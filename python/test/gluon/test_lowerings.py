@@ -326,7 +326,7 @@ def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, d
 
         def compute_rep_shape(layout):
             if type(layout) is ttgl.BlockedLayout:
-                warp_shape = torch.tensor(layout.sz_per_thread) * torch.tensor(layout.threads_per_warp)
+                warp_shape = torch.tensor(layout.size_per_thread) * torch.tensor(layout.threads_per_warp)
                 rep_shape = warp_shape * torch.tensor(layout.warps_per_cta)
                 return rep_shape
             else:
@@ -419,12 +419,6 @@ _mma_pairs = [
                                     cta_order=[0, 1], instr_shape=[16, 64, 32]),
     ],
     [
-        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 64, 32]),
-        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 32, 32]),
-    ],
-    [
         ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[1, 4], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
                                     cta_order=[0, 1], instr_shape=[16, 32, 32]),
         ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
@@ -441,12 +435,6 @@ _mma_pairs = [
                                     cta_order=[0, 1], instr_shape=[16, 128, 16]),
         ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
                                     cta_order=[0, 1], instr_shape=[16, 64, 16]),
-    ],
-    [
-        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 64, 16]),
-        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                    cta_order=[0, 1], instr_shape=[16, 128, 16]),
     ],
     # AMD MFMA layouts
     [
@@ -547,7 +535,8 @@ def test_convert_mma2mma_layouts(M, N, mma_pair, dtype, device):
 
     # Calculate num_warps based on layout
     num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(src_layout, (M, N)))))
-    kernel[(1, 1, 1)](x, y, M, N, src_layout, dst_layout, num_warps=num_warps)
+    kernel[(1, )](x, y, M, N, src_layout, dst_layout, num_warps=num_warps)
+    kernel[(1, )](x, y, M, N, dst_layout, src_layout, num_warps=num_warps)
 
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
