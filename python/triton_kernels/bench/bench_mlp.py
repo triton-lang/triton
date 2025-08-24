@@ -113,7 +113,7 @@ def roofline_mlp(batch_sizes, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
 if __name__ == "__main__":
     has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
     batch_sizes_dense = [(128, 8192, 128)]
-    batch_ranges_moe = [(2**(2 + k), 2**(3 + k), min(2**k, 32)) for k in range(3, 8)]
+    batch_ranges_moe = [(2**(2 + k), 2**(3 + k), min(2**k, 32)) for k in range(8)]
     batch_sizes_moe = list(chain(*[range(*r) for r in batch_ranges_moe]))
     dense_dtypes = ["fp8", "fp8"]
     quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
@@ -133,7 +133,7 @@ if __name__ == "__main__":
         argparse = argparse.ArgumentParser()
         argparse.add_argument("--tp", type=int, default=1)
         argparse.add_argument("--ep", type=int, default=1)
-        argparse.add_argument("--name", type=str, choices=["dense", "gpt-oss-x2"])
+        argparse.add_argument("--name", type=str, choices=["dense", "gpt-oss"])
         argparse.add_argument("--quantized", action="store_true", default=False)
         args = argparse.parse_args()
         dtypes = dense_dtypes if args.quantized else quantized_dtypes
@@ -141,13 +141,13 @@ if __name__ == "__main__":
             assert args.ep == 1, "EP must be 1 for dense"
             roofline_mlp(batch_sizes_dense, 8192, 8192, 1, 1, *dtypes, TP=args.tp, EP=args.ep, name="dense")
         else:
-            roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, *dtypes, TP=args.tp, EP=args.ep, name="gpt-oss-x2")
+            roofline_mlp(batch_sizes_moe, 2880, 2880, 128, 4, *dtypes, TP=args.tp, EP=args.ep, name="gpt-oss")
         triton_dist.cleanup()
     else:
         pass
         # roofline_mlp(batch_sizes_dense, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
         # roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, *dense_dtypes, TP=1, EP=1, name="gpt-oss-x2")
-        roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, *quantized_dtypes, TP=1, EP=1, name="gpt-oss-x2")
+        roofline_mlp(batch_sizes_moe, 2880, 2880, 128, 4, *quantized_dtypes, TP=1, EP=1, name="gpt-oss")
         # roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, *quantized_dtypes, TP=2, EP=1, name="gpt-oss-x2")
         # roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, *quantized_dtypes, TP=4, EP=1, name="gpt-oss-x2")
         # roofline_mlp(batch_ranges_moe, 5760, 5760, 128, 4, *quantized_dtypes, TP=8, EP=1, name="gpt-oss-x2")
