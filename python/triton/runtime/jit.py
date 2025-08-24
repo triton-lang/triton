@@ -595,7 +595,15 @@ class JitFunctionInfo:
 
 
 def compute_cache_key(kernel_key_cache, specialization, options):
-    key = (tuple(specialization), tuple(options.items()))
+    def make_hashable(obj):
+        if isinstance(obj, dict):
+            return tuple((k, make_hashable(v)) for k, v in obj.items())
+        elif isinstance(obj, (list, tuple, set)):
+            return tuple(make_hashable(x) for x in obj)
+        else:
+            return obj
+
+    key = (tuple(specialization), make_hashable(options))
     cache_key = kernel_key_cache.get(key, None)
     if cache_key is not None:
         return cache_key
