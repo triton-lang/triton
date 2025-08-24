@@ -588,8 +588,8 @@ void init_gluon_ir(py::module &&m) {
                                             pred, two_ctas);
            })
       .def("create_tcgen05_commit",
-           [](GluonOpBuilder &self, Value &barrier) {
-             self.create<ttng::TCGen5CommitOp>(barrier);
+           [](GluonOpBuilder &self, Value barrier, Value pred) {
+             self.create<ttng::TCGen5CommitOp>(barrier, pred);
            })
 
       .def("create_async_tma_copy_global_to_local",
