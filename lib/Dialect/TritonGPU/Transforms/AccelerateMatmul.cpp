@@ -686,6 +686,26 @@ public:
       return failure();
     }
 
+    // Check for single CTA configuration - SM120 dot scaled layouts don't
+    // support multi-CTA yet
+    auto checkSingleCTA = [&](RankedTensorType scaleType) -> LogicalResult {
+      if (auto blockedEnc = dyn_cast<triton::gpu::BlockedEncodingAttr>(
+              scaleType.getEncoding())) {
+        auto ctasPerCGA = blockedEnc.getCTALayout().getCTAsPerCGA();
+        if (ctasPerCGA[0] != 1 || ctasPerCGA[1] != 1) {
+          return rewriter.notifyMatchFailure(
+              dotOp, "SM120 dot scaled layouts do not support multi-CTA "
+                     "configurations yet");
+        }
+      }
+      return success();
+    };
+
+    if (checkSingleCTA(aScaleType).failed() ||
+        checkSingleCTA(bScaleType).failed()) {
+      return failure();
+    }
+
     // Common MMA encoding creation
     auto mmaResult =
         createMMAEncodingForDot(dotOp, rewriter, computeCapability, 2);
