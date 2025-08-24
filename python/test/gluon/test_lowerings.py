@@ -364,9 +364,8 @@ def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, d
             y = ttgl.convert_layout(x, layout=dst_layout)
         else:
             # Store to shared memory and load back before converting
-            shared_desc = ttgl.allocate_shared_memory(x.dtype, (M, N), interm_layout)
-            shared_desc.store(x)
-            x_shared = shared_desc.load(interm_layout)
+            shared_desc = ttgl.allocate_shared_memory(x.dtype, (M, N), interm_layout, value=x)
+            x_shared = shared_desc.load(src_layout)
             y = ttgl.convert_layout(x_shared, layout=dst_layout)
         
         # Create offsets for dst layout and store
