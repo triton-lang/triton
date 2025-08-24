@@ -1,10 +1,11 @@
 import torch
 import pytest
+import numpy as np
 
 import triton
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton._internal_testing import is_cuda, is_hip, is_hopper_or_newer
+from triton._internal_testing import is_cuda, is_hip, is_hopper_or_newer, get_hip_lds_size
 
 
 def _is_layout_applicable(layout) -> bool:
@@ -240,7 +241,7 @@ _1d_layouts = _filter_layouts([
 @pytest.mark.parametrize("src_dim", [0, 1])
 @pytest.mark.parametrize("dst_dim", [0, 1])
 @pytest.mark.parametrize("is_bool", [True, False])
-def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, is_bool, device):
+def test_convert1d_layouts(M, src_layout, dst_layout, src_dim, dst_dim, is_bool, device):
 
     @gluon.jit
     def kernel(x_ptr, y_ptr, M: ttgl.constexpr, src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr,
@@ -257,3 +258,261 @@ def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, is_bool, device)
     y = torch.zeros((M, ), dtype=torch.int32, device=device)
     kernel[(1, )](x, y, M, src_layout, dst_layout, src_dim, dst_dim, num_warps=4)
     torch.testing.assert_close(y, x.to(torch.int32))
+
+
+_2d_layouts = _filter_layouts([
+    ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [2, 2], [0, 1]),
+    ttgl.BlockedLayout([1, 16], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0]),
+    ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], 
+                                cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 32, 16]),
+    ttgl.DotOperandLayout(
+        parent=ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
+                                           cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 32, 16]),
+        operand_index=0, k_width=2),
+    ttgl.DotOperandLayout(
+        parent=ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
+                                           cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 32, 16]),
+        operand_index=0, k_width=1),
+    ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
+                                cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 8]),
+    ttgl.DotOperandLayout(
+        parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
+                                           cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 8]),
+        operand_index=1, k_width=2),
+    ttgl.DotOperandLayout(
+        parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 2], ctas_per_cga=[1, 1],
+                                           cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 8]),
+        operand_index=0, k_width=2),
+    ttgl.DotOperandLayout(
+        parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
+                                           cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 8]),
+        operand_index=0, k_width=8),
+    ttgl.SliceLayout(
+        dim=1,
+        parent=ttgl.DotOperandLayout(
+            parent=ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],
+                                               cta_split_num=[1, 1, 1], cta_order=[2, 1, 0], instr_shape=[16, 32, 16]),
+            operand_index=0, k_width=2)),
+    ttgl.SliceLayout(
+        dim=1,
+        parent=ttgl.DotOperandLayout(
+            parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],
+                                               cta_split_num=[1, 1, 1], cta_order=[2, 1, 0], instr_shape=[1, 16, 8]),
+            operand_index=1, k_width=2)),
+])
+
+_intermediate_layouts = [
+    None,
+    ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1]),
+    ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0]),
+    ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=4, order=[1, 0]),
+    ttgl.SwizzledSharedLayout(vec=2, per_phase=2, max_phase=4, order=[1, 0]),
+    # TODO: Support PaddedSharedLayout
+    #PaddedSharedLayout([[32, 8]], [1, 0], [1, 1], [1, 1], [0, 1]),
+    #PaddedSharedLayout([[64, 4], [128, 8]], [1, 0], [1, 1], [1, 1], [0, 1])
+]
+
+
+@pytest.mark.parametrize("M, N", [[64, 1], [64, 64], [64, 128], [1, 64]])
+@pytest.mark.parametrize("dtype", ['float16'])
+@pytest.mark.parametrize("src_layout", _filter_layouts(_2d_layouts))
+@pytest.mark.parametrize("interm_layout", _intermediate_layouts)
+@pytest.mark.parametrize("dst_layout", _filter_layouts(_2d_layouts))
+def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, device):
+    if str(src_layout) == str(dst_layout):
+        pytest.skip("Source and destination layouts are the same")
+
+    def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
+        def compute_rep_shape(layout):
+            if type(layout) is ttgl.BlockedLayout:
+                warp_shape = torch.tensor(layout.sz_per_thread) * torch.tensor(layout.threads_per_warp)
+                rep_shape = warp_shape * torch.tensor(layout.warps_per_cta)
+                return rep_shape
+            else:
+                assert False, "TODO: support compute_rep_shape for layout " + str(type(layout))
+        src_rep_shape = compute_rep_shape(src_layout)
+        dst_rep_shape = compute_rep_shape(dst_layout)
+        full_scratch_shape = torch.maximum(src_rep_shape, dst_rep_shape)
+        return torch.minimum(full_scratch_shape, torch.tensor(shape))
+
+    if is_hip():
+        try:
+            scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
+        except AssertionError:
+            pytest.skip("Can't compute scratch buffer size")
+        lds_size = get_hip_lds_size()
+        # consider int32 dtype in scratch buffer size,
+        # because it is the largest dtype used in convert_layout in this test
+        int32_size = 4
+        # skip even if scratch buffer equal to lds_size, because real scratch buffer is typically larger due to padding
+        if scratch_shape[0] * scratch_shape[1] * int32_size >= lds_size:
+            pytest.skip("Scratch buffer is too large")
+    
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, M: ttgl.constexpr, N: ttgl.constexpr, 
+               src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr,
+               interm_layout: ttgl.constexpr):
+        # Create offsets for src layout
+        offs_m_src = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, src_layout))[:, None]
+        offs_n_src = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, src_layout))[None, :]
+        
+        # Load data
+        x = ttgl.load(x_ptr + offs_m_src * N + offs_n_src)
+        
+        # Convert layout (with or without intermediate shared memory)
+        if interm_layout is None:
+            y = ttgl.convert_layout(x, layout=dst_layout)
+        else:
+            # Store to shared memory and load back before converting
+            shared_desc = ttgl.allocate_shared_memory(x.dtype, (M, N), interm_layout)
+            shared_desc.store(x)
+            x_shared = shared_desc.load(interm_layout)
+            y = ttgl.convert_layout(x_shared, layout=dst_layout)
+        
+        # Create offsets for dst layout and store
+        offs_m_dst = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, dst_layout))[:, None]
+        offs_n_dst = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, dst_layout))[None, :]
+        ttgl.store(y_ptr + offs_m_dst * N + offs_n_dst, y)
+    
+    torch.manual_seed(0)
+    torch_dtype = getattr(torch, dtype)
+    x = torch.randn((M, N), dtype=torch_dtype, device=device)
+    y = torch.zeros_like(x)
+    kernel[(1, 1, 1)](x, y, M, N, src_layout, dst_layout, interm_layout)
+    
+    torch.testing.assert_close(y, x, rtol=0, atol=0)
+
+
+# MMA layout pairs for MMA-to-MMA conversion tests
+_mma_pairs = [
+    [
+        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[1, 4], ctas_per_cga=[1, 1],
+                                    cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8]),
+        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
+                                    cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8]),
+    ],
+    [
+        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 8], ctas_per_cga=[1, 1],
+                                    cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8]),
+        ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[8, 2], ctas_per_cga=[1, 1],
+                                    cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8]),
+    ],
+    [
+        ttgl.NVMMADistributedLayout(version=[2, 1], warps_per_cta=[1, 4], ctas_per_cga=[1, 1],
+                                    cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8]),
+        ttgl.NVMMADistributedLayout(version=[2, 1], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
+                                    cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8]),
+    ],
+    [
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
+                                    cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 32, 32]),
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
+                                    cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 64, 32]),
+    ],
+    [
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
+                                    cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 128, 16]),
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1],
+                                    cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 64, 16]),
+    ],
+]
+
+
+@pytest.mark.parametrize("M, N", [[16, 16], [64, 1], [1, 64], [64, 64], [128, 128], [256, 256]])
+@pytest.mark.parametrize("dtype", ['float16'])
+@pytest.mark.parametrize("mma_pair", [pair for pair in _mma_pairs if all(_is_layout_applicable(layout) for layout in pair)])
+def test_convert_mma2mma_layouts(M, N, mma_pair, dtype, device):
+    src_layout, dst_layout = mma_pair
+    
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, M: ttgl.constexpr, N: ttgl.constexpr,
+               src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr):
+        # Create offsets for src layout
+        offs_m_src = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, src_layout))[:, None]
+        offs_n_src = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, src_layout))[None, :]
+        
+        # Load data and convert layout
+        x = ttgl.load(x_ptr + offs_m_src * N + offs_n_src)
+        y = ttgl.convert_layout(x, layout=dst_layout)
+        
+        # Create offsets for dst layout and store
+        offs_m_dst = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, dst_layout))[:, None]
+        offs_n_dst = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, dst_layout))[None, :]
+        ttgl.store(y_ptr + offs_m_dst * N + offs_n_dst, y)
+    
+    torch.manual_seed(0)
+    torch_dtype = getattr(torch, dtype)
+    x = torch.randint(-100, 100, (M, N), dtype=torch.int32, device=device).to(torch_dtype)
+    y = torch.zeros((M, N), dtype=torch_dtype, device=device)
+    
+    # Calculate num_warps based on layout
+    num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(src_layout, (M, N)))))
+    kernel[(1, 1, 1)](x, y, M, N, src_layout, dst_layout, num_warps=num_warps)
+    
+    torch.testing.assert_close(y, x, rtol=0, atol=0)
+
+
+_warp_local_layouts = _filter_layouts([
+    ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [1, 1], [1, 0]),
+    ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP // 2, 2], [1, 1], [1, 0]),
+    ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP // 4, 4], [1, 1], [1, 0]),
+    ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP // 8, 8], [1, 1], [1, 0]),
+    ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP // 16, 16], [1, 1], [1, 0]),
+    ttgl.BlockedLayout([1, 1], [THREADS_PER_WARP // 32, 32], [1, 1], [1, 0]),
+    ttgl.BlockedLayout([32, 1], [1, THREADS_PER_WARP], [1, 1], [1, 0]),
+    ttgl.BlockedLayout([16, 1], [2, THREADS_PER_WARP // 2], [1, 1], [1, 0]),
+    ttgl.BlockedLayout([1, 4], [THREADS_PER_WARP, 1], [1, 1], [1, 0]),
+    ttgl.BlockedLayout([1, 4], [THREADS_PER_WARP // 2, 2], [1, 1], [1, 0]),
+    ttgl.BlockedLayout([1, 4], [THREADS_PER_WARP // 4, 4], [1, 1], [1, 0]),
+    ttgl.BlockedLayout([1, 4], [THREADS_PER_WARP // 8, 8], [1, 1], [1, 0]),
+    ttgl.BlockedLayout([1, 4], [THREADS_PER_WARP // 16, 16], [1, 1], [1, 0]),
+    ttgl.BlockedLayout([1, 4], [THREADS_PER_WARP // 32, 32], [1, 1], [1, 0]),
+])
+
+
+@pytest.mark.parametrize("M, N", [[32, 32], [64, 64]])
+@pytest.mark.parametrize("dtype", ['float16'])
+@pytest.mark.parametrize("src_layout", _warp_local_layouts)
+@pytest.mark.parametrize("dst_layout", _warp_local_layouts)
+def test_convert_warp_local_layouts(M, N, src_layout, dst_layout, dtype, device):
+    if str(src_layout) == str(dst_layout):
+        pytest.skip("Source and destination layouts are the same")
+    
+    # Skip certain layout combinations that don't make sense for warp-local tests
+    if (hasattr(src_layout, 'threads_per_warp') and hasattr(dst_layout, 'threads_per_warp')):
+        import numpy as np
+        if (np.prod(src_layout.threads_per_warp) == 0 or np.prod(dst_layout.threads_per_warp) == 0):
+            pytest.skip("Invalid layout with zero threads per warp")
+        
+        # Test layout pairs that are likely to codegen warp shuffles.
+        a, b = list(np.array(src_layout.threads_per_warp) // np.array(dst_layout.threads_per_warp))
+        c = a if a != 0 else b
+        if c > 2:
+            pytest.skip("Layout pair too complex for warp-local conversion")
+    
+    @gluon.jit
+    def kernel(x_ptr, y_ptr, M: ttgl.constexpr, N: ttgl.constexpr,
+               src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr):
+        # Create offsets for src layout
+        offs_m_src = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, src_layout))[:, None]
+        offs_n_src = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, src_layout))[None, :]
+        
+        # Load data and convert layout
+        x = ttgl.load(x_ptr + offs_m_src * N + offs_n_src)
+        y = ttgl.convert_layout(x, layout=dst_layout)
+        
+        # Create offsets for dst layout and store
+        offs_m_dst = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, dst_layout))[:, None]
+        offs_n_dst = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, dst_layout))[None, :]
+        ttgl.store(y_ptr + offs_m_dst * N + offs_n_dst, y)
+    
+    torch.manual_seed(0)
+    torch_dtype = getattr(torch, dtype)
+    x = torch.randint(-100, 100, (M, N), dtype=torch.int32, device=device).to(torch_dtype)
+    y = torch.zeros((M, N), dtype=torch_dtype, device=device)
+    
+    # Single warp tests use 1 warp
+    num_warps = 1
+    kernel[(1, 1, 1)](x, y, M, N, src_layout, dst_layout, num_warps=num_warps)
+    
+    torch.testing.assert_close(y, x, rtol=0, atol=0)

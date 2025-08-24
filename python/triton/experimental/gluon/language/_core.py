@@ -228,7 +228,7 @@ class shared_memory_descriptor(base_value):
         return str(self.type)
 
     @builtin
-    def load(self, layout, _semantic: GluonSemantic) -> tensor:
+    def load(self, layout, _semantic: GluonSemantic = None) -> tensor:
         """
         Load a tensor from shared memory.
 
@@ -242,7 +242,7 @@ class shared_memory_descriptor(base_value):
         return _semantic.shared_load(self, layout)
 
     @builtin
-    def store(self, value, _semantic: GluonSemantic) -> None:
+    def store(self, value, _semantic: GluonSemantic = None) -> None:
         """
         Store a tensor into shared memory.
 
@@ -284,7 +284,7 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_index(self, index)
 
     @builtin
-    def permute(self, order, _semantic: GluonSemantic) -> shared_memory_descriptor:
+    def permute(self, order, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
         Permute the dimensions of the shared memory descriptor.
 
@@ -298,7 +298,7 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_trans(self, order)
 
     @builtin
-    def reshape(self, shape, _semantic: GluonSemantic) -> shared_memory_descriptor:
+    def reshape(self, shape, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
         Reshape the shared memory descriptor to a new shape and layout.
 
@@ -397,7 +397,7 @@ def full(shape, value, dtype, layout=None, _semantic=None):
 
 
 @builtin
-def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None):
+def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None) -> shared_memory_descriptor:
     """
     Allocate shared memory for a tensor with the given element type, shape, and layout.
 
