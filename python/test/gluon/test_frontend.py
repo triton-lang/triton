@@ -568,7 +568,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %true = arith.constant true
     %true_0 = arith.constant true
     %true_1 = arith.constant true
-    %3 = ttng.tc_gen5_mma %0, %1, %result[], %true, %true_0, %2[%true_1] {is_async} : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #smem, mutable>
+    %3 = ttng.tc_gen5_mma %0, %1, %result[], %true, %true_0 {is_async} : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_commit %2, %true_1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     tt.return
   }
 }
