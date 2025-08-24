@@ -1480,6 +1480,9 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
       {{kRegister, registerBase}, {kLane, laneBase}, {kWarp, warpBase}},
       {outDims[kIdx], outDims[mnIdx]});
   auto ctaLay = CTALayoutAttr::get(ctx, {1, 1}, {1, 1}, {1, 0});
+  assert(ctaLay.getCTAsPerCGA()[0] == 1 && ctaLay.getCTAsPerCGA()[1] == 1 &&
+         "getSM120DotScaledScaleLayout does not support multi-CTA "
+         "configurations yet");
   return combineCtaCgaWithShape(ctaLayout, ctaLay, dotOperandShape);
 }
 
