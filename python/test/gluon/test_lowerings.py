@@ -385,6 +385,7 @@ def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, d
 
 # MMA layout pairs for MMA-to-MMA conversion tests
 _mma_pairs = [
+    # MMA v2.0 layouts
     [
         ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[1, 4], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
                                     cta_order=[0, 1], instr_shape=[16, 8]),
@@ -397,12 +398,20 @@ _mma_pairs = [
         ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[8, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
                                     cta_order=[0, 1], instr_shape=[16, 8]),
     ],
+    # MMA v2.1 layouts
     [
         ttgl.NVMMADistributedLayout(version=[2, 1], warps_per_cta=[1, 4], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
                                     cta_order=[0, 1], instr_shape=[16, 8]),
         ttgl.NVMMADistributedLayout(version=[2, 1], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
                                     cta_order=[0, 1], instr_shape=[16, 8]),
     ],
+    [
+        ttgl.NVMMADistributedLayout(version=[2, 1], warps_per_cta=[2, 8], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
+                                    cta_order=[0, 1], instr_shape=[16, 8]),
+        ttgl.NVMMADistributedLayout(version=[2, 1], warps_per_cta=[8, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
+                                    cta_order=[0, 1], instr_shape=[16, 8]),
+    ],
+    # MMA v3.0 layouts
     [
         ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
                                     cta_order=[0, 1], instr_shape=[16, 32, 32]),
@@ -411,10 +420,84 @@ _mma_pairs = [
     ],
     [
         ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
+                                    cta_order=[0, 1], instr_shape=[16, 64, 32]),
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
+                                    cta_order=[0, 1], instr_shape=[16, 32, 32]),
+    ],
+    [
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[1, 4], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
+                                    cta_order=[0, 1], instr_shape=[16, 32, 32]),
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
+                                    cta_order=[0, 1], instr_shape=[16, 64, 32]),
+    ],
+    [
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[2, 8], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
+                                    cta_order=[0, 1], instr_shape=[16, 64, 32]),
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[8, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
+                                    cta_order=[0, 1], instr_shape=[16, 32, 32]),
+    ],
+    [
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
                                     cta_order=[0, 1], instr_shape=[16, 128, 16]),
         ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
                                     cta_order=[0, 1], instr_shape=[16, 64, 16]),
     ],
+    [
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
+                                    cta_order=[0, 1], instr_shape=[16, 64, 16]),
+        ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
+                                    cta_order=[0, 1], instr_shape=[16, 128, 16]),
+    ],
+    # AMD MFMA layouts
+    [
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[2, 2], tiles_per_warp=[1, 1], instr_shape=[32, 32], transposed=False),
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32], transposed=False),
+    ],
+    [
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32], transposed=False),
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[2, 2], tiles_per_warp=[1, 1], instr_shape=[32, 32], transposed=False),
+    ],
+    [
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[2, 2], tiles_per_warp=[1, 1], instr_shape=[32, 32], transposed=False),
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32], transposed=True),
+    ],
+    [
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32], transposed=False),
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[2, 2], tiles_per_warp=[1, 1], instr_shape=[32, 32], transposed=True),
+    ],
+    [
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 4], tiles_per_warp=[1, 1], instr_shape=[16, 16], transposed=False),
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[16, 1], tiles_per_warp=[1, 1], instr_shape=[16, 16], transposed=False),
+    ],
+    [
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[16, 1], tiles_per_warp=[1, 1], instr_shape=[16, 16], transposed=False),
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 4], tiles_per_warp=[1, 1], instr_shape=[16, 16], transposed=False),
+    ],
+    [
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 4], tiles_per_warp=[1, 1], instr_shape=[16, 16], transposed=False),
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[16, 1], tiles_per_warp=[1, 1], instr_shape=[16, 16], transposed=True),
+    ],
+    [
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[16, 1], tiles_per_warp=[1, 1], instr_shape=[16, 16], transposed=False),
+        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 4], tiles_per_warp=[1, 1], instr_shape=[16, 16], transposed=True),
+    ],
+    # TODO: AMD WMMA layouts
+    #[
+    #    WmmaLayout(1, [4, 4]),
+    #    WmmaLayout(1, [16, 1]),
+    #],
+    #[
+    #    WmmaLayout(1, [16, 1]),
+    #    WmmaLayout(1, [4, 4]),
+    #],
+    #[
+    #    WmmaLayout(2, [4, 4]),
+    #    WmmaLayout(2, [16, 1]),
+    #],
+    #[
+    #    WmmaLayout(2, [16, 1]),
+    #    WmmaLayout(2, [4, 4]),
+    #],
 ]
 
 
