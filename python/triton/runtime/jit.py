@@ -595,6 +595,7 @@ class JitFunctionInfo:
 
 
 def compute_cache_key(kernel_key_cache, specialization, options):
+
     def make_hashable(obj):
         if isinstance(obj, dict):
             return tuple((k, make_hashable(v)) for k, v in obj.items())
