@@ -377,6 +377,8 @@ public:
 
   Value getShmemOffset(Location loc, RewriterBase &rewriter,
                        triton::gpu::MemDescType srcTy) const;
+  Value getShmemAffineBase(Location loc, RewriterBase &rewriter,
+                           triton::gpu::MemDescType srcTy) const;
 
   // TODO(Keren): deprecate the method once AMD backend has cleaned up
   Value getCSwizzleOffset(int dim) const {

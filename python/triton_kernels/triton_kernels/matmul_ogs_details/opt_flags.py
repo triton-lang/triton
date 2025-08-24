@@ -18,8 +18,8 @@ class OptFlags:
     xcd_swizzle: int
     w_cache_modifier: str
     split_k: int
-    fused_scatter: bool
     is_persistent: bool
+    fused_scatter: bool
     idle_sms: int
     epilogue_subtile: int | None
     arch: str
@@ -28,7 +28,6 @@ class OptFlags:
     def __post_init__(self):
         if self.fused_scatter and self.split_k != 1:
             raise ValueError("Not supported")
-
 
 
 def make_default_opt_flags_amd(
@@ -119,8 +118,8 @@ def make_default_opt_flags_amd(
         xcd_swizzle=xcd_swizzle,
         w_cache_modifier=w_cache_modifier,
         split_k=split_k,
-        fused_scatter=constraints.get('fused_scatter', False),
         is_persistent=is_persistent,
+        fused_scatter=constraints.get('fused_scatter', False),
         idle_sms=0,
         epilogue_subtile=epilogue_subtile,
         arch=None,
@@ -146,7 +145,7 @@ def make_default_opt_flags_nvidia(
     epilogue_effective_itemsize,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile", "num_stages", "idle_sms"]
+    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "fused_scatter", "epilogue_subtile", "num_stages", "idle_sms"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None or batch_size > 1:
@@ -204,6 +203,7 @@ def make_default_opt_flags_nvidia(
     compute_num_stages_args = (
         precision_config,
         is_persistent,
+
         block_m,
         block_n,
         block_k,
@@ -224,7 +224,6 @@ def make_default_opt_flags_nvidia(
     assert num_stages >= 1
     if constraints.get("num_stages", None):
         num_stages = constraints["num_stages"]
-
     # fused scatter scratchpad
     if constraints.get("fused_scatter", None) is not None:
         fused_scatter = constraints["fused_scatter"]
@@ -238,11 +237,11 @@ def make_default_opt_flags_nvidia(
         block_k=block_k,
         num_warps=num_warps,
         num_stages=num_stages,
+        fused_scatter=fused_scatter,
         group_m=group_m,
         xcd_swizzle=xcd_swizzle,
         w_cache_modifier=None,
         split_k=split_k,
-        fused_scatter=fused_scatter,
         is_persistent=is_persistent,
         epilogue_subtile=epilogue_subtile,
         arch=arch,
@@ -293,6 +292,8 @@ def make_opt_flags(
 ):
     if _opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
         raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")
+    if _opt_flags_constraints.get("fused_scatter", False) and not can_use_fused_scatter:
+        raise InapplicableConstraint("cannot enforce `fused_scatter=True` constraint")
     enforce_bitwise_invariance = precision_config.enforce_bitwise_invariance
     if _opt_flags is not None:
         assert not _opt_flags_constraints

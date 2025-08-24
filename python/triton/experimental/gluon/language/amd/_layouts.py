@@ -81,3 +81,16 @@ class AMDMFMALayout(DistributedLayout):
         assert len(self.ctas_per_cga) == rank
         assert len(self.cta_split_num) == rank
         assert len(self.cta_order) == rank
+
+    def __hash__(self):
+        return hash((
+            self.version,
+            tuple(self.instr_shape),
+            self.transposed,
+            tuple(self.warps_per_cta),
+            self.elem_type,
+            tuple(self.tiles_per_warp) if self.tiles_per_warp else None,
+            tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+            tuple(self.cta_split_num) if self.cta_split_num else None,
+            tuple(self.cta_order) if self.cta_order else None,
+        ))
