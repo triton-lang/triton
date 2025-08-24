@@ -113,7 +113,8 @@ struct ConvertTritonGPUToLLVM
     mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
     mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(
-        typeConverter, patterns, patternBenefitNvidiaTensorCoreSubviewPattern);
+        typeConverter, patterns, targetInfo,
+        patternBenefitNvidiaTensorCoreSubviewPattern);
     mlir::triton::NVIDIA::populateTMAToLLVMPatterns(typeConverter, targetInfo,
                                                     patterns, benefit);
     populateDotOpToLLVMPatterns(typeConverter, patterns, computeCapability,
@@ -162,7 +163,7 @@ struct ConvertTritonGPUToLLVM
     mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
     mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
-        typeConverter, patterns, benefit);
+        typeConverter, patterns, targetInfo, benefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, benefit);
     mlir::triton::NVIDIA::populateTCGen5MMAOpToLLVMPattern(typeConverter,

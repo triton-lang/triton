@@ -298,7 +298,8 @@ private:
     unsigned rank = srcShapePerCTA.size();
 
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    auto elemPtrTy =
+        ptr_ty(rewriter.getContext(), targetInfo.getSharedAddressSpace());
 
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());

@@ -160,7 +160,7 @@ LogicalResult lowerLdStMatrix(
   auto kWarp = S("warp");
   auto kBlock = S("block");
   auto kOffset = S("offset");
-  auto smemPtrTy = ptr_ty(ctx, 3);
+  auto smemPtrTy = ptr_ty(ctx, targetInfo.getSharedAddressSpace());
   auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
   // In the transpose case, consecutive elements are not stored contiguously
   // so we cannot split an fp32
