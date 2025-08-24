@@ -560,3 +560,143 @@ def test_aggregate_constexpr_function():
 
     # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_16_
     anchor(agg.square_val())
+
+
+def test_anonymous_with_statement():
+    called_enter = False
+    called_exit = False
+
+    @triton.context_manager
+    def context(_semantic=None):
+        nonlocal called_enter
+        nonlocal called_exit
+        called_enter = True
+        yield
+        called_exit = True
+
+    @triton.jit
+    def kernel(shape: tl.constexpr):
+        with context():
+            tl.full(shape, 1, dtype=tl.int32)
+
+    run_parser(kernel, args=([2, 4], ))
+    assert called_enter
+    assert called_exit
+
+
+def test_with_statement_args():
+
+    @triton.context_manager
+    def context(*args, _semantic=None):
+        assert len(args) == 3
+        assert args[0] == 1
+        assert args[1] == "test"
+        assert args[2] == [2, 4]
+        yield
+
+    @triton.jit
+    def kernel(shape: tl.constexpr):
+        with context(1, "test", shape):
+            tl.full(shape, 1, dtype=tl.int32)
+
+    run_parser(kernel, args=([2, 4], ))
+
+
+def test_named_with_statement():
+
+    @triton.context_manager
+    def context(_semantic=None):
+        yield 100
+
+    @triton.jit
+    def kernel():
+        with context() as value:
+            #CHECK: %cst = arith.constant dense<100> : tensor<2x4xi32>
+            tl.full([2, 4], value, dtype=tl.int32)
+
+    run_filecheck_test(kernel)
+
+
+def test_explicit_context_manager():
+    called_enter = False
+    called_exit = False
+
+    @tl.core.extern
+    class context:
+
+        def __init__(self, name: str, _semantic=None):
+            self.name = name
+            self.semantic = _semantic
+            assert _semantic
+
+        def __enter__(self):
+            nonlocal called_enter
+            called_enter = True
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            nonlocal called_exit
+            called_exit = True
+
+    @triton.jit
+    def kernel(shape: tl.constexpr):
+        with context("test"):
+            tl.full(shape, 1, dtype=tl.int32)
+
+    run_parser(kernel, args=([2, 4], ))
+    assert called_enter
+    assert called_exit
+
+
+def test_single_context_multiple_values_with_statement():
+
+    @triton.context_manager
+    def context(_semantic=None):
+        yield tl.tuple([tl.tuple([4, 16]), 100])
+
+    @triton.jit
+    def kernel():
+        with context() as (shape, value):
+            #CHECK: %cst = arith.constant dense<100> : tensor<4x16xi32>
+            tl.full(shape, value, dtype=tl.int32)
+
+    run_filecheck_test(kernel)
+
+
+def test_multiple_contexts_with_statement():
+
+    @triton.context_manager
+    def shapeContext(_semantic=None):
+        yield tl.tuple([4, 16])
+
+    @triton.context_manager
+    def valueContext(_semantic=None):
+        yield 100
+
+    @triton.jit
+    def kernel():
+        with shapeContext() as shape, valueContext() as value:
+            #CHECK: %cst = arith.constant dense<100> : tensor<4x16xi32>
+            tl.full(shape, value, dtype=tl.int32)
+
+    run_filecheck_test(kernel)
+
+
+def test_context_manager_builds_ir():
+
+    @triton.context_manager
+    def debugContext(val, _semantic=None):
+        _semantic.device_print("Start", [val], hex=False)
+        yield
+        _semantic.debug_barrier()
+
+    @triton.jit
+    def kernel():
+        #CHECK: %cst = arith.constant dense<1> : tensor<2x4xi32>
+        #CHECK: tt.print " Start: " {hex = false, isSigned = array<i32: 1>} : %cst
+        #CHECK: arith.muli
+        #CHECK: gpu.barrier
+        vals = tl.full([2, 4], 1, dtype=tl.int32)
+        with debugContext(vals):
+            vals = vals * 10
+
+    run_filecheck_test(kernel)
