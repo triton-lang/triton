@@ -36,7 +36,6 @@ from triton._internal_testing import (
     is_hip_cdna3,
     is_hip_cdna4,
     is_hip_gfx12,
-    get_hip_lds_size,
     is_xpu,
     get_arch,
     torch_float8_dtypes,
