@@ -300,7 +300,7 @@ _2d_layouts = _filter_layouts([
             operand_index=1, k_width=2)),
 ])
 
-_intermediate_layouts = [
+_intermediate_layouts = _filter_layouts([
     None,
     ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0, 1]),
     ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0]),
@@ -309,14 +309,14 @@ _intermediate_layouts = [
     # TODO: Support PaddedSharedLayout
     #PaddedSharedLayout([[32, 8]], [1, 0], [1, 1], [1, 1], [0, 1]),
     #PaddedSharedLayout([[64, 4], [128, 8]], [1, 0], [1, 1], [1, 1], [0, 1])
-]
+])
 
 
 @pytest.mark.parametrize("M, N", [[64, 1], [64, 64], [64, 128], [1, 64]])
 @pytest.mark.parametrize("dtype", ["float16"])
-@pytest.mark.parametrize("src_layout", _filter_layouts(_2d_layouts))
+@pytest.mark.parametrize("src_layout", _2d_layouts)
 @pytest.mark.parametrize("interm_layout", _intermediate_layouts)
-@pytest.mark.parametrize("dst_layout", _filter_layouts(_2d_layouts))
+@pytest.mark.parametrize("dst_layout", _2d_layouts)
 def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     if str(src_layout) == str(dst_layout):
         pytest.skip("Source and destination layouts are the same")
