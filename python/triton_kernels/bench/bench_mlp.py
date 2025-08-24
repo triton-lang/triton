@@ -133,7 +133,7 @@ if __name__ == "__main__":
         argparse = argparse.ArgumentParser()
         argparse.add_argument("--tp", type=int, default=1)
         argparse.add_argument("--ep", type=int, default=1)
-        argparse.add_argument("--name", type=str, choices=["dense", "gpt-oss-x2"])
+        argparse.add_argument("--name", type=str, choices=["dense", "gpt-oss"])
         argparse.add_argument("--quantized", action="store_true", default=False)
         args = argparse.parse_args()
         dtypes = dense_dtypes if args.quantized else quantized_dtypes
@@ -141,13 +141,13 @@ if __name__ == "__main__":
             assert args.ep == 1, "EP must be 1 for dense"
             roofline_mlp(batch_sizes_dense, 8192, 8192, 1, 1, *dtypes, TP=args.tp, EP=args.ep, name="dense")
         else:
-            roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, *dtypes, TP=args.tp, EP=args.ep, name="gpt-oss-x2")
+            roofline_mlp(batch_sizes_moe, 2880, 2880, 128, 4, *dtypes, TP=args.tp, EP=args.ep, name="gpt-oss")
         triton_dist.cleanup()
     else:
         pass
         # roofline_mlp(batch_sizes_dense, 8192, 8192, 1, 1, *quantized_dtypes, TP=1, EP=1, name="dense")
         # roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, *dense_dtypes, TP=1, EP=1, name="gpt-oss-x2")
-        roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, *quantized_dtypes, TP=1, EP=1, name="gpt-oss-x2")
+        roofline_mlp(batch_sizes_moe, 2880, 2880, 128, 4, *quantized_dtypes, TP=1, EP=1, name="gpt-oss")
         # roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, *quantized_dtypes, TP=2, EP=1, name="gpt-oss-x2")
         # roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, *quantized_dtypes, TP=4, EP=1, name="gpt-oss-x2")
         # roofline_mlp(batch_ranges_moe, 5760, 5760, 128, 4, *quantized_dtypes, TP=8, EP=1, name="gpt-oss-x2")

@@ -101,7 +101,6 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
       return true;
     return false;
   });
-
   addDynamicallyLegalOp<triton::FuncOp>([](triton::FuncOp funcOp) -> bool {
     for (auto arg : funcOp.getArguments()) {
       if (auto tensor = dyn_cast<RankedTensorType>(arg.getType())) {

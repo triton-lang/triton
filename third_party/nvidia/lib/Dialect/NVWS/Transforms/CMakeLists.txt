@@ -3,6 +3,7 @@ add_triton_library(NVWSTransforms
   LowerWarpGroup.cpp
   InsertAref.cpp
   Utilities.cpp
+  AssignStagePhase.cpp
 
   DEPENDS
   NVWSTransformsIncGen
