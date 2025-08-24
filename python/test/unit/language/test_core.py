@@ -36,7 +36,6 @@ from triton._internal_testing import (
     is_hip_cdna3,
     is_hip_cdna4,
     is_hip_gfx12,
-    get_hip_lds_size,
     is_xpu,
     get_arch,
     torch_float8_dtypes,
@@ -5800,8 +5799,6 @@ def test_smid(device):
 # test layout conversions
 # -----------------------
 # TODO: backend should be tested separately
-
-
 
 layouts_3d = [
     BlockedLayout([4, 4, 1], [1, 8, THREADS_PER_WARP // 8], [2, 2, 1], [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
