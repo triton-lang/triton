@@ -1,6 +1,5 @@
 import torch
 import pytest
-import numpy as np
 
 import triton
 from triton.experimental import gluon
@@ -314,7 +313,7 @@ _intermediate_layouts = [
 
 
 @pytest.mark.parametrize("M, N", [[64, 1], [64, 64], [64, 128], [1, 64]])
-@pytest.mark.parametrize("dtype", ['float16'])
+@pytest.mark.parametrize("dtype", ["float16"])
 @pytest.mark.parametrize("src_layout", _filter_layouts(_2d_layouts))
 @pytest.mark.parametrize("interm_layout", _intermediate_layouts)
 @pytest.mark.parametrize("dst_layout", _filter_layouts(_2d_layouts))
@@ -377,7 +376,7 @@ def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, d
     torch_dtype = getattr(torch, dtype)
     x = torch.randn((M, N), dtype=torch_dtype, device=device)
     y = torch.zeros_like(x)
-    kernel[(1, 1, 1)](x, y, M, N, src_layout, dst_layout, interm_layout)
+    kernel[(1, )](x, y, M, N, src_layout, dst_layout, interm_layout)
     
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
@@ -418,7 +417,7 @@ _mma_pairs = [
 
 
 @pytest.mark.parametrize("M, N", [[16, 16], [64, 1], [1, 64], [64, 64], [128, 128], [256, 256]])
-@pytest.mark.parametrize("dtype", ['float16'])
+@pytest.mark.parametrize("dtype", ["float16"])
 @pytest.mark.parametrize("mma_pair", [pair for pair in _mma_pairs if all(_is_layout_applicable(layout) for layout in pair)])
 def test_convert_mma2mma_layouts(M, N, mma_pair, dtype, device):
     src_layout, dst_layout = mma_pair
@@ -441,9 +440,9 @@ def test_convert_mma2mma_layouts(M, N, mma_pair, dtype, device):
     
     torch.manual_seed(0)
     torch_dtype = getattr(torch, dtype)
-    x = torch.randint(-100, 100, (M, N), dtype=torch.int32, device=device).to(torch_dtype)
-    y = torch.zeros((M, N), dtype=torch_dtype, device=device)
-    
+    x = torch.randn((M, N), dtype=torch_dtype, device=device)
+    y = torch.zeros_like(x)
+
     # Calculate num_warps based on layout
     num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(src_layout, (M, N)))))
     kernel[(1, 1, 1)](x, y, M, N, src_layout, dst_layout, num_warps=num_warps)
@@ -470,24 +469,18 @@ _warp_local_layouts = _filter_layouts([
 
 
 @pytest.mark.parametrize("M, N", [[32, 32], [64, 64]])
-@pytest.mark.parametrize("dtype", ['float16'])
+@pytest.mark.parametrize("dtype", ["float16"])
 @pytest.mark.parametrize("src_layout", _warp_local_layouts)
 @pytest.mark.parametrize("dst_layout", _warp_local_layouts)
 def test_convert_warp_local_layouts(M, N, src_layout, dst_layout, dtype, device):
     if str(src_layout) == str(dst_layout):
         pytest.skip("Source and destination layouts are the same")
     
-    # Skip certain layout combinations that don't make sense for warp-local tests
-    if (hasattr(src_layout, 'threads_per_warp') and hasattr(dst_layout, 'threads_per_warp')):
-        import numpy as np
-        if (np.prod(src_layout.threads_per_warp) == 0 or np.prod(dst_layout.threads_per_warp) == 0):
-            pytest.skip("Invalid layout with zero threads per warp")
-        
-        # Test layout pairs that are likely to codegen warp shuffles.
-        a, b = list(np.array(src_layout.threads_per_warp) // np.array(dst_layout.threads_per_warp))
-        c = a if a != 0 else b
-        if c > 2:
-            pytest.skip("Layout pair too complex for warp-local conversion")
+    # Test layout pairs that are likely to codegen warp shuffles.
+    a, b = list(torch.tensor(src_layout.threads_per_warp) // torch.tensor(dst_layout.threads_per_warp))
+    c = a if a != 0 else b
+    if c > 2:
+        pytest.skip("Layout pair too complex for warp-local conversion")
     
     @gluon.jit
     def kernel(x_ptr, y_ptr, M: ttgl.constexpr, N: ttgl.constexpr,
@@ -507,11 +500,9 @@ def test_convert_warp_local_layouts(M, N, src_layout, dst_layout, dtype, device)
     
     torch.manual_seed(0)
     torch_dtype = getattr(torch, dtype)
-    x = torch.randint(-100, 100, (M, N), dtype=torch.int32, device=device).to(torch_dtype)
-    y = torch.zeros((M, N), dtype=torch_dtype, device=device)
+    x = torch.randn((M, N), dtype=torch_dtype, device=device)
+    y = torch.zeros_like(x)
     
-    # Single warp tests use 1 warp
-    num_warps = 1
-    kernel[(1, 1, 1)](x, y, M, N, src_layout, dst_layout, num_warps=num_warps)
+    kernel[(1,)](x, y, M, N, src_layout, dst_layout)
     
     torch.testing.assert_close(y, x, rtol=0, atol=0)
