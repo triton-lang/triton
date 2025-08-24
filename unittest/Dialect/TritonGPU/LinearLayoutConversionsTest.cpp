@@ -3675,17 +3675,18 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_MultiWarp) {
       /*tilesPerWarp=*/{2, 1}, /*warpsPerCTA=*/{2, 2},
       /*mmaInstrM=*/16, /*mmaInstrN=*/8);
   ll = LinearLayout({{S("register"),
-                      {{32, 0},
-                       {0, 1},
+                      {{0, 1},
                        {0, 2},
                        {0, 4},
                        {0, 8},
                        {0, 16},
                        {0, 32},
+                       {16, 0},
+                       {32, 0},
                        {64, 0},
                        {128, 0}}},
-                     {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
-                     {S("warp"), {{0, 0}, {16, 0}}},
+                     {S("lane"), {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
+                     {S("warp"), {{8, 0}, {0, 0}}},
                      {S("block"), {}}},
                     {S("dim0"), S("dim1")});
 

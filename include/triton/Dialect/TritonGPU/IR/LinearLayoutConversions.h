@@ -126,12 +126,11 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<unsigned> tilesPerWarp,
                                          ArrayRef<unsigned> warpsPerCTA);
 
-LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
-                                             int dotOperandIdx,
-                                             ArrayRef<int64_t> dotOperandShape,
-                                             ArrayRef<unsigned> tilesPerWarp,
-                                             ArrayRef<unsigned> warpsPerCTA,
-                                             unsigned instrM, unsigned instrN);
+LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
+                                          ArrayRef<int64_t> dotOperandShape,
+                                          ArrayRef<unsigned> tilesPerWarp,
+                                          ArrayRef<unsigned> warpsPerCTA,
+                                          unsigned instrM, unsigned instrN);
 
 // Create LinearLayout for nvidia mma tile.
 LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
