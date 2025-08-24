@@ -84,7 +84,7 @@ def main(use_tensor_desc: bool):
         targs = [TensorDescriptor.from_tensor(torch.zeros(1, 16, device="cuda"), block_shape=[1, 16]) for _ in range(5)]
     else:
         targs = [torch.zeros(1, device="cuda") for _ in range(5)]
-    ncargs = [0, 1, 1024, 2 ** 31 - 1,  2 ** 64 - 1, False, True, None, (16, 16)]
+    ncargs = [0, 1, 1024, 2**31 - 1, 2**64 - 1, False, True, None, (16, 16)]
     cargs = [32, False, True, 0, 64]
 
     usecs = do_bench_walltime(lambda: nop_args[
