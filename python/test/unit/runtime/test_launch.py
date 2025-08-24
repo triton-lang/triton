@@ -37,9 +37,9 @@ def test_metadata() -> None:
         pass
 
     # launch kernel
-    triton.knobs.runtime.launch_enter_hook = hook
+    triton.knobs.runtime.launch_enter_hook.add(hook)
     kernel[(1, 3, 2)](6)
-    triton.knobs.runtime.launch_enter_hook = None
+    triton.knobs.runtime.launch_enter_hook.remove(hook)
     assert used_hook
 
 
@@ -96,72 +96,56 @@ def test_load_hook() -> None:
         pass
 
     # launch kernel
-    triton.knobs.runtime.kernel_load_start_hook = hook_start
-    triton.knobs.runtime.kernel_load_end_hook = hook_end
+    triton.knobs.runtime.kernel_load_start_hook.add(hook_start)
+    triton.knobs.runtime.kernel_load_end_hook.add(hook_end)
     kernel[(1, 3, 2)](6)
     assert used_start_hook
     assert used_end_hook
     assert start_hash == end_hash
+    triton.knobs.runtime.kernel_load_start_hook.remove(hook_start)
+    triton.knobs.runtime.kernel_load_end_hook.remove(hook_end)
 
 
-# LATENCY_THRESHOLD_US = 46
+def test_multiple_hooks() -> None:
 
-# def test_kernel_launch_latency() -> None:
-#     def define_kernel(kernel_name: str, num_tensor_args: int) -> str:
-#         arg_str = ",".join([f"arg{i}: torch.Tensor" for i in range(num_tensor_args)])
-#         arg_str += ", n_elements: int, BLOCK_SIZE: tl.constexpr"
-#         func_str = f"""
-#         import torch
+    start0 = False
+    end0 = False
+    start1 = False
+    end1 = False
 
-#         import triton
-#         import triton.language as tl
+    def hook_start0(module, function, name, metadata_group, hash):
+        nonlocal start0
+        start0 = True
 
-#         @triton.jit
-#         def {kernel_name}({arg_str}):
-#             pass
-#         """
-#         with tempfile.NamedTemporaryFile(mode="w+t", suffix=".py", delete=False) as temp_file:
-#             temp_file.write(textwrap.dedent(func_str))
-#             temp_file_path = temp_file.name
+    def hook_end0(module, function, name, metadata_group, hash):
+        nonlocal end0
+        end0 = True
 
-#         return temp_file_path
+    def hook_start1(module, function, name, metadata_group, hash):
+        nonlocal start1
+        start1 = True
 
-#     def import_kernel(file_path, kernel_name):
-#         directory, filename = os.path.split(file_path)
-#         module_name, _ = os.path.splitext(filename)
-#         sys.path.insert(0, directory)
+    def hook_end1(module, function, name, metadata_group, hash):
+        nonlocal end1
+        end1 = True
 
-#         module = importlib.import_module(module_name)
-#         kernel = getattr(module, kernel_name)
-#         return kernel
+    triton.knobs.runtime.kernel_load_start_hook.add(hook_start0)
+    triton.knobs.runtime.kernel_load_end_hook.add(hook_end0)
+    triton.knobs.runtime.kernel_load_start_hook.add(hook_start1)
+    triton.knobs.runtime.kernel_load_end_hook.add(hook_end1)
 
-#     def empty(*kernel_args: Tuple[torch.Tensor]):
-#         first_arg = kernel_args[0]
-#         n_elements = first_arg.numel()
-#         grid = (triton.cdiv(n_elements, 1024),)
-#         device = torch.cuda.current_device()
-#         # Warmup
-#         empty_kernel[grid](*kernel_args, n_elements, BLOCK_SIZE=1024, device=device)
-#         torch.cuda.synchronize()
-#         # Measure launch overhead at steady state
-#         num_runs = 1000
-#         start_time = time.time()
-#         for i in range(num_runs):
-#             empty_kernel[grid](*kernel_args, n_elements, BLOCK_SIZE=1024, device=device)
-#         end_time = time.time()
-#         latency_us = (end_time - start_time) / num_runs * 1e6
+    @triton.jit
+    def kernel(x):
+        pass
 
-#         assert latency_us < LATENCY_THRESHOLD_US, "Kernel launch time has increased!"
+    kernel[(1, )](6)
 
-#     num_tensor_args = 40
-#     kernel_name = 'empty_kernel'
-#     file_path = define_kernel(kernel_name, num_tensor_args)
-#     empty_kernel = import_kernel(file_path, kernel_name)
+    assert start0
+    assert end0
+    assert start1
+    assert end1
 
-#     # Initialize random tensors for the empty_kernel
-#     torch.manual_seed(0)
-#     size = 1024
-#     kernel_args = (torch.rand(size, device='cuda') for i in range(num_tensor_args))
-
-#     # Run empty, which would run empty_kernel internally
-#     empty(*kernel_args)
+    triton.knobs.runtime.kernel_load_start_hook.remove(hook_start0)
+    triton.knobs.runtime.kernel_load_end_hook.remove(hook_end0)
+    triton.knobs.runtime.kernel_load_start_hook.remove(hook_start1)
+    triton.knobs.runtime.kernel_load_end_hook.remove(hook_end1)

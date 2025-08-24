@@ -35,15 +35,15 @@ class LaunchHook(Hook):
     def deactivate(self):
         pass
 
-    def enter(self, lazy_dict: LazyDict) -> None:
+    def enter(self, metadata: LazyDict) -> None:
         enter_state(COMPUTE_METADATA_SCOPE_NAME)
-        metadata = lazy_dict.get()
+        lazy_metadata = metadata.get()
         exit_state()
-        fn_metrics = {k: metadata[k] for k in LaunchHook.metrics if k in metadata}
-        op_name.set(metadata["name"])
+        fn_metrics = {k: lazy_metadata[k] for k in LaunchHook.metrics if k in lazy_metadata}
+        op_name.set(lazy_metadata["name"])
         id.set(libproton.record_scope())
-        libproton.enter_op(id.get(), metadata["name"])
+        libproton.enter_op(id.get(), lazy_metadata["name"])
         libproton.add_metrics(id.get(), fn_metrics)
 
-    def exit(self, lazy_dict: LazyDict) -> None:
+    def exit(self, metadata: LazyDict) -> None:
         libproton.exit_op(id.get(), op_name.get())

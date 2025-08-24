@@ -139,7 +139,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     %1 = ttng.tmem_alloc  {tensor_memory_col_offset = 256 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x16xf8E4M3FN, #tmem_scales, #ttng.tensor_memory, mutable>
     // gpu.barrier
     // CHECK: tmem_copy
-    ttng.tmem_copy %0, %1,  : (!ttg.memdesc<1x2048xf8E4M3FN, #shared, #smem>, !ttg.memdesc<128x16xf8E4M3FN, #tmem_scales, #ttng.tensor_memory, mutable>) -> ()
+    ttng.tmem_copy %0, %1 : !ttg.memdesc<1x2048xf8E4M3FN, #shared, #smem>, !ttg.memdesc<128x16xf8E4M3FN, #tmem_scales, #ttng.tensor_memory, mutable>
     tt.return
   }
 }
