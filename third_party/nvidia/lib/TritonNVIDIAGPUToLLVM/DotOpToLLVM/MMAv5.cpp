@@ -755,7 +755,6 @@ struct TCGen5CommitOpConversion
   LogicalResult
   matchAndRewrite(ttng::TCGen5CommitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    assert(false);
     Location loc = op.getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
 

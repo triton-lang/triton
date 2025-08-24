@@ -351,8 +351,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle)
 
     for mbar, pred in zip(mbarriers, mbarrier_preds):
-        assert pred is False, "Non-trivial predicate for tcgen05_commit not supported in gluon"
-        tcgen05_commit(mbar, pred)
+        _semantic.builder.create_tcgen05_commit(mbar, pred)
 
 
 @builtin
@@ -367,4 +366,4 @@ def tcgen05_commit(barrier, pred=True, _semantic=None):
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
     """
     pred = _semantic.to_tensor(pred)
-    _semantic.builder.create_tcgen05_commit(barrier.handl, pred.handle)
+    _semantic.builder.create_tcgen05_commit(barrier.handle, pred.handle)
