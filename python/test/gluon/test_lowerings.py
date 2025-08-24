@@ -505,6 +505,7 @@ def test_convert_warp_local_layouts(M, N, src_layout, dst_layout, dtype, device)
     x = torch.randn((M, N), dtype=torch_dtype, device=device)
     y = torch.zeros_like(x)
     
-    kernel[(1,)](x, y, M, N, src_layout, dst_layout)
+    num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(src_layout, (M, N)))))
+    kernel[(1,)](x, y, M, N, src_layout, dst_layout, num_warps=num_warps)
     
     torch.testing.assert_close(y, x, rtol=0, atol=0)
