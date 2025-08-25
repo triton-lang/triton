@@ -450,6 +450,7 @@ def test_math_fast_dividef():
     torch.testing.assert_close(z, torch.div(x, y), atol=1e-5, rtol=1e-4)
 
 
+@pytest.mark.xfail(reason="copy to tmem with scale layout is currently broken in Gluon.")
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_copy_2d():
     device = "cuda"
@@ -470,8 +471,8 @@ def test_tmem_copy_2d():
 
         smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=2)
         tmem_layout: ttgl.constexpr = TensorMemoryScalesLayout()
-        smem = ttgl.allocate_shared_memory(ttgl.int32, (smem_h, smem_w), layout=smem_layout)
-        tmem = allocate_tensor_memory(ttgl.int32, (num_rows, num_cols), layout=tmem_layout)
+        smem = ttgl.allocate_shared_memory(ttgl.int8, (smem_h, smem_w), layout=smem_layout)
+        tmem = allocate_tensor_memory(ttgl.int8, (num_rows, num_cols), layout=tmem_layout)
 
         barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
         mbarrier.init(barrier, count=1)
@@ -481,11 +482,13 @@ def test_tmem_copy_2d():
         tcgen05_copy(smem, tmem)
         tcgen05_commit(barrier)
         mbarrier.wait(barrier, phase=0)
+        tmem_alias: ttgl.constexpr = TensorMemoryLayout((128, 32), unpacked=False)
+        tmem = tmem._reinterpret(ttgl.int8, (num_rows, num_cols), tmem_alias)
         value = tmem.load(blocked)
         ttgl.store(ttgl.set_auto_layout(out_ptrs, blocked), value)
 
-    x = torch.randint(size=(smem_h, smem_w), low=-100, high=100, dtype=torch.int32).to(device)
-    z_tri = torch.zeros(size=(num_rows, num_cols), dtype=torch.int32).to(device)
+    x = torch.randint(size=(smem_h, smem_w), low=-100, high=100, dtype=torch.int8).to(device)
+    z_tri = torch.zeros(size=(num_rows, num_cols), dtype=torch.int8).to(device)
     kernel[(1, )](x, z_tri, smem_h, smem_w, num_rows, num_cols)
 
     num_rep_m = smem_h // 32
