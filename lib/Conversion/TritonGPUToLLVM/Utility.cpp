@@ -531,7 +531,8 @@ largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
                      std::optional<int> maybeMaxVecElems = std::nullopt) {
   // Find the largest vectorisation we can use:
   StringAttr kReg = str_attr("register");
-  StringAttr kOffset = str_attr("offset");
+  assert(llvm::size(cvt.getOutDimNames()) == 1);
+  StringAttr kMemIndex = *cvt.getOutDimNames().begin();
   LinearLayout quot;
   LinearLayout tile;
   ColumnAction permutation;
@@ -540,7 +541,7 @@ largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
   auto allowPerm = !maybeMaxVecElems.has_value();
   auto maxVecElems = maybeMaxVecElems.value_or(128 / bitwidth);
   for (int v = maxVecElems; v >= 1; v /= 2) {
-    tile = LinearLayout::identity1D(v, kReg, kOffset);
+    tile = LinearLayout::identity1D(v, kReg, kMemIndex);
     auto maybePerm = regPermForDivide(cvt, tile, /*left=*/true);
     if (!maybePerm) {
       continue;
@@ -614,7 +615,8 @@ SmallVector<Value> lowerLdSt(
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
-  auto kOffset = str_attr("offset");
+  auto kMemIndex = *cvt.getOutDimNames().begin();
+  assert(kMemIndex == "offset" || kMemIndex == "index");
   auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
 
   auto [elemsPerVec, permutation] =
@@ -625,7 +627,7 @@ SmallVector<Value> lowerLdSt(
     vals = permutation.apply(vals);
   }
 
-  auto tile = LinearLayout::identity1D(elemsPerVec, kReg, kOffset);
+  auto tile = LinearLayout::identity1D(elemsPerVec, kReg, kMemIndex);
   auto quot = divideLeft(cvt, tile);
   assert(quot.has_value() && "cvt must be divisible by tile");
   LinearLayout reps = zerosLike(tile) * *quot;
@@ -646,7 +648,7 @@ SmallVector<Value> lowerLdSt(
   // have to divide the computation by bitwdith / 8 and then lift this
   // shl, which often it's not able to do.
   auto i8Tile =
-      zerosLike(LinearLayout::identity1D(bitwidth / 8, kReg, kOffset));
+      zerosLike(LinearLayout::identity1D(bitwidth / 8, kReg, kMemIndex));
   auto i8AddrLayout = i8Tile * addrLayout;
 
   auto regBaseI8 =
@@ -697,7 +699,8 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                SharedMemoryObject smemObj, RewriterBase &rewriter,
                const TargetInfoBase &targetInfo, Operation *localLoadOp) {
   assert(cvt.getNumOutDims() == 1);
-  assert(*cvt.getOutDimNames().begin() == str_attr("offset"));
+  assert(*cvt.getOutDimNames().begin() == str_attr("offset") ||
+         *cvt.getOutDimNames().begin() == str_attr("index"));
   auto calcPaddedOffset = [&](Value smemOffset) {
     TritonLLVMOpBuilder b(loc, rewriter);
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
@@ -749,16 +752,9 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kOffset = str_attr("offset");
 
   auto shape = sharedTy.getShape();
-  auto paddedEnc =
-      dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedTy.getEncoding());
   LinearLayout regToSharedLayout = LinearLayout::empty();
-  if (paddedEnc) {
-    regToSharedLayout =
-        triton::gpu::getPaddedRegToSharedLayout(regLayout, paddedEnc);
-  } else {
-    auto sharedLL = triton::gpu::toLinearLayout(sharedTy);
-    regToSharedLayout = regLayout.invertAndCompose(sharedLL);
-  }
+  auto sharedLL = triton::gpu::toLinearLayout(sharedTy);
+  regToSharedLayout = regLayout.invertAndCompose(sharedLL);
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
@@ -776,6 +772,9 @@ bool emitTransferBetweenRegistersAndShared(
   int vecElems =
       std::min({regToSharedLayout.getNumConsecutiveInOut(),
                 maxVecElems.value_or(std::numeric_limits<int>::max())});
+
+  auto paddedEnc =
+      dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedTy.getEncoding());
   if (paddedEnc) {
     vecElems = std::min(vecElems, int(paddedEnc.getMinInterval()));
   }
