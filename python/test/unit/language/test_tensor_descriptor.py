@@ -156,6 +156,78 @@ def test_tensor_descriptor_functional_interface(dtype_str, device):
     torch.testing.assert_close(unwrap_tensor(inp), unwrap_tensor(out))
 
 
+@pytest.mark.skipif(not (is_cuda() and torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 9),
+                    reason="Requires NVIDIA Hopper or newer")
+def test_tensor_descriptor_oob_fill_mode_device(device):
+    import torch
+    @triton.jit
+    def kernel(out_ptr, in_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr, OOB_NAN: tl.constexpr):
+        desc = tl.make_tensor_descriptor(
+            in_ptr,
+            shape=[M, N],
+            strides=[N, 1],
+            block_shape=[M_BLOCK, N_BLOCK],
+            oob_fill_nan=OOB_NAN,
+        )
+        block = desc.load([0, 0])
+        idx = tl.arange(0, M_BLOCK)[:, None] * N_BLOCK + tl.arange(0, N_BLOCK)[None, :]
+        tl.store(out_ptr + idx, block)
+
+    M, N = 8, 20
+    M_BLOCK, N_BLOCK = 8, 32  # force OOB in last dimension
+    inp = torch.arange(M * N, device=device, dtype=torch.float32).reshape(M, N)
+    out_zero = torch.empty((M_BLOCK, N_BLOCK), device=device, dtype=torch.float32)
+    out_nan = torch.empty_like(out_zero)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
+
+    # Zero fill
+    kernel[(1, )](out_zero, inp, M, N, M_BLOCK, N_BLOCK, False)
+    # NaN fill
+    kernel[(1, )](out_nan, inp, M, N, M_BLOCK, N_BLOCK, True)
+
+    # In-bounds should match
+    assert torch.equal(out_zero[:, :N], inp)
+    assert torch.equal(out_nan[:, :N], inp)
+    # OOB area
+    assert torch.all(out_zero[:, N:] == 0)
+    assert torch.all(torch.isnan(out_nan[:, N:]))
+
+
+@pytest.mark.skipif(not (is_cuda() and torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 9),
+                    reason="Requires NVIDIA Hopper or newer")
+def test_host_tensor_descriptor_oob_fill_mode():
+    import torch
+    M, N = 8, 20
+    M_BLOCK, N_BLOCK = 8, 32
+
+    @triton.jit
+    def kernel(out_ptr, desc, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        block = desc.load([0, 0])
+        idx = tl.arange(0, M_BLOCK)[:, None] * N_BLOCK + tl.arange(0, N_BLOCK)[None, :]
+        tl.store(out_ptr + idx, block)
+
+    inp = torch.arange(M * N, device='cuda', dtype=torch.float32).reshape(M, N)
+    out_zero = torch.empty((M_BLOCK, N_BLOCK), device='cuda', dtype=torch.float32)
+    out_nan = torch.empty_like(out_zero)
+
+    # Zero fill descriptor
+    desc_zero = TensorDescriptor(inp, [M, N], [N, 1], [M_BLOCK, N_BLOCK], oob_fill_nan=False)
+    # NaN fill descriptor
+    desc_nan = TensorDescriptor(inp, [M, N], [N, 1], [M_BLOCK, N_BLOCK], oob_fill_nan=True)
+
+    kernel[(1, )](out_zero, desc_zero, M_BLOCK, N_BLOCK)
+    kernel[(1, )](out_nan, desc_nan, M_BLOCK, N_BLOCK)
+
+    assert torch.equal(out_zero[:, :N], inp)
+    assert torch.equal(out_nan[:, :N], inp)
+    assert torch.all(out_zero[:, N:] == 0)
+    assert torch.all(torch.isnan(out_nan[:, N:]))
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("K_BLOCK", [16, 32, 64, 128])

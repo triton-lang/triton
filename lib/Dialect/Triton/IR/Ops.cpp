@@ -1020,7 +1020,7 @@ OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
 void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
                              Value base, ValueRange shape, ValueRange strides,
                              ArrayRef<int32_t> blockShape,
-                             bool isSignedInteger) {
+                             bool isSignedInteger, bool oobFillNaN) {
   auto ptrTy = dyn_cast<triton::PointerType>(base.getType());
   if (!ptrTy) {
     llvm::report_fatal_error("Expected pointer type");
@@ -1030,7 +1030,7 @@ void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
   auto blockTy = RankedTensorType::get(blockShape64, elemTy);
   auto descTy =
       TensorDescType::get(builder.getContext(), blockTy, isSignedInteger);
-  return build(builder, state, descTy, base, shape, strides);
+  return build(builder, state, descTy, base, shape, strides, oobFillNaN);
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and

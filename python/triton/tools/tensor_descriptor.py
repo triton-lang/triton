@@ -9,6 +9,7 @@ class TensorDescriptor:
     shape: List[int]
     strides: List[int]
     block_shape: List[int]
+    oob_fill_nan: bool = False
 
     def __post_init__(self):
         rank = len(self.shape)
@@ -26,10 +27,11 @@ class TensorDescriptor:
         assert self.strides[-1] == 1, "Last dimension must be contiguous"
 
     @staticmethod
-    def from_tensor(tensor: Any, block_shape: List[int]):
+    def from_tensor(tensor: Any, block_shape: List[int], oob_fill_nan: bool = False):
         return TensorDescriptor(
             tensor,
             tensor.shape,
             tensor.stride(),
             block_shape,
+            oob_fill_nan,
         )

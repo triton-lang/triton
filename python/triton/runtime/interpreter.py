@@ -77,12 +77,13 @@ class BlockPointerHandle:
 class TensorDescHandle:
 
     def __init__(self, base: TensorHandle, shape: List[TensorHandle], strides: List[TensorHandle],
-                 block_shape: List[int]):
+                 block_shape: List[int], oob_fill_nan: bool):
         self.base = base
         self.ndim = len(shape)
         self.shape = shape
         self.strides = strides
         self.block_shape = block_shape
+        self.oob_fill_nan = oob_fill_nan
 
     def validate(self):
         assert self.base.data.item() % 16 == 0, "base must be 16-byte aligned"
@@ -736,8 +737,9 @@ class InterpreterBuilder:
         strides: List[TensorHandle],
         tensor_shape: List[int],
         is_signed: bool,
+        oob_fill_nan: bool = False,
     ):
-        desc = TensorDescHandle(base, shape, strides, tensor_shape)
+        desc = TensorDescHandle(base, shape, strides, tensor_shape, oob_fill_nan)
         desc.validate()
         return desc
 
@@ -745,7 +747,8 @@ class InterpreterBuilder:
                                eviction_policy):
         assert isinstance(desc, TensorDescHandle)
         ptrs, mask = desc.materialize_pointers(indices)
-        return self.create_masked_load(ptrs, mask, other=None, cache_modifier=cache_modifier,
+        other = TensorHandle(np.full_like(ptrs.data, float('nan'), dtype=ptrs.dtype), ptrs.dtype) if desc.oob_fill_nan else None
+        return self.create_masked_load(ptrs, mask, other=other, cache_modifier=cache_modifier,
                                        eviction_policy=eviction_policy, is_volatile=False)
 
     def create_descriptor_store(self, desc: TensorDescHandle, value: TensorHandle, indices: List[TensorHandle]):

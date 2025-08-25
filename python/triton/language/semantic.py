@@ -1902,6 +1902,7 @@ class TritonSemantic(Generic[TensorTy]):
         shape: List[TensorTy],
         strides: List[TensorTy],
         block_shape: List[tl.constexpr],
+        oob_fill_nan: bool = False,
     ) -> tl.tensor_descriptor:
         ndim = len(shape)
         if not (1 <= ndim <= 5):
@@ -1934,5 +1935,6 @@ class TritonSemantic(Generic[TensorTy]):
         is_signed_int = base.type.element_ty.is_int_signed()
 
         handle = self.builder.create_make_tensor_descriptor(base_handle, [s.handle for s in shape],
-                                                            [s.handle for s in strides], block_shape, is_signed_int)
+                                                            [s.handle for s in strides], block_shape, is_signed_int,
+                                                            oob_fill_nan)
         return tl.tensor_descriptor(handle, shape, strides, type)

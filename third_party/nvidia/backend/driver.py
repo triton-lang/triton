@@ -645,6 +645,7 @@ def make_tensordesc_arg(arg, metadata):
         swizzle,
         elem_size,
         TMA_DTYPE_DEVICE_TO_HOST[elem_type],
+        1 if getattr(arg, 'oob_fill_nan', False) else 0,
         block_size,
         shape,
         strides,

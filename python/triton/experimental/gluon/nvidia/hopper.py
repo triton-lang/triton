@@ -13,6 +13,7 @@ class TensorDescriptor:
     strides: List[int]
     block_shape: List[int]
     layout: NVMMASharedLayout
+    oob_fill_nan: bool = False
 
     def __post_init__(self):
         rank = len(self.shape)
@@ -30,11 +31,12 @@ class TensorDescriptor:
         assert isinstance(self.layout, NVMMASharedLayout), "Layout must be NVMMASharedLayout"
 
     @staticmethod
-    def from_tensor(tensor: Any, block_shape: List[int], layout: NVMMASharedLayout):
+    def from_tensor(tensor: Any, block_shape: List[int], layout: NVMMASharedLayout, oob_fill_nan: bool = False):
         return TensorDescriptor(
             tensor,
             tensor.shape,
             tensor.stride(),
             block_shape,
             layout,
+            oob_fill_nan,
         )
