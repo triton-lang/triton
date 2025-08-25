@@ -594,16 +594,8 @@ class JitFunctionInfo:
     jit_function: JITFunction
 
 
-def _make_hashable(obj):
-    if isinstance(obj, dict):
-        return tuple((k, _make_hashable(v)) for k, v in obj.items())
-    if isinstance(obj, (list, tuple)):
-        return tuple(_make_hashable(x) for x in obj)
-    return obj
-
-
 def compute_cache_key(kernel_key_cache, specialization, options):
-    key = (tuple(specialization), _make_hashable(options))
+    key = (tuple(specialization), str(options))
     cache_key = kernel_key_cache.get(key, None)
     if cache_key is not None:
         return cache_key
