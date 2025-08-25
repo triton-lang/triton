@@ -1,18 +1,13 @@
 import gc
-# import importlib
-# import os
-# import sys
-# import tempfile
-# import textwrap
-# import time
 import tracemalloc
+import pytest
+import inspect
+import pathlib
+import os
 
 import torch
-
 import triton
 import triton.language as tl
-
-# from typing import Tuple
 
 
 def test_metadata() -> None:
@@ -149,3 +144,43 @@ def test_multiple_hooks() -> None:
     triton.knobs.runtime.kernel_load_end_hook.remove(hook_end0)
     triton.knobs.runtime.kernel_load_start_hook.remove(hook_start1)
     triton.knobs.runtime.kernel_load_end_hook.remove(hook_end1)
+
+
+@pytest.mark.parametrize("options", [
+    {"num_warps": 1},
+    {"enable_fp_fusion": False},
+    {"extern_libs": {}},
+])
+def test_launch_with_options(options) -> None:
+    if "extern_libs" in options:
+        # copied from tutorials/07-extern-functions.py
+        current_file = inspect.getfile(inspect.currentframe())
+        current_dir = pathlib.Path(os.path.dirname(os.path.abspath(current_file)))
+        if triton.runtime.driver.active.get_current_target().backend == "cuda":
+            libdir = current_dir.parent.parent.parent.parent / 'third_party/nvidia/backend/lib'
+            options["extern_libs"] = {"libdevice": str(libdir / 'libdevice.10.bc')}
+        elif triton.runtime.driver.active.get_current_target().backend == "hip":
+            libdir = current_dir.parent.parent.parent.parent / 'third_party/amd/backend/lib'
+            options["extern_libs"] = {"ocml": str(libdir / 'ocml.bc'), "ockl": str(libdir / 'ockl.bc')}
+
+    compile_info = {}
+    def hook(key, repr, fn, compile, is_manual_warmup, already_compiled):
+        nonlocal compile_info
+        compile_info = compile
+
+    @triton.jit
+    def kernel(x):
+        pass
+
+    # launch kernel with options (twice)
+    triton.knobs.runtime.jit_post_compile_hook = hook
+    kernel[(1, 1, 1)](6, **options)
+    kernel[(1, 1, 1)](6, **options)
+    triton.knobs.runtime.jit_post_compile_hook = None
+
+    # check the compile info
+    option_key, option_val = next(iter(options.items()))
+    if option_key == "extern_libs":
+        assert compile_info[option_key] == tuple(option_val.items())
+    else:
+        assert compile_info[option_key] == option_val
