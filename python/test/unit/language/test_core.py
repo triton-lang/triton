@@ -3745,7 +3745,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
     if is_hip():
         if not (is_hip_cdna() or is_hip_gfx11() or is_hip_gfx12()):
-            pytest.skip("scaled_dot only implemented for HIP CDNA and gfx12")
+            pytest.skip("scaled_dot only implemented for HIP CDNA, gfx11, gfx12")
         if "e4m3" in (mxfp_type, normal_type):
             if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx12()):
                 pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, gfx12")

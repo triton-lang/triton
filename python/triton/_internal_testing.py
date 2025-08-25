@@ -76,7 +76,6 @@ def is_hip_cdna4():
 
 def is_hip_gfx11():
     target = get_current_target()
-    print(target.arch)
     return target is not None and target.backend == 'hip' and 'gfx11' in target.arch
 
 
