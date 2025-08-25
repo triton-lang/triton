@@ -71,6 +71,7 @@ class CudaUtils(object):
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
         self.set_printf_fifo_size = mod.set_printf_fifo_size
         self.fill_tma_descriptor = mod.fill_tma_descriptor
+        self.replace_tma_address = mod.replace_tma_address
 
 
 # ------------------------
@@ -599,10 +600,11 @@ class TmaDescKernelParam:
     def __init__(self):
         import torch
         self.desc = torch.empty(self.TMA_DESC_SIZE, dtype=torch.uint8, device="cpu")
+        self._desc_ptr = self.desc.data_ptr()
 
     # Return a CUtensorMap* pointer in host memory
     def tma_desc_cpu_ptr(self):
-        return self.desc.data_ptr()
+        return self._desc_ptr
 
 
 # The TMA dtype enum values are slightly different on host vs device...
@@ -652,7 +654,7 @@ def make_tensordesc_arg(arg, metadata):
     return result
 
 
-def wrap_handle_tensordesc(launcher, tensordesc_meta):
+def wrap_handle_tensordesc(launcher, tensordesc_meta, tensordesc_cache):
     from triton.tools.tensor_descriptor import TensorDescriptor
     from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
 
@@ -664,8 +666,16 @@ def wrap_handle_tensordesc(launcher, tensordesc_meta):
         for i, arg in enumerate(raw_kernel_args):
             if isinstance(arg, (TensorDescriptor, GluonTensorDescriptor)):
                 meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
+                if tensordesc_idx in tensordesc_cache:
+                    # TODO verify if args are indeed passed as positional args
+                    desc_arg = tensordesc_cache[tensordesc_idx]
+                    triton.runtime.driver.active.utils.replace_tma_address(desc_arg[0]._desc_ptr, arg.base.data_ptr())
+
+                else:
+                    desc_arg = make_tensordesc_arg(arg, meta)
+                    tensordesc_cache[tensordesc_idx] = desc_arg
                 tensordesc_idx += 1
-                final_args.extend(make_tensordesc_arg(arg, meta))
+                final_args.extend(desc_arg)
             else:
                 final_args.append(arg)
         assert not tensordesc_meta or tensordesc_idx == len(tensordesc_meta)
@@ -693,7 +703,8 @@ class CudaLauncher(object):
         has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
 
         self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
-        self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_meta) if has_tensor_desc_arg else mod.launch
+        tensordesc_cache = {}
+        self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_meta, tensordesc_cache) if has_tensor_desc_arg else mod.launch
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size

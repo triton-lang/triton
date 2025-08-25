@@ -164,6 +164,9 @@ typedef CUresult (*cuTensorMapEncodeTiled_t)(
     CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion,
     CUtensorMapFloatOOBfill oobFill);
 
+typedef CUresult (*cuTensorMapReplaceAddress_t)(
+    CUtensorMap *tensorMap, void *newAddress);
+
 #define defineGetFunctionHandle(name, symbolName)                              \
   static symbolName##_t name() {                                               \
     /* Open the shared library */                                              \
@@ -191,6 +194,9 @@ defineGetFunctionHandle(getCuOccupancyMaxActiveClustersHandle,
 
 defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle,
                         cuTensorMapEncodeTiled);
+
+defineGetFunctionHandle(getCuTensorMapReplaceAddressHandle,
+                        cuTensorMapReplaceAddress);
 
 static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
   int clusterDimX = -1, clusterDimY = -1, clusterDimZ = -1,
@@ -378,6 +384,21 @@ cleanup:
   return result;
 }
 
+static PyObject* replaceTMAAddress(PyObject *self, PyObject *args) {
+  unsigned long long desc_address;
+  unsigned long long new_address;
+  if (!PyArg_ParseTuple(args, "KK", &desc_address, &new_address)) {
+    return NULL;
+  }
+
+  static cuTensorMapReplaceAddress_t cuTensorMapReplaceAddress = NULL;
+  INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapReplaceAddress,
+                                      getCuTensorMapReplaceAddressHandle);
+  CUDA_CHECK_AND_RETURN_NULL(cuTensorMapReplaceAddress(
+      (CUtensorMap *)desc_address, (void *)new_address));
+  Py_RETURN_NONE;
+}
+
 static PyMethodDef ModuleMethods[] = {
     {"load_binary", loadBinary, METH_VARARGS,
      "Load provided cubin into CUDA driver"},
@@ -392,6 +413,7 @@ static PyMethodDef ModuleMethods[] = {
      "particular it's an error to change this value after launching any kernel "
      "that calls printf()."},
     {"fill_tma_descriptor", fillTMADescriptor, METH_VARARGS, "doc"},
+    {"replace_tma_address", replaceTMAAddress, METH_VARARGS, "doc"},
 
     {NULL, NULL, 0, NULL} // sentinel
 };
