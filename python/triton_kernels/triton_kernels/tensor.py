@@ -51,14 +51,12 @@ class Storage:
             block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
             shape = shape[:-2] + [shape[-1], shape[-2]]
             strides = strides[:-2] + [strides[-1], strides[-2]]
-        if self.data.dtype == torch.uint8 and self.layout.name is None:
-            # physical block size is half logical block size along packed dimension
+        if self.data.dtype == torch.uint8 and self.layout.name == "BLACKWELL_VALUE":
             indx = strides.index(1)
             block_shape[indx] = block_shape[indx] // 2
-            # Pad the inner shape to 128 for mxfp4 weights; TMA requires this when the compiler uses
-            # CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B.
-            pad = 128
-            shape[-1] = (shape[-1] + pad - 1) // pad * pad
+            if shape[-1] % 128 != 0:
+                raise ValueError("inner shape need to be multiple of 128 for "
+                                 "mxfp4 (CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B) TMAs.")
         block_shape = self.layout.swizzle_block_shape(block_shape)
         return TensorDescriptor(self.data, shape, strides, block_shape)
 

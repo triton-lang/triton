@@ -704,3 +704,85 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// The following two regression tests (all_false_mask and all_true_mask) are to
+// make sure that a buffer-op does not have to take mask-operand if and only if
+// its mask operand is a all-true-predicate.
+//
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: all_false_mask
+  tt.func public @all_false_mask(%in_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                 %idx_ptr: !tt.ptr<i64> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                 %out_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                 %shape0: i32, %shape1: i32) {
+    %cst = arith.constant dense<false> : tensor<64xi1, #blocked>
+    %c64_i32 = arith.constant 64 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c64_i32 : i32
+    %2 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked>
+    %3 = tt.splat %1 : i32 -> tensor<64xi32, #blocked>
+    %4 = arith.addi %3, %2 : tensor<64xi32, #blocked>
+    %5 = tt.splat %shape1 : i32 -> tensor<64xi32, #blocked>
+    %6 = arith.divsi %4, %5 : tensor<64xi32, #blocked>
+    %7 = arith.muli %5, %6 : tensor<64xi32, #blocked>
+    %8 = tt.addptr %idx_ptr, %1 : !tt.ptr<i64>, i32
+    %9 = tt.splat %8 : !tt.ptr<i64> -> tensor<64x!tt.ptr<i64>, #blocked>
+    %10 = tt.addptr %9, %2 : tensor<64x!tt.ptr<i64>, #blocked>, tensor<64xi32, #blocked>
+    %11 = tt.load %10, %cst : tensor<64x!tt.ptr<i64>, #blocked>
+    // CHECK: amdgpu.buffer_load %[[ptr1:.*]][%[[ofst1:.*]]], %[[mask1:.*]] : tensor<64xi64, #blocked>
+    %12 = tt.addptr %in_ptr, %1 : !tt.ptr<f32>, i32
+    %13 = tt.splat %12 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>, #blocked>
+    %14 = tt.addptr %13, %2 : tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xi32, #blocked>
+    %15 = tt.load %14, %cst : tensor<64x!tt.ptr<f32>, #blocked>
+    // CHECK: amdgpu.buffer_load %[[ptr2:.*]][%[[ofst2:.*]]], %[[mask2:.*]] : tensor<64xf32, #blocked>
+    %16 = arith.extsi %7 : tensor<64xi32, #blocked> to tensor<64xi64, #blocked>
+    %17 = arith.addi %11, %16 : tensor<64xi64, #blocked>
+    %18 = arith.trunci %17 : tensor<64xi64, #blocked> to tensor<64xi32, #blocked>
+    %19 = tt.splat %out_ptr : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>, #blocked>
+    %20 = tt.addptr %19, %18 : tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xi32, #blocked>
+    %21 = tt.atomic_rmw fadd, relaxed, gpu, %20, %15, %cst : (tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xf32, #blocked>, tensor<64xi1, #blocked>) -> tensor<64xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: all_true_mask
+  tt.func public @all_true_mask(%in_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                %idx_ptr: !tt.ptr<i64> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                %out_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                %shape0: i32, %shape1: i32) {
+    %cst = arith.constant dense<true> : tensor<64xi1, #blocked>
+    %c64_i32 = arith.constant 64 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c64_i32 : i32
+    %2 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #blocked>
+    %3 = tt.splat %1 : i32 -> tensor<64xi32, #blocked>
+    %4 = arith.addi %3, %2 : tensor<64xi32, #blocked>
+    %5 = tt.splat %shape1 : i32 -> tensor<64xi32, #blocked>
+    %6 = arith.divsi %4, %5 : tensor<64xi32, #blocked>
+    %7 = arith.muli %5, %6 : tensor<64xi32, #blocked>
+    %8 = tt.addptr %idx_ptr, %1 : !tt.ptr<i64>, i32
+    %9 = tt.splat %8 : !tt.ptr<i64> -> tensor<64x!tt.ptr<i64>, #blocked>
+    %10 = tt.addptr %9, %2 : tensor<64x!tt.ptr<i64>, #blocked>, tensor<64xi32, #blocked>
+    %11 = tt.load %10, %cst : tensor<64x!tt.ptr<i64>, #blocked>
+    // CHECK: amdgpu.buffer_load %[[ptr1:.*]][%[[ofst1:.*]]] : tensor<64xi64, #blocked>
+    %12 = tt.addptr %in_ptr, %1 : !tt.ptr<f32>, i32
+    %13 = tt.splat %12 : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>, #blocked>
+    %14 = tt.addptr %13, %2 : tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xi32, #blocked>
+    %15 = tt.load %14, %cst : tensor<64x!tt.ptr<f32>, #blocked>
+    // CHECK: amdgpu.buffer_load %[[ptr2:.*]][%[[ofst2:.*]]] : tensor<64xf32, #blocked>
+    %16 = arith.extsi %7 : tensor<64xi32, #blocked> to tensor<64xi64, #blocked>
+    %17 = arith.addi %11, %16 : tensor<64xi64, #blocked>
+    %18 = arith.trunci %17 : tensor<64xi64, #blocked> to tensor<64xi32, #blocked>
+    %19 = tt.splat %out_ptr : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>, #blocked>
+    %20 = tt.addptr %19, %18 : tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xi32, #blocked>
+    %21 = tt.atomic_rmw fadd, relaxed, gpu, %20, %15, %cst : (tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xf32, #blocked>, tensor<64xi1, #blocked>) -> tensor<64xf32, #blocked>
+    tt.return
+  }
+}
