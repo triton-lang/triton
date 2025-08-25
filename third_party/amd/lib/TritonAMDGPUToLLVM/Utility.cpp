@@ -685,7 +685,7 @@ bool isUsedByDotScaledOp(Operation *op) {
       });
 }
 
-bool isChainDotHead(tt::DotOpInterface dotOp) {
+bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
   auto isInSameRegion = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
@@ -696,14 +696,16 @@ bool isChainDotHead(tt::DotOpInterface dotOp) {
   for (Operation *op : fwdSlices) {
     if (auto dOp = dyn_cast<tt::DotOpInterface>(op)) {
       assert(dOp != dotOp);
-      auto opA = dOp.getA().getDefiningOp();
-      if (opA && fwdSlices.contains(opA)) {
+      Operation *dotOperand = (opIdx == 0) ? dOp.getA().getDefiningOp()
+                                           : dOp.getB().getDefiningOp();
+      if (dotOperand && fwdSlices.contains(dotOperand)) {
         return true;
       }
     }
   }
   return false;
 }
+
 
 bool hasTransInDefChain(tt::DotOpInterface dotOp, unsigned opIdx) {
   auto isInSameRegion = [&dotOp](Operation *op) {
@@ -744,6 +746,27 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
       }) != bwdSlices.end())
     return true;
   return false;
+}
+
+Operation *getChainDotTail(tt::DotOpInterface dotOp) {
+  auto isInSameRegion = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  BackwardSliceOptions bwdOpt;
+  bwdOpt.omitBlockArguments = true;
+  bwdOpt.filter = isInSameRegion;
+  SetVector<Operation *> bwdSlices;
+  Operation *opA = dotOp.getA().getDefiningOp();
+  if (!opA)
+    return nullptr;
+  (void)getBackwardSlice(opA, &bwdSlices, bwdOpt);
+  auto dotHead =llvm::find_if(bwdSlices, [](Operation *op) {
+        //return isa<tt::DotOpInterface>(op);
+        return isa<tt::DotOpInterface>(op); });
+   if ( dotHead != bwdSlices.end())
+    return *dotHead;
+   else 
+     return nullptr;
 }
 
 SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
