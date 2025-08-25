@@ -211,16 +211,25 @@ Value generateMask(OpBuilder &builder, const Location &loc,
 }
 
 Value generateOther(OpBuilder &builder, Location loc, Type scalarTy,
-                    ArrayRef<int64_t> blockShape) {
+                    ArrayRef<int64_t> blockShape, bool oobNaN = false) {
   auto blockTy = RankedTensorType::get(blockShape, scalarTy);
-  auto attr = builder.getZeroAttr(blockTy);
-  return builder.create<arith::ConstantOp>(loc, attr);
+  if (oobNaN) {
+    assert(mlir::isa<FloatType>(scalarTy));
+    auto floatTy = mlir::cast<FloatType>(scalarTy);
+    auto nan = llvm::APFloat::getNaN(floatTy.getFloatSemantics());
+    auto elem = builder.getFloatAttr(floatTy, nan);
+    auto attr = SplatElementsAttr::get(blockTy, elem);
+    return builder.create<arith::ConstantOp>(loc, attr);
+  } else {
+    auto attr = builder.getZeroAttr(blockTy);
+    return builder.create<arith::ConstantOp>(loc, attr);
+  }
 }
 
-Value generateOther(OpBuilder &builder, Location loc, TensorDescType descTy) {
+Value generateOther(OpBuilder &builder, Location loc, TensorDescType descTy, bool oobNaN = false) {
   auto blockTy = descTy.getSignlessBlockType();
   return generateOther(builder, loc, blockTy.getElementType(),
-                       blockTy.getShape());
+                       blockTy.getShape(), oobNaN);
 }
 
 SmallVector<mlir::Value> castToI64(OpBuilder &builder,
@@ -258,11 +267,13 @@ struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
     auto descTy = op.getDesc().getType();
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto offsets = castToI64(rewriter, op.getIndices());
-
+    bool oobNaN = false;
+    if (auto mk = op.getDesc().getDefiningOp<triton::MakeTensorDescOp>())
+      oobNaN = mk.getOobFillNaN();
     auto newLoad = rewriter.replaceOpWithNewOp<triton::LoadOp>(
         op, generatePtr(rewriter, loc, blockShape, desc, offsets),
         generateMask(rewriter, loc, blockShape, desc, offsets),
-        generateOther(rewriter, loc, descTy), triton::CacheModifier::NONE,
+        generateOther(rewriter, loc, descTy, oobNaN), triton::CacheModifier::NONE,
         triton::EvictionPolicy::NORMAL, false);
     newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
 
@@ -325,9 +336,12 @@ struct RewriteGatherPattern : OpConversionPattern<triton::DescriptorGatherOp> {
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto [ptr, mask] = generateGatherScatterPtrMask(
         rewriter, loc, blockShape, desc, op.getXOffsets(), op.getYOffset());
+    bool oobNaN = false;
+    if (auto mk = op.getDesc().getDefiningOp<triton::MakeTensorDescOp>())
+      oobNaN = mk.getOobFillNaN();
     auto other = generateOther(rewriter, loc,
                                descTy.getSignlessBlockType().getElementType(),
-                               blockShape);
+                               blockShape, oobNaN);
     auto newLoad = rewriter.replaceOpWithNewOp<triton::LoadOp>(
         op, ptr, mask, other, triton::CacheModifier::NONE,
         triton::EvictionPolicy::NORMAL, false);

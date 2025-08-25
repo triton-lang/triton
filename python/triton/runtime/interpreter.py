@@ -1162,6 +1162,7 @@ def _implicit_cvt(arg):
             shape=[_implicit_cvt(s) for s in arg.shape],
             strides=strides,
             block_shape=[tl.constexpr(b) for b in arg.block_shape],
+            oob_fill_nan=arg.oob_fill_nan,
         )
     return arg
 
@@ -1205,6 +1206,7 @@ class GridExecutor:
                     arg.shape,
                     arg.strides,
                     arg.block_shape,
+                    arg.oob_fill_nan,
                 )
             elif not hasattr(arg, "data_ptr"):
                 return arg

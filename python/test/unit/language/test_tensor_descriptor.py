@@ -156,8 +156,7 @@ def test_tensor_descriptor_functional_interface(dtype_str, device):
     torch.testing.assert_close(unwrap_tensor(inp), unwrap_tensor(out))
 
 
-@pytest.mark.skipif(not (is_cuda() and torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 9),
-                    reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.skipif(is_hip(), reason="Currently unsupported by HIP devices")
 def test_tensor_descriptor_oob_fill_mode_device(device):
     import torch
     @triton.jit
@@ -197,8 +196,7 @@ def test_tensor_descriptor_oob_fill_mode_device(device):
     assert torch.all(torch.isnan(out_nan[:, N:]))
 
 
-@pytest.mark.skipif(not (is_cuda() and torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 9),
-                    reason="Requires NVIDIA Hopper or newer")
+@pytest.mark.skipif(is_hip(), reason="Currently unsupported by HIP devices")
 def test_host_tensor_descriptor_oob_fill_mode():
     import torch
     M, N = 8, 20
