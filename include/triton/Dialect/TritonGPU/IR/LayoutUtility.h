@@ -9,4 +9,7 @@ CTALayoutAttr permuteCTALayout(MLIRContext *ctx, CTALayoutAttr layout,
 LinearLayout getPaddedRegToSharedLayout(const LinearLayout &regLayout,
                                         PaddedSharedEncodingAttr paddedEnc);
 
+LinearLayout getElemIndexToSharedLayout(PaddedSharedEncodingAttr paddedEnc,
+                                        ArrayRef<int64_t> shape);
+
 } // namespace mlir::triton::gpu
