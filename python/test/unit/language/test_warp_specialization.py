@@ -377,7 +377,6 @@ def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE
     ttgir = kernel.asm["ttgir"]
     if is_blackwell():
         if num_warps == 2:
-            # TODO: Enable ttng.tc_gen5_mma?
             assert "ttng.tc_gen5_mma" not in ttgir
             assert "tt.dot" in ttgir
             assert "ttng.async_tma_copy_global_to_local" in ttgir
