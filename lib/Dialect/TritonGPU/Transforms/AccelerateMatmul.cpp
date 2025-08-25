@@ -367,8 +367,6 @@ public:
   mlir::LogicalResult
   matchAndRewrite(triton::DotOp dotOp,
                   mlir::PatternRewriter &rewriter) const override {
-    // Enable F64 MMA only on SM80/SM90 with high performance F64 tensorcore.
-    // Otherwise, fallback to F64 FMA for better performance.
     if (computeCapability < 70)
       return failure();
     if (computeCapability < 80) {
@@ -389,6 +387,8 @@ public:
     auto oldBType = cast<RankedTensorType>(b.getType());
     auto oldRetType = cast<RankedTensorType>(dotOp.getType());
 
+    // Enable F64 MMA only on SM80/SM90 with high performance F64 tensorcore.
+    // Otherwise, fallback to F64 FMA for better performance.
     if ((oldAType.getElementType().isF64() ||
          oldBType.getElementType().isF64() ||
          oldRetType.getElementType().isF64()) &&
@@ -753,7 +753,6 @@ public:
     };
     SmallVector<unsigned, 2> tilesPerWarp{computeTilePerWarp(newA, 0),
                                           computeTilePerWarp(newB, 1)};
-
     // Convert scales to Linear layout
     auto convertScale = [&](Value scale, int opIdx) -> Value {
       if (!scale)
