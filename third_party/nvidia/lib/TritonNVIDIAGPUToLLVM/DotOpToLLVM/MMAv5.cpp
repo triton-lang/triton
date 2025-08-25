@@ -5,6 +5,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/SmallVector.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -714,7 +715,8 @@ struct TCGen5MMAOpConversion
     auto AEnc = op.getA().getType().getEncoding();
     auto BEnc = op.getB().getType().getEncoding();
     auto typeConverter = getTypeConverter();
-    auto commitOps = collectCommitOpAfter(op);
+    //    auto commitOps = collectCommitOpAfter(op);
+    SmallVector<ttng::TCGen5CommitOp> commitOps;
     assert(
         (isa<NVMMASharedEncodingAttr, ttng::TensorMemoryEncodingAttr>(AEnc)) &&
         "Operand A should use Shared or Tensor memory layout.");
@@ -737,7 +739,8 @@ struct TCGen5MMAScaledOpConversion
   LogicalResult
   matchAndRewrite(ttng::TCGen5MMAScaledOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto commitOps = collectCommitOpAfter(op);
+    //    auto commitOps = collectCommitOpAfter(op);
+    SmallVector<ttng::TCGen5CommitOp> commitOps;
     convertScaledDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor,
                      commitOps);
     rewriter.eraseOp(op);
