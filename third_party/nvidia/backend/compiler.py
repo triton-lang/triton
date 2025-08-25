@@ -366,13 +366,13 @@ class CUDABackend(BaseBackend):
 
         pass_entries = pass_config[0]
         pass_list = pass_config[1]
-        config_pass_entries = global_config["ttgir"]["passes"]
         cluster_info = pass_config[2]
 
         new_pass_list = list()
         if(global_config == None):
             new_pass_list = pass_list
         else:
+            config_pass_entries = global_config["ttgir"]["passes"]
             for e in config_pass_entries:
                 if(e in list(pass_entries.keys())):
                     new_pass_list.append([pass_entries[e][0], pass_entries[e][1]])
@@ -587,11 +587,13 @@ please share the reproducer above with Triton project.
 
     def add_stages(self, stages, options, language):
         global_config = None
-        if os.path.isfile("default.config") and os.access("default.config", os.R_OK):
-            with open("default.config", "r") as f:
+        global_config_path = None
+        if "PASS_MANAGER_CONFIG_PATH" in os.environ:
+            global_config_path = os.path.realpath(os.environ.get("PASS_MANAGER_CONFIG_PATH"))
+        if(global_config_path != None and os.access(global_config_path, os.R_OK)):
+            print(f"Loading global config from {global_config_path}")
+            with open(global_config_path, "r") as f:
                 global_config = json.load(f)
-        # if global_config is not None:
-        #     print(global_config["ttgir"]["passes"])
         capability = self._parse_arch(options.arch)
         if language == Language.TRITON:
             ttgir_pass_config = self.make_ttgir_pass_config(options.num_warps, options.num_ctas, options.num_stages, capability, options.cluster_dims, dump_enabled=False)
