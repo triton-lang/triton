@@ -1,4 +1,5 @@
 #include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/Dominance.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -260,6 +261,16 @@ bool ttng::hasLoadsAfterMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
     }
   }
   return false;
+}
+
+ttng::TCGen5CommitOp ttng::createCommit(OpBuilder &builder,
+                                        ttng::MMAv5OpInterface mmaOp,
+                                        Value barrier, Value pred) {
+  builder.setInsertionPointAfter(mmaOp);
+  auto commit =
+      builder.create<ttng::TCGen5CommitOp>(mmaOp.getLoc(), barrier, pred);
+  mmaOp.setIsAsync(true);
+  return commit;
 }
 
 //===----------------------------------------------------------------------===//

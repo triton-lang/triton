@@ -755,9 +755,8 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     barrierSlice =
         triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
   }
-  builder.setInsertionPointAfter(mma);
-  builder.create<ttng::TCGen5CommitOp>(barrierSlice);
-  mma.setIsAsync(true);
+
+  ttng::createCommit(builder, mma, barrierSlice);
 
   // List of buffers that may be used until wait completes
   SmallVector<Value> waitBuffers;

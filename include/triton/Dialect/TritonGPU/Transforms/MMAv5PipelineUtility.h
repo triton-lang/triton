@@ -28,6 +28,10 @@ bool requiresAccMultiBuffering(MMAv5OpInterface mma, scf::ForOp forOp);
 // Returns true if there are loads from tmem after the MMA operation.
 bool hasLoadsAfterMMA(MMAv5OpInterface mma, scf::ForOp forOp);
 
+// Creates TCGen5CommitOp after the mma op
+TCGen5CommitOp createCommit(OpBuilder &builder, MMAv5OpInterface mmaOp,
+                            Value barrier, Value pred = Value());
+
 // Helper class to determine if the operands of an MMA operation are
 // pipelineable.
 class MMAv5PipelineableOperandsHelper {

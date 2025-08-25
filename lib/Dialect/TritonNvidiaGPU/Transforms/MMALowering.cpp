@@ -2,6 +2,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
@@ -40,13 +41,8 @@ public:
     Value barrierAlloc =
         rewriter.create<ttg::LocalAllocOp>(loc, barrierMemDescType, Value());
     rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
-    // op.addCompletionBarrier(barrierAlloc,
-    //                         rewriter.create<arith::ConstantIntOp>(loc, 1, 1));
 
-
-    rewriter.setInsertionPointAfter(op);
-    rewriter.create<TCGen5CommitOp>(loc, barrierAlloc);
-    op.setIsAsync(true);
+    createCommit(rewriter, op, barrierAlloc);
 
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase, op.getPred());
