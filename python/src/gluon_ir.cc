@@ -403,6 +403,14 @@ void init_gluon_ir(py::module &&m) {
                  ctx, block[0], block[1], unpacked, ctaSplitNum[0],
                  ctaSplitNum[1]);
            })
+      .def("get_tensor_memory_scales_layout",
+           [](GluonOpBuilder &self,
+              std::vector<unsigned> &ctaSplitNum) -> Attribute {
+             auto ctx = self.getContext();
+             assert(ctaSplitNum.size() == 2);
+             return self.getChecked<ttng::TensorMemoryScalesEncodingAttr>(
+                 ctx, ctaSplitNum[0], ctaSplitNum[1]);
+           })
       .def("get_gluon_layout_from_tensor",
            [](GluonOpBuilder &self, Value tensor) -> py::object {
              auto ty = dyn_cast<RankedTensorType>(tensor.getType());
@@ -548,6 +556,10 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
              return self.create<ttng::TMEMLoadOp>(resultTy, memDesc);
            })
+      .def("create_tmem_copy",
+           [](GluonOpBuilder &self, Value src, Value dst) {
+             self.create<ttng::TMEMCopyOp>(src, dst, /*barrier=*/Value());
+           })
       .def("create_tmem_subslice",
            [](GluonOpBuilder &self, Type resultTy, Value memDesc,
               int N) -> Value {
@@ -584,6 +596,10 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttng::TCGen5MMAOp>(tokType, a, b, acc, accDep, useAcc,
                                             pred, two_ctas, mbarriers,
                                             mbarrier_preds);
+           })
+      .def("create_tcgen05_cp",
+           [](GluonOpBuilder &self, Value src, Value dst) {
+             self.create<ttng::TMEMCopyOp>(src, dst, Value());
            })
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value &barrier) {

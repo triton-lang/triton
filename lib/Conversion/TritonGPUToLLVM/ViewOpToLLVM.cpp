@@ -561,8 +561,8 @@ struct MemDescReinterpretOpConversion
 
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), srcElemTy, b);
-    SharedMemoryObject newObj(smemObj.getBase(), dstElemTy, dstTy.getRank(),
-                              loc, b);
+    Value newBase = smemObj.getShmemAffineBase(loc, b, srcTy);
+    SharedMemoryObject newObj(newBase, dstElemTy, dstTy.getRank(), loc, b);
     b.replaceOp(op, getStructFromSharedMemoryObject(loc, newObj, b));
     return success();
   }
