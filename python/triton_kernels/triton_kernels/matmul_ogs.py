@@ -49,7 +49,7 @@ class Epilogue:
     effective_itemsize: float = None
 
 class FnName(Enum):
-    DEQUANTIZE_MXFP8 = auto()
+    QUANTIZE_MXFP8 = auto()
 
 
 EpilogueSpecs = FnSpecs  # TODO: remove this alias when callers are updated
@@ -513,7 +513,7 @@ def matmul_ogs(x, w, bias,
                    X_TMA_MODE=x_tma_mode,
                    Y_TMA_MODE=y_tma_mode,
                    SWAP_XW=get_swap_xw(precision_config, opt_flags),
-                   IS_EPILOGUE_DEQUANT_MXFP8=epilogue.specs.name == FnName.DEQUANTIZE_MXFP8.name,
+                   IS_EPILOGUE_QUANT_MXFP8=epilogue.specs.name == FnName.QUANTIZE_MXFP8.name,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
     # Build grouped reduction inputs in a uniform way
