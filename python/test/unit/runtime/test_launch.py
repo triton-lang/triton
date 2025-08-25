@@ -164,6 +164,7 @@ def test_launch_with_options(options) -> None:
             options["extern_libs"] = {"ocml": str(libdir / 'ocml.bc'), "ockl": str(libdir / 'ockl.bc')}
 
     compile_info = {}
+
     def hook(key, repr, fn, compile, is_manual_warmup, already_compiled):
         nonlocal compile_info
         compile_info = compile
