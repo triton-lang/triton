@@ -1425,12 +1425,10 @@ LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
 //   - We choose a fixed provider for A (thread-id-a = 0) and B (thread-id-b =
 //   0)
 //   - In this implementation, each lane in a quad has the same scale factor.
-LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
-                                          ArrayRef<int64_t> dotOperandShape,
-                                          ArrayRef<unsigned> tilesPerWarp,
-                                          ArrayRef<unsigned> warpsPerCTA,
-                                          unsigned mmaInstrM,
-                                          unsigned mmaInstrN) {
+LinearLayout getSM120DotScaledScaleLayout(
+    MLIRContext *ctx, int dotOperandIdx, ArrayRef<int64_t> dotOperandShape,
+    ArrayRef<unsigned> tilesPerWarp, ArrayRef<unsigned> warpsPerCTA,
+    unsigned mmaInstrM, unsigned mmaInstrN, CTALayoutAttr ctaLayoutAttr) {
   unsigned rank = dotOperandShape.size();
   auto outDims = standardOutDimNames(ctx, rank);
 
@@ -1479,8 +1477,7 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   LinearLayout ctaLayout(
       {{kRegister, registerBase}, {kLane, laneBase}, {kWarp, warpBase}},
       {outDims[kIdx], outDims[mnIdx]});
-  auto ctaLay = CTALayoutAttr::get(ctx, {1, 1}, {1, 1}, {1, 0});
-  return combineCtaCgaWithShape(ctaLayout, ctaLay, dotOperandShape);
+  return combineCtaCgaWithShape(ctaLayout, ctaLayoutAttr, dotOperandShape);
 }
 
 LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,

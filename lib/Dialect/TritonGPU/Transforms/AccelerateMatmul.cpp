@@ -376,7 +376,7 @@ public:
       return failure();
     }
     // TODO: Check data-types and SM compatibility
-    auto retType = cast<RankedTensorType>(dotOp.getType());
+    auto retType = dotOp.getType();
     if (!retType.getEncoding() ||
         mlir::isa<NvidiaMmaEncodingAttr>(retType.getEncoding()))
       return failure();
@@ -678,16 +678,14 @@ public:
     if (!dotOp.getAScale() || !dotOp.getBScale())
       return failure();
 
-    auto aScaleType = cast<RankedTensorType>(dotOp.getAScale().getType());
-    auto bScaleType = cast<RankedTensorType>(dotOp.getBScale().getType());
+    auto aScaleType = dotOp.getAScale().getType();
+    auto bScaleType = dotOp.getBScale().getType();
 
     if (mlir::isa<LinearEncodingAttr>(aScaleType.getEncoding()) ||
         mlir::isa<LinearEncodingAttr>(bScaleType.getEncoding())) {
       return failure();
     }
 
-    // Check for single CTA configuration - SM120 dot scaled layouts don't
-    // support multi-CTA yet
     auto checkSingleCTA = [&](RankedTensorType scaleType) -> LogicalResult {
       if (auto blockedEnc = dyn_cast<triton::gpu::BlockedEncodingAttr>(
               scaleType.getEncoding())) {
@@ -703,6 +701,12 @@ public:
 
     if (checkSingleCTA(aScaleType).failed() ||
         checkSingleCTA(bScaleType).failed()) {
+      return failure();
+    }
+
+    auto aType = dotOp.getA().getType();
+    auto bType = dotOp.getB().getType();
+    if (checkSingleCTA(aType).failed() || checkSingleCTA(bType).failed()) {
       return failure();
     }
 
@@ -778,19 +782,15 @@ public:
 
       auto ll = triton::gpu::getSM120DotScaledScaleLayout(
           ctx, opIdx, shape, tilesPerWarp,
-          /*warpsPerCTA=*/mmaWarps, instrM, instrN);
+          /*warpsPerCTA=*/mmaWarps, instrM, instrN, blocked.getCTALayout());
 
       auto newEnc = triton::gpu::LinearEncodingAttr::get(ctx, ll);
       auto newTy = RankedTensorType::get(shape, ty.getElementType(), newEnc);
       return rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy,
                                               blockAdjustedScale);
     };
-    Value aScale = dotOp.getAScale()
-                       ? convertScale(dotOp.getAScale(), /*opIdx=*/0)
-                       : Value();
-    Value bScale = dotOp.getBScale()
-                       ? convertScale(dotOp.getBScale(), /*opIdx=*/1)
-                       : Value();
+    Value aScale = convertScale(dotOp.getAScale(), /*opIdx=*/0);
+    Value bScale = convertScale(dotOp.getBScale(), /*opIdx=*/1);
 
     newDot = rewriter.create<triton::DotScaledOp>(
         dotOp.getLoc(), mmaResult.newRetType, newA, newB, mmaResult.newAcc,
