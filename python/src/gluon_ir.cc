@@ -580,12 +580,12 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_tcgen05_mma",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
-              Value pred) {
+              Value pred, bool isAsync) {
              Value accDep;
              bool two_ctas = false;
              auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
              self.create<ttng::TCGen5MMAOp>(tokType, a, b, acc, accDep, useAcc,
-                                            pred, two_ctas);
+                                            pred, two_ctas, isAsync);
            })
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value barrier, Value pred) {
