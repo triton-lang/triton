@@ -397,8 +397,8 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS
     atol = 1e-2 * math.sqrt(K / 32)
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=0)
 
-    ptx = out.asm["ptx"]
     if is_cuda() and torch.cuda.get_device_capability()[0] == 12:
+        ptx = out.asm["ptx"]
         assert "mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X" in ptx
 
 
