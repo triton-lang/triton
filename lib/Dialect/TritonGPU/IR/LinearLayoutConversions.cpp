@@ -1,5 +1,6 @@
 #include <vector>
 
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
@@ -1628,6 +1629,11 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   swapLL *= LinearLayout({{dimN, dimNBases}}, {dimN});
 
   return mfmaLL.compose(swapLL);
+}
+
+LinearLayout getPaddedRegToSharedLayout(const LinearLayout &regLayout,
+                                        PaddedSharedEncodingAttr paddedEnc) {
+  return regLayout.invertAndCompose(paddedEnc.getLinearComponent());
 }
 
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,

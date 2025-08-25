@@ -235,15 +235,13 @@ class SwizzledSharedLayout:
 
 class PaddedSharedLayout:
 
-    def __init__(self, interval_padding_pairs, order, ctas_per_cga, cta_split_num, cta_order):
+    def __init__(self, interval_padding_pairs, linear_layout_offset_bases, linear_layout_block_bases):
         self.interval_padding_pairs = "[" + ", ".join(f"{v[0]}:{v[1]:+d}" for v in interval_padding_pairs) + "]"
-        self.order = order
-        self.ctas_per_cga = ctas_per_cga
-        self.cta_split_num = cta_split_num
-        self.cta_order = cta_order
+        self.offset_bases = linear_layout_offset_bases
+        self.block_bases = linear_layout_block_bases
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.padded_shared<{self.interval_padding_pairs} {{order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+        return f"#{GPU_DIALECT}.padded_shared<{self.interval_padding_pairs} {{offset={self.offset_bases}, block={self.block_bases}}}>"
 
 
 class NVMMASharedLayout:
@@ -5826,8 +5824,12 @@ intermediate_layouts = [
     SwizzledSharedLayout(1, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
     SwizzledSharedLayout(4, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
     SwizzledSharedLayout(2, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
-    PaddedSharedLayout([[32, 8]], [1, 0], [1, 1], [1, 1], [0, 1]),
-    PaddedSharedLayout([[64, 4], [128, 8]], [1, 0], [1, 1], [1, 1], [0, 1])
+    PaddedSharedLayout(
+        [[32, 8]], [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]],
+        []),
+    PaddedSharedLayout(
+        [[64, 4], [128, 8]],
+        [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]], []),
 ]
 
 
@@ -5868,8 +5870,12 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
         # skip even if scratch buffer equal to lds_size, because real scratch buffer is typically larger due to padding
         if scratch_shape[0] * scratch_shape[1] * int32_size >= lds_size:
             pytest.skip("Scratch buffer is too large")
-    if is_cuda() and isinstance(interm_layout, PaddedSharedLayout):
-        pytest.skip("PaddedSharedLayout is not supported on CUDA")
+
+    if isinstance(interm_layout, PaddedSharedLayout):
+        if is_cuda():
+            pytest.skip("PaddedSharedLayout is not supported on CUDA")
+        if M != 64 or N != 64:
+            pytest.skip("Padded layouts with linear remapping require 64 elements along M")
 
     layouts = f"""
     #src = {src_layout}
