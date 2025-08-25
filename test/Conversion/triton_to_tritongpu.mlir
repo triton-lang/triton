@@ -171,9 +171,11 @@ tt.func @cf_br(%ptr: !tt.ptr<i32>) {
 
 // -----
 
-#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, unpacked = true>
+// CHECK-DAG: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @test_func1(%arg0: tensor<64x1xi32>,%arg1: !ttg.memdesc<1x64x64xf32, #tmem, #ttng.tensor_memory, mutable>) attributes {noinline = false} {
+  // CHECK: %arg0: tensor<64x1xi32, [[BLOCKED]]>
+  tt.func public @test_func1(%arg0: tensor<64x1xi32>) attributes {noinline = false} {
+    // CHECK: tt.broadcast {{.*}} : tensor<64x1xi32, [[BLOCKED]]> -> tensor<64x64xi32, [[BLOCKED]]>
     %1 = tt.broadcast %arg0 : tensor<64x1xi32> -> tensor<64x64xi32>
     tt.return
   }
