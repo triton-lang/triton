@@ -686,15 +686,17 @@ public:
       return failure();
     }
 
-    auto checkSingleCTA = [&](RankedTensorType scaleType) -> LogicalResult {
-      if (auto blockedEnc = dyn_cast<triton::gpu::BlockedEncodingAttr>(
-              scaleType.getEncoding())) {
-        auto ctasPerCGA = blockedEnc.getCTALayout().getCTAsPerCGA();
-        if (ctasPerCGA[0] != 1 || ctasPerCGA[1] != 1) {
-          return rewriter.notifyMatchFailure(
-              dotOp, "SM120 dot scaled layouts do not support multi-CTA "
-                     "configurations yet");
-        }
+    auto checkSingleCTA = [&](RankedTensorType tensorType) -> LogicalResult {
+      auto encoding = tensorType.getEncoding();
+      if (!encoding)
+        return success();
+
+      auto ctaLayout = triton::gpu::getCTALayout(encoding);
+      auto ctasPerCGA = ctaLayout.getCTAsPerCGA();
+      if (ctasPerCGA[0] != 1 || ctasPerCGA[1] != 1) {
+        return rewriter.notifyMatchFailure(
+            dotOp, "SM120 dot scaled layouts do not support multi-CTA "
+                   "configurations yet");
       }
       return success();
     };
