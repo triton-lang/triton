@@ -706,7 +706,6 @@ bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
   return false;
 }
 
-
 bool hasTransInDefChain(tt::DotOpInterface dotOp, unsigned opIdx) {
   auto isInSameRegion = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
@@ -760,13 +759,14 @@ Operation *getChainDotTail(tt::DotOpInterface dotOp) {
   if (!opA)
     return nullptr;
   (void)getBackwardSlice(opA, &bwdSlices, bwdOpt);
-  auto dotHead =llvm::find_if(bwdSlices, [](Operation *op) {
-        //return isa<tt::DotOpInterface>(op);
-        return isa<tt::DotOpInterface>(op); });
-   if ( dotHead != bwdSlices.end())
+  auto dotHead = llvm::find_if(bwdSlices, [](Operation *op) {
+    // return isa<tt::DotOpInterface>(op);
+    return isa<tt::DotOpInterface>(op);
+  });
+  if (dotHead != bwdSlices.end())
     return *dotHead;
-   else 
-     return nullptr;
+  else
+    return nullptr;
 }
 
 SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
