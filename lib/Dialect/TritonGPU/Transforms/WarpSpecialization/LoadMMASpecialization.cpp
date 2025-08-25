@@ -358,7 +358,7 @@ static void createCommit(PartitionBuilder &builder, Partition &partition,
                          StageCluster stageCluster,
                          ttng::MMAv5OpInterface mmaOp, Value barrier,
                          Value pred = Value()) {
-  auto commit = ttng::createCommit(builder, mmaOp, barrier);
+  auto commit = ttng::createCommit(builder, mmaOp, barrier, pred);
   builder.assignPartition(commit, partition);
   builder.assignStage(commit, stageCluster);
 }
