@@ -11,6 +11,7 @@ import torch
 
 import triton
 import triton.language as tl
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 
 @triton.jit
@@ -20,15 +21,15 @@ def nop_args(
     t3,
     t4,
     t5,
-    i1,
-    i2,
-    i3,
-    i4,
-    i5,
-    i6,
-    i7,
-    i8,
-    i9,
+    nc1,
+    nc2,
+    nc3,
+    nc4,
+    nc5,
+    nc6,
+    nc7,
+    nc8,
+    nc9,
     c1: tl.constexpr,
     c2: tl.constexpr,
     c3: tl.constexpr,
@@ -78,18 +79,24 @@ def do_bench_walltime(fn):
     return mses
 
 
-def main():
-    targs = [torch.zeros(1, device="cuda") for _ in range(5)]
-    iargs = [1 for _ in range(9)]
-    cargs = [32 for _ in range(5)]
+def main(use_tensor_desc: bool):
+    if use_tensor_desc:
+        targs = [TensorDescriptor.from_tensor(torch.zeros(1, 16, device="cuda"), block_shape=[1, 16]) for _ in range(5)]
+    else:
+        targs = [torch.zeros(1, device="cuda") for _ in range(5)]
+    ncargs = [0, 1, 1024, 2**31 - 1, 2**64 - 1, False, True, None, (16, 16)]
+    cargs = [32, False, True, 0, 64]
 
     usecs = do_bench_walltime(lambda: nop_args[
         1,
-    ](*targs, *iargs, *cargs)) * 1000.0
+    ](*targs, *ncargs, *cargs)) * 1000.0
 
     print(usecs)
     print(sorted(usecs)[len(usecs) >> 1])
 
 
 if __name__ == "__main__":
-    main()
+    print("launch overhead of kernel with Tensor inputs")
+    main(use_tensor_desc=False)
+    print("launch overhead of kernel with TensorDescriptor inputs")
+    main(use_tensor_desc=True)
