@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 from triton.runtime.jit import constexpr_function
+import math
 
 
 def _realize_cta_layout(layout, rank):
@@ -495,33 +496,31 @@ class PaddedSharedLayout(SharedLayout):
         cta_order (Optional[List[int]]): CTA ordering.
     """
     interval_padding_pairs: List[List[int]]
-    order: List[int]
-    ctas_per_cga: Optional[List[int]] = None
-    cta_split_num: Optional[List[int]] = None
-    cta_order: Optional[List[int]] = None
+    offset_bases: List[List[int]]
+    block_bases: List[List[int]]
+    shape: List[int]
 
     def __post_init__(self):
         super().__setattr__("interval_padding_pairs", _unwrap_shape(self.interval_padding_pairs))
-        super().__setattr__("order", _unwrap_if_constexpr(self.order))
-        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
-        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
-        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+        super().__setattr__("offset_bases", _unwrap_shape(self.offset_bases))
+        super().__setattr__("block_bases", _unwrap_shape(self.block_bases))
+        super().__setattr__("shape", _unwrap_shape(self.shape))
+
+        rank = len(self.shape)
+
+        for basis in self.offset_bases:
+            assert len(basis) == rank
+        for basis in self.block_bases:
+            assert len(basis) == rank
 
         self.verify()
 
     def _to_ir(self, builder):
         intervals, paddings = zip(*self.interval_padding_pairs)
-        return builder.get_padded_shared_layout(intervals, paddings, self.order, self.ctas_per_cga, self.cta_split_num,
-                                                self.cta_order)
+        return builder.get_padded_shared_layout(intervals, paddings, self.offset_bases, self.block_bases, self.shape)
 
     def mangle(self) -> str:
-
-        def stringify(x):
-            if x is None:
-                return ""
-            return "_".join(map(str, x))
-
-        return f"PaddedShared_{stringify(self.interval_padding_pairs)}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_PaddedShared"
+        return f"PaddedShared_{self.interval_padding_pairs}_{self.offset_bases}_{self.block_bases}_{self.shape}_PaddedShared"
 
     def verify(self):
         pairs = self.interval_padding_pairs
@@ -536,19 +535,31 @@ class PaddedSharedLayout(SharedLayout):
         assert all(is_power_of_2(n) for n in intervals), "PaddedSharedLayout interval values must all be power of two"
         assert all(is_power_of_2(n) for n in paddings), "PaddedSharedLayout padding values must all be power of two"
 
-        rank = len(self.order)
+        rank = len(self.shape)
         assert rank > 0, "PaddedSharedLayout order must not be empty"
-        _realize_cta_layout(self, rank)
 
-        assert len(self.ctas_per_cga) == rank
-        assert len(self.cta_split_num) == rank
-        assert len(self.cta_order) == rank
+    @staticmethod
+    @constexpr_function
+    def get_default_for(interval_padding_pairs, shape, order):
+        """Returns an PaddedSharedLayout with the given interval and padding pairs and an identity mapping as the linear component for the given shape and order.
+        """
+
+        assert len(shape) == len(order)
+        is_power_of_2 = lambda n: n > 0 and n & (n - 1) == 0
+        assert all(is_power_of_2(n) for n in shape)
+
+        rank = len(shape)
+        # Create a idendity mapping based on shape + order
+        offset_bases = []
+        for dim in order:
+            for basis in range(int(math.log2(shape[dim]))):
+                offset_bases.append([1 << basis if i == dim else 0 for i in range(rank)])
+
+        return PaddedSharedLayout(interval_padding_pairs, offset_bases, [], shape)
 
     def __hash__(self):
-        return hash((tuple(map(tuple, self.interval_padding_pairs)),
-                     tuple(self.order), tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
-                     tuple(self.cta_split_num) if self.cta_split_num else None,
-                     tuple(self.cta_order) if self.cta_order else None))
+        return hash((tuple(map(tuple, self.interval_padding_pairs)), tuple(map(tuple, self.offset_bases)),
+                     tuple(map(tuple, self.block_bases)), tuple(self.shape)))
 
 
 # Python impl of LinearEncodingAttr::basesPerDim
