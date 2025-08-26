@@ -3,18 +3,6 @@ from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 from triton.runtime.jit import constexpr_function
 
-__all__ = [
-    "AutoLayout",
-    "BlockedLayout",
-    "SliceLayout",
-    "DistributedLinearLayout",
-    "DotOperandLayout",
-    "NVMMADistributedLayout",
-    "NVMMASharedLayout",
-    "SwizzledSharedLayout",
-    "PaddedSharedLayout",
-]
-
 
 def _realize_cta_layout(layout, rank):
     ctas_per_cga = layout.ctas_per_cga or [1] * rank
@@ -112,6 +100,17 @@ class BlockedLayout(DistributedLayout):
         cta_order = stringify(self.cta_order)
         return f"B{size_per_thread}B{threads_per_warp}B{warps_per_cta}B{order}B{ctas_per_cga}B{cta_split_num}B{cta_order}B"
 
+    def __hash__(self):
+        return hash((
+            tuple(self.size_per_thread),
+            tuple(self.threads_per_warp),
+            tuple(self.warps_per_cta),
+            tuple(self.order),
+            tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+            tuple(self.cta_split_num) if self.cta_split_num else None,
+            tuple(self.cta_order) if self.cta_order else None,
+        ))
+
 
 @dataclass(frozen=True)
 class SliceLayout(DistributedLayout):
@@ -137,6 +136,9 @@ class SliceLayout(DistributedLayout):
 
     def mangle(self) -> str:
         return f"SL{self.dim}_{self.parent.mangle()}SL"
+
+    def __hash__(self):
+        return hash((self.dim, self.parent))
 
 
 @dataclass(frozen=True)
@@ -183,6 +185,15 @@ class DistributedLinearLayout(DistributedLayout):
     def mangle(self):
         return f"DLL{self.reg_bases}_{self.lane_bases}_{self.warp_bases}_{self.block_bases}_{self.shape}DLL"
 
+    def __hash__(self):
+        return hash((
+            tuple(self.reg_bases),
+            tuple(self.lane_bases),
+            tuple(self.warp_bases),
+            tuple(self.block_bases),
+            tuple(self.shape),
+        ))
+
 
 @dataclass(frozen=True)
 class DotOperandLayout(DistributedLayout):
@@ -208,6 +219,9 @@ class DotOperandLayout(DistributedLayout):
 
     def mangle(self) -> str:
         return f"DO{self.operand_index}_{self.parent.mangle()}_{self.k_width}DO"
+
+    def __hash__(self):
+        return hash((self.operand_index, self.parent, self.k_width))
 
 
 @dataclass(frozen=True)
@@ -250,6 +264,12 @@ class NVMMADistributedLayout(DistributedLayout):
 
     def mangle(self) -> str:
         return f"MMA_{self.version}_{self.warps_per_cta}_{self.instr_shape}_{self.ctas_per_cga}_{self.cta_split_num}_{self.cta_order}_MMA"
+
+    def __hash__(self):
+        return hash((tuple(self.version), tuple(self.warps_per_cta),
+                     tuple(self.instr_shape), tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+                     tuple(self.cta_split_num) if self.cta_split_num else None,
+                     tuple(self.cta_order) if self.cta_order else None))
 
 
 class SharedLayout:
@@ -370,6 +390,12 @@ class NVMMASharedLayout(SharedLayout):
     def mangle(self) -> str:
         return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_NVMMA"
 
+    def __hash__(self):
+        return hash((self.swizzle_byte_width, self.element_bitwidth, self.rank, self.transposed, self.fp4_padded,
+                     tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+                     tuple(self.cta_split_num) if self.cta_split_num else None,
+                     tuple(self.cta_order) if self.cta_order else None))
+
 
 @dataclass(frozen=True, eq=True)
 class SwizzledSharedLayout(SharedLayout):
@@ -427,6 +453,12 @@ class SwizzledSharedLayout(SharedLayout):
             return "_".join(map(str, x))
 
         return f"SSS_{self.vec}_{self.per_phase}_{self.max_phase}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_SSS"
+
+    def __hash__(self):
+        return hash((self.vec, self.per_phase, self.max_phase,
+                     tuple(self.order), tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+                     tuple(self.cta_split_num) if self.cta_split_num else None,
+                     tuple(self.cta_order) if self.cta_order else None))
 
 
 @dataclass(frozen=True, eq=True)
@@ -511,6 +543,12 @@ class PaddedSharedLayout(SharedLayout):
         assert len(self.ctas_per_cga) == rank
         assert len(self.cta_split_num) == rank
         assert len(self.cta_order) == rank
+
+    def __hash__(self):
+        return hash((tuple(map(tuple, self.interval_padding_pairs)),
+                     tuple(self.order), tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+                     tuple(self.cta_split_num) if self.cta_split_num else None,
+                     tuple(self.cta_order) if self.cta_order else None))
 
 
 # Python impl of LinearEncodingAttr::basesPerDim

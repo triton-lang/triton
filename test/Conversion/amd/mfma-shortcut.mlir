@@ -20,8 +20,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 #dotop0 = #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth=8}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  // GFX942-LABEL: mfma_dot_cvt_bf8_mfma32
-  tt.func public @mfma_dot_cvt_bf8_mfma32(%arg0: tensor<128x32xf8E5M2, #mfma>) {
+  // GFX942-LABEL: mfma_dot_cvt_bf8_mfma32_v3
+  tt.func public @mfma_dot_cvt_bf8_mfma32_v3(%arg0: tensor<128x32xf8E5M2, #mfma>) {
     // GFX942-NOT: store
     // GFX942-NOT: load
     // GFX942: rocdl.ds_bpermute
@@ -33,16 +33,49 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // -----
 
+#mfma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = true}>
+#dotop0 = #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth=8}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // GFX950-LABEL: mfma_dot_cvt_bf8_mfma32_v4
+  tt.func public @mfma_dot_cvt_bf8_mfma32_v4(%arg0: tensor<128x32xf8E5M2, #mfma>) {
+    // GFX950-NOT: rocdl.ds_bpermute
+    // GFX950-COUNT-2: llvm.call_intrinsic "llvm.amdgcn.permlane32.swap"
+    %0 = ttg.convert_layout %arg0 : tensor<128x32xf8E5M2, #mfma> -> tensor<128x32xf8E5M2, #dotop0>
+    tt.return
+  }
+}
+
+// -----
+
 #mfma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>
 #dotop0 = #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth=8}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  // GFX942-LABEL: mfma_dot_cvt_bf8_mfma16
-  tt.func public @mfma_dot_cvt_bf8_mfma16(%arg0: tensor<128x32xf8E5M2, #mfma>) {
+  // GFX942-LABEL: mfma_dot_cvt_bf8_mfma16_v3
+  tt.func public @mfma_dot_cvt_bf8_mfma16_v3(%arg0: tensor<128x32xf8E5M2, #mfma>) {
     // GFX942-NOT: store
     // GFX942-NOT: load
     // GFX942: rocdl.ds_bpermute
     // GFX942: llvm.return
+    %0 = ttg.convert_layout %arg0 : tensor<128x32xf8E5M2, #mfma> -> tensor<128x32xf8E5M2, #dotop0>
+    tt.return
+  }
+}
+
+// -----
+
+#mfma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>
+#dotop0 = #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth=8}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // GFX950-LABEL: mfma_dot_cvt_bf8_mfma16_v4
+  tt.func public @mfma_dot_cvt_bf8_mfma16_v4(%arg0: tensor<128x32xf8E5M2, #mfma>) {
+    // GFX950-NOT: rocdl.ds_bpermute
+    // GFX950: llvm.call_intrinsic "llvm.amdgcn.permlane32.swap"
+    // GFX950: llvm.call_intrinsic "llvm.amdgcn.permlane16.swap"
+    // GFX950: llvm.call_intrinsic "llvm.amdgcn.permlane32.swap"
+    // GFX950: llvm.call_intrinsic "llvm.amdgcn.permlane16.swap"
     %0 = ttg.convert_layout %arg0 : tensor<128x32xf8E5M2, #mfma> -> tensor<128x32xf8E5M2, #dotop0>
     tt.return
   }

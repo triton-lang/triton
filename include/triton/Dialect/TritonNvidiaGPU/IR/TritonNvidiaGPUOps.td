@@ -701,8 +701,13 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
     for the completion of the copy before MMA, since tcgen05.cp followed by tcgen05.mma is guaranteed to
     execute in that order.
 
-    This op lowers to the PTX instruction tcgen05.cp. Right now, we only support 1CTA and the warpx4.32x128b
-    variant of the instruction. Each 32x128b block in SMEM is duplicated over 4 warps and stored into 128 rows
+    This op lowers to the PTX instruction tcgen05.cp. This supports writing either to scales tmem layout as well as default tmem layout.
+    Currently the semantic is different when writing to tmem scale layout.
+
+    In case of default layout the copy doesn't change the logical elements between the source and destination memdesc.
+
+    In case of scale layout:
+    Each 32x128b block in SMEM is duplicated over 4 warps and stored into 128 rows
     and 4 columns of TMEM. The primary use case of this op is to copy blocked scales from SMEM to TMEM.
 
     The shape of the input SMEM can be flexibily chosen depending on use cases. In the simplest case (e.g. unit test),
@@ -741,7 +746,7 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
     Optional<TTG_MemDescType>:$barrier
   );
 
-  let assemblyFormat = [{$src `,` $dst `,` $barrier attr-dict `:` functional-type(operands, results)}];
+  let assemblyFormat = [{$src `,` $dst (`,` $barrier^)? attr-dict `:` qualified(type(operands))}];
   let hasVerifier = 1;
 }
 
