@@ -164,24 +164,41 @@ def test_launch_with_options(options) -> None:
             options["extern_libs"] = {"ocml": str(libdir / 'ocml.bc'), "ockl": str(libdir / 'ockl.bc')}
 
     compile_info = {}
+    counter = 0
 
-    def hook(key, repr, fn, compile, is_manual_warmup, already_compiled):
+    def compile_info_hook(key, repr, fn, compile, is_manual_warmup, already_compiled):
         nonlocal compile_info
         compile_info = compile
+
+    def cache_hook(*args, **kwargs):
+        nonlocal counter
+        counter += 1
 
     @triton.jit
     def kernel(x):
         pass
 
-    # launch kernel with options (twice)
-    triton.knobs.runtime.jit_post_compile_hook = hook
-    kernel[(1, 1, 1)](6, **options)
-    kernel[(1, 1, 1)](6, **options)
-    triton.knobs.runtime.jit_post_compile_hook = None
+    triton.knobs.runtime.jit_post_compile_hook = compile_info_hook
+    triton.knobs.runtime.jit_cache_hook = cache_hook
 
-    # check the compile info
+    # run first without options
+    kernel[(1, 1, 1)](6)
+    assert counter == 1
+
+    # run with options, should lead to new compilation
+    kernel[(1, 1, 1)](6, **options)
+    assert counter == 2
+
+    # run a second time for testing kernel-cache look-up
+    kernel[(1, 1, 1)](6, **options)
+    assert counter == 2
+
+    # check the options are passed on to compile_info correctly
     option_key, option_val = next(iter(options.items()))
     if option_key == "extern_libs":
         assert compile_info[option_key] == tuple(option_val.items())
     else:
         assert compile_info[option_key] == option_val
+
+    triton.knobs.runtime.jit_post_compile_hook = None
+    triton.knobs.runtime.jit_cache_hook = None
