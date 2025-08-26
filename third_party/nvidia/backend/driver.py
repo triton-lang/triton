@@ -614,7 +614,7 @@ TMA_DTYPE_DEVICE_TO_HOST[9] = 8
 TMA_DTYPE_DEVICE_TO_HOST[10] = 9
 
 
-def make_tensordesc_arg(arg, metadata):
+def make_tensordesc_arg(arg, metadata, tensordesc_cache, tensordesc_idx):
     if metadata is None:
         # Currently the host side tensor descriptors get decomposed in
         # the frontend to tensor desc, shape, and strides. We have no
@@ -630,20 +630,26 @@ def make_tensordesc_arg(arg, metadata):
     block_size = metadata["block_size"]
     fp4_padded = metadata["fp4_padded"]
 
-    data_ptr = arg.base.data_ptr()
     shape = arg.shape
     strides = arg.strides
     assert strides[-1] == 1
 
-    desc = TmaDescKernelParam()
-    result = [desc, *shape, *strides]
-
+    # Each CompiledKernel should have its own instance of a CudaLauncher
+    # and hence its own tensordesc_cache. Since arguments to launcher are
+    # passed as positional args, using tensordesc_idx as key for the cache
+    # should be valid.
+    key = tensordesc_idx
+    desc = tensordesc_cache.get(key, None)
+    if desc is None:
+      desc = TmaDescKernelParam()
+      tensordesc_cache[key] = desc
+ 
     if fp4_padded:
         shape = list(shape)
         shape[-1] *= 2
     triton.runtime.driver.active.utils.fill_tma_descriptor(
-        desc.tma_desc_cpu_ptr(),
-        data_ptr,
+        desc._desc_ptr,
+        arg.base.data_ptr(),
         swizzle,
         elem_size,
         TMA_DTYPE_DEVICE_TO_HOST[elem_type],
@@ -651,34 +657,25 @@ def make_tensordesc_arg(arg, metadata):
         shape,
         strides,
     )
-    return result
+
+    return [desc, *shape, *strides]
 
 
-def wrap_handle_tensordesc(launcher, tensordesc_meta, tensordesc_cache):
+def wrap_handle_tensordesc(launcher, tensordesc_indices, tensordesc_meta, tensordesc_cache):
     from triton.tools.tensor_descriptor import TensorDescriptor
     from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
 
     def inner(*args):
-        meta_args = args[:len(_BASE_ARGS_FORMAT)]
+        meta_args = list(args[:len(_BASE_ARGS_FORMAT)])
         raw_kernel_args = args[len(_BASE_ARGS_FORMAT):]
-        tensordesc_idx = 0
         final_args = []
+        tensordesc_idx = 0
         for i, arg in enumerate(raw_kernel_args):
-            if isinstance(arg, (TensorDescriptor, GluonTensorDescriptor)):
-                meta = tensordesc_meta[tensordesc_idx] if tensordesc_meta else None
-                if tensordesc_idx in tensordesc_cache:
-                    # TODO verify if args are indeed passed as positional args
-                    desc_arg = tensordesc_cache[tensordesc_idx]
-                    triton.runtime.driver.active.utils.replace_tma_address(desc_arg[0]._desc_ptr, arg.base.data_ptr())
-
-                else:
-                    desc_arg = make_tensordesc_arg(arg, meta)
-                    tensordesc_cache[tensordesc_idx] = desc_arg
-                tensordesc_idx += 1
-                final_args.extend(desc_arg)
+            if i in tensordesc_indices:
+              final_args.extend(make_tensordesc_arg(arg, tensordesc_meta[tensordesc_idx], tensordesc_cache, tensordesc_idx))
+              tensordesc_idx += 1
             else:
-                final_args.append(arg)
-        assert not tensordesc_meta or tensordesc_idx == len(tensordesc_meta)
+              final_args.append(arg)
         return launcher(*meta_args, *final_args)
 
     return inner
@@ -701,10 +698,14 @@ class CudaLauncher(object):
             libraries=libraries,
         )
         has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
+        tensordesc_indices = set([i for i, sig in enumerate(signature.values()) if isinstance(sig, str) and sig.startswith("tensordesc")])
+        tensordesc_cache = {}
+        assert not tensordesc_meta or len(tensordesc_meta) == len(tensordesc_indices)
+        if tensordesc_meta is None:
+          tensordesc_meta = [None] * len(tensordesc_indices)
 
         self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
-        tensordesc_cache = {}
-        self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_meta, tensordesc_cache) if has_tensor_desc_arg else mod.launch
+        self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_indices, tensordesc_meta, tensordesc_cache) if has_tensor_desc_arg else mod.launch
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
