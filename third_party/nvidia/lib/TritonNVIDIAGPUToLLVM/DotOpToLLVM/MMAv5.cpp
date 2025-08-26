@@ -705,7 +705,8 @@ collectCommitOpAfter(ttng::MMAv5OpInterface mmaOp) {
 
   while (nextOp && !isa<nvidia_gpu::MMAv5OpInterface>(nextOp)) {
     if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(nextOp)) {
-      if (commit.getPred() == nullptr || equalPred(mmaPred, commit.getPred())) {
+      if ((isConstTrue(mmaPred) && commit.getPred() == nullptr) ||
+          equalPred(mmaPred, commit.getPred())) {
         commitOps.push_back(commit);
       }
     }
