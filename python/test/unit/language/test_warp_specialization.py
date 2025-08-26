@@ -341,7 +341,7 @@ def matmul_tma_persistent_ws_kernel(  #
 @pytest.mark.parametrize("BLOCK_SIZE_N", [128, 256])
 @pytest.mark.parametrize("BLOCK_SIZE_K", [64, 128])
 @pytest.mark.parametrize("num_stages", [2, 3])
-@pytest.mark.parametrize("num_warps", [4, 8])
+@pytest.mark.parametrize("num_warps", [2, 4, 8])
 @pytest.mark.parametrize("use_fp8", [False, True])
 @pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
 @pytest.mark.skipif(not is_hopper_or_blackwell(), reason="Requires Hopper or Blackwell")
@@ -376,8 +376,13 @@ def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE
                                                    num_warps=num_warps, USE_FP8=use_fp8, FLATTEN=is_blackwell())
     ttgir = kernel.asm["ttgir"]
     if is_blackwell():
-        assert "ttng.tc_gen5_mma" in ttgir
-        assert "ttng.async_tma_copy_global_to_local" in ttgir
+        if num_warps == 2:
+            assert "ttng.tc_gen5_mma" not in ttgir
+            assert "tt.dot" in ttgir
+            assert "ttng.async_tma_copy_global_to_local" in ttgir
+        else:
+            assert "ttng.tc_gen5_mma" in ttgir
+            assert "ttng.async_tma_copy_global_to_local" in ttgir
     else:
         assert "ttng.warp_group_dot" in ttgir
         assert "ttng.async_tma_copy_global_to_local" in ttgir

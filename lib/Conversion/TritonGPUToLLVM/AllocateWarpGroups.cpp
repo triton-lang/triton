@@ -144,6 +144,11 @@ struct AllocateWarpGroups
       // Iterate over the partitions and assign them to warp groups. Determine
       // the maximum number of requested registers per warp group.
       SmallVector<WarpGroupInfo> warpGroups;
+      // Allocate a warp group for the default partition.
+      // when baseNumWarps < 4.
+      if (baseNumWarps < 4) {
+        warpGroups.push_back(WarpGroupInfo{});
+      }
       for (auto [startId, partition, estRegs, numWarps] : orderedPartitions) {
         if (startId % 4 == 0) {
           warpGroups.push_back(WarpGroupInfo{});
@@ -158,8 +163,12 @@ struct AllocateWarpGroups
 
       // Compute the register deficit over the partition warp groups.
       int registerBudget = maxnreg * baseNumWarps * threadsPerWarp;
-      for (const WarpGroupInfo &wg : warpGroups) {
-        assert(wg.numWarps % 4 == 0);
+      for (WarpGroupInfo &wg : warpGroups) {
+        auto warpsModFour = wg.numWarps % 4;
+        if (warpsModFour != 0) {
+          // Round up the number of warps to the next multiple of 4.
+          wg.numWarps = wg.numWarps + (4 - warpsModFour);
+        }
         registerBudget +=
             (maxnreg - wg.maxRequestedRegs) * wg.numWarps * threadsPerWarp;
       }
