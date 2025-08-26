@@ -543,7 +543,6 @@ class PaddedSharedLayout(SharedLayout):
     def get_default_for(interval_padding_pairs, shape, order):
         """Returns an PaddedSharedLayout with the given interval and padding pairs and an identity mapping as the linear component for the given shape and order.
         """
-
         assert len(shape) == len(order)
         is_power_of_2 = lambda n: n > 0 and n & (n - 1) == 0
         assert all(is_power_of_2(n) for n in shape)

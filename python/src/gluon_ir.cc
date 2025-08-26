@@ -234,7 +234,7 @@ py::object layoutToGluon(Attribute layout) {
     }
     auto kOffset = mlir::StringAttr::get(ctx, "offset");
     auto kBlock = mlir::StringAttr::get(ctx, "block");
-    const auto &ll = paddedShared.getLinearComponent();
+    auto ll = paddedShared.getLinearComponent();
     auto shape = toStdVector(ArrayRef(llvm::to_vector(ll.getOutDimSizes())));
     return layouts.PaddedSharedLayout(intervalPaddingPairs,
                                       ll.getBases().lookup(kOffset),
@@ -358,9 +358,9 @@ void init_gluon_ir(py::module &&m) {
       .def("get_padded_shared_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &intervals,
               std::vector<unsigned> &paddings,
-              std::vector<std::vector<int>> offsetBases,
-              std::vector<std::vector<int>> blockBases,
-              std::vector<int64_t> shape) -> Attribute {
+              std::vector<std::vector<int>> &offsetBases,
+              std::vector<std::vector<int>> &blockBases,
+              std::vector<int64_t> &shape) -> Attribute {
              auto ctx = self.getContext();
              assert(offsetBases.size() > 0 && offsetBases.front().size() > 0);
              auto rank = shape.size();

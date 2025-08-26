@@ -330,8 +330,9 @@ unsigned getNumCTAs(Attribute layout) {
   return product<unsigned>(getCTAsPerCGA(layout));
 }
 
-SmallVector<unsigned> getOrderPerDim(const LinearLayout &ll, StringAttr dimName,
-                                     ArrayRef<unsigned> defaultOrder) {
+SmallVector<unsigned> orderPerDimImpl(const LinearLayout &ll,
+                                      StringAttr dimName,
+                                      ArrayRef<unsigned> defaultOrder) {
   assert(ll.getBases().contains(dimName));
   const auto &bases = ll.getBases().find(dimName)->second;
   llvm::SetVector<unsigned> order;
@@ -913,7 +914,7 @@ LinearEncodingAttr::basesPerDim(StringAttr dimName, bool skipBroadcast) const {
 SmallVector<unsigned>
 LinearEncodingAttr::orderPerDim(StringAttr dimName,
                                 ArrayRef<unsigned> defaultOrder) const {
-  return getOrderPerDim(getLinearLayout(), dimName, defaultOrder);
+  return orderPerDimImpl(getLinearLayout(), dimName, defaultOrder);
 }
 
 // [Note. Divergence of methods wrt. legacy layouts]
@@ -1758,7 +1759,7 @@ int64_t PaddedSharedEncodingAttr::getPaddedSize(ArrayRef<int64_t> shape) const {
 SmallVector<unsigned>
 PaddedSharedEncodingAttr::orderPerDim(StringAttr dimName,
                                       ArrayRef<unsigned> defaultOrder) const {
-  return getOrderPerDim(getLinearComponent(), dimName, defaultOrder);
+  return orderPerDimImpl(getLinearComponent(), dimName, defaultOrder);
 }
 
 SmallVector<unsigned> PaddedSharedEncodingAttr::getOrder() const {

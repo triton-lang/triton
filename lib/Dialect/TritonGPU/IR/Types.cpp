@@ -167,37 +167,35 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     return emitError() << encoding << " is not a valid encoding";
   }
 
-  // Handle PaddedSharedEncoding separate because it's also a
-  // SharedEncodingTrait
+  // PaddedSharedEncodingAttr is also a SharedEncodingTrait so treat separatly
   if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
     auto rank = enc.getRank();
-    // The linear component inside padded encodings must much the shape or be
-    // one less to allow for pipelining
+
     if (rank != shape.size() && rank != shape.size() - 1) {
-      return emitError()
-             << "Padding rank must be equal or one less when pipelining";
+      return emitError() << "padding rank must be equal to or one less than "
+                         << "the shape size when pipelining.";
     }
 
-    // Subslices are not support at the moment
+    // Subslices are not yet implemented
     auto subsliceAllocSize =
         allocShape.drop_front(allocShape.size() - shape.size());
-    for (auto [allocShape, shape] : llvm::zip(shape, subsliceAllocSize)) {
-      if (allocShape != shape) {
-        return emitError()
-               << "Subslices with padded encodings not yet implemented";
+    for (auto [allocDim, shapeDim] : llvm::zip(shape, subsliceAllocSize)) {
+      if (allocDim != shapeDim) {
+        return emitError() << "Subslices with padded encodings are not yet "
+                           << "implemented.";
       }
     }
 
-    // Verify outdims of the linear component match the alloc memdesc shape
+    // Ensure linear component's outDims match the alloc size ignoring
+    // pipelining dimension
     auto outDims = standardOutDimNames(ctx, rank);
     auto ll = enc.getLinearComponent();
     auto llAllocSize = allocShape.drop_front(allocShape.size() - rank);
     for (auto d = 0; d < rank; d++) {
       if (ll.getOutDimSize(outDims[d]) != llAllocSize[d]) {
-        return emitError() << "expected shape for dim" << d << " to be "
-                           << ll.getOutDimSize(outDims[d]) << ", got "
-                           << llAllocSize[d]
-                           << ". Note that slicing is not supported";
+        return emitError() << "Mismatch in expected shape for dimension " << d
+                           << ". Expected: " << ll.getOutDimSize(outDims[d])
+                           << ", got: " << llAllocSize[d];
       }
     }
   }

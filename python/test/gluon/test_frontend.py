@@ -2191,10 +2191,10 @@ def infer_layout_for_padded_shared_kernel():
 
     which results in the new shape of [4, 32, 32]
     """
-    permuted_shape: ttgl.constexpr = [4, 32, 32]
-    permuted_order: ttgl.constexpr = [2, 1, 0]
+    perm_shape: ttgl.constexpr = [4, 32, 32]
+    perm_order: ttgl.constexpr = [2, 1, 0]
     ref_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.get_default_for(
-        interval_padding_pairs=[[2, 1], [4, 2], [8, 4]], shape=permuted_shape, order=permuted_order)
+        interval_padding_pairs=[[2, 1], [4, 2], [8, 4]], shape=perm_shape, order=perm_order)
     ttgl.static_assert(reshaped.type.layout == ref_layout)
 
 
