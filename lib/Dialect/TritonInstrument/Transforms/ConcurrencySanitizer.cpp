@@ -511,19 +511,38 @@ private:
         // for mmav5s and mark their operands as reads guarded by the barrier.
         Operation *prevOp = op->getPrevNode();
         while (prevOp) {
-          auto setBarrier = [&](TypedValue<ttg::MemDescType> buf) {
+          auto setBarrier = [&](TypedValue<ttg::MemDescType> buf, Value pred,
+                                bool read, bool hwPipelined = false) {
             MemType memType = MemType::TENSOR_MEM;
             if (isa<ttg::SharedEncodingTrait>(buf.getType().getEncoding())) {
               memType = MemType::SHARED_MEM;
             }
-            b.create<tti::ExperimentalSetReadBarrierOp>(
-                buf, commitOp.getBarrier(), buffersTensor[(int)memType],
-                barriers, readBarriersAlloc[(int)memType],
-                readBarriersType[(int)memType], commitOp.getPred());
+            if (read) {
+              b.create<tti::ExperimentalSetReadBarrierOp>(
+                  buf, commitOp.getBarrier(), buffersTensor[(int)memType],
+                  barriers, readBarriersAlloc[(int)memType],
+                  readBarriersType[(int)memType], pred);
+            } else {
+              b.create<tti::ExperimentalSetWriteStateOp>(
+                  buf, buffersTensor[(int)memType],
+                  writeStateAlloc[(int)memType], writeStateType[(int)memType],
+                  hwPipelined, pred);
+            }
           };
           if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(prevOp)) {
-            setBarrier(mmav5Op.getA());
-            setBarrier(mmav5Op.getB());
+            auto pred = mmav5Op.getPredicate();
+            setBarrier(mmav5Op.getA(), pred, /*read*/ true);
+            setBarrier(mmav5Op.getB(), pred, /*read*/ true);
+            setBarrier(mmav5Op.getAccumulator(), pred, /*read*/ false,
+                       /*hwPipelined*/ true);
+            addWriteChecks(b, mmav5Op.getA(), pred, MemType::SHARED_MEM,
+                           /*hwPipelined*/ false);
+            addWriteChecks(b, mmav5Op.getB(), pred, MemType::SHARED_MEM,
+                           /*hwPipelined*/ false);
+            addWriteChecks(b, mmav5Op.getAccumulator(), pred,
+                           MemType::TENSOR_MEM, /*hwPipelined*/ true);
+            addReadChecks(b, mmav5Op.getAccumulator(), pred,
+                          MemType::TENSOR_MEM);
           }
           prevOp = prevOp->getPrevNode();
         }
