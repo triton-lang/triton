@@ -1,7 +1,6 @@
 import gc
 import tracemalloc
 import pytest
-import inspect
 import pathlib
 import os
 
@@ -154,8 +153,7 @@ def test_multiple_hooks() -> None:
 def test_launch_with_options(options) -> None:
     if "extern_libs" in options:
         # copied from tutorials/07-extern-functions.py
-        current_file = inspect.getfile(inspect.currentframe())
-        current_dir = pathlib.Path(os.path.dirname(os.path.abspath(current_file)))
+        current_dir = pathlib.Path(os.path.dirname(os.path.abspath(__file__)))
         if triton.runtime.driver.active.get_current_target().backend == "cuda":
             libdir = current_dir.parent.parent.parent.parent / 'third_party/nvidia/backend/lib'
             options["extern_libs"] = {"libdevice": str(libdir / 'libdevice.10.bc')}
