@@ -595,10 +595,6 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttng::TCGen5MMAOp>(tokType, a, b, acc, accDep, useAcc,
                                             pred, two_ctas, isAsync);
            })
-      .def("create_tcgen05_cp",
-           [](GluonOpBuilder &self, Value src, Value dst) {
-             self.create<ttng::TMEMCopyOp>(src, dst, Value());
-           })
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value barrier, Value pred) {
              self.create<ttng::TCGen5CommitOp>(barrier, pred);
