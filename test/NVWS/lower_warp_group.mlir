@@ -13,6 +13,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   //       CHECK:   partition0
   //       CHECK-NEXT:   arith.constant
   //       CHECK-NEXT:   ttng.tc_gen5_mma
+  //       CHECK-NEXT:   ttng.tc_gen5_commit
   tt.func @warp_group(%a: !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
                   %b: !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
                   %c: !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory, mutable>,
@@ -22,11 +23,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %false = arith.constant false
     nvws.warp_group
     partition0  num_warps(8) {
-      ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred, %barrier[%false] {is_async} :
+      ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred {is_async} :
         !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
          !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
-         !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory, mutable>,
-         !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
+         !ttg.memdesc<128x256xf8E5M2, #shared1, #ttng.tensor_memory, mutable>
+      ttng.tc_gen5_commit %barrier[%false] : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
         nvws.warp_group.return
       }
     tt.return
@@ -46,6 +47,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   //       CHECK:   ttg.warp_specialize
   //       CHECK-NEXT:   default
   //       CHECK-NEXT:   ttng.tc_gen5_mma
+  //       CHECK-NEXT:   ttng.tc_gen5_commit
   tt.func @warp_default(%a: !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
                   %b: !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
                   %c: !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory, mutable>,
@@ -55,11 +57,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %false = arith.constant false
     nvws.warp_group
     partition0  num_warps(4) {
-      ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred, %barrier[%false] {is_async} :
+      ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred {is_async} :
          !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
          !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
-         !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory, mutable>,
-         !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
+         !ttg.memdesc<128x256xf8E5M2, #shared1, #ttng.tensor_memory, mutable>
+      ttng.tc_gen5_commit %barrier, %false : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
         nvws.warp_group.return
       }
     tt.return
@@ -80,6 +82,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   //       CHECK:   ttg.warp_specialize(%
   //       CHECK-NEXT:   default
   //       CHECK-NEXT:   ttng.tc_gen5_mma
+  //       CHECK-NEXT:   ttng.tc_gen5_commit
   //       CHECK:   partition0(%
   //       CHECK-NEXT:   arith.constant
   //       CHECK-NEXT:   ttg.local_load
@@ -99,11 +102,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %c0 = arith.constant 0 : i32
     nvws.warp_group
     partition0  num_warps(4) {
-      ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred, %barrier[%false] {is_async} :
+      ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred {is_async} :
          !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>,
          !ttg.memdesc<128x256xf16, #shared1, #ttg.shared_memory>,
-         !ttg.memdesc<128x256xf16, #acc_tmem, #ttng.tensor_memory, mutable>,
-         !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
+         !ttg.memdesc<128x256xf16, #acc_tmem, #ttng.tensor_memory, mutable>
+      ttng.tc_gen5_commit %barrier, %false : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
         nvws.warp_group.return
       }
     partition1 num_warps(4) {

@@ -447,13 +447,13 @@ tt.func public @load_into_async_mma(
     %scales_cvt = ttg.convert_layout %scales : tensor<128x8xi8, #load_blocked> -> tensor<128x8xi8, #scales>
     %scales_tmem = ttng.tmem_alloc %scales_cvt : (tensor<128x8xi8, #scales>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
 
-    ttng.tc_gen5_mma_scaled %lhs_shared, %rhs_shared, %tmem, %scales_tmem, %rhs_scales, %true, %true lhs = e4m3 rhs = e4m3, %barrier[%true] {is_async} :
+    ttng.tc_gen5_mma_scaled %lhs_shared, %rhs_shared, %tmem, %scales_tmem, %rhs_scales, %true, %true lhs = e4m3 rhs = e4m3 {is_async} :
       !ttg.memdesc<128x64xf8E4M3FN, #shared, #smem>,
       !ttg.memdesc<64x64xf8E4M3FN, #shared, #smem>,
       !ttg.memdesc<128x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>,
       !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>,
-      !ttg.memdesc<64x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>,
-      !ttg.memdesc<1xi64, #shared, #smem, mutable>
+      !ttg.memdesc<64x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
+    ttng.tc_gen5_commit %barrier, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
   }
 
   tt.return
