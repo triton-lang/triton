@@ -1671,3 +1671,30 @@ def test_host_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
         # Only a subset of TMEM and stmatrix layout pairs are compatible, for example 16x256bx2 and m8n8x4.
         assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm[
             "ptx"] or "stmatrix.sync.aligned.x4.m8n8.shared.b16" in kernel.asm["ptx"]
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ["float16", "bfloat16"])
+def test_tensor_descriptor_store_downcast(dtype_str, device):
+
+    @triton.jit
+    def kernel(desc, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        moffset = tl.program_id(axis=0) * M_BLOCK
+        noffset = tl.program_id(axis=1) * N_BLOCK
+        midx = moffset + tl.arange(0, M_BLOCK)[:, None]
+        nidx = noffset + tl.arange(0, N_BLOCK)[None, :]
+        val_f32 = (midx * N + nidx).to(tl.float32)
+        # implicit downcast in the store.
+        desc.store([moffset, noffset], val_f32)
+
+    M, N = 32, 128
+    torch_dtype = getattr(torch, dtype_str)
+    M_BLOCK = 8
+    N_BLOCK = 32
+    grid_m = M // M_BLOCK
+    grid_n = N // N_BLOCK
+    out = torch.empty((M, N), dtype=torch_dtype, device=device)
+    desc = TensorDescriptor(out, out.shape, out.stride(), [M_BLOCK, N_BLOCK])
+    kernel[(grid_m, grid_n)](desc, M, N, M_BLOCK=M_BLOCK, N_BLOCK=N_BLOCK)
+    ref = torch.arange(M * N, dtype=torch.float32, device=device).reshape(M, N).to(torch_dtype)
+    torch.testing.assert_close(out, ref)

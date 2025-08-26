@@ -333,12 +333,18 @@ def compute_expt_data_torch(hist, n_expts_tot, n_gates):
         token_offs_pad[block_m] = torch.cat((torch.zeros(1, device=device), token_offs_pad[block_m]))
         token_offs_pad[block_m] = token_offs_pad[block_m].int()
         # compute data required to drive ragged batch matmul
-        block_pid_map[block_m] = -torch.ones(max_n_tiles, device=device)
-        for e in range(n_expts_tot):
-            offset = token_offs_pad[block_m][e]
-            for b in range(n_tiles[e]):
-                block_pid_map[block_m][offset + b] = (b << 16) + e
-        block_pid_map[block_m] = block_pid_map[block_m].int()
+        block_pid_map[block_m] = -torch.ones(max_n_tiles, dtype=torch.int32, device=device)
+
+        # for e in range(n_expts_tot):
+        #     offset = token_offs_pad[block_m][e]
+        #     for b in range(n_tiles[e]):
+        #         block_pid_map[block_m][offset + b] = (b << 16) + e
+
+        col = torch.arange(max_n_tiles, device=device)
+        map_vals = torch.arange(n_expts_tot, device=device)[:, None] + (col << 16)[None, :]
+        map_idxs = token_offs_pad[block_m][:-1, None] + col[None, :]
+        mask = col[None, :] < n_tiles[:, None]
+        block_pid_map[block_m].index_put_((map_idxs[mask], ), map_vals.int()[mask])
     return ExptData(hist, token_offs_raw, token_offs_pad, block_pid_map)
 
 
