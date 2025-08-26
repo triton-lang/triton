@@ -456,7 +456,7 @@ and `pN` to mean padding:
       AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
                        "LinearLayout":$linearComponent)>,
 
-      // Convience builder to create an identity mapping for the linear component
+      // Builder to create an identity mapping as the linear component
       AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
                        "ArrayRef<unsigned>":$order, "ArrayRef<int64_t>":$shape,
                        "CTALayoutAttr":$ctaLayout)>,
