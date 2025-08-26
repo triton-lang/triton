@@ -1625,11 +1625,6 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   return mfmaLL.compose(swapLL);
 }
 
-LinearLayout getPaddedRegToSharedLayout(const LinearLayout &regLayout,
-                                        PaddedSharedEncodingAttr paddedEnc) {
-  return regLayout.invertAndCompose(paddedEnc.getLinearComponent());
-}
-
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
                                            int numWarps) {
   assert(numWarps == 4 || numWarps == 8);

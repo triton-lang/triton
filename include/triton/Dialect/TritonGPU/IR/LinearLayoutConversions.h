@@ -147,14 +147,5 @@ LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
 // the two can be done using transferWithinWarp, without involving LDS
 std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
 
-// Builds a LinearLayout that maps [register, lane, warp] -> [offset] for a
-// given regLayout PaddedSharedEncoding. If the encoding has
-// linear_component it's applied to reorder elements in shared memory; otherwise
-// a contiguous mapping is returned. If the linear_component’s output dimensions
-// are smaller than those required by regLayout, the mapping is repeated
-// (tiled); if larger, an assert is triggered.
-LinearLayout getPaddedRegToSharedLayout(const LinearLayout &regLayout,
-                                        PaddedSharedEncodingAttr paddedEnc);
-
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H
