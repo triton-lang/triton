@@ -376,6 +376,152 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
   return loadToStreamOp;
 }
 
+static bool isCoalesced(RankedTensorType loadType,
+                        ttg::LinearEncodingAttr llEnc) {
+  // Expect a BlockedEncoding on the load.
+  auto *ctx = loadType.getContext();
+  auto loadEnc = loadType.getEncoding();
+  auto blockedEnc = dyn_cast_or_null<ttg::BlockedEncodingAttr>(loadEnc);
+  auto shape = loadType.getShape();
+  if (!blockedEnc)
+    return false;
+
+  // Contiguous (fastest) dimension as defined by the blocked encoding.
+  const unsigned contigDim = blockedEnc.getOrder()[0];
+  const unsigned contigPerThreadBlocked =
+      blockedEnc.getSizePerThread()[contigDim];
+  const unsigned contigPerThreadLL = llEnc.getContigPerThread()[contigDim];
+  const unsigned contigPerWarpLL = llEnc.getContigPerWarp()[contigDim];
+  auto blockedLL = toLinearEncoding(blockedEnc, shape);
+  const unsigned contigPerWarpBlocked = llEnc.getContigPerWarp()[contigDim];
+  auto ll = llEnc.toLinearLayout(shape);
+
+  // 1) Require that the linear layout provides at least as much per-thread and
+  // per-warp contiguity as the original load encoding.
+  if (contigPerThreadLL < contigPerThreadBlocked ||
+      contigPerWarpLL < contigPerWarpBlocked)
+    return false;
+
+  // 2) Check that there is no broadcasting along the warp dimension.
+  // Broadcasting would force multiple warps to share the same elements,
+  // resulting in additional global_load instructions compared to a blocked
+  // layout.
+  auto kWarp = StringAttr::get(ctx, "warp");
+
+  auto basesIt = ll.getBases().find(kWarp);
+  if (basesIt == ll.getBases().end())
+    return false;
+
+  const auto &bases = basesIt->second;
+  for (const auto &basis : bases) {
+    const bool allZero = std::all_of(basis.begin(), basis.end(),
+                                     [](int64_t v) { return v == 0; });
+    if (allZero)
+      return false;
+  }
+
+  return true;
+}
+
+static bool bypassLDS(Operation *load, Operation *use) {
+  // Determine if it is safe to bypass LDS for dot operands.
+  // Normally, dot operation operands are consumed in the dot MFMA layout,
+  // which is not coalesced. To better utilize global memory bandwidth,
+  // operands are usually loaded in a coalesced "blocked" layout and then
+  // rearranged through LDS.
+  //
+  // However, certain optimizations allow dot operands to be preshuffled in
+  // global memory. In that case, the operands can be loaded efficiently
+  // (in a coalesced way) and consumed directly by the dot operation.
+  // When preshuffling is used, a sequence of transpose and reshape ops
+  // must be applied to the operand.
+  //
+  // To verify that preshuffling was done correctly and the final layout
+  // remains coalesced, we start from the dot MFMA layout and apply the
+  // inverse of each transpose/reshape op (while ignoring convert_layout
+  // ops) until we reach the load. We then inspect the resulting layout
+  // to decide if it is coalesced enough to load directly, without needing
+  // any further rearrangement.
+  if (!load || !use)
+    return false;
+
+  // Only applies to dot-like ops (scaled/regular) that conform to this
+  // interface.
+  if (!isa<tt::DotOpInterface>(use))
+    return false;
+
+  // Find operands of 'use' that are in the forward slice of 'load'.
+  SetVector<Operation *> fwdSlice;
+  mlir::getForwardSlice(load, &fwdSlice);
+
+  SmallVector<Operation *> defs;
+  defs.reserve(use->getNumOperands());
+  for (Value opnd : use->getOperands()) {
+    if (Operation *def = opnd.getDefiningOp()) {
+      if (fwdSlice.contains(def))
+        defs.push_back(def);
+    }
+  }
+
+  // Expect that 'load' op matches with a single operand for dot op.
+  if (defs.size() != 1)
+    return false;
+
+  Operation *def = defs.front();
+  if (!def)
+    return false;
+
+  // Thread encodings from 'def' back to 'load', skipping explicit converts.
+  Attribute resultEnc =
+      cast<RankedTensorType>(def->getResult(0).getType()).getEncoding();
+  if (!resultEnc)
+    return false;
+
+  Attribute srcEnc = nullptr;
+  Operation *cur = def;
+
+  while (cur && cur != load) {
+    if (!isa<triton::ReshapeOp, triton::TransposeOpInterface,
+             ttg::ConvertLayoutOp>(cur)) {
+      return false;
+    }
+    // Skip explicit layout converts.
+    if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(cur)) {
+      cur = cvt.getSrc().getDefiningOp();
+      continue;
+    }
+
+    // Infer the source encoding that would produce 'resultEnc' from 'cur' op.
+    srcEnc = inferSrcEncoding(cur, resultEnc);
+    if (!srcEnc)
+      return false;
+
+    resultEnc = srcEnc;
+    assert(cur->getNumOperands() == 1);
+
+    Value in = cur->getOperand(0);
+    cur = in.getDefiningOp();
+  }
+
+  // Must land exactly on the original load.
+  if (cur != load || !srcEnc)
+    return false;
+
+  // Check coalescing under the inferred linear encoding.
+  auto loadType = cast<RankedTensorType>(load->getResult(0).getType());
+  auto distTrait = dyn_cast<ttg::DistributedEncodingTrait>(srcEnc);
+  if (!distTrait)
+    return false;
+
+  auto srcLL = ttg::toLinearEncoding(distTrait, loadType.getShape());
+  if (!isCoalesced(loadType, srcLL))
+    return false;
+
+  // Finally, rewrite the load to use the inferred (better) encoding.
+  convertOpEncoding(srcEnc, load);
+  return true;
+};
+
 LoadToInfoMap
 preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
                scf::ForOp &forOp, int numStages) {
@@ -403,6 +549,9 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
   LoadToInfoMap loadToInfo;
   for (const auto &[load, info] : loadOpToIndLevel) {
     auto [distance, use] = info;
+    if (bypassLDS(load, use)) {
+      continue;
+    }
     auto sharedEncoding =
         getSharedEncIfAllUsersAreDotEnc(load->getResult(0)).value_or(nullptr);
     loadToInfo[load] = {sharedEncoding, distance, use};
