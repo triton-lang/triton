@@ -1709,7 +1709,6 @@ PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
   }
   // Transpose to standard out dim order
   linearComponent = linearComponent.transposeOuts(outDimNames);
-  llvm::outs() << "Final LL: " << linearComponent << "\n";
 
   linearComponent = combineCtaCgaWithShape(linearComponent, ctaLayout, shape);
 
