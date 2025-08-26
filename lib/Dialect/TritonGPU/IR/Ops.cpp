@@ -433,6 +433,31 @@ void Fp4ToFpOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, resultTy, src, axis);
 }
 
+Attribute Fp4ToFpOp::inferDstEncoding(unsigned opIdx, Attribute srcEnc) {
+  Attribute dstEnc;
+  auto shape = getSrc().getType().getShape();
+  auto result =
+      srcEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+          ->inferFp4ToFpOpEncoding(shape, getAxis(), srcEnc, dstEnc,
+                                   /*fwdInference*/ true, std::nullopt);
+  assert(succeeded(result));
+  return dstEnc;
+}
+
+Attribute Fp4ToFpOp::inferSrcEncoding(unsigned opIdx, Attribute dstEnc) {
+  Attribute srcEnc;
+  auto shape = getSrc().getType().getShape();
+  if (succeeded(
+          dstEnc.getDialect()
+              .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+              ->inferFp4ToFpOpEncoding(shape, getAxis(), dstEnc, srcEnc,
+                                       /*fwdInference*/ false, std::nullopt))) {
+    return srcEnc;
+  }
+  return {};
+}
+
 OpFoldResult MemDescTransOp::fold(FoldAdaptor adaptor) {
   // transpose(x, order=[0, 1, ...]) -> x
   if (isIota(getOrder())) {

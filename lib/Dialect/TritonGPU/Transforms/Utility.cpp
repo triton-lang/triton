@@ -549,6 +549,8 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
     return inferSrcEncoding(gather, encoding);
   if (auto fp4ToFp = dyn_cast<triton::gpu::Fp4ToFpOp>(op))
     return inferSrcEncoding(fp4ToFp, encoding);
+  // if (auto upcastFp = dyn_cast<triton::gpu::UpcastFpOpInterface>(op))
+  //   return upcastFp.inferSrcEncoding(0, encoding);
 
   return {};
 }
@@ -580,6 +582,8 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(gather, encoding);
   if (auto fp4ToFp = dyn_cast<triton::gpu::Fp4ToFpOp>(op))
     return inferDstEncoding(fp4ToFp, encoding);
+  // if (auto upcastFp = dyn_cast<triton::gpu::UpcastFpOpInterface>(op))
+  //   return upcastFp.inferDstEncoding(encoding);
 
   return {};
 }
@@ -938,7 +942,13 @@ LogicalResult getConvertBackwardSlice(
         continue;
       }
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
-        auto srcEncoding = inferSrcEncoding(definingOp, encoding);
+        Attribute srcEncoding;
+        if (auto upcast =
+                dyn_cast<triton::gpu::UpcastFpOpInterface>(definingOp)) {
+          srcEncoding = upcast.inferSrcEncoding(i, encoding);
+        } else {
+          srcEncoding = inferSrcEncoding(definingOp, encoding);
+        }
         if (!srcEncoding)
           return failure();
         // If the infered layout matches the original one we don't need to keep

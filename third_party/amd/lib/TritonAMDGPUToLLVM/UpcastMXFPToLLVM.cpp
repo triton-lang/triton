@@ -19,6 +19,8 @@
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
+using ::mlir::LLVM::AMD::upcast4xMxfp8_HW;
+using ::mlir::LLVM::AMD::upcast8xMxfp4_HW;
 using ::mlir::LLVM::AMD::upcast8xMxfp4_SW;
 
 namespace {
@@ -84,54 +86,6 @@ Value mxfpScaleBf16ViaF32(RewriterBase &rewriter, Location loc, Value v,
   Value nanBf16 = b.bitcast(b.i16_val(0x7fff), bf16_ty);
   return b.select(scaleIsNan, nanBf16, mulBf16);
 };
-
-template <typename ConvertOp>
-SmallVector<Value, 4> upcast8xMxfp4_HW(RewriterBase &rewriter, Location loc,
-                                       ArrayRef<Value> xVals, int idx,
-                                       Value scale) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value packedVec = b.undef(vec_ty(i8_ty, 4));
-  for (int i : llvm::seq(4))
-    packedVec = b.insert_element(packedVec, xVals[idx + i], b.i32_val(i));
-  packedVec = b.bitcast(packedVec, i32_ty);
-  Type retElemType = bf16_ty;
-  if constexpr (std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF16Fp4Op>)
-    retElemType = f16_ty;
-  Type resType = vec_ty(retElemType, 2);
-  Value scaleF32 =
-      b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
-  SmallVector<Value, 4> results;
-  for (int srcSelIndex : llvm::seq(4))
-    results.push_back(rewriter.create<ConvertOp>(loc, resType, packedVec,
-                                                 scaleF32, srcSelIndex));
-  return results;
-}
-
-template <typename ConvertOp>
-SmallVector<Value, 2> upcast4xMxfp8_HW(RewriterBase &rewriter, Location loc,
-                                       ArrayRef<Value> xVals, int idx,
-                                       Value scale) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value packedVec = b.undef(vec_ty(i8_ty, 4));
-  for (int i : llvm::seq(4))
-    packedVec = b.insert_element(packedVec, xVals[idx + i], b.i32_val(i));
-  packedVec = b.bitcast(packedVec, i32_ty);
-  Type retElemType = bf16_ty;
-  if constexpr (std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF16Fp8Op> ||
-                std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF16Bf8Op>)
-    retElemType = f16_ty;
-  Type resType = vec_ty(retElemType, 2);
-  Value scaleF32 =
-      b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
-  SmallVector<Value, 2> results;
-  results.push_back(rewriter.create<ConvertOp>(loc, resType, packedVec,
-                                               scaleF32,
-                                               /*srcLoHiSel=*/false));
-  results.push_back(rewriter.create<ConvertOp>(loc, resType, packedVec,
-                                               scaleF32,
-                                               /*srcLoHiSel=*/true));
-  return results;
-}
 
 // Upcast 8 mxfp4 values from xVals starting at idx using the given scale
 // factor, and store the results into yVals

@@ -22,6 +22,7 @@
  */
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "third_party/amd/include/Utils/Utility.h"
@@ -416,6 +417,86 @@ InThreadTransposeOp::deduceOutputLayout(ArrayRef<int64_t> shape,
 
   LinearLayout transposedLL(bases, SmallVector<StringAttr>(outDimNames));
   return transposedLL;
+}
+
+LogicalResult ScaledUpcastFp4Op::verify() {
+  RankedTensorType inputTy = getInput().getType();
+  RankedTensorType outputTy = getOutput().getType();
+  RankedTensorType scaleTy = getScale().getType();
+
+  if (outputTy.getShape() != scaleTy.getShape())
+    return emitError() << "scale and output should have the same shape";
+
+  int64_t rank = inputTy.getRank();
+  if (rank != outputTy.getRank())
+    return emitError() << "source rank " << rank << " != result rank "
+                       << outputTy.getRank();
+
+  auto inputShape = inputTy.getShape();
+  auto outputShape = outputTy.getShape();
+  auto axis = getAxis();
+
+  if (axis < 0 || axis >= rank)
+    return emitError() << "axis " << axis << " out of range for rank " << rank;
+
+  for (int i = 0; i < rank; ++i) {
+    if (i == axis) {
+      if (outputShape[i] != inputShape[i] * 2)
+        return emitError() << "axis " << axis
+                           << " dimension must be 2x source dimension (src="
+                           << inputShape[i] << ", dst=" << outputShape[i]
+                           << ")";
+    } else {
+      if (outputShape[i] != inputShape[i])
+        return emitError() << "dimension " << i
+                           << " mismatch (src=" << inputShape[i]
+                           << ", dst=" << outputShape[i] << ", axis=" << axis
+                           << ")";
+    }
+  }
+  return success();
+}
+
+Attribute ScaledUpcastFp4Op::inferDstEncoding(unsigned opIdx,
+                                              Attribute srcEnc) {
+  if (opIdx == 1)
+    return srcEnc;
+  Attribute dstEnc;
+  auto shape = getInput().getType().getShape();
+  auto result =
+      srcEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+          ->inferFp4ToFpOpEncoding(shape, getAxis(), srcEnc, dstEnc,
+                                   /*fwdInference*/ true, std::nullopt);
+  assert(succeeded(result));
+  return dstEnc;
+}
+
+Attribute ScaledUpcastFp4Op::inferSrcEncoding(unsigned opIdx,
+                                              Attribute dstEnc) {
+  Attribute srcEnc;
+  auto shape = getInput().getType().getShape();
+  if (opIdx == 1)
+    return dstEnc;
+
+  if (succeeded(
+          dstEnc.getDialect()
+              .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+              ->inferFp4ToFpOpEncoding(shape, getAxis(), dstEnc, srcEnc,
+                                       /*fwdInference*/ false, std::nullopt))) {
+    return srcEnc;
+  }
+  return {};
+}
+
+Attribute ScaledUpcastFp8Op::inferDstEncoding(unsigned opIdx,
+                                              Attribute srcEnc) {
+  return srcEnc;
+}
+
+Attribute ScaledUpcastFp8Op::inferSrcEncoding(unsigned opIdx,
+                                              Attribute dstEnc) {
+  return dstEnc;
 }
 
 LogicalResult ConcatOp::verify() {
