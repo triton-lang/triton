@@ -3,6 +3,7 @@
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUOpInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypeInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
@@ -398,7 +399,7 @@ def TTG_MaskReturnOp: TTG_Op<"mask.return",
     let assemblyFormat = "$result attr-dict `:` type($result)";
 }
 
-def TTG_Fp4ToFpOp : TTG_Op<"fp4_to_fp", [Pure]> {
+def TTG_Fp4ToFpOp : TTG_Op<"fp4_to_fp", [Pure, DeclareOpInterfaceMethods<UpcastFpOpInterface>]> {
   let summary = "Upcast fp4 (e2m1) to fp";
 
   let hasVerifier = 1;

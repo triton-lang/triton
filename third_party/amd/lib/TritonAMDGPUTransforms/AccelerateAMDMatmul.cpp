@@ -911,21 +911,21 @@ public:
       }
     }
 
-    vType16 = vType16.clone(rewriter.getBF16Type());
-    RankedTensorType unpackedType16 = vType16;
     auto vEnc = cast<BlockedEncodingAttr>(vType16.getEncoding());
+    RankedTensorType unpackedType16 = vType16;
     auto sizePerThread = llvm::to_vector(vEnc.getSizePerThread());
 
     if (isFp4) {
       auto packedShape = llvm::to_vector(vType16.getShape());
       packedShape[kDim] *= 2;
-      unpackedType16 = vType16.clone(packedShape);
+      unpackedType16 = unpackedType16.clone(packedShape);
       sizePerThread[kDim] *= 2;
+      vEnc = ttg::BlockedEncodingAttr::get(
+          ctx, sizePerThread, vEnc.getThreadsPerWarp(), vEnc.getWarpsPerCTA(),
+          vEnc.getOrder(), vEnc.getCTALayout());
     }
-    auto newEnc = ttg::BlockedEncodingAttr::get(
-        ctx, sizePerThread, vEnc.getThreadsPerWarp(), vEnc.getWarpsPerCTA(),
-        vEnc.getOrder(), vEnc.getCTALayout());
-    unpackedType16 = unpackedType16.cloneWithEncoding(newEnc);
+
+    unpackedType16 = unpackedType16.cloneWithEncoding(vEnc);
 
     auto fastMath = dotOp.getFastMath();
 
@@ -934,23 +934,15 @@ public:
       scale = rewriter.create<tt::TransOp>(loc, scale, order);
     }
 
-    // 1) Cast scale to compute type (fp16/bf16)
-    TensorValue scale16 = scaleTo16(rewriter, scale, rewriter.getBF16Type());
+    // 1) Cast scale to bf16
+    TensorValue scaleBf16 = scaleTo16(rewriter, scale, rewriter.getBF16Type());
 
     // 2) Broadcast scale to the same shape and layout as v
     TensorValue reshapeScale =
-        broadcastScale(rewriter, dotOp, mod, scale16, kDim);
+        broadcastScale(rewriter, dotOp, mod, scaleBf16, kDim);
 
-    // auto newVEncoding = DotOperandEncodingAttr::get(
-    //     ctx, oldEncoding.getOpIdx(), oldEncoding.getParent(),
-    //     oldEncoding.getKWidth() * factor);
-
-    // auto encoding = ttg::DotOperandEncodingAttr::get(ctx, opIdx, retEnc,
-    //                                                  vType16.getElementType());
-    // auto retTy = unpackedType16.cloneWithEncoding(encoding);
-
-    reshapeScale = rewriter.create<ttg::ConvertLayoutOp>(loc, unpackedType16,
-                                                         reshapeScale);
+    reshapeScale = rewriter.create<ttg::ConvertLayoutOp>(
+        loc, unpackedType16.clone(rewriter.getBF16Type()), reshapeScale);
 
     // 3) Upcast with scale
     TensorValue result;

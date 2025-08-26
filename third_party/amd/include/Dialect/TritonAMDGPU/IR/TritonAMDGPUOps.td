@@ -33,6 +33,7 @@ include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUOpInterfaces.td"
 
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
@@ -523,7 +524,7 @@ def TTG_UpcastMXFPOp : TT_AMDGPU_Op<"upcast_mxfp", [Pure]> {
 // ScaledUpcastFp4Op
 //===----------------------------------------------------------------------===//
 
-def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure]> {
+def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, DeclareOpInterfaceMethods<UpcastFpOpInterface>]> {
   let summary = "Upcast fp4 and then multiply scale";
 
   let description = [{
@@ -557,7 +558,10 @@ def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure]> {
 //===----------------------------------------------------------------------===//
 
 def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
-    Elementwise, SameOperandsAndResultShape, SameOperandsAndResultEncoding]> {
+    Elementwise,
+    SameOperandsAndResultShape,
+    SameOperandsAndResultEncoding,
+    DeclareOpInterfaceMethods<UpcastFpOpInterface>]> {
   let summary = "Upcast Fp8 and then multiply scale";
 
   let description = [{

@@ -419,35 +419,6 @@ InThreadTransposeOp::deduceOutputLayout(ArrayRef<int64_t> shape,
   return transposedLL;
 }
 
-/*
-LogicalResult Fp32ScaledConvertOp::verify() {
-  mlir::Builder b(getContext());
-  ScaleDotElemType elemType = getSrcElemType();
-  Type expectedType;
-  switch (elemType) {
-  case ScaleDotElemType::E2M1:
-    expectedType = b.getIntegerType(8);
-    break;
-  case ScaleDotElemType::E4M3:
-    expectedType = b.getType<Float8E4M3FNType>();
-    break;
-  case ScaleDotElemType::E5M2:
-    expectedType = b.getType<Float8E5M2Type>();
-    break;
-
-  default:
-    return emitOpError("only support E2M1, E4M3, E5M2 right now");
-  }
-
-  Type actualType = getSrc().getType().getElementType();
-  if (actualType != expectedType)
-    return emitOpError("mismatch between input element type; expected ")
-           << expectedType << " but given " << actualType;
-
-  return success();
-}
-*/
-
 LogicalResult ScaledUpcastFp4Op::verify() {
   RankedTensorType inputTy = getInput().getType();
   RankedTensorType outputTy = getOutput().getType();
@@ -473,7 +444,8 @@ LogicalResult ScaledUpcastFp4Op::verify() {
       if (outputShape[i] != inputShape[i] * 2)
         return emitError() << "axis " << axis
                            << " dimension must be 2x source dimension (src="
-                           << inputShape[i] << ", dst=" << outputShape[i] << ")";
+                           << inputShape[i] << ", dst=" << outputShape[i]
+                           << ")";
     } else {
       if (outputShape[i] != inputShape[i])
         return emitError() << "dimension " << i
@@ -483,6 +455,48 @@ LogicalResult ScaledUpcastFp4Op::verify() {
     }
   }
   return success();
+}
+
+Attribute ScaledUpcastFp4Op::inferDstEncoding(unsigned opIdx,
+                                              Attribute srcEnc) {
+  if (opIdx == 1)
+    return srcEnc;
+  Attribute dstEnc;
+  auto shape = getInput().getType().getShape();
+  auto result =
+      srcEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+          ->inferFp4ToFpOpEncoding(shape, getAxis(), srcEnc, dstEnc,
+                                   /*fwdInference*/ true, std::nullopt);
+  assert(succeeded(result));
+  return dstEnc;
+}
+
+Attribute ScaledUpcastFp4Op::inferSrcEncoding(unsigned opIdx,
+                                              Attribute dstEnc) {
+  Attribute srcEnc;
+  auto shape = getInput().getType().getShape();
+  if (opIdx == 1)
+    return dstEnc;
+
+  if (succeeded(
+          dstEnc.getDialect()
+              .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+              ->inferFp4ToFpOpEncoding(shape, getAxis(), dstEnc, srcEnc,
+                                       /*fwdInference*/ false, std::nullopt))) {
+    return srcEnc;
+  }
+  return {};
+}
+
+Attribute ScaledUpcastFp8Op::inferDstEncoding(unsigned opIdx,
+                                              Attribute srcEnc) {
+  return srcEnc;
+}
+
+Attribute ScaledUpcastFp8Op::inferSrcEncoding(unsigned opIdx,
+                                              Attribute dstEnc) {
+  return dstEnc;
 }
 
 LogicalResult ConcatOp::verify() {

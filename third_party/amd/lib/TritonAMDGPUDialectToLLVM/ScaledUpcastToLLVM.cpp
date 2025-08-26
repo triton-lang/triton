@@ -68,7 +68,7 @@ struct ScaledUpcastFp8OpPattern
     assert(inputVals.size() % 4 == 0);
     assert(inputVals.size() == scaleVals.size());
     SmallVector<Value> results;
-    results.reserve(inputVals.size() * 2);
+    results.reserve(inputVals.size());
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     for (int i = 0; i < inputVals.size(); i += 4) {
