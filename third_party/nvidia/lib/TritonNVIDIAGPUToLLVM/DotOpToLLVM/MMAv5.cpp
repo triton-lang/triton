@@ -399,7 +399,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
   auto *mmaBlock = rewriter.createBlock(curBlock->getParent(),
                                         std::next(Region::iterator(curBlock)));
   rewriter.setInsertionPointToEnd(curBlock);
-  rewriter.create<LLVM::CondBrOp>(loc, pred, mmaBlock, endBlock);
+  auto condBr = rewriter.create<LLVM::CondBrOp>(loc, pred, mmaBlock, endBlock);
   // Emit the rest in mmaBlock
   rewriter.setInsertionPointToEnd(mmaBlock);
 
@@ -504,10 +504,11 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
 
     collectOpsToMove(barrier);
 
-    // Move operations to current insertion point
+    // Must move to curBlock since these ops might be used in endBlock. Moving them
+    // inside mmaBlock causes dominance issues if the barrier is defined after
+    // the mma op
     for (Operation *op : toMove) {
-      op->moveBefore(rewriter.getInsertionBlock(),
-                     rewriter.getInsertionPoint());
+      op->moveBefore(condBr);
     }
 
     auto smemObj =
