@@ -3607,6 +3607,96 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_CTASplit) {
                 LinearLayout::identity1D(2, kCol, d1));
 }
 
+// Tests for SM120 DotScaled Scale Layout
+TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_AScale_Basic) {
+  // Test basic A-scale (per-row) layout for SM120
+  // dotOperandIdx = 0 (A-scale), shape = [128, 32], tilesPerWarp = [1, 1],
+  // warpsPerCTA = [4, 1], instrM = 16, instrN = 8
+  auto layout = getSM120DotScaledScaleLayout(
+      &ctx, /*dotOperandIdx=*/0, /*dotOperandShape=*/{128, 32},
+      /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{4, 1},
+      /*mmaInstrM=*/16, /*mmaInstrN=*/8,
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
+
+  auto ll = LinearLayout(
+      {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {64, 0}}},
+       {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
+       {S("warp"), {{16, 0}, {32, 0}}},
+       {S("block"), {}}},
+      {S("dim0"), S("dim1")});
+
+  EXPECT_EQ(ll, layout);
+}
+
+TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_BScale_Basic) {
+  // Test basic B-scale (per-col) layout for SM120
+  // dotOperandIdx = 1 (B-scale), shape = [32, 128], tilesPerWarp = [1, 1],
+  // warpsPerCTA = [1, 4], instrM = 16, instrN = 8
+  auto layout = getSM120DotScaledScaleLayout(
+      &ctx, /*dotOperandIdx=*/1, /*dotOperandShape=*/{32, 128},
+      /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{1, 4},
+      /*mmaInstrM=*/16, /*mmaInstrN=*/8,
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
+  auto ll = LinearLayout(
+      {{S("register"),
+        {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 32}, {0, 64}}},
+       {S("lane"), {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
+       {S("warp"), {{8, 0}, {16, 0}}},
+       {S("block"), {}}},
+      {S("dim0"), S("dim1")});
+
+  EXPECT_EQ(ll, layout);
+}
+
+TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_MultiWarp) {
+  // Test with multiple warps configuration
+  // A-scale with 2x2 warp layout
+  auto layout = getSM120DotScaledScaleLayout(
+      &ctx, /*dotOperandIdx=*/0, /*dotOperandShape=*/{256, 64},
+      /*tilesPerWarp=*/{2, 1}, /*warpsPerCTA=*/{2, 2},
+      /*mmaInstrM=*/16, /*mmaInstrN=*/8,
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
+  auto ll = LinearLayout({{S("register"),
+                           {{32, 0},
+                            {0, 1},
+                            {0, 2},
+                            {0, 4},
+                            {0, 8},
+                            {0, 16},
+                            {0, 32},
+                            {64, 0},
+                            {128, 0}}},
+                          {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
+                          {S("warp"), {{0, 0}, {16, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")});
+
+  EXPECT_EQ(ll, layout);
+
+  layout = getSM120DotScaledScaleLayout(
+      &ctx, /*dotOperandIdx=*/1, /*dotOperandShape=*/{256, 64},
+      /*tilesPerWarp=*/{2, 1}, /*warpsPerCTA=*/{2, 2},
+      /*mmaInstrM=*/16, /*mmaInstrN=*/8,
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
+  ll = LinearLayout({{S("register"),
+                      {{0, 1},
+                       {0, 2},
+                       {0, 4},
+                       {0, 8},
+                       {0, 16},
+                       {0, 32},
+                       {16, 0},
+                       {32, 0},
+                       {64, 0},
+                       {128, 0}}},
+                     {S("lane"), {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
+                     {S("warp"), {{8, 0}, {0, 0}}},
+                     {S("block"), {}}},
+                    {S("dim0"), S("dim1")});
+
+  EXPECT_EQ(ll, layout);
+}
+
 } // anonymous namespace
 } // namespace mlir::triton::gpu
 

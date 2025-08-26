@@ -7,6 +7,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -30,6 +31,10 @@ public:
 
   LogicalResult matchAndRewrite(DotScaledOp scaledDotOp,
                                 PatternRewriter &rewriter) const override {
+    auto resTy = cast<RankedTensorType>(scaledDotOp.getType());
+    if (mlir::isa<NvidiaMmaEncodingAttr>(resTy.getEncoding()))
+      return failure();
+
     if (isa_and_nonnull<MmaEncodingTrait>(
             scaledDotOp.getResult().getType().getEncoding()))
       return failure();
@@ -37,6 +42,7 @@ public:
     // TODO: add support for m/n packed formats.
     if (!scaledDotOp.getLhsKPack() || !scaledDotOp.getRhsKPack())
       return failure();
+
     // Types
     auto computeType = getComputeType(scaledDotOp.getAElemType(),
                                       scaledDotOp.getBElemType(), rewriter);
@@ -215,7 +221,7 @@ private:
 
     // For some weird reason, we take the scale with shape as if it were coming
     // from the lhs even when it's the rhs. In a normal world, we should accept
-    // this parametre transposed, as we do with the mxfp.
+    // this parameter transposed, as we do with the mxfp.
     if (opIdx == 1) {
       auto order = getTransposeOrder(rank);
       scale = rewriter.create<TransOp>(loc, scale, order);

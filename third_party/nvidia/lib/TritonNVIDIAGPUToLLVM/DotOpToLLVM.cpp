@@ -14,11 +14,36 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                          ConversionPatternRewriter &rewriter, bool isTuring,
                          bool isHopperF64);
 
+LogicalResult convertMMADotScaled(triton::DotScaledOp op,
+                                  triton::DotScaledOp::Adaptor adaptor,
+                                  const LLVMTypeConverter *typeConverter,
+                                  ConversionPatternRewriter &rewriter);
+
 LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
                            triton::nvidia_gpu::WarpGroupDotOp::Adaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Value thread);
+
 namespace {
+struct ScaledDotOpConversion
+    : public ConvertOpToLLVMPattern<triton::DotScaledOp> {
+  using ConvertOpToLLVMPattern<triton::DotScaledOp>::ConvertOpToLLVMPattern;
+
+  ScaledDotOpConversion(LLVMTypeConverter &converter, int computeCapability,
+                        PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::DotScaledOp>(converter, benefit),
+        computeCapability(computeCapability) {}
+
+  LogicalResult
+  matchAndRewrite(triton::DotScaledOp op, triton::DotScaledOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    return convertMMADotScaled(op, adaptor, getTypeConverter(), rewriter);
+  }
+
+private:
+  int computeCapability;
+};
+
 struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
   using ConvertOpToLLVMPattern<triton::DotOp>::ConvertOpToLLVMPattern;
 
@@ -162,4 +187,6 @@ void mlir::triton::NVIDIA::populateDotOpToLLVMPatterns(
   patterns.add<DotOpConversion>(typeConverter, computeCapability, benefit);
   patterns.add<WarpGroupDotOpConversion>(typeConverter, benefit);
   patterns.add<WarpGroupDotWaitOpConversion>(typeConverter, benefit);
+  patterns.add<ScaledDotOpConversion>(typeConverter, computeCapability,
+                                      benefit);
 }
