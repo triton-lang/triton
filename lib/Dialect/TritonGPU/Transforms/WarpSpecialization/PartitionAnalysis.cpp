@@ -545,7 +545,8 @@ Flags getNodeFlags(Node *node) {
       return Flags::MMA;
     if (isa<math::Exp2Op>(op))
       return Flags::SFU;
-    if (op->hasTrait<OpTrait::MemDescViewTrait>())
+    if (isa<tt::BroadcastOp, tt::ExpandDimsOp>(op) ||
+        op->hasTrait<OpTrait::MemDescViewTrait>())
       return Flags::VIEW;
     if (!options.disable_simt && isSIMTOp(op))
       return Flags::SIMT;
@@ -790,6 +791,14 @@ SmallVector<OutputPort> initialDataValues(Graph *graph) {
         node->setDataValue(1);
         values.push_back({node, 1});
       }
+      // if it is manually tagged with data attribute,
+      // all outputs are treated as data values
+      if (op->hasAttr("data")) {
+        for (size_t i = 0; i < node->getNumOutputs(); i++) {
+          node->setDataValue(i);
+          values.push_back({node, i});
+        }
+      }
     }
   });
   return values;
@@ -856,47 +865,79 @@ SmallVector<Edge> getOutCrossingEdges(Group *group) {
 bool deserializeManualGroups(ModuleOp m, Graph *graph) {
   const auto &options = get_options();
 
-  if (!tools::getBoolEnv("PARTITION_ANALYSIS_NVWS_SERIALIZATION"))
-    return false;
+  if (tools::getBoolEnv("PARTITION_ANALYSIS_NVWS_SERIALIZATION")) {
+    std::map<std::string, Group *> manual_groups;
 
-  std::map<std::string, Group *> manual_groups;
+    graph->walk([&](Node *node) {
+      if (!node->isData())
+        // ignore manual groups for non-data values
+        return;
+      if (node->isOp()) {
+        auto op = node->getOp();
 
+        if (op->hasAttr("groups")) {
+          for (auto attr : cast<ArrayAttr>(op->getAttr("groups"))) {
+            auto fullname = cast<SymbolRefAttr>(attr).getRootReference().str();
+            auto name = fullname.substr(11); // strip nvws.groups. prefix
+            if (manual_groups.find(name) == manual_groups.end()) {
+              auto group = graph->addGroup();
+              group->addFlag(Flags::MANUAL);
+              group->name = name;
+              auto attr =
+                  mlir::cast<mlir::DictionaryAttr>(m->getAttr(fullname));
+              group->start_warp =
+                  mlir::cast<IntegerAttr>(attr.get("start_warp")).getInt();
+              group->num_warps =
+                  mlir::cast<IntegerAttr>(attr.get("num_warps")).getInt();
+              if (attr.contains("reg_count")) {
+                group->reg_count =
+                    mlir::cast<IntegerAttr>(attr.get("reg_count")).getInt();
+              }
+              manual_groups[name] = group;
+
+              if (options.dump) {
+                std::cout << "deserialize manual group:";
+                group->dump();
+              }
+            }
+            node->addGroup(manual_groups[name]);
+          }
+        }
+      }
+    });
+    return !manual_groups.empty();
+  }
+
+  std::map<int, Group *> manual_groups;
   graph->walk([&](Node *node) {
-    if (!node->isData())
-      // ignore manual groups for non-data values
-      return;
+    // if (!node->isData())
+    //   // ignore manual groups for non-data values
+    //   return;
     if (node->isOp()) {
       auto op = node->getOp();
+      if (op->hasAttr("ttg.partition")) {
+        // Note: reads ttg.partition, but emits ttg.partitions
+        auto id = cast<IntegerAttr>(op->getAttr("ttg.partition")).getInt();
+        std::cout << id << std::endl;
+        if (manual_groups.find(id) == manual_groups.end()) {
+          auto group = graph->addGroup();
+          group->addFlag(Flags::MANUAL);
+          group->name = std::to_string(id);
+          manual_groups[id] = group;
 
-      if (op->hasAttr("groups")) {
-        for (auto attr : cast<ArrayAttr>(op->getAttr("groups"))) {
-          auto fullname = cast<SymbolRefAttr>(attr).getRootReference().str();
-          auto name = fullname.substr(11); // strip nvws.groups. prefix
-          if (manual_groups.find(name) == manual_groups.end()) {
-            auto group = graph->addGroup();
-            group->addFlag(Flags::MANUAL);
-            group->name = name;
-            auto attr = mlir::cast<mlir::DictionaryAttr>(m->getAttr(fullname));
-            group->start_warp =
-                mlir::cast<IntegerAttr>(attr.get("start_warp")).getInt();
-            group->num_warps =
-                mlir::cast<IntegerAttr>(attr.get("num_warps")).getInt();
-            if (attr.contains("reg_count")) {
-              group->reg_count =
-                  mlir::cast<IntegerAttr>(attr.get("reg_count")).getInt();
-            }
-            manual_groups[name] = group;
-
-            if (options.dump) {
-              std::cout << "deserialize manual group:";
-              group->dump();
-            }
+          if (options.dump) {
+            std::cout << "deserialize manual group:";
+            group->dump();
           }
-          node->addGroup(manual_groups[name]);
         }
+        node->addGroup(manual_groups[id]);
+
+        // FIXME: Remove partition attribute - it's replaced with tt.partitions
+        op->removeAttr("ttg.partition");
       }
     }
   });
+
   return !manual_groups.empty();
 }
 
@@ -1263,18 +1304,42 @@ void mergeGroups(Graph *graph, std::string funcName,
   // updating the data structures rather than rebuilding the whole lot when a
   // rule is applied
   const auto &options = get_options();
+  if (options.dump) {
+    std::cout << "############### apply heuristics #####################"
+              << std::endl;
+  }
   int iter = 0;
   bool changed = false;
   do {
     changed = false;
 
     auto crossingEdges = getCrossingEdges(graph);
+    if (options.dump) {
+      std::cout << "#### " << crossingEdges.size() << " crossing edges"
+                << std::endl;
+    }
 
     for (auto [name, apply] : heuristics) {
       for (auto edge : crossingEdges) {
-        // std::cout << "\n---- try ----\n";
-        // std::cout << edge.getFromNode()->getLabel() << " -> "
-        //           << edge.getToNode()->getLabel() << "\n";
+        if (options.dump) {
+          std::cout << "\n---- try " << name << " ----\n";
+          std::cout << edge.getFromNode()->getLabel() << " -> "
+                    << edge.getToNode()->getLabel() << "\n";
+          std::cout << "groups ";
+          if (edge.getFromNode()->getGroup()->name.empty())
+            std::cout << edge.getFromNode()->getGroup();
+          else
+            std::cout << edge.getFromNode()->getGroup()->name;
+          std::cout << " -> ";
+          if (edge.getToNode()->getGroup()->name.empty())
+            std::cout << edge.getToNode()->getGroup();
+          else
+            std::cout << edge.getToNode()->getGroup()->name;
+          std::cout << "\n";
+          std::cout << "flags " << edge.getFromNode()->getGroup()->getFlags()
+                    << " -> " << edge.getToNode()->getGroup()->getFlags()
+                    << "\n";
+        }
 
         if (apply(edge)) {
 
@@ -1284,6 +1349,8 @@ void mergeGroups(Graph *graph, std::string funcName,
           // groups, so disable them if we don't want epilogue groups
           for (auto [name, constraint] : constraints) {
             if (!constraint(edge)) {
+              if (options.dump)
+                std::cout << "\n---- failed constraint check ----\n";
               ok = false;
               break;
             }
@@ -1324,6 +1391,9 @@ void mergeGroups(Graph *graph, std::string funcName,
             changed = true;
             break;
           }
+        } else {
+          if (options.dump)
+            std::cout << "\n---- does not apply ----\n";
         }
       }
       if (changed)
@@ -1333,6 +1403,11 @@ void mergeGroups(Graph *graph, std::string funcName,
     iter++;
   } while (changed && iter < 10000);
   // std::cout << "iter = " << iter << "\n";
+
+  if (options.dump) {
+    std::cout << "############### heuristics done #####################"
+              << std::endl;
+  }
 
   // merge all load groups that are consumed by the same group
   {
@@ -2186,16 +2261,19 @@ bool hasFlattenedEpilogue(ModuleOp m) {
   return false;
 }
 
-void duplicateViewOps(ModuleOp m) {
-  // Ensure all view ops have a single user, by duplicated them where necessary
-  // This ensures view ops do not span more than one group
-  // Note: Duplicate view ops within a single group are deduplicated after
-  // analysis
+llvm::SmallVector<llvm::SmallVector<mlir::Operation *>>
+duplicateViewOps(ModuleOp m) {
+  // Ensure all view ops/broadcast/expand dims have a single user, by
+  // duplicating them where necessary. Ensures these ops do not span more
+  // than one group
+  // Note: Duplicated ops within a single group are deduplicated after analysis
 
+  llvm::SmallVector<llvm::SmallVector<mlir::Operation *>> duplicatedViewOps;
   llvm::SmallVector<mlir::Operation *> viewOps;
 
   m.walk([&](mlir::Operation *op) {
-    if (op->hasTrait<OpTrait::MemDescViewTrait>()) {
+    if (isa<tt::BroadcastOp, tt::ExpandDimsOp>(op) ||
+        op->hasTrait<OpTrait::MemDescViewTrait>()) {
       viewOps.push_back(op);
     }
   });
@@ -2208,11 +2286,58 @@ void duplicateViewOps(ModuleOp m) {
 
     bool first = true;
     for (auto &use : result.getUses()) {
-      if (!first) {
+      if (first) {
+        duplicatedViewOps.push_back({op});
+      } else {
         Operation *newOp = OpBuilder(op).clone(*op);
         use.set(newOp->getResult(0));
+        duplicatedViewOps.back().push_back(newOp);
       }
       first = false;
+    }
+  }
+  return duplicatedViewOps;
+}
+
+void deduplicateViewOps(
+    ModuleOp m,
+    llvm::SmallVector<llvm::SmallVector<mlir::Operation *>> duplicatedViewOps) {
+  // get group assignment for the ops, and group them by it
+  // merge ops that have the same group assignment
+  for (auto ops : duplicatedViewOps) {
+    std::map<std::string, llvm::SmallVector<mlir::Operation *>> groupedOps;
+    for (auto op : ops) {
+      std::string group;
+      // nvws:
+      if (op->hasAttr("groups")) {
+        for (auto attr : cast<ArrayAttr>(op->getAttr("groups"))) {
+          auto fullname = cast<SymbolRefAttr>(attr).getRootReference().str();
+          group += fullname + ",";
+        }
+      }
+      // main:
+      if (op->hasAttr("ttg.partitions")) {
+        for (auto attr : cast<ArrayAttr>(op->getAttr("ttg.partitions"))) {
+          auto name = std::to_string(cast<IntegerAttr>(attr).getInt());
+          group += name + ",";
+        }
+      }
+      if (groupedOps.find(group) == groupedOps.end()) {
+        groupedOps[group] = {};
+      }
+      groupedOps[group].push_back(op);
+    }
+
+    for (auto group : groupedOps) {
+      auto &sameOps = group.second;
+      if (sameOps.size() <= 1)
+        continue;
+      auto op = sameOps.front();
+      for (auto it = sameOps.begin() + 1; it != sameOps.end(); it++) {
+        // merge the two ops
+        (*it)->replaceAllUsesWith(op->getResults());
+        (*it)->erase();
+      }
     }
   }
 }
@@ -2240,7 +2365,7 @@ struct PartitionAnalysis
 
 void PartitionAnalysis::runOnOperation() {
   ModuleOp m = getOperation();
-  duplicateViewOps(m);
+  auto duplicatedOps = duplicateViewOps(m);
   auto func = cast<tt::FuncOp>(m.getRegion().front().front());
 
   auto toInt = [](int dflt, std::string value) {
@@ -2305,4 +2430,5 @@ void PartitionAnalysis::runOnOperation() {
               graph.get(), vis_info);
   assignWarpsAndRegisters(m, graph.get());
   serialize(m, graph.get());
+  deduplicateViewOps(m, duplicatedOps);
 }
