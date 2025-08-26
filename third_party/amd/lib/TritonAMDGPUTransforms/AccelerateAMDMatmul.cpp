@@ -1216,8 +1216,9 @@ public:
 
     auto CTALayout = ttg::getCTALayout(oldRetEncoding);
 
-    // TODO extend heuristic for this parameter
-    bool isTransposed = isChainDotHead(dotOp);
+    // Use transposed wmma layout to enable larger vectorization for global
+    // store instructions.
+    bool isTransposed = true;
     wmmaEnc = ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, isTransposed,
                                             warpsPerTile, CTALayout);
 
