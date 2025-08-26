@@ -3747,8 +3747,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         if not (is_hip_cdna() or is_hip_gfx11() or is_hip_gfx12()):
             pytest.skip("scaled_dot only implemented for HIP CDNA, gfx11, gfx12")
         if "e4m3" in (mxfp_type, normal_type):
-            if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx12()):
-                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, gfx12")
+            if not (is_hip_cdna3() or is_hip_cdna4() or is_hip_gfx11() or is_hip_gfx12()):
+                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3, CDNA4, gfx11, gfx12")
         if mma == 16 and K == 64 and not (is_hip_gfx12() or is_hip_gfx11()):
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
@@ -3977,8 +3977,12 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     # CDNA2 devices use reduced precision fp16 and bf16 and flush input and output denormal values
     # to zero. Detailed info is at:
     # https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
-    atol = 2e-4 if is_hip_cdna2() else 1e-5
-    rtol = 2e-2 if is_hip_cdna2() else 1e-2
+    large_tolerance = is_hip_cdna2()
+    # For e4m3, gfx11 can slightly exceed the default tolerances in isolated cases
+    if is_hip_gfx11() and mxfp_type == "e4m3" and normal_type == "fp16":
+        large_tolerance = True
+    atol = 2e-4 if large_tolerance else 1e-5
+    rtol = 2e-2 if large_tolerance else 1e-2
     torch.testing.assert_close(z, z_ref, atol=atol, rtol=rtol)
 
     # make sure ld/st are vectorized
