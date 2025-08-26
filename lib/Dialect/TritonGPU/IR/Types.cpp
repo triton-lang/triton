@@ -97,10 +97,9 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   }
   // Every dimension but the first (to allow for pipelining) must be a power of
   // 2
-  if (!(isa<PaddedSharedEncodingAttr>(encoding) ||
-        llvm::all_of(shape.drop_front(1), [](int64_t dim) {
-          return llvm::isPowerOf2_64(dim) && dim > 0;
-        })))
+  if (!llvm::all_of(shape.drop_front(1), [](int64_t dim) {
+        return llvm::isPowerOf2_64(dim) && dim > 0;
+      }))
     return emitError()
            << "shape must have power-of-2 and non-zero dimensions; got "
            << shape;
@@ -167,6 +166,42 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   } else {
     return emitError() << encoding << " is not a valid encoding";
   }
+
+  // Handle PaddedSharedEncoding separate because it's also a
+  // SharedEncodingTrait
+  if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
+    auto rank = enc.getRank();
+    // The linear component inside padded encodings must much the shape or be
+    // one less to allow for pipelining
+    if (rank != shape.size() && rank != shape.size() - 1) {
+      return emitError()
+             << "Padding rank must be equal or one less when pipelining";
+    }
+
+    // Subslices are not support at the moment
+    auto subsliceAllocSize =
+        allocShape.drop_front(allocShape.size() - shape.size());
+    for (auto [allocShape, shape] : llvm::zip(shape, subsliceAllocSize)) {
+      if (allocShape != shape) {
+        return emitError()
+               << "Subslices with padded encodings not yet implemented";
+      }
+    }
+
+    // Verify outdims of the linear component match the alloc memdesc shape
+    auto outDims = standardOutDimNames(ctx, rank);
+    auto ll = enc.getLinearComponent();
+    auto llAllocSize = allocShape.drop_front(allocShape.size() - rank);
+    for (auto d = 0; d < rank; d++) {
+      if (ll.getOutDimSize(outDims[d]) != llAllocSize[d]) {
+        return emitError() << "expected shape for dim" << d << " to be "
+                           << ll.getOutDimSize(outDims[d]) << ", got "
+                           << llAllocSize[d]
+                           << ". Note that slicing is not supported";
+      }
+    }
+  }
+
   return success();
 }
 
