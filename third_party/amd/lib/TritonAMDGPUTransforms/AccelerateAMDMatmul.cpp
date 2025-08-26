@@ -479,9 +479,6 @@ public:
 
     SmallVector<unsigned, 2> tilesPerWarp = {1, 1};
 
-    bool isMfma16OnCDNA4 = mfmaVersion == 4 && is16BitElemTy && mDim == 16 &&
-                           nDim == 16 && oldRetType.getRank() == 2 &&
-                           warpsPerTile.back() == 1;
     // Set tilesPerWarp and isTransposed to enable intra warp conversion for the
     // mfma16x16 layout of a dot op, depending on whether
     // its result is used by operand 0 or operand 1 of another dot op.
@@ -498,11 +495,20 @@ public:
       }
     }
 
-    ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        oldRetType.getContext(),
-        /*version*/ mfmaVersion, warpsPerTile, tilesPerWarp,
-        /*instrShape*/ mDim, nDim, /*isTransposed=*/isTransposed, CTALayout,
-        mfmaAccType);
+    ttg::AMDMfmaEncodingAttr mfmaEnc;
+    if (llvm::any_of(tilesPerWarp, [](int x) { return x != 1; })) {
+      mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+          oldRetType.getContext(),
+          /*version*/ mfmaVersion, warpsPerTile, tilesPerWarp,
+          /*instrShape*/ mDim, nDim, /*isTransposed=*/isTransposed, CTALayout,
+          mfmaAccType);
+    } else {
+      mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+          oldRetType.getContext(),
+          /*version*/ mfmaVersion, warpsPerTile,
+          /*instrShape*/ mDim, nDim, /*isTransposed=*/isTransposed, CTALayout,
+          mfmaAccType);
+    }
 
     // convert accumulator
     auto oldAcc = dotOp.getC();
