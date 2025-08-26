@@ -230,6 +230,26 @@ bool verifyNonNegativeExpr(
   return nonNegative;
 }
 
+bool isFuncArgWith32bitPtrRange(mlir::Value value) {
+  if (value.getDefiningOp())
+    return false;
+
+  mlir::BlockArgument blockArg = mlir::cast<mlir::BlockArgument>(value);
+  auto blk = blockArg.getOwner();
+  auto funcOp = dyn_cast_or_null<tt::FuncOp>(blk->getParentOp());
+
+  if (funcOp && blk == &funcOp->getRegion(0).front()) {
+    for (auto [idx, arg] : llvm::enumerate(funcOp.getArguments())) {
+      if (arg != value)
+        continue;
+      auto attr = funcOp.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range");
+      return attr && attr.getInt() <= 32;
+    }
+  }
+
+  return false;
+}
+
 // Quick analysis on the Triton IR to decide if we can safely use
 // buffer operations
 bool canUseBufferOps(Value ptr,
@@ -248,11 +268,29 @@ bool canUseBufferOps(Value ptr,
     return false;
   LDBG("Pattern matched");
 
-  // 2. Check if the offset is a 32-bit tensor
+  // 2. check if offset is either 32 or 64-bit.
   Value offset = addPtrOp.getOffset();
-  if (cast<RankedTensorType>(offset.getType()).getElementTypeBitWidth() != 32)
+  auto ofstBit =
+      cast<RankedTensorType>(offset.getType()).getElementTypeBitWidth();
+  LLVM_DEBUG(llvm::dbgs() << "offset bits:" << ofstBit << "\n");
+
+  // TODO: step 3 and 4 need to be transposed. When the base-ptr is func
+  // argument and has tt.pointer_range=32 attribute, it's safe to promote
+  // the mem-op into buffer-op even if offset is a 64-bit value. If this is
+  // the case, offset need to be cast down to 32-bit.
+
+  // 3. Bail out if ofst cannot fit in 32-bit.
+  if (ofstBit != 32)
     return false;
-  LDBG("32 bit offset");
+
+  // 4. If the base is function formal argument which has attribute
+  //  tt.point_range=32, then it's safe to promote this memory op into
+  //  bufferOp. In this case, if offset is 64-bit, we should cast it down to
+  //  32-bit.
+  if (isFuncArgWith32bitPtrRange(maybeSplatOp.getSrc())) {
+    LDBG("base-ptr as tt.pointer_range=32 attribute");
+    return true;
+  }
 
   return verifyNonNegativeExpr(offset, assumptions, std::move(solver));
 }
