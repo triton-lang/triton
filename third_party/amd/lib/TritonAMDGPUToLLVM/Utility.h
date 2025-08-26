@@ -122,7 +122,6 @@ bool hasTransInDefChain(mlir::triton::DotOpInterface dotOp, unsigned opIdx);
 // Check if the opA of this tl.dot is the result of another tl.dot
 // in the same region
 bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
-Operation *getChainDotTail(mlir::triton::DotOpInterface dotOp);
 
 // Software implementation of converting an 8-element vector of MXFP4 elements
 // to a wider type: BF16 or FP16

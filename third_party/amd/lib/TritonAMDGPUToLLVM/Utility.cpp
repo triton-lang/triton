@@ -747,28 +747,6 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
   return false;
 }
 
-Operation *getChainDotTail(tt::DotOpInterface dotOp) {
-  auto isInSameRegion = [&dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
-  };
-  BackwardSliceOptions bwdOpt;
-  bwdOpt.omitBlockArguments = true;
-  bwdOpt.filter = isInSameRegion;
-  SetVector<Operation *> bwdSlices;
-  Operation *opA = dotOp.getA().getDefiningOp();
-  if (!opA)
-    return nullptr;
-  (void)getBackwardSlice(opA, &bwdSlices, bwdOpt);
-  auto dotHead = llvm::find_if(bwdSlices, [](Operation *op) {
-    // return isa<tt::DotOpInterface>(op);
-    return isa<tt::DotOpInterface>(op);
-  });
-  if (dotHead != bwdSlices.end())
-    return *dotHead;
-  else
-    return nullptr;
-}
-
 SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                        bool toFp16, Value packedVec) {
   assert((isa<triton::amdgpu::UpcastMXFPOp, triton::gpu::Fp4ToFpOp>(op)) &&
