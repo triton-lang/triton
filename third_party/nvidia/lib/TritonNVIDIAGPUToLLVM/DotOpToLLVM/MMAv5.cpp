@@ -374,7 +374,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
                     Value b, Value loadedA, Value loadedB,
                     MemDescType dTensorTy, Value useDFlag, Value pred,
                     bool twoCTAs, bool opKindIsMXFP4, const DotConversion &op,
-                    ArrayRef<ttng::TCGen5CommitOp> commitOps) {
+                    ArrayRef<Value> barriersForCommit) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
 
   // Only run mma on one thread. We currently use elect as ptxas is not able to
@@ -483,10 +483,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
     }
   }
 
-  for (auto commitOp : commitOps) {
-    Value commitPred = elect;
-    Value barrier = rewriter.getRemappedValue(commitOp.getBarrier());
-
+  for (auto barrier : barriersForCommit) {
     // Placing a commit op after the mma op requires that defining ops
     // for the barrier argument of the commit op be moved into the right
     // place as well. Those ops are in endBlock.
@@ -515,7 +512,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
 
     auto smemObj =
         LLVM::getSharedMemoryObjectFromStruct(loc, barrier, i64_ty, rewriter);
-    createMMACommit(rewriter, loc, smemObj.getBase(), commitPred, twoCTAs);
+    createMMACommit(rewriter, loc, smemObj.getBase(), elect, twoCTAs);
   }
   rewriter.create<LLVM::BrOp>(loc, endBlock);
 }
@@ -523,7 +520,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
 void convertDot(const LLVMTypeConverter &typeConverter,
                 ConversionPatternRewriter &rewriter, Location loc,
                 ttng::TCGen5MMAOp op, ttng::TCGen5MMAOpAdaptor &adaptor,
-                ArrayRef<ttng::TCGen5CommitOp> commitOps) {
+                ArrayRef<Value> barriersForCommit) {
   MemDescType aTensorTy = op.getA().getType();
   MemDescType bTensorTy = op.getB().getType();
   MemDescType dTensorTy = op.getD().getType();
@@ -565,7 +562,7 @@ void convertDot(const LLVMTypeConverter &typeConverter,
   convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
                  adaptor.getA(), adaptor.getB(), dTensorTy, adaptor.getUseD(),
                  adaptor.getPred(), twoCTAs, /*opKindIsMXFP4=*/false, dot,
-                 commitOps);
+                 barriersForCommit);
 }
 
 int64_t getFormatBitSize(ScaleDotElemType type) {
@@ -602,7 +599,7 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
                       ConversionPatternRewriter &rewriter, Location loc,
                       ttng::TCGen5MMAScaledOp op,
                       ttng::TCGen5MMAScaledOpAdaptor &adaptor,
-                      ArrayRef<ttng::TCGen5CommitOp> commitOps) {
+                      ArrayRef<Value> barriersForCommit) {
   MemDescType aTensorTy = op.getA().getType();
   MemDescType bTensorTy = op.getB().getType();
   MemDescType dTensorTy = op.getD().getType();
@@ -680,7 +677,7 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
   convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
                  adaptor.getA(), adaptor.getB(), dTensorTy, adaptor.getUseD(),
                  adaptor.getPred(), /*twoCTAs=*/false, opKindIsMXFP4, dot,
-                 commitOps);
+                 barriersForCommit);
 }
 
 //===----------------------------------------------------------------------===//
@@ -717,6 +714,25 @@ collectCommitOpAfter(ttng::MMAv5OpInterface mmaOp) {
   return commitOps;
 }
 
+std::optional<SmallVector<Value>>
+getRemappedBarriers(ArrayRef<ttng::TCGen5CommitOp> commitOps,
+                    ConversionPatternRewriter &rewriter) {
+  SmallVector<Value> barriers;
+  for (auto commitOp : commitOps) {
+    // When this function is called, there is no OpAdaptor for the commit op at
+    // the call site. We resort to getRemappedValue to type-convert the barrier
+    // operand.
+    if (auto remapped = rewriter.getRemappedValue(commitOp.getBarrier())) {
+      barriers.push_back(remapped);
+    } else {
+      // Bail as soon as getRemappedValue fails. In practice, this does not seem
+      // to happen.
+      return std::nullopt;
+    }
+  }
+  return barriers;
+}
+
 struct TCGen5MMAOpConversion
     : public ConvertOpToLLVMPattern<ttng::TCGen5MMAOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -733,12 +749,19 @@ struct TCGen5MMAOpConversion
         "Operand A should use Shared or Tensor memory layout.");
     assert(isa<NVMMASharedEncodingAttr>(BEnc) &&
            "Operand B should use Shared layout.");
-    convertDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor,
-               commitOps);
-    rewriter.eraseOp(op);
-    for (auto commit : commitOps) {
-      rewriter.eraseOp(commit);
+    if (auto barriers = getRemappedBarriers(commitOps, rewriter)) {
+      // Emit the mma op and commit ops in the same basic block if possible.
+      // This can result in slightly better performance for the version of ptxas
+      // as of this writing.
+      convertDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor,
+                 *barriers);
+      for (auto commit : commitOps) {
+        rewriter.eraseOp(commit);
+      }
+    } else {
+      convertDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor, {});
     }
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -751,12 +774,17 @@ struct TCGen5MMAScaledOpConversion
   matchAndRewrite(ttng::TCGen5MMAScaledOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto commitOps = collectCommitOpAfter(op);
-    convertScaledDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor,
-                     commitOps);
-    rewriter.eraseOp(op);
-    for (auto commit : commitOps) {
-      rewriter.eraseOp(commit);
+    if (auto barriers = getRemappedBarriers(commitOps, rewriter)) {
+      convertScaledDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor,
+                       *barriers);
+      for (auto commit : commitOps) {
+        rewriter.eraseOp(commit);
+      }
+    } else {
+      convertScaledDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor,
+                       {});
     }
+    rewriter.eraseOp(op);
     return success();
   }
 };
