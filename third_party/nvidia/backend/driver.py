@@ -148,6 +148,8 @@ def make_launcher(constants, signature, tensordesc_meta):
                     # we have to pass the shape and strides twice.
                     for _ in range(2 * ndim):
                         output.append("i64")
+
+                    output.append("i1")
                 else:
                     output.append("nvTmaDesc")
 
@@ -620,7 +622,7 @@ def make_tensordesc_arg(arg, metadata):
         # descriptors which is why we provide our own decomposition
         # above. Sadly this means we have to pass the shape and strides
         # twice.
-        return [arg.base, *arg.shape, *arg.strides, *arg.shape, *arg.strides]
+        return [arg.base, *arg.shape, *arg.strides, arg.oob_fill_nan, *arg.shape, *arg.strides]
 
     swizzle = metadata["swizzle"]
     elem_size = metadata["elem_size"]

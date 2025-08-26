@@ -59,18 +59,21 @@ struct Descriptor {
   Value base;
   ValueRange shape;
   ValueRange strides;
+  Value oobFillNaN;
 };
 
 Descriptor unpackDescriptor(TensorDescType type, ValueRange pack) {
   int rank = type.getBlockType().getRank();
-  assert(pack.size() == 1 + 2 * static_cast<size_t>(rank) &&
+  assert(pack.size() == 1 + 2 * static_cast<size_t>(rank) + 1 &&
          "Expected tensor descriptors to consist of a pointer, "
-         "followed by 'rank' shape values and 'rank' stride values.");
+         "followed by 'rank' shape values and 'rank' stride values, "
+         "followed by a boolean value indicating whether to fill NaN for out-of-bounds access.");
 
   Descriptor res;
   res.base = pack[0];
   res.shape = pack.slice(1, rank);
   res.strides = pack.slice(1 + rank, rank);
+  res.oobFillNaN = pack[1 + 2 * rank];
   return res;
 }
 
@@ -211,22 +214,23 @@ Value generateMask(OpBuilder &builder, const Location &loc,
 }
 
 Value generateOther(OpBuilder &builder, Location loc, Type scalarTy,
-                    ArrayRef<int64_t> blockShape, bool oobNaN = false) {
+                    ArrayRef<int64_t> blockShape, Value oobNaN = mlir::Value()) {
   auto blockTy = RankedTensorType::get(blockShape, scalarTy);
-  if (oobNaN) {
-    assert(mlir::isa<FloatType>(scalarTy));
+  if (oobNaN && mlir::isa<FloatType>(scalarTy)) {
     auto floatTy = mlir::cast<FloatType>(scalarTy);
     auto nan = llvm::APFloat::getNaN(floatTy.getFloatSemantics());
-    auto elem = builder.getFloatAttr(floatTy, nan);
-    auto attr = SplatElementsAttr::get(blockTy, elem);
-    return builder.create<arith::ConstantOp>(loc, attr);
+    auto nanValue = builder.create<arith::ConstantOp>(loc,
+      SplatElementsAttr::get(blockTy, builder.getFloatAttr(floatTy, nan)));
+    auto zeroValue = builder.create<arith::ConstantOp>(loc,
+      SplatElementsAttr::get(blockTy, builder.getZeroAttr(floatTy)));
+    return builder.create<mlir::arith::SelectOp>(loc, oobNaN, nanValue, zeroValue);
   } else {
     auto attr = builder.getZeroAttr(blockTy);
     return builder.create<arith::ConstantOp>(loc, attr);
   }
 }
 
-Value generateOther(OpBuilder &builder, Location loc, TensorDescType descTy, bool oobNaN = false) {
+Value generateOther(OpBuilder &builder, Location loc, TensorDescType descTy, Value oobNaN = mlir::Value()) {
   auto blockTy = descTy.getSignlessBlockType();
   return generateOther(builder, loc, blockTy.getElementType(),
                        blockTy.getShape(), oobNaN);
@@ -251,6 +255,11 @@ struct RewriteMakeTensorDesc : OpConversionPattern<triton::MakeTensorDescOp> {
     llvm::append_range(ptrShapeStrides,
                        castToI64(rewriter, adaptor.getShape()));
     llvm::append_range(ptrShapeStrides, adaptor.getStrides());
+    auto oobFillNaN = rewriter.create<mlir::arith::ConstantOp>(
+        op.getLoc(), rewriter.getI1Type(),
+        rewriter.getBoolAttr(adaptor.getOobFillNaN())
+    );
+    llvm::append_values(ptrShapeStrides, oobFillNaN);
     rewriter.replaceOpWithMultiple(op, {ptrShapeStrides});
     return mlir::success();
   }
@@ -267,13 +276,11 @@ struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
     auto descTy = op.getDesc().getType();
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto offsets = castToI64(rewriter, op.getIndices());
-    bool oobNaN = false;
-    if (auto mk = op.getDesc().getDefiningOp<triton::MakeTensorDescOp>())
-      oobNaN = mk.getOobFillNaN();
+    auto other = generateOther(rewriter, loc, descTy, desc.oobFillNaN);
     auto newLoad = rewriter.replaceOpWithNewOp<triton::LoadOp>(
         op, generatePtr(rewriter, loc, blockShape, desc, offsets),
         generateMask(rewriter, loc, blockShape, desc, offsets),
-        generateOther(rewriter, loc, descTy, oobNaN), triton::CacheModifier::NONE,
+        other, triton::CacheModifier::NONE,
         triton::EvictionPolicy::NORMAL, false);
     newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
 
@@ -336,12 +343,9 @@ struct RewriteGatherPattern : OpConversionPattern<triton::DescriptorGatherOp> {
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto [ptr, mask] = generateGatherScatterPtrMask(
         rewriter, loc, blockShape, desc, op.getXOffsets(), op.getYOffset());
-    bool oobNaN = false;
-    if (auto mk = op.getDesc().getDefiningOp<triton::MakeTensorDescOp>())
-      oobNaN = mk.getOobFillNaN();
     auto other = generateOther(rewriter, loc,
                                descTy.getSignlessBlockType().getElementType(),
-                               blockShape, oobNaN);
+                               blockShape, desc.oobFillNaN);
     auto newLoad = rewriter.replaceOpWithNewOp<triton::LoadOp>(
         op, ptr, mask, other, triton::CacheModifier::NONE,
         triton::EvictionPolicy::NORMAL, false);
@@ -485,13 +489,14 @@ class TritonRewriteTensorDescriptorToPointerPass
     converter.addConversion([](mlir::triton::TensorDescType t,
                                llvm::SmallVectorImpl<mlir::Type> &out) {
       // We convert a tensor descriptor into an pointer, and a shape and stride
-      // for each dimension, i.e., we create 1+2*rank values. Note that tensor
-      // descriptors may be signed/unsigned integers whereas pointers should
-      // always be signless.
+      // for each dimension, and a boolean. i.e., we create 1+2*rank+1 values.
+      // Note that tensor descriptors may be signed/unsigned integers whereas pointers
+      // should always be signless.
       auto tensorType = t.getSignlessBlockType();
       out.push_back(triton::getPointerType(tensorType.getElementType()));
       out.insert(out.end(), 2 * tensorType.getRank(),
                  mlir::IntegerType::get(t.getContext(), 64));
+      out.push_back(mlir::IntegerType::get(t.getContext(), 1));
       return mlir::success();
     });
 
