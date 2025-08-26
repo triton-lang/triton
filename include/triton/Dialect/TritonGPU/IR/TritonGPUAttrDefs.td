@@ -383,9 +383,8 @@ different GPU threads in the programs, via shared memory. In other words,
 for all indices i \in Z^d, \mathcal{L}(i) = {0, 1, ..., 32*num_warps - 1}.
 Compared to SwizzledSharedEncodingAttr, this encoding uses padding to avoid
 shared memory bank conflicts. For cases where padding alone cannot efficiently
-avoid shared memory bank conflicts it has an optional linear component to
-rearange elements. If the linear component is absent the elements will be
-contiguous (identity mapping).
+avoid shared memory bank conflicts it has a linear component to further rearange
+elements.
 
 Formally, given a layout:
     padded_shared<[<interval_0>:+<pad_0>, <interval_1>:+<pad_1>, ...]>
@@ -396,26 +395,26 @@ at index i, the corresponding shared memory location index is
     i + \sum_{k} (i / interval_k) * pad_k = 1
 `<interval_i>` and `<pad_i>` all need to be power of two.
 
-Some concrete examples, using `eM` to mean tensor elements and `pN` to mean
-padding:
+Some concrete examples ignoring the linear component, using `eM` to mean tensor
+elements and `pN` to mean padding:
 
 1. Single interval-padding pair:
 
-   #ttg.padded_shared<[2:+2]>
+   #ttg.padded_shared<[2:+2], {...}>
    [e0, e1, p0, p1,
     e2, e3, p2, p3,
     ...]
 
 2. Double interval-padding pairs:
 
-   #ttg.padded_shared<[2:+1, 4:+2]>
+   #ttg.padded_shared<[2:+1, 4:+2], {...}>
    [e0, e1, p0,
     e2, e3, p1, p2, p3,
     e4, e5, p4,
     e6, e7, p5, p6, p7,
     ...]
 
-Optionally this encoding allows for a linear remapping from the 1-D shared
+Furthermore this encoding allows for a linear remapping from the 1-D shared
 memory offset to logical n-D tensor elements. The remapping is gives in the form
 of linear bases mapping from offset to [dim0, dim1...dimN-1].
 See LinearLayout.h for more details how linear layouts are applied to remap
@@ -425,14 +424,14 @@ and `pN` to mean padding:
 
 1. 1D Single interval-padding with strided elements
 
-    #ttg.padded_shared<[2:+2] {offset = [[2], [1]]}>
+    #ttg.padded_shared<[2:+2] {offset = [[2], [1]], block = []}>
     [x0, x3, p0 p1,
      x1, x3, p2, p3
      ...]
 
 3. 2D single interval-padding with rearanged rows.
 
-    #ttg.padded_shared<[16:+1] {offset = [[0, 1], [0, 2], /*gap, stride by 2 rows*/[2, 0], [4, 0], [1, 0]]]}>
+    #ttg.padded_shared<[16:+1] {offset = [[0, 1], [0, 2], /*gap, stride by 2 rows*/[2, 0], [4, 0], [1, 0]]], block = []}>
     [
       x0y0, x0y1, x0y2, x0y3,
       x2y0, x2y1, x2y2, x2y3,
@@ -445,14 +444,6 @@ and `pN` to mean padding:
       x7y0, x7y1, x7y2, x7y3,
       p1,
     ]
-
-Additionally this encoding requires an `order` to specify the logical
-tensor dimensions from the fastest-to slowest-varying.
-It may optionally support CGA level organization like other encoding
-attributes too, for example,
-    #ttg.padded_shared<[2:+1, 4:+2] {
-        order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1],
-        CTAOrder = [0, 1]}>
   }];
 
   let parameters = (ins
@@ -463,10 +454,12 @@ attributes too, for example,
 
   let builders = [
       AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
+                       "LinearLayout":$linearComponent)>,
+
+      // Convience builder to create an identity mapping for the linear component
+      AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
                        "ArrayRef<unsigned>":$order, "ArrayRef<int64_t>":$shape,
                        "CTALayoutAttr":$ctaLayout)>,
-      AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
-                       "LinearLayout":$linearComponent)>,
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
