@@ -110,6 +110,34 @@ def _get_path_to_hip_runtime_dylib():
                 return f
             paths.append(f)
 
+    # HIP_PATH should point to HIP SDK root if set
+    env_hip_path = os.getenv("HIP_PATH")
+    if env_hip_path:
+        hip_lib_path = os.path.join(env_hip_path, "lib", lib_name)
+        if os.path.exists(hip_lib_path):
+            return hip_lib_path
+        paths.append(hip_lib_path)
+
+    # if available, `hipconfig --path` prints the HIP SDK root
+    try:
+        hip_root = subprocess.check_output(["hipconfig", "--path"]).decode().strip()
+        if hip_root:
+            hip_lib_path = os.path.join(hip_root, "lib", lib_name)
+            if os.path.exists(hip_lib_path):
+                return hip_lib_path
+            paths.append(hip_lib_path)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # hipconfig may not be available
+        pass
+
+    # ROCm lib dir based on env var
+    env_rocm_path = os.getenv("ROCM_PATH")
+    if env_rocm_path:
+        rocm_lib_path = os.path.join(env_rocm_path, "lib", lib_name)
+        if os.path.exists(rocm_lib_path):
+            return rocm_lib_path
+        paths.append(rocm_lib_path)
+
     # Afterwards try to search the loader dynamic library resolution paths.
     libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
     # each line looks like the following:
