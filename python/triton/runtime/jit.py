@@ -536,23 +536,24 @@ class JITCallable:
     def cache_key(self):
         # TODO : hash should be attribute of `self`
         with self._hash_lock:
-            if self.hash is None:
-                # Set a placeholder hash to break recursion in case the function
-                # transitively calls itself. The full hash is set after.
-                self.hash = f"recursion:{self._fn_name}"
-                nonlocals = inspect.getclosurevars(self.fn).nonlocals
-                dependencies_finder = DependenciesFinder(name=self._fn_name, globals=self.__globals__,
-                                                         nonlocals=nonlocals, src=self.src)
-                dependencies_finder.visit(self.parse())
-                self.hash = dependencies_finder.ret + str(self.starting_line_number)
-                self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
+            if self.hash is not None:
+                return self.hash
+            # Set a placeholder hash to break recursion in case the function
+            # transitively calls itself. The full hash is set after.
+            self.hash = f"recursion:{self._fn_name}"
+            nonlocals = inspect.getclosurevars(self.fn).nonlocals
+            dependencies_finder = DependenciesFinder(name=self._fn_name, globals=self.__globals__, nonlocals=nonlocals,
+                                                     src=self.src)
+            dependencies_finder.visit(self.parse())
+            self.hash = dependencies_finder.ret + str(self.starting_line_number)
+            self.used_global_vals = dict(sorted(dependencies_finder.used_global_vals.items()))
 
-                from triton.language.core import constexpr
-                self.hash += str([(name, val)
-                                  for (name, _), (val, _) in self.used_global_vals.items()
-                                  if isinstance(val, constexpr)])
-                self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
-            return self.hash
+            from triton.language.core import constexpr
+            self.hash += str([(name, val)
+                              for (name, _), (val, _) in self.used_global_vals.items()
+                              if isinstance(val, constexpr)])
+            self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
+        return self.hash
 
     # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.
