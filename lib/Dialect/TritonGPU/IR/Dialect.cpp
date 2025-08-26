@@ -330,6 +330,29 @@ unsigned getNumCTAs(Attribute layout) {
   return product<unsigned>(getCTAsPerCGA(layout));
 }
 
+SmallVector<unsigned> getOrderPerDim(const LinearLayout &ll, StringAttr dimName,
+                                     ArrayRef<unsigned> defaultOrder) {
+  assert(ll.getBases().contains(dimName));
+  const auto &bases = ll.getBases().find(dimName)->second;
+  llvm::SetVector<unsigned> order;
+  auto nonZero = [](auto val) { return val != 0; };
+  for (const auto &basis : bases) {
+    // Bases can have one or zero non-zero elements
+    // Skip a basis if it's broadcasting (all zeros)
+    // e.g. warps for DotOperandEncodingAttr (see ampereDotToLinearLayout)
+    auto it = std::find_if(basis.begin(), basis.end(), nonZero);
+    if (it != basis.end()) {
+      auto i = it - basis.begin();
+      order.insert(i);
+    }
+  }
+  // If any dim is missing, we add them in the defaultOrder
+  for (auto i : defaultOrder) {
+    order.insert(i);
+  }
+  return SmallVector<unsigned>(order.begin(), order.end());
+}
+
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
   // If the new elements per thread is less than the old one, we will need to
   // do convert encoding that goes through shared memory anyway. So we
@@ -890,25 +913,7 @@ LinearEncodingAttr::basesPerDim(StringAttr dimName, bool skipBroadcast) const {
 SmallVector<unsigned>
 LinearEncodingAttr::orderPerDim(StringAttr dimName,
                                 ArrayRef<unsigned> defaultOrder) const {
-  auto ll = getLinearLayout();
-  const auto &bases = ll.getBases().find(dimName)->second;
-  llvm::SetVector<unsigned> order;
-  auto nonZero = [](auto val) { return val != 0; };
-  for (const auto &basis : bases) {
-    // Bases can have one or zero non-zero elements
-    // Skip a basis if it's broadcasting (all zeros)
-    // e.g. warps for DotOperandEncodingAttr (see ampereDotToLinearLayout)
-    auto it = std::find_if(basis.begin(), basis.end(), nonZero);
-    if (it != basis.end()) {
-      auto i = it - basis.begin();
-      order.insert(i);
-    }
-  }
-  // If any dim is missing, we add them in the defaultOrder
-  for (auto i : defaultOrder) {
-    order.insert(i);
-  }
-  return SmallVector<unsigned>(order.begin(), order.end());
+  return getOrderPerDim(getLinearLayout(), dimName, defaultOrder);
 }
 
 // [Note. Divergence of methods wrt. legacy layouts]
@@ -1753,34 +1758,14 @@ int64_t PaddedSharedEncodingAttr::getPaddedSize(ArrayRef<int64_t> shape) const {
 SmallVector<unsigned>
 PaddedSharedEncodingAttr::orderPerDim(StringAttr dimName,
                                       ArrayRef<unsigned> defaultOrder) const {
-  auto ll = getLinearComponent();
-  assert(ll.getBases().contains(dimName));
-  const auto &bases = ll.getBases().find(dimName)->second;
-  llvm::SetVector<unsigned> order;
-  auto nonZero = [](auto val) { return val != 0; };
-  for (const auto &basis : bases) {
-    // Bases can have one or zero non-zero elements
-    // Skip a basis if it's broadcasting (all zeros)
-    // e.g. warps for DotOperandEncodingAttr (see ampereDotToLinearLayout)
-    auto it = std::find_if(basis.begin(), basis.end(), nonZero);
-    if (it != basis.end()) {
-      auto i = it - basis.begin();
-      order.insert(i);
-    }
-  }
-  // If any dim is missing, we add them in the defaultOrder
-  for (auto i : defaultOrder) {
-    order.insert(i);
-  }
-  return SmallVector<unsigned>(order.begin(), order.end());
+  return getOrderPerDim(getLinearComponent(), dimName, defaultOrder);
 }
 
 SmallVector<unsigned> PaddedSharedEncodingAttr::getOrder() const {
   auto rank = getLinearComponent().getNumOutDims();
   SmallVector<unsigned> order(rank);
   // Choose [rank-1, rank-2, ... 0] as the default order in case
-  // there are dims that do not move in the register
-  // This order is as good as any really
+  // there are dims that do not move in the offsets
   std::iota(order.rbegin(), order.rend(), 0);
 
   return orderPerDim(StringAttr::get(getContext(), "block"), order);
