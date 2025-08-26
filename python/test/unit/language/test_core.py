@@ -2965,6 +2965,25 @@ def test_histogram_mask(M, N, device):
     assert (z_torch == z).all()
 
 
+@pytest.mark.interpreter
+def test_histogram_complex_layout(device):
+
+    @triton.jit
+    def test(data, counts, SIZE: tl.constexpr):
+        data = tl.load(data + tl.arange(0, SIZE * SIZE)).reshape(SIZE, SIZE)
+        result = tl.dot(data, data).argmin(axis=1)
+        tl.store(counts + tl.arange(0, SIZE), tl.histogram(result, SIZE))
+
+    SIZE = 16
+
+    data = torch.randn(SIZE, SIZE, device=device)
+    counts = torch.empty((SIZE, ), dtype=torch.int32, device=device)
+
+    test[(1, )](data, counts, SIZE)
+
+    assert torch.equal(counts, torch.histc(torch.mm(data, data).argmin(1), bins=SIZE, min=0, max=SIZE - 1))
+
+
 @pytest.mark.parametrize("M, N", [(1, 64), (2, 32), (4, 16), (8, 8), (16, 4), (32, 2), (64, 1)])
 def test_scan_1d(M, N, device):
 
