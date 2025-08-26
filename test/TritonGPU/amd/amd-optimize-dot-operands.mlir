@@ -10,11 +10,10 @@
 // CHECK-LABEL: test_local_load_transposed
 // CHECK: %[[LOAD:.+]] = tt.load {{.*}} : tensor<64x16x!tt.ptr<f16>, #blocked>
 // CHECK: %[[ALLOC:.+]] = ttg.local_alloc %[[LOAD]] : (tensor<64x16xf16, #blocked>) -> !ttg.memdesc<64x16xf16, #shared, #smem>
-// CHECK: %[[LOCAL_LOAD_TRANS:.+]] = ttg.local_load %[[ALLOC]] : !ttg.memdesc<64x16xf16, #shared, #smem> -> tensor<64x16xf16, #linear>
 // CHECK: %[[LOCAL_LOAD_DIRECT:.+]] = ttg.local_load %[[ALLOC]] : !ttg.memdesc<64x16xf16, #shared, #smem> -> tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+// CHECK: %[[LOCAL_LOAD_TRANS:.+]] = amdgpu.local_load_transposed %[[ALLOC]] : !ttg.memdesc<64x16xf16, #shared, #smem> -> tensor<16x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 8}>>
 // CHECK: tt.dot {{.+}}, %[[LOCAL_LOAD_DIRECT]], {{.+}}: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x16xf32, #mma>
-// CHECK: %[[TRANS:.+]] = tt.trans %[[LOCAL_LOAD_TRANS]] {order = array<i32: 1, 0>} : tensor<64x16xf16, #linear> -> tensor<16x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 8}>>
-// CHECK: tt.dot {{.+}}, %[[TRANS]], {{.+}} : tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 8}>> * tensor<16x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 8}>> -> tensor<128x64xf32, #mma1>
+// CHECK: tt.dot {{.+}}, %[[LOCAL_LOAD_TRANS]], {{.+}} : tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 8}>> * tensor<16x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 8}>> -> tensor<128x64xf32, #mma1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @test_local_load_transposed(
     %arg0: tensor<64x16x!tt.ptr<f16>, #blocked>,
