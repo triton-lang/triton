@@ -487,7 +487,9 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
     Value commitPred = elect;
     Value barrier = rewriter.getRemappedValue(commitOp.getBarrier());
 
-    // Collect operations that need to be moved
+    // Placing a commit op after the mma op requires that defining ops
+    // for the barrier argument of the commit op be moved into the right
+    // place as well. Those ops are in endBlock.
     SmallVector<Operation *> toMove;
     std::function<void(Value)> collectOpsToMove = [&](Value val) {
       if (auto defOp = val.getDefiningOp()) {
@@ -504,9 +506,9 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
 
     collectOpsToMove(barrier);
 
-    // Must move to curBlock since these ops might be used in endBlock. Moving them
-    // inside mmaBlock causes dominance issues if the barrier is defined after
-    // the mma op
+    // Must move to curBlock since these ops might be used in endBlock. Moving
+    // them inside mmaBlock causes dominance issues if the barrier is defined
+    // after the mma op.
     for (Operation *op : toMove) {
       op->moveBefore(condBr);
     }
@@ -515,7 +517,6 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
         LLVM::getSharedMemoryObjectFromStruct(loc, barrier, i64_ty, rewriter);
     createMMACommit(rewriter, loc, smemObj.getBase(), commitPred, twoCTAs);
   }
-
   rewriter.create<LLVM::BrOp>(loc, endBlock);
 }
 

@@ -354,6 +354,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
+        is_async (bool): Set this to True when the mma op is intended to be async while no mbarriers argument is passed. Defaults to False.
     """
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
