@@ -8,7 +8,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
-from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, async_copy
+from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, TensorMemoryScalesLayout, async_copy
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.amd import _layouts as amd_layouts
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
@@ -583,11 +583,11 @@ def test_tcgen05_copy():
     num_cols: ttgl.constexpr = smem_h * 4 // 32
 
     shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=2)
-    tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 32], unpacked=True)
+    tmem_layout: ttgl.constexpr = TensorMemoryScalesLayout()
     # CHECK: [[SRC:%.*]] = ttg.local_alloc
-    src = ttgl.allocate_shared_memory(ttgl.int32, [smem_h, 4], shared_layout)
+    src = ttgl.allocate_shared_memory(ttgl.int8, [smem_h, 4], shared_layout)
     # CHECK: [[DST:%.*]] = ttng.tmem_alloc
-    dst = blackwell.allocate_tensor_memory(ttgl.int32, [128, num_cols], tmem_layout)
+    dst = blackwell.allocate_tensor_memory(ttgl.int8, [128, num_cols], tmem_layout)
     # CHECK: ttng.tmem_copy [[SRC]], [[DST]]
     blackwell.tcgen05_copy(src, dst)
 

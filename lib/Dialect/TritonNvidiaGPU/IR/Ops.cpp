@@ -588,9 +588,6 @@ LogicalResult TMEMCopyOp::verify() {
   if (!isa<triton::gpu::SharedMemorySpaceAttr>(
           getSrc().getType().getMemorySpace()))
     return emitOpError("The source must be a shared memory buffer");
-  if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
-          getDst().getType().getEncoding()))
-    return emitOpError("The destination must be a tensor memory buffer.");
 
   if (getBarrier() && !isa<triton::gpu::SharedMemorySpaceAttr>(
                           getBarrier().getType().getMemorySpace())) {
@@ -599,19 +596,41 @@ LogicalResult TMEMCopyOp::verify() {
   if (!getDst().getType().getMutableMemory()) {
     return emitOpError("Cannot copy into an immutable alloc");
   }
-
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
   auto sharedEnc =
-      cast<triton::gpu::NVMMASharedEncodingAttr>(srcTy.getEncoding());
-
-  if (!sharedEnc || sharedEnc.getTransposed() || sharedEnc.getFp4Padded() ||
-      sharedEnc.getSwizzlingByteWidth() != 0)
-    return emitOpError("The source should not have swizzling applied for now");
-
-  if (!triton::gpu::isInnermostContiguous(srcTy, 512)) {
-    return emitOpError("The source must be in a row-major order.");
+      dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(srcTy.getEncoding());
+  if (!sharedEnc) {
+    return emitOpError("Source must have nvmma layout.");
   }
-
+  if (sharedEnc.getTransposed() || sharedEnc.getFp4Padded())
+    return emitOpError("The source should not be transposed or passed");
+  if (isa<TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding())) {
+    if (sharedEnc.getSwizzlingByteWidth() != 0) {
+      return emitOpError("The source should not be swizzled for now");
+    }
+    if (!triton::gpu::isInnermostContiguous(srcTy, 512)) {
+      return emitOpError("The source must be in a row-major order.");
+    }
+  } else {
+    if (getSrc().getType().getShape() != getDst().getType().getShape()) {
+      return emitOpError(
+          "The source and destination must have the same shape.");
+    }
+    auto tmemEnc = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+        getDst().getType().getEncoding());
+    if (!tmemEnc) {
+      return emitOpError("Incorrect tmem layout.");
+    }
+    if (tmemEnc.getBlockM() != 128) {
+      return emitOpError("Tmem layout ahouls have M=128.");
+    }
+    if (sharedEnc.getSwizzlingByteWidth() == 0) {
+      return emitOpError("Source layout should be swizzled.");
+    }
+    if (srcTy.getElementType().getIntOrFloatBitWidth() != 32) {
+      return emitOpError("Source element type should be 32-bit.");
+    }
+  }
   // Given that we want to support flexible input SMEM shapes, kinds of shape
   // checking we can do here are limited. For simplicity, shape checking is
   // omitted.
