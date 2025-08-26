@@ -45,6 +45,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "ALLOW_LHS_TMEM_LAYOUT_CONVERSION",
     "TRITON_F32_DEFAULT",
     "TRITON_PREFER_TMEM_16x256_LAYOUT",
+    "MLIR_PASS_PLUGIN_PATH",
     // clang-format on
 };
 

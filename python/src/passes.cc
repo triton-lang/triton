@@ -12,6 +12,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/Passes.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
+#include "mlir/Tools/Plugins/PassPlugin.h"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -92,6 +94,20 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUCoalesceAsyncCopy);
   ADD_PASS_WRAPPER_0("add_concurrency_sanitizer",
                      createTritonInstrumentConcurrencySanitizer);
+
+  std::string pluginFile =
+      mlir::triton::tools::getStrEnv("MLIR_PASS_PLUGIN_PATH");
+
+  if (!pluginFile.empty()) {
+      auto plugin = mlir::PassPlugin::load(pluginFile);
+    if (!plugin) {
+      llvm::Error Err = plugin.takeError();
+      std::string ErrMsg =
+          "Pass Plugin Error: " + llvm::toString(std::move(Err));
+      throw std::runtime_error(ErrMsg);
+    }
+    plugin.get().registerPassRegistryCallbacks();
+  }
 }
 
 void init_triton_passes_convert(py::module &&m) {
