@@ -544,6 +544,12 @@ class PaddedSharedLayout(SharedLayout):
         assert len(self.cta_split_num) == rank
         assert len(self.cta_order) == rank
 
+    def __hash__(self):
+        return hash((tuple(map(tuple, self.interval_padding_pairs)),
+                     tuple(self.order), tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+                     tuple(self.cta_split_num) if self.cta_split_num else None,
+                     tuple(self.cta_order) if self.cta_order else None))
+
 
 # Python impl of LinearEncodingAttr::basesPerDim
 def bases_per_dim(bases, rank, skip_broadcast=True):

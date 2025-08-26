@@ -507,6 +507,27 @@ private:
         }
       }
       if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
+        // Workaround: scan towards the beginning of the current block looking
+        // for mmav5s and mark their operands as reads guarded by the barrier.
+        Operation *prevOp = op->getPrevNode();
+        while (prevOp) {
+          auto setBarrier = [&](TypedValue<ttg::MemDescType> buf) {
+            MemType memType = MemType::TENSOR_MEM;
+            if (isa<ttg::SharedEncodingTrait>(buf.getType().getEncoding())) {
+              memType = MemType::SHARED_MEM;
+            }
+            b.create<tti::ExperimentalSetReadBarrierOp>(
+                buf, commitOp.getBarrier(), buffersTensor[(int)memType],
+                barriers, readBarriersAlloc[(int)memType],
+                readBarriersType[(int)memType], commitOp.getPred());
+          };
+          if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(prevOp)) {
+            setBarrier(mmav5Op.getA());
+            setBarrier(mmav5Op.getB());
+          }
+          prevOp = prevOp->getPrevNode();
+        }
+
         b.create<tti::ExperimentalCommitWriteWithBarrierOp>(
             commitOp.getBarrier(), barriers,
             writeBarriersAlloc[(int)MemType::TENSOR_MEM],
