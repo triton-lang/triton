@@ -390,6 +390,25 @@ static bool isCoalesced(RankedTensorType loadType,
   const unsigned contigDim = blockedEnc.getOrder()[0];
   const unsigned contigPerThreadBlocked =
       blockedEnc.getSizePerThread()[contigDim];
+
+  // This is the correct way to compute vectorization instead of using
+  // getContigPerThread. However, currently global load vectorizer doesn't
+  // support vectorization that require in thread permutation (NOTE: local_load
+  // op lowering does support this!) such as: #ttg.linear<{register = [[0, 2],
+  // [0, 1]], ...}>, so we don't use largest vectorization here as well. This
+  // should be updated once vectorization in load op lowering is fixed..
+  //
+  // auto ctaLayout = ttg::getCTALayout(loadType.getEncoding());
+  // // Dummy shared layout that emulates global memory so we can use
+  // // largestVectorisation utility.
+  // auto sharedEncoding = ttg::SwizzledSharedEncodingAttr::get(
+  //     ctx, 1, 1, 1, blockedEnc.getOrder(), ctaLayout);
+  // auto sharedLL = triton::gpu::toLinearLayout(shape, sharedEncoding);
+  // auto invertedLL = ll.invertAndCompose(sharedLL).flattenOuts();
+
+  // auto [contigPerThreadLL, permutation] =
+  //     largestVectorisation(ctx, invertedLL, bitwidth, std::nullopt);
+
   const unsigned contigPerThreadLL = llEnc.getContigPerThread()[contigDim];
   const unsigned contigPerWarpLL = llEnc.getContigPerWarp()[contigDim];
   auto blockedLL = toLinearEncoding(blockedEnc, shape);
