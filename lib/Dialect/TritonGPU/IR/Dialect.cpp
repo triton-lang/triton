@@ -1697,9 +1697,23 @@ PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
     MLIRContext *context, ArrayRef<std::pair<unsigned, unsigned>> intervalPads,
     ArrayRef<unsigned> order, ArrayRef<int64_t> shape,
     CTALayoutAttr ctaLayout) {
-  assert("NYI: create default blocked layout based on order, cta and shape");
-  LinearLayout ll;
-  return get(context, intervalPads, ll);
+  auto rank = shape.size();
+  auto outDimNames = standardOutDimNames(context, rank);
+  StringAttr kOffset = StringAttr::get(context, "offset");
+
+  // Create identity mapping based on shape and order
+  LinearLayout linearComponent;
+  for (auto dim : order) {
+    linearComponent *=
+        LinearLayout::identity1D(shape[dim], kOffset, outDimNames[dim]);
+  }
+  // Transpose to standard out dim order
+  linearComponent = linearComponent.transposeOuts(outDimNames);
+  llvm::outs() << "Final LL: " << linearComponent << "\n";
+
+  linearComponent = combineCtaCgaWithShape(linearComponent, ctaLayout, shape);
+
+  return get(context, intervalPads, linearComponent);
 }
 
 PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
