@@ -62,6 +62,28 @@ class TensorMemoryLayout:
         return f"TL{block_str}{unpacked_str}{cta_split_str}TL"
 
 
+@dataclass(frozen=True, eq=True)
+class TensorMemoryScalesLayout:
+    """
+    Describes the layout for tensor memory scales in Blackwell architecture.
+
+    Args:
+        cta_split_num (Optional[Tuple[int, int]]): CTA split factors. Defaults to None.
+    """
+    cta_split_num: Optional[Tuple[int, int]] = None
+
+    def __post_init__(self):
+        assert self.cta_split_num is None or len(self.cta_split_num) == 2
+
+    def _to_ir(self, builder):
+        cta_split_num = self.cta_split_num or [1, 1]
+        return builder.get_tensor_memory_scales_layout(cta_split_num, )
+
+    def mangle(self) -> str:
+        cta_split_str = f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else ""
+        return f"TLS{cta_split_str}TLS"
+
+
 @constexpr_function
 def _cdiv(x, div):
     return (x + div - 1) // div
@@ -115,7 +137,7 @@ class tensor_memory_descriptor_type(base_type):
         self.shape = shape
         self.layout = layout
         self.alloc_shape = alloc_shape
-        assert isinstance(layout, TensorMemoryLayout)
+        assert isinstance(layout, TensorMemoryLayout) or isinstance(layout, TensorMemoryScalesLayout)
 
     def to_ir(self, builder: GluonOpBuilder) -> None:
         return builder.get_tensor_mem_desc_ty(
@@ -350,6 +372,19 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
 
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
                                          mbarrier_preds)
+
+
+@builtin
+def tcgen05_cp_smem_to_tmem(a, b, _semantic=None):
+    """
+    Start an asynchronous copy from shared memory to tensor memory.
+    WARNING: The current semantics of the instruction are not well defined and
+    the API will change in the future. Use at your own risk.
+    Args:
+        src (shared_memory_descriptor): Shared memory to copy from.
+        dst (tensor_memory_descriptor): Tensor memory to copy to.
+    """
+    _semantic.builder.create_tcgen05_cp(a.handle, b.handle)
 
 
 @builtin

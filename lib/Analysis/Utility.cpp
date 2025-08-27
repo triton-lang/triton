@@ -869,6 +869,8 @@ bool supportMMA(triton::DotOp op, int version) {
   if (version == 5) {
     if (triton::tools::getBoolEnv("DISABLE_MMA_V5"))
       return false;
+    RankedTensorType typeA = op.getA().getType();
+    int k = typeA.getShape().back();
     auto retType = op.getType();
     auto retShapePerCTA = getShapePerCTA(retType);
     auto rank = retShapePerCTA.size();
@@ -882,8 +884,11 @@ bool supportMMA(triton::DotOp op, int version) {
       // Currently only support numWarps 4 or 8 for TMEM load and store.
       return false;
     }
+    // If k size is smaller than the native mma size, we cannot use MMA.
+    if (k < 256 / aElemTy.getIntOrFloatBitWidth())
+      return false;
     if (!(retShapePerCTA[rank - 2] % 64 == 0 &&
-          retShapePerCTA[rank - 1] % 8 == 0))
+          retShapePerCTA[rank - 1] % 16 == 0))
       return false;
     return true;
   }
@@ -903,7 +908,7 @@ bool supportMMA(triton::DotOp op, int version) {
     if (rank == 3)
       return false;
     if (!(numWarps % 4 == 0 && retShapePerCTA[rank - 2] % 64 == 0 &&
-          retShapePerCTA[rank - 1] % 8 == 0 &&
+          retShapePerCTA[rank - 1] % 16 == 0 &&
           (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy) ||
            aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
            aElemTy.isF32()))) {
