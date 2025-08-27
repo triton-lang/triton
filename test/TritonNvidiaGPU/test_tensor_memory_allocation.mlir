@@ -391,11 +391,11 @@ tt.func @mma_lhs_tmem(
   cf.br ^bb1(%a2 : !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>)
 
 ^bb1(%lhs: !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>):
-  ttng.tc_gen5_mma %lhs, %b, %c, %useAcc, %pred, %barrier[%barrierPred] {is_async} :
+  ttng.tc_gen5_mma %lhs, %b, %c, %useAcc, %pred {is_async} :
     !ttg.memdesc<64x64xf16, #tmem, #ttng.tensor_memory, mutable>,
     !ttg.memdesc<64x64xf16, #shared1, #ttg.shared_memory>,
-    !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>,
-    !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>
+    !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+  ttng.tc_gen5_commit %barrier, %barrierPred : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>
   tt.return
 }
 
