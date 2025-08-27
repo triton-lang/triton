@@ -168,7 +168,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   }
 
   // PaddedSharedEncodingAttr is also a SharedEncodingTrait but we have some
-  // additional rules to verify
+  // additional rules to verify.
   if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
     auto rank = enc.getRank();
 
