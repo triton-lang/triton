@@ -530,19 +530,28 @@ private:
             }
           };
           if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(prevOp)) {
+	    b.setInsertionPoint(mmav5Op);
             auto pred = mmav5Op.getPredicate();
-            setBarrier(mmav5Op.getA(), pred, /*read*/ true);
-            setBarrier(mmav5Op.getB(), pred, /*read*/ true);
-            setBarrier(mmav5Op.getAccumulator(), pred, /*read*/ false,
-                       /*hwPipelined*/ true);
-            addWriteChecks(b, mmav5Op.getA(), pred, MemType::SHARED_MEM,
+            MemType lhsMemType = MemType::TENSOR_MEM;
+            if (isa<ttg::SharedEncodingTrait>(
+                    mmav5Op.getA().getType().getEncoding())) {
+              lhsMemType = MemType::SHARED_MEM;
+            }
+
+            addWriteChecks(b, mmav5Op.getA(), pred, lhsMemType,
                            /*hwPipelined*/ false);
+            setBarrier(mmav5Op.getA(), pred, /*read*/ true);
+
             addWriteChecks(b, mmav5Op.getB(), pred, MemType::SHARED_MEM,
                            /*hwPipelined*/ false);
+            setBarrier(mmav5Op.getB(), pred, /*read*/ true);
+
             addWriteChecks(b, mmav5Op.getAccumulator(), pred,
                            MemType::TENSOR_MEM, /*hwPipelined*/ true);
             addReadChecks(b, mmav5Op.getAccumulator(), pred,
                           MemType::TENSOR_MEM);
+            setBarrier(mmav5Op.getAccumulator(), pred, /*read*/ false,
+                       /*hwPipelined*/ true);
           }
           prevOp = prevOp->getPrevNode();
         }
