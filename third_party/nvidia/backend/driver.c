@@ -1,6 +1,7 @@
 #include "cuda.h"
 #include <dlfcn.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
@@ -26,7 +27,7 @@ static bool gpuAssert(CUresult code, const char *file, int line) {
 #define CUDA_CHECK_AND_RETURN_NULL(ans)                                        \
   do {                                                                         \
     if (!gpuAssert((ans), __FILE__, __LINE__))                                 \
-      return NULL;                                                             \
+      goto cleanup;                                                           \
   } while (0)
 
 // To be used inside a Py_{BEGIN,END}_ALLOW_THREADS block.
@@ -44,7 +45,7 @@ static bool gpuAssert(CUresult code, const char *file, int line) {
     if ((funcPointer) == NULL) {                                               \
       (funcPointer) = (initializerFunction)();                                 \
       if ((funcPointer) == NULL) {                                             \
-        return NULL;                                                           \
+        goto cleanup;                                                           \
       }                                                                        \
     }                                                                          \
   } while (0)
@@ -87,6 +88,9 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
                        warp_size, "sm_clock_rate", sm_clock_rate,
                        "mem_clock_rate", mem_clock_rate, "mem_bus_width",
                        mem_bus_width);
+
+cleanup:
+  return NULL;
 }
 
 static PyObject *loadBinary(PyObject *self, PyObject *args) {
@@ -238,6 +242,9 @@ static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
       cuOccupancyMaxActiveClusters(&maxActiveClusters, func, &config));
   Py_END_ALLOW_THREADS;
   return PyLong_FromLong(maxActiveClusters);
+
+cleanup:
+  return NULL;
 }
 
 static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
@@ -281,16 +288,52 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
 
 typedef struct {
   PyObject_HEAD;
+  int8_t padding[112];
   CUtensorMap tensorMap;
 } PyCUtensorMapObject;
 
+static PyObject* PyCUtensorMap_alloc(PyTypeObject *type, Py_ssize_t n_items) {
+  PyCUtensorMapObject *self = NULL;
+  void *mem = NULL;
+  size_t size = type->tp_basicsize;
+
+  if (posix_memalign(&mem, 128, size) != 0) {
+    PyErr_NoMemory();
+    return NULL;
+  }
+
+  self = (PyCUtensorMapObject*)mem;
+  PyObject_INIT(self, type);
+  return (PyObject*)self;
+}
+
+static PyObject *PyCUtensorMap_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
+  PyCUtensorMapObject *self = (PyCUtensorMapObject *)type->tp_alloc(type, 0);
+  if (!self) {
+    return NULL;
+  }
+  return (PyObject *)self;
+}
+
+static void PyCUtensorMap_dealloc(PyObject *self) {
+  Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static void PyCUtensorMap_free(void *ptr) {
+  free(ptr);
+}
+
 static PyTypeObject PyCUtensorMapType = {
-    PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-        "triton.backends.nvidia.PyCUtensorMap",
-    .tp_doc = "<PyCUtensorMap object>",
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name ="triton.backends.nvidia.PyCUtensorMap",
     .tp_basicsize = sizeof(PyCUtensorMapObject),
+    .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT,
-    .tp_new = PyType_GenericNew,
+    .tp_doc = "<PyCUtensorMap object>",
+    .tp_new = PyCUtensorMap_new,
+    .tp_alloc = PyCUtensorMap_alloc,
+    .tp_dealloc = (destructor)PyCUtensorMap_dealloc,
+    .tp_free = PyCUtensorMap_free,
 };
 
 static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
@@ -307,8 +350,7 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
     return NULL;
   }
 
-  PyCUtensorMapObject *desc =
-      PyObject_New(PyCUtensorMapObject, &PyCUtensorMapType);
+  PyCUtensorMapObject *desc = (PyCUtensorMapObject *)PyObject_CallObject((PyObject *)&PyCUtensorMapType, NULL);
   if (!desc) {
     return NULL;
   }

@@ -287,12 +287,6 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
 
 typedef CUresult (*cuLaunchKernelEx_t)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra);
 
-
-typedef struct {{
-  PyObject_HEAD;
-  CUtensorMap tensorMap;
-}} PyCUtensorMapObject;
-
 static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
   // Open the shared library
   void* handle = dlopen("libcuda.so.1", RTLD_LAZY);
@@ -425,6 +419,12 @@ cleanup:
 
 }}
 
+typedef struct {{
+  PyObject_HEAD;
+  int8_t padding[112];
+  CUtensorMap tensorMap;
+}} PyCUtensorMapObject;
+
 static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
   if (sizeof(CUtensorMap*) != 8) {{
     PyErr_SetString(PyExc_SystemError, "getTmaDesc() requires 64-bit compilation");
@@ -436,7 +436,13 @@ if (Py_TYPE(obj) != (PyTypeObject*)py_tensor_map_type) {{
     return NULL;
 }}
 
-  return &((PyCUtensorMapObject*)obj)->tensorMap;
+  CUtensorMap* map = &((PyCUtensorMapObject*)obj)->tensorMap;
+  unsigned long align_128 = (unsigned long)map & (128 - 1);
+  if (align_128 != 0) {{
+    PyErr_Format(PyExc_ValueError, "CUtensorMap must be aligned to 128B, but got (&map) mod 128 = %ld", align_128);
+    return NULL;
+  }}
+  return map;
 }}
 
 static void ensureCudaContext() {{
