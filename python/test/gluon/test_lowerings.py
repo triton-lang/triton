@@ -535,13 +535,15 @@ def test_convert_mma2mma_layouts(M, N, mma_pair, dtype, device):
     torch.manual_seed(0)
     torch_dtype = getattr(torch, dtype)
     x = torch.randn((M, N), dtype=torch_dtype, device=device)
-    y = torch.zeros_like(x)
 
     # Calculate num_warps based on layout
     num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(src_layout, (M, N)))))
+    y = torch.zeros_like(x)
     kernel[(1, )](x, y, M, N, src_layout, dst_layout, num_warps=num_warps)
-    kernel[(1, )](x, y, M, N, dst_layout, src_layout, num_warps=num_warps)
+    torch.testing.assert_close(y, x, rtol=0, atol=0)
 
+    y = torch.zeros_like(x)
+    kernel[(1, )](x, y, M, N, dst_layout, src_layout, num_warps=num_warps)
     torch.testing.assert_close(y, x, rtol=0, atol=0)
 
 
@@ -696,6 +698,9 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
 
     y = torch.zeros_like(x)
     kernel[(1, )](x, y, shape, blocked_layout, dist_layout, shared_layout, num_warps=num_warps)
+    torch.testing.assert_close(y, x)
+
+    y = torch.zeros_like(x)
     obj = kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
     torch.testing.assert_close(y, x)
     if (isinstance(shared_layout, ttgl.NVMMASharedLayout) and dist_layout in _ld_st_mma_layouts
@@ -767,5 +772,8 @@ def test_local_load_store_3d_layouts(shape, dtype, dist_layout, shared_layout, d
 
     y = torch.zeros_like(x)
     kernel[(1, )](x, y, shape, blocked_layout, dist_layout, shared_layout, num_warps=num_warps)
+    torch.testing.assert_close(y, x)
+
+    y = torch.zeros_like(x)
     kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
     torch.testing.assert_close(y, x)
