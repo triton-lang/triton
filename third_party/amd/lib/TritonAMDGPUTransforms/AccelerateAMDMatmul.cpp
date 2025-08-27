@@ -483,13 +483,15 @@ public:
     // mfma16x16 layout of a dot op, depending on whether
     // its result is used by operand 0 or operand 1 of another dot op.
     if (mfmaVersion == 4 && is16BitElemTy && mDim == 16 && nDim == 16 &&
-        oldRetType.getRank() == 2 && warpsPerTile.back() == 1) {
-      if (isChainDotHead(dotOp, 0u) && retShape.front() >= 16 * 2 &&
-          retShape.back() == 16) {
+        oldRetType.getRank() == 2) {
+      if (isChainDotHead(dotOp, 0u) &&
+          retShape.front() >= 16 * 2 * warpsPerTile.front() &&
+          retShape.back() == 16 && warpsPerTile.back() == 1) {
         isTransposed = true;
         tilesPerWarp = {2, 1};
       } else if (isChainDotHead(dotOp, 1u) && retShape.front() == 16 &&
-                 retShape.back() >= 16 * 2) {
+                 retShape.back() >= 16 * 2 * warpsPerTile.back() &&
+                 warpsPerTile.front() == 1) {
         isTransposed = false;
         tilesPerWarp = {1, 2};
       }
