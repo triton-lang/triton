@@ -43,6 +43,23 @@ def NVWSLowerWarpGroup : Pass<"nvws-lower-warp-group", "mlir::ModuleOp"> {
   ];
 }
 
+def NVWSAssignStagePhase : Pass<"nvws-assign-stage-phase", "mlir::ModuleOp"> {
+  let summary = "Assign buffer stage to nvws.aref.*.";
+
+  let description = [{
+    Assign buffer stage & phase to nvws.aref.*
+
+    The pass will assign buffer stage to each aref op, and phase for enter ops.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
 def NVWSLowerAref : Pass<"nvws-lower-aref", "mlir::ModuleOp"> {
   let summary = "Convert nvws.aref.* to ttng.*barrier* ops.";
 

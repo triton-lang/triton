@@ -135,8 +135,13 @@ class CublasLtInstance {
     int returnedResults = 0;
     cublasLtMatmulHeuristicResult_t heuristicResult = {};
 
+    // Select compute type. Use TF32 when inputs are FP32, otherwise default
+    // FP32 accumulation.
+    cublasComputeType_t computeType = (dtype == CUDA_R_32F)
+                                          ? CUBLAS_COMPUTE_32F_FAST_TF32
+                                          : CUBLAS_COMPUTE_32F;
     successOrExit(
-        cublasLtMatmulDescCreate(&matmulDesc, CUBLAS_COMPUTE_32F, CUDA_R_32F));
+        cublasLtMatmulDescCreate(&matmulDesc, computeType, CUDA_R_32F));
     successOrExit(cublasLtMatmulDescSetAttribute(
         matmulDesc, CUBLASLT_MATMUL_DESC_TRANSA, &transa, sizeof(transa)));
     successOrExit(cublasLtMatmulDescSetAttribute(
@@ -147,9 +152,10 @@ class CublasLtInstance {
           sizeof(fastAccum)));
     }
 
+    auto c_dtype = dtype == CUDA_R_8F_E4M3 ? CUDA_R_16F : dtype;
     successOrExit(cublasLtMatrixLayoutCreate(&Adesc, dtype, k, m, k));
     successOrExit(cublasLtMatrixLayoutCreate(&Bdesc, dtype, k, n, k));
-    successOrExit(cublasLtMatrixLayoutCreate(&Cdesc, CUDA_R_16F, m, n, m));
+    successOrExit(cublasLtMatrixLayoutCreate(&Cdesc, c_dtype, m, n, m));
     successOrExit(cublasLtMatrixLayoutCreate(&Ddesc, dtype, m, n, m));
 
     successOrExit(cublasLtMatmulAlgoGetHeuristic(

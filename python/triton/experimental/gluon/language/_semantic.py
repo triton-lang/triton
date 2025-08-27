@@ -280,6 +280,27 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(all(l == l0 for l in layouts[1:]),
                lambda: f"Expected inputs to have matching layouts, but got: {layouts}")
 
+    def associative_scan(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn,
+                         reverse: bool) -> Tuple[TensorTy, ...]:
+        shape = inputs[0].type.shape
+        rank = len(shape)
+
+        assert -rank <= axis < rank, f"scan axis {axis} must be < inputs rank ({rank})"
+
+        if axis < 0:
+            axis += rank
+
+        for t in inputs:
+            assert t.type.shape == shape, "all scan inputs must have the same shape"
+
+        scan_op = self.builder.create_scan([t.handle for t in inputs], axis, reverse)
+        region_builder_fn(scan_op)
+        assert scan_op.verify()
+
+        return tuple(
+            self._wrap_handle_infer_layout(scan_op.get_result(i), inputs[i].type.scalar, shape)
+            for i in range(len(inputs)))
+
     def reduction(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn) -> Tuple[TensorTy, ...]:
         _check(axis is not None, lambda: "All-reduce is not yet implemented in gluon")
         # get result shape
@@ -297,6 +318,18 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return tuple(
             self._wrap_handle_infer_layout(reduce_op.get_result(i), inputs[i].type.scalar, ret_shape)
             for i in range(len(inputs)))
+
+    def histogram(self, input: TensorTy, num_bins: int, mask: TensorTy, layout) -> TensorTy:
+        _check(len(input.shape) == 1, lambda: "histogram only supports 1D input")
+        _check(input.dtype.is_int(), lambda: "histogram only supports integer input")
+        _check(layout is not None, lambda: "histogram requires a destination layout")
+        if mask is not None:
+            mask, input = self.broadcast_impl_value(mask, input)
+            _check(mask.type.scalar.is_bool(), lambda: "Mask must have boolean scalar type")
+            mask = mask.handle
+        layout_attr = layout._to_ir(self.builder)
+        handle = self.builder.create_histogram(input.handle, num_bins, mask, layout_attr)
+        return self.wrap_tensor(handle, ttgl.int32, [num_bins], layout)
 
     def warp_specialize(self, default_args, default_partition, worker_args, worker_partitions,
                         worker_num_warps: Sequence[int], worker_num_regs: Sequence[int], generator):

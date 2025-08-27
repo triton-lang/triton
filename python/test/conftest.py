@@ -19,7 +19,8 @@ def device(request):
 def fresh_triton_cache():
     with tempfile.TemporaryDirectory() as tmpdir:
         from triton import knobs
-        with knobs.cache.scope():
+
+        with knobs.cache.scope(), knobs.runtime.scope():
             knobs.cache.dir = tmpdir
             yield tmpdir
 

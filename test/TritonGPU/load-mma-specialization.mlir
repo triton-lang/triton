@@ -132,8 +132,7 @@ tt.func @warp_specialize_tma_matmul(
   // CHECK-NEXT: ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 0 : i32
   } {tt.warp_specialize, tt.num_stages = 2 : i32}
 
-  // CHECK-NEXT: [[DONE_MBAR0a:%.*]] = ttg.memdesc_index [[DONE_MBAR]]{{\[}}[[C0]]{{\]}} {ttg.partition = 1 : i32, ttg.warp_specialize.tag = 0 : i32}
-  // CHECK-NEXT: ttng.wait_barrier [[DONE_MBAR0a]], %c0_i32 {ttg.partition = 1 : i32, ttg.warp_specialize.tag = 0 : i32}
+  // CHECK-NEXT: ttng.wait_barrier [[DONE_MBAR0]], %c0_i32
   // CHECK-NEXT: ttng.inval_barrier [[DONE_MBAR0]]
   // CHECK-NEXT: ttg.local_dealloc [[DONE_MBAR]]
 
@@ -195,8 +194,7 @@ tt.func @unsupported_load() {
   // CHECK: ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 1 : i32
   } {tt.warp_specialize}
 
-  // CHECK-NEXT: [[DONE_MBAR0a:%.*]] = ttg.memdesc_index [[DONE_MBAR]]{{\[}}[[C0]]{{\]}} {ttg.partition = 1 : i32, ttg.warp_specialize.tag = 1 : i32}
-  // CHECK-NEXT: ttng.wait_barrier [[DONE_MBAR0a]], %c0_i32 {ttg.partition = 1 : i32, ttg.warp_specialize.tag = 1 : i32}
+  // CHECK-NEXT: ttng.wait_barrier [[DONE_MBAR0]], %c0_i32
   // CHECK-NEXT: ttng.inval_barrier [[DONE_MBAR0]]
   // CHECK-NEXT: ttg.local_dealloc [[DONE_MBAR]]
 
@@ -1575,8 +1573,7 @@ tt.func public @attention_forward(
   // CHECK-NEXT: ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32
   } {tt.warp_specialize}
 
-  // CHECK-NEXT: [[PV_READY_BAR0a:%.*]] = ttg.memdesc_index [[PV_READY_MBARS]]{{\[}}%c0_i32{{\]}} {ttg.partition = 3 : i32, ttg.warp_specialize.tag = 0 : i32}
-  // CHECK-NEXT: wait_barrier [[PV_READY_BAR0a]], [[OUTS]]#9 {ttg.partition = 3 : i32, ttg.warp_specialize.tag = 0 : i32}
+  // CHECK-NEXT: wait_barrier [[PV_READY_BAR0]], [[OUTS]]#9
 
   "use"(%loop_outs#0, %loop_outs#1, %loop_outs#2) : (tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<256x64xf32, #blocked>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>) -> ()
 

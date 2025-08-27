@@ -77,7 +77,7 @@ def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: G
         offsets, mask = _semantic.broadcast_impl_value(offsets, mask)
 
     mask = mask.handle if mask is not None else ir.value()
-    cache_modifier = _semantic._str_to_load_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
+    cache_modifier = _semantic._str_to_store_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
 
     _semantic.builder.create_buffer_store(stored_value.handle, ptr.handle, offsets.handle, mask, cache_modifier)
 

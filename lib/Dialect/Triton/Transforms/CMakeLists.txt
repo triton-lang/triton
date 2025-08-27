@@ -13,7 +13,6 @@ add_triton_library(TritonTransforms
   RewriteTensorDescriptorToPointer.cpp
   ArithTypeConversion.cpp
   FunctionTypeConversion.cpp
-  SCFToCF.cpp
 
   DEPENDS
   TritonTransformsIncGen

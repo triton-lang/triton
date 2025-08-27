@@ -26,6 +26,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/PatternMatch.h"
@@ -37,6 +38,7 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -63,13 +65,17 @@ namespace {
 
 // ----------------------------------------------------------------------------
 
-void assignStageCluster(Operation *op, StageCluster stageCluster,
-                        OpBuilder &builder) {
-  if (stageCluster) {
-    op->setAttr(triton::kLoopStageAttrName,
-                builder.getI32IntegerAttr(stageCluster->first));
-    op->setAttr(triton::kLoopClusterAttrName,
-                builder.getI32IntegerAttr(stageCluster->second));
+void assignStageCluster(Operation *op, std::optional<PartitionId> partitionId,
+                        StageCluster stageCluster, OpBuilder &builder) {
+  if (partitionId) {
+    op->setAttr(kPartitionAttrName,
+                builder.getI32IntegerAttr(partitionId->index()));
+    if (stageCluster) {
+      op->setAttr(triton::kLoopStageAttrName,
+                  builder.getI32IntegerAttr(stageCluster->first));
+      op->setAttr(triton::kLoopClusterAttrName,
+                  builder.getI32IntegerAttr(stageCluster->second));
+    }
   }
 }
 
@@ -90,16 +96,6 @@ Value getFullBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
   return createSingleBufferView(rewriter, aref.fullMbars, stage);
 }
 
-std::pair<WarpGroupOp, int> getWarpGroupIdx(Operation *op) {
-  if (auto wgOp = dyn_cast<WarpGroupOp>(op->getParentOp())) {
-    auto region = op->getParentRegion();
-    return {wgOp, region->getRegionNumber()};
-  }
-  if (isa<triton::FuncOp>(op))
-    return {nullptr, -1};
-  return getWarpGroupIdx(op->getParentOp());
-}
-
 struct BarrierCount {
   int producerPendingCount{0};
   int consumerPendingCount{0};
@@ -114,13 +110,16 @@ SmallVector<AsyncOp> castAsyncOpAttrs(ArrayAttr opAttrs) {
 }
 
 BarrierCount getArrivalCount(ArefCreateOp op) {
-  SetVector<int> producerGroups, consumerGroups;
+  SetVector<PartitionId> producerGroups, consumerGroups;
   BarrierCount count;
 
   for (auto user : op->getUsers()) {
-    auto idx = getWarpGroupIdx(user).second;
+    auto partitionId = getPartitionId(user);
+    if (!partitionId)
+      continue;
+
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
-      if (!producerGroups.insert(idx)) {
+      if (!producerGroups.insert(*partitionId)) {
         continue;
       }
       for (auto kind : castAsyncOpAttrs(putExitOp.getAsyncOps())) {
@@ -135,7 +134,7 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         }
       }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-      if (!consumerGroups.insert(idx)) {
+      if (!consumerGroups.insert(*partitionId)) {
         continue;
       }
       for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
@@ -155,6 +154,22 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
   return count;
 }
 
+Value createBarriers(ImplicitLocOpBuilder &b1, ImplicitLocOpBuilder &b2,
+                     int numBarriers, int arrivalCount) {
+  Value barrierAlloc = createScalarAlloc(b1, b1.getI64Type(), numBarriers);
+  for (unsigned i = 0; i < numBarriers; i++) {
+    Value barrierView = createSingleBufferView(b1, barrierAlloc, i);
+    b1.create<InitBarrierOp>(barrierView, arrivalCount);
+  }
+  // Invalidate and deallocate the barriers.
+  for (unsigned i = 0; i < numBarriers; i++) {
+    Value barrierView = createSingleBufferView(b2, barrierAlloc, i);
+    b2.create<InvalBarrierOp>(barrierView);
+  }
+  b2.create<LocalDeallocOp>(barrierAlloc);
+  return barrierAlloc;
+}
+
 ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   BarrierCount count = getArrivalCount(op);
 
@@ -164,11 +179,17 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   auto shape = arefBufTypes[0].getShape();
   auto depth = shape[0];
 
-  auto wgOp = getWarpGroupIdx(*op->getUsers().begin()).first;
-  auto emptyMbars =
-      triton::createBarrierAlloc(wgOp, depth, count.producerPendingCount);
-  auto fullMbars =
-      triton::createBarrierAlloc(wgOp, depth, count.consumerPendingCount);
+  SetVector<Operation *> arefUsers;
+  for (auto user : op->getUsers())
+    arefUsers.insert(user);
+  auto sorted = topologicalSort(arefUsers);
+
+  ImplicitLocOpBuilder b1(op->getLoc(), op), b2(op->getLoc(), op);
+  auto op1 = op->getBlock()->findAncestorOpInBlock(*sorted.back());
+  b2.setInsertionPointAfter(op1);
+
+  auto emptyMbars = createBarriers(b1, b2, depth, count.producerPendingCount);
+  auto fullMbars = createBarriers(b1, b2, depth, count.consumerPendingCount);
 
   return ArefValue{emptyMbars, fullMbars, static_cast<int>(depth),
                    op.getOperands()};
@@ -253,6 +274,12 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
   }
 }
 
+void insertWaitOp(PatternRewriter &rewriter, Operation *op, Value barrier,
+                  Value phase, Value stage) {
+  auto waitOp = rewriter.create<WaitBarrierOp>(op->getLoc(), barrier, phase);
+  assignStageCluster(waitOp, getPartitionId(op), getStageCluster(op), rewriter);
+}
+
 void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
                        ArefValue arefVal,
                        const DenseSet<MMAv5OpInterface> &mmav5Ops) {
@@ -262,9 +289,7 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
   // get empty barrier at a given stage
   Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getStage());
 
-  auto waitOp =
-      rewriter.create<WaitBarrierOp>(loc, emptyBarrier, op.getPhase());
-  assignStageCluster(waitOp, getStageCluster(op), rewriter);
+  insertWaitOp(rewriter, op, emptyBarrier, op.getPhase(), op.getStage());
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter);
   assert(views.size() == op.getBuffers().size());
 
@@ -329,8 +354,7 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
   rewriter.setInsertionPointAfter(op);
 
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage());
-  auto waitOp = rewriter.create<WaitBarrierOp>(loc, fullBarrier, op.getPhase());
-  assignStageCluster(waitOp, getStageCluster(op), rewriter);
+  insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter);
   assert(views.size() == op.getBuffers().size());
 
@@ -344,6 +368,7 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
 
 void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
                          PatternRewriter &rewriter, Value mbar,
+                         std::optional<PartitionId> partitionId,
                          StageCluster stageCluster) {
   for (auto asyncOpEnum : asyncOps) {
     Operation *arriveOp = {};
@@ -364,7 +389,7 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
       llvm_unreachable("unknown async op");
     }
     if (arriveOp)
-      assignStageCluster(arriveOp, stageCluster, rewriter);
+      assignStageCluster(arriveOp, partitionId, stageCluster, rewriter);
   }
 }
 
@@ -374,7 +399,7 @@ void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
   rewriter.setInsertionPointAfter(op);
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage());
   insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
-                      fullBarrier, getStageCluster(op));
+                      fullBarrier, getPartitionId(op), getStageCluster(op));
 }
 
 void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
@@ -405,11 +430,11 @@ void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
 
   if (needFence) {
     auto fence = rewriter.create<FenceAsyncSharedOp>(loc, /*bCluster=*/false);
-    assignStageCluster(fence, stageCluster, rewriter);
+    assignStageCluster(fence, getPartitionId(op), stageCluster, rewriter);
   }
 
   Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getStage());
-  return insertArriveBarrier(loc, asyncKinds, rewriter, emptyBarrier,
+  return insertArriveBarrier(loc, asyncKinds, rewriter, emptyBarrier, getPartitionId(op),
                              stageCluster);
 }
 
@@ -417,7 +442,8 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
   DenseSet<MMAv5OpInterface> mmav5Ops;
   for (auto arefUser : aref.getUsers()) {
     if (auto getEnter = dyn_cast<ArefGetEnterOp>(arefUser)) {
-      if (getWarpGroupIdx(getEnter).second == 0) {
+      auto id = getPartitionId(getEnter);
+      if (id && id->second == 0) {
         // Ignore mmav5 ops in the default partition. They are not warp
         // specialized.
         continue;
@@ -475,9 +501,17 @@ public:
     }
 
     auto sorted = topologicalSort(opToDelete);
-    for (auto it = sorted.rbegin(); it != sorted.rend(); ++it) {
-      rewriter.eraseOp(*it);
+    OpBuilder b(op);
+    auto replToken =
+        b.create<ub::PoisonOp>(op.getLoc(), b.getType<AsyncTokenType>());
+    for (auto op : sorted) {
+      if (auto enterOp = dyn_cast<ArefPutEnterOp>(op))
+        enterOp.getToken().replaceAllUsesWith(replToken);
+      else if (auto enterOp = dyn_cast<ArefGetEnterOp>(op))
+        enterOp.getToken().replaceAllUsesWith(replToken);
     }
+    for (auto it = sorted.rbegin(); it != sorted.rend(); ++it)
+      rewriter.eraseOp(*it);
 
     return success();
   }
@@ -541,241 +575,6 @@ void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages) {
   }
 }
 
-template <class... Ts> struct ArefIndex;
-template <class T> struct ArefIndex<T> {
-  struct Index {
-    // Having stage and phase as separate values, rather than encoding them
-    // into a single index, results in better performance. Same approach is used
-    // in CUTLASS and CUTEDSL, and this may allow PTXAS to better optimize code.
-    Value stage;
-    Value phase;
-  };
-  using ArefIndexMap = llvm::MapVector<Value /*aref*/, Index>;
-  using ArefUseSet = llvm::SetVector<Value /*aref*/>;
-
-  static ArefUseSet analyzeArefUseInBlock(Block *block, ArefUseSet arefUseSet) {
-    for (auto &op : *block) {
-      if (auto opT = dyn_cast<T>(op)) {
-        arefUseSet.insert(opT.getAref());
-      } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-        arefUseSet = analyzeArefUseInBlock(forOp.getBody(), arefUseSet);
-      } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-        arefUseSet = analyzeArefUseInBlock(ifOp.thenBlock(), arefUseSet);
-        if (ifOp.elseBlock())
-          arefUseSet = analyzeArefUseInBlock(ifOp.elseBlock(), arefUseSet);
-      }
-    }
-    return arefUseSet;
-  }
-
-  static void assignArefIndexInForOp(scf::ForOp forOp,
-                                     ArefIndexMap &arefIndexMap) {
-
-    // find uses of arefs in forOp body
-    auto arefUseInBlock = analyzeArefUseInBlock(forOp.getBody(), {});
-    if (arefUseInBlock.empty())
-      return;
-
-    // add extra iterArgs to the forOp
-    SmallVector<Value> extraIterArgs;
-    SmallVector<Value *> arefIndexRefs;
-    for (auto aref : arefUseInBlock) {
-      auto index = arefIndexMap.lookup(aref);
-      extraIterArgs.push_back(index.stage);
-      arefIndexRefs.push_back(&arefIndexMap[aref].stage);
-      if (index.phase) {
-        extraIterArgs.push_back(index.phase);
-        arefIndexRefs.push_back(&arefIndexMap[aref].phase);
-      }
-    }
-
-    // create new forOp with extra iterArgs
-    OpBuilder builder(forOp);
-    size_t nArgs = forOp.getRegionIterArgs().size();
-    forOp = addIterArgsToLoop(builder, forOp, extraIterArgs);
-
-    // update arefIndex with iterArgs in the forOp body
-    for (size_t idx = nArgs; idx < forOp.getRegionIterArgs().size(); ++idx)
-      *arefIndexRefs[idx - nArgs] = forOp.getRegionIterArgs()[idx];
-
-    // assign arefIndex in the forOp body
-    auto arefIndexMapInBlock =
-        assignArefIndexInBlock(forOp.getBody(), arefIndexMap);
-
-    // update yieldOp to return new indexes
-    SmallVector<Value> extraYieldArgs;
-    for (auto aref : arefUseInBlock) {
-      auto &index = arefIndexMapInBlock[aref];
-      extraYieldArgs.push_back(index.stage);
-      if (index.phase)
-        extraYieldArgs.push_back(index.phase);
-    }
-    appendToForOpYield(forOp, extraYieldArgs);
-
-    // update arefIndex with results from newForOp
-    for (size_t idx = nArgs; idx < forOp.getRegionIterArgs().size(); ++idx)
-      *arefIndexRefs[idx - nArgs] = forOp.getResult(idx);
-  }
-
-  static void assignArefIndexInIfOp(scf::IfOp ifOp,
-                                    ArefIndexMap &arefIndexMap) {
-
-    // find uses of aref in then-block
-    auto arefUseInIfOp = analyzeArefUseInBlock(ifOp.thenBlock(), {});
-    if (arefUseInIfOp.empty())
-      return;
-
-    // find uses of aref in else-block
-    arefUseInIfOp = ifOp.elseBlock()
-                        ? analyzeArefUseInBlock(ifOp.elseBlock(), arefUseInIfOp)
-                        : arefUseInIfOp;
-
-    // add extra results to the ifOp
-    SmallVector<Type> extraIfResults;
-    SmallVector<Value *> arefIndexRefs;
-    for (auto aref : arefUseInIfOp) {
-      auto index = arefIndexMap.lookup(aref);
-      extraIfResults.push_back(index.stage.getType());
-      arefIndexRefs.push_back(&arefIndexMap[aref].stage);
-      if (index.phase) {
-        extraIfResults.push_back(index.phase.getType());
-        arefIndexRefs.push_back(&arefIndexMap[aref].phase);
-      }
-    }
-
-    // create new ifOp with extra results
-    OpBuilder builder(ifOp);
-    size_t nArgs = ifOp.getResults().size();
-    auto newIfOp = replaceIfOpWithNewSignature(builder, ifOp, extraIfResults);
-
-    // assign arefIndex in then-body
-    auto arefIndexInThenBlock =
-        assignArefIndexInBlock(newIfOp.thenBlock(), arefIndexMap);
-
-    // assign arefIndex in else-body
-    auto arefIndexInElseBlock =
-        ifOp.elseBlock()
-            ? assignArefIndexInBlock(newIfOp.elseBlock(), arefIndexMap)
-            : arefIndexMap;
-
-    // update yieldOp to return new indexes
-    auto thenYieldOp = newIfOp.thenYield();
-    auto elseYieldOp = newIfOp.elseYield();
-    // insert new indexes to the yieldOp
-    for (auto aref : arefUseInIfOp) {
-      auto &thenIndex = arefIndexInThenBlock[aref];
-      auto &elseIndex = arefIndexInElseBlock[aref];
-      thenYieldOp->insertOperands(thenYieldOp.getNumOperands(),
-                                  thenIndex.stage);
-      elseYieldOp->insertOperands(elseYieldOp.getNumOperands(),
-                                  elseIndex.stage);
-      if (thenIndex.phase) {
-        thenYieldOp->insertOperands(thenYieldOp.getNumOperands(),
-                                    thenIndex.phase);
-        elseYieldOp->insertOperands(elseYieldOp.getNumOperands(),
-                                    elseIndex.phase);
-      }
-    }
-    ifOp.erase();
-
-    // update arefIndex with results from newIfOp
-    for (size_t idx = nArgs; idx < newIfOp.getResults().size(); ++idx)
-      *arefIndexRefs[idx - nArgs] = newIfOp.getResult(idx);
-  }
-
-  static ArefIndexMap assignArefIndexInBlock(Block *block,
-                                             ArefIndexMap arefIndexMap) {
-    for (auto &op : llvm::make_early_inc_range(*block)) {
-      if (auto opT = dyn_cast<T>(op)) {
-        auto index = arefIndexMap.lookup(opT.getAref());
-
-        OpBuilder builder(opT);
-        builder.setInsertionPointAfter(opT);
-
-        // compute next stage
-        opT.getStageMutable().assign(index.stage);
-        auto nextStage = builder.create<arith::AddIOp>(
-            opT.getLoc(), index.stage,
-            builder.create<arith::ConstantIntOp>(opT.getLoc(), 1, 32));
-        auto arefBuf = opT.getAref()
-                           .template getDefiningOp<nvws::ArefCreateOp>()
-                           .getOperand(0);
-        auto depth = cast<MemDescType>(arefBuf.getType()).getShape().front();
-
-        auto cnd = builder.create<arith::CmpIOp>(
-            opT.getLoc(), arith::CmpIPredicate::eq, nextStage,
-            builder.create<arith::ConstantIntOp>(opT.getLoc(), depth, 32));
-        auto zero = builder.create<arith::ConstantIntOp>(opT.getLoc(), 0, 32);
-        arefIndexMap[opT.getAref()].stage =
-            builder.create<arith::SelectOp>(opT.getLoc(), cnd, zero, nextStage);
-
-        if (index.phase) {
-          // if this is an enterOp, compute next phase
-          opT->setOperand(2, index.phase);
-          auto nextPhase = builder.create<arith::XOrIOp>(
-              opT.getLoc(), index.phase,
-              builder.create<arith::ConstantIntOp>(opT.getLoc(), 1, 32));
-          arefIndexMap[opT.getAref()].phase = builder.create<arith::SelectOp>(
-              opT.getLoc(), cnd, nextPhase, index.phase);
-        }
-
-      } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-        assignArefIndexInForOp(forOp, arefIndexMap);
-      } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-        assignArefIndexInIfOp(ifOp, arefIndexMap);
-      }
-    }
-
-    return arefIndexMap;
-  }
-
-  static LogicalResult run(WarpGroupOp wgOp, std::string opName) {
-    ArefUseSet arefUse;
-    for (auto region : wgOp.getRegions()) {
-      auto block = &region->getBlocks().front();
-      arefUse = analyzeArefUseInBlock(block, arefUse);
-    }
-
-    // initialize indexes
-    ArefIndexMap arefIndexMap;
-    for (auto aref : arefUse) {
-      OpBuilder builder(aref.getDefiningOp());
-      builder.setInsertionPointAfter(aref.getDefiningOp());
-      arefIndexMap[aref].stage =
-          builder.create<arith::ConstantIntOp>(aref.getLoc(), 0, 32);
-      if (std::is_same_v<T, ArefPutEnterOp>) {
-        arefIndexMap[aref].phase =
-            builder.create<arith::ConstantIntOp>(aref.getLoc(), 1, 32);
-      } else if (std::is_same_v<T, ArefGetEnterOp>) {
-        arefIndexMap[aref].phase =
-            builder.create<arith::ConstantIntOp>(aref.getLoc(), 0, 32);
-      } else {
-        arefIndexMap[aref].phase = {};
-      }
-    }
-
-    for (auto region : wgOp.getRegions()) {
-      auto block = &region->getBlocks().front();
-      assignArefIndexInBlock(block, arefIndexMap);
-    }
-    return success();
-  }
-};
-
-template <> struct ArefIndex<> {
-  static LogicalResult run(WarpGroupOp wgOp) {
-    if (failed(ArefIndex<ArefPutEnterOp>::run(wgOp, "ArefPutEnterOp")))
-      return failure();
-    if (failed(ArefIndex<ArefPutExitOp>::run(wgOp, "ArefPutExitOp")))
-      return failure();
-    if (failed(ArefIndex<ArefGetEnterOp>::run(wgOp, "ArefGetEnterOp")))
-      return failure();
-    if (failed(ArefIndex<ArefGetExitOp>::run(wgOp, "ArefGetExitOp")))
-      return failure();
-    return success();
-  }
-};
-
 template <typename EnterOp, typename ExitOp>
 void createCombinedArefOps(SmallVector<EnterOp> &enterOps,
                            SmallVector<ExitOp> &exitOps, ArefCreateOp aref,
@@ -807,7 +606,7 @@ void createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   auto enter = builder.create<EnterOp>(firstEnter.getLoc(), arefEnterBuffers,
                                        builder.getType<AsyncTokenType>(), aref,
                                        zero, zero);
-  assignStageCluster(enter, getStageCluster(firstEnter), builder);
+  assignStageCluster(enter, getPartitionId(firstEnter), getStageCluster(firstEnter), builder);
 
   builder.setInsertionPoint(lastExit);
   llvm::SmallVector<Attribute> AsyncOpAttrs(opAttrsSet.begin(),
@@ -815,7 +614,7 @@ void createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   auto exit =
       builder.create<ExitOp>(firstEnter.getLoc(), aref, enter.getToken(), zero,
                              builder.getArrayAttr(AsyncOpAttrs));
-  assignStageCluster(exit, getStageCluster(lastExit), builder);
+  assignStageCluster(exit, getPartitionId(lastExit), getStageCluster(lastExit), builder);
 
   for (auto [idx, enterOp] : llvm::enumerate(enterOps)) {
     enterOp.getBuffers()[0].replaceAllUsesWith(enter.getBuffers()[idx]);
@@ -876,12 +675,12 @@ void combineArefs(scf::ForOp loop) {
     SmallVector<ArefPutEnterOp> putEnterOps;
     SmallVector<ArefPutExitOp> putExitOps;
     SmallVector<ArefGetExitOp> getExitOps;
-    SmallVector<int> producerGroupIds;
+    SmallVector<PartitionId> producerGroupIds;
     for (auto aref : arefs) {
       for (auto user : aref->getUsers()) {
         if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(user)) {
           putEnterOps.push_back(putEnterOp);
-          producerGroupIds.push_back(getWarpGroupIdx(putEnterOp).second);
+          producerGroupIds.push_back(*getPartitionId(putEnterOp));
         } else if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
           putExitOps.push_back(putExitOp);
         } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
@@ -892,7 +691,7 @@ void combineArefs(scf::ForOp loop) {
 
     // Producer arefs must be in the same partition.
     if (llvm::any_of(producerGroupIds,
-                     [&](int id) { return id != producerGroupIds[0]; })) {
+                     [&](auto id) { return id != producerGroupIds[0]; })) {
       continue;
     }
 
@@ -957,14 +756,6 @@ public:
       }
     });
     multiBufferAref(arefOps, numStages);
-
-    SmallVector<WarpGroupOp> wgOps;
-    m.walk([&](WarpGroupOp wgOp) { wgOps.push_back(wgOp); });
-    for (auto wgOp : wgOps) {
-      if (failed(ArefIndex<>::run(wgOp)))
-        signalPassFailure();
-    }
-    LLVM_DEBUG(llvm::dbgs() << "After arefIndexAssignment\n" << m << "\n");
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<LowerArefCreate>(context);
