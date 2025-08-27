@@ -3,9 +3,9 @@
 
 #include "Utility/String.h"
 #include "Utility/Traits.h"
+#include <stdexcept>
 #include <variant>
 #include <vector>
-#include <stdexcept>
 
 namespace proton {
 
@@ -61,10 +61,10 @@ public:
     // Enforce type consistency: once a valueId has a type, it must not change.
     if (values[valueId].index() != value.index()) {
       throw std::runtime_error(
-        std::string("Metric value type mismatch for valueId ") +
-        std::to_string(valueId) + " (" + getValueName(valueId) + ")" +
-        ": current=" + typeNameForIndex(values[valueId].index()) +
-        ", new=" + typeNameForIndex(value.index()));
+          std::string("Metric value type mismatch for valueId ") +
+          std::to_string(valueId) + " (" + getValueName(valueId) + ")" +
+          ": current=" + typeNameForIndex(values[valueId].index()) +
+          ", new=" + typeNameForIndex(value.index()));
     }
     // Handle string and other values separately
     if (std::holds_alternative<std::string>(value)) {
