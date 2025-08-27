@@ -289,7 +289,7 @@ typedef CUresult (*cuLaunchKernelEx_t)(const CUlaunchConfig* config, CUfunction 
 
 
 typedef struct {{
-  PyObject_HEAD
+  PyObject_HEAD;
   CUtensorMap tensorMap;
 }} PyCUtensorMapObject;
 

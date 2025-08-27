@@ -280,7 +280,8 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
 }
 
 typedef struct {
-  PyObject_HEAD CUtensorMap tensorMap;
+  PyObject_HEAD;
+  CUtensorMap tensorMap;
 } PyCUtensorMapObject;
 
 static PyTypeObject PyCUtensorMapType = {
@@ -315,7 +316,6 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
   PyObject *blockSizeFast = NULL;
   PyObject *shapeFast = NULL;
   PyObject *stridesFast = NULL;
-  PyObject *result = NULL;
 
   uint32_t blockSizeInt[5];
   uint64_t shapeInt[5];
@@ -393,7 +393,8 @@ cleanup:
   Py_XDECREF(blockSizeFast);
   Py_XDECREF(shapeFast);
   Py_XDECREF(stridesFast);
-  return result;
+  Py_XDECREF(desc);
+  return NULL;
 }
 
 static PyMethodDef ModuleMethods[] = {
