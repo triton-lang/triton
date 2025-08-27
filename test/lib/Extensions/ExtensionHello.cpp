@@ -54,6 +54,8 @@ using namespace mlir;
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 
+extern "C" void FOOBAR() { }
+
 namespace mlir {
 namespace triton {
 namespace gpu {
@@ -62,23 +64,18 @@ namespace gpu {
 #include "Passes.h.inc"
 
 namespace {
-
-class HelloExtension : public OpRewritePattern<DotOp> {
-public:
+struct HelloExtension : public OpRewritePattern<DotOp> {
   using OpRewritePattern::OpRewritePattern;
-
   LogicalResult matchAndRewrite(DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
     return success();
   }
 };
-
 } // anonymous namespace
 
-struct HelloExtensionPass : public impl::TritonGPUHelloExtensionBase<HelloExtensionPass> {
-  void runOnOperation()
-    // override
-    {
+struct HelloExtensionPass :
+  public impl::TritonGPUHelloExtensionBase<HelloExtensionPass> {
+  void runOnOperation() override {
     // MLIRContext *context = &getContext();
     // ModuleOp m = getOperation();
     // RewritePatternSet decomposePatterns(context);
@@ -94,14 +91,10 @@ struct HelloExtensionPass : public impl::TritonGPUHelloExtensionBase<HelloExtens
 } // namespace mlir
 
 
-inline void registerStandaloneSwitchBarFoo() {
+void registerPasses() {
   ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
     return mlir::triton::gpu::createTritonGPUHelloExtension();
   });
-}
-
-inline void registerPasses() {
-  registerStandaloneSwitchBarFoo();
 }
 
 
