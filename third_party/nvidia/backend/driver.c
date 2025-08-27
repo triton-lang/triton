@@ -280,17 +280,16 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
 }
 
 typedef struct {
-    PyObject_HEAD
-    CUtensorMap tensorMap;
+  PyObject_HEAD CUtensorMap tensorMap;
 } PyCUtensorMapObject;
 
 static PyTypeObject PyCUtensorMapType = {
-  PyVarObject_HEAD_INIT(NULL, 0)
-  .tp_name = "triton.backends.nvidia.PyCUtensorMap",
-  .tp_doc = "<PyCUtensorMap object>",
-  .tp_basicsize = sizeof(PyCUtensorMapObject),
-  .tp_flags = Py_TPFLAGS_DEFAULT,
-  .tp_new = PyType_GenericNew,
+    PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "triton.backends.nvidia.PyCUtensorMap",
+    .tp_doc = "<PyCUtensorMap object>",
+    .tp_basicsize = sizeof(PyCUtensorMapObject),
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_new = PyType_GenericNew,
 };
 
 static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
@@ -302,13 +301,13 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
   PyObject *shape;
   PyObject *strides;
 
-  if (!PyArg_ParseTuple(args, "KiiiOOO", &global_address,
-                        &swizzle, &elemSize, &elemType, &blockSize, &shape,
-                        &strides)) {
+  if (!PyArg_ParseTuple(args, "KiiiOOO", &global_address, &swizzle, &elemSize,
+                        &elemType, &blockSize, &shape, &strides)) {
     return NULL;
   }
 
-  PyCUtensorMapObject *desc = PyObject_New(PyCUtensorMapObject, &PyCUtensorMapType);
+  PyCUtensorMapObject *desc =
+      PyObject_New(PyCUtensorMapObject, &PyCUtensorMapType);
   if (!desc) {
     return NULL;
   }
@@ -383,12 +382,12 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
   INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeTiled,
                                       getCuTensorMapEncodeTiledHandle);
   CUDA_CHECK_AND_RETURN_NULL(cuTensorMapEncodeTiled(
-      &desc->tensorMap, elemType, rank, (void *)global_address,
-      shapeInt, stridesLL, blockSizeInt, elementStrides,
-      CU_TENSOR_MAP_INTERLEAVE_NONE, swizzle,
-      CU_TENSOR_MAP_L2_PROMOTION_L2_128B, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE));
+      &desc->tensorMap, elemType, rank, (void *)global_address, shapeInt,
+      stridesLL, blockSizeInt, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
+      swizzle, CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
+      CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE));
 
-  return (PyObject*)desc;
+  return (PyObject *)desc;
 
 cleanup:
   Py_XDECREF(blockSizeFast);

@@ -17,6 +17,7 @@ libdevice_dir = os.path.join(dirname, "lib")
 libraries = ['cuda']
 PyCUtensorMap = None
 
+
 @functools.lru_cache()
 def libcuda_dirs():
     if env_libcuda_path := knobs.nvidia.libcuda_path:
@@ -122,6 +123,7 @@ FLOAT_PACK_FUNCTION = {
 
 _BASE_ARGS_FORMAT = "iiiKKppOOOOOO"
 _BASE_ARGS_FORMAT_LEN = len(_BASE_ARGS_FORMAT)
+
 
 def make_launcher(constants, signature, tensordesc_meta):
 
@@ -286,7 +288,7 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
 typedef CUresult (*cuLaunchKernelEx_t)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra);
 
 
-typedef struct {{    
+typedef struct {{
   PyObject_HEAD
   CUtensorMap tensorMap;
 }} PyCUtensorMapObject;
@@ -591,7 +593,7 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
   PyObject *m = PyModule_Create(&ModuleDef);
   if(m == NULL) {{
     return NULL;
-  }}  
+  }}
   PyModule_AddFunctions(m, ModuleMethods);
   return m;
 }}
@@ -601,7 +603,7 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 
 class TmaDescKernelParam:
     TMA_DESC_SIZE = 128
-    
+
     def __init__(self, cu_tensor_map):
         self.tma_desc_cpu_ptr = cu_tensor_map
 
@@ -632,7 +634,7 @@ def make_tensordesc_arg(arg, metadata):
     shape = arg.shape
     strides = arg.strides
     assert strides[-1] == 1
- 
+
     if fp4_padded:
         shape = list(shape)
         shape[-1] *= 2
@@ -646,25 +648,23 @@ def make_tensordesc_arg(arg, metadata):
         shape,
         strides,
     )
-    
+
     desc = TmaDescKernelParam(cu_tensor_map)
 
     return [desc, *shape, *strides]
 
 
 def wrap_handle_tensordesc(launcher, tensordesc_indices, tensordesc_meta):
-    from triton.tools.tensor_descriptor import TensorDescriptor
-    from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
 
     def inner(*args):
         final_args = list(args[:_BASE_ARGS_FORMAT_LEN])
         tensordesc_idx = 0
         for i, arg in enumerate(args[_BASE_ARGS_FORMAT_LEN:]):
             if i in tensordesc_indices:
-              final_args.extend(make_tensordesc_arg(arg, tensordesc_meta[tensordesc_idx]))
-              tensordesc_idx += 1
+                final_args.extend(make_tensordesc_arg(arg, tensordesc_meta[tensordesc_idx]))
+                tensordesc_idx += 1
             else:
-              final_args.append(arg)
+                final_args.append(arg)
         return launcher(*final_args)
 
     return inner
@@ -687,13 +687,15 @@ class CudaLauncher(object):
             libraries=libraries,
         )
         has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
-        tensordesc_indices = set([i for i, sig in enumerate(signature.values()) if isinstance(sig, str) and sig.startswith("tensordesc")])
+        tensordesc_indices = set(
+            [i for i, sig in enumerate(signature.values()) if isinstance(sig, str) and sig.startswith("tensordesc")])
         assert not tensordesc_meta or len(tensordesc_meta) == len(tensordesc_indices)
         if tensordesc_meta is None:
-          tensordesc_meta = [None] * len(tensordesc_indices)
+            tensordesc_meta = [None] * len(tensordesc_indices)
 
         self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
-        self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_indices, tensordesc_meta) if has_tensor_desc_arg else mod.launch
+        self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_indices,
+                                             tensordesc_meta) if has_tensor_desc_arg else mod.launch
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
