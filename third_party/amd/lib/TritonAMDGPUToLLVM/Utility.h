@@ -139,6 +139,9 @@ upcast8xMxfp4_HW(RewriterBase &rewriter, Location loc, ArrayRef<Value> xVals,
     retElemType = f16_ty;
   Type resType = vec_ty(retElemType, 2);
   Value scaleF32;
+  // In the DotScaledOp decomposition, the scale has already been left-shifted
+  // by 7 to fit the exponent of bf16. So now we only need to further left-shift
+  // it by 16
   if (useShiftedScale) {
     scaleF32 = b.bitcast(
         b.shl(b.zext(i32_ty, b.bitcast(scale, i16_ty)), b.i32_val(16)), f32_ty);
@@ -167,6 +170,9 @@ upcast4xMxfp8_HW(RewriterBase &rewriter, Location loc, ArrayRef<Value> xVals,
     retElemType = f16_ty;
   Type resType = vec_ty(retElemType, 2);
   Value scaleF32;
+  // In the DotScaledOp decomposition, the scale has already been left-shifted
+  // by 7 to fit the exponent of bf16. So now we only need to further left-shift
+  // it by 16
   if (useShiftedScale) {
     scaleF32 = b.bitcast(
         b.shl(b.zext(i32_ty, b.bitcast(scale, i16_ty)), b.i32_val(16)), f32_ty);

@@ -890,18 +890,19 @@ public:
       return v;
 
     auto mod = dotOp->getParentOfType<ModuleOp>();
-    bool isFp4 = (elemType == ScaleDotElemType::E2M1);
     RankedTensorType vType = v.getType();
     unsigned rank = vType.getRank();
     int32_t kDim = opIdx == 0 ? rank - 1 : rank - 2;
     FloatType computeType =
         useFp16 ? rewriter.getF16Type() : rewriter.getBF16Type();
+    FloatType bf16Type = rewriter.getBF16Type();
     auto vType16 = vType.clone(computeType);
 
     auto loc = dotOp.getLoc();
     auto *ctx = rewriter.getContext();
     auto retEnc = dotOp.getType().getEncoding();
 
+    bool isFp4 = (elemType == ScaleDotElemType::E2M1);
     if (!scale) {
       if (isFp4) {
         return rewriter.create<ttg::Fp4ToFpOp>(loc, v, computeType, kDim);
@@ -916,18 +917,14 @@ public:
     auto sizePerThread = llvm::to_vector(vEnc.getSizePerThread());
 
     if (isFp4) {
+      // We want scale to have the same layout as the operand. But Fp4 operand
+      // is packed along kDim. So we need to double the shape to fit scale.
       auto packedShape = llvm::to_vector(vType16.getShape());
       packedShape[kDim] *= 2;
       unpackedType16 = unpackedType16.clone(packedShape);
-      sizePerThread[kDim] *= 2;
-      vEnc = ttg::BlockedEncodingAttr::get(
-          ctx, sizePerThread, vEnc.getThreadsPerWarp(), vEnc.getWarpsPerCTA(),
-          vEnc.getOrder(), vEnc.getCTALayout());
     }
 
     unpackedType16 = unpackedType16.cloneWithEncoding(vEnc);
-
-    auto fastMath = dotOp.getFastMath();
 
     if (opIdx == 1) {
       auto order = DecomposeScaledBlocked::getTransposeOrder(rank);
@@ -935,14 +932,16 @@ public:
     }
 
     // 1) Cast scale to bf16
-    TensorValue scaleBf16 = scaleTo16(rewriter, scale, rewriter.getBF16Type());
+    // We want to put the scale in the exponent of Bf16 for further usage, so we
+    // always generate a Bf16 scale. Same in step 2.
+    TensorValue scaleBf16 = scaleTo16(rewriter, scale, bf16Type);
 
     // 2) Broadcast scale to the same shape and layout as v
     TensorValue reshapeScale =
         broadcastScale(rewriter, dotOp, mod, scaleBf16, kDim);
 
     reshapeScale = rewriter.create<ttg::ConvertLayoutOp>(
-        loc, unpackedType16.clone(rewriter.getBF16Type()), reshapeScale);
+        loc, unpackedType16.clone(bf16Type), reshapeScale);
 
     // 3) Upcast with scale
     TensorValue result;
@@ -956,7 +955,7 @@ public:
 
     // 4) If not fastMath and the scale is NaN, return NaN, else return the
     // scaled value.
-    if (fastMath)
+    if (dotOp.getFastMath())
       return result;
 
     return maskNan(rewriter, dotOp, mod, result, scale, kDim);

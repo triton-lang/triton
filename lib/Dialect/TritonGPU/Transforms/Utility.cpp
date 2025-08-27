@@ -550,8 +550,6 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
     return inferSrcEncoding(gather, encoding);
   if (auto fp4ToFp = dyn_cast<triton::gpu::Fp4ToFpOp>(op))
     return inferSrcEncoding(fp4ToFp, encoding);
-  // if (auto upcastFp = dyn_cast<triton::gpu::UpcastFpOpInterface>(op))
-  //   return upcastFp.inferSrcEncoding(0, encoding);
 
   return {};
 }
@@ -584,8 +582,6 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(gather, encoding);
   if (auto fp4ToFp = dyn_cast<triton::gpu::Fp4ToFpOp>(op))
     return inferDstEncoding(fp4ToFp, encoding);
-  // if (auto upcastFp = dyn_cast<triton::gpu::UpcastFpOpInterface>(op))
-  //   return upcastFp.inferDstEncoding(encoding);
 
   return {};
 }
@@ -1189,7 +1185,6 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
 
   LogicalResult matchAndRewrite(scf::ForOp forOp,
                                 PatternRewriter &rewriter) const final {
-    llvm::outs() << "Enter ForOpDeadArgElimination\n";
     Block &block = *forOp.getBody();
     auto yieldOp = cast<scf::YieldOp>(block.getTerminator());
     // Assume that nothing is live at the beginning and mark values as live

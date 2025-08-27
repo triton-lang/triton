@@ -459,10 +459,14 @@ LogicalResult ScaledUpcastFp4Op::verify() {
 
 Attribute ScaledUpcastFp4Op::inferDstEncoding(unsigned opIdx,
                                               Attribute srcEnc) {
+  // The layout of scale is the same as that of the result
   if (opIdx == 1)
     return srcEnc;
   Attribute dstEnc;
   auto shape = getInput().getType().getShape();
+
+  // Given the fp4 operand is packed, we can reuse the infer utility of
+  // Fp4ToFpOp
   auto result =
       srcEnc.getDialect()
           .getRegisteredInterface<triton::DialectInferLayoutInterface>()
@@ -474,11 +478,14 @@ Attribute ScaledUpcastFp4Op::inferDstEncoding(unsigned opIdx,
 
 Attribute ScaledUpcastFp4Op::inferSrcEncoding(unsigned opIdx,
                                               Attribute dstEnc) {
-  Attribute srcEnc;
-  auto shape = getInput().getType().getShape();
+  // The layout of scale is the same as that of the result
   if (opIdx == 1)
     return dstEnc;
+  Attribute srcEnc;
+  auto shape = getInput().getType().getShape();
 
+  // Given the fp4 operand is packed, we can reuse the infer utility of
+  // Fp4ToFpOp
   if (succeeded(
           dstEnc.getDialect()
               .getRegisteredInterface<triton::DialectInferLayoutInterface>()
