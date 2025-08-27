@@ -238,9 +238,29 @@ _1d_layouts = _filter_layouts([
 ])
 
 
-@pytest.mark.parametrize("M", [64, 128, 256])
-@pytest.mark.parametrize("src_layout", _1d_layouts)
-@pytest.mark.parametrize("dst_layout", _1d_layouts)
+# TODO: test more complex layouts with duplicated elements.
+@pytest.mark.parametrize("M, bins", [[2048, 2], [8, 512]])
+@pytest.mark.parametrize("src_layout", [ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])])
+@pytest.mark.parametrize("dst_layout", [ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])])
+def test_histogram(M, bins, src_layout, dst_layout, device):
+
+    @gluon.jit
+    def kernel(x_ptr, z_ptr, M: ttgl.constexpr, B: ttgl.constexpr, src_layout: ttgl.constexpr,
+               dst_layout: ttgl.constexpr):
+        offs = ttgl.arange(0, M, layout=src_layout)
+        x = ttgl.load(x_ptr + offs)
+        h = ttgl.histogram(x, B, layout=dst_layout)
+        z_offs = ttgl.arange(0, B, layout=dst_layout)
+        ttgl.store(z_ptr + z_offs, h)
+
+    torch.manual_seed(0)
+    x = torch.randint(0, bins, (M, ), dtype=torch.int32, device=device)
+    z = torch.zeros((bins, ), dtype=torch.int32, device=device)
+    z_torch = torch.histc(x.float(), bins=bins, min=0, max=bins - 1)
+    kernel[(1, )](x, z, M, bins, src_layout, dst_layout, num_warps=4)
+    assert (z == z_torch).all()
+
+
 @pytest.mark.parametrize("src_dim", [0, 1])
 @pytest.mark.parametrize("dst_dim", [0, 1])
 @pytest.mark.parametrize("is_bool", [True, False])

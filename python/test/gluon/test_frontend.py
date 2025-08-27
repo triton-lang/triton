@@ -77,6 +77,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 @filecheck_test
 @gluon.jit
+def test_histogram_frontend():
+    # CHECK: #blocked = #ttg.blocked
+    # CHECK-LABEL: test_histogram_frontend
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    x = ttgl.arange(0, 256, layout=layout)
+    m = x < 128
+    # CHECK: tt.histogram %{{.*}}, %{{.*}} : tensor<256xi32, #blocked> -> tensor<512xi32, #blocked>
+    _ = ttgl.histogram(x, 512, mask=m, layout=layout)
+
+
+@filecheck_test
+@gluon.jit
 def test_convert_layout_assert_trivial():
     # CHECK: test_convert_layout_assert_trivial
     parent_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 128], [32, 1], [4, 1], [0, 1])
