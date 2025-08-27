@@ -324,7 +324,7 @@ def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, d
 
     if interm_layout in ["padded_shared_layout_single_interval", "padded_shared_layout_multi_interval"]:
         int_pad_pairs = [[32, 8]] if "single" in interm_layout else [[64, 4], [128, 8]]
-        interm_layout = ttgl.PaddedSharedLayout.get_default_for(int_pad_pairs, [M, N], [1, 0])
+        interm_layout = ttgl.PaddedSharedLayout.with_identity_for(int_pad_pairs, [M, N], [1, 0])
 
     def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 

@@ -362,7 +362,6 @@ void init_gluon_ir(py::module &&m) {
               std::vector<std::vector<int>> &blockBases,
               std::vector<int64_t> &shape) -> Attribute {
              auto ctx = self.getContext();
-             assert(offsetBases.size() > 0 && offsetBases.front().size() > 0);
              auto rank = shape.size();
              auto kOffset = mlir::StringAttr::get(ctx, "offset");
              auto kBlock = mlir::StringAttr::get(ctx, "block");

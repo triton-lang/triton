@@ -2145,7 +2145,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 @gluon.jit
 def padded_shared_layout_kernel():
     shape: ttgl.constexpr = [64, 64]
-    padded_shared_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.get_default_for(
+    padded_shared_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for(
         interval_padding_pairs=[[2, 1], [4, 2], [8, 4]], shape=shape, order=[1, 0])
     ttgl.allocate_shared_memory(ttgl.int32, shape, padded_shared_layout)
 
@@ -2171,8 +2171,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 def infer_layout_for_padded_shared_kernel():
     shape: ttgl.constexpr = [32, 4, 32]
     initial_order: ttgl.constexpr = [2, 0, 1]
-    layout: ttgl.constexpr = ttgl.PaddedSharedLayout.get_default_for(interval_padding_pairs=[[2, 1], [4, 2], [8, 4]],
-                                                                     shape=shape, order=initial_order)
+    layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for(interval_padding_pairs=[[2, 1], [4, 2], [8, 4]],
+                                                                       shape=shape, order=initial_order)
     smem = ttgl.allocate_shared_memory(ttgl.int32, shape, layout)
 
     reshaped = smem.permute((1, 0, 2))
@@ -2193,7 +2193,7 @@ def infer_layout_for_padded_shared_kernel():
     """
     perm_shape: ttgl.constexpr = [4, 32, 32]
     perm_order: ttgl.constexpr = [2, 1, 0]
-    ref_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.get_default_for(
+    ref_layout: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for(
         interval_padding_pairs=[[2, 1], [4, 2], [8, 4]], shape=perm_shape, order=perm_order)
     ttgl.static_assert(reshaped.type.layout == ref_layout)
 

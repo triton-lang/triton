@@ -490,10 +490,9 @@ class PaddedSharedLayout(SharedLayout):
 
     Args:
         interval_padding_pairs (List[int]): List of [interval, padding] pair and both interval and padding must be powers of 2.
-        order (List[int]): Order of logical tensor dimensions; fastest-varying first.
-        ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
-        cta_split_num (Optional[List[int]]): Split factors for CTAs.
-        cta_order (Optional[List[int]]): CTA ordering.
+        offset_bases (List[int]): Bases for shared memory offsets
+        block_bases (List[List[int]]): Bases for block-level shared memory offsets.
+        shape (List[int]): The tensor global shape.
     """
     interval_padding_pairs: List[List[int]]
     offset_bases: List[List[int]]
@@ -540,8 +539,8 @@ class PaddedSharedLayout(SharedLayout):
 
     @staticmethod
     @constexpr_function
-    def get_default_for(interval_padding_pairs, shape, order):
-        """Returns an PaddedSharedLayout with the given interval and padding pairs and an identity mapping as the linear component for the given shape and order.
+    def with_identity_for(interval_padding_pairs, shape, order):
+        """Returns a PaddedSharedLayout with the given interval and padding pairs and an identity mapping as the linear component for the given shape and order.
         """
         assert len(shape) == len(order)
         is_power_of_2 = lambda n: n > 0 and n & (n - 1) == 0
