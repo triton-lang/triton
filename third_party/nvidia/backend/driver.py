@@ -635,7 +635,16 @@ def make_tensordesc_arg(arg, metadata):
     return [cu_tensor_map, *shape, *strides]
 
 
-def wrap_handle_tensordesc(launcher, tensordesc_indices, tensordesc_meta):
+def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
+    has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
+    if not has_tensor_desc_arg:
+      return launcher
+
+    tensordesc_indices = set(
+        [i for i, sig in enumerate(signature.values()) if isinstance(sig, str) and sig.startswith("tensordesc")])
+    assert not tensordesc_meta or len(tensordesc_meta) == len(tensordesc_indices)
+    if tensordesc_meta is None:
+        tensordesc_meta = [None] * len(tensordesc_indices)
 
     def inner(*args):
         final_args = list(args[:_BASE_ARGS_FORMAT_LEN])
@@ -667,16 +676,9 @@ class CudaLauncher(object):
             include_dirs=include_dirs,
             libraries=libraries,
         )
-        has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
-        tensordesc_indices = set(
-            [i for i, sig in enumerate(signature.values()) if isinstance(sig, str) and sig.startswith("tensordesc")])
-        assert not tensordesc_meta or len(tensordesc_meta) == len(tensordesc_indices)
-        if tensordesc_meta is None:
-            tensordesc_meta = [None] * len(tensordesc_indices)
 
         self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
-        self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_indices,
-                                             tensordesc_meta) if has_tensor_desc_arg else mod.launch
+        self.launch = wrap_handle_tensordesc(mod.launch, signature, tensordesc_meta)
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size
