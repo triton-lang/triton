@@ -649,7 +649,7 @@ def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
     tensordesc_indices = set(
         [i for i, sig in enumerate(signature.values()) if isinstance(sig, str) and sig.startswith("tensordesc")])
     assert not tensordesc_meta or len(tensordesc_meta) == len(tensordesc_indices)
-    if tensordesc_meta is None:
+    if not tensordesc_meta:
         tensordesc_meta = [None] * len(tensordesc_indices)
 
     def inner(*args):

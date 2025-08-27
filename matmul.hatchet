@@ -1,0 +1,198 @@
+
+[
+    {
+        "children": [
+            {
+                "children": [
+                    {
+                        "children": [],
+                        "frame": {
+                            "name": "nvjet_hsh_128x256_64x6_2x1_2cta_v_bz_TNT",
+                            "type": "function"
+                        },
+                        "metrics": {
+                            "count": 10000,
+                            "device_id": "0",
+                            "device_type": "CUDA",
+                            "time (ns)": 606642948
+                        }
+                    }
+                ],
+                "frame": {
+                    "name": "cublas [M=8192, N=8192, K=512]",
+                    "type": "function"
+                },
+                "metrics": {
+                    "bytes": 1509949440000,
+                    "flops16": 687194767360000.0
+                }
+            },
+            {
+                "children": [],
+                "frame": {
+                    "name": "matmul_kernel [M=8192, N=8192, K=512]",
+                    "type": "function"
+                },
+                "metrics": {
+                    "bytes": 1509949440000,
+                    "count": 10000,
+                    "device_id": "0",
+                    "device_type": "CUDA",
+                    "flops16": 687194767360000.0,
+                    "time (ns)": 902867331
+                }
+            },
+            {
+                "children": [],
+                "frame": {
+                    "name": "matmul_kernel_descriptor_persistent [M=8192, N=8192, K=512]",
+                    "type": "function"
+                },
+                "metrics": {
+                    "bytes": 1509949440000,
+                    "count": 10000,
+                    "device_id": "0",
+                    "device_type": "CUDA",
+                    "flops16": 687194767360000.0,
+                    "time (ns)": 797964534
+                }
+            },
+            {
+                "children": [],
+                "frame": {
+                    "name": "matmul_kernel_descriptor_persistent_ws [M=8192, N=8192, K=512]",
+                    "type": "function"
+                },
+                "metrics": {
+                    "bytes": 1509949440000,
+                    "count": 10000,
+                    "device_id": "0",
+                    "device_type": "CUDA",
+                    "flops16": 687194767360000.0,
+                    "time (ns)": 710260674
+                }
+            },
+            {
+                "children": [],
+                "frame": {
+                    "name": "matmul_kernel_persistent [M=8192, N=8192, K=512]",
+                    "type": "function"
+                },
+                "metrics": {
+                    "bytes": 1509949440000,
+                    "count": 10000,
+                    "device_id": "0",
+                    "device_type": "CUDA",
+                    "flops16": 687194767360000.0,
+                    "time (ns)": 909820195
+                }
+            },
+            {
+                "children": [],
+                "frame": {
+                    "name": "matmul_kernel_tma [M=8192, N=8192, K=512]",
+                    "type": "function"
+                },
+                "metrics": {
+                    "bytes": 1509949440000,
+                    "count": 10000,
+                    "device_id": "0",
+                    "device_type": "CUDA",
+                    "flops16": 687194767360000.0,
+                    "time (ns)": 847528241
+                }
+            },
+            {
+                "children": [],
+                "frame": {
+                    "name": "matmul_kernel_tma_persistent [M=8192, N=8192, K=512]",
+                    "type": "function"
+                },
+                "metrics": {
+                    "bytes": 1509949440000,
+                    "count": 10000,
+                    "device_id": "0",
+                    "device_type": "CUDA",
+                    "flops16": 687194767360000.0,
+                    "time (ns)": 756505352
+                }
+            },
+            {
+                "children": [],
+                "frame": {
+                    "name": "matmul_kernel_tma_persistent_ws [M=8192, N=8192, K=512]",
+                    "type": "function"
+                },
+                "metrics": {
+                    "bytes": 1509949440000,
+                    "count": 10000,
+                    "device_id": "0",
+                    "device_type": "CUDA",
+                    "flops16": 687194767360000.0,
+                    "time (ns)": 694411665
+                }
+            },
+            {
+                "children": [],
+                "frame": {
+                    "name": "matmul_kernel_tma_ws [M=8192, N=8192, K=512]",
+                    "type": "function"
+                },
+                "metrics": {
+                    "bytes": 1509949440000,
+                    "count": 10000,
+                    "device_id": "0",
+                    "device_type": "CUDA",
+                    "flops16": 687194767360000.0,
+                    "time (ns)": 1003472848
+                }
+            },
+            {
+                "children": [
+                    {
+                        "children": [],
+                        "frame": {
+                            "name": "nvjet_hsh_128x256_64x6_2x1_2cta_v_bz_TNT",
+                            "type": "function"
+                        },
+                        "metrics": {
+                            "count": 10000,
+                            "device_id": "0",
+                            "device_type": "CUDA",
+                            "time (ns)": 606824973
+                        }
+                    }
+                ],
+                "frame": {
+                    "name": "torch [M=8192, N=8192, K=512]",
+                    "type": "function"
+                },
+                "metrics": {
+                    "bytes": 1509949440000,
+                    "flops16": 687194767360000.0
+                }
+            }
+        ],
+        "frame": {
+            "name": "ROOT",
+            "type": "function"
+        },
+        "metrics": {
+            "bytes": 0,
+            "count": 0,
+            "flops16": 0,
+            "time (ns)": 0
+        }
+    },
+    {
+        "CUDA": {
+            "0": {
+                "arch": "100",
+                "bus_width": 7680,
+                "clock_rate": 1965000,
+                "memory_clock_rate": 3996000,
+                "num_sms": 148
+            }
+        }
+    }
+]
