@@ -15,7 +15,7 @@ dirname = os.path.dirname(os.path.realpath(__file__))
 include_dirs = [os.path.join(dirname, "include")]
 libdevice_dir = os.path.join(dirname, "lib")
 libraries = ['cuda']
-
+PyCUtensorMap = None
 
 @functools.lru_cache()
 def libcuda_dirs():
@@ -66,12 +66,13 @@ class CudaUtils(object):
             include_dirs=include_dirs,
             libraries=libraries,
         )
+        global PyCUtensorMap
+        PyCUtensorMap = mod.PyCUtensorMap
         self.load_binary = mod.load_binary
         self.get_device_properties = mod.get_device_properties
         self.cuOccupancyMaxActiveClusters = mod.cuOccupancyMaxActiveClusters
         self.set_printf_fifo_size = mod.set_printf_fifo_size
         self.fill_tma_descriptor = mod.fill_tma_descriptor
-        self.replace_tma_address = mod.replace_tma_address
 
 
 # ------------------------
@@ -120,7 +121,7 @@ FLOAT_PACK_FUNCTION = {
 }
 
 _BASE_ARGS_FORMAT = "iiiKKppOOOOOO"
-
+_BASE_ARGS_FORMAT_LEN = len(_BASE_ARGS_FORMAT)
 
 def make_launcher(constants, signature, tensordesc_meta):
 
@@ -284,6 +285,12 @@ static inline void gpuAssert(CUresult code, const char *file, int line)
 
 typedef CUresult (*cuLaunchKernelEx_t)(const CUlaunchConfig* config, CUfunction f, void** kernelParams, void** extra);
 
+
+typedef struct {{    
+  PyObject_HEAD
+  CUtensorMap tensorMap;
+}} PyCUtensorMapObject;
+
 static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
   // Open the shared library
   void* handle = dlopen("libcuda.so.1", RTLD_LAZY);
@@ -372,6 +379,7 @@ typedef struct _DevicePtrInfo {{
 
 static PyObject* data_ptr_str = NULL;
 static PyObject* tma_desc_cpu_ptr_str = NULL;
+static PyObject* py_tensor_map_type = NULL;
 
 static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
   DevicePtrInfo ptr_info;
@@ -422,29 +430,17 @@ static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
     return NULL;
   }}
 
-  PyObject *method_ret = PyObject_CallMethodNoArgs(obj, tma_desc_cpu_ptr_str);
-  if (!method_ret) {{
+  PyObject *desc = PyObject_GetAttr(obj, tma_desc_cpu_ptr_str);
+  if (!desc) {{
     return NULL;
   }}
 
-  if (!PyLong_Check(method_ret)) {{
-    PyErr_SetString(PyExc_TypeError, "tma_desc_cpu_ptr() must return 64-bit int");
-    Py_DECREF(method_ret);
+if (Py_TYPE(desc) != (PyTypeObject*)py_tensor_map_type) {{
+    PyErr_Format(PyExc_TypeError, "tma_desc_cpu_ptr must be of type PyCUtensorMap, got %s", Py_TYPE(desc)->tp_name);
     return NULL;
-  }}
+}}
 
-  uint64_t ptr_as_uint = PyLong_AsUnsignedLongLong(method_ret);
-  Py_DECREF(method_ret);
-  if (!ptr_as_uint) {{
-    PyErr_SetString(PyExc_ValueError, "received NULL ptr from tma_desc_cpu_ptr()");
-    return NULL;
-  }}
-  if (ptr_as_uint % 64 != 0) {{
-    PyErr_SetString(PyExc_ValueError, "tma_desc_cpu_ptr() must be 64-byte aligned");
-    return NULL;
-  }}
-
-  return (CUtensorMap*)(ptr_as_uint);
+  return &((PyCUtensorMapObject*)desc)->tensorMap;
 }}
 
 static void ensureCudaContext() {{
@@ -575,10 +571,6 @@ static struct PyModuleDef ModuleDef = {{
 }};
 
 PyMODINIT_FUNC PyInit___triton_launcher(void) {{
-  PyObject *m = PyModule_Create(&ModuleDef);
-  if(m == NULL) {{
-    return NULL;
-  }}
   data_ptr_str = PyUnicode_InternFromString("data_ptr");
   if(data_ptr_str == NULL) {{
     return NULL;
@@ -587,6 +579,19 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
   if(tma_desc_cpu_ptr_str == NULL) {{
     return NULL;
   }}
+  PyObject* driver_mod = PyImport_ImportModule("triton.backends.nvidia.driver");
+  if (driver_mod == NULL) {{
+    return NULL;
+  }}
+  py_tensor_map_type = PyObject_GetAttrString(driver_mod, "PyCUtensorMap");
+  if (py_tensor_map_type == NULL) {{
+    return NULL;
+  }}
+
+  PyObject *m = PyModule_Create(&ModuleDef);
+  if(m == NULL) {{
+    return NULL;
+  }}  
   PyModule_AddFunctions(m, ModuleMethods);
   return m;
 }}
@@ -596,15 +601,9 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 
 class TmaDescKernelParam:
     TMA_DESC_SIZE = 128
-
-    def __init__(self):
-        import torch
-        self.desc = torch.empty(self.TMA_DESC_SIZE, dtype=torch.uint8, device="cpu")
-        self._desc_ptr = self.desc.data_ptr()
-
-    # Return a CUtensorMap* pointer in host memory
-    def tma_desc_cpu_ptr(self):
-        return self._desc_ptr
+    
+    def __init__(self, cu_tensor_map):
+        self.tma_desc_cpu_ptr = cu_tensor_map
 
 
 # The TMA dtype enum values are slightly different on host vs device...
@@ -614,7 +613,7 @@ TMA_DTYPE_DEVICE_TO_HOST[9] = 8
 TMA_DTYPE_DEVICE_TO_HOST[10] = 9
 
 
-def make_tensordesc_arg(arg, metadata, tensordesc_cache, tensordesc_idx):
+def make_tensordesc_arg(arg, metadata):
     if metadata is None:
         # Currently the host side tensor descriptors get decomposed in
         # the frontend to tensor desc, shape, and strides. We have no
@@ -633,22 +632,12 @@ def make_tensordesc_arg(arg, metadata, tensordesc_cache, tensordesc_idx):
     shape = arg.shape
     strides = arg.strides
     assert strides[-1] == 1
-
-    # Each CompiledKernel should have its own instance of a CudaLauncher
-    # and hence its own tensordesc_cache. Since arguments to launcher are
-    # passed as positional args, using tensordesc_idx as key for the cache
-    # should be valid.
-    key = tensordesc_idx
-    desc = tensordesc_cache.get(key, None)
-    if desc is None:
-      desc = TmaDescKernelParam()
-      tensordesc_cache[key] = desc
  
     if fp4_padded:
         shape = list(shape)
         shape[-1] *= 2
-    triton.runtime.driver.active.utils.fill_tma_descriptor(
-        desc._desc_ptr,
+
+    cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor(
         arg.base.data_ptr(),
         swizzle,
         elem_size,
@@ -657,26 +646,26 @@ def make_tensordesc_arg(arg, metadata, tensordesc_cache, tensordesc_idx):
         shape,
         strides,
     )
+    
+    desc = TmaDescKernelParam(cu_tensor_map)
 
     return [desc, *shape, *strides]
 
 
-def wrap_handle_tensordesc(launcher, tensordesc_indices, tensordesc_meta, tensordesc_cache):
+def wrap_handle_tensordesc(launcher, tensordesc_indices, tensordesc_meta):
     from triton.tools.tensor_descriptor import TensorDescriptor
     from triton.experimental.gluon.nvidia.hopper import TensorDescriptor as GluonTensorDescriptor
 
     def inner(*args):
-        meta_args = list(args[:len(_BASE_ARGS_FORMAT)])
-        raw_kernel_args = args[len(_BASE_ARGS_FORMAT):]
-        final_args = []
+        final_args = list(args[:_BASE_ARGS_FORMAT_LEN])
         tensordesc_idx = 0
-        for i, arg in enumerate(raw_kernel_args):
+        for i, arg in enumerate(args[_BASE_ARGS_FORMAT_LEN:]):
             if i in tensordesc_indices:
-              final_args.extend(make_tensordesc_arg(arg, tensordesc_meta[tensordesc_idx], tensordesc_cache, tensordesc_idx))
+              final_args.extend(make_tensordesc_arg(arg, tensordesc_meta[tensordesc_idx]))
               tensordesc_idx += 1
             else:
               final_args.append(arg)
-        return launcher(*meta_args, *final_args)
+        return launcher(*final_args)
 
     return inner
 
@@ -699,13 +688,12 @@ class CudaLauncher(object):
         )
         has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
         tensordesc_indices = set([i for i, sig in enumerate(signature.values()) if isinstance(sig, str) and sig.startswith("tensordesc")])
-        tensordesc_cache = {}
         assert not tensordesc_meta or len(tensordesc_meta) == len(tensordesc_indices)
         if tensordesc_meta is None:
           tensordesc_meta = [None] * len(tensordesc_indices)
 
         self.num_ctas = functools.reduce(operator.mul, metadata.cluster_dims, 1)
-        self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_indices, tensordesc_meta, tensordesc_cache) if has_tensor_desc_arg else mod.launch
+        self.launch = wrap_handle_tensordesc(mod.launch, tensordesc_indices, tensordesc_meta) if has_tensor_desc_arg else mod.launch
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
         self.profile_scratch_size = metadata.profile_scratch_size

@@ -164,9 +164,6 @@ typedef CUresult (*cuTensorMapEncodeTiled_t)(
     CUtensorMapSwizzle swizzle, CUtensorMapL2promotion l2Promotion,
     CUtensorMapFloatOOBfill oobFill);
 
-typedef CUresult (*cuTensorMapReplaceAddress_t)(
-    CUtensorMap *tensorMap, void *newAddress);
-
 #define defineGetFunctionHandle(name, symbolName)                              \
   static symbolName##_t name() {                                               \
     /* Open the shared library */                                              \
@@ -194,9 +191,6 @@ defineGetFunctionHandle(getCuOccupancyMaxActiveClustersHandle,
 
 defineGetFunctionHandle(getCuTensorMapEncodeTiledHandle,
                         cuTensorMapEncodeTiled);
-
-defineGetFunctionHandle(getCuTensorMapReplaceAddressHandle,
-                        cuTensorMapReplaceAddress);
 
 static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
   int clusterDimX = -1, clusterDimY = -1, clusterDimZ = -1,
@@ -285,8 +279,21 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
   Py_RETURN_NONE;
 }
 
+typedef struct {
+    PyObject_HEAD
+    CUtensorMap tensorMap;
+} PyCUtensorMapObject;
+
+static PyTypeObject PyCUtensorMapType = {
+  PyVarObject_HEAD_INIT(NULL, 0)
+  .tp_name = "triton.backends.nvidia.PyCUtensorMap",
+  .tp_doc = "<PyCUtensorMap object>",
+  .tp_basicsize = sizeof(PyCUtensorMapObject),
+  .tp_flags = Py_TPFLAGS_DEFAULT,
+  .tp_new = PyType_GenericNew,
+};
+
 static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
-  unsigned long long desc_address;
   unsigned long long global_address;
   int swizzle;
   int elemSize;
@@ -295,9 +302,14 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
   PyObject *shape;
   PyObject *strides;
 
-  if (!PyArg_ParseTuple(args, "KKiiiOOO", &desc_address, &global_address,
+  if (!PyArg_ParseTuple(args, "KiiiOOO", &global_address,
                         &swizzle, &elemSize, &elemType, &blockSize, &shape,
                         &strides)) {
+    return NULL;
+  }
+
+  PyCUtensorMapObject *desc = PyObject_New(PyCUtensorMapObject, &PyCUtensorMapType);
+  if (!desc) {
     return NULL;
   }
 
@@ -371,32 +383,18 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
   INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeTiled,
                                       getCuTensorMapEncodeTiledHandle);
   CUDA_CHECK_AND_RETURN_NULL(cuTensorMapEncodeTiled(
-      (CUtensorMap *)desc_address, elemType, rank, (void *)global_address,
+      &desc->tensorMap, elemType, rank, (void *)global_address,
       shapeInt, stridesLL, blockSizeInt, elementStrides,
       CU_TENSOR_MAP_INTERLEAVE_NONE, swizzle,
       CU_TENSOR_MAP_L2_PROMOTION_L2_128B, CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE));
-  Py_RETURN_NONE;
+
+  return (PyObject*)desc;
 
 cleanup:
   Py_XDECREF(blockSizeFast);
   Py_XDECREF(shapeFast);
   Py_XDECREF(stridesFast);
   return result;
-}
-
-static PyObject* replaceTMAAddress(PyObject *self, PyObject *args) {
-  unsigned long long desc_address;
-  unsigned long long new_address;
-  if (!PyArg_ParseTuple(args, "KK", &desc_address, &new_address)) {
-    return NULL;
-  }
-
-  static cuTensorMapReplaceAddress_t cuTensorMapReplaceAddress = NULL;
-  INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapReplaceAddress,
-                                      getCuTensorMapReplaceAddressHandle);
-  CUDA_CHECK_AND_RETURN_NULL(cuTensorMapReplaceAddress(
-      (CUtensorMap *)desc_address, (void *)new_address));
-  Py_RETURN_NONE;
 }
 
 static PyMethodDef ModuleMethods[] = {
@@ -413,7 +411,6 @@ static PyMethodDef ModuleMethods[] = {
      "particular it's an error to change this value after launching any kernel "
      "that calls printf()."},
     {"fill_tma_descriptor", fillTMADescriptor, METH_VARARGS, "doc"},
-    {"replace_tma_address", replaceTMAAddress, METH_VARARGS, "doc"},
 
     {NULL, NULL, 0, NULL} // sentinel
 };
@@ -424,12 +421,18 @@ static struct PyModuleDef ModuleDef = {PyModuleDef_HEAD_INIT, "cuda_utils",
                                        ModuleMethods};
 
 PyMODINIT_FUNC PyInit_cuda_utils(void) {
+  if (PyType_Ready(&PyCUtensorMapType) < 0) {
+    return NULL;
+  }
+
   PyObject *m = PyModule_Create(&ModuleDef);
   if (m == NULL) {
     return NULL;
   }
 
   PyModule_AddFunctions(m, ModuleMethods);
+  Py_INCREF(&PyCUtensorMapType);
+  PyModule_AddObject(m, "PyCUtensorMap", (PyObject *)&PyCUtensorMapType);
 
   return m;
 }
