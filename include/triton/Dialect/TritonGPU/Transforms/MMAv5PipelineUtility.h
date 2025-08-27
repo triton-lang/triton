@@ -32,6 +32,9 @@ bool hasLoadsAfterMMA(MMAv5OpInterface mma, scf::ForOp forOp);
 TCGen5CommitOp createCommit(OpBuilder &builder, MMAv5OpInterface mmaOp,
                             Value barrier, Value pred = Value());
 
+SmallVector<TCGen5CommitOp>
+collectCommitOpsAfter(MMAv5OpInterface mmaOp);
+
 // Helper class to determine if the operands of an MMA operation are
 // pipelineable.
 class MMAv5PipelineableOperandsHelper {

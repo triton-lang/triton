@@ -3,6 +3,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -131,6 +132,29 @@ bool hasWGMMA(ModuleOp module) {
     }
   });
   return hasWGMMA;
+}
+
+void moveDefiningOpsBefore(Value val, Operation *target) {
+  SmallVector<Operation *> toMove;
+  std::function<void(Value)> collectOpsToMove = [&](Value val) {
+    if (auto defOp = val.getDefiningOp()) {
+      if (defOp->getBlock() == target->getBlock() &&
+          target->isBeforeInBlock(defOp)) {
+        for (Value operand : defOp->getOperands()) {
+          collectOpsToMove(operand);
+        }
+        if (llvm::find(toMove, defOp) == toMove.end()) {
+          toMove.push_back(defOp);
+        }
+      }
+    }
+  };
+
+  collectOpsToMove(val);
+
+  for (Operation *op : toMove) {
+    op->moveBefore(target);
+  }
 }
 
 } // namespace
@@ -506,63 +530,69 @@ private:
           }
         }
       }
-      if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-        // Workaround: scan towards the beginning of the current block looking
-        // for mmav5s and mark their operands as reads guarded by the barrier.
-        Operation *prevOp = op->getPrevNode();
-        while (prevOp) {
-          auto setBarrier = [&](TypedValue<ttg::MemDescType> buf, Value pred,
-                                bool read, bool hwPipelined = false) {
-            MemType memType = MemType::TENSOR_MEM;
-            if (isa<ttg::SharedEncodingTrait>(buf.getType().getEncoding())) {
-              memType = MemType::SHARED_MEM;
-            }
-            if (read) {
-              b.create<tti::ExperimentalSetReadBarrierOp>(
-                  buf, commitOp.getBarrier(), buffersTensor[(int)memType],
-                  barriers, readBarriersAlloc[(int)memType],
-                  readBarriersType[(int)memType], pred);
-            } else {
-              b.create<tti::ExperimentalSetWriteStateOp>(
-                  buf, buffersTensor[(int)memType],
-                  writeStateAlloc[(int)memType], writeStateType[(int)memType],
-                  hwPipelined, pred);
-            }
-          };
-          if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(prevOp)) {
-	    b.setInsertionPoint(mmav5Op);
-            auto pred = mmav5Op.getPredicate();
-            MemType lhsMemType = MemType::TENSOR_MEM;
-            if (isa<ttg::SharedEncodingTrait>(
-                    mmav5Op.getA().getType().getEncoding())) {
-              lhsMemType = MemType::SHARED_MEM;
-            }
 
-            addWriteChecks(b, mmav5Op.getA(), pred, lhsMemType,
-                           /*hwPipelined*/ false);
-            setBarrier(mmav5Op.getA(), pred, /*read*/ true);
-
-            addWriteChecks(b, mmav5Op.getB(), pred, MemType::SHARED_MEM,
-                           /*hwPipelined*/ false);
-            setBarrier(mmav5Op.getB(), pred, /*read*/ true);
-
-            addWriteChecks(b, mmav5Op.getAccumulator(), pred,
-                           MemType::TENSOR_MEM, /*hwPipelined*/ true);
-            addReadChecks(b, mmav5Op.getAccumulator(), pred,
-                          MemType::TENSOR_MEM);
-            setBarrier(mmav5Op.getAccumulator(), pred, /*read*/ false,
-                       /*hwPipelined*/ true);
-          }
-          prevOp = prevOp->getPrevNode();
+      if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+        auto pred = mmav5Op.getPredicate();
+        MemType lhsMemType = MemType::TENSOR_MEM;
+        if (isa<ttg::SharedEncodingTrait>(
+                mmav5Op.getA().getType().getEncoding())) {
+          lhsMemType = MemType::SHARED_MEM;
         }
 
-        b.create<tti::ExperimentalCommitWriteWithBarrierOp>(
-            commitOp.getBarrier(), barriers,
-            writeBarriersAlloc[(int)MemType::TENSOR_MEM],
-            writeBarriersType[(int)MemType::TENSOR_MEM],
+	auto commitOps = ttng::collectCommitOpsAfter(mmav5Op);
+        for (auto commitOp: commitOps) {
+	  moveDefiningOpsBefore(commitOp.getBarrier(), mmav5Op);
+	}
+
+        auto forEachCommit =
+            [&](std::function<void(ttng::TCGen5CommitOp)> callback) {
+              for (auto commitOp : commitOps) {
+                b.setInsertionPoint(mmav5Op);
+                callback(commitOp);
+              }
+            };
+        auto setBarrier = [&](TypedValue<ttg::MemDescType> buf,
+                              Value commitBarrier, Value pred) {
+          MemType memType = MemType::TENSOR_MEM;
+          if (isa<ttg::SharedEncodingTrait>(buf.getType().getEncoding())) {
+            memType = MemType::SHARED_MEM;
+          }
+          b.create<tti::ExperimentalSetReadBarrierOp>(
+              buf, commitBarrier, buffersTensor[(int)memType], barriers,
+              readBarriersAlloc[(int)memType], readBarriersType[(int)memType],
+              pred);
+        };
+
+        addWriteChecks(b, mmav5Op.getA(), pred, lhsMemType,
+                       /*hwPipelined*/ false);
+	forEachCommit([&](ttng::TCGen5CommitOp commitOp){
+	  setBarrier(mmav5Op.getA(), commitOp.getBarrier(), pred);
+	});
+
+        addWriteChecks(b, mmav5Op.getB(), pred, MemType::SHARED_MEM,
+                       /*hwPipelined*/ false);
+	forEachCommit([&](ttng::TCGen5CommitOp commitOp){
+	  setBarrier(mmav5Op.getB(), commitOp.getBarrier(), pred);
+	});
+
+        addWriteChecks(b, mmav5Op.getAccumulator(), pred, MemType::TENSOR_MEM,
+                       /*hwPipelined*/ true);
+        addReadChecks(b, mmav5Op.getAccumulator(), pred, MemType::TENSOR_MEM);
+        b.create<tti::ExperimentalSetWriteStateOp>(
+            mmav5Op.getAccumulator(), buffersTensor[(int)MemType::TENSOR_MEM],
             writeStateAlloc[(int)MemType::TENSOR_MEM],
-            writeStateType[(int)MemType::TENSOR_MEM], commitOp.getPred());
+            writeStateType[(int)MemType::TENSOR_MEM],
+            /*hwPipelined*/ true, pred);
+	forEachCommit([&](ttng::TCGen5CommitOp commitOp){
+          b.create<tti::ExperimentalCommitWriteWithBarrierOp>(
+              commitOp.getBarrier(), barriers,
+              writeBarriersAlloc[(int)MemType::TENSOR_MEM],
+              writeBarriersType[(int)MemType::TENSOR_MEM],
+              writeStateAlloc[(int)MemType::TENSOR_MEM],
+              writeStateType[(int)MemType::TENSOR_MEM], commitOp.getPred());
+	});
       }
+
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
         b.create<tti::ExperimentalCommitAccessesOp>(
             asyncCpCommitsAlloc, asyncCpCommitsType, nullptr);

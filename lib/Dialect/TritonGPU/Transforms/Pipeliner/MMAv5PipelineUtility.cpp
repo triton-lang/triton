@@ -273,6 +273,37 @@ ttng::TCGen5CommitOp ttng::createCommit(OpBuilder &builder,
   return commit;
 }
 
+SmallVector<ttng::TCGen5CommitOp>
+ttng::collectCommitOpsAfter(ttng::MMAv5OpInterface mmaOp) {
+  auto isConstTrue = [](Value v) {
+    if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
+      if (auto attr = dyn_cast<BoolAttr>(constOp.getValueAttr())) {
+        return attr.getValue();
+      }
+    }
+    return false;
+  };
+  auto equalPred = [=](Value pred1, Value pred2) {
+    // Keep it simple for now. TODO: Check structural equality?
+    return (isConstTrue(pred1) && isConstTrue(pred2)) || pred1 == pred2;
+  };
+
+  SmallVector<ttng::TCGen5CommitOp> commitOps;
+  Operation *nextOp = mmaOp->getNextNode();
+  auto mmaPred = mmaOp.getPredicate();
+
+  while (nextOp && !isa<ttng::MMAv5OpInterface>(nextOp)) {
+    if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(nextOp)) {
+      if ((isConstTrue(mmaPred) && commit.getPred() == nullptr) ||
+          equalPred(mmaPred, commit.getPred())) {
+        commitOps.push_back(commit);
+      }
+    }
+    nextOp = nextOp->getNextNode();
+  }
+  return commitOps;
+}
+
 //===----------------------------------------------------------------------===//
 // MMA Pipeline Rewriters
 //===----------------------------------------------------------------------===//
