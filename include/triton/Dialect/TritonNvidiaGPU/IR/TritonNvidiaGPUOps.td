@@ -421,10 +421,8 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
 
   let description = [{
     $d += matrix_multiply($a, $b).
-    if is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
-    Otherwise, if a barrier is given, the op will trigger a commit/arrive on it. The result will be safe to read after a barrier wait.
-    If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
-    and syncronize both CTAs if the op is synchronous.
+    if is_async is false, the op executes synchronously. If $two_ctas is set the op will execute a matmul across two contiguous CTAs,
+    it will read the data distributed across the two CTAs, and syncronize both CTAs if the op is synchronous.
 
     This operation takes and produces an optional token to indicate TMEM read
     and write on its accumulator operand. When the tokens are present, they can
@@ -460,10 +458,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
 
   let description = [{
     $d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
-    if is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
-    Otherwise, if a barrier is given, the op will trigger a commit/arrive on it.
-    The result will be safe to read after a barrier wait.
-
+    if is_async is false, the op executes synchronously.
     This operation takes and produces an optional token to indicate TMEM read
     and write on its accumulator operand. When the tokens are present, they can
     be used to check aliasing and modref on the accumulator memory.
