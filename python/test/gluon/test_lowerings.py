@@ -639,7 +639,9 @@ _ld_st_mma_layouts = _filter_layouts([
 ])
 
 _ld_st_shared_layouts = _filter_layouts([
+    ttgl.NVMMASharedLayout(swizzle_byte_width=0, transposed=False, element_bitwidth=16, rank=2),
     ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False, element_bitwidth=16, rank=2),
+    ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=True, element_bitwidth=16, rank=2),
     ttgl.NVMMASharedLayout(swizzle_byte_width=128, transposed=False, element_bitwidth=16, rank=2),
     ttgl.SwizzledSharedLayout(vec=8, per_phase=1, max_phase=1, order=[1, 0]),
     ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=4, order=[0, 1]),
@@ -657,12 +659,10 @@ _ld_st_shared_layouts = _filter_layouts([
 @pytest.mark.parametrize("dist_layout", _ld_st_dot_layouts + _ld_st_mma_layouts)
 @pytest.mark.parametrize("shared_layout", _ld_st_shared_layouts)
 def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, device):
-    # Skip dtype incompatibilities
-    if "float8" in dtype and dist_layout not in _ld_st_dot_layouts:
-        pytest.skip("float8 only supported with dot operand layouts")
-    # Skip small shapes
-    if (shape[0] < 128 or shape[1] < 128) and isinstance(shared_layout, ttgl.NVMMASharedLayout):
-        pytest.skip("NVMMASharedLayout is intended for large shapes")
+    if isinstance(shared_layout, ttgl.NVMMASharedLayout):
+        contig_dim = 0 if shared_layout.transposed else 1
+        if shape[contig_dim] < (8 * shared_layout.swizzle_byte_width) / shared_layout.element_bitwidth:
+            pytest.skip("contig_dim too small for swizzle_byte_width in NVMMASharedLayout")
 
     @gluon.jit
     def kernel(x_ptr, y_ptr, shape_tuple: ttgl.constexpr, dist_layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
