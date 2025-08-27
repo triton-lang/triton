@@ -184,6 +184,7 @@ def test_scope_metrics(tmp_path: pathlib.Path):
     proton.exit_scope(metrics={"b": 1.0})
 
     proton.finalize()
+
     assert temp_file.exists()
     with temp_file.open() as f:
         data = json.load(f)
@@ -193,6 +194,22 @@ def test_scope_metrics(tmp_path: pathlib.Path):
             assert child["metrics"]["a"] == 2.0
         elif child["frame"]["name"] == "test4":
             assert child["metrics"]["b"] == 1.0
+
+
+def test_scope_metrics_invalid(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_scope_metrics.hatchet"
+    proton.start(str(temp_file.with_suffix("")))
+
+    try: 
+        with proton.scope("test0", {"a": 1.0}):
+            pass
+
+        with proton.scope("test0", {"a": 1}):
+            pass
+    except Exception as e:
+        print(f"Error occurred: {e}")
+    finally:
+        proton.finalize()
 
 
 def test_scope_properties(tmp_path: pathlib.Path):
