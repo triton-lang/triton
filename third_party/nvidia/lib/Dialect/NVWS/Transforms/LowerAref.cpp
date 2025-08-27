@@ -25,8 +25,8 @@
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/Dominance.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/PatternMatch.h"
@@ -110,7 +110,7 @@ SmallVector<AsyncOp> castAsyncOpAttrs(ArrayAttr opAttrs) {
 }
 
 BarrierCount getArrivalCount(ArefCreateOp op) {
-  SetVector<PartitionId> producerGroups, consumerGroups;
+  std::set<PartitionId> producerGroups, consumerGroups;
   BarrierCount count;
 
   for (auto user : op->getUsers()) {
@@ -119,9 +119,10 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
       continue;
 
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
-      if (!producerGroups.insert(*partitionId)) {
+      if (producerGroups.count(*partitionId)) {
         continue;
       }
+      producerGroups.insert(*partitionId);
       for (auto kind : castAsyncOpAttrs(putExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
@@ -134,9 +135,10 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         }
       }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-      if (!consumerGroups.insert(*partitionId)) {
+      if (consumerGroups.count(*partitionId)) {
         continue;
       }
+      consumerGroups.insert(*partitionId);
       for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
@@ -224,7 +226,8 @@ void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
       rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
           op.getLoc(), op.getDesc(), indices, barrierAlloc, op.getResult(),
           pred);
-  assignStageCluster(newLoadOp, getStageCluster(op), rewriter);
+  assignStageCluster(newLoadOp, getPartitionId(op), getStageCluster(op),
+                     rewriter);
 };
 
 void createTMAGather(triton::nvws::DescriptorGatherOp op,
@@ -233,7 +236,8 @@ void createTMAGather(triton::nvws::DescriptorGatherOp op,
   auto newGatherOp = rewriter.create<triton::nvidia_gpu::AsyncTMAGatherOp>(
       op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
       barrierAlloc, op.getResult(), pred);
-  assignStageCluster(newGatherOp, getStageCluster(op), rewriter);
+  assignStageCluster(newGatherOp, getPartitionId(op), getStageCluster(op),
+                     rewriter);
 }
 
 void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
@@ -258,7 +262,8 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
   Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
   auto expectOp = rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(
       loc, fullBarrier, txCount, pred);
-  assignStageCluster(expectOp, getStageCluster(op), rewriter);
+  assignStageCluster(expectOp, getPartitionId(op), getStageCluster(op),
+                     rewriter);
 
   for (auto loadOp : loadOps) {
     rewriter.setInsertionPoint(loadOp);
@@ -434,8 +439,8 @@ void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
   }
 
   Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getStage());
-  return insertArriveBarrier(loc, asyncKinds, rewriter, emptyBarrier, getPartitionId(op),
-                             stageCluster);
+  return insertArriveBarrier(loc, asyncKinds, rewriter, emptyBarrier,
+                             getPartitionId(op), stageCluster);
 }
 
 DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
@@ -606,7 +611,8 @@ void createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   auto enter = builder.create<EnterOp>(firstEnter.getLoc(), arefEnterBuffers,
                                        builder.getType<AsyncTokenType>(), aref,
                                        zero, zero);
-  assignStageCluster(enter, getPartitionId(firstEnter), getStageCluster(firstEnter), builder);
+  assignStageCluster(enter, getPartitionId(firstEnter),
+                     getStageCluster(firstEnter), builder);
 
   builder.setInsertionPoint(lastExit);
   llvm::SmallVector<Attribute> AsyncOpAttrs(opAttrsSet.begin(),
@@ -614,7 +620,8 @@ void createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   auto exit =
       builder.create<ExitOp>(firstEnter.getLoc(), aref, enter.getToken(), zero,
                              builder.getArrayAttr(AsyncOpAttrs));
-  assignStageCluster(exit, getPartitionId(lastExit), getStageCluster(lastExit), builder);
+  assignStageCluster(exit, getPartitionId(lastExit), getStageCluster(lastExit),
+                     builder);
 
   for (auto [idx, enterOp] : llvm::enumerate(enterOps)) {
     enterOp.getBuffers()[0].replaceAllUsesWith(enter.getBuffers()[idx]);
