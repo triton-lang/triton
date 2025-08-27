@@ -525,11 +525,12 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
     if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
       return {};
   }
-  if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
-      op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
-      op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp,
-          nvidia_gpu::WarpGroupDotWaitOp>(op)) {
+  if ((op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
+       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
+       op->hasTrait<mlir::OpTrait::Elementwise>() ||
+       isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp,
+           nvidia_gpu::WarpGroupDotWaitOp>(op)) &&
+      !isa<triton::gpu::UpcastFpOpInterface>(op)) {
     return encoding;
   }
 
@@ -560,11 +561,12 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
     if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
       return {};
   }
-  if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
-      op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
-      op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<scf::WhileOp, scf::ForOp, scf::YieldOp, scf::ConditionOp,
-          nvidia_gpu::WarpGroupDotWaitOp>(op))
+  if ((op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
+       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
+       op->hasTrait<mlir::OpTrait::Elementwise>() ||
+       isa<scf::WhileOp, scf::ForOp, scf::YieldOp, scf::ConditionOp,
+           nvidia_gpu::WarpGroupDotWaitOp>(op)) &&
+      !isa<triton::gpu::UpcastFpOpInterface>(op))
     return encoding;
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferDstEncoding(reduceOp, encoding);
@@ -1187,6 +1189,7 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
 
   LogicalResult matchAndRewrite(scf::ForOp forOp,
                                 PatternRewriter &rewriter) const final {
+    llvm::outs() << "Enter ForOpDeadArgElimination\n";
     Block &block = *forOp.getBody();
     auto yieldOp = cast<scf::YieldOp>(block.getTerminator());
     // Assume that nothing is live at the beginning and mark values as live

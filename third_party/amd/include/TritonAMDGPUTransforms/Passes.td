@@ -277,18 +277,4 @@ def TritonAMDGPUOptimizeDotOperands : Pass<"tritonamdgpu-optimize-dot-operands",
   ];
 }
 
-def TritonAMDPeepholeOptimize: Pass<"tritonamdgpu-peephole-optimize", "mlir::ModuleOp"> {
-  let summary = "Perform peephole optimizations";
-
-  let description = [{
-  }];
-
-  let options = [
-    Option<"archGenerationName", "arch-generation-name",
-           "std::string", /*default=*/"std::string{}",
-           "GFX generation name of target device.">,
-  ];
-}
-
-
 #endif

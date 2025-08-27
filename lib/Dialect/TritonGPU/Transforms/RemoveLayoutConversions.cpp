@@ -94,8 +94,6 @@ public:
   void rewriteAssertOp(AssertOp assertOp);
   Operation *cloneElementwise(OpBuilder &rewriter, Operation *op,
                               Attribute encoding);
-  Operation *cloneUpcastFpOp(OpBuilder &rewriter, Operation *op,
-                             Attribute encoding);
   // Map the original value to the rewritten one.
   void map(Value old, Value newV);
   // Return the mapped value in the given encoding. This will insert a convert
@@ -516,44 +514,6 @@ Operation *LayoutPropagation::cloneElementwise(OpBuilder &rewriter,
   return newOp;
 }
 
-Operation *LayoutPropagation::cloneUpcastFpOp(OpBuilder &rewriter,
-                                              Operation *op,
-                                              Attribute encoding) {
-  Operation *newOp = rewriter.clone(*op);
-  auto iface = dyn_cast<UpcastFpOpInterface>(op);
-
-  Attribute operandEnc;
-  if (op->getNumOperands() > 0) {
-    for (auto [idx, operand] : llvm::enumerate(op->getOperands())) {
-      auto ty =
-          dyn_cast<RankedTensorType>(getRewrittenValue(operand).getType());
-      if (!ty)
-        continue;
-      auto enc = ty.getEncoding();
-      if (iface.inferDstEncoding(idx, enc) == encoding) {
-        operandEnc = enc;
-        break;
-      }
-    }
-  }
-
-  for (OpOperand &operand : op->getOpOperands()) {
-    newOp->setOperand(
-        operand.getOperandNumber(),
-        getValueAs(operand.get(), iface.inferSrcEncoding(
-                                      operand.getOperandNumber(), encoding)));
-  }
-
-  for (unsigned i = 0, e = op->getNumResults(); i < e; ++i) {
-    auto origType = dyn_cast<RankedTensorType>(op->getResult(i).getType());
-    if (!origType)
-      continue;
-    auto newType = origType.cloneWithEncoding(encoding);
-    newOp->getResult(i).setType(newType);
-  }
-  return newOp;
-}
-
 Operation *LayoutPropagation::rewriteForOp(scf::ForOp forOp) {
   SmallVector<Value> operands;
   OpBuilder rewriter(forOp);
@@ -774,14 +734,8 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
       isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp, GatherOp,
-          ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp, UpcastFpOpInterface>(
-          op)) {
-    Operation *newOp;
-    if (auto iface = dyn_cast<UpcastFpOpInterface>(op)) {
-      newOp = cloneUpcastFpOp(rewriter, op, encoding);
-    } else {
-      newOp = cloneElementwise(rewriter, op, encoding);
-    }
+          ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(op)) {
+    Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
          llvm::zip(op->getResults(), newOp->getResults())) {
       if (oldResult.getType() == newResult.getType()) {

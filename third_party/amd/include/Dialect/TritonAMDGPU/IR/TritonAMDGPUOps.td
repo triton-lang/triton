@@ -558,6 +558,7 @@ def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, DeclareOpInterf
 //===----------------------------------------------------------------------===//
 
 def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
+    Pure,
     Elementwise,
     SameOperandsAndResultShape,
     SameOperandsAndResultEncoding,
