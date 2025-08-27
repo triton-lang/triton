@@ -436,6 +436,20 @@ void init_gluon_ir(py::module &&m) {
              auto dstTy = cast<RankedTensorType>(resultTy);
              return isConvertLayoutTrivial(dstTy, value);
            })
+      .def("create_histogram",
+           [](GluonOpBuilder &self, Value operand, int numBins,
+              std::optional<Value> mask, Attribute layout) -> Value {
+             auto *ctx = self.getContext();
+             auto resultTy =
+                 RankedTensorType::get({static_cast<int64_t>(numBins)},
+                                       IntegerType::get(ctx, 32), layout);
+             if (!mask) {
+               return self.create<triton::HistogramOp>(resultTy, operand);
+             } else {
+               return self.create<triton::HistogramOp>(resultTy, operand,
+                                                       *mask);
+             }
+           })
       .def("create_async_copy_global_to_local",
            [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
               Value other, tt::CacheModifier cacheModifier,

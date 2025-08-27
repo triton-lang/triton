@@ -224,7 +224,7 @@ class DotOperandLayout(DistributedLayout):
         return hash((self.operand_index, self.parent, self.k_width))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=True)
 class NVMMADistributedLayout(DistributedLayout):
     """
     Represents a layout for NVIDIA MMA (tensor core) operations.
