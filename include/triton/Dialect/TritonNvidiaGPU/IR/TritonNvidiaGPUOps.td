@@ -529,7 +529,6 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {
   }];
 
   let arguments = (ins
-//    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
     TTG_MemDescType:$barrier,
     Optional<I1>:$pred,
     UnitAttr:$two_ctas
