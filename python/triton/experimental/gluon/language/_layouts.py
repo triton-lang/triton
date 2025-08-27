@@ -466,9 +466,10 @@ class SwizzledSharedLayout(SharedLayout):
 class PaddedSharedLayout(SharedLayout):
     """
     Represents a layout for the access to shared memory. Compared to SwizzledSharedLayout,
-    it uses padding to avoid shared memory bank conflicts. After every interval tensor elements,
-    the corresponding number of padding elements are inserted.
-    If a position corresponds to multiple intervals, the padding amounts are summed.
+    it combined padding and element reordering via linear transformation (e.g. row permutation)
+    to avoid shared memory bank conflicts. After every interval tensor elements, the
+    corresponding number of padding elements are inserted. If a position corresponds to
+    multiple intervals, the padding amounts are summed.
 
     In the following example of a tensor,
     `eM` represents original elements in the and `pN` represents padded element.
@@ -480,7 +481,7 @@ class PaddedSharedLayout(SharedLayout):
      e6, e7,
      ...]
 
-    After padding with interval-padding list [[2, 1], [4, 2]],
+    After padding with interval-padding list [[2, 1], [4, 2]] with an identity remapping,
     the shared memory will be
     [e0, e1, p0,
      e2, e3, p1, p2, p3,
@@ -488,11 +489,37 @@ class PaddedSharedLayout(SharedLayout):
      e6, e7, p5, p6, p7,
      ...]
 
+    Furthermore this encoding allows for a linear remapping from the 1-D shared
+    memory offset to logical n-D tensor elements. The remapping is given in the form
+    of linear bases mapping from offset to [dim0, dim1...dimN-1].
+    See LinearLayout.h for more details how linear layouts are applied to remap
+    elements.
+    Some concrete examples using `xN` and `yN` to mean the logical n-D tensor elements
+    and `pN` to mean padding:
+
+    After padding for shape = [8] with interval-padding list [[2, 2]], offset_bases = [[2], [1]] and block_bases = []:
+    [x0, x2, p0 p1, x1, x3]
+
+    After padding for shape = [8, 4] with interval_padding_pairs = [[8, 1]], offset_bases = [[0, 1], [0, 2], /*gap, stride by 2 rows*/[2, 0], [4, 0], [1, 0]]] and block_bases = []:
+    [
+        x0y0, x0y1, x0y2, x0y3,
+        x2y0, x2y1, x2y2, x2y3,
+        p0,
+        x4y0, x4y1, x4y2, x4y3,
+        x6y0, x6y1, x6y2, x6y3,
+        p1,
+        x1y0, x1y1, x1y2, x1y3,
+        x3y0, x3y1, x3y2, x3y3,
+        p2,
+        x5y0, x5y1, x5y2, x5y3,
+        x7y0, x7y1, x7y2, x7y3,
+    ]
+
     Args:
         interval_padding_pairs (List[int]): List of [interval, padding] pair and both interval and padding must be powers of 2.
         offset_bases (List[int]): Bases for shared memory offsets
         block_bases (List[List[int]]): Bases for block-level shared memory offsets.
-        shape (List[int]): The tensor global shape.
+        shape (List[int]): n-D logical shared memory shape
     """
     interval_padding_pairs: List[List[int]]
     offset_bases: List[List[int]]
