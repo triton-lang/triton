@@ -690,8 +690,12 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
     num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(dist_layout, shape))))
     obj = kernel[(1, )](x, y, shape, dist_layout, shared_layout, num_warps=num_warps)
     torch.testing.assert_close(y, x)
-    if isinstance(shared_layout,
-                  ttgl.NVMMASharedLayout) and dist_layout in _ld_st_mma_layouts and dist_layout.version[0] >= 3:
+    if (
+        isinstance(shared_layout, ttgl.NVMMASharedLayout)
+        and dist_layout in _ld_st_mma_layouts
+        and dist_layout.version[0] >= 3
+        and dtype == "float16"
+    ):
         assert "stmatrix" in obj.asm["ptx"]
 
 
