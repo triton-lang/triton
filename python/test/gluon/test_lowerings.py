@@ -256,11 +256,14 @@ def test_histogram(M, bins, src_layout, dst_layout, device):
     torch.manual_seed(0)
     x = torch.randint(0, bins, (M, ), dtype=torch.int32, device=device)
     z = torch.zeros((bins, ), dtype=torch.int32, device=device)
-    z_torch = torch.histc(x.float(), bins=bins, min=0, max=bins - 1)
+    z_torch = torch.histc(x.float(), bins=bins, min=0, max=bins - 1).to(torch.int32)
     kernel[(1, )](x, z, M, bins, src_layout, dst_layout, num_warps=4)
-    assert (z == z_torch).all()
+    torch.testing.assert_close(z, z_torch, atol=0, rtol=0)
 
 
+@pytest.mark.parametrize("M", [64, 128, 256])
+@pytest.mark.parametrize("src_layout", _1d_layouts)
+@pytest.mark.parametrize("dst_layout", _1d_layouts)
 @pytest.mark.parametrize("src_dim", [0, 1])
 @pytest.mark.parametrize("dst_dim", [0, 1])
 @pytest.mark.parametrize("is_bool", [True, False])

@@ -324,7 +324,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(input.dtype.is_int(), lambda: "histogram only supports integer input")
         _check(layout is not None, lambda: "histogram requires a destination layout")
         if mask is not None:
-            mask = self.broadcast_impl_shape(mask, input.shape)
+            mask, input = self.broadcast_impl_value(mask, input)
             _check(mask.type.scalar.is_bool(), lambda: "Mask must have boolean scalar type")
             mask = mask.handle
         layout_attr = layout._to_ir(self.builder)
