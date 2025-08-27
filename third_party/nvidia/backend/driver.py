@@ -380,7 +380,6 @@ typedef struct _DevicePtrInfo {{
 }} DevicePtrInfo;
 
 static PyObject* data_ptr_str = NULL;
-static PyObject* tma_desc_cpu_ptr_str = NULL;
 static PyObject* py_tensor_map_type = NULL;
 
 static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
@@ -432,17 +431,12 @@ static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
     return NULL;
   }}
 
-  PyObject *desc = PyObject_GetAttr(obj, tma_desc_cpu_ptr_str);
-  if (!desc) {{
-    return NULL;
-  }}
-
-if (Py_TYPE(desc) != (PyTypeObject*)py_tensor_map_type) {{
-    PyErr_Format(PyExc_TypeError, "tma_desc_cpu_ptr must be of type PyCUtensorMap, got %s", Py_TYPE(desc)->tp_name);
+if (Py_TYPE(obj) != (PyTypeObject*)py_tensor_map_type) {{
+    PyErr_Format(PyExc_TypeError, "object must be of type PyCUtensorMap, got %s", Py_TYPE(obj)->tp_name);
     return NULL;
 }}
 
-  return &((PyCUtensorMapObject*)desc)->tensorMap;
+  return &((PyCUtensorMapObject*)obj)->tensorMap;
 }}
 
 static void ensureCudaContext() {{
@@ -577,10 +571,6 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
   if(data_ptr_str == NULL) {{
     return NULL;
   }}
-  tma_desc_cpu_ptr_str = PyUnicode_InternFromString("tma_desc_cpu_ptr");
-  if(tma_desc_cpu_ptr_str == NULL) {{
-    return NULL;
-  }}
   PyObject* driver_mod = PyImport_ImportModule("triton.backends.nvidia.driver");
   if (driver_mod == NULL) {{
     return NULL;
@@ -599,13 +589,6 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 }}
 """
     return src
-
-
-class TmaDescKernelParam:
-    TMA_DESC_SIZE = 128
-
-    def __init__(self, cu_tensor_map):
-        self.tma_desc_cpu_ptr = cu_tensor_map
 
 
 # The TMA dtype enum values are slightly different on host vs device...
@@ -649,9 +632,7 @@ def make_tensordesc_arg(arg, metadata):
         strides,
     )
 
-    desc = TmaDescKernelParam(cu_tensor_map)
-
-    return [desc, *shape, *strides]
+    return [cu_tensor_map, *shape, *strides]
 
 
 def wrap_handle_tensordesc(launcher, tensordesc_indices, tensordesc_meta):
