@@ -54,7 +54,7 @@ test-distributed: all
 .PHONY: test-gluon
 test-gluon: all
 	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon
-	$(PYTEST) -vs python/tutorials/gluon/01-attention-forward.py
+	$(PYTEST) -vs python/examples/gluon/01-attention-forward.py
 
 .PHONY: test-regression
 test-regression: all

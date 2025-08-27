@@ -184,6 +184,9 @@ class constexpr_type(base_type):
     def __repr__(self) -> str:
         return f"constexpr_type[{self.value}]"
 
+    def __hash__(self):
+        return hash(self.value)
+
     def mangle(self) -> str:
         return repr(self)
 
@@ -207,6 +210,9 @@ class constexpr(base_value):
 
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
+
+    def __hash__(self):
+        return hash((self.value, self.type))
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         return
@@ -3360,7 +3366,7 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
             dispatch_args[i], _ = _semantic.binary_op_type_checking_impl(dispatch_args[i], broadcast_arg,
                                                                          arithmetic_check=arithmetic_check)
         if not all_scalar:
-            ret_type = broadcast_arg.type
+            ret_type = broadcast_arg.type.with_element_ty(ret_type)
     func = _semantic.builder.create_extern_elementwise
     return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_type, is_pure, _semantic)
 

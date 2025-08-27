@@ -1453,11 +1453,8 @@ struct TritonAMDGPUAccelerateMatmulPass
           /*benefit=*/2);
       break;
     case ISAFamily::RDNA3:
-      // Only gfx12 is supported for now
-      if (getWmmaVersion(archGenerationName) == 2) {
-        ttg::populateDecomposeScaledBlockedPatterns(mfmaPatterns,
-                                                    /*benefit=*/3);
-      }
+      ttg::populateDecomposeScaledBlockedPatterns(mfmaPatterns,
+                                                  /*benefit=*/3);
       mfmaPatterns.add<::BlockedToWMMA>(
           context, getWmmaVersion(archGenerationName), matrixInstructionSize,
           /*benefit=*/2);

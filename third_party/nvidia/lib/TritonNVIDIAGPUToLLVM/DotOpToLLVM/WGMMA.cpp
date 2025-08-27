@@ -102,8 +102,13 @@ static Value createDescriptor(ConversionPatternRewriter &rewriter, Location loc,
   default:
     llvm::report_fatal_error("Unsupported swizzling size.");
   }
-  desc.strideDimensionBaseOffset = swizzling >> 1;
-  desc.leadDimensionBaseOffset = (swizzling * stride) >> 4;
+  if (swizzling == 0) {
+    desc.leadDimensionBaseOffset = 16 >> 4; // 16 bytes.
+    desc.strideDimensionBaseOffset = (8 * 16) >> 4;
+  } else {
+    desc.leadDimensionBaseOffset = (swizzling * stride) >> 4;
+    desc.strideDimensionBaseOffset = swizzling >> 1;
+  }
   return b.int_val(64, desc.descriptor);
 }
 
@@ -139,18 +144,23 @@ Value mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::smemLoad(
   if (trans) {
     std::swap(k, m);
   }
-  Value leading_offset =
-      tb.mul(tb.udiv(k, elemsPerSwizzlingRowVal),
-             tb.i32_val(shape[1 - fastMovingDim] * elemsPerSwizzlingRow));
-  Value stride_offset = tb.mul(m, elemsPerSwizzlingRowVal);
-  Value offset = tb.add(tb.add(leading_offset, stride_offset),
-                        tb.urem(k, elemsPerSwizzlingRowVal));
   Value off1;
-  // Avoid the runtime udiv if we know the elements are byte multiples
-  if (elemBits % 8) {
-    off1 = tb.udiv(tb.mul(tb.i32_val(elemBits), offset), tb.i32_val(8));
+  if (elemsPerSwizzlingRow > 0) {
+    Value leading_offset =
+        tb.mul(tb.udiv(k, elemsPerSwizzlingRowVal),
+               tb.i32_val(shape[1 - fastMovingDim] * elemsPerSwizzlingRow));
+    Value stride_offset = tb.mul(m, elemsPerSwizzlingRowVal);
+    Value offset = tb.add(tb.add(leading_offset, stride_offset),
+                          tb.urem(k, elemsPerSwizzlingRowVal));
+    // Avoid the runtime udiv if we know the elements are byte multiples
+    if (elemBits % 8) {
+      off1 = tb.udiv(tb.mul(tb.i32_val(elemBits), offset), tb.i32_val(8));
+    } else {
+      off1 = tb.mul(tb.i32_val(elemBits / 8), offset);
+    }
   } else {
-    off1 = tb.mul(tb.i32_val(elemBits / 8), offset);
+    off1 = tb.mul(k, tb.i32_val(shape[1 - fastMovingDim]));
+    off1 = tb.add(off1, tb.mul(m, tb.i32_val(1024)));
   }
   Value smemBase = tb.ptrtoint(i32_ty, base);
   smemBase = tb.add(smemBase, off1);
