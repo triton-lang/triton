@@ -663,15 +663,15 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
         contig_dim = 0 if shared_layout.transposed else 1
         if shape[contig_dim] < (8 * shared_layout.swizzle_byte_width) / shared_layout.element_bitwidth:
             pytest.skip("contig_dim too small for swizzle_byte_width in NVMMASharedLayout")
-    
+
     # A simple blocked layout
     num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(dist_layout, shape))))
-    blocked_layout = ttgl.BlockedLayout(
-        size_per_thread=[1, 1], threads_per_warp=[4, THREADS_PER_WARP // 4], warps_per_cta=[1, num_warps], order=[0, 1]
-    )
+    blocked_layout = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[4, THREADS_PER_WARP // 4],
+                                        warps_per_cta=[1, num_warps], order=[0, 1])
 
     @gluon.jit
-    def kernel(x_ptr, y_ptr, shape_tuple: ttgl.constexpr, src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+    def kernel(x_ptr, y_ptr, shape_tuple: ttgl.constexpr, src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr,
+               shared_layout: ttgl.constexpr):
         M: ttgl.constexpr = shape_tuple[0]
         N: ttgl.constexpr = shape_tuple[1]
         offs_m_src = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, src_layout))[:, None]
@@ -736,22 +736,29 @@ def test_local_load_store_3d_layouts(shape, dtype, dist_layout, shared_layout, d
     )
 
     @gluon.jit
-    def kernel(x_ptr, y_ptr, shape_tuple: ttgl.constexpr, src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+    def kernel(x_ptr, y_ptr, shape_tuple: ttgl.constexpr, src_layout: ttgl.constexpr, dst_layout: ttgl.constexpr,
+               shared_layout: ttgl.constexpr):
         M: ttgl.constexpr = shape_tuple[0]
         N: ttgl.constexpr = shape_tuple[1]
         K: ttgl.constexpr = shape_tuple[2]
-        offs_m_src = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, parent=ttgl.SliceLayout(2, src_layout)))[:, None, None]
-        offs_n_src = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, parent=ttgl.SliceLayout(2, src_layout)))[None, :, None]
-        offs_k_src = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, parent=ttgl.SliceLayout(1, src_layout)))[None, None, :]
+        offs_m_src = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, parent=ttgl.SliceLayout(2, src_layout)))[:, None,
+                                                                                                           None]
+        offs_n_src = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, parent=ttgl.SliceLayout(2, src_layout)))[None, :,
+                                                                                                           None]
+        offs_k_src = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, parent=ttgl.SliceLayout(1, src_layout)))[None,
+                                                                                                           None, :]
 
         x = ttgl.load(x_ptr + offs_m_src * N * K + offs_n_src * K + offs_k_src)
 
         shared_desc = ttgl.allocate_shared_memory(x.dtype, shape_tuple, shared_layout, value=x)
         y = shared_desc.load(dst_layout)
 
-        offs_m_dst = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, parent=ttgl.SliceLayout(2, dst_layout)))[:, None, None]
-        offs_n_dst = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, parent=ttgl.SliceLayout(2, dst_layout)))[None, :, None]
-        offs_k_dst = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, parent=ttgl.SliceLayout(1, dst_layout)))[None, None, :]
+        offs_m_dst = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, parent=ttgl.SliceLayout(2, dst_layout)))[:, None,
+                                                                                                           None]
+        offs_n_dst = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, parent=ttgl.SliceLayout(2, dst_layout)))[None, :,
+                                                                                                           None]
+        offs_k_dst = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, parent=ttgl.SliceLayout(1, dst_layout)))[None,
+                                                                                                           None, :]
         ttgl.store(y_ptr + offs_m_dst * N * K + offs_n_dst * K + offs_k_dst, y)
 
     torch.manual_seed(0)
