@@ -274,7 +274,8 @@ ttng::TCGen5CommitOp ttng::createCommit(OpBuilder &builder,
 }
 
 SmallVector<ttng::TCGen5CommitOp>
-ttng::collectCommitOpsAfter(ttng::MMAv5OpInterface mmaOp) {
+ttng::collectCommitOpsAfter(ttng::MMAv5OpInterface mmaOp,
+                            std::function<bool(Operation *)> stopAt) {
   auto isConstTrue = [](Value v) {
     if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
       if (auto attr = dyn_cast<BoolAttr>(constOp.getValueAttr())) {
@@ -292,7 +293,7 @@ ttng::collectCommitOpsAfter(ttng::MMAv5OpInterface mmaOp) {
   Operation *nextOp = mmaOp->getNextNode();
   auto mmaPred = mmaOp.getPredicate();
 
-  while (nextOp && !isa<ttng::MMAv5OpInterface>(nextOp)) {
+  while (nextOp && (stopAt == nullptr || !stopAt(nextOp))) {
     if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(nextOp)) {
       if ((isConstTrue(mmaPred) && commit.getPred() == nullptr) ||
           equalPred(mmaPred, commit.getPred())) {
@@ -301,6 +302,7 @@ ttng::collectCommitOpsAfter(ttng::MMAv5OpInterface mmaOp) {
     }
     nextOp = nextOp->getNextNode();
   }
+
   return commitOps;
 }
 

@@ -32,8 +32,11 @@ bool hasLoadsAfterMMA(MMAv5OpInterface mma, scf::ForOp forOp);
 TCGen5CommitOp createCommit(OpBuilder &builder, MMAv5OpInterface mmaOp,
                             Value barrier, Value pred = Value());
 
+// Scan through the ops after the mmaOp in its block and collect commit ops.
+// Scanning is terminated if the stopAt condition evaluates to true.
 SmallVector<TCGen5CommitOp>
-collectCommitOpsAfter(MMAv5OpInterface mmaOp);
+collectCommitOpsAfter(MMAv5OpInterface mmaOp,
+                      std::function<bool(Operation *)> stopAt = nullptr);
 
 // Helper class to determine if the operands of an MMA operation are
 // pipelineable.

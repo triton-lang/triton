@@ -703,6 +703,12 @@ getRemappedBarriers(ArrayRef<ttng::TCGen5CommitOp> commitOps,
   return barriers;
 }
 
+SmallVector<ttng::TCGen5CommitOp>
+collectCommitOpsAfter(ttng::MMAv5OpInterface mmaOp) {
+  return ttng::collectCommitOpsAfter(
+      mmaOp, [](Operation *op) { return isa<ttng::MMAv5OpInterface>(op); });
+}
+
 struct TCGen5MMAOpConversion
     : public ConvertOpToLLVMPattern<ttng::TCGen5MMAOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -713,7 +719,7 @@ struct TCGen5MMAOpConversion
     auto AEnc = op.getA().getType().getEncoding();
     auto BEnc = op.getB().getType().getEncoding();
     auto typeConverter = getTypeConverter();
-    auto commitOps = ttng::collectCommitOpsAfter(op);
+    auto commitOps = ::collectCommitOpsAfter(op);
     assert(
         (isa<NVMMASharedEncodingAttr, ttng::TensorMemoryEncodingAttr>(AEnc)) &&
         "Operand A should use Shared or Tensor memory layout.");
@@ -743,7 +749,7 @@ struct TCGen5MMAScaledOpConversion
   LogicalResult
   matchAndRewrite(ttng::TCGen5MMAScaledOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto commitOps = ttng::collectCommitOpsAfter(op);
+    auto commitOps = ::collectCommitOpsAfter(op);
     if (auto barriers = getRemappedBarriers(commitOps, rewriter)) {
       convertScaledDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor,
                        *barriers);
