@@ -14,15 +14,48 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK: llvm.cond_br %[[P1]]
   // CHECK: %[[E:.+]] = nvvm.elect.sync -> i1
   // CHECK-COUNT-8: @$5 tcgen05.mma.cta_group::1.kind::f16 [ $0 + 0 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}, %[[E]]
-  // CHECK: %[[PRED:.+]] = llvm.and %arg6, %[[E]]
-  // CHECK: @$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [$1];", "b,l" %[[PRED]]
+  // CHECK: @$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [$1];", "b,l" %[[E]]
   tt.func @tc_gen5_mma(%a: !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>,
                        %b: !ttg.memdesc<128x128xf16, #shared1, #ttg.shared_memory>,
                        %c: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
                        %useAcc: i1,
                        %pred: i1,
-                       %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>,
-                       %barrierPred: i1) {
+                       %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>) {
+    ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred {is_async} :
+       !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf16, #shared1, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.tc_gen5_commit %barrier, %pred : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>
+    tt.return
+  }
+}
+
+// -----
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 256, 32]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>
+#shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: @tc_gen5_mma_commit_different_predicates
+  // CHECK: %[[WID:.+]] = nvgpu.warp_id
+  // CHECK: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK: %[[P0:.+]] = llvm.icmp "eq" %[[WID]], %[[C0]] : i32
+  // CHECK: %[[P1:.+]] = llvm.and %{{.*}}, %[[P0]]  : i1
+  // CHECK: llvm.cond_br %[[P1]]
+  // CHECK: ^bb
+  // CHECK: %[[E:.+]] = nvvm.elect.sync -> i1
+  // CHECK-COUNT-8: @$5 tcgen05.mma.cta_group::1.kind::f16 [ $0 + 0 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}, %[[E]]
+  // CHECK: ^bb
+  // CHECK: %[[PRED:.+]] = llvm.and %arg6, {{.*}}
+  // CHECK: @$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [$1];", "b,l" %[[PRED]]
+  tt.func @tc_gen5_mma_commit_different_predicates(%a: !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>,
+                                                   %b: !ttg.memdesc<128x128xf16, #shared1, #ttg.shared_memory>,
+                                                   %c: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>,
+                                                   %useAcc: i1,
+                                                   %pred: i1,
+                                                   %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>,
+                                                   %barrierPred: i1) {
     ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred {is_async} :
        !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>,
        !ttg.memdesc<128x128xf16, #shared1, #ttg.shared_memory>,
@@ -280,8 +313,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
                        %c: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>,
                        %useAcc: i1,
                        %pred: i1,
-                       %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>,
-                       %barrierPred: i1) {
+                       %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>) {
     // CHECK: tcgen05.mma.cta_group::2.kind::f16
     // CHECK: tcgen05.mma.cta_group::2.kind::f16
     // CHECK: tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster.multicast::cluster.b64
@@ -289,7 +321,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
        !ttg.memdesc<256x32xf16, #shared, #ttg.shared_memory>,
        !ttg.memdesc<32x128xf16, #shared1, #ttg.shared_memory>,
        !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>
-    ttng.tc_gen5_commit %barrier, %barrierPred : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>
+    ttng.tc_gen5_commit %barrier, %pred : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>
     tt.return
   }
 }
@@ -308,7 +340,8 @@ tt.func public @tmem_copy_2d(%src: !ttg.memdesc<256x16xi8, #shared, #ttg.shared_
 		                         %barrier: !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory>) {
   // CHECK-COUNT-8: tcgen05.cp.cta_group::1.warpx4.32x128b
   // CHECK: tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64
-  ttng.tmem_copy %src, %dst, %barrier : !ttg.memdesc<256x16xi8, #shared, #ttg.shared_memory>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory>
+  ttng.tmem_copy %src, %dst : !ttg.memdesc<256x16xi8, #shared, #ttg.shared_memory>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+  ttng.tc_gen5_commit %barrier : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory>
   tt.return
 }
 
