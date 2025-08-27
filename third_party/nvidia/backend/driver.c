@@ -27,7 +27,7 @@ static bool gpuAssert(CUresult code, const char *file, int line) {
 #define CUDA_CHECK_AND_RETURN_NULL(ans)                                        \
   do {                                                                         \
     if (!gpuAssert((ans), __FILE__, __LINE__))                                 \
-      goto cleanup;                                                           \
+      goto cleanup;                                                            \
   } while (0)
 
 // To be used inside a Py_{BEGIN,END}_ALLOW_THREADS block.
@@ -45,7 +45,7 @@ static bool gpuAssert(CUresult code, const char *file, int line) {
     if ((funcPointer) == NULL) {                                               \
       (funcPointer) = (initializerFunction)();                                 \
       if ((funcPointer) == NULL) {                                             \
-        goto cleanup;                                                           \
+        goto cleanup;                                                          \
       }                                                                        \
     }                                                                          \
   } while (0)
@@ -292,7 +292,7 @@ typedef struct {
   CUtensorMap tensorMap;
 } PyCUtensorMapObject;
 
-static PyObject* PyCUtensorMap_alloc(PyTypeObject *type, Py_ssize_t n_items) {
+static PyObject *PyCUtensorMap_alloc(PyTypeObject *type, Py_ssize_t n_items) {
   PyCUtensorMapObject *self = NULL;
   void *mem = NULL;
   size_t size = type->tp_basicsize;
@@ -302,12 +302,13 @@ static PyObject* PyCUtensorMap_alloc(PyTypeObject *type, Py_ssize_t n_items) {
     return NULL;
   }
 
-  self = (PyCUtensorMapObject*)mem;
+  self = (PyCUtensorMapObject *)mem;
   PyObject_INIT(self, type);
-  return (PyObject*)self;
+  return (PyObject *)self;
 }
 
-static PyObject *PyCUtensorMap_new(PyTypeObject *type, PyObject *args, PyObject *kwargs) {
+static PyObject *PyCUtensorMap_new(PyTypeObject *type, PyObject *args,
+                                   PyObject *kwargs) {
   PyCUtensorMapObject *self = (PyCUtensorMapObject *)type->tp_alloc(type, 0);
   if (!self) {
     return NULL;
@@ -319,13 +320,11 @@ static void PyCUtensorMap_dealloc(PyObject *self) {
   Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
-static void PyCUtensorMap_free(void *ptr) {
-  free(ptr);
-}
+static void PyCUtensorMap_free(void *ptr) { free(ptr); }
 
 static PyTypeObject PyCUtensorMapType = {
-    PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name ="triton.backends.nvidia.PyCUtensorMap",
+    PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+        "triton.backends.nvidia.PyCUtensorMap",
     .tp_basicsize = sizeof(PyCUtensorMapObject),
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT,
@@ -350,7 +349,8 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
     return NULL;
   }
 
-  PyCUtensorMapObject *desc = (PyCUtensorMapObject *)PyObject_CallObject((PyObject *)&PyCUtensorMapType, NULL);
+  PyCUtensorMapObject *desc = (PyCUtensorMapObject *)PyObject_CallObject(
+      (PyObject *)&PyCUtensorMapType, NULL);
   if (!desc) {
     return NULL;
   }

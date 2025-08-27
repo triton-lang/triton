@@ -644,7 +644,7 @@ def make_tensordesc_arg(arg, metadata):
 def wrap_handle_tensordesc(launcher, signature, tensordesc_meta):
     has_tensor_desc_arg = any(isinstance(sig, str) and sig.startswith("tensordesc") for sig in signature.values())
     if not has_tensor_desc_arg:
-      return launcher
+        return launcher
 
     tensordesc_indices = set(
         [i for i, sig in enumerate(signature.values()) if isinstance(sig, str) and sig.startswith("tensordesc")])
