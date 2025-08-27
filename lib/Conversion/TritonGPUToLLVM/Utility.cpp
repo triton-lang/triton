@@ -567,7 +567,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 std::function<Value(Value)> calcPaddedOffset,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
                 RewriterBase &rewriter, const TargetInfoBase &targetInfo,
-                Operation *localLoadOp) {
+                std::optional<int> maybeMaxVecElems, Operation *localLoadOp) {
 
   bool isStore = !valsArray.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -593,7 +593,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBase,
                    calcPaddedOffset, affineOffset, maskSpanAffineOffset, laneId,
-                   warpId, rewriter, targetInfo, {}, emitLdSt);
+                   warpId, rewriter, targetInfo, maybeMaxVecElems, emitLdSt);
 }
 
 SmallVector<Value> lowerLdSt(
@@ -728,9 +728,17 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   }
   auto affineOffset = smemObj.getShmemOffset(loc, rewriter, srcTy);
   auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(srcTy);
-  return lowerLdStShared(
-      loc, ctx, cvt, valsArray, llvmElemTy, smemObj.getBase(), calcPaddedOffset,
-      affineOffset, maskSpanAffineOffset, rewriter, targetInfo, localLoadOp);
+
+  std::optional<int> maybeMaxVecElems;
+  if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+          srcTy.getEncoding())) {
+    maybeMaxVecElems = paddedEnc.getMinInterval();
+  }
+
+  return lowerLdStShared(loc, ctx, cvt, valsArray, llvmElemTy,
+                         smemObj.getBase(), calcPaddedOffset, affineOffset,
+                         maskSpanAffineOffset, rewriter, targetInfo,
+                         maybeMaxVecElems, localLoadOp);
 }
 
 bool emitTransferBetweenRegistersAndShared(
