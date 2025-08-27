@@ -167,7 +167,8 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     return emitError() << encoding << " is not a valid encoding";
   }
 
-  // PaddedSharedEncodingAttr is also a SharedEncodingTrait so treat separatly
+  // PaddedSharedEncodingAttr is also a SharedEncodingTrait but we have some
+  // additional rules to verify
   if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(encoding)) {
     auto rank = enc.getRank();
 

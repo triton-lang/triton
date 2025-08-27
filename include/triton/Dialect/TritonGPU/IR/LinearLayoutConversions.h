@@ -76,8 +76,8 @@ LinearLayout getLayoutWithinBlock(const LinearLayout &layout);
 // layout of a CGA (i.e. a block), and ensures that the resulting layout has the
 // given shape.
 //
-// See the nomenclature note at the top of the file for why the variable with
-// type CTALayoutAttr is called cgaLayoutAttr.
+// See the nomenclature note at the top LinearLayoutConversions.cpp for why the
+// variable with type CTALayoutAttr is called cgaLayoutAttr.
 LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
                                     const CTALayoutAttr &cgaLayoutAttr,
                                     ArrayRef<int64_t> shape);

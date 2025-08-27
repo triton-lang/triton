@@ -351,7 +351,7 @@ SmallVector<unsigned> orderPerDimImpl(const LinearLayout &ll,
   for (auto i : defaultOrder) {
     order.insert(i);
   }
-  return SmallVector<unsigned>(order.begin(), order.end());
+  return order.takeVector();
 }
 
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
@@ -1690,7 +1690,7 @@ LogicalResult PaddedSharedEncodingAttr::verify(
       return emitError() << "Each offset basis must be 0 or a power of two.";
     }
     if (!llvm::all_of(dimBases, [&](const auto &basis) {
-          return llvm::count_if(basis, nonZero) != basis.size();
+          return llvm::count_if(basis, nonZero) != 0;
         })) {
       return emitError() << "Broadcasting offset basis are not supported.";
     }

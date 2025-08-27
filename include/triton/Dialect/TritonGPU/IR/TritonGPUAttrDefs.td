@@ -381,10 +381,9 @@ def PaddedSharedEncodingAttr
 An encoding for tensors whose elements may be simultaneously accessed by
 different GPU threads in the programs, via shared memory. In other words,
 for all indices i \in Z^d, \mathcal{L}(i) = {0, 1, ..., 32*num_warps - 1}.
-Compared to SwizzledSharedEncodingAttr, this encoding uses padding to avoid
-shared memory bank conflicts. For cases where padding alone cannot efficiently
-avoid shared memory bank conflicts it has a linear component to further rearange
-elements.
+Compared to SwizzledSharedEncodingAttr, this encoding combines padding with
+element reordering via linear transformation (e.g. row permutation) to avoid
+shared memory bank conflicts.
 
 Formally, given a layout:
     padded_shared<[<interval_0>:+<pad_0>, <interval_1>:+<pad_1>, ...]>
@@ -415,7 +414,7 @@ elements and `pN` to mean padding:
     ...]
 
 Furthermore this encoding allows for a linear remapping from the 1-D shared
-memory offset to logical n-D tensor elements. The remapping is gives in the form
+memory offset to logical n-D tensor elements. The remapping is given in the form
 of linear bases mapping from offset to [dim0, dim1...dimN-1].
 See LinearLayout.h for more details how linear layouts are applied to remap
 elements.
@@ -425,7 +424,7 @@ and `pN` to mean padding:
 1. 1D Single interval-padding with strided elements
 
     #ttg.padded_shared<[2:+2] {offset = [[2], [1]], block = []}>
-    [x0, x3, p0 p1,
+    [x0, x2, p0 p1,
      x1, x3, p2, p3
      ...]
 
