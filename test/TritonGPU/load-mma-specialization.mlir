@@ -115,7 +115,9 @@ tt.func @warp_specialize_tma_matmul(
     %b_T_shared = ttg.memdesc_trans %b_shared {order = array<i32: 1, 0>} : !ttg.memdesc<128x64xf16, #shared, #smem> -> !ttg.memdesc<64x128xf16, #shared_trans, #smem>
     %c_tmem, %c_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
     // CHECK-NEXT: [[IS_LAST:%.*]] = arith.cmpi eq, [[K]], [[LAST_ITER]]
-    // CHECK-NEXT: [[MMA_TOK:%.*]] = ttng.tc_gen5_mma [[A_BUF]], [[B_T]], [[ACC_BUF]][], [[TRUE]], [[TRUE]], [[READY_MBAR]][%true], [[DONE_MBAR0]][[[IS_LAST]]] {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: [[MMA_TOK:%.*]] = ttng.tc_gen5_mma [[A_BUF]], [[B_T]], [[ACC_BUF]][], [[TRUE]], [[TRUE]] {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: tc_gen5_commit [[DONE_MBAR0]], [[IS_LAST]]
+    // CHECK-NEXT: tc_gen5_commit [[READY_MBAR]]
     %mma_tok = ttng.tc_gen5_mma %a_shared, %b_T_shared, %c_tmem[%c_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared_trans, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
 
     %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
@@ -186,7 +188,8 @@ tt.func @unsupported_load() {
 
     %c_tmem, %c_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
     // CHECK: [[IS_LAST:%.*]] = arith.cmpi eq, %{{.*}}, %c31_i32
-    // CHECK-NEXT: ttng.tc_gen5_mma %{{.*}}, [[ACC]][], %true, %true, [[DONE_MBAR0]][[[IS_LAST]]] {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: ttng.tc_gen5_mma %{{.*}}, [[ACC]][], %true, %true {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: ttng.tc_gen5_commit [[DONE_MBAR0]], [[IS_LAST]]
     %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
     %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
 
@@ -344,7 +347,9 @@ tt.func @matmul_tma_acc_with_unconditional_user(
     // CHECK-NEXT: [[ACC_BUF:%.*]] = ttg.memdesc_index [[ACC_BUFS]]{{\[}}[[ACC_INDEX]]{{\]}}
 
     // CHECK-NEXT: [[CUR_ACC_READY_BAR:%.*]] = ttg.memdesc_index [[ACC_READY_BUFS]]{{\[}}[[ACC_INDEX]]{{\]}}
-    // CHECK-NEXT: [[MMA_TOK:%.*]] = ttng.tc_gen5_mma %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_BUF]][], %true, %true, {{.*}}, [[CUR_ACC_READY_BAR]][%true] {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: [[MMA_TOK:%.*]] = ttng.tc_gen5_mma %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_BUF]][], %true, %true {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: ttng.tc_gen5_commit [[CUR_ACC_READY_BAR]]
+    // CHECK-NEXT: ttng.tc_gen5_commit
     %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
 
     // CHECK-NEXT: ttng.wait_barrier [[CUR_ACC_READY_BAR]], [[ACC_PHASE]] {ttg.partition = 0 : i32}
@@ -432,8 +437,10 @@ tt.func @matmul_tma_acc_with_conditional_user(
 
     // CHECK-NEXT: [[ACC_BUF:%.*]] = ttg.memdesc_index [[ACC_BUFS]]{{\[}}[[ACC_INDEX]]{{\]}}
     // CHECK-NEXT: [[CUR_ACC_READY_BAR:%.*]] = ttg.memdesc_index [[ACC_READY_BUFS]]{{\[}}[[ACC_INDEX]]{{\]}}
+    // CHECK-NEXT: [[MMA_TOK:%.*]] = ttng.tc_gen5_mma %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_BUF]][], %true, %true {is_async, ttg.partition = 1 : i32}
     // CHECK-NEXT: [[DO_EPILOGUE:%.*]] = arith.cmpi
-    // CHECK-NEXT: [[MMA_TOK:%.*]] = ttng.tc_gen5_mma %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_BUF]][], %true, %true, {{.*}}, [[CUR_ACC_READY_BAR]][[[DO_EPILOGUE]]] {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: ttng.tc_gen5_commit [[CUR_ACC_READY_BAR]], [[DO_EPILOGUE]]
+    // CHECK-NEXT: ttng.tc_gen5_commit
     %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
     %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
 
@@ -528,7 +535,9 @@ tt.func @matmul_tma_acc_with_conditional_def(
     // CHECK-NEXT: [[ACC_BUF:%.*]] = ttg.memdesc_index [[ACC_BUFS]]{{\[}}[[ACC_INDEX]]{{\]}}
 
     // CHECK-NEXT: [[CUR_ACC_READY_BAR:%.*]] = ttg.memdesc_index [[ACC_READY_BUFS]]{{\[}}[[ACC_INDEX]]{{\]}}
-    // CHECK-NEXT: [[MMA_TOK:%.*]] = ttng.tc_gen5_mma %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_BUF]][], %true, %true, {{.*}}, [[CUR_ACC_READY_BAR]][%true] {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: [[MMA_TOK:%.*]] = ttng.tc_gen5_mma %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_BUF]][], %true, %true {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: tc_gen5_commit [[CUR_ACC_READY_BAR]]
+    // CHECK-NEXT: tc_gen5_commit
     %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
     %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
 
@@ -619,8 +628,10 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
     // CHECK-NEXT: [[ACC_BUF:%.*]] = ttg.memdesc_index [[ACC_BUFS]]{{\[}}[[ACC_INDEX]]{{\]}}
 
     // CHECK-NEXT: [[CUR_ACC_READY_BAR:%.*]] = ttg.memdesc_index [[ACC_READY_BUFS]]{{\[}}[[ACC_INDEX]]{{\]}}
+    // CHECK-NEXT: [[MMA_TOK:%.*]] = ttng.tc_gen5_mma %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_BUF]][], %true, %true {is_async, ttg.partition = 1 : i32}
     // CHECK-NEXT: [[DO_EPILOGUE:%.*]] = arith.cmpi
-    // CHECK-NEXT: [[MMA_TOK:%.*]] = ttng.tc_gen5_mma %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_BUF]][], %true, %true, {{.*}}, [[CUR_ACC_READY_BAR]][[[DO_EPILOGUE]]] {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: tc_gen5_commit [[CUR_ACC_READY_BAR]], [[DO_EPILOGUE]]
+    // CHECK-NEXT: tc_gen5_commit
     %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
     %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
 
@@ -723,8 +734,10 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
     %b_shared = ttg.local_alloc %b : (tensor<64x128xf16, #oper_layout>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
     %c_tmem, %c_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
 
+    // CHECK-NEXT: [[MMA_TOK:%.*]] = ttng.tc_gen5_mma %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_BUF]][], [[FLAG]], %true {is_async, ttg.partition = 1 : i32}
     // CHECK-NEXT: [[DO_EPILOGUE:%.*]] = arith.cmpi eq, [[K:%.*]], %c0_i32 : i32
-    // CHECK-NEXT: [[MMA_TOK:%.*]] = ttng.tc_gen5_mma %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_BUF]][], [[FLAG]], %true, {{.*}}, [[ACC_READY_BUF0]][[[DO_EPILOGUE]]] {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: tc_gen5_commit [[ACC_READY_BUF0]], [[DO_EPILOGUE]]
+    // CHECK-NEXT: tc_gen5_commit
     %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %flag, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
     %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
 
@@ -972,8 +985,10 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_flag(
     // CHECK-NEXT: [[ACC_BUF:%.*]] = ttg.memdesc_index [[ACC_BUFS]]{{\[}}[[ACC_INDEX]]{{\]}}
     // CHECK-NEXT: [[CUR_ACC_READY_BUF:%.*]] = ttg.memdesc_index [[ACC_READY_BUFS]]{{\[}}[[ACC_INDEX]]{{\]}}
 
+    // CHECK-NEXT: ttng.tc_gen5_mma %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_BUF]][], [[FLAG]], %true {is_async, ttg.partition = 1 : i32}
     // CHECK-NEXT: [[DO_EPILOGUE:%.*]] = arith.cmpi eq, [[K:%.*]], %c0_i32
-    // CHECK-NEXT: ttng.tc_gen5_mma %{{[0-9]+}}, %{{[0-9]+}}, [[ACC_BUF]][], [[FLAG]], %true, {{.*}}, [[CUR_ACC_READY_BUF]][[[DO_EPILOGUE]]] {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: tc_gen5_commit [[CUR_ACC_READY_BUF]], [[DO_EPILOGUE]]
+    // CHECK-NEXT: tc_gen5_commit
     %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %flag, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
     %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
 
@@ -1093,7 +1108,8 @@ tt.func @specialize_mma_only(%rhs_desc: !tt.tensordesc<tensor<64x128xf16, #share
     %rhs_T = ttg.memdesc_trans %rhs {order = array<i32: 1, 0>} : !ttg.memdesc<128x64xf16, #shared, #smem> -> !ttg.memdesc<64x128xf16, #shared_trans, #smem>
     %acc_tmem, %acc_tok = ttng.tmem_alloc %next_acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
     // CHECK: wait_barrier [[EMPTY_BAR0]]{{.*}}partition = 1
-    // CHECK-NEXT: ttng.tc_gen5_mma %arg1, [[RHS_T]], {{.*}} [[READY_BAR0]][%true] {{.*}}partition = 1
+    // CHECK-NEXT: ttng.tc_gen5_mma %arg1, [[RHS_T]], {{.*}}
+    // CHECK-NEXT: tc_gen5_commit [[READY_BAR0]]
     %mma_tok = ttng.tc_gen5_mma %lhs, %rhs_T, %acc_tmem[%acc_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared_trans, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
     %c, %load_tok = ttng.tmem_load %acc_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
 
@@ -1138,7 +1154,9 @@ tt.func @load_scale_mma_user(
     // CHECK: wait_barrier [[USER_DONE:%.*]], %arg{{[0-9]+}}, %true {{.*}}partition = 1
     // CHECK: wait_barrier [[SCALES_READY_BAR]]{{.*}}partition = 1
     %acc_tmem, %acc_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
-    // CHECK-NEXT: tc_gen5_mma_scaled {{.*}} [[SCALES_TMEM]]{{.*}} [[USER_BAR:%.*]][%true], [[SCALES_TMEM_BAR]][%true] {{.*}}partition = 1
+    // CHECK-NEXT: tc_gen5_mma_scaled {{.*}} [[SCALES_TMEM]]{{.*}}
+    // CHECK-NEXT: tc_gen5_commit [[SCALES_TMEM_BAR]]
+    // CHECK-NEXT: tc_gen5_commit [[USER_BAR:%.*]], %true {ttg.partition = 1 : i32}
     %mma_tok = ttng.tc_gen5_mma_scaled %lhs, %rhs, %acc_tmem[%acc_tok], %scales_tmem, %b_scales, %true, %true lhs = e4m3 rhs = e4m3 : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>, !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
 
     // CHECK: wait_barrier [[USER_BAR]]{{.*}}partition = 0
@@ -1208,7 +1226,8 @@ tt.func @store_mma_load(
     %acc_tmem, %acc_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
 
     // CHECK-NEXT: wait_barrier [[MMA_ENTRY_BAR]], {{.*}}partition = 1
-    // CHECK-NEXT: tc_gen5_mma {{.*}} [[MMA_EXIT_BAR]][%true]
+    // CHECK-NEXT: tc_gen5_mma {{.*}}
+    // CHECK-NEXT: tc_gen5_commit [[MMA_EXIT_BAR]]
     %mma_tok = ttng.tc_gen5_mma %lhs_shared, %rhs, %acc_tmem[%acc_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
 
     // CHECK-NEXT: wait_barrier [[MMA_EXIT_BAR]], {{.*}}partition = 0
@@ -1250,7 +1269,9 @@ tt.func @local_alloc_into_mma(
     %rhs_reg_mod = arith.addf %rhs_reg, %rhs_reg : tensor<64x128xf16, #oper_layout>
     %rhs_shared = ttg.local_alloc %rhs_reg_mod : (tensor<64x128xf16, #oper_layout>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
     // CHECK: wait_barrier [[MMA_READY_BAR]], {{.*}}partition = 1
-    // CHECK-NEXT: tc_gen5_mma [[LHS_SHARED]], [[RHS_SHARED]], {{.*}} [[MMA_OPER_BAR]][%true] {{.*}}partition = 1
+    // CHECK-NEXT: tc_gen5_mma [[LHS_SHARED]], [[RHS_SHARED]], {{.*}} {{.*}}partition = 1
+    // CHECK-NEXT  tc_gen5_commit [[MMA_OPER_BAR]]
+    // CHECK-NEXT: tc_gen5_commit
     %mma_tok = ttng.tc_gen5_mma %lhs_shared, %rhs_shared, %acc[%acc_tok], %true, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
     scf.yield %mma_tok : !ttg.async.token
   } {tt.warp_specialize, tt.num_stages = 2 : i32}
@@ -1473,7 +1494,9 @@ tt.func public @attention_forward(
     // CHECK-NEXT: [[QK_EMPTY_BAR:%.*]] = ttg.memdesc_index [[QK_EMPTY_MBARS]]{{\[}}[[QK_INDEX]]{{\]}}
     // CHECK-NEXT: wait_barrier [[QK_EMPTY_BAR]], [[QK_PHASE]], %true {ttg.partition = 1 : i32}
     // CHECK-NEXT: [[QK_READY_BAR:%.*]] = ttg.memdesc_index [[QK_READY_MBARS]]{{\[}}[[QK_INDEX]]{{\]}}
-    // CHECK-NEXT: tc_gen5_mma [[Q_SHARED]], [[K_TRANS]], [[QK_BUF]][], %false, %true, [[K_EMPTY_BAR]][%true], [[QK_READY_BAR]][%true] {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: tc_gen5_mma [[Q_SHARED]], [[K_TRANS]], [[QK_BUF]][], %false, %true {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: tc_gen5_commit [[QK_READY_BAR]]
+    // CHECK-NEXT: tc_gen5_commit [[K_EMPTY_BAR]]
     %QK_tmem, %QK_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>, !ttg.async.token)
     %QK_mma_tok = ttng.tc_gen5_mma %Q_shared, %K_trans, %QK_tmem[%QK_tok], %false, %true : !ttg.memdesc<256x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared_T, #smem>, !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>
 
@@ -1549,7 +1572,10 @@ tt.func public @attention_forward(
     // CHECK-NEXT: wait_barrier [[P_READY_BAR0]], [[P_PHASE]] {ttg.partition = 1 : i32}
     %P_tmem = ttng.tmem_alloc %P : (tensor<256x64xf16, #blocked>) -> !ttg.memdesc<256x64xf16, #tmem_lhs, #ttng.tensor_memory>
     %acc_tmem, %acc_tok = ttng.tmem_alloc %acc_corrected : (tensor<256x64xf32, #blocked>) -> (!ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>, !ttg.async.token)
-    // CHECK-NEXT: tc_gen5_mma [[P_BUF]], [[V_BUF]], [[PV_0]][], %true, %true, [[V_EMPTY_BAR]][%true], [[PV_READY_BAR0]][%true], [[P_EMPTY_BAR0]][%true] {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: tc_gen5_mma [[P_BUF]], [[V_BUF]], [[PV_0]][], %true, %true {is_async, ttg.partition = 1 : i32}
+    // CHECK-NEXT: tc_gen5_commit [[P_EMPTY_BAR0]]
+    // CHECK-NEXT: tc_gen5_commit [[PV_READY_BAR0]]
+    // CHECK-NEXT: tc_gen5_commit [[V_EMPTY_BAR]]
     %PV_mma_tok = ttng.tc_gen5_mma %P_tmem, %V_shared, %acc_tmem[%acc_tok], %true, %true : !ttg.memdesc<256x64xf16, #tmem_lhs, #ttng.tensor_memory>, !ttg.memdesc<64x64xf16, #shared, #smem>, !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>
     %O, %O_tok = ttng.tmem_load %acc_tmem[%PV_mma_tok] : !ttg.memdesc<256x64xf32, #tmem_acc, #ttng.tensor_memory, mutable> -> tensor<256x64xf32, #blocked>
 
