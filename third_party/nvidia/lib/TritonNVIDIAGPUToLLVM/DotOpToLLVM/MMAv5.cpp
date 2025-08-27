@@ -696,7 +696,7 @@ collectCommitOpAfter(ttng::MMAv5OpInterface mmaOp) {
   };
   auto equalPred = [=](Value pred1, Value pred2) {
     // Keep it simple for now. TODO: Check structural equality?
-    return isConstTrue(pred1) && isConstTrue(pred2);
+    return (isConstTrue(pred1) && isConstTrue(pred2)) || pred1 == pred2;
   };
 
   SmallVector<ttng::TCGen5CommitOp> commitOps;
