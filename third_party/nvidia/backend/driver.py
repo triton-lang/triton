@@ -152,6 +152,7 @@ def make_launcher(constants, signature, tensordesc_meta):
                     # we have to pass the shape and strides twice.
                     for _ in range(2 * ndim):
                         output.append("i64")
+                    output.append("i1")
                 else:
                     output.append("nvTmaDesc")
 
@@ -619,7 +620,7 @@ def make_tensordesc_arg(arg, metadata):
         # descriptors which is why we provide our own decomposition
         # above. Sadly this means we have to pass the shape and strides
         # twice.
-        return [arg.base, *arg.shape, *arg.strides, *arg.shape, *arg.strides]
+        return [arg.base, *arg.shape, *arg.strides, arg.padding == "nan", *arg.shape, *arg.strides]
 
     swizzle = metadata["swizzle"]
     elem_size = metadata["elem_size"]
@@ -630,6 +631,7 @@ def make_tensordesc_arg(arg, metadata):
     shape = arg.shape
     strides = arg.strides
     assert strides[-1] == 1
+    padding = 1 if arg.padding == "nan" else 0
 
     if fp4_padded:
         shape = list(shape)
@@ -643,6 +645,7 @@ def make_tensordesc_arg(arg, metadata):
         block_size,
         shape,
         strides,
+        padding,
     )
 
     return [cu_tensor_map, *shape, *strides]

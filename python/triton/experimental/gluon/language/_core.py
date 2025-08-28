@@ -397,6 +397,27 @@ def full(shape, value, dtype, layout=None, _semantic=None):
 
 
 @builtin
+def histogram(input, num_bins, mask=None, layout=None, _semantic=None, _generator=None):
+    """
+    Compute a histogram of a 1D integer tensor.
+
+    Args:
+        input (tensor): 1D tensor of integer values.
+        num_bins (int): Number of bins. Bins have width 1 and start at 0.
+        mask (Optional[tensor]): Boolean mask to exclude elements when False.
+        layout (DistributedLayout): Destination layout of the output histogram.
+
+    Returns:
+        tensor: 1D int32 tensor of length `num_bins` with the requested layout.
+    """
+    num_bins = _unwrap_if_constexpr(num_bins)
+    layout = _unwrap_if_constexpr(layout)
+    if mask is not None:
+        mask = _semantic.to_tensor(mask)
+    return _semantic.histogram(input, num_bins, mask, layout)
+
+
+@builtin
 def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None) -> shared_memory_descriptor:
     """
     Allocate shared memory for a tensor with the given element type, shape, and layout.

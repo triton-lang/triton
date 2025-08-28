@@ -349,9 +349,10 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
   PyObject *blockSize;
   PyObject *shape;
   PyObject *strides;
+  int padding;
 
-  if (!PyArg_ParseTuple(args, "KiiiOOO", &global_address, &swizzle, &elemSize,
-                        &elemType, &blockSize, &shape, &strides)) {
+  if (!PyArg_ParseTuple(args, "KiiiOOOi", &global_address, &swizzle, &elemSize,
+                        &elemType, &blockSize, &shape, &strides, &padding)) {
     return NULL;
   }
 
@@ -425,6 +426,10 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
   Py_DECREF(stridesFast);
   stridesFast = NULL;
 
+  CUtensorMapFloatOOBfill fill =
+      (padding == 1) ? CU_TENSOR_MAP_FLOAT_OOB_FILL_NAN_REQUEST_ZERO_FMA
+                     : CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE;
+
   uint32_t elementStrides[5] = {1, 1, 1, 1, 1};
   static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiled = NULL;
   INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeTiled,
@@ -433,7 +438,7 @@ static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
       &desc->tensorMap, elemType, rank, (void *)global_address, shapeInt,
       stridesLL, blockSizeInt, elementStrides, CU_TENSOR_MAP_INTERLEAVE_NONE,
       swizzle, CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
-      CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE));
+      fill));
 
   return (PyObject *)desc;
 
