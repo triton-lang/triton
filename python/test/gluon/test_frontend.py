@@ -8,7 +8,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
-from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, async_copy
+from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, TensorMemoryScalesLayout, async_copy
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.amd import _layouts as amd_layouts
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
@@ -73,6 +73,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@filecheck_test
+@gluon.jit
+def test_histogram_frontend():
+    # CHECK: #blocked = #ttg.blocked
+    # CHECK-LABEL: test_histogram_frontend
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    x = ttgl.arange(0, 256, layout=layout)
+    m = x < 128
+    # CHECK: tt.histogram %{{.*}}, %{{.*}} : tensor<256xi32, #blocked> -> tensor<512xi32, #blocked>
+    _ = ttgl.histogram(x, 512, mask=m, layout=layout)
 
 
 @filecheck_test
@@ -583,11 +595,11 @@ def test_tcgen05_copy():
     num_cols: ttgl.constexpr = smem_h * 4 // 32
 
     shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=2)
-    tmem_layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 32], unpacked=True)
+    tmem_layout: ttgl.constexpr = TensorMemoryScalesLayout()
     # CHECK: [[SRC:%.*]] = ttg.local_alloc
-    src = ttgl.allocate_shared_memory(ttgl.int32, [smem_h, 4], shared_layout)
+    src = ttgl.allocate_shared_memory(ttgl.int8, [smem_h, 4], shared_layout)
     # CHECK: [[DST:%.*]] = ttng.tmem_alloc
-    dst = blackwell.allocate_tensor_memory(ttgl.int32, [128, num_cols], tmem_layout)
+    dst = blackwell.allocate_tensor_memory(ttgl.int8, [128, num_cols], tmem_layout)
     # CHECK: ttng.tmem_copy [[SRC]], [[DST]]
     blackwell.tcgen05_copy(src, dst)
 
@@ -1330,6 +1342,36 @@ def test_inline_asm_elementwise():
     x = ttgl.arange(0, 16, layout)
     # CHECK: elementwise_inline_asm {{.*}} : tensor<16xi32, [[BLOCKED:#.*]]> -> tensor<16xi32, [[BLOCKED]]>
     ttgl.inline_asm_elementwise("mov $0, $0;", "=r,r", [x], dtype=x.dtype, is_pure=True, pack=1)
+
+
+@gluon.jit
+def load_kernel(inp, xnumel):
+    block_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    xindex = ttgl.arange(0, 128, block_layout)
+    mask = xindex < xnumel
+    ttgl.load(inp + xindex, mask=mask, other=0.0)
+
+
+@pytest.mark.parametrize("target", ALL_TARGETS)
+def test_load(target):
+    mod = run_parser(load_kernel, *make_args(MockTensor(ttgl.float32), xnumel=100), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @load_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32) attributes {noinline = false} {
+    %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked>
+    %1 = tt.splat %arg1 : i32 -> tensor<128xi32, #blocked>
+    %2 = arith.cmpi slt, %0, %1 : tensor<128xi32, #blocked>
+    %3 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<128x!tt.ptr<f32>, #blocked>
+    %4 = tt.addptr %3, %0 : tensor<128x!tt.ptr<f32>, #blocked>, tensor<128xi32, #blocked>
+    %cst = arith.constant 0.000000e+00 : f32
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128xf32, #blocked>
+    %5 = tt.load %4, %2, %cst_0 : tensor<128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+""")
 
 
 @gluon.jit

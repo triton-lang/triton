@@ -228,7 +228,7 @@ class shared_memory_descriptor(base_value):
         return str(self.type)
 
     @builtin
-    def load(self, layout, _semantic: GluonSemantic) -> tensor:
+    def load(self, layout, _semantic: GluonSemantic = None) -> tensor:
         """
         Load a tensor from shared memory.
 
@@ -242,7 +242,7 @@ class shared_memory_descriptor(base_value):
         return _semantic.shared_load(self, layout)
 
     @builtin
-    def store(self, value, _semantic: GluonSemantic) -> None:
+    def store(self, value, _semantic: GluonSemantic = None) -> None:
         """
         Store a tensor into shared memory.
 
@@ -284,7 +284,7 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_index(self, index)
 
     @builtin
-    def permute(self, order, _semantic: GluonSemantic) -> shared_memory_descriptor:
+    def permute(self, order, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
         Permute the dimensions of the shared memory descriptor.
 
@@ -298,7 +298,7 @@ class shared_memory_descriptor(base_value):
         return _semantic.memdesc_trans(self, order)
 
     @builtin
-    def reshape(self, shape, _semantic: GluonSemantic) -> shared_memory_descriptor:
+    def reshape(self, shape, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
         Reshape the shared memory descriptor to a new shape and layout.
 
@@ -397,7 +397,28 @@ def full(shape, value, dtype, layout=None, _semantic=None):
 
 
 @builtin
-def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None):
+def histogram(input, num_bins, mask=None, layout=None, _semantic=None, _generator=None):
+    """
+    Compute a histogram of a 1D integer tensor.
+
+    Args:
+        input (tensor): 1D tensor of integer values.
+        num_bins (int): Number of bins. Bins have width 1 and start at 0.
+        mask (Optional[tensor]): Boolean mask to exclude elements when False.
+        layout (DistributedLayout): Destination layout of the output histogram.
+
+    Returns:
+        tensor: 1D int32 tensor of length `num_bins` with the requested layout.
+    """
+    num_bins = _unwrap_if_constexpr(num_bins)
+    layout = _unwrap_if_constexpr(layout)
+    if mask is not None:
+        mask = _semantic.to_tensor(mask)
+    return _semantic.histogram(input, num_bins, mask, layout)
+
+
+@builtin
+def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None) -> shared_memory_descriptor:
     """
     Allocate shared memory for a tensor with the given element type, shape, and layout.
 

@@ -4,6 +4,7 @@ import copy
 import hashlib
 import inspect
 import itertools
+import threading
 import re
 import textwrap
 from collections import defaultdict
@@ -502,6 +503,7 @@ class JITCallable:
         self.signature = inspect.signature(fn)
         self.raw_src, self.starting_line_number = inspect.getsourcelines(fn)
         self._fn_name = get_full_name(fn)
+        self._hash_lock = threading.RLock()
 
         # function source code (without decorators)
         src = textwrap.dedent("".join(self.raw_src))
@@ -533,7 +535,9 @@ class JITCallable:
     @property
     def cache_key(self):
         # TODO : hash should be attribute of `self`
-        if self.hash is None:
+        with self._hash_lock:
+            if self.hash is not None:
+                return self.hash
             # Set a placeholder hash to break recursion in case the function
             # transitively calls itself. The full hash is set after.
             self.hash = f"recursion:{self._fn_name}"
@@ -595,7 +599,7 @@ class JitFunctionInfo:
 
 
 def compute_cache_key(kernel_key_cache, specialization, options):
-    key = (tuple(specialization), tuple(options.items()))
+    key = (tuple(specialization), str(options))
     cache_key = kernel_key_cache.get(key, None)
     if cache_key is not None:
         return cache_key

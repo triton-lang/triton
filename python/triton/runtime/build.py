@@ -22,7 +22,6 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
         return impl(name, src, srcdir, library_dirs, include_dirs, libraries)
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
-    # try to avoid setuptools if possible
     cc = os.environ.get("CC")
     if cc is None:
         clang = shutil.which("clang")
