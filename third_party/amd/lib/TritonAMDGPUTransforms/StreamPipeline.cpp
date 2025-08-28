@@ -442,7 +442,7 @@ static bool isCoalesced(RankedTensorType loadType,
   return true;
 }
 
-static bool bypassLDS(Operation *load, Operation *use) {
+static Operation *bypassLDS(Operation *load, Operation *use) {
   // Determine if it is safe to bypass LDS for dot operands.
   // Normally, dot operation operands are consumed in the dot MFMA layout,
   // which is not coalesced. To better utilize global memory bandwidth,
@@ -462,12 +462,12 @@ static bool bypassLDS(Operation *load, Operation *use) {
   // to decide if it is coalesced enough to load directly, without needing
   // any further rearrangement.
   if (!load || !use)
-    return false;
+    return nullptr;
 
   // Only applies to dot-like ops (scaled/regular) that conform to this
   // interface.
   if (!isa<tt::DotOpInterface>(use))
-    return false;
+    return nullptr;
 
   // Find operands of 'use' that are in the forward slice of 'load'.
   SetVector<Operation *> fwdSlice;
@@ -484,17 +484,17 @@ static bool bypassLDS(Operation *load, Operation *use) {
 
   // Expect that 'load' op matches with a single operand for dot op.
   if (defs.size() != 1)
-    return false;
+    return nullptr;
 
   Operation *def = defs.front();
   if (!def)
-    return false;
+    return nullptr;
 
   // Thread encodings from 'def' back to 'load', skipping explicit converts.
   Attribute resultEnc =
       cast<RankedTensorType>(def->getResult(0).getType()).getEncoding();
   if (!resultEnc)
-    return false;
+    return nullptr;
 
   Attribute srcEnc = nullptr;
   Operation *cur = def;
@@ -502,7 +502,7 @@ static bool bypassLDS(Operation *load, Operation *use) {
   while (cur && cur != load) {
     if (!isa<triton::ReshapeOp, triton::TransposeOpInterface,
              ttg::ConvertLayoutOp>(cur)) {
-      return false;
+      return nullptr;
     }
     // Skip explicit layout converts.
     if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(cur)) {
@@ -513,7 +513,7 @@ static bool bypassLDS(Operation *load, Operation *use) {
     // Infer the source encoding that would produce 'resultEnc' from 'cur' op.
     srcEnc = inferSrcEncoding(cur, resultEnc);
     if (!srcEnc)
-      return false;
+      return nullptr;
 
     resultEnc = srcEnc;
     assert(cur->getNumOperands() == 1);
@@ -524,21 +524,21 @@ static bool bypassLDS(Operation *load, Operation *use) {
 
   // Must land exactly on the original load.
   if (cur != load || !srcEnc)
-    return false;
+    return nullptr;
 
   // Check coalescing under the inferred linear encoding.
   auto loadType = cast<RankedTensorType>(load->getResult(0).getType());
   auto distTrait = dyn_cast<ttg::DistributedEncodingTrait>(srcEnc);
   if (!distTrait)
-    return false;
+    return nullptr;
 
   auto srcLL = ttg::toLinearEncoding(distTrait, loadType.getShape());
   if (!isCoalesced(loadType, srcLL))
-    return false;
+    return nullptr;
 
   // Finally, rewrite the load to use the inferred (better) encoding.
-  convertOpEncoding(srcEnc, load);
-  return true;
+  auto newOp = convertOpEncoding(srcEnc, load);
+  return newOp;
 };
 
 LoadToInfoMap
@@ -568,12 +568,14 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
   LoadToInfoMap loadToInfo;
   for (const auto &[load, info] : loadOpToIndLevel) {
     auto [distance, use] = info;
-    if (bypassLDS(load, use)) {
-      continue;
+    auto newLoad = bypassLDS(load, use);
+    if (!newLoad) {
+      auto sharedEncoding =
+          getSharedEncIfAllUsersAreDotEnc(load->getResult(0)).value_or(nullptr);
+      loadToInfo[load] = {sharedEncoding, distance, use};
+    } else {
+      loadToInfo[newLoad] = {nullptr, distance, use};
     }
-    auto sharedEncoding =
-        getSharedEncIfAllUsersAreDotEnc(load->getResult(0)).value_or(nullptr);
-    loadToInfo[load] = {sharedEncoding, distance, use};
   }
 
   return loadToInfo;

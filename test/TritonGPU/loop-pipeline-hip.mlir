@@ -922,12 +922,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // COMMON-LABEL: bypass_lds_b_operand
 
-//         SYNC: %[[load:.+]] = tt.load %97
-//         SYNC: %[[reshape1:.+]] = tt.reshape %[[load]]
+//         SYNC: %[[load:.+]] = tt.load %100
+//         SYNC: %[[reshape1:.+]] = tt.reshape %arg24
 //         SYNC: %[[trans1:.+]] = tt.trans %[[reshape1]]
 //         SYNC: %[[reshape2:.+]] = tt.reshape %[[trans1]]
 //         SYNC: %[[trans2:.+]] = tt.trans %[[reshape2]]
 //         SYNC: tt.dot_scaled {{.*}}, %[[trans2]]
+//         SYNC: scf.yield {{.*}}, %[[load]]
+
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>

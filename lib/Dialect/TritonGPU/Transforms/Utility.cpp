@@ -1174,7 +1174,7 @@ static Type getNewType(Type type, Attribute encoding) {
                                tensorType.getElementType(), encoding);
 }
 
-void convertOpEncoding(Attribute encoding, Operation *op) {
+Operation *convertOpEncoding(Attribute encoding, Operation *op) {
   OpBuilder builder(op);
   // Convert operands
   // For load/store with tensor pointers, we don't have to change the
@@ -1214,6 +1214,7 @@ void convertOpEncoding(Attribute encoding, Operation *op) {
     op->getResult(i).replaceAllUsesWith(newResult);
   }
   op->erase();
+  return newOp;
 }
 
 namespace {
