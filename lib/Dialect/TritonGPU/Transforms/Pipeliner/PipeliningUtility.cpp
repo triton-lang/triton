@@ -643,7 +643,24 @@ ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(Operation *op) {
   if (localAllocEnc)
     return localAllocEnc;
 
-  // Use generic layout. This won't be optimal for 2D tensors.
+  // Use generic layout but ensure CTALayout matches the source pointer's layout
+  // when available, so that src/dst CTALayouts are identical for cp.async.
+  // This helps make the convert layout trivial over the `block` dimension.
+  if (auto load = dyn_cast<tt::LoadOp>(op)) {
+    Value srcPtr = load.getPtr();
+    Type srcPtrTy = srcPtr.getType();
+    if (auto ptrTy = dyn_cast<triton::PointerType>(srcPtrTy)) {
+      Type pointee = ptrTy.getPointeeType();
+      if (auto rankedTensor = dyn_cast<RankedTensorType>(pointee)) {
+        if (Attribute srcEncAttr = rankedTensor.getEncoding()) {
+          if (auto srcCta = ttg::getCTALayout(srcEncAttr)) {
+            ctaLayout = srcCta;
+          }
+        }
+      }
+    }
+  }
+
   return ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
                                               ctaLayout);
 }
