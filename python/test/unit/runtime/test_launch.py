@@ -194,10 +194,11 @@ def test_launch_with_options(options) -> None:
 
     # check the options are passed on to compile_info correctly
     option_key, option_val = next(iter(options.items()))
-    # HIPOptions overwrite the extern_libs option, so we skip the test
-    # passing and specializing options still is tested
-    if option_key == "extern_libs" and not is_hip():
-        assert compile_info[option_key] == tuple(option_val.items())
+    if option_key == "extern_libs":
+        # HIPOptions overwrite the extern_libs option, so we skip the test
+        # passing and specializing options still is tested
+        if not is_hip():
+            assert compile_info[option_key] == tuple(option_val.items())
     else:
         assert compile_info[option_key] == option_val
 
