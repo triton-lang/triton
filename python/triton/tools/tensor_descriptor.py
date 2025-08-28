@@ -26,6 +26,8 @@ class TensorDescriptor:
             assert (stride * elem_bytes) % 16 == 0, "strides must be 16-byte aligned"
         assert self.strides[-1] == 1, "Last dimension must be contiguous"
         assert self.padding == "zero" or self.padding == "nan", "Illegal value for padding"
+        if self.padding == "nan":
+            assert self.base.dtype.is_floating_point, "Padding option `nan` is only supported for floating point tensors"
 
     @staticmethod
     def from_tensor(tensor: Any, block_shape: List[int], padding="zero"):
