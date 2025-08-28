@@ -1,6 +1,8 @@
 #ifndef PROTON_UTILITY_STRING_H_
 #define PROTON_UTILITY_STRING_H_
 
+#include <cstdlib>
+#include <cxxabi.h>
 #include <string>
 
 namespace proton {
@@ -56,6 +58,20 @@ inline std::vector<std::string> split(const std::string &str,
   }
   result.push_back(str.substr(start, end));
   return result;
+}
+
+inline std::string demangle(const std::string &mangledName) {
+  int status = 0;
+  char *demangled =
+      abi::__cxa_demangle(mangledName.c_str(), nullptr, nullptr, &status);
+
+  if (status == 0 && demangled) {
+    std::string result(demangled);
+    std::free(demangled);
+    return result;
+  }
+
+  return mangledName;
 }
 
 } // namespace proton
