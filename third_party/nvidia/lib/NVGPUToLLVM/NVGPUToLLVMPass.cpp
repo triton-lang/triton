@@ -660,6 +660,7 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
     auto ctx = ret->getContext();
     auto loc = ret.getLoc();
     auto voidTy = void_ty(ctx);
+    b.create<NVVM::Barrier0Op>(loc);
     PTXBuilder ptxBuilder;
     // Calculate the predicate in the inline asm to avoid creating long
     // liveranges.

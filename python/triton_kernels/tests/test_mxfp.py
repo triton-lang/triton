@@ -1,6 +1,5 @@
 import pytest
 import torch
-
 from triton_kernels.numerics_details.mxfp import (
     DequantScaleRoundingMode,
     downcast_to_mxfp,
@@ -16,7 +15,7 @@ def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
     return torch.uint8 if dtype_str == "float4_e2m1" else getattr(torch, dtype_str)
 
 
-@pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16"])
+@pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
 def test_mxfp4_rounding_cases(dst_dtype):
     dst_dtype = dtype_str_to_torch(dst_dtype)
     x = torch.tensor([6, 0, 0.24, 0.25, 0.75, 0.99, 1.2, 1.3]).cuda().bfloat16().view(1, -1, 1)
@@ -33,7 +32,7 @@ def test_mxfp4_rounding_cases(dst_dtype):
 
 
 @pytest.mark.parametrize("src_dtype", ["float4_e2m1", "float8_e5m2", "float8_e4m3fn"])
-@pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16"])
+@pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
 def test_mxfp_quant_dequant(src_dtype, dst_dtype):
     if "float8" in src_dtype and torch.cuda.get_device_capability()[0] < 9:
         pytest.skip("Float8 not tested on A100")
@@ -79,7 +78,7 @@ def test_mxfp_quant_dequant(src_dtype, dst_dtype):
     ],
 )
 # fmt: on
-@pytest.mark.parametrize("dequant_dtype", ["float16", "bfloat16"])
+@pytest.mark.parametrize("dequant_dtype", ["float16", "bfloat16", "float32"])
 def test_mxfp_casting(
     shape: tuple[int, ...],
     axis: int,

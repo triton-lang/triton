@@ -1,4 +1,5 @@
 import ast
+import builtins
 import contextlib
 import copy
 import inspect
@@ -1354,7 +1355,15 @@ class CodeGenerator(ast.NodeVisitor):
         if fn in self.builtin_namespace.values():
             args = map(_unwrap_if_constexpr, args)
         ret = fn(*args, **kws)
-        return _apply_to_tuple_values(ret, lambda x: x) if _is_namedtuple(type(ret)) else ret
+
+        def wrap_constexpr(x):
+            if _is_triton_value(x):
+                return x
+            return constexpr(x)
+
+        if isinstance(ret, (builtins.tuple, language.tuple)):
+            return _apply_to_tuple_values(ret, wrap_constexpr)
+        return wrap_constexpr(ret)
 
     def call_Method(self, node, fn, fn_self, args, kws):
         if isinstance(fn, JITFunction):
@@ -1582,7 +1591,11 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
                               jit_fn=fn, is_kernel=True, file_name=file_name, begin_line=begin_line, options=options,
                               codegen_fns=codegen_fns, module_map=module_map, module=module, is_gluon=fn.is_gluon())
     generator.visit(fn.parse())
-    ret = generator.module
+    module = generator.module
     # module takes ownership of the context
-    ret.context = context
-    return ret
+    module.context = context
+    if not module.verify_with_diagnostics():
+        if not fn.is_gluon():
+            print(module)
+        raise RuntimeError("error encountered during parsing")
+    return module

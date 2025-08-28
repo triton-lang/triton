@@ -1209,6 +1209,14 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
   return offset;
 }
 
+Value SharedMemoryObject::getShmemAffineBase(
+    Location loc, RewriterBase &rewriter,
+    triton::gpu::MemDescType srcTy) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value offset = getShmemOffset(loc, rewriter, srcTy);
+  return b.gep(base.getType(), baseElemType, base, offset);
+}
+
 Value getStructFromSharedMemoryObject(Location loc,
                                       const SharedMemoryObject &smemObj,
                                       RewriterBase &rewriter) {
