@@ -262,9 +262,22 @@ def make_launcher(constants, signature, tensordesc_meta):
     params.append("&profile_scratch")
     src = f"""
 #include \"cuda.h\"
-#include <stdbool.h>
-#include <Python.h>
 #include <dlfcn.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#define PY_SSIZE_T_CLEAN
+#include <Python.h>
+
+// dummy to get the size of expanded types of PyObject_HEAD macro
+typedef struct {{
+  PyObject_HEAD;
+}} _PyAlignmentHead;
+
+typedef struct {{
+  PyObject_HEAD;
+  int8_t padding[128 - sizeof(_PyAlignmentHead)];
+  CUtensorMap tensorMap;
+}} PyCUtensorMapObject;
 
 static inline void gpuAssert(CUresult code, const char *file, int line)
 {{
@@ -418,12 +431,6 @@ cleanup:
   return ptr_info;
 
 }}
-
-typedef struct {{
-  PyObject_HEAD;
-  int8_t padding[112];
-  CUtensorMap tensorMap;
-}} PyCUtensorMapObject;
 
 static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
   if (sizeof(CUtensorMap*) != 8) {{

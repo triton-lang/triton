@@ -5,6 +5,17 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
+// dummy to get the size of expanded types of PyObject_HEAD macro
+typedef struct {
+  PyObject_HEAD;
+} _PyAlignmentHead;
+
+typedef struct {
+  PyObject_HEAD;
+  int8_t padding[128 - sizeof(_PyAlignmentHead)];
+  CUtensorMap tensorMap;
+} PyCUtensorMapObject;
+
 // Raises a Python exception and returns false if code is not CUDA_SUCCESS.
 static bool gpuAssert(CUresult code, const char *file, int line) {
   if (code == CUDA_SUCCESS)
@@ -286,11 +297,6 @@ static PyObject *setPrintfFifoSize(PyObject *self, PyObject *args) {
   Py_RETURN_NONE;
 }
 
-typedef struct {
-  PyObject_HEAD;
-  int8_t padding[112];
-  CUtensorMap tensorMap;
-} PyCUtensorMapObject;
 
 static PyObject *PyCUtensorMap_alloc(PyTypeObject *type, Py_ssize_t n_items) {
   PyCUtensorMapObject *self = NULL;
