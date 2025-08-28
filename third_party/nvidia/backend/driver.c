@@ -306,33 +306,26 @@ static PyObject *PyCUtensorMap_alloc(PyTypeObject *type, Py_ssize_t n_items) {
   return (PyObject *)self;
 }
 
-static PyObject *PyCUtensorMap_new(PyTypeObject *type, PyObject *args,
-                                   PyObject *kwargs) {
-  PyCUtensorMapObject *self = (PyCUtensorMapObject *)type->tp_alloc(type, 0);
-  if (!self) {
-    return NULL;
-  }
-  return (PyObject *)self;
-}
-
 static void PyCUtensorMap_dealloc(PyObject *self) {
-  Py_TYPE(self)->tp_free((PyObject *)self);
+  Py_TYPE(self)->tp_free(self);
 }
 
 static void PyCUtensorMap_free(void *ptr) { free(ptr); }
 
+// clang-format off
 static PyTypeObject PyCUtensorMapType = {
-    PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-        "triton.backends.nvidia.PyCUtensorMap",
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "triton.backends.nvidia.PyCUtensorMap",
     .tp_basicsize = sizeof(PyCUtensorMapObject),
     .tp_itemsize = 0,
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_doc = "<PyCUtensorMap object>",
-    .tp_new = PyCUtensorMap_new,
+    .tp_new = PyType_GenericNew,
     .tp_alloc = PyCUtensorMap_alloc,
     .tp_dealloc = (destructor)PyCUtensorMap_dealloc,
     .tp_free = PyCUtensorMap_free,
 };
+// clang-format on
 
 static PyObject *fillTMADescriptor(PyObject *self, PyObject *args) {
   unsigned long long global_address;
