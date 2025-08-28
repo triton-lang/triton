@@ -214,23 +214,27 @@ Value generateMask(OpBuilder &builder, const Location &loc,
 }
 
 Value generateOther(OpBuilder &builder, Location loc, Type scalarTy,
-                    ArrayRef<int64_t> blockShape, Value paddingOption = nullptr) {
+                    ArrayRef<int64_t> blockShape,
+                    Value paddingOption = nullptr) {
   auto blockTy = RankedTensorType::get(blockShape, scalarTy);
   if (paddingOption && mlir::isa<FloatType>(scalarTy)) {
     auto floatTy = mlir::cast<FloatType>(scalarTy);
     auto nan = llvm::APFloat::getNaN(floatTy.getFloatSemantics());
-    auto nanValue = builder.create<arith::ConstantOp>(loc,
-      SplatElementsAttr::get(blockTy, builder.getFloatAttr(floatTy, nan)));
-    auto zeroValue = builder.create<arith::ConstantOp>(loc,
-      SplatElementsAttr::get(blockTy, builder.getZeroAttr(floatTy)));
-    return builder.create<mlir::arith::SelectOp>(loc, paddingOption, nanValue, zeroValue);
+    auto nanValue = builder.create<arith::ConstantOp>(
+        loc,
+        SplatElementsAttr::get(blockTy, builder.getFloatAttr(floatTy, nan)));
+    auto zeroValue = builder.create<arith::ConstantOp>(
+        loc, SplatElementsAttr::get(blockTy, builder.getZeroAttr(floatTy)));
+    return builder.create<mlir::arith::SelectOp>(loc, paddingOption, nanValue,
+                                                 zeroValue);
   } else {
     auto attr = builder.getZeroAttr(blockTy);
     return builder.create<arith::ConstantOp>(loc, attr);
   }
 }
 
-Value generateOther(OpBuilder &builder, Location loc, TensorDescType descTy, Value paddingOption = nullptr) {
+Value generateOther(OpBuilder &builder, Location loc, TensorDescType descTy,
+                    Value paddingOption = nullptr) {
   auto blockTy = descTy.getSignlessBlockType();
   return generateOther(builder, loc, blockTy.getElementType(),
                        blockTy.getShape(), paddingOption);
@@ -256,9 +260,9 @@ struct RewriteMakeTensorDesc : OpConversionPattern<triton::MakeTensorDescOp> {
                        castToI64(rewriter, adaptor.getShape()));
     llvm::append_range(ptrShapeStridesPaddingOption, adaptor.getStrides());
     auto paddingOption = rewriter.create<mlir::arith::ConstantOp>(
-      op.getLoc(), rewriter.getI1Type(),
-      rewriter.getBoolAttr(adaptor.getPadding() == triton::PaddingOption::PAD_NAN)
-    );
+        op.getLoc(), rewriter.getI1Type(),
+        rewriter.getBoolAttr(adaptor.getPadding() ==
+                             triton::PaddingOption::PAD_NAN));
     llvm::append_values(ptrShapeStridesPaddingOption, paddingOption);
     rewriter.replaceOpWithMultiple(op, {ptrShapeStridesPaddingOption});
     return mlir::success();
@@ -279,9 +283,8 @@ struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
     auto other = generateOther(rewriter, loc, descTy, desc.paddingOption);
     auto newLoad = rewriter.replaceOpWithNewOp<triton::LoadOp>(
         op, generatePtr(rewriter, loc, blockShape, desc, offsets),
-        generateMask(rewriter, loc, blockShape, desc, offsets),
-        other, triton::CacheModifier::NONE,
-        triton::EvictionPolicy::NORMAL, false);
+        generateMask(rewriter, loc, blockShape, desc, offsets), other,
+        triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL, false);
     newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     return llvm::success();
@@ -489,9 +492,9 @@ class TritonRewriteTensorDescriptorToPointerPass
     converter.addConversion([](mlir::triton::TensorDescType t,
                                llvm::SmallVectorImpl<mlir::Type> &out) {
       // We convert a tensor descriptor into an pointer, and a shape and stride
-      // for each dimension, and padding option. i.e., we create 1+2*rank+1 values.
-      // Note that tensor descriptors may be signed/unsigned integers whereas pointers should
-      // always be signless.
+      // for each dimension, and padding option. i.e., we create 1+2*rank+1
+      // values. Note that tensor descriptors may be signed/unsigned integers
+      // whereas pointers should always be signless.
       auto tensorType = t.getSignlessBlockType();
       out.push_back(triton::getPointerType(tensorType.getElementType()));
       out.insert(out.end(), 2 * tensorType.getRank(),
