@@ -181,13 +181,11 @@ class NvidiaTool:
     def from_path(path: str) -> Optional[NvidiaTool]:
         try:
             result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
-            if result is None:
-                return None
             version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
             if version is None:
                 return None
             return NvidiaTool(path, version.group(1))
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             return None
 
 
