@@ -444,7 +444,7 @@ if (Py_TYPE(obj) != (PyTypeObject*)py_tensor_map_type) {{
 }}
 
   CUtensorMap* map = &((PyCUtensorMapObject*)obj)->tensorMap;
-  unsigned long align_128 = (unsigned long)map & (128 - 1);
+  uintptr_t align_128 = (uintptr_t)map & (128 - 1);
   if (align_128 != 0) {{
     PyErr_Format(PyExc_ValueError, "CUtensorMap must be aligned to 128B, but got (&map) mod 128 = %ld", align_128);
     return NULL;
