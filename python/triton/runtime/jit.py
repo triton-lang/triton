@@ -499,7 +499,10 @@ class JITCallable:
     def __init__(self, fn):
         self.fn = fn
         self.signature = inspect.signature(fn)
-        self.raw_src, self.starting_line_number = inspect.getsourcelines(fn)
+        try:
+            self.raw_src, self.starting_line_number = inspect.getsourcelines(fn)
+        except OSError as e:
+            raise ValueError("@jit functions should be defined in a Python file") from e
         self._fn_name = get_full_name(fn)
         self._hash_lock = threading.RLock()
 
@@ -766,10 +769,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
         super().__init__(fn)
         self.module = fn.__module__
         self.version = version
-        self.signature = inspect.signature(fn)
         self.do_not_specialize = do_not_specialize
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
-        self.raw_src, self.starting_line_number = inspect.getsourcelines(fn)
         self._repr = repr
         self.launch_metadata = launch_metadata
 

@@ -810,6 +810,24 @@ def test_mlir_attr_error():
     assert "order must be a permutation of 0..(rank-1), but was [1]" in str(e.value.__cause__)
 
 
+def test_tensor_layout_type_changed():
+
+    @gluon.jit
+    def kernel():
+        layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32],
+                                                    warps_per_cta=[1, 4], order=[1, 0])
+        x = ttgl.zeros([128], ttgl.float32)
+        y = ttgl.zeros([128, 128], ttgl.float32, layout=layout)
+        c = ttgl.to_tensor(True)
+        while c:
+            x = x + y.sum(axis=0)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "Loop-carried variable x has initial type" in str(e.value)
+
+
 @gluon.jit
 def tmem_index_kernel():
     layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 128], unpacked=True)

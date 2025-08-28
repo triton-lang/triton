@@ -152,6 +152,11 @@ class distributed_type(block_type):
     def with_element_ty(self, scalar_ty: dtype) -> block_type:
         return distributed_type(scalar_ty, self.shape, self.layout)
 
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, distributed_type):
+            return False
+        return super().__eq__(other) and self.layout == other.layout
+
 
 class shared_memory_descriptor_type(base_type):
 
