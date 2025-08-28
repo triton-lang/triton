@@ -5,15 +5,9 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
-// dummy to get the size of expanded types of PyObject_HEAD macro
 typedef struct {
   PyObject_HEAD;
-} _PyAlignmentHead;
-
-typedef struct {
-  PyObject_HEAD;
-  int8_t padding[128 - sizeof(_PyAlignmentHead)];
-  CUtensorMap tensorMap;
+  _Alignas(128) CUtensorMap tensorMap;
 } PyCUtensorMapObject;
 
 // Raises a Python exception and returns false if code is not CUDA_SUCCESS.

@@ -269,15 +269,9 @@ def make_launcher(constants, signature, tensordesc_meta):
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
-// dummy to get the size of expanded types of PyObject_HEAD macro
 typedef struct {{
   PyObject_HEAD;
-}} _PyAlignmentHead;
-
-typedef struct {{
-  PyObject_HEAD;
-  int8_t padding[128 - sizeof(_PyAlignmentHead)];
-  CUtensorMap tensorMap;
+  _Alignas(128) CUtensorMap tensorMap;
 }} PyCUtensorMapObject;
 
 static inline void gpuAssert(CUresult code, const char *file, int line)
