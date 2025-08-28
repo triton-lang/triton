@@ -49,7 +49,7 @@ class Epilogue:
     effective_itemsize: float = None
 
 class FnName(Enum):
-    DEQUANTIZE_MXFP8 = auto()
+    QUANTIZE_MXFP8 = auto()
 
 
 EpilogueSpecs = FnSpecs  # TODO: remove this alias when callers are updated
@@ -368,7 +368,7 @@ def matmul_ogs(x, w, bias,
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
     can_use_fused_scatter = has_scatter and (fused_activation.specs.fn is None) and (epilogue.specs.fn is None) and (routing_data.n_expts_act == 1)
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
-        batch_size, M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
+        M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
     )
     if not can_use_fused_scatter and opt_flags.fused_scatter:
         raise InapplicableConstraint("Fused scatter is not supported")
@@ -513,7 +513,7 @@ def matmul_ogs(x, w, bias,
                    X_TMA_MODE=x_tma_mode,
                    Y_TMA_MODE=y_tma_mode,
                    SWAP_XW=get_swap_xw(precision_config, opt_flags),
-                   IS_EPILOGUE_DEQUANT_MXFP8=epilogue.specs.name == FnName.DEQUANTIZE_MXFP8.name,
+                   IS_EPILOGUE_QUANT_MXFP8=epilogue.specs.name == FnName.QUANTIZE_MXFP8.name,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
     # Build grouped reduction inputs in a uniform way

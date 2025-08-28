@@ -1,5 +1,5 @@
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
-from triton_kernels.numerics_details.mxfp import dequantize_mxfp8_fn
+from triton_kernels.numerics_details.mxfp import quantize_mxfp8_fn
 import triton
 import triton.language as tl
 
@@ -75,7 +75,7 @@ def _reduce_grouped(X, stride_xb: tl.uint64, stride_xm: tl.uint64, stride_xn,  #
         out_n_mask = tl.arange(0, BLOCK_N_OUT) < Nrem
         out_n_mask_scale = tl.arange(0, BLOCK_N_OUT // 32) < tl.cdiv(Nrem, 32)
         if HAS_OUT_MX_SCALE:
-            acc, acc_scale = dequantize_mxfp8_fn(acc[None, :], out_n_mask[None, :])
+            acc, acc_scale = quantize_mxfp8_fn(acc[None, :], out_n_mask[None, :])
             acc = tl.reshape(acc, [acc.shape[-1]])
             acc_scale = tl.reshape(acc_scale, [acc_scale.shape[-1]])
         # Convert to flexpoint output if configured (scalar scales)
