@@ -151,6 +151,7 @@ def test_multiple_hooks() -> None:
     {"extern_libs": {}},
 ])
 def test_launch_with_options(options) -> None:
+
     def is_cuda():
         return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
