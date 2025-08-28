@@ -1,4 +1,5 @@
 import ast
+import builtins
 import contextlib
 import copy
 import inspect
@@ -1354,7 +1355,15 @@ class CodeGenerator(ast.NodeVisitor):
         if fn in self.builtin_namespace.values():
             args = map(_unwrap_if_constexpr, args)
         ret = fn(*args, **kws)
-        return _apply_to_tuple_values(ret, lambda x: x) if _is_namedtuple(type(ret)) else ret
+
+        def wrap_constexpr(x):
+            if _is_triton_value(x):
+                return x
+            return constexpr(x)
+
+        if isinstance(ret, (builtins.tuple, language.tuple)):
+            return _apply_to_tuple_values(ret, wrap_constexpr)
+        return wrap_constexpr(ret)
 
     def call_Method(self, node, fn, fn_self, args, kws):
         if isinstance(fn, JITFunction):
