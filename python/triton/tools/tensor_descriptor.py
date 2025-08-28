@@ -9,6 +9,7 @@ class TensorDescriptor:
     shape: List[int]
     strides: List[int]
     block_shape: List[int]
+    padding: str = "zero"
 
     def __post_init__(self):
         rank = len(self.shape)
@@ -24,12 +25,10 @@ class TensorDescriptor:
         for stride in self.strides[:-1]:
             assert (stride * elem_bytes) % 16 == 0, "strides must be 16-byte aligned"
         assert self.strides[-1] == 1, "Last dimension must be contiguous"
+        assert self.padding == "zero" or self.padding == "nan", "Illegal value for padding"
+        if self.padding == "nan":
+            assert self.base.dtype.is_floating_point, "Padding option `nan` is only supported for floating point tensors"
 
     @staticmethod
-    def from_tensor(tensor: Any, block_shape: List[int]):
-        return TensorDescriptor(
-            tensor,
-            tensor.shape,
-            tensor.stride(),
-            block_shape,
-        )
+    def from_tensor(tensor: Any, block_shape: List[int], padding="zero"):
+        return TensorDescriptor(tensor, tensor.shape, tensor.stride(), block_shape, padding)
