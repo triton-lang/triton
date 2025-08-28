@@ -52,7 +52,7 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
         kernel_scale = out_scale.view(-1, out_scale.shape[-1])
 
         BLOCK_OUT_DIM = 128
-        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE
+        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value
         grid_out = triton.cdiv(kernel_src_tensor.shape[0], BLOCK_OUT_DIM)
         grid_quant = triton.cdiv(kernel_src_tensor.shape[1], BLOCK_QUANT_DIM)
 
@@ -83,7 +83,7 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
     assert tensor.dtype in {torch.uint8, torch.float8_e5m2, torch.float8_e4m3fn}, \
         f"Invalid tensor dtype {tensor.dtype=}"
     assert scale.dtype == torch.uint8, f"Invalid scale dtype {scale.dtype=}"
-    assert dtype in (torch.float16, torch.bfloat16), f"Invalid output dtype {dtype=}"
+    assert dtype in (torch.float16, torch.bfloat16, torch.float32), f"Invalid output dtype {dtype=}"
     # upcast
     logical_quant_dim = tensor.shape[axis] * (2 if tensor.dtype == torch.uint8 else 1)
     tensor = tensor.transpose(axis, tensor.ndim - 1).contiguous()
@@ -93,7 +93,7 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
     reshaped_tensor = tensor.view(-1, tensor.shape[-1])
     reshaped_scale = scale.view(-1, scale.shape[-1])
     BLOCK_OUT_DIM = 128
-    BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE
+    BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value
     blocks_out_dim = triton.cdiv(reshaped_out.shape[0], BLOCK_OUT_DIM)
     blocks_quant_dim = triton.cdiv(reshaped_out.shape[1], BLOCK_QUANT_DIM)
     _upcast_from_mxfp[(blocks_out_dim, blocks_quant_dim)](reshaped_out, *reshaped_out.stride(), reshaped_scale,

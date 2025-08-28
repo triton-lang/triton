@@ -8,6 +8,7 @@ import triton
 from triton.compiler import ASTSource, make_backend
 from triton.backends.compiler import GPUTarget
 from triton.experimental.gluon._runtime import GluonASTSource
+from triton.runtime.jit import create_function_from_signature
 from triton._C.libtriton import ir
 
 # ===-----------------------------------------------------------------------===#
@@ -16,7 +17,6 @@ from triton._C.libtriton import ir
 
 # Stub target for testing the frontend.
 stub_target = GPUTarget("cuda", 100, 32)
-stub_backend = make_backend(stub_target)
 
 triton_dir = os.path.dirname(__file__)
 filecheck_path = os.path.join(triton_dir, "FileCheck")
@@ -51,24 +51,29 @@ def run_filecheck(name, module_str, check_template):
             raise ValueError(decoded)
 
 
-def run_parser(kernel_fn):
-    sigkeys = [x.name for x in kernel_fn.params]
-    sigvals = [f"arg{i}" for i in range(len(sigkeys))]
-    signature = {k: v for (k, v) in zip(sigkeys, sigvals)}
+def run_parser(kernel_fn, args=(), kwargs={}, target=stub_target):
+    if "sanitize_overflow" not in kwargs:
+        kwargs = dict(kwargs)
+        kwargs["sanitize_overflow"] = False
+    backend = make_backend(target)
+    binder = create_function_from_signature(
+        kernel_fn.signature,
+        kernel_fn.params,
+        backend,
+    )
+
+    bound_args, specialization, options = binder(*args, **kwargs)
+    options, signature, constexprs, attrs = kernel_fn._pack_args(backend, kwargs, bound_args, specialization, options)
     source_cls = GluonASTSource if kernel_fn.is_gluon() else ASTSource
-    src = source_cls(fn=kernel_fn, signature=signature)
+    src = source_cls(kernel_fn, signature, constexprs, attrs)
 
     context = ir.context()
     ir.load_dialects(context)
-    stub_backend.load_dialects(context)
+    backend.load_dialects(context)
 
-    options = dict(sanitize_overflow=False)
-    options.update(src.parse_options())
-
-    options = stub_backend.parse_options(options)
-    codegen_fns = stub_backend.get_codegen_implementation(options)
-    module_map = stub_backend.get_module_map()
-    module = src.make_ir(options, codegen_fns, module_map, context)
+    codegen_fns = backend.get_codegen_implementation(options)
+    module_map = backend.get_module_map()
+    module = src.make_ir(target, options, codegen_fns, module_map, context)
     assert module.verify()
     return module
 

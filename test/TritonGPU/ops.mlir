@@ -228,3 +228,16 @@ tt.func @split_join_linear_mix(%arg: tensor<128x2xf32, #linear>) attributes {"tt
   tt.return
 }
 }
+
+// -----
+
+// CHECK-LABEL: @async_commit_group
+tt.func @async_commit_group(%arg0: !ttg.async.token) {
+  // CHECK-NEXT: ttg.async_commit_group
+  ttg.async_commit_group
+  // CHECK-NEXT: ttg.async_commit_group tokens %arg0
+  %0 = ttg.async_commit_group tokens %arg0
+  // CHECK-NEXT: ttg.async_commit_group
+  %1 = ttg.async_commit_group
+  tt.return
+}

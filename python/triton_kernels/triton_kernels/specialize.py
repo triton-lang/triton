@@ -19,6 +19,9 @@ def cacheable(f):
     g.fn.__name__ = f.__name__
     g.fn.__module__ = f.__module__
     g.fn.__qualname__ = f.__qualname__
+    g.__name__ = f.__name__
+    g.__module__ = f.__module__
+    g.__qualname__ = f.__qualname__
     g._fn_name = f"{f.__module__}.{f.__qualname__}"
     return g
 

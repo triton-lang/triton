@@ -23,50 +23,6 @@ namespace nvidia_gpu {
 
 namespace {
 
-static Attribute getEncoding(Operation *op, RankedTensorType tensorType,
-                             Value desc) {
-  auto descBlockType = cast<TensorDescType>(desc.getType()).getBlockType();
-  Attribute encoding = descBlockType.getEncoding();
-  if (!encoding) {
-    constexpr auto msg =
-        "Internal Error: Tensor descriptor should have encoding set";
-    op->emitError() << msg;
-    llvm::report_fatal_error(msg);
-  }
-  assert(isa<gpu::SharedEncodingTrait>(encoding));
-  if (descBlockType.getShape() == tensorType.getShape())
-    return encoding;
-
-  // Handle rank reducing loads
-  auto ctx = encoding.getContext();
-  auto rankDiff = descBlockType.getRank() - tensorType.getRank();
-  if (auto nvmmaEnc = dyn_cast<gpu::NVMMASharedEncodingAttr>(encoding)) {
-    auto existingCta = nvmmaEnc.getCTALayout();
-    auto newCtaEnc = gpu::CTALayoutAttr::get(
-        ctx, existingCta.getCTAsPerCGA().slice(rankDiff),
-        existingCta.getCTASplitNum().slice(rankDiff),
-        existingCta.getCTAOrder().slice(rankDiff));
-
-    return gpu::NVMMASharedEncodingAttr::get(
-        ctx, nvmmaEnc.getSwizzlingByteWidth(), nvmmaEnc.getTransposed(),
-        nvmmaEnc.getElementBitWidth(), nvmmaEnc.getFp4Padded(), newCtaEnc);
-  }
-  if (auto swizEnc = dyn_cast<gpu::SwizzledSharedEncodingAttr>(encoding)) {
-    auto existingCta = swizEnc.getCTALayout();
-    auto newCtaEnc = gpu::CTALayoutAttr::get(
-        ctx, existingCta.getCTAsPerCGA().slice(rankDiff),
-        existingCta.getCTASplitNum().slice(rankDiff),
-        existingCta.getCTAOrder().slice(rankDiff));
-    return gpu::SwizzledSharedEncodingAttr::get(
-        ctx, swizEnc.getVec(), swizEnc.getPerPhase(), swizEnc.getMaxPhase(),
-        swizEnc.getOrder().slice(rankDiff), newCtaEnc);
-  }
-
-  constexpr auto msg = "Internal Error: Unhandled tensor descriptor encoding";
-  op->emitError() << msg;
-  llvm::report_fatal_error(msg);
-}
-
 static void
 lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
              function_ref<void(Value, Value, Value, Value)> createLoad,
@@ -152,7 +108,7 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
   assert(isa<gpu::SharedEncodingTrait>(encoding));
   gpu::MemDescType memDescType = gpu::MemDescType::get(
       tensorType.getShape(), tensorType.getElementType(), encoding,
-      sharedMemorySpace, /*mutableMemory=*/true);
+      sharedMemorySpace, /*mutableMemory=*/false);
   Value alloc = rewriter.create<gpu::LocalAllocOp>(loc, memDescType, src);
   rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
   createStore(desc, alloc);

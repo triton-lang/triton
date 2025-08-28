@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <set>
 #include <string>
 #include <vector>
@@ -16,7 +17,6 @@ namespace proton {
 
 class Profiler;
 class Data;
-enum class OutputFormat;
 
 /// A session is a collection of profiler, context source, and data objects.
 /// There could be multiple sessions in the system, each can correspond to a
@@ -29,7 +29,7 @@ public:
 
   void deactivate();
 
-  void finalize(OutputFormat outputFormat);
+  void finalize(const std::string &outputFormat);
 
   size_t getContextDepth();
 
@@ -76,11 +76,11 @@ public:
   size_t addSession(const std::string &path, const std::string &profilerName,
                     const std::string &profilerPath,
                     const std::string &contextSourceName,
-                    const std::string &dataName);
+                    const std::string &dataName, const std::string &mode);
 
-  void finalizeSession(size_t sessionId, OutputFormat outputFormat);
+  void finalizeSession(size_t sessionId, const std::string &outputFormat);
 
-  void finalizeAllSessions(OutputFormat outputFormat);
+  void finalizeAllSessions(const std::string &outputFormat);
 
   void activateSession(size_t sessionId);
 
@@ -100,6 +100,18 @@ public:
 
   void exitOp(const Scope &scope);
 
+  void initFunctionMetadata(
+      uint64_t functionId, const std::string &functionName,
+      const std::vector<std::pair<size_t, std::string>> &scopeIdNames,
+      const std::vector<std::pair<size_t, size_t>> &scopeIdParents,
+      const std::string &metadataPath);
+
+  void enterInstrumentedOp(uint64_t streamId, uint64_t functionId,
+                           uint8_t *buffer, size_t size);
+
+  void exitInstrumentedOp(uint64_t streamId, uint64_t functionId,
+                          uint8_t *buffer, size_t size);
+
   void addMetrics(size_t scopeId,
                   const std::map<std::string, MetricValueType> &metrics);
 
@@ -110,7 +122,8 @@ private:
                                        const std::string &profilerName,
                                        const std::string &profilerPath,
                                        const std::string &contextSourceName,
-                                       const std::string &dataName);
+                                       const std::string &dataName,
+                                       const std::string &mode);
 
   void activateSessionImpl(size_t sessionId);
 
@@ -161,6 +174,27 @@ private:
     updateInterfaceCount<Interface, Counter, false>(sessionId, interfaceCounts);
   }
 
+  template <typename Counter, typename FnT>
+  void executeInterface(Counter &interfaceCounts, FnT &&fn,
+                        bool isReversed = false) {
+    auto process = [&](auto &entry) {
+      if (entry.second > 0) {
+        fn(entry.first);
+      }
+    };
+
+    if (isReversed) {
+      for (auto it = interfaceCounts.rbegin(); it != interfaceCounts.rend();
+           ++it) {
+        process(*it);
+      }
+    } else {
+      for (auto &entry : interfaceCounts) {
+        process(entry);
+      }
+    }
+  }
+
   mutable std::mutex mutex;
 
   size_t nextSessionId{};
@@ -174,6 +208,9 @@ private:
   std::vector<std::pair<ScopeInterface *, size_t>> scopeInterfaceCounts;
   // {op, active count}
   std::vector<std::pair<OpInterface *, size_t>> opInterfaceCounts;
+  // {instrumentation, active count}
+  std::vector<std::pair<InstrumentationInterface *, size_t>>
+      instrumentationInterfaceCounts;
   // {context source, active count}
   std::vector<std::pair<ContextSource *, size_t>> contextSourceCounts;
 };

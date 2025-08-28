@@ -1,5 +1,6 @@
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
@@ -22,9 +23,8 @@ namespace {
 
 // On gfx9 global and buffer loads directly to shared memory need to write
 // coalesced. This pattern converts the layout of the src, mask and other to
-// ensure the owned data per thread is contigious and does no exceed the
-// supported load vector size. The swizzle pattern is ignored here and is
-// handled when lowering to LLVMIR
+// ensure the owned data per thread is contiguous and does no exceed the
+// supported load vector size.
 struct CoalesceAsyncCopyWrites
     : public OpRewritePattern<ttg::AsyncCopyGlobalToLocalOp> {
   CoalesceAsyncCopyWrites(const triton::AMD::TargetInfo &targetInfo,
@@ -49,12 +49,6 @@ struct CoalesceAsyncCopyWrites
       return rewriter.notifyMatchFailure(copyOp,
                                          "src encoding must be #blocked");
 
-    auto sharedEnc =
-        dyn_cast<ttg::SwizzledSharedEncodingAttr>(dstTy.getEncoding());
-    if (!sharedEnc)
-      return rewriter.notifyMatchFailure(
-          copyOp, "destination encoding must be #SwizzledShared");
-
     // We start from the precomputed contiguity we got from AxisAnalysis.
     unsigned loadContig = 0;
     if (auto it = asyncCopyContiguity.find(copyOp);
@@ -77,10 +71,8 @@ struct CoalesceAsyncCopyWrites
 
     // Select the largest supported load width equal or smaller than loadContig
     auto elemBitWidth = dstTy.getElementTypeBitWidth();
-    while (loadContig > 0 && !targetInfo.supportsDirectToLdsLoadBitWidth(
-                                 loadContig * elemBitWidth)) {
-      loadContig /= 2;
-    }
+    loadContig =
+        fitToValidDirectToLdsVecSize(loadContig, elemBitWidth, targetInfo);
 
     if (loadContig == 0) {
       return rewriter.notifyMatchFailure(

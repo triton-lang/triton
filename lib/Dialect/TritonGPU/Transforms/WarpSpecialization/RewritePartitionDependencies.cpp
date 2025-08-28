@@ -48,7 +48,7 @@ struct UseInfo {
 int UseInfo::getMaxUseDistance(const Partition &partition) {
   int maxDistance = 0;
   for (auto [usePartition, distance] : llvm::make_first_range(consumers)) {
-    int dist = 2 + distance;
+    int dist = 1 + distance;
     maxDistance = std::max(maxDistance, dist);
   }
   return maxDistance;
@@ -63,12 +63,14 @@ struct AsyncRef {
                StageCluster srcStageCluster) {
     auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
     auto enterOp = b.createInto<triton::nvws::ArefPutEnterOp>(
-        partition, srcStageCluster, viewType, aref, zero, zero);
+        partition, srcStageCluster, viewType, tokenType, aref, zero, zero);
+    auto token = enterOp.getToken();
 
-    auto exitOp = [this, &partition, srcStageCluster](PartitionBuilder &b) {
+    auto exitOp = [this, &partition, srcStageCluster,
+                   token](PartitionBuilder &b) {
       auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
       auto exitOp = b.createInto<triton::nvws::ArefPutExitOp>(
-          partition, srcStageCluster, aref, zero,
+          partition, srcStageCluster, aref, token, zero,
           b.getArrayAttr(SmallVector<Attribute>{triton::nvws::AsyncOpAttr::get(
               aref.getContext(), triton::nvws::AsyncOp::NONE)}));
     };
@@ -79,12 +81,14 @@ struct AsyncRef {
                StageCluster srcStageCluster) {
     auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
     auto enterOp = b.createInto<triton::nvws::ArefGetEnterOp>(
-        partition, srcStageCluster, viewType, aref, zero, zero);
+        partition, srcStageCluster, viewType, tokenType, aref, zero, zero);
+    auto token = enterOp.getToken();
 
-    auto exitOp = [this, &partition, srcStageCluster](PartitionBuilder &b) {
+    auto exitOp = [this, &partition, srcStageCluster,
+                   token](PartitionBuilder &b) {
       auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
       auto exitOp = b.createInto<triton::nvws::ArefGetExitOp>(
-          partition, srcStageCluster, aref, zero,
+          partition, srcStageCluster, aref, token, zero,
           b.getArrayAttr(SmallVector<Attribute>{triton::nvws::AsyncOpAttr::get(
               aref.getContext(), triton::nvws::AsyncOp::NONE)}));
     };
@@ -93,6 +97,7 @@ struct AsyncRef {
 
   Value aref;
   MemDescType viewType;
+  AsyncTokenType tokenType;
 };
 
 //===----------------------------------------------------------------------===//
@@ -135,9 +140,8 @@ AsyncRef DependencyRewriter::allocateAsyncValue(RankedTensorType tensorType,
       triton::nvws::TypeArrayAttr::get(b.getContext(), alloc.getType()));
   auto aref = b.create<triton::nvws::ArefCreateOp>(b.getLoc(), arefTy, alloc);
 
-  endBuilder.create<nvws::ArefDestroyOp>(aref);
-
-  return AsyncRef{aref, getBufferViewType(allocType)};
+  return AsyncRef{aref, getBufferViewType(allocType),
+                  b.getType<AsyncTokenType>()};
 }
 
 LogicalResult DependencyRewriter::run() {

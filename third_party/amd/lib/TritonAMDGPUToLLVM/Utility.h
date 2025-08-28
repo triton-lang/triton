@@ -37,8 +37,11 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
                  mlir::triton::AMD::ISAFamily isaFamily =
                      mlir::triton::AMD::ISAFamily::Unknown);
 
+Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
+              Value selector);
+
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
-               int axis);
+               ProgramIDDim axis);
 
 // Loads from shared or global memory with predication.
 // `otherElems` is used to mask out the elements that are not loaded
@@ -112,9 +115,18 @@ bool isUsedByDotScaledOp(Operation *op);
 // in the same region
 bool isChainDotHead(mlir::triton::DotOpInterface dotOp);
 
+// Check if given operand of this tt.dot is the result of a tt.trans
+// in the same region
+bool hasTransInDefChain(mlir::triton::DotOpInterface dotOp, unsigned opIdx);
+
 // Check if the opA of this tl.dot is the result of another tl.dot
 // in the same region
 bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
+
+// Software implementation of converting an 8-element vector of MXFP4 elements
+// to a wider type: BF16 or FP16
+SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
+                                       bool toFp16, Value packedVec);
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_

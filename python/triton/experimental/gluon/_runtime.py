@@ -1,12 +1,13 @@
 from __future__ import annotations
-import triton
 from triton.compiler.compiler import ASTSource
 from triton.backends.compiler import Language
-from triton.runtime.jit import JITFunction
+from triton.runtime.jit import JITFunction, constexpr_function
 from typing import TypeVar, Optional, Callable, Iterable, Union
 from triton._C.libtriton import ir
 
 T = TypeVar("T")
+
+__all__ = ["constexpr_function", "jit"]
 
 
 class GluonASTSource(ASTSource):
@@ -16,7 +17,7 @@ class GluonASTSource(ASTSource):
         self.language = Language.GLUON
         self.ext = "ttgir"
 
-    def make_ir(self, options, codegen_fns, module_map, context):
+    def make_ir(self, target, options, codegen_fns, module_map, context):
         from triton.compiler.compiler import make_backend
         from triton.compiler.code_generator import ast_to_ttir
 
@@ -24,7 +25,6 @@ class GluonASTSource(ASTSource):
         module = builder.create_module()
 
         # Assign module attributes eagerly, as they are needed to verify layouts
-        target = triton.runtime.driver.active.get_current_target()
         backend = make_backend(target)
         target = backend.get_target_name(options)
 

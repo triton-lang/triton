@@ -477,18 +477,31 @@ struct MemDescIndexOpConversion
     auto *ctx = op->getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
-    auto destTy = op.getResult().getType();
+    auto dstTy = op.getResult().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
 
+    // getAllocationShapePerCTA returns the correct number fp4 elements that we
+    // need to skip when we have fp4Padded=True. getShapePerCTA does not account
+    // for this
+    auto stride = product(
+        getAllocationShapePerCTA(dstTy.getEncoding(), dstTy.getShape()));
+    Value offset = b.mul(op.getIndex(), b.i32_val(stride));
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
     auto base = smemObj.getBase();
     auto elemPtrTy = base.getType();
-    Value stride = smemObj.getStrides(srcTy, loc, rewriter).front();
-    Value offset = b.mul(op.getIndex(), stride);
     auto prevOffsets = smemObj.getOffsets();
-    SmallVector<Value> offsetVals(prevOffsets.end() - destTy.getRank(),
+    SmallVector<Value> offsetVals(prevOffsets.end() - dstTy.getRank(),
                                   prevOffsets.end());
+
+    // Apply padding based on the amount we move the base ptr
+    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstTy.getEncoding())) {
+      auto bitwidth = dstTy.getElementTypeBitWidth();
+      Value padOffset = emitPadding(loc, rewriter, padEnc, bitwidth, offset,
+                                    /*offsetInBytes=*/false);
+      offset = b.add(offset, padOffset);
+    }
+
     // Advance the pointer and keep the opOffsets as the new shape
     smemObj = SharedMemoryObject(b.gep(elemPtrTy, llvmElemTy, base, offset),
                                  llvmElemTy, offsetVals);
@@ -548,8 +561,8 @@ struct MemDescReinterpretOpConversion
 
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), srcElemTy, b);
-    SharedMemoryObject newObj(smemObj.getBase(), dstElemTy, dstTy.getRank(),
-                              loc, b);
+    Value newBase = smemObj.getShmemAffineBase(loc, b, srcTy);
+    SharedMemoryObject newObj(newBase, dstElemTy, dstTy.getRank(), loc, b);
     b.replaceOp(op, getStructFromSharedMemoryObject(loc, newObj, b));
     return success();
   }

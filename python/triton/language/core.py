@@ -10,7 +10,7 @@ from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 from dataclasses import dataclass
 import builtins
 from .. import knobs
-from ..runtime.jit import JITFunction
+from ..runtime.jit import JITCallable
 import inspect
 
 from .._C.libtriton import ir
@@ -87,7 +87,7 @@ def _tensor_member_fn(fn: T) -> T:
     if is_builtin(fn):
         setattr(wrapper, TRITON_BUILTIN, True)
 
-    setattr(tensor, fn.__name__, fn if isinstance(fn, JITFunction) else wrapper)
+    setattr(tensor, fn.__name__, fn if isinstance(fn, JITCallable) else wrapper)
     return fn
 
 
@@ -153,10 +153,10 @@ class base_value:
 
 class base_type:
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         raise NotImplementedError("Types must implement __eq__")
 
-    def __ne__(self, other):
+    def __ne__(self, other) -> bool:
         return not (self == other)
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
@@ -184,6 +184,9 @@ class constexpr_type(base_type):
     def __repr__(self) -> str:
         return f"constexpr_type[{self.value}]"
 
+    def __hash__(self):
+        return hash(self.value)
+
     def mangle(self) -> str:
         return repr(self)
 
@@ -207,6 +210,9 @@ class constexpr(base_value):
 
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
+
+    def __hash__(self):
+        return hash((self.value, self.type))
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         return
@@ -332,34 +338,6 @@ class constexpr(base_value):
     def __getitem__(self, *args):
         args = (_unwrap_if_constexpr(x) for x in _normalize_tuple(args))
         return self.value.__getitem__(*args)
-
-
-def constexpr_function(f):
-    """
-    Wraps an arbitrary Python function so that it can be called at
-    compile-time on constexpr arguments in a Triton function and
-    returns a constexpr result.
-    """
-
-    @wraps(f)
-    def wrapper(*args, _semantic=None, **kwargs):
-        # de-constexpr arguments and discard the _semantic keyword argument:
-        args = [_unwrap_if_constexpr(x) for x in args]
-        kwargs = {k: _unwrap_if_constexpr(v) for (k, v) in kwargs.items()}
-
-        # call the raw Python function f:
-        res = f(*args, **kwargs)
-
-        # convert result back to a Triton constexpr:
-        if knobs.runtime.interpret:
-            return res  # No constexpr in interpreter
-        return constexpr(res)
-
-    # disguise the function as a Triton builtin to avoid raising an error
-    # that we're calling a non-JIT function from within a Triton kernel:
-    wrapper.__triton_builtin__ = True
-    wrapper.__module__ = constexpr_function.__module__
-    return wrapper
 
 
 CONSTEXPR_0 = constexpr(0)
@@ -574,7 +552,8 @@ class dtype(base_type):
     def is_const():
         return False
 
-    def __eq__(self, other: dtype):
+    def __eq__(self, other) -> bool:
+        other = _unwrap_if_constexpr(other)
         if not isinstance(other, dtype):
             return False
         return self.name == other.name
@@ -698,7 +677,8 @@ class pointer_type(dtype):
     def is_const(self):
         return self.const
 
-    def __eq__(self, other: pointer_type) -> bool:
+    def __eq__(self, other) -> bool:
+        other = _unwrap_if_constexpr(other)
         if not isinstance(other, pointer_type):
             return False
         return self.element_ty == other.element_ty and self.address_space == other.address_space and self.const == other.const
@@ -1277,7 +1257,7 @@ def _type_for_tuple_values(values, fields=None):
 
 class tuple(base_value):
 
-    def __init__(self, args: Sequence, type: tuple_type = None):
+    def __init__(self, args: Sequence, type: Optional[tuple_type] = None):
         self.values = [i for i in args]
         if isinstance(type, tuple_type):
             self.type = type
@@ -1299,10 +1279,9 @@ class tuple(base_value):
         return self.values[self.type.fields.index(name)]
 
     # TODO: remove
-    def __setitem__(self, idx: constexpr, value):
-        if isinstance(idx, int):
-            idx = constexpr(idx)
-        assert isinstance(idx, constexpr)
+    def _setitem(self, idx, value):
+        idx = _unwrap_if_constexpr(idx)
+        assert isinstance(idx, int)
         self.values[idx] = value
         self.type = _type_for_tuple_values(self.values, self.type.fields)
 
@@ -1565,7 +1544,7 @@ def _aggregate(cls):
         def __new__(this_cls, *args, _semantic=None, _generator=None, **kwargs):
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
-            if isinstance(cls.__init__, JITFunction):
+            if isinstance(cls.__init__, JITCallable):
                 raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
             extra_kwargs = {}
             if "_semantic" in inspect.signature(cls.__init__).parameters:
@@ -1599,7 +1578,7 @@ def _aggregate(cls):
                                    [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
 
     for (name, member) in inspect.getmembers(cls):
-        if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITFunction):
+        if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITCallable):
             if name != "__init__":
                 setattr(aggregate_value, name, member)
 
@@ -3014,7 +2993,7 @@ def device_print(prefix, *args, hex=False, _semantic=None):
 
 
 @builtin
-def device_assert(cond, msg="", _semantic=None):
+def device_assert(cond, msg="", mask=None, _semantic=None):
     '''
     Assert the condition at runtime from the device.  Requires that the environment variable :code:`TRITON_DEBUG`
     is set to a value besides :code:`0` in order for this to have any effect.
@@ -3033,7 +3012,10 @@ def device_assert(cond, msg="", _semantic=None):
     :param msg: the message to print if the assertion fails. This is required to be a string literal.
     '''
     msg = _unwrap_if_constexpr(msg)
-    return _semantic.device_assert(_semantic.to_tensor(cond), msg)
+    mask = _unwrap_if_constexpr(mask)
+    if mask is not None:
+        mask = _semantic.to_tensor(mask)
+    return _semantic.device_assert(_semantic.to_tensor(cond), msg, mask)
 
 
 @builtin
@@ -3246,6 +3228,9 @@ class range:
         The compiler will attempt to partition memory, MMA, and vector
         operations in the loop into separate async partitions. This will
         increase the total number of warps required by the kernel.
+    :param disable_licm: Tells the compiler it shouldn't hoist loop invariant
+        code outside the loop. This is often useful to avoid creating long liveranges
+        within a loop.
 
         Note that warp specialization is only supported on Blackwell GPUs and
         only works on simple matmul loops. Support for arbitrary loops will be
@@ -3253,7 +3238,7 @@ class range:
     """
 
     def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None,
-                 disallow_acc_multi_buffer=False, flatten=False, warp_specialize=False):
+                 disallow_acc_multi_buffer=False, flatten=False, warp_specialize=False, disable_licm=False):
         if step is None:
             self.step = constexpr(1)
         else:
@@ -3269,6 +3254,7 @@ class range:
         self.disallow_acc_multi_buffer = disallow_acc_multi_buffer
         self.flatten = flatten
         self.warp_specialize = warp_specialize
+        self.disable_licm = disable_licm
 
     def __iter__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")
@@ -3277,13 +3263,36 @@ class range:
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")
 
 
+class condition:
+    """
+    While loop condition wrapper.
+
+    .. highlight:: python
+    .. code-block:: python
+
+        @triton.jit
+        def kernel(...):
+            while tl.condition(c, disable_licm)
+                ...
+    :note: This is a special wrapper used to annotate while loops in the context of
+        :code:`triton.jit` functions. It allows user to pass extra attributes to the compiler.
+    :param disable_licm: Tells the compiler it shouldn't hoist loop invariant
+        code outside the loop. This is often useful to avoid creating long liveranges
+        within a loop.
+    """
+
+    def __init__(self, arg1, disable_licm=False):
+        self.condition = arg1
+        self.disable_licm = disable_licm
+
+
 # -----------------------
 # Extern functions
 # -----------------------
 
 
-def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_shape: tuple,
-             is_pure: bool, _semantic):
+def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dict: dict, ret_type: dtype, is_pure: bool,
+             _semantic):
     '''
         Dispatch a function to a library
         :param func: the function to dispatch
@@ -3291,7 +3300,7 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
         :param lib_path: the path of the library
         :param args: the arguments of the function
         :param arg_type_symbol_dict: the type of the arguments
-        :param ret_shape: the shape of the return value
+        :param ret_type: the type of the return value
         :return: the return value of the function
     '''
     if len(arg_type_symbol_dict) == 0:
@@ -3318,9 +3327,6 @@ def dispatch(func, lib_name: str, lib_path: str, args: list, arg_type_symbol_dic
                          f"Expect one of {arg_type_symbol_dict.keys()}, got {arg_types}")
     else:
         symbol = arg_type_symbol_dict[arg_types][0]
-        ret_type = arg_type_symbol_dict[arg_types][1]
-        if ret_shape:
-            ret_type = block_type(ret_type, ret_shape)
         builder = _semantic.builder
         return tensor(func(lib_name, lib_path, symbol, arg_list, ret_type.to_ir(builder), is_pure), ret_type)
 
@@ -3339,15 +3345,16 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
     '''
     dispatch_args = args.copy()
     all_scalar = True
-    ret_shape = None
     arg_types = []
     for i in builtins.range(len(dispatch_args)):
         dispatch_args[i] = _semantic.to_tensor(dispatch_args[i])
         arg_types.append(dispatch_args[i].dtype)
         if dispatch_args[i].type.is_block():
             all_scalar = False
+
+    arg_types = tuple(arg_types)
+    ret_type = arg_type_symbol_dict[arg_types][1]
     if len(arg_types) > 0:
-        arg_types = tuple(arg_types)
         arithmetic_check = True
         # If there's a type tuple that is not supported by the library, we will do arithmetic check
         if arg_types in arg_type_symbol_dict:
@@ -3362,9 +3369,9 @@ def extern_elementwise(lib_name: str, lib_path: str, args: list, arg_type_symbol
             dispatch_args[i], _ = _semantic.binary_op_type_checking_impl(dispatch_args[i], broadcast_arg,
                                                                          arithmetic_check=arithmetic_check)
         if not all_scalar:
-            ret_shape = broadcast_arg.shape
+            ret_type = broadcast_arg.type.with_element_ty(ret_type)
     func = _semantic.builder.create_extern_elementwise
-    return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_shape, is_pure, _semantic)
+    return dispatch(func, lib_name, lib_path, dispatch_args, arg_type_symbol_dict, ret_type, is_pure, _semantic)
 
 
 def binary_op_type_legalization(lhs, rhs, semantic):

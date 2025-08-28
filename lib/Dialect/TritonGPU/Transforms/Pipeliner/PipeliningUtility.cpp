@@ -378,10 +378,10 @@ mlir::triton::getDefiningOpAndDistance(scf::ForOp forOp, Value value) {
 int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
                                   ttg::SharedEncodingTrait sharedEnc) {
   auto shape = registerTy.getShape();
-  auto regLayout =
-      triton::gpu::toLinearLayout(shape, registerTy.getEncoding(), {});
+  auto regLayout = triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
   // FIXME: Here we should pass a MemDescType instead of a SharedEncodingTrait!!
-  auto sharedLayout = triton::gpu::toLinearLayout(shape, sharedEnc, shape);
+  // This is currently broken for memdesc_subslice!
+  auto sharedLayout = triton::gpu::toLinearLayout(shape, sharedEnc);
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
   const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
   return vecElems * registerTy.getElementTypeBitWidth() / 8;
@@ -459,15 +459,15 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
   auto barrierEncoding =
       ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
   ttg::MemDescType memDescType = ttg::MemDescType::get(
-      {numBuffers}, type, barrierEncoding, sharedMemorySpace,
+      {numBuffers, 1}, type, barrierEncoding, sharedMemorySpace,
       /*mutableMemory=*/true);
   return rewriter.create<ttg::LocalAllocOp>(memDescType, Value());
 }
 
 // Create an allocation and init the mbarriers.
-Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers,
+Value mlir::triton::createBarrierAlloc(Operation *op, int numBarriers,
                                        int arriveCount) {
-  ImplicitLocOpBuilder rewriter(forOp.getLoc(), forOp);
+  ImplicitLocOpBuilder rewriter(op->getLoc(), op);
 
   Value barrierAlloc =
       createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers);
@@ -476,7 +476,7 @@ Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers,
     rewriter.create<ttng::InitBarrierOp>(barrierView, arriveCount);
   }
   // Invalidate and deallocate the barriers.
-  rewriter.setInsertionPointAfter(forOp);
+  rewriter.setInsertionPointAfter(op);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
     rewriter.create<ttng::InvalBarrierOp>(barrierView);
@@ -561,13 +561,23 @@ void mlir::triton::combineRedundantWaitOps(
   }
 }
 
-ttg::MemDescType mlir::triton::getBufferViewType(ttg::MemDescType allocTy) {
-  Attribute sharedMemorySpace =
-      ttg::SharedMemorySpaceAttr::get(allocTy.getContext());
+ttg::MemDescType mlir::triton::getBufferViewType(ttg::MemDescType allocTy,
+                                                 bool mutableMemory) {
   return ttg::MemDescType::get(allocTy.getShape().drop_front(),
                                allocTy.getElementType(), allocTy.getEncoding(),
-                               sharedMemorySpace, /*mutableMemory=*/true,
+                               allocTy.getMemorySpace(), mutableMemory,
                                /*allocShape=*/allocTy.getAllocShape());
+}
+
+ttg::MemDescType
+mlir::triton::getMultiBufferedType(ttg::MemDescType memDescType,
+                                   int32_t depth) {
+  auto shape = memDescType.getShape();
+  SmallVector<int64_t> bufferShape(shape.begin(), shape.end());
+  bufferShape.insert(bufferShape.begin(), depth);
+  return ttg::MemDescType::get(
+      bufferShape, memDescType.getElementType(), memDescType.getEncoding(),
+      memDescType.getMemorySpace(), /*mutableMemory*/ true);
 }
 
 ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(RankedTensorType ty) {
@@ -653,12 +663,10 @@ triton::createSingleBufferView(OpBuilder &builder, Value alloc, Value idx) {
   assert(isa<ttg::MemDescType>(alloc.getType()) && "Expected MemDescType");
   auto allocDescType = cast<ttg::MemDescType>(alloc.getType());
   SmallVector<int64_t> shape;
-  if (allocDescType.getShape().size() > 1) {
-    shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
-                 allocDescType.getShape().end());
-  } else {
-    shape.push_back(1);
-  }
+  assert(allocDescType.getShape().size() > 1 &&
+         "Expected multi-dimensional memdesc (e.g., Nx...) for subview");
+  shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
+               allocDescType.getShape().end());
   auto viewDescType = ttg::MemDescType::get(
       shape, allocDescType.getElementType(), allocDescType.getEncoding(),
       allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
@@ -811,4 +819,95 @@ scf::ForOp triton::lowerTMADescriptors(scf::ForOp forOp,
     llvm_unreachable("Failed to rewrite TMA ops");
   }
   return forOp;
+}
+
+DenseSet<Operation *>
+triton::getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
+                               std::function<bool(Operation *)> filter) {
+  DenseSet<Operation *> topLevelUsers;
+  SmallVector<OpOperand *> q;
+  for (auto &use : op->getUses())
+    q.push_back(&use);
+  while (!q.empty()) {
+    auto use = q.pop_back_val();
+    auto yieldOp = dyn_cast<scf::YieldOp>(use->getOwner());
+    if (yieldOp && yieldOp->getParentOp() == forOp) {
+      for (auto &use :
+           forOp.getRegionIterArgs()[use->getOperandNumber()].getUses())
+        q.push_back(&use);
+      continue;
+    }
+    // Don't count view operations as uses. Follow them through to their
+    // users.
+    if (use->getOwner()->hasTrait<OpTrait::MemDescViewTrait>()) {
+      for (auto &use : use->getOwner()->getUses())
+        q.push_back(&use);
+      continue;
+    }
+    if (filter && !filter(use->getOwner()))
+      continue;
+    Operation *topLevelUser =
+        forOp.getBody()->findAncestorOpInBlock(*use->getOwner());
+    topLevelUsers.insert(topLevelUser);
+  }
+  return topLevelUsers;
+}
+
+// Helper function that finds an operation based on a comparison predicate
+static Operation *getUseOfPipelinedOp(
+    ArrayRef<Operation *> ops, scf::ForOp forOp,
+    triton::CoarseSchedule &schedule,
+    std::function<bool(Operation *)> filterUse,
+    std::function<bool(Operation *, Operation *)> shouldPrefer) {
+  DenseSet<Operation *> topLevelUsers;
+  Operation *selectedUser = nullptr;
+  for (Operation *op : ops) {
+    auto users = triton::getTopLevelUsersInLoop(op, forOp, filterUse);
+    topLevelUsers.insert(users.begin(), users.end());
+  }
+  for (Operation *topLevelUser : topLevelUsers) {
+    assert(schedule.count(topLevelUser) && "op user not found in the schedule");
+    if (!selectedUser || shouldPrefer(topLevelUser, selectedUser)) {
+      selectedUser = topLevelUser;
+    }
+  }
+  return selectedUser;
+}
+
+Operation *
+triton::getFirstUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                                 triton::CoarseSchedule &schedule,
+                                 std::function<bool(Operation *)> filterUse) {
+  return getUseOfPipelinedOp(
+      ops, forOp, schedule, filterUse,
+      [&](Operation *candidate, Operation *current) {
+        auto [candidateStage, candidateCluster] = schedule[candidate];
+        auto [currentStage, currentCluster] = schedule[current];
+
+        return candidateStage < currentStage ||
+               (candidateStage == currentStage &&
+                schedule.clusters.isBefore(candidateCluster, currentCluster)) ||
+               (candidateStage == currentStage &&
+                candidateCluster == currentCluster &&
+                candidate->isBeforeInBlock(current));
+      });
+}
+
+Operation *
+triton::getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                                triton::CoarseSchedule &schedule,
+                                std::function<bool(Operation *)> filterUse) {
+  return getUseOfPipelinedOp(
+      ops, forOp, schedule, filterUse,
+      [&](Operation *candidate, Operation *current) {
+        auto [candidateStage, candidateCluster] = schedule[candidate];
+        auto [currentStage, currentCluster] = schedule[current];
+
+        return candidateStage > currentStage ||
+               (candidateStage == currentStage &&
+                schedule.clusters.isBefore(currentCluster, candidateCluster)) ||
+               (candidateStage == currentStage &&
+                candidateCluster == currentCluster &&
+                current->isBeforeInBlock(candidate));
+      });
 }

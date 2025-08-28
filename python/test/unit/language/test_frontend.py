@@ -1,12 +1,24 @@
+import functools
 import triton
 import triton.language as tl
-from triton._filecheck import filecheck_test, run_filecheck_test
+from triton._filecheck import filecheck_test, run_filecheck_test, run_parser
 from triton.compiler.errors import CompilationError
 import pytest
+from typing import NamedTuple
 
 # ===-----------------------------------------------------------------------===#
 # Unit Tests
 # ===-----------------------------------------------------------------------===#
+
+
+def doesnt_compile(kernel):
+
+    @functools.wraps(kernel)
+    def test_fn():
+        with pytest.raises(triton.CompilationError):
+            run_parser(kernel)
+
+    return test_fn
 
 
 @triton.jit
@@ -47,33 +59,20 @@ class Pair:
         self.second = value
 
 
-@filecheck_test
+@doesnt_compile
 @triton.jit
 def test_assign_attribute():
-    # CHECK-LABEL: assign_attribute
-    # CHECK: %c11_i32 = arith.constant 11 : i32
-    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     scalar = 11
     pair = Pair(tl.arange(0, 4), scalar)
-    # CHECK: %c42_i32 = arith.constant 42 : i32
-    # CHECK-NEXT: call @{{.*}}anchor{{.*}}([[RANGE]], %c42_i32)
     pair.second = 42
-    anchor(pair)
 
 
-@filecheck_test
+@doesnt_compile
 @triton.jit
 def test_augassign_attribute():
-    # CHECK-LABEL: test_augassign_attribute
-    # CHECK: %c11_i32 = arith.constant 11 : i32
-    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     scalar = 11
     pair = Pair(tl.arange(0, 4), scalar)
-    # CHECK: %c42_i32 = arith.constant 42 : i32
-    # CHECK: [[VALUE:%.*]] = arith.addi %c11_i32, %c42_i32
     pair.second += 42
-    # CHECK-NEXT: call @{{.*}}anchor{{.*}}([[RANGE]], [[VALUE]])
-    anchor(pair)
 
 
 @filecheck_test
@@ -88,33 +87,20 @@ def test_retrieve_item():
     anchor(pair[1])
 
 
-@filecheck_test
+@doesnt_compile
 @triton.jit
 def test_assign_item():
-    # CHECK-LABEL: test_assign_item
-    # CHECK: %c11_i32 = arith.constant 11 : i32
-    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     scalar = 11
     pair = Pair(tl.arange(0, 4), scalar)
-    # CHECK: %c42_i32 = arith.constant 42 : i32
     pair[1] = 42
-    # CHECK-NEXT: call @{{.*}}anchor{{.*}}([[RANGE]], %c42_i32)
-    anchor(pair)
 
 
-@filecheck_test
+@doesnt_compile
 @triton.jit
 def test_augassign_item():
-    # CHECK-LABEL: test_augassign_item
-    # CHECK: %c11_i32 = arith.constant 11 : i32
-    # CHECK: [[RANGE:%.*]] = tt.make_range {end = 4 : i32, start = 0 : i32}
     scalar = 11
     pair = Pair(tl.arange(0, 4), scalar)
-    # CHECK: %c42_i32 = arith.constant 42 : i32
-    # CHECK: [[VALUE:%.*]] = arith.addi %c11_i32, %c42_i32
     pair[1] += 42
-    # CHECK-NEXT: call @{{.*}}anchor{{.*}}([[RANGE]], [[VALUE]])
-    anchor(pair)
 
 
 @filecheck_test
@@ -322,7 +308,7 @@ def test_aggregate_with_constexpr():
     # CHECK: arith.addi %arg0, %cst : tensor<4xi32>
 
 
-@tl.constexpr_function
+@triton.constexpr_function
 def constexpr_function(x):
     return x + 1
 
@@ -345,45 +331,26 @@ def swap(pair):
     return pair.second, pair.first
 
 
-@filecheck_test
+@doesnt_compile
 @triton.jit
-def test_assign_tuple_attrs():
-    # CHECK-LABEL: test_assign_tuple_attrs
+def test_assign_tuple_attrs_kernel():
     p = Pair(tl.arange(0, 4), tl.arange(4, 8))
-    # CHECK: [[P:%.*]]:2 = tt.call @{{.*}}swap
     p.first, p.second = swap(p)
-    # CHECK: call @{{.*}}anchor{{.*}}([[P]]#0)
-    # CHECK: call @{{.*}}anchor{{.*}}([[P]]#1)
-    anchor(p.first)
-    anchor(p.second)
 
 
-@filecheck_test
+@doesnt_compile
 @triton.jit
 def test_reassign_aggregate_with_constexpr():
-    # CHECK-LABEL: test_reassign_aggregate_with_constexpr
     agg = AggregateWithConstexpr.create(tl.arange(0, 4))
-    var = 1
-    # CHECK: [[AGG:%.*]] = scf.if {{.*}} -> (tensor<4xi32>)
-    # CHECK:   [[VALUE:%.*]] = tt.call {{.*}}modify
-    # CHECK:   yield [[VALUE]]
-    # CHECK: else
-    # CHECK:   [[VALUE:%.*]] = tt.call {{.*}}modify
-    # CHECK:   yield [[VALUE]]
-    if var == 0:
-        agg = agg.modify(tl.arange(4, 8))
-    else:
-        agg = agg.modify(tl.arange(8, 12))
-    # CHECK: call @{{.*}}anchor{{.*}}([[AGG]])
-    anchor(agg)
+    agg = agg.modify(tl.arange(4, 8))
 
 
-@tl.constexpr_function
+@triton.constexpr_function
 def make_shape(m, n):
     return (m, n)
 
 
-@tl.constexpr_function
+@triton.constexpr_function
 def add_shape_dims(m, n):
     return m + n
 
@@ -398,7 +365,7 @@ def test_constexpr_getitem():
     tl.arange(4, sum)
 
 
-@tl.constexpr_function
+@triton.constexpr_function
 def make_constexpr_closure(x):
     x = tl.constexpr(x)
 
@@ -419,7 +386,7 @@ def test_constexpr_closure():
     closure((128, 128))
 
 
-@tl.constexpr_function
+@triton.constexpr_function
 def make_constexpr_generator(f):
     f = tl.constexpr(f)
 
@@ -455,7 +422,7 @@ def test_constexpr_generator():
     generator(lhs)
 
 
-@tl.constexpr_function
+@triton.constexpr_function
 def Box(T):
 
     @tl.core._aggregate
@@ -483,26 +450,6 @@ def test_late_bound_class_reference():
         anchor(value)
 
     run_filecheck_test(kernel)
-
-
-@filecheck_test
-@triton.jit
-def test_modify_if_livein():
-    # CHECK-LABEL: test_modify_if_livein
-    none_livein = None  # noqa: F841
-
-    # CHECK: [[LOOP_OUT:%.*]] = scf.for {{.*}} iter_args([[BOX:%.*]] = %true)
-    # CHECK:   [[LIVEOUT:%.*]] = scf.if [[BOX]]
-    # CHECK:     yield %false
-    # CHECK:   else
-    # CHECK:     yield [[BOX]]
-    # CHECK:   yield [[LIVEOUT]]
-    # CHECK: call @{{.*}}anchor{{.*}}([[LOOP_OUT]])
-    box = Box(tl.tensor)(tl.core.to_tensor(True))
-    for i in range(10):
-        if box.value:
-            box.value = False
-    anchor(box.value)
 
 
 @triton.jit
@@ -563,3 +510,53 @@ def test_return_in_while():
         kernel.warmup(grid=(1, ))
 
     assert "Cannot have `return` statements inside `while` or `for` statements in triton" in str(e.value)
+
+
+class TensorPtr(NamedTuple):
+    test: tl.constexpr
+
+
+class TestTuple(NamedTuple):
+    __test__ = False
+    test: TensorPtr
+
+
+@triton.jit
+def foo(test: TestTuple):
+    x: tl.constexpr = tl.constexpr(1)
+    for i in tl.range(x):
+        # Tests that it compiles and is usable.
+        tl.static_assert(test.test.test == 1)
+
+
+def test_tuple_constexpr():
+    test = TestTuple(test=TensorPtr(tl.constexpr(1)))
+    _ = foo.warmup(test, grid=(1, 0))
+
+
+@tl.core._aggregate
+class AggregateWithConstexprFunction:
+    val: tl.constexpr
+    val_squared: tl.constexpr
+
+    def __init__(self, val):
+        self.val = tl.constexpr(val)
+        self.val_squared = tl.constexpr(self.square_val())
+
+    @triton.constexpr_function
+    def square_val(self):
+        return self.val * self.val
+
+
+@filecheck_test
+@triton.jit
+def test_aggregate_constexpr_function():
+    agg = AggregateWithConstexprFunction(4)
+    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_4_
+    anchor(agg.val)
+
+    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_16_
+    anchor(agg.val_squared)
+
+    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_16_
+    anchor(agg.square_val())

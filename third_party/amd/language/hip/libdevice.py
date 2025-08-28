@@ -74,6 +74,13 @@ def fast_expf(arg0, _semantic=None):
 
 
 @core.extern
+def fast_tanhf(arg0, _semantic=None):
+    return core.extern_elementwise("", "", [arg0], {
+        (core.dtype("fp32"), ): ("__triton_hip_fast_tanhf", core.dtype("fp32")),
+    }, is_pure=True, _semantic=_semantic)
+
+
+@core.extern
 def fast_dividef(arg0, arg1, _semantic=None):
     return core.extern_elementwise("", "", [arg0, arg1], {
         (core.dtype("fp32"), core.dtype("fp32")): ("__triton_hip_fast_fdividef", core.dtype("fp32")),

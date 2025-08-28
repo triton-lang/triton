@@ -2,7 +2,7 @@ from __future__ import annotations
 import ast
 import textwrap
 import inspect
-from typing import Tuple, List, Dict
+from typing import Tuple, List, Dict, Callable
 
 import math
 import numpy as np
@@ -89,6 +89,7 @@ class TensorDescHandle:
         assert self.base.data.item() % 16 == 0, "base must be 16-byte aligned"
         assert len(self.strides) == self.ndim
         assert len(self.block_shape) == self.ndim
+        assert self.ndim >= 1, "descriptor cannot be 0 dimensional"
 
         for stride in self.strides[:-1]:
             assert stride.data.item() % 16 == 0, "stride must be 16-byte aligned"
@@ -1132,7 +1133,7 @@ def _tuple_create(arg, contents):
 # TODO: wrap everything in triton tensors
 def _implicit_cvt(arg):
     if isinstance(arg, int):
-        ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg))
+        ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg), None)
         dtype = np.int32
         if -2**31 <= arg < 2**31:
             dtype = np.int32
@@ -1147,7 +1148,7 @@ def _implicit_cvt(arg):
         handle = TensorHandle(np.array([arg], dtype=dtype), ty)
         return tl.tensor(handle, ty)
     if hasattr(arg, "data_ptr"):
-        ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg))
+        ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg), None)
         handle = TensorHandle(np.array([arg.data_ptr()], dtype=np.uint64), ty)
         return tl.tensor(handle, ty)
     elif isinstance(arg, tuple):
@@ -1374,11 +1375,12 @@ class FunctionRewriter:
 
 class InterpretedFunction:
     # Cache all rewritten functions
-    rewritten_fn = {}
+    rewritten_fn: Dict[Callable, Callable] = {}
 
     def __init__(self, fn, **kwargs) -> None:
         self.fn = fn
         self.rewriter = FunctionRewriter(fn, **kwargs)
+        self.kwargs = kwargs
 
         def run(*args, **kwargs):
             grid = kwargs["grid"]

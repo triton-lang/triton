@@ -6,10 +6,6 @@
 namespace proton {
 
 void ShadowContextSource::initializeThreadContext() {
-  if (!mainContextStack) {
-    mainContextStack = &threadContextStack[this];
-    threadContextInitialized[this] = false;
-  }
   if (!threadContextInitialized[this]) {
     threadContextStack[this] = *mainContextStack;
     threadContextInitialized[this] = true;

@@ -88,6 +88,17 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
   return rewriter.create<ROCDL::BallotOp>(loc, type, cmp);
 }
 
+void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
+                         bool isWarpSync) const {
+  if (isWarpSync) {
+    LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.wave.barrier",
+                                    {}, {});
+  } else {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    b.barrier();
+  }
+}
+
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Value val,
                               Value pred) const {
@@ -98,23 +109,9 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
-bool TargetInfo::canUseStMatrix(RankedTensorType tensorTy,
-                                ArrayRef<unsigned> repShape,
-                                ArrayRef<unsigned> paddedRepShape,
-                                ArrayRef<unsigned> order,
-                                int swizzleByteSize) const {
-  // AMD does not support stmatrix
-  return false;
-}
-
 bool TargetInfo::canUseLDSTransLoad(int bitwidth) const {
   return getISAFamily() == ISAFamily::CDNA4 &&
          llvm::is_contained({16, 8, 4, 6}, bitwidth);
-}
-
-void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
-                                   Value ptr, Value val) const {
-  llvm::report_fatal_error("AMDGPU does not support stmatrix");
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -151,8 +148,16 @@ Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
   return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, getISAFamily());
 }
 
+Value TargetInfo::permute(RewriterBase &rewriter, Location loc, Value a,
+                          Value b, Value selector) const {
+  // Warning: The `a` and `b` operands are ordered to align with Nvidia's `prmt`
+  // Both use little-endian ordering, but AMD puts the MSBs of the data in the
+  // 0-th operand.
+  return LLVM::AMD::permute(loc, rewriter, b, a, selector);
+}
+
 Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
-                            ModuleOp moduleOp, int axis) const {
+                            ModuleOp moduleOp, ProgramIDDim axis) const {
   return LLVM::AMD::llGetPid(loc, rewriter, moduleOp, axis);
 }
 

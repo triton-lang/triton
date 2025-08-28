@@ -3,6 +3,7 @@ from typing import Type
 
 import torch
 from triton.tools.tensor_descriptor import TensorDescriptor
+from triton.tools.ragged_tma import create_ragged_descriptor
 
 from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from .target_info import cuda_capability_geq
@@ -42,26 +43,29 @@ class Storage:
         compliant = [strides[i] * bitwidth % 128 == 0 for i in range(ndim) if i != major_dim]
         return all(compliant)
 
-    def make_tma(self, block_shape, transpose=False):
+    def make_dense_tma(self, block_shape, transpose=False):
         strides = list(self.data.stride())
         shape = list(self.data.shape)
-        # TODO
-        # there is an issue w/ column-major TMA; we transpose instead
         transpose = self.data.stride()[-1] != 1
         if transpose:
             block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
             shape = shape[:-2] + [shape[-1], shape[-2]]
             strides = strides[:-2] + [strides[-1], strides[-2]]
-        if self.data.dtype == torch.uint8 and self.layout.name is None:
-            # physical block size is half logical block size along packed dimension
+        if self.data.dtype == torch.uint8 and self.layout.name == "BLACKWELL_VALUE":
             indx = strides.index(1)
             block_shape[indx] = block_shape[indx] // 2
-            # Pad the inner shape to 128 for mxfp4 weights; TMA requires this when the compiler uses
-            # CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B.
-            pad = 128
-            shape[-1] = (shape[-1] + pad - 1) // pad * pad
+            if shape[-1] % 128 != 0:
+                raise ValueError("inner shape need to be multiple of 128 for "
+                                 "mxfp4 (CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B) TMAs.")
         block_shape = self.layout.swizzle_block_shape(block_shape)
         return TensorDescriptor(self.data, shape, strides, block_shape)
+
+    def make_tma(self, block_shape, mode, transpose=False):
+        if mode in ["dense", "gather", "scatter"]:
+            return self.make_dense_tma(block_shape, transpose)
+        assert mode == "ragged"
+        ragged_dim = len(self.data.shape) - 2
+        return create_ragged_descriptor(self.data, block_shape, ragged_dim=ragged_dim)
 
 
 @dataclass
@@ -148,6 +152,14 @@ class Tensor:
     def data(self):
         t = self.storage
         return t.data if isinstance(t, Storage) else t
+
+    def dim(self):
+        return self.ndim
+
+    def size(self, i=None):
+        if i is None:
+            return self.shape
+        return self.shape[i]
 
 
 @dataclass

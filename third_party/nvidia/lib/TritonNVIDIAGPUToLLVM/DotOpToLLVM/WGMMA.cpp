@@ -497,10 +497,6 @@ LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
                            ConversionPatternRewriter &rewriter, Value thread) {
   auto AEnc = op.getA().getType().getEncoding();
   auto BEnc = op.getB().getType().getEncoding();
-  assert(mlir::isa<NVMMASharedEncodingAttr>(AEnc) ||
-         mlir::isa<DotOperandEncodingAttr>(AEnc));
-  assert(mlir::isa<NVMMASharedEncodingAttr>(BEnc) &&
-         "Operand B should use Shared layout.");
   return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(),  //
                     op.getA(), op.getB(), op.getC(), op.getD(), op.getUseC(), //
                     adaptor.getA(), adaptor.getB(), adaptor.getC(),           //

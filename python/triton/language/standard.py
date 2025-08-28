@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from ..runtime.jit import jit
+from ..runtime.jit import jit, constexpr_function
 from . import core
 from . import math
 
 # constexpr utilities
 
 
-@core.constexpr_function
+@constexpr_function
 def _log2(i):
     log2 = 0
     n = i
@@ -17,7 +17,7 @@ def _log2(i):
     return log2
 
 
-@core.constexpr_function
+@constexpr_function
 def _is_power_of_two(i):
     return (i & (i - 1)) == 0 and i != 0
 
@@ -264,7 +264,7 @@ def _sum_combine(a, b):
 # sum
 
 
-@core.constexpr_function
+@constexpr_function
 def _pick_sum_dtype(in_dtype, dtype):
     if dtype is not None:
         return dtype
@@ -317,9 +317,9 @@ def _or_combine(x, y):
 
 @core._tensor_member_fn
 @jit
-@core._add_reduction_docstr("reduce_of")
+@core._add_reduction_docstr("reduce_or")
 def reduce_or(input, axis, keep_dims=False):
-    core.static_assert(input.type.scalar.is_int(), "reduce_of only supported for integers")
+    core.static_assert(input.type.scalar.is_int(), "reduce_or only supported for integers")
     return core.reduce(input, axis, _or_combine, keep_dims=keep_dims)
 
 
@@ -477,7 +477,7 @@ def bitonic_merge(x, dim: core.constexpr = None, descending: core.constexpr = co
     return _bitonic_merge(x, n_dims, descending, n_dims)
 
 
-@core.constexpr_function
+@constexpr_function
 def _get_flip_dim(dim, shape):
     if dim is None:
         dim = len(shape) - 1
