@@ -319,15 +319,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
-def shared_memory_permute_kernel(layout: ttgl.constexpr):
+def shared_memory_permute_kernel():
+    layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
     smem = ttgl.allocate_shared_memory(ttgl.float16, [4, 128], layout)
-    smem.permute((1, 0))
+    perm = smem.permute((1, 0))
+    ttgl.static_assert(perm.layout == ttgl.SwizzledSharedLayout(1, 1, 1, [0, 1]))
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS)
 def test_shared_memory_permute(target):
-    layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
-    mod = run_parser(shared_memory_permute_kernel, *make_args(layout), target=target)
+    mod = run_parser(shared_memory_permute_kernel, target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(mod.str_nodebug()), """\
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
