@@ -1582,7 +1582,11 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
                               jit_fn=fn, is_kernel=True, file_name=file_name, begin_line=begin_line, options=options,
                               codegen_fns=codegen_fns, module_map=module_map, module=module, is_gluon=fn.is_gluon())
     generator.visit(fn.parse())
-    ret = generator.module
+    module = generator.module
     # module takes ownership of the context
-    ret.context = context
-    return ret
+    module.context = context
+    if not module.verify_with_diagnostics():
+        if not fn.is_gluon():
+            print(module)
+        raise RuntimeError("error encountered during parsing")
+    return module

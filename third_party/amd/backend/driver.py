@@ -110,6 +110,34 @@ def _get_path_to_hip_runtime_dylib():
                 return f
             paths.append(f)
 
+    # HIP_PATH should point to HIP SDK root if set
+    env_hip_path = os.getenv("HIP_PATH")
+    if env_hip_path:
+        hip_lib_path = os.path.join(env_hip_path, "lib", lib_name)
+        if os.path.exists(hip_lib_path):
+            return hip_lib_path
+        paths.append(hip_lib_path)
+
+    # if available, `hipconfig --path` prints the HIP SDK root
+    try:
+        hip_root = subprocess.check_output(["hipconfig", "--path"]).decode().strip()
+        if hip_root:
+            hip_lib_path = os.path.join(hip_root, "lib", lib_name)
+            if os.path.exists(hip_lib_path):
+                return hip_lib_path
+            paths.append(hip_lib_path)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # hipconfig may not be available
+        pass
+
+    # ROCm lib dir based on env var
+    env_rocm_path = os.getenv("ROCM_PATH")
+    if env_rocm_path:
+        rocm_lib_path = os.path.join(env_rocm_path, "lib", lib_name)
+        if os.path.exists(rocm_lib_path):
+            return rocm_lib_path
+        paths.append(rocm_lib_path)
+
     # Afterwards try to search the loader dynamic library resolution paths.
     libs = subprocess.check_output(["/sbin/ldconfig", "-p"]).decode(errors="ignore")
     # each line looks like the following:
@@ -204,6 +232,7 @@ def make_launcher(constants, signature, warp_size):
                 output.append("*" + dtype)
                 for _ in range(2 * ndim):
                     output.append("i64")
+                output.append("i1")
                 # Currently the host side tensor descriptors get passed in as a
                 # tensor desc, shape, and strides. We have no way to use these
                 # shape and strides when processing tensor descriptors which is
@@ -606,7 +635,7 @@ def wrap_handle_tensor_descriptor(launcher):
                 # descriptors which is why we provide our own decomposition
                 # above. Sadly this means we have to pass the shape and strides
                 # twice.
-                final_args.extend([arg.base, *arg.shape, *arg.strides, *arg.shape, *arg.strides])
+                final_args.extend([arg.base, *arg.shape, *arg.strides, arg.padding == "nan", *arg.shape, *arg.strides])
             else:
                 final_args.append(arg)
         return launcher(*meta_args, *final_args)
