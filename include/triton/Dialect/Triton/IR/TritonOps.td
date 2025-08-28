@@ -1052,7 +1052,7 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
     TT_Ptr:$base,
     Variadic<I32>:$shape,
     Variadic<I64>:$strides,
-    TT_PaddingOptionAttr:$padding
+    DefaultValuedAttr<TT_PaddingOptionAttr, "::mlir::triton::PaddingOption::PAD_ZERO">:$padding
   );
 
   let results = (outs TT_TensorDescType:$result);
