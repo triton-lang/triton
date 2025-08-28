@@ -104,6 +104,13 @@ jobs:
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
           ccache --zero-stats
+          export PATH="/opt/homebrew/opt/llvm@19/bin:$PATH"
+          export CC="/opt/homebrew/opt/llvm@19/bin/clang"
+          export CXX="/opt/homebrew/opt/llvm@19/bin/clang++"
+          export CXXFLAGS="-stdlib=libc++"
+          export LDFLAGS="-L/opt/homebrew/opt/llvm@19/lib"
+          which clang++
+          clang++ --version
           make dev-install
       - name: CCache Stats
         run: ccache --print-stats
