@@ -666,6 +666,11 @@ public:
     if (computeCapability != 120)
       return failure();
 
+    auto numCTAs = lookupNumCTAs(rewriter);
+    if (numCTAs != 1) {
+      return failure();
+    }
+
     // TODO: support mxfp4 variants.
     if (!((dotOp.getAElemType() == ScaleDotElemType::E5M2 ||
            dotOp.getAElemType() == ScaleDotElemType::E4M3) &&
@@ -683,32 +688,6 @@ public:
 
     if (mlir::isa<LinearEncodingAttr>(aScaleType.getEncoding()) ||
         mlir::isa<LinearEncodingAttr>(bScaleType.getEncoding())) {
-      return failure();
-    }
-
-    auto checkSingleCTA = [&](RankedTensorType tensorType) -> LogicalResult {
-      auto encoding = tensorType.getEncoding();
-      if (!encoding)
-        return success();
-
-      auto ctaLayout = triton::gpu::getCTALayout(encoding);
-      auto ctasPerCGA = ctaLayout.getCTAsPerCGA();
-      if (ctasPerCGA[0] != 1 || ctasPerCGA[1] != 1) {
-        return rewriter.notifyMatchFailure(
-            dotOp, "SM120 dot scaled layouts do not support multi-CTA "
-                   "configurations yet");
-      }
-      return success();
-    };
-
-    if (checkSingleCTA(aScaleType).failed() ||
-        checkSingleCTA(bScaleType).failed()) {
-      return failure();
-    }
-
-    auto aType = dotOp.getA().getType();
-    auto bType = dotOp.getB().getType();
-    if (checkSingleCTA(aType).failed() || checkSingleCTA(bType).failed()) {
       return failure();
     }
 
@@ -766,30 +745,17 @@ public:
       auto ty = cast<RankedTensorType>(scale.getType());
       SmallVector<int64_t> shape = llvm::to_vector(ty.getShape());
       MLIRContext *ctx = ty.getContext();
-
       const auto mmaWarps = mmaResult.mmaEnc.getWarpsPerCTA(); // [wM, wN]
       const auto instr = mmaResult.mmaEnc.getInstrShape(); // [instrM, instrN]
       const unsigned instrM = instr[0], instrN = instr[1];
 
       auto blocked = cast<triton::gpu::BlockedEncodingAttr>(ty.getEncoding());
-      SmallVector<unsigned, 2> expectedWarpsPerCTA{mmaWarps[0], mmaWarps[1]};
-      auto fixedBlockedEncodingAttr = triton::gpu::BlockedEncodingAttr::get(
-          ctx, blocked.getSizePerThread(), blocked.getThreadsPerWarp(),
-          /*warpsPerCTA=*/expectedWarpsPerCTA, blocked.getOrder(),
-          /*CTALayout=*/blocked.getCTALayout());
-      auto fixedBlockedTy = RankedTensorType::get(shape, ty.getElementType(),
-                                                  fixedBlockedEncodingAttr);
-      Value blockAdjustedScale = rewriter.create<ConvertLayoutOp>(
-          scale.getLoc(), fixedBlockedTy, scale);
-
       auto ll = triton::gpu::getSM120DotScaledScaleLayout(
           ctx, opIdx, shape, tilesPerWarp,
           /*warpsPerCTA=*/mmaWarps, instrM, instrN, blocked.getCTALayout());
-
       auto newEnc = triton::gpu::LinearEncodingAttr::get(ctx, ll);
       auto newTy = RankedTensorType::get(shape, ty.getElementType(), newEnc);
-      return rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy,
-                                              blockAdjustedScale);
+      return rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy, scale);
     };
     Value aScale = convertScale(dotOp.getAScale(), /*opIdx=*/0);
     Value bScale = convertScale(dotOp.getBScale(), /*opIdx=*/1);
