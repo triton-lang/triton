@@ -1,3 +1,6 @@
+################################################################################
+# Modification Copyright 2025 ByteDance Ltd. and/or its affiliates.
+################################################################################
 import functools
 import operator
 import os
@@ -12,8 +15,9 @@ from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
 
 dirname = os.path.dirname(os.path.realpath(__file__))
-include_dirs = [os.path.join(dirname, "include")]
-libdevice_dir = os.path.join(dirname, "lib")
+upstream_dirname = os.path.join(triton.__path__[0], "backends/nvidia")
+include_dirs = [os.path.join(upstream_dirname, "include")]
+libdevice_dir = os.path.join(upstream_dirname, "lib")
 libraries = ['cuda']
 
 
@@ -60,7 +64,7 @@ class CudaUtils(object):
 
     def __init__(self):
         mod = compile_module_from_src(
-            src=Path(os.path.join(dirname, "driver.c")).read_text(),
+            src=Path(os.path.join(upstream_dirname, "driver.c")).read_text(),
             name="cuda_utils",
             library_dirs=library_dirs(),
             include_dirs=include_dirs,
@@ -226,7 +230,9 @@ def make_launcher(constants, signature, tensordesc_meta):
     ]
     params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
     params.append("&global_scratch")
-    src = f"""
+
+    use_cxx = False
+    src_c = f"""
 #include \"cuda.h\"
 #include <stdbool.h>
 #include <Python.h>
@@ -275,7 +281,7 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int launch_pdl, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   void *params[] = {{ {', '.join(params)} }};
   if (gridX*gridY*gridZ > 0) {{
-    // 4 attributes that we can currently pass maximum
+    // 4 attributes that we can currently pass maxmimum
     CUlaunchAttribute launchAttr[4];
     static cuLaunchKernelEx_t cuLaunchKernelExHandle = NULL;
     if (cuLaunchKernelExHandle == NULL) {{
@@ -533,7 +539,324 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
   return m;
 }}
 """
-    return src
+    src_cxx = f"""
+#include <cuda.h>
+#include <cuda_fp16.h>
+#include <cuda_fp8.h>
+#include <cuda_runtime.h>
+#include <string>
+#include <stdbool.h>
+#include <Python.h>
+#include <dlfcn.h>
+#include <chrono>
+#include <iostream>
+
+static inline void gpuAssertC(CUresult code, const char *file, int line)
+{{
+   if (code != CUDA_SUCCESS)
+   {{
+      const char* prefix = "Triton Error [CUDA]: ";
+      const char* str;
+      cuGetErrorString(code, &str);
+      char err[1024] = {{0}};
+      strcat(err, prefix);
+      strcat(err, str);
+      PyGILState_STATE gil_state;
+      gil_state = PyGILState_Ensure();
+      PyErr_SetString(PyExc_RuntimeError, err);
+      PyGILState_Release(gil_state);
+   }}
+}}
+
+#define CUDA_CHECK_C(ans) {{ gpuAssertC((ans), __FILE__, __LINE__); }}
+
+static inline void gpuAssert(cudaError_t code, const char *file, int line)
+{{
+   if (code != cudaSuccess)
+   {{
+      std::string prefix = "Triton Error [CUDA]: ";
+      std::string str = prefix + cudaGetErrorString(code);
+      PyGILState_STATE gil_state;
+      gil_state = PyGILState_Ensure();
+      PyErr_SetString(PyExc_RuntimeError, str.c_str());
+      PyGILState_Release(gil_state);
+   }}
+}}
+
+#define CUDA_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
+
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+  // auto start = std::chrono::high_resolution_clock::now();
+  void *params[] = {{ {', '.join(params)} }};
+  if (gridX*gridY*gridZ > 0) {{
+    if ((num_ctas == 1) && (0 == launch_cooperative_grid)) {{
+      // auto stop = std::chrono::high_resolution_clock::now();
+      // auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+      // std::cout << \"before launch num_cta=1 and no cooperative time cost \" << duration.count() << \" us\" << std::endl;
+      CUDA_CHECK_C(cuLaunchKernel(function, gridX, gridY, gridZ, 32*num_warps, 1, 1, shared_memory, stream, params, 0));
+    }} else if ((num_ctas == 1) && (0 != launch_cooperative_grid)) {{
+
+      cudaLaunchConfig_t launch_config;
+      launch_config.gridDim = {{(unsigned)gridX, (unsigned)gridY, (unsigned)gridZ}};
+      launch_config.blockDim = {{(unsigned)32 * (unsigned)num_warps, 1, 1}};
+      launch_config.dynamicSmemBytes = size_t(shared_memory);
+      launch_config.stream = stream;
+
+      cudaLaunchAttribute launch_attribute[1];
+      launch_attribute[0].id = cudaLaunchAttributeCooperative;
+      launch_attribute[0].val.cooperative = true;
+
+      launch_config.attrs = launch_attribute;
+      launch_config.numAttrs = 1;
+
+      // auto stop = std::chrono::high_resolution_clock::now();
+      // auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+      // std::cout << \"before launch num_cta=1 and cooperative time cost \" << duration.count() << \" us\" << std::endl;
+      cudaError_t status = cudaLaunchKernelExC(&launch_config, function, params);
+      cudaError_t launch_result = cudaGetLastError();
+      CUDA_CHECK(launch_result);
+
+    }} else {{
+      cudaLaunchConfig_t launch_config;
+      launch_config.gridDim = {{(unsigned)gridX * (unsigned)clusterDimX, (unsigned)gridY * (unsigned)clusterDimY, (unsigned)gridZ * (unsigned)clusterDimZ}};
+      launch_config.blockDim = {{(unsigned)32 * (unsigned)num_warps, 1, 1}};
+      launch_config.dynamicSmemBytes = size_t(shared_memory);
+      launch_config.stream = stream;
+
+      unsigned numAttrs = 2;
+      cudaLaunchAttribute launch_attribute[3];
+      launch_attribute[0].id = cudaLaunchAttributeClusterDimension;
+      launch_attribute[0].val.clusterDim.x = clusterDimX;
+      launch_attribute[0].val.clusterDim.y = clusterDimY;
+      launch_attribute[0].val.clusterDim.z = clusterDimZ;
+
+      launch_attribute[1].id = cudaLaunchAttributeClusterSchedulingPolicyPreference;
+      launch_attribute[1].val.clusterSchedulingPolicyPreference = cudaClusterSchedulingPolicySpread;
+
+      if (0 != launch_cooperative_grid) {{
+          launch_attribute[2].id = cudaLaunchAttributeCooperative;
+          launch_attribute[2].val.cooperative = true;
+          numAttrs = 3;
+      }}
+
+      launch_config.attrs = launch_attribute;
+      launch_config.numAttrs = numAttrs;
+
+      // auto stop = std::chrono::high_resolution_clock::now();
+      // auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+      // std::cout << \"before launch num_cta>1 and no cooperative time cost \" << duration.count() << \" us\" << std::endl;
+      cudaError_t status = cudaLaunchKernelExC(&launch_config, function, params);
+      cudaError_t launch_result = cudaGetLastError();
+      CUDA_CHECK(launch_result);
+    }}
+  }}
+}}
+
+typedef struct _DevicePtrInfo {{
+    CUdeviceptr dev_ptr;
+    bool valid;
+}} DevicePtrInfo;
+
+static inline DevicePtrInfo getPointer(PyObject *obj, int idx) {{
+  DevicePtrInfo ptr_info;
+  ptr_info.dev_ptr = 0;
+  ptr_info.valid = true;
+  if (PyLong_Check(obj)) {{
+    ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(obj);
+    return ptr_info;
+  }}
+  if (obj == Py_None) {{
+    // valid nullptr
+    return ptr_info;
+  }}
+  PyObject *ptr = PyObject_GetAttrString(obj, "data_ptr");
+  if(ptr){{
+    PyObject *empty_tuple = PyTuple_New(0);
+    PyObject *ret = PyObject_Call(ptr, empty_tuple, NULL);
+    Py_DECREF(empty_tuple);
+    Py_DECREF(ptr);
+    if (!PyLong_Check(ret)) {{
+      PyErr_SetString(PyExc_TypeError, "data_ptr method of Pointer object must return 64-bit int");
+      ptr_info.valid = false;
+      return ptr_info;
+    }}
+    ptr_info.dev_ptr = PyLong_AsUnsignedLongLong(ret);
+    if(!ptr_info.dev_ptr)
+      return ptr_info;
+    uint64_t dev_ptr;
+    auto status = cuPointerGetAttribute(&dev_ptr, CU_POINTER_ATTRIBUTE_DEVICE_POINTER, ptr_info.dev_ptr);
+    if (status == CUDA_ERROR_INVALID_VALUE) {{
+        PyErr_Format(PyExc_ValueError,
+                     "Pointer argument (at %d) cannot be accessed from Triton (cpu tensor?)", idx);
+        ptr_info.valid = false;
+    }} else if (status != CUDA_SUCCESS) {{
+        CUDA_CHECK_C(status);  // Catch any other cuda API errors
+        ptr_info.valid = false;
+    }}
+    ptr_info.dev_ptr = dev_ptr;
+    Py_DECREF(ret);  // Thanks ChatGPT!
+    return ptr_info;
+  }}
+  PyErr_SetString(PyExc_TypeError, "Pointer argument must be either uint64 or have data_ptr method");
+  ptr_info.valid = false;
+  return ptr_info;
+}}
+
+static inline CUtensorMap* getTmaDesc(PyObject *obj) {{
+  if (sizeof(CUtensorMap*) != 8) {{
+    PyErr_SetString(PyExc_SystemError, "getTmaDesc() requires 64-bit compilation");
+    return NULL;
+  }}
+
+  PyObject *method_handle = PyObject_GetAttrString(obj, "tma_desc_cpu_ptr");
+  if (!method_handle) {{
+    PyErr_SetString(PyExc_TypeError, "tma_desc_cpu_ptr() method does not exist");
+    return NULL;
+  }}
+
+  PyObject *empty_tuple = PyTuple_New(0);
+  if (!empty_tuple) {{
+    Py_DECREF(method_handle);
+    PyErr_SetString(PyExc_SystemError, "Internal Python error!");
+    return NULL;
+  }}
+  PyObject *method_ret = PyObject_Call(method_handle, empty_tuple, NULL);
+  Py_DECREF(empty_tuple);
+  Py_DECREF(method_handle);
+  if (!method_ret) {{
+    PyErr_SetString(PyExc_SystemError, "Internal Python error!");
+    return NULL;
+  }}
+
+  if (!PyLong_Check(method_ret)) {{
+    PyErr_SetString(PyExc_TypeError, "tma_desc_cpu_ptr() must return 64-bit int");
+    Py_DECREF(method_ret);
+    return NULL;
+  }}
+
+  uint64_t ptr_as_uint = PyLong_AsUnsignedLongLong(method_ret);
+  Py_DECREF(method_ret);
+  if (!ptr_as_uint) {{
+    PyErr_SetString(PyExc_ValueError, "received NULL ptr from tma_desc_cpu_ptr()");
+    return NULL;
+  }}
+  if (ptr_as_uint % 64 != 0) {{
+    PyErr_SetString(PyExc_ValueError, "tma_desc_cpu_ptr() must be 64-byte aligned");
+    return NULL;
+  }}
+
+  return (CUtensorMap*)(ptr_as_uint);
+}}
+
+static void ensureCudaContext() {{
+  CUcontext pctx;
+  CUDA_CHECK_C(cuCtxGetCurrent(&pctx));
+  if (!pctx) {{
+    // Ensure device context.
+    CUdevice device;
+    CUDA_CHECK_C(cuDeviceGet(&device, 0));
+    CUDA_CHECK_C(cuDevicePrimaryCtxRetain(&pctx, device));
+    CUDA_CHECK_C(cuCtxSetCurrent(pctx));
+  }}
+}}
+
+static PyObject* launch(PyObject* self, PyObject* args) {{
+  // auto start = std::chrono::high_resolution_clock::now();
+  // ensure cuda context is valid before calling any CUDA APIs, e.g. before getPointer calls cuPointerGetAttributes
+  ensureCudaContext();
+
+  int gridX, gridY, gridZ;
+  uint64_t _stream;
+  uint64_t _function;
+  int launch_cooperative_grid;
+  PyObject *launch_enter_hook = NULL;
+  PyObject *launch_exit_hook = NULL;
+  PyObject *kernel_metadata = NULL;
+  PyObject *launch_metadata = NULL;
+  PyObject *global_scratch_obj = NULL;
+  {newline.join([f"{_extracted_type(ty)} _arg{i};" for i, ty in signature.items()])}
+  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ,
+                                           &_stream, &_function, &launch_cooperative_grid, &global_scratch_obj,
+                                           &kernel_metadata, &launch_metadata,
+                                           &launch_enter_hook, &launch_exit_hook{args_list})) {{
+    return NULL;
+  }}
+
+  int num_warps, num_ctas, shared_memory, clusterDimX, clusterDimY, clusterDimZ;
+  if (!PyArg_ParseTuple(kernel_metadata, \"iiiiii\", &num_warps, &num_ctas, &shared_memory, &clusterDimX, &clusterDimY, &clusterDimZ)) {{
+    PyErr_SetString(PyExc_TypeError, "kernel_metadata must be a tuple");
+    return NULL;
+  }}
+
+  // extract launch metadata
+  if (launch_enter_hook != Py_None){{
+    PyObject* args = Py_BuildValue("(O)", launch_metadata);
+    PyObject* ret = PyObject_CallObject(launch_enter_hook, args);
+    Py_DECREF(args);
+    if (!ret)
+      return NULL;
+  }}
+
+  CUdeviceptr global_scratch = 0;
+  if (global_scratch_obj != Py_None) {{
+    DevicePtrInfo global_scratch_info = getPointer(global_scratch_obj, -1);
+    if (!global_scratch_info.valid) {{
+      return NULL;
+    }}
+    global_scratch = global_scratch_info.dev_ptr;
+  }}
+
+  // raise exception asap
+  {newline.join(ptr_decls)}
+  {newline.join(tma_decls)}
+  Py_BEGIN_ALLOW_THREADS;
+  // auto stop = std::chrono::high_resolution_clock::now();
+  // auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+  // std::cout << \"before outer launch time cost \" << duration.count() << \" us\" << std::endl;
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function, global_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  Py_END_ALLOW_THREADS;
+  if (PyErr_Occurred()) {{
+    return NULL;
+  }}
+
+  if(launch_exit_hook != Py_None){{
+    PyObject* args = Py_BuildValue("(O)", launch_metadata);
+    PyObject* ret = PyObject_CallObject(launch_exit_hook, args);
+    Py_DECREF(args);
+    if (!ret)
+      return NULL;
+
+  }}
+
+  Py_RETURN_NONE;
+}}
+
+static PyMethodDef ModuleMethods[] = {{
+  {{"launch", launch, METH_VARARGS, "Entry point for all kernels with this signature"}},
+  {{NULL, NULL, 0, NULL}} // sentinel
+}};
+
+static struct PyModuleDef ModuleDef = {{
+  PyModuleDef_HEAD_INIT,
+  \"__triton_launcher\",
+  NULL, //documentation
+  -1, //size
+  ModuleMethods
+}};
+
+PyMODINIT_FUNC PyInit___triton_launcher(void) {{
+  PyObject *m = PyModule_Create(&ModuleDef);
+  if(m == NULL) {{
+    return NULL;
+  }}
+  PyModule_AddFunctions(m, ModuleMethods);
+  return m;
+}}
+"""
+    if use_cxx:
+        return src_cxx
+    else:
+        return src_c
 
 
 class TmaDescKernelParam:

@@ -1,6 +1,11 @@
+################################################################################
+# Modification Copyright 2025 ByteDance Ltd. and/or its affiliates.
+################################################################################
+# fmt: off
 from __future__ import annotations
 import hashlib
 import json
+
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
 from ..backends.compiler import Language
@@ -492,6 +497,19 @@ class CompiledKernel:
         warp_size = driver.active.get_current_target().warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads")
+
+        if hasattr(self.metadata, 'use_nvshmem'):
+            if self.metadata.use_nvshmem:
+                # patch function with nvshmem
+                import nvshmem.bindings.nvshmem as pynvshmem
+                pynvshmem.cumodule_init(self.module)
+        elif hasattr(self.metadata, 'use_rocshmem'):
+            if self.metadata.use_rocshmem:
+                pass
+                ## TODO: add pyrocshmem init
+                # import pyrocshmem
+        else:
+            print("Warning: No nvshmem/rocshmem imported.")
 
     def __getattribute__(self, name):
         if name == 'run':

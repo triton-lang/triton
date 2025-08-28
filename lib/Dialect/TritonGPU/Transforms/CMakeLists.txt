@@ -50,4 +50,5 @@ add_triton_library(TritonGPUTransforms
   TritonNvidiaGPUIR
   TritonToTritonGPU
   MLIRTransformUtils
+  DistributedIR
 )

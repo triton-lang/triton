@@ -1,4 +1,4 @@
-include(${PROJECT_SOURCE_DIR}/unittest/googletest.cmake)
+include(${PROJECT_SOURCE_DIR}/3rdparty/triton/unittest/googletest.cmake)
 
 include(GoogleTest)
 enable_testing()

@@ -1,3 +1,6 @@
+################################################################################
+# Modification Copyright 2025 ByteDance Ltd. and/or its affiliates.
+################################################################################
 import ast
 import copy
 import inspect
@@ -10,7 +13,7 @@ from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, List
 
 from .. import knobs, language
-from .._C.libtriton import ir, gluon_ir
+from .._C.libtriton import ir, gluon_ir, distributed
 from ..language import constexpr, str_to_ty, tensor
 from ..language.core import _unwrap_if_constexpr, base_value, base_type
 from ..runtime.jit import get_jit_fn_file_line, get_full_name
@@ -19,6 +22,9 @@ from ..runtime import JITFunction
 from .._utils import find_paths_if, get_iterable_path, set_iterable_path
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
+
+import triton_dist
+import builtins
 
 
 def check_identifier_legality(name, type):
@@ -290,7 +296,7 @@ class CodeGenerator(ast.NodeVisitor):
             self.semantic = GluonSemantic(self.builder)
         else:
             from triton.language.semantic import TritonSemantic
-            self.builder = ir.builder(context)
+            self.builder = distributed.ir.DistributedOpBuilder(context)
             self.semantic = TritonSemantic(self.builder)
         self.file_name = file_name
         # node.lineno starts from 1, so we need to subtract 1
@@ -926,6 +932,74 @@ class CodeGenerator(ast.NodeVisitor):
             f'but is re-assigned to {loop_val.type} in loop! '\
             f'Please make sure that the type stays consistent.'
 
+    #  Extension of dist triton: parse `simt_exec_region`
+    def visit_With(self, node):
+        assert len(node.items) == 1
+        context = node.items[0].context_expr
+        withitemClass = self.visit(context.func)
+        thread_id = language.core.tensor(self.builder.create_get_thread_id(), language.core.int32)
+        block_size = language.core.tensor(self.builder.create_get_block_size(), language.core.int32)
+
+        if withitemClass == triton_dist.language.simt_exec_region:
+            self.set_value(node.items[0].optional_vars.elts[0].id, thread_id)
+            self.set_value(node.items[0].optional_vars.elts[1].id, block_size)
+            with enter_sub_region(self) as sr:
+                liveins, insert_block = sr
+                ip, last_loc = self._get_insertion_point_and_loc()
+
+                self._set_insertion_point_and_loc(ip, last_loc)
+                # create with node body block
+                dummy = self.builder.create_block()
+                self.builder.set_insertion_point_to_start(dummy)
+                self.scf_stack.append(node)
+                self.visit_compound_statement(node.body)
+                self.scf_stack.pop()
+                dummy.erase()
+
+                # If a variable (name) is defined in both its parent & itself, then it's
+                # captured by SIMT Reigon. (They must be of the same type)
+                names = []
+                init_args = []
+                for name in self.local_defs:
+                    if name in liveins:
+                        live_val = liveins[name]
+                        names.append(name)
+                        init_args.append(live_val)
+                self._set_insertion_point_and_loc(ip, last_loc)
+
+                init_tys = [v.type for v in init_args]
+                init_handles = flatten_values_to_ir(init_args)
+
+                simt_op = self.builder.create_simt_exec_region_op(init_handles)
+                block = simt_op.get_simt_entry_block()
+
+                block_handles = [block.arg(i) for i in range(len(init_handles))]
+                block_args = unflatten_ir_values(block_handles, init_tys)
+                # reset local scope/local_defs to not pick up local defs from the previous dry run.
+                for name, val in zip(names, block_args):
+                    self.set_value(name, val)
+
+                self.builder.set_insertion_point_to_start(block)
+                self.builder.create_barrier()
+                self.scf_stack.append(node)
+
+                self.visit_compound_statement(node.body)
+                self.scf_stack.pop()
+                yields = []
+                for name in self.local_defs:
+                    if name in liveins:
+                        yields.append(self.local_defs[name])
+                yield_handles = flatten_values_to_ir(yields)
+                self.builder.create_barrier()
+                self.builder.create_block_yield_op(yield_handles)
+
+            result_handles = [simt_op.get_result(i) for i in range(len(init_handles))]
+            result_values = unflatten_ir_values(result_handles, init_tys)
+            for name, val in zip(names, result_values):
+                self.set_value(name, val)
+        else:
+            raise NotImplementedError()
+
     def visit_While(self, node):
         with enter_sub_region(self) as sr:
             liveins, insert_block = sr
@@ -1009,6 +1083,19 @@ class CodeGenerator(ast.NodeVisitor):
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
         if _is_triton_tensor(lhs):
+            # Extension of dist triton
+            if isinstance(slices, (builtins.slice, language.core.slice, constexpr, tensor)) or slices is None:
+                slices = [slices]
+            if isinstance(slices, tuple):
+                slices = slices.values
+            is_extract = True
+            for sl in slices:
+                if not isinstance(sl, (constexpr, tensor)):
+                    is_extract = False
+                if isinstance(sl, constexpr) and sl.value is None:
+                    is_extract = False
+            if is_extract:
+                return triton_dist.language.extract(lhs, slices, self.semantic)
             return lhs.__getitem__(slices, _semantic=self.semantic)
         return lhs[slices]
 
@@ -1016,6 +1103,11 @@ class CodeGenerator(ast.NodeVisitor):
         assert isinstance(node.ctx, ast.Store)
         lhs = self.visit(node.value)
         slices = self.visit(node.slice)
+        # Extension of dist triton: store value to tile
+        if _is_triton_tensor(lhs):
+            ret = triton_dist.language.insert(lhs, value, slices, self.semantic)
+            self.set_value(node.value.id, ret)
+            return
         assert isinstance(lhs, language.tuple)
         lhs.__setitem__(slices, value)
 

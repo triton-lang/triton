@@ -1,5 +1,6 @@
 {
   "ptxas": "12.8.93",
+  "nvlink": "12.8.93",
   "cuobjdump": "12.8.55",
   "nvdisasm": "12.8.55",
   "cudacrt": "12.8.61",

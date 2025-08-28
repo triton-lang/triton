@@ -1,4 +1,9 @@
+/*
+ * Modification Copyright 2025 ByteDance Ltd. and/or its affiliates.
+ */
 #pragma once
+#include "TritonDistributed/Dialect/Distributed/IR/Dialect.h"
+#include "TritonDistributed/Dialect/SIMT/IR/Dialect.h"
 #include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "amd/include/TritonAMDGPUTransforms/Passes.h"
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
@@ -92,13 +97,16 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   // NVGPU transform passes
   mlir::registerNVHopperTransformsPasses();
 
-  registry.insert<
-      mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
-      mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
-      mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
-      mlir::arith::ArithDialect, mlir::scf::SCFDialect, mlir::gpu::GPUDialect,
-      mlir::LLVM::LLVMDialect, mlir::NVVM::NVVMDialect,
-      mlir::triton::nvgpu::NVGPUDialect, mlir::triton::nvws::NVWSDialect,
-      mlir::triton::amdgpu::TritonAMDGPUDialect,
-      mlir::triton::proton::ProtonDialect, mlir::ROCDL::ROCDLDialect>();
+  registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
+                  mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
+                  mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
+                  mlir::arith::ArithDialect, mlir::scf::SCFDialect,
+                  mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
+                  mlir::NVVM::NVVMDialect, mlir::triton::nvgpu::NVGPUDialect,
+                  mlir::triton::nvws::NVWSDialect,
+                  mlir::triton::amdgpu::TritonAMDGPUDialect,
+                  mlir::triton::proton::ProtonDialect,
+                  mlir::triton::distributed::DistributedDialect,
+                  mlir::tensor::TensorDialect, mlir::triton::simt::SIMTDialect,
+                  mlir::ROCDL::ROCDLDialect>();
 }
