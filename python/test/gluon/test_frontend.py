@@ -1,5 +1,4 @@
 import expecttest
-import torch
 import pytest
 import re
 
