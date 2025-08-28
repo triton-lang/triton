@@ -40,7 +40,7 @@ specialize_arg(PyObject *backend, PyObject *arg, bool is_const,
 static bool init_called = false;
 
 static PyObject *constexpr_cls = nullptr;
-static PyObject *jit_function_cls = nullptr;
+static PyObject *jit_callable_cls = nullptr;
 static PyObject *tensor_descriptor_cls = nullptr;
 static PyObject *gluon_tensor_descriptor_cls = nullptr;
 static PyObject *canonicalize_dtype_fn = nullptr;
@@ -61,7 +61,6 @@ static PyObject *base_attr = nullptr;
 static PyObject *data_ptr_attr = nullptr;
 static PyObject *dtype_attr = nullptr;
 static PyObject *cache_key_attr = nullptr;
-static PyObject *tma_desc_cpu_ptr_attr = nullptr;
 static PyObject *_fields_attr = nullptr;
 static PyObject *block_shape_attr = nullptr;
 static PyObject *layout_attr = nullptr;
@@ -115,9 +114,6 @@ static bool init_interned_strings() {
     goto cleanup;
   cache_key_attr = PyUnicode_InternFromString("cache_key");
   if (!cache_key_attr)
-    goto cleanup;
-  tma_desc_cpu_ptr_attr = PyUnicode_InternFromString("tma_desc_cpu_ptr");
-  if (!tma_desc_cpu_ptr_attr)
     goto cleanup;
   _fields_attr = PyUnicode_InternFromString("_fields");
   if (!_fields_attr)
@@ -193,8 +189,8 @@ static bool init_globals() {
   }
 
   // get symbols from modules
-  jit_function_cls = PyObject_GetAttrString(m_jit, "JITFunction");
-  if (!jit_function_cls)
+  jit_callable_cls = PyObject_GetAttrString(m_jit, "JITCallable");
+  if (!jit_callable_cls)
     goto cleanup;
   tensor_descriptor_cls = PyObject_GetAttrString(m_desc, "TensorDescriptor");
   if (!tensor_descriptor_cls)
@@ -526,7 +522,7 @@ handle_constexpr_type(PyObject *backend, PyObject *arg, bool is_const,
 }
 
 static std::pair<py::object, py::object>
-handle_jit_function(PyObject *backend, PyObject *arg, bool is_const,
+handle_jit_callable(PyObject *backend, PyObject *arg, bool is_const,
                     bool specialize_value, bool align) {
   PyObject *cache_key = PyObject_GetAttr(arg, cache_key_attr);
   if (!cache_key) {
@@ -646,9 +642,9 @@ static void init_type_handler_cache() {
   if (constexpr_cls && PyType_Check(constexpr_cls)) {
     type_handler_cache[(PyTypeObject *)constexpr_cls] = handle_constexpr_type;
   }
-  // JITFunction
-  if (jit_function_cls && PyType_Check(jit_function_cls)) {
-    type_handler_cache[(PyTypeObject *)jit_function_cls] = handle_jit_function;
+  // JITCallable
+  if (jit_callable_cls && PyType_Check(jit_callable_cls)) {
+    type_handler_cache[(PyTypeObject *)jit_callable_cls] = handle_jit_callable;
   }
 }
 
@@ -690,17 +686,13 @@ specialize_arg(PyObject *backend, PyObject *arg, bool is_const,
                                           specialize_value, align);
   }
 
-  if (PyObject_IsInstance(arg, jit_function_cls)) {
-    return handle_jit_function(backend, arg, is_const, specialize_value, align);
+  if (PyObject_IsInstance(arg, jit_callable_cls)) {
+    return handle_jit_callable(backend, arg, is_const, specialize_value, align);
   }
 
   // fallback paths checking attributes directly
   if (PyObject_HasAttr(arg, data_ptr_attr)) {
     return handle_tensor(backend, arg, is_const, specialize_value, align);
-  }
-
-  if (PyObject_HasAttr(arg, tma_desc_cpu_ptr_attr)) {
-    return {py::reinterpret_borrow<py::object>(nvTmaDesc_str), py::none()};
   }
 
   return {py::object(), py::object()};
