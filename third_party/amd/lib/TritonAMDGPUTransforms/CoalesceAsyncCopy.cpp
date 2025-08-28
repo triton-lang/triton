@@ -6,6 +6,7 @@
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
 
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-coalesce-async-copy"
@@ -65,8 +66,9 @@ struct CoalesceAsyncCopyWrites
     // swizzled we cannot exceed the vector size of the swizzling pattern
     LinearLayout regLayout = triton::gpu::toLinearLayout(srcTy);
     LinearLayout sharedLayout;
-    if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-            dstTy.getEncoding())) {
+    auto paddedEnc =
+        dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(dstTy.getEncoding());
+    if (paddedEnc) {
       sharedLayout = paddedEnc.getLinearComponent();
     } else {
       sharedLayout = triton::gpu::toLinearLayout(dstTy);
@@ -89,22 +91,88 @@ struct CoalesceAsyncCopyWrites
     // previous rewrite)
     auto contigPerThread = ttg::getContigPerThread(srcTy);
     auto blockedContig = contigPerThread[blockedEnc.getOrder()[0]];
-    if (blockedContig == loadContig) {
+    if (!paddedEnc && blockedContig == loadContig) {
       return rewriter.notifyMatchFailure(copyOp,
                                          "already using the correct layout");
     }
 
-    // Get new blocked encoding with loadContig as sizePerThread in the fastest
-    // dim
-    assert(blockedContig >= loadContig);
-    contigPerThread[blockedEnc.getOrder()[0]] = loadContig;
-    int numWarps = triton::gpu::lookupNumWarps(copyOp);
-    auto mod = copyOp->getParentOfType<ModuleOp>();
-    int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-    auto newBlockEnc = BlockedEncodingAttr::get(
-        copyOp.getContext(), srcTy.getShape(), contigPerThread,
-        blockedEnc.getOrder(), numWarps, threadsPerWarp,
-        blockedEnc.getCTALayout());
+    ttg::DistributedEncodingTrait newDistEnc;
+    if (!paddedEnc) {
+      // Get new blocked encoding with loadContig as sizePerThread in the
+      // fastest dim
+      assert(blockedContig >= loadContig);
+      contigPerThread[blockedEnc.getOrder()[0]] = loadContig;
+      int numWarps = triton::gpu::lookupNumWarps(copyOp);
+      auto mod = copyOp->getParentOfType<ModuleOp>();
+      int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+      newDistEnc = BlockedEncodingAttr::get(
+          copyOp.getContext(), srcTy.getShape(), contigPerThread,
+          blockedEnc.getOrder(), numWarps, threadsPerWarp,
+          blockedEnc.getCTALayout());
+    } else {
+      // Adjust blocked to padded
+      if (loadContig * elemBitWidth != 128) {
+        return copyOp.emitError(
+            "NYI: Only 128bit wide padded async loads are implemented!");
+      }
+
+      std::vector<std::vector<int>> regBases;
+      std::vector<std::vector<int>> laneBases;
+      std::vector<std::vector<int>> warpBases;
+
+      // We adjust the global layout so lanes write contiguous into LDS. Note
+      // that we do not look for performance here, so if the shared layout is
+      // inefficient we will produce ineffect IR/assembly. The padded shared
+      // layout composition need to take this into account
+
+      auto *ctx = srcTy.getContext();
+      StringAttr kOffset = StringAttr::get(ctx, "offset");
+
+      int logWarpSize = llvm::Log2_32(64);
+      auto ll = paddedEnc.getLinearComponent();
+
+      int offsetIndex = 0;
+      int logVecSize = 3;
+      for (; offsetIndex < logVecSize; offsetIndex++) {
+        regBases.push_back(ll.getBasis(kOffset, offsetIndex));
+      }
+      for (; offsetIndex < logVecSize + logWarpSize; offsetIndex++) {
+        laneBases.push_back(ll.getBasis(kOffset, offsetIndex));
+      }
+      int logNumWarps = 3;
+      for (; offsetIndex < logVecSize + logWarpSize + logNumWarps;
+           offsetIndex++) {
+        warpBases.push_back(ll.getBasis(kOffset, offsetIndex));
+      }
+      // Remaining basis are added as reg
+      for (; offsetIndex < ll.getInDimSizeLog2(kOffset); offsetIndex++) {
+        regBases.push_back(ll.getBasis(kOffset, offsetIndex));
+      }
+
+      auto transposeBases = [](std::vector<std::vector<int>> &vec) {
+        for (auto &p : vec)
+          std::swap(p[0], p[1]);
+      };
+
+      auto standardOutDims = triton::standardOutDimNames(ctx, srcTy.getRank());
+      StringAttr kRegister = StringAttr::get(ctx, "register");
+      StringAttr kLane = StringAttr::get(ctx, "lane");
+      StringAttr kWarp = StringAttr::get(ctx, "warp");
+      StringAttr kBlock = StringAttr::get(ctx, "block");
+
+      triton::LinearLayout paddedLayout(
+          {
+              {kRegister, regBases},
+              {kLane, laneBases},
+              {kWarp, warpBases},
+          },
+          {standardOutDims[0], standardOutDims[1]});
+
+      paddedLayout = triton::gpu::combineCtaCgaWithShape(
+          paddedLayout, blockedEnc.getCTALayout(), srcTy.getShape());
+
+      newDistEnc = ttg::LinearEncodingAttr::get(ctx, paddedLayout);
+    }
 
     // Convert layout of src, mask and other to new encoding
     auto convertLayout = [&rewriter](auto loc, Value old, auto newEnc) {
@@ -114,12 +182,12 @@ struct CoalesceAsyncCopyWrites
     };
 
     auto loc = copyOp->getLoc();
-    Value cvtSrc = convertLayout(loc, src, newBlockEnc);
+    Value cvtSrc = convertLayout(loc, src, newDistEnc);
 
     if (mask)
-      mask = convertLayout(loc, mask, newBlockEnc);
+      mask = convertLayout(loc, mask, newDistEnc);
     if (other)
-      other = convertLayout(loc, other, newBlockEnc);
+      other = convertLayout(loc, other, newDistEnc);
 
     rewriter.modifyOpInPlace(copyOp, [&]() {
       copyOp.getSrcMutable().assign(cvtSrc);
