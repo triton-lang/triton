@@ -1399,7 +1399,8 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_tensor_pointer_load",
            [](TritonOpBuilder &self, Value &ptr,
-              std::vector<int32_t> &boundaryCheck, std::optional<PaddingOption> paddingOption,
+              std::vector<int32_t> &boundaryCheck,
+              std::optional<PaddingOption> paddingOption,
               CacheModifier cacheModifier, EvictionPolicy evictionPolicy,
               bool isVolatile) -> Value {
              return self.create<LoadOp>(ptr, boundaryCheck, paddingOption,
