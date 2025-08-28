@@ -151,13 +151,19 @@ def test_multiple_hooks() -> None:
     {"extern_libs": {}},
 ])
 def test_launch_with_options(options) -> None:
+    def is_cuda():
+        return triton.runtime.driver.active.get_current_target().backend == "cuda"
+
+    def is_hip():
+        return triton.runtime.driver.active.get_current_target().backend == "hip"
+
     if "extern_libs" in options:
         # copied from tutorials/07-extern-functions.py
         current_dir = pathlib.Path(os.path.dirname(os.path.abspath(__file__)))
-        if triton.runtime.driver.active.get_current_target().backend == "cuda":
+        if is_cuda():
             libdir = current_dir.parent.parent.parent.parent / 'third_party/nvidia/backend/lib'
             options["extern_libs"] = {"libdevice": str(libdir / 'libdevice.10.bc')}
-        elif triton.runtime.driver.active.get_current_target().backend == "hip":
+        elif is_hip():
             libdir = current_dir.parent.parent.parent.parent / 'third_party/amd/backend/lib'
             options["extern_libs"] = {"ocml": str(libdir / 'ocml.bc'), "ockl": str(libdir / 'ockl.bc')}
 
@@ -193,7 +199,9 @@ def test_launch_with_options(options) -> None:
 
     # check the options are passed on to compile_info correctly
     option_key, option_val = next(iter(options.items()))
-    if option_key == "extern_libs":
+    # HIPOptions overwrite the extern_libs option, so we skip the test
+    # passing and specializing options still is tested
+    if option_key == "extern_libs" and not is_hip():
         assert compile_info[option_key] == tuple(option_val.items())
     else:
         assert compile_info[option_key] == option_val
