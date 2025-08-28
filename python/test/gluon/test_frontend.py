@@ -321,7 +321,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 @gluon.jit
 def shared_memory_permute_kernel(layout: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(ttgl.float16, [4, 128], layout)
-    perm = smem.permute((1, 0))
+    smem.permute((1, 0))
 
 
 @pytest.mark.parametrize("target", ALL_TARGETS)
