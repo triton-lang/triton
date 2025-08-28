@@ -764,6 +764,11 @@ public:
     });
     multiBufferAref(arefOps, numStages);
 
+    OpPassManager pm;
+    pm.addPass(createNVWSAssignStagePhase());
+    if (failed(runPipeline(pm, m)))
+      return signalPassFailure();
+
     mlir::RewritePatternSet patterns(context);
     patterns.add<LowerArefCreate>(context);
     GreedyRewriteConfig config;
