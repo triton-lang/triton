@@ -387,7 +387,7 @@ def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devi
 def test_tensor_descriptor_padding():
 
     @triton.jit
-    def tma_load(in_ptr, out_ptr, IM, IN, YM, YN, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr, padding: tl.constexpr):
+    def device_tma_load(in_ptr, out_ptr, IM, IN, YM, YN, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr, padding: tl.constexpr):
         x_desc = tl.make_tensor_descriptor(in_ptr, shape=[IM, IN], strides=[IN, 1], block_shape=[M_BLOCK, N_BLOCK],
                                            padding_option=padding)
 
@@ -396,33 +396,21 @@ def test_tensor_descriptor_padding():
 
         value = x_desc.load([moffset, noffset])
 
-        out_block = tl.make_block_ptr(
-            out_ptr,
-            shape=[YM, YN],
-            strides=[YN, 1],
-            block_shape=[M_BLOCK, N_BLOCK],
-            offsets=[moffset, noffset],
-            order=(0, 1),
-        )
-        tl.store(out_block, value)
+        offs_m = moffset + tl.arange(0, M_BLOCK)
+        offs_n = noffset + tl.arange(0, N_BLOCK)
+        tl.store(out_ptr + offs_m[:, None] * YN + offs_n[None, :], value)
 
     @triton.jit
-    def external_tma_load(in_desc, out_ptr, YM, YN, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+    def host_tma_load(in_desc, out_ptr, YM, YN, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
 
         moffset = tl.program_id(0) * M_BLOCK
         noffset = tl.program_id(1) * N_BLOCK
 
         value = in_desc.load([moffset, noffset])
 
-        out_block = tl.make_block_ptr(
-            out_ptr,
-            shape=[YM, YN],
-            strides=[YN, 1],
-            block_shape=[M_BLOCK, N_BLOCK],
-            offsets=[moffset, noffset],
-            order=(0, 1),
-        )
-        tl.store(out_block, value)
+        offs_m = moffset + tl.arange(0, M_BLOCK)
+        offs_n = noffset + tl.arange(0, N_BLOCK)
+        tl.store(out_ptr + offs_m[:, None] * YN + offs_n[None, :], value)
 
     # TMA descriptors require a global memory allocation
     def alloc_fn(size: int, alignment: float, stream: float):
@@ -437,20 +425,20 @@ def test_tensor_descriptor_padding():
     padding = "nan"
     input = torch.arange(IM * IN, device="cuda", dtype=torch.float32)
     input = input.reshape(IM, IN)
-    outt = torch.zeros((OM, ON), device="cuda", dtype=torch.float32)
-    outet = torch.zeros((OM, ON), device="cuda", dtype=torch.float32)
+    out_device_tma = torch.zeros((OM, ON), device="cuda", dtype=torch.float32)
+    out_host_tma = torch.zeros((OM, ON), device="cuda", dtype=torch.float32)
     dummy_block = [M_BLOCK, N_BLOCK]
     in_desc = TensorDescriptor(input, input.shape, input.stride(), dummy_block, padding=padding)
     grid = (triton.cdiv(OM, M_BLOCK), triton.cdiv(ON, N_BLOCK))
-    tma_load[grid](input, outt, IM, IN, OM, ON, M_BLOCK, N_BLOCK, padding)
-    external_tma_load[grid](in_desc, outet, OM, ON, M_BLOCK, N_BLOCK)
+    device_tma_load[grid](input, out_device_tma, IM, IN, OM, ON, M_BLOCK, N_BLOCK, padding)
+    host_tma_load[grid](in_desc, out_host_tma, OM, ON, M_BLOCK, N_BLOCK)
     expected = torch.zeros((OM, ON), device="cuda", dtype=torch.float32)
     expected[0:IN, 0:IM] = input
     expected[:, IN:ON] = float('nan')
     expected[IM:OM, :] = float('nan')
 
-    torch.testing.assert_close(expected, outt, equal_nan=True)
-    torch.testing.assert_close(expected, outet, equal_nan=True)
+    torch.testing.assert_close(expected, out_device_tma, equal_nan=True)
+    torch.testing.assert_close(expected, out_host_tma, equal_nan=True)
 
 
 @triton.jit(noinline=True)
