@@ -126,7 +126,7 @@ def _p_matmul_ogs(
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES:tl.constexpr=False,
              SWAP_XW: tl.constexpr = False,
-             IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False):
+             IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False):
     # tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
 
     # why is this faster than using host-side tensor descriptor?!

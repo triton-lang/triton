@@ -5,7 +5,7 @@ import triton
 import torch
 import torch.nn.functional as F
 from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
-from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, _dequantize_mxfp8_fn, MXFP_BLOCK_SIZE
+from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, MXFP_BLOCK_SIZE, _quantize_mxfp8_fn
 
 # -----------------------------------------------------------------------------
 #                      Dequantization / Quantization Utilities
@@ -66,7 +66,7 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
     return out_quant_tensor, out_scale
 
 
-def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype, axis: int):
+def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: torch.dtype, axis: int):
     """
     Upcasts an mxfp (packed) weight tensor back to float16 or bfloat16.
 
@@ -83,12 +83,12 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dty
     assert tensor.dtype in {torch.uint8, torch.float8_e5m2, torch.float8_e4m3fn}, \
         f"Invalid tensor dtype {tensor.dtype=}"
     assert scale.dtype == torch.uint8, f"Invalid scale dtype {scale.dtype=}"
-    assert dtype in (torch.float16, torch.bfloat16, torch.float32), f"Invalid output dtype {dtype=}"
+    assert target_dtype in (torch.float16, torch.bfloat16, torch.float32), f"Invalid output dtype {target_dtype=}"
     # upcast
     logical_quant_dim = tensor.shape[axis] * (2 if tensor.dtype == torch.uint8 else 1)
     tensor = tensor.transpose(axis, tensor.ndim - 1).contiguous()
     scale = scale.transpose(axis, scale.ndim - 1).contiguous()
-    out = torch.empty((*tensor.shape[:-1], logical_quant_dim), dtype=dtype, device=tensor.device)
+    out = torch.empty((*tensor.shape[:-1], logical_quant_dim), dtype=target_dtype, device=tensor.device)
     reshaped_out = out.view(-1, out.shape[-1])
     reshaped_tensor = tensor.view(-1, tensor.shape[-1])
     reshaped_scale = scale.view(-1, scale.shape[-1])
@@ -300,4 +300,4 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     return out_tensor
 
 
-dequantize_mxfp8_fn = _dequantize_mxfp8_fn
+quantize_mxfp8_fn = _quantize_mxfp8_fn

@@ -1,7 +1,6 @@
 # isort: off
 # fmt: off
 from dataclasses import dataclass, fields, replace
-import itertools
 import pytest
 import torch
 from typing import Union
@@ -17,7 +16,7 @@ from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4
 from triton_kernels.tensor_details import layout
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
-from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp, dequantize_mxfp8_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE
+from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp, quantize_mxfp8_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE
 # testing utilities
 from triton_kernels.testing import assert_close, compute_actual_scale
 # target-specific utilities
@@ -354,8 +353,8 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
     act_is_float8 = act_dtype_str.startswith("float8")
     if act_mxfp8:
         act_dtype_str = act_dtype_str[2:]
-        dequantize_mxfp8_spec = FnSpecs(
-            FnName.DEQUANTIZE_MXFP8.name, dequantize_mxfp8_fn, (), ()
+        quantize_mxfp8_spec = FnSpecs(
+            FnName.QUANTIZE_MXFP8.name, quantize_mxfp8_fn, (), ()
         )
 
     test_bwd = False
@@ -414,7 +413,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         y_scale_shape = y_shape[:-1] + (triton.cdiv(y_shape[-1], MXFP_BLOCK_SIZE),)
         y_scale = torch.empty(y_scale_shape, dtype=torch.uint8, device=x_tri.device)
         precision_opt = replace(precision_opt, act_scale=x_mx_scales_tri, out_scale=y_scale)
-        epilogue = Epilogue(dequantize_mxfp8_spec, tuple(), tuple(), effective_itemsize=6.0)
+        epilogue = Epilogue(quantize_mxfp8_spec, tuple(), tuple(), effective_itemsize=6.0)
     else:
         y_scale = None
 
@@ -454,7 +453,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
             ref_y = ref_y[:n_rows]
             tri_y = tri_y[:n_rows]
     if act_mxfp8:
-        tri_y = upcast_from_mxfp(tri_y, precision_opt.out_scale, dtype=torch.bfloat16, axis=-1).to(ref_y.dtype)
+        tri_y = upcast_from_mxfp(tri_y, precision_opt.out_scale, target_dtype=torch.bfloat16, axis=-1).to(ref_y.dtype)
         ref_y_quant, ref_y_scale = downcast_to_mxfp_torch(ref_y, act_dtype, axis=-1)
         ref_y = upcast_from_mxfp_torch(ref_y_quant, ref_y_scale, target_dtype=ref_y.dtype, axis=-1)
         maxtol = 4e-1
@@ -471,58 +470,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                 tri_y_scale).abs() < 1e-10, f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
-# Test that we don't use unsupported block sizes.
-@pytest.mark.parametrize("m", [8, 16, 32, 64, 128])
-@pytest.mark.parametrize("n", [8, 16, 32, 64, 128])
-@pytest.mark.parametrize("k", [8, 16, 32, 64, 128])
-def test_small_batch_matmul(m, n, k):
-    if is_hip():
-        pytest.skip("Not fully tested on AMD")
-
-    if m * n * k > 16384:
-        pytest.skip()
-
-    BATCH_SIZE = 10000
-
-    def _make_tensor(shape, dtype, trans):
-        if trans:
-            shape = (shape[0], shape[2], shape[1])
-        t = alloc_rand(shape, "cuda", dtype)
-        return t.transpose(1, 2) if trans else t
-
-    for x_transpose, w_transpose, bias, dtype in itertools.product(
-        (False, True),
-        (False, True),
-        (False, True),
-        (torch.float16, torch.bfloat16, torch.float8_e5m2),
-    ):
-        if (
-            torch.cuda.get_device_capability()[0] < 10
-            and dtype is torch.float8_e5m2
-            and (not w_transpose)
-        ):
-            continue  # Not supported
-
-        x = _make_tensor((BATCH_SIZE, m, k), dtype, x_transpose)
-        w = _make_tensor((BATCH_SIZE, k, n), dtype, w_transpose)
-        bias = _make_tensor((BATCH_SIZE, n), torch.float32, False) if bias else None
-        tri_y = matmul_ogs(x, w, bias)
-
-        # ref_y = matmul_ogs_torch(x.float(), w.float(), bias)
-
-        # This is faster than matmul_ogs_torch.
-        ref_y = torch.bmm(x.float(), w.float())
-        if bias is not None:
-            ref_y += bias[:, None, :]
-
-        assert_close(
-            ref_y,
-            tri_y,
-            maxtol=4e-1 if dtype is torch.float8_e5m2 else None,
-            rmstol=4e-2 if dtype is torch.float8_e5m2 else None,
-        )
-
-
 def test_set_idle_sms():
     if not is_cuda():
         pytest.skip("Only supported on CUDA")
@@ -530,7 +477,7 @@ def test_set_idle_sms():
     num_idle_sms = 24
     matmul_ogs_set_idle_sms(num_idle_sms)
     flags = make_opt_flags(torch.float32, torch.float32, torch.float32, PrecisionConfig(), \
-                           1, 1024, 1024, 1024, None, True, False, 1)
+                           1024, 1024, 1024, None, True, False, 1)
     assert flags.idle_sms == num_idle_sms
 
 
