@@ -2251,3 +2251,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@filecheck_test
+@gluon.jit
+def test_layout_zeros():
+    # CHECK: #blocked = #ttg.blocked
+    # CHECK: arith.constant dense<0.000000e+00> : tensor<128xf32, #blocked>
+    ttgl.zeros([128], ttgl.float32, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
