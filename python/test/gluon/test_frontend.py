@@ -128,7 +128,7 @@ def test_convert_layout_not_trivial(target):
     with pytest.raises(CompilationError) as e:
         src_layout: ttgl.constexpr = ttgl.AutoLayout()
         dst_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
-        kernel.warmup(src_layout, dst_layout, grid=(1, ))
+        run_parser(kernel, *make_args(src_layout, dst_layout), target=target)
 
     assert "layout conversion from AutoLayout()" in str(e.value.__cause__)
     assert "to BlockedLayout(size_per_thread=[2]" in str(e.value.__cause__)
@@ -699,7 +699,7 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
 
 @pytest.mark.parametrize("target", [HOPPER_TARGET, BLACKWELL_TARGET])
 def test_async_tma(target):
-    input = torch.randn((1024, 1024), device="cuda", dtype=torch.float16)
+    input = MockTensor(ttgl.float16, (1024, 1024))
     XBLOCK = 128
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     input_desc = TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
@@ -758,7 +758,7 @@ def async_tma_blackwell_kernel(input_desc, XBLOCK: ttgl.constexpr):
 
 
 def test_async_tma_blackwell():
-    input = torch.randn((1024, 1024), device="cuda", dtype=torch.float16)
+    input = MockTensor(ttgl.float16, (1024, 1024))
     XBLOCK = 128
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     input_desc = TensorDescriptor.from_tensor(input, [1, XBLOCK], shared_layout)

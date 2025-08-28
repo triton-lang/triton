@@ -966,8 +966,17 @@ class MockTensor:
             return MockTensor(arg)
         return arg
 
-    def __init__(self, dtype):
+    def __init__(self, dtype, shape=None):
+        if shape is None:
+            shape = [1]
         self.dtype = dtype
+        self.shape = shape
+
+    def stride(self):
+        strides = [1]
+        for size in self.shape[1:]:
+            strides.append(strides[-1] * size)
+        return tuple(reversed(strides))
 
     @staticmethod
     def data_ptr():
