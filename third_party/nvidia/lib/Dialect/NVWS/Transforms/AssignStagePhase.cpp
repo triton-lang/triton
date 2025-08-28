@@ -76,10 +76,16 @@ template <class T> struct AssignStagePhase {
       : aref(aref), partitionId(partitionId) {}
 
   T isValidOp(Operation *op) {
+    auto isZero = [](Value v) { return matchPattern(v, m_Zero()); };
+
     if (isa<T>(op) && op->getOperand(0) == aref) {
       auto opPartitionId = getPartitionId(op);
-      if (!opPartitionId || *opPartitionId == partitionId)
-        return cast<T>(op);
+      if (!opPartitionId || *opPartitionId == partitionId) {
+        auto casted = cast<T>(op);
+        if (isZero(casted.getStage()) && isZero(casted.getPhase())) {
+          return casted;
+        }
+      }
     }
     return {};
   }
