@@ -7,6 +7,7 @@ import os
 import torch
 import triton
 import triton.language as tl
+from triton._internal_testing import is_cuda, is_hip
 
 
 def test_metadata() -> None:
@@ -151,13 +152,6 @@ def test_multiple_hooks() -> None:
     {"extern_libs": {}},
 ])
 def test_launch_with_options(options) -> None:
-
-    def is_cuda():
-        return triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-    def is_hip():
-        return triton.runtime.driver.active.get_current_target().backend == "hip"
-
     if "extern_libs" in options:
         # copied from tutorials/07-extern-functions.py
         current_dir = pathlib.Path(os.path.dirname(os.path.abspath(__file__)))
