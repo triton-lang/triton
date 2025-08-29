@@ -525,11 +525,12 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
     if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
       return {};
   }
-  if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
-      op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
-      op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp,
-          nvidia_gpu::WarpGroupDotWaitOp>(op)) {
+  if ((op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
+       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
+       op->hasTrait<mlir::OpTrait::Elementwise>() ||
+       isa<scf::WhileOp, scf::YieldOp, scf::ConditionOp,
+           nvidia_gpu::WarpGroupDotWaitOp>(op)) &&
+      !isa<triton::gpu::UpcastFpOpInterface>(op)) {
     return encoding;
   }
 
@@ -558,11 +559,12 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
     if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
       return {};
   }
-  if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
-      op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
-      op->hasTrait<mlir::OpTrait::Elementwise>() ||
-      isa<scf::WhileOp, scf::ForOp, scf::YieldOp, scf::ConditionOp,
-          nvidia_gpu::WarpGroupDotWaitOp>(op))
+  if ((op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
+       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
+       op->hasTrait<mlir::OpTrait::Elementwise>() ||
+       isa<scf::WhileOp, scf::ForOp, scf::YieldOp, scf::ConditionOp,
+           nvidia_gpu::WarpGroupDotWaitOp>(op)) &&
+      !isa<triton::gpu::UpcastFpOpInterface>(op))
     return encoding;
   if (auto reduceOp = dyn_cast<triton::ReduceOp>(op))
     return inferDstEncoding(reduceOp, encoding);
@@ -938,7 +940,13 @@ LogicalResult getConvertBackwardSlice(
         continue;
       }
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
-        auto srcEncoding = inferSrcEncoding(definingOp, encoding);
+        Attribute srcEncoding;
+        if (auto upcast =
+                dyn_cast<triton::gpu::UpcastFpOpInterface>(definingOp)) {
+          srcEncoding = upcast.inferSrcEncoding(i, encoding);
+        } else {
+          srcEncoding = inferSrcEncoding(definingOp, encoding);
+        }
         if (!srcEncoding)
           return failure();
         // If the infered layout matches the original one we don't need to keep

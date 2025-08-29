@@ -702,9 +702,7 @@ public:
       // Don't need to covert int8 holding mxfp4--the upcast_mxfp op can
       // take int8 tensor as input.
       if (type == ScaleDotElemType::BF16 || type == ScaleDotElemType::FP16 ||
-          type == ScaleDotElemType::E2M1 ||
-          (mfmaVersion == 4 &&
-           (type == ScaleDotElemType::E4M3 || type == ScaleDotElemType::E5M2)))
+          type == ScaleDotElemType::E2M1)
         return v;
 
       auto upcastedType = RankedTensorType::get(
@@ -816,6 +814,153 @@ SmallVector<unsigned, 2> getTilesPerWarp(Value aScale, Value bScale) {
   }
   return {1, 1};
 }
+
+class DecomposeAMDScaledBlocked final : public ttg::DecomposeScaledBlocked {
+public:
+  DecomposeAMDScaledBlocked(MLIRContext *context, PatternBenefit benefit = 1)
+      : ttg::DecomposeScaledBlocked(context, benefit) {}
+  using TensorValue = TypedValue<RankedTensorType>;
+
+  LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
+                                PatternRewriter &rewriter) const override {
+    if (!dotOp.getLhsKPack() || !dotOp.getRhsKPack())
+      return failure();
+
+    RankedTensorType oldRetType = dotOp.getType();
+    if (!isa_and_nonnull<BlockedEncodingAttr>(oldRetType.getEncoding()))
+      return rewriter.notifyMatchFailure(
+          dotOp, "expected blocked encoding result tensor");
+    unsigned rank = oldRetType.getRank();
+    if (rank == 3)
+      return rewriter.notifyMatchFailure(dotOp, "NYI: 3d case");
+
+    TensorValue aScale = dotOp.getAScale();
+    TensorValue bScale = dotOp.getBScale();
+    if (aScale && bScale)
+      return rewriter.notifyMatchFailure(dotOp, "NYI: both LHS and RHS scale");
+
+    ScaleDotElemType aElemType = dotOp.getAElemType();
+    ScaleDotElemType bElemType = dotOp.getBElemType();
+    auto supportsTypes = [](ScaleDotElemType elemType) {
+      return elemType == ScaleDotElemType::E2M1 ||
+             elemType == ScaleDotElemType::E4M3 ||
+             elemType == ScaleDotElemType::E5M2 ||
+             elemType == ScaleDotElemType::BF16 ||
+             elemType == ScaleDotElemType::FP16;
+    };
+    if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
+      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6 operand");
+
+    bool useFp16 = aElemType == ScaleDotElemType::FP16 ||
+                   bElemType == ScaleDotElemType::FP16;
+    auto loc = dotOp.getLoc();
+
+    auto cvtDotOperand = [&](TensorValue v, int opIdx) -> TensorValue {
+      auto *ctx = rewriter.getContext();
+      auto retEnc = dotOp.getType().getEncoding();
+      auto vType = v.getType();
+      auto encoding = ttg::DotOperandEncodingAttr::get(ctx, opIdx, retEnc,
+                                                       vType.getElementType());
+      auto retTy = vType.cloneWithEncoding(encoding);
+      return rewriter.create<ttg::ConvertLayoutOp>(loc, retTy, v);
+    };
+
+    auto scaledA = scaleArg(rewriter, dotOp, 0, useFp16);
+    scaledA = cvtDotOperand(scaledA, 0);
+    auto scaledB = scaleArg(rewriter, dotOp, 1, useFp16);
+    scaledB = cvtDotOperand(scaledB, 1);
+
+    auto newDot =
+        rewriter.create<tt::DotOp>(loc, scaledA, scaledB, dotOp.getC());
+
+    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
+                                                      newDot);
+    return success();
+  }
+
+  TensorValue scaleArg(PatternRewriter &rewriter, DotScaledOp dotOp, int opIdx,
+                       bool useFp16) const {
+    TensorValue v = (opIdx == 0) ? dotOp.getA() : dotOp.getB();
+    TensorValue scale = (opIdx == 0) ? dotOp.getAScale() : dotOp.getBScale();
+    ScaleDotElemType elemType =
+        (opIdx == 0) ? dotOp.getAElemType() : dotOp.getBElemType();
+
+    if (elemType == ScaleDotElemType::BF16 ||
+        elemType == ScaleDotElemType::FP16)
+      return v;
+
+    auto mod = dotOp->getParentOfType<ModuleOp>();
+    RankedTensorType vType = v.getType();
+    unsigned rank = vType.getRank();
+    int32_t kDim = opIdx == 0 ? rank - 1 : rank - 2;
+    FloatType computeType =
+        useFp16 ? rewriter.getF16Type() : rewriter.getBF16Type();
+    FloatType bf16Type = rewriter.getBF16Type();
+    auto vType16 = vType.clone(computeType);
+
+    auto loc = dotOp.getLoc();
+    auto *ctx = rewriter.getContext();
+    auto retEnc = dotOp.getType().getEncoding();
+
+    bool isFp4 = (elemType == ScaleDotElemType::E2M1);
+    if (!scale) {
+      if (isFp4) {
+        return rewriter.create<ttg::Fp4ToFpOp>(loc, v, computeType, kDim);
+      } else {
+        return cast<TensorValue>(
+            rewriter.create<tt::FpToFpOp>(loc, vType16, v).getResult());
+      }
+    }
+
+    auto vEnc = cast<BlockedEncodingAttr>(vType16.getEncoding());
+    RankedTensorType unpackedType16 = vType16;
+    auto sizePerThread = llvm::to_vector(vEnc.getSizePerThread());
+
+    if (isFp4) {
+      // We want scale to have the same layout as the operand. But Fp4 operand
+      // is packed along kDim. So we need to double the shape to fit scale.
+      auto packedShape = llvm::to_vector(vType16.getShape());
+      packedShape[kDim] *= 2;
+      unpackedType16 = unpackedType16.clone(packedShape);
+    }
+
+    unpackedType16 = unpackedType16.cloneWithEncoding(vEnc);
+
+    if (opIdx == 1) {
+      auto order = DecomposeScaledBlocked::getTransposeOrder(rank);
+      scale = rewriter.create<tt::TransOp>(loc, scale, order);
+    }
+
+    // 1) Cast scale to bf16
+    // We want to put the scale in the exponent of Bf16 for further usage, so we
+    // always generate a Bf16 scale. Same in step 2.
+    TensorValue scaleBf16 = scaleTo16(rewriter, scale, bf16Type);
+
+    // 2) Broadcast scale to the same shape and layout as v
+    TensorValue reshapeScale =
+        broadcastScale(rewriter, dotOp, mod, scaleBf16, kDim);
+
+    reshapeScale = rewriter.create<ttg::ConvertLayoutOp>(
+        loc, unpackedType16.clone(bf16Type), reshapeScale);
+
+    // 3) Upcast with scale
+    TensorValue result;
+    if (isFp4) {
+      result = rewriter.create<triton::amdgpu::ScaledUpcastFp4Op>(
+          loc, unpackedType16, v, reshapeScale, kDim);
+    } else {
+      result = rewriter.create<triton::amdgpu::ScaledUpcastFp8Op>(
+          loc, unpackedType16, v, reshapeScale);
+    }
+
+    // 4) If not fastMath and the scale is NaN, return NaN, else return the
+    // scaled value.
+    if (dotOp.getFastMath())
+      return result;
+
+    return maskNan(rewriter, dotOp, mod, result, scale, kDim);
+  }
+};
 
 class ScaledBlockedToScaledMFMAF8F6F4 final
     : public OpRewritePattern<triton::DotScaledOp> {
@@ -1059,7 +1204,7 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
   return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
 }
 
-// promote operands of dot op if the existing combination is not natively
+// Promote operands of dot op if the existing combination is not natively
 // supported.
 static void decomposeMixedModeDotOp(ModuleOp mod) {
   mod.walk([](triton::DotOp dotOp) -> void {
@@ -1443,11 +1588,12 @@ struct TritonAMDGPUAccelerateMatmulPass
     case ISAFamily::CDNA4:
       mfmaPatterns.add<::ScaledBlockedToScaledMFMAF8F6F4>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize,
-          /*benefit=*/10);
+          /*benefit=*/4);
+      mfmaPatterns.add<::DecomposeAMDScaledBlocked>(context, /*benefit=*/3);
       [[fallthrough]];
-    case ISAFamily::CDNA1:
-    case ISAFamily::CDNA2:
     case ISAFamily::CDNA3:
+    case ISAFamily::CDNA2:
+    case ISAFamily::CDNA1:
       mfmaPatterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
           /*benefit=*/2);

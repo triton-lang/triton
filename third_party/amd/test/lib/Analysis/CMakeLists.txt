@@ -8,6 +8,7 @@ add_mlir_library(TritonAMDGPUTestAnalysis
   TritonGPUTableGen
   TritonGPUAttrDefsIncGen
   TritonGPUTypeInterfacesIncGen
+  TritonGPUOpInterfacesIncGen
 
   LINK_LIBS PUBLIC
   MLIRPass
