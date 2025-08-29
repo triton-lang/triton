@@ -614,20 +614,20 @@ ExitOp createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   } else {
     builder.setInsertionPoint(firstEnter);
   }
-  auto combinedEnter = builder.create<EnterOp>(firstEnter.getLoc(), arefEnterBuffers,
-                                       builder.getType<AsyncTokenType>(), aref,
-                                       zero, zero);
+  auto combinedEnter = builder.create<EnterOp>(
+      firstEnter.getLoc(), arefEnterBuffers, builder.getType<AsyncTokenType>(),
+      aref, zero, zero);
   assignStageCluster(combinedEnter, getPartitionId(firstEnter),
                      getStageCluster(firstEnter), builder);
 
   builder.setInsertionPoint(lastExit);
   llvm::SmallVector<Attribute> AsyncOpAttrs(opAttrsSet.begin(),
                                             opAttrsSet.end());
-  auto combinedExit =
-      builder.create<ExitOp>(firstEnter.getLoc(), aref, combinedEnter.getToken(), zero,
-                             builder.getArrayAttr(AsyncOpAttrs));
-  assignStageCluster(combinedExit, getPartitionId(lastExit), getStageCluster(lastExit),
-                     builder);
+  auto combinedExit = builder.create<ExitOp>(
+      firstEnter.getLoc(), aref, combinedEnter.getToken(), zero,
+      builder.getArrayAttr(AsyncOpAttrs));
+  assignStageCluster(combinedExit, getPartitionId(lastExit),
+                     getStageCluster(lastExit), builder);
 
   std::function<void(Operation *, Operation *)> moveUserAfter =
       [&](Operation *op, Operation *target) {
