@@ -234,7 +234,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
 
     def memdesc_index(self, mem_desc, index):
-        _check(isinstance(index, int), lambda: f"expected 'index' to be an int but got {index}")
+        index = self.to_tensor(index)
+        _check(index.type == ttgl.int32, lambda: f"expected 'index' to be int32 but got {index.type}")
         shape = mem_desc.shape[1:]
         index = self.to_tensor(index).handle
         layout = mem_desc.layout
