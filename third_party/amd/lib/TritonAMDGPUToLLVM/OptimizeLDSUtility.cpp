@@ -101,7 +101,6 @@ estimateResourcesForReplacement(OpBuilder builder,
   RankedTensorType dstTy = cvtOp.getType();
   RankedTensorType intermediateTy = RankedTensorType::get(
       srcTy.getShape(), srcTy.getElementType(), tmpLayout);
-  auto *ctx = cvtOp->getContext();
 
   int tmpCvtLDS = getConvertLayoutScratchInBytes(srcTy, intermediateTy,
                                                  /*usePadding*/ true);

@@ -107,7 +107,6 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   // Map the MLIR attribute `tt.nv_tma_desc` to the appropriate LLVM and NVVM
   // attributes.
   static void handleByvalTmaDescArgs(LLVM::LLVMFuncOp &llvmFuncOp) {
-    const bool isKernel = triton::isKernel(llvmFuncOp);
     for (unsigned i = 0; i < llvmFuncOp.getNumArguments(); ++i) {
       const auto attrs = llvmFuncOp.getArgAttrDict(i);
       if (!attrs) {
@@ -119,12 +118,11 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
           const auto i32_type =
               mlir::IntegerType::get(llvmFuncOp.getContext(), 32);
           assert(attr.getValue() == mlir::IntegerAttr::get(i32_type, 1));
-          assert(isKernel &&
+          assert(triton::isKernel(llvmFuncOp) &&
                  "tt.nv_tma_desc is not supported for device functions");
 
           // See
           // https://github.com/google/jax/blob/main/jaxlib/mosaic/gpu/passes.cc
-          mlir::BlockArgument arg = llvmFuncOp.getArgument(i);
           const auto byteType =
               mlir::IntegerType::get(llvmFuncOp.getContext(), 8);
           const auto arrayType = mlir::LLVM::LLVMArrayType::get(

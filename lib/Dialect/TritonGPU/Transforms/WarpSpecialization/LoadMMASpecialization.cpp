@@ -502,7 +502,6 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   Value firstView = createSingleBufferView(b, allocOp, b.intCst(0));
   b.setInsertionPointAfter(loop);
   Value lastIndex = loop.getResult(index.getArgNumber() - 1);
-  Value lastPhase = loop.getResult(phase.getArgNumber() - 1);
   Value lastView = createSingleBufferView(b, allocOp, lastIndex);
 
   // Find users of the accumulator in the loop and sort them by program order.

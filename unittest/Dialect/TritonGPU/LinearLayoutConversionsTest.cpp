@@ -3559,10 +3559,6 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_128) {
 }
 
 TEST_F(LinearLayoutConversionsTest, TensorMemory_Packed) {
-  auto d0 = S("dim0");
-  auto d1 = S("dim1");
-  auto rows = S("rows");
-  auto cols = S("cols");
   auto enc = tmem(128, 128, /*unpacked*/ false, 1, 1);
   auto encUnpacked = tmem(128, 128, /*unpacked*/ true, 1, 1);
   // Packed and unpacked map to the same layout
@@ -3580,7 +3576,6 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_Packed) {
 TEST_F(LinearLayoutConversionsTest, TensorMemory_CTASplit) {
   auto d0 = S("dim0");
   auto d1 = S("dim1");
-  auto kRow = S("row");
   auto kCol = S("col");
   auto enc = tmem(64, 128, /*unpacked*/ true, 2, 1);
   auto enc1 = tmem(64, 128, /*unpacked*/ true, 1, 1);
@@ -3601,7 +3596,6 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_CTASplit) {
   // The non-contiguous tile stays non-contiguous even in the multiCTA setup
   auto noncontigTile =
       toLinearLayout({64, 64}, tmem(64, 64, /*unpacked*/ true, 1, 1));
-  auto noncontigEnc = tmem(64, 64, /*unpacked*/ true, 2, 2);
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
             noncontigTile * LinearLayout::identity1D(2, kCol, d0) *
                 LinearLayout::identity1D(2, kCol, d1));

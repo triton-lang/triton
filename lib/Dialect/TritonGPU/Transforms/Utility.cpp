@@ -422,7 +422,7 @@ static Attribute inferTransOpDstEncoding(Attribute srcEnc,
 static Attribute inferDstEncoding(triton::gpu::Fp4ToFpOp op, Attribute srcEnc) {
   Attribute dstEnc;
   auto shape = op.getSrc().getType().getShape();
-  auto result =
+  [[maybe_unused]] auto result =
       srcEnc.getDialect()
           .getRegisteredInterface<triton::DialectInferLayoutInterface>()
           ->inferFp4ToFpOpEncoding(shape, op.getAxis(), srcEnc, dstEnc,
@@ -474,7 +474,7 @@ static Attribute inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape,
     return {};
 
   Attribute dstEnc;
-  auto result =
+  [[maybe_unused]] auto result =
       srcEnc.getDialect()
           .getRegisteredInterface<triton::DialectInferLayoutInterface>()
           ->inferReshapeOpEncoding(srcShape, srcEnc, dstShape, dstEnc,
@@ -1040,13 +1040,14 @@ int getNVIDIAComputeCapability(Operation *module) {
       module->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
   assert(targetAttr && "Expected a target attribute on the module operation");
 
-  StringRef ref = targetAttr.strref();
+  [[maybe_unused]] StringRef ref = targetAttr.strref();
   assert(ref.starts_with("cuda:") &&
          "expected target attribute to be prefixed with \"cuda:\"");
 
   StringRef capabilityStr = ref.drop_front(5); // drop the "cuda:"
   int computeCapability;
-  bool parseError = capabilityStr.getAsInteger(10, computeCapability);
+  [[maybe_unused]] bool parseError =
+      capabilityStr.getAsInteger(10, computeCapability);
   assert(!parseError &&
          "invalid compute capability string in target attribute");
 

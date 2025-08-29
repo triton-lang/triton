@@ -69,7 +69,7 @@ struct AsyncRef {
     auto exitOp = [this, &partition, srcStageCluster,
                    token](PartitionBuilder &b) {
       auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
-      auto exitOp = b.createInto<triton::nvws::ArefPutExitOp>(
+      b.createInto<triton::nvws::ArefPutExitOp>(
           partition, srcStageCluster, aref, token, zero,
           b.getArrayAttr(SmallVector<Attribute>{triton::nvws::AsyncOpAttr::get(
               aref.getContext(), triton::nvws::AsyncOp::NONE)}));
@@ -87,7 +87,7 @@ struct AsyncRef {
     auto exitOp = [this, &partition, srcStageCluster,
                    token](PartitionBuilder &b) {
       auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
-      auto exitOp = b.createInto<triton::nvws::ArefGetExitOp>(
+      b.createInto<triton::nvws::ArefGetExitOp>(
           partition, srcStageCluster, aref, token, zero,
           b.getArrayAttr(SmallVector<Attribute>{triton::nvws::AsyncOpAttr::get(
               aref.getContext(), triton::nvws::AsyncOp::NONE)}));
@@ -183,7 +183,6 @@ LogicalResult DependencyRewriter::run() {
         assert(distance > 0 && "self-recursion must occur in the future");
         return;
       }
-      Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
       UseInfo &info = useInfo[output];
       info.consumers[{usePartition, distance}].push_back(&use);
     };
@@ -231,8 +230,6 @@ LogicalResult DependencyRewriter::run() {
       b.setLoc(output.getLoc());
       ImplicitLocOpBuilder endBuilder(b.getLoc(), loop->getNextNode());
       AsyncRef aref = allocateAsyncValue(tensorType, maxDistance);
-
-      unsigned numConsumers = info.consumers.size();
 
       for (auto &[key, uses] : info.consumers) {
         assert(!uses.empty() && "expected at least one use");

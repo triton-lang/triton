@@ -24,14 +24,11 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
         cast<RankedTensorType>(op.getResult().getType());
 
     ArrayRef<int64_t> dstShape = resultType.getShape();
-    Attribute dstEncoding = resultType.getEncoding();
 
     Value srcVal = op.getSources()[0];
     RankedTensorType srcType = cast<RankedTensorType>(srcVal.getType());
     ArrayRef<int64_t> srcShape = srcType.getShape();
-    Attribute srcEncoding = srcType.getEncoding();
 
-    MLIRContext *context = resultType.getContext();
     auto linearLayoutSrc = triton::gpu::toLinearLayout(srcType);
     auto outDimNames = llvm::to_vector(linearLayoutSrc.getOutDimNames());
     // Call transposeOuts, to ensure that order of input and output tensor

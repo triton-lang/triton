@@ -493,11 +493,10 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   auto vecIndices =
       applyLinearLayoutVec(loc, rewriter, ll, commonIndices, registerIndices);
 
-  unsigned rank = shape.size();
   SmallVector<SmallVector<Value>> ret;
   for (auto &indices : vecIndices) {
     SmallVector<Value> vals;
-    assert(indices.size() == rank);
+    assert(indices.size() == shape.size());
     for (auto &idx : indices)
       vals.push_back(idx.second);
     ret.push_back(vals);
@@ -746,9 +745,7 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
-  StringAttr kOffset = str_attr("offset");
 
-  auto shape = sharedTy.getShape();
   auto paddedEnc =
       dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedTy.getEncoding());
   LinearLayout regToSharedLayout = LinearLayout::empty();

@@ -517,7 +517,7 @@ public:
     auto typeB = opB.getType();
     auto typeOutput = op.getType();
     auto structTypeA = dyn_cast<LLVM::LLVMStructType>(typeA);
-    auto structTypeB = dyn_cast<LLVM::LLVMStructType>(typeB);
+    [[maybe_unused]] auto structTypeB = dyn_cast<LLVM::LLVMStructType>(typeB);
     auto structTypeOutput = dyn_cast<LLVM::LLVMStructType>(typeOutput);
     assert(!structTypeB && "Operand B can not be registers");
     assert(structTypeOutput && "Output and C operand must be registers");
@@ -634,7 +634,6 @@ static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
   allocOp(
       {ptxBuilder.newOperand(pred, "b"), ptxBuilder.newOperand(sharedMem, "r")},
       /*onlyAttachMLIRArgs=*/true);
-  auto voidTy = void_ty(func->getContext());
   ptxBuilder.launch(rewriter, loc, void_ty(func->getContext()));
   rewriter.create<NVVM::Barrier0Op>(loc);
   Value address = b.load(i32_ty, sharedMem);
@@ -659,7 +658,6 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
     OpBuilder b(ret);
     auto ctx = ret->getContext();
     auto loc = ret.getLoc();
-    auto voidTy = void_ty(ctx);
     b.create<NVVM::Barrier0Op>(loc);
     PTXBuilder ptxBuilder;
     // Calculate the predicate in the inline asm to avoid creating long

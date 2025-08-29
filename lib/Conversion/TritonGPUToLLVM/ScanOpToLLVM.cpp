@@ -252,8 +252,6 @@ static void AddPartialReduceOneWarp(SmallVector<SmallVector<Value>> &srcValues,
   unsigned parallelElementsPerThread = helper.getNonAxisNumElementsPerThread();
   unsigned elementStride = helper.getAxisElementStride();
   unsigned threadStride = helper.getAxisThreadStride();
-  unsigned axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
-  unsigned numParallelLane = helper.getNonAxisNumThreadsPerCTA();
   unsigned scanDim = helper.getAxisNumThreadsPerWarpWithUniqueData();
   Value maskFirstWarp = b.icmp_eq(warpId, b.i32_val(0));
   Value maskFirstLane = b.icmp_eq(laneIdAxis, b.i32_val(0));

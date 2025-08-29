@@ -46,10 +46,12 @@ struct AllocateProtonGlobalScratchBufferPass
     if (alignments.empty())
       return;
 
+#ifndef NDEBUG
     bool allAlignmentsEqual = std::equal(alignments.begin() + 1,
                                          alignments.end(), alignments.begin());
     assert(allAlignmentsEqual &&
            "all global scratch buffer alignment values must be the same");
+#endif
     mod->setAttr("ttg.profile_scratch_memory_size",
                  builder.getI32IntegerAttr(cumulativeMemorySize));
     mod->setAttr("ttg.profile_scratch_memory_alignment",

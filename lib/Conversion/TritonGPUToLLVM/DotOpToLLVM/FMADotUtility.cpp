@@ -54,7 +54,6 @@ ValueTableFMA getValueTableFromStructFMA(
   assert(elems.size() == numElemsRep * product(repetitions));
   assert(kDim == 1 || kDim == 2);
   assert(nonKDim == 1 || nonKDim == 2);
-  const unsigned bDim = 0;
 
   for (unsigned idx = 0; idx < elems.size(); ++idx) {
     auto inRepLinearIdx = idx % numElemsRep;
@@ -79,7 +78,6 @@ LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
                                       const LLVMTypeConverter *typeConverter,
                                       ConversionPatternRewriter &rewriter,
                                       FMAVectorMultiplier &multiplier) {
-  auto *ctx = rewriter.getContext();
   auto loc = op.getLoc();
 
   auto A = op.getA();
@@ -116,7 +114,6 @@ LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
 
   unsigned K = aShapePerCTA[2];
 
-  unsigned threadTileShape[3];
   unsigned repetitions[3];
   for (int i = 0; i < 3; ++i) {
     repetitions[i] =

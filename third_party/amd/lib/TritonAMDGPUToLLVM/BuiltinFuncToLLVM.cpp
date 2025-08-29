@@ -160,7 +160,6 @@ private:
     StringRef calleeName = callOp.getCallee().value();
 
     auto operands = callOp.getOperands();
-    auto result = callOp.getResult();
 
     LLVM::LLVMFunctionType calleeType = callOp.getCalleeFunctionType();
     Type returnType = calleeType.getReturnType();

@@ -130,7 +130,7 @@ getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
 }
 
 const Partition *getPartition(Operation *op, const WarpSchedule &schedule) {
-  auto origOp = op;
+  [[maybe_unused]] auto origOp = op;
   while (op && !schedule.getPartition(op)) {
     op = op->getParentOp();
   }

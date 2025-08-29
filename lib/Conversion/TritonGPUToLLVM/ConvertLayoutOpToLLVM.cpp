@@ -39,7 +39,6 @@ struct ConvertLayoutOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     MLIRContext *ctx = op.getContext();
 
-    const auto &shape = op.getType().getShape();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
@@ -95,8 +94,6 @@ struct ConvertLayoutOpConversion
     StringAttr kRegister = str_attr("register");
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
-    auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> outVals(conversion.getInDimSize(kRegister));
     for (int i = 0; i < outVals.size(); i++) {
@@ -424,11 +421,10 @@ struct ConvertLayoutOpConversion
       ArrayRef<TranspositionInfo> mixedTranspositions) const {
     auto *ctx = rewriter.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    StringAttr kReg = str_attr("register");
     StringAttr kLane = str_attr("lane");
 
     SmallVector<Value> vals(inVals.begin(), inVals.end());
-    int m = mixedTranspositions.size();
+    [[maybe_unused]] int m = mixedTranspositions.size();
     int numRegs = inVals.size();
     // A single mixed transposition (r_i l_j) which swaps the i-th register
     // index bit and the j-th lane index bit of an element applies a tiled 2x2

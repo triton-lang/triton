@@ -31,8 +31,6 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
-    Attribute srcLayout = srcTy.getEncoding();
-    Attribute dstLayout = dstTy.getEncoding();
 
     if (isPackedLoad || canUseTransLoad(op, srcTy, dstTy)) {
       return lowerSharedToDotOperandTransLL(op, adaptor,
@@ -56,7 +54,6 @@ private:
       return false;
     }
 
-    auto tilesPerWarp = mfmaEnc.getTilesPerWarp();
     if (!mfmaEnc.hasUnitTilesPerWarp()) {
       return false;
     }
@@ -186,7 +183,7 @@ private:
     SmallVector<Value> elemsI32;
     mlir::Type retTy = dstTy;
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-    bool valid = emitTransferBetweenRegistersAndShared(
+    [[maybe_unused]] bool valid = emitTransferBetweenRegistersAndShared(
         ldsTransLayout, srcTy, llvmElemTy,
         /*maxVecElems=*/std::nullopt, smemObj, loc, rewriter, targetInfo,
         laneId, warpId, [&](VectorType vecTy, Value vecAddr) {

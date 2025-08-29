@@ -300,7 +300,6 @@ struct ReshapeOpConversion : public ConvertOpToLLVMPattern<ReshapeOp> {
                                "expensive view not supported on reshape op");
     }
     auto resultTy = cast<RankedTensorType>(op.getType());
-    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
     auto typeConverter = getTypeConverter();
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     Value ret = packLLElements(loc, typeConverter, vals, rewriter, resultTy);
@@ -439,10 +438,8 @@ struct BroadcastOpConversion
     auto srcLayout = srcTy.getEncoding();
     auto resultLayout = resultTy.getEncoding();
     auto srcShape = srcTy.getShape();
-    auto resultShape = resultTy.getShape();
-    unsigned rank = srcTy.getRank();
     auto typeConverter = getTypeConverter();
-    assert(rank == resultTy.getRank());
+    assert(srcTy.getRank() == resultTy.getRank());
     auto srcOffsets = emitOffsetForLayout(srcLayout, srcTy);
     auto resultOffsets = emitOffsetForLayout(resultLayout, resultTy);
     SmallVector<Value> srcVals = unpackLLElements(loc, src, rewriter);
@@ -474,7 +471,6 @@ struct MemDescIndexOpConversion
   matchAndRewrite(triton::gpu::MemDescIndexOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto *ctx = op->getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
@@ -520,20 +516,16 @@ struct MemDescSubsliceOpConversion
   matchAndRewrite(triton::gpu::MemDescSubsliceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto *ctx = op->getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
-    auto destTy = op.getResult().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto layoutOrder = getOrder(srcTy);
-    auto enc = srcTy.getEncoding();
 
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
     auto opOffsetVals = op.getOffsets();
 
     auto base = smemObj.getBase();
-    auto elemPtrTy = base.getType();
     // Accumulate the logical offsets
     SmallVector<Value> offsetVals;
     for (auto [oldOffVal, opOff] :

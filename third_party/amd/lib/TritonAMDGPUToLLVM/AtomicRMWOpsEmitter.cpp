@@ -97,8 +97,8 @@ Value genPrefixSum(RewriterBase &rewriter, Value v0) {
   auto loc = v0.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  auto v0Ty = v0.getType();
-  assert(v0Ty.getIntOrFloatBitWidth() == i32_ty.getIntOrFloatBitWidth());
+  assert(v0.getType().getIntOrFloatBitWidth() ==
+         i32_ty.getIntOrFloatBitWidth());
 
   Value v1 = v0;
   // v_add_f32 v1, v0, v0 row_shr:1 bound_ctrl:0

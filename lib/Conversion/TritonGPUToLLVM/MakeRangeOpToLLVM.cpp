@@ -20,7 +20,6 @@ struct MakeRangeOpConversion
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     RankedTensorType ty = op.getType();
-    auto shape = ty.getShape();
     auto layout = ty.getEncoding();
     auto elemTy = ty.getElementType();
     assert(elemTy.isInteger(32));

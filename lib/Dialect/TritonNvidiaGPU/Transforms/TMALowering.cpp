@@ -66,7 +66,6 @@ public:
 
   LogicalResult matchAndRewrite(DescriptorLoadOp op,
                                 PatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
     auto createLoad = [&](Value tmaPtr, Value barrierAlloc, Value alloc,
                           Value pred) {
       auto indices = translateTMAIndices(
@@ -170,7 +169,6 @@ public:
 
   LogicalResult matchAndRewrite(MakeTensorDescOp op,
                                 PatternRewriter &rewriter) const override {
-    MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     auto alloc = rewriter.create<triton::gpu::GlobalScratchAllocOp>(
         loc, getPointerType(rewriter.getI8Type()), TMA_SIZE_BYTES, TMA_ALIGN);

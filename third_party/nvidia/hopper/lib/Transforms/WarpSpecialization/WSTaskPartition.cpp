@@ -52,19 +52,6 @@ void doTaskPartition(triton::FuncOp &funcOp, unsigned numWarpGroups) {
   if (loops.empty() || loads.empty() || dots.empty())
     return;
 
-  auto getLoopLevel = [&](Operation *op) {
-    // Compute loop depth
-    unsigned depth = 0;
-    Operation *parent = op->getParentOp();
-    while (parent) {
-      if (isa<scf::ForOp>(parent)) {
-        ++depth;
-      }
-      parent = parent->getParentOp();
-    }
-    return depth;
-  };
-
   // Step 1. Select loads into the first task, which is the producer task by
   // default. Place dots into the second task, which is the consumer.
   // Only consider loads that are connected to a dot op in a loop.

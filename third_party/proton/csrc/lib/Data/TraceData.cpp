@@ -215,7 +215,6 @@ void TraceData::addMetrics(
   // The profile data is deactivated, ignore the metric
   if (scopeIdIt == scopeIdToContextId.end())
     return;
-  auto contextId = scopeIdIt->second;
   if (!trace->hasEvent(scopeId))
     return;
   auto &event = trace->getEvent(scopeId);

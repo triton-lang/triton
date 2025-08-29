@@ -52,7 +52,6 @@ createAsyncCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *c,
     return {nullptr, nullptr};
   // Get basic information from tensorType
   auto order = ttg::getOrderForMemory(tensorType);
-  auto CTALayout = ttg::getCTALayout(tensorType.getEncoding());
   auto elemType = tensorType.getElementType();
 
   // Get shape, layout and type of a slice
@@ -107,7 +106,6 @@ createLocalCopy(const DenseMap<Channel *, Value> &bufferMap, Channel *channel,
     return {nullptr, nullptr};
   // Get basic information from tensorType
   auto order = ttg::getOrderForMemory(tensorType);
-  auto CTALayout = ttg::getCTALayout(tensorType.getEncoding());
   auto elemType = tensorType.getElementType();
 
   // Get shape, layout and type of a slice
@@ -177,7 +175,6 @@ Value getBufferForPipelineStage(OpBuilderWithAsyncTaskIds &builder,
   assert(tensorType);
 
   auto order = ttg::getOrderForMemory(tensorType);
-  auto CTALayout = ttg::getCTALayout(tensorType.getEncoding());
   auto elemType = tensorType.getElementType();
 
   // Get shape, layout and type of a slice
@@ -221,8 +218,8 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
   auto prodBarrier =
       getBarrierForPipelineStage(builder, barrierAlloc, bufferIdx);
   auto pred = builder.createWithAsyncTaskIds<arith::ConstantIntOp>(loc, 1, 1);
-  auto expect = builder.createWithAsyncTaskIds<ttng::BarrierExpectOp>(
-      loc, prodBarrier, sizeInBytes, pred);
+  builder.createWithAsyncTaskIds<ttng::BarrierExpectOp>(loc, prodBarrier,
+                                                        sizeInBytes, pred);
 
   // Convert all the producers to async_tma_copy_global_to_local
   Operation *copy = nullptr;
@@ -243,8 +240,7 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
       getBarrierForPipelineStage(builder, barrierAlloc, bufferIdxExtract);
   phase = builder.createWithAsyncTaskIds<arith::ExtSIOp>(
       loc, builder.getI32Type(), phase);
-  auto wait = builder.createWithAsyncTaskIds<ttng::WaitBarrierOp>(
-      loc, consBarrier, phase);
+  builder.createWithAsyncTaskIds<ttng::WaitBarrierOp>(loc, consBarrier, phase);
 
   // Convert all the consumers to local_load
   for (auto [tmaLoad, buffer] : zip(tmaLoads, buffers)) {
@@ -253,7 +249,6 @@ Operation *optimizeTMALoads(OpBuilderWithAsyncTaskIds &builder,
     auto sharedLoad = builder.createWithAsyncTaskIds<ttg::LocalLoadOp>(
         loc, tmaLoad.getType(), pipelineBuffer);
 
-    Value loadResult = tmaLoad.getResult();
     tmaLoad.getResult().replaceAllUsesWith(sharedLoad.getResult());
     tmaLoad.erase();
   }

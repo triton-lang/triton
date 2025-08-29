@@ -26,8 +26,8 @@ Value loadC(Value tensor, Value llTensor,
          "Currently, we only support $c with a mma layout.");
   // Load a normal C tensor with mma layout, that should be a
   // LLVM::struct with fcSize elements.
-  auto structTy = cast<LLVM::LLVMStructType>(llTensor.getType());
-  assert(structTy.getBody().size() == fcSize &&
+  assert(cast<LLVM::LLVMStructType>(llTensor.getType()).getBody().size() ==
+             fcSize &&
          "DotOp's $c operand should pass the same number of values as $d in "
          "mma layout.");
 

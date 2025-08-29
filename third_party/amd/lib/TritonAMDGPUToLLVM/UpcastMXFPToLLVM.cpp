@@ -260,7 +260,6 @@ public:
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
     bool useFp16 = op.getType().getElementType().isF16();
-    Type retElemType = useFp16 ? f16_ty : bf16_ty;
 
     // Given that MFMA layout for the A tensor arranges thread in a column-major
     // manner, for the current tid, it's at row (tid % mDim). When we set up

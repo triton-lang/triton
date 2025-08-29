@@ -120,16 +120,12 @@ LogicalResult WarpGroupOp::verify() {
 }
 
 ParseResult WarpGroupOp::parse(OpAsmParser &p, OperationState &result) {
-  auto ctx = p.getBuilder().getContext();
-
-  SMLoc operandLoc = p.getCurrentLocation();
   if (p.parseOptionalAttrDictWithKeyword(result.attributes))
     return failure();
 
   SmallVector<int32_t> partitionNumWarps;
   while (succeeded(p.parseOptionalKeyword(
       ("partition" + Twine(partitionNumWarps.size()).str())))) {
-    SMLoc regionLoc = p.getCurrentLocation();
     if (p.parseKeyword("num_warps") || p.parseLParen() ||
         p.parseInteger(partitionNumWarps.emplace_back()) || p.parseRParen() ||
         p.parseRegion(*result.addRegion()))

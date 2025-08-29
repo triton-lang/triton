@@ -216,7 +216,6 @@ class OptimizeAMDLDSUsage
   computeTargetScratchBufferSize(triton::gpu::ConvertLayoutOp op,
                                  Allocation *allocation,
                                  ArrayRef<Allocation::BufferId> liveBuffers) {
-    int totalSize = 0;
     auto scratchBufferId = allocation->getBufferId(op.getOperation());
     int64_t scratchBufferSize = allocation->getAllocatedSize(scratchBufferId);
     size_t totalLDSConsumption = 0;

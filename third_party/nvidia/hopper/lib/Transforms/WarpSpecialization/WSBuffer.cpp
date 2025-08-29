@@ -151,8 +151,7 @@ scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
 
   // Go through region ops in the thenBlock. updateAccumLoopCount takes current
   // accumCnt value and returns the value at the end of the thenBlock.
-  Value endAccum =
-      updateAccumLoopCount(opList, taskTopOps, regionsWithChannels, prevAccum);
+  updateAccumLoopCount(opList, taskTopOps, regionsWithChannels, prevAccum);
 
   SmallVector<Value> ifYieldOperands = newIfOp.thenYield().getOperands();
 
@@ -169,12 +168,13 @@ scf::IfOp rewriteIfOp(scf::IfOp ifOp, SmallVector<Operation *> &taskTopOps,
     }
     // We need to differentiate channels in then region vs. in else region.
     // For now, only handle the case where channels are in then region.
+#ifndef NDEBUG
     for (auto *op : opListElse)
       assert(!enclosingAChannel(op, regionsWithChannels));
+#endif
   } else {
     // Create an empty yield
-    auto yieldOp =
-        newIfOp.getElseBodyBuilder().create<scf::YieldOp>(ifOp.getLoc());
+    newIfOp.getElseBodyBuilder().create<scf::YieldOp>(ifOp.getLoc());
   }
 
   SmallVector<Value> elseYieldOperands = newIfOp.elseYield().getOperands();
@@ -487,8 +487,7 @@ scf::ForOp createNewLoopWrapper(scf::ForOp origForOp,
     if (auto tOp = dyn_cast<scf::IfOp>(&op))
       opList.push_back(&op);
   }
-  Value endAccum =
-      updateAccumLoopCount(opList, taskTopOps, regionsWithChannels, prevAccum);
+  updateAccumLoopCount(opList, taskTopOps, regionsWithChannels, prevAccum);
   LLVM_DEBUG({
     LDBG("-- before replacing yieldOp ");
     newForOp.dump();

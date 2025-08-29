@@ -43,11 +43,7 @@ public:
     // CodePartitioning to correctly handle channels in else block.
     bool hasElse = false;
     funcOp->walk([&](scf::IfOp ifOp) {
-      if (ifOp.elseBlock()) {
-        for (Operation &op : ifOp.elseBlock()->getOperations()) {
-          hasElse = true;
-        }
-      }
+      hasElse |= ifOp.elseBlock() && !ifOp.elseBlock()->getOperations().empty();
     });
     if (hasElse)
       return;

@@ -21,7 +21,7 @@ using namespace mlir::triton::NVIDIA;
 
 // The maximum number of tensor memory registers that can be accessed
 // by a single message regardless of shape or repetitions
-static constexpr int largestTmemLoadStore = 128;
+[[maybe_unused]] static constexpr int largestTmemLoadStore = 128;
 // The maximum number of thread registers that can be populated by
 // multiple messages
 static constexpr int maxRegisters = 256;
@@ -79,8 +79,10 @@ std::optional<LinearLayout> getReps(const LinearLayout &cvt,
   // cannot divide by the tile given the `register=64 -> (16, 0)` basis.
 
   // Ensure tile out-dims are subset of cvt out-dims.
+#ifndef NDEBUG
   for (auto od : tile.getOutDimNames())
     assert(cvt.hasOutDim(od) && "tile out-dims must be contained in cvt");
+#endif
 
   // Precompute tile out-dim bit-widths.
   llvm::SmallDenseMap<StringAttr, int> outBLog2;
@@ -832,7 +834,6 @@ struct TensorMemoryAllocOpConversion
     SmallVector<unsigned> order(op.getType().getRank());
     std::iota(order.begin(), order.end(), 0);
     std::reverse(order.begin(), order.end());
-    auto shape = op.getType().getShape();
 
     if (op.getSrc()) {
       auto regTy = cast<RankedTensorType>(op.getSrc().getType());
@@ -908,7 +909,6 @@ static void copyScales(ConversionPatternRewriter &rewriter, Location loc,
                        Value pred) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   MemDescType srcTy = op.getSrc().getType();
-  MemDescType dstTy = op.getDst().getType();
   Type elemTy = typeConverter->convertType(srcTy.getElementType());
   auto smemObj =
       LLVM::getSharedMemoryObjectFromStruct(loc, src, elemTy, rewriter);
@@ -1086,7 +1086,6 @@ struct MemDescIndexOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
 
     if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
             srcTy.getEncoding())) {
@@ -1137,8 +1136,6 @@ struct TMEMSubSliceOpConversion
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
-    auto dstTy = op.getResult().getType();
-    auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
 
     auto encoding = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
         srcTy.getEncoding());

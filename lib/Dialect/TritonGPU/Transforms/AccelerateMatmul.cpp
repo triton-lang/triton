@@ -324,7 +324,6 @@ public:
       return failure();
 
     bool aFromLoad = comesFromLoadOrBlockArg(dotOp.getA());
-    bool bFromLoad = comesFromLoadOrBlockArg(dotOp.getB());
     auto origDotOp = dotOp;
 
     Value a = dotOp.getA();
@@ -518,7 +517,6 @@ public:
         dotOp.getInputPrecision() != InputPrecision::TF32)
       return failure();
     auto oldAType = dotOp.getA().getType();
-    auto oldBType = dotOp.getB().getType();
     bool useTwoCTAs = canUseTwoCTAs(dotOp);
     if (useTwoCTAs) {
       b = splitBOperand(b, rewriter);
@@ -653,8 +651,6 @@ public:
     // operands
     Value a = dotOp.getA();
     Value b = dotOp.getB();
-    auto oldAType = a.getType();
-    auto oldBType = b.getType();
 
     bool IsAMixedPrecFp4 = false;
     bool IsBMixedPrecFp4 = false;

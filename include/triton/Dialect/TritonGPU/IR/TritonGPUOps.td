@@ -288,7 +288,8 @@ def TTG_MemDescReshapeOp : TTG_Op<"memdesc_reshape", [Pure,
               [{
                 MemDescType dstTy;
                 auto srcTy = cast<MemDescType>(src.getType());
-                auto result = inferReturnTypes($_builder.getContext(),
+                [[maybe_unused]] auto result = inferReturnTypes(
+                                           $_builder.getContext(),
                                            $_builder.getUnknownLoc(),
                                            srcTy, shape, dstTy);
                 assert(succeeded(result) && "failed to infer return types");
