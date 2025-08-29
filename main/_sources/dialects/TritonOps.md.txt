@@ -1183,6 +1183,13 @@ Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterfac
 
 Effects: `MemoryEffects::Effect{}`
 
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>padding</code></td><td>::mlir::triton::PaddingOptionAttr</td><td>allowed 32-bit signless integer cases: 1, 2</td></tr>
+</table>
+
 #### Operands:
 
 | Operand | Description |

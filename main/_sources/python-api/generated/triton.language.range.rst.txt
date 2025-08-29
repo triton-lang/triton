@@ -19,4 +19,10 @@
 
    
    
+   .. rubric:: Attributes
+
+   .. autosummary::
+   
+      ~range.type
+   
    
