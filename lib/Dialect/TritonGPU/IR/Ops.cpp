@@ -906,6 +906,12 @@ LogicalResult WarpSpecializeOp::verify() {
         "cannot be nested inside another `ttg.warp_specialize` op");
   }
 
+  std::optional<int> numWarps = maybeLookupNumWarps(*this);
+  if (numWarps && *numWarps % 4 != 0) {
+    return mlir::emitError(getLoc()) << "warp-specialized kernels requires "
+                                        "num_warps to be a multiple of 4";
+  }
+
   return success();
 }
 
