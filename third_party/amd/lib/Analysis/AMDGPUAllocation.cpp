@@ -53,9 +53,6 @@ SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
 
 std::pair<unsigned, unsigned>
 getScratchCvtInOutVecLengths(RankedTensorType srcTy, RankedTensorType dstTy) {
-  Attribute srcLayout = srcTy.getEncoding();
-  Attribute dstLayout = dstTy.getEncoding();
-
   auto srcLinAttr = gpu::toLinearEncoding(srcTy);
   auto dstLinAttr = gpu::toLinearEncoding(dstTy);
   auto inOrd = srcLinAttr.getOrder();
@@ -82,8 +79,6 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
     return ScratchConfig({}, {});
   ScratchConfig scratchConfig(repShape, repShape);
   auto rank = repShape.size();
-  Attribute srcLayout = srcTy.getEncoding();
-  Attribute dstLayout = dstTy.getEncoding();
 
   assert(cvtNeedsSharedMemory(srcTy, dstTy));
   auto outOrd = gpu::getOrder(dstTy);

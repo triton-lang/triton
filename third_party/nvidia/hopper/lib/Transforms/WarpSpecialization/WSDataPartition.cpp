@@ -145,39 +145,38 @@ struct DataPartitionScheme {
   }
 
   void dump() const {
-    LDBG("=================== DataPartitionScheme ====================");
-    LDBG(" numPartitions " << numPartitions);
-    LDBG(" ops to partition:");
-    for (auto &op : ops) {
-      std::string operand;
-      if (dotPartitionOperand.contains(op)) {
-        operand = "operand " + std::to_string(dotPartitionOperand.at(op));
-      }
-      assert(opPartitionDims.contains(op) && "missing partition dim");
-      LDBG(" dim " << opPartitionDims.at(op) << " " << operand);
-      op->dump();
-    }
-    LDBG("\n");
-    if (!rematerializedOps.empty()) {
-      LDBG(" ops to rematerialize\n");
-      for (auto &op : rematerializedOps) {
-        op.first->dump();
-        LDBG(" along dim ");
-        for (auto &dim : op.second) {
-          LDBG(dim << " ");
+    LLVM_DEBUG(
+        LDBG("=================== DataPartitionScheme ====================");
+        LDBG(" numPartitions " << numPartitions); LDBG(" ops to partition:");
+        for (auto &op : ops) {
+          std::string operand;
+          if (dotPartitionOperand.contains(op)) {
+            operand = "operand " + std::to_string(dotPartitionOperand.at(op));
+          }
+          assert(opPartitionDims.contains(op) && "missing partition dim");
+          LDBG(" dim " << opPartitionDims.at(op) << " " << operand);
+          op->dump();
+        } LDBG("\n");
+        if (!rematerializedOps.empty()) {
+          LDBG(" ops to rematerialize\n");
+          for (auto &op : rematerializedOps) {
+            op.first->dump();
+            LDBG(" along dim ");
+            for (auto &dim : op.second) {
+              LDBG(dim << " ");
+            }
+          }
+          LDBG("\n");
         }
-      }
-      LDBG("\n");
-    }
 
-    if (!opsToSkip.empty()) {
-      LDBG(" ops to skip\n");
-      for (auto &op : opsToSkip)
-        op->dump();
-      LDBG("\n");
-    }
+        if (!opsToSkip.empty()) {
+          LDBG(" ops to skip\n");
+          for (auto &op : opsToSkip)
+            op->dump();
+          LDBG("\n");
+        }
 
-    LDBG("===========================================================");
+        LDBG("==========================================================="););
   };
 };
 
@@ -541,7 +540,6 @@ static bool computePartitionScheme(triton::FuncOp &funcOp,
     return true;
 
   // Checking if all dots can be partitioned in the same way
-  int numWarps = mlir::triton::gpu::lookupNumWarps(funcOp);
   for (auto op : dots) {
     if (partitionScheme.isPartitioned(op) || partitionScheme.isSkipped(op)) {
       continue;
@@ -859,7 +857,6 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     RankedTensorType oldRetType = tmemLdOp.getType();
     auto retShapePerCTA = getShapePerCTA(oldRetType);
     int numWarps = mlir::triton::gpu::lookupNumWarps(op);
-    auto CTALayout = getCTALayout(oldRetType.getEncoding());
     builder.setInsertionPoint(op);
     // The source op is already sliced at this point, so srcTy, type, tmem is
     // sliced. We use getTmemCompatibleLayout to get a block layout that is for
@@ -899,7 +896,6 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
       // convert from srcTy to a compatible blocked layout.
       auto retShapePerCTA = getShapePerCTA(srcTy);
       int numWarps = mlir::triton::gpu::lookupNumWarps(op);
-      auto CTALayout = getCTALayout(srcTy.getEncoding());
       builder.setInsertionPoint(op);
 
       // calculate new tmem type.
@@ -1073,8 +1069,7 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     for (unsigned i = 0; i < forOp.getInitArgs().size(); i++) {
       auto initArg = forOp.getInitArgs()[i];
       Value newInitArg;
-      auto newInitArgOp =
-          sliceOp(initArg, offset, mappings, reverseMappings, partitionScheme);
+      sliceOp(initArg, offset, mappings, reverseMappings, partitionScheme);
       if (auto bbArg = dyn_cast<BlockArgument>(initArg)) {
         // find the corresponding new block argument
         Block *parentBlock = bbArg.getOwner();
@@ -1088,8 +1083,6 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
         assert(argIndex < parentBlock->getNumArguments() &&
                "new init argment not found");
         Region *parentRegion = parentBlock->getParent();
-        Region &newParentRegion =
-            newInitArgOp->getRegion(parentRegion->getRegionNumber());
         newInitArg = parentRegion->getArgument(argIndex);
       } else {
         newInitArg = mappings.lookupOrNull(initArg);

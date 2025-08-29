@@ -182,7 +182,7 @@ CTAPlanner::~CTAPlanner() {
 
 void CTAPlanner::run(triton::FuncOp &funcOp) {
   assert(!tiled && "Please create a new CTAPlanner");
-  static const unsigned maxSteps = 10000;
+  [[maybe_unused]] static const unsigned maxSteps = 10000;
 
   auto nextStep = [&]() {
     ++step;
@@ -528,8 +528,7 @@ bool CTAPlanner::propagateForward(CastOp cast) {
 }
 
 void CTAPlanner::eraseCastOp(CastOp cast) {
-  Value output = cast.getResult(0);
-  assert(getNumUsers(output) == 0 &&
+  assert(getNumUsers(cast.getResult(0)) == 0 &&
          "Cannot erase CastOp because it is still in use");
   cast.erase();
 }

@@ -334,8 +334,6 @@ private:
     triton::ReduceOp op = helper.getOperation();
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto srcLayout = helper.getSrcLayout();
-    auto axis = op.getAxis();
     auto smemOrder = helper.getOrderWithAxisAtBeginning();
     SmallVector<Value> results(op.getNumOperands());
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {

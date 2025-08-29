@@ -325,7 +325,6 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
   // In the second case, we only need to emit one enter / exit since we know
   // that the two results are used by consumers in the same partition.
   assert(results.size() == 1 || results.size() == 2);
-  auto loc = results[0].getLoc();
 
   auto filterUse = [&](Operation *use) {
     return schedule.getPartition(use) == consumerPartition;
@@ -365,7 +364,6 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
 
   for (auto result : results) {
     if (auto localAlloc = result.getDefiningOp<LocalAllocOp>()) {
-      auto memDescType = cast<MemDescType>(result.getType());
       auto callback = [&](Operation *oldOp, Operation *newOp) {
         assert(schedule.getPartition(oldOp) == consumerPartition);
         schedule.insert(consumerPartition, newOp);

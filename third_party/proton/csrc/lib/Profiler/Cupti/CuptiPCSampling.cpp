@@ -134,7 +134,6 @@ CUpti_PCSamplingData allocPCSamplingData(size_t collectNumPCs,
                                          size_t numValidStallReasons) {
   uint32_t libVersion = 0;
   cupti::getVersion<true>(&libVersion);
-  size_t pcDataSize = sizeof(CUpti_PCSamplingPCData);
   // Since CUPTI 12.4, a new field (i.e., correlationId) is added to
   // CUpti_PCSamplingPCData, which breaks the ABI compatibility.
   // Instead of using workarounds, we emit an error message and exit the
@@ -431,7 +430,6 @@ void CuptiPCSampling::finalize(CUcontext context) {
   cupti::getContextId<true>(context, &contextId);
   if (!contextInitialized.contain(contextId))
     return;
-  auto *configureData = getConfigureData(contextId);
   contextIdToConfigureData.erase(contextId);
   contextInitialized.erase(contextId);
   disablePCSampling(context);

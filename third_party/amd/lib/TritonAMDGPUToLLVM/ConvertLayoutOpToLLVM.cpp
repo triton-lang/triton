@@ -280,14 +280,16 @@ public:
   SmallVector<SmallVector<int> /*registers*/>
   collectRegsForIter(MLIRContext *ctx, const LinearLayout &layout) const {
     StringAttr kRegister = str_attr("register");
+    StringAttr kIteration = str_attr("iteration");
+
+#ifndef NDEBUG
     StringAttr kLane = str_attr("lane");
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
-    StringAttr kIteration = str_attr("iteration");
-
     // The choice of iteration should be determined only by the register.  That
     // is, it should be correct to split the register dimension into iterations.
     assert(layout.sublayoutIsZero({kLane, kWarp, kBlock}, {kIteration}));
+#endif
 
     LinearLayout sublayout = layout.sublayout({kRegister}, {kIteration});
     SmallVector<SmallVector<int>> ret(sublayout.getOutDimSize(kIteration));
@@ -311,8 +313,8 @@ public:
     StringAttr kLane = str_attr("lane");
     StringAttr kWarp = str_attr("warp");
     StringAttr kBlock = str_attr("block");
-    StringAttr kOffset = str_attr("offset");
     StringAttr kIteration = str_attr("iteration");
+    [[maybe_unused]] StringAttr kOffset = str_attr("offset");
 
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
@@ -337,9 +339,8 @@ public:
     // Output dims: [offset, iteration]
     LinearLayout shmemStoreLayout = srcLayout.invertAndCompose(sharedLayout);
 
-    const int shmemAllocatedNumElems =
-        getNumScratchElements(scratchConfig.paddedRepShape);
-    assert(shmemStoreLayout.getOutDimSize(kOffset) <= shmemAllocatedNumElems);
+    assert(shmemStoreLayout.getOutDimSize(kOffset) <=
+           getNumScratchElements(scratchConfig.paddedRepShape));
 
     // Layout for the load from shmem to registers.
     LinearLayout shmemLoadLayout = dstLayout.invertAndCompose(sharedLayout);
@@ -484,7 +485,6 @@ public:
   /// \returns llvm structure containing converted output
   Value transferWithinBlockPadding(triton::gpu::ConvertLayoutOp op, Value src,
                                    RewriterBase &rewriter) const {
-    MLIRContext *ctx = op.getContext();
     auto typeConverter = getTypeConverter();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);

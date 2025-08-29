@@ -211,7 +211,6 @@ SmallVector<Value> getSubViews(ArefValue arefVal, Value stage, Location loc,
   for (auto buffer : arefVal.buffers) {
     auto memDescType = cast<MemDescType>(buffer.getType());
     auto shape = memDescType.getShape();
-    auto rank = shape.size() - 1;
 
     SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
     auto memDescTypeNew = MemDescType::get(

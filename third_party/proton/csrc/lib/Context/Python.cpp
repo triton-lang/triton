@@ -81,7 +81,6 @@ std::vector<Context> PythonContextSource::getContextsImpl() {
   while (frame != nullptr) {
     PyCodeObject *f_code = getFrameCodeObject(frame);
     size_t lineno = PyFrame_GetLineNumber(frame);
-    size_t firstLineNo = f_code->co_firstlineno;
     std::string file = unpackPyobject(f_code->co_filename);
     std::string function = unpackPyobject(f_code->co_name);
     auto pythonFrame = file + ":" + function + "@" + std::to_string(lineno);

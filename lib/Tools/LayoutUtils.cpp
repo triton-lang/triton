@@ -227,7 +227,6 @@ std::optional<ColumnAction> regPermForDivide(const LinearLayout &A,
   auto multiplyByTileSize =
       [&](ArrayRef<int32_t> bBasis) -> std::vector<int32_t> {
     std::vector<int32_t> result;
-    size_t idx = 0;
     assert(bBasis.size() == A.getNumOutDims());
     for (auto [dim, b] : llvm::zip(A.getOutDimNames(), bBasis)) {
       result.push_back(b << log2QuotSize.lookup(dim));
@@ -296,8 +295,6 @@ actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
   assert(layout.getNumInDims() != 0);
   auto kReg = *layout.getInDimNames().begin();
   assert(kReg.str() == "register");
-  auto kLane = StringAttr::get(kReg.getContext(), "lane");
-  auto kWarp = StringAttr::get(kReg.getContext(), "warp");
   assert(layout.getNumOutDims() == 1);
   uint32_t bits = maskSpanOffsets;
   llvm::SetVector<uint32_t> tileBases;

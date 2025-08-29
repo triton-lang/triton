@@ -106,7 +106,6 @@ struct ExtractSliceOpConversion
   LogicalResult
   matchAndRewrite(amdgpu::ExtractSliceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto srcTy = op.getSource().getType();
     return processLayout(op, adaptor, rewriter);
   }
 };

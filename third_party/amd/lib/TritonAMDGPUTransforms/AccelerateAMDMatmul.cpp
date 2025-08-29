@@ -456,7 +456,6 @@ public:
 
     auto mDim = mfmaInstr->mDim;
     auto nDim = mfmaInstr->nDim;
-    auto kDim = mfmaInstr->kDim;
     auto kBase = mfmaInstr->kBase;
 
     auto warpsPerTile =
@@ -656,7 +655,6 @@ public:
 
     unsigned mDim = mfmaInstr->mDim;
     unsigned nDim = mfmaInstr->nDim;
-    unsigned kDim = mfmaInstr->kDim;
     unsigned kBase = mfmaInstr->kBase;
 
     // For mxfp4 A/B tensor, we pack every two values into one int8 value there.
@@ -883,7 +881,6 @@ public:
 
     auto mDim = mfmaInstr->mDim;
     auto nDim = mfmaInstr->nDim;
-    auto kDim = mfmaInstr->kDim;
     auto kBase = mfmaInstr->kBase;
     assert(mDim == nDim);
 
@@ -1001,7 +998,6 @@ public:
     a = convertInputLayout(a, 0);
     b = convertInputLayout(b, 1);
 
-    StringAttr kWarp = StringAttr::get(ctx, "warp");
     auto convertScaleLayout = [&](TensorValue scale,
                                   llvm::ArrayRef<int64_t> valShape,
                                   LinearLayout dotLL, int idx) -> Value {
@@ -1203,7 +1199,6 @@ public:
 
     auto mDim = wmmaInstr->mDim;
     auto nDim = wmmaInstr->nDim;
-    auto kDim = wmmaInstr->kDim;
     auto kBase = wmmaInstr->kBase;
 
     // get WMMA encoding for the given number of warps

@@ -288,7 +288,6 @@ class TritonGPUOptimizeThreadLocalityPass
       auto yieldOp = dyn_cast<scf::YieldOp>(yieldOpOperand.getOwner());
       if (!yieldOp)
         return;
-      auto operandNumber = yieldOpOperand.getOperandNumber();
       Block *block = reduce->getBlock();
       Operation *parentOp = block->getParentOp();
       auto forOp = dyn_cast<scf::ForOp>(parentOp);
@@ -307,12 +306,8 @@ class TritonGPUOptimizeThreadLocalityPass
       builder.setInsertionPoint(reduce);
       auto srcType = cast<RankedTensorType>(reduce.getOperands()[0].getType());
       auto srcShape = srcType.getShape();
-      auto srcEncoding = srcType.getEncoding();
-      assert(isa<triton::gpu::BlockedEncodingAttr>(srcEncoding) &&
+      assert(isa<triton::gpu::BlockedEncodingAttr>(srcType.getEncoding()) &&
              "Thread locality optimization only supports blocked encoding");
-      auto blocked = dyn_cast<triton::gpu::BlockedEncodingAttr>(srcEncoding);
-      auto elemsPerThread =
-          triton::gpu::getElemsPerThread(srcType)[reduce.getAxis()];
       auto rank = srcShape.size();
       // create new layouts
       auto blocked3d = getThreadLocalityOptimizedEncoding(reduce);
@@ -357,8 +352,8 @@ class TritonGPUOptimizeThreadLocalityPass
       // create new accum update
       auto newUpdate = createUpdate(builder, newLoop, newReduce, oldUpdate);
       // create new yield
-      auto newYield = createYield(builder, newLoop, oldYield,
-                                  newUpdate->getResult(0), blockArgNum);
+      createYield(builder, newLoop, oldYield, newUpdate->getResult(0),
+                  blockArgNum);
       // create post loop reduction on the original reduce axis
       auto newReduce2 = createPostLoopReduce(builder, newLoop, reduce);
       // add convert_layout to get back to original layout, the result layout
