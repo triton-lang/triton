@@ -581,9 +581,10 @@ void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages) {
 }
 
 template <typename EnterOp, typename ExitOp>
-void createCombinedArefOps(SmallVector<EnterOp> &enterOps,
-                           SmallVector<ExitOp> &exitOps, ArefCreateOp aref,
-                           OpBuilder &builder) {
+ExitOp createCombinedArefOps(SmallVector<EnterOp> &enterOps,
+                             SmallVector<ExitOp> &exitOps, ArefCreateOp aref,
+                             OpBuilder &builder,
+                             Operation *combinedEnterInsertPoint = nullptr) {
   auto firstEnter = *llvm::min_element(enterOps, [](EnterOp a, EnterOp b) {
     assert(a->getBlock() == b->getBlock());
     return a->isBeforeInBlock(b);
@@ -607,7 +608,11 @@ void createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   builder.setInsertionPointAfter(aref);
   auto zero = builder.create<arith::ConstantIntOp>(aref.getLoc(), 0, 32);
 
-  builder.setInsertionPoint(firstEnter);
+  if (combinedEnterInsertPoint) {
+    builder.setInsertionPointAfter(combinedEnterInsertPoint);
+  } else {
+    builder.setInsertionPoint(firstEnter);
+  }
   auto enter = builder.create<EnterOp>(firstEnter.getLoc(), arefEnterBuffers,
                                        builder.getType<AsyncTokenType>(), aref,
                                        zero, zero);
@@ -626,6 +631,8 @@ void createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   for (auto [idx, enterOp] : llvm::enumerate(enterOps)) {
     enterOp.getBuffers()[0].replaceAllUsesWith(enter.getBuffers()[idx]);
   }
+
+  return exit;
 }
 
 SmallVector<Operation *> findSharedMemorySinkOps(Value value) {
@@ -719,8 +726,10 @@ void combineArefs(scf::ForOp loop) {
     auto aref =
         createArefCreateOp(builder, arefBufTypes, arefBufs, lastAref->getLoc());
 
-    createCombinedArefOps(putEnterOps, putExitOps, aref, builder);
-    createCombinedArefOps(getEnterOps, getExitOps, aref, builder);
+    auto combinedPutExit =
+        createCombinedArefOps(putEnterOps, putExitOps, aref, builder);
+    createCombinedArefOps(getEnterOps, getExitOps, aref, builder,
+                          combinedPutExit);
 
     for (auto putExitOp : putExitOps)
       putExitOp->erase();
