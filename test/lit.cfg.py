@@ -59,6 +59,7 @@ tools = [
     'triton-opt',
     'triton-llvm-opt',
     'mlir-translate',
+    'llc',
     ToolSubst('%PYTHON', config.python_executable, unresolved='ignore'),
 ]
 
