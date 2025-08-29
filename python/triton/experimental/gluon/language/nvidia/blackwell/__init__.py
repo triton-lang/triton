@@ -341,7 +341,8 @@ def tcgen05_copy(src, dst, _semantic=None):
 
 
 @builtin
-def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_preds=None, _semantic=None):
+def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_preds=None, is_async=False,
+                _semantic=None):
     """
     Emit a 5th generation TensorCore MMA instruction.
     acc = a * b + (acc if use_acc else 0)
@@ -354,6 +355,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
         pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         mbarriers (Sequence[shared_memory_descriptor], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
         mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
+        is_async (bool): Set this to True when the mma op is intended to be async while no mbarriers argument is passed. Defaults to False.
     """
     use_acc = _semantic.to_tensor(use_acc)
     pred = _semantic.to_tensor(pred)
@@ -363,6 +365,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
         mbarriers = []
         mbarrier_preds = []
     else:
+        is_async = True
         mbarriers = [bar.handle for bar in mbarriers]
         if mbarrier_preds is None:
             true = _semantic.to_tensor(True)
@@ -370,12 +373,14 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
         else:
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
-    _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
-                                         mbarrier_preds)
+    _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, is_async)
+
+    for mbar, pred in zip(mbarriers, mbarrier_preds):
+        _semantic.builder.create_tcgen05_commit(mbar, pred)
 
 
 @builtin
-def tcgen05_commit(barrier, _semantic=None):
+def tcgen05_commit(barrier, pred=True, _semantic=None):
     """
     This instruction causes the provided mbarrier to be arrived-on with a count
     of 1 when all async tcgen05 MMA and copy instructions previously issued by
@@ -383,5 +388,7 @@ def tcgen05_commit(barrier, _semantic=None):
 
     Args:
         barrier (shared_memory_descriptor): The barrier to track completion of tcgen05 MMA and copy instructions.
+        pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
     """
-    _semantic.builder.create_tcgen05_commit(barrier.handle)
+    pred = _semantic.to_tensor(pred)
+    _semantic.builder.create_tcgen05_commit(barrier.handle, pred.handle)

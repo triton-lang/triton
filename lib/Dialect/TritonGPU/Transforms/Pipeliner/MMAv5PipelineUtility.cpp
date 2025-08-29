@@ -1,4 +1,5 @@
 #include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/Dominance.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -260,6 +261,49 @@ bool ttng::hasLoadsAfterMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
     }
   }
   return false;
+}
+
+ttng::TCGen5CommitOp ttng::createCommit(OpBuilder &builder,
+                                        ttng::MMAv5OpInterface mmaOp,
+                                        Value barrier, Value pred) {
+  builder.setInsertionPointAfter(mmaOp);
+  auto commit =
+      builder.create<ttng::TCGen5CommitOp>(mmaOp.getLoc(), barrier, pred);
+  mmaOp.setIsAsync(true);
+  return commit;
+}
+
+SmallVector<ttng::TCGen5CommitOp>
+ttng::collectCommitOpsAfter(ttng::MMAv5OpInterface mmaOp,
+                            std::function<bool(Operation *)> stopAt) {
+  auto isConstTrue = [](Value v) {
+    if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
+      if (auto attr = dyn_cast<BoolAttr>(constOp.getValueAttr())) {
+        return attr.getValue();
+      }
+    }
+    return false;
+  };
+  auto equalPred = [=](Value pred1, Value pred2) {
+    // Keep it simple for now. TODO: Check structural equality?
+    return (isConstTrue(pred1) && isConstTrue(pred2)) || pred1 == pred2;
+  };
+
+  SmallVector<ttng::TCGen5CommitOp> commitOps;
+  Operation *nextOp = mmaOp->getNextNode();
+  auto mmaPred = mmaOp.getPredicate();
+
+  while (nextOp && (stopAt == nullptr || !stopAt(nextOp))) {
+    if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(nextOp)) {
+      if ((isConstTrue(mmaPred) && commit.getPred() == nullptr) ||
+          equalPred(mmaPred, commit.getPred())) {
+        commitOps.push_back(commit);
+      }
+    }
+    nextOp = nextOp->getNextNode();
+  }
+
+  return commitOps;
 }
 
 //===----------------------------------------------------------------------===//

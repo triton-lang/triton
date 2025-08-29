@@ -2,6 +2,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 
@@ -40,11 +41,9 @@ public:
     Value barrierAlloc =
         rewriter.create<ttg::LocalAllocOp>(loc, barrierMemDescType, Value());
     rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
-    op.addCompletionBarrier(barrierAlloc,
-                            rewriter.create<arith::ConstantIntOp>(loc, 1, 1));
-    op.setIsAsync(true);
 
-    rewriter.setInsertionPointAfter(op);
+    createCommit(rewriter, op, barrierAlloc);
+
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
     rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase, op.getPred());
     rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
@@ -76,8 +75,7 @@ struct TCGen5MMAScaleSharedToTmemConversion
         ttg::MemDescType::get(shape, elType, scaleEncoding, tensorMemorySpace,
                               /*mutableMemory=*/true);
     auto tmemAlloc = rewriter.create<TMEMAllocOp>(loc, scaleAType, Value());
-    rewriter.create<TMEMCopyOp>(loc, operand.get(), tmemAlloc,
-                                /*barrier*/ Value());
+    rewriter.create<TMEMCopyOp>(loc, operand.get(), tmemAlloc);
     operand.set(tmemAlloc);
     return true;
   }

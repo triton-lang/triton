@@ -416,16 +416,13 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
     DeclareOpInterfaceMethods<DotOpInterface>,
     DeclareOpInterfaceMethods<MMAv5OpInterface>,
-    AttrSizedOperandSegments
 ]> {
   let summary = "block level op mapping to tensorcore gen5 mma";
 
   let description = [{
     $d += matrix_multiply($a, $b).
-    if is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
-    Otherwise, if a barrier is given, the op will trigger a commit/arrive on it. The result will be safe to read after a barrier wait.
-    If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
-    and syncronize both CTAs if the op is synchronous.
+    if is_async is false, the op executes synchronously. If $two_ctas is set the op will execute a matmul across two contiguous CTAs,
+    it will read the data distributed across the two CTAs, and syncronize both CTAs if the op is synchronous.
 
     This operation takes and produces an optional token to indicate TMEM read
     and write on its accumulator operand. When the tokens are present, they can
@@ -439,46 +436,29 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [
     Optional<TTG_AsyncToken>:$acc_dep,
     I1:$useD,
     I1:$pred,
-    Variadic<TTG_MemDescType>:$barriers,
-    Variadic<I1>:$barrier_preds,
-    UnitAttr:$is_async,
-    UnitAttr:$two_ctas
+    UnitAttr:$two_ctas,
+    UnitAttr:$is_async
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
 
-  let builders = [
-    OpBuilder<(ins "Type":$token,
-      "Value":$a, "Value":$b, "Value":$d, "Value":$acc_dep, "Value":$useD,
-      "Value":$pred, CArg<"bool", "false">:$two_ctas,
-      CArg<"ValueRange", "{}">:$barriers,
-      CArg<"ValueRange", "{}">:$barrier_preds,
-      CArg<"bool", "false">:$is_async)>
-  ];
-
   let assemblyFormat = [{
     $a `,` $b `,` $d `` custom<Token>($acc_dep, type($token)) `,` $useD`,`
-    $pred `` custom<BarriersAndPreds>($barriers, $barrier_preds)
+    $pred
     attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
-    qualified(type($d)) (`,` qualified(type($barriers))^)?
+    qualified(type($d))
   }];
-
-  let hasVerifier = 1;
 }
 
 def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
     DeclareOpInterfaceMethods<DotOpInterface, ["verifyDims", "verifyOutputDims"]>,
     DeclareOpInterfaceMethods<MMAv5OpInterface>,
-    AttrSizedOperandSegments
 ]> {
   let summary = "block level op mapping to tensorcore gen5 mma";
 
   let description = [{
     $d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
-    if is_async is false, the op executes synchronously. The barrier operands must not be present in that case.
-    Otherwise, if a barrier is given, the op will trigger a commit/arrive on it.
-    The result will be safe to read after a barrier wait.
-
+    if is_async is false, the op executes synchronously.
     This operation takes and produces an optional token to indicate TMEM read
     and write on its accumulator operand. When the tokens are present, they can
     be used to check aliasing and modref on the accumulator memory.
@@ -495,8 +475,6 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     TT_ScaleDotElemTypeAttr:$b_type,
     I1:$useD,
     I1:$pred,
-    Variadic<TTG_MemDescType>:$barriers,
-    Variadic<I1>:$barrier_preds,
     UnitAttr:$is_async
   );
   let results = (outs Optional<TTG_AsyncToken>:$token);
@@ -507,30 +485,13 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [
     int64_t getBlockK();
   }];
 
-  let builders = [
-    // Namespaces need to be prefixed so ODS prefers our
-    // custom builder signature over the default-generated one.
-    OpBuilder<(ins "::mlir::Type":$token,
-      "::mlir::Value":$a, "::mlir::Value":$b, "::mlir::Value":$d,
-      "::mlir::Value":$acc_dep, "::mlir::Value":$a_scale,
-      "::mlir::Value":$b_scale, "::mlir::triton::ScaleDotElemType":$a_type,
-      "::mlir::triton::ScaleDotElemType":$b_type,
-      "::mlir::Value":$useD, "::mlir::Value":$pred,
-      CArg<"::mlir::ValueRange", "{}">:$barriers,
-      CArg<"::mlir::ValueRange", "{}">:$barrier_preds,
-      CArg<"bool", "false">:$is_async)>
-  ];
-
   let assemblyFormat = [{
     $a `,` $b `,` $d `` custom<Token>($acc_dep, type($token)) `,` $a_scale `,`
     $b_scale `,` $useD `,` $pred `lhs` `=` $a_type `rhs` `=` $b_type
-    `` custom<BarriersAndPreds>($barriers, $barrier_preds)
     attr-dict `:` qualified(type($a)) `,` qualified(type($b)) `,`
     qualified(type($d)) `,` qualified(type($a_scale)) `,`
-    qualified(type($b_scale)) (`,` qualified(type($barriers))^)?
+    qualified(type($b_scale))
   }];
-
-  let hasVerifier = 1;
 }
 
 def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {
@@ -563,7 +524,7 @@ def TTNG_TCGen5CommitOp : TTNG_Op<"tc_gen5_commit"> {
   }];
 
   let arguments = (ins
-    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$barrier,
+    TTG_MemDescType:$barrier,
     Optional<I1>:$pred,
     UnitAttr:$two_ctas
   );
@@ -696,10 +657,9 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
 
   let description = [{
     2D blocks stored contiguously in SMEM are copied into TMEM as specified by the destination address.
-    The completion of the copy can be observed by waiting on the optional barrier. If this op is used
-    together with an MMA op, one barrier can be used to wait for both copy and MMA. We do not need to wait
-    for the completion of the copy before MMA, since tcgen05.cp followed by tcgen05.mma is guaranteed to
-    execute in that order.
+    If this op is used together with an MMA op, one barrier can be used to wait for both copy and MMA.
+    We do not need to wait for the completion of the copy before MMA, since tcgen05.cp followed by
+    tcgen05.mma is guaranteed to execute in that order.
 
     This op lowers to the PTX instruction tcgen05.cp. This supports writing either to scales tmem layout as well as default tmem layout.
     Currently the semantic is different when writing to tmem scale layout.
@@ -742,11 +702,10 @@ def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy"> {
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
-    Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst,
-    Optional<TTG_MemDescType>:$barrier
+    Arg<TTG_MemDescType, "", [MemWrite<TensorMemory>]>:$dst
   );
 
-  let assemblyFormat = [{$src `,` $dst (`,` $barrier^)? attr-dict `:` qualified(type(operands))}];
+  let assemblyFormat = [{$src `,` $dst attr-dict `:` qualified(type(operands))}];
   let hasVerifier = 1;
 }
 

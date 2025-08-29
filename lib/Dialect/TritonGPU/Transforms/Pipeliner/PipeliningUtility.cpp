@@ -271,6 +271,16 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     atomicRMWOp.getMaskMutable().assign(mask);
     return op;
   }
+  if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
+    rewriter.setInsertionPoint(commitOp);
+    Value mask = pred;
+    Value currentPred = commitOp.getPred();
+    if (currentPred) {
+      mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
+    }
+    commitOp.getPredMutable().assign(mask);
+    return op;
+  }
   if (!op->isRegistered()) {
     // Skip ops from unregistered dialects to make writing lit tests easier.
     return op;

@@ -1063,12 +1063,6 @@ struct TensorMemoryCopyOpConversion
                        adaptor.getDst(), pred);
     }
 
-    if (op.getBarrier()) {
-      auto barrier = LLVM::getSharedMemoryObjectFromStruct(
-          op.getLoc(), adaptor.getBarrier(), i64_ty, rewriter);
-      createCommit(rewriter, loc, barrier.getBase(), pred);
-    }
-
     rewriter.eraseOp(op);
     return success();
   }

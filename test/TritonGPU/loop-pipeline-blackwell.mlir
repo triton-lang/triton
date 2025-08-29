@@ -19,14 +19,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[ACC2:.+]] = arith.mulf %[[ACC1]]
   // CHECK: ttng.tmem_store %[[ACC2]], %[[TMEM_BUF]]
   // CHECK: %[[BAR_SLICE:.+]] = ttg.memdesc_index %[[BAR_BUF]]{{\[}}%[[C0]]{{\]}}
-  // CHECK: ttng.tc_gen5_mma %[[A_OP:.*]], %[[B_OP:.*]], %[[TMEM_BUF]], {{.*}}, %[[BAR_SLICE]]
+  // CHECK: ttng.tc_gen5_mma %[[A_OP:.*]], %[[B_OP:.*]], %[[TMEM_BUF]], {{.*}}
+  // CHECK: tc_gen5_commit %[[BAR_SLICE]]
   // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.+]] = %[[C0]], %[[BAR_IDX:.+]] = %[[C1]], {{.*}}, %[[BAR_PREV:.*]] = %[[BAR_SLICE]], %[[PHASE_PREV:.+]] = %[[C0]], %[[A_DEP:.+]] = %[[A_OP]], %[[B_DEP:.+]] = %[[B_OP]]
   // CHECK:   ttng.wait_barrier %[[BAR_PREV]], %[[PHASE_PREV]] deps %[[A_DEP]], %[[B_DEP]]
   // CHECK:   %[[ACC1:.+]] = ttng.tmem_load %[[TMEM_BUF]]
   // CHECK:   %[[ACC2:.+]] = arith.mulf %[[ACC1]]
   // CHECK:   ttng.tmem_store %[[ACC2]], %[[TMEM_BUF]]
   // CHECK:   %[[BAR_SLICE:.+]] = ttg.memdesc_index %[[BAR_BUF]]{{\[}}%[[BAR_IDX]]{{\]}}
-  // CHECK:   ttng.tc_gen5_mma %[[A_OP:.*]], %[[B_OP:.*]], %[[TMEM_BUF]], %[[TRUE]], {{.*}}, %[[BAR_SLICE]]
+  // CHECK:   ttng.tc_gen5_mma %[[A_OP:.*]], %[[B_OP:.*]], %[[TMEM_BUF]], %[[TRUE]], {{.*}}
+  // CHECK:   tc_gen5_commit %[[BAR_SLICE]]
   // CHECK:   %[[PHASE_NEG:.+]] = arith.xori %[[PHASE]], %[[C1]]
   // CHECK:   %[[BAR_IDX_P1:.+]] = arith.addi %[[BAR_IDX]], %[[C1]]
   // CHECK:   %[[BAR_IDX_CMP:.+]] = arith.cmpi sge, %[[BAR_IDX_P1]], %[[C2]]
@@ -447,13 +449,13 @@ tt.func public @load_into_async_mma(
     %scales_cvt = ttg.convert_layout %scales : tensor<128x8xi8, #load_blocked> -> tensor<128x8xi8, #scales>
     %scales_tmem = ttng.tmem_alloc %scales_cvt : (tensor<128x8xi8, #scales>) -> !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
 
-    ttng.tc_gen5_mma_scaled %lhs_shared, %rhs_shared, %tmem, %scales_tmem, %rhs_scales, %true, %true lhs = e4m3 rhs = e4m3, %barrier[%true] {is_async} :
+    ttng.tc_gen5_mma_scaled %lhs_shared, %rhs_shared, %tmem, %scales_tmem, %rhs_scales, %true, %true lhs = e4m3 rhs = e4m3 {is_async} :
       !ttg.memdesc<128x64xf8E4M3FN, #shared, #smem>,
       !ttg.memdesc<64x64xf8E4M3FN, #shared, #smem>,
       !ttg.memdesc<128x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>,
       !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>,
-      !ttg.memdesc<64x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>,
-      !ttg.memdesc<1xi64, #shared, #smem, mutable>
+      !ttg.memdesc<64x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
+    ttng.tc_gen5_commit %barrier, %true : !ttg.memdesc<1xi64, #shared, #smem, mutable>
   }
 
   tt.return

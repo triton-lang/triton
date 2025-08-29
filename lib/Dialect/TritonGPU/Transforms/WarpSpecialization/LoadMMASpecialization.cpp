@@ -354,6 +354,15 @@ static void lowerTMACopy(PartitionBuilder &b, Partition &loadPartition,
   }
 }
 
+static void createCommit(PartitionBuilder &builder, Partition &partition,
+                         StageCluster stageCluster,
+                         ttng::MMAv5OpInterface mmaOp, Value barrier,
+                         Value pred = Value()) {
+  auto commit = ttng::createCommit(builder, mmaOp, barrier, pred);
+  builder.assignPartition(commit, partition);
+  builder.assignStage(commit, stageCluster);
+}
+
 LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
                                              DominanceInfo &domInfo,
                                              PostDominanceInfo &postDomInfo) {
@@ -412,8 +421,8 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
     distinctAsyncUsers.insert(load.asyncUsers.begin(), load.asyncUsers.end());
   for (Operation *asyncUser : distinctAsyncUsers) {
     if (auto mmaOp = dyn_cast<ttng::MMAv5OpInterface>(asyncUser)) {
-      mmaOp.addCompletionBarrier(curEmptyBar, b.boolCst(true));
-      mmaOp.setIsAsync(true);
+      createCommit(b, *schedule.getPartition(mmaOp), getStageCluster(mmaOp),
+                   mmaOp, curEmptyBar);
       continue;
     }
     llvm::report_fatal_error("FIXME: unhandled async user of pipelined load: " +
@@ -755,8 +764,8 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       if (mmaOp == node.op) {
         b.setInsertionPoint(mmaOp);
         Value bar = createSingleBufferView(b, node.barNext, node.index);
-        mmaOp.addCompletionBarrier(bar, userPred);
-        mmaOp.setIsAsync(true);
+        createCommit(b, *schedule.getPartition(mmaOp), getStageCluster(mmaOp),
+                     mmaOp, bar, userPred);
       } else {
         b.setInsertionPointAfter(lastOp);
         if (isa<scf::IfOp>(lastOp->getParentOp()) && accIsMultiBuffered)
@@ -801,8 +810,8 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
                                       getStageCluster(mmaOp), readyView2,
                                       phase);
     Value emptyView2 = createSingleBufferView(b, emptyBar, index);
-    mmaOp.addCompletionBarrier(emptyView2, b.boolCst(true));
-    mmaOp.setIsAsync(true);
+    auto mmaPartition = schedule.getPartition(mmaOp);
+    createCommit(b, *mmaPartition, getStageCluster(mmaOp), mmaOp, emptyView2);
   }
 
   if (nodes.back().barNext) {
