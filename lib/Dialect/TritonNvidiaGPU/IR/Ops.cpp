@@ -279,62 +279,60 @@ static std::string strMMADTypeKind(MMADTypeKind kind) {
   }
 }
 
-LogicalResult TCGen5MMAOp::verify() {
-  auto getDTypeKindAndAcc =
-      [](Type t) -> std::optional<std::pair<MMADTypeKind, SmallVector<Type>>> {
-    MLIRContext *ctx = t.getContext();
-    if (t.isF32()) {
-      return {{MMADTypeKind::tf32, {Float32Type::get(ctx)}}};
-    }
-    if (t.isF16() || t.isBF16()) {
-      return {
-          {MMADTypeKind::f16, {Float16Type::get(ctx), Float32Type::get(ctx)}}};
-    }
-    if (isa<Float8E4M3FNType, Float8E5M2Type, Float6E2M3FNType,
-            Float6E3M2FNType, Float4E2M1FNType>(t)) {
-      return {{MMADTypeKind::f8f6f4,
-               {Float16Type::get(ctx), Float32Type::get(ctx)}}};
-    }
-    if (t.isInteger(8)) {
-      return {{MMADTypeKind::i8, {IntegerType::get(ctx, 32)}}};
-    }
-    return std::nullopt;
-  };
-
-  if (!getIsAsync() && !getBarriers().empty()) {
-    return emitOpError("The op is synchronous but a barrier is present.");
+static std::optional<std::pair<MMADTypeKind, SmallVector<Type>>>
+getMMAv5DTypeKindAndAcc(Type t) {
+  MLIRContext *ctx = t.getContext();
+  if (t.isF32()) {
+    return {{MMADTypeKind::tf32, {Float32Type::get(ctx)}}};
   }
+  if (t.isF16() || t.isBF16()) {
+    return {
+        {MMADTypeKind::f16, {Float16Type::get(ctx), Float32Type::get(ctx)}}};
+  }
+  // TODO: float6 and explicit float4 types are not supported yet.
+  // TODO: tcgen05.mma supports ui8/si8 -> s32 MMA, but Triton does not.
+  // FIXME: i8 is used to represent float4 types.
+  if (isa<Float8E4M3FNType, Float8E5M2Type>(t) || t.isInteger(8)) {
+    return {
+        {MMADTypeKind::f8f6f4, {Float16Type::get(ctx), Float32Type::get(ctx)}}};
+  }
+  return std::nullopt;
+}
 
-  // Verify valid dtype combinations.
-  Type atype = getA().getType().getElementType();
-  Type btype = getB().getType().getElementType();
-  Type dtype = getD().getType().getElementType();
-  auto akind = getDTypeKindAndAcc(atype);
-  auto bkind = getDTypeKindAndAcc(btype);
+static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
+  auto akind = getMMAv5DTypeKindAndAcc(a);
+  auto bkind = getMMAv5DTypeKindAndAcc(b);
   if (!akind)
-    return emitOpError("unsupported LHS operand dtype: ") << atype;
+    return op->emitOpError("unsupported LHS operand dtype: ") << a;
   if (!bkind)
-    return emitOpError("unsupported RHS operand dtype: ") << btype;
+    return op->emitOpError("unsupported RHS operand dtype: ") << b;
   if (akind->first != bkind->first) {
-    return emitOpError(
+    return op->emitOpError(
                "LHS and RHS operand dtypes kinds don't match: LHS kind is ")
            << strMMADTypeKind(akind->first) << " but RHS kind is "
            << strMMADTypeKind(bkind->first);
   }
-  // TODO: tcgen05.mma supports ui8/si8 -> s32 MMA, but Triton does not.
-  if (akind->first == MMADTypeKind::i8) {
-    return emitOpError("TODO: does not yet support integer dtypes");
-  }
-  if (!llvm::is_contained(akind->second, dtype)) {
+  if (!llvm::is_contained(akind->second, d)) {
     InFlightDiagnostic diag =
-        emitOpError("unsupported accumulator dtype for operand kind ")
-        << strMMADTypeKind(akind->first) << ", accumulator dtype is " << dtype
+        op->emitOpError("unsupported accumulator dtype for operand kind ")
+        << strMMADTypeKind(akind->first) << ", accumulator dtype is " << d
         << " but must be one of [";
     llvm::interleaveComma(akind->second, diag, [&](Type t) { diag << t; });
     diag << "]";
     return diag;
   }
+  return success();
+}
 
+LogicalResult TCGen5MMAOp::verify() {
+  if (!getIsAsync() && !getBarriers().empty()) {
+    return emitOpError("The op is synchronous but a barrier is present.");
+  }
+  Type atype = getA().getType().getElementType();
+  Type btype = getB().getType().getElementType();
+  Type dtype = getD().getType().getElementType();
+  if (failed(verifyMMADType(*this, atype, btype, dtype)))
+    return failure();
   return success();
 }
 
@@ -405,6 +403,12 @@ LogicalResult TCGen5MMAScaledOp::verify() {
   if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
   }
+  Type atype = getA().getType().getElementType();
+  Type btype = getB().getType().getElementType();
+  Type dtype = getD().getType().getElementType();
+  if (failed(verifyMMADType(*this, atype, btype, dtype)))
+    return failure();
+  return success();
   return success();
 }
 
