@@ -448,7 +448,7 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
   for (auto arefUser : aref.getUsers()) {
     if (auto getEnter = dyn_cast<ArefGetEnterOp>(arefUser)) {
       auto id = getPartitionId(getEnter);
-      if (id && id->second == 0) {
+      if (id && id->index() == 0) {
         // Ignore mmav5 ops in the default partition. They are not warp
         // specialized.
         continue;
