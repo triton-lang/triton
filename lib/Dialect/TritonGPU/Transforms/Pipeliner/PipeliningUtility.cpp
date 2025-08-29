@@ -653,8 +653,8 @@ ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(Operation *op) {
       Type pointee = ptrTy.getPointeeType();
       if (auto rankedTensor = dyn_cast<RankedTensorType>(pointee)) {
         if (Attribute srcEncAttr = rankedTensor.getEncoding()) {
-          if (auto srcCta = ttg::getCTALayout(srcEncAttr)) {
-            ctaLayout = srcCta;
+          if (mlir::isa<ttg::LayoutEncodingTrait>(srcEncAttr)) {
+            ctaLayout = ttg::getCTALayout(srcEncAttr);
           }
         }
       }
