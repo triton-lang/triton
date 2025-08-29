@@ -366,7 +366,7 @@ struct TMEMAref {
                    paritionIdStageCluster) {
     auto arefBufType =
         cast<MemDescType>(aref.getDefiningOp()->getOperand(0).getType());
-    Type dataBufType = getBufferViewType(arefBufType, /*mutable*/ true);
+    Type dataBufType = arefViewBufferType(arefBufType);
     SmallVector<Type> buffers{dataBufType};
     SmallVector<Type> tokens{b.getType<AsyncTokenType>()};
     auto cnst0 = intCst(b, loc, 0, 32);
@@ -408,7 +408,7 @@ struct TMEMAref {
       auto stageCluster = getStageCluster(op);
       auto arefBufType =
           cast<MemDescType>(aref.getDefiningOp()->getOperand(0).getType());
-      Type dataBufType = getBufferViewType(arefBufType, /*mutable*/ true);
+      Type dataBufType = arefViewBufferType(arefBufType);
       SmallVector<Type> buffers{dataBufType};
       auto cnst0 = intCst(b, op->getLoc(), 0, 32);
       auto bufferOp =
@@ -550,8 +550,8 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
     }
   }
   auto numStages = isMultiStaged ? (1 + *isMultiStaged) : 1;
-  MemDescType arefBufType =
-      getMultiBufferedType(allocOp.getResult().getType(), numStages);
+  auto arefBufType =
+      arefMultiBufferedType(allocOp.getResult().getType(), numStages);
   OpBuilder b(allocOp);
 
   // alloc can be inside ws-loop, we need to find the entry point for ws-loop

@@ -222,10 +222,7 @@ template <class T> struct AssignStagePhase {
         auto arefBuf = opT.getAref()
                            .template getDefiningOp<nvws::ArefCreateOp>()
                            .getOperand(0);
-        auto depth = cast<MemDescType>(arefBuf.getType()).getShape().front();
-        if (isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(
-                cast<MemDescType>(arefBuf.getType()).getEncoding()))
-          depth = 1;
+        auto depth = arefDepth(cast<MemDescType>(arefBuf.getType()));
 
         auto cnd =
             b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, nextStage,
