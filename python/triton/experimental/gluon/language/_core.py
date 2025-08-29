@@ -414,7 +414,28 @@ def histogram(input, num_bins, mask=None, layout=None, _semantic=None, _generato
     layout = _unwrap_if_constexpr(layout)
     if mask is not None:
         mask = _semantic.to_tensor(mask)
-    return _semantic.histogram(input, num_bins, mask, layout)
+    return _semantic.histogram(input, num_bins, mask, layout=layout)
+
+
+@builtin
+def gather(src, index, axis, efficient_layout=False, _semantic=None):
+    """
+    Gather values from a tensor along a specified axis using an index tensor.
+
+    Args:
+        src (tensor): The source tensor to gather values from.
+        index (tensor): The index tensor specifying which values to gather.
+        axis (int): The axis along which to gather values.
+        efficient_layout (bool): Whether to use an efficient layout for the output tensor.
+
+    Returns:
+        tensor: The gathered tensor.
+    """
+    src = _unwrap_if_constexpr(src)
+    index = _unwrap_if_constexpr(index)
+    axis = _unwrap_if_constexpr(axis)
+    efficient_layout = _unwrap_if_constexpr(efficient_layout)
+    return _semantic.gather(src, index, axis, efficient_layout)
 
 
 @builtin
