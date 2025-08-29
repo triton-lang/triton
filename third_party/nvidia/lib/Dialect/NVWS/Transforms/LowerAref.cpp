@@ -609,30 +609,44 @@ ExitOp createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   auto zero = builder.create<arith::ConstantIntOp>(aref.getLoc(), 0, 32);
 
   if (combinedEnterInsertPoint) {
+    // Combined get enter must be placed after combined put enter
     builder.setInsertionPointAfter(combinedEnterInsertPoint);
   } else {
     builder.setInsertionPoint(firstEnter);
   }
-  auto enter = builder.create<EnterOp>(firstEnter.getLoc(), arefEnterBuffers,
+  auto combinedEnter = builder.create<EnterOp>(firstEnter.getLoc(), arefEnterBuffers,
                                        builder.getType<AsyncTokenType>(), aref,
                                        zero, zero);
-  assignStageCluster(enter, getPartitionId(firstEnter),
+  assignStageCluster(combinedEnter, getPartitionId(firstEnter),
                      getStageCluster(firstEnter), builder);
 
   builder.setInsertionPoint(lastExit);
   llvm::SmallVector<Attribute> AsyncOpAttrs(opAttrsSet.begin(),
                                             opAttrsSet.end());
-  auto exit =
-      builder.create<ExitOp>(firstEnter.getLoc(), aref, enter.getToken(), zero,
+  auto combinedExit =
+      builder.create<ExitOp>(firstEnter.getLoc(), aref, combinedEnter.getToken(), zero,
                              builder.getArrayAttr(AsyncOpAttrs));
-  assignStageCluster(exit, getPartitionId(lastExit), getStageCluster(lastExit),
+  assignStageCluster(combinedExit, getPartitionId(lastExit), getStageCluster(lastExit),
                      builder);
 
+  std::function<void(Operation *, Operation *)> moveUserAfter =
+      [&](Operation *op, Operation *target) {
+        auto curBlock = target->getBlock();
+        for (auto user : op->getUsers()) {
+          auto userOp = curBlock->findAncestorOpInBlock(*user);
+          if (userOp->isBeforeInBlock(target)) {
+            userOp->moveAfter(target);
+            moveUserAfter(userOp, userOp);
+          }
+        }
+      };
+
   for (auto [idx, enterOp] : llvm::enumerate(enterOps)) {
-    enterOp.getBuffers()[0].replaceAllUsesWith(enter.getBuffers()[idx]);
+    moveUserAfter(enterOp, combinedEnter);
+    enterOp.getBuffers()[0].replaceAllUsesWith(combinedEnter.getBuffers()[idx]);
   }
 
-  return exit;
+  return combinedExit;
 }
 
 SmallVector<Operation *> findSharedMemorySinkOps(Value value) {
