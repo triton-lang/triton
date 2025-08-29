@@ -16,7 +16,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   //       CHECK:   ttng.tc_gen5_mma
   tt.func @tcgen5(%a: !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
                   %b: !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
-                  %c: !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory, mutable>,
+                  %c: !ttg.memdesc<128x256xf16, #shared1, #ttg.shared_memory, mutable>,
                   %accUse: i1,
                   %pred: i1,
                   %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>,
@@ -24,13 +24,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred, %barrier[%barrierPred] {is_async} :
        !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
        !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
-       !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory, mutable>,
+       !ttg.memdesc<128x256xf16, #shared1, #ttg.shared_memory, mutable>,
        !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
 
     ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred:
        !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
        !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
-       !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory, mutable>
+       !ttg.memdesc<128x256xf16, #shared1, #ttg.shared_memory, mutable>
     tt.return
   }
 

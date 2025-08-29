@@ -22,6 +22,7 @@
  */
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -261,10 +262,79 @@ static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
   p << ']';
 }
 
+namespace {
+enum class MMADTypeKind { tf32, f16, f8f6f4, i8 };
+} // namespace
+
+static std::string strMMADTypeKind(MMADTypeKind kind) {
+  switch (kind) {
+  case MMADTypeKind::tf32:
+    return "tf32";
+  case MMADTypeKind::f16:
+    return "f16";
+  case MMADTypeKind::f8f6f4:
+    return "f8f6f4";
+  case MMADTypeKind::i8:
+    return "i8";
+  }
+}
+
 LogicalResult TCGen5MMAOp::verify() {
+  auto getDTypeKindAndAcc =
+      [](Type t) -> std::optional<std::pair<MMADTypeKind, SmallVector<Type>>> {
+    MLIRContext *ctx = t.getContext();
+    if (t.isF32()) {
+      return {{MMADTypeKind::tf32, {Float32Type::get(ctx)}}};
+    }
+    if (t.isF16() || t.isBF16()) {
+      return {
+          {MMADTypeKind::f16, {Float16Type::get(ctx), Float32Type::get(ctx)}}};
+    }
+    if (isa<Float8E4M3FNType, Float8E5M2Type, Float6E2M3FNType,
+            Float6E3M2FNType, Float4E2M1FNType>(t)) {
+      return {{MMADTypeKind::f8f6f4,
+               {Float16Type::get(ctx), Float32Type::get(ctx)}}};
+    }
+    if (t.isInteger(8)) {
+      return {{MMADTypeKind::i8, {IntegerType::get(ctx, 32)}}};
+    }
+    return std::nullopt;
+  };
+
   if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
   }
+
+  // Verify valid dtype combinations.
+  Type atype = getA().getType().getElementType();
+  Type btype = getB().getType().getElementType();
+  Type dtype = getD().getType().getElementType();
+  auto akind = getDTypeKindAndAcc(atype);
+  auto bkind = getDTypeKindAndAcc(btype);
+  if (!akind)
+    return emitOpError("unsupported LHS operand dtype: ") << atype;
+  if (!bkind)
+    return emitOpError("unsupported RHS operand dtype: ") << btype;
+  if (akind->first != bkind->first) {
+    return emitOpError(
+               "LHS and RHS operand dtypes kinds don't match: LHS kind is ")
+           << strMMADTypeKind(akind->first) << " but RHS kind is "
+           << strMMADTypeKind(bkind->first);
+  }
+  // TODO: tcgen05.mma supports ui8/si8 -> s32 MMA, but Triton does not.
+  if (akind->first == MMADTypeKind::i8) {
+    return emitOpError("TODO: does not yet support integer dtypes");
+  }
+  if (!llvm::is_contained(akind->second, dtype)) {
+    InFlightDiagnostic diag =
+        emitOpError("unsupported accumulator dtype for operand kind ")
+        << strMMADTypeKind(akind->first) << ", accumulator dtype is " << dtype
+        << " but must be one of [";
+    llvm::interleaveComma(akind->second, diag, [&](Type t) { diag << t; });
+    diag << "]";
+    return diag;
+  }
+
   return success();
 }
 
