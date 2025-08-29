@@ -801,12 +801,12 @@ def test_2d_tensor_early_return():
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
         BLOCK: ttgl.constexpr = 32
 
-        x0 = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(0, layout))
-        x1 = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(1, layout))
+        x0 = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(1, layout))
+        x1 = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(0, layout))
         x = x0[:, None] * x1[None, :]
         for i in range(N):
             x += early_return_kernel(x)
         print("value", x)
 
-    compiled_kernel = kernel.warmup(N=100, grid=(1,))
+    compiled_kernel = kernel.warmup(N=100, grid=(1, ))
     assert compiled_kernel.asm["llir"].count("define") == 1
