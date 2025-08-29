@@ -2,6 +2,7 @@
 #define PROTON_UTILITY_STRING_H_
 
 #include <string>
+#include <vector>
 
 namespace proton {
 
