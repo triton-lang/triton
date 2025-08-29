@@ -170,6 +170,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         ty = value.type
         _check(isinstance(ty, ttgl.distributed_type),
                lambda: f"expected convert_layout input to be a distributed_type but got: {ty!r}")
+        _check(isinstance(layout, ttgl.DistributedLayout),
+               lambda: f"expected 'layout' to be a DistributedLayout but got {layout}")
         ret_ty = ttgl.distributed_type(ty.element_ty, ty.shape, layout)
         ret_ty_ir = ret_ty.to_ir(self.builder)
         if assert_trivial and not self.builder.is_convert_layout_trivial(ret_ty_ir, value.handle):
@@ -178,6 +180,10 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return ttgl.tensor(handle, ret_ty)
 
     def allocate_shared(self, element_ty, shape, layout, value):
+        _check(isinstance(element_ty, ttgl.dtype), lambda: f"expected 'element_ty' to be a dtype but got {element_ty}")
+        _check(_is_int_list(shape), lambda: f"all elements of 'shape' must be integers but got {shape}")
+        _check(isinstance(layout, ttgl.SharedLayout),
+               lambda: f"expected 'layout' to be a SharedLayout but got {layout}")
         ty = ttgl.shared_memory_descriptor_type(element_ty, shape, layout, shape)
         if value is not None:
             handle = self.builder.create_local_alloc(ty.to_ir(self.builder), value.handle)
@@ -238,7 +244,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return ttgl.shared_memory_descriptor(handle, **ty.__dict__)
 
     def memdesc_trans(self, mem_desc, order):
-        _check(_is_int_list(order), lambda: "all elements of 'order' must be integers")
+        _check(_is_int_list(order), lambda: f"all elements of 'order' must be integers but got {order}")
         _check(
             len(order) == len(mem_desc.shape),
             lambda: f"source rank ({mem_desc.rank}) and order length ({len(order)}) must match")
@@ -254,7 +260,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
                                              alloc_shape=new_alloc_shape, layout=layout)
 
     def memdesc_reshape(self, mem_desc, shape):
-        _check(_is_int_list(shape), lambda: "all elements of 'shape' must be integers")
+        _check(_is_int_list(shape), lambda: f"all elements of 'shape' must be integers but got {shape}")
         _check(
             math.prod(shape) == math.prod(mem_desc.shape),
             lambda: (f"memdesc_reshape total elements mismatch: "
@@ -277,7 +283,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def memdesc_reinterpret(self, mem_desc, dtype, shape, layout):
         _check(isinstance(dtype, ttgl.dtype), lambda: f"expected 'dtype' to be a dtype but got {dtype}")
-        _check(_is_int_list(shape), lambda: "all elements of 'shape' must be integers")
+        _check(_is_int_list(shape), lambda: f"all elements of 'shape' must be integers but got {shape}")
         _check(isinstance(layout, ttgl.SharedLayout),
                lambda: f"expected 'layout' to be a SharedLayout but got {layout}")
         ty = ttgl.shared_memory_descriptor_type(dtype, shape, layout, shape)
