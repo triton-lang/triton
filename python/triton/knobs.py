@@ -486,7 +486,7 @@ class nvidia_knobs(base_knobs):
 
 
 class amd_knobs(base_knobs):
-    use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS", True)
+    use_buffer_ops: env_bool = env_bool("AMDGCN_USE_BUFFER_OPS")
     # Note: This requires use_buffer_ops be true to have any effect
     use_buffer_atomics: env_bool = env_bool("AMDGCN_USE_BUFFER_ATOMICS", True)
     dump_amdgcn: env_bool = env_bool("AMDGCN_ENABLE_DUMP")
