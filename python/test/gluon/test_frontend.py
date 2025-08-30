@@ -1,5 +1,4 @@
 import expecttest
-import torch
 import pytest
 import re
 
@@ -128,7 +127,7 @@ def test_convert_layout_not_trivial(target):
     with pytest.raises(CompilationError) as e:
         src_layout: ttgl.constexpr = ttgl.AutoLayout()
         dst_layout: ttgl.constexpr = ttgl.BlockedLayout([2], [32], [4], [0])
-        kernel.warmup(src_layout, dst_layout, grid=(1, ))
+        run_parser(kernel, *make_args(src_layout, dst_layout), target=target)
 
     assert "layout conversion from AutoLayout()" in str(e.value.__cause__)
     assert "to BlockedLayout(size_per_thread=[2]" in str(e.value.__cause__)
@@ -312,6 +311,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %5 = ttg.memdesc_index %0[%arg0] : !ttg.memdesc<4x256xi32, #shared, #smem, mutable> -> !ttg.memdesc<256xi32, #shared, #smem, mutable, 4x256>
       %6 = ttg.local_load %5 : !ttg.memdesc<256xi32, #shared, #smem, mutable, 4x256> -> tensor<256xi32, #blocked>
     }
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def shared_memory_permute_kernel():
+    layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [4, 128], layout)
+    perm = smem.permute((1, 0))
+    ttgl.static_assert(perm.layout == ttgl.SwizzledSharedLayout(1, 1, 1, [0, 1]))
+
+
+@pytest.mark.parametrize("target", ALL_TARGETS)
+def test_shared_memory_permute(target):
+    mod = run_parser(shared_memory_permute_kernel, target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @shared_memory_permute_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<4x128xf16, #shared, #smem, mutable>
+    %1 = ttg.memdesc_trans %0 {order = array<i32: 1, 0>} : !ttg.memdesc<4x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x4xf16, #shared1, #smem, mutable>
     tt.return
   }
 }
@@ -699,7 +724,7 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
 
 @pytest.mark.parametrize("target", [HOPPER_TARGET, BLACKWELL_TARGET])
 def test_async_tma(target):
-    input = torch.randn((1024, 1024), device="cuda", dtype=torch.float16)
+    input = MockTensor(ttgl.float16, (1024, 1024))
     XBLOCK = 128
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     input_desc = TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
@@ -758,7 +783,7 @@ def async_tma_blackwell_kernel(input_desc, XBLOCK: ttgl.constexpr):
 
 
 def test_async_tma_blackwell():
-    input = torch.randn((1024, 1024), device="cuda", dtype=torch.float16)
+    input = MockTensor(ttgl.float16, (1024, 1024))
     XBLOCK = 128
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     input_desc = TensorDescriptor.from_tensor(input, [1, XBLOCK], shared_layout)
@@ -808,6 +833,24 @@ def test_mlir_attr_error():
         run_parser(kernel)
 
     assert "order must be a permutation of 0..(rank-1), but was [1]" in str(e.value.__cause__)
+
+
+def test_tensor_layout_type_changed():
+
+    @gluon.jit
+    def kernel():
+        layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[1, 32],
+                                                    warps_per_cta=[1, 4], order=[1, 0])
+        x = ttgl.zeros([128], ttgl.float32)
+        y = ttgl.zeros([128, 128], ttgl.float32, layout=layout)
+        c = ttgl.to_tensor(True)
+        while c:
+            x = x + y.sum(axis=0)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "Loop-carried variable x has initial type" in str(e.value)
 
 
 @gluon.jit
@@ -2251,3 +2294,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@filecheck_test
+@gluon.jit
+def test_layout_zeros():
+    # CHECK: #blocked = #ttg.blocked
+    # CHECK: arith.constant dense<0.000000e+00> : tensor<128xf32, #blocked>
+    ttgl.zeros([128], ttgl.float32, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
