@@ -811,3 +811,127 @@ def test_local_load_store_3d_layouts(shape, dtype, dist_layout, shared_layout, d
     y = torch.zeros_like(x)
     kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
     torch.testing.assert_close(y, x)
+
+
+def _gather_layouts():
+    if THREADS_PER_WARP == 32:
+        return [
+            (
+                0,
+                ttgl.DistributedLinearLayout(
+                    reg_bases=[[0, 2], [2, 0]],
+                    lane_bases=[[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]],
+                    warp_bases=[[0, 1], [0, 4]],
+                    block_bases=[],
+                    shape=[32, 16],
+                ),
+                ttgl.DistributedLinearLayout(
+                    reg_bases=[[2, 0], [0, 2]],
+                    lane_bases=[[0, 8], [16, 0], [1, 0], [8, 0], [4, 0]],
+                    warp_bases=[[0, 1], [0, 4]],
+                    block_bases=[],
+                    shape=[32, 16],
+                ),
+            ),
+            (
+                0,
+                ttgl.DistributedLinearLayout(
+                    reg_bases=[[0, 2], [32, 0], [2, 0], [0, 16], [0, 32], [64, 0]],
+                    lane_bases=[[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]],
+                    warp_bases=[[0, 1], [0, 4]],
+                    block_bases=[],
+                    shape=[128, 64],
+                ),
+                ttgl.DistributedLinearLayout(
+                    reg_bases=[[0, 2], [32, 0], [0, 32], [2, 0], [0, 16], [64, 0], [128, 0]],
+                    lane_bases=[[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]],
+                    warp_bases=[[0, 1], [0, 4]],
+                    block_bases=[],
+                    shape=[256, 64],
+                ),
+            ),
+        ]
+    elif THREADS_PER_WARP == 64:
+        return [
+            (
+                0,
+                ttgl.DistributedLinearLayout(
+                    reg_bases=[[0, 2], [2, 0]],
+                    lane_bases=[[0, 8], [8, 0], [1, 0], [4, 0], [16, 0], [32, 0]],
+                    warp_bases=[[0, 1], [0, 4]],
+                    block_bases=[],
+                    shape=[64, 16],
+                ),
+                ttgl.DistributedLinearLayout(
+                    reg_bases=[[2, 0], [0, 2]],
+                    lane_bases=[[0, 8], [16, 0], [1, 0], [8, 0], [4, 0], [32, 0]],
+                    warp_bases=[[0, 1], [0, 4]],
+                    block_bases=[],
+                    shape=[64, 16],
+                ),
+            ),
+            (
+                0,
+                ttgl.DistributedLinearLayout(
+                    reg_bases=[[0, 2], [2, 0], [0, 16], [0, 32]],
+                    lane_bases=[[0, 8], [8, 0], [1, 0], [4, 0], [16, 0], [32, 0]],
+                    warp_bases=[[0, 1], [0, 4]],
+                    block_bases=[],
+                    shape=[64, 64],
+                ),
+                ttgl.DistributedLinearLayout(
+                    reg_bases=[[0, 2], [0, 32], [2, 0], [0, 16], [64, 0]],
+                    lane_bases=[[0, 8], [8, 0], [1, 0], [4, 0], [16, 0], [32, 0]],
+                    warp_bases=[[0, 1], [0, 4]],
+                    block_bases=[],
+                    shape=[128, 64],
+                ),
+            ),
+        ]
+    else:
+        return []
+
+
+@pytest.mark.parametrize("axis, src_layout, index_layout", _gather_layouts())
+def test_gather_layouts(axis, src_layout, index_layout, device):
+    src_shape = src_layout.shape
+    indices_shape = index_layout.shape
+
+    @gluon.jit
+    def kernel(
+        src_ptr,
+        idx_ptr,
+        out_ptr,
+        axis: ttgl.constexpr,
+        src_dim0: ttgl.constexpr,
+        src_dim1: ttgl.constexpr,
+        idx_dim0: ttgl.constexpr,
+        idx_dim1: ttgl.constexpr,
+        src_layout: ttgl.constexpr,
+        idx_layout: ttgl.constexpr,
+    ):
+        offs_src_dim0 = ttgl.arange(0, src_dim0, layout=ttgl.SliceLayout(1, src_layout))[:, None]
+        offs_src_dim1 = ttgl.arange(0, src_dim1, layout=ttgl.SliceLayout(0, src_layout))[None, :]
+        src_offs = offs_src_dim0 * src_dim1 + offs_src_dim1
+        src = ttgl.load(src_ptr + src_offs)
+
+        offs_idx_dim0 = ttgl.arange(0, idx_dim0, layout=ttgl.SliceLayout(1, idx_layout))[:, None]
+        offs_idx_dim1 = ttgl.arange(0, idx_dim1, layout=ttgl.SliceLayout(0, idx_layout))[None, :]
+        idx_offs = offs_idx_dim0 * idx_dim1 + offs_idx_dim1
+        idx = ttgl.load(idx_ptr + idx_offs)
+
+        out = ttgl.gather(src, idx, axis)
+
+        ttgl.store(out_ptr + idx_offs, out)
+
+    src = torch.randn(src_shape, device=device)
+    indices = torch.randint(0, src.shape[axis], indices_shape, device=device)
+    out = torch.zeros_like(indices, device=device, dtype=src.dtype)
+    ref = torch.gather(src, axis, indices)
+    obj = kernel[(1, )](
+        src, indices, out, axis,  #
+        src_shape[0], src_shape[1], indices_shape[0], indices_shape[1],  #
+        src_layout, index_layout,  #
+    )
+    torch.testing.assert_close(out, ref, rtol=0, atol=0)
+    assert ("nvvm.shfl.sync.idx" in obj.asm["llir"]) or ("llvm.amdgcn.ds.bpermute" in obj.asm["llir"])
