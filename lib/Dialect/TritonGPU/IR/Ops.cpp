@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LayoutUtility.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -807,7 +808,12 @@ LogicalResult MemDescSubsliceOp::verify() {
   }
 
   auto ctx = getContext();
-  auto ll = triton::gpu::toLinearLayout(srcTy);
+  LinearLayout ll;
+  if (auto paddedEncoding = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
+    ll = getElemIndexToSharedLayout(paddedEncoding, srcTy.getShape());
+  } else {
+    ll = triton::gpu::toLinearLayout(srcTy);
+  }
   // NYI: We don't support non-trivial block dimension for now.
   auto kBlock = mlir::StringAttr::get(getContext(), "block");
   if (ll.getInDimSize(kBlock) != 1) {
