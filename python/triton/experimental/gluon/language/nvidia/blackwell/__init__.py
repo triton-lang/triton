@@ -375,19 +375,6 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
 
 
 @builtin
-def tcgen05_cp_smem_to_tmem(a, b, _semantic=None):
-    """
-    Start an asynchronous copy from shared memory to tensor memory.
-    WARNING: The current semantics of the instruction are not well defined and
-    the API will change in the future. Use at your own risk.
-    Args:
-        src (shared_memory_descriptor): Shared memory to copy from.
-        dst (tensor_memory_descriptor): Tensor memory to copy to.
-    """
-    _semantic.builder.create_tcgen05_cp(a.handle, b.handle)
-
-
-@builtin
 def tcgen05_commit(barrier, _semantic=None):
     """
     This instruction causes the provided mbarrier to be arrived-on with a count

@@ -152,6 +152,11 @@ class distributed_type(block_type):
     def with_element_ty(self, scalar_ty: dtype) -> block_type:
         return distributed_type(scalar_ty, self.shape, self.layout)
 
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, distributed_type):
+            return False
+        return super().__eq__(other) and self.layout == other.layout
+
 
 class shared_memory_descriptor_type(base_type):
 
@@ -394,6 +399,27 @@ def full(shape, value, dtype, layout=None, _semantic=None):
     dtype = _unwrap_if_constexpr(dtype)
     layout = _unwrap_if_constexpr(layout)
     return _semantic.full(shape, value, dtype, layout)
+
+
+@builtin
+def histogram(input, num_bins, mask=None, layout=None, _semantic=None, _generator=None):
+    """
+    Compute a histogram of a 1D integer tensor.
+
+    Args:
+        input (tensor): 1D tensor of integer values.
+        num_bins (int): Number of bins. Bins have width 1 and start at 0.
+        mask (Optional[tensor]): Boolean mask to exclude elements when False.
+        layout (DistributedLayout): Destination layout of the output histogram.
+
+    Returns:
+        tensor: 1D int32 tensor of length `num_bins` with the requested layout.
+    """
+    num_bins = _unwrap_if_constexpr(num_bins)
+    layout = _unwrap_if_constexpr(layout)
+    if mask is not None:
+        mask = _semantic.to_tensor(mask)
+    return _semantic.histogram(input, num_bins, mask, layout)
 
 
 @builtin

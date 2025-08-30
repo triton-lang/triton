@@ -187,10 +187,10 @@ class DistributedLinearLayout(DistributedLayout):
 
     def __hash__(self):
         return hash((
-            tuple(self.reg_bases),
-            tuple(self.lane_bases),
-            tuple(self.warp_bases),
-            tuple(self.block_bases),
+            tuple(map(tuple, self.reg_bases)),
+            tuple(map(tuple, self.lane_bases)),
+            tuple(map(tuple, self.warp_bases)),
+            tuple(map(tuple, self.block_bases)),
             tuple(self.shape),
         ))
 
@@ -224,7 +224,7 @@ class DotOperandLayout(DistributedLayout):
         return hash((self.operand_index, self.parent, self.k_width))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=True)
 class NVMMADistributedLayout(DistributedLayout):
     """
     Represents a layout for NVIDIA MMA (tensor core) operations.

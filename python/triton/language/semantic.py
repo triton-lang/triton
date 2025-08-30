@@ -1037,9 +1037,9 @@ class TritonSemantic(Generic[TensorTy]):
         # Make `mask` and `other` into the same shape as `ptr`
         if ptr.type.is_block():
             if mask is not None:
-                mask = self.broadcast_impl_shape(mask, ptr.type.get_block_shapes())
+                ptr, mask = self.broadcast_impl_value(ptr, mask)
             if other is not None:
-                other = self.broadcast_impl_shape(other, ptr.type.get_block_shapes())
+                ptr, other = self.broadcast_impl_value(ptr, other)
 
         # Get `pointer_type<elt_ty>` and `elt_ty`
         ptr_ty = ptr.type.scalar
@@ -1547,7 +1547,7 @@ class TritonSemantic(Generic[TensorTy]):
             acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
         else:
             acc_handle = acc.handle
-            assert acc.type == ret_ty
+            assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
 
         # max_num_imprecise_acc only applies to fp8 -> fp32 dot on sm_90
         if max_num_imprecise_acc is None:
@@ -1627,7 +1627,7 @@ class TritonSemantic(Generic[TensorTy]):
             acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
         else:
             acc_handle = acc.handle
-            assert acc.type == ret_ty
+            assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
         rhs_scale_handle = None if rhs_scale_is_none else rhs_scale.handle
         lhs_scale_handle = None if lhs_scale_is_none else lhs_scale.handle
         return self.tensor(
@@ -1896,13 +1896,8 @@ class TritonSemantic(Generic[TensorTy]):
         # Advanced block pointer type is the same as before
         return self.tensor(self.builder.create_advance(base.handle, offsets), base.type)
 
-    def make_tensor_descriptor(
-        self,
-        base: TensorTy,
-        shape: List[TensorTy],
-        strides: List[TensorTy],
-        block_shape: List[tl.constexpr],
-    ) -> tl.tensor_descriptor:
+    def make_tensor_descriptor(self, base: TensorTy, shape: List[TensorTy], strides: List[TensorTy],
+                               block_shape: List[tl.constexpr], padding_option: str = "zero") -> tl.tensor_descriptor:
         ndim = len(shape)
         if not (1 <= ndim <= 5):
             raise ValueError(f"Expected 1 <= ndim <= 5 but got {ndim} dimensions")
@@ -1933,6 +1928,12 @@ class TritonSemantic(Generic[TensorTy]):
         base_handle = base.handle
         is_signed_int = base.type.element_ty.is_int_signed()
 
+        padding = self._str_to_padding_option(padding_option)
+
+        if base.type.element_ty.is_int() and padding == ir.PADDING_OPTION.PAD_NAN:
+            raise ValueError("Padding option `nan` is not supported for integer blocks")
+
         handle = self.builder.create_make_tensor_descriptor(base_handle, [s.handle for s in shape],
-                                                            [s.handle for s in strides], block_shape, is_signed_int)
+                                                            [s.handle for s in strides], block_shape, is_signed_int,
+                                                            padding)
         return tl.tensor_descriptor(handle, shape, strides, type)

@@ -21,7 +21,6 @@ from triton.runtime.driver import DriverBase
 def build_for_backend(name, src, srcdir):
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
-    # try to avoid setuptools if possible
     cc = os.environ.get("CC")
     if cc is None:
         # TODO: support more things here.

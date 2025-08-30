@@ -77,12 +77,13 @@ class BlockPointerHandle:
 class TensorDescHandle:
 
     def __init__(self, base: TensorHandle, shape: List[TensorHandle], strides: List[TensorHandle],
-                 block_shape: List[int]):
+                 block_shape: List[int], padding):
         self.base = base
         self.ndim = len(shape)
         self.shape = shape
         self.strides = strides
         self.block_shape = block_shape
+        self.padding = padding
 
     def validate(self):
         assert self.base.data.item() % 16 == 0, "base must be 16-byte aligned"
@@ -729,15 +730,9 @@ class InterpreterBuilder:
             ret.offsets[i].data += offsets[i].data
         return ret
 
-    def create_make_tensor_descriptor(
-        self,
-        base: TensorHandle,
-        shape: List[TensorHandle],
-        strides: List[TensorHandle],
-        tensor_shape: List[int],
-        is_signed: bool,
-    ):
-        desc = TensorDescHandle(base, shape, strides, tensor_shape)
+    def create_make_tensor_descriptor(self, base: TensorHandle, shape: List[TensorHandle], strides: List[TensorHandle],
+                                      tensor_shape: List[int], is_signed: bool, padding: str = "zero"):
+        desc = TensorDescHandle(base, shape, strides, tensor_shape, padding)
         desc.validate()
         return desc
 
@@ -745,7 +740,16 @@ class InterpreterBuilder:
                                eviction_policy):
         assert isinstance(desc, TensorDescHandle)
         ptrs, mask = desc.materialize_pointers(indices)
-        return self.create_masked_load(ptrs, mask, other=None, cache_modifier=cache_modifier,
+        dtype_tt = ptrs.get_element_ty()
+        dtype_np = _get_np_dtype(dtype_tt)
+        padding = desc.padding
+        if padding == _ir.PADDING_OPTION.PAD_ZERO:
+            other = TensorHandle(np.zeros_like(ptrs.data, dtype=dtype_np), dtype_tt)
+        elif padding == _ir.PADDING_OPTION.PAD_NAN:
+            other = TensorHandle(np.full_like(ptrs.data, float('nan'), dtype=dtype_np), dtype_tt)
+        else:
+            raise ValueError(f"unsupported padding {padding}")
+        return self.create_masked_load(ptrs, mask, other, cache_modifier=cache_modifier,
                                        eviction_policy=eviction_policy, is_volatile=False)
 
     def create_descriptor_store(self, desc: TensorDescHandle, value: TensorHandle, indices: List[TensorHandle]):
@@ -1154,12 +1158,10 @@ def _implicit_cvt(arg):
         assert arg.strides[-1] == 1
         strides[-1] = tl.constexpr(1)
         semantic = TritonSemantic(InterpreterBuilder())
-        return semantic.make_tensor_descriptor(
-            base=_implicit_cvt(arg.base),
-            shape=[_implicit_cvt(s) for s in arg.shape],
-            strides=strides,
-            block_shape=[tl.constexpr(b) for b in arg.block_shape],
-        )
+        return semantic.make_tensor_descriptor(base=_implicit_cvt(arg.base),
+                                               shape=[_implicit_cvt(s) for s in arg.shape], strides=strides,
+                                               block_shape=[tl.constexpr(b)
+                                                            for b in arg.block_shape], padding_option=arg.padding)
     return arg
 
 
@@ -1202,6 +1204,7 @@ class GridExecutor:
                     arg.shape,
                     arg.strides,
                     arg.block_shape,
+                    arg.padding,
                 )
             elif not hasattr(arg, "data_ptr"):
                 return arg

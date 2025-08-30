@@ -191,10 +191,11 @@ py::object layoutToGluon(Attribute layout) {
         toStdVector(ctaLayout.getCTAOrder()));
   } else if (auto swizzled =
                  dyn_cast<ttg::SwizzledSharedEncodingAttr>(layout)) {
-    auto ctaLayout = nvmma.getCTALayout();
+    auto ctaLayout = swizzled.getCTALayout();
     return layouts.SwizzledSharedLayout(
         swizzled.getVec(), swizzled.getPerPhase(), swizzled.getMaxPhase(),
-        swizzled.getOrder(), toStdVector(ctaLayout.getCTAsPerCGA()),
+        toStdVector(swizzled.getOrder()),
+        toStdVector(ctaLayout.getCTAsPerCGA()),
         toStdVector(ctaLayout.getCTASplitNum()),
         toStdVector(ctaLayout.getCTAOrder()));
   } else if (auto autoEnc = dyn_cast<gluon::AutoEncodingAttr>(layout)) {
@@ -436,6 +437,20 @@ void init_gluon_ir(py::module &&m) {
              auto dstTy = cast<RankedTensorType>(resultTy);
              return isConvertLayoutTrivial(dstTy, value);
            })
+      .def("create_histogram",
+           [](GluonOpBuilder &self, Value operand, int numBins,
+              std::optional<Value> mask, Attribute layout) -> Value {
+             auto *ctx = self.getContext();
+             auto resultTy =
+                 RankedTensorType::get({static_cast<int64_t>(numBins)},
+                                       IntegerType::get(ctx, 32), layout);
+             if (!mask) {
+               return self.create<triton::HistogramOp>(resultTy, operand);
+             } else {
+               return self.create<triton::HistogramOp>(resultTy, operand,
+                                                       *mask);
+             }
+           })
       .def("create_async_copy_global_to_local",
            [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
               Value other, tt::CacheModifier cacheModifier,
@@ -596,10 +611,6 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttng::TCGen5MMAOp>(tokType, a, b, acc, accDep, useAcc,
                                             pred, two_ctas, mbarriers,
                                             mbarrier_preds);
-           })
-      .def("create_tcgen05_cp",
-           [](GluonOpBuilder &self, Value src, Value dst) {
-             self.create<ttng::TMEMCopyOp>(src, dst, Value());
            })
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value &barrier) {
