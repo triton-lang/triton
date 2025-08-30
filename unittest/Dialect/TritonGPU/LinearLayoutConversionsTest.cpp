@@ -2282,6 +2282,59 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_rhs_trans) {
                                     /*elemBitWidth=*/8));
 }
 
+TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_lhs_real_transpose) {
+  auto parentMfma32 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+                           /*isTransposed=*/false);
+  auto mfmaDotOp0_kwidth_8 = mfmaDotOp(parentMfma32, /*opIdx=*/0, /*kWidth=*/8);
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {16, 32},
+                                    /*elemBitWidth=*/8, /*isTranspose*/ true),
+            LinearLayout(
+                {{S("register"), {{1, 0}, {2, 0}, {4, 0}}},
+                 {S("lane"), {{8, 0}, {0, 1}, {0, 2}, {0, 4}, {16, 0}, {0, 8}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim1"), S("dim0")}));
+
+  // Dot operand for LDS transpose load based on transposed mfma layout has
+  // same  layout as ordinary.
+  auto parentTMfma32 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+                            /*isTransposed=*/true);
+  auto tmfmaDotOp0_kwidth_8 =
+      mfmaDotOp(parentTMfma32, /*opIdx=*/0, /*kWidth=*/8);
+
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_8, {16, 32},
+                                    /*elemBitWidth=*/8, /*isTranspose*/ true),
+            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {16, 32},
+                                    /*elemBitWidth=*/8, /*isTranspose*/ true));
+}
+
+TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_rhs_real_transpose) {
+  auto parentMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+                           /*isTransposed=*/false);
+  auto mfmaDotOp1_kwidth_8 = mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/8);
+
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {32, 16},
+                                    /*elemBitWidth=*/8, /*isTranspose*/ true),
+            LinearLayout(
+                {{S("register"), {{0, 1}, {0, 2}, {0, 4}}},
+                 {S("lane"), {{0, 8}, {1, 0}, {2, 0}, {4, 0}, {0, 16}, {8, 0}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim1"), S("dim0")}));
+
+  // Dot operand for LDS transpose load based on transposed mfma layout has
+  // same  layout as ordinary.
+  auto parentTMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
+                            /*isTransposed=*/true);
+  auto tmfmaDotOp1_kwidth_8 =
+      mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/8);
+
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_8, {32, 16},
+                                    /*elemBitWidth=*/8, /*isTranspose*/ true),
+            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {32, 16},
+                                    /*elemBitWidth=*/8, /*isTranspose*/ true));
+}
+
 TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_trans_fp4_mn_packed) {
   auto parentMfma16 = mfma(/*warps=*/{4, 1}, /*mDim=*/16, /*nDim=*/16,
                            /*isTransposed=*/false);
