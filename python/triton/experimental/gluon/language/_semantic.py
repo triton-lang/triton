@@ -331,15 +331,14 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         handle = self.builder.create_histogram(input.handle, num_bins, mask, layout_attr)
         return self.wrap_tensor(handle, ttgl.int32, [num_bins], layout)
 
-    def gather(self, src: TensorTy, index: TensorTy, axis: int, efficient_layout: bool) -> TensorTy:
-        _check(index.dtype.is_int(), lambda: "index must be an integer tensor")
+    def gather(self, src: TensorTy, index: TensorTy, axis: int) -> TensorTy:
+        _check(isinstance(src.type, ttgl.distributed_type), lambda: f"expected distributed_type but got: {src.type!r}")
         _check(isinstance(index.type, ttgl.distributed_type),
-               lambda: f"expected gather index to be a distributed_type but got: {index.type!r}")
-        _check(isinstance(src.type, ttgl.distributed_type),
-               lambda: f"expected gather source to be a distributed_type but got: {src.type!r}")
-        rank = len(src.type.shape)
-        _check(len(index.type.shape) == rank, lambda: "source and index tensors must have the same rank")
+               lambda: f"expected distributed_type but got: {index.type!r}")
+        _check(index.type.scalar.is_int(), lambda: f"expected integer scalar type but got: {index.type.scalar!r}")
 
+        rank = len(src.type.shape)
+        _check(len(index.type.shape) == rank, "source and index tensors must have the same rank")
         _check(-rank <= axis < rank, lambda: f"gather axis {axis} must be < source rank ({rank})")
         if axis < 0:
             axis += rank
@@ -347,10 +346,12 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         for d in range(rank):
             if d == axis:
                 continue
-            _check(index.type.shape[d] == src.type.shape[d], lambda: f"index dim {axis} must match the corresponding source dim")
-
+            _check(
+                index.type.shape[d] == src.type.shape[d],
+                lambda: f"index dim {axis} must match the corresponding source dim",
+            )
         gather = self.builder.create_gather(src.handle, index.handle, axis)
-        return self.wrap_tensor(gather, src.type.scalar, index.type.shape)
+        return self.wrap_tensor(gather, src.type.scalar, index.type.shape, index.type.layout)
 
     def warp_specialize(self, default_args, default_partition, worker_args, worker_partitions,
                         worker_num_warps: Sequence[int], worker_num_regs: Sequence[int], generator):
