@@ -419,7 +419,7 @@ def histogram(input, num_bins, mask=None, layout=None, _semantic=None, _generato
     layout = _unwrap_if_constexpr(layout)
     if mask is not None:
         mask = _semantic.to_tensor(mask)
-    return _semantic.histogram(input, num_bins, mask, layout=layout)
+    return _semantic.histogram(input, num_bins, mask, layout)
 
 
 @builtin
