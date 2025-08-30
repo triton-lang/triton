@@ -27,6 +27,19 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
   return clockVal;
 }
 
+Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
+                             Location loc) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  StringRef globalTimeIntrinsicName = "llvm.amdgcn.s.memrealtime";
+  Value globalTimeVal = LLVM::createLLVMIntrinsicCallOp(
+                            rewriter, loc, globalTimeIntrinsicName, i64_ty, {})
+                            .getResult(0);
+  // The clock-generator runs at 100 MHz ==> 10 ns per clock.
+  // Reference: Section 3.4.11 in the RDNA4 ISA manual
+  // https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/instruction-set-architectures/rdna4-instruction-set-architecture.pdf
+  return b.mul(globalTimeVal, b.i64_val(10));
+}
+
 // TODO(crobeck): move these into a util file
 static Value getXCCID(ConversionPatternRewriter &rewriter, Location loc) {
   GCNBuilder builder;
