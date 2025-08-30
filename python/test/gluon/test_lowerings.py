@@ -82,7 +82,7 @@ def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
     torch.testing.assert_close(z_tri, z_ref)
 
 
-@pytest.mark.parametrize("M, N", [[128, 16], [32, 128], [32, 32], [16, 16]])
+@pytest.mark.parametrize("M, N", [[128, 128], [128, 16], [32, 128], [32, 32], [16, 16]])
 @pytest.mark.parametrize(
     "src_layout",
     _filter_layouts([
@@ -115,18 +115,16 @@ def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
                                                cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 32, 16]),  #
             operand_index=0, k_width=2),
         ttgl.SliceLayout(
-            dim=0,
-            parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],  #
-                                               cta_split_num=[1, 1, 1], cta_order=[2, 1, 0], instr_shape=[1, 16,
-                                                                                                          8])),  #
+            dim=0, parent=ttgl.NVMMADistributedLayout(
+                version=[2, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],  #
+                cta_split_num=[1, 1, 1], cta_order=[2, 1, 0], instr_shape=[1, 16, 8])),  #
         ttgl.SliceLayout(
             dim=1, parent=ttgl.DotOperandLayout(
                 parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],  #
-                                                   cta_split_num=[1, 1, 1], cta_order=[2, 1, 0], instr_shape=[1, 16,
-                                                                                                              8]),  #
+                                                   cta_split_num=[1, 1, 1], cta_order=[2, 1, 0], instr_shape=[1, 16, 8
+                                                                                                              ]),  #
                 operand_index=1, k_width=2)),
-        "linear_layout",
-    ]))
+    ]) + ["linear_layout"])
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("epilogue_kind", ['reduce1d', 'reduce2d', 'expand_reduce2d'])
 @pytest.mark.parametrize("dtype_str, sanitize_overflow", [("int32", False), ("int32", True), ("float32", False),
@@ -136,11 +134,9 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, saniti
     if src_layout == "linear_layout":
         src_layout = ttgl.DistributedLinearLayout(reg_bases=[[0, 16], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],  #
                                                   lane_bases=[[0, 0], [0, 1], [0, 2], [0, 4], [0, 8]],  #
-                                                  warp_bases=[[32, 0], [0, 32]], block_bases=[], shape=[M, N])
+                                                  warp_bases=[[32, 0], [0, 32]], block_bases=[], shape=[64, 64])
         if THREADS_PER_WARP != (1 << len(src_layout.lane_bases)):
             pytest.skip(f"Skipping. This LinearLayout assumes {1 << len(src_layout.lane_bases)} threads per warp")
-        elif M < 64 or N < 64:
-            pytest.skip(f"Skipping. This LinearLayout assumes M >= 64 and N >= 64, got M={M}, N={N}")
     if isinstance(src_layout,
                   (ttgl.amd.AMDMFMALayout, ttgl.NVMMADistributedLayout)) and (M < src_layout.instr_shape[0]
                                                                               or N < src_layout.instr_shape[1]):
@@ -255,16 +251,13 @@ def test_histogram(M, bins, src_layout, dst_layout, device):
         ttgl.store(z_ptr + z_offs, h)
 
     if src_layout == "linear_layout":
-        if M == 32:
-            src_layout = ttgl.DistributedLinearLayout(
-                reg_bases=[],
-                lane_bases=[[0], [16], [4], [2], [1]] + [[0]] * (THREADS_PER_WARP >> 6),
-                warp_bases=[[0], [8]],
-                block_bases=[],
-                shape=(M, ),
-            )
-        else:
-            pytest.skip("Linear layout is specialized for 32 elements")
+        src_layout = ttgl.DistributedLinearLayout(
+            reg_bases=[],
+            lane_bases=[[0], [16], [4], [2], [1]] + [[0]] * (THREADS_PER_WARP >> 6),
+            warp_bases=[[0], [8]],
+            block_bases=[],
+            shape=(THREADS_PER_WARP, ),
+        )
 
     torch.manual_seed(0)
     x = torch.randint(0, bins, (M, ), dtype=torch.int32, device=device)
