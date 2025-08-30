@@ -191,10 +191,11 @@ py::object layoutToGluon(Attribute layout) {
         toStdVector(ctaLayout.getCTAOrder()));
   } else if (auto swizzled =
                  dyn_cast<ttg::SwizzledSharedEncodingAttr>(layout)) {
-    auto ctaLayout = nvmma.getCTALayout();
+    auto ctaLayout = swizzled.getCTALayout();
     return layouts.SwizzledSharedLayout(
         swizzled.getVec(), swizzled.getPerPhase(), swizzled.getMaxPhase(),
-        swizzled.getOrder(), toStdVector(ctaLayout.getCTAsPerCGA()),
+        toStdVector(swizzled.getOrder()),
+        toStdVector(ctaLayout.getCTAsPerCGA()),
         toStdVector(ctaLayout.getCTASplitNum()),
         toStdVector(ctaLayout.getCTAOrder()));
   } else if (auto autoEnc = dyn_cast<gluon::AutoEncodingAttr>(layout)) {
@@ -403,6 +404,14 @@ void init_gluon_ir(py::module &&m) {
                  ctx, block[0], block[1], unpacked, ctaSplitNum[0],
                  ctaSplitNum[1]);
            })
+      .def("get_tensor_memory_scales_layout",
+           [](GluonOpBuilder &self,
+              std::vector<unsigned> &ctaSplitNum) -> Attribute {
+             auto ctx = self.getContext();
+             assert(ctaSplitNum.size() == 2);
+             return self.getChecked<ttng::TensorMemoryScalesEncodingAttr>(
+                 ctx, ctaSplitNum[0], ctaSplitNum[1]);
+           })
       .def("get_gluon_layout_from_tensor",
            [](GluonOpBuilder &self, Value tensor) -> py::object {
              auto ty = dyn_cast<RankedTensorType>(tensor.getType());
@@ -427,6 +436,20 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Type resultTy, Value value) -> bool {
              auto dstTy = cast<RankedTensorType>(resultTy);
              return isConvertLayoutTrivial(dstTy, value);
+           })
+      .def("create_histogram",
+           [](GluonOpBuilder &self, Value operand, int numBins,
+              std::optional<Value> mask, Attribute layout) -> Value {
+             auto *ctx = self.getContext();
+             auto resultTy =
+                 RankedTensorType::get({static_cast<int64_t>(numBins)},
+                                       IntegerType::get(ctx, 32), layout);
+             if (!mask) {
+               return self.create<triton::HistogramOp>(resultTy, operand);
+             } else {
+               return self.create<triton::HistogramOp>(resultTy, operand,
+                                                       *mask);
+             }
            })
       .def("create_async_copy_global_to_local",
            [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
@@ -547,6 +570,10 @@ void init_gluon_ir(py::module &&m) {
       .def("create_tmem_load",
            [](GluonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
              return self.create<ttng::TMEMLoadOp>(resultTy, memDesc);
+           })
+      .def("create_tmem_copy",
+           [](GluonOpBuilder &self, Value src, Value dst) {
+             self.create<ttng::TMEMCopyOp>(src, dst, /*barrier=*/Value());
            })
       .def("create_tmem_subslice",
            [](GluonOpBuilder &self, Type resultTy, Value memDesc,

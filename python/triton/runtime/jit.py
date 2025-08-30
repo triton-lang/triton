@@ -4,6 +4,7 @@ import copy
 import hashlib
 import inspect
 import itertools
+import threading
 import re
 import textwrap
 from collections import defaultdict
@@ -379,8 +380,6 @@ def create_specialize_impl(specialize_extra):
             return ("constexpr", arg.cache_key)
         elif isinstance(arg, constexpr):
             return ("constexpr", arg)
-        elif hasattr(arg, "tma_desc_cpu_ptr"):
-            return ("nvTmaDesc", None)
         elif isinstance(arg, tuple):
             spec = [specialize_impl(x) for x in arg]
             make_tuple = lambda vals: type(arg)(*vals) if hasattr(arg, "_fields") else tuple(vals)
@@ -500,8 +499,12 @@ class JITCallable:
     def __init__(self, fn):
         self.fn = fn
         self.signature = inspect.signature(fn)
-        self.raw_src, self.starting_line_number = inspect.getsourcelines(fn)
+        try:
+            self.raw_src, self.starting_line_number = inspect.getsourcelines(fn)
+        except OSError as e:
+            raise ValueError("@jit functions should be defined in a Python file") from e
         self._fn_name = get_full_name(fn)
+        self._hash_lock = threading.RLock()
 
         # function source code (without decorators)
         src = textwrap.dedent("".join(self.raw_src))
@@ -533,7 +536,9 @@ class JITCallable:
     @property
     def cache_key(self):
         # TODO : hash should be attribute of `self`
-        if self.hash is None:
+        with self._hash_lock:
+            if self.hash is not None:
+                return self.hash
             # Set a placeholder hash to break recursion in case the function
             # transitively calls itself. The full hash is set after.
             self.hash = f"recursion:{self._fn_name}"
@@ -592,6 +597,17 @@ class JitFunctionInfo:
     module: ModuleType
     name: str
     jit_function: JITFunction
+
+
+def compute_cache_key(kernel_key_cache, specialization, options):
+    key = (tuple(specialization), str(options))
+    cache_key = kernel_key_cache.get(key, None)
+    if cache_key is not None:
+        return cache_key
+
+    cache_key = str(specialization) + str(options)
+    kernel_key_cache[key] = cache_key
+    return cache_key
 
 
 class JITFunction(JITCallable, KernelInterface[T]):
@@ -664,7 +680,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         self.compile = compile
         self.ASTSource = ASTSource
         binder = create_function_from_signature(self.signature, self.params, backend)
-        return {}, target, backend, binder
+        return {}, {}, target, backend, binder
 
     def _pack_args(self, backend, kwargs, bound_args, specialization, options):
         # options
@@ -701,13 +717,12 @@ class JITFunction(JITCallable, KernelInterface[T]):
         for hook in self.pre_run_hooks:
             hook(*args, **kwargs)
 
-        kernel_cache, target, backend, binder = self.device_caches[device]
+        kernel_cache, kernel_key_cache, target, backend, binder = self.device_caches[device]
         # specialization is list[tuple[str, Any]], where first element of tuple is
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
 
-        # compute cache key
-        key = str(specialization) + str(options)
+        key = compute_cache_key(kernel_key_cache, specialization, options)
         kernel = kernel_cache.get(key, None)
 
         # Kernel is not cached; we have to compile.
@@ -754,10 +769,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
         super().__init__(fn)
         self.module = fn.__module__
         self.version = version
-        self.signature = inspect.signature(fn)
         self.do_not_specialize = do_not_specialize
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
-        self.raw_src, self.starting_line_number = inspect.getsourcelines(fn)
         self._repr = repr
         self.launch_metadata = launch_metadata
 
@@ -810,7 +823,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
             for key, value in deserialized_obj['options'].items()
         }
         key = deserialized_obj['key']
-        _, _, backend, _ = self.device_caches[device]
+        _, _, _, backend, _ = self.device_caches[device]
         options = backend.parse_options(options)
         return self._do_compile(
             key,
@@ -823,7 +836,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         )
 
     def _do_compile(self, key, signature, device, constexprs, options, attrs, warmup):
-        kernel_cache, target, backend, _ = self.device_caches[device]
+        kernel_cache, _, target, backend, _ = self.device_caches[device]
 
         if self._call_hook(knobs.runtime.jit_cache_hook, key, signature, device, constexprs, options, [attrs], warmup):
             return None
@@ -954,8 +967,17 @@ class MockTensor:
             return MockTensor(arg)
         return arg
 
-    def __init__(self, dtype):
+    def __init__(self, dtype, shape=None):
+        if shape is None:
+            shape = [1]
         self.dtype = dtype
+        self.shape = shape
+
+    def stride(self):
+        strides = [1]
+        for size in self.shape[1:]:
+            strides.append(strides[-1] * size)
+        return tuple(reversed(strides))
 
     @staticmethod
     def data_ptr():

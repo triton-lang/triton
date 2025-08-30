@@ -4,7 +4,7 @@ import torch
 import triton
 import triton.language as tl
 from triton.tools.ragged_tma import load_ragged, store_ragged
-from triton_kernels.target_info import cuda_capability_geq
+from triton_kernels import target_info
 from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
 from triton_kernels.numerics_details.flexpoint import (
     float_to_flex,
@@ -15,6 +15,10 @@ from triton_kernels.numerics_details.flexpoint import (
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
 
+
+@triton.constexpr_function
+def cuda_capability_geq(major, minor):
+    return target_info.cuda_capability_geq(major, minor)
 
 @triton.constexpr_function
 def get_dtype(tensor_or_desc: tl.tensor | tl.tensor_descriptor) -> tl.dtype:
@@ -122,14 +126,15 @@ def _p_matmul_ogs(
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES:tl.constexpr=False,
              SWAP_XW: tl.constexpr = False,
-             IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False):
-    tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
+             IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False):
+    # tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
 
     # why is this faster than using host-side tensor descriptor?!
     if Y_TMA_MODE is not None:
         Y = tl.make_tensor_descriptor(YPtr, Y.shape, Y.strides[:-1] + (1,), Y.block_shape)
 
     is_microscaled_format: tl.constexpr = MxScale is not None
+    tl.static_assert(not is_microscaled_format or W_TRANSPOSE, "NYI. Non-transposed mxfp4 weights")
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
     if is_microscaled_format:
         w_type: tl.constexpr = get_dtype(W)
@@ -417,7 +422,8 @@ def _p_matmul_ogs(
                 None, # ActualScale: local absmax is tracked and updated after the loop
                 YChecksumScale,
                 None, # mask: out is manually masked to 0
-                YPtr, FLEXPOINT_SATURATE_INF)
+                YPtr, FLEXPOINT_SATURATE_INF
+            )
             if EPILOGUE_FN is not None:
                 out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtr.dtype.element_ty, pid=len(accs)*tile_id1 + a_i)
 

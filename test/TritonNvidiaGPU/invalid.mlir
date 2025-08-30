@@ -35,7 +35,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %cst = arith.constant dense<0> : tensor<128x4xi8, #scales>
     %0 = ttng.tmem_alloc %cst : (tensor<128x4xi8, #scales>) -> !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory>
     // expected-error @+1 {{Cannot copy into an immutable alloc}}
-    ttng.tmem_copy %arg, %0,  : (!ttg.memdesc<1x512xi8, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory>) -> ()
+    ttng.tmem_copy %arg, %0 : !ttg.memdesc<1x512xi8, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory>
     tt.return
   }
 }

@@ -12,6 +12,7 @@ import triton
 @pytest.mark.forked
 def test_device_assert(monkeypatch, cond, mask, opt_flag, env_var, jit_flag, device):
     monkeypatch.setenv("TRITON_DEBUG", str(int(env_var)))
+    triton.knobs.refresh_knobs()
     torch.zeros([1], dtype=torch.int32, device=device)
 
     @triton.jit(debug=jit_flag)
@@ -36,6 +37,7 @@ def test_device_assert(monkeypatch, cond, mask, opt_flag, env_var, jit_flag, dev
 
 def test_device_assert_barrier(monkeypatch, device):
     monkeypatch.setenv("TRITON_DEBUG", "1")
+    triton.knobs.refresh_knobs()
     tensor = torch.zeros([16], dtype=torch.int32, device=device)
 
     @triton.jit

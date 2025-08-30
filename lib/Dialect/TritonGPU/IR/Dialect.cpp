@@ -1335,12 +1335,6 @@ AMDWmmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
   if (version != 1 && version != 2) {
     return emitError() << "WMMA version must be in the [1, 2] range";
   }
-  // Transposed layout is needed for bypassing LDS between multiple dots.
-  // Version 1 tt.dot results and tt.dot operand layouts are different,
-  // therefore we test and support transposed only for version 2.
-  if (version != 2 && isTransposed) {
-    return emitError() << "Transposed WMMA is supported only for version 2";
-  }
   return success();
 }
 
@@ -2119,10 +2113,10 @@ LogicalResult DotOperandEncodingAttr::verify(
   }
 
   if (auto parentAttr = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
-    if (kWidth != 16 && parentAttr.getVersion() == 1 ||
+    if (kWidth != 8 && kWidth != 16 && parentAttr.getVersion() == 1 ||
         kWidth != 4 && kWidth != 8 && kWidth != 16 &&
             parentAttr.getVersion() == 2)
-      return emitError() << "ttg.dot_op kWidth parameter must be 16 for "
+      return emitError() << "ttg.dot_op kWidth parameter must be 8/16 for "
                             "gfx11 and 4/8/16 for gfx12 (including packed "
                             "cases for `scaled_dot`)";
     return success();
