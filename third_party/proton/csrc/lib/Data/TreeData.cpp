@@ -2,6 +2,7 @@
 #include "Context/Context.h"
 #include "Data/Metric.h"
 #include "Device.h"
+#include "Utility/String.h"
 #include "nlohmann/json.hpp"
 
 #include <limits>
@@ -209,7 +210,7 @@ void TreeData::dumpHatchet(std::ostream &os) const {
   std::map<uint64_t, std::set<uint64_t>> deviceIds;
   this->tree->template walk<Tree::WalkPolicy::PreOrder>([&](Tree::TreeNode
                                                                 &treeNode) {
-    const auto contextName = treeNode.name;
+    const auto contextName = demangle(treeNode.name);
     auto contextId = treeNode.id;
     json *jsonNode = jsonNodes[contextId];
     (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};

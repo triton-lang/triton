@@ -1,6 +1,7 @@
 #include "Data/TraceData.h"
 #include "TraceDataIO/TraceWriter.h"
 #include "Utility/Errors.h"
+#include "Utility/String.h"
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
@@ -385,8 +386,8 @@ convertToTimelineTrace(TraceData::Trace *trace,
       }
       parserResult->blockTraces.push_back(std::move(blockTrace));
     }
-    metadata->kernelName =
-        getStringValue(kernelEvent.cycleMetric, CycleMetric::KernelName);
+    metadata->kernelName = demangle(
+        getStringValue(kernelEvent.cycleMetric, CycleMetric::KernelName));
     metadata->scopeName = scopeIdToName;
     if (timeShiftCost > 0)
       timeShift(timeShiftCost, parserResult);
@@ -427,7 +428,7 @@ void dumpKernelMetricTrace(
       auto contexts = trace->getContexts(contextId);
 
       json element;
-      element["name"] = contexts.back().name;
+      element["name"] = demangle(contexts.back().name);
       element["cat"] = "kernel";
       element["ph"] = "X";
       element["ts"] = ts;
@@ -435,7 +436,7 @@ void dumpKernelMetricTrace(
       element["tid"] = streamId; // thread id = stream
       json callStack = json::array();
       for (auto const &ctx : contexts) {
-        callStack.push_back(ctx.name);
+        callStack.push_back(demangle(ctx.name));
       }
       element["args"]["call_stack"] = std::move(callStack);
 
