@@ -9,6 +9,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Iterators.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -31,6 +32,8 @@
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/LogicalResult.h"
 #include <utility>
+
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 #define DEBUG_TYPE "tritonamdgpu-canonicalize-pointers"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -78,6 +81,9 @@ namespace mlir {
 //    `%fat_ptr = tt.addptr(%t_ptr, %fatPointers[ptr].offset)`
 //    `%data = tt.load(%fat_ptr)`
 //
+//    However, if the ptr pointing to a smaller-tensor, it's handled in
+//    different way. See followwing for details.
+//
 // Please note that `%offset` might be a 32bit or 64bit integer. If
 // we can, we would like to use 32 bit integers. This can happen under
 // certain conditions:
@@ -98,9 +104,9 @@ Value createExtSIOffset(RewriterBase &rewriter, Location loc, Value offset,
     auto shape = tensorType.getShape();
     auto newTensorType =
         RankedTensorType::get(shape, toType, tensorType.getEncoding());
-    return rewriter.create<arith::ExtSIOp>(loc, newTensorType, offset);
+    return rewriter.createOrFold<arith::ExtSIOp>(loc, newTensorType, offset);
   }
-  return rewriter.create<arith::ExtSIOp>(loc, toType, offset);
+  return rewriter.createOrFold<arith::ExtSIOp>(loc, toType, offset);
 }
 
 // Narrow `offset` into `toType` using a arith.trunci operation
@@ -114,9 +120,9 @@ Value createTruncIOffset(RewriterBase &rewriter, Location loc, Value offset,
     auto shape = tensorType.getShape();
     auto newTensorType =
         RankedTensorType::get(shape, toType, tensorType.getEncoding());
-    return rewriter.create<arith::TruncIOp>(loc, newTensorType, offset);
+    return rewriter.createOrFold<arith::TruncIOp>(loc, newTensorType, offset);
   }
-  return rewriter.create<arith::TruncIOp>(loc, toType, offset);
+  return rewriter.createOrFold<arith::TruncIOp>(loc, toType, offset);
 }
 
 // Helper function to determine if the given `op` is a constant tensor and in
@@ -146,6 +152,85 @@ std::optional<Value> maybeGetOrCreateScalarConstant(RewriterBase &rewriter,
   }
 
   return {};
+}
+
+bool isScalarIntZero(Value v) {
+  auto constOp = v.getDefiningOp<mlir::arith::ConstantOp>();
+  if (!constOp)
+    return false;
+
+  return TypeSwitch<Attribute, bool>(constOp.getValue())
+      .Case<IntegerAttr>(
+          [](auto intAttr) { return intAttr.getValue().isZero(); })
+      .Default([](auto) { return false; });
+}
+
+bool isTensorIntZero(Value v) {
+  if (!getElementTypeOrSelf(v).isInteger())
+    return false;
+  if (auto splatOp = v.getDefiningOp<tt::SplatOp>())
+    return isScalarIntZero(splatOp.getSrc());
+  return isZeroConst(v);
+}
+
+bool isIntZero(Value v) { return isTensorIntZero(v) || isScalarIntZero(v); }
+
+Type getWiderElementIntType(Value v1, Value v2) {
+  auto t1 = getElementTypeOrSelf(v1);
+  auto t2 = getElementTypeOrSelf(v2);
+
+  assert(t1.isIntOrIndex() && t2.isIntOrIndex() && "expect int type");
+  return t1.getIntOrFloatBitWidth() > t2.getIntOrFloatBitWidth() ? t1 : t2;
+}
+
+Value createCastOffset(RewriterBase &rewriter, Location loc, Value offset,
+                       Type toType) {
+  auto offsetTyBits = getElementTypeOrSelf(offset).getIntOrFloatBitWidth();
+  auto toTyBits = toType.getIntOrFloatBitWidth();
+
+  if (offsetTyBits == toTyBits)
+    return offset;
+
+  if (offsetTyBits < toTyBits)
+    return createExtSIOffset(rewriter, loc, offset, toType);
+
+  return createTruncIOffset(rewriter, loc, offset, toType);
+}
+
+Value createAddOffsetsOfSameKind(RewriterBase &rewriter, Location loc, Value v1,
+                                 Value v2) {
+  auto resultTy = getWiderElementIntType(v1, v2);
+
+  if (isScalarIntZero(v1) || isTensorIntZero(v1))
+    return createCastOffset(rewriter, loc, v2, resultTy);
+
+  if (isScalarIntZero(v2) || isTensorIntZero(v2))
+    return createCastOffset(rewriter, loc, v1, resultTy);
+
+  v1 = createCastOffset(rewriter, loc, v1, resultTy);
+  v2 = createCastOffset(rewriter, loc, v2, resultTy);
+
+  return rewriter.createOrFold<arith::AddIOp>(loc, v1, v2);
+}
+
+Value createAddUniformAndNonUniform(RewriterBase &rewriter, Location loc,
+                                    Value uniform, Value nonUniform) {
+  auto resultTy = getWiderElementIntType(uniform, nonUniform);
+
+  if (isScalarIntZero(uniform))
+    return createCastOffset(rewriter, loc, nonUniform, resultTy);
+
+  auto castUniform = createCastOffset(rewriter, loc, uniform, resultTy);
+  auto castNonUniform = createCastOffset(rewriter, loc, nonUniform, resultTy);
+
+  Value uniformSplat =
+      rewriter.create<tt::SplatOp>(loc, castNonUniform.getType(), castUniform);
+
+  if (isTensorIntZero(nonUniform))
+    return uniformSplat;
+
+  return rewriter.createOrFold<arith::AddIOp>(loc, uniformSplat,
+                                              castNonUniform);
 }
 
 // Narrowing logic
@@ -178,9 +263,11 @@ std::pair<Value, Value> createDecomposeOffsetFromAdd(RewriterBase &rewriter,
   auto [uniformOffsetR, nonUniformOffsetR] =
       createDecomposeOffsetFromExpr(rewriter, loc, addOp.getRhs(), bitness);
   Value uniformAdd =
-      rewriter.create<arith::AddIOp>(loc, uniformOffsetL, uniformOffsetR);
-  Value nonUniformAdd =
-      rewriter.create<arith::AddIOp>(loc, nonUniformOffsetL, nonUniformOffsetR);
+      createAddOffsetsOfSameKind(rewriter, loc, uniformOffsetL, uniformOffsetR);
+  Value nonUniformAdd = createAddOffsetsOfSameKind(
+      rewriter, loc, nonUniformOffsetL, nonUniformOffsetR);
+  Value maybeDeadValue[] = {nonUniformOffsetL, nonUniformOffsetR,
+                            uniformOffsetL, uniformOffsetR};
   return {uniformAdd, nonUniformAdd};
 }
 
@@ -289,7 +376,9 @@ struct FatPointers {
     FatPtrAttrs() = default;
 
     friend bool operator==(const FatPtrAttrs &lhs, const FatPtrAttrs &rhs) {
-      return lhs.canNarrow == rhs.canNarrow && lhs.attributes == rhs.attributes;
+      return lhs.canNarrow == rhs.canNarrow &&
+             lhs.attributes == rhs.attributes &&
+             lhs.smallTensorBase == rhs.smallTensorBase;
     }
 
     friend bool operator!=(const FatPtrAttrs &lhs, const FatPtrAttrs &rhs) {
@@ -297,6 +386,9 @@ struct FatPointers {
     }
 
     llvm::DenseMap<StringRef, Attribute> attributes;
+    // If the fat-pointer points to somewhere in a small-tensor, keep track the
+    // base of the tensor.
+    Value smallTensorBase;
     bool canNarrow = false;
   };
 
@@ -393,7 +485,8 @@ Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
   ArrayRef<int64_t> offsetShape = tensorType.getShape();
   auto tensorPtrType = RankedTensorType::get(offsetShape, basePtr.getType(),
                                              tensorType.getEncoding());
-  if (fatPtrAttrs.canNarrow)
+  if (fatPtrAttrs.canNarrow &&
+      getElementTypeOrSelf(offset).getIntOrFloatBitWidth() > 32)
     offset = createTruncIOffset(rewriter, loc, offset, rewriter.getI32Type());
 
   tt::SplatOp tensorPtr =
@@ -562,6 +655,9 @@ public:
     RewriterBase::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(addPtrOp);
 
+    if (fatPtrs.at({fatPtrBase, fatPtrOffset}).smallTensorBase)
+      return rewriteSmallTensorPtr(addPtrOp, adaptor, rewriter);
+
     // Query all discardable attributes that we want to preserve
     std::array<StringRef, 3> propagateList{"tt.divisibility", "tt.contiguity",
                                            "tt.constancy"};
@@ -621,7 +717,7 @@ public:
     bool canNarrow = fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow;
     bool propagateAtrs = true;
     Value newOffset = fatPtrOffset;
-    if (!isZeroConst(nonUniformOffset)) {
+    if (!isTensorIntZero(nonUniformOffset)) {
       Type addPtrOffsetType = getElementTypeOrSelf(nonUniformOffset);
       Type fatPtrOffsetType = getElementTypeOrSelf(fatPtrOffset);
       assert(addPtrOffsetType.isIntOrIndex() &&
@@ -639,8 +735,8 @@ public:
         nonUniformOffset = createTruncIOffset(
             rewriter, curLoc, nonUniformOffset, fatPtrOffsetType);
 
-      newOffset = rewriter.create<arith::AddIOp>(curLoc, nonUniformOffset,
-                                                 fatPtrOffset);
+      newOffset = createAddOffsetsOfSameKind(rewriter, curLoc, nonUniformOffset,
+                                             fatPtrOffset);
       propagateAtrs = false;
     }
 
@@ -650,6 +746,78 @@ public:
     if (propagateAtrs)
       fatPtrs[nextFatPtr].attributes =
           fatPtrs.at({fatPtrBase, fatPtrOffset}).attributes;
+    return success();
+  }
+
+private:
+  LogicalResult
+  rewriteSmallTensorPtr(tt::AddPtrOp addPtrOp, OneToNOpAdaptor adaptor,
+                        ConversionPatternRewriter &rewriter) const {
+    ValueRange remappedPtr = adaptor.getPtr();
+    ValueRange nonRemappedOffset = adaptor.getOffset();
+
+    assert(remappedPtr.size() == 2 && nonRemappedOffset.size() == 1 &&
+           "expected to be satisified in caller");
+
+    Value fatPtrBase = remappedPtr[0];
+    Value fatPtrOffset = remappedPtr[1];
+    Value origOffset = nonRemappedOffset[0];
+    Location curLoc = addPtrOp.getLoc();
+
+    RewriterBase::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(addPtrOp);
+
+    const auto &oldAttr = fatPtrs.at({fatPtrBase, fatPtrOffset});
+
+    LDBG("smal-tensor addPtr:" << addPtrOp);
+    LDBG("   - with tensor-base:" << oldAttr.smallTensorBase);
+    LDBG("   - with originl offset:" << origOffset);
+    LDBG("   - fatPtr base: " << fatPtrBase);
+    LDBG("   - fatPtr offst " << fatPtrOffset);
+
+    auto ptrTy = addPtrOp.getPtr().getType();
+    assert((llvm::isa<RankedTensorType>(ptrTy) ||
+            llvm::isa<tt::PointerType>(ptrTy)) &&
+           "expected Ptr to be RankedTensorType type or scalar type");
+    if (llvm::isa<tt::PointerType>(ptrTy)) {
+      LDBG("  - it scalar addition");
+    }
+
+    Value newOffset;
+    if (isIntZero(fatPtrOffset))
+      newOffset = origOffset;
+    else if (isIntZero(origOffset))
+      newOffset = fatPtrOffset;
+
+    if (!newOffset) {
+      int64_t bitness = llvm::cast<RankedTensorType>(origOffset.getType())
+                            .getElementTypeBitWidth();
+      auto [uniformOffset, nonUniformOffset] =
+          createDecomposeOffsetFromExpr(rewriter, curLoc, origOffset, bitness);
+
+      auto [uniformOffsetPrev, nonUniformOffsetPrev] =
+          createDecomposeOffsetFromExpr(rewriter, curLoc, fatPtrOffset,
+                                        bitness);
+
+      Value uniformAdd = createAddOffsetsOfSameKind(
+          rewriter, curLoc, uniformOffset, uniformOffsetPrev);
+
+      Value nonUniformAdd = createAddOffsetsOfSameKind(
+          rewriter, curLoc, nonUniformOffset, nonUniformOffsetPrev);
+
+      newOffset = createAddUniformAndNonUniform(rewriter, curLoc, uniformAdd,
+                                                nonUniformAdd);
+    }
+
+    if (getElementTypeOrSelf(newOffset).getIntOrFloatBitWidth() > 32)
+      newOffset = createTruncIOffset(rewriter, curLoc, newOffset,
+                                     rewriter.getI32Type());
+
+    rewriter.replaceOpWithMultiple(addPtrOp, {{fatPtrBase, newOffset}});
+
+    auto nextFatPtr = std::pair{fatPtrBase, newOffset};
+    fatPtrs[nextFatPtr] = oldAttr;
+    fatPtrs[nextFatPtr].canNarrow = false;
 
     return success();
   }
@@ -1321,6 +1489,8 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
           arg.getLoc(), TypeRange{arg.getType()}, ValueRange{arg, zeroOffset});
       rewriter.replaceAllUsesExcept(arg, dummyCast.getResult(0), dummyCast);
       fatPtrs[{arg, zeroOffset}].canNarrow = true;
+      if (bitness != 64)
+        fatPtrs[{arg, zeroOffset}].smallTensorBase = arg;
     }
 
     newOp->setDiscardableAttr(kInitFuncArgsRewritten, rewriter.getUnitAttr());
@@ -1550,20 +1720,6 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   llvm::SetVector<Operation *> opsToRewrite;
   for (auto [idx, arg] : llvm::enumerate(func.getArguments())) {
     if (llvm::isa<tt::PointerType>(arg.getType())) {
-      // TODO: there is a bug about transform ptr + 32-bit-ofst, if we decompose
-      // the 32-bit-ofst into 32-bit U (uniform) and NU (nonuniform part), the
-      // NU part may not fit in 32-bit.
-      //  e.g. 32-bit-ofst = (0x2000000 + 0x4000000*((-32) + x1))
-      //    where x1 in 32 and 40
-      //  U = 0x2000000 - 0x4000000*32 = -0x7e000000, and
-      //  NU = 0x4000000*x1
-      //  while (int32(U) + int32(NU) == 32-bit-ofst, the NU part already
-      //  overflow, int64(NU) only see negative number in some cases.
-      if (auto pointerRangeAttr =
-              func.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range")) {
-        if (pointerRangeAttr.getInt() <= 32)
-          continue;
-      }
       // NB: reusing the same SetVector invalidates the topo order implied by
       // getForwardSlice
       for (auto &use : arg.getUses())
@@ -1640,6 +1796,18 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
         op->removeDiscardableAttr(attr.getName());
     }
   });
+
+  LDBG("Remove some dead ops:");
+  func->walk<WalkOrder::PostOrder, ReverseIterator>([](Operation *op) {
+    if (!op->use_empty())
+      return;
+    if (llvm::isa<arith::ConstantOp, tt::SplatOp, arith::AddIOp, tt::SplatOp,
+                  arith::TruncIOp, arith::ExtSIOp>(op)) {
+      LDBG("Remove op:" << *op);
+      op->erase();
+    }
+  });
+  LDBG("Done");
 }
 
 } // namespace mlir
