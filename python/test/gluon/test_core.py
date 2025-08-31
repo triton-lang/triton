@@ -795,10 +795,11 @@ def early_return_kernel(x):
 
 
 def test_2d_tensor_early_return():
+    warp_size = ttgl.constexpr(THREADS_PER_WARP)
 
     @gluon.jit
     def kernel(N):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, warp_size], [1, 4], [1, 0])
         BLOCK: ttgl.constexpr = 32
 
         x0 = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(1, layout))
