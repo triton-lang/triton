@@ -812,6 +812,7 @@ def test_local_load_store_3d_layouts(shape, dtype, dist_layout, shared_layout, d
     kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
     torch.testing.assert_close(y, x)
 
+
 @gluon.jit
 def _gather_kernel_1d(
     src_ptr,
@@ -832,6 +833,7 @@ def _gather_kernel_1d(
     out = ttgl.gather(src, idx, axis)
 
     ttgl.store(out_ptr + idx_offs, out)
+
 
 @gluon.jit
 def _gather_kernel_2d(
@@ -863,44 +865,40 @@ def _gather_kernel_2d(
 
 def _gather_linear_layouts():
     if THREADS_PER_WARP == 32:
-        return [
-            (
-                0,
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[[0, 2], [2, 0]],
-                    lane_bases=[[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]],
-                    warp_bases=[[0, 1], [0, 4]],
-                    block_bases=[],
-                    shape=[32, 16],
-                ),
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[[2, 0], [0, 2]],
-                    lane_bases=[[0, 8], [16, 0], [1, 0], [8, 0], [4, 0]],
-                    warp_bases=[[0, 1], [0, 4]],
-                    block_bases=[],
-                    shape=[32, 16],
-                ),
+        return [(
+            0,
+            ttgl.DistributedLinearLayout(
+                reg_bases=[[0, 2], [2, 0]],
+                lane_bases=[[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]],
+                warp_bases=[[0, 1], [0, 4]],
+                block_bases=[],
+                shape=[32, 16],
             ),
-            (
-                0,
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[[0, 2], [32, 0], [2, 0], [0, 16], [0, 32], [64, 0]],
-                    lane_bases=[[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]],
-                    warp_bases=[[0, 1], [0, 4]],
-                    block_bases=[],
-                    shape=[128, 64],
-                ),
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[[0, 2], [32, 0], [0, 32], [2, 0], [0, 16], [64, 0], [128, 0]],
-                    lane_bases=[[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]],
-                    warp_bases=[[0, 1], [0, 4]],
-                    block_bases=[],
-                    shape=[256, 64],
-                ),
+            ttgl.DistributedLinearLayout(
+                reg_bases=[[2, 0], [0, 2]],
+                lane_bases=[[0, 8], [16, 0], [1, 0], [8, 0], [4, 0]],
+                warp_bases=[[0, 1], [0, 4]],
+                block_bases=[],
+                shape=[32, 16],
             ),
-            (
-            )
-        ]
+        ),
+                (
+                    0,
+                    ttgl.DistributedLinearLayout(
+                        reg_bases=[[0, 2], [32, 0], [2, 0], [0, 16], [0, 32], [64, 0]],
+                        lane_bases=[[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]],
+                        warp_bases=[[0, 1], [0, 4]],
+                        block_bases=[],
+                        shape=[128, 64],
+                    ),
+                    ttgl.DistributedLinearLayout(
+                        reg_bases=[[0, 2], [32, 0], [0, 32], [2, 0], [0, 16], [64, 0], [128, 0]],
+                        lane_bases=[[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]],
+                        warp_bases=[[0, 1], [0, 4]],
+                        block_bases=[],
+                        shape=[256, 64],
+                    ),
+                ), ()]
     elif THREADS_PER_WARP == 64:
         return [
             (
@@ -961,40 +959,31 @@ def test_gather_linear_layouts(axis, src_layout, index_layout, device):
 
 
 def _gather_layouts():
-    return [
-        (
-            0,
-            ttgl.BlockedLayout(
-                sizePerThread=[1],
-                threadsPerWarp=[THREADS_PER_WARP],
-                warpsPerCTA=[4],
-                order=[0],
-            ),
-            ttgl.BlockedLayout(
-                sizePerThread=[1],
-                threadsPerWarp=[THREADS_PER_WARP],
-                warpsPerCTA=[4],
-                order=[0],
-            ),
-            [16]
-        ),
-        (
-            0,
-            ttgl.BlockedLayout(
-                sizePerThread=[2, 1],
-                threadsPerWarp=[THREADS_PER_WARP, 1],
-                warpsPerCTA=[1, 4],
-                order=[1, 0],
-            ),
-            ttgl.BlockedLayout(
-                sizePerThread=[2, 1],
-                threadsPerWarp=[THREADS_PER_WARP, 1],
-                warpsPerCTA=[1, 4],
-                order=[1, 0],
-            ),
-            [64, 1]
-        )
-    ]
+    return [(0, ttgl.BlockedLayout(
+        sizePerThread=[1],
+        threadsPerWarp=[THREADS_PER_WARP],
+        warpsPerCTA=[4],
+        order=[0],
+    ), ttgl.BlockedLayout(
+        sizePerThread=[1],
+        threadsPerWarp=[THREADS_PER_WARP],
+        warpsPerCTA=[4],
+        order=[0],
+    ), [16]),
+            (0,
+             ttgl.BlockedLayout(
+                 sizePerThread=[2, 1],
+                 threadsPerWarp=[THREADS_PER_WARP, 1],
+                 warpsPerCTA=[1, 4],
+                 order=[1, 0],
+             ),
+             ttgl.BlockedLayout(
+                 sizePerThread=[2, 1],
+                 threadsPerWarp=[THREADS_PER_WARP, 1],
+                 warpsPerCTA=[1, 4],
+                 order=[1, 0],
+             ), [64, 1])]
+
 
 def test_gather_layouts(axis, src_layout, index_layout, shape, device):
 
@@ -1005,7 +994,7 @@ def test_gather_layouts(axis, src_layout, index_layout, shape, device):
     if len(shape) == 1:
         obj = _gather_kernel_1d[(1, )](
             src, indices, out, axis,  #
-            shape[0], shape[0], # 
+            shape[0], shape[0],  #
             src_layout, index_layout,  #
         )
     elif len(shape) == 2:
