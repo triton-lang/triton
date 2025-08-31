@@ -959,30 +959,32 @@ def test_gather_linear_layouts(axis, src_layout, index_layout, device):
 
 
 def _gather_layouts():
-    return [(0, ttgl.BlockedLayout(
-        size_per_thread=[1],
-        threads_per_warp=[THREADS_PER_WARP],
-        warps_per_cta=[4],
-        order=[0],
-    ), ttgl.BlockedLayout(
-        size_per_thread=[1],
-        threads_per_warp=[THREADS_PER_WARP],
-        warps_per_cta=[4],
-        order=[0],
-    ), [16]),
-            (0,
-             ttgl.BlockedLayout(
-                 size_per_thread=[2, 1],
-                 threads_per_warp=[THREADS_PER_WARP, 1],
-                 warps_per_cta=[1, 4],
-                 order=[1, 0],
-             ),
-             ttgl.BlockedLayout(
-                 size_per_thread=[2, 1],
-                 threads_per_warp=[THREADS_PER_WARP, 1],
-                 warps_per_cta=[1, 4],
-                 order=[1, 0],
-             ), [64, 1])]
+    return [
+        (0, ttgl.BlockedLayout(
+            size_per_thread=[1],
+            threads_per_warp=[THREADS_PER_WARP],
+            warps_per_cta=[4],
+            order=[0],
+        ), ttgl.BlockedLayout(
+            size_per_thread=[1],
+            threads_per_warp=[THREADS_PER_WARP],
+            warps_per_cta=[4],
+            order=[0],
+        ), [16]),
+        (0,
+         ttgl.BlockedLayout(
+             size_per_thread=[2, 1],
+             threads_per_warp=[THREADS_PER_WARP, 1],
+             warps_per_cta=[1, 4],
+             order=[1, 0],
+         ),
+         ttgl.BlockedLayout(
+             size_per_thread=[2, 1],
+             threads_per_warp=[THREADS_PER_WARP, 1],
+             warps_per_cta=[1, 4],
+             order=[1, 0],
+         ), [64, 1])
+    ]
 
 
 @pytest.mark.parametrize("axis, src_layout, index_layout, shape", _gather_layouts())
