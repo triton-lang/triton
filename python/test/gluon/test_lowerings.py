@@ -960,27 +960,27 @@ def test_gather_linear_layouts(axis, src_layout, index_layout, device):
 
 def _gather_layouts():
     return [(0, ttgl.BlockedLayout(
-        sizePerThread=[1],
-        threadsPerWarp=[THREADS_PER_WARP],
-        warpsPerCTA=[4],
+        size_per_thread=[1],
+        threads_per_warp=[THREADS_PER_WARP],
+        warps_per_cta=[4],
         order=[0],
     ), ttgl.BlockedLayout(
-        sizePerThread=[1],
-        threadsPerWarp=[THREADS_PER_WARP],
-        warpsPerCTA=[4],
+        size_per_thread=[1],
+        threads_per_warp=[THREADS_PER_WARP],
+        warps_per_cta=[4],
         order=[0],
     ), [16]),
             (0,
              ttgl.BlockedLayout(
-                 sizePerThread=[2, 1],
-                 threadsPerWarp=[THREADS_PER_WARP, 1],
-                 warpsPerCTA=[1, 4],
+                 size_per_thread=[2, 1],
+                 threads_per_warp=[THREADS_PER_WARP, 1],
+                 warps_per_cta=[1, 4],
                  order=[1, 0],
              ),
              ttgl.BlockedLayout(
-                 sizePerThread=[2, 1],
-                 threadsPerWarp=[THREADS_PER_WARP, 1],
-                 warpsPerCTA=[1, 4],
+                 size_per_thread=[2, 1],
+                 threads_per_warp=[THREADS_PER_WARP, 1],
+                 warps_per_cta=[1, 4],
                  order=[1, 0],
              ), [64, 1])]
 
