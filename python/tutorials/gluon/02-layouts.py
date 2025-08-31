@@ -56,7 +56,7 @@ If `order` was `[0, 1]` (col-major order), the tile would look like:
 
 Likewise, `threads_per_warp=[16, 2]` indicates how the tensor elements owned by
 a single thread are tiled to obtain the elements owned by a single warp. For
-`order=[0, 1]`, the warp tile of threads looks like:
+`order=[1, 0]`, the warp tile of threads looks like:
 
 ```
 [[ T0,  T1],
