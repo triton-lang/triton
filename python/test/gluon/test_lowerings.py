@@ -812,8 +812,56 @@ def test_local_load_store_3d_layouts(shape, dtype, dist_layout, shared_layout, d
     kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
     torch.testing.assert_close(y, x)
 
+@gluon.jit
+def _gather_kernel_1d(
+    src_ptr,
+    idx_ptr,
+    out_ptr,
+    axis: ttgl.constexpr,
+    src_dim: ttgl.constexpr,
+    idx_dim: ttgl.constexpr,
+    src_layout: ttgl.constexpr,
+    idx_layout: ttgl.constexpr,
+):
+    src_offs = ttgl.arange(0, src_dim, layout=src_layout)
+    src = ttgl.load(src_ptr + src_offs)
 
-def _gather_layouts():
+    idx_offs = ttgl.arange(0, idx_dim, layout=idx_layout)
+    idx = ttgl.load(idx_ptr + idx_offs)
+
+    out = ttgl.gather(src, idx, axis)
+
+    ttgl.store(out_ptr + idx_offs, out)
+
+@gluon.jit
+def _gather_kernel_2d(
+    src_ptr,
+    idx_ptr,
+    out_ptr,
+    axis: ttgl.constexpr,
+    src_dim0: ttgl.constexpr,
+    src_dim1: ttgl.constexpr,
+    idx_dim0: ttgl.constexpr,
+    idx_dim1: ttgl.constexpr,
+    src_layout: ttgl.constexpr,
+    idx_layout: ttgl.constexpr,
+):
+    offs_src_dim0 = ttgl.arange(0, src_dim0, layout=ttgl.SliceLayout(1, src_layout))[:, None]
+    offs_src_dim1 = ttgl.arange(0, src_dim1, layout=ttgl.SliceLayout(0, src_layout))[None, :]
+    src_offs = offs_src_dim0 * src_dim1 + offs_src_dim1
+    src = ttgl.load(src_ptr + src_offs)
+
+    offs_idx_dim0 = ttgl.arange(0, idx_dim0, layout=ttgl.SliceLayout(1, idx_layout))[:, None]
+    offs_idx_dim1 = ttgl.arange(0, idx_dim1, layout=ttgl.SliceLayout(0, idx_layout))[None, :]
+    idx_offs = offs_idx_dim0 * idx_dim1 + offs_idx_dim1
+    idx = ttgl.load(idx_ptr + idx_offs)
+
+    out = ttgl.gather(src, idx, axis)
+
+    ttgl.store(out_ptr + idx_offs, out)
+
+
+def _gather_linear_layouts():
     if THREADS_PER_WARP == 32:
         return [
             (
@@ -850,6 +898,8 @@ def _gather_layouts():
                     shape=[256, 64],
                 ),
             ),
+            (
+            )
         ]
     elif THREADS_PER_WARP == 64:
         return [
@@ -889,49 +939,82 @@ def _gather_layouts():
             ),
         ]
     else:
-        return []
+        raise RuntimeError(f"Unsupported THREADS_PER_WARP: {THREADS_PER_WARP}")
 
 
-@pytest.mark.parametrize("axis, src_layout, index_layout", _gather_layouts())
-def test_gather_layouts(axis, src_layout, index_layout, device):
+@pytest.mark.parametrize("axis, src_layout, index_layout", _gather_linear_layouts())
+def test_gather_linear_layouts(axis, src_layout, index_layout, device):
     src_shape = src_layout.shape
     indices_shape = index_layout.shape
-
-    @gluon.jit
-    def kernel(
-        src_ptr,
-        idx_ptr,
-        out_ptr,
-        axis: ttgl.constexpr,
-        src_dim0: ttgl.constexpr,
-        src_dim1: ttgl.constexpr,
-        idx_dim0: ttgl.constexpr,
-        idx_dim1: ttgl.constexpr,
-        src_layout: ttgl.constexpr,
-        idx_layout: ttgl.constexpr,
-    ):
-        offs_src_dim0 = ttgl.arange(0, src_dim0, layout=ttgl.SliceLayout(1, src_layout))[:, None]
-        offs_src_dim1 = ttgl.arange(0, src_dim1, layout=ttgl.SliceLayout(0, src_layout))[None, :]
-        src_offs = offs_src_dim0 * src_dim1 + offs_src_dim1
-        src = ttgl.load(src_ptr + src_offs)
-
-        offs_idx_dim0 = ttgl.arange(0, idx_dim0, layout=ttgl.SliceLayout(1, idx_layout))[:, None]
-        offs_idx_dim1 = ttgl.arange(0, idx_dim1, layout=ttgl.SliceLayout(0, idx_layout))[None, :]
-        idx_offs = offs_idx_dim0 * idx_dim1 + offs_idx_dim1
-        idx = ttgl.load(idx_ptr + idx_offs)
-
-        out = ttgl.gather(src, idx, axis)
-
-        ttgl.store(out_ptr + idx_offs, out)
 
     src = torch.randn(src_shape, device=device)
     indices = torch.randint(0, src.shape[axis], indices_shape, device=device)
     out = torch.zeros_like(indices, device=device, dtype=src.dtype)
     ref = torch.gather(src, axis, indices)
-    obj = kernel[(1, )](
+    obj = _gather_kernel_2d[(1, )](
         src, indices, out, axis,  #
         src_shape[0], src_shape[1], indices_shape[0], indices_shape[1],  #
         src_layout, index_layout,  #
     )
+    torch.testing.assert_close(out, ref, rtol=0, atol=0)
+    assert ("nvvm.shfl.sync.idx" in obj.asm["llir"]) or ("llvm.amdgcn.ds.bpermute" in obj.asm["llir"])
+
+
+def _gather_layouts():
+    return [
+        (
+            0,
+            ttgl.BlockedLayout(
+                sizePerThread=[1],
+                threadsPerWarp=[THREADS_PER_WARP],
+                warpsPerCTA=[4],
+                order=[0],
+            ),
+            ttgl.BlockedLayout(
+                sizePerThread=[1],
+                threadsPerWarp=[THREADS_PER_WARP],
+                warpsPerCTA=[4],
+                order=[0],
+            ),
+            [16]
+        ),
+        (
+            0,
+            ttgl.BlockedLayout(
+                sizePerThread=[2, 1],
+                threadsPerWarp=[THREADS_PER_WARP, 1],
+                warpsPerCTA=[1, 4],
+                order=[1, 0],
+            ),
+            ttgl.BlockedLayout(
+                sizePerThread=[2, 1],
+                threadsPerWarp=[THREADS_PER_WARP, 1],
+                warpsPerCTA=[1, 4],
+                order=[1, 0],
+            ),
+            [64, 1]
+        )
+    ]
+
+def test_gather_layouts(axis, src_layout, index_layout, shape, device):
+
+    src = torch.randn(shape, device=device)
+    indices = torch.randint(0, src.shape[axis], shape, device=device)
+    out = torch.zeros_like(indices, device=device, dtype=src.dtype)
+    ref = torch.gather(src, axis, indices)
+    if len(shape) == 1:
+        obj = _gather_kernel_1d[(1, )](
+            src, indices, out, axis,  #
+            shape[0], shape[0], # 
+            src_layout, index_layout,  #
+        )
+    elif len(shape) == 2:
+        obj = _gather_kernel_2d[(1, )](
+            src, indices, out, axis,  #
+            shape[0], shape[1], shape[0], shape[1],  #
+            src_layout, index_layout,  #
+        )
+    else:
+        raise RuntimeError(f"Unsupported shape: {shape}")
     torch.testing.assert_close(out, ref, rtol=0, atol=0)
     assert ("nvvm.shfl.sync.idx" in obj.asm["llir"]) or ("llvm.amdgcn.ds.bpermute" in obj.asm["llir"])
