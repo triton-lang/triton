@@ -985,6 +985,7 @@ def _gather_layouts():
              ), [64, 1])]
 
 
+@pytest.mark.parametrize("axis, src_layout, index_layout, shape", _gather_layouts())
 def test_gather_layouts(axis, src_layout, index_layout, shape, device):
 
     src = torch.randn(shape, device=device)
