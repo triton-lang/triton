@@ -1125,7 +1125,7 @@ def test_gather_linear_layouts(axis, src_layout, index_layout, device):
     if len(src_shape) == 1:
         obj = _gather_kernel_1d[(1, )](
             src, indices, out, axis,  #
-            src_shape[0], src_shape[0],  #
+            src_shape[0], indices_shape[0],  #
             src_layout, index_layout,  #
             num_warps=num_warps
         )
