@@ -41,7 +41,7 @@ struct AddSchedBarriers
       }
     });
 
-    assert(numFuncOps == 1, "Expected exactly one funcOp");
+    assert(numFuncOps == 1 && "Expected exactly one funcOp");
 
     IntegerAttr zeroAttrValue =
         builder.getI32IntegerAttr(static_cast<int32_t>(0));

@@ -30,7 +30,7 @@ struct AllocateProtonGlobalScratchBufferPass
       }
     });
 
-    assert(numFuncOps == 1, "Expected exactly one funcOp");
+    assert(numFuncOps == 1 && "Expected exactly one funcOp");
 
     int32_t cumulativeMemorySize = 0; // bytes
     std::vector<uint32_t> alignments;
