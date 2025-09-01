@@ -952,22 +952,22 @@ def _gather_linear_layouts():
                 ): (0, l, l))()]
     elif THREADS_PER_WARP == 64:
         return [(
-            0,
-            ttgl.DistributedLinearLayout(
-                reg_bases=[[0, 2], [2, 0]],
-                lane_bases=[[0, 8], [8, 0], [1, 0], [4, 0], [16, 0], [32, 0]],
-                warp_bases=[[0, 1], [0, 4]],
-                block_bases=[],
-                shape=[64, 16],
-            ),
-            ttgl.DistributedLinearLayout(
-                reg_bases=[[2, 0], [0, 2]],
-                lane_bases=[[0, 8], [16, 0], [1, 0], [8, 0], [4, 0], [32, 0]],
-                warp_bases=[[0, 1], [0, 4]],
-                block_bases=[],
-                shape=[64, 16],
-            ),
-        ),
+                    0,
+                    ttgl.DistributedLinearLayout(
+                        reg_bases=[[0, 2], [2, 0]],
+                        lane_bases=[[0, 8], [8, 0], [1, 0], [4, 0], [16, 0], [32, 0]],
+                        warp_bases=[[0, 1], [0, 4]],
+                        block_bases=[],
+                        shape=[64, 16],
+                    ),
+                    ttgl.DistributedLinearLayout(
+                        reg_bases=[[2, 0], [0, 2]],
+                        lane_bases=[[0, 8], [16, 0], [1, 0], [8, 0], [4, 0], [32, 0]],
+                        warp_bases=[[0, 1], [0, 4]],
+                        block_bases=[],
+                        shape=[64, 16],
+                    ),
+                ),
                 (
                     0,
                     ttgl.DistributedLinearLayout(
@@ -1042,30 +1042,30 @@ def _gather_linear_layouts():
 
 def _gather_layouts():
     return [
-        (0, ttgl.BlockedLayout(
-            size_per_thread=[1],
-            threads_per_warp=[THREADS_PER_WARP],
-            warps_per_cta=[4],
-            order=[0],
-        ), ttgl.BlockedLayout(
-            size_per_thread=[1],
-            threads_per_warp=[THREADS_PER_WARP],
-            warps_per_cta=[4],
-            order=[0],
-        ), [16]),
-        (0,
-         ttgl.BlockedLayout(
-             size_per_thread=[2, 1],
-             threads_per_warp=[THREADS_PER_WARP, 1],
-             warps_per_cta=[1, 4],
-             order=[1, 0],
-         ),
-         ttgl.BlockedLayout(
-             size_per_thread=[2, 1],
-             threads_per_warp=[THREADS_PER_WARP, 1],
-             warps_per_cta=[1, 4],
-             order=[1, 0],
-         ), [64, 1])
+        (
+            0,
+            (
+                lambda l=ttgl.BlockedLayout(
+                    size_per_thread=[1],
+                    threads_per_warp=[THREADS_PER_WARP],
+                    warps_per_cta=[4],
+                    order=[0],
+                ): (0, l, l)
+            )(),
+            [16],
+        ),
+        (
+            0,
+            (
+                lambda l=ttgl.BlockedLayout(
+                    size_per_thread=[2, 1],
+                    threads_per_warp=[THREADS_PER_WARP, 1],
+                    warps_per_cta=[1, 4],
+                    order=[1, 0],
+                ): (0, l, l)
+            )(),
+            [64, 1],
+        ),
     ]
 
 
