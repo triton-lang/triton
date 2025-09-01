@@ -35,13 +35,13 @@ struct AddSchedBarriers
       // are currently pseduo instrunctions at this point and may get picked up
       // here and trigger the FunctionOpInterface range based assert below
       StringRef funcName(op.getNameAttr());
-      if (!funcName.contains("__")) {
+      if (!funcName.contains("__") || !funcName.contains("llvm.")) {
         numFuncOps += 1;
         func = op;
       }
     });
 
-    assert(numFuncOps == 1);
+    assert(numFuncOps == 1, "Expected exactly one funcOp");
 
     IntegerAttr zeroAttrValue =
         builder.getI32IntegerAttr(static_cast<int32_t>(0));

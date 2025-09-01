@@ -24,13 +24,13 @@ struct AllocateProtonGlobalScratchBufferPass
       // are currently pseduo instrunctions at this point and will get picked up
       // here and trigger the FunctionOpInterface range based assert below
       StringRef funcName(op.getNameAttr());
-      if (!funcName.contains("__")) {
+      if (!funcName.contains("__") || !funcName.contains("llvm.")) {
         numFuncOps += 1;
         func = op;
       }
     });
 
-    assert(numFuncOps == 1);
+    assert(numFuncOps == 1, "Expected exactly one funcOp");
 
     int32_t cumulativeMemorySize = 0; // bytes
     std::vector<uint32_t> alignments;
