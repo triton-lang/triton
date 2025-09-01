@@ -82,7 +82,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   llvm.func @llvm.exp2.f32(f32) -> f32 attributes {libname = "", libpath = ""}
   // CHECK-LABEL: two_functions
   llvm.func @two_functions(%arg: f32) -> f32 {
-    %1 = llvm.func @llvm.exp2.f32(%arg) : (f32) -> f32
+    %1 = llvm.call @llvm.exp2.f32(%arg) : (f32) -> f32
     llvm.return %1 : f32
   }
 }
