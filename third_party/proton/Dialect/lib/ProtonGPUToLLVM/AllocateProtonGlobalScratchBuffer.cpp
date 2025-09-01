@@ -18,13 +18,13 @@ struct AllocateProtonGlobalScratchBufferPass
     MLIRContext *ctx = &getContext();
     OpBuilder builder(ctx);
 
-    int numFuncOps = triton::proton::gpu::getNumTritonFunctions(mod);
-    assert(numFuncOps == 1 && "Expected exactly one funcOp");
+    auto funcOps = triton::proton::gpu::getTritonFunctions(mod);
+    assert(funcOps.size() == 1 && "Expected exactly one funcOp");
 
     int32_t cumulativeMemorySize = 0; // bytes
     std::vector<uint32_t> alignments;
 
-    func.walk([&](proton::gpu::GlobalScratchAllocOp op) {
+    funcOps[0].walk([&](proton::gpu::GlobalScratchAllocOp op) {
       int offset = llvm::alignTo(cumulativeMemorySize,
                                  proton::gpu::getBytesPerClockEntry());
       op->setAttr("offset",

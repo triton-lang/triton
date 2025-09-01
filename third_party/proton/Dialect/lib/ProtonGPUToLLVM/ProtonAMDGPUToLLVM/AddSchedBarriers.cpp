@@ -29,13 +29,13 @@ struct AddSchedBarriers
     MLIRContext *ctx = &getContext();
     OpBuilder builder(ctx);
 
-    int numFuncOps = triton::proton::gpu::getNumTritonFunctions(mod);
-    assert(numFuncOps == 1 && "Expected exactly one funcOp");
+    auto funcOps = triton::proton::gpu::getTritonFunctions(mod);
+    assert(funcOps.size() == 1 && "Expected exactly one funcOp");
 
     IntegerAttr zeroAttrValue =
         builder.getI32IntegerAttr(static_cast<int32_t>(0));
 
-    func.walk([&](mlir::triton::proton::gpu::ReadCounterOp op) {
+    funcOps[0].walk([&](mlir::triton::proton::gpu::ReadCounterOp op) {
       auto loc = op.getLoc();
       if (!isa_and_nonnull<ROCDL::SchedBarrier>(op->getPrevNode())) {
         builder.setInsertionPoint(op);
