@@ -190,7 +190,7 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     // Ensure linear component's outDims match the alloc size ignoring
     // pipelining dimension
     auto outDims = standardOutDimNames(ctx, rank);
-    auto ll = enc.getLinearComponent();
+    const auto &ll = enc.getLinearComponent();
     auto expectedShape = shape;
     if (shape.size() == allocShape.size() && shape.size() == rank + 1)
       expectedShape = expectedShape.drop_front(1);

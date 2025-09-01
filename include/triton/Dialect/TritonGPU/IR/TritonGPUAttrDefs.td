@@ -455,7 +455,7 @@ For identity mappings a short form based on order and shape is used to increase 
   let parameters = (ins
       ArrayRefParameter<"unsigned">:$intervals,
       ArrayRefParameter<"unsigned">:$paddings,
-      "LinearLayout":$linearComponent
+      LinearLayoutParam:$linearComponent
   );
 
   let builders = [

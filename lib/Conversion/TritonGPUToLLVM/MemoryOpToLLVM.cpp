@@ -31,7 +31,7 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
       dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(memDescTy.getEncoding());
   LinearLayout cvt = LinearLayout::empty();
   if (paddedEnc) {
-    auto sharedLL = paddedEnc.getLinearComponent();
+    const auto &sharedLL = paddedEnc.getLinearComponent();
     cvt = regLayout.invertAndCompose(sharedLL);
   } else {
     auto sharedLayout = toLinearLayout(memDescTy);
@@ -168,7 +168,7 @@ public:
     auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
     LinearLayout cvt = LinearLayout::empty();
     if (paddedEnc) {
-      auto sharedLL = paddedEnc.getLinearComponent();
+      const auto &sharedLL = paddedEnc.getLinearComponent();
       cvt = regLayout.invertAndCompose(sharedLL);
     } else {
       auto sharedLayout = toLinearLayout(memDescTy);

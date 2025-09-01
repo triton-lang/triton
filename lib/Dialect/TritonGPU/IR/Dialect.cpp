@@ -1791,7 +1791,7 @@ PaddedSharedEncodingAttr PaddedSharedEncodingAttr::get(
 SmallVector<unsigned>
 PaddedSharedEncodingAttr::basesPerDim(StringAttr dimName,
                                       bool skipBroadcast) const {
-  auto ll = getLinearComponent();
+  const auto &ll = getLinearComponent();
   auto rank = ll.getNumOutDims();
   return basesPerDimImpl(ll.getBases(), dimName, rank, skipBroadcast);
 }
@@ -2469,7 +2469,8 @@ struct TritonGPUInferLayoutInterface
     if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(operandEncoding)) {
       if (failed(checkRank(enc.getRank())))
         return failure();
-      auto transLL = transposeLinearLayout(enc.getLinearComponent(), order);
+      const auto &transLL =
+          transposeLinearLayout(enc.getLinearComponent(), order);
       resultEncoding = PaddedSharedEncodingAttr::get(
           ctx, enc.getIntervals(), enc.getPaddings(), transLL);
       return success();

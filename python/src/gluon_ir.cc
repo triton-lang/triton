@@ -160,7 +160,7 @@ py::object layoutToGluon(Attribute layout) {
     return layouts.SliceLayout(sliced.getDim(),
                                layoutToGluon(sliced.getParent()));
   } else if (auto linear = dyn_cast<ttg::LinearEncodingAttr>(layout)) {
-    auto ll = linear.getLinearLayout();
+    const auto &ll = linear.getLinearLayout();
     auto ctx = layout.getContext();
     auto kReg = mlir::StringAttr::get(ctx, "register");
     auto kLane = mlir::StringAttr::get(ctx, "lane");
@@ -235,7 +235,7 @@ py::object layoutToGluon(Attribute layout) {
     }
     auto kOffset = mlir::StringAttr::get(ctx, "offset");
     auto kBlock = mlir::StringAttr::get(ctx, "block");
-    auto ll = paddedShared.getLinearComponent();
+    const auto &ll = paddedShared.getLinearComponent();
     auto shape = toStdVector(ArrayRef(llvm::to_vector(ll.getOutDimSizes())));
     return layouts.PaddedSharedLayout(intervalPaddingPairs,
                                       ll.getBases().lookup(kOffset),
