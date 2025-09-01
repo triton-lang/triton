@@ -136,5 +136,5 @@ module {
 // CHECK-SAME: %[[PTR:[^:]*]]
 // CHECK-DAG: %[[c1:.*]] = arith.constant 1 : i64
 // CHECK-DAG: %[[c256:.*]] = arith.constant 256 : i64
-// CHECK: %{{.*}}:5 = tt.call @callee(%[[PTR]], %[[c256]], %[[c256]], %[[c256]], %[[c1]])
-// CHECK-SAME -> (!tt.ptr<f32>, i64, i64, i64, i64)
+// CHECK: %{{.*}}:6 = tt.call @callee(%[[PTR]], %[[c256]], %[[c256]], %[[c256]], %[[c1]], %false)
+// CHECK-SAME -> (!tt.ptr<f32>, i64, i64, i64, i64, i1)
