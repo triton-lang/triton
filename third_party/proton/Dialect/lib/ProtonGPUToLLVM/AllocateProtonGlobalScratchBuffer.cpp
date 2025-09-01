@@ -1,4 +1,5 @@
 #include "Conversion/ProtonGPUToLLVM/Passes.h"
+#include "Conversion/ProtonGPUToLLVM/Utility.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
