@@ -191,12 +191,15 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     // pipelining dimension
     auto outDims = standardOutDimNames(ctx, rank);
     auto ll = enc.getLinearComponent();
-    auto llAllocSize = allocShape.drop_front(allocShape.size() - rank);
+    auto expectedShape = shape;
+    if (shape.size() == allocShape.size() && shape.size() == rank + 1)
+      expectedShape = expectedShape.drop_front(1);
+
     for (auto d = 0; d < rank; d++) {
-      if (ll.getOutDimSize(outDims[d]) != llAllocSize[d]) {
+      if (ll.getOutDimSize(outDims[d]) != expectedShape[d]) {
         return emitError() << "Mismatch in expected shape for dimension " << d
                            << ". Expected: " << ll.getOutDimSize(outDims[d])
-                           << ", got: " << llAllocSize[d];
+                           << ", got: " << expectedShape[d];
       }
     }
   }
