@@ -1631,13 +1631,11 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
     }
 
     // Create identity mapping based on shape and order
-    SmallVector<int64_t> shapeI64 = SmallVector<int64_t>(ArrayRef(shape));
-    // Create identity mapping based on shape and order
     auto kOffset = StringAttr::get(parser.getContext(), "offset");
     maybeLL = identityStandardND(kOffset, shape, order);
     maybeLL = combineCtaCgaWithShape(
         *maybeLL, CTALayoutAttr::getDefault(parser.getContext(), shape.size()),
-        shapeI64);
+        SmallVector<int64_t>(ArrayRef(shape)));
   }
 
   if (!maybeLL.has_value())
@@ -1747,10 +1745,10 @@ LogicalResult PaddedSharedEncodingAttr::verify(
       return emitError()
              << "Each offset basis must move in at most one dimension.";
     }
-    // Ensure all non zero elements are power of twoes. Combined with the
-    // broadcast check above this ensure we do not swizzle on a per element
-    // basis. The intent of the linear component is to rearange whole rows or
-    // cache-line sizes chunks of rows.
+    // Ensure all non zero elements are a power of 2. Combined with the
+    // broadcast check above this prevents per element swizzling. The intent of
+    // the linear component is to rearange whole rows or cache-line sized chunks
+    // of rows.
     if (!llvm::all_of(dimBases, [&](const auto &basis) {
           return llvm::all_of(
               basis, [](auto v) { return v == 0 || llvm::isPowerOf2_32(v); });
