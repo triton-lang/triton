@@ -1121,17 +1121,20 @@ def test_gather_linear_layouts(axis, src_layout, index_layout, device):
     indices = torch.randint(0, src.shape[axis], indices_shape, device=device)
     out = torch.zeros_like(indices, device=device, dtype=src.dtype)
     ref = torch.gather(src, axis, indices)
+    num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(src_layout, src_shape))))
     if len(src_shape) == 1:
         obj = _gather_kernel_1d[(1, )](
             src, indices, out, axis,  #
             src_shape[0], src_shape[0],  #
             src_layout, index_layout,  #
+            num_warps=num_warps
         )
     elif len(src_shape) == 2:
         obj = _gather_kernel_2d[(1, )](
             src, indices, out, axis,  #
             src_shape[0], src_shape[1], indices_shape[0], indices_shape[1],  #
             src_layout, index_layout,  #
+            num_warps=num_warps
         )
     else:
         raise RuntimeError(f"Unsupported shape: {src_shape}")
