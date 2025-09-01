@@ -43,7 +43,7 @@ struct AddSchedBarriers
       }
     });
 
-    func.walk([&](mlir::triton::proton::gpu::CircularStoreOp op) {
+    funcOps[0].walk([&](mlir::triton::proton::gpu::CircularStoreOp op) {
       auto loc = op.getLoc();
       if (!isa_and_nonnull<ROCDL::SchedBarrier>(op->getNextNode())) {
         builder.setInsertionPointAfter(op);
