@@ -83,7 +83,7 @@ namespace mlir {
 //    `%data = tt.load(%fat_ptr)`
 //
 //    However, if the ptr pointing to a smaller-tensor, it's handled in
-//    different way. See followwing for details.
+//    different way. See following for details.
 //
 // Please note that `%offset` might be a 32bit or 64bit integer. If
 // we can, we would like to use 32 bit integers. This can happen under
@@ -95,6 +95,48 @@ namespace mlir {
 //    value. In this case we can simply start with a 32bit offset and downcast
 //    if we ever meet 64 bit operations (because we know that the offset can be
 //    contained in 32 bits)
+//
+// Pointer pointing to small-tensor
+// ---------------------------------
+// In the context of this pass, we call a tensor "small-tensor" if its size is
+// is not greater than 2G. Function arguments are tagged with "pointer_range=32"
+// attribute if they are bound to small-tensors.
+//
+// We canonicalize pointer pointing to small-tensor in different way. For
+// example, given input like this:
+//   %p1 = tt.addptr %p0, %ofst
+//    ...
+//   %p2 = tt.addptr %p1, %ofst2
+//
+// it will be canonicalized into following:
+//   %p1 = tt.addptr %p0, %ofst
+//    ...
+//   %p2 = tt.addptr %p0, (%ofst2 + %ofst)
+//
+// The rationale are two-fold:
+//  - Correctness
+//    Let ptr, ofst denote the base and offset, and let U and NU denote
+//    the uniform and non-uniform parts of the offset. The transformation for
+//    pointer not pointing to a small-tensor is to transform pointer expression
+//      ptr + int64(U + NU)                       -- E1
+//      ptr + int64(U) + int64(NU)                -- E2
+//    Note that E1 is not necessarily equals to E2 if U and NU are 32-bit
+//    quantity! for Example
+//      * 32-bit offset = (0x2000000 + 0x4000000*((-32) + x1)), where
+//        where x1 in 32 and 40
+//        - U = 0x2000000 - 0x4000000*32 = -0x7e000000, and
+//        - NU = 0x4000000*x1
+//    Although NU start to overflow where x1 >= 32, (N + NU) can still fit in
+//    32-bit. Therefore, above expression E1 is still correct, however, E2
+//    evaluates to wrong result.
+//
+//    This is bit tricky, please see https://github.com/ROCm/triton/issues/830
+//    for details.
+//
+//  - To expose opportunity for buffer-ops optimization. When this pass see
+//    a global memory operation with base pointer pointing to small-tensor,
+//    it can safely convert them into buffer-op without examining if the offset
+//    is a non-negative value.
 //
 namespace {
 

@@ -1420,7 +1420,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: %[[PID:.*]] = tt.get_program_id x : i32
 // CHECK: %[[PID_X_256:.*]] = arith.muli %[[PID]], %[[c256_i32:.*]] : i32
 // CHECK: %[[MK_RANGE:.*]] = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>
-// CHECK: %[[PID_X_256_SPLAT:.*]] = tt.splat %[[PID_X_256]] : i32 -> tensor<256xi32> 
+// CHECK: %[[PID_X_256_SPLAT:.*]] = tt.splat %[[PID_X_256]] : i32 -> tensor<256xi32>
 // CHECK: arith.cmpi
 // CHECK: %[[LD_OFST_1:.*]] = arith.addi %[[PID_X_256_SPLAT]], %[[MK_RANGE]] : tensor<256xi32>
 // CHECK: %[[SPLAT_ARG0:.*]] = tt.splat %arg0 : !tt.ptr<i16> -> tensor<256x!tt.ptr<i16>>
