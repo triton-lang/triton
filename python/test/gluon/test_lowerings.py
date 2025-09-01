@@ -948,7 +948,7 @@ def _gather_linear_layouts():
                     lane_bases=[[1], [2], [4], [8], [16]],
                     warp_bases=[],
                     block_bases=[],
-                    shape=[64],
+                    shape=[32],
                 )
             ),
             (
