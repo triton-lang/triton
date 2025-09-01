@@ -35,8 +35,8 @@ of the tensor are tiled.
 
 In this example, `size_per_thread=[2, 4]` indicates that within each block, each
 thread owns a contiguous `2x4` subtile of the tensor, stored as registers in
-that thread. `order=[1, 0]` indicates that the layout tiles the columns first
-then the rows, i.e. column-major order. For a thread T, the tile looks like:
+that thread. `order=[1, 0]` indicates that the layout tiles the rows first
+then the columns, i.e. row-major order. For a thread T, the tile looks like:
 
 ```
 [[T:0, T:1, T:2, T:3],
@@ -47,7 +47,7 @@ When visualizing layouts, we sometimes represent which warp, lane, and register
 are mapped to which tensor element. Notice that the registers increment over the
 inner dimension.
 
-If `order` was `[0, 1]` (row-major order), the tile would look like:
+If `order` was `[0, 1]` (col-major order), the tile would look like:
 
 ```
 [[T:0, T:2, T:4, T:6],
