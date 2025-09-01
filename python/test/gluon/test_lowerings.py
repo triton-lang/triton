@@ -938,10 +938,10 @@ def _gather_linear_layouts():
                 0,
                 ttgl.DistributedLinearLayout(
                     reg_bases=[[1]],
-                    lane_bases=[[2], [4], [8], [16]],
+                    lane_bases=[[2], [4], [8], [16], [32]],
                     warp_bases=[],
                     block_bases=[],
-                    shape=[32],
+                    shape=[64],
                 ),
                 ttgl.DistributedLinearLayout(
                     reg_bases=[],
