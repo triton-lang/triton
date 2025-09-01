@@ -404,7 +404,6 @@ public:
 
     Operation *newDot = nullptr;
     bool aFromLoad = comesFromLoadOrBlockArg(a);
-    bool bFromLoad = comesFromLoadOrBlockArg(b);
 
     if (mmaResult.versionMajor == 3) {
       auto eltType = cast<RankedTensorType>(a.getType()).getElementType();
