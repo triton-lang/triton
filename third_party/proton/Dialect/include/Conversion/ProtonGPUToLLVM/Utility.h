@@ -45,8 +45,8 @@ CircularStoreDataPack
 lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
                            ConversionPatternRewriter &rewriter);
 
-SmallVector<triton::FuncOp> getTritonFunctions(ModuleOp mod) {
-  SmallVector<triton::FuncOp> funcOps;
+SmallVector<FunctionOpInterface> getTritonFunctions(ModuleOp mod) {
+  SmallVector<FunctionOpInterface> funcOps;
   mod.walk([&](FunctionOpInterface op) {
     // Ignore any intrinsic functions. On AMD the predicate load/store ops
     // are currently pseudo instructions at this point and may get picked up
