@@ -927,7 +927,7 @@ def _gather_linear_layouts():
                     shape=[32],
                 ),
                 ttgl.DistributedLinearLayout(
-                    reg_bases=[32],
+                    reg_bases=[[32]],
                     lane_bases=[[1], [2], [4], [8], [16]],
                     warp_bases=[],
                     block_bases=[],
@@ -937,7 +937,7 @@ def _gather_linear_layouts():
             (
                 0,
                 ttgl.DistributedLinearLayout(
-                    reg_bases=[1],
+                    reg_bases=[[1]],
                     lane_bases=[[2], [4], [8], [16]],
                     warp_bases=[],
                     block_bases=[],
@@ -1049,7 +1049,7 @@ def _gather_linear_layouts():
                     shape=[64],
                 ),
                 ttgl.DistributedLinearLayout(
-                    reg_bases=[64],
+                    reg_bases=[[64]],
                     lane_bases=[[1], [2], [4], [8], [16], [32]],
                     warp_bases=[],
                     block_bases=[],
@@ -1059,7 +1059,7 @@ def _gather_linear_layouts():
             (
                 0,
                 ttgl.DistributedLinearLayout(
-                    reg_bases=[1],
+                    reg_bases=[[1]],
                     lane_bases=[[2], [4], [8], [16], [32], [64]],
                     warp_bases=[],
                     block_bases=[],
@@ -1121,11 +1121,20 @@ def test_gather_linear_layouts(axis, src_layout, index_layout, device):
     indices = torch.randint(0, src.shape[axis], indices_shape, device=device)
     out = torch.zeros_like(indices, device=device, dtype=src.dtype)
     ref = torch.gather(src, axis, indices)
-    obj = _gather_kernel_2d[(1, )](
-        src, indices, out, axis,  #
-        src_shape[0], src_shape[1], indices_shape[0], indices_shape[1],  #
-        src_layout, index_layout,  #
-    )
+    if len(src_shape) == 1:
+        obj = _gather_kernel_1d[(1, )](
+            src, indices, out, axis,  #
+            src_shape[0], src_shape[0],  #
+            src_layout, index_layout,  #
+        )
+    elif len(src_shape) == 2:
+        obj = _gather_kernel_2d[(1, )](
+            src, indices, out, axis,  #
+            src_shape[0], src_shape[1], indices_shape[0], indices_shape[1],  #
+            src_layout, index_layout,  #
+        )
+    else:
+        raise RuntimeError(f"Unsupported shape: {src_shape}")
     torch.testing.assert_close(out, ref, rtol=0, atol=0)
     assert ("nvvm.shfl.sync.idx" in obj.asm["llir"]) or ("llvm.amdgcn.ds.bpermute" in obj.asm["llir"])
 
