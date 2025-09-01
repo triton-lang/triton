@@ -17,19 +17,7 @@ struct AllocateProtonGlobalScratchBufferPass
     MLIRContext *ctx = &getContext();
     OpBuilder builder(ctx);
 
-    int numFuncOps = 0;
-    FunctionOpInterface func;
-    mod.walk([&](FunctionOpInterface op) {
-      // Ignore any intrinsic functions. On AMD the predicate load/store ops
-      // are currently pseduo instrunctions at this point and will get picked up
-      // here and trigger the FunctionOpInterface range based assert below
-      StringRef funcName(op.getNameAttr());
-      if (!(funcName.contains("__") || funcName.contains("llvm."))) {
-        numFuncOps += 1;
-        func = op;
-      }
-    });
-
+    int numFuncOps = triton::proton::gpu::getNumTritonFunctions(mod);
     assert(numFuncOps == 1 && "Expected exactly one funcOp");
 
     int32_t cumulativeMemorySize = 0; // bytes

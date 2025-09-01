@@ -45,6 +45,22 @@ CircularStoreDataPack
 lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
                            ConversionPatternRewriter &rewriter);
 
+int getNumTritonFunctions(ModuleOp mod) {
+  int numFuncOps = 0;
+  FunctionOpInterface func;
+  mod.walk([&](FunctionOpInterface op) {
+    // Ignore any intrinsic functions. On AMD the predicate load/store ops
+    // are currently pseudo instructions at this point and may get picked up
+    // here and trigger the FunctionOpInterface range based assert below
+    StringRef funcName(op.getNameAttr());
+    if (!(funcName.contains("__") || funcName.contains("llvm."))) {
+      numFuncOps += 1;
+      func = op;
+    }
+  });
+  return numFuncOps;
+}
+
 } // namespace proton::gpu
 } // namespace triton
 
