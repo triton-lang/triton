@@ -21,6 +21,7 @@
 #include "triton/Dialect/Triton/IR/DiscardableAttributes.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/SmallVector.h"
@@ -125,15 +126,23 @@ Value createTruncIOffset(RewriterBase &rewriter, Location loc, Value offset,
   return rewriter.createOrFold<arith::TruncIOp>(loc, toType, offset);
 }
 
+using ScalarToSplatMap = llvm::SmallMapVector<std::pair<Value, Type>, Value, 8>;
+
 // Helper function to determine if the given `op` is a constant tensor and in
 // that case return the scalar value.
-std::optional<Value> maybeGetOrCreateScalarConstant(RewriterBase &rewriter,
-                                                    Location loc, Value expr) {
+std::optional<Value>
+maybeGetOrCreateScalarConstant(RewriterBase &rewriter, Location loc, Value expr,
+                               ScalarToSplatMap *scalarToSplatMap = nullptr) {
   Operation *op = expr.getDefiningOp();
 
   // Check for splatness
-  if (auto splatOp = dyn_cast_or_null<tt::SplatOp>(op))
+  if (auto splatOp = dyn_cast_or_null<tt::SplatOp>(op)) {
+    if (scalarToSplatMap) {
+      auto key = std::pair(splatOp.getSrc(), splatOp.getType());
+      (*scalarToSplatMap)[key] = expr;
+    }
     return splatOp.getSrc();
+  }
 
   // Check for constant
   DenseIntElementsAttr constVal;
@@ -152,6 +161,16 @@ std::optional<Value> maybeGetOrCreateScalarConstant(RewriterBase &rewriter,
   }
 
   return {};
+}
+
+bool isScalarIntConst(Value v) {
+  auto constOp = v.getDefiningOp<mlir::arith::ConstantOp>();
+  if (!constOp)
+    return false;
+
+  return TypeSwitch<Attribute, bool>(constOp.getValue())
+      .Case<IntegerAttr>([](auto intAttr) { return true; })
+      .Default([](auto) { return false; });
 }
 
 bool isScalarIntZero(Value v) {
@@ -249,19 +268,21 @@ Value createTensorZero(RewriterBase &rw, Location loc, RankedTensorType type) {
   return rw.create<arith::ConstantOp>(loc, zeroDenseAttr);
 }
 
-std::pair<Value, Value> createDecomposeOffsetFromExpr(RewriterBase &rewriter,
-                                                      Location loc, Value expr,
-                                                      int64_t bitness);
+std::pair<Value, Value>
+createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
+                              int64_t bitness,
+                              ScalarToSplatMap *salarToSplatMap = nullptr);
 // Offset extraction logic for an addition op:
 // decompose(A+B) = {U(A)+U(B), NU(A)+NU(B)}
-std::pair<Value, Value> createDecomposeOffsetFromAdd(RewriterBase &rewriter,
-                                                     Location loc, Value expr,
-                                                     int64_t bitness) {
+std::pair<Value, Value>
+createDecomposeOffsetFromAdd(RewriterBase &rewriter, Location loc, Value expr,
+                             int64_t bitness,
+                             ScalarToSplatMap *salarToSplatMap = nullptr) {
   auto addOp = expr.getDefiningOp<arith::AddIOp>();
-  auto [uniformOffsetL, nonUniformOffsetL] =
-      createDecomposeOffsetFromExpr(rewriter, loc, addOp.getLhs(), bitness);
-  auto [uniformOffsetR, nonUniformOffsetR] =
-      createDecomposeOffsetFromExpr(rewriter, loc, addOp.getRhs(), bitness);
+  auto [uniformOffsetL, nonUniformOffsetL] = createDecomposeOffsetFromExpr(
+      rewriter, loc, addOp.getLhs(), bitness, salarToSplatMap);
+  auto [uniformOffsetR, nonUniformOffsetR] = createDecomposeOffsetFromExpr(
+      rewriter, loc, addOp.getRhs(), bitness, salarToSplatMap);
   Value uniformAdd =
       createAddOffsetsOfSameKind(rewriter, loc, uniformOffsetL, uniformOffsetR);
   Value nonUniformAdd = createAddOffsetsOfSameKind(
@@ -273,14 +294,15 @@ std::pair<Value, Value> createDecomposeOffsetFromAdd(RewriterBase &rewriter,
 
 // Offset extraction logic for a multiplication op:
 // decompose(A*B) = {U(A)*U(B), NU(A)*NU(B)+NU(B)*U(A)+U(A)*NU(B)}
-std::pair<Value, Value> createDecomposeOffsetFromMul(RewriterBase &rewriter,
-                                                     Location loc, Value expr,
-                                                     int64_t bitness) {
+std::pair<Value, Value>
+createDecomposeOffsetFromMul(RewriterBase &rewriter, Location loc, Value expr,
+                             int64_t bitness,
+                             ScalarToSplatMap *salarToSplatMap = nullptr) {
   auto mulOp = expr.getDefiningOp<arith::MulIOp>();
-  auto [uniformOffsetL, nonUniformOffsetL] =
-      createDecomposeOffsetFromExpr(rewriter, loc, mulOp.getLhs(), bitness);
-  auto [uniformOffsetR, nonUniformOffsetR] =
-      createDecomposeOffsetFromExpr(rewriter, loc, mulOp.getRhs(), bitness);
+  auto [uniformOffsetL, nonUniformOffsetL] = createDecomposeOffsetFromExpr(
+      rewriter, loc, mulOp.getLhs(), bitness, salarToSplatMap);
+  auto [uniformOffsetR, nonUniformOffsetR] = createDecomposeOffsetFromExpr(
+      rewriter, loc, mulOp.getRhs(), bitness, salarToSplatMap);
   Value uniformMul =
       rewriter.create<arith::MulIOp>(loc, uniformOffsetL, uniformOffsetR);
 
@@ -301,12 +323,14 @@ std::pair<Value, Value> createDecomposeOffsetFromMul(RewriterBase &rewriter,
   return {uniformMul, nonUniformMul};
 }
 
-std::pair<Value, Value> createDecomposeOffsetFromExpr(RewriterBase &rewriter,
-                                                      Location loc, Value expr,
-                                                      int64_t bitness) {
+std::pair<Value, Value>
+createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
+                              int64_t bitness,
+                              ScalarToSplatMap *salarToSplatMap) {
 
   // Base case 1: it is a splat. Return the scalar constant as the uniform part
-  if (auto scalarConst = maybeGetOrCreateScalarConstant(rewriter, loc, expr)) {
+  if (auto scalarConst = maybeGetOrCreateScalarConstant(rewriter, loc, expr,
+                                                        salarToSplatMap)) {
     auto tensorZero =
         createTensorZero(rewriter, loc, cast<RankedTensorType>(expr.getType()));
     return {*scalarConst, tensorZero};
@@ -325,23 +349,25 @@ std::pair<Value, Value> createDecomposeOffsetFromExpr(RewriterBase &rewriter,
           expr.getDefiningOp())
           .Case<tt::BroadcastOp>([&](auto broadcastOp) {
             auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
-                rewriter, loc, broadcastOp.getSrc(), bitness);
+                rewriter, loc, broadcastOp.getSrc(), bitness, salarToSplatMap);
             auto broadcastNonUniform = rewriter.create<tt::BroadcastOp>(
                 loc, broadcastOp.getType(), nonUniform);
             return std::make_pair(uniform, broadcastNonUniform);
           })
           .Case<tt::ExpandDimsOp>([&](auto expandOp) {
             auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
-                rewriter, loc, expandOp.getSrc(), bitness);
+                rewriter, loc, expandOp.getSrc(), bitness, salarToSplatMap);
             auto expandNonUniform = rewriter.create<tt::ExpandDimsOp>(
                 loc, nonUniform, expandOp.getAxis());
             return std::make_pair(uniform, expandNonUniform);
           })
           .Case<arith::AddIOp>([&](Operation *op) {
-            return createDecomposeOffsetFromAdd(rewriter, loc, expr, bitness);
+            return createDecomposeOffsetFromAdd(rewriter, loc, expr, bitness,
+                                                salarToSplatMap);
           })
           .Case<arith::MulIOp>([&](Operation *op) {
-            return createDecomposeOffsetFromMul(rewriter, loc, expr, bitness);
+            return createDecomposeOffsetFromMul(rewriter, loc, expr, bitness,
+                                                salarToSplatMap);
           })
           .Default([&](Operation *op) {
             // Base case 3: it is not a supported operation. We assume no
@@ -769,49 +795,145 @@ private:
 
     const auto &oldAttr = fatPtrs.at({fatPtrBase, fatPtrOffset});
 
-    LDBG("smal-tensor addPtr:" << addPtrOp);
-    LDBG("   - with tensor-base:" << oldAttr.smallTensorBase);
-    LDBG("   - with originl offset:" << origOffset);
+    LDBG("smal-tensor addPtr: " << addPtrOp);
+    LDBG("   - with tensor-base: " << oldAttr.smallTensorBase);
+    LDBG("   - with originl offset: " << origOffset);
     LDBG("   - fatPtr base: " << fatPtrBase);
-    LDBG("   - fatPtr offst " << fatPtrOffset);
+    LDBG("   - fatPtr offst: " << fatPtrOffset);
 
-    auto ptrTy = addPtrOp.getPtr().getType();
-    assert((llvm::isa<RankedTensorType>(ptrTy) ||
-            llvm::isa<tt::PointerType>(ptrTy)) &&
-           "expected Ptr to be RankedTensorType type or scalar type");
-    if (llvm::isa<tt::PointerType>(ptrTy)) {
-      LDBG("  - it scalar addition");
+    // This loop goes over all offset expressions and try to decompose them
+    // into uniform and non-uniform parts, and accumulte these two parts
+    // respectively.
+    //
+    // Each iteration decompose the given offset expression into 3 categories
+    //  - uniform value
+    //  - non-uniform value
+    //  - const-tensors value, i.e. a tensor whose elements are equal.
+
+    Value offsetExprs[] = {fatPtrOffset, origOffset};
+
+    SmallVector<Value> uniforms;
+    SmallVector<Value> nonUniforms;
+    SmallVector<std::pair</*tensor*/ Value, /*element*/ Value>> constTensors;
+
+    ScalarToSplatMap scalarToSplatMap;
+
+    for (auto offsetIter : offsetExprs) {
+      Type offsetType = offsetIter.getType();
+      if (offsetType.isIntOrIndexOrFloat()) {
+        // case 1: The offset value is a scalar.
+        //
+        // Note that we cannot unify this case with case-3 because
+        // createDecomposeOffsetFromExpr() cannot handle scalar value.
+        //
+        assert(llvm::isa<IntegerType>(offsetType) &&
+               "expected offset to be integer type");
+        uniforms.push_back(offsetIter);
+      } else {
+        if (auto scalarConst = maybeGetOrCreateScalarConstant(
+                rewriter, curLoc, offsetIter, &scalarToSplatMap)) {
+          // case 2: origOffset is a constant tensor (all elements are equal).
+          constTensors.push_back(std::pair(offsetIter, *scalarConst));
+        } else {
+          auto bitness =
+              llvm::cast<RankedTensorType>(offsetType).getElementTypeBitWidth();
+          // case 3: No trick we can make on this offset component, just
+          // decomopose it into two parts.
+          auto [uniformOffset, nonUniformOffset] =
+              createDecomposeOffsetFromExpr(rewriter, curLoc, offsetIter,
+                                            bitness, &scalarToSplatMap);
+
+          uniforms.push_back(uniformOffset);
+          nonUniforms.push_back(nonUniformOffset);
+        }
+      }
     }
 
-    Value newOffset;
-    if (isIntZero(fatPtrOffset))
-      newOffset = origOffset;
-    else if (isIntZero(origOffset))
-      newOffset = fatPtrOffset;
+    // Accumulate the uniform offsets and  non-unforms part.
+    Value uniformSum;
+    Value nonUniformSum;
+    while (true) {
+      for (auto uniformValue : uniforms) {
+        if (!uniformSum)
+          uniformSum = uniformValue;
+        else
+          uniformSum = createAddOffsetsOfSameKind(rewriter, curLoc, uniformSum,
+                                                  uniformValue);
+      }
 
-    if (!newOffset) {
-      int64_t bitness = llvm::cast<RankedTensorType>(origOffset.getType())
-                            .getElementTypeBitWidth();
-      auto [uniformOffset, nonUniformOffset] =
-          createDecomposeOffsetFromExpr(rewriter, curLoc, origOffset, bitness);
+      // Accumulate the uniform offsets
+      for (auto noUniformValue : nonUniforms) {
+        if (!nonUniformSum)
+          nonUniformSum = noUniformValue;
+        else
+          nonUniformSum = createAddOffsetsOfSameKind(
+              rewriter, curLoc, nonUniformSum, noUniformValue);
+      }
 
-      auto [uniformOffsetPrev, nonUniformOffsetPrev] =
-          createDecomposeOffsetFromExpr(rewriter, curLoc, fatPtrOffset,
-                                        bitness);
+      // Each element in constTensors can be added as a scalar (uniform) or as
+      // a tensor (non-uniform). Care must taken to avoid generating
+      // duplicated splat operation.
+      // e.g. Consider an element in constTensors: sx = tt.spalt(x)
+      //
+      // If we blindly add "x" to uniformSum:
+      //  - if uniformSum is 0, then we have to generate dup=tt.splat(x),
+      //    before it is added to the non-uniforum part. Note that the
+      //    expression "dup" and "sx" are redundant.
+      //  - if the uniformSum is not 0, then it's desirable to add this
+      //    const-tensor as scalar.
+      //
+      if (constTensors.empty())
+        break;
 
-      Value uniformAdd = createAddOffsetsOfSameKind(
-          rewriter, curLoc, uniformOffset, uniformOffsetPrev);
+      bool asScalar =
+          isScalarIntConst(uniformSum) && !isScalarIntZero(uniformSum);
+      if (asScalar) {
+        // The asScalar was set to true based on heuristic. However, it may not
+        // be leagal to do so. The condition constTensors.size() != 0
+        // indicates that final offset must be a tensor. We have to contirbute
+        // constTensors as tensor to make sure the resulting offset has right
+        // type!
+        if (nonUniforms.empty())
+          asScalar = false;
+      }
 
-      Value nonUniformAdd = createAddOffsetsOfSameKind(
-          rewriter, curLoc, nonUniformOffset, nonUniformOffsetPrev);
-
-      newOffset = createAddUniformAndNonUniform(rewriter, curLoc, uniformAdd,
-                                                nonUniformAdd);
+      LDBG("   -- consider const-tensor as uniform: " << asScalar);
+      nonUniforms.clear();
+      uniforms.clear();
+      for (auto [tensor, scalar] : constTensors) {
+        if (asScalar)
+          uniforms.push_back(scalar);
+        else
+          nonUniforms.push_back(tensor);
+      }
+      constTensors.clear();
     }
 
-    if (getElementTypeOrSelf(newOffset).getIntOrFloatBitWidth() > 32)
+    LDBG("   -- new uniform offset: " << uniformSum);
+    LDBG("   -- new non-uniform offset: " << nonUniformSum);
+
+    // Add uniform and non-uniform quantities together to be a new offset.
+    assert(uniformSum && "uniformSum should have value, even if it is 0");
+    Value newOffset = uniformSum;
+    if (!nonUniformSum)
+      newOffset = uniformSum;
+    else {
+      // Try to reruse existing splat(uniform) value.
+      auto maybeSplat = scalarToSplatMap.lookup(
+          std::pair(uniformSum, nonUniformSum.getType()));
+      if (maybeSplat)
+        newOffset = createAddOffsetsOfSameKind(rewriter, curLoc, maybeSplat,
+                                               nonUniformSum);
+      else
+        newOffset = createAddUniformAndNonUniform(rewriter, curLoc, uniformSum,
+                                                  nonUniformSum);
+    }
+
+    if (getElementTypeOrSelf(newOffset).getIntOrFloatBitWidth() > 32) {
       newOffset = createTruncIOffset(rewriter, curLoc, newOffset,
                                      rewriter.getI32Type());
+    }
+    LDBG("   -- new offset: " << newOffset);
 
     rewriter.replaceOpWithMultiple(addPtrOp, {{fatPtrBase, newOffset}});
 

@@ -1397,6 +1397,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 //
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @_compute_indx(
+// CHECK-LABEL:   tt.func public @_compute_indx(
+// CHECK-SAME:        %arg0: !tt.ptr<i16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+// CHECK-SAME:        %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+// CHECK-SAME         %arg2: i32 {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}) -> tensor<256xi32> {
     %arg0: !tt.ptr<i16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
     %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
     %arg2: i32 {tt.divisibility = 16 : i32},
@@ -1412,40 +1416,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %6 = arith.cmpi slt, %4, %5 : tensor<256xi32>
     %7 = tt.splat %arg0 : !tt.ptr<i16> -> tensor<256x!tt.ptr<i16>>
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<i16>>, tensor<256xi32>
+
+// CHECK: %[[PID:.*]] = tt.get_program_id x : i32
+// CHECK: %[[PID_X_256:.*]] = arith.muli %[[PID]], %[[c256_i32:.*]] : i32
+// CHECK: %[[MK_RANGE:.*]] = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>
+// CHECK: %[[PID_X_256_SPLAT:.*]] = tt.splat %[[PID_X_256]] : i32 -> tensor<256xi32> 
+// CHECK: arith.cmpi
+// CHECK: %[[LD_OFST_1:.*]] = arith.addi %[[PID_X_256_SPLAT]], %[[MK_RANGE]] : tensor<256xi32>
+// CHECK: %[[SPLAT_ARG0:.*]] = tt.splat %arg0 : !tt.ptr<i16> -> tensor<256x!tt.ptr<i16>>
+// CHECK: %[[LD_ADDR1:.*]] = tt.addptr %[[SPLAT_ARG0]], %[[LD_OFST_1]] : tensor<256x!tt.ptr<i16>>, tensor<256xi32>
+// CHECK: %[[LD_RES1:.*]] = tt.load %[[LD_ADDR1]], %[[LD_MASK1:.*]] : tensor<256x!tt.ptr<i16>>
     %9 = tt.load %8, %6 : tensor<256x!tt.ptr<i16>>
     %10 = arith.muli %0, %arg2 : i32
     %11 = tt.addptr %arg1, %10 : !tt.ptr<i32>, i32
     %12 = tt.splat %11 : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>>
     %13 = tt.addptr %12, %9 : tensor<256x!tt.ptr<i32>>, tensor<256xi16>
     %14 = tt.load %13, %6 : tensor<256x!tt.ptr<i32>>
+
+// CHECK: %[[PID_X_ARG2:.*]] = arith.muli %[[PID]], %arg2 : i32
+// CHECK: %[[PID_X_ARG2_SPLAT:.*]] = tt.splat %[[PID_X_ARG2]] : i32 -> tensor<256xi32>
+// CHECK: %[[LD_EXT:.*]] = arith.extsi %[[LD_RES1]] : tensor<256xi16> to tensor<256xi32>
+// CHECK: %[[OFST_2:.*]] = arith.addi %[[LD_EXT]], %[[PID_X_ARG2_SPLAT]] : tensor<256xi32>
+// CHECK: %[[BASE_2:.*]] = tt.splat %arg1 : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>>
+// CHECK: %[[LD_ADDR_2:.*]] = tt.addptr %[[BASE_2]], %[[OFS_2:.*]] : tensor<256x!tt.ptr<i32>>, tensor<256xi32>
+// CHECK: tt.load %[[LD_ADDR_2]], %[[LD_MASK2:.*]] : tensor<256x!tt.ptr<i32>>
     tt.return %14 : tensor<256xi32>
   }
 }
-
-// CHECK-LABEL:   tt.func public @_compute_indx(
-// CHECK-SAME:        %arg0: !tt.ptr<i16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
-// CHECK-SAME:        %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
-// CHECK-SAME         %arg2: i32 {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}) -> tensor<256xi32> {
-// CHECK:           %[[C256:.*]] = arith.constant 256 : i32
-// CHECK:           %[[PID:.*]] = tt.get_program_id x : i32
-// CHECK:           %[[PID_X_256:.*]] = arith.muli %[[PID]], %[[C256]] : i32
-// CHECK:           %[[MK_RANGE_256:.*]] = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>
-// CHECK:           %[[SPLAT_MK_RANGE_256:.*]] = tt.splat %[[PID_X_256]] : i32 -> tensor<256xi32>
-// CHECK:           %[[OFST_LD_1:.*]] = arith.addi %[[SPLAT_MK_RANGE_256]], %[[MK_RANGE_256]] : tensor<256xi32>
-// CHECK:           %[[SPLAT_ARG3:.*]] = tt.splat %arg3 : i32 -> tensor<256xi32>
-// CHECK:           %[[MASK1:.*]] = arith.cmpi slt, %[[OFST_LD_1]], %[[SPLAT_ARG3]] : tensor<256xi32>
-// CHECK:           %[[BASE_LD_1:.*]] = tt.splat %arg0 : !tt.ptr<i16> -> tensor<256x!tt.ptr<i16>>
-// CHECK:           %[[ADDR_LD_1:.*]] = tt.addptr %[[BASE_LD_1]], %[[OFST_LD_1]] : tensor<256x!tt.ptr<i16>>, tensor<256xi32>
-// CHECK:           %[[LD_RES:.*]] = tt.load %[[ADDR_LD_1]], %[[MASK1]] : tensor<256x!tt.ptr<i16>>
-// CHECK:           %[[PID_X_ARG2:.*]] = arith.muli %0, %arg2 : i32
-// CHECK:           %[[EXT_LD_RES:.*]] = arith.extsi %[[LD_RES]] : tensor<256xi16> to tensor<256xi32>
-// CHECK:           %[[SPLAT_PID_X_ARG2:.*]] = tt.splat %[[PID_X_ARG2]] : i32 -> tensor<256xi32>
-// CHECK:           %[[OFST_LD_2:.*]] = arith.addi %[[SPLAT_PID_X_ARG2]], %[[EXT_LD_RES]] : tensor<256xi32>
-// CHECK:           %[[SPLAT_ARG1:.*]] = tt.splat %arg1 : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>>
-// CHECK:           %[[ADDR_LD2:.*]] = tt.addptr %[[SPLAT_ARG1]], %[[OFST_LD_2]] : tensor<256x!tt.ptr<i32>>, tensor<256xi32>
-// CHECK:           %[[DONT_CARE:.*]] = tt.load %[[ADDR_LD2]], %6 : tensor<256x!tt.ptr<i32>>
-// CHECK:           tt.return %[[DONT_CARE]] : tensor<256xi32>
-
 
 // -----
 
