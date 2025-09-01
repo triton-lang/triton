@@ -1052,14 +1052,14 @@ def _gather_linear_layouts():
                      lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0]],
                      warp_bases=[],
                      block_bases=[],
-                     shape=[[64, 2]],
+                     shape=[64, 2],
                  ),
                  ttgl.DistributedLinearLayout(
                      reg_bases=[[0, 1]],
                      lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0]],
                      warp_bases=[],
                      block_bases=[],
-                     shape=[[64, 2]],
+                     shape=[64, 2],
                  )),
                 (0,
                  ttgl.DistributedLinearLayout(
