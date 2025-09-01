@@ -2241,7 +2241,7 @@ def test_padded_shared_layout(target):
     module = run_parser(padded_shared_layout_kernel, target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
-#shared = #ttg.padded_shared<[2:+1, 4:+2, 8:+4] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0]], block = []}>
+#shared = #ttg.padded_shared<[2:+1, 4:+2, 8:+4] {order = [1, 0], shape = [64, 64]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @padded_shared_layout_kernel() attributes {noinline = false} {
@@ -2291,7 +2291,7 @@ def test_infer_layout_for_padded_shared(target):
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
 #shared = #ttg.padded_shared<[2:+1, 4:+2, 8:+4] {offset = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 0, 16], [1, 0, 0], [2, 0, 0], [4, 0, 0], [8, 0, 0], [16, 0, 0], [0, 1, 0], [0, 2, 0]], block = []}>
-#shared1 = #ttg.padded_shared<[2:+1, 4:+2, 8:+4] {offset = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 0, 16], [0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0], [1, 0, 0], [2, 0, 0]], block = []}>
+#shared1 = #ttg.padded_shared<[2:+1, 4:+2, 8:+4] {order = [2, 1, 0], shape = [4, 32, 32]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @infer_layout_for_padded_shared_kernel() attributes {noinline = false} {
