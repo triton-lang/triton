@@ -900,23 +900,13 @@ def _gather_linear_layouts():
                     shape=[256, 64],
                 ),
             ),
-            (
-                0,
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[],
-                    lane_bases=[[1], [2], [4], [8], [16]],
-                    warp_bases=[],
-                    block_bases=[],
-                    shape=[32],
-                ),
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[],
-                    lane_bases=[[1], [2], [4], [8], [16]],
-                    warp_bases=[],
-                    block_bases=[],
-                    shape=[32],
-                )
-            ),
+            (lambda l=ttgl.DistributedLinearLayout(
+                reg_bases=[],
+                lane_bases=[[1], [2], [4], [8], [16]],
+                warp_bases=[],
+                block_bases=[],
+                shape=[32],
+            ): (0, l, l))(),
             (
                 0,
                 ttgl.DistributedLinearLayout(
@@ -951,40 +941,20 @@ def _gather_linear_layouts():
                     shape=[32],
                 )
             ),
-            (
-                0,
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[[0, 1]],
-                    lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
-                    warp_bases=[],
-                    block_bases=[],
-                    shape=[32, 2],
-                ),
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[[0, 1]],
-                    lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
-                    warp_bases=[],
-                    block_bases=[],
-                    shape=[32, 2],
-                )
-            ),
-            (
-                0,
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[[1, 0]],
-                    lane_bases=[[2, 0], [4, 0], [8, 0], [16, 0], [0, 1]],
-                    warp_bases=[],
-                    block_bases=[],
-                    shape=[32, 2],
-                ),
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[[1, 0]],
-                    lane_bases=[[2, 0], [4, 0], [8, 0], [16, 0], [0, 1]],
-                    warp_bases=[],
-                    block_bases=[],
-                    shape=[32, 2],
-                )
-            )
+            (lambda l=ttgl.DistributedLinearLayout(
+                reg_bases=[[0, 1]],
+                lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
+                warp_bases=[],
+                block_bases=[],
+                shape=[32, 2],
+            ): (0, l, l))(),
+            (lambda l=ttgl.DistributedLinearLayout(
+                reg_bases=[[1, 0]],
+                lane_bases=[[2, 0], [4, 0], [8, 0], [16, 0], [0, 1]],
+                warp_bases=[],
+                block_bases=[],
+                shape=[32, 2],
+            ): (0, l, l))()
         ]
     elif THREADS_PER_WARP == 64:
         return [
@@ -1022,23 +992,13 @@ def _gather_linear_layouts():
                     shape=[128, 64],
                 ),
             ),
-            (
-                0,
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[],
-                    lane_bases=[[1], [2], [4], [8], [16], [32]],
-                    warp_bases=[],
-                    block_bases=[],
-                    shape=[64],
-                ),
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[],
-                    lane_bases=[[1], [2], [4], [8], [16], [32]],
-                    warp_bases=[],
-                    block_bases=[],
-                    shape=[64],
-                )
-            ),
+            (lambda l=ttgl.DistributedLinearLayout(
+                reg_bases=[],
+                lane_bases=[[1], [2], [4], [8], [16], [32]],
+                warp_bases=[],
+                block_bases=[],
+                shape=[64],
+            ): (0, l, l))(),
             (
                 0,
                 ttgl.DistributedLinearLayout(
@@ -1073,74 +1033,23 @@ def _gather_linear_layouts():
                     shape=[64],
                 )
             ),
-            (
-                0,
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[[0, 1]],
-                    lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0]],
-                    warp_bases=[],
-                    block_bases=[],
-                    shape=[64],
-                ),
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[[0, 1]],
-                    lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0]],
-                    warp_bases=[],
-                    block_bases=[],
-                    shape=[64],
-                )
-            ),
-            (
-                0,
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[[1, 0]],
-                    lane_bases=[[2, 0], [4, 0], [8, 0], [16, 0], [0, 1], [32, 0]],
-                    warp_bases=[],
-                    block_bases=[],
-                    shape=[64, 2],
-                ),
-                ttgl.DistributedLinearLayout(
-                    reg_bases=[[1, 0]],
-                    lane_bases=[[2, 0], [4, 0], [8, 0], [16, 0], [0, 1], [32, 0]],
-                    warp_bases=[],
-                    block_bases=[],
-                    shape=[64, 2],
-                )
-            )
+            (lambda l=ttgl.DistributedLinearLayout(
+                reg_bases=[[0, 1]],
+                lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0]],
+                warp_bases=[],
+                block_bases=[],
+                shape=[64],
+            ): (0, l, l))(),
+            (lambda l=ttgl.DistributedLinearLayout(
+                reg_bases=[[1, 0]],
+                lane_bases=[[2, 0], [4, 0], [8, 0], [16, 0], [0, 1], [32, 0]],
+                warp_bases=[],
+                block_bases=[],
+                shape=[64, 2],
+            ): (0, l, l))()
         ]
     else:
         raise RuntimeError(f"Unsupported THREADS_PER_WARP: {THREADS_PER_WARP}")
-
-
-@pytest.mark.parametrize("axis, src_layout, index_layout", _gather_linear_layouts())
-def test_gather_linear_layouts(axis, src_layout, index_layout, device):
-    src_shape = src_layout.shape
-    indices_shape = index_layout.shape
-
-    src = torch.randn(src_shape, device=device)
-    indices = torch.randint(0, src.shape[axis], indices_shape, device=device)
-    out = torch.zeros_like(indices, device=device, dtype=src.dtype)
-    ref = torch.gather(src, axis, indices)
-    num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(src_layout, src_shape))))
-    if len(src_shape) == 1:
-        obj = _gather_kernel_1d[(1, )](
-            src, indices, out, axis,  #
-            src_shape[0], indices_shape[0],  #
-            src_layout, index_layout,  #
-            num_warps=num_warps
-        )
-    elif len(src_shape) == 2:
-        obj = _gather_kernel_2d[(1, )](
-            src, indices, out, axis,  #
-            src_shape[0], src_shape[1], indices_shape[0], indices_shape[1],  #
-            src_layout, index_layout,  #
-            num_warps=num_warps
-        )
-    else:
-        raise RuntimeError(f"Unsupported shape: {src_shape}")
-    torch.testing.assert_close(out, ref, rtol=0, atol=0)
-    assert ("nvvm.shfl.sync.idx" in obj.asm["llir"]) or ("llvm.amdgcn.ds.bpermute" in obj.asm["llir"])
-
 
 def _gather_layouts():
     return [
@@ -1170,27 +1079,43 @@ def _gather_layouts():
          ), [64, 1])
     ]
 
+def _gather_cases():
+    # Normalize linear-layout cases to include explicit src/idx shapes
+    for axis, s_layout, i_layout in _gather_linear_layouts():
+        yield (axis, s_layout, i_layout, tuple(s_layout.shape), tuple(i_layout.shape))
+    # Normalize non-linear cases to (src_shape, idx_shape) form
+    for axis, s_layout, i_layout, shape in _gather_layouts():
+        shape_t = tuple(shape)
+        yield (axis, s_layout, i_layout, shape_t, shape_t)
 
-@pytest.mark.parametrize("axis, src_layout, index_layout, shape", _gather_layouts())
-def test_gather_layouts(axis, src_layout, index_layout, shape, device):
 
-    src = torch.randn(shape, device=device)
-    indices = torch.randint(0, src.shape[axis], shape, device=device)
+
+@pytest.mark.parametrize("axis, src_layout, index_layout, src_shape, idx_shape", _gather_cases())
+def test_gather_layouts(axis, src_layout, index_layout, src_shape, idx_shape, device):
+    src = torch.randn(src_shape, device=device)
+    indices = torch.randint(0, src.shape[axis], idx_shape, device=device)
     out = torch.zeros_like(indices, device=device, dtype=src.dtype)
     ref = torch.gather(src, axis, indices)
-    if len(shape) == 1:
+
+    # Compute num_warps uniformly from layout/shape for both linear and non-linear cases
+    num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(src_layout, src_shape))))
+
+    if len(src_shape) == 1:
         obj = _gather_kernel_1d[(1, )](
-            src, indices, out, axis,  #
-            shape[0], shape[0],  #
-            src_layout, index_layout,  #
+            src, indices, out, axis,
+            src_shape[0], idx_shape[0],
+            src_layout, index_layout,
+            num_warps=num_warps,
         )
-    elif len(shape) == 2:
+    elif len(src_shape) == 2:
         obj = _gather_kernel_2d[(1, )](
-            src, indices, out, axis,  #
-            shape[0], shape[1], shape[0], shape[1],  #
-            src_layout, index_layout,  #
+            src, indices, out, axis,
+            src_shape[0], src_shape[1], idx_shape[0], idx_shape[1],
+            src_layout, index_layout,
+            num_warps=num_warps,
         )
     else:
-        raise RuntimeError(f"Unsupported shape: {shape}")
+        raise RuntimeError(f"Unsupported shape: {src_shape}")
+
     torch.testing.assert_close(out, ref, rtol=0, atol=0)
     assert ("nvvm.shfl.sync.idx" in obj.asm["llir"]) or ("llvm.amdgcn.ds.bpermute" in obj.asm["llir"])
