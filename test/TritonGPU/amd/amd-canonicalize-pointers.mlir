@@ -106,11 +106,11 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // %7 = %6 + %4 = splat(arg0) + ((pid * 1024) + tl.range(0,1024)) * 2
 // tt.load %7
 //
-// But for the tt.pointer_range=32, the tt.load's base-pointer and offset would
-// be =%6 and offset=%4, repsectively.
+// If arg0 does not have attribute tt.pointer_range=32, then the tt.load's
+// immediate base pointer and offset would be ptr=%6 and offset=%4, respectively.
 //
-// For tt.pointer_range=32, we try to track to base-pointer as far as possible.
-// So, the tt.load's base-pointer is %5(=splat(arg0) and offset=2x%4
+// If with tt.pointer_range=32, we try to keep track the the base pointer as far
+// ahead as possible, so base pointer should be %5 and offset should be 2x%4."
 //
 module attributes {"ttg.num-warps" = 4 : i32} {
   tt.func @conversion4(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}) -> tensor<1024xf32> {
@@ -1241,7 +1241,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 }
 
-// CHECK2: WTF
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -1390,8 +1389,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 // In this example, the tensor passed to the function is small (pointer-range=32),
-// so we prefer the addptr, which is diretly fed to load/store, has tensor' base
-// as its first operand, when we come across pointer arithemetic, we try to
+// so we prefer the addptr, which is directly fed to load/store, has tensor's
+// base as its first operand, when we come across pointer arithemetic, we try to
 //  - keep base pointer intact (still points to the beginning of given tensor)
 //  - update the offset accordingly
 //
