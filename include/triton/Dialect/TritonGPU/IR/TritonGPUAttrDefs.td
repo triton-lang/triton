@@ -428,7 +428,7 @@ and `pN` to mean padding:
      x1, x3, p2, p3
      ...]
 
-3. 2D single interval-padding with rearanged rows.
+2. 2D single interval-padding with rearanged rows.
 
     #ttg.padded_shared<[16:+1] {offset = [[0, 1], [0, 2], /*gap, stride by 2 rows*/[2, 0], [4, 0], [1, 0]]], block = []}>
     [
@@ -443,6 +443,13 @@ and `pN` to mean padding:
       x7y0, x7y1, x7y2, x7y3,
       p1,
     ]
+
+For identity mappings a short form based on order and shape is used to increase readability. The following two encodings are the same:
+
+    #ttg.padded_shared<[2:+2] {order = [1, 0], shape = [16, 32]}>
+    #ttg.padded_shared<[2:+2] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0], [2, 0], [4, 0], [8, 0]], block = []}>
+
+
   }];
 
   let parameters = (ins

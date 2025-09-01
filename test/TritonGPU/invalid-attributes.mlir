@@ -94,20 +94,35 @@
 
 // -----
 
-// expected-error@+1 {{Expected basis of 'offset' not found}}
+// expected-error@+1 {{Unexpected attribute}}
 #shared = #ttg.padded_shared<[2:+1, 4:+2] {unknown = 5}>
 
 // -----
 
-// expected-error@+1 {{Each offset basis must be 0 or a power of two}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0], offset = [[1, 0], [3, 0]], block = []}>
+// expected-error@+1 {{Unexpected attribute "order" found}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {offset = [[1, 0], [2, 0]], block = [], order=[0, 1]}>
 
 // -----
 
-// expected-error@+1 {{Expected basis of 'offset' not found}}
+// expected-error@+1 {{Each offset basis must be 0 or a power of two}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {offset = [[1, 0], [3, 0]], block = []}>
+
+// -----
+
+// expected-error@+1 {{Unexpected attribute "register" found}}
 #shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0], register = [[0, 1], [0, 2]]}>
 
 // -----
 
 // expected-error@+1 {{Expected basis of 'block' not found}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0], offset = [[1, 0], [1, 1]]}>
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {offset = [[1, 0], [1, 1]]}>
+
+// -----
+
+// expected-error@+1 {{Expected basis of 'block' not found}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {offset = [[0 , 1]]}>
+
+// -----
+
+// expected-error@+1 {{Expected basis of 'offset' not found}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {block = [[0 , 1]]}>

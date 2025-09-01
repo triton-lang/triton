@@ -22,13 +22,13 @@
 #NVMMA_SHARED_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #NVMMA_SHARED_FP4PADDED = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, fp4Padded = true}>
 
-#PADDED_SHARED_0_1x256 = #ttg.padded_shared<[256:+8] {offset=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128]], block=[]}>
-#PADDED_SHARED_0_1x512 = #ttg.padded_shared<[256:+8] {offset=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [0, 256]], block=[]}>
-#PADDED_SHARED_0_16x16 = #ttg.padded_shared<[256:+8] {offset=[[0, 1], [0, 2], [0, 4], [0, 8], [1, 0], [2, 0], [4, 0], [8, 0]], block=[]}>
-#PADDED_SHARED_0_16x32 = #ttg.padded_shared<[256:+8] {offset=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0], [2, 0], [4, 0], [8, 0]], block=[]}>
+#PADDED_SHARED_0_1x256 = #ttg.padded_shared<[256:+8] {order = [1, 0], shape = [1, 256]}>
+#PADDED_SHARED_0_1x512 = #ttg.padded_shared<[256:+8] {order = [1, 0], shape = [1, 512]}>
+#PADDED_SHARED_0_16x16 = #ttg.padded_shared<[256:+8] {order = [1, 0], shape = [16, 16]}>
+#PADDED_SHARED_0_16x32 = #ttg.padded_shared<[256:+8] {order = [1, 0], shape = [16, 32]}>
 
-#PADDED_SHARED_1_16x256 = #ttg.padded_shared<[128:+4, 256:+8] {offset=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [1, 0], [2, 0], [4, 0], [8, 0]], block=[]}>
-#PADDED_SHARED_2_16x256 = #ttg.padded_shared<[64:+2, 128:+4, 256:+8] {offset=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [0, 128], [1, 0], [2, 0], [4, 0], [8, 0]], block=[]}>
+#PADDED_SHARED_1_16x256 = #ttg.padded_shared<[128:+4, 256:+8] {order = [1, 0], shape = [16, 256]}>
+#PADDED_SHARED_2_16x256 = #ttg.padded_shared<[64:+2, 128:+4, 256:+8] {order = [1, 0], shape = [16, 256]}>
 
 #smem = #ttg.shared_memory
 

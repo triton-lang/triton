@@ -1596,10 +1596,50 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
   if (failed(parser.parseAttribute(attrList)))
     return {};
 
-  // Decode linear layout
-  std::vector<std::string> inDimNames = {"offset", "block"};
-  std::optional<LinearLayout> maybeLL =
-      parseLinearLayout(attrList, parser, inDimNames);
+  // We have 2 possible formats for the attr-dict:
+  //  1) offset=[..], block=[..] handled by parseLinearLayout
+  //  2) order=[..], shape=[..] which creates an identity mapping
+
+  std::optional<LinearLayout> maybeLL;
+  // Assume it's the first variant if offset or block is defined
+  if (attrList.contains("offset") || attrList.contains("block")) {
+    std::vector<std::string> inDimNames = {"offset", "block"};
+    // Error out on additional attribute names
+    for (const NamedAttribute &attr : attrList) {
+      if (!llvm::is_contained(inDimNames, attr.getName())) {
+        parser.emitError(parser.getCurrentLocation(), "Unexpected attribute ")
+            << attr.getName() << " found";
+      }
+    }
+    maybeLL = parseLinearLayout(attrList, parser, inDimNames);
+  } else {
+    // Parse the second form
+    SmallVector<unsigned> order;
+    SmallVector<unsigned> shape;
+    for (const NamedAttribute &attr : attrList) {
+      if (attr.getName() == "order") {
+        if (parseIntArrayAttr(parser, attr, order, "order").failed())
+          return {};
+      } else if (attr.getName() == "shape") {
+        if (parseIntArrayAttr(parser, attr, shape, "shape").failed())
+          return {};
+      } else {
+        parser.emitError(parser.getCurrentLocation(), "Unexpected attribute ")
+            << attr.getName() << " found";
+        return {};
+      }
+    }
+
+    // Create identity mapping based on shape and order
+    SmallVector<int64_t> shapeI64 = SmallVector<int64_t>(ArrayRef(shape));
+    // Create identity mapping based on shape and order
+    auto kOffset = StringAttr::get(parser.getContext(), "offset");
+    maybeLL = identityStandardND(kOffset, shape, order);
+    maybeLL = combineCtaCgaWithShape(
+        *maybeLL, CTALayoutAttr::getDefault(parser.getContext(), shape.size()),
+        shapeI64);
+  }
+
   if (!maybeLL.has_value())
     return {};
 
@@ -1612,6 +1652,10 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
 }
 
 void PaddedSharedEncodingAttr::print(AsmPrinter &printer) const {
+
+  auto *ctx = getContext();
+  const auto &ll = getLinearComponent();
+
   printer << "<[";
   llvm::interleaveComma(llvm::zip(getIntervals(), getPaddings()), printer,
                         [&](std::tuple<unsigned, unsigned> intervalPad) {
@@ -1619,7 +1663,27 @@ void PaddedSharedEncodingAttr::print(AsmPrinter &printer) const {
                                   << std::get<1>(intervalPad);
                         });
   printer << "] {";
-  printLinearLayout(printer, getLinearComponent());
+
+  // We have a short hand form if linearComponent:
+  //  1) does have an empty CTA layout (empty block dim)
+  //  2) offsets are an identity mapping
+  auto kOffset = StringAttr::get(ctx, "offset");
+  auto kBlock = StringAttr::get(ctx, "block");
+  auto shape = SmallVector<unsigned>(ll.getOutDimSizes());
+
+  bool hasEmptyBlock = ll.getInDimSizeLog2(kBlock) == 0;
+
+  LinearLayout identity = identityStandardND(kOffset, shape, getOrder())
+                              .transposeOuts(to_vector(ll.getOutDimNames()));
+  auto offsetLayout = ll.sublayout({kOffset}, to_vector(ll.getOutDimNames()));
+
+  if (hasEmptyBlock && offsetLayout == identity) {
+    printer << "order = [" << ArrayRef(getOrder()) << "], shape = ["
+            << ArrayRef(shape) << "]";
+  } else {
+    printLinearLayout(printer, getLinearComponent());
+  }
+
   printer << "}>";
 }
 
