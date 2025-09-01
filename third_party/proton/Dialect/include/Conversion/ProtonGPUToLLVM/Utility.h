@@ -48,10 +48,10 @@ lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
 SmallVector<FunctionOpInterface> getTritonFunctions(ModuleOp mod) {
   SmallVector<FunctionOpInterface> funcOps;
   mod.walk([&](FunctionOpInterface funcOp) {
-    // Ignore any intrinsic functions. On AMD the predicate load/store ops
-    // are currently pseudo instructions at this point and may get picked up
-    // here and trigger the FunctionOpInterface range based assert below
-    // These functions have an empty body
+    // Ignore any intrinsic functions which have an empty body.
+    // For example, on AMD the predicate load/store ops are currently pseudo
+    // instructions at this point and may get picked up here and trigger the
+    // FunctionOpInterface range based assert below.
     if (funcOp.empty())
       return;
     funcOps.push_back(funcOp);
