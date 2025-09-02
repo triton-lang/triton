@@ -1705,6 +1705,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@gluon.jit
+def amd_async_wait():
+    cdna4_async_copy.async_wait(0)
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
+def test_amd_async_wait(target):
+    mod = run_parser(amd_async_wait, target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @amd_async_wait() attributes {noinline = false} {
+    %0 = ttg.async_wait {num = 0 : i32}
+    tt.return
+  }
+}
+""")
+
+
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
 def test_amd_load_shared_relaxed(target):
 
@@ -1851,31 +1870,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 @gluon.jit
 def buffer_load_to_shared_kernel(ptr):
-    blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 64], [4, 1], [1, 0])
+    blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [32, 2], [4, 1], [1, 0])
     shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
 
-    dest = ttgl.allocate_shared_memory(ptr.dtype.element_ty, [4, 64], shared)
+    smem = ttgl.allocate_shared_memory(ptr.dtype.element_ty, [128, 16], shared)
+    y_offset = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))
+    x_offset = ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))
+    offsets = y_offset[:, None] * 16 + x_offset[None, :]
 
-    y_index = ttgl.arange(0, 4, layout=ttgl.SliceLayout(1, blocked))
-    x_index = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, blocked))
-    offsets = y_index[:, None] * 64 + x_index[None, :]
-
-    cdna4_async_copy.buffer_load_to_shared(dest, ptr, offsets)
+    cdna4_async_copy.buffer_load_to_shared(smem, ptr, offsets)
 
     # test cache modifiers
-    cdna4_async_copy.buffer_load_to_shared(dest, ptr, offsets, cache_modifier=".ca")
-    cdna4_async_copy.buffer_load_to_shared(dest, ptr, offsets, cache_modifier=".cg")
-    cdna4_async_copy.buffer_load_to_shared(dest, ptr, offsets, cache_modifier=".cv")
+    cdna4_async_copy.buffer_load_to_shared(smem, ptr, offsets, cache_modifier=".ca")
+    cdna4_async_copy.buffer_load_to_shared(smem, ptr, offsets, cache_modifier=".cg")
+    cdna4_async_copy.buffer_load_to_shared(smem, ptr, offsets, cache_modifier=".cv")
 
     # test mask and other
-    mask = (y_index < 2)[:, None]
-    other = ttgl.full([4, 64], 0.0, ptr.dtype.element_ty, layout=blocked)
-    cdna4_async_copy.buffer_load_to_shared(dest, ptr, offsets, mask, other=other)
+    mask = (y_offset < 64)[:, None]
 
-    other = ttgl.full([1, 64], 0.0, ptr.dtype.element_ty, layout=blocked)
-    cdna4_async_copy.buffer_load_to_shared(dest, ptr, offsets, mask, other=other)
+    other = ttgl.full([128, 16], 0.0, ptr.dtype.element_ty, layout=blocked)
+    cdna4_async_copy.buffer_load_to_shared(smem, ptr, offsets, mask, other=other)
 
-    cdna4_async_copy.buffer_load_to_shared(dest, ptr, offsets, mask, other=0.0)
+    other = ttgl.full([128, 1], 0.0, ptr.dtype.element_ty, layout=blocked)
+    cdna4_async_copy.buffer_load_to_shared(smem, ptr, offsets, mask, other=other)
+
+    cdna4_async_copy.buffer_load_to_shared(smem, ptr, offsets, mask, other=0.0)
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
@@ -1884,45 +1903,45 @@ def test_buffer_load_to_shared(target):
     mod = run_parser(buffer_load_to_shared_kernel, *make_args(ptr), target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(mod.str_nodebug()), """\
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @buffer_load_to_shared_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
-    %0 = ttg.local_alloc : () -> !ttg.memdesc<4x64xf16, #shared, #smem, mutable>
-    %1 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %2 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %3 = tt.expand_dims %1 {axis = 1 : i32} : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<4x1xi32, #blocked>
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #shared, #smem, mutable>
+    %1 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %2 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %3 = tt.expand_dims %1 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
+    %c16_i32 = arith.constant 16 : i32
+    %c16_i32_0 = arith.constant 16 : i32
+    %cst = arith.constant dense<16> : tensor<128x1xi32, #blocked>
+    %4 = arith.muli %3, %cst : tensor<128x1xi32, #blocked>
+    %5 = tt.expand_dims %2 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked>
+    %6 = tt.broadcast %4 : tensor<128x1xi32, #blocked> -> tensor<128x16xi32, #blocked>
+    %7 = tt.broadcast %5 : tensor<1x16xi32, #blocked> -> tensor<128x16xi32, #blocked>
+    %8 = arith.addi %6, %7 : tensor<128x16xi32, #blocked>
+    %9 = amdgpu.buffer_load_to_local %arg0[%8] into %0 : <f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
+    %10 = amdgpu.buffer_load_to_local %arg0[%8] cacheModifier = ca into %0 : <f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
+    %11 = amdgpu.buffer_load_to_local %arg0[%8] cacheModifier = cg into %0 : <f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
+    %12 = amdgpu.buffer_load_to_local %arg0[%8] cacheModifier = cv into %0 : <f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
     %c64_i32 = arith.constant 64 : i32
-    %c64_i32_0 = arith.constant 64 : i32
-    %cst = arith.constant dense<64> : tensor<4x1xi32, #blocked>
-    %4 = arith.muli %3, %cst : tensor<4x1xi32, #blocked>
-    %5 = tt.expand_dims %2 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
-    %6 = tt.broadcast %4 : tensor<4x1xi32, #blocked> -> tensor<4x64xi32, #blocked>
-    %7 = tt.broadcast %5 : tensor<1x64xi32, #blocked> -> tensor<4x64xi32, #blocked>
-    %8 = arith.addi %6, %7 : tensor<4x64xi32, #blocked>
-    %9 = amdgpu.buffer_load_to_local %arg0[%8] into %0 : <f16>[tensor<4x64xi32, #blocked>]  -> <4x64xf16, #shared, #smem, mutable>
-    %10 = amdgpu.buffer_load_to_local %arg0[%8] cacheModifier = ca into %0 : <f16>[tensor<4x64xi32, #blocked>]  -> <4x64xf16, #shared, #smem, mutable>
-    %11 = amdgpu.buffer_load_to_local %arg0[%8] cacheModifier = cg into %0 : <f16>[tensor<4x64xi32, #blocked>]  -> <4x64xf16, #shared, #smem, mutable>
-    %12 = amdgpu.buffer_load_to_local %arg0[%8] cacheModifier = cv into %0 : <f16>[tensor<4x64xi32, #blocked>]  -> <4x64xf16, #shared, #smem, mutable>
-    %c2_i32 = arith.constant 2 : i32
-    %cst_1 = arith.constant dense<2> : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %13 = arith.cmpi slt, %1, %cst_1 : tensor<4xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %14 = tt.expand_dims %13 {axis = 1 : i32} : tensor<4xi1, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<4x1xi1, #blocked>
+    %cst_1 = arith.constant dense<64> : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %13 = arith.cmpi slt, %1, %cst_1 : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %14 = tt.expand_dims %13 {axis = 1 : i32} : tensor<128xi1, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi1, #blocked>
     %cst_2 = arith.constant 0.000000e+00 : f16
-    %cst_3 = arith.constant dense<0.000000e+00> : tensor<4x64xf16, #blocked>
-    %15 = tt.broadcast %14 : tensor<4x1xi1, #blocked> -> tensor<4x64xi1, #blocked>
-    %16 = amdgpu.buffer_load_to_local %arg0[%8] mask = %15 other = %cst_3 into %0 : <f16>[tensor<4x64xi32, #blocked>] tensor<4x64xf16, #blocked> -> <4x64xf16, #shared, #smem, mutable>
+    %cst_3 = arith.constant dense<0.000000e+00> : tensor<128x16xf16, #blocked>
+    %15 = tt.broadcast %14 : tensor<128x1xi1, #blocked> -> tensor<128x16xi1, #blocked>
+    %16 = amdgpu.buffer_load_to_local %arg0[%8] mask = %15 other = %cst_3 into %0 : <f16>[tensor<128x16xi32, #blocked>] tensor<128x16xf16, #blocked> -> <128x16xf16, #shared, #smem, mutable>
     %cst_4 = arith.constant 0.000000e+00 : f16
-    %cst_5 = arith.constant dense<0.000000e+00> : tensor<1x64xf16, #blocked>
-    %17 = tt.broadcast %14 : tensor<4x1xi1, #blocked> -> tensor<4x64xi1, #blocked>
-    %18 = tt.broadcast %cst_5 : tensor<1x64xf16, #blocked> -> tensor<4x64xf16, #blocked>
-    %19 = amdgpu.buffer_load_to_local %arg0[%8] mask = %17 other = %18 into %0 : <f16>[tensor<4x64xi32, #blocked>] tensor<4x64xf16, #blocked> -> <4x64xf16, #shared, #smem, mutable>
-    %20 = tt.broadcast %14 : tensor<4x1xi1, #blocked> -> tensor<4x64xi1, #blocked>
+    %cst_5 = arith.constant dense<0.000000e+00> : tensor<128x1xf16, #blocked>
+    %17 = tt.broadcast %14 : tensor<128x1xi1, #blocked> -> tensor<128x16xi1, #blocked>
+    %18 = tt.broadcast %cst_5 : tensor<128x1xf16, #blocked> -> tensor<128x16xf16, #blocked>
+    %19 = amdgpu.buffer_load_to_local %arg0[%8] mask = %17 other = %18 into %0 : <f16>[tensor<128x16xi32, #blocked>] tensor<128x16xf16, #blocked> -> <128x16xf16, #shared, #smem, mutable>
+    %20 = tt.broadcast %14 : tensor<128x1xi1, #blocked> -> tensor<128x16xi1, #blocked>
     %cst_6 = arith.constant 0.000000e+00 : f32
     %21 = arith.truncf %cst_6 : f32 to f16
-    %22 = tt.splat %21 : f16 -> tensor<4x64xf16, #blocked>
-    %23 = amdgpu.buffer_load_to_local %arg0[%8] mask = %20 other = %22 into %0 : <f16>[tensor<4x64xi32, #blocked>] tensor<4x64xf16, #blocked> -> <4x64xf16, #shared, #smem, mutable>
+    %22 = tt.splat %21 : f16 -> tensor<128x16xf16, #blocked>
+    %23 = amdgpu.buffer_load_to_local %arg0[%8] mask = %20 other = %22 into %0 : <f16>[tensor<128x16xi32, #blocked>] tensor<128x16xf16, #blocked> -> <128x16xf16, #shared, #smem, mutable>
     tt.return
   }
 }
