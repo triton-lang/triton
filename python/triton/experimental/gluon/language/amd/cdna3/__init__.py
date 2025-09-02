@@ -18,11 +18,8 @@ def _verify_buffer_ops(ptr, offsets, mask=None, other=None):
     assert isinstance(offsets.type, ttgl.distributed_type), "expected offsets type to be a distributed_type"
     assert offsets.dtype.is_int32() or offsets.dtype.is_uint32(), "offsets element type must be int32 or uint32"
 
-    element_type = ptr.type.scalar.element_ty
-
     if other is not None:
         assert mask is not None, "when other is not None, mask should not be None"
-        assert other.dtype == element_type, "other must have the same data type as ptr scalar type"
 
 
 @builtin
@@ -47,6 +44,8 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
 
     other = _unwrap_if_constexpr(other)
     if other is not None:
+        other = _semantic.to_tensor(other)
+        other = _semantic.cast(other, ptr.dtype.element_ty)
         offsets, other = _semantic.broadcast_impl_value(offsets, other)
 
     other = other.handle if other is not None else ir.value()
