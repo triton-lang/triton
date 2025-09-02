@@ -196,6 +196,41 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, saniti
     torch.testing.assert_close(z, z_ref.to(torch_dtype))
 
 
+def test_chain_reduce_layouts():
+    pass
+
+@pytest.mark.parametrize("M, N", [[128, 128], [256, 128], [256, 256], [128, 256]])
+@pytest.mark.parametrize("src_layout", _filter_layouts([
+    # [HIP] TO DO: some tests are flaky with the layout, so turn off them for now.
+    # BlockedLayout([1, 4], [1, THREADS_PER_WARP], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
+    ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[1, THREADS_PER_WARP], warps_per_cta=[4, 1], order=[1, 0]),
+    ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[1, THREADS_PER_WARP], warps_per_cta=[2, 2], order=[1, 0]),
+    ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[THREADS_PER_WARP // 32, 32], warps_per_cta=[1, 4], order=[0, 1]),
+    ttgl.BlockedLayout(size_per_thread=[1, 4], threads_per_warp=[8, THREADS_PER_WARP // 8], warps_per_cta=[2, 2], order=[0, 1]),
+]))
+@pytest.mark.parametrize("op", ["sum", "max"])
+@pytest.mark.parametrize("first_axis", [0, 1])
+def test_chain_reduce(M, N, src_layout, op, first_axis, device):
+
+    @triton.jit
+    def kernel(x_ptr, y_ptr, src_layout: ttgl.constexpr, M: ttgl.constexpr, N: ttgl.constexpr, first_axis: ttgl.constexpr, op: ttgl.constexpr):
+        offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, src_layout))[:, None]
+        offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, src_layout))[None, :]
+        x = ttgl.load(x_ptr + offs_m * N + offs_n)
+        ret = op(op(x, axis=first_axis), axis=1 - first_axis)
+        ttgl.store(y_ptr, ret)
+
+    torch.manual_seed(17)
+    x = torch.randint(0, 4, (M, N), dtype=torch.int32, device=device)
+    z = torch.zeros((1, ), dtype=torch.int32, device=device)
+    z_ref = torch.max(x) if op == "max" else torch.sum(x)
+
+    num_warps = int(torch.prod(torch.tensor(ttgl._layouts.warps_per_cta(src_layout, (M, N)))))
+    kernel[(1, )](x, z, src_layout, M, N, first_axis, op, num_warps=num_warps)
+
+    torch.testing.assert_close(z_ref, z)
+
+
 @pytest.mark.parametrize("M", [32, 64, 128, 256])
 @pytest.mark.parametrize(
     "src_layout",
