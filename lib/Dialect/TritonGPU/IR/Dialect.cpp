@@ -131,8 +131,7 @@ bool isExpensiveView(Type srcType, Type dstType) {
  */
 static SmallVector<unsigned> eraseOrder(ArrayRef<unsigned> order,
                                         unsigned dim) {
-  unsigned rank = order.size();
-  assert(dim < rank && "Invalid dim to erase");
+  assert(dim < order.size() && "Invalid dim to erase");
   SmallVector<unsigned> resOrder;
   for (unsigned i : order)
     if (i < dim)
@@ -1213,7 +1212,6 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
           << "version = " << getVersion() //
           << ", warpsPerCTA = [" << getWarpsPerCTA() << "]";
 
-  auto tilesPerWarp = getTilesPerWarp();
   if (!hasUnitTilesPerWarp()) {
     printer << ", tilesPerWarp = [" << getTilesPerWarp() << "]";
   }
@@ -2720,7 +2718,7 @@ struct TritonGPUInferLayoutInterface
     // Try join on last dim
     auto axis = dstShape.size() - 1;
     auto newLl = LinearLayout::empty();
-    auto result =
+    [[maybe_unused]] auto result =
         tryJoinOnAxis(ctx, ll, newLl, /*fwdInference=*/true, axis, loc);
 
     assert(result.succeeded());
@@ -3379,12 +3377,7 @@ bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
 }
 
 bool triton::gpu::isInnermostContiguous(MemDescType type, unsigned numElems) {
-  ArrayRef<int64_t> shape = type.getShape();
-  Attribute enc = type.getEncoding();
-  MLIRContext *ctx = enc.getContext();
-
   LinearLayout actual = toLinearLayout(type);
-  StringAttr fastestIn = *actual.getInDimNames().begin();
 
   // Flatten actual outs in reverse order to produce a row-major flattening
   // of the layout

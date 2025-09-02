@@ -201,7 +201,6 @@ private:
         (opIdx == 0 ? scaledDotOp.getAElemType() : scaledDotOp.getBElemType());
     auto fastMath = scaledDotOp.getFastMath();
 
-    auto *ctx = rewriter.getContext();
     auto loc = v.getLoc();
     auto mod = scaledDotOp->getParentOfType<ModuleOp>();
     auto rank = v.getType().getRank();

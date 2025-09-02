@@ -133,7 +133,6 @@ template <class T> struct AssignStagePhase {
 
     // update yieldOp to return new indexes
     SmallVector<Value> extraYieldArgs;
-    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
 
     // associate token with stage positional argument in the yieldOp
     // we will need this in propagateStage function that will assign stage
@@ -336,7 +335,6 @@ class NVWSAssignStagePhase
     : public impl::NVWSAssignStagePhaseBase<NVWSAssignStagePhase> {
 public:
   void runOnOperation() override {
-    MLIRContext *context = &getContext();
     mlir::ModuleOp m = getOperation();
 
     m.walk([&](triton::FuncOp funcOp) {

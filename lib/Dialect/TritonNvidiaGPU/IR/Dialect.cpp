@@ -178,7 +178,6 @@ getTmemLoadLayoutSplitLongM(RankedTensorType tensorType, MemDescType memType,
   auto llEncoding = dyn_cast<LinearEncodingAttr>(tensorType.getEncoding());
   if (!llEncoding)
     return {};
-  auto CTALayout = getCTALayout(tensorType.getEncoding());
   auto shapePerCTA = mlir::triton::gpu::getShapePerCTA(tensorType);
   if (numWarps != 8)
     return {};

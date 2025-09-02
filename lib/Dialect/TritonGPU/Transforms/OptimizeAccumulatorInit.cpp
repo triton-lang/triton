@@ -21,8 +21,6 @@ public:
 
   LogicalResult matchAndRewrite(triton::nvidia_gpu::TMEMAllocOp op,
                                 PatternRewriter &rewriter) const override {
-    MLIRContext *ctx = op.getContext();
-    Location loc = op.getLoc();
     if (op.getSrc() == nullptr)
       return failure();
     SmallVector<Operation *> users(op.getResult().getUsers().begin(),

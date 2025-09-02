@@ -27,8 +27,8 @@ Value loadC(Value tensor, Value llTensor,
          "Currently, we only support $c with a mma layout.");
   // Load a normal C tensor with mma layout, that should be a
   // LLVM::struct with fcSize elements.
-  auto structTy = cast<LLVM::LLVMStructType>(llTensor.getType());
-  assert(structTy.getBody().size() == fcSize &&
+  assert(cast<LLVM::LLVMStructType>(llTensor.getType()).getBody().size() ==
+             fcSize &&
          "DotOp's $c operand should pass the same number of values as $d in "
          "mma layout.");
 
@@ -678,11 +678,13 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
                const std::map<TensorCoreType, std::string> &mmaInstructions,
                const EmitMmaCallback &emitMma) {
   auto loc = op.getLoc();
+#ifndef NDEBUG
   auto aType = cast<RankedTensorType>(op.getA().getType());
   auto bType = cast<RankedTensorType>(op.getB().getType());
   assert(mlir::isa<DotOperandEncodingAttr>(aType.getEncoding()) &&
          mlir::isa<DotOperandEncodingAttr>(bType.getEncoding()) &&
          "Both $a and %b should be DotOperand layout.");
+#endif
 
   Value cOperand = op->getOperand(2);
   Value loadedC = loadC(cOperand, llvmC, typeConverter, loc, rewriter);
@@ -865,8 +867,6 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
                              ValueTableV2 &aTable, ValueTableV2 &bTable,
                              const SmallVector<Value> &cValues,
                              RankedTensorType dTy, int repK) {
-    const unsigned numCPackedElem = 4u / numMmaRets;
-
     // aScaleValue, bScaleValue selection logic for the scale factor
     // depends on the layout selection in
     // LinearLayoutConversions.cpp::getSM120DotScaledScaleLayout

@@ -188,15 +188,13 @@ public:
     auto subSlice0 = b.create<TMEMSubSliceOp>(loc, tmem, 0, splitNSize);
     auto cvt0 =
         b.create<ttg::ConvertLayoutOp>(loc, newStoreType, joinOp.getLhs());
-    auto store0 =
-        b.create<TMEMStoreOp>(loc, subSlice0, cvt0.getResult(), truePred);
+    b.create<TMEMStoreOp>(loc, subSlice0, cvt0.getResult(), truePred);
     // Second slice.
     auto subSlice1 =
         b.create<TMEMSubSliceOp>(loc, tmem, splitNSize, splitNSize);
     auto cvt1 =
         b.create<ttg::ConvertLayoutOp>(loc, newStoreType, joinOp.getRhs());
-    auto store1 =
-        b.create<TMEMStoreOp>(loc, subSlice1, cvt1.getResult(), truePred);
+    b.create<TMEMStoreOp>(loc, subSlice1, cvt1.getResult(), truePred);
     b.eraseOp(storeOp);
     return success();
   }

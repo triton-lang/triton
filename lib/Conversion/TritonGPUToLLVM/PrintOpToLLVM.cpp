@@ -90,11 +90,12 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
                    ArrayRef<SmallVector<Value>> indices,
                    ArrayRef<int> dimWidths, bool hex,
                    ConversionPatternRewriter &rewriter, bool isSigned) const {
+#ifndef NDEBUG
     assert(!elems.empty());
     assert(elems.size() == indices.size());
-    assert(dimWidths.size() == indices.front().size());
-
     size_t rank = dimWidths.size();
+    assert(rank == indices.front().size());
+#endif
 
     // Format is:
     //   pid (<x>, <y>, <z>) idx (<i1>, <i2>, ...)<prefix> (operand <n>) <elem>

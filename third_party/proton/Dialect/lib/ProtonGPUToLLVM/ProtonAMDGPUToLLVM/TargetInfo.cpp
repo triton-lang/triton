@@ -84,7 +84,7 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
                               Location loc) const {
   GCNBuilder builder;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto &gethwid = *builder.create("s_getreg_b32");
+  builder.create("s_getreg_b32");
 
   Value xcc_id = b.i32_val(0);
   llvm::AMDGPU::GPUKind GPUKind = llvm::AMDGPU::parseArchAMDGCN(this->arch);

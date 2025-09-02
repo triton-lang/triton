@@ -634,6 +634,7 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
     pattern.globalLoads.insert_range(globalLoadSearch.value());
   }
 
+#ifndef NDEBUG
   LDBG("found global loads: " << pattern.globalLoads.size());
   for (auto load : pattern.globalLoads)
     LDBG(load);
@@ -643,6 +644,7 @@ matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
   LDBG("found shared mem values: " << pattern.sharedMemVals.size());
   for (auto val : pattern.sharedMemVals)
     LDBG(val);
+#endif
 
   if (pattern.globalLoads.empty()) {
     LDBG("Did not find global load operation");
