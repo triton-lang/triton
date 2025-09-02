@@ -155,8 +155,12 @@ def test_line_info(func: str):
         kernel_info = kernel_cdiv.warmup(20, grid=(1, ))
 
     file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
+    backend = triton.runtime.driver.active.get_current_target().backend
+
     if func == "single":
-        assert (check_file_lines(file_lines, "test_line_info.py", 14))
+        if backend != "hip":
+            # removed for release/3.5 w/ turning off AMD buffer ops
+            assert (check_file_lines(file_lines, "test_line_info.py", 14))
         assert (check_file_lines(file_lines, "test_line_info.py", 15))
     elif func == "call":
         assert (check_file_lines(file_lines, "test_line_info.py", 25))
@@ -167,7 +171,9 @@ def test_line_info(func: str):
         assert (check_file_lines(file_lines, "test_line_info.py", 32))
     elif func == "autotune":
         assert (check_file_lines(file_lines, "test_line_info.py", 50))
-        assert (check_file_lines(file_lines, "test_line_info.py", 51))
+        if backend != "hip":
+            # removed for release/3.5 w/ turning off AMD buffer ops
+            assert (check_file_lines(file_lines, "test_line_info.py", 51))
         assert (check_file_lines(file_lines, "test_line_info.py", 52))
     elif func == "dot_combine":
         assert (check_file_lines(file_lines, "test_line_info.py", 62))
