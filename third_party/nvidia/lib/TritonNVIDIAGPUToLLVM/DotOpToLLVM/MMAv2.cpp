@@ -655,12 +655,8 @@ static void callMmaScaled(PTXBuilder &builder, int b, int m, int n, int k,
     ops.push_back(sel);
   };
 
-  unsigned aByte = (m / 2) & 0x3;
-  unsigned bByte = n & 0x3;
-  // byteId, threadId selection logic for the scale factor
-  // depends on getSM120DotScaledScaleLayout
-  appendScale(aScaleValue, aByte, /*threadId*/ 0);
-  appendScale(bScaleValue, bByte, /*threadId*/ 0);
+  appendScale(aScaleValue, 0, 0);
+  appendScale(bScaleValue, 0, 0);
 
   mma(ops);
 }
@@ -865,79 +861,25 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
                              ValueTableV2 &aTable, ValueTableV2 &bTable,
                              const SmallVector<Value> &cValues,
                              RankedTensorType dTy, int repK) {
-    const unsigned numCPackedElem = 4u / numMmaRets;
-
-    // aScaleValue, bScaleValue selection logic for the scale factor
-    // depends on the layout selection in
-    // LinearLayoutConversions.cpp::getSM120DotScaledScaleLayout
-    auto tb2 = TritonLLVMOpBuilder(op.getLoc(), rewriter);
+    auto tb = TritonLLVMOpBuilder(op.getLoc(), rewriter);
     auto i32 = IntegerType::get(op->getContext(), 32);
-    auto toI32 = [&](Value v) -> Value {
-      if (v.getType().isInteger(32))
-        return v;
-      return tb2.zext(i32, v);
-    };
-    auto pack4BytesToI32 = [&](ArrayRef<Value> bytes) -> Value {
-      Value acc = tb2.i32_val(0);
-      for (int i = 0; i < 4; ++i) {
-        Value bv = (i < (int)bytes.size()) ? toI32(bytes[i]) : tb2.i32_val(0);
-        acc = tb2.or_(acc, tb2.shl(bv, tb2.i32_val(8 * i)));
-      }
-      return acc;
-    };
-    auto pack4ByGroupedIndex = [&](ArrayRef<Value> bytes, int idx,
-                                   int groupSize) -> Value {
-      int blocks = bytes.size() / 4;
-      int maxIdx = blocks * groupSize;
-      if (idx < maxIdx) {
-        int base = (idx / groupSize) * 4;
-        return pack4BytesToI32(bytes.slice(base, 4));
-      }
-      return pack4BytesToI32(bytes);
-    };
 
-    int chooseK = k / 2;
-    bool interleavedB = (repK > 1);
-    SmallVector<Value> KsliceBuf;
-    auto Kslice = [&](ArrayRef<Value> bytes,
-                      bool interleaved) -> ArrayRef<Value> {
-      int sz = bytes.size();
-      if (repK == 1)
-        return bytes;
-      assert(sz % repK == 0);
-      int chunk = (sz / repK);
-      if (!interleaved) {
-        int beg = chooseK * chunk;
-        return bytes.slice(beg, chunk);
-      } else {
-        KsliceBuf.clear();
-        KsliceBuf.reserve(chunk);
-        const int elementsPerGroup = 2;
-        for (int group = 0; group < chunk / elementsPerGroup; ++group) {
-          for (int elem = 0; elem < elementsPerGroup; ++elem) {
-            int idx = group * elementsPerGroup * repK +
-                      chooseK * elementsPerGroup + elem;
-            if (idx < sz) {
-              KsliceBuf.push_back(bytes[idx]);
-            }
-          }
-        }
-        if (chunk % elementsPerGroup != 0) {
-          for (int nn = (chunk / elementsPerGroup) * elementsPerGroup;
-               nn < chunk; ++nn) {
-            int idx = nn * repK + chooseK;
-            if (idx < sz) {
-              KsliceBuf.push_back(bytes[idx]);
-            }
-          }
-        }
-        return ArrayRef<Value>(KsliceBuf);
-      }
+    // Split bytes into kRep equal chunks and return the i-th chunk
+    auto getKRepChunk = [&](ArrayRef<Value> bytes, int kRep,
+                            int chunkIdx) -> ArrayRef<Value> {
+      int total = static_cast<int>(bytes.size());
+      int base = total / kRep;
+      int rem = total % kRep;
+      int start = chunkIdx * base + std::min(chunkIdx, rem);
+      if (start >= total)
+        return bytes.slice(total, 0);
+      int len = std::min(base + (chunkIdx < rem ? 1 : 0), total - start);
+      return bytes.slice(start, std::max(0, len));
     };
-    Value aScaleValue =
-        pack4ByGroupedIndex(Kslice(unpackedAScale, false), m, 8);
-    Value bScaleValue =
-        pack4ByGroupedIndex(Kslice(unpackedBScale, interleavedB), n, 4);
+    auto aScaleBytes = getKRepChunk(unpackedAScale, repK, k / 2);
+    auto bScaleBytes = getKRepChunk(unpackedBScale, repK, k / 2);
+    Value aScaleValue = tb.zext(i32, aScaleBytes[m / 2]);
+    Value bScaleValue = tb.zext(i32, bScaleBytes[n]);
 
     callMmaScaled(builder, b, m, n, k, mma, numMmaRets, colsPerThread, aTable,
                   bTable, cValues, aScaleValue, bScaleValue);
