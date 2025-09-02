@@ -91,7 +91,8 @@ def _reduce_linear_layouts():
                 warp_bases=[[32, 0], [0, 32]],
                 block_bases=[],
                 shape=[64, 64],
-            )]
+            )
+        ]
     elif THREADS_PER_WARP == 64:
         return [
             ttgl.DistributedLinearLayout(
@@ -100,7 +101,8 @@ def _reduce_linear_layouts():
                 warp_bases=[[32, 0], [0, 32]],
                 block_bases=[],
                 shape=[64, 128],
-            )]
+            )
+        ]
     else:
         raise RuntimeError(f"Unsupported THREADS_PER_WARP: {THREADS_PER_WARP}")
 
@@ -135,14 +137,14 @@ def _reduce_layouts():
                                                cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 32, 16]),
             operand_index=0, k_width=2),
         ttgl.SliceLayout(
-            dim=0,
-            parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],
-                                               cta_split_num=[1, 1, 1], cta_order=[2, 1, 0], instr_shape=[1, 16, 8])),
+            dim=0, parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],
+                                                      cta_split_num=[1, 1, 1], cta_order=[2, 1,
+                                                                                          0], instr_shape=[1, 16, 8])),
         ttgl.SliceLayout(
             dim=1, parent=ttgl.DotOperandLayout(
                 parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],
-                                                   cta_split_num=[1, 1, 1], cta_order=[2, 1, 0], instr_shape=[1, 16, 8]),
-                operand_index=1, k_width=2)),
+                                                   cta_split_num=[1, 1, 1], cta_order=[2, 1, 0],
+                                                   instr_shape=[1, 16, 8]), operand_index=1, k_width=2)),
     ])
 
     rets = []
