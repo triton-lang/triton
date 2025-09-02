@@ -280,7 +280,7 @@ def _histogram_cases():
     linear_layouts = [
         (
             ttgl.DistributedLinearLayout(
-                reg_bases=[1 << (5 + i) for i in range(int(math.log2(m)) - 5)],
+                reg_bases=[[1 << (5 + i)] for i in range(int(math.log2(m)) - 5)],
                 lane_bases=[[0], [16], [4], [2], [1]] + [[0]] * (THREADS_PER_WARP >> 6),
                 warp_bases=[[0], [8]],
                 block_bases=[],
