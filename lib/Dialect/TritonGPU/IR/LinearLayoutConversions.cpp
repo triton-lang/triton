@@ -183,6 +183,8 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
 }
 
+} // namespace
+
 // Returns the layout of a single core matrix which tiles the nvmma layout
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
                                        bool disableSwizzle) {
@@ -195,7 +197,7 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
   int maxPhase = shared.getMaxPhase();
 
   int tileRows = 8;
-  int tileCols = 8 * tileWidthBytes / elemBitWidth;
+  int tileCols = 8 * std::max(16, tileWidthBytes) / elemBitWidth;
   bool isFp4Padded = shared.getFp4Padded();
 
   std::vector<std::vector<int>> bases2D;
@@ -226,8 +228,6 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
   auto outDimNames = standardOutDimNames(ctx, 2);
   return LinearLayout({{S("offset"), bases2D}}, outDimNames);
 }
-
-} // namespace
 
 LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                                        NVMMASharedEncodingAttr shared,
@@ -1180,7 +1180,7 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   assert(encoding.getCTASplitM() == 1 && encoding.getCTASplitN() == 1);
 
   auto blockM = encoding.getBlockM();
-  auto blockN = encoding.getBlockN();
+  auto blockN = std::min<int32_t>(encoding.getBlockN(), shape[1]);
   assert(blockM == 64 || blockM == 128);
   LinearLayout tile;
   if (blockM == 64) {
@@ -1190,7 +1190,7 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     if (shape[0] > blockM) {
       bases[kRow].push_back({64, 0});
     } else if (shape[1] > blockN) {
-      bases[kRow].push_back({0, static_cast<int32_t>(blockN)});
+      bases[kRow].push_back({0, blockN});
     } else {
       // Empty. This is modelled as broadcasting, same as for TMA(fp4)
       bases[kRow].push_back({0, 0});
@@ -1231,6 +1231,106 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
       LinearLayout::identity1D(std::max<int>(1, shape[0] / 32), kCol, dims[0]) *
       LinearLayout::identity1D(std::max<int>(1, shape[1] / 4), kCol, dims[1]);
   return tile;
+}
+
+LinearLayout descriptorToLinearLayout(MLIRContext *ctx, int32_t m, int32_t k,
+                                      int32_t bitwidth, bool kContig,
+                                      int32_t swizzlingBytes,
+                                      std::optional<int32_t> LBO_opt,
+                                      std::optional<int32_t> SBO_opt) {
+  assert(llvm::isPowerOf2_32(m));
+  assert(llvm::isPowerOf2_32(k));
+  assert(llvm::isPowerOf2_32(bitwidth));
+  assert(swizzlingBytes == 0 || swizzlingBytes == 32 || swizzlingBytes == 64 ||
+         swizzlingBytes == 128);
+  assert(bitwidth >= 8 && "NYI");
+  // T elements per 128-bit vector
+  int32_t T = 128 / bitwidth;
+  int32_t bBits = (swizzlingBytes == 0) ? 0 : llvm::Log2_32(swizzlingBytes) - 4;
+
+  assert(!SBO_opt.has_value() || llvm::isPowerOf2_32(SBO_opt.value()));
+  assert(!LBO_opt.has_value() || llvm::isPowerOf2_32(LBO_opt.value()));
+
+  // Set the accumulation layout with dims[0] and dims[1] in order
+  StringAttr kOffset = S("offset");
+  auto dims = standardOutDimNames(ctx, 2);
+  LinearLayout ret = LinearLayout::identity1D(1, dims[0], kOffset) *
+                     LinearLayout::identity1D(1, dims[1], kOffset);
+  int32_t SBO = 1, LBO = 1;
+  if (kContig) {
+    // kContig
+    //   No-swizzling: ((8,m),(T,2k)):((1T,SBO),(1,LBO)) o Swizzle<0,4,3>
+    //   32B:          ((8,m),(T,2k)):((2T,SBO),(1,T))   o Swizzle<1,4,3>
+    //   64B:          ((8,m),(T,2k)):((4T,SBO),(1,T))   o Swizzle<2,4,3>
+    //   128B:         ((8,m),(T,2k)):((8T,SBO),(1,T))   o Swizzle<3,4,3>
+    // where T = 128 / bitwidth.
+    ret *= LinearLayout::identity1D(T, dims[1], kOffset);
+    if (swizzlingBytes > 0) {
+      assert(2 * k >= (1 << bBits) &&
+             "k must be greater than 2^bBits to form the 'atom' layout");
+      ret *= LinearLayout::identity1D(2 * k, dims[1], kOffset);
+    }
+    ret *= LinearLayout::identity1D(8, dims[0], kOffset);
+    SBO = SBO_opt ? SBO_opt.value() : ret.getTotalOutDimSize();
+    assert(SBO >= ret.getTotalOutDimSize());
+    ret *= LinearLayout::strided1D(m, SBO / ret.getTotalOutDimSize(), dims[0],
+                                   kOffset);
+    if (swizzlingBytes == 0) {
+      LBO = LBO_opt ? LBO_opt.value() : ret.getTotalOutDimSize();
+      assert(LBO >= ret.getTotalOutDimSize());
+      ret *= LinearLayout::strided1D(2 * k, LBO / ret.getTotalOutDimSize(),
+                                     dims[1], kOffset);
+    }
+  } else {
+    // MN-contig (kContig=false)
+    //   No-swizzling: ((T,1,m),(8,k)):((1,T,SBO),(1T,LBO)) o Swizzle<0,4,3>
+    //   32B:          ((T,2,m),(8,k)):((1,T,LBO),(2T,SBO)) o Swizzle<1,4,3>
+    //   64B:          ((T,4,m),(8,k)):((1,T,LBO),(4T,SBO)) o Swizzle<2,4,3>
+    //   128B:         ((T,8,m),(8,k)):((1,T,LBO),(8T,SBO)) o Swizzle<3,4,3>
+    ret *= LinearLayout::identity1D((1 << bBits) * T, dims[0], kOffset);
+    ret *= LinearLayout::identity1D(8, dims[1], kOffset);
+    if (swizzlingBytes == 0) {
+      SBO = SBO_opt ? SBO_opt.value() : ret.getTotalOutDimSize();
+      assert(SBO >= ret.getTotalOutDimSize());
+      ret *= LinearLayout::strided1D(m, SBO / ret.getTotalOutDimSize(), dims[0],
+                                     kOffset);
+      LBO = LBO_opt ? LBO_opt.value() : ret.getTotalOutDimSize();
+      assert(LBO >= ret.getTotalOutDimSize());
+      ret *= LinearLayout::strided1D(k, LBO / ret.getTotalOutDimSize(), dims[1],
+                                     kOffset);
+    } else {
+      LBO = LBO_opt ? LBO_opt.value() : ret.getTotalOutDimSize();
+      assert(LBO >= ret.getTotalOutDimSize());
+      ret *= LinearLayout::strided1D(m, LBO / ret.getTotalOutDimSize(), dims[0],
+                                     kOffset);
+      SBO = SBO_opt ? SBO_opt.value() : ret.getTotalOutDimSize();
+      assert(SBO >= ret.getTotalOutDimSize());
+      ret *= LinearLayout::strided1D(k, SBO / ret.getTotalOutDimSize(), dims[1],
+                                     kOffset);
+    }
+  }
+  // ret now has the unswizzled layout
+  // TODO REMOVE
+  if (swizzlingBytes == 0) {
+    return ret;
+  }
+
+  // We now create the functor that swizzles the offsets
+  constexpr auto mBase = 4;
+  constexpr auto sShift = 3;
+  // Otherwise the swizzle pattern would hit one given element!
+  auto swizzling = LinearLayout::identity1D((1 << mBase), kOffset, kOffset);
+  auto bases = swizzling.getBases();
+  auto bits = 1 | (1 << sShift);
+  for (int i = 0; i < bBits; i++) {
+    bases[kOffset].push_back({(bits << (i + mBase))});
+  }
+  for (int i = bases[kOffset].size(); i < ret.getTotalOutDimSizeLog2(); i++) {
+    bases[kOffset].push_back({1 << i});
+  }
+  swizzling = LinearLayout(bases, {kOffset});
+
+  return ret.compose(swizzling);
 }
 
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,

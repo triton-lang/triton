@@ -146,5 +146,17 @@ LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
 // the two can be done using transferWithinWarp, without involving LDS
 std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
 
+// Create a LinearLayout for a given matrix descriptor for mmav3 / mmav5
+// We take LBO and SBO in *elements not bytes*.
+LinearLayout descriptorToLinearLayout(MLIRContext *ctx, int32_t m, int32_t k,
+                                      int32_t bitwidth, bool kContig,
+                                      int32_t swizzlingBytes,
+                                      std::optional<int32_t> LBO = {},
+                                      std::optional<int32_t> SBO = {});
+
+// Create the core layout (atom in the PTX manual) a given nvmma shared encoding
+LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
+                                       bool disableSwizzle);
+
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H
