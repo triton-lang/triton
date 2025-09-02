@@ -277,6 +277,7 @@ static std::string strMMADTypeKind(MMADTypeKind kind) {
   case MMADTypeKind::i8:
     return "i8";
   }
+  __builtin_unreachable();
 }
 
 static std::optional<std::pair<MMADTypeKind, SmallVector<Type>>>
