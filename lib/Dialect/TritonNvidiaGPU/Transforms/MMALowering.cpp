@@ -1,3 +1,4 @@
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
@@ -101,13 +102,26 @@ struct TCGen5MMAScaleSharedToTmemConversion
   }
 };
 
+bool containsMMAv5Op(Operation *op) {
+  if (isa<MMAv5OpInterface>(op)) {
+    return true;
+  } else if (auto br = dyn_cast<RegionBranchOpInterface>(op)) {
+    bool found = false;
+    br->walk([&](Operation *opInRegion) {
+      found |= isa<MMAv5OpInterface>(opInRegion);
+    });
+    return found;
+  }
+  return false;
+}
+
 std::pair<SmallVector<TCGen5CommitOp>, SmallVector<Value>>
 collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
   SmallVector<TCGen5CommitOp> commitOps;
   SmallVector<Value> commitPredicates;
   Operation *nextOp = mmaOp->getNextNode();
 
-  while (nextOp && !isa<MMAv5OpInterface>(nextOp)) {
+  while (nextOp && !containsMMAv5Op(nextOp)) {
     if (auto commit = dyn_cast<TCGen5CommitOp>(nextOp)) {
       commitOps.push_back(commit);
       commitPredicates.push_back(commit.getPred());
