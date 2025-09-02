@@ -53,7 +53,7 @@ def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
                     "void",
                     "setIsAsync",
                     (ins "bool":$isAsync)>,
-    InterfaceMethod<"Indicate that this MMA op executes asynchronously.",
+    InterfaceMethod<"Return true if this MMA op executes asynchronously.",
                     "bool",
                     "isAsync">
   ];
