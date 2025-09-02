@@ -118,6 +118,29 @@ collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
   return {commitOps, commitPredicates};
 }
 
+void moveDefiningOpsBefore(Value val, Operation *target) {
+  SmallVector<Operation *> toMove;
+  std::function<void(Value)> collectOpsToMove = [&](Value val) {
+    if (auto defOp = val.getDefiningOp()) {
+      if (defOp->getBlock() == target->getBlock() &&
+          target->isBeforeInBlock(defOp)) {
+        for (Value operand : defOp->getOperands()) {
+          collectOpsToMove(operand);
+        }
+        if (llvm::find(toMove, defOp) == toMove.end()) {
+          toMove.push_back(defOp);
+        }
+      }
+    }
+  };
+
+  collectOpsToMove(val);
+
+  for (Operation *op : toMove) {
+    op->moveBefore(target);
+  }
+}
+
 template <typename TCGen5MMAOpTy>
 class MergeCommitIntoMMA : public OpRewritePattern<TCGen5MMAOpTy> {
 public:
@@ -133,6 +156,7 @@ public:
       if (!pred) {
         pred = rewriter.create<arith::ConstantIntOp>(op.getLoc(), true, 1);
       }
+      moveDefiningOpsBefore(commit.getBarrier(), op);
       op.addCompletionBarrier(commit.getBarrier(), pred);
       rewriter.eraseOp(commit);
     }
