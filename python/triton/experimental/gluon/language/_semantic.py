@@ -204,6 +204,9 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         res_ty = ttgl.distributed_type(src_ty.element_ty, src_ty.shape, layout)
         return self.tensor(handle, res_ty)
 
+    def assume(self, cond) -> TensorTy:
+        return self.tensor(self.builder.create_assume(cond.handle), ttgl.void)
+
     def memdesc_slice(self, mem_desc, start, length, dim):
         offsets = [0] * mem_desc.rank
         offsets[dim] = start

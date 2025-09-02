@@ -353,7 +353,7 @@ def matmul(a, b, activation=""):
         c.stride(0), c.stride(1),  #
         ACTIVATION=activation  #
     )
-    print(f"{str(matmul_kernel.best_config)=}")
+    # print(f"{str(matmul_kernel.best_config)=}")
     return c
 
 

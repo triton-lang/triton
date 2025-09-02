@@ -12,8 +12,8 @@ from triton.experimental.gluon.language.amd import AMDMFMALayout, cdna4, cdna3
 
 import os
 os.environ["TRITON_CACHE_DIR"] = "/home/sijieli2/gluon_cache"
-os.environ["MLIR_ENABLE_DUMP"] = "1"
-os.environ["AMDGCN_ENABLE_DUMP"] = "1"
+# os.environ["MLIR_ENABLE_DUMP"] = "1"
+# os.environ["AMDGCN_ENABLE_DUMP"] = "1"
 
 def make_block_layout(x: torch.Tensor, block_shape, num_warps):
     thread_nums, thread_load_bits = 64, 128
@@ -198,20 +198,133 @@ def matmul_kernel1(
 
     cdna3.buffer_store(gc, c_ptr, offs_c)
 
-def matmul(a, b):
-    M, _ = a.shape
+
+@triton.autotune(
+    configs=[triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 6}, num_stages=2, num_warps=8)
+    ],
+    key=['M', 'N', 'K'],
+)
+@jit
+def matmul_ori_kernel(
+        a_ptr, b_ptr, c_ptr, 
+        M, N, K,
+        stride_am, stride_ak,  #
+        stride_bk, stride_bn,  #
+        stride_cm, stride_cn,
+        BLOCK_SIZE_M: constexpr,
+        BLOCK_SIZE_N: constexpr,
+        BLOCK_SIZE_K: constexpr,
+        GROUP_SIZE_M: constexpr,
+        num_warps: constexpr,
+    ):
+    blocked_layout: constexpr = BlockedLayout(
+        size_per_thread=(1,8),
+        threads_per_warp=(8,8),
+        warps_per_cta=(8,1),
+        order=(1,0)
+    )
+    mfma_layout: constexpr = AMDMFMALayout(version=3, instr_shape=(16, 16),
+                                transposed=True, warps_per_cta=(2, 4))
+    dot_a_layout: constexpr = DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=4)
+    dot_b_layout: constexpr = DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=4)
+
+
+    shared_a_layout: constexpr = SwizzledSharedLayout(vec=4, per_phase=1, max_phase=16, order=(1,0))
+    shared_b_layout: constexpr = SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(1,0))
+
+    pid = gl.program_id(axis=0)
+    num_pid_m = gl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = gl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    gl.assume(pid_m >= 0)
+    gl.assume(pid_n >= 0)
+    gl.assume(stride_am > 0)
+    gl.assume(stride_ak > 0)
+    gl.assume(stride_bn > 0)
+    gl.assume(stride_bk > 0)
+    gl.assume(stride_cm > 0)
+    gl.assume(stride_cn > 0)
+
+    offs_am = (pid_m * BLOCK_SIZE_M + gl.arange(0, BLOCK_SIZE_M, layout=SliceLayout(1, blocked_layout))) % M
+    offs_bn = (pid_n * BLOCK_SIZE_N + gl.arange(0, BLOCK_SIZE_N, layout=SliceLayout(0, blocked_layout))) % N
+    offs_ak = gl.arange(0, BLOCK_SIZE_K, layout=SliceLayout(0, blocked_layout))
+    offs_bk = gl.arange(0, BLOCK_SIZE_K, layout=SliceLayout(1, blocked_layout))
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_ak[None, :] * stride_ak)
+    b_ptrs = b_ptr + (offs_bk[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+
+
+    smem_a = allocate_shared_memory(a_ptr.dtype.element_ty, [1, BLOCK_SIZE_M, BLOCK_SIZE_K], shared_a_layout)
+    smem_b = allocate_shared_memory(b_ptr.dtype.element_ty, [1, BLOCK_SIZE_K, BLOCK_SIZE_M], shared_b_layout)
+
+    accumulator = gl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=gl.float32, layout=mfma_layout)
+
+    ga = gl.load(a_ptrs, mask=offs_ak[None, :] < K, other=0.0)
+    gb = gl.load(b_ptrs, mask=offs_bk[:, None] < K, other=0.0)
+
+    smem_a.index(0).store(ga)
+    smem_b.index(0).store(gb)
+
+    for k in range(1, gl.cdiv(K, BLOCK_SIZE_K)):
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * stride_bk
+
+        ga = gl.load(a_ptrs, mask=offs_ak[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+        gb = gl.load(b_ptrs, mask=offs_bk[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+
+        ra = smem_a.index(0).load(dot_a_layout)
+        rb = smem_b.index(0).load(dot_b_layout)
+
+        accumulator = cdna3.mfma(ra, rb, accumulator) # no gl.dot
+
+        smem_a.index(0).store(ga)
+        smem_b.index(0).store(gb)
+
+    ra = smem_a.index(0).load(dot_a_layout)
+    rb = smem_b.index(0).load(dot_b_layout)
+
+    accumulator = cdna3.mfma(ra, rb, accumulator)
+
+    gc = accumulator.to(gl.float16)
+    
+    offs_cm = pid_m * BLOCK_SIZE_M + gl.arange(0, BLOCK_SIZE_M, layout=SliceLayout(1, mfma_layout))
+    offs_cn = pid_n * BLOCK_SIZE_N + gl.arange(0, BLOCK_SIZE_N, layout=SliceLayout(0, mfma_layout))
+    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    gl.store(c_ptrs, gc, mask=c_mask)
+
+def matmul0(a, b):
+    M, K = a.shape
+    _, N = b.shape
+
+    c = torch.randn((M,N), dtype=a.dtype, device=a.device)
+
+    grid0 = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']), triton.cdiv(N, META['BLOCK_SIZE_N']))
+
+    matmul_kernel1[grid0](
+        a, b, c, M, N, K,
+        a.stride(0), a.stride(1),
+        b.stride(0), b.stride(1),
+        c.stride(0), c.stride(1),
+        # 128, 128, 32, 4
+    )
+    return c
+
+def matmul1(a, b):
+    M, K = a.shape
     _, N = b.shape
 
 
     c = torch.randn((M,N), dtype=a.dtype, device=a.device)
 
-    grid = lambda META: (M // META["BLOCK_SIZE_M"], N // META["BLOCK_SIZE_N"])
+    grid1 = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
 
-    # blocked_a = make_block_layout(a, (128, 32), 4)
-    # blocked_b = make_block_layout(b, (32, 128), 4)
-    # print(blocked_a, blocked_b, sep='\n')
-
-    matmul_kernel1[grid](
+    matmul_ori_kernel[grid1](
         a, b, c, M, N, K,
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
@@ -223,12 +336,12 @@ def matmul(a, b):
 configs = [
     triton.testing.Benchmark(
         x_names=["M", "N", "K"],  # Argument names to use as an x-axis for the plot
-        x_vals=[128 * i for i in range(2, 33)],  # Different possible values for `x_name`
+        x_vals=[128 * i for i in range(2, 33, 2)],  # Different possible values for `x_name`
         line_arg="provider",  # Argument name whose value corresponds to a different line in the plot
         # Possible values for `line_arg`
         # Don't compare to cublas for fp8 cases as torch.matmul doesn't support fp8 at the moment.
-        line_vals=["triton"],  # Label name for the lines
-        line_names=["Triton"],  # Line styles
+        line_vals=["triton", "gluon"],  # Label name for the lines
+        line_names=["Triton", "Gluon"],  # Line styles
         styles=[("green", "-"), ("blue", "-")],
         ylabel="TFLOPS",  # Label name for the y-axis
         plot_name="matmul-performance-fp16",  # Name for the plot, used also as a file name for saving the plot.
@@ -236,29 +349,34 @@ configs = [
     )
 ]
 
+from matrix_multiplication import matmul as triton_matmul
+
 @triton.testing.perf_report(configs)
 def benchmark(M, N, K, provider):
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16)
     quantiles = [0.5, 0.2, 0.8]
-    if provider == 'rocblas':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
+    if provider == 'gluon':
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul1(a, b), quantiles=quantiles)
     if provider == 'triton':
-        ms, min_ms, max_ms = triton.testing.do_bench(lambda: matmul(a, b), quantiles=quantiles)
+        ms, min_ms, max_ms = triton.testing.do_bench(lambda: triton_matmul(a, b), quantiles=quantiles)
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
-if __name__ == "__main__":
-    M, N, K = 512, 512, 512
+def test_matmul(M, N, K):
     dtype=torch.float16
     device="cuda"
 
     a = torch.randn((M,K), dtype=dtype, device=device)
     b = torch.randn((K,N), dtype=dtype, device=device)
 
-    triton_out = matmul(a, b)
+    # new_out = matmul0(a, b)
+    ori_out = matmul1(a, b)
     torch_out = torch.matmul(a, b)
 
-    torch.testing.assert_close(triton_out, torch_out, rtol=3e-3, atol=3e-3)
-    # benchmark.run(show_plots=False, print_data=True)
+    torch.testing.assert_close(ori_out, torch_out, rtol=1e-3, atol=1e-3)
+
+if __name__ == "__main__":
+    test_matmul(512, 512, 512)
+    benchmark.run(show_plots=False, print_data=True)
 

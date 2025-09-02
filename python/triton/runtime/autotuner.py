@@ -357,6 +357,9 @@ class Config:
         res.append(f"maxnreg: {self.maxnreg}")
         return ", ".join(res)
 
+    def __repr__(self):
+        return self.__str__()
+
     def __hash__(self):
         return hash((*self.all_kwargs().items(), self.pre_hook))
 

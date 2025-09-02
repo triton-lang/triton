@@ -395,6 +395,13 @@ def full(shape, value, dtype, layout=None, _semantic=None):
     layout = _unwrap_if_constexpr(layout)
     return _semantic.full(shape, value, dtype, layout)
 
+@builtin
+def assume(cond, _semantic=None):
+    '''
+    Allow compiler to assume the :code:`cond` is True.
+    '''
+    return _semantic.assume(_semantic.to_tensor(cond))
+
 
 @builtin
 def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None) -> shared_memory_descriptor:
