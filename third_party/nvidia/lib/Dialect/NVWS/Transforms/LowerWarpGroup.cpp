@@ -21,6 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/AttrTypeSubElements.h"
 #include "mlir/IR/Location.h"
@@ -32,32 +33,34 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVectorExtras.h"
 #include "llvm/Support/LogicalResult.h"
-
-#include <memory>
 #include <optional>
+#include <queue>
 
-#define GEN_PASS_CLASSES
-#include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
+using namespace mlir::triton;
+using namespace mlir::triton::nvws;
+using namespace mlir::triton::gpu;
 
 #define DEBUG_TYPE "nvws-lower-warp-group"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-namespace {
+namespace mlir {
+namespace triton {
 
-using namespace mlir;
-using namespace triton;
-using namespace triton::nvws;
-using namespace triton::gpu;
+#define GEN_PASS_DEF_NVWSLOWERWARPGROUP
+#include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
+
+namespace {
 
 class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
 
   void populateRegion(PatternRewriter &rewriter, Region *inputRegion,
                       Region *outputRegion, SmallVector<Value> &inputs,
-                      SmallVector<Value> &constants) const {
+                      IRMapping &mapping) const {
     Block *output_block = &outputRegion->emplaceBlock();
     DenseMap<Value, Value> valueMap;
     rewriter.setInsertionPointToEnd(output_block);
@@ -66,12 +69,6 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
       auto new_value =
           output_block->addArgument(value.getType(), value.getLoc());
       valueMap[value] = new_value;
-    }
-    for (auto &value : constants) {
-      auto cOp = cast<arith::ConstantOp>(*value.getDefiningOp());
-      auto newConst =
-          rewriter.create<arith::ConstantOp>(value.getLoc(), cOp.getValue());
-      valueMap[value] = newConst->getResult(0);
     }
     auto retOp = rewriter.create<triton::gpu::WarpReturnOp>(
         inputRegion->getLoc(), ArrayRef<Type>(), ArrayRef<Value>());
@@ -85,10 +82,12 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
       replaceAllUsesInRegionWith(pair.first, pair.second, *outputRegion);
   }
 
-  LogicalResult createTtgWSOp(Location loc, PatternRewriter &rewriter,
-                              Region *defaultPartition, RegionRange &partitions,
-                              ArrayRef<int> numWarps,
-                              ArrayRef<int> warpGroupStartIds) const {
+  LogicalResult createWarpSpecializeOp(Location loc, WarpGroupOp warpGroupOp,
+                                       PatternRewriter &rewriter,
+                                       Region *defaultPartition,
+                                       RegionRange partitions,
+                                       ArrayRef<int> numWarps,
+                                       ArrayRef<int> warpGroupStartIds) const {
     if (partitions.size() != numWarps.size())
       return failure("mismatched number of warp groups and number of warps per "
                      "warp group");
@@ -101,31 +100,80 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
       mlir::getUsedValuesDefinedAbove(*partition, captures);
 
     SmallVector<Value> inputs;
-    SmallVector<Value> constants;
-    for (Value capture : captures) {
-      if (!isa<BlockArgument>(capture) &&
-          isa<arith::ConstantOp>(capture.getDefiningOp())) {
-        constants.push_back(capture);
+    SmallVector<IRMapping> mappings(partitions.size());
+    SmallVector<OpBuilder> builders;
+    for (auto region : partitions) {
+      builders.push_back(OpBuilder::atBlockBegin(&region->front()));
+    }
+
+    SetVector<Operation *> opsToClone;
+    std::queue<Value> que;
+    for (auto capture : captures) {
+      que.push(capture);
+    }
+
+    while (!que.empty()) {
+      Value capture = que.front();
+      // Rematerialize constants and also pure tensor ops to get around the
+      // restriction below on capturing tensors.
+      Operation *defOp = capture.getDefiningOp();
+      if (!isa<BlockArgument>(capture) && defOp && isPure(defOp) &&
+          (defOp->hasTrait<OpTrait::ConstantLike>() ||
+           isa<RankedTensorType>(capture.getType()))) {
+        for (auto operand : defOp->getOperands()) {
+          que.push(operand);
+        }
+        opsToClone.insert(defOp);
+      } else if (auto tensorTy =
+                     dyn_cast<RankedTensorType>(capture.getType())) {
+        SharedEncodingTrait sharedEnc = getSharedEncoding(tensorTy);
+        auto memdescTy = MemDescType::get(
+            tensorTy.getShape(), tensorTy.getElementType(), sharedEnc,
+            SharedMemorySpaceAttr::get(tensorTy.getContext()));
+        auto alloc = rewriter.create<LocalAllocOp>(loc, memdescTy, capture);
+        for (auto [i, region] : llvm::enumerate(partitions)) {
+          Value value = builders[i].create<LocalLoadOp>(capture.getLoc(),
+                                                        tensorTy, alloc);
+          replaceAllUsesInRegionWith(capture, value, *region);
+          mappings[i].map(capture, value);
+        }
+        inputs.push_back(alloc);
       } else {
         inputs.push_back(capture);
       }
+      que.pop();
     }
 
-    auto wsOp = rewriter.create<WarpSpecializeOp>(loc, TypeRange(), inputs);
+    opsToClone = topologicalSort(opsToClone);
+
+    for (auto [region, b, mapping] :
+         llvm::zip(partitions, builders, mappings)) {
+      for (Operation *op : opsToClone) {
+        auto copy = b.clone(*op, mapping)->getResult(0);
+        mapping.map(op->getResult(0), copy);
+        replaceAllUsesInRegionWith(op->getResult(0), copy, *region);
+      }
+    }
+
+    auto wsOp = rewriter.create<WarpSpecializeOp>(
+        loc, warpGroupOp.getResultTypes(), inputs);
 
     wsOp.setPartitionNumWarps(numWarps);
-    wsOp.setWarpGroupStartIds(warpGroupStartIds);
 
     auto &defaultBlock = wsOp.getDefaultRegion().emplaceBlock();
     rewriter.setInsertionPointToEnd(&defaultBlock);
-    auto yieldOp =
-        rewriter.create<WarpYieldOp>(loc, TypeRange(), ArrayRef<Value>());
 
     if (defaultPartition) {
+      auto yieldOp = defaultPartition->front().getTerminator();
+      auto newYieldOp = rewriter.create<WarpYieldOp>(
+          loc, yieldOp->getResultTypes(), yieldOp->getOperands());
+
       for (auto &op : llvm::make_early_inc_range(
                defaultPartition->getBlocks().front().without_terminator())) {
-        op.moveBefore(yieldOp);
+        op.moveBefore(newYieldOp);
       }
+    } else {
+      rewriter.create<WarpYieldOp>(loc, TypeRange(), ArrayRef<Value>());
     }
 
     auto &block = wsOp.getPartitionOpHolder().emplaceBlock();
@@ -134,8 +182,10 @@ class LowerWarpGroup : public OpRewritePattern<WarpGroupOp> {
         rewriter.create<WarpSpecializePartitionsOp>(loc, partitions.size());
     auto regions = wspOp.getPartitionRegions();
 
-    for (auto [in, out] : zip(partitions, regions))
-      populateRegion(rewriter, in, &out, inputs, constants);
+    for (auto [in, out, mapping] : zip(partitions, regions, mappings))
+      populateRegion(rewriter, in, &out, inputs, mapping);
+
+    warpGroupOp.replaceAllUsesWith(wsOp);
 
     return success();
   }
@@ -161,15 +211,21 @@ public:
       regions = regions.drop_front();
       startWarp = globalNumWarps;
       numWarps = numWarps.drop_front();
+    } else if (warpGroupOp.getNumResults() > 0) {
+      return failure("The first warp group does not use the default number of "
+                     "warps. The default partition cannot be created. When "
+                     "nvws.warp_group op returns results, there must be a "
+                     "default region.");
     }
 
-    auto result =
-        createTtgWSOp(loc, rewriter, defaultRegion, regions, numWarps,
-                      llvm::map_to_vector(numWarps, [&](int numWarps) {
-                        int result = startWarp;
-                        startWarp += numWarps;
-                        return result;
-                      }));
+    auto result = createWarpSpecializeOp(
+        loc, warpGroupOp, rewriter, defaultRegion, regions, numWarps,
+        llvm::map_to_vector(numWarps, [&](int numWarps) {
+          int result = startWarp;
+          startWarp += numWarps;
+          return result;
+        }));
+
     if (result.succeeded())
       rewriter.eraseOp(warpGroupOp);
 
@@ -177,7 +233,10 @@ public:
   }
 };
 
-class NVWSLowerWarpGroup : public NVWSLowerWarpGroupBase<NVWSLowerWarpGroup> {
+} // namespace
+
+class NVWSLowerWarpGroup
+    : public impl::NVWSLowerWarpGroupBase<NVWSLowerWarpGroup> {
 public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -194,8 +253,6 @@ public:
       assert(false);
   }
 };
-} // namespace
 
-std::unique_ptr<Pass> mlir::createNVWSLowerWarpGroupPass() {
-  return std::make_unique<NVWSLowerWarpGroup>();
-}
+} // namespace triton
+} // namespace mlir

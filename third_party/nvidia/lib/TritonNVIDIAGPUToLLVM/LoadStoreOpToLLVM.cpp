@@ -2,6 +2,7 @@
 #include "TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 
@@ -18,12 +19,15 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/LayoutUtils.h"
 
 #include <cassert>
 
 using namespace mlir;
 using namespace mlir::triton;
+namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace ttng = mlir::triton::nvidia_gpu;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
@@ -31,8 +35,6 @@ using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getCTALayout;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
-
-namespace ttg = mlir::triton::gpu;
 
 // Toggle this to work around Cooperative Grid Launch ld.acquire optimized path
 static constexpr bool disableLDAcquireLowering = false;
@@ -51,7 +53,7 @@ Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
 // according to freeVarsMask. The predicate may be null to indicate no
 // predication is required.
 Value emitRedundantThreadPredicate(
-    ModuleOp moduleOp, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
+    const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
     ConversionPatternRewriter &rewriter, Location loc,
     const NVIDIA::TargetInfo &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -101,7 +103,8 @@ std::string getRegisterSizeCode(int size, bool is_float) {
 }
 
 Value createCachePolicy(triton::EvictionPolicy opEvict,
-                        ConversionPatternRewriter &rewriter, Location loc) {
+                        ConversionPatternRewriter &rewriter, Location loc,
+                        int computeCapability) {
   // Emit createpolicy.fractional.L2::policy.b64 xx 1.0
   PTXBuilder ptxBuilder;
   const bool hasL2EvictPolicy =
@@ -109,7 +112,9 @@ Value createCachePolicy(triton::EvictionPolicy opEvict,
       opEvict == triton::EvictionPolicy::EVICT_LAST;
   Value policyRet;
 
-  if (hasL2EvictPolicy) {
+  const bool hardwareSupport = computeCapability >= 80;
+
+  if (hasL2EvictPolicy && hardwareSupport) {
     auto &policy =
         ptxBuilder.create<>("createpolicy.fractional")
             ->o("L2::evict_first",
@@ -168,10 +173,11 @@ protected:
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                           public LoadStoreConversionBase {
   LoadOpConversion(LLVMTypeConverter &converter,
-                   const NVIDIA::TargetInfo &targetInfo,
+                   const NVIDIA::TargetInfo &targetInfo, int computeCapability,
                    ModuleAxisInfoAnalysis &axisAnalysisPass,
                    PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::LoadOp>(converter, benefit),
+        computeCapability(computeCapability),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -305,7 +311,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
           size_t size = width / valueElemNBits;
 
-          auto vecTy = LLVM::getFixedVectorType(valueElemTy, size);
+          auto vecTy = LLVM::getVectorType(valueElemTy, size);
           Value v = b.undef(vecTy);
           for (size_t s = 0; s < size; ++s) {
             Value falseVal = otherElems[vecStart + ii * size + s];
@@ -334,7 +340,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
       // Create L2 cache policy register if needed
-      Value l2PolicyReg = createCachePolicy(op.getEvict(), rewriter, loc);
+      Value l2PolicyReg =
+          createCachePolicy(op.getEvict(), rewriter, loc, computeCapability);
 
       // Define the instruction opcode
       auto &ld = ptxBuilder.create<>("ld")
@@ -376,8 +383,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         } else {
           curr = ret;
         }
-        curr = b.bitcast(curr, LLVM::getFixedVectorType(
-                                   valueElemTy, width / valueElemNBits));
+        curr = b.bitcast(
+            curr, LLVM::getVectorType(valueElemTy, width / valueElemNBits));
         rets.push_back(curr);
       }
       int tmp = width / valueElemNBits;
@@ -395,15 +402,18 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
+
+  int computeCapability;
 };
 
 struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                            public LoadStoreConversionBase {
   StoreOpConversion(LLVMTypeConverter &converter,
-                    const NVIDIA::TargetInfo &targetInfo,
+                    const NVIDIA::TargetInfo &targetInfo, int computeCapability,
                     ModuleAxisInfoAnalysis &axisAnalysisPass,
                     PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::StoreOp>(converter, benefit),
+        computeCapability(computeCapability),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
   LogicalResult
@@ -451,14 +461,13 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                        << mask << "\n";
     }
 
-    auto moduleOp = op->getParentOfType<ModuleOp>();
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
 
     auto freeVarMasks = getFreeVariableMasks(ptr.getType());
-    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
-                                                    rewriter, loc, targetInfo);
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
 
     const int numVecs = elemsPerThread / vec;
@@ -518,7 +527,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
 
       // Create L2 cache policy register if needed
-      Value l2PolicyReg = createCachePolicy(op.getEvict(), rewriter, loc);
+      Value l2PolicyReg =
+          createCachePolicy(op.getEvict(), rewriter, loc, computeCapability);
 
       auto &ptxStoreInstr =
           ptxBuilder.create<>("st")
@@ -550,6 +560,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     rewriter.eraseOp(op);
     return success();
   }
+
+  int computeCapability;
 };
 
 void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
@@ -599,52 +611,27 @@ struct AtomicCASOpConversion
                  : valueTy;
     auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
-    // vec = 1 for scalar
-    auto vec = getVectorSize(op.getPtr());
-    auto vecOrig = vec;
-    // tensor
-    if (tensorTy) {
-      auto valTy = cast<RankedTensorType>(op.getVal().getType());
-      vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
-    }
-
-    if (vec == 1 && elemsPerThread > 1)
-      op->emitRemark() << "Warning: vectorization fails vec = " << vec
-                       << " origin vec = " << vecOrig
-                       << " elemsPerThread = " << elemsPerThread << "\n";
-
     auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
-    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
-                                                    rewriter, loc, targetInfo);
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
 
-    auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
-    for (size_t i = 0; i < elemsPerThread; i += vec) {
-      if (auto canonicalVecStart = getCanonicalIndex(i, regMask);
-          canonicalVecStart != i) {
+    for (size_t i = 0; i < elemsPerThread; i += 1) {
+      if (auto canonicalStart = getCanonicalIndex(i, regMask);
+          canonicalStart != i) {
         // For redundant registers, refer back to the canonical result
-        for (auto iVec = 0; iVec < vec; ++iVec) {
-          resultVals[i + iVec] = resultVals[canonicalVecStart + iVec];
-        }
+        resultVals[i] = resultVals[canonicalStart];
         continue;
       }
 
-      Value casVal = b.undef(vecTy);
-      for (int ii = 0; ii < vec; ++ii) {
-        Value iiVal = createIndexAttrConstant(
-            rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        casVal = b.insert_element(vecTy, casVal, valElements[i + ii], iiVal);
-      }
-
-      Value casPtr = ptrElements[i];
+      Value casVal = valElements[i];
       Value casCmp = cmpElements[i];
-      casVal = valElements[i];
+      Value casPtr = ptrElements[i];
       PTXBuilder ptxBuilderAtomicCAS;
-      std::string tyId = valueElemNBits * vec == 64
-                             ? "l"
-                             : (valueElemNBits * vec == 32 ? "r" : "h");
+      std::string tyId =
+          valueElemNBits == 64 ? "l" : (valueElemNBits == 32 ? "r" : "h");
       auto *dstOpr = ptxBuilderAtomicCAS.newOperand("=" + tyId, /*init=*/true);
       auto *ptrOpr = ptxBuilderAtomicCAS.newAddrOperand(casPtr, "l");
       auto *cmpOpr = ptxBuilderAtomicCAS.newOperand(casCmp, tyId);
@@ -659,16 +646,12 @@ struct AtomicCASOpConversion
       atom(dstOpr, ptrOpr, cmpOpr, valOpr).maybePredicate(threadPred);
 
       if (tensorTy) {
-        auto retType = vec == 1 ? valueElemTy : vecTy;
+        auto retType = valueElemTy;
         auto ret = ptxBuilderAtomicCAS.launch(rewriter, loc, retType);
-        for (int ii = 0; ii < vec; ++ii) {
-          resultVals[i + ii] =
-              vec == 1 ? ret
-                       : b.extract_element(valueElemTy, ret, b.i32_val(ii));
-        }
+        resultVals[i] = ret;
       } else {
         auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -687,15 +670,12 @@ struct AtomicCASOpConversion
         createBarrier(rewriter, loc, numCTAs);
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
+        return success();
       }
     }
 
-    if (tensorTy) {
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
-    }
+    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
+                                b, threadPred, targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -764,6 +744,7 @@ struct AtomicRMWOpConversion
     return true;
   }
 
+public:
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -830,8 +811,8 @@ struct AtomicRMWOpConversion
                        << " numElems = " << numElems;
 
     auto freeVarMasks = getFreeVariableMasks(ptr.getType());
-    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
-                                                    rewriter, loc, targetInfo);
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
     uint32_t regMask = freeVarMasks[str_attr("reg")];
 
     auto packedTy = vec_ty(valueElemTy, packed);
@@ -872,7 +853,7 @@ struct AtomicRMWOpConversion
             ScopeMap[op.getScope()]);
 
         auto ASMReturnTy = void_ty(ctx);
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -884,6 +865,102 @@ struct AtomicRMWOpConversion
         createBarrier(rewriter, loc, numCTAs);
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
+        return success();
+      }
+
+      // Let LLVM handle compare+swap loop; branch-based pred should be fine
+      if (valueElemTy.isBF16() && getNVIDIAComputeCapability(moduleOp) < 90) {
+        // Lower atomic bin-op and sem to LLVM
+        auto llvmAtomicBinOp = matchAtomicOp(atomicRmwAttr);
+        auto llvmAtomicMemOrdering = getMemoryOrdering(op.getSem());
+
+        // Generate dominating undef
+        Value undefVal = b.undef(valueElemTy);
+
+        // Create basic block and branch to handle mask
+        auto *curBlock = rewriter.getInsertionBlock();
+        auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+        auto *atomicBlock = rewriter.createBlock(
+            curBlock->getParent(), std::next(Region::iterator(curBlock)));
+
+        // Setup the BlockArgument to return the result
+        endBlock->addArgument({valueElemTy}, {loc});
+
+        // Enter into predicate block
+        rewriter.setInsertionPointToEnd(curBlock);
+        bool doesAtomicNeedMEM = !op.getResult().use_empty();
+
+        // Setup for SMEM Sync case
+        Value atomPtr = tensorTy || !doesAtomicNeedMEM
+                            ? nullptr
+                            : LLVM::getSharedMemoryBase(
+                                  loc, rewriter, targetInfo, op.getOperation());
+        rewriter.create<LLVM::CondBrOp>(loc, pred, atomicBlock, endBlock,
+                                        undefVal);
+
+        // Codegen the atomic-rmw instruction(s)
+        rewriter.setInsertionPointToEnd(atomicBlock);
+        Value atom = rewriter
+                         .create<LLVM::AtomicRMWOp>(
+                             loc, *llvmAtomicBinOp, rmwPtr, valElements[i],
+                             *llvmAtomicMemOrdering, StringRef("device"))
+                         .getResult();
+        // Handle the 2 bf16 case
+        if (packed == 2 && valueElemNBits == 16) {
+          Value atom2 = rewriter
+                            .create<LLVM::AtomicRMWOp>(
+                                loc, *llvmAtomicBinOp, ptrElements[i + 1],
+                                valElements[i + 1], *llvmAtomicMemOrdering,
+                                StringRef("device"))
+                            .getResult();
+          auto vecTy = vec_ty(valueElemTy, vec);
+          auto tmp =
+              b.insert_element(vecTy, b.undef(vecTy), atom, b.i32_val(0));
+          atom = b.insert_element(vecTy, tmp, atom2, b.i32_val(1)).getResult();
+        }
+
+        if (tensorTy) {
+          // Return from predicated block
+          rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
+
+          // Recover values from predicated block
+          rewriter.setInsertionPointToStart(endBlock);
+          Value ret = endBlock->getArgument(0);
+          if (vec > 1) {
+            for (unsigned ii = 0; ii < vec; ++ii) {
+              resultVals[i + ii] = b.extract_val(valueElemTy, ret, ii);
+            }
+          } else if (packed > 1) {
+            for (unsigned ii = 0; ii < packed; ++ii) {
+              resultVals[i + ii] =
+                  b.extract_element(valueElemTy, ret, b.i32_val(ii));
+            }
+          } else {
+            resultVals[i] = ret;
+          }
+        } else {
+          if (!doesAtomicNeedMEM) {
+            rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
+            rewriter.eraseOp(op);
+            // if type isn't a tensor and there is no need to write to SMEM then
+            // we are done here
+            return success();
+          }
+
+          // Commit values from predicated block to SMEM and return from
+          // predicate block
+          // Note: there is no need to use the BlockArgument here because
+          //       the value is recovered from SMEM in the !tensorTy case
+          b.store(atom, atomPtr);
+          rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
+
+          // Recover values from predicated block (from SMEM)
+          rewriter.setInsertionPointToStart(endBlock);
+          b.barrier();
+          Value ret = b.load(valueElemTy, atomPtr);
+          rewriter.replaceOp(op, {ret});
+          return success();
+        }
         continue;
       }
 
@@ -944,7 +1021,7 @@ struct AtomicRMWOpConversion
       case RMWOp::FADD:
         rmwOp = "add";
         rmwOp += (valueElemNBits == 16 ? ".noftz" : "");
-        sTy = "f" + sBits;
+        sTy = (valueElemTy.isBF16() ? "bf" : "f") + sBits;
         sTy += (packed == 2 && valueElemNBits == 16) ? "x2" : "";
         break;
       case RMWOp::MAX:
@@ -983,7 +1060,7 @@ struct AtomicRMWOpConversion
           retType = valueElemTy;
         }
 
-        auto ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
+        Value ret = ptxBuilderAtomicRMW.launch(rewriter, loc, retType);
 
         if (vec > 1) {
           for (unsigned ii = 0; ii < vec; ++ii) {
@@ -997,12 +1074,11 @@ struct AtomicRMWOpConversion
         } else {
           resultVals[i] = ret;
         }
-
       } else {
         auto ASMReturnTy = void_ty(ctx);
         atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred);
         auto old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
-        if (!atomicNeedsSharedMemory(op.getResult())) {
+        if (op.getResult().use_empty()) {
           rewriter.eraseOp(op);
           return success();
         }
@@ -1014,14 +1090,11 @@ struct AtomicRMWOpConversion
         createBarrier(rewriter, loc, numCTAs);
         Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
+        return success();
       }
     }
-    if (tensorTy) {
-      Type structTy = getTypeConverter()->convertType(tensorTy);
-      Value resultStruct = packLLElements(loc, getTypeConverter(), resultVals,
-                                          rewriter, structTy);
-      rewriter.replaceOp(op, {resultStruct});
-    }
+    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
+                                b, threadPred, targetInfo, getTypeConverter());
     return success();
   }
 };
@@ -1050,7 +1123,6 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
-    auto srcLayout = srcTy.getEncoding();
 
     Value llDst = adaptor.getResult();
     Value llSrc = adaptor.getSrc();
@@ -1060,9 +1132,6 @@ struct AsyncCopyGlobalToLocalOpConversion
     // %src
     auto srcElems = unpackLLElements(loc, llSrc, rewriter);
 
-    // %dst
-    auto smemObj =
-        getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
     // %mask
     SmallVector<Value> maskElems;
     if (llMask) {
@@ -1070,16 +1139,32 @@ struct AsyncCopyGlobalToLocalOpConversion
       assert(srcElems.size() == maskElems.size());
     }
 
+    // We assume other = 0, see XXX(Keren) below
     // %other
-    SmallVector<Value> otherElems;
-    if (llOther) {
-      // FIXME(Keren): assume other is 0 for now.
-      //
-      // It's not necessary for now because the pipeline pass will skip
-      // generating insert_slice_async if the load op has any "other" tensor.
-      otherElems = unpackLLElements(loc, llOther, rewriter);
-      assert(srcElems.size() == otherElems.size());
+    // SmallVector<Value> otherElems;
+    // if (llOther) {
+    //   otherElems = unpackLLElements(loc, llOther, rewriter);
+    //   assert(srcElems.size() == otherElems.size());
+    // }
+
+    // zip(src, mask)
+    SmallVector<Value> vals;
+    auto ptrTy = srcElems[0].getType();
+    auto structTy =
+        LLVM::LLVMStructType::getLiteral(ctx, ArrayRef<Type>{ptrTy, i1_ty});
+    for (int i = 0; i < srcElems.size(); i++) {
+      Value packedArr = rewriter.create<LLVM::UndefOp>(loc, structTy);
+      packedArr = b.insert_val(packedArr, srcElems[i], 0);
+      auto maskElem = llMask ? maskElems[i] : b.false_val();
+      packedArr = b.insert_val(packedArr, maskElem, 1);
+      vals.push_back(packedArr);
     }
+
+    // Remove broadcasted registers
+    auto srcLayout = ttg::toLinearLayout(srcTy);
+    auto removeBroadcastSrc = actionRemoveBroadcastedRegs(srcLayout);
+    srcLayout = removeBroadcastSrc.apply(srcLayout);
+    vals = removeBroadcastSrc.apply(vals);
 
     // We can load N elements at a time if:
     //  1. Every group of N source pointers are contiguous.  For example, if
@@ -1091,80 +1176,85 @@ struct AsyncCopyGlobalToLocalOpConversion
     if (mask) {
       maxVec = std::min(maxVec, getMaskAlignment(mask));
     }
+    // The maximum vector size is 128 bits on NVIDIA GPUs.
+    maxVec = std::min(maxVec, 128 / resElemTy.getIntOrFloatBitWidth());
 
-    // Addresses to store into, one per `vecTy`.
-    VectorType vecTy;
-    SmallVector<Value> shmemAddrs;
-    bool ok = emitTransferBetweenRegistersAndShared(
-        srcTy, dstTy, resElemTy, maxVec, smemObj, loc, rewriter, targetInfo,
-        [&](VectorType vecTy_, Value shmemAddr) {
-          vecTy = vecTy_;
-          shmemAddrs.push_back(shmemAddr);
-        });
-    assert(ok);
-
-    int vecBytes = vecTy.getNumElements() * vecTy.getElementTypeBitWidth() / 8;
-    assert(llvm::isPowerOf2_32(vecBytes));
+    int vecBytes = maxVec * resElemTy.getIntOrFloatBitWidth() / 8;
     if (vecBytes < 4) {
       return emitError(loc, "cp.async does not support transfers smaller than "
                             "4 bytes; calculated this as ")
              << vecBytes << " bytes";
     }
+    assert(vecBytes == 16 || vecBytes == 8 || vecBytes == 4);
 
-    auto moduleOp = op->getParentOfType<ModuleOp>();
     auto freeVarMasks = getFreeVariableMasks(srcTy);
     // NOTE(@peterbell10): We load redundant data on different CTAs, so the data
     // is available in each CTAs respective shared memory. Otherwise, we would
     // need an additional broadcast step to copy the data between CTAs.
     freeVarMasks[str_attr("block")] = 0;
-    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
-                                                    rewriter, loc, targetInfo);
-    uint32_t regMask = freeVarMasks[str_attr("reg")];
+    Value threadPred =
+        emitRedundantThreadPredicate(freeVarMasks, rewriter, loc, targetInfo);
 
-    for (int i = 0; i < shmemAddrs.size(); i++) {
-      // It's possible that vecTy is larger than 128 bits, in which case we have
-      // to use multiple cp.async instructions.
-      int wordBytes = std::min(vecBytes, 16);
-      int wordElems = wordBytes * 8 / vecTy.getElementTypeBitWidth();
-      int numWordsInVec = std::max(1, vecBytes / wordBytes);
-      for (int j = 0; j < numWordsInVec; j++) {
-        int elemIdx = i * vecTy.getNumElements() + j * wordElems;
+    auto emitCpAsync = [&b, threadPred, ptrTy, hasMask = bool(llMask)](
+                           RewriterBase &rewriter, Location loc,
+                           ArrayRef<Value> vals, Value shmemAddr, int startIdx,
+                           VectorType vecTy) -> SmallVector<Value> {
+      assert(isa<VectorType>(vecTy));
+      auto *ctx = rewriter.getContext();
+      auto elemTy = vecTy.getElementType();
+      auto nBytes = vecTy.getNumElements() * elemTy.getIntOrFloatBitWidth() / 8;
+      assert(nBytes == 16 || nBytes == 8 || nBytes == 4);
+      // Tune CG and CA.
+      CacheModifier srcCacheModifier =
+          nBytes == 16 ? CacheModifier::CG : CacheModifier::CA;
 
-        if (!isCanonicalIndex(elemIdx, regMask)) {
-          continue; // Skip redundant registers
-        }
+      auto structElem = vals[startIdx];
+      auto srcElem = b.extract_val(ptrTy, structElem, 0);
+      auto maskElem = b.extract_val(i1_ty, structElem, 1);
 
-        // Tune CG and CA.
-        CacheModifier srcCacheModifier =
-            wordBytes == 16 ? CacheModifier::CG : CacheModifier::CA;
-        assert(wordBytes == 16 || wordBytes == 8 || wordBytes == 4);
-
-        PTXBuilder ptxBuilder;
-        auto &copyAsyncOp =
-            *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
-        auto *dstOperand = ptxBuilder.newAddrOperand(shmemAddrs[i], "r",
-                                                     /*offset=*/j * wordBytes);
-        auto *srcOperand = ptxBuilder.newAddrOperand(srcElems[elemIdx], "l");
-        auto *copySize = ptxBuilder.newConstantOperand(wordBytes);
-        auto *srcSize = copySize;
-        if (op.getMask()) {
-          // We don't use predicate in this case, setting src-size to 0
-          // if there's any mask. cp.async will automatically fill the
-          // remaining slots with 0 if cp-size > src-size.
-          // XXX(Keren): Always assume other = 0 for now.
-          // When 'other != 0' is supported, we will need to fold the
-          // op.getMask() and redundantDataMask() into the same predicate, the
-          // way it is done for LoadOp.
-          auto selectOp =
-              b.select(maskElems[elemIdx], b.i32_val(wordBytes), b.i32_val(0));
-          srcSize = ptxBuilder.newOperand(selectOp, "r");
-        }
-
-        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
-            .maybePredicate(threadPred);
-        ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
+      PTXBuilder ptxBuilder;
+      auto &copyAsyncOp =
+          *ptxBuilder.create<PTXCpAsyncLoadInstr>(srcCacheModifier);
+      auto *dstOperand = ptxBuilder.newAddrOperand(shmemAddr, "r");
+      auto *srcOperand = ptxBuilder.newAddrOperand(srcElem, "l");
+      auto *copySize = ptxBuilder.newConstantOperand(nBytes);
+      auto *srcSize = copySize;
+      if (hasMask) {
+        // We don't use predicate in this case, setting src-size to 0
+        // if there's any mask. cp.async will automatically fill the
+        // remaining slots with 0 if cp-size > src-size.
+        // XXX(Keren): Always assume other = 0 for now.
+        // When 'other != 0' is supported, we will need to fold the
+        // op.getMask() and redundantDataMask() into the same predicate, the
+        // way it is done for LoadOp.
+        auto selectOp = b.select(maskElem, b.i32_val(nBytes), b.i32_val(0));
+        srcSize = ptxBuilder.newOperand(selectOp, "r");
       }
+      copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
+          .maybePredicate(threadPred);
+      ptxBuilder.launch(rewriter, loc, void_ty(ctx));
+      return {};
+    };
+
+    // %dst
+    auto smemObj =
+        getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
+    auto smemLayout = ttg::toLinearLayout(dstTy);
+    auto cvt = srcLayout.invertAndCompose(smemLayout);
+    if (!cvt.isTrivialOver({str_attr("block")})) {
+      return emitError(loc,
+                       "cp.async does not support non-trivial block dimension");
     }
+    cvt = cvt.sublayout(
+        {str_attr("register"), str_attr("lane"), str_attr("warp")},
+        {str_attr("offset")});
+    auto affineOffset = smemObj.getShmemOffset(loc, rewriter, dstTy);
+    auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    lowerLdSt(
+        loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
+        [](Value v) { return v; }, affineOffset, maskSpanAffineOffset, laneId,
+        warpId, rewriter, targetInfo, maxVec, emitCpAsync);
 
     // Drop the result token.
     Value zero = rewriter.create<LLVM::ConstantOp>(
@@ -1175,26 +1265,44 @@ struct AsyncCopyGlobalToLocalOpConversion
   }
 };
 
-static SmallVector<Value> getCtaOffset(RewriterBase &rewriter, Location loc,
-                                       Attribute encoding,
-                                       ArrayRef<int64_t> shapePerCTA) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto rank = shapePerCTA.size();
-  auto ctaId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
-  auto ctaLayout = getCTALayout(encoding);
-  SmallVector<Value> ctaOffset(rank, Value());
-  Value curVal = ctaId;
-  for (int i = 0; i < rank; i++) {
-    auto dim = ctaLayout.getCTAOrder()[i];
-    auto splits = ctaLayout.getCTASplitNum()[dim];
-    if (splits == 1)
-      continue;
-    auto splitsVal = b.i32_val(splits);
-    auto idx = b.urem(curVal, splitsVal);
-    curVal = b.udiv(curVal, splitsVal);
-    ctaOffset[dim] = b.mul(idx, b.i32_val(shapePerCTA[dim]));
+static LinearLayout getMsgToPackedOffsetLayout(ttg::MemDescType ty) {
+  auto ctx = ty.getContext();
+  auto kMsg = str_attr("msg");
+  auto kBlock = str_attr("block");
+  auto shapePerCTA = ttg::getShapePerCTA(ty);
+  int rank = shapePerCTA.size();
+  auto blockShape = ttng::getTMABlockShape(ty, /*packedSize=*/true);
+  auto outDimNames = standardOutDimNames(ctx, rank);
+  LinearLayout msgToOffset;
+  for (int dim = 0; dim < rank; ++dim) {
+    msgToOffset *=
+        LinearLayout::strided1D(shapePerCTA[dim] / blockShape[dim],
+                                blockShape[dim], kMsg, outDimNames[dim]);
   }
-  return ctaOffset;
+  auto ctaLayout = getCTALayout(ty.getEncoding());
+  for (int i = 0; i < rank; ++i) {
+    auto dim = ctaLayout.getCTAOrder()[i];
+    msgToOffset *= LinearLayout::identity1D(ctaLayout.getCTASplitNum()[dim],
+                                            kBlock, outDimNames[dim]);
+  }
+  return msgToOffset;
+}
+
+static LinearLayout
+getMsgToUnpackedOffsetLayout(const LinearLayout &packedLayout,
+                             ttg::MemDescType ty) {
+  auto isFp4Padded =
+      cast<NVMMASharedEncodingAttr>(ty.getEncoding()).getFp4Padded();
+  if (!isFp4Padded) {
+    return packedLayout;
+  }
+  auto ctx = ty.getContext();
+  auto rank = ty.getRank();
+  auto kMsg = str_attr("msg");
+  auto kLastDim = str_attr("dim" + Twine(rank - 1));
+  // Multiply to offset by 2 in the last dimension
+  auto unpackLayout = LinearLayout::zeros1D(1, kMsg, kLastDim, 2);
+  return unpackLayout * packedLayout;
 }
 
 struct AsyncTMACopyGlobalToLocalOpConversion
@@ -1215,14 +1323,15 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Type llvmElemTy =
-        typeConverter->convertType(op.getResult().getType().getElementType());
+    ttg::MemDescType dstTy = op.getResult().getType();
+    Type llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     auto barrierMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getBarrier(),
         typeConverter->convertType(op.getBarrier().getType().getElementType()),
         rewriter);
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), llvmElemTy, rewriter);
+    Value dstBase = dstMemObj.getShmemAffineBase(loc, rewriter, dstTy);
     auto voidTy = void_ty(op->getContext());
     auto id = getThreadId(rewriter, loc);
 
@@ -1235,19 +1344,27 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     // figure out that the op is uniform.
     pred = b.and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
 
-    Attribute encoding = op.getResult().getType().getEncoding();
+    auto smemTy = op.getResult().getType();
+    Attribute encoding = smemTy.getEncoding();
     auto mmaEncoding = dyn_cast_or_null<NVMMASharedEncodingAttr>(encoding);
     int elementSizeInBytes =
         op.getResult().getType().getElementType().getIntOrFloatBitWidth() / 8;
     int packingFactor = (mmaEncoding && mmaEncoding.getFp4Padded()) ? 2 : 1;
 
-    auto shapePerCTA = ttg::getShapePerCTA(op.getResult().getType());
-    auto contigDimSize = nvidia_gpu::getTMAContigDim(op.getResult().getType());
-    int numCopies =
-        ceil<int>(shapePerCTA.back() * packingFactor, contigDimSize);
+    auto shapePerCTA = ttg::getShapePerCTA(smemTy);
     int rank = op.getCoord().size();
-    auto ctaOffset = getCtaOffset(rewriter, loc, encoding, shapePerCTA);
-    int elementsPerCTA = product(shapePerCTA) * packingFactor;
+
+    auto msgToPackedOffset = getMsgToPackedOffsetLayout(smemTy);
+    auto smemLayout = ttg::toLinearLayout(smemTy);
+    auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
+    auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, smemTy);
+
+    auto ctx = op.getContext();
+    auto kMsg = str_attr("msg");
+    auto kBlock = str_attr("block");
+    const auto numCopies = msgToOffset.getInDimSize(kMsg);
+    auto zero = b.i32_val(0);
+    auto ctaId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
 
     // The bounding box inner dimension must be less than or equal to the
     // swizzle size.
@@ -1264,25 +1381,25 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
       Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
       Value shMemOffset =
-          b.mul(copyIdxVal, b.i32_val(elementsPerCTA / numCopies));
-      Value shMemPtr =
-          b.gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
+          applyLinearLayout(loc, rewriter, msgToShared,
+                            {{kMsg, copyIdxVal}, {kBlock, zero}})[0]
+              .second;
+      Value shMemPtr = b.gep(elemPtrTy, llvmElemTy, dstBase, shMemOffset);
       SmallVector<PTXBuilder::Operand *> operands = {
           ptxBuilderTMA.newOperand(boxPred, "b"),
           ptxBuilderTMA.newOperand(shMemPtr, "r"),
-          ptxBuilderTMA.newOperand(adaptor.getDescPtr(), "l")};
+          ptxBuilderTMA.newOperand(adaptor.getDesc(), "l")};
       std::string tmaInst =
           "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
           "d.shared::cluster.global.mbarrier::complete_tx::bytes [$1], [$2, {";
+
+      auto offsets = applyLinearLayout(loc, rewriter, msgToOffset,
+                                       {{kMsg, copyIdxVal}, {kBlock, ctaId}});
       int operandIdx = 3;
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
-        if (i < ctaOffset.size() && ctaOffset[ctaOffset.size() - i - 1])
-          coord = b.add(coord, ctaOffset[ctaOffset.size() - i - 1]);
-        if (i == 0) {
-          Value offset = b.mul(copyIdxVal, b.i32_val(contigDimSize));
-          coord = b.add(coord, offset);
-        }
+        if (i < offsets.size())
+          coord = b.add(coord, offsets[offsets.size() - i - 1].second);
         operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
         tmaInst += "$" + std::to_string(operandIdx++);
         if (i != rank - 1)
@@ -1301,6 +1418,88 @@ struct AsyncTMACopyGlobalToLocalOpConversion
   }
 };
 
+LogicalResult convertTMAStoreLikeOp(Operation *op,
+                                    const TypeConverter *typeConverter,
+                                    ConversionPatternRewriter &rewriter,
+                                    Value tmaPtr, ttg::MemDescType srcTy,
+                                    Value src, ValueRange coords,
+                                    const std::string &tmaInst) {
+  auto loc = op->getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
+  auto dstMemObj =
+      LLVM::getSharedMemoryObjectFromStruct(loc, src, llvmElemTy, rewriter);
+  Value dstBase = dstMemObj.getShmemAffineBase(loc, rewriter, srcTy);
+  auto voidTy = void_ty(op->getContext());
+  auto id = getThreadId(rewriter, loc);
+  // Select just one thread for the TMA copy. This also helps the compiler to
+  // figure out that the op is uniform.
+  Value pred = LLVM::NVIDIA::createElectPredicate(loc, rewriter);
+  int elementSizeInBytes = srcTy.getElementType().getIntOrFloatBitWidth() / 8;
+
+  auto mod = op->getParentOfType<ModuleOp>();
+  int numWarps = ttg::lookupNumWarps(op);
+  int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+  Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
+  auto shapePerCTA = ttg::getShapePerCTA(srcTy);
+  int elementsPerCTA = product(shapePerCTA);
+
+  auto rank = coords.size();
+  auto encoding = srcTy.getEncoding();
+
+  auto msgToPackedOffset = getMsgToPackedOffsetLayout(srcTy);
+  auto smemLayout = ttg::toLinearLayout(srcTy);
+  auto msgToShared = msgToPackedOffset.invertAndCompose(smemLayout);
+  auto msgToOffset = getMsgToUnpackedOffsetLayout(msgToPackedOffset, srcTy);
+
+  auto ctx = op->getContext();
+  auto kMsg = str_attr("msg");
+  auto kBlock = str_attr("block");
+  auto numCopies = msgToOffset.getInDimSize(kMsg);
+  auto zero = b.i32_val(0);
+  auto ctaId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
+
+  for (int copyIdx = 0; copyIdx < numCopies; copyIdx += numWarps) {
+    int numWarpsToCopy = std::min(numCopies - copyIdx, numWarps);
+    if (numWarpsToCopy == 1)
+      warpID = b.i32_val(0);
+    Value boxPred =
+        b.and_(pred, b.icmp_ult(id, b.i32_val(numWarpsToCopy * warpSize)));
+    ::mlir::triton::PTXBuilder ptxBuilderTMA;
+    Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+    Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
+    Value shMemOffset =
+        applyLinearLayout(loc, rewriter, msgToShared,
+                          {{kMsg, copyIdxVal}, {kBlock, zero}})[0]
+            .second;
+    Value shMemPtr = b.gep(elemPtrTy, llvmElemTy, dstBase, shMemOffset);
+    SmallVector<PTXBuilder::Operand *> operands = {
+        ptxBuilderTMA.newOperand(boxPred, "b"),
+        ptxBuilderTMA.newOperand(tmaPtr, "l")};
+
+    auto offsets = applyLinearLayout(loc, rewriter, msgToOffset,
+                                     {{kMsg, copyIdxVal}, {kBlock, ctaId}});
+    int operandIdx = 2;
+    for (int i = 0; i < rank; i++) {
+      Value coord = coords[rank - i - 1];
+      if (i < offsets.size())
+        coord = b.add(coord, offsets[offsets.size() - i - 1].second);
+      operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
+    }
+    operands.push_back(ptxBuilderTMA.newOperand(shMemPtr, "r"));
+    auto &tma = *ptxBuilderTMA.create<>(tmaInst);
+    tma(operands, /*onlyAttachMLIRArgs=*/true);
+    ptxBuilderTMA.launch(rewriter, loc, voidTy);
+  }
+
+  // TODO: Separate the syncronizations operations into separate TTGIR ops to
+  // be able to schedule them at the high level.
+  rewriter.create<NVVM::CpAsyncBulkCommitGroupOp>(loc);
+
+  rewriter.eraseOp(op);
+  return success();
+};
+
 struct AsyncTMACopyLocalToGlobalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp> {
@@ -1310,89 +1509,56 @@ struct AsyncTMACopyLocalToGlobalOpConversion
   matchAndRewrite(triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Type llvmElemTy =
-        typeConverter->convertType(op.getSrc().getType().getElementType());
-    auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
-        loc, adaptor.getSrc(), llvmElemTy, rewriter);
-    auto voidTy = void_ty(op->getContext());
-    auto id = getThreadId(rewriter, loc);
-    // Select just one thread for the TMA copy. This also helps the compiler to
-    // figure out that the op is uniform.
-    Value pred = LLVM::NVIDIA::createElectPredicate(loc, rewriter);
-    int elementSizeInBytes =
-        op.getSrc().getType().getElementType().getIntOrFloatBitWidth() / 8;
-
-    auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = ttg::lookupNumWarps(op);
-    int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-    Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
-    auto shapePerCTA = ttg::getShapePerCTA(op.getSrc().getType());
-    int elementsPerCTA = product(shapePerCTA);
-
-    auto contigDimSize = nvidia_gpu::getTMAContigDim(op.getSrc().getType());
-    int numCopies = shapePerCTA.back() / contigDimSize;
+    std::ostringstream tmaInst;
     auto rank = op.getCoord().size();
-    auto encoding = op.getSrc().getType().getEncoding();
-    auto ctaOffset = getCtaOffset(rewriter, loc, encoding, shapePerCTA);
-
-    for (int copyIdx = 0; copyIdx < numCopies; copyIdx += numWarps) {
-      int numWarpsToCopy = std::min(numCopies - copyIdx, numWarps);
-      if (numWarpsToCopy == 1)
-        warpID = b.i32_val(0);
-      Value boxPred =
-          b.and_(pred, b.icmp_ult(id, b.i32_val(numWarpsToCopy * warpSize)));
-      ::mlir::triton::PTXBuilder ptxBuilderTMA;
-      Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-      Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
-      Value shMemOffset =
-          b.mul(copyIdxVal, b.i32_val(elementsPerCTA / numCopies));
-      Value shMemPtr =
-          b.gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
-      SmallVector<PTXBuilder::Operand *> operands = {
-          ptxBuilderTMA.newOperand(boxPred, "b"),
-          ptxBuilderTMA.newOperand(adaptor.getDescPtr(), "l")};
-      std::string tmaInst = "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
-                            "d.global.shared::cta.bulk_group [$1, {";
-      int operandIdx = 2;
-      for (int i = 0; i < rank; i++) {
-        Value coord = adaptor.getCoord()[rank - i - 1];
-        if (i < ctaOffset.size() && ctaOffset[ctaOffset.size() - i - 1])
-          coord = b.add(coord, ctaOffset[ctaOffset.size() - i - 1]);
-        if (i == 0) {
-          Value offset = b.mul(copyIdxVal, b.i32_val(contigDimSize));
-          coord = b.add(coord, offset);
-        }
-        operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
-        tmaInst += "$" + std::to_string(operandIdx++);
-        if (i != rank - 1)
-          tmaInst += ", ";
-      }
-      operands.push_back(ptxBuilderTMA.newOperand(shMemPtr, "r"));
-      tmaInst += "}], [$" + std::to_string(operandIdx++) + "];";
-      auto &tma = *ptxBuilderTMA.create<>(tmaInst);
-      tma(operands, /*onlyAttachMLIRArgs=*/true);
-      ptxBuilderTMA.launch(rewriter, loc, voidTy);
+    tmaInst << "@$0 cp.async.bulk.tensor." << rank;
+    tmaInst << "d.global.shared::cta.bulk_group [$1, {";
+    int operandIdx = 2;
+    for (int i = 0; i < rank; i++) {
+      tmaInst << "$" << operandIdx++;
+      if (i != rank - 1)
+        tmaInst << ", ";
     }
+    tmaInst << "}], [$" << (operandIdx++) << "];";
+    return convertTMAStoreLikeOp(op, typeConverter, rewriter, adaptor.getDesc(),
+                                 op.getSrc().getType(), adaptor.getSrc(),
+                                 adaptor.getCoord(), tmaInst.str());
+  }
+};
 
-    // TODO: Separate the syncronizations operations into separate TTGIR ops to
-    // be able to schedule them at the high level.
-    rewriter.create<NVVM::CpAsyncBulkCommitGroupOp>(loc);
+struct AsyncTMAReduceOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMAReduceOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-    rewriter.eraseOp(op);
-    return success();
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::AsyncTMAReduceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    std::ostringstream tmaInst;
+    auto rank = op.getCoord().size();
+    auto kind = stringifyDescriptorReduceKind(op.getKind());
+    tmaInst << "@$0 cp.reduce.async.bulk.tensor." << rank;
+    tmaInst << "d.global.shared::cta." << kind.str() << ".bulk_group [$1, {";
+    int operandIdx = 2;
+    for (int i = 0; i < rank; i++) {
+      tmaInst << "$" << operandIdx++;
+      if (i != rank - 1)
+        tmaInst << ", ";
+    }
+    tmaInst << "}], [$" << (operandIdx++) << "];";
+    return convertTMAStoreLikeOp(op, typeConverter, rewriter, adaptor.getDesc(),
+                                 op.getSrc().getType(), adaptor.getSrc(),
+                                 adaptor.getCoord(), tmaInst.str());
   }
 };
 
 static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
-  auto encoding = type.getEncoding();
   auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(type.getEncoding());
   if (!mmaEncoding) {
-    assert(isa<ttg::SwizzledSharedEncodingAttr>(encoding));
-    return ttg::toLinearLayout(type.getShape(), encoding);
+    assert(isa<ttg::SwizzledSharedEncodingAttr>(type.getEncoding()));
+    return ttg::toLinearLayout(type);
   }
-  return ttg::sharedToLinearLayoutLeadingOffset(
+  assert(type.getShape() == type.getAllocShape().take_back(type.getRank()));
+  return ttg::nvmmaSharedToLinearLayout(
       type.getShape(), cast<NVMMASharedEncodingAttr>(type.getEncoding()),
       /*disableSwizzle=*/true);
 }
@@ -1425,9 +1591,7 @@ static LogicalResult iterateGatherScatterIndices(
   // Each warp can issue a distinct `gather4` instruction that loads 4 rows into
   // consecutive shared memory. Thus, the layout of the x offsets must be such
   // that 4 consecutive elements are broadcasted to a warp.
-  RankedTensorType xCoordsTy = xCoords.getType();
-  LinearLayout xCoordsLayout = triton::gpu::toLinearLayout(
-      xCoordsTy.getShape(), xCoordsTy.getEncoding());
+  LinearLayout xCoordsLayout = triton::gpu::toLinearLayout(xCoords.getType());
   if (xCoordsLayout.getInDimSize(kRegister) < 4)
     return op->emitError("must have at least 4 x offsets per warp");
   // Check that the first two bases are [1] and [2].
@@ -1450,14 +1614,16 @@ static LogicalResult iterateGatherScatterIndices(
   Type elemPtrTy = ptr_ty(ctx, /*addrspace=*/3);
   auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, smemObjValue,
                                                        llvmElemTy, rewriter);
+  Value smemBase = smemObj.getShmemAffineBase(loc, rewriter, smemType);
 
   unsigned threadsPerWarp = xCoordsLayout.getInDimSize(kLane);
   unsigned numWarps = xCoordsLayout.getInDimSize(kWarp);
 
-  // Each gather4 instructions reads 128 bytes for 4 rows at a time.
+  // Each gather4 instructions reads contigDimSize columns, 4 rows at a time.
   auto shapePerCTA = ttg::getShapePerCTA(smemType);
+  auto tmaBlockShape = ttng::getTMABlockShape(smemType, /*packedSize=*/true);
   unsigned innerBlockSize = shapePerCTA.back();
-  unsigned contigDimSize = nvidia_gpu::getTMAContigDim(smemType);
+  unsigned contigDimSize = tmaBlockShape.back();
   unsigned numMessagesPerRow = ceil<unsigned>(innerBlockSize, contigDimSize);
 
   // `xCoordsLayout` maps the register ID into dim0. Tile dim1 by adding a new
@@ -1465,15 +1631,11 @@ static LogicalResult iterateGatherScatterIndices(
   assert(innerBlockSize % numMessagesPerRow == 0);
   assert(llvm::isPowerOf2_32(numMessagesPerRow));
   unsigned msgSize = innerBlockSize / numMessagesPerRow;
-  std::vector<std::vector<int>> msgBases;
-  for (unsigned msgId = 1; msgId < numMessagesPerRow; msgId *= 2)
-    msgBases.push_back({int32_t(msgId * msgSize)});
-  LinearLayout msgToCol({{{kMsg, std::move(msgBases)}}},
-                        {{kDim1, innerBlockSize}},
-                        /*requiresSurjective=*/false);
+  LinearLayout msgToCol =
+      LinearLayout::strided1D(numMessagesPerRow, msgSize, kMsg, kDim1);
   LinearLayout msgLayout = xCoordsLayout * msgToCol;
 
-  // `gather4` will put the 128-byte segments of the 4 rows consecutively in
+  // `gather4` will put the segments of the 4 rows consecutively in
   // shared memory. However, if the 4 rows are smaller than the shared memory
   // swizzle tile size, e.g. [4, 32] vs. [8, 32], then, for example, the address
   // of the 0th element of row 4 will not be at the start of the segment.
@@ -1510,18 +1672,17 @@ static LogicalResult iterateGatherScatterIndices(
       Value msgIdVal = b.i32_val(msgId);
 
       auto result = applyLinearLayout(loc, rewriter, msgToShared,
-                                      {{kMsg, msgIdVal},
-                                       {kRegister, regIdVal},
+                                      {{kRegister, regIdVal},
                                        {kLane, laneId},
                                        {kWarp, warpId},
-                                       {kBlock, blockId}});
+                                       {kBlock, blockId},
+                                       {kMsg, msgIdVal}});
       assert(result.size() == 2 && result.front().first == "offset" &&
              result.back().first == "block");
       Value shMemOffset = result.front().second;
       // Because we checked that the memdesc's allocshape and shape match, we
       // can ignore the strides and directly index into the shmem object.
-      Value shMemPtr =
-          b.gep(elemPtrTy, llvmElemTy, smemObj.getBase(), shMemOffset);
+      Value shMemPtr = b.gep(elemPtrTy, llvmElemTy, smemBase, shMemOffset);
       Value yOffset = b.add(yOffsetValue, b.i32_val(msgId * msgSize));
 
       callback(pred, shMemPtr, yOffset, ArrayRef(xOffsets).slice(regId, 4));
@@ -1564,7 +1725,7 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
         // clang-format off
         ptxBuilder.newOperand(pred, "b"),
         ptxBuilder.newOperand(shMemPtr, "r"),
-        ptxBuilder.newOperand(adaptor.getDescPtr(), "l"),
+        ptxBuilder.newOperand(adaptor.getDesc(), "l"),
         ptxBuilder.newOperand(yOffset, "r")
         // clang-format on
     };
@@ -1615,7 +1776,7 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
     SmallVector<PTXBuilder::Operand *, 8> operands{
         // clang-format off
         ptxBuilder.newOperand(pred, "b"),
-        ptxBuilder.newOperand(adaptor.getDescPtr(), "l"),
+        ptxBuilder.newOperand(adaptor.getDesc(), "l"),
         ptxBuilder.newOperand(yOffset, "r")
         // clang-format on
     };
@@ -1641,6 +1802,28 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
   rewriter.eraseOp(op);
   return success();
 }
+
+struct AsyncCopyMbarrierArriveOpConversion
+    : public ConvertOpToLLVMPattern<ttng::AsyncCopyMbarrierArriveOp> {
+  using ConvertOpToLLVMPattern<
+      ttng::AsyncCopyMbarrierArriveOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ttng::AsyncCopyMbarrierArriveOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto noinc = op.getNoIncrement();
+    auto barrierMemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getBarrier(),
+        typeConverter->convertType(op.getBarrier().getType().getElementType()),
+        rewriter);
+    TritonLLVMOpBuilder b(loc, rewriter);
+    rewriter.create<NVVM::CpAsyncMBarrierArriveSharedOp>(
+        loc, barrierMemObj.getBase(), noinc);
+    op->erase();
+    return success();
+  }
+};
 
 struct AsyncWaitOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::AsyncWaitOp> {
@@ -1698,16 +1881,18 @@ struct TMAStoreWaitOpConversion
 
 void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
-    RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    PatternBenefit benefit) {
+    int computeCapability, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit) {
   patterns.add<AsyncCopyGlobalToLocalOpConversion, AtomicCASOpConversion,
-               AtomicRMWOpConversion, LoadOpConversion, StoreOpConversion>(
-      typeConverter, targetInfo, axisInfoAnalysis, benefit);
-  patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
-  patterns
-      .add<AsyncTMACopyGlobalToLocalOpConversion,
-           AsyncTMACopyLocalToGlobalOpConversion, AsyncTMAGatherOpConversion,
-           AsyncTMAScatterOpConversion, TMAStoreWaitOpConversion>(typeConverter,
-                                                                  benefit);
+               AtomicRMWOpConversion>(typeConverter, targetInfo,
+                                      axisInfoAnalysis, benefit);
+  patterns.add<LoadOpConversion, StoreOpConversion>(
+      typeConverter, targetInfo, computeCapability, axisInfoAnalysis, benefit);
+  patterns.add<AsyncCommitGroupOpConversion, AsyncWaitOpConversion,
+               AsyncCopyMbarrierArriveOpConversion>(typeConverter, benefit);
+  patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
+               AsyncTMACopyLocalToGlobalOpConversion,
+               AsyncTMAReduceOpConversion, AsyncTMAGatherOpConversion,
+               AsyncTMAScatterOpConversion, TMAStoreWaitOpConversion>(
+      typeConverter, benefit);
 }

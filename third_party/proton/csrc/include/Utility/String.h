@@ -2,6 +2,7 @@
 #define PROTON_UTILITY_STRING_H_
 
 #include <string>
+#include <vector>
 
 namespace proton {
 
@@ -42,6 +43,20 @@ inline std::string trim(const std::string &str) {
     end--;
   }
   return str.substr(start, end - start);
+}
+
+inline std::vector<std::string> split(const std::string &str,
+                                      const std::string &delim) {
+  std::vector<std::string> result;
+  size_t start = 0;
+  size_t end = str.find(delim);
+  while (end != std::string::npos) {
+    result.push_back(str.substr(start, end - start));
+    start = end + delim.length();
+    end = str.find(delim, start);
+  }
+  result.push_back(str.substr(start, end));
+  return result;
 }
 
 } // namespace proton

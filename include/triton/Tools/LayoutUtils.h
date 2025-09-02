@@ -10,14 +10,6 @@ namespace mlir::triton {
 bool squareSublayoutIsIdentity(const LinearLayout &ll,
                                ArrayRef<StringAttr> dimNames);
 
-// Is the sublayout defined from dimNames to dimNames a subpermutation matrix?
-// I.e. the layout matrix is formed by selecting unique columns from the
-// identity matrix and adding zero columns. A zero column in the layout means
-// that changing a bit in the inputs does not change the bits of the outputs
-// (broadcasting).
-bool squareSublayoutIsPermutation(const LinearLayout &ll,
-                                  ArrayRef<StringAttr> dimNames);
-
 // For each output dimension d, ensure that the layout's output size (i.e., its
 // codomain) does not exceed shape[d]. Do this without changing the size of the
 // layout's inputs (i.e., leave its domain unchanged).
@@ -83,6 +75,17 @@ LinearLayout ensureLayoutNotSmallerThan(
     const LinearLayout &layout,
     const llvm::SmallDenseMap<StringAttr, int64_t> &shape);
 
+inline LinearLayout
+ensureLayoutNotSmallerThan(const LinearLayout &layout,
+                           const llvm::ArrayRef<StringAttr> dimNames,
+                           const llvm::ArrayRef<int64_t> shape) {
+  llvm::SmallDenseMap<StringAttr, int64_t> namedDims;
+  for (auto [dimName, length] : llvm::zip_equal(dimNames, shape))
+    namedDims[dimName] = length;
+  assert(namedDims.size() == shape.size() && "duplicate dimension names given");
+  return ensureLayoutNotSmallerThan(layout, namedDims);
+}
+
 // Return a vector of the standard out dimension names for tensor layouts. These
 // are "dim0", "dim1", etc.
 SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank);
@@ -98,12 +101,46 @@ standardOutDimPairs(MLIRContext *ctx, ArrayRef<int64_t> dstShape);
 LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
                                 ArrayRef<unsigned> order);
 
+// Return a layout with the same in/out dimensions as `layout` but with all
+// bases set to 0.
+LinearLayout zerosLike(const LinearLayout &layout);
+
+// For a layout A with A.hasInDim(kReg), find a permutation of registers action
+// such that action.apply(A) may be divisible by B
+// It's not always true that the action returned by this function will
+// allow us to divideLeft (resp. divideRight), but it is true that if it if
+// there exists one, it is the one returned by this function.
+std::optional<ColumnAction> regPermForDivide(const LinearLayout &A,
+                                             const LinearLayout &B, bool left);
+
+// For a layout A with A.hasInDim(kReg), find a permutation of registers action
+// such that action.apply(A) has the broadcasted registers removed
+ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout);
+
+std::pair<int64_t, ColumnAction>
+actionAdditiveStrides(const LinearLayout &layout, const LinearLayout addrLayout,
+                      uint64_t maskSpanOffsets);
+
+// For a layout A with A.hasInDim(kReg), repeat the values so that they have
+// the same broadcasting as layout
+SmallVector<Value> broadcastAs(const SmallVector<Value> &values,
+                               const LinearLayout &layout);
+
 // Compute the supremum of two lists.
 // Error out if the supremum does not exist (e.g. [a, b] and [b, a]).
 // If the supremum is not unique, we return the first list first
 // (e.g. [a, b], [a, c] -> [a, b, c]).
 SmallVector<StringAttr> supremum(const SmallVector<StringAttr> &x,
                                  const SmallVector<StringAttr> &y);
+
+// Return a new layout reshaped to the given shape.
+LinearLayout reshapeLayout(MLIRContext *ctx, LinearLayout layout,
+                           ArrayRef<int64_t> shape);
+
+// Return a new layout with the dimensions transposed according to the given
+// order.
+LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order);
+
 } // namespace mlir::triton
 
 #endif // TRITON_TOOLS_LAYOUTUTILS_H

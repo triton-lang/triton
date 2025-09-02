@@ -1,0 +1,197 @@
+name: Integration Tests AMD
+
+on:
+  workflow_call:
+    inputs:
+      matrix:
+        required: true
+        type: string
+
+jobs:
+  integration-tests-amd:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        runner: ${{ fromJson(inputs.matrix) }}
+        include:
+          - image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
+            runner: ["self-hosted", "gfx90a"]
+            # Cache save/restore is on the host machine at directory /home/runner/.triton, while in the docker
+            # container expect it at /github/home/.triton. So map here to make sure visible in docker.
+            options: >-
+              --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+              --volume /home/runner/.triton:/github/home/.triton
+          - image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
+            runner: ["amd-gfx942"]
+            # We add --env-file to pull in HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES definition for GPU isolation.
+            options: >-
+              --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+              --env-file /etc/podinfo/gha-gpu-isolation-settings
+              --volume /home/runner/.triton:/github/home/.triton
+          - image: rocm/7.0-preview:rocm7.0_preview_ubuntu22.04_llama2_70b_training_mlperf_mi35X_prealpha
+            runner: ["amd-gfx950"]
+            options: >-
+              --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
+              --env-file /etc/podinfo/gha-gpu-isolation-settings
+              --volume /home/runner/.triton:/github/home/.triton
+    env:
+      RUNNER_TYPE: ${{ matrix.runner[1] }}
+      TRITON_BUILD_WITH_CCACHE: "true"
+      TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
+      TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+      TRITON_DISABLE_LINE_INFO: 1
+      PROTON_SKIP_PC_SAMPLING_TEST: 1
+      PYTHON: "python3"
+      CCACHE_COMPRESS: "true"
+    container:
+      image: ${{ matrix.image }}
+      options: ${{ matrix.options }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: 'true'
+      - name: Compute cache keys
+        id: cache-key
+        run: |
+          llvm_file="cmake/llvm-hash.txt"
+          nvidia_file="cmake/nvidia-toolchain-version.json"
+          json_file="cmake/json-version.txt"
+
+          # Check if files exist before proceeding
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
+            echo "Error: Required dependency files are missing."
+            exit 1
+          fi
+
+          # Process the files if they exist
+          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
+        shell: bash
+      - name: Cache build dependencies
+        uses: actions/cache@v4
+        with:
+          # Note that we cannot use environment variables here given there is
+          # no shell to interpret them in the paths.
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/json
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
+      - name: Update compiler to clang
+        run: |
+          export CC=/usr/bin/clang
+          export CXX=/usr/bin/clang++
+      - name: Install Triton
+        id: amd-install-triton
+        run: |
+          echo "PATH is '$PATH'"
+          pip uninstall -y triton pytorch-triton-rocm
+
+          if [ "${{ matrix.runner[0] }}" != "amd-gfx950" ]; then
+            ccache --zero-stats
+          fi
+
+          make dev-install
+      - name: CCache Stats
+        if: ${{ matrix.runner[0] != 'amd-gfx950' }}
+        run: ccache --print-stats
+      - name: Run lit tests
+        run: make test-lit
+      - name: Run C++ unittests
+        run: make test-cpp
+      - name: Run python tests on AMD
+        run: |
+          INSTRUMENTATION_LIB_DIR="${GITHUB_WORKSPACE}/python/triton/instrumentation"
+          if [ ! -d "${INSTRUMENTATION_LIB_DIR}" ]; then
+            echo "Could not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
+          fi
+
+          # Test gluon
+          pytest --capture=tee-sys -rfs -n 8 python/test/gluon/
+
+          pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
+          pytest --capture=tee-sys -rfs -n 8 third_party/amd/python/test/ \
+                --ignore=third_party/amd/python/test/test_scalarize_packed_fops.py \
+                --ignore=third_party/amd/python/test/test_address_sanitizer.py
+          TRITON_ALWAYS_COMPILE=1 pytest --capture=tee-sys -rfs third_party/amd/python/test/test_scalarize_packed_fops.py
+          cd python/test/unit
+          pytest --capture=tee-sys -rfs -n 12 \
+                 --ignore=blackwell \
+                 --ignore=cuda \
+                 --ignore=instrumentation \
+                 --ignore=language/test_line_info.py \
+                 --ignore=test_debug.py
+          # TODO: uncomment
+          # pytest --capture=tee-sys -rfs test_debug.py
+          TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \
+          pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
+
+          # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
+            TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py -k "not test_line_info_ir_source"
+          else
+            TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
+          fi
+
+          # Run tests under triton/python/triton_kernels/tests/ on gfx950 and gfx942
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ] || [ "${{ matrix.runner[0] }}" = "amd-gfx942" ]; then
+            cd ../../triton_kernels/
+            python3 -m pytest -s -n 12 tests/
+          fi
+      - name: Run distributed tests
+        run: |
+          make test-distributed
+      - name: Run asan tests on AMD
+        if: false
+        run: |
+          cd third_party/amd/python/test/
+          ulimit -s 1024
+          export PATH=$(find ~/.triton/llvm -name llvm-symbolizer  -printf '%h\n'):$PATH
+          export LD_LIBRARY_PATH=$(find /opt -name libclang_rt.asan-x86_64.so -printf '%h\n'):$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=$(find /opt -type d -wholename *lib/llvm/lib/asan):$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=$(find /usr -name libcaffe2_nvrtc.so -printf '%h\n'):$LD_LIBRARY_PATH
+          export CLANG_ASAN_LIB=$(find /opt -name libclang_rt.asan-x86_64.so)
+          export HIP_ASAN_LIB=$(find /opt -wholename *lib/asan/libamdhip64.so)
+          ASAN_OPTIONS=detect_leaks=0,alloc_dealloc_mismatch=0 \
+          LD_PRELOAD=$CLANG_ASAN_LIB:$HIP_ASAN_LIB python3 -m pytest -s test_address_sanitizer.py
+      - name: Run regression tests
+        run: |
+          # Reenable test_functional_regression.py once it's fixed
+          cd python/test/regression
+          python3 -m pytest -s -n 8 ./test_cast_matmul.py
+      - name: Run microbenchmark tests
+        run: |
+          python3 python/test/microbenchmark/launch_overhead.py
+      - name: Run Proton tests
+        run: |
+          unset HIP_VISIBLE_DEVICES
+          unset ROCR_VISIBLE_DEVICES
+          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
+            python3 -m pytest -s -n 8 third_party/proton/test -k "not test_instrument_exec"
+          else
+            make test-proton
+          fi
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
+      - name: Clean up caches
+        # Always cleanup the worker, even if builds or tests failed given that these directories are
+        # mapped from the host and we write files as the root user in the docker.
+        if: always()
+        run: |
+          rm -rf ~/.triton/cache
+          rm -rf ~/.ccache

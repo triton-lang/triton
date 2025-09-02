@@ -1,5 +1,6 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
+#include "AsyncUtility.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -18,7 +19,7 @@ namespace {
 class CallOpConversion : public OpRewritePattern<LLVM::CallOp> {
 public:
   CallOpConversion(mlir::MLIRContext *context, bool ftz)
-      : OpRewritePattern<LLVM::CallOp>(context, 1), ftz(ftz) {}
+      : OpRewritePattern(context, 1), ftz(ftz) {}
 
   LogicalResult
   matchAndRewrite(LLVM::CallOp callOp,
@@ -75,8 +76,20 @@ private:
     //               | 1         | 0/1     | (wt) global store sc0 sc1
     auto [volatileFlag, nonTmpFlag] =
         mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(callOp);
-    auto storeOp = rewriter.create<LLVM::StoreOp>(
-        loc, val, ptr, /*alignment=*/0, volatileFlag, nonTmpFlag);
+    int alignment = 0;
+    if (auto vecTy = dyn_cast<VectorType>(val.getType())) {
+      auto elemTy = vecTy.getElementType();
+      auto elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
+      alignment = elemSizeInBytes * vecTy.getNumElements();
+    }
+
+    auto storeOp = rewriter.create<LLVM::StoreOp>(loc, val, ptr, alignment,
+                                                  volatileFlag, nonTmpFlag);
+    bool addAsyncAliasScopes =
+        callOp.getCallee().value().contains(mlir::LLVM::AMD::noAliasAsyncLoads);
+    if (addAsyncAliasScopes) {
+      AMD::addLocalLoadNoAliasScope(storeOp);
+    }
     rewriter.create<LLVM::BrOp>(loc, afterStore);
     rewriter.setInsertionPointToStart(afterStore);
     rewriter.eraseOp(callOp);
@@ -112,6 +125,11 @@ private:
         mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(callOp);
     auto loadOp = rewriter.create<LLVM::LoadOp>(
         loc, elemTy, ptr, /*alignment=*/0, volatileFlag, nonTmpFlag);
+    bool addAsyncNoAliasInfo =
+        callOp.getCallee().value().contains(mlir::LLVM::AMD::noAliasAsyncLoads);
+    if (addAsyncNoAliasInfo) {
+      AMD::addLocalLoadNoAliasScope(loadOp);
+    }
     rewriter.create<LLVM::BrOp>(loc, loadOp->getResult(0), afterLoad);
     rewriter.setInsertionPointToStart(falseBlock);
     rewriter.create<LLVM::BrOp>(loc, falseVal, afterLoad);
@@ -119,6 +137,22 @@ private:
     Value loadVal = afterLoad->getArgument(0);
     rewriter.replaceOp(callOp, loadVal);
     return mlir::success();
+  }
+
+  // Utility function to create fast exponential operation
+  Operation *createFastExpf(mlir::PatternRewriter &rewriter, Location loc,
+                            Value input, Type returnType, bool ftz) const {
+    assert(input.getType().getIntOrFloatBitWidth() == 32);
+    const double log2e = 1.4426950408889634;
+    LLVM::FastmathFlagsAttr defaultFlags{};
+
+    auto mulOp = rewriter.create<LLVM::FMulOp>(
+        loc, rewriter.getF32Type(), input,
+        LLVM::createConstantF32(loc, rewriter, log2e), defaultFlags);
+
+    const char *intrinsic = ftz ? "llvm.amdgcn.exp2.f32" : "llvm.exp2.f32";
+    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, returnType,
+                                           mulOp->getResult(0));
   }
 
   LogicalResult convertToLLVMIntrinsic(LLVM::CallOp callOp,
@@ -161,15 +195,36 @@ private:
     } else if (calleeName == "__triton_hip_fast_expf") {
       assert(operands.size() == 1);
       assert(operands[0].getType().getIntOrFloatBitWidth() == 32);
-      const double log2e = 1.4426950408889634;
+      replacementOp =
+          createFastExpf(rewriter, loc, operands[0], returnType, ftz);
+    } else if (calleeName == "__triton_hip_fast_tanhf") {
+      assert(operands.size() == 1);
+      assert(operands[0].getType().getIntOrFloatBitWidth() == 32);
       LLVM::FastmathFlagsAttr defaultFlags{};
-      auto mulOp = rewriter.create<LLVM::FMulOp>(
-          loc, rewriter.getF32Type(), operands[0],
-          LLVM::createConstantF32(loc, rewriter, log2e), defaultFlags);
-      const char *intrinsic = ftz ? "llvm.amdgcn.exp2.f32" : "llvm.exp2.f32";
 
-      replacementOp = LLVM::createLLVMIntrinsicCallOp(
-          rewriter, loc, intrinsic, returnType, mulOp->getResult(0));
+      // Calculate 2*x
+      auto twoX = rewriter.create<LLVM::FMulOp>(
+          loc, rewriter.getF32Type(), operands[0],
+          LLVM::createConstantF32(loc, rewriter, 2.0), defaultFlags);
+
+      // Calculate fast_expf(2*x) using the utility function
+      auto exp2X = createFastExpf(rewriter, loc, twoX->getResult(0),
+                                  rewriter.getF32Type(), ftz);
+
+      // Calculate exp2X - 1
+      auto exp2XMinus1 = rewriter.create<LLVM::FSubOp>(
+          loc, rewriter.getF32Type(), exp2X->getResult(0),
+          LLVM::createConstantF32(loc, rewriter, 1.0), defaultFlags);
+
+      // Calculate exp2X + 1
+      auto exp2XPlus1 = rewriter.create<LLVM::FAddOp>(
+          loc, rewriter.getF32Type(), exp2X->getResult(0),
+          LLVM::createConstantF32(loc, rewriter, 1.0), defaultFlags);
+
+      // Calculate tanh(X) = (exp2X - 1) / (exp2X + 1)
+      replacementOp = rewriter.create<LLVM::FDivOp>(
+          loc, returnType, exp2XMinus1->getResult(0), exp2XPlus1->getResult(0),
+          defaultFlags);
     }
 
     if (replacementOp) {
@@ -194,7 +249,7 @@ struct ConvertBuiltinFuncToLLVM
     ModuleOp mod = getOperation();
 
     GreedyRewriteConfig config;
-    config.enableRegionSimplification = GreedySimplifyRegionLevel::Aggressive;
+    config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Aggressive);
 
     RewritePatternSet patterns(context);
     patterns.add<CallOpConversion>(context, this->ftz);

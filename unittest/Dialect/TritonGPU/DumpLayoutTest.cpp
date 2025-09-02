@@ -179,8 +179,8 @@ TEST_F(DumpLayoutTest, Simple1DShared) {
                              4,    /* maxPhase */
                              {1},  /* cpg */
                              {1},  /* csplit */
-                             {1},  /* ord, row-major */
-                             {1}); /* cOrd */
+                             {0},  /* ord, row-major */
+                             {0}); /* cOrd */
 
   auto elemTy = Float16Type::get(sharedLayout.getContext());
   auto tensorType = RankedTensorType::get({32}, elemTy, sharedLayout);

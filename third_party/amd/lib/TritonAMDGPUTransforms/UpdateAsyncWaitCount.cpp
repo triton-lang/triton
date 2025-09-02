@@ -1,10 +1,6 @@
+#include "TritonAMDGPUTransforms/Passes.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "amd/lib/TritonAMDGPUTransforms/Utility.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "llvm/ADT/TypeSwitch.h"
-
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h"
 
 // This pass updates the waitCount of `AsyncWait` Ops to represent the number of
 // inflight async load operation between the async_wait and the definition of
@@ -22,19 +18,23 @@
 // We do not exit early if we encounter another async_wait along the def chain
 // because the pipeliner will merge redundant waits for us already
 
-using namespace mlir;
 namespace tt = triton;
 namespace ttg = triton::gpu;
+
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUUPDATEASYNCWAITCOUNT
+#include "TritonAMDGPUTransforms/Passes.h.inc"
+
+namespace {
 
 // Returns the number of individual async load memory transactions when copy
 // data from the given |srcTy| in global memory to the given |dstTy| in shared
 // memory.
 int getNumberOfLoadInstructions(RankedTensorType srcTy,
                                 ttg::MemDescType dstTy) {
-  auto shape = srcTy.getShape();
-  LinearLayout srcLayout = tt::gpu::toLinearLayout(shape, srcTy.getEncoding());
-  LinearLayout sharedLayout =
-      tt::gpu::toLinearLayout(shape, dstTy.getEncoding());
+  LinearLayout srcLayout = tt::gpu::toLinearLayout(srcTy);
+  LinearLayout sharedLayout = tt::gpu::toLinearLayout(dstTy);
   LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
   // On GFX9 we cannot split direct to lds loads into multiple ones because we
@@ -106,16 +106,16 @@ void updateWaitCount(ttg::AsyncWaitOp waitOp, RewriterBase &rewriter) {
   rewriter.modifyOpInPlace(waitOp, [&]() { waitOp.setNum(waitCnt); });
 }
 
+} // anonymous namespace
+
 struct TritonAMDGPUUpdateAsyncWaitCountPass
-    : public TritonAMDGPUUpdateAsyncWaitCountBase<
+    : impl::TritonAMDGPUUpdateAsyncWaitCountBase<
           TritonAMDGPUUpdateAsyncWaitCountPass> {
-  TritonAMDGPUUpdateAsyncWaitCountPass(StringRef archGenName) {
-    this->archGenerationName = archGenName.str();
-  }
+  using Base::Base;
 
   void runOnOperation() override {
     tt::AMD::TargetInfo targetInfo(archGenerationName);
-    if (!targetInfo.isCDNA()) {
+    if (!isCDNA(targetInfo.getISAFamily())) {
       return;
     }
 
@@ -132,7 +132,4 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
   }
 };
 
-std::unique_ptr<Pass>
-mlir::createTritonAMDGPUUpdateAsyncWaitCountPass(std::string archGenName) {
-  return std::make_unique<TritonAMDGPUUpdateAsyncWaitCountPass>(archGenName);
-}
+} // namespace mlir

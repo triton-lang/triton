@@ -1,4 +1,5 @@
 #include "Utility.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "AtomicRMWOpsEmitter.h"
@@ -207,8 +208,7 @@ Value AtomicRMWEmitter::emitAtomicRMW(RewriterBase &rewriter, Value rmwPtr,
 
 Value AtomicRMWEmitter::emitPairedAtomicForEvenTID(RewriterBase &rewriter,
                                                    Value rmwPtr, Value valElem,
-                                                   Value rmwMask,
-                                                   bool checkPairs) const {
+                                                   Value rmwMask) const {
   auto loc = rmwPtr.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value i64Ones = b.i64_val(~uint64_t(0));
@@ -231,44 +231,34 @@ Value AtomicRMWEmitter::emitPairedAtomicForEvenTID(RewriterBase &rewriter,
   Value dppMoveRes = shiftLeftI32ByDpp(rewriter, packedVal);
   Value operand = b.bitcast(b.or_(packedVal, dppMoveRes), packF16Ty);
 
-  // If a runtime check is unnecessary (`checkPairs` is `false`),
-  // `rightNeighbourPtr` is irrelevant.
-  // Set the conditional value `enablePackedOpt` to `true` to enable DCE on the
-  // runtime check branch.
-  Value rightNeighbourPtr = rmwPtr;
-  Value enablePackedOpt = b.true_val();
-  if (checkPairs) {
-    Value rightNeighbourAddr =
-        genI32TiledOp(rewriter, shiftLeftI32ByDpp, castedAddr);
+  Value rightNeighbourAddr =
+      genI32TiledOp(rewriter, shiftLeftI32ByDpp, castedAddr);
 
-    // Packing optimization only supported if following conditions are true:
-    // 1. address is aligned by 4 bytes
-    // 2. right neighbour has adjacent address
-    // 3. both threads are active
-    Value isAligned = b.icmp_eq(b.urem(castedAddr, b.i64_val(4)), b.i64_val(0));
-    Value neighbourAddrAdjacent = b.icmp_eq(
-        rightNeighbourAddr,
-        b.add(castedAddr, b.i64_val(valueElemTy.getIntOrFloatBitWidth() / 8)));
-    Value neighbourEnabled = b.icmp_ne(i64Ones, rightNeighbourAddr);
-    Value bothEnabled = b.and_(neighbourEnabled, rmwMask);
-    enablePackedOpt =
-        b.and_(b.and_(isAligned, bothEnabled), neighbourAddrAdjacent);
+  // Packing optimization only supported if following conditions are true:
+  // 1. address is aligned by 4 bytes
+  // 2. right neighbour has adjacent address
+  // 3. both threads are active
+  Value isAligned = b.icmp_eq(b.urem(castedAddr, b.i64_val(4)), b.i64_val(0));
+  Value neighbourAddrAdjacent = b.icmp_eq(
+      rightNeighbourAddr,
+      b.add(castedAddr, b.i64_val(valueElemTy.getIntOrFloatBitWidth() / 8)));
+  Value neighbourEnabled = b.icmp_ne(i64Ones, rightNeighbourAddr);
+  Value bothEnabled = b.and_(neighbourEnabled, rmwMask);
+  Value enablePackedOpt =
+      b.and_(b.and_(isAligned, bothEnabled), neighbourAddrAdjacent);
 
-    // Enable only the even threads.
-    Value anyEnabled = b.or_(neighbourEnabled, rmwMask);
-    // If one of the threads is disabled, use the neighbour's addr.
-    rightNeighbourAddr =
-        b.select(neighbourEnabled, rightNeighbourAddr, castedAddr);
-    castedAddr = b.select(rmwMask, castedAddr, rightNeighbourAddr);
+  // Enable only the even threads.
+  Value anyEnabled = b.or_(neighbourEnabled, rmwMask);
+  // If one of the threads is disabled, use the neighbour's addr.
+  rightNeighbourAddr =
+      b.select(neighbourEnabled, rightNeighbourAddr, castedAddr);
+  castedAddr = b.select(rmwMask, castedAddr, rightNeighbourAddr);
 
-    rmwMask = b.and_(anyEnabled, b.icmp_eq(isOddI32, b.i32_val(0)));
+  rmwMask = b.and_(anyEnabled, b.icmp_eq(isOddI32, b.i32_val(0)));
 
-    // Unpack results back
-    rightNeighbourPtr = b.inttoptr(rmwPtr.getType(), rightNeighbourAddr);
-    rmwPtr = b.inttoptr(rmwPtr.getType(), castedAddr);
-  } else {
-    rmwMask = b.and_(rmwMask, b.icmp_eq(isOddI32, b.i32_val(0)));
-  }
+  // Unpack results back
+  Value rightNeighbourPtr = b.inttoptr(rmwPtr.getType(), rightNeighbourAddr);
+  rmwPtr = b.inttoptr(rmwPtr.getType(), castedAddr);
 
   Value undefVal = b.undef(packF16Ty);
   // Build blocks to bypass the atomic instruction for ~rmwMask.
@@ -416,12 +406,14 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   Value mask = targetInfo.ballot(rewriter, loc, i64_ty, done);
   Value start = loopBody->getArgument(0);
   Value cnt = b.trunc(i32_ty, generatePopcount64(rewriter, mask));
-  Value mbcntLoRes = rewriter
-                         .create<ROCDL::MbcntLoOp>(
-                             loc, i32_ty, b.trunc(i32_ty, mask), b.i32_val(0))
-                         ->getResult(0);
-  Value idx = rewriter.create<ROCDL::MbcntHiOp>(
-      loc, i32_ty, b.trunc(i32_ty, b.lshr(mask, b.i64_val(32))), mbcntLoRes);
+  Value maskLo = b.trunc(i32_ty, mask);
+  Value mbcntLoRes =
+      ROCDL::MbcntLoOp::create(rewriter, loc, i32_ty, maskLo, b.i32_val(0),
+                               /*arg_attrs=*/{}, /*res_attrs=*/{});
+  Value maskHi = b.trunc(i32_ty, b.lshr(mask, b.i64_val(32)));
+  Value idx =
+      ROCDL::MbcntHiOp::create(rewriter, loc, i32_ty, maskHi, mbcntLoRes,
+                               /*arg_attrs=*/{}, /*res_attrs=*/{});
   Value base = b.add(start, cnt);
   Value leader = b.icmp_eq(idx, b.i32_val(0));
   cnt = b.sub(cnt, idx);

@@ -35,9 +35,11 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
 // Return true if the Load uses block pointer.
 bool isLoadFromTensorPtr(triton::LoadOp op);
 
-// Return an array of indices enumerating the elements of 'arr' in descending
-// order (so that result[i] is the index of the i-th largest element of 'arr')
-SmallVector<unsigned, 4> argSort(const SmallVector<int64_t> &arr);
+// Gets the order of a tensor from its contiguity. Places the dimensions with
+// the largest contiguity as the inner most dimension. If the contiguity is
+// all ones, returns the order {dim - 1, dim - 2, ..., 0}
+SmallVector<unsigned, 4>
+getOrderFromContiguity(const SmallVector<int64_t> &contiguity);
 
 // Return the operand used to access the memory in the operation
 Value getMemAccessPtr(Operation *op);
@@ -53,6 +55,10 @@ getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
 
 // Returns whether the op is a "view op", i.e. doesn't move any data
 bool isView(Operation *op);
+
+// Returns whether the op is a "noop op", i.e. has one input and one output
+// and lowers to llvm as the identity function (returns the input)
+bool isNoop(Operation *op);
 
 /* Dump Triton IR in graphviz dot format.
  *
@@ -137,8 +143,8 @@ scf::ForOp replaceForOpWithNewSignature(
     SmallVectorImpl<std::tuple<Value, Value>> &replacements);
 scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
                                         ValueRange newIterOperands);
-Block::BlockArgListType addIterArgsToLoop(OpBuilder &rewriter, scf::ForOp &loop,
-                                          ValueRange newIterOperands);
+[[nodiscard]] scf::ForOp addIterArgsToLoop(OpBuilder &rewriter, scf::ForOp loop,
+                                           ValueRange newIterOperands);
 
 // Replace WhileOp with a new WhileOp with extra operands. The YieldOp is not
 // updated and needs to be updated separately for the loop to be correct.
@@ -202,7 +208,7 @@ bool isPureUnaryInlineAsm(Operation *op);
 int getNVIDIAComputeCapability(Operation *module);
 
 // Read the amd target from the module attributes
-StringRef getAMDArch(Operation *module);
+std::optional<StringRef> getAMDArch(Operation *module);
 
 std::optional<mlir::triton::gpu::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
@@ -243,11 +249,37 @@ SetVector<Value> getNestedOperands(Operation *op);
 // Erase the given loop carried values from the loop, where `loop` is replaced
 // with a new loop.
 void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
-
-// Return true if two value sets may refer to the same allocation.
-bool mayAliasAllocations(const DenseSet<Value> &lhs,
-                         const DenseSet<Value> &rhs);
-
 } // namespace mlir
+
+namespace mlir::triton {
+/// Replace all uses of `oldUse` with `val` and propagate the type if needed.
+/// This is useful when we need to change a memory descriptor from immutable to
+/// mutable.
+/// The callback is invoked for each pair of an old and a cloned memdesc op
+/// as the type is propagated.
+void replaceUsesAndPropagateType(
+    OpBuilder &builder, Operation *oldUse, Value val,
+    std::function<void(Operation *, Operation *)> callback = nullptr);
+
+/// Replace all uses of `old` with a local load from `alloc` unless the use is a
+/// `ttg.local_alloc` with a matching shared encoding, in which case the shared
+/// memory is forwarded directly into the use. Returns the `ttg.local_load` if
+/// it created one.
+triton::gpu::LocalLoadOp
+replaceUsesWithLocalLoad(OpBuilder &builder, OpResult old,
+                         TypedValue<triton::gpu::MemDescType> alloc,
+                         TypedValue<triton::gpu::AsyncTokenType> token = {});
+
+// Return true if the value comes from a load or a block argument.
+// This will skip convert layouts and memdesc views.
+// This is a helper useful to know if value is likely to come from shared memory
+// after converting loads into async loads.
+bool comesFromLoadOrBlockArg(Value v);
+
+// For structured control flow ops, returns the values associated with the
+// `resultIdx`th result.
+SmallVector<Value> getTiedArgs(Operation *op, int resultIdx);
+
+} // namespace mlir::triton
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

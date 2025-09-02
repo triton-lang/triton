@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <assert.h>
 #include <cstdlib>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -13,8 +14,8 @@ namespace mlir::triton {
 inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     // clang-format off
     "AMDGCN_ENABLE_DUMP",
+    "AMDGCN_USE_BUFFER_ATOMICS",
     "AMDGCN_USE_BUFFER_OPS",
-    "DISABLE_FAST_REDUCTION",
     "DISABLE_LLVM_OPT",
     "DISABLE_MMA_V3",
     "DISABLE_MMA_V5",
@@ -29,7 +30,6 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "MLIR_DISABLE_MULTITHREADING",
     "TRITON_DEFAULT_FP_FUSION",
     "TRITON_DISABLE_LINE_INFO",
-    "TRITON_DISABLE_RESHAPE_ENCODING_INFERENCE",
     "TRITON_ENABLE_LLVM_DEBUG",
     "TRITON_HIP_GLOBAL_PREFETCH",
     "TRITON_HIP_LOCAL_PREFETCH",
@@ -41,17 +41,16 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_OVERRIDE_ARCH",
     "USE_IR_LOC",
     "NVPTX_ENABLE_DUMP",
-    "STORE_TMEM_TO_GLOBAL_BYPASS_SMEM",
     "ALLOW_LHS_TMEM_LAYOUT_CONVERSION",
     "TRITON_F32_DEFAULT",
-    "ENABLE_MMA_V5_ATT_PIPELINE"
+    "TRITON_PREFER_TMEM_16x256_LAYOUT",
     // clang-format on
 };
 
 inline const std::set<std::string> CACHE_NEUTRAL_ENV_VARS = {
     // clang-format off
     "TRITON_REPRODUCER_PATH",
-    "TRITON_ENABLE_PYTHON_STACKTRACE"
+    "TRITON_ENABLE_PYTHON_STACKTRACE",
     // clang-format on
 };
 
@@ -67,7 +66,10 @@ inline void assertIsRecognized(const std::string &env) {
   assert((is_invalidating || is_neutral) && errmsg.c_str());
 }
 
+static std::mutex getenv_mutex;
+
 inline std::string getStrEnv(const std::string &env) {
+  std::lock_guard<std::mutex> lock(getenv_mutex);
   assertIsRecognized(env);
   const char *cstr = std::getenv(env.c_str());
   if (!cstr)
@@ -78,6 +80,7 @@ inline std::string getStrEnv(const std::string &env) {
 
 // return value of a cache-invalidating boolean environment variable
 inline bool getBoolEnv(const std::string &env) {
+  std::lock_guard<std::mutex> lock(getenv_mutex);
   assertIsRecognized(env);
   const char *s = std::getenv(env.c_str());
   std::string str(s ? s : "");

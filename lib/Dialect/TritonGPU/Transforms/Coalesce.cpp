@@ -38,7 +38,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     });
 
     auto contiguity = axisInfoAnalysis.getAxisInfo(ptr)->getContiguity();
-    SmallVector<unsigned> order = argSort(contiguity);
+    SmallVector<unsigned> order = getOrderFromContiguity(contiguity);
     LDBG("order=[" << triton::join(order, ", ") << "]");
 
     auto matchesShape = [&refTensorType](const Value &val) {
@@ -55,8 +55,8 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
         Value val = getMemAccessPtr(use);
         if (!val || !matchesShape(val) || memAccessesSameOrder.contains(use))
           continue;
-        auto currOrder =
-            argSort(axisInfoAnalysis.getAxisInfo(val)->getContiguity());
+        auto currOrder = getOrderFromContiguity(
+            axisInfoAnalysis.getAxisInfo(val)->getContiguity());
         if (order == currOrder) {
           LDBG("multi-root-slice: insert to memAccessesSameOrder " << *use);
           memAccessesSameOrder.insert(use);
@@ -106,8 +106,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
 
   static Type getNewType(Type type, Attribute encoding) {
     RankedTensorType tensorType = cast<RankedTensorType>(type);
-    return RankedTensorType::get(tensorType.getShape(),
-                                 tensorType.getElementType(), encoding);
+    return tensorType.cloneWithEncoding(encoding);
   }
 
   void coalesceOp(Attribute encoding, Operation *op) {

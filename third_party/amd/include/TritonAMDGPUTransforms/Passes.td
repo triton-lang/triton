@@ -11,8 +11,6 @@ def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::Mod
     tile
   }];
 
-  let constructor = "mlir::createTritonAMDGPUStreamPipelinePass()";
-
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
@@ -28,6 +26,9 @@ def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::Mod
     Option<"useAsyncCopy", "use_async_copy",
            "bool", /*default*/"false",
            "Use AsyncCopyGlobalToLocal to directly load to shared memory">,
+    Option<"usePingpong", "use_pingpong",
+           "bool", /*default*/"false",
+           "Use schedules to enable block ping-pong">,
   ];
 }
 
@@ -38,8 +39,6 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
     Optimize the input/output layout of `dot` instruction to make them compatible hardware accelerators
     (e.g., AMD matrix cores)
   }];
-
-  let constructor = "mlir::createTritonAMDGPUAccelerateMatmulPass()";
 
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
@@ -62,8 +61,6 @@ def TritonAMDGPUOptimizeEpilogue : Pass<"tritonamdgpu-optimize-epilogue", "mlir:
   let description = [{
   }];
 
-  let constructor = "mlir::createTritonAMDGPUOptimizeEpiloguePass()";
-
   let dependentDialects = [];
 
 }
@@ -81,8 +78,6 @@ def TritonAMDGPUHoistLayoutConversions : Pass<"tritonamdgpu-hoist-layout-convers
      a larger register file but smaller shared memory. It's beneficial to keep loop-invariant
      variables in registers rather than loading them from shared memory in the loop.
   }];
-
-  let constructor = "mlir::createTritonAMDGPUHoistLayoutConversionsPass()";
 
 }
 
@@ -120,8 +115,6 @@ def TritonAMDGPUCanonicalizePointers : Pass<"tritonamdgpu-canonicalize-pointers"
   when we have to load the data, we splat the scalar pointer, add the "variable" offset and then issue the load.
   }];
 
-  let constructor = "mlir::createTritonAMDGPUCanonicalizePointersPass()";
-
   let dependentDialects = [];
 
 }
@@ -133,8 +126,6 @@ def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "
                     "conversions from shared memory before their first use) and (2) promote LLVM instruction "
                     "order more friendly to `ptxas`.";
 
-  let constructor = "mlir::createTritonAMDGPUReorderInstructionsPass()";
-
   let dependentDialects = [];
 }
 
@@ -143,14 +134,15 @@ def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "ml
 
   let description = "This pass converts memory and atomic operations (e.g., tt.load/tt.store/tt.atomic_rmw) to  amdgpu buffer operations, if possible";
 
-  let constructor = "mlir::createTritonAMDGPUConvertToBufferOpsPass()";
-
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
     Option<"archGenerationName", "arch-generation-name",
            "std::string", /*default=*/"std::string{}",
            "GFX generation name of target device.">,
+    Option<"allowBufferAtomics", "allow-buffer-atomics",
+           "bool", /*default*/"true",
+           "Allow buffer atomic operations when the hardware supports it.">,
   ];
 }
 
@@ -163,8 +155,6 @@ def TritonAMDGPUBlockPingpong: Pass<"tritonamdgpu-block-pingpong", "mlir::Module
     This block ping-pong pattern could be beneficial under few conditions including
     occupancy and number of warps.
   }];
-
-  let constructor = "mlir::createTritonAMDGPUBlockPingpongPass()";
 
   let dependentDialects = ["mlir::ROCDL::ROCDLDialect, mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
@@ -219,10 +209,8 @@ def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mli
     local_load is vectorized, because shared memory order matches destination layout register order.
 
     This pass introduces two ttg.convert_layouts to properly cover cases when between ttg.load and ttg.local_alloc/ttg.local_store
-    exist more operations like scf or ttg.memdesc_subview. These convert_layouts ops are optimized out by later passes.
+    exist more operations like scf or ttg.memdesc_index. These convert_layouts ops are optimized out by later passes.
   }];
-
-  let constructor = "mlir::createTritonAMDGPUInThreadTransposePass()";
 
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect", "mlir::triton::gpu::TritonGPUDialect"];
 }
@@ -236,8 +224,6 @@ def TritonAMDGPUCoalesceAsyncCopy: Pass<"tritonamdgpu-coalesce-async-copy", "mli
       source or the supported load vector size we clip it to the largest supported size. This ensures we get coalesced writes to
       shared memory as required by the hardware. Does only work for non swizzled shared memory layouts
   }];
-
-  let constructor = "mlir::createTritonAMDGPUCoalesceAsyncCopyPass()";
 
   let dependentDialects = [];
 
@@ -257,8 +243,6 @@ def TritonAMDGPUUpdateAsyncWaitCount: Pass<"tritonamdgpu-update-async-wait-count
       compute the number of interleaving global memory instructions to emit the correct waitcnt during lowering.
   }];
 
-  let constructor = "mlir::createTritonAMDGPUUpdateAsyncWaitCountPass()";
-
   let dependentDialects = [];
 
   let options = [
@@ -274,9 +258,23 @@ def TritonAMDFoldTrueCmpI: Pass<"tritonamdgpu-fold-true-cmpi", "mlir::ModuleOp">
   let description = [{
     Fold true arith.cmpi to %true. Useful for removing unnecessary predicated loads.
   }];
-
-  let constructor = "mlir::createTritonAMDGPUFoldTrueCmpIPass()";
 }
 
+def TritonAMDGPUOptimizeDotOperands : Pass<"tritonamdgpu-optimize-dot-operands", "mlir::ModuleOp"> {
+  let summary = "Optimize shared memory use for dot operands";
+
+  let description = [{
+    Perform transformations to promote shared memory reuse between matrix multiplication operands.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::amdgpu::TritonAMDGPUDialect",
+                           "mlir::triton::TritonDialect"];
+  let options = [
+    Option<"archGenerationName", "arch-generation-name",
+           "std::string", /*default=*/"std::string{}",
+           "GFX generation name of target device.">
+  ];
+}
 
 #endif

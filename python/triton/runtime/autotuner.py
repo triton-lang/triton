@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import builtins
-import os
 import time
 import inspect
 import hashlib
 import json
+from functools import cached_property
 from typing import Dict, Tuple, List, Optional
 
-from .jit import KernelInterface
+from .. import knobs
+from .jit import KernelInterface, JITFunction
 from .errors import OutOfResources, PTXASError
 from .driver import driver
+from .cache import get_cache_manager, triton_key
+from triton._C.libtriton import get_cache_invalidating_env_vars
 
 
 class Autotuner(KernelInterface):
@@ -31,7 +34,7 @@ class Autotuner(KernelInterface):
         self.keys = key
         self.cache: Dict[Tuple, Config] = {}
         self.arg_names = arg_names
-        self.cache_results = cache_results or os.getenv("TRITON_CACHE_AUTOTUNING", None) == "1"
+        self.cache_results = cache_results or (knobs.autotuning.cache and not knobs.runtime.interpret)
 
         # Reset to zero or restore values
         self.reset_to_zero = []
@@ -84,6 +87,7 @@ class Autotuner(KernelInterface):
         while not inspect.isfunction(self.base_fn):
             self.base_fn = self.base_fn.fn
 
+        self._do_bench = do_bench
         self.num_warmups = warmup
         self.num_reps = rep
         self.use_cuda_graph = use_cuda_graph
@@ -97,7 +101,7 @@ class Autotuner(KernelInterface):
                           stacklevel=1)
             if use_cuda_graph:
                 from ..testing import do_bench_cudagraph
-                self.do_bench = lambda kernel_call, quantiles: do_bench_cudagraph(
+                self._do_bench = lambda kernel_call, quantiles: do_bench_cudagraph(
                     kernel_call,
                     rep=rep if rep is not None else 100,
                     quantiles=quantiles,
@@ -105,7 +109,7 @@ class Autotuner(KernelInterface):
                 return
 
             import triton.testing
-            self.do_bench = lambda kernel_call, quantiles: triton.testing.do_bench(
+            self._do_bench = lambda kernel_call, quantiles: triton.testing.do_bench(
                 kernel_call,
                 warmup=warmup if warmup is not None else 25,
                 rep=rep if rep is not None else 100,
@@ -113,15 +117,16 @@ class Autotuner(KernelInterface):
             )
             return
 
-        if do_bench is None:
-            self.do_bench = driver.active.get_benchmarker()
-        else:
-            self.do_bench = do_bench
+    @cached_property
+    def do_bench(self):
+        if self._do_bench is None:
+            return driver.active.get_benchmarker()
+        return self._do_bench
 
     def _bench(self, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
 
-        verbose = os.environ.get("TRITON_PRINT_AUTOTUNING", None) == "1"
+        verbose = knobs.autotuning.print
         if verbose:
             print(f"Autotuning kernel {self.base_fn.__name__} with config {config}")
 
@@ -164,12 +169,9 @@ class Autotuner(KernelInterface):
         # We can't serialize prehooks, so just give up and run the benchmarks.
         if not tuning_key or any(cfg.pre_hook for cfg in configs):
             bench_fn()
-            return
+            return False
 
-        from triton._C.libtriton import get_cache_invalidating_env_vars
-        from triton.compiler.compiler import make_backend, triton_key
-        from triton.runtime.cache import get_cache_manager
-        from triton.runtime.jit import JITFunction
+        from triton.compiler.compiler import make_backend
 
         fn = self.fn
         while not isinstance(fn, JITFunction):
@@ -193,7 +195,7 @@ class Autotuner(KernelInterface):
                 timings = {Config(**config): timing for config, timing in timings}
                 self.cache[tuning_key] = builtins.min(timings, key=timings.get)
                 self.configs_timings = timings
-            return
+            return True
 
         bench_fn()
         cache.put(
@@ -203,6 +205,7 @@ class Autotuner(KernelInterface):
                 "configs_timings":
                 [(config.__dict__, timings) for config, timings in self.configs_timings.items() if not config.pre_hook],
             }), file_name, binary=False)
+        return False
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
@@ -230,7 +233,7 @@ class Autotuner(KernelInterface):
                     self.configs_timings = timings
 
                 if self.cache_results:
-                    self.check_disk_cache(key, pruned_configs, benchmark)
+                    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
                 else:
                     benchmark()
 
@@ -238,9 +241,9 @@ class Autotuner(KernelInterface):
         else:
             config = self.configs[0]
         self.best_config = config
-        if os.getenv("TRITON_PRINT_AUTOTUNING", None) == "1" and not used_cached_result:
-            print(f"Triton autotuning for function {self.base_fn.__name__} finished after "
-                  f"{self.bench_time:.2f}s; best config selected: {self.best_config};")
+        if knobs.autotuning.print and not used_cached_result:
+            print(f"Triton autotuning for function {self.base_fn.__name__},\nwith key as {key},\n"
+                  f"finished after {self.bench_time:.2f}s,\nbest config selected: {self.best_config};")
         if config.pre_hook is not None:
             full_nargs = {**self.nargs, **kwargs, **config.all_kwargs()}
             config.pre_hook(full_nargs)
@@ -279,11 +282,11 @@ class Autotuner(KernelInterface):
     def warmup(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
         ret = []
-        for config in self.prune_configs(kwargs):
+        for autotune_config in self.prune_configs(kwargs):
             ret.append(self.fn.warmup(
                 *args,
                 **kwargs,
-                **config.all_kwargs(),
+                **autotune_config.all_kwargs(),
             ))
         self.nargs = None
         return ret
@@ -301,22 +304,34 @@ class Config:
     :type num_warps: int
     :ivar num_stages: the number of stages that the compiler should use when software-pipelining loops.
                        Mostly useful for matrix multiplication workloads on SM80+ GPUs.
-    :type num_ctas: int
+    :type num_stages: int
     :ivar num_ctas: number of blocks in a block cluster. SM90+ only.
+    :type num_ctas: int
     :type maxnreg: Optional[int]
     :ivar maxnreg: maximum number of registers one thread can use.  Corresponds
                        to ptx .maxnreg directive.  Not supported on all platforms.
     :ivar pre_hook: a function that will be called before the kernel is called. Parameters of this
                     function are args.
+    :ivar ir_override: filename of a user-defined IR (*.{ttgir|llir|ptx|amdgcn}).
     """
 
-    def __init__(self, kwargs, num_warps=4, num_stages=3, num_ctas=1, maxnreg=None, pre_hook=None):
+    def __init__(self, kwargs, num_warps=4, num_stages=3, num_ctas=1, maxnreg=None, pre_hook=None, ir_override=None):
         self.kwargs = kwargs
         self.num_warps = num_warps
         self.num_ctas = num_ctas
         self.num_stages = num_stages
         self.maxnreg = maxnreg
         self.pre_hook = pre_hook
+        self.ir_override = ir_override
+
+    def __setstate__(self, state):
+        self.kwargs = state.get("kwargs", {})
+        self.num_warps = state.get("num_warps", 4)
+        self.num_stages = state.get("num_stages", 3)
+        self.num_ctas = state.get("num_ctas", 1)
+        self.maxnreg = state.get("maxnreg", None)
+        self.pre_hook = state.get("pre_hook", None)
+        self.ir_override = state.get("ir_override", None)
 
     def all_kwargs(self):
         return {
@@ -327,6 +342,7 @@ class Config:
                     ("num_ctas", self.num_ctas),
                     ("num_stages", self.num_stages),
                     ("maxnreg", self.maxnreg),
+                    ("ir_override", self.ir_override),
                 ) if v is not None
             }
         }

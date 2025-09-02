@@ -5,13 +5,10 @@
 
 namespace mlir::triton::gpu {
 
-FailureOr<CTALayoutAttr>
-permuteCTALayout(MLIRContext *ctx, CTALayoutAttr layout, ArrayRef<int> order) {
+CTALayoutAttr permuteCTALayout(MLIRContext *ctx, CTALayoutAttr layout,
+                               ArrayRef<int> order) {
   auto n = order.size();
-  if (layout.getCTAsPerCGA().size() != n ||
-      layout.getCTASplitNum().size() != n || layout.getCTAOrder().size() != n) {
-    return failure();
-  }
+  assert(n == layout.getRank() && "order and layout rank mismatch");
 
   auto invOrder = inversePermutation(order);
   llvm::SmallVector<unsigned> invOrderUnsigned(invOrder.begin(),
@@ -20,6 +17,20 @@ permuteCTALayout(MLIRContext *ctx, CTALayoutAttr layout, ArrayRef<int> order) {
       ctx, applyPermutation(layout.getCTAsPerCGA(), order),
       applyPermutation(layout.getCTASplitNum(), order),
       applyPermutation(invOrderUnsigned, layout.getCTAOrder()));
+}
+
+LinearLayout getPaddedRegToSharedLayout(const LinearLayout &regLayout,
+                                        PaddedSharedEncodingAttr paddedEnc) {
+  auto *ctx = paddedEnc.getContext();
+  auto kOffset = StringAttr::get(ctx, "offset");
+  auto outNames = to_vector(regLayout.getOutDimNames());
+  auto order = paddedEnc.getOrder();
+  // transposeOuts just iterates over out dims so we order them based on the
+  // order from the encoding
+  auto inOrderRegLayout =
+      regLayout.transposeOuts(triton::applyPermutation(outNames, order));
+  return inOrderRegLayout.reshapeOuts(
+      {{kOffset, inOrderRegLayout.getTotalOutDimSize()}});
 }
 
 } // namespace mlir::triton::gpu

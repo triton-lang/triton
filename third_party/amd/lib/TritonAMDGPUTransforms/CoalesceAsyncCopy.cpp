@@ -1,25 +1,30 @@
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
+#include "TritonAMDGPUTransforms/Passes.h"
+#include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h"
 
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-coalesce-async-copy"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-using namespace mlir;
 namespace ttg = triton::gpu;
+
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUCOALESCEASYNCCOPY
+#include "TritonAMDGPUTransforms/Passes.h.inc"
+
+namespace {
 
 // On gfx9 global and buffer loads directly to shared memory need to write
 // coalesced. This pattern converts the layout of the src, mask and other to
-// ensure the owned data per thread is contigious and does no exceed the
-// supported load vector size. The swizzle pattern is ignored here and is
-// handled when lowering to LLVMIR
+// ensure the owned data per thread is contiguous and does no exceed the
+// supported load vector size.
 struct CoalesceAsyncCopyWrites
     : public OpRewritePattern<ttg::AsyncCopyGlobalToLocalOp> {
   CoalesceAsyncCopyWrites(const triton::AMD::TargetInfo &targetInfo,
@@ -44,12 +49,6 @@ struct CoalesceAsyncCopyWrites
       return rewriter.notifyMatchFailure(copyOp,
                                          "src encoding must be #blocked");
 
-    auto sharedEnc =
-        dyn_cast<ttg::SwizzledSharedEncodingAttr>(dstTy.getEncoding());
-    if (!sharedEnc)
-      return rewriter.notifyMatchFailure(
-          copyOp, "destination encoding must be #SwizzledShared");
-
     // We start from the precomputed contiguity we got from AxisAnalysis.
     unsigned loadContig = 0;
     if (auto it = asyncCopyContiguity.find(copyOp);
@@ -64,20 +63,16 @@ struct CoalesceAsyncCopyWrites
     // layout e.g. if the order of the blocked and shared encoding is different
     // we can only load one element at a time or if the shared encoding is
     // swizzled we cannot exceed the vector size of the swizzling pattern
-    LinearLayout regLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), blockedEnc);
-    LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), sharedEnc);
+    LinearLayout regLayout = triton::gpu::toLinearLayout(srcTy);
+    LinearLayout sharedLayout = triton::gpu::toLinearLayout(dstTy);
     auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
     loadContig = std::min<unsigned>(loadContig,
                                     regToSharedLayout.getNumConsecutiveInOut());
 
     // Select the largest supported load width equal or smaller than loadContig
     auto elemBitWidth = dstTy.getElementTypeBitWidth();
-    while (loadContig > 0 && !targetInfo.supportsDirectToLdsLoadBitWidth(
-                                 loadContig * elemBitWidth)) {
-      loadContig /= 2;
-    }
+    loadContig =
+        fitToValidDirectToLdsVecSize(loadContig, elemBitWidth, targetInfo);
 
     if (loadContig == 0) {
       return rewriter.notifyMatchFailure(
@@ -108,8 +103,7 @@ struct CoalesceAsyncCopyWrites
     // Convert layout of src, mask and other to new encoding
     auto convertLayout = [&rewriter](auto loc, Value old, auto newEnc) {
       auto oldTy = cast<RankedTensorType>(old.getType());
-      RankedTensorType newSrcTy = RankedTensorType::get(
-          oldTy.getShape(), oldTy.getElementType(), newEnc);
+      RankedTensorType newSrcTy = oldTy.cloneWithEncoding(newEnc);
       return rewriter.create<ttg::ConvertLayoutOp>(loc, newSrcTy, old);
     };
 
@@ -136,13 +130,13 @@ private:
   const DenseMap<ttg::AsyncCopyGlobalToLocalOp, unsigned> &asyncCopyContiguity;
 };
 
+} // anonymous namespace
+
 class TritonAMDGPUCoalesceAsyncCopyPass
-    : public TritonAMDGPUCoalesceAsyncCopyBase<
+    : public impl::TritonAMDGPUCoalesceAsyncCopyBase<
           TritonAMDGPUCoalesceAsyncCopyPass> {
 public:
-  TritonAMDGPUCoalesceAsyncCopyPass(StringRef archGenName) {
-    this->archGenerationName = archGenName.str();
-  }
+  using Base::Base;
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
@@ -166,7 +160,7 @@ public:
     // Precompute the contiguity of all AsyncCopy ops based on the src and
     // mask contiguity/alignment to avoid rebuilding ModuleAxisInfoAnalysis
     // after every IR change.
-    triton::ModuleAxisInfoAnalysis axisAnalysis(m);
+    AMD::ModuleAxisInfoAnalysis axisAnalysis(m);
     DenseMap<ttg::AsyncCopyGlobalToLocalOp, unsigned> asyncCopyContiguity;
     m->walk([&](ttg::AsyncCopyGlobalToLocalOp copyOp) {
       unsigned contiguity =
@@ -185,8 +179,4 @@ public:
   }
 };
 
-std::unique_ptr<Pass>
-mlir::createTritonAMDGPUCoalesceAsyncCopyPass(std::string archGenName) {
-  return std::make_unique<TritonAMDGPUCoalesceAsyncCopyPass>(
-      std::move(archGenName));
-}
+} // namespace mlir

@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-pipeline=num-stages=3 -canonicalize | FileCheck %s --check-prefixes=COMMON,CHECK
+// RUN: triton-opt %s -split-input-file -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline=num-stages=3 -canonicalize | FileCheck %s --check-prefixes=COMMON,CHECK
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline=num_stages=2 -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline="num_stages=3 global_prefetch=1 local_prefetch=1" -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD_PREFETCH
 
@@ -9,7 +9,7 @@
 #ALs0 = #ttg.slice<{parent=#AL, dim=0}>
 #BLs0 = #ttg.slice<{parent=#BL, dim=0}>
 #BLs1 = #ttg.slice<{parent=#BL, dim=1}>
-#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
+#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
 #A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
 #B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
 #smem = #ttg.shared_memory
@@ -23,36 +23,36 @@
 // CHECK: %[[BBUFFER:.*]] = ttg.local_alloc
 // CHECK-DAG: %[[LOOP_COND_0:.*]] = arith.cmpi slt, %[[LB:.*]], %[[UB:.*]]
 // CHECK-DAG: %[[LOOP_COND_0_SPLAT_A:.*]] = tt.splat %[[LOOP_COND_0]]
-// CHECK-DAG: %[[ASUB:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK-DAG: %[[ASUB:.*]] = ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[CONSTANT_0]]{{\]}}
 // CHECK: %[[T_A0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[ASUB]] mask %[[LOOP_COND_0_SPLAT_A]]
 // CHECK-DAG: %[[LOOP_COND_0_SPLAT_B:.*]] = tt.splat %[[LOOP_COND_0]]
-// CHECK-DAG: %[[BSUB:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK-DAG: %[[BSUB:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_0]]{{\]}}
 // CHECK: %[[T_B0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[BSUB]] mask %[[LOOP_COND_0_SPLAT_B]] other %{{.*}}
 // CHECK-DAG: %[[IV_1:.*]] = arith.addi %[[LB]], %[[STEP:.*]]
 // CHECK-DAG: %[[LOOP_COND_1:.*]] = arith.cmpi slt, %[[IV_1]], %[[UB]]
 // CHECK-DAG: %[[LOOP_COND_1_SPLAT_A:.*]] = tt.splat %[[LOOP_COND_1]]
-// CHECK-DAG: %[[ASUB1:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK-DAG: %[[ASUB1:.*]] = ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[CONSTANT_1]]{{\]}}
 // CHECK: %[[T_A1:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[ASUB1]] mask %[[LOOP_COND_1_SPLAT_A]]
 // CHECK-DAG: %[[LOOP_COND_1_SPLAT_B:.*]] = tt.splat %[[LOOP_COND_1]]
-// CHECK-DAG: %[[BSUB1:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK-DAG: %[[BSUB1:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_1]]{{\]}}
 // CHECK: %[[T_B1:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[BSUB1]] mask %[[LOOP_COND_1_SPLAT_B]]
 // CHECK: scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_NEG1]]
 // CHECK-DAG: %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
 // CHECK-DAG: %[[CMP_EXT:.*]] = arith.cmpi sge, %[[EXT_IDX_2]], %[[CONSTANT_2]]
 // CHECK-DAG: %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[CONSTANT_0]], %[[EXT_IDX_2]]
 // CHECK-DAG: ttg.async_wait {{.*}} {num = 2 : i32}
-// CHECK-DAG: %[[A0:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[EXT_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK-DAG: %[[A0:.*]] = ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[EXT_IDX_3]]{{\]}}
 // CHECK:   %[[arg_a0_dot_op:.*]] = ttg.local_load %[[A0]]
-// CHECK-DAG: %[[B0:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[EXT_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK-DAG: %[[B0:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[EXT_IDX_3]]{{\]}}
 // CHECK:   %[[arg_b0_dot_op_0:.*]] = ttg.local_load %[[B0]]
 // CHECK:   %[[arg_b0_dot_op_1:.*]] = arith.mulf %[[arg_b0_dot_op_0]]
 // CHECK:   tt.dot %[[arg_a0_dot_op]], %[[arg_b0_dot_op_1]], {{.*}}
 // CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[INS_IDX]], %[[CONSTANT_1]] : i32
 // CHECK-DAG: %[[CMP_INS:.*]] = arith.cmpi sge, %[[INS_IDX_2]], %[[CONSTANT_2]]
 // CHECK-DAG: %[[INS_IDX_3:.*]] = arith.select %[[CMP_INS]], %[[CONSTANT_0]], %[[INS_IDX_2]]
-// CHECK:   %[[ASUB3:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   %[[ASUB3:.*]] = ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
 // CHECK:   %[[NEXT_A_BUFFER:.*]] = ttg.async_copy_global_to_local {{.*}}, %[[ASUB3]]
-// CHECK:   %[[BSUB3:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   %[[BSUB3:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
 // CHECK:   %[[NEXT_B_BUFFER:.*]] = ttg.async_copy_global_to_local {{.*}}, %[[BSUB3]]
 // CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]]
 
@@ -73,9 +73,9 @@
 //       AMD:     %[[ADDI_42:.*]] = arith.addi %[[ARG9]], %{{.*}}
 //       AMD:     %[[CMPI_43:.*]] = arith.cmpi slt, %[[ADDI_42]], %{{.*}}
 //       AMD:     %[[SELECT_44:.*]] = arith.select %[[CMPI_43]], %[[ADDI_42]], %{{.*}}
-//       AMD:     %[[MEMDESC_SUBVIEW_45:.*]] = ttg.memdesc_subview %{{.*}}[%[[SELECT_44]], %{{.*}}, %{{.*}}]
+//       AMD:     %[[MEMDESC_SUBVIEW_45:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%[[SELECT_44]]{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_36]], %[[MEMDESC_SUBVIEW_45]]
-//       AMD:     %[[MEMDESC_SUBVIEW_46:.*]] = ttg.memdesc_subview %{{.*}}[%[[SELECT_44]], %{{.*}}, %{{.*}}]
+//       AMD:     %[[MEMDESC_SUBVIEW_46:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%[[SELECT_44]]{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_38]], %[[MEMDESC_SUBVIEW_46]]
 //       AMD:     scf.yield %[[ADDPTR_34]], %[[ADDPTR_35]], %[[DOT_41]], %[[SELECT_44]], %[[MEMDESC_SUBVIEW_45]], %[[MEMDESC_SUBVIEW_46]]
 //       AMD:   }
@@ -180,30 +180,30 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK: scf.for
 // CHECK:   %[[ABUFFER:.*]] = ttg.local_alloc
 // CHECK:   %[[BBUFFER:.*]] = ttg.local_alloc
-// CHECK:   ttg.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[CONSTANT_0]]{{\]}}
 // CHECK:   ttg.async_copy_global_to_local
-// CHECK:   ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_0]]{{\]}}
 // CHECK:   ttg.async_copy_global_to_local
-// CHECK:   ttg.memdesc_subview %[[ABUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[CONSTANT_1]]{{\]}}
 // CHECK:   ttg.async_copy_global_to_local
-// CHECK:   ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_1]]{{\]}}
 // CHECK:   ttg.async_copy_global_to_local
 // CHECK:   scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_NEG1]]{{.*}}
 // CHECK:     %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
 // CHECK:     %[[CMP_EXT:.*]] = arith.cmpi sge, %[[EXT_IDX_2]], %[[CONSTANT_2]]
 // CHECK:     %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[CONSTANT_0]], %[[EXT_IDX_2]]
 // CHECK:     ttg.async_wait {{.*}} {num = 2 : i32}
-// CHECK:     %[[A:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[EXT_IDX_3]],
+// CHECK:     %[[A:.*]] = ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[EXT_IDX_3]]{{\]}}
 // CHECK:     %[[arg_a0_dot_op:.*]] = ttg.local_load %[[A]]
-// CHECK:     %[[B:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[EXT_IDX_3]],
+// CHECK:     %[[B:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[EXT_IDX_3]]{{\]}}
 // CHECK:     %[[arg_b0_dot_op_0:.*]] = ttg.local_load %[[B]]
 // CHECK:     tt.dot %[[arg_a0_dot_op]], %[[arg_b0_dot_op_0]], {{.*}}
 // CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[INS_IDX]], %[[CONSTANT_1]] : i32
 // CHECK-DAG: %[[CMP_INS:.*]] = arith.cmpi sge, %[[INS_IDX_2]], %[[CONSTANT_2]]
 // CHECK-DAG: %[[INS_IDX_3:.*]] = arith.select %[[CMP_INS]], %[[CONSTANT_0]], %[[INS_IDX_2]]
-// CHECK:     ttg.memdesc_subview %[[ABUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:     ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
 // CHECK:     ttg.async_copy_global_to_local
-// CHECK:     ttg.memdesc_subview %[[BBUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:     ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
 // CHECK:     ttg.async_copy_global_to_local
 // CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]]
 // CHECK:   ttg.async_wait {num = 0 : i32}
@@ -213,9 +213,9 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 //         AMD:  scf.for
 // AMD-COUNT-2:  ttg.local_alloc
 // AMD-COUNT-2:  tt.load
-//         AMD:  %[[SUBVIEW0:.*]] = ttg.memdesc_subview
+//         AMD:  %[[SUBVIEW0:.*]] = ttg.memdesc_index
 //         AMD:  ttg.local_store %{{.+}}, %[[SUBVIEW0]]
-//         AMD:  %[[SUBVIEW1:.*]] = ttg.memdesc_subview
+//         AMD:  %[[SUBVIEW1:.*]] = ttg.memdesc_index
 //         AMD:  ttg.local_store %{{.+}}, %[[SUBVIEW1]]
 //         AMD:  %[[FOR:.*]]:6 = scf.for
 // AMD-COUNT-2:    tt.addptr
@@ -224,9 +224,9 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 //         AMD:    tt.load
 //         AMD:    ttg.local_load
 //         AMD:    tt.dot
-//         AMD:    %[[SUBVIEW0:.*]] = ttg.memdesc_subview
+//         AMD:    %[[SUBVIEW0:.*]] = ttg.memdesc_index
 //         AMD:    ttg.local_store %{{.+}}, %[[SUBVIEW0]]
-//         AMD:    %[[SUBVIEW1:.*]] = ttg.memdesc_subview
+//         AMD:    %[[SUBVIEW1:.*]] = ttg.memdesc_index
 //         AMD:    ttg.local_store %{{.+}}, %[[SUBVIEW1]]
 //         AMD:    scf.yield
 // AMD-COUNT-2:  ttg.local_load
@@ -290,22 +290,22 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
 // CHECK: %[[BBUFFER:.*]] = ttg.local_alloc
-// CHECK: ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK: ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_0]]{{\]}}
 // CHECK: ttg.async_copy_global_to_local
-// CHECK: ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK: ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_1]]{{\]}}
 // CHECK: ttg.async_copy_global_to_local
 // CHECK:   scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_NEG1]]
 // CHECK:     %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
 // CHECK:     %[[CMP_EXT:.*]] = arith.cmpi sge, %[[EXT_IDX_2]], %[[CONSTANT_2]]
 // CHECK:     %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[CONSTANT_0]], %[[EXT_IDX_2]]
 // CHECK:     ttg.async_wait {{.*}} {num = 1 : i32}
-// CHECK:     %[[B0:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[EXT_IDX_3]]
+// CHECK:     %[[B0:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[EXT_IDX_3]]{{\]}}
 // CHECK:     %[[arg_b0_dot_op:.*]] = ttg.local_load %[[B0]]
 // CHECK:     tt.dot {{.*}}, %[[arg_b0_dot_op]], {{.*}}
 // CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[INS_IDX]], %[[CONSTANT_1]] : i32
 // CHECK-DAG: %[[CMP_INS:.*]] = arith.cmpi sge, %[[INS_IDX_2]], %[[CONSTANT_2]]
 // CHECK-DAG: %[[INS_IDX_3:.*]] = arith.select %[[CMP_INS]], %[[CONSTANT_0]], %[[INS_IDX_2]]
-// CHECK:     ttg.memdesc_subview %[[BBUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:     ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[INS_IDX_3]]{{\]}}
 // CHECK:     ttg.async_copy_global_to_local
 // CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]]
 
@@ -316,7 +316,7 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 //       AMD:   %[[CMPI_13:.*]] = arith.cmpi slt, %{{.*}}, %{{.*}}
 //       AMD:   %[[SPLAT_14:.*]] = tt.splat %[[CMPI_13]]
 //       AMD:   %[[LOAD_15:.*]] = tt.load %{{.*}}, %[[SPLAT_14]], %{{.*}}
-//       AMD:   %[[MEMDESC_SUBVIEW_16:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_12]][%{{.*}}, %{{.*}}, %{{.*}}]
+//       AMD:   %[[MEMDESC_SUBVIEW_16:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_12]]{{\[}}%{{.*}}{{\]}}
 //       AMD:   ttg.local_store %[[LOAD_15]], %[[MEMDESC_SUBVIEW_16]]
 //       AMD:   %[[SUBI_17:.*]] = arith.subi %{{.*}}, %{{.*}}
 //       AMD:   %{{.*}}:4 = scf.for %[[ARG5:.*]] = %{{.*}} to %[[SUBI_17]] step %{{.*}} iter_args(%[[ARG6:.*]] = %{{.*}}, %[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %[[MEMDESC_SUBVIEW_16]])
@@ -327,7 +327,7 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 //       AMD:       %[[ADDI_34:.*]] = arith.addi %[[ARG8]], %{{.*}}
 //       AMD:       %[[CMPI_35:.*]] = arith.cmpi slt, %[[ADDI_34]], %{{.*}}
 //       AMD:       %[[SELECT_36:.*]] = arith.select %[[CMPI_35]], %[[ADDI_34]], %{{.*}}
-//       AMD:       %[[MEMDESC_SUBVIEW_37:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_12]][%[[SELECT_36]], %{{.*}}, %{{.*}}]
+//       AMD:       %[[MEMDESC_SUBVIEW_37:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_12]]{{\[}}%[[SELECT_36]]{{\]}}
 //       AMD:       ttg.local_store %[[LOAD_33]], %[[MEMDESC_SUBVIEW_37]]
 //       AMD:       scf.yield %[[ADDPTR_32]], %[[DOT_31]], %[[SELECT_36]], %[[MEMDESC_SUBVIEW_37]]
 //       AMD:  ttg.local_dealloc %[[LOCAL_ALLOC_12]]
@@ -393,10 +393,12 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 // CHECK: ttg.async_copy_global_to_local
 // CHECK: ttg.async_commit_group
 // CHECK: scf.for
-// CHECK: ttg.async_wait {{.*}} {num = 2 : i32}
+// CHECK: ttg.async_wait {{.*}} {num = 1 : i32}
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
 // CHECK: ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]]
-// CHECK: %[[IND_BUFFER_0:.*]] = tt.load %{{.*}}, {{.*}}
+// CHECK: ttg.async_wait {{.*}} {num = 1 : i32}
+// CHECK: %[[IND_BUFFER_0_T:.*]] = ttg.local_load
+// CHECK: %[[IND_BUFFER_0:.*]] = tt.unsplat %[[IND_BUFFER_0_T]] : tensor<1xi64
 // CHECK: %[[IND_BUFFER_1:.*]] = arith.muli {{.*}}, %[[IND_BUFFER_0]]
 // CHECK: %[[IND_BUFFER_2:.*]] = tt.splat %[[IND_BUFFER_1]]
 // CHECK: %[[NEXT_BUFFER_0:.*]] = tt.addptr {{.*}}, %[[IND_BUFFER_2]]
@@ -406,54 +408,39 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD:     %[[LOCAL_ALLOC_0:.*]] = ttg.local_alloc
 //       AMD:     %[[LOCAL_ALLOC_1:.*]] = ttg.local_alloc
 //       AMD:     %[[CMPI_2:.*]] = arith.cmpi sgt, %{{.*}}, %{{.*}}
+//       AMD:     %[[LOAD_5:.*]] = tt.load %{{.*}}, %[[CMPI_2]] {amd.pipeliner_part = "prologue"}
 //       AMD:     %[[SPLAT_3:.*]] = tt.splat %[[CMPI_2]]
-//       AMD:     %[[LOAD_4:.*]] = tt.load %{{.*}}, %[[SPLAT_3]] {OpIdx = #amdgpu.OpIdx<0>}
-//       AMD:     %[[LOAD_5:.*]] = tt.load %{{.*}}, %[[CMPI_2]]
+//       AMD:     %[[LOAD_4:.*]] = tt.load %{{.*}}, %[[SPLAT_3]] {amd.pipeliner_part = "prologue"}
 //       AMD:     %[[MULI_6:.*]] = arith.muli %{{.*}}, %[[LOAD_5]]
 //       AMD:     %[[SPLAT_7:.*]] = tt.splat %[[MULI_6]]
 //       AMD:     %[[ADDPTR_8:.*]] = tt.addptr %{{.*}}, %[[SPLAT_7]]
 //       AMD:     %[[SPLAT_9:.*]] = tt.splat %[[CMPI_2]]
-//       AMD:     %[[LOAD_10:.*]] = tt.load %[[ADDPTR_8]], %[[SPLAT_9]] {OpIdx = #amdgpu.OpIdx<1>}
-//       AMD:     %[[MEMDESC_SUBVIEW_11:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_0]][%{{.*}}, %{{.*}}, %{{.*}}]
-//       AMD:     ttg.local_store %[[LOAD_4]], %[[MEMDESC_SUBVIEW_11]] {OpIdx = #amdgpu.OpIdx<0>}
-//       AMD:     %[[MEMDESC_SUBVIEW_12:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_1]][%{{.*}}, %{{.*}}, %{{.*}}]
-//       AMD:     ttg.local_store %[[LOAD_10]], %[[MEMDESC_SUBVIEW_12]] {OpIdx = #amdgpu.OpIdx<1>}
-//       AMD:     %[[CMPI_13:.*]] = arith.cmpi sgt, %{{.*}}, %{{.*}}
-//       AMD:     %[[ADDPTR_14:.*]] = tt.addptr %{{.*}}, %{{.*}}
-//       AMD:     %[[ADDPTR_15:.*]] = tt.addptr %{{.*}}, %{{.*}}
-//       AMD:     %[[SPLAT_16:.*]] = tt.splat %[[CMPI_13]]
-//       AMD:     %[[LOAD_17:.*]] = tt.load %[[ADDPTR_14]], %[[SPLAT_16]] {OpIdx = #amdgpu.OpIdx<0>}
-//       AMD:     %[[LOAD_18:.*]] = tt.load %[[ADDPTR_15]], %[[CMPI_13]]
-//       AMD:     %[[MULI_19:.*]] = arith.muli %{{.*}}, %[[LOAD_18]]
-//       AMD:     %[[SPLAT_20:.*]] = tt.splat %[[MULI_19]]
-//       AMD:     %[[ADDPTR_21:.*]] = tt.addptr %{{.*}}, %[[SPLAT_20]]
-//       AMD:     %[[SPLAT_22:.*]] = tt.splat %[[CMPI_13]]
-//       AMD:     %[[LOAD_23:.*]] = tt.load %[[ADDPTR_21]], %[[SPLAT_22]] {OpIdx = #amdgpu.OpIdx<1>}
-//       AMD:     %[[MEMDESC_SUBVIEW_24:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_0]][%{{.*}}, %{{.*}}, %{{.*}}]
-//       AMD:     ttg.local_store %[[LOAD_17]], %[[MEMDESC_SUBVIEW_24]] {OpIdx = #amdgpu.OpIdx<0>}
-//       AMD:     %[[MEMDESC_SUBVIEW_25:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_1]][%{{.*}}, %{{.*}}, %{{.*}}]
-//       AMD:     ttg.local_store %[[LOAD_23]], %[[MEMDESC_SUBVIEW_25]] {OpIdx = #amdgpu.OpIdx<1>}
+//       AMD:     %[[LOAD_10:.*]] = tt.load %[[ADDPTR_8]], %[[SPLAT_9]] {amd.pipeliner_part = "prologue"}
+//       AMD:     %[[MEMDESC_SUBVIEW_11:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_0]]{{\[}}%{{.*}}{{\]}}
+//       AMD:     ttg.local_store %[[LOAD_4]], %[[MEMDESC_SUBVIEW_11]]
+//       AMD:     %[[MEMDESC_SUBVIEW_12:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_1]]{{\[}}%{{.*}}{{\]}}
+//       AMD:     ttg.local_store %[[LOAD_10]], %[[MEMDESC_SUBVIEW_12]]
 //       AMD:     %[[SUBI_26:.*]] = arith.subi %{{.*}}, %{{.*}}
-//       AMD:     %{{.*}}:8 = scf.for %[[ARG6:.*]] = %{{.*}} to %[[SUBI_26]] step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %[[ADDPTR_14]], %[[ARG9:.*]] = %[[ADDPTR_15]], %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %[[MEMDESC_SUBVIEW_11]], %[[ARG12:.*]] = %[[MEMDESC_SUBVIEW_24]], %[[ARG13:.*]] = %[[MEMDESC_SUBVIEW_12]], %[[ARG14:.*]] = %[[MEMDESC_SUBVIEW_25]])
+//       AMD:     %{{.*}}:7 = scf.for %[[ARG6:.*]] = %{{.*}} to %[[SUBI_26]] step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %{{.*}}, %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %[[MEMDESC_SUBVIEW_11]], %[[ARG12:.*]] = %{{.*}}, %[[ARG13:.*]] = %[[MEMDESC_SUBVIEW_12]])
 //       AMD:       %[[ADDPTR_38:.*]] = tt.addptr %[[ARG8]], %{{.*}}
 //       AMD:       %[[ADDPTR_39:.*]] = tt.addptr %[[ARG9]], %{{.*}}
-//       AMD:       %[[LOAD_40:.*]] = tt.load %[[ADDPTR_38]] {OpIdx = #amdgpu.OpIdx<0>}
+//       AMD:       %[[LOAD_40:.*]] = tt.load %[[ADDPTR_38]]
 //       AMD:       %[[LOCAL_LOAD_41:.*]] = ttg.local_load %[[ARG11]]
 //       AMD:       %[[LOAD_42:.*]] = tt.load %[[ADDPTR_39]]
-//       AMD:       %[[MULI_43:.*]] = arith.muli %{{.*}}, %[[LOAD_42]]
+//       AMD:       %[[MULI_43:.*]] = arith.muli %{{.*}}, %[[ARG12]]
 //       AMD:       %[[SPLAT_44:.*]] = tt.splat %[[MULI_43]]
 //       AMD:       %[[ADDPTR_45:.*]] = tt.addptr %{{.*}}, %[[SPLAT_44]]
-//       AMD:       %[[LOAD_46:.*]] = tt.load %[[ADDPTR_45]] {OpIdx = #amdgpu.OpIdx<1>}
+//       AMD:       %[[LOAD_46:.*]] = tt.load %[[ADDPTR_45]]
 //       AMD:       %[[LOCAL_LOAD_47:.*]] = ttg.local_load %[[ARG13]]
 //       AMD:       %[[DOT_48:.*]] = tt.dot %[[LOCAL_LOAD_41]], %[[LOCAL_LOAD_47]], %[[ARG7]]
 //       AMD:       %[[ADDI_49:.*]] = arith.addi %[[ARG10]], %{{.*}}
 //       AMD:       %[[CMPI_50:.*]] = arith.cmpi slt, %[[ADDI_49]], %{{.*}}
 //       AMD:       %[[SELECT_51:.*]] = arith.select %[[CMPI_50]], %[[ADDI_49]], %{{.*}}
-//       AMD:       %[[MEMDESC_SUBVIEW_52:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_0]][%[[SELECT_51]], %{{.*}}, %{{.*}}]
-//       AMD:       ttg.local_store %[[LOAD_40]], %[[MEMDESC_SUBVIEW_52]] {OpIdx = #amdgpu.OpIdx<0>}
-//       AMD:       %[[MEMDESC_SUBVIEW_53:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_1]][%[[SELECT_51]], %{{.*}}, %{{.*}}]
-//       AMD:       ttg.local_store %[[LOAD_46]], %[[MEMDESC_SUBVIEW_53]] {OpIdx = #amdgpu.OpIdx<1>}
-//       AMD:       scf.yield %[[DOT_48]], %[[ADDPTR_38]], %[[ADDPTR_39]], %[[SELECT_51]], %[[ARG12]], %[[MEMDESC_SUBVIEW_52]], %[[ARG14]], %[[MEMDESC_SUBVIEW_53]]
+//       AMD:       %[[MEMDESC_SUBVIEW_52:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_0]]{{\[}}%[[SELECT_51]]{{\]}}
+//       AMD:       ttg.local_store %[[LOAD_40]], %[[MEMDESC_SUBVIEW_52]]
+//       AMD:       %[[MEMDESC_SUBVIEW_53:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_1]]{{\[}}%[[SELECT_51]]{{\]}}
+//       AMD:       ttg.local_store %[[LOAD_46]], %[[MEMDESC_SUBVIEW_53]]
+//       AMD:       scf.yield %[[DOT_48]], %[[ADDPTR_38]], %[[ADDPTR_39]], %[[SELECT_51]], %[[MEMDESC_SUBVIEW_52]], %[[LOAD_42]], %[[MEMDESC_SUBVIEW_53]]
 //       AMD:     } {tt.num_stages = 3
 //       AMD:     %[[CMPI_28:.*]] = arith.cmpi sge, %{{.*}}, %{{.*}}
 //       AMD:     %[[CMPI_29:.*]] = arith.cmpi sge, %{{.*}}, %{{.*}}
@@ -466,8 +453,8 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD:       scf.yield %{{.*}}#0
 //       AMD:     }
 //       AMD:     %[[SELECT_33:.*]] = arith.select %[[CMPI_28]], %[[IF_32]], %{{.*}}#0
-//       AMD:     %[[LOCAL_LOAD_34:.*]] = ttg.local_load %{{.*}}#5
-//       AMD:     %[[LOCAL_LOAD_35:.*]] = ttg.local_load %{{.*}}#7
+//       AMD:     %[[LOCAL_LOAD_34:.*]] = ttg.local_load %{{.*}}
+//       AMD:     %[[LOCAL_LOAD_35:.*]] = ttg.local_load %{{.*}}
 //       AMD:     %[[IF_36:.*]] = scf.if %[[CMPI_29]]
 //       AMD:       %[[DOT_38:.*]] = tt.dot %[[LOCAL_LOAD_34]], %[[LOCAL_LOAD_35]], %[[SELECT_33]]
 //       AMD:       scf.yield %[[DOT_38]]
@@ -475,36 +462,8 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD:       scf.yield %[[SELECT_33]]
 //       AMD:     }
 //       AMD:     %[[SELECT_37:.*]] = arith.select %[[CMPI_29]], %[[IF_36]], %[[SELECT_33]]
-//       AMD:     ttg.local_dealloc %[[LOCAL_ALLOC_0]]
-//       AMD:     ttg.local_dealloc %[[LOCAL_ALLOC_1]]
-
-// AMD_PREFETCH-LABEL: tt.func @indirect_bmm_scalar
-//       AMD_PREFETCH:   ttg.local_alloc
-//       AMD_PREFETCH:   ttg.local_alloc
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_store
-//       AMD_PREFETCH:   ttg.local_store
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_load
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_load
-//       AMD_PREFETCH:   scf.for
-//       AMD_PREFETCH:     ttg.local_store
-//       AMD_PREFETCH:     ttg.local_store
-//       AMD_PREFETCH:     tt.dot
-//       AMD_PREFETCH:     tt.load
-//       AMD_PREFETCH:     ttg.local_load
-//       AMD_PREFETCH:     tt.load
-//       AMD_PREFETCH:     tt.load
-//       AMD_PREFETCH:     ttg.local_load
-//       AMD_PREFETCH:     scf.yield
-//       AMD_PREFETCH:   tt.dot
-//       AMD_PREFETCH:   tt.dot
-//       AMD_PREFETCH:   tt.return
-
+//       AMD-DAG:     ttg.local_dealloc %[[LOCAL_ALLOC_0]]
+//       AMD-DAG:     ttg.local_dealloc %[[LOCAL_ALLOC_1]]
 tt.func @indirect_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
                    %76: index,
                    %49: tensor<16x16x!tt.ptr<f16>, #AL> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
@@ -604,7 +563,7 @@ tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
 // CHECK: ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]]
 // CHECK-DAG: %[[IND_BUFFER_WAIT_TOKEN:.*]] = ttg.async_wait {{.*}} {num = 1 : i32}
-// CHECK-DAG: %[[IND_BUFFER_0:.*]] = ttg.memdesc_subview
+// CHECK-DAG: %[[IND_BUFFER_0:.*]] = ttg.memdesc_index
 // CHECK: %[[IND_BUFFER_1:.*]] = ttg.local_load %[[IND_BUFFER_0]] token %[[IND_BUFFER_WAIT_TOKEN]]
 // CHECK: %[[IND_BUFFER_2:.*]] = tt.expand_dims %[[IND_BUFFER_1]] {axis = 1 : i32}
 // CHECK: %[[IND_BUFFER_3:.*]] = tt.broadcast %[[IND_BUFFER_2]]
@@ -631,9 +590,9 @@ tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
 //       AMD:   %[[ADDPTR_14:.*]] = tt.addptr %{{.*}}, %[[MULI_13]]
 //       AMD:   %[[SPLAT_15:.*]] = tt.splat %[[CMPI_2]]
 //       AMD:   %[[LOAD_16:.*]] = tt.load %[[ADDPTR_14]], %[[SPLAT_15]]
-//       AMD:   %[[MEMDESC_SUBVIEW_17:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_0]][%{{.*}}, %{{.*}}, %{{.*}}]
+//       AMD:   %[[MEMDESC_SUBVIEW_17:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_0]]{{\[}}%{{.*}}{{\]}}
 //       AMD:   ttg.local_store %[[LOAD_8]], %[[MEMDESC_SUBVIEW_17]]
-//       AMD:   %[[MEMDESC_SUBVIEW_18:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_1]][%{{.*}}, %{{.*}}, %{{.*}}]
+//       AMD:   %[[MEMDESC_SUBVIEW_18:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_1]]{{\[}}%{{.*}}{{\]}}
 //       AMD:   ttg.local_store %[[LOAD_16]], %[[MEMDESC_SUBVIEW_18]]
 //       AMD:   %[[SUBI_19:.*]] = arith.subi %{{.*}}, %{{.*}}
 //       AMD:   %{{.*}}:7 = scf.for %[[ARG6:.*]] = %{{.*}} to %[[SUBI_19]] step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %[[ADDPTR_6]], %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %[[MEMDESC_SUBVIEW_17]], %[[ARG12:.*]] = %[[LOAD_10]], %[[ARG13:.*]] = %[[MEMDESC_SUBVIEW_18]])
@@ -652,9 +611,9 @@ tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
 //       AMD:     %[[ADDI_59:.*]] = arith.addi %[[ARG10]], %{{.*}}
 //       AMD:     %[[CMPI_60:.*]] = arith.cmpi slt, %[[ADDI_59]], %{{.*}}
 //       AMD:     %[[SELECT_61:.*]] = arith.select %[[CMPI_60]], %[[ADDI_59]], %{{.*}}
-//       AMD:     %[[MEMDESC_SUBVIEW_62:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_0]][%[[SELECT_61]], %{{.*}}, %{{.*}}]
+//       AMD:     %[[MEMDESC_SUBVIEW_62:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_0]]{{\[}}%[[SELECT_61]]{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_49]], %[[MEMDESC_SUBVIEW_62]]
-//       AMD:     %[[MEMDESC_SUBVIEW_63:.*]] = ttg.memdesc_subview %[[LOCAL_ALLOC_1]][%[[SELECT_61]], %{{.*}}, %{{.*}}]
+//       AMD:     %[[MEMDESC_SUBVIEW_63:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_1]]{{\[}}%[[SELECT_61]]{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_56]], %[[MEMDESC_SUBVIEW_63]]
 //       AMD:     scf.yield %[[DOT_58]], %[[ADDPTR_47]], %[[ADDPTR_48]], %[[SELECT_61]], %[[MEMDESC_SUBVIEW_62]], %[[LOAD_51]], %[[MEMDESC_SUBVIEW_63]]
 
@@ -920,8 +879,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
       %25 = ttg.memdesc_trans %24 {order=array<i32: 1,0>} : !ttg.memdesc<64x16xf16, #shared, #smem> -> !ttg.memdesc<16x64xf16, #shared1, #smem>
       %26 = ttg.local_load %25 : !ttg.memdesc<16x64xf16, #shared1, #smem> -> tensor<16x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
       %27 = tt.dot %23, %26, %arg4 : tensor<128x16xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<16x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x64xf32, #mma>
+      // COMMON: scf.yield
       scf.yield %21, %27 : tensor<128x16xf32, #mma>, tensor<128x64xf32, #mma>
     }
+    // COMMON-NOT: alloc
     tt.return %17#0, %17#1 : tensor<128x16xf32, #mma>, tensor<128x64xf32, #mma>
   }
 }
@@ -967,7 +928,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func public @nested_loops(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @nested_loops(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
     %cst_0 = arith.constant dense<320> : tensor<32x1xi32, #blocked>
     %c0_i32 = arith.constant 0 : i32
@@ -1027,7 +988,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK: ttg.async_wait {{.*}} {num = 1 : i32}
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
 // CHECK: ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]]
-// CHECK: %[[IND_BUFFER_0:.*]] = ttg.memdesc_subview {{.*}} : !ttg.memdesc<1x16xi64, #[[$SHARED_LAYOUT]], #smem, mutable> -> !ttg.memdesc<16xi64, #[[$SHARED_LAYOUT]], #smem, mutable, 1x16>
+// CHECK: %[[IND_BUFFER_0:.*]] = ttg.memdesc_index {{.*}} : !ttg.memdesc<1x16xi64, #[[$SHARED_LAYOUT]], #smem, mutable> -> !ttg.memdesc<16xi64, #[[$SHARED_LAYOUT]], #smem, mutable, 1x16>
 // CHECK: %[[IND_BUFFER_1:.*]] = ttg.local_load %[[IND_BUFFER_0]]
 // CHECK: %[[IND_BUFFER_2:.*]] = tt.expand_dims %[[IND_BUFFER_1]] {axis = 1 : i32}
 // CHECK: %[[IND_BUFFER_3:.*]] = tt.broadcast %[[IND_BUFFER_2]]
@@ -1055,9 +1016,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 //       AMD:     %[[ADDI_59:.*]] = arith.addi %[[ARG10]], %{{.*}}
 //       AMD:     %[[CMPI_60:.*]] = arith.cmpi slt, %[[ADDI_59]], %{{.*}}
 //       AMD:     %[[SELECT_61:.*]] = arith.select %[[CMPI_60]], %[[ADDI_59]], %{{.*}}
-//       AMD:     %[[MEMDESC_SUBVIEW_62:.*]] = ttg.memdesc_subview %{{.*}}[%[[SELECT_61]], %{{.*}}, %{{.*}}]
+//       AMD:     %[[MEMDESC_SUBVIEW_62:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%[[SELECT_61]]{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_49]], %[[MEMDESC_SUBVIEW_62]]
-//       AMD:     %[[MEMDESC_SUBVIEW_63:.*]] = ttg.memdesc_subview %{{.*}}[%[[SELECT_61]], %{{.*}}, %{{.*}}]
+//       AMD:     %[[MEMDESC_SUBVIEW_63:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%[[SELECT_61]]{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_56]], %[[MEMDESC_SUBVIEW_63]]
 //       AMD:     scf.yield %[[DOT_58]], %[[ADDPTR_47]], %[[ADDPTR_48]], %[[SELECT_61]], %[[MEMDESC_SUBVIEW_62]], %[[LOAD_51]], %[[MEMDESC_SUBVIEW_63]]
 //       AMD:   }
@@ -1083,9 +1044,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 //       AMD:     %[[ADDI_35:.*]] = arith.addi %{{.*}}#3, %{{.*}}
 //       AMD:     %[[CMPI_36:.*]] = arith.cmpi slt, %[[ADDI_35]], %{{.*}}
 //       AMD:     %[[SELECT_37:.*]] = arith.select %[[CMPI_36]], %[[ADDI_35]], %{{.*}}
-//       AMD:     %[[MEMDESC_SUBVIEW_38:.*]] = ttg.memdesc_subview %{{.*}}[%[[SELECT_37]], %{{.*}}, %{{.*}}]
+//       AMD:     %[[MEMDESC_SUBVIEW_38:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%[[SELECT_37]]{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_25]], %[[MEMDESC_SUBVIEW_38]]
-//       AMD:     %[[MEMDESC_SUBVIEW_39:.*]] = ttg.memdesc_subview %{{.*}}[%[[SELECT_37]], %{{.*}}, %{{.*}}]
+//       AMD:     %[[MEMDESC_SUBVIEW_39:.*]] = ttg.memdesc_index %{{.*}}{{\[}}%[[SELECT_37]]{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_32]], %[[MEMDESC_SUBVIEW_39]]
 //       AMD:     %[[SELECT_40:.*]] = arith.select %[[CMPI_21]], %[[IF_34]], %{{.*}}#0
 //       AMD:     %[[LOCAL_LOAD_41:.*]] = ttg.local_load %[[MEMDESC_SUBVIEW_38]]
@@ -1103,7 +1064,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #BL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #BLs1 = #ttg.slice<{parent=#BL, dim=1}>
-#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
+#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
 #A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
 #B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
@@ -1145,23 +1106,23 @@ tt.func @indirect_load_shared_layout(%77: tensor<16x16xi64, #BL> {tt.divisibilit
 // CHECK-LABEL: @kernel_yield_constant
 // CHECK: ttg.async_copy_global_to_local
 // CHECK: scf.for
-// CHECK: ttg.memdesc_subview
+// CHECK: ttg.memdesc_index
 // CHECK: ttg.async_copy_global_to_local
 // CHECK: tt.return
 
 // AMD-LABEL: @kernel_yield_constant
 // AMD: tt.load
-// AMD: ttg.memdesc_subview
+// AMD: ttg.memdesc_index
 // AMD: ttg.local_store
 // AMD: scf.for
 // AMD: tt.load
-// AMD: ttg.memdesc_subview
+// AMD: ttg.memdesc_index
 // AMD: ttg.local_store
 // AMD: tt.return
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func public @kernel_yield_constant(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @kernel_yield_constant(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
     %cst1 = arith.constant dense<1.000000e+00> : tensor<32x32xf32, #mma>
     %c0_i32 = arith.constant 0 : i32
@@ -1205,13 +1166,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK:   %[[ABUFFER:.*]] = ttg.local_alloc
 // CHECK:   %[[BBUFFER:.*]] = ttg.local_alloc
-// CHECK:   %[[A0BUFFER:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   %[[A0BUFFER:.*]] = ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[CONSTANT_0]]{{\]}}
 // CHECK:   ttg.async_copy_global_to_local {{.*}}, %[[A0BUFFER]]
-// CHECK:   %[[B0BUFFER:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   %[[B0BUFFER:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_0]]{{\]}}
 // CHECK:   ttg.async_copy_global_to_local {{.*}}, %[[B0BUFFER]]
-// CHECK:   %[[A1BUFFER:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]]]
+// CHECK:   %[[A1BUFFER:.*]] = ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[CONSTANT_1]]{{\]}}
 // CHECK:   ttg.async_copy_global_to_local {{.*}}, %[[A1BUFFER]]
-// CHECK:   %[[B1BUFFER:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]]]
+// CHECK:   %[[B1BUFFER:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_1]]{{\]}}
 // CHECK:   ttg.async_copy_global_to_local {{.*}}, %[[B1BUFFER]]
 // CHECK:   scf.for
 
@@ -1230,7 +1191,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // AMD:  scf.for
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func public @add_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @add_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}) {
     %c1024_i32 = arith.constant 1024 : i32
     %c0_i32 = arith.constant 0 : i32
     %c1016800_i32 = arith.constant 1016800 : i32
@@ -1270,21 +1231,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK:   %[[TRANS:.*]] = ttg.memdesc_trans %[[BUFFER_2]]
 // CHECK:   %[[LOCAL_LOAD_1:.*]] = ttg.local_load %[[TRANS]]
 // CHECK:   %[[BUFFER_1:.*]] = ttg.local_alloc : ()
-// CHECK:   %[[SUBVIEW_1:.*]] = ttg.memdesc_subview %[[BUFFER_1]]
+// CHECK:   %[[SUBVIEW_1:.*]] = ttg.memdesc_index %[[BUFFER_1]]
 // CHECK:   %[[ASYNC_COPY_1:.*]] = ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]], %[[SUBVIEW_1]]
-// CHECK:   ttg.async_commit_group %[[ASYNC_COPY_1]]
-// CHECK:   %[[SUBVIEW_2:.*]] = ttg.memdesc_subview %[[BUFFER_1]]
+// CHECK:   ttg.async_commit_group tokens %[[ASYNC_COPY_1]]
+// CHECK:   %[[SUBVIEW_2:.*]] = ttg.memdesc_index %[[BUFFER_1]]
 // CHECK:   %[[ASYNC_COPY_2:.*]] = ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]], %[[SUBVIEW_2]]
-// CHECK:   ttg.async_commit_group %[[ASYNC_COPY_2]]
+// CHECK:   ttg.async_commit_group tokens %[[ASYNC_COPY_2]]
 // CHECK:   scf.for
 // CHECK:     ttg.async_wait
-// CHECK:     ttg.memdesc_subview %[[BUFFER_1]]
+// CHECK:     ttg.memdesc_index %[[BUFFER_1]]
 // CHECK:     %[[LOCAL_LOAD_2:.*]] = ttg.local_load
 // CHECK:     %[[DOT:.*]] = tt.dot %[[LOCAL_LOAD_2]], %[[LOCAL_LOAD_1]]
 // CHECK:     %[[CONVERT_LAYOUT_3:.*]] = ttg.convert_layout %[[DOT]]
-// CHECK:     %[[SUBVIEW_4:.*]] = ttg.memdesc_subview %[[BUFFER_1]]
+// CHECK:     %[[SUBVIEW_4:.*]] = ttg.memdesc_index %[[BUFFER_1]]
 // CHECK:     %[[ASYNC_COPY_3:.*]] = ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]], %[[SUBVIEW_4]]
-// CHECK:     ttg.async_commit_group %[[ASYNC_COPY_3]]
+// CHECK:     ttg.async_commit_group tokens %[[ASYNC_COPY_3]]
 // CHECK: ttg.local_dealloc %[[BUFFER_1]]
 
 // AMD-LABEL:  tt.func public @nested_loops
@@ -1320,7 +1281,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #shared1 = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
-  tt.func public @nested_loops(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @nested_loops(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma>
     %c1_i32 = arith.constant 1 : i32
     %c2_i32 = arith.constant 2 : i32
@@ -1367,7 +1328,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   tt.func public @int4_matmul_ampere(
     %arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32},
     %arg1: !tt.ptr<i8> {tt.divisibility = 16 : i32}
-  ) -> tensor<16x256xf32, #mma> attributes {noinline = false} {
+  ) -> tensor<16x256xf32, #mma> {
     %cst = arith.constant dense<64> : tensor<64x256xi32, #blocked>
     %cst_0 = arith.constant dense<128> : tensor<16x128xi32, #blocked1>
     %c256_i32 = arith.constant 256 : i32
@@ -1434,7 +1395,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 #ALs0 = #ttg.slice<{parent=#AL, dim=0}>
 #BLs0 = #ttg.slice<{parent=#BL, dim=0}>
 #BLs1 = #ttg.slice<{parent=#BL, dim=1}>
-#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
+#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
 #A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
 #B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
 
@@ -1483,7 +1444,7 @@ tt.func @load_convert_layout(%77: tensor<16x16xi64, #BL> {tt.divisibility=16: i3
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 2], order = [0, 1]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 1], instrShape = [16, 8]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
-  tt.func public @matmul_indirect_pipeline(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @matmul_indirect_pipeline(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
     %c1_i32 = arith.constant 1 : i32
     %c2_i32 = arith.constant 2 : i32
@@ -1528,7 +1489,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func public @dont_pipeline_128x1(%arg6: !tt.ptr<i32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @dont_pipeline_128x1(%arg6: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #mma>
     %c128_i32 = arith.constant 128 : i32
     %c0_i32 = arith.constant 0 : i32
@@ -1574,7 +1535,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #ALs0 = #ttg.slice<{parent=#AL, dim=0}>
 #BLs0 = #ttg.slice<{parent=#BL, dim=0}>
 #BLs1 = #ttg.slice<{parent=#BL, dim=1}>
-#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
+#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
 #A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
 #B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
 
@@ -1668,7 +1629,7 @@ tt.func @matmul_nested_ops(%lb : index, %ub : index, %step : index,
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  tt.func public @masked_add_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @masked_add_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}) {
     %c1024_i32 = arith.constant 1024 : i32
     %c0_i32 = arith.constant 0 : i32
     %c1016800_i32 = arith.constant 1016800 : i32
@@ -1695,4 +1656,76 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     }{tt.num_stages = 3 : i32}
     tt.return
   }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @predicate_stage1
+  // CHECK: scf.for %[[IV:.*]] = %[[LB:.*]] to %[[UB:.*]] step %[[STEP:.*]] iter_args
+  // CHECK: ttg.predicate_stage %[[IV]], %[[UB]], %[[STEP]] maxStage 2 stage 0 : i32 -> i1
+  tt.func public @predicate_stage1(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32, tt.max_divisibility = 16 : i32}) {
+    %c1024_i32 = arith.constant 1024 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c1016800_i32 = arith.constant 1016800 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1016800_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %3 = tt.splat %arg3 : i32 -> tensor<1024xi32, #blocked>
+    %4 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %5 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %6 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    scf.for %arg4 = %c0_i32 to %c1016800_i32 step %c1024_i32  : i32 {
+      %7 = arith.addi %1, %arg4 : i32
+      %8 = tt.splat %7 : i32 -> tensor<1024xi32, #blocked>
+      %9 = arith.addi %8, %2 : tensor<1024xi32, #blocked>
+      %10 = arith.cmpi slt, %9, %3 : tensor<1024xi32, #blocked>
+      %11 = tt.addptr %4, %9 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+      %12 = tt.load %11, %10 : tensor<1024x!tt.ptr<f32>, #blocked>
+      %13 = tt.addptr %5, %9 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+      %14 = tt.load %13, %10 : tensor<1024x!tt.ptr<f32>, #blocked>
+      %15 = arith.addf %12, %14 : tensor<1024xf32, #blocked>
+      %16 = tt.addptr %6, %9 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+      tt.store %16, %15, %10 : tensor<1024x!tt.ptr<f32>, #blocked>
+    } {tt.num_stages = 3 : i32, __test_keep_predicate_stage}
+    tt.return
+  }
+}
+
+// -----
+
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
+#B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// Verify that statically dead prologue iterations are properly predicated
+// CHECK-LABEL: @peeled_prologue_statically_dead
+// CHECK-DAG: %[[FALSE:.*]] = arith.constant dense<false>
+// CHECK-DAG: %[[TRUE:.*]] = arith.constant dense<true>
+// CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[TRUE]]
+// CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[TRUE]]
+// CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[FALSE]]
+// CHECK: scf.for
+tt.func @peeled_prologue_statically_dead(
+                  %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                  %B : tensor<32x128xf16, #B>) -> tensor<128x128xf32, #C> {
+  %lb = arith.constant 0 : i32
+  %ub = arith.constant 2 : i32
+  %step = arith.constant 1 : i32
+
+  %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf32, #C>
+
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%prev_c = %c_init) -> (tensor<128x128xf32, #C>) : i32 {
+    %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
+    %c = tt.dot %a, %B, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
+    scf.yield %c : tensor<128x128xf32, #C>
+  } {tt.num_stages = 4 : i32}
+  tt.return %loop: tensor<128x128xf32, #C>
+}
+
 }

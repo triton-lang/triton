@@ -1,0 +1,105 @@
+name: Runner Preparation
+
+on:
+  workflow_call:
+    outputs:
+      matrix-NVIDIA:
+        value: ${{ jobs.prepare.outputs.matrix-NVIDIA }}
+      matrix-AMD:
+        value: ${{ jobs.prepare.outputs.matrix-AMD }}
+      matrix-MACOS:
+        value: ${{ jobs.prepare.outputs.matrix-MACOS }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix-NVIDIA: ${{ steps.set-matrix.outputs.matrix-NVIDIA }}
+      matrix-AMD: ${{ steps.set-matrix.outputs.matrix-AMD }}
+      matrix-MACOS: ${{ steps.set-matrix.outputs.matrix-MACOS }}
+    steps:
+      - name: Decide pre-submit integration test enablement
+        # Always enable integration tests for pre-submit pull requests.
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "enable_integration=true" >> $GITHUB_ENV
+      - name: Decide manual trigger integration test enablement
+        # Always enable integration tests when manually triggered
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "enable_integration=true" >> $GITHUB_ENV
+      - name: Checkout post-submit commits
+        if: github.event_name == 'push'
+        uses: actions/checkout@v4
+        with:
+          # Only fetch two commits to check the latest changed files.
+          fetch-depth: 2
+      - name: Detect if build deps (e.g. LLVM hash) changed
+        id: detect-change
+        if: github.event_name == 'push'
+        uses: tj-actions/changed-files@v46
+        with:
+          files: |
+            cmake/*.txt
+            cmake/*.json
+      - name: Detect if enough time has passed since last post-submit run
+        id: detect-time
+        if: github.event_name == 'push'
+        run: |
+          GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+          REPO_NAME="${{ github.repository }}"
+          # ID of integration-tests workflow
+          WORKFLOW_ID="11678186"
+
+          # Fetch the last run time of this workflow
+          LAST_RUN=$(curl -s \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/$REPO_NAME/actions/workflows/$WORKFLOW_ID/runs?branch=main&status=success&per_page=1" \
+            | jq -r '.workflow_runs[0].updated_at')
+
+          # Convert to timestamp
+          LAST_RUN_TS=$(date -d "$LAST_RUN" +%s)
+          NOW_TS=$(date +%s)
+          DIFF=$(( (NOW_TS - LAST_RUN_TS) / 3600 )) # Difference in hours
+
+          echo "Last run was $DIFF hours ago."
+
+          if [ "$DIFF" -ge 4 ]; then
+            echo "Will run CI; last build was long enough ago."
+            echo "n_hours_since_last_run=true" >> $GITHUB_ENV
+          else
+            echo "Will not run CI; last build was too recent."
+            echo "n_hours_since_last_run=false" >> $GITHUB_ENV
+          fi
+      # We want to run integration tests on the main branch (i.e. post-submit)
+      # occasionally, because pre-submit CI caches will only read from caches
+      # generated from the main branch (or the PR's branch), and we want these
+      # caches to be recent.
+      #
+      # But we also don't want to run the tests on *every* commit, because this
+      # would compete for resources with pre-commit CI (and the whole point of
+      # caching is to speed up CI).
+      #
+      # As a compromise, run every N hours, or if a build dependency changes
+      # (e.g.  we update the LLVM hash).
+      - name: Decide whether to run integration tests post-submit
+        if: |
+          github.event_name == 'push' &&
+          (steps.detect-change.outputs.any_changed == 'true' ||
+           env.n_hours_since_last_run == 'true')
+        run: |
+          echo "enable_integration=true" >> $GITHUB_ENV
+      - name: Prepare runner matrix
+        id: set-matrix
+        if: env.enable_integration == 'true'
+        run: |
+          if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
+            echo '::set-output name=matrix-NVIDIA::[["nvidia-a100"], ["nvidia-h100"], ["nvidia-gb200"]]'
+            echo '::set-output name=matrix-AMD::[["self-hosted", "gfx90a"], ["amd-gfx942"], ["amd-gfx950"]]'
+            echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
+          else
+            echo '::set-output name=matrix-NVIDIA::["ubuntu-latest"]'
+            echo '::set-output name=matrix-AMD::["ubuntu-latest"]'
+            echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
+          fi

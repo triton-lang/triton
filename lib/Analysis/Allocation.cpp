@@ -2,15 +2,16 @@
 
 #include <algorithm>
 #include <limits>
-#include <numeric>
 
 #include "mlir/Analysis/Liveness.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Alias.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/GenericSwizzling.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -19,6 +20,8 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
+namespace ttng = mlir::triton::nvidia_gpu;
+
 namespace mlir {
 
 //===----------------------------------------------------------------------===//
@@ -26,133 +29,41 @@ namespace mlir {
 //===----------------------------------------------------------------------===//
 namespace triton {
 
-// Bitwidth of pointers
-constexpr int kPtrBitWidth = 64;
-// Max shmem LDS/STS instruction in bits
-constexpr int kMaxShmemVecBitLength = 128;
-
-static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
-                                               RankedTensorType dstTy) {
-  Attribute srcLayout = srcTy.getEncoding();
-  Attribute dstLayout = dstTy.getEncoding();
-
-  if (!cvtNeedsSharedMemory(srcTy, dstTy)) {
-    return {};
-  }
-
-  if (shouldUseDistSmem(srcLayout, dstLayout)) {
-    // TODO: padding to avoid bank conflicts
-    return convertType<unsigned, int64_t>(gpu::getShapePerCTA(srcTy));
-  }
-
-  assert(srcLayout && dstLayout && "Unexpected layout in getRepShapeForCvt()");
-
-  auto srcShapePerCTA = gpu::getShapePerCTA(srcTy);
-  auto dstShapePerCTA = gpu::getShapePerCTA(dstTy);
-  auto srcShapePerCTATile = gpu::getShapePerCTATile(srcTy);
-  auto dstShapePerCTATile = gpu::getShapePerCTATile(dstTy);
-
-  assert(srcTy.getRank() == dstTy.getRank() &&
-         "src and dst must have the same rank");
-
-  unsigned rank = dstTy.getRank();
-  SmallVector<unsigned> repShape(rank);
-  for (unsigned d = 0; d < rank; ++d) {
-    repShape[d] =
-        std::max(std::min<unsigned>(srcShapePerCTA[d], srcShapePerCTATile[d]),
-                 std::min<unsigned>(dstShapePerCTA[d], dstShapePerCTATile[d]));
-  }
-  return repShape;
+unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
+                                       RankedTensorType dstTy) {
+  auto *ctx = srcTy.getContext();
+  auto srcLayout = gpu::toLinearLayout(srcTy);
+  auto dstLayout = gpu::toLinearLayout(dstTy);
+  srcLayout = actionRemoveBroadcastedRegs(srcLayout).apply(srcLayout);
+  dstLayout = actionRemoveBroadcastedRegs(dstLayout).apply(dstLayout);
+  auto bitwidth = getBitwidth(srcTy);
+  auto smem = gpu::optimalSwizzlingLdSt(srcLayout, dstLayout, bitwidth);
+  auto reps = smem.getInDimSize(StringAttr::get(ctx, "reps"));
+  return smem.getTotalOutDimSize() / reps;
 }
 
-// Both `atomic_cas` and `atomic_rmw need a single scratch element if returning
-// a scalar value because Triton's block-based programming model ensures that
-// all threads in each block see the same return value, even those threads that
-// do not participate in the atomic operation
+// Both `atomic_cas` and `atomic_rmw` may need scratch memory to store values
+// because Triton's block-based programming model ensures that
+// all threads sharing the same partition of the tensor see the same values,
+// even for threads that do not participate in the atomic operation
 static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
   SmallVector<unsigned> smemShape;
-  if (atomicNeedsSharedMemory(result)) {
-    smemShape.push_back(1);
+  if (!result.use_empty()) {
+    if (auto tensorTy = dyn_cast<RankedTensorType>(result.getType())) {
+      auto freeVariableMasks =
+          gpu::toLinearLayout(tensorTy).getFreeVariableMasks();
+      if (llvm::any_of(freeVariableMasks, [](auto variableMask) {
+            return variableMask.second != 0;
+          })) {
+        // The tensor has broadcasted dimensions
+        smemShape = convertType<unsigned>(gpu::getShapePerCTA(tensorTy));
+      }
+    } else {
+      // If the result is a scalar, we need to allocate a single element.
+      smemShape.push_back(1);
+    }
   }
   return smemShape;
-}
-
-std::pair<unsigned, unsigned>
-getScratchCvtInOutVecLengths(RankedTensorType srcTy, RankedTensorType dstTy) {
-  Attribute srcLayout = srcTy.getEncoding();
-  Attribute dstLayout = dstTy.getEncoding();
-
-  auto srcLinAttr = gpu::toLinearEncoding(srcLayout, srcTy.getShape());
-  auto dstLinAttr = gpu::toLinearEncoding(dstLayout, dstTy.getShape());
-  auto inOrd = srcLinAttr.getOrder();
-  auto outOrd = dstLinAttr.getOrder();
-
-  unsigned rank = srcTy.getRank();
-
-  unsigned srcContigPerThread = srcLinAttr.getContigPerThread()[inOrd[0]];
-  unsigned dstContigPerThread = dstLinAttr.getContigPerThread()[outOrd[0]];
-  // TODO: Fix the legacy issue that outOrd[0] == 0 always means
-  //       that we cannot do vectorization.
-  unsigned innerDim = rank - 1;
-  unsigned inVec = outOrd[0] != innerDim  ? 1
-                   : inOrd[0] != innerDim ? 1
-                                          : srcContigPerThread;
-  unsigned outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
-
-  if (isa<gpu::NvidiaMmaEncodingAttr>(srcLayout) &&
-      isa<gpu::BlockedEncodingAttr>(dstLayout)) {
-    // when storing from mma layout and loading in blocked layout vectorizing
-    // the load back gives better performance even if there is a
-    // transposition.
-    outVec = dstContigPerThread;
-  }
-  return {inVec, outVec};
-}
-
-ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
-                                     RankedTensorType dstTy) {
-  // Initialize vector sizes and stride
-  auto repShape = getRepShapeForCvt(srcTy, dstTy);
-  if (repShape.empty())
-    return ScratchConfig({}, {});
-  ScratchConfig scratchConfig(repShape, repShape);
-  auto rank = repShape.size();
-  Attribute srcLayout = srcTy.getEncoding();
-  Attribute dstLayout = dstTy.getEncoding();
-
-  assert(cvtNeedsSharedMemory(srcTy, dstTy));
-  auto outOrd = gpu::getOrder(dstTy);
-  scratchConfig.order = outOrd;
-
-  std::tie(scratchConfig.inVec, scratchConfig.outVec) =
-      getScratchCvtInOutVecLengths(srcTy, dstTy);
-  // We can't write a longer vector than the shape of shared memory.
-  // This shape might be smaller than the tensor shape in case we decided to
-  // do the conversion in multiple iterations.
-  unsigned contiguousShapeDim = scratchConfig.repShape[scratchConfig.order[0]];
-  scratchConfig.inVec = std::min(scratchConfig.inVec, contiguousShapeDim);
-  scratchConfig.outVec = std::min(scratchConfig.outVec, contiguousShapeDim);
-  // Clamp the vector length to kMaxShmemVecBitLength / element bitwidth as this
-  // is the max vectorisation
-  auto inBitWidth = isa<PointerType>(srcTy.getElementType())
-                        ? kPtrBitWidth
-                        : srcTy.getElementTypeBitWidth();
-  auto outBitWidth = isa<PointerType>(dstTy.getElementType())
-                         ? kPtrBitWidth
-                         : dstTy.getElementTypeBitWidth();
-  scratchConfig.inVec =
-      std::min(scratchConfig.inVec, kMaxShmemVecBitLength / inBitWidth);
-  scratchConfig.outVec =
-      std::min(scratchConfig.outVec, kMaxShmemVecBitLength / outBitWidth);
-
-  // No padding is required if the tensor is 1-D, or if all dimensions except
-  // the first accessed dimension have a size of 1.
-  if (rank <= 1 || product(repShape) == repShape[outOrd[0]])
-    return scratchConfig;
-
-  auto paddedSize = std::max(scratchConfig.inVec, scratchConfig.outVec);
-  scratchConfig.paddedRepShape[outOrd[0]] += paddedSize;
-  return scratchConfig;
 }
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
@@ -173,42 +84,27 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     int threadsPerWarp = gpu::TritonGPUDialect::getThreadsPerWarp(
         op->getParentOfType<ModuleOp>());
     return std::max<int>(dstTy.getNumElements(), threadsPerWarp) *
-           std::max<int>(8, dstTy.getElementTypeBitWidth()) / 8;
+           getBitwidth(dstTy) / 8;
   }
   if (auto cvtLayout = dyn_cast<gpu::ConvertLayoutOp>(op)) {
     auto srcTy = cvtLayout.getSrc().getType();
     auto dstTy = cvtLayout.getType();
-    auto srcEncoding = srcTy.getEncoding();
-    auto dstEncoding = dstTy.getEncoding();
-    if (mlir::isa<gpu::SharedEncodingTrait>(srcEncoding) ||
-        mlir::isa<gpu::SharedEncodingTrait>(dstEncoding)) {
-      // Conversions from/to shared memory do not need scratch memory.
+    if (!cvtNeedsSharedMemory(srcTy, dstTy))
       return 0;
-    }
-    // ConvertLayoutOp with both input/output non-shared_layout
-    // TODO: Besides of implementing ConvertLayoutOp via shared memory, it's
-    //       also possible to realize it with other approaches in restricted
-    //       conditions, such as warp-shuffle
-    auto scratchConfig = getScratchConfigForCvt(srcTy, dstTy);
-    auto elems = getNumScratchElements(scratchConfig.paddedRepShape);
-    return isa<PointerType>(srcTy.getElementType())
-               ? elems * kPtrBitWidth / 8
-               : elems * std::max<int>(8, srcTy.getElementTypeBitWidth()) / 8;
+    // The generic pass uses swizzling
+    auto elems = getNumScratchElemsSwizzledCvt(srcTy, dstTy);
+    return elems * getBitwidth(srcTy) / 8;
   }
   if (isa<AtomicRMWOp, AtomicCASOp>(op)) {
     auto value = op->getOperand(0);
-    // only scalar requires scratch memory
-    // make it explicit for readability
-    if (dyn_cast<RankedTensorType>(value.getType())) {
-      return 0;
-    }
     auto smemShape = getRepShapeForAtomic(op->getResult(0));
     auto elems = getNumScratchElements(smemShape);
-    auto elemTy = cast<PointerType>(value.getType()).getPointeeType();
-    assert(!isa<PointerType>(elemTy) && "unexpected pointer type");
+    if (elems == 0)
+      return 0;
+    auto elemTy = getElementTypeOrSelf(getPointeeType(value.getType()));
     return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
   }
-  if (isa<ExperimentalTensormapCreateOp>(op)) {
+  if (isa<ttng::TensormapCreateOp>(op)) {
     constexpr int32_t kTMASize = 128;
     return kTMASize;
   }
@@ -246,12 +142,17 @@ private:
     auto alloc = dyn_cast<gpu::LocalAllocOp>(op);
     if (!alloc || !alloc.isSharedMemoryAlloc())
       return;
-    // Bytes could be a different value once we support padding or other
-    // allocation policies.
     auto allocType = alloc.getType();
-    auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
-    auto bytes =
-        product<int64_t>(shapePerCTA) * allocType.getElementTypeBitWidth() / 8;
+    int64_t numElems = 0;
+    if (auto paddedEnc =
+            dyn_cast<gpu::PaddedSharedEncodingAttr>(allocType.getEncoding())) {
+      SmallVector<int64_t> unpaddedShape = gpu::getShapePerCTA(allocType);
+      numElems = paddedEnc.getPaddedSize(unpaddedShape);
+    } else {
+      auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
+      numElems = product<int64_t>(shapePerCTA);
+    }
+    int64_t bytes = numElems * allocType.getElementTypeBitWidth() / 8;
 
     auto alignment = alloc.getAlignmentOrDefault();
     allocation->addBuffer<BufferT::BufferKind::Explicit>(alloc, bytes,

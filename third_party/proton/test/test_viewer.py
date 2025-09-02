@@ -1,7 +1,7 @@
 import pytest
 import subprocess
-from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics, format_frames, derive_metrics, filter_frames, parse
-from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME
+from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, read, format_frames, derive_metrics, filter_frames, parse
+from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import numpy as np
 
 file_path = __file__
@@ -18,72 +18,65 @@ def test_help():
 
 
 def test_exclusive_metrics():
-    with open(triton_example_file, "r") as f:
-        gf, inclusive_metrics, exclusive_metrics, device_info = get_raw_metrics(f)
-        gf.update_inclusive_columns()
-        metrics = ["cpu_time/ns"]
-        metrics = derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info)
-        gf = filter_frames(gf, None, None, None, metrics[0])
-        sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
-        actual = sorted_df.iloc[0:1]["name"].values[0]
-        assert actual == "scope"
+    gf, inclusive_metrics, exclusive_metrics, device_info = read(triton_example_file)
+    metrics = ["cpu_time/ns"]
+    metrics = derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info)
+    gf = filter_frames(gf, None, None, None, metrics[0])
+    sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
+    actual = sorted_df.iloc[0:1]["name"].values[0]
+    assert actual == "scope"
 
 
 def test_sort():
-    with open(leaf_example_file, "r") as f:
-        gf, inclusive_metrics, exclusive_metrics, device_info = get_raw_metrics(f)
-        gf = format_frames(gf, None)
-        gf.update_inclusive_columns()
-        metrics = ["time/s", "time/ms", "time/us", "time/ns"]
-        metrics = derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info)
-        gf = filter_frames(gf, None, None, None, metrics[0])
-        sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
-        actual = sorted_df.iloc[0:5]["name"].values
-        expected = ["ROOT", "kernel_1_1_1", "kernel_3_1_1", "kernel_3_2_2", "kernel_1_2_2"]
-        assert len(actual) == len(expected)
-        assert all(a == b for a, b in zip(actual, expected))
+    gf, inclusive_metrics, exclusive_metrics, device_info = read(leaf_example_file)
+    gf = format_frames(gf, None)
+    metrics = ["time/s", "time/ms", "time/us", "time/ns"]
+    metrics = derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info)
+    gf = filter_frames(gf, None, None, None, metrics[0])
+    sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
+    actual = sorted_df.iloc[0:5]["name"].values
+    expected = ["ROOT", "kernel_1_1_1", "kernel_3_1_1", "kernel_3_2_2", "kernel_1_2_2"]
+    assert len(actual) == len(expected)
+    assert all(a == b for a, b in zip(actual, expected))
 
 
 @pytest.mark.parametrize("option", ["full", "file_function_line", "function_line", "file_function"])
 def test_format_frames(option):
-    with open(frame_example_file, "r") as f:
-        gf, _, _, _ = get_raw_metrics(f)
-        gf = format_frames(gf, option)
-        if option == "full":
-            idx = gf.dataframe["name"] == "/home/user/projects/example.py/test.py:1@foo"
-        elif option == "file_function_line":
-            idx = gf.dataframe["name"] == "test.py:1@foo"
-        elif option == "function_line":
-            idx = gf.dataframe["name"] == "1@foo"
-        elif option == "file_function":
-            idx = gf.dataframe["name"] == "test.py@foo"
-        assert idx.sum() == 1
+    gf, _, _, _ = read(frame_example_file)
+    gf = format_frames(gf, option)
+    if option == "full":
+        idx = gf.dataframe["name"] == "/home/user/projects/example.py/test.py:1@foo"
+    elif option == "file_function_line":
+        idx = gf.dataframe["name"] == "test.py:1@foo"
+    elif option == "function_line":
+        idx = gf.dataframe["name"] == "1@foo"
+    elif option == "file_function":
+        idx = gf.dataframe["name"] == "test.py@foo"
+    assert idx.sum() == 1
 
 
 @pytest.mark.parametrize("option", ["include", "exclude"])
 def test_filter_frames(option):
     include = ""
     exclude = ""
-    with open(frame_example_file, "r") as f:
-        gf, _, _, _ = get_raw_metrics(f)
-        if option == "include":
-            include = ".*test0.*"
-        elif option == "exclude":
-            exclude = ".*test1.*"
-        gf = filter_frames(gf, include=include, exclude=exclude)
-        idx = gf.dataframe["name"] == "test1"
-        assert idx.sum() == 0
-        idx = gf.dataframe["name"] == "test0"
-        assert idx.sum() == 1
+    gf, _, _, _ = read(frame_example_file)
+    if option == "include":
+        include = ".*test0.*"
+    elif option == "exclude":
+        exclude = ".*test1.*"
+    gf = filter_frames(gf, include=include, exclude=exclude)
+    idx = gf.dataframe["name"] == "test1"
+    assert idx.sum() == 0
+    idx = gf.dataframe["name"] == "test0"
+    assert idx.sum() == 1
 
 
 def test_filter_metadata():
-    with open(triton_example_file, "r") as f:
-        gf, _, _, _ = get_raw_metrics(f)
-        assert COMPUTE_METADATA_SCOPE_NAME not in gf.dataframe["name"].tolist()
-        assert "cuda_kernel" not in gf.dataframe["name"].tolist()
-        assert "scope" in gf.dataframe["name"].tolist()
-        assert "triton_kernel" in gf.dataframe["name"].tolist()
+    gf, _, _, _ = read(triton_example_file)
+    assert COMPUTE_METADATA_SCOPE_NAME not in gf.dataframe["name"].tolist()
+    assert "cuda_kernel" not in gf.dataframe["name"].tolist()
+    assert "scope" in gf.dataframe["name"].tolist()
+    assert "triton_kernel" in gf.dataframe["name"].tolist()
 
 
 def test_parse():
@@ -93,48 +86,50 @@ def test_parse():
 
 
 def test_min_time_flops():
-    with open(cuda_example_file, "r") as f:
-        gf, _, _, device_info = get_raw_metrics(f)
-        ret = get_min_time_flops(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["device_id"] == "0"
-        device1_idx = gf.dataframe["device_id"] == "1"
-        device2_idx = gf.dataframe["device_id"] == "2"
-        # sm89
-        np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[0.000025]], atol=1e-5)
-        # sm90
-        np.testing.assert_allclose(ret[device1_idx].to_numpy(), [[0.00005]], atol=1e-5)
-        # sm100
-        np.testing.assert_allclose(ret[device2_idx].to_numpy(), [[0.000025]], atol=1e-5)
-    with open(hip_example_file, "r") as f:
-        gf, _, _, device_info = get_raw_metrics(f)
-        ret = get_min_time_flops(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["device_id"] == "0"
-        device1_idx = gf.dataframe["device_id"] == "1"
-        # CDNA2
-        np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[0.000026]], atol=1e-5)
-        # CDNA3
-        np.testing.assert_allclose(ret[device1_idx].to_numpy(), [[0.000038]], atol=1e-5)
+    gf, _, _, device_info = read(cuda_example_file)
+    ret = get_min_time_flops(gf.dataframe, device_info)
+    device0_idx = gf.dataframe["device_id"] == "0"
+    device1_idx = gf.dataframe["device_id"] == "1"
+    device2_idx = gf.dataframe["device_id"] == "2"
+    # sm89
+    np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[0.000025]], atol=1e-5)
+    # sm90
+    np.testing.assert_allclose(ret[device1_idx].to_numpy(), [[0.00005]], atol=1e-5)
+    # sm100
+    np.testing.assert_allclose(ret[device2_idx].to_numpy(), [[0.000025]], atol=1e-5)
+    gf, _, _, device_info = read(hip_example_file)
+    ret = get_min_time_flops(gf.dataframe, device_info)
+    device0_idx = gf.dataframe["device_id"] == "0"
+    device1_idx = gf.dataframe["device_id"] == "1"
+    device2_idx = gf.dataframe["device_id"] == "2"
+    # CDNA2
+    np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[0.000055]], atol=1e-5)
+    # CDNA3
+    np.testing.assert_allclose(ret[device1_idx].to_numpy(), [[0.000038]], atol=1e-5)
+    # CDNA4
+    np.testing.assert_allclose(ret[device2_idx].to_numpy(), [[0.000217]], atol=1e-5)
 
 
 def test_min_time_bytes():
-    with open(cuda_example_file, "r") as f:
-        gf, _, _, device_info = get_raw_metrics(f)
-        ret = get_min_time_bytes(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["device_id"] == "0"
-        device1_idx = gf.dataframe["device_id"] == "1"
-        # sm89
-        np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[9.91969e-06]], atol=1e-6)
-        # sm90
-        np.testing.assert_allclose(ret[device1_idx].to_numpy(), [[2.48584e-05]], atol=1e-6)
-    with open(hip_example_file, "r") as f:
-        gf, _, _, device_info = get_raw_metrics(f)
-        ret = get_min_time_bytes(gf.dataframe, device_info)
-        device0_idx = gf.dataframe["device_id"] == "0"
-        device1_idx = gf.dataframe["device_id"] == "1"
-        # CDNA2
-        np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[6.10351e-06]], atol=1e-6)
-        # CDNA3
-        np.testing.assert_allclose(ret[device1_idx].to_numpy(), [[1.93378e-05]], atol=1e-6)
+    gf, _, _, device_info = read(cuda_example_file)
+    ret = get_min_time_bytes(gf.dataframe, device_info)
+    device0_idx = gf.dataframe["device_id"] == "0"
+    device1_idx = gf.dataframe["device_id"] == "1"
+    # sm89
+    np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[9.91969e-06]], atol=1e-6)
+    # sm90
+    np.testing.assert_allclose(ret[device1_idx].to_numpy(), [[2.48584e-05]], atol=1e-6)
+    gf, _, _, device_info = read(hip_example_file)
+    ret = get_min_time_bytes(gf.dataframe, device_info)
+    device0_idx = gf.dataframe["device_id"] == "0"
+    device1_idx = gf.dataframe["device_id"] == "1"
+    device2_idx = gf.dataframe["device_id"] == "2"
+    # CDNA2
+    np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[3.125e-06]], atol=1e-6)
+    # CDNA3
+    np.testing.assert_allclose(ret[device1_idx].to_numpy(), [[1.93378e-05]], atol=1e-6)
+    # CDNA4
+    np.testing.assert_allclose(ret[device2_idx].to_numpy(), [[0.000125]], atol=1e-6)
 
 
 def test_percentage():
@@ -142,14 +137,12 @@ def test_percentage():
 
 
 def derivation_metrics_test(metrics, expected_data, sample_file, rtol=1e-7, atol=1e-6):
-    with open(sample_file, "r") as f:
-        gf, inclusive_metrics, exclusive_metrics, device_info = get_raw_metrics(f)
-        assert len(inclusive_metrics + exclusive_metrics) > 0, "No metrics found in the input file"
-        gf.update_inclusive_columns()
-        derived_metrics = derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info)
-        for derived_metric in derived_metrics:
-            np.testing.assert_allclose(gf.dataframe[derived_metric].to_numpy(), expected_data[derived_metric],
-                                       rtol=rtol, atol=atol)
+    gf, inclusive_metrics, exclusive_metrics, device_info = read(sample_file)
+    assert len(inclusive_metrics + exclusive_metrics) > 0, "No metrics found in the input file"
+    derived_metrics = derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info)
+    for derived_metric in derived_metrics:
+        np.testing.assert_allclose(gf.dataframe[derived_metric].to_numpy(), expected_data[derived_metric], rtol=rtol,
+                                   atol=atol)
 
 
 def test_avg_time_derivation():

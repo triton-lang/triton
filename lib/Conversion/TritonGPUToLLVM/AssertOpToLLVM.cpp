@@ -63,6 +63,9 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
     while (auto callLoc = dyn_cast<CallSiteLoc>(loc))
       loc = callLoc.getCallee();
 
+    while (auto nameLoc = dyn_cast<NameLoc>(loc))
+      loc = nameLoc.getChildLoc();
+
     if (auto fileLineColLoc = dyn_cast<FileLineColLoc>(loc)) {
       file = fileLineColLoc.getFilename();
       line = fileLineColLoc.getLine();
@@ -84,9 +87,9 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
     // Split a block after the call.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
     rewriter.setInsertionPointToEnd(ifBlock);
-    rewriter.create<cf::BranchOp>(loc, thenBlock);
+    rewriter.create<LLVM::BrOp>(loc, thenBlock);
     rewriter.setInsertionPointToEnd(prevBlock);
-    rewriter.create<cf::CondBranchOp>(loc, condition, ifBlock, thenBlock);
+    rewriter.create<LLVM::CondBrOp>(loc, condition, ifBlock, thenBlock);
     rewriter.setInsertionPointToStart(thenBlock);
   }
 

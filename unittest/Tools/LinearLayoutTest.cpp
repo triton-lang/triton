@@ -388,6 +388,42 @@ TEST_F(LinearLayoutTest, InvertAndCompose_Simple) {
   EXPECT_EQ(composition.compose(l2), l1);
 }
 
+TEST_F(LinearLayoutTest, InvertAndComposeLargerA) {
+  // Note that dim0 and dim1 are larger in sharedLaoyout
+  auto regLayout =
+      LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 32}, {32, 0}}},
+                    {S("lane"), {{0, 8}, {0, 16}, {1, 0}, {2, 0}, {4, 0}}},
+                    {S("warp"), {{8, 0}, {16, 0}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")});
+  auto sharedLayout = LinearLayout({{S("offset"),
+                                     {{0, 1},
+                                      {0, 2},
+                                      {0, 4},
+                                      {0, 8},
+                                      {0, 16},
+                                      {0, 32},
+                                      {0, 64},
+                                      {1, 8},
+                                      {2, 16},
+                                      {4, 32},
+                                      {8, 0},
+                                      {16, 0},
+                                      {32, 0},
+                                      {64, 0},
+                                      {128, 0}}},
+                                    {S("block"), {}}},
+                                   {S("dim0"), S("dim1")});
+  auto expected = LinearLayout(
+      {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {32, 0}, {4096, 0}}},
+       {S("lane"), {{8, 0}, {16, 0}, {136, 0}, {272, 0}, {544, 0}}},
+       {S("warp"), {{1024, 0}, {2048, 0}}},
+       {S("block"), {}}},
+      {{S("offset"), 32768}, {S("block"), 1}}, /*requireSurjective=*/false);
+  EXPECT_EQ(regLayout.invertAndCompose(sharedLayout), expected);
+  EXPECT_EQ(regLayout.compose(sharedLayout.invert()), expected);
+}
+
 TEST_F(LinearLayoutTest, InvertAndCompose_NonInjective) {
   LinearLayout l1({{S("in1"), {{2}, {1}, {4}}}}, {S("out")});
   LinearLayout l2({{S("in2"), {{0}, {2}, {1}, {4}}}}, {S("out")});
@@ -758,17 +794,15 @@ TEST_F(LinearLayoutTest, QuotientIdentityMultipleDimensions) {
 LinearLayout getPackedCoordtoPaddedOffset(int M, int KPacked8b, StringAttr row,
                                           StringAttr col, StringAttr offset) {
   std::vector<std::vector<int>> basesRows, basesCols;
-  for (int i = 0; i < llvm::Log2_32(M); ++i) {
-    int row = 1 << i;
+  for (int row = 1; row < M; row *= 2) {
     int col = 0;
     int linearCoord = row * KPacked8b + col;
     int offset = (linearCoord / 8) * 16 + (linearCoord % 8);
     basesRows.push_back({offset});
   }
 
-  for (int j = 0; j < llvm::Log2_32(KPacked8b); ++j) {
+  for (int col = 1; col < KPacked8b; col *= 2) {
     int row = 0;
-    int col = 1 << j;
     int linearCoord = row * KPacked8b + col;
     int offset = (linearCoord / 8) * 16 + (linearCoord % 8);
     basesCols.push_back({offset});
@@ -785,8 +819,7 @@ TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEM) {
   int KPacked8b = numFp4Elems / M / 2;
   int KPadded8b = numFp4Elems / M;
 
-  for (int i = 0; i < llvm::Log2_32(M * KPadded8b); ++i) {
-    int offset = 1 << i;
+  for (int offset = 1; offset < M * KPadded8b; offset *= 2) {
     int linearCoordPacked = offset / 16 * 8 + offset % 8;
     int row = linearCoordPacked / KPacked8b;
     int col = linearCoordPacked % KPacked8b;
@@ -819,13 +852,11 @@ TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEMSwizzled) {
   int vec = 16;
 
   std::vector<std::vector<int>> bases2D;
-  for (int logCol = 0; logCol < llvm::Log2_32(tileCols); logCol++) {
-    int colPadded = 1 << logCol;
+  for (int colPadded = 1; colPadded < tileCols; colPadded *= 2) {
     int colPacked = colPadded / 16 * 8 + colPadded % 8;
     bases2D.push_back({0, colPacked});
   }
-  for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
-    int row = 1 << logRow;
+  for (int row = 1; row < tileRows; row *= 2) {
     int perPhase = 1;
     int maxPhase = 8;
     int colPadded = vec * ((row / perPhase) % maxPhase);
@@ -921,6 +952,216 @@ TEST(SupremumTest, ErrorOnInconsistentOrder) {
   ASSERT_DEATH({ supremum(x, y); }, "Supremum does not exist");
 }
 #endif
+
+TEST_F(LinearLayoutTest, Divide_Basic) {
+  // Test division when A = B * C.
+  auto B = LinearLayout::identity1D(8, S("in"), S("out"));
+  auto C = LinearLayout::zeros1D(16, S("in"), S("out"));
+  auto isC = divideLeft(B * C, B);
+  EXPECT_TRUE(isC.has_value());
+  EXPECT_EQ(isC.value(), C);
+  auto isB = divideRight(B * C, C);
+  EXPECT_TRUE(isB.has_value());
+  EXPECT_EQ(isB.value(), B);
+
+  isB = divideLeft(C * B, C);
+  EXPECT_TRUE(isB.has_value());
+  EXPECT_EQ(isB.value(), B);
+  isC = divideRight(C * B, B);
+  EXPECT_TRUE(isC.has_value());
+  EXPECT_EQ(isC.value(), C);
+}
+
+TEST_F(LinearLayoutTest, Divide_NonMatchingDims) {
+  // If B contains an extra input dimension not present in A, division should
+  // fail.
+  LinearLayout A = LinearLayout::identity1D(32, S("in"), S("out"));
+  LinearLayout B({{S("in"), {{1}, {2}, {4}, {8}}}, {S("extra"), {{0}}}},
+                 {S("out")});
+  auto candidateOpt = divideLeft(A, B);
+  EXPECT_FALSE(candidateOpt.has_value());
+  candidateOpt = divideRight(A, B);
+  EXPECT_FALSE(candidateOpt.has_value());
+}
+
+TEST_F(LinearLayoutTest, Divide_Simple) {
+  auto A = LinearLayout::identity1D(8, S("in"), S("out"));
+  auto B = LinearLayout::identity1D(4, S("in"), S("out"));
+  auto C = LinearLayout::identity1D(2, S("in"), S("out"));
+  EXPECT_EQ(divideLeft(A, B), C);
+  EXPECT_EQ(divideRight(A, B), C);
+
+  A = LinearLayout::identity1D(8, S("in"), S("out"));
+  C = LinearLayout::identity1D(1, S("in"), S("out"));
+  EXPECT_EQ(divideLeft(A, A), C);
+  EXPECT_EQ(divideRight(A, A), C);
+}
+
+TEST_F(LinearLayoutTest, Divide_2D) {
+  LinearLayout l1(
+      {
+          {S("in1"), {{1, 1}, {2, 2}, {0, 8}, {0, 4}}},
+          {S("in2"), {{0, 2}, {0, 1}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l2(
+      {
+          {S("in1"), {{1, 1}, {2, 2}}},
+          {S("in2"), {{0, 2}, {0, 1}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l3({{S("in1"), {{0, 2}, {0, 1}}}, {S("in2"), {}}},
+                  {S("out1"), S("out2")});
+  ASSERT_EQ(l2 * l3, l1);
+  ASSERT_EQ(divideLeft(l1, l2).value(), l3);
+  ASSERT_EQ(divideRight(l1, l3).value(), l2);
+}
+
+TEST_F(LinearLayoutTest, Divide_EliminateInDim) {
+  LinearLayout l1(
+      {
+          {S("in2"), {{0, 1}, {1, 0}}},
+          {S("in1"), {{2, 0}, {0, 2}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l2({{S("in2"), {{0, 1}, {1, 0}}}}, {S("out1"), S("out2")});
+  LinearLayout l3({{S("in2"), {}}, {S("in1"), {{1, 0}, {0, 1}}}},
+                  {S("out1"), S("out2")});
+  ASSERT_EQ(l2 * l3, l1);
+  EXPECT_EQ(divideLeft(l1, l2).value(), l3);
+
+  l2 = LinearLayout({{S("in2"), {{0, 1}, {1, 0}}}, {S("in1"), {}}},
+                    {S("out1"), S("out2")});
+  l3 = LinearLayout({{S("in1"), {{1, 0}, {0, 1}}}}, {S("out1"), S("out2")});
+  ASSERT_EQ(l2 * l3, l1);
+  EXPECT_EQ(divideRight(l1, l3).value(), l2);
+
+  LinearLayout l4({{S("in1"), {{0, 1}, {0, 2}}}, {S("in2"), {}}},
+                  {S("out1"), S("out2")});
+  LinearLayout l5({{S("in1"), {{0, 1}, {0, 2}}}}, {S("out1"), S("out2")});
+  LinearLayout l6({{S("in1"), {}}, {S("in2"), {}}}, {S("out1"), S("out2")});
+  ASSERT_EQ(l5 * l6, l4);
+  EXPECT_EQ(divideLeft(l4, l5).value(), l6);
+  EXPECT_EQ(divideRight(l4, l5).value(), l6);
+
+  LinearLayout l7({{S("in1"), {}}, {S("in2"), {{0, 1}}}, {S("in3"), {}}},
+                  {S("out1"), S("out2")});
+  LinearLayout l8({{S("in2"), {{0, 1}}}}, {S("out1"), S("out2")});
+  LinearLayout l9({{S("in1"), {}}, {S("in2"), {}}, {S("in3"), {}}},
+                  {S("out1"), S("out2")});
+  ASSERT_EQ(l8 * l9, l7);
+  EXPECT_EQ(divideLeft(l7, l8).value(), l9);
+  EXPECT_EQ(divideRight(l7, l8).value(), l9);
+}
+
+TEST_F(LinearLayoutTest, Divide_EliminateOutDim) {
+  LinearLayout l1(
+      {
+          {S("in2"), {{1, 0}, {1, 0}}},
+          {S("in1"), {{2, 0}, {0, 1}}},
+      },
+      {S("out1"), S("out2")});
+  LinearLayout l2({{S("in2"), {{1}, {1}}}}, {S("out1")});
+  LinearLayout l3({{S("in2"), {}}, {S("in1"), {{1, 0}, {0, 1}}}},
+                  {S("out1"), S("out2")});
+  ASSERT_EQ(l2 * l3, l1);
+  EXPECT_EQ(divideLeft(l1, l2).value(), l3);
+
+  l1 = LinearLayout(
+      {
+          {S("in2"), {{1, 0}, {0, 2}}},
+          {S("in1"), {{0, 1}, {0, 2}}},
+      },
+      {S("out1"), S("out2")});
+  l2 = LinearLayout({{S("in2"), {{1}}}, {S("in1"), {{1}}}}, {S("out2")});
+  l3 = LinearLayout({{S("in2"), {{1, 0}}}, {S("in1"), {{0, 1}}}},
+                    {S("out1"), S("out2")});
+  ASSERT_EQ(l3 * l2, l1);
+  EXPECT_EQ(divideRight(l1, l2).value(), l3);
+
+  LinearLayout l4(
+      {
+          {S("in1"), {{0, 1}, {0, 2}}},
+      },
+      {S("out1"), S("out2")});
+  using BasesArray =
+      ArrayRef<std::pair<StringAttr, std::vector<std::vector<int32_t>>>>;
+  LinearLayout l5(BasesArray{}, {S("out1")});
+  LinearLayout l6({{S("in1"), {{0, 1}, {0, 2}}}}, {S("out1"), S("out2")});
+  ASSERT_EQ(l5 * l6, l4);
+  EXPECT_EQ(divideLeft(l4, l5).value(), l6);
+  EXPECT_EQ(divideRight(l4, l5).value(), l6);
+}
+
+TEST_F(LinearLayoutTest, ColumnActionApplyLayout) {
+  // Create a simple LinearLayout with one input dimension "in" and one output
+  // "out". The original bases for "in" are: [{1}, {2}, {4}]. According to the
+  // ColumnAction example, with action = [2, 0, 1], the new order should be:
+  // [{4}, {1}, {2}].
+  StringAttr inDim = S("in");
+  StringAttr outDim = S("out");
+  std::vector<std::vector<int32_t>> origBases = {{1}, {2}, {4}};
+  LinearLayout layout({{inDim, origBases}}, {outDim});
+
+  // Construct the ColumnAction: use action vector [2, 0, 1] with inSizeLog2
+  // = 3.
+  ColumnAction colAction({2, 0, 1}, inDim, 3);
+  LinearLayout transformed = colAction.apply(layout);
+
+  // Expected layout: the bases for "in" are permuted to [{4}, {1}, {2}].
+  std::vector<std::vector<int32_t>> expectedBases = {{4}, {1}, {2}};
+  LinearLayout expectedLayout({{inDim, expectedBases}}, {outDim});
+
+  // Test dropping 4th basis and flipping the other two
+  colAction = ColumnAction({1, 0}, inDim, 3);
+  transformed = colAction.apply(layout);
+  expectedLayout = LinearLayout({{inDim, {{2}, {1}}}}, {{outDim, 8}}, false);
+  EXPECT_EQ(transformed, expectedLayout);
+}
+
+TEST_F(LinearLayoutTest, ColumnActionApplyValues) {
+  // Test that ColumnAction correctly permutes a range of values.
+  // We simulate mlir::Value objects via the opaque-pointer mechanism.
+  // Create 8 dummy values corresponding to the integers 1..8.
+  SmallVector<mlir::Value> values;
+  for (int i = 1; i <= 8; ++i) {
+    // We use getFromOpaquePointer to make a dummy value that 'carries' the
+    // integer i.
+    Value val = mlir::Value::getFromOpaquePointer(
+        reinterpret_cast<void *>(static_cast<intptr_t>(i)));
+    values.push_back(val);
+  }
+
+  // Create a ColumnAction with action = [2, 0, 1] and inSizeLog2 = 3.
+  // According to the specification, this should permute the value range as:
+  //   [x[0], x[4], x[1], x[5], x[2], x[6], x[3], x[7]].
+  // Given our dummy values (which represent 1..8), the expected sequence is [1,
+  // 5, 2, 6, 3, 7, 4, 8].
+  ColumnAction colAction({2, 0, 1}, S("register"), 3);
+  SmallVector<mlir::Value> permuted = colAction.apply(values);
+
+  // Extract the integer 'identifier' from each dummy value.
+  auto getId = [](mlir::Value val) -> intptr_t {
+    return reinterpret_cast<intptr_t>(val.getAsOpaquePointer());
+  };
+  std::vector<intptr_t> result;
+  for (mlir::Value v : permuted)
+    result.push_back(getId(v));
+
+  std::vector<intptr_t> expected = {1, 5, 2, 6, 3, 7, 4, 8};
+  EXPECT_EQ(result, expected);
+
+  // Test dropping the odd indices
+  colAction = ColumnAction({2, 1}, S("register"), 3);
+  permuted = colAction.apply(values);
+  result.clear();
+  for (mlir::Value v : permuted)
+    result.push_back(getId(v));
+
+  expected = std::vector<intptr_t>{1, 5, 3, 7};
+  EXPECT_EQ(result, expected);
+}
+
 } // anonymous namespace
 } // namespace mlir::triton
 

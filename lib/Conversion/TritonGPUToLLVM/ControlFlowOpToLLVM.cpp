@@ -84,7 +84,8 @@ private:
     auto promotedOperands = this->getTypeConverter()->promoteOperands(
         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
         adaptor.getOperands(), rewriter);
-    if (!caller->hasAttr("allocation.offset")) {
+    if (!caller->hasAttr("allocation.offset") ||
+        !callOp->hasAttr("allocation.offset")) {
       auto base = LLVM::getStackPointer(rewriter, caller);
       promotedOperands.push_back(base);
     } else {
@@ -102,6 +103,8 @@ private:
 
     promotedOperands.push_back(LLVM::getGlobalScratchPtr(
         loc, rewriter, targetInfo, caller, opOffsetVal));
+    promotedOperands.push_back(
+        LLVM::getProfileScratchPtr(loc, rewriter, caller));
     return promotedOperands;
   }
 

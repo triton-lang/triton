@@ -1,12 +1,10 @@
 #define __HIP_PLATFORM_AMD__
-// clang-format off
-// hip_depreated.h needs definitions from hip_runtime.h.
 #include <hip/hip_runtime.h>
-#include <hip/hip_deprecated.h>
-// clang-format on
+#include <hip/hip_runtime_api.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dlfcn.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -18,24 +16,9 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
 // in this file.
 // |FOR_EACH_ERR_FN| is a macro to process APIs that return hipError_t;
 // |FOR_EACH_STR_FN| is a macro to process APIs that return const char *.
-//
-// HIP 6.0 introduced an updated hipGetDeviceProperties API under a new symbol,
-// hipGetDevicePropertiesR0600. However, the associated hipDeviceProp_t was
-// directly updated with breaking changes to match hipGetDevicePropertiesR0600
-// in the header file. We include the header file from HIP 6.0. So here if we
-// use hipGetDeviceProperties together with hipDeviceProp_t we will use the
-// old API with a new struct definition and mess up the interpretation.
-//
-// This is a known issue: https://github.com/ROCm/ROCm/issues/2728.
-//
-// For now explicitly defer to the old hipDeviceProp_t struct. This should work
-// for both 5.x and 6.x. In the long term we need to switch to use
-// hipGetProcAddress once available:
-// https://github.com/ROCm/clr/commit/0479cdb3dd30ef58718cad44e424bd793c394cc0
 #define HIP_SYMBOL_LIST(FOR_EACH_ERR_FN, FOR_EACH_STR_FN)                      \
   FOR_EACH_STR_FN(hipGetErrorString, hipError_t hipError)                      \
-  FOR_EACH_ERR_FN(hipGetDeviceProperties, hipDeviceProp_tR0000 *prop,          \
-                  int deviceId)                                                \
+  FOR_EACH_ERR_FN(hipGetDeviceProperties, hipDeviceProp_t *prop, int deviceId) \
   FOR_EACH_ERR_FN(hipModuleLoadDataEx, hipModule_t *module, const void *image, \
                   unsigned int numOptions, hipJitOption *options,              \
                   void **optionValues)                                         \
@@ -43,6 +26,34 @@ static const char *hipLibSearchPaths[] = {"/*py_libhip_search_path*/"};
                   hipModule_t module, const char *kname)                       \
   FOR_EACH_ERR_FN(hipFuncGetAttribute, int *, hipFunction_attribute attr,      \
                   hipFunction_t function)
+
+// HIP driver version format: HIP_VERSION_MAJOR * 10000000 + HIP_VERSION_MINOR *
+// 100000 + HIP_VERSION_PATCH.
+#define TRITON_HIP_DRIVER_EXTRACT_MAJOR_VERSION(version) ((version) / 10000000)
+#define TRITON_HIP_DRIVER_EXTRACT_MINOR_VERSION(version)                       \
+  (((version) % 10000000) / 100000)
+#define TRITON_HIP_DRIVER_EXTRACT_PATCH_VERSION(version) ((version) % 100000)
+#define TRITON_HIP_DRIVER_REQ_MAJOR_VERSION (HIP_VERSION_MAJOR)
+
+// #define TRITON_HIP_DRIVER_DBG_VERSION
+#ifdef TRITON_HIP_DRIVER_DBG_VERSION
+#define TRITON_HIP_DRIVER_LOG_VERSION(version, msgBuff)                        \
+  do {                                                                         \
+    snprintf(msgBuff, sizeof(msgBuff), "libamdhip64 version is: %d.%d.%d",     \
+             TRITON_HIP_DRIVER_EXTRACT_MAJOR_VERSION(version),                 \
+             TRITON_HIP_DRIVER_EXTRACT_MINOR_VERSION(version),                 \
+             TRITON_HIP_DRIVER_EXTRACT_PATCH_VERSION(version));                \
+    printf("%s\n", msgBuff);                                                   \
+  } while (0);
+#else
+#define TRITON_HIP_DRIVER_LOG_VERSION(version, msgBuff)                        \
+  do {                                                                         \
+    (void)msgBuff;                                                             \
+    (void)(version);                                                           \
+  } while (0);
+#endif
+
+#define TRITON_HIP_MSG_BUFF_SIZE (1024U)
 
 // The HIP symbol table for holding resolved dynamic library symbols.
 struct HIPSymbolTable {
@@ -56,39 +67,96 @@ struct HIPSymbolTable {
 
 static struct HIPSymbolTable hipSymbolTable;
 
-bool initSymbolTable() {
-  // Use the HIP runtime library loaded into the existing process if it exits.
-  void *lib = dlopen("libamdhip64.so", RTLD_NOLOAD);
-  if (lib) {
-    // printf("[triton] chosen loaded libamdhip64.so in the process\n");
+static int checkDriverVersion(void *lib) {
+  int hipVersion = -1;
+  const char *error = NULL;
+  typedef hipError_t (*hipDriverGetVersion_fn)(int *driverVersion);
+  hipDriverGetVersion_fn hipDriverGetVersion;
+  dlerror(); // Clear existing errors
+  hipDriverGetVersion =
+      (hipDriverGetVersion_fn)dlsym(lib, "hipDriverGetVersion");
+  error = dlerror();
+  if (error) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "cannot query 'hipDriverGetVersion' from libamdhip64.so");
+    dlclose(lib);
+    return -1;
   }
 
-  // Otherwise, go through the list of search paths to dlopen the first HIP
-  // driver library.
-  if (!lib) {
-    int n = sizeof(hipLibSearchPaths) / sizeof(hipLibSearchPaths[0]);
-    for (int i = 0; i < n; ++i) {
-      void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
-      if (handle) {
-        lib = handle;
-        // printf("[triton] chosen %s\n", hipLibSearchPaths[i]);
-      }
+  (void)hipDriverGetVersion(&hipVersion);
+  char msgBuff[TRITON_HIP_MSG_BUFF_SIZE] = {0};
+
+  const int hipMajVersion = TRITON_HIP_DRIVER_EXTRACT_MAJOR_VERSION(hipVersion);
+  if (hipMajVersion < TRITON_HIP_DRIVER_REQ_MAJOR_VERSION) {
+    const int hipMinVersion =
+        TRITON_HIP_DRIVER_EXTRACT_MINOR_VERSION(hipVersion);
+    const int hipPatchVersion =
+        TRITON_HIP_DRIVER_EXTRACT_PATCH_VERSION(hipVersion);
+    snprintf(msgBuff, sizeof(msgBuff),
+             "libamdhip64 version %d.%d.%d is not supported! Required major "
+             "version is >=%d.",
+             hipMajVersion, hipMinVersion, hipPatchVersion,
+             TRITON_HIP_DRIVER_REQ_MAJOR_VERSION);
+    PyErr_SetString(PyExc_RuntimeError, msgBuff);
+    dlclose(lib);
+    return -1;
+  }
+
+  TRITON_HIP_DRIVER_LOG_VERSION(hipVersion, msgBuff);
+
+  return hipVersion;
+}
+
+bool initSymbolTable() {
+  void *lib;
+
+  // Go through the list of search paths to dlopen the first HIP driver library.
+  int n = sizeof(hipLibSearchPaths) / sizeof(hipLibSearchPaths[0]);
+  for (int i = 0; i < n; ++i) {
+    void *handle = dlopen(hipLibSearchPaths[i], RTLD_LAZY | RTLD_LOCAL);
+    if (handle) {
+      lib = handle;
+      // printf("[triton] chosen %s\n", hipLibSearchPaths[i]);
     }
   }
+
   if (!lib) {
     PyErr_SetString(PyExc_RuntimeError, "cannot open libamdhip64.so");
     return false;
   }
 
-  // Resolve all symbols we are interested in.
-  dlerror(); // Clear existing errors
+  int hipVersion = checkDriverVersion(lib);
+  if (hipVersion == -1)
+    return false;
+
   const char *error = NULL;
+  typedef hipError_t (*hipGetProcAddress_fn)(
+      const char *symbol, void **pfn, int hipVersion, uint64_t hipFlags,
+      hipDriverProcAddressQueryResult *symbolStatus);
+  hipGetProcAddress_fn hipGetProcAddress;
+  dlerror(); // Clear existing errors
+
+  *(void **)&hipGetProcAddress = dlsym(lib, "hipGetProcAddress");
+  error = dlerror();
+  if (error) {
+    PyErr_SetString(PyExc_RuntimeError,
+                    "cannot query 'hipGetProcAddress' from libamdhip64.so");
+    dlclose(lib);
+    return false;
+  }
+
+  // Resolve all symbols we are interested in.
+  uint64_t hipFlags = 0;
+  hipDriverProcAddressQueryResult symbolStatus;
+  hipError_t status = hipSuccess;
 #define QUERY_EACH_FN(hipSymbolName, ...)                                      \
-  *(void **)&hipSymbolTable.hipSymbolName = dlsym(lib, #hipSymbolName);        \
-  error = dlerror();                                                           \
-  if (error) {                                                                 \
+  status = hipGetProcAddress(#hipSymbolName,                                   \
+                             (void **)&hipSymbolTable.hipSymbolName,           \
+                             hipVersion, hipFlags, &symbolStatus);             \
+  if (status != hipSuccess) {                                                  \
     PyErr_SetString(PyExc_RuntimeError,                                        \
-                    "cannot query " #hipSymbolName " from libamdhip64.so");    \
+                    "cannot get address for '" #hipSymbolName                  \
+                    "' from libamdhip64.so");                                  \
     dlclose(lib);                                                              \
     return false;                                                              \
   }
@@ -104,8 +172,9 @@ static inline void gpuAssert(hipError_t code, const char *file, int line) {
       {
         const char *prefix = "Triton Error [HIP]: ";
         const char *str = hipSymbolTable.hipGetErrorString(code);
-        char err[1024] = {0};
-        snprintf(err, 1024, "%s Code: %d, Messsage: %s", prefix, code, str);
+        char err[TRITON_HIP_MSG_BUFF_SIZE] = {0};
+        snprintf(err, sizeof(err), "%s Code: %d, Messsage: %s", prefix, code,
+                 str);
         PyGILState_STATE gil_state;
         gil_state = PyGILState_Ensure();
         PyErr_SetString(PyExc_RuntimeError, err);
@@ -127,7 +196,7 @@ static PyObject *getDeviceProperties(PyObject *self, PyObject *args) {
   if (!PyArg_ParseTuple(args, "i", &device_id))
     return NULL;
 
-  hipDeviceProp_tR0000 props;
+  hipDeviceProp_t props;
   HIP_CHECK(hipSymbolTable.hipGetDeviceProperties(&props, device_id));
 
   // create a struct to hold device properties
@@ -172,15 +241,18 @@ static PyObject *loadBinary(PyObject *self, PyObject *args) {
   // get allocated registers and spilled registers from the function
   int n_regs = 0;
   int n_spills = 0;
+  int32_t n_max_threads = 0;
   hipSymbolTable.hipFuncGetAttribute(&n_regs, HIP_FUNC_ATTRIBUTE_NUM_REGS, fun);
   hipSymbolTable.hipFuncGetAttribute(&n_spills,
                                      HIP_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, fun);
+  hipSymbolTable.hipFuncGetAttribute(
+      &n_max_threads, HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, fun);
   n_spills /= 4;
   if (PyErr_Occurred()) {
     return NULL;
   }
-  return Py_BuildValue("(KKii)", (uint64_t)mod, (uint64_t)fun, n_regs,
-                       n_spills);
+  return Py_BuildValue("(KKiii)", (uint64_t)mod, (uint64_t)fun, n_regs,
+                       n_spills, n_max_threads);
 }
 
 static PyMethodDef ModuleMethods[] = {

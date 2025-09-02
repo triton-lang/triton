@@ -1,10 +1,8 @@
 #include <algorithm>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <random>
 
 #include "mlir/AsmParser/AsmParser.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
@@ -197,7 +195,7 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
         << " " << stringifyLLVMType(inferredEnc) << " -> "
         << triton::join(srcTy.getShape(), "x") << "failed:\n"
         << join(diags, "\n");
-    auto srcLinear = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    auto srcLinear = toLinearLayout(srcTy);
     auto inferredSrcLinear = toLinearLayout(srcTy.getShape(), inferredSrcEnc);
     EXPECT_EQ(inferredSrcLinear, srcLinear)
         << "Inverse encoding inference (" << triton::join(dstTy.getShape(), "x")
@@ -367,6 +365,38 @@ TEST_F(Fp4ToFpOpTest, Fp4ToFpOpLayoutPropagation) {
   }
 }
 
+class ShapePerCTATest : public ::testing::Test {
+public:
+  ShapePerCTATest() { ctx.getOrLoadDialect<TritonGPUDialect>(); }
+
+protected:
+  MLIRContext ctx;
+};
+
+TEST_F(ShapePerCTATest, ShapePerCTA) {
+  // Equal length
+  SmallVector<unsigned> CTASplitNum = {2, 4};
+  SmallVector<int64_t> shape = {64, 128};
+  auto shapePerCTA = getShapePerCTA(CTASplitNum, shape);
+  auto expectedShapePerCTA = SmallVector<int64_t>{32, 32};
+  EXPECT_EQ(shapePerCTA.size(), shape.size());
+  EXPECT_EQ(shapePerCTA, expectedShapePerCTA);
+
+  // rank(shape) < rank(CTASplitNum)
+  CTASplitNum = {2, 4, 8};
+  shapePerCTA = getShapePerCTA(CTASplitNum, shape);
+  expectedShapePerCTA = SmallVector<int64_t>{16, 16};
+  EXPECT_EQ(shapePerCTA.size(), shape.size());
+  EXPECT_EQ(shapePerCTA, expectedShapePerCTA);
+
+  // rank(shape) > rank(CTASplitNum)
+  CTASplitNum = {2};
+  shapePerCTA = getShapePerCTA(CTASplitNum, shape);
+  expectedShapePerCTA = SmallVector<int64_t>{64, 64};
+  EXPECT_EQ(shapePerCTA.size(), shape.size());
+  EXPECT_EQ(shapePerCTA, expectedShapePerCTA);
+}
+
 class JoinOpTest : public ::testing::Test {
 public:
   JoinOpTest() { ctx.getOrLoadDialect<TritonGPUDialect>(); }
@@ -425,8 +455,8 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
       joinShape.push_back(2);
       assert(succeeded(result));
       Attribute transEnc;
-      result = inferLayout->inferTransOpEncoding(joinedEnc, joinShape,
-                                                 transPerm, transEnc);
+      result = inferLayout->inferTransOpEncoding(
+          joinedEnc, joinShape, transPerm, transEnc, /*loc=*/{});
       assert(succeeded(result));
       SmallVector<int64_t> transShape;
       for (auto i : transPerm) {
@@ -474,15 +504,15 @@ public:
   triton::gpu::AMDMfmaEncodingAttr createMFMA(int mDim, int nDim,
                                               ArrayRef<unsigned> warpsPerCTA) {
     return triton::gpu::AMDMfmaEncodingAttr::get(
-        &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
-        /*isTransposed=*/false, ctaLayout);
+        &ctx, /*version=*/2, warpsPerCTA, mDim, nDim,
+        /*isTransposed=*/false, ctaLayout, std::nullopt);
   }
 
   triton::gpu::AMDMfmaEncodingAttr
   createTransposedMFMA(int mDim, int nDim, ArrayRef<unsigned> warpsPerCTA) {
     return triton::gpu::AMDMfmaEncodingAttr::get(
-        &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
-        /*isTransposed=*/true, ctaLayout);
+        &ctx, /*version=*/2, warpsPerCTA, mDim, nDim,
+        /*isTransposed=*/true, ctaLayout, std::nullopt);
   }
 };
 

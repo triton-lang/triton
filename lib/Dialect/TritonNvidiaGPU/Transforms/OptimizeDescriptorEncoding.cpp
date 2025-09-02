@@ -1,5 +1,6 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Pass/PassManager.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -11,22 +12,14 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "llvm/ADT/PriorityWorklist.h"
 #include <algorithm>
-#include <memory>
 #include <unordered_set>
+
+namespace ttg = mlir::triton::gpu;
 
 namespace {
 
-using namespace mlir;
-
-namespace ttng = triton::nvidia_gpu;
-namespace ttg = triton::gpu;
-namespace tt = triton;
-
-#define GEN_PASS_CLASSES
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
-
 struct UseInfo {
-  TypedValue<tt::TensorDescType> descriptor;
+  TypedValue<TensorDescType> descriptor;
   Operation *use;
   Attribute desiredSharedEncoding;
   SmallVector<int64_t> shape;
@@ -36,10 +29,6 @@ struct UseInfo {
 static bool isTMACompatibleEncoding(Attribute enc) {
   if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(enc)) {
     return !nvmma.getTransposed();
-  }
-  if (auto swizzled = dyn_cast<ttg::SwizzledSharedEncodingAttr>(enc)) {
-    return swizzled.getVec() == 1 && swizzled.getPerPhase() == 1 &&
-           swizzled.getMaxPhase() == 1;
   }
   return false;
 }
@@ -60,13 +49,6 @@ Attribute findLoadEncodingFromUsers(Operation *op) {
   return {};
 }
 
-ttg::CTALayoutAttr getCtaLayoutFromEncoding(Attribute encoding) {
-  auto layout = cast<ttg::LayoutEncodingTrait>(encoding);
-  auto ctx = encoding.getContext();
-  return ttg::CTALayoutAttr::get(ctx, layout.getCTAsPerCGA(),
-                                 layout.getCTASplitNum(), layout.getCTAOrder());
-}
-
 SmallVector<int64_t> expandToRank(ArrayRef<int64_t> shape, int rank) {
   SmallVector<int64_t> result(rank, 1);
   assert(shape.size() <= rank);
@@ -78,7 +60,7 @@ SmallVector<int64_t> expandToRank(ArrayRef<int64_t> shape, int rank) {
 std::optional<UseInfo> getUseInfo(Operation *op) {
   UseInfo info;
   info.use = op;
-  if (auto load = dyn_cast<tt::DescriptorLoadOp>(op)) {
+  if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
     info.descriptor = load.getDesc();
     info.desiredSharedEncoding = findLoadEncodingFromUsers(op);
     auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
@@ -89,7 +71,7 @@ std::optional<UseInfo> getUseInfo(Operation *op) {
     info.shape = expandToRank(shape, rank);
     return info;
   }
-  if (auto gather = dyn_cast<tt::DescriptorGatherOp>(op)) {
+  if (auto gather = dyn_cast<DescriptorGatherOp>(op)) {
     info.descriptor = gather.getDesc();
     info.desiredSharedEncoding = findLoadEncodingFromUsers(op);
     auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
@@ -100,21 +82,12 @@ std::optional<UseInfo> getUseInfo(Operation *op) {
     info.shape = expandToRank(shape, rank);
     return info;
   }
-  if (auto store = dyn_cast<tt::DescriptorStoreOp>(op)) {
+  if (auto store = dyn_cast<DescriptorStoreLikeOpInterface>(op)) {
     info.descriptor = store.getDesc();
     auto encoding = store.getSrc().getType().getEncoding();
     info.ctaLayout = ttg::getCTALayout(encoding);
     auto shape = store.getSrc().getType().getShape();
     auto rank = store.getDesc().getType().getBlockType().getRank();
-    info.shape = expandToRank(shape, rank);
-    return info;
-  }
-  if (auto scatter = dyn_cast<tt::DescriptorScatterOp>(op)) {
-    info.descriptor = scatter.getDesc();
-    auto encoding = scatter.getSrc().getType().getEncoding();
-    info.ctaLayout = ttg::getCTALayout(encoding);
-    auto shape = scatter.getSrc().getType().getShape();
-    auto rank = scatter.getDesc().getType().getBlockType().getRank();
     info.shape = expandToRank(shape, rank);
     return info;
   }
@@ -146,39 +119,14 @@ template <> struct std::hash<EncodingInfo> {
   }
 };
 
-namespace {
+namespace mlir {
+namespace triton {
+namespace nvidia_gpu {
 
-SmallVector<Value> getTiedArgs(Operation *op, int resultIdx) {
-  if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-    auto iterArg = forOp.getRegionIterArg(resultIdx);
-    auto result = forOp.getResult(resultIdx);
-    auto yieldVal = forOp.getBody()->getTerminator()->getOperand(resultIdx);
-    auto initVal = forOp.getInitArgs()[resultIdx];
-    return {iterArg, result, yieldVal, initVal};
-  } else if (auto whileOp = dyn_cast<scf::WhileOp>(op)) {
-    auto iterArg = whileOp.getBeforeArguments()[resultIdx];
-    auto result = whileOp.getResults()[resultIdx];
-    auto yieldVal =
-        whileOp.getBeforeBody()->getTerminator()->getOperand(resultIdx);
-    auto initVal = whileOp.getOperands()[resultIdx];
-    return {iterArg, result, iterArg, initVal};
-  } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-    SmallVector<Value> values;
-    for (auto &block : ifOp.getThenRegion().getBlocks()) {
-      auto terminator = block.getTerminator();
-      if (isa<scf::YieldOp>(terminator))
-        values.push_back(terminator->getOperands()[resultIdx]);
-    }
-    for (auto &block : ifOp.getElseRegion().getBlocks()) {
-      auto terminator = block.getTerminator();
-      if (isa<scf::YieldOp>(terminator))
-        values.push_back(terminator->getOperands()[resultIdx]);
-    }
-    values.push_back(ifOp->getResults()[resultIdx]);
-    return values;
-  }
-  return {};
-}
+#define GEN_PASS_DEF_TRITONNVIDIAGPUOPTIMIZEDESCRIPTORENCODINGPASS
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
+
+namespace {
 
 const EncodingInfo *internEncoding(std::unordered_set<EncodingInfo> &encodings,
                                    EncodingInfo info) {
@@ -258,41 +206,31 @@ Attribute getFallbackSharedEncoding(RankedTensorType tensorType,
   if (!ctaLayout)
     ctaLayout = ttg::CTALayoutAttr::getDefault(ctx, tensorType.getRank());
   else if (ctaLayout.getRank() != tensorType.getRank())
-    ctaLayout = ttng::updateCTALayoutForShape(ctaLayout, shape);
+    ctaLayout = updateCTALayoutForShape(ctaLayout, shape);
 
-  auto elemTy = tensorType.getElementType();
-  auto shapePerCTA = ttg::getShapePerCTA(ctaLayout.getCTASplitNum(), shape);
-  unsigned eleBitWidth = tensorType.getElementType().getIntOrFloatBitWidth();
-
-  auto contigDimSizeInBytes = shapePerCTA.back() * eleBitWidth / 8;
-  auto rank = tensorType.getRank();
-  if (rank == 1 || contigDimSizeInBytes < 32 || shapePerCTA[rank - 2] < 8) {
-    return ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, order, ctaLayout);
-  }
   return ttg::NVMMASharedEncodingAttr::get(ctx, shape, order, ctaLayout,
                                            tensorType.getElementType(),
                                            /*fp4Padded*/ false);
 }
 
-tt::TensorDescType getTensorDescTypeWithEncoding(Operation *op,
-                                                 RankedTensorType existingTy,
-                                                 Attribute encoding) {
+TensorDescType getTensorDescTypeWithEncoding(Operation *op,
+                                             RankedTensorType existingTy,
+                                             Attribute encoding) {
   auto sharedEnc = cast<triton::gpu::SharedEncodingTrait>(encoding);
-  encoding = ttng::updateEncodingForShape(op, sharedEnc, existingTy);
-  auto blockTy = RankedTensorType::get(existingTy.getShape(),
-                                       existingTy.getElementType(), encoding);
-  return tt::TensorDescType::get(existingTy.getContext(), blockTy);
+  encoding = updateEncodingForShape(op, sharedEnc, existingTy);
+  auto blockTy = existingTy.cloneWithEncoding(encoding);
+  return TensorDescType::get(existingTy.getContext(), blockTy);
 }
 
-void assignMemoryLayouts(tt::FuncOp &func) {
+void assignMemoryLayouts(FuncOp &func) {
   std::unordered_set<EncodingInfo> encodings;
-  llvm::MapVector<TypedValue<tt::TensorDescType>, const EncodingInfo *>
+  llvm::MapVector<TypedValue<TensorDescType>, const EncodingInfo *>
       valueToEncodingInfo;
   llvm::PriorityWorklist<TypedValue<triton::TensorDescType>> worklist;
 
   auto updateEncoding = [&](ArrayRef<Value> descValues, EncodingInfo info) {
     for (auto value : descValues) {
-      auto typedVal = cast<TypedValue<tt::TensorDescType>>(value);
+      auto typedVal = cast<TypedValue<TensorDescType>>(value);
       auto itr = valueToEncodingInfo.find(typedVal);
       if (itr != valueToEncodingInfo.end())
         info = combineEncodings(*itr->second, info,
@@ -301,7 +239,7 @@ void assignMemoryLayouts(tt::FuncOp &func) {
 
     auto einfo = internEncoding(encodings, info);
     for (auto value : descValues) {
-      auto typedVal = cast<TypedValue<tt::TensorDescType>>(value);
+      auto typedVal = cast<TypedValue<TensorDescType>>(value);
       auto res = valueToEncodingInfo.try_emplace(typedVal, einfo);
       if (res.second) {
         worklist.insert(typedVal);
@@ -312,12 +250,13 @@ void assignMemoryLayouts(tt::FuncOp &func) {
     }
   };
 
-  // 1. Set seed values from either TMA ops, or function boundary ops which we
-  // fallback to default encoding
+  // 1. Set seed values from either TMA ops, or device function boundaries for
+  // which we fallback to default encoding
+  auto isKernel = triton::isKernel(func);
   for (auto blockArg : func.getBlocks().front().getArguments())
-    if (auto desc = dyn_cast<TypedValue<tt::TensorDescType>>(blockArg))
+    if (auto desc = dyn_cast<TypedValue<TensorDescType>>(blockArg))
       updateEncoding({desc},
-                     EncodingInfo{{}, {}, {}, /*forcedToDefault=*/true});
+                     EncodingInfo{{}, {}, {}, /*forcedToDefault=*/!isKernel});
 
   func.walk([&](Operation *op) {
     if (auto info = getUseInfo(op)) {
@@ -325,23 +264,22 @@ void assignMemoryLayouts(tt::FuncOp &func) {
                      EncodingInfo{info->desiredSharedEncoding, info->ctaLayout,
                                   info->shape});
     } else {
-      bool forcedToDefault =
-          isa<tt::CallOp, tt::ReturnOp, tt::ReinterpretTensorDescOp>(op);
+      bool forcedToDefault = isa<CallOp, ReturnOp, ReinterpretTensorDescOp>(op);
       auto einfo =
           internEncoding(encodings, EncodingInfo{{}, {}, {}, forcedToDefault});
 
       auto setEncoding = [&](Value v) {
-        auto typedVal = cast<TypedValue<tt::TensorDescType>>(v);
+        auto typedVal = cast<TypedValue<TensorDescType>>(v);
         valueToEncodingInfo.try_emplace(typedVal, einfo);
         if (forcedToDefault)
           worklist.insert(typedVal);
       };
       for (auto result : op->getResults())
-        if (auto desc = dyn_cast<TypedValue<tt::TensorDescType>>(result))
+        if (auto desc = dyn_cast<TypedValue<TensorDescType>>(result))
           setEncoding(desc);
 
       for (auto arg : op->getOperands())
-        if (auto desc = dyn_cast<TypedValue<tt::TensorDescType>>(arg))
+        if (auto desc = dyn_cast<TypedValue<TensorDescType>>(arg))
           setEncoding(desc);
     }
   });
@@ -397,17 +335,10 @@ void assignMemoryLayouts(tt::FuncOp &func) {
                                                newEncoding));
   }
 
-  SmallVector<Type> argTys(func.getArgumentTypes());
+  SmallVector<Type> argTys(func.getBlocks().front().getArgumentTypes());
   SmallVector<Type> resultTys(func.getResultTypes());
-  for (auto [i, argTy] : llvm::enumerate(argTys)) {
-    if (auto descTy = dyn_cast<tt::TensorDescType>(argTy)) {
-      auto encoding = getFallbackSharedEncoding(descTy.getBlockType(), {}, {});
-      argTys[i] = getTensorDescTypeWithEncoding(nullptr, descTy.getBlockType(),
-                                                encoding);
-    }
-  }
   for (auto [i, resultTy] : llvm::enumerate(resultTys)) {
-    if (auto descTy = dyn_cast<tt::TensorDescType>(resultTy)) {
+    if (auto descTy = dyn_cast<TensorDescType>(resultTy)) {
       auto encoding = getFallbackSharedEncoding(descTy.getBlockType(), {}, {});
       resultTys[i] = getTensorDescTypeWithEncoding(
           nullptr, descTy.getBlockType(), encoding);
@@ -418,14 +349,16 @@ void assignMemoryLayouts(tt::FuncOp &func) {
 
 void assignMemoryLayouts(ModuleOp &mod) {
   for (auto &op : *mod.getBody()) {
-    if (auto func = dyn_cast<tt::FuncOp>(&op)) {
+    if (auto func = dyn_cast<FuncOp>(&op)) {
       assignMemoryLayouts(func);
     }
   }
 }
 
+} // anonymous namespace
+
 class TritonNvidiaGPUOptimizeDescriptorEncodingPass
-    : public TritonNvidiaGPUOptimizeDescriptorEncodingPassBase<
+    : public impl::TritonNvidiaGPUOptimizeDescriptorEncodingPassBase<
           TritonNvidiaGPUOptimizeDescriptorEncodingPass> {
 public:
   using BaseT = TritonNvidiaGPUOptimizeDescriptorEncodingPassBase<
@@ -439,9 +372,6 @@ public:
   }
 };
 
-} // namespace
-
-std::unique_ptr<Pass>
-mlir::createTritonNvidiaGPUOptimizeDescriptorEncodingPass() {
-  return std::make_unique<TritonNvidiaGPUOptimizeDescriptorEncodingPass>();
-}
+} // namespace nvidia_gpu
+} // namespace triton
+} // namespace mlir

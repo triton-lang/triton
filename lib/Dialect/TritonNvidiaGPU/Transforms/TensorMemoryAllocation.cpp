@@ -1,21 +1,26 @@
 #include "mlir/Analysis/Liveness.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Traits.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/ADT/EquivalenceClasses.h"
 #include "llvm/ADT/MapVector.h"
 
-#define GEN_PASS_CLASSES
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
+namespace mlir {
+namespace triton {
+namespace nvidia_gpu {
 
-using namespace mlir;
-using namespace triton;
-using namespace triton::gpu;
-using namespace triton::nvidia_gpu;
+namespace ttg = triton::gpu;
+
+#define GEN_PASS_DEF_TRITONTENSORMEMORYALLOCATIONPASS
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 namespace {
 
@@ -119,7 +124,7 @@ static Interval<int> getLiveIntervals(Value value, Liveness &liveness,
   SmallVector<Operation *> users(value.getUsers());
   while (!users.empty()) {
     Operation *user = users.pop_back_val();
-    if (!isa<triton::gpu::MemDescSubviewOp>(user))
+    if (!isa<ttg::MemDescIndexOp, ttg::MemDescReinterpretOp>(user))
       continue;
     auto usersLivness = liveness.resolveLiveness(user->getResult(0));
     liveOperations.insert(liveOperations.end(), usersLivness.begin(),
@@ -174,13 +179,92 @@ static TMemChunk allocFirstFit(MemoryBitMap &memoryMap,
   return chunk;
 }
 
-static Operation *getAlloc(Value value) {
-  Operation *op = value.getDefiningOp();
-  while (isa<triton::gpu::MemDescSubviewOp>(op)) {
-    op = op->getResult(0).getDefiningOp();
+static SmallVector<Operation *> getAlloc(Value value) {
+  SmallVector<Operation *> allocs;
+  DenseSet<Value> seen;
+  SmallVector<Value> worklist{value};
+
+  while (!worklist.empty()) {
+    Value v = worklist.pop_back_val();
+    if (!seen.insert(v).second)
+      continue;
+
+    // Handle block arguments.
+    if (auto arg = dyn_cast<BlockArgument>(v)) {
+      Block *block = arg.getOwner();
+      Operation *parentOp = block->getParentOp();
+
+      // Handle block with predecessors.
+      if (!block->isEntryBlock()) {
+        for (Block *pred : block->getPredecessors()) {
+          Operation *predOp = pred->getTerminator();
+          auto br = dyn_cast<BranchOpInterface>(predOp);
+          if (!br) {
+            llvm::report_fatal_error("unhandled branch op: " +
+                                     predOp->getName().getStringRef());
+          }
+          SmallVector<Attribute> operands(br->getNumOperands());
+          auto it = llvm::find(br->getSuccessors(), block);
+          unsigned idx = std::distance(br->getSuccessors().begin(), it);
+          SuccessorOperands args = br.getSuccessorOperands(idx);
+          Value operand =
+              args.getForwardedOperands()[arg.getArgNumber() -
+                                          args.getProducedOperandCount()];
+          worklist.push_back(operand);
+        }
+        continue;
+      }
+
+      // Handle region entry arguments.
+      if (auto wsOp = dyn_cast<ttg::WarpSpecializePartitionsOp>(parentOp)) {
+        worklist.push_back(
+            wsOp.getParentOp().getExplicitCaptures()[arg.getArgNumber()]);
+      } else if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+        unsigned idx = arg.getArgNumber() - 1;
+        worklist.push_back(forOp.getYieldedValues()[idx]);
+        worklist.push_back(forOp.getInits()[idx]);
+      } else if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp)) {
+        unsigned idx = arg.getArgNumber();
+        if (arg.getParentRegion() == &whileOp.getAfter()) {
+          worklist.push_back(whileOp.getConditionOp().getArgs()[idx]);
+        } else {
+          worklist.push_back(whileOp.getYieldedValues()[idx]);
+          worklist.push_back(whileOp.getInits()[idx]);
+        }
+      } else {
+        llvm::report_fatal_error(
+            "unhandled parent op when looking for TMEM alloc: " +
+            parentOp->getName().getStringRef());
+      }
+      continue;
+    }
+
+    Operation *defOp = v.getDefiningOp();
+    unsigned idx = cast<OpResult>(v).getResultNumber();
+    if (isa<TMEMAllocOp>(defOp)) {
+      allocs.push_back(defOp);
+    } else if (defOp->hasTrait<OpTrait::MemDescViewTrait>()) {
+      worklist.push_back(defOp->getOperand(0));
+    } else if (auto sliceOp = dyn_cast<TMEMSubSliceOp>(defOp)) {
+      worklist.push_back(sliceOp.getSrc());
+    } else if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
+      worklist.push_back(selectOp.getTrueValue());
+      worklist.push_back(selectOp.getFalseValue());
+    } else if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
+      worklist.push_back(ifOp.thenYield().getOperand(idx));
+      worklist.push_back(ifOp.elseYield().getOperand(idx));
+    } else if (auto forOp = dyn_cast<scf::ForOp>(defOp)) {
+      worklist.push_back(forOp.getYieldedValues()[idx]);
+      worklist.push_back(forOp.getInits()[idx]);
+    } else if (auto whileOp = dyn_cast<scf::WhileOp>(defOp)) {
+      worklist.push_back(whileOp.getConditionOp().getArgs()[idx]);
+    } else {
+      llvm::report_fatal_error("unhandled op when looking for TMEM alloc: " +
+                               defOp->getName().getStringRef());
+    }
   }
-  assert(isa<triton::nvidia_gpu::TMEMAllocOp>(op) && "Expected a TMEMAllocOp");
-  return op;
+
+  return allocs;
 }
 
 class RowIdConstraints {
@@ -221,23 +305,25 @@ allocateTMem(Operation *parentOp,
     if (auto alloc = dyn_cast<triton::nvidia_gpu::TMEMAllocOp>(op)) {
       allocs.push_back(alloc);
     }
-    if (auto mmaOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAOp>(op)) {
-      if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-              mmaOp.getA().getType().getEncoding())) {
+    if (auto mmaOp = dyn_cast<MMAv5OpInterface>(op)) {
+      if (isa<TensorMemoryEncodingAttr>(mmaOp.getA().getType().getEncoding())) {
         TMemAllocation allocSize = getTmemAllocSizes(mmaOp.getA().getType());
         if (allocSize.numRows == 64) {
           // HW restriction, the A alloc and accumulator needs to be in the same
           // rows.
-          rowIdConstraints.joinOps(getAlloc(mmaOp.getA()),
-                                   getAlloc(mmaOp.getD()));
+          SmallVector<Operation *> lhsAllocs = getAlloc(mmaOp.getA());
+          SmallVector<Operation *> accAllocs = getAlloc(mmaOp.getAccumulator());
+          for (Operation *lhsAlloc : lhsAllocs)
+            for (Operation *accAlloc : accAllocs)
+              rowIdConstraints.joinOps(lhsAlloc, accAlloc);
         } else {
           // TODO: we need to handle cases where the format is blockM and we
           // have multiple blocks.
-          assert((cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+          assert((cast<TensorMemoryEncodingAttr>(
                       mmaOp.getA().getType().getEncoding())
                           .getBlockM() != 64 &&
-                  cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-                      mmaOp.getD().getType().getEncoding())
+                  cast<TensorMemoryEncodingAttr>(
+                      mmaOp.getAccumulator().getType().getEncoding())
                           .getBlockM() != 64) &&
                  "interleaved layout with TMEM operand is not supported yet.");
         }
@@ -257,10 +343,11 @@ allocateTMem(Operation *parentOp,
     // Find all allocations in code that may execute at the same time. Only look
     // at processed allocations.
     SmallVector<TMemChunk> coexistingChunks;
-    if (auto ws = alloc->getParentOfType<WarpSpecializeOp>()) {
+    if (auto ws = alloc->getParentOfType<triton::gpu::WarpSpecializeOp>()) {
       for (auto prevIt = allocs.begin(); prevIt != it; ++prevIt) {
         TMEMAllocOp prevAlloc = *prevIt;
-        auto prevWs = prevAlloc->getParentOfType<WarpSpecializeOp>();
+        auto prevWs =
+            prevAlloc->getParentOfType<triton::gpu::WarpSpecializeOp>();
         if (prevWs && prevWs == ws &&
             alloc->getParentRegion() != prevAlloc->getParentRegion())
           coexistingChunks.push_back(allocChunks.at(prevAlloc));
@@ -300,10 +387,16 @@ allocateTMem(Operation *parentOp,
   return totalMemorySize;
 }
 
-class TritionTensorMemoryAllocationPass
-    : public TritionTensorMemoryAllocationPassBase<
-          TritionTensorMemoryAllocationPass> {
+} // anonymous namespace
+
+class TritonTensorMemoryAllocationPass
+    : public impl::TritonTensorMemoryAllocationPassBase<
+          TritonTensorMemoryAllocationPass> {
 public:
+  IntegerAttr getI32Attr(int32_t value) {
+    return Builder(&getContext()).getI32IntegerAttr(value);
+  }
+
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
@@ -313,6 +406,9 @@ public:
     int totalMemorySize = allocateTMem(mod, offsets);
 
     std::array<int, 6> possibleAllocations = {0, 32, 64, 128, 256, 512};
+    // NOTE: if totalMemorySize > 512 we exceeded the maximum amount of tensor
+    // memory, but we let the compilation finish so that we can raise an
+    // exception in python for the auto-tuner.
     if (totalMemorySize <= 512) {
       for (int size : possibleAllocations) {
         if (totalMemorySize <= size) {
@@ -321,23 +417,21 @@ public:
         }
       }
     }
-    // if totalMemorySize > 512 we exceeded the maximum amount of tensor memory,
-    // let the compilation finish so that we can raise an exception in python
-    // for auto-tuner.
     if (totalMemorySize > 0) {
-      assert(mod->getAttr("ttg.shared") != nullptr &&
-             cast<IntegerAttr>(mod->getAttr("ttg.shared")).getInt() != 0 &&
-             "Shared memory is required for allocation of Tensor Core memory.");
+      // We use a small smem allocation to get the tensor memory base address
+      // from tcgen05.alloc, ensure the block has at least 4 bytes of smem
+      int shared = 0;
+      if (auto sharedAttr = mod->getAttr("ttg.shared")) {
+        shared = cast<IntegerAttr>(sharedAttr).getInt();
+      }
+      if (shared < 4) {
+        mod->setAttr("ttg.shared", getI32Attr(4));
+      }
     }
-
-    mod->setAttr("ttg.tensor_memory_size",
-                 mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
-                                        totalMemorySize));
+    mod->setAttr("ttg.tensor_memory_size", getI32Attr(totalMemorySize));
   }
 };
 
-} // namespace
-
-std::unique_ptr<Pass> mlir::createTensorMemoryAllocationPass() {
-  return std::make_unique<TritionTensorMemoryAllocationPass>();
-}
+} // namespace nvidia_gpu
+} // namespace triton
+} // namespace mlir

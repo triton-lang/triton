@@ -5,10 +5,11 @@
 
 namespace mlir {
 
-/// Create a pass to add DIScope
-std::unique_ptr<Pass> createLLVMDIScopePass();
+// Generate the pass class declarations.
+#define GEN_PASS_DECL
+#include "triton/Target/LLVMIR/Passes.h.inc"
 
-/// Generate the code for registering conversion passes.
+// Generate the code for registering conversion passes.
 #define GEN_PASS_REGISTRATION
 #include "triton/Target/LLVMIR/Passes.h.inc"
 

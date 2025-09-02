@@ -5,4 +5,6 @@ add_triton_ut(
     TritonAnalysis
     TritonIR
     TritonGPUIR
+    TritonGPUTransforms
+    TritonNvidiaGPUTransforms
 )

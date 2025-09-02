@@ -4,6 +4,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -22,8 +23,7 @@ using RunPipelineFn = function_ref<LogicalResult(OpPassManager &, ModuleOp)>;
 // Take the body of a partition into a new `tt.func`. We can use this to run a
 // full compiler pipeline on the partition.
 static OwningOpRef<ModuleOp> takeIntoFunction(ModuleAxisInfoAnalysis &axisInfo,
-                                              Region *partition,
-                                              unsigned numWarps) {
+                                              Region *partition, int numWarps) {
   // Forward the module attributes (target, number of threads per warp, etc.)
   // onto the container module.
   ModuleOp mod = axisInfo.getModuleOp();
@@ -83,17 +83,15 @@ static void extractPartitionBody(OwningOpRef<ModuleOp> container,
 
 // Reset the layouts of operations in a region and re-run layout assignment.
 static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
-                                   Region *partition, unsigned prevNumWarps,
-                                   unsigned newNumWarps,
-                                   RunPipelineFn runPipeline) {
+                                   Region *partition, int prevNumWarps,
+                                   int newNumWarps, RunPipelineFn runPipeline) {
   OwningOpRef<ModuleOp> container =
       takeIntoFunction(axisInfo, partition, prevNumWarps);
 
   // Start by removing all tensor encodings.
   mlir::AttrTypeReplacer replacer;
-  replacer.addReplacement([](RankedTensorType ty) {
-    return RankedTensorType::get(ty.getShape(), ty.getElementType());
-  });
+  replacer.addReplacement(
+      [](RankedTensorType ty) { return ty.cloneWithEncoding({}); });
   // But don't remove them from the tensors inside descriptors.
   replacer.addReplacement([](TensorDescType ty) -> std::pair<Type, WalkResult> {
     return {ty, WalkResult::skip()};
@@ -112,9 +110,10 @@ static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
   // Enable `convert-triton-to-tritongpu` to rematerialize source layouts for
   // TTG dialect operations. They will get cleared later.
   OpPassManager pm;
-  pm.addPass(createConvertTritonToTritonGPUPass(target.str(), newNumWarps,
-                                                threadsPerWarp, numCTAs,
-                                                /*enableSourceRemat=*/true));
+  pm.addPass(
+      createConvertTritonToTritonGPU({target.str(), newNumWarps, threadsPerWarp,
+                                      numCTAs, /*enableSourceRemat=*/true}));
+  pm.addPass(createRelayoutTritonGPU());
   if (failed(runPipeline(pm, *container)))
     return failure();
   // Clear source rematerializations by propagating the source layout.
@@ -127,6 +126,7 @@ static LogicalResult relayoutWarps(ModuleAxisInfoAnalysis &axisInfo,
   pm.addPass(createTritonGPUCoalesce());
   pm.addPass(createTritonGPURemoveLayoutConversions());
   pm.addPass(createTritonGPUOptimizeThreadLocality());
+  pm.addPass(createTritonGPUAccelerateMatmul());
   pm.addPass(createTritonGPURemoveLayoutConversions());
   if (failed(runPipeline(pm, *container)))
     return failure();
@@ -192,17 +192,19 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
   SmallVector<int32_t> partitionNumWarps =
       llvm::to_vector(wsOp.getPartitionNumWarps());
 
-  // Some instructions have critical throughput if have low register usage. Make
-  // sure there are enough warps for these ops to execute quickly.
+  // Determine if a partition has a lower limit on the number of warps.
   SmallVector<int32_t> minWarpsForPartition(partitionNumWarps.size(), 1);
   for (auto [minWarps, region] :
        llvm::zip(minWarpsForPartition, wsOp.getPartitionRegions())) {
     region->walk([minWarps = &minWarps](Operation *op) {
-      if (!isa<scf::ForOp>(op->getParentOp()))
-        return;
+      // Some instructions have critical throughput if have low register usage.
+      // Make sure there are enough warps for these ops to execute quickly.
       if (isa<ttng::AsyncTMAGatherOp, ttng::AsyncTMAScatterOp,
               ttng::AsyncTMACopyGlobalToLocalOp>(op))
         *minWarps = 2;
+      // TMEM ops require at least 4 warps to be able to read all lanes.
+      else if (isa<ttng::TMEMLoadOp, ttng::TMEMStoreOp, ttng::TMEMAllocOp>(op))
+        *minWarps = 4;
     });
   }
 
@@ -254,7 +256,7 @@ static LogicalResult optimizePartitionNumWarps(ModuleAxisInfoAnalysis &axisInfo,
        llvm::zip(wsOp.getPartitionRegions(), partitionNumWarps,
                  wsOp.getPartitionNumWarps(), maxTensorRegs, estRegUsage)) {
     // "Guess" the register usage for each partition.
-    estRegs = tensorRegs ? 80 : 48;
+    estRegs = tensorRegs ? 88 : 24;
 
     // Layouts need to be reassigned if the number of warps changed and there
     // are tensor computations.

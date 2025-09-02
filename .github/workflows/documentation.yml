@@ -4,18 +4,21 @@ on:
   schedule:
     - cron: "0 0 * * *"
 
-permissions: read-all
+permissions:
+  contents: write
 
 jobs:
   Build-Documentation:
-    runs-on: [a100-runner-set]
+    runs-on: [nvidia-a100]
     timeout-minutes: 30
+    env:
+      PYTHON: "python3"
 
     steps:
       - name: Checkout branch
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.CI_PAT }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
       - name: Clear docs
@@ -24,8 +27,7 @@ jobs:
         continue-on-error: true
 
       - name: Install dependent packages
-        run: |
-          sudo pip3 install tabulate cmake sphinx matplotlib myst_parser sphinx-rtd-theme pandas pytest sphinx-gallery sphinx-multiversion llnl-hatchet
+        run: sudo -E make docs-requirements
 
       #- name: Fetch dependent branches
       #  run: |
@@ -33,11 +35,9 @@ jobs:
 
       - name: Build docs
         run: |
-          cd docs
-          export PATH=$(python3 -c "import cmake; print(cmake.CMAKE_BIN_DIR)"):$PATH
           # Limit the number of threads to reduce CPU memory usage
           # This CI node has 24 cores
-          MAX_JOBS=24 sudo -E python3 -m sphinx . _build/html/main
+          MAX_JOBS=24 sudo -E make docs-only
 
       - name: Update docs
         run: |

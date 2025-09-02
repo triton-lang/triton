@@ -12,7 +12,8 @@ namespace NVIDIA {
 
 void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns,
-                                     PatternBenefit benefit);
+                                     PatternBenefit benefit,
+                                     NVIDIA::TargetInfo &info);
 
 void populateClusterOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
@@ -34,7 +35,7 @@ void populateConvertLayoutOpToLLVMOptimizedPatterns(
 
 void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
-                                 PatternBenefit benefit);
+                                 int computeCapability, PatternBenefit benefit);
 
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
@@ -47,6 +48,7 @@ void populateFp4ToFpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfo &targetInfo,
+                                       int computeCapability,
                                        RewritePatternSet &patterns,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit);

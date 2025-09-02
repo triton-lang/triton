@@ -78,7 +78,7 @@ tt.func @reduce_ops(%ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
 // -----
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
-tt.func public @select_op(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i1) attributes {noinline = false} {
+tt.func public @select_op(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i1) {
   // CHECK-LABEL: select_op
   %cst = arith.constant dense<0.000000e+00> : tensor<128xf32>
   %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
@@ -147,26 +147,6 @@ tt.func @scatter4_layout(%arg0: !tt.tensordesc<tensor<1x128xf32>>, %arg1: i32, %
   tt.return
 }
 
-// CHECK: @async_tma_gather
-tt.func @async_tma_gather(%desc: !tt.ptr<i8>, %y_offset: i32,
-                          %bar: !ttg.memdesc<1xi64, #bar_layout, #ttg.shared_memory, mutable>,
-                          %result: !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>,
-                          %pred: i1) {
-  %x_offsets = arith.constant dense<1> : tensor<32xi32>
-  // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
-  ttng.async_tma_gather %desc[%x_offsets, %y_offset] %result, %bar, %pred : !tt.ptr<i8>, tensor<32xi32>, i32, !ttg.memdesc<1xi64, #bar_layout, #ttg.shared_memory, mutable>, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>, i1
-  tt.return
-}
-
-// CHECK: @async_tma_scatter
-tt.func @async_tma_scatter(%desc: !tt.ptr<i8>, %y_offset: i32,
-                           %src: !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>) {
-  %x_offsets = arith.constant dense<1> : tensor<32xi32>
-  // CHECK: [[IDX:%.*]] = ttg.convert_layout %cst : tensor<32xi32, #{{.*}}> -> tensor<32xi32, #ttg.slice<{dim = 0, parent = [[SLICE_PARENT]]}>>
-  ttng.async_tma_scatter %desc[%x_offsets, %y_offset] %src : !tt.ptr<i8>, tensor<32xi32>, i32, !ttg.memdesc<32x128xbf16, #shared, #ttg.shared_memory, mutable>
-  tt.return
-}
-
 // -----
 
 // CHECK-LABEL: @ub_poison
@@ -178,22 +158,13 @@ tt.func @ub_poison() {
 
 // -----
 
-#blocked2 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
-
-module attributes {"ttg.num-warps" = 4 : i32} {
-
-// CHECK-LABEL: @partition_axis_info
-tt.func @partition_axis_info(%arg0: !tt.ptr<i32>, %arg1: !tt.ptr<i32>) {
-  ttg.warp_specialize(%arg0)
-  default {
-    ttg.warp_yield
-  }
-  partition0(%arg2: !tt.ptr<i32>) num_warps(2) {
-    %splatted = tt.splat %arg2 : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>, #blocked2>
-    %input = tt.load %splatted : tensor<256x!tt.ptr<i32>, #blocked2>
-    ttg.warp_return
-  } : (!tt.ptr<i32>) -> ()
+// CHECK-LABEL: @cf_br
+tt.func @cf_br(%ptr: !tt.ptr<i32>) {
+  %cst = arith.constant dense<1> : tensor<128xi32>
+  // cf.br ^bb1(%{{.+}} : tensor<128xi32, #{{.+}}>)
+  cf.br ^bb1(%cst : tensor<128xi32>)
+^bb1(%arg0: tensor<128xi32>):
+  %ptrs = tt.splat %ptr : !tt.ptr<i32> -> tensor<128x!tt.ptr<i32>>
+  tt.store %ptrs, %arg0 : tensor<128x!tt.ptr<i32>>
   tt.return
-}
-
 }

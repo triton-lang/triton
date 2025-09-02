@@ -68,6 +68,21 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
 // -----
 
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16,  CTAsPerCGA = [1,1,1,1], CTASplitNum = [1,1,1,1], CTAOrder = [3, 2, 1, 0]}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: memdesc_reshape
+  // CHECK: !ttg.memdesc<128x64xf16, #{{.+}}, mutable>
+  tt.func @memdesc_reshape(%d : !ttg.memdesc<32x1x4x64xf16, #shared, #smem, mutable>){
+    %1 = ttg.memdesc_reshape %d : !ttg.memdesc<32x1x4x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared1, #smem, mutable>
+    tt.return
+  }
+}
+
+
+// -----
+
 // CHECK-LABEL: @warp_specialize_nothing
 tt.func @warp_specialize_nothing() {
   // CHECK-NEXT: ttg.warp_specialize()
@@ -205,11 +220,24 @@ tt.func @function_no_scope() {
 
 module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL: @split_join_linear_mix
-tt.func @split_join_linear_mix(%arg: tensor<128x2xf32, #linear>) attributes {"ttg.num-warps" = 8 : i32} {
+tt.func @split_join_linear_mix(%arg: tensor<128x2xf32, #linear>) attributes {"ttg.num-warps" = 4 : i32} {
   // CHECK-NEXT: tt.split %{{.*}} : tensor<128x2xf32, [[$LINEAR]]> -> tensor<128xf32, #ttg.slice<{dim = 1, parent = [[$BLOCKED]]}>>
   %lhs, %rhs = tt.split %arg : tensor<128x2xf32, #linear> -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
   // CHECK-NEXT: tt.join %{{.*}}, %{{.*}} : tensor<128xf32, #ttg.slice<{dim = 1, parent = [[$BLOCKED]]}>> -> tensor<128x2xf32, [[$LINEAR]]>
   %j = tt.join %lhs, %rhs : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x2xf32, #linear>
   tt.return
 }
+}
+
+// -----
+
+// CHECK-LABEL: @async_commit_group
+tt.func @async_commit_group(%arg0: !ttg.async.token) {
+  // CHECK-NEXT: ttg.async_commit_group
+  ttg.async_commit_group
+  // CHECK-NEXT: ttg.async_commit_group tokens %arg0
+  %0 = ttg.async_commit_group tokens %arg0
+  // CHECK-NEXT: ttg.async_commit_group
+  %1 = ttg.async_commit_group
+  tt.return
 }

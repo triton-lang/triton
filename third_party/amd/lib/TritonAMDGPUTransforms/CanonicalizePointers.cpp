@@ -3,6 +3,7 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/Transforms/FuncConversions.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -13,9 +14,10 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Transforms/OneToNTypeConversion.h"
+#include "mlir/Transforms/DialectConversion.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/DiscardableAttributes.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
@@ -30,16 +32,16 @@
 #include "llvm/Support/LogicalResult.h"
 #include <utility>
 
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h.inc"
-#include "mlir/Transforms/WalkPatternRewriteDriver.h"
-
 #define DEBUG_TYPE "tritonamdgpu-canonicalize-pointers"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
-using namespace mlir;
-namespace tt = triton;
+namespace tt = mlir::triton;
+
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUCANONICALIZEPOINTERS
+#include "TritonAMDGPUTransforms/Passes.h.inc"
 
 // -----------------------------------------------------------------------------
 // Pointer canonicalizer utility class
@@ -89,32 +91,32 @@ namespace tt = triton;
 //
 namespace {
 
-// Extend a 32bit `offset` into 64bit using a arith.extsi operation
-static Value createExtend32bitOffsetTo64Bits(RewriterBase &rewriter,
-                                             Location loc, Value offset) {
+// Extend `offset` into `toType` using a arith.extsi operation
+Value createExtSIOffset(RewriterBase &rewriter, Location loc, Value offset,
+                        Type toType) {
   if (auto tensorType = dyn_cast<RankedTensorType>(offset.getType())) {
     auto shape = tensorType.getShape();
-    auto newTensorType = RankedTensorType::get(shape, rewriter.getI64Type(),
-                                               tensorType.getEncoding());
+    auto newTensorType =
+        RankedTensorType::get(shape, toType, tensorType.getEncoding());
     return rewriter.create<arith::ExtSIOp>(loc, newTensorType, offset);
   }
-  return rewriter.create<arith::ExtSIOp>(loc, rewriter.getI64Type(), offset);
+  return rewriter.create<arith::ExtSIOp>(loc, toType, offset);
 }
 
-// Narrow a 64bit `offset` into 32bit using a arith.trunci operation
-static Value createNarrow64bitOffsetTo32bits(RewriterBase &rewriter,
-                                             Location loc, Value offset) {
+// Narrow `offset` into `toType` using a arith.trunci operation
+Value createTruncIOffset(RewriterBase &rewriter, Location loc, Value offset,
+                         Type toType) {
   Type elementType = getElementTypeOrSelf(offset);
   if (elementType.isInteger(32))
     return offset;
 
   if (auto tensorType = dyn_cast<RankedTensorType>(offset.getType())) {
     auto shape = tensorType.getShape();
-    auto newTensorType = RankedTensorType::get(shape, rewriter.getI32Type(),
-                                               tensorType.getEncoding());
+    auto newTensorType =
+        RankedTensorType::get(shape, toType, tensorType.getEncoding());
     return rewriter.create<arith::TruncIOp>(loc, newTensorType, offset);
   }
-  return rewriter.create<arith::TruncIOp>(loc, rewriter.getI32Type(), offset);
+  return rewriter.create<arith::TruncIOp>(loc, toType, offset);
 }
 
 // Helper function to determine if the given `op` is a constant tensor and in
@@ -161,8 +163,6 @@ Value createTensorZero(RewriterBase &rw, Location loc, RankedTensorType type) {
   auto zeroDenseAttr = DenseElementsAttr::get(type, zeroAttr);
   return rw.create<arith::ConstantOp>(loc, zeroDenseAttr);
 }
-
-} // namespace
 
 std::pair<Value, Value> createDecomposeOffsetFromExpr(RewriterBase &rewriter,
                                                       Location loc, Value expr,
@@ -394,7 +394,7 @@ Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
   auto tensorPtrType = RankedTensorType::get(offsetShape, basePtr.getType(),
                                              tensorType.getEncoding());
   if (fatPtrAttrs.canNarrow)
-    offset = createNarrow64bitOffsetTo32bits(rewriter, loc, offset);
+    offset = createTruncIOffset(rewriter, loc, offset, rewriter.getI32Type());
 
   tt::SplatOp tensorPtr =
       rewriter.create<tt::SplatOp>(loc, tensorPtrType, basePtr);
@@ -562,12 +562,28 @@ public:
     RewriterBase::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(addPtrOp);
 
+    // Query all discardable attributes that we want to preserve
+    std::array<StringRef, 3> propagateList{"tt.divisibility", "tt.contiguity",
+                                           "tt.constancy"};
+    SmallVector<NamedAttribute> propagatedAttrs =
+        tt::filterDiscardableAttrs(addPtrOp.getOperation(), propagateList);
+    auto currPtrTy = llvm::dyn_cast<RankedTensorType>(addPtrOp.getType());
+    int currPtrRank = currPtrTy ? currPtrTy.getRank() : 1;
+    auto doSetDiscardableAttrs = [&](tt::AddPtrOp newAddPtrOp) {
+      auto newPtrTy = llvm::dyn_cast<RankedTensorType>(newAddPtrOp.getType());
+      int newPtrRank = newPtrTy ? newPtrTy.getRank() : 1;
+      if (newPtrRank == currPtrRank)
+        newAddPtrOp->setDiscardableAttrs(propagatedAttrs);
+    };
+
     // If it is a scalar pointer update, simply bump the base pointer
     if (llvm::isa<tt::PointerType>(addPtrOp.getPtr().getType())) {
       assert(llvm::isa<IntegerType>(origOffset.getType()) &&
              "expected offset to be integer type");
       auto newAddPtrOp = rewriter.create<tt::AddPtrOp>(
           curLoc, fatPtrBase.getType(), fatPtrBase, origOffset);
+      doSetDiscardableAttrs(newAddPtrOp);
+
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
       fatPtrs[{newAddPtrOp, fatPtrOffset}] =
           fatPtrs.at({fatPtrBase, fatPtrOffset});
@@ -582,6 +598,8 @@ public:
             maybeGetOrCreateScalarConstant(rewriter, curLoc, origOffset)) {
       tt::AddPtrOp newAddPtrOp = rewriter.create<tt::AddPtrOp>(
           curLoc, fatPtrBase.getType(), fatPtrBase, *scalarConst);
+      doSetDiscardableAttrs(newAddPtrOp);
+
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
       // If we are updating the tensor pointer with a constant value, we can
       // propagate the attributes of the tensor pointer to the fat pointer.
@@ -597,6 +615,7 @@ public:
 
     auto newAddPtrOp = rewriter.create<tt::AddPtrOp>(
         curLoc, fatPtrBase.getType(), fatPtrBase, uniformOffset);
+    doSetDiscardableAttrs(newAddPtrOp);
 
     // Vector offset update (if any): bump the tensor offset
     bool canNarrow = fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow;
@@ -605,14 +624,20 @@ public:
     if (!isZeroConst(nonUniformOffset)) {
       Type addPtrOffsetType = getElementTypeOrSelf(nonUniformOffset);
       Type fatPtrOffsetType = getElementTypeOrSelf(fatPtrOffset);
+      assert(addPtrOffsetType.isIntOrIndex() &&
+             fatPtrOffsetType.isIntOrIndex() &&
+             "expected both addPtrOffsetType and fatPtrOffsetType to be int or "
+             "index type");
       canNarrow = canNarrow && canNarrowOffset(fatPtrOffset, nonUniformOffset);
       // Upcast or downcast the offset accordingly
-      if (addPtrOffsetType.isInteger(32) && fatPtrOffsetType.isInteger(64))
-        nonUniformOffset =
-            createExtend32bitOffsetTo64Bits(rewriter, curLoc, nonUniformOffset);
-      else if (addPtrOffsetType.isInteger(64) && fatPtrOffsetType.isInteger(32))
-        nonUniformOffset =
-            createNarrow64bitOffsetTo32bits(rewriter, curLoc, nonUniformOffset);
+      unsigned addPtrOffsetTypeWidth = addPtrOffsetType.getIntOrFloatBitWidth();
+      unsigned fatPtrOffsetTypeWidth = fatPtrOffsetType.getIntOrFloatBitWidth();
+      if (addPtrOffsetTypeWidth < fatPtrOffsetTypeWidth)
+        nonUniformOffset = createExtSIOffset(rewriter, curLoc, nonUniformOffset,
+                                             fatPtrOffsetType);
+      else if (addPtrOffsetTypeWidth > fatPtrOffsetTypeWidth)
+        nonUniformOffset = createTruncIOffset(
+            rewriter, curLoc, nonUniformOffset, fatPtrOffsetType);
 
       newOffset = rewriter.create<arith::AddIOp>(curLoc, nonUniformOffset,
                                                  fatPtrOffset);
@@ -630,8 +655,49 @@ public:
   }
 };
 
-using ConversionCallbackFn =
-    std::function<std::optional<LogicalResult>(Type, SmallVectorImpl<Type> &)>;
+/// Slice only offset and keep base - i.e.,
+/// slice(fatPtrBase, fatPtrOffset) -> (fatPtrBase, slice(fatPtrOffset))
+class ConvertExtractSliceOp
+    : public PointerCanonicalizationPattern<tt::amdgpu::ExtractSliceOp> {
+public:
+  using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
+
+  LogicalResult
+  matchAndRewrite_(tt::amdgpu::ExtractSliceOp extractSliceOp,
+                   OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
+    ValueRange remappedOperands = adaptor.getSource();
+    if (remappedOperands.size() != 2)
+      return success();
+
+    Value fatPtrBase = remappedOperands[0];
+    Value fatPtrOffset = remappedOperands[1];
+    if (!llvm::isa<tt::PointerType>(fatPtrBase.getType()))
+      return rewriter.notifyMatchFailure(extractSliceOp,
+                                         "non tt.ptr base unimplemented");
+
+    auto fatPtrOffsetTy = dyn_cast<RankedTensorType>(fatPtrOffset.getType());
+    if (!fatPtrOffsetTy)
+      return rewriter.notifyMatchFailure(
+          extractSliceOp, "non RankedTensorType offset unimplemented");
+
+    Location loc = extractSliceOp->getLoc();
+    RankedTensorType resultType = extractSliceOp.getResult().getType();
+    auto slicedOffsetsTy = RankedTensorType::get(
+        resultType.getShape(), fatPtrOffsetTy.getElementType(),
+        resultType.getEncoding());
+    Value slicedOffsets = rewriter.create<tt::amdgpu::ExtractSliceOp>(
+        loc, Type{slicedOffsetsTy}, Value{fatPtrOffset},
+        extractSliceOp.getStaticOffsetsAttr());
+
+    rewriter.replaceOpWithMultiple(extractSliceOp,
+                                   {{fatPtrBase, slicedOffsets}});
+    fatPtrs[{fatPtrBase, slicedOffsets}] =
+        fatPtrs.at({fatPtrBase, fatPtrOffset});
+
+    return success();
+  }
+};
 
 /// Rewrite init args and result type and bb args.
 class ConvertSCFForOp : public PointerCanonicalizationPattern<scf::ForOp> {
@@ -1365,6 +1431,8 @@ public:
   }
 };
 
+} // anonymous namespace
+
 /// The pass structure/action is roughly:
 ///
 /// 1. Perform an approximate sparse dataflow analysis to find all transitive
@@ -1377,11 +1445,9 @@ public:
 /// category of such remaining casts but can be extended to handle all; see
 /// bullet 1 in TODOs).
 class TritonAMDGPUCanonicalizePointersPass
-    : public TritonAMDGPUCanonicalizePointersBase<
+    : public impl::TritonAMDGPUCanonicalizePointersBase<
           TritonAMDGPUCanonicalizePointersPass> {
 public:
-  TritonAMDGPUCanonicalizePointersPass() = default;
-
   void runOnOperation() override;
 };
 
@@ -1460,6 +1526,12 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   });
 
   auto func = getOperation();
+  auto walkResult = func->walk<WalkOrder::PreOrder>([](ub::PoisonOp op) {
+    op.emitRemark("skipping canonicalize-pointers due to ub.poison");
+    return WalkResult::interrupt();
+  });
+  if (walkResult.wasInterrupted())
+    return;
 
   FatPointers fatPrs;
   PatternRewriter rewriter(&getContext());
@@ -1502,6 +1574,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   target.addDynamicallyLegalDialect<scf::SCFDialect>(isLegal);
   target.addDynamicallyLegalDialect<cf::ControlFlowDialect>(isLegal);
   target.addDynamicallyLegalDialect<arith::ArithDialect>(isLegal);
+  target.addDynamicallyLegalDialect<triton::amdgpu::TritonAMDGPUDialect>(
+      isLegal);
 
   // Rewrite the rest of the ops.
   // Note we *do not* declare unrealized_cast an illegal op here in order that
@@ -1513,7 +1587,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   patterns.add<
       ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
-      ConvertConvertLayoutOp, ConvertAddPtrOp,
+      ConvertConvertLayoutOp, ConvertAddPtrOp, ConvertExtractSliceOp,
       MaterializeFatPointer<tt::AtomicCASOp>,
       MaterializeFatPointer<tt::AtomicRMWOp>,
       MaterializeFatPointer<tt::BitcastOp>, MaterializeFatPointer<tt::LoadOp>,
@@ -1547,6 +1621,4 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   });
 }
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUCanonicalizePointersPass() {
-  return std::make_unique<TritonAMDGPUCanonicalizePointersPass>();
-}
+} // namespace mlir

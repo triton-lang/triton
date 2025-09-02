@@ -14,14 +14,15 @@
 
 namespace mlir::LLVM::AMD {
 
-const char predicatedLoad[] = "__predicated_load";
-const char predicatedLoadCA[] = "__predicated_load_CA";
-const char predicatedLoadCG[] = "__predicated_load_CG";
-const char predicatedLoadCV[] = "__predicated_load_CV";
-const char predicatedStore[] = "__predicated_store";
-const char predicatedStoreCG[] = "__predicated_store_CG";
-const char predicatedStoreCS[] = "__predicated_store_CS";
-const char predicatedStoreWT[] = "__predicated_store_WT";
+const char predicatedLoad[] = "__triton_hip_predicated_load";
+const char predicatedLoadCA[] = "__triton_hip_predicated_load_CA";
+const char predicatedLoadCG[] = "__triton_hip_predicated_load_CG";
+const char predicatedLoadCV[] = "__triton_hip_predicated_load_CV";
+const char predicatedStore[] = "__triton_hip_predicated_store";
+const char predicatedStoreCG[] = "__triton_hip_predicated_store_CG";
+const char predicatedStoreCS[] = "__triton_hip_predicated_store_CS";
+const char predicatedStoreWT[] = "__triton_hip_predicated_store_WT";
+const char noAliasAsyncLoads[] = "__no_alias_async_loads";
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
                  mlir::triton::AMD::ISAFamily isaFamily =
@@ -36,19 +37,29 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
                  mlir::triton::AMD::ISAFamily isaFamily =
                      mlir::triton::AMD::ISAFamily::Unknown);
 
+Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
+              Value selector);
+
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
-               int axis);
+               ProgramIDDim axis);
 
 // Loads from shared or global memory with predication.
 // `otherElems` is used to mask out the elements that are not loaded
+// forceNoAliasAsyncLoads=true adds alias information to the llvm.load to
+// signal its not aliasing with any AsyncCopyGlobalToLocal/BufferLoadToLocal to
+// avoid conservative waits. See `addLocalLoadNoAliasScope` for more details
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal,
-             triton::CacheModifier cm = triton::CacheModifier::NONE);
+             triton::CacheModifier cm = triton::CacheModifier::NONE,
+             bool forceNoAliasAsyncLoads = false);
 
 // Stores to shared or global memory with predication.
+// forceNoAliasAsyncLoads=true adds alias information to the llvm.store to
+// signal its not aliasing with any AsyncCopyGlobalToLocal/BufferLoadToLocal to
+// avoid conservative waits. See `addLocalLoadNoAliasScope` for more details
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
-             Value pred,
-             triton::CacheModifier cm = triton::CacheModifier::NONE);
+             Value pred, triton::CacheModifier cm = triton::CacheModifier::NONE,
+             bool forceNoAliasAsyncLoads = false);
 
 // Get cache modifier information for creating load or store instruction
 // Get flags <volatile, nontemporal> for a predicated Load or Store
@@ -62,7 +73,8 @@ getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
 int32_t getCtrlBitsForBufferAtomicsOnGFX_942_950(bool setSC0, bool setSC1,
                                                  bool setNT);
 
-Value cvtFp32ToFp16RTNE(Location loc, RewriterBase &rewriter, const Value &v);
+Value cvtFp32ToFp16RTNE_oneValue(Location loc, RewriterBase &rewriter,
+                                 const Value &v);
 
 // Return a tensor of pointers with the same type of `basePtr` and the same
 // shape of `offset`
@@ -103,9 +115,18 @@ bool isUsedByDotScaledOp(Operation *op);
 // in the same region
 bool isChainDotHead(mlir::triton::DotOpInterface dotOp);
 
+// Check if given operand of this tt.dot is the result of a tt.trans
+// in the same region
+bool hasTransInDefChain(mlir::triton::DotOpInterface dotOp, unsigned opIdx);
+
 // Check if the opA of this tl.dot is the result of another tl.dot
 // in the same region
 bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
+
+// Software implementation of converting an 8-element vector of MXFP4 elements
+// to a wider type: BF16 or FP16
+SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
+                                       bool toFp16, Value packedVec);
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_

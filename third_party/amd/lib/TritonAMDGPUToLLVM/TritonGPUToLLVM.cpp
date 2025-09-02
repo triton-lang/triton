@@ -1,8 +1,9 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 
+#include "AsyncUtility.h"
 #include "PatternTritonGPUOpToLLVM.h"
-#include "SchedInstructions.h"
 #include "TargetInfo.h"
+#include "TritonAMDGPUToLLVM/MembarUtility.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -10,21 +11,22 @@
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
+#include "mlir/Dialect/AMDGPU/Utils/Chipset.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-
-#include "third_party/proton/dialect/include/TritonProtonToLLVM/PatternTritonProtonOpToLLVM.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONAMDGPUTOLLVM
@@ -97,7 +99,10 @@ struct ConvertTritonAMDGPUToLLVM
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
-    ModuleMembarAnalysis membarPass(&allocation);
+
+    AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
+    ModuleMembarAnalysis membarPass(&allocation,
+                                    mlir::triton::AMD::membarFilter);
     membarPass.run();
 
     // Lower functions
@@ -127,7 +132,7 @@ struct ConvertTritonAMDGPUToLLVM
         return signalPassFailure();
     }
 
-    ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+    AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
 
     // Emit logics to get threadId/blockIds/linearized clusterCTAId etc. and
     // cache the values. The reason to do it here is that cluster_ctaid is
@@ -199,6 +204,8 @@ struct ConvertTritonAMDGPUToLLVM
                                                           patterns, AMDBenefit);
     mlir::triton::AMD::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
                                                         targetInfo, AMDBenefit);
+    mlir::triton::AMD::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
+                                                     AMDBenefit);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
@@ -206,23 +213,28 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
 
+    FailureOr<mlir::amdgpu::Chipset> maybeChipset =
+        mlir::amdgpu::Chipset::parse(this->arch);
+    if (failed(maybeChipset)) {
+      emitError(UnknownLoc::get(&getContext()),
+                "Invalid AMDGPU chipset name: " + this->arch);
+      return signalPassFailure();
+    }
     // Native lowering patterns
-    mlir::populateGpuToROCDLConversionPatterns(typeConverter, patterns,
-                                               mlir::gpu::amd::HIP);
+    mlir::populateGpuToROCDLConversionPatterns(
+        typeConverter, patterns, mlir::gpu::amd::HIP, *maybeChipset);
 
     mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           patterns);
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, commonBenefit);
-
-    mlir::triton::proton::populateRecordOpToLLVMPattern(
-        typeConverter, patterns, targetInfo, commonBenefit);
-
     mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();
     }
+
+    fixUpLoopAnnotation(mod);
   }
 
 private:
