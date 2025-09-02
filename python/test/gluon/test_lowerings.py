@@ -284,8 +284,8 @@ def _histogram_cases():
             block_bases=[],
             shape=(m, ),
         ),
-        bin,
-    ) for (m, bin) in m_bins if m >= 32]
+        bins,
+    ) for (m, bins) in m_bins if m >= 32]
     for linear_layout, bins in linear_layouts:
         yield (linear_layout.shape[0], bins, linear_layout, ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]))
 
