@@ -9,7 +9,7 @@ LLVM_COMMIT_HASH=${LLVM_COMMIT_HASH:-$(cat "$REPO_ROOT/cmake/llvm-hash.txt")}
 LLVM_PROJECT_PATH=${LLVM_PROJECT_PATH:-"$REPO_ROOT/llvm-project"}
 LLVM_BUILD_PATH=${LLVM_BUILD_PATH:-"$LLVM_PROJECT_PATH/build"}
 LLVM_INSTALL_PATH=${LLVM_INSTALL_PATH:-"$LLVM_PROJECT_PATH/install"}
-LLVM_PROJECT_URL=${LLVM_PROJECT_URL:-"https://github.com/llvm/llvm-project"}
+LLVM_PROJECT_URL=${LLVM_PROJECT_URL:-"https://github.com/triton-lang/llvm-project"}
 
 if [ -z "$CMAKE_ARGS" ]; then
     if [ "$#" -eq 0 ]; then
