@@ -307,18 +307,6 @@ def test_histogram(M, bins, src_layout, dst_layout, device):
         z_offs = ttgl.arange(0, B, layout=dst_layout)
         ttgl.store(z_ptr + z_offs, h)
 
-    if src_layout == "linear_layout":
-        if M == 32:
-            src_layout = ttgl.DistributedLinearLayout(
-                reg_bases=[],
-                lane_bases=[[0], [16], [4], [2], [1]] + [[0]] * (THREADS_PER_WARP >> 6),
-                warp_bases=[[0], [8]],
-                block_bases=[],
-                shape=(M, ),
-            )
-        else:
-            pytest.skip("Linear layout is specialized for 32 elements")
-
     torch.manual_seed(0)
     x = torch.randint(0, bins, (M, ), dtype=torch.int32, device=device)
     z = torch.zeros((bins, ), dtype=torch.int32, device=device)
