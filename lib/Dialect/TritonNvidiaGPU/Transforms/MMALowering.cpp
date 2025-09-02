@@ -132,25 +132,39 @@ collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
   return {commitOps, commitPredicates};
 }
 
-void moveDefiningOpsBefore(Value val, Operation *target) {
+// Return false if defining ops cannot be moved above the target op
+bool moveDefiningOpsBefore(Value val, Operation *target) {
   SetVector<Operation *> toMove;
-  std::function<void(Value)> collectOpsToMove = [&](Value val) {
+
+  std::function<bool(Value)> collectOpsToMove = [&](Value val) {
     if (auto defOp = val.getDefiningOp()) {
       if (defOp->getBlock() == target->getBlock() &&
           target->isBeforeInBlock(defOp)) {
+        if (!isPure(defOp)) {
+          // This defOp needs to move above the target op, but it is unsafe due
+          // to impurity.
+          return false;
+        }
         for (Value operand : defOp->getOperands()) {
-          collectOpsToMove(operand);
+          if (!collectOpsToMove(operand)) {
+            return false;
+          }
         }
         toMove.insert(defOp);
       }
     }
+    return true;
   };
 
-  collectOpsToMove(val);
+  if (!collectOpsToMove(val)) {
+    return false;
+  }
 
   for (Operation *op : toMove) {
     op->moveBefore(target);
   }
+
+  return true;
 }
 
 template <typename TCGen5MMAOpTy>
@@ -168,8 +182,12 @@ public:
       if (!pred) {
         pred = rewriter.create<arith::ConstantIntOp>(op.getLoc(), true, 1);
       }
-      moveDefiningOpsBefore(commit.getBarrier(), op);
-      moveDefiningOpsBefore(pred, op);
+      if (!moveDefiningOpsBefore(commit.getBarrier(), op) ||
+          !moveDefiningOpsBefore(pred, op)) {
+        // Give up merging a commit if its defining ops cannot be moved above
+        // the mma op.
+        continue;
+      }
       op.addCompletionBarrier(commit.getBarrier(), pred);
       rewriter.eraseOp(commit);
     }
