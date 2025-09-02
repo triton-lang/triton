@@ -62,14 +62,13 @@ __all__ = [
 # into any specific module
 # -------------------------------------
 
-
 @constexpr_function
-def cdiv(x: int, y: int):
+def cdiv(x: int, y: int) -> int:
     return (x + y - 1) // y
 
 
 @constexpr_function
-def next_power_of_2(n: int):
+def next_power_of_2(n: int) -> int:
     """Return the smallest power of 2 greater than or equal to n"""
     n -= 1
     n |= n >> 1

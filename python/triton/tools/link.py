@@ -5,7 +5,7 @@ from typing import Sequence, Union
 from dataclasses import dataclass
 
 
-def _exists(x):
+def _exists(x) -> bool:
     return x is not None
 
 
@@ -42,7 +42,7 @@ class HeaderParser:
 
         self.kernels = defaultdict(list)
 
-    def extract_linker_meta(self, header: str):
+    def extract_linker_meta(self, header: str) -> None:
         for ln in header.splitlines():
             if ln.startswith("//"):
                 m = self.linker_directives.match(ln)
@@ -65,14 +65,14 @@ class HeaderParser:
                         ),
                     )
 
-    def _match_name(self, ker_name: str):
+    def _match_name(self, ker_name: str) -> tuple[str, str, str]:
         m = self.kernel_name.match(ker_name)
         if _exists(m):
             name, sig_hash, suffix = m.group(1), m.group(2), m.group(3)
             return name, sig_hash, suffix
         raise LinkerError(f"{ker_name} is not a valid kernel name")
 
-    def _match_c_sig(self, c_sig: str):
+    def _match_c_sig(self, c_sig: str) -> tuple[list[str], list[str]]:
         m = self.c_sig.findall(c_sig)
         if len(m):
             tys, args = [], []
@@ -83,7 +83,7 @@ class HeaderParser:
 
         raise LinkerError(f"{c_sig} is not a valid argument signature")
 
-    def _match_suffix(self, suffix: str, c_sig: str):
+    def _match_suffix(self, suffix: str, c_sig: str) -> tuple[int, list[Union[int, None]]]:
         args = c_sig.split(",")
         s2i = {"c": 1, "d": 16}
         num_specs = 0
@@ -106,7 +106,7 @@ class HeaderParser:
                 sizes.extend([None] * (len(args) - len(sizes)))
         return num_specs, sizes
 
-    def _add_kernel(self, name: str, ker: KernelLinkerMeta):
+    def _add_kernel(self, name: str, ker: KernelLinkerMeta) -> None:
         if name in self.kernels:
             last: KernelLinkerMeta = self.kernels[name][-1]
 
@@ -119,11 +119,11 @@ class HeaderParser:
         self.kernels[name].append(ker)
 
 
-def gen_signature_with_full_args(m):
+def gen_signature_with_full_args(m: KernelLinkerMeta) -> str:
     return ", ".join([f"{ty} {arg}" for ty, arg in zip(m.arg_ctypes, m.arg_names)])
 
 
-def gen_signature(m):
+def gen_signature(m: KernelLinkerMeta) -> str:
     arg_types = [ty for ty, hint in zip(m.arg_ctypes, m.sizes) if hint != 1]
     arg_names = [arg for arg, hint in zip(m.arg_names, m.sizes) if hint != 1]
     sig = ", ".join([f"{ty} {arg}" for ty, arg in zip(arg_types, arg_names)])
@@ -208,7 +208,7 @@ def make_kernel_meta_const_dispatcher(meta: KernelLinkerMeta) -> str:
 
 
 # generate definition of function pointers of kernel dispatchers based on meta-parameter and constant values
-def make_func_pointers(names: str, meta: KernelLinkerMeta) -> str:
+def make_func_pointers(names: Sequence[str], meta: KernelLinkerMeta) -> str:
     # the table of hint dispatchers
     src = f"typedef CUresult (*kernel_func_t)(CUstream stream, {gen_signature_with_full_args(meta)});\n"
     src += f"kernel_func_t {meta.orig_kernel_name}_kernels[] = {{\n"
@@ -219,7 +219,7 @@ def make_func_pointers(names: str, meta: KernelLinkerMeta) -> str:
 
 
 # generate definition for load/unload functions for kernels with different meta-parameter and constant values
-def make_kernel_load_def(names: str, meta: KernelLinkerMeta) -> str:
+def make_kernel_load_def(names: Sequence[str], meta: KernelLinkerMeta) -> str:
     src = ""
     for mode in ["load", "unload"]:
         src += f"void {mode}_{meta.orig_kernel_name}(void){{\n"
