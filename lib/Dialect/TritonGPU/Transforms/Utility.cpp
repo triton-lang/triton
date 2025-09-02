@@ -1174,7 +1174,9 @@ static Type getNewType(Type type, Attribute encoding) {
                                tensorType.getElementType(), encoding);
 }
 
-Operation *convertOpEncoding(Attribute encoding, Operation *op) {
+/// Convert an op to use 'encoding' attribute.
+/// Skips operands if they’re in shared encoding.
+Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
   OpBuilder builder(op);
   // Convert operands
   // For load/store with tensor pointers, we don't have to change the
@@ -1183,8 +1185,8 @@ Operation *convertOpEncoding(Attribute encoding, Operation *op) {
   SmallVector<Value, 4> newArgs;
   for (auto operand : op->getOperands()) {
     auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
-    if (tensorType && !isa<triton::gpu::SwizzledSharedEncodingAttr>(
-                          tensorType.getEncoding())) {
+    if (tensorType &&
+        !isa<triton::gpu::SharedEncodingTrait>(tensorType.getEncoding())) {
       Type newType = getNewType(tensorType, encoding);
       newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), newType, operand));

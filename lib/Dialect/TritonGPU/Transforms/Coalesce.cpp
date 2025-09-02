@@ -141,7 +141,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     // 4. Convert the output of this new memory op back to L1
     // 5. Replace all the uses of the original memory op by the new one
     for (auto &kv : layoutMap) {
-      convertOpEncoding(kv.second, kv.first);
+      convertDistributedOpEncoding(kv.second, kv.first);
     }
   }
 };

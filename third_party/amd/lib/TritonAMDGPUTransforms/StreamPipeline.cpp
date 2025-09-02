@@ -376,8 +376,11 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
   return loadToStreamOp;
 }
 
+/// Returns true if for a given global load with loadType, loading instead with
+/// targetLLAttr maintains at least the same level of coalescing/vectorization
+/// with same amount of load ops.
 static bool isCoalesced(RankedTensorType loadType,
-                        ttg::LinearEncodingAttr llEnc) {
+                        ttg::LinearEncodingAttr targetLLAttr) {
   // Expect a BlockedEncoding on the load.
   auto *ctx = loadType.getContext();
   auto loadEnc = loadType.getEncoding();
@@ -388,7 +391,7 @@ static bool isCoalesced(RankedTensorType loadType,
 
   // Contiguous (fastest) dimension as defined by the blocked encoding.
   const unsigned contigDim = blockedEnc.getOrder()[0];
-  const unsigned contigPerThreadBlocked =
+  const unsigned originalContigPerThread =
       blockedEnc.getSizePerThread()[contigDim];
 
   // This is the correct way to compute vectorization instead of using
@@ -409,16 +412,19 @@ static bool isCoalesced(RankedTensorType loadType,
   // auto [contigPerThreadLL, permutation] =
   //     largestVectorisation(ctx, invertedLL, bitwidth, std::nullopt);
 
-  const unsigned contigPerThreadLL = llEnc.getContigPerThread()[contigDim];
-  const unsigned contigPerWarpLL = llEnc.getContigPerWarp()[contigDim];
+  const unsigned targetContigPerThread =
+      targetLLAttr.getContigPerThread()[contigDim];
+  const unsigned targetContigPerWarp =
+      targetLLAttr.getContigPerWarp()[contigDim];
   auto blockedLL = toLinearEncoding(blockedEnc, shape);
-  const unsigned contigPerWarpBlocked = llEnc.getContigPerWarp()[contigDim];
-  auto ll = llEnc.toLinearLayout(shape);
+  const unsigned originalContigPerWarp =
+      targetLLAttr.getContigPerWarp()[contigDim];
+  auto ll = targetLLAttr.toLinearLayout(shape);
 
   // 1) Require that the linear layout provides at least as much per-thread and
   // per-warp contiguity as the original load encoding.
-  if (contigPerThreadLL < contigPerThreadBlocked ||
-      contigPerWarpLL < contigPerWarpBlocked)
+  if (targetContigPerThread < originalContigPerThread ||
+      targetContigPerWarp < originalContigPerWarp)
     return false;
 
   // 2) Check that there is no broadcasting along the warp dimension.
@@ -442,25 +448,25 @@ static bool isCoalesced(RankedTensorType loadType,
   return true;
 }
 
+/// Determine if it is safe to bypass LDS for dot operands.
+/// Normally, dot operation operands are consumed in the dot MFMA layout,
+/// which is not coalesced. To better utilize global memory bandwidth,
+/// operands are usually loaded in a coalesced "blocked" layout and then
+/// rearranged through LDS.
+///
+/// However, certain optimizations allow dot operands to be preshuffled in
+/// global memory. In that case, the operands can be loaded efficiently
+/// (in a coalesced way) and consumed directly by the dot operation.
+/// When preshuffling is used, a sequence of transpose and reshape ops
+/// must be applied to the operand.
+///
+/// To verify that preshuffling was done correctly and the final layout
+/// remains coalesced, we start from the dot MFMA layout and apply the
+/// inverse of each transpose/reshape op (while ignoring convert_layout
+/// ops) until we reach the load. We then inspect the resulting layout
+/// to decide if it is coalesced enough to load directly, without needing
+/// any further rearrangement.
 static Operation *bypassLDS(Operation *load, Operation *use) {
-  // Determine if it is safe to bypass LDS for dot operands.
-  // Normally, dot operation operands are consumed in the dot MFMA layout,
-  // which is not coalesced. To better utilize global memory bandwidth,
-  // operands are usually loaded in a coalesced "blocked" layout and then
-  // rearranged through LDS.
-  //
-  // However, certain optimizations allow dot operands to be preshuffled in
-  // global memory. In that case, the operands can be loaded efficiently
-  // (in a coalesced way) and consumed directly by the dot operation.
-  // When preshuffling is used, a sequence of transpose and reshape ops
-  // must be applied to the operand.
-  //
-  // To verify that preshuffling was done correctly and the final layout
-  // remains coalesced, we start from the dot MFMA layout and apply the
-  // inverse of each transpose/reshape op (while ignoring convert_layout
-  // ops) until we reach the load. We then inspect the resulting layout
-  // to decide if it is coalesced enough to load directly, without needing
-  // any further rearrangement.
   if (!load || !use)
     return nullptr;
 
@@ -537,7 +543,7 @@ static Operation *bypassLDS(Operation *load, Operation *use) {
     return nullptr;
 
   // Finally, rewrite the load to use the inferred (better) encoding.
-  auto newOp = convertOpEncoding(srcEnc, load);
+  auto newOp = convertDistributedOpEncoding(srcEnc, load);
   return newOp;
 };
 
@@ -569,12 +575,12 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
   for (const auto &[load, info] : loadOpToIndLevel) {
     auto [distance, use] = info;
     auto newLoad = bypassLDS(load, use);
-    if (!newLoad) {
+    if (newLoad) {
+      loadToInfo[newLoad] = {nullptr, distance, use};
+    } else {
       auto sharedEncoding =
           getSharedEncIfAllUsersAreDotEnc(load->getResult(0)).value_or(nullptr);
       loadToInfo[load] = {sharedEncoding, distance, use};
-    } else {
-      loadToInfo[newLoad] = {nullptr, distance, use};
     }
   }
 
