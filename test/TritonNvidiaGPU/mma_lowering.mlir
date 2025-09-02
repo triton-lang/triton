@@ -66,16 +66,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: tcgen5_with_commit
   tt.func @tcgen5_with_commit(
+    // CHECK: [[BARRIER1:%.*]]: !ttg.memdesc<1xi64, #shared
+    %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>,
+    %barrierPred: i1,
     %a: !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
     %b: !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
     %c: !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>,
     %accUse: i1,
-    %pred: i1,
-    %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>,
-    %barrierPred: i1) {
+    %pred: i1) {
     %barrier2 = ttg.local_alloc : () -> !ttg.memdesc<2x1xi64, #shared2, #smem, mutable>
     %c0_i32 = arith.constant 0 : i32
+    // CHECK: [[TRUE:%.*]] = arith.constant true
+    // CHECK: [[BARRIER_SLICE:%.*]] = ttg.memdesc_index
+    // CHECK: ttng.tc_gen5_mma {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, [[BARRIER1]][%arg1], [[BARRIER_SLICE]][[[TRUE]]]
     ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred {is_async} :
        !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
        !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
