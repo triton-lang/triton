@@ -161,7 +161,7 @@ def _reduce_layouts():
 def _reduce_cases():
     for layout in _reduce_linear_layouts():
         yield (tuple(layout.shape), layout)
-    for M, N, layout in _reduce_linear_layouts():
+    for M, N, layout in _reduce_layouts():
         yield (M, N, layout)
 
 
