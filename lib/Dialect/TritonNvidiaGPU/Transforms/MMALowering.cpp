@@ -126,11 +126,15 @@ public:
   LogicalResult matchAndRewrite(TCGen5MMAOpTy op,
                                 PatternRewriter &rewriter) const override {
     auto [commitOps, predicates] = collectCommitOpsAfter(op);
+    if (commitOps.size() == 0) {
+      return llvm::failure();
+    }
     for (auto [commit, pred] : llvm::zip(commitOps, predicates)) {
       if (!pred) {
         pred = rewriter.create<arith::ConstantIntOp>(op.getLoc(), true, 1);
       }
       op.addCompletionBarrier(commit.getBarrier(), pred);
+      rewriter.eraseOp(commit);
     }
     return success();
   }
@@ -151,6 +155,7 @@ public:
         SyncMMALowering<TCGen5MMAOp>, SyncMMALowering<TCGen5MMAScaledOp>,
         TCGen5MMAScaleSharedToTmemConversion, MergeCommitIntoMMA<TCGen5MMAOp>,
         MergeCommitIntoMMA<TCGen5MMAScaledOp>>(context);
+
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }
