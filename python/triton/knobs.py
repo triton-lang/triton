@@ -181,13 +181,11 @@ class NvidiaTool:
     def from_path(path: str) -> Optional[NvidiaTool]:
         try:
             result = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT)
-            if result is None:
-                return None
             version = re.search(r".*release (\d+\.\d+).*", result.decode("utf-8"), flags=re.MULTILINE)
             if version is None:
                 return None
             return NvidiaTool(path, version.group(1))
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, FileNotFoundError):
             return None
 
 
@@ -374,16 +372,51 @@ class autotuning_knobs(base_knobs):
 
 
 class LaunchHook(Protocol):
+    """Hook invoked before and after kernel launching
+    """
 
     def __call__(self, metadata: LazyDict) -> None:
         ...
 
 
 class InitHandleHook(Protocol):
+    """Hook invoked around kernel binary/module loading.
+    module/function can be None for the *start* hook (before loading).
+    """
 
-    def __call__(self, function: Optional[Callable], module: Optional[object], metadata_group: dict[str, str],
-                 hash: str) -> None:
+    def __call__(
+        self,
+        module: Optional[object],
+        function: Optional[Callable],
+        name: str,
+        metadata_group: dict[str, str],
+        hash: str,
+    ) -> None:
         ...
+
+
+F = TypeVar("F", bound=Callable)
+
+
+class HookChain(Generic[F]):
+    """A chain of hooks of the same type F to be called in order.
+    """
+
+    def __init__(self, reversed: bool = False):
+        self.calls: list[F] = []
+        self.reversed = reversed
+
+    def add(self, func: F) -> None:
+        if func not in self.calls:
+            self.calls.append(func)
+
+    def remove(self, func: F) -> None:
+        if func in self.calls:
+            self.calls.remove(func)
+
+    def __call__(self, *args, **kwargs):
+        for call in self.calls if not self.reversed else reversed(self.calls):
+            call(*args, **kwargs)
 
 
 # This is of the form [attr_name, attr_val]
@@ -416,13 +449,15 @@ class JITHook(Protocol):
 
 class runtime_knobs(base_knobs):
     interpret: env_bool = env_bool("TRITON_INTERPRET")
-    debug: env_bool = env_bool("TRITON_DEBUG")
+    # debug is on critical path for kernel launches
+    # avoid repeated reads from env-var by calling get directly
+    debug: bool = env_bool("TRITON_DEBUG").get()
     override_arch: env_opt_str = env_opt_str("TRITON_OVERRIDE_ARCH")
 
-    launch_enter_hook: Optional[LaunchHook] = None
-    launch_exit_hook: Optional[LaunchHook] = None
-    kernel_load_start_hook: Optional[InitHandleHook] = None
-    kernel_load_end_hook: Optional[InitHandleHook] = None
+    launch_enter_hook: HookChain[LaunchHook] = HookChain()
+    launch_exit_hook: HookChain[LaunchHook] = HookChain(reversed=True)
+    kernel_load_start_hook: HookChain[InitHandleHook] = HookChain()
+    kernel_load_end_hook: HookChain[InitHandleHook] = HookChain(reversed=True)
 
     # Hook for inspecting compiled functions and modules
     jit_cache_hook: Optional[JITHook] = None
@@ -481,3 +516,7 @@ language = language_knobs()
 nvidia = nvidia_knobs()
 amd = amd_knobs()
 proton = proton_knobs()
+
+
+def refresh_knobs():
+    runtime.debug = env_bool("TRITON_DEBUG").get()

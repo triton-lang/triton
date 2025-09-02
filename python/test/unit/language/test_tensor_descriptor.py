@@ -383,6 +383,65 @@ def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devi
     torch.testing.assert_close(expect, actual)
 
 
+@pytest.mark.interpreter
+def test_tensor_descriptor_padding():
+
+    @triton.jit
+    def device_tma_load(in_ptr, out_ptr, IM, IN, YM, YN, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
+                        padding: tl.constexpr):
+        x_desc = tl.make_tensor_descriptor(in_ptr, shape=[IM, IN], strides=[IN, 1], block_shape=[M_BLOCK, N_BLOCK],
+                                           padding_option=padding)
+
+        moffset = tl.program_id(0) * M_BLOCK
+        noffset = tl.program_id(1) * N_BLOCK
+
+        value = x_desc.load([moffset, noffset])
+
+        offs_m = moffset + tl.arange(0, M_BLOCK)
+        offs_n = noffset + tl.arange(0, N_BLOCK)
+        tl.store(out_ptr + offs_m[:, None] * YN + offs_n[None, :], value)
+
+    @triton.jit
+    def host_tma_load(in_desc, out_ptr, YM, YN, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+
+        moffset = tl.program_id(0) * M_BLOCK
+        noffset = tl.program_id(1) * N_BLOCK
+
+        value = in_desc.load([moffset, noffset])
+
+        offs_m = moffset + tl.arange(0, M_BLOCK)
+        offs_n = noffset + tl.arange(0, N_BLOCK)
+        tl.store(out_ptr + offs_m[:, None] * YN + offs_n[None, :], value)
+
+    # TMA descriptors require a global memory allocation
+    def alloc_fn(size: int, alignment: float, stream: float):
+        return torch.ones(size, device="cuda", dtype=torch.float32)
+
+    triton.set_allocator(alloc_fn)
+
+    IM, IN = 48, 48
+    OM, ON = 64, 64
+    M_BLOCK = 32
+    N_BLOCK = 32
+    padding = "nan"
+    input = torch.arange(IM * IN, device="cuda", dtype=torch.float32)
+    input = input.reshape(IM, IN)
+    out_device_tma = torch.zeros((OM, ON), device="cuda", dtype=torch.float32)
+    out_host_tma = torch.zeros((OM, ON), device="cuda", dtype=torch.float32)
+    dummy_block = [M_BLOCK, N_BLOCK]
+    in_desc = TensorDescriptor(input, input.shape, input.stride(), dummy_block, padding=padding)
+    grid = (triton.cdiv(OM, M_BLOCK), triton.cdiv(ON, N_BLOCK))
+    device_tma_load[grid](input, out_device_tma, IM, IN, OM, ON, M_BLOCK, N_BLOCK, padding)
+    host_tma_load[grid](in_desc, out_host_tma, OM, ON, M_BLOCK, N_BLOCK)
+    expected = torch.zeros((OM, ON), device="cuda", dtype=torch.float32)
+    expected[0:IN, 0:IM] = input
+    expected[:, IN:ON] = float('nan')
+    expected[IM:OM, :] = float('nan')
+
+    torch.testing.assert_close(expected, out_device_tma, equal_nan=True)
+    torch.testing.assert_close(expected, out_host_tma, equal_nan=True)
+
+
 @triton.jit(noinline=True)
 def tensor_descriptor_in_function_helper(out_ptr, in_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
     in_desc = tl.make_tensor_descriptor(
@@ -1671,3 +1730,30 @@ def test_host_tensor_descriptor_matmul(num_stages, num_ctas, BLOCK_M, BLOCK_N, B
         # Only a subset of TMEM and stmatrix layout pairs are compatible, for example 16x256bx2 and m8n8x4.
         assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm[
             "ptx"] or "stmatrix.sync.aligned.x4.m8n8.shared.b16" in kernel.asm["ptx"]
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", ["float16", "bfloat16"])
+def test_tensor_descriptor_store_downcast(dtype_str, device):
+
+    @triton.jit
+    def kernel(desc, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+        moffset = tl.program_id(axis=0) * M_BLOCK
+        noffset = tl.program_id(axis=1) * N_BLOCK
+        midx = moffset + tl.arange(0, M_BLOCK)[:, None]
+        nidx = noffset + tl.arange(0, N_BLOCK)[None, :]
+        val_f32 = (midx * N + nidx).to(tl.float32)
+        # implicit downcast in the store.
+        desc.store([moffset, noffset], val_f32)
+
+    M, N = 32, 128
+    torch_dtype = getattr(torch, dtype_str)
+    M_BLOCK = 8
+    N_BLOCK = 32
+    grid_m = M // M_BLOCK
+    grid_n = N // N_BLOCK
+    out = torch.empty((M, N), dtype=torch_dtype, device=device)
+    desc = TensorDescriptor(out, out.shape, out.stride(), [M_BLOCK, N_BLOCK])
+    kernel[(grid_m, grid_n)](desc, M, N, M_BLOCK=M_BLOCK, N_BLOCK=N_BLOCK)
+    ref = torch.arange(M * N, dtype=torch.float32, device=device).reshape(M, N).to(torch_dtype)
+    torch.testing.assert_close(out, ref)

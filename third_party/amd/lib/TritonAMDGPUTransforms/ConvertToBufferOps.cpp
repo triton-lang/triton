@@ -37,6 +37,21 @@ namespace mlir {
 
 namespace {
 
+// Return true iff the given value v is a tensor splatting from 1 (int).
+// The usefulness of this func stems from the fact than if a buffer-op's mask
+// operand is a all-1-tensor, it does not need to take this operand.
+bool isSplatOneConstTensor(const Value v) {
+  auto constantOp = v.getDefiningOp<arith::ConstantOp>();
+  if (!constantOp)
+    return false;
+
+  if (auto denseAttr =
+          dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
+    return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isOne();
+
+  return false;
+}
+
 bool verifyNonSmallerByAssumption(
     Value expr, const DenseMap<Value, SetVector<Operation *>> &assumptions,
     const std::function<bool(Value)> &matchesOther) {
@@ -476,7 +491,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     }
 
     Value maybeMask{};
-    if (op.getMask() && !isZeroConst(op.getMask()))
+    if (op.getMask() && !isSplatOneConstTensor(op.getMask()))
       maybeMask = op.getMask();
     Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
     rewriter.replaceOpWithNewOp<triton::amdgpu::BufferAtomicRMWOp>(
@@ -525,7 +540,7 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
       if (op.getOther() && !isZeroConst(op.getOther()))
         maybeOther = op.getOther();
       Value maybeMask{};
-      if (op.getMask() && !isZeroConst(op.getMask()))
+      if (op.getMask() && !isSplatOneConstTensor(op.getMask()))
         maybeMask = op.getMask();
       Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
 
@@ -586,7 +601,7 @@ struct ConvertTritonStoreToBufferStore
       auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
       Value basePtr = splatOp.getSrc();
       Value maybeMask{};
-      if (op.getMask() && !isZeroConst(op.getMask()))
+      if (op.getMask() && !isSplatOneConstTensor(op.getMask()))
         maybeMask = op.getMask();
       Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(

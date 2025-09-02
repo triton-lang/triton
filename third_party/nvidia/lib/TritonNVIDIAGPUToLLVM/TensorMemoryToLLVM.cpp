@@ -8,8 +8,10 @@
 #include "mlir/Support/LogicalResult.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/SmallVector.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -888,14 +890,155 @@ static void createCommit(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 static void createTcgen05Cp(ConversionPatternRewriter &rewriter, Location loc,
-                            Value tmem_address, Value src_desc, Value pred) {
+                            Value tmem_address, Value src_desc, Value pred,
+                            bool scales) {
   PTXBuilder ptxBuilder;
   auto dst = ptxBuilder.newAddrOperand(tmem_address, "r");
   auto src = ptxBuilder.newOperand(src_desc, "l");
-  std::string opcode = "tcgen05.cp.cta_group::1.warpx4.32x128b";
+  std::string opcode = scales ? "tcgen05.cp.cta_group::1.warpx4.32x128b"
+                              : "tcgen05.cp.cta_group::1.128x256b";
   auto &op = *ptxBuilder.create<PTXInstr>(opcode);
   op({dst, src}).predicate(pred);
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+}
+
+static void copyScales(ConversionPatternRewriter &rewriter, Location loc,
+                       const TypeConverter *typeConverter,
+                       triton::nvidia_gpu::TMEMCopyOp op, Value src, Value dst,
+                       Value pred) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  MemDescType srcTy = op.getSrc().getType();
+  MemDescType dstTy = op.getDst().getType();
+  Type elemTy = typeConverter->convertType(srcTy.getElementType());
+  auto smemObj =
+      LLVM::getSharedMemoryObjectFromStruct(loc, src, elemTy, rewriter);
+  Value baseSrc = smemObj.getShmemAffineBase(loc, rewriter, srcTy);
+
+  Value baseDst = dst;
+  auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
+  auto llvmElementTy = typeConverter->convertType(srcTy.getElementType());
+
+  auto ll = toLinearLayout(srcTy);
+  // flattenOuts flattens into fortran order, so need to transpose first to
+  // get C-order
+  auto ctx = op.getContext();
+  auto outDimNames = standardOutDimNames(ctx, srcTy.getRank());
+  std::reverse(outDimNames.begin(), outDimNames.end());
+  ll = ll.transposeOuts(outDimNames).flattenOuts();
+  auto invLayout = ll.flattenOuts().invert();
+  auto kDim = *ll.getOutDimNames().begin();
+  Value smemDesc = createBlockedScalesSMEMDescriptor(rewriter, loc, baseSrc);
+  auto createCopy = [&](int repMorN, int repK) {
+    for (int i = 0; i < repMorN; ++i) {
+      for (int j = 0; j < repK; ++j) {
+        // Multiple copies of 32x128b blocks are laid out along M/N first then
+        // K
+        auto colOffset = b.int_val(32, (j * repMorN + i) * 4);
+        auto tmemAddr = b.add(b.ptrtoint(i32_ty, baseDst), colOffset);
+        auto blockSize = (32 * 128) / llvmElementTy.getIntOrFloatBitWidth();
+        auto linearIdx = (i * repK + j) * blockSize;
+        auto smemOffset = applyLinearLayout(loc, rewriter, invLayout,
+                                            {{kDim, b.i32_val(linearIdx)}})[0]
+                              .second;
+        auto smemAddr = b.gep(elemPtrTy, llvmElementTy, baseSrc, smemOffset);
+        smemDesc = createBlockedScalesSMEMDescriptor(rewriter, loc, smemAddr);
+        createTcgen05Cp(rewriter, loc, tmemAddr, smemDesc, pred,
+                        /*scales=*/true);
+      }
+    }
+  };
+  // Break up src axes into rep_m x rep_k x 32x128b, where rep_m = BLOCK_M /
+  // 128 and rep_k = BLOCK_K / 128 32x128b blockes are contiguously laid out
+  // in SMEM. rep_m * rep_k copies of such blocks are consumed by one
+  // dot_scaled op for given BLOCK_M / BLOCK_K. Some axes of the scale shape
+  // can be flattened into one, to reduce the rank of the load. Since rep_m
+  // blocks are not contiguous in SMEM, we need to identify the original rep_m
+  // axis from the given input shape.
+
+  // The SMEM shapes are expected to be one of the followings. As long as
+  // rep_m and rep_k can be identified correctly, other patterns are allowed.
+  // * (rep_m x 32, 16B), meant only for TMEMCopy unit tests
+  // * (rep_m, rep_k * 32 x 4 x 4B), 2D scale load with cp.async
+  // * (rep_m, rep_k, 32, 16B), 4D scale load with TMA
+  // * (1, rep_m, rep_k, 2, 256B), 5D scale load with TMA
+  // * (rep_m, rep_k, 32, 4, 4B), 5D scale load with cp.async
+  auto elemBits = srcTy.getElementType().getIntOrFloatBitWidth();
+  int prodInner = 1;
+  int repMorN = 1;
+  int repK = 1;
+
+  for (int i = srcTy.getRank() - 1; i >= 0; --i) {
+    prodInner *= srcTy.getDimSize(i);
+    if (prodInner * elemBits >= 32 * 128) {
+      if (i == 0) {
+        repMorN = prodInner * elemBits / (32 * 128);
+        repK = 1;
+      } else if (i == 1) {
+        repMorN = srcTy.getDimSize(0);
+        repK = prodInner * elemBits / (32 * 128);
+      } else {
+        if (srcTy.getDimSize(0) == 1 &&
+            srcTy.getDimSize(srcTy.getRank() - 1) == 256) {
+          repMorN = srcTy.getDimSize(1);
+          repK = srcTy.getDimSize(2);
+        } else {
+          repMorN = srcTy.getDimSize(0);
+          repK = srcTy.getDimSize(1);
+        }
+      }
+      break;
+    }
+  }
+  createCopy(repMorN, repK);
+}
+
+static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
+                             const TypeConverter *typeConverter,
+                             triton::nvidia_gpu::TMEMCopyOp op, Value src,
+                             Value dst, Value pred) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  MemDescType srcTy = op.getSrc().getType();
+  MemDescType dstTy = op.getDst().getType();
+  Type elemTy = typeConverter->convertType(srcTy.getElementType());
+  auto smemObj =
+      LLVM::getSharedMemoryObjectFromStruct(loc, src, elemTy, rewriter);
+  Value baseSrc = smemObj.getShmemAffineBase(loc, rewriter, srcTy);
+
+  Value baseDst = dst;
+  assert(srcTy.getElementType().getIntOrFloatBitWidth() == 32);
+
+  int blockN =
+      cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(dstTy.getEncoding())
+          .getBlockN();
+  // Currently, hardcoded to 128x256b message.
+  std::array<int, 2> instShape = {128, 8};
+  int repNPerBlock = blockN / instShape[1];
+  auto createCopy = [&](int repM, int repN) {
+    Value zero = b.i32_val(0);
+    SmallVector<int64_t> shape(op.getSrc().getType().getShape());
+    DotOpMmaV3SmemLoader smemLoader = DotOpMmaV3SmemLoader(
+        op.getSrc(), baseSrc, shape, op.getSrc().getType().getAllocShape(),
+        zero, 1, /*trans=*/false, {128, 8},
+        op.getSrc().getType().getElementType().getIntOrFloatBitWidth(),
+        rewriter, loc);
+    for (int m = 0; m < repM; m++) {
+      for (int n = 0; n < repN; n++) {
+        int colIndx =
+            (n % repNPerBlock) * instShape[1] +
+            m * repNPerBlock * instShape[1] +
+            (n / repNPerBlock) * (srcTy.getDimSize(0) / instShape[0]) * blockN;
+        auto colOffset = b.i32_val(colIndx);
+        auto tmemAddr = b.add(b.ptrtoint(i32_ty, baseDst), colOffset);
+        Value smemDesc = smemLoader.smemLoad(m, n, rewriter, loc);
+        createTcgen05Cp(rewriter, loc, tmemAddr, smemDesc, pred,
+                        /*scales=*/false);
+      }
+    }
+  };
+
+  int repM = srcTy.getDimSize(0) / instShape[0];
+  int repN = srcTy.getDimSize(1) / instShape[1];
+  createCopy(repM, repN);
 }
 
 struct TensorMemoryCopyOpConversion
@@ -905,101 +1048,20 @@ struct TensorMemoryCopyOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMEMCopyOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+
     Location loc = op->getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto srcTy = cast<MemDescType>(op.getSrc().getType());
-    assert(isa<triton::gpu::SharedMemorySpaceAttr>(srcTy.getMemorySpace()));
-
-    Value baseSrc =
-        LLVM::getSharedMemoryObjectFromStruct(
-            loc, adaptor.getSrc(),
-            typeConverter->convertType(srcTy.getElementType()), rewriter)
-            .getBase();
-
-    Value baseDst = adaptor.getDst();
-    auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-    auto llvmElementTy = typeConverter->convertType(srcTy.getElementType());
-
-    // The following codegen assumes that we use tcgen05.cp only with
-    // the warpx4.32x128b mode, to load blocked scales from MXFP.
-    // We will expand the support as we find more use cases for the instruction.
-
-    auto ll = toLinearLayout(srcTy);
-    // flattenOuts flattens into fortran order, so need to transpose first to
-    // get C-order
-    auto ctx = op.getContext();
-    auto outDimNames = standardOutDimNames(ctx, srcTy.getRank());
-    std::reverse(outDimNames.begin(), outDimNames.end());
-    ll = ll.transposeOuts(outDimNames).flattenOuts();
-    auto invLayout = ll.flattenOuts().invert();
-    auto kDim = *ll.getOutDimNames().begin();
-
-    Value smemDesc = createBlockedScalesSMEMDescriptor(rewriter, loc, baseSrc);
     Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
-
-    auto createCopy = [&](int repMorN, int repK) {
-      for (int i = 0; i < repMorN; ++i) {
-        for (int j = 0; j < repK; ++j) {
-          // Multiple copies of 32x128b blocks are laid out along M/N first then
-          // K
-          auto colOffset = b.int_val(32, (j * repMorN + i) * 4);
-          auto tmemAddr = b.add(b.ptrtoint(i32_ty, baseDst), colOffset);
-          auto blockSize = (32 * 128) / llvmElementTy.getIntOrFloatBitWidth();
-          auto linearIdx = (i * repK + j) * blockSize;
-          auto smemOffset = applyLinearLayout(loc, rewriter, invLayout,
-                                              {{kDim, b.i32_val(linearIdx)}})[0]
-                                .second;
-          auto smemAddr = b.gep(elemPtrTy, llvmElementTy, baseSrc, smemOffset);
-          smemDesc = createBlockedScalesSMEMDescriptor(rewriter, loc, smemAddr);
-          createTcgen05Cp(rewriter, loc, tmemAddr, smemDesc, pred);
-        }
-      }
-    };
-
-    // Break up src axes into rep_m x rep_k x 32x128b, where rep_m = BLOCK_M /
-    // 128 and rep_k = BLOCK_K / 128 32x128b blockes are contiguously laid out
-    // in SMEM. rep_m * rep_k copies of such blocks are consumed by one
-    // dot_scaled op for given BLOCK_M / BLOCK_K. Some axes of the scale shape
-    // can be flattened into one, to reduce the rank of the load. Since rep_m
-    // blocks are not contiguous in SMEM, we need to identify the original rep_m
-    // axis from the given input shape.
-
-    // The SMEM shapes are expected to be one of the followings. As long as
-    // rep_m and rep_k can be identified correctly, other patterns are allowed.
-    // * (rep_m x 32, 16B), meant only for TMEMCopy unit tests
-    // * (rep_m, rep_k * 32 x 4 x 4B), 2D scale load with cp.async
-    // * (rep_m, rep_k, 32, 16B), 4D scale load with TMA
-    // * (1, rep_m, rep_k, 2, 256B), 5D scale load with TMA
-    // * (rep_m, rep_k, 32, 4, 4B), 5D scale load with cp.async
-    auto elemBits = srcTy.getElementType().getIntOrFloatBitWidth();
-    int prodInner = 1;
-    int repMorN = 1;
-    int repK = 1;
-
-    for (int i = srcTy.getRank() - 1; i >= 0; --i) {
-      prodInner *= srcTy.getDimSize(i);
-      if (prodInner * elemBits >= 32 * 128) {
-        if (i == 0) {
-          repMorN = prodInner * elemBits / (32 * 128);
-          repK = 1;
-        } else if (i == 1) {
-          repMorN = srcTy.getDimSize(0);
-          repK = prodInner * elemBits / (32 * 128);
-        } else {
-          if (srcTy.getDimSize(0) == 1 &&
-              srcTy.getDimSize(srcTy.getRank() - 1) == 256) {
-            repMorN = srcTy.getDimSize(1);
-            repK = srcTy.getDimSize(2);
-          } else {
-            repMorN = srcTy.getDimSize(0);
-            repK = srcTy.getDimSize(1);
-          }
-        }
-        break;
-      }
+    if (isa<TensorMemoryScalesEncodingAttr>(
+            op.getDst().getType().getEncoding())) {
+      // Special case for copy of scales as they behave differently from other
+      // copies. This can be unified once we fix the smem layout representation
+      // of the source.
+      copyScales(rewriter, loc, typeConverter, op, adaptor.getSrc(),
+                 adaptor.getDst(), pred);
+    } else {
+      copySharedToTmem(rewriter, loc, typeConverter, op, adaptor.getSrc(),
+                       adaptor.getDst(), pred);
     }
-
-    createCopy(repMorN, repK);
 
     if (op.getBarrier()) {
       auto barrier = LLVM::getSharedMemoryObjectFromStruct(

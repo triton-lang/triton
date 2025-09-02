@@ -252,6 +252,41 @@ def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
             queue.append(child)
 
 
+def test_hook_with_third_party(tmp_path: pathlib.Path):
+    third_party_hook_invoked = False
+
+    def third_party_hook(metadata) -> None:
+        nonlocal third_party_hook_invoked
+        third_party_hook_invoked = True
+
+    triton.knobs.runtime.launch_enter_hook.add(third_party_hook)
+
+    proton_hook_invoked = False
+
+    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
+        nonlocal proton_hook_invoked
+        proton_hook_invoked = True
+        return {"name": "foo_test"}
+
+    @triton.jit(launch_metadata=metadata_fn)
+    def foo(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        tl.store(y + offs, tl.load(x + offs))
+
+    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_hook_with_third_party.hatchet"
+    proton.start(str(temp_file.with_suffix("")), hook="triton")
+    foo[(1, )](x, 1, y, num_warps=4)
+    proton.finalize()
+    triton.knobs.runtime.launch_enter_hook.remove(third_party_hook)
+    with temp_file.open() as f:
+        data = json.load(f)
+    assert len(data[0]["children"]) == 1
+    assert data[0]["children"][0]["frame"]["name"] == "foo_test"
+    assert data[0]["children"][0]["metrics"]["time (ns)"] > 0
+
+
 def test_hook_multiple_threads(tmp_path: pathlib.Path):
 
     def metadata_fn_foo(grid: tuple, metadata: NamedTuple, args: dict):
@@ -315,6 +350,7 @@ def test_pcsampling(tmp_path: pathlib.Path):
         pytest.skip("HIP backend does not support pc sampling")
 
     import os
+
     if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
         pytest.skip("PC sampling test is disabled")
 
@@ -411,3 +447,35 @@ def test_trace(tmp_path: pathlib.Path):
         assert len(trace_events) == 3
         assert trace_events[-1]["name"] == "foo"
         assert trace_events[-1]["args"]["call_stack"] == ["ROOT", "test", "foo"]
+
+
+def test_scope_multiple_threads(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_scope_threads.hatchet"
+    proton.start(str(temp_file.with_suffix("")))
+
+    N = 50
+    thread_names = ["threadA", "threadB"]
+
+    def worker(prefix: str):
+        for i in range(N):
+            name = f"{prefix}_{i}"
+            proton.enter_scope(name)
+            torch.ones((1, ), device="cuda")
+            proton.exit_scope()
+
+    threads = [threading.Thread(target=worker, args=(tname, )) for tname in thread_names]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    children = data[0]["children"]
+    assert len(children) == N * len(thread_names)
+    names = {c["frame"]["name"] for c in children}
+    expected = {f"{t}_{i}" for t in thread_names for i in range(N)}
+    assert names == expected

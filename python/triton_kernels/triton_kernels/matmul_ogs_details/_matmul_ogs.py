@@ -5,6 +5,7 @@ import triton.language as tl
 from triton_kernels.tensor_details.layout_details.blackwell_scale import unswizzle_mx_scale_bw
 from triton_kernels.tensor_details.layout_details.hopper_scale import unswizzle_mxfp4_scale_hopper
 from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_bf16_triton
+from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_mx_scale_cdna4
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
@@ -77,7 +78,29 @@ def _matmul_ogs(
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES: tl.constexpr = False,
              SWAP_XW: tl.constexpr = False,
-             IS_EPILOGUE_DEQUANT_MXFP8: tl.constexpr = False):
+             IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False):
+
+    tl.assume(stride_y_k >= 0)
+    tl.assume(stride_y_z >= 0)
+    tl.assume(stride_y_m >= 0)
+    tl.assume(stride_y_n >= 0)
+    tl.assume(stride_x_z >= 0)
+    tl.assume(stride_x_m >= 0)
+    tl.assume(stride_x_k >= 0)
+    tl.assume(stride_w_e >= 0)
+    tl.assume(stride_w_k >= 0)
+    tl.assume(stride_w_n >= 0)
+    if stride_w_mx_e is not None:
+        tl.assume(stride_w_mx_e >= 0)
+    if stride_w_mx_k is not None:
+        tl.assume(stride_w_mx_k >= 0)
+    if stride_w_mx_n is not None:
+        tl.assume(stride_w_mx_n >= 0)
+    if B is not None:
+        tl.assume(stride_b_e >= 0)
+    tl.assume(batch_size >= 0)
+    tl.assume(grid_m >= 0)
+    tl.assume(grid_n >= 0)
 
     is_w_microscaled: tl.constexpr = WMxScale is not None
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
@@ -115,7 +138,9 @@ def _matmul_ogs(
     HAS_FUSED_SCATTER: tl.constexpr = WriteBackIndx is not None
     index_type: tl.constexpr = tl.int64 if UPCAST_INDICES else tl.int32
 
-    total_actual_tiles = batch_size * (grid_m - padding_m) * grid_n * SPLIT_K
+    unpadded_m = grid_m - padding_m
+    tl.assume(unpadded_m >= 0)
+    total_actual_tiles = batch_size * unpadded_m * grid_n * SPLIT_K
     if padding_m > 0 and pid >= total_actual_tiles:
         tl.device_assert(batch_size == 0)
         pid_mn = pid - total_actual_tiles
@@ -131,11 +156,11 @@ def _matmul_ogs(
     pid_emnk = pid
     if XCD_SWIZZLE != 1:
         pid_emnk = xcd_swizzle(pid_emnk, total_actual_tiles, XCD_SWIZZLE)
-    pid_e = pid_emnk // ((grid_m - padding_m) * grid_n * SPLIT_K)
-    pid_mnk = pid_emnk % ((grid_m - padding_m) * grid_n * SPLIT_K)
+    pid_e = pid_emnk // (unpadded_m * grid_n * SPLIT_K)
+    pid_mnk = pid_emnk % (unpadded_m * grid_n * SPLIT_K)
     pid_k = pid_mnk % SPLIT_K
     pid_mn = pid_mnk // SPLIT_K
-    pid_m, pid_n = swizzle2d(pid_mn, (grid_m - padding_m), grid_n, GROUP_M)
+    pid_m, pid_n = swizzle2d(pid_mn, unpadded_m, grid_n, GROUP_M)
     # For split-k, advance to the output k slice
     if SPLIT_K > 1:
         Y += pid_k.to( index_type) * stride_y_k
@@ -190,24 +215,43 @@ def _matmul_ogs(
             W_K_MULTIPLIER: tl.constexpr = 1
             W_N_DIVISOR: tl.constexpr = 1
 
-        PACKED_BLOCK_K_W: tl.constexpr = (BLOCK_K // W_K_DIVISOR) * W_K_MULTIPLIER
-        PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N // W_N_DIVISOR
+        if W_TRANSPOSE:
+            # When weight is transposed, 2 fp4 values are packed per Byte along
+            # the contiguous dimension, K.
+            PACKED_BLOCK_K_W: tl.constexpr = (BLOCK_K // W_K_DIVISOR) * W_K_MULTIPLIER
+            PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N // W_N_DIVISOR
+        else:
+            # When weight is not transposed, fp4 values are *not* packed along
+            # the contiguous dimension, N.
+            PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
+            PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N // W_K_DIVISOR
         MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
 
         WMxScale += expt_id * stride_w_mx_e
 
         if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
+            # TODO: support non W_TRANSPOSE with blackwell swizzling
+            tl.static_assert(W_TRANSPOSE)
             tl.static_assert(BLOCK_N % 128 == 0)
             tl.static_assert(MX_SCALE_BLOCK_K % 4 == 0)
             PACKED_MX_BLOCK: tl.constexpr = (MX_SCALE_BLOCK_K // 4) * 32 * 4 * 4
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N // 128
             stride_scale_k: tl.constexpr = 1
         elif SWIZZLE_MX_SCALE == "HOPPER_SCALE":
+            # TODO: support non W_TRANSPOSE with Hopper swizzling
+            tl.static_assert(W_TRANSPOSE)
             n_warps: tl.constexpr = tl.extra.cuda.num_warps()
             tl.static_assert(BLOCK_N % (2 * n_warps * 2 * 8) == 0)
             tl.static_assert(MX_SCALE_BLOCK_K % 2 == 0)
             PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K * 32
             SCALE_BLOCK_N: tl.constexpr = BLOCK_N // 32
+            stride_scale_k = stride_w_mx_k
+        elif SWIZZLE_MX_SCALE == "CDNA4_SCALE":
+            tl.static_assert(stride_w_mx_k is not None)
+            tl.static_assert(stride_w_mx_n is not None)
+            NON_K_PRESHUFFLE_BLOCK_SIZE: tl.constexpr = 32
+            PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K * NON_K_PRESHUFFLE_BLOCK_SIZE
+            SCALE_BLOCK_N: tl.constexpr = BLOCK_N // NON_K_PRESHUFFLE_BLOCK_SIZE
             stride_scale_k = stride_w_mx_k
         else:
             PACKED_MX_BLOCK: tl.constexpr = MX_SCALE_BLOCK_K
@@ -255,7 +299,7 @@ def _matmul_ogs(
                 mask_x_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
         else:
             mask_k = offs_k < k
-            mask_k_w = offs_w_k < ((k // W_K_DIVISOR) * W_K_MULTIPLIER)
+            mask_k_w = offs_w_k < ((k // (W_K_DIVISOR if W_TRANSPOSE else 1)) * W_K_MULTIPLIER)
             if is_w_microscaled and SWIZZLE_MX_SCALE is None:
                 mask_k_scale = offs_k_scale * MX_PACK_DIVISOR < k
             if is_x_microscaled:
@@ -281,6 +325,8 @@ def _matmul_ogs(
                 # Handshake with the swizzling code
                 num_warps: tl.constexpr = tl.extra.cuda.num_warps()
                 w_scales = unswizzle_mxfp4_scale_hopper(tl.load(WMxScalePtrs), mx_axis=1, num_warps=num_warps)
+            elif SWIZZLE_MX_SCALE == "CDNA4_SCALE":
+                w_scales = unswizzle_mx_scale_cdna4(tl.load(WMxScalePtrs), BLOCK_N, MX_SCALE_BLOCK_K)
             else:
                 w_scales = tl.load(WMxScalePtrs, mask=mask_k_scale[None, :])
 
@@ -296,7 +342,8 @@ def _matmul_ogs(
                 acc = tl.dot(w, x, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
                 acc = acc.trans()
             else:
-                acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True)
+                rhs_k_pack: tl.constexpr = W_TRANSPOSE or not is_w_microscaled or W_K_DIVISOR != 2
+                acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True, rhs_k_pack=rhs_k_pack)
             if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
                 WMxScalePtrs += (MX_SCALE_BLOCK_K // 4 * SPLIT_K) * stride_w_mx_k
             else:
@@ -377,88 +424,6 @@ def _matmul_ogs(
         tl.store(YActualScalePtrs, out_scale, mask=mask_m[:, None] & mask_n_scale[None, :])
     else:
         out = float_to_flex(out, YExpectedScale, YActualScale, YChecksumScale, mask, Y, FLEXPOINT_SATURATE_INF)
-        if EPILOGUE_FN is not None and not IS_EPILOGUE_DEQUANT_MXFP8:
+        if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MXFP8:
             out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtrs.dtype.element_ty)
     tl.store(YPtrs, out, mask=mask)
-
-
-# Imagine N_EXPTS_ACT = 4, n_final_rows = 5, and n_scratchpad_rows = 8.
-# Also imagine scatter_indx.src_indx is:
-#                   (number of active experts per final row)
-#   -1 -1  0 -1     1
-#   -1  2 -1 -1     1
-#    1  3 -1 -1     2
-#   -1  4  5  6     3
-#   -1 -1 -1 -1     0 (this row is unused)
-#
-# Then, row 0 and 1 can be written directly to the final tensor.
-# In this case, WriteBackIndx looks like:
-#    [0] = 0      : intermediate row 0 is written directly to final row 0
-#    [1] = 5+1=6  : scratchpad starts at offset 5
-#    [2] = 1      : intermediate row 2 is written directly to final row 1
-#    [3] = 5+3=8
-#    [4] = 5+4=9
-#    [5] = 5+5=10
-#    [6] = 5+6=11
-#    [7] = -1     : unused (there are only seven intermediate rows)
-@triton.jit
-def _compute_writeback_idx(
-    WriteBackIndx,
-    FinalizeScatterIdxs,
-    ScatterDstIndx, ScatterSrcIndx,
-    n_final_rows, n_scratchpad_rows,
-    BLOCK_M: tl.constexpr,
-    N_EXPTS_ACT: tl.constexpr,
-):
-    tl.static_assert(N_EXPTS_ACT > 1)
-
-    pid_m = tl.program_id(0)
-    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    mask_m = offs_m < n_scratchpad_rows
-    dst_idxs = tl.load(ScatterDstIndx + offs_m, mask=mask_m, other=-1)
-    # Load corresponding rows in ScatterSrcIndx.
-    mask = dst_idxs != -1
-    src_offs = (dst_idxs // N_EXPTS_ACT) * N_EXPTS_ACT
-    src_offs = src_offs[:, None] + tl.arange(0, N_EXPTS_ACT)[None, :]
-    src_idxs = tl.load(ScatterSrcIndx + src_offs, mask=mask[:, None], other=-1)
-    # Compute the number of actually active experts.
-    is_src_active = (src_idxs != -1).to(tl.int32)
-    has_one_active = tl.sum(is_src_active, axis=1) == 1
-    # Compute the writeback index.
-    wb_idx = tl.where(has_one_active, dst_idxs // N_EXPTS_ACT, n_final_rows + offs_m)
-    wb_idx = tl.where(mask, wb_idx, -1)
-    tl.store(WriteBackIndx + offs_m, wb_idx, mask=mask_m)
-
-    if pid_m >= ((n_final_rows + BLOCK_M - 1) // BLOCK_M):
-        return
-
-    mask_m = offs_m < n_final_rows
-    src_offs = offs_m[:, None] * N_EXPTS_ACT + tl.arange(0, N_EXPTS_ACT)[None, :]
-    src_idxs = tl.load(ScatterSrcIndx + src_offs, mask=mask_m[:, None], other=-1)
-    is_src_active = (src_idxs != -1).to(tl.int32)
-    num_src_active = tl.sum(is_src_active, axis=1)
-
-    need_finalize_scatter = mask_m & (num_src_active != 1)
-    finalize_scatter_count = tl.sum(need_finalize_scatter.to(tl.int32))
-    if finalize_scatter_count == 0:
-        return
-    pp_off = tl.atomic_add(FinalizeScatterIdxs + n_final_rows + n_scratchpad_rows, finalize_scatter_count)
-
-    # need_finalize_scatter = [1, 0, 0, 1, 1, 0, 1, 0, 1]
-    # arange = [0, 1, 2, 3, 4, 5, 6, 7, 8]
-    arange = tl.arange(0, BLOCK_M)
-    # idxs = [0, _, _, 3, 4, _, 6, _, 8]
-    last = BLOCK_M - 1
-    idxs = tl.where(need_finalize_scatter, arange, last)
-    # idxs = [0, 3, 4, 6, 8, _, _, _, _]
-    idxs = tl.sort(idxs)
-    # r = offs_m
-    # d = [r[0], r[3], r[4], r[6], r[8], r[-1], r[-1], r[-1], r[-1]]
-    d = tl.gather(offs_m, idxs, axis=0)
-    s = tl.gather(src_idxs, idxs.expand_dims(1).broadcast_to(src_idxs.shape), axis=0)
-    # store destination indices
-    Ptr = FinalizeScatterIdxs + pp_off
-    tl.store(Ptr + arange, d, mask=arange < finalize_scatter_count)
-    # store src indices
-    Ptr = FinalizeScatterIdxs + n_final_rows + pp_off * N_EXPTS_ACT
-    tl.store(Ptr + N_EXPTS_ACT * arange[:, None] + tl.arange(0, N_EXPTS_ACT)[None, :], s, mask=(arange < finalize_scatter_count)[:, None])
