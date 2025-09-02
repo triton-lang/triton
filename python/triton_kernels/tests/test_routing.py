@@ -76,7 +76,7 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, sm_first, use_
     assert_close(ref_logits.grad[:n_tokens_raw], tri_logits.grad[:n_tokens_raw])
 
 
-def bench_routing(device="cuda"):
+def bench_routing(device):
     import triton.profiler as proton
     n_tokens = 8192
     n_expts_tot, n_expts_act = 128, 4
