@@ -17,15 +17,14 @@ namespace nvidia_gpu {
 
 namespace {
 
-template <typename TCGen5MMAOpTy>
-class SyncMMALowering : public OpRewritePattern<TCGen5MMAOpTy> {
+class SyncMMALowering : public OpInterfaceRewritePattern<MMAv5OpInterface> {
 public:
-  using OpRewritePattern<TCGen5MMAOpTy>::OpRewritePattern;
+  using OpInterfaceRewritePattern<MMAv5OpInterface>::OpInterfaceRewritePattern;
 
-  LogicalResult matchAndRewrite(TCGen5MMAOpTy op,
+  LogicalResult matchAndRewrite(MMAv5OpInterface op,
                                 PatternRewriter &rewriter) const override {
     // If the op doesn't have synchronous semantic skip the pattern.
-    if (op.getIsAsync())
+    if (op.isAsync())
       return failure();
     MLIRContext *ctx = op.getContext();
     Location loc = op.getLoc();
@@ -47,7 +46,7 @@ public:
 
     rewriter.setInsertionPointAfter(op);
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-    rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase, op.getPred());
+    rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase, op.getPredicate());
     rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
     return success();
   }
@@ -181,12 +180,11 @@ bool moveDefiningOpsBefore(Value val, Operation *target) {
   return true;
 }
 
-template <typename TCGen5MMAOpTy>
-class MergeCommitIntoMMA : public OpRewritePattern<TCGen5MMAOpTy> {
+class MergeCommitIntoMMA : public OpInterfaceRewritePattern<MMAv5OpInterface> {
 public:
-  using OpRewritePattern<TCGen5MMAOpTy>::OpRewritePattern;
+  using OpInterfaceRewritePattern<MMAv5OpInterface>::OpInterfaceRewritePattern;
 
-  LogicalResult matchAndRewrite(TCGen5MMAOpTy op,
+  LogicalResult matchAndRewrite(MMAv5OpInterface op,
                                 PatternRewriter &rewriter) const override {
     auto [commitOps, predicates] = collectCommitOpsAfter(op);
     if (commitOps.size() == 0) {
@@ -220,10 +218,8 @@ public:
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<
-        SyncMMALowering<TCGen5MMAOp>, SyncMMALowering<TCGen5MMAScaledOp>,
-        TCGen5MMAScaleSharedToTmemConversion, MergeCommitIntoMMA<TCGen5MMAOp>,
-        MergeCommitIntoMMA<TCGen5MMAScaledOp>>(context);
+    patterns.add<SyncMMALowering, TCGen5MMAScaleSharedToTmemConversion,
+                 MergeCommitIntoMMA>(context);
 
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();

@@ -399,6 +399,8 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
         useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
 }
 
+bool TCGen5MMAOp::isAsync() { return getIsAsync(); }
+
 // -- TCGen5MMAScaledOp --
 LogicalResult TCGen5MMAScaledOp::verify() {
   if (!getIsAsync() && !getBarriers().empty()) {
@@ -571,6 +573,8 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
         ScaleDotElemTypeAttr::get(ctx, bType), useD, pred, barriers,
         barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr());
 }
+
+bool TCGen5MMAScaledOp::isAsync() { return getIsAsync(); }
 
 // -- TMEMStoreOp --
 static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
