@@ -267,9 +267,35 @@ _1d_layouts = _filter_layouts([
 ])
 
 
-@pytest.mark.parametrize("M, bins", [[2048, 2], [8, 512], [32, 32]])
-@pytest.mark.parametrize("src_layout", [ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]), "linear_layout"])
-@pytest.mark.parametrize("dst_layout", [ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])])
+def _histogram_cases():
+    m_bins = [(2048, 2), (8, 512), (32, 32)]
+    layouts = [
+        (ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]), ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]))
+    ]
+    for m, bins in m_bins:
+        for src_layout, dst_layout in layouts:
+            yield (m, bins, src_layout, dst_layout)
+    import math
+
+    linear_layouts = [
+        (
+            ttgl.DistributedLinearLayout(
+                reg_bases=[1 << (5 + i) for i in range(int(math.log2(m)) - 5)],
+                lane_bases=[[0], [16], [4], [2], [1]] + [[0]] * (THREADS_PER_WARP >> 6),
+                warp_bases=[[0], [8]],
+                block_bases=[],
+                shape=(m,),
+            ),
+            bin,
+        )
+        for (m, bin) in m_bins
+        if m >= 32
+    ]
+    for linear_layout, bins in linear_layouts:
+        yield (linear_layout.shape[0], bins, linear_layout, ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]))
+
+
+@pytest.mark.parametrize("M, bins, src_layout, dst_layout", _histogram_cases())
 def test_histogram(M, bins, src_layout, dst_layout, device):
 
     @gluon.jit
