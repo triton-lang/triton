@@ -10,7 +10,7 @@ from typing import Dict, Tuple, List, Optional
 
 from .. import knobs
 from .jit import KernelInterface, JITFunction
-from .errors import OutOfResources, PTXASError
+from .errors import OutOfResources, PTXASError, InterpreterError
 from .driver import driver
 from .cache import get_cache_manager, triton_key
 from triton._C.libtriton import get_cache_invalidating_env_vars
@@ -259,6 +259,8 @@ class Autotuner(KernelInterface):
         pruned_configs = self.configs
         if self.early_config_prune:
             pruned_configs = self.early_config_prune(self.configs, self.nargs, **kwargs)
+            if not pruned_configs:
+                raise InterpreterError("No valid autotuner configs after pruning. `early_config_prune` should return at least one config.")
         if self.perf_model:
             top_k = self.configs_top_k
             if isinstance(top_k, float) and top_k <= 1.0:
