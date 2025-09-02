@@ -1169,6 +1169,13 @@ def descriptor_store(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets,
     ndim = len(desc.block_shape)
     assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
     assert value.shape == desc.block_shape
+    # Implicitly cast value to the descriptor element type to avoid user-visible
+    # MLIR verification errors when the value dtype differs from the descriptor
+    # block element type. This mirrors implicit casting behavior in other
+    # frontend ops and ensures the generated `tt.descriptor_store` has matching
+    # tensor element types.
+    if value.dtype != desc.dtype:
+        value = cast(value, desc.dtype, builder)
 
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
     return tl.tensor(builder.create_descriptor_store(desc.handle, value.handle, offsets), tl.void)
