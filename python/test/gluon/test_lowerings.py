@@ -82,10 +82,34 @@ def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
     torch.testing.assert_close(z_tri, z_ref)
 
 
-@pytest.mark.parametrize("M, N", [[128, 16], [32, 128], [32, 32], [16, 16]])
-@pytest.mark.parametrize(
-    "src_layout",
-    _filter_layouts([
+def _reduce_linear_layouts():
+    if THREADS_PER_WARP == 32:
+        return [
+            ttgl.DistributedLinearLayout(
+                reg_bases=[[0, 16], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
+                lane_bases=[[0, 0], [0, 1], [0, 2], [0, 4], [0, 8]],
+                warp_bases=[[32, 0], [0, 32]],
+                block_bases=[],
+                shape=[64, 64],
+            )
+        ]
+    elif THREADS_PER_WARP == 64:
+        return [
+            ttgl.DistributedLinearLayout(
+                reg_bases=[[0, 16], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],
+                lane_bases=[[0, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 64]],
+                warp_bases=[[32, 0], [0, 32]],
+                block_bases=[],
+                shape=[64, 128],
+            )
+        ]
+    else:
+        raise RuntimeError(f"Unsupported THREADS_PER_WARP: {THREADS_PER_WARP}")
+
+
+def _reduce_layouts():
+    shapes = [(128, 16), (32, 128), (32, 32), (16, 16)]
+    layouts = _filter_layouts([
         # FIXME: Do not enable these tests until the SLPVectorizor problem with nvptx target has been resolved
         # SliceLayout(dim=1, parent=BlockedLayout([1, 4, 1], [1, 8, THREADS_PER_WARP // 8], [1, 1, 4], [2, 0, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2])),
         # SliceLayout(dim=0, parent=BlockedLayout([1, 4, 1], [1, 8, THREADS_PER_WARP // 8], [1, 4, 1], [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2])),
@@ -104,47 +128,50 @@ def test_scan_layouts(M, N, src_layout, axis, sanitize_overflow, device):
         ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[1, 4], tiles_per_warp=[1, 1], instr_shape=[32, 32],
                                transposed=True),
         # TODO: AMDWMMA layouts
-        # WmmaLayout(version=1, warps_per_cta=[4, 1]),
-        # WmmaLayout(version=1, warps_per_cta=[1, 4]),
         ttgl.DotOperandLayout(
-            parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 4], ctas_per_cga=[1, 1],  #
-                                               cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8]),  #
+            parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 4], ctas_per_cga=[1, 1],
+                                               cta_split_num=[1, 1], cta_order=[0, 1], instr_shape=[16, 8]),
             operand_index=1, k_width=8),
         ttgl.DotOperandLayout(
-            parent=ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[8, 1], ctas_per_cga=[1, 1],  #
-                                               cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 32, 16]),  #
+            parent=ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[8, 1], ctas_per_cga=[1, 1],
+                                               cta_split_num=[1, 1], cta_order=[1, 0], instr_shape=[16, 32, 16]),
             operand_index=0, k_width=2),
         ttgl.SliceLayout(
-            dim=0,
-            parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],  #
-                                               cta_split_num=[1, 1, 1], cta_order=[2, 1, 0], instr_shape=[1, 16,
-                                                                                                          8])),  #
+            dim=0, parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],
+                                                      cta_split_num=[1, 1, 1], cta_order=[2, 1,
+                                                                                          0], instr_shape=[1, 16, 8])),
         ttgl.SliceLayout(
             dim=1, parent=ttgl.DotOperandLayout(
-                parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],  #
-                                                   cta_split_num=[1, 1, 1], cta_order=[2, 1, 0], instr_shape=[1, 16,
-                                                                                                              8]),  #
-                operand_index=1, k_width=2)),
-        "linear_layout",
-    ]))
+                parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1, 1], ctas_per_cga=[1, 1, 1],
+                                                   cta_split_num=[1, 1, 1], cta_order=[2, 1, 0],
+                                                   instr_shape=[1, 16, 8]), operand_index=1, k_width=2)),
+    ])
+
+    rets = []
+    for (M, N) in shapes:
+        for layout in layouts:
+            if isinstance(layout, (ttgl.amd.AMDMFMALayout, ttgl.NVMMADistributedLayout)):
+                instr_shape = layout.instr_shape
+                if M < instr_shape[0] or N < instr_shape[1]:
+                    continue
+            rets.append((M, N, layout))
+    return rets
+
+
+def _reduce_cases():
+    for layout in _reduce_linear_layouts():
+        yield (layout.shape[0], layout.shape[1], layout)
+    for M, N, layout in _reduce_layouts():
+        yield (M, N, layout)
+
+
+@pytest.mark.parametrize("M, N, src_layout", _reduce_cases())
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("epilogue_kind", ['reduce1d', 'reduce2d', 'expand_reduce2d'])
 @pytest.mark.parametrize("dtype_str, sanitize_overflow", [("int32", False), ("int32", True), ("float32", False),
                                                           ("float16", False)])
 @pytest.mark.parametrize("reduce_op", ["sum", "max"])
 def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, sanitize_overflow, reduce_op, device):
-    if src_layout == "linear_layout":
-        src_layout = ttgl.DistributedLinearLayout(reg_bases=[[0, 16], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]],  #
-                                                  lane_bases=[[0, 0], [0, 1], [0, 2], [0, 4], [0, 8]],  #
-                                                  warp_bases=[[32, 0], [0, 32]], block_bases=[], shape=[M, N])
-        if THREADS_PER_WARP != (1 << len(src_layout.lane_bases)):
-            pytest.skip(f"Skipping. This LinearLayout assumes {1 << len(src_layout.lane_bases)} threads per warp")
-        elif M < 64 or N < 64:
-            pytest.skip(f"Skipping. This LinearLayout assumes M >= 64 and N >= 64, got M={M}, N={N}")
-    if isinstance(src_layout,
-                  (ttgl.amd.AMDMFMALayout, ttgl.NVMMADistributedLayout)) and (M < src_layout.instr_shape[0]
-                                                                              or N < src_layout.instr_shape[1]):
-        pytest.skip("Skipping because tensor shape is smaller than M(f)maLayout instr_shape")
 
     @gluon.jit
     def _add(a, b):
@@ -240,9 +267,33 @@ _1d_layouts = _filter_layouts([
 ])
 
 
-@pytest.mark.parametrize("M, bins", [[2048, 2], [8, 512], [32, 32]])
-@pytest.mark.parametrize("src_layout", [ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]), "linear_layout"])
-@pytest.mark.parametrize("dst_layout", [ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0])])
+def _histogram_cases():
+    if THREADS_PER_WARP not in (32, 64):
+        raise RuntimeError(f"Unsupported THREADS_PER_WARP: {THREADS_PER_WARP}")
+
+    m_bins = [(2048, 2), (8, 512), (32, 32)]
+    layouts = [(ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4],
+                                   [0]), ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]))]
+    for m, bins in m_bins:
+        for src_layout, dst_layout in layouts:
+            yield (m, bins, src_layout, dst_layout)
+    import math
+
+    linear_layouts = [(
+        ttgl.DistributedLinearLayout(
+            reg_bases=[[1 << (5 + i)] for i in range(int(math.log2(m)) - 5)],
+            lane_bases=[[0], [16], [4], [2], [1]] + ([[0]] if THREADS_PER_WARP == 64 else []),
+            warp_bases=[[0], [8]],
+            block_bases=[],
+            shape=(m, ),
+        ),
+        bins,
+    ) for (m, bins) in m_bins if m >= 32]
+    for linear_layout, bins in linear_layouts:
+        yield (linear_layout.shape[0], bins, linear_layout, ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]))
+
+
+@pytest.mark.parametrize("M, bins, src_layout, dst_layout", _histogram_cases())
 def test_histogram(M, bins, src_layout, dst_layout, device):
 
     @gluon.jit
@@ -253,18 +304,6 @@ def test_histogram(M, bins, src_layout, dst_layout, device):
         h = ttgl.histogram(x, B, layout=dst_layout)
         z_offs = ttgl.arange(0, B, layout=dst_layout)
         ttgl.store(z_ptr + z_offs, h)
-
-    if src_layout == "linear_layout":
-        if M == 32:
-            src_layout = ttgl.DistributedLinearLayout(
-                reg_bases=[],
-                lane_bases=[[0], [16], [4], [2], [1]] + [[0]] * (THREADS_PER_WARP >> 6),
-                warp_bases=[[0], [8]],
-                block_bases=[],
-                shape=(M, ),
-            )
-        else:
-            pytest.skip("Linear layout is specialized for 32 elements")
 
     torch.manual_seed(0)
     x = torch.randint(0, bins, (M, ), dtype=torch.int32, device=device)
