@@ -790,7 +790,6 @@ def early_return_kernel(x):
     if x.sum(0).sum(0):
         return x
     x = x + x
-    print("value", x)
     return x
 
 
@@ -798,7 +797,7 @@ def test_2d_tensor_early_return():
     warp_size = ttgl.constexpr(THREADS_PER_WARP)
 
     @gluon.jit
-    def kernel(N):
+    def kernel(N, out):
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, warp_size], [1, 4], [1, 0])
         BLOCK: ttgl.constexpr = 32
 
@@ -807,7 +806,8 @@ def test_2d_tensor_early_return():
         x = x0[:, None] * x1[None, :]
         for i in range(N):
             x += early_return_kernel(x)
-        print("value", x)
+        ttgl.store(out, x.sum(0).sum(0))
 
-    compiled_kernel = kernel.warmup(N=100, grid=(1, ))
+    out = torch.empty(1, dtype=torch.int32, device="cuda")
+    compiled_kernel = kernel.warmup(N=100, out=out, grid=(1, ))
     assert compiled_kernel.asm["llir"].count("define") == 1
