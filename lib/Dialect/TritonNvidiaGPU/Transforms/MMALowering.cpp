@@ -157,6 +157,7 @@ public:
         pred = rewriter.create<arith::ConstantIntOp>(op.getLoc(), true, 1);
       }
       moveDefiningOpsBefore(commit.getBarrier(), op);
+      moveDefiningOpsBefore(pred, op);
       op.addCompletionBarrier(commit.getBarrier(), pred);
       rewriter.eraseOp(commit);
     }
