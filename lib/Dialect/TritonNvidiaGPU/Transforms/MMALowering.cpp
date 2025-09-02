@@ -133,7 +133,7 @@ collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
 }
 
 void moveDefiningOpsBefore(Value val, Operation *target) {
-  SmallVector<Operation *> toMove;
+  SetVector<Operation *> toMove;
   std::function<void(Value)> collectOpsToMove = [&](Value val) {
     if (auto defOp = val.getDefiningOp()) {
       if (defOp->getBlock() == target->getBlock() &&
@@ -141,9 +141,7 @@ void moveDefiningOpsBefore(Value val, Operation *target) {
         for (Value operand : defOp->getOperands()) {
           collectOpsToMove(operand);
         }
-        if (llvm::find(toMove, defOp) == toMove.end()) {
-          toMove.push_back(defOp);
-        }
+        toMove.insert(defOp);
       }
     }
   };
