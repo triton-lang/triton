@@ -74,7 +74,8 @@ def compute_roofline(*args, \
         if verbose:
             tflops = perfs[-1].flops / perfs[-1].time_ns * 1e-3
             tbps = perfs[-1].bytes / perfs[-1].time_ns * 1e-3
-            print(f"{intensity_proxy_name}: {val:5d} | TFLOPS: {tflops:#.4g} | TBPS: {tbps:.2f}")
+            ms = perfs[-1].time_ns / 1e6
+            print(f"{intensity_proxy_name}: {val:5d} | MS: {ms:.2f} | TFLOPS: {tflops:#.4g} | TBPS: {tbps:.2f}")
     # write to csv
     return write_csv(intensity_proxy_values, perfs, out_path)
 
@@ -145,51 +146,157 @@ def validate_perfs(perfs):
                 raise ValueError(f"x mismatch between series[0] and series[{i}]")
 
 
-def plot_roofline(series, flops_dtype, out_path, max_tbps, max_tflops, title="", xlabel="", labels=None):
+def plot_roofline(series, flops_dtype, out_path, max_tbps, max_tflops, title="", xlabel="", labels=None,
+                  zoom_range=None, zoom_loc="upper right", zoom_size=("45%", "45%"), points_of_interest=None):
     from bisect import bisect_left
     from pathlib import Path
+    from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+    from matplotlib.patches import ConnectionPatch
+    from matplotlib.ticker import MaxNLocator
+
     perfs = [load_perf_csv(p) for p in series]
     validate_perfs(perfs)
     xs, flops_ref, bytes_ref, _ = perfs[0]
+    n = len(xs)
+
     if not isinstance(max_tbps, int):
         assert max_tbps == "memset"
         max_tbps = get_memset_tbps()
     if not isinstance(max_tflops, int):
         assert max_tflops == "cublas"
         max_tflops = get_cublas_tflops(flops_dtype)
+
+    grey = "#7f7f7f"
+    opints = [f / b for f, b in zip(flops_ref, bytes_ref)]  # arithmetic intensity per sample
+    kappa = max_tflops / max_tbps  # intensity at the knee
+
+    # --- knee interpolation ---
+    knee_idx = bisect_left(opints, kappa)
+    if knee_idx <= 0:
+        x_knee, knee_in_domain = xs[0], True
+    elif knee_idx >= n:
+        x_knee, knee_in_domain = xs[-1], False
+    else:
+        i0, i1 = knee_idx - 1, knee_idx
+        t = (kappa - opints[i0]) / (opints[i1] - opints[i0])
+        x_knee = xs[i0] + t * (xs[i1] - xs[i0])
+        knee_in_domain = True
+
+    # --- piecewise roofline segments (for plotting the grey guideline) ---
+    if knee_idx >= n:
+        bw_x, bw_y = xs[:], [op * max_tbps for op in opints]
+        comp_x, comp_y = [], []
+    elif knee_idx <= 0:
+        bw_x, bw_y = [], []
+        comp_x, comp_y = xs[:], [max_tflops] * n
+    else:
+        bw_x = xs[:knee_idx] + [x_knee]
+        bw_y = [op * max_tbps for op in opints[:knee_idx]] + [max_tflops]
+        comp_x = [x_knee] + xs[knee_idx:]
+        comp_y = [max_tflops] * (1 + (n - knee_idx))
+
+    y_roof_sampled = [min(op * max_tbps, max_tflops) for op in opints]
+
+    # --- helpers ---
+    def idx_range(xlist, lo, hi):
+        i0 = bisect_left(xlist, lo)
+        i1 = bisect_left(xlist, hi, lo=i0)
+        return i0, max(i1, i0 + 1) if i0 < len(xlist) else (i0, i0)
+
+    def visible_y(x0, x1):
+        i0, i1 = idx_range(xs, x0, x1)
+        vals = [min(op * max_tbps, max_tflops) for op in opints[i0:i1]]
+        if knee_in_domain and (x0 <= x_knee <= x1):
+            vals.append(max_tflops)
+        if not vals:
+            return (0.0, 1.0)
+        lo, hi = min(vals), max(vals)
+        return lo, hi
+
+    def interp(yxs, yys, x):
+        """Linear interpolation on (xs, ys), clamped at the ends."""
+        j = bisect_left(yxs, x)
+        if j <= 0:
+            return yys[0]
+        if j >= len(yxs):
+            return yys[-1]
+        x0, x1 = yxs[j - 1], yxs[j]
+        y0, y1 = yys[j - 1], yys[j]
+        t = (x - x0) / (x1 - x0) if x1 != x0 else 0.0
+        return y0 + t * (y1 - y0)
+
+    # Prepare series curves
+    series_perf, series_labels = [], []
+    for idx, (pth, (_, f, b, t)) in enumerate(zip(series, perfs)):
+        perf = [ff / tt * 1e-3 if tt > 0 else 0.0 for ff, tt in zip(f, t)]
+        series_perf.append(perf)
+        series_labels.append(labels[idx] if labels and idx < len(labels) else Path(pth).stem)
+
+    def plot_on(ax, extent=None, add_legend=False, annotate=False):
+        # Grey roofline
+        if bw_x:
+            ax.plot(bw_x, bw_y, ls="--", color=grey, label=f"BW-bound - {max_tbps:.1f} TB/s [memset]")
+        if comp_x:
+            ax.plot(comp_x, comp_y, ls=":", color=grey, label=f"Compute-bound - {max_tflops:.0f} TFLOP/s [cuBLAS]")
+
+        # Series
+        for lab, perf in zip(series_labels, series_perf):
+            ax.plot(xs, perf, label=lab if add_legend else None, lw=1.8 if add_legend else 1.4, zorder=2)
+
+        # Layout
+        xmin, xmax = xs[0], xs[-1]
+        if extent:
+            x0, x1 = max(extent[0], xmin), min(extent[1], xmax)
+            ax.set_xlim(x0, x1)
+            lo, hi = visible_y(x0, x1)
+            pad = 0.08 * (hi - lo) if hi > lo else max(0.1, 0.1 * hi)
+            ax.set_ylim(max(0.0, lo - pad), hi + pad)
+            ax.tick_params(axis="x", labelsize=7)
+            ax.tick_params(axis="y", labelsize=7)
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=4, prune=None))
+        else:
+            dx = 0.05 * (xmax - xmin) if xmax > xmin else 1.0
+            ax.set_xlim(xmin - dx, xmax + dx)
+            ax.set_ylim(min(y_roof_sampled) * 0.8 if y_roof_sampled else 0.0, max_tflops * 1.05)
+
+        # Points of interest
+        if annotate and points_of_interest:
+            for x_pt, label in points_of_interest.items():
+                if (extent is not None) and not (ax.get_xlim()[0] <= x_pt <= ax.get_xlim()[1]):
+                    continue
+                y_pt = interp(xs, series_perf[0], x_pt)
+                ax.plot([x_pt], [y_pt], marker="o", ms=4, mfc="white", mec="black", zorder=3)
+                ax.annotate(f"{label}\n({y_pt:.2f})", xy=(x_pt, y_pt), xytext=(5, 8), textcoords="offset points",
+                            fontsize=7 if extent else 8, ha="left", va="bottom",
+                            bbox=dict(boxstyle="round,pad=0.2", fc="w", ec="0.6",
+                                      alpha=0.8), arrowprops=dict(arrowstyle="-", lw=0.6, color="0.3"))
+
+    def draw_connectors(ax_main, ax_inset, x0, x1):
+        y0_main = ax_main.get_ylim()[0]
+        y0_in = ax_inset.get_ylim()[0]
+        style = dict(ls=(0, (2, 2)), color="lightcoral", lw=0.4)
+        for xx in (x0, x1):
+            ax_main.add_artist(
+                ConnectionPatch(xyA=(xx, y0_main), coordsA=ax_main.transData, xyB=(xx, y0_in),
+                                coordsB=ax_inset.transData, **style))
+
+    # --- draw ---
     fig, ax = plt.subplots(figsize=(7, 5), dpi=120)
     ax.set_xlabel(xlabel)
     ax.set_ylabel("performance  [TFLOP/s]")
     ax.set_title(title)
-    xmin, xmax = min(xs), max(xs)
-    dx = 0.05 * (xmax - xmin) if xmax > xmin else 1.0
-    ax.set_xlim(xmin - dx, xmax + dx)
-    ax.set_ylim(100, max_tflops + 500)
-
-    # roofline from operational intensity (identical across series)
-    opints = [f / b for f, b in zip(flops_ref, bytes_ref)]
-    knee = bisect_left(opints, max_tflops / max_tbps)
-    if knee > 0:
-        x_bw = [xs[0], xs[knee - 1]]
-        y_bw = [opints[0] * max_tbps, max_tflops]
-    else:
-        x_bw = y_bw = []
-    x_comp = xs[max(knee - 1, 0):]
-    y_comp = [max_tflops] * len(x_comp)
-    grey = "#7f7f7f"
-    ax.plot(x_bw, y_bw, linestyle="--", color=grey, label=f"BW-bound - {max_tbps:.1f} TB/s [memset]", zorder=1)
-    ax.plot(x_comp, y_comp, linestyle=":", color=grey, label=f"Compute-bound  - {max_tflops:.0f} TFLOP/s [cuBLAS]",
-            zorder=1)
-
-    # Plot each series as a lineplot of TFLOP/s
-    for idx, (pth, (_, f, b, t)) in enumerate(zip(series, perfs)):
-        perf_tflops = [ff / tt * 1e-3 if tt > 0 else 0.0 for ff, tt in zip(f, t)]
-        label = (labels[idx] if labels and idx < len(labels) else Path(pth).stem)
-        ax.plot(xs, perf_tflops, label=label, linewidth=1.8, zorder=2)
-
+    plot_on(ax, extent=None, add_legend=True, annotate=True)
     ax.legend(frameon=False, loc="lower right")
     ax.grid(True, which="both", ls=":", lw=0.5)
-    fig.tight_layout()
+
+    if zoom_range is not None:
+        x0, x1 = sorted(zoom_range)
+        assert x1 > x0
+        axins = inset_axes(ax, width=zoom_size[0], height=zoom_size[1], loc=zoom_loc)
+        plot_on(axins, extent=(x0, x1), add_legend=False, annotate=True)
+        axins.grid(True, which="both", ls=":", lw=0.4)
+        draw_connectors(ax, axins, x0, x1)
+
     plt.savefig(out_path)
 
 
