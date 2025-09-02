@@ -268,6 +268,9 @@ _1d_layouts = _filter_layouts([
 
 
 def _histogram_cases():
+    if THREADS_PER_WARP not in (32, 64):
+        raise RuntimeError(f"Unsupported THREADS_PER_WARP: {THREADS_PER_WARP}")
+
     m_bins = [(2048, 2), (8, 512), (32, 32)]
     layouts = [(ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4],
                                    [0]), ttgl.BlockedLayout([1], [THREADS_PER_WARP], [4], [0]))]
@@ -279,7 +282,7 @@ def _histogram_cases():
     linear_layouts = [(
         ttgl.DistributedLinearLayout(
             reg_bases=[[1 << (5 + i)] for i in range(int(math.log2(m)) - 5)],
-            lane_bases=[[0], [16], [4], [2], [1]] + [[0]] * (THREADS_PER_WARP >> 6),
+            lane_bases=[[0], [16], [4], [2], [1]] + [0] if THREADS_PER_WARP == 64 else [],
             warp_bases=[[0], [8]],
             block_bases=[],
             shape=(m, ),
