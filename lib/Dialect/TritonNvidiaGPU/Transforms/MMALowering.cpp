@@ -101,6 +101,41 @@ struct TCGen5MMAScaleSharedToTmemConversion
   }
 };
 
+std::pair<SmallVector<TCGen5CommitOp>, SmallVector<Value>>
+collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
+  SmallVector<TCGen5CommitOp> commitOps;
+  SmallVector<Value> commitPredicates;
+  Operation *nextOp = mmaOp->getNextNode();
+
+  while (nextOp && !isa<MMAv5OpInterface>(nextOp)) {
+    if (auto commit = dyn_cast<TCGen5CommitOp>(nextOp)) {
+      commitOps.push_back(commit);
+      commitPredicates.push_back(commit.getPred());
+    }
+    nextOp = nextOp->getNextNode();
+  }
+
+  return {commitOps, commitPredicates};
+}
+
+template <typename TCGen5MMAOpTy>
+class MergeCommitIntoMMA : public OpRewritePattern<TCGen5MMAOpTy> {
+public:
+  using OpRewritePattern<TCGen5MMAOpTy>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(TCGen5MMAOpTy op,
+                                PatternRewriter &rewriter) const override {
+    auto [commitOps, predicates] = collectCommitOpsAfter(op);
+    for (auto [commit, pred] : llvm::zip(commitOps, predicates)) {
+      if (!pred) {
+        pred = rewriter.create<arith::ConstantIntOp>(op.getLoc(), true, 1);
+      }
+      op.addCompletionBarrier(commit.getBarrier(), pred);
+    }
+    return success();
+  }
+};
+
 } // anonymous namespace
 
 class TritonNvidiaGPUMMALoweringPass
@@ -112,9 +147,10 @@ public:
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    patterns
-        .add<SyncMMALowering<TCGen5MMAOp>, SyncMMALowering<TCGen5MMAScaledOp>,
-             TCGen5MMAScaleSharedToTmemConversion>(context);
+    patterns.add<
+        SyncMMALowering<TCGen5MMAOp>, SyncMMALowering<TCGen5MMAScaledOp>,
+        TCGen5MMAScaleSharedToTmemConversion, MergeCommitIntoMMA<TCGen5MMAOp>,
+        MergeCommitIntoMMA<TCGen5MMAScaledOp>>(context);
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }
