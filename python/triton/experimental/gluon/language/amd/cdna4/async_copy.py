@@ -38,7 +38,7 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
         dest (shared_memory_descriptor): Destination shared memory descriptor.
         ptr (pointer tensor): Tensor of pointers to global memory to load from.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
-        other (tensor, optional): Tensor providing default values for masked elements. Defaults to None.
+        other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
     """
     _check(ptr.type.is_block(), lambda: "expected ptr to be a tensor")
@@ -92,7 +92,7 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
         ptr (pointer to scalar): Global memory scalar base pointer to load from.
         offsets (tensor): Offsets tensor for the load operation.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
-        other (tensor, optional): Tensor providing default values for masked elements. Defaults to None.
+        other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
     """
     _check(isinstance(offsets.type.layout, (BlockedLayout, SliceLayout)),

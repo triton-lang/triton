@@ -33,7 +33,7 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
         ptr (pointer to scalar): Global memory scalar base pointer to load from.
         offsets (tensor): Offsets tensor for the load operation.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
-        other (tensor, optional): Tensor providing default values for masked elements. Defaults to None.
+        other (tensor or scalar, optional): Tensor or scalar providing default values for masked elements. Defaults to None.
         cache_modifier (str): Cache modifier specifier. Defaults to "".
     """
     _verify_buffer_ops(ptr, offsets, mask, other)
