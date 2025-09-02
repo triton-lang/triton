@@ -1973,8 +1973,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   func->walk<WalkOrder::PostOrder, ReverseIterator>([](Operation *op) {
     if (!op->use_empty())
       return;
-    if (llvm::isa<arith::ConstantOp, tt::SplatOp, arith::AddIOp, tt::SplatOp,
-                  arith::TruncIOp, arith::ExtSIOp>(op)) {
+    if (isOpTriviallyDead(op)) {
       LDBG("Remove op:" << *op);
       op->erase();
     }
