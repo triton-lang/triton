@@ -212,7 +212,7 @@ def test_chain_reduce_layouts():
 @pytest.mark.parametrize("first_axis", [0, 1])
 def test_chain_reduce(M, N, src_layout, op, first_axis, device):
 
-    @triton.jit
+    @gluon.jit
     def kernel(x_ptr, y_ptr, src_layout: ttgl.constexpr, M: ttgl.constexpr, N: ttgl.constexpr, first_axis: ttgl.constexpr, op: ttgl.constexpr):
         offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, src_layout))[:, None]
         offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, src_layout))[None, :]
