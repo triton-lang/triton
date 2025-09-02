@@ -184,8 +184,9 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
 }
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
-// with which dot operand |inputValue| is fed into if possible.
-ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx) {
+// and |vecSize| with which dot operand |inputValue| is fed into if possible.
+ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
+                                        unsigned *vecSize) {
   if (!inputValue.hasOneUse())
     return nullptr;
 
@@ -194,13 +195,27 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx) {
       user->getBlock() != inputValue.getParentBlock())
     return nullptr;
 
+  LDBG("getDotEncoding user: " << *user);
   if (auto dotOp = dyn_cast<tt::DotOpInterface>(user)) {
     OpOperand &use = *inputValue.getUses().begin();
     *opIdx = use.getOperandNumber();
+    Type operandType = inputValue.getType();
+    auto operandEnc = cast<RankedTensorType>(operandType).getEncoding();
+    if (*opIdx >= 2) {
+      // Scale operand. Calculate vecSize based on the linear encoding of the
+      // operand.
+      auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(operandEnc);
+      *vecSize = llEnc.getLinearLayout().getNumConsecutiveInOut();
+    } else {
+      auto dotEnc = dyn_cast<ttg::DotOperandEncodingAttr>(operandEnc);
+      *vecSize = dotEnc.getKWidth();
+    }
+
     auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
     return dyn_cast<ttg::AMDMfmaEncodingAttr>(dotType.getEncoding());
   }
-  return getDotEncoding(user->getResult(0), opIdx);
+
+  return getDotEncoding(user->getResult(0), opIdx, vecSize);
 }
 
 // Adapted from
@@ -257,23 +272,28 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
         tempAttr = ttg::SwizzledSharedEncodingAttr::get(
             loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
             ctaLayout, bitWidth, /*needTrans=*/false);
+        LDBG("Deduced shared encoding based on dot: " << tempAttr);
       } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
         // We use linear layout directly for scaled dot fp8 operands. For such
         // cases, we need to look further down the def-use chain to find the dot
         // op for the mfma layout to deduce operand index and other information.
         unsigned opIdx;
-        if (auto dotEnc = getDotEncoding(userResult, &opIdx)) {
-          unsigned vecSize = llEnc.getLinearLayout().getNumConsecutiveInOut();
+        unsigned vecSize;
+        if (auto mfmaEnc = getDotEncoding(userResult, &opIdx, &vecSize)) {
           LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
-          tempAttr = dotEnc.composeSharedLayoutForOperand(
+          tempAttr = mfmaEnc.composeSharedLayoutForOperand(
               ctaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
               /*needTrans=*/false);
+          LDBG("Deduced shared encoding based on linear: " << tempAttr);
         }
       }
     }
     // Check that the shared encodings needed by the users are compatible.
-    if (!tempAttr || (attr != nullptr && attr != tempAttr))
+    if (!tempAttr || (attr != nullptr && attr != tempAttr)) {
+      LDBG("Incompatible encodings");
       return std::nullopt;
+    }
+
     attr = tempAttr;
   }
   return attr;
@@ -577,9 +597,11 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
     if (newLoad) {
       loadToInfo[newLoad] = {nullptr, distance, use};
     } else {
+      LDBG("Deduce shared encoding for: " << *load);
       auto sharedEncoding =
           getSharedEncIfAllUsersAreDotEnc(load->getResult(0)).value_or(nullptr);
       loadToInfo[load] = {sharedEncoding, distance, use};
+      LDBG("Populate loadInfo with shared encoding: " << sharedEncoding);
     }
   }
 
@@ -618,6 +640,7 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
                            int localPrefetch, bool useAsyncCopy,
                            bool waitAtTail, Clusters &clusters,
                            tt::CoarseSchedule &schedule) {
+  LDBG("Init SingleDotSchedule");
   int lastStage = numStages - 1;
   stages[SCHED_GLOBAL_LOAD] = 0;
   stages[SCHED_LOCAL_STORE] = globalPrefetch;
@@ -806,6 +829,7 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
               int globalPrefetch, int localPrefetch, bool useAsyncCopy,
               bool waitAtTail,
               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  LDBG("Build SingleDotSchedule");
   tt::CoarseSchedule schedule(numStages);
   Stages stages;
   Clusters clusters;
@@ -1101,6 +1125,7 @@ tt::CoarseSchedule
 buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
               bool useAsyncCopy,
               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  LDBG("Build ChainedDotSchedule");
   tt::CoarseSchedule schedule(numStages);
   ChainedDotClusters clusters;
   std::generate(clusters.begin(), clusters.end(),
