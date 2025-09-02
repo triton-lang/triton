@@ -117,14 +117,28 @@ bool containsMMAv5Op(Operation *op) {
 
 std::pair<SmallVector<TCGen5CommitOp>, SmallVector<Value>>
 collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
+  auto isConstTrue = [](Value v) {
+    if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
+      if (auto attr = dyn_cast<BoolAttr>(constOp.getValueAttr())) {
+        return attr.getValue();
+      }
+    }
+    return false;
+  };
+
   SmallVector<TCGen5CommitOp> commitOps;
   SmallVector<Value> commitPredicates;
+  auto mmaPred = mmaOp.getPredicate();
   Operation *nextOp = mmaOp->getNextNode();
 
   while (nextOp && !containsMMAv5Op(nextOp)) {
     if (auto commit = dyn_cast<TCGen5CommitOp>(nextOp)) {
-      commitOps.push_back(commit);
-      commitPredicates.push_back(commit.getPred());
+      // If the mma predicate is true, or mma and commit ops use the same
+      // predicate, it is safe to merge them
+      if (isConstTrue(mmaPred) || mmaPred == commit.getPred()) {
+        commitOps.push_back(commit);
+        commitPredicates.push_back(commit.getPred());
+      }
     }
     nextOp = nextOp->getNextNode();
   }
