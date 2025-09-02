@@ -17,6 +17,7 @@ class SwizzledSharedEncodingAttr;
 class NVMMASharedEncodingAttr;
 class TensorOrMemDesc;
 class MemDescType;
+class CTALayoutAttr;
 
 // - BlockedEncodingAttrs have the following input dimensions.
 //
@@ -78,7 +79,7 @@ LinearLayout getLayoutWithinBlock(const LinearLayout &layout);
 // See the nomenclature note at the top of LinearLayoutConversions.cpp for why
 // the variable with type CTALayoutAttr is called cgaLayoutAttr.
 LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
-                                    const CTALayoutAttr &cgaLayoutAttr,
+                                    CTALayoutAttr cgaLayoutAttr,
                                     ArrayRef<int64_t> shape);
 
 // In this function, we construct a linear layout representing the

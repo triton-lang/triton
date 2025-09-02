@@ -1315,7 +1315,7 @@ LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
 }
 
 LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
-                                    const CTALayoutAttr &cgaLayoutAttr,
+                                    CTALayoutAttr cgaLayoutAttr,
                                     ArrayRef<int64_t> shape) {
   int rank = shape.size();
   assert(ctaLayout.getNumOutDims() == rank);
