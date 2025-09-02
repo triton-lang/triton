@@ -1823,7 +1823,7 @@ SmallVector<unsigned> PaddedSharedEncodingAttr::getOrder() const {
   // there are dims that do not move in the offsets
   std::iota(order.rbegin(), order.rend(), 0);
 
-  return orderPerDim(StringAttr::get(getContext(), "block"), order);
+  return orderPerDim(StringAttr::get(getContext(), "offset"), order);
 }
 
 // LayoutEncodingTrait, ["getCTAsPerCGA", "getCTAOrder", "getCTASplitNum"]>;
