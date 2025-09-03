@@ -369,3 +369,22 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         if default_results is None:
             return
         return tuple(unflatten_ir_values(mlir_results, [r.type for r in default_results]))
+
+    def where(self, condition: TensorTy, x: TensorTy, y: TensorTy) -> TensorTy:
+        if condition.dtype != ttgl.int1:
+            warnings.warn(
+                f"ttgl.where with a non-boolean condition is deprecated and will error out in a future triton release. Got {condition.dtype}"
+            )
+        condition = self.cast(condition, ttgl.int1)
+        # x, y = self.binary_op_type_checking_impl(x, y, True, True)
+        # x, y are broadcasted
+        # if condition.type.is_block():
+        #     condition, x = self.broadcast_impl_value(condition, x)
+        #     x, y = self.broadcast_impl_value(x, y)
+        # else:
+        #     condition, _ = self.broadcast_impl_value(condition, x)
+        ret_ty = x.type
+        return self.tensor(self.builder.create_select(condition.handle, x.handle, y.handle), ret_ty)
+
+    def value_int32(self, value):
+        return self.tensor(self.builder.get_int32(value), ttgl.int32)

@@ -47,6 +47,8 @@ from ._core import (
     expand_dims,
     full,
     assume,
+    where,
+    value_int32,
     inline_asm_elementwise,
     join,
     load,

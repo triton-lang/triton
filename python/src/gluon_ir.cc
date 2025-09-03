@@ -357,6 +357,17 @@ void init_gluon_ir(py::module &&m) {
                  ctx, version, warpsPerCta, tilesPerWarp, instrShape[0],
                  instrShape[1], transposed, ctaLayout, elemType);
            })
+      .def("get_amd_rotating_shared_layout",
+           [](GluonOpBuilder &self, int vec, int perPhase, int maxPhase,
+              std::vector<unsigned> &order, std::vector<unsigned> &ctasPerCga,
+              std::vector<unsigned> &ctaSplitNum,
+              std::vector<unsigned> &ctaOrder) -> Attribute {
+             auto ctx = self.getContext();
+             auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+             return self.getChecked<ttg::AMDRotatingSharedEncodingAttr>(
+                 ctx, vec, perPhase, maxPhase, order, ctaLayout);
+           })
       .def("get_padded_shared_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &intervals,
               std::vector<unsigned> &paddings, std::vector<unsigned> &order,
@@ -670,6 +681,11 @@ void init_gluon_ir(py::module &&m) {
               std::vector<int> &partitionNumWarps) {
              return self.create<ttg::WarpSpecializeOp>(
                  resultTypes, explicitCaptures, partitionNumWarps);
+           })
+      .def("create_in_thread_transpose",
+           [](GluonOpBuilder &self, Type resultType, Value& arg) -> Value {
+             return self.create<ttag::InThreadTransposeOp>(
+                 resultType, arg);
            })
       .def("create_buffer_load",
            [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,

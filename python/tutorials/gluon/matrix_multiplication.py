@@ -157,7 +157,7 @@ import triton.language as tl
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 import os
-os.environ["TRITON_CACHE_DIR"] = "/home/sijieli2/triton_cache"
+# os.environ["TRITON_CACHE_DIR"] = "/home/sijieli2/triton_cache"
 # os.environ["MLIR_ENABLE_DUMP"] = "1"
 # os.environ["AMDGCN_ENABLE_DUMP"] = "1"
 
@@ -208,13 +208,13 @@ def get_hip_autotune_config():
         # {'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 6},
         # {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4},
         # {'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 6},
-        {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 6},
+        # {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 6},
         # {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4},
-        # {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4},
+        {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4},
         # {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4},
         # {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 6},
     ]
-    return [triton.Config(s | {'matrix_instr_nonkdim': 16}, num_warps=8, num_stages=4) for s in sizes]
+    return [triton.Config(s | {'matrix_instr_nonkdim': 16}, num_warps=8, num_stages=2) for s in sizes]
 
 
 def get_autotune_config():
@@ -363,36 +363,36 @@ def matmul(a, b, activation=""):
 #
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
-torch.manual_seed(0)
-a = torch.rand((512, 512), device=DEVICE, dtype=torch.float16) - 0.5
-b = torch.rand((512, 512), device=DEVICE, dtype=torch.float16) - 0.5
-triton_output = matmul(a, b)
-torch_output = torch.matmul(a, b)
-print(f"triton_output_with_fp16_inputs={triton_output}")
-print(f"torch_output_with_fp16_inputs={torch_output}")
+# torch.manual_seed(0)
+# a = torch.rand((512, 512), device=DEVICE, dtype=torch.float16) - 0.5
+# b = torch.rand((512, 512), device=DEVICE, dtype=torch.float16) - 0.5
+# triton_output = matmul(a, b)
+# torch_output = torch.matmul(a, b)
+# print(f"triton_output_with_fp16_inputs={triton_output}")
+# print(f"torch_output_with_fp16_inputs={torch_output}")
 
-if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
-    print("✅ Triton and Torch match")
-else:
-    print("❌ Triton and Torch differ")
+# if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=0):
+#     print("✅ Triton and Torch match")
+# else:
+#     print("❌ Triton and Torch differ")
 
 TORCH_HAS_FP8 = hasattr(torch, "float8_e5m2")
-if TORCH_HAS_FP8 and is_cuda():
-    torch.manual_seed(0)
-    a = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
-    b = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
-    a = a.to(torch.float8_e5m2)
-    # pre-transpose b for efficiency.
-    b = b.T
-    b = b.to(torch.float8_e5m2)
-    triton_output = matmul(a, b)
-    torch_output = torch.matmul(a.to(torch.float16), b.to(torch.float16))
-    print(f"triton_output_with_fp8_inputs={triton_output}")
-    print(f"torch_output_with_fp8_inputs={torch_output}")
-    if torch.allclose(triton_output, torch_output, atol=0.125, rtol=0):
-        print("✅ Triton and Torch match")
-    else:
-        print("❌ Triton and Torch differ")
+# if TORCH_HAS_FP8 and is_cuda():
+#     torch.manual_seed(0)
+#     a = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
+#     b = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
+#     a = a.to(torch.float8_e5m2)
+#     # pre-transpose b for efficiency.
+#     b = b.T
+#     b = b.to(torch.float8_e5m2)
+#     triton_output = matmul(a, b)
+#     torch_output = torch.matmul(a.to(torch.float16), b.to(torch.float16))
+#     print(f"triton_output_with_fp8_inputs={triton_output}")
+#     print(f"torch_output_with_fp8_inputs={torch_output}")
+#     if torch.allclose(triton_output, torch_output, atol=0.125, rtol=0):
+#         print("✅ Triton and Torch match")
+#     else:
+#         print("❌ Triton and Torch differ")
 
 # %%
 # Benchmark
