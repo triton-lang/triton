@@ -1174,8 +1174,6 @@ static Type getNewType(Type type, Attribute encoding) {
                                tensorType.getElementType(), encoding);
 }
 
-/// Convert an op to use 'encoding' attribute.
-/// Skips operands if they’re in shared encoding.
 Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
   OpBuilder builder(op);
   // Convert operands

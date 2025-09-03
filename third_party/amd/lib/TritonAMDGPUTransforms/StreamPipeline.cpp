@@ -416,10 +416,9 @@ static bool isCoalesced(RankedTensorType loadType,
       targetLLAttr.getContigPerThread()[contigDim];
   const unsigned targetContigPerWarp =
       targetLLAttr.getContigPerWarp()[contigDim];
-  auto blockedLL = toLinearEncoding(blockedEnc, shape);
   const unsigned originalContigPerWarp =
       targetLLAttr.getContigPerWarp()[contigDim];
-  auto ll = targetLLAttr.toLinearLayout(shape);
+  auto targetLL = targetLLAttr.toLinearLayout(shape);
 
   // 1) Require that the linear layout provides at least as much per-thread and
   // per-warp contiguity as the original load encoding.
@@ -433,8 +432,8 @@ static bool isCoalesced(RankedTensorType loadType,
   // layout.
   auto kWarp = StringAttr::get(ctx, "warp");
 
-  auto basesIt = ll.getBases().find(kWarp);
-  if (basesIt == ll.getBases().end())
+  auto basesIt = targetLL.getBases().find(kWarp);
+  if (basesIt == targetLL.getBases().end())
     return false;
 
   const auto &bases = basesIt->second;

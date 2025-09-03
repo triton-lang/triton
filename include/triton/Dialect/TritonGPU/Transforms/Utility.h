@@ -213,7 +213,8 @@ std::optional<StringRef> getAMDArch(Operation *module);
 std::optional<mlir::triton::gpu::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
 
-// Convert \param op operands and results to layout \param encoding.
+// Convert \param op to use \param encoding attribute.
+// Skips operands if they're in shared encoding.
 Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op);
 
 // Returns the original memory allocation for a memdesc value

@@ -922,7 +922,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // COMMON-LABEL: bypass_lds_b_operand
 
-//         SYNC: %[[load:.+]] = tt.load %55 : tensor<8x2048x!tt.ptr<i8>, #linear>
+//         SYNC: scf.for
+//         SYNC: %[[load:.+]] = tt.load {{.*}} : tensor<8x2048x!tt.ptr<i8>, #linear>
 //         SYNC: %[[reshape1:.+]] = tt.reshape %arg24
 //         SYNC: %[[trans1:.+]] = tt.trans %[[reshape1]]
 //         SYNC: %[[reshape2:.+]] = tt.reshape %[[trans1]]
