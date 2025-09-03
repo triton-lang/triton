@@ -49,12 +49,7 @@ def DotOpInterface : OpInterface<"DotOpInterface"> {
       /*retType=*/"::mlir::Value",
       /*methodName=*/"getB",
       /*args=*/(ins)>,
-    InterfaceMethod<
-      /*desc=*/"Get the output tensor",
-      /*retType=*/"::mlir::Value",
-      /*methodName=*/"getD",
-      /*args=*/(ins)>,
-    InterfaceMethod<
+  InterfaceMethod<
       /*desc=*/"Verify the dimensions of the A and B DotOp operands.",
       /*retType=*/"bool",
       /*methodName=*/"verifyDims",
@@ -69,7 +64,6 @@ def DotOpInterface : OpInterface<"DotOpInterface"> {
         auto aTy = cast<ShapedType>($_op.getA().getType());
         auto bTy = cast<ShapedType>($_op.getB().getType());
         auto cTy = cast<ShapedType>($_op->getOperand(2).getType());
-        auto dTy = cast<ShapedType>($_op.getD().getType());
         auto aShape = aTy.getShape();
         auto bShape = bTy.getShape();
         auto cShape = cTy.getShape();

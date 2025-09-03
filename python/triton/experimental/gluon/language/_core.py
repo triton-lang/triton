@@ -423,6 +423,25 @@ def histogram(input, num_bins, mask=None, layout=None, _semantic=None, _generato
 
 
 @builtin
+def gather(src, index, axis, _semantic=None):
+    """
+    Gather values from a tensor along a specified axis using an index tensor.
+
+    Args:
+        src (tensor): The source tensor to gather values from.
+        index (tensor): The index tensor specifying which values to gather.
+        axis (int): The axis along which to gather values.
+
+    Returns:
+        tensor: The gathered tensor.
+    """
+    src = _unwrap_if_constexpr(src)
+    index = _unwrap_if_constexpr(index)
+    axis = _unwrap_if_constexpr(axis)
+    return _semantic.gather(src, index, axis)
+
+
+@builtin
 def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None) -> shared_memory_descriptor:
     """
     Allocate shared memory for a tensor with the given element type, shape, and layout.
@@ -446,7 +465,7 @@ def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None
 @builtin
 def set_auto_layout(value, layout, _semantic=None):
     """
-    Set a a tensor with AutoLayout to a concrete layout
+    Set a tensor with AutoLayout to a concrete layout
 
     Args:
         value (tensor): The input tensor.

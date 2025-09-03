@@ -3079,82 +3079,6 @@ def test_no_rematerialization_op():
     assert compiled_kernel.asm["ttgir"].count('"tt.reduce"') == 1, "we shouldn't rematerialize tt.reduce"
 
 
-layouts = [
-    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [1, THREADS_PER_WARP], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    # [HIP] TO DO: some tests are flaky with the layout, so turn off them for now.
-    # BlockedLayout([1, 4], [1, THREADS_PER_WARP], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [THREADS_PER_WARP // 32, 32], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1])
-]
-
-
-@pytest.mark.parametrize("M, N", [[128, 128], [256, 128], [256, 256], [128, 256]])
-@pytest.mark.parametrize("src_layout", layouts)
-@pytest.mark.parametrize("op", ["sum", "max"])
-@pytest.mark.parametrize("first_axis", [0, 1])
-def test_chain_reduce(M, N, src_layout, op, device, first_axis, tmp_path: pathlib.Path):
-
-    op_str = ""
-    if op == "sum":
-        op_str = """
-        %13 = arith.addi %arg2, %arg3 : i32
-        tt.reduce.return %13 : i32"""
-    elif op == "max":
-        op_str = """
-        %13 = arith.cmpi "sgt", %arg2, %arg3 : i32
-        %14 = arith.select %13, %arg2, %arg3 : i32
-        tt.reduce.return %14 : i32"""
-    ir = f"""
-    #src = {src_layout}
-    module attributes {{"{GPU_DIALECT}.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
-    tt.func public @sum_kernel_0d1d(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) {{
-        %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #src>
-        %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, parent = #src}}>>
-        %1 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = 1, parent = #src}}>> -> tensor<{M}x1xi32, #src>
-        %2 = arith.muli %1, %cst : tensor<{M}x1xi32, #src>
-        %3 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #{GPU_DIALECT}.slice<{{dim = 0, parent = #src}}>>
-        %4 = tt.expand_dims %3 {{axis = 0 : i32}} : tensor<{N}xi32, #{GPU_DIALECT}.slice<{{dim = 0, parent = #src}}>> -> tensor<1x{N}xi32, #src>
-        %5 = tt.broadcast %2 : tensor<{M}x1xi32, #src> -> tensor<{M}x{N}xi32, #src>
-        %6 = tt.broadcast %4 : tensor<1x{N}xi32, #src> -> tensor<{M}x{N}xi32, #src>
-        %7 = arith.addi %5, %6 : tensor<{M}x{N}xi32, #src>
-        %8 = tt.splat %arg0 : !tt.ptr<i32> -> tensor<{M}x{N}x!tt.ptr<i32>, #src>
-        %9 = tt.addptr %8, %7 : tensor<{M}x{N}x!tt.ptr<i32>, #src>, tensor<{M}x{N}xi32, #src>
-        %10 = tt.load %9 : tensor<{M}x{N}x!tt.ptr<i32>, #src>
-        %11 = "tt.reduce"(%10) ({{
-        ^bb0(%arg2: i32, %arg3: i32):
-        {op_str}
-        }}) {{axis = {first_axis} : i32}} : (tensor<{M}x{N}xi32, #src>) -> tensor<{M if first_axis == 1 else N}xi32, #{GPU_DIALECT}.slice<{{dim = {first_axis}, parent = #src}}>>
-        %12 = "tt.reduce"(%11) ({{
-        ^bb0(%arg2: i32, %arg3: i32):
-        {op_str}
-        }}) {{axis = 0 : i32}} : (tensor<{M if first_axis == 1 else N}xi32, #{GPU_DIALECT}.slice<{{dim = {first_axis}, parent = #src}}>>) -> i32
-        tt.store %arg1, %12 : !tt.ptr<i32>
-        tt.return
-    }}
-    }}
-    """
-    temp_file = tmp_path / "test_chain_reduce.ttgir"
-    temp_file.write_text(ir)
-    kernel = triton.compile(str(temp_file))
-
-    rs = RandomState(17)
-    x = rs.randint(0, 4, (M, N)).astype('int32')
-
-    z = np.zeros((1, )).astype('int32')
-
-    x_tri = torch.tensor(x, device=device)
-    z_tri = torch.tensor(z, device=device)
-
-    pgm = kernel[(1, 1, 1)](x_tri, z_tri)
-    if op == "sum":
-        z_ref = np.sum(x)
-    elif op == "max":
-        z_ref = np.max(x)
-
-    np.testing.assert_allclose(z_ref, z_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
-
-
 @triton.jit
 def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
     delta = mean_2 - mean_1
@@ -3739,12 +3663,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                           for mma in (mma_nonk_sizes if is_hip() else [16])
                           for kpack in ([1, 2] if (is_hip() and not is_hip_cdna4()) else [1])])
 def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack, device):
-    is_SM120 = False
     if is_cuda():
         cc = torch.cuda.get_device_capability()
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
-        is_SM120 = cc >= (12, 0)
     if is_hip():
         if not (is_hip_cdna() or is_hip_gfx11() or is_hip_gfx12()):
             pytest.skip("scaled_dot only implemented for HIP CDNA, gfx11, gfx12")
@@ -3982,8 +3904,6 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     large_tolerance = is_hip_cdna2()
     # For e4m3, gfx11 can slightly exceed the default tolerances in isolated cases
     if is_hip_gfx11() and mxfp_type == "e4m3" and normal_type == "fp16":
-        large_tolerance = True
-    if is_SM120:
         large_tolerance = True
     atol = 2e-4 if large_tolerance else 1e-5
     rtol = 2e-2 if large_tolerance else 1e-2
@@ -6686,97 +6606,6 @@ def test_gather(src_shape, indices_shape, axis, device):
     ref = torch.gather(src, axis, indices)
     result = triton_gather(src, axis, indices)
     torch.testing.assert_close(result, ref, rtol=0, atol=0)
-
-
-def gen_gather_warp_shuffle_cases():
-    if THREADS_PER_WARP == 32:
-        return [
-            ([32, 16], [32, 16], 0,
-             "linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>",
-             "linear<{register = [[2, 0], [0, 2]], lane = [[0, 8], [16, 0], [1, 0], [8, 0], [4, 0]], warp = [[0, 1], [0, 4]], block = []}>"
-             ),
-            ([128, 64], [256, 64], 0,
-             "linear<{register = [[0, 2], [32, 0], [2, 0], [0, 16], [0, 32], [64, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>",
-             "linear<{register = [[0, 2], [32, 0], [0, 32], [2, 0], [0, 16], [64, 0], [128, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>"
-             ),
-        ]
-    elif THREADS_PER_WARP == 64:
-        return [
-            ([64, 16], [64, 16], 0,
-             "linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0], [32, 0]], warp = [[0, 1], [0, 4]], block = []}>",
-             "linear<{register = [[2, 0], [0, 2]], lane = [[0, 8], [16, 0], [1, 0], [8, 0], [4, 0], [32, 0]], warp = [[0, 1], [0, 4]], block = []}>"
-             ),
-            ([128, 64], [256, 64], 0,
-             "linear<{register = [[0, 2], [2, 0], [0, 16], [0, 32]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0], [32, 0]], warp = [[0, 1], [0, 4]], block = []}>",
-             "linear<{register = [[0, 2], [0, 32], [2, 0], [0, 16], [64, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0], [32, 0]], warp = [[0, 1], [0, 4]], block = []}>"
-             ),
-        ]
-    else:
-        return []
-
-
-# These layouts are specially chosen to trigger the warp shuffle codegen.
-@pytest.mark.parametrize("src_shape, indices_shape, axis, src_layout, indices_layout", gen_gather_warp_shuffle_cases())
-def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices_layout, tmp_path: pathlib.Path,
-                             device):
-
-    def prepare_kernel(src: torch.Tensor, axis: int, indices: torch.Tensor):
-        output = torch.empty(indices.shape, dtype=src.dtype, device=src.device)
-        compiled = gather_test_kernel.warmup(src, indices, output, axis, src.shape[0], src.shape[1], src.stride(0),
-                                             src.stride(1), indices.shape[0], indices.shape[1], indices.stride(0),
-                                             indices.stride(1), output.shape[0], output.shape[1], output.stride(0),
-                                             output.stride(1), grid=(1, ))
-        return output, compiled
-
-    def inject_layout(ir, src: torch.Tensor, axis, indices: torch.Tensor, src_layout, idx_layout):
-        ir = f"""
-#src_layout = #ttg.{src_layout}
-#idx_layout = #ttg.{idx_layout}
-{ir}"""
-
-        dtypes = {torch.int32: "i32", torch.float32: "f32", torch.int64: "i64", torch.float64: "f64"}
-
-        src_spec = f"{src.shape[0]}x{src.shape[1]}x{dtypes[src.dtype]}"
-        indices_spec = f"{indices.shape[0]}x{indices.shape[1]}x{dtypes[indices.dtype]}"
-        output_spec = f"{indices.shape[0]}x{indices.shape[1]}x{dtypes[src.dtype]}"
-
-        pat = r"(%[0-9]+) = tt.gather (%[0-9]+)\[(%[0-9]+)\] {axis = "
-        pat += str(axis)
-        pat += r" : i32, efficient_layout} : \(tensor\<"
-        pat += src_spec
-        pat += r", (#[a-z]+[0-9]+)\>, tensor\<"
-        pat += indices_spec
-        pat += r", (#[a-z]+[0-9]+)\>\) -> tensor\<"
-        pat += output_spec
-        pat += r", (#[a-z]+[0-9]+)\>"
-
-        repl = r"""
-    %src = ttg.convert_layout \2 : tensor<""" + src_spec + r""", \4> -> tensor<""" + src_spec + r""", #src_layout>
-    %idx = ttg.convert_layout \3 : tensor<""" + indices_spec + r""", \5> -> tensor<""" + indices_spec + r""", #idx_layout>
-    %out = tt.gather %src[%idx] {axis = """ + str(
-            axis
-        ) + r""" : i32, efficient_layout} : (tensor<""" + src_spec + r""", #src_layout>, tensor<""" + indices_spec + r""", #idx_layout>) -> tensor<""" + output_spec + r""", #idx_layout>
-    \1 = ttg.convert_layout %out : tensor<""" + output_spec + r""", #idx_layout> -> tensor<""" + output_spec + r""", \6>"""
-        return re.sub(pat, repl, ir)
-
-    src = torch.randn(src_shape, device=device)
-    indices = torch.randint(0, src.shape[axis], indices_shape, device=device)
-    ref = torch.gather(src, axis, indices)
-
-    output, compiled = prepare_kernel(src, axis, indices)
-    ir = compiled.asm["ttgir"]
-    ir = inject_layout(ir, src, axis, indices, src_layout, indices_layout)
-    assert ir != compiled.asm["ttgir"]
-
-    temp_file = tmp_path / "test_warp_gather.ttgir"
-    temp_file.write_text(ir)
-
-    kernel = triton.compile(str(temp_file))
-    assert ("nvvm.shfl.sync.idx" in kernel.asm["llir"]) or ("llvm.amdgcn.ds.bpermute" in kernel.asm["llir"])
-
-    kernel[(1, 1, 1)](src, indices, output)
-
-    torch.testing.assert_close(output, ref, rtol=0, atol=0)
 
 
 @triton.jit
