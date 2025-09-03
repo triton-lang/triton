@@ -1239,8 +1239,7 @@ def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, device):
         smem: ttgl.shared_memory_descriptor = ttgl.allocate_shared_memory(vals.dtype, (M, N), shared_layout, value=vals)
         for i in ttgl.static_range(M // BLOCK_SIZE_M):
             for j in ttgl.static_range(N // BLOCK_SIZE_N):
-                tile = smem.slice(i * BLOCK_SIZE_M, (i + 1) * BLOCK_SIZE_M, dim=0).slice(j * BLOCK_SIZE_N,
-                                                                                  (j + 1) * BLOCK_SIZE_N, dim=1)
+                tile = smem.slice(i * BLOCK_SIZE_M, BLOCK_SIZE_M, dim=0).slice(j * BLOCK_SIZE_N, BLOCK_SIZE_N, dim=1)
                 tile_vals = tile.load(blocked_layout)
                 linear_idx = ttgl.full((BLOCK_SIZE_M, BLOCK_SIZE_N), j + i * (N // BLOCK_SIZE_N), tile_vals.dtype,
                                        layout=blocked_layout)
