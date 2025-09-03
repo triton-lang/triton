@@ -1241,8 +1241,9 @@ def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, device):
             for j in ttgl.static_range(N // BLOCK_SIZE_N):
                 tile = smem.slice(i * BLOCK_SIZE_M, BLOCK_SIZE_M, dim=0).slice(j * BLOCK_SIZE_N, BLOCK_SIZE_N, dim=1)
                 tile_vals = tile.load(blocked_layout)
-                linear_idx = ttgl.full((BLOCK_SIZE_M, BLOCK_SIZE_N), j + i * (N // BLOCK_SIZE_N), tile_vals.dtype,
-                                       layout=blocked_layout)
+                tile_offs_m = ttgl.arange(0, BLOCK_SIZE_M, layout=ttgl.SliceLayout(1, blocked_layout))[:, None]
+                tile_offs_n = ttgl.arange(0, BLOCK_SIZE_N, layout=ttgl.SliceLayout(0, blocked_layout))[None, :]
+                linear_idx = tile_offs_m * N + tile_offs_n + i * BLOCK_SIZE_M * N + j * BLOCK_SIZE_N
                 tile.store(linear_idx + tile_vals)
 
         vals = smem.load(blocked_layout)
@@ -1251,13 +1252,5 @@ def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, device):
     out = torch.zeros((M, N), device=device, dtype=torch.float16)
     kernel[(1, )](out, M, N, M_tile_size, N_tile_size, blocked_layout, shared_layout)
 
-    rows = []
-    for m in range(num_repeats_M):
-        columns = []
-        for n in range(num_repeats_N):
-            linear_idx = n + m * num_repeats_N
-            tile = float(linear_idx) * torch.ones((M_tile_size, N_tile_size), device=device, dtype=torch.float16)
-            columns.append(tile)
-        rows.append(torch.cat(columns, dim=1))
-    out_ref = torch.cat(rows, dim=0)
+    out_ref = torch.arange(0, M * N, device=device).reshape((M, N)).to(torch.float16)
     torch.testing.assert_close(out, out_ref, rtol=0, atol=0)
