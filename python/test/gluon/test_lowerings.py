@@ -1216,8 +1216,6 @@ def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, device):
         pytest.skip(f"Shape size ({M}, {N}) must be divisible by tile size ({M_tile_size}, {N_tile_size})")
 
     num_rows_per_warp = THREADS_PER_WARP // 4
-    num_repeats_M = M // M_tile_size
-    num_repeats_N = N // N_tile_size
     blocked_layout = ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[num_rows_per_warp, 4],
                                         warps_per_cta=[4, 1], order=[1, 0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=8, per_phase=1, max_phase=8, order=[1, 0])
