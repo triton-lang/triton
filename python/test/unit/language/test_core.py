@@ -323,8 +323,8 @@ def is_layout_applicable(layout) -> bool:
         target_arch = triton.runtime.driver.active.get_current_target().arch
         if isinstance(layout, PaddedSharedLayout):
             return True
-        elif "gfx11" in target_arch:
-            # RDNA 3
+        elif any(arch for arch in ["gfx11", "gfx12"] if arch in target_arch):
+            # RDNA 3, 4
             return isinstance(layout, WmmaLayout)
         elif any(arch for arch in ["gfx8", "gfx9"] if arch in target_arch):
             # CDNA 1, 2, 3, 4
