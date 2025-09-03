@@ -191,7 +191,7 @@ def plot_roofline(series, flops_dtype, out_path, max_tbps="memset", max_tflops="
         comp_x = [x_knee] + xs[knee_idx:]
         comp_y = [max_tflops] * (1 + (n - knee_idx))
 
-    y_roof_sampled = [min(op * max_tbps, max_tflops) for op in opints]
+    y_roof = [min(op * max_tbps, max_tflops) for op in opints]
 
     # --- helpers ---
     def interp(yxs, yys, x):
@@ -233,13 +233,13 @@ def plot_roofline(series, flops_dtype, out_path, max_tbps="memset", max_tflops="
     xmin, xmax = xs[0], xs[-1]
     dx = 0.05 * (xmax - xmin) if xmax > xmin else 1.0
     ax.set_xlim(xmin - dx, xmax + dx)
-    ax.set_ylim(min(y_roof_sampled) * 0.8 if y_roof_sampled else 0.0, max_tflops * 1.05)
+    ax.set_ylim(min(y_roof) * 0.8 if y_roof else 0.0, max_tflops * 1.05)
 
     # Points of interest
     if points_of_interest:
         for x_pt, label in points_of_interest.items():
             y_pt = interp(xs, series_perf[0], x_pt)
-            y_rf = interp(xs, y_roof_sampled, x_pt)
+            y_rf = interp(xs, y_roof, x_pt)
             ax.plot([x_pt], [y_pt], marker="o", ms=4, mfc="white", mec="black", zorder=3)
             ax.annotate(f"{label}\n{int(y_pt)} TFLOP/s ({int(y_pt/y_rf*100)}%)", xy=(x_pt, y_pt), xytext=(5, -25),
                         textcoords="offset points", fontsize=7, ha="left", va="bottom")
