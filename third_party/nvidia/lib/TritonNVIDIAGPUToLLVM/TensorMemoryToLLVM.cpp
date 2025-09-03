@@ -740,6 +740,22 @@ static FailureOr<SmallVector<Value>> lowerTMemLdStFromTypes(
   return resultVals;
 }
 
+static void createWaitOpSt(Location loc, ConversionPatternRewriter &rewriter) {
+  PTXBuilder ptxBuilder;
+  std::string opcode = "tcgen05.wait::st.sync.aligned;";
+  auto &wait = *ptxBuilder.create<PTXInstr>(opcode);
+  wait({}, /*onlyAttachMLIRArgs=*/true);
+  ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+}
+
+static void createWaitOpLd(Location loc, ConversionPatternRewriter &rewriter) {
+  PTXBuilder ptxBuilder;
+  std::string opcode = "tcgen05.wait::ld.sync.aligned;";
+  auto &wait = *ptxBuilder.create<PTXInstr>(opcode);
+  wait({}, /*onlyAttachMLIRArgs=*/true);
+  ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+}
+
 struct TensorMemoryLoadOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMLoadOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -767,7 +783,8 @@ struct TensorMemoryLoadOpConversion
     Value resultStruct = packLLElements(loc, getTypeConverter(), *resultValsOr,
                                         rewriter, structTy);
     // Wait insertion could be moved to the TTGIR level if needed.
-    rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::LOAD);
+    // rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::LOAD);
+    createWaitOpLd(loc, rewriter);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -799,7 +816,8 @@ struct TensorMemoryStoreOpConversion
                                maxnreg, pred, llvmElemTy, srcValues);
     if (failed(lowered))
       return failure();
-    rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::STORE);
+    // rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::STORE);
+    createWaitOpSt(loc, rewriter);
 
     // Emit a barrier to ensure all threads have finished writing to tensor
     // memory before any use of the tensor memory.
@@ -847,7 +865,8 @@ struct TensorMemoryAllocOpConversion
                                  b.i1_val(true), llvmElemTy, srcValues);
       if (failed(lowered))
         return failure();
-      rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::STORE);
+      // rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::STORE);
+      createWaitOpSt(loc, rewriter);
       // Emit a barrier to ensure all threads have finished writing to tensor
       // memory before any use of the tensor memory.
       b.barrier();
