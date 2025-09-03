@@ -115,6 +115,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
        !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
     ttng.tc_gen5_commit %barrier : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
 
+    // There is an impure op between mma and commit ops. Do not allow merging in such cases.
+    // CHECK: tc_gen5_commit
+    ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred {is_async} :
+       !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x256xf8E5M2, #shared1, #ttg.shared_memory>,
+       !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
+    ttng.wait_barrier %barrier, %c0_i32 : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
+    ttng.tc_gen5_commit %barrier : !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
+
     tt.return
   }
 }
