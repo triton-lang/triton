@@ -101,19 +101,6 @@ struct TCGen5MMAScaleSharedToTmemConversion
   }
 };
 
-bool containsMMAv5Op(Operation *op) {
-  if (isa<MMAv5OpInterface>(op)) {
-    return true;
-  } else if (auto br = dyn_cast<RegionBranchOpInterface>(op)) {
-    bool found = false;
-    br->walk([&](Operation *opInRegion) {
-      found |= isa<MMAv5OpInterface>(opInRegion);
-    });
-    return found;
-  }
-  return false;
-}
-
 std::pair<SmallVector<TCGen5CommitOp>, SmallVector<Value>>
 collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
   auto isConstTrue = [](Value v) {
@@ -130,7 +117,7 @@ collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
   auto mmaPred = mmaOp.getPredicate();
   Operation *nextOp = mmaOp->getNextNode();
 
-  while (nextOp && !containsMMAv5Op(nextOp)) {
+  while (nextOp) {
     if (auto commit = dyn_cast<TCGen5CommitOp>(nextOp)) {
       // If the mma predicate is true, or mma and commit ops use the same
       // predicate, it is safe to merge them
