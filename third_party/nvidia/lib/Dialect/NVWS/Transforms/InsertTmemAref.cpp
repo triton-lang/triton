@@ -40,25 +40,23 @@ using namespace triton::nvws;
 
 struct TmemAccessDag {
   struct Node {
-    Operation *op = {};
-    OpOperand *tokOperand = {};
-    std::optional<int> tokPos = {};
-    std::optional<PartitionId> partitionId = {};
-    Node *parent = {};
-    Node *parentDag = {};
-
     // For now we assume there is only one use of generated async tmem token
-    std::unique_ptr<Node> user = {};
-    SmallVector<std::unique_ptr<Node>> subDags = {};
+    std::unique_ptr<Node> user;
+    SmallVector<std::unique_ptr<Node>> subDags;
     Node(Operation *op, OpOperand *tokOperand,
          std::optional<PartitionId> partitionId, Node *parent)
         : op(op), tokOperand(tokOperand), partitionId(partitionId),
           parent(parent), parentDag(nullptr) {}
-  };
 
-  std::unique_ptr<Node> dag;
-  DenseMap<Operation *, Node *> op2dagMap;
-  DenseMap<scf::ForOp, TMEMAllocOp> arefTmemAllocs;
+    // ------------------------------------------------------------------------
+
+    Operation *op;
+    OpOperand *tokOperand;
+    Node *parent;
+    Node *parentDag;
+    std::optional<int> tokPos;
+    std::optional<PartitionId> partitionId;
+  };
 
   TmemAccessDag(std::unique_ptr<Node> dag) : dag(std::move(dag)) {}
 
@@ -316,6 +314,12 @@ struct TmemAccessDag {
     printNode(dag.get(), 2, os);
     os << "\n";
   }
+
+  // --------------------------------------------------------------------------
+
+  std::unique_ptr<Node> dag;
+  DenseMap<Operation *, Node *> op2dagMap;
+  DenseMap<scf::ForOp, TMEMAllocOp> arefTmemAllocs;
 };
 
 Value intCst(OpBuilder &b, Location loc, int value, unsigned width) {
@@ -349,14 +353,6 @@ OpT createInto(OpBuilder &b, Location loc,
 
 struct TMEMAref {
   enum Kind { PUT, GET };
-  Value origBuffer;
-  Value aref;
-  Value replToken;
-
-  Value buffer;
-  Value token;
-  Kind kind;
-  std::optional<AsyncOp> asyncOp;
 
   TMEMAref(Value aref, Value origBuffer, Value replToken)
       : aref(aref), origBuffer(origBuffer), replToken(replToken), kind(PUT) {}
@@ -419,6 +415,17 @@ struct TMEMAref {
     }
     return buffer;
   }
+
+  // --------------------------------------------------------------------------
+
+  Value origBuffer;
+  Value aref;
+  Value replToken;
+
+  Value buffer;
+  Value token;
+  Kind kind;
+  std::optional<AsyncOp> asyncOp;
 };
 
 TmemAccessDag::Node *
