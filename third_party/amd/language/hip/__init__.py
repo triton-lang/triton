@@ -23,6 +23,5 @@
 #
 ################################################################################
 from . import libdevice
-# TODO: import librocshmem_device
 
-__all__ = ["libdevice"]
+__all__ = ["libdevice", "librocshmem_device"]

@@ -14,6 +14,7 @@ import re
 import subprocess
 import functools
 from pathlib import Path
+import os
 
 
 def get_min_dot_size(target: GPUTarget):
@@ -84,7 +85,10 @@ class HIPOptions:
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         for lib in ["ocml", "ockl"]:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
+        rocshmem_device_lib = str(default_libdir / 'librocshmem_device.bc')
+
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
+        object.__setattr__(self, 'rocshmem_device_lib', rocshmem_device_lib)
 
     def hash(self):
         key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
@@ -145,8 +149,12 @@ class HIPBackend(BaseBackend):
 
     def get_module_map(self) -> Dict[str, ModuleType]:
         from triton.language.extra.hip import libdevice
+        from triton.language.extra.hip import librocshmem_device
 
-        return {"triton.language.extra.libdevice": libdevice}
+        return {
+            "triton.language.extra.libdevice": libdevice, "triton_dist.language.extra.libshmem_device":
+            librocshmem_device
+        }
 
     def load_dialects(self, ctx):
         distributed.ir.load_dialects(ctx)
@@ -399,6 +407,9 @@ class HIPBackend(BaseBackend):
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
+        if options.rocshmem_device_lib and metadata['use_rocshmem']:
+            llvm.link_extern_libs(llvm_mod, [options.rocshmem_device_lib])
+
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
         if knobs.amd.scalarize_packed_fops:
@@ -422,6 +433,16 @@ class HIPBackend(BaseBackend):
         names = re.findall(r"define amdgpu_kernel void @([a-zA-Z_][a-zA-Z0-9_]*)", src)
         assert len(names) == 1
         metadata["name"] = names[0]
+
+        # Debug llir issue from rocshmem bitcode
+        if os.environ.get("LLIR_ENABLE_DUMP", "0") == "1":
+            with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.ll') as ll_file:
+                ll_file.write(src)
+                ll_path = ll_file.name
+                with open(ll_path) as f:
+                    print("// -----// LLIR Dump //----- //")
+                    print(f.read())
+
         # llvm -> hsaco
         flags = []
         # The sink-insts-to-avoid-spills flag asks LLVM backend to sink instructions
