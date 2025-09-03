@@ -141,8 +141,9 @@ static bool isConvertLayoutTrivial(RankedTensorType dstTy, Value value) {
   return dims.empty() || (dims.size() == 1 && dims.front() == "register");
 }
 
-template <typename T> std::vector<T> toStdVector(llvm::ArrayRef<T> array) {
-  return std::vector<T>(array.begin(), array.end());
+template <typename R>
+std::vector<llvm::ValueTypeFromRangeType<R>> toStdVector(R &&range) {
+  return {range.begin(), range.end()};
 }
 
 py::object layoutToGluon(Attribute layout) {
@@ -169,7 +170,7 @@ py::object layoutToGluon(Attribute layout) {
     return layouts.DistributedLinearLayout(
         ll.getBases().lookup(kReg), ll.getBases().lookup(kLane),
         ll.getBases().lookup(kWarp), ll.getBases().lookup(kBlock),
-        toStdVector(ArrayRef(llvm::to_vector(ll.getOutDimSizes()))));
+        toStdVector(ll.getOutDimSizes()));
   } else if (auto dotOp = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
     return layouts.DotOperandLayout(
         dotOp.getOpIdx(), layoutToGluon(dotOp.getParent()), dotOp.getKWidth());
@@ -236,7 +237,7 @@ py::object layoutToGluon(Attribute layout) {
     auto kOffset = mlir::StringAttr::get(ctx, "offset");
     auto kBlock = mlir::StringAttr::get(ctx, "block");
     const auto &ll = paddedShared.getLinearComponent();
-    auto shape = toStdVector(ArrayRef(llvm::to_vector(ll.getOutDimSizes())));
+    auto shape = toStdVector(ll.getOutDimSizes());
     return layouts.PaddedSharedLayout(intervalPaddingPairs,
                                       ll.getBases().lookup(kOffset),
                                       ll.getBases().lookup(kBlock), shape);
