@@ -1225,8 +1225,8 @@ def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, device):
     @gluon.jit
     def kernel(
         out,
-        M,
-        N,
+        M: ttgl.constexpr,
+        N: ttgl.constexpr,
         BLOCK_SIZE_M: ttgl.constexpr,
         BLOCK_SIZE_N: ttgl.constexpr,
         blocked_layout: ttgl.constexpr,
