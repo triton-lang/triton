@@ -1222,7 +1222,7 @@ def test_memdesc_subslice(M, N, M_tile_size, N_tile_size, device):
                                         warps_per_cta=[4, 1], order=[1, 0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=8, per_phase=1, max_phase=8, order=[1, 0])
 
-    @ttgl.jit
+    @gluon.jit
     def kernel(
         out,
         M,
