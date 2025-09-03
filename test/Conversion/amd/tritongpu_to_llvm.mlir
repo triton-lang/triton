@@ -480,6 +480,36 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+#shared = #ttg.padded_shared<[4:+4] {offset=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0], [2, 0], [4, 0], [8, 0]], block=[]}>
+#smem = #ttg.shared_memory
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 4], instrShape = [16, 16], isTransposed = true}>
+module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: padded_shared_layout_vectorization_limited_by_min_interval
+  tt.func @padded_shared_layout_vectorization_limited_by_min_interval(%arg0: tensor<16x32xf16, #blocked>) {
+    // CHECK-NOT: llvm.store
+    // CHECK: llvm.store {{.*}} : vector<4xf16>
+    // CHECK: llvm.store {{.*}} : vector<4xf16>
+    // CHECK-NOT: llvm.store
+    %0 = ttg.local_alloc %arg0 : (tensor<16x32xf16, #blocked>) -> !ttg.memdesc<16x32xf16, #shared, #smem, mutable>
+
+    // CHECK-NOT: llvm.load
+    // CHECK: llvm.load {{.*}} !llvm.ptr<3> -> vector<4xf16>
+    // CHECK: llvm.load {{.*}} !llvm.ptr<3> -> vector<4xf16>
+    // CHECK-NOT: llvm.load
+    %1 = ttg.local_load %0: !ttg.memdesc<16x32xf16, #shared, #smem, mutable, 16x32> -> tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+
+    // CHECK-NOT: llvm.store
+    // CHECK: llvm.store {{.*}} : vector<4xf16>
+    // CHECK: llvm.store {{.*}} : vector<4xf16>
+    // CHECK-NOT: llvm.store
+    ttg.local_store %1, %0 : tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> -> !ttg.memdesc<16x32xf16, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 // GFX950-LABEL: reduce_32x32
 // GFX950: llvm.call_intrinsic "llvm.amdgcn.permlane32.swap"
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
