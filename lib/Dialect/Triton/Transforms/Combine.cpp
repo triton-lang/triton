@@ -257,14 +257,13 @@ public:
         return failure();
       }
     }
+    rewriter.modifyOpInPlace(dotOp, [&] {
+      dotOp.getCMutable().assign(isDotLHS ? addOp.getRhs() : addOp.getLhs());
+      dotOp->moveBefore(addOp);
+    });
+    rewriter.replaceAllUsesWith(addOp, dotOp.getResult());
+    return success();
   }
-  rewriter.modifyOpInPlace(dotOp, [&] {
-    dotOp.getCMutable().assign(isDotLHS ? addOp.getRhs() : addOp.getLhs());
-    dotOp->moveBefore(addOp);
-  });
-  rewriter.replaceAllUsesWith(addOp, dotOp.getResult());
-  return success();
-}
 };
 
 // AddIOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
