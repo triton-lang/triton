@@ -811,3 +811,21 @@ def test_2d_tensor_early_return():
     out = torch.empty(1, dtype=torch.int32, device="cuda")
     compiled_kernel = kernel.warmup(N=100, out=out, grid=(1, ))
     assert compiled_kernel.asm["llir"].count("define") == 1
+
+
+def test_inline_with_assume():
+
+    @gluon.jit
+    def to_be_inlined(x):
+        tl.assume(x > 0)
+        return x
+
+    @gluon.jit
+    def kernel(N, out):
+        tl.assume(N > 0)
+        x = to_be_inlined(N)
+        ttgl.store(out, x)
+
+    out = torch.empty(1, dtype=torch.int32, device="cuda")
+    compiled_kernel = kernel.warmup(N=100, out=out, grid=(1, ))
+    assert compiled_kernel.asm["ttgir"].count("tt.func private") == 0
