@@ -1,6 +1,6 @@
 import torch
 import triton
-from triton_kernels.target_info import get_cdna_version
+from triton_kernels.target_info import get_cdna_version, get_rdna_version
 from triton_kernels.tensor import bitwidth
 
 
@@ -23,6 +23,9 @@ def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precisi
     if get_cdna_version() == 4 and block_m == 128:
         block_n = 512
 
+    if get_rdna_version() != -1 and block_m == 64:
+        block_n = 256
+
     # block_k needs to match the cacheline size (128B)
     block_k = int(128 // min(lhs_width, rhs_width))
 
@@ -30,4 +33,7 @@ def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precisi
     #       perhaps due to increased number of k loops to pipeline
     if precision_config.b_mx_scale is not None and get_cdna_version() != 4:
         block_k = 128
+
+    if precision_config.b_mx_scale is not None and get_rdna_version() != -1 and block_m == 64:
+        block_k = 64
     return block_n, block_k

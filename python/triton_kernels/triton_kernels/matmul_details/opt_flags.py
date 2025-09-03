@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import triton
 from triton_kernels import target_info
-from triton_kernels.target_info import get_cdna_version
+from triton_kernels.target_info import get_cdna_version, get_rdna_version
 from triton_kernels.tensor import FP4
 import torch
 from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXScaleLayout
@@ -83,6 +83,8 @@ def make_default_opt_flags_amd(
         block_m = 256 if is_cdna4 else 128
     elif is_cdna4 and m >= 512:
         block_m = 128
+    elif get_rdna_version() != -1 and m >= 512:
+        block_m = 64
     else:
         block_m = max(32, min(triton.next_power_of_2(slice_size), 64))
 
