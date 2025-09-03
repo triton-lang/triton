@@ -132,10 +132,22 @@ static void checkMatmulConstraints(const std::string &A_dtype,
                                    const std::vector<int> &A_shape,
                                    const std::vector<int> &B_shape,
                                    const std::vector<int> &C_shape) {
-  if (A_dtype != B_dtype || A_dtype != C_dtype) {
-    throw std::runtime_error("Data types do not match.");
+  // Allow C to be float16 when A/B are FP8; otherwise all must match
+  bool ab_are_fp8 = (A_dtype == "torch.float8_e4m3fnuz" &&
+                     B_dtype == "torch.float8_e4m3fnuz");
+  bool c_is_f16 = (C_dtype == "torch.float16");
+
+  if (ab_are_fp8) {
+    if (!c_is_f16) {
+      throw std::runtime_error(
+          "When A/B are torch.float8_e4m3fnuz, C must be torch.float16.");
+    }
+  } else {
+    if (!(A_dtype == B_dtype && A_dtype == C_dtype)) {
+      throw std::runtime_error("Data types do not match.");
+    }
   }
-  if (A_dtype != "torch.float8_e4m3fn" && A_dtype != "torch.float16" &&
+  if (A_dtype != "torch.float8_e4m3fnuz" && A_dtype != "torch.float16" &&
       A_dtype != "torch.float32" && A_dtype != "torch.bfloat16") {
     throw std::runtime_error("Unsupported data type.");
   }
@@ -432,7 +444,7 @@ void init_triton_amd(py::module &&m) {
                  A_dtype.substr(A_dtype.find_last_of('.') + 1);
              hipDataType dtype;
 
-             if (dtype_str == "float8_e4m3fn") {
+             if (dtype_str == "float8_e4m3fnuz") {
                dtype = HIP_R_8F_E4M3_FNUZ;
              } else if (dtype_str == "float16") {
                dtype = HIP_R_16F;
@@ -477,8 +489,9 @@ void init_triton_amd(py::module &&m) {
 
         std::string dtype_str = A_dtype.substr(A_dtype.find_last_of('.') + 1);
         hipDataType dtype;
-        if (dtype_str == "float8_e4m3fn") {
-          dtype = HIP_R_8F_E4M3_FNUZ;
+        if (dtype_str == "float8_e4m3fnuz") {
+          dtype = HIP_R_8F_E4M3_FNUZ; // How should we direct whether or not to
+                                      // use FNUZ?
         } else if (dtype_str == "float16") {
           dtype = HIP_R_16F;
         } else if (dtype_str == "float32") {

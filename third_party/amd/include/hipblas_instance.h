@@ -115,10 +115,46 @@ class HipBlasLtInstance {
 
   void unloadHipBlasDylib() { dlclose(dylibHandle); }
 
-  void successOrExit(hipblasStatus_t status) {
+  void successOrExit(hipblasStatus_t status, const std::string &context = "") {
     if (status != HIPBLAS_STATUS_SUCCESS) {
-      throw std::runtime_error("HIPBLAS Error: " + std::to_string(status) +
-                               "\n");
+      std::string error_msg =
+          "HIPBLAS Error in " + context + ": " + std::to_string(status);
+
+      switch (status) {
+      case HIPBLAS_STATUS_NOT_INITIALIZED:
+        error_msg += " (NOT_INITIALIZED)";
+        break;
+      case HIPBLAS_STATUS_ALLOC_FAILED:
+        error_msg += " (ALLOC_FAILED)";
+        break;
+      case HIPBLAS_STATUS_INVALID_VALUE:
+        error_msg += " (INVALID_VALUE - Parameters are unexpectedly NULL, in "
+                     "conflict or in impossible configuration)";
+        break;
+      case HIPBLAS_STATUS_MAPPING_ERROR:
+        error_msg += " (MAPPING_ERROR)";
+        break;
+      case HIPBLAS_STATUS_EXECUTION_FAILED:
+        error_msg += " (EXECUTION_FAILED)";
+        break;
+      case HIPBLAS_STATUS_INTERNAL_ERROR:
+        error_msg += " (INTERNAL_ERROR)";
+        break;
+      case HIPBLAS_STATUS_NOT_SUPPORTED:
+        error_msg += " (NOT_SUPPORTED)";
+        break;
+      case HIPBLAS_STATUS_INVALID_ENUM:
+        error_msg +=
+            " (INVALID_ENUM - unsupported enum value was passed to function)";
+        break;
+      case HIPBLAS_STATUS_UNKNOWN:
+        error_msg += " (UNKNOWN)";
+        break;
+      default:
+        error_msg += " (UNKNOWN_ERROR_CODE)";
+      }
+
+      throw std::runtime_error(error_msg + "\n");
     }
   }
 
@@ -138,9 +174,14 @@ class HipBlasLtInstance {
     int returnedResults = 0;
     hipblasLtMatmulHeuristicResult_t heuristicResult = {};
 
-    hipblasComputeType_t computeType = (dtype == HIP_R_32F)
-                                           ? HIPBLAS_COMPUTE_32F_FAST_TF32
-                                           : HIPBLAS_COMPUTE_32F;
+    hipblasComputeType_t computeType;
+    if (dtype == HIP_R_32F) {
+      computeType = HIPBLAS_COMPUTE_32F_FAST_TF32;
+    } else if (dtype == HIP_R_8F_E4M3_FNUZ) {
+      computeType = HIPBLAS_COMPUTE_32F_FAST_8F_FNUZ;
+    } else {
+      computeType = HIPBLAS_COMPUTE_32F;
+    }
     successOrExit(
         hipblasLtMatmulDescCreate(&matmulDesc, computeType, HIP_R_32F));
     successOrExit(hipblasLtMatmulDescSetAttribute(
@@ -153,14 +194,28 @@ class HipBlasLtInstance {
     successOrExit(hipblasLtMatrixLayoutCreate(&Adesc, dtype, k, m, k));
     successOrExit(hipblasLtMatrixLayoutCreate(&Bdesc, dtype, k, n, k));
     successOrExit(hipblasLtMatrixLayoutCreate(&Cdesc, c_dtype, m, n, m));
-    successOrExit(hipblasLtMatrixLayoutCreate(&Ddesc, dtype, m, n, m));
+    // FP8 inputs require FP16 output layout for valid heuristics?
+    successOrExit(hipblasLtMatrixLayoutCreate(&Ddesc, c_dtype, m, n, m));
     successOrExit(hipblasLtMatmulAlgoGetHeuristic(
-        ltHandle, matmulDesc, Adesc, Bdesc, Cdesc, Ddesc, preference, 1,
+        ltHandle, matmulDesc, Adesc, Bdesc, Cdesc, Ddesc, preference,
+        1, // should we increase this value if they want more?
         &heuristicResult, &returnedResults));
 
     if (returnedResults == 0) {
-      throw std::runtime_error(
-          "No valid algorithm found by hipblasLtMatmulAlgoGetHeuristic");
+      std::string error_msg =
+          "No valid algorithm found by hipblasLtMatmulAlgoGetHeuristic\n";
+      error_msg += "Matrix details:\n";
+      error_msg += "  A: dtype=" + std::to_string(dtype) + ", shape=(" +
+                   std::to_string(k) + "," + std::to_string(m) + ")\n";
+      error_msg += "  B: dtype=" + std::to_string(dtype) + ", shape=(" +
+                   std::to_string(k) + "," + std::to_string(n) + ")\n";
+      error_msg += "  C: dtype=" + std::to_string(c_dtype) + ", shape=(" +
+                   std::to_string(m) + "," + std::to_string(n) + ")\n";
+      error_msg += "  D: dtype=" + std::to_string(dtype) + ", shape=(" +
+                   std::to_string(m) + "," + std::to_string(n) + ")\n";
+      error_msg += "  Compute type: " + std::to_string(computeType) + "\n";
+      error_msg += "  Requested algorithms: 1\n";
+      throw std::runtime_error(error_msg);
     }
 
     if (heuristicResult.workspaceSize > workspaceSize) {
