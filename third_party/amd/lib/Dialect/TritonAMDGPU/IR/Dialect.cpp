@@ -26,6 +26,7 @@
 #include "mlir/IR/OpImplementation.h"
 #include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -49,6 +50,8 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
 #define GET_OP_LIST
 #include "Dialect/TritonAMDGPU/IR/Ops.cpp.inc"
       >();
+
+  addInterfaces<TritonInlinerInterface>();
 }
 
 #include "Dialect/TritonAMDGPU/IR/TritonAMDGPUEnums.cpp.inc"
