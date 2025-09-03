@@ -6,7 +6,7 @@ include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 
 //===----------------------------------------------------------------------===//
-// Traits and Interfaces
+// Traits, Interfaces and shared Parameters
 //===----------------------------------------------------------------------===//
 
 def MemDescViewTrait : NativeOpTrait<"MemDescViewTrait">;
@@ -54,6 +54,11 @@ def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
 }
 def DeclareSharedEncodingMethods : DeclareAttrInterfaceMethods<
   SharedEncodingTrait, ["getAlignment"]>;
+
+def LinearLayoutParam : AttrOrTypeParameter<"LinearLayout",
+                                            "linear layout"> {
+  let cppAccessorType = "const LinearLayout &";
+}
 
 //===----------------------------------------------------------------------===//
 // Base Attribute
@@ -369,14 +374,15 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
 
 def PaddedSharedEncodingAttr
     : TritonGPU_Attr<"PaddedSharedEncoding", "padded_shared_encoding",
-                     [SharedEncodingTrait, LayoutEncodingTrait]> {
+                     [SharedEncodingTrait, DeclareLayoutEncodingMethods]> {
   let mnemonic = "padded_shared";
 
   let description = [{
 An encoding for tensors whose elements may be simultaneously accessed by
 different GPU threads in the programs, via shared memory. In other words,
 for all indices i \in Z^d, \mathcal{L}(i) = {0, 1, ..., 32*num_warps - 1}.
-Compared to SwizzledSharedEncodingAttr, this encoding uses padding to avoid
+Compared to SwizzledSharedEncodingAttr, this encoding combines padding with
+element reordering via linear transformation (e.g. row permutation) to avoid
 shared memory bank conflicts.
 
 Formally, given a layout:
@@ -388,48 +394,93 @@ at index i, the corresponding shared memory location index is
     i + \sum_{k} (i / interval_k) * pad_k = 1
 `<interval_i>` and `<pad_i>` all need to be power of two.
 
-Some concrete examples, using `eM` to mean tensor elements and `pN` to mean
-padding:
+Some concrete examples ignoring the linear component, using `eM` to mean tensor
+elements and `pN` to mean padding:
 
 1. Single interval-padding pair:
 
-   #ttg.padded_shared<[2:+2]>
+   #ttg.padded_shared<[2:+2], {...}>
    [e0, e1, p0, p1,
     e2, e3, p2, p3,
     ...]
 
 2. Double interval-padding pairs:
 
-   #ttg.padded_shared<[2:+1, 4:+2]>
+   #ttg.padded_shared<[2:+1, 4:+2], {...}>
    [e0, e1, p0,
     e2, e3, p1, p2, p3,
     e4, e5, p4,
     e6, e7, p5, p6, p7,
     ...]
 
-In addition to interval-padding pairs, this encoding requires an `order` to
-specify the logical tensor dimenions from the fastest-to slowest-varying.
-It may optionally support CGA level organization like other encoding
-attributes too, for example,
-    #ttg.padded_shared<[2:+1, 4:+2] {
-        order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1],
-        CTAOrder = [0, 1]}>
+Furthermore this encoding allows for a linear remapping from the 1-D shared
+memory offset to logical n-D tensor elements. The remapping is given in the form
+of linear bases mapping from offset to [dim0, dim1...dimN-1].
+See LinearLayout.h for more details how linear layouts are applied to remap
+elements.
+Some concrete examples using `xN` and `yN` to mean the logical n-D tensor elements
+and `pN` to mean padding:
+
+1. 1D Single interval-padding with strided elements
+
+    #ttg.padded_shared<[2:+2] {offset = [[2], [1]], block = []}>
+    [x0, x2, p0 p1,
+     x1, x3, p2, p3
+     ...]
+
+2. 2D single interval-padding with rearanged rows.
+
+    #ttg.padded_shared<[16:+1] {offset = [[0, 1], [0, 2], /*gap, stride by 2 rows*/[2, 0], [4, 0], [1, 0]]], block = []}>
+    [
+      x0y0, x0y1, x0y2, x0y3,
+      x2y0, x2y1, x2y2, x2y3,
+      x4y0, x4y1, x4y2, x4y3,
+      x6y0, x6y1, x6y2, x6y3,
+      p0,
+      x1y0, x1y1, x1y2, x1y3,
+      x3y0, x3y1, x3y2, x3y3,
+      x5y0, x5y1, x5y2, x5y3,
+      x7y0, x7y1, x7y2, x7y3,
+      p1,
+    ]
+
+For identity mappings a short form based on order and shape is used to increase readability. The following two encodings are the same:
+
+    #ttg.padded_shared<[2:+2] {order = [1, 0], shape = [16, 32]}>
+    #ttg.padded_shared<[2:+2] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0], [2, 0], [4, 0], [8, 0]], block = []}>
+
+
   }];
 
   let parameters = (ins
       ArrayRefParameter<"unsigned">:$intervals,
       ArrayRefParameter<"unsigned">:$paddings,
-      // Order of logical tensor dimensions; fastest-varying first.
-      ArrayRefParameter<"unsigned">:$order,
-      "CTALayoutAttr":$CTALayout
+      LinearLayoutParam:$linearComponent
   );
 
   let builders = [
       AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
-                       "ArrayRef<unsigned>":$order, "CTALayoutAttr":$ctaLayout)>,
+                       "LinearLayout":$linearComponent)>,
+
+      // Builder to create an identity mapping as the linear component
+      AttrBuilder<(ins "ArrayRef<std::pair<unsigned, unsigned>>":$intervalPads,
+                       "ArrayRef<unsigned>":$order, "ArrayRef<int64_t>":$shape,
+                       "CTALayoutAttr":$ctaLayout)>,
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
+    // Returns the order of the dimensions `dimName` of the layout.
+    // If more than dimension is of size one, it uses defaultOrder to determine
+    // the order of the dimensions of size one.
+    SmallVector<unsigned> orderPerDim(StringAttr dimName,
+                                      ArrayRef<unsigned> defaultOrder) const;
+    SmallVector<unsigned> getOrder() const;
+
+    // Returns the bases of the dimensions `dimName` of the linear_component.
+    // If skipBroadcast is false, we count a base zero
+    SmallVector<unsigned> basesPerDim(StringAttr dimName,
+                                      bool skipBroadcast = true) const;
+
     unsigned getMinInterval() const {
       return *llvm::min_element(getIntervals());
     }
@@ -706,11 +757,6 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
 //===----------------------------------------------------------------------===//
 // Linear Layout Encoding
 //===----------------------------------------------------------------------===//
-
-def LinearLayoutParam : AttrOrTypeParameter<"LinearLayout",
-                                            "linear layout"> {
-  let cppAccessorType = "const LinearLayout &";
-}
 
 def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding", [DeclareLayoutEncodingMethods]> {
   let mnemonic = "linear";
