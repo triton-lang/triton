@@ -22,7 +22,7 @@ def _is_layout_applicable(layout) -> bool:
             return False
         return True
     elif is_hip():
-        if isinstance(layout, ttgl.PaddedSharedLayout):
+        if layout in ["padded_shared_layout_single_interval", "padded_shared_layout_multi_interval"]:
             return True
         # TODO: Add other amd layouts
         return isinstance(layout, ttgl.amd.AMDMFMALayout)
@@ -383,10 +383,8 @@ _intermediate_layouts = _filter_layouts([
     ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0]),
     ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=4, order=[1, 0]),
     ttgl.SwizzledSharedLayout(vec=2, per_phase=2, max_phase=4, order=[1, 0]),
-    ttgl.PaddedSharedLayout(interval_padding_pairs=[[32, 8]], order=[1, 0], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                            cta_order=[0, 1]),
-    ttgl.PaddedSharedLayout(interval_padding_pairs=[[64, 4], [128, 8]], order=[1, 0], ctas_per_cga=[1, 1],
-                            cta_split_num=[1, 1], cta_order=[0, 1]),
+    "padded_shared_layout_single_interval",
+    "padded_shared_layout_multi_interval",
 ])
 
 
@@ -398,6 +396,10 @@ _intermediate_layouts = _filter_layouts([
 def test_convert2d_layouts(M, N, src_layout, interm_layout, dst_layout, dtype, device):
     if str(src_layout) == str(dst_layout):
         pytest.skip("Source and destination layouts are the same")
+
+    if interm_layout in ["padded_shared_layout_single_interval", "padded_shared_layout_multi_interval"]:
+        int_pad_pairs = [[32, 8]] if "single" in interm_layout else [[64, 4], [128, 8]]
+        interm_layout = ttgl.PaddedSharedLayout.with_identity_for(int_pad_pairs, [M, N], [1, 0])
 
     def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 
