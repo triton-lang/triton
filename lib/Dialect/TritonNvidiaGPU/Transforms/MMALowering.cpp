@@ -126,7 +126,8 @@ collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
         commitPredicates.push_back(commit.getPred());
       }
     } else if (!isPure(nextOp)) {
-      // Only move commits across pure ops
+      // Only move commits across pure ops. We also bail here when encountering
+      // another MMAv5 op.
       break;
     }
     nextOp = nextOp->getNextNode();
