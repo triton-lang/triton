@@ -228,74 +228,116 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
 // needs to be used to be compatible with users' layouts.
 std::optional<ttg::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
-  ttg::SwizzledSharedEncodingAttr attr;
-  for (Operation *user : loadedValue.getUsers()) {
-    LDBG(" getSharedEncIfAllUsersAreDotEnc current user: " << *user);
-    if (user->getNumResults() != 1)
-      return std::nullopt;
+  int commonOpIdx = -1;
+  unsigned maxKWidth = 0;
+  ttg::AMDMfmaEncodingAttr anyMfmaEnc = nullptr;
 
-    ttg::SwizzledSharedEncodingAttr tempAttr;
-    Value userResult = user->getResult(0);
-    Type userResType = userResult.getType();
-    if (auto memDesc = dyn_cast<ttg::MemDescType>(userResType)) {
-      // First time we find a shared encoding in the chain, save it and try to
-      // use it if it is compatible with the other users.
-      tempAttr = cast<ttg::SwizzledSharedEncodingAttr>(memDesc.getEncoding());
-      if (!getSharedEncIfAllUsersAreDotEnc(userResult).has_value())
-        return std::nullopt;
-    } else {
-      if (!(isa<ttg::ConvertLayoutOp>(user) ||
-            user->hasTrait<OpTrait::LocalLoadTrait>()))
-        return std::nullopt;
+  llvm::SmallPtrSet<Operation *, 32> visited;
+  std::function<bool(Value)> dfs = [&](Value v) {
+    for (Operation *user : v.getUsers()) {
+      if (!visited.insert(user).second)
+        continue;
+      LDBG(" getSharedEncIfAllUsersAreDotEnc current user: " << *user);
+      if (user->getNumResults() != 1)
+        return false;
 
-      auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
-      auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
-      auto order = getOrderForMemory(srcTy);
-      unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
-      SmallVector<unsigned> sharedOrder;
-      int rank = order.size();
-      // TODO rework this when shared -> dotOperand conversions support
-      // arbitrary shared memory ordering
-      if (rank == 3) {
-        // Move the batch dimension (dim #0) to be the last so that it will be
-        // the slowest varying dimension.
-        for (unsigned i = 0; i < rank; ++i)
-          if (order[i] != 0)
-            sharedOrder.emplace_back(order[i]);
-        sharedOrder.emplace_back(0);
+      Value userResult = user->getResult(0);
+      Type userResType = userResult.getType();
+
+      if (auto memDesc = dyn_cast<ttg::MemDescType>(userResType)) {
+        if (!dfs(userResult))
+          return false;
       } else {
-        sharedOrder = order;
-      }
+        if (!(isa<ttg::ConvertLayoutOp>(user) ||
+              user->hasTrait<OpTrait::LocalLoadTrait>()))
+          return false;
 
-      auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
-      if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
-        tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-            loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
-            ctaLayout, bitWidth, /*needTrans=*/false);
-        LDBG("Deduced shared encoding based on dot: " << tempAttr);
-      } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
-        // We use linear layout directly for scaled dot fp8 operands. For such
-        // cases, we need to look further down the def-use chain to find the dot
-        // op for the mfma layout to deduce operand index and other information.
-        unsigned opIdx;
-        unsigned vecSize;
-        if (auto mfmaEnc = getDotEncoding(userResult, &opIdx, &vecSize)) {
-          LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
-          tempAttr = mfmaEnc.composeSharedLayoutForOperand(
-              ctaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
-              /*needTrans=*/false);
-          LDBG("Deduced shared encoding based on linear: " << tempAttr);
+        auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
+        if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
+          unsigned opIdx = dotOpEnc.getOpIdx();
+          unsigned kWidth = dotOpEnc.getKWidth();
+          if (commonOpIdx != -1 && commonOpIdx != opIdx) {
+            LDBG("Incompatible operand indices: opIdx: "
+                 << opIdx << "; commonOpIdx: " << commonOpIdx);
+            return false;
+          }
+          commonOpIdx = opIdx;
+          maxKWidth = std::max(maxKWidth, kWidth);
+          if (!anyMfmaEnc) {
+            LDBG("Deducing mfma enc from dotOpEnc: " << dotOpEnc);
+            anyMfmaEnc =
+                dyn_cast<ttg::AMDMfmaEncodingAttr>(dotOpEnc.getParent());
+            LDBG("Deduced mfma enc: " << anyMfmaEnc);
+          }
+
+          LDBG("(Dot) Deduced opIdx: " << opIdx
+                                       << "; deduced kWidth: " << kWidth);
+        } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
+          // We use linear layout directly for scaled dot fp8 operands. For such
+          // cases, we need to look further down the def-use chain to find the
+          // dot op for the mfma layout to deduce operand index and other
+          // information.
+          unsigned opIdx;
+          unsigned kWidth;
+          if (auto mfmaEnc = getDotEncoding(userResult, &opIdx, &kWidth)) {
+            if (commonOpIdx != -1 && commonOpIdx != opIdx) {
+              LDBG("Incompatible operand indices: opIdx: "
+                   << opIdx << "; commonOpIdx: " << commonOpIdx);
+              return false;
+            }
+            commonOpIdx = opIdx;
+            maxKWidth = std::max(maxKWidth, kWidth);
+            if (!anyMfmaEnc) {
+              LDBG("Deducing mfma enc from dotOpEnc: " << dotOpEnc);
+              anyMfmaEnc =
+                  dyn_cast<ttg::AMDMfmaEncodingAttr>(dotOpEnc.getParent());
+              LDBG("Deduced mfma enc: " << anyMfmaEnc);
+            }
+
+            LDBG("(LL) Deduced opIdx: " << opIdx
+                                        << "; deduced kWidth: " << kWidth);
+          }
         }
       }
     }
-    // Check that the shared encodings needed by the users are compatible.
-    if (!tempAttr || (attr != nullptr && attr != tempAttr)) {
-      LDBG("Incompatible encodings");
-      return std::nullopt;
-    }
 
-    attr = tempAttr;
+    return true;
+  };
+
+  if (!dfs(loadedValue)) {
+    LDBG("Encoding not found");
+    return std::nullopt;
   }
+
+  if (!anyMfmaEnc || commonOpIdx == -1 || maxKWidth == 0) {
+    LDBG("Common mfma encoding not found");
+    return std::nullopt;
+  }
+
+  LDBG("Deduced vecSize for the shared encoding: " << maxKWidth);
+  ttg::SwizzledSharedEncodingAttr attr;
+  auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
+  auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
+  auto order = getOrderForMemory(srcTy);
+  unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
+  SmallVector<unsigned> sharedOrder = order;
+  int rank = order.size();
+  // TODO rework this when shared -> dotOperand conversions support
+  // arbitrary shared memory ordering
+  if (rank == 3) {
+    // Move the batch dimension (dim #0) to be the last so that it will be
+    // the slowest varying dimension.
+    for (unsigned i = 0; i < rank; ++i)
+      if (order[i] != 0)
+        sharedOrder.emplace_back(order[i]);
+    sharedOrder.emplace_back(0);
+  }
+
+  attr = anyMfmaEnc.composeSharedLayoutForOperand(ctaLayout, commonOpIdx,
+                                                  srcTy.getShape(), sharedOrder,
+                                                  maxKWidth, bitWidth,
+                                                  /*needTrans=*/false);
+  LDBG("Deduced shared encoding: " << attr);
   return attr;
 }
 
