@@ -783,8 +783,9 @@ struct TensorMemoryLoadOpConversion
     Value resultStruct = packLLElements(loc, getTypeConverter(), *resultValsOr,
                                         rewriter, structTy);
     // Wait insertion could be moved to the TTGIR level if needed.
-    // rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::LOAD);
+    // Use inline asm until tcgen05 NVVM ops are supported for sm_103 by NVPTX.
     createWaitOpLd(loc, rewriter);
+    // rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::LOAD);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -816,8 +817,9 @@ struct TensorMemoryStoreOpConversion
                                maxnreg, pred, llvmElemTy, srcValues);
     if (failed(lowered))
       return failure();
-    // rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::STORE);
+    // Use inline asm until tcgen05 NVVM ops are supported for sm_103 by NVPTX.
     createWaitOpSt(loc, rewriter);
+    // rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::STORE);
 
     // Emit a barrier to ensure all threads have finished writing to tensor
     // memory before any use of the tensor memory.
@@ -865,8 +867,13 @@ struct TensorMemoryAllocOpConversion
                                  b.i1_val(true), llvmElemTy, srcValues);
       if (failed(lowered))
         return failure();
-      // rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::STORE);
+
+      // Use inline asm until tcgen05 NVVM ops are supported for sm_103 by
+      // NVPTX.
       createWaitOpSt(loc, rewriter);
+      // rewriter.create<NVVM::Tcgen05WaitOp>(loc,
+      // NVVM::Tcgen05WaitKind::STORE);
+
       // Emit a barrier to ensure all threads have finished writing to tensor
       // memory before any use of the tensor memory.
       b.barrier();
