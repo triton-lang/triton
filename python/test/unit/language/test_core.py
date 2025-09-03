@@ -5,7 +5,6 @@ import re
 from typing import Optional
 import math
 import textwrap
-import pathlib
 
 import numpy as np
 import pytest
@@ -29,7 +28,6 @@ from triton._internal_testing import (
     is_cuda,
     is_interpreter,
     is_hopper,
-    is_hopper_or_newer,
     is_hip,
     is_hip_cdna,
     is_hip_cdna2,
