@@ -383,6 +383,65 @@ def test_tensor_descriptor_store_nd(dtype_str, num_ctas, ndim, INNER_BLOCK, devi
     torch.testing.assert_close(expect, actual)
 
 
+@pytest.mark.interpreter
+def test_tensor_descriptor_padding():
+
+    @triton.jit
+    def device_tma_load(in_ptr, out_ptr, IM, IN, YM, YN, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
+                        padding: tl.constexpr):
+        x_desc = tl.make_tensor_descriptor(in_ptr, shape=[IM, IN], strides=[IN, 1], block_shape=[M_BLOCK, N_BLOCK],
+                                           padding_option=padding)
+
+        moffset = tl.program_id(0) * M_BLOCK
+        noffset = tl.program_id(1) * N_BLOCK
+
+        value = x_desc.load([moffset, noffset])
+
+        offs_m = moffset + tl.arange(0, M_BLOCK)
+        offs_n = noffset + tl.arange(0, N_BLOCK)
+        tl.store(out_ptr + offs_m[:, None] * YN + offs_n[None, :], value)
+
+    @triton.jit
+    def host_tma_load(in_desc, out_ptr, YM, YN, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
+
+        moffset = tl.program_id(0) * M_BLOCK
+        noffset = tl.program_id(1) * N_BLOCK
+
+        value = in_desc.load([moffset, noffset])
+
+        offs_m = moffset + tl.arange(0, M_BLOCK)
+        offs_n = noffset + tl.arange(0, N_BLOCK)
+        tl.store(out_ptr + offs_m[:, None] * YN + offs_n[None, :], value)
+
+    # TMA descriptors require a global memory allocation
+    def alloc_fn(size: int, alignment: float, stream: float):
+        return torch.ones(size, device="cuda", dtype=torch.float32)
+
+    triton.set_allocator(alloc_fn)
+
+    IM, IN = 48, 48
+    OM, ON = 64, 64
+    M_BLOCK = 32
+    N_BLOCK = 32
+    padding = "nan"
+    input = torch.arange(IM * IN, device="cuda", dtype=torch.float32)
+    input = input.reshape(IM, IN)
+    out_device_tma = torch.zeros((OM, ON), device="cuda", dtype=torch.float32)
+    out_host_tma = torch.zeros((OM, ON), device="cuda", dtype=torch.float32)
+    dummy_block = [M_BLOCK, N_BLOCK]
+    in_desc = TensorDescriptor(input, input.shape, input.stride(), dummy_block, padding=padding)
+    grid = (triton.cdiv(OM, M_BLOCK), triton.cdiv(ON, N_BLOCK))
+    device_tma_load[grid](input, out_device_tma, IM, IN, OM, ON, M_BLOCK, N_BLOCK, padding)
+    host_tma_load[grid](in_desc, out_host_tma, OM, ON, M_BLOCK, N_BLOCK)
+    expected = torch.zeros((OM, ON), device="cuda", dtype=torch.float32)
+    expected[0:IN, 0:IM] = input
+    expected[:, IN:ON] = float('nan')
+    expected[IM:OM, :] = float('nan')
+
+    torch.testing.assert_close(expected, out_device_tma, equal_nan=True)
+    torch.testing.assert_close(expected, out_host_tma, equal_nan=True)
+
+
 @triton.jit(noinline=True)
 def tensor_descriptor_in_function_helper(out_ptr, in_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
     in_desc = tl.make_tensor_descriptor(

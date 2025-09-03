@@ -380,8 +380,6 @@ def create_specialize_impl(specialize_extra):
             return ("constexpr", arg.cache_key)
         elif isinstance(arg, constexpr):
             return ("constexpr", arg)
-        elif hasattr(arg, "tma_desc_cpu_ptr"):
-            return ("nvTmaDesc", None)
         elif isinstance(arg, tuple):
             spec = [specialize_impl(x) for x in arg]
             make_tuple = lambda vals: type(arg)(*vals) if hasattr(arg, "_fields") else tuple(vals)
@@ -501,7 +499,10 @@ class JITCallable:
     def __init__(self, fn):
         self.fn = fn
         self.signature = inspect.signature(fn)
-        self.raw_src, self.starting_line_number = inspect.getsourcelines(fn)
+        try:
+            self.raw_src, self.starting_line_number = inspect.getsourcelines(fn)
+        except OSError as e:
+            raise ValueError("@jit functions should be defined in a Python file") from e
         self._fn_name = get_full_name(fn)
         self._hash_lock = threading.RLock()
 
@@ -768,10 +769,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
         super().__init__(fn)
         self.module = fn.__module__
         self.version = version
-        self.signature = inspect.signature(fn)
         self.do_not_specialize = do_not_specialize
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
-        self.raw_src, self.starting_line_number = inspect.getsourcelines(fn)
         self._repr = repr
         self.launch_metadata = launch_metadata
 
@@ -968,8 +967,17 @@ class MockTensor:
             return MockTensor(arg)
         return arg
 
-    def __init__(self, dtype):
+    def __init__(self, dtype, shape=None):
+        if shape is None:
+            shape = [1]
         self.dtype = dtype
+        self.shape = shape
+
+    def stride(self):
+        strides = [1]
+        for size in self.shape[1:]:
+            strides.append(strides[-1] * size)
+        return tuple(reversed(strides))
 
     @staticmethod
     def data_ptr():

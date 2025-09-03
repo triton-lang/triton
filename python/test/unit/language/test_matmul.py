@@ -157,8 +157,8 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         atol = 0.06
         rtol = 0.06
     else:
-        atol = 0.01
-        rtol = 0.01
+        atol = 0.001
+        rtol = 0.001
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
     # Make sure the mma is pipelined by checking if in the TTGIR we see two mmav5
     # operations. (Pipeliner will add additional mma operation by peeling the prologue.)

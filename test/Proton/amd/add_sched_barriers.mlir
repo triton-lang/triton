@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file  -add-sched-barriers --verify-diagnostics | FileCheck --check-prefix=CHECK %s
+// RUN: triton-opt %s -split-input-file -add-sched-barriers --verify-diagnostics | FileCheck --check-prefix=CHECK %s
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -73,5 +73,16 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
     gpu.barrier
     proton_gpu.finalize %2, %1 : !proton_gpu.segment<2048, #smem, warp>, !tt.ptr<i32>
     llvm.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 3072 : i32, ttg.target = "hip:gfx90a", "ttg.threads-per-warp" = 64 : i32} {
+  llvm.func @llvm.exp2.f32(f32) -> f32 attributes {libname = "", libpath = ""}
+  // CHECK-LABEL: two_functions
+  llvm.func @two_functions(%arg: f32) -> f32 {
+    %1 = llvm.call @llvm.exp2.f32(%arg) : (f32) -> f32
+    llvm.return %1 : f32
   }
 }
