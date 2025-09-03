@@ -4,6 +4,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 #include "third_party/nvidia/include/Dialect/NVWS/Transforms/Passes.h"
+#include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
@@ -35,6 +36,8 @@ struct AutomaticWarpSpecialization
 void AutomaticWarpSpecialization::runOnOperation() {
   OpPassManager pm;
   pm.addPass(createTritonGPUPartitionScheduling());
+  pm.addPass(createNVWSInsertAref());
+  pm.addPass(createNVWSInsertTmemAref());
   pm.addPass(createTritonGPULoadMMASpecialization({numStages}));
   pm.addPass(createTritonGPURewritePartitionDependencies());
   // `int-range-optimizations` and SCCP are good at cleaning up loop arithmetic.
@@ -42,8 +45,7 @@ void AutomaticWarpSpecialization::runOnOperation() {
   // pm.addPass(arith::createIntRangeOptimizationsPass());
   pm.addPass(createSCCPPass());
   pm.addPass(createCSEPass());
-  pm.addPass(createNVWSAssignStagePhase());
-  pm.addPass(createNVWSLowerAref());
+  pm.addPass(createNVWSLowerAref({numStages}));
   pm.addPass(createTritonGPUPartitionLoops());
   pm.addPass(createNVWSLowerWarpGroup());
   if (failed(runPipeline(pm, getOperation())))

@@ -76,10 +76,16 @@ template <class T> struct AssignStagePhase {
       : aref(aref), partitionId(partitionId) {}
 
   T isValidOp(Operation *op) {
+    auto isZero = [](Value v) { return matchPattern(v, m_Zero()); };
+
     if (isa<T>(op) && op->getOperand(0) == aref) {
       auto opPartitionId = getPartitionId(op);
-      if (!opPartitionId || *opPartitionId == partitionId)
-        return cast<T>(op);
+      if (!opPartitionId || *opPartitionId == partitionId) {
+        auto casted = cast<T>(op);
+        if (isZero(casted.getStage()) && isZero(casted.getPhase())) {
+          return casted;
+        }
+      }
     }
     return {};
   }
@@ -292,8 +298,10 @@ template <class T> struct AssignStagePhase {
     StagePhase index;
     ImplicitLocOpBuilder b(arefOp.getLoc(), arefOp);
     b.setInsertionPointAfter(arefOp);
-    auto depth =
-        cast<MemDescType>(arefOp.getOperand(0).getType()).getShape().front();
+    auto type = cast<MemDescType>(arefOp.getOperand(0).getType());
+    auto depth = type.getShape().front();
+    if (isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(type.getEncoding()))
+      depth = 1;
     index.stage = b.create<arith::ConstantIntOp>(depth - 1, 32);
 
     static_assert(std::is_same_v<T, ArefPutEnterOp> ||
