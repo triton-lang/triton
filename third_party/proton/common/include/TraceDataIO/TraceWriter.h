@@ -19,6 +19,7 @@ const uint64_t kKernelTimeGap = 10000000;
 struct KernelMetadata {
   std::map<int, std::string> scopeName;
   std::string kernelName;
+  std::vector<std::string> callStack;
 };
 
 using KernelTrace = std::pair<std::shared_ptr<CircularLayoutParserResult>,

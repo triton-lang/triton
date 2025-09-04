@@ -609,3 +609,4 @@ def test_timeline(tmp_path: pathlib.Path):
         trace_events = data["traceEvents"]
         assert len(trace_events) == 12
         assert trace_events[-1]["tid"][0:4] == "warp"
+        assert trace_events[-1]["args"]["call_stack"] == ["test"]
