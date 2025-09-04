@@ -341,17 +341,10 @@ class KernelParam:
         return self._param.default != inspect.Parameter.empty
 
 
-dtype2str = {}
-specialize_impl_cache = []
-
-
 def mangle_type(arg, specialize=False):
-    if len(specialize_impl_cache) == 0:
-        specialize_impl_cache.append(native_specialize_impl)
-    specialize_impl = specialize_impl_cache[0]
-    # previous: specialize_impl(arg, is_const=False, specialize_value=True, align=True):
-    # native_specialize_impl has same signature, so use is_const=False, and align=True
-    return specialize_impl(BaseBackend, arg, False, specialize, True)[0]
+    is_const = False
+    align = True
+    return native_specialize_impl(BaseBackend, arg, is_const, specialize, align)[0]
 
 
 class KernelInterface(Generic[T]):
