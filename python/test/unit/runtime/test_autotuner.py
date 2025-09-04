@@ -475,7 +475,4 @@ def test_prune_all_configs(device):
         _kernel[grid](dst, src, N=N)
         pytest.fail("Expected exception was not thrown.")
     except triton.TritonError as e:
-        assert e is not None and str(e) == "No valid autotuner configs after pruning. `early_config_prune` should return at least one config."
-    
-    
-    
+        assert e is not None and str(e) == "Autotuner error: No valid autotuner configs after pruning. `early_config_prune` should return at least one config."
