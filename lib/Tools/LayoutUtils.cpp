@@ -268,6 +268,39 @@ std::optional<ColumnAction> regPermForDivide(const LinearLayout &A,
   return ColumnAction(permOrder, kReg, ARegBases.size());
 }
 
+std::pair<unsigned, ColumnAction>
+largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
+                     std::optional<int> maybeMaxVecElems) {
+  // Find the largest vectorisation we can use:
+  StringAttr kReg = StringAttr::get(ctx, "register");
+  StringAttr kOffset = StringAttr::get(ctx, "offset");
+  LinearLayout quot;
+  LinearLayout tile;
+  ColumnAction permutation;
+  // If there are restrictions on the vectorisation, we don't allow
+  // permutations.
+  auto allowPerm = !maybeMaxVecElems.has_value();
+  auto maxVecElems = maybeMaxVecElems.value_or(128 / bitwidth);
+  for (int v = maxVecElems; v >= 1; v /= 2) {
+    tile = LinearLayout::identity1D(v, kReg, kOffset);
+    auto maybePerm = regPermForDivide(cvt, tile, /*left=*/true);
+    if (!maybePerm) {
+      continue;
+    }
+    permutation = *maybePerm;
+    if (!allowPerm && !permutation.isIdentity()) {
+      continue;
+    }
+    auto newCvt = permutation.apply(cvt);
+    auto maybeQuot = divideLeft(newCvt, tile);
+    if (!maybeQuot) {
+      continue;
+    }
+    return {v, permutation};
+  }
+  llvm_unreachable("Vectorization < 1 is not valid");
+}
+
 ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout) {
   assert(layout.getNumInDims() != 0);
   auto kReg = *layout.getInDimNames().begin();

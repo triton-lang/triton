@@ -541,6 +541,44 @@ Type getPointerTypeWithShape(Value basePtr, Value offset) {
   return offsetType.cloneWith(std::nullopt, basePtrType);
 }
 
+std::pair<unsigned, ColumnAction>
+getContiguityWithPermutation(Value ptr,
+                             ModuleAxisInfoAnalysis &axisAnalysisPass) {
+  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+  if (!tensorTy) {
+    ColumnAction defaultPermutation;
+    return {1, defaultPermutation};
+  }
+  return axisAnalysisPass.getContiguityWithPermutation(ptr);
+}
+
+std::pair<unsigned, ColumnAction>
+getContiguityWithPermutation(Value ptr, Value offset,
+                             ModuleAxisInfoAnalysis &axisAnalysisPass) {
+
+  Type type = getPointerTypeWithShape(ptr, offset);
+  RankedTensorType tensorTy = cast<RankedTensorType>(type);
+
+  // To compute the contiguity of the scalar/warp-uniform ptr and offset pair we
+  // need to look at the contiguity of the offsets and the alignment of the ptr
+  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
+  auto [vec, permutation] =
+      axisAnalysisPass.getContiguityWithPermutation(offset, elemNumBits);
+
+  // To get the alignment of the scalar ptr we need to look at the divisibility
+  auto *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
+  auto maxMultipleBytes = axisInfo->getDivisibility(0);
+  auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
+  auto align = std::max<unsigned>(maxMultipleBytes / elemNumBytes, 1);
+
+  if (vec <= align) {
+    return {vec, permutation};
+  } else {
+    ColumnAction defaultPem;
+    return {align, defaultPem};
+  }
+}
+
 unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
   auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
   if (!tensorTy)
@@ -595,6 +633,39 @@ unsigned getVectorSize(Value ptr, Value offset,
   auto contiguity = getContiguity(ptr, offset, axisAnalysisPass);
   auto pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
   return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
+}
+
+std::pair<unsigned, ColumnAction>
+getVectorSizeRegs(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
+  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+  if (!tensorTy) {
+    ColumnAction defaultPem;
+    return {1, defaultPem};
+  }
+  auto [vec, permutation] = getContiguityWithPermutation(ptr, axisAnalysisPass);
+  auto pointeeBitWidth = triton::getPointeeBitWidth(tensorTy);
+  auto targetWidthLimit = 128 / pointeeBitWidth;
+  if (vec <= 128 / pointeeBitWidth) {
+    return {vec, permutation};
+  } else {
+    ColumnAction defaultPem;
+    return {128 / pointeeBitWidth, defaultPem};
+  }
+}
+
+std::pair<unsigned, ColumnAction>
+getVectorSizeRegs(Value ptr, Value offset,
+                  ModuleAxisInfoAnalysis &axisAnalysisPass) {
+  auto [vec, permutation] =
+      getContiguityWithPermutation(ptr, offset, axisAnalysisPass);
+  auto pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
+  auto targetWidthLimit = 128 / pointeeBitWidth;
+  if (vec <= targetWidthLimit) {
+    return {vec, permutation};
+  } else {
+    ColumnAction defaultPem;
+    return {targetWidthLimit, defaultPem};
+  }
 }
 
 Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {

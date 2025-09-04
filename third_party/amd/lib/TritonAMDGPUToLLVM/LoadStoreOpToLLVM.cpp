@@ -22,6 +22,7 @@ using namespace mlir::triton::gpu;
 
 using ::mlir::LLVM::getSharedMemoryBase;
 using ::mlir::LLVM::AMD::getVectorSize;
+using ::mlir::LLVM::AMD::getVectorSizeRegs;
 using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;
 using ::mlir::triton::AMD::ISAFamily;
@@ -549,7 +550,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Type valueTy = op.getType();
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
-    unsigned vec = getVectorSize(ptr, axisAnalysisPass);
+    auto [vec, permutation] = getVectorSizeRegs(ptr, axisAnalysisPass);
+
     unsigned numElems = getTotalElemsPerThread(ptr.getType());
 
     // Get the LLVM values for pointers
@@ -602,6 +604,10 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       }
     } // end vec
 
+    if (!permutation.isIdentity()) {
+      loadedVals = permutation.apply(loadedVals);
+    }
+
     Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
     Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
                                         rewriter, llvmResultStructTy);
@@ -648,7 +654,7 @@ struct BufferLoadOpConversion
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
     Type ptrType = getPointerTypeWithShape(ptr, offset);
     unsigned numElems = getTotalElemsPerThread(ptrType);
-    unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
+    auto [vec, permutation] = getVectorSizeRegs(ptr, offset, axisAnalysisPass);
 
     // Get the offset
     SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);
@@ -684,6 +690,9 @@ struct BufferLoadOpConversion
       }
     } // end vec
 
+    if (!permutation.isIdentity()) {
+      loadedVals = permutation.apply(loadedVals);
+    }
     Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
     Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
                                         rewriter, llvmResultStructTy);
