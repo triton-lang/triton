@@ -40,6 +40,19 @@ std::optional<SetVector<int>> getPartitionIds(Operation *op) {
   return partitionIds;
 }
 
+std::optional<int> getPartitionId(Operation *op) {
+  auto ids = getPartitionIds(op);
+  if (!ids) {
+    return std::nullopt;
+  }
+  assert(ids->size() == 1);
+  return (*ids)[0];
+}
+
+bool hasPartition(Operation*op) {
+  return getPartitionIds(op) != std::nullopt;
+}
+
 bool isOpInPartition(Operation *op, const Partition *partition) {
   auto partitionIds = getPartitionIds(op);
   if (!partitionIds) {
@@ -364,7 +377,7 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     // another partition and spawn a single cluster at that operation.
     auto defCallback = [&](OpResult result, unsigned distance) {
       Operation *defOp = result.getDefiningOp();
-      if (!schedule.isScheduled(defOp) &&
+      if (!hasPartition(defOp) &&
           hasDefPartition(loop, defOp, schedule)) {
         // Add the current partition as a sink to the cluster.
         opClusters.getOrCreate(defOp)->sinkPartitions.insert(&partition);
@@ -376,11 +389,12 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     // already assigned to a partition.
     auto useCallback = [&](OpResult result, OpOperand &use, unsigned distance) {
       Operation *user = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
-      if (!schedule.isScheduled(user)) {
+      if (!hasPartition(user)) {
         // Add the current partition as a def to the cluster.
         opClusters.getOrCreate(user)->defPartitions.insert(&partition);
       }
     };
+    // TODO
     schedule.iterateUses(loop, &partition, useCallback);
   }
 
@@ -396,7 +410,7 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     // Look at the definitions directly feeding into this operation.
     iterateDefs(loop, op, [&](OpResult def) {
       Operation *defOp = def.getDefiningOp();
-      if (schedule.isScheduled(defOp)) {
+      if (hasPartition(defOp)) {
         // The input originates from an operation already assigned to a
         // partition. Add this as a def partition.
         cluster->defPartitions.insert(schedule.getPartition(defOp));
@@ -421,11 +435,10 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     });
     // Check the users of the operation.
     iterateUsers(loop, op, [&](Operation *user) {
-      if (schedule.isScheduled(user)) {
+      if (auto id = getPartitionId(user)) {
         // If the user is already assigned to a partition, add that partition as
         // one of the sink partitions.
-        Partition *userPartition = schedule.getPartition(user);
-        cluster->sinkPartitions.insert(userPartition);
+        cluster->sinkPartitions.insert(schedule.getPartition(*id));
         return;
       }
       // If the user does not already have a cluster, add it to the current
@@ -451,14 +464,14 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
       continue;
     assert(!cluster.defPartitions.empty());
     assert(llvm::all_of(
-        cluster.ops, [&](Operation *op) { return !schedule.isScheduled(op); }));
+        cluster.ops, [&](Operation *op) { return !hasPartition(op); }));
 
     // If there are multiple def or sink partitions, don't know what to do.
     // Assign the whole cluster to its own partition.
     if (cluster.defPartitions.size() > 1 || cluster.sinkPartitions.size() > 1) {
       Partition *newPartition = schedule.addPartition(0);
       for (Operation *op : cluster.ops)
-        schedule.insert(newPartition, op);
+	setPartition(op, newPartition);
       continue;
     }
 
@@ -467,7 +480,7 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     Partition *defPartition = cluster.defPartitions.front();
     if (cluster.sinkPartitions.empty()) {
       for (Operation *op : cluster.ops)
-        schedule.insert(defPartition, op);
+	setPartition(op, defPartition);
       continue;
     }
 
@@ -480,6 +493,7 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
       if (opsInCluster.contains(defOp))
         critPath.insert(defOp);
     };
+    // TODO
     schedule.iterateDefs(loop, sinkPartition, callback);
     for (unsigned i = 0; i < critPath.size(); ++i) {
       Operation *op = critPath[i];
@@ -493,7 +507,7 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     // If all ops are on the critical path, assign them to the def partition.
     if (critPath.size() == cluster.ops.size()) {
       for (Operation *op : cluster.ops)
-        schedule.insert(defPartition, op);
+	setPartition(op, defPartition);
       continue;
     }
 
@@ -510,10 +524,10 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
         return sinkOps.contains(use.getOwner());
       });
       sinkOps.insert(clone);
-      schedule.insert(sinkPartition, clone);
+      setPartition(clone, sinkPartition);
     }
     for (Operation *op : cluster.ops)
-      schedule.insert(defPartition, op);
+      setPartition(op, defPartition);
   }
 }
 
@@ -527,9 +541,10 @@ void rematerializeBroadcasts(WarpSchedule &schedule, OpOperand *use) {
   Operation *defOp = use->get().getDefiningOp();
   while (isa_and_nonnull<BroadcastOp, ExpandDimsOp>(defOp)) {
     Operation *clone = OpBuilder(defOp).clone(*defOp);
-    Partition *userPartition = schedule.getPartition(use->getOwner());
-    assert(userPartition && "user not scheduled");
-    schedule.insert(userPartition, clone);
+    auto userPartitionId = getPartitionId(use->getOwner());
+    assert(userPartitionId && "user not scheduled");
+    Partition *userPartition = schedule.getPartition(*userPartitionId);
+    setPartition(clone, userPartition);
     use->set(clone->getResult(0));
 
     defOp = clone->getOperand(0).getDefiningOp();

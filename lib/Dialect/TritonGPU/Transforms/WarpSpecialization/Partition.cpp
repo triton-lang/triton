@@ -18,9 +18,11 @@ Partition *WarpSchedule::addPartition(unsigned stage) {
 }
 
 Partition *WarpSchedule::getPartition(Operation *op) {
+  assert(false);
   return opToPartition.lookup(op);
 }
 const Partition *WarpSchedule::getPartition(Operation *op) const {
+  assert(false);
   return opToPartition.lookup(op);
 }
 
@@ -32,16 +34,19 @@ const Partition *WarpSchedule::getPartition(unsigned idx) const {
 }
 
 void WarpSchedule::insert(Partition *partition, Operation *op) {
+  assert(false);
   partition->ops.push_back(op);
   opToPartition[op] = partition;
 }
 
 bool WarpSchedule::isScheduled(Operation *op) const {
+  assert(false);
   const Partition *partition = getPartition(op);
   return partition && partition != getRootPartition();
 }
 
 bool WarpSchedule::trySchedule(Partition *partition, Operation *op) {
+  assert(false);
   if (isScheduled(op))
     return false;
   insert(partition, op);
@@ -49,6 +54,7 @@ bool WarpSchedule::trySchedule(Partition *partition, Operation *op) {
 }
 
 FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
+  assert(false);
   auto stages = loop->getAttrOfType<ArrayAttr>(kPartitionStagesAttrName);
   if (!stages)
     return failure();
@@ -85,6 +91,7 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
 }
 
 void WarpSchedule::serialize(scf::ForOp loop) const {
+  assert(false);
   SmallVector<Attribute> stages;
   Builder b(loop.getContext());
   for (Operation &op : loop.getBody()->without_terminator()) {
@@ -101,6 +108,7 @@ void WarpSchedule::serialize(scf::ForOp loop) const {
 }
 
 LogicalResult WarpSchedule::verify(scf::ForOp loop) const {
+  assert(false);
   // The root partition is only allowed to transitively depend on itself.
   bool failed = false;
   iterateInputs(loop, getRootPartition(), [&](OpOperand &input) {
