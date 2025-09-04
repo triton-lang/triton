@@ -554,6 +554,8 @@ void init_triton_ir(py::module &&m) {
            })
       .def("verify",
            [](OpState &self) -> bool {
+             TritonSourceMgrDiagnosticHandler handler =
+                 setupTritonDiagnosticHandler(self.getContext());
              return succeeded(verify(self.getOperation()));
            })
       .def("get_operation", [](OpState &self) { return self.getOperation(); });
@@ -700,12 +702,7 @@ void init_triton_ir(py::module &&m) {
       .def("walk",
            [](ModuleOp &self, const std::function<void(Operation *)> &fn) {
              self.walk(fn);
-           })
-      .def("verify_with_diagnostics", [](ModuleOp &self) {
-        TritonSourceMgrDiagnosticHandler handler =
-            setupTritonDiagnosticHandler(self.getContext());
-        return succeeded(verify(self.getOperation()));
-      });
+           });
 
   m.def("make_attr", [](const std::vector<int> &values, MLIRContext &context) {
     return mlir::cast<Attribute>(DenseIntElementsAttr::get(
