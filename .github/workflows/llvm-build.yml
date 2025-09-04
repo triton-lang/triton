@@ -69,13 +69,6 @@ jobs:
         path: llvm-project
         ref: ${{ env.llvm_commit_hash }}
 
-    - name: Apply patch
-      shell: bash
-      run: |
-        cd llvm-project
-        # like in https://github.com/llvm/llvm-project/pull/156711
-        sed -i 's/\[SEP:\[\/\\\\\]\]/[SEP:[\/\\\\]+]/g' mlir/test/python/ir/auto_location.py
-
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
