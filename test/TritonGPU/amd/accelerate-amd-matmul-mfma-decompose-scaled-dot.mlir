@@ -59,20 +59,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK-NOT: amdgpu.scaled_upcast_fp4
     // CHECK-NOT: tt.dot_scaled
     //
-    // CHECK: %[[CST:.*]] = arith.constant dense<7> : tensor<2x32xi16, #ttg.slice<{dim = 2, parent = #linear{{.*}}}>>
-    // CHECK: %[[B:.*]] = ttg.convert_layout %{{.*}} : tensor<64x32xf8E4M3FN, #blocked{{.*}}> -> tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-    // CHECK: %[[S:.*]] = ttg.convert_layout %{{.*}} : tensor<32x2xi8, #blocked{{.*}}> -> tensor<32x2xi8, #linear{{.*}}>
-    // CHECK: %[[TS:.*]] = tt.trans %[[S]] {order = array<i32: 1, 0>}
-    // CHECK: %[[ES:.*]] = arith.extui %[[TS]]
-    // CHECK: %[[SHS:.*]] = arith.shli %[[ES]], %[[CST]]
-    // CHECK: %[[BS:.*]] = tt.bitcast %[[SHS]] : tensor<2x32xi16, #ttg.slice<{dim = 2, parent = #linear{{.*}}}>> -> tensor<2x32xbf16, #ttg.slice<{dim = 2, parent = #linear{{.*}}}>>
-    // CHECK: %[[EPS:.*]] = tt.expand_dims %[[BS]] {axis = 2 : i32} : tensor<2x32xbf16, #ttg.slice<{dim = 2, parent = #linear{{.*}}}>> -> tensor<2x32x1xbf16, #linear{{.*}}>
-    // CHECK: %[[BCS:.*]] = tt.broadcast %[[EPS]] : tensor<2x32x1xbf16, #linear{{.*}}> -> tensor<2x32x32xbf16, #linear{{.*}}>
-    // CHECK: %[[TBCS:.*]] = tt.trans %[[BCS]] {order = array<i32: 0, 2, 1>} : tensor<2x32x32xbf16, #linear{{.*}}> -> tensor<2x32x32xbf16, #linear{{.*}}>
-    // CHECK: %[[RTBCS:.*]] = tt.reshape %[[TBCS]] : tensor<2x32x32xbf16, #linear{{.*}}> -> tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-    // CHECK: %[[UB:.*]] = amdgpu.scaled_upcast_fp8 %[[B]] scale %[[RTBCS]] : tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>, tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-    // CHECK: %[[A:.*]] = ttg.convert_layout %{{.*}} : tensor<32x64xbf16, #blocked{{.*}}> -> tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-    // CHECK: %{{.*}} = tt.dot %[[A]], %[[UB]], %{{.*}} : tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<32x32xf32, #mma>
+    // CHECK: %[[UB:.*]] = amdgpu.scaled_upcast_fp8 %{{.*}} scale %{{.*}} : tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>, tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+    // CHECK: %{{.*}} = tt.dot %{{.*}}, %[[UB]], %{{.*}} : tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<32x32xf32, #mma>
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
     %1 = tt.load %arg0 : tensor<32x64x!tt.ptr<bf16>, #blocked2>
     %2 = tt.load %arg1 : tensor<64x32x!tt.ptr<f8E4M3FN>, #blocked>

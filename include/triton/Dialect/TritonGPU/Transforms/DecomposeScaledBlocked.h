@@ -23,13 +23,20 @@ protected:
                  ModuleOp mod, TypedValue<RankedTensorType> scale,
                  int dim) const;
   TypedValue<RankedTensorType> maskNan(PatternRewriter &rewriter,
-                                       DotScaledOp scaledDotOp, ModuleOp mod,
+                                       DotScaledOp scaledDotOp,
                                        TypedValue<RankedTensorType> mxfp,
                                        TypedValue<RankedTensorType> scale,
                                        int dim) const;
+  TypedValue<RankedTensorType>
+  cvtDotOperand(PatternRewriter &rewriter, DotScaledOp scaledDotOp, int opIdx,
+                TypedValue<RankedTensorType> v) const;
+  TypedValue<RankedTensorType>
+  extendAndBroadcastScale(PatternRewriter &rewriter, DotScaledOp scaledDotOp,
+                          TypedValue<RankedTensorType> scale,
+                          FloatType computeType, RankedTensorType dstType,
+                          int kDim) const;
   static SmallVector<int, 2> getTransposeOrder(int rank);
 
-private:
   TypedValue<RankedTensorType> scaleArg(PatternRewriter &rewriter,
                                         DotScaledOp scaledDotOp, int opIdx,
                                         FloatType computeType) const;

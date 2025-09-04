@@ -423,38 +423,12 @@ LogicalResult ScaledUpcastFp4Op::verify() {
   RankedTensorType inputTy = getInput().getType();
   RankedTensorType outputTy = getOutput().getType();
   RankedTensorType scaleTy = getScale().getType();
+  auto axis = getAxis();
 
   if (outputTy.getShape() != scaleTy.getShape())
     return emitError() << "scale and output should have the same shape";
 
-  int64_t rank = inputTy.getRank();
-  if (rank != outputTy.getRank())
-    return emitError() << "source rank " << rank << " != result rank "
-                       << outputTy.getRank();
-
-  auto inputShape = inputTy.getShape();
-  auto outputShape = outputTy.getShape();
-  auto axis = getAxis();
-
-  if (axis < 0 || axis >= rank)
-    return emitError() << "axis " << axis << " out of range for rank " << rank;
-
-  for (int i = 0; i < rank; ++i) {
-    if (i == axis) {
-      if (outputShape[i] != inputShape[i] * 2)
-        return emitError() << "axis " << axis
-                           << " dimension must be 2x source dimension (src="
-                           << inputShape[i] << ", dst=" << outputShape[i]
-                           << ")";
-    } else {
-      if (outputShape[i] != inputShape[i])
-        return emitError() << "dimension " << i
-                           << " mismatch (src=" << inputShape[i]
-                           << ", dst=" << outputShape[i] << ", axis=" << axis
-                           << ")";
-    }
-  }
-  return success();
+  return triton::gpu::Fp4ToFpOp::verifyFp4ToFp(*this, inputTy, outputTy, axis);
 }
 
 Attribute ScaledUpcastFp4Op::inferDstEncoding(unsigned opIdx,
@@ -465,13 +439,14 @@ Attribute ScaledUpcastFp4Op::inferDstEncoding(unsigned opIdx,
   Attribute dstEnc;
   auto shape = getInput().getType().getShape();
 
+  auto iface =
+      srcEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>();
   // Given the fp4 operand is packed, we can reuse the infer utility of
   // Fp4ToFpOp
   auto result =
-      srcEnc.getDialect()
-          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
-          ->inferFp4ToFpOpEncoding(shape, getAxis(), srcEnc, dstEnc,
-                                   /*fwdInference*/ true, std::nullopt);
+      iface->inferFp4ToFpOpEncoding(shape, getAxis(), srcEnc, dstEnc,
+                                    /*fwdInference*/ true, std::nullopt);
   assert(succeeded(result));
   return dstEnc;
 }
@@ -484,13 +459,14 @@ Attribute ScaledUpcastFp4Op::inferSrcEncoding(unsigned opIdx,
   Attribute srcEnc;
   auto shape = getInput().getType().getShape();
 
+  auto iface =
+      dstEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>();
   // Given the fp4 operand is packed, we can reuse the infer utility of
   // Fp4ToFpOp
-  if (succeeded(
-          dstEnc.getDialect()
-              .getRegisteredInterface<triton::DialectInferLayoutInterface>()
-              ->inferFp4ToFpOpEncoding(shape, getAxis(), dstEnc, srcEnc,
-                                       /*fwdInference*/ false, std::nullopt))) {
+  if (succeeded(iface->inferFp4ToFpOpEncoding(shape, getAxis(), dstEnc, srcEnc,
+                                              /*fwdInference*/ false,
+                                              std::nullopt))) {
     return srcEnc;
   }
   return {};

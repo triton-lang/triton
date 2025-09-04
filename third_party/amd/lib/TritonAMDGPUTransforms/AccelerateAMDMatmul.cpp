@@ -60,6 +60,15 @@ FailureOr<ScaleDotElemType> mlirTypeToScaledElemType(Type type) {
       .Default([](Type) { return failure(); });
 }
 
+// Data types supported by non-native DotScaledOp
+bool isF16F8F4(ScaleDotElemType elemType) {
+  return elemType == ScaleDotElemType::E2M1 ||
+         elemType == ScaleDotElemType::E4M3 ||
+         elemType == ScaleDotElemType::E5M2 ||
+         elemType == ScaleDotElemType::BF16 ||
+         elemType == ScaleDotElemType::FP16;
+}
+
 SmallVector<unsigned, 3>
 warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
              std::pair<int64_t, int64_t> shapePerWarp) {
@@ -622,14 +631,7 @@ public:
 
     ScaleDotElemType aElemType = dotOp.getAElemType();
     ScaleDotElemType bElemType = dotOp.getBElemType();
-    auto supportsTypes = [](ScaleDotElemType elemType) {
-      return elemType == ScaleDotElemType::E2M1 ||
-             elemType == ScaleDotElemType::E4M3 ||
-             elemType == ScaleDotElemType::E5M2 ||
-             elemType == ScaleDotElemType::BF16 ||
-             elemType == ScaleDotElemType::FP16;
-    };
-    if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
+    if (!isF16F8F4(aElemType) || !isF16F8F4(bElemType))
       return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6 operand");
 
     MLIRContext *ctx = dotOp.getContext();
@@ -834,52 +836,40 @@ public:
     if (rank == 3)
       return rewriter.notifyMatchFailure(dotOp, "NYI: 3d case");
 
-    TensorValue aScale = dotOp.getAScale();
-    TensorValue bScale = dotOp.getBScale();
-    if (aScale && bScale)
-      return rewriter.notifyMatchFailure(dotOp, "NYI: both LHS and RHS scale");
-
     ScaleDotElemType aElemType = dotOp.getAElemType();
     ScaleDotElemType bElemType = dotOp.getBElemType();
-    auto supportsTypes = [](ScaleDotElemType elemType) {
-      return elemType == ScaleDotElemType::E2M1 ||
-             elemType == ScaleDotElemType::E4M3 ||
-             elemType == ScaleDotElemType::E5M2 ||
-             elemType == ScaleDotElemType::BF16 ||
-             elemType == ScaleDotElemType::FP16;
-    };
-    if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
+    if (!isF16F8F4(aElemType) || !isF16F8F4(bElemType))
       return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6 operand");
 
-    bool useFp16 = aElemType == ScaleDotElemType::FP16 ||
-                   bElemType == ScaleDotElemType::FP16;
-    auto loc = dotOp.getLoc();
+    auto computeType = getComputeType(aElemType, bElemType, rewriter);
 
-    auto cvtDotOperand = [&](TensorValue v, int opIdx) -> TensorValue {
-      auto *ctx = rewriter.getContext();
-      auto retEnc = dotOp.getType().getEncoding();
-      auto vType = v.getType();
-      auto encoding = ttg::DotOperandEncodingAttr::get(ctx, opIdx, retEnc,
-                                                       vType.getElementType());
-      auto retTy = vType.cloneWithEncoding(encoding);
-      return rewriter.create<ttg::ConvertLayoutOp>(loc, retTy, v);
-    };
+    auto scaledA = scaleArg(rewriter, dotOp, 0, computeType);
+    scaledA = cvtDotOperand(rewriter, dotOp, 0, scaledA);
+    auto scaledB = scaleArg(rewriter, dotOp, 1, computeType);
+    scaledB = cvtDotOperand(rewriter, dotOp, 1, scaledB);
 
-    auto scaledA = scaleArg(rewriter, dotOp, 0, useFp16);
-    scaledA = cvtDotOperand(scaledA, 0);
-    auto scaledB = scaleArg(rewriter, dotOp, 1, useFp16);
-    scaledB = cvtDotOperand(scaledB, 1);
-
-    auto newDot =
-        rewriter.create<tt::DotOp>(loc, scaledA, scaledB, dotOp.getC());
+    auto newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), scaledA, scaledB,
+                                             dotOp.getC());
 
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
                                                       newDot);
     return success();
   }
 
+  RankedTensorType getScaleType(RankedTensorType vType, int32_t kDim,
+                                bool isFp4) const {
+    if (!isFp4)
+      return vType;
+
+    // We want scale to have the same layout as the operand. But Fp4 operand
+    // is packed along kDim. So we need to double the shape to fit scale.
+    auto packedShape = llvm::to_vector(vType.getShape());
+    packedShape[kDim] *= 2;
+    return vType.clone(packedShape);
+  }
+
   TensorValue scaleArg(PatternRewriter &rewriter, DotScaledOp dotOp, int opIdx,
-                       bool useFp16) const {
+                       FloatType computeType) const {
     TensorValue v = (opIdx == 0) ? dotOp.getA() : dotOp.getB();
     TensorValue scale = (opIdx == 0) ? dotOp.getAScale() : dotOp.getBScale();
     ScaleDotElemType elemType =
@@ -889,76 +879,42 @@ public:
         elemType == ScaleDotElemType::FP16)
       return v;
 
-    auto mod = dotOp->getParentOfType<ModuleOp>();
+    if (!scale) {
+      // If it's non-scaled F8F4, we just reuse the common path.
+      return ttg::DecomposeScaledBlocked::scaleArg(rewriter, dotOp, opIdx,
+                                                   computeType);
+    }
+
     RankedTensorType vType = v.getType();
     unsigned rank = vType.getRank();
     int32_t kDim = opIdx == 0 ? rank - 1 : rank - 2;
-    FloatType computeType =
-        useFp16 ? rewriter.getF16Type() : rewriter.getBF16Type();
-    FloatType bf16Type = rewriter.getBF16Type();
     auto vType16 = vType.clone(computeType);
-
     auto loc = dotOp.getLoc();
-    auto *ctx = rewriter.getContext();
-    auto retEnc = dotOp.getType().getEncoding();
-
     bool isFp4 = (elemType == ScaleDotElemType::E2M1);
-    if (!scale) {
-      if (isFp4) {
-        return rewriter.create<ttg::Fp4ToFpOp>(loc, v, computeType, kDim);
-      } else {
-        return cast<TensorValue>(
-            rewriter.create<tt::FpToFpOp>(loc, vType16, v).getResult());
-      }
-    }
 
-    auto vEnc = cast<BlockedEncodingAttr>(vType16.getEncoding());
-    RankedTensorType unpackedType16 = vType16;
-    auto sizePerThread = llvm::to_vector(vEnc.getSizePerThread());
-
-    if (isFp4) {
-      // We want scale to have the same layout as the operand. But Fp4 operand
-      // is packed along kDim. So we need to double the shape to fit scale.
-      auto packedShape = llvm::to_vector(vType16.getShape());
-      packedShape[kDim] *= 2;
-      unpackedType16 = unpackedType16.clone(packedShape);
-    }
-
-    unpackedType16 = unpackedType16.cloneWithEncoding(vEnc);
+    RankedTensorType scaleType16 = getScaleType(vType16, kDim, isFp4);
 
     if (opIdx == 1) {
       auto order = DecomposeScaledBlocked::getTransposeOrder(rank);
       scale = rewriter.create<tt::TransOp>(loc, scale, order);
     }
 
-    // 1) Cast scale to bf16
-    // We want to put the scale in the exponent of Bf16 for further usage, so we
-    // always generate a Bf16 scale. Same in step 2.
-    TensorValue scaleBf16 = scaleTo16(rewriter, scale, bf16Type);
+    // 1) Cast scale to bf16, broadcast it and convert its layout
+    FloatType bf16Type = rewriter.getBF16Type();
+    auto reshapeScale = extendAndBroadcastScale(
+        rewriter, dotOp, scale, bf16Type, scaleType16.clone(bf16Type), kDim);
 
-    // 2) Broadcast scale to the same shape and layout as v
-    TensorValue reshapeScale =
-        broadcastScale(rewriter, dotOp, mod, scaleBf16, kDim);
-
-    reshapeScale = rewriter.create<ttg::ConvertLayoutOp>(
-        loc, unpackedType16.clone(bf16Type), reshapeScale);
-
-    // 3) Upcast with scale
+    // 2) Upcast with scale
     TensorValue result;
     if (isFp4) {
       result = rewriter.create<triton::amdgpu::ScaledUpcastFp4Op>(
-          loc, unpackedType16, v, reshapeScale, kDim);
+          loc, scaleType16, v, reshapeScale, kDim);
     } else {
       result = rewriter.create<triton::amdgpu::ScaledUpcastFp8Op>(
-          loc, unpackedType16, v, reshapeScale);
+          loc, scaleType16, v, reshapeScale);
     }
 
-    // 4) If not fastMath and the scale is NaN, return NaN, else return the
-    // scaled value.
-    if (dotOp.getFastMath())
-      return result;
-
-    return maskNan(rewriter, dotOp, mod, result, scale, kDim);
+    return maskNan(rewriter, dotOp, result, scale, kDim);
   }
 };
 
