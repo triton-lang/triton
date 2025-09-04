@@ -34,6 +34,6 @@ def compute_block_nk(n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precisi
     if precision_config.weight_scale is not None and get_cdna_version() != 4:
         block_k = 128
 
-    if precision_config.weight_scale is not None and get_rdna_version() != -1:
+    if precision_config.weight_scale is not None and get_rdna_version() != -1 and block_m == 64:
         block_k = 64
     return block_n, block_k
