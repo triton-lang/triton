@@ -2,6 +2,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/SCCIterator.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/Use.h"
 
 using namespace mlir;
@@ -24,6 +25,9 @@ bool setPartition(Operation *op, Partition *partition) {
 }
 
 std::optional<SetVector<int>> getPartitionIds(Operation *op) {
+  if (!op) {
+    return std::nullopt;
+  }
   auto attrs = op->getAttr(kPartitionAttrName);
   if (!attrs) {
     return std::nullopt;
@@ -35,9 +39,7 @@ std::optional<SetVector<int>> getPartitionIds(Operation *op) {
   return partitionIds;
 }
 
-bool hasPartition(Operation*op) {
-  return getPartitionIds(op) != std::nullopt;
-}
+bool hasPartition(Operation *op) { return getPartitionIds(op) != std::nullopt; }
 
 bool isOpInPartition(Operation *op, const Partition *partition) {
   auto partitionIds = getPartitionIds(op);
@@ -186,6 +188,7 @@ void WarpSchedule::iterateInputs(
     visitNestedOperands(op, [&](OpOperand &operand) {
       // Ignore implicit captures.
       Value value = operand.get();
+      auto partitionIds = getPartitionIds(value.getDefiningOp());
       if (value.getParentBlock() != loop.getBody())
         return;
       if (auto arg = dyn_cast<BlockArgument>(value)) {
@@ -196,7 +199,8 @@ void WarpSchedule::iterateInputs(
         // This value originates from a previous iteration.
         assert(llvm::is_contained(loop.getRegionIterArgs(), arg));
         callback(operand);
-      } else if (getPartition(value.getDefiningOp()) != partition) {
+      } else if (partitionIds &&
+                 !llvm::is_contained(*partitionIds, partition->getIndex())) {
         // This value originates from a different partition in the same
         // iteration.
         assert(value.getDefiningOp()->getParentOp() == loop);
@@ -212,10 +216,12 @@ void WarpSchedule::iterateOutputs(
   for (Operation *op : partition->getOps()) {
     for (OpOperand &use : op->getUses()) {
       Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+      auto partitionIds = getPartitionIds(owner);
       if (isa<scf::YieldOp>(owner)) {
         // This value is used in a subsequent iteration.
         callback(owner, use);
-      } else if (getPartition(owner) != partition) {
+      } else if (partitionIds &&
+                 !llvm::is_contained(*partitionIds, partition->getIndex())) {
         // This value is used in a different partition in the same iteration.
         callback(owner, use);
       }

@@ -159,11 +159,6 @@ static void scheduleUsers(scf::ForOp loop, WarpSchedule &schedule,
 // first-order partition assignment to the operations in the scheme and its
 // users and/or dependencies. This sets up the initial partitioning of the ops.
 static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
-  // Check for an existing schedule.
-  if (FailureOr<WarpSchedule> scheduleOr = WarpSchedule::deserialize(loop);
-      succeeded(scheduleOr))
-    return {std::move(*scheduleOr)};
-
   // Start by creating the default partition, a partition for for all loads, and
   // a partition for all MMAs.
   WarpSchedule schedule;
@@ -357,7 +352,6 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
         opClusters.getOrCreate(user)->defPartitions.insert(&partition);
       }
     };
-    // TODO
     schedule.iterateUses(loop, &partition, useCallback);
   }
 
@@ -456,7 +450,6 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
       if (opsInCluster.contains(defOp))
         critPath.insert(defOp);
     };
-    // TODO
     schedule.iterateDefs(loop, sinkPartition, callback);
     for (unsigned i = 0; i < critPath.size(); ++i) {
       Operation *op = critPath[i];

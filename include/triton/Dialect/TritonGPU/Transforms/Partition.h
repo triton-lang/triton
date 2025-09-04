@@ -32,7 +32,7 @@ class Partition {
 public:
   Partition(int idx, int stage) : idx(idx), stage(stage) {}
 
-  int getIndex() const { return idx; }
+  int getIndex() const { assert(idx >= 0); return idx; }
   int getStage() const { return stage; }
   ArrayRef<Operation *> getOps() const { return ops; }
   void addOp(Operation* op) {ops.push_back(op);}
