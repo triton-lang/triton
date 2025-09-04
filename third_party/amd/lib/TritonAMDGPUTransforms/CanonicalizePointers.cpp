@@ -519,7 +519,7 @@ public:
     // impact.
     triton::distributed::SymmAtOp newSymmAtOp =
         rewriter.create<triton::distributed::SymmAtOp>(
-            newSymmAtOp->getLoc(), fatPtrBase, adaptor.getRank()[0]);
+            symmAtOp->getLoc(), fatPtrBase, adaptor.getRank()[0]);
     rewriter.replaceOpWithMultiple(symmAtOp, {{newSymmAtOp, fatPtrOffset}});
     fatPtrs[{newSymmAtOp, fatPtrOffset}] =
         fatPtrs.at({fatPtrBase, fatPtrOffset});
