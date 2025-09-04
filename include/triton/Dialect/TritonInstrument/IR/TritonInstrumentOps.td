@@ -66,6 +66,227 @@ def TTI_ExperimentalBufferPointersOp : TTI_Op<"experimental_buffer_pointers", [P
 }
 
 
+def TTI_ExperimentalSetWriteVisibilityOp : TTI_Op<"experimental_set_write_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "set the write visibility for a buffer";
+  let description = [{
+    Set the write visibility for a buffer. Marks the buffer as visible to the thread
+    issuing the write. Clears out any other threads from the visibility bitmask. We know
+    this is safe because there cannot be outstanding writes to this buffer at this point.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    I32Attr:$thread,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$writeVisibility,
+    TypeAttr:$writeVisibilityType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $buf `,` $thread `{` $buffers `,` $writeVisibility `(` $writeVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeVisibility)
+  }];
+}
+
+
+def TTI_ExperimentalClearWriteTrackingOp : TTI_Op<"experimental_clear_write_tracking", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "clear the write tracking for a buffer";
+  let description = [{
+    Clear the write tracking for a buffer.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$writeTracking,
+    TypeAttr:$writeTrackingType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $buf `{` $buffers `,` $writeTracking `(` $writeTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeTracking)
+  }];
+}
+
+
+def TTI_ExperimentalClearReadVisibilityOp : TTI_Op<"experimental_clear_read_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "clear the read visibility for a buffer";
+  let description = [{
+    Clear the read visibility for a buffer.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$readVisibility,
+    TypeAttr:$readVisibilityType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $buf `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
+  }];
+}
+
+
+def TTI_ExperimentalClearReadTrackingOp : TTI_Op<"experimental_clear_read_tracking", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "clear the read tracking for a buffer";
+  let description = [{
+    Clear the read tracking for a buffer.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$readTracking,
+    TypeAttr:$readTrackingType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $buf `{` $buffers `,` $readTracking `(` $readTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readTracking)
+  }];
+}
+
+
+def TTI_ExperimentalSetReadVisibilityOp : TTI_Op<"experimental_set_read_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "set the read visibility for a buffer";
+  let description = [{
+    Add the thread to the read visibility bitmask for the buffer.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    I32Attr:$thread,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$readVisibility,
+    TypeAttr:$readVisibilityType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $buf `,` $thread `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
+  }];
+}
+
+
+def TTI_ExperimentalTrackVisibleWritesOp : TTI_Op<"experimental_track_visible_writes", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "start tracking visible writes to a buffer";
+  let description = [{
+    For all buffers that are marked as visible to the thread, start tracking them with a barrier.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$mbar,
+    I32Attr:$thread,
+    TT_Tensor:$barriers,
+    TT_PtrLike:$writeVisibility,
+    TypeAttr:$writeVisibilityType,
+    TT_PtrLike:$writeTracking,
+    TypeAttr:$writeTrackingType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $mbar `,` $thread `{` $barriers `,` $writeVisibility `(` $writeVisibilityType `)` `,` $writeTracking `(` $writeTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeVisibility) `,` type($writeTracking)
+  }];
+  // let hasVerifier = 1;
+}
+
+
+def TTI_ExperimentalTrackVisibleReadsOp : TTI_Op<"experimental_track_visible_reads", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "start tracking visible reads from a buffer";
+  let description = [{
+    For all buffers that are marked as visible to the thread, start tracking them with a barrier.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$mbar,
+    I32Attr:$thread,
+    TT_Tensor:$barriers,
+    TT_PtrLike:$readVisibility,
+    TypeAttr:$readVisibilityType,
+    TT_PtrLike:$readTracking,
+    TypeAttr:$readTrackingType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $mbar `,` $thread `{` $barriers `,` $readVisibility `(` $readVisibilityType `)` `,` $readTracking `(` $readTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readVisibility) `,` type($readTracking)
+  }];
+  // let hasVerifier = 1;
+}
+
+
+def TTI_ExperimentalTransferVisibleWritesOp : TTI_Op<"experimental_transfer_visible_writes", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "transfer all the writes tracked by a barrier to visible by thread";
+  let description = [{
+    Transfer all the writes tracked by a barrier to visible by thread.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$mbar,
+    I32Attr:$thread,
+    TT_Tensor:$barriers,
+    TT_PtrLike:$writeVisibility,
+    TypeAttr:$writeVisibilityType,
+    TT_PtrLike:$writeTracking,
+    TypeAttr:$writeTrackingType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $mbar `,` $thread `{` $barriers `,` $writeVisibility `(` $writeVisibilityType `)` `,` $writeTracking `(` $writeTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeVisibility) `,` type($writeTracking)
+  }];
+  // let hasVerifier = 1;
+}
+
+
+def TTI_ExperimentalTransferVisibleReadsOp : TTI_Op<"experimental_transfer_visible_reads", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "transfer all the reads tracked by a barrier to visible by thread";
+  let description = [{
+    Transfer all the reads tracked by a barrier to visible by thread.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$mbar,
+    I32Attr:$thread,
+    TT_Tensor:$barriers,
+    TT_PtrLike:$readVisibility,
+    TypeAttr:$readVisibilityType,
+    TT_PtrLike:$readTracking,
+    TypeAttr:$readTrackingType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $mbar `,` $thread `{` $barriers `,` $readVisibility `(` $readVisibilityType `)` `,` $readTracking `(` $readTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readVisibility) `,` type($readTracking)
+  }];
+  // let hasVerifier = 1;
+}
+
+
+def TTI_ExperimentalVerifyWriteVisibilityOp : TTI_Op<"experimental_check_write_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "verify that the buffer write is visible to the thread";
+  let description = [{
+    Verify that the buffer write is visible to the thread, or no threads are writing to the buffer.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    I32Attr:$thread,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$writeVisibility,
+    TypeAttr:$writeVisibilityType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $buf `,` $thread `{` $buffers `,` $writeVisibility `(` $writeVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeVisibility)
+  }];
+  // let hasVerifier = 1;
+}
+
+
+def TTI_ExperimentalVerifyReadVisibilityOp : TTI_Op<"experimental_check_read_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "verify that all the reads from a buffer are visible to the thread";
+  let description = [{
+    Verify that all the reads from a buffer are visible to the thread.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    I32Attr:$thread,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$readVisibility,
+    TypeAttr:$readVisibilityType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $buf `,` $thread `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
+  }];
+  // let hasVerifier = 1;
+}
+
 def TTI_ExperimentalCheckWriteStateOp : TTI_Op<"experimental_check_write_state", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "check if there are outstanding writes to a buffer guarded by a mbar";
   let description = [{
