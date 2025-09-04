@@ -777,7 +777,7 @@ class tuple_type(base_type):
         return tuple(values, self), cursor
 
     def mangle(self):
-        return 'T' + '_'.join(ty.mangle for ty in self.types) + 'T'
+        return 'T' + '_'.join(ty.mangle() for ty in self.types) + 'T'
 
 
 class slice_type(dtype):
