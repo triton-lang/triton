@@ -113,7 +113,7 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper):
 
 
 @gluon.jit
-def tma_interleave_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr):
+def tma_interleave_kernel(input_desc, out, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr):
     smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK, XBLOCK], input_desc.layout)
     bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
     mbarrier.init(bar.index(0), count=1)
@@ -128,13 +128,13 @@ def tma_interleave_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.cons
     if not FAILURE:
         mbarrier.wait(bar.index(1), 0)
 
-    mbarrier.expect(bar.index(0), XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
-    mbarrier.expect(bar.index(1), XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
-    tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(0), smem.index(0))
-    tma.async_copy_global_to_shared(input_desc, [0, 0], bar.index(1), smem.index(1))
-
-    mbarrier.wait(bar.index(0), 1)
-    mbarrier.wait(bar.index(1), 1)
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
+                                                        warps_per_cta=[4, 1], order=[0, 1])
+    out_m = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(1, blocked_layout))[:, None]
+    out_n = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(0, blocked_layout))[None, :]
+    out_ptr = out + out_m * XBLOCK + out_n
+    ttgl.store(out_ptr, smem.index(0))
+    ttgl.store(out_ptr, smem.index(1))
 
     mbarrier.invalidate(bar.index(0))
     mbarrier.invalidate(bar.index(1))
