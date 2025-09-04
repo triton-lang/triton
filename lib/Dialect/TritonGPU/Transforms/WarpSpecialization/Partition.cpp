@@ -139,7 +139,7 @@ void assignPartitionToBlock(mlir::Block *block, Partition *parentPartition,
   for (auto &op : block->getOperations()) {
     Partition *part;
     if (auto attr = op.getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
-      int64_t idx = attr.getInt();
+      int64_t idx = std::abs(attr.getInt());
       part = partitions[idx].get();
     } else {
       part = parentPartition;
@@ -177,7 +177,7 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
   for (Operation &op : loop.getBody()->without_terminator()) {
     Partition *partition = result.getRootPartition();
     if (auto attr = op.getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
-      int64_t idx = attr.getInt();
+      int64_t idx = std::abs(attr.getInt());
       if (idx < 0 || idx >= result.partitions.size())
         return mlir::emitError(op.getLoc(), "invalid partition index ") << idx;
       partition = result.partitions[idx].get();
