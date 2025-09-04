@@ -8,11 +8,45 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include <optional>
 
 using namespace mlir;
 using namespace triton;
 using namespace triton::gpu;
 namespace ttng = triton::nvidia_gpu;
+
+bool setPartition(Operation *op, Partition *partition) {
+  if (op->getAttr(kPartitionAttrName)) {
+    // TODO: set union with the existing annotation
+    return false;
+  }
+
+  Builder b(op->getContext());
+  SmallVector<Attribute, 4> attrs{b.getI32IntegerAttr(partition->getIndex())};
+  op->setAttr(kPartitionAttrName, ArrayAttr::get(op->getContext(), attrs));
+  // TODO: Add op into the op list of partition?
+  return true;
+}
+
+std::optional<SetVector<int>> getPartitionIds(Operation *op) {
+  auto attrs = op->getAttr(kPartitionAttrName);
+  if (!attrs) {
+    return std::nullopt;
+  }
+  SetVector<int> partitionIds;
+  for (auto attr : cast<ArrayAttr>(attrs)) {
+    partitionIds.insert(cast<IntegerAttr>(attr).getInt());
+  }
+  return partitionIds;
+}
+
+bool isOpInPartition(Operation *op, const Partition *partition) {
+  auto partitionIds = getPartitionIds(op);
+  if (!partitionIds) {
+    return false;
+  }
+  return partitionIds->contains(partition->getIndex());
+}
 
 //===----------------------------------------------------------------------===//
 // assignPartitions
@@ -83,8 +117,8 @@ static bool hasDefPartition(scf::ForOp loop, Operation *op,
     Operation *op = worklist.pop_back_val();
     if (!seen.insert(op).second)
       continue;
-    Partition *p = schedule.getPartition(op);
-    if (p && p != schedule.getRootPartition())
+    auto partitionIds = getPartitionIds(op);
+    if (partitionIds && partitionIds->size() != schedule.getNumPartitions())
       return true;
     iterateDefs(loop, op,
                 [&](OpResult def) { worklist.push_back(def.getDefiningOp()); });
@@ -114,7 +148,7 @@ static void scheduleDependencies(scf::ForOp loop, WarpSchedule &schedule,
     Operation *defOp =
         loop.getBody()->findAncestorOpInBlock(*dep.getDefiningOp());
     if (!defOp || !hasDefPartition(loop, defOp, schedule) ||
-        !schedule.trySchedule(partition, defOp))
+        !setPartition(defOp, partition))
       continue;
     llvm::append_range(deps, getNestedOperands(defOp));
   }
@@ -138,7 +172,7 @@ static void scheduleUsers(scf::ForOp loop, WarpSchedule &schedule,
       continue;
     }
 
-    if (!schedule.trySchedule(partition, user))
+    if (!setPartition(user, partition))
       continue;
     for (OpOperand &use : user->getUses())
       uses.push_back(&use);
@@ -167,7 +201,7 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
     // Only TMA loads are supported at the moment.
     if (!isa<DescriptorLoadOp, DescriptorGatherOp>(op))
       continue;
-    schedule.trySchedule(loadPartition, &op);
+    setPartition(&op, loadPartition);
     loadsAndAllocs.push_back(&op);
 
     // Local alloc users of the load with matching encoding will cause the
@@ -176,11 +210,11 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
     for (Operation *user : op.getUsers()) {
       if (auto alloc = dyn_cast<LocalAllocOp>(user)) {
         if (sharedEnc == alloc.getType().getEncoding()) {
-          schedule.trySchedule(loadPartition, alloc);
+          setPartition(alloc, loadPartition);
           loadsAndAllocs.push_back(alloc);
         }
       } else if (isa<ttng::TMEMAllocOp>(user)) {
-        schedule.trySchedule(loadPartition, user);
+        setPartition(user, loadPartition);
         loadsAndAllocs.push_back(user);
       }
     }
@@ -189,7 +223,7 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
   // Find MMAs to pipeline.
   SmallVector<ttng::MMAv5OpInterface> mmas;
   for (auto mmaOp : loop.getOps<ttng::MMAv5OpInterface>()) {
-    schedule.trySchedule(mmaPartition, mmaOp);
+    setPartition(mmaOp, mmaPartition);
     mmas.push_back(mmaOp);
 
     // If the store is unrelated to the use of the MMA, then it gets placed in
@@ -198,7 +232,7 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
         findDefOpInLoop(loop, mmaOp.getAccDep()));
     if (!ttng::hasAccReadModifyWrite(mmaOp, loop) && storeOp &&
         loop.isDefinedOutsideOfLoop(storeOp.getSrc()))
-      schedule.trySchedule(mmaPartition, storeOp);
+      setPartition(storeOp, mmaPartition);
 
     // Look for views into the operands.
     SmallVector<Operation *> operandViews;
@@ -214,16 +248,16 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
       // Duplicate the op if necessary to ensure that the MMA partition is the
       // only user.
       if (!llvm::all_of(op->getUsers(), [&](Operation *user) {
-            return schedule.getPartition(user) == mmaPartition;
+            return isOpInPartition(user, mmaPartition);
           })) {
         Operation *newOp = OpBuilder(op).clone(*op);
         op->replaceUsesWithIf(newOp->getResults(), [&](OpOperand &use) {
-          return schedule.getPartition(use.getOwner()) == mmaPartition;
+          return isOpInPartition(use.getOwner(), mmaPartition);
         });
         op = newOp;
       }
 
-      schedule.trySchedule(mmaPartition, op);
+      setPartition(op, mmaPartition);
       if (Operation *defOp = op->getOperand(0).getDefiningOp())
         operandViews.push_back(defOp);
     }
@@ -243,7 +277,7 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
         elementCount += tensorTy.getNumElements();
     }
     if (elementCount > 256) {
-      schedule.trySchedule(defaultPartition, &op);
+      setPartition(&op, defaultPartition);
       scheduleDependencies(loop, schedule, defaultPartition, &op);
     }
   }
@@ -545,7 +579,7 @@ void PartitionScheduling::runOnOperation() {
     if (std::optional<WarpSchedule> schedule = getInitialSchedule(loop)) {
       propagatePartitions(loop, *schedule);
       optimizeSchedule(loop, *schedule);
-      schedule->serialize(loop);
+      // schedule->serialize(loop);
       loop->setAttr(
           kWarpSpecializeTagAttrName,
           IntegerAttr::get(IntegerType::get(loop.getContext(), 32), idx));
