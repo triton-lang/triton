@@ -327,7 +327,7 @@ std::pair<py::object, py::object> handle_tensor(PyObject *backend,
   } else {
     PyObject *args[3] = {backend, arg, align ? Py_True : Py_False};
     PyObject *kwnames = align_kwarg;
-    auto key = from_new_ref(
+    key = from_new_ref(
         PyObject_VectorcallMethod(get_tensor_spec_attr, args, 2, kwnames));
     if (!key)
       return {};
