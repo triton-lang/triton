@@ -49,6 +49,11 @@ private:
   SmallVector<Operation *> ops;
 };
 
+bool setPartition(Operation *op, Partition *partition);
+std::optional<SetVector<int>> getPartitionIds(Operation *op);
+bool hasPartition(Operation*op);
+bool isOpInPartition(Operation *op, const Partition *partition);
+
 // A warp schedule divides a loop into multiple partitions. Ops in a loop are
 // assigned at most one partition. A warp schedule represents asynchronous
 // execution of the loop body, where partitions may execute simultaneously.

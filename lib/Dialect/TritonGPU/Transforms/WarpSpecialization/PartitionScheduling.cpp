@@ -15,50 +15,13 @@ using namespace triton;
 using namespace triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 
-bool setPartition(Operation *op, Partition *partition) {
-  if (op->getAttr(kPartitionAttrName)) {
-    // TODO: set union with the existing annotation
-    return false;
-  }
-
-  Builder b(op->getContext());
-  SmallVector<Attribute, 4> attrs{b.getI32IntegerAttr(partition->getIndex())};
-  op->setAttr(kPartitionAttrName, ArrayAttr::get(op->getContext(), attrs));
-  partition->addOp(op);
-  return true;
-}
-
-std::optional<SetVector<int>> getPartitionIds(Operation *op) {
-  auto attrs = op->getAttr(kPartitionAttrName);
-  if (!attrs) {
-    return std::nullopt;
-  }
-  SetVector<int> partitionIds;
-  for (auto attr : cast<ArrayAttr>(attrs)) {
-    partitionIds.insert(cast<IntegerAttr>(attr).getInt());
-  }
-  return partitionIds;
-}
-
 std::optional<int> getPartitionId(Operation *op) {
-  auto ids = getPartitionIds(op);
+  auto ids = ::getPartitionIds(op);
   if (!ids) {
     return std::nullopt;
   }
   assert(ids->size() == 1);
   return (*ids)[0];
-}
-
-bool hasPartition(Operation*op) {
-  return getPartitionIds(op) != std::nullopt;
-}
-
-bool isOpInPartition(Operation *op, const Partition *partition) {
-  auto partitionIds = getPartitionIds(op);
-  if (!partitionIds) {
-    return false;
-  }
-  return partitionIds->contains(partition->getIndex());
 }
 
 //===----------------------------------------------------------------------===//
@@ -595,6 +558,8 @@ void PartitionScheduling::runOnOperation() {
       propagatePartitions(loop, *schedule);
       optimizeSchedule(loop, *schedule);
       // schedule->serialize(loop);
+      // assign partition to body ops
+      // Put unassigned ops into root partition
       loop->setAttr(
           kWarpSpecializeTagAttrName,
           IntegerAttr::get(IntegerType::get(loop.getContext(), 32), idx));

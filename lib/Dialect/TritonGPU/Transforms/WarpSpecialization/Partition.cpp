@@ -8,6 +8,46 @@ using namespace mlir;
 using namespace triton;
 using namespace triton::gpu;
 
+namespace mlir::triton::gpu {
+
+bool setPartition(Operation *op, Partition *partition) {
+  if (op->getAttr(kPartitionAttrName)) {
+    // TODO: set union with the existing annotation
+    return false;
+  }
+
+  Builder b(op->getContext());
+  SmallVector<Attribute, 4> attrs{b.getI32IntegerAttr(partition->getIndex())};
+  op->setAttr(kPartitionAttrName, ArrayAttr::get(op->getContext(), attrs));
+  partition->addOp(op);
+  return true;
+}
+
+std::optional<SetVector<int>> getPartitionIds(Operation *op) {
+  auto attrs = op->getAttr(kPartitionAttrName);
+  if (!attrs) {
+    return std::nullopt;
+  }
+  SetVector<int> partitionIds;
+  for (auto attr : cast<ArrayAttr>(attrs)) {
+    partitionIds.insert(cast<IntegerAttr>(attr).getInt());
+  }
+  return partitionIds;
+}
+
+bool hasPartition(Operation*op) {
+  return getPartitionIds(op) != std::nullopt;
+}
+
+bool isOpInPartition(Operation *op, const Partition *partition) {
+  auto partitionIds = getPartitionIds(op);
+  if (!partitionIds) {
+    return false;
+  }
+  return partitionIds->contains(partition->getIndex());
+}
+} // namespace mlir::triton::gpu
+
 //===----------------------------------------------------------------------===//
 // WarpSchedule
 //===----------------------------------------------------------------------===//
