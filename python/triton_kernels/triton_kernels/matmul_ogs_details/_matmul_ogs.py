@@ -33,7 +33,7 @@ _matmul_ogs_repr = make_matmul_repr("_matmul_ogs", [0, 1, 2])
 def _matmul_ogs(
              Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
              YExpectedScale, YActualScale, YChecksumScale,
-             stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
+             stride_y_mx_k, stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
              X, XPtr, stride_x_z, stride_x_m, stride_x_k,
              XScale,
              XMxScale, stride_x_mx_z, stride_x_mx_m, stride_x_mx_k,
@@ -165,7 +165,7 @@ def _matmul_ogs(
     if SPLIT_K > 1:
         Y += pid_k.to( index_type) * stride_y_k
         if is_out_microscaled:
-            YActualScale += pid_k.to(index_type) * stride_x_mx_k
+            YActualScale += pid_k.to(index_type) * stride_y_mx_k
     # set masked out rows to 0
     if HAS_FUSED_SCATTER and N_EXPTS_ACT == 1:
         _zero_masked_rows(pid_m, pid_n, Y, stride_y_m, stride_y_n, yN, ScatterSrcIndx, num_idxs, BLOCK_M, OUT_BLOCK_N)

@@ -457,7 +457,7 @@ def matmul_ogs(x, w, bias,
     w_scale_strides = w_scale.stride() if w_has_mx and not w_scale_has_tma else (None, None, None)
     w_scale_strides = (0, ) * (3 - len(w_scale_strides)) + w_scale_strides
     out_matmul_scale_strides = out_matmul_scale.stride() if out_matmul_has_mx else (None, None, None, None)
-    out_matmul_scale_strides = (0, ) * (3 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
+    out_matmul_scale_strides = (0, ) * (4 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
     # launch kernel
     kernels = get_kernels(epilogue.specs, matmul_fused_activation.specs)
     # When stride(-2) == stride(-1) == 1, it's ambiguous whether W is transposed
@@ -468,7 +468,7 @@ def matmul_ogs(x, w, bias,
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
-                   *out_matmul_scale_strides[-3:],
+                   *out_matmul_scale_strides[-4:],
                    x_tensor_or_tma, x_storage.data, *x_strides,
                    flex.lhs_data.scale,
                    None if x_scale is None else x_scale.data.view(torch.uint8), *x_scale_strides,
