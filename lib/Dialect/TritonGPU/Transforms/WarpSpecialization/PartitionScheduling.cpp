@@ -16,7 +16,7 @@ using namespace triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 
 std::optional<int> getPartitionId(Operation *op) {
-  auto ids = ::getPartitionIds(op);
+  auto ids = getPartitionIds(op);
   if (!ids) {
     return std::nullopt;
   }
@@ -367,10 +367,10 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     // Look at the definitions directly feeding into this operation.
     iterateDefs(loop, op, [&](OpResult def) {
       Operation *defOp = def.getDefiningOp();
-      if (hasPartition(defOp)) {
+      if (auto partitionId = getPartitionId(defOp)) {
         // The input originates from an operation already assigned to a
         // partition. Add this as a def partition.
-        cluster->defPartitions.insert(schedule.getPartition(defOp));
+        cluster->defPartitions.insert(schedule.getPartition(*partitionId));
       } else {
         // If the input is not reachable from a partition, ignore it.
         if (!hasDefPartition(loop, defOp, schedule))
