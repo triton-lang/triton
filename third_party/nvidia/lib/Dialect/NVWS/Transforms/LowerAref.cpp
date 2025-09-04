@@ -454,18 +454,16 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
         continue;
       }
 
-      for (auto buffer : getEnter.getBuffers()) {
-        for (auto consumer : buffer.getUsers()) {
-          if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
-            mmav5Ops.insert(mmav5);
-          } else if (auto forOp = consumer->getParentOfType<scf::ForOp>()) {
-            auto users =
-                getTopLevelUsersInLoop(consumer, forOp, [](Operation *user) {
-                  return isa<MMAv5OpInterface>(user);
-                });
-            for (auto user : users) {
-              mmav5Ops.insert(cast<MMAv5OpInterface>(user));
-            }
+      for (auto consumer : getEnter->getUsers()) {
+        if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
+          mmav5Ops.insert(mmav5);
+        } else if (auto forOp = consumer->getParentOfType<scf::ForOp>()) {
+          auto users =
+              getTopLevelUsersInLoop(consumer, forOp, [](Operation *user) {
+                return isa<MMAv5OpInterface>(user);
+              });
+          for (auto user : users) {
+            mmav5Ops.insert(cast<MMAv5OpInterface>(user));
           }
         }
       }
@@ -525,12 +523,10 @@ public:
 bool isProducerLoad(ArefCreateOp arefOp) {
   for (auto user : arefOp.getResult().getUsers()) {
     if (auto putOp = dyn_cast<ArefPutEnterOp>(user)) {
-      for (auto buffer : putOp.getBuffers()) {
-        for (auto user : buffer.getUsers()) {
-          if (isa<triton::nvws::DescriptorLoadOpInterface>(user)) {
-            return true;
-          }
-        }
+      if (llvm::any_of(putOp->getUsers(), [](auto user) {
+            return isa<triton::nvws::DescriptorLoadOpInterface>(user);
+          })) {
+        return true;
       }
     }
   }
