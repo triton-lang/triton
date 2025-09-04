@@ -1,7 +1,10 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
@@ -202,17 +205,12 @@ LogicalResult DependencyRewriter::run() {
        llvm::zip(schedule.getPartitions(), partitionUseInfo)) {
     // The amount of buffering is based on the longest distance to a user.
     for (auto &[output, info] : useInfo) {
-      // FIXME: No IR support for passing simple scalars through shared
-      // memory.
-      auto tensorType = dyn_cast<RankedTensorType>(output.getType());
-      if (!tensorType) {
-        return mlir::emitWarning(output.getLoc(),
-                                 "FIXME: only tensor SSA dependencies between "
-                                 "partitions are supported");
-      }
+      b.setLoc(output.getLoc());
+      ImplicitLocOpBuilder endBuilder(b.getLoc(), loop->getNextNode());
 
-      Operation *defOp;
+      bool isScalar = false;
       Value tmp = output;
+      Operation *defOp;
       while (true) {
         if (auto arg = dyn_cast<BlockArgument>(tmp)) {
           tmp = loop.getBody()->getTerminator()->getOperand(arg.getArgNumber() -
@@ -222,14 +220,31 @@ LogicalResult DependencyRewriter::run() {
         defOp = tmp.getDefiningOp();
         break;
       }
+      Value val = output;
+      auto tensorType = dyn_cast<RankedTensorType>(output.getType());
+      if (!tensorType) {
+        isScalar = true;
+        b.setInsertionPointAfterValue(output);
+        auto mod = output.getParentRegion()->getParentOfType<ModuleOp>();
+        auto nWarps = lookupNumWarps(mod);
+        auto threadsPerWarp =
+            triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+        int CTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+        Attribute encoding = getDefaultBlockedEncoding(
+            b.getContext(), {1}, nWarps, threadsPerWarp, CTAs);
+        tensorType = RankedTensorType::get({1}, output.getType(), encoding);
+        StageCluster srcStageCluster = getStageCluster(defOp);
+
+        defOp = b.createInto<triton::SplatOp>(partition, srcStageCluster,
+                                              tensorType, output);
+        val = defOp->getResult(0);
+      }
 
       // Buffer the value based on the greatest distance to a consumer
       // partition.
       int maxDistance = info.getMaxUseDistance(partition);
 
       // Allocate buffers for the value and its associated barriers.
-      b.setLoc(output.getLoc());
-      ImplicitLocOpBuilder endBuilder(b.getLoc(), loop->getNextNode());
       AsyncRef aref = allocateAsyncValue(tensorType, maxDistance);
 
       unsigned numConsumers = info.consumers.size();
@@ -249,20 +264,24 @@ LogicalResult DependencyRewriter::run() {
         // partition with it.
         Value value = b.createInto<LocalLoadOp>(*usePartition, sinkSrcCluster,
                                                 tensorType, view);
+        if (isScalar) {
+          value = b.createInto<triton::UnsplatOp>(*usePartition, sinkSrcCluster,
+                                                  value);
+        }
         for (OpOperand *use : uses)
           use->set(value);
         exitOp(b);
       }
 
       // Set up production of the value
-      if (isa<BlockArgument>(output))
+      if (isa<BlockArgument>(val))
         b.setInsertionPointToStart(loop.getBody());
       else
         b.setInsertionPointAfter(defOp);
 
       StageCluster srcStageCluster = getStageCluster(defOp);
       auto [view, exitOp] = aref.putView(b, partition, srcStageCluster);
-      b.createInto<LocalStoreOp>(partition, srcStageCluster, output, view);
+      b.createInto<LocalStoreOp>(partition, srcStageCluster, val, view);
       exitOp(b);
     }
   }
