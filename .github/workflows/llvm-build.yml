@@ -248,7 +248,11 @@ jobs:
       run: |
         # if this step crashes, it can leave behind a stale docker container
         docker container prune -f
-        docker rmi -f $(docker images -q)
+
+        images=$(docker images -q)
+        if [ -n "$images" ]; then
+          docker rmi -f $images
+        fi
 
         docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
           -f llvm-build/.github/workflows/llvm-build/centos.Dockerfile .
@@ -271,7 +275,11 @@ jobs:
       run: |
         # if this step crashes, it can leave behind a stale docker container
         docker container prune -f
-        docker rmi -f $(docker images -q)
+
+        images=$(docker images -q)
+        if [ -n "$images" ]; then
+          docker rmi -f $images
+        fi
 
         docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
           -f llvm-build/.github/workflows/llvm-build/almalinux.Dockerfile .
