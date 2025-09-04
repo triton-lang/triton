@@ -111,9 +111,9 @@ bool doesSwizzleInsideWarp(RewriterBase &rewriter,
 // Return true if op is used by DotScaledOp or UpcastMXFPOp ops.
 bool isUsedByDotScaledOp(Operation *op);
 
-// Check if the result of this tl.dot is used as opA of another tl.dot
+// Check if the result of this tl.dot is used as opA or opB of another tl.dot
 // in the same region
-bool isChainDotHead(mlir::triton::DotOpInterface dotOp);
+bool isChainDotHead(mlir::triton::DotOpInterface dotOp, unsigned opIdx = 0);
 
 // Check if given operand of this tt.dot is the result of a tt.trans
 // in the same region

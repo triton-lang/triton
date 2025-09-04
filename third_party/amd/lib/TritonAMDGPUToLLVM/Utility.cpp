@@ -686,7 +686,7 @@ bool isUsedByDotScaledOp(Operation *op) {
       });
 }
 
-bool isChainDotHead(tt::DotOpInterface dotOp) {
+bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
   auto isInSameRegion = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
@@ -697,8 +697,9 @@ bool isChainDotHead(tt::DotOpInterface dotOp) {
   for (Operation *op : fwdSlices) {
     if (auto dOp = dyn_cast<tt::DotOpInterface>(op)) {
       assert(dOp != dotOp);
-      auto opA = dOp.getA().getDefiningOp();
-      if (opA && fwdSlices.contains(opA)) {
+      Operation *dotOperand = (opIdx == 0) ? dOp.getA().getDefiningOp()
+                                           : dOp.getB().getDefiningOp();
+      if (dotOperand && fwdSlices.contains(dotOperand)) {
         return true;
       }
     }
