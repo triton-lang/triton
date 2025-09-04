@@ -24,7 +24,7 @@ bool setPartition(Operation *op, Partition *partition) {
   Builder b(op->getContext());
   SmallVector<Attribute, 4> attrs{b.getI32IntegerAttr(partition->getIndex())};
   op->setAttr(kPartitionAttrName, ArrayAttr::get(op->getContext(), attrs));
-  // TODO: Add op into the op list of partition?
+  partition->addOp(op);
   return true;
 }
 

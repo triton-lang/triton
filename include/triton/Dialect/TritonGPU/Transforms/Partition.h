@@ -35,6 +35,7 @@ public:
   int getIndex() const { return idx; }
   int getStage() const { return stage; }
   ArrayRef<Operation *> getOps() const { return ops; }
+  void addOp(Operation* op) {ops.push_back(op);}
 
 private:
   void setIndex(int idx) { this->idx = idx; }
