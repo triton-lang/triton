@@ -262,7 +262,8 @@ class Autotuner(KernelInterface):
         if self.early_config_prune:
             pruned_configs = self.early_config_prune(self.configs, self.nargs, **kwargs)
             if not pruned_configs:
-                raise AutotunerError("No valid autotuner configs after pruning. `early_config_prune` should return at least one config.")
+                raise AutotunerError(
+                    "No valid autotuner configs after pruning. `early_config_prune` should return at least one config.")
         if self.perf_model:
             top_k = self.configs_top_k
             if isinstance(top_k, float) and top_k <= 1.0:
