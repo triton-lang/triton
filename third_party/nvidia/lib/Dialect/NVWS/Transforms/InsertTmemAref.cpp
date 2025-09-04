@@ -112,7 +112,6 @@ struct TmemAccessDag {
       auto newTokOp = yieldOp.getOperand(tokPos).getDefiningOp();
       getNode(newTokOp)->partitionId = partitionId;
     }
-    assert(partitionId && "expecting a partition index");
 
     // find final node in then-branch and assign yieldOp as its user
     // XXX: improve representation later, but for now the user's parentDag
