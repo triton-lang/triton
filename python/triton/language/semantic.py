@@ -1755,7 +1755,7 @@ class TritonSemantic(Generic[TensorTy]):
             pack,
         )
         region_builder_fn(elementwise_op)
-        # assert elementwise_op.verify()
+        assert elementwise_op.verify()
 
         return tuple(self.tensor(elementwise_op.get_result(i), ty) for i, ty in enumerate(result_types))
 
