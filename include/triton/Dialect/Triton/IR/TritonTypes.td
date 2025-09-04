@@ -92,7 +92,7 @@ def TT_TensorPtr : TT_PtrOf<[TT_Tensor]>;
 // Any Type in Triton IR
 def TT_Type : AnyTypeOf<[TT_FloatLike, TT_IntLike, TT_PtrLike, TT_TensorPtr]>;
 
-// Result type of ExperimentalMakeTensorDescriptor
+// Result type of MakeTensorDescriptor
 def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", []> {
   let summary = "Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system";
 
@@ -102,6 +102,28 @@ def TT_TensorDescType : TritonTypeDef<"TensorDesc", "tensordesc", []> {
 
   let parameters = (ins "RankedTensorType":$blockType);
   let assemblyFormat = "`<` $blockType `>`";
+
+  let builders = [
+    TypeBuilder<(ins "RankedTensorType":$blockType, "bool":$isSigned), [{
+      if (auto intTy = llvm::dyn_cast<IntegerType>(blockType.getElementType())) {
+        auto sem = isSigned ? IntegerType::Signed : IntegerType::Unsigned;
+        auto elemTy = IntegerType::get($_ctxt, intTy.getWidth(), sem);
+        blockType = blockType.clone(elemTy);
+      }
+      return Base::get($_ctxt, blockType);
+    }]>,
+  ];
+  let extraClassDeclaration = [{
+    RankedTensorType getSignlessBlockType() const {
+      auto resTy = getBlockType();
+      if (auto intTy = llvm::dyn_cast<IntegerType>(resTy.getElementType())) {
+        auto width = resTy.getElementTypeBitWidth();
+        auto signlessTy = IntegerType::get(getContext(), width);
+        resTy = resTy.clone(signlessTy);
+      }
+      return resTy;
+    }
+  }];
 }
 
 #endif

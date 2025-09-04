@@ -2,7 +2,7 @@
 // RUN: triton-opt %s -split-input-file -triton-amdgpu-insert-instruction-sched-hints="variant=attention" -triton-amdgpu-lower-insert-instruction-sched-hints -verify-diagnostics | FileCheck %s -check-prefix=LOWER_HINT
 
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [2, 4], order = [1, 0]}>
-#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [2, 4], instrShape = [32, 32], isTransposed = true}>
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 4], instrShape = [32, 32], isTransposed = true}>
 #dot_op_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>
 #dot_op_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>
 // INSTR_HINT-LABEL: @insert_schedule_hint

@@ -4,8 +4,6 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/GraphTraits.h"
-#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
@@ -20,12 +18,36 @@ class ForOp;
 
 static constexpr char kPartitionAttrName[] = "ttg.partition";
 static constexpr char kPartitionStagesAttrName[] = "ttg.partition.stages";
+static constexpr char kWarpSpecializeTagAttrName[] = "ttg.warp_specialize.tag";
 
 //===----------------------------------------------------------------------===//
 // WarpSchedule
 //===----------------------------------------------------------------------===//
 
 namespace mlir::triton::gpu {
+// A partition has a stage and contains some operation. The stage of a
+// partition determines how many cycles the partition's outputs are buffered
+// relative to its consumers.
+class Partition {
+public:
+  Partition(int idx, int stage) : idx(idx), stage(stage) {}
+
+  int getIndex() const { return idx; }
+  int getStage() const { return stage; }
+  ArrayRef<Operation *> getOps() const { return ops; }
+
+private:
+  void setIndex(int idx) { this->idx = idx; }
+  friend class WarpSchedule;
+
+  // The partition number.
+  int idx;
+  // The stage of the partition.
+  int stage;
+  // The ops in the partition.
+  SmallVector<Operation *> ops;
+};
+
 // A warp schedule divides a loop into multiple partitions. Ops in a loop are
 // assigned at most one partition. A warp schedule represents asynchronous
 // execution of the loop body, where partitions may execute simultaneously.
@@ -33,35 +55,11 @@ class WarpSchedule {
   static constexpr int kSentinel = -1;
 
 public:
-  // A partition has a stage and contains some operation. The stage of a
-  // partition determines how many cycles the partition's outputs are buffered
-  // relative to its consumers.
-  class Partition {
-  public:
-    Partition(int idx, int stage) : idx(idx), stage(stage) {}
-
-    int getIndex() const { return idx; }
-    int getStage() const { return stage; }
-    ArrayRef<Operation *> getOps() const { return ops; }
-
-    void insert(Operation *op) { ops.push_back(op); }
-
-  private:
-    void setIndex(int idx) { this->idx = idx; }
-    friend class WarpSchedule;
-
-    // The partition number.
-    int idx;
-    // The stage of the partition.
-    int stage;
-    // The ops in the partition.
-    SmallVector<Operation *> ops;
-  };
+  // Get WarpSpecialization tag
+  int getTag() const { return tag; }
 
   // Create a new partition with a stage.
   Partition *addPartition(unsigned stage);
-  // Give each partition a new index and order. The indices must be unique.
-  void reorderPartitions(ArrayRef<unsigned> order);
 
   // Get the partition the op belongs to.
   Partition *getPartition(Operation *op);
@@ -71,14 +69,24 @@ public:
   Partition *getPartition(unsigned idx);
   // Get the partition at the index.
   const Partition *getPartition(unsigned idx) const;
+  // Insert an operation into a partition.
+  void insert(Partition *partition, Operation *op);
   // Return an iterator range over the partitions.
   auto getPartitions() { return llvm::make_pointee_range(partitions); }
   // Return an iterator range over the partitions.
   auto getPartitions() const { return llvm::make_pointee_range(partitions); }
+  // Get the number of partitions.
+  unsigned getNumPartitions() const { return partitions.size(); }
   // Get the root partition.
   Partition *getRootPartition() { return rootPartition.get(); }
   // Get the root partition.
   const Partition *getRootPartition() const { return rootPartition.get(); }
+
+  // Return true if an operation is assigned to a partition.
+  bool isScheduled(Operation *op) const;
+  // Schedule an operation to a partition if it is not already scheduled. Return
+  // true if the operation was scheduled.
+  bool trySchedule(Partition *partition, Operation *op);
 
   // Deserialize a warp schedule from an `scf.for` op using the attributes
   // tagged on operations in its body.
@@ -115,7 +123,12 @@ public:
       scf::ForOp loop, const Partition *partition,
       function_ref<void(OpResult, OpOperand &, unsigned)> callback) const;
 
+  // Debug dump the schedule.
+  LLVM_DUMP_METHOD void dump() const;
+
 private:
+  // WarpSpecialization tag
+  int tag;
   // Partitions are numbered [0, N).
   SmallVector<std::unique_ptr<Partition>> partitions;
   // A mapping from operation to its partition.

@@ -1,5 +1,3 @@
-#include <memory>
-
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -8,12 +6,14 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/DiscardableAttributes.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 
-#define GEN_PASS_CLASSES
+namespace mlir::triton {
+
+#define GEN_PASS_DEF_TRITONCOMBINEOPS
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
-namespace mlir::triton {
 namespace {
 
 bool isZero(Value val) {
@@ -118,21 +118,12 @@ private:
     return false;
   }
 
-  static SmallVector<int> getEqualIndices(ArrayRef<int64_t> x,
-                                          ArrayRef<int64_t> y) {
-    SmallVector<int> res;
-    for (int i = 0; i < x.size(); ++i)
-      if (x[i] == y[i])
-        res.push_back(i);
-    return res;
-  }
-
 public:
   CombineBroadcastMulReducePattern(MLIRContext *context)
       : RewritePattern(ReduceOp::getOperationName(), 1, context) {}
 
   LogicalResult matchAndRewrite(Operation *op,
-                                PatternRewriter &rewriter) const {
+                                PatternRewriter &rewriter) const override {
     auto reduceOp = llvm::dyn_cast<ReduceOp>(op);
     if (!reduceOp)
       return failure();
@@ -240,19 +231,59 @@ public:
   }
 };
 
-class CombineOpsPass : public TritonCombineOpsBase<CombineOpsPass> {
+template <typename OpTy>
+class CombineDotAddPattern : public mlir::OpRewritePattern<OpTy> {
+public:
+  using OpRewritePattern<OpTy>::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(OpTy addOp, mlir::PatternRewriter &rewriter) const override {
+    auto dotOp = addOp.getRhs().template getDefiningOp<DotOp>();
+    bool isDotLHS = false;
+    if (!dotOp) {
+      dotOp = addOp.getLhs().template getDefiningOp<DotOp>();
+      if (!dotOp) {
+        return failure();
+      }
+      isDotLHS = true;
+    }
+    if (!dotOp->hasOneUse()) {
+      return failure();
+    }
+    if (!isZero(dotOp.getC()))
+      return failure();
+    if constexpr (std::is_same_v<OpTy, arith::AddFOp>) {
+      if (dotOp.getMaxNumImpreciseAcc() != 0) {
+        return failure();
+      }
+    }
+    rewriter.modifyOpInPlace(dotOp, [&] {
+      dotOp.getCMutable().assign(isDotLHS ? addOp.getRhs() : addOp.getLhs());
+      dotOp->moveBefore(addOp);
+    });
+    rewriter.replaceAllUsesWith(addOp, dotOp.getResult());
+    return success();
+  }
+};
+
+// AddIOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
+// AddFOp(DotOp(a, b, c), d) and c==0 => DotOp(a, b, d)
+// AddIOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
+// AddFOp(d, DotOp(a, b, c)) and c==0 => DotOp(a, b, d)
+using CombineDotAddIPattern = CombineDotAddPattern<arith::AddIOp>;
+using CombineDotAddFPattern = CombineDotAddPattern<arith::AddFOp>;
+
+} // anonymous namespace
+
+class CombineOpsPass : public impl::TritonCombineOpsBase<CombineOpsPass> {
 public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     ModuleOp m = getOperation();
 
-    // Dot Add %{
     patterns.add<CombineDotAddIPattern>(context);
     patterns.add<CombineDotAddFPattern>(context);
-    patterns.add<CombineDotAddIRevPattern>(context);
-    patterns.add<CombineDotAddFRevPattern>(context);
-    // %}
     patterns.add<CombineSelectMaskedLoadPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
@@ -263,11 +294,5 @@ public:
       signalPassFailure();
   }
 };
-
-} // anonymous namespace
-
-std::unique_ptr<mlir::Pass> createCombineOpsPass() {
-  return std::make_unique<CombineOpsPass>();
-}
 
 } // namespace mlir::triton

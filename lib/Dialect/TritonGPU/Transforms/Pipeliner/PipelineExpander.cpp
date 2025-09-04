@@ -67,6 +67,8 @@ protected:
   triton::PipeliningOption::AnnotationlFnType annotateFn = nullptr;
   bool peelEpilogue;
   triton::PipeliningOption::PredicateOpFnType predicateFn = nullptr;
+  triton::PipeliningOption::EmitPredicateStageFnType emitPredicateStageFn =
+      nullptr;
 
   // When peeling the kernel we generate several version of each value for
   // different stage of the prologue. This map tracks the mapping between
@@ -133,6 +135,20 @@ bool LoopPipelinerInternal::initializeLoopInfo(
   lb = forOp.getLowerBound();
   step = forOp.getStep();
 
+  std::vector<std::pair<Operation *, unsigned>> schedule;
+  options.getScheduleFn(forOp, schedule);
+  if (schedule.empty()) {
+    LDBG("--empty schedule -> BAIL");
+    return false;
+  }
+
+  opOrder.reserve(schedule.size());
+  for (auto &opSchedule : schedule) {
+    maxStage = std::max(maxStage, opSchedule.second);
+    stages[opSchedule.first] = opSchedule.second;
+    opOrder.push_back(opSchedule.first);
+  }
+
   dynamicLoop = true;
   auto upperBoundCst = ub.getDefiningOp<arith::ConstantIndexOp>();
   auto lowerBoundCst = lb.getDefiningOp<arith::ConstantIndexOp>();
@@ -147,7 +163,7 @@ bool LoopPipelinerInternal::initializeLoopInfo(
     int64_t lbImm = lowerBoundCst.value();
     int64_t stepImm = stepCst.value();
     int64_t numIteration = llvm::divideCeilSigned(ubImm - lbImm, stepImm);
-    if (numIteration > maxStage) {
+    if (numIteration >= maxStage) {
       dynamicLoop = false;
     } else if (!options.supportDynamicLoops) {
       LDBG("--fewer loop iterations than pipeline stages -> BAIL");
@@ -160,18 +176,9 @@ bool LoopPipelinerInternal::initializeLoopInfo(
     LDBG("--no epilogue or predicate set -> BAIL");
     return false;
   }
-  std::vector<std::pair<Operation *, unsigned>> schedule;
-  options.getScheduleFn(forOp, schedule);
-  if (schedule.empty()) {
-    LDBG("--empty schedule -> BAIL");
-    return false;
-  }
-
-  opOrder.reserve(schedule.size());
-  for (auto &opSchedule : schedule) {
-    maxStage = std::max(maxStage, opSchedule.second);
-    stages[opSchedule.first] = opSchedule.second;
-    opOrder.push_back(opSchedule.first);
+  emitPredicateStageFn = options.emitPredicateStageFn;
+  if (emitPredicateStageFn == nullptr) {
+    emitPredicateStageFn = mlir::triton::emitPredicateForStage;
   }
 
   // All operations need to have a stage.
@@ -490,20 +497,10 @@ LogicalResult LoopPipelinerInternal::createKernel(
   if (!peelEpilogue) {
     // Create a predicate for each stage except the last stage.
     Location loc = newForOp.getLoc();
-    Type t = ub.getType();
     for (unsigned i = 0; i < maxStage; i++) {
       // c = ub - (maxStage - i) * step
-      Value c = rewriter.create<arith::SubIOp>(
-          loc, ub,
-          rewriter.create<arith::MulIOp>(
-              loc, step,
-              rewriter.create<arith::ConstantOp>(
-                  loc, rewriter.getIntegerAttr(t, int64_t(maxStage - i)))));
-
-      Value pred = rewriter.create<arith::CmpIOp>(
-          newForOp.getLoc(), arith::CmpIPredicate::slt,
-          newForOp.getInductionVar(), c);
-      predicates[i] = pred;
+      predicates[i] = emitPredicateStageFn(rewriter, newForOp.getInductionVar(),
+                                           ub, step, maxStage, i);
     }
   }
   for (Operation *op : opOrder) {
@@ -851,4 +848,20 @@ mlir::triton::pipelineForLoop(RewriterBase &rewriter, ForOp forOp,
     rewriter.eraseOp(forOp);
 
   return newForOp;
+}
+
+Value mlir::triton::emitPredicateForStage(RewriterBase &rewriter,
+                                          Value inductionVar, Value upperBound,
+                                          Value step, uint64_t maxStage,
+                                          uint64_t stage) {
+  auto loc = inductionVar.getLoc();
+  auto type = inductionVar.getType();
+  Value c = rewriter.create<arith::SubIOp>(
+      loc, upperBound,
+      rewriter.create<arith::MulIOp>(
+          loc, step,
+          rewriter.create<arith::ConstantOp>(
+              loc, rewriter.getIntegerAttr(type, maxStage - stage))));
+  return rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                        inductionVar, c);
 }

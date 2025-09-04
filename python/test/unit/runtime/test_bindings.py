@@ -77,7 +77,7 @@ def test_module_walk(device):
     triton._C.libtriton.ir.load_dialects(context)
     backend.load_dialects(context)
 
-    ttir_module = src.make_ir(options, codegen_fns, module_map, context)
+    ttir_module = src.make_ir(target, options, codegen_fns, module_map, context)
     ttir_module.walk(walk_fn)
 
 

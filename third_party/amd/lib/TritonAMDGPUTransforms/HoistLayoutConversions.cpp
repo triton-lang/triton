@@ -1,18 +1,17 @@
 #include "TritonAMDGPUTransforms/Passes.h"
-#include "mlir/IR/Matchers.h"
-#include "mlir/IR/PatternMatch.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Support/LogicalResult.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "mlir/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
-using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+
+namespace mlir {
+
+#define GEN_PASS_DEF_TRITONAMDGPUHOISTLAYOUTCONVERSIONS
+#include "TritonAMDGPUTransforms/Passes.h.inc"
+
+namespace {
 
 // Hoist convert_layout out of the loop if the src is defined out of the loop.
 // This is a heuristic driven by optimizing fused attention kernels, in which
@@ -38,12 +37,10 @@ static void hoistCvtDotOpOutOfLoop(ttg::ConvertLayoutOp cvtOp) {
   }
 }
 
-#define GEN_PASS_CLASSES
-#include "TritonAMDGPUTransforms/Passes.h.inc"
+} // anonymous namespace
 
-namespace {
 struct TritonAMDGPUHoistLayoutConversionsPass
-    : public TritonAMDGPUHoistLayoutConversionsBase<
+    : public impl::TritonAMDGPUHoistLayoutConversionsBase<
           TritonAMDGPUHoistLayoutConversionsPass> {
 
   void runOnOperation() override {
@@ -56,8 +53,5 @@ struct TritonAMDGPUHoistLayoutConversionsPass
       hoistCvtDotOpOutOfLoop(cvtOp);
   }
 };
-} // namespace
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUHoistLayoutConversionsPass() {
-  return std::make_unique<TritonAMDGPUHoistLayoutConversionsPass>();
-}
+} // namespace mlir

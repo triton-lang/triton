@@ -235,7 +235,7 @@ struct ElementwiseInlineAsmOpConversion
       Type elemTy = getElementType(op.getOperand(i));
       unsigned bitWidth =
           elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : 64;
-      unsigned numElementPerReg = bitWidth < 32 ? 32 / bitWidth : 1;
+      unsigned numElementPerReg = std::max(32 / bitWidth, 1u);
       numElementPerReg = std::min(numElementPerReg, numPackedElements);
       for (int j = 0; j < numPackedElements; j += numElementPerReg) {
         if (numElementPerReg == 1) {
@@ -278,7 +278,7 @@ struct ElementwiseInlineAsmOpConversion
       // Pack return elements into 32-bits.
       unsigned bitWidth = ty.isIntOrFloat() ? ty.getIntOrFloatBitWidth() : 64;
       unsigned numElemsPerReg =
-          std::min(bitWidth < 32 ? 32 / bitWidth : 1, op.getPackedElement());
+          std::min(std::max(32 / bitWidth, 1u), op.getPackedElement());
       assert(op.getPackedElement() % numElemsPerReg == 0);
       if (numElemsPerReg > 1) {
         ty = vec_ty(ty, numElemsPerReg);
@@ -298,7 +298,7 @@ struct ElementwiseInlineAsmOpConversion
                 /*asm_string=*/op.getAsmString(),
                 /*constraints=*/op.getConstraints(),
                 /*has_side_effects=*/!op.getPure(),
-                /*is_align_stack=*/false,
+                /*is_align_stack=*/false, LLVM::TailCallKind::None,
                 /*asm_dialect=*/
                 LLVM::AsmDialectAttr::get(rewriter.getContext(),
                                           LLVM::AsmDialect::AD_ATT),
@@ -571,6 +571,77 @@ protected:
   const TargetInfoBase &targetInfo;
 };
 
+struct MapElementwiseOpConversion
+    : public ConvertOpToLLVMPattern<MapElementwiseOp> {
+  using Base = ConvertOpToLLVMPattern<MapElementwiseOp>;
+  using Adaptor = typename Base::OpAdaptor;
+
+  using Base::Base;
+
+  LogicalResult matchAndRewrite(MapElementwiseOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const {
+    Location loc = op->getLoc();
+    auto typeConverter = getTypeConverter();
+
+    auto operands = adaptor.getOperands();
+    const auto nOperands = operands.size();
+    const auto nElems =
+        cast<LLVM::LLVMStructType>(operands[0].getType()).getBody().size();
+    const auto nElemsPerPack = op.getPack();
+    if (nElems % nElemsPerPack != 0)
+      return op->emitError()
+             << "pack size must be a divisor of the number of elements per "
+                "thread, but got pack = "
+             << nElemsPerPack << ", elements per thread = " << nElems << "\n";
+
+    const auto nPacks = nElems / nElemsPerPack;
+    auto nArgsUnpacked = nElemsPerPack * nOperands;
+
+    SmallVector<Value> scalarOperands(nOperands * nElems);
+    for (auto iOp : llvm::seq(nOperands)) {
+      auto elems = unpackLLElements(loc, operands[iOp], rewriter);
+      assert(elems.size() == nElems);
+      for (auto iPack : llvm::seq(nPacks)) {
+        auto *packOperands =
+            &scalarOperands[iPack * nArgsUnpacked + iOp * nElemsPerPack];
+        auto *packElems = &elems[iPack * nElemsPerPack];
+        for (auto iElem : llvm::seq(nElemsPerPack)) {
+          packOperands[iElem] = packElems[iElem];
+        }
+      }
+    }
+
+    auto &scalarOp = op.getScalarOp();
+    Region &parent = *rewriter.getBlock()->getParent();
+
+    auto nOutputs = op.getNumResults();
+    SmallVector<Value> scalarOutputs(nOutputs * nElems);
+    for (auto iPack : llvm::seq(nPacks)) {
+      ArrayRef<Value> packedArgs(&scalarOperands[iPack * nArgsUnpacked],
+                                 nArgsUnpacked);
+      auto packResults = inlineRegion<triton::MapElementwiseReturnOp>(
+          rewriter, scalarOp, packedArgs, loc);
+      assert(packResults.size() == nOutputs * nElemsPerPack);
+      for (auto iOut : llvm::seq(nOutputs)) {
+        auto *packOutputs =
+            &scalarOutputs[iOut * nElems + iPack * nElemsPerPack];
+        for (auto iElem : llvm::seq(nElemsPerPack)) {
+          packOutputs[iElem] = packResults[iOut * nElemsPerPack + iElem];
+        }
+      }
+    }
+
+    SmallVector<Value> packedOutputs(nOutputs);
+    for (auto iOut : llvm::seq(nOutputs)) {
+      ArrayRef<Value> vals(&scalarOutputs[iOut * nElems], nElems);
+      packedOutputs[iOut] =
+          packLLElements(loc, typeConverter, vals, rewriter, op.getType(iOut));
+    }
+    rewriter.replaceOp(op, packedOutputs);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::populateMinMaxFOpToLLVMPattern(
@@ -662,4 +733,5 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<MapElementwiseOpConversion>(typeConverter, benefit);
 }

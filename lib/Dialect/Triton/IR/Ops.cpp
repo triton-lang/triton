@@ -9,6 +9,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
 namespace mlir {
 namespace triton {
@@ -17,10 +18,9 @@ void LoadOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Read::get(), &getPtrMutable(),
-                       triton::GlobalMemory::get());
+                       GlobalMemory::get());
   if (getIsVolatile())
-    effects.emplace_back(MemoryEffects::Write::get(),
-                         SideEffects::DefaultResource::get());
+    effects.emplace_back(MemoryEffects::Write::get());
 }
 
 } // namespace triton
@@ -232,9 +232,10 @@ LogicalResult TransOp::verify() {
   return success();
 }
 
-LogicalResult TransOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> location,
-    TransOp::Adaptor adaptor, SmallVectorImpl<Type> &inferredReturnTypes) {
+LogicalResult
+TransOp::inferReturnTypes(MLIRContext *context, std::optional<Location> loc,
+                          TransOp::Adaptor adaptor,
+                          SmallVectorImpl<Type> &inferredReturnTypes) {
 
   // type is the same as the input
   auto argTy = cast<RankedTensorType>(adaptor.getSrc().getType());
@@ -248,9 +249,8 @@ LogicalResult TransOp::inferReturnTypes(
   if (argEncoding) {
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
-    if (inferLayoutInterface
-            ->inferTransOpEncoding(argEncoding, shape, order, retEncoding)
-            .failed()) {
+    if (failed(inferLayoutInterface->inferTransOpEncoding(
+            argEncoding, shape, order, retEncoding, loc))) {
       return failure();
     }
   }
@@ -369,8 +369,8 @@ OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
 LogicalResult MakeRangeOp::verify() {
   int64_t start = getStartAttr().getInt();
   int64_t end = getEndAttr().getInt();
-  if (start > end) {
-    return this->emitOpError() << "start must be less than or equal to end";
+  if (start >= end) {
+    return this->emitOpError() << "start must be less than end";
   }
   auto ty = getType();
   if (ty.getShape().size() != 1) {
@@ -390,7 +390,8 @@ LogicalResult MakeRangeOp::verify() {
 
 //-- ReduceOp --
 static LogicalResult
-inferReduceReturnShape(RankedTensorType argTy, Type retEltTy, int axis,
+inferReduceReturnShape(std::optional<Location> loc, RankedTensorType argTy,
+                       Type retEltTy, int axis,
                        SmallVectorImpl<Type> &inferredReturnTypes) {
   auto retShape = argTy.getShape().vec();
   retShape.erase(retShape.begin() + axis);
@@ -405,10 +406,8 @@ inferReduceReturnShape(RankedTensorType argTy, Type retEltTy, int axis,
     if (argEncoding) {
       Dialect &dialect = argEncoding.getDialect();
       auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
-      if (inferLayoutInterface
-              ->inferReduceOpEncoding(argEncoding, axis, retEncoding)
-              .failed()) {
-        llvm::report_fatal_error("failed to infer layout for ReduceOp");
+      if (failed(inferLayoutInterface->inferReduceOpEncoding(
+              argEncoding, axis, retEncoding, loc))) {
         return failure();
       }
     }
@@ -419,29 +418,18 @@ inferReduceReturnShape(RankedTensorType argTy, Type retEltTy, int axis,
   return success();
 }
 
-void ReduceOp::build(OpBuilder &builder, OperationState &state,
-                     ValueRange operands, int axis) {
-  SmallVector<Type> inferredReturnTypes;
-  for (unsigned i = 0; i < operands.size(); ++i) {
-    auto argTy = cast<RankedTensorType>(operands[i].getType());
-    auto retEltTy = argTy.getElementType();
-    (void)inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes);
-  }
-
-  ReduceOp::build(builder, state, inferredReturnTypes, operands, axis);
-}
-
-LogicalResult ReduceOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
+LogicalResult
+ReduceOp::inferReturnTypes(MLIRContext *context, std::optional<Location> loc,
+                           ValueRange operands, DictionaryAttr attributes,
+                           OpaqueProperties properties, RegionRange regions,
+                           SmallVectorImpl<Type> &inferredReturnTypes) {
   Properties *prop = properties.as<Properties *>();
   int axis = prop->axis.getInt();
   for (auto arg : operands) {
     auto argTy = cast<RankedTensorType>(arg.getType());
     auto retEltTy = argTy.getElementType();
-    if (inferReduceReturnShape(argTy, retEltTy, axis, inferredReturnTypes)
-            .failed()) {
+    if (failed(inferReduceReturnShape(loc, argTy, retEltTy, axis,
+                                      inferredReturnTypes))) {
       return failure();
     }
   }
@@ -457,16 +445,9 @@ template <class Op> LogicalResult verifyReduceScan(Op &op) {
     return op.emitOpError() << "must have the same number of inputs as outputs";
   }
 
-  auto getElementType = [](Type ty) {
-    if (auto tensorType = dyn_cast<RankedTensorType>(ty)) {
-      return tensorType.getElementType();
-    }
-    return ty;
-  };
-
   for (auto [opElemTy, resTy] :
        llvm::zip(op.getElementTypes(), op.getResultTypes())) {
-    if (opElemTy != getElementType(resTy)) {
+    if (opElemTy != getElementTypeOrSelf(resTy)) {
       return op.emitOpError() << "operand types and result types must agree";
     }
   }
@@ -484,7 +465,6 @@ static LogicalResult verifyRegionsImpl(Op &op) {
                             << " arguments, but given block with "
                             << block.getNumArguments() << " arguments";
   }
-  unsigned i = 0;
   const auto &blockArgTypes = block.getArgumentTypes();
   for (unsigned i = 0; i < numArgs; ++i) {
     const auto &blockArgTy = blockArgTypes[i];
@@ -530,8 +510,8 @@ getInputTypesImpl(const Operation::operand_range &operands) {
   return srcTys;
 }
 
-static llvm::SmallVector<Type>
-getElementTypesImpl(const Operation::operand_range &operands) {
+template <typename ValueRange>
+static llvm::SmallVector<Type> getElementTypesImpl(const ValueRange &operands) {
   llvm::SmallVector<Type> srcElemTys;
   srcElemTys.reserve(operands.size());
   for (const auto &op : operands) {
@@ -607,6 +587,59 @@ llvm::SmallVector<Type> ScanOp::getElementTypes() {
 
 unsigned ScanOp::getNumOperands() { return this->getOperands().size(); }
 
+//-- MapElementwiseOp
+LogicalResult MapElementwiseOp::verify() {
+  if (getOperands().empty()) {
+    return emitOpError() << "MapElementwiseOp must have at least 1 operand";
+  }
+  if (!llvm::isPowerOf2_32(getPack())) {
+    return emitOpError() << "Pack must be a power of 2";
+  }
+  return success();
+}
+
+template <typename T>
+SmallVector<T> repeatInterleave(const SmallVectorImpl<T> &vs, int nRepeat) {
+  SmallVector<T> result;
+  result.reserve(vs.size() * nRepeat);
+  for (auto v : vs)
+    for (auto _ : llvm::seq(nRepeat))
+      result.push_back(v);
+  return result;
+}
+
+LogicalResult MapElementwiseOp::verifyRegions() {
+  // Verify signature
+  auto *firstBlock = &getRegion().getBlocks().front();
+  if (firstBlock->getNumArguments() != getNumOperands() * getPack()) {
+    return emitOpError() << "region has wrong number of arguments";
+  }
+
+  auto expectedArgTypes =
+      repeatInterleave(getElementTypesImpl(getOperands()), getPack());
+  if (firstBlock->getArgumentTypes() != expectedArgTypes) {
+    return emitError() << "argument types did not match";
+  }
+  auto expectedReturnTypes =
+      repeatInterleave(getElementTypesImpl(getResults()), getPack());
+  auto walkRes = getRegion().walk([&](Operation *op) -> WalkResult {
+    auto memEffects = dyn_cast<MemoryEffectOpInterface>(op);
+    // Ban stores as we won't get the redundant masking correct by treating it
+    // as a scalar.
+    if (memEffects && memEffects.hasEffect<MemoryEffects::Write>()) {
+      return op->emitOpError()
+             << "Stores are not supported inside map_elementwise";
+    }
+    if (isa<MapElementwiseReturnOp>(op) &&
+        op->getOperandTypes() != expectedReturnTypes) {
+      return op->emitError()
+             << "region return does not match map_elementwise result";
+    }
+    return WalkResult::advance();
+  });
+  return success(!walkRes.wasInterrupted());
+}
+
 //-- SplatOp --
 OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
   auto value = adaptor.getSrc();
@@ -617,6 +650,24 @@ OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
   auto shapedType = cast<ShapedType>(getType());
   auto ret = SplatElementsAttr::get(shapedType, ArrayRef<Attribute>(value));
   return ret;
+}
+
+//-- UnsplatOp --
+LogicalResult UnsplatOp::verify() {
+  auto srcShape = getSrc().getType().getShape();
+  if (product(srcShape) != 1) {
+    return emitError("source tensor must have exactly one element");
+  }
+  return success();
+}
+
+LogicalResult UnsplatOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  auto dstTy = cast<RankedTensorType>(operands[0].getType()).getElementType();
+  inferredReturnTypes.push_back(dstTy);
+  return success();
 }
 
 //-- ExpandDimsOp --
@@ -637,9 +688,8 @@ LogicalResult ExpandDimsOp::inferReturnTypes(
   if (argEncoding) {
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
-    if (inferLayoutInterface
-            ->inferExpandDimsOpEncoding(argEncoding, axis, retEncoding, loc)
-            .failed())
+    if (failed(inferLayoutInterface->inferExpandDimsOpEncoding(
+            argEncoding, axis, retEncoding, loc)))
       return emitOptionalError(loc, "failed to infer layout for ExpandDimsOp");
   }
   // create type
@@ -675,10 +725,10 @@ LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
     // Infer the encoding of the new expand op, if encodings are present.
     Attribute newExpandEnc;
     if (auto srcEnc = srcTy.getEncoding()) {
-      if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-              ->inferExpandDimsOpEncoding(srcEnc, op.getAxis(), newExpandEnc,
-                                          op.getLoc())
-              .failed()) {
+      Dialect &dialect = srcEnc.getDialect();
+      auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
+      if (failed(inferLayoutInterface->inferExpandDimsOpEncoding(
+              srcEnc, op.getAxis(), newExpandEnc, op.getLoc()))) {
         return emitOptionalError(op.getLoc(),
                                  "failed to infer layout for ExpandDimsOp");
       }
@@ -720,9 +770,8 @@ OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
 //-- ReshapeOp --
 
 void ReshapeOp::build(OpBuilder &builder, OperationState &state,
-                      ArrayRef<int64_t> shape,
-                      TypedValue<RankedTensorType> src) {
-  auto srcTy = src.getType();
+                      ArrayRef<int64_t> shape, Value src, bool allowReorder) {
+  auto srcTy = cast<RankedTensorType>(src.getType());
   auto srcEnc = srcTy.getEncoding();
   Attribute dstEnc;
   if (srcEnc) {
@@ -732,7 +781,7 @@ void ReshapeOp::build(OpBuilder &builder, OperationState &state,
     assert(succeeded(result));
   }
   auto dstTy = RankedTensorType::get(shape, srcTy.getElementType(), dstEnc);
-  build(builder, state, dstTy, src);
+  build(builder, state, dstTy, src, allowReorder);
 }
 
 LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
@@ -795,14 +844,14 @@ LogicalResult ReshapeOp::verify() {
   // Check that we can infer the dst encoding from the src encoding
   // and that the inferred dst encoding is the same as the given dst encoding
   Attribute inferredDstEnc;
-  auto result =
-      cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-          ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, dstTy.getShape(),
-                                   inferredDstEnc, getLoc());
-  assert(succeeded(result));
-  return cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-      ->verifyLayoutsAreEqual(dstTy.getShape(), inferredDstEnc, dstEnc,
-                              getLoc());
+  auto layoutInterface =
+      cast<DialectInferLayoutInterface>(&srcEnc.getDialect());
+  auto result = layoutInterface->inferReshapeOpEncoding(
+      srcTy.getShape(), srcEnc, dstTy.getShape(), inferredDstEnc, getLoc());
+  if (failed(result))
+    return failure();
+  return layoutInterface->verifyLayoutsAreEqual(
+      dstTy.getShape(), inferredDstEnc, dstEnc, getLoc());
 }
 
 //-- FpToFpOp --
@@ -916,7 +965,7 @@ LogicalResult BroadcastOp::verify() {
   if (srcShape.size() != resultShape.size()) {
     return emitError("rank of source must be same as rank of result");
   }
-  for (int i = 0; i < srcShape.size(); i++) {
+  for (size_t i = 0; i < srcShape.size(); i++) {
     if (srcShape[i] != 1 && srcShape[i] != resultShape[i]) {
       return emitError("Different dimensions at index ")
              << i << " between source and result.  "
@@ -970,17 +1019,19 @@ OpFoldResult AdvanceOp::fold(FoldAdaptor adaptor) {
 //-- MakeTensorDescOp --
 void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
                              Value base, ValueRange shape, ValueRange strides,
-                             ArrayRef<int32_t> blockShape) {
+                             ArrayRef<int32_t> blockShape, bool isSignedInteger,
+                             triton::PaddingOption padding) {
   auto ptrTy = dyn_cast<triton::PointerType>(base.getType());
   if (!ptrTy) {
     llvm::report_fatal_error("Expected pointer type");
   }
   auto elemTy = ptrTy.getPointeeType();
-
   SmallVector<int64_t> blockShape64(blockShape);
   auto blockTy = RankedTensorType::get(blockShape64, elemTy);
-  auto descTy = TensorDescType::get(builder.getContext(), blockTy);
-  return build(builder, state, descTy, base, shape, strides);
+  auto descTy =
+      TensorDescType::get(builder.getContext(), blockTy, isSignedInteger);
+  auto paddingAttr = PaddingOptionAttr::get(builder.getContext(), padding);
+  return build(builder, state, descTy, base, shape, strides, paddingAttr);
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and
@@ -1001,7 +1052,7 @@ void FuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
     return;
   assert(type.getNumInputs() == argAttrs.size());
   call_interface_impl::addArgAndResultAttrs(
-      builder, state, argAttrs, /*resultAttrs=*/std::nullopt,
+      builder, state, argAttrs, /*resultAttrs=*/{},
       getArgAttrsAttrName(state.name), getResAttrsAttrName(state.name));
 }
 
@@ -1092,11 +1143,10 @@ void JoinOp::build(OpBuilder &builder, OperationState &state, Value lhs,
   Attribute srcEnc = lhsTy.getEncoding();
   Attribute retEnc;
   if (srcEnc) {
-    if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-            ->inferDefaultJoinOpEncoding(srcEnc, retEnc, lhsTy.getShape(),
-                                         /*loc=*/std::nullopt)
-            .failed()) {
-      assert(false && "failed to infer join encoding");
+    if (failed(cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+                   ->inferDefaultJoinOpEncoding(
+                       srcEnc, retEnc, lhsTy.getShape(), state.location))) {
+      llvm_unreachable("failed to infer join encoding");
     }
   }
   auto retTy = RankedTensorType::get(retShape, lhsTy.getElementType(), retEnc);
@@ -1177,10 +1227,8 @@ void ElementwiseInlineAsmOp::getEffects(
         &effects) {
   if (getPure())
     return;
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       SideEffects::DefaultResource::get());
-  effects.emplace_back(MemoryEffects::Read::get(),
-                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Write::get());
+  effects.emplace_back(MemoryEffects::Read::get());
 }
 
 Speculation::Speculatability ElementwiseInlineAsmOp::getSpeculatability() {
@@ -1209,10 +1257,8 @@ void ExternElementwiseOp::getEffects(
         &effects) {
   if (getPure())
     return;
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       SideEffects::DefaultResource::get());
-  effects.emplace_back(MemoryEffects::Read::get(),
-                       SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Write::get());
+  effects.emplace_back(MemoryEffects::Read::get());
 }
 
 Speculation::Speculatability ExternElementwiseOp::getSpeculatability() {
@@ -1242,7 +1288,7 @@ LogicalResult GatherOp::verify() {
   if (getAxis() >= srcTy.getRank()) {
     return emitOpError("gather dimension must be less than the input rank");
   }
-  for (int dim = 0; dim < indicesTy.getRank(); ++dim) {
+  for (uint32_t dim = 0; dim < indicesTy.getRank(); ++dim) {
     if (dim == getAxis())
       continue;
     if (indicesTy.getShape()[dim] != srcTy.getShape()[dim]) {
@@ -1263,9 +1309,7 @@ LogicalResult GatherOp::inferReturnTypes(
   auto srcType = cast<RankedTensorType>(adaptor.getSrc().getType());
 
   // Shape and encoding of the indices with the element type of the src.
-  inferredReturnTypes.push_back(
-      RankedTensorType::get(indicesType.getShape(), srcType.getElementType(),
-                            indicesType.getEncoding()));
+  inferredReturnTypes.push_back(indicesType.clone(srcType.getElementType()));
   return success();
 }
 
@@ -1338,13 +1382,15 @@ static LogicalResult verifyGatherScatterOp(Operation *op,
 }
 
 LogicalResult DescriptorGatherOp::verify() {
-  return verifyGatherScatterOp(*this, getDesc().getType().getBlockType(),
+  return verifyGatherScatterOp(*this,
+                               getDesc().getType().getSignlessBlockType(),
                                getResult().getType(), getXOffsets().getType());
 }
 
 // -- DescriptorScatterOp --
 LogicalResult DescriptorScatterOp::verify() {
-  return verifyGatherScatterOp(*this, getDesc().getType().getBlockType(),
+  return verifyGatherScatterOp(*this,
+                               getDesc().getType().getSignlessBlockType(),
                                getSrc().getType(), getXOffsets().getType());
 }
 
@@ -1352,7 +1398,7 @@ LogicalResult DescriptorScatterOp::verify() {
 static LogicalResult verifyDescriptorLoadStoreType(Operation *op,
                                                    TensorDescType desc,
                                                    RankedTensorType tensor) {
-  RankedTensorType block = desc.getBlockType();
+  RankedTensorType block = desc.getSignlessBlockType();
   ArrayRef<int64_t> blockShape = block.getShape();
   ArrayRef<int64_t> tensorShape = tensor.getShape();
   if (blockShape.size() > tensorShape.size()) {
@@ -1379,24 +1425,6 @@ LogicalResult DescriptorLoadOp::verify() {
 LogicalResult DescriptorStoreOp::verify() {
   return verifyDescriptorLoadStoreType(*this, getDesc().getType(),
                                        getSrc().getType());
-}
-
-// -- ExperimentalTensormapCreateOp --
-LogicalResult ExperimentalTensormapCreateOp::verify() {
-  auto rank = getBoxDim().size();
-  if (getGlobalDim().size() != rank) {
-    return emitError("Rank mismatch for global dim. Got ")
-           << getGlobalDim().size() << " but expected " << rank;
-  }
-  if (getGlobalStride().size() + 1 != rank) {
-    return emitError("Rank mismatch for global stride. Got ")
-           << getGlobalStride().size() << " but expected " << rank - 1;
-  }
-  if (getElementStride().size() != rank) {
-    return emitError("Rank mismatch for element stride. Got ")
-           << getElementStride().size() << " but expected " << rank;
-  }
-  return success();
 }
 
 } // namespace triton

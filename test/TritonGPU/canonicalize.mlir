@@ -81,20 +81,22 @@ tt.func @test_canonicalize_convert_view(%arg0: tensor<64x64xf32, #blocked0>) -> 
 // -----
 
 // CHECK-LABEL: @test_canonicalize_convert_histogram
-// CHECK-SAME: (%[[ARG:.+]]: tensor<256xi32
-//   CHECK-NOT:   ttg.convert_layout
-//       CHECK:   %[[V:.+]] = tt.histogram %[[ARG]]
+// CHECK-SAME: (%[[SRC:.+]]: tensor<256xi32
+// CHECK-SAME: %[[MASK:.+]]: tensor<256xi1
+//       CHECK:   %[[M:.+]] = ttg.convert_layout %[[MASK]]
+//       CHECK:   %[[V:.+]] = tt.histogram %[[SRC]], %[[M]]
 //   CHECK-NOT:   ttg.convert_layout
 //       CHECK:   tt.return %[[V]]
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.target" = "cuda:80"} {
-tt.func @test_canonicalize_convert_histogram(%arg0: tensor<256xi32, #blocked1>) -> tensor<512xi32, #blocked2> {
+tt.func @test_canonicalize_convert_histogram(%arg0: tensor<256xi32, #blocked1>, %arg1: tensor<256xi1, #blocked2>) -> tensor<512xi32, #blocked2> {
     %0 = ttg.convert_layout %arg0 : tensor<256xi32, #blocked1> -> tensor<256xi32, #blocked>
-    %1 = tt.histogram %0 : tensor<256xi32, #blocked> -> tensor<512xi32, #blocked>
-    %2 = ttg.convert_layout %1 : tensor<512xi32, #blocked> -> tensor<512xi32, #blocked2>
-    tt.return %2 : tensor<512xi32, #blocked2>
+    %1 = ttg.convert_layout %arg1 : tensor<256xi1, #blocked2> -> tensor<256xi1, #blocked>
+    %2 = tt.histogram %0, %1 : tensor<256xi32, #blocked> -> tensor<512xi32, #blocked>
+    %3 = ttg.convert_layout %2 : tensor<512xi32, #blocked> -> tensor<512xi32, #blocked2>
+    tt.return %3 : tensor<512xi32, #blocked2>
 }
 }  // end module
 
@@ -106,9 +108,9 @@ tt.func @test_canonicalize_convert_histogram(%arg0: tensor<256xi32, #blocked1>) 
 // CHECK-NEXT:  gpu.barrier
 // CHECK-NEXT: tt.return %[[V]]
 
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.compute-capability" = 80} {
 tt.func @test_canonicalize_convert_local_load(%arg0: !ttg.async.token) -> tensor<256xi32, #blocked1> {

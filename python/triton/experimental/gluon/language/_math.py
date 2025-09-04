@@ -1,0 +1,20 @@
+import triton.language.math as tl_math
+from ._core import builtin
+
+umulhi = builtin(tl_math.umulhi)
+exp = builtin(tl_math.exp)
+exp2 = builtin(tl_math.exp2)
+fma = builtin(tl_math.fma)
+log = builtin(tl_math.log)
+log2 = builtin(tl_math.log2)
+cos = builtin(tl_math.cos)
+rsqrt = builtin(tl_math.rsqrt)
+sin = builtin(tl_math.sin)
+sqrt = builtin(tl_math.sqrt)
+sqrt_rn = builtin(tl_math.sqrt_rn)
+abs = builtin(tl_math.abs)
+fdiv = builtin(tl_math.fdiv)
+div_rn = builtin(tl_math.div_rn)
+erf = builtin(tl_math.erf)
+floor = builtin(tl_math.floor)
+ceil = builtin(tl_math.ceil)

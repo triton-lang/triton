@@ -8,66 +8,20 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "llvm/Support/ErrorHandling.h"
 
-#include <memory>
+namespace mlir {
+namespace triton {
+namespace nvidia_gpu {
 
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_TRITONNVIDIAGPUTMALOWERINGPASS
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 namespace {
-
-using namespace mlir;
-using namespace triton;
-using namespace triton::gpu;
-using namespace triton::nvidia_gpu;
-
-static Attribute getEncoding(Operation *op, RankedTensorType tensorType,
-                             Value desc) {
-  auto descBlockType = cast<TensorDescType>(desc.getType()).getBlockType();
-  Attribute encoding = descBlockType.getEncoding();
-  if (!encoding) {
-    constexpr auto msg =
-        "Internal Error: Tensor descriptor should have encoding set";
-    op->emitError() << msg;
-    llvm::report_fatal_error(msg);
-  }
-  assert(isa<SharedEncodingTrait>(encoding));
-  if (descBlockType.getShape() == tensorType.getShape())
-    return encoding;
-
-  // Handle rank reducing loads
-  auto ctx = encoding.getContext();
-  auto rankDiff = descBlockType.getRank() - tensorType.getRank();
-  if (auto nvmmaEnc = dyn_cast<NVMMASharedEncodingAttr>(encoding)) {
-    auto existingCta = nvmmaEnc.getCTALayout();
-    auto newCtaEnc =
-        CTALayoutAttr::get(ctx, existingCta.getCTAsPerCGA().slice(rankDiff),
-                           existingCta.getCTASplitNum().slice(rankDiff),
-                           existingCta.getCTAOrder().slice(rankDiff));
-
-    return NVMMASharedEncodingAttr::get(
-        ctx, nvmmaEnc.getSwizzlingByteWidth(), nvmmaEnc.getTransposed(),
-        nvmmaEnc.getElementBitWidth(), nvmmaEnc.getFp4Padded(), newCtaEnc);
-  }
-  if (auto swizEnc = dyn_cast<SwizzledSharedEncodingAttr>(encoding)) {
-    auto existingCta = swizEnc.getCTALayout();
-    auto newCtaEnc =
-        CTALayoutAttr::get(ctx, existingCta.getCTAsPerCGA().slice(rankDiff),
-                           existingCta.getCTASplitNum().slice(rankDiff),
-                           existingCta.getCTAOrder().slice(rankDiff));
-    return SwizzledSharedEncodingAttr::get(
-        ctx, swizEnc.getVec(), swizEnc.getPerPhase(), swizEnc.getMaxPhase(),
-        swizEnc.getOrder().slice(rankDiff), newCtaEnc);
-  }
-
-  constexpr auto msg = "Internal Error: Unhandled tensor descriptor encoding";
-  op->emitError() << msg;
-  llvm::report_fatal_error(msg);
-}
 
 static void
 lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
@@ -77,19 +31,20 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
   auto encoding = getEncodingFromDescriptor(op, tensorType, desc);
-  MemDescType memDescType =
-      MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
-                       encoding, sharedMemorySpace, /*mutableMemory=*/true);
-  Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType);
-  auto barrierCTALayout = CTALayoutAttr::get(
+  gpu::MemDescType memDescType = gpu::MemDescType::get(
+      tensorType.getShape(), tensorType.getElementType(), encoding,
+      sharedMemorySpace, /*mutableMemory=*/true);
+  auto alloc = rewriter.create<gpu::LocalAllocOp>(loc, memDescType).getResult();
+  auto barrierCTALayout = gpu::CTALayoutAttr::get(
       /*context=*/tensorType.getContext(), /*CTAsPerCGA=*/{1},
       /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
-  auto barrierEncoding = SwizzledSharedEncodingAttr::get(
+  auto barrierEncoding = gpu::SwizzledSharedEncodingAttr::get(
       tensorType.getContext(), 1, 1, 1, {0}, barrierCTALayout);
-  MemDescType barrierMemDescType =
-      MemDescType::get({1}, rewriter.getI64Type(), barrierEncoding,
-                       sharedMemorySpace, /*mutableMemory=*/true);
-  Value barrierAlloc = rewriter.create<LocalAllocOp>(loc, barrierMemDescType);
+  gpu::MemDescType barrierMemDescType =
+      gpu::MemDescType::get({1}, rewriter.getI64Type(), barrierEncoding,
+                            sharedMemorySpace, /*mutableMemory=*/true);
+  Value barrierAlloc =
+      rewriter.create<gpu::LocalAllocOp>(loc, barrierMemDescType);
   rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
   auto shapePerCTA = getShapePerCTA(encoding, tensorType.getShape());
   int sizeInBytes = product(shapePerCTA) *
@@ -97,13 +52,12 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
   rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(loc, barrierAlloc,
                                                        sizeInBytes, pred);
-  Value tmaPtr =
-      rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(loc, desc);
-  createLoad(tmaPtr, barrierAlloc, alloc, pred);
+  createLoad(desc, barrierAlloc, alloc, pred);
   Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
   rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase);
   rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
-  rewriter.replaceOpWithNewOp<LocalLoadOp>(op, tensorType, alloc);
+  replaceUsesWithLocalLoad(rewriter, op->getResult(0), alloc);
+  op->erase();
 }
 
 class TMALoadLowering : public OpRewritePattern<DescriptorLoadOp> {
@@ -151,15 +105,13 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
   auto loc = op->getLoc();
   auto tensorType = src.getType();
   auto encoding = getEncodingFromDescriptor(op, src.getType(), desc);
-  assert(isa<SharedEncodingTrait>(encoding));
-  MemDescType memDescType =
-      MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
-                       encoding, sharedMemorySpace, /*mutableMemory=*/true);
-  Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, src);
+  assert(isa<gpu::SharedEncodingTrait>(encoding));
+  gpu::MemDescType memDescType = gpu::MemDescType::get(
+      tensorType.getShape(), tensorType.getElementType(), encoding,
+      sharedMemorySpace, /*mutableMemory=*/false);
+  Value alloc = rewriter.create<gpu::LocalAllocOp>(loc, memDescType, src);
   rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
-  Value tmaPtr =
-      rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(loc, desc);
-  createStore(tmaPtr, alloc);
+  createStore(desc, alloc);
   rewriter.create<triton::nvidia_gpu::TMAStoreWaitOp>(loc, 0);
   rewriter.eraseOp(op);
 }
@@ -175,6 +127,23 @@ struct TMAStoreLowering : public OpRewritePattern<DescriptorStoreOp> {
           op.getDesc().getType().getBlockType().getEncoding(), op.getIndices());
       rewriter.create<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(
           op.getLoc(), tmaPtr, indices, alloc);
+    };
+    lowerTMAStore(op, op.getSrc(), op.getDesc(), createStore, rewriter);
+    return success();
+  }
+};
+
+struct TMAReduceLowering : public OpRewritePattern<DescriptorReduceOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(DescriptorReduceOp op,
+                                PatternRewriter &rewriter) const override {
+    auto createStore = [&](Value tmaPtr, Value alloc) {
+      auto indices = translateTMAIndices(
+          rewriter, op.getLoc(),
+          op.getDesc().getType().getBlockType().getEncoding(), op.getIndices());
+      rewriter.create<triton::nvidia_gpu::AsyncTMAReduceOp>(
+          op.getLoc(), op.getKind(), tmaPtr, indices, alloc);
     };
     lowerTMAStore(op, op.getSrc(), op.getDesc(), createStore, rewriter);
     return success();
@@ -208,17 +177,18 @@ public:
     if (failed(createTMADesc(alloc, op, rewriter))) {
       return failure();
     }
-    rewriter.create<triton::ExperimentalTensormapFenceproxyAcquireOp>(
-        loc, alloc.getResult());
-    auto newDesc = rewriter.create<triton::ReinterpretTensorDescOp>(
-        loc, op.getType(), alloc.getResult());
+    rewriter.create<TensormapFenceproxyAcquireOp>(loc, alloc.getResult());
+    auto newDesc = rewriter.create<ReinterpretTensorDescOp>(loc, op.getType(),
+                                                            alloc.getResult());
     rewriter.replaceOp(op, newDesc);
     return success();
   }
 };
 
+} // anonymous namespace
+
 class TritonNvidiaGPUTMALoweringPass
-    : public TritonNvidiaGPUTMALoweringPassBase<
+    : public impl::TritonNvidiaGPUTMALoweringPassBase<
           TritonNvidiaGPUTMALoweringPass> {
 public:
   void runOnOperation() override {
@@ -227,14 +197,13 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<TMALoadLowering, TMAGatherLowering, TMAStoreLowering,
-                 TMAScatterLowering, TMACreateDescLowering>(context);
+                 TMAScatterLowering, TMAReduceLowering, TMACreateDescLowering>(
+        context);
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }
 };
 
-} // namespace
-
-std::unique_ptr<Pass> mlir::createTritonNvidiaGPUTMALoweringPass() {
-  return std::make_unique<TritonNvidiaGPUTMALoweringPass>();
-}
+} // namespace nvidia_gpu
+} // namespace triton
+} // namespace mlir

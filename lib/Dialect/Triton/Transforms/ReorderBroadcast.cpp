@@ -10,12 +10,11 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 
-// TODO(jlebar): Move this and all other generatede code into namespace
-// mlir::triton.
+namespace mlir::triton {
+
 #define GEN_PASS_DEF_TRITONREORDERBROADCAST
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
-namespace mlir::triton {
 namespace {
 
 Operation *cloneWithNewArgsAndResultTypes(PatternRewriter &rewriter,
@@ -156,7 +155,6 @@ struct MoveBroadcastAfterElementwisePattern
 
     auto srcTy = broadcastOp.getSrc().getType();
     auto bcSrcShape = srcTy.getShape();
-    auto srcEncoding = srcTy.getEncoding();
 
     // Reshape operands to match srcShape
     llvm::SmallVector<Value, 4> newOperands;
@@ -168,7 +166,7 @@ struct MoveBroadcastAfterElementwisePattern
       }
       auto elemTy =
           dyn_cast<RankedTensorType>(operand.getType()).getElementType();
-      auto newTy = RankedTensorType::get(bcSrcShape, elemTy, srcEncoding);
+      auto newTy = srcTy.clone(bcSrcShape, elemTy);
       if (auto splatOp = llvm::dyn_cast<SplatOp>(definingOp)) {
         auto newSplat = rewriter.create<SplatOp>(loc, newTy, splatOp.getSrc());
         newOperands.push_back(newSplat);
@@ -192,8 +190,7 @@ struct MoveBroadcastAfterElementwisePattern
     auto resultTypes = op->getResultTypes();
     for (auto resultTy : resultTypes) {
       auto elemTy = dyn_cast<RankedTensorType>(resultTy).getElementType();
-      newResultTypes.push_back(
-          RankedTensorType::get(bcSrcShape, elemTy, srcEncoding));
+      newResultTypes.push_back(srcTy.clone(bcSrcShape, elemTy));
     }
 
     // Create new op and broadcast results
@@ -208,8 +205,10 @@ struct MoveBroadcastAfterElementwisePattern
   }
 };
 
+} // namespace
+
 class ReorderBroadcastPass
-    : public ::impl::TritonReorderBroadcastBase<ReorderBroadcastPass> {
+    : public impl::TritonReorderBroadcastBase<ReorderBroadcastPass> {
 public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -227,11 +226,5 @@ public:
       signalPassFailure();
   }
 };
-
-} // namespace
-
-std::unique_ptr<mlir::Pass> createReorderBroadcastPass() {
-  return std::make_unique<ReorderBroadcastPass>();
-}
 
 } // namespace mlir::triton

@@ -38,34 +38,18 @@ struct ClusterInfo {
   int clusterDimZ;
 };
 
+std::unique_ptr<Pass> createTritonNvidiaGPUPlanCTAPass(
+    mlir::triton::nvidia_gpu::ClusterInfo *clusterInfo = nullptr);
+
+#define GEN_PASS_DECL
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
+
+/// Generate the code for registering passes.
+#define GEN_PASS_REGISTRATION
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
+
 } // namespace nvidia_gpu
 } // namespace triton
 } // namespace mlir
 
-namespace mlir {
-
-std::unique_ptr<Pass> createTritonNvidiaGPUPlanCTAPass(
-    mlir::triton::nvidia_gpu::ClusterInfo *clusterInfo = nullptr);
-
-std::unique_ptr<Pass>
-createTritonNvidiaGPUFenceInsertionPass(int computeCapability = 90);
-
-std::unique_ptr<Pass> createTritonNvidiaGPUTMALoweringPass();
-
-std::unique_ptr<Pass> createTensorMemoryAllocationPass();
-
-std::unique_ptr<Pass> createTritonNvidiaGPUMMALoweringPass();
-
-std::unique_ptr<Pass> createTritonNvidiaGPUPromoteLHSToTMemPass();
-
-std::unique_ptr<Pass> createTritonNvidiaGPUOptimizeDescriptorEncodingPass();
-
-std::unique_ptr<Pass> createTritonNvidiaGPUOptimizeTMemSubtilingPass();
-
-/// Generate the code for registering passes.
-#define GEN_PASS_REGISTRATION
-#define GEN_PASS_DECL_TRITONNVIDIAGPULEGALIZETMALAYOUTS
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
-
-} // namespace mlir
 #endif // TRITON_DIALECT_TRITONNVIDIAGPU_TRANSFORMS_PASSES_H_

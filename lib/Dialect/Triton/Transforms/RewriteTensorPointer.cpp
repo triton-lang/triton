@@ -1,4 +1,3 @@
-#include <memory>
 #include <stack>
 
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
@@ -6,13 +5,13 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 
-using namespace mlir;
+namespace mlir::triton {
 
-#define GEN_PASS_CLASSES
+#define GEN_PASS_DEF_TRITONREWRITETENSORPOINTER
 #include "triton/Dialect/Triton/Transforms/Passes.h.inc"
 
 namespace {
@@ -34,6 +33,8 @@ public:
   RewritedInfo() = default;
 
   RewritedInfo(const RewritedInfo &other) = default;
+
+  RewritedInfo &operator=(const RewritedInfo &other) = default;
 
   RewritedInfo(Value base, const SmallVector<Value> &shape,
                const SmallVector<Value> &strides,
@@ -80,7 +81,7 @@ public:
     // Expand dimensions
     Value expandedResult =
         builder.create<arith::AddIOp>(loc, splatOffset, i64Range);
-    for (int j = 0; j < tensorShape.size(); ++j) {
+    for (size_t j = 0; j < tensorShape.size(); ++j) {
       if (j == i)
         continue;
       expandedResult =
@@ -134,7 +135,7 @@ public:
 
       // Compare with lower bound
       Value lowerBound = builder.create<mlir::arith::ConstantIntOp>(
-          loc, 0, builder.getI64Type());
+          loc, builder.getI64Type(), 0);
       Value splatLowerBound = builder.create<triton::SplatOp>(
           loc, offsetWithRange.getType(), lowerBound);
       Value cmpLower = builder.create<arith::CmpIOp>(
@@ -196,7 +197,7 @@ public:
 // very fragile and to solve we should expose convert Ptr of tensor to a
 // structure containins all values and not only offsets.
 class RewriteTensorPointerPass
-    : public TritonRewriteTensorPointerBase<RewriteTensorPointerPass> {
+    : public impl::TritonRewriteTensorPointerBase<RewriteTensorPointerPass> {
 private:
   DenseMap<Value, RewritedInfo> rewritedInfo;
 
@@ -258,7 +259,7 @@ public:
     // Calculate new offsets
     assert(info.length() == op.getOffsets().size());
     SmallVector<Value> newOffsets;
-    for (int i = 0; i < info.length(); ++i) {
+    for (size_t i = 0; i < info.length(); ++i) {
       Value i64Offset = builder.create<arith::ExtSIOp>(
           op.getLoc(), builder.getI64Type(), op.getOffsets()[i]);
       Value newOffset = builder.create<arith::AddIOp>(
@@ -340,7 +341,7 @@ public:
         continue;
       }
       needRewrite = true;
-      auto makeTensorPtrOp = getMakeTensorPtrOp(results[i]);
+      auto makeTensorPtrOp = triton::getMakeTensorPtrOp(results[i]);
       assert(rewritedInfo.count(makeTensorPtrOp.getResult()));
       const auto &info = rewritedInfo[makeTensorPtrOp.getResult()];
       for (unsigned j = 0; j < info.length(); ++j) {
@@ -378,7 +379,7 @@ public:
         oldResIdx++;
         newResIdx++;
       } else {
-        auto makeTensorPtrOp = getMakeTensorPtrOp(results[oldResIdx]);
+        auto makeTensorPtrOp = triton::getMakeTensorPtrOp(results[oldResIdx]);
         assert(rewritedInfo.count(makeTensorPtrOp.getResult()));
         auto info = rewritedInfo[makeTensorPtrOp.getResult()];
         for (unsigned j = 0; j < info.length(); ++j) {
@@ -560,6 +561,4 @@ public:
   }
 };
 
-std::unique_ptr<Pass> triton::createRewriteTensorPointerPass() {
-  return std::make_unique<RewriteTensorPointerPass>();
-}
+} // namespace mlir::triton

@@ -22,7 +22,7 @@
  */
 
 #include "../PatternTritonGPUOpToLLVM.h"
-#include "../TritonAMDGPUToLLVM/SchedInstructions.h"
+#include "TritonAMDGPUTransforms/WmmaGroup.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -172,6 +172,10 @@ std::string getTypeStr(Type ty) {
     scalarName = "iu8";
   } else if (ty.isInteger(4)) {
     scalarName = "iu4";
+  } else if (llvm::isa<Float8E4M3FNType>(ty)) {
+    scalarName = "fp8";
+  } else if (llvm::isa<Float8E5M2Type>(ty)) {
+    scalarName = "bf8";
   } else if (auto vecTy = dyn_cast<VectorType>(ty)) {
     auto elemType = vecTy.getElementType();
     auto numElems = vecTy.getNumElements();
@@ -207,13 +211,27 @@ StringRef getWmmaIntrinsicName(Type aElTy, Type bElTy, Type dElTy, Type valATy,
   return intrinsics[h];
 }
 
+std::string addInstructionSuffix(std::string intrinsicName, unsigned kWidth,
+                                 Type aElTy, Type bElTy, Type dElTy,
+                                 bool tied) {
+  if (tied) {
+    intrinsicName += ".tied";
+  } else {
+    if (isa<FloatType>(aElTy) && aElTy.getIntOrFloatBitWidth() == 8)
+      intrinsicName += "." + getTypeStr(bElTy);
+    intrinsicName += ".v" + std::to_string(kWidth) + getTypeStr(dElTy);
+    intrinsicName += ".v" + std::to_string(kWidth) + getTypeStr(aElTy);
+  }
+
+  return intrinsicName;
+}
+
 Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
                             Value valA, Value valB, Value valC, Type aElType,
-                            Type bElType, Type dElType,
+                            Type bElType, Type dElType, StringRef name,
                             std::optional<bool> tiedLower) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto name = getWmmaIntrinsicName(aElType, bElType, dElType, valA.getType(),
-                                   valC.getType(), tiedLower.has_value());
+
   LLVM::FastmathFlagsAttr defaultFlags{};
   SmallVector<Value> operands;
   if (aElType.isInteger())
@@ -236,12 +254,12 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
 
 Value generateWMMAOp(ConversionPatternRewriter &rewriter, Location loc,
                      Value valA, Value valB, Value valC, Type aElType,
-                     Type bElType, Type dElType,
+                     Type bElType, Type dElType, StringRef intrinsicName,
                      std::optional<bool> tiedLower) {
   // Independent of wmma version because builtin functions are backward
   // compatible
   return generateWMMAIntrinsic(rewriter, loc, valA, valB, valC, aElType,
-                               bElType, dElType, tiedLower);
+                               bElType, dElType, intrinsicName, tiedLower);
 }
 
 // Conduct the Dot conversion.
@@ -262,16 +280,33 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto aTensorTy = cast<RankedTensorType>(a.getType());
   auto bTensorTy = cast<RankedTensorType>(b.getType());
   auto dTensorTy = cast<RankedTensorType>(d.getType());
-  auto elemTy = aTensorTy.getElementType();
+  auto aElemTy = aTensorTy.getElementType();
+  auto bElemTy = bTensorTy.getElementType();
+  auto dElemTy = dTensorTy.getElementType();
+
+  const auto kDimOperandSize = aTensorTy.getShape().back();
+
+  std::string intrinsicName;
+  FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic =
+      WmmaIntrinsic::selectFor(wmmaVer, mnkDim[0], mnkDim[1], kDimOperandSize,
+                               aElemTy, bElemTy, dElemTy);
+  if (failed(maybeWmmaIntrinsic)) {
+
+    return op.emitError(
+        "no matching matrix core intrinsic due to unsupported element type");
+  }
+
+  unsigned kDim = maybeWmmaIntrinsic->kDim;
 
   auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
   auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
   int kWidth = aEncoding.getKWidth();
+  intrinsicName = maybeWmmaIntrinsic->name;
 
-  auto repA =
-      wmmaLayout.getRepForOperand(aTensorTy.getShape(), elemTy, kWidth, 0);
-  auto repB =
-      wmmaLayout.getRepForOperand(bTensorTy.getShape(), elemTy, kWidth, 1);
+  auto repA = wmmaLayout.getRepForOperand(aTensorTy.getShape(), aElemTy, kWidth,
+                                          kDim, 0);
+  auto repB = wmmaLayout.getRepForOperand(bTensorTy.getShape(), bElemTy, kWidth,
+                                          kDim, 1);
 
   assert(repA[2] == repB[1]);
 
@@ -303,6 +338,9 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto vecTy = vec_ty(dstElemTy, elemsPerVec);
   bool tied = numRepM % 2 == 0 && paddedOutputElemSize == 2;
   int tiedGroup = tied ? 2 : 1;
+
+  intrinsicName = addInstructionSuffix(intrinsicName, kWidth, aElemTy, bElemTy,
+                                       dElemTy, tied);
   for (int b = 0; b < numRepB; ++b) {
     for (int m = 0; m < numRepM / tiedGroup; ++m) {
       for (int n = 0; n < numRepN; ++n) {
@@ -330,11 +368,12 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
                                        ha[{b, m * tiedGroup + subTied, k}], acc,
                                        bTensorTy.getElementType(),
                                        aTensorTy.getElementType(), dstElemTy,
-                                       optTied)
+                                       intrinsicName, optTied)
                       : generateWMMAOp(
                             rewriter, loc, ha[{b, m * tiedGroup + subTied, k}],
                             hb[{b, n, k}], acc, aTensorTy.getElementType(),
-                            bTensorTy.getElementType(), dstElemTy, optTied);
+                            bTensorTy.getElementType(), dstElemTy,
+                            intrinsicName, optTied);
           }
         }
         for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
@@ -354,9 +393,6 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   Type structTy = LLVM::LLVMStructType::getLiteral(
       wmmaLayout.getContext(), SmallVector<Type>(fc.size(), dstElemTy));
   Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
-
-  const size_t mmaCount = numRepB * numRepM * numRepN * numRepK;
-  setNumGeneratedMMAs(op, mmaCount, mnkDim[0], mnkDim[1], mnkDim[2], elemTy);
 
   rewriter.replaceOp(op, res);
   return success();

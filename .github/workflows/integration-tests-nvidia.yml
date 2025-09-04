@@ -1,0 +1,113 @@
+name: Integration Tests CUDA
+
+on:
+  workflow_call:
+    inputs:
+      matrix:
+        required: true
+        type: string
+
+jobs:
+  integration-tests-nvidia:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    # Let A100 and H100 continue even if GB200 fails, as it's a bit flaky
+    continue-on-error: ${{ matrix.runner[0] == 'nvidia-gb200'}}
+    strategy:
+      matrix:
+        runner: ${{ fromJson(inputs.matrix) }}
+    env:
+      RUNNER_TYPE: ${{ matrix.runner[0] }}
+      TRITON_BUILD_WITH_CCACHE: "true"
+      TRITON_BUILD_WITH_CLANG_LLD: "TRUE"
+      TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
+      TRITON_DISABLE_LINE_INFO: 1
+      PROTON_SKIP_PC_SAMPLING_TEST: 1
+      PYTHON: "python3"
+      CCACHE_COMPRESS: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: "true"
+      - name: Compute cache keys
+        id: cache-key
+        run: |
+          llvm_file="cmake/llvm-hash.txt"
+          nvidia_file="cmake/nvidia-toolchain-version.json"
+          json_file="cmake/json-version.txt"
+
+          # Check if files exist before proceeding
+          if [[ ! -f "$llvm_file" || ! -f "$nvidia_file" || ! -f "$json_file" ]]; then
+            echo "Error: Required dependency files are missing."
+            exit 1
+          fi
+
+          # Process the files if they exist
+          echo "llvm=$(cat $llvm_file | cut -c 1-8)" >> $GITHUB_OUTPUT
+          echo "nvidia=$(sha256sum $nvidia_file | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
+          echo "json=$(cat $json_file)" >> $GITHUB_OUTPUT
+        shell: bash
+      - name: Cache build dependencies
+        uses: actions/cache@v4
+        with:
+          # Note that we cannot use environment variables here given there is
+          # no shell to interpret them in the paths.
+          path: |
+            ~/.triton/llvm
+            ~/.triton/nvidia
+            ~/.triton/json
+          key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache
+      - name: Update PATH
+        run: |
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Setup Python environment for GB200
+        if: ${{ matrix.runner[0] == 'nvidia-gb200' }}
+        run: |
+          echo "/venv/bin" >> $GITHUB_PATH
+          echo "VIRTUAL_ENV=/venv" >> $GITHUB_ENV
+          echo "PYTHONHOME=" >> $GITHUB_ENV
+      - name: Install Triton
+        env:
+          CUDA_HOME: "/usr/local/cuda"
+        run: |
+          nproc
+          nvidia-smi
+          echo "PATH is '$PATH'"
+          ccache --zero-stats
+          make dev-install
+      - name: CCache Stats
+        run: ccache --print-stats
+      - name: Run lit tests
+        run: make test-lit
+      - name: Run python tests on CUDA
+        run: make NUM_PROCS=24 test-unit
+      - name: Run distributed tests
+        run: make test-distributed
+      - name: Run interpreter tests
+        if: ${{ matrix.runner[0] == 'nvidia-h100' }}
+        run: make test-interpret
+      - name: Run regression tests
+        run: make test-regression
+      - name: Run microbenchmark tests
+        # Microbenchmark never fail but running them gives us an easy way to track performance changes.
+        run: make test-microbenchmark
+      - name: Run C++ unittests
+        run: make test-cpp
+      - name: Run Proton tests
+        if: ${{ matrix.runner[0] != 'nvidia-gb200' }}
+        run: make test-proton
+      - name: Inspect cache directories
+        run: |
+          mkdir -p ~/.triton
+          du -h -d 1 ~/.triton
+
+          mkdir -p ~/.ccache
+          du -h -d 1 ~/.ccache

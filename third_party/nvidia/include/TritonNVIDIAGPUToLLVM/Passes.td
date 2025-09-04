@@ -8,7 +8,6 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
     let description = [{
 
     }];
-    let constructor = "mlir::triton::createConvertTritonGPUToLLVMPass()";
 
     let dependentDialects = ["mlir::arith::ArithDialect",
                              "mlir::math::MathDialect",
@@ -30,6 +29,23 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
                "PTX version">,
     ];
 }
+def AllocateSharedMemoryNv : Pass<"allocate-shared-memory-nv", "mlir::ModuleOp"> {
+  let summary = "Add metadata for shared memory allocation for Nvidia";
+
+  let description = [{
+    See `allocate-shared-memory` for more details.
+  }];
+
+  let options = [
+      Option<"computeCapability", "compute-capability",
+             "int32_t", /*default*/"80",
+             "device compute capability">,
+      Option<"ptxVersion", "ptx-version",
+             "int32_t", /*default*/"80",
+             "PTX version">,
+  ];
+}
+
 
 def ConvertWarpSpecializeToLLVM : Pass<"convert-warp-specialize-to-llvm", "mlir::ModuleOp"> {
   let summary = "lower `ttg.warp_specialize` to LLVM";

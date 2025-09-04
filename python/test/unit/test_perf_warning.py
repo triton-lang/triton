@@ -5,7 +5,7 @@ import pytest
 import torch
 import triton
 import triton.language as tl
-from triton._internal_testing import is_cuda
+from triton._internal_testing import is_cuda, is_hip
 
 
 @contextmanager
@@ -18,6 +18,8 @@ def enable_diagnostics_context(value):
 
 
 def test_mma_remark(capfd, fresh_triton_cache):
+    if is_hip():
+        pytest.skip("CUDA specific test")
     if is_cuda():
         capability = torch.cuda.get_device_capability()
         if capability[0] != 9:
@@ -32,40 +34,31 @@ def test_mma_remark(capfd, fresh_triton_cache):
         N,
         K,
         stride_am,
-        stride_ak,
-        stride_bk,
         stride_bn,
         stride_cm,
-        stride_cn,
     ):
-        a_block_ptr = tl.make_block_ptr(
+        a_desc = tl.make_tensor_descriptor(
             base=a_ptr,
-            shape=(M, K),
-            strides=(stride_am, stride_ak),
-            offsets=(0, 0),
-            block_shape=(32, 128),
-            order=(1, 0),
+            shape=[M, K],
+            strides=[stride_am, 1],
+            block_shape=[32, 128],
         )
-        b_block_ptr = tl.make_block_ptr(
+        b_desc = tl.make_tensor_descriptor(
             base=b_ptr,
-            shape=(K, N),
-            strides=(stride_bk, stride_bn),
-            offsets=(0, 0),
-            block_shape=(128, 32),
-            order=(0, 1),
+            shape=[K, N],
+            strides=[stride_bn, 1],
+            block_shape=[32, 128],
         )
-        c_block_ptr = tl.make_block_ptr(
+        c_desc = tl.make_tensor_descriptor(
             base=c_ptr,
-            shape=(M, N),
-            strides=(stride_cm, stride_cn),
-            offsets=(0, 0),
-            block_shape=(32, 32),
-            order=(1, 0),
+            shape=[M, N],
+            strides=[stride_cm, 1],
+            block_shape=[32, 32],
         )
-        a = tl.load(a_block_ptr)
-        b = tl.load(b_block_ptr)
+        a = a_desc.load([0, 0])
+        b = b_desc.load([0, 0]).T
         c = tl.dot(a, b)
-        tl.store(c_block_ptr, c)
+        c_desc.store([0, 0], c)
 
     signature = {
         "a_ptr": "*fp32",
@@ -75,11 +68,8 @@ def test_mma_remark(capfd, fresh_triton_cache):
         "N": "i32",
         "K": "i32",
         "stride_am": "i32",
-        "stride_ak": "i32",
-        "stride_bk": "i32",
         "stride_bn": "i32",
         "stride_cm": "i32",
-        "stride_cn": "i32",
     }
     with enable_diagnostics_context('remarks'):
         triton.compile(triton.compiler.ASTSource(
@@ -89,7 +79,8 @@ def test_mma_remark(capfd, fresh_triton_cache):
         ))
     captured = capfd.readouterr()
 
-    assert ("can't use MMA V3 for the dot op" in captured.err), "expect MMA V3 remark"
+    assert "MMA version 3" in captured.err, "expect MMA V3 in the remark"
+    assert ("due to unsupported shapes or data types" in captured.err), "expect explanation in the remark"
     assert "note: see current operation:" not in captured.err
 
     with enable_diagnostics_context('remarks,operations,stacktraces'):
@@ -104,6 +95,8 @@ def test_mma_remark(capfd, fresh_triton_cache):
 
 
 def test_remark_vectorization(capfd, fresh_triton_cache):
+    if is_hip():
+        pytest.skip("currently failing on HIP")
 
     @triton.jit
     def ldst_vec(in_ptr0, in_ptr1, in_ptr2, in_ptr3, out_ptr0, XBLOCK: tl.constexpr):

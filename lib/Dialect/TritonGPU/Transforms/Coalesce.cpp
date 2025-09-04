@@ -38,7 +38,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     });
 
     auto contiguity = axisInfoAnalysis.getAxisInfo(ptr)->getContiguity();
-    SmallVector<unsigned> order = argSort(contiguity);
+    SmallVector<unsigned> order = getOrderFromContiguity(contiguity);
     LDBG("order=[" << triton::join(order, ", ") << "]");
 
     auto matchesShape = [&refTensorType](const Value &val) {
@@ -55,8 +55,8 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
         Value val = getMemAccessPtr(use);
         if (!val || !matchesShape(val) || memAccessesSameOrder.contains(use))
           continue;
-        auto currOrder =
-            argSort(axisInfoAnalysis.getAxisInfo(val)->getContiguity());
+        auto currOrder = getOrderFromContiguity(
+            axisInfoAnalysis.getAxisInfo(val)->getContiguity());
         if (order == currOrder) {
           LDBG("multi-root-slice: insert to memAccessesSameOrder " << *use);
           memAccessesSameOrder.insert(use);
@@ -106,51 +106,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
 
   static Type getNewType(Type type, Attribute encoding) {
     RankedTensorType tensorType = cast<RankedTensorType>(type);
-    return RankedTensorType::get(tensorType.getShape(),
-                                 tensorType.getElementType(), encoding);
-  }
-
-  void coalesceOp(Attribute encoding, Operation *op) {
-    OpBuilder builder(op);
-    // Convert operands
-    // For load/store with tensor pointers, we don't have to change the
-    // operands' type, we do this by changing the outputs' type of
-    // `make_tensor_ptr`
-    SmallVector<Value, 4> newArgs;
-    for (auto operand : op->getOperands()) {
-      auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
-      if (tensorType &&
-          !isa<triton::gpu::SharedEncodingTrait>(tensorType.getEncoding())) {
-        Type newType = getNewType(tensorType, encoding);
-        newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
-            op->getLoc(), newType, operand));
-      } else {
-        newArgs.push_back(operand);
-      }
-    }
-
-    // Convert output types
-    SmallVector<Type, 4> newTypes;
-    for (auto t : op->getResultTypes()) {
-      bool isAsync = isa<triton::gpu::AsyncCopyGlobalToLocalOp>(op);
-      newTypes.push_back(isAsync ? t : getNewType(t, encoding));
-    }
-
-    // Construct new op with the new encoding
-    Operation *newOp =
-        builder.create(op->getLoc(), op->getName().getIdentifier(), newArgs,
-                       newTypes, op->getAttrs());
-
-    // Cast the results back to the original layout
-    for (size_t i = 0; i < op->getNumResults(); i++) {
-      Value newResult = newOp->getResult(i);
-      if (newTypes[i] != op->getResultTypes()[i]) {
-        newResult = builder.create<triton::gpu::ConvertLayoutOp>(
-            op->getLoc(), op->getResult(i).getType(), newResult);
-      }
-      op->getResult(i).replaceAllUsesWith(newResult);
-    }
-    op->erase();
+    return tensorType.cloneWithEncoding(encoding);
   }
 
   void runOnOperation() override {
@@ -185,7 +141,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     // 4. Convert the output of this new memory op back to L1
     // 5. Replace all the uses of the original memory op by the new one
     for (auto &kv : layoutMap) {
-      coalesceOp(kv.second, kv.first);
+      convertDistributedOpEncoding(kv.second, kv.first);
     }
   }
 };

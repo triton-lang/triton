@@ -4,11 +4,11 @@ import numpy as np
 import torch
 import triton
 import triton.language as tl
-from triton.backends.nvidia.compiler import _path_to_binary
+from triton import knobs
+from typing import Optional, Set, Union
 import pytest
 
 from numpy.random import RandomState
-from typing import Optional, Union
 from triton.runtime.jit import TensorWrapper, reinterpret, type_canonicalisation_dict
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
@@ -38,8 +38,20 @@ def is_cuda():
     return False if target is None else target.backend == "cuda"
 
 
-def is_hopper():
+def is_ampere_or_newer():
+    return is_cuda() and torch.cuda.get_device_capability()[0] >= 8
+
+
+def is_blackwell():
+    return is_cuda() and torch.cuda.get_device_capability()[0] == 10
+
+
+def is_hopper_or_newer():
     return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+
+
+def is_hopper():
+    return is_cuda() and torch.cuda.get_device_capability()[0] == 9
 
 
 def is_hip():
@@ -49,27 +61,35 @@ def is_hip():
 
 def is_hip_cdna2():
     target = get_current_target()
-    if target is None or target.backend != 'hip':
-        return False
-    return target.arch == 'gfx90a'
+    return target is not None and target.backend == 'hip' and target.arch == 'gfx90a'
 
 
 def is_hip_cdna3():
     target = get_current_target()
-    if target is None or target.backend != 'hip':
-        return False
-    return target.arch in ('gfx940', 'gfx941', 'gfx942')
+    return target is not None and target.backend == 'hip' and target.arch == 'gfx942'
 
 
 def is_hip_cdna4():
     target = get_current_target()
-    if target is None or target.backend != 'hip':
-        return False
-    return target.arch in ('gfx950')
+    return target is not None and target.backend == 'hip' and target.arch == 'gfx950'
+
+
+def is_hip_gfx11():
+    target = get_current_target()
+    return target is not None and target.backend == 'hip' and 'gfx11' in target.arch
+
+
+def is_hip_gfx12():
+    target = get_current_target()
+    return target is not None and target.backend == 'hip' and 'gfx12' in target.arch
 
 
 def is_hip_cdna():
     return is_hip_cdna2() or is_hip_cdna3() or is_hip_cdna4()
+
+
+def get_hip_lds_size():
+    return 163840 if is_hip_cdna4() else 65536
 
 
 def is_xpu():
@@ -132,7 +152,7 @@ def to_triton(x: np.ndarray, device, dst_type=None) -> Union[TensorWrapper, torc
 
 
 def str_to_triton_dtype(x: str) -> tl.dtype:
-    return tl.str_to_ty(type_canonicalisation_dict[x])
+    return tl.str_to_ty(type_canonicalisation_dict[x], None)
 
 
 def torch_dtype_name(dtype) -> str:
@@ -162,7 +182,7 @@ def supports_tma(byval_only=False):
         return True
     if not is_cuda():
         return False
-    _, cuda_version = _path_to_binary("ptxas")
+    cuda_version = knobs.nvidia.ptxas.version
     min_cuda_version = (12, 0) if byval_only else (12, 3)
     cuda_version_tuple = tuple(map(int, cuda_version.split(".")))
     assert len(cuda_version_tuple) == 2, cuda_version_tuple
@@ -179,7 +199,57 @@ def tma_skip_msg(byval_only=False):
 requires_tma = pytest.mark.skipif(not supports_tma(), reason=tma_skip_msg())
 
 
+def default_alloc_fn(size: int, align: int, _):
+    return torch.empty(size, dtype=torch.int8, device="cuda")
+
+
 def unwrap_tensor(t: Union[torch.Tensor, triton.runtime.jit.TensorWrapper]) -> torch.Tensor:
     if isinstance(t, triton.runtime.jit.TensorWrapper):
         return t.base
     return t
+
+
+def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
+    from triton import knobs
+
+    if skipped_attr is None:
+        skipped_attr = set()
+
+    monkeypatch = pytest.MonkeyPatch()
+
+    knobs_map = {
+        name: knobset
+        for name, knobset in knobs.__dict__.items()
+        if isinstance(knobset, knobs.base_knobs) and knobset != knobs.base_knobs and name not in skipped_attr
+    }
+
+    # We store which variables we need to unset below in finally because
+    # monkeypatch doesn't appear to reset variables that were never set
+    # before the monkeypatch.delenv call below.
+    env_to_unset = []
+    prev_propagate_env = knobs.propagate_env
+
+    def fresh_function():
+        nonlocal env_to_unset
+        for name, knobset in knobs_map.items():
+            setattr(knobs, name, knobset.copy().reset())
+            for knob in knobset.knob_descriptors.values():
+                if knob.key in os.environ:
+                    monkeypatch.delenv(knob.key, raising=False)
+                else:
+                    env_to_unset.append(knob.key)
+        knobs.propagate_env = True
+        return knobs
+
+    def reset_function():
+        for name, knobset in knobs_map.items():
+            setattr(knobs, name, knobset)
+        # `undo` should be placed before `del os.environ`
+        # Otherwise, it may restore environment variables that monkeypatch deleted
+        monkeypatch.undo()
+        for k in env_to_unset:
+            if k in os.environ:
+                del os.environ[k]
+        knobs.propagate_env = prev_propagate_env
+
+    return fresh_function, reset_function
