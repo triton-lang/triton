@@ -323,6 +323,43 @@ struct CanonicalizeConvertFromConvert
   }
 };
 
+// Decompose unsupported MMA -> MMA layout conversions into
+// MMA -> Blocked -> MMA to guarantee a legal path.
+struct DecomposeMmaToMmaConvert : public OpRewritePattern<ConvertLayoutOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ConvertLayoutOp op,
+                                PatternRewriter &rewriter) const override {
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getType();
+    Attribute srcEnc = srcTy.getEncoding();
+    Attribute dstEnc = dstTy.getEncoding();
+
+    // Only trigger when both sides are MMA encodings (NVIDIA or AMD).
+    auto isMMA = [](Attribute enc) -> bool {
+      return mlir::isa<NvidiaMmaEncodingAttr>(enc) ||
+             mlir::isa<AMDWmmaEncodingAttr>(enc);
+    };
+    if (!srcEnc || !dstEnc || !isMMA(srcEnc) || !isMMA(dstEnc))
+      return failure();
+
+    // Build an intermediate default blocked layout with same shape/elem type.
+    auto shape = dstTy.getShape();
+    int numWarps = triton::gpu::lookupNumWarps(op);
+    int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
+    int numCTAs = 1;
+    auto blocked = getDefaultBlockedEncoding(rewriter.getContext(), shape,
+                                             numWarps, threadsPerWarp, numCTAs);
+    auto midTy = RankedTensorType::get(shape, dstTy.getElementType(), blocked);
+
+    // Replace: cvt(mmaA -> mmaB) with cvt(cvt(mmaA -> blocked) -> mmaB).
+    Location loc = op.getLoc();
+    Value first = rewriter.create<ConvertLayoutOp>(loc, midTy, op.getSrc());
+    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, dstTy, first);
+    return success();
+  }
+};
+
 void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                                   MLIRContext *context) {
   patterns.add<CanonicalizeConvertFromConvert>(context);
@@ -333,6 +370,7 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
   patterns.add<CanonicalizeConvertFromAlloc>(context);
   patterns.add<CanonicalizeConvertFromLocalStore>(context);
   patterns.add<CanonicalizeConvertFromSplit>(context);
+  patterns.add<DecomposeMmaToMmaConvert>(context);
 }
 
 LogicalResult Fp4ToFpOp::verify() {
