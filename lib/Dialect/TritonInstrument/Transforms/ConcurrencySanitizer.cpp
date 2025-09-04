@@ -21,6 +21,35 @@ namespace tti = mlir::triton::instrument;
 
 namespace {
 
+constexpr int NUM_THREADS = 16;
+constexpr int TMA_THREAD_OFFSET = NUM_THREADS;
+constexpr int TC_THREAD_OFFSET = TMA_THREAD_OFFSET + NUM_THREADS;
+constexpr int TOTAL_NUM_THREADS = TC_THREAD_OFFSET + NUM_THREADS;
+constexpr int THREADS_BITMASK_SIZE = llvm::NextPowerOf2(TOTAL_NUM_THREADS);
+
+bool isTMAOp(Operation *op) {
+  return isa<ttng::AsyncTMACopyGlobalToLocalOp,
+             ttng::AsyncTMACopyLocalToGlobalOp, ttng::AsyncTMAGatherOp,
+             ttng::AsyncTMAScatterOp>(op);
+}
+
+bool isTensorCoreOp(Operation *op) {
+  return isa<ttng::TCGen5MMAOp, ttng::TCGen5MMAOp, ttng::TCGen5MMAScaledOp>(op);
+}
+
+int getCurrentThread(Operation *op) {
+  int thread = 0;
+  if (isTMAOp(op)) {
+    thread += TMA_THREAD_OFFSET;
+    return thread;
+  }
+  if (isTensorCoreOp(op)) {
+    thread += TC_THREAD_OFFSET;
+    return thread;
+  }
+  return thread;
+}
+
 bool canAllocBeInstrumented(Operation *op) {
   if (llvm::any_of(op->getUsers(),
                    [](Operation *user) { return isa<tt::CallOp>(user); })) {
@@ -216,6 +245,13 @@ public:
       TypedValue<RankedTensorType> writeState =
           tti::createConstIntTensor(b, b.getLoc(), 0, writeStateType[iMemType]);
       writeStateAlloc[iMemType] = createInitializedScratchMemory(b, writeState);
+
+      createZeroInitStateTensor(b, numBufs, 0, 64,
+                                writeVisibilityType[iMemType],
+                                writeVisibilityAlloc[iMemType]);
+      createZeroInitStateTensor(b, numBufs, THREADS_BITMASK_SIZE, 64,
+                                readVisibilityType[iMemType],
+                                readVisibilityAlloc[iMemType]);
     }
 
     if (!barrierValues.empty()) {
@@ -229,6 +265,13 @@ public:
         int numBufs = bufValues[iMemType].size();
         int numBarriers = barrierValues.size();
         if (numBufs > 0) {
+          createZeroInitStateTensor(b, numBufs, numBarriers, 8,
+                                    writeTrackingType[iMemType],
+                                    writeTrackingAlloc[iMemType]);
+          createZeroInitStateTensor(b, numBufs, numBarriers, 64,
+                                    readTrackingType[iMemType],
+                                    readTrackingAlloc[iMemType]);
+
           writeBarriersType[iMemType] = RankedTensorType::get(
               {numBufs, numBarriers}, b.getIntegerType(8),
               getThreadLocalBlockedEncoding(numBufs, numBarriers));
@@ -280,12 +323,16 @@ public:
 
 private:
   void addWriteChecks(ImplicitLocOpBuilder &b, Value buf, Value pred,
-                      MemType memType, bool hwPipelined) {
+                      MemType memType, bool hwPipelined, int thread) {
     if (barriers) {
-      b.create<tti::ExperimentalCheckWriteStateOp>(
-          buf, buffersTensor[(int)memType], writeBarriersAlloc[(int)memType],
-          writeBarriersType[(int)memType], writeStateAlloc[(int)memType],
-          writeStateType[(int)memType], hwPipelined, pred);
+      // b.create<tti::ExperimentalCheckWriteStateOp>(
+      //     buf, buffersTensor[(int)memType], writeBarriersAlloc[(int)memType],
+      //     writeBarriersType[(int)memType], writeStateAlloc[(int)memType],
+      //     writeStateType[(int)memType], hwPipelined, pred);
+      b.create<tti::ExperimentalVerifyWriteVisibilityOp>(
+          buf, thread, buffersTensor[(int)memType],
+          writeVisibilityAlloc[(int)memType], writeVisibilityType[(int)memType],
+          pred);
     }
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM && asyncCpCommitsAlloc) {
@@ -440,6 +487,8 @@ private:
 
   void instrumentMemoryOperations(ImplicitLocOpBuilder &b) {
     module.walk([&](Operation *op) {
+      // TODO: get the correct thread
+      int thread = getCurrentThread(op);
       b.setLoc(op->getLoc());
       b.setInsertionPoint(op);
       SmallVector<MemEffects> effects = getMemEffects(op);
@@ -454,7 +503,8 @@ private:
           if (effect.rw == MemEffects::RW::Read) {
             // For op that is reading, we only need to check if anything else
             // is writing to the same buffer.
-            addWriteChecks(b, buf, effect.pred, memType, effect.hwPipelined);
+            addWriteChecks(b, buf, effect.pred, memType, effect.hwPipelined,
+                           thread);
             if (effect.trackingKind == MemEffects::TrackingKind::Barrier) {
               for (auto [barrier, pred] : effect.barriersAndPreds) {
                 if (pred && effect.pred) {
@@ -465,6 +515,10 @@ private:
                     readBarriersAlloc[(int)memType],
                     readBarriersType[(int)memType], pred);
               }
+              b.create<tti::ExperimentalSetReadVisibilityOp>(
+                  buf, thread, buffersTensor[(int)memType],
+                  readVisibilityAlloc[(int)memType],
+                  readVisibilityType[(int)memType], effect.pred);
             }
             if (effect.trackingKind == MemEffects::TrackingKind::wgmmaCommit) {
               assert(isa<ttng::WarpGroupDotOp>(op));
@@ -485,9 +539,26 @@ private:
             }
             // Op is writing to the buffer, we need to check if anything else
             // is reading or writing to the same buffer.
-            addWriteChecks(b, buf, effect.pred, memType, effect.hwPipelined);
+            addWriteChecks(b, buf, effect.pred, memType, effect.hwPipelined,
+                           thread);
             addReadChecks(b, buf, effect.pred, memType);
             if (effect.trackingKind == MemEffects::TrackingKind::Barrier) {
+              b.create<tti::ExperimentalSetWriteVisibilityOp>(
+                  buf, thread, buffersTensor[(int)memType],
+                  writeVisibilityAlloc[(int)memType],
+                  writeVisibilityType[(int)memType], effect.pred);
+              b.create<tti::ExperimentalClearWriteTrackingOp>(
+                  buf, buffersTensor[(int)memType],
+                  writeTrackingAlloc[(int)memType],
+                  writeTrackingType[(int)memType], effect.pred);
+              b.create<tti::ExperimentalClearReadVisibilityOp>(
+                  buf, buffersTensor[(int)memType],
+                  readVisibilityAlloc[(int)memType],
+                  readVisibilityType[(int)memType], effect.pred);
+              b.create<tti::ExperimentalClearReadTrackingOp>(
+                  buf, buffersTensor[(int)memType],
+                  readTrackingAlloc[(int)memType],
+                  readTrackingType[(int)memType], effect.pred);
               b.create<tti::ExperimentalSetWriteStateOp>(
                   buf, buffersTensor[(int)memType],
                   writeStateAlloc[(int)memType], writeStateType[(int)memType],
@@ -501,6 +572,12 @@ private:
                     writeBarriersType[(int)memType],
                     writeStateAlloc[(int)memType], writeStateType[(int)memType],
                     pred);
+                b.create<tti::ExperimentalTrackVisibleWritesOp>(
+                    barrier, thread, barriers,
+                    writeVisibilityAlloc[(int)memType],
+                    writeVisibilityType[(int)memType],
+                    writeTrackingAlloc[(int)memType],
+                    writeTrackingType[(int)memType], pred);
               }
             }
             if (effect.trackingKind ==
@@ -522,6 +599,11 @@ private:
         auto barrier = waitOp.getAlloc();
         for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
           if (writeBarriersAlloc[(int)memType]) {
+            b.create<tti::ExperimentalTransferVisibleWritesOp>(
+                barrier, thread, barriers, writeVisibilityAlloc[(int)memType],
+                writeVisibilityType[(int)memType],
+                writeTrackingAlloc[(int)memType],
+                writeTrackingType[(int)memType], pred);
             b.create<tti::ExperimentalClearWriteBarrierOp>(
                 barrier, barriers, writeBarriersAlloc[(int)memType],
                 writeBarriersType[(int)memType], writeStateAlloc[(int)memType],
@@ -671,11 +753,61 @@ private:
     return alloc;
   }
 
+  void createZeroInitStateTensor(ImplicitLocOpBuilder &b, int m, int n,
+                                 int bitWidth, RankedTensorType &type,
+                                 Value &alloc) {
+    SmallVector<int64_t> shape = {m};
+    if (n > 0) {
+      shape.push_back(n);
+    }
+    ttg::BlockedEncodingAttr encoding = getThreadLocalBlockedEncoding(m);
+    if (n > 0) {
+      encoding = getThreadLocalBlockedEncoding(m, n);
+    }
+    type = RankedTensorType::get(shape, b.getIntegerType(bitWidth), encoding);
+    TypedValue<RankedTensorType> tensor =
+        tti::createConstIntTensor(b, b.getLoc(), 0, type);
+    alloc = createInitializedScratchMemory(b, tensor);
+  }
+
   ModuleOp module;
 
   static constexpr int numMemTypes = getMaxEnumValForMemType() + 1;
   Value buffersTensor[numMemTypes];
   Value barriers;
+
+  /////////////////////////////
+  // mbarrier synchronization
+  /////////////////////////////
+
+  // WriteVisibility tracks which writes to buffers are visible to which
+  // threads. 1D tensor, [num_buffers x i64], elements are bitmasks representing
+  // threads
+  RankedTensorType writeVisibilityType[numMemTypes];
+  Value writeVisibilityAlloc[numMemTypes];
+
+  // WriteTracking describes which writes to buffers are being tracked by which
+  // barriers. 2D tensor, [num_buffers x num_barriers x i8], elements are bool
+  // flags
+  RankedTensorType writeTrackingType[numMemTypes];
+  Value writeTrackingAlloc[numMemTypes];
+
+  // ReadVisibility tracks which reads from buffers are visible to which
+  // threads. 2D tensor, [num_buffers x num_threads i64], elements are bitmasks
+  // representing threads.
+  RankedTensorType readVisibilityType[numMemTypes];
+  Value readVisibilityAlloc[numMemTypes];
+
+  // ReadTracking describes which reads from buffers are being tracked by which
+  // barriers. 2D tensor, [num_buffers x num_barriers x i64], elements are
+  // bitmasks representing threads.
+  RankedTensorType readTrackingType[numMemTypes];
+  Value readTrackingAlloc[numMemTypes];
+
+  /////////////////////////////
+  // TODO: legacy, remove
+  /////////////////////////////
+
   // Tensor tracking which barriers are tracking writes to which buffers
   RankedTensorType writeBarriersType[numMemTypes];
   Value writeBarriersAlloc[numMemTypes];
@@ -688,9 +820,19 @@ private:
   RankedTensorType readBarriersType[numMemTypes];
   Value readBarriersAlloc[numMemTypes];
 
+  /////////////////////////////
+  // cp_async synchronization
+  // TODO: make it work with WS by supporting threads
+  /////////////////////////////
+
   // Tensor tracking number of outstanding write commits for given buffer
   RankedTensorType asyncCpCommitsType;
   Value asyncCpCommitsAlloc;
+
+  /////////////////////////////
+  // wgmma synchronization
+  // TODO: make it work with WS by supporting threads
+  /////////////////////////////
 
   // Tensor tracking number of outstanding read commits for given buffer
   RankedTensorType wgmmaCommitsType;

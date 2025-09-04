@@ -66,23 +66,24 @@ def run_in_process(client_fn, args=(), kwargs={}):
 
 
 @gluon.jit
-def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr):
+def async_tma_kernel(input_desc, out, XBLOCK: ttgl.constexpr, FAILURE: ttgl.constexpr):
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[32, 1],
+                                                        warps_per_cta=[4, 1], order=[0, 1])
     smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], input_desc.layout)
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
 
     mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float16.primitive_bitwidth // 8)
     tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
-    tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem, pred=FAILURE)
-    mbarrier.wait(bar, 0)
-
-    tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem, pred=(not FAILURE))
     mbarrier.wait(bar, 0, pred=(not FAILURE))
-
+    val = smem.load(blocked_layout)
+    mbarrier.wait(bar, 0, pred=FAILURE)
     mbarrier.invalidate(bar)
 
-    tma.async_copy_shared_to_global(input_desc, [0, 0], smem)
-    tma.store_wait(0)
+    out_m = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(1, blocked_layout))[:, None]
+    out_n = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(0, blocked_layout))[None, :]
+    out_ptr = out + out_m * XBLOCK + out_n
+    ttgl.store(out_ptr, val)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
@@ -105,9 +106,10 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper):
     triton.set_allocator(alloc_fn)
     XBLOCK = 128
     input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    output = torch.empty((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
-    async_tma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=4)
+    async_tma_kernel[(1, )](input_desc, output, XBLOCK, FAILURE=FAILURE, num_warps=4)
 
 
 @gluon.jit
