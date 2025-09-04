@@ -68,6 +68,22 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
 // -----
 
+#shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "gfx950", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: memdesc_padded_same_rank_than_shape
+  tt.func @memdesc_padded_same_rank_than_shape(%d : !ttg.memdesc<4x4xf16, #shared, #smem, mutable, 3x4x4>) {
+    tt.return
+  }
+
+  // CHECK-LABEL: memdesc_padded_with_pipeline_dim
+  tt.func @memdesc_padded_with_pipeline_dim(%d : !ttg.memdesc<3x4x4xf32, #shared, #smem, mutable>){
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16,  CTAsPerCGA = [1,1,1,1], CTASplitNum = [1,1,1,1], CTAOrder = [3, 2, 1, 0]}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory

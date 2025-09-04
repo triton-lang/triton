@@ -23,8 +23,10 @@ ISAFamily deduceISAFamily(llvm::StringRef arch) {
     break;
   }
 
-  // RNDA ISA cases
-  if (kind >= llvm::AMDGPU::GK_GFX1100 && kind <= llvm::AMDGPU::GK_GFX1201)
+  // RDNA ISA cases
+  if (kind >= llvm::AMDGPU::GK_GFX1200 && kind <= llvm::AMDGPU::GK_GFX1201)
+    return ISAFamily::RDNA4;
+  if (kind >= llvm::AMDGPU::GK_GFX1100 && kind <= llvm::AMDGPU::GK_GFX1153)
     return ISAFamily::RDNA3;
   if (kind >= llvm::AMDGPU::GK_GFX1030 && kind <= llvm::AMDGPU::GK_GFX1036)
     return ISAFamily::RDNA2;
@@ -42,6 +44,7 @@ bool supportsVDot(llvm::StringRef arch) {
   case AMD::ISAFamily::CDNA4:
   case AMD::ISAFamily::RDNA2:
   case AMD::ISAFamily::RDNA3:
+  case AMD::ISAFamily::RDNA4:
     return true;
   default:
     break;
@@ -68,6 +71,7 @@ bool isRDNA(ISAFamily isaFamily) {
   case ISAFamily::RDNA1:
   case ISAFamily::RDNA2:
   case ISAFamily::RDNA3:
+  case ISAFamily::RDNA4:
     return true;
   default:
     break;
