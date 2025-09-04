@@ -25,7 +25,9 @@ class Autotuner(KernelInterface):
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
             'top_k': number of configs to bench
-            'early_config_prune': a function used to prune configs. It should have the signature `prune_configs_by( configs: List[triton.Config], named_args: Dict[str, Any], **kwargs: Dict[str, Any]) -> List[triton.Config]:` and return pruned configs. It should return at least one config.
+            'early_config_prune': a function used to prune configs. It should have the signature 
+                `prune_configs_by( configs: List[triton.Config], named_args: Dict[str, Any], **kwargs: Dict[str, Any]) -> List[triton.Config]:` 
+                and return pruned configs. It should return at least one config.
         """
         if not configs:
             self.configs = [Config({}, num_warps=4, num_stages=3, num_ctas=1)]
