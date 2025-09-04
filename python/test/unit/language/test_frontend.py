@@ -507,7 +507,7 @@ def test_return_in_while():
             i += 1
 
     with pytest.raises(CompilationError) as e:
-        kernel.warmup(grid=(1, ))
+        run_parser(kernel)
 
     assert "Cannot have `return` statements inside `while` or `for` statements in triton" in str(e.value)
 
@@ -531,7 +531,7 @@ def foo(test: TestTuple):
 
 def test_tuple_constexpr():
     test = TestTuple(test=TensorPtr(tl.constexpr(1)))
-    _ = foo.warmup(test, grid=(1, 0))
+    run_parser(foo, args=(test, ))
 
 
 @tl.core._aggregate
