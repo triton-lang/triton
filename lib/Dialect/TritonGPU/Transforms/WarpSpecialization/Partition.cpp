@@ -13,7 +13,8 @@ namespace mlir::triton::gpu {
 
 bool setPartition(Operation *op, Partition *partition) {
   if (op->getAttr(kPartitionAttrName)) {
-    // TODO: what to do in this case
+    // Allow overwriting in this case
+    // TODO: is this the right thing to do
   }
 
   Builder b(op->getContext());
