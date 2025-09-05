@@ -340,8 +340,8 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
   SmallVector<Value>
   emitSwizzledLaneOffsets(RewriterBase &rewriter, Operation *op,
                           RankedTensorType srcTy, MemDescType swizzledTy,
-                          MemDescType flatTy, bool hasSwizzling, Value llDst,
-                          Type resElemTy, unsigned vec) const {
+                          MemDescType flatTy, Value llDst, Type resElemTy,
+                          unsigned vec) const {
     auto loc = op->getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
 
@@ -766,16 +766,15 @@ struct BufferLoadToLocalOpConversion
 
     auto dstTy = op.getDest().getType();
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
+    auto dstEnc = dstTy.getEncoding();
 
-    // If we write into a padded encoding we need to further restrict the vec
-    // size
-    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstTy.getEncoding())) {
+    // For padded encodings restrict vec by the min interval
+    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstEnc)) {
       vec = std::min(vec, padEnc.getMinInterval());
     }
 
-    auto maybeSwizzedEnc =
-        dyn_cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
-    bool hasSwizzling = maybeSwizzedEnc && maybeSwizzedEnc.getMaxPhase() != 1;
+    auto maybeSwizzledEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstEnc);
+    bool hasSwizzling = maybeSwizzledEnc && maybeSwizzledEnc.getMaxPhase() != 1;
     if (failed(canWriteCoalesced(rewriter, op, ptrType, dstTy, vec,
                                  hasSwizzling))) {
       return failure();
@@ -790,15 +789,13 @@ struct BufferLoadToLocalOpConversion
       // TODO (alex): this is only correct as long as the lds view is a
       // contiguous block. So this can break if we slice along the 2 minor
       // dimensions.
-      auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
-          op->getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
-          dstEnc.getCTALayout());
+          op->getContext(), maybeSwizzledEnc.getVec(), 1, 1,
+          maybeSwizzledEnc.getOrder(), maybeSwizzledEnc.getCTALayout());
       flatDstTy = MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
                                    flatSharedEnc, dstTy.getMemorySpace());
-      swizzledLaneOffsets =
-          emitSwizzledLaneOffsets(rewriter, op, ptrType, dstTy, flatDstTy,
-                                  hasSwizzling, llDst, resElemTy, vec);
+      swizzledLaneOffsets = emitSwizzledLaneOffsets(
+          rewriter, op, ptrType, dstTy, flatDstTy, llDst, resElemTy, vec);
     }
 
     auto offsetTy = offsetElems[0].getType();
@@ -894,6 +891,7 @@ struct AsyncCopyGlobalToLocalOpConversion
           op, "requires Blocked or Slice encoding for src");
 
     auto dstTy = op.getResult().getType();
+    auto dstEnc = dstTy.getEncoding();
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     Value llDst = adaptor.getResult();
 
@@ -912,14 +910,13 @@ struct AsyncCopyGlobalToLocalOpConversion
     if (op.getOther())
       otherElems = unpackLLElements(loc, adaptor.getOther(), rewriter);
 
-    // If we write into a padded encoding we need to further restrict the vec
-    // size
-    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstTy.getEncoding())) {
+    // For padded encodings restrict vec by the min interval
+    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstEnc)) {
       vec = std::min(vec, padEnc.getMinInterval());
     }
 
-    auto sharedEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
-    bool hasSwizzling = sharedEnc && sharedEnc.getMaxPhase() != 1;
+    auto maybeSwizzledEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstEnc);
+    bool hasSwizzling = maybeSwizzledEnc && maybeSwizzledEnc.getMaxPhase() != 1;
     if (failed(
             canWriteCoalesced(rewriter, op, srcTy, dstTy, vec, hasSwizzling))) {
       return failure();
@@ -930,15 +927,13 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto flatDstTy = dstTy;
     SmallVector<Value> swizzledLaneOffsets;
     if (hasSwizzling) {
-      auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
-          op->getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
-          dstEnc.getCTALayout());
+          op->getContext(), maybeSwizzledEnc.getVec(), 1, 1,
+          maybeSwizzledEnc.getOrder(), maybeSwizzledEnc.getCTALayout());
       flatDstTy = MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
                                    flatSharedEnc, dstTy.getMemorySpace());
-      swizzledLaneOffsets =
-          emitSwizzledLaneOffsets(rewriter, op, srcTy, dstTy, flatDstTy,
-                                  hasSwizzling, llDst, resElemTy, vec);
+      swizzledLaneOffsets = emitSwizzledLaneOffsets(
+          rewriter, op, srcTy, dstTy, flatDstTy, llDst, resElemTy, vec);
     }
 
     Type srcPtrTy = srcElems[0].getType();
