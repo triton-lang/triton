@@ -177,6 +177,16 @@ void setResourceCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
 #undef CALLBACK_ENABLE
 }
 
+void setNvtxCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
+#define CALLBACK_ENABLE(id)                                                    \
+  cupti::enableCallback<true>(static_cast<uint32_t>(enable), subscriber,       \
+                              CUPTI_CB_DOMAIN_NVTX, id)
+  CALLBACK_ENABLE(CUPTI_CBID_NVTX_nvtxRangePushA);
+  CALLBACK_ENABLE(CUPTI_CBID_NVTX_nvtxRangePushW);
+  CALLBACK_ENABLE(CUPTI_CBID_NVTX_nvtxRangePop);
+#undef CALLBACK_ENABLE
+}
+
 bool isDriverAPILaunch(CUpti_CallbackId cbId) {
   return cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunch ||
          cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid ||
@@ -396,6 +406,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
   setGraphCallbacks(subscriber, /*enable=*/true);
   setRuntimeCallbacks(subscriber, /*enable=*/true);
   setDriverCallbacks(subscriber, /*enable=*/true);
+  setNvtxCallbacks(subscriber, /*enable=*/true);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
@@ -439,6 +450,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   setGraphCallbacks(subscriber, /*enable=*/false);
   setRuntimeCallbacks(subscriber, /*enable=*/false);
   setDriverCallbacks(subscriber, /*enable=*/false);
+  setNvtxCallbacks(subscriber, /*enable=*/false);
   cupti::unsubscribe<true>(subscriber);
   cupti::finalize<true>();
 }
