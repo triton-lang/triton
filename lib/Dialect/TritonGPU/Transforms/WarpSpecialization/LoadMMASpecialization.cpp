@@ -913,16 +913,13 @@ void LoadMMASpecialization::runOnOperation() {
   });
   for (scf::ForOp loop : loops) {
     FailureOr<WarpSchedule> schedule = WarpSchedule::deserialize(loop);
-    if (failed(schedule)) {
-      llvm::outs() << "foo\n";
+    if (failed(schedule))
       continue;
-    }
-      llvm::outs() << "bar\n";
-    // auto [loads, mmas] = getPartitionScheme(loop);
-    // if (loads.empty() && mmas.empty())
-    //   continue;
-    // int loopNumStages = getNumStagesOrDefault(loop, numStages);
-    // if (failed(lowerLoops(loop, loads, mmas, *schedule, loopNumStages)))
-    //   continue;
+    auto [loads, mmas] = getPartitionScheme(loop);
+    if (loads.empty() && mmas.empty())
+      continue;
+    int loopNumStages = getNumStagesOrDefault(loop, numStages);
+    if (failed(lowerLoops(loop, loads, mmas, *schedule, loopNumStages)))
+      continue;
   }
 }
