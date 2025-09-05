@@ -290,6 +290,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_lds_usage(pm, options.arch, custom_lds_size)
         amd.passes.ttgpuir.add_warp_pipeline_conversion(pm)
         passes.convert.add_scf_to_cf(pm)
+        passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
 
         amd.passes.ttgpuir.add_allocate_shared_memory(pm)

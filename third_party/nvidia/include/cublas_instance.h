@@ -152,7 +152,7 @@ class CublasLtInstance {
           sizeof(fastAccum)));
     }
 
-    auto c_dtype = (dtype == CUDA_R_32F) ? dtype : CUDA_R_16F;
+    auto c_dtype = dtype == CUDA_R_8F_E4M3 ? CUDA_R_16F : dtype;
     successOrExit(cublasLtMatrixLayoutCreate(&Adesc, dtype, k, m, k));
     successOrExit(cublasLtMatrixLayoutCreate(&Bdesc, dtype, k, n, k));
     successOrExit(cublasLtMatrixLayoutCreate(&Cdesc, c_dtype, m, n, m));

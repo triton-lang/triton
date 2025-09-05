@@ -320,6 +320,31 @@ tt.func @no_def_op(%lb: i32, %ub: i32, %step: i32) {
   tt.return
 }
 
+// CHECK-LABEL: @scalar_consumers
+tt.func @scalar_consumers(%lb: i32, %ub: i32, %step: i32) {
+  // CHECK: [[C0:%.*]] = arith.constant 0 : i32
+  // CHECK-NEXT: [[ABUF:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi32, {{.*}}>
+  // CHECK-NEXT: [[AREF:%.*]] = nvws.aref.create [[ABUF]]
+  scf.for %i = %lb to %ub step %step iter_args() -> () : i32 {
+    %0 = "op_a"() {ttg.partition = 0} : () -> i32
+    // CHECK: [[VAL:%.*]] = "op_a"
+    // CHECK-NEXT: [[VAL_TENSOR:%.*]] = tt.splat [[VAL]] {ttg.partition = 0 : i32} : i32 -> tensor<1xi32, #blocked>
+    // CHECK-NEXT: [[BUF:%.*]], [[TOKEN:%.*]] = nvws.aref.put.enter [[AREF]][[[C0]], [[C0]]] {ttg.partition = 0 : i32}
+    // CHECK-NEXT: ttg.local_store [[VAL_TENSOR]], [[BUF]] {ttg.partition = 0 : i32}
+    // CHECK-NEXT: nvws.aref.put.exit [[AREF]][[[C0]]], [[TOKEN]] [#nvws.async_op<none>] {ttg.partition = 0 : i32}
+
+    "op_b"(%0) {ttg.partition = 1} : (i32) -> ()
+    // CHECK-NEXT: [[BUF:%.*]], [[TOKEN:%.*]] = nvws.aref.get.enter [[AREF]][[[C0]], [[C0]]] {ttg.partition = 1 : i32}
+    // CHECK-NEXT: [[VAL:%.*]] = ttg.local_load [[BUF]] {ttg.partition = 1 : i32}
+    // CHECK-NEXT: [[VAL_SCALAR:%.*]] = tt.unsplat [[VAL]] {ttg.partition = 1 : i32} : tensor<1xi32, #blocked>
+    // CHECK-NEXT: nvws.aref.get.exit [[AREF]][[[C0]]], [[TOKEN]] [#nvws.async_op<none>] {ttg.partition = 1 : i32}
+    // CHECK-NEXT: "op_b"([[VAL_SCALAR]])
+
+  } {ttg.partition.stages = [0, 2], ttg.warp_specialize.tag = 0 : i32}
+  tt.return
+}
+
+
 }
 
 // -----

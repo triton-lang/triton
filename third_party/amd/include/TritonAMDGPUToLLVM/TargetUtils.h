@@ -15,6 +15,7 @@ enum class ISAFamily {
   RDNA1,
   RDNA2,
   RDNA3,
+  RDNA4,
 };
 
 // Deduces the corresponding ISA family for the given target gfx |arch|.

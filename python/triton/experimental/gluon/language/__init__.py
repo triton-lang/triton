@@ -46,6 +46,8 @@ from ._core import (
     device_assert,
     expand_dims,
     full,
+    gather,
+    histogram,
     inline_asm_elementwise,
     join,
     load,

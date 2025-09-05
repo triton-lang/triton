@@ -31,15 +31,16 @@ LogicalResult lowerLocalStore(Location loc, MLIRContext *ctx, Value regVal,
       dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(memDescTy.getEncoding());
   LinearLayout cvt = LinearLayout::empty();
   if (paddedEnc) {
-    cvt = getPaddedRegToSharedLayout(regLayout, paddedEnc);
+    const auto &sharedLL = paddedEnc.getLinearComponent();
+    cvt = regLayout.invertAndCompose(sharedLL);
   } else {
     auto sharedLayout = toLinearLayout(memDescTy);
     cvt = regLayout.invertAndCompose(sharedLayout);
-    auto kBlock = str_attr("block");
-    // NYI. We would need to emit a map.shared::cluster instruction.
-    if (!cvt.isTrivialOver({kBlock})) {
-      return failure();
-    }
+  }
+  auto kBlock = str_attr("block");
+  // NYI. We would need to emit a map.shared::cluster instruction.
+  if (!cvt.isTrivialOver({kBlock})) {
+    return failure();
   }
   cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
   lowerLocalLdSt(loc, ctx, cvt, inVals, llvmElemTy, memDescTy, smemObj,
@@ -167,15 +168,16 @@ public:
     auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
     LinearLayout cvt = LinearLayout::empty();
     if (paddedEnc) {
-      cvt = getPaddedRegToSharedLayout(regLayout, paddedEnc);
+      const auto &sharedLL = paddedEnc.getLinearComponent();
+      cvt = regLayout.invertAndCompose(sharedLL);
     } else {
       auto sharedLayout = toLinearLayout(memDescTy);
       cvt = regLayout.invertAndCompose(sharedLayout);
-      auto kBlock = str_attr("block");
-      // NYI. We would need to emit a map.shared::cluster instruction.
-      if (!cvt.isTrivialOver({kBlock})) {
-        return failure();
-      }
+    }
+    auto kBlock = str_attr("block");
+    // NYI. We would need to emit a map.shared::cluster instruction.
+    if (!cvt.isTrivialOver({kBlock})) {
+      return failure();
     }
     cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
 
