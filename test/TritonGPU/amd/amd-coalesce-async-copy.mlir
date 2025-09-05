@@ -17,6 +17,23 @@ tt.func @async_copy_1d(%input: tensor<1024x!tt.ptr<f32>, #blocked>,
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.padded_shared<[4:+4] {order = [0], shape = [1024]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+// sizePerThread = [1] because we have no information about contiguity of src pointers
+// CHECK: #[[NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+tt.func @async_copy_1d(%input: tensor<1024x!tt.ptr<f32>, #blocked>,
+    %view: !ttg.memdesc<1024xf32, #shared, #smem, mutable>) {
+  // CHECK: %{{.*}} = ttg.convert_layout %{{.*}} : {{.*}} -> tensor<1024x!tt.ptr<f32>, #[[NEW_BLOCKED]]>
+  // CHECK: %{{.*}} = ttg.async_copy_global_to_local %{{.*}}: tensor<1024x!tt.ptr<f32>, #[[NEW_BLOCKED]]>
+  %token = ttg.async_copy_global_to_local %input, %view: tensor<1024x!tt.ptr<f32>, #blocked> -> <1024xf32, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
