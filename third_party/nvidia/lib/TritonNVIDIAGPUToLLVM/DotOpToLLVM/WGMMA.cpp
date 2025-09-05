@@ -103,8 +103,12 @@ static Value createDescriptor(ConversionPatternRewriter &rewriter, Location loc,
     llvm::report_fatal_error("Unsupported swizzling size.");
   }
   if (swizzling == 0) {
-    desc.leadDimensionBaseOffset = 16 >> 4; // 16 bytes.
-    desc.strideDimensionBaseOffset = (8 * 16) >> 4;
+    // Because the descriptor normalizes spacing to 128-bit units, the
+    // normalized per-element stride is 16 bytes and LBO is defined as 8×that,
+    // i.e. 128 bytes.
+    desc.leadDimensionBaseOffset = 128 >> 4;
+    // Offset from first row to second row 16x16 bytes.
+    desc.strideDimensionBaseOffset = 256 >> 4;
   } else {
     desc.leadDimensionBaseOffset = (swizzling * stride) >> 4;
     desc.strideDimensionBaseOffset = swizzling >> 1;
