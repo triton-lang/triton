@@ -4,7 +4,7 @@
 #include "Device.h"
 #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/CuptiApi.h"
-#include "Driver/GPU/NVTX.h"
+#include "Driver/GPU/NvtxApi.h"
 #include "Profiler/Cupti/CuptiPCSampling.h"
 #include "Utility/Map.h"
 

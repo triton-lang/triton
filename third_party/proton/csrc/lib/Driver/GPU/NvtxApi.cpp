@@ -1,4 +1,4 @@
-#include "Driver/GPU/NVTX.h"
+#include "Driver/GPU/NvtxApi.h"
 
 #include <codecvt>
 #include <cstdint>
