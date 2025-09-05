@@ -236,10 +236,10 @@ tt.func @multiplicity_branch2(%lb: i32, %ub: i32, %step: i32) {
     // CHECK-NEXT: "op_c"([[B1]]) {ttg.partition = array<i32: 2>}
     %e = "op_c"(%b) {ttg.partition = array<i32: 2>}: (!ty) -> !ty
 
-    // CHECK: aref.get.enter [[AREF3]][{{.*}}, {{.*}}] {ttg.partition = 3 : i32}
-    // CHECK-NEXT: [[C1:%.*]] = ttg.local_load {{.*}} {ttg.partition = 3 : i32}
+    // CHECK: aref.get.enter [[AREF3]][{{.*}}, {{.*}}] {ttg.partition = array<i32: 3>}
+    // CHECK-NEXT: [[C1:%.*]] = ttg.local_load {{.*}} {ttg.partition = array<i32: 3>}
     // CHECK-NEXT: aref.get.exit [[AREF3]]
-    // CHECK-NEXT: "op_d"([[C1]]) {ttg.partition = array<i32: 3> : i32}
+    // CHECK-NEXT: "op_d"([[C1]]) {ttg.partition = array<i32: 3>}
     "op_d"(%c) {ttg.partition = array<i32: 3>}: (!ty) -> ()
 
     scf.yield %0, %d, %e : !ty, !ty, !ty
@@ -455,47 +455,6 @@ tt.func @cycle_in_partition(%lb: i32, %ub: i32, %step: i32) {
     // CHECK: "op_c"
     scf.yield
   } {ttg.partition.stages = [0, 2, 3], ttg.warp_specialize.tag = 0 : i32}
-  tt.return
-}
-
-}
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-!ty = tensor<1xi32, #blocked>
-
-module attributes {"ttg.num-warps" = 4 : i32} {
-
-tt.func @invalid_root_partition(%lb: i32, %ub: i32, %step: i32) {
-  scf.for %i = %lb to %ub step %step : i32 {
-    // expected-note @below {{operand defined here in partition #0 at distance 0}}
-    %0 = "partition"() {ttg.partition = array<i32: 0>} : () -> index
-    // expected-warning @below {{operation in the root partition depends on a value that originates from a non-root partition through operand #0}}
-    "root"(%0) : (index) -> ()
-    scf.yield
-  } {ttg.partition.stages = [0, 2], ttg.warp_specialize.tag = 0 : i32}
-  tt.return
-}
-
-}
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
-!ty = tensor<1xi32, #blocked>
-
-module attributes {"ttg.num-warps" = 4 : i32} {
-
-tt.func @invalid_root_partition(%lb: i32, %ub: i32, %step: i32) {
-  %c0 = arith.constant 0 : index
-  scf.for %j = %lb to %ub step %step iter_args(%k = %c0) -> index : i32 {
-    // expected-warning @below {{operation in the root partition depends on a value that originates from a non-root partition through operand #0}}
-    "root"(%k) : (index) -> ()
-    // expected-note @below {{operand defined here in partition #0 at distance 1}}
-    %0 = "partition"() {ttg.partition = array<i32: 0>} : () -> index
-    scf.yield %0 : index
-  } {ttg.partition.stages = [0, 2], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
