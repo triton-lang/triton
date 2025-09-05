@@ -64,6 +64,23 @@ llvm::raw_ostream &mlir_dumps_or_dbgs() {
   }
 }
 
+// Function to parse a comma-separated string into a vector of C-style strings
+llvm::SmallVector<const char *, 3>
+parseCommaSeparatedValues(const std::string &input,
+                          llvm::SmallVector<std::string, 3> &storage) {
+  llvm::SmallVector<StringRef, 3> split;
+  llvm::SmallVector<const char *, 3> result;
+  StringRef(input.c_str()).split(split, ',');
+  llvm::transform(split, std::back_inserter(result), [&storage](StringRef str) {
+    // StringRefs are not always null-terminated.
+    // The purpose for this storage pattern is to
+    // produce a collection of C-strings that are.
+    storage.push_back(str.str());
+    return storage.back().c_str();
+  });
+  return result;
+}
+
 // Run the pass manager under a source manager diagnostic handler, which
 // enables emitted MLIR diagnostics to directly reference Python source
 // code. This diagnostic handler supports filtering diagnostic info by
@@ -100,29 +117,49 @@ struct TritonSourceMgrDiagnosticHandler : public SourceMgrDiagnosticHandler {
   llvm::SourceMgr sourceMgr;
 };
 
+TritonSourceMgrDiagnosticHandler
+setupTritonDiagnosticHandler(MLIRContext *context) {
+  bool showOperations = false, showStacktraces = false, showRemarks = false,
+       showWarnings = false;
+
+  if (auto enableDiagnostics =
+          triton::tools::getStrEnv("MLIR_ENABLE_DIAGNOSTICS");
+      !enableDiagnostics.empty()) {
+    llvm::SmallVector<std::string, 3> storage;
+    parseCommaSeparatedValues(enableDiagnostics, storage);
+    for (auto &str : storage) {
+      if (str == "warnings") {
+        showWarnings = true;
+      } else if (str == "remarks") {
+        showRemarks = true;
+      } else if (str == "stacktraces") {
+        showStacktraces = true;
+      } else if (str == "operations") {
+        showOperations = true;
+      }
+      // we show errors by default, so no need to set it
+    }
+  }
+
+  DiagnosticSeverity minSeverity =
+      showWarnings ? DiagnosticSeverity::Warning : DiagnosticSeverity::Error;
+  minSeverity = showRemarks ? DiagnosticSeverity::Remark : minSeverity;
+
+  context->printOpOnDiagnostic(showOperations);
+  context->printStackTraceOnDiagnostic(showStacktraces);
+  if (showStacktraces) {
+    context->disableMultithreading();
+  }
+
+  return TritonSourceMgrDiagnosticHandler(context, minSeverity);
+}
+
 std::string locationToString(Location loc) {
   std::string str;
   llvm::raw_string_ostream os(str);
   loc.print(os);
   os.flush(); // Make sure all the content is dumped into the 'str' string
   return str;
-}
-
-// Function to parse a comma-separated string into a vector of C-style strings
-llvm::SmallVector<const char *, 3>
-parseCommaSeparatedValues(const std::string &input,
-                          llvm::SmallVector<std::string, 3> &storage) {
-  llvm::SmallVector<StringRef, 3> split;
-  llvm::SmallVector<const char *, 3> result;
-  StringRef(input.c_str()).split(split, ',');
-  llvm::transform(split, std::back_inserter(result), [&storage](StringRef str) {
-    // StringRefs are not always null-terminated.
-    // The purpose for this storage pattern is to
-    // produce a collection of C-strings that are.
-    storage.push_back(str.str());
-    return storage.back().c_str();
-  });
-  return result;
 }
 
 void outputWarning(Location loc, const std::string &msg) {
@@ -517,6 +554,8 @@ void init_triton_ir(py::module &&m) {
            })
       .def("verify",
            [](OpState &self) -> bool {
+             TritonSourceMgrDiagnosticHandler handler =
+                 setupTritonDiagnosticHandler(self.getContext());
              return succeeded(verify(self.getOperation()));
            })
       .def("get_operation", [](OpState &self) { return self.getOperation(); });
@@ -1762,9 +1801,10 @@ void init_triton_ir(py::module &&m) {
       .def("create_make_tensor_descriptor",
            [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
               std::vector<Value> &strides, std::vector<int32_t> &tensorShape,
-              bool isSignedInteger) -> Value {
+              bool isSignedInteger, PaddingOption paddingOption) -> Value {
              return self.create<MakeTensorDescOp>(base, shape, strides,
-                                                  tensorShape, isSignedInteger);
+                                                  tensorShape, isSignedInteger,
+                                                  paddingOption);
            });
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())
@@ -1862,42 +1902,8 @@ void init_triton_ir(py::module &&m) {
               self.enableTiming();
             }
 
-            // setting up diagnostics
-            bool showOperations = false, showStacktraces = false,
-                 showRemarks = false, showWarnings = false;
-
-            if (auto enableDiagnostics =
-                    triton::tools::getStrEnv("MLIR_ENABLE_DIAGNOSTICS");
-                !enableDiagnostics.empty()) {
-              llvm::SmallVector<std::string, 3> storage;
-              parseCommaSeparatedValues(enableDiagnostics, storage);
-              for (auto &str : storage) {
-                if (str == "warnings") {
-                  showWarnings = true;
-                } else if (str == "remarks") {
-                  showRemarks = true;
-                } else if (str == "stacktraces") {
-                  showStacktraces = true;
-                } else if (str == "operations") {
-                  showOperations = true;
-                }
-                // we show errors by default, so no need to set it
-              }
-            }
-
-            DiagnosticSeverity minSeverity = showWarnings
-                                                 ? DiagnosticSeverity::Warning
-                                                 : DiagnosticSeverity::Error;
-            minSeverity =
-                showRemarks ? DiagnosticSeverity::Remark : minSeverity;
-
-            TritonSourceMgrDiagnosticHandler diagHandler(context, minSeverity);
-
-            context->printOpOnDiagnostic(showOperations);
-            context->printStackTraceOnDiagnostic(showStacktraces);
-            if (showStacktraces) {
-              context->disableMultithreading();
-            }
+            TritonSourceMgrDiagnosticHandler diagHandler =
+                setupTritonDiagnosticHandler(context);
             if (failed(self.run(mod.getOperation())))
               throw std::runtime_error("PassManager::run failed");
           },

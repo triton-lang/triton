@@ -151,6 +151,11 @@ void StreamChromeTraceWriter::writeKernel(json &object,
   auto result = kernelTrace.first;
   auto metadata = kernelTrace.second;
 
+  json callStack = json::array();
+  for (auto const &frame : metadata->callStack) {
+    callStack.push_back(frame);
+  }
+
   int curColorIndex = 0;
   // scope id -> color index in chrome color
   std::map<int, int> scopeColor;
@@ -209,6 +214,8 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           args["Unit"] = "GPU cycle";
           args["Kernel Gap"] = std::to_string(kKernelTimeGap) + "cycle(ns)";
           element["args"] = args;
+          element["args"]["call_stack"] = callStack;
+
           object["traceEvents"].push_back(element);
 
           eventIdx++;

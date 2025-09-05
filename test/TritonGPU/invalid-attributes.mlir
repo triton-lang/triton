@@ -42,18 +42,13 @@
 
 // -----
 
-// expected-error@+2 {{ttg.dot_op kWidth parameter must be 16 for gfx11 and 4/8/16 for gfx12 (including packed cases for `scaled_dot`)}}
+// expected-error@+2 {{ttg.dot_op kWidth parameter must be 8/16 for gfx11 and 4/8/16 for gfx12 (including packed cases for `scaled_dot`)}}
 #wmma = #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 4]}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma}>
 
 // -----
 
-// expected-error@+2 {{ttg.dot_op kWidth parameter must be 16 for gfx11 and 4/8/16 for gfx12 (including packed cases for `scaled_dot`)}}
-#wmma = #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 4]}>
-#dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma, kWidth = 8}>
-
-// -----
-// expected-error@+2 {{ttg.dot_op kWidth parameter must be 16 for gfx11 and 4/8/16 for gfx12 (including packed cases for `scaled_dot`)}}
+// expected-error@+2 {{ttg.dot_op kWidth parameter must be 8/16 for gfx11 and 4/8/16 for gfx12 (including packed cases for `scaled_dot`)}}
 #wmma = #ttg.amd_wmma<{version = 2, warpsPerCTA = [1, 4]}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma, kWidth = 32}>
 
@@ -75,39 +70,59 @@
 // -----
 
 // expected-error@+1 {{interval values must all be power of two}}
-#shared = #ttg.padded_shared<[3:+2]>
+#shared = #ttg.padded_shared<[3:+2] {offset=[[0]], block=[]}>
 
 // -----
 
 // expected-error@+1 {{interval values must all be power of two}}
-#shared = #ttg.padded_shared<[0:+2]>
+#shared = #ttg.padded_shared<[0:+2] {offset=[[0]], block=[]}>
 
 // -----
 
 // expected-error@+1 {{padding values must all be power of two}}
-#shared = #ttg.padded_shared<[2:+3]>
+#shared = #ttg.padded_shared<[2:+3] {offset=[[0]], block=[]}>
 
 // -----
 
 // expected-error@+1 {{padding values must all be power of two}}
-#shared = #ttg.padded_shared<[2:+0]>
+#shared = #ttg.padded_shared<[2:+0] {offset=[[0]], block=[]}>
 
 // -----
 
 // expected-error@+1 {{interval values cannot have duplicates}}
-#shared = #ttg.padded_shared<[2:+1, 2:+4]>
+#shared = #ttg.padded_shared<[2:+1, 2:+4] {offset=[[0]], block=[]}>
 
 // -----
 
-// expected-error@+1 {{order cannot be empty}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2]>
+// expected-error@+1 {{Unexpected attribute}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {unknown = 5}>
 
 // -----
 
-// expected-error@+1 {{unexpected key: unknown}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0], unknown = 5}>
+// expected-error@+1 {{Unexpected attribute "order" found}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {offset = [[1, 0], [2, 0]], block = [], order=[0, 1]}>
 
 // -----
 
-// expected-error@+1 {{order size (3) must match CTALayout rank (2)}}
-#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [2, 1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+// expected-error@+1 {{Each offset basis must be 0 or a power of two}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {offset = [[1, 0], [3, 0]], block = []}>
+
+// -----
+
+// expected-error@+1 {{Unexpected attribute "register" found}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {order = [1, 0], register = [[0, 1], [0, 2]]}>
+
+// -----
+
+// expected-error@+1 {{Expected basis of 'block' not found}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {offset = [[1, 0], [1, 1]]}>
+
+// -----
+
+// expected-error@+1 {{Expected basis of 'block' not found}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {offset = [[0 , 1]]}>
+
+// -----
+
+// expected-error@+1 {{Expected basis of 'offset' not found}}
+#shared = #ttg.padded_shared<[2:+1, 4:+2] {block = [[0 , 1]]}>

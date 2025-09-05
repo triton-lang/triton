@@ -4,7 +4,6 @@
 namespace mlir::triton::gpu {
 
 class DecomposeScaledBlocked : public OpRewritePattern<DotScaledOp> {
-
 public:
   DecomposeScaledBlocked(MLIRContext *context, PatternBenefit benefit)
       : OpRewritePattern<DotScaledOp>(context, benefit) {}
