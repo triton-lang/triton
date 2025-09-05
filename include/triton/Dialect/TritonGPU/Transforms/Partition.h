@@ -1,6 +1,8 @@
 #ifndef TRITON_TRITONGPU_TRANSFORM_PIPELINE_PARTITION_H_
 #define TRITON_TRITONGPU_TRANSFORM_PIPELINE_PARTITION_H_
 
+#include "mlir/IR/Block.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
@@ -127,6 +129,9 @@ public:
   LLVM_DUMP_METHOD void dump() const;
 
 private:
+  void serializeBlock(mlir::Block *block, mlir::Builder &builder,
+                      const Partition *parentPartition = nullptr) const;
+
   // WarpSpecialization tag
   int tag;
   // Partitions are numbered [0, N).
