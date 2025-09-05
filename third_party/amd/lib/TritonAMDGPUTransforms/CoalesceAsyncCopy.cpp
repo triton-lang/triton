@@ -96,63 +96,78 @@ struct CoalesceAsyncCopyWrites
                                          "already using the correct layout");
     }
 
+    auto mod = copyOp->getParentOfType<ModuleOp>();
+    int numWarps = triton::gpu::lookupNumWarps(copyOp);
+    int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+
     ttg::DistributedEncodingTrait newDistEnc;
     if (!paddedEnc) {
       // Get new blocked encoding with loadContig as sizePerThread in the
       // fastest dim
       assert(blockedContig >= loadContig);
       contigPerThread[blockedEnc.getOrder()[0]] = loadContig;
-      int numWarps = triton::gpu::lookupNumWarps(copyOp);
-      auto mod = copyOp->getParentOfType<ModuleOp>();
-      int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
       newDistEnc = BlockedEncodingAttr::get(
           copyOp.getContext(), srcTy.getShape(), contigPerThread,
           blockedEnc.getOrder(), numWarps, threadsPerWarp,
           blockedEnc.getCTALayout());
     } else {
-      // Adjust blocked to padded
-      if (loadContig * elemBitWidth != 128) {
-        return copyOp.emitError(
-            "NYI: Only 128bit wide padded async loads are implemented!");
-      }
+      // Each warp has to write coalesced into LDS so we have to change the src
+      // encoding to reflect the reordering of elements from the
+      // linear_component of the padded encoding. This is done by taking bases
+      // from the linear component to build a new distributed shared encoding
+      // used for the global pointers:
+      // 1) Take log2(loadContig) bases as reg bases to ensure our registers per
+      // load point to contiguous elements in LDS.
+      // 2) Take log2(threadsPerWarp) as lane bases to ensure lanes write
+      // contiguous into LDS.
+      // 3) Take log2(numWarps) or add braodcasting bases if we run out of bases
+      // 4) Take any remaining bases as additional reg bases
+
+      auto *ctx = srcTy.getContext();
+      StringAttr kOffset = StringAttr::get(ctx, "offset");
+
+      auto ll = paddedEnc.getLinearComponent();
+      auto rank = srcTy.getRank();
+
+      auto offsetBases = ll.getBases().lookup(kOffset);
+      auto remainingBases = ArrayRef(offsetBases);
 
       std::vector<std::vector<int>> regBases;
       std::vector<std::vector<int>> laneBases;
       std::vector<std::vector<int>> warpBases;
 
-      // We adjust the global layout so lanes write contiguous into LDS. Note
-      // that we do not look for performance here, so if the shared layout is
-      // inefficient we will produce ineffect IR/assembly. The padded shared
-      // layout composition need to take this into account
+      int log2LoadContig = llvm::Log2_32(loadContig);
+      int log2ThreadsPerWarp = llvm::Log2_32(threadsPerWarp);
+      int log2NumWarps = llvm::Log2_32(numWarps);
 
-      auto *ctx = srcTy.getContext();
-      StringAttr kOffset = StringAttr::get(ctx, "offset");
-
-      int logWarpSize = llvm::Log2_32(64);
-      auto ll = paddedEnc.getLinearComponent();
-
-      int offsetIndex = 0;
-      int logVecSize = 3;
-      for (; offsetIndex < logVecSize; offsetIndex++) {
-        regBases.push_back(ll.getBasis(kOffset, offsetIndex));
-      }
-      for (; offsetIndex < logVecSize + logWarpSize; offsetIndex++) {
-        laneBases.push_back(ll.getBasis(kOffset, offsetIndex));
-      }
-      int logNumWarps = 3;
-      for (; offsetIndex < logVecSize + logWarpSize + logNumWarps;
-           offsetIndex++) {
-        warpBases.push_back(ll.getBasis(kOffset, offsetIndex));
-      }
-      // Remaining basis are added as reg
-      for (; offsetIndex < ll.getInDimSizeLog2(kOffset); offsetIndex++) {
-        regBases.push_back(ll.getBasis(kOffset, offsetIndex));
+      if (remainingBases.size() < log2LoadContig + log2ThreadsPerWarp) {
+        return rewriter.notifyMatchFailure(copyOp, "dst shape is too small");
       }
 
-      auto transposeBases = [](std::vector<std::vector<int>> &vec) {
-        for (auto &p : vec)
-          std::swap(p[0], p[1]);
-      };
+      // 1) take log2(loadContig) bases as regBases
+      for (auto b : llvm::seq(log2LoadContig)) {
+        assert(!remainingBases.empty());
+        regBases.push_back(remainingBases.consume_front());
+      }
+      // 2) take log2(threadsPerWarp) bases as laneBases
+      for (auto b : llvm::seq(log2ThreadsPerWarp)) {
+        assert(!remainingBases.empty());
+        laneBases.push_back(remainingBases.consume_front());
+      }
+      // 3) take log2(numWarps) bases as warpBases or broadcast
+      for (auto b : llvm::seq(log2NumWarps)) {
+        if (!remainingBases.empty()) {
+          warpBases.push_back(remainingBases.consume_front());
+        } else {
+          // Broadcast since we need to exhaust numWarps
+          warpBases.push_back(std::vector<int32_t>(rank, 0));
+        }
+      }
+      // Remaining basis are added as reg to repeat the pattern
+      // 3) take remaining bases as additionl reg bases
+      while (!remainingBases.empty()) {
+        regBases.push_back(remainingBases.consume_front());
+      }
 
       auto standardOutDims = triton::standardOutDimNames(ctx, srcTy.getRank());
       StringAttr kRegister = StringAttr::get(ctx, "register");
@@ -166,7 +181,7 @@ struct CoalesceAsyncCopyWrites
               {kLane, laneBases},
               {kWarp, warpBases},
           },
-          {standardOutDims[0], standardOutDims[1]});
+          standardOutDims);
 
       paddedLayout = triton::gpu::combineCtaCgaWithShape(
           paddedLayout, blockedEnc.getCTALayout(), srcTy.getShape());
