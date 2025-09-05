@@ -12,17 +12,25 @@ using namespace triton::gpu;
 
 namespace mlir::triton::gpu {
 
-bool setPartition(Operation *op, Partition *partition) {
+void setPartition(Operation *op, ArrayRef<int> partitionIds) {
+  Builder b(op->getContext());
+  op->setAttr(kPartitionAttrName, b.getDenseI32ArrayAttr(partitionIds));
+}
+
+void setPartition(Operation *op, const SetVector<int>& partitionIds) {
+  SmallVector<int> partitions(partitionIds.begin(), partitionIds.end());
+  setPartition(op, partitions);
+}
+
+void setPartition(Operation *op, Partition *partition) {
   if (op->getAttr(kPartitionAttrName)) {
     // Allow overwriting in this case
     // TODO: is this the right thing to do
   }
 
-  Builder b(op->getContext());
   SmallVector<int> partitions{partition->getIndex()};
-  op->setAttr(kPartitionAttrName, b.getDenseI32ArrayAttr(partitions));
+  setPartition(op, partitions);
   partition->addOp(op);
-  return true;
 }
 
 std::optional<SetVector<int>> getPartitionIds(Operation *op) {

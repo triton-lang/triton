@@ -49,7 +49,8 @@ private:
   SmallVector<Operation *> ops;
 };
 
-bool setPartition(Operation *op, Partition *partition);
+void setPartition(Operation *op, Partition *partition);
+void setPartition(Operation *op, const SetVector<int>& partitionIds);
 std::optional<SetVector<int>> getPartitionIds(Operation *op);
 bool hasPartition(Operation*op);
 bool isOpInPartition(Operation *op, const Partition *partition);
