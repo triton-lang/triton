@@ -528,6 +528,22 @@ void optimizeSchedule(scf::ForOp loop, WarpSchedule &schedule) {
   }
 }
 
+void assignRootPartition(scf::ForOp loop, int numPartitions) {
+  auto ctx = loop.getContext();
+  Builder b(ctx);
+  SmallVector<Attribute, 4> attrs;
+  for (int i = 0; i < numPartitions; ++i) {
+    attrs.push_back(b.getI32IntegerAttr(i));
+  }
+  auto partitionAttr = ArrayAttr::get(ctx, attrs);
+
+  for (Operation &op : loop.getBody()->without_terminator()) {
+    if (!hasPartition(&op)) {
+      op.setAttr(kPartitionAttrName, partitionAttr);
+    }
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Pass Definition
 //===----------------------------------------------------------------------===//
@@ -557,9 +573,8 @@ void PartitionScheduling::runOnOperation() {
     if (std::optional<WarpSchedule> schedule = getInitialSchedule(loop)) {
       propagatePartitions(loop, *schedule);
       optimizeSchedule(loop, *schedule);
-      // schedule->serialize(loop);
+      assignRootPartition(loop, schedule->getNumPartitions());
       // assign partition to body ops
-      // Put unassigned ops into root partition
       loop->setAttr(
           kWarpSpecializeTagAttrName,
           IntegerAttr::get(IntegerType::get(loop.getContext(), 32), idx));
