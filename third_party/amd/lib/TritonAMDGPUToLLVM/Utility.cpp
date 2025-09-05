@@ -151,10 +151,11 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       }
     } else {
       if (!llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
-                               ISAFamily::CDNA4, ISAFamily::RDNA3},
+                               ISAFamily::CDNA4, ISAFamily::RDNA3,
+                               ISAFamily::RDNA4},
                               isaFamily)) {
-        // DPP is only supported for CDNA2/CDNA3/CDNA4/RDNA3 right now, so we
-        // fallback to ds_swizzle for other architectures.
+        // DPP is only supported for CDNA2/CDNA3/CDNA4/RDNA3/RDNA4 right now, so
+        // we fallback to ds_swizzle for other architectures.
         //
         // This map facilates the butterfly shuffle pattern for a stride less
         // than 16. The pattern stride is the key of the map.
@@ -685,7 +686,7 @@ bool isUsedByDotScaledOp(Operation *op) {
       });
 }
 
-bool isChainDotHead(tt::DotOpInterface dotOp) {
+bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
   auto isInSameRegion = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
@@ -696,8 +697,9 @@ bool isChainDotHead(tt::DotOpInterface dotOp) {
   for (Operation *op : fwdSlices) {
     if (auto dOp = dyn_cast<tt::DotOpInterface>(op)) {
       assert(dOp != dotOp);
-      auto opA = dOp.getA().getDefiningOp();
-      if (opA && fwdSlices.contains(opA)) {
+      Operation *dotOperand = (opIdx == 0) ? dOp.getA().getDefiningOp()
+                                           : dOp.getB().getDefiningOp();
+      if (dotOperand && fwdSlices.contains(dotOperand)) {
         return true;
       }
     }
