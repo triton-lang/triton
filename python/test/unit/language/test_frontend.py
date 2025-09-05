@@ -588,3 +588,12 @@ def test_aggregate_constexpr_function():
 
     # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_16_
     anchor(agg.square_val())
+
+
+def test_no_constexpr_function():
+
+    def foo():
+        pass
+
+    with pytest.raises(TypeError, match="constexpr must not be a function"):
+        foo = tl.constexpr(foo)

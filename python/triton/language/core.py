@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import builtins
 from .. import knobs
 from ..runtime.jit import JITCallable
+from types import FunctionType
 import inspect
 
 from .._C.libtriton import ir
@@ -203,6 +204,8 @@ class constexpr(base_value):
     """
 
     def __init__(self, value):
+        if isinstance(value, FunctionType):
+            raise TypeError('constexpr must not be a function')
         while isinstance(value, constexpr):
             value = value.value
         self.value = value
