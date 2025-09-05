@@ -544,6 +544,18 @@ void assignRootPartition(scf::ForOp loop, int numPartitions) {
   }
 }
 
+void assignIfBodyPartition(scf::ForOp loop) {
+  for (Operation &op : loop.getBody()->without_terminator()) {
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      auto attrs = ifOp->getAttr(kPartitionAttrName);
+      assert(attrs);
+
+      ifOp->walk(
+          [&](Operation *op) { op->setAttr(kPartitionAttrName, attrs); });
+    }
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Pass Definition
 //===----------------------------------------------------------------------===//
@@ -574,6 +586,7 @@ void PartitionScheduling::runOnOperation() {
       propagatePartitions(loop, *schedule);
       optimizeSchedule(loop, *schedule);
       assignRootPartition(loop, schedule->getNumPartitions());
+      assignIfBodyPartition(loop);
       // assign partition to body ops
       loop->setAttr(
           kWarpSpecializeTagAttrName,
