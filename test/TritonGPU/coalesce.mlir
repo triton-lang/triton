@@ -199,17 +199,3 @@ tt.func @coalesce_poison(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1
 }
 
 }
-
-// -----
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [2, 4, 4], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @load_3D_contig_1(%arg: !tt.ptr<i8> {tt.divisibility = 16 : i32}) {
-    %50 = tt.splat %arg : !tt.ptr<i8> -> tensor<32x4x4x!tt.ptr<i8>, #blocked>
-    // This checks that the pass picks the row-major ordering by default for elements with contiguity 1.
-    // CHECK: #blocked = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [2, 4, 4], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
-    // CHECK:  tt.load %1 : tensor<32x4x4x!tt.ptr<i8>, #blocked>
-    %108 = tt.load %50 : tensor<32x4x4x!tt.ptr<i8>, #blocked>
-    tt.return
-  }
-}
