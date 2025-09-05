@@ -426,7 +426,6 @@ class HIPBackend(BaseBackend):
         features = '-real-true16' if 'gfx11' in options.arch else ''
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
                                        False)
-        print("We are inside of this.")
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)

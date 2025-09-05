@@ -25,7 +25,7 @@ def test_hipblas(m, n, k, dtype_str, device):
     elements = torch.tensor([-2.0, -1.0, 0.0, 1.0, 2.0], dtype=torch.float32, device=device)
     a = limited_rand(elements, (m, k)).to(dtype)
     b = limited_rand(elements, (k, n)).to(dtype)
-    # for FP8 inputs, hipBLASLt expects FP16 accumulation/output layout?
+
     c_dtype = torch.float16 if dtype == torch.float8_e4m3fnuz else dtype
     c = torch.zeros((m, n), dtype=c_dtype, device=device)
 

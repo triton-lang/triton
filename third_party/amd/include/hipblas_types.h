@@ -1,66 +1,10 @@
 #ifndef TRITON_HIPBLAS_TYPES_H
 #define TRITON_HIPBLAS_TYPES_H
 
+#include "hipblas-common.h"
 #include <cstddef>
 #include <cstdint>
-
 // Forward declarations of hipBLAS types and functions.
-// TODO: Add utility for printing actual problem. Does the library offer this?
-
-/* HIPBLAS status type returns */
-typedef enum {
-  HIPBLAS_STATUS_SUCCESS = 0,         /**< Function succeeds */
-  HIPBLAS_STATUS_NOT_INITIALIZED = 1, /**< HIPBLAS library not initialized */
-  HIPBLAS_STATUS_ALLOC_FAILED = 2,    /**< resource allocation failed */
-  HIPBLAS_STATUS_INVALID_VALUE =
-      3, /**< unsupported numerical value was passed to function */
-  HIPBLAS_STATUS_MAPPING_ERROR = 4,    /**< access to GPU memory space failed */
-  HIPBLAS_STATUS_EXECUTION_FAILED = 5, /**< GPU program failed to execute */
-  HIPBLAS_STATUS_INTERNAL_ERROR =
-      6,                            /**< an internal HIPBLAS operation failed */
-  HIPBLAS_STATUS_NOT_SUPPORTED = 7, /**< function not implemented */
-  HIPBLAS_STATUS_ARCH_MISMATCH = 8, /**< architecture mismatch */
-  HIPBLAS_STATUS_HANDLE_IS_NULLPTR = 9, /**< hipBLAS handle is null pointer */
-  HIPBLAS_STATUS_INVALID_ENUM =
-      10, /**<  unsupported enum value was passed to function */
-  HIPBLAS_STATUS_UNKNOWN =
-      11, /**<  back-end returned an unsupported status code */
-} hipblasStatus_t;
-
-/*! \brief The compute type to be used. Currently only used with GemmEx with the
- * HIPBLAS_V2 interface. Note that support for compute types is largely
- * dependent on backend. */
-typedef enum {
-  // Note that these types are taken from cuBLAS. With the rocBLAS backend,
-  // currently hipBLAS will convert to rocBLAS types to get equivalent
-  // functionality where supported.
-  HIPBLAS_COMPUTE_16F = 0, /**< compute will be at least 16-bit precision */
-  HIPBLAS_COMPUTE_16F_PEDANTIC =
-      1,                   /**< compute will be exactly 16-bit precision */
-  HIPBLAS_COMPUTE_32F = 2, /**< compute will be at least 32-bit precision */
-  HIPBLAS_COMPUTE_32F_PEDANTIC =
-      3, /**< compute will be exactly 32-bit precision */
-  HIPBLAS_COMPUTE_32F_FAST_16F = 4,  /**< 32-bit input can use 16-bit compute */
-  HIPBLAS_COMPUTE_32F_FAST_16BF = 5, /**< 32-bit input can is bf16 compute */
-  HIPBLAS_COMPUTE_32F_FAST_TF32 =
-      6, /**< 32-bit input can use tensor cores w/ TF32 compute. Only supported
-            with cuBLAS and hipBLASLT backend currently */
-  HIPBLAS_COMPUTE_64F = 7, /**< compute will be at least 64-bit precision */
-  HIPBLAS_COMPUTE_64F_PEDANTIC =
-      8, /**< compute will be exactly 64-bit precision */
-  HIPBLAS_COMPUTE_32I =
-      9, /**< compute will be at least 32-bit integer precision */
-  HIPBLAS_COMPUTE_32I_PEDANTIC =
-      10, /**< compute will be exactly 32-bit integer precision */
-  HIPBLAS_COMPUTE_32F_FAST_8F_FNUZ =
-      100, /**< 32-bit compute using fp8 mfma instruction */
-  HIPBLAS_COMPUTE_32F_FAST_8BF_FNUZ =
-      101, /**< 32-bit compute using bf8 mfma instruction */
-  HIPBLAS_COMPUTE_32F_FAST_8F8BF_FNUZ =
-      102, /**< 32-bit compute using f8bf8 mfma instruction */
-  HIPBLAS_COMPUTE_32F_FAST_8BF8F_FNUZ =
-      103, /**< 32-bit compute using bf8f8 mfma instruction */
-} hipblasComputeType_t;
 
 typedef enum {
   HIPBLASLT_MATMUL_DESC_TRANSA =
@@ -146,12 +90,6 @@ typedef enum {
                                                   Type: float*/
   HIPBLASLT_MATMUL_DESC_MAX,
 } hipblasLtMatmulDescAttributes_t;
-
-typedef enum {
-  HIPBLAS_OP_N = 111, /**<  Operate with the matrix. */
-  HIPBLAS_OP_T = 112, /**<  Operate with the transpose of the matrix. */
-  HIPBLAS_OP_C = 113 /**< Operate with the conjugate transpose of the matrix. */
-} hipblasOperation_t;
 
 typedef enum {
   HIPBLASLT_MATMUL_PREF_SEARCH_MODE = 0, /**<Search mode. Data Type: uint32_t*/

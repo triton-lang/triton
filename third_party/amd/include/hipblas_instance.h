@@ -40,8 +40,7 @@ class HipBlasLtInstance {
       const hipblasLtMatrixLayout_t, void *, const hipblasLtMatrixLayout_t,
       const hipblasLtMatmulAlgo_t *, void *, size_t, hipStream_t);
 
-  static constexpr const char *name =
-      "libhipblaslt.so"; // TODO: verify this is correct so name
+  static constexpr const char *name = "libhipblaslt.so";
 
   hipblasLtCreate_t hipblasLtCreate;
   hipblasLtDestroy_t hipblasLtDestroy;
@@ -194,11 +193,10 @@ class HipBlasLtInstance {
     successOrExit(hipblasLtMatrixLayoutCreate(&Adesc, dtype, k, m, k));
     successOrExit(hipblasLtMatrixLayoutCreate(&Bdesc, dtype, k, n, k));
     successOrExit(hipblasLtMatrixLayoutCreate(&Cdesc, c_dtype, m, n, m));
-    // FP8 inputs require FP16 output layout for valid heuristics?
+
     successOrExit(hipblasLtMatrixLayoutCreate(&Ddesc, c_dtype, m, n, m));
     successOrExit(hipblasLtMatmulAlgoGetHeuristic(
-        ltHandle, matmulDesc, Adesc, Bdesc, Cdesc, Ddesc, preference,
-        1, // should we increase this value if they want more?
+        ltHandle, matmulDesc, Adesc, Bdesc, Cdesc, Ddesc, preference, 1,
         &heuristicResult, &returnedResults));
 
     if (returnedResults == 0) {
