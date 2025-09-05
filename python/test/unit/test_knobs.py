@@ -77,13 +77,10 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
 
     assert fresh_knobs.amd.global_prefetch == 4
     assert fresh_knobs.amd.local_prefetch == 3
-    assert fresh_knobs.amd.use_buffer_ops
 
     # Just to prove that use_buffer_ops is coming from env
     monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
     assert not fresh_knobs.amd.use_buffer_ops
-    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS")
-    assert fresh_knobs.amd.use_buffer_ops
 
     with fresh_knobs.amd.scope():
         fresh_knobs.amd.global_prefetch = 5
@@ -97,13 +94,10 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
 
     assert fresh_knobs.amd.global_prefetch == 4
     assert fresh_knobs.amd.local_prefetch == 3
-    assert fresh_knobs.amd.use_buffer_ops
 
     # Just to prove that use_buffer_ops is coming from env
     monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
     assert not fresh_knobs.amd.use_buffer_ops
-    monkeypatch.delenv("AMDGCN_USE_BUFFER_OPS")
-    assert fresh_knobs.amd.use_buffer_ops
 
 
 def test_env_updated(fresh_knobs, monkeypatch):

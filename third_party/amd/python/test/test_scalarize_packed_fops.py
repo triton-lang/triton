@@ -64,6 +64,8 @@ def test_check_not_scalarize():
 # check scalarization "fixes"
 def test_check_scalarized():
     triton.knobs.amd.scalarize_packed_fops = True
+    triton.knobs.amd.use_buffer_ops = True
+
     kernel = triton.compile(str(Path(__file__).parent / "attn_fwd.ttir"), target=current_target)
 
     # check the specific IR pattern was rewritten

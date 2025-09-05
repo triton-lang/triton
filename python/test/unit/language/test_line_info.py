@@ -155,8 +155,12 @@ def test_line_info(func: str):
         kernel_info = kernel_cdiv.warmup(20, grid=(1, ))
 
     file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
+    backend = triton.runtime.driver.active.get_current_target().backend
+
     if func == "single":
-        assert (check_file_lines(file_lines, "test_line_info.py", 14))
+        if backend != "hip":
+            # removed for release/3.5 w/ turning off AMD buffer ops
+            assert (check_file_lines(file_lines, "test_line_info.py", 14))
         assert (check_file_lines(file_lines, "test_line_info.py", 15))
     elif func == "call":
         assert (check_file_lines(file_lines, "test_line_info.py", 25))
@@ -167,7 +171,9 @@ def test_line_info(func: str):
         assert (check_file_lines(file_lines, "test_line_info.py", 32))
     elif func == "autotune":
         assert (check_file_lines(file_lines, "test_line_info.py", 50))
-        assert (check_file_lines(file_lines, "test_line_info.py", 51))
+        if backend != "hip":
+            # removed for release/3.5 w/ turning off AMD buffer ops
+            assert (check_file_lines(file_lines, "test_line_info.py", 51))
         assert (check_file_lines(file_lines, "test_line_info.py", 52))
     elif func == "dot_combine":
         assert (check_file_lines(file_lines, "test_line_info.py", 62))
@@ -259,7 +265,7 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
 
     @triton.jit
     def kernel_basic(src, N, BLOCK_SIZE: tl.constexpr):
-        # CHECK: #loc = loc("{{.*}}":261:0)
+        # CHECK: #loc = loc("{{.*}}":267:0)
         # CHECK-LABEL:  tt.func public @kernel_basic(
         # CHECK-SAME:                                %src: !tt.ptr<f32> loc("src"(#loc)), %N: i32 loc("N"(#loc)))
         # CHECK:          %x_plus_1 = arith.constant dense<1.000000e+00> : tensor<16xf32> loc(#loc14)
