@@ -31,6 +31,8 @@ namespace mlir::triton::AMD {
 /// @return created pass
 std::unique_ptr<OperationPass<ModuleOp>>
 createOptimizeLDSUsagePass(StringRef arch, int32_t customLDSLimit = 0);
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertWarpPipelinePass();
 
 void runScalarizePackedFOpsPass(llvm::Function &F);
 

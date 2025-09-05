@@ -962,6 +962,7 @@ LDBG("######### creating region");
     
   }
   executeRegionOp.setNoInline(true);
+  executeRegionOp->setAttr("warp_pipelined", b.getUnitAttr());
   b.restoreInsertionPoint(ip);
   LDBG("######### created region");
   
@@ -1025,7 +1026,9 @@ void Pipeliner::getDotPingponged() {
   moveOpAndPredecessorsUpSameBlock(lLoadOps[0]);
   moveOpAndPredecessorsUpSameBlock(lLoadOps[1]);
 
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  auto innerSBarrier = builder.create<ROCDL::SchedBarrier>(loc, 0);
+  innerSBarrier->setAttr("embed", builder.getUnitAttr());
+  appendOp(innerSBarrier);
 
   appendOp(asyncBufferLoadOps[0]);
   appendOp(asyncCommitOps[0]);
@@ -1061,6 +1064,10 @@ void Pipeliner::getDotPingponged() {
     if (auto await = dyn_cast<ttg::AsyncWaitOp>(op))
       return;
     if (auto sbar = dyn_cast<ROCDL::SchedBarrier>(op)){
+      if (auto embedUnitAttr = op->getAttr("embed")) {
+        containedOps.push_back(op);
+        return;
+      }
       if(!containedOps.empty())
         createStage(builder, loc, containedOps);
       containedOps.clear();
@@ -1071,6 +1078,9 @@ void Pipeliner::getDotPingponged() {
   LDBG("######### dump done");
   if(!containedOps.empty())
     createStage(builder, loc, containedOps);
+
+  forOp->setAttr("total_stages", builder.getI32IntegerAttr(2));
+  forOp->setAttr("lead_stages", builder.getI32IntegerAttr(1));
 
   // Only one pattern in this PoC implementation.
   return;
