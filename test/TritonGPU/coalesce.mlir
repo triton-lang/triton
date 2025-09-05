@@ -213,3 +213,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @test_scf_for_after_if(%arg0: i32 {tt.divisibility = 16 : i32}, %arg1: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c128_i32 = arith.constant 128 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %0 = arith.cmpi eq, %arg0, %arg1 : i32
+    %1 = scf.if %0 -> (i32) {
+      %3 = arith.addi %c0_i32, %c128_i32 : i32
+      scf.yield %3 : i32
+    } else {
+      scf.yield %c0_i32 : i32
+    }
+    %2 = scf.for %arg2 = %1 to %arg1 step %c128_i32 iter_args(%arg3 = %arg0) -> (i32)  : i32 {
+      scf.yield %arg3 : i32
+    }
+    tt.return
+  }
+}
