@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 import tempfile
+from typing import Dict, Optional, Tuple
 
 FLINE_RE = re.compile(r'\s*/\*\w{4}\*/\s*([^;]*;)\s*/\* 0x(\w{16}) \*/\s*')
 SLINE_RE = re.compile(r'\s*/\* 0x(\w{16}) \*/\s*')
@@ -32,7 +33,7 @@ FNAME_RE = re.compile(r'\s*Function : (\w+)\s*')
 BRA_RE = re.compile(r'(.*BRA(?:\.U)? )(0x\w+);')
 
 
-def parseCtrl(sline):
+def parseCtrl(sline: str) -> str:
     enc = int(SLINE_RE.match(sline).group(1), 16)
     stall = (enc >> 41) & 0xf
     yld = (enc >> 45) & 0x1
@@ -47,7 +48,7 @@ def parseCtrl(sline):
     return f'{watdb_str}:{readb_str}:{wrtdb_str}:{yld_str}:{stall:x}'
 
 
-def processSassLines(fline, sline, labels):
+def processSassLines(fline: str, sline: str, labels: Dict[int, int]) -> Tuple[str, str]:
     asm = FLINE_RE.match(fline).group(1)
     # Remove tailing space
     if asm.endswith(" ;"):
@@ -64,7 +65,7 @@ def processSassLines(fline, sline, labels):
 
 
 @functools.lru_cache()
-def get_sass(cubin_asm, fun=None):
+def get_sass(cubin_asm: bytes, fun: Optional[str] = None) -> Optional[str]:
     fd, path = tempfile.mkstemp()
     try:
         with open(fd, 'wb') as cubin:
@@ -75,13 +76,14 @@ def get_sass(cubin_asm, fun=None):
     return sass
 
 
-def path_to_cuobjdump():
-    from triton import knobs
-    return knobs.nvidia.cuobjdump.path
+@functools.lru_cache()
+def path_to_cuobjdump() -> Tuple[str, str]:
+    from triton.backends.nvidia.compiler import _path_to_binary
+    return _path_to_binary("cuobjdump")
 
 
-def extract(file_path, fun):
-    cuobjdump = path_to_cuobjdump()
+def extract(file_path: str, fun: Optional[str]) -> Optional[str]:
+    cuobjdump, _ = path_to_cuobjdump()
     if fun is None:
         sass_str = subprocess.check_output([cuobjdump, "-sass", file_path])
     else:
