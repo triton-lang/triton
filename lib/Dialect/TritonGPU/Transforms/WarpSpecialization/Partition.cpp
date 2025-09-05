@@ -199,7 +199,7 @@ void WarpSchedule::iterateInputs(
         // This value originates from a previous iteration.
         assert(llvm::is_contained(loop.getRegionIterArgs(), arg));
         callback(operand);
-      } else if (partitionIds &&
+      } else if (!partitionIds ||
                  !llvm::is_contained(*partitionIds, partition->getIndex())) {
         // This value originates from a different partition in the same
         // iteration.
@@ -220,7 +220,7 @@ void WarpSchedule::iterateOutputs(
       if (isa<scf::YieldOp>(owner)) {
         // This value is used in a subsequent iteration.
         callback(owner, use);
-      } else if (partitionIds &&
+      } else if (!partitionIds ||
                  !llvm::is_contained(*partitionIds, partition->getIndex())) {
         // This value is used in a different partition in the same iteration.
         callback(owner, use);
