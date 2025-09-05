@@ -141,10 +141,10 @@ upcast8xMxfp4_HW(RewriterBase &rewriter, Location loc, ArrayRef<Value> xVals,
   if constexpr (std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF16Fp4Op>)
     retElemType = f16_ty;
   Type resType = vec_ty(retElemType, 2);
-  Value scaleF32;
   // In the DotScaledOp decomposition, the scale has already been left-shifted
   // by 7 to fit the exponent of bf16. So now we only need to further left-shift
   // it by 16
+  Value scaleF32;
   if (useShiftedScale) {
     scaleF32 = b.bitcast(
         b.shl(b.zext(i32_ty, b.bitcast(scale, i16_ty)), b.i32_val(16)), f32_ty);
@@ -172,10 +172,10 @@ upcast4xMxfp8_HW(RewriterBase &rewriter, Location loc, ArrayRef<Value> xVals,
                 std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF16Bf8Op>)
     retElemType = f16_ty;
   Type resType = vec_ty(retElemType, 2);
-  Value scaleF32;
   // In the DotScaledOp decomposition, the scale has already been left-shifted
   // by 7 to fit the exponent of bf16. So now we only need to further left-shift
   // it by 16
+  Value scaleF32;
   if (useShiftedScale) {
     scaleF32 = b.bitcast(
         b.shl(b.zext(i32_ty, b.bitcast(scale, i16_ty)), b.i32_val(16)), f32_ty);
