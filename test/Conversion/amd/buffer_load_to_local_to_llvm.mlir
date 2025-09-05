@@ -147,19 +147,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // Note that mask/other alignment is 1 so we need 4 conditionals
 
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+    // COMMON: llvm.cond_br
+    // COMMON: llvm.store
 
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+    // COMMON: llvm.cond_br
+    // COMMON: llvm.store
 
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+    // COMMON: llvm.cond_br
+    // COMMON: llvm.store
 
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+    // COMMON: llvm.cond_br
+    // COMMON: llvm.store
 
     // COMMON-NOT: rocdl.raw.ptr.buffer.load.lds
     // COMMON-NOT: _predicated_store
+    // COMMON-NOT: llvm.cond_br
+    // COMMON-NOT: llvm.store
 
     amdgpu.buffer_load_to_local %arg1[%arg2] mask=%67 other=%cst_0 into %arg3 : <f32>[tensor<32x32xi32, #blocked>] tensor<32x32xf32, #blocked>  -> <32x32xf32, #shared, #smem, mutable>
     tt.return
@@ -257,22 +263,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+    // COMMON: llvm.cond_br
+    // COMMON: llvm.store
 
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+    // COMMON: llvm.cond_br
+    // COMMON: llvm.store
 
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+    // COMMON: llvm.cond_br
+    // COMMON: llvm.store
 
     // COMMON: rocdl.ds_bpermute
     // COMMON: rocdl.ballot
     // COMMON: rocdl.raw.ptr.buffer.load.lds
-    // COMMON: _predicated_store
+    // COMMON: llvm.cond_br
+    // COMMON: llvm.store
 
     // COMMON-NOT: rocdl.ds_bpermute
     // COMMON-NOT: rocdl.ballot
