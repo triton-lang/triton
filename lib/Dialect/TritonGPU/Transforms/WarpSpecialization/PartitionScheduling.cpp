@@ -587,10 +587,15 @@ void PartitionScheduling::runOnOperation() {
       optimizeSchedule(loop, *schedule);
       assignRootPartition(loop, schedule->getNumPartitions());
       assignIfBodyPartition(loop);
-      // assign partition to body ops
       loop->setAttr(
           kWarpSpecializeTagAttrName,
           IntegerAttr::get(IntegerType::get(loop.getContext(), 32), idx));
+
+      SmallVector<Attribute> stages;
+      Builder b(loop.getContext());
+      for (Partition &partition : schedule->getPartitions())
+	stages.push_back(b.getI32IntegerAttr(partition.getStage()));
+      loop->setAttr(kPartitionStagesAttrName, b.getArrayAttr(stages));
     }
   }
 }
