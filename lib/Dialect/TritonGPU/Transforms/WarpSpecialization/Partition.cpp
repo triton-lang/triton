@@ -41,6 +41,9 @@ std::optional<SetVector<int>> getPartitionIds(Operation *op) {
   if (!attrs) {
     return std::nullopt;
   }
+  if (!isa<DenseI32ArrayAttr>(attrs)) {
+    op->dump();
+  }
   SetVector<int> partitionIds;
   for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
     partitionIds.insert(id);
