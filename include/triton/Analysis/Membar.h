@@ -170,7 +170,7 @@ private:
                       FuncBlockInfoMapT *funcBlockInfoMap,
                       OpBuilder *builder) override;
 
-  void insertBarrier(Operation *operation, OpBuilder *builder);
+  gpu::BarrierOp insertBarrier(Operation *operation, OpBuilder *builder);
 };
 
 /// Postorder traversal on the callgraph to insert membar instructions
