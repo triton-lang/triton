@@ -531,11 +531,11 @@ void optimizeSchedule(scf::ForOp loop, WarpSchedule &schedule) {
 void assignRootPartition(scf::ForOp loop, int numPartitions) {
   auto ctx = loop.getContext();
   Builder b(ctx);
-  SmallVector<Attribute, 4> attrs;
+  SmallVector<int> ids;
   for (int i = 0; i < numPartitions; ++i) {
-    attrs.push_back(b.getI32IntegerAttr(i));
+    ids.push_back(i);
   }
-  auto partitionAttr = ArrayAttr::get(ctx, attrs);
+  auto partitionAttr = b.getDenseI32ArrayAttr(ids);
 
   for (Operation &op : loop.getBody()->without_terminator()) {
     if (!hasPartition(&op)) {

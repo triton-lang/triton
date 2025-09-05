@@ -1,4 +1,5 @@
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/SCCIterator.h"
@@ -18,8 +19,8 @@ bool setPartition(Operation *op, Partition *partition) {
   }
 
   Builder b(op->getContext());
-  SmallVector<Attribute, 4> attrs{b.getI32IntegerAttr(partition->getIndex())};
-  op->setAttr(kPartitionAttrName, ArrayAttr::get(op->getContext(), attrs));
+  SmallVector<int> partitions{partition->getIndex()};
+  op->setAttr(kPartitionAttrName, b.getDenseI32ArrayAttr(partitions));
   partition->addOp(op);
   return true;
 }
@@ -33,8 +34,8 @@ std::optional<SetVector<int>> getPartitionIds(Operation *op) {
     return std::nullopt;
   }
   SetVector<int> partitionIds;
-  for (auto attr : cast<ArrayAttr>(attrs)) {
-    partitionIds.insert(cast<IntegerAttr>(attr).getInt());
+  for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
+    partitionIds.insert(id);
   }
   return partitionIds;
 }
