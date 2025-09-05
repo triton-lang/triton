@@ -26,11 +26,11 @@ LIBDEVICE_PAT = re.compile('{libname = "", libpath = "", pure = true, symbol = "
 BLACKWELL_TARGET = GPUTarget("cuda", 100, 32)
 HOPPER_TARGET = GPUTarget("cuda", 90, 32)
 AMPERE_TARGET = GPUTarget("cuda", 80, 32)
-HIP_TARGET = GPUTarget("hip", "gfx1200", 32)
+HIP_TARGET_RDNA4 = GPUTarget("hip", "gfx1200", 32)
 HIP_TARGET_CDNA3 = GPUTarget("hip", "gfx942", 64)
 HIP_TARGET_CDNA4 = GPUTarget("hip", "gfx950", 64)
 
-ALL_TARGETS = [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET]
+ALL_TARGETS = [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET_RDNA4]
 
 
 def anonymize_ir(ir):
@@ -1703,6 +1703,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@filecheck_test
+@gluon.jit
+def test_amd_wmma_layout():
+    # CHECK: {{.*}} = #ttg.amd_wmma<{version = 1, isTranspose = true, warpsPerCTA = [1, 4]}>
+    # CHECK: {{.*}} = #ttg.amd_wmma<{version = 2, isTranspose = true, warpsPerCTA = [1, 4]}>
+    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=1, transposed=True,
+                                                                          warps_per_cta=[1, 4]))
+    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=True,
+                                                                          warps_per_cta=[1, 4]))
 
 
 @gluon.jit

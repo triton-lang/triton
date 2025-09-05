@@ -564,23 +564,23 @@ _mma_pairs = [
         ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 4], tiles_per_warp=[1, 1], instr_shape=[16, 16],
                                transposed=True),
     ],
-    # TODO: AMD WMMA layouts
-    #[
-    #    WmmaLayout(1, [4, 4]),
-    #    WmmaLayout(1, [16, 1]),
-    #],
-    #[
-    #    WmmaLayout(1, [16, 1]),
-    #    WmmaLayout(1, [4, 4]),
-    #],
-    #[
-    #    WmmaLayout(2, [4, 4]),
-    #    WmmaLayout(2, [16, 1]),
-    #],
-    #[
-    #    WmmaLayout(2, [16, 1]),
-    #    WmmaLayout(2, [4, 4]),
-    #],
+    # AMD WMMA layouts
+    [
+        ttgl.amd.AMDWMMALayout(version=1, transposed=False, warps_per_cta=[4, 4]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=False, warps_per_cta=[16, 1]),
+    ],
+    [
+        ttgl.amd.AMDWMMALayout(version=1, transposed=False, warps_per_cta=[16, 1]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=False, warps_per_cta=[4, 4]),
+    ],
+    [
+        ttgl.amd.AMDWMMALayout(version=2, transposed=False, warps_per_cta=[4, 4]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=False, warps_per_cta=[16, 1]),
+    ],
+    [
+        ttgl.amd.AMDWMMALayout(version=2, transposed=False, warps_per_cta=[16, 1]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=False, warps_per_cta=[4, 4]),
+    ],
 ]
 
 
