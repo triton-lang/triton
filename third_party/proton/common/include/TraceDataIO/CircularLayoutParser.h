@@ -46,7 +46,6 @@ struct CircularLayoutParserResult {
     uint64_t initTime = 0;
     uint64_t preFinalTime = 0;
     uint64_t postFinalTime = 0;
-    uint32_t frequency = 0;
     std::vector<Trace> traces;
   };
 

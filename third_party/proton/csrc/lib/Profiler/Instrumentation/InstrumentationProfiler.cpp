@@ -223,8 +223,6 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
         optimizations.end())
       timeShiftCost = getTimeShiftCost(*circularLayoutConfig);
   }
-
-  int64_t frequency = std::stoi(modeOptions.at("frequency"));
   auto &scopeIdContexts = functionScopeIdContexts[functionId];
 
   runtime->synchronizeStream(reinterpret_cast<void *>(streamId));
@@ -253,8 +251,7 @@ void InstrumentationProfiler::exitInstrumentedOp(uint64_t streamId,
                         blockTrace.blockId, blockTrace.procId, trace.uid,
                         device, static_cast<uint64_t>(runtime->getDeviceType()),
                         timeShiftCost, blockTrace.initTime,
-                        blockTrace.preFinalTime, blockTrace.postFinalTime,
-                        frequency));
+                        blockTrace.preFinalTime, blockTrace.postFinalTime));
               }
             }
           }

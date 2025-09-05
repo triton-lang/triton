@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
-import logging
 from triton._C.libtriton import proton as triton_proton
-from typing import List, Optional
+from typing import List
 from enum import Enum
 
 metric_types = {"cycle": triton_proton.METRIC_TYPE.CYCLE}
@@ -81,7 +80,6 @@ class InstrumentationMode(BaseMode):
     buffer_type: triton_proton.BUFFER_TYPE = triton_proton.BUFFER_TYPE.SHARED
     buffer_size: int = 0
     optimizations: List[Optimize] = field(default_factory=list)
-    frequency: Optional[int] = None  # Unit: MHz
 
     def __post_init__(self):
         # automatically map string inputs to enums using the global lookup dicts
@@ -107,25 +105,12 @@ class InstrumentationMode(BaseMode):
                     raise ValueError(f"Unknown optimization: {value}")
             object.__setattr__(self, "optimizations", [optimizations[value] for value in values])
 
-        # query the device properties for frequency if not provided
-        if self.frequency is None:
-            import triton
-
-            device = triton.runtime.driver.active.get_current_device()
-            properties = triton.runtime.driver.active.utils.get_device_properties(device)
-            sm_clock_rate = properties["sm_clock_rate"] // 1000  # Unit: MHz
-            if sm_clock_rate == 0:
-                logging.warning("Unable to query device properties for frequency. Using default value of 1000 MHz.")
-                sm_clock_rate = 1000
-            object.__setattr__(self, "frequency", sm_clock_rate)
-
     def __str__(self):
         optimizations_str = ",".join([str(opt) for opt in self.optimizations])
         return (f"{self.name}:metric_type={self.metric_type}:sampling_strategy={self.sampling_strategy}"
                 f":sampling_options={self.sampling_options}:granularity={self.granularity}"
                 f":buffer_strategy={self.buffer_strategy}:buffer_type={self.buffer_type}"
-                f":buffer_size={self.buffer_size}:optimizations={optimizations_str}"
-                f":frequency={self.frequency}")
+                f":buffer_size={self.buffer_size}:optimizations={optimizations_str}")
 
 
 @dataclass(frozen=True)

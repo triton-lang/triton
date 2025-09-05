@@ -78,7 +78,6 @@ TEST_F(ChromeTraceWriterTest, SingleBlock) {
   result->blockTraces[0].blockId = 1;
   result->blockTraces[0].procId = 120;
   result->blockTraces[0].initTime = 0;
-  result->blockTraces[0].frequency = 1000;
   result->blockTraces[0].traces[0].uid = 2;
   result->blockTraces[0].traces[0].profileEvents[0].first->cycle = 122;
   result->blockTraces[0].traces[0].profileEvents[0].second->cycle = 162;
@@ -113,7 +112,6 @@ TEST_F(ChromeTraceWriterTest, MultiBlockMultiWarp) {
     for (int j = 0; j < 2; j++) {
       result->blockTraces[j].blockId = 1 + j;
       result->blockTraces[j].procId = 120 + j;
-      result->blockTraces[j].frequency = 1000;
       result->blockTraces[j].traces[i].uid = i;
       result->blockTraces[j].traces[i].profileEvents[0].first->cycle = 122;
       result->blockTraces[j].traces[i].profileEvents[0].second->cycle = 162;
@@ -168,7 +166,6 @@ TEST_F(ChromeTraceWriterTest, MultiKernel) {
       result1->blockTraces[j].blockId = j;
       result1->blockTraces[j].procId = j;
       result1->blockTraces[j].initTime = 0;
-      result1->blockTraces[j].frequency = 1000;
       result1->blockTraces[j].traces[i].uid = i;
       result1->blockTraces[j].traces[i].profileEvents[0].first->cycle = 1220000;
       result1->blockTraces[j].traces[i].profileEvents[0].second->cycle =
@@ -188,7 +185,6 @@ TEST_F(ChromeTraceWriterTest, MultiKernel) {
       result2->blockTraces[j].blockId = j;
       result2->blockTraces[j].procId = j;
       result2->blockTraces[j].initTime = 10000000;
-      result2->blockTraces[j].frequency = 1000;
       result2->blockTraces[j].traces[i].uid = i;
       result2->blockTraces[j].traces[i].profileEvents[0].first->cycle = 1220000;
       result2->blockTraces[j].traces[i].profileEvents[0].second->cycle =
