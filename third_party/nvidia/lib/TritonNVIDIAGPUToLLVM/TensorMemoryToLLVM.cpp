@@ -1016,7 +1016,7 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
   auto createCopy = [&](int repM, int repN) {
     Value zero = b.i32_val(0);
     SmallVector<int64_t> shape(op.getSrc().getType().getShape());
-    DotOpMmaV3SmemLoader smemLoader = DotOpMmaV3SmemLoader(
+    DotOpMmaV5SmemLoader smemLoader = DotOpMmaV5SmemLoader(
         op.getSrc(), baseSrc, shape, op.getSrc().getType().getAllocShape(),
         zero, 1, /*trans=*/false, {128, 8},
         op.getSrc().getType().getElementType().getIntOrFloatBitWidth(),
