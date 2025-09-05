@@ -885,10 +885,6 @@ struct AsyncCopyGlobalToLocalOpConversion
 
     auto srcTy = op.getSrc().getType();
 
-    if (!isa<BlockedEncodingAttr, SliceEncodingAttr>(srcTy.getEncoding()))
-      return rewriter.notifyMatchFailure(
-          op, "requires Blocked or Slice encoding for src");
-
     auto dstTy = op.getResult().getType();
     auto dstEnc = dstTy.getEncoding();
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
