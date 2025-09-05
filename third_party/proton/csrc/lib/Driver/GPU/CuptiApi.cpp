@@ -115,7 +115,6 @@ void setLibPath(const std::string &path) { ExternLibCupti::defaultDir = path; }
 
 // TODO(Keren): generalize to AMD
 const std::string getLibPath() {
-  Dl_info info;
   if (ExternLibCupti::lib == nullptr) {
     // Force initialization
     Dispatch<ExternLibCupti>::init(ExternLibCupti::name, &ExternLibCupti::lib);
