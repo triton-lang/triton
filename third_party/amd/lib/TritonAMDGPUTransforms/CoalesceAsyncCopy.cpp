@@ -64,7 +64,13 @@ struct CoalesceAsyncCopyWrites
     // we can only load one element at a time or if the shared encoding is
     // swizzled we cannot exceed the vector size of the swizzling pattern
     LinearLayout regLayout = triton::gpu::toLinearLayout(srcTy);
-    LinearLayout sharedLayout = triton::gpu::toLinearLayout(dstTy);
+    LinearLayout sharedLayout;
+    if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+            dstTy.getEncoding())) {
+      sharedLayout = paddedEnc.getLinearComponent();
+    } else {
+      sharedLayout = triton::gpu::toLinearLayout(dstTy);
+    }
     auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
     loadContig = std::min<unsigned>(loadContig,
                                     regToSharedLayout.getNumConsecutiveInOut());
