@@ -199,18 +199,8 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
   if (auto dotOp = dyn_cast<tt::DotOpInterface>(user)) {
     OpOperand &use = *inputValue.getUses().begin();
     *opIdx = use.getOperandNumber();
-    Type operandType = inputValue.getType();
-    auto operandEnc = cast<RankedTensorType>(operandType).getEncoding();
-    if (*opIdx >= 2) {
-      // Scale operand. Calculate vecSize based on the linear encoding of the
-      // operand.
-      auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(operandEnc);
-      *vecSize = llEnc.getLinearLayout().getNumConsecutiveInOut();
-    } else {
-      auto dotEnc = dyn_cast<ttg::DotOperandEncodingAttr>(operandEnc);
-      *vecSize = dotEnc.getKWidth();
-    }
-
+    auto operandType = cast<RankedTensorType>(inputValue.getType());
+    *vecSize = ttg::toLinearLayout(operandType).getNumConsecutiveInOut();
     auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
     return dyn_cast<ttg::AMDMfmaEncodingAttr>(dotType.getEncoding());
   }
@@ -241,11 +231,11 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
       tempAttr = cast<ttg::SwizzledSharedEncodingAttr>(memDesc.getEncoding());
+      LDBG("Deduced shared encoding candidate from memDesc: " << tempAttr);
       if (!getSharedEncIfAllUsersAreDotEnc(userResult).has_value()) {
         return std::nullopt;
       }
-      LDBG("Deduced shared encoding candidate from memDesc: " << tempAttr);
-      sharedEncs.push_back(std::move(tempAttr));
+      sharedEncs.push_back(tempAttr);
     } else {
       if (!(isa<ttg::ConvertLayoutOp>(user) ||
             user->hasTrait<OpTrait::LocalLoadTrait>()))
@@ -276,7 +266,7 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
             loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
             ctaLayout, bitWidth, /*needTrans=*/false);
         LDBG("Deduced shared encoding candidate from dot layout: " << tempAttr);
-        sharedEncs.push_back(std::move(tempAttr));
+        sharedEncs.push_back(tempAttr);
       } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
         // We use linear layout directly for scaled dot fp8 operands. For such
         // cases, we need to look further down the def-use chain to find the dot
@@ -290,14 +280,14 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
               /*needTrans=*/false);
           LDBG("Deduced shared encoding candidate from mfma layout: "
                << tempAttr);
-          sharedEncs.push_back(std::move(tempAttr));
+          sharedEncs.push_back(tempAttr);
         }
       }
     }
   }
 
-  auto equalSharedEncIgnoreVec = [](const ttg::SwizzledSharedEncodingAttr &a,
-                                    const ttg::SwizzledSharedEncodingAttr &b) {
+  auto equalSharedEncIgnoreVec = [](ttg::SwizzledSharedEncodingAttr a,
+                                    ttg::SwizzledSharedEncodingAttr b) {
     if (!a || !b)
       return false;
     return (a.getPerPhase() == b.getPerPhase() &&
@@ -307,26 +297,21 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
   };
   if (sharedEncs.empty() || !sharedEncs.front())
     return std::nullopt;
-  const auto &refSharedEnc = sharedEncs.front();
-  size_t maxIdx = 0;
-  unsigned maxVec = refSharedEnc.getVec();
+  auto maxVecSharedEnc = sharedEncs.front();
 
-  for (size_t i = 1; i < sharedEncs.size(); i++) {
-    if (!sharedEncs[i])
-      return std::nullopt;
-    if (!equalSharedEncIgnoreVec(sharedEncs[i], refSharedEnc)) {
+  for (auto sharedEnc : sharedEncs) {
+    if (!equalSharedEncIgnoreVec(sharedEnc, maxVecSharedEnc)) {
       LDBG("Incompatible shared encodings");
       return std::nullopt;
     }
-    if (sharedEncs[i].getVec() > maxVec) {
-      maxVec = sharedEncs[i].getVec();
-      maxIdx = i;
+    if (sharedEnc.getVec() > maxVecSharedEnc.getVec()) {
+      maxVecSharedEnc = sharedEnc;
     }
   }
 
-  LDBG("Deduced shared encoding: " << sharedEncs[maxIdx]);
+  LDBG("Deduced shared encoding: " << maxVecSharedEnc);
 
-  return sharedEncs[maxIdx];
+  return maxVecSharedEnc;
 }
 
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
