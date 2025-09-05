@@ -4,6 +4,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -1238,6 +1239,50 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
   contiguity = std::min(align, contiguity);
 
   return contiguity;
+}
+
+std::pair<unsigned, ColumnAction>
+ModuleAxisInfoAnalysis::getContiguityWithPermutation(Value value) {
+  auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
+  if (!tensorTy) {
+    ColumnAction defaultPermutation;
+    return {1, defaultPermutation};
+  }
+  auto elemTy = tensorTy.getElementType();
+  // Get the pointee type if we have a tensor of ptrs to compute contiguity for
+  if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
+    elemTy = ptrTy.getPointeeType();
+  }
+  return getContiguityWithPermutation(value, elemTy.getIntOrFloatBitWidth());
+}
+
+std::pair<unsigned, ColumnAction>
+ModuleAxisInfoAnalysis::getContiguityWithPermutation(Value offsetsValue,
+                                                     unsigned elementBitWidth) {
+  auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
+  auto shape = tensorTy.getShape();
+  auto linAttr = gpu::toLinearEncoding(tensorTy);
+  auto order = linAttr.getOrder();
+  unsigned align = getAlignment(offsetsValue, elementBitWidth);
+
+  auto ll = linAttr.toLinearLayout(shape);
+  auto ctaLayout = triton::gpu::getCTALayout(tensorTy.getEncoding());
+  // Dummy shared layout that emulates global memory so we can use
+  // largestVectorisation utility.
+  auto sharedEncoding = triton::gpu::SwizzledSharedEncodingAttr::get(
+      tensorTy.getContext(), 1, 1, 1, order, ctaLayout);
+  auto sharedLL = triton::gpu::toLinearLayout(shape, sharedEncoding);
+  auto invertedLL = ll.invertAndCompose(sharedLL).flattenOuts();
+
+  auto [vec, permutation] = largestVectorisation(
+      tensorTy.getContext(), invertedLL, elementBitWidth, std::nullopt);
+
+  if (vec <= align) {
+    return {vec, permutation};
+  } else {
+    ColumnAction defaultPem;
+    return {align, defaultPem};
+  }
 }
 
 unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {

@@ -94,6 +94,15 @@ unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass);
 unsigned getVectorSize(Value ptr, Value offset,
                        ModuleAxisInfoAnalysis &axisAnalysisPass);
 
+// Determine the vector size of a tensor of pointers
+std::pair<unsigned, ColumnAction>
+getVectorSizeRegs(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass);
+
+// Given a scalar pointer and a tensor of offsets, determine the vector size
+std::pair<unsigned, ColumnAction>
+getVectorSizeRegs(Value ptr, Value offset,
+                  ModuleAxisInfoAnalysis &axisAnalysisPass);
+
 Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t);
 
 // Returns true if we can perform coalesced write from the source encoding to
