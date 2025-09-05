@@ -41,6 +41,7 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -69,16 +70,16 @@ template <class T> struct AssignStagePhase {
     Value token;
   };
   Value aref;
-  PartitionId partitionId;
+  int partitionId;
   DenseMap<Value, int> tokToStagePosMap;
 
-  AssignStagePhase(Value aref, PartitionId partitionId)
+  AssignStagePhase(Value aref, int partitionId)
       : aref(aref), partitionId(partitionId) {}
 
   T isValidOp(Operation *op) {
     if (isa<T>(op) && op->getOperand(0) == aref) {
-      auto opPartitionId = getPartitionId(op);
-      if (!opPartitionId || *opPartitionId == partitionId)
+      auto opPartitionIds = getPartitionIds(op);
+      if (!opPartitionIds || llvm::is_contained(*opPartitionIds, partitionId))
         return cast<T>(op);
     }
     return {};
@@ -271,14 +272,13 @@ template <class T> struct AssignStagePhase {
   }
 
   static LogicalResult run(ArefCreateOp arefOp) {
-
-    std::set<PartitionId> partitionIds;
+    SetVector<int> partitionIds;
     for (auto user : arefOp->getUsers()) {
       // Each partition requires its own stage/phase tracking for proper
       // multi-user handling; collect partition IDs in which this aref is used
       if (isa<T>(user)) {
-        if (auto partitionId = getPartitionId(user))
-          partitionIds.insert(*partitionId);
+        if (auto ids = getPartitionIds(user))
+          partitionIds.insert(ids->begin(), ids->end());
       }
     }
 
