@@ -109,6 +109,8 @@ CUptiResult pcSamplingStop(CUpti_PCSamplingStopParams *pParams);
 
 void setLibPath(const std::string &path);
 
+const std::string getLibPath();
+
 } // namespace cupti
 
 } // namespace proton

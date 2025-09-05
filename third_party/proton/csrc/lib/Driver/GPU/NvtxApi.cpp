@@ -1,7 +1,9 @@
 #include "Driver/GPU/NvtxApi.h"
+#include "Driver/GPU/CuptiApi.h"
 
 #include <codecvt>
 #include <cstdint>
+#include <cstdlib>
 #include <locale>
 
 namespace proton {
@@ -27,6 +29,16 @@ struct RangePushWParams {
 } // namespace
 
 namespace nvtx {
+
+void enable() {
+  // Get cupti lib path and append it to NVTX_INJECTION64_PATH
+  const std::string cuptiLibPath = cupti::getLibPath();
+  if (!cuptiLibPath.empty()) {
+    setenv("NVTX_INJECTION64_PATH", cuptiLibPath.c_str(), 1);
+  }
+}
+
+void disable() { unsetenv("NVTX_INJECTION64_PATH"); }
 
 std::string getMessageFromRangePushA(const void *params) {
   if (const auto *p = static_cast<const RangePushAParams *>(params))

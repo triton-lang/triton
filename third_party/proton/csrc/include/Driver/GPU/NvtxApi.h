@@ -7,6 +7,10 @@ namespace proton {
 
 namespace nvtx {
 
+void enable();
+
+void disable();
+
 std::string getMessageFromRangePushA(const void *params);
 
 std::string getMessageFromRangePushW(const void *params);
