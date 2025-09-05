@@ -1161,7 +1161,11 @@ SharedMemoryObject::getMaskSpanOffsets(triton::gpu::MemDescType srcTy) {
   LinearLayout totalLl;
   if (auto paddedEncoding = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
           srcTy.getEncoding())) {
-    totalLl = paddedEncoding.getLinearComponent();
+    // Mask is used in fusion of constant part of memory operation address as
+    // immediate operand. Padded layout has additional address computations
+    // between main offset computation and actual memory access, which breaks
+    // constand fusing. Full mask disables this optimization.
+    return ~uint64_t(0);
   } else {
     totalLl = triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
   }
@@ -1189,6 +1193,21 @@ SharedMemoryObject::getMaskSpanOffsets(triton::gpu::MemDescType srcTy) {
   return ret;
 }
 
+static Value generateShmemOffset(Location loc, RewriterBase &rewriter,
+                                 ArrayRef<Value> dimOffsets, LinearLayout ll) {
+  auto ctx = rewriter.getContext();
+  auto dimNames = standardOutDimNames(ctx, dimOffsets.size());
+  SmallVector<std::pair<StringAttr, Value>> logicalOffsets;
+  for (auto [dim, offset] : llvm::zip(dimNames, dimOffsets)) {
+    logicalOffsets.push_back({dim, offset});
+  }
+
+  ll = ll.sublayout({str_attr("offset")}, dimNames);
+  auto offset =
+      applyLinearLayout(loc, rewriter, ll.invert(), logicalOffsets)[0].second;
+  return offset;
+}
+
 Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
                                          triton::gpu::MemDescType srcTy) const {
   auto ctx = srcTy.getContext();
@@ -1205,22 +1224,12 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
   if (auto paddedSharedEncoding =
           dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
               srcTy.getEncoding())) {
-    auto allocShape64 = srcTy.getAllocShape();
-    SmallVector<unsigned> allocShape(allocShape64.begin(), allocShape64.end());
-    return LLVM::linearize(rewriter, loc, offsets, allocShape);
-  }
-
-  auto dimNames = standardOutDimNames(ctx, offsets.size());
-  SmallVector<std::pair<StringAttr, Value>> logicalOffsets;
-  for (auto [dim, offset] : llvm::zip(dimNames, offsets)) {
-    logicalOffsets.push_back({dim, offset});
+    auto linearComponent = paddedSharedEncoding.getLinearComponent();
+    return generateShmemOffset(loc, rewriter, offsets, linearComponent);
   }
 
   LinearLayout ll = triton::gpu::toLinearLayout(srcTy);
-  ll = ll.sublayout({str_attr("offset")}, dimNames);
-  auto offset =
-      applyLinearLayout(loc, rewriter, ll.invert(), logicalOffsets)[0].second;
-  return offset;
+  return generateShmemOffset(loc, rewriter, offsets, ll);
 }
 
 Value SharedMemoryObject::getShmemAffineBase(

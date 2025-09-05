@@ -897,3 +897,58 @@ def test_inline_with_amdgpu_dialect():
 
     compiled_kernel = kernel.warmup(input, output, grid=(1, ))
     assert compiled_kernel.asm["ttgir"].count("tt.func private") == 0
+
+
+@pytest.mark.parametrize("interval_pairs", [[[32, 4]], [[16, 4]], [[16, 4], [64, 8]]])
+@pytest.mark.parametrize(
+    "shared_layout",
+    [{"order": [0, 1]}, {"order": [1, 0]},
+     {"offsets": [[0, 1], [0, 2], [0, 8], [0, 4], [0, 16], [0, 32], [2, 0], [1, 0], [4, 0], [8, 0], [16, 0], [32, 0]]}])
+@pytest.mark.parametrize("slice_m_offset, slice_n_offset, slice_m, slice_n", [(48, 16, 16, 16), (32, 48, 32, 16),
+                                                                              (48, 32, 16, 32)])
+def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_offset, slice_n_offset, slice_m, slice_n):
+    m = 64
+    n = 64
+    num_warps = 1
+    num_warps_cst = ttgl.constexpr(num_warps)
+    warp_size_cst = ttgl.constexpr(THREADS_PER_WARP)
+
+    shape = [m, n]
+    if "order" in shared_layout:
+        order = shared_layout["order"]
+        smem_layout = ttgl.constexpr(ttgl.PaddedSharedLayout.with_identity_for(interval_pairs, shape, order))
+    elif "offsets" in shared_layout:
+        offsets = shared_layout["offsets"]
+        blocks = []
+        smem_layout = ttgl.constexpr(ttgl.PaddedSharedLayout(interval_pairs, offsets, blocks, shape))
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, SLICE_M_OFFSET: ttgl.constexpr,
+               SLICE_N_OFFSET: ttgl.constexpr, SLICE_M: ttgl.constexpr, SLICE_N: ttgl.constexpr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [warp_size_cst, 1], [1, num_warps_cst], [1, 0])
+        offs_m_load = ttgl.arange(0, M, ttgl.SliceLayout(1, blocked))
+        offs_n_load = ttgl.arange(0, N, ttgl.SliceLayout(0, blocked))
+        in_offs = offs_m_load[:, None] * N + offs_n_load[None, :]
+
+        in_data = ttgl.load(in_ptr + in_offs)
+
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [M, N], smem_layout)
+        smem_slice0 = smem.slice(SLICE_M_OFFSET, SLICE_M, dim=0)
+        smem_slice1 = smem_slice0.slice(SLICE_N_OFFSET, SLICE_N, dim=1)
+
+        smem.store(in_data)
+
+        out_data = smem_slice1.load(blocked)
+
+        offs_m_store = ttgl.arange(0, SLICE_M, ttgl.SliceLayout(1, blocked))
+        offs_n_store = ttgl.arange(0, SLICE_N, ttgl.SliceLayout(0, blocked))
+        out_offs = offs_m_store[:, None] * SLICE_N + offs_n_store[None, :]
+        ttgl.store(out_ptr + out_offs, out_data)
+
+    input = torch.arange(m * n, device="cuda").reshape(m, n).to(torch.int32)
+    output = torch.zeros((slice_m, slice_n), dtype=torch.int32, device="cuda")
+    ref_output = input[slice_m_offset:slice_m_offset + slice_m, slice_n_offset:slice_n_offset + slice_n]
+
+    kernel[(1, )](input, output, m, n, slice_m_offset, slice_n_offset, slice_m, slice_n, num_warps=num_warps)
+
+    assert (output == ref_output).all()
