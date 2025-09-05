@@ -25,7 +25,6 @@ thread_local std::deque<size_t>
 
 namespace {
 
-
 std::shared_ptr<Metric> convertActivityToMetric(CUpti_Activity *activity) {
   std::shared_ptr<Metric> metric;
   switch (activity->kind) {

@@ -490,7 +490,7 @@ def test_nvtx_range_push_pop(tmp_path: pathlib.Path):
 
     with proton.scope("proton_scope"):
         torch.cuda.nvtx.range_push("nvtx_range")
-        torch.ones((1,), device="cuda")
+        torch.ones((1, ), device="cuda")
         torch.cuda.nvtx.range_pop()
 
     proton.finalize()
