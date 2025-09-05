@@ -35,14 +35,32 @@ struct ProducedValueInfo {
   Value result;
 };
 
+Partition *getPartition(Operation *op, WarpSchedule &schedule) {
+  auto id = getPartitionIds(op);
+  assert(id && id->size() == 1);
+  return schedule.getPartition((*id)[0]);
+}
+
+bool samePartition(Operation *op1, Operation *op2) {
+  auto part1 = getPartitionIds(op1);
+  auto part2 = getPartitionIds(op2);
+
+  if (!part1 || !part2) {
+    return false;
+  }
+
+  return *part1 == *part2;
+}
+
 SmallVector<ProducedValueInfo> getProducedValues(Operation *op, Block *loopBody,
                                                  WarpSchedule &schedule) {
   SmallVector<ProducedValueInfo> producedValues;
-  auto partition = schedule.getPartition(loopBody->findAncestorOpInBlock(*op));
+  auto partitionIds = getPartitionIds(op);
 
-  if (partition != schedule.getRootPartition()) {
+  if (partitionIds && partitionIds->size() == 1) {
     for (auto result : op->getResults()) {
-      producedValues.push_back({partition, result});
+      producedValues.push_back(
+          {schedule.getPartition((*partitionIds)[0]), result});
     }
   }
 
@@ -142,14 +160,14 @@ void createNVWSDescriptorLoadOp(OpBuilder &builder, Operation *ttDescLoadOp,
         loc, descLoad.getDesc(), descLoad.getIndices(), txCount, dataBuf,
         descLoad.getCache(), descLoad.getEvict());
     newDescLoad->setAttrs(descLoad->getAttrs());
-    schedule.insert(producerPartition, newDescLoad);
+    setPartition(newDescLoad, producerPartition);
   } else if (auto descGather =
                  dyn_cast<triton::DescriptorGatherOp>(ttDescLoadOp)) {
     auto newDescGather = builder.create<triton::nvws::DescriptorGatherOp>(
         loc, descGather.getDesc(), descGather.getXOffsets(),
         descGather.getYOffset(), txCount, dataBuf);
     newDescGather->setAttrs(descGather->getAttrs());
-    schedule.insert(producerPartition, newDescGather);
+    setPartition(newDescGather, producerPartition);
   } else {
     llvm_unreachable("unknown descriptor op.");
   }
@@ -184,8 +202,8 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
   auto putEnterOp = builder.createInto<ArefPutEnterOp>(
       *producerPartition, stageCluster, SmallVector{dataBufType}, token, aref,
       c0Enter, c0Enter);
-  schedule.insert(producerPartition, putEnterOp);
-  schedule.insert(producerPartition, c0Enter.getDefiningOp());
+  setPartition(putEnterOp, producerPartition);
+  setPartition(c0Enter.getDefiningOp(), producerPartition);
   auto dataBuf = putEnterOp.getBuffers()[0];
 
   auto producerKind = AsyncOp::NONE;
@@ -234,15 +252,15 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
       *producerPartition, stageCluster, aref, putEnterOp.getToken(), c0Exit,
       builder.getArrayAttr(SmallVector<Attribute>{
           AsyncOpAttr::get(aref.getContext(), producerKind)}));
-  schedule.insert(producerPartition, putExitOp);
-  schedule.insert(producerPartition, c0Exit.getDefiningOp());
+  setPartition(putExitOp, producerPartition);
+  setPartition(c0Exit.getDefiningOp(), producerPartition);
 
   return staleOps;
 };
 
 SetVector<Operation *> getTransitiveConsumers(Operation *op,
                                               Partition *consumerPartition,
-                                              const WarpSchedule &schedule) {
+                                              WarpSchedule &schedule) {
   SetVector<Operation *> opConsumers;
   auto isMemDesc = [](auto res) { return isa<MemDescType>(res.getType()); };
   for (auto user : op->getUsers()) {
@@ -253,7 +271,7 @@ SetVector<Operation *> getTransitiveConsumers(Operation *op,
           getTransitiveConsumers(user, consumerPartition, schedule);
       opConsumers.insert(consumers.begin(), consumers.end());
     } else {
-      if (schedule.getPartition(user) == consumerPartition) {
+      if (getPartition(user, schedule) == consumerPartition) {
         opConsumers.insert(user);
       }
     }
@@ -263,7 +281,7 @@ SetVector<Operation *> getTransitiveConsumers(Operation *op,
 
 SmallVector<Operation *> getTransitiveConsumers(const SetVector<Value> &results,
                                                 Partition *consumerPartition,
-                                                const WarpSchedule &schedule) {
+                                                WarpSchedule &schedule) {
   SetVector<Operation *> opSet;
   for (auto result : results) {
     auto consumers = getTransitiveConsumers(result.getDefiningOp(),
@@ -331,7 +349,11 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
   auto loc = results[0].getLoc();
 
   auto filterUse = [&](Operation *use) {
-    return schedule.getPartition(use) == consumerPartition;
+    auto partitionIds = getPartitionIds(use);
+    if (!partitionIds || partitionIds->size() == schedule.getNumPartitions()) {
+      return false;
+    }
+    return getPartition(use, schedule) == consumerPartition;
   };
   auto [stageClusterEnter, stageClusterExit] =
       getEnterAndExitStageClustersOfUses(results, filterUse, loop);
@@ -343,8 +365,8 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
   auto getEnterOp = builder.createInto<ArefGetEnterOp>(
       *consumerPartition, stageClusterEnter, SmallVector{bufferType}, tokenType,
       aref, c0Enter, c0Enter);
-  schedule.insert(consumerPartition, getEnterOp);
-  schedule.insert(consumerPartition, c0Enter.getDefiningOp());
+  setPartition(getEnterOp, consumerPartition);
+  setPartition(c0Enter.getDefiningOp(), consumerPartition);
 
   auto consumers = getTransitiveConsumers(results, consumerPartition, schedule);
   assert(consumers.size() > 0);
@@ -358,7 +380,7 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
     auto localLoadOp = builder.createInto<LocalLoadOp>(
         *consumerPartition, stageCluster, result.getType(), dataBuf);
     result.replaceAllUsesWith(localLoadOp.getResult());
-    schedule.insert(consumerPartition, localLoadOp);
+    setPartition(localLoadOp, consumerPartition);
     if (consumers.size() == 1) {
       // If there is only one consumer and we hit this code path, the empty
       // barrier can be released after local load.
@@ -370,8 +392,8 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
     if (auto localAlloc = result.getDefiningOp<LocalAllocOp>()) {
       auto memDescType = cast<MemDescType>(result.getType());
       auto callback = [&](Operation *oldOp, Operation *newOp) {
-        assert(schedule.getPartition(oldOp) == consumerPartition);
-        schedule.insert(consumerPartition, newOp);
+        assert(getPartition(oldOp, schedule) == consumerPartition);
+        setPartition(newOp, consumerPartition);
       };
       replaceUsesAndPropagateType(builder, localAlloc, dataBuf, callback);
     } else if (auto tmemAlloc = result.getDefiningOp<TMEMAllocOp>()) {
@@ -397,8 +419,8 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
   auto getExitOp = builder.createInto<ArefGetExitOp>(
       *consumerPartition, stageClusterExit, aref, token, c0Exit,
       builder.getArrayAttr(asyncKinds));
-  schedule.insert(consumerPartition, getExitOp);
-  schedule.insert(consumerPartition, c0Exit.getDefiningOp());
+  setPartition(getExitOp, consumerPartition);
+  setPartition(c0Exit.getDefiningOp(), consumerPartition);
 };
 
 bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
@@ -409,7 +431,7 @@ bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
   DenseMap<Partition *, SetVector<Value>> resultsPerPartition;
   auto processResultUses = [&](Value result) {
     for (auto user : result.getUsers()) {
-      Partition *userPartition = schedule.getPartition(user);
+      Partition *userPartition = getPartition(user, schedule);
       if (producedValue.partition != userPartition) {
         resultsPerPartition[userPartition].insert(result);
       }
@@ -505,8 +527,6 @@ public:
           }
         }
       }
-
-      schedule->serialize(loop);
     }
   }
 };
