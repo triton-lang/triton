@@ -420,7 +420,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
       b.setInsertionPoint(liveUntilOp);
       auto arriveOp = b.createInto<ttng::ArriveBarrierOp>(
           userPartition, userStageCluster, curEmptyBar, 1);
-      arriveOps[schedule.getPartition(liveUntilOp)] = arriveOp;
+      arriveOps[getPartition(liveUntilOp, schedule)] = arriveOp;
     }
   }
 
