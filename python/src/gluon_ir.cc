@@ -97,6 +97,7 @@ struct GluonLayouts {
   py::handle NVMMASharedLayout;
   py::handle SwizzledSharedLayout;
   py::handle AMDMFMALayout;
+  py::handle AMDWMMALayout;
   py::handle PaddedSharedLayout;
   py::handle GluonDType;
 
@@ -117,6 +118,7 @@ struct GluonLayouts {
     SwizzledSharedLayout =
         py::object(layouts.attr("SwizzledSharedLayout")).release();
     AMDMFMALayout = py::object(amdLayouts.attr("AMDMFMALayout")).release();
+    AMDWMMALayout = py::object(amdLayouts.attr("AMDWMMALayout")).release();
     PaddedSharedLayout =
         py::object(layouts.attr("PaddedSharedLayout")).release();
 
@@ -226,6 +228,14 @@ py::object layoutToGluon(Attribute layout) {
         toStdVector(ctaLayout.getCTAsPerCGA()),
         toStdVector(ctaLayout.getCTASplitNum()),
         toStdVector(ctaLayout.getCTAOrder()));
+  } else if (auto amdWmma = dyn_cast<ttg::AMDWmmaEncodingAttr>(layout)) {
+    auto ctaLayout = amdWmma.getCTALayout();
+    return layouts.AMDWMMALayout(amdWmma.getVersion(),
+                                 amdWmma.getIsTransposed(),
+                                 toStdVector(amdWmma.getWarpsPerCTA()),
+                                 toStdVector(ctaLayout.getCTAsPerCGA()),
+                                 toStdVector(ctaLayout.getCTASplitNum()),
+                                 toStdVector(ctaLayout.getCTAOrder()));
   } else if (auto paddedShared =
                  dyn_cast<ttg::PaddedSharedEncodingAttr>(layout)) {
     auto *ctx = paddedShared.getContext();
