@@ -175,7 +175,7 @@ def init_allocation(x, w, precision_config, fused_activation, routing_data, gath
 def apply_allocation(allocation: MatmulAllocation, output):
     ret = dict()
     if output is None:
-        output = torch.empty(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
+        output = torch.zeros(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
     else:
         assert output.shape == allocation.output[0]
     ret["output"] = output[None, :, :]
