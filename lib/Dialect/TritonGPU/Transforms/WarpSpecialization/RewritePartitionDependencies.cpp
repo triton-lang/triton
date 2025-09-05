@@ -174,6 +174,10 @@ LogicalResult DependencyRewriter::run() {
       }
     };
     for (Operation *op : partition.getOps()) {
+      if (getPartitionIds(op)->size() == schedule.getNumPartitions()) {
+        // skip ops in the root partition
+        continue;
+      }
       for (OpOperand &use : op->getUses()) {
         collectUses(use);
       }
@@ -187,7 +191,6 @@ LogicalResult DependencyRewriter::run() {
         assert(distance > 0 && "self-recursion must occur in the future");
         return;
       }
-      Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
       UseInfo &info = useInfo[output];
       info.consumers[{usePartition, distance}].push_back(&use);
     };
