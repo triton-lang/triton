@@ -777,7 +777,7 @@ class tuple_type(base_type):
         return tuple(values, self), cursor
 
     def mangle(self):
-        return 'T' + '_'.join(ty.mangle for ty in self.types) + 'T'
+        return 'T' + '_'.join(ty.mangle() for ty in self.types) + 'T'
 
 
 class slice_type(dtype):
@@ -3153,7 +3153,7 @@ def inline_asm_elementwise(asm: str, constraints: str, args: Sequence, dtype: Un
 # -----------------------
 
 
-class static_range:
+class static_range(base_value):
     """
     Iterator that counts upward forever.
 
@@ -3193,7 +3193,7 @@ class static_range:
         raise RuntimeError("static_range can only be used in @triton.jit'd functions")
 
 
-class range:
+class range(base_value):
     """
     Iterator that counts upward forever.
 
@@ -3263,7 +3263,7 @@ class range:
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")
 
 
-class condition:
+class condition(base_value):
     """
     While loop condition wrapper.
 

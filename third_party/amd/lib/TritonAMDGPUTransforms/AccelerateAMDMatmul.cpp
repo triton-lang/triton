@@ -475,9 +475,36 @@ public:
     // requires to broadcast the operand A.
     bool isTransposed = !(mDim == 4 && nDim == 64);
     auto aElemTy = mfmaInstr->aElementType;
+    auto is16BitElemTy = (aElemTy.isF16() || aElemTy.isBF16());
+
+    unsigned rank = oldRetType.getRank();
+    SmallVector<unsigned, 2> tilesPerWarp = {1, 1};
+
+    // Set tilesPerWarp and isTransposed to enable intra warp conversion for the
+    // mfma16x16 layout of a dot op, depending on whether
+    // its result is used by operand 0 or operand 1 of another dot op.
+    if (mfmaVersion == 4 && is16BitElemTy && mDim == 16 && nDim == 16 &&
+        rank == 2) {
+      if (isChainDotHead(dotOp, 0u) &&
+          retShape.front() >= 16 * 2 * warpsPerTile.front() &&
+          retShape.back() == 16 && warpsPerTile.back() == 1) {
+        isTransposed = true;
+        tilesPerWarp = {2, 1};
+      } else if (isChainDotHead(dotOp, 1u) && retShape.front() == 16 &&
+                 retShape.back() >= 16 * 2 * warpsPerTile.back() &&
+                 warpsPerTile.front() == 1) {
+        isTransposed = false;
+        tilesPerWarp = {1, 2};
+      }
+    }
+
+    if (rank == 3) {
+      tilesPerWarp.insert(tilesPerWarp.begin(), 1);
+    }
+
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
-        /*version*/ mfmaVersion, warpsPerTile,
+        /*version*/ mfmaVersion, warpsPerTile, tilesPerWarp,
         /*instrShape*/ mDim, nDim, /*isTransposed=*/isTransposed, CTALayout,
         mfmaAccType);
 
@@ -524,7 +551,6 @@ public:
     // kWidth = 4 so that the coversion from #mma (result of 1st dot)
     // to #dotOp (operand 0 of 2nd dot) is a no-op.
     // TODO (lixun): relax the condition for 8-bit elementTy.
-    auto is16BitElemTy = (aElemTy.isF16() || aElemTy.isBF16());
     if (is16BitElemTy && isDotChainTail) {
       kWidth = 4;
     }
@@ -1216,8 +1242,9 @@ public:
 
     auto CTALayout = ttg::getCTALayout(oldRetEncoding);
 
-    // TODO implement heuristic/option for this parameter
-    bool isTransposed = false;
+    // Use transposed wmma layout to enable larger vectorization for global
+    // store instructions.
+    bool isTransposed = true;
     wmmaEnc = ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, isTransposed,
                                             warpsPerTile, CTALayout);
 
@@ -1453,6 +1480,7 @@ struct TritonAMDGPUAccelerateMatmulPass
           /*benefit=*/2);
       break;
     case ISAFamily::RDNA3:
+    case ISAFamily::RDNA4:
       ttg::populateDecomposeScaledBlockedPatterns(mfmaPatterns,
                                                   /*benefit=*/3);
       mfmaPatterns.add<::BlockedToWMMA>(

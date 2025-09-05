@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 from triton.runtime.jit import constexpr_function
+import math
 
 
 def _realize_cta_layout(layout, rank):
@@ -187,10 +188,10 @@ class DistributedLinearLayout(DistributedLayout):
 
     def __hash__(self):
         return hash((
-            tuple(self.reg_bases),
-            tuple(self.lane_bases),
-            tuple(self.warp_bases),
-            tuple(self.block_bases),
+            tuple(map(tuple, self.reg_bases)),
+            tuple(map(tuple, self.lane_bases)),
+            tuple(map(tuple, self.warp_bases)),
+            tuple(map(tuple, self.block_bases)),
             tuple(self.shape),
         ))
 
@@ -465,9 +466,10 @@ class SwizzledSharedLayout(SharedLayout):
 class PaddedSharedLayout(SharedLayout):
     """
     Represents a layout for the access to shared memory. Compared to SwizzledSharedLayout,
-    it uses padding to avoid shared memory bank conflicts. After every interval tensor elements,
-    the corresponding number of padding elements are inserted.
-    If a position corresponds to multiple intervals, the padding amounts are summed.
+    it combined padding and element reordering via linear transformation (e.g. row permutation)
+    to avoid shared memory bank conflicts. After every interval tensor elements, the
+    corresponding number of padding elements are inserted. If a position corresponds to
+    multiple intervals, the padding amounts are summed.
 
     In the following example of a tensor,
     `eM` represents original elements in the and `pN` represents padded element.
@@ -479,7 +481,7 @@ class PaddedSharedLayout(SharedLayout):
      e6, e7,
      ...]
 
-    After padding with interval-padding list [[2, 1], [4, 2]],
+    After padding with interval-padding list [[2, 1], [4, 2]] with an identity remapping,
     the shared memory will be
     [e0, e1, p0,
      e2, e3, p1, p2, p3,
@@ -487,41 +489,64 @@ class PaddedSharedLayout(SharedLayout):
      e6, e7, p5, p6, p7,
      ...]
 
+    Furthermore this encoding allows for a linear remapping from the 1-D shared
+    memory offset to logical n-D tensor elements. The remapping is given in the form
+    of linear bases mapping from offset to [dim0, dim1...dimN-1].
+    See LinearLayout.h for more details how linear layouts are applied to remap
+    elements.
+    Some concrete examples using `xN` and `yN` to mean the logical n-D tensor elements
+    and `pN` to mean padding:
+
+    After padding for shape = [8] with interval-padding list [[2, 2]], offset_bases = [[2], [1]] and block_bases = []:
+    [x0, x2, p0 p1, x1, x3]
+
+    After padding for shape = [8, 4] with interval_padding_pairs = [[8, 1]], offset_bases = [[0, 1], [0, 2], /*gap, stride by 2 rows*/[2, 0], [4, 0], [1, 0]]] and block_bases = []:
+    [
+        x0y0, x0y1, x0y2, x0y3,
+        x2y0, x2y1, x2y2, x2y3,
+        p0,
+        x4y0, x4y1, x4y2, x4y3,
+        x6y0, x6y1, x6y2, x6y3,
+        p1,
+        x1y0, x1y1, x1y2, x1y3,
+        x3y0, x3y1, x3y2, x3y3,
+        p2,
+        x5y0, x5y1, x5y2, x5y3,
+        x7y0, x7y1, x7y2, x7y3,
+    ]
+
     Args:
         interval_padding_pairs (List[int]): List of [interval, padding] pair and both interval and padding must be powers of 2.
-        order (List[int]): Order of logical tensor dimensions; fastest-varying first.
-        ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
-        cta_split_num (Optional[List[int]]): Split factors for CTAs.
-        cta_order (Optional[List[int]]): CTA ordering.
+        offset_bases (List[int]): Bases for shared memory offsets
+        block_bases (List[List[int]]): Bases for block-level shared memory offsets.
+        shape (List[int]): n-D logical shared memory shape
     """
     interval_padding_pairs: List[List[int]]
-    order: List[int]
-    ctas_per_cga: Optional[List[int]] = None
-    cta_split_num: Optional[List[int]] = None
-    cta_order: Optional[List[int]] = None
+    offset_bases: List[List[int]]
+    block_bases: List[List[int]]
+    shape: List[int]
 
     def __post_init__(self):
         super().__setattr__("interval_padding_pairs", _unwrap_shape(self.interval_padding_pairs))
-        super().__setattr__("order", _unwrap_if_constexpr(self.order))
-        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
-        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
-        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+        super().__setattr__("offset_bases", _unwrap_shape(self.offset_bases))
+        super().__setattr__("block_bases", _unwrap_shape(self.block_bases))
+        super().__setattr__("shape", _unwrap_shape(self.shape))
+
+        rank = len(self.shape)
+
+        for basis in self.offset_bases:
+            assert len(basis) == rank
+        for basis in self.block_bases:
+            assert len(basis) == rank
 
         self.verify()
 
     def _to_ir(self, builder):
         intervals, paddings = zip(*self.interval_padding_pairs)
-        return builder.get_padded_shared_layout(intervals, paddings, self.order, self.ctas_per_cga, self.cta_split_num,
-                                                self.cta_order)
+        return builder.get_padded_shared_layout(intervals, paddings, self.offset_bases, self.block_bases, self.shape)
 
     def mangle(self) -> str:
-
-        def stringify(x):
-            if x is None:
-                return ""
-            return "_".join(map(str, x))
-
-        return f"PaddedShared_{stringify(self.interval_padding_pairs)}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_PaddedShared"
+        return f"PaddedShared_{self.interval_padding_pairs}_{self.offset_bases}_{self.block_bases}_{self.shape}_PaddedShared"
 
     def verify(self):
         pairs = self.interval_padding_pairs
@@ -536,19 +561,30 @@ class PaddedSharedLayout(SharedLayout):
         assert all(is_power_of_2(n) for n in intervals), "PaddedSharedLayout interval values must all be power of two"
         assert all(is_power_of_2(n) for n in paddings), "PaddedSharedLayout padding values must all be power of two"
 
-        rank = len(self.order)
+        rank = len(self.shape)
         assert rank > 0, "PaddedSharedLayout order must not be empty"
-        _realize_cta_layout(self, rank)
 
-        assert len(self.ctas_per_cga) == rank
-        assert len(self.cta_split_num) == rank
-        assert len(self.cta_order) == rank
+    @staticmethod
+    @constexpr_function
+    def with_identity_for(interval_padding_pairs, shape, order):
+        """Returns a PaddedSharedLayout with the given interval and padding pairs and an identity mapping as the linear component for the given shape and order.
+        """
+        assert len(shape) == len(order)
+        is_power_of_2 = lambda n: n > 0 and n & (n - 1) == 0
+        assert all(is_power_of_2(n) for n in shape)
+
+        rank = len(shape)
+        # Create a idendity mapping based on shape + order
+        offset_bases = []
+        for dim in order:
+            for basis in range(int(math.log2(shape[dim]))):
+                offset_bases.append([1 << basis if i == dim else 0 for i in range(rank)])
+
+        return PaddedSharedLayout(interval_padding_pairs, offset_bases, [], shape)
 
     def __hash__(self):
-        return hash((tuple(map(tuple, self.interval_padding_pairs)),
-                     tuple(self.order), tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
-                     tuple(self.cta_split_num) if self.cta_split_num else None,
-                     tuple(self.cta_order) if self.cta_order else None))
+        return hash((tuple(map(tuple, self.interval_padding_pairs)), tuple(map(tuple, self.offset_bases)),
+                     tuple(map(tuple, self.block_bases)), tuple(self.shape)))
 
 
 # Python impl of LinearEncodingAttr::basesPerDim

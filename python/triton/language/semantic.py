@@ -1547,7 +1547,7 @@ class TritonSemantic(Generic[TensorTy]):
             acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
         else:
             acc_handle = acc.handle
-            assert acc.type == ret_ty
+            assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
 
         # max_num_imprecise_acc only applies to fp8 -> fp32 dot on sm_90
         if max_num_imprecise_acc is None:
@@ -1627,7 +1627,7 @@ class TritonSemantic(Generic[TensorTy]):
             acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
         else:
             acc_handle = acc.handle
-            assert acc.type == ret_ty
+            assert acc.type.shape == ret_ty.shape and acc.type.element_ty == out_dtype
         rhs_scale_handle = None if rhs_scale_is_none else rhs_scale.handle
         lhs_scale_handle = None if lhs_scale_is_none else lhs_scale.handle
         return self.tensor(
@@ -1755,7 +1755,7 @@ class TritonSemantic(Generic[TensorTy]):
             pack,
         )
         region_builder_fn(elementwise_op)
-        # assert elementwise_op.verify()
+        assert elementwise_op.verify()
 
         return tuple(self.tensor(elementwise_op.get_result(i), ty) for i, ty in enumerate(result_types))
 
