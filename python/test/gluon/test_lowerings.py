@@ -119,11 +119,7 @@ def _reduce_layouts():
                                     cta_order=[0, 1], instr_shape=[16, 8]),
         ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
                                     cta_order=[1, 0], instr_shape=[16, 16, 16]),
-        ttgl.amd.AMDMFMALayout(version=3, warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32],
-                               transposed=True),
         ttgl.amd.AMDMFMALayout(version=3, warps_per_cta=[1, 4], tiles_per_warp=[1, 1], instr_shape=[32, 32],
-                               transposed=True),
-        ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32],
                                transposed=True),
         ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[1, 4], tiles_per_warp=[1, 1], instr_shape=[32, 32],
                                transposed=True),
@@ -516,71 +512,73 @@ _mma_pairs = [
         ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
                                     cta_order=[0, 1], instr_shape=[16, 64, 16]),
     ],
-    # AMD MFMA layouts
+    # AMD MFMA 3 layouts
     [
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[2, 2], tiles_per_warp=[1, 1], instr_shape=[32, 32],
-                               transposed=False),
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32],
-                               transposed=False),
-    ],
-    [
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32],
-                               transposed=False),
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[2, 2], tiles_per_warp=[1, 1], instr_shape=[32, 32],
-                               transposed=False),
-    ],
-    [
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[2, 2], tiles_per_warp=[1, 1], instr_shape=[32, 32],
-                               transposed=False),
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32],
+        ttgl.amd.AMDMFMALayout(version=3, warps_per_cta=[2, 2], tiles_per_warp=[1, 1], instr_shape=[32, 32],
+                               transposed=True),
+        ttgl.amd.AMDMFMALayout(version=3, warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32],
                                transposed=True),
     ],
     [
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32],
-                               transposed=False),
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[2, 2], tiles_per_warp=[1, 1], instr_shape=[32, 32],
+        ttgl.amd.AMDMFMALayout(version=3, warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32],
+                               transposed=True),
+        ttgl.amd.AMDMFMALayout(version=3, warps_per_cta=[2, 2], tiles_per_warp=[1, 1], instr_shape=[32, 32],
                                transposed=True),
     ],
     [
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 4], tiles_per_warp=[1, 1], instr_shape=[16, 16],
-                               transposed=False),
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[16, 1], tiles_per_warp=[1, 1], instr_shape=[16, 16],
-                               transposed=False),
-    ],
-    [
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[16, 1], tiles_per_warp=[1, 1], instr_shape=[16, 16],
-                               transposed=False),
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 4], tiles_per_warp=[1, 1], instr_shape=[16, 16],
-                               transposed=False),
-    ],
-    [
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 4], tiles_per_warp=[1, 1], instr_shape=[16, 16],
-                               transposed=False),
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[16, 1], tiles_per_warp=[1, 1], instr_shape=[16, 16],
+        ttgl.amd.AMDMFMALayout(version=3, warps_per_cta=[4, 4], tiles_per_warp=[1, 1], instr_shape=[16, 16],
+                               transposed=True),
+        ttgl.amd.AMDMFMALayout(version=3, warps_per_cta=[16, 1], tiles_per_warp=[1, 1], instr_shape=[16, 16],
                                transposed=True),
     ],
     [
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[16, 1], tiles_per_warp=[1, 1], instr_shape=[16, 16],
-                               transposed=False),
-        ttgl.amd.AMDMFMALayout(version=2, warps_per_cta=[4, 4], tiles_per_warp=[1, 1], instr_shape=[16, 16],
+        ttgl.amd.AMDMFMALayout(version=3, warps_per_cta=[16, 1], tiles_per_warp=[1, 1], instr_shape=[16, 16],
+                               transposed=True),
+        ttgl.amd.AMDMFMALayout(version=3, warps_per_cta=[4, 4], tiles_per_warp=[1, 1], instr_shape=[16, 16],
                                transposed=True),
     ],
-    # AMD WMMA layouts
+    # AMD MFMA 4 layouts
     [
-        ttgl.amd.AMDWMMALayout(version=1, transposed=False, warps_per_cta=[4, 4]),
-        ttgl.amd.AMDWMMALayout(version=1, transposed=False, warps_per_cta=[16, 1]),
+        ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[2, 2], tiles_per_warp=[1, 1], instr_shape=[32, 32],
+                               transposed=True),
+        ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32],
+                               transposed=True),
     ],
     [
-        ttgl.amd.AMDWMMALayout(version=1, transposed=False, warps_per_cta=[16, 1]),
-        ttgl.amd.AMDWMMALayout(version=1, transposed=False, warps_per_cta=[4, 4]),
+        ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[4, 1], tiles_per_warp=[1, 1], instr_shape=[32, 32],
+                               transposed=True),
+        ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[2, 2], tiles_per_warp=[1, 1], instr_shape=[32, 32],
+                               transposed=True),
     ],
     [
-        ttgl.amd.AMDWMMALayout(version=2, transposed=False, warps_per_cta=[4, 4]),
-        ttgl.amd.AMDWMMALayout(version=2, transposed=False, warps_per_cta=[16, 1]),
+        ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[4, 4], tiles_per_warp=[1, 1], instr_shape=[16, 16],
+                               transposed=True),
+        ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[16, 1], tiles_per_warp=[1, 1], instr_shape=[16, 16],
+                               transposed=True),
     ],
     [
-        ttgl.amd.AMDWMMALayout(version=2, transposed=False, warps_per_cta=[16, 1]),
-        ttgl.amd.AMDWMMALayout(version=2, transposed=False, warps_per_cta=[4, 4]),
+        ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[16, 1], tiles_per_warp=[1, 1], instr_shape=[16, 16],
+                               transposed=True),
+        ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[4, 4], tiles_per_warp=[1, 1], instr_shape=[16, 16],
+                               transposed=True),
+    ],
+    # AMD WMMA 1 layouts
+    [
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[4, 4]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[16, 1]),
+    ],
+    [
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[16, 1]),
+        ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[4, 4]),
+    ],
+    # AMD WMMA 2 layouts
+    [
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[4, 4]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[16, 1]),
+    ],
+    [
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[16, 1]),
+        ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[4, 4]),
     ],
 ]
 
