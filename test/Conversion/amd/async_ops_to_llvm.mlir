@@ -25,8 +25,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #shared = #ttg.padded_shared<[4:+4] {order = [1, 0], shape = [32, 64]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL: async_copy
-  tt.func public @async_copy(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+  // CHECK-LABEL: async_copy_padded
+  tt.func public @async_copy_padded(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg1: i32 {tt.divisibility = 16 : i32},
                                 %arg2: !ttg.memdesc<32x64xf32, #shared, #smem, mutable>) {
     // We need the splat to allow the AxisAnalysis to work during lowering

@@ -36,11 +36,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [2, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+// Padding interval of 1 forces vec==1 which we cannot lower because it's less than 32bits per lane
 #shared = #ttg.padded_shared<[1:+2] {order = [1, 0], shape = [32, 64]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL: async_copy_padded
-  tt.func public @async_copy_padded(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+  tt.func public @async_copy_padded_invalid_vec(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                     %arg1: i32 {tt.divisibility = 16 : i32},
                                     %arg2: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
     // We need the index calculation so AxisAnalysis sees that we can vectorize the load
