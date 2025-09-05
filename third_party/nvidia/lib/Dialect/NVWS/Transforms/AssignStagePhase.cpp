@@ -272,7 +272,7 @@ template <class T> struct AssignStagePhase {
   }
 
   static LogicalResult run(ArefCreateOp arefOp) {
-    SetVector<int> partitionIds;
+    std::set<int> partitionIds;
     for (auto user : arefOp->getUsers()) {
       // Each partition requires its own stage/phase tracking for proper
       // multi-user handling; collect partition IDs in which this aref is used

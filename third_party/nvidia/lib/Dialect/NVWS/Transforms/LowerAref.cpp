@@ -228,7 +228,7 @@ void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
       rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
           op.getLoc(), op.getDesc(), indices, barrierAlloc, op.getResult(),
           pred);
-  assignStageCluster(newLoadOp, getPartitionId(op), getStageCluster(op),
+  assignStageCluster(newLoadOp, getPartitionIds(op), getStageCluster(op),
                      rewriter);
 };
 
@@ -238,7 +238,7 @@ void createTMAGather(triton::nvws::DescriptorGatherOp op,
   auto newGatherOp = rewriter.create<triton::nvidia_gpu::AsyncTMAGatherOp>(
       op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
       barrierAlloc, op.getResult(), pred);
-  assignStageCluster(newGatherOp, getPartitionId(op), getStageCluster(op),
+  assignStageCluster(newGatherOp, getPartitionIds(op), getStageCluster(op),
                      rewriter);
 }
 
@@ -264,7 +264,7 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
   Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
   auto expectOp = rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(
       loc, fullBarrier, txCount, pred);
-  assignStageCluster(expectOp, getPartitionId(op), getStageCluster(op),
+  assignStageCluster(expectOp, getPartitionIds(op), getStageCluster(op),
                      rewriter);
 
   for (auto loadOp : loadOps) {
@@ -615,7 +615,7 @@ ExitOp createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   auto combinedEnter = builder.create<EnterOp>(
       firstEnter.getLoc(), arefEnterBuffers, builder.getType<AsyncTokenType>(),
       aref, zero, zero);
-  assignStageCluster(combinedEnter, getPartitionId(firstEnter),
+  assignStageCluster(combinedEnter, getPartitionIds(firstEnter),
                      getStageCluster(firstEnter), builder);
 
   builder.setInsertionPoint(lastExit);
@@ -624,7 +624,7 @@ ExitOp createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   auto combinedExit = builder.create<ExitOp>(
       firstEnter.getLoc(), aref, combinedEnter.getToken(), zero,
       builder.getArrayAttr(AsyncOpAttrs));
-  assignStageCluster(combinedExit, getPartitionId(lastExit),
+  assignStageCluster(combinedExit, getPartitionIds(lastExit),
                      getStageCluster(lastExit), builder);
 
   std::function<void(Operation *, Operation *)> moveUserAfter =
@@ -701,12 +701,12 @@ void combineArefs(scf::ForOp loop) {
     SmallVector<ArefPutEnterOp> putEnterOps;
     SmallVector<ArefPutExitOp> putExitOps;
     SmallVector<ArefGetExitOp> getExitOps;
-    SmallVector<PartitionId> producerGroupIds;
+    SmallVector<int> producerGroupIds;
     for (auto aref : arefs) {
       for (auto user : aref->getUsers()) {
         if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(user)) {
           putEnterOps.push_back(putEnterOp);
-          producerGroupIds.push_back(*getPartitionId(putEnterOp));
+          producerGroupIds.push_back(getPartitionIds(putEnterOp)->front());
         } else if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
           putExitOps.push_back(putExitOp);
         } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
