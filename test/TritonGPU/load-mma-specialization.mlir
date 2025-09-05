@@ -1025,7 +1025,7 @@ tt.func @specialize_load_only(%desc: !tt.tensordesc<tensor<128x64xf16, #shared>>
   scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
     // CHECK: wait_barrier {{.*}} {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = array<i32: 0>}
     // CHECK-NEXT: local_load {{.*}} {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = array<i32: 0>}
-    // CHECK-NEXT: fence_async_shared {{.*}}partition = 0
+    // CHECK-NEXT: fence_async_shared {{.*}}partition = array<i32: 0>
     // CHECK-NEXT: arrive_barrier {{.*}} {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = array<i32: 0>}
     %val = tt.descriptor_load %desc[%i, %i] {loop.cluster = 1 : i32, loop.stage = 0}: !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
     "use"(%val) {loop.cluster = 0 : i32, loop.stage = 1 : i32} : (tensor<128x64xf16, #oper_layout>) -> ()
@@ -1041,8 +1041,8 @@ tt.func @fp4_padded_load(%desc: !tt.tensordesc<tensor<1x256x64xui8, #fp4_padded_
   scf.for %i = %c0_i32 to %ub step %c1_i32 : i32 {
     // CHECK: [[IDX:%.*]] = arith.muli [[I]], %c2_i32 : i32
     // CHECK: async_tma_copy_global_to_local %arg{{[0-9]+}}[[[I]], [[IDX]]]
-    %val = tt.descriptor_load %desc[%i, %i] {loop.cluster = 1 : i32, loop.stage = 0, ttg.partition = 2 : i32} : !tt.tensordesc<tensor<1x256x64xui8, #fp4_padded_shared>> -> tensor<256x64xi8, #oper_layout>
-    "use"(%val) {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = 0 : i32} : (tensor<256x64xi8, #oper_layout>) -> ()
+    %val = tt.descriptor_load %desc[%i, %i] {loop.cluster = 1 : i32, loop.stage = 0, ttg.partition = array<i32: 2>} : !tt.tensordesc<tensor<1x256x64xui8, #fp4_padded_shared>> -> tensor<256x64xi8, #oper_layout>
+    "use"(%val) {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = array<i32: 0>} : (tensor<256x64xi8, #oper_layout>) -> ()
   } {tt.num_stages = 2 : i32, tt.scheduled_max_stage = 1 : i32, tt.warp_specialize}
   tt.return
 }
