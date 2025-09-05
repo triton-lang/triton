@@ -46,9 +46,6 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   m.def("add_builtin_func_to_llvmir", [](mlir::PassManager &pm, bool ftz) {
     pm.addPass(createConvertBuiltinFuncToLLVMPass(ftz));
   });
-  m.def("add_masked_ops_to_llvmir", [](mlir::PassManager &pm) {
-    pm.addPass(createConvertMaskedOpsToLLVMPass());
-  });
   m.def("insert_instruction_sched_hints", [](mlir::PassManager &pm,
                                              const std::string &variant) {
     pm.addPass(createTritonAMDGPUInsertInstructionSchedHintsPass(variant));

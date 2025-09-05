@@ -525,7 +525,7 @@ def TTG_UpcastMXFPOp : TT_AMDGPU_Op<"upcast_mxfp", [Pure]> {
 def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
   let summary = "Masked load operation";
   let description = [{
-    Load operation with masked support. When the mask is existing, loads from the given pointer. WOrks with LLVM types.
+    Load operation with masking support. If the mask is true, loads from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.
   }];
   let arguments = (ins
     LLVM_AnyPointer:$ptr,
@@ -550,9 +550,9 @@ def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
 // MaskedStoreOp
 //===----------------------------------------------------------------------===//
 def MaskedStoreOp : TT_AMDGPU_Op<"masked_store", []> {
-  let summary = "Masked load operation";
+  let summary = "Masked Store operation";
   let description = [{
-    Load operation with masked support. When the mask is existing, loads from the given pointer. WOrks with LLVM types.
+    Store operation with masking support. If the mask is true, Store from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.
   }];
   let arguments = (ins
     LLVM_AnyPointer:$ptr,

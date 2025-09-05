@@ -301,6 +301,58 @@ Value permute(Location loc, RewriterBase &rewriter, Value x, Value y,
   return op.getResult(0);
 }
 
+// Utility function that returns flags <volatile, nontemporal> for a predicated
+// Load or Store
+// ---------------------------------
+// Op   | cm  | volatile | NT
+// -----+-----+---------------------
+// Load | .ca |   F      | F
+//      | .cg |   F      | T
+//      | .cs |   F      | T
+//      | .cv |   T      | X
+// -----+-----+----------+---------
+// Store| .wb |   F      | F
+//      | .cg |   F      | F
+//      | .cs |   F      | T
+//      | .wt |   T      | X
+// -----+-----+----------+---------
+std::pair<bool, bool>
+getCacheModifierFlagsForPredicatedCall(const triton::CacheModifier &cm,
+                                       MemoryOp op) {
+  switch (op) {
+  case MemoryOp::Load: {
+    switch (cm) {
+    case triton::CacheModifier::CA:
+      return std::make_pair(false, false);
+    case triton::CacheModifier::CG:
+      return std::make_pair(false, true);
+    case triton::CacheModifier::CS:
+      return std::make_pair(false, true);
+    case triton::CacheModifier::CV:
+      return std::make_pair(true, true);
+    default:
+      return std::make_pair(false, false);
+    }
+  }
+  case MemoryOp::Store: {
+    switch (cm) {
+    case triton::CacheModifier::WB:
+      return std::make_pair(false, false);
+    case triton::CacheModifier::CG:
+      return std::make_pair(false, false);
+    case triton::CacheModifier::CS:
+      return std::make_pair(false, true);
+    case triton::CacheModifier::WT:
+      return std::make_pair(true, true);
+    default:
+      return std::make_pair(false, false);
+    }
+  }
+  default:
+    return std::make_pair(false, false);
+  }
+}
+
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis) {
   Value blockId =
@@ -311,101 +363,17 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal, triton::CacheModifier cm,
              bool forceNoAliasAsyncLoads) {
-  bool isNonMasked = false;
-
-  if (auto constOp = pred.getDefiningOp<LLVM::ConstantOp>()) {
-    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
-      isNonMasked = (intAttr.getValue() == 1);
-    }
-  }
-
-  if (isNonMasked) {
-    // Determine cache flags based on cache modifier
-    bool volatileFlag = false;
-    bool nonTmpFlag = false;
-    switch (cm) {
-    case triton::CacheModifier::CA:
-      // ca: volatile=false, nontemporal=false
-      volatileFlag = false;
-      nonTmpFlag = false;
-      break;
-    case triton::CacheModifier::CG:
-      // cg: volatile=false, nontemporal=true
-      volatileFlag = false;
-      nonTmpFlag = true;
-      break;
-    case triton::CacheModifier::CV:
-      // cv: volatile=true, nontemporal=false
-      volatileFlag = true;
-      nonTmpFlag = false;
-      break;
-    default:
-      volatileFlag = false;
-      nonTmpFlag = false;
-      break;
-    }
-
-    auto loadOp = rewriter.create<LLVM::LoadOp>(
-        loc, elemTy, ptr, /*alignment*/ 0, volatileFlag, nonTmpFlag);
-
-    if (forceNoAliasAsyncLoads) {
-      mlir::triton::AMD::addLocalLoadNoAliasScope(loadOp);
-    }
-
-    return loadOp.getResult();
-  } else {
-    return rewriter
-        .create<triton::amdgpu::MaskedLoadOp>(loc, elemTy, ptr, pred, falseVal,
-                                              cm, forceNoAliasAsyncLoads)
-        .getResult();
-  }
+  return rewriter
+      .create<triton::amdgpu::MaskedLoadOp>(loc, elemTy, ptr, pred, falseVal,
+                                            cm, forceNoAliasAsyncLoads)
+      .getResult();
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              Value pred, triton::CacheModifier cm,
              bool forceNoAliasAsyncLoads) {
-  bool isNonMasked = false;
-  if (auto constOp = pred.getDefiningOp<LLVM::ConstantOp>()) {
-    if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
-      isNonMasked = (intAttr.getValue() == 1);
-    }
-  }
-  if (isNonMasked) {
-    // Determine cache flags based on cache modifier
-    bool isVolatile = false;
-    bool isNonTemporal = false;
-    switch (cm) {
-    case triton::CacheModifier::WT:
-      isVolatile = true;
-      break;
-    case triton::CacheModifier::CG:
-      isNonTemporal = true;
-      break;
-    case triton::CacheModifier::CS:
-      isNonTemporal = true;
-      break;
-    default:
-      // Default: no special flags
-      break;
-    }
-    int alignmentBytes = 0;
-    if (auto vecTy = dyn_cast<VectorType>(val.getType())) {
-      Type elementType = vecTy.getElementType();
-      unsigned elementBitWidth = elementType.getIntOrFloatBitWidth();
-      unsigned elementBytes = elementBitWidth / 8u;
-      alignmentBytes = static_cast<int>(elementBytes * vecTy.getNumElements());
-    }
-    auto storeOp = rewriter.create<LLVM::StoreOp>(
-        loc, val, ptr, /*alignment*/ alignmentBytes, isVolatile, isNonTemporal);
-
-    if (forceNoAliasAsyncLoads) {
-      mlir::triton::AMD::addLocalLoadNoAliasScope(storeOp);
-    }
-
-  } else {
-    auto maskedOp = rewriter.create<triton::amdgpu::MaskedStoreOp>(
-        loc, ptr, val, pred, cm, forceNoAliasAsyncLoads);
-  }
+  rewriter.create<triton::amdgpu::MaskedStoreOp>(loc, ptr, val, pred, cm,
+                                                 forceNoAliasAsyncLoads);
 }
 
 // Create the auxiliary/cachepolicy value of ROCDL::RawPtrBufferLoad/StoreOp

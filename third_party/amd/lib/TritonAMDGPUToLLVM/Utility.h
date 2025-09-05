@@ -14,6 +14,8 @@
 
 namespace mlir::LLVM::AMD {
 
+enum class MemoryOp { Load, Store };
+
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
                  mlir::triton::AMD::ISAFamily isaFamily =
                      mlir::triton::AMD::ISAFamily::Unknown);
@@ -32,6 +34,10 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
+
+std::pair<bool, bool>
+getCacheModifierFlagsForPredicatedCall(const triton::CacheModifier &cm,
+                                       MemoryOp op);
 
 // Loads from shared or global memory with predication.
 // `otherElems` is used to mask out the elements that are not loaded

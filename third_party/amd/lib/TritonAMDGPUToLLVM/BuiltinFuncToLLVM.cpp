@@ -2,7 +2,6 @@
 
 #include "AsyncUtility.h"
 #include "Utility.h"
-#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -156,7 +155,6 @@ struct ConvertBuiltinFuncToLLVM
 
     RewritePatternSet patterns(context);
     patterns.add<CallOpConversion>(context, this->ftz);
-    LLVMTypeConverter typeConverter(context);
     if (mlir::applyPatternsGreedily(mod, std::move(patterns), config)
             .failed()) {
       signalPassFailure();

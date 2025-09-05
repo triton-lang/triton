@@ -1,4 +1,4 @@
-#include "AsyncUtility.h" // is this okay?
+#include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
@@ -21,56 +21,6 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
-static std::pair<bool, bool>
-getCacheModifierFlagsForLoad(triton::amdgpu::MaskedLoadOp loadOp) {
-  auto cm = loadOp.getCache();
-  bool isVolatile = false;
-  bool isNonTemporal = false;
-
-  switch (cm) {
-  case triton::CacheModifier::CA:
-    // ca: volatile=false, nontemporal=false
-    break;
-  case triton::CacheModifier::CG:
-    // cg: volatile=false, nontemporal=true
-    isNonTemporal = true;
-    break;
-  case triton::CacheModifier::CV:
-    // cv: volatile=true, nontemporal=X
-    isVolatile = true;
-    break;
-  default:
-    // Default: no special flags
-    break;
-  }
-
-  return std::make_pair(isVolatile, isNonTemporal);
-}
-
-static std::pair<bool, bool>
-getCacheModifierFlagsForStore(triton::amdgpu::MaskedStoreOp storeOp) {
-  auto cm = storeOp.getCache();
-  bool isVolatile = false;
-  bool isNonTemporal = false;
-
-  switch (cm) {
-  case triton::CacheModifier::WT:
-    isVolatile = true;
-    break;
-  case triton::CacheModifier::CG:
-    isNonTemporal = true;
-    break;
-  case triton::CacheModifier::CS:
-    isNonTemporal = true;
-    break;
-  default:
-    // Default: no special flags
-    break;
-  }
-
-  return std::make_pair(isVolatile, isNonTemporal);
-}
-
 class ConvertMaskedLoadOp
     : public OpRewritePattern<triton::amdgpu::MaskedLoadOp> {
 public:
@@ -83,6 +33,30 @@ public:
     auto ptr = loadOp.getPtr();
     auto mask = loadOp.getMask();
     auto falseVal = loadOp.getFalseVal();
+
+    bool isNonMasked = false;
+    if (auto constOp = mask.getDefiningOp<LLVM::ConstantOp>()) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
+        isNonMasked = (intAttr.getValue() == 1);
+      }
+    }
+
+    if (isNonMasked) {
+      auto [volatileFlag, nonTmpFlag] =
+          mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(
+              loadOp.getCache(), mlir::LLVM::AMD::MemoryOp::Load);
+
+      auto llvmLoadOp = rewriter.create<LLVM::LoadOp>(
+          loc, elemTy, ptr, /*alignment*/ 0, volatileFlag, nonTmpFlag);
+
+      if (loadOp.getForceNoAlias()) {
+        AMD::addLocalLoadNoAliasScope(llvmLoadOp);
+      }
+
+      rewriter.replaceOp(loadOp, llvmLoadOp.getResult());
+      return success();
+    }
+
     Block *currentBlock = rewriter.getInsertionBlock();
     Block *afterLoad =
         rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
@@ -94,7 +68,9 @@ public:
     rewriter.create<LLVM::CondBrOp>(loc, mask, trueBlock, ValueRange{},
                                     afterLoad, ValueRange{falseVal});
     rewriter.setInsertionPointToStart(trueBlock);
-    auto [volatileFlag, nonTmpFlag] = getCacheModifierFlagsForLoad(loadOp);
+    auto [volatileFlag, nonTmpFlag] =
+        mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(
+            loadOp.getCache(), mlir::LLVM::AMD::MemoryOp::Load);
 
     auto llvmLoadOp = rewriter.create<LLVM::LoadOp>(
         loc, elemTy, ptr, /*alignment*/ 0, volatileFlag, nonTmpFlag);
@@ -124,8 +100,37 @@ public:
     auto val = storeOp.getValue();
     auto elemTy = storeOp.getValue().getType();
     auto ptr = storeOp.getPtr();
-
     auto mask = storeOp.getMask();
+
+    bool isNonMasked = false;
+    if (auto constOp = mask.getDefiningOp<LLVM::ConstantOp>()) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
+        isNonMasked = (intAttr.getValue() == 1);
+      }
+    }
+
+    if (isNonMasked) {
+      auto [volatileFlag, nonTmpFlag] =
+          mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(
+              storeOp.getCache(), mlir::LLVM::AMD::MemoryOp::Store);
+
+      int alignment = 0;
+      if (auto vecTy = dyn_cast<VectorType>(elemTy)) {
+        auto vecElemTy = vecTy.getElementType();
+        auto elemSizeInBytes = vecElemTy.getIntOrFloatBitWidth() / 8;
+        alignment = elemSizeInBytes * vecTy.getNumElements();
+      }
+
+      auto llvmStoreOp = rewriter.create<LLVM::StoreOp>(
+          loc, val, ptr, alignment, volatileFlag, nonTmpFlag);
+      if (storeOp.getForceNoAlias()) {
+        AMD::addLocalLoadNoAliasScope(llvmStoreOp);
+      }
+
+      rewriter.eraseOp(storeOp);
+      return success();
+    }
+
     Block *currentBlock = rewriter.getInsertionBlock();
     Block *afterStore =
         rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
@@ -137,7 +142,9 @@ public:
     // LLVM::StoreOp | 0         | 0       | (cg) global store
     //               | 0         | 1       | (cs) global store nt
     //               | 1         | 0/1     | (wt) global store sc0 sc1
-    auto [volatileFlag, nonTmpFlag] = getCacheModifierFlagsForStore(storeOp);
+    auto [volatileFlag, nonTmpFlag] =
+        mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(
+            storeOp.getCache(), mlir::LLVM::AMD::MemoryOp::Store);
     int alignment = 0;
     if (auto vecTy = dyn_cast<VectorType>(elemTy)) {
       auto vecElemTy = vecTy.getElementType();
@@ -157,35 +164,7 @@ public:
   }
 };
 
-struct ConvertMaskedOpsToLLVM
-    : public triton::impl::ConvertMaskedOpsToLLVMBase<ConvertMaskedOpsToLLVM> {
-  void runOnOperation() override {
-    MLIRContext *context = &getContext();
-    ModuleOp mod = getOperation();
-
-    GreedyRewriteConfig config;
-    config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Aggressive);
-
-    RewritePatternSet patterns(context);
-    patterns.add<ConvertMaskedLoadOp>(context);
-    patterns.add<ConvertMaskedStoreOp>(context);
-
-    if (applyPatternsGreedily(mod, std::move(patterns), config)
-            .failed()) { // is it okay to fail?
-      signalPassFailure();
-    }
-  }
-};
-
 } // namespace
-
-namespace mlir::triton {
-
-std::unique_ptr<OperationPass<ModuleOp>> createConvertMaskedOpsToLLVMPass() {
-  return std::make_unique<ConvertMaskedOpsToLLVM>();
-}
-
-} // namespace mlir::triton
 
 namespace mlir::triton::AMD {
 
