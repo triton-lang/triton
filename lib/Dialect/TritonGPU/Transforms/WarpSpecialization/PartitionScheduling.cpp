@@ -15,15 +15,6 @@ using namespace triton;
 using namespace triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 
-std::optional<int> getPartitionId(Operation *op) {
-  auto ids = getPartitionIds(op);
-  if (!ids) {
-    return std::nullopt;
-  }
-  assert(ids->size() == 1);
-  return (*ids)[0];
-}
-
 //===----------------------------------------------------------------------===//
 // assignPartitions
 //===----------------------------------------------------------------------===//
@@ -159,6 +150,10 @@ static void scheduleUsers(scf::ForOp loop, WarpSchedule &schedule,
 // first-order partition assignment to the operations in the scheme and its
 // users and/or dependencies. This sets up the initial partitioning of the ops.
 static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
+  // Check for an existing schedule.
+  if (FailureOr<WarpSchedule> scheduleOr = WarpSchedule::deserialize(loop);
+      succeeded(scheduleOr))
+    return {std::move(*scheduleOr)};
   // Start by creating the default partition, a partition for for all loads, and
   // a partition for all MMAs.
   WarpSchedule schedule;
@@ -367,10 +362,12 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     // Look at the definitions directly feeding into this operation.
     iterateDefs(loop, op, [&](OpResult def) {
       Operation *defOp = def.getDefiningOp();
-      if (auto partitionId = getPartitionId(defOp)) {
+      if (auto partitionIds = getPartitionIds(defOp)) {
         // The input originates from an operation already assigned to a
         // partition. Add this as a def partition.
-        cluster->defPartitions.insert(schedule.getPartition(*partitionId));
+	for (auto id: *partitionIds) {
+	  cluster->defPartitions.insert(schedule.getPartition(id));
+	}
       } else {
         // If the input is not reachable from a partition, ignore it.
         if (!hasDefPartition(loop, defOp, schedule))
@@ -392,10 +389,12 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     });
     // Check the users of the operation.
     iterateUsers(loop, op, [&](Operation *user) {
-      if (auto id = getPartitionId(user)) {
+      if (auto partitionIds = getPartitionIds(user)) {
         // If the user is already assigned to a partition, add that partition as
         // one of the sink partitions.
-        cluster->sinkPartitions.insert(schedule.getPartition(*id));
+	for (auto id: *partitionIds) {
+	  cluster->sinkPartitions.insert(schedule.getPartition(id));
+	}
         return;
       }
       // If the user does not already have a cluster, add it to the current
@@ -497,10 +496,12 @@ void rematerializeBroadcasts(WarpSchedule &schedule, OpOperand *use) {
   Operation *defOp = use->get().getDefiningOp();
   while (isa_and_nonnull<BroadcastOp, ExpandDimsOp>(defOp)) {
     Operation *clone = OpBuilder(defOp).clone(*defOp);
-    auto userPartitionId = getPartitionId(use->getOwner());
-    assert(userPartitionId && "user not scheduled");
-    Partition *userPartition = schedule.getPartition(*userPartitionId);
-    setPartition(clone, userPartition);
+    auto userPartitionIds = getPartitionIds(use->getOwner());
+    assert(userPartitionIds && "user not scheduled");
+    for (auto id: *userPartitionIds) {
+      Partition *userPartition = schedule.getPartition(id);
+      setPartition(clone, userPartition);
+    }
     use->set(clone->getResult(0));
 
     defOp = clone->getOperand(0).getDefiningOp();

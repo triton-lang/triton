@@ -13,8 +13,7 @@ namespace mlir::triton::gpu {
 
 bool setPartition(Operation *op, Partition *partition) {
   if (op->getAttr(kPartitionAttrName)) {
-    // TODO: set union with the existing annotation
-    return false;
+    // TODO: what to do in this case
   }
 
   Builder b(op->getContext());
@@ -96,7 +95,6 @@ bool WarpSchedule::trySchedule(Partition *partition, Operation *op) {
 }
 
 FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
-  assert(false);
   auto stages = loop->getAttrOfType<ArrayAttr>(kPartitionStagesAttrName);
   if (!stages)
     return failure();
@@ -119,14 +117,14 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
   }
 
   for (Operation &op : loop.getBody()->without_terminator()) {
-    Partition *partition = result.getRootPartition();
-    if (auto attr = op.getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
-      int64_t idx = attr.getInt();
-      if (idx < 0 || idx >= result.partitions.size())
-        return mlir::emitError(op.getLoc(), "invalid partition index ") << idx;
-      partition = result.partitions[idx].get();
+    if (auto attrs = getPartitionIds(&op)) {
+      for (auto idx : *attrs) {
+        if (idx < 0 || idx >= result.partitions.size())
+          return mlir::emitError(op.getLoc(), "invalid partition index ")
+                 << idx;
+        result.partitions[idx]->addOp(&op);
+      }
     }
-    result.insert(partition, &op);
   }
 
   return result;
