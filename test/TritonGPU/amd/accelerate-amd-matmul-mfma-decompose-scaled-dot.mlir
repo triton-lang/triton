@@ -11,11 +11,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %arg2: tensor<32x2x!tt.ptr<i8>, #blocked1>,
       %arg3: tensor<32x32x!tt.ptr<f32>, #blocked>
     ) {
-    // CHECK-NOT: tt.fp_to_fp
-    // CHECK-NOT: amdgpu.upcast_mxfp
-    // CHECK-NOT: amdgpu.scaled_upcast_fp4
-    // CHECK-NOT: tt.dot_scaled
-    //
     // CHECK: %[[CST:.*]] = arith.constant dense<7> : tensor<2x32xi16, #ttg.slice<{dim = 2, parent = #linear{{.*}}}>>
     // CHECK: %[[B:.*]] = ttg.convert_layout %{{.*}} : tensor<64x32xf8E4M3FN, #blocked{{.*}}> -> tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
     // CHECK: %[[S:.*]] = ttg.convert_layout %{{.*}} : tensor<32x2xi8, #blocked{{.*}}> -> tensor<32x2xi8, #linear{{.*}}>
@@ -54,11 +49,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %arg2: tensor<32x2x!tt.ptr<i8>, #blocked1>,
       %arg3: tensor<32x32x!tt.ptr<f32>, #blocked>
     ) {
-    // CHECK-NOT: tt.fp_to_fp
-    // CHECK-NOT: amdgpu.upcast_mxfp
-    // CHECK-NOT: amdgpu.scaled_upcast_fp4
-    // CHECK-NOT: tt.dot_scaled
-    //
     // CHECK: %[[UB:.*]] = amdgpu.scaled_upcast_fp8 %{{.*}} scale %{{.*}} : tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>, tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
     // CHECK: %{{.*}} = tt.dot %{{.*}}, %[[UB]], %{{.*}} : tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<32x32xf32, #mma>
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
@@ -84,11 +74,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %arg2: tensor<32x2x!tt.ptr<i8>, #blocked1>,
       %arg3: tensor<32x32x!tt.ptr<f32>, #blocked>
     ) {
-    // CHECK-NOT: tt.fp_to_fp
-    // CHECK-NOT: amdgpu.upcast_mxfp
-    // CHECK-NOT: amdgpu.scaled_upcast_fp8
-    // CHECK-NOT: tt.dot_scaled
-    //
     // CHECK: %[[CST:.*]] = arith.constant dense<7> : tensor<2x32xi16, #ttg.slice<{dim = 2, parent = #linear{{.*}}}>>
     // CHECK: %[[B:.*]] = ttg.convert_layout %{{.*}} : tensor<32x32xi8, #blocked{{.*}}> -> tensor<32x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
     // CHECK: %[[S:.*]] = ttg.convert_layout %{{.*}} : tensor<32x2xi8, #blocked{{.*}}> -> tensor<32x2xi8, #linear{{.*}}>

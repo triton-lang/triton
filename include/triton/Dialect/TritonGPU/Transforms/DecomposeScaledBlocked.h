@@ -26,9 +26,10 @@ protected:
                                        TypedValue<RankedTensorType> mxfp,
                                        TypedValue<RankedTensorType> scale,
                                        int dim) const;
-  TypedValue<RankedTensorType> scaleArg(PatternRewriter &rewriter,
-                                        DotScaledOp scaledDotOp, int opIdx,
-                                        FloatType computeType) const;
+  virtual TypedValue<RankedTensorType> scaleArg(PatternRewriter &rewriter,
+                                                DotScaledOp scaledDotOp,
+                                                int opIdx,
+                                                FloatType computeType) const;
   TypedValue<RankedTensorType>
   cvtDotOperand(PatternRewriter &rewriter, DotScaledOp scaledDotOp, int opIdx,
                 TypedValue<RankedTensorType> v) const;

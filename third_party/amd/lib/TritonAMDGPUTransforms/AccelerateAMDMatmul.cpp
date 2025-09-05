@@ -849,39 +849,6 @@ public:
       : ttg::DecomposeScaledBlocked(context, benefit) {}
   using TensorValue = TypedValue<RankedTensorType>;
 
-  LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
-                                PatternRewriter &rewriter) const override {
-    if (!dotOp.getLhsKPack() || !dotOp.getRhsKPack())
-      return failure();
-
-    RankedTensorType oldRetType = dotOp.getType();
-    if (!isa_and_nonnull<BlockedEncodingAttr>(oldRetType.getEncoding()))
-      return rewriter.notifyMatchFailure(
-          dotOp, "expected blocked encoding result tensor");
-    unsigned rank = oldRetType.getRank();
-    if (rank == 3)
-      return rewriter.notifyMatchFailure(dotOp, "NYI: 3d case");
-
-    ScaleDotElemType aElemType = dotOp.getAElemType();
-    ScaleDotElemType bElemType = dotOp.getBElemType();
-    if (!isF16F8F4(aElemType) || !isF16F8F4(bElemType))
-      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6 operand");
-
-    auto computeType = getComputeType(aElemType, bElemType, rewriter);
-
-    auto scaledA = scaleArg(rewriter, dotOp, 0, computeType);
-    scaledA = cvtDotOperand(rewriter, dotOp, 0, scaledA);
-    auto scaledB = scaleArg(rewriter, dotOp, 1, computeType);
-    scaledB = cvtDotOperand(rewriter, dotOp, 1, scaledB);
-
-    auto newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), scaledA, scaledB,
-                                             dotOp.getC());
-
-    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
-                                                      newDot);
-    return success();
-  }
-
   RankedTensorType getScaleType(RankedTensorType vType, int32_t kDim,
                                 bool isFp4) const {
     if (!isFp4)
@@ -894,8 +861,8 @@ public:
     return vType.clone(packedShape);
   }
 
-  TensorValue scaleArg(PatternRewriter &rewriter, DotScaledOp dotOp, int opIdx,
-                       FloatType computeType) const {
+  TensorValue scaleArg(PatternRewriter &rewriter, triton::DotScaledOp dotOp,
+                       int opIdx, FloatType computeType) const override {
     TensorValue v = (opIdx == 0) ? dotOp.getA() : dotOp.getB();
     TensorValue scale = (opIdx == 0) ? dotOp.getAScale() : dotOp.getBScale();
     ScaleDotElemType elemType =
@@ -936,6 +903,7 @@ public:
           loc, scaleType16, v, reshapeScale);
     }
 
+    // 5) If the scale is NaN, return NaN, else return the scaled value.
     return maskNan(rewriter, dotOp, result, scale, kDim);
   }
 };
