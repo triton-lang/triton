@@ -13,6 +13,7 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
 namespace mlir::triton::gpu {
+
 SmallVector<int, 2> DecomposeScaledBlocked::getTransposeOrder(int rank) {
   assert(rank >= 2);
   auto transOrder = llvm::to_vector<2>(llvm::seq<int>(rank - 2));
@@ -198,17 +199,9 @@ DecomposeScaledBlocked::scaleArg(PatternRewriter &rewriter,
   if (!scale)
     return v;
 
-  // For some weird reason, we take the scale with shape as if it were coming
-  // from the lhs even when it's the rhs. In a normal world, we should accept
-  // this parametre transposed, as we do with the mxfp.
-  if (opIdx == 1) {
-    auto order = getTransposeOrder(rank);
-    scale = rewriter.create<TransOp>(loc, scale, order);
-  }
-
   // 1) Cast scale to fp16/bf16, broadcast it and convert its layout
   auto reshapeScale = extendAndBroadcastScale(rewriter, scaledDotOp, scale,
-                                              computeType, v.getType(), kDim);
+                                              computeType, v.getType(), opIdx);
 
   // 2) Multiply
   auto mxfp = cast<TypedValue<RankedTensorType>>(
@@ -220,15 +213,28 @@ DecomposeScaledBlocked::scaleArg(PatternRewriter &rewriter,
 
 TypedValue<RankedTensorType> DecomposeScaledBlocked::extendAndBroadcastScale(
     PatternRewriter &rewriter, DotScaledOp scaledDotOp,
-    TypedValue<RankedTensorType> scale, FloatType computeType,
-    RankedTensorType dstType, int kDim) const {
+    TypedValue<RankedTensorType> &scale, FloatType computeType,
+    RankedTensorType dstType, int opIdx) const {
   auto loc = scale.getLoc();
   auto mod = scaledDotOp->getParentOfType<ModuleOp>();
+  auto v = opIdx == 0 ? scaledDotOp.getA() : scaledDotOp.getB();
+  auto rank = v.getType().getRank();
+  auto kDim = opIdx == 0 ? rank - 1 : rank - 2;
+
+  // For some weird reason, we take the scale with shape as if it were coming
+  // from the lhs even when it's the rhs. In a normal world, we should accept
+  // this parameter transposed, as we do with the mxfp.
+  //
+  // Notice: this is an inplace change.
+  if (opIdx == 1) {
+    auto order = getTransposeOrder(rank);
+    scale = rewriter.create<TransOp>(loc, scale, order);
+  }
 
   // 1) Cast scale to compute type (fp16/bf16)
   auto scale16 = scaleTo16(rewriter, scale, computeType);
 
-  // 2) Broadcast scale to the same shape as v and convert layout
+  // 2) Broadcast scale to the same shape as v and convert the layout
   auto reshapeScale = broadcastScale(rewriter, scaledDotOp, mod, scale16, kDim);
   return rewriter.create<ConvertLayoutOp>(loc, dstType, reshapeScale);
 }
@@ -238,13 +244,12 @@ DecomposeScaledBlocked::cvtDotOperand(PatternRewriter &rewriter,
                                       DotScaledOp scaledDotOp, int opIdx,
                                       TypedValue<RankedTensorType> v) const {
   auto *ctx = rewriter.getContext();
-  auto loc = v.getLoc();
   auto retEnc = scaledDotOp.getType().getEncoding();
   auto vType = v.getType();
   auto encoding =
       DotOperandEncodingAttr::get(ctx, opIdx, retEnc, vType.getElementType());
   auto retTy = vType.cloneWithEncoding(encoding);
-  return rewriter.create<ConvertLayoutOp>(loc, retTy, v);
+  return rewriter.create<ConvertLayoutOp>(v.getLoc(), retTy, v);
 }
 
 void populateDecomposeScaledBlockedPatterns(RewritePatternSet &patterns,

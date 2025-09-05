@@ -26,19 +26,18 @@ protected:
                                        TypedValue<RankedTensorType> mxfp,
                                        TypedValue<RankedTensorType> scale,
                                        int dim) const;
+  TypedValue<RankedTensorType> scaleArg(PatternRewriter &rewriter,
+                                        DotScaledOp scaledDotOp, int opIdx,
+                                        FloatType computeType) const;
   TypedValue<RankedTensorType>
   cvtDotOperand(PatternRewriter &rewriter, DotScaledOp scaledDotOp, int opIdx,
                 TypedValue<RankedTensorType> v) const;
   TypedValue<RankedTensorType>
   extendAndBroadcastScale(PatternRewriter &rewriter, DotScaledOp scaledDotOp,
-                          TypedValue<RankedTensorType> scale,
+                          TypedValue<RankedTensorType> &scale,
                           FloatType computeType, RankedTensorType dstType,
-                          int kDim) const;
+                          int opIdx) const;
   static SmallVector<int, 2> getTransposeOrder(int rank);
-
-  TypedValue<RankedTensorType> scaleArg(PatternRewriter &rewriter,
-                                        DotScaledOp scaledDotOp, int opIdx,
-                                        FloatType computeType) const;
 };
 
 void populateDecomposeScaledBlockedPatterns(mlir::RewritePatternSet &patterns,

@@ -901,12 +901,13 @@ public:
     ScaleDotElemType elemType =
         (opIdx == 0) ? dotOp.getAElemType() : dotOp.getBElemType();
 
+    // 1) If it's fp16/bf16, we don't upcast
     if (elemType == ScaleDotElemType::BF16 ||
         elemType == ScaleDotElemType::FP16)
       return v;
 
+    // 2) If it's non-scaled F8F4, we reuse the common path
     if (!scale) {
-      // If it's non-scaled F8F4, we just reuse the common path.
       return ttg::DecomposeScaledBlocked::scaleArg(rewriter, dotOp, opIdx,
                                                    computeType);
     }
@@ -920,17 +921,12 @@ public:
 
     RankedTensorType scaleType16 = getScaleType(vType16, kDim, isFp4);
 
-    if (opIdx == 1) {
-      auto order = DecomposeScaledBlocked::getTransposeOrder(rank);
-      scale = rewriter.create<tt::TransOp>(loc, scale, order);
-    }
-
-    // 1) Cast scale to bf16, broadcast it and convert its layout
+    // 3) Cast scale to bf16, broadcast it and convert the layout
     FloatType bf16Type = rewriter.getBF16Type();
     auto reshapeScale = extendAndBroadcastScale(
-        rewriter, dotOp, scale, bf16Type, scaleType16.clone(bf16Type), kDim);
+        rewriter, dotOp, scale, bf16Type, scaleType16.clone(bf16Type), opIdx);
 
-    // 2) Upcast with scale
+    // 4) Upcast with scale
     TensorValue result;
     if (isFp4) {
       result = rewriter.create<triton::amdgpu::ScaledUpcastFp4Op>(
