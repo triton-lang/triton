@@ -1664,6 +1664,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 def amd_wmma_layout_kernel():
     ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=True,
                                                                           warps_per_cta=[1, 4]))
+    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=True,
+                                                                          warps_per_cta=[2, 2]))
+    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=False,
+                                                                          warps_per_cta=[1, 4]))
+    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=False,
+                                                                          warps_per_cta=[2, 2]))
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_RDNA4])
@@ -1672,10 +1678,19 @@ def test_amd_wmma_layout(target):
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
 #mma = #ttg.amd_wmma<{version = 2, isTranspose = true, warpsPerCTA = [1, 4]}>
+#mma1 = #ttg.amd_wmma<{version = 2, isTranspose = true, warpsPerCTA = [2, 2]}>
+#mma2 = #ttg.amd_wmma<{version = 2, isTranspose = false, warpsPerCTA = [1, 4]}>
+#mma3 = #ttg.amd_wmma<{version = 2, isTranspose = false, warpsPerCTA = [2, 2]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @amd_wmma_layout_kernel() attributes {noinline = false} {
     %cst = arith.constant 0.000000e+00 : f16
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #mma>
+    %cst_1 = arith.constant 0.000000e+00 : f16
+    %cst_2 = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #mma1>
+    %cst_3 = arith.constant 0.000000e+00 : f16
+    %cst_4 = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #mma2>
+    %cst_5 = arith.constant 0.000000e+00 : f16
+    %cst_6 = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #mma3>
     tt.return
   }
 }
