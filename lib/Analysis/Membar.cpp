@@ -157,9 +157,10 @@ void MembarOrFenceAnalysis::visitTerminator(
   llvm_unreachable("Unknown terminator encountered in membar analysis");
 }
 
-void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
+gpu::BarrierOp MembarAnalysis::insertBarrier(Operation *op,
+                                             OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
-  auto barrierOp = builder->create<gpu::BarrierOp>(op->getLoc());
+  return builder->create<gpu::BarrierOp>(op->getLoc());
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
@@ -176,7 +177,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // If the current op is an async wait and the next op is not a barrier we
     // insert a barrier op and sync
     builder->setInsertionPointAfter(op);
-    insertBarrier(op, builder);
+    auto barrierOp = insertBarrier(op, builder);
+    barrierOp->setAttr("fromWaitOp", builder->getI32IntegerAttr(1));
     blockInfo->sync();
     return;
   }
