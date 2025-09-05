@@ -11,21 +11,9 @@ namespace mlir {
 #define GEN_PASS_DECL
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
-} // namespace mlir
-
-namespace mlir::triton::amdgpu {
-
-// Generate the pass class declarations.
-#define GEN_PASS_DECL_TRITONAMDGPUOPTIMIZEDOTOPERANDS
-#include "TritonAMDGPUTransforms/Passes.h.inc"
-
-void registerTritonAMDGPUOptimizeDotOperands();
-} // namespace mlir::triton::amdgpu
-
-namespace mlir {
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
 #include "TritonAMDGPUTransforms/Passes.h.inc"
-} // namespace mlir
 
+} // namespace mlir
 #endif // TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTRANSFORMS_PASSES_H_
