@@ -11,6 +11,7 @@
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
+using ::mlir::LLVM::AMD::upcast8xMxfp4_SW;
 
 namespace {
 
@@ -41,7 +42,7 @@ public:
         packedVec = b.insert_element(packedVec, v, b.i32_val(j));
       }
       SmallVector<Value, 4> v4i32 =
-          ::mlir::LLVM::AMD::upcast8xMxfp4_SW(rewriter, op, toFp16, packedVec);
+          upcast8xMxfp4_SW(rewriter, op, toFp16, packedVec);
       for (int j = 0; j < 4; j++) {
         Value elements = b.bitcast(v4i32[j], vec_ty(elemType, 2));
         results.push_back(b.extract_element(elements, b.i32_val(0)));

@@ -428,6 +428,7 @@ LogicalResult ScaledUpcastFp4Op::verify() {
   if (outputTy.getShape() != scaleTy.getShape())
     return emitError() << "scale and output should have the same shape";
 
+  // Reuse Fp4ToFpOp's verifier to check types of input and output
   return triton::gpu::Fp4ToFpOp::verifyFp4ToFp(*this, inputTy, outputTy, axis);
 }
 
