@@ -479,3 +479,33 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path):
     names = {c["frame"]["name"] for c in children}
     expected = {f"{t}_{i}" for t in thread_names for i in range(N)}
     assert names == expected
+
+
+def test_nvtx_range_push_pop(tmp_path: pathlib.Path):
+    if is_hip():
+        pytest.skip("HIP backend does not support NVTX")
+
+    temp_file = tmp_path / "test_nvtx_range_push_pop.hatchet"
+    proton.start(str(temp_file.with_suffix("")))
+
+    with proton.scope("proton_scope"):
+        torch.cuda.nvtx.range_push("nvtx_range")
+        torch.ones((1,), device="cuda")
+        torch.cuda.nvtx.range_pop()
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    children = data[0]["children"]
+    assert len(children) == 1
+    proton_scope = children[0]
+    assert proton_scope["frame"]["name"] == "proton_scope"
+    assert len(proton_scope["children"]) == 1
+    nvtx_range = proton_scope["children"][0]
+    assert nvtx_range["frame"]["name"] == "nvtx_range"
+    assert len(nvtx_range["children"]) == 1
+    kernel = nvtx_range["children"][0]
+    assert "elementwise" in kernel["frame"]["name"]
+    assert kernel["metrics"]["count"] == 1

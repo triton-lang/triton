@@ -4,6 +4,7 @@
 #include "Device.h"
 #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/CuptiApi.h"
+#include "Driver/GPU/NVTX.h"
 #include "Profiler/Cupti/CuptiPCSampling.h"
 #include "Utility/Map.h"
 
@@ -23,6 +24,7 @@ thread_local std::deque<size_t>
     GPUProfiler<CuptiProfiler>::Correlation::externIdQueue{};
 
 namespace {
+
 
 std::shared_ptr<Metric> convertActivityToMetric(CUpti_Activity *activity) {
   std::shared_ptr<Metric> metric;
@@ -322,6 +324,18 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         pImpl->graphIdToNumInstances.erase(graphId);
       }
     }
+  } else if (domain == CUPTI_CB_DOMAIN_NVTX) {
+    auto *nvtxData = static_cast<const CUpti_NvtxData *>(cbData);
+    auto name = std::string(nvtxData->functionName);
+    if (name == "nvtxRangePushA") {
+      auto message = nvtx::getMessageFromRangePushA(nvtxData->functionParams);
+      threadState.enterOp(message);
+    } else if (name == "nvtxRangePushW") {
+      auto message = nvtx::getMessageFromRangePushW(nvtxData->functionParams);
+      threadState.enterOp(message);
+    } else if (nvtxData->functionName == "nvtxRangePop") {
+      threadState.exitOp();
+    } // TODO: else handle other NVTX range functions
   } else {
     const CUpti_CallbackData *callbackData =
         static_cast<const CUpti_CallbackData *>(cbData);
