@@ -276,3 +276,13 @@ void WarpSchedule::dump() const {
   }
   llvm::errs() << "\n";
 }
+
+namespace mlir::triton::gpu {
+
+Partition *getPartition(Operation *op, WarpSchedule &schedule) {
+  auto id = getPartitionIds(op);
+  assert(id && id->size() == 1);
+  return schedule.getPartition((*id)[0]);
+}
+
+} // namespace mlir::triton::gpu

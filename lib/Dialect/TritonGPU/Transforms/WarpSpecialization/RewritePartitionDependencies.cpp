@@ -159,6 +159,7 @@ LogicalResult DependencyRewriter::run() {
     std::function<void(OpOperand &)> collectUses;
     collectUses = [&](OpOperand &use) {
       Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+      auto partitionIds = getPartitionIds(owner);
       if (isa<scf::YieldOp>(owner)) {
         // This value is used in a subsequent iteration.
         // collect the uses of the appropriate loop arg
@@ -167,7 +168,7 @@ LogicalResult DependencyRewriter::run() {
                                 .getUses()) {
           collectUses(newUse);
         }
-      } else if (schedule.getPartition(owner) != &partition) {
+      } else if (partitionIds && !llvm::is_contained(*partitionIds, partition.getIndex())) {
         // This value is used in a different partition in the same iteration.
         uses.emplace_back(use.get(), &use, 0);
       }
@@ -180,7 +181,7 @@ LogicalResult DependencyRewriter::run() {
 
     auto callback = [&](Value output, OpOperand &use, unsigned distance) {
       Operation *user = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
-      Partition *usePartition = schedule.getPartition(user);
+      Partition *usePartition = getPartition(user, schedule);
       // Ignore uses in the same partition in the future.
       if (usePartition == &partition) {
         assert(distance > 0 && "self-recursion must occur in the future");
@@ -290,7 +291,6 @@ LogicalResult DependencyRewriter::run() {
   // indices set will just resize the results.
   eraseLoopCarriedValues(loop, {});
   // Update the schedule.
-  schedule.serialize(loop);
   return success();
 }
 
@@ -303,8 +303,6 @@ LogicalResult triton::gpu::rewritePartitionDependencies(scf::ForOp &loop) {
   if (failed(scheduleOr))
     return failure();
   WarpSchedule schedule = std::move(*scheduleOr);
-  if (failed(schedule.verify(loop)))
-    return failure();
   DependencyRewriter rewriter(schedule, loop);
   if (failed(rewriter.run()))
     return failure();

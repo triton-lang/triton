@@ -35,12 +35,6 @@ struct ProducedValueInfo {
   Value result;
 };
 
-Partition *getPartition(Operation *op, WarpSchedule &schedule) {
-  auto id = getPartitionIds(op);
-  assert(id && id->size() == 1);
-  return schedule.getPartition((*id)[0]);
-}
-
 bool samePartition(Operation *op1, Operation *op2) {
   auto part1 = getPartitionIds(op1);
   auto part2 = getPartitionIds(op2);

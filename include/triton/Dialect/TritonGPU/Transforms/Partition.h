@@ -145,6 +145,9 @@ private:
   std::unique_ptr<Partition> rootPartition =
       std::make_unique<Partition>(kSentinel, kSentinel);
 };
+
+Partition *getPartition(Operation *op, WarpSchedule &schedule);
+
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_TRITONGPU_TRANSFORM_PIPELINE_PARTITION_H_

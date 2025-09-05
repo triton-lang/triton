@@ -201,12 +201,6 @@ findSharedMemorySinkOps(Value value, SmallVectorImpl<Operation *> &sinkOps) {
   return success();
 }
 
-Partition *getPartition(Operation *op, WarpSchedule &schedule) {
-  auto id = getPartitionIds(op);
-  assert(id && id->size() == 1);
-  return schedule.getPartition((*id)[0]);
-}
-
 LogicalResult PipelinedLoad::determineLiveRange(Block &container,
                                                 DominanceInfo &domInfo,
                                                 PostDominanceInfo &postDomInfo,
