@@ -376,36 +376,44 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
 LogicalResult Fp4ToFpOp::verify() {
   auto srcTy = cast<RankedTensorType>(getSrc().getType());
   auto resTy = cast<RankedTensorType>(getResult().getType());
-  auto rank = srcTy.getRank();
-
-  if (rank != resTy.getRank())
-    return emitError() << "source rank " << rank << " != result rank "
-                       << resTy.getRank();
-
-  auto srcShape = srcTy.getShape();
-  auto resShape = resTy.getShape();
   auto axis = getAxis();
-
-  if (!(0 <= axis && axis < rank))
-    return emitError() << "axis " << axis << " out of range for rank " << rank;
 
   auto elemType = resTy.getElementType();
   if (!(elemType.isBF16() || elemType.isF16()))
     return emitError() << "only bf16 or f16 is supported for now, got "
                        << elemType;
 
+  return verifyFp4ToFp(*this, srcTy, resTy, axis);
+}
+
+LogicalResult Fp4ToFpOp::verifyFp4ToFp(mlir::Operation *op,
+                                       RankedTensorType srcTy,
+                                       RankedTensorType resTy, unsigned axis) {
+  auto rank = srcTy.getRank();
+
+  if (rank != resTy.getRank())
+    return op->emitError() << "source rank " << rank << " != result rank "
+                           << resTy.getRank();
+
+  auto srcShape = srcTy.getShape();
+  auto resShape = resTy.getShape();
+
+  if (!(0 <= axis && axis < rank))
+    return op->emitError() << "axis " << axis << " out of range for rank "
+                           << rank;
+
   for (int i = 0; i < rank; ++i) {
     if (i == axis) {
       if (resShape[i] != srcShape[i] * 2)
-        return emitError() << "axis " << axis
-                           << " dimension must be 2x source dimension (src="
-                           << srcShape[i] << ", dst=" << resShape[i] << ")";
+        return op->emitError()
+               << "axis " << axis
+               << " dimension must be 2x source dimension (src=" << srcShape[i]
+               << ", dst=" << resShape[i] << ")";
     } else {
       if (resShape[i] != srcShape[i])
-        return emitError() << "dimension " << i
-                           << " mismatch (src=" << srcShape[i]
-                           << ", dst=" << resShape[i] << ", axis=" << axis
-                           << ")";
+        return op->emitError()
+               << "dimension " << i << " mismatch (src=" << srcShape[i]
+               << ", dst=" << resShape[i] << ", axis=" << axis << ")";
     }
   }
   return success();
