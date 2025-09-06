@@ -562,6 +562,89 @@ Traits: `LocalLoadTrait`
 | `result` | ranked tensor of floating-point or integer or ptr values |
 
 
+### `amdgpu.scaled_upcast_fp4` (triton::amdgpu::ScaledUpcastFp4Op)
+
+_Upcast fp4 and then multiply scale_
+
+Syntax:
+
+```
+operation ::= `amdgpu.scaled_upcast_fp4` $input `scale` $scale attr-dict
+              `:` type($input) `,` type($scale) `->` type($output)
+```
+
+Upcast fp4 (e2m1) values packed as i8 values and multiply with the given
+E8M0 scale encoded as BF16. This maps to `v_cvt_scalef32_*` intrinsics
+on the AMD CDNA4 architecture.
+
+The lower 4 bits of the i8s represent the first fp4 element, and the upper
+4 bits the second fp4 element.
+
+The `axis` attribute specifies the axis along which the fp4 elements are
+packed.
+
+Traits: `AlwaysSpeculatableImplTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>axis</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `input` | ranked tensor of 8-bit signless integer values |
+| `scale` | ranked tensor of bfloat16 type values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `output` | ranked tensor of 16-bit float or bfloat16 type or 32-bit float values |
+
+
+### `amdgpu.scaled_upcast_fp8` (triton::amdgpu::ScaledUpcastFp8Op)
+
+_Upcast Fp8 and then multiply scale_
+
+Syntax:
+
+```
+operation ::= `amdgpu.scaled_upcast_fp8` $input `scale` $scale attr-dict
+              `:` type($input) `,` type($scale) `->` type($output)
+```
+
+Upcast fp8 (e4m3/e5m2) values and multiply with the given E8M0 scale
+encoded as BF16. This maps to `v_cvt_scalef32_*` intrinsics
+on the AMD CDNA4 architecture.
+
+Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `input` | ranked tensor of f8E4M3FN type or f8E5M2 type values |
+| `scale` | ranked tensor of bfloat16 type values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `output` | ranked tensor of 16-bit float or bfloat16 type or 32-bit float values |
+
+
 ### `amdgpu.upcast_mxfp` (triton::amdgpu::UpcastMXFPOp)
 
 _Convert an mxfp tensor to bf16/fp16_
