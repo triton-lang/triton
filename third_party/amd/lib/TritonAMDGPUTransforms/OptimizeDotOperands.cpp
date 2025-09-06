@@ -177,29 +177,23 @@ public:
     rewriter.modifyOpInPlace(
         directDot, [&]() { directDot->setOperand(opIdx, localLoad); });
     LDBG("Updated Direct dot: " << *directDot);
-    if (!canUseLocalLoadTransposed(opIdx, sharedOrder)) {
+    if (triton::amdgpu::LocalLoadTransposedOp::canUseLocalLoadTransposed(
+            opIdx, sharedOrder)) {
+      auto transposedLocalLoad =
+          rewriter.create<triton::amdgpu::LocalLoadTransposedOp>(
+              loc, transOperandType, alloc);
+      LDBG("Created transposed local load op:" << *transposedLocalLoad);
+      transDot->setOperand(opIdx, transposedLocalLoad);
+    } else {
       rewriter.modifyOpInPlace(cvtOp, [&]() {
         cvtOp.getSrcMutable().assign(localLoad.getResult());
       });
       LDBG("Updated cvt op: " << *cvtOp);
-    } else {
-      return rewriter.notifyMatchFailure(loadOp, "currently not supported");
     }
 
     LDBG("Updated Trans dot: " << *transDot);
 
     return success();
-  }
-
-private:
-  bool canUseLocalLoadTransposed(unsigned opIdx,
-                                 ArrayRef<unsigned> sharedOrder) const {
-    // TODO(PMylon): Comment out for now, until lowering from
-    // local_load_transposed to ds_read_tr is supported.
-    // unsigned kDimIdx = (opIdx == 0) ? 1 : 0;
-    // bool isCDNA4 = (isaFamily == triton::AMD::ISAFamily::CDNA4);
-    // bool isKContig = (sharedOrder[0] == kDimIdx);
-    return false;
   }
 
   triton::AMD::ISAFamily isaFamily;
