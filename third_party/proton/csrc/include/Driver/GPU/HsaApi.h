@@ -1,5 +1,5 @@
-#ifndef PROTON_DRIVER_GPU_HSA_H_
-#define PROTON_DRIVER_GPU_HSA_H_
+#ifndef PROTON_DRIVER_GPU_HSA_API_H_
+#define PROTON_DRIVER_GPU_HSA_API_H_
 
 #include "Device.h"
 #include "hsa/hsa_ext_amd.h"
@@ -20,4 +20,4 @@ hsa_status_t iterateAgents(hsa_status_t (*callback)(hsa_agent_t agent,
 
 } // namespace proton
 
-#endif // PROTON_DRIVER_GPU_HSA_H_
+#endif // PROTON_DRIVER_GPU_HSA_API_H_

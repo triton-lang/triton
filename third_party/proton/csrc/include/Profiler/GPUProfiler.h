@@ -66,11 +66,11 @@ protected:
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
-    void enterOp() {
+    void enterOp(const std::string &name = "") {
       if (profiler.isOpInProgress())
         return;
       scopeId = Scope::getNewScopeId();
-      profiler.enterOp(Scope(scopeId));
+      profiler.enterOp(Scope(scopeId, name));
       profiler.correlation.apiExternIds.insert(scopeId);
     }
 

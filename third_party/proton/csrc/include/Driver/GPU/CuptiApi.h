@@ -1,5 +1,5 @@
-#ifndef PROTON_DRIVER_GPU_CUPTI_H_
-#define PROTON_DRIVER_GPU_CUPTI_H_
+#ifndef PROTON_DRIVER_GPU_CUPTI_API_H_
+#define PROTON_DRIVER_GPU_CUPTI_API_H_
 
 #include "cupti.h"
 #include "cupti_pcsampling.h"
@@ -109,8 +109,10 @@ CUptiResult pcSamplingStop(CUpti_PCSamplingStopParams *pParams);
 
 void setLibPath(const std::string &path);
 
+const std::string getLibPath();
+
 } // namespace cupti
 
 } // namespace proton
 
-#endif // PROTON_EXTERN_DISPATCH_H_
+#endif // PROTON_DRIVER_GPU_CUPTI_API_H_

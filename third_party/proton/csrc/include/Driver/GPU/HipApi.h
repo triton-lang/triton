@@ -1,5 +1,5 @@
-#ifndef PROTON_DRIVER_GPU_HIP_H_
-#define PROTON_DRIVER_GPU_HIP_H_
+#ifndef PROTON_DRIVER_GPU_HIP_API_H_
+#define PROTON_DRIVER_GPU_HIP_API_H_
 
 #include "Device.h"
 #include "hip/hip_runtime_api.h"
@@ -49,4 +49,4 @@ template <bool CheckSuccess> hipError_t memFreeHost(void *p);
 
 } // namespace proton
 
-#endif // PROTON_DRIVER_GPU_HIP_H_
+#endif // PROTON_DRIVER_GPU_HIP_API_H_
