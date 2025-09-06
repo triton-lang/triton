@@ -188,41 +188,6 @@ LogicalResult ExperimentalVerifyReadVisibilityOp::verify() {
   return success();
 }
 
-LogicalResult ExperimentalClearWriteBarrierOp::verify() {
-  auto writeBarsType = cast<RankedTensorType>(getWriteBarsType());
-  auto barriersType = getBarriers().getType();
-  auto writeStateType = cast<RankedTensorType>(getWriteStateType());
-  if (writeBarsType.getShape()[0] != writeStateType.getShape()[0])
-    return emitError()
-           << "writeBars and writeState must have the same number of buffers";
-  if (writeBarsType.getShape()[1] != barriersType.getShape()[0])
-    return emitError() << "writeBars dim 1 must match number of barriers";
-  if (!verifySingleThreadEncoding(writeBarsType))
-    return emitError() << "writeBars must have encoding that ensures that all "
-                          "its elements reside in a single thread";
-  return success();
-}
-
-LogicalResult ExperimentalClearReadBarrierOp::verify() {
-  auto readBarsType = cast<RankedTensorType>(getReadBarsType());
-  auto barriersType = getBarriers().getType();
-  // readBars is 2D tensor of shape [num_buffers, num_barriers]
-  if (readBarsType.getShape()[1] != barriersType.getShape()[0])
-    return emitError() << "readBars dim 0 must match number of barriers";
-  if (!verifySingleThreadEncoding(readBarsType))
-    return emitError() << "readBars must have encoding that ensures that all "
-                          "its elements reside in a single thread";
-  return success();
-}
-
-LogicalResult ExperimentalCheckBarrierWritesClearedOp::verify() {
-  auto writeBarsType = cast<RankedTensorType>(getWriteBarsType());
-  auto barriersType = getBarriers().getType();
-  if (writeBarsType.getShape()[1] != barriersType.getShape()[0])
-    return emitError() << "writeBars dim 1 must match number of barriers";
-  return success();
-}
-
 LogicalResult ExperimentalStageAccessForCommitOp::verify() {
   auto buffersType = getBuffers().getType();
   auto outstandingCommitsType =

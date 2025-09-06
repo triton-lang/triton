@@ -345,8 +345,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     // CHECK: tti.experimental_transfer_visible_writes {{.*}}{%[[BARRIERS]], %[[WRITE_VISIBILITY_GLOB]](tensor<1xi64, #{{.*}}>), %[[WRITE_TRACKING_GLOB]](tensor<1x1xi8, #{{.*}}>)}
     // CHECK: tti.experimental_transfer_visible_reads {{.*}}{%[[BARRIERS]], %[[READ_VISIBILITY_GLOB]](tensor<1x64xi64, #{{.*}}>), %[[READ_TRACKING_GLOB]](tensor<1x1xi64, #{{.*}}>)}
-    // CHECK: tti.experimental_clear_write_barrier {{.*}}{%[[BARRIERS]], %[[WRT_BARS_GLOB]](tensor<1x1xi8, #{{.*}}>), %[[WRITE_STATE_GLOB]](tensor<1xi8, #{{.*}}>)}
-    // CHECK: tti.experimental_clear_read_barrier {{.*}}{%[[BARRIERS]], %[[READ_BARS_GLOB]](tensor<1x1xi8, #{{.*}}>)}
     ttng.wait_barrier %bar, %c0_i32, %true : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     tt.return
   }

@@ -293,66 +293,6 @@ def TTI_ExperimentalVerifyReadVisibilityOp : TTI_Op<"experimental_verify_read_vi
 }
 
 
-def TTI_ExperimentalClearWriteBarrierOp : TTI_Op<"experimental_clear_write_barrier", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "clear the write state for buffers being guarded by an mbar";
-  let description = [{
-    For each buffer that has [buffer, mbar] entry in writeBars tensor, set the corresponding entry in writeState tensor to 0.
-    Also, set the corresponding entry in writeBars tensor to 0.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$mbar,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$writeBars,
-    TypeAttr:$writeBarsType,
-    TT_PtrLike:$writeState,
-    TypeAttr:$writeStateType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars) `,` type($writeState)
-  }];
-  let hasVerifier = 1;
-}
-
-
-def TTI_ExperimentalClearReadBarrierOp : TTI_Op<"experimental_clear_read_barrier", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "clear the read state for buffers being guarded by an mbar";
-  let description = [{
-    Set all the entries in the column corresponding to the mbar in readBars tensor to 0.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$mbar,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$readBars,
-    TypeAttr:$readBarsType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $mbar `{` $barriers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readBars)
-  }];
-  let hasVerifier = 1;
-}
-
-
-def TTI_ExperimentalCheckBarrierWritesClearedOp : TTI_Op<"experimental_check_barrier_writes_cleared", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "verify that the barrier is not used to track any writes";
-  let description = [{
-    Verify that the column corresponding to the mbar in writeBars tensor is all 0.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$mbar,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$writeBars,
-    TypeAttr:$writeBarsType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars)
-  }];
-  let hasVerifier = 1;
-}
-
-
 def TTI_ExperimentalStageAccessForCommitOp : TTI_Op<"experimental_stage_access_for_commit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "";
   let description = [{
