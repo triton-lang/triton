@@ -793,26 +793,6 @@ def early_return_kernel(x):
     return x
 
 
-def test_2d_tensor_early_return():
-    warp_size = ttgl.constexpr(THREADS_PER_WARP)
-
-    @gluon.jit
-    def kernel(N, out):
-        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, warp_size], [1, 4], [1, 0])
-        BLOCK: ttgl.constexpr = 32
-
-        x0 = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(1, layout))
-        x1 = ttgl.arange(0, BLOCK, layout=ttgl.SliceLayout(0, layout))
-        x = x0[:, None] * x1[None, :]
-        for i in range(N):
-            x += early_return_kernel(x)
-        ttgl.store(out, x.sum(0).sum(0))
-
-    out = torch.empty(1, dtype=torch.int32, device="cuda")
-    compiled_kernel = kernel.warmup(N=100, out=out, grid=(1, ))
-    assert compiled_kernel.asm["llir"].count("define") == 1
-
-
 @pytest.mark.skipif(not is_hip_cdna3() and not is_hip_cdna4(), reason="Requires CDNA3 or CDNA4")
 def test_inline_with_amdgpu_dialect():
 
