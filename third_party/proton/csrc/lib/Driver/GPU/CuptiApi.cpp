@@ -2,7 +2,6 @@
 #include "Device.h"
 #include "Driver/Dispatch.h"
 
-
 namespace proton {
 
 namespace cupti {
