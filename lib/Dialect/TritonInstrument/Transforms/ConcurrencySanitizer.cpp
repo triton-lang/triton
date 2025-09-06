@@ -617,13 +617,6 @@ private:
                   readTrackingAlloc[(int)memType],
                   readTrackingType[(int)memType], pred);
             }
-            b.create<tti::ExperimentalClearWriteBarrierOp>(
-                barrier, barriers, writeBarriersAlloc[(int)memType],
-                writeBarriersType[(int)memType], writeStateAlloc[(int)memType],
-                writeStateType[(int)memType], pred);
-            b.create<tti::ExperimentalClearReadBarrierOp>(
-                barrier, barriers, readBarriersAlloc[(int)memType],
-                readBarriersType[(int)memType], pred);
           }
         }
       }
@@ -650,20 +643,6 @@ private:
         b.create<tti::ExperimentalClearOutstandingCommitsOp>(
             asyncCpCommitsAlloc, asyncCpCommitsType, asyncWaitOp.getNum(),
             nullptr);
-      }
-      if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
-        if (writeBarriersAlloc[(int)MemType::SHARED_MEM]) {
-          b.create<tti::ExperimentalCheckBarrierWritesClearedOp>(
-              expectOp.getAlloc(), barriers,
-              writeBarriersAlloc[(int)MemType::SHARED_MEM],
-              writeBarriersType[(int)MemType::SHARED_MEM], expectOp.getPred());
-        }
-        if (writeBarriersAlloc[(int)MemType::TENSOR_MEM]) {
-          b.create<tti::ExperimentalCheckBarrierWritesClearedOp>(
-              expectOp.getAlloc(), barriers,
-              writeBarriersAlloc[(int)MemType::TENSOR_MEM],
-              writeBarriersType[(int)MemType::TENSOR_MEM], expectOp.getPred());
-        }
       }
       if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
         if (wgmmaOp.getIsAsync() == true) {
