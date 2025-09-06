@@ -218,8 +218,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: tti.experimental_clear_write_tracking {{.*}}{%[[BUFFERS]], %[[WRITE_TRACKING_GLOB]](tensor<1x1xi8, #{{.*}}>)}, %true
     // CHECK: tti.experimental_clear_read_visibility {{.*}}{%[[BUFFERS]], %[[READ_VISIBILITY_GLOB]](tensor<1x64xi64, #{{.*}}>)}, %true
     // CHECK: tti.experimental_clear_read_tracking {{.*}}{%[[BUFFERS]], %[[READ_TRACKING_GLOB]](tensor<1x1xi64, #{{.*}}>)}, %true
-    // CHECK: tti.experimental_set_write_state {{.*}}{%[[BUFFERS]], %[[WRITE_STATE_GLOB]](tensor<1xi8, #{{.*}}>)}, %true pipelined false
-    // CHECK: tti.experimental_commit_write_with_barrier {{.*}}{%[[BARRIERS]], %[[WRT_BARS_GLOB]](tensor<1x1xi8, #{{.*}}>), %[[WRITE_STATE_GLOB]](tensor<1xi8, #{{.*}}>)}
     // CHECK: tti.experimental_track_visible_writes {{.*}}, 16{%[[BARRIERS]], %[[WRITE_VISIBILITY_GLOB]](tensor<1xi64, #{{.*}}>), %[[WRITE_TRACKING_GLOB]](tensor<1x1xi8, #{{.*}}>)}
     ttng.async_tma_copy_global_to_local %arg0[%c0_i32, %c0_i32] %0, %bar, %true : !tt.tensordesc<tensor<32x32xf32, #shared>>, !ttg.memdesc<1xi64, #shared1, #smem, mutable> -> !ttg.memdesc<32x32xf32, #shared, #smem, mutable>
     tt.return
@@ -279,8 +277,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
     // CHECK: tti.experimental_verify_write_visibility
     // CHECK: tti.experimental_verify_read_visibility
-    // CHECK: tti.experimental_set_write_state
-    // CHECK: tti.experimental_commit_write_with_barrier
+    // CHECK: tti.experimental_set_write_visibility
+    // CHECK: tti.experimental_clear_write_tracking
+    // CHECK: tti.experimental_clear_read_visibility
+    // CHECK: tti.experimental_clear_read_tracking
+    // CHECK: tti.experimental_track_visible_writes
     ttng.async_tma_gather %arg0[%x_offsets, %c0_i32] %0, %bar, %true : !tt.tensordesc<tensor<32x32xf32, #shared>>, tensor<32xi32>, i32, !ttg.memdesc<1xi64, #shared1, #smem, mutable>, !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, i1
     tt.return
   }
@@ -404,13 +405,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: %[[TM_READ_BARS_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 1 : i32} : !tt.ptr<i8>
 
     // CHECK: tti.experimental_verify_write_visibility %[[A:.*]], 32{%[[SM_BUFS]], %[[SM_WRITE_VISIBILITY_GLOB]](tensor<2xi64, #{{.*}}>)}, %true
-    // CHECK: tti.experimental_set_read_barrier %[[A]], %[[BAR:.*]]{%[[SM_BUFS]], %[[BARRIERS]], %[[SM_READ_BARS_GLOB]](tensor<2x1xi8, #{{.*}}>)}
+    // CHECK: tti.experimental_set_read_visibility %[[A]], 32{%[[SM_BUFS]], %[[SM_READ_VISIBILITY_GLOB]](tensor<2x64xi64, #{{.*}}>)}, %true
+    // CHECK: tti.experimental_track_visible_reads %[[BAR:.*]], 32{%[[BARRIERS]], %[[SM_READ_VISIBILITY_GLOB]](tensor<2x64xi64, #{{.*}}>), %[[SM_READ_TRACKING_GLOB]](tensor<2x1xi64, #{{.*}}>)}
     // CHECK: tti.experimental_verify_write_visibility %[[B:.*]], 32{%[[SM_BUFS]], %[[SM_WRITE_VISIBILITY_GLOB]](tensor<2xi64, #{{.*}}>)}, %true
-    // CHECK: tti.experimental_set_read_barrier %[[B]], %[[BAR:.*]]{%[[SM_BUFS]], %[[BARRIERS]], %[[SM_READ_BARS_GLOB]](tensor<2x1xi8, #{{.*}}>)}
+    // CHECK: tti.experimental_set_read_visibility %[[B]], 32{%[[SM_BUFS]], %[[SM_READ_VISIBILITY_GLOB]](tensor<2x64xi64, #{{.*}}>)}, %true
+    // CHECK: tti.experimental_track_visible_reads %[[BAR]], 32{%[[BARRIERS]], %[[SM_READ_VISIBILITY_GLOB]](tensor<2x64xi64, #{{.*}}>), %[[SM_READ_TRACKING_GLOB]](tensor<2x1xi64, #{{.*}}>)}
     // CHECK: tti.experimental_verify_write_visibility %[[ACC:.*]], 32{%[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]](tensor<1xi64, #{{.*}}>)}, %true
     // CHECK: tti.experimental_verify_read_visibility %[[ACC]], 32{%[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]](tensor<1x64xi64, #{{.*}}>)}
-    // CHECK: tti.experimental_set_write_state %[[ACC]]{%[[TM_BUFS]], %[[TM_WRITE_STATE_GLOB]](tensor<1xi8, #{{.*}}>)}, {{.*}} pipelined true
-    // CHECK: tti.experimental_commit_write_with_barrier {{.*}}{%[[BARRIERS]], %[[TM_WRT_BARS_GLOB]](tensor<1x1xi8, #{{.*}}>), %[[TM_WRITE_STATE_GLOB]](tensor<1xi8, #{{.*}}>)}
+    // CHECK: tti.experimental_set_write_visibility %[[ACC]], 32{%[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]](tensor<1xi64, #{{.*}}>)}, %true
+    // CHECK: tti.experimental_clear_write_tracking %[[ACC]]{%[[TM_BUFS]], %[[TM_WRITE_TRACKING_GLOB]](tensor<1x1xi8, #{{.*}}>)}, %true
+    // CHECK: tti.experimental_clear_read_visibility %[[ACC]]{%[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]](tensor<1x64xi64, #{{.*}}>)}, %true
+    // CHECK: tti.experimental_clear_read_tracking %[[ACC]]{%[[TM_BUFS]], %[[TM_READ_TRACKING_GLOB]](tensor<1x1xi64, #{{.*}}>)}, %true
     // CHECK: tti.experimental_track_visible_writes %[[BAR]], 32{%[[BARRIERS]], %[[TM_WRITE_VISIBILITY_GLOB]](tensor<1xi64, #{{.*}}>), %[[TM_WRITE_TRACKING_GLOB]](tensor<1x1xi8, #{{.*}}>)}
     // CHECK: tti.experimental_track_visible_reads %[[BAR]], 32{%[[BARRIERS]], %[[TM_READ_VISIBILITY_GLOB]](tensor<1x64xi64, #{{.*}}>), %[[TM_READ_TRACKING_GLOB]](tensor<1x1xi64, #{{.*}}>)}
     // CHECK: ttng.tc_gen5_mma %[[A]], %[[B]], %[[ACC]][], {{.*}}, {{.*}}, %[[BAR]]
@@ -456,13 +461,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: %[[TM_READ_BARS_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 2 : i32} : !tt.ptr<i8>
 
     // CHECK: tti.experimental_verify_write_visibility %[[A:.*]], 32{%[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]](tensor<2xi64, #{{.*}}>)}, %true
-    // CHECK: tti.experimental_set_read_barrier %[[A]], %[[BAR:.*]]{%[[TM_BUFS]], %[[BARRIERS]], %[[TM_READ_BARS_GLOB]](tensor<2x1xi8, #{{.*}}>)}
+    // CHECK: tti.experimental_set_read_visibility %[[A]], 32{%[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]](tensor<2x64xi64, #{{.*}}>)}, %true
+    // CHECK: tti.experimental_track_visible_reads %[[BAR:.*]], 32{%[[BARRIERS]], %[[TM_READ_VISIBILITY_GLOB]](tensor<2x64xi64, #{{.*}}>), %[[TM_READ_TRACKING_GLOB]](tensor<2x1xi64, #{{.*}}>)}
     // CHECK: tti.experimental_verify_write_visibility %[[B:.*]], 32{%[[SM_BUFS]], %[[SM_WRITE_VISIBILITY_GLOB]](tensor<1xi64, #{{.*}}>)}, %true
-    // CHECK: tti.experimental_set_read_barrier %[[B]], %[[BAR:.*]]{%[[SM_BUFS]], %[[BARRIERS]], %[[SM_READ_BARS_GLOB]](tensor<1x1xi8, #{{.*}}>)}
+    // CHECK: tti.experimental_set_read_visibility %[[B]], 32{%[[SM_BUFS]], %[[SM_READ_VISIBILITY_GLOB]](tensor<1x64xi64, #{{.*}}>)}, %true
+    // CHECK: tti.experimental_track_visible_reads %[[BAR]], 32{%[[BARRIERS]], %[[SM_READ_VISIBILITY_GLOB]](tensor<1x64xi64, #{{.*}}>), %[[SM_READ_TRACKING_GLOB]](tensor<1x1xi64, #{{.*}}>)}
     // CHECK: tti.experimental_verify_write_visibility %[[ACC:.*]], 32{%[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]](tensor<2xi64, #{{.*}}>)}, %true
     // CHECK: tti.experimental_verify_read_visibility %[[ACC]], 32{%[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]](tensor<2x64xi64, #{{.*}}>)}
-    // CHECK: tti.experimental_set_write_state %[[ACC]]{%[[TM_BUFS]], %[[TM_WRITE_STATE_GLOB]](tensor<2xi8, #{{.*}}>)}, {{.*}} pipelined true
-    // CHECK: tti.experimental_commit_write_with_barrier {{.*}}{%[[BARRIERS]], %[[TM_WRT_BARS_GLOB]](tensor<2x1xi8, #{{.*}}>), %[[TM_WRITE_STATE_GLOB]](tensor<2xi8, #{{.*}}>)}
+    // CHECK: tti.experimental_set_write_visibility %[[ACC]], 32{%[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]](tensor<2xi64, #{{.*}}>)}, %true
+    // CHECK: tti.experimental_clear_write_tracking %[[ACC]]{%[[TM_BUFS]], %[[TM_WRITE_TRACKING_GLOB]](tensor<2x1xi8, #{{.*}}>)}, %true
+    // CHECK: tti.experimental_clear_read_visibility %[[ACC]]{%[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]](tensor<2x64xi64, #{{.*}}>)}, %true
+    // CHECK: tti.experimental_clear_read_tracking %[[ACC]]{%[[TM_BUFS]], %[[TM_READ_TRACKING_GLOB]](tensor<2x1xi64, #{{.*}}>)}, %true
+    // CHECK: tti.experimental_track_visible_writes %[[BAR]], 32{%[[BARRIERS]], %[[TM_WRITE_VISIBILITY_GLOB]](tensor<2xi64, #{{.*}}>), %[[TM_WRITE_TRACKING_GLOB]](tensor<2x1xi8, #{{.*}}>)}
+    // CHECK: tti.experimental_track_visible_reads %[[BAR]], 32{%[[BARRIERS]], %[[TM_READ_VISIBILITY_GLOB]](tensor<2x64xi64, #{{.*}}>), %[[TM_READ_TRACKING_GLOB]](tensor<2x1xi64, #{{.*}}>)}
     // CHECK: ttng.tc_gen5_mma %[[A]], %[[B]], %[[ACC]][], {{.*}}, {{.*}}, %[[BAR]]
     %c0_i32 = arith.constant 0 : i32
     %0 = ttng.tmem_alloc  {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #tmem1, #ttng.tensor_memory, mutable>
