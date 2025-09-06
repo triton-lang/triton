@@ -5485,22 +5485,31 @@ def test_globaltimer(device):
         pytest.skip("test_globaltimer is flaky on AMD GPUs")
 
     @triton.jit
-    def kernel(Out1, Out2, func: tl.constexpr):
-        start = func()
+    def kernel_cuda(Out1, Out2):
+        start = tl.extra.cuda.globaltimer()
         off = tl.arange(0, 128)
         for i in range(10000):
             tl.store(Out1 + off, tl.load(Out1 + off) + 1)
-        end = func()
+        end = tl.extra.cuda.globaltimer()
+        tl.store(Out2, start)
+        tl.store(Out2 + 1, end)
+
+    @triton.jit
+    def kernel_hip(Out1, Out2):
+        start = tl.extra.hip.memrealtime()
+        off = tl.arange(0, 128)
+        for i in range(10000):
+            tl.store(Out1 + off, tl.load(Out1 + off) + 1)
+        end = tl.extra.hip.memrealtime()
         tl.store(Out2, start)
         tl.store(Out2 + 1, end)
 
     out1 = to_triton(np.zeros((128, ), dtype=np.int64), device=device)
     out2 = to_triton(np.zeros((2, ), dtype=np.int64), device=device)
     if is_cuda():
-        func = tl.extra.cuda.globaltimer
+        h = kernel_cuda[(1, )](out1, out2)
     else:
-        func = tl.extra.hip.memrealtime
-    h = kernel[(1, )](out1, out2, func)
+        h = kernel_hip[(1, )](out1, out2)
     assert out2[1] - out2[0] > 0
     if is_cuda():
         assert h.asm["ptx"].count("%globaltimer") == 2
