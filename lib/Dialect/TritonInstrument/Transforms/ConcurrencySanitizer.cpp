@@ -520,10 +520,6 @@ private:
                 if (pred && effect.pred) {
                   pred = b.create<arith::AndIOp>(effect.pred, pred);
                 }
-                b.create<tti::ExperimentalSetReadBarrierOp>(
-                    buf, barrier, buffersTensor[(int)memType], barriers,
-                    readBarriersAlloc[(int)memType],
-                    readBarriersType[(int)memType], pred);
                 b.create<tti::ExperimentalTrackVisibleReadsOp>(
                     barrier, thread, barriers,
                     readVisibilityAlloc[(int)memType],
@@ -571,19 +567,10 @@ private:
                   buf, buffersTensor[(int)memType],
                   readTrackingAlloc[(int)memType],
                   readTrackingType[(int)memType], effect.pred);
-              b.create<tti::ExperimentalSetWriteStateOp>(
-                  buf, buffersTensor[(int)memType],
-                  writeStateAlloc[(int)memType], writeStateType[(int)memType],
-                  effect.hwPipelined, effect.pred);
               for (auto [barrier, pred] : effect.barriersAndPreds) {
                 if (pred && effect.pred) {
                   pred = b.create<arith::AndIOp>(effect.pred, pred);
                 }
-                b.create<tti::ExperimentalCommitWriteWithBarrierOp>(
-                    barrier, barriers, writeBarriersAlloc[(int)memType],
-                    writeBarriersType[(int)memType],
-                    writeStateAlloc[(int)memType], writeStateType[(int)memType],
-                    pred);
                 b.create<tti::ExperimentalTrackVisibleWritesOp>(
                     barrier, thread, barriers,
                     writeVisibilityAlloc[(int)memType],
@@ -641,33 +628,6 @@ private:
         }
       }
       if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
-        // Workaround: scan towards the beginning of the current block looking
-        // for mmav5s and mark their operands as reads guarded by the barrier.
-        Operation *prevOp = op->getPrevNode();
-        while (prevOp) {
-          auto setBarrier = [&](TypedValue<ttg::MemDescType> buf) {
-            MemType memType = MemType::TENSOR_MEM;
-            if (isa<ttg::SharedEncodingTrait>(buf.getType().getEncoding())) {
-              memType = MemType::SHARED_MEM;
-            }
-            b.create<tti::ExperimentalSetReadBarrierOp>(
-                buf, commitOp.getBarrier(), buffersTensor[(int)memType],
-                barriers, readBarriersAlloc[(int)memType],
-                readBarriersType[(int)memType], commitOp.getPred());
-          };
-          if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(prevOp)) {
-            setBarrier(mmav5Op.getA());
-            setBarrier(mmav5Op.getB());
-          }
-          prevOp = prevOp->getPrevNode();
-        }
-
-        b.create<tti::ExperimentalCommitWriteWithBarrierOp>(
-            commitOp.getBarrier(), barriers,
-            writeBarriersAlloc[(int)MemType::TENSOR_MEM],
-            writeBarriersType[(int)MemType::TENSOR_MEM],
-            writeStateAlloc[(int)MemType::TENSOR_MEM],
-            writeStateType[(int)MemType::TENSOR_MEM], commitOp.getPred());
         for (MemType memType : {MemType::TENSOR_MEM, MemType::SHARED_MEM}) {
           b.create<tti::ExperimentalTrackVisibleWritesOp>(
               commitOp.getBarrier(), thread, barriers,
