@@ -139,6 +139,21 @@ def __fence(scope: core.constexpr = core.constexpr("gpu"), _semantic=None):
 
 
 @core.extern
+def tma_sync(N: core.constexpr = core.constexpr(0), _semantic=None):
+    return core.inline_asm_elementwise(
+        asm=f"""
+        cp.async.bulk.wait_group {N.value};
+        """,
+        constraints="=r",  # force have a return value, even not used.
+        args=[],
+        dtype=tl.uint32,
+        is_pure=False,  # no optimize this!
+        pack=1,
+        _semantic=_semantic,
+    )
+
+
+@core.extern
 def _load_v4_impl(ptr, suffix: core.constexpr, _semantic=None):
     val_type: core.constexpr = _ptx_suffix_to_tl_type(suffix,
                                                       _semantic=_semantic)
@@ -953,6 +968,74 @@ def atomic_cas(
     )
 
 
+@core.extern
+def globaltimer_lo(_semantic=None):
+    return tl.inline_asm_elementwise(
+        asm="mov.u32 $0, %globaltimer_lo;",
+        constraints=("=r"),
+        args=[],
+        dtype=tl.uint32,
+        is_pure=False,
+        pack=1,
+        _semantic=_semantic,
+    )
+
+
+@core.extern
+def globaltimer_hi(_semantic=None):
+    return tl.inline_asm_elementwise(
+        asm="mov.u32 $0, %globaltimer_hi;",
+        constraints=("=r"),
+        args=[],
+        dtype=tl.uint32,
+        is_pure=False,
+        pack=1,
+        _semantic=_semantic,
+    )
+
+
+@core.extern
+def globaltimer(_semantic=None):
+    return tl.inline_asm_elementwise(
+        asm="mov.u64 $0, %globaltimer;",
+        constraints=("=l"),
+        args=[],
+        dtype=tl.uint64,
+        is_pure=False,
+        pack=1,
+        _semantic=_semantic,
+    )
+
+
+@core.extern
+def smid(_semantic=None):
+    return tl.inline_asm_elementwise(
+        asm="mov.u32 $0, %smid;",
+        constraints=("=r"),
+        args=[],
+        dtype=tl.uint32,
+        is_pure=False,
+        pack=1,
+        _semantic=_semantic,
+    )
+
+
+@core.extern
+def membar(scope: core.constexpr = core.constexpr("cta"), _semantic=None):
+    return tl.inline_asm_elementwise(
+        asm=f"""
+        membar.{scope.value};
+        mov.u32 $0, 0;
+        """,
+        constraints=("=r"),
+        args=[],
+        dtype=tl.uint32,
+        is_pure=False,
+        pack=1,
+        _semantic=_semantic,
+    )
+
+
 __all__ = [
     "__syncthreads",
     "__fence",
@@ -975,4 +1058,9 @@ __all__ = [
     "atomic_cas",
     "ld_b32",
     "st_b32",
+    "globaltimer",
+    "globaltimer_lo",
+    "globaltimer_hi",
+    "smid",
+    "membar",
 ]

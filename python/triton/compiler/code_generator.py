@@ -976,6 +976,8 @@ class CodeGenerator(ast.NodeVisitor):
                 block_handles = [block.arg(i) for i in range(len(init_handles))]
                 block_args = unflatten_ir_values(block_handles, init_tys)
                 # reset local scope/local_defs to not pick up local defs from the previous dry run.
+                self.lscope = liveins.copy()
+                self.local_defs = {}
                 for name, val in zip(names, block_args):
                     self.set_value(name, val)
 
