@@ -1,5 +1,5 @@
-#ifndef PROTON_DRIVER_GPU_NVTX_API_H
-#define PROTON_DRIVER_GPU_NVTX_API_H
+#ifndef PROTON_DRIVER_GPU_NVTX_API_H_
+#define PROTON_DRIVER_GPU_NVTX_API_H_
 
 #include <string>
 
@@ -19,4 +19,4 @@ std::string getMessageFromRangePushW(const void *params);
 
 } // namespace proton
 
-#endif // PROTON_DRIVER_GPU_NVTX_API_H
+#endif // PROTON_DRIVER_GPU_NVTX_API_H_
