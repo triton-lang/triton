@@ -858,100 +858,6 @@ struct VerifyReadVisibilityOpConversion
   }
 };
 
-struct CheckWriteStateOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalCheckWriteStateOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  LogicalResult matchAndRewrite(tti::ExperimentalCheckWriteStateOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
-    Location loc = op.getLoc();
-    b.setInsertionPoint(op);
-    if (op.getPred()) {
-      auto [prevBlock, ifBlock, thenBlock] =
-          createIfBlock(b, loc, op.getPred());
-      b.setInsertionPointToStart(ifBlock);
-    }
-    TypedValue<RankedTensorType> buffers = op.getBuffers();
-    RankedTensorType writeStateType =
-        cast<RankedTensorType>(op.getWriteStateType());
-    Value writeState =
-        tti::createLoadScratchMemory(b, loc, op.getWriteState(), writeStateType)
-            ->getResult(0);
-    int hwPipelined = op.getHwPipelined() ? 1 : 0;
-    Value buf = createMemDescToI64(b, loc, getTypeConverter(),
-                                   op.getBuf().getType(), adaptor.getBuf());
-
-    // Gluon pseudo-code:
-    // curr_buf_state = tl.where(bufs == buf, write_state, 0)
-    // curr_buf_state = curr_buf_state >> 1 if hw_pipelined else 0
-    // tl.device_assert(curr_buf_state == ttgl.zeros_like(curr_buf_state),
-    // "Buffer being accessed has outstanding writes")
-
-    Value writeStateZero = tti::createConstIntTensor(b, loc, 0, writeStateType);
-    Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
-    Value currBufState = b.create<arith::SelectOp>(loc, buffersEqBuf,
-                                                   writeState, writeStateZero);
-    auto shiftVal =
-        tti::createConstIntTensor(b, loc, hwPipelined, writeStateType);
-    currBufState = b.create<arith::ShRUIOp>(loc, currBufState, shiftVal);
-    Value currBufStateEqZero = b.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::eq, currBufState, writeStateZero);
-    b.create<tti::ExperimentalAssertInThreadOp>(
-        loc, currBufStateEqZero, "Buffer being accessed has outstanding writes",
-        /*check_any=*/false);
-    b.eraseOp(op);
-
-    return success();
-  }
-};
-
-struct CheckReadBarriersOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalCheckReadBarriersOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  LogicalResult matchAndRewrite(tti::ExperimentalCheckReadBarriersOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
-    Location loc = op.getLoc();
-    OpBuilder::InsertionGuard guard(b);
-    b.setInsertionPoint(op);
-    if (op.getPred()) {
-      auto [prevBlock, ifBlock, thenBlock] =
-          createIfBlock(b, loc, op.getPred());
-      b.setInsertionPointToStart(ifBlock);
-    }
-    TypedValue<RankedTensorType> buffers = op.getBuffers();
-    RankedTensorType readBarsType =
-        cast<RankedTensorType>(op.getReadBarsType());
-    Value readBars =
-        tti::createLoadScratchMemory(b, loc, op.getReadBars(), readBarsType)
-            ->getResult(0);
-    Value buf = createMemDescToI64(b, loc, getTypeConverter(),
-                                   op.getBuf().getType(), adaptor.getBuf());
-
-    // clang-format off
-    // Gluon pseudo-code:
-    // bufsEqBuf = bufs == buf
-    // bufsEqBuf = ttgl.convert_layout(bufsEqBuf, ttgl.SliceLayout(1, read_bars_layout))[:, None]
-    // curr_buf_bars = tl.where(bufsEqBuf, read_bars, 0)
-    // tl.device_assert(curr_buf_bars == ttgl.zeros_like(curr_buf_bars), "Buffer being accessed has outstanding reads")
-    // clang-format on
-    auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
-    buffersEqBuf = convertAndBroadcast(b, loc, buffersEqBuf, 1, readBarsType);
-    auto readBarsZero = tti::createConstIntTensor(b, loc, 0, readBarsType);
-    auto currBufBar =
-        b.create<arith::SelectOp>(loc, buffersEqBuf, readBars, readBarsZero);
-    auto currBufBarEqZero = b.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::eq, currBufBar, readBarsZero);
-    b.create<tti::ExperimentalAssertInThreadOp>(
-        loc, currBufBarEqZero, "Buffer being accessed has outstanding reads",
-        /*check_any=*/false);
-    b.eraseOp(op);
-    return success();
-  }
-};
-
 struct SetWriteStateOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalSetWriteStateOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -1469,8 +1375,6 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<TransferVisibleReadsOpConversion>(typeConverter);
   patterns.add<VerifyWriteVisibilityOpConversion>(typeConverter);
   patterns.add<VerifyReadVisibilityOpConversion>(typeConverter);
-  patterns.add<CheckWriteStateOpConversion>(typeConverter);
-  patterns.add<CheckReadBarriersOpConversion>(typeConverter);
   patterns.add<SetWriteStateOpConversion>(typeConverter);
   patterns.add<CommitWriteWithBarrierOpConversion>(typeConverter);
   patterns.add<SetReadBarrierOpConversion>(typeConverter);
