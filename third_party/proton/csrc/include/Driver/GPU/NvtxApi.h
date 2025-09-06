@@ -13,8 +13,6 @@ void disable();
 
 std::string getMessageFromRangePushA(const void *params);
 
-std::string getMessageFromRangePushW(const void *params);
-
 } // namespace nvtx
 
 } // namespace proton

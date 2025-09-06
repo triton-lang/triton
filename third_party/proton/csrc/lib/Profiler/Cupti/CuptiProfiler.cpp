@@ -338,9 +338,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
     if (cbId == CUPTI_CBID_NVTX_nvtxRangePushA) {
       auto message = nvtx::getMessageFromRangePushA(nvtxData->functionParams);
       threadState.enterOp(message);
-    } else if (cbId == CUPTI_CBID_NVTX_nvtxRangePushW) {
-      auto message = nvtx::getMessageFromRangePushW(nvtxData->functionParams);
-      threadState.enterOp(message);
     } else if (cbId == CUPTI_CBID_NVTX_nvtxRangePop) {
       threadState.exitOp();
     } // TODO: else handle other NVTX range functions
