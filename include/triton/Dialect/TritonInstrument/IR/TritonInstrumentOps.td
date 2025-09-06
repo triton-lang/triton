@@ -248,7 +248,7 @@ def TTI_ExperimentalTransferVisibleReadsOp : TTI_Op<"experimental_transfer_visib
 }
 
 
-def TTI_ExperimentalVerifyWriteVisibilityOp : TTI_Op<"experimental_check_write_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+def TTI_ExperimentalVerifyWriteVisibilityOp : TTI_Op<"experimental_verify_write_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "verify that the buffer write is visible to the thread";
   let description = [{
     Verify that the buffer write is visible to the thread, or no threads are writing to the buffer.
@@ -268,7 +268,7 @@ def TTI_ExperimentalVerifyWriteVisibilityOp : TTI_Op<"experimental_check_write_v
 }
 
 
-def TTI_ExperimentalVerifyReadVisibilityOp : TTI_Op<"experimental_check_read_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+def TTI_ExperimentalVerifyReadVisibilityOp : TTI_Op<"experimental_verify_read_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "verify that all the reads from a buffer are visible to the thread";
   let description = [{
     Verify that all the reads from a buffer are visible to the thread.

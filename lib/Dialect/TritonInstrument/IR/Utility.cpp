@@ -9,7 +9,7 @@ using namespace mlir::triton::instrument;
 namespace mlir::triton::instrument {
 
 TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
-                                                  Location loc, int val,
+                                                  Location loc, int64_t val,
                                                   RankedTensorType tensorType) {
   auto denseAttr = DenseElementsAttr::get(
       tensorType, APInt(tensorType.getElementType().getIntOrFloatBitWidth(),
