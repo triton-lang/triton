@@ -8,7 +8,7 @@ Operation *createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                    RankedTensorType tensorType);
 Value expandOuterSlicedDim(OpBuilder &b, Location loc, Value tensor);
 TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
-                                                  Location loc, int val,
+                                                  Location loc, int64_t val,
                                                   RankedTensorType tensorType);
 
 } // namespace mlir::triton::instrument

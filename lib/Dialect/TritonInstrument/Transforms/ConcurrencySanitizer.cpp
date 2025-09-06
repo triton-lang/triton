@@ -34,7 +34,8 @@ bool isTMAOp(Operation *op) {
 }
 
 bool isTensorCoreOp(Operation *op) {
-  return isa<ttng::TCGen5MMAOp, ttng::TCGen5MMAOp, ttng::TCGen5MMAScaledOp>(op);
+  return isa<ttng::TCGen5MMAOp, ttng::TCGen5MMAOp, ttng::TCGen5MMAScaledOp,
+             ttng::TCGen5CommitOp>(op);
 }
 
 int getCurrentThread(Operation *op) {
@@ -48,6 +49,14 @@ int getCurrentThread(Operation *op) {
     return thread;
   }
   return thread;
+}
+
+// Peer threads are the equivalent threads in the TMA, TC and normal
+// thread classes.
+SmallVector<int, 3> getThreadPeers(int thread) {
+  int baseThread = thread % NUM_THREADS;
+  return {baseThread, baseThread + TMA_THREAD_OFFSET,
+          baseThread + TC_THREAD_OFFSET};
 }
 
 bool canAllocBeInstrumented(Operation *op) {
@@ -343,11 +352,15 @@ private:
   }
 
   void addReadChecks(ImplicitLocOpBuilder &b, Value buf, Value pred,
-                     MemType memType) {
+                     MemType memType, int thread) {
     if (barriers) {
-      b.create<tti::ExperimentalCheckReadBarriersOp>(
-          buf, buffersTensor[(int)memType], readBarriersAlloc[(int)memType],
-          readBarriersType[(int)memType], pred);
+      b.create<tti::ExperimentalVerifyReadVisibilityOp>(
+          buf, thread, buffersTensor[(int)memType],
+          readVisibilityAlloc[(int)memType], readVisibilityType[(int)memType],
+          pred);
+      // b.create<tti::ExperimentalCheckReadBarriersOp>(
+      //     buf, buffersTensor[(int)memType], readBarriersAlloc[(int)memType],
+      //     readBarriersType[(int)memType], pred);
     }
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM && wgmmaCommitsAlloc) {
@@ -506,6 +519,10 @@ private:
             addWriteChecks(b, buf, effect.pred, memType, effect.hwPipelined,
                            thread);
             if (effect.trackingKind == MemEffects::TrackingKind::Barrier) {
+              b.create<tti::ExperimentalSetReadVisibilityOp>(
+                  buf, thread, buffersTensor[(int)memType],
+                  readVisibilityAlloc[(int)memType],
+                  readVisibilityType[(int)memType], effect.pred);
               for (auto [barrier, pred] : effect.barriersAndPreds) {
                 if (pred && effect.pred) {
                   pred = b.create<arith::AndIOp>(effect.pred, pred);
@@ -514,11 +531,13 @@ private:
                     buf, barrier, buffersTensor[(int)memType], barriers,
                     readBarriersAlloc[(int)memType],
                     readBarriersType[(int)memType], pred);
+                b.create<tti::ExperimentalTrackVisibleReadsOp>(
+                    barrier, thread, barriers,
+                    readVisibilityAlloc[(int)memType],
+                    readVisibilityType[(int)memType],
+                    readTrackingAlloc[(int)memType],
+                    readTrackingType[(int)memType], pred);
               }
-              b.create<tti::ExperimentalSetReadVisibilityOp>(
-                  buf, thread, buffersTensor[(int)memType],
-                  readVisibilityAlloc[(int)memType],
-                  readVisibilityType[(int)memType], effect.pred);
             }
             if (effect.trackingKind == MemEffects::TrackingKind::wgmmaCommit) {
               assert(isa<ttng::WarpGroupDotOp>(op));
@@ -541,7 +560,7 @@ private:
             // is reading or writing to the same buffer.
             addWriteChecks(b, buf, effect.pred, memType, effect.hwPipelined,
                            thread);
-            addReadChecks(b, buf, effect.pred, memType);
+            addReadChecks(b, buf, effect.pred, memType, thread);
             if (effect.trackingKind == MemEffects::TrackingKind::Barrier) {
               b.create<tti::ExperimentalSetWriteVisibilityOp>(
                   buf, thread, buffersTensor[(int)memType],
@@ -578,6 +597,12 @@ private:
                     writeVisibilityType[(int)memType],
                     writeTrackingAlloc[(int)memType],
                     writeTrackingType[(int)memType], pred);
+                b.create<tti::ExperimentalTrackVisibleReadsOp>(
+                    barrier, thread, barriers,
+                    readVisibilityAlloc[(int)memType],
+                    readVisibilityType[(int)memType],
+                    readTrackingAlloc[(int)memType],
+                    readTrackingType[(int)memType], pred);
               }
             }
             if (effect.trackingKind ==
@@ -599,11 +624,19 @@ private:
         auto barrier = waitOp.getAlloc();
         for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
           if (writeBarriersAlloc[(int)memType]) {
-            b.create<tti::ExperimentalTransferVisibleWritesOp>(
-                barrier, thread, barriers, writeVisibilityAlloc[(int)memType],
-                writeVisibilityType[(int)memType],
-                writeTrackingAlloc[(int)memType],
-                writeTrackingType[(int)memType], pred);
+            // Transfer visible writes and reads to all peer threads
+            for (int peer : getThreadPeers(thread)) {
+              b.create<tti::ExperimentalTransferVisibleWritesOp>(
+                  barrier, peer, barriers, writeVisibilityAlloc[(int)memType],
+                  writeVisibilityType[(int)memType],
+                  writeTrackingAlloc[(int)memType],
+                  writeTrackingType[(int)memType], pred);
+              b.create<tti::ExperimentalTransferVisibleReadsOp>(
+                  barrier, peer, barriers, readVisibilityAlloc[(int)memType],
+                  readVisibilityType[(int)memType],
+                  readTrackingAlloc[(int)memType],
+                  readTrackingType[(int)memType], pred);
+            }
             b.create<tti::ExperimentalClearWriteBarrierOp>(
                 barrier, barriers, writeBarriersAlloc[(int)memType],
                 writeBarriersType[(int)memType], writeStateAlloc[(int)memType],
@@ -642,6 +675,19 @@ private:
             writeBarriersType[(int)MemType::TENSOR_MEM],
             writeStateAlloc[(int)MemType::TENSOR_MEM],
             writeStateType[(int)MemType::TENSOR_MEM], commitOp.getPred());
+        for (MemType memType : {MemType::TENSOR_MEM, MemType::SHARED_MEM}) {
+          b.create<tti::ExperimentalTrackVisibleWritesOp>(
+              commitOp.getBarrier(), thread, barriers,
+              writeVisibilityAlloc[(int)memType],
+              writeVisibilityType[(int)memType],
+              writeTrackingAlloc[(int)memType], writeTrackingType[(int)memType],
+              commitOp.getPred());
+          b.create<tti::ExperimentalTrackVisibleReadsOp>(
+              commitOp.getBarrier(), thread, barriers,
+              readVisibilityAlloc[(int)memType],
+              readVisibilityType[(int)memType], readTrackingAlloc[(int)memType],
+              readTrackingType[(int)memType], commitOp.getPred());
+        }
       }
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
         b.create<tti::ExperimentalCommitAccessesOp>(

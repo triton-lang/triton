@@ -133,8 +133,8 @@ def tma_interleave_kernel(input_desc, out, XBLOCK: ttgl.constexpr, FAILURE: ttgl
     out_m = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(1, blocked_layout))[:, None]
     out_n = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(0, blocked_layout))[None, :]
     out_ptr = out + out_m * XBLOCK + out_n
-    ttgl.store(out_ptr, smem.index(0))
-    ttgl.store(out_ptr, smem.index(1))
+    ttgl.store(out_ptr, smem.index(0).load(blocked_layout))
+    ttgl.store(out_ptr, smem.index(1).load(blocked_layout))
 
     mbarrier.invalidate(bar.index(0))
     mbarrier.invalidate(bar.index(1))
@@ -150,7 +150,7 @@ def test_tma_interleave_kernel(FAILURE, device, run_wrapper):
         result = run_in_process(test_tma_interleave_kernel, (FAILURE, device, False))
         if FAILURE:
             assert "device-side assert" in str(result.exc)
-            assert "Barrier is being reused while still tracking writes" in result.driver_stderr_output
+            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""
@@ -166,9 +166,10 @@ def test_tma_interleave_kernel(FAILURE, device, run_wrapper):
     triton.set_allocator(alloc_fn)
     XBLOCK = 128
     input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    output = torch.empty((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
-    tma_interleave_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=4)
+    tma_interleave_kernel[(1, )](input_desc, output, XBLOCK, FAILURE=FAILURE, num_warps=4)
 
 
 @gluon.jit
@@ -412,8 +413,8 @@ def tcgen5_mma_multibar_kernel(input_desc, XBLOCK: ttgl.constexpr, BUF_IDX: ttgl
 @pytest.mark.parametrize("BUF_IDX", [0, 1])
 @pytest.mark.parametrize("BAR_IDX", [0, 1, 2, 3])
 def test_tcgen5_mma_multibar(BUF_IDX, BAR_IDX, device, run_wrapper):
-    if BAR_IDX == 0:
-        pytest.skip("Skipping due to wait on false-predicated barrier - not supported yet")
+    # if BAR_IDX == 0:
+    #     pytest.skip("Skipping due to wait on false-predicated barrier - not supported yet")
     if run_wrapper:
         result = run_in_process(test_tcgen5_mma_multibar, (BUF_IDX, BAR_IDX, device, False))
         if BAR_IDX // 2 < BUF_IDX:
