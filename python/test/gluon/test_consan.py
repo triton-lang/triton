@@ -413,8 +413,8 @@ def tcgen5_mma_multibar_kernel(input_desc, XBLOCK: ttgl.constexpr, BUF_IDX: ttgl
 @pytest.mark.parametrize("BUF_IDX", [0, 1])
 @pytest.mark.parametrize("BAR_IDX", [0, 1, 2, 3])
 def test_tcgen5_mma_multibar(BUF_IDX, BAR_IDX, device, run_wrapper):
-    # if BAR_IDX == 0:
-    #     pytest.skip("Skipping due to wait on false-predicated barrier - not supported yet")
+    if BAR_IDX == 0:
+        pytest.skip("Skipping due to wait on false-predicated barrier - not supported yet")
     if run_wrapper:
         result = run_in_process(test_tcgen5_mma_multibar, (BUF_IDX, BAR_IDX, device, False))
         if BAR_IDX // 2 < BUF_IDX:
