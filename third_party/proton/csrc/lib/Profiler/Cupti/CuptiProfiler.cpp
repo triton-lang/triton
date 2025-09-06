@@ -335,14 +335,13 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
     }
   } else if (domain == CUPTI_CB_DOMAIN_NVTX) {
     auto *nvtxData = static_cast<const CUpti_NvtxData *>(cbData);
-    auto name = std::string(nvtxData->functionName);
-    if (name == "nvtxRangePushA") {
+    if (cbId == CUPTI_CBID_NVTX_nvtxRangePushA) {
       auto message = nvtx::getMessageFromRangePushA(nvtxData->functionParams);
       threadState.enterOp(message);
-    } else if (name == "nvtxRangePushW") {
+    } else if (cbId == CUPTI_CBID_NVTX_nvtxRangePushW) {
       auto message = nvtx::getMessageFromRangePushW(nvtxData->functionParams);
       threadState.enterOp(message);
-    } else if (nvtxData->functionName == "nvtxRangePop") {
+    } else if (cbId == CUPTI_CBID_NVTX_nvtxRangePop) {
       threadState.exitOp();
     } // TODO: else handle other NVTX range functions
   } else {
