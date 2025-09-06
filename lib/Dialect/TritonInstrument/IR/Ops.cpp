@@ -8,16 +8,16 @@
 
 using namespace mlir;
 namespace {
-// readBars/writeBars should have encoding that ensures that all its elements
+// All ConSan tensors should have encoding that ensures that all its elements
 // reside in a single thread
-bool verifyBarsEncoding(RankedTensorType readBarsType) {
+bool verifySingleThreadEncoding(RankedTensorType tensorType) {
   auto encoding =
-      cast<triton::gpu::BlockedEncodingAttr>(readBarsType.getEncoding());
+      cast<triton::gpu::BlockedEncodingAttr>(tensorType.getEncoding());
   int rank = encoding.getRank();
-  if (rank != readBarsType.getRank() || rank != 2)
+  if (rank != tensorType.getRank())
     return false;
   for (int i = 0; i < rank; ++i) {
-    if (encoding.getSizePerThread()[i] != readBarsType.getShape()[i])
+    if (encoding.getSizePerThread()[i] != tensorType.getShape()[i])
       return false;
   }
   return true;
@@ -26,34 +26,165 @@ bool verifyBarsEncoding(RankedTensorType readBarsType) {
 
 namespace mlir::triton::instrument {
 
-LogicalResult ExperimentalCheckWriteStateOp::verify() {
-  auto writeStateType = cast<RankedTensorType>(getWriteStateType());
+LogicalResult ExperimentalSetWriteVisibilityOp::verify() {
   auto buffersType = getBuffers().getType();
-  if (writeStateType.getShape() != buffersType.getShape() ||
-      writeStateType.getEncoding() != buffersType.getEncoding())
-    return emitError()
-           << "writeState and buffers must have the same shape and encoding";
-  auto writeBarsType = cast<RankedTensorType>(getWriteBarsType());
-  // writeBars is 2D tensor of shape [num_buffers, num_barriers]
-  if (writeBarsType.getShape()[0] != buffersType.getShape()[0])
-    return emitError() << "writeBars dim 0 must match number of buffers";
-
-  if (!verifyBarsEncoding(writeBarsType))
-    return emitError() << "writeBars must have encoding that ensures that all "
-                          "its elements reside in a single thread";
+  auto writeVisibilityType = cast<RankedTensorType>(getWriteVisibilityType());
+  if (writeVisibilityType.getShape() != buffersType.getShape() ||
+      writeVisibilityType.getEncoding() != buffersType.getEncoding())
+    return emitError() << "writeVisibility and buffers must have the same "
+                          "shape and encoding";
   return success();
 }
 
-LogicalResult ExperimentalCheckReadBarriersOp::verify() {
-  auto readBarsType = cast<RankedTensorType>(getReadBarsType());
+LogicalResult ExperimentalClearWriteTrackingOp::verify() {
   auto buffersType = getBuffers().getType();
-  // readBars is 2D tensor of shape [num_buffers, num_barriers]
-  if (readBarsType.getShape()[0] != buffersType.getShape()[0])
-    return emitError() << "readBars dim 0 must match number of buffers";
+  auto writeTrackingType = cast<RankedTensorType>(getWriteTrackingType());
+  if (writeTrackingType.getShape()[0] != buffersType.getShape()[0])
+    return emitError() << "writeTracking dim 0 must match number of buffers";
+  if (!verifySingleThreadEncoding(writeTrackingType))
+    return emitError()
+           << "writeTracking must have encoding that ensures that all "
+              "its elements reside in a single thread";
+  return success();
+}
 
-  if (!verifyBarsEncoding(readBarsType))
-    return emitError() << "readBars must have encoding that ensures that all "
-                          "its elements reside in a single thread";
+LogicalResult ExperimentalClearReadVisibilityOp::verify() {
+  auto buffersType = getBuffers().getType();
+  auto readVisibilityType = cast<RankedTensorType>(getReadVisibilityType());
+  if (readVisibilityType.getShape()[0] != buffersType.getShape()[0])
+    return emitError() << "readVisibility dim 0 must match number of buffers";
+  if (!verifySingleThreadEncoding(readVisibilityType))
+    return emitError()
+           << "readVisibility must have encoding that ensures that all "
+              "its elements reside in a single thread";
+  return success();
+}
+
+LogicalResult ExperimentalClearReadTrackingOp::verify() {
+  auto buffersType = getBuffers().getType();
+  auto readTrackingType = cast<RankedTensorType>(getReadTrackingType());
+  if (readTrackingType.getShape()[0] != buffersType.getShape()[0])
+    return emitError() << "readTracking dim 0 must match number of buffers";
+  if (!verifySingleThreadEncoding(readTrackingType))
+    return emitError()
+           << "readTracking must have encoding that ensures that all "
+              "its elements reside in a single thread";
+  return success();
+}
+
+LogicalResult ExperimentalSetReadVisibilityOp::verify() {
+  auto buffersType = getBuffers().getType();
+  auto readVisibilityType = cast<RankedTensorType>(getReadVisibilityType());
+  if (readVisibilityType.getShape()[0] != buffersType.getShape()[0])
+    return emitError() << "readVisibility dim 0 must match number of buffers";
+  if (!verifySingleThreadEncoding(readVisibilityType))
+    return emitError()
+           << "readVisibility must have encoding that ensures that all "
+              "its elements reside in a single thread";
+  return success();
+}
+
+LogicalResult ExperimentalTrackVisibleWritesOp::verify() {
+  auto barriersType = getBarriers().getType();
+  auto writeVisibilityType = cast<RankedTensorType>(getWriteVisibilityType());
+  auto writeTrackingType = cast<RankedTensorType>(getWriteTrackingType());
+  if (writeVisibilityType.getShape()[0] != writeTrackingType.getShape()[0])
+    return emitError()
+           << "writeVisibility dim 0 must match number of writeTracking";
+  if (writeTrackingType.getShape()[1] != barriersType.getShape()[0])
+    return emitError() << "writeTracking dim 1 must match number of barriers";
+  if (!verifySingleThreadEncoding(writeVisibilityType))
+    return emitError()
+           << "writeVisibility must have encoding that ensures that all "
+              "its elements reside in a single thread";
+  if (!verifySingleThreadEncoding(writeTrackingType))
+    return emitError()
+           << "writeTracking must have encoding that ensures that all "
+              "its elements reside in a single thread";
+  return success();
+}
+
+LogicalResult ExperimentalTrackVisibleReadsOp::verify() {
+  auto barriersType = getBarriers().getType();
+  auto readVisibilityType = cast<RankedTensorType>(getReadVisibilityType());
+  auto readTrackingType = cast<RankedTensorType>(getReadTrackingType());
+  if (readVisibilityType.getShape()[0] != readTrackingType.getShape()[0])
+    return emitError()
+           << "readVisibility dim 0 must match number of readTracking";
+  if (readTrackingType.getShape()[1] != barriersType.getShape()[0])
+    return emitError() << "readTracking dim 1 must match number of barriers";
+  if (!verifySingleThreadEncoding(readVisibilityType))
+    return emitError()
+           << "readVisibility must have encoding that ensures that all "
+              "its elements reside in a single thread";
+  if (!verifySingleThreadEncoding(readTrackingType))
+    return emitError()
+           << "readTracking must have encoding that ensures that all "
+              "its elements reside in a single thread";
+  return success();
+}
+
+LogicalResult ExperimentalTransferVisibleWritesOp::verify() {
+  auto barriersType = getBarriers().getType();
+  auto writeVisibilityType = cast<RankedTensorType>(getWriteVisibilityType());
+  auto writeTrackingType = cast<RankedTensorType>(getWriteTrackingType());
+  if (writeVisibilityType.getShape()[0] != writeTrackingType.getShape()[0])
+    return emitError()
+           << "writeVisibility dim 0 must match number of writeTracking";
+  if (writeTrackingType.getShape()[1] != barriersType.getShape()[0])
+    return emitError() << "writeTracking dim 1 must match number of barriers";
+  if (!verifySingleThreadEncoding(writeVisibilityType))
+    return emitError()
+           << "writeVisibility must have encoding that ensures that all "
+              "its elements reside in a single thread";
+  if (!verifySingleThreadEncoding(writeTrackingType))
+    return emitError()
+           << "writeTracking must have encoding that ensures that all "
+              "its elements reside in a single thread";
+  return success();
+}
+
+LogicalResult ExperimentalTransferVisibleReadsOp::verify() {
+  auto barriersType = getBarriers().getType();
+  auto readVisibilityType = cast<RankedTensorType>(getReadVisibilityType());
+  auto readTrackingType = cast<RankedTensorType>(getReadTrackingType());
+  if (readVisibilityType.getShape()[0] != readTrackingType.getShape()[0])
+    return emitError()
+           << "readVisibility dim 0 must match number of readTracking";
+  if (readTrackingType.getShape()[1] != barriersType.getShape()[0])
+    return emitError() << "readTracking dim 1 must match number of barriers";
+  if (!verifySingleThreadEncoding(readVisibilityType))
+    return emitError()
+           << "readVisibility must have encoding that ensures that all "
+              "its elements reside in a single thread";
+  if (!verifySingleThreadEncoding(readTrackingType))
+    return emitError()
+           << "readTracking must have encoding that ensures that all "
+              "its elements reside in a single thread";
+  return success();
+}
+
+LogicalResult ExperimentalVerifyWriteVisibilityOp::verify() {
+  auto buffersType = getBuffers().getType();
+  auto writeVisibilityType = cast<RankedTensorType>(getWriteVisibilityType());
+  if (writeVisibilityType.getShape()[0] != buffersType.getShape()[0])
+    return emitError() << "writeVisibility dim 0 must match number of buffers";
+  if (!verifySingleThreadEncoding(writeVisibilityType))
+    return emitError()
+           << "writeVisibility must have encoding that ensures that all "
+              "its elements reside in a single thread";
+  return success();
+}
+
+LogicalResult ExperimentalVerifyReadVisibilityOp::verify() {
+  auto buffersType = getBuffers().getType();
+  auto readVisibilityType = cast<RankedTensorType>(getReadVisibilityType());
+  if (readVisibilityType.getShape()[0] != buffersType.getShape()[0])
+    return emitError() << "readVisibility dim 0 must match number of buffers";
+  if (!verifySingleThreadEncoding(readVisibilityType))
+    return emitError()
+           << "readVisibility must have encoding that ensures that all "
+              "its elements reside in a single thread";
   return success();
 }
 
@@ -76,7 +207,7 @@ LogicalResult ExperimentalCommitWriteWithBarrierOp::verify() {
            << "writeBars and writeState must have the same number of buffers";
   if (writeBarsType.getShape()[1] != barriersType.getShape()[0])
     return emitError() << "writeBars dim 1 must match number of barriers";
-  if (!verifyBarsEncoding(writeBarsType))
+  if (!verifySingleThreadEncoding(writeBarsType))
     return emitError() << "writeBars must have encoding that ensures that all "
                           "its elements reside in a single thread";
   return success();
@@ -91,7 +222,7 @@ LogicalResult ExperimentalSetReadBarrierOp::verify() {
     return emitError() << "readBars dim 0 must match number of buffers";
   if (readBarsType.getShape()[1] != barriersType.getShape()[0])
     return emitError() << "readBars dim 1 must match number of barriers";
-  if (!verifyBarsEncoding(readBarsType))
+  if (!verifySingleThreadEncoding(readBarsType))
     return emitError() << "readBars must have encoding that ensures that all "
                           "its elements reside in a single thread";
   return success();
@@ -106,7 +237,7 @@ LogicalResult ExperimentalClearWriteBarrierOp::verify() {
            << "writeBars and writeState must have the same number of buffers";
   if (writeBarsType.getShape()[1] != barriersType.getShape()[0])
     return emitError() << "writeBars dim 1 must match number of barriers";
-  if (!verifyBarsEncoding(writeBarsType))
+  if (!verifySingleThreadEncoding(writeBarsType))
     return emitError() << "writeBars must have encoding that ensures that all "
                           "its elements reside in a single thread";
   return success();
@@ -118,7 +249,7 @@ LogicalResult ExperimentalClearReadBarrierOp::verify() {
   // readBars is 2D tensor of shape [num_buffers, num_barriers]
   if (readBarsType.getShape()[1] != barriersType.getShape()[0])
     return emitError() << "readBars dim 0 must match number of barriers";
-  if (!verifyBarsEncoding(readBarsType))
+  if (!verifySingleThreadEncoding(readBarsType))
     return emitError() << "readBars must have encoding that ensures that all "
                           "its elements reside in a single thread";
   return success();

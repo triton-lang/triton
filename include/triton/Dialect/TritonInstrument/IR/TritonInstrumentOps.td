@@ -84,6 +84,7 @@ def TTI_ExperimentalSetWriteVisibilityOp : TTI_Op<"experimental_set_write_visibi
   let assemblyFormat = [{
     $buf `,` $thread `{` $buffers `,` $writeVisibility `(` $writeVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeVisibility)
   }];
+  let hasVerifier = 1;
 }
 
 
@@ -102,6 +103,7 @@ def TTI_ExperimentalClearWriteTrackingOp : TTI_Op<"experimental_clear_write_trac
   let assemblyFormat = [{
     $buf `{` $buffers `,` $writeTracking `(` $writeTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeTracking)
   }];
+  let hasVerifier = 1;
 }
 
 
@@ -120,6 +122,7 @@ def TTI_ExperimentalClearReadVisibilityOp : TTI_Op<"experimental_clear_read_visi
   let assemblyFormat = [{
     $buf `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
   }];
+  let hasVerifier = 1;
 }
 
 
@@ -138,6 +141,7 @@ def TTI_ExperimentalClearReadTrackingOp : TTI_Op<"experimental_clear_read_tracki
   let assemblyFormat = [{
     $buf `{` $buffers `,` $readTracking `(` $readTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readTracking)
   }];
+  let hasVerifier = 1;
 }
 
 
@@ -157,6 +161,7 @@ def TTI_ExperimentalSetReadVisibilityOp : TTI_Op<"experimental_set_read_visibili
   let assemblyFormat = [{
     $buf `,` $thread `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
   }];
+  let hasVerifier = 1;
 }
 
 
@@ -178,7 +183,7 @@ def TTI_ExperimentalTrackVisibleWritesOp : TTI_Op<"experimental_track_visible_wr
   let assemblyFormat = [{
     $mbar `,` $thread `{` $barriers `,` $writeVisibility `(` $writeVisibilityType `)` `,` $writeTracking `(` $writeTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeVisibility) `,` type($writeTracking)
   }];
-  // let hasVerifier = 1;
+  let hasVerifier = 1;
 }
 
 
@@ -200,7 +205,7 @@ def TTI_ExperimentalTrackVisibleReadsOp : TTI_Op<"experimental_track_visible_rea
   let assemblyFormat = [{
     $mbar `,` $thread `{` $barriers `,` $readVisibility `(` $readVisibilityType `)` `,` $readTracking `(` $readTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readVisibility) `,` type($readTracking)
   }];
-  // let hasVerifier = 1;
+  let hasVerifier = 1;
 }
 
 
@@ -222,7 +227,7 @@ def TTI_ExperimentalTransferVisibleWritesOp : TTI_Op<"experimental_transfer_visi
   let assemblyFormat = [{
     $mbar `,` $thread `{` $barriers `,` $writeVisibility `(` $writeVisibilityType `)` `,` $writeTracking `(` $writeTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeVisibility) `,` type($writeTracking)
   }];
-  // let hasVerifier = 1;
+  let hasVerifier = 1;
 }
 
 
@@ -244,7 +249,7 @@ def TTI_ExperimentalTransferVisibleReadsOp : TTI_Op<"experimental_transfer_visib
   let assemblyFormat = [{
     $mbar `,` $thread `{` $barriers `,` $readVisibility `(` $readVisibilityType `)` `,` $readTracking `(` $readTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readVisibility) `,` type($readTracking)
   }];
-  // let hasVerifier = 1;
+  let hasVerifier = 1;
 }
 
 
@@ -264,7 +269,7 @@ def TTI_ExperimentalVerifyWriteVisibilityOp : TTI_Op<"experimental_verify_write_
   let assemblyFormat = [{
     $buf `,` $thread `{` $buffers `,` $writeVisibility `(` $writeVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeVisibility)
   }];
-  // let hasVerifier = 1;
+  let hasVerifier = 1;
 }
 
 
@@ -283,49 +288,6 @@ def TTI_ExperimentalVerifyReadVisibilityOp : TTI_Op<"experimental_verify_read_vi
   );
   let assemblyFormat = [{
     $buf `,` $thread `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
-  }];
-  // let hasVerifier = 1;
-}
-
-def TTI_ExperimentalCheckWriteStateOp : TTI_Op<"experimental_check_write_state", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "check if there are outstanding writes to a buffer guarded by a mbar";
-  let description = [{
-    Check if the writeState tensor has non-zero value associated with the buffer.
-
-    If hwPipelined is true, shift the bitfield by 1 to check the second bit - this
-    means that the error won't be triggered if another pipelined write is outstanding.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$buf,
-    TT_Tensor:$buffers,
-    TT_PtrLike:$writeBars,
-    TypeAttr:$writeBarsType,
-    TT_PtrLike:$writeState,
-    TypeAttr:$writeStateType,
-    I1Attr:$hwPipelined,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $buf `{` $buffers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? `pipelined` $hwPipelined attr-dict `:` type($buf) `,` type($buffers) `,` type($writeBars) `,` type($writeState)
-  }];
-  let hasVerifier = 1;
-}
-
-
-def TTI_ExperimentalCheckReadBarriersOp : TTI_Op<"experimental_check_read_barriers", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "check if there are outstanding reads from a buffer guarded by a mbar";
-  let description = [{
-    Check if any of the entries in readBars in the row corresponding to the buffer is non-zero.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$buf,
-    TT_Tensor:$buffers,
-    TT_PtrLike:$readBars,
-    TypeAttr:$readBarsType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $buf `{` $buffers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readBars)
   }];
   let hasVerifier = 1;
 }

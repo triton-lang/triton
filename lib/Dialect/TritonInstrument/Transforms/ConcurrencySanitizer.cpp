@@ -334,10 +334,6 @@ private:
   void addWriteChecks(ImplicitLocOpBuilder &b, Value buf, Value pred,
                       MemType memType, bool hwPipelined, int thread) {
     if (barriers) {
-      // b.create<tti::ExperimentalCheckWriteStateOp>(
-      //     buf, buffersTensor[(int)memType], writeBarriersAlloc[(int)memType],
-      //     writeBarriersType[(int)memType], writeStateAlloc[(int)memType],
-      //     writeStateType[(int)memType], hwPipelined, pred);
       b.create<tti::ExperimentalVerifyWriteVisibilityOp>(
           buf, thread, buffersTensor[(int)memType],
           writeVisibilityAlloc[(int)memType], writeVisibilityType[(int)memType],
@@ -358,9 +354,6 @@ private:
           buf, thread, buffersTensor[(int)memType],
           readVisibilityAlloc[(int)memType], readVisibilityType[(int)memType],
           pred);
-      // b.create<tti::ExperimentalCheckReadBarriersOp>(
-      //     buf, buffersTensor[(int)memType], readBarriersAlloc[(int)memType],
-      //     readBarriersType[(int)memType], pred);
     }
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM && wgmmaCommitsAlloc) {
