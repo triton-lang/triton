@@ -115,8 +115,30 @@ bool verifyNonNegativeExpr(
   // Recurse if the operation is defined
   Operation *op = expr.getDefiningOp();
   if (!op) {
-    LDBG("  No defining op, assuming possibly negative");
-    return false;
+    BlockArgument blockArg = cast<BlockArgument>(expr);
+    auto argNum = blockArg.getArgNumber();
+    Operation *parentOp = blockArg.getOwner()->getParentOp();
+    if (argNum == 0) {
+      // Only do the value range analyse for induction variable in the scf.for
+      if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+        auto lb = forOp.getLowerBound();
+        auto ub = forOp.getUpperBound();
+        return verifyNonNegativeExpr(lb, assumptions, solver) &&
+               verifyNonNegativeExpr(ub, assumptions, solver);
+      } else {
+        LDBG("Induction variable in a non scf.ForOp");
+        return false;
+      }
+    }
+
+    if (auto loopOp = dyn_cast<LoopLikeOpInterface>(parentOp)) {
+      mlir::ValueRange initArgs = loopOp.getInits();
+      size_t initArgIdx = argNum - 1;
+      return verifyNonNegativeExpr(initArgs[initArgIdx], assumptions, solver);
+    } else {
+      LDBG("Block argument of non loop-like operation.");
+      return false;
+    }
   }
 
   bool nonNegative =
@@ -141,6 +163,7 @@ bool verifyNonNegativeExpr(
           // Returns a tensor representing histogram: histograms only contain
           // buckets of non-negative values.
           .Case<triton::HistogramOp>([&](auto) { return true; })
+          .Case<triton::GetProgramIdOp>([&](auto) { return true; })
           .Case<triton::MakeRangeOp>([&](auto makeRangeOp) {
             // See the warning in TritonOps.td: getStart/getEnd return unsigned,
             // so we need to look through get*Attr.
