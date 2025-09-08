@@ -318,7 +318,7 @@ Value permute(Location loc, RewriterBase &rewriter, Value x, Value y,
 //      | .wt |   T      | X
 // -----+-----+----------+---------
 std::pair<bool, bool>
-getCacheModifierFlagsForPredicatedCall(const triton::CacheModifier &cm,
+getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm,
                                        MemoryOp op) {
   switch (op) {
   case MemoryOp::Load: {
@@ -337,8 +337,6 @@ getCacheModifierFlagsForPredicatedCall(const triton::CacheModifier &cm,
   }
   case MemoryOp::Store: {
     switch (cm) {
-    case triton::CacheModifier::WB:
-      return std::make_pair(false, false);
     case triton::CacheModifier::CG:
       return std::make_pair(false, false);
     case triton::CacheModifier::CS:
@@ -349,8 +347,6 @@ getCacheModifierFlagsForPredicatedCall(const triton::CacheModifier &cm,
       return std::make_pair(false, false);
     }
   }
-  default:
-    return std::make_pair(false, false);
   }
 }
 

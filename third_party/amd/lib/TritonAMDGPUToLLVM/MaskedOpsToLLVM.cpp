@@ -5,16 +5,11 @@
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
-#include <optional>
-
-namespace mlir::triton {
-#define GEN_PASS_DEF_CONVERTMASKEDOPSTOLLVM
-#include "TritonAMDGPUToLLVM/Passes.h.inc"
-} // namespace mlir::triton
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
@@ -34,25 +29,23 @@ public:
     auto mask = loadOp.getMask();
     auto falseVal = loadOp.getFalseVal();
 
-    bool isNonMasked = false;
-    if (auto constOp = mask.getDefiningOp<LLVM::ConstantOp>()) {
-      if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
-        isNonMasked = (intAttr.getValue() == 1);
-      }
-    }
+    auto [volatileFlag, nonTmpFlag] =
+        mlir::LLVM::AMD::getCacheModifierFlagsForLoadStore(
+            loadOp.getCache(), mlir::LLVM::AMD::MemoryOp::Load);
 
-    if (isNonMasked) {
-      auto [volatileFlag, nonTmpFlag] =
-          mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(
-              loadOp.getCache(), mlir::LLVM::AMD::MemoryOp::Load);
-
-      auto llvmLoadOp = rewriter.create<LLVM::LoadOp>(
-          loc, elemTy, ptr, /*alignment*/ 0, volatileFlag, nonTmpFlag);
-
+    auto createLoadWithAttrs = [&](Location loadLoc) -> LLVM::LoadOp {
+      auto load = rewriter.create<LLVM::LoadOp>(
+          loadLoc, elemTy, ptr, /*alignment*/ 0, volatileFlag, nonTmpFlag);
       if (loadOp.getForceNoAlias()) {
-        AMD::addLocalLoadNoAliasScope(llvmLoadOp);
+        AMD::addLocalLoadNoAliasScope(load);
       }
+      return load;
+    };
 
+    bool useDirectLoad = mlir::matchPattern(mask, mlir::m_One());
+
+    if (useDirectLoad) {
+      auto llvmLoadOp = createLoadWithAttrs(loc);
       rewriter.replaceOp(loadOp, llvmLoadOp.getResult());
       return success();
     }
@@ -68,17 +61,11 @@ public:
     rewriter.create<LLVM::CondBrOp>(loc, mask, trueBlock, ValueRange{},
                                     afterLoad, ValueRange{falseVal});
     rewriter.setInsertionPointToStart(trueBlock);
-    auto [volatileFlag, nonTmpFlag] =
-        mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(
-            loadOp.getCache(), mlir::LLVM::AMD::MemoryOp::Load);
-
-    auto llvmLoadOp = rewriter.create<LLVM::LoadOp>(
-        loc, elemTy, ptr, /*alignment*/ 0, volatileFlag, nonTmpFlag);
-
-    if (loadOp.getForceNoAlias()) {
-      AMD::addLocalLoadNoAliasScope(llvmLoadOp);
-    }
-
+    //              | vialatile | non-tmp | gcn instr gfx94
+    // LLVM::LoadOp | 0         | 0       | (ca) global load
+    //              | 0/1       | 1       | (cg) global load nt
+    //              | 1         | 0       | (cv) flat load sc0 sc1
+    auto llvmLoadOp = createLoadWithAttrs(loc);
     rewriter.create<LLVM::BrOp>(loc, ValueRange{llvmLoadOp->getResult(0)},
                                 afterLoad);
 
@@ -102,31 +89,30 @@ public:
     auto ptr = storeOp.getPtr();
     auto mask = storeOp.getMask();
 
-    bool isNonMasked = false;
-    if (auto constOp = mask.getDefiningOp<LLVM::ConstantOp>()) {
-      if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
-        isNonMasked = (intAttr.getValue() == 1);
-      }
+    auto [volatileFlag, nonTmpFlag] =
+        mlir::LLVM::AMD::getCacheModifierFlagsForLoadStore(
+            storeOp.getCache(), mlir::LLVM::AMD::MemoryOp::Store);
+
+    int alignment = 0;
+    if (auto vecTy = dyn_cast<VectorType>(elemTy)) {
+      auto vecElemTy = vecTy.getElementType();
+      auto elemSizeInBytes = vecElemTy.getIntOrFloatBitWidth() / 8;
+      alignment = elemSizeInBytes * vecTy.getNumElements();
     }
 
-    if (isNonMasked) {
-      auto [volatileFlag, nonTmpFlag] =
-          mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(
-              storeOp.getCache(), mlir::LLVM::AMD::MemoryOp::Store);
-
-      int alignment = 0;
-      if (auto vecTy = dyn_cast<VectorType>(elemTy)) {
-        auto vecElemTy = vecTy.getElementType();
-        auto elemSizeInBytes = vecElemTy.getIntOrFloatBitWidth() / 8;
-        alignment = elemSizeInBytes * vecTy.getNumElements();
-      }
-
-      auto llvmStoreOp = rewriter.create<LLVM::StoreOp>(
-          loc, val, ptr, alignment, volatileFlag, nonTmpFlag);
+    auto createStoreWithAttrs = [&](Location storeLoc) -> LLVM::StoreOp {
+      auto store = rewriter.create<LLVM::StoreOp>(
+          storeLoc, val, ptr, alignment, volatileFlag, nonTmpFlag);
       if (storeOp.getForceNoAlias()) {
-        AMD::addLocalLoadNoAliasScope(llvmStoreOp);
+        AMD::addLocalLoadNoAliasScope(store);
       }
+      return store;
+    };
 
+    bool useDirectStore = mlir::matchPattern(mask, mlir::m_One());
+
+    if (useDirectStore) {
+      auto llvmStoreOp = createStoreWithAttrs(loc);
       rewriter.eraseOp(storeOp);
       return success();
     }
@@ -142,21 +128,7 @@ public:
     // LLVM::StoreOp | 0         | 0       | (cg) global store
     //               | 0         | 1       | (cs) global store nt
     //               | 1         | 0/1     | (wt) global store sc0 sc1
-    auto [volatileFlag, nonTmpFlag] =
-        mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(
-            storeOp.getCache(), mlir::LLVM::AMD::MemoryOp::Store);
-    int alignment = 0;
-    if (auto vecTy = dyn_cast<VectorType>(elemTy)) {
-      auto vecElemTy = vecTy.getElementType();
-      auto elemSizeInBytes = vecElemTy.getIntOrFloatBitWidth() / 8;
-      alignment = elemSizeInBytes * vecTy.getNumElements();
-    }
-
-    auto llvmStoreOp = rewriter.create<LLVM::StoreOp>(loc, val, ptr, alignment,
-                                                      volatileFlag, nonTmpFlag);
-    if (storeOp.getForceNoAlias()) {
-      AMD::addLocalLoadNoAliasScope(llvmStoreOp);
-    }
+    auto llvmStoreOp = createStoreWithAttrs(loc);
     rewriter.create<LLVM::BrOp>(loc, afterStore);
     rewriter.setInsertionPointToStart(afterStore);
     rewriter.eraseOp(storeOp);

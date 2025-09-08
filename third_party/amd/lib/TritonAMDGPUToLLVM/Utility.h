@@ -36,7 +36,7 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
 
 std::pair<bool, bool>
-getCacheModifierFlagsForPredicatedCall(const triton::CacheModifier &cm,
+getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm,
                                        MemoryOp op);
 
 // Loads from shared or global memory with predication.
@@ -59,7 +59,7 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
 
 // Get cache modifier information for creating load or store instruction
 // Get flags <volatile, nontemporal> for a predicated Load or Store
-std::pair<bool, bool> getCacheModifierFlagsForPredicatedCall(LLVM::CallOp);
+std::pair<bool, bool> getCacheModifierFlagsForLoadStore(LLVM::CallOp);
 // Get the cachepolicy value for a cache modifier
 int32_t
 getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
