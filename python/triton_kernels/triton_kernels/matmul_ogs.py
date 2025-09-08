@@ -368,7 +368,7 @@ def matmul_ogs(x, w, bias,
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
     can_use_fused_scatter = has_scatter and (fused_activation.specs.fn is None) and (epilogue.specs.fn is None) and (routing_data.n_expts_act == 1)
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
-        M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
+        batch_size, M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
     )
     if not can_use_fused_scatter and opt_flags.fused_scatter:
         raise InapplicableConstraint("Fused scatter is not supported")
