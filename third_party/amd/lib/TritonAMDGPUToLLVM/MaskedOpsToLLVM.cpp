@@ -10,6 +10,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include <tuple>
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
@@ -29,7 +30,8 @@ public:
     auto mask = loadOp.getMask();
     auto falseVal = loadOp.getFalseVal();
 
-    auto [volatileFlag, nonTmpFlag] =
+    bool volatileFlag, nonTmpFlag;
+    std::tie(volatileFlag, nonTmpFlag) =
         mlir::LLVM::AMD::getCacheModifierFlagsForLoadStore(
             loadOp.getCache(), mlir::LLVM::AMD::MemoryOp::Load);
 
@@ -89,7 +91,8 @@ public:
     auto ptr = storeOp.getPtr();
     auto mask = storeOp.getMask();
 
-    auto [volatileFlag, nonTmpFlag] =
+    bool volatileFlag, nonTmpFlag;
+    std::tie(volatileFlag, nonTmpFlag) =
         mlir::LLVM::AMD::getCacheModifierFlagsForLoadStore(
             storeOp.getCache(), mlir::LLVM::AMD::MemoryOp::Store);
 

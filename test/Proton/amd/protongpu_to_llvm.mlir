@@ -82,7 +82,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
     // CHECK-DAG: rocdl.workgroup.id.z
     // CHECK-DAG: rocdl.grid.dim.x
     // CHECK-DAG: rocdl.grid.dim.y
-    // CHECK-DAG: %[[PID:.*]] = llvm.trunc %15 : i64 to i32
+    // CHECK-DAG: %[[PID:.*]] = llvm.trunc %25 : i64 to i32
     // CHECK-DAG: %[[SIZE:.*]] = llvm.mlir.constant(384 : i32)
     // CHECK-DAG: %{{.*}} = llvm.mul %[[PID]], %[[SIZE]] : i32
     %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
