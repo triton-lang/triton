@@ -243,7 +243,8 @@ public:
           /*knownConstantValue=*/{value});
     }
 
-    // -------------------------------------- New code --------------------------------------
+    // -------------------------------------- New code
+    // --------------------------------------
     auto denseAttr = dyn_cast<DenseElementsAttr>(op.getValue());
     if (denseAttr && denseAttr.getElementType().isIntOrIndex()) {
       TensorType ty = cast<TensorType>(denseAttr.getType());
@@ -268,7 +269,8 @@ public:
         SmallVector<int64_t> idx(rank, 0);
         int64_t tmp = s;
         for (int64_t k = rank - 1; k >= 0; --k) {
-          if (k == d) continue;
+          if (k == d)
+            continue;
           int64_t sz = ty.getShape()[k];
           idx[k] = tmp % sz;
           tmp /= sz;
@@ -301,7 +303,8 @@ public:
               }
             }
           }
-          if (allGroupsConst) bestConst = groupSize;
+          if (allGroupsConst)
+            bestConst = groupSize;
         }
         constancy[d] = bestConst;
 
@@ -340,13 +343,12 @@ public:
             minDiv = std::min(minDiv, highestPowOf2Divisor(first));
           }
         }
-        divisibility[d] = (minDiv == std::numeric_limits<int64_t>::max()) ? 1 : minDiv;
+        divisibility[d] =
+            (minDiv == std::numeric_limits<int64_t>::max()) ? 1 : minDiv;
       }
 
       return AxisInfo(contiguity, divisibility, constancy);
     }
-
-
 
     return AxisInfo();
   }
@@ -1139,7 +1141,6 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
 
-  
   if (callback)
     callback(visitors);
 }
