@@ -181,8 +181,7 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
 
   Type token{builder.getType<AsyncTokenType>()};
   auto putEnterOp = builder.createInto<ArefPutEnterOp>(
-      *producerPartition, stageCluster, SmallVector{dataBufType}, token, aref,
-      Value(), Value());
+      *producerPartition, stageCluster, aref, TypeRange{dataBufType}, token);
   schedule.insert(producerPartition, putEnterOp);
   auto dataBuf = putEnterOp.getBuffers()[0];
 
@@ -228,7 +227,7 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
   }
 
   auto putExitOp = builder.createInto<ArefPutExitOp>(
-      *producerPartition, stageCluster, aref, putEnterOp.getToken(), Value(),
+      *producerPartition, stageCluster, aref, putEnterOp.getToken(),
       builder.getArrayAttr(SmallVector<Attribute>{
           AsyncOpAttr::get(aref.getContext(), producerKind)}));
   schedule.insert(producerPartition, putExitOp);
@@ -336,8 +335,8 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
   Type bufferType = getBufferViewType(arefBufType, /*mutable*/ false);
   Type tokenType = builder.getType<AsyncTokenType>();
   auto getEnterOp = builder.createInto<ArefGetEnterOp>(
-      *consumerPartition, stageClusterEnter, SmallVector{bufferType}, tokenType,
-      aref, Value(), Value());
+      *consumerPartition, stageClusterEnter, aref, TypeRange{bufferType},
+      tokenType);
   schedule.insert(consumerPartition, getEnterOp);
 
   auto consumers = getTransitiveConsumers(results, consumerPartition, schedule);
@@ -388,7 +387,7 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
   builder.setInsertionPointAfter(exitInsertPointAfter);
 
   auto getExitOp = builder.createInto<ArefGetExitOp>(
-      *consumerPartition, stageClusterExit, aref, token, Value(),
+      *consumerPartition, stageClusterExit, aref, token,
       builder.getArrayAttr(asyncKinds));
   schedule.insert(consumerPartition, getExitOp);
 };

@@ -76,6 +76,16 @@ def NVWS_ArefGetEnterOp : NVWS_Op<"aref.get.enter", [AttrSizedOperandSegments, D
     $aref `[` ($stage^)? (`,` $phase^)? `]` attr-dict
     `:` type($aref) `->` type(results)
   }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$aref, "TypeRange":$bufferTypes, "Type":$tokenType), [{
+      $_state.addOperands(aref);
+      $_state.addTypes(bufferTypes);
+      $_state.addTypes(tokenType);
+      $_state.addAttribute("operandSegmentSizes",
+                          $_builder.getDenseI32ArrayAttr({1, 0, 0}));
+    }]>
+  ];
 }
 
 def NVWS_ArefGetExitOp : NVWS_Op<"aref.get.exit", [DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
@@ -91,6 +101,14 @@ def NVWS_ArefGetExitOp : NVWS_Op<"aref.get.exit", [DeclareOpInterfaceMethods<NVW
     $aref `[` ($stage^)? `]` `,` $token $async_ops attr-dict
     `:` type($aref) `,` type($token)
  }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$aref, "Value":$token, "ArrayAttr":$async_ops), [{
+      $_state.addOperands(aref);
+      $_state.addOperands(token);
+      $_state.addAttribute("async_ops", async_ops);
+    }]>
+  ];
 }
 
 def NVWS_ArefPutEnterOp : NVWS_Op<"aref.put.enter", [AttrSizedOperandSegments, DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
@@ -108,6 +126,16 @@ def NVWS_ArefPutEnterOp : NVWS_Op<"aref.put.enter", [AttrSizedOperandSegments, D
     $aref `[` ($stage^)? (`,` $phase^)? `]` attr-dict
     `:` type($aref) `->` type(results)
   }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$aref, "TypeRange":$bufferTypes, "Type":$tokenType), [{
+      $_state.addOperands(aref);
+      $_state.addTypes(bufferTypes);
+      $_state.addTypes(tokenType);
+      $_state.addAttribute("operandSegmentSizes",
+                          $_builder.getDenseI32ArrayAttr({1, 0, 0}));
+    }]>
+  ];
 }
 
 def NVWS_ArefPutExitOp : NVWS_Op<"aref.put.exit", [DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
@@ -123,6 +151,14 @@ def NVWS_ArefPutExitOp : NVWS_Op<"aref.put.exit", [DeclareOpInterfaceMethods<NVW
     $aref`[` ($stage^)? `]` `,` $token  $async_ops attr-dict
     `:` type($aref) `,` type($token)
  }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$aref, "Value":$token, "ArrayAttr":$async_ops), [{
+      $_state.addOperands(aref);
+      $_state.addOperands(token);
+      $_state.addAttribute("async_ops", async_ops);
+    }]>
+  ];
 }
 
 def NVWS_WarpGroupOp : NVWS_Op<"warp_group", [

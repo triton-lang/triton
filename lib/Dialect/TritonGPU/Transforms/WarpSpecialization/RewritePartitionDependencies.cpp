@@ -65,14 +65,13 @@ struct AsyncRef {
   auto putView(PartitionBuilder &b, Partition &partition,
                StageCluster srcStageCluster) {
     auto enterOp = b.createInto<triton::nvws::ArefPutEnterOp>(
-        partition, srcStageCluster, viewType, tokenType, aref, Value(),
-        Value());
+        partition, srcStageCluster, aref, TypeRange{viewType}, tokenType);
     auto token = enterOp.getToken();
 
     auto exitOp = [this, &partition, srcStageCluster,
                    token](PartitionBuilder &b) {
       auto exitOp = b.createInto<triton::nvws::ArefPutExitOp>(
-          partition, srcStageCluster, aref, token, Value(),
+          partition, srcStageCluster, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{triton::nvws::AsyncOpAttr::get(
               aref.getContext(), triton::nvws::AsyncOp::NONE)}));
     };
@@ -82,14 +81,13 @@ struct AsyncRef {
   auto getView(PartitionBuilder &b, Partition &partition,
                StageCluster srcStageCluster) {
     auto enterOp = b.createInto<triton::nvws::ArefGetEnterOp>(
-        partition, srcStageCluster, viewType, tokenType, aref, Value(),
-        Value());
+        partition, srcStageCluster, aref, TypeRange{viewType}, tokenType);
     auto token = enterOp.getToken();
 
     auto exitOp = [this, &partition, srcStageCluster,
                    token](PartitionBuilder &b) {
       auto exitOp = b.createInto<triton::nvws::ArefGetExitOp>(
-          partition, srcStageCluster, aref, token, Value(),
+          partition, srcStageCluster, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{triton::nvws::AsyncOpAttr::get(
               aref.getContext(), triton::nvws::AsyncOp::NONE)}));
     };
