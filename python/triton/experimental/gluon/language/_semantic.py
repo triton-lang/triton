@@ -365,7 +365,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(index.type.scalar.is_int(), lambda: f"expected integer scalar type but got: {index.type.scalar!r}")
 
         rank = len(src.type.shape)
-        _check(len(index.type.shape) == rank, "source and index tensors must have the same rank")
+        _check(len(index.type.shape) == rank, lambda: "source and index tensors must have the same rank")
         _check(-rank <= axis < rank, lambda: f"gather axis {axis} must be < source rank ({rank})")
         if axis < 0:
             axis += rank
