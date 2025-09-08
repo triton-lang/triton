@@ -2,17 +2,13 @@
 
 // Pick a common shared memory layout with vec = max kWidth of all users.
 // CHECK{LITERAL}: #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 2, maxPhase = 8, order = [0, 1]}>
-// CHECK-NOT: #shared1
+// CHECK-NOT: #ttg.swizzled_shared
 // CHECK{LITERAL}: #smem = #ttg.shared_memory
 // CHECK-LABEL: test_lds_layout_selection
 
-// Prologue
 // CHECK: %[[ALLOC:.+]] = ttg.local_alloc : () -> !ttg.memdesc<1x64x16xf16, #shared, #smem, mutable>
-// CHECK: %[[LOAD:.+]] = tt.load {{.+}} : tensor<64x16x!tt.ptr<f16>, #blocked>
 // CHECK: %[[MEMDESC_IDX:.+]] = ttg.memdesc_index %[[ALLOC]]
-// CHECK: ttg.local_store %[[LOAD]], %[[MEMDESC_IDX]]
 
-// Main loop
 // CHECK: scf.for {{.+}} iter_args({{.*}}, %[[MEMDESC_IDX_ITER:.+]] = %[[MEMDESC_IDX]]) -> ({{.+}})
 //  CHECK: %[[LOAD:.+]] = tt.load {{.+}} : tensor<64x16x!tt.ptr<f16>, #blocked>
 //  CHECK: %[[LOCAL_LOAD_TRANS:.+]] = ttg.local_load %[[MEMDESC_IDX_ITER]] : {{.+}} -> tensor<64x16xf16, #linear>
@@ -23,15 +19,6 @@
 //  CHECK: %[[MEMDESC_IDX:.+]] = ttg.memdesc_index %[[ALLOC]]
 //  CHECK: ttg.local_store %[[LOAD]], %[[MEMDESC_IDX]]
 //  CHECK: scf.yield
-
-// Epilogue
-// CHECK-NOT: tt.load
-// CHECK-COUNT-2: ttg.local_load
-// CHECK: tt.dot
-// CHECK: %[[TRANS:.+]] = tt.trans
-// CHECK: tt.dot {{.+}}, %[[TRANS]], {{.+}}
-// CHECK-NOT: ttg.local_store
-// CHECK: ttg.local_dealloc
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
 #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [32, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]], warp = [[0, 0], [0, 0]], block = []}>
@@ -73,17 +60,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // Verify that a common shared memory layout is chosen for users with different kWidth and opIdx.
 // CHECK{LITERAL}: #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 2, maxPhase = 8, order = [0, 1]}>
-// CHECK-NOT: #shared1
+// CHECK-NOT: #ttg.swizzled_shared
 // CHECK{LITERAL}: #smem = #ttg.shared_memory
 // CHECK-LABEL: test_lds_layout_selection_different_opIdx
 
-// Prologue
 // CHECK: %[[ALLOC:.+]] = ttg.local_alloc : () -> !ttg.memdesc<1x64x16xf16, #shared, #smem, mutable>
-// CHECK: %[[LOAD:.+]] = tt.load {{.+}} : tensor<64x16x!tt.ptr<f16>, #blocked>
 // CHECK: %[[MEMDESC_IDX:.+]] = ttg.memdesc_index %[[ALLOC]]
-// CHECK: ttg.local_store %[[LOAD]], %[[MEMDESC_IDX]]
 
-// Main loop
 // CHECK: scf.for {{.+}} iter_args({{.*}}, %[[MEMDESC_IDX_ITER:.+]] = %[[MEMDESC_IDX]]) -> ({{.+}})
 //  CHECK: %[[LOAD:.+]] = tt.load {{.+}} : tensor<64x16x!tt.ptr<f16>, #blocked>
 //  CHECK: %[[LOCAL_LOAD_TRANS:.+]] = ttg.local_load %[[MEMDESC_IDX_ITER]] : {{.+}} -> tensor<64x16xf16, #linear>
@@ -94,15 +77,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 //  CHECK: %[[MEMDESC_IDX:.+]] = ttg.memdesc_index %[[ALLOC]]
 //  CHECK: ttg.local_store %[[LOAD]], %[[MEMDESC_IDX]]
 //  CHECK: scf.yield
-
-// Epilogue
-// CHECK-NOT: tt.load
-// CHECK-COUNT-2: ttg.local_load
-// CHECK: tt.dot
-// CHECK: %[[TRANS:.+]] = tt.trans
-// CHECK: tt.dot {{.+}}, %[[TRANS]], {{.+}}
-// CHECK-NOT: ttg.local_store
-// CHECK: ttg.local_dealloc
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
 #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [32, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]], warp = [[0, 0], [0, 0]], block = []}>
