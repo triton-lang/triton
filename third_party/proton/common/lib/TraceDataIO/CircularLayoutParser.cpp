@@ -55,13 +55,14 @@ void CircularLayoutParser::parseMetadata() {
   for (auto uid : getConfig().uidVec) {
     // Each event is 2 words (8 bytes) and countVec captures the number of words
     // of each warp captured during profiling
-    auto count = countVec[uid] / 2;
+    auto count = countVec[uid];
+    auto numEvent = count / 2;
 
-    if (count > maxCountPerUnit) {
+    if (numEvent > maxCountPerUnit) {
       std::cerr << "Warning (cta" << bt.blockId << ", warp" << uid
-                << "): first " << count - maxCountPerUnit
+                << "): first " << numEvent - maxCountPerUnit
                 << " events are dropped due to insufficient buffer size ("
-                << maxCountPerUnit << "/" << count << ")" << std::endl;
+                << maxCountPerUnit << "/" << numEvent << ")" << std::endl;
     }
 
     auto &trace = bt.traces.emplace_back();
