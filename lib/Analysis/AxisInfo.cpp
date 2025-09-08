@@ -242,6 +242,112 @@ public:
           AxisInfo::DimVectorT(ty.getShape().begin(), ty.getShape().end()),
           /*knownConstantValue=*/{value});
     }
+
+    // -------------------------------------- New code --------------------------------------
+    auto denseAttr = dyn_cast<DenseElementsAttr>(op.getValue());
+    if (denseAttr && denseAttr.getElementType().isIntOrIndex()) {
+      TensorType ty = cast<TensorType>(denseAttr.getType());
+      SmallVector<int64_t> values;
+      for (auto val : denseAttr.getValues<APInt>())
+        values.push_back(val.getZExtValue());
+
+      int64_t rank = ty.getRank();
+      AxisInfo::DimVectorT contiguity(rank, 1);
+      AxisInfo::DimVectorT divisibility(rank, 1);
+      AxisInfo::DimVectorT constancy(rank, 1);
+
+      // --- Precompute strides (row-major)
+      SmallVector<int64_t> strides(rank);
+      strides[rank - 1] = 1;
+      for (int i = rank - 2; i >= 0; --i)
+        strides[i] = strides[i + 1] * ty.getShape()[i + 1];
+      int64_t total = values.size();
+
+      // Helper: compute base index for slice s along axis d
+      auto computeBase = [&](int64_t s, int64_t d) {
+        SmallVector<int64_t> idx(rank, 0);
+        int64_t tmp = s;
+        for (int64_t k = rank - 1; k >= 0; --k) {
+          if (k == d) continue;
+          int64_t sz = ty.getShape()[k];
+          idx[k] = tmp % sz;
+          tmp /= sz;
+        }
+        int64_t base = 0;
+        for (int64_t k = 0; k < rank; ++k)
+          base += idx[k] * strides[k];
+        return base;
+      };
+
+      // Analyze each axis
+      for (int64_t d = 0; d < rank; ++d) {
+        int64_t dimSize = ty.getShape()[d];
+        int64_t numSlices = total / dimSize;
+
+        // --- Constancy
+        int64_t bestConst = 1;
+        for (int64_t groupSize = 1; groupSize <= dimSize; groupSize *= 2) {
+          bool allGroupsConst = true;
+          for (int64_t s = 0; s < numSlices && allGroupsConst; ++s) {
+            int64_t base = computeBase(s, d);
+            for (int64_t i = 0; i < dimSize; i += groupSize) {
+              int64_t ref = values[base + i * strides[d]];
+              for (int64_t j = 1; j < groupSize; ++j) {
+                int64_t idx = base + (i + j) * strides[d];
+                if (values[idx] != ref) {
+                  allGroupsConst = false;
+                  break;
+                }
+              }
+            }
+          }
+          if (allGroupsConst) bestConst = groupSize;
+        }
+        constancy[d] = bestConst;
+
+        // --- Contiguity
+        int64_t bestContig = 1;
+        for (int64_t C = dimSize; C >= 1; C /= 2) {
+          bool valid = true;
+          for (int64_t s = 0; s < numSlices && valid; ++s) {
+            int64_t base = computeBase(s, d);
+            for (int64_t i = 0; i < dimSize; i += C) {
+              for (int64_t j = 1; j < C; ++j) {
+                int64_t idxPrev = base + (i + j - 1) * strides[d];
+                int64_t idxCurr = base + (i + j) * strides[d];
+                if (values[idxCurr] != values[idxPrev] + 1) {
+                  valid = false;
+                  break;
+                }
+              }
+            }
+          }
+          if (valid) {
+            bestContig = C;
+            break;
+          }
+        }
+        contiguity[d] = bestContig;
+
+        // --- Divisibility
+        int64_t groupSize = contiguity[d];
+        int64_t minDiv = std::numeric_limits<int64_t>::max();
+        for (int64_t s = 0; s < numSlices; ++s) {
+          int64_t base = computeBase(s, d);
+          for (int64_t i = 0; i < dimSize; i += groupSize) {
+            int64_t idx = base + i * strides[d];
+            int64_t first = values[idx];
+            minDiv = std::min(minDiv, highestPowOf2Divisor(first));
+          }
+        }
+        divisibility[d] = (minDiv == std::numeric_limits<int64_t>::max()) ? 1 : minDiv;
+      }
+
+      return AxisInfo(contiguity, divisibility, constancy);
+    }
+
+
+
     return AxisInfo();
   }
 };
@@ -1033,6 +1139,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
 
+  
   if (callback)
     callback(visitors);
 }
