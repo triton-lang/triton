@@ -1615,7 +1615,7 @@ def test_tensor_atomic_rmw_block(num_ctas, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-@pytest.mark.parametrize("dtype_str", [torch.int32, torch.int64])
+@pytest.mark.parametrize("torch_dtype", [torch.int32, torch.int64])
 def test_atomic_cas(sem, num_ctas, torch_dtype, device):
     # 1. make sure that atomic_cas changes the original value (Lock)
     @triton.jit
