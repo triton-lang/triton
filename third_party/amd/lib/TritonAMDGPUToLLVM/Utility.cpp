@@ -348,6 +348,7 @@ getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm,
     }
   }
   }
+  return std::make_pair(false, false);
 }
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,

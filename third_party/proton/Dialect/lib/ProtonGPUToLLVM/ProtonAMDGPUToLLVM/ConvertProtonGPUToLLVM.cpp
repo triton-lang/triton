@@ -8,9 +8,12 @@
 #include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
 #include "mlir/Dialect/AMDGPU/Utils/Chipset.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -30,6 +33,11 @@ public:
       : ConversionTarget(ctx) {
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<ROCDL::ROCDLDialect>();
+    // check later if this is needed?
+    addLegalDialect<mlir::arith::ArithDialect>();
+    addLegalDialect<mlir::cf::ControlFlowDialect>();
+    addLegalDialect<mlir::triton::gpu::TritonGPUDialect>();
+    addLegalDialect<mlir::triton::TritonDialect>();
     addIllegalDialect<mlir::triton::proton::gpu::ProtonGPUDialect>();
     addIllegalDialect<mlir::triton::proton::ProtonDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
@@ -40,6 +48,12 @@ struct ConvertProtonAMDGPUToLLVM
     : public mlir::triton::proton::gpu::impl::ConvertProtonAMDGPUToLLVMBase<
           ConvertProtonAMDGPUToLLVM> {
   explicit ConvertProtonAMDGPUToLLVM(std::string arch) { this->arch = arch; }
+
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<mlir::triton::amdgpu::TritonAMDGPUDialect,
+                    mlir::LLVM::LLVMDialect, mlir::ROCDL::ROCDLDialect,
+                    mlir::gpu::GPUDialect>();
+  }
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
