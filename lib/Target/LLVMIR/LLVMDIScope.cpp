@@ -115,8 +115,9 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
     funcOp->setLoc(FusedLoc::get(context, {loc}, subprogramAttr));
   }
 
-  static LLVM::DILexicalBlockFileAttr makeCalleeScopeFor(
-      MLIRContext *context, LLVM::DIScopeAttr parentScope, Location calleeFrameLoc) {
+  static LLVM::DILexicalBlockFileAttr
+  makeCalleeScopeFor(MLIRContext *context, LLVM::DIScopeAttr parentScope,
+                     Location calleeFrameLoc) {
     auto calleeFileName = extractFileLoc(calleeFrameLoc).getFilename();
     LLVM::DIFileAttr calleeFileAttr = LLVM::DIFileAttr::get(
         context, llvm::sys::path::filename(calleeFileName),
@@ -135,7 +136,8 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
     if (auto cs = dyn_cast<CallSiteLoc>(calleeLoc)) {
       // For this inlined frame, create a scope anchored to the callee's file,
       // then recurse into the next callee.
-      auto frameScope = makeCalleeScopeFor(context, parentScope, cs.getCallee());
+      auto frameScope =
+          makeCalleeScopeFor(context, parentScope, cs.getCallee());
       auto newCallee =
           annotateCalleeInlineChain(op, frameScope, cs.getCallee());
       // Preserve the intermediate caller chain on the *callee* side.
