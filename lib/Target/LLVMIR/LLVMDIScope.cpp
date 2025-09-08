@@ -131,9 +131,8 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
 
       // Build a DIFile for this leaf location
       FileLineColLoc fileLine = extractFileLoc(loc);
-      LLVM::DIFileAttr fileAttr;
       StringRef inputFilePath = fileLine.getFilename().getValue();
-      fileAttr =
+      LLVM::DIFileAttr fileAttr =
           LLVM::DIFileAttr::get(ctx, llvm::sys::path::filename(inputFilePath),
                                 llvm::sys::path::parent_path(inputFilePath));
 
