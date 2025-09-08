@@ -520,6 +520,67 @@ def TTG_UpcastMXFPOp : TT_AMDGPU_Op<"upcast_mxfp", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// ScaledUpcastFp4Op
+//===----------------------------------------------------------------------===//
+
+def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure]> {
+  let summary = "Upcast fp4 and then multiply scale";
+
+  let description = [{
+    Upcast fp4 (e2m1) values packed as i8 values and multiply with the given
+    E8M0 scale encoded as BF16. This maps to `v_cvt_scalef32_*` intrinsics
+    on the AMD CDNA4 architecture.
+
+    The lower 4 bits of the i8s represent the first fp4 element, and the upper
+    4 bits the second fp4 element.
+
+    The `axis` attribute specifies the axis along which the fp4 elements are
+    packed.
+  }];
+
+  let arguments = (ins
+    RankedTensorOf<[I8]>:$input,
+    RankedTensorOf<[BF16]>:$scale,
+    I32Attr:$axis);
+  let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16, F32]>]>:$output);
+
+  let assemblyFormat = [{
+    $input `scale` $scale attr-dict
+        `:` type($input) `,` type($scale) `->` type($output)
+  }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// ScaledUpcastFp8Op
+//===----------------------------------------------------------------------===//
+
+def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
+    Pure,
+    Elementwise,
+    SameOperandsAndResultShape,
+    SameOperandsAndResultEncoding]> {
+  let summary = "Upcast Fp8 and then multiply scale";
+
+  let description = [{
+    Upcast fp8 (e4m3/e5m2) values and multiply with the given E8M0 scale
+    encoded as BF16. This maps to `v_cvt_scalef32_*` intrinsics
+    on the AMD CDNA4 architecture.
+  }];
+
+  let arguments = (ins
+    RankedTensorOf<[AnyTypeOf<[F8E4M3FN, F8E5M2]>]>:$input,
+    RankedTensorOf<[BF16]>:$scale);
+  let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16, F32]>]>:$output);
+
+  let assemblyFormat = [{
+    $input `scale` $scale attr-dict
+        `:` type($input) `,` type($scale) `->` type($output)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // InThreadTransposeOp
 //===----------------------------------------------------------------------===//
 

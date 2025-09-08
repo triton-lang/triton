@@ -811,3 +811,26 @@ def test_2d_tensor_early_return():
     out = torch.empty(1, dtype=torch.int32, device="cuda")
     compiled_kernel = kernel.warmup(N=100, out=out, grid=(1, ))
     assert compiled_kernel.asm["llir"].count("define") == 1
+
+
+@pytest.mark.skipif(not is_hip_cdna3() and not is_hip_cdna4(), reason="Requires CDNA3 or CDNA4")
+def test_inline_with_amdgpu_dialect():
+
+    @gluon.jit
+    def buffer_load(x, offsets):
+        return ttgl.amd.cdna3.buffer_load(ptr=x, offsets=offsets)
+
+    @gluon.jit
+    def kernel(x, y):
+        layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[64], warps_per_cta=[4],
+                                                    order=[0])
+        offsets = ttgl.arange(0, 64, layout=layout)
+
+        a = buffer_load(x, offsets)
+        ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=y, offsets=offsets)
+
+    input = torch.arange(64, device="cuda").to(torch.int32)
+    output = torch.empty_like(input)
+
+    compiled_kernel = kernel.warmup(input, output, grid=(1, ))
+    assert compiled_kernel.asm["ttgir"].count("tt.func private") == 0
