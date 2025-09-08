@@ -1615,13 +1615,14 @@ def test_tensor_atomic_rmw_block(num_ctas, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_atomic_cas(sem, num_ctas, device):
+@pytest.mark.parametrize("dtype_str", [torch.int32, torch.int64])
+def test_atomic_cas(sem, num_ctas, torch_dtype, device):
     # 1. make sure that atomic_cas changes the original value (Lock)
     @triton.jit
     def change_value(Lock):
         tl.atomic_cas(Lock, 0, 1)
 
-    Lock = torch.zeros((1, ), device=device, dtype=torch.int32)
+    Lock = torch.zeros((1, ), device=device, dtype=torch_dtype)
     change_value[(1, )](Lock)
 
     assert (Lock[0] == 1)
@@ -1642,7 +1643,7 @@ def test_atomic_cas(sem, num_ctas, device):
         # release lock
         tl.atomic_xchg(Lock, 0)
 
-    Lock = torch.zeros((1, ), device=device, dtype=torch.int32)
+    Lock = torch.zeros((1, ), device=device, dtype=torch_dtype)
     data = torch.zeros((128, ), device=device, dtype=torch.float32)
     ref = torch.full((128, ), 2000.0)
     h = serialized_add[(2000, )](data, Lock, SEM=sem, num_ctas=num_ctas)
