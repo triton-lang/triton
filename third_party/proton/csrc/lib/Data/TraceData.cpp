@@ -385,9 +385,19 @@ convertToTimelineTrace(TraceData::Trace *trace,
       }
       parserResult->blockTraces.push_back(std::move(blockTrace));
     }
+    std::vector<std::string> callStack;
+    if (!sortedEvents.empty()) {
+      auto contexts = trace->getContexts(kernelEvent.contextId);
+      if (!contexts.empty()) {
+        callStack.resize(contexts.size() - 1);
+        std::transform(contexts.begin(), contexts.end() - 1, callStack.begin(),
+                       [](const Context &c) { return c.name; });
+      }
+    }
     metadata->kernelName =
         getStringValue(kernelEvent.cycleMetric, CycleMetric::KernelName);
     metadata->scopeName = scopeIdToName;
+    metadata->callStack = std::move(callStack);
     if (timeShiftCost > 0)
       timeShift(timeShiftCost, parserResult);
     results.emplace_back(parserResult, metadata);

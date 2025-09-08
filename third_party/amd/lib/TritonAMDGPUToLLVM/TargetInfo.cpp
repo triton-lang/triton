@@ -298,7 +298,8 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     return false;
   if (isCDNA(getISAFamily()) && getISAFamily() == ISAFamily::CDNA1)
     return false;
-  if (isRDNA(getISAFamily()) && getISAFamily() != ISAFamily::RDNA3)
+  if (isRDNA(getISAFamily()) &&
+      llvm::is_contained({ISAFamily::RDNA1, ISAFamily::RDNA2}, getISAFamily()))
     return false;
 
   Operation *reduxOp = op.getSingleCombiner();

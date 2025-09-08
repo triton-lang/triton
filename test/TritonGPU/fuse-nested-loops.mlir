@@ -473,7 +473,7 @@ tt.func @fuse_attr_speculate(%lb: i32, %ub: i32) {
   // CHECK: scf.if [[IS_ZERO]]
   // CHECK-NEXT: scf.for %{{.*}} = [[LB]] to [[UB]] step %c1_i32
   // CHECK-NEXT:   "prologue"
-  // CHECK-NXET: }
+  // CHECK-NXET: } {tt.flatten}
 
   // CHECK: else
   // CHECK-COUNT-1: scf.for
@@ -487,7 +487,7 @@ tt.func @fuse_attr_speculate(%lb: i32, %ub: i32) {
       "body"(%i, %j) : (i32, i32) -> ()
       scf.yield
     }
-  } {tt.flatten}
+  } {tt.flatten, tt.warp_specialize}
   tt.return
 }
 

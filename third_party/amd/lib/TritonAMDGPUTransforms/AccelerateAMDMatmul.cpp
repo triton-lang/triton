@@ -60,6 +60,15 @@ FailureOr<ScaleDotElemType> mlirTypeToScaledElemType(Type type) {
       .Default([](Type) { return failure(); });
 }
 
+// Data types supported by non-native DotScaledOp
+bool isF16F8F4(ScaleDotElemType elemType) {
+  return elemType == ScaleDotElemType::E2M1 ||
+         elemType == ScaleDotElemType::E4M3 ||
+         elemType == ScaleDotElemType::E5M2 ||
+         elemType == ScaleDotElemType::BF16 ||
+         elemType == ScaleDotElemType::FP16;
+}
+
 SmallVector<unsigned, 3>
 warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
              std::pair<int64_t, int64_t> shapePerWarp) {
@@ -475,9 +484,36 @@ public:
     // requires to broadcast the operand A.
     bool isTransposed = !(mDim == 4 && nDim == 64);
     auto aElemTy = mfmaInstr->aElementType;
+    auto is16BitElemTy = (aElemTy.isF16() || aElemTy.isBF16());
+
+    unsigned rank = oldRetType.getRank();
+    SmallVector<unsigned, 2> tilesPerWarp = {1, 1};
+
+    // Set tilesPerWarp and isTransposed to enable intra warp conversion for the
+    // mfma16x16 layout of a dot op, depending on whether
+    // its result is used by operand 0 or operand 1 of another dot op.
+    if (mfmaVersion == 4 && is16BitElemTy && mDim == 16 && nDim == 16 &&
+        rank == 2) {
+      if (isChainDotHead(dotOp, 0u) &&
+          retShape.front() >= 16 * 2 * warpsPerTile.front() &&
+          retShape.back() == 16 && warpsPerTile.back() == 1) {
+        isTransposed = true;
+        tilesPerWarp = {2, 1};
+      } else if (isChainDotHead(dotOp, 1u) && retShape.front() == 16 &&
+                 retShape.back() >= 16 * 2 * warpsPerTile.back() &&
+                 warpsPerTile.front() == 1) {
+        isTransposed = false;
+        tilesPerWarp = {1, 2};
+      }
+    }
+
+    if (rank == 3) {
+      tilesPerWarp.insert(tilesPerWarp.begin(), 1);
+    }
+
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
-        /*version*/ mfmaVersion, warpsPerTile,
+        /*version*/ mfmaVersion, warpsPerTile, tilesPerWarp,
         /*instrShape*/ mDim, nDim, /*isTransposed=*/isTransposed, CTALayout,
         mfmaAccType);
 
@@ -524,7 +560,6 @@ public:
     // kWidth = 4 so that the coversion from #mma (result of 1st dot)
     // to #dotOp (operand 0 of 2nd dot) is a no-op.
     // TODO (lixun): relax the condition for 8-bit elementTy.
-    auto is16BitElemTy = (aElemTy.isF16() || aElemTy.isBF16());
     if (is16BitElemTy && isDotChainTail) {
       kWidth = 4;
     }
@@ -622,14 +657,7 @@ public:
 
     ScaleDotElemType aElemType = dotOp.getAElemType();
     ScaleDotElemType bElemType = dotOp.getBElemType();
-    auto supportsTypes = [](ScaleDotElemType elemType) {
-      return elemType == ScaleDotElemType::E2M1 ||
-             elemType == ScaleDotElemType::E4M3 ||
-             elemType == ScaleDotElemType::E5M2 ||
-             elemType == ScaleDotElemType::BF16 ||
-             elemType == ScaleDotElemType::FP16;
-    };
-    if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
+    if (!isF16F8F4(aElemType) || !isF16F8F4(bElemType))
       return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6 operand");
 
     MLIRContext *ctx = dotOp.getContext();
@@ -1059,7 +1087,7 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
   return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
 }
 
-// promote operands of dot op if the existing combination is not natively
+// Promote operands of dot op if the existing combination is not natively
 // supported.
 static void decomposeMixedModeDotOp(ModuleOp mod) {
   mod.walk([](triton::DotOp dotOp) -> void {
@@ -1446,14 +1474,15 @@ struct TritonAMDGPUAccelerateMatmulPass
           context, getMfmaVersion(isaFamily), matrixInstructionSize,
           /*benefit=*/10);
       [[fallthrough]];
-    case ISAFamily::CDNA1:
-    case ISAFamily::CDNA2:
     case ISAFamily::CDNA3:
+    case ISAFamily::CDNA2:
+    case ISAFamily::CDNA1:
       mfmaPatterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
           /*benefit=*/2);
       break;
     case ISAFamily::RDNA3:
+    case ISAFamily::RDNA4:
       ttg::populateDecomposeScaledBlockedPatterns(mfmaPatterns,
                                                   /*benefit=*/3);
       mfmaPatterns.add<::BlockedToWMMA>(
