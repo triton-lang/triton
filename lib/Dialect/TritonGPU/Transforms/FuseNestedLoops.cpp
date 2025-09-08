@@ -1006,6 +1006,9 @@ static LogicalResult speculateInnerLoopLength(scf::ForOp outerLoop,
   newInnerLoop.replaceAllUsesWith(newInnerLoop.getInits());
   newInnerLoop.erase();
 
+  // Clear up the warp specialization attributes for the specialized loop.
+  newLoop->removeAttr(kWarpSpecializeAttrName);
+
   // Move the loop nest into the `else` branch.
   outerLoop.replaceAllUsesWith(ifOp.getResults());
   Block *block = b.createBlock(&ifOp.getElseRegion());

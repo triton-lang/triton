@@ -72,6 +72,24 @@ private:
   Value descriptor;
 };
 
+// Helper class to load shared memory slices following MMAv5 layout.
+class DotOpMmaV5SmemLoader : public DotOpMmaV3SmemLoader {
+public:
+  using DotOpMmaV3SmemLoader::DotOpMmaV3SmemLoader;
+
+  // Return a descriptor pointing to the shared memory slice at coordinates (a,
+  // b), with bit 46 set.
+  Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
+                 Location loc) const {
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
+    Value desc = DotOpMmaV3SmemLoader::smemLoad(a, b, rewriter, loc);
+    // Set bit 46 as per
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-shared-memory-descriptor
+    Value mask = tb.int_val(64, 1ULL << 46);
+    return tb.or_(desc, mask, /*disjoint*/ true);
+  }
+};
+
 // Helper class to load tensor memory following MMAv5 layout.
 class DotOpMmaV5TmemLoader : public DotOpMmaMemLoader {
 public:

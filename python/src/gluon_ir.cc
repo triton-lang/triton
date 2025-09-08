@@ -97,6 +97,7 @@ struct GluonLayouts {
   py::handle NVMMASharedLayout;
   py::handle SwizzledSharedLayout;
   py::handle AMDMFMALayout;
+  py::handle AMDWMMALayout;
   py::handle PaddedSharedLayout;
   py::handle GluonDType;
 
@@ -117,6 +118,7 @@ struct GluonLayouts {
     SwizzledSharedLayout =
         py::object(layouts.attr("SwizzledSharedLayout")).release();
     AMDMFMALayout = py::object(amdLayouts.attr("AMDMFMALayout")).release();
+    AMDWMMALayout = py::object(amdLayouts.attr("AMDWMMALayout")).release();
     PaddedSharedLayout =
         py::object(layouts.attr("PaddedSharedLayout")).release();
 
@@ -226,6 +228,14 @@ py::object layoutToGluon(Attribute layout) {
         toStdVector(ctaLayout.getCTAsPerCGA()),
         toStdVector(ctaLayout.getCTASplitNum()),
         toStdVector(ctaLayout.getCTAOrder()));
+  } else if (auto amdWmma = dyn_cast<ttg::AMDWmmaEncodingAttr>(layout)) {
+    auto ctaLayout = amdWmma.getCTALayout();
+    return layouts.AMDWMMALayout(amdWmma.getVersion(),
+                                 amdWmma.getIsTransposed(),
+                                 toStdVector(amdWmma.getWarpsPerCTA()),
+                                 toStdVector(ctaLayout.getCTAsPerCGA()),
+                                 toStdVector(ctaLayout.getCTASplitNum()),
+                                 toStdVector(ctaLayout.getCTAOrder()));
   } else if (auto paddedShared =
                  dyn_cast<ttg::PaddedSharedEncodingAttr>(layout)) {
     auto *ctx = paddedShared.getContext();
@@ -356,6 +366,18 @@ void init_gluon_ir(py::module &&m) {
              return ttg::AMDMfmaEncodingAttr::get(
                  ctx, version, warpsPerCta, tilesPerWarp, instrShape[0],
                  instrShape[1], transposed, ctaLayout, elemType);
+           })
+      .def("get_amd_wmma_layout",
+           [](GluonOpBuilder &self, unsigned version, bool transposed,
+              std::vector<unsigned> &warpsPerCta,
+              std::vector<unsigned> &ctasPerCga,
+              std::vector<unsigned> &ctaSplitNum,
+              std::vector<unsigned> &ctaOrder) -> Attribute {
+             auto ctx = self.getContext();
+             auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+             return ttg::AMDWmmaEncodingAttr::get(ctx, version, transposed,
+                                                  warpsPerCta, ctaLayout);
            })
       .def("get_padded_shared_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &intervals,
