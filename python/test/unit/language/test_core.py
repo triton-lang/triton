@@ -1620,8 +1620,8 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
     # 1. make sure that atomic_cas changes the original value (Lock)
     @triton.jit
     def change_value(Lock, triton_dtype: tl.constexpr):
-        num0 = tl.full((1, ), 0, dtype=triton_dtype)
-        num1 = tl.full((1, ), 1, dtype=triton_dtype)
+        num0 = tl.full((1, ), 0, dtype=triton_dtype).item()
+        num1 = tl.full((1, ), 1, dtype=triton_dtype).item()
         tl.atomic_cas(Lock, num0, num1)
 
     torch_dtype = getattr(torch, dtype_str)
@@ -1634,8 +1634,8 @@ def test_atomic_cas(sem, num_ctas, dtype_str, device):
     # 2. only one block enters the critical section
     @triton.jit
     def serialized_add(data, Lock, triton_dtype: tl.constexpr, SEM: tl.constexpr):
-        num0 = tl.full((1, ), 0, dtype=triton_dtype)
-        num1 = tl.full((1, ), 1, dtype=triton_dtype)
+        num0 = tl.full((1, ), 0, dtype=triton_dtype).item()
+        num1 = tl.full((1, ), 1, dtype=triton_dtype).item()
 
         ptrs = data + tl.arange(0, 128)
         while tl.atomic_cas(Lock, num0, num1, SEM) == 1:
