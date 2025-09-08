@@ -30,8 +30,14 @@ FileLineColLoc extractFileLoc(Location loc) {
     return extractFileLoc(opaqueLoc.getFallbackLocation());
   if (auto fusedLoc = dyn_cast<FusedLoc>(loc))
     return extractFileLoc(fusedLoc.getLocations().front());
-  if (auto callerLoc = dyn_cast<CallSiteLoc>(loc))
-    return extractFileLoc(callerLoc.getCaller());
+  if (auto csl = dyn_cast<CallSiteLoc>(loc)) {
+    // Prefer the callee frame's file/line/col for scope attachment;
+    // if that is not a file location, fall back to the caller.
+    auto calleeFileLoc = extractFileLoc(csl.getCallee());
+    if (calleeFileLoc)
+      return calleeFileLoc;
+    return extractFileLoc(csl.getCaller());
+  }
   StringAttr unknownFile = mlir::StringAttr::get(loc.getContext(), "<unknown>");
   return mlir::FileLineColLoc::get(unknownFile, 0, 0);
 }
@@ -109,22 +115,36 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
     funcOp->setLoc(FusedLoc::get(context, {loc}, subprogramAttr));
   }
 
-  // Get a nested loc for inlined functions
-  Location getNestedLoc(Operation *op, LLVM::DIScopeAttr scopeAttr,
-                        Location calleeLoc) {
-    auto calleeFileName = extractFileLoc(calleeLoc).getFilename();
-    auto context = op->getContext();
+  static LLVM::DILexicalBlockFileAttr makeCalleeScopeFor(
+      MLIRContext *context, LLVM::DIScopeAttr parentScope, Location calleeFrameLoc) {
+    auto calleeFileName = extractFileLoc(calleeFrameLoc).getFilename();
     LLVM::DIFileAttr calleeFileAttr = LLVM::DIFileAttr::get(
         context, llvm::sys::path::filename(calleeFileName),
         llvm::sys::path::parent_path(calleeFileName));
-    auto lexicalBlockFileAttr = LLVM::DILexicalBlockFileAttr::get(
-        context, scopeAttr, calleeFileAttr, /*discriminator=*/0);
-    Location loc = calleeLoc;
-    if (mlir::isa<CallSiteLoc>(calleeLoc)) {
-      auto nestedLoc = mlir::cast<CallSiteLoc>(calleeLoc).getCallee();
-      loc = getNestedLoc(op, lexicalBlockFileAttr, nestedLoc);
+    // NOTE: we keep discriminator = 0 here for basic debugging.
+    // If needed, we can assign unique incrementing discriminators per callsite
+    return LLVM::DILexicalBlockFileAttr::get(
+        context, parentScope, calleeFileAttr, /*discriminator=*/0);
+  }
+
+  static Location annotateCalleeInlineChain(Operation *op,
+                                            LLVM::DIScopeAttr parentScope,
+                                            Location calleeLoc) {
+    MLIRContext *context = op->getContext();
+
+    if (auto cs = dyn_cast<CallSiteLoc>(calleeLoc)) {
+      // For this inlined frame, create a scope anchored to the callee's file,
+      // then recurse into the next callee.
+      auto frameScope = makeCalleeScopeFor(context, parentScope, cs.getCallee());
+      auto newCallee =
+          annotateCalleeInlineChain(op, frameScope, cs.getCallee());
+      // Preserve the intermediate caller chain on the *callee* side.
+      return CallSiteLoc::get(newCallee, cs.getCaller());
     }
-    return FusedLoc::get(context, {loc}, lexicalBlockFileAttr);
+
+    // Leaf (non-callsite) callee location: fuse in the final scope.
+    auto finalScope = makeCalleeScopeFor(context, parentScope, calleeLoc);
+    return FusedLoc::get(context, {calleeLoc}, finalScope);
   }
 
   void setLexicalBlockFileAttr(Operation *op) {
@@ -138,9 +158,9 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
       auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
       auto funcOpLoc = mlir::cast<FusedLoc>(funcOp.getLoc());
       scopeAttr = mlir::cast<LLVM::DISubprogramAttr>(funcOpLoc.getMetadata());
-      auto loc =
-          CallSiteLoc::get(getNestedLoc(op, scopeAttr, calleeLoc), callerLoc);
-      op->setLoc(loc);
+      auto newCallee = annotateCalleeInlineChain(op, scopeAttr, calleeLoc);
+      auto newLoc = CallSiteLoc::get(newCallee, callerLoc);
+      op->setLoc(newLoc);
     }
   }
 
