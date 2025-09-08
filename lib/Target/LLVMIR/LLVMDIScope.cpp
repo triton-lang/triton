@@ -121,7 +121,8 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
         mlir::cast<LLVM::DISubprogramAttr>(funcOpLoc.getMetadata());
 
     MLIRContext *ctx = op->getContext();
-    std::function<Location(Location)> makeScoped = [&](Location loc) -> Location {
+    std::function<Location(Location)> makeScoped =
+        [&](Location loc) -> Location {
       if (auto cs = dyn_cast<CallSiteLoc>(loc)) {
         Location newCallee = makeScoped(cs.getCallee());
         Location newCaller = makeScoped(cs.getCaller());
