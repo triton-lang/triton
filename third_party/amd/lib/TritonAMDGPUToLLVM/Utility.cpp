@@ -707,28 +707,6 @@ bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
   return false;
 }
 
-bool hasTransInDefChain(tt::DotOpInterface dotOp, unsigned opIdx) {
-  auto isInSameRegion = [&dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
-  };
-
-  BackwardSliceOptions bwdOpt;
-  bwdOpt.omitBlockArguments = true;
-  bwdOpt.filter = isInSameRegion;
-  SetVector<Operation *> bwdSlices;
-  Operation *dotOperand = (opIdx == 0) ? dotOp.getA().getDefiningOp()
-                                       : dotOp.getB().getDefiningOp();
-
-  if (!dotOperand)
-    return false;
-  (void)getBackwardSlice(dotOperand, &bwdSlices, bwdOpt);
-  if (llvm::find_if(bwdSlices, [](Operation *op) {
-        return isa<tt::TransOp>(op);
-      }) != bwdSlices.end())
-    return true;
-  return false;
-}
-
 bool isChainDotTail(tt::DotOpInterface dotOp) {
   auto isInSameRegion = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
