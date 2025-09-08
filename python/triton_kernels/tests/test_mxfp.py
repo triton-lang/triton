@@ -1,6 +1,10 @@
+from functools import partial
+
 import pytest
 import torch
+import triton
 from triton_kernels.numerics_details.mxfp import (
+    MXFP_BLOCK_SIZE,
     DequantScaleRoundingMode,
     downcast_to_mxfp,
     downcast_to_mxfp_torch,
@@ -110,3 +114,57 @@ def test_mxfp_casting(
 
     # Dequantized result should be close to the original, though tolerance is large due to the precision loss.
     assert_close(x, dequant, maxtol=0.5, rmstol=0.15)
+
+
+def _benchmark_mxfp_quantization(shape, src_dtype: torch.dtype, target_quant_dtype: torch.dtype, n_iters=1000):
+    x = torch.randn(*shape, dtype=src_dtype, device="cuda")
+    elapsed = (triton.testing.do_bench(
+        partial(downcast_to_mxfp, x, target_quant_dtype, axis=-1),
+        rep=n_iters,
+        return_mode="min",
+    ) / 1e3)
+
+    # Each call reads x (2 Bytes) and writes the output tensor (1B or 0.5B) once.
+    # -> 3B * numel
+    gbytes = ((3 if target_quant_dtype == torch.float8_e4m3fn else 2.5) * x.numel()) / 1e9
+
+    bw = gbytes / elapsed
+    return bw
+
+
+def _benchmark_mxfp_dequantization(shape, src_quant_dtype: torch.dtype, target_dtype: torch.dtype, n_iters=1000):
+    x = torch.randn(*shape, dtype=torch.bfloat16, device="cuda").to(src_quant_dtype)
+    scale_shape = shape[:-1] + (triton.cdiv(shape[-1], MXFP_BLOCK_SIZE), )
+    x_scale = torch.randint(0, 256, scale_shape, device="cuda", dtype=torch.uint8)
+    elapsed = (triton.testing.do_bench(
+        partial(upcast_from_mxfp, x, x_scale, target_dtype, axis=-1),
+        rep=n_iters,
+        return_mode="min",
+    ) / 1e3)
+
+    # Each call reads x (1B or 0.5B) and writes the output tensor (2 Bytes) once.
+    # -> 3B * numel
+    gbytes = ((3 if src_quant_dtype == torch.float8_e4m3fn else 2.5) * x.numel()) / 1e9
+
+    bw = gbytes / elapsed
+    return bw
+
+
+if __name__ == "__main__":
+    tests = [
+        ((1024, 8192), torch.float16),
+        ((4096, 8192), torch.float16),
+        ((1024, 8192), torch.bfloat16),
+        ((4096, 8192), torch.bfloat16),
+    ]
+
+    table = []
+    for shape, dtype in tests:
+        mxfp8_q_bw = _benchmark_mxfp_quantization(shape, dtype, torch.float8_e4m3fn)
+        mxfp8_dq_bw = _benchmark_mxfp_dequantization(shape, torch.float8_e4m3fn, dtype)
+        mxfp4_q_bw = _benchmark_mxfp_quantization(shape, dtype, torch.uint8)
+        mxfp4_dq_bw = _benchmark_mxfp_dequantization(shape, torch.uint8, dtype)
+        table.append(shape + (dtype, mxfp8_q_bw, mxfp8_dq_bw, mxfp4_q_bw, mxfp4_dq_bw))
+
+    from tabulate import tabulate
+    print(tabulate(table, headers=["M", "N", "dtype", "mxfp8_quant_bw", "mxfp8_dequant_bw", "mxfp4_quant_bw", "mxfp4_dequant_bw"]))
