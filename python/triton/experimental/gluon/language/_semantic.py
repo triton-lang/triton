@@ -86,7 +86,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def join(self, a: TensorTy, b: TensorTy) -> TensorTy:
         a, b = self.broadcast_impl_value(a, b)
-        _check(a.shape != [], "Cannot join scalars in gluon")
+        _check(a.shape != [], lambda: "Cannot join scalars in gluon")
         value = super().join(a, b)
         return self._wrap_tensor_infer_layout(value)
 
@@ -151,7 +151,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return super().arange(start, end, ret_ty=ret_ty)
 
     def reshape(self, input: TensorTy, dst_shape: List[int], can_reorder: bool):
-        _check(not can_reorder, "can_reorder is not supported in gluon")
+        _check(not can_reorder, lambda: "can_reorder is not supported in gluon")
         value = super().reshape(input, dst_shape, can_reorder)
         return self._wrap_tensor_infer_layout(value)
 
