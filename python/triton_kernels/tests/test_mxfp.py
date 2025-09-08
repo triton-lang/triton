@@ -22,10 +22,19 @@ def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
 @pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
 def test_mxfp4_rounding_cases(dst_dtype):
     dst_dtype = dtype_str_to_torch(dst_dtype)
-    x = torch.tensor([6, 0, 0.24, 0.25, 0.75, 0.99, 1.2, 1.3]).cuda().bfloat16().view(1, -1, 1)
+    x = torch.tensor([6, 0, 0.24, 0.25, 0.75, 0.99, 1.2, 1.3, 1.25, -1.25]).cuda().bfloat16().view(1, -1, 1)
     quant, scale = downcast_to_mxfp(x, torch.uint8, axis=1)
     dequant = upcast_from_mxfp(quant, scale, dst_dtype, axis=1)
-    assert dequant.flatten().tolist() == [6, 0, 0, 0.5, 1.0, 1.0, 1.0, 1.5], f"{dequant=}"
+    # Tie-breaking cases (RTNE):
+    # - 0.25 is exactly halfway between 0.0 and 0.5. RTNE selects the even quantized value 0.0
+    #   (binary LSB of target is 0). Rounding away from zero would pick 0.5; towards zero also picks 0.0.
+    # - 0.75 is halfway between 0.5 and 1.0. RTNE selects the even value 1.0 (LSB 0). Away-from-zero would pick 1.0;
+    #   towards-zero would pick 0.5.
+    # - 1.25 is halfway between 1.0 and 1.5. RTNE selects the even value 1.0. Away-from-zero would pick 1.5;
+    #   towards-zero would pick 1.0.
+    # - -1.25 is halfway between -1.0 and -1.5. RTNE selects -1.0 (even). Away-from-zero would pick -1.5;
+    #   towards-zero would pick -1.0.
+    assert dequant.flatten().tolist() == [6, 0, 0, 0.0, 1.0, 1.0, 1.0, 1.5, 1.0, -1.0], f"{dequant=}"
 
     quant_torch, scale_torch = downcast_to_mxfp_torch(x, torch.uint8, axis=1)
     assert_equal(quant_torch, quant)
