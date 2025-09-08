@@ -678,14 +678,27 @@ LogicalResult TMEMCopyOp::verify() {
   }
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
   auto sharedEnc =
+      dyn_cast<triton::gpu::SharedEncodingTrait>(srcTy.getEncoding());
+  if (sharedEnc.getAlignment() < 16) {
+    return emitOpError("Source must have at least 16-byte alignment to be "
+                       "representable in a matrix descriptor.");
+  }
+
+  auto mod = getOperation()->getParentOfType<ModuleOp>();
+  unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+  if (numCTAs != 1)
+    return emitOpError("NYI: Only one CTA is supported for now.");
+
+  auto nvmmaEnc =
       dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(srcTy.getEncoding());
-  if (!sharedEnc) {
+  if (!nvmmaEnc) {
     return emitOpError("Source must have nvmma layout.");
   }
-  if (sharedEnc.getTransposed() || sharedEnc.getFp4Padded())
-    return emitOpError("The source should not be transposed or passed");
+  // Fp4 we could lift if we needed
+  if (nvmmaEnc.getTransposed() || nvmmaEnc.getFp4Padded())
+    return emitOpError("The source should not be transposed or padded");
   if (isa<TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding())) {
-    if (sharedEnc.getSwizzlingByteWidth() != 0) {
+    if (nvmmaEnc.getSwizzlingByteWidth() != 0) {
       return emitOpError("The source should not be swizzled for now");
     }
     if (!triton::gpu::isInnermostContiguous(srcTy, 512)) {
@@ -704,9 +717,10 @@ LogicalResult TMEMCopyOp::verify() {
     if (tmemEnc.getBlockM() != 128) {
       return emitOpError("Tmem layout ahouls have M=128.");
     }
-    if (sharedEnc.getSwizzlingByteWidth() == 0) {
+    if (nvmmaEnc.getSwizzlingByteWidth() == 0) {
       return emitOpError("Source layout should be swizzled.");
     }
+    // When we lift this, we should make sure we handle unpacked cleanly
     if (srcTy.getElementType().getIntOrFloatBitWidth() != 32) {
       return emitOpError("Source element type should be 32-bit.");
     }

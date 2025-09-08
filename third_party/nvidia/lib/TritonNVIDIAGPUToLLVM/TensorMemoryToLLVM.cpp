@@ -1036,12 +1036,6 @@ getSwizzling(MemDescType shmemTy, MemDescType tmemTy) {
       return std::nullopt;
     }
   }
-  // FIXME Check this on the tmem itself once we have a decent representation of
-  // them in LLs We can only move things if the tmem is packed
-  if (bitwidth < 32 &&
-      cast<TensorMemoryEncodingAttr>(tmemTy.getEncoding()).getUnpacked()) {
-    return std::nullopt;
-  }
 
   auto CTALayout = getCTALayout(shmemTy.getEncoding());
 
@@ -1105,11 +1099,6 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
 
   MemDescType srcTy = op.getSrc().getType();
   MemDescType dstTy = op.getDst().getType();
-  // Easy to lift, we haven't done so yet tho
-  assert(isa<NVMMASharedEncodingAttr>(srcTy.getEncoding()) && "NYI");
-  assert(!cast<NVMMASharedEncodingAttr>(srcTy.getEncoding()).getFp4Padded() &&
-         "NYI");
-  assert(lookupNumCTAs(rewriter) == 1 && "NYI");
 
   auto sharedLl = toLinearLayout(srcTy);
   sharedLl =
@@ -1132,6 +1121,7 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
       LLVM::getSharedMemoryObjectFromStruct(loc, src, elemTy, rewriter);
   Value baseSrcInt =
       b.ptrtoint(i32_ty, smemObj.getShmemAffineBase(loc, rewriter, srcTy));
+  // We checked in the verifier that the alignment is at least 16
   Value baseSrcIntShr4 = b.lshr(baseSrcInt, b.i32_val(4));
 
   // Set common fields in the SMEMDescriptor
