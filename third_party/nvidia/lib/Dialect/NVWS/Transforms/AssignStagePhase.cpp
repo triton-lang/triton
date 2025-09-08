@@ -259,8 +259,6 @@ template <class T> struct AssignStagePhase {
       visited.insert(owner);
       if (auto stageOp = dyn_cast<ArefStageInterface>(owner)) {
         stageOp.setStage(stage);
-      } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(owner)) {
-        getExitOp.getStageMutable().assign(stage);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(owner)) {
         auto tokPos = tokUse.getOperandNumber();
         auto stagePos = tokToStagePosMap.at(token);
