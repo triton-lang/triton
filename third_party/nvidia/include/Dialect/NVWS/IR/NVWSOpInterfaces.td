@@ -14,6 +14,7 @@ def NVWS_DescriptorLoadOpInterface : OpInterface<"DescriptorLoadOpInterface", [T
       /*args=*/(ins)>,
   ];
 }
+
 def NVWS_ArefStageInterface : OpInterface<"ArefStageInterface"> {
   let cppNamespace = "::mlir::triton::nvws";
 

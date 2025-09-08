@@ -73,17 +73,13 @@ def NVWS_ArefGetEnterOp : NVWS_Op<"aref.get.enter", [AttrSizedOperandSegments, D
                       TTG_AsyncToken:$token);
   let hasVerifier=1;
   let assemblyFormat = [{
-    $aref `[` ($stage^)? (`,` $phase^)? `]` attr-dict
+    $aref ( `[` $stage^ `,` $phase `]`)? attr-dict
     `:` type($aref) `->` type(results)
   }];
 
   let builders = [
     OpBuilder<(ins "Value":$aref, "TypeRange":$bufferTypes, "Type":$tokenType), [{
-      $_state.addOperands(aref);
-      $_state.addTypes(bufferTypes);
-      $_state.addTypes(tokenType);
-      $_state.addAttribute("operandSegmentSizes",
-                          $_builder.getDenseI32ArrayAttr({1, 0, 0}));
+      build($_builder, $_state, bufferTypes, tokenType, aref, Value(), Value());
     }]>
   ];
 }
@@ -98,15 +94,13 @@ def NVWS_ArefGetExitOp : NVWS_Op<"aref.get.exit", [DeclareOpInterfaceMethods<NVW
                        Optional<I32>:$stage,
                        NVWS_AsyncOpArrayAttr:$async_ops);
   let assemblyFormat = [{
-    $aref `[` ($stage^)? `]` `,` $token $async_ops attr-dict
+    $aref (`[` $stage^ `]`)? `,` $token $async_ops attr-dict
     `:` type($aref) `,` type($token)
  }];
 
   let builders = [
     OpBuilder<(ins "Value":$aref, "Value":$token, "ArrayAttr":$async_ops), [{
-      $_state.addOperands(aref);
-      $_state.addOperands(token);
-      $_state.addAttribute("async_ops", async_ops);
+      build($_builder, $_state, aref, token, Value(), async_ops);
     }]>
   ];
 }
@@ -123,17 +117,13 @@ def NVWS_ArefPutEnterOp : NVWS_Op<"aref.put.enter", [AttrSizedOperandSegments, D
                       TTG_AsyncToken:$token);
   let hasVerifier=1;
   let assemblyFormat = [{
-    $aref `[` ($stage^)? (`,` $phase^)? `]` attr-dict
+    $aref ( `[` $stage^ `,` $phase `]`)? attr-dict
     `:` type($aref) `->` type(results)
   }];
 
   let builders = [
     OpBuilder<(ins "Value":$aref, "TypeRange":$bufferTypes, "Type":$tokenType), [{
-      $_state.addOperands(aref);
-      $_state.addTypes(bufferTypes);
-      $_state.addTypes(tokenType);
-      $_state.addAttribute("operandSegmentSizes",
-                          $_builder.getDenseI32ArrayAttr({1, 0, 0}));
+      build($_builder, $_state, bufferTypes, tokenType, aref, Value(), Value());
     }]>
   ];
 }
@@ -148,15 +138,13 @@ def NVWS_ArefPutExitOp : NVWS_Op<"aref.put.exit", [DeclareOpInterfaceMethods<NVW
                        Optional<I32>:$stage,
                        NVWS_AsyncOpArrayAttr:$async_ops);
   let assemblyFormat = [{
-    $aref`[` ($stage^)? `]` `,` $token  $async_ops attr-dict
+    $aref (`[` $stage^ `]`)? `,` $token  $async_ops attr-dict
     `:` type($aref) `,` type($token)
  }];
 
   let builders = [
     OpBuilder<(ins "Value":$aref, "Value":$token, "ArrayAttr":$async_ops), [{
-      $_state.addOperands(aref);
-      $_state.addOperands(token);
-      $_state.addAttribute("async_ops", async_ops);
+      build($_builder, $_state, aref, token, Value(), async_ops);
     }]>
   ];
 }

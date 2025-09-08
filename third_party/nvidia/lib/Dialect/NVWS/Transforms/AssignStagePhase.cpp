@@ -80,7 +80,7 @@ template <class T> struct AssignStagePhase {
       if (opT.getAref() == aref) {
         auto opPartitionId = getPartitionId(op);
         if (!opPartitionId || *opPartitionId == partitionId)
-          return cast<T>(op);
+          return opT;
       }
     }
     return {};
