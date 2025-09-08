@@ -1158,6 +1158,9 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
     // Compute base offset for the swizzling pattern
     int32_t off = reps.apply({{kRow, 0}, {kCol, col}})[0].second;
     desc.matrixBaseOffset = (off * elementBytes / 128) & 0x7;
+    uint64_t descBase = desc.descriptor;
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-shared-memory-descriptor
+    descBase |= (1ULL << 46);
     Value descValBase = b.int_val(64, desc.descriptor);
     for (int offset = 0; offset < tile.getInDimSize(kCol);
          offset += tileShape[1]) {
@@ -1166,6 +1169,7 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
           cvt.apply({{kRow, 0}, {kCol, col + offset}})[0].second;
       int32_t smemByteOffset = totalOffElems * elementBytes;
       int32_t smemByteOffsetShr4 = smemByteOffset >> 4;
+      // We could fold this add into the descBase if we wanted to
       Value baseAddr = b.add(baseSrcIntShr4, b.i32_val(smemByteOffsetShr4));
       Value baseSrcDesc = b.zext(i64_ty, b.and_(baseAddr, b.i32_val(0x3FFF)));
       // Add the base address to the descriptor
