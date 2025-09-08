@@ -395,6 +395,20 @@ void init_gluon_ir(py::module &&m) {
              return ttg::PaddedSharedEncodingAttr::get(ctx, intervals, paddings,
                                                        ll);
            })
+      .def("get_shared_linear_layout",
+           [](GluonOpBuilder &self, std::vector<std::vector<int>> &offsetBases,
+              std::vector<std::vector<int>> &blockBases,
+              std::vector<int64_t> &shape, unsigned alignment) -> Attribute {
+             auto ctx = self.getContext();
+             auto kOffset = mlir::StringAttr::get(ctx, "offset");
+             auto kBlock = mlir::StringAttr::get(ctx, "block");
+             auto ll = tt::LinearLayout(
+                 {{kOffset, offsetBases}, {kBlock, blockBases}},
+                 tt::standardOutDimPairs(ctx, shape),
+                 /*requireSurjective=*/true);
+             return self.getChecked<ttg::SharedLinearEncodingAttr>(ctx, ll,
+                                                                   alignment);
+           })
       .def("get_nvmma_shared_layout",
            [](GluonOpBuilder &self, unsigned swizzleByteWidth,
               unsigned elementBitwidth, bool transposed, bool fp4Padded,
