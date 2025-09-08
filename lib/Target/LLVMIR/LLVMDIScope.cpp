@@ -128,23 +128,18 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
         return CallSiteLoc::get(newCallee, newCaller);
       }
 
-      // Build a DIFile for this leaf location.
-      FileLineColLoc fl = extractFileLoc(loc);
+      // Build a DIFile for this leaf location
+      FileLineColLoc fileLine = extractFileLoc(loc);
       LLVM::DIFileAttr fileAttr;
-      if (!fl) {
-        // Fallback to the function's file if available.
-        fileAttr = scopeAttr.getFile();
-      } else {
-        StringRef inputFilePath = fl.getFilename().getValue();
-        fileAttr = LLVM::DIFileAttr::get(
-            ctx, llvm::sys::path::filename(inputFilePath),
-            llvm::sys::path::parent_path(inputFilePath));
-      }
+      StringRef inputFilePath = fileLine.getFilename().getValue();
+      fileAttr =
+          LLVM::DIFileAttr::get(ctx, llvm::sys::path::filename(inputFilePath),
+                                llvm::sys::path::parent_path(inputFilePath));
 
-      auto lbFile =
+      auto lexicalBlock =
           LLVM::DILexicalBlockFileAttr::get(ctx, scopeAttr, fileAttr,
                                             /*discriminator=*/0);
-      return FusedLoc::get(ctx, {loc}, lbFile);
+      return FusedLoc::get(ctx, {loc}, lexicalBlock);
     };
 
     op->setLoc(makeScoped(opLoc));
