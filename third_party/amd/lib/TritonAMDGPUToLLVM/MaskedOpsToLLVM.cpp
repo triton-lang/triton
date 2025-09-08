@@ -104,8 +104,8 @@ public:
     }
 
     auto createStoreWithAttrs = [&](Location storeLoc) -> LLVM::StoreOp {
-      auto store = rewriter.create<LLVM::StoreOp>(
-          storeLoc, val, ptr, alignment, volatileFlag, nonTmpFlag);
+      auto store = rewriter.create<LLVM::StoreOp>(storeLoc, val, ptr, alignment,
+                                                  volatileFlag, nonTmpFlag);
       if (storeOp.getForceNoAlias()) {
         AMD::addLocalLoadNoAliasScope(store);
       }

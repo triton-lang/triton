@@ -319,7 +319,7 @@ Value permute(Location loc, RewriterBase &rewriter, Value x, Value y,
 // -----+-----+----------+---------
 std::pair<bool, bool>
 getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm,
-                                       MemoryOp op) {
+                                  MemoryOp op) {
   switch (op) {
   case MemoryOp::Load: {
     switch (cm) {

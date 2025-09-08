@@ -36,8 +36,7 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
 
 std::pair<bool, bool>
-getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm,
-                                       MemoryOp op);
+getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm, MemoryOp op);
 
 // Loads from shared or global memory with predication.
 // `otherElems` is used to mask out the elements that are not loaded
