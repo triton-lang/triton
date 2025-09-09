@@ -1615,22 +1615,30 @@ def test_tensor_atomic_rmw_block(num_ctas, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_atomic_cas(sem, num_ctas, device):
+@pytest.mark.parametrize("dtype_str", ["int32", "int64"])
+def test_atomic_cas(sem, num_ctas, dtype_str, device):
     # 1. make sure that atomic_cas changes the original value (Lock)
     @triton.jit
-    def change_value(Lock):
-        tl.atomic_cas(Lock, 0, 1)
+    def change_value(Lock, triton_dtype: tl.constexpr):
+        num0 = tl.full((1, ), 0, dtype=triton_dtype).item()
+        num1 = tl.full((1, ), 1, dtype=triton_dtype).item()
+        tl.atomic_cas(Lock, num0, num1)
 
-    Lock = torch.zeros((1, ), device=device, dtype=torch.int32)
-    change_value[(1, )](Lock)
+    torch_dtype = getattr(torch, dtype_str)
+    triton_dtype = getattr(tl, dtype_str)
+    Lock = torch.zeros((1, ), device=device, dtype=torch_dtype)
+    change_value[(1, )](Lock, triton_dtype)
 
     assert (Lock[0] == 1)
 
     # 2. only one block enters the critical section
     @triton.jit
-    def serialized_add(data, Lock, SEM: tl.constexpr):
+    def serialized_add(data, Lock, triton_dtype: tl.constexpr, SEM: tl.constexpr):
+        num0 = tl.full((1, ), 0, dtype=triton_dtype).item()
+        num1 = tl.full((1, ), 1, dtype=triton_dtype).item()
+
         ptrs = data + tl.arange(0, 128)
-        while tl.atomic_cas(Lock, 0, 1, SEM) == 1:
+        while tl.atomic_cas(Lock, num0, num1, SEM) == 1:
             pass
 
         tl.store(ptrs, tl.load(ptrs) + 1.0)
@@ -1640,12 +1648,12 @@ def test_atomic_cas(sem, num_ctas, device):
         tl.debug_barrier()
 
         # release lock
-        tl.atomic_xchg(Lock, 0)
+        tl.atomic_xchg(Lock, num0)
 
-    Lock = torch.zeros((1, ), device=device, dtype=torch.int32)
+    Lock = torch.zeros((1, ), device=device, dtype=torch_dtype)
     data = torch.zeros((128, ), device=device, dtype=torch.float32)
     ref = torch.full((128, ), 2000.0)
-    h = serialized_add[(2000, )](data, Lock, SEM=sem, num_ctas=num_ctas)
+    h = serialized_add[(2000, )](data, Lock, triton_dtype=triton_dtype, SEM=sem, num_ctas=num_ctas)
     sem_str = "acq_rel" if sem is None else sem
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
     if not is_cuda():

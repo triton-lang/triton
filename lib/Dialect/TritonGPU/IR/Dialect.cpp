@@ -187,6 +187,9 @@ SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
   if (auto paddedEnc = dyn_cast<PaddedSharedEncodingAttr>(layout)) {
     return paddedEnc.getOrder();
   }
+  if (auto linearEnc = dyn_cast<SharedLinearEncodingAttr>(layout)) {
+    return linearEnc.getOrder();
+  }
   if (auto sharedLayout = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
     if (shape.size() == 1) {
       return {0};
@@ -1564,6 +1567,181 @@ void SwizzledSharedEncodingAttr::print(AsmPrinter &printer) const {
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getOrder().size());
   printer << "}>";
+}
+
+//===----------------------------------------------------------------------===//
+// SharedLinear encoding
+//===----------------------------------------------------------------------===//
+
+LogicalResult
+SharedLinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                                 LinearLayout linearLayout,
+                                 unsigned layoutAlignment) {
+  if (layoutAlignment == 0 || !llvm::isPowerOf2_32(layoutAlignment)) {
+    return emitError() << "alignment must be a positive power of two";
+  }
+  static const auto expectedInDims =
+      SmallVector<std::string>({"offset", "block"});
+  for (const auto &[index, dims] : llvm::enumerate(
+           llvm::zip(linearLayout.getInDimNames(), expectedInDims))) {
+    const auto &[dim, expected] = dims;
+    if (dim.str() != expected) {
+      return emitError() << "Expected input dimension " << index << " to be '"
+                         << expected << "'. Got " << dim;
+    }
+  }
+
+  for (auto [i, dim] : llvm::enumerate(linearLayout.getOutDimNames())) {
+    if (dim.str() != ("dim" + llvm::Twine(i)).str()) {
+      return emitError()
+             << "Expected output dimensions to be ['dim0', 'dim1', ...]. Got "
+             << dim << " at position " << i;
+    }
+  }
+
+  SmallVector<StringAttr> outDimNames =
+      llvm::to_vector(linearLayout.getOutDimNames());
+  if (outDimNames.empty()) {
+    return emitError()
+           << "SharedLinearEncodingAttr requires at least one output"
+              " dimension.";
+  }
+
+  auto *ctx = outDimNames.front().getContext();
+  auto kOffset = StringAttr::get(ctx, "offset");
+  auto kBlock = StringAttr::get(ctx, "block");
+
+  if (!linearLayout.isSurjective()) {
+    return emitError() << "The layout must be surjective";
+  }
+
+  LinearLayout withoutBroadcast =
+      linearLayout.removeZeroBasesAlongDim(kOffset).removeZeroBasesAlongDim(
+          kBlock);
+  if (!withoutBroadcast.isInvertible()) {
+    return emitError()
+           << "After removing the zero bases the layout must be bijective";
+  }
+
+  return success();
+}
+
+void SharedLinearEncodingAttr::print(AsmPrinter &printer) const {
+  printer << "<{";
+  auto layout = getLinearLayout();
+  auto kBlock = StringAttr::get(getContext(), "block");
+  auto kOffset = StringAttr::get(getContext(), "offset");
+  if (layout.getBases().lookup(kBlock).empty()) {
+    layout =
+        layout.sublayout({kOffset}, llvm::to_vector(layout.getOutDimNames()));
+  }
+  printLinearLayout(printer, layout);
+  printer << "}, alignment = " << getAlignment() << "}>";
+}
+
+Attribute SharedLinearEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess().failed())
+    return {};
+
+  DictionaryAttr layoutDictRaw;
+  if (parser.parseAttribute(layoutDictRaw).failed())
+    return {};
+
+  if (layoutDictRaw.get("alignment")) {
+    parser.emitError(parser.getCurrentLocation())
+        << "alignment must be specified outside of the linear layout braces";
+    return {};
+  }
+
+  NamedAttrList layoutAttrList(layoutDictRaw.getValue());
+  auto *ctx = parser.getContext();
+  auto kBlock = StringAttr::get(ctx, "block");
+  if (!layoutAttrList.get(kBlock)) {
+    layoutAttrList.push_back({kBlock, ArrayAttr::get(ctx, {})});
+  }
+
+  DictionaryAttr layoutDict = layoutAttrList.getDictionary(ctx);
+
+  // Parse alignment
+  unsigned layoutAlignment;
+  if (parser.parseComma().failed())
+    return {};
+  if (parser.parseKeyword("alignment").failed() || parser.parseEqual().failed())
+    return {};
+  if (parser.parseInteger(layoutAlignment).failed())
+    return {};
+
+  if (parser.parseGreater().failed())
+    return {};
+
+  std::vector<std::string> inDimNames = {"offset", "block"};
+  auto maybeLL = parseLinearLayout(layoutDict, parser, inDimNames);
+  if (!maybeLL.has_value())
+    return {};
+
+  // Special case for cleaner errors
+  if (layoutDict.get("alignment")) {
+    parser.emitError(parser.getCurrentLocation())
+        << "alignment must be specified outside of the linear layout braces";
+    return {};
+  }
+
+  if (layoutDict.size() != 2) {
+    parser.emitError(parser.getCurrentLocation())
+        << "SharedLinearEncodingAttr must have exactly two attributes: offset "
+           "and block";
+    return {};
+  }
+
+  return parser.getChecked<SharedLinearEncodingAttr>(
+      parser.getContext(), std::move(*maybeLL), layoutAlignment);
+}
+
+SmallVector<unsigned>
+SharedLinearEncodingAttr::basesPerDim(StringAttr dimName,
+                                      bool skipBroadcast) const {
+  auto ll = getLinearLayout();
+  auto rank = ll.getNumOutDims();
+  return basesPerDimImpl(ll.getBases(), dimName, rank, skipBroadcast);
+}
+
+SmallVector<unsigned>
+SharedLinearEncodingAttr::orderPerDim(StringAttr dimName,
+                                      ArrayRef<unsigned> defaultOrder) const {
+  return orderPerDimImpl(getLinearLayout(), dimName, defaultOrder);
+}
+
+SmallVector<unsigned> SharedLinearEncodingAttr::getOrder() const {
+  auto ll = getLinearLayout();
+  auto rank = ll.getNumOutDims();
+  SmallVector<unsigned> defaultOrder(rank);
+  std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
+  return orderPerDim(StringAttr::get(getContext(), "offset"), defaultOrder);
+}
+
+SmallVector<unsigned> SharedLinearEncodingAttr::getCTAsPerCGA() const {
+  return basesPerDim(StringAttr::get(getContext(), "block"),
+                     /*skipBroadcast=*/false);
+}
+
+SmallVector<unsigned> SharedLinearEncodingAttr::getCTAOrder() const {
+  return orderPerDim(StringAttr::get(getContext(), "block"), getOrder());
+}
+
+SmallVector<unsigned> SharedLinearEncodingAttr::getCTASplitNum() const {
+  return basesPerDim(StringAttr::get(getContext(), "block"));
+}
+
+LinearLayout
+SharedLinearEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  auto ll = getLinearLayout();
+  auto outDimNames = llvm::to_vector(ll.getOutDimNames());
+  assert(shape.size() == outDimNames.size());
+  // We don't support automatic broadcasting for shared linear layouts
+  for (auto [size, llSize] : llvm::zip(shape, ll.getOutDimSizes())) {
+    assert(size == llSize);
+  }
+  return ll;
 }
 
 //===----------------------------------------------------------------------===//

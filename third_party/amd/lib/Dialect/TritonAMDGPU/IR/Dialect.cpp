@@ -22,10 +22,12 @@
  */
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -49,6 +51,8 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
 #define GET_OP_LIST
 #include "Dialect/TritonAMDGPU/IR/Ops.cpp.inc"
       >();
+
+  addInterfaces<TritonInlinerInterface>();
 }
 
 #include "Dialect/TritonAMDGPU/IR/TritonAMDGPUEnums.cpp.inc"
@@ -416,6 +420,19 @@ InThreadTransposeOp::deduceOutputLayout(ArrayRef<int64_t> shape,
 
   LinearLayout transposedLL(bases, SmallVector<StringAttr>(outDimNames));
   return transposedLL;
+}
+
+LogicalResult ScaledUpcastFp4Op::verify() {
+  RankedTensorType inputTy = getInput().getType();
+  RankedTensorType outputTy = getOutput().getType();
+  RankedTensorType scaleTy = getScale().getType();
+  auto axis = getAxis();
+
+  if (outputTy.getShape() != scaleTy.getShape())
+    return emitError() << "scale and output should have the same shape";
+
+  // Reuse Fp4ToFpOp's verifier to check types of input and output
+  return triton::gpu::Fp4ToFpOp::verifyFp4ToFp(*this, inputTy, outputTy, axis);
 }
 
 LogicalResult ConcatOp::verify() {

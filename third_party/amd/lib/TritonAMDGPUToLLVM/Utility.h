@@ -14,15 +14,7 @@
 
 namespace mlir::LLVM::AMD {
 
-const char predicatedLoad[] = "__triton_hip_predicated_load";
-const char predicatedLoadCA[] = "__triton_hip_predicated_load_CA";
-const char predicatedLoadCG[] = "__triton_hip_predicated_load_CG";
-const char predicatedLoadCV[] = "__triton_hip_predicated_load_CV";
-const char predicatedStore[] = "__triton_hip_predicated_store";
-const char predicatedStoreCG[] = "__triton_hip_predicated_store_CG";
-const char predicatedStoreCS[] = "__triton_hip_predicated_store_CS";
-const char predicatedStoreWT[] = "__triton_hip_predicated_store_WT";
-const char noAliasAsyncLoads[] = "__no_alias_async_loads";
+enum class MemoryOp { Load, Store };
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
                  mlir::triton::AMD::ISAFamily isaFamily =
@@ -42,6 +34,9 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
+
+std::pair<bool, bool>
+getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm, MemoryOp op);
 
 // Loads from shared or global memory with predication.
 // `otherElems` is used to mask out the elements that are not loaded
@@ -63,7 +58,7 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
 
 // Get cache modifier information for creating load or store instruction
 // Get flags <volatile, nontemporal> for a predicated Load or Store
-std::pair<bool, bool> getCacheModifierFlagsForPredicatedCall(LLVM::CallOp);
+std::pair<bool, bool> getCacheModifierFlagsForLoadStore(LLVM::CallOp);
 // Get the cachepolicy value for a cache modifier
 int32_t
 getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
@@ -115,10 +110,6 @@ bool isUsedByDotScaledOp(Operation *op);
 // in the same region
 bool isChainDotHead(mlir::triton::DotOpInterface dotOp, unsigned opIdx = 0);
 
-// Check if given operand of this tt.dot is the result of a tt.trans
-// in the same region
-bool hasTransInDefChain(mlir::triton::DotOpInterface dotOp, unsigned opIdx);
-
 // Check if the opA of this tl.dot is the result of another tl.dot
 // in the same region
 bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
@@ -129,9 +120,9 @@ SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                        bool toFp16, Value packedVec);
 
 template <typename ConvertOp>
-SmallVector<Value, 4> upcast8xMxfp4_HW(RewriterBase &rewriter, Location loc,
-                                       ArrayRef<Value> xVals, int idx,
-                                       Value scale) {
+SmallVector<Value, 4>
+upcast8xMxfp4_HW(RewriterBase &rewriter, Location loc, ArrayRef<Value> xVals,
+                 int idx, Value scale, bool useShiftedScale = false) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value packedVec = b.undef(vec_ty(i8_ty, 4));
   for (int i : llvm::seq(4))
@@ -141,8 +132,16 @@ SmallVector<Value, 4> upcast8xMxfp4_HW(RewriterBase &rewriter, Location loc,
   if constexpr (std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF16Fp4Op>)
     retElemType = f16_ty;
   Type resType = vec_ty(retElemType, 2);
-  Value scaleF32 =
-      b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
+  // In the DotScaledOp decomposition, the scale has already been left-shifted
+  // by 7 to fit the exponent of bf16. So now we only need to further left-shift
+  // it by 16
+  Value scaleF32;
+  if (useShiftedScale) {
+    scaleF32 = b.bitcast(
+        b.shl(b.zext(i32_ty, b.bitcast(scale, i16_ty)), b.i32_val(16)), f32_ty);
+  } else {
+    scaleF32 = b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
+  }
   SmallVector<Value, 4> results;
   for (int srcSelIndex : llvm::seq(4))
     results.push_back(rewriter.create<ConvertOp>(loc, resType, packedVec,
@@ -151,9 +150,9 @@ SmallVector<Value, 4> upcast8xMxfp4_HW(RewriterBase &rewriter, Location loc,
 }
 
 template <typename ConvertOp>
-SmallVector<Value, 2> upcast4xMxfp8_HW(RewriterBase &rewriter, Location loc,
-                                       ArrayRef<Value> xVals, int idx,
-                                       Value scale) {
+SmallVector<Value, 2>
+upcast4xMxfp8_HW(RewriterBase &rewriter, Location loc, ArrayRef<Value> xVals,
+                 int idx, Value scale, bool useShiftedScale = false) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value packedVec = b.undef(vec_ty(i8_ty, 4));
   for (int i : llvm::seq(4))
@@ -164,8 +163,16 @@ SmallVector<Value, 2> upcast4xMxfp8_HW(RewriterBase &rewriter, Location loc,
                 std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF16Bf8Op>)
     retElemType = f16_ty;
   Type resType = vec_ty(retElemType, 2);
-  Value scaleF32 =
-      b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
+  // In the DotScaledOp decomposition, the scale has already been left-shifted
+  // by 7 to fit the exponent of bf16. So now we only need to further left-shift
+  // it by 16
+  Value scaleF32;
+  if (useShiftedScale) {
+    scaleF32 = b.bitcast(
+        b.shl(b.zext(i32_ty, b.bitcast(scale, i16_ty)), b.i32_val(16)), f32_ty);
+  } else {
+    scaleF32 = b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
+  }
   SmallVector<Value, 2> results;
   results.push_back(rewriter.create<ConvertOp>(loc, resType, packedVec,
                                                scaleF32,

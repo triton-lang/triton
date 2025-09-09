@@ -86,7 +86,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def join(self, a: TensorTy, b: TensorTy) -> TensorTy:
         a, b = self.broadcast_impl_value(a, b)
-        _check(a.shape != [], "Cannot join scalars in gluon")
+        _check(a.shape != [], lambda: "Cannot join scalars in gluon")
         value = super().join(a, b)
         return self._wrap_tensor_infer_layout(value)
 
@@ -151,7 +151,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return super().arange(start, end, ret_ty=ret_ty)
 
     def reshape(self, input: TensorTy, dst_shape: List[int], can_reorder: bool):
-        _check(not can_reorder, "can_reorder is not supported in gluon")
+        _check(not can_reorder, lambda: "can_reorder is not supported in gluon")
         value = super().reshape(input, dst_shape, can_reorder)
         return self._wrap_tensor_infer_layout(value)
 
@@ -365,7 +365,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(index.type.scalar.is_int(), lambda: f"expected integer scalar type but got: {index.type.scalar!r}")
 
         rank = len(src.type.shape)
-        _check(len(index.type.shape) == rank, "source and index tensors must have the same rank")
+        _check(len(index.type.shape) == rank, lambda: "source and index tensors must have the same rank")
         _check(-rank <= axis < rank, lambda: f"gather axis {axis} must be < source rank ({rank})")
         if axis < 0:
             axis += rank
