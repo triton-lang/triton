@@ -232,9 +232,6 @@ struct TmemAccessDag {
     accessDag.op2dagMap.insert({allocOp, accessDag.getRootNode()});
 
     if (allocOp.getSrc()) {
-      // Handle tmem_alloc with src operand specially. When a src operand is
-      // present, no async tokens are generated, we can't traverse IR,
-      // and we directly add the single user operation to the access DAG.
       assert(!allocOp.getToken());
       assert(allocOp->hasOneUse());
       auto user = *allocOp->getUsers().begin();
@@ -612,7 +609,9 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
 LogicalResult runOnFunction(triton::FuncOp funcOp) {
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
-    tmemDags.push_back(TmemAccessDag::build(allocOp));
+    // Workaround: if allocOp has src and has no partition, we skip it
+    if (!allocOp.getSrc() || getPartitionId(allocOp))
+      tmemDags.push_back(TmemAccessDag::build(allocOp));
   });
 
   for (auto &accessDag : tmemDags) {

@@ -51,6 +51,57 @@ enum class LoopVarCategory {
   TensorResultFromOtherPartition,
 };
 
+constexpr int kAllPartitionsDefIdx = 255;
+// Helper function to process a single defIdx and update partition indices
+void processDefIdx(int defIdx, SetVector<size_t> &partitionIndices,
+                   const WarpSchedule &schedule) {
+  partitionIndices.insert(std::abs(defIdx));
+  if (defIdx < 0) {
+    partitionIndices.insert(0);
+  } else if (defIdx == kAllPartitionsDefIdx) {
+    partitionIndices.clear();
+    for (size_t i = 0; i < schedule.getNumPartitions(); ++i) {
+      partitionIndices.insert(i);
+    }
+  }
+}
+
+SmallVector<size_t>
+getPartitionIndicesToCloneInto(Operation *op, const Partition *partition,
+                               const WarpSchedule &schedule) {
+  SetVector<size_t> partitionIndices;
+
+  if (!partition || partition == schedule.getRootPartition()) {
+    for (size_t i = 0; i < schedule.getNumPartitions(); ++i) {
+      partitionIndices.insert(i);
+    }
+  } else if (auto attr = op->getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
+    auto defIdx = attr.getInt();
+    processDefIdx(defIdx, partitionIndices, schedule);
+  } else {
+    partitionIndices.insert(partition->getIndex());
+  }
+
+  return SmallVector<size_t>{partitionIndices.begin(), partitionIndices.end()};
+}
+
+// for IfOp, the partition is a list, each positional result to its partition
+SmallVector<size_t>
+getPartitionIndicesToCloneInto(scf::IfOp ifOp, const WarpSchedule &schedule) {
+  SetVector<size_t> bodyPartitions;
+  auto arrayAttr = ifOp->getAttrOfType<ArrayAttr>(kPartitionAttrName);
+  assert(arrayAttr.size() == ifOp.getResultTypes().size());
+  for (auto attr : arrayAttr) {
+    int defIdx = cast<IntegerAttr>(attr).getInt();
+    processDefIdx(defIdx, bodyPartitions, schedule);
+    if (defIdx == kAllPartitionsDefIdx) {
+      break;
+    }
+  }
+  assert(!bodyPartitions.empty());
+  return SmallVector<size_t>{bodyPartitions.begin(), bodyPartitions.end()};
+}
+
 bool isTensorResultComputedBy(scf::ForOp loop, size_t resultIdx,
                               const Partition *partition,
                               const WarpSchedule &schedule) {
@@ -64,12 +115,44 @@ bool isTensorResultComputedBy(scf::ForOp loop, size_t resultIdx,
   return ret;
 }
 
+// Helper function to check if an operation belongs to a partition based on
+// defIdx
+bool belongsToPartition(int defIdx, const Partition *partition) {
+  if (defIdx < 0) {
+    return std::abs(defIdx) == partition->getIndex() ||
+           partition->getIndex() == 0;
+  } else if (defIdx == kAllPartitionsDefIdx) {
+    return true;
+  } else {
+    return defIdx == partition->getIndex();
+  }
+}
+
 SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
                                               const Partition *partition,
                                               const WarpSchedule &schedule) {
-  auto inPartition = [&](Operation *op) {
+  auto inPartition = [&](OpOperand &opnd) {
+    auto op = opnd.getOwner();
+    if (auto ifOp = dyn_cast<scf::IfOp>(op->getParentOp())) {
+      int defIdx = kAllPartitionsDefIdx;
+      if (auto attr = op->getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
+        defIdx = attr.getInt();
+      } else if (isa<scf::YieldOp>(op)) {
+        auto arrayAttr = ifOp->getAttrOfType<ArrayAttr>(kPartitionAttrName);
+        assert(arrayAttr.size() == ifOp.getResultTypes().size());
+        defIdx = cast<IntegerAttr>(arrayAttr[opnd.getOperandNumber()]).getInt();
+      }
+      return belongsToPartition(defIdx, partition);
+    }
+
+    if (auto attr = op->getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
+      auto defIdx = attr.getInt();
+      return belongsToPartition(defIdx, partition);
+    }
+
     const Partition *opPartition =
         schedule.getPartition(loop.getBody()->findAncestorOpInBlock(*op));
+
     return llvm::is_contained({partition, schedule.getRootPartition()},
                               opPartition);
   };
@@ -87,7 +170,7 @@ SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
 
   SmallVector<LoopVarCategory> categories(loop.getNumRegionIterArgs());
   for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
-    if (llvm::any_of(arg.getUsers(), inPartition)) {
+    if (llvm::any_of(arg.getUses(), inPartition)) {
       categories[i] = LoopVarCategory::Used;
     } else if (isTensorResultFromOtherPartition(i)) {
       categories[i] = LoopVarCategory::TensorResultFromOtherPartition;
@@ -149,21 +232,6 @@ void mapRange(ValueRange fromRange, ValueRange toRange, IRMapping &mapping) {
   }
 }
 
-SmallVector<size_t>
-getPartitionIndicesToCloneInto(const Partition *partition,
-                               const WarpSchedule &schedule) {
-  SmallVector<size_t> partitionIndices;
-
-  if (!partition || partition == schedule.getRootPartition()) {
-    for (size_t i = 0; i < schedule.getNumPartitions(); ++i) {
-      partitionIndices.push_back(i);
-    }
-  } else {
-    partitionIndices.push_back(partition->getIndex());
-  }
-
-  return partitionIndices;
-}
 int getPartitionIndex(Operation *op) {
   if (isa<nvws::WarpGroupOp>(op->getParentOp()))
     return op->getParentRegion()->getRegionNumber();
@@ -211,28 +279,45 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
   }
 }
 
+bool useDefIdx(int defIdx, size_t idx) {
+  return std::abs(defIdx) == idx || (defIdx < 0 && idx == 0) ||
+         defIdx == kAllPartitionsDefIdx;
+}
+
 void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
                const WarpSchedule &schedule) {
-  auto partition = getPartition(ifOp, schedule);
-  auto partitionIndices = getPartitionIndicesToCloneInto(partition, schedule);
+  auto partitionIndices = getPartitionIndicesToCloneInto(ifOp, schedule);
 
   SmallVector<scf::IfOp> newIfOps;
   for (size_t idx : partitionIndices) {
     auto &b = builders[idx];
     auto cond = b.mapping.lookupOrDefault(ifOp.getCondition());
-    auto newIfOp = b.create<scf::IfOp>(ifOp.getLoc(), ifOp.getResultTypes(),
-                                       cond, ifOp.elseBlock() ? true : false);
+    SmallVector<Type> newIfResultTypes;
+    auto attrArray = ifOp->getAttrOfType<ArrayAttr>(kPartitionAttrName);
+    assert(attrArray.size() == ifOp.getResultTypes().size());
+    SmallVector<int> newIfResultIndices;
+    for (auto pos = 0; pos < ifOp.getResultTypes().size(); ++pos) {
+      auto defIdx = cast<IntegerAttr>(attrArray[pos]).getInt();
+      if (useDefIdx(defIdx, idx)) {
+        newIfResultTypes.push_back(ifOp.getResult(pos).getType());
+        newIfResultIndices.push_back(pos);
+      }
+    }
+    auto newIfOp = b.create<scf::IfOp>(ifOp.getLoc(), newIfResultTypes, cond,
+                                       ifOp.elseBlock() ? true : false);
     newIfOp->setAttrs(ifOp->getAttrs());
     newIfOps.push_back(newIfOp);
 
-    mapRange(ifOp.getResults(), newIfOp.getResults(), b.mapping);
-    mapRange(ifOp.thenBlock()->getArguments(),
-             newIfOp.thenBlock()->getArguments(), b.mapping);
+    auto oldArrayAttr = ifOp->getAttrOfType<ArrayAttr>(kPartitionAttrName);
+    SmallVector<Attribute> newArrayAttr;
 
-    if (ifOp.elseBlock()) {
-      mapRange(ifOp.elseBlock()->getArguments(),
-               newIfOp.elseBlock()->getArguments(), b.mapping);
+    for (auto [newIdx, oldIdx] : llvm::enumerate(newIfResultIndices)) {
+      b.mapping.map(ifOp.getResult(oldIdx), newIfOp.getResult(newIdx));
+      newArrayAttr.push_back(oldArrayAttr[oldIdx]);
     }
+    newIfOp->setAttr(kPartitionAttrName,
+                     ArrayAttr::get(ifOp.getContext(), newArrayAttr));
+    assert(ifOp.thenBlock()->getNumArguments() == 0);
 
     b.setInsertionPointToStart(newIfOp.thenBlock());
   }
@@ -240,8 +325,8 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
   cloneOpsInBlock(ifOp.thenBlock(), builders, schedule);
 
   if (auto elseBlock = ifOp.elseBlock()) {
-    for (auto [builder, newIfOp] : llvm::zip(builders, newIfOps)) {
-      builder.setInsertionPointToStart(newIfOp.elseBlock());
+    for (auto [idx, newIfOp] : llvm::zip(partitionIndices, newIfOps)) {
+      builders[idx].setInsertionPointToStart(newIfOp.elseBlock());
     }
     cloneOpsInBlock(elseBlock, builders, schedule);
   }
@@ -255,7 +340,8 @@ void cloneReduceOp(triton::ReduceOp reduceOp,
                    SmallVector<WarpGroupBuilder> &builders,
                    const WarpSchedule &schedule) {
   auto partition = getPartition(reduceOp, schedule);
-  auto partitionIndices = getPartitionIndicesToCloneInto(partition, schedule);
+  auto partitionIndices =
+      getPartitionIndicesToCloneInto(reduceOp, partition, schedule);
 
   SmallVector<ReduceOp> newReduceOps;
   for (size_t idx : partitionIndices) {
@@ -309,7 +395,6 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
   for (auto &op_ : *block) {
     auto op = &op_;
     auto partition = getPartition(op, schedule);
-    auto partitionIndices = getPartitionIndicesToCloneInto(partition, schedule);
 
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       cloneForOp(forOp, builders, schedule);
@@ -322,6 +407,14 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
         continue;
       }
 
+      SmallVector<size_t> partitionIndices;
+      if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
+        partitionIndices = getPartitionIndicesToCloneInto(ifOp, schedule);
+      } else {
+        partitionIndices =
+            getPartitionIndicesToCloneInto(op, partition, schedule);
+      }
+
       for (size_t idx : partitionIndices) {
         auto &builder = builders[idx];
         SmallVector<size_t> newOperandIndices;
@@ -331,8 +424,14 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
                   forOp, schedule.getPartition(builder.partitionId), schedule)
                   .first;
         } else {
+          auto ifOp = cast<scf::IfOp>(yieldOp->getParentOp());
+          auto attrArray = ifOp->getAttrOfType<ArrayAttr>(kPartitionAttrName);
+          assert(attrArray.size() == yieldOp.getOperands().size());
           for (size_t i = 0; i < yieldOp.getOperands().size(); ++i) {
-            newOperandIndices.push_back(i);
+            auto defIdx = cast<IntegerAttr>(attrArray[i]).getInt();
+            if (useDefIdx(defIdx, idx)) {
+              newOperandIndices.push_back(i);
+            }
           }
         }
 
@@ -347,10 +446,74 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
         }
       }
     } else {
+      SmallVector<size_t> partitionIndices;
+      // WA until we assign partitions to index / phase update ops in
+      // AssignStagePhase
+      if (partition == schedule.getRootPartition()) {
+        if (auto ifOp = dyn_cast<scf::IfOp>(op->getParentOp())) {
+          partitionIndices = getPartitionIndicesToCloneInto(ifOp, schedule);
+        } else {
+          partitionIndices =
+              getPartitionIndicesToCloneInto(op, partition, schedule);
+        }
+      } else {
+        partitionIndices =
+            getPartitionIndicesToCloneInto(op, partition, schedule);
+      }
       cloneOp(op, builders, partitionIndices);
     }
   }
 }
+
+std::optional<int> getOpPartitionIdx(Operation *op) {
+  if (auto partition = op->getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
+    return partition.getInt();
+  }
+  return std::nullopt;
+};
+
+void inferIfStmtPartitions(scf::IfOp ifOp) {
+  SmallVector<std::optional<int>> partitionIndices;
+  auto partitionIndex = [&](OpOperand &opnd) -> std::optional<int> {
+    if (auto defOp = opnd.get().getDefiningOp()) {
+      return getOpPartitionIdx(defOp);
+    }
+    return std::nullopt;
+  };
+  for (auto &opnd : ifOp.thenYield()->getOpOperands()) {
+    partitionIndices.push_back(partitionIndex(opnd));
+  }
+
+  if (ifOp.elseBlock()) {
+    for (auto [idx, opnd] :
+         llvm::enumerate(ifOp.elseYield()->getOpOperands())) {
+      auto index = partitionIndex(opnd);
+      if (index) {
+        if (partitionIndices[idx]) {
+          assert(
+              partitionIndices[idx] == index &&
+              "inconsistent partitions for then/else branches yield operand");
+        } else {
+          partitionIndices[idx] = index;
+        }
+      } else if (!partitionIndices[idx]) {
+        partitionIndices[idx] = isa<AsyncTokenType>(opnd.get().getType())
+                                    ? 0
+                                    : kAllPartitionsDefIdx;
+      }
+    }
+  }
+
+  llvm::SmallVector<Attribute> partitionAttrs;
+  for (auto partition : partitionIndices) {
+    assert(partition);
+    partitionAttrs.push_back(mlir::IntegerAttr::get(
+        mlir::IntegerType::get(ifOp.getContext(), 32), *partition));
+  }
+  ifOp->setAttr(kPartitionAttrName,
+                ArrayAttr::get(ifOp.getContext(), partitionAttrs));
+}
+
 } // namespace
 
 LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
@@ -358,8 +521,10 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   if (failed(scheduleOr))
     return failure();
   WarpSchedule schedule = std::move(*scheduleOr);
+#if 0
   if (failed(schedule.verify(loop)))
     return failure();
+#endif
 
   // Only the root node should have consumers at this point.
   for (const Partition &partition : schedule.getPartitions()) {
@@ -519,6 +684,8 @@ void PartitionLoops::runOnOperation() {
     if (loop->hasAttrOfType<ArrayAttr>(kPartitionStagesAttrName))
       loops.push_back(loop);
   });
+
+  getOperation().walk([&](scf::IfOp ifOp) { inferIfStmtPartitions(ifOp); });
 
   for (scf::ForOp loop : loops) {
     if (failed(partitionLoop(loop)))

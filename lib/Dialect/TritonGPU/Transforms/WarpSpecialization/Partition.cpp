@@ -48,6 +48,38 @@ bool WarpSchedule::trySchedule(Partition *partition, Operation *op) {
   return true;
 }
 
+void assignPartitionToBlock(mlir::Block *block, Partition *part,
+                            ArrayRef<std::unique_ptr<Partition>> partitions,
+                            DenseMap<Operation *, Partition *> &opToPartition);
+
+void assignPartitionToIfOp(scf::IfOp ifOp, Partition *part,
+                           ArrayRef<std::unique_ptr<Partition>> partitions,
+                           DenseMap<Operation *, Partition *> &opToPartition) {
+  assignPartitionToBlock(ifOp.thenBlock(), part, partitions, opToPartition);
+  if (ifOp.elseBlock()) {
+    assignPartitionToBlock(ifOp.elseBlock(), part, partitions, opToPartition);
+  }
+}
+
+void assignPartitionToBlock(mlir::Block *block, Partition *parentPartition,
+                            ArrayRef<std::unique_ptr<Partition>> partitions,
+                            DenseMap<Operation *, Partition *> &opToPartition) {
+  for (auto &op : block->getOperations()) {
+    Partition *part;
+    if (auto attr = op.getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
+      int64_t idx = std::abs(attr.getInt());
+      part = partitions[idx].get();
+    } else {
+      part = parentPartition;
+    }
+
+    opToPartition[&op] = part;
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      assignPartitionToIfOp(ifOp, parentPartition, partitions, opToPartition);
+    }
+  }
+}
+
 FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
   auto stages = loop->getAttrOfType<ArrayAttr>(kPartitionStagesAttrName);
   if (!stages)
@@ -73,28 +105,57 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
   for (Operation &op : loop.getBody()->without_terminator()) {
     Partition *partition = result.getRootPartition();
     if (auto attr = op.getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
-      int64_t idx = attr.getInt();
+      int64_t idx = std::abs(attr.getInt());
       if (idx < 0 || idx >= result.partitions.size())
         return mlir::emitError(op.getLoc(), "invalid partition index ") << idx;
       partition = result.partitions[idx].get();
     }
     result.insert(partition, &op);
+
+    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+      assignPartitionToIfOp(ifOp, partition, result.partitions,
+                            result.opToPartition);
+    }
   }
 
   return result;
 }
 
-void WarpSchedule::serialize(scf::ForOp loop) const {
-  SmallVector<Attribute> stages;
-  Builder b(loop.getContext());
-  for (Operation &op : loop.getBody()->without_terminator()) {
+void WarpSchedule::serializeBlock(Block *block, Builder &b,
+                                  const Partition *parentPartition) const {
+  for (Operation &op : block->without_terminator()) {
     if (Partition *partition = opToPartition.lookup(&op)) {
       if (partition == getRootPartition())
         continue;
       op.setAttr(kPartitionAttrName,
                  b.getI32IntegerAttr(partition->getIndex()));
+
+      if (auto forOp = dyn_cast<scf::ForOp>(op)) {
+        serializeBlock(forOp.getBody(), b, partition);
+      } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+        serializeBlock(ifOp.thenBlock(), b, partition);
+        if (ifOp.elseBlock()) {
+          serializeBlock(ifOp.elseBlock(), b, partition);
+        }
+      }
+    } else if (parentPartition) {
+      op.setAttr(kPartitionAttrName,
+                 b.getI32IntegerAttr(parentPartition->getIndex()));
+      if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
+        serializeBlock(ifOp.thenBlock(), b, parentPartition);
+        if (ifOp.elseBlock()) {
+          serializeBlock(ifOp.elseBlock(), b, parentPartition);
+        }
+      }
     }
   }
+}
+
+void WarpSchedule::serialize(scf::ForOp loop) const {
+  SmallVector<Attribute> stages;
+  Builder b(loop.getContext());
+  serializeBlock(loop.getBody(), b);
+
   for (Partition &partition : getPartitions())
     stages.push_back(b.getI32IntegerAttr(partition.getStage()));
   loop->setAttr(kPartitionStagesAttrName, b.getArrayAttr(stages));
@@ -164,6 +225,12 @@ void WarpSchedule::iterateOutputs(
   for (Operation *op : partition->getOps()) {
     for (OpOperand &use : op->getUses()) {
       Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+
+      // if owner is ifOp, use actualy user of
+      if (isa<scf::IfOp>(owner)) {
+        owner = use.getOwner();
+      }
+
       if (isa<scf::YieldOp>(owner)) {
         // This value is used in a subsequent iteration.
         callback(owner, use);

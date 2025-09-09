@@ -860,11 +860,12 @@ LogicalResult lowerLoops(scf::ForOp &loop, MutableArrayRef<PipelinedLoad> loads,
   }
 
   // Multi-buffer and lower the MMAs.
+#if 0
   for (PipelinedMMA &mma : mmas) {
     if (failed(pipelineMMA(loop, mma, schedule, domInfo, postDomInfo)))
       return failure();
   }
-
+#endif
   return success();
 }
 

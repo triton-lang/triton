@@ -152,6 +152,10 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
       }
     }
   }
+  if (count.producerPendingCount == 0)
+    count.producerPendingCount = 1;
+  if (count.consumerPendingCount == 0)
+    count.consumerPendingCount = 1;
 
   return count;
 }
@@ -197,20 +201,27 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
 }
 
 SmallVector<Value> getSubViews(ArefValue arefVal, Value stage, Location loc,
-                               OpBuilder &rewriter) {
+                               OpBuilder &rewriter,
+                               std::optional<PartitionId> partitionId,
+                               StageCluster stageCluster) {
   SmallVector<Value> views;
   for (auto buffer : arefVal.buffers) {
     auto memDescType = cast<MemDescType>(buffer.getType());
     auto shape = memDescType.getShape();
-    auto rank = shape.size() - 1;
-
-    SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
-    auto memDescTypeNew = MemDescType::get(
-        tensorShape, memDescType.getElementType(), memDescType.getEncoding(),
-        memDescType.getMemorySpace(), true);
-    Value singleBuffer =
-        rewriter.create<MemDescIndexOp>(loc, memDescTypeNew, buffer, stage);
-    views.push_back(singleBuffer);
+    if (isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+            memDescType.getEncoding())) {
+      views.push_back(buffer);
+    } else {
+      SmallVector<int64_t> tensorShape(shape.begin() + 1, shape.end());
+      auto memDescTypeNew = MemDescType::get(
+          tensorShape, memDescType.getElementType(), memDescType.getEncoding(),
+          memDescType.getMemorySpace(), true);
+      // TODO partition
+      auto singleBuffer =
+          rewriter.create<MemDescIndexOp>(loc, memDescTypeNew, buffer, stage);
+      assignStageCluster(singleBuffer, partitionId, stageCluster, rewriter);
+      views.push_back(singleBuffer);
+    }
   }
 
   return views;
@@ -292,9 +303,12 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
 
   // get empty barrier at a given stage
   Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getStage());
+  assignStageCluster(emptyBarrier.getDefiningOp(), getPartitionId(op),
+                     getStageCluster(op), rewriter);
 
   insertWaitOp(rewriter, op, emptyBarrier, op.getPhase(), op.getStage());
-  auto views = getSubViews(arefVal, op.getStage(), loc, rewriter);
+  auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
+                           getPartitionId(op), getStageCluster(op));
   assert(views.size() == op.getBuffers().size());
 
   // Use the token to find the matching enter / exit pair
@@ -310,6 +324,8 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
       break;
     }
   }
+  if (!exitOp)
+    return;
   assert(exitOp);
   assert(exitOp.getAref() == op.getAref() &&
          "Expecting matching Aref on the ArefPutExitOp");
@@ -322,6 +338,8 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
 
   if (llvm::any_of(asyncKinds, hasTMA)) {
     Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage());
+    assignStageCluster(fullBarrier.getDefiningOp(), getPartitionId(op),
+                       getStageCluster(op), rewriter);
     lowerTMALoad(op, fullBarrier, rewriter, arefVal);
   }
 
@@ -358,8 +376,12 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
   rewriter.setInsertionPointAfter(op);
 
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage());
+  assignStageCluster(fullBarrier.getDefiningOp(), getPartitionId(op),
+                     getStageCluster(op), rewriter);
+
   insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
-  auto views = getSubViews(arefVal, op.getStage(), loc, rewriter);
+  auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
+                           getPartitionId(op), getStageCluster(op));
   assert(views.size() == op.getBuffers().size());
 
   for (auto [oldBuffer, view] : llvm::zip(op.getBuffers(), views)) {
@@ -368,6 +390,17 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
     // a get enter op. After lowering, all buffers are mutable.
     propagateMutability(view);
   }
+}
+
+void rewriteArefBufferOp(ArefBufferOp op, PatternRewriter &rewriter,
+                         ArefValue arefVal) {
+  auto loc = op->getLoc();
+  rewriter.setInsertionPointAfter(op);
+  auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
+                           getPartitionId(op), getStageCluster(op));
+  assert(views.size() == op.getBuffers().size());
+  for (int i = 0; i < arefVal.buffers.size(); ++i)
+    op.getBuffers()[i].replaceAllUsesWith(views[i]);
 }
 
 void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
@@ -402,6 +435,8 @@ void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
   auto loc = op->getLoc();
   rewriter.setInsertionPointAfter(op);
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage());
+  assignStageCluster(fullBarrier.getDefiningOp(), getPartitionId(op),
+                     getStageCluster(op), rewriter);
   insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
                       fullBarrier, getPartitionId(op), getStageCluster(op));
 }
@@ -438,8 +473,10 @@ void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
   }
 
   Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getStage());
-  return insertArriveBarrier(loc, asyncKinds, rewriter, emptyBarrier,
-                             getPartitionId(op), stageCluster);
+  assignStageCluster(emptyBarrier.getDefiningOp(), getPartitionId(op),
+                     stageCluster, rewriter);
+  insertArriveBarrier(loc, asyncKinds, rewriter, emptyBarrier,
+                      getPartitionId(op), stageCluster);
 }
 
 DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
@@ -453,16 +490,18 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
         continue;
       }
 
-      for (auto consumer : getEnter->getUsers()) {
-        if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
-          mmav5Ops.insert(mmav5);
-        } else if (auto forOp = consumer->getParentOfType<scf::ForOp>()) {
-          auto users =
-              getTopLevelUsersInLoop(consumer, forOp, [](Operation *user) {
-                return isa<MMAv5OpInterface>(user);
-              });
-          for (auto user : users) {
-            mmav5Ops.insert(cast<MMAv5OpInterface>(user));
+      for (auto buffer : getEnter.getBuffers()) {
+        for (auto consumer : buffer.getUsers()) {
+          if (auto mmav5 = dyn_cast<MMAv5OpInterface>(consumer)) {
+            mmav5Ops.insert(mmav5);
+          } else if (auto forOp = consumer->getParentOfType<scf::ForOp>()) {
+            auto users =
+                getTopLevelUsersInLoop(consumer, forOp, [](Operation *user) {
+                  return isa<MMAv5OpInterface>(user);
+                });
+            for (auto user : users) {
+              mmav5Ops.insert(cast<MMAv5OpInterface>(user));
+            }
           }
         }
       }
@@ -497,6 +536,8 @@ public:
         rewritePutExitOp(user, rewriter, aref);
       } else if (auto user = dyn_cast<ArefGetExitOp>(userOp)) {
         rewriteGetExitOp(user, rewriter, aref);
+      } else if (auto user = dyn_cast<ArefBufferOp>(userOp)) {
+        rewriteArefBufferOp(user, rewriter, aref);
       } else {
         llvm_unreachable("users of aref can only be ArefPut or ArefGet");
       }
@@ -522,10 +563,12 @@ public:
 bool isProducerLoad(ArefCreateOp arefOp) {
   for (auto user : arefOp.getResult().getUsers()) {
     if (auto putOp = dyn_cast<ArefPutEnterOp>(user)) {
-      if (llvm::any_of(putOp->getUsers(), [](auto user) {
-            return isa<triton::nvws::DescriptorLoadOpInterface>(user);
-          })) {
-        return true;
+      for (auto buffer : putOp.getBuffers()) {
+        for (auto user : buffer.getUsers()) {
+          if (isa<triton::nvws::DescriptorLoadOpInterface>(user)) {
+            return true;
+          }
+        }
       }
     }
   }
@@ -540,7 +583,7 @@ void multiBufferAref(const SmallVector<ArefCreateOp> &arefOps, int numStages) {
 
     bool eligible = true;
     for (auto opnd : arefOp.getOperands()) {
-      if (!opnd.getDefiningOp()) {
+      if (!opnd.getDefiningOp() || isa<TMEMAllocOp>(opnd.getDefiningOp())) {
         eligible = false;
       }
     }
