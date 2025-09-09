@@ -39,20 +39,6 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 
-#include "llvm/ADT/SmallVector.h"
-
-void setAsyncTaskIds(mlir::Operation *op,
-                     llvm::ArrayRef<AsyncTaskId> asyncTaskIds) {
-  llvm::SmallVector<AsyncTaskId> sortedAsyncTaskIds(asyncTaskIds.begin(),
-                                                    asyncTaskIds.end());
-  sort(sortedAsyncTaskIds);
-  auto i32Ty = IntegerType::get(op->getContext(), 32);
-  auto size = static_cast<int64_t>(sortedAsyncTaskIds.size());
-  auto vecTy = VectorType::get(size, i32Ty);
-  op->setAttr("async_task_id",
-              DenseI32ArrayAttr::get(op->getContext(), sortedAsyncTaskIds));
-}
-
 namespace {
 
 namespace py = pybind11;
@@ -813,12 +799,6 @@ void init_triton_ir(py::module &&m) {
            [](TritonOpBuilder &self, OpBuilder::InsertPoint pt) {
              self.restoreInsertionPoint(pt);
            })
-      .def("set_async_task_ids",
-           [](TritonOpBuilder &self, std::vector<int> v) {
-             self.setAsyncTaskIds(v);
-           })
-      .def("unset_async_task_ids",
-           [](TritonOpBuilder &self) { self.unsetAsyncTaskIds(); })
       // Attr
       .def(
           "get_unit_attr",

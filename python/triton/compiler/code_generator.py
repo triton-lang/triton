@@ -974,15 +974,6 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_With(self, node):
         # Lower `with` statements by constructing context managers and calling their enter/exit hooks
         # Instantiate each context manager with builder injection
-        if len(node.items) == 1:  # Handle async_task
-            context = node.items[0].context_expr
-            withitemClass = self.visit(context.func)
-            if withitemClass == language.async_task:
-                args = [self.visit(arg) for arg in context.args]
-                with withitemClass(*args, _builder=self.builder):
-                    self.visit_compound_statement(node.body)
-                return
-
         cm_list = []
         for item in node.items:
             call = item.context_expr
@@ -1054,9 +1045,6 @@ class CodeGenerator(ast.NodeVisitor):
             f'Loop-carried variable {name} has initial type {live_val.type} '\
             f'but is re-assigned to {loop_val.type} in loop! '\
             f'Please make sure that the type stays consistent.'
-
-    def visit_withitem(self, node):
-        return self.visit(node.context_expr)
 
     def visit_While(self, node):
         with enter_sub_region(self) as sr:
