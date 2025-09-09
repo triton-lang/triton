@@ -506,6 +506,20 @@ std::pair<py::object, py::object> specialize_arg(PyObject *backend,
     return handle_tensor(backend, arg, is_const, specialize_value, align);
   }
 
+  // fallback for default types
+  if (PyLong_Check(arg)) {
+    return handle_long_type(backend, arg, is_const, specialize_value, align);
+  }
+  if (PyFloat_Check(arg)) {
+    return handle_float_type(backend, arg, is_const, specialize_value, align);
+  }
+  if (PyBool_Check(arg)) {
+    return handle_bool_type(backend, arg, is_const, specialize_value, align);
+  }
+  if (PyTuple_Check(arg)) {
+    return handle_tuple(backend, arg, is_const, specialize_value, align);
+  }
+
   return {};
 }
 
