@@ -247,7 +247,7 @@ def test_nvidia_tool(fresh_knobs, tmp_path, monkeypatch):
     default_ptxas = triton_root / "backends/nvidia/bin/ptxas"
 
     assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == default_ptxas.resolve()
-    assert fresh_knobs.nvidia.ptxas_options == None
+    assert fresh_knobs.nvidia.ptxas_options is None
 
     tmp_ptxas = tmp_path / "ptxas-special"
     shutil.copy(default_ptxas, tmp_ptxas)
@@ -282,7 +282,7 @@ def test_nvidia_tool(fresh_knobs, tmp_path, monkeypatch):
     monkeypatch.delenv("TRITON_PTXAS_PATH")
     monkeypatch.delenv("PTXAS_OPTIONS")
     assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == default_ptxas.resolve()
-    assert fresh_knobs.nvidia.ptxas_options == None
+    assert fresh_knobs.nvidia.ptxas_options is None
 
 
 def test_opt_bool(fresh_knobs, monkeypatch):
