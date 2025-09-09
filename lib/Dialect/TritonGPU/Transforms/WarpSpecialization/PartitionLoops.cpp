@@ -53,7 +53,7 @@ enum class LoopVarCategory {
 
 bool isTensorResultComputedBy(scf::ForOp loop, size_t resultIdx,
                               const Partition *partition,
-                              const WarpSchedule &schedule) {
+                              const PartitionSet &schedule) {
   bool ret = false;
   iterateOutputs(loop, partition, [&](Operation *op, OpOperand &use) {
     if (isa<scf::YieldOp>(op) && use.getOperandNumber() == resultIdx &&
@@ -77,7 +77,7 @@ SmallVector<size_t> getPartitionIds(Operation *op, size_t numPartitions) {
 
 SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
                                               const Partition *partition,
-                                              const WarpSchedule &schedule) {
+                                              const PartitionSet &schedule) {
   auto inPartition = [&](Operation *op) {
     auto opPartitionIds = getPartitionIds(op, schedule.getNumPartitions());
     return llvm::is_contained(opPartitionIds, partition->getIndex());
@@ -133,7 +133,7 @@ getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
 
 std::pair<SmallVector<size_t>, SmallVector<std::optional<size_t>>>
 getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
-                        const WarpSchedule &schedule) {
+                        const PartitionSet &schedule) {
   auto loopVarCategories = classifyLoopVars(loop, partition, schedule);
   return getLoopVarIndicesToKeep(loop, partition, loopVarCategories);
 }
@@ -152,10 +152,10 @@ int getPartitionIndex(Operation *op) {
 }
 
 void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
-                     const WarpSchedule &schedule);
+                     const PartitionSet &schedule);
 
 void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
-                const WarpSchedule &schedule) {
+                const PartitionSet &schedule) {
   SmallVector<scf::ForOp> newForOps;
   for (auto [b, partition] : llvm::zip(builders, schedule.getPartitions())) {
     auto [newLoopIndices, _] =
@@ -194,7 +194,7 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
 }
 
 void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
-               const WarpSchedule &schedule) {
+               const PartitionSet &schedule) {
   auto partitionIndices = getPartitionIds(ifOp, schedule.getNumPartitions());
 
   SmallVector<scf::IfOp> newIfOps;
@@ -234,7 +234,7 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
 
 void cloneReduceOp(triton::ReduceOp reduceOp,
                    SmallVector<WarpGroupBuilder> &builders,
-                   const WarpSchedule &schedule) {
+                   const PartitionSet &schedule) {
   auto partitionIndices =
       getPartitionIds(reduceOp, schedule.getNumPartitions());
 
@@ -286,7 +286,7 @@ void cloneOp(Operation *op, SmallVector<WarpGroupBuilder> &builders,
 }
 
 void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
-                     const WarpSchedule &schedule) {
+                     const PartitionSet &schedule) {
   for (auto &op_ : *block) {
     auto op = &op_;
     auto partitionIndices = getPartitionIds(op, schedule.getNumPartitions());
@@ -362,10 +362,10 @@ void assignRegionBodyPartition(scf::ForOp loop) {
 } // namespace
 
 LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
-  FailureOr<WarpSchedule> scheduleOr = WarpSchedule::deserialize(loop);
+  FailureOr<PartitionSet> scheduleOr = PartitionSet::deserialize(loop);
   if (failed(scheduleOr))
     return failure();
-  WarpSchedule schedule = std::move(*scheduleOr);
+  PartitionSet schedule = std::move(*scheduleOr);
 
   assignRootPartition(loop, schedule.getNumPartitions());
   assignRegionBodyPartition(loop);

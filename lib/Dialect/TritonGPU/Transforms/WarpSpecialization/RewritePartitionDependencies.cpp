@@ -110,7 +110,7 @@ struct AsyncRef {
 // Helper class for dependency rewriting.
 class DependencyRewriter {
 public:
-  DependencyRewriter(WarpSchedule &schedule, scf::ForOp &loop)
+  DependencyRewriter(PartitionSet &schedule, scf::ForOp &loop)
       : schedule(schedule), loop(loop), b(loop.getLoc(), loop),
         endBuilder(loop.getLoc(), loop->getNextNode()) {}
 
@@ -122,7 +122,7 @@ private:
                               unsigned maxDistance);
 
   // The schedule to apply.
-  WarpSchedule &schedule;
+  PartitionSet &schedule;
   // The loop to partition.
   scf::ForOp &loop;
   // The builders to use.
@@ -302,10 +302,10 @@ LogicalResult DependencyRewriter::run() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult triton::gpu::rewritePartitionDependencies(scf::ForOp &loop) {
-  FailureOr<WarpSchedule> scheduleOr = WarpSchedule::deserialize(loop);
+  FailureOr<PartitionSet> scheduleOr = PartitionSet::deserialize(loop);
   if (failed(scheduleOr))
     return failure();
-  WarpSchedule schedule = std::move(*scheduleOr);
+  PartitionSet schedule = std::move(*scheduleOr);
   DependencyRewriter rewriter(schedule, loop);
   if (failed(rewriter.run()))
     return failure();

@@ -47,7 +47,7 @@ bool samePartition(Operation *op1, Operation *op2) {
 }
 
 SmallVector<ProducedValueInfo> getProducedValues(Operation *op, Block *loopBody,
-                                                 WarpSchedule &schedule) {
+                                                 PartitionSet &schedule) {
   SmallVector<ProducedValueInfo> producedValues;
   auto partitionIds = getPartitionIds(op);
 
@@ -147,7 +147,7 @@ int getTxCount(Operation *descOp) {
 
 void createNVWSDescriptorLoadOp(OpBuilder &builder, Operation *ttDescLoadOp,
                                 Value dataBuf, Partition *producerPartition,
-                                WarpSchedule &schedule, Location loc) {
+                                PartitionSet &schedule, Location loc) {
   auto txCount = getTxCount(ttDescLoadOp);
   if (auto descLoad = dyn_cast<triton::DescriptorLoadOp>(ttDescLoadOp)) {
     auto newDescLoad = builder.create<triton::nvws::DescriptorLoadOp>(
@@ -183,7 +183,7 @@ StageCluster getStageClusterForProducer(Value producedValue) {
 SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
                                        ArefCreateOp aref, std::string arefTag,
                                        ProducedValueInfo producedValue,
-                                       WarpSchedule &schedule) {
+                                       PartitionSet &schedule) {
   auto loc = producedValue.result.getLoc();
   auto arefBufType = cast<MemDescType>(aref.getBuffers()[0].getType());
   Value result = producedValue.result;
@@ -254,7 +254,7 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
 
 SetVector<Operation *> getTransitiveConsumers(Operation *op,
                                               Partition *consumerPartition,
-                                              WarpSchedule &schedule) {
+                                              PartitionSet &schedule) {
   SetVector<Operation *> opConsumers;
   auto isMemDesc = [](auto res) { return isa<MemDescType>(res.getType()); };
   for (auto user : op->getUsers()) {
@@ -275,7 +275,7 @@ SetVector<Operation *> getTransitiveConsumers(Operation *op,
 
 SmallVector<Operation *> getTransitiveConsumers(const SetVector<Value> &results,
                                                 Partition *consumerPartition,
-                                                WarpSchedule &schedule) {
+                                                PartitionSet &schedule) {
   SetVector<Operation *> opSet;
   for (auto result : results) {
     auto consumers = getTransitiveConsumers(result.getDefiningOp(),
@@ -332,7 +332,7 @@ getEnterAndExitStageClustersOfUses(const SetVector<Value> &producedResults,
 void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
                    ArefCreateOp aref, std::string arefTag,
                    const SetVector<Value> &results,
-                   Partition *consumerPartition, WarpSchedule &schedule) {
+                   Partition *consumerPartition, PartitionSet &schedule) {
   OpBuilder::InsertionGuard g(builder);
   // The vector "results" contains either
   // 1. One of local_load(desc_load()) or desc_load()
@@ -418,7 +418,7 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
 };
 
 bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
-                 WarpSchedule &schedule, ProducedValueInfo producedValue,
+                 PartitionSet &schedule, ProducedValueInfo producedValue,
                  int arefTag) {
   // Collect uses of local_alloc(desc_load()) or desc_load() results by each
   // partition
@@ -482,7 +482,7 @@ public:
     });
 
     for (scf::ForOp loop : loops) {
-      FailureOr<WarpSchedule> schedule = WarpSchedule::deserialize(loop);
+      FailureOr<PartitionSet> schedule = PartitionSet::deserialize(loop);
       if (failed(schedule))
         continue;
 

@@ -84,7 +84,7 @@ static void iterateUsers(scf::ForOp loop, Operation *op,
 
 // Check if any of the inputs to `op` are reachable from a non-null partition.
 static bool hasDefPartition(scf::ForOp loop, Operation *op,
-                            WarpSchedule &schedule) {
+                            PartitionSet &schedule) {
   SmallVector<Operation *> worklist{op};
   DenseSet<Operation *> seen;
   while (!worklist.empty()) {
@@ -102,7 +102,7 @@ static bool hasDefPartition(scf::ForOp loop, Operation *op,
 
 // Recursively schedule the dependencies of an operation, stopping when
 // encountering an operation that is already assigned.
-static void scheduleDependencies(scf::ForOp loop, WarpSchedule &schedule,
+static void scheduleDependencies(scf::ForOp loop, PartitionSet &schedule,
                                  Partition *partition, Operation *op) {
   SmallVector<Value> deps;
   for (Value value : getNestedOperands(op)) {
@@ -130,7 +130,7 @@ static void scheduleDependencies(scf::ForOp loop, WarpSchedule &schedule,
 
 // Recursively schedule the users of an operation, stopping when
 // encountering an operation that is already assigned.
-static void scheduleUsers(scf::ForOp loop, WarpSchedule &schedule,
+static void scheduleUsers(scf::ForOp loop, PartitionSet &schedule,
                           Partition *partition, Operation *op) {
   SmallVector<OpOperand *> uses;
   for (OpOperand &use : op->getUses())
@@ -164,14 +164,14 @@ static bool isOpInPartition(Operation *op, const Partition *partition) {
 // Given a partitioning scheme, determine an initial schedule by performing a
 // first-order partition assignment to the operations in the scheme and its
 // users and/or dependencies. This sets up the initial partitioning of the ops.
-static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
+static std::optional<PartitionSet> getInitialSchedule(scf::ForOp loop) {
   // Check for an existing schedule.
-  if (FailureOr<WarpSchedule> scheduleOr = WarpSchedule::deserialize(loop);
+  if (FailureOr<PartitionSet> scheduleOr = PartitionSet::deserialize(loop);
       succeeded(scheduleOr))
     return {std::move(*scheduleOr)};
   // Start by creating the default partition, a partition for for all loads, and
   // a partition for all MMAs.
-  WarpSchedule schedule;
+  PartitionSet schedule;
   Partition *defaultPartition = schedule.addPartition(0);
   Partition *mmaPartition = schedule.addPartition(1);
   Partition *loadPartition = schedule.addPartition(0);
@@ -337,7 +337,7 @@ struct OpClusters : public llvm::MapVector<Operation *, OpCluster *> {
 // operation in a partition. This function propagates partitions by first
 // forming contiguous clusters from the unassigned operations and then deciding
 // what to do with the operations in that cluster.
-void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
+void propagatePartitions(scf::ForOp loop, PartitionSet &schedule) {
   OpClusters opClusters;
 
   for (Partition &partition : schedule.getPartitions()) {
@@ -502,7 +502,7 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
 
 // Rematerialize chains of broadcasts where the user is in a different partition
 // than the broadcast to reduce the amount of data that needs to be transferred.
-void rematerializeBroadcasts(WarpSchedule &schedule, OpOperand *use) {
+void rematerializeBroadcasts(PartitionSet &schedule, OpOperand *use) {
   static_assert(
       std::is_base_of_v<OpTrait::OneResult<BroadcastOp>, BroadcastOp> &&
       std::is_base_of_v<OpTrait::OneResult<ExpandDimsOp>, ExpandDimsOp>);
@@ -523,7 +523,7 @@ void rematerializeBroadcasts(WarpSchedule &schedule, OpOperand *use) {
   }
 }
 
-void optimizeSchedule(scf::ForOp loop, WarpSchedule &schedule) {
+void optimizeSchedule(scf::ForOp loop, PartitionSet &schedule) {
   for (Partition &partition : schedule.getPartitions()) {
     SmallVector<OpOperand *> uses;
     iterateOutputs(loop, &partition,
@@ -562,7 +562,7 @@ void PartitionScheduling::runOnOperation() {
       loops.push_back(loop);
   });
   for (auto [idx, loop] : llvm::enumerate(loops)) {
-    if (std::optional<WarpSchedule> schedule = getInitialSchedule(loop)) {
+    if (std::optional<PartitionSet> schedule = getInitialSchedule(loop)) {
       propagatePartitions(loop, *schedule);
       optimizeSchedule(loop, *schedule);
       loop->setAttr(
