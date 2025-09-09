@@ -270,7 +270,7 @@ void cloneReduceOp(triton::ReduceOp reduceOp,
 }
 
 void cloneOp(Operation *op, SmallVector<WarpGroupBuilder> &builders,
-             SmallVector<size_t> const &partitionIndices) {
+             ArrayRef<size_t> partitionIndices) {
   if (op->getNumRegions() != 0) {
     llvm::report_fatal_error(
         "Ops are expected to be regionless at this point.");
@@ -409,8 +409,9 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
     auto wsTag = op->getAttrOfType<IntegerAttr>(kWarpSpecializeTagAttrName);
     if (!wsTag || wsTag.getInt() != schedule.getTag())
       continue;
-    if (auto partitionId = op->getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
-      cloneOp(op, builders, {static_cast<size_t>(partitionId.getInt())});
+    if (auto partitionIds = triton::gpu::getPartitionIds(op)) {
+      SmallVector<size_t> tmp(partitionIds->begin(), partitionIds->end());
+      cloneOp(op, builders, tmp);
       opsToErase.push_back(op);
     } else {
       assert(loop.getOperation() == op && "Unexpected op");
