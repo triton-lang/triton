@@ -349,10 +349,11 @@ void assignRootPartition(scf::ForOp loop, int numPartitions) {
 
 void assignRegionBodyPartition(scf::ForOp loop) {
   loop->walk([&](Operation *op) {
-    if (!isa<scf::YieldOp, scf::ForOp>(op) && !hasPartition(op)) {
+    if (!isa<scf::ForOp>(op) && !hasPartition(op)) {
       auto parentOp = loop.getBody()->findAncestorOpInBlock(*op);
-      assert(hasPartition(parentOp));
-      op->setAttr(kPartitionAttrName, parentOp->getAttr(kPartitionAttrName));
+      if (hasPartition(parentOp)) {
+        op->setAttr(kPartitionAttrName, parentOp->getAttr(kPartitionAttrName));
+      }
     }
   });
 }
@@ -367,6 +368,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
 
   assignRootPartition(loop, schedule.getNumPartitions());
   assignRegionBodyPartition(loop);
+
+  //  loop->getParentOfType<ModuleOp>().dump();
 
   // if (failed(schedule.verify(loop)))
   //   return failure();
