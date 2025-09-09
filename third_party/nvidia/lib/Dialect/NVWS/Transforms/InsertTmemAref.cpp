@@ -364,16 +364,15 @@ struct TMEMAref {
     Type dataBufType = arefViewBufferType(arefBufType);
     SmallVector<Type> buffers{dataBufType};
     SmallVector<Type> tokens{b.getType<AsyncTokenType>()};
-    auto cnst0 = intCst(b, loc, 0, 32);
     if (kind == PUT) {
-      auto op = createInto<ArefPutEnterOp>(b, loc, paritionIdStageCluster,
-                                           buffers, b.getType<AsyncTokenType>(),
-                                           aref, cnst0, cnst0);
+      auto op =
+          createInto<ArefPutEnterOp>(b, loc, paritionIdStageCluster, aref,
+                                     buffers, b.getType<AsyncTokenType>());
       token = op.getToken();
     } else {
-      auto op = createInto<ArefGetEnterOp>(b, loc, paritionIdStageCluster,
-                                           buffers, b.getType<AsyncTokenType>(),
-                                           aref, cnst0, cnst0);
+      auto op =
+          createInto<ArefGetEnterOp>(b, loc, paritionIdStageCluster, aref,
+                                     buffers, b.getType<AsyncTokenType>());
       token = op.getToken();
     }
     buffer = {};
@@ -381,17 +380,16 @@ struct TMEMAref {
   void release(OpBuilder &b, Location loc,
                std::pair<std::optional<PartitionId>, StageCluster>
                    paritionIdStageCluster) {
-    auto cnst0 = intCst(b, loc, 0, 32);
     assert(asyncOp);
     if (kind == PUT) {
       createInto<ArefPutExitOp>(
-          b, loc, paritionIdStageCluster, aref, token, cnst0,
+          b, loc, paritionIdStageCluster, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{
               AsyncOpAttr::get(b.getContext(), *asyncOp)}));
       kind = GET;
     } else {
       createInto<ArefGetExitOp>(
-          b, loc, paritionIdStageCluster, aref, token, cnst0,
+          b, loc, paritionIdStageCluster, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{
               AsyncOpAttr::get(b.getContext(), *asyncOp)}));
       kind = PUT;
@@ -405,10 +403,8 @@ struct TMEMAref {
           cast<MemDescType>(aref.getDefiningOp()->getOperand(0).getType());
       Type dataBufType = arefViewBufferType(arefBufType);
       SmallVector<Type> buffers{dataBufType};
-      auto cnst0 = intCst(b, op->getLoc(), 0, 32);
-      auto bufferOp =
-          createInto<ArefBufferOp>(b, op->getLoc(), {partitionId, stageCluster},
-                                   buffers, aref, token, cnst0);
+      auto bufferOp = createInto<ArefBufferOp>(
+          b, op->getLoc(), {partitionId, stageCluster}, aref, buffers, token);
 
       buffer = bufferOp.getBuffers()[0];
     }

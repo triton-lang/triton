@@ -180,5 +180,6 @@ void ArefPutEnterOp::setStage(Value stage) { getStageMutable().assign(stage); }
 void ArefPutExitOp::setStage(Value stage) { getStageMutable().assign(stage); }
 void ArefGetExitOp::setStage(Value stage) { getStageMutable().assign(stage); }
 void ArefGetEnterOp::setStage(Value stage) { getStageMutable().assign(stage); }
+void ArefBufferOp::setStage(Value stage) { getStageMutable().assign(stage); }
 
 } // namespace mlir::triton::nvws
