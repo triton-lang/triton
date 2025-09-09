@@ -908,7 +908,7 @@ void LoadMMASpecialization::runOnOperation() {
       loops.push_back(loop);
   });
   for (scf::ForOp loop : loops) {
-    FailureOr<PartitionSet> partitions = PartitionSet::deserialize(loop);
+    FailureOr<PartitionSet> partitions = PartitionSet::fromLoop(loop);
     if (failed(partitions))
       continue;
     auto [loads, mmas] = getPartitionScheme(loop);

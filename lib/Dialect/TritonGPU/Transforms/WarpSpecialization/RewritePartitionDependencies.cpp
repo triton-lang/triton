@@ -290,7 +290,6 @@ LogicalResult DependencyRewriter::run() {
   // Rewrite the loop to add the new results. Calling this function with no
   // indices set will just resize the results.
   eraseLoopCarriedValues(loop, {});
-  // Update the schedule.
   return success();
 }
 
@@ -299,7 +298,7 @@ LogicalResult DependencyRewriter::run() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult triton::gpu::rewritePartitionDependencies(scf::ForOp &loop) {
-  FailureOr<PartitionSet> partitionsOr = PartitionSet::deserialize(loop);
+  FailureOr<PartitionSet> partitionsOr = PartitionSet::fromLoop(loop);
   if (failed(partitionsOr))
     return failure();
   PartitionSet partitions = std::move(*partitionsOr);
@@ -331,7 +330,7 @@ struct RewritePartitionDependencies
 
 void RewritePartitionDependencies::runOnOperation() {
   // Collect for loops to warp specialize. This pass expects the loop to
-  // already be scheduled.
+  // already be annotated with partitions.
   SmallVector<scf::ForOp> loops;
   getOperation().walk([&](scf::ForOp loop) {
     if (loop->hasAttrOfType<ArrayAttr>(kPartitionStagesAttrName))

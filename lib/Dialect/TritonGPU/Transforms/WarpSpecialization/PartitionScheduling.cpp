@@ -164,9 +164,9 @@ static bool isOpInPartition(Operation *op, const Partition *partition) {
 // Given a partitioning scheme, determine an initial schedule by performing a
 // first-order partition assignment to the operations in the scheme and its
 // users and/or dependencies. This sets up the initial partitioning of the ops.
-static std::optional<PartitionSet> getInitialSchedule(scf::ForOp loop) {
+static std::optional<PartitionSet> getInitialPartitions(scf::ForOp loop) {
   // Check for an existing partition set.
-  if (FailureOr<PartitionSet> partitionsOr = PartitionSet::deserialize(loop);
+  if (FailureOr<PartitionSet> partitionsOr = PartitionSet::fromLoop(loop);
       succeeded(partitionsOr))
     return {std::move(*partitionsOr)};
   // Start by creating the default partition, a partition for for all loads, and
@@ -523,7 +523,7 @@ void rematerializeBroadcasts(PartitionSet &partitions, OpOperand *use) {
   }
 }
 
-void optimizeSchedule(scf::ForOp loop, PartitionSet &partitions) {
+void optimizePartitions(scf::ForOp loop, PartitionSet &partitions) {
   for (Partition &partition : partitions.getPartitions()) {
     SmallVector<OpOperand *> uses;
     iterateOutputs(loop, &partition, [&](Operation *defOp, OpOperand &use) {
@@ -561,9 +561,9 @@ void PartitionScheduling::runOnOperation() {
       loops.push_back(loop);
   });
   for (auto [idx, loop] : llvm::enumerate(loops)) {
-    if (std::optional<PartitionSet> partitions = getInitialSchedule(loop)) {
+    if (std::optional<PartitionSet> partitions = getInitialPartitions(loop)) {
       propagatePartitions(loop, *partitions);
-      optimizeSchedule(loop, *partitions);
+      optimizePartitions(loop, *partitions);
       loop->setAttr(
           kWarpSpecializeTagAttrName,
           IntegerAttr::get(IntegerType::get(loop.getContext(), 32), idx));

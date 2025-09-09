@@ -75,7 +75,7 @@ public:
 
   // Deserialize a partition set from an `scf.for` op using the attributes
   // tagged on operations in its body.
-  static FailureOr<PartitionSet> deserialize(scf::ForOp loop);
+  static FailureOr<PartitionSet> fromLoop(scf::ForOp loop);
 
   // Debug dump the partition set.
   LLVM_DUMP_METHOD void dump() const;

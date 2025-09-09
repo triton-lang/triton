@@ -363,7 +363,7 @@ void assignRegionBodyPartition(scf::ForOp loop) {
 } // namespace
 
 LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
-  FailureOr<PartitionSet> partitionsOr = PartitionSet::deserialize(loop);
+  FailureOr<PartitionSet> partitionsOr = PartitionSet::fromLoop(loop);
   if (failed(partitionsOr))
     return failure();
   PartitionSet partitions = std::move(*partitionsOr);
@@ -535,7 +535,7 @@ struct PartitionLoops
 
 void PartitionLoops::runOnOperation() {
   // Collect for loops to warp specialize. This pass expects the loop to already
-  // be scheduled.
+  // be annotated with partitions.
   SmallVector<scf::ForOp> loops;
   getOperation().walk([&](scf::ForOp loop) {
     if (loop->hasAttrOfType<ArrayAttr>(kPartitionStagesAttrName))

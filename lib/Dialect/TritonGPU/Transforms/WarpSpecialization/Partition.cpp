@@ -26,7 +26,7 @@ const Partition *PartitionSet::getPartition(unsigned idx) const {
   return partitions[idx].get();
 }
 
-FailureOr<PartitionSet> PartitionSet::deserialize(scf::ForOp loop) {
+FailureOr<PartitionSet> PartitionSet::fromLoop(scf::ForOp loop) {
   auto stages = loop->getAttrOfType<ArrayAttr>(kPartitionStagesAttrName);
   if (!stages)
     return failure();
