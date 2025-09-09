@@ -1,12 +1,7 @@
 #pragma once
 #include "mlir/IR/Builders.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
-#include "llvm/ADT/ArrayRef.h"
 #include <memory>
-
-typedef int AsyncTaskId;
-void setAsyncTaskIds(mlir::Operation *op,
-                     llvm::ArrayRef<AsyncTaskId> asyncTaskIds);
 
 // A custom op builder that keeps track of the last location
 class TritonOpBuilder {
@@ -67,10 +62,7 @@ public:
 
   template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
     auto loc = getLastLoc();
-    auto ret = builder->create<OpTy>(loc, std::forward<Args>(args)...);
-    if (asyncTaskIds)
-      ::setAsyncTaskIds(ret, *asyncTaskIds);
-    return ret;
+    return builder->create<OpTy>(loc, std::forward<Args>(args)...);
   }
 
   // Overload to create or fold a single result operation.
@@ -90,16 +82,9 @@ public:
     return builder->createOrFold<OpTy>(loc, std::forward<Args>(args)...);
   }
 
-  void setAsyncTaskIds(std::vector<int> taskIds) {
-    this->asyncTaskIds = taskIds;
-  }
-
-  void unsetAsyncTaskIds() { this->asyncTaskIds = std::nullopt; }
-
 private:
   std::unique_ptr<mlir::OpBuilder> builder;
   std::unique_ptr<mlir::Location> lastLoc;
-  std::optional<std::vector<int>> asyncTaskIds;
   bool lineInfoEnabled =
       !mlir::triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO");
 };
