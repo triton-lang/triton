@@ -11,6 +11,12 @@ __all__ = ["wmma"]
 @builtin
 def wmma(a, b, acc, _semantic=None):
     """
+    Computes matrix-multiplication of a * b + acc using AMD WMMA instruction.
+
+    Args:
+        a (tensor): The operand a to be multiplied.
+        b (tensor): The operand b to be multiplied.
+        acc (tensor): The accumulator tensor.
     """
     _check(acc is not None, lambda: "acc is required")
     layout = acc.type.layout
