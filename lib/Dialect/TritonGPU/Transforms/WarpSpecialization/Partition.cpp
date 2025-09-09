@@ -225,6 +225,12 @@ void WarpSchedule::iterateOutputs(
     scf::ForOp loop, const Partition *partition,
     function_ref<void(Operation *, OpOperand &)> callback) const {
   for (Operation *op : partition->getOps()) {
+    // TODO: Is this correct
+    if (getPartitionIds(op)->size() == getNumPartitions()) {
+      // skip ops in the root partition
+      continue;
+    }
+
     for (OpOperand &use : op->getUses()) {
       Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
       auto partitionIds = getPartitionIds(owner);

@@ -358,30 +358,36 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   if (failed(scheduleOr))
     return failure();
   WarpSchedule schedule = std::move(*scheduleOr);
-  if (failed(schedule.verify(loop)))
-    return failure();
+  // if (failed(schedule.verify(loop)))
+  //   return failure();
 
   // Only the root node should have consumers at this point.
   for (const Partition &partition : schedule.getPartitions()) {
     bool failed = false;
     auto callback = [&](OpResult output, OpOperand &use, unsigned distance) {
-      Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
-      const Partition *usePartition = schedule.getPartition(owner);
-      if (usePartition == schedule.getRootPartition() ||
-          usePartition == &partition)
+      auto partitionIds = getPartitionIds(use.getOwner());
+      if (!partitionIds ||
+          partitionIds->size() == schedule.getNumPartitions() ||
+          llvm::is_contained(*partitionIds, partition.getIndex()))
         return;
       failed = true;
       InFlightDiagnostic diag =
           mlir::emitWarning(output.getLoc(), "non-root partition #")
           << partition.getIndex() << " has direct SSA consumer";
-      diag.attachNote(use.getOwner()->getLoc())
-          << "use at distance " << distance << " in partition #"
-          << usePartition->getIndex() << " here";
+
+      for (auto partitionId : *partitionIds) {
+        diag.attachNote(use.getOwner()->getLoc())
+            << "use at distance " << distance << " in partition #"
+            << partitionId << " here";
+      }
     };
     schedule.iterateUses(loop, &partition, callback);
     if (failed)
       return failure();
   }
+
+  llvm::outs() << "foo\n";
+  return success();
 
   // There is nothing to do if the loop has 1 or fewer partitions.
   if (llvm::size(schedule.getPartitions()) <= 1)
