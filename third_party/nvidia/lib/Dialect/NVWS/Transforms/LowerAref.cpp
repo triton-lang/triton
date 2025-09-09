@@ -65,7 +65,8 @@ namespace {
 
 // ----------------------------------------------------------------------------
 
-void assignStageCluster(Operation *op, std::optional<SetVector<int>> partitionIds,
+void assignStageCluster(Operation *op,
+                        std::optional<SetVector<int>> partitionIds,
                         StageCluster stageCluster, OpBuilder &builder) {
   if (partitionIds) {
     setPartition(op, *partitionIds);
@@ -284,7 +285,8 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
 void insertWaitOp(PatternRewriter &rewriter, Operation *op, Value barrier,
                   Value phase, Value stage) {
   auto waitOp = rewriter.create<WaitBarrierOp>(op->getLoc(), barrier, phase);
-  assignStageCluster(waitOp, getPartitionIds(op), getStageCluster(op), rewriter);
+  assignStageCluster(waitOp, getPartitionIds(op), getStageCluster(op),
+                     rewriter);
 }
 
 void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,

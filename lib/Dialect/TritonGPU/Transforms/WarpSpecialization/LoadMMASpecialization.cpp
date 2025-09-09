@@ -471,7 +471,8 @@ LogicalResult PipelinedLoadGroup::lowerLoads(PartitionSet &partitions,
 //===----------------------------------------------------------------------===//
 
 static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
-                                 PartitionSet &partitions, DominanceInfo &domInfo,
+                                 PartitionSet &partitions,
+                                 DominanceInfo &domInfo,
                                  PostDominanceInfo &postDomInfo) {
   ttng::MMAv5OpInterface mmaOp = mma.mmaOp;
   auto fail = [&](StringRef msg) { return emitWarning(mmaOp.getLoc(), msg); };
@@ -673,7 +674,8 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     defOp = inBody(defOp);
     auto partitionIds = getPartitionIds(defOp);
 
-    if (!partitionIds || partitionIds->size() == partitions.getNumPartitions()) {
+    if (!partitionIds ||
+        partitionIds->size() == partitions.getNumPartitions()) {
       // If the MMA operand is coming from outside the loop, move the alloc out.
       auto allocOp = dyn_cast<LocalAllocOp>(defOp);
       if (allocOp && loop.isDefinedOutsideOfLoop(allocOp.getSrc()))

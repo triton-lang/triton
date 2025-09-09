@@ -339,7 +339,8 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
 
   auto filterUse = [&](Operation *use) {
     auto partitionIds = getPartitionIds(use);
-    if (!partitionIds || partitionIds->size() == partitions.getNumPartitions()) {
+    if (!partitionIds ||
+        partitionIds->size() == partitions.getNumPartitions()) {
       return false;
     }
     return getPartition(use, partitions) == consumerPartition;
@@ -355,7 +356,8 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
       tokenType);
   setPartition(getEnterOp, consumerPartition);
 
-  auto consumers = getTransitiveConsumers(results, consumerPartition, partitions);
+  auto consumers =
+      getTransitiveConsumers(results, consumerPartition, partitions);
   assert(consumers.size() > 0);
   auto asyncKinds = getConsumerAsyncOpKinds(consumers, aref.getContext());
   Value dataBuf = getEnterOp.getBuffers()[0];

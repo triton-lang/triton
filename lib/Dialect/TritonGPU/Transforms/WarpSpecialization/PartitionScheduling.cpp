@@ -526,11 +526,10 @@ void rematerializeBroadcasts(PartitionSet &partitions, OpOperand *use) {
 void optimizeSchedule(scf::ForOp loop, PartitionSet &partitions) {
   for (Partition &partition : partitions.getPartitions()) {
     SmallVector<OpOperand *> uses;
-    iterateOutputs(loop, &partition,
-                            [&](Operation *defOp, OpOperand &use) {
-                              if (!isa<scf::YieldOp>(use.getOwner()))
-                                uses.push_back(&use);
-                            });
+    iterateOutputs(loop, &partition, [&](Operation *defOp, OpOperand &use) {
+      if (!isa<scf::YieldOp>(use.getOwner()))
+        uses.push_back(&use);
+    });
     for (OpOperand *use : uses)
       rematerializeBroadcasts(partitions, use);
   }
@@ -572,7 +571,7 @@ void PartitionScheduling::runOnOperation() {
       SmallVector<Attribute> stages;
       Builder b(loop.getContext());
       for (Partition &partition : partitions->getPartitions())
-	stages.push_back(b.getI32IntegerAttr(partition.getStage()));
+        stages.push_back(b.getI32IntegerAttr(partition.getStage()));
       loop->setAttr(kPartitionStagesAttrName, b.getArrayAttr(stages));
     }
   }

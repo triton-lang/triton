@@ -308,7 +308,8 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
         if (auto forOp = dyn_cast<scf::ForOp>(yieldOp->getParentOp())) {
           newOperandIndices =
               getLoopVarIndicesToKeep(
-                  forOp, partitions.getPartition(builder.partitionId), partitions)
+                  forOp, partitions.getPartition(builder.partitionId),
+                  partitions)
                   .first;
         } else {
           for (size_t i = 0; i < yieldOp.getOperands().size(); ++i) {

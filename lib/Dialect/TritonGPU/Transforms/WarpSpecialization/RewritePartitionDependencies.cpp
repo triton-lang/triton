@@ -164,7 +164,8 @@ LogicalResult DependencyRewriter::run() {
                                 .getUses()) {
           collectUses(newUse);
         }
-      } else if (partitionIds && !llvm::is_contained(*partitionIds, partition.getIndex())) {
+      } else if (partitionIds &&
+                 !llvm::is_contained(*partitionIds, partition.getIndex())) {
         // This value is used in a different partition in the same iteration.
         uses.emplace_back(use.get(), &use, 0);
       }
