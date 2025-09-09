@@ -1,3 +1,4 @@
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -115,8 +116,30 @@ bool verifyNonNegativeExpr(
   // Recurse if the operation is defined
   Operation *op = expr.getDefiningOp();
   if (!op) {
-    LDBG("  No defining op, assuming possibly negative");
-    return false;
+    BlockArgument blockArg = cast<BlockArgument>(expr);
+    auto argNum = blockArg.getArgNumber();
+    Operation *parentOp = blockArg.getOwner()->getParentOp();
+    if (argNum == 0) {
+      // Only do the value range analyse for induction variable in the scf.for
+      if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+        auto lb = forOp.getLowerBound();
+        auto ub = forOp.getUpperBound();
+        return verifyNonNegativeExpr(lb, assumptions, solver) &&
+               verifyNonNegativeExpr(ub, assumptions, solver);
+      } else {
+        LDBG("Induction variable in a non scf.ForOp");
+        return false;
+      }
+    }
+
+    if (auto loopOp = dyn_cast<LoopLikeOpInterface>(parentOp)) {
+      mlir::ValueRange initArgs = loopOp.getInits();
+      size_t initArgIdx = argNum - 1;
+      return verifyNonNegativeExpr(initArgs[initArgIdx], assumptions, solver);
+    } else {
+      LDBG("Block argument of non loop-like operation.");
+      return false;
+    }
   }
 
   bool nonNegative =
@@ -141,6 +164,7 @@ bool verifyNonNegativeExpr(
           // Returns a tensor representing histogram: histograms only contain
           // buckets of non-negative values.
           .Case<triton::HistogramOp>([&](auto) { return true; })
+          .Case<triton::GetProgramIdOp>([&](auto) { return true; })
           .Case<triton::MakeRangeOp>([&](auto makeRangeOp) {
             // See the warning in TritonOps.td: getStart/getEnd return unsigned,
             // so we need to look through get*Attr.
@@ -436,10 +460,12 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
 
     // float16 is the only 16-bit dtype supported by buffer atomic fadd on
     // gfx942
-    if (isaFamily == ISAFamily::CDNA3 && checkType.isBF16() &&
-        atomicRmwOp == RMWOp::FADD) {
-      return rewriter.notifyMatchFailure(op, "RMW FADD does not support bf16");
+    if ((isaFamily == ISAFamily::CDNA3 || isaFamily == ISAFamily::CDNA4) &&
+        checkType.isBF16() && atomicRmwOp == RMWOp::FADD) {
+      return rewriter.notifyMatchFailure(
+          op, "RMW FADD does not support bf16 on CDNA3");
     }
+
     LDBG("RMW FADD supported 16-bit type");
 
     auto vecSize = getVectorSize(ptr, axisAnalysisPass);
@@ -646,12 +672,13 @@ struct TritonAMDGPUConvertToBufferOpsPass
                  ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>,
                  ConvertTritonStoreToBufferStore>(context, assumptions, solver);
 
-    // Gate buffer atomics behind CDNA3 for now
-    // GFX942-specific assumptions regarding cache coherence are made when
-    // lowering to LLVM
+    // Gate buffer atomics behind CDNA3 and CDNA4 for now.
+    // GFX942 and GFX950 assumptions regarding cache coherence are made when
+    // lowering to LLVM.
     triton::AMD::ISAFamily isaFamily =
         triton::AMD::deduceISAFamily(archGenerationName);
-    if (this->allowBufferAtomics && ISAFamily::CDNA3 == isaFamily)
+    if (this->allowBufferAtomics &&
+        (ISAFamily::CDNA3 == isaFamily || ISAFamily::CDNA4 == isaFamily))
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
           context, assumptions, axisInfoAnalysis, solver, isaFamily);
     patterns.add<ConvertTritonAtomicCASOpToBufferAtomicCAS>(
