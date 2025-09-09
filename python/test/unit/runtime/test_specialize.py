@@ -27,11 +27,13 @@ class MockJITCallable(JITCallable):
 
 
 class MockFloat(float):
+
     def __new__(cls, value):
         return super().__new__(cls, value)
 
 
 class MockInt(int):
+
     def __new__(cls, value):
         return super().__new__(cls, value)
 
@@ -144,9 +146,7 @@ def gluon_tensordescriptors_to_specialize():
             tensor,
             block_shape=tensor.shape,
             layout=NVMMASharedLayout(0, tensor.dtype.itemsize * 8, len(tensor.shape)),
-        )
-        for tensor in tensors_to_specialize()
-        if tensor.shape[-1] % 16 == 0
+        ) for tensor in tensors_to_specialize() if tensor.shape[-1] % 16 == 0
     ]
 
 
