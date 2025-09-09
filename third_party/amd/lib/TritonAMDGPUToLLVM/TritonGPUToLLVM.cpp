@@ -175,6 +175,8 @@ struct ConvertTritonAMDGPUToLLVM
                                              targetInfo, AMDBenefit);
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
                                            axisInfoAnalysis, AMDBenefit);
+    AMD::populateMaskedOpsToLLVMPatterns(patterns);
+
     populatePatterns7(mlir::triton::populateReduceOpToLLVMPatterns,
                       commonBenefit);
     populatePatterns7(mlir::triton::populateScanOpToLLVMPatterns,
@@ -206,7 +208,6 @@ struct ConvertTritonAMDGPUToLLVM
                                                         targetInfo, AMDBenefit);
     mlir::triton::AMD::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
                                                      AMDBenefit);
-
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
     // to help convert scalar expression to LLVM.
