@@ -188,7 +188,8 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
 
   for (auto newForOp : newForOps) {
     builders[getPartitionIndex(newForOp)].setInsertionPointAfter(newForOp);
-    WarpSchedule::eraseFrom(newForOp);
+    newForOp.walk([&](Operation *op) { op->removeAttr(kPartitionAttrName); });
+    newForOp->removeAttr(kPartitionStagesAttrName);
   }
 }
 

@@ -71,40 +71,11 @@ Partition *WarpSchedule::addPartition(unsigned stage) {
   return partitions.back().get();
 }
 
-Partition *WarpSchedule::getPartition(Operation *op) {
-  assert(false);
-  return opToPartition.lookup(op);
-}
-const Partition *WarpSchedule::getPartition(Operation *op) const {
-  assert(false);
-  return opToPartition.lookup(op);
-}
-
 Partition *WarpSchedule::getPartition(unsigned idx) {
   return partitions[idx].get();
 }
 const Partition *WarpSchedule::getPartition(unsigned idx) const {
   return partitions[idx].get();
-}
-
-void WarpSchedule::insert(Partition *partition, Operation *op) {
-  assert(false);
-  partition->ops.push_back(op);
-  opToPartition[op] = partition;
-}
-
-bool WarpSchedule::isScheduled(Operation *op) const {
-  assert(false);
-  const Partition *partition = getPartition(op);
-  return partition && partition != getRootPartition();
-}
-
-bool WarpSchedule::trySchedule(Partition *partition, Operation *op) {
-  assert(false);
-  if (isScheduled(op))
-    return false;
-  insert(partition, op);
-  return true;
 }
 
 FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
@@ -141,55 +112,6 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
   }
 
   return result;
-}
-
-void WarpSchedule::serialize(scf::ForOp loop) const {
-  assert(false);
-  SmallVector<Attribute> stages;
-  Builder b(loop.getContext());
-  for (Operation &op : loop.getBody()->without_terminator()) {
-    if (Partition *partition = opToPartition.lookup(&op)) {
-      if (partition == getRootPartition())
-        continue;
-      op.setAttr(kPartitionAttrName,
-                 b.getI32IntegerAttr(partition->getIndex()));
-    }
-  }
-  for (Partition &partition : getPartitions())
-    stages.push_back(b.getI32IntegerAttr(partition.getStage()));
-  loop->setAttr(kPartitionStagesAttrName, b.getArrayAttr(stages));
-}
-
-LogicalResult WarpSchedule::verify(scf::ForOp loop) const {
-  assert(false);
-  // The root partition is only allowed to transitively depend on itself.
-  bool failed = false;
-  iterateInputs(loop, getRootPartition(), [&](OpOperand &input) {
-    auto [def, distance] = getDefiningOpAndDistance(loop, input.get());
-    // Ignore values defined outside the loop.
-    if (!def || def->getParentOp() != loop)
-      return;
-    const Partition *defPartition = opToPartition.at(def);
-    if (defPartition == getRootPartition())
-      return;
-    InFlightDiagnostic diag = mlir::emitWarning(input.getOwner()->getLoc());
-    diag << "operation in the root partition depends on a value that "
-            "originates from a non-root partition through operand #"
-         << input.getOperandNumber();
-    diag.attachNote(def->getLoc())
-        << "operand defined here in partition #" << defPartition->getIndex()
-        << " at distance " << distance;
-    failed = true;
-  });
-  if (failed)
-    return failure();
-
-  return success();
-}
-
-void WarpSchedule::eraseFrom(scf::ForOp loop) {
-  loop.walk([&](Operation *op) { op->removeAttr(kPartitionAttrName); });
-  loop->removeAttr(kPartitionStagesAttrName);
 }
 
 void WarpSchedule::iterateInputs(
@@ -278,11 +200,6 @@ void WarpSchedule::dump() const {
       op->print(llvm::errs(), OpPrintingFlags().skipRegions());
       llvm::errs() << "\n";
     }
-    llvm::errs() << "\n";
-  }
-  llvm::errs() << "=== ROOT PARTITION ===\n";
-  for (Operation *op : getRootPartition()->getOps()) {
-    op->print(llvm::errs(), OpPrintingFlags().skipRegions());
     llvm::errs() << "\n";
   }
   llvm::errs() << "\n";
