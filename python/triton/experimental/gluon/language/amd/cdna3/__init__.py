@@ -9,7 +9,7 @@ from ..._core import builtin, _unwrap_if_constexpr
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
-__all__ = ["buffer_load", "buffer_store", "mfma"]
+__all__ = ["buffer_load", "buffer_store", "mfma", "buffer_atomic_rmw"]
 
 
 def _verify_buffer_ops(ptr, offsets, mask=None, other=None):
@@ -97,3 +97,53 @@ def mfma(a, b, acc, _semantic: GluonSemantic = None):
     handle = _semantic.dot(a, b, acc, input_precision=knobs.language.fp32_default, max_num_imprecise_acc=None,
                            out_dtype=acc.dtype).handle
     return ttgl.tensor(handle, ret_type)
+
+
+op_str_to_op = {
+    "max": ir.ATOMIC_OP.MAX, "min": ir.ATOMIC_OP.MIN, "fadd": ir.ATOMIC_OP.FADD, "add": ir.ATOMIC_OP.ADD, "and":
+    ir.ATOMIC_OP.AND, "or": ir.ATOMIC_OP.OR, "xor": ir.ATOMIC_OP.XOR, "xchg": ir.ATOMIC_OP.XCHG
+}
+
+
+@builtin
+def buffer_atomic_rmw(op, ptr, offsets, value, mask=None, sem=None, scope=None, stride=None, _semantic=None):
+    """
+    AMD Buffer atomic RMW operation. Buffer atomics are similar to normal atomics, but access global memory via a
+    scalar base pointer and a tensor of offsets instead of a tensor of pointers.
+    Similar to other buffer ops, the `mask` is a boolean vector that determines if a given element should be processed with
+    the atomic RMW op. Elements with `mask[i] == 0` are dropped (i.e., the atomic is not executed).
+    Similar to TT_AtomicRMWOp: Buffer atomic RMW ops load data at $ptr, do $rmw_op with $val, and store result to $ptr with
+    the specified memory semantics and scope.
+
+    Stride is the distance between the beginning of contiguous memory chunks. When performing a RMW, the `stride` is
+    the address difference between the first elements of each row in bytes. Compiler tries to obtain the `stride`
+    when it converts to the buffer ops because it is important for optimizing the cache memory access.
+
+    Atomic RMW ops return the pre-op value in the global memory.
+
+    Args:
+        op (str) : The operator to be executed atomically.
+        ptr (pointer to scalar): Global memory scalar base pointer to load from.
+        offsets (tensor): Offsets tensor for the load operation.
+        mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
+        sem (str, optional): Memory Semantic Descriptor. Default is None.
+        scope (str, optional): Memory Sync Scope. Default is None.
+        stride (int32, optional): The address difference between the first elements of each row in bytes. Default is 1.
+    """
+    _verify_buffer_ops(ptr, offsets, mask)
+
+    mask = _unwrap_if_constexpr(mask)
+    mask = mask.handle if mask is not None else ir.value()
+
+    sem = _semantic._str_to_sem(sem)
+    scope = _semantic._str_to_scope(scope)
+
+    op = op_str_to_op[_unwrap_if_constexpr(op)]
+    ret_type = value.type
+    if stride is None:
+        stride = 1
+    stride = _semantic.builder.get_int32(stride)
+
+    return _semantic.tensor(
+        _semantic.builder.create_buffer_atomic_rmw(op, ptr.handle, offsets.handle, mask, value.handle, sem, scope,
+                                                   stride), ret_type)
