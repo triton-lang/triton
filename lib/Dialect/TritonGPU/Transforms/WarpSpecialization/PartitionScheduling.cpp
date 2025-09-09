@@ -528,34 +528,6 @@ void optimizeSchedule(scf::ForOp loop, WarpSchedule &schedule) {
   }
 }
 
-void assignRootPartition(scf::ForOp loop, int numPartitions) {
-  auto ctx = loop.getContext();
-  Builder b(ctx);
-  SmallVector<int> ids;
-  for (int i = 0; i < numPartitions; ++i) {
-    ids.push_back(i);
-  }
-  auto partitionAttr = b.getDenseI32ArrayAttr(ids);
-
-  for (Operation &op : loop.getBody()->without_terminator()) {
-    if (!hasPartition(&op)) {
-      op.setAttr(kPartitionAttrName, partitionAttr);
-    }
-  }
-}
-
-void assignIfBodyPartition(scf::ForOp loop) {
-  for (Operation &op : loop.getBody()->without_terminator()) {
-    if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-      auto attrs = ifOp->getAttr(kPartitionAttrName);
-      assert(attrs);
-
-      ifOp->walk(
-          [&](Operation *op) { op->setAttr(kPartitionAttrName, attrs); });
-    }
-  }
-}
-
 //===----------------------------------------------------------------------===//
 // Pass Definition
 //===----------------------------------------------------------------------===//
@@ -585,8 +557,6 @@ void PartitionScheduling::runOnOperation() {
     if (std::optional<WarpSchedule> schedule = getInitialSchedule(loop)) {
       propagatePartitions(loop, *schedule);
       optimizeSchedule(loop, *schedule);
-      assignRootPartition(loop, schedule->getNumPartitions());
-      assignIfBodyPartition(loop);
       loop->setAttr(
           kWarpSpecializeTagAttrName,
           IntegerAttr::get(IntegerType::get(loop.getContext(), 32), idx));

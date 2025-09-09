@@ -330,6 +330,33 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
     }
   }
 }
+
+void assignRootPartition(scf::ForOp loop, int numPartitions) {
+  auto ctx = loop.getContext();
+  Builder b(ctx);
+  SmallVector<int> ids;
+  for (int i = 0; i < numPartitions; ++i) {
+    ids.push_back(i);
+  }
+  auto partitionAttr = b.getDenseI32ArrayAttr(ids);
+
+  for (Operation &op : loop.getBody()->without_terminator()) {
+    if (!hasPartition(&op)) {
+      op.setAttr(kPartitionAttrName, partitionAttr);
+    }
+  }
+}
+
+void assignRegionBodyPartition(scf::ForOp loop) {
+  loop->walk([&](Operation *op) {
+    if (!isa<scf::YieldOp, scf::ForOp>(op) && !hasPartition(op)) {
+      auto parentOp = loop.getBody()->findAncestorOpInBlock(*op);
+      assert(hasPartition(parentOp));
+      op->setAttr(kPartitionAttrName, parentOp->getAttr(kPartitionAttrName));
+    }
+  });
+}
+
 } // namespace
 
 LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
@@ -337,6 +364,10 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   if (failed(scheduleOr))
     return failure();
   WarpSchedule schedule = std::move(*scheduleOr);
+
+  assignRootPartition(loop, schedule.getNumPartitions());
+  assignRegionBodyPartition(loop);
+
   // if (failed(schedule.verify(loop)))
   //   return failure();
 
@@ -475,6 +506,7 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
     }
   }
 
+  //  loop->getParentOfType<ModuleOp>().dump();
   for (auto op : llvm::reverse(opsToErase))
     op->erase();
 
