@@ -26,6 +26,16 @@ class MockJITCallable(JITCallable):
         return "mock_jit_callable"
 
 
+class MockFloat(float):
+    def __new__(cls, value):
+        return super().__new__(cls, value)
+
+
+class MockInt(int):
+    def __new__(cls, value):
+        return super().__new__(cls, value)
+
+
 def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
     if arg is None:
         return ("constexpr", None)
@@ -70,69 +80,94 @@ def reference_specialize_impl(backend, arg, is_const, specialize_value, align):
         raise TypeError("Unsupported type: %s" % type(arg))
 
 
-native_inputs_to_specialize = [
-    1.0,
-    None,
-    False,
-    True,
-    1,
-    0,
-    -1,
-    16,
-    17,
-    2**31 - 1,
-    2**31,
-    -2 * 31 - 1,
-    2**63 - 1,
-    2**63,
-    2**63 + 1,
-    2**64 - 1,
-    constexpr(1),
-    constexpr(False),
-    constexpr(1.0),
-    numpy.float64(1.0),
-    MockJITCallable(),
-]
-tuples_to_specialize = [
-    (1, 1),
-    (False, True),
-    namedtuple('strides', ['x', 'y'])(1, 1),
-    namedtuple('flags', ['x', 'y'])(False, True),
-]
-tensors_to_specialize = [
-    torch.empty(shape, dtype=dtype)
-    for shape in [(1, ), (1, 1), (16, ), (16, 16), (128, ), (128, 128)]
-    for dtype in [torch.float64, torch.float32, torch.float16, torch.bfloat16, torch.int32, torch.int64]
-]
-tensordescriptors_to_specialize = [
-    TensorDescriptor.from_tensor(tensor, block_shape=tensor.shape)
-    for tensor in tensors_to_specialize
-    if tensor.shape[-1] % 16 == 0
-]
-gluon_tensordescriptors_to_specialize = [
-    GluonTensorDescriptor.from_tensor(tensor, block_shape=tensor.shape,
-                                      layout=NVMMASharedLayout(0, tensor.dtype.itemsize * 8, len(tensor.shape)))
-    for tensor in tensors_to_specialize
-    if tensor.shape[-1] % 16 == 0
-]
-mock_tensors_to_specialize = [mock_tensor_from_tensor(tensor) for tensor in tensors_to_specialize]
-
-inputs_to_specialize = [
-    *native_inputs_to_specialize,
-    *tuples_to_specialize,
-    *tensors_to_specialize,
-    *tensordescriptors_to_specialize,
-    *gluon_tensordescriptors_to_specialize,
-    *mock_tensors_to_specialize,
-]
+def native_inputs_to_specialize():
+    return [
+        1.0,
+        None,
+        False,
+        True,
+        1,
+        0,
+        -1,
+        16,
+        17,
+        2**31 - 1,
+        2**31,
+        -2 * 31 - 1,
+        2**63 - 1,
+        2**63,
+        2**63 + 1,
+        2**64 - 1,
+    ]
 
 
-@pytest.mark.parametrize("input", inputs_to_specialize)
+def derived_inputs_to_specialize():
+    return [
+        constexpr(1),
+        constexpr(False),
+        constexpr(1.0),
+        numpy.float64(1.0),
+        MockFloat(1.0),
+        MockInt(1),
+        MockJITCallable(),
+    ]
+
+
+def tuples_to_specialize():
+    return [
+        (1, 1),
+        (False, True),
+        namedtuple('strides', ['x', 'y'])(1, 1),
+        namedtuple('flags', ['x', 'y'])(False, True),
+    ]
+
+
+def tensors_to_specialize():
+    return [
+        torch.empty(shape, dtype=dtype, device="cpu")
+        for shape in [(1, ), (1, 1), (16, ), (16, 16), (128, ), (128, 128)]
+        for dtype in [torch.float64, torch.float32, torch.float16, torch.bfloat16, torch.int32, torch.int64]
+    ]
+
+
+def tensordescriptors_to_specialize():
+    return [
+        TensorDescriptor.from_tensor(tensor, block_shape=tensor.shape)
+        for tensor in tensors_to_specialize()
+        if tensor.shape[-1] % 16 == 0
+    ]
+
+
+def gluon_tensordescriptors_to_specialize():
+    return [
+        GluonTensorDescriptor.from_tensor(
+            tensor,
+            block_shape=tensor.shape,
+            layout=NVMMASharedLayout(0, tensor.dtype.itemsize * 8, len(tensor.shape)),
+        )
+        for tensor in tensors_to_specialize()
+        if tensor.shape[-1] % 16 == 0
+    ]
+
+
+def mock_tensors_to_specialize():
+    return [mock_tensor_from_tensor(tensor) for tensor in tensors_to_specialize()]
+
+
+@pytest.mark.parametrize("input_generator", [
+    native_inputs_to_specialize,
+    tuples_to_specialize,
+    tensors_to_specialize,
+    tensordescriptors_to_specialize,
+    gluon_tensordescriptors_to_specialize,
+    mock_tensors_to_specialize,
+])
 @pytest.mark.parametrize("backend", [CUDABackend, HIPBackend])
 @pytest.mark.parametrize("is_const", [True, False])
 @pytest.mark.parametrize("specialize_value", [True, False])
 @pytest.mark.parametrize("align", [True, False])
-def test_specialize_impl(input, backend, is_const, specialize_value, align):
-    result = native_specialize_impl(backend, input, is_const, specialize_value, align)
-    expected = reference_specialize_impl(backend, input, is_const, specialize_value, align)
-    assert result == expected
+def test_specialize_impl(input_generator, backend, is_const, specialize_value, align):
+    for arg in input_generator():
+        result = native_specialize_impl(backend, arg, is_const, specialize_value, align)
+        expected = reference_specialize_impl(backend, arg, is_const, specialize_value, align)
+        assert result == expected
