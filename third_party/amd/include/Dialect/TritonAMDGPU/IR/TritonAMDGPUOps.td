@@ -520,6 +520,56 @@ def TTG_UpcastMXFPOp : TT_AMDGPU_Op<"upcast_mxfp", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// MaskedLoadOp
+//===----------------------------------------------------------------------===//
+def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
+  let summary = "Masked load operation";
+  let description = [{
+    Load operation with masking support. If the mask is true, loads from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.
+  }];
+  let arguments = (ins
+    LLVM_AnyPointer:$ptr,
+    I1:$mask,
+    LLVM_Type:$falseVal,
+    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<BoolAttr, "false">:$forceNoAlias
+  );
+
+  let results = (outs LLVM_Type:$result);
+
+  let assemblyFormat = [{
+    $ptr `,` $mask `,` $falseVal
+    oilist(`cacheModifier` `=` $cache)
+    (`forceNoAlias` $forceNoAlias^)?
+    attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// MaskedStoreOp
+//===----------------------------------------------------------------------===//
+def MaskedStoreOp : TT_AMDGPU_Op<"masked_store", []> {
+  let summary = "Masked Store operation";
+  let description = [{
+    Store operation with masking support. If the mask is true, Store from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.
+  }];
+  let arguments = (ins
+    LLVM_AnyPointer:$ptr,
+    LLVM_Type:$value,
+    I1:$mask,
+    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<BoolAttr, "false">:$forceNoAlias
+  );
+
+  let assemblyFormat = [{
+    $ptr `,` $value `,` $mask
+    oilist(`cacheModifier` `=` $cache)
+    (`forceNoAlias` $forceNoAlias^)?
+    attr-dict `:` type(operands)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // ScaledUpcastFp4Op
 //===----------------------------------------------------------------------===//
 
@@ -579,7 +629,6 @@ def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
         `:` type($input) `,` type($scale) `->` type($output)
   }];
 }
-
 //===----------------------------------------------------------------------===//
 // InThreadTransposeOp
 //===----------------------------------------------------------------------===//

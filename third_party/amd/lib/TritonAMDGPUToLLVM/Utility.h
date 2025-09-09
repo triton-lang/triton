@@ -14,15 +14,7 @@
 
 namespace mlir::LLVM::AMD {
 
-const char predicatedLoad[] = "__triton_hip_predicated_load";
-const char predicatedLoadCA[] = "__triton_hip_predicated_load_CA";
-const char predicatedLoadCG[] = "__triton_hip_predicated_load_CG";
-const char predicatedLoadCV[] = "__triton_hip_predicated_load_CV";
-const char predicatedStore[] = "__triton_hip_predicated_store";
-const char predicatedStoreCG[] = "__triton_hip_predicated_store_CG";
-const char predicatedStoreCS[] = "__triton_hip_predicated_store_CS";
-const char predicatedStoreWT[] = "__triton_hip_predicated_store_WT";
-const char noAliasAsyncLoads[] = "__no_alias_async_loads";
+enum class MemoryOp { Load, Store };
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
                  mlir::triton::AMD::ISAFamily isaFamily =
@@ -42,6 +34,9 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
+
+std::pair<bool, bool>
+getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm, MemoryOp op);
 
 // Loads from shared or global memory with predication.
 // `otherElems` is used to mask out the elements that are not loaded
@@ -63,7 +58,7 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
 
 // Get cache modifier information for creating load or store instruction
 // Get flags <volatile, nontemporal> for a predicated Load or Store
-std::pair<bool, bool> getCacheModifierFlagsForPredicatedCall(LLVM::CallOp);
+std::pair<bool, bool> getCacheModifierFlagsForLoadStore(LLVM::CallOp);
 // Get the cachepolicy value for a cache modifier
 int32_t
 getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
@@ -114,10 +109,6 @@ bool isUsedByDotScaledOp(Operation *op);
 // Check if the result of this tl.dot is used as opA or opB of another tl.dot
 // in the same region
 bool isChainDotHead(mlir::triton::DotOpInterface dotOp, unsigned opIdx = 0);
-
-// Check if given operand of this tt.dot is the result of a tt.trans
-// in the same region
-bool hasTransInDefChain(mlir::triton::DotOpInterface dotOp, unsigned opIdx);
 
 // Check if the opA of this tl.dot is the result of another tl.dot
 // in the same region
