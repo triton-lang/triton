@@ -38,6 +38,15 @@ using namespace triton::gpu;
 using namespace triton::nvidia_gpu;
 using namespace triton::nvws;
 
+std::optional<int> getPartitionId(Operation *op) {
+  auto partitionIds = getPartitionIds(op);
+  if (!partitionIds)
+    return std::nullopt;
+  assert(partitionIds->size() == 1);
+  return *partitionIds->begin();
+}
+using PartitionId = int;
+
 struct TmemAccessDag {
   struct Node {
     // For now we assume there is only one use of generated async tmem token
@@ -292,7 +301,7 @@ struct TmemAccessDag {
     }
     os << "[";
     for (auto partition : partitions) {
-      os << " @" << partition.tag() << "." << partition.index() << " ";
+      os << " @" << partition << " ";
     }
     os << "]";
     os << " prev[" << (node->parent ? node->parent->op : nullptr) << "]";
@@ -343,8 +352,9 @@ OpT createInto(OpBuilder &b, Location loc,
                Args &&...args) {
   auto op = b.create<OpT>(loc, std::forward<Args>(args)...);
   if (parititionIdStageCluster.first) {
-    op->setAttr(kPartitionAttrName,
-                b.getI32IntegerAttr(parititionIdStageCluster.first->index()));
+    SetVector<int> pid;
+    pid.insert(*parititionIdStageCluster.first);
+    setPartition(op, pid);
     assignStage(b, op, parititionIdStageCluster.second);
   }
   return op;

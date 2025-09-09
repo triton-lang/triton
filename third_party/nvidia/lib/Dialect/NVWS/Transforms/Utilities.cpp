@@ -69,5 +69,4 @@ MemDescType arefMultiBufferedType(MemDescType bufTy, int depth) {
                                /*mutableMemory*/ true);
 }
 
->>>>>>> b29f64bfe6 (insert-tmem-aref)
 } // namespace mlir::triton::nvws
