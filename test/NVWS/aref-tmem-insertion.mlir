@@ -273,11 +273,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %true = arith.constant true
-    // CHECK: [[LHS_SCALES_BUF:%.*]] = ttng.tmem_alloc : () -> !ttg.memdesc<128x8xi8,
-    // CHECK-NEXT: [[LHS_SCALES_AREF:%.*]] = nvws.aref.create [[LHS_SCALES_BUF]]
-    // CHECK-NEXT: {{.*}}, [[LHS_SCALES_TOK:%.*]] = nvws.aref.put.enter [[LHS_SCALES_AREF]]
-    // CHECK-NEXT: [[LHS_SCALES_BUF:%.*]] = nvws.aref.buffer [[LHS_SCALES_AREF]], [[LHS_SCALES_TOK]]
-    // CHECK-NEXT: tmem_store [[CST]], [[LHS_SCALES_BUF]]
+    // CHECK: [[LHS_SCALES_BUF:%.*]] = ttng.tmem_alloc [[CST]] : (tensor<128x8xi8, #linear>) -> !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory>
     %result = ttng.tmem_alloc %cst : (tensor<128x8xi8, #linear>) -> !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory>
 
     // CHECK-NEXT: [[ABUF:%.*]] = ttng.tmem_alloc
@@ -318,7 +314,6 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       scf.yield %9 : !ttg.async.token
     } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 9 : i32}
     // CHECK: nvws.aref.put.exit [[AREF]], [[ATOK]] [#nvws.async_op<tc5mma>]
-    // CHECK-NEXT: nvws.aref.put.exit [[LHS_SCALES_AREF]], [[LHS_SCALES_TOK]] [#nvws.async_op<tc5mma>]
     tt.return
   }
 

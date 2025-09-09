@@ -612,7 +612,9 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
 LogicalResult runOnFunction(triton::FuncOp funcOp) {
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
-    tmemDags.push_back(TmemAccessDag::build(allocOp));
+    // if allocOp has src and has no partition, we skip it
+    if (!allocOp.getSrc() || getPartitionId(allocOp))
+      tmemDags.push_back(TmemAccessDag::build(allocOp));
   });
 
   for (auto &accessDag : tmemDags) {
