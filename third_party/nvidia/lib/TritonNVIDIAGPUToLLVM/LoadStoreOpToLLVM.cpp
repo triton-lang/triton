@@ -661,7 +661,7 @@ struct AtomicCASOpConversion
         // Only threads with mask = True store the result
         PTXBuilder ptxBuilderStore;
         auto *dstOprStore = ptxBuilderStore.newAddrOperand(atomPtr, "r");
-        auto *valOprStore = ptxBuilderStore.newOperand(old, "r");
+        auto *valOprStore = ptxBuilderStore.newOperand(old, tyId);
         auto &st = *ptxBuilderStore.create<PTXInstr>("st");
         st.shared().o(sTy);
         st(dstOprStore, valOprStore).maybePredicate(threadPred);
