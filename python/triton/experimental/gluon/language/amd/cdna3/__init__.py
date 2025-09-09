@@ -125,6 +125,7 @@ def buffer_atomic_rmw(op, ptr, offsets, value, mask=None, sem=None, scope=None, 
         op (str) : The operator to be executed atomically.
         ptr (pointer to scalar): Global memory scalar base pointer to load from.
         offsets (tensor): Offsets tensor for the load operation.
+        value (tensor): Another opearand of `op`.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         sem (str, optional): Memory Semantic Descriptor. Default is None.
         scope (str, optional): Memory Sync Scope. Default is None.
