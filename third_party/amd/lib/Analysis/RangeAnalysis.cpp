@@ -193,9 +193,9 @@ std::optional<ConstantIntRanges> maybeGetAssumedRange(Operation *assumption,
     APInt min, max;
     if (isSigned) {
       min = APInt::getSignedMinValue(bitWidth);
-      if (auto op = anchor.getDefiningOp();
-          op && llvm::isa<mlir::triton::GetProgramIdOp,
-                          mlir::triton::GetNumProgramsOp>(op)) {
+      if (llvm::isa_and_nonnull<mlir::triton::GetProgramIdOp,
+                                mlir::triton::GetNumProgramsOp>(
+              anchor.getDefiningOp())) {
         min = APInt::getZero(bitWidth);
       } else
         min = APInt::getSignedMinValue(bitWidth);
@@ -303,7 +303,7 @@ TritonIntegerRangeAnalysis::maybeGetAssumedRange(Value anchor) const {
   unsigned bitWidth = ConstantIntRanges::getStorageBitwidth(anchor.getType());
   assert(bitWidth > 0 && "expected non-zero bitwidth");
   ConstantIntRanges constIntRange = ConstantIntRanges::maxRange(bitWidth);
-  if (auto op = anchor.getDefiningOp(); op && llvm::isa<GetProgramIdOp>(op)) {
+  if (llvm::isa_and_nonnull<GetProgramIdOp>(anchor.getDefiningOp())) {
     constIntRange = ConstantIntRanges::range(
         APInt::getZero(bitWidth),
         APInt(bitWidth, kDefaultMaxPrograms - 1, true), true);
