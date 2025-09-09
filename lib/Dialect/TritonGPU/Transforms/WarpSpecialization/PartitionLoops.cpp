@@ -68,10 +68,12 @@ SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
                                               const Partition *partition,
                                               const WarpSchedule &schedule) {
   auto inPartition = [&](Operation *op) {
-    const Partition *opPartition =
-        schedule.getPartition(loop.getBody()->findAncestorOpInBlock(*op));
-    return llvm::is_contained({partition, schedule.getRootPartition()},
-                              opPartition);
+    auto opPartitionIds = getPartitionIds(op);
+    if (!opPartitionIds) {
+      // This op belongs to all partitions
+      return true;
+    }
+    return llvm::is_contained(*opPartitionIds, partition->getIndex());
   };
   auto isTensorResultFromOtherPartition = [&](int i) {
     for (auto otherPartition : schedule.getPartitions()) {
@@ -129,41 +131,12 @@ getLoopVarIndicesToKeep(scf::ForOp loop, const Partition *partition,
   return getLoopVarIndicesToKeep(loop, partition, loopVarCategories);
 }
 
-const Partition *getPartition(Operation *op, const WarpSchedule &schedule) {
-  auto origOp = op;
-  while (op && !schedule.getPartition(op)) {
-    op = op->getParentOp();
-  }
-  if (op) {
-    return schedule.getPartition(op);
-  }
-
-  // Some yield ops, e.g. automatically added one, might not have a partition
-  assert(isa<scf::YieldOp>(origOp) && "No partition is found for an op.");
-  return nullptr;
-}
-
 void mapRange(ValueRange fromRange, ValueRange toRange, IRMapping &mapping) {
   for (auto [from, to] : llvm::zip(fromRange, toRange)) {
     mapping.map(from, to);
   }
 }
 
-SmallVector<size_t>
-getPartitionIndicesToCloneInto(const Partition *partition,
-                               const WarpSchedule &schedule) {
-  SmallVector<size_t> partitionIndices;
-
-  if (!partition || partition == schedule.getRootPartition()) {
-    for (size_t i = 0; i < schedule.getNumPartitions(); ++i) {
-      partitionIndices.push_back(i);
-    }
-  } else {
-    partitionIndices.push_back(partition->getIndex());
-  }
-
-  return partitionIndices;
-}
 int getPartitionIndex(Operation *op) {
   if (isa<nvws::WarpGroupOp>(op->getParentOp()))
     return op->getParentRegion()->getRegionNumber();
@@ -211,10 +184,17 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
   }
 }
 
+SmallVector<size_t> getPartitionIds(Operation* op) {
+  auto partitionIds = triton::gpu::getPartitionIds(op);
+  assert(partitionIds);
+  SmallVector<size_t> ret(partitionIds->begin(), partitionIds->end());
+  return ret;
+}
+
+
 void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
                const WarpSchedule &schedule) {
-  auto partition = getPartition(ifOp, schedule);
-  auto partitionIndices = getPartitionIndicesToCloneInto(partition, schedule);
+  auto partitionIndices = getPartitionIds(ifOp);
 
   SmallVector<scf::IfOp> newIfOps;
   for (size_t idx : partitionIndices) {
@@ -254,8 +234,7 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
 void cloneReduceOp(triton::ReduceOp reduceOp,
                    SmallVector<WarpGroupBuilder> &builders,
                    const WarpSchedule &schedule) {
-  auto partition = getPartition(reduceOp, schedule);
-  auto partitionIndices = getPartitionIndicesToCloneInto(partition, schedule);
+  auto partitionIndices = getPartitionIds(reduceOp);
 
   SmallVector<ReduceOp> newReduceOps;
   for (size_t idx : partitionIndices) {
@@ -308,8 +287,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
                      const WarpSchedule &schedule) {
   for (auto &op_ : *block) {
     auto op = &op_;
-    auto partition = getPartition(op, schedule);
-    auto partitionIndices = getPartitionIndicesToCloneInto(partition, schedule);
+    auto partitionIndices = getPartitionIds(op);
 
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       cloneForOp(forOp, builders, schedule);
@@ -386,11 +364,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
       return failure();
   }
 
-  llvm::outs() << "foo\n";
-  return success();
-
-  // There is nothing to do if the loop has 1 or fewer partitions.
-  if (llvm::size(schedule.getPartitions()) <= 1)
+  // There is nothing to do if the loop does not have any partition.
+  if (llvm::size(schedule.getPartitions()) == 0)
     return success();
 
   auto numPartitions = schedule.getNumPartitions();
