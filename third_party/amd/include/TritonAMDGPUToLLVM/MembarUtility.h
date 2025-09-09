@@ -1,6 +1,7 @@
 #ifndef TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_MEMBARUTILITY_H_
 #define TRITON_THIRD_PARTY_AMD_INCLUDE_TRITONAMDGPUTOLLVM_MEMBARUTILITY_H_
 
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Operation.h"
 
 namespace mlir::triton::AMD {
@@ -26,6 +27,12 @@ namespace mlir::triton::AMD {
 //     %4 = AsyncCopyGlobalToLocal %ptr_2 %tile_a
 //     scf.yield
 bool membarFilter(Operation *op1, Operation *op2);
+
+// Custom inserter of barrier instructions for CDNA4.
+// In some cases a gpu.barrier (the default) is too strong so we want to catch
+// those cases and insert the sequence s.waitcnt(lds) + s.barrier instead.
+void membarInsertBarrierCDNA4(Operation *op, OpBuilder *builder);
+
 } // namespace mlir::triton::AMD
 
 #endif

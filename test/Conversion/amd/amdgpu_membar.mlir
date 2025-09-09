@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-tritonamdgpu-membar | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-tritonamdgpu-membar | FileCheck %s --check-prefixes CHECK,CHECK-GENERIC
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect --convert-scf-to-cf --allocate-shared-memory -test-tritonamdgpu-membar="arch-generation-name=gfx950" | FileCheck %s --check-prefixes CHECK,CHECK-GFX950
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #A_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
@@ -24,7 +25,9 @@ tt.func @pipelined_async_copy_local_to_global(%A: !tt.ptr<f16>) {
   // There should be a single barrier after async_wait
   // CHECK-NOT: gpu.barrier
   // CHECK: ttg.async_wait
-  // CHECK-NEXT: gpu.barrier
+  // CHECK-GENERIC-NEXT: gpu.barrier
+  // CHECK-GFX950-NEXT: rocdl.s.waitcnt -7937
+  // CHECK-GFX950-NEXT: rocdl.s.barrier
   // CHECK-NOT: gpu.barrier
   // CHECK: tt.return
   tt.return
@@ -49,7 +52,9 @@ tt.func @pipelined_async_copy_local_to_global_2(%A: !tt.ptr<f16>) {
   // There should be a single barrier after async_wait
   // CHECK-NOT: gpu.barrier
   // CHECK: ttg.async_wait
-  // CHECK-NEXT: gpu.barrier
+  // CHECK-GENERIC-NEXT: gpu.barrier
+  // CHECK-GFX950-NEXT: rocdl.s.waitcnt -7937
+  // CHECK-GFX950-NEXT: rocdl.s.barrier
   // CHECK-NOT: gpu.barrier
   // CHECK: tt.return
   tt.return
@@ -88,7 +93,9 @@ tt.func @pipelined_async_copy_local_to_global_3(%A: !tt.ptr<f16>, %B: !tt.ptr<f1
   // There should be a single barrier after async_wait
   // CHECK-NOT: gpu.barrier
   // CHECK: ttg.async_wait
-  // CHECK-NEXT: gpu.barrier
+  // CHECK-GENERIC-NEXT: gpu.barrier
+  // CHECK-GFX950-NEXT: rocdl.s.waitcnt -7937
+  // CHECK-GFX950-NEXT: rocdl.s.barrier
   // CHECK-NOT: gpu.barrier
   // CHECK: tt.return
   tt.return
@@ -112,7 +119,9 @@ tt.func @async_wait_in_previous_loop_iteration(%a_ptr: tensor<16x16x!tt.ptr<f16>
     // CHECK-NOT: gpu.barrier
     // CHECK: ttg.async_wait
     %8 = ttg.async_wait %7 {num = 4 : i32}
-    // CHECK: gpu.barrier
+    // CHECK-GENERIC: gpu.barrier
+    // CHECK-GFX950: rocdl.s.waitcnt -7937
+    // CHECK-GFX950: rocdl.s.barrier
     // CHECK-NOT: gpu.barrier
     scf.yield %8: !ttg.async.token
   }

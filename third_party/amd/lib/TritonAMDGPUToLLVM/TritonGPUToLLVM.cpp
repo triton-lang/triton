@@ -4,6 +4,7 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/MembarUtility.h"
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -100,8 +101,11 @@ struct ConvertTritonAMDGPUToLLVM
     ModuleAllocation allocation(mod);
 
     AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
-    ModuleMembarAnalysis membarPass(&allocation,
-                                    mlir::triton::AMD::membarFilter);
+    MembarInsertBarrierFn insertBarrierFn = nullptr;
+    if (targetInfo.getISAFamily() == AMD::ISAFamily::CDNA4)
+      insertBarrierFn = mlir::triton::AMD::membarInsertBarrierCDNA4;
+    ModuleMembarAnalysis membarPass(
+        &allocation, mlir::triton::AMD::membarFilter, insertBarrierFn);
     membarPass.run();
 
     // Lower functions

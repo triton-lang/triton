@@ -13,6 +13,7 @@ class OpBuilder;
 /// is needed between two operations. Even though two operations access the same
 /// shared memory they may not require a barrier in between them.
 using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
+using MembarInsertBarrierFn = std::function<void(Operation *, OpBuilder *)>;
 
 struct BlockInfo {
   using IntervalMapT = std::map<Interval<size_t>, std::set<Operation *>>;
@@ -116,8 +117,9 @@ public:
   /// it is considered as the problem of the operation itself but not the membar
   /// analysis.
   MembarOrFenceAnalysis() = default;
-  explicit MembarOrFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : allocation(allocation), filter(filter) {}
+  explicit MembarOrFenceAnalysis(Allocation *allocation, MembarFilterFn filter,
+                                 MembarInsertBarrierFn insertBarrier)
+      : allocation(allocation), filter(filter), insertBarrier(insertBarrier) {}
 
   virtual ~MembarOrFenceAnalysis() = default;
 
@@ -154,13 +156,14 @@ protected:
 
   Allocation *allocation = nullptr;
   MembarFilterFn filter = nullptr;
+  MembarInsertBarrierFn insertBarrier = nullptr;
 };
 
 class MembarAnalysis : public MembarOrFenceAnalysis {
 public:
   MembarAnalysis() = default;
-  explicit MembarAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, filter) {}
+  explicit MembarAnalysis(Allocation *allocation, MembarFilterFn filter,
+                          MembarInsertBarrierFn insertBarrierFn);
 
   ~MembarAnalysis() override = default;
 
@@ -169,8 +172,6 @@ private:
   virtual void update(Operation *operation, BlockInfo *blockInfo,
                       FuncBlockInfoMapT *funcBlockInfoMap,
                       OpBuilder *builder) override;
-
-  gpu::BarrierOp insertBarrier(Operation *operation, OpBuilder *builder);
 };
 
 /// Postorder traversal on the callgraph to insert membar instructions
@@ -182,9 +183,11 @@ template <typename AnalysisType>
 class ModuleMembarOrFenceAnalysis : public CallGraph<BlockInfo> {
 public:
   ModuleMembarOrFenceAnalysis(ModuleAllocation *moduleAllocation,
-                              MembarFilterFn filter = nullptr)
+                              MembarFilterFn filter = nullptr,
+                              MembarInsertBarrierFn insertBarrier = nullptr)
       : CallGraph<BlockInfo>(moduleAllocation->getModuleOp()),
-        moduleAllocation(moduleAllocation), filter(filter) {}
+        moduleAllocation(moduleAllocation), filter(filter),
+        insertBarrier(insertBarrier) {}
 
   void run() {
     walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
@@ -195,7 +198,7 @@ public:
           auto *allocation = moduleAllocation->getFuncData(funcOp);
           auto [it, inserted] = funcMap.try_emplace(funcOp, BlockInfo());
           if (inserted) {
-            AnalysisType analysis(allocation, filter);
+            AnalysisType analysis(allocation, filter, insertBarrier);
             analysis.run(funcMap);
           }
         });
@@ -204,6 +207,7 @@ public:
 private:
   ModuleAllocation *moduleAllocation;
   MembarFilterFn filter;
+  MembarInsertBarrierFn insertBarrier;
 };
 
 typedef ModuleMembarOrFenceAnalysis<MembarAnalysis> ModuleMembarAnalysis;

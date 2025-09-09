@@ -1,9 +1,8 @@
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
-#include "TritonAMDGPUToLLVM/TargetUtils.h"
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
@@ -257,50 +256,15 @@ private:
   const AMD::TargetInfo &targetInfo;
 };
 
-class GPUBarrierWithAsyncWaitConversion
-    : public ConvertOpToLLVMPattern<mlir::gpu::BarrierOp> {
-public:
-  GPUBarrierWithAsyncWaitConversion(const LLVMTypeConverter &converter,
-                                    const AMD::TargetInfo &targetInfo,
-                                    PatternBenefit benefit = 2)
-      : ConvertOpToLLVMPattern<mlir::gpu::BarrierOp>(converter, benefit),
-        targetInfo(targetInfo) {}
-  using OpAdaptor = typename mlir::gpu::BarrierOp::Adaptor;
-
-  LogicalResult
-  matchAndRewrite(mlir::gpu::BarrierOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    if (targetInfo.getISAFamily() != AMD::ISAFamily::CDNA4)
-      return failure();
-    auto fromWaitOp =
-        dyn_cast_or_null<IntegerAttr>(op->getDiscardableAttr("fromWaitOp"));
-    if (!fromWaitOp || fromWaitOp.getInt() != 1)
-      return failure();
-
-    constexpr int32_t ldsOnlyBits = ~(0x1f << 8);
-    Location loc = op->getLoc();
-    ROCDL::SWaitcntOp::create(rewriter, loc, ldsOnlyBits);
-    rewriter.replaceOpWithNewOp<ROCDL::SBarrierOp>(op);
-
-    return success();
-  }
-
-private:
-  const AMD::TargetInfo &targetInfo;
-};
-
 } // namespace
 
 void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfo &targetInfo, PatternBenefit benefit) {
   PatternBenefit transBenefit = PatternBenefit(benefit.getBenefit() + 1);
-  PatternBenefit barrierBenefit = PatternBenefit(benefit.getBenefit() + 1);
   patterns.add<TransLocalLoadOpConversion<triton::gpu::LocalLoadOp>>(
       typeConverter, targetInfo, transBenefit);
   patterns.add<
       TransLocalLoadOpConversion<triton::amdgpu::LocalLoadPackedTransposedOp>>(
       typeConverter, targetInfo, benefit);
-  patterns.add<GPUBarrierWithAsyncWaitConversion>(typeConverter, targetInfo,
-                                                  barrierBenefit);
 }
