@@ -91,7 +91,7 @@ void setPartition(Operation *op, Partition *partition);
 void setPartition(Operation *op, const SetVector<int> &partitionIds);
 std::optional<SetVector<int>> getPartitionIds(Operation *op);
 bool hasPartition(Operation *op);
-bool isOpInPartition(Operation *op, const Partition *partition);
+// Utility to be used when the op is known to belong to one partition
 Partition *getPartition(Operation *op, WarpSchedule &schedule);
 
 // Iterate the inputs of the partition. Input values are those that originate

@@ -118,14 +118,6 @@ std::optional<SetVector<int>> getPartitionIds(Operation *op) {
 
 bool hasPartition(Operation *op) { return getPartitionIds(op) != std::nullopt; }
 
-bool isOpInPartition(Operation *op, const Partition *partition) {
-  auto partitionIds = getPartitionIds(op);
-  if (!partitionIds) {
-    return false;
-  }
-  return partitionIds->contains(partition->getIndex());
-}
-
 void iterateInputs(scf::ForOp loop, const Partition *partition,
                    function_ref<void(OpOperand &)> callback) {
   for (Operation *op : partition->getOps()) {

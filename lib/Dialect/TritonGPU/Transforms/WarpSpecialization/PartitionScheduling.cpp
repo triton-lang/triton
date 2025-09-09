@@ -153,6 +153,14 @@ static void scheduleUsers(scf::ForOp loop, WarpSchedule &schedule,
   }
 }
 
+static bool isOpInPartition(Operation *op, const Partition *partition) {
+  auto partitionIds = getPartitionIds(op);
+  if (!partitionIds) {
+    return false;
+  }
+  return partitionIds->contains(partition->getIndex());
+}
+
 // Given a partitioning scheme, determine an initial schedule by performing a
 // first-order partition assignment to the operations in the scheme and its
 // users and/or dependencies. This sets up the initial partitioning of the ops.
