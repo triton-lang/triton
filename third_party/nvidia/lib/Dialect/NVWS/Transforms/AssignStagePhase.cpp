@@ -76,10 +76,12 @@ template <class T> struct AssignStagePhase {
       : aref(aref), partitionId(partitionId) {}
 
   T isValidOp(Operation *op) {
-    if (isa<T>(op) && op->getOperand(0) == aref) {
-      auto opPartitionId = getPartitionId(op);
-      if (!opPartitionId || *opPartitionId == partitionId)
-        return cast<T>(op);
+    if (auto opT = dyn_cast<T>(op)) {
+      if (opT.getAref() == aref) {
+        auto opPartitionId = getPartitionId(op);
+        if (!opPartitionId || *opPartitionId == partitionId)
+          return opT;
+      }
     }
     return {};
   }
@@ -236,7 +238,7 @@ template <class T> struct AssignStagePhase {
 
         index.token = opT.getToken();
         opT.getStageMutable().assign(index.stage);
-        opT->setOperand(2, index.phase);
+        opT.getPhaseMutable().assign(index.phase);
 
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         assignArefIndexInForOp(forOp, index);
@@ -255,8 +257,8 @@ template <class T> struct AssignStagePhase {
       if (visited.contains(owner))
         continue;
       visited.insert(owner);
-      if (isa<ArefGetExitOp, ArefPutExitOp>(owner)) {
-        owner->setOperand(2, stage);
+      if (auto stageOp = dyn_cast<ArefStageInterface>(owner)) {
+        stageOp.setStage(stage);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(owner)) {
         auto tokPos = tokUse.getOperandNumber();
         auto stagePos = tokToStagePosMap.at(token);
