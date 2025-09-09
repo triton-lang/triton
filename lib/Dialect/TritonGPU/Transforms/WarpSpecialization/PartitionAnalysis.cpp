@@ -1298,6 +1298,126 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> constraints = {
      }},
 };
 
+bool isCritical(Group *group) {
+  SmallVector<Node *> stack;
+  DenseSet<Node *> seen;
+  for (auto node : group->getNodes()) {
+    stack.push_back(node);
+    seen.insert(node);
+  }
+
+  while (!stack.empty()) {
+    auto node = stack.back();
+    stack.pop_back();
+    if (!node->isData())
+      continue;
+    if (node->isOp() && isa<ttng::MMAv5OpInterface>(node->getOp()))
+      return true;
+
+    for (auto edge : node->getOutEdges()) {
+      auto next_node = edge.getToNode();
+      if (!seen.contains(next_node)) {
+        stack.push_back(next_node);
+        seen.insert(next_node);
+      }
+    }
+  }
+
+  return false;
+};
+
+SetVector<Group *> getConsumingGroups(Group *group) {
+  SetVector<Group *> result;
+  for (auto node : group->getNodes()) {
+    for (auto edge : node->getOutEdges()) {
+      auto outGroup = edge.getToNode()->getGroup();
+      if (outGroup != group)
+        result.insert(outGroup);
+    }
+  }
+  return result;
+}
+
+DenseSet<Group *> getReachableGroups(Group *group) {
+  // look for all groups connected to this group via data edges
+  DenseSet<Group *> groups;
+  SmallVector<Node *> stack;
+  DenseSet<Node *> seen;
+  auto addNode = [&](Node *node) {
+    if (node->isData() && !seen.contains(node)) {
+      groups.insert(node->getGroup());
+      stack.push_back(node);
+      seen.insert(node);
+    }
+  };
+  for (auto node : group->getNodes())
+    addNode(node);
+
+  while (!stack.empty()) {
+    auto node = stack.back();
+    stack.pop_back();
+    for (auto input : node->getInputs())
+      addNode(input.getNode());
+    for (auto outputs : node->getOutputs())
+      for (auto output : outputs)
+        addNode(output.getNode());
+  }
+  return groups;
+}
+
+SmallVector<std::pair<std::string, std::function<bool(Group *, Group *)>>>
+    group_heuristics = {
+        // merge load groups that are consumed by the same group
+        {"load_groups_with_same_consumer",
+         [](Group *a, Group *b) {
+           auto a_is_load = (a->getFlags() & Flags::LOAD &&
+                             !(a->getFlags() & Flags::MANUAL));
+           auto b_is_load = (b->getFlags() & Flags::LOAD &&
+                             !(b->getFlags() & Flags::MANUAL));
+           if (!a_is_load || !b_is_load)
+             return false;
+
+           auto a_consuming_groups = getConsumingGroups(a);
+           auto b_consuming_groups = getConsumingGroups(b);
+           for (auto ag : a_consuming_groups)
+             for (auto bg : b_consuming_groups)
+               if (ag == bg)
+                 return true;
+           return false;
+         }},
+
+        // vertically merge load groups
+        // groups that are reachable from one another are merged into the same
+        // group
+        {"load_groups_vertical",
+         [](Group *a, Group *b) {
+           auto a_is_load = (a->getFlags() & Flags::LOAD &&
+                             !(a->getFlags() & Flags::MANUAL));
+           auto b_is_load = (b->getFlags() & Flags::LOAD &&
+                             !(b->getFlags() & Flags::MANUAL));
+           if (!a_is_load || !b_is_load)
+             return false;
+
+           return getReachableGroups(a).contains(b);
+         }}
+
+        // // merge simt groups if one of them is not on critical path to an mma
+        // {"non_critical_simt",
+        //  [](Group *a, Group *b) {
+        //    auto a_is_simt = (a->getFlags() & Flags::SIMT &&
+        //                      !(a->getFlags() & Flags::MANUAL));
+        //    auto b_is_simt = (b->getFlags() & Flags::SIMT &&
+        //                      !(b->getFlags() & Flags::MANUAL));
+        //    // TODO: follow edges to check the group does not lead to an mma
+        //    // within the loop
+        //
+        //    auto a_is_crit = isCritical(a);
+        //    auto b_is_crit = isCritical(b);
+        //
+        //    return a_is_simt && b_is_simt && (a_is_crit ^ b_is_crit);
+        //  }},
+};
+
 void mergeGroups(Graph *graph, std::string funcName,
                  VisualizationInfo &vis_info) {
   // Note: this implementation is slow. It can be improved by incrementally
@@ -1387,6 +1507,7 @@ void mergeGroups(Graph *graph, std::string funcName,
                    << iter << "-" << funcName << ".dot";
               visualize(name.str(), graph, vis_info);
             }
+            iter++;
 
             changed = true;
             break;
@@ -1399,8 +1520,6 @@ void mergeGroups(Graph *graph, std::string funcName,
       if (changed)
         break;
     }
-
-    iter++;
   } while (changed && iter < 10000);
   // std::cout << "iter = " << iter << "\n";
 
@@ -1409,118 +1528,49 @@ void mergeGroups(Graph *graph, std::string funcName,
               << std::endl;
   }
 
-  // merge all load groups that are consumed by the same group
   {
-    // std::cout << "----- merge load groups...\n";
-    // get all load groups
-    llvm::SmallVector<Group *> load_groups;
-    for (auto &group : graph->getGroups())
-      if (group->getFlags() & Flags::LOAD &&
-          !(group->getFlags() & Flags::MANUAL))
-        load_groups.push_back(group.get());
-
-    std::map<llvm::SmallVector<Group *>, llvm::SmallVector<Group *>>
-        load_groups_by_consumer;
-    // get groups that consume each load
-    for (auto load_group : load_groups) {
-      llvm::DenseSet<Group *> consumers_set;
-      for (auto edge : getOutCrossingEdges(load_group))
-        consumers_set.insert(edge.getToNode()->getGroup());
-
-      llvm::SmallVector<Group *> consumers_vec;
-      for (auto x : consumers_set)
-        consumers_vec.push_back(x);
-      std::sort(consumers_vec.begin(), consumers_vec.end());
-
-      // std::cout << "load group " << load_group << " : consumers = [ ";
-      // for (auto x : consumers_vec)
-      //   std::cout << x << " ";
-      // std::cout << "]\n";
-
-      if (load_groups_by_consumer.count(consumers_vec) > 0)
-        load_groups_by_consumer[consumers_vec].push_back(load_group);
-      else
-        load_groups_by_consumer[consumers_vec] = {load_group};
-    }
-
-    // merge groups that share consumers
-    for (auto &entry : load_groups_by_consumer) {
-      auto &load_groups = entry.second;
-      // std::cout << "----- merging load group set with " << load_groups.size()
-      //           << " groups\n";
-      if (load_groups.size() > 1) {
-        auto load_group = load_groups.front();
-        for (auto it = load_groups.begin() + 1; it != load_groups.end(); it++) {
-          Group::merge(*it, load_group);
-        }
+    // look at every pair of groups and check if they should be merged
+    auto merge_groups_step = [&]() {
+      SmallVector<Group *> all_groups;
+      for (auto &group : graph->getGroups()) {
+        all_groups.push_back(group.get());
       }
-    }
-  }
-
-  // vertically merge load groups
-  // groups that are reachable from one another are merged into the same group
-  {
-    // std::cout << "----- vertically merge load groups...\n";
-    // get all load groups
-    llvm::SmallVector<Group *> load_groups;
-    for (auto &group : graph->getGroups())
-      if (group->getFlags() & Flags::LOAD &&
-          !(group->getFlags() & Flags::MANUAL))
-        load_groups.push_back(group.get());
-    // std::cout << "----- num load groups = " << load_groups.size() << "\n";
-
-    // merge groups
-    bool changed = false;
-    do {
-      changed = false;
-      for (auto load_group : load_groups) {
-        if (load_group->empty())
-          continue;
-        // look for all groups connected to this load group via data edges
-        // std::cout << "----- checking group " << load_group << "\n";
-        DenseSet<Group *> groups;
-        SmallVector<Node *> stack;
-        DenseSet<Node *> seen;
-        auto addNode = [&](Node *node) {
-          if (node->isData() && !seen.contains(node)) {
-            groups.insert(node->getGroup());
-            stack.push_back(node);
-            seen.insert(node);
-          }
-        };
-        for (auto node : load_group->getNodes())
-          addNode(node);
-
-        while (!stack.empty()) {
-          auto node = stack.back();
-          stack.pop_back();
-          for (auto input : node->getInputs())
-            addNode(input.getNode());
-          for (auto outputs : node->getOutputs())
-            for (auto output : outputs)
-              addNode(output.getNode());
-        }
-
-        // if any other load group is reachable, merge them
-        for (auto group : groups) {
-          if (group == load_group || group->empty())
-            continue;
-          if (group->getFlags() & Flags::LOAD &&
-              !(group->getFlags() & Flags::MANUAL)) {
-            // std::cout << "----- merge groups " << group << " " << load_group
-            //          << "\n";
-            Group::merge(group, load_group);
-            changed = true;
-            break;
+      for (auto [name, apply] : group_heuristics) {
+        for (auto groupA : all_groups) {
+          for (auto groupB : all_groups) {
+            if (groupA == groupB || groupA->empty() || groupB->empty())
+              continue;
+            if (apply(groupA, groupB)) {
+              if (options.dump) {
+                std::cout << "\n---- apply " << name << " ----\n";
+                groupA->dump();
+                groupB->dump();
+              }
+              Group::merge(groupA, groupB);
+              if (options.dump_dot) {
+                std::stringstream name;
+                name << "graph-merge-step-" << std::setfill('0') << std::setw(4)
+                     << iter << "-" << funcName << ".dot";
+                visualize(name.str(), graph, vis_info);
+              }
+              iter++;
+              return false;
+            }
           }
         }
-        if (changed)
-          break;
       }
-    } while (changed);
+      return true;
+    };
+
+    while (true) {
+      if (merge_groups_step())
+        return;
+    }
   }
 
   // push broadcast ops into consumer group, to reduce shared memory pressure
+  // note: doesn't actually do anything, just checks this is the case as the
+  // heuristics should guarantee this could probably just be removed
   {
     bool changed = false;
     do {
