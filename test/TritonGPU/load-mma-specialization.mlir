@@ -740,7 +740,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
       // CHECK-NEXT: ttng.wait_barrier [[ACC_READY_BUF0]], [[ACC_PHASE]] {ttg.partition = array<i32: 0>}
       // CHECK-NEXT: [[C:%.*]], [[USER_TOK:%.*]] = ttng.tmem_load [[ACC_BUF]][]
       // CHECK-NEXT: ttng.arrive_barrier [[ACC_EMPTY_BUF0]], 1 {ttg.partition = array<i32: 0>}
-      // CHECK-NEXT: "acc_user"([[C]]) {ttg.partition = array<i32: 0>}
+      // CHECK-NEXT: "acc_user"([[C]])
       "acc_user"(%c) : (tensor<128x128xf32, #acc_layout>) -> ()
     // CHECK-NEXT: }
     }
@@ -1231,7 +1231,7 @@ tt.func @local_alloc_into_mma(
   %c1 = arith.constant 1 : i32
   %acc, %acc_tok = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
   %true = arith.constant true
-  // CHECK: [[LHS_SHARED:%.*]] = ttg.local_alloc %arg1 {{.*}} : (tensor<128x64xf16, {{.*}}>) -> !ttg.memdesc<128x64xf16,
+  // CHECK: [[LHS_SHARED:%.*]] = ttg.local_alloc %arg1 : (tensor<128x64xf16, {{.*}}>) -> !ttg.memdesc<128x64xf16,
   // CHECK: scf.for
   scf.for %i = %c0 to %ub step %c1 iter_args(%tok = %acc_tok) -> !ttg.async.token : i32 {
     // CHECK: barrier_expect [[LOAD_READY_BAR:%.*]], 16384 {ttg.partition = array<i32: 2>}
