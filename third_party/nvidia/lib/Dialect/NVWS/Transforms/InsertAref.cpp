@@ -192,12 +192,9 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
   Partition *producerPartition = producedValue.partition;
 
   Type token{builder.getType<AsyncTokenType>()};
-  auto c0Enter = builder.intCst(0);
   auto putEnterOp = builder.createInto<ArefPutEnterOp>(
-      *producerPartition, stageCluster, SmallVector{dataBufType}, token, aref,
-      c0Enter, c0Enter);
+      *producerPartition, stageCluster, aref, TypeRange{dataBufType}, token);
   setPartition(putEnterOp, producerPartition);
-  setPartition(c0Enter.getDefiningOp(), producerPartition);
   auto dataBuf = putEnterOp.getBuffers()[0];
 
   auto producerKind = AsyncOp::NONE;
@@ -241,13 +238,11 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
     llvm::report_fatal_error(msg.c_str());
   }
 
-  auto c0Exit = builder.intCst(0);
   auto putExitOp = builder.createInto<ArefPutExitOp>(
-      *producerPartition, stageCluster, aref, putEnterOp.getToken(), c0Exit,
+      *producerPartition, stageCluster, aref, putEnterOp.getToken(),
       builder.getArrayAttr(SmallVector<Attribute>{
           AsyncOpAttr::get(aref.getContext(), producerKind)}));
   setPartition(putExitOp, producerPartition);
-  setPartition(c0Exit.getDefiningOp(), producerPartition);
 
   return staleOps;
 };
@@ -355,12 +350,10 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
   auto arefBufType = cast<MemDescType>(aref.getOperand(0).getType());
   Type bufferType = getBufferViewType(arefBufType, /*mutable*/ false);
   Type tokenType = builder.getType<AsyncTokenType>();
-  auto c0Enter = builder.intCst(0);
   auto getEnterOp = builder.createInto<ArefGetEnterOp>(
-      *consumerPartition, stageClusterEnter, SmallVector{bufferType}, tokenType,
-      aref, c0Enter, c0Enter);
+      *consumerPartition, stageClusterEnter, aref, TypeRange{bufferType},
+      tokenType);
   setPartition(getEnterOp, consumerPartition);
-  setPartition(c0Enter.getDefiningOp(), consumerPartition);
 
   auto consumers = getTransitiveConsumers(results, consumerPartition, partitions);
   assert(consumers.size() > 0);
@@ -409,12 +402,10 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
 
   builder.setInsertionPointAfter(exitInsertPointAfter);
 
-  auto c0Exit = builder.intCst(0);
   auto getExitOp = builder.createInto<ArefGetExitOp>(
-      *consumerPartition, stageClusterExit, aref, token, c0Exit,
+      *consumerPartition, stageClusterExit, aref, token,
       builder.getArrayAttr(asyncKinds));
   setPartition(getExitOp, consumerPartition);
-  setPartition(c0Exit.getDefiningOp(), consumerPartition);
 };
 
 bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,

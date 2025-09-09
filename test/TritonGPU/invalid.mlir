@@ -466,3 +466,9 @@ tt.func @async_copy_invalid_other_type(%input: tensor<64x64x!tt.ptr<f16>, #block
 #shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
 // expected-error @below {{Mismatch in expected shape for dimension 0. Expected: 4, got: 8}}
 !out_dim_too_large = !ttg.memdesc<8x8xf32, #shared, #ttg.shared_memory>
+
+// -----
+
+// expected-error @below {{alignment must be specified outside of the linear layout braces}}
+#shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [2, 0]], block = [], alignment = 16}>
+!alignment_in_layout = !ttg.memdesc<4x4xf32, #shared, #ttg.shared_memory>

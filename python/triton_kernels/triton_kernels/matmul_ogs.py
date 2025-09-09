@@ -332,6 +332,7 @@ def matmul_ogs(x, w, bias,
     w_scale = precision_config.weight_scale
     w_has_mx = w_scale is not None
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and bitwidth(w.dtype) == 8
+    if w_has_mx: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp"
     if is_hopper_fp8: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     if not isinstance(w, Tensor):
         # TODO: remove this code path; using uint8 for mxfp4 weight will bite us when we want to support uint8 for real
@@ -368,7 +369,7 @@ def matmul_ogs(x, w, bias,
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
     can_use_fused_scatter = has_scatter and (fused_activation.specs.fn is None) and (epilogue.specs.fn is None) and (routing_data.n_expts_act == 1)
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
-        M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
+        batch_size, M, N, K, routing_data, can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
     )
     if not can_use_fused_scatter and opt_flags.fused_scatter:
         raise InapplicableConstraint("Fused scatter is not supported")
@@ -456,7 +457,7 @@ def matmul_ogs(x, w, bias,
     w_scale_strides = w_scale.stride() if w_has_mx and not w_scale_has_tma else (None, None, None)
     w_scale_strides = (0, ) * (3 - len(w_scale_strides)) + w_scale_strides
     out_matmul_scale_strides = out_matmul_scale.stride() if out_matmul_has_mx else (None, None, None, None)
-    out_matmul_scale_strides = (0, ) * (3 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
+    out_matmul_scale_strides = (0, ) * (4 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
     # launch kernel
     kernels = get_kernels(epilogue.specs, matmul_fused_activation.specs)
     # When stride(-2) == stride(-1) == 1, it's ambiguous whether W is transposed
@@ -467,7 +468,7 @@ def matmul_ogs(x, w, bias,
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
-                   *out_matmul_scale_strides[-3:],
+                   *out_matmul_scale_strides[-4:],
                    x_tensor_or_tma, x_storage.data, *x_strides,
                    flex.lhs_data.scale,
                    None if x_scale is None else x_scale.data.view(torch.uint8), *x_scale_strides,
@@ -475,7 +476,6 @@ def matmul_ogs(x, w, bias,
                    flex.rhs_data.scale,
                    w_scale_tensor_or_tma, *w_scale_strides,
                    bias, bias_stride,
-                   x.shape[-2],
                    x.shape[-2] if routing_data.expt_hist is None else None,
                    N, K,
                    betas, gammas,

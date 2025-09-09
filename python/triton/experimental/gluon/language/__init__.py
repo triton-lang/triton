@@ -83,6 +83,7 @@ from ._layouts import (
     NVMMASharedLayout,
     SwizzledSharedLayout,
     PaddedSharedLayout,
+    SharedLinearLayout,
 )
 from ._math import (
     umulhi,

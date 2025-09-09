@@ -26,11 +26,12 @@ LIBDEVICE_PAT = re.compile('{libname = "", libpath = "", pure = true, symbol = "
 BLACKWELL_TARGET = GPUTarget("cuda", 100, 32)
 HOPPER_TARGET = GPUTarget("cuda", 90, 32)
 AMPERE_TARGET = GPUTarget("cuda", 80, 32)
-HIP_TARGET = GPUTarget("hip", "gfx1200", 32)
+HIP_TARGET_RDNA3 = GPUTarget("hip", "gfx1100", 32)
+HIP_TARGET_RDNA4 = GPUTarget("hip", "gfx1200", 32)
 HIP_TARGET_CDNA3 = GPUTarget("hip", "gfx942", 64)
 HIP_TARGET_CDNA4 = GPUTarget("hip", "gfx950", 64)
 
-ALL_TARGETS = [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET]
+ALL_TARGETS = [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET_RDNA4]
 
 
 def anonymize_ir(ir):
@@ -1706,6 +1707,79 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
+def amd_wmma_layout_kernel():
+    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=True,
+                                                                          warps_per_cta=[1, 4]))
+    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=True,
+                                                                          warps_per_cta=[2, 2]))
+    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=False,
+                                                                          warps_per_cta=[1, 4]))
+    ttgl.full([64, 64], 0, ttgl.float16, layout=amd_layouts.AMDWMMALayout(version=2, transposed=False,
+                                                                          warps_per_cta=[2, 2]))
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_RDNA4])
+def test_amd_wmma_layout(target):
+    module = run_parser(amd_wmma_layout_kernel, target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, warpsPerCTA = [1, 4]}>
+#mma1 = #ttg.amd_wmma<{version = 2, isTranspose = true, warpsPerCTA = [2, 2]}>
+#mma2 = #ttg.amd_wmma<{version = 2, isTranspose = false, warpsPerCTA = [1, 4]}>
+#mma3 = #ttg.amd_wmma<{version = 2, isTranspose = false, warpsPerCTA = [2, 2]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @amd_wmma_layout_kernel() attributes {noinline = false} {
+    %cst = arith.constant 0.000000e+00 : f16
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #mma>
+    %cst_1 = arith.constant 0.000000e+00 : f16
+    %cst_2 = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #mma1>
+    %cst_3 = arith.constant 0.000000e+00 : f16
+    %cst_4 = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #mma2>
+    %cst_5 = arith.constant 0.000000e+00 : f16
+    %cst_6 = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #mma3>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def infer_layout_for_amd_wmma_kernel():
+    layout: ttgl.constexpr = amd_layouts.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[4, 1])
+    a = ttgl.full([128, 32], 1, ttgl.float16, layout)
+    b = ttgl.reduce(a, 1, add_int)
+    ttgl.static_assert(b.type.layout == ttgl.SliceLayout(1, layout))
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_RDNA4])
+def test_infer_layout_for_amd_wmma(target):
+    module = run_parser(infer_layout_for_amd_wmma_kernel, target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, warpsPerCTA = [4, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @infer_layout_for_amd_wmma_kernel() attributes {noinline = false} {
+    %cst = arith.constant 1.000000e+00 : f16
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<128x32xf16, #mma>
+    %0 = "tt.reduce"(%cst_0) <{axis = 1 : i32}> ({
+    ^bb0(%arg0: f16, %arg1: f16):
+      %1 = tt.call @test_frontend.add_int__fp16_fp16__(%arg0, %arg1) : (f16, f16) -> f16
+      tt.reduce.return %1 : f16
+    }) : (tensor<128x32xf16, #mma>) -> tensor<128xf16, #ttg.slice<{dim = 1, parent = #mma}>>
+    tt.return
+  }
+  tt.func private @test_frontend.add_int__fp16_fp16__(%arg0: f16, %arg1: f16) -> f16 attributes {noinline = false} {
+    %0 = arith.addf %arg0, %arg1 : f16
+    tt.return %0 : f16
+  ^bb1:  // no predecessors
+    %1 = ub.poison : f16
+    tt.return %1 : f16
+  }
+}
+""")
+
+
+@gluon.jit
 def amd_async_wait():
     cdna4_async_copy.async_wait(0)
 
@@ -2050,6 +2124,78 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %14 = amdgpu.buffer_load %arg0[%2], %11, %13 cacheModifier = ca : tensor<64x64xf16, #blocked>
     %15 = tt.broadcast %cst_3 : tensor<1x64xi1, #blocked> -> tensor<64x64xi1, #blocked>
     amdgpu.buffer_store %14, %arg1[%2], %15 cacheModifier = cs : tensor<64x64xf16, #blocked>
+    tt.return
+  }
+}
+""")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_RDNA3])
+def test_amd_rdna3_wmma(target):
+
+    @gluon.jit
+    def kernel():
+        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=1, transposed=True, warps_per_cta=[4, 1])
+
+        a = ttgl.full([64, 64], 1.0, ttgl.float16, layout=ttgl.DotOperandLayout(0, wmma_layout, 16))
+        b = ttgl.full([64, 64], 2.0, ttgl.float16, layout=ttgl.DotOperandLayout(1, wmma_layout, 16))
+
+        acc = ttgl.full([64, 64], 0.0, ttgl.float32, layout=wmma_layout)
+        acc = ttgl.amd.rdna3.wmma(a, b, acc)
+
+        ttgl.static_assert(isinstance(acc, ttgl.tensor))
+        ttgl.static_assert(acc.type.layout == wmma_layout)
+
+    module = run_parser(kernel, target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#mma = #ttg.amd_wmma<{version = 1, isTranspose = true, warpsPerCTA = [4, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %cst = arith.constant 1.000000e+00 : f16
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
+    %cst_1 = arith.constant 2.000000e+00 : f16
+    %cst_2 = arith.constant dense<2.000000e+00> : tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>
+    %cst_3 = arith.constant 0.000000e+00 : f32
+    %cst_4 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %cst_5 = arith.constant 0.000000e+00 : f32
+    %0 = tt.dot %cst_0, %cst_2, %cst_4 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>> -> tensor<64x64xf32, #mma>
+    tt.return
+  }
+}
+""")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_RDNA4])
+def test_amd_rdna4_wmma(target):
+
+    @gluon.jit
+    def kernel():
+        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=2, transposed=True, warps_per_cta=[4, 1])
+
+        a = ttgl.full([64, 64], 1.0, ttgl.float16, layout=ttgl.DotOperandLayout(0, wmma_layout, 8))
+        b = ttgl.full([64, 64], 2.0, ttgl.float16, layout=ttgl.DotOperandLayout(1, wmma_layout, 8))
+
+        acc = ttgl.full([64, 64], 0.0, ttgl.float32, layout=wmma_layout)
+        acc = ttgl.amd.rdna4.wmma(a, b, acc)
+
+        ttgl.static_assert(isinstance(acc, ttgl.tensor))
+        ttgl.static_assert(acc.type.layout == wmma_layout)
+
+    module = run_parser(kernel, target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, warpsPerCTA = [4, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %cst = arith.constant 1.000000e+00 : f16
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+    %cst_1 = arith.constant 2.000000e+00 : f16
+    %cst_2 = arith.constant dense<2.000000e+00> : tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+    %cst_3 = arith.constant 0.000000e+00 : f32
+    %cst_4 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %cst_5 = arith.constant 0.000000e+00 : f32
+    %0 = tt.dot %cst_0, %cst_2, %cst_4 : tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma>
     tt.return
   }
 }
