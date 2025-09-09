@@ -344,6 +344,11 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   for (const Partition &partition : schedule.getPartitions()) {
     bool failed = false;
     auto callback = [&](OpResult output, OpOperand &use, unsigned distance) {
+      auto defOpPartitionIds = getPartitionIds(output.getDefiningOp());
+      if (!defOpPartitionIds ||
+          defOpPartitionIds->size() == schedule.getNumPartitions()) {
+        return;
+      }
       auto partitionIds = getPartitionIds(use.getOwner());
       if (!partitionIds ||
           partitionIds->size() == schedule.getNumPartitions() ||
