@@ -260,6 +260,7 @@ class Case:
     (False, False, False),
     (True, False, False),
     (False, True, False),
+    (False, True, True),
     (True, True, False),
     (True, True, True),
 ])
@@ -277,9 +278,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         if weight_dtype_str.startswith("mx"):
             if "float8" in act_dtype_str and torch.cuda.get_device_capability()[0] < 10:
                 pytest.skip("float8 x mx not supported with cuda capability < 10")
-            if act_dtype_str == "mxfloat8_e4m3fn":
-                if is_persistent:
-                    pytest.skip("mx x mx not supported with persistent kernel")
         if n == 2880 and k == 2880 and torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("Not enough memory on A100")
 
