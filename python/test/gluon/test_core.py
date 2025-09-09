@@ -8,6 +8,8 @@ import triton.language as tl
 from triton._internal_testing import (
     is_ampere_or_newer,
     is_blackwell,
+    is_hip_gfx11,
+    is_hip_gfx12,
     is_hip_cdna3,
     is_hip_cdna4,
     is_hopper_or_newer,
@@ -200,6 +202,67 @@ def test_amd_direct_load_to_shared(use_buffer_load):
     else:
         assert re.search(r"global_load_lds", pgm.asm['amdgcn'], re.MULTILINE)
     assert 'vmcnt(0)' in pgm.asm['amdgcn']
+
+
+@pytest.mark.skipif(not (is_hip_gfx11() or is_hip_gfx12()), reason="Requires RDNA3 or RDNA4")
+@pytest.mark.parametrize("M, N, K", [(64, 64, 64)])
+@pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
+def test_amd_wmma(M, N, K, in_dtype):
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr,  #
+               stride_am, stride_ak,  #
+               stride_bk, stride_bn,  #
+               stride_cm, stride_cn,  #
+               BLOCK_SIZE_M: ttgl.constexpr,  #
+               BLOCK_SIZE_N: ttgl.constexpr,  #
+               BLOCK_SIZE_K: ttgl.constexpr,  #
+               BLOCKED_LAYOUT: ttgl.constexpr,  #
+               WMMA_LAYOUT: ttgl.constexpr,  #
+               K_WIDTH: ttgl.constexpr):
+        offs_am = ttgl.arange(0, BLOCK_SIZE_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
+        offs_bn = ttgl.arange(0, BLOCK_SIZE_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+
+        offs_ak = ttgl.arange(0, BLOCK_SIZE_K, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+        offs_bk = ttgl.arange(0, BLOCK_SIZE_K, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
+
+        offs_a = offs_am[:, None] * stride_am + offs_ak[None, :] * stride_ak
+        offs_b = offs_bk[:, None] * stride_bk + offs_bn[None, :] * stride_bn
+
+        a = ttgl.load(a_ptr + offs_a)
+        b = ttgl.load(b_ptr + offs_b)
+
+        a = ttgl.convert_layout(a, layout=ttgl.DotOperandLayout(0, WMMA_LAYOUT, K_WIDTH))
+        b = ttgl.convert_layout(b, layout=ttgl.DotOperandLayout(1, WMMA_LAYOUT, K_WIDTH))
+
+        acc = ttgl.zeros([BLOCK_SIZE_M, BLOCK_SIZE_N], ttgl.float32, WMMA_LAYOUT)
+        if WMMA_LAYOUT.version == 1:
+            c = ttgl.amd.rdna3.wmma(a, b, acc)
+        else:
+            ttgl.static_assert(WMMA_LAYOUT.version == 2, "WMMA_LAYOUT.version must be 1 or 2")
+            c = ttgl.amd.rdna4.wmma(a, b, acc)
+        c = c.to(a_ptr.dtype.element_ty)
+
+        offs_cm = ttgl.arange(0, BLOCK_SIZE_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
+        offs_cn = ttgl.arange(0, BLOCK_SIZE_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
+        offs_c = offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn
+        ttgl.store(c_ptr + offs_c, c)
+
+    elem_type = torch.float16 if in_dtype == 'float16' else torch.bfloat16
+    a = torch.randn((M, K), device='cuda', dtype=elem_type)
+    b = torch.randn((K, N), device='cuda', dtype=elem_type)
+    c = torch.empty((M, N), device=a.device, dtype=elem_type)
+
+    blocked = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+    wmma_version = 1 if is_hip_gfx11() else 2
+    k_width = 16 if is_hip_gfx11() else 8
+    wmma = ttgl.amd.AMDWMMALayout(wmma_version, True, [2, 2])
+    kernel[1, 1](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_SIZE_M=M,
+                 BLOCK_SIZE_N=N, BLOCK_SIZE_K=K, BLOCKED_LAYOUT=blocked, WMMA_LAYOUT=wmma, K_WIDTH=k_width, num_warps=4)
+
+    ref = torch.matmul(a, b)
+    triton_output = c
+    torch.testing.assert_close(ref, triton_output)
 
 
 @pytest.mark.parametrize("M, N, K", [(32, 32, 16), (16, 16, 32)])
