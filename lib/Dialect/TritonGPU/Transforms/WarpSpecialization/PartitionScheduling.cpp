@@ -342,7 +342,7 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
         opClusters.getOrCreate(defOp)->sinkPartitions.insert(&partition);
       }
     };
-    schedule.iterateDefs(loop, &partition, defCallback);
+    iterateDefs(loop, &partition, defCallback);
 
     // For each partition, place users of its outputs in a cluster if it is not
     // already assigned to a partition.
@@ -353,7 +353,7 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
         opClusters.getOrCreate(user)->defPartitions.insert(&partition);
       }
     };
-    schedule.iterateUses(loop, &partition, useCallback);
+    iterateUses(loop, &partition, useCallback);
   }
 
   // Now we have a pile of single-operation clusters directly adjacent to the
@@ -455,7 +455,7 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
       if (opsInCluster.contains(defOp))
         critPath.insert(defOp);
     };
-    schedule.iterateDefs(loop, sinkPartition, callback);
+    iterateDefs(loop, sinkPartition, callback);
     for (unsigned i = 0; i < critPath.size(); ++i) {
       Operation *op = critPath[i];
       iterateDefs(loop, op, [&](OpResult def) {
@@ -518,7 +518,7 @@ void rematerializeBroadcasts(WarpSchedule &schedule, OpOperand *use) {
 void optimizeSchedule(scf::ForOp loop, WarpSchedule &schedule) {
   for (Partition &partition : schedule.getPartitions()) {
     SmallVector<OpOperand *> uses;
-    schedule.iterateOutputs(loop, &partition,
+    iterateOutputs(loop, &partition,
                             [&](Operation *defOp, OpOperand &use) {
                               if (!isa<scf::YieldOp>(use.getOwner()))
                                 uses.push_back(&use);

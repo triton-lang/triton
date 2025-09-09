@@ -10,58 +10,6 @@ using namespace mlir;
 using namespace triton;
 using namespace triton::gpu;
 
-namespace mlir::triton::gpu {
-
-void setPartition(Operation *op, ArrayRef<int> partitionIds) {
-  Builder b(op->getContext());
-  op->setAttr(kPartitionAttrName, b.getDenseI32ArrayAttr(partitionIds));
-}
-
-void setPartition(Operation *op, const SetVector<int>& partitionIds) {
-  SmallVector<int> partitions(partitionIds.begin(), partitionIds.end());
-  setPartition(op, partitions);
-}
-
-void setPartition(Operation *op, Partition *partition) {
-  if (op->getAttr(kPartitionAttrName)) {
-    // Allow overwriting in this case
-    // TODO: is this the right thing to do
-  }
-
-  SmallVector<int> partitions{partition->getIndex()};
-  setPartition(op, partitions);
-  partition->addOp(op);
-}
-
-std::optional<SetVector<int>> getPartitionIds(Operation *op) {
-  if (!op) {
-    return std::nullopt;
-  }
-  auto attrs = op->getAttr(kPartitionAttrName);
-  if (!attrs) {
-    return std::nullopt;
-  }
-  if (!isa<DenseI32ArrayAttr>(attrs)) {
-    op->dump();
-  }
-  SetVector<int> partitionIds;
-  for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
-    partitionIds.insert(id);
-  }
-  return partitionIds;
-}
-
-bool hasPartition(Operation *op) { return getPartitionIds(op) != std::nullopt; }
-
-bool isOpInPartition(Operation *op, const Partition *partition) {
-  auto partitionIds = getPartitionIds(op);
-  if (!partitionIds) {
-    return false;
-  }
-  return partitionIds->contains(partition->getIndex());
-}
-} // namespace mlir::triton::gpu
-
 //===----------------------------------------------------------------------===//
 // WarpSchedule
 //===----------------------------------------------------------------------===//
@@ -114,9 +62,72 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
   return result;
 }
 
-void WarpSchedule::iterateInputs(
-    scf::ForOp loop, const Partition *partition,
-    function_ref<void(OpOperand &)> callback) const {
+void WarpSchedule::dump() const {
+  for (auto [i, partition] :
+       llvm::enumerate(llvm::make_pointee_range(partitions))) {
+    llvm::errs() << "=== PARTITION #" << i << " ===\n";
+    for (Operation *op : partition.getOps()) {
+      op->print(llvm::errs(), OpPrintingFlags().skipRegions());
+      llvm::errs() << "\n";
+    }
+    llvm::errs() << "\n";
+  }
+  llvm::errs() << "\n";
+}
+
+namespace mlir::triton::gpu {
+
+void setPartition(Operation *op, ArrayRef<int> partitionIds) {
+  Builder b(op->getContext());
+  op->setAttr(kPartitionAttrName, b.getDenseI32ArrayAttr(partitionIds));
+}
+
+void setPartition(Operation *op, const SetVector<int> &partitionIds) {
+  SmallVector<int> partitions(partitionIds.begin(), partitionIds.end());
+  setPartition(op, partitions);
+}
+
+void setPartition(Operation *op, Partition *partition) {
+  if (op->getAttr(kPartitionAttrName)) {
+    // Allow overwriting in this case
+    // TODO: is this the right thing to do
+  }
+
+  SmallVector<int> partitions{partition->getIndex()};
+  setPartition(op, partitions);
+  partition->addOp(op);
+}
+
+std::optional<SetVector<int>> getPartitionIds(Operation *op) {
+  if (!op) {
+    return std::nullopt;
+  }
+  auto attrs = op->getAttr(kPartitionAttrName);
+  if (!attrs) {
+    return std::nullopt;
+  }
+  if (!isa<DenseI32ArrayAttr>(attrs)) {
+    op->dump();
+  }
+  SetVector<int> partitionIds;
+  for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
+    partitionIds.insert(id);
+  }
+  return partitionIds;
+}
+
+bool hasPartition(Operation *op) { return getPartitionIds(op) != std::nullopt; }
+
+bool isOpInPartition(Operation *op, const Partition *partition) {
+  auto partitionIds = getPartitionIds(op);
+  if (!partitionIds) {
+    return false;
+  }
+  return partitionIds->contains(partition->getIndex());
+}
+
+void iterateInputs(scf::ForOp loop, const Partition *partition,
+                   function_ref<void(OpOperand &)> callback) {
   for (Operation *op : partition->getOps()) {
     visitNestedOperands(op, [&](OpOperand &operand) {
       // Ignore implicit captures.
@@ -143,9 +154,8 @@ void WarpSchedule::iterateInputs(
   }
 }
 
-void WarpSchedule::iterateOutputs(
-    scf::ForOp loop, const Partition *partition,
-    function_ref<void(Operation *, OpOperand &)> callback) const {
+void iterateOutputs(scf::ForOp loop, const Partition *partition,
+                    function_ref<void(Operation *, OpOperand &)> callback) {
   for (Operation *op : partition->getOps()) {
     for (OpOperand &use : op->getUses()) {
       Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
@@ -162,9 +172,8 @@ void WarpSchedule::iterateOutputs(
   }
 }
 
-void WarpSchedule::iterateDefs(
-    scf::ForOp loop, const Partition *partition,
-    function_ref<void(OpResult, unsigned)> callback) const {
+void iterateDefs(scf::ForOp loop, const Partition *partition,
+                 function_ref<void(OpResult, unsigned)> callback) {
   iterateInputs(loop, partition, [&](OpOperand &input) {
     auto [def, distance] = getDefinitionAndDistance(loop, input.get());
     if (def && def.getParentBlock() == loop.getBody())
@@ -172,9 +181,8 @@ void WarpSchedule::iterateDefs(
   });
 }
 
-void WarpSchedule::iterateUses(
-    scf::ForOp loop, const Partition *partition,
-    function_ref<void(OpResult, OpOperand &, unsigned)> callback) const {
+void iterateUses(scf::ForOp loop, const Partition *partition,
+                 function_ref<void(OpResult, OpOperand &, unsigned)> callback) {
   SmallVector<std::tuple<OpResult, OpOperand *, unsigned>> uses;
   iterateOutputs(loop, partition, [&](Operation *owner, OpOperand &use) {
     uses.emplace_back(cast<OpResult>(use.get()), &use, 0);
@@ -191,21 +199,6 @@ void WarpSchedule::iterateUses(
       uses.emplace_back(output, &use, distance + 1);
   }
 }
-
-void WarpSchedule::dump() const {
-  for (auto [i, partition] :
-       llvm::enumerate(llvm::make_pointee_range(partitions))) {
-    llvm::errs() << "=== PARTITION #" << i << " ===\n";
-    for (Operation *op : partition.getOps()) {
-      op->print(llvm::errs(), OpPrintingFlags().skipRegions());
-      llvm::errs() << "\n";
-    }
-    llvm::errs() << "\n";
-  }
-  llvm::errs() << "\n";
-}
-
-namespace mlir::triton::gpu {
 
 Partition *getPartition(Operation *op, WarpSchedule &schedule) {
   auto id = getPartitionIds(op);

@@ -55,7 +55,7 @@ bool isTensorResultComputedBy(scf::ForOp loop, size_t resultIdx,
                               const Partition *partition,
                               const WarpSchedule &schedule) {
   bool ret = false;
-  schedule.iterateOutputs(loop, partition, [&](Operation *op, OpOperand &use) {
+  iterateOutputs(loop, partition, [&](Operation *op, OpOperand &use) {
     if (isa<scf::YieldOp>(op) && use.getOperandNumber() == resultIdx &&
         isa<RankedTensorType>(loop.getResult(resultIdx).getType())) {
       ret = true;
@@ -400,7 +400,7 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
             << partitionId << " here";
       }
     };
-    schedule.iterateUses(loop, &partition, callback);
+    iterateUses(loop, &partition, callback);
     if (failed)
       return failure();
   }
