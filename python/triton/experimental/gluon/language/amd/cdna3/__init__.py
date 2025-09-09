@@ -9,7 +9,13 @@ from ..._core import builtin, _unwrap_if_constexpr
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
-__all__ = ["buffer_load", "buffer_store", "mfma", "buffer_atomic_rmw"]
+__all__ = ["buffer_atomic_rmw", "buffer_load", "buffer_store", "mfma"]
+
+_atomic_op_str_to_op = {
+    "max": ir.ATOMIC_OP.MAX, "min": ir.ATOMIC_OP.MIN, "umax": ir.ATOMIC_OP.UMAX, "umin": ir.ATOMIC_OP.UMIN, "fadd":
+    ir.ATOMIC_OP.FADD, "add": ir.ATOMIC_OP.ADD, "and": ir.ATOMIC_OP.AND, "or": ir.ATOMIC_OP.OR, "xor": ir.ATOMIC_OP.XOR,
+    "xchg": ir.ATOMIC_OP.XCHG
+}
 
 
 def _verify_buffer_ops(ptr, offsets, mask=None, other=None):
@@ -20,6 +26,33 @@ def _verify_buffer_ops(ptr, offsets, mask=None, other=None):
 
     if other is not None:
         assert mask is not None, "when other is not None, mask should not be None"
+
+
+def _verify_element_type_in_buffer_atomic(op, elem_type, arch):
+    supported_types = [ttgl.float16, ttgl.float32, ttgl.bfloat16, ttgl.float64, ttgl.int32, ttgl.int64]
+    assert elem_type in supported_types, f"{elem_type} is not supported in buffer atomic on {arch}."
+    op = _atomic_op_str_to_op[_unwrap_if_constexpr(op)]
+    assert arch != "cdna3" or op != ir.ATOMIC_OP.FADD or elem_type != ttgl.bfloat16, "Buffer atomic fadd with bf16 is not supported on CDNA3"
+
+
+def _buffer_atomic_rmw_impl(op, ptr, offsets, value, arch, mask, sem, scope, _semantic):
+    _verify_element_type_in_buffer_atomic(op, value.type.scalar, arch)
+
+    _verify_buffer_ops(ptr, offsets, mask)
+
+    mask = _unwrap_if_constexpr(mask)
+    if mask is not None:
+        mask = _semantic.to_tensor(mask)
+        mask = _semantic.cast(mask, ttgl.int1)
+        offsets, mask = _semantic.broadcast_impl_value(offsets, mask)
+    mask = mask.handle if mask is not None else ir.value()
+
+    sem = _semantic._str_to_sem(sem)
+    scope = _semantic._str_to_scope(scope)
+    op = _atomic_op_str_to_op[_unwrap_if_constexpr(op)]
+    return _semantic.tensor(
+        _semantic.builder.create_buffer_atomic_rmw(op, ptr.handle, offsets.handle, value.handle, sem, scope, mask),
+        value.type)
 
 
 @builtin
@@ -99,27 +132,17 @@ def mfma(a, b, acc, _semantic: GluonSemantic = None):
     return ttgl.tensor(handle, ret_type)
 
 
-op_str_to_op = {
-    "max": ir.ATOMIC_OP.MAX, "min": ir.ATOMIC_OP.MIN, "fadd": ir.ATOMIC_OP.FADD, "add": ir.ATOMIC_OP.ADD, "and":
-    ir.ATOMIC_OP.AND, "or": ir.ATOMIC_OP.OR, "xor": ir.ATOMIC_OP.XOR, "xchg": ir.ATOMIC_OP.XCHG
-}
-
-
 @builtin
-def buffer_atomic_rmw(op, ptr, offsets, value, mask=None, sem=None, scope=None, stride=None, _semantic=None):
+def buffer_atomic_rmw(op, ptr, offsets, value, mask=None, sem=None, scope=None, _semantic=None):
     """
-    AMD Buffer atomic RMW operation. Buffer atomics are similar to normal atomics, but access global memory via a
-    scalar base pointer and a tensor of offsets instead of a tensor of pointers.
+    AMD Buffer Atomic RMW operation.
+    Similar to normal atomic ops: it loads data at ptr plus offsets, do `op` with `value`, and store result to `ptr` plus `offsets` with
+    the specified memory semantics and scope.
+    Buffer atomics access global memory via a scalar base pointer and a tensor of offsets instead of a tensor of pointers.
     Similar to other buffer ops, the `mask` is a boolean vector that determines if a given element should be processed with
     the atomic RMW op. Elements with `mask[i] == 0` are dropped (i.e., the atomic is not executed).
-    Similar to TT_AtomicRMWOp: Buffer atomic RMW ops load data at $ptr, do $rmw_op with $val, and store result to $ptr with
-    the specified memory semantics and scope.
 
-    Stride is the distance between the beginning of contiguous memory chunks. When performing a RMW, the `stride` is
-    the address difference between the first elements of each row in bytes. Compiler tries to obtain the `stride`
-    when it converts to the buffer ops because it is important for optimizing the cache memory access.
-
-    Atomic RMW ops return the pre-op value in the global memory.
+    Buffer Atomic RMW ops return the pre-op value in the global memory.
 
     Args:
         op (str) : The operator to be executed atomically.
@@ -129,22 +152,7 @@ def buffer_atomic_rmw(op, ptr, offsets, value, mask=None, sem=None, scope=None, 
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
         sem (str, optional): Memory Semantic Descriptor. Default is None.
         scope (str, optional): Memory Sync Scope. Default is None.
-        stride (int32, optional): The address difference between the first elements of each row in bytes. Default is 1.
     """
-    _verify_buffer_ops(ptr, offsets, mask)
 
-    mask = _unwrap_if_constexpr(mask)
-    mask = mask.handle if mask is not None else ir.value()
-
-    sem = _semantic._str_to_sem(sem)
-    scope = _semantic._str_to_scope(scope)
-
-    op = op_str_to_op[_unwrap_if_constexpr(op)]
-    ret_type = value.type
-    if stride is None:
-        stride = 1
-    stride = _semantic.builder.get_int32(stride)
-
-    return _semantic.tensor(
-        _semantic.builder.create_buffer_atomic_rmw(op, ptr.handle, offsets.handle, mask, value.handle, sem, scope,
-                                                   stride), ret_type)
+    return _buffer_atomic_rmw_impl(op, ptr, offsets, value, "cdna3", mask=mask, sem=sem, scope=scope,
+                                   _semantic=_semantic)

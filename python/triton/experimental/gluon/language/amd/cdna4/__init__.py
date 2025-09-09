@@ -1,7 +1,8 @@
 from triton.experimental.gluon.language import _core as ttgl
-from ..._core import builtin, float32
+from ..._core import builtin, float32, _unwrap_if_constexpr
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
+from ..cdna3 import _buffer_atomic_rmw_impl
 from ..cdna3 import *  # NOQA: F403
 from ..cdna3 import __all__ as __cdna3_all
 from . import async_copy
@@ -46,3 +47,12 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
 
     ret_ty = ttgl.distributed_type(tensor.dtype, tensor.shape, layout)
     return ttgl.tensor(tensor.handle, ret_ty)
+
+
+@builtin
+def buffer_atomic_rmw(op, ptr, offsets, value, mask=None, sem=None, scope=None, _semantic=None):
+    """
+    It is almost the same as cdna3.buffer_atomic_rmw except for it support bf16 type fadd op
+    """
+    return _buffer_atomic_rmw_impl(op, ptr, offsets, value, "cdna4", mask=mask, sem=sem, scope=scope,
+                                   _semantic=_semantic)

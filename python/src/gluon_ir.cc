@@ -700,11 +700,11 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_buffer_atomic_rmw",
            [](GluonOpBuilder &self, tt::RMWOp op, Value ptr, Value offsets,
-              Value mask, Value value, tt::MemSemantic sem,
-              tt::MemSyncScope scope, Value stride) -> Value {
+              Value value, tt::MemSemantic sem, tt::MemSyncScope scope,
+              Value mask) -> Value {
              return self.create<ttag::BufferAtomicRMWOp>(
-                 value.getType(), op, ptr, offsets, value, stride, sem, scope,
-                 mask);
+                 value.getType(), op, ptr, offsets, value, Value() /*stride*/,
+                 sem, scope, mask);
            })
       .def("create_buffer_load_to_local",
            [](GluonOpBuilder &self, Value dest, Value ptr, Value offsets,
