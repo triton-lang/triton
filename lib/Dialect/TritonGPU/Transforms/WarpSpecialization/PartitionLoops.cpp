@@ -64,16 +64,23 @@ bool isTensorResultComputedBy(scf::ForOp loop, size_t resultIdx,
   return ret;
 }
 
+SmallVector<size_t> getPartitionIds(Operation *op, size_t numPartitions) {
+  auto partitionIds = triton::gpu::getPartitionIds(op);
+  if (!partitionIds) {
+    SmallVector<size_t> ret(numPartitions);
+    std::iota(ret.begin(), ret.end(), 0);
+    return ret;
+  }
+  SmallVector<size_t> ret(partitionIds->begin(), partitionIds->end());
+  return ret;
+}
+
 SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
                                               const Partition *partition,
                                               const WarpSchedule &schedule) {
   auto inPartition = [&](Operation *op) {
-    auto opPartitionIds = getPartitionIds(op);
-    if (!opPartitionIds) {
-      // This op belongs to all partitions
-      return true;
-    }
-    return llvm::is_contained(*opPartitionIds, partition->getIndex());
+    auto opPartitionIds = getPartitionIds(op, schedule.getNumPartitions());
+    return llvm::is_contained(opPartitionIds, partition->getIndex());
   };
   auto isTensorResultFromOtherPartition = [&](int i) {
     for (auto otherPartition : schedule.getPartitions()) {
@@ -137,6 +144,7 @@ void mapRange(ValueRange fromRange, ValueRange toRange, IRMapping &mapping) {
   }
 }
 
+// TODO: remove this
 int getPartitionIndex(Operation *op) {
   if (isa<nvws::WarpGroupOp>(op->getParentOp()))
     return op->getParentRegion()->getRegionNumber();
@@ -180,21 +188,12 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
 
   for (auto newForOp : newForOps) {
     builders[getPartitionIndex(newForOp)].setInsertionPointAfter(newForOp);
-    WarpSchedule::eraseFrom(newForOp);
   }
 }
 
-SmallVector<size_t> getPartitionIds(Operation* op) {
-  auto partitionIds = triton::gpu::getPartitionIds(op);
-  assert(partitionIds);
-  SmallVector<size_t> ret(partitionIds->begin(), partitionIds->end());
-  return ret;
-}
-
-
 void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
                const WarpSchedule &schedule) {
-  auto partitionIndices = getPartitionIds(ifOp);
+  auto partitionIndices = getPartitionIds(ifOp, schedule.getNumPartitions());
 
   SmallVector<scf::IfOp> newIfOps;
   for (size_t idx : partitionIndices) {
@@ -234,7 +233,8 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
 void cloneReduceOp(triton::ReduceOp reduceOp,
                    SmallVector<WarpGroupBuilder> &builders,
                    const WarpSchedule &schedule) {
-  auto partitionIndices = getPartitionIds(reduceOp);
+  auto partitionIndices =
+      getPartitionIds(reduceOp, schedule.getNumPartitions());
 
   SmallVector<ReduceOp> newReduceOps;
   for (size_t idx : partitionIndices) {
@@ -287,7 +287,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
                      const WarpSchedule &schedule) {
   for (auto &op_ : *block) {
     auto op = &op_;
-    auto partitionIndices = getPartitionIds(op);
+    auto partitionIndices = getPartitionIds(op, schedule.getNumPartitions());
 
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       cloneForOp(forOp, builders, schedule);
