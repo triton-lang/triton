@@ -183,6 +183,8 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
 }
 
+} // namespace
+
 // Returns the layout of a single core matrix which tiles the nvmma layout
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
                                        bool disableSwizzle) {
@@ -195,7 +197,7 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
   int maxPhase = shared.getMaxPhase();
 
   int tileRows = 8;
-  int tileCols = 8 * tileWidthBytes / elemBitWidth;
+  int tileCols = 8 * std::max(16, tileWidthBytes) / elemBitWidth;
   bool isFp4Padded = shared.getFp4Padded();
 
   std::vector<std::vector<int>> bases2D;
@@ -226,8 +228,6 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
   auto outDimNames = standardOutDimNames(ctx, 2);
   return LinearLayout({{S("offset"), bases2D}}, outDimNames);
 }
-
-} // namespace
 
 LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                                        NVMMASharedEncodingAttr shared,
@@ -1180,7 +1180,7 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   assert(encoding.getCTASplitM() == 1 && encoding.getCTASplitN() == 1);
 
   auto blockM = encoding.getBlockM();
-  auto blockN = encoding.getBlockN();
+  auto blockN = std::min<int32_t>(encoding.getBlockN(), shape[1]);
   assert(blockM == 64 || blockM == 128);
   LinearLayout tile;
   if (blockM == 64) {
@@ -1190,7 +1190,7 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     if (shape[0] > blockM) {
       bases[kRow].push_back({64, 0});
     } else if (shape[1] > blockN) {
-      bases[kRow].push_back({0, static_cast<int32_t>(blockN)});
+      bases[kRow].push_back({0, blockN});
     } else {
       // Empty. This is modelled as broadcasting, same as for TMA(fp4)
       bases[kRow].push_back({0, 0});
