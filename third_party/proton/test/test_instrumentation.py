@@ -8,6 +8,8 @@ import triton.language as tl
 import triton.language.semantic
 import triton.profiler.language as pl
 import triton.profiler as proton
+from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 from typing import NamedTuple
@@ -521,3 +523,69 @@ def test_timeline(tmp_path: pathlib.Path):
         assert trace_events[-1]["tid"][0:4] == "warp"
         assert trace_events[-1]["args"]["call_stack"][-1] == "foo"
         assert trace_events[-1]["args"]["call_stack"][-2] == "test"
+
+
+def test_globaltime(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_globaltime.chrome_trace"
+    mode = proton.mode.Default(
+        metric_type="cycle",
+        optimizations="clock32,time_shift",
+        sampling_strategy="selective",
+        sampling_options="0",
+    )
+    proton.start(str(temp_file.with_suffix("")), data="trace", backend="instrumentation", mode=mode)
+
+    @gluon.jit
+    def elementwise_add_kernel(  #
+            a_ptr, b_ptr, c_ptr, xnumel, ynumel,  #
+            xstride_a, ystride_a, xstride_b, ystride_b, xstride_c, ystride_c,  #
+            XBLOCK: gl.constexpr, YBLOCK: gl.constexpr,  #
+    ):
+        pl.enter_scope("elementwise_add_kernel")
+        pid = gl.program_id(0)
+        layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, 32], [1, 0])
+        xoffs = pid * XBLOCK + gl.arange(0, XBLOCK, gl.SliceLayout(1, layout))
+        a_ptrs = a_ptr + xstride_a * xoffs[:, None]
+        b_ptrs = b_ptr + xstride_b * xoffs[:, None]
+        c_ptrs = c_ptr + xstride_c * xoffs[:, None]
+        for yoff in range(0, ynumel, YBLOCK):
+            yoffs = yoff + gl.arange(0, YBLOCK, gl.SliceLayout(0, layout))
+            mask = (xoffs < xnumel)[:, None] & (yoffs < ynumel)[None, :]
+            a_val = gl.load(a_ptrs + ystride_a * yoffs[None, :], mask=mask)
+            b_val = gl.load(b_ptrs + ystride_b * yoffs[None, :], mask=mask)
+            c_val = a_val + b_val
+            gl.store(c_ptrs + ystride_c * yoffs[None, :], c_val, mask=mask)
+        pl.exit_scope("elementwise_add_kernel")
+
+    xnumel, ynumel, XBLOCK, YBLOCK = 40000, 1000, 128, 128
+    a = torch.randn(xnumel, ynumel, device="cuda")
+    b = torch.randn(xnumel, ynumel, device="cuda")
+    c = torch.empty_like(a, device="cuda")
+    grid = (triton.cdiv(xnumel, XBLOCK), )
+    elementwise_add_kernel[grid](
+        a,
+        b,
+        c,
+        xnumel,
+        ynumel,
+        *a.stride(),
+        *b.stride(),
+        *c.stride(),
+        XBLOCK,
+        YBLOCK,
+        num_warps=32,
+    )
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+        trace_events = data["traceEvents"]
+        target = sorted(
+            [event for event in trace_events if "Core0 " in event["pid"]],
+            key=lambda x: x["ts"],
+        )
+        for i in range(1, len(target)):
+            prev_event, curr_event = target[i - 1], target[i]
+            ts_diff = curr_event["ts"] - prev_event["ts"]
+            prev_dur = prev_event["dur"]
+            assert ts_diff >= prev_dur
