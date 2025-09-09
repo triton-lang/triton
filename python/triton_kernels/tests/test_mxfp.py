@@ -176,4 +176,7 @@ if __name__ == "__main__":
         table.append(shape + (dtype, mxfp8_q_bw, mxfp8_dq_bw, mxfp4_q_bw, mxfp4_dq_bw))
 
     from tabulate import tabulate
-    print(tabulate(table, headers=["M", "N", "dtype", "mxfp8_quant_bw", "mxfp8_dequant_bw", "mxfp4_quant_bw", "mxfp4_dequant_bw"]))
+    print(
+        tabulate(
+            table,
+            headers=["M", "N", "dtype", "mxfp8_quant_bw", "mxfp8_dequant_bw", "mxfp4_quant_bw", "mxfp4_dequant_bw"]))
