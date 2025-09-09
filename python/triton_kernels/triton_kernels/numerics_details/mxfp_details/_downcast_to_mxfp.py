@@ -80,7 +80,7 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
 
         # Combine sign, exponent, and mantissa, while saturating
         # Round to nearest, ties to even (RTNE): use guard/sticky and LSB to decide increment
-        m2bits = (mantissas >> 21) & 0x3
+        m2bits = mantissas >> 21
         lsb_keep = (m2bits >> 1) & 0x1
         guard = m2bits & 0x1
         sticky = ((mantissas & 0x1FFFFF) != 0).to(tl.uint32)
