@@ -39,7 +39,7 @@ struct PipelinedLoad {
   }
   LogicalResult determineLiveRange(Block &container, DominanceInfo &domInfo,
                                    PostDominanceInfo &postDomInfo,
-                                   PartitionSet &schedule);
+                                   WarpSchedule &schedule);
 
   Operation *loadOp;
   RankedTensorType type;
@@ -204,7 +204,7 @@ findSharedMemorySinkOps(Value value, SmallVectorImpl<Operation *> &sinkOps) {
 LogicalResult PipelinedLoad::determineLiveRange(Block &container,
                                                 DominanceInfo &domInfo,
                                                 PostDominanceInfo &postDomInfo,
-                                                PartitionSet &schedule) {
+                                                WarpSchedule &schedule) {
   // Find the liveBefore and liveUntil operations of the load.
   llvm::MapVector<Partition *, SmallVector<Operation *>> regSinks, shmemSinks;
   for (Operation *user : loadOp->getUsers()) {
@@ -294,7 +294,7 @@ namespace {
 struct PipelinedLoadGroup {
   Location getLoc();
   void allocateAref(scf::ForOp &loop, int numStages);
-  LogicalResult lowerLoads(PartitionSet &schedule, DominanceInfo &domInfo,
+  LogicalResult lowerLoads(WarpSchedule &schedule, DominanceInfo &domInfo,
                            PostDominanceInfo &postDomInfo);
 
   SmallVector<PipelinedLoad> loads;
@@ -365,7 +365,7 @@ static void lowerTMACopy(PartitionBuilder &b, Partition &loadPartition,
   }
 }
 
-LogicalResult PipelinedLoadGroup::lowerLoads(PartitionSet &schedule,
+LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
                                              DominanceInfo &domInfo,
                                              PostDominanceInfo &postDomInfo) {
   // Insert before the group of loads.
@@ -471,7 +471,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(PartitionSet &schedule,
 //===----------------------------------------------------------------------===//
 
 static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
-                                 PartitionSet &schedule, DominanceInfo &domInfo,
+                                 WarpSchedule &schedule, DominanceInfo &domInfo,
                                  PostDominanceInfo &postDomInfo) {
   ttng::MMAv5OpInterface mmaOp = mma.mmaOp;
   auto fail = [&](StringRef msg) { return emitWarning(mmaOp.getLoc(), msg); };
@@ -844,7 +844,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 
 LogicalResult lowerLoops(scf::ForOp &loop, MutableArrayRef<PipelinedLoad> loads,
                          MutableArrayRef<PipelinedMMA> mmas,
-                         PartitionSet &schedule, int numLoadStages) {
+                         WarpSchedule &schedule, int numLoadStages) {
   Block &body = *loop.getBody();
   DominanceInfo domInfo(loop);
   PostDominanceInfo postDomInfo(loop);
@@ -906,7 +906,7 @@ void LoadMMASpecialization::runOnOperation() {
       loops.push_back(loop);
   });
   for (scf::ForOp loop : loops) {
-    FailureOr<PartitionSet> schedule = PartitionSet::deserialize(loop);
+    FailureOr<WarpSchedule> schedule = WarpSchedule::deserialize(loop);
     if (failed(schedule))
       continue;
     auto [loads, mmas] = getPartitionScheme(loop);

@@ -11,22 +11,22 @@ using namespace triton;
 using namespace triton::gpu;
 
 //===----------------------------------------------------------------------===//
-// PartitionSet
+// WarpSchedule
 //===----------------------------------------------------------------------===//
 
-Partition *PartitionSet::addPartition(unsigned stage) {
+Partition *WarpSchedule::addPartition(unsigned stage) {
   partitions.push_back(std::make_unique<Partition>(partitions.size(), stage));
   return partitions.back().get();
 }
 
-Partition *PartitionSet::getPartition(unsigned idx) {
+Partition *WarpSchedule::getPartition(unsigned idx) {
   return partitions[idx].get();
 }
-const Partition *PartitionSet::getPartition(unsigned idx) const {
+const Partition *WarpSchedule::getPartition(unsigned idx) const {
   return partitions[idx].get();
 }
 
-FailureOr<PartitionSet> PartitionSet::deserialize(scf::ForOp loop) {
+FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
   auto stages = loop->getAttrOfType<ArrayAttr>(kPartitionStagesAttrName);
   if (!stages)
     return failure();
@@ -35,7 +35,7 @@ FailureOr<PartitionSet> PartitionSet::deserialize(scf::ForOp loop) {
   if (!tag)
     return failure();
 
-  PartitionSet result;
+  WarpSchedule result;
   result.tag = tag.getInt();
   for (auto [idx, attr] : llvm::enumerate(stages)) {
     auto stage = dyn_cast<IntegerAttr>(attr);
@@ -62,7 +62,7 @@ FailureOr<PartitionSet> PartitionSet::deserialize(scf::ForOp loop) {
   return result;
 }
 
-void PartitionSet::dump() const {
+void WarpSchedule::dump() const {
   for (auto [i, partition] :
        llvm::enumerate(llvm::make_pointee_range(partitions))) {
     llvm::errs() << "=== PARTITION #" << i << " ===\n";
@@ -192,7 +192,7 @@ void iterateUses(scf::ForOp loop, const Partition *partition,
   }
 }
 
-Partition *getPartition(Operation *op, PartitionSet &schedule) {
+Partition *getPartition(Operation *op, WarpSchedule &schedule) {
   auto id = getPartitionIds(op);
   assert(id && id->size() == 1);
   return schedule.getPartition((*id)[0]);
