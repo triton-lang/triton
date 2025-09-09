@@ -265,6 +265,7 @@ def test_nvidia_tool(fresh_knobs, tmp_path, monkeypatch):
     assert fresh_knobs.nvidia.ptxas_options == "--device-debug"
 
     del fresh_knobs.nvidia.ptxas
+    del fresh_knobs.nvidia.ptxas_options
     assert Path(fresh_knobs.nvidia.ptxas.path).resolve() == tmp_ptxas.resolve()
     assert fresh_knobs.nvidia.ptxas_options == "--verbose"
 
