@@ -21,7 +21,7 @@ static constexpr char kPartitionStagesAttrName[] = "ttg.partition.stages";
 static constexpr char kWarpSpecializeTagAttrName[] = "ttg.warp_specialize.tag";
 
 //===----------------------------------------------------------------------===//
-// WarpSchedule
+// PartitionSet
 //===----------------------------------------------------------------------===//
 
 namespace mlir::triton::gpu {
@@ -51,10 +51,10 @@ private:
   SmallVector<Operation *> ops;
 };
 
-// A warp schedule divides a loop into multiple partitions. Ops in a loop are
-// assigned at most one partition. A warp schedule represents asynchronous
+// A partition set divides a loop into multiple partitions. Ops in a loop are
+// assigned at most one partition. A partition set represents asynchronous
 // execution of the loop body, where partitions may execute simultaneously.
-class WarpSchedule {
+class PartitionSet {
 public:
   // Get WarpSpecialization tag
   int getTag() const { return tag; }
@@ -73,11 +73,11 @@ public:
   // Get the number of partitions.
   unsigned getNumPartitions() const { return partitions.size(); }
 
-  // Deserialize a warp schedule from an `scf.for` op using the attributes
+  // Deserialize a partition set from an `scf.for` op using the attributes
   // tagged on operations in its body.
-  static FailureOr<WarpSchedule> deserialize(scf::ForOp loop);
+  static FailureOr<PartitionSet> deserialize(scf::ForOp loop);
 
-  // Debug dump the schedule.
+  // Debug dump the partition set.
   LLVM_DUMP_METHOD void dump() const;
 
 private:
@@ -92,7 +92,7 @@ void setPartition(Operation *op, const SetVector<int> &partitionIds);
 std::optional<SetVector<int>> getPartitionIds(Operation *op);
 bool hasPartition(Operation *op);
 // Utility to be used when the op is known to belong to one partition
-Partition *getPartition(Operation *op, WarpSchedule &schedule);
+Partition *getPartition(Operation *op, PartitionSet &partitions);
 
 // Iterate the inputs of the partition. Input values are those that originate
 // from a different partition or a previous iteration of the current

@@ -110,8 +110,8 @@ struct AsyncRef {
 // Helper class for dependency rewriting.
 class DependencyRewriter {
 public:
-  DependencyRewriter(WarpSchedule &schedule, scf::ForOp &loop)
-      : schedule(schedule), loop(loop), b(loop.getLoc(), loop),
+  DependencyRewriter(PartitionSet &partitions, scf::ForOp &loop)
+      : partitions(partitions), loop(loop), b(loop.getLoc(), loop),
         endBuilder(loop.getLoc(), loop->getNextNode()) {}
 
   // Partition the loop.
@@ -121,8 +121,8 @@ private:
   AsyncRef allocateAsyncValue(RankedTensorType tensorType,
                               unsigned maxDistance);
 
-  // The schedule to apply.
-  WarpSchedule &schedule;
+  // The partition set to apply.
+  PartitionSet &partitions;
   // The loop to partition.
   scf::ForOp &loop;
   // The builders to use.
@@ -150,7 +150,7 @@ AsyncRef DependencyRewriter::allocateAsyncValue(RankedTensorType tensorType,
 LogicalResult DependencyRewriter::run() {
   SmallVector<llvm::MapVector<Value, UseInfo>> partitionUseInfo;
 
-  for (const Partition &partition : schedule.getPartitions()) {
+  for (const Partition &partition : partitions.getPartitions()) {
     // Find all consumers of all outputs of this partition, tracking the
     // specific Partition
     auto &useInfo = partitionUseInfo.emplace_back();
@@ -174,7 +174,7 @@ LogicalResult DependencyRewriter::run() {
       }
     };
     for (Operation *op : partition.getOps()) {
-      if (getPartitionIds(op)->size() == schedule.getNumPartitions()) {
+      if (getPartitionIds(op)->size() == partitions.getNumPartitions()) {
         // skip ops in the root partition
         continue;
       }
@@ -185,7 +185,7 @@ LogicalResult DependencyRewriter::run() {
 
     auto callback = [&](Value output, OpOperand &use, unsigned distance) {
       Operation *user = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
-      Partition *usePartition = getPartition(user, schedule);
+      Partition *usePartition = getPartition(user, partitions);
       // Ignore uses in the same partition in the future.
       if (usePartition == &partition) {
         assert(distance > 0 && "self-recursion must occur in the future");
@@ -206,7 +206,7 @@ LogicalResult DependencyRewriter::run() {
 
   // Cut all SSA dependencies by passing outputs through shared memory.
   for (auto [partition, useInfo] :
-       llvm::zip(schedule.getPartitions(), partitionUseInfo)) {
+       llvm::zip(partitions.getPartitions(), partitionUseInfo)) {
     // The amount of buffering is based on the longest distance to a user.
     for (auto &[output, info] : useInfo) {
       b.setLoc(output.getLoc());
@@ -302,11 +302,11 @@ LogicalResult DependencyRewriter::run() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult triton::gpu::rewritePartitionDependencies(scf::ForOp &loop) {
-  FailureOr<WarpSchedule> scheduleOr = WarpSchedule::deserialize(loop);
-  if (failed(scheduleOr))
+  FailureOr<PartitionSet> partitionsOr = PartitionSet::deserialize(loop);
+  if (failed(partitionsOr))
     return failure();
-  WarpSchedule schedule = std::move(*scheduleOr);
-  DependencyRewriter rewriter(schedule, loop);
+  PartitionSet partitions = std::move(*partitionsOr);
+  DependencyRewriter rewriter(partitions, loop);
   if (failed(rewriter.run()))
     return failure();
   return success();

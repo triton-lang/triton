@@ -84,7 +84,7 @@ static void iterateUsers(scf::ForOp loop, Operation *op,
 
 // Check if any of the inputs to `op` are reachable from a non-null partition.
 static bool hasDefPartition(scf::ForOp loop, Operation *op,
-                            WarpSchedule &schedule) {
+                            PartitionSet &partitions) {
   SmallVector<Operation *> worklist{op};
   DenseSet<Operation *> seen;
   while (!worklist.empty()) {
@@ -92,7 +92,7 @@ static bool hasDefPartition(scf::ForOp loop, Operation *op,
     if (!seen.insert(op).second)
       continue;
     auto partitionIds = getPartitionIds(op);
-    if (partitionIds && partitionIds->size() != schedule.getNumPartitions())
+    if (partitionIds && partitionIds->size() != partitions.getNumPartitions())
       return true;
     iterateDefs(loop, op,
                 [&](OpResult def) { worklist.push_back(def.getDefiningOp()); });
@@ -102,7 +102,7 @@ static bool hasDefPartition(scf::ForOp loop, Operation *op,
 
 // Recursively schedule the dependencies of an operation, stopping when
 // encountering an operation that is already assigned.
-static void scheduleDependencies(scf::ForOp loop, WarpSchedule &schedule,
+static void scheduleDependencies(scf::ForOp loop, PartitionSet &partitions,
                                  Partition *partition, Operation *op) {
   SmallVector<Value> deps;
   for (Value value : getNestedOperands(op)) {
@@ -121,7 +121,7 @@ static void scheduleDependencies(scf::ForOp loop, WarpSchedule &schedule,
 
     Operation *defOp =
         loop.getBody()->findAncestorOpInBlock(*dep.getDefiningOp());
-    if (!defOp || !hasDefPartition(loop, defOp, schedule) ||
+    if (!defOp || !hasDefPartition(loop, defOp, partitions) ||
         !trySetPartition(defOp, partition))
       continue;
     llvm::append_range(deps, getNestedOperands(defOp));
@@ -130,7 +130,7 @@ static void scheduleDependencies(scf::ForOp loop, WarpSchedule &schedule,
 
 // Recursively schedule the users of an operation, stopping when
 // encountering an operation that is already assigned.
-static void scheduleUsers(scf::ForOp loop, WarpSchedule &schedule,
+static void scheduleUsers(scf::ForOp loop, PartitionSet &partitions,
                           Partition *partition, Operation *op) {
   SmallVector<OpOperand *> uses;
   for (OpOperand &use : op->getUses())
@@ -164,17 +164,17 @@ static bool isOpInPartition(Operation *op, const Partition *partition) {
 // Given a partitioning scheme, determine an initial schedule by performing a
 // first-order partition assignment to the operations in the scheme and its
 // users and/or dependencies. This sets up the initial partitioning of the ops.
-static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
-  // Check for an existing schedule.
-  if (FailureOr<WarpSchedule> scheduleOr = WarpSchedule::deserialize(loop);
-      succeeded(scheduleOr))
-    return {std::move(*scheduleOr)};
+static std::optional<PartitionSet> getInitialSchedule(scf::ForOp loop) {
+  // Check for an existing partition set.
+  if (FailureOr<PartitionSet> partitionsOr = PartitionSet::deserialize(loop);
+      succeeded(partitionsOr))
+    return {std::move(*partitionsOr)};
   // Start by creating the default partition, a partition for for all loads, and
   // a partition for all MMAs.
-  WarpSchedule schedule;
-  Partition *defaultPartition = schedule.addPartition(0);
-  Partition *mmaPartition = schedule.addPartition(1);
-  Partition *loadPartition = schedule.addPartition(0);
+  PartitionSet partitions;
+  Partition *defaultPartition = partitions.addPartition(0);
+  Partition *mmaPartition = partitions.addPartition(1);
+  Partition *loadPartition = partitions.addPartition(0);
 
   // Find loads to pipeline.
   SmallVector<Operation *> loadsAndAllocs;
@@ -259,24 +259,24 @@ static std::optional<WarpSchedule> getInitialSchedule(scf::ForOp loop) {
     }
     if (elementCount > 256) {
       setPartition(&op, defaultPartition);
-      scheduleDependencies(loop, schedule, defaultPartition, &op);
+      scheduleDependencies(loop, partitions, defaultPartition, &op);
     }
   }
 
   // Propagate users of loads and MMAs.
   for (Operation *loadOrAlloc : loadsAndAllocs)
-    scheduleUsers(loop, schedule, defaultPartition, loadOrAlloc);
+    scheduleUsers(loop, partitions, defaultPartition, loadOrAlloc);
 
   SmallVector<Partition *> userPartitions{defaultPartition};
   while (userPartitions.size() < mmas.size()) {
-    userPartitions.push_back(schedule.addPartition(userPartitions.size()));
+    userPartitions.push_back(partitions.addPartition(userPartitions.size()));
   }
   for (auto [mmaOp, userPartition] :
        llvm::reverse(llvm::zip(mmas, userPartitions))) {
-    scheduleUsers(loop, schedule, userPartition, mmaOp);
+    scheduleUsers(loop, partitions, userPartition, mmaOp);
   }
 
-  return schedule;
+  return partitions;
 }
 
 namespace {
@@ -337,15 +337,15 @@ struct OpClusters : public llvm::MapVector<Operation *, OpCluster *> {
 // operation in a partition. This function propagates partitions by first
 // forming contiguous clusters from the unassigned operations and then deciding
 // what to do with the operations in that cluster.
-void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
+void propagatePartitions(scf::ForOp loop, PartitionSet &partitions) {
   OpClusters opClusters;
 
-  for (Partition &partition : schedule.getPartitions()) {
+  for (Partition &partition : partitions.getPartitions()) {
     // For each partition, check if any of their inputs are reachable from
     // another partition and spawn a single cluster at that operation.
     auto defCallback = [&](OpResult result, unsigned distance) {
       Operation *defOp = result.getDefiningOp();
-      if (!hasPartition(defOp) && hasDefPartition(loop, defOp, schedule)) {
+      if (!hasPartition(defOp) && hasDefPartition(loop, defOp, partitions)) {
         // Add the current partition as a sink to the cluster.
         opClusters.getOrCreate(defOp)->sinkPartitions.insert(&partition);
       }
@@ -380,11 +380,11 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
         // The input originates from an operation already assigned to a
         // partition. Add this as a def partition.
         for (auto id : *partitionIds) {
-          cluster->defPartitions.insert(schedule.getPartition(id));
+          cluster->defPartitions.insert(partitions.getPartition(id));
         }
       } else {
         // If the input is not reachable from a partition, ignore it.
-        if (!hasDefPartition(loop, defOp, schedule))
+        if (!hasDefPartition(loop, defOp, partitions))
           return;
         // This operation is not assigned to a partition.
         OpCluster *&defCluster = opClusters[defOp];
@@ -407,7 +407,7 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
         // If the user is already assigned to a partition, add that partition as
         // one of the sink partitions.
         for (auto id : *partitionIds) {
-          cluster->sinkPartitions.insert(schedule.getPartition(id));
+          cluster->sinkPartitions.insert(partitions.getPartition(id));
         }
         return;
       }
@@ -439,7 +439,7 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
     // If there are multiple def or sink partitions, don't know what to do.
     // Assign the whole cluster to its own partition.
     if (cluster.defPartitions.size() > 1 || cluster.sinkPartitions.size() > 1) {
-      Partition *newPartition = schedule.addPartition(0);
+      Partition *newPartition = partitions.addPartition(0);
       for (Operation *op : cluster.ops)
         setPartition(op, newPartition);
       continue;
@@ -502,7 +502,7 @@ void propagatePartitions(scf::ForOp loop, WarpSchedule &schedule) {
 
 // Rematerialize chains of broadcasts where the user is in a different partition
 // than the broadcast to reduce the amount of data that needs to be transferred.
-void rematerializeBroadcasts(WarpSchedule &schedule, OpOperand *use) {
+void rematerializeBroadcasts(PartitionSet &partitions, OpOperand *use) {
   static_assert(
       std::is_base_of_v<OpTrait::OneResult<BroadcastOp>, BroadcastOp> &&
       std::is_base_of_v<OpTrait::OneResult<ExpandDimsOp>, ExpandDimsOp>);
@@ -513,7 +513,7 @@ void rematerializeBroadcasts(WarpSchedule &schedule, OpOperand *use) {
     auto userPartitionIds = getPartitionIds(use->getOwner());
     assert(userPartitionIds && "user not scheduled");
     for (auto id : *userPartitionIds) {
-      Partition *userPartition = schedule.getPartition(id);
+      Partition *userPartition = partitions.getPartition(id);
       setPartition(clone, userPartition);
     }
     use->set(clone->getResult(0));
@@ -523,8 +523,8 @@ void rematerializeBroadcasts(WarpSchedule &schedule, OpOperand *use) {
   }
 }
 
-void optimizeSchedule(scf::ForOp loop, WarpSchedule &schedule) {
-  for (Partition &partition : schedule.getPartitions()) {
+void optimizeSchedule(scf::ForOp loop, PartitionSet &partitions) {
+  for (Partition &partition : partitions.getPartitions()) {
     SmallVector<OpOperand *> uses;
     iterateOutputs(loop, &partition,
                             [&](Operation *defOp, OpOperand &use) {
@@ -532,7 +532,7 @@ void optimizeSchedule(scf::ForOp loop, WarpSchedule &schedule) {
                                 uses.push_back(&use);
                             });
     for (OpOperand *use : uses)
-      rematerializeBroadcasts(schedule, use);
+      rematerializeBroadcasts(partitions, use);
   }
 }
 
@@ -562,16 +562,16 @@ void PartitionScheduling::runOnOperation() {
       loops.push_back(loop);
   });
   for (auto [idx, loop] : llvm::enumerate(loops)) {
-    if (std::optional<WarpSchedule> schedule = getInitialSchedule(loop)) {
-      propagatePartitions(loop, *schedule);
-      optimizeSchedule(loop, *schedule);
+    if (std::optional<PartitionSet> partitions = getInitialSchedule(loop)) {
+      propagatePartitions(loop, *partitions);
+      optimizeSchedule(loop, *partitions);
       loop->setAttr(
           kWarpSpecializeTagAttrName,
           IntegerAttr::get(IntegerType::get(loop.getContext(), 32), idx));
 
       SmallVector<Attribute> stages;
       Builder b(loop.getContext());
-      for (Partition &partition : schedule->getPartitions())
+      for (Partition &partition : partitions->getPartitions())
 	stages.push_back(b.getI32IntegerAttr(partition.getStage()));
       loop->setAttr(kPartitionStagesAttrName, b.getArrayAttr(stages));
     }

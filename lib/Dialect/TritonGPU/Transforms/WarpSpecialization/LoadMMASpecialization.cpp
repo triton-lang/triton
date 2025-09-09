@@ -39,7 +39,7 @@ struct PipelinedLoad {
   }
   LogicalResult determineLiveRange(Block &container, DominanceInfo &domInfo,
                                    PostDominanceInfo &postDomInfo,
-                                   WarpSchedule &schedule);
+                                   PartitionSet &partitions);
 
   Operation *loadOp;
   RankedTensorType type;
@@ -204,7 +204,7 @@ findSharedMemorySinkOps(Value value, SmallVectorImpl<Operation *> &sinkOps) {
 LogicalResult PipelinedLoad::determineLiveRange(Block &container,
                                                 DominanceInfo &domInfo,
                                                 PostDominanceInfo &postDomInfo,
-                                                WarpSchedule &schedule) {
+                                                PartitionSet &partitions) {
   // Find the liveBefore and liveUntil operations of the load.
   llvm::MapVector<Partition *, SmallVector<Operation *>> regSinks, shmemSinks;
   for (Operation *user : loadOp->getUsers()) {
@@ -213,14 +213,14 @@ LogicalResult PipelinedLoad::determineLiveRange(Block &container,
       // This is an in-register use of the load. The result must be live before
       // the op. Since it will be loaded out of shared memory, it only needs to
       // be live until the op as well.
-      regSinks[getPartition(user, schedule)].push_back(user);
+      regSinks[getPartition(user, partitions)].push_back(user);
       continue;
     }
     SmallVector<Operation *> sinkOps;
     if (failed(findSharedMemorySinkOps((*it)->getResult(0), sinkOps)))
       return failure();
     for (Operation *sinkOp : sinkOps)
-      shmemSinks[getPartition(sinkOp, schedule)].push_back(sinkOp);
+      shmemSinks[getPartition(sinkOp, partitions)].push_back(sinkOp);
   }
   SetVector<Partition *> userPartitions;
   userPartitions.insert_range(llvm::make_first_range(regSinks));
@@ -294,7 +294,7 @@ namespace {
 struct PipelinedLoadGroup {
   Location getLoc();
   void allocateAref(scf::ForOp &loop, int numStages);
-  LogicalResult lowerLoads(WarpSchedule &schedule, DominanceInfo &domInfo,
+  LogicalResult lowerLoads(PartitionSet &partitions, DominanceInfo &domInfo,
                            PostDominanceInfo &postDomInfo);
 
   SmallVector<PipelinedLoad> loads;
@@ -365,14 +365,14 @@ static void lowerTMACopy(PartitionBuilder &b, Partition &loadPartition,
   }
 }
 
-LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
+LogicalResult PipelinedLoadGroup::lowerLoads(PartitionSet &partitions,
                                              DominanceInfo &domInfo,
                                              PostDominanceInfo &postDomInfo) {
   // Insert before the group of loads.
   auto firstLoad = llvm::min_element(loads, [&](auto &lhs, auto &rhs) {
     return domInfo.properlyDominates(lhs.loadOp, rhs.loadOp);
   });
-  Partition &loadPartition = *getPartition(firstLoad->loadOp, schedule);
+  Partition &loadPartition = *getPartition(firstLoad->loadOp, partitions);
   PartitionBuilder b(getLoc(), firstLoad->loadOp);
   StageCluster stageCluster = getStageCluster(firstLoad->loadOp);
 
@@ -395,7 +395,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
   DenseMap<Partition *, ttng::ArriveBarrierOp> arriveOps;
   for (auto [i, liveBeforeOp] : llvm::enumerate(firstLoad->liveBeforeOps)) {
     b.setInsertionPoint(liveBeforeOp);
-    Partition &userPartition = *getPartition(liveBeforeOp, schedule);
+    Partition &userPartition = *getPartition(liveBeforeOp, partitions);
     StageCluster userStageCluster = getStageCluster(liveBeforeOp);
     b.createInto<ttng::WaitBarrierOp>(userPartition, userStageCluster,
                                       curLoadBar, phase);
@@ -414,7 +414,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
       b.setInsertionPoint(liveUntilOp);
       auto arriveOp = b.createInto<ttng::ArriveBarrierOp>(
           userPartition, userStageCluster, curEmptyBar, 1);
-      arriveOps[getPartition(liveUntilOp, schedule)] = arriveOp;
+      arriveOps[getPartition(liveUntilOp, partitions)] = arriveOp;
     }
   }
 
@@ -444,7 +444,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
     // If there are remaining users, they must be in-register.
     llvm::MapVector<Partition *, SmallVector<OpOperand *>> regUses;
     for (OpOperand &use : load.loadOp->getUses())
-      regUses[getPartition(use.getOwner(), schedule)].push_back(&use);
+      regUses[getPartition(use.getOwner(), partitions)].push_back(&use);
     for (auto &[partition, uses] : regUses) {
       auto users = llvm::to_vector(llvm::map_range(
           uses, [](OpOperand *use) { return use->getOwner(); }));
@@ -471,7 +471,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(WarpSchedule &schedule,
 //===----------------------------------------------------------------------===//
 
 static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
-                                 WarpSchedule &schedule, DominanceInfo &domInfo,
+                                 PartitionSet &partitions, DominanceInfo &domInfo,
                                  PostDominanceInfo &postDomInfo) {
   ttng::MMAv5OpInterface mmaOp = mma.mmaOp;
   auto fail = [&](StringRef msg) { return emitWarning(mmaOp.getLoc(), msg); };
@@ -673,7 +673,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     defOp = inBody(defOp);
     auto partitionIds = getPartitionIds(defOp);
 
-    if (!partitionIds || partitionIds->size() == schedule.getNumPartitions()) {
+    if (!partitionIds || partitionIds->size() == partitions.getNumPartitions()) {
       // If the MMA operand is coming from outside the loop, move the alloc out.
       auto allocOp = dyn_cast<LocalAllocOp>(defOp);
       if (allocOp && loop.isDefinedOutsideOfLoop(allocOp.getSrc()))
@@ -681,7 +681,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       continue;
     }
 
-    Partition *defPartition = schedule.getPartition((*partitionIds)[0]);
+    Partition *defPartition = partitions.getPartition((*partitionIds)[0]);
 
     if (auto allocOp = operand.getDefiningOp<LocalAllocOp>()) {
       PartitionBuilder b(allocOp.getLoc(), allocOp);
@@ -717,7 +717,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   }
 
   for (Node &node : nodes) {
-    Partition *partition = getPartition(inBody(node.op), schedule);
+    Partition *partition = getPartition(inBody(node.op), partitions);
     PartitionBuilder b(node.op->getLoc(), loop);
 
     SmallVector<Operation *> defs;
@@ -809,7 +809,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 
     b.setInsertionPoint(mmaOp);
     Value readyView2 = createSingleBufferView(b, readyBar, index);
-    b.createInto<ttng::WaitBarrierOp>(*getPartition(mmaOp, schedule),
+    b.createInto<ttng::WaitBarrierOp>(*getPartition(mmaOp, partitions),
                                       getStageCluster(mmaOp), readyView2,
                                       phase);
     Value emptyView2 = createSingleBufferView(b, emptyBar, index);
@@ -844,7 +844,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 
 LogicalResult lowerLoops(scf::ForOp &loop, MutableArrayRef<PipelinedLoad> loads,
                          MutableArrayRef<PipelinedMMA> mmas,
-                         WarpSchedule &schedule, int numLoadStages) {
+                         PartitionSet &partitions, int numLoadStages) {
   Block &body = *loop.getBody();
   DominanceInfo domInfo(loop);
   PostDominanceInfo postDomInfo(loop);
@@ -854,7 +854,7 @@ LogicalResult lowerLoops(scf::ForOp &loop, MutableArrayRef<PipelinedLoad> loads,
   llvm::MapVector<ArrayRef<Operation *>, SmallVector<PipelinedLoad>>
       liveBeforeGroups;
   for (PipelinedLoad &load : loads) {
-    if (failed(load.determineLiveRange(body, domInfo, postDomInfo, schedule)))
+    if (failed(load.determineLiveRange(body, domInfo, postDomInfo, partitions)))
       return failure();
     liveBeforeGroups[load.liveBeforeOps].push_back(std::move(load));
   }
@@ -867,13 +867,13 @@ LogicalResult lowerLoops(scf::ForOp &loop, MutableArrayRef<PipelinedLoad> loads,
     group.allocateAref(loop, numLoadStages);
 
   for (PipelinedLoadGroup &group : loadGroups) {
-    if (failed(group.lowerLoads(schedule, domInfo, postDomInfo)))
+    if (failed(group.lowerLoads(partitions, domInfo, postDomInfo)))
       return failure();
   }
 
   // Multi-buffer and lower the MMAs.
   for (PipelinedMMA &mma : mmas) {
-    if (failed(pipelineMMA(loop, mma, schedule, domInfo, postDomInfo)))
+    if (failed(pipelineMMA(loop, mma, partitions, domInfo, postDomInfo)))
       return failure();
   }
 
@@ -906,14 +906,14 @@ void LoadMMASpecialization::runOnOperation() {
       loops.push_back(loop);
   });
   for (scf::ForOp loop : loops) {
-    FailureOr<WarpSchedule> schedule = WarpSchedule::deserialize(loop);
-    if (failed(schedule))
+    FailureOr<PartitionSet> partitions = PartitionSet::deserialize(loop);
+    if (failed(partitions))
       continue;
     auto [loads, mmas] = getPartitionScheme(loop);
     if (loads.empty() && mmas.empty())
       continue;
     int loopNumStages = getNumStagesOrDefault(loop, numStages);
-    if (failed(lowerLoops(loop, loads, mmas, *schedule, loopNumStages)))
+    if (failed(lowerLoops(loop, loads, mmas, *partitions, loopNumStages)))
       continue;
   }
 }
