@@ -1,4 +1,5 @@
 #include "triton/Analysis/Membar.h"
+#include "mlir/IR/Builders.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -157,10 +158,15 @@ void MembarOrFenceAnalysis::visitTerminator(
   llvm_unreachable("Unknown terminator encountered in membar analysis");
 }
 
-gpu::BarrierOp MembarAnalysis::insertBarrier(Operation *op,
-                                             OpBuilder *builder) {
-  OpBuilder::InsertionGuard g(*builder);
-  return builder->create<gpu::BarrierOp>(op->getLoc());
+MembarAnalysis::MembarAnalysis(Allocation *allocation, MembarFilterFn filter,
+                               MembarInsertBarrierFn insertBarrierFn)
+    : MembarOrFenceAnalysis(allocation, filter, insertBarrierFn) {
+  if (!insertBarrierFn) {
+    insertBarrier = [](Operation *op, OpBuilder *builder) {
+      OpBuilder::InsertionGuard g(*builder);
+      auto barrierOp = builder->create<gpu::BarrierOp>(op->getLoc());
+    };
+  }
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
@@ -177,8 +183,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // If the current op is an async wait and the next op is not a barrier we
     // insert a barrier op and sync
     builder->setInsertionPointAfter(op);
-    auto barrierOp = insertBarrier(op, builder);
-    barrierOp->setAttr("fromWaitOp", builder->getI32IntegerAttr(1));
+    insertBarrier(op, builder);
     blockInfo->sync();
     return;
   }
