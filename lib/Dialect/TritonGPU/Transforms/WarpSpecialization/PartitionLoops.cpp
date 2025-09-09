@@ -188,6 +188,7 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
 
   for (auto newForOp : newForOps) {
     builders[getPartitionIndex(newForOp)].setInsertionPointAfter(newForOp);
+    WarpSchedule::eraseFrom(newForOp);
   }
 }
 
@@ -364,8 +365,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
       return failure();
   }
 
-  // There is nothing to do if the loop does not have any partition.
-  if (llvm::size(schedule.getPartitions()) == 0)
+  // There is nothing to do if the loop has 1 or fewer partitions.
+  if (llvm::size(schedule.getPartitions()) <= 1)
     return success();
 
   auto numPartitions = schedule.getNumPartitions();
