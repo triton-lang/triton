@@ -461,6 +461,14 @@ class CUDABackend(BaseBackend):
             # Accept more ptxas options if provided
             ptx_extra_options = opt.ptx_options.split(" ") if opt.ptx_options else []
 
+            # Accept more ptxas options if ptxas related envs are provided
+            if not knobs.nvidia.disable_ptxas_opt and (
+                ptxas_options := os.environ.get("PTXAS_OPTIONS", None)
+            ):
+                kernel_name = os.environ.get("PTXAS_OPTIONS_KERNEL", None)
+                if not kernel_name or kernel_name == metadata["name"]:
+                    ptx_extra_options.extend(ptxas_options.split(" "))
+
             ptxas_cmd = [
                 ptxas, *debug_info, *fmad, '-v', *disable_opt, *ptx_extra_options, f'--gpu-name={arch}', fsrc.name,
                 '-o', fbin
