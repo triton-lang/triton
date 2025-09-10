@@ -553,7 +553,7 @@ def test_globaltime(tmp_path: pathlib.Path):
     output = torch.empty_like(x)
     n_elements = output.numel()
     BLOCK_SIZE = 1024
-    grid = lambda meta: (triton.cdiv(n_elements, BLOCK_SIZE),)
+    grid = lambda meta: (triton.cdiv(n_elements, BLOCK_SIZE), )
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE, num_warps=16)
     proton.finalize()
 
@@ -566,5 +566,5 @@ def test_globaltime(tmp_path: pathlib.Path):
         )
         s = len(target)
         assert s > 1
-        ts_diff = target[s-1]["ts"] - target[0]["ts"]
+        ts_diff = target[s - 1]["ts"] - target[0]["ts"]
         assert ts_diff >= target[0]["dur"]
