@@ -556,14 +556,28 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   if (llvmElemTy.getIntOrFloatBitWidth() < 32) {
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
     LinearLayout quot;
-    if (auto maybeQuot = divideLeft(
-            cvt, LinearLayout::identity1D(32 / bitwidth, kReg, kCol))) {
+    Type packedElemTy;
+    int bestContig = 1;
+    for (int contig = 1; bitwidth * contig <= 32; contig *= 2) {
+      auto maybeQuot =
+          divideLeft(cvt, LinearLayout::identity1D(contig, kReg, kCol));
+      if (!maybeQuot)
+        break;
       quot = *maybeQuot;
+      bestContig = contig;
+    }
+    if (bestContig > 1) {
+      // There are contiguous elements along kCol, so we can pack them into a
+      // larger dtype
       unpacked = false;
-    } else if (auto maybeQuot = divideRight(
-                   cvt, LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth))) {
+      packedElemTy = int_ty(bitwidth * bestContig);
+    } else if (auto maybeQuot = divideLeft(
+                   cvt, LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth));
+               bitwidth == 16 && maybeQuot) {
+      // Unpacked just supported for bitwidth 16
       quot = *maybeQuot;
       unpacked = true;
+      packedElemTy = i32_ty;
     } else {
       emitError(loc, "Failed to lower TMEM load/store: TMEM layout is not "
                      "packed or unpacked");
@@ -571,10 +585,11 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
     }
     SmallVector<Value> inVals;
     if (isStore) {
-      inVals = pack(vals, i32_ty, loc, rewriter);
+      inVals = pack(vals, packedElemTy, loc, rewriter);
     }
-    auto outValsOr = lowerTMemLdSt(loc, ctx, rewriter, quot, inVals, i32_ty,
-                                   tmemBase, maxnreg, pred, unpacked);
+    auto outValsOr =
+        lowerTMemLdSt(loc, ctx, rewriter, quot, inVals, packedElemTy, tmemBase,
+                      maxnreg, pred, unpacked);
     if (failed(outValsOr))
       return failure();
     auto outVals = std::move(*outValsOr);
@@ -583,6 +598,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
     }
     return outVals;
   }
+
   assert(!isStore || cvt.getInDimSize(kReg) == vals.size());
   auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
   auto nRow = cvt.getOutDimSize(kRow);
@@ -653,7 +669,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
 static FailureOr<SmallVector<Value>> lowerTMemLdStFromTypes(
     Location loc, MLIRContext *ctx, ConversionPatternRewriter &rewriter,
     RankedTensorType regTy, MemDescType memTy, Value tmemBase, int maxnreg,
-    Value pred, Type llvmElemTy, ArrayRef<Value> storeVals) {
+    Value pred, Type llvmElemTy, ArrayRef<Value> vals) {
   auto memLayout = toLinearLayout(memTy);
   auto regLayout = toLinearLayout(regTy);
   auto cvt = regLayout.invertAndCompose(memLayout);
@@ -668,37 +684,8 @@ static FailureOr<SmallVector<Value>> lowerTMemLdStFromTypes(
   assert(maybeQuot.has_value());
   auto quot = maybeQuot->unsqueezeIn(kBlock);
 
-  // Handle K = 1 and K = 2 cases
-  auto K = regTy.getDimSize(1);
-  auto undefShmem =
-      isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding()) && K < 4;
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  bool isStore = !storeVals.empty();
-  auto inVals = to_vector(storeVals);
-  auto packedLlvmElemTy = llvmElemTy;
-  auto packedLayout = std::move(quot);
-  if (undefShmem) {
-    auto kReg = str_attr("register");
-    auto tile = LinearLayout::identity1D(K, kReg, kCol) *
-                LinearLayout::zeros1D(4 / K, kReg, kCol);
-    auto maybePacked = divideLeft(packedLayout, tile);
-    assert(maybePacked.has_value());
-    packedLayout = std::move(*maybePacked);
-    if (isStore) {
-      inVals = pack(inVals, i32_ty, loc, rewriter);
-    }
-    packedLlvmElemTy = i32_ty;
-  }
-
-  auto resultValsOr = lowerTMemLdSt(loc, ctx, rewriter, packedLayout, inVals,
-                                    packedLlvmElemTy, tmemBase, maxnreg, pred);
-  if (failed(resultValsOr))
-    return failure();
-  auto resultVals = std::move(*resultValsOr);
-  if (!isStore && undefShmem) {
-    resultVals = unpack(resultVals, llvmElemTy, loc, rewriter);
-  }
-  return resultVals;
+  return lowerTMemLdSt(loc, ctx, rewriter, quot, vals, llvmElemTy, tmemBase,
+                       maxnreg, pred);
 }
 
 struct TensorMemoryLoadOpConversion

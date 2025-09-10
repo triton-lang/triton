@@ -1188,15 +1188,11 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   auto blockM = encoding.getBlockM();
   auto blockN = std::min<int32_t>(encoding.getBlockN(), shape[1]);
   assert(blockM == 64 || blockM == 128);
-  // If unpacked, the zeros along the col dimension mean that the elements are
-  // not defined
   LinearLayout tile =
-      encoding.getUnpacked()
-          ? LinearLayout::zeros1D(32 / encoding.getBitwidth(), kCol, dims[1])
-          : LinearLayout::empty();
+      LinearLayout::zeros1D(encoding.getColStride(), kCol, dims[1]);
   if (blockM == 64) {
-    tile = LinearLayout::identity1D(16, kRow, dims[0]) *
-           LinearLayout::identity1D(blockN, kCol, dims[1]);
+    tile *= LinearLayout::identity1D(16, kRow, dims[0]) *
+            LinearLayout::identity1D(blockN, kCol, dims[1]);
     auto bases = tile.getBases();
     if (shape[0] > blockM) {
       bases[kRow].push_back({64, 0});
@@ -1210,8 +1206,8 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
     bases[kRow].push_back({32, 0});
     tile = LinearLayout(bases, dims);
   } else {
-    tile = LinearLayout::identity1D(blockM, kRow, dims[0]) *
-           LinearLayout::identity1D(blockN, kCol, dims[1]);
+    tile *= LinearLayout::identity1D(blockM, kRow, dims[0]) *
+            LinearLayout::identity1D(blockN, kCol, dims[1]);
   }
   auto repsM = shape[0] / tile.getOutDimSize(dims[0]);
   auto repsN = shape[1] / tile.getOutDimSize(dims[1]);
