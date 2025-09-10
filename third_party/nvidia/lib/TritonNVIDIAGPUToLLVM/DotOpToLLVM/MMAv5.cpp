@@ -25,7 +25,7 @@ mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::DotOpMmaV5TmemLoader(
   auto ty = cast<MemDescType>(tensor.getType());
   auto tmemEncoding = cast<ttng::TensorMemoryEncodingAttr>(ty.getEncoding());
   int elTyWidth = ty.getElementTypeBitWidth();
-  unpacked = tmemEncoding.getColStride() * elTyWidth == 32;
+  unpacked = tmemEncoding.getColStride() != 1;
   // When using TMEM to store operands mma operands the TMEM block size may be
   // smaller than mma k block. Therefore we need to adjust the offset
   // calculation.

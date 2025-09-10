@@ -701,7 +701,7 @@ static FailureOr<SmallVector<Value>> lowerTMemLdStFromTypes(
   bool unpacked;
   unsigned elementBitWidth = memTy.getElementType().getIntOrFloatBitWidth();
   if (auto enc = dyn_cast<TensorMemoryEncodingAttr>(memTy.getEncoding())) {
-    unpacked = enc.getColStride() * elementBitWidth == 32;
+    unpacked = enc.getColStride() != 1;
   } else {
     assert(isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding()));
     unpacked = false;

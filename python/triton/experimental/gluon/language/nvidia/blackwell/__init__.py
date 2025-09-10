@@ -50,13 +50,6 @@ class TensorMemoryLayout:
         assert self.cta_split_num is None or len(self.cta_split_num) == 2
         assert self.col_stride >= 1 and (self.col_stride &
                                          (self.col_stride - 1)) == 0, "tensor memory col_stride must be a power of two"
-        # The dtype supplied when constructing a memdesc enforces
-        # bitwidth * col_stride <= 32. We only check the power-of-two
-        # restriction here as the dtype is not known.
-
-    @property
-    def unpacked(self) -> bool:
-        return self.col_stride != 1
 
     def _to_ir(self, builder):
         cta_split_num = self.cta_split_num or [1, 1]
@@ -69,9 +62,8 @@ class TensorMemoryLayout:
     def mangle(self) -> str:
         block_str = f"{self.block[0]}x{self.block[1]}"
         stride_str = f"C{self.col_stride}"
-        unpacked_str = "U" if self.unpacked else "P"
         cta_split_str = (f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else "")
-        return f"TL{block_str}{stride_str}{unpacked_str}{cta_split_str}TL"
+        return f"TL{block_str}{stride_str}{cta_split_str}TL"
 
 
 @dataclass(frozen=True, eq=True)
