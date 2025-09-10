@@ -406,23 +406,44 @@ void createTMABarrierAndWait(
 }
 
 // Check if load requires additional buffer for a mma pipelining
-bool loadRequiresAdditionalBuffer(Operation *loadOp) {
-  auto skipViewOps = [](Operation *op) -> Operation * {
-    while (op->hasOneUse() && op->hasTrait<OpTrait::MemDescViewTrait>()) {
-      op = *op->getUsers().begin();
-    }
-    return op;
+bool loadRequiresAdditionalBuffer(Operation *op) {
+  static bool (*hasWGMMAUser)(Operation *) = [](Operation *op) -> bool {
+    if (isa<ttng::WarpGroupDotOp>(op))
+      return true;
+
+    return op->hasTrait<OpTrait::MemDescViewTrait>() &&
+           llvm::any_of(op->getUsers(),
+                        [](Operation *op) { return hasWGMMAUser(op); });
   };
+
+  if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+    // AsyncCopyGlobalToLocalOp does not support the non-zero "other" value.
+    // With consumer consuming directly the shared memory, there would be no way
+    // to replace masked values with the "other" value.
+    if (loadOp.getOther() && !isZeroConst(loadOp.getOther()))
+      return false;
+  }
+
+  Attribute loadEncoding;
+  if (auto descLoad = dyn_cast<DescriptorLoadOp>(op)) {
+    loadEncoding = nvidia_gpu::getEncodingFromDescriptor(op, descLoad.getType(),
+                                                         descLoad.getDesc());
+  } else if (auto descGather = dyn_cast<DescriptorGatherOp>(op)) {
+    loadEncoding = nvidia_gpu::getEncodingFromDescriptor(
+        op, descGather.getType(), descGather.getDesc());
+  }
+
   // Pattern match the op sequence used for loading mmav3 operands
-  if (!mustLoadToRegisters(loadOp)) {
-    assert(loadOp->hasOneUse());
-    ttg::LocalAllocOp alloc =
-        dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin());
-    if (alloc) {
-      return llvm::any_of(alloc->getUsers(), [&](Operation *op) {
-        return isa<ttng::WarpGroupDotOp>(skipViewOps(op));
-      });
-    }
+  for (auto user : op->getUsers()) {
+    ttg::LocalAllocOp alloc = dyn_cast<ttg::LocalAllocOp>(user);
+    if (!alloc)
+      continue;
+
+    if (loadEncoding && (loadEncoding != alloc.getType().getEncoding()))
+      return false;
+
+    if (llvm::any_of(alloc->getUsers(), hasWGMMAUser))
+      return true;
   }
   return false;
 }
