@@ -414,15 +414,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #shared_T = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 
 #smem = #ttg.shared_memory
-#tmem_acc = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
-#tmem_lhs = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 
 // CHECK-LABEL: @load_into_async_mma
 tt.func public @load_into_async_mma(
   %lhs_ptrs: tensor<128x64x!tt.ptr<f8E4M3FN>, #load_blocked>,
   %scale_ptrs: tensor<128x8x!tt.ptr<i8>, #load_blocked>,
-  %tmem: !ttg.memdesc<128x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>,
+  %tmem: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>,
   %barrier: !ttg.memdesc<1xi64, #shared, #smem, mutable>,
   %rhs_shared: !ttg.memdesc<64x64xf8E4M3FN, #shared, #smem>,
   %n_tiles: i32
@@ -450,7 +449,7 @@ tt.func public @load_into_async_mma(
     ttng.tc_gen5_mma_scaled %lhs_shared, %rhs_shared, %tmem, %scales_tmem, %rhs_scales, %true, %true lhs = e4m3 rhs = e4m3, %barrier[%true] {is_async} :
       !ttg.memdesc<128x64xf8E4M3FN, #shared, #smem>,
       !ttg.memdesc<64x64xf8E4M3FN, #shared, #smem>,
-      !ttg.memdesc<128x64xf32, #tmem_acc, #ttng.tensor_memory, mutable>,
+      !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>,
       !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>,
       !ttg.memdesc<64x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>,
       !ttg.memdesc<1xi64, #shared, #smem, mutable>

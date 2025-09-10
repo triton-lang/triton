@@ -36,7 +36,8 @@ def TTG_TensorMemoryEncodingAttr : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemor
   let attrName = "triton.gpu.tensor_memory_encoding";
   let description = [{
     An encoding to represent the different way the tensor memory is laid out.
-    `colStride` describes the stride in elements along the column dimension.
+    `colStride` describes the stride in elements along the column dimension,
+    that is, the stride between two elements in the same row.
     When colStride is 1 the tensor memory is packed. When colStride > 1, the
     tensor memory between elements is undefined.
   }];

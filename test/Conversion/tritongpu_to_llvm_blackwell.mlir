@@ -751,9 +751,6 @@ module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num
 #bm64_bn128 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 1>
 #bm64_bn64 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 
-#bm64_bn128_packed = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 1>
-#bm64_bn64_packed = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
-
 #bm64_bn32 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 32, colStride = 1>
 #bm64_bn16 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 16, colStride = 1>
 
@@ -771,12 +768,12 @@ tt.func private @subslice_16x32bx2(%arg0: !ttg.memdesc<64x128xf32, #bm64_bn128, 
 }
 
 // CHECK-LABEL: @subslice_16x32bx2_packed
-tt.func private @subslice_16x32bx2_packed(%arg0: !ttg.memdesc<64x128xf16, #bm64_bn128_packed, #tmem>) -> !ttg.memdesc<64x64xf16, #bm64_bn64_packed, #tmem> {
+tt.func private @subslice_16x32bx2_packed(%arg0: !ttg.memdesc<64x128xf16, #bm64_bn128, #tmem>) -> !ttg.memdesc<64x64xf16, #bm64_bn64, #tmem> {
   // CHECK: [[OFFSET:%.*]] = llvm.mlir.constant(32 : i32)
   // CHECK: [[PTR:%.*]] = llvm.ptrtoint
   // CHECK: llvm.add [[PTR]], [[OFFSET]]
-  %0 = ttng.tmem_subslice %arg0 {N = 64 : i32} : !ttg.memdesc<64x128xf16, #bm64_bn128_packed, #tmem> -> !ttg.memdesc<64x64xf16, #bm64_bn64_packed, #tmem>
-  tt.return %0 : !ttg.memdesc<64x64xf16, #bm64_bn64_packed, #tmem>
+  %0 = ttng.tmem_subslice %arg0 {N = 64 : i32} : !ttg.memdesc<64x128xf16, #bm64_bn128, #tmem> -> !ttg.memdesc<64x64xf16, #bm64_bn64, #tmem>
+  tt.return %0 : !ttg.memdesc<64x64xf16, #bm64_bn64, #tmem>
 }
 
 // CHECK-LABEL: @subslice_16x32bx2_interleaved_block1
