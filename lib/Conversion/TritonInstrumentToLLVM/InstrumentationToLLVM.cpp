@@ -1,6 +1,8 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
+#include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+#include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -323,6 +325,93 @@ struct BufferPointersOpConversion
     TritonLLVMOpBuilder b(loc, rewriter);
     base = b.ptrtoint(i64Ty, base);
     return base;
+  }
+};
+
+struct LockAcquireOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalLockAcquireOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  LogicalResult matchAndRewrite(tti::ExperimentalLockAcquireOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    Value lock = op.getLock();
+
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+
+    Type elType = cast<PointerType>(lock.getType()).getPointeeType();
+    assert(elType == b.getI32Type() && "Expected i32 lock element type");
+
+    // Build: do { old = atom.global.acquire.cas.b32 [lock], 0, 1; } while (old
+    // != 0);
+    Block *prevBlock2 = b.getInsertionBlock();
+    Block *whileBlock = b.splitBlock(prevBlock2, b.getInsertionPoint());
+    Block *endBlock = b.splitBlock(whileBlock, whileBlock->begin());
+    b.setInsertionPointToEnd(prevBlock2);
+    Value elect = mlir::LLVM::NVIDIA::createElectPredicateWarp0(loc, b);
+    b.create<LLVM::CondBrOp>(loc, elect, whileBlock, endBlock);
+
+    b.setInsertionPointToEnd(whileBlock);
+
+    auto i32 = b.getI32Type();
+    Value zero =
+        b.create<arith::ConstantOp>(loc, i32, b.getIntegerAttr(i32, 0));
+    Value one = b.create<arith::ConstantOp>(loc, i32, b.getIntegerAttr(i32, 1));
+
+    // Inline PTX CAS: old = atom.global.acquire.gpu.cas.b32 [lock], 0, 1
+    // Use converted lock pointer from adaptor for addressing
+    PTXBuilder ptx;
+    auto *dstOpr = ptx.newOperand("=r", /*init=*/true);
+    auto *ptrOpr = ptx.newAddrOperand(adaptor.getLock(), "l");
+    auto *cmpOpr = ptx.newOperand(zero, "r");
+    auto *valOpr = ptx.newOperand(one, "r");
+    auto &atom = *ptx.create<PTXInstr>("atom");
+    atom.global().o("acquire").o("gpu").o("cas").o("b32");
+    atom(dstOpr, ptrOpr, cmpOpr, valOpr);
+    Value old = ptx.launch(b, loc, i32);
+
+    // while (old != 0) loop
+    Value cond =
+        b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne, old, zero);
+    b.create<LLVM::CondBrOp>(loc, cond, whileBlock, endBlock);
+
+    b.setInsertionPointToStart(endBlock);
+    b.create<mlir::gpu::BarrierOp>(loc);
+    b.eraseOp(op);
+    return success();
+  }
+};
+struct LockReleaseOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalLockReleaseOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  LogicalResult matchAndRewrite(tti::ExperimentalLockReleaseOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    Value lock = op.getLock();
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+
+    Type elType = cast<PointerType>(lock.getType()).getPointeeType();
+    assert(elType == b.getI32Type() && "Expected i32 lock element type");
+
+    b.create<mlir::gpu::BarrierOp>(loc);
+    Value zero =
+        b.create<arith::ConstantOp>(loc, elType, b.getIntegerAttr(elType, 0));
+    b.create<triton::AtomicRMWOp>(loc, elType, RMWOp::XCHG, lock, zero, nullptr,
+                                  MemSemantic::ACQUIRE_RELEASE,
+                                  MemSyncScope::GPU);
+    b.eraseOp(op);
+    return success();
   }
 };
 
@@ -1058,6 +1147,8 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<AssertInThreadOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<BufferPointersOpConversion>(typeConverter);
+  patterns.add<LockAcquireOpConversion>(typeConverter);
+  patterns.add<LockReleaseOpConversion>(typeConverter);
   patterns.add<SetWriteVisibilityOpConversion>(typeConverter);
   patterns.add<SetReadVisibilityOpConversion>(typeConverter);
   patterns.add<ClearWriteTrackingOpConversion>(typeConverter);

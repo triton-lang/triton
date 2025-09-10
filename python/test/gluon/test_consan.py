@@ -640,3 +640,249 @@ def test_multibuffered_wgmma_loop(FAILURE, device, run_wrapper):
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
     multibuffered_loop_wgmma_kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=4)
+
+
+XBLOCK = ttgl.constexpr(128)
+
+
+@gluon.jit
+def ws_store_wait_load_default(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
+    mbarrier.wait(bar.index(0), phase=0, pred=(not FAILURE))
+    val = smem.index(0).load(layout)
+    smem.index(1).store(val)
+    mbarrier.arrive(bar.index(1), count=1)
+
+
+@gluon.jit
+def ws_store_wait_load_1(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
+    smem.index(0).store(ttgl.arange(0, XBLOCK, layout).to(ttgl.float16))
+    mbarrier.arrive(bar.index(0), count=1)
+
+
+@gluon.jit
+def ws_store_wait_load_kernel(output, FAILURE: ttgl.constexpr):
+    smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4],
+                                                        order=[0])
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK], smem_layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
+    for i in range(2):
+        mbarrier.init(bar.index(i), count=1)
+    ttgl.warp_specialize((smem, bar, FAILURE, blocked_layout), ws_store_wait_load_default,
+                         (smem, bar, FAILURE, blocked_layout), [ws_store_wait_load_1], [4], [32])
+    mbarrier.wait(bar.index(1), phase=0)
+    val = smem.index(0).load(blocked_layout)
+    output_ptrs = output + ttgl.arange(0, XBLOCK, blocked_layout)
+    ttgl.store(output_ptrs, val)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.parametrize("FAILURE", [True, False])
+def test_ws_store_wait_load(FAILURE, device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_ws_store_wait_load, (FAILURE, device, False))
+        if FAILURE:
+            assert "device-side assert" in str(result.exc)
+            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    output = torch.empty((XBLOCK, ), device=device, dtype=torch.float16)
+    ws_store_wait_load_kernel[(1, )](output, FAILURE=FAILURE, num_warps=4)
+
+
+@gluon.jit
+def ws_load_wait_store_default(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
+    mbarrier.wait(bar.index(0), phase=0, pred=(not FAILURE))
+    smem.index(0).store(ttgl.arange(0, XBLOCK, layout).to(ttgl.float16))
+    mbarrier.arrive(bar.index(1), count=1)
+
+
+@gluon.jit
+def ws_load_wait_store_1(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
+    val = smem.index(0).load(layout)
+    mbarrier.arrive(bar.index(0), count=1)
+    smem.index(1).store(val)  # dummy store to make sure the load is executed
+
+
+@gluon.jit
+def ws_load_wait_store_kernel(output, FAILURE: ttgl.constexpr):
+    smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4],
+                                                        order=[0])
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK], smem_layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
+    for i in range(2):
+        mbarrier.init(bar.index(i), count=1)
+    ttgl.warp_specialize((smem, bar, FAILURE, blocked_layout), ws_load_wait_store_default,
+                         (smem, bar, FAILURE, blocked_layout), [ws_load_wait_store_1], [4], [32])
+    mbarrier.wait(bar.index(1), phase=0)
+    val = smem.index(0).load(blocked_layout)
+    output_ptrs = output + ttgl.arange(0, XBLOCK, blocked_layout)
+    ttgl.store(output_ptrs, val)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.parametrize("FAILURE", [True, False])
+def test_ws_load_wait_store(FAILURE, device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_ws_load_wait_store, (FAILURE, device, False))
+        if FAILURE:
+            assert "device-side assert" in str(result.exc)
+            assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    output = torch.empty((XBLOCK, ), device=device, dtype=torch.float16)
+    ws_load_wait_store_kernel[(1, )](output, FAILURE=FAILURE, num_warps=4)
+
+
+@gluon.jit
+def ws_two_loads_two_bars_default(smem, bar, MISSING_BAR: ttgl.constexpr, layout: ttgl.constexpr):
+    val = smem.index(0).load(layout)
+    mbarrier.arrive(bar.index(0), count=1)
+    smem.index(1).store(val)  # dummy store to make sure the load is executed
+
+
+@gluon.jit
+def ws_two_loads_two_bars_1(smem, bar, MISSING_BAR: ttgl.constexpr, layout: ttgl.constexpr):
+    val = smem.index(0).load(layout)
+    mbarrier.arrive(bar.index(1), count=1)
+    smem.index(2).store(val)  # dummy store to make sure the load is executed
+
+
+@gluon.jit
+def ws_two_loads_two_bars_2(smem, bar, MISSING_BAR: ttgl.constexpr, layout: ttgl.constexpr):
+    if MISSING_BAR != "first":
+        mbarrier.wait(bar.index(0), phase=0)
+    if MISSING_BAR != "second":
+        mbarrier.wait(bar.index(1), phase=0)
+    smem.index(0).store(ttgl.arange(0, XBLOCK, layout).to(ttgl.float16))
+    mbarrier.arrive(bar.index(2), count=1)
+
+
+@gluon.jit
+def ws_two_loads_two_bars_kernel(output, MISSING_BAR: ttgl.constexpr):
+    smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4],
+                                                        order=[0])
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [3, XBLOCK], smem_layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [3, 1], mbarrier.MBarrierLayout())
+    for i in range(3):
+        mbarrier.init(bar.index(i), count=1)
+    ttgl.warp_specialize((smem, bar, MISSING_BAR, blocked_layout), ws_two_loads_two_bars_default,
+                         (smem, bar, MISSING_BAR, blocked_layout), [ws_two_loads_two_bars_1, ws_two_loads_two_bars_2],
+                         [4, 4], [32, 32])
+    mbarrier.wait(bar.index(2), phase=0)
+    val = smem.index(0).load(blocked_layout)
+    output_ptrs = output + ttgl.arange(0, XBLOCK, blocked_layout)
+    ttgl.store(output_ptrs, val)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.parametrize("MISSING_BAR", ["none", "first", "second"])
+def test_ws_two_loads_two_bars(MISSING_BAR, device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_ws_two_loads_two_bars, (MISSING_BAR, device, False))
+        if MISSING_BAR != "none":
+            assert "device-side assert" in str(result.exc)
+            assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    output = torch.empty((XBLOCK, ), device=device, dtype=torch.float16)
+    ws_two_loads_two_bars_kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4)
+
+
+@gluon.jit
+def ws_two_loads_one_bar_default(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
+    val = smem.index(0).load(layout)
+    mbarrier.arrive(bar.index(0), count=1)
+    smem.index(1).store(val)  # dummy store to make sure the load is executed
+
+
+@gluon.jit
+def ws_two_loads_one_bar_1(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
+    val = smem.index(0).load(layout)
+    mbarrier.arrive(bar.index(0), count=1)
+    smem.index(2).store(val)  # dummy store to make sure the load is executed
+
+
+@gluon.jit
+def ws_two_loads_one_bar_2(smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
+    mbarrier.wait(bar.index(0), phase=0, pred=(not FAILURE))
+    smem.index(0).store(ttgl.arange(0, XBLOCK, layout).to(ttgl.float16))
+    mbarrier.arrive(bar.index(1), count=1)
+
+
+@gluon.jit
+def ws_two_loads_one_bar_kernel(output, FAILURE: ttgl.constexpr):
+    smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[4],
+                                                        order=[0])
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [3, XBLOCK], smem_layout)
+    bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
+    mbarrier.init(bar.index(0), count=2)
+    mbarrier.init(bar.index(1), count=1)
+    ttgl.warp_specialize((smem, bar, FAILURE, blocked_layout), ws_two_loads_one_bar_default,
+                         (smem, bar, FAILURE, blocked_layout), [ws_two_loads_one_bar_1, ws_two_loads_one_bar_2], [4, 4],
+                         [32, 32])
+    mbarrier.wait(bar.index(1), phase=0)
+    val = smem.index(0).load(blocked_layout)
+    output_ptrs = output + ttgl.arange(0, XBLOCK, blocked_layout)
+    ttgl.store(output_ptrs, val)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+@pytest.mark.parametrize("FAILURE", [True, False])
+def test_ws_two_loads_one_bar(FAILURE, device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_ws_two_loads_one_bar, (FAILURE, device, False))
+        if FAILURE:
+            assert "device-side assert" in str(result.exc)
+            assert "Buffer being accessed has outstanding reads" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    output = torch.empty((XBLOCK, ), device=device, dtype=torch.float16)
+    ws_two_loads_one_bar_kernel[(1, )](output, FAILURE=FAILURE, num_warps=4)

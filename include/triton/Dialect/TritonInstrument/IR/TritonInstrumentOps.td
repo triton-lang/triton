@@ -66,6 +66,30 @@ def TTI_ExperimentalBufferPointersOp : TTI_Op<"experimental_buffer_pointers", [P
 }
 
 
+def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Acquire a lock.";
+  let description = [{
+    Acquire a lock.
+  }];
+  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
+  let assemblyFormat = [{
+    $lock (`,` $pred^)? attr-dict `:` type($lock)
+  }];
+}
+
+
+def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Release a lock.";
+  let description = [{
+    Release a lock.
+  }];
+  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
+  let assemblyFormat = [{
+    $lock (`,` $pred^)? attr-dict `:` type($lock)
+  }];
+}
+
+
 def TTI_ExperimentalSetWriteVisibilityOp : TTI_Op<"experimental_set_write_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "set the write visibility for a buffer";
   let description = [{
