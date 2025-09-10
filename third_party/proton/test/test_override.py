@@ -2,6 +2,7 @@ import os
 import subprocess
 import pathlib
 import json
+import pytest
 
 import triton
 
