@@ -335,12 +335,29 @@ struct ConvertLayoutOpConversion
       SmallVector<Value> packedVals;
       packedVals.reserve(regDim / elemsPerVec);
       if (bitwidth < bitsPerVecElem) {
-        // Should have bitsPerVecElem == 16 here.
-        for (int i = 0; i < regDim; i += elemsPerVec) {
-          Value x0 = b.zext(i32_ty, b.bitcast(inVals[i], int_ty(bitwidth)));
-          Value x1 = b.zext(i32_ty, b.bitcast(inVals[i + 1], int_ty(bitwidth)));
-          x1 = b.shl(x1, b.i32_val(16));
-          packedVals.emplace_back(b.or_(x0, x1));
+        assert(bitsPerVecElem == 8 || bitsPerVecElem == 16);
+        if (bitsPerVecElem == 8) {
+          for (int i = 0; i < regDim; i += elemsPerVec) {
+            Value x0 = b.zext(i32_ty, b.bitcast(inVals[i], int_ty(bitwidth)));
+            Value x1 =
+                b.zext(i32_ty, b.bitcast(inVals[i + 1], int_ty(bitwidth)));
+            Value x2 =
+                b.zext(i32_ty, b.bitcast(inVals[i + 2], int_ty(bitwidth)));
+            Value x3 =
+                b.zext(i32_ty, b.bitcast(inVals[i + 3], int_ty(bitwidth)));
+            x1 = b.shl(x1, b.i32_val(8));
+            x2 = b.shl(x2, b.i32_val(16));
+            x3 = b.shl(x3, b.i32_val(24));
+            packedVals.emplace_back(b.or_(x0, b.or_(x1, b.or_(x2, x3))));
+          }
+        } else {
+          for (int i = 0; i < regDim; i += elemsPerVec) {
+            Value x0 = b.zext(i32_ty, b.bitcast(inVals[i], int_ty(bitwidth)));
+            Value x1 =
+                b.zext(i32_ty, b.bitcast(inVals[i + 1], int_ty(bitwidth)));
+            x1 = b.shl(x1, b.i32_val(16));
+            packedVals.emplace_back(b.or_(x0, x1));
+          }
         }
       } else {
         for (int i = 0; i < regDim; i += elemsPerVec) {
@@ -389,13 +406,34 @@ struct ConvertLayoutOpConversion
           unpackedVals.append(unpacked.begin(), unpacked.end());
         }
       } else {
-        for (auto packedVal : outVals) {
-          Value x0 =
-              b.trunc(int_ty(bitwidth), b.and_(packedVal, b.i32_val(0xFF)));
-          Value x1 =
-              b.trunc(int_ty(bitwidth), b.lshr(packedVal, b.i32_val(16)));
-          unpackedVals.push_back(b.bitcast(x0, elemTy));
-          unpackedVals.push_back(b.bitcast(x1, elemTy));
+        assert(bitsPerVecElem == 8 || bitsPerVecElem == 16);
+        if (bitsPerVecElem == 8) {
+          for (auto packedVal : outVals) {
+            Value x0 =
+                b.trunc(int_ty(bitwidth), b.and_(packedVal, b.i32_val(0xF)));
+            Value x1 = b.trunc(
+                int_ty(bitwidth),
+                b.and_(b.lshr(packedVal, b.i32_val(8)), b.i32_val(0xF)));
+            Value x2 = b.trunc(
+                int_ty(bitwidth),
+                b.and_(b.lshr(packedVal, b.i32_val(16)), b.i32_val(0xF)));
+            Value x3 = b.trunc(
+                int_ty(bitwidth),
+                b.and_(b.lshr(packedVal, b.i32_val(24)), b.i32_val(0xF)));
+            unpackedVals.push_back(b.bitcast(x0, elemTy));
+            unpackedVals.push_back(b.bitcast(x1, elemTy));
+            unpackedVals.push_back(b.bitcast(x2, elemTy));
+            unpackedVals.push_back(b.bitcast(x3, elemTy));
+          }
+        } else {
+          for (auto packedVal : outVals) {
+            Value x0 =
+                b.trunc(int_ty(bitwidth), b.and_(packedVal, b.i32_val(0xFF)));
+            Value x1 =
+                b.trunc(int_ty(bitwidth), b.lshr(packedVal, b.i32_val(16)));
+            unpackedVals.push_back(b.bitcast(x0, elemTy));
+            unpackedVals.push_back(b.bitcast(x1, elemTy));
+          }
         }
       }
       outVals = std::move(unpackedVals);
