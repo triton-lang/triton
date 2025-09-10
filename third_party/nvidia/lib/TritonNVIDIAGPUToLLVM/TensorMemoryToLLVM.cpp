@@ -160,8 +160,7 @@ std::optional<LinearLayout> getReps(const LinearLayout &cvt,
 
 // Similar to largestVectorisation in TritonGPUToLLVM/Utility.cpp
 std::optional<std::tuple<LinearLayout, ColumnAction, int>>
-getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg,
-       int bitwidth) {
+getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg) {
   auto *ctx = cvt.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kCol = StringAttr::get(ctx, "col");
@@ -174,7 +173,7 @@ getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg,
   // Heuristic:
   // If maxnreg is 256 and we need more than one message, we don't use max
   // vectorisation as ptxas' scheduler breaks...
-  if (maxnreg == 256 && cvt.getInDimSize(kReg) / (32 / bitwidth) > maxReg) {
+  if (maxnreg == 256 && cvt.getInDimSize(kReg) > maxReg) {
     maxReg /= 2;
   }
   auto maxVec = maxReg / tile.getInDimSize(kReg);
@@ -210,8 +209,7 @@ getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg,
                          (i / 2) * tile.getInDimSize(kReg));
 }
 
-LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, int bitwidth,
-                           bool unpacked, int nRow) {
+LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, int nRow) {
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
@@ -239,12 +237,6 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, int bitwidth,
   auto ret = LinearLayout(bases, {{kRow, 128}, {kCol, nCol}}, false);
   // Broadcast the row dimension if it's smaller than 128
   ret = ensureLayoutNotLargerThan(ret, {{kRow, nRow}, {kCol, nCol}}, true);
-  // For unpacked, the tile above is for 32-bit elements, so we have to multiply
-  // by identity1D(32 / bitwidth, kReg, kCol) to get the correct tile to allow
-  // us to divide the cvt layout by it
-  if (unpacked) {
-    ret = LinearLayout::identity1D(32 / bitwidth, kReg, kCol) * ret;
-  }
   return ret;
 }
 
@@ -479,35 +471,6 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   auto kRow = str_attr("row");
   bool isStore = !vals.empty();
 
-  // Pack into bitwidth=32 if it was not packed already
-  if (llvmElemTy.getIntOrFloatBitWidth() < 32) {
-    assert(unpacked);
-    SmallVector<Value> inVals;
-    if (isStore) {
-      inVals = pack(vals, i32_ty, loc, rewriter);
-    }
-    // kill the first logValsPerReg bases of kReg as they are now packed
-    // again, super hacky, we should probably do this when building the
-    // instruction
-    auto bases = reps.getBases();
-    auto valsPerReg = 32 / llvmElemTy.getIntOrFloatBitWidth();
-    auto logValsPerReg = llvm::Log2_32(valsPerReg);
-    assert(reps.getInDimSizeLog2(kReg) >= logValsPerReg);
-    auto &reg = bases[kReg];
-    reg.erase(reg.begin(), reg.begin() + logValsPerReg);
-    auto quot = LinearLayout(bases, reps.getOutDims(), /*isSurjective=*/false);
-    auto outValsOr = lowerTMemLdSt(
-        loc, ctx, rewriter, quot, inVals, atom, i32_ty, tmemBase, pred,
-        valsPerMessage / valsPerReg, unpacked, secondHalfOffset);
-    if (failed(outValsOr))
-      return failure();
-    auto outVals = std::move(*outValsOr);
-    if (!isStore) {
-      outVals = unpack(outVals, llvmElemTy, loc, rewriter);
-    }
-    return outVals;
-  }
-
   tmemBase = b.ptrtoint(i32_ty, tmemBase);
 
   assert(to_vector(reps.getOutDimNames()) ==
@@ -562,7 +525,7 @@ FailureOr<SmallVector<Value>>
 lowerTMemLdSt(Location loc, MLIRContext *ctx,
               ConversionPatternRewriter &rewriter, const LinearLayout &cvt,
               ArrayRef<Value> vals, Type llvmElemTy, Value tmemBase,
-              int maxnreg, bool unpacked, Value pred) {
+              int maxnreg, Value pred, bool unpacked = false) {
   assert(cvt.getNumOutDims() == 2);
   bool isStore = !vals.empty();
   // Remove broadcasting in the registers
@@ -575,7 +538,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
     }
     auto outValsOr =
         lowerTMemLdSt(loc, ctx, rewriter, prmtCvt, inVals, llvmElemTy, tmemBase,
-                      maxnreg, unpacked, pred);
+                      maxnreg, pred, unpacked);
     if (failed(outValsOr))
       return failure();
     auto outVals = std::move(*outValsOr);
@@ -589,21 +552,29 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   auto kRow = str_attr("row");
   auto kCol = str_attr("col");
 
-  // There must be a better way to do this. We should follow something similar
-  // to what we do in shmem, where we pack/unpack just before the PTX instr
-  // creation
-  if (!unpacked && llvmElemTy.getIntOrFloatBitWidth() < 32) {
+  // Default to unpacked=false for bitwidth == 32
+  if (llvmElemTy.getIntOrFloatBitWidth() < 32) {
+    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    LinearLayout quot;
+    if (auto maybeQuot = divideLeft(
+            cvt, LinearLayout::identity1D(32 / bitwidth, kReg, kCol))) {
+      quot = *maybeQuot;
+      unpacked = false;
+    } else if (auto maybeQuot = divideRight(
+                   cvt, LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth))) {
+      quot = *maybeQuot;
+      unpacked = true;
+    } else {
+      emitError(loc, "Failed to lower TMEM load/store: TMEM layout is not "
+                     "packed or unpacked");
+      return failure();
+    }
     SmallVector<Value> inVals;
     if (isStore) {
       inVals = pack(vals, i32_ty, loc, rewriter);
     }
-    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    auto maybeQuot =
-        divideLeft(cvt, LinearLayout::identity1D(32 / bitwidth, kReg, kCol));
-    assert(maybeQuot.has_value());
-    auto quot = *maybeQuot;
     auto outValsOr = lowerTMemLdSt(loc, ctx, rewriter, quot, inVals, i32_ty,
-                                   tmemBase, maxnreg, unpacked, pred);
+                                   tmemBase, maxnreg, pred, unpacked);
     if (failed(outValsOr))
       return failure();
     auto outVals = std::move(*outValsOr);
@@ -626,8 +597,8 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   std::optional<std::tuple<TMemAccessAtom, LinearLayout, ColumnAction, int>>
       msgInfo;
   for (auto atom : {TMemAccess32x32b, TMemAccess16x256b}) {
-    auto tile = getTileLayout(ctx, atom, bitwidth, unpacked, nRow);
-    auto maybeReps = getVec(cvt, tile, maxnreg, bitwidth);
+    auto tile = getTileLayout(ctx, atom, nRow);
+    auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       // Cannot match more than one
       msgInfo = {atom, std::get<0>(*maybeReps), std::get<1>(*maybeReps),
@@ -639,9 +610,8 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   if (!msgInfo) {
     // Quotient by the smaller tile and then, if possible, we set the
     // secondHalfOffset to the last kLane basis
-    auto tile =
-        getTileLayout(ctx, TMemAccess16x32bx2, bitwidth, unpacked, nRow);
-    auto maybeReps = getVec(cvt, tile, maxnreg, bitwidth);
+    auto tile = getTileLayout(ctx, TMemAccess16x32bx2, nRow);
+    auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       auto [reps, perm, numRegsPerMessage] = std::move(*maybeReps);
       // Find the last kLane basis and use it as secondHalfOffset
@@ -667,10 +637,9 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
     inVals = to_vector(vals);
     inVals = perm.apply(inVals);
   }
-  auto outValsOr = lowerTMemLdSt(
-      loc, ctx, rewriter, reps, inVals, atom, llvmElemTy, tmemBase, pred,
-      numRegsPerMessage, unpacked && llvmElemTy.getIntOrFloatBitWidth() == 16,
-      secondHalfOffset);
+  auto outValsOr = lowerTMemLdSt(loc, ctx, rewriter, reps, inVals, atom,
+                                 llvmElemTy, tmemBase, pred, numRegsPerMessage,
+                                 unpacked, secondHalfOffset);
   if (failed(outValsOr))
     return failure();
   auto outVals = std::move(*outValsOr);
@@ -698,14 +667,6 @@ static FailureOr<SmallVector<Value>> lowerTMemLdStFromTypes(
       divideRight(cvt, LinearLayout::identity1D(nCTAs, kBlock, kCol));
   assert(maybeQuot.has_value());
   auto quot = maybeQuot->unsqueezeIn(kBlock);
-  bool unpacked;
-  unsigned elementBitWidth = memTy.getElementType().getIntOrFloatBitWidth();
-  if (auto enc = dyn_cast<TensorMemoryEncodingAttr>(memTy.getEncoding())) {
-    unpacked = enc.getColStride() != 1;
-  } else {
-    assert(isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding()));
-    unpacked = false;
-  }
 
   // Handle K = 1 and K = 2 cases
   auto K = regTy.getDimSize(1);
@@ -729,9 +690,8 @@ static FailureOr<SmallVector<Value>> lowerTMemLdStFromTypes(
     packedLlvmElemTy = i32_ty;
   }
 
-  auto resultValsOr =
-      lowerTMemLdSt(loc, ctx, rewriter, packedLayout, inVals, packedLlvmElemTy,
-                    tmemBase, maxnreg, unpacked, pred);
+  auto resultValsOr = lowerTMemLdSt(loc, ctx, rewriter, packedLayout, inVals,
+                                    packedLlvmElemTy, tmemBase, maxnreg, pred);
   if (failed(resultValsOr))
     return failure();
   auto resultVals = std::move(*resultValsOr);
