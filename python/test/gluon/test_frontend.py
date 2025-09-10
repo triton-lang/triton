@@ -2399,4 +2399,5 @@ def test_get_num_warps():
     # CHECK: tt.func private @{{.*}}print_num_warps{{.*}}NW8
     # CHECK-NEXT arith.constant 8 : i32
     print_num_warps()
-    ttgl.warp_specialize((), print_num_warps, (), [print_num_warps, print_num_warps, print_num_warps], [1, 2, 8], [24, 24, 24])
+    ttgl.warp_specialize((), print_num_warps, (), [print_num_warps, print_num_warps, print_num_warps], [1, 2, 8],
+                         [24, 24, 24])
