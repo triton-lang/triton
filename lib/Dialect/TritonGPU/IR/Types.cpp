@@ -177,29 +177,19 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                          << "the shape size when pipelining.";
     }
 
-    // Subslices are not yet implemented
-    auto subsliceAllocSize =
-        allocShape.drop_front(allocShape.size() - shape.size());
-    for (auto [allocDim, shapeDim] : llvm::zip(shape, subsliceAllocSize)) {
-      if (allocDim != shapeDim) {
-        return emitError() << "Subslices with padded encodings are not yet "
-                           << "implemented.";
-      }
-    }
-
     // Ensure linear component's outDims match the alloc size ignoring
     // pipelining dimension
     auto outDims = standardOutDimNames(ctx, rank);
     const auto &ll = enc.getLinearComponent();
-    auto expectedShape = shape;
-    if (shape.size() == allocShape.size() && shape.size() == rank + 1)
+    auto expectedShape = allocShape;
+    if (rank == allocShape.size() - 1)
       expectedShape = expectedShape.drop_front(1);
 
     for (auto d = 0; d < rank; d++) {
       if (ll.getOutDimSize(outDims[d]) != expectedShape[d]) {
         return emitError() << "Mismatch in expected shape for dimension " << d
-                           << ". Expected: " << ll.getOutDimSize(outDims[d])
-                           << ", got: " << expectedShape[d];
+                           << ". Expected: " << expectedShape[d]
+                           << ", got: " << ll.getOutDimSize(outDims[d]);
       }
     }
   }

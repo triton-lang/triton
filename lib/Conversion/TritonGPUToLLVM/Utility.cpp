@@ -1158,6 +1158,14 @@ SharedMemoryObject::getMaskSpanOffsets(triton::gpu::MemDescType srcTy) {
   if (allocShape == shape) {
     return 0;
   }
+  if (auto paddedEncoding = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+          srcTy.getEncoding())) {
+    // Mask is used in fusion of constant part of memory operation address as
+    // immediate operand. Padded layout has additional address computations
+    // between main offset computation and actual memory access, which breaks
+    // constand fusing. Full mask disables this optimization.
+    return ~uint64_t(0);
+  }
   auto totalLl = triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
   auto dimNames = standardOutDimNames(ctx, shape.size());
   // Remove the kBlock dimension
@@ -1194,14 +1202,15 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
     return b.i32_val(0);
   }
 
+  LinearLayout ll;
   // We return the offset without the padding. The padding will be added in the
   // lowering
   if (auto paddedSharedEncoding =
           dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
               srcTy.getEncoding())) {
-    auto allocShape64 = srcTy.getAllocShape();
-    SmallVector<unsigned> allocShape(allocShape64.begin(), allocShape64.end());
-    return LLVM::linearize(rewriter, loc, offsets, allocShape);
+    ll = paddedSharedEncoding.getLinearComponent();
+  } else {
+    ll = triton::gpu::toLinearLayout(srcTy);
   }
 
   auto dimNames = standardOutDimNames(ctx, offsets.size());
@@ -1210,7 +1219,6 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
     logicalOffsets.push_back({dim, offset});
   }
 
-  LinearLayout ll = triton::gpu::toLinearLayout(srcTy);
   ll = ll.sublayout({str_attr("offset")}, dimNames);
   auto offset =
       applyLinearLayout(loc, rewriter, ll.invert(), logicalOffsets)[0].second;
