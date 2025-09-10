@@ -50,6 +50,12 @@ Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
   return globalTimeVal;
 }
 
+void TargetInfo::storeWarpScalar(ConversionPatternRewriter &rewriter,
+                                 Location loc, Value val, Value ptr) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  b.store(val, ptr);
+}
+
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
                               Location loc) const {
   return rewriter.create<NVVM::SmIdOp>(loc, i32_ty);

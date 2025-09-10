@@ -23,6 +23,9 @@ public:
   Value processorId(ConversionPatternRewriter &rewriter,
                     Location loc) const override;
 
+  void storeWarpScalar(ConversionPatternRewriter &rewriter, Location loc,
+                       Value val, Value ptr) const override;
+
   int getAddressSpace(Attribute addressSpace) const override;
 
   int getIndexPtrAddrSpace() const override;
