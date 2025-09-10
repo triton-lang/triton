@@ -5,6 +5,7 @@ import triton.profiler as proton
 import torch
 import argparse
 import triton_kernels
+import triton_kernels.roofline as roofline
 import triton_kernels.swiglu
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.target_info import get_cdna_version
@@ -12,7 +13,6 @@ import distributed as triton_dist
 from triton_kernels.tensor_details import layout
 from bench_utils import quantize_weight
 import tempfile
-import roofline
 
 
 def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP):

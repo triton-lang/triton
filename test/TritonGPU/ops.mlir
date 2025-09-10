@@ -68,6 +68,22 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
 // -----
 
+#shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "gfx950", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: memdesc_padded_same_rank_than_shape
+  tt.func @memdesc_padded_same_rank_than_shape(%d : !ttg.memdesc<4x4xf16, #shared, #smem, mutable, 3x4x4>) {
+    tt.return
+  }
+
+  // CHECK-LABEL: memdesc_padded_with_pipeline_dim
+  tt.func @memdesc_padded_with_pipeline_dim(%d : !ttg.memdesc<3x4x4xf32, #shared, #smem, mutable>){
+    tt.return
+  }
+}
+
+// -----
+
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16,  CTAsPerCGA = [1,1,1,1], CTASplitNum = [1,1,1,1], CTAOrder = [3, 2, 1, 0]}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
@@ -240,4 +256,21 @@ tt.func @async_commit_group(%arg0: !ttg.async.token) {
   // CHECK-NEXT: ttg.async_commit_group
   %1 = ttg.async_commit_group
   tt.return
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+#shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [2, 2]]}, alignment = 16>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.threads-per-warp" = 4 : i32, "ttg.num-warps" = 1 : i32} {
+  tt.func @round_trip(%arg0: tensor<4x4xf32, #blocked>) -> tensor<4x4xf32, #blocked> {
+    // CHECK: ttg.local_alloc
+    // CHECK-SAME: !ttg.memdesc<4x4xf32, #shared
+    %alloc = ttg.local_alloc %arg0 : (tensor<4x4xf32, #blocked>) -> !ttg.memdesc<4x4xf32, #shared, #smem, mutable>
+    ttg.local_store %arg0, %alloc : tensor<4x4xf32, #blocked> -> !ttg.memdesc<4x4xf32, #shared, #smem, mutable>
+    %loaded = ttg.local_load %alloc : !ttg.memdesc<4x4xf32, #shared, #smem, mutable> -> tensor<4x4xf32, #blocked>
+    tt.return %loaded : tensor<4x4xf32, #blocked>
+  }
 }

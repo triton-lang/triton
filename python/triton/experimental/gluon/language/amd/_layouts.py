@@ -9,6 +9,7 @@ from triton.experimental.gluon import language as ttgl
 
 __all__ = [
     "AMDMFMALayout",
+    "AMDWMMALayout",
 ]
 
 
@@ -18,15 +19,22 @@ class AMDMFMALayout(DistributedLayout):
     Represents a layout for AMD MFMA (matrix core) operations.
 
     Args:
-        version (int): Major and minor identifier for the MFMA instruction.
-        instr_shape: (M, N) dimension for the instrinsic shape.
-        transposed (bool): indicates the result tensor is transposed so that each thread holds consecutive elements in the same row instead of column, which is good for chained dot and global write.
+        version (int): Indicates the GPU architecture.
+        instr_shape: (M, N) Dimension for the instrinsic shape.
+        transposed (bool): Indicates the result tensor is transposed so that each thread holds consecutive elements in the same row instead of column, which is good for chained dot and global write.
         warps_per_cta (List[int]): Number of warps per CTA.
         elem_type Optional(ttgl.dtype): Supported types are int32, fp32 and fp64. Default is fp32.
         tiles_per_warp Optional(List[int]): Number of tiles per WARP. For mfma layout, if missing, use the default where we have unit tile size on all dimensions.
         ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
         cta_split_num (Optional[List[int]]): Split factors for CTAs.
         cta_order (Optional[List[int]]): CTA ordering.
+
+    Current supported versions:
+
+    - 1: gfx908
+    - 2: gfx90a
+    - 3: gfx942
+    - 4: gfx950
     """
     version: int
     instr_shape: List[int]
@@ -90,6 +98,73 @@ class AMDMFMALayout(DistributedLayout):
             tuple(self.warps_per_cta),
             self.elem_type,
             tuple(self.tiles_per_warp) if self.tiles_per_warp else None,
+            tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+            tuple(self.cta_split_num) if self.cta_split_num else None,
+            tuple(self.cta_order) if self.cta_order else None,
+        ))
+
+
+@dataclass(frozen=True)
+class AMDWMMALayout(DistributedLayout):
+    """
+    Represents a layout for AMD WMMA (matrix core) operations.
+
+    Args:
+        version (int): Indicates the GPU architecture.
+        transposed (bool): Indicates the result tensor is transposed.
+        warps_per_cta (List[int]): Number of warps per CTA.
+        ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
+        cta_split_num (Optional[List[int]]): Split factors for CTAs.
+        cta_order (Optional[List[int]]): CTA ordering.
+
+    Current supported versions:
+
+    - 1: RDNA3; e.g., gfx1100, gfx1101
+    - 2: RDNA4; e.g., gfx1200, gfx1201
+    """
+    version: int
+    transposed: bool
+    warps_per_cta: List[int]
+    ctas_per_cga: Optional[List[int]] = None
+    cta_split_num: Optional[List[int]] = None
+    cta_order: Optional[List[int]] = None
+
+    def __post_init__(self):
+        super().__setattr__("version", _unwrap_if_constexpr(self.version))
+        super().__setattr__("transposed", _unwrap_if_constexpr(self.transposed))
+        super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
+        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
+        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+        self.verify()
+
+    def _to_ir(self, builder):
+        return builder.get_amd_wmma_layout(self.version, self.transposed, self.warps_per_cta, self.ctas_per_cga,
+                                           self.cta_split_num, self.cta_order)
+
+    def mangle(self) -> str:
+
+        def stringify(x):
+            if x is None:
+                return ""
+            return "_".join(map(str, x))
+
+        return f"WMMA_{self.version}_{self.transposed}_{stringify(self.warps_per_cta)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_WMMA"
+
+    def verify(self):
+        assert self.version >= 1 and self.version <= 2, "version must be in the [1, 2] range"
+
+        rank = len(self.warps_per_cta)
+        _realize_cta_layout(self, rank)
+        assert len(self.ctas_per_cga) == rank
+        assert len(self.cta_split_num) == rank
+        assert len(self.cta_order) == rank
+
+    def __hash__(self):
+        return hash((
+            self.version,
+            self.transposed,
+            tuple(self.warps_per_cta),
             tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
             tuple(self.cta_split_num) if self.cta_split_num else None,
             tuple(self.cta_order) if self.cta_order else None,

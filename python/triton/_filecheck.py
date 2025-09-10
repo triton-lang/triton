@@ -74,7 +74,6 @@ def run_parser(kernel_fn, args=(), kwargs={}, target=stub_target):
     codegen_fns = backend.get_codegen_implementation(options)
     module_map = backend.get_module_map()
     module = src.make_ir(target, options, codegen_fns, module_map, context)
-    assert module.verify()
     return module
 
 

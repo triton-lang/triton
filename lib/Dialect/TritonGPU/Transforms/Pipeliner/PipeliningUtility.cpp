@@ -42,7 +42,8 @@ bool triton::isPureScalarOp(Operation *op) {
 bool triton::getDominatingValueSetOpsToHoist(
     DominanceInfo &domInfo, Operation *refOp, ArrayRef<Value> valueSet,
     llvm::SetVector<Operation *> &toHoist,
-    function_ref<bool(Operation *)> canHoist) {
+    function_ref<bool(Operation *)> canHoist,
+    function_ref<bool(BlockArgument)> canUseArg) {
   // The set of operations below `refOp` that are being checked if they can be
   // hoisted. This set prevents checking operations twice but also if the
   // computation can be hoisted, this becomes the set of operations to hoist.
@@ -62,9 +63,12 @@ bool triton::getDominatingValueSetOpsToHoist(
     // to it.
     if (domInfo.properlyDominates(value, refOp))
       continue;
-    // If the value is a block argument, it cannot be hoisted.
-    if (auto arg = dyn_cast<BlockArgument>(value))
-      return false;
+    // If the value is a block argument, check if it can be used.
+    if (auto arg = dyn_cast<BlockArgument>(value)) {
+      if (!canUseArg(arg))
+        return false;
+      continue;
+    }
 
     Operation *op = value.getDefiningOp();
     // Check if the op was already visited.
@@ -255,6 +259,16 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
       mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
     }
     arriveBarrier.getPredMutable().assign(mask);
+    return op;
+  }
+  if (auto commit = dyn_cast<ttng::TCGen5CommitOp>(op)) {
+    rewriter.setInsertionPoint(commit);
+    Value mask = pred;
+    Value currentPred = commit.getPred();
+    if (currentPred) {
+      mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
+    }
+    commit.getPredMutable().assign(mask);
     return op;
   }
   if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
