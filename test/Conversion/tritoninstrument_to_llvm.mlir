@@ -446,3 +446,33 @@ tt.func private @experimental_assert_in_thread_all(
   tt.return
 }
 }
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_lock_acquire
+// CHECK: 09atom.global.acquire.gpu.cas.b32
+// CHECK: nvvm.barrier0
+tt.func private @experimental_lock_acquire(
+  %lock: !tt.ptr<i32>,
+  %pred: i1
+) {
+  tti.experimental_lock_acquire %lock, %pred : !tt.ptr<i32>
+  tt.return
+}
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_lock_release
+// CHECK: nvvm.barrier0
+// CHECK: atom.global.gpu.acq_rel.exch.b32
+tt.func private @experimental_lock_release(
+  %lock: !tt.ptr<i32>,
+  %pred: i1
+) {
+  tti.experimental_lock_release %lock, %pred : !tt.ptr<i32>
+  tt.return
+}
+}
