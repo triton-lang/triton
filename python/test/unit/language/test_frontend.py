@@ -308,6 +308,34 @@ def test_aggregate_with_constexpr():
     # CHECK: arith.addi %arg0, %cst : tensor<4xi32>
 
 
+@tl.core._aggregate
+class AggregateWithTuple:
+    a: tl.tuple
+
+    def __init__(self, a):
+        self.a = tl.tuple((a, ))
+
+    @staticmethod
+    @triton.jit
+    def create(a):
+        return AggregateWithTuple(a)
+
+
+@triton.jit
+def pass_tuple_aggregate(agg):
+    pass
+
+
+@filecheck_test
+@triton.jit
+def test_aggregate_with_tuple():
+    # CHECK-LABEL: test_aggregate_with_tuple
+    # CHECK: tt.call @"test_frontend.pass_tuple_aggregate__test_frontend.AggregateWithTuple<Ti32S4ST>__"
+    agg = AggregateWithTuple.create(tl.arange(0, 4))
+    pass_tuple_aggregate(agg)
+    # CHECK: tt.func private @"test_frontend.pass_tuple_aggregate__test_frontend.AggregateWithTuple<Ti32S4ST>__"
+
+
 @triton.constexpr_function
 def constexpr_function(x):
     return x + 1

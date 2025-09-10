@@ -454,13 +454,13 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
                                                      interleaved, transA);
   } else {
     auto allocShapeA = getAllocShape(aTensorTy, 1);
-    aLoader = std::make_unique<DotOpMmaV3SmemLoader>(
+    aLoader = std::make_unique<DotOpMmaV5SmemLoader>(
         a, baseA, shapeA, allocShapeA, zero, 1, transA, aOperandShape,
         op.numBitsPerElementA, rewriter, loc);
   }
 
   auto allocShapeB = getAllocShape(bTensorTy, 0);
-  DotOpMmaV3SmemLoader bLoader = DotOpMmaV3SmemLoader(
+  DotOpMmaV5SmemLoader bLoader = DotOpMmaV5SmemLoader(
       b, baseB, shapeB, allocShapeB, zero, 1, transB, {mmaSizeN, mmaSizeK},
       op.numBitsPerElementB, rewriter, loc);
 

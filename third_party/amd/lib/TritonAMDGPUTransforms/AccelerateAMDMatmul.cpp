@@ -15,7 +15,6 @@
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
-using ::mlir::LLVM::AMD::hasTransInDefChain;
 using ::mlir::LLVM::AMD::isChainDotHead;
 using ::mlir::LLVM::AMD::isChainDotTail;
 using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
@@ -58,6 +57,15 @@ FailureOr<ScaleDotElemType> mlirTypeToScaledElemType(Type type) {
       .Case<Float6E2M3FNType>([](Type) { return ScaleDotElemType::E2M3; })
       .Case<Float4E2M1FNType>([](Type) { return ScaleDotElemType::E2M1; })
       .Default([](Type) { return failure(); });
+}
+
+// Data types supported by non-native DotScaledOp
+bool isF16F8F4(ScaleDotElemType elemType) {
+  return elemType == ScaleDotElemType::E2M1 ||
+         elemType == ScaleDotElemType::E4M3 ||
+         elemType == ScaleDotElemType::E5M2 ||
+         elemType == ScaleDotElemType::BF16 ||
+         elemType == ScaleDotElemType::FP16;
 }
 
 SmallVector<unsigned, 3>
@@ -554,18 +562,6 @@ public:
     if (is16BitElemTy && isDotChainTail) {
       kWidth = 4;
     }
-    // For FA bwd kernel (detected using hasTransInDefChain), depending on
-    // whether the dot is a head or tail in the chain, we adjust the kWidth
-    // accordingly. This will enable us to create the same shared encoding per
-    // pair of tt.dot ops that both use the same tt.load result, one directly
-    // and one via tt.trans, later in the pass pipeline.
-    if (is16BitElemTy && hasTransInDefChain(dotOp, 1u)) {
-      if (isChainDotHead(dotOp)) {
-        kWidth = 4;
-      } else if (isDotChainTail) {
-        kWidth = 8;
-      }
-    }
 
     Value newDot;
     if (withScale) {
@@ -648,14 +644,7 @@ public:
 
     ScaleDotElemType aElemType = dotOp.getAElemType();
     ScaleDotElemType bElemType = dotOp.getBElemType();
-    auto supportsTypes = [](ScaleDotElemType elemType) {
-      return elemType == ScaleDotElemType::E2M1 ||
-             elemType == ScaleDotElemType::E4M3 ||
-             elemType == ScaleDotElemType::E5M2 ||
-             elemType == ScaleDotElemType::BF16 ||
-             elemType == ScaleDotElemType::FP16;
-    };
-    if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
+    if (!isF16F8F4(aElemType) || !isF16F8F4(bElemType))
       return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6 operand");
 
     MLIRContext *ctx = dotOp.getContext();
@@ -1085,7 +1074,7 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
   return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
 }
 
-// promote operands of dot op if the existing combination is not natively
+// Promote operands of dot op if the existing combination is not natively
 // supported.
 static void decomposeMixedModeDotOp(ModuleOp mod) {
   mod.walk([](triton::DotOp dotOp) -> void {
@@ -1472,9 +1461,9 @@ struct TritonAMDGPUAccelerateMatmulPass
           context, getMfmaVersion(isaFamily), matrixInstructionSize,
           /*benefit=*/10);
       [[fallthrough]];
-    case ISAFamily::CDNA1:
-    case ISAFamily::CDNA2:
     case ISAFamily::CDNA3:
+    case ISAFamily::CDNA2:
+    case ISAFamily::CDNA1:
       mfmaPatterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
           /*benefit=*/2);

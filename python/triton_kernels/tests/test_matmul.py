@@ -1,6 +1,7 @@
 # isort: off
 # fmt: off
 from dataclasses import dataclass, fields, replace
+import itertools
 import pytest
 import torch
 from typing import Union
@@ -259,6 +260,7 @@ class Case:
     (False, False, False),
     (True, False, False),
     (False, True, False),
+    (False, True, True),
     (True, True, False),
     (True, True, True),
 ])
@@ -276,9 +278,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         if weight_dtype_str.startswith("mx"):
             if "float8" in act_dtype_str and torch.cuda.get_device_capability()[0] < 10:
                 pytest.skip("float8 x mx not supported with cuda capability < 10")
-            if act_dtype_str == "mxfloat8_e4m3fn":
-                if is_persistent:
-                    pytest.skip("mx x mx not supported with persistent kernel")
         if n == 2880 and k == 2880 and torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("Not enough memory on A100")
 
@@ -470,6 +469,58 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                 tri_y_scale).abs() < 1e-10, f"ref_y_scale: {ref_y_scale}, tri_y_scale: {tri_y_scale.item()}"
 
 
+# Test that we don't use unsupported block sizes.
+@pytest.mark.parametrize("m", [8, 16, 32, 64, 128])
+@pytest.mark.parametrize("n", [8, 16, 32, 64, 128])
+@pytest.mark.parametrize("k", [8, 16, 32, 64, 128])
+def test_small_batch_matmul(m, n, k):
+    if is_hip():
+        pytest.skip("Not fully tested on AMD")
+
+    if m * n * k > 16384:
+        pytest.skip()
+
+    BATCH_SIZE = 10000
+
+    def _make_tensor(shape, dtype, trans):
+        if trans:
+            shape = (shape[0], shape[2], shape[1])
+        t = alloc_rand(shape, "cuda", dtype)
+        return t.transpose(1, 2) if trans else t
+
+    for x_transpose, w_transpose, bias, dtype in itertools.product(
+        (False, True),
+        (False, True),
+        (False, True),
+        (torch.float16, torch.bfloat16, torch.float8_e5m2),
+    ):
+        if (
+            torch.cuda.get_device_capability()[0] < 10
+            and dtype is torch.float8_e5m2
+            and (not w_transpose)
+        ):
+            continue  # Not supported
+
+        x = _make_tensor((BATCH_SIZE, m, k), dtype, x_transpose)
+        w = _make_tensor((BATCH_SIZE, k, n), dtype, w_transpose)
+        bias = _make_tensor((BATCH_SIZE, n), torch.float32, False) if bias else None
+        tri_y = matmul_ogs(x, w, bias)
+
+        # ref_y = matmul_ogs_torch(x.float(), w.float(), bias)
+
+        # This is faster than matmul_ogs_torch.
+        ref_y = torch.bmm(x.float(), w.float())
+        if bias is not None:
+            ref_y += bias[:, None, :]
+
+        assert_close(
+            ref_y,
+            tri_y,
+            maxtol=4e-1 if dtype is torch.float8_e5m2 else None,
+            rmstol=4e-2 if dtype is torch.float8_e5m2 else None,
+        )
+
+
 def test_set_idle_sms():
     if not is_cuda():
         pytest.skip("Only supported on CUDA")
@@ -477,7 +528,7 @@ def test_set_idle_sms():
     num_idle_sms = 24
     matmul_ogs_set_idle_sms(num_idle_sms)
     flags = make_opt_flags(torch.float32, torch.float32, torch.float32, PrecisionConfig(), \
-                           1024, 1024, 1024, None, True, False, 1)
+                           1, 1024, 1024, 1024, None, True, False, 1)
     assert flags.idle_sms == num_idle_sms
 
 

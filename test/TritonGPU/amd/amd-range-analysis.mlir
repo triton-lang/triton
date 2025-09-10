@@ -35,7 +35,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
   tt.func @assumepid(%arg0: !tt.ptr<f32>) -> tensor<1024xf32> {
     %c0 = arith.constant 0 : i32
     %c1024_i32 = arith.constant 1024 : i32
-    // expected-remark@+2 {{unsigned : [0, 2147483647] signed : [0, 1024]}}
+    // expected-remark@+2 {{unsigned : [0, 1024] signed : [0, 1024]}}
     // expected-remark@+1 {{non-neg}}
     %pid = tt.get_program_id x : i32
     // expected-remark@+2 {{unsigned : [1, 1] signed : [-1, -1]}}
@@ -519,7 +519,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     // expected-remark@+1 {{non-neg}}
     %0 = tt.get_program_id x : i32
     %c65535_i32 = arith.constant 65535 : i32
-    %cmpule_pid = arith.cmpi ule, %0, %c65535_i32 : i32
+    %cmpule_pid = arith.cmpi sle, %0, %c65535_i32 : i32
     llvm.intr.assume %cmpule_pid : i1
     // expected-remark@+2 {{unsigned : [0, 8388480] signed : [0, 8388480]}}
     // expected-remark@+1 {{non-neg}}

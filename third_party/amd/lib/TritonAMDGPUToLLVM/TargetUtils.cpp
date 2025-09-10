@@ -9,6 +9,9 @@ ISAFamily deduceISAFamily(llvm::StringRef arch) {
   // See https://llvm.org/docs/AMDGPUUsage.html#processors for how to categorize
   // the following target gfx architectures.
 
+  if (kind == llvm::AMDGPU::GK_GFX1250)
+    return ISAFamily::GFX1250;
+
   // CDNA ISA cases
   switch (kind) {
   case llvm::AMDGPU::GK_GFX950:
