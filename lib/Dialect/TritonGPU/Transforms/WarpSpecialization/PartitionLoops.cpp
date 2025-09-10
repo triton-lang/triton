@@ -144,13 +144,6 @@ void mapRange(ValueRange fromRange, ValueRange toRange, IRMapping &mapping) {
   }
 }
 
-// TODO: remove this
-int getPartitionIndex(Operation *op) {
-  if (isa<nvws::WarpGroupOp>(op->getParentOp()))
-    return op->getParentRegion()->getRegionNumber();
-  return getPartitionIndex(op->getParentOp());
-}
-
 void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
                      const PartitionSet &partitions);
 
@@ -186,8 +179,8 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
 
   cloneOpsInBlock(forOp.getBody(), builders, partitions);
 
-  for (auto newForOp : newForOps) {
-    builders[getPartitionIndex(newForOp)].setInsertionPointAfter(newForOp);
+  for (auto [i, newForOp] : enumerate(newForOps)) {
+    builders[i].setInsertionPointAfter(newForOp);
     newForOp.walk([&](Operation *op) { op->removeAttr(kPartitionAttrName); });
     newForOp->removeAttr(kPartitionStagesAttrName);
   }
