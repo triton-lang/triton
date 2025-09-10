@@ -463,7 +463,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     if ((isaFamily == ISAFamily::CDNA3 || isaFamily == ISAFamily::CDNA4) &&
         checkType.isBF16() && atomicRmwOp == RMWOp::FADD) {
       return rewriter.notifyMatchFailure(
-          op, "RMW FADD does not support bf16 on CDNA3");
+          op, "RMW FADD does not support bf16 on CDNA3 or CDNA4");
     }
 
     LDBG("RMW FADD supported 16-bit type");
