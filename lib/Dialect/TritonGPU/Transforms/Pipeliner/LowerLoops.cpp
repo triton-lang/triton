@@ -81,6 +81,7 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
                        CoarseSchedule &schedule) {
   assert(schedule.count(op) && "Op not found in the schedule");
   int defStage = schedule[op].first;
+  CoarseSchedule::Cluster defCluster = schedule[op].second;
   std::optional<int> useStage;
   DenseSet<Operation *> topLevelUsers =
       triton::getTopLevelUsersInLoop(op, forOp);
@@ -108,6 +109,15 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   }
   for (Operation *topLevelUser : topLevelUsers) {
     int _useStage = schedule[topLevelUser].first;
+    CoarseSchedule::Cluster _useCluster = schedule[topLevelUser].second;
+    if (*_useCluster > *defCluster) {
+      // Check if we need extra buffer due to unusual execution order
+      // The issue occurs when users of the load are scheduled in a later
+      // cluster, which happens when conditional code gets moved to epilogue
+      // cluster. This creates a race condition where the local load happens
+      // after the global-to-local copy for the next pipeline stage starts.
+      _useStage++;
+    }
     useStage = std::min(_useStage, useStage.value_or(_useStage));
   }
   // Waits tells us the buffer is still in use until the wait completes, we
@@ -469,28 +479,6 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
           // Allocate additional buffer required by the wgmma pipelining.
           stageDiff += 1;
         }
-
-        // Check if we need extra buffer due to unusual execution order
-        // The issue occurs when users of the load are scheduled in a later
-        // cluster, which happens when conditional code gets moved to epilogue
-        // cluster. This creates a race condition where the local load happens
-        // after the global-to-local copy for the next pipeline stage starts.
-        // Identify the cluster containing the load
-        auto loadCluster = schedule[&op].second;
-        // Check if any users are scheduled in a later cluster
-        for (Operation *user : triton::getTopLevelUsersInLoop(&op, forOp)) {
-          if (schedule.count(user)) {
-            auto userCluster = schedule[user].second;
-            // If the user is in a later cluster than the load, the local load
-            // will happen after the global-to-local copy starts, requiring
-            // extra buffer
-            if (*userCluster > *loadCluster) {
-              stageDiff += 1;
-              break;
-            }
-          }
-        }
-
         auto &asyncLoad = asyncLoads[&op];
         asyncLoad.stageDiff = stageDiff;
         asyncLoad.sharedEncoding = sharedEncoding;
