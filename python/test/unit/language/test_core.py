@@ -5938,17 +5938,69 @@ def test_tl_range_num_stages(device):
                 assert 'cp.async.wait_group \t6' in ptx
 
 
-def test_tl_range_fuse():
+def test_tl_range_fuse(device):
 
     @triton.jit
-    def kernel(ub):
+    def kernel(ub, out_ptr):
+        k = 1
         for i in tl.range(0, ub, flatten=True):
             for j in tl.range(0, ub):
-                print("i", i)
+                tl.store(out_ptr + i * 32 + j, k)
+                k += 1
 
-    compiled_kernel = kernel.warmup(10, grid=(1, ))
+    ub = 10
+    out = torch.zeros((32, 32), dtype=torch.int32, device=device)
+    compiled_kernel = kernel[(1, )](ub, out)
     assert "tt.flatten" in compiled_kernel.asm["ttir"]
     assert compiled_kernel.asm["ttgir"].count("scf.for") == 1
+
+    ref = torch.zeros((32, 32), dtype=torch.int32, device=device)
+    k = 1
+    for i in range(ub):
+        for j in range(ub):
+            ref[i, j] = k
+            k += 1
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+def test_tl_range_fuse_dependent(device):
+
+    @triton.jit
+    def kernel(ub, out_i_ptr, out_j_ptr):
+        k = 0
+        for i in tl.range(0, ub, flatten=True):
+            lower_bound = i * 2
+            upper_bound = lower_bound + i + 1
+            tl.assume(upper_bound > lower_bound)
+            for j in tl.range(lower_bound, upper_bound):
+                tl.store(out_i_ptr + k, i)
+                tl.store(out_j_ptr + k, j)
+                k += 1
+
+    ub = 10
+    out_i = torch.zeros(1024, dtype=torch.int32, device=device)
+    out_j = torch.zeros(1024, dtype=torch.int32, device=device)
+    compiled_kernel = kernel[(1, )](ub, out_i, out_j)
+    assert "tt.flatten" in compiled_kernel.asm["ttir"]
+    ttgir = compiled_kernel.asm["ttgir"]
+    ttgir = ttgir[ttgir.find("scf.for"):]
+    assert ttgir[:ttgir.find("}")].count("scf.for") == 1
+    ttgir = ttgir[ttgir.find("}"):]
+    assert ttgir.count("scf.for") == 1
+
+    ref_i = torch.zeros(1024, dtype=torch.int32, device=device)
+    ref_j = torch.zeros(1024, dtype=torch.int32, device=device)
+    k = 0
+    for i in range(ub):
+        lower_bound = i * 2
+        upper_bound = lower_bound + i + 1
+        assert upper_bound > lower_bound
+        for j in range(lower_bound, upper_bound):
+            ref_i[k] = i
+            ref_j[k] = j
+            k += 1
+    torch.testing.assert_close(out_i, ref_i, atol=0, rtol=0)
+    torch.testing.assert_close(out_j, ref_j, atol=0, rtol=0)
 
 
 def test_tl_range_option_none():
