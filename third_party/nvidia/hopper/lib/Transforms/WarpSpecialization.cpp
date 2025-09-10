@@ -16,6 +16,7 @@ int doTaskIdPropagate(triton::FuncOp &funcOp);
 bool doDataPartition(triton::FuncOp &funcOp, unsigned numConsumerGroups);
 void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers);
 void doTokenLowering(triton::FuncOp &funcOp, unsigned numConsumerGroups);
+void doPingPongSync(triton::FuncOp &funcOp, unsigned numWarpGroups);
 
 #define GEN_PASS_DEF_NVGPUWARPSPECIALIZATION
 #include "nvidia/hopper/include/Transforms/Passes.h.inc"
@@ -94,6 +95,12 @@ public:
     if (dumpIntermediateSteps) {
       llvm::dbgs()
           << "// -----// WarpSpec internal IR Dump After: doCodePartition\n"
+          << moduleOp << "\n\n\n";
+    }
+    doPingPongSync(funcOp, numWarpGroups);
+    if (dumpIntermediateSteps) {
+      llvm::dbgs()
+          << "// -----// WarpSpec internal IR Dump After: doPingPongSync\n"
           << moduleOp << "\n\n\n";
     }
     doTokenLowering(funcOp, numWarpGroups - 1);
