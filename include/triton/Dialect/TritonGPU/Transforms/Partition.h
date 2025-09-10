@@ -87,8 +87,11 @@ private:
   SmallVector<std::unique_ptr<Partition>> partitions;
 };
 
+// Annotate the op with the partition index, and
 void setPartition(Operation *op, Partition *partition);
+// TODO: remove this one?
 void setPartition(Operation *op, const SetVector<int> &partitionIds);
+void setPartition(Operation *op, const SetVector<Partition*> &partitions);
 std::optional<SetVector<int>> getPartitionIds(Operation *op);
 bool hasPartition(Operation *op);
 // Utility to be used when the op is known to belong to one partition
