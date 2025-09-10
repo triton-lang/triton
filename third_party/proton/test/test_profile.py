@@ -482,9 +482,6 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path):
 
 
 def test_nvtx_range_push_pop(tmp_path: pathlib.Path):
-    if is_hip():
-        pytest.skip("HIP backend does not support NVTX")
-
     temp_file = tmp_path / "test_nvtx_range_push_pop.hatchet"
     proton.start(str(temp_file.with_suffix("")))
 

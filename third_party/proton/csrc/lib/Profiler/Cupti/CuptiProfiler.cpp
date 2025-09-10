@@ -182,7 +182,6 @@ void setNvtxCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
   cupti::enableCallback<true>(static_cast<uint32_t>(enable), subscriber,       \
                               CUPTI_CB_DOMAIN_NVTX, id)
   CALLBACK_ENABLE(CUPTI_CBID_NVTX_nvtxRangePushA);
-  CALLBACK_ENABLE(CUPTI_CBID_NVTX_nvtxRangePushW);
   CALLBACK_ENABLE(CUPTI_CBID_NVTX_nvtxRangePop);
 #undef CALLBACK_ENABLE
 }
