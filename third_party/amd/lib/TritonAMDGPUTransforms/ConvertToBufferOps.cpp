@@ -459,7 +459,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     LDBG("RMW supported type");
 
     // float16 is the only 16-bit dtype supported by buffer atomic fadd on
-    // gfx942
+    // gfx942 or gfx950
     if ((isaFamily == ISAFamily::CDNA3 || isaFamily == ISAFamily::CDNA4) &&
         checkType.isBF16() && atomicRmwOp == RMWOp::FADD) {
       return rewriter.notifyMatchFailure(
