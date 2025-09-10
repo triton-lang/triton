@@ -93,9 +93,9 @@ void setPartition(Operation *op, Partition *partition) {
   partition->addOp(op);
 }
 
-void setPartition(Operation *op, const SetVector<Partition*> &partitions) {
+void setPartition(Operation *op, const SetVector<Partition *> &partitions) {
   SmallVector<int> partitionIds;
-  for (auto partition: partitions) {
+  for (auto partition : partitions) {
     partitionIds.push_back(partition->getIndex());
     partition->addOp(op);
   }

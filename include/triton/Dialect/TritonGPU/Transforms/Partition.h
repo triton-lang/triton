@@ -90,7 +90,7 @@ private:
 // Annotate the op with the partition index or indices, and add the op
 // to the partitions it belongs to.
 void setPartition(Operation *op, Partition *partition);
-void setPartition(Operation *op, const SetVector<Partition*> &partitions);
+void setPartition(Operation *op, const SetVector<Partition *> &partitions);
 // Annotate the op with the partition indices. It should only be used in a pass
 // which does not work with Partition instances and iterate* functions, since
 // it does not keep the op attributes and the op list of a partition in sync.
