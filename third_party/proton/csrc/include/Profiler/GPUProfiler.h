@@ -66,12 +66,14 @@ protected:
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
-    void enterOp(const std::string &name = "") {
+    void enterOp(const std::string &name = "", bool triggerGPUEvent = true) {
       if (profiler.isOpInProgress())
         return;
       scopeId = Scope::getNewScopeId();
       profiler.enterOp(Scope(scopeId, name));
-      profiler.correlation.apiExternIds.insert(scopeId);
+      if (triggerGPUEvent) {
+        profiler.correlation.apiExternIds.insert(scopeId);
+      }
     }
 
     void exitOp() {

@@ -326,7 +326,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
     const roctx_api_data_t *data =
         static_cast<const roctx_api_data_t *>(callbackData);
     if (cid == ROCTX_API_ID_roctxRangePushA) {
-      threadState.enterOp((data->args).message);
+      threadState.enterOp((data->args).message, /*triggerGPUEvent=*/false);
     } else if (cid == ROCTX_API_ID_roctxRangePop) {
       threadState.exitOp();
     }

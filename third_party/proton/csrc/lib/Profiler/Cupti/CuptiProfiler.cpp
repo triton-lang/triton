@@ -336,7 +336,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
     auto *nvtxData = static_cast<const CUpti_NvtxData *>(cbData);
     if (cbId == CUPTI_CBID_NVTX_nvtxRangePushA) {
       auto message = nvtx::getMessageFromRangePushA(nvtxData->functionParams);
-      threadState.enterOp(message);
+      threadState.enterOp(message, /*triggerGPUEvent=*/false);
     } else if (cbId == CUPTI_CBID_NVTX_nvtxRangePop) {
       threadState.exitOp();
     } // TODO: else handle other NVTX range functions
