@@ -156,5 +156,5 @@ if __name__ == "__main__":
                      name="gpt-oss-x2")
         roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, quantized_dtypes[0], quantized_dtypes[1], TP=4, EP=1,
                      name="gpt-oss-x2")
-        roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, quantized_dtypes[0], quantized_dtypes[1], TP=8, EP=1,
-                     name="gpt-oss-x2")
+    # roofline_mlp(batch_sizes_moe, 5760, 5760, 128, 4, quantized_dtypes[0], quantized_dtypes[1], TP=8, EP=1,
+    #              name="gpt-oss-x2")
