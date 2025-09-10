@@ -231,7 +231,8 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
         dynamic_cast<RoctracerProfiler &>(RoctracerProfiler::instance());
     auto *pImpl = dynamic_cast<RoctracerProfiler::RoctracerProfilerPimpl *>(
         profiler.pImpl.get());
-    const hip_api_data_t *data = static_cast<const hip_api_data_t *>(callbackData);
+    const hip_api_data_t *data =
+        static_cast<const hip_api_data_t *>(callbackData);
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
       // Valid context and outermost level of the kernel launch
       threadState.enterOp();
