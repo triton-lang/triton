@@ -1158,7 +1158,6 @@ SharedMemoryObject::getMaskSpanOffsets(triton::gpu::MemDescType srcTy) {
   if (allocShape == shape) {
     return 0;
   }
-  LinearLayout totalLl;
   if (auto paddedEncoding = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
           srcTy.getEncoding())) {
     // Mask is used in fusion of constant part of memory operation address as
@@ -1166,9 +1165,8 @@ SharedMemoryObject::getMaskSpanOffsets(triton::gpu::MemDescType srcTy) {
     // between main offset computation and actual memory access, which breaks
     // constand fusing. Full mask disables this optimization.
     return ~uint64_t(0);
-  } else {
-    totalLl = triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
   }
+  auto totalLl = triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
   auto dimNames = standardOutDimNames(ctx, shape.size());
   // Remove the kBlock dimension
   auto kOffset = StringAttr::get(ctx, "offset");
