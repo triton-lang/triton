@@ -699,8 +699,9 @@ static FailureOr<SmallVector<Value>> lowerTMemLdStFromTypes(
   assert(maybeQuot.has_value());
   auto quot = maybeQuot->unsqueezeIn(kBlock);
   bool unpacked;
+  unsigned elementBitWidth = memTy.getElementType().getIntOrFloatBitWidth();
   if (auto enc = dyn_cast<TensorMemoryEncodingAttr>(memTy.getEncoding())) {
-    unpacked = enc.getUnpacked();
+    unpacked = enc.getColStride() != 1;
   } else {
     assert(isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding()));
     unpacked = false;
@@ -1306,9 +1307,10 @@ struct TMEMSubSliceOpConversion
       offsetCol -= blockN * (blockOffset / 2);
     }
 
-    if (!encoding.getUnpacked()) {
+    unsigned elementBitWidth = srcTy.getElementTypeBitWidth();
+    if (encoding.getColStride() * elementBitWidth != 32) {
       // Adjust the column offset based on the element size.
-      int numElementsPer32B = 32 / srcTy.getElementTypeBitWidth();
+      int numElementsPer32B = 32 / (encoding.getColStride() * elementBitWidth);
       if (offsetCol % numElementsPer32B != 0) {
         return failure();
       }
