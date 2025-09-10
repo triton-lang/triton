@@ -428,7 +428,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             return
         return tuple(unflatten_ir_values(mlir_results, [r.type for r in default_results]))
 
-    def get_num_warps(self, generator):
+    def num_warps(self, generator):
         if generator.caller_context is not None:
             assert isinstance(generator.caller_context, GluonCallerContext)
             return ttgl.constexpr(generator.caller_context.num_warps)

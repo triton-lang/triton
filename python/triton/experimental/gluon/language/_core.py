@@ -502,8 +502,11 @@ def warp_specialize(default_args, default_partition, worker_args, worker_partiti
 
 
 @builtin
-def get_num_warps(_semantic=None, _generator=None):
-    return _semantic.get_num_warps(_generator)
+def num_warps(_semantic=None, _generator=None):
+    """
+    Returns the number of warps that execute the current context, including in warp-specialized regions.
+    """
+    return _semantic.num_warps(_generator)
 
 
 @builtin

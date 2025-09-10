@@ -2379,7 +2379,7 @@ def test_layout_zeros():
 
 @gluon.jit
 def print_num_warps():
-    num_warps: ttgl.constexpr = ttgl.get_num_warps()
+    num_warps: ttgl.constexpr = ttgl.num_warps()
     print("num_warps", num_warps)
 
 
