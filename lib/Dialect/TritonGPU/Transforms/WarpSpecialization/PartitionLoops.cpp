@@ -333,28 +333,31 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
   }
 }
 
-void assignRootPartition(scf::ForOp loop, int numPartitions) {
+void assignRootPartition(scf::ForOp loop, PartitionSet &partitions) {
   auto ctx = loop.getContext();
   Builder b(ctx);
-  SmallVector<int> ids;
-  for (int i = 0; i < numPartitions; ++i) {
-    ids.push_back(i);
+  SetVector<Partition *> root;
+  for (int i = 0; i < partitions.getNumPartitions(); ++i) {
+    root.insert(partitions.getPartition(i));
   }
-  auto partitionAttr = b.getDenseI32ArrayAttr(ids);
 
   for (Operation &op : loop.getBody()->without_terminator()) {
     if (!hasPartition(&op)) {
-      op.setAttr(kPartitionAttrName, partitionAttr);
+      setPartition(&op, root);
     }
   }
 }
 
-void assignRegionBodyPartition(scf::ForOp loop) {
+void assignRegionBodyPartition(scf::ForOp loop, PartitionSet &partitions) {
   loop->walk([&](Operation *op) {
     if (!isa<scf::ForOp>(op) && !hasPartition(op)) {
       auto parentOp = loop.getBody()->findAncestorOpInBlock(*op);
-      if (hasPartition(parentOp)) {
-        op->setAttr(kPartitionAttrName, parentOp->getAttr(kPartitionAttrName));
+      if (auto partitionIds = triton::gpu::getPartitionIds(parentOp)) {
+        SetVector<Partition *> parentPartitions;
+        for (auto id : *partitionIds) {
+          parentPartitions.insert(partitions.getPartition(id));
+        }
+        setPartition(op, parentPartitions);
       }
     }
   });
@@ -368,8 +371,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
     return failure();
   PartitionSet partitions = std::move(*partitionsOr);
 
-  assignRootPartition(loop, partitions.getNumPartitions());
-  assignRegionBodyPartition(loop);
+  assignRootPartition(loop, partitions);
+  assignRegionBodyPartition(loop, partitions);
 
   //  loop->getParentOfType<ModuleOp>().dump();
 
