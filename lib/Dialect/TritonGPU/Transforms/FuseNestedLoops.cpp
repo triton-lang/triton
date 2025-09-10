@@ -244,7 +244,9 @@ static Logue createLogueFrom(llvm::iterator_range<Block::iterator> ops,
 // recursively. This includes integer division, which are not speculatable, but
 // we know they will never divide by zero.
 static bool canHoistLoopBoundComputation(Operation *op) {
-  auto isScalar = [](Type type) { return type.isIntOrIndexOrFloat() || isa<PointerType>(type); };
+  auto isScalar = [](Type type) {
+    return type.isIntOrIndexOrFloat() || isa<PointerType>(type);
+  };
   return (isMemoryEffectFree(op) || hasSingleEffect<MemoryEffects::Read>(op)) &&
          llvm::all_of(op->getOperandTypes(), isScalar) &&
          llvm::all_of(op->getResultTypes(), isScalar);
