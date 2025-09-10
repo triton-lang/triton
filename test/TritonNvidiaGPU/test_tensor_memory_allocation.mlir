@@ -3,10 +3,10 @@
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [0, 1]}>
-#tmem_f32 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true, bitwidth = 32>
-#tmem_f16 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true, bitwidth = 16>
-#tmem1 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, unpacked = true, bitwidth = 16>
-#tmem2 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, unpacked = true, bitwidth = 16>
+#tmem_f32 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem_f16 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 2>
+#tmem1 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 2>
+#tmem2 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 2>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 #linear = #ttg.linear<{register = [[0, 1], [0, 2], [32, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
@@ -63,8 +63,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true, bitwidth = 32>
-#tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true, bitwidth = 32>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: ttg.tensor_memory_size = 512
   // CHECK: alloc_tensor_memory_re_use
@@ -119,7 +119,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true, bitwidth = 32>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: ttg.tensor_memory_size = 128
   // CHECK: alloc_tensor_memory_re_use_liverange_end_collision
@@ -164,8 +164,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CTAsPerCGA = [2, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1], CTAsPerCGA = [2, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true, bitwidth = 16, CTASplitM = 2>
-#tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true, bitwidth = 16, CTASplitN = 2>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 2, CTASplitM = 2>
+#tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 2, CTASplitN = 2>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32, ttg.shared = 65536 : i32} {
   // CHECK-LABEL: multi_ctas
   tt.func public @multi_ctas() {
@@ -189,7 +189,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-#layout = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true, bitwidth = 32>
+#layout = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 #tmem = #ttng.tensor_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100"} {
@@ -243,8 +243,8 @@ tt.func @alloc_warp_specialize_explicit_capture() {
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#tmem_f16 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, unpacked = true, bitwidth = 16>
-#tmem_f32 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, unpacked = true, bitwidth = 32>
+#tmem_f16 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 2>
+#tmem_f32 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32} {
@@ -300,8 +300,8 @@ tt.func @mma_scaled_lhs_tmem(
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
-#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, unpacked = true, bitwidth = 32>
-#tmem1 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, unpacked = false, bitwidth = 16>
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 1>
+#tmem1 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 1>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100"} {
 
 // CHECK-LABEL: @alloc_warp_specialize_explicit_capture_subview
@@ -363,8 +363,8 @@ tt.func @alloc_warp_specialize_explicit_capture() {
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#tmem_f16 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, unpacked = true, bitwidth = 16>
-#tmem_f32 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, unpacked = true, bitwidth = 32>
+#tmem_f16 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 2>
+#tmem_f32 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32} {

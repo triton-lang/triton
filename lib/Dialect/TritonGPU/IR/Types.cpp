@@ -120,9 +120,11 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (shape.size() != 2 && shape.size() != 3) {
       return emitError() << "rank must be 2 or 3";
     }
-    if (elementType.getIntOrFloatBitWidth() != enc.getBitwidth()) {
+    unsigned bitwidth = elementType.getIntOrFloatBitWidth();
+    if (bitwidth * enc.getColStride() > 32) {
       return emitError()
-             << "bitwidth must be equal to the element type bitwidth";
+             << "bitwidth * colStride must be less than or equal to 32. Got "
+             << bitwidth << " and " << enc.getColStride();
     }
     shape = shape.take_back(2);
     allocShape = allocShape.take_back(2);

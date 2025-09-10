@@ -568,9 +568,10 @@ public:
         versionMajor, retShapePerCTA, oldAType.getElementType(), numWarps);
     ArrayRef<unsigned> CTASplitNum = CTALayout.getCTASplitNum();
     auto bitwidth = oldRetType.getElementType().getIntOrFloatBitWidth();
+    unsigned colStride = 32 / bitwidth;
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
-        context, instrShape[0], instrShape[1], /*unpacked=*/true, bitwidth,
-        CTASplitNum[0], CTASplitNum[1]);
+        context, instrShape[0], instrShape[1], colStride, CTASplitNum[0],
+        CTASplitNum[1]);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     Type accMemDescType = triton::gpu::MemDescType::get(
@@ -844,9 +845,9 @@ public:
 
     ArrayRef<unsigned> CTASplitNum = CTALayout.getCTASplitNum();
     auto bitwidth = oldRetType.getElementType().getIntOrFloatBitWidth();
+    unsigned colStride = 32 / bitwidth;
     Attribute accEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
-        context, m, n, /*unpacked=*/true, bitwidth, CTASplitNum[0],
-        CTASplitNum[1]);
+        context, m, n, colStride, CTASplitNum[0], CTASplitNum[1]);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     Type accMemDescType = triton::gpu::MemDescType::get(

@@ -762,7 +762,7 @@ LogicalResult TMEMSubSliceOp::verify() {
   if (dstEncoding.getBlockM() != encoding.getBlockM() ||
       dstEncoding.getCTASplitM() != encoding.getCTASplitM() ||
       dstEncoding.getCTASplitN() != encoding.getCTASplitN() ||
-      dstEncoding.getUnpacked() != encoding.getUnpacked())
+      dstEncoding.getColStride() != encoding.getColStride())
     return emitOpError("The destination must have the same block size and "
                        "CTASplit size as the source.");
   return mlir::success();
@@ -778,7 +778,7 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
   unsigned newBlockN = std::min<unsigned>(encoding.getBlockN(), size);
   auto newEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
       builder.getContext(), encoding.getBlockM(), newBlockN,
-      encoding.getUnpacked(), encoding.getBitwidth(), encoding.getCTASplitM(),
+      encoding.getColStride(), encoding.getCTASplitM(),
       encoding.getCTASplitN());
   auto subsliceType = gpu::MemDescType::get(
       shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),

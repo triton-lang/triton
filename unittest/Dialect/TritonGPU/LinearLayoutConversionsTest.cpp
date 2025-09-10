@@ -134,13 +134,20 @@ public:
         CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
+  TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN,
+                                unsigned colStride, unsigned ctaSplitM,
+                                unsigned ctaSplitN) {
+    return TensorMemoryEncodingAttr::get(&ctx, blockM, blockN, colStride,
+                                         ctaSplitM, ctaSplitN);
+  }
+
   TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN, bool unpacked,
                                 unsigned ctaSplitM, unsigned ctaSplitN,
                                 unsigned bitwidth = 0) {
     if (!bitwidth)
       bitwidth = unpacked ? 32 : 16;
-    return TensorMemoryEncodingAttr::get(&ctx, blockM, blockN, unpacked,
-                                         bitwidth, ctaSplitM, ctaSplitN);
+    unsigned colStride = unpacked ? 32 / bitwidth : 1;
+    return tmem(blockM, blockN, colStride, ctaSplitM, ctaSplitN);
   }
 
   StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }
