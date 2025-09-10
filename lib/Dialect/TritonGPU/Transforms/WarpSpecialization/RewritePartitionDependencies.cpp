@@ -171,7 +171,7 @@ LogicalResult DependencyRewriter::run() {
       }
     };
     for (Operation *op : partition.getOps()) {
-      if (getPartitionIds(op)->size() == partitions.getNumPartitions()) {
+      if (isInRootPartition(op, partitions)) {
         // skip ops in the root partition
         continue;
       }

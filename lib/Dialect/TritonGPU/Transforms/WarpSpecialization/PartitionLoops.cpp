@@ -373,14 +373,11 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   for (const Partition &partition : partitions.getPartitions()) {
     bool failed = false;
     auto callback = [&](OpResult output, OpOperand &use, unsigned distance) {
-      auto defOpPartitionIds = getPartitionIds(output.getDefiningOp());
-      if (!defOpPartitionIds ||
-          defOpPartitionIds->size() == partitions.getNumPartitions()) {
+      if (isInRootPartition(output.getDefiningOp(), partitions)) {
         return;
       }
       auto partitionIds = getPartitionIds(use.getOwner());
-      if (!partitionIds ||
-          partitionIds->size() == partitions.getNumPartitions() ||
+      if (isInRootPartition(use.getOwner(), partitions) ||
           llvm::is_contained(*partitionIds, partition.getIndex()))
         return;
       failed = true;
@@ -445,8 +442,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
     if (!wsTag || wsTag.getInt() != partitions.getTag())
       continue;
     if (auto partitionIds = triton::gpu::getPartitionIds(op)) {
-      SmallVector<size_t> tmp(partitionIds->begin(), partitionIds->end());
-      cloneOp(op, builders, tmp);
+      cloneOp(op, builders,
+              SmallVector<size_t>{partitionIds->begin(), partitionIds->end()});
       opsToErase.push_back(op);
     } else {
       assert(loop.getOperation() == op && "Unexpected op");
@@ -504,7 +501,6 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
     }
   }
 
-  //  loop->getParentOfType<ModuleOp>().dump();
   for (auto op : llvm::reverse(opsToErase))
     op->erase();
 
