@@ -438,13 +438,14 @@ void init_gluon_ir(py::module &&m) {
                  ctx, vec, perPhase, maxPhase, order, ctaLayout);
            })
       .def("get_tensor_memory_layout",
-           [](GluonOpBuilder &self, std::vector<unsigned> &block, bool unpacked,
+           [](GluonOpBuilder &self, std::vector<unsigned> &block,
+              unsigned colStride,
               std::vector<unsigned> &ctaSplitNum) -> Attribute {
              auto ctx = self.getContext();
              assert(block.size() == 2);
              assert(ctaSplitNum.size() == 2);
              return self.getChecked<ttng::TensorMemoryEncodingAttr>(
-                 ctx, block[0], block[1], unpacked, ctaSplitNum[0],
+                 ctx, block[0], block[1], colStride, ctaSplitNum[0],
                  ctaSplitNum[1]);
            })
       .def("get_tensor_memory_scales_layout",

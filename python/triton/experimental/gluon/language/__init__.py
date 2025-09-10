@@ -47,6 +47,7 @@ from ._core import (
     expand_dims,
     full,
     gather,
+    num_warps,
     histogram,
     inline_asm_elementwise,
     join,

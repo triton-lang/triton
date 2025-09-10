@@ -232,6 +232,7 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_F32_DEFAULT` sets the default input precision of `tl.dot` when using 32-bit floats, which can be either `ieee`, `tf32`, or `tf32x3`.
 - `TRITON_FRONT_END_DEBUGGING=1` disables exception wrapping when an error occurs in the compiler frontend, allowing the full stack trace to be seen.
 - `TRITON_DISABLE_LINE_INFO=1` removes all line information from the module.
+- `PTXAS_OPTIONS` passes additional command-line options to the PTX assembler `ptxas` (only on NVIDIA).
 
 > [!NOTE]
 > Some of these environment variables don't have a knob in `knobs.py`-- those are only relevant to the C++ layer(s), hence they don't exist in the python layer.
