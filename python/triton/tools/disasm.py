@@ -28,25 +28,25 @@ import subprocess
 import tempfile
 from typing import Dict, Optional, Tuple
 
-FLINE_RE = re.compile(r'\s*/\*\w{4}\*/\s*([^;]*;)\s*/\* 0x(\w{16}) \*/\s*')
-SLINE_RE = re.compile(r'\s*/\* 0x(\w{16}) \*/\s*')
-FNAME_RE = re.compile(r'\s*Function : (\w+)\s*')
-BRA_RE = re.compile(r'(.*BRA(?:\.U)? )(0x\w+);')
+FLINE_RE = re.compile(r"\s*/\*\w{4}\*/\s*([^;]*;)\s*/\* 0x(\w{16}) \*/\s*")
+SLINE_RE = re.compile(r"\s*/\* 0x(\w{16}) \*/\s*")
+FNAME_RE = re.compile(r"\s*Function : (\w+)\s*")
+BRA_RE = re.compile(r"(.*BRA(?:\.U)? )(0x\w+);")
 
 
 def parseCtrl(sline: str) -> str:
     enc = int(SLINE_RE.match(sline).group(1), 16)
-    stall = (enc >> 41) & 0xf
+    stall = (enc >> 41) & 0xF
     yld = (enc >> 45) & 0x1
     wrtdb = (enc >> 46) & 0x7
     readb = (enc >> 49) & 0x7
-    watdb = (enc >> 52) & 0x3f
+    watdb = (enc >> 52) & 0x3F
 
-    yld_str = 'Y' if yld == 0 else '-'
-    wrtdb_str = '-' if wrtdb == 7 else str(wrtdb)
-    readb_str = '-' if readb == 7 else str(readb)
-    watdb_str = '--' if watdb == 0 else f'{watdb:02d}'
-    return f'{watdb_str}:{readb_str}:{wrtdb_str}:{yld_str}:{stall:x}'
+    yld_str = "Y" if yld == 0 else "-"
+    wrtdb_str = "-" if wrtdb == 7 else str(wrtdb)
+    readb_str = "-" if readb == 7 else str(readb)
+    watdb_str = "--" if watdb == 0 else f"{watdb:02d}"
+    return f"{watdb_str}:{readb_str}:{wrtdb_str}:{yld_str}:{stall:x}"
 
 
 def processSassLines(fline: str, sline: str, labels: Dict[int, int]) -> Tuple[str, str]:
@@ -62,14 +62,14 @@ def processSassLines(fline: str, sline: str, labels: Dict[int, int]) -> Tuple[st
             pass
         else:
             labels[target] = len(labels)
-    return (f'{ctrl}', f'{asm}')
+    return (f"{ctrl}", f"{asm}")
 
 
 @functools.lru_cache()
 def get_sass(cubin_asm: bytes, fun: Optional[str] = None) -> Optional[str]:
     fd, path = tempfile.mkstemp()
     try:
-        with open(fd, 'wb') as cubin:
+        with open(fd, "wb") as cubin:
             cubin.write(cubin_asm)
         sass = extract(path, fun)
     finally:
@@ -135,8 +135,8 @@ def extract(file_path: str, fun: Optional[str]) -> Optional[str]:
                 return
 
         fname = FNAME_RE.match(line).group(1)
-        ret = ''
-        ret += f'Function:{fname}\n'
+        ret = ""
+        ret += f"Function:{fname}\n"
         line_idx += 2  # bypass .headerflags
         line = sass_lines[line_idx].decode()
         # Remapping address to label
@@ -160,14 +160,14 @@ def extract(file_path: str, fun: Optional[str]) -> Optional[str]:
             # Print label if this is BRA target
             offset = idx * 16
             if offset in labels:
-                label_name = f'LBB{labels[offset]}'
-                ret += f'{label_name}:\n'
-            ret += ctrl + '\t'
+                label_name = f"LBB{labels[offset]}"
+                ret += f"{label_name}:\n"
+            ret += ctrl + "\t"
             # if this is BRA, remap offset to label
             if BRA_RE.match(asm):
                 target = int(BRA_RE.match(asm).group(2), 16)
-                target_name = f'LBB{labels[target]}'
-                asm = BRA_RE.sub(rf'\1{target_name};', asm)
-            ret += asm + '\n'
-        ret += '\n'
+                target_name = f"LBB{labels[target]}"
+                asm = BRA_RE.sub(rf"\1{target_name};", asm)
+            ret += asm + "\n"
+        ret += "\n"
         return ret
