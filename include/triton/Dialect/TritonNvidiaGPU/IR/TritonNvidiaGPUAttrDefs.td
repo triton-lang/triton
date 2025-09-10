@@ -44,6 +44,7 @@ def TTG_TensorMemoryEncodingAttr : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemor
     "unsigned":$blockM,
     "unsigned":$blockN,
     "bool":$unpacked,
+    "unsigned":$bitwidth,
     DefaultValuedParameter<"unsigned", "1">:$CTASplitM,
     DefaultValuedParameter<"unsigned", "1">:$CTASplitN
   );

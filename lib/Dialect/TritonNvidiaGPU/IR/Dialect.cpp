@@ -247,9 +247,11 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
   });
 }
 
-LogicalResult TensorMemoryEncodingAttr::verify(
-    function_ref<InFlightDiagnostic()> emitError, unsigned blockM,
-    unsigned blockN, bool unpacked, unsigned CTASplitM, unsigned CTASplitN) {
+LogicalResult
+TensorMemoryEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                                 unsigned blockM, unsigned blockN,
+                                 bool unpacked, unsigned bitwidth,
+                                 unsigned CTASplitM, unsigned CTASplitN) {
   if (CTASplitM < 1 || CTASplitN < 1) {
     return emitError() << "CTASplitM and CTASplitN must be greater than 0";
   }
@@ -258,6 +260,17 @@ LogicalResult TensorMemoryEncodingAttr::verify(
   }
   if (!llvm::isPowerOf2_32(blockN)) {
     return emitError() << "blockN must be a power of 2 but got " << blockN;
+  }
+  if (bitwidth == 0 || !llvm::isPowerOf2_32(bitwidth) || bitwidth > 32) {
+    return emitError() << "bitwidth must be a non-zero power of two no greater"
+                       << " than 32 but got " << bitwidth;
+  }
+  if (!unpacked && bitwidth > 16) {
+    return emitError() << "bitwidth must be <= 16 for packed tensor memory";
+  }
+  if (unpacked && bitwidth != 16 && bitwidth != 32) {
+    return emitError()
+           << "bitwidth must be either 16 or 32 for unpacked tensor memory";
   }
   if (!unpacked && blockN < 2) {
     return emitError() << "blockN must be at least 2 for packed tensor memory";

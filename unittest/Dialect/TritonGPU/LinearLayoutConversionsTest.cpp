@@ -135,9 +135,12 @@ public:
   }
 
   TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN, bool unpacked,
-                                unsigned ctaSplitM, unsigned ctaSplitN) {
+                                unsigned ctaSplitM, unsigned ctaSplitN,
+                                unsigned bitwidth = 0) {
+    if (!bitwidth)
+      bitwidth = unpacked ? 32 : 16;
     return TensorMemoryEncodingAttr::get(&ctx, blockM, blockN, unpacked,
-                                         ctaSplitM, ctaSplitN);
+                                         bitwidth, ctaSplitM, ctaSplitN);
   }
 
   StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }
@@ -3563,8 +3566,8 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_Packed) {
   auto d1 = S("dim1");
   auto rows = S("rows");
   auto cols = S("cols");
-  auto enc = tmem(128, 128, /*unpacked*/ false, 1, 1);
-  auto encUnpacked = tmem(128, 128, /*unpacked*/ true, 1, 1);
+  auto enc = tmem(128, 128, /*unpacked*/ false, 1, 1, 16);
+  auto encUnpacked = tmem(128, 128, /*unpacked*/ true, 1, 1, 16);
   // Packed and unpacked map to the same layout
   // Packing is modelled as setting the M/N slot size to bitwidth=16
   EXPECT_EQ(toLinearLayout({128, 256}, enc),

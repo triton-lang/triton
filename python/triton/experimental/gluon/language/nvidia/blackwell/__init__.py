@@ -41,25 +41,32 @@ class TensorMemoryLayout:
     """
     block: Tuple[int, int]
     unpacked: bool
+    bitwidth: int
     cta_split_num: Optional[Tuple[int, int]] = None
 
     def __post_init__(self):
         assert len(self.block) == 2
         assert self.cta_split_num is None or len(self.cta_split_num) == 2
+        if self.unpacked:
+            assert self.bitwidth in (16, 32), "unpacked tensor memory expects 16 or 32 bit elements"
+        else:
+            assert self.bitwidth <= 16, "packed tensor memory expects sub-32 bit elements"
 
     def _to_ir(self, builder):
         cta_split_num = self.cta_split_num or [1, 1]
         return builder.get_tensor_memory_layout(
             self.block,
             self.unpacked,
+            self.bitwidth,
             cta_split_num,
         )
 
     def mangle(self) -> str:
         block_str = f"{self.block[0]}x{self.block[1]}"
+        bitwidth_str = f"B{self.bitwidth}"
         unpacked_str = "U" if self.unpacked else "P"
         cta_split_str = f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else ""
-        return f"TL{block_str}{unpacked_str}{cta_split_str}TL"
+        return f"TL{block_str}{bitwidth_str}{unpacked_str}{cta_split_str}TL"
 
 
 @dataclass(frozen=True, eq=True)
@@ -250,7 +257,7 @@ class tensor_memory_descriptor(base_value):
         _check(isinstance(length, int), lambda: "length must be a constant int")
         shape = self.shape[:-1] + [length]
         layout = self.type.layout
-        layout = TensorMemoryLayout((layout.block[0], min(layout.block[1], length)), layout.unpacked,
+        layout = TensorMemoryLayout((layout.block[0], min(layout.block[1], length)), layout.unpacked, layout.bitwidth,
                                     layout.cta_split_num)
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
         builder = _semantic.builder
