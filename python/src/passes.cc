@@ -106,6 +106,7 @@ void init_triton_passes_convert(py::module &&m) {
 void init_triton_passes_llvmir(py::module &&m) {
   using namespace mlir;
   ADD_PASS_WRAPPER_0("add_di_scope", mlir::createLLVMDIScope);
+  ADD_PASS_WRAPPER_0("add_di_local_variable", mlir::createLLVMDILocalVariable);
 }
 
 void init_gluon_passes(py::module &&m) {
