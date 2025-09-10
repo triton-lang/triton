@@ -14,6 +14,14 @@ def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
+def unsupport_amd():
+    return is_hip() and triton.runtime.driver.active.get_current_target().arch in ["gfx90a"]
+
+
+# Skip all tests if the AMD GPU version is not supported
+pytestmark = pytest.mark.skipif(unsupport_amd(), reason="old AMD GPUs are not supported")
+
+
 def test_override(tmp_path: pathlib.Path):
     dir_path = os.path.dirname(os.path.realpath(__file__))
 

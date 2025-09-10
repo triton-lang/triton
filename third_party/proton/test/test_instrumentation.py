@@ -36,7 +36,7 @@ def unsupport_amd():
     return is_hip() and triton.runtime.driver.active.get_current_target().arch in ["gfx90a"]
 
 
-# Skip all tests if AMD is not supported
+# Skip all tests if the AMD GPU version is not supported
 pytestmark = pytest.mark.skipif(unsupport_amd(), reason="old AMD GPUs are not supported")
 
 HAS_TENSOR_DESC = supports_tma() and hasattr(tl, "make_tensor_descriptor")
