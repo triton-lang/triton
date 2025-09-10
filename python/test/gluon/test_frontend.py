@@ -2375,3 +2375,27 @@ def test_layout_zeros():
     # CHECK: #blocked = #ttg.blocked
     # CHECK: arith.constant dense<0.000000e+00> : tensor<128xf32, #blocked>
     ttgl.zeros([128], ttgl.float32, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+
+
+@gluon.jit
+def print_num_warps():
+    num_warps: ttgl.constexpr = ttgl.get_num_warps()
+    print("num_warps", num_warps)
+
+
+@gluon.jit
+def test_get_num_warps():
+    # CHECK-LABEL: test_get_num_warps
+    # CHECK: tt.func private @{{.*}}print_num_warps()
+    # CHECK-NEXT arith.constant 4 : i32
+
+    # CHECK: tt.func private @{{.*}}print_num_warps{{.*}}NW1
+    # CHECK-NEXT arith.constant 1 : i32
+
+    # CHECK: tt.func private @{{.*}}print_num_warps{{.*}}NW2
+    # CHECK-NEXT arith.constant 1 : i32
+
+    # CHECK: tt.func private @{{.*}}print_num_warps{{.*}}NW8
+    # CHECK-NEXT arith.constant 1 : i32
+    print_num_warps()
+    ttgl.warp_specialize((), print_num_warps, (), [print_num_warps, print_num_warps, print_num_warps], [1, 2, 8], [80])

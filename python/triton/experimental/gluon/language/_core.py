@@ -502,6 +502,11 @@ def warp_specialize(default_args, default_partition, worker_args, worker_partiti
 
 
 @builtin
+def get_num_warps(_semantic=None, _generator=None):
+    return _semantic.get_num_warps(_generator)
+
+
+@builtin
 def thread_barrier(_semantic=None):
     """
     Insert a barrier to synchronize threads within a CTA.
