@@ -1615,22 +1615,30 @@ def test_tensor_atomic_rmw_block(num_ctas, device):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("sem", [None, 'acquire', 'release', 'acq_rel', 'relaxed'])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_atomic_cas(sem, num_ctas, device):
+@pytest.mark.parametrize("dtype_str", ["int32", "int64"])
+def test_atomic_cas(sem, num_ctas, dtype_str, device):
     # 1. make sure that atomic_cas changes the original value (Lock)
     @triton.jit
-    def change_value(Lock):
-        tl.atomic_cas(Lock, 0, 1)
+    def change_value(Lock, triton_dtype: tl.constexpr):
+        num0 = tl.full((1, ), 0, dtype=triton_dtype).item()
+        num1 = tl.full((1, ), 1, dtype=triton_dtype).item()
+        tl.atomic_cas(Lock, num0, num1)
 
-    Lock = torch.zeros((1, ), device=device, dtype=torch.int32)
-    change_value[(1, )](Lock)
+    torch_dtype = getattr(torch, dtype_str)
+    triton_dtype = getattr(tl, dtype_str)
+    Lock = torch.zeros((1, ), device=device, dtype=torch_dtype)
+    change_value[(1, )](Lock, triton_dtype)
 
     assert (Lock[0] == 1)
 
     # 2. only one block enters the critical section
     @triton.jit
-    def serialized_add(data, Lock, SEM: tl.constexpr):
+    def serialized_add(data, Lock, triton_dtype: tl.constexpr, SEM: tl.constexpr):
+        num0 = tl.full((1, ), 0, dtype=triton_dtype).item()
+        num1 = tl.full((1, ), 1, dtype=triton_dtype).item()
+
         ptrs = data + tl.arange(0, 128)
-        while tl.atomic_cas(Lock, 0, 1, SEM) == 1:
+        while tl.atomic_cas(Lock, num0, num1, SEM) == 1:
             pass
 
         tl.store(ptrs, tl.load(ptrs) + 1.0)
@@ -1640,12 +1648,12 @@ def test_atomic_cas(sem, num_ctas, device):
         tl.debug_barrier()
 
         # release lock
-        tl.atomic_xchg(Lock, 0)
+        tl.atomic_xchg(Lock, num0)
 
-    Lock = torch.zeros((1, ), device=device, dtype=torch.int32)
+    Lock = torch.zeros((1, ), device=device, dtype=torch_dtype)
     data = torch.zeros((128, ), device=device, dtype=torch.float32)
     ref = torch.full((128, ), 2000.0)
-    h = serialized_add[(2000, )](data, Lock, SEM=sem, num_ctas=num_ctas)
+    h = serialized_add[(2000, )](data, Lock, triton_dtype=triton_dtype, SEM=sem, num_ctas=num_ctas)
     sem_str = "acq_rel" if sem is None else sem
     np.testing.assert_allclose(to_numpy(data), to_numpy(ref))
     if not is_cuda():
@@ -3466,10 +3474,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                           for mma in (mma_nonk_sizes if is_hip() else [16])
                           for kpack in ([1, 2] if (is_hip() and not is_hip_cdna4()) else [1])])
 def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack, device):
+    is_SM120 = False
     if is_cuda():
         cc = torch.cuda.get_device_capability()
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
+        is_SM120 = cc >= (12, 0)
     if is_hip():
         if not (is_hip_cdna() or is_hip_gfx11() or is_hip_gfx12()):
             pytest.skip("scaled_dot only implemented for HIP CDNA, gfx11, gfx12")
@@ -3707,6 +3717,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     large_tolerance = is_hip_cdna2()
     # For e4m3, gfx11 can slightly exceed the default tolerances in isolated cases
     if is_hip_gfx11() and mxfp_type == "e4m3" and normal_type == "fp16":
+        large_tolerance = True
+    if is_SM120:
         large_tolerance = True
     atol = 2e-4 if large_tolerance else 1e-5
     rtol = 2e-2 if large_tolerance else 1e-2
@@ -5938,17 +5950,69 @@ def test_tl_range_num_stages(device):
                 assert 'cp.async.wait_group \t6' in ptx
 
 
-def test_tl_range_fuse():
+def test_tl_range_fuse(device):
 
     @triton.jit
-    def kernel(ub):
+    def kernel(ub, out_ptr):
+        k = 1
         for i in tl.range(0, ub, flatten=True):
             for j in tl.range(0, ub):
-                print("i", i)
+                tl.store(out_ptr + i * 32 + j, k)
+                k += 1
 
-    compiled_kernel = kernel.warmup(10, grid=(1, ))
+    ub = 10
+    out = torch.zeros((32, 32), dtype=torch.int32, device=device)
+    compiled_kernel = kernel[(1, )](ub, out)
     assert "tt.flatten" in compiled_kernel.asm["ttir"]
     assert compiled_kernel.asm["ttgir"].count("scf.for") == 1
+
+    ref = torch.zeros((32, 32), dtype=torch.int32, device=device)
+    k = 1
+    for i in range(ub):
+        for j in range(ub):
+            ref[i, j] = k
+            k += 1
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+def test_tl_range_fuse_dependent(device):
+
+    @triton.jit
+    def kernel(ub, out_i_ptr, out_j_ptr):
+        k = 0
+        for i in tl.range(0, ub, flatten=True):
+            lower_bound = i * 2
+            upper_bound = lower_bound + i + 1
+            tl.assume(upper_bound > lower_bound)
+            for j in tl.range(lower_bound, upper_bound):
+                tl.store(out_i_ptr + k, i)
+                tl.store(out_j_ptr + k, j)
+                k += 1
+
+    ub = 10
+    out_i = torch.zeros(1024, dtype=torch.int32, device=device)
+    out_j = torch.zeros(1024, dtype=torch.int32, device=device)
+    compiled_kernel = kernel[(1, )](ub, out_i, out_j)
+    assert "tt.flatten" in compiled_kernel.asm["ttir"]
+    ttgir = compiled_kernel.asm["ttgir"]
+    ttgir = ttgir[ttgir.find("scf.for"):]
+    assert ttgir[:ttgir.find("}")].count("scf.for") == 1
+    ttgir = ttgir[ttgir.find("}"):]
+    assert ttgir.count("scf.for") == 1
+
+    ref_i = torch.zeros(1024, dtype=torch.int32, device=device)
+    ref_j = torch.zeros(1024, dtype=torch.int32, device=device)
+    k = 0
+    for i in range(ub):
+        lower_bound = i * 2
+        upper_bound = lower_bound + i + 1
+        assert upper_bound > lower_bound
+        for j in range(lower_bound, upper_bound):
+            ref_i[k] = i
+            ref_j[k] = j
+            k += 1
+    torch.testing.assert_close(out_i, ref_i, atol=0, rtol=0)
+    torch.testing.assert_close(out_j, ref_j, atol=0, rtol=0)
 
 
 def test_tl_range_option_none():
