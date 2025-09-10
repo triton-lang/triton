@@ -43,11 +43,7 @@ Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
 void TargetInfo::storeWarpScalar(ConversionPatternRewriter &rewriter,
                                  Location loc, Value val, Value ptr) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  std::string intrinsic = "llvm.amdgcn.readfirstlane";
-  Value scalar =
-      LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, i32_ty, val)
-          ->getResult(0);
-  b.store(scalar, ptr);
+  b.store(val, ptr);
 }
 
 // TODO(crobeck): move these into a util file
