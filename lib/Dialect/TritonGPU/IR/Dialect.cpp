@@ -27,6 +27,7 @@
 
 // Include TableGen'erated code
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
+#include "triton/Dialect/TritonGPU/IR/OpInterfaces.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/TypeInterfaces.cpp.inc"
 
 using namespace mlir;
@@ -1806,6 +1807,12 @@ Attribute PaddedSharedEncodingAttr::parse(AsmParser &parser, Type type) {
             << attr.getName() << " found";
         return {};
       }
+    }
+
+    if (order.size() != shape.size()) {
+      parser.emitError(parser.getCurrentLocation(),
+                       "Mismatch of shape and order ranks in padded layout");
+      return {};
     }
 
     // Create identity mapping based on shape and order
