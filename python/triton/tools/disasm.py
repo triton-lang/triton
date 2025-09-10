@@ -23,6 +23,7 @@
 import functools
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from typing import Dict, Optional, Tuple
@@ -78,8 +79,35 @@ def get_sass(cubin_asm: bytes, fun: Optional[str] = None) -> Optional[str]:
 
 @functools.lru_cache()
 def path_to_cuobjdump() -> Tuple[str, str]:
-    from triton.backends.nvidia.compiler import _path_to_binary
-    return _path_to_binary("cuobjdump")
+    """
+    Return the path to cuobjdump.
+
+    Avoid importing backend-private helpers to keep tools stable across backend refactors.
+    Resolution order:
+      1) TRITON_CUOBJDUMP / TRITON_CUOBJDUMP_PATH env var
+      2) ${CUDA_HOME}/bin/cuobjdump or ${CUDA_PATH}/bin/cuobjdump
+      3) shutil.which("cuobjdump")
+    The second return value is kept for backward compatibility; callers ignore it.
+    """
+    # 1) Explicit override
+    for key in ("TRITON_CUOBJDUMP", "TRITON_CUOBJDUMP_PATH"):
+        val = os.getenv(key)
+        if val and os.path.isfile(val):
+            return val, os.path.dirname(val)
+    # 2) CUDA toolkit locations
+    for key in ("CUDA_HOME", "CUDA_PATH"):
+        home = os.getenv(key)
+        if home:
+            candidate = os.path.join(home, "bin", "cuobjdump")
+            if os.path.isfile(candidate):
+                return candidate, home
+    # 3) PATH lookup
+    which = shutil.which("cuobjdump")
+    if which:
+        return which, os.path.dirname(which)
+    raise ImportError(
+        "cuobjdump not found. Set TRITON_CUOBJDUMP or ensure CUDA toolkit is installed and on PATH."
+    )
 
 
 def extract(file_path: str, fun: Optional[str]) -> Optional[str]:
