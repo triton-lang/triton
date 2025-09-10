@@ -523,6 +523,10 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
     if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
       return {};
   }
+
+  if (isa<triton::gpu::UpcastFpOpInterface>(op))
+    return {};
+
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
@@ -556,6 +560,9 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
     if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
       return {};
   }
+  if (isa<triton::gpu::UpcastFpOpInterface>(op))
+    return {};
+
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
@@ -936,7 +943,13 @@ LogicalResult getConvertBackwardSlice(
         continue;
       }
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
-        auto srcEncoding = inferSrcEncoding(definingOp, encoding);
+        Attribute srcEncoding;
+        if (auto upcast =
+                dyn_cast<triton::gpu::UpcastFpOpInterface>(definingOp)) {
+          srcEncoding = upcast.inferSrcEncoding(i, encoding);
+        } else {
+          srcEncoding = inferSrcEncoding(definingOp, encoding);
+        }
         if (!srcEncoding)
           return failure();
         // If the infered layout matches the original one we don't need to keep
