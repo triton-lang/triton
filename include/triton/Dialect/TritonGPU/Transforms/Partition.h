@@ -87,15 +87,21 @@ private:
   SmallVector<std::unique_ptr<Partition>> partitions;
 };
 
-// Annotate the op with the partition index, and
+// Annotate the op with the partition index or indices, and add the op
+// to the partitions it belongs to.
 void setPartition(Operation *op, Partition *partition);
-// TODO: remove this one?
-void setPartition(Operation *op, const SetVector<int> &partitionIds);
 void setPartition(Operation *op, const SetVector<Partition*> &partitions);
+// Annotate the op with the partition indices. It should only be used in a pass
+// which does not work with Partition instances and iterate* functions, since
+// it does not keep the op attributes and the op list of a partition in sync.
+void setPartition(Operation *op, const SetVector<int> &partitionIds);
+
 std::optional<SetVector<int>> getPartitionIds(Operation *op);
-bool hasPartition(Operation *op);
 // Utility to be used when the op is known to belong to one partition
 Partition *getPartition(Operation *op, PartitionSet &partitions);
+
+bool hasPartition(Operation *op);
+bool isInRootPartition(Operation *op, PartitionSet &partitions);
 
 // Iterate the inputs of the partition. Input values are those that originate
 // from a different partition or a previous iteration of the current

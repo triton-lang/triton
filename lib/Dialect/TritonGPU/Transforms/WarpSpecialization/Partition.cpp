@@ -88,11 +88,6 @@ void setPartition(Operation *op, const SetVector<int> &partitionIds) {
 }
 
 void setPartition(Operation *op, Partition *partition) {
-  if (op->getAttr(kPartitionAttrName)) {
-    // Allow overwriting in this case
-    // TODO: is this the right thing to do
-  }
-
   SmallVector<int> partitions{partition->getIndex()};
   setPartition(op, partitions);
   partition->addOp(op);
@@ -115,9 +110,9 @@ std::optional<SetVector<int>> getPartitionIds(Operation *op) {
   if (!attrs) {
     return std::nullopt;
   }
-  if (!isa<DenseI32ArrayAttr>(attrs)) {
-    op->dump();
-  }
+
+  assert(isa<DenseI32ArrayAttr>(attrs));
+
   SetVector<int> partitionIds;
   for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
     partitionIds.insert(id);
@@ -125,7 +120,18 @@ std::optional<SetVector<int>> getPartitionIds(Operation *op) {
   return partitionIds;
 }
 
+Partition *getPartition(Operation *op, PartitionSet &partitions) {
+  auto id = getPartitionIds(op);
+  assert(id && id->size() == 1);
+  return partitions.getPartition((*id)[0]);
+}
+
 bool hasPartition(Operation *op) { return getPartitionIds(op) != std::nullopt; }
+
+bool isInRootPartition(Operation *op, PartitionSet &partitions) {
+  auto partitionIds = getPartitionIds(op);
+  return !partitionIds || partitionIds->size() == partitions.getNumPartitions();
+}
 
 void iterateInputs(scf::ForOp loop, const Partition *partition,
                    function_ref<void(OpOperand &)> callback) {
@@ -199,12 +205,6 @@ void iterateUses(scf::ForOp loop, const Partition *partition,
     for (OpOperand &use : arg.getUses())
       uses.emplace_back(output, &use, distance + 1);
   }
-}
-
-Partition *getPartition(Operation *op, PartitionSet &partitions) {
-  auto id = getPartitionIds(op);
-  assert(id && id->size() == 1);
-  return partitions.getPartition((*id)[0]);
 }
 
 } // namespace mlir::triton::gpu

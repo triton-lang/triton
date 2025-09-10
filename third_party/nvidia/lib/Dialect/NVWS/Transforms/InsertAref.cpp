@@ -54,7 +54,7 @@ SmallVector<ProducedValueInfo> getProducedValues(Operation *op, Block *loopBody,
   if (partitionIds && partitionIds->size() == 1) {
     for (auto result : op->getResults()) {
       producedValues.push_back(
-          {partitions.getPartition((*partitionIds)[0]), result});
+          {partitions.getPartition(partitionIds->front()), result});
     }
   }
 
@@ -338,9 +338,7 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
   auto loc = results[0].getLoc();
 
   auto filterUse = [&](Operation *use) {
-    auto partitionIds = getPartitionIds(use);
-    if (!partitionIds ||
-        partitionIds->size() == partitions.getNumPartitions()) {
+    if (isInRootPartition(use, partitions)) {
       return false;
     }
     return getPartition(use, partitions) == consumerPartition;
