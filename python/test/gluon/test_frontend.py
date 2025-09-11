@@ -198,7 +198,7 @@ def tensor_memory_kernel(layout: ttgl.constexpr, tmem_layout: ttgl.constexpr):
 
 def test_tensor_memory():
     layout = ttgl.BlockedLayout(size_per_thread=[1, 64], threads_per_warp=[32, 1], warps_per_cta=[4, 1], order=[0, 1])
-    tmem_layout = TensorMemoryLayout(block=[128, 128], unpacked=True)
+    tmem_layout = TensorMemoryLayout(block=[128, 128], col_stride=1)
     mod = run_parser(
         tensor_memory_kernel,
         *make_args(layout, tmem_layout, num_warps=4),
@@ -207,8 +207,8 @@ def test_tensor_memory():
     expecttest.assert_expected_inline(
         anonymize_ir(mod.str_nodebug()), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
-#tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @tensor_memory_kernel() attributes {noinline = false} {
     %c0_i32 = arith.constant 0 : i32
@@ -555,14 +555,14 @@ def tcgen05_mma_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr)
 
 def test_tcgen05_mma():
     nvmma_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
-    acc_layout = TensorMemoryLayout([128, 128], unpacked=True)
+    acc_layout = TensorMemoryLayout([128, 128], col_stride=2)
 
     mod = run_parser(tcgen05_mma_kernel, *make_args(nvmma_layout, acc_layout), target=BLACKWELL_TARGET)
     expecttest.assert_expected_inline(
         anonymize_ir(mod.str_nodebug()), """\
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 2>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @tcgen05_mma_kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
@@ -588,7 +588,7 @@ def tcgen05_mma_mbar_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.const
 
 def test_tcgen05_mma_mbar():
     nvmma_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
-    acc_layout = TensorMemoryLayout([128, 128], unpacked=True)
+    acc_layout = TensorMemoryLayout([128, 128], col_stride=2)
 
     mod = run_parser(tcgen05_mma_mbar_kernel, *make_args(nvmma_layout, acc_layout), target=BLACKWELL_TARGET)
     expecttest.assert_expected_inline(
@@ -596,7 +596,7 @@ def test_tcgen05_mma_mbar():
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 2>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @tcgen05_mma_mbar_kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
@@ -856,7 +856,7 @@ def test_tensor_layout_type_changed():
 
 @gluon.jit
 def tmem_index_kernel():
-    layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 128], unpacked=True)
+    layout: ttgl.constexpr = TensorMemoryLayout(block=[128, 128], col_stride=1)
     tmem = ttgl.nvidia.blackwell.allocate_tensor_memory(ttgl.int32, [2, 256, 256], layout)
     tmem.index(0)
 
@@ -864,7 +864,7 @@ def tmem_index_kernel():
 def test_tmem_index_constexpr():
     expecttest.assert_expected_inline(
         anonymize_ir(run_parser(tmem_index_kernel).str_nodebug()), """\
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @tmem_index_kernel() attributes {noinline = false} {
     %result = ttng.tmem_alloc : () -> !ttg.memdesc<2x256x256xi32, #tmem, #ttng.tensor_memory, mutable>
@@ -2375,3 +2375,29 @@ def test_layout_zeros():
     # CHECK: #blocked = #ttg.blocked
     # CHECK: arith.constant dense<0.000000e+00> : tensor<128xf32, #blocked>
     ttgl.zeros([128], ttgl.float32, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+
+
+@gluon.jit
+def print_num_warps():
+    num_warps: ttgl.constexpr = ttgl.num_warps()
+    print("num_warps", num_warps)
+
+
+@filecheck_test
+@gluon.jit
+def test_get_num_warps():
+    # CHECK-LABEL: test_get_num_warps
+    # CHECK: tt.func private @{{.*}}print_num_warps
+    # CHECK-NEXT arith.constant 4 : i32
+
+    # CHECK: tt.func private @{{.*}}print_num_warps{{.*}}NW1
+    # CHECK-NEXT arith.constant 1 : i32
+
+    # CHECK: tt.func private @{{.*}}print_num_warps{{.*}}NW2
+    # CHECK-NEXT arith.constant 2 : i32
+
+    # CHECK: tt.func private @{{.*}}print_num_warps{{.*}}NW8
+    # CHECK-NEXT arith.constant 8 : i32
+    print_num_warps()
+    ttgl.warp_specialize((), print_num_warps, (), [print_num_warps, print_num_warps, print_num_warps], [1, 2, 8],
+                         [24, 24, 24])

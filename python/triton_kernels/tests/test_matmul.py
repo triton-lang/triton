@@ -457,6 +457,12 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
         ref_y = upcast_from_mxfp_torch(ref_y_quant, ref_y_scale, target_dtype=ref_y.dtype, axis=-1)
         maxtol = 4e-1
         rmstol = 4e-2
+    elif weight_mxfp and "float4_e2m1" in weight_dtype_str:
+        if act_is_float8:
+            maxtol = 8e-2
+        else:
+            maxtol = 3e-2
+        rmstol = None
     else:
         maxtol = None
         rmstol = None

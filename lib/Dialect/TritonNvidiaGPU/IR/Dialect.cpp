@@ -69,10 +69,8 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   triton::nvidia_gpu::TensorMemoryEncodingAttr attr =
       cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
           memDescType.getEncoding());
-  bool isUnpacked = attr.getUnpacked();
-  int64_t elementSizeInBytes =
-      isUnpacked ? rowSizeInBytes
-                 : memDescType.getElementType().getIntOrFloatBitWidth() / 8;
+  unsigned bitwidth = memDescType.getElementType().getIntOrFloatBitWidth();
+  int64_t elementSizeInBytes = (bitwidth * attr.getColStride()) / 8;
   int sizeInBytes = product(shapePerCTA) * elementSizeInBytes;
   int numRows = numTmemRows;
   // BlockM of 64 is and interleaved format, where for single message only the
@@ -247,9 +245,11 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
   });
 }
 
-LogicalResult TensorMemoryEncodingAttr::verify(
-    function_ref<InFlightDiagnostic()> emitError, unsigned blockM,
-    unsigned blockN, bool unpacked, unsigned CTASplitM, unsigned CTASplitN) {
+LogicalResult
+TensorMemoryEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                                 unsigned blockM, unsigned blockN,
+                                 unsigned colStride, unsigned CTASplitM,
+                                 unsigned CTASplitN) {
   if (CTASplitM < 1 || CTASplitN < 1) {
     return emitError() << "CTASplitM and CTASplitN must be greater than 0";
   }
@@ -259,8 +259,10 @@ LogicalResult TensorMemoryEncodingAttr::verify(
   if (!llvm::isPowerOf2_32(blockN)) {
     return emitError() << "blockN must be a power of 2 but got " << blockN;
   }
-  if (!unpacked && blockN < 2) {
-    return emitError() << "blockN must be at least 2 for packed tensor memory";
+  if (!(colStride >= 1 && llvm::isPowerOf2_32(colStride))) {
+    return emitError()
+           << "colStride must be a power of two greater than or equal to 1 "
+           << "but got " << colStride;
   }
   return success();
 }
