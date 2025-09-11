@@ -200,6 +200,7 @@ class env_nvidia_tool(env_base[str, NvidiaTool]):
     def get(self) -> NvidiaTool:
         return self.transform(getenv(self.key))
 
+    # pyrefly: ignore  # bad-override pyright agrees
     def transform(self, path: str) -> NvidiaTool:
         # We still add default as fallback in case the pointed binary isn't
         # accessible.
@@ -340,8 +341,11 @@ cache: cache_knobs
 class cache_knobs(base_knobs):
     home_dir: env_str = env_str("TRITON_HOME", os.path.expanduser("~/"))
 
+    # pyrefly: ignore  # unbound-name
     dump_dir = env_str_callable_default("TRITON_DUMP_DIR", lambda: cache.get_triton_dir("dump"))
+    # pyrefly: ignore  # unbound-name
     override_dir = env_str_callable_default("TRITON_OVERRIDE_DIR", lambda: cache.get_triton_dir("override"))
+    # pyrefly: ignore  # unbound-name
     dir = env_str_callable_default("TRITON_CACHE_DIR", lambda: cache.get_triton_dir("cache"))
 
     manager_class: env_class[CacheManager] = env_class("TRITON_CACHE_MANAGER", "CacheManager")
