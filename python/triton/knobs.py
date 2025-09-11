@@ -353,6 +353,7 @@ class cache_knobs(base_knobs):
 
 class compilation_knobs(base_knobs):
     override: env_bool = env_bool("TRITON_KERNEL_OVERRIDE")
+    inspect_stages = env_bool("TRITON_INSPECT_PASS_STAGES")
     dump_ir: env_bool = env_bool("TRITON_KERNEL_DUMP")
     store_binary_only: env_bool = env_bool("TRITON_STORE_BINARY_ONLY")
     always_compile: env_bool = env_bool("TRITON_ALWAYS_COMPILE")
@@ -446,6 +447,9 @@ class JITHook(Protocol):
                  already_compiled: bool) -> Optional[bool]:
         ...
 
+class PipelineStagesHook(Protocol):
+    def __call__(self, stages, options, language, capability):
+        ...
 
 class runtime_knobs(base_knobs):
     interpret: env_bool = env_bool("TRITON_INTERPRET")
@@ -464,6 +468,9 @@ class runtime_knobs(base_knobs):
     # Hook to signal that a kernel is done compiling and inspect compiled function.
     # jit_cache_hook will always be called before compilation and jit_post_compile_hook after.
     jit_post_compile_hook: Optional[JITHook] = None
+
+    # Hook for inspecting compiler num_stages
+    add_stages_inspection_hook: Optional[PipelineStagesHook] = None
 
 
 class language_knobs(base_knobs):
