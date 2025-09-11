@@ -62,24 +62,38 @@ protected:
 
   struct ThreadState {
     ConcreteProfilerT &profiler;
-    size_t scopeId{Scope::DummyScopeId};
+    SessionManager &sessionManager = SessionManager::instance();
+    std::vector<Scope> scopeStack;
+    size_t opId{Scope::DummyScopeId};
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
-    void enterOp(const std::string &name = "", bool triggerGPUEvent = true) {
+    void enterOp() {
       if (profiler.isOpInProgress())
         return;
-      scopeId = Scope::getNewScopeId();
-      profiler.enterOp(Scope(scopeId, name));
-      if (triggerGPUEvent) {
-        profiler.correlation.apiExternIds.insert(scopeId);
-      }
+      opId = Scope::getNewScopeId();
+      profiler.enterOp(Scope(opId, name));
+      profiler.correlation.apiExternIds.insert(opId);
     }
 
     void exitOp() {
       if (!profiler.isOpInProgress())
         return;
-      profiler.exitOp(Scope(scopeId));
+      profiler.exitOp(Scope(opId));
+    }
+
+    void enterScope(const std::string &name) {
+      auto scope = Scope(name);
+      scopeStack.push_back(scope);
+      sessionManager.enterScope(scope);
+    }
+
+    void exitScope() {
+      if (scopeStack.empty()) {
+        return;
+      }
+      sessionManager.exitScope(scopeStack.back());
+      scopeStack.pop_back();
     }
   };
 
