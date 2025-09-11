@@ -410,16 +410,16 @@ struct ConvertLayoutOpConversion
         if (bitsPerVecElem == 8) {
           for (auto packedVal : outVals) {
             Value x0 =
-                b.trunc(int_ty(bitwidth), b.and_(packedVal, b.i32_val(0xF)));
+                b.trunc(int_ty(bitwidth), b.and_(packedVal, b.i32_val(0xFF)));
             Value x1 = b.trunc(
                 int_ty(bitwidth),
-                b.and_(b.lshr(packedVal, b.i32_val(8)), b.i32_val(0xF)));
+                b.and_(b.lshr(packedVal, b.i32_val(8)), b.i32_val(0xFF)));
             Value x2 = b.trunc(
                 int_ty(bitwidth),
-                b.and_(b.lshr(packedVal, b.i32_val(16)), b.i32_val(0xF)));
+                b.and_(b.lshr(packedVal, b.i32_val(16)), b.i32_val(0xFF)));
             Value x3 = b.trunc(
                 int_ty(bitwidth),
-                b.and_(b.lshr(packedVal, b.i32_val(24)), b.i32_val(0xF)));
+                b.and_(b.lshr(packedVal, b.i32_val(24)), b.i32_val(0xFF)));
             unpackedVals.push_back(b.bitcast(x0, elemTy));
             unpackedVals.push_back(b.bitcast(x1, elemTy));
             unpackedVals.push_back(b.bitcast(x2, elemTy));
@@ -428,7 +428,7 @@ struct ConvertLayoutOpConversion
         } else {
           for (auto packedVal : outVals) {
             Value x0 =
-                b.trunc(int_ty(bitwidth), b.and_(packedVal, b.i32_val(0xFF)));
+                b.trunc(int_ty(bitwidth), b.and_(packedVal, b.i32_val(0xFFFF)));
             Value x1 =
                 b.trunc(int_ty(bitwidth), b.lshr(packedVal, b.i32_val(16)));
             unpackedVals.push_back(b.bitcast(x0, elemTy));
