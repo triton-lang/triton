@@ -52,7 +52,9 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
 @builtin
 def buffer_atomic_rmw(op, ptr, offsets, value, mask=None, sem=None, scope=None, _semantic=None):
     """
-    It is almost the same as cdna3.buffer_atomic_rmw except it support bf16 type `fadd`
+    It shares the same signature as cdna3.buffer_atomic_rmw and
+    It has all functionalities as cdna3.buffer_atomic_rmw.
+    This version `cdna4.buffer_atomic_rmw` supports `fadd` with `bf16`.
     """
     return _buffer_atomic_rmw_impl(op, ptr, offsets, value, "cdna4", mask=mask, sem=sem, scope=scope,
                                    _semantic=_semantic)
