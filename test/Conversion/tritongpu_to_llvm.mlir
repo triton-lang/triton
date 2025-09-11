@@ -786,8 +786,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blocked0 = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [16, 2], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
-  //CHECK-LABEL: @convert_layout_blocked_blocked_shuffle_swap
-  tt.func @convert_layout_blocked_blocked_shuffle_swap(%arg0: tensor<32x32xi32, #blocked0>) {
+  //CHECK-LABEL: @convert_layout_blocked_blocked_shuffle_swap_i32
+  tt.func @convert_layout_blocked_blocked_shuffle_swap_i32(%arg0: tensor<32x32xi32, #blocked0>) {
     //CHECK-COUNT-32: llvm.select
     //CHECK-COUNT-32: nvvm.shfl.sync
     //CHECK-COUNT-32: llvm.select
@@ -795,6 +795,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#blocked0 = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [16, 2], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  //CHECK-LABEL: @convert_layout_blocked_blocked_shuffle_swap_i1
+  tt.func @convert_layout_blocked_blocked_shuffle_swap_i1(%arg0: tensor<32x32xi1, #blocked0>) {
+    //CHECK-COUNT-32: llvm.zext
+    //CHECK-COUNT-8: llvm.select
+    //CHECK-COUNT-8: nvvm.shfl.sync
+    //CHECK-COUNT-8: llvm.select
+    %0 = ttg.convert_layout %arg0 : tensor<32x32xi1, #blocked0> -> tensor<32x32xi1, #blocked1>
+    tt.return
+  }
+}
+
 
 // -----
 
