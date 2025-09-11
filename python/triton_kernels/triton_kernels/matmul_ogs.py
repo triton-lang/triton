@@ -177,6 +177,8 @@ def apply_allocation(allocation: MatmulAllocation, output):
     if output is None:
         output = torch.empty(allocation.output[0], device=allocation.device, dtype=allocation.output[1])
     else:
+        if output.ndim == 2:
+            output = output[None, :, :]
         assert output.shape == allocation.output[0]
     ret["output"] = output[None, :, :]
     ret["scratchpad"] = {
@@ -362,9 +364,14 @@ def matmul_ogs(x, w, bias,
         assert x.shape[0] == w.shape[0]
     # compute optimization flags
     out_dtype = precision_config.out_dtype or x.dtype
-    can_use_tma = x.numel() > 0 and x.storage.is_tma_compliant() and \
-                  w.numel() > 0 and w.storage.is_tma_compliant() and \
-                 (w_scale is None or w_scale.storage.is_tma_compliant())
+    can_use_tma = (
+        x.numel() > 0 and x.storage.is_tma_compliant() and
+        w.numel() > 0 and w.storage.is_tma_compliant() and
+        (w_scale is None or w_scale.storage.is_tma_compliant()) and
+        (not is_ragged or (x.stride(-1) == 1 and w.stride(-1) == 1)) and
+        # Currently we don't support tma if y is column major; may revisit later if this becomes an issue.
+        (y is None or y.stride(-1) == 1)
+    )
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
     can_use_fused_scatter = has_scatter and (fused_activation.specs.fn is None) and (epilogue.specs.fn is None) and (routing_data.n_expts_act == 1)
@@ -469,7 +476,7 @@ def matmul_ogs(x, w, bias,
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
                    *out_matmul_scale_strides[-4:],
-                   x_tensor_or_tma, x_storage.data, *x_strides,
+                   x_tensor_or_tma, x_storage.data, *x_strides, x_strides[-1] != 1,
                    flex.lhs_data.scale,
                    None if x_scale is None else x_scale.data.view(torch.uint8), *x_scale_strides,
                    w_tensor_or_tma, w_storage.data, *w_storage.data.stride(), w_transpose,
