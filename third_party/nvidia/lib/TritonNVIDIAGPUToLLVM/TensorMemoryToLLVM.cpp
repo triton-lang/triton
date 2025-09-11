@@ -209,7 +209,7 @@ getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg) {
                          (i / 2) * tile.getInDimSize(kReg));
 }
 
-LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, int nRow) {
+LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom) {
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
@@ -235,8 +235,6 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, int nRow) {
   bases[kWarp].push_back({32, 0});
   bases[kWarp].push_back({64, 0});
   auto ret = LinearLayout(bases, {{kRow, 128}, {kCol, nCol}}, false);
-  // Broadcast the row dimension if it's smaller than 128
-  ret = ensureLayoutNotLargerThan(ret, {{kRow, nRow}, {kCol, nCol}}, true);
   return ret;
 }
 
@@ -637,8 +635,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   }
 
   assert(!isStore || cvt.getInDimSize(kReg) == vals.size());
-  auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-  auto nRow = cvt.getOutDimSize(kRow);
+  assert(llvmElemTy.getIntOrFloatBitWidth() == 32);
 
   // The algorithm goes as:
   // - Try to match the tile with one of the standard messages
@@ -650,7 +647,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   std::optional<std::tuple<TMemAccessAtom, LinearLayout, ColumnAction, int>>
       msgInfo;
   for (auto atom : {TMemAccess32x32b, TMemAccess16x256b}) {
-    auto tile = getTileLayout(ctx, atom, nRow);
+    auto tile = getTileLayout(ctx, atom);
     auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       // Cannot match more than one
@@ -663,7 +660,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   if (!msgInfo) {
     // Quotient by the smaller tile and then, if possible, we set the
     // secondHalfOffset to the last kLane basis
-    auto tile = getTileLayout(ctx, TMemAccess16x32bx2, nRow);
+    auto tile = getTileLayout(ctx, TMemAccess16x32bx2);
     auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       auto [reps, perm, numRegsPerMessage] = std::move(*maybeReps);
@@ -711,6 +708,25 @@ static FailureOr<SmallVector<Value>> lowerTMemLdStFromTypes(
   auto memLayout = toLinearLayout(memTy);
   auto regLayout = toLinearLayout(regTy);
   auto cvt = regLayout.invertAndCompose(memLayout);
+  auto kWarp = str_attr("warp");
+  auto kRow = str_attr("row");
+  // Warps 0-3 must map to row=32 and row=64 whether with broadcasting or not
+  if (!(regLayout.getBasis(kWarp, 0) == memLayout.getBasis(kRow, 5) &&
+        regLayout.getBasis(kWarp, 1) == memLayout.getBasis(kRow, 6))) {
+    emitError(
+        loc,
+        "Failed to lower TMEM load/store: unsupported src/dst combination\n" +
+            regLayout.toString() + "\n" + memLayout.toString());
+    return failure();
+  }
+  // Map warp bases to row=32 and row=64 in the cvt. This would be done
+  // automatically in `invertAndCompose` if we had a different dimension name
+  // for these rows. We can do this in the future if needed.
+  auto bases = cvt.getBases();
+  bases[kWarp][0] = {32, 0};
+  bases[kWarp][1] = {64, 0};
+  cvt = LinearLayout(bases, cvt.getOutDims(),
+                     /*isSurjective=*/cvt.isSurjective());
 
   // tmemBase already encodes CTA/block offsets so we just remove them from the
   // cvt
