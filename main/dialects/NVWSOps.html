@@ -236,12 +236,14 @@ multi-buffering of the values.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">nvws.aref.get.enter</span></code> (triton::nvws::ArefGetEnterOp)<a class="headerlink" href="#nvws-aref-get-enter-triton-nvws-arefgetenterop" title="Link to this heading">¶</a></h2>
 <p><em>Enter ArefGet region where the buffer can be used to read data</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.get.enter` $aref `[` $stage `,` $phase `]` attr-dict
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.get.enter` $aref ( `[` $stage^ `,` $phase `]`)? attr-dict
               `:` type($aref) `-&gt;` type(results)
 </pre></div>
 </div>
 <p>Enter a “region” where you can freely read from the buffer)
 These ArefGet “regions” can span multiple iterations.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ArefStageInterface</span></code></p>
 <section id="id1">
 <h3>Operands:<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -286,12 +288,13 @@ These ArefGet “regions” can span multiple iterations.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">nvws.aref.get.exit</span></code> (triton::nvws::ArefGetExitOp)<a class="headerlink" href="#nvws-aref-get-exit-triton-nvws-arefgetexitop" title="Link to this heading">¶</a></h2>
 <p><em>Exit ArefGet region, where the buffer should no longer be used</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.get.exit` $aref `[` $stage `]` `,` $token $async_ops attr-dict
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.get.exit` $aref (`[` $stage^ `]`)? `,` $token $async_ops attr-dict
               `:` type($aref) `,` type($token)
 </pre></div>
 </div>
 <p>Leave the region where you can freely read from the buffer).
 These ArefGet “regions” can span multiple iterations.</p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ArefStageInterface</span></code></p>
 <section id="attributes">
 <h3>Attributes:<a class="headerlink" href="#attributes" title="Link to this heading">¶</a></h3>
 <table>
@@ -325,12 +328,14 @@ These ArefGet “regions” can span multiple iterations.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">nvws.aref.put.enter</span></code> (triton::nvws::ArefPutEnterOp)<a class="headerlink" href="#nvws-aref-put-enter-triton-nvws-arefputenterop" title="Link to this heading">¶</a></h2>
 <p><em>Enter ArefPut region where the buffer can be used to read data</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.put.enter` $aref `[` $stage `,` $phase `]` attr-dict
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.put.enter` $aref ( `[` $stage^ `,` $phase `]`)? attr-dict
               `:` type($aref) `-&gt;` type(results)
 </pre></div>
 </div>
 <p>Enter a “region” where you can freely write to the buffer)
 These ArefPut “regions” can span multiple iterations.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ArefStageInterface</span></code></p>
 <section id="id4">
 <h3>Operands:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -375,12 +380,13 @@ These ArefPut “regions” can span multiple iterations.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">nvws.aref.put.exit</span></code> (triton::nvws::ArefPutExitOp)<a class="headerlink" href="#nvws-aref-put-exit-triton-nvws-arefputexitop" title="Link to this heading">¶</a></h2>
 <p><em>Exit ArefPut region, where the buffer should no longer be used</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.put.exit` $aref`[` $stage `]` `,` $token  $async_ops attr-dict
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `nvws.aref.put.exit` $aref (`[` $stage^ `]`)? `,` $token  $async_ops attr-dict
               `:` type($aref) `,` type($token)
 </pre></div>
 </div>
 <p>Leave the region where you can freely write to the buffer).
 These ArefPut “regions” can span multiple iterations.</p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ArefStageInterface</span></code></p>
 <section id="id6">
 <h3>Attributes:<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <table>

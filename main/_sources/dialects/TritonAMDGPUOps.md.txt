@@ -562,6 +562,76 @@ Traits: `LocalLoadTrait`
 | `result` | ranked tensor of floating-point or integer or ptr values |
 
 
+### `amdgpu.masked_load` (triton::amdgpu::MaskedLoadOp)
+
+_Masked load operation_
+
+Syntax:
+
+```
+operation ::= `amdgpu.masked_load` $ptr `,` $mask `,` $falseVal
+              oilist(`cacheModifier` `=` $cache)
+              (`forceNoAlias` $forceNoAlias^)?
+              attr-dict `:` functional-type(operands, results)
+```
+
+Load operation with masking support. If the mask is true, loads from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>forceNoAlias</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `ptr` | LLVM pointer type |
+| `mask` | 1-bit signless integer |
+| `falseVal` | LLVM dialect-compatible type |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | LLVM dialect-compatible type |
+
+
+### `amdgpu.masked_store` (triton::amdgpu::MaskedStoreOp)
+
+_Masked Store operation_
+
+Syntax:
+
+```
+operation ::= `amdgpu.masked_store` $ptr `,` $value `,` $mask
+              oilist(`cacheModifier` `=` $cache)
+              (`forceNoAlias` $forceNoAlias^)?
+              attr-dict `:` type(operands)
+```
+
+Store operation with masking support. If the mask is true, Store from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>forceNoAlias</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `ptr` | LLVM pointer type |
+| `value` | LLVM dialect-compatible type |
+| `mask` | 1-bit signless integer |
+
+
 ### `amdgpu.scaled_upcast_fp4` (triton::amdgpu::ScaledUpcastFp4Op)
 
 _Upcast fp4 and then multiply scale_
@@ -585,7 +655,7 @@ packed.
 
 Traits: `AlwaysSpeculatableImplTrait`
 
-Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`, `UpcastFpOpInterface`
 
 Effects: `MemoryEffects::Effect{}`
 
@@ -627,7 +697,7 @@ on the AMD CDNA4 architecture.
 
 Traits: `AlwaysSpeculatableImplTrait`, `Elementwise`, `SameOperandsAndResultEncoding`, `SameOperandsAndResultShape`
 
-Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`, `UpcastFpOpInterface`
 
 Effects: `MemoryEffects::Effect{}`
 

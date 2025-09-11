@@ -131,21 +131,32 @@
 <li class="toctree-l4"><a class="reference internal" href="#id22">Results:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#amdgpu-scaled-upcast-fp4-triton-amdgpu-scaledupcastfp4op"><code class="docutils literal notranslate"><span class="pre">amdgpu.scaled_upcast_fp4</span></code> (triton::amdgpu::ScaledUpcastFp4Op)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#amdgpu-masked-load-triton-amdgpu-maskedloadop"><code class="docutils literal notranslate"><span class="pre">amdgpu.masked_load</span></code> (triton::amdgpu::MaskedLoadOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id23">Attributes:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id24">Operands:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id25">Results:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#amdgpu-scaled-upcast-fp8-triton-amdgpu-scaledupcastfp8op"><code class="docutils literal notranslate"><span class="pre">amdgpu.scaled_upcast_fp8</span></code> (triton::amdgpu::ScaledUpcastFp8Op)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id26">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id27">Results:</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#amdgpu-masked-store-triton-amdgpu-maskedstoreop"><code class="docutils literal notranslate"><span class="pre">amdgpu.masked_store</span></code> (triton::amdgpu::MaskedStoreOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id26">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id27">Operands:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#amdgpu-upcast-mxfp-triton-amdgpu-upcastmxfpop"><code class="docutils literal notranslate"><span class="pre">amdgpu.upcast_mxfp</span></code> (triton::amdgpu::UpcastMXFPOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#amdgpu-scaled-upcast-fp4-triton-amdgpu-scaledupcastfp4op"><code class="docutils literal notranslate"><span class="pre">amdgpu.scaled_upcast_fp4</span></code> (triton::amdgpu::ScaledUpcastFp4Op)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id28">Attributes:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id29">Operands:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id30">Results:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#amdgpu-scaled-upcast-fp8-triton-amdgpu-scaledupcastfp8op"><code class="docutils literal notranslate"><span class="pre">amdgpu.scaled_upcast_fp8</span></code> (triton::amdgpu::ScaledUpcastFp8Op)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id31">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id32">Results:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#amdgpu-upcast-mxfp-triton-amdgpu-upcastmxfpop"><code class="docutils literal notranslate"><span class="pre">amdgpu.upcast_mxfp</span></code> (triton::amdgpu::UpcastMXFPOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id33">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id34">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id35">Results:</a></li>
 </ul>
 </li>
 </ul>
@@ -887,6 +898,103 @@ For example if A is 16x64 in shared memory, the result of this operation will be
 </table>
 </section>
 </section>
+<section id="amdgpu-masked-load-triton-amdgpu-maskedloadop">
+<h2><code class="docutils literal notranslate"><span class="pre">amdgpu.masked_load</span></code> (triton::amdgpu::MaskedLoadOp)<a class="headerlink" href="#amdgpu-masked-load-triton-amdgpu-maskedloadop" title="Link to this heading">¶</a></h2>
+<p><em>Masked load operation</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdgpu.masked_load` $ptr `,` $mask `,` $falseVal
+              oilist(`cacheModifier` `=` $cache)
+              (`forceNoAlias` $forceNoAlias^)?
+              attr-dict `:` functional-type(operands, results)
+</pre></div>
+</div>
+<p>Load operation with masking support. If the mask is true, loads from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.</p>
+<section id="id23">
+<h3>Attributes:<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h3>
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>forceNoAlias</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+</table>
+</section>
+<section id="id24">
+<h3>Operands:<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">ptr</span></code></p></td>
+<td><p>LLVM pointer type</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">mask</span></code></p></td>
+<td><p>1-bit signless integer</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">falseVal</span></code></p></td>
+<td><p>LLVM dialect-compatible type</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id25">
+<h3>Results:<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Result</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
+<td><p>LLVM dialect-compatible type</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+<section id="amdgpu-masked-store-triton-amdgpu-maskedstoreop">
+<h2><code class="docutils literal notranslate"><span class="pre">amdgpu.masked_store</span></code> (triton::amdgpu::MaskedStoreOp)<a class="headerlink" href="#amdgpu-masked-store-triton-amdgpu-maskedstoreop" title="Link to this heading">¶</a></h2>
+<p><em>Masked Store operation</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdgpu.masked_store` $ptr `,` $value `,` $mask
+              oilist(`cacheModifier` `=` $cache)
+              (`forceNoAlias` $forceNoAlias^)?
+              attr-dict `:` type(operands)
+</pre></div>
+</div>
+<p>Store operation with masking support. If the mask is true, Store from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.</p>
+<section id="id26">
+<h3>Attributes:<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h3>
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</td></tr>
+<tr><td><code>forceNoAlias</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+</table>
+</section>
+<section id="id27">
+<h3>Operands:<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">ptr</span></code></p></td>
+<td><p>LLVM pointer type</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">value</span></code></p></td>
+<td><p>LLVM dialect-compatible type</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">mask</span></code></p></td>
+<td><p>1-bit signless integer</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
 <section id="amdgpu-scaled-upcast-fp4-triton-amdgpu-scaledupcastfp4op">
 <h2><code class="docutils literal notranslate"><span class="pre">amdgpu.scaled_upcast_fp4</span></code> (triton::amdgpu::ScaledUpcastFp4Op)<a class="headerlink" href="#amdgpu-scaled-upcast-fp4-triton-amdgpu-scaledupcastfp4op" title="Link to this heading">¶</a></h2>
 <p><em>Upcast fp4 and then multiply scale</em></p>
@@ -903,17 +1011,17 @@ on the AMD CDNA4 architecture.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">axis</span></code> attribute specifies the axis along which the fp4 elements are
 packed.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code>, <code class="docutils literal notranslate"><span class="pre">UpcastFpOpInterface</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id23">
-<h3>Attributes:<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h3>
+<section id="id28">
+<h3>Attributes:<a class="headerlink" href="#id28" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>axis</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 </section>
-<section id="id24">
-<h3>Operands:<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h3>
+<section id="id29">
+<h3>Operands:<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -930,8 +1038,8 @@ packed.</p>
 </tbody>
 </table>
 </section>
-<section id="id25">
-<h3>Results:<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h3>
+<section id="id30">
+<h3>Results:<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -958,10 +1066,10 @@ packed.</p>
 encoded as BF16. This maps to <code class="docutils literal notranslate"><span class="pre">v_cvt_scalef32_*</span></code> intrinsics
 on the AMD CDNA4 architecture.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">Elementwise</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultEncoding</span></code>, <code class="docutils literal notranslate"><span class="pre">SameOperandsAndResultShape</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code>, <code class="docutils literal notranslate"><span class="pre">UpcastFpOpInterface</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id26">
-<h3>Operands:<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h3>
+<section id="id31">
+<h3>Operands:<a class="headerlink" href="#id31" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -978,8 +1086,8 @@ on the AMD CDNA4 architecture.</p>
 </tbody>
 </table>
 </section>
-<section id="id27">
-<h3>Results:<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h3>
+<section id="id32">
+<h3>Results:<a class="headerlink" href="#id32" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -1006,16 +1114,16 @@ https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-fina
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id28">
-<h3>Attributes:<a class="headerlink" href="#id28" title="Link to this heading">¶</a></h3>
+<section id="id33">
+<h3>Attributes:<a class="headerlink" href="#id33" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>fp_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</td></tr>
 <tr><td><code>fastMath</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 </section>
-<section id="id29">
-<h3>Operands:<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h3>
+<section id="id34">
+<h3>Operands:<a class="headerlink" href="#id34" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -1032,8 +1140,8 @@ https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-fina
 </tbody>
 </table>
 </section>
-<section id="id30">
-<h3>Results:<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h3>
+<section id="id35">
+<h3>Results:<a class="headerlink" href="#id35" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
