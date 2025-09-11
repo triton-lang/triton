@@ -3,6 +3,7 @@
 
 #include "Context/Context.h"
 #include "Profiler.h"
+#include "Session/Session.h"
 #include "Utility/Atomic.h"
 #include "Utility/Map.h"
 #include "Utility/Set.h"
