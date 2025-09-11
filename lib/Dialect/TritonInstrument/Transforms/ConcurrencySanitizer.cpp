@@ -91,13 +91,13 @@ private:
     if (!auxData.barriers.empty()) {
       b.create<tti::ExperimentalVerifyWriteVisibilityOp>(
           buf, thread, buffers, auxData.writeVisibility[(int)memType][op],
-          auxData.writeVisibilityType[(int)memType], pred);
+          auxData.writeVisibilityType[(int)memType](op), pred);
     }
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM && auxData.asyncCpCommits[op]) {
       b.create<tti::ExperimentalCheckOutstandingCommitsOp>(
-          buf, buffers, auxData.asyncCpCommits[op], auxData.asyncCpCommitsType,
-          "async_copy_global_to_shared", pred);
+          buf, buffers, auxData.asyncCpCommits[op],
+          auxData.asyncCpCommitsType(op), "async_copy_global_to_shared", pred);
     }
   }
 
@@ -107,12 +107,12 @@ private:
     if (!auxData.barriers.empty()) {
       b.create<tti::ExperimentalVerifyReadVisibilityOp>(
           buf, thread, buffers, auxData.readVisibility[(int)memType][op],
-          auxData.readVisibilityType[(int)memType], pred);
+          auxData.readVisibilityType[(int)memType](op), pred);
     }
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM && auxData.wgmmaCommits[op]) {
       b.create<tti::ExperimentalCheckOutstandingCommitsOp>(
-          buf, buffers, auxData.wgmmaCommits[op], auxData.wgmmaCommitsType,
+          buf, buffers, auxData.wgmmaCommits[op], auxData.wgmmaCommitsType(op),
           "warpgroup_mma operand read", pred);
     }
   }
@@ -313,7 +313,7 @@ private:
               b.create<tti::ExperimentalSetReadVisibilityOp>(
                   buf, thread, _buffers,
                   auxData.readVisibility[(int)memType][op],
-                  auxData.readVisibilityType[(int)memType], effect.pred);
+                  auxData.readVisibilityType[(int)memType](op), effect.pred);
               for (auto [barrier, pred] : effect.barriersAndPreds) {
                 if (pred && effect.pred) {
                   pred = b.create<arith::AndIOp>(effect.pred, pred);
@@ -321,9 +321,9 @@ private:
                 b.create<tti::ExperimentalTrackVisibleReadsOp>(
                     barrier, thread, _barriers,
                     auxData.readVisibility[(int)memType][op],
-                    auxData.readVisibilityType[(int)memType],
+                    auxData.readVisibilityType[(int)memType](op),
                     auxData.readTracking[(int)memType][op],
-                    auxData.readTrackingType[(int)memType], pred);
+                    auxData.readTrackingType[(int)memType](op), pred);
               }
             }
             if (effect.trackingKind == MemEffects::TrackingKind::wgmmaCommit) {
@@ -331,7 +331,7 @@ private:
               assert(memType == MemType::SHARED_MEM);
               b.create<tti::ExperimentalStageAccessForCommitOp>(
                   buf, _buffers, auxData.wgmmaCommits[op],
-                  auxData.wgmmaCommitsType, effect.pred);
+                  auxData.wgmmaCommitsType(op), effect.pred);
             }
             assert(effect.trackingKind !=
                    MemEffects::TrackingKind::asyncCpCommit);
@@ -346,16 +346,16 @@ private:
               b.create<tti::ExperimentalSetWriteVisibilityOp>(
                   buf, thread, _buffers,
                   auxData.writeVisibility[(int)memType][op],
-                  auxData.writeVisibilityType[(int)memType], effect.pred);
+                  auxData.writeVisibilityType[(int)memType](op), effect.pred);
               b.create<tti::ExperimentalClearWriteTrackingOp>(
                   buf, _buffers, auxData.writeTracking[(int)memType][op],
-                  auxData.writeTrackingType[(int)memType], effect.pred);
+                  auxData.writeTrackingType[(int)memType](op), effect.pred);
               b.create<tti::ExperimentalClearReadVisibilityOp>(
                   buf, _buffers, auxData.readVisibility[(int)memType][op],
-                  auxData.readVisibilityType[(int)memType], effect.pred);
+                  auxData.readVisibilityType[(int)memType](op), effect.pred);
               b.create<tti::ExperimentalClearReadTrackingOp>(
                   buf, _buffers, auxData.readTracking[(int)memType][op],
-                  auxData.readTrackingType[(int)memType], effect.pred);
+                  auxData.readTrackingType[(int)memType](op), effect.pred);
               for (auto [barrier, pred] : effect.barriersAndPreds) {
                 if (pred && effect.pred) {
                   pred = b.create<arith::AndIOp>(effect.pred, pred);
@@ -363,15 +363,15 @@ private:
                 b.create<tti::ExperimentalTrackVisibleWritesOp>(
                     barrier, thread, _barriers,
                     auxData.writeVisibility[(int)memType][op],
-                    auxData.writeVisibilityType[(int)memType],
+                    auxData.writeVisibilityType[(int)memType](op),
                     auxData.writeTracking[(int)memType][op],
-                    auxData.writeTrackingType[(int)memType], pred);
+                    auxData.writeTrackingType[(int)memType](op), pred);
                 b.create<tti::ExperimentalTrackVisibleReadsOp>(
                     barrier, thread, _barriers,
                     auxData.readVisibility[(int)memType][op],
-                    auxData.readVisibilityType[(int)memType],
+                    auxData.readVisibilityType[(int)memType](op),
                     auxData.readTracking[(int)memType][op],
-                    auxData.readTrackingType[(int)memType], pred);
+                    auxData.readTrackingType[(int)memType](op), pred);
               }
             }
             if (effect.trackingKind ==
@@ -379,7 +379,7 @@ private:
               assert(memType == MemType::SHARED_MEM);
               b.create<tti::ExperimentalStageAccessForCommitOp>(
                   buf, _buffers, auxData.asyncCpCommits[op],
-                  auxData.asyncCpCommitsType, effect.pred);
+                  auxData.asyncCpCommitsType(op), effect.pred);
             }
             assert(effect.trackingKind !=
                    MemEffects::TrackingKind::wgmmaCommit);
@@ -399,15 +399,15 @@ private:
               b.create<tti::ExperimentalTransferVisibleWritesOp>(
                   barrier, peer, _barriers,
                   auxData.writeVisibility[(int)memType][op],
-                  auxData.writeVisibilityType[(int)memType],
+                  auxData.writeVisibilityType[(int)memType](op),
                   auxData.writeTracking[(int)memType][op],
-                  auxData.writeTrackingType[(int)memType], pred);
+                  auxData.writeTrackingType[(int)memType](op), pred);
               b.create<tti::ExperimentalTransferVisibleReadsOp>(
                   barrier, peer, _barriers,
                   auxData.readVisibility[(int)memType][op],
-                  auxData.readVisibilityType[(int)memType],
+                  auxData.readVisibilityType[(int)memType](op),
                   auxData.readTracking[(int)memType][op],
-                  auxData.readTrackingType[(int)memType], pred);
+                  auxData.readTrackingType[(int)memType](op), pred);
             }
           }
         }
@@ -418,15 +418,15 @@ private:
           b.create<tti::ExperimentalTrackVisibleWritesOp>(
               commitOp.getBarrier(), thread, _barriers,
               auxData.writeVisibility[(int)memType][op],
-              auxData.writeVisibilityType[(int)memType],
+              auxData.writeVisibilityType[(int)memType](op),
               auxData.writeTracking[(int)memType][op],
-              auxData.writeTrackingType[(int)memType], commitOp.getPred());
+              auxData.writeTrackingType[(int)memType](op), commitOp.getPred());
           b.create<tti::ExperimentalTrackVisibleReadsOp>(
               commitOp.getBarrier(), thread, _barriers,
               auxData.readVisibility[(int)memType][op],
-              auxData.readVisibilityType[(int)memType],
+              auxData.readVisibilityType[(int)memType](op),
               auxData.readTracking[(int)memType][op],
-              auxData.readTrackingType[(int)memType], commitOp.getPred());
+              auxData.readTrackingType[(int)memType](op), commitOp.getPred());
         }
       }
       if (auto arriveOp = dyn_cast<ttng::ArriveBarrierOp>(op)) {
@@ -436,25 +436,27 @@ private:
             b.create<tti::ExperimentalTrackVisibleWritesOp>(
                 arriveOp.getAlloc(), thread, _barriers,
                 auxData.writeVisibility[(int)memType][op],
-                auxData.writeVisibilityType[(int)memType],
+                auxData.writeVisibilityType[(int)memType](op),
                 auxData.writeTracking[(int)memType][op],
-                auxData.writeTrackingType[(int)memType], arriveOp.getPred());
+                auxData.writeTrackingType[(int)memType](op),
+                arriveOp.getPred());
             b.create<tti::ExperimentalTrackVisibleReadsOp>(
                 arriveOp.getAlloc(), thread, _barriers,
                 auxData.readVisibility[(int)memType][op],
-                auxData.readVisibilityType[(int)memType],
+                auxData.readVisibilityType[(int)memType](op),
                 auxData.readTracking[(int)memType][op],
-                auxData.readTrackingType[(int)memType], arriveOp.getPred());
+                auxData.readTrackingType[(int)memType](op), arriveOp.getPred());
           }
         }
       }
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
         b.create<tti::ExperimentalCommitAccessesOp>(
-            auxData.asyncCpCommits[op], auxData.asyncCpCommitsType, nullptr);
+            auxData.asyncCpCommits[op], auxData.asyncCpCommitsType(op),
+            nullptr);
       }
       if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
         b.create<tti::ExperimentalClearOutstandingCommitsOp>(
-            auxData.asyncCpCommits[op], auxData.asyncCpCommitsType,
+            auxData.asyncCpCommits[op], auxData.asyncCpCommitsType(op),
             asyncWaitOp.getNum(), nullptr);
       }
       if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
@@ -462,12 +464,12 @@ private:
           // Add commit (implicit in ttgir) after staging wgmma's operand for
           // read
           b.create<tti::ExperimentalCommitAccessesOp>(
-              auxData.wgmmaCommits[op], auxData.wgmmaCommitsType, nullptr);
+              auxData.wgmmaCommits[op], auxData.wgmmaCommitsType(op), nullptr);
         }
       }
       if (auto wgmmaWaitOp = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
         b.create<tti::ExperimentalClearOutstandingCommitsOp>(
-            auxData.wgmmaCommits[op], auxData.wgmmaCommitsType,
+            auxData.wgmmaCommits[op], auxData.wgmmaCommitsType(op),
             wgmmaWaitOp.getPendings(), nullptr);
       }
       listener.maybeWrapWithCriticalSection(b, auxData, nullptr);
