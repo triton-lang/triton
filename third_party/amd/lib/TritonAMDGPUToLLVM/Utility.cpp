@@ -715,7 +715,7 @@ SmallVector<Value, 8> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
   Value resB1_7531 = b.or_(resB1NoS_7531, s_7531);
 
   // fp4 to bf16: fp4->fp32 for each element
-  if (!toFp16 && std::getenv("USE_NEW_SEQ")) {
+  if (!toFp16) {
     Value res_6 =
         LLVM::createLLVMCallOp(rewriter, loc, funcOp,
                                {resB1_6420, resB0_6420, b.i32_val(0x0703c0c0)})
