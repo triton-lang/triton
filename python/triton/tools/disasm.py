@@ -105,9 +105,7 @@ def path_to_cuobjdump() -> Tuple[str, str]:
     which = shutil.which("cuobjdump")
     if which:
         return which, os.path.dirname(which)
-    raise ImportError(
-        "cuobjdump not found. Set TRITON_CUOBJDUMP or ensure CUDA toolkit is installed and on PATH."
-    )
+    raise ImportError("cuobjdump not found. Set TRITON_CUOBJDUMP or ensure CUDA toolkit is installed and on PATH.")
 
 
 def extract(file_path: str, fun: Optional[str]) -> Optional[str]:
