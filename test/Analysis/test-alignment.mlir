@@ -948,7 +948,6 @@ tt.func @if_into_for_step(%i1 : i1) {
     scf.yield %cst128 : i32
   }
   scf.for %i = %c0 to %cst128 step %ret : i32 {
-    // Incorrect divisility here.
     // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
     %t = arith.addi %i, %c0 : i32
   }
