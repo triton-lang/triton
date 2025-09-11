@@ -1,5 +1,5 @@
 from triton.experimental.gluon.language import _core as ttgl
-from ..._core import builtin, float32, _unwrap_if_constexpr
+from ..._core import builtin, float32
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
 from ..cdna3 import _buffer_atomic_rmw_impl
