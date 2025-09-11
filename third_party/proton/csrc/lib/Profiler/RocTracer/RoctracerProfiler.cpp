@@ -5,7 +5,6 @@
 #include "Driver/GPU/HsaApi.h"
 #include "Driver/GPU/RoctracerApi.h"
 
-#include "Session/Session.h"
 #include "hip/amd_detail/hip_runtime_prof.h"
 #include "roctracer/roctracer_ext.h"
 #include "roctracer/roctracer_hip.h"
