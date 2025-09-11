@@ -73,7 +73,7 @@ protected:
       if (profiler.isOpInProgress())
         return;
       opId = Scope::getNewScopeId();
-      profiler.enterOp(Scope(opId, name));
+      profiler.enterOp(Scope(opId));
       profiler.correlation.apiExternIds.insert(opId);
     }
 
