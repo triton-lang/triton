@@ -208,7 +208,7 @@ struct FinalizeOpConversion
     Value gmemWarpIndexPtr =
         b.gep(scratchPtrTy, i32_ty, scratchPtr, warpIndexOffset);
     Value index = b.load(i32_ty, segmentObj.indexPtr);
-    targetInfo.storeWarpScalar(rewriter, loc, index, gmemWarpIndexPtr);
+    b.store(index, gmemWarpIndexPtr);
 
     Block *prevBlock = op->getBlock();
     // Add the 'if' block.

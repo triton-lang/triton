@@ -29,9 +29,6 @@ public:
   virtual Value processorId(ConversionPatternRewriter &rewriter,
                             Location loc) const = 0;
 
-  virtual void storeWarpScalar(ConversionPatternRewriter &rewriter,
-                               Location loc, Value val, Value ptr) const = 0;
-
   virtual int getAddressSpace(Attribute addressSpace) const = 0;
 
   virtual int getIndexPtrAddrSpace() const = 0;

@@ -40,12 +40,6 @@ Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
   return b.mul(globalTimeVal, b.i64_val(10));
 }
 
-void TargetInfo::storeWarpScalar(ConversionPatternRewriter &rewriter,
-                                 Location loc, Value val, Value ptr) const {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  b.store(val, ptr);
-}
-
 // TODO(crobeck): move these into a util file
 static Value getXCCID(ConversionPatternRewriter &rewriter, Location loc) {
   GCNBuilder builder;
