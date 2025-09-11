@@ -107,23 +107,34 @@ static void upcast8xMxfp4(RewriterBase &rewriter, Location loc,
         yVals.push_back(result);
       }
     } else {
+      // pack 2 values together to help llvm backend codegen
       Value scaleF32 =
           b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
-      SmallVector<Value, 8> scaledVals;
-      for (unsigned i = 0; i < 8; i++) {
-        Value scaledVal = b.fmul(scaleF32, vecVals[i]);
-        scaledVals.push_back(b.bitcast(scaledVal, i32_ty));
+      Type v2f32 = vec_ty(f32_ty, 2);
+      Value pkScale = b.undef(v2f32);
+      pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(0));
+      pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(1));
+      Type v2i32 = vec_ty(i32_ty, 2);
+      SmallVector<Value, 4> pkScaledVals;
+      for (unsigned i = 0; i < 8; i += 2) {
+        Value pkVals = b.undef(v2f32);
+        pkVals = b.insert_element(pkVals, vecVals[i], b.i32_val(0));
+        pkVals = b.insert_element(pkVals, vecVals[i + 1], b.i32_val(1));
+        Value pkScaled = b.fmul(pkScale, pkVals);
+        pkScaledVals.push_back(b.bitcast(pkScaled, v2i32));
       }
       auto permU32FnTy =
           LLVM::LLVMFunctionType::get(i32_ty, {i32_ty, i32_ty, i32_ty});
       LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
           rewriter, op, "llvm.amdgcn.perm", permU32FnTy);
       Value sel = b.i32_val(0x07060302);
-      for (unsigned i = 0; i < 8; i += 2) {
+      for (unsigned i = 0; i < 4; i++) {
         // v2f32->v2bf16: {e1.f32[31:16], e0.f32[31:16]}
-        Value res = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
-                                           {scaledVals[i + 1], scaledVals[i], sel})
-                        .getResult();
+        Value first = b.extract_element(pkScaledVals[i], b.i32_val(0));
+        Value second = b.extract_element(pkScaledVals[i], b.i32_val(1));
+        Value res =
+            LLVM::createLLVMCallOp(rewriter, loc, funcOp, {second, first, sel})
+                .getResult();
         Type v2bf16 = vec_ty(bf16_ty, 2);
         res = b.bitcast(res, v2bf16);
         yVals.push_back(b.extract_element(res, b.i32_val(0)));
