@@ -241,7 +241,7 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, int nRow) {
 }
 
 SmallVector<Value> pack(ArrayRef<Value> values, Type outType, Location loc,
-                        ConversionPatternRewriter &rewriter) {
+                        ConversionPatternRewriter &rewriter, bool allowUndef) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> packedValues;
   Type inType = values[0].getType();
@@ -257,6 +257,18 @@ SmallVector<Value> pack(ArrayRef<Value> values, Type outType, Location loc,
 
   auto vecSize = outbitwidth / inbitwidth;
   auto vecTy = vec_ty(inType, vecSize);
+  // Pack with undefined values
+  if (allowUndef && values.size() < vecSize) {
+    Value packed = b.undef(vecTy);
+    for (int i = 0; i < values.size(); i++) {
+      packed = b.insert_element(vecTy, packed, values[i], b.i32_val(i));
+    }
+    packed = b.bitcast(packed, outType);
+    packedValues.emplace_back(std::move(packed));
+    return packedValues;
+  }
+
+  assert(values.size() % vecSize == 0);
   for (int i = 0; i < values.size(); i += vecSize) {
     Value packed = b.undef(vecTy);
     for (int j = 0; j < vecSize; j++) {
@@ -270,7 +282,8 @@ SmallVector<Value> pack(ArrayRef<Value> values, Type outType, Location loc,
 }
 
 SmallVector<Value> unpack(ArrayRef<Value> packedValues, Type outType,
-                          Location loc, ConversionPatternRewriter &rewriter) {
+                          Location loc, ConversionPatternRewriter &rewriter,
+                          int outVals = 0) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type inType = packedValues[0].getType();
   auto inbitwidth = inType.getIntOrFloatBitWidth();
@@ -285,6 +298,18 @@ SmallVector<Value> unpack(ArrayRef<Value> packedValues, Type outType,
   }
   auto vecSize = inbitwidth / outbitwidth;
   auto vecTy = vec_ty(outType, vecSize);
+
+  // Remove undefined values if outVals is specified
+  if (outVals > 0) {
+    assert(packedValues.size() == 1);
+    Value packed = b.bitcast(packedValues[0], vecTy);
+    for (int i = 0; i < outVals; i++) {
+      unpackedValues.push_back(
+          b.extract_element(outType, packed, b.i32_val(i)));
+    }
+    return unpackedValues;
+  }
+
   for (int i = 0; i < packedValues.size(); i++) {
     Value packed = b.bitcast(packedValues[i], vecTy);
     for (int j = 0; j < vecSize; j++) {
@@ -566,18 +591,30 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
       quot = *maybeQuot;
       bestContig = contig;
     }
+    bool padding = false;
     if (bestContig > 1) {
       // There are contiguous elements along kCol, so we can pack them into a
       // larger dtype
       unpacked = false;
       packedElemTy = int_ty(bitwidth * bestContig);
     } else if (auto maybeQuot = divideLeft(
-                   cvt, LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth));
+                   cvt, LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth) *
+                            LinearLayout::identity1D(2, kReg, kCol));
                bitwidth == 16 && maybeQuot) {
       // Unpacked just supported for bitwidth 16
-      quot = *maybeQuot;
       unpacked = true;
+      quot = *maybeQuot;
       packedElemTy = i32_ty;
+    } else if (auto maybeQuot = divideLeft(
+                   cvt, LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth));
+               bitwidth == 16 && maybeQuot &&
+               maybeQuot->getInDimSize(kReg) == 1) {
+      // There are not enough element to fill a full register, so we have to pad
+      // it
+      unpacked = true;
+      quot = *maybeQuot;
+      packedElemTy = i32_ty;
+      padding = true;
     } else {
       emitError(loc, "Failed to lower TMEM load/store: TMEM layout is not "
                      "packed or unpacked");
@@ -585,7 +622,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
     }
     SmallVector<Value> inVals;
     if (isStore) {
-      inVals = pack(vals, packedElemTy, loc, rewriter);
+      inVals = pack(vals, packedElemTy, loc, rewriter, padding);
     }
     auto outValsOr =
         lowerTMemLdSt(loc, ctx, rewriter, quot, inVals, packedElemTy, tmemBase,
@@ -594,7 +631,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
       return failure();
     auto outVals = std::move(*outValsOr);
     if (!isStore) {
-      outVals = unpack(outVals, llvmElemTy, loc, rewriter);
+      outVals = unpack(outVals, llvmElemTy, loc, rewriter, padding ? 1 : 0);
     }
     return outVals;
   }
@@ -643,7 +680,8 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   }
 
   if (!msgInfo) {
-    emitError(loc, "Failed to lower TMEM load/store: unsupported dst layout");
+    emitError(loc, "Failed to lower TMEM load/store: unsupported dst layout\n" +
+                       cvt.toString());
     return failure();
   }
   auto [atom, reps, perm, numRegsPerMessage] = std::move(msgInfo.value());
