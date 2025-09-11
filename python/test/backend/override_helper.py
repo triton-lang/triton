@@ -6,6 +6,8 @@ import sys
 
 from typing import NamedTuple
 
+import compiler_inspection
+
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
