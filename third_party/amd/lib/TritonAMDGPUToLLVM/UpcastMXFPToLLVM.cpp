@@ -31,18 +31,18 @@ SmallVector<Value, 8> upcastMxfp4_SW(RewriterBase &rewriter,
   Location loc = upcastOp.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  SmallVector<Value, 8> results;
-  Type elemType = toFp16 ? f16_ty : bf16_ty;
+  // SmallVector<Value, 8> results;
+  // Type elemType = toFp16 ? f16_ty : bf16_ty;
   Value packedVec = b.undef(vec_ty(i8_ty, 4));
   for (int i : llvm::seq(4))
     packedVec = b.insert_element(packedVec, values[idx + i], b.i32_val(i));
-  SmallVector<Value, 4> v4i32 =
+  SmallVector<Value, 8> results =
       upcast8xMxfp4_SW(rewriter, upcastOp, toFp16, packedVec);
-  for (int j = 0; j < 4; j++) {
-    Value elements = b.bitcast(v4i32[j], vec_ty(elemType, 2));
-    results.push_back(b.extract_element(elements, b.i32_val(0)));
-    results.push_back(b.extract_element(elements, b.i32_val(1)));
-  }
+  // for (int j = 0; j < 4; j++) {
+  //   Value elements = b.bitcast(v4i32[j], vec_ty(elemType, 2));
+  //   results.push_back(b.extract_element(elements, b.i32_val(0)));
+  //   results.push_back(b.extract_element(elements, b.i32_val(1)));
+  // }
   return results;
 }
 
@@ -105,6 +105,39 @@ static void upcast8xMxfp4(RewriterBase &rewriter, Location loc,
       Value elements = b.bitcast(v4i32[k], vec_ty(retElemType, 2));
       yVals.push_back(b.extract_element(elements, b.i32_val(0)));
       yVals.push_back(b.extract_element(elements, b.i32_val(1)));
+    }
+  } else if (std::getenv("USE_NEW_SEQ")) {
+    // v8f32 for fp4->bf16; v8f16 for fp4->f16
+    SmallVector<Value, 8> vecVals =
+        upcastMxfp4_SW(rewriter, op, useFp16, xVals, idx);
+    if (useFp16) {
+      for (int i = 0; i < 8; i++) {
+        auto result =
+            mxfpScaleFp16(rewriter, loc, vecVals[i], scale, op.getFastMath());
+        yVals.push_back(result);
+      }
+    } else {
+      Value scaleF32 = b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
+      SmallVector<Value, 8> scaledVals;
+      for (unsigned i = 0; i < 8; i++)  {
+        Value scaledVal = b.fmul(scaleF32, vecVals[i]);
+        scaledVals.push_back(b.bitcast(scaledVal, i32_ty));
+      }
+      auto permU32FnTy = LLVM::LLVMFunctionType::get(i32_ty, {i32_ty, i32_ty, i32_ty});
+      LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
+          rewriter, op, "llvm.amdgcn.perm", permU32FnTy);
+      Value sel = b.i32_val(0x07060302);
+      for (unsigned i = 0; i < 8; i+=2) {
+        Value res =
+            LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                                   {vecVals[i + 1], vecVals[i], sel})
+                .getResult();
+        Type v2bf16 = vec_ty(bf16_ty, 2);
+        res = b.bitcast(res, v2bf16);
+        yVals.push_back(b.extract_element(res, b.i32_val(0)));
+        yVals.push_back(b.extract_element(res, b.i32_val(1)));
+      }
+
     }
   } else {
     SmallVector<Value, 8> vf16 =

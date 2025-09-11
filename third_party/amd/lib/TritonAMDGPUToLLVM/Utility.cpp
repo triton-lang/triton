@@ -619,7 +619,7 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
   return false;
 }
 
-SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
+SmallVector<Value, 8> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                        bool toFp16, Value packedVec) {
   assert((isa<triton::amdgpu::UpcastMXFPOp, triton::gpu::Fp4ToFpOp>(op)) &&
          "Expected UpcastMXFPOp or Fp4ToFpOp");
@@ -655,14 +655,13 @@ SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
   Value resB1LutLoNoS = toFp16 ? b.i32_val(0x3e3c3800) : b.i32_val(0x3f3f3f00);
   Value resB1LutHiNoS = toFp16 ? b.i32_val(0x46444240) : b.i32_val(0x40404040);
 
-  Type i32Ty = rewriter.getI32Type();
-  auto permU32FnTy = LLVM::LLVMFunctionType::get(i32Ty, {i32Ty, i32Ty, i32Ty});
+  auto permU32FnTy = LLVM::LLVMFunctionType::get(i32_ty, {i32_ty, i32_ty, i32_ty});
   LLVM::LLVMFuncOp funcOp =
       appendOrGetExternFuncOp(rewriter, op, "llvm.amdgcn.perm", permU32FnTy);
 
   // Start with 8 mxfp4 elements in a single i32 register
   // | e7e6 | e5e4 | e3e2 | e1e0 |
-  Value input = b.bitcast(packedVec, i32Ty);
+  Value input = b.bitcast(packedVec, i32_ty);
 
   // Step 1: extract EM bits for elements 0,2,4,6 and 1,3,5,7 respectively.
   // e2m1_6420_idx = | 0[0e6EM] | 0[0e4EM] | 0[0e2EM] | 0[0e0EM] |
@@ -680,7 +679,7 @@ SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
   // s_7531 = | [e7S000]0 | [e5S000]0 | [e3S000]0 | [e1S000]0 |
   Value s_7531 = b.and_(input, b.i32_val(0x80808080));
 
-  // Step 3: Upcast elements 0,2,4,6 to 4 16-bit elements
+  // Step 3.0: Upcast elements 0,2,4,6 to 4 16-bit elements
   // Select Byte #0. It's always 0 if upcasting to fp16.
   // resB0_6420 = | e6B0 | e4B0 | e2B0 | e0B0 |
   Value resB0_6420 = b.i32_val(0);
@@ -696,20 +695,8 @@ SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
           .getResult();
   // resB1_6420 = | e6B1 | e4B1 | e2B1 | e0B1 |
   Value resB1_6420 = b.or_(resB1NoS_6420, s_6420);
-  // Construct 16-bit values of e0 and e2
-  // res_20 = | e2B1 | e2B0 | e0B1 | e0B0 | = | e2_f16 | e0_f16 |
-  Value res_20 =
-      LLVM::createLLVMCallOp(rewriter, loc, funcOp,
-                             {resB1_6420, resB0_6420, b.i32_val(0x05010400)})
-          .getResult();
-  // Construct 16-bit values of e4 and e6
-  // res_64 = | e6B1 | e6B0 | e4B1 | e4B0 | = | e6_f16 | e4_f16 |
-  Value res_64 =
-      LLVM::createLLVMCallOp(rewriter, loc, funcOp,
-                             {resB1_6420, resB0_6420, b.i32_val(0x07030602)})
-          .getResult();
 
-  // Step 4: Upcast elements 1,3,5,7 to 4 16-bit elements
+  // Step 3.1: Upcast elements 1,3,5,7 to 4 16-bit elements
   // This is a copy of step 3 on different group of elements
   // Select Byte #0. It's always 0 if upcasting to fp16.
   // resB0_7531 = | e7B0 | e5B0 | e3B0 | e1B0 |
@@ -726,6 +713,61 @@ SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
           .getResult();
   // resB1_7531 = | e7B1 | e5B1 | e3B1 | e1B1 |
   Value resB1_7531 = b.or_(resB1NoS_7531, s_7531);
+
+  // fp4 to bf16: fp4->fp32 for each element
+  if (!toFp16 && std::getenv("USE_NEW_SEQ")) {
+    Value res_6 =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                               {resB1_6420, resB0_6420, b.i32_val(0x0703c0c0)})
+            .getResult();
+    Value res_4 =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                               {resB1_6420, resB0_6420, b.i32_val(0x0602c0c0)})
+            .getResult();
+    Value res_2 =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                               {resB1_6420, resB0_6420, b.i32_val(0x0501c0c0)})
+            .getResult();
+    Value res_0 =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                               {resB1_6420, resB0_6420, b.i32_val(0x0400c0c0)})
+            .getResult();
+
+    Value res_7 =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                               {resB1_7531, resB0_7531, b.i32_val(0x0703c0c0)})
+            .getResult();
+    Value res_5 =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                               {resB1_7531, resB0_7531, b.i32_val(0x0602c0c0)})
+            .getResult();
+    Value res_3 =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                               {resB1_7531, resB0_7531, b.i32_val(0x0501c0c0)})
+            .getResult();
+    Value res_1 =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                               {resB1_7531, resB0_7531, b.i32_val(0x0400c0c0)})
+            .getResult();
+    SmallVector<Value, 8> results{res_0, res_1, res_2, res_3, res_4, res_5, res_6, res_7};
+    for (auto & res: results)
+      res = b.bitcast(res, f32_ty);
+    return results;
+  }
+
+  // Step 4:
+  // Construct 16-bit values of e0 and e2
+  // res_20 = | e2B1 | e2B0 | e0B1 | e0B0 | = | e2_f16 | e0_f16 |
+  Value res_20 =
+      LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                             {resB1_6420, resB0_6420, b.i32_val(0x05010400)})
+          .getResult();
+  // Construct 16-bit values of e4 and e6
+  // res_64 = | e6B1 | e6B0 | e4B1 | e4B0 | = | e6_f16 | e4_f16 |
+  Value res_64 =
+      LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                             {resB1_6420, resB0_6420, b.i32_val(0x07030602)})
+          .getResult();
   // Construct 16-bit values of e1 and e3
   // res_31 = | e3B1 | e3B0 | e1B1 | e1B0 | = | e3_f16 | e1_f16 |
   Value res_31 =
@@ -757,7 +799,14 @@ SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                         {res_75, res_64, b.i32_val(0x07060302)})
                      .getResult();
 
-  return {res_10, res_32, res_54, res_76};
+  SmallVector<Value, 4> results{res_10, res_32, res_54, res_76};
+  SmallVector<Value, 8> resultsFp16;
+  for (int j = 0; j < 4; j++) {
+    Value elements = b.bitcast(results[j], vec_ty(f16_ty, 2));
+    resultsFp16.push_back(b.extract_element(elements, b.i32_val(0)));
+    resultsFp16.push_back(b.extract_element(elements, b.i32_val(1)));
+  }
+  return resultsFp16;
 }
 
 } // namespace mlir::LLVM::AMD
