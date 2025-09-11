@@ -209,7 +209,8 @@ getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg) {
                          (i / 2) * tile.getInDimSize(kReg));
 }
 
-LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom) {
+LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
+                           bool unpacked) {
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
@@ -229,6 +230,10 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom) {
             LinearLayout::identity1D(2, kReg, kRow);
   } else {
     llvm_unreachable("Unsupported TMEM access atom");
+  }
+  // Each register moves 32/bitwidth (= 2) columns when unpacked
+  if (unpacked) {
+    tile = LinearLayout::zeros1D(1, kReg, kCol, 2) * tile;
   }
   auto nCol = tile.getOutDimSize(kCol);
   auto bases = tile.getBases();
@@ -618,6 +623,10 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
                      "packed or unpacked");
       return failure();
     }
+    // When unpacked each register moves 32/bitwidth (= 2) columns
+    if (unpacked) {
+      quot = LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth) * quot;
+    }
     SmallVector<Value> inVals;
     if (isStore) {
       inVals = pack(vals, packedElemTy, loc, rewriter, padding);
@@ -647,7 +656,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   std::optional<std::tuple<TMemAccessAtom, LinearLayout, ColumnAction, int>>
       msgInfo;
   for (auto atom : {TMemAccess32x32b, TMemAccess16x256b}) {
-    auto tile = getTileLayout(ctx, atom);
+    auto tile = getTileLayout(ctx, atom, unpacked);
     auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       // Cannot match more than one
@@ -660,7 +669,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   if (!msgInfo) {
     // Quotient by the smaller tile and then, if possible, we set the
     // secondHalfOffset to the last kLane basis
-    auto tile = getTileLayout(ctx, TMemAccess16x32bx2);
+    auto tile = getTileLayout(ctx, TMemAccess16x32bx2, unpacked);
     auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       auto [reps, perm, numRegsPerMessage] = std::move(*maybeReps);
