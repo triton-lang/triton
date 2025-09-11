@@ -43,7 +43,7 @@ Value createBufferPointersTensor(ImplicitLocOpBuilder &builder, MemType memType,
   int64_t size = values.size();
   assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
   Type elType = builder.getI64Type();
-  unsigned int warps = lookupNumWarps(builder.getBlock()->getParentOp());
+  unsigned int warps = lookupNumWarps(&builder.getBlock()->front());
   auto tensorType = RankedTensorType::get(
       {size}, elType,
       getThreadLocalBlockedEncoding(builder.getContext(), size, warps));
@@ -68,9 +68,8 @@ Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
   return alloc;
 }
 
-void createZeroInitStateTensor(ImplicitLocOpBuilder &b, int m, int n,
-                               int bitWidth, RankedTensorType &type,
-                               Value &alloc) {
+Value createZeroInitStateTensor(ImplicitLocOpBuilder &b, int m, int n,
+                                int bitWidth) {
   SmallVector<int64_t> shape = {m};
   if (n > 0) {
     shape.push_back(n);
@@ -81,10 +80,11 @@ void createZeroInitStateTensor(ImplicitLocOpBuilder &b, int m, int n,
   if (n > 0) {
     encoding = getThreadLocalBlockedEncoding(b.getContext(), m, n, warps);
   }
-  type = RankedTensorType::get(shape, b.getIntegerType(bitWidth), encoding);
+  auto type =
+      RankedTensorType::get(shape, b.getIntegerType(bitWidth), encoding);
   TypedValue<RankedTensorType> tensor =
       createConstIntTensor(b, b.getLoc(), 0, type);
-  alloc = createInitializedScratchMemory(b, tensor);
+  return createInitializedScratchMemory(b, tensor);
 }
 
 SmallVector<Region *> getRegionsToInstrument(ModuleOp module) {
@@ -204,6 +204,25 @@ unsigned getSubBufferSize(TMEMAllocOp op) {
 } // namespace
 
 namespace mlir::triton::instrument {
+
+RankedTensorType
+AuxDataMap::OnDemandTensorType::operator()(Operation *op) const {
+  assert(!shape.empty() && bitWidth != 0 && "Type provider not initialized");
+  MLIRContext *ctx = op->getContext();
+  unsigned int warps = gpu::lookupNumWarps(op);
+  BlockedEncodingAttr encoding;
+  if (shape.size() == 1) {
+    encoding = getThreadLocalBlockedEncoding(
+        ctx, static_cast<unsigned>(shape[0]), warps);
+  } else {
+    assert(shape.size() == 2 && "Only 1D and 2D shapes are supported");
+    encoding =
+        getThreadLocalBlockedEncoding(ctx, static_cast<unsigned>(shape[0]),
+                                      static_cast<unsigned>(shape[1]), warps);
+  }
+  Type elType = IntegerType::get(ctx, bitWidth);
+  return RankedTensorType::get(shape, elType, encoding);
+}
 
 TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
                                                   Location loc, int64_t val,
@@ -368,13 +387,15 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
         });
     int numBufs = bufValues[iMemType].size();
 
-    createZeroInitStateTensor(b, numBufs, 0, 64, writeVisibilityType[iMemType],
-                              writeVisibility[iMemType][entryRegion]);
+    writeVisibility[iMemType][entryRegion] =
+        createZeroInitStateTensor(b, numBufs, 0, 64);
+    writeVisibilityType[iMemType] = OnDemandTensorType{{numBufs}, 64};
     passToWarpSpecialize(entryPoint, writeVisibility[iMemType][entryRegion],
                          writeVisibility[iMemType]);
-    createZeroInitStateTensor(b, numBufs, THREADS_BITMASK_SIZE, 64,
-                              readVisibilityType[iMemType],
-                              readVisibility[iMemType][entryRegion]);
+    readVisibility[iMemType][entryRegion] =
+        createZeroInitStateTensor(b, numBufs, THREADS_BITMASK_SIZE, 64);
+    readVisibilityType[iMemType] =
+        OnDemandTensorType{{numBufs, THREADS_BITMASK_SIZE}, 64};
     passToWarpSpecialize(entryPoint, readVisibility[iMemType][entryRegion],
                          readVisibility[iMemType]);
   }
@@ -395,14 +416,16 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
       int numBufs = bufValues[iMemType].size();
       int numBarriers = barrierValues.size();
       if (numBufs > 0) {
-        createZeroInitStateTensor(b, numBufs, numBarriers, 8,
-                                  writeTrackingType[iMemType],
-                                  writeTracking[iMemType][entryRegion]);
+        writeTracking[iMemType][entryRegion] =
+            createZeroInitStateTensor(b, numBufs, numBarriers, 8);
+        writeTrackingType[iMemType] =
+            OnDemandTensorType{{numBufs, numBarriers}, 8};
         passToWarpSpecialize(entryPoint, writeTracking[iMemType][entryRegion],
                              writeTracking[iMemType]);
-        createZeroInitStateTensor(b, numBufs, numBarriers, 64,
-                                  readTrackingType[iMemType],
-                                  readTracking[iMemType][entryRegion]);
+        readTracking[iMemType][entryRegion] =
+            createZeroInitStateTensor(b, numBufs, numBarriers, 64);
+        readTrackingType[iMemType] =
+            OnDemandTensorType{{numBufs, numBarriers}, 64};
         passToWarpSpecialize(entryPoint, readTracking[iMemType][entryRegion],
                              readTracking[iMemType]);
       }
@@ -425,12 +448,15 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
   if (hasCpAsync(module)) {
     assert(!bufValues[(int)MemType::SHARED_MEM].empty());
     unsigned int warps = lookupNumWarps(b.getBlock()->getParentOp());
-    asyncCpCommitsType = RankedTensorType::get(
-        {(long)bufValues[(int)MemType::SHARED_MEM].size()}, b.getIntegerType(8),
+    asyncCpCommitsType = OnDemandTensorType{
+        {static_cast<int64_t>(bufValues[(int)MemType::SHARED_MEM].size())}, 8};
+    RankedTensorType _asyncCommitsInitTy = RankedTensorType::get(
+        {static_cast<long>(bufValues[(int)MemType::SHARED_MEM].size())},
+        b.getIntegerType(8),
         getThreadLocalBlockedEncoding(
             b.getContext(), bufValues[(int)MemType::SHARED_MEM].size(), warps));
     TypedValue<RankedTensorType> writeCommits =
-        createConstIntTensor(b, b.getLoc(), 0, asyncCpCommitsType);
+        createConstIntTensor(b, b.getLoc(), 0, _asyncCommitsInitTy);
     asyncCpCommits[entryRegion] =
         createInitializedScratchMemory(b, writeCommits);
   }
@@ -439,12 +465,15 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
   if (hasWGMMA(module)) {
     assert(!bufValues[(int)MemType::SHARED_MEM].empty());
     unsigned int warps = lookupNumWarps(b.getBlock()->getParentOp());
-    wgmmaCommitsType = RankedTensorType::get(
-        {(long)bufValues[(int)MemType::SHARED_MEM].size()}, b.getIntegerType(8),
+    wgmmaCommitsType = OnDemandTensorType{
+        {static_cast<int64_t>(bufValues[(int)MemType::SHARED_MEM].size())}, 8};
+    RankedTensorType _wgmmaCommitsInitTy = RankedTensorType::get(
+        {static_cast<long>(bufValues[(int)MemType::SHARED_MEM].size())},
+        b.getIntegerType(8),
         getThreadLocalBlockedEncoding(
             b.getContext(), bufValues[(int)MemType::SHARED_MEM].size(), warps));
     TypedValue<RankedTensorType> readCommits =
-        createConstIntTensor(b, b.getLoc(), 0, wgmmaCommitsType);
+        createConstIntTensor(b, b.getLoc(), 0, _wgmmaCommitsInitTy);
     wgmmaCommits[entryRegion] = createInitializedScratchMemory(b, readCommits);
   }
 }

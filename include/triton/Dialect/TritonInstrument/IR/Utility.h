@@ -47,22 +47,29 @@ struct AuxDataMap {
   RegionToValueMap buffers[numMemTypes];
   RegionToValueMap barriers;
 
-  RankedTensorType writeVisibilityType[numMemTypes];
+  struct OnDemandTensorType {
+    SmallVector<int64_t, 2> shape;
+    unsigned bitWidth = 0;
+    RankedTensorType operator()(Operation *op) const;
+    bool empty() const { return shape.empty() || bitWidth == 0; }
+  };
+
+  OnDemandTensorType writeVisibilityType[numMemTypes];
   RegionToValueMap writeVisibility[numMemTypes];
 
-  RankedTensorType writeTrackingType[numMemTypes];
+  OnDemandTensorType writeTrackingType[numMemTypes];
   RegionToValueMap writeTracking[numMemTypes];
 
-  RankedTensorType readVisibilityType[numMemTypes];
+  OnDemandTensorType readVisibilityType[numMemTypes];
   RegionToValueMap readVisibility[numMemTypes];
 
-  RankedTensorType readTrackingType[numMemTypes];
+  OnDemandTensorType readTrackingType[numMemTypes];
   RegionToValueMap readTracking[numMemTypes];
 
-  RankedTensorType asyncCpCommitsType;
+  OnDemandTensorType asyncCpCommitsType;
   RegionToValueMap asyncCpCommits;
 
-  RankedTensorType wgmmaCommitsType;
+  OnDemandTensorType wgmmaCommitsType;
   RegionToValueMap wgmmaCommits;
 
   RegionToValueMap lock;
