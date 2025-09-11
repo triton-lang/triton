@@ -479,3 +479,35 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path):
     names = {c["frame"]["name"] for c in children}
     expected = {f"{t}_{i}" for t in thread_names for i in range(N)}
     assert names == expected
+
+
+def test_nvtx_range_push_pop(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_nvtx_range_push_pop.hatchet"
+    proton.start(str(temp_file.with_suffix("")))
+
+    with proton.scope("proton_scope"):
+        torch.cuda.nvtx.range_push("nvtx_range0")
+        torch.cuda.nvtx.range_push("nvtx_range1")
+        torch.ones((1, ), device="cuda")
+        torch.cuda.nvtx.range_pop()
+        torch.cuda.nvtx.range_pop()
+
+    proton.finalize()
+
+    with temp_file.open() as f:
+        data = json.load(f)
+
+    children = data[0]["children"]
+    assert len(children) == 1
+    proton_scope = children[0]
+    assert proton_scope["frame"]["name"] == "proton_scope"
+    assert len(proton_scope["children"]) == 1
+    nvtx_range0 = proton_scope["children"][0]
+    assert nvtx_range0["frame"]["name"] == "nvtx_range0"
+    assert len(nvtx_range0["children"]) == 1
+    nvtx_range1 = nvtx_range0["children"][0]
+    assert nvtx_range1["frame"]["name"] == "nvtx_range1"
+    assert len(nvtx_range1["children"]) == 1
+    kernel = nvtx_range1["children"][0]
+    assert "elementwise" in kernel["frame"]["name"]
+    assert kernel["metrics"]["count"] == 1
