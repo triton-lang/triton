@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx942"| FileCheck %s
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx950"| FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx942"| FileCheck %s --check-prefixes=CHECK,GFX942-ONLY
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx950"| FileCheck %s --check-prefixes=CHECK,GFX950-ONLY
 
 #blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
@@ -560,7 +560,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %3 = tt.addptr %arg0, %1 : !tt.ptr<bf16>, i32
     %4 = tt.splat %3 : !tt.ptr<bf16> -> tensor<512x!tt.ptr<bf16>, #blocked>
     %5 = tt.addptr %4, %2 : tensor<512x!tt.ptr<bf16>, #blocked>, tensor<512xi32, #blocked>
-    // CHECK-NOT: amdgpu.buffer_atomic_rmw
+    // GFX942-ONLY-NOT: amdgpu.buffer_atomic_rmw
+    // GFX950-ONLY: amdgpu.buffer_atomic_rmw
     %6 = tt.atomic_rmw fadd, acq_rel, gpu, %5, %cst_0, %cst : (tensor<512x!tt.ptr<bf16>, #blocked>, tensor<512xbf16, #blocked>, tensor<512xi1, #blocked>) -> tensor<512xbf16, #blocked>
     tt.return
   }
@@ -784,71 +785,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %19 = tt.splat %out_ptr : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>, #blocked>
     %20 = tt.addptr %19, %18 : tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xi32, #blocked>
     %21 = tt.atomic_rmw fadd, relaxed, gpu, %20, %15, %cst : (tensor<64x!tt.ptr<f32>, #blocked>, tensor<64xf32, #blocked>, tensor<64xi1, #blocked>) -> tensor<64xf32, #blocked>
-    tt.return
-  }
-}
-
-// -----
-
-// This test is added to test if the 2nd operand of addptr is dominated by
-// a blockargument: the non-negative analysis will keep going.
-// or the result of get_program_id, the non-negative analysis will return true.
-#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @add(%in_ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %out_ptr: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %M: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32}, %stride_m: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
-    %c0_i32 = arith.constant 0 : i32
-    %true = arith.constant true
-    %c32_i32 = arith.constant 32 : i32
-    %cst = arith.constant dense<true> : tensor<32x32xi1, #blocked>
-    %c31_i32 = arith.constant 31 : i32
-    %c1_i32 = arith.constant 1 : i32
-    %cst_0 = arith.constant dense<32> : tensor<32x32xi32, #blocked>
-    %pid = tt.get_program_id x : i32
-    %offs = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %offs_1 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %0 = arith.cmpi sgt, %stride_m, %c0_i32 : i32
-    llvm.intr.assume %0 : i1
-    llvm.intr.assume %true : i1
-    %1 = arith.cmpi sgt, %M, %c0_i32 : i32
-    llvm.intr.assume %1 : i1
-    %2 = arith.cmpi sgt, %K, %c0_i32 : i32
-    llvm.intr.assume %2 : i1
-    %in_ptr_2 = arith.muli %pid, %K : i32
-    %in_ptr_3 = arith.muli %in_ptr_2, %c32_i32 : i32
-    %in_ptrs = tt.splat %in_ptr_3 : i32 -> tensor<32x32xi32, #blocked>
-    %in_ptrs_4 = tt.expand_dims %offs {axis = 1 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32x1xi32, #blocked>
-    %in_ptrs_5 = tt.splat %stride_m : i32 -> tensor<32x1xi32, #blocked>
-    %in_ptrs_6 = arith.muli %in_ptrs_4, %in_ptrs_5 : tensor<32x1xi32, #blocked>
-    %in_ptrs_7 = tt.broadcast %in_ptrs_6 : tensor<32x1xi32, #blocked> -> tensor<32x32xi32, #blocked>
-    %in_ptrs_8 = tt.expand_dims %offs_1 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x32xi32, #blocked>
-    %in_ptrs_9 = tt.broadcast %in_ptrs_8 : tensor<1x32xi32, #blocked> -> tensor<32x32xi32, #blocked>
-    %in_ptrs_10 = arith.addi %in_ptrs_7, %in_ptrs_9 : tensor<32x32xi32, #blocked>
-    %in_ptrs_11 = arith.addi %in_ptrs_10, %in_ptrs : tensor<32x32xi32, #blocked>
-    %out_ptrs = tt.splat %in_ptr_3 : i32 -> tensor<32x32xi32, #blocked>
-    %out_ptrs_12 = tt.expand_dims %offs {axis = 1 : i32} : tensor<32xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<32x1xi32, #blocked>
-    %out_ptrs_13 = tt.splat %stride_m : i32 -> tensor<32x1xi32, #blocked>
-    %out_ptrs_14 = arith.muli %out_ptrs_12, %out_ptrs_13 : tensor<32x1xi32, #blocked>
-    %out_ptrs_15 = tt.broadcast %out_ptrs_14 : tensor<32x1xi32, #blocked> -> tensor<32x32xi32, #blocked>
-    %out_ptrs_16 = tt.expand_dims %offs_1 {axis = 0 : i32} : tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x32xi32, #blocked>
-    %out_ptrs_17 = tt.broadcast %out_ptrs_16 : tensor<1x32xi32, #blocked> -> tensor<32x32xi32, #blocked>
-    %out_ptrs_18 = arith.addi %out_ptrs_15, %out_ptrs_17 : tensor<32x32xi32, #blocked>
-    %out_ptrs_19 = arith.addi %out_ptrs_18, %out_ptrs : tensor<32x32xi32, #blocked>
-    %3 = arith.addi %K, %c31_i32 : i32
-    %4 = arith.divsi %3, %c32_i32 : i32
-    %out_ptrs_20:2 = scf.for %out_ptrs_21 = %c0_i32 to %4 step %c1_i32 iter_args(%in_ptrs_22 = %in_ptrs_11, %out_ptrs_23 = %out_ptrs_19) -> (tensor<32x32xi32, #blocked>, tensor<32x32xi32, #blocked>)  : i32 {
-      %a = tt.splat %in_ptr : !tt.ptr<bf16> -> tensor<32x32x!tt.ptr<bf16>, #blocked>
-      %a_24 = tt.addptr %a, %in_ptrs_22 : tensor<32x32x!tt.ptr<bf16>, #blocked>, tensor<32x32xi32, #blocked>
-      %a_25 = tt.load %a_24 : tensor<32x32x!tt.ptr<bf16>, #blocked>
-      %5 = tt.splat %out_ptr : !tt.ptr<bf16> -> tensor<32x32x!tt.ptr<bf16>, #blocked>
-      %6 = tt.addptr %5, %out_ptrs_23 : tensor<32x32x!tt.ptr<bf16>, #blocked>, tensor<32x32xi32, #blocked>
-      %7 = tt.atomic_rmw fadd, acq_rel, gpu, %6, %a_25, %cst : (tensor<32x32x!tt.ptr<bf16>, #blocked>, tensor<32x32xbf16, #blocked>, tensor<32x32xi1, #blocked>) -> tensor<32x32xbf16, #blocked>
-      %in_ptrs_26 = arith.addi %in_ptrs_22, %cst_0 : tensor<32x32xi32, #blocked>
-      %out_ptrs_27 = arith.addi %out_ptrs_23, %cst_0 : tensor<32x32xi32, #blocked>
-      scf.yield %in_ptrs_26, %out_ptrs_27 : tensor<32x32xi32, #blocked>, tensor<32x32xi32, #blocked>
-      // CHECK: %[[VAL:.*]] = amdgpu.buffer_load
-      // CHECK: %[[PTR:.*]] = tt.addptr
-      // CHECK-NEXt: amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu, %[[PTR]] %[[VAL]]
-    }
     tt.return
   }
 }

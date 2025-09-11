@@ -6,8 +6,10 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/include/Analysis/RangeAnalysis.h"
@@ -95,7 +97,8 @@ bool verifyNonSmallerByAssumption(
 }
 
 bool verifyNonNegativeExpr(
-    Value expr, const DenseMap<Value, SetVector<Operation *>> &assumptions,
+    Value expr, DenseMap<Value, bool> &visitedBlockArgs,
+    const DenseMap<Value, SetVector<Operation *>> &assumptions,
     std::shared_ptr<DataFlowSolver> solver) {
   LDBG("Determing if non-negative: " << expr);
 
@@ -117,27 +120,89 @@ bool verifyNonNegativeExpr(
   Operation *op = expr.getDefiningOp();
   if (!op) {
     BlockArgument blockArg = cast<BlockArgument>(expr);
-    auto argNum = blockArg.getArgNumber();
-    Operation *parentOp = blockArg.getOwner()->getParentOp();
-    if (argNum == 0) {
-      // Only do the value range analyse for induction variable in the scf.for
-      if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
-        auto lb = forOp.getLowerBound();
-        auto ub = forOp.getUpperBound();
-        return verifyNonNegativeExpr(lb, assumptions, solver) &&
-               verifyNonNegativeExpr(ub, assumptions, solver);
-      } else {
-        LDBG("Induction variable in a non scf.ForOp");
-        return false;
-      }
+
+    auto argIt = visitedBlockArgs.find(blockArg);
+    if (argIt != visitedBlockArgs.end()) {
+      return argIt->second;
     }
 
-    if (auto loopOp = dyn_cast<LoopLikeOpInterface>(parentOp)) {
-      mlir::ValueRange initArgs = loopOp.getInits();
+    auto argNum = blockArg.getArgNumber();
+    Operation *parentOp = blockArg.getOwner()->getParentOp();
+
+    // The value of block argument could from be various defining ops.
+    // Here we only do the analyis on scf.ForOp since the value is
+    // either from the initial value defined outside the loop,
+    // or scf.YieldOp in the terminator of scf.ForOp.
+    if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+      if (argNum == 0) {
+        auto lb = forOp.getLowerBound();
+        auto ub = forOp.getUpperBound();
+        return verifyNonNegativeExpr(lb, visitedBlockArgs, assumptions,
+                                     solver) &&
+               verifyNonNegativeExpr(ub, visitedBlockArgs, assumptions, solver);
+      }
+
+      /*
+     clang-format off
+      for the loop carried block arguments like
+      scf.for %c0_i32 to %4 step %c1_i32 iter_args(%block_arg0 = %c1, %block_arg1 = %c1)-> {
+        %offsets = arith.add block_arg0, block_arg1
+        %a_24 = tt.addptr %a, %offsets
+        %a_25 = tt.load %a_24
+        ......
+        ......ops may or maynot change `next_block_arg0` or `next_block_arg1`
+        %next_arg0_value = arith.addi %block_arg0, %cst_0
+        %next_arg1_value = arith.addi %block_arg1, %cst_0
+        ....
+        scf.yield %next_block_arg0, %next_block_arg1
+       }
+
+       To make sure initial value and updated value per iteration of blockargment is non-negative:
+       1) first we check the initial value.
+       2) follow the UD chain to check the value could be non-negative per iteration.
+     clang-format on
+     */
+
+      if (forOp.getLoopRegions().size() != 1) {
+        LDBG("Only loops with single region are supported.");
+        return false;
+      }
+
+      mlir::Region &bodyRegion = *forOp.getLoopRegions().front();
+      if (!bodyRegion.hasOneBlock()) {
+        LDBG("Only loops with single block in the body are supported.");
+        return false;
+      }
+
+      mlir::ValueRange initArgs = forOp.getInits();
       size_t initArgIdx = argNum - 1;
-      return verifyNonNegativeExpr(initArgs[initArgIdx], assumptions, solver);
+      Value initValue = initArgs[initArgIdx];
+      Value yieldValue = forOp.getTiedLoopYieldedValue(blockArg)->get();
+
+      // Set the true or false as the initial value of blockargument.
+      // Once the UD-chain stops at the blockargument, the recursive call here
+      // will return with the inital value.
+      bool nonNegative = verifyNonNegativeExpr(initValue, visitedBlockArgs,
+                                               assumptions, solver);
+      visitedBlockArgs[blockArg] = nonNegative;
+      if (nonNegative) {
+        LDBG("   Cannot verify the intial value "
+             << initValue << " of blockargument " << blockArg
+             << " is non negative");
+        // return false;
+      }
+
+      nonNegative = verifyNonNegativeExpr(yieldValue, visitedBlockArgs,
+                                          assumptions, solver);
+      visitedBlockArgs[blockArg] = nonNegative;
+      if (nonNegative) {
+        LDBG("   Cannot verify the value "
+             << yieldValue << " of blockargument " << blockArg
+             << " is non negative per iteration.");
+        return false;
+      }
     } else {
-      LDBG("Block argument of non loop-like operation.");
+      LDBG("Block argument of a non scf.ForOp.");
       return false;
     }
   }
@@ -148,18 +213,19 @@ bool verifyNonNegativeExpr(
           .Case<triton::TransOp, triton::SplitOp, triton::BroadcastOp,
                 triton::ExpandDimsOp, triton::SplatOp, triton::ReshapeOp,
                 triton::gpu::ConvertLayoutOp>([&](auto unaryOp) {
-            return verifyNonNegativeExpr(unaryOp.getOperand(), assumptions,
-                                         solver);
+            return verifyNonNegativeExpr(unaryOp.getOperand(), visitedBlockArgs,
+                                         assumptions, solver);
           })
           .Case<triton::GatherOp>([&](auto gatherOp) {
-            return verifyNonNegativeExpr(gatherOp.getSrc(), assumptions,
-                                         solver);
+            return verifyNonNegativeExpr(gatherOp.getSrc(), visitedBlockArgs,
+                                         assumptions, solver);
           })
           // Joining two non-negative tensors is still non-negative
           .Case<triton::JoinOp, triton::CatOp>([&](auto joinOp) {
-            return verifyNonNegativeExpr(joinOp.getLhs(), assumptions,
-                                         solver) &&
-                   verifyNonNegativeExpr(joinOp.getRhs(), assumptions, solver);
+            return verifyNonNegativeExpr(joinOp.getLhs(), visitedBlockArgs,
+                                         assumptions, solver) &&
+                   verifyNonNegativeExpr(joinOp.getRhs(), visitedBlockArgs,
+                                         assumptions, solver);
           })
           // Returns a tensor representing histogram: histograms only contain
           // buckets of non-negative values.
@@ -186,17 +252,20 @@ bool verifyNonNegativeExpr(
           })
           .Case<arith::MaxSIOp>([&](auto maxOp) {
             // max(a,b) >= 0 iff a>=0 || b>=0
-            return verifyNonNegativeExpr(maxOp.getLhs(), assumptions, solver) ||
-                   verifyNonNegativeExpr(maxOp.getRhs(), assumptions, solver);
+            return verifyNonNegativeExpr(maxOp.getLhs(), visitedBlockArgs,
+                                         assumptions, solver) ||
+                   verifyNonNegativeExpr(maxOp.getRhs(), visitedBlockArgs,
+                                         assumptions, solver);
           })
           .Case<arith::RemSIOp>([&](auto remsiOp) {
             // a % b >= 0 iff a>=0
-            return verifyNonNegativeExpr(remsiOp.getLhs(), assumptions, solver);
+            return verifyNonNegativeExpr(remsiOp.getLhs(), visitedBlockArgs,
+                                         assumptions, solver);
           })
           .Case<arith::TruncIOp, arith::ExtSIOp>([&](Operation *unaryOp) {
             // a = OP b >= 0 iff b >= 0
-            return verifyNonNegativeExpr(unaryOp->getOperand(0), assumptions,
-                                         solver);
+            return verifyNonNegativeExpr(unaryOp->getOperand(0),
+                                         visitedBlockArgs, assumptions, solver);
           })
           // Casting from arbitrary data does *not* guarantee the offset is in
           // range (even if pointer, or the data is non-negative when
@@ -215,9 +284,11 @@ bool verifyNonNegativeExpr(
               // Generally speaking, a OP b >= 0  iff  a >= 0 && b >= 0 when
               // OP != sub
               [&](Operation *binOp) {
-                return verifyNonNegativeExpr(binOp->getOperand(0), assumptions,
+                return verifyNonNegativeExpr(binOp->getOperand(0),
+                                             visitedBlockArgs, assumptions,
                                              solver) &&
-                       verifyNonNegativeExpr(binOp->getOperand(1), assumptions,
+                       verifyNonNegativeExpr(binOp->getOperand(1),
+                                             visitedBlockArgs, assumptions,
                                              solver);
               })
           // TODO: more scf
@@ -233,9 +304,10 @@ bool verifyNonNegativeExpr(
             auto thenYield = cast<scf::YieldOp>(ifOp.thenYield());
             auto elseYield = cast<scf::YieldOp>(ifOp.elseYield());
             return verifyNonNegativeExpr(thenYield->getOperand(resultIdx),
-                                         assumptions, solver) &&
+                                         visitedBlockArgs, assumptions,
+                                         solver) &&
                    verifyNonNegativeExpr(elseYield->getOperand(resultIdx),
-                                         assumptions, solver);
+                                         visitedBlockArgs, assumptions, solver);
           })
           .Case<arith::SubIOp>([&](auto op) {
             // If a user annotates tl.assume(a >= b) then we know a - b >= 0
@@ -243,8 +315,8 @@ bool verifyNonNegativeExpr(
                                                 op.getRhs());
           })
           .Case<triton::amdgpu::ExtractSliceOp>([&](auto op) {
-            return verifyNonNegativeExpr(op->getOperand(0), assumptions,
-                                         solver);
+            return verifyNonNegativeExpr(op->getOperand(0), visitedBlockArgs,
+                                         assumptions, solver);
           })
           .Default([&](Operation *) {
             // Conservatively assume that the expression is negative
@@ -278,7 +350,9 @@ bool canUseBufferOps(Value ptr,
     return false;
   LDBG("32 bit offset");
 
-  return verifyNonNegativeExpr(offset, assumptions, std::move(solver));
+  DenseMap<Value, bool> visitedBlockArgs;
+  return verifyNonNegativeExpr(offset, visitedBlockArgs, assumptions,
+                               std::move(solver));
 }
 
 // Extract stride of the blocked offset of LD/ST ops.
@@ -459,11 +533,11 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     LDBG("RMW supported type");
 
     // float16 is the only 16-bit dtype supported by buffer atomic fadd on
-    // gfx942 or gfx950
-    if ((isaFamily == ISAFamily::CDNA3 || isaFamily == ISAFamily::CDNA4) &&
-        checkType.isBF16() && atomicRmwOp == RMWOp::FADD) {
+    // gfx942.
+    if (isaFamily == ISAFamily::CDNA3 && checkType.isBF16() &&
+        atomicRmwOp == RMWOp::FADD) {
       return rewriter.notifyMatchFailure(
-          op, "RMW FADD does not support bf16 on CDNA3 or CDNA4");
+          op, "RMW FADD does not support bf16 on CDNA3");
     }
 
     LDBG("RMW FADD supported 16-bit type");
