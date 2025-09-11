@@ -262,6 +262,26 @@ export TRITON_OVERRIDE_DIR=<override_dir>
 # Step 4: Run the kernel again to see the overridden result
 ```
 
+**Compiler Pipeline Inspection Steps**
+```bash
+# To introspect the pipeline add_stages, set the following environments:
+export TRITON_ALWAYS_COMPILE=1
+export TRITON_INSPECT_PASS_STAGES=1
+```
+
+And provide a hook like so:
+
+```python
+
+def inspect_stages(_self, stages, options, language, capability):
+    # inspect
+
+triton.knobs.runtime.add_stages_inspection_hook = inspect_stages
+
+```
+
+before running your kernels.
+
 
 # Changelog
 
