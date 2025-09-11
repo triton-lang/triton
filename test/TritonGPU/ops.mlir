@@ -257,3 +257,20 @@ tt.func @async_commit_group(%arg0: !ttg.async.token) {
   %1 = ttg.async_commit_group
   tt.return
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 2], warpsPerCTA = [1, 1], order = [1, 0]}>
+#shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [2, 2]]}, alignment = 16>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.threads-per-warp" = 4 : i32, "ttg.num-warps" = 1 : i32} {
+  tt.func @round_trip(%arg0: tensor<4x4xf32, #blocked>) -> tensor<4x4xf32, #blocked> {
+    // CHECK: ttg.local_alloc
+    // CHECK-SAME: !ttg.memdesc<4x4xf32, #shared
+    %alloc = ttg.local_alloc %arg0 : (tensor<4x4xf32, #blocked>) -> !ttg.memdesc<4x4xf32, #shared, #smem, mutable>
+    ttg.local_store %arg0, %alloc : tensor<4x4xf32, #blocked> -> !ttg.memdesc<4x4xf32, #shared, #smem, mutable>
+    %loaded = ttg.local_load %alloc : !ttg.memdesc<4x4xf32, #shared, #smem, mutable> -> tensor<4x4xf32, #blocked>
+    tt.return %loaded : tensor<4x4xf32, #blocked>
+  }
+}

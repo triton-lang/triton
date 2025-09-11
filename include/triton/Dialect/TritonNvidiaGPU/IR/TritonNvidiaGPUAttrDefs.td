@@ -36,14 +36,16 @@ def TTG_TensorMemoryEncodingAttr : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemor
   let attrName = "triton.gpu.tensor_memory_encoding";
   let description = [{
     An encoding to represent the different way the tensor memory is laid out.
-    `unpacked` attributes indicates whether types smaller than 32bits are unpacked (take full 32bits)
-    or are packed (N elements are stored within one 32bits row).
+    `colStride` describes the stride in elements along the column dimension,
+    that is, the stride between two elements in the same row.
+    When colStride is 1 the tensor memory is packed. When colStride > 1, the
+    tensor memory between elements is undefined.
   }];
   let parameters = (
     ins
     "unsigned":$blockM,
     "unsigned":$blockN,
-    "bool":$unpacked,
+    "unsigned":$colStride,
     DefaultValuedParameter<"unsigned", "1">:$CTASplitM,
     DefaultValuedParameter<"unsigned", "1">:$CTASplitN
   );

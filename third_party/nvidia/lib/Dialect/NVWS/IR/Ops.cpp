@@ -163,4 +163,9 @@ void CreateTokenOp::build(::mlir::OpBuilder &builder,
   build(builder, state, resultType, num, loadType);
 }
 
+void ArefPutEnterOp::setStage(Value stage) { getStageMutable().assign(stage); }
+void ArefPutExitOp::setStage(Value stage) { getStageMutable().assign(stage); }
+void ArefGetExitOp::setStage(Value stage) { getStageMutable().assign(stage); }
+void ArefGetEnterOp::setStage(Value stage) { getStageMutable().assign(stage); }
+
 } // namespace mlir::triton::nvws

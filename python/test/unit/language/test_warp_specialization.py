@@ -60,7 +60,7 @@ def test_warp_specialize_tmem_ir(tmp_path: pathlib.Path):
     ir = """
     #blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
     #shared = #ttg.swizzled_shared<{vec=1, perPhase=1, maxPhase=1, order=[1, 0]}>
-    #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
+    #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 
     module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
 

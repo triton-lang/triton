@@ -134,10 +134,17 @@ public:
         CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
-  TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN, bool unpacked,
-                                unsigned ctaSplitM, unsigned ctaSplitN) {
-    return TensorMemoryEncodingAttr::get(&ctx, blockM, blockN, unpacked,
+  TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN,
+                                unsigned colStride, unsigned ctaSplitM,
+                                unsigned ctaSplitN) {
+    return TensorMemoryEncodingAttr::get(&ctx, blockM, blockN, colStride,
                                          ctaSplitM, ctaSplitN);
+  }
+
+  TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN,
+                                unsigned ctaSplitM, unsigned ctaSplitN) {
+    // TODO Test colStride > 1
+    return tmem(blockM, blockN, 1, ctaSplitM, ctaSplitN);
   }
 
   StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }
@@ -3510,7 +3517,7 @@ TEST_F(LinearLayoutConversionsTest, MMAv5Fp4Padded) {
 }
 
 TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_64) {
-  auto enc = tmem(64, 64, /*unpacked=*/true, 1, 1);
+  auto enc = tmem(64, 64, 1, 1);
   auto d0 = S("dim0");
   auto d1 = S("dim1");
   auto kRow = S("row");
@@ -3543,7 +3550,7 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_64) {
 }
 
 TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_128) {
-  auto enc = tmem(128, 128, /*unpacked=*/true, 1, 1);
+  auto enc = tmem(128, 128, 1, 1);
   auto d0 = S("dim0");
   auto d1 = S("dim1");
   auto kRow = S("row");
@@ -3558,53 +3565,123 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_128) {
                 LinearLayout::identity1D(2, kCol, d1));
 }
 
-TEST_F(LinearLayoutConversionsTest, TensorMemory_Packed) {
-  auto d0 = S("dim0");
-  auto d1 = S("dim1");
-  auto rows = S("rows");
-  auto cols = S("cols");
-  auto enc = tmem(128, 128, /*unpacked*/ false, 1, 1);
-  auto encUnpacked = tmem(128, 128, /*unpacked*/ true, 1, 1);
-  // Packed and unpacked map to the same layout
-  // Packing is modelled as setting the M/N slot size to bitwidth=16
-  EXPECT_EQ(toLinearLayout({128, 256}, enc),
-            toLinearLayout({128, 256}, encUnpacked));
-  EXPECT_EQ(toLinearLayout({256, 256}, enc),
-            toLinearLayout({256, 256}, encUnpacked));
-  EXPECT_EQ(toLinearLayout({128, 512}, enc),
-            toLinearLayout({128, 512}, encUnpacked));
-  EXPECT_EQ(toLinearLayout({256, 512}, enc),
-            toLinearLayout({256, 512}, encUnpacked));
-}
-
 TEST_F(LinearLayoutConversionsTest, TensorMemory_CTASplit) {
   auto d0 = S("dim0");
   auto d1 = S("dim1");
   auto kRow = S("row");
   auto kCol = S("col");
-  auto enc = tmem(64, 128, /*unpacked*/ true, 2, 1);
-  auto enc1 = tmem(64, 128, /*unpacked*/ true, 1, 1);
+  auto enc = tmem(64, 128, 2, 1);
+  auto enc1 = tmem(64, 128, 1, 1);
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
             toLinearLayout({64, 128}, enc1) *
                 LinearLayout::identity1D(2, kCol, d0));
-  enc = tmem(128, 64, /*unpacked*/ true, 1, 2);
-  enc1 = tmem(128, 64, /*unpacked*/ true, 1, 1);
+  enc = tmem(128, 64, 1, 2);
+  enc1 = tmem(128, 64, 1, 1);
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
             toLinearLayout({128, 64}, enc1) *
                 LinearLayout::identity1D(2, kCol, d1));
-  enc = tmem(64, 64, /*unpacked*/ true, 2, 2);
-  enc1 = tmem(64, 64, /*unpacked*/ true, 1, 1);
+  enc = tmem(64, 64, 2, 2);
+  enc1 = tmem(64, 64, 1, 1);
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
             toLinearLayout({64, 64}, enc1) *
                 LinearLayout::identity1D(2, kCol, d0) *
                 LinearLayout::identity1D(2, kCol, d1));
   // The non-contiguous tile stays non-contiguous even in the multiCTA setup
-  auto noncontigTile =
-      toLinearLayout({64, 64}, tmem(64, 64, /*unpacked*/ true, 1, 1));
-  auto noncontigEnc = tmem(64, 64, /*unpacked*/ true, 2, 2);
+  auto noncontigTile = toLinearLayout({64, 64}, tmem(64, 64, 1, 1));
+  auto noncontigEnc = tmem(64, 64, 2, 2);
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
             noncontigTile * LinearLayout::identity1D(2, kCol, d0) *
                 LinearLayout::identity1D(2, kCol, d1));
+}
+
+// Tests for SM120 DotScaled Scale Layout
+TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_AScale_Basic) {
+  // Test basic A-scale (per-row) layout for SM120
+  // dotOperandIdx = 0 (A-scale), shape = [128, 32], tilesPerWarp = [1, 1],
+  // warpsPerCTA = [4, 1], instrM = 16, instrN = 8
+  auto layout = getSM120DotScaledScaleLayout(
+      &ctx, /*dotOperandIdx=*/0, /*dotOperandShape=*/{128, 32},
+      /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{4, 1},
+      /*mmaInstrM=*/16, /*mmaInstrN=*/8,
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
+
+  auto ll = LinearLayout(
+      {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {64, 0}}},
+       {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
+       {S("warp"), {{16, 0}, {32, 0}}},
+       {S("block"), {}}},
+      {S("dim0"), S("dim1")});
+
+  EXPECT_EQ(ll, layout);
+}
+
+TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_BScale_Basic) {
+  // Test basic B-scale (per-col) layout for SM120
+  // dotOperandIdx = 1 (B-scale), shape = [32, 128], tilesPerWarp = [1, 1],
+  // warpsPerCTA = [1, 4], instrM = 16, instrN = 8
+  auto layout = getSM120DotScaledScaleLayout(
+      &ctx, /*dotOperandIdx=*/1, /*dotOperandShape=*/{32, 128},
+      /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{1, 4},
+      /*mmaInstrM=*/16, /*mmaInstrN=*/8,
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
+  auto ll = LinearLayout(
+      {{S("register"),
+        {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 32}, {0, 64}}},
+       {S("lane"), {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
+       {S("warp"), {{8, 0}, {16, 0}}},
+       {S("block"), {}}},
+      {S("dim0"), S("dim1")});
+
+  EXPECT_EQ(ll, layout);
+}
+
+TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_MultiWarp) {
+  // Test with multiple warps configuration
+  // A-scale with 2x2 warp layout
+  auto layout = getSM120DotScaledScaleLayout(
+      &ctx, /*dotOperandIdx=*/0, /*dotOperandShape=*/{256, 64},
+      /*tilesPerWarp=*/{2, 1}, /*warpsPerCTA=*/{2, 2},
+      /*mmaInstrM=*/16, /*mmaInstrN=*/8,
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
+  auto ll = LinearLayout({{S("register"),
+                           {{32, 0},
+                            {0, 1},
+                            {0, 2},
+                            {0, 4},
+                            {0, 8},
+                            {0, 16},
+                            {0, 32},
+                            {64, 0},
+                            {128, 0}}},
+                          {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
+                          {S("warp"), {{0, 0}, {16, 0}}},
+                          {S("block"), {}}},
+                         {S("dim0"), S("dim1")});
+
+  EXPECT_EQ(ll, layout);
+
+  layout = getSM120DotScaledScaleLayout(
+      &ctx, /*dotOperandIdx=*/1, /*dotOperandShape=*/{256, 64},
+      /*tilesPerWarp=*/{2, 1}, /*warpsPerCTA=*/{2, 2},
+      /*mmaInstrM=*/16, /*mmaInstrN=*/8,
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
+  ll = LinearLayout({{S("register"),
+                      {{0, 1},
+                       {0, 2},
+                       {0, 4},
+                       {0, 8},
+                       {0, 16},
+                       {0, 32},
+                       {16, 0},
+                       {32, 0},
+                       {64, 0},
+                       {128, 0}}},
+                     {S("lane"), {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
+                     {S("warp"), {{8, 0}, {0, 0}}},
+                     {S("block"), {}}},
+                    {S("dim0"), S("dim1")});
+
+  EXPECT_EQ(ll, layout);
 }
 
 } // anonymous namespace

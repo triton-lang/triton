@@ -2,11 +2,11 @@
 
 #include "AsyncUtility.h"
 #include "Utility.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTBUILTINFUNCTOLLVM
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
@@ -24,11 +24,7 @@ public:
   LogicalResult
   matchAndRewrite(LLVM::CallOp callOp,
                   mlir::PatternRewriter &rewriter) const override {
-    if (isPredicatedLoad(callOp)) {
-      return convertPredicatedLoad(callOp, rewriter);
-    } else if (isPredicatedStore(callOp)) {
-      return convertPredicatedStore(callOp, rewriter);
-    } else if (isWrappedLLVMIntrinsic(callOp)) {
+    if (isWrappedLLVMIntrinsic(callOp)) {
       return convertToLLVMIntrinsic(callOp, rewriter);
     } else {
       return failure();
@@ -36,15 +32,6 @@ public:
   }
 
 private:
-  bool isPredicatedLoad(LLVM::CallOp callOp) const {
-    return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoad);
-  }
-
-  bool isPredicatedStore(LLVM::CallOp callOp) const {
-    return callOp.getCallee().value().contains(
-        mlir::LLVM::AMD::predicatedStore);
-  }
-
   bool isWrappedLLVMIntrinsic(LLVM::CallOp callOp) const {
     if (std::optional<StringRef> callee = callOp.getCallee()) {
       if (callee.value().starts_with("__triton_hip_")) {
@@ -52,91 +39,6 @@ private:
       }
     }
     return false;
-  }
-
-  LogicalResult convertPredicatedStore(LLVM::CallOp callOp,
-                                       mlir::PatternRewriter &rewriter) const {
-    auto operands = callOp.getOperands();
-
-    auto loc = callOp.getLoc();
-    auto ptr = operands[0];
-    auto val = operands[1];
-    auto pred = operands[2];
-
-    Block *currentBlock = rewriter.getInsertionBlock();
-    Block *afterStore =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
-    Block *trueBlock = rewriter.createBlock(afterStore);
-    rewriter.setInsertionPointToEnd(currentBlock);
-    rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, afterStore);
-    rewriter.setInsertionPointToStart(trueBlock);
-    //               | vialatile | non-tmp | gcn instr gfx94
-    // LLVM::StoreOp | 0         | 0       | (cg) global store
-    //               | 0         | 1       | (cs) global store nt
-    //               | 1         | 0/1     | (wt) global store sc0 sc1
-    auto [volatileFlag, nonTmpFlag] =
-        mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(callOp);
-    int alignment = 0;
-    if (auto vecTy = dyn_cast<VectorType>(val.getType())) {
-      auto elemTy = vecTy.getElementType();
-      auto elemSizeInBytes = elemTy.getIntOrFloatBitWidth() / 8;
-      alignment = elemSizeInBytes * vecTy.getNumElements();
-    }
-
-    auto storeOp = rewriter.create<LLVM::StoreOp>(loc, val, ptr, alignment,
-                                                  volatileFlag, nonTmpFlag);
-    bool addAsyncAliasScopes =
-        callOp.getCallee().value().contains(mlir::LLVM::AMD::noAliasAsyncLoads);
-    if (addAsyncAliasScopes) {
-      AMD::addLocalLoadNoAliasScope(storeOp);
-    }
-    rewriter.create<LLVM::BrOp>(loc, afterStore);
-    rewriter.setInsertionPointToStart(afterStore);
-    rewriter.eraseOp(callOp);
-    return mlir::success();
-  }
-
-  LogicalResult convertPredicatedLoad(LLVM::CallOp callOp,
-                                      mlir::PatternRewriter &rewriter) const {
-    auto operands = callOp.getOperands();
-    auto result = callOp.getResult();
-
-    auto loc = callOp.getLoc();
-    auto elemTy = result.getType();
-    auto ptr = operands[0];
-    auto pred = operands[1];
-    auto falseVal = operands[2];
-
-    Block *currentBlock = rewriter.getInsertionBlock();
-    Block *afterLoad =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
-    afterLoad->addArgument({elemTy}, {loc});
-    Block *trueBlock = rewriter.createBlock(afterLoad);
-    Block *falseBlock =
-        rewriter.splitBlock(trueBlock, rewriter.getInsertionPoint());
-    rewriter.setInsertionPointToEnd(currentBlock);
-    rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, falseBlock);
-    rewriter.setInsertionPointToStart(trueBlock);
-    //              | vialatile | non-tmp | gcn instr gfx94
-    // LLVM::LoadOp | 0         | 0       | (ca) global load
-    //              | 0/1       | 1       | (cg) global load nt
-    //              | 1         | 0       | (cv) flat load sc0 sc1
-    auto [volatileFlag, nonTmpFlag] =
-        mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(callOp);
-    auto loadOp = rewriter.create<LLVM::LoadOp>(
-        loc, elemTy, ptr, /*alignment=*/0, volatileFlag, nonTmpFlag);
-    bool addAsyncNoAliasInfo =
-        callOp.getCallee().value().contains(mlir::LLVM::AMD::noAliasAsyncLoads);
-    if (addAsyncNoAliasInfo) {
-      AMD::addLocalLoadNoAliasScope(loadOp);
-    }
-    rewriter.create<LLVM::BrOp>(loc, loadOp->getResult(0), afterLoad);
-    rewriter.setInsertionPointToStart(falseBlock);
-    rewriter.create<LLVM::BrOp>(loc, falseVal, afterLoad);
-    rewriter.setInsertionPointToStart(afterLoad);
-    Value loadVal = afterLoad->getArgument(0);
-    rewriter.replaceOp(callOp, loadVal);
-    return mlir::success();
   }
 
   // Utility function to create fast exponential operation
@@ -253,7 +155,6 @@ struct ConvertBuiltinFuncToLLVM
 
     RewritePatternSet patterns(context);
     patterns.add<CallOpConversion>(context, this->ftz);
-
     if (mlir::applyPatternsGreedily(mod, std::move(patterns), config)
             .failed()) {
       signalPassFailure();
