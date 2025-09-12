@@ -325,13 +325,14 @@ def TTI_ExperimentalStageAccessForCommitOp : TTI_Op<"experimental_stage_access_f
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
+    I32Attr:$thread,
     TT_Tensor:$buffers,
     TT_PtrLike:$outstandingCommits,
     TypeAttr:$outstandingCommitsType,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `{` $buffers `,` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($outstandingCommits)
+    $buf `,` $thread `{` $buffers `,` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($outstandingCommits)
   }];
   let hasVerifier = 1;
 }
@@ -343,11 +344,12 @@ def TTI_ExperimentalCommitAccessesOp : TTI_Op<"experimental_commit_accesses", [M
     Change all the `-1` entries in outstandingCommits tensor to 1, signifying 1 outstanding commit.
   }];
   let arguments = (ins
+    I32Attr:$thread,
     TT_PtrLike:$outstandingCommits,
     TypeAttr:$outstandingCommitsType,
     Optional<I1>:$pred);
   let assemblyFormat = [{
-    `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($outstandingCommits)
+    $thread `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($outstandingCommits)
   }];
 }
 
@@ -357,12 +359,13 @@ def TTI_ExperimentalClearOutstandingCommitsOp : TTI_Op<"experimental_clear_outst
     Clear all the outstanding commits more distant than `outstandingNum` from the current thread.
   }];
   let arguments = (ins
+    I32Attr:$thread,
     TT_PtrLike:$outstandingCommits,
     TypeAttr:$outstandingCommitsType,
     I32Attr:$outstandingNum,
     Optional<I1>:$pred);
   let assemblyFormat = [{
-    `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $outstandingNum (`,` $pred^)? attr-dict `:` type($outstandingCommits)
+    $thread `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $outstandingNum (`,` $pred^)? attr-dict `:` type($outstandingCommits)
   }];
 }
 

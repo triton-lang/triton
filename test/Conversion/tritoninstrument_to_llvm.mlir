@@ -328,6 +328,7 @@ tt.func private @experimental_verify_read_visibility(
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [2, 16], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #smem = #ttg.shared_memory
 
@@ -339,7 +340,7 @@ tt.func private @experimental_stage_access_for_commit(
   %buffers: tensor<2xi64, #blocked>,
   %writeCommits: !tt.ptr<i8>
 ) {
-  tti.experimental_stage_access_for_commit %buf {%buffers, %writeCommits(tensor<2xi8, #blocked>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
+  tti.experimental_stage_access_for_commit %buf, 0{%buffers, %writeCommits(tensor<2x16xi8, #blocked2>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
   tt.return
 }
 }
@@ -347,6 +348,7 @@ tt.func private @experimental_stage_access_for_commit(
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [2, 16], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #smem = #ttg.shared_memory
 
@@ -358,7 +360,7 @@ tt.func private @experimental_check_outstanding_commits(
   %buffers: tensor<2xi64, #blocked>,
   %writeCommits: !tt.ptr<i8>
 ) {
-  tti.experimental_check_outstanding_commits %buf {%buffers, %writeCommits(tensor<2xi8, #blocked>)}, "dummy" : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
+  tti.experimental_check_outstanding_commits %buf{%buffers, %writeCommits(tensor<2x16xi8, #blocked2>)}, "dummy" : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i8>
   tt.return
 }
 }
@@ -366,6 +368,7 @@ tt.func private @experimental_check_outstanding_commits(
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [2, 16], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #smem = #ttg.shared_memory
 
@@ -375,7 +378,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 tt.func private @experimental_commit_accesses(
   %writeCommits: !tt.ptr<i8>
 ) {
-  tti.experimental_commit_accesses {%writeCommits(tensor<2xi8, #blocked>)} : !tt.ptr<i8>
+  tti.experimental_commit_accesses 0{%writeCommits(tensor<2x16xi8, #blocked2>)} : !tt.ptr<i8>
   tt.return
 }
 }
@@ -383,6 +386,7 @@ tt.func private @experimental_commit_accesses(
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [2, 16], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #smem = #ttg.shared_memory
 
@@ -392,7 +396,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 tt.func private @experimental_clear_outstanding_commits(
   %outstandingCommits: !tt.ptr<i8>
 ) {
-  tti.experimental_clear_outstanding_commits {%outstandingCommits(tensor<2xi8, #blocked>)}, 42 : !tt.ptr<i8>
+  tti.experimental_clear_outstanding_commits 0{%outstandingCommits(tensor<2x16xi8, #blocked2>)}, 42 : !tt.ptr<i8>
   tt.return
 }
 }
