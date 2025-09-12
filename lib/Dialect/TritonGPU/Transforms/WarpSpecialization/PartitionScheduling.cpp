@@ -350,7 +350,7 @@ void propagatePartitions(scf::ForOp loop, PartitionSet &partitions) {
         opClusters.getOrCreate(defOp)->sinkPartitions.insert(&partition);
       }
     };
-    iterateDefs(loop, &partition, defCallback);
+    partition.iterateDefs(loop, defCallback);
 
     // For each partition, place users of its outputs in a cluster if it is not
     // already assigned to a partition.
@@ -361,7 +361,7 @@ void propagatePartitions(scf::ForOp loop, PartitionSet &partitions) {
         opClusters.getOrCreate(user)->defPartitions.insert(&partition);
       }
     };
-    iterateUses(loop, &partition, useCallback);
+    partition.iterateUses(loop, useCallback);
   }
 
   // Now we have a pile of single-operation clusters directly adjacent to the
@@ -463,7 +463,7 @@ void propagatePartitions(scf::ForOp loop, PartitionSet &partitions) {
       if (opsInCluster.contains(defOp))
         critPath.insert(defOp);
     };
-    iterateDefs(loop, sinkPartition, callback);
+    sinkPartition->iterateDefs(loop, callback);
     for (unsigned i = 0; i < critPath.size(); ++i) {
       Operation *op = critPath[i];
       iterateDefs(loop, op, [&](OpResult def) {
@@ -526,7 +526,7 @@ void rematerializeBroadcasts(PartitionSet &partitions, OpOperand *use) {
 void optimizePartitions(scf::ForOp loop, PartitionSet &partitions) {
   for (Partition &partition : partitions.getPartitions()) {
     SmallVector<OpOperand *> uses;
-    iterateOutputs(loop, &partition, [&](Operation *defOp, OpOperand &use) {
+    partition.iterateOutputs(loop, [&](Operation *defOp, OpOperand &use) {
       if (!isa<scf::YieldOp>(use.getOwner()))
         uses.push_back(&use);
     });

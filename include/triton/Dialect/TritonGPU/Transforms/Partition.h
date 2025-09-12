@@ -40,6 +40,29 @@ public:
   ArrayRef<Operation *> getOps() const { return ops; }
   void addOp(Operation *op) { ops.push_back(op); }
 
+  // Iterate the inputs of the partition. Input values are those that originate
+  // from a different partition or a previous iteration of the current
+  // partition. E.g. partition B(i) may have inputs from A(i) or B(i-1). Note
+  // that the same value may be visited more than once.
+  void iterateInputs(scf::ForOp loop,
+                     function_ref<void(OpOperand &)> callback) const;
+  // Iterate the outputs of the partition. Output values are those that are
+  // consumed by a different partition or a future iteration of the current
+  // partition. E.g. partition A(i) may have outputs to B(i) or A(i+1). Note
+  // that the same value may be visited more than once.
+  void
+  iterateOutputs(scf::ForOp loop,
+                 function_ref<void(Operation *, OpOperand &)> callback) const;
+  // Iterate the defining ops of the inputs to the partition in the current and
+  // previous iterations, including the distance in the past.
+  void iterateDefs(scf::ForOp loop,
+                   function_ref<void(OpResult, unsigned)> callback) const;
+  // Iterate the uses of all outputs of the partition in the current iteration
+  // and in future iterations, including the distance in the future.
+  void iterateUses(
+      scf::ForOp loop,
+      function_ref<void(OpResult, OpOperand &, unsigned)> callback) const;
+
 private:
   void setIndex(int idx) { this->idx = idx; }
 
@@ -102,27 +125,6 @@ Partition *getPartition(Operation *op, PartitionSet &partitions);
 
 bool hasPartition(Operation *op);
 bool isInRootPartition(Operation *op, PartitionSet &partitions);
-
-// Iterate the inputs of the partition. Input values are those that originate
-// from a different partition or a previous iteration of the current
-// partition. E.g. partition B(i) may have inputs from A(i) or B(i-1). Note
-// that the same value may be visited more than once.
-void iterateInputs(scf::ForOp loop, const Partition *partition,
-                   function_ref<void(OpOperand &)> callback);
-// Iterate the outputs of the partition. Output values are those that are
-// consumed by a different partition or a future iteration of the current
-// partition. E.g. partition A(i) may have outputs to B(i) or A(i+1). Note
-// that the same value may be visited more than once.
-void iterateOutputs(scf::ForOp loop, const Partition *partition,
-                    function_ref<void(Operation *, OpOperand &)> callback);
-// Iterate the defining ops of the inputs to the partition in the current and
-// previous iterations, including the distance in the past.
-void iterateDefs(scf::ForOp loop, const Partition *partition,
-                 function_ref<void(OpResult, unsigned)> callback);
-// Iterate the uses of all outputs of the partition in the current iteration
-// and in future iterations, including the distance in the future.
-void iterateUses(scf::ForOp loop, const Partition *partition,
-                 function_ref<void(OpResult, OpOperand &, unsigned)> callback);
 
 } // namespace mlir::triton::gpu
 

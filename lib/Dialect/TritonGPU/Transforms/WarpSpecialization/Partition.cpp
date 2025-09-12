@@ -133,9 +133,9 @@ bool isInRootPartition(Operation *op, PartitionSet &partitions) {
   return !partitionIds || partitionIds->size() == partitions.getNumPartitions();
 }
 
-void iterateInputs(scf::ForOp loop, const Partition *partition,
-                   function_ref<void(OpOperand &)> callback) {
-  for (Operation *op : partition->getOps()) {
+void Partition::iterateInputs(scf::ForOp loop,
+                              function_ref<void(OpOperand &)> callback) const {
+  for (Operation *op : getOps()) {
     visitNestedOperands(op, [&](OpOperand &operand) {
       // Ignore implicit captures.
       Value value = operand.get();
@@ -151,7 +151,7 @@ void iterateInputs(scf::ForOp loop, const Partition *partition,
         assert(llvm::is_contained(loop.getRegionIterArgs(), arg));
         callback(operand);
       } else if (!partitionIds ||
-                 !llvm::is_contained(*partitionIds, partition->getIndex())) {
+                 !llvm::is_contained(*partitionIds, getIndex())) {
         // This value originates from a different partition in the same
         // iteration.
         assert(value.getDefiningOp()->getParentOp() == loop);
@@ -161,9 +161,10 @@ void iterateInputs(scf::ForOp loop, const Partition *partition,
   }
 }
 
-void iterateOutputs(scf::ForOp loop, const Partition *partition,
-                    function_ref<void(Operation *, OpOperand &)> callback) {
-  for (Operation *op : partition->getOps()) {
+void Partition::iterateOutputs(
+    scf::ForOp loop,
+    function_ref<void(Operation *, OpOperand &)> callback) const {
+  for (Operation *op : getOps()) {
     for (OpOperand &use : op->getUses()) {
       Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
       auto partitionIds = getPartitionIds(owner);
@@ -171,7 +172,7 @@ void iterateOutputs(scf::ForOp loop, const Partition *partition,
         // This value is used in a subsequent iteration.
         callback(owner, use);
       } else if (!partitionIds ||
-                 !llvm::is_contained(*partitionIds, partition->getIndex())) {
+                 !llvm::is_contained(*partitionIds, getIndex())) {
         // This value is used in a different partition in the same iteration.
         callback(owner, use);
       }
@@ -179,19 +180,20 @@ void iterateOutputs(scf::ForOp loop, const Partition *partition,
   }
 }
 
-void iterateDefs(scf::ForOp loop, const Partition *partition,
-                 function_ref<void(OpResult, unsigned)> callback) {
-  iterateInputs(loop, partition, [&](OpOperand &input) {
+void Partition::iterateDefs(
+    scf::ForOp loop, function_ref<void(OpResult, unsigned)> callback) const {
+  iterateInputs(loop, [&](OpOperand &input) {
     auto [def, distance] = getDefinitionAndDistance(loop, input.get());
     if (def && def.getParentBlock() == loop.getBody())
       callback(def, distance);
   });
 }
 
-void iterateUses(scf::ForOp loop, const Partition *partition,
-                 function_ref<void(OpResult, OpOperand &, unsigned)> callback) {
+void Partition::iterateUses(
+    scf::ForOp loop,
+    function_ref<void(OpResult, OpOperand &, unsigned)> callback) const {
   SmallVector<std::tuple<OpResult, OpOperand *, unsigned>> uses;
-  iterateOutputs(loop, partition, [&](Operation *owner, OpOperand &use) {
+  iterateOutputs(loop, [&](Operation *owner, OpOperand &use) {
     uses.emplace_back(cast<OpResult>(use.get()), &use, 0);
   });
   while (!uses.empty()) {
