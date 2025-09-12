@@ -369,7 +369,7 @@ def matmul_ogs(x, w, bias,
         x.numel() > 0 and x.storage.is_tma_compliant() and
         w.numel() > 0 and w.storage.is_tma_compliant() and
         (w_scale is None or w_scale.storage.is_tma_compliant()) and
-        (not is_ragged or (x.stride(-1) == 1 and w.stride(-1) == 1)) and
+        (not is_ragged or x.stride(-1) == 1) and
         # Currently we don't support tma if y is column major; may revisit later if this becomes an issue.
         (y is None or y.stride(-1) == 1)
     )
