@@ -65,7 +65,7 @@ jobs:
     - name: Checkout LLVM
       uses: actions/checkout@v4
       with:
-        repository: triton-lang/llvm-project
+        repository: llvm/llvm-project
         path: llvm-project
         ref: ${{ env.llvm_commit_hash }}
 
