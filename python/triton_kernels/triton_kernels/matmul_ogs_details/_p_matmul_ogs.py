@@ -82,7 +82,7 @@ def _p_matmul_ogs(
              Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
              YExpectedScale, YActualScale, YChecksumScale,
              stride_y_mx_k, stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
-             X, XPtr, stride_x_z, stride_x_m, stride_x_k,
+             X, XPtr, stride_x_z, stride_x_m, stride_x_k, X_TRANSPOSE: tl.constexpr,
              XScale,
              XMxScale, stride_x_mx_z, stride_x_mx_m, stride_x_mx_k,
              W, WPtr, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
@@ -287,8 +287,12 @@ def _p_matmul_ogs(
             if USE_GATHER_TMA:
                 x = X.gather(offs_x_m, off_k)
             elif X_TMA_MODE == "dense":
-                x = X.load([start_z, start_m + off_m, off_k])
-                x = x.reshape(BLOCK_M, BLOCK_K)
+                if X_TRANSPOSE:
+                    x = X.load([start_z, off_k, start_m + off_m])
+                    x = x.reshape(BLOCK_K, BLOCK_M).T
+                else:
+                    x = X.load([start_z, start_m + off_m, off_k])
+                    x = x.reshape(BLOCK_M, BLOCK_K)
             elif X_TMA_MODE == "ragged":
                 x = load_ragged(X, start_m, eM, [start_z, off_m, off_k], ragged_dim=1)
                 x = x.reshape(BLOCK_M, BLOCK_K)

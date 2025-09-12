@@ -159,6 +159,9 @@ class Case:
     split_k: int = 1
     hbm_swizzling: bool = False
     epilogue_subtile: Union[int, None] = None
+    x_transpose: bool = False
+    w_transpose: bool = False
+    y_transpose: bool = False
 
 
 @pytest.mark.parametrize(
@@ -252,6 +255,13 @@ class Case:
             Case(1000, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 3, 1),
             Case(600, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 4, 2),
             Case(600, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 4, 2, n_expt_shards=2),
+        ] + [
+            Case(320, 400, 400, mode, dtype, dtype, x_transpose=x_transpose, w_transpose=w_transpose, y_transpose=y_transpose)
+            for mode in ("batched", "ragged")
+            for dtype in ("float16", "float8_e5m2")
+            for x_transpose in (False, True)
+            for w_transpose in (False, True)
+            for y_transpose in (False, True)
         ]
     ],
 )
@@ -268,6 +278,7 @@ class Case:
 @pytest.mark.parametrize("is_persistent", [False, True])
 def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas, is_persistent, n_expts_tot,
             n_expts_act, n_expt_shards, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, epilogue_subtile,
+            x_transpose, w_transpose, y_transpose,
             device, opt_flags_scope, fresh_knobs):
     # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
@@ -372,6 +383,17 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
                                                                  has_y_gammas, requires_grad=test_bwd, device=device)
     x_ref, w_ref, bias_ref, gs0_ref, gs1_ref = apply_precision(x_tri, w_tri, bias_tri, gs0_tri, gs1_tri, precision_opt)
 
+    if x_transpose:
+        x_tri = x_tri.detach().transpose(-1, -2).contiguous().transpose(-1, -2).requires_grad_(test_bwd)
+    if w_transpose:
+        w_tri = w_tri.detach().transpose(-1, -2).contiguous().transpose(-1, -2).requires_grad_(test_bwd)
+    if y_transpose:
+        n_rows = m if gindx is None else gindx.dst_indx.shape[0]
+        yT_shape = (n_expts_tot, n, n_rows) if mode == "batched" else (n, n_rows)
+        y_tri_in = torch.empty(yT_shape, dtype=act_dtype, device=device).transpose(-1, -2)
+    else:
+        y_tri_in = None
+
     if w_tri.shape[0] == 1 and mode != "batched":
         # Test the case when weight has dim 2, i.e., shape (K, N).
         w_tri = w_tri.squeeze(0).detach().requires_grad_(test_bwd)
@@ -422,9 +444,14 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, has_y_gammas
 
     # triton
     try:
-        tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt, gammas=gs1_ref, epilogue=epilogue)
+        tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt,
+                           gammas=gs1_ref, epilogue=epilogue, y=y_tri_in)
     except (opt_flags.InapplicableConstraint, NotImplementedError):
         pytest.skip("inapplicable opt_flags constraint")
+    if y_tri_in is not None:
+        assert tri_y.data_ptr() == y_tri_in.data_ptr()
+        assert tri_y.shape == y_tri_in.shape
+        assert tri_y.stride() == y_tri_in.stride()
     # If split_k > 1, then the intermediate tensor is fp32.
     sep_gather = mode == "ragged" and do_gather and n_expts_act > 1 and split_k == 1
     sep_scatter = mode == "ragged" and do_scatter and n_expts_act > 1 and split_k == 1
@@ -534,7 +561,7 @@ def test_set_idle_sms():
     num_idle_sms = 24
     matmul_ogs_set_idle_sms(num_idle_sms)
     flags = make_opt_flags(torch.float32, torch.float32, torch.float32, PrecisionConfig(), \
-                           1, 1024, 1024, 1024, None, True, False, 1)
+                           1, 1024, 1024, 1024, None, True, False, 1, False)
     assert flags.idle_sms == num_idle_sms
 
 
