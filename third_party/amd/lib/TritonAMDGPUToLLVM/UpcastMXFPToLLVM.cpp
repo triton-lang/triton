@@ -96,54 +96,54 @@ static void upcast8xMxfp4(RewriterBase &rewriter, Location loc,
       yVals.push_back(b.extract_element(elements, b.i32_val(0)));
       yVals.push_back(b.extract_element(elements, b.i32_val(1)));
     }
-  } else {
-    // v8f32 for fp4->bf16; v8f16 for fp4->f16
-    SmallVector<Value, 8> vecVals =
-        upcastMxfp4_SW(rewriter, op, useFp16, xVals, idx);
-    if (useFp16) {
-      for (int i = 0; i < 8; i++) {
-        auto result =
-            mxfpScaleFp16(rewriter, loc, vecVals[i], scale, op.getFastMath());
-        yVals.push_back(result);
-      }
-    } else {
-      // pack 2 values together to help llvm backend codegen
-      Value scaleF32 =
-          b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
-      Type v2f32 = vec_ty(f32_ty, 2);
-      Value pkScale = b.undef(v2f32);
-      pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(0));
-      pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(1));
-      Type v2i32 = vec_ty(i32_ty, 2);
-      SmallVector<Value, 4> pkScaledVals;
-      for (unsigned i = 0; i < 8; i += 2) {
-        Value pkVals = b.undef(v2f32);
-        pkVals = b.insert_element(pkVals, vecVals[i], b.i32_val(0));
-        pkVals = b.insert_element(pkVals, vecVals[i + 1], b.i32_val(1));
-        Value pkScaled = b.fmul(pkScale, pkVals);
-        pkScaledVals.push_back(b.bitcast(pkScaled, v2i32));
-      }
-      auto permU32FnTy =
-          LLVM::LLVMFunctionType::get(i32_ty, {i32_ty, i32_ty, i32_ty});
-      LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
-          rewriter, op, "llvm.amdgcn.perm", permU32FnTy);
-      Value sel = b.i32_val(0x07060302);
-      for (unsigned i = 0; i < 4; i++) {
-        // v2f32->v2bf16: {e1.f32[31:16], e0.f32[31:16]}
-        Value first = b.extract_element(pkScaledVals[i], b.i32_val(0));
-        Value second = b.extract_element(pkScaledVals[i], b.i32_val(1));
-        Value res =
-            LLVM::createLLVMCallOp(rewriter, loc, funcOp, {second, first, sel})
-                .getResult();
-        Type v2bf16 = vec_ty(bf16_ty, 2);
-        res = b.bitcast(res, v2bf16);
-        yVals.push_back(b.extract_element(res, b.i32_val(0)));
-        yVals.push_back(b.extract_element(res, b.i32_val(1)));
-      }
-    }
+    return;
   }
-
-  return;
+  // v8f32 for fp4->bf16; v8f16 for fp4->f16
+  SmallVector<Value, 8> vecVals =
+      upcastMxfp4_SW(rewriter, op, useFp16, xVals, idx);
+  /// fp4->f16 below cdna4
+  if (useFp16) {
+    for (int i = 0; i < 8; i++) {
+      auto result =
+          mxfpScaleFp16(rewriter, loc, vecVals[i], scale, op.getFastMath());
+      yVals.push_back(result);
+    }
+    return;
+  }
+  /// fp4->bf16 below cdna4
+  // pack 2 values together to help llvm backend codegen
+  Value scaleF32 =
+      b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
+  Type v2f32 = vec_ty(f32_ty, 2);
+  Value pkScale = b.undef(v2f32);
+  pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(0));
+  pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(1));
+  Type v2i32 = vec_ty(i32_ty, 2);
+  SmallVector<Value, 4> pkScaledVals;
+  for (unsigned i = 0; i < 8; i += 2) {
+    Value pkVals = b.undef(v2f32);
+    pkVals = b.insert_element(pkVals, vecVals[i], b.i32_val(0));
+    pkVals = b.insert_element(pkVals, vecVals[i + 1], b.i32_val(1));
+    Value pkScaled = b.fmul(pkScale, pkVals);
+    pkScaledVals.push_back(b.bitcast(pkScaled, v2i32));
+  }
+  auto permU32FnTy =
+      LLVM::LLVMFunctionType::get(i32_ty, {i32_ty, i32_ty, i32_ty});
+  LLVM::LLVMFuncOp funcOp =
+      appendOrGetExternFuncOp(rewriter, op, "llvm.amdgcn.perm", permU32FnTy);
+  Value sel = b.i32_val(0x07060302);
+  for (unsigned i = 0; i < 4; i++) {
+    // v2f32->v2bf16: {e1.f32[31:16], e0.f32[31:16]}
+    Value first = b.extract_element(pkScaledVals[i], b.i32_val(0));
+    Value second = b.extract_element(pkScaledVals[i], b.i32_val(1));
+    Value res =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, {second, first, sel})
+            .getResult();
+    Type v2bf16 = vec_ty(bf16_ty, 2);
+    res = b.bitcast(res, v2bf16);
+    yVals.push_back(b.extract_element(res, b.i32_val(0)));
+    yVals.push_back(b.extract_element(res, b.i32_val(1)));
+  }
 }
 
 // Upcast 4 mxfp8 values from xVals starting at idx using the given scale
