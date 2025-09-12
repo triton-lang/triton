@@ -7,20 +7,27 @@ import sys
 from triton import knobs
 from triton.backends.compiler import Language
 
+
 def dump_stages(self, stages, options, language, capability):
     source_code = "# This is generated from Triton compiler.py"
     source_code = source_code + '\n' + "from triton._C.libtriton import ir, passes, llvm, amd, nvidia"
     source_code = source_code + '\n' + "class GPUOverrideBackend:"
     source_code = source_code + '\n' + inspect.getsource(self.make_ttir)
     source_code = source_code + '\n' + inspect.getsource(self.make_ttgir)
-    with open("compiler_override.py", "w") as file:
+    full_name = "compiler_override.py"
+    if knobs.cache.dump_dir:
+        full_name = os.path.join(knobs.cache.dump_dir, full_name)
+
+    with open(full_name, "w") as file:
         file.write(source_code)
 
+
 def override_stages(self, stages, options, language, capability):
-    print('override')
     # Limit to TTIR and TTGIR for now
     if language != Language.TRITON: return
     full_name = "compiler_override.py"
+    if knobs.cache.override_dir:
+        full_name = os.path.join(knobs.cache.override_dir, full_name)
 
     print(f"\nOverriding compile pass stages with file {full_name}")
     module_name = 'triton_override_compiler_stages'
@@ -42,7 +49,6 @@ def override_stages(self, stages, options, language, capability):
 
 
 def inspect_stages(self, stages, options, language, capability):
-    print('INSPECT STAGES')
     if os.getenv('TRITON_DUMP_PASS_STAGES', '0') != '0':
         dump_stages(self, stages, options, language, capability)
     if os.getenv('TRITON_OVERRIDE_PASS_STAGES', '0') != '0':
@@ -50,6 +56,7 @@ def inspect_stages(self, stages, options, language, capability):
 
 
 def init():
-        knobs.runtime.add_stages_inspection_hook = inspect_stages
+    knobs.runtime.add_stages_inspection_hook = inspect_stages
+
 
 init()

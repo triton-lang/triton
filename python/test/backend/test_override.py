@@ -20,14 +20,12 @@ def test_override(tmp_path: pathlib.Path):
     # Run once to get the file dumps
     first_env = os.environ.copy()
     first_env["TRITON_ALWAYS_COMPILE"] = "1"
+    first_env["TRITON_INSPECT_PASS_STAGES"] = "1"
     first_env["TRITON_DUMP_PASS_STAGES"] = "1"
     first_env["TRITON_DUMP_DIR"] = str(tmp_path)
-    first_env["TRITON_REPRODUCER_PATH"] = str(tmp_path)
 
-    subprocess.run(["python3", dir_path + "/override_helper.py", str(tmp_path)], env=first_env)
-    filename = tmp_path / "override_compiler.py"
-
-    print(str(filename))
+    subprocess.run(["python3", dir_path + "/override_helper.py"], env=first_env)
+    filename = tmp_path / "compiler_override.py"
 
     with open(filename, "r") as infile:
         file_str = infile.readlines()
@@ -39,14 +37,15 @@ def test_override(tmp_path: pathlib.Path):
                 continue
             outfile.write(line)
 
-    # Run again with pipeline override
+    # # Run again with pipeline override
     second_env = os.environ.copy()
     second_env["TRITON_ALWAYS_COMPILE"] = "1"
+    second_env["TRITON_INSPECT_PASS_STAGES"] = "1"
     second_env["TRITON_OVERRIDE_PASS_STAGES"] = "1"
     second_env["TRITON_REPRODUCER_PATH"] = str(tmp_path)
     second_env["TRITON_OVERRIDE_DIR"] = str(tmp_path)
 
-    subprocess.run(["python3", dir_path + "/override_helper.py", str(tmp_path)], env=second_env)
+    subprocess.run(["python3", dir_path + "/override_helper.py"], env=second_env)
 
     curr_repro_path = tmp_path / ("../test_override0." + "make_ttgir" + ".repro.mlir")
     repro = curr_repro_path.read_text()
