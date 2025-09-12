@@ -1,3 +1,5 @@
+import importlib.util
+
 from .autotuner import (Autotuner, Config, Heuristics, autotune, heuristics)
 from .cache import RedisRemoteCacheBackend, RemoteCacheBackend
 from .driver import driver
@@ -21,3 +23,9 @@ __all__ = [
     "RemoteCacheBackend",
     "TensorWrapper",
 ]
+
+# TritonParse initialization must be called after knobs initialization
+if importlib.util.find_spec("tritonparse") is not None:
+    import tritonparse.structured_logging
+
+    tritonparse.structured_logging.init_with_env()
