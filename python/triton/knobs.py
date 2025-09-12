@@ -447,9 +447,12 @@ class JITHook(Protocol):
                  already_compiled: bool) -> Optional[bool]:
         ...
 
+
 class PipelineStagesHook(Protocol):
+
     def __call__(self, stages, options, language, capability):
         ...
+
 
 class runtime_knobs(base_knobs):
     interpret: env_bool = env_bool("TRITON_INTERPRET")
