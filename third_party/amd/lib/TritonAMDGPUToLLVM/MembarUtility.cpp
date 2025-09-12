@@ -32,15 +32,10 @@ bool membarFilter(Operation *op1, Operation *op2) {
 }
 
 void membarInsertBarrierCDNA4(Operation *op, OpBuilder *builder) {
-  OpBuilder::InsertionGuard g(*builder);
-  if (isa<triton::gpu::AsyncWaitOp>(op)) {
-    constexpr int32_t ldsOnlyBits = ~(0x1f << 8);
-    builder->create<ROCDL::SWaitcntOp>(op->getLoc(),
-                                       builder->getI32IntegerAttr(ldsOnlyBits));
-    builder->create<ROCDL::SBarrierOp>(op->getLoc());
-  } else {
-    builder->create<mlir::gpu::BarrierOp>(op->getLoc());
-  }
+  constexpr int32_t ldsOnlyBits = ~(0x1f << 8);
+  builder->create<ROCDL::SWaitcntOp>(op->getLoc(),
+                                     builder->getI32IntegerAttr(ldsOnlyBits));
+  builder->create<ROCDL::SBarrierOp>(op->getLoc());
 }
 
 } // namespace mlir::triton::AMD
