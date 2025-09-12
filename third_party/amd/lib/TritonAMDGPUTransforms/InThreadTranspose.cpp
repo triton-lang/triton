@@ -158,29 +158,25 @@ Attribute createPaddedSharedEncoding(ttg::BlockedEncodingAttr globalLoadEnc,
   auto elemWidth = bitWidth / 8;
   unsigned writeWidth = globalLoadEnc.getSizePerThread()[kDimIdx] * elemWidth;
 
-  SmallVector<unsigned> intervals;
-  SmallVector<unsigned> pads;
+  SmallVector<std::pair<unsigned, unsigned>> intervalPads;
 
   // Heuristic is based on empirical benchmarking of different padding
   // combinations for tensor sizes:
   // (32, 128), (32, 256), (32, 512), (64, 64), (64, 128), (64, 256),
   // (128, 32), (128, 64), (128, 128), (256, 32), (256, 64)
   if (writeWidth < 16) {
-    intervals.push_back(kDimSize);
-    pads.push_back(8 / elemWidth);
-
-    intervals.push_back(kDimSize * 16);
-    pads.push_back(std::max(std::min(1024 / nonKDimSize, 16), 8) / elemWidth);
+    intervalPads.push_back({kDimSize, 8 / elemWidth});
+    intervalPads.push_back(
+        {kDimSize * 16,
+         std::max(std::min(1024 / nonKDimSize, 16), 8) / elemWidth});
   } else {
-    intervals.push_back(kDimSize);
-    pads.push_back(16 / elemWidth);
-
-    intervals.push_back(kDimSize * 16);
-    pads.push_back(std::max(1024 / nonKDimSize, 16) / elemWidth);
+    intervalPads.push_back({kDimSize, 16 / elemWidth});
+    intervalPads.push_back(
+        {kDimSize * 16, std::max(1024 / nonKDimSize, 16) / elemWidth});
   }
 
-  auto newSharedEnc = ttg::PaddedSharedEncodingAttr::get(ctx, intervals, pads,
-                                                         order, ctaLayout);
+  auto newSharedEnc = ttg::PaddedSharedEncodingAttr::get(
+      ctx, intervalPads, order, shape, ctaLayout);
 
   return newSharedEnc;
 }
