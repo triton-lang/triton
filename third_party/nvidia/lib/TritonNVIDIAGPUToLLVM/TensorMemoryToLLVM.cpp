@@ -244,7 +244,7 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
 }
 
 SmallVector<Value> pack(ArrayRef<Value> values, Type outType, Location loc,
-                        ConversionPatternRewriter &rewriter, bool allowUndef) {
+                        ConversionPatternRewriter &rewriter, bool pad = false) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> packedValues;
   Type inType = values[0].getType();
@@ -260,21 +260,12 @@ SmallVector<Value> pack(ArrayRef<Value> values, Type outType, Location loc,
 
   auto vecSize = outbitwidth / inbitwidth;
   auto vecTy = vec_ty(inType, vecSize);
-  // Pack with undefined values
-  if (allowUndef && values.size() < vecSize) {
-    Value packed = b.undef(vecTy);
-    for (int i = 0; i < values.size(); i++) {
-      packed = b.insert_element(vecTy, packed, values[i], b.i32_val(i));
-    }
-    packed = b.bitcast(packed, outType);
-    packedValues.emplace_back(std::move(packed));
-    return packedValues;
-  }
 
-  assert(values.size() % vecSize == 0);
-  for (int i = 0; i < values.size(); i += vecSize) {
+  auto elemsPerVec = pad ? 1 : vecSize;
+  assert(values.size() % elemsPerVec == 0);
+  for (int i = 0; i < values.size(); i += elemsPerVec) {
     Value packed = b.undef(vecTy);
-    for (int j = 0; j < vecSize; j++) {
+    for (int j = 0; j < elemsPerVec; j++) {
       Value val = values[i + j];
       packed = b.insert_element(vecTy, packed, val, b.i32_val(j));
     }
@@ -286,7 +277,7 @@ SmallVector<Value> pack(ArrayRef<Value> values, Type outType, Location loc,
 
 SmallVector<Value> unpack(ArrayRef<Value> packedValues, Type outType,
                           Location loc, ConversionPatternRewriter &rewriter,
-                          int outVals = 0) {
+                          bool pad = false) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type inType = packedValues[0].getType();
   auto inbitwidth = inType.getIntOrFloatBitWidth();
@@ -302,20 +293,10 @@ SmallVector<Value> unpack(ArrayRef<Value> packedValues, Type outType,
   auto vecSize = inbitwidth / outbitwidth;
   auto vecTy = vec_ty(outType, vecSize);
 
-  // Remove undefined values if outVals is specified
-  if (outVals > 0) {
-    assert(packedValues.size() == 1);
-    Value packed = b.bitcast(packedValues[0], vecTy);
-    for (int i = 0; i < outVals; i++) {
-      unpackedValues.push_back(
-          b.extract_element(outType, packed, b.i32_val(i)));
-    }
-    return unpackedValues;
-  }
-
-  for (int i = 0; i < packedValues.size(); i++) {
+  auto elemsPerVec = pad ? 1 : vecSize;
+  for (int i = 0; i < packedValues.size(); i += elemsPerVec) {
     Value packed = b.bitcast(packedValues[i], vecTy);
-    for (int j = 0; j < vecSize; j++) {
+    for (int j = 0; j < elemsPerVec; j++) {
       unpackedValues.push_back(
           b.extract_element(outType, packed, b.i32_val(j)));
     }
@@ -609,12 +590,12 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
       quot = *maybeQuot;
       packedElemTy = i32_ty;
     } else if (auto maybeQuot = divideLeft(
-                   cvt, LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth));
-               bitwidth == 16 && maybeQuot &&
-               maybeQuot->getInDimSize(kReg) == 1) {
-      // There are not enough element to fill a full register, so we have to pad
-      // it
-      unpacked = true;
+                   cvt, LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth))) {
+      // We software-pad the elements when we either do not have enough elements
+      // to fill a full 32b register, e.g., colN = 1 and colStride != 1 or when
+      // we have scales with K=1. These are mostly supported for testing
+      // purposes.
+      unpacked = bitwidth == 16;
       quot = *maybeQuot;
       packedElemTy = i32_ty;
       padding = true;
@@ -638,7 +619,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
       return failure();
     auto outVals = std::move(*outValsOr);
     if (!isStore) {
-      outVals = unpack(outVals, llvmElemTy, loc, rewriter, padding ? 1 : 0);
+      outVals = unpack(outVals, llvmElemTy, loc, rewriter, padding);
     }
     return outVals;
   }
