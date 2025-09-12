@@ -353,19 +353,41 @@ def TTI_ExperimentalCommitAccessesOp : TTI_Op<"experimental_commit_accesses", [M
   }];
 }
 
-def TTI_ExperimentalClearOutstandingCommitsOp : TTI_Op<"experimental_clear_outstanding_commits", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Clear all the outstanding commits more distant than `outstandingNum.";
+def TTI_ExperimentalClearOutstandingCommitsSetWriteOp : TTI_Op<"experimental_clear_outstanding_commits_set_write", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Clear distant outstanding commits and set write visibility for current thread.";
   let description = [{
-    Clear all the outstanding commits more distant than `outstandingNum` from the current thread.
+    For all rows where outstanding commits are more distant than `outstandingNum` from the current thread,
+    clear those entries and mark the corresponding buffer as visible in the write visibility table for the current thread.
   }];
   let arguments = (ins
     I32Attr:$thread,
     TT_PtrLike:$outstandingCommits,
     TypeAttr:$outstandingCommitsType,
+    TT_PtrLike:$writeVisibility,
+    TypeAttr:$writeVisibilityType,
     I32Attr:$outstandingNum,
     Optional<I1>:$pred);
   let assemblyFormat = [{
-    $thread `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $outstandingNum (`,` $pred^)? attr-dict `:` type($outstandingCommits)
+    $thread `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $writeVisibility `(` $writeVisibilityType `)` `,` $outstandingNum (`,` $pred^)? attr-dict `:` type($outstandingCommits) `,` type($writeVisibility)
+  }];
+}
+
+def TTI_ExperimentalClearOutstandingCommitsSetReadOp : TTI_Op<"experimental_clear_outstanding_commits_set_read", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Clear distant outstanding commits and set read visibility for current thread.";
+  let description = [{
+    For all rows where outstanding commits are more distant than `outstandingNum` from the current thread,
+    clear those entries and mark the corresponding buffer as visible in the read visibility table for the current thread.
+  }];
+  let arguments = (ins
+    I32Attr:$thread,
+    TT_PtrLike:$outstandingCommits,
+    TypeAttr:$outstandingCommitsType,
+    TT_PtrLike:$readVisibility,
+    TypeAttr:$readVisibilityType,
+    I32Attr:$outstandingNum,
+    Optional<I1>:$pred);
+  let assemblyFormat = [{
+    $thread `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $readVisibility `(` $readVisibilityType `)` `,` $outstandingNum (`,` $pred^)? attr-dict `:` type($outstandingCommits) `,` type($readVisibility)
   }];
 }
 

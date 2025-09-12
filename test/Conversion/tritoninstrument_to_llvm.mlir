@@ -391,12 +391,13 @@ tt.func private @experimental_commit_accesses(
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @experimental_clear_outstanding_commits
+// CHECK-LABEL: @experimental_clear_outstanding_commits_set_write
 // CHECK: st.global
-tt.func private @experimental_clear_outstanding_commits(
-  %outstandingCommits: !tt.ptr<i8>
+tt.func private @experimental_clear_outstanding_commits_set_write(
+  %outstandingCommits: !tt.ptr<i8>,
+  %writeVisibility: !tt.ptr<i64>
 ) {
-  tti.experimental_clear_outstanding_commits 0{%outstandingCommits(tensor<2x16xi8, #blocked2>)}, 42 : !tt.ptr<i8>
+  tti.experimental_clear_outstanding_commits_set_write 0{%outstandingCommits(tensor<2x16xi8, #blocked2>)}, %writeVisibility(tensor<2xi64, #blocked>), 42 : !tt.ptr<i8>, !tt.ptr<i64>
   tt.return
 }
 }

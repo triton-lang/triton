@@ -471,7 +471,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: %[[WRITE_COMMITS:.*]] = arith.constant dense<0> : tensor<1xi8
     // CHECK: %[[WRT_COMMITS_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 1 : i32} : !tt.ptr<i8>
 
-    // CHECK: tti.experimental_check_outstanding_commits %[[A:.*]], 0{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1x16xi8,
+    // CHECK: tti.experimental_check_outstanding_commits %[[A:.*]]{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1x16xi8,
     // CHECK: tti.experimental_stage_access_for_commit %[[A]], 0{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1x16xi8,
     // CHECK: ttg.async_copy_global_to_local %{{.*}}, %[[A]]
 
@@ -500,7 +500,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-DAG: %[[WRT_COMMITS_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 1 : i32} : !tt.ptr<i8>
 
     // CHECK: tti.experimental_verify_write_visibility
-    // CHECK: tti.experimental_check_outstanding_commits %[[A:.*]], 0{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1x16xi8,
+    // CHECK: tti.experimental_check_outstanding_commits %[[A:.*]]{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1x16xi8,
     // CHECK: tti.experimental_verify_read_visibility
     // CHECK: tti.experimental_stage_access_for_commit %[[A]], 0{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1x16xi8,
     // CHECK: ttg.async_copy_global_to_local %{{.*}}, %[[A]]
@@ -533,7 +533,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:90", ttg.tensor_memory_size = 0 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 1 : i32} {
   // CHECK-LABEL: @async_commit_group
   tt.func public @async_commit_group() {
-    // CHECK: tti.experimental_clear_outstanding_commits{{.*}}, 42 : !tt.ptr<i8>
+    // CHECK: tti.experimental_clear_outstanding_commits_set_write{{.*}}, 42
     %shmem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     ttg.async_wait {num = 42 : i32}
     tt.return
@@ -620,7 +620,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   tt.func public @warp_group_dot_wait(%acc: tensor<128x128xf16, #mma>) {
     // Dummy buffer just to make the pass run
     %dummy = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-    // CHECK: tti.experimental_clear_outstanding_commits
+    // CHECK: tti.experimental_clear_outstanding_commits_set_read
     ttng.warp_group_dot_wait %acc { pendings = 42 : i32 } : tensor<128x128xf16, #mma>
     tt.return
   }

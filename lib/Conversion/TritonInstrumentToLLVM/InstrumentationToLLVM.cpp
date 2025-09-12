@@ -1064,14 +1064,15 @@ struct CommitAccessesOpConversion
   }
 };
 
-struct ClearOutstandingCommitsOpConversion
+struct ClearOutstandingCommitsSetWriteOpConversion
     : public ConvertOpToLLVMPattern<
-          tti::ExperimentalClearOutstandingCommitsOp> {
+          tti::ExperimentalClearOutstandingCommitsSetWriteOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-  LogicalResult matchAndRewrite(tti::ExperimentalClearOutstandingCommitsOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalClearOutstandingCommitsSetWriteOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
     OpBuilder::InsertionGuard guard(b);
     b.setInsertionPoint(op);
@@ -1086,11 +1087,12 @@ struct ClearOutstandingCommitsOpConversion
         tti::createLoadScratchMemory(b, loc, op.getOutstandingCommits(),
                                      outstandingCommitsType)
             ->getResult(0);
-
-    // clang-format off
-    // Gluon pseudo-code:
-    // outstanding_commits = tl.where(outstanding_commits > outstanding_num, 0, outstanding_commits)
-    // clang-format on
+    RankedTensorType writeVisibilityType =
+        cast<RankedTensorType>(op.getWriteVisibilityType());
+    Value writeVisibility =
+        tti::createLoadScratchMemory(b, loc, op.getWriteVisibility(),
+                                     writeVisibilityType)
+            ->getResult(0);
 
     Type elementType = outstandingCommitsType.getElementType();
     Value outstandingNum = b.create<arith::ConstantOp>(
@@ -1111,6 +1113,90 @@ struct ClearOutstandingCommitsOpConversion
         b, loc, outstandingCommits, outstandingNum, arith::CmpIPredicate::sgt);
     outstandingCommitsGtOutstandingNum = b.create<arith::AndIOp>(
         loc, outstandingCommitsGtOutstandingNum, threadOneHot);
+
+    // Update write visibility rows
+    auto rowMask =
+        createOrReduce(b, loc, outstandingCommitsGtOutstandingNum, 1);
+    Value threadBit = tti::createConstIntTensor(b, loc, 1ULL << op.getThread(),
+                                                writeVisibilityType);
+    writeVisibility =
+        b.create<arith::SelectOp>(loc, rowMask, threadBit, writeVisibility);
+    tti::createStoreScratchMemory(b, loc, op.getWriteVisibility(),
+                                  writeVisibility, writeVisibilityType);
+
+    // Clear outstanding commits entries
+    outstandingCommits =
+        b.create<arith::SelectOp>(loc, outstandingCommitsGtOutstandingNum,
+                                  outstandingCommitsZero, outstandingCommits);
+    tti::createStoreScratchMemory(b, loc, op.getOutstandingCommits(),
+                                  outstandingCommits, outstandingCommitsType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct ClearOutstandingCommitsSetReadOpConversion
+    : public ConvertOpToLLVMPattern<
+          tti::ExperimentalClearOutstandingCommitsSetReadOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalClearOutstandingCommitsSetReadOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    RankedTensorType outstandingCommitsType =
+        cast<RankedTensorType>(op.getOutstandingCommitsType());
+    Value outstandingCommits =
+        tti::createLoadScratchMemory(b, loc, op.getOutstandingCommits(),
+                                     outstandingCommitsType)
+            ->getResult(0);
+    RankedTensorType readVisibilityType =
+        cast<RankedTensorType>(op.getReadVisibilityType());
+    Value readVisibility =
+        tti::createLoadScratchMemory(b, loc, op.getReadVisibility(),
+                                     readVisibilityType)
+            ->getResult(0);
+
+    Type elementType = outstandingCommitsType.getElementType();
+    Value outstandingNum = b.create<arith::ConstantOp>(
+        loc, elementType,
+        b.getIntegerAttr(elementType, op.getOutstandingNum()));
+    Value outstandingCommitsZero =
+        tti::createConstIntTensor(b, loc, 0, outstandingCommitsType);
+    Attribute threadOneHotEncoding = SliceEncodingAttr::get(
+        b.getContext(), 0,
+        cast<BlockedEncodingAttr>(outstandingCommitsType.getEncoding()));
+    Value threadOneHot =
+        createOneHot(b, loc, outstandingCommitsType.getShape()[1],
+                     op.getThread(), threadOneHotEncoding);
+    threadOneHot =
+        convertAndBroadcast(b, loc, threadOneHot, 0, outstandingCommitsType);
+
+    auto outstandingCommitsGtOutstandingNum = createCmpIntTensorScalar(
+        b, loc, outstandingCommits, outstandingNum, arith::CmpIPredicate::sgt);
+    outstandingCommitsGtOutstandingNum = b.create<arith::AndIOp>(
+        loc, outstandingCommitsGtOutstandingNum, threadOneHot);
+
+    // Update read visibility at precise [row, thread]
+    Value threadBit = tti::createConstIntTensor(b, loc, 1ULL << op.getThread(),
+                                                readVisibilityType);
+    Value readVisibilityOrThreadBit =
+        b.create<arith::OrIOp>(loc, readVisibility, threadBit);
+    readVisibility =
+        b.create<arith::SelectOp>(loc, outstandingCommitsGtOutstandingNum,
+                                  readVisibilityOrThreadBit, readVisibility);
+    tti::createStoreScratchMemory(b, loc, op.getReadVisibility(),
+                                  readVisibility, readVisibilityType);
+
+    // Clear outstanding commits entries
     outstandingCommits =
         b.create<arith::SelectOp>(loc, outstandingCommitsGtOutstandingNum,
                                   outstandingCommitsZero, outstandingCommits);
@@ -1198,6 +1284,7 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<VerifyReadVisibilityOpConversion>(typeConverter);
   patterns.add<StageAccessForCommitOpConversion>(typeConverter);
   patterns.add<CommitAccessesOpConversion>(typeConverter);
-  patterns.add<ClearOutstandingCommitsOpConversion>(typeConverter);
+  patterns.add<ClearOutstandingCommitsSetWriteOpConversion>(typeConverter);
+  patterns.add<ClearOutstandingCommitsSetReadOpConversion>(typeConverter);
   patterns.add<CheckOutstandingCommitsOpConversion>(typeConverter);
 }

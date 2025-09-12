@@ -219,6 +219,60 @@ def test_async_copy(FAILURE, device, run_wrapper):
     kernel[(1, )](input, FAILURE=FAILURE, num_warps=4)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
+@pytest.mark.parametrize("FAILURE", [True, False])
+def test_ws_async_copy_wait_visibility(FAILURE, device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_ws_async_copy_wait_visibility, (FAILURE, device, False))
+        if FAILURE:
+            assert "device-side assert" in str(result.exc)
+            assert (("Buffer being accessed has outstanding writes" in result.driver_stderr_output)
+                    or ("Accessing buffer with pending access. Pending access type: async_copy_global_to_shared"
+                        in result.driver_stderr_output))
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def ws_default(input, smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
+        offs = ttgl.arange(0, XBLOCK, layout)
+        ampere.async_copy.async_copy_global_to_shared(smem.index(0), input + offs)
+        ampere.async_copy.commit_group()
+        ampere.async_copy.async_copy_global_to_shared(smem.index(1), input + offs)
+        ampere.async_copy.commit_group()
+        ampere.async_copy.wait_group(1)
+        mbarrier.arrive(bar.index(0), count=1)
+
+    @gluon.jit
+    def ws_1(input, smem, bar, FAILURE: ttgl.constexpr, layout: ttgl.constexpr):
+        mbarrier.wait(bar.index(0), phase=0)
+        val = smem.index(1 if FAILURE else 0).load(layout)
+        smem.index(0).store(val)  # keep load
+
+    @gluon.jit
+    def kernel(input, FAILURE: ttgl.constexpr):
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[XBLOCK], threads_per_warp=[32],
+                                                            warps_per_cta=[4], order=[0])
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK], smem_layout)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar.index(0), count=1)
+        ttgl.warp_specialize((input, smem, bar, FAILURE, blocked_layout), ws_default,
+                             (input, smem, bar, FAILURE, blocked_layout), [ws_1], [4], [32])
+
+    input = torch.randn((XBLOCK, ), device=device, dtype=torch.float16)
+    kernel[(1, )](input, FAILURE=FAILURE, num_warps=4)
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 @pytest.mark.parametrize("MEM_ACCESS_KIND", ["tma_cp", "local_store", "tmem_load", "tmem_store"])
@@ -1169,7 +1223,7 @@ def test_ws_async_copy_commits(FAILURE, device, run_wrapper):
         result = run_in_process(test_ws_async_copy_commits, (FAILURE, device, False))
         if FAILURE:
             assert "device-side assert" in str(result.exc)
-            assert "Accessing buffer with pending access. Pending access type: async_copy_global_to_shared" in result.driver_stderr_output
+            assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
         else:
             assert result.exc is None
             assert result.driver_stderr_output == ""

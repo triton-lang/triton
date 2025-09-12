@@ -457,8 +457,10 @@ private:
             nullptr);
       }
       if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
-        b.create<tti::ExperimentalClearOutstandingCommitsOp>(
+        b.create<tti::ExperimentalClearOutstandingCommitsSetWriteOp>(
             thread, auxData.asyncCpCommits[op], auxData.asyncCpCommitsType(op),
+            auxData.writeVisibility[(int)MemType::SHARED_MEM][op],
+            auxData.writeVisibilityType[(int)MemType::SHARED_MEM](op),
             asyncWaitOp.getNum(), nullptr);
       }
       if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
@@ -471,8 +473,10 @@ private:
         }
       }
       if (auto wgmmaWaitOp = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
-        b.create<tti::ExperimentalClearOutstandingCommitsOp>(
+        b.create<tti::ExperimentalClearOutstandingCommitsSetReadOp>(
             thread, auxData.wgmmaCommits[op], auxData.wgmmaCommitsType(op),
+            auxData.readVisibility[(int)MemType::SHARED_MEM][op],
+            auxData.readVisibilityType[(int)MemType::SHARED_MEM](op),
             wgmmaWaitOp.getPendings(), nullptr);
       }
       listener.maybeWrapWithCriticalSection(b, auxData, nullptr);
