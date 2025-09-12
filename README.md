@@ -265,7 +265,6 @@ export TRITON_OVERRIDE_DIR=<override_dir>
 **Compiler Pipeline Inspection Steps**
 ```bash
 # To introspect the pipeline add_stages, set the following environments:
-export TRITON_ALWAYS_COMPILE=1
 export TRITON_INSPECT_PASS_STAGES=1
 ```
 
