@@ -282,7 +282,7 @@ def _p_matmul_ogs(
                 if EVEN_K:
                     mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
                 else:
-                    mask_k_scale = offs_k_scale < tl.cdiv(K, MX_PACK_DIVISOR)
+                    mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
 
             if USE_GATHER_TMA:
                 x = X.gather(offs_x_m, off_k)
