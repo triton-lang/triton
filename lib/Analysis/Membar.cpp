@@ -161,12 +161,13 @@ void MembarOrFenceAnalysis::visitTerminator(
 MembarAnalysis::MembarAnalysis(Allocation *allocation, MembarFilterFn filter,
                                MembarInsertBarrierFn insertBarrierFn)
     : MembarOrFenceAnalysis(allocation, filter, insertBarrierFn) {
-  if (!insertBarrierFn) {
-    insertBarrier = [](Operation *op, OpBuilder *builder) {
-      OpBuilder::InsertionGuard g(*builder);
-      auto barrierOp = builder->create<gpu::BarrierOp>(op->getLoc());
-    };
-  }
+  insertBarrier = [insertBarrierFn](Operation *op, OpBuilder *builder) {
+    OpBuilder::InsertionGuard g(*builder);
+    if (!insertBarrierFn)
+      builder->create<gpu::BarrierOp>(op->getLoc());
+    else
+      insertBarrierFn(op, builder);
+  };
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,

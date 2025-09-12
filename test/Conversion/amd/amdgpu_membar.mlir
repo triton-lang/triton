@@ -140,7 +140,9 @@ tt.func @intial_loop_token_is_not_from_async_wait(%a_ptr: tensor<16x16x!tt.ptr<f
   %loop_result:1 = scf.for %arg14 = %c0_i32 to %loopIterCount step %c1_i32 iter_args(%arg10 = %1) -> (!ttg.async.token)  : i32 {
     %6 = ttg.local_load %alloc token %arg10 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
     // CHECK: ttg.local_load
-    // CHECK: gpu.barrier
+    // CHECK-GENERIC: gpu.barrier
+    // CHECK-GFX950-NEXT: rocdl.s.waitcnt -7937
+    // CHECK-GFX950-NEXT: rocdl.s.barrier
     // CHECK: ttg.async_copy_global_to_local
     %7 = ttg.async_copy_global_to_local %a_ptr, %alloc : tensor<16x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
     %8 = ttg.async_wait %7 {num = 4 : i32}
@@ -162,7 +164,9 @@ tt.func @loop_carried_token_not_from_async_wait(%a_ptr: tensor<16x16x!tt.ptr<f16
   %loop_result:1 = scf.for %arg14 = %c0_i32 to %loopIterCount step %c1_i32 iter_args(%arg10 = %2) -> (!ttg.async.token)  : i32 {
     %6 = ttg.local_load %alloc token %arg10 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
     // CHECK: ttg.local_load
-    // CHECK: gpu.barrier
+    // CHECK-GENERIC: gpu.barrier
+    // CHECK-GFX950-NEXT: rocdl.s.waitcnt -7937
+    // CHECK-GFX950-NEXT: rocdl.s.barrier
     // CHECK: ttg.async_copy_global_to_local
     %7 = ttg.async_copy_global_to_local %a_ptr, %alloc : tensor<16x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
     scf.yield %7: !ttg.async.token
@@ -215,7 +219,9 @@ tt.func @non_async_wait_token_from_then(%cond: i1, %a_ptr: tensor<16x16x!tt.ptr<
     %6 = ttg.local_load %alloc token %arg10 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
     // We should get a barrier because the then branch does not yield an token from AsyncWait
     // CHECK: ttg.local_load
-    // CHECK: gpu.barrier
+    // CHECK-GENERIC: gpu.barrier
+    // CHECK-GFX950-NEXT: rocdl.s.waitcnt -7937
+    // CHECK-GFX950-NEXT: rocdl.s.barrier
     // CHECK: ttg.async_copy_global_to_local
     %7 = ttg.async_copy_global_to_local %a_ptr, %alloc : tensor<16x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
     %103 = scf.if %cond -> (!ttg.async.token) {
@@ -244,7 +250,9 @@ tt.func @non_async_wait_token_from_else(%cond: i1, %a_ptr: tensor<16x16x!tt.ptr<
     %6 = ttg.local_load %alloc token %arg10 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
     // We should get a barrier because the else branch does not yield an token from AsyncWait
     // CHECK: ttg.local_load
-    // CHECK: gpu.barrier
+    // CHECK-GENERIC: gpu.barrier
+    // CHECK-GFX950-NEXT: rocdl.s.waitcnt -7937
+    // CHECK-GFX950-NEXT: rocdl.s.barrier
     // CHECK: ttg.async_copy_global_to_local
     %7 = ttg.async_copy_global_to_local %a_ptr, %alloc : tensor<16x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
     %103 = scf.if %cond -> (!ttg.async.token) {
