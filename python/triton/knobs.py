@@ -353,7 +353,7 @@ class cache_knobs(base_knobs):
 
 class compilation_knobs(base_knobs):
     override: env_bool = env_bool("TRITON_KERNEL_OVERRIDE")
-    inspect_stages = env_bool("TRITON_INSPECT_PASS_STAGES")
+    inspect_stages = env_bool("TRITON_ENABLE_COMPILER_INSPECTION")
     dump_ir: env_bool = env_bool("TRITON_KERNEL_DUMP")
     store_binary_only: env_bool = env_bool("TRITON_STORE_BINARY_ONLY")
     always_compile: env_bool = env_bool("TRITON_ALWAYS_COMPILE")
