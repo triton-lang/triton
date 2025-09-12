@@ -334,8 +334,8 @@ struct ConvertLayoutOpConversion
     if (elemsPerVec > 1) {
       SmallVector<Value> packedVals;
       packedVals.reserve(regDim / elemsPerVec);
-      if (bitwidth < bitsPerVecElem) {
-        // Should have bitsPerVecElem == 16 here.
+      if (bitwidth == 8 && bitsPerVecElem == 16) {
+        // TODO: Can remove `if` part of `if-else` once ptxas bugfix lands.
         for (int i = 0; i < regDim; i += elemsPerVec) {
           Value x0 = b.zext(i32_ty, b.bitcast(inVals[i], int_ty(bitwidth)));
           Value x1 = b.zext(i32_ty, b.bitcast(inVals[i + 1], int_ty(bitwidth)));
@@ -343,6 +343,13 @@ struct ConvertLayoutOpConversion
           packedVals.emplace_back(b.or_(x0, x1));
         }
       } else {
+        if (bitwidth < bitsPerVecElem) {
+          for (Value &v : inVals) {
+            if (elemTy != int_ty(bitwidth))
+              v = b.bitcast(v, int_ty(bitwidth));
+            v = b.zext(int_ty(bitsPerVecElem), v);
+          }
+        }
         for (int i = 0; i < regDim; i += elemsPerVec) {
           auto slice = ArrayRef<Value>(inVals).slice(i, elemsPerVec);
           Value v = packLLVector(loc, slice, rewriter);
@@ -376,26 +383,22 @@ struct ConvertLayoutOpConversion
     if (elemsPerVec > 1) {
       SmallVector<Value> unpackedVals;
       unpackedVals.reserve(regDim);
-      if (bitwidth >= bitsPerVecElem) {
-        auto packedTy =
-            bitwidth < bitsPerVecElem ? int_ty(bitsPerVecElem) : elemTy;
-        auto vecTy = vec_ty(packedTy, elemsPerVec);
-        auto unpackVal = [&](Value v) {
-          v = b.bitcast(v, vecTy);
-          return unpackLLVector(loc, v, rewriter);
-        };
-        for (auto v : outVals) {
-          auto unpacked = unpackVal(v);
-          unpackedVals.append(unpacked.begin(), unpacked.end());
-        }
-      } else {
-        for (auto packedVal : outVals) {
-          Value x0 =
-              b.trunc(int_ty(bitwidth), b.and_(packedVal, b.i32_val(0xFF)));
-          Value x1 =
-              b.trunc(int_ty(bitwidth), b.lshr(packedVal, b.i32_val(16)));
-          unpackedVals.push_back(b.bitcast(x0, elemTy));
-          unpackedVals.push_back(b.bitcast(x1, elemTy));
+      auto packedTy =
+          bitwidth < bitsPerVecElem ? int_ty(bitsPerVecElem) : elemTy;
+      auto vecTy = vec_ty(packedTy, elemsPerVec);
+      auto unpackVal = [&](Value v) {
+        v = b.bitcast(v, vecTy);
+        return unpackLLVector(loc, v, rewriter);
+      };
+      for (auto v : outVals) {
+        auto unpacked = unpackVal(v);
+        unpackedVals.append(unpacked.begin(), unpacked.end());
+      }
+      if (bitwidth < bitsPerVecElem) {
+        for (Value &v : unpackedVals) {
+          v = b.trunc(int_ty(bitwidth), v);
+          if (elemTy != int_ty(bitwidth))
+            v = b.bitcast(v, elemTy);
         }
       }
       outVals = std::move(unpackedVals);
