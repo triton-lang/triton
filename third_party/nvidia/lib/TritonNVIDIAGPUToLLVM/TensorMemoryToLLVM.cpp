@@ -246,11 +246,15 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
 SmallVector<Value> pack(ArrayRef<Value> values, Type outType, Location loc,
                         ConversionPatternRewriter &rewriter, bool pad = false) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Value> packedValues;
   Type inType = values[0].getType();
+  if (inType == outType) {
+    return to_vector(values);
+  }
+
   auto inbitwidth = inType.getIntOrFloatBitWidth();
   auto outbitwidth = outType.getIntOrFloatBitWidth();
   assert(inbitwidth <= outbitwidth);
+  SmallVector<Value> packedValues;
   if (inbitwidth == outbitwidth) {
     for (auto &val : values) {
       packedValues.push_back(b.bitcast(val, outType));
@@ -280,12 +284,16 @@ SmallVector<Value> unpack(ArrayRef<Value> packedValues, Type outType,
                           bool pad = false) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type inType = packedValues[0].getType();
+  if (inType == outType) {
+    return to_vector(packedValues);
+  }
+
   auto inbitwidth = inType.getIntOrFloatBitWidth();
   auto outbitwidth = outType.getIntOrFloatBitWidth();
   assert(inbitwidth >= outbitwidth);
   SmallVector<Value> unpackedValues;
   if (inbitwidth == outbitwidth) {
-    for (auto &val : packedValues) {
+    for (auto val : packedValues) {
       unpackedValues.push_back(b.bitcast(val, outType));
     }
     return unpackedValues;
@@ -294,8 +302,8 @@ SmallVector<Value> unpack(ArrayRef<Value> packedValues, Type outType,
   auto vecTy = vec_ty(outType, vecSize);
 
   auto elemsPerVec = pad ? 1 : vecSize;
-  for (int i = 0; i < packedValues.size(); i++) {
-    Value packed = b.bitcast(packedValues[i], vecTy);
+  for (auto val : packedValues) {
+    Value packed = b.bitcast(val, vecTy);
     for (int j = 0; j < elemsPerVec; j++) {
       unpackedValues.push_back(
           b.extract_element(outType, packed, b.i32_val(j)));
