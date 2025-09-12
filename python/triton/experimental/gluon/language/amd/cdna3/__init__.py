@@ -159,6 +159,7 @@ def buffer_atomic_rmw(op, ptr, offsets, value, mask=None, sem=None, scope=None, 
     AMD Buffer Atomic RMW operation.
     Similar to normal atomic ops: it loads data at ptr plus offsets, do `op` with `value`, and store result to `ptr` plus `offsets` with
     the specified memory semantics and scope.
+
     Buffer atomics access global memory via a scalar base pointer and a tensor of offsets instead of a tensor of pointers.
     Similar to other buffer ops, the `mask` is a boolean vector that determines if a given element should be processed with
     the atomic RMW op. Elements with `mask[i] == 0` are dropped (i.e., the atomic is not executed).
