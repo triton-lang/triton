@@ -15,7 +15,7 @@ class OpBuilder;
 using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
 /// Callback to allow backend to customise which sequence of instructions to
 /// insert when a barrier to shared memory and execution is needed.
-using MembarInsertBarrierFn = std::function<void(Operation *, OpBuilder *)>;
+using MembarInsertBarrierFn = std::function<void(Location, OpBuilder *)>;
 
 struct BlockInfo {
   using IntervalMapT = std::map<Interval<size_t>, std::set<Operation *>>;

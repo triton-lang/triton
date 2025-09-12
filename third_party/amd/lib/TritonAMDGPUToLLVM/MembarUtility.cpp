@@ -2,6 +2,7 @@
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/IR/Location.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace mlir::triton::AMD {
@@ -31,11 +32,11 @@ bool membarFilter(Operation *op1, Operation *op2) {
   return filterAsyncLocalLoadsDependencies(op1, op2);
 }
 
-void membarInsertBarrierCDNA4(Operation *op, OpBuilder *builder) {
+void membarInsertBarrierCDNA4(Location loc, OpBuilder *builder) {
   constexpr int32_t ldsOnlyBits = ~(0x1f << 8);
-  builder->create<ROCDL::SWaitcntOp>(op->getLoc(),
+  builder->create<ROCDL::SWaitcntOp>(loc,
                                      builder->getI32IntegerAttr(ldsOnlyBits));
-  builder->create<ROCDL::SBarrierOp>(op->getLoc());
+  builder->create<ROCDL::SBarrierOp>(loc);
 }
 
 } // namespace mlir::triton::AMD
