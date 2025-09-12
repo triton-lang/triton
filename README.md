@@ -282,6 +282,10 @@ triton.knobs.runtime.add_stages_inspection_hook = inspect_stages
 
 before running your kernels.
 
+An example of using compiler pipeline inspection coupled with the hook to configure/override
+the Triton pass pipeline stages (remove, reorder, replace passes) for a specific kernel can be
+found in this test python/test/backend/test_stages_override.py
+
 
 # Changelog
 
