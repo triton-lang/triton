@@ -976,10 +976,21 @@ struct StageAccessForCommitOpConversion
     // write_commits = tl.where(bufs == buf, -1, write_commits)
 
     auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
+    buffersEqBuf =
+        convertAndBroadcast(b, loc, buffersEqBuf, 1, writeCommitsType);
+    Attribute threadOneHotEncoding = SliceEncodingAttr::get(
+        b.getContext(), 0,
+        cast<BlockedEncodingAttr>(writeCommitsType.getEncoding()));
+    Value threadOneHot = createOneHot(b, loc, writeCommitsType.getShape()[1],
+                                      op.getThread(), threadOneHotEncoding);
+    threadOneHot =
+        convertAndBroadcast(b, loc, threadOneHot, 0, writeCommitsType);
+    Value bufAndThread =
+        b.create<arith::AndIOp>(loc, buffersEqBuf, threadOneHot);
     auto writeCommitsMinusOne =
         tti::createConstIntTensor(b, loc, -1, writeCommitsType);
     writeCommits = b.create<arith::SelectOp>(
-        loc, buffersEqBuf, writeCommitsMinusOne, writeCommits);
+        loc, bufAndThread, writeCommitsMinusOne, writeCommits);
     tti::createStoreScratchMemory(b, loc, op.getOutstandingCommits(),
                                   writeCommits, writeCommitsType);
     b.eraseOp(op);
@@ -1023,8 +1034,18 @@ struct CommitAccessesOpConversion
     Value writeCommitsOne =
         tti::createConstIntTensor(b, loc, 1, writeCommitsType);
 
+    Attribute threadOneHotEncoding = SliceEncodingAttr::get(
+        b.getContext(), 0,
+        cast<BlockedEncodingAttr>(writeCommitsType.getEncoding()));
+    Value threadOneHot = createOneHot(b, loc, writeCommitsType.getShape()[1],
+                                      op.getThread(), threadOneHotEncoding);
+    threadOneHot =
+        convertAndBroadcast(b, loc, threadOneHot, 0, writeCommitsType);
+
     auto writeCommitsGtZero = createCmpIntTensorScalar(
         b, loc, writeCommits, zero, arith::CmpIPredicate::sgt);
+    writeCommitsGtZero =
+        b.create<arith::AndIOp>(loc, writeCommitsGtZero, threadOneHot);
     auto writeCommitsPlusOne =
         b.create<arith::AddIOp>(loc, writeCommits, writeCommitsOne);
     writeCommits = b.create<arith::SelectOp>(loc, writeCommitsGtZero,
@@ -1032,6 +1053,8 @@ struct CommitAccessesOpConversion
 
     auto writeCommitsEqMinusOne =
         createCmpIntTensorScalar(b, loc, writeCommits, minusOne);
+    writeCommitsEqMinusOne =
+        b.create<arith::AndIOp>(loc, writeCommitsEqMinusOne, threadOneHot);
     writeCommits = b.create<arith::SelectOp>(loc, writeCommitsEqMinusOne,
                                              writeCommitsOne, writeCommits);
     tti::createStoreScratchMemory(b, loc, op.getOutstandingCommits(),
@@ -1075,8 +1098,19 @@ struct ClearOutstandingCommitsOpConversion
         b.getIntegerAttr(elementType, op.getOutstandingNum()));
     Value outstandingCommitsZero =
         tti::createConstIntTensor(b, loc, 0, outstandingCommitsType);
+    Attribute threadOneHotEncoding = SliceEncodingAttr::get(
+        b.getContext(), 0,
+        cast<BlockedEncodingAttr>(outstandingCommitsType.getEncoding()));
+    Value threadOneHot =
+        createOneHot(b, loc, outstandingCommitsType.getShape()[1],
+                     op.getThread(), threadOneHotEncoding);
+    threadOneHot =
+        convertAndBroadcast(b, loc, threadOneHot, 0, outstandingCommitsType);
+
     auto outstandingCommitsGtOutstandingNum = createCmpIntTensorScalar(
         b, loc, outstandingCommits, outstandingNum, arith::CmpIPredicate::sgt);
+    outstandingCommitsGtOutstandingNum = b.create<arith::AndIOp>(
+        loc, outstandingCommitsGtOutstandingNum, threadOneHot);
     outstandingCommits =
         b.create<arith::SelectOp>(loc, outstandingCommitsGtOutstandingNum,
                                   outstandingCommitsZero, outstandingCommits);
@@ -1121,20 +1155,22 @@ struct CheckOutstandingCommitsOpConversion
     // clang-format on
 
     Type elementType = outstandingCommitsType.getElementType();
-    auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
-    auto zero = b.create<arith::ConstantOp>(loc, elementType,
-                                            b.getIntegerAttr(elementType, 0));
-    auto outstandingCommitsZero =
+    // Select the buffer row across all threads and check it equals zero
+    // (including -1 case).
+    Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
+    buffersEqBuf =
+        convertAndBroadcast(b, loc, buffersEqBuf, 1, outstandingCommitsType);
+    auto zeroTensor =
         tti::createConstIntTensor(b, loc, 0, outstandingCommitsType);
-    auto currCommits = b.create<arith::SelectOp>(
-        loc, buffersEqBuf, outstandingCommits, outstandingCommitsZero);
-    auto currCommitsEqZero =
-        createCmpIntTensorScalar(b, loc, currCommits, zero);
+    auto selectedRows = b.create<arith::SelectOp>(
+        loc, buffersEqBuf, outstandingCommits, zeroTensor);
+    auto selectedEqZero = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                                  selectedRows, zeroTensor);
     std::string message =
         "Accessing buffer with pending access. Pending access type: " +
         pendingAccessType.str();
     b.create<tti::ExperimentalAssertInThreadOp>(
-        loc, currCommitsEqZero, b.getStringAttr(message), false);
+        loc, selectedEqZero, b.getStringAttr(message), false);
     b.eraseOp(op);
     return success();
   }

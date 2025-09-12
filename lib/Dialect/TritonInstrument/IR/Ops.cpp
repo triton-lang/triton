@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "triton/Dialect/TritonInstrument/IR/Utility.h"
 
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonInstrument/IR/Ops.cpp.inc"
@@ -195,6 +196,13 @@ LogicalResult ExperimentalStageAccessForCommitOp::verify() {
   if (buffersType.getShape()[0] != outstandingCommitsType.getShape()[0])
     return emitError()
            << "buffers and outstandingCommits must have the same size";
+  if (outstandingCommitsType.getShape()[1] != NUM_THREADS)
+    return emitError()
+           << "outstandingCommits dim 1 must match number of threads";
+  if (!verifySingleThreadEncoding(outstandingCommitsType))
+    return emitError()
+           << "outstandingCommits must have encoding that ensures that all "
+              "its elements reside in a single thread";
   return success();
 }
 
@@ -205,6 +213,13 @@ LogicalResult ExperimentalCheckOutstandingCommitsOp::verify() {
   if (buffersType.getShape()[0] != outstandingCommitsType.getShape()[0])
     return emitError()
            << "buffers and outstandingCommits must have the same size";
+  if (outstandingCommitsType.getShape()[1] != NUM_THREADS)
+    return emitError()
+           << "outstandingCommits dim 1 must match number of threads";
+  if (!verifySingleThreadEncoding(outstandingCommitsType))
+    return emitError()
+           << "outstandingCommits must have encoding that ensures that all "
+              "its elements reside in a single thread";
   return success();
 }
 

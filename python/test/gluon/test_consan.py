@@ -1160,3 +1160,64 @@ def test_ws_different_warp_sizes(MISSING_BAR, device, run_wrapper):
 
     output = torch.empty((XBLOCK, ), device=device, dtype=torch.float16)
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 8, reason="Requires ampere or newer")
+@pytest.mark.parametrize("FAILURE", [True, False])
+def test_ws_async_copy_commits(FAILURE, device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_ws_async_copy_commits, (FAILURE, device, False))
+        if FAILURE:
+            assert "device-side assert" in str(result.exc)
+            assert "Accessing buffer with pending access. Pending access type: async_copy_global_to_shared" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def ws_prog(input, smem, FAILURE: ttgl.constexpr, blocked_layout: ttgl.constexpr, BASE: ttgl.constexpr):
+        # Two-buffer ping-pong within a partition: buffers BASE and BASE+1
+        offs = ttgl.arange(0, XBLOCK, layout=blocked_layout)
+
+        acc = ttgl.zeros([XBLOCK], ttgl.float16, blocked_layout)
+
+        # Prime pipeline
+        ampere.async_copy.async_copy_global_to_shared(smem.index(BASE + 0), input + offs)
+        ampere.async_copy.commit_group()
+
+        for i in range(1, 10):
+            dst = (i % 2)
+            src = ((i - 1) % 2)
+            if i < 9:
+                ampere.async_copy.async_copy_global_to_shared(smem.index(BASE + dst), input + offs)
+                ampere.async_copy.commit_group()
+                ampere.async_copy.wait_group(1)
+            else:
+                ampere.async_copy.wait_group(0)
+
+            # Load from last completed buffer. In failure mode for BASE==2 (ws_1), read other partition's buffers (0/1)
+            load_base = 0 if (FAILURE and BASE == 2) else BASE
+            acc = acc + smem.index(load_base + src).load(blocked_layout)
+        smem.index(BASE).store(acc)
+
+    @gluon.jit
+    def kernel(input, FAILURE: ttgl.constexpr):
+        smem_layout: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[0])
+        # 4 buffers total: ws_default uses 0/1; ws_1 uses 2/3
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [4, XBLOCK], smem_layout)
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[XBLOCK], threads_per_warp=[32],
+                                                            warps_per_cta=[4], order=[0])
+        ttgl.warp_specialize((input, smem, FAILURE, blocked_layout, 0), ws_prog,
+                             (input, smem, FAILURE, blocked_layout, 2), [ws_prog], [4], [32])
+
+    input = torch.randn((XBLOCK, ), device=device, dtype=torch.float16)
+    kernel[(1, )](input, FAILURE=FAILURE, num_warps=4)

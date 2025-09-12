@@ -432,7 +432,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
     }
   }
 
-  // Create semaphore allocation
+  // Create lock variable allocation
   // TODO: move to function
   Type ptrType = triton::getPointerType(b.getI32Type());
   auto alloc = b.create<GlobalScratchAllocOp>(ptrType, 4, 4);
@@ -446,35 +446,27 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
 
   // Create write commits tensor for cp-async
   if (hasCpAsync(module)) {
-    assert(!bufValues[(int)MemType::SHARED_MEM].empty());
-    unsigned int warps = lookupNumWarps(b.getBlock()->getParentOp());
-    asyncCpCommitsType = OnDemandTensorType{
-        {static_cast<int64_t>(bufValues[(int)MemType::SHARED_MEM].size())}, 8};
-    RankedTensorType _asyncCommitsInitTy = RankedTensorType::get(
-        {static_cast<long>(bufValues[(int)MemType::SHARED_MEM].size())},
-        b.getIntegerType(8),
-        getThreadLocalBlockedEncoding(
-            b.getContext(), bufValues[(int)MemType::SHARED_MEM].size(), warps));
-    TypedValue<RankedTensorType> writeCommits =
-        createConstIntTensor(b, b.getLoc(), 0, _asyncCommitsInitTy);
-    asyncCpCommits[entryRegion] =
-        createInitializedScratchMemory(b, writeCommits);
+    int iMemType = (int)MemType::SHARED_MEM;
+    int numBufs = bufValues[iMemType].size();
+    assert(numBufs > 0);
+    // NUM_THREADS instead of THREADS_BITMASK_SIZE as cp_async can't work on the
+    // helper threads of TMA and TC
+    asyncCpCommitsType = OnDemandTensorType{{numBufs, NUM_THREADS}, 8};
+    asyncCpCommits[entryRegion] = createZeroInitStateTensor(b, numBufs, 0, 8);
+    passToWarpSpecialize(entryPoint, asyncCpCommits[entryRegion],
+                         asyncCpCommits);
   }
 
   // Create reads commits tensor for wgmma
   if (hasWGMMA(module)) {
-    assert(!bufValues[(int)MemType::SHARED_MEM].empty());
-    unsigned int warps = lookupNumWarps(b.getBlock()->getParentOp());
-    wgmmaCommitsType = OnDemandTensorType{
-        {static_cast<int64_t>(bufValues[(int)MemType::SHARED_MEM].size())}, 8};
-    RankedTensorType _wgmmaCommitsInitTy = RankedTensorType::get(
-        {static_cast<long>(bufValues[(int)MemType::SHARED_MEM].size())},
-        b.getIntegerType(8),
-        getThreadLocalBlockedEncoding(
-            b.getContext(), bufValues[(int)MemType::SHARED_MEM].size(), warps));
-    TypedValue<RankedTensorType> readCommits =
-        createConstIntTensor(b, b.getLoc(), 0, _wgmmaCommitsInitTy);
-    wgmmaCommits[entryRegion] = createInitializedScratchMemory(b, readCommits);
+    int iMemType = (int)MemType::SHARED_MEM;
+    int numBufs = bufValues[iMemType].size();
+    assert(numBufs > 0);
+    // NUM_THREADS instead of THREADS_BITMASK_SIZE as wgmma can't work on the
+    // helper threads of TMA and TC
+    wgmmaCommitsType = OnDemandTensorType{{numBufs, NUM_THREADS}, 8};
+    wgmmaCommits[entryRegion] = createZeroInitStateTensor(b, numBufs, 0, 8);
+    passToWarpSpecialize(entryPoint, wgmmaCommits[entryRegion], wgmmaCommits);
   }
 }
 

@@ -309,7 +309,8 @@ private:
             // is writing to the same buffer.
             addWriteChecks(b, op, buf, effect.pred, memType, effect.hwPipelined,
                            thread);
-            if (effect.trackingKind == MemEffects::TrackingKind::Barrier) {
+            if (effect.trackingKind == MemEffects::TrackingKind::Barrier &&
+                _barriers) {
               b.create<tti::ExperimentalSetReadVisibilityOp>(
                   buf, thread, _buffers,
                   auxData.readVisibility[(int)memType][op],
@@ -330,7 +331,7 @@ private:
               assert(isa<ttng::WarpGroupDotOp>(op));
               assert(memType == MemType::SHARED_MEM);
               b.create<tti::ExperimentalStageAccessForCommitOp>(
-                  buf, _buffers, auxData.wgmmaCommits[op],
+                  buf, thread, _buffers, auxData.wgmmaCommits[op],
                   auxData.wgmmaCommitsType(op), effect.pred);
             }
             assert(effect.trackingKind !=
@@ -342,7 +343,8 @@ private:
             addWriteChecks(b, op, buf, effect.pred, memType, effect.hwPipelined,
                            thread);
             addReadChecks(b, op, buf, effect.pred, memType, thread);
-            if (effect.trackingKind == MemEffects::TrackingKind::Barrier) {
+            if (effect.trackingKind == MemEffects::TrackingKind::Barrier &&
+                _barriers) {
               b.create<tti::ExperimentalSetWriteVisibilityOp>(
                   buf, thread, _buffers,
                   auxData.writeVisibility[(int)memType][op],
@@ -378,7 +380,7 @@ private:
                 MemEffects::TrackingKind::asyncCpCommit) {
               assert(memType == MemType::SHARED_MEM);
               b.create<tti::ExperimentalStageAccessForCommitOp>(
-                  buf, _buffers, auxData.asyncCpCommits[op],
+                  buf, thread, _buffers, auxData.asyncCpCommits[op],
                   auxData.asyncCpCommitsType(op), effect.pred);
             }
             assert(effect.trackingKind !=
@@ -451,12 +453,12 @@ private:
       }
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
         b.create<tti::ExperimentalCommitAccessesOp>(
-            auxData.asyncCpCommits[op], auxData.asyncCpCommitsType(op),
+            thread, auxData.asyncCpCommits[op], auxData.asyncCpCommitsType(op),
             nullptr);
       }
       if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
         b.create<tti::ExperimentalClearOutstandingCommitsOp>(
-            auxData.asyncCpCommits[op], auxData.asyncCpCommitsType(op),
+            thread, auxData.asyncCpCommits[op], auxData.asyncCpCommitsType(op),
             asyncWaitOp.getNum(), nullptr);
       }
       if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
@@ -464,12 +466,13 @@ private:
           // Add commit (implicit in ttgir) after staging wgmma's operand for
           // read
           b.create<tti::ExperimentalCommitAccessesOp>(
-              auxData.wgmmaCommits[op], auxData.wgmmaCommitsType(op), nullptr);
+              thread, auxData.wgmmaCommits[op], auxData.wgmmaCommitsType(op),
+              nullptr);
         }
       }
       if (auto wgmmaWaitOp = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
         b.create<tti::ExperimentalClearOutstandingCommitsOp>(
-            auxData.wgmmaCommits[op], auxData.wgmmaCommitsType(op),
+            thread, auxData.wgmmaCommits[op], auxData.wgmmaCommitsType(op),
             wgmmaWaitOp.getPendings(), nullptr);
       }
       listener.maybeWrapWithCriticalSection(b, auxData, nullptr);

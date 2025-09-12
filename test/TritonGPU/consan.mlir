@@ -471,8 +471,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: %[[WRITE_COMMITS:.*]] = arith.constant dense<0> : tensor<1xi8
     // CHECK: %[[WRT_COMMITS_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 1 : i32} : !tt.ptr<i8>
 
-    // CHECK: tti.experimental_check_outstanding_commits %[[A:.*]]{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1xi8,
-    // CHECK: tti.experimental_stage_access_for_commit %[[A]]{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1xi8,
+    // CHECK: tti.experimental_check_outstanding_commits %[[A:.*]], 0{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1x16xi8,
+    // CHECK: tti.experimental_stage_access_for_commit %[[A]], 0{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1x16xi8,
     // CHECK: ttg.async_copy_global_to_local %{{.*}}, %[[A]]
 
     %shmem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
@@ -500,9 +500,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-DAG: %[[WRT_COMMITS_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 1 : i32} : !tt.ptr<i8>
 
     // CHECK: tti.experimental_verify_write_visibility
-    // CHECK: tti.experimental_check_outstanding_commits %[[A:.*]]{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1xi8,
+    // CHECK: tti.experimental_check_outstanding_commits %[[A:.*]], 0{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1x16xi8,
     // CHECK: tti.experimental_verify_read_visibility
-    // CHECK: tti.experimental_stage_access_for_commit %[[A]]{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1xi8,
+    // CHECK: tti.experimental_stage_access_for_commit %[[A]], 0{%[[BUFFERS]], %[[WRT_COMMITS_GLOB]](tensor<1x16xi8,
     // CHECK: ttg.async_copy_global_to_local %{{.*}}, %[[A]]
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -571,9 +571,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK-DAG: %[[SM_WGMMA_READS:.*]] = arith.constant dense<0> : tensor<2xi8
     // CHECK-DAG: %[[SM_WGMMA_WRITES_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 2 : i32} : !tt.ptr<i8>
 
-    // CHECK: tti.experimental_stage_access_for_commit %[[A:.*]]{%[[SM_BUFS]], %[[SM_WGMMA_WRITES_GLOB]](tensor<2xi8, #{{.*}}>)}
-    // CHECK: tti.experimental_stage_access_for_commit %[[B:.*]]{%[[SM_BUFS]], %[[SM_WGMMA_WRITES_GLOB]](tensor<2xi8, #{{.*}}>)}
-    // CHECK: tti.experimental_commit_accesses{%[[SM_WGMMA_WRITES_GLOB]](tensor<2xi8, #{{.*}}>)}
+    // CHECK: tti.experimental_stage_access_for_commit %[[A:.*]], 0{%[[SM_BUFS]], %[[SM_WGMMA_WRITES_GLOB]](tensor<2x16xi8, #{{.*}}>)}
+    // CHECK: tti.experimental_stage_access_for_commit %[[B:.*]], 0{%[[SM_BUFS]], %[[SM_WGMMA_WRITES_GLOB]](tensor<2x16xi8, #{{.*}}>)}
+    // CHECK: tti.experimental_commit_accesses 0{%[[SM_WGMMA_WRITES_GLOB]](tensor<2x16xi8, #{{.*}}>)}
     %c0_i32 = arith.constant 0 : i32
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     %1 = ttg.local_alloc {allocation.offset = 32768 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
