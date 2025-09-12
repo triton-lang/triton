@@ -651,7 +651,8 @@ struct TritonAMDGPUConvertToBufferOpsPass
     // lowering to LLVM
     triton::AMD::ISAFamily isaFamily =
         triton::AMD::deduceISAFamily(archGenerationName);
-    if (this->allowBufferAtomics && ISAFamily::CDNA3 == isaFamily)
+    if (this->allowBufferAtomics &&
+        (ISAFamily::CDNA3 == isaFamily || ISAFamily::CDNA4 == isaFamily))
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
           context, assumptions, axisInfoAnalysis, solver, isaFamily);
     patterns.add<ConvertTritonAtomicCASOpToBufferAtomicCAS>(
