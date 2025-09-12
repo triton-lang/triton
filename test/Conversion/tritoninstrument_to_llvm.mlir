@@ -405,6 +405,24 @@ tt.func private @experimental_clear_outstanding_commits_set_write(
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [2, 16], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [2, 64], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_clear_outstanding_commits_set_read
+// CHECK: st.global
+tt.func private @experimental_clear_outstanding_commits_set_read(
+  %outstandingCommits: !tt.ptr<i8>,
+  %readVisibility: !tt.ptr<i64>
+) {
+  tti.experimental_clear_outstanding_commits_set_read 0{%outstandingCommits(tensor<2x16xi8, #blocked2>)}, %readVisibility(tensor<2x64xi64, #blocked3>), 42 : !tt.ptr<i8>, !tt.ptr<i64>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_assert_in_thread_any

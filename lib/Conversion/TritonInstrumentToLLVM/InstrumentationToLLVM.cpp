@@ -1114,13 +1114,18 @@ struct ClearOutstandingCommitsSetWriteOpConversion
     outstandingCommitsGtOutstandingNum = b.create<arith::AndIOp>(
         loc, outstandingCommitsGtOutstandingNum, threadOneHot);
 
-    // Update write visibility rows
-    auto rowMask =
+    // Update write visibility rows: reduce per-thread mask to row mask,
+    // and set the current thread bit only for rows where mask is true.
+    Value rowMask =
         createOrReduce(b, loc, outstandingCommitsGtOutstandingNum, 1);
+    // writeVisibilityType can be rank-1 (e.g., tensor<2xi64>), so do NOT
+    // broadcast along dim=1. The select condition should match the row shape.
     Value threadBit = tti::createConstIntTensor(b, loc, 1ULL << op.getThread(),
                                                 writeVisibilityType);
-    writeVisibility =
-        b.create<arith::SelectOp>(loc, rowMask, threadBit, writeVisibility);
+    Value writeVisibilityOrThreadBit =
+        b.create<arith::OrIOp>(loc, writeVisibility, threadBit);
+    writeVisibility = b.create<arith::SelectOp>(
+        loc, rowMask, writeVisibilityOrThreadBit, writeVisibility);
     tti::createStoreScratchMemory(b, loc, op.getWriteVisibility(),
                                   writeVisibility, writeVisibilityType);
 
@@ -1185,14 +1190,16 @@ struct ClearOutstandingCommitsSetReadOpConversion
     outstandingCommitsGtOutstandingNum = b.create<arith::AndIOp>(
         loc, outstandingCommitsGtOutstandingNum, threadOneHot);
 
-    // Update read visibility at precise [row, thread]
+    // Update read visibility: set current thread bit for rows with mask
+    Value rowMask =
+        createOrReduce(b, loc, outstandingCommitsGtOutstandingNum, 1);
+    rowMask = convertAndBroadcast(b, loc, rowMask, 1, readVisibilityType);
     Value threadBit = tti::createConstIntTensor(b, loc, 1ULL << op.getThread(),
                                                 readVisibilityType);
     Value readVisibilityOrThreadBit =
         b.create<arith::OrIOp>(loc, readVisibility, threadBit);
-    readVisibility =
-        b.create<arith::SelectOp>(loc, outstandingCommitsGtOutstandingNum,
-                                  readVisibilityOrThreadBit, readVisibility);
+    readVisibility = b.create<arith::SelectOp>(
+        loc, rowMask, readVisibilityOrThreadBit, readVisibility);
     tti::createStoreScratchMemory(b, loc, op.getReadVisibility(),
                                   readVisibility, readVisibilityType);
 
