@@ -20,7 +20,7 @@ def test_override(tmp_path: pathlib.Path):
     # Run once to get the file dumps
     first_env = os.environ.copy()
     first_env["TRITON_ALWAYS_COMPILE"] = "1"
-    first_env["TRITON_INSPECT_PASS_STAGES"] = "1"
+    first_env["TRITON_ENABLE_COMPILER_INSPECTION"] = "1"
     first_env["TRITON_DUMP_PASS_STAGES"] = "1"
     first_env["TRITON_DUMP_DIR"] = str(tmp_path)
 
@@ -40,7 +40,7 @@ def test_override(tmp_path: pathlib.Path):
     # # Run again with pipeline override
     second_env = os.environ.copy()
     second_env["TRITON_ALWAYS_COMPILE"] = "1"
-    second_env["TRITON_INSPECT_PASS_STAGES"] = "1"
+    second_env["TRITON_ENABLE_COMPILER_INSPECTION"] = "1"
     second_env["TRITON_OVERRIDE_PASS_STAGES"] = "1"
     second_env["TRITON_REPRODUCER_PATH"] = str(tmp_path)
     second_env["TRITON_OVERRIDE_DIR"] = str(tmp_path)
