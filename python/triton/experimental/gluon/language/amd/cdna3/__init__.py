@@ -12,9 +12,9 @@ if TYPE_CHECKING:
 __all__ = ["buffer_atomic_rmw", "buffer_load", "buffer_store", "mfma"]
 
 _atomic_op_str_to_op = {
-    "max": ir.ATOMIC_OP.MAX, "min": ir.ATOMIC_OP.MIN, "umax": ir.ATOMIC_OP.UMAX, "umin": ir.ATOMIC_OP.UMIN, "fadd":
-    ir.ATOMIC_OP.FADD, "add": ir.ATOMIC_OP.ADD, "and": ir.ATOMIC_OP.AND, "or": ir.ATOMIC_OP.OR, "xor": ir.ATOMIC_OP.XOR,
-    "xchg": ir.ATOMIC_OP.XCHG
+    "smax": ir.ATOMIC_OP.MAX, "smin": ir.ATOMIC_OP.MIN, "umax": ir.ATOMIC_OP.UMAX, "umin": ir.ATOMIC_OP.UMIN, "fadd":
+    ir.ATOMIC_OP.FADD, "iadd": ir.ATOMIC_OP.ADD, "and": ir.ATOMIC_OP.AND, "or": ir.ATOMIC_OP.OR, "xor":
+    ir.ATOMIC_OP.XOR, "xchg": ir.ATOMIC_OP.XCHG
 }
 
 
@@ -29,23 +29,44 @@ def _verify_buffer_ops(ptr, offsets, mask=None, other=None):
 
 
 def _verify_element_type_in_buffer_atomic(op, elem_type, arch):
-    supported_types = [ttgl.float16, ttgl.float32, ttgl.bfloat16, ttgl.float64, ttgl.int32, ttgl.int64]
+    supported_types = [
+        ttgl.float16, ttgl.float32, ttgl.bfloat16, ttgl.float64, ttgl.int32, ttgl.int64, ttgl.uint32, ttgl.uint64
+    ]
     assert elem_type in supported_types, f"{elem_type} is not supported in buffer atomic on {arch}."
+
     op = _atomic_op_str_to_op[_unwrap_if_constexpr(op)]
-    assert arch != "cdna3" or op != ir.ATOMIC_OP.FADD or elem_type != ttgl.bfloat16, "Buffer atomic fadd with bf16 is not supported on CDNA3"
+    if op in [ir.ATOMIC_OP.AND, ir.ATOMIC_OP.OR, ir.ATOMIC_OP.XOR, ir.ATOMIC_OP.XCHG]:
+        assert elem_type in [ttgl.int32, ttgl.int64], f"{op} with {elem_type} is not supported on CDNA3 and CDNA4"
+
+    if op in [ir.ATOMIC_OP.UMAX, ir.ATOMIC_OP.UMIN, ir.ATOMIC_OP.ADD]:
+        assert elem_type in [ttgl.uint32, ttgl.uint64], f"{op} with {elem_type} is not supported on CDNA3 and CDNA4"
+
+    if op in [ir.ATOMIC_OP.MAX, ir.ATOMIC_OP.MIN]:
+        assert elem_type in [ttgl.int32, ttgl.int64,
+                             ttgl.float64], "smax only support int32, int64 and fp64 on CDNA3 and CDNA4"
+
+    if op == ir.ATOMIC_OP.FADD:
+        if elem_type is ttgl.bfloat16:
+            assert arch != "cdna3", "Buffer atomic fadd with bf16 is not supported on CDNA3"
+        else:
+            assert elem_type in [ttgl.float16, ttgl.float32, ttgl.float64]
 
 
 def _buffer_atomic_rmw_impl(op, ptr, offsets, value, arch, mask, sem, scope, _semantic):
-    _verify_element_type_in_buffer_atomic(op, value.type.scalar, arch)
-
     _verify_buffer_ops(ptr, offsets, mask)
 
     mask = _unwrap_if_constexpr(mask)
     if mask is not None:
         mask = _semantic.to_tensor(mask)
         mask = _semantic.cast(mask, ttgl.int1)
-        offsets, mask = _semantic.broadcast_impl_value(offsets, mask)
+        _, mask = _semantic.broadcast_impl_value(offsets, mask)
     mask = mask.handle if mask is not None else ir.value()
+
+    value = _unwrap_if_constexpr(value)
+    value = _semantic.to_tensor(value)
+    _, value = _semantic.broadcast_impl_value(offsets, value)
+
+    _verify_element_type_in_buffer_atomic(op, value.dtype, arch)
 
     sem = _semantic._str_to_sem(sem)
     scope = _semantic._str_to_scope(scope)
@@ -148,10 +169,10 @@ def buffer_atomic_rmw(op, ptr, offsets, value, mask=None, sem=None, scope=None, 
         op (str) : The operator to be executed atomically.
         ptr (pointer to scalar): Global memory scalar base pointer to load from.
         offsets (tensor): Offsets tensor for the load operation.
-        value (tensor): Another opearand of `op`.
+        value (tensor): Another operand of `op`.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
-        sem (str, optional): Memory Semantic Descriptor. Default is None.
-        scope (str, optional): Memory Sync Scope. Default is None.
+        sem (str, optional): Memory Semantic Descriptor. Default is None and it will be mapped to `accquire-and-release` mode or happens-before in other words.
+        scope (str, optional): Memory Sync Scope for atomic accesses. Default is None and it will be mapped to `gpu`, which is called `agent` for AMDGPU. Please ref https://llvm.org/docs/AMDGPUUsage.html#memory-model-gfx942 for details.
     """
 
     return _buffer_atomic_rmw_impl(op, ptr, offsets, value, "cdna3", mask=mask, sem=sem, scope=scope,
