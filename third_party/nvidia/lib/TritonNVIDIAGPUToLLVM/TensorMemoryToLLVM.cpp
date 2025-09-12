@@ -593,8 +593,8 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
                    cvt, LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth))) {
       // We software-pad the elements when we either do not have enough elements
       // to fill a full 32b register, e.g., colN = 1 and colStride != 1 or when
-      // we have scales with K=1. These are mostly supported for testing
-      // purposes.
+      // bitwidth == 8 (this happens with scales with K=1).
+      // These two cases are mostly supported for testing purposes.
       unpacked = bitwidth == 16;
       quot = *maybeQuot;
       packedElemTy = i32_ty;
