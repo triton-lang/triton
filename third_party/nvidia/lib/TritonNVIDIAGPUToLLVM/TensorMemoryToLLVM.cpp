@@ -294,7 +294,7 @@ SmallVector<Value> unpack(ArrayRef<Value> packedValues, Type outType,
   auto vecTy = vec_ty(outType, vecSize);
 
   auto elemsPerVec = pad ? 1 : vecSize;
-  for (int i = 0; i < packedValues.size(); i += elemsPerVec) {
+  for (int i = 0; i < packedValues.size(); i++) {
     Value packed = b.bitcast(packedValues[i], vecTy);
     for (int j = 0; j < elemsPerVec; j++) {
       unpackedValues.push_back(
