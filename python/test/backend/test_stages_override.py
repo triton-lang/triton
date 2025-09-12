@@ -79,7 +79,6 @@ def test_override_integrity(tmp_path: pathlib.Path):
     first_env["TRITON_DUMP_DIR"] = str(tmp_path)
 
     subprocess.run(["python3", dir_path + "/override_helper.py"], env=first_env)
-    filename = tmp_path / "compiler_override.py"
 
     # # Run again with pipeline override
     second_env = os.environ.copy()
