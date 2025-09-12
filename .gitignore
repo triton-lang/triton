@@ -26,6 +26,9 @@ python/triton/backends/*
 !python/triton/backends/compiler.py
 !python/triton/backends/driver.py
 
+# Backends extensions
+python/test/backend/compiler_override.py
+
 # Language extras
 python/triton/language/extra/*
 !python/triton/language/extra/__init__.py
