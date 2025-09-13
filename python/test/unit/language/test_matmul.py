@@ -668,7 +668,10 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A
         pytest.skip("Minimal tile size for preshuffling is 32x32x256")
 
     if not (DTYPE_A.startswith("mx") or DTYPE_B.startswith("mx")):
-        pytest.skip("Requires at least 1 microscaling operand.")
+        pytest.skip("Requires at least 1 microscaling operand")
+
+    if is_cuda() and (DTYPE_A == "mxfp8e4" or DTYPE_B == "mxfp8e4"):
+        pytest.skip("Skip fp8e4 on NV backend")
 
     def shuffle_scales_cdna4(scales: torch.Tensor):
         if not preshuffle:
