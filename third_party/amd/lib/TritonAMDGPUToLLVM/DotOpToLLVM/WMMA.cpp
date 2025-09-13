@@ -260,7 +260,7 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
     operands.push_back(b.int_val(1, tiedLower.value_or(false)));
   }
 
-  // add two addtional operands perf llvm changes
+  // add two additional operands perf llvm changes
   if (wmmaVer == 3) {
     operands.push_back(b.i1_val(0));
     operands.push_back(b.i1_val(0));
