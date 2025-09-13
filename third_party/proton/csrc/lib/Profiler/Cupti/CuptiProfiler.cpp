@@ -7,6 +7,7 @@
 #include "Driver/GPU/NvtxApi.h"
 #include "Profiler/Cupti/CuptiPCSampling.h"
 #include "Utility/Map.h"
+#include "Utility/Env.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -401,8 +402,10 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
   setGraphCallbacks(subscriber, /*enable=*/true);
   setRuntimeCallbacks(subscriber, /*enable=*/true);
   setDriverCallbacks(subscriber, /*enable=*/true);
-  nvtx::enable();
-  setNvtxCallbacks(subscriber, /*enable=*/true);
+  if (getBoolEnv("TRITON_NVTX_ENABLED")) {
+    nvtx::enable();
+    setNvtxCallbacks(subscriber, /*enable=*/true);
+  }
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
