@@ -72,6 +72,7 @@ def compute_num_stages(
     out_dtype,
     lhs_dtype,
     rhs_dtype,
+    x_transpose,
     epilogue_subtile,
     epilogue_effective_itemsize,
 ):
@@ -103,6 +104,8 @@ def compute_num_stages(
         # pipelined layout conversion before store of the accumulator
         # note: layout conversion has some padding
         smem_capacity -= int((block_m + 4) * acc_block_n * acc_size)
+        if x_transpose:
+            smem_capacity -= block_m * block_k * lhs_dtype.itemsize
         if precision_config.weight_scale is not None:
             # mx scales
             stage_size += block_n * (block_k // int(MXFP_BLOCK_SIZE))
