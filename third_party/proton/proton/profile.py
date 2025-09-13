@@ -27,7 +27,7 @@ def _get_backend_default_path(backend: str) -> str:
     lib_path = ""
     if backend == "cupti":
         # First try to get the path from the environment variable that overrides the default path
-        lib_path = knobs.proton.cupti_dir
+        lib_path = knobs.proton.cupti_lib_dir
         if lib_path is None:
             # Get the default path for the cupti backend,
             # which is the most compatible with the current CUPTI header file triton is compiled with
