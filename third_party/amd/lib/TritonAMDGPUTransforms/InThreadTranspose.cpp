@@ -1,8 +1,11 @@
+#include "Analysis/AMDGPUAllocation.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/WalkPatternRewriteDriver.h"
+#include "triton/Analysis/Allocation.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -106,13 +109,17 @@ void transposeInRegsitersBeforeStoreInLocalMemory(
   rewriter.finalizeOpModification(memStoreOp);
 }
 
-Attribute createNewSharedEncoding(RankedTensorType operandType) {
+Attribute createRotatingSharedEncoding(ttg::BlockedEncodingAttr globalLoadEnc,
+                                       RankedTensorType operandType) {
   auto ctx = operandType.getContext();
   auto dotOperandEnc =
       cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding());
   auto ctaLayout = ttg::getCTALayout(dotOperandEnc);
   auto bitWidth = operandType.getElementTypeBitWidth();
-  SmallVector<unsigned> order{1, 0};
+  auto shape = operandType.getShape();
+  int rank = operandType.getRank();
+  SmallVector<unsigned> order(rank);
+  std::iota(order.rbegin(), order.rend(), 0);
   if (dotOperandEnc.getOpIdx() == 1)
     std::swap(order[0], order[1]);
 
@@ -126,19 +133,69 @@ Attribute createNewSharedEncoding(RankedTensorType operandType) {
 
   auto newSharedEnc = ttg::AMDRotatingSharedEncodingAttr::get(
       ctx, sharedVec, perPhase, maxPhase, order, ctaLayout);
+  return newSharedEnc;
+}
+
+Attribute createPaddedSharedEncoding(ttg::BlockedEncodingAttr globalLoadEnc,
+                                     RankedTensorType operandType) {
+  auto ctx = operandType.getContext();
+  auto dotOperandEnc =
+      cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding());
+  auto ctaLayout = ttg::getCTALayout(dotOperandEnc);
+  auto bitWidth = operandType.getElementTypeBitWidth();
+  auto shape = operandType.getShape();
+  int rank = operandType.getRank();
+  SmallVector<unsigned> order(rank);
+  std::iota(order.rbegin(), order.rend(), 0);
+  if (dotOperandEnc.getOpIdx() == 1)
+    std::swap(order[0], order[1]);
+
+  int kDimIdx = dotOperandEnc.getOpIdx() == 1 ? rank - 2 : rank - 1;
+  int nonKDimIdx = dotOperandEnc.getOpIdx() == 1 ? rank - 1 : rank - 2;
+  int kDimSize = shape[kDimIdx];
+  int nonKDimSize = shape[nonKDimIdx];
+  // Unit of values below is one byte
+  auto elemWidth = bitWidth / 8;
+  unsigned writeWidth = globalLoadEnc.getSizePerThread()[kDimIdx] * elemWidth;
+
+  SmallVector<std::pair<unsigned, unsigned>> intervalPads;
+
+  // Heuristic is based on empirical benchmarking of different padding
+  // combinations for tensor sizes:
+  // (32, 128), (32, 256), (32, 512), (64, 64), (64, 128), (64, 256),
+  // (128, 32), (128, 64), (128, 128), (256, 32), (256, 64)
+  if (writeWidth < 16) {
+    intervalPads.push_back({kDimSize, 8 / elemWidth});
+    intervalPads.push_back(
+        {kDimSize * 16,
+         std::max(std::min(1024 / nonKDimSize, 16), 8) / elemWidth});
+  } else {
+    intervalPads.push_back({kDimSize, 16 / elemWidth});
+    intervalPads.push_back(
+        {kDimSize * 16, std::max(1024 / nonKDimSize, 16) / elemWidth});
+  }
+
+  auto newSharedEnc = ttg::PaddedSharedEncodingAttr::get(
+      ctx, intervalPads, order, shape, ctaLayout);
 
   return newSharedEnc;
+}
+
+bool isEnoughLDS(ModuleOp mod, int totalSharedMemSize) {
+  // Padded layout requires more shared memory than other layout types.
+  // If LDS memory is not enough, skip this pattern.
+  mlir::ModuleAllocation allocAnalysis(
+      mod, mlir::triton::AMD::AMDAllocationAnalysisScratchSizeFn);
+  if (allocAnalysis.getSharedMemorySize() > totalSharedMemSize) {
+    LDBG("Not enough LDS memory, skip transposing ITT patter");
+    return false;
+  }
+  return true;
 }
 
 void changeSharedEncoding(PatternRewriter &rewriter, Value memVal,
                           Attribute newEncoding) {
   auto originalType = cast<ttg::MemDescType>(memVal.getType());
-  auto sharedEnc =
-      dyn_cast<ttg::SwizzledSharedEncodingAttr>(originalType.getEncoding());
-  // Already transformed this value
-  if (!sharedEnc)
-    return;
-
   auto newType = ttg::MemDescType::get(
       originalType.getShape(), originalType.getElementType(), newEncoding,
       originalType.getMemorySpace(), originalType.getMutableMemory());
@@ -733,10 +790,41 @@ ttg::BlockedEncodingAttr getTransposableBlockedEnc(int dotOperandIdx,
                                        numWarps, threadsPerWarp, numCTAs);
 }
 
+/// Generate a list of candidates for new shared layout.
+/// First goes more beneficial case.
+/// Return multiple cases, because some could be skipped due to LDS overflow.
+SmallVector<Attribute>
+createSharedLayoutCandidates(const GlobalToSharedMemoryOpChain &pattern,
+                             ttg::LocalLoadOp localLoad,
+                             ttg::BlockedEncodingAttr newBlockedEnc) {
+  SmallVector<Attribute> candidates;
+
+  // Padded encoding in general lowers register consumption,
+  // which is very beneficial in case of register spills.
+  // Currently it is hard to estimate register pressure in general case,
+  // heuristic covers FA cases with register spills because of masked loads.
+  bool maskedLoad = llvm::any_of(pattern.globalLoads,
+                                 [](tt::LoadOp l) { return l.getMask(); });
+
+  if (maskedLoad) {
+    auto paddedCandidate =
+        createPaddedSharedEncoding(newBlockedEnc, localLoad.getType());
+    candidates.push_back(paddedCandidate);
+  }
+
+  auto rotatingCandidate =
+      createRotatingSharedEncoding(newBlockedEnc, localLoad.getType());
+  candidates.push_back(rotatingCandidate);
+  return candidates;
+}
+
 class InThreadTransposePattern : public OpRewritePattern<ttg::LocalLoadOp> {
+  int totalSharedMemSize;
+
 public:
-  InThreadTransposePattern(MLIRContext *context, PatternBenefit benefit = 1)
-      : OpRewritePattern(context, benefit) {}
+  InThreadTransposePattern(MLIRContext *context, int sharedMemSize,
+                           PatternBenefit benefit = 1)
+      : OpRewritePattern(context, benefit), totalSharedMemSize(sharedMemSize) {}
 
   LogicalResult matchAndRewrite(ttg::LocalLoadOp localLoad,
                                 PatternRewriter &rewriter) const override {
@@ -752,7 +840,6 @@ public:
     auto dotOpEnc =
         cast<ttg::DotOperandEncodingAttr>(localLoad.getType().getEncoding());
 
-    LDBG("Adjusting global loads");
     auto firstLoadOp = pattern.globalLoads.front();
     RankedTensorType loadResultType =
         cast<RankedTensorType>(firstLoadOp.getResult().getType());
@@ -760,6 +847,12 @@ public:
         getTransposableBlockedEnc(dotOpEnc.getOpIdx(), loadResultType);
     auto loadShape = loadResultType.getShape();
 
+    // Call this analysis here, before all actual transformations,
+    // so operations stored in "pattern" still exist.
+    auto sharedLayoutCandidates =
+        createSharedLayoutCandidates(pattern, localLoad, newBlockedEnc);
+
+    LDBG("Adjusting global loads");
     for (auto gLoad : pattern.globalLoads) {
       LDBG("operand newBlockedEnc = " << newBlockedEnc);
       refineGlobalLoadLayout(rewriter, newBlockedEnc, gLoad);
@@ -771,10 +864,16 @@ public:
                                                    newBlockedEnc);
 
     LDBG("Adjust shared encoding");
-    auto newSharedEncoding =
-        createNewSharedEncoding(cast<RankedTensorType>(localLoad.getType()));
-    for (auto memVal : pattern.sharedMemVals)
-      changeSharedEncoding(rewriter, memVal, newSharedEncoding);
+    for (Attribute encodingCandidate : sharedLayoutCandidates) {
+      for (auto memVal : pattern.sharedMemVals)
+        changeSharedEncoding(rewriter, memVal, encodingCandidate);
+      auto mod = localLoad->getParentOfType<ModuleOp>();
+      // If current encoding fits into LDS, stop here,
+      // otherwise, try next one
+      if (isEnoughLDS(mod, totalSharedMemSize)) {
+        break;
+      }
+    }
     return success();
   }
 };
@@ -788,10 +887,31 @@ class TritonAMDGPUInThreadTransposePass
 public:
   void runOnOperation() override {
     tt::FuncOp f = getOperation();
+    mlir::ModuleOp mod = f->getParentOfType<mlir::ModuleOp>();
+    auto targetAttr =
+        mod->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
+    if (!targetAttr) {
+      std::string message =
+          std::string("No ") + ttg::AttrTargetName + " attribute in Module";
+      mlir::emitError(mod.getLoc(), message);
+      return signalPassFailure();
+    }
+    auto targetStr = targetAttr.str();
+    auto delimiterPos = targetStr.find(':');
+    if (delimiterPos == std::string::npos) {
+      std::string message = std::string("Wrong format of ") +
+                            ttg::AttrTargetName + " attribute in Module";
+      mlir::emitError(mod.getLoc(), message);
+      return signalPassFailure();
+    }
+    auto targetArchStr = targetStr.substr(delimiterPos + 1);
+
+    triton::AMD::TargetInfo targetInfo(targetArchStr);
+    auto sharedMemSize = targetInfo.getSharedMemorySize();
 
     auto ctx = f.getContext();
     RewritePatternSet patterns(ctx);
-    patterns.add<InThreadTransposePattern>(ctx, /*benefit=*/1);
+    patterns.add<InThreadTransposePattern>(ctx, sharedMemSize, /*benefit=*/1);
     walkAndApplyPatterns(f, std::move(patterns));
   }
 };
