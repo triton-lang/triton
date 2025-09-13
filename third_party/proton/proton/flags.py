@@ -1,49 +1,35 @@
 """
-This file contains the global flags used in the proton package.
+In-memory profiler flags for the Triton profiler.
+
+Centralized, process-local flags with a minimal interface (no environment variables).
+
+Usage:
+    from triton.profiler.flags import flags
+
+    # Toggle
+    flags.profiling_on = True
+    flags.instrumentation_on = False
+
+    # Check
+    if flags.command_line:
+            ...
 """
-
-# Whether to enable profiling. Default is False.
-profiling_on = False
-# Whether instrumentation is enabled. Default is False.
-instrumentation_on = False
-# Whether the script is run from the command line. Default is False.
-command_line = False
+from dataclasses import dataclass
 
 
-def set_profiling_on():
-    global profiling_on
-    profiling_on = True
+@dataclass
+class ProfilerFlags:
+    """Container for profiler-related boolean flags.
 
+    All values are process-local and default to False.
+    """
 
-def set_profiling_off():
-    global profiling_on
-    profiling_on = False
+    # Whether to enable profiling. Default is False.
+    profiling_on: bool = False
+    # Whether instrumentation is enabled. Default is False.
+    instrumentation_on: bool = False
+    # Whether the script is run from the command line. Default is False.
+    command_line: bool = False
 
+flags = ProfilerFlags()
 
-def get_profiling_on():
-    global profiling_on
-    return profiling_on
-
-
-def set_command_line():
-    global command_line
-    command_line = True
-
-
-def is_command_line():
-    global command_line
-    return command_line
-
-
-def get_instrumentation_on():
-    return instrumentation_on
-
-
-def set_instrumentation_on():
-    global instrumentation_on
-    instrumentation_on = True
-
-
-def set_instrumentation_off():
-    global instrumentation_on
-    instrumentation_on = False
