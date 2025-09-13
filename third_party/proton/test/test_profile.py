@@ -15,7 +15,6 @@ import threading
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
-import triton.knobs as knobs
 
 
 def is_cuda():
