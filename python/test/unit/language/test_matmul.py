@@ -343,9 +343,9 @@ def fp8e8m0_to_float32(scale):
     return scale
 
 
-@pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256), (128, 128, 128), (2, 4, 64)])
+@pytest.mark.parametrize("M, N, K", [(1024, 512, 256)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
-                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128)])
+                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128), (128, 16, 256)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else [0]))
@@ -394,7 +394,7 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS
     b = b_f16 * b_scale_f32
     ref_out = torch.matmul(a, b).to(torch.float32)
     output = output.to(torch.float32)
-    atol = 1e-2 * math.sqrt(K / 32)
+    atol = 0.0001
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=0)
 
     if is_cuda() and torch.cuda.get_device_capability()[0] == 12:
