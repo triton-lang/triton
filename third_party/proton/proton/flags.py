@@ -31,5 +31,5 @@ class ProfilerFlags:
     # Whether the script is run from the command line. Default is False.
     command_line: bool = False
 
-flags = ProfilerFlags()
 
+flags = ProfilerFlags()
