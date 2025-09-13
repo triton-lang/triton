@@ -828,7 +828,7 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   // Please also check explaining comments in TritonGPUAttrDefs.td at the
   // AMDWmmaEncodingAttr section.
   unsigned ver = getVersion();
-  assert(ver == 1 || ver == 2);
+  assert(ver == 1 || ver == 2 || ver == 3);
   LinearLayout tileLayout =
       ver == 1
           ? LinearLayout(
@@ -898,6 +898,20 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
   case 2:
     // WMMA version 2 offset values in lanes 0-15 and 16-31 across k dimensions
     laneBase.push_back({kWidth, 0});
+    break;
+  case 3:
+    // WMMA version 3 offset values in lanes 0-15 and 16-31 across k dimensions
+    if (kWidth == 16) {
+      registerBase.back() = {kWidth, 0};
+      laneBase.push_back({kWidth / 2, 0});
+    } else if (kWidth == 32) {
+      registerBase = std::vector<std::vector<int32_t>>{
+          {1, 0}, {2, 0}, {4, 0}, {16, 0}, {32, 0}};
+      laneBase = std::vector<std::vector<int32_t>>{
+          {0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}};
+    } else {
+      assert(false && "unexpected kWidth for WMMA v3");
+    }
     break;
   default:
     assert(false && "unexpected version");

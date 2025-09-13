@@ -71,7 +71,7 @@ getValuesFromDotOperandLayoutStruct(ConversionPatternRewriter &rewriter,
         }
 
         Value convertedElems;
-        if (type.isF16()) {
+        if (type.isF16() || type.isBF16() && kWidth == 16) {
           convertedElems = rawElems;
         } else if (type.isBF16()) {
           convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kWidth));
@@ -234,19 +234,36 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
 
   LLVM::FastmathFlagsAttr defaultFlags{};
   SmallVector<Value> operands;
+  int64_t kWidth = cast<VectorType>(valA.getType()).getNumElements();
   if (aElType.isInteger())
     operands.push_back(b.int_val(1, !aElType.isUnsignedInteger()));
+
+  if (kWidth == 16 && (aElType.isBF16() || aElType.isF16()))
+    operands.push_back(b.int_val(1, 0));
   operands.push_back(valA);
+
+  if (kWidth == 16 && (bElType.isBF16() || bElType.isF16()))
+    operands.push_back(b.int_val(1, 0));
+
   if (bElType.isInteger())
     operands.push_back(b.int_val(1, !bElType.isUnsignedInteger()));
   operands.push_back(valB);
+
+  if (kWidth == 16 || (kWidth == 8 && aElType.getIntOrFloatBitWidth() == 8))
+    operands.push_back(b.int_val(16, 0));
   operands.push_back(valC);
+
   // Flag for using low bits in registers. Result could be already packed to
   // int32. Set low bits by default for now.
   if (tiedLower.has_value() || 32 / dElType.getIntOrFloatBitWidth() > 1 ||
       dElType.isInteger(32)) {
     operands.push_back(b.int_val(1, tiedLower.value_or(false)));
   }
+
+  // add two addtional operands perf llvm changes
+  operands.push_back(b.i1_val(0));
+  operands.push_back(b.i1_val(0));
+
   auto wmmaIntrinsic = LLVM::createLLVMIntrinsicCallOp(
       rewriter, loc, name, valC.getType(), operands);
   return wmmaIntrinsic.getResult(0);

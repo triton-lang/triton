@@ -1358,8 +1358,8 @@ AMDWmmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
                             unsigned version, bool isTransposed,
                             llvm::ArrayRef<unsigned int> warpsPerCTA,
                             mlir::triton::gpu::CTALayoutAttr) {
-  if (version != 1 && version != 2) {
-    return emitError() << "WMMA version must be in the [1, 2] range";
+  if (version != 1 && version != 2 && version != 3) {
+    return emitError() << "WMMA version must be in the [1, 3] range";
   }
   return success();
 }
