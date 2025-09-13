@@ -472,6 +472,8 @@ bool hasShuffledDotScale(Value v, int opIdx) {
 
   Value scale = v;
   Operation *defOp = v.getDefiningOp();
+  if (!defOp)
+    return false;
   if (isa<arith::SelectOp, amdgpu::ScaledUpcastFp8Op,
           amdgpu::ScaledUpcastFp4Op>(defOp)) {
     scale = goThruScaleDecomposition(defOp, opIdx);
