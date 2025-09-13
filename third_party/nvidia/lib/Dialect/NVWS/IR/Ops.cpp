@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVectorExtras.h"
@@ -46,13 +47,25 @@ template <typename T>
 static std::optional<Twine> verifySlice(T &origType, T &newType) {
   if (!origType || !newType)
     return "MLIR Types don't match";
-  if (origType.getElementType() != newType.getElementType() ||
-      origType.getRank() - 1 != newType.getRank()) {
-    return "Ranks don't match";
-  }
-  for (size_t i = 0, e = newType.getShape().size(); i < e; i++) {
-    if (origType.getShape()[i + 1] != newType.getShape()[i])
-      return "Dimensions don't match";
+  if (isa<mlir::triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+          origType.getEncoding())) {
+    if (origType.getElementType() != newType.getElementType() ||
+        origType.getRank() != newType.getRank()) {
+      return "Ranks don't match for TensorMemoryScalesEncodingAttr";
+    }
+    for (size_t i = 0, e = newType.getShape().size(); i < e; i++) {
+      if (origType.getShape()[i] != newType.getShape()[i])
+        return "Dimensions don't match for TensorMemoryScalesEncodingAttr";
+    }
+  } else {
+    if (origType.getElementType() != newType.getElementType() ||
+        origType.getRank() - 1 != newType.getRank()) {
+      return "Ranks don't match";
+    }
+    for (size_t i = 0, e = newType.getShape().size(); i < e; i++) {
+      if (origType.getShape()[i + 1] != newType.getShape()[i])
+        return "Dimensions don't match";
+    }
   }
   return std::nullopt;
 }
@@ -167,5 +180,6 @@ void ArefPutEnterOp::setStage(Value stage) { getStageMutable().assign(stage); }
 void ArefPutExitOp::setStage(Value stage) { getStageMutable().assign(stage); }
 void ArefGetExitOp::setStage(Value stage) { getStageMutable().assign(stage); }
 void ArefGetEnterOp::setStage(Value stage) { getStageMutable().assign(stage); }
+void ArefBufferOp::setStage(Value stage) { getStageMutable().assign(stage); }
 
 } // namespace mlir::triton::nvws
