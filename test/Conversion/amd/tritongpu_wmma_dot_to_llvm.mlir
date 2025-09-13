@@ -249,3 +249,42 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0]}>
+#mma1 = #ttg.amd_wmma<{version = 1, warpsPerCTA = [2, 1, 4]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: wmma_dot_operand3d
+  tt.func @wmma_dot_operand3d(%arg0: !ttg.memdesc<4x16x32xf16, #shared, #smem>, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // CHECK-COUNT-8: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<8xf16>
+    %0 = ttg.local_load %arg0 : !ttg.memdesc<4x16x32xf16, #shared, #smem> -> tensor<4x16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 16}>>
+    // CHECK-COUNT-32: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xf16>
+    %1 = ttg.local_load %arg0 : !ttg.memdesc<4x16x32xf16, #shared, #smem> -> tensor<4x16x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 16}>>
+
+    %ptr0 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<4x16x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 16}>>
+    %ptr1 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<4x16x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 16}>>
+    tt.store %ptr0, %0 : tensor<4x16x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 16}>>
+    tt.store %ptr1, %1 : tensor<4x16x32x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 16}>>
+    tt.return
+  }
+
+  // CHECK-LABEL: wmma_dot3d
+  tt.func @wmma_dot3d(%arg0: tensor<2x16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 16}>>, %arg1: tensor<2x32x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 16}>>, %arg2: tensor<2x16x16xf16, #mma1>, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // CHECK-COUNT-32: llvm.extractvalue %arg0
+    // CHECK-COUNT-32: llvm.insertelement
+    // CHECK-COUNT-32: llvm.extractvalue %arg1
+    // CHECK-COUNT-32: llvm.insertelement
+    // CHECK-COUNT-8: llvm.extractvalue %arg2
+    // CHECK-COUNT-8: llvm.insertelement
+    // CHECK-COUNT-2: wmma.f16.16x16x16.f16{{.*}} : (vector<16xf16>, vector<16xf16>, vector<16xf16>, i1) -> vector<16xf16>
+    %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<2x16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 16}>> * tensor<2x32x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 16}>> -> tensor<2x16x16xf16, #mma1>
+    // CHECK-COUNT-8: llvm.extractelement
+    // CHECK-COUNT-8: llvm.insertelement
+
+    %ptr0 = tt.splat %arg3 : !tt.ptr<f16> -> tensor<2x16x16x!tt.ptr<f16>, #mma1>
+    tt.store %ptr0, %0 : tensor<2x16x16x!tt.ptr<f16>, #mma1>
+    tt.return
+  }
+}
