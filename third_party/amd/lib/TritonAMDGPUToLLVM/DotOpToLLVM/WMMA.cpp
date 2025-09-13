@@ -49,11 +49,10 @@ enum class WMMAInstrType : uint8_t {
 
 using ValueTable = std::map<std::tuple<unsigned, unsigned, unsigned>, Value>;
 
-ValueTable
-getValuesFromDotOperandLayoutStruct(ConversionPatternRewriter &rewriter,
-                                    const LLVMTypeConverter *typeConverter,
-                                    Value value, int batch, int n0, int n1,
-                                    int kWidth, Type type, Location loc) {
+ValueTable getValuesFromDotOperandLayoutStruct(
+    ConversionPatternRewriter &rewriter, const LLVMTypeConverter *typeConverter,
+    int wmmaVer, Value value, int batch, int n0, int n1, int kWidth, Type type,
+    Location loc) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto elems = unpackLLElements(loc, value, rewriter);
   ValueTable vals;
@@ -71,7 +70,7 @@ getValuesFromDotOperandLayoutStruct(ConversionPatternRewriter &rewriter,
         }
 
         Value convertedElems;
-        if (type.isF16() || type.isBF16() && kWidth == 16) {
+        if (type.isF16() || (wmmaVer == 3 && type.isBF16() && kWidth == 16)) {
           convertedElems = rawElems;
         } else if (type.isBF16()) {
           convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kWidth));
@@ -227,30 +226,31 @@ std::string addInstructionSuffix(std::string intrinsicName, unsigned kWidth,
 }
 
 Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
-                            Value valA, Value valB, Value valC, Type aElType,
-                            Type bElType, Type dElType, StringRef name,
-                            std::optional<bool> tiedLower) {
+                            int wmmaVer, Value valA, Value valB, Value valC,
+                            Type aElType, Type bElType, Type dElType,
+                            StringRef name, std::optional<bool> tiedLower) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   LLVM::FastmathFlagsAttr defaultFlags{};
   SmallVector<Value> operands;
   int64_t kWidth = cast<VectorType>(valA.getType()).getNumElements();
+
   if (aElType.isInteger())
     operands.push_back(b.int_val(1, !aElType.isUnsignedInteger()));
-
-  if (kWidth == 16 && (aElType.isBF16() || aElType.isF16()))
+  if (wmmaVer == 3 && (kWidth == 16 && (aElType.isBF16() || aElType.isF16())))
     operands.push_back(b.int_val(1, 0));
   operands.push_back(valA);
 
-  if (kWidth == 16 && (bElType.isBF16() || bElType.isF16()))
-    operands.push_back(b.int_val(1, 0));
-
   if (bElType.isInteger())
     operands.push_back(b.int_val(1, !bElType.isUnsignedInteger()));
+  if (wmmaVer == 3 && (kWidth == 16 && (bElType.isBF16() || bElType.isF16())))
+    operands.push_back(b.int_val(1, 0));
   operands.push_back(valB);
 
-  if (kWidth == 16 || (kWidth == 8 && aElType.getIntOrFloatBitWidth() == 8))
+  if (wmmaVer == 3 &&
+      (kWidth == 16 || (kWidth == 8 && aElType.getIntOrFloatBitWidth() == 8)))
     operands.push_back(b.int_val(16, 0));
+
   operands.push_back(valC);
 
   // Flag for using low bits in registers. Result could be already packed to
@@ -261,8 +261,10 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
   }
 
   // add two addtional operands perf llvm changes
-  operands.push_back(b.i1_val(0));
-  operands.push_back(b.i1_val(0));
+  if (wmmaVer == 3) {
+    operands.push_back(b.i1_val(0));
+    operands.push_back(b.i1_val(0));
+  }
 
   auto wmmaIntrinsic = LLVM::createLLVMIntrinsicCallOp(
       rewriter, loc, name, valC.getType(), operands);
@@ -270,13 +272,14 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 Value generateWMMAOp(ConversionPatternRewriter &rewriter, Location loc,
-                     Value valA, Value valB, Value valC, Type aElType,
-                     Type bElType, Type dElType, StringRef intrinsicName,
-                     std::optional<bool> tiedLower) {
+                     int version, Value valA, Value valB, Value valC,
+                     Type aElType, Type bElType, Type dElType,
+                     StringRef intrinsicName, std::optional<bool> tiedLower) {
   // Independent of wmma version because builtin functions are backward
   // compatible
-  return generateWMMAIntrinsic(rewriter, loc, valA, valB, valC, aElType,
-                               bElType, dElType, intrinsicName, tiedLower);
+  return generateWMMAIntrinsic(rewriter, loc, version, valA, valB, valC,
+                               aElType, bElType, dElType, intrinsicName,
+                               tiedLower);
 }
 
 // Conduct the Dot conversion.
@@ -336,11 +339,11 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto numRepB = repA[0];
 
   ValueTable ha = getValuesFromDotOperandLayoutStruct(
-      rewriter, typeConverter, loadedA, numRepB, numRepM, numRepK, kWidth,
-      aTensorTy.getElementType(), loc);
+      rewriter, typeConverter, wmmaVer, loadedA, numRepB, numRepM, numRepK,
+      kWidth, aTensorTy.getElementType(), loc);
   ValueTable hb = getValuesFromDotOperandLayoutStruct(
-      rewriter, typeConverter, loadedB, numRepB, numRepN, numRepK, kWidth,
-      aTensorTy.getElementType(), loc);
+      rewriter, typeConverter, wmmaVer, loadedB, numRepB, numRepN, numRepK,
+      kWidth, aTensorTy.getElementType(), loc);
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
@@ -381,16 +384,17 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
             auto optTied =
                 tied ? std::optional<bool>(subTied != 0) : std::nullopt;
             acc = wmmaLayout.getIsTransposed()
-                      ? generateWMMAOp(rewriter, loc, hb[{b, n, k}],
+                      ? generateWMMAOp(rewriter, loc, wmmaVer, hb[{b, n, k}],
                                        ha[{b, m * tiedGroup + subTied, k}], acc,
                                        bTensorTy.getElementType(),
                                        aTensorTy.getElementType(), dstElemTy,
                                        intrinsicName, optTied)
-                      : generateWMMAOp(
-                            rewriter, loc, ha[{b, m * tiedGroup + subTied, k}],
-                            hb[{b, n, k}], acc, aTensorTy.getElementType(),
-                            bTensorTy.getElementType(), dstElemTy,
-                            intrinsicName, optTied);
+                      : generateWMMAOp(rewriter, loc, wmmaVer,
+                                       ha[{b, m * tiedGroup + subTied, k}],
+                                       hb[{b, n, k}], acc,
+                                       aTensorTy.getElementType(),
+                                       bTensorTy.getElementType(), dstElemTy,
+                                       intrinsicName, optTied);
           }
         }
         for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
