@@ -1,6 +1,4 @@
 """
-In-memory profiler flags for the Triton profiler.
-
 Centralized, process-local flags with a minimal interface (no environment variables).
 
 Usage:
@@ -19,11 +17,6 @@ from dataclasses import dataclass
 
 @dataclass
 class ProfilerFlags:
-    """Container for profiler-related boolean flags.
-
-    All values are process-local and default to False.
-    """
-
     # Whether to enable profiling. Default is False.
     profiling_on: bool = False
     # Whether instrumentation is enabled. Default is False.
