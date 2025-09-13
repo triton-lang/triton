@@ -47,7 +47,7 @@ def _verify_element_type_in_buffer_atomic(op, elem_type, arch):
 
     if op == ir.ATOMIC_OP.FADD:
         if elem_type is ttgl.bfloat16:
-            assert arch != "cdna3", "Buffer atomic fadd with bf16 is not supported on CDNA3"
+            assert arch == "cdna4", "Buffer atomic fadd with bf16 is only supported on CDNA4 for now."
         else:
             assert elem_type in [ttgl.float16, ttgl.float32, ttgl.float64]
 
@@ -172,7 +172,7 @@ def buffer_atomic_rmw(op, ptr, offsets, value, mask=None, sem=None, scope=None, 
         offsets (tensor): Offsets tensor for the load operation.
         value (tensor): Another operand of `op`.
         mask (tensor, optional): Mask tensor for predicated loads. Defaults to None.
-        sem (str, optional): Memory Semantic Descriptor. Default is None and it will be mapped to `accquire-and-release` mode or happens-before in other words.
+        sem (str, optional): Memory Semantic Descriptor. Default is None which means acq_rel memory semantic.
         scope (str, optional): Memory Sync Scope for atomic accesses. Default is None and it will be mapped to `gpu`, which is called `agent` for AMDGPU. Please ref https://llvm.org/docs/AMDGPUUsage.html#memory-model-gfx942 for details.
     """
 

@@ -52,7 +52,7 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
 @builtin
 def buffer_atomic_rmw(op, ptr, offsets, value, mask=None, sem=None, scope=None, _semantic=None):
     """
-    buffer_atomi_rmw of cnda4 shares the same signature and functionalities as cdna3.buffer_atomic_rmw.
+    buffer_atomic_rmw of cnda4 shares the same signature and functionalities as cdna3.buffer_atomic_rmw.
     The cdna4 version additionally supports `fadd` with `bf16`.
     """
     return _buffer_atomic_rmw_impl(op, ptr, offsets, value, "cdna4", mask=mask, sem=sem, scope=scope,
