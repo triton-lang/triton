@@ -57,7 +57,7 @@ public:
 
     tt::DotOpInterface directDot = nullptr;
     tt::DotOpInterface transDot = nullptr;
-    ttg::ConvertLayoutOp cvtOp = nullptr;
+    tt::TransOp transposeOp = nullptr;
     unsigned directOpIdx = 0;
     unsigned transOpIdx = 0;
 
@@ -74,16 +74,15 @@ public:
       return op;
     };
 
-    mlir::Value usedValue;
     for (mlir::Operation *user : loadOp->getUsers()) {
+      mlir::Value usedValue;
       auto op = user;
 
       op = followConvertLayoutChain(usedValue, op);
 
       if (auto transOp = dyn_cast_or_null<tt::TransOp>(op)) {
         LDBG("Found tranpose op: " << *transOp);
-        cvtOp = transOp.getSrc().getDefiningOp<ttg::ConvertLayoutOp>();
-        LDBG("Found parent cvt op of transpose: " << *cvtOp);
+        transposeOp = transOp;
         usedValue = transOp->getResult(0);
         op =
             followConvertLayoutChain(usedValue, *(transOp->getUsers().begin()));
@@ -178,10 +177,13 @@ public:
         directDot, [&]() { directDot->setOperand(opIdx, localLoad); });
     LDBG("Updated Direct dot: " << *directDot);
     if (!canUseLocalLoadTransposed(opIdx, sharedOrder)) {
-      rewriter.modifyOpInPlace(cvtOp, [&]() {
-        cvtOp.getSrcMutable().assign(localLoad.getResult());
+      Value lLoad = localLoad.getResult();
+      ttg::ConvertLayoutOp cvtOp = rewriter.create<ttg::ConvertLayoutOp>(
+          loc, transposeOp.getSrc().getType(), lLoad);
+      rewriter.modifyOpInPlace(transposeOp, [&]() {
+        transposeOp.getSrcMutable().assign(cvtOp.getResult());
       });
-      LDBG("Updated cvt op: " << *cvtOp);
+      LDBG("Created cvt op: " << *cvtOp);
     } else {
       return rewriter.notifyMatchFailure(loadOp, "currently not supported");
     }
