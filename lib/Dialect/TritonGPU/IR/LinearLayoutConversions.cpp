@@ -893,7 +893,7 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
       registerBase.push_back(std::vector<int32_t>{i, 0});
     // WMMA version 1 duplicates values in lanes 0-15 and 16-31
     // WMMA version 2 offset values in lanes 0-15 and 16-31 across k dimensions
-    laneBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {version == 1 ? 0 : kWidth}};
+    laneBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {version == 1 ? 0 : kWidth, 0}};
   } else {
     assert(version == 3 && "unexpected wmma version");
     if (kWidth == 16) {
