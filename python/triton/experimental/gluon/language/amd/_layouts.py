@@ -152,7 +152,7 @@ class AMDWMMALayout(DistributedLayout):
         return f"WMMA_{self.version}_{self.transposed}_{stringify(self.warps_per_cta)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_WMMA"
 
     def verify(self):
-        assert self.version >= 1 and self.version <= 2, "version must be in the [1, 2] range"
+        assert self.version >= 1 and self.version <= 3, "version must be in the [1, 3] range"
 
         rank = len(self.warps_per_cta)
         _realize_cta_layout(self, rank)
