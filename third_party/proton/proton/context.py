@@ -1,6 +1,6 @@
 from typing import Optional
 from triton._C.libproton import proton as libproton
-from .flags import get_profiling_on
+from .flags import flags
 
 
 def depth(session: Optional[int] = 0) -> Optional[int]:
@@ -13,6 +13,6 @@ def depth(session: Optional[int] = 0) -> Optional[int]:
     Returns:
         depth (int or None): The depth of the context. If profiling is off, returns None.
     """
-    if not get_profiling_on():
+    if not flags.profiling_on:
         return None
     return libproton.get_context_depth(session)

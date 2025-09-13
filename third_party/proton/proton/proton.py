@@ -2,7 +2,7 @@ import argparse
 import sys
 import os
 from .profile import start, finalize, _select_backend
-from .flags import set_command_line
+from .flags import flags
 
 
 def parse_arguments():
@@ -58,7 +58,7 @@ def execute_as_main(script, args):
 
 def do_setup_and_execute(target_args):
     # Set the command line mode to avoid any `start` calls in the script.
-    set_command_line()
+    flags.command_line = True
 
     script = target_args[0]
     script_args = target_args[1:] if len(target_args) > 1 else []
