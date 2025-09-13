@@ -260,7 +260,7 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
     operands.push_back(b.int_val(1, tiedLower.value_or(false)));
   }
 
-  // add two additional operands for gfx1250 llvm changes
+  // Two additional operands for LLVM gfx1250 A/B reuse control
   if (wmmaVer == 3) {
     operands.push_back(b.i1_val(0));
     operands.push_back(b.i1_val(0));
