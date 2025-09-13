@@ -3601,6 +3601,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_AScale_Basic) {
   // warpsPerCTA = [4, 1], instrM = 16, instrN = 8
   auto layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/0, /*dotOperandShape=*/{128, 32},
+      /*groupSize=*/1,
       /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{4, 1},
       /*mmaInstrM=*/16, /*mmaInstrN=*/8,
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
@@ -3621,6 +3622,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_BScale_Basic) {
   // warpsPerCTA = [1, 4], instrM = 16, instrN = 8
   auto layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/1, /*dotOperandShape=*/{32, 128},
+      /*groupSize=*/1,
       /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{1, 4},
       /*mmaInstrM=*/16, /*mmaInstrN=*/8,
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
@@ -3640,6 +3642,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_MultiWarp) {
   // A-scale with 2x2 warp layout
   auto layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/0, /*dotOperandShape=*/{256, 64},
+      /*groupSize=*/1,
       /*tilesPerWarp=*/{2, 1}, /*warpsPerCTA=*/{2, 2},
       /*mmaInstrM=*/16, /*mmaInstrN=*/8,
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
@@ -3662,6 +3665,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_MultiWarp) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/1, /*dotOperandShape=*/{256, 64},
+      /*groupSize=*/1,
       /*tilesPerWarp=*/{2, 1}, /*warpsPerCTA=*/{2, 2},
       /*mmaInstrM=*/16, /*mmaInstrN=*/8,
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));

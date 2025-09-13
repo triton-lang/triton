@@ -280,6 +280,8 @@ enum class TensorCoreType : uint8_t {
   FP32_FP8E4M3FN_FP8E5M2_FP32_SCALE_VEC_1X,
   FP32_FP8E4M3FN_FP8E4M3FN_FP32_SCALE_VEC_1X,
   //
+  FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X,
+  FP32_NVFP4_NVFP4_FP32_SCALE_VEC_4X,
   NOT_APPLICABLE,
 };
 
@@ -323,6 +325,8 @@ static Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
   case TensorCoreType::FP32_FP8E5M2_FP8E4M3FN_FP32_SCALE_VEC_1X:
   case TensorCoreType::FP32_FP8E4M3FN_FP8E5M2_FP32_SCALE_VEC_1X:
   case TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32_SCALE_VEC_1X:
+  case TensorCoreType::FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X:
+  case TensorCoreType::FP32_NVFP4_NVFP4_FP32_SCALE_VEC_4X:
     return fp32x4Ty;
   default:
     llvm::report_fatal_error("Unsupported mma type found");
@@ -350,6 +354,15 @@ static TensorCoreType getMmaTypeDotScaled(DotScaledOp op, RankedTensorType aTy,
     if (llvm::isa<Float8E4M3FNType>(aTy.getElementType()) &&
         llvm::isa<Float8E4M3FNType>(bTy.getElementType())) {
       return TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32_SCALE_VEC_1X;
+    }
+    if (op.getBElemType() == ScaleDotElemType::E2M1 &&
+        op.getAElemType() == ScaleDotElemType::E2M1) {
+      if (isa<mlir::Float8E4M3FNType>(
+              op.getBScale().getType().getElementType())) {
+        return TensorCoreType::FP32_NVFP4_NVFP4_FP32_SCALE_VEC_4X;
+      } else {
+        return TensorCoreType::FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X;
+      }
     }
   }
   return TensorCoreType::NOT_APPLICABLE;
@@ -461,7 +474,6 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxHopper = {
 };
 
 inline static const std::map<TensorCoreType, std::string> mmaInstrPtxScaled = {
-    // 1X variants (default kind::mxf8f6f4). We may switch to mxfp4 dynamically.
     {TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32_SCALE_VEC_1X,
      "mma.sync.aligned.m16n8k32.row.col."
      "kind::mxf8f6f4.block_scale.scale_vec::"
@@ -478,6 +490,14 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxScaled = {
      "mma.sync.aligned.m16n8k32.row.col."
      "kind::mxf8f6f4.block_scale.scale_vec::"
      "1X.f32.e4m3.e4m3.f32.ue8m0"},
+    {TensorCoreType::FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X,
+     "mma.sync.aligned.m16n8k64.row.col."
+     "kind::mxf4nvf4.block_scale.scale_vec::"
+     "2X.f32.e2m1.e2m1.f32.ue8m0"},
+    {TensorCoreType::FP32_NVFP4_NVFP4_FP32_SCALE_VEC_4X,
+     "mma.sync.aligned.m16n8k64.row.col."
+     "kind::mxf4nvf4.block_scale.scale_vec::"
+     "4X.f32.e2m1.e2m1.f32.ue4m3"},
 };
 
 static void callMmaTuringInt8(PTXBuilder &builder, int b, int m, int n, int k,
@@ -655,12 +675,8 @@ static void callMmaScaled(PTXBuilder &builder, int b, int m, int n, int k,
     ops.push_back(sel);
   };
 
-  unsigned aByte = (m / 2) & 0x3;
-  unsigned bByte = n & 0x3;
-  // byteId, threadId selection logic for the scale factor
-  // depends on getSM120DotScaledScaleLayout
-  appendScale(aScaleValue, aByte, /*threadId*/ 0);
-  appendScale(bScaleValue, bByte, /*threadId*/ 0);
+  appendScale(aScaleValue, 0, 0);
+  appendScale(bScaleValue, 0, 0);
 
   mma(ops);
 }
@@ -865,8 +881,6 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
                              ValueTableV2 &aTable, ValueTableV2 &bTable,
                              const SmallVector<Value> &cValues,
                              RankedTensorType dTy, int repK) {
-    const unsigned numCPackedElem = 4u / numMmaRets;
-
     // aScaleValue, bScaleValue selection logic for the scale factor
     // depends on the layout selection in
     // LinearLayoutConversions.cpp::getSM120DotScaledScaleLayout
@@ -885,64 +899,64 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
       }
       return acc;
     };
-    auto pack4ByGroupedIndex = [&](ArrayRef<Value> bytes, int idx,
-                                   int groupSize) -> Value {
-      int blocks = bytes.size() / 4;
-      int maxIdx = blocks * groupSize;
-      if (idx < maxIdx) {
-        int base = (idx / groupSize) * 4;
-        return pack4BytesToI32(bytes.slice(base, 4));
-      }
-      return pack4BytesToI32(bytes);
+
+    auto pack2or4From = [&](ArrayRef<Value> bytes, int startIdx) -> Value {
+      int total = static_cast<int>(bytes.size());
+      int remain = total - startIdx;
+      if (remain >= 4)
+        return pack4BytesToI32(bytes.slice(startIdx, 4));
+      if (remain >= 2)
+        return pack4BytesToI32(bytes.slice(startIdx, 2));
+      // Fallback: pack whatever remains (possibly 0 or 1)
+      return pack4BytesToI32(bytes.slice(startIdx, remain > 0 ? remain : 0));
     };
 
-    int chooseK = k / 2;
-    bool interleavedB = (repK > 1);
-    SmallVector<Value> KsliceBuf;
-    auto Kslice = [&](ArrayRef<Value> bytes,
-                      bool interleaved) -> ArrayRef<Value> {
-      int sz = bytes.size();
-      if (repK == 1)
+    // Split bytes into kRep equal chunks and return the i-th chunk
+    auto getKRepChunk = [&](ArrayRef<Value> bytes, int kRep,
+                            int chunkIdx) -> ArrayRef<Value> {
+      if (kRep <= 0)
         return bytes;
-      assert(sz % repK == 0);
-      int chunk = (sz / repK);
-      if (!interleaved) {
-        int beg = chooseK * chunk;
-        return bytes.slice(beg, chunk);
-      } else {
-        KsliceBuf.clear();
-        KsliceBuf.reserve(chunk);
-        const int elementsPerGroup = 2;
-        for (int group = 0; group < chunk / elementsPerGroup; ++group) {
-          for (int elem = 0; elem < elementsPerGroup; ++elem) {
-            int idx = group * elementsPerGroup * repK +
-                      chooseK * elementsPerGroup + elem;
-            if (idx < sz) {
-              KsliceBuf.push_back(bytes[idx]);
-            }
-          }
-        }
-        if (chunk % elementsPerGroup != 0) {
-          for (int nn = (chunk / elementsPerGroup) * elementsPerGroup;
-               nn < chunk; ++nn) {
-            int idx = nn * repK + chooseK;
-            if (idx < sz) {
-              KsliceBuf.push_back(bytes[idx]);
-            }
-          }
-        }
-        return ArrayRef<Value>(KsliceBuf);
-      }
+      int total = static_cast<int>(bytes.size());
+      int base = total / kRep;
+      int rem = total % kRep;
+      int extra = (chunkIdx < rem) ? chunkIdx : rem;
+      int start = chunkIdx * base + extra;
+      int len = base + ((chunkIdx < rem) ? 1 : 0);
+      if (start >= total)
+        return bytes.slice(total, 0);
+      if (len > total - start)
+        len = total - start;
+      if (len < 0)
+        len = 0;
+      return bytes.slice(start, len);
     };
-    Value aScaleValue =
-        pack4ByGroupedIndex(Kslice(unpackedAScale, false), m, 8);
-    Value bScaleValue =
-        pack4ByGroupedIndex(Kslice(unpackedBScale, interleavedB), n, 4);
+
+    Value aScaleValue;
+    Value bScaleValue;
+    auto aScaleBytes = getKRepChunk(unpackedAScale, repK, k / 2);
+    auto bScaleBytes = getKRepChunk(unpackedBScale, repK, k / 2);
+
+    // Determine groupSize based on mmaType
+    bool isGroupSize4 = (instrMap.find(mmaType) != instrMap.end() &&
+                         instrMap.at(mmaType).find("4X") != std::string::npos);
+    bool isGroupSize1 = (instrMap.find(mmaType) != instrMap.end() &&
+                         instrMap.at(mmaType).find("1X") != std::string::npos);
+    bool isGroupSize2 = (instrMap.find(mmaType) != instrMap.end() &&
+                         instrMap.at(mmaType).find("2X") != std::string::npos);
+    if (isGroupSize4) {
+      aScaleValue = pack2or4From(aScaleBytes, m * 2);
+      bScaleValue = pack2or4From(bScaleBytes, n * 4);
+    } else if (isGroupSize2) {
+      aScaleValue = pack2or4From(aScaleBytes, m);
+      bScaleValue = pack2or4From(bScaleBytes, n * 2);
+    } else if (isGroupSize1) {
+      aScaleValue = pack2or4From(aScaleBytes, m / 2);
+      bScaleValue = pack2or4From(bScaleBytes, n);
+    }
 
     callMmaScaled(builder, b, m, n, k, mma, numMmaRets, colsPerThread, aTable,
                   bTable, cValues, aScaleValue, bScaleValue);
   };
-
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
                         typeConverter, rewriter, mmaType, instrMap, emit);
 }

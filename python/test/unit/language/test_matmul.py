@@ -402,6 +402,119 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, NUM_WARPS
         assert "mma.sync.aligned.m16n8k32.row.col.kind::mxf8f6f4.block_scale.scale_vec::1X" in ptx
 
 
+@triton.jit
+def nvfp4_matmul(
+        a_ptr, b_ptr, output_ptr,
+        a_scale, b_scale,
+        M, N, K,
+        stride_a_scale_m, stride_a_scale_g, stride_b_scale_n, stride_b_scale_g,
+        stride_am, stride_ak,
+        stride_bk, stride_bn,
+        stride_cm, stride_cn,
+        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+        GROUP_K: tl.constexpr,
+        NUM_STAGES: tl.constexpr):
+
+    tl.static_assert(BLOCK_K % 2 == 0)
+    tl.static_assert(BLOCK_K % GROUP_K == 0)
+    BK2: tl.constexpr = BLOCK_K // 2
+    BLOCK_K_S: tl.constexpr = BLOCK_K // GROUP_K
+
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+
+    ACC = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    offs_k_scales = tl.arange(0, BLOCK_K_S)
+
+    for k0 in tl.range(0, K, BLOCK_K):
+        k2_base = k0 // 2
+        k2v = k2_base + tl.arange(0, BK2)
+        k2_limit = K // 2
+
+        a_mask = ((rm[:, None] < M) & (k2v[None, :] < k2_limit)).to(tl.int1)
+        b_mask = ((k2v[:, None] < k2_limit) & (rn[None, :] < N)).to(tl.int1)
+
+        A_idx = rm[:, None] * stride_am + k2v[None, :] * stride_ak
+        B_idx = k2v[:, None] * stride_bk + rn[None, :] * stride_bn
+
+        A_p = tl.load(a_ptr + A_idx, mask=a_mask, other=0)
+        B_p = tl.load(b_ptr + B_idx, mask=b_mask, other=0)
+
+        k_group_index_base = k0 // GROUP_K
+        sA_blk = tl.load(a_scale + rm[:, None] * stride_a_scale_m +
+                         (k_group_index_base + offs_k_scales[None, :]) * stride_a_scale_g)
+        sB_blk = tl.load(b_scale + rn[:, None] * stride_b_scale_n +
+                         (k_group_index_base + offs_k_scales[None, :]) * stride_b_scale_g)
+
+        ACC = tl.dot_scaled(A_p, sA_blk, "e2m1", B_p, sB_blk, "e2m1", ACC)
+
+    C_idx = rm[:, None] * stride_cm + rn[None, :] * stride_cn
+    c_mask = (rm[:, None] < M) & (rn[None, :] < N)
+    tl.store(output_ptr + C_idx, ACC, mask=c_mask)
+
+
+@pytest.mark.parametrize("M, N, K", [(128, 128, 128), (256, 128, 128), (128, 256, 128)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(64, 64, 128), (128, 64, 128)])
+@pytest.mark.parametrize("NUM_STAGES", [1, 2])
+@pytest.mark.parametrize("NUM_WARPS", [4, 8])
+@pytest.mark.parametrize("version", ["mxfp4", "nvfp4"])
+def test_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, NUM_WARPS, version, device):
+    if not is_cuda():
+        pytest.skip("Only NV backend is supported for FP4 tests")
+    if K % BLOCK_K != 0:
+        pytest.skip("Kernel requires shapes aligned by K dimension")
+    if is_cuda() and torch.cuda.get_device_capability()[0] < 12:
+        pytest.skip("FP4 requires compute capability >= 12")
+
+    if version == 'mxfp4':
+        GROUP_K = 32
+    elif version == 'nvfp4':
+        GROUP_K = 16
+    else:
+        raise ValueError(f"Invalid version: {version}")
+
+    if K % GROUP_K != 0:
+        pytest.skip(f"Kernel requires K divisible by GROUP_K={GROUP_K}")
+
+    torch.manual_seed(42)
+
+    a_packed = torch.randint(0, 255, (M, K // 2), dtype=torch.uint8, device=device)
+    b_packed = torch.randint(0, 255, (K // 2, N), dtype=torch.uint8, device=device)
+
+    KG = K // GROUP_K
+    if version == 'mxfp4':
+        # uint8 scales for MXFP4
+        a_scale = torch.randint(122, 130, (M, KG), dtype=torch.uint8, device=device)
+        b_scale = torch.randint(122, 130, (N, KG), dtype=torch.uint8, device=device)
+    else:  # nvfp4
+        # float8_e4m3fn scales for NVFP4
+        a_scale = (torch.randn((M, KG), device=device).abs() * 0.5 + 1.0).to(torch.float8_e4m3fn)
+        b_scale = (torch.randn((N, KG), device=device).abs() * 0.5 + 1.0).to(torch.float8_e4m3fn)
+
+    output = torch.zeros((M, N), dtype=torch.float32, device=device)
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+
+    ret = nvfp4_matmul[grid](a_packed, b_packed, output, a_scale, b_scale, M, N, K,
+                             a_scale.stride(0), a_scale.stride(1), b_scale.stride(0), b_scale.stride(1),
+                             a_packed.stride(0), a_packed.stride(1),
+                             b_packed.stride(0), b_packed.stride(1), output.stride(0), output.stride(1),
+                             BLOCK_M, BLOCK_N, BLOCK_K, GROUP_K,
+                             NUM_STAGES=NUM_STAGES, num_warps=NUM_WARPS)
+
+    # Simple verification - just check output is not all zeros
+    assert not torch.allclose(output, torch.zeros_like(output))
+
+    if is_cuda() and torch.cuda.get_device_capability()[0] == 12:
+        ptx = ret.asm["ptx"]
+        if version == "nvfp4":
+            assert "mma.sync.aligned.m16n8k64.row.col.kind::mxf4nvf4.block_scale.scale_vec::4X" in ptx
+        else:  # mxfp4
+            assert "mma.sync.aligned.m16n8k64.row.col.kind::mxf4nvf4.block_scale.scale_vec::2X" in ptx
+
+
 def _knob_promote_lhs_to_tmem(monkeypatch):
     # Promoting the LHS to TMEM should be patched because it will otherwise
     # unintentionally be enabled for all consecutive tests if using os.environ
