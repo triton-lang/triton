@@ -1079,8 +1079,20 @@ void AxisInfoAnalysis::visitForOpInductionVar(
   ProgramPoint *programPoint = getProgramPointAfter(op);
   const auto &lb =
       getLatticeElementFor(programPoint, op.getLowerBound())->getValue();
+  if (lb.getDivisibility().empty()) {
+    auto definingOp = op.getLowerBound().getDefiningOp();
+    if (definingOp) {
+      auto result = visit(getProgramPointAfter(definingOp));
+    }
+  }
   const auto &step =
       getLatticeElementFor(programPoint, op.getStep())->getValue();
+  if (step.getDivisibility().empty()) {
+    auto definingOp = op.getStep().getDefiningOp();
+    if (definingOp) {
+      auto result = visit(getProgramPointAfter(definingOp));
+    }
+  }
 
   AxisInfo::DimVectorT knownContiguity(1, 1);
   AxisInfo::DimVectorT knownDivisibility(1, 1);
