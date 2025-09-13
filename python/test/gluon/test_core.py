@@ -952,3 +952,30 @@ def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_of
     kernel[(1, )](input, output, m, n, slice_m_offset, slice_n_offset, slice_m, slice_n, num_warps=num_warps)
 
     assert (output == ref_output).all()
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+def test_buffer_atomic_rmw_add_bf16():
+    BLOCK = 128
+    elem_type = torch.bfloat16
+    SIZE_PER_THREAD = 8
+
+    @gluon.jit
+    def kernel(a, BLOCK: ttgl.constexpr, SIZE_PER_THREAD: ttgl.constexpr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([SIZE_PER_THREAD], [64], [4], [0])
+        offsets = ttgl.arange(0, BLOCK, layout=blocked)
+        val = ttgl.full([BLOCK], 1.0, ttgl.bfloat16, layout=blocked)
+        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", a, offsets, val, mask=1, scope="cta", sem="relaxed")
+
+    a = torch.randn((BLOCK), dtype=elem_type, device="cuda")
+    origin_a = a.clone()
+    compiled = kernel[(1, )](a, BLOCK, SIZE_PER_THREAD)
+
+    torch_ref = origin_a + torch.ones((BLOCK, ), device='cuda', dtype=torch.bfloat16)
+    torch.testing.assert_close(a, torch_ref)
+
+    ttgir = compiled.asm["ttgir"]
+    assert ttgir.count("amdgpu.buffer_atomic_rmw fadd, relaxed, cta") == 1
+
+    llir = compiled.asm["llir"]
+    assert llir.count("tail call <2 x bfloat> @llvm.amdgcn.raw.ptr.buffer.atomic.fadd.v2bf16") == SIZE_PER_THREAD // 2
