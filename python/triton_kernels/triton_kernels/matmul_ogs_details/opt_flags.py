@@ -44,6 +44,7 @@ def make_default_opt_flags_amd(
     can_use_fused_scatter,
     enforce_bitwise_invariance,
     epilogue_effective_itemsize,
+    x_transpose,
     constraints,
 ):
     constraints_supported = ["block_m", "block_n", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile"]
@@ -143,6 +144,7 @@ def make_default_opt_flags_nvidia(
     can_use_fused_scatter,
     enforce_bitwise_invariance,
     epilogue_effective_itemsize,
+    x_transpose,
     constraints,
 ):
     constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "fused_scatter", "epilogue_subtile", "num_stages", "idle_sms"]
@@ -177,9 +179,6 @@ def make_default_opt_flags_nvidia(
     else:
         has_simple_epilogue = precision_config.max_num_imprecise_acc is None
         is_persistent = supports_persistent and has_simple_epilogue and (tiles_per_sm >= 2.0 or lhs_dtype.itemsize <= 1) and out_dtype.itemsize < 4
-        # TEMP CHANGE
-        if precision_config.act_scale is not None or precision_config.out_scale is not None:
-            is_persistent = False
         # TMA is slower for batched matmuls with small m/n/k.
         if m * n * k < 131072:
             is_persistent = False
@@ -210,6 +209,7 @@ def make_default_opt_flags_nvidia(
         out_dtype,
         lhs_dtype,
         rhs_dtype,
+        x_transpose,
     )
 
     if constraints.get("epilogue_subtile", None) is not None:
@@ -289,6 +289,7 @@ def make_opt_flags(
     can_use_persistent_tma,
     can_use_fused_scatter,
     epilogue_effective_itemsize,
+    x_transpose,
 ):
     if _opt_flags_constraints.get("is_persistent", False) and not can_use_persistent_tma:
         raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")
@@ -300,7 +301,7 @@ def make_opt_flags(
         return _opt_flags
     args = [out_dtype, lhs_dtype, rhs_dtype, precision_config, batch_size, m, n, k,
             routing_data, can_use_persistent_tma, can_use_fused_scatter,
-            enforce_bitwise_invariance, epilogue_effective_itemsize,
+            enforce_bitwise_invariance, epilogue_effective_itemsize, x_transpose,
             _opt_flags_constraints]
     backend = triton.runtime.driver.active.get_current_target().backend
     if backend == "hip":

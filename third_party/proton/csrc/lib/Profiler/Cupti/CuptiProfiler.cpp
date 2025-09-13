@@ -4,6 +4,7 @@
 #include "Device.h"
 #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/CuptiApi.h"
+#include "Driver/GPU/NvtxApi.h"
 #include "Profiler/Cupti/CuptiPCSampling.h"
 #include "Utility/Map.h"
 
@@ -176,6 +177,15 @@ void setResourceCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
 #undef CALLBACK_ENABLE
 }
 
+void setNvtxCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
+#define CALLBACK_ENABLE(id)                                                    \
+  cupti::enableCallback<true>(static_cast<uint32_t>(enable), subscriber,       \
+                              CUPTI_CB_DOMAIN_NVTX, id)
+  CALLBACK_ENABLE(CUPTI_CBID_NVTX_nvtxRangePushA);
+  CALLBACK_ENABLE(CUPTI_CBID_NVTX_nvtxRangePop);
+#undef CALLBACK_ENABLE
+}
+
 bool isDriverAPILaunch(CUpti_CallbackId cbId) {
   return cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunch ||
          cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid ||
@@ -322,6 +332,14 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         pImpl->graphIdToNumInstances.erase(graphId);
       }
     }
+  } else if (domain == CUPTI_CB_DOMAIN_NVTX) {
+    auto *nvtxData = static_cast<const CUpti_NvtxData *>(cbData);
+    if (cbId == CUPTI_CBID_NVTX_nvtxRangePushA) {
+      auto message = nvtx::getMessageFromRangePushA(nvtxData->functionParams);
+      threadState.enterScope(message);
+    } else if (cbId == CUPTI_CBID_NVTX_nvtxRangePop) {
+      threadState.exitScope();
+    } // TODO: else handle other NVTX range functions
   } else {
     const CUpti_CallbackData *callbackData =
         static_cast<const CUpti_CallbackData *>(cbData);
@@ -383,6 +401,8 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
   setGraphCallbacks(subscriber, /*enable=*/true);
   setRuntimeCallbacks(subscriber, /*enable=*/true);
   setDriverCallbacks(subscriber, /*enable=*/true);
+  nvtx::enable();
+  setNvtxCallbacks(subscriber, /*enable=*/true);
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
@@ -426,6 +446,8 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   setGraphCallbacks(subscriber, /*enable=*/false);
   setRuntimeCallbacks(subscriber, /*enable=*/false);
   setDriverCallbacks(subscriber, /*enable=*/false);
+  nvtx::disable();
+  setNvtxCallbacks(subscriber, /*enable=*/false);
   cupti::unsubscribe<true>(subscriber);
   cupti::finalize<true>();
 }

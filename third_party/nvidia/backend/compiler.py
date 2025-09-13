@@ -113,7 +113,7 @@ class CUDAOptions:
     maxnreg: Optional[int] = None
     cluster_dims: tuple = (1, 1, 1)
     ptx_version: int = None
-    ptx_options: str = None
+    ptx_options: Optional[str] = knobs.nvidia.ptxas_options
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
@@ -239,7 +239,7 @@ class CUDABackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
-        pm.run(mod)
+        pm.run(mod, 'make_ttir')
         return mod
 
     @staticmethod
@@ -316,7 +316,7 @@ class CUDABackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_canonicalizer(pm)
 
-        pm.run(mod)
+        pm.run(mod, 'make_ttgir')
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         tensordesc_meta = mod.get_tensordesc_metadata()
         metadata["tensordesc_meta"] = tensordesc_meta
@@ -334,7 +334,7 @@ class CUDABackend(BaseBackend):
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
-        pm.run(mod)
+        pm.run(mod, 'gluon_to_ttgir')
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
@@ -374,7 +374,7 @@ class CUDABackend(BaseBackend):
         if CUDABackend.instrumentation:
             CUDABackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
 
-        pm.run(mod)
+        pm.run(mod, 'make_llir')
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()

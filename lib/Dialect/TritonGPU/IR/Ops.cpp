@@ -815,7 +815,16 @@ LogicalResult MemDescSubsliceOp::verify() {
   }
 
   auto ctx = getContext();
-  auto ll = triton::gpu::toLinearLayout(srcTy);
+  LinearLayout ll;
+  if (auto paddedEncoding = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
+    if (paddedEncoding.getRank() < srcTy.getRank()) {
+      return emitError("SubSlice of low rank PaddedSharedEncoding from higher "
+                       "rank tensors is not supported yet");
+    }
+    ll = paddedEncoding.getLinearComponent();
+  } else {
+    ll = triton::gpu::toLinearLayout(srcTy);
+  }
   // NYI: We don't support non-trivial block dimension for now.
   auto kBlock = mlir::StringAttr::get(getContext(), "block");
   if (ll.getInDimSize(kBlock) != 1) {

@@ -30,8 +30,9 @@ FileLineColLoc extractFileLoc(Location loc) {
     return extractFileLoc(opaqueLoc.getFallbackLocation());
   if (auto fusedLoc = dyn_cast<FusedLoc>(loc))
     return extractFileLoc(fusedLoc.getLocations().front());
-  if (auto callerLoc = dyn_cast<CallSiteLoc>(loc))
-    return extractFileLoc(callerLoc.getCaller());
+  // Prefer the innermost callee for callsite locations.
+  if (auto csLoc = dyn_cast<CallSiteLoc>(loc))
+    return extractFileLoc(csLoc.getCallee());
   StringAttr unknownFile = mlir::StringAttr::get(loc.getContext(), "<unknown>");
   return mlir::FileLineColLoc::get(unknownFile, 0, 0);
 }
@@ -109,39 +110,39 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
     funcOp->setLoc(FusedLoc::get(context, {loc}, subprogramAttr));
   }
 
-  // Get a nested loc for inlined functions
-  Location getNestedLoc(Operation *op, LLVM::DIScopeAttr scopeAttr,
-                        Location calleeLoc) {
-    auto calleeFileName = extractFileLoc(calleeLoc).getFilename();
-    auto context = op->getContext();
-    LLVM::DIFileAttr calleeFileAttr = LLVM::DIFileAttr::get(
-        context, llvm::sys::path::filename(calleeFileName),
-        llvm::sys::path::parent_path(calleeFileName));
-    auto lexicalBlockFileAttr = LLVM::DILexicalBlockFileAttr::get(
-        context, scopeAttr, calleeFileAttr, /*discriminator=*/0);
-    Location loc = calleeLoc;
-    if (mlir::isa<CallSiteLoc>(calleeLoc)) {
-      auto nestedLoc = mlir::cast<CallSiteLoc>(calleeLoc).getCallee();
-      loc = getNestedLoc(op, lexicalBlockFileAttr, nestedLoc);
-    }
-    return FusedLoc::get(context, {loc}, lexicalBlockFileAttr);
-  }
-
   void setLexicalBlockFileAttr(Operation *op) {
-    auto opLoc = op->getLoc();
-    if (auto callSiteLoc = dyn_cast<CallSiteLoc>(opLoc)) {
-      auto callerLoc = callSiteLoc.getCaller();
-      auto calleeLoc = callSiteLoc.getCallee();
-      LLVM::DIScopeAttr scopeAttr;
-      // We assemble the full inline stack so the parent of this loc must be a
-      // function
-      auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
-      auto funcOpLoc = mlir::cast<FusedLoc>(funcOp.getLoc());
-      scopeAttr = mlir::cast<LLVM::DISubprogramAttr>(funcOpLoc.getMetadata());
-      auto loc =
-          CallSiteLoc::get(getNestedLoc(op, scopeAttr, calleeLoc), callerLoc);
-      op->setLoc(loc);
-    }
+    Location opLoc = op->getLoc();
+    if (!isa<CallSiteLoc>(opLoc))
+      return;
+
+    auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    auto funcOpLoc = mlir::cast<FusedLoc>(funcOp.getLoc());
+    auto scopeAttr =
+        mlir::cast<LLVM::DISubprogramAttr>(funcOpLoc.getMetadata());
+
+    MLIRContext *ctx = op->getContext();
+    std::function<Location(Location)> makeScoped =
+        [&](Location loc) -> Location {
+      if (auto cs = dyn_cast<CallSiteLoc>(loc)) {
+        Location newCallee = makeScoped(cs.getCallee());
+        Location newCaller = makeScoped(cs.getCaller());
+        return CallSiteLoc::get(newCallee, newCaller);
+      }
+
+      // Build a DIFile for this leaf location
+      FileLineColLoc fileLine = extractFileLoc(loc);
+      StringRef inputFilePath = fileLine.getFilename().getValue();
+      LLVM::DIFileAttr fileAttr =
+          LLVM::DIFileAttr::get(ctx, llvm::sys::path::filename(inputFilePath),
+                                llvm::sys::path::parent_path(inputFilePath));
+
+      auto lexicalBlock =
+          LLVM::DILexicalBlockFileAttr::get(ctx, scopeAttr, fileAttr,
+                                            /*discriminator=*/0);
+      return FusedLoc::get(ctx, {loc}, lexicalBlock);
+    };
+
+    op->setLoc(makeScoped(opLoc));
   }
 
   void runOnOperation() override {
