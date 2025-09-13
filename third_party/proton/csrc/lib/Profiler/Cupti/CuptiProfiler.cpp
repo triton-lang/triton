@@ -402,7 +402,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
   setGraphCallbacks(subscriber, /*enable=*/true);
   setRuntimeCallbacks(subscriber, /*enable=*/true);
   setDriverCallbacks(subscriber, /*enable=*/true);
-  if (getBoolEnv("TRITON_ENABLE_NVTX")) {
+  if (getBoolEnv("TRITON_ENABLE_NVTX", true)) {
     nvtx::enable();
     setNvtxCallbacks(subscriber, /*enable=*/true);
   }
