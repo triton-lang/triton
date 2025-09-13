@@ -772,7 +772,7 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A
                                                       num_stages=1, **kernel_kwargs)
     triton_out = triton_out.to(torch.float32)
     torch.testing.assert_close(torch_out, triton_out, atol=2e-5, rtol=1e-4)
-    if preshuffle and mfma_nonkdim == 16:
+    if is_hip() and preshuffle and mfma_nonkdim == 16:
         assert "tilesPerWarp = [2, 2]" in pgm.asm["ttgir"]
 
 
