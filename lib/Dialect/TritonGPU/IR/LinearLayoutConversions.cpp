@@ -885,25 +885,22 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
   auto laneOrder =
       getOrderForDotOperand(dotWmmaLayout.getOpIdx(), rank, /*kContig*/ true);
   // generate continuous part of register bases(i.e. kWidth)
-  std::vector<std::vector<int32_t>> registerBase;
   const int32_t kWidth = dotWmmaLayout.getKWidth();
-  for (int i = 1; i < kWidth; i *= 2)
-    registerBase.push_back(std::vector<int32_t>{i, 0});
-  std::vector<std::vector<int32_t>> laneBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}};
-  switch (wmmaLayout.getVersion()) {
-  case 1:
+  auto version = wmmaLayout.getVersion();
+  std::vector<std::vector<int32_t>> registerBase, laneBase;
+  if (version == 1 || version == 2) {
+    for (int i = 1; i < kWidth; i *= 2)
+      registerBase.push_back(std::vector<int32_t>{i, 0});
     // WMMA version 1 duplicates values in lanes 0-15 and 16-31
-    laneBase.push_back({0, 0});
-    break;
-  case 2:
     // WMMA version 2 offset values in lanes 0-15 and 16-31 across k dimensions
-    laneBase.push_back({kWidth, 0});
-    break;
-  case 3:
-    // WMMA version 3 offset values in lanes 0-15 and 16-31 across k dimensions
+    laneBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {version == 1 ? 0 : kWidth}};
+  } else {
+    assert(version == 3 && "unexpected wmma version");
     if (kWidth == 16) {
-      registerBase.back() = {kWidth, 0};
-      laneBase.push_back({kWidth / 2, 0});
+      registerBase =
+          std::vector<std::vector<int32_t>>{{1, 0}, {2, 0}, {4, 0}, {16, 0}};
+      laneBase = std::vector<std::vector<int32_t>>{
+          {0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}};
     } else if (kWidth == 32) {
       registerBase = std::vector<std::vector<int32_t>>{
           {1, 0}, {2, 0}, {4, 0}, {16, 0}, {32, 0}};
@@ -912,9 +909,6 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
     } else {
       assert(false && "unexpected kWidth for WMMA v3");
     }
-    break;
-  default:
-    assert(false && "unexpected version");
   }
   // Generate layout for one wmma instruction
   LinearLayout tileLayout(
