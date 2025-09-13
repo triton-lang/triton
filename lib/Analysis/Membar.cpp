@@ -1,4 +1,5 @@
 #include "triton/Analysis/Membar.h"
+#include "mlir/IR/Builders.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -157,9 +158,16 @@ void MembarOrFenceAnalysis::visitTerminator(
   llvm_unreachable("Unknown terminator encountered in membar analysis");
 }
 
-void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
-  OpBuilder::InsertionGuard g(*builder);
-  auto barrierOp = builder->create<gpu::BarrierOp>(op->getLoc());
+MembarAnalysis::MembarAnalysis(Allocation *allocation, MembarFilterFn filter,
+                               MembarInsertBarrierFn insertBarrierFn)
+    : MembarOrFenceAnalysis(allocation, filter, insertBarrierFn) {
+  insertBarrier = [insertBarrierFn](Location loc, OpBuilder *builder) {
+    OpBuilder::InsertionGuard g(*builder);
+    if (!insertBarrierFn)
+      builder->create<gpu::BarrierOp>(loc);
+    else
+      insertBarrierFn(loc, builder);
+  };
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
@@ -176,7 +184,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     // If the current op is an async wait and the next op is not a barrier we
     // insert a barrier op and sync
     builder->setInsertionPointAfter(op);
-    insertBarrier(op, builder);
+    insertBarrier(op->getLoc(), builder);
     blockInfo->sync();
     return;
   }
@@ -254,7 +262,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     auto insertCTABarrier = blockInfo->isIntersected(curBlockInfo, filter);
     if (insertCTABarrier) {
       builder->setInsertionPoint(op);
-      insertBarrier(op, builder);
+      insertBarrier(op->getLoc(), builder);
     }
     // Ops with a scratch buffer that don't use warp.sync internally sync
     // read/write on shared memory
@@ -263,7 +271,7 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     curBlockInfo.syncReadIntervals[interval].insert(op);
   } else if (blockInfo->isIntersected(curBlockInfo, filter)) {
     builder->setInsertionPoint(op);
-    insertBarrier(op, builder);
+    insertBarrier(op->getLoc(), builder);
     blockInfo->sync();
   }
   // Update the region info, even if barrier is inserted, we have to maintain

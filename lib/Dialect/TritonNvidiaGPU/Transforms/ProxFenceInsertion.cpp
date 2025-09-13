@@ -76,8 +76,9 @@ class ProxyFenceAnalysis : public MembarOrFenceAnalysis {
 
 public:
   ProxyFenceAnalysis() = default;
-  explicit ProxyFenceAnalysis(Allocation *allocation, MembarFilterFn filter)
-      : MembarOrFenceAnalysis(allocation, filter) {}
+  explicit ProxyFenceAnalysis(Allocation *allocation, MembarFilterFn filter,
+                              MembarInsertBarrierFn insertBarrier)
+      : MembarOrFenceAnalysis(allocation, filter, insertBarrier) {}
 
 private:
   /// Updates the BlockInfo operation based on the operation.
