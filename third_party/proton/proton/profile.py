@@ -27,7 +27,7 @@ def _get_backend_default_path(backend: str) -> str:
     lib_path = ""
     if backend == "cupti":
         # First try to get the path from the environment variable that overrides the default path
-        lib_path = knobs.proton.cupti_dir
+        lib_path = knobs.proton.cupti_lib_dir
         if lib_path is None:
             # Get the default path for the cupti backend,
             # which is the most compatible with the current CUPTI header file triton is compiled with
@@ -108,12 +108,12 @@ def start(
     name = DEFAULT_PROFILE_NAME if name is None else name
     backend = _select_backend() if backend is None else backend
     backend_path = _get_backend_default_path(backend)
+    # Convert mode to its string representation for libproton's runtime
     mode_str = _get_mode_str(backend, mode)
 
     _check_env(backend)
 
-    # Convert mode to its string representation for libproton's runtime
-    session = libproton.start(name, context, data, backend, mode_str, backend_path)
+    session = libproton.start(name, context, data, backend, backend_path, mode_str)
 
     if hook == "triton":
         HookManager.register(LaunchHook(), session)
