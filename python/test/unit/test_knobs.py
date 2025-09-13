@@ -293,3 +293,14 @@ def test_opt_bool(fresh_knobs, monkeypatch):
     assert fresh_knobs.amd.use_block_pingpong
     monkeypatch.delenv("TRITON_HIP_USE_BLOCK_PINGPONG")
     assert fresh_knobs.amd.use_block_pingpong is None
+
+
+def test_proton(fresh_knobs, monkeypatch):
+    assert fresh_knobs.proton.cupti_dir is None
+    assert fresh_knobs.proton.enable_nvtx is True
+
+    monkeypatch.setenv("TRITON_CUPTI_PATH", "/tmp/cupti")
+    monkeypatch.setenv("TRITON_PROTON_ENABLE_NVTX", "0")
+
+    assert fresh_knobs.proton.cupti_dir == "/tmp/cupti"
+    assert not fresh_knobs.proton.enable_nvtx
