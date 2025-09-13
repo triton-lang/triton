@@ -504,7 +504,7 @@ def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path):
     proton_scope = children[0]
     assert proton_scope["frame"]["name"] == "proton_scope"
     assert len(proton_scope["children"]) == 1
-    if nvtx_enabled:
+    if enable_nvtx:
         nvtx_range0 = proton_scope["children"][0]
         assert nvtx_range0["frame"]["name"] == "nvtx_range0"
         assert len(nvtx_range0["children"]) == 1
