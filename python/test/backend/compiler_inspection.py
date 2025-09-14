@@ -1,11 +1,5 @@
 import os
-import inspect
-
-from importlib.util import spec_from_file_location, module_from_spec
-import sys
-
 from triton import knobs
-from triton.backends.compiler import Language
 
 def inspect_stages(self, stages, options, language, capability):
     if os.getenv('TRITON_MOCK_INSPECT_STAGES', '0') != '0':
