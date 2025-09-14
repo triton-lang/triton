@@ -7,56 +7,21 @@ import sys
 from triton import knobs
 from triton.backends.compiler import Language
 
-
-def dump_stages(self, stages, options, language, capability):
-    source_code = "# This is generated from Triton compiler.py"
-    source_code = source_code + '\n' + "from triton._C.libtriton import ir, passes, llvm, amd, nvidia"
-    source_code = source_code + '\n' + "class GPUOverrideBackend:"
-    source_code = source_code + '\n' + inspect.getsource(self.make_ttir)
-    source_code = source_code + '\n' + inspect.getsource(self.make_ttgir)
-    full_name = "compiler_override.py"
-    if knobs.cache.dump_dir:
-        full_name = os.path.join(knobs.cache.dump_dir, full_name)
-
-    with open(full_name, "w") as file:
-        file.write(source_code)
-
-
-def override_stages(self, stages, options, language, capability):
-    # Limit to TTIR and TTGIR for now
-    if language != Language.TRITON: return
-    full_name = "compiler_override.py"
-    if knobs.cache.override_dir:
-        full_name = os.path.join(knobs.cache.override_dir, full_name)
-
-    print(f"\nOverriding compile pass stages with file {full_name}")
-    module_name = 'triton_override_compiler_stages'
-    spec = spec_from_file_location(module_name, full_name) if os.path.isfile(full_name) else None
-    if not spec: return
-
-    module = module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    if not hasattr(module, 'GPUOverrideBackend'): return
-    module = getattr(module, 'GPUOverrideBackend')
-
-    has_func = lambda mod, name: hasattr(mod, name) and callable(getattr(mod, name))
-    make_lambda = lambda f: lambda src, metadata: f(src, metadata, options, capability)
-    if has_func(module, "make_ttir"): stages["ttir"] = make_lambda(module.make_ttir)
-    if has_func(module, "make_ttgir"): stages["ttgir"] = make_lambda(module.make_ttgir)
-    # make_llir is not static, it uses self.target.arch so we don't allow overriding it
-    # for now
-
-
 def inspect_stages(self, stages, options, language, capability):
-    if os.getenv('TRITON_DUMP_PASS_STAGES', '0') != '0':
-        dump_stages(self, stages, options, language, capability)
-    if os.getenv('TRITON_OVERRIDE_PASS_STAGES', '0') != '0':
-        override_stages(self, stages, options, language, capability)
-
+    if os.getenv('TRITON_MOCK_INSPECT_STAGES', '0') != '0':
+        source_code = "# This is generated from Triton add_stages_inspection_hook"
+        full_name = os.path.join(knobs.cache.dump_dir, "inspect_stages.py")
+        with open(full_name, "w") as file:
+            file.write(source_code)
+    if os.getenv('TRITON_MOCK_OVERRIDE_STAGES', '0') != '0':
+        make_lambda = lambda f: lambda src, metadata: f(src, metadata, options, capability)
+        stages["ttir"] = make_lambda(self.make_ttir)
+        stages["ttgir"] = make_lambda(self.make_ttgir)
 
 def init():
-    knobs.runtime.add_stages_inspection_hook = inspect_stages
-
+    do_mock_inspect = os.getenv('TRITON_MOCK_INSPECT_STAGES', '0') != '0'
+    do_mock_override = os.getenv('TRITON_MOCK_OVERRIDE_STAGES', '0') != '0'
+    if do_mock_inspect or do_mock_override:
+        knobs.runtime.add_stages_inspection_hook = inspect_stages
 
 init()

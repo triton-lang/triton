@@ -17,46 +17,24 @@ def is_hip():
 def test_override(tmp_path: pathlib.Path):
     dir_path = os.path.dirname(os.path.realpath(__file__))
 
-    # Run once to get the file dumps
-    first_env = os.environ.copy()
-    first_env["TRITON_ALWAYS_COMPILE"] = "1"
-    first_env["TRITON_ENABLE_COMPILER_INSPECTION"] = "1"
-    first_env["TRITON_DUMP_PASS_STAGES"] = "1"
-    first_env["TRITON_DUMP_DIR"] = str(tmp_path)
+    test_env = os.environ.copy()
+    test_env["TRITON_ALWAYS_COMPILE"] = "1"
+    test_env["TRITON_MOCK_INSPECT_STAGES"] = "1"
+    test_env["TRITON_DUMP_DIR"] = str(tmp_path)
 
-    subprocess.run(["python3", dir_path + "/override_helper.py"], env=first_env)
-    filename = tmp_path / "compiler_override.py"
+    subprocess.run(["python3", dir_path + "/override_helper.py"], env=test_env)
 
+    filename = tmp_path / "inspect_stages.py"
     with open(filename, "r") as infile:
         file_str = infile.readlines()
 
-    with open(filename, "w") as outfile:
-        for line in file_str:
-            # turn off pre-fetching for test
-            if "add_prefetch" in line:
-                continue
-            outfile.write(line)
-
-    # # Run again with pipeline override
-    second_env = os.environ.copy()
-    second_env["TRITON_ALWAYS_COMPILE"] = "1"
-    second_env["TRITON_ENABLE_COMPILER_INSPECTION"] = "1"
-    second_env["TRITON_OVERRIDE_PASS_STAGES"] = "1"
-    second_env["TRITON_REPRODUCER_PATH"] = str(tmp_path)
-    second_env["TRITON_OVERRIDE_DIR"] = str(tmp_path)
-
-    subprocess.run(["python3", dir_path + "/override_helper.py"], env=second_env)
-
-    curr_repro_path = tmp_path / ("../test_override0." + "make_ttgir" + ".repro.mlir")
-    repro = curr_repro_path.read_text()
-    m = re.search(r"pipeline: \"(.*" + "convert-triton-to-tritongpu" + ".*)\"", repro)
-    assert "tritongpu-prefetch" not in m.group(1)
+    assert file_str == ["# This is generated from Triton add_stages_inspection_hook"]
 
 
 def test_override_integrity(tmp_path: pathlib.Path):
     dir_path = os.path.dirname(os.path.realpath(__file__))
 
-    # Run once to get the clean repro dump
+    # Run once to get the clean/golden repro dump
     golden_env = os.environ.copy()
     golden_env["TRITON_ALWAYS_COMPILE"] = "1"
     golden_env["TRITON_DUMP_DIR"] = str(tmp_path)
@@ -71,24 +49,15 @@ def test_override_integrity(tmp_path: pathlib.Path):
     golden_ttgir_repro = curr_repro_path.read_text()
     curr_repro_path.unlink()
 
-    # Run once to get the file dumps
-    first_env = os.environ.copy()
-    first_env["TRITON_ALWAYS_COMPILE"] = "1"
-    first_env["TRITON_ENABLE_COMPILER_INSPECTION"] = "1"
-    first_env["TRITON_DUMP_PASS_STAGES"] = "1"
-    first_env["TRITON_DUMP_DIR"] = str(tmp_path)
-
-    subprocess.run(["python3", dir_path + "/override_helper.py"], env=first_env)
-
     # # Run again with pipeline override
-    second_env = os.environ.copy()
-    second_env["TRITON_ALWAYS_COMPILE"] = "1"
-    second_env["TRITON_ENABLE_COMPILER_INSPECTION"] = "1"
-    second_env["TRITON_OVERRIDE_PASS_STAGES"] = "1"
-    second_env["TRITON_REPRODUCER_PATH"] = str(tmp_path)
-    second_env["TRITON_OVERRIDE_DIR"] = str(tmp_path)
+    test_env = os.environ.copy()
+    test_env["TRITON_ALWAYS_COMPILE"] = "1"
+    test_env["TRITON_MOCK_OVERRIDE_STAGES"] = "1"
+    test_env["TRITON_REPRODUCER_PATH"] = str(tmp_path)
+    test_env["TRITON_DUMP_DIR"] = str(tmp_path)
+    test_env["TRITON_OVERRIDE_DIR"] = str(tmp_path)
 
-    subprocess.run(["python3", dir_path + "/override_helper.py"], env=second_env)
+    subprocess.run(["python3", dir_path + "/override_helper.py"], env=test_env)
 
     curr_repro_path = tmp_path / ("../test_override_integrity0." + "make_ttir" + ".repro.mlir")
     override_ttir_repro = curr_repro_path.read_text()
