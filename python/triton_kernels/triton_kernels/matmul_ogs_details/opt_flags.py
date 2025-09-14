@@ -5,6 +5,7 @@ import triton
 from triton_kernels.target_info import get_cdna_version
 import torch
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
+from triton_kernels.tensor import bitwidth
 
 
 @dataclass
@@ -80,15 +81,10 @@ def make_default_opt_flags_amd(
     num_xcds = 8
     xcd_swizzle = num_xcds
     # block_nk:
+    # TODO: Does opt_flags_amd.compute_block_nk need to be refactored?
     block_n, block_k = opt_flags_amd.compute_block_nk(
         n, block_m, grid_m, num_xcds, lhs_dtype, rhs_dtype, precision_config
     )
-    # Replace block_k if provided in constraints.
-    # TODO: Does opt_flags_amd.compute_block_nk need to be refactored?
-    if constraints.get("block_k", None) is not None:
-        block_k = constraints["block_k"]
-    if constraints.get("block_n", None) is not None:
-        block_n = constraints["block_n"]
     is_persistent = constraints.get("is_persistent", False)
     # split_k:
     if constraints.get("split_k", None) is not None:
@@ -109,10 +105,32 @@ def make_default_opt_flags_amd(
     epilogue_subtile = constraints.get('epilogue_subtile', None)
     if epilogue_subtile is None:
         epilogue_subtile = 1
+
+    # specific configs for F16 x MXFP4
+    if bitwidth(lhs_dtype) == 16 and bitwidth(rhs_dtype) == 4 and precision_config.weight_scale is not None:
+        split_k = 1
+        if m <= 1024:
+            target_kernel_kwargs["waves_per_eu"] = 3
+            block_n = 128
+            block_k = 256
+            num_warps = 4
+        else:
+            target_kernel_kwargs["waves_per_eu"] = 0
+            block_m = 64
+            block_n = 512
+            block_k = 256
+            num_warps = 8
+
+    def replace_with_valid_constraint(k: str, v):
+        if constraints.get(k, None) is not None:
+            return constraints[k]
+        else:
+            return v
+
     ret = OptFlags(
-        block_m=block_m,
-        block_n=block_n,
-        block_k=block_k,
+        block_m=replace_with_valid_constraint('block_m', block_m),
+        block_n=replace_with_valid_constraint('block_n', block_n),
+        block_k=replace_with_valid_constraint('block_k', block_k),
         num_warps=num_warps,
         num_stages=num_stages,
         group_m=group_m,
