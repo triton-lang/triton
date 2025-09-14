@@ -5,7 +5,7 @@ import pathlib
 
 from triton import knobs
 from triton._C.libproton import proton as libproton
-from .flags import set_profiling_off, set_profiling_on, is_command_line
+from .flags import flags
 from .hooks import HookManager, LaunchHook, InstrumentationHook
 from .mode import BaseMode
 from typing import Optional, Union
@@ -27,7 +27,7 @@ def _get_backend_default_path(backend: str) -> str:
     lib_path = ""
     if backend == "cupti":
         # First try to get the path from the environment variable that overrides the default path
-        lib_path = knobs.proton.cupti_dir
+        lib_path = knobs.proton.cupti_lib_dir
         if lib_path is None:
             # Get the default path for the cupti backend,
             # which is the most compatible with the current CUPTI header file triton is compiled with
@@ -99,21 +99,21 @@ def start(
     Returns:
         session (int): The session ID of the profiling session.
     """
-    if is_command_line():
+    if flags.command_line:
         # Ignore the start() call if the script is run from the command line.
         return
 
-    set_profiling_on()
+    flags.profiling_on = True
 
     name = DEFAULT_PROFILE_NAME if name is None else name
     backend = _select_backend() if backend is None else backend
     backend_path = _get_backend_default_path(backend)
+    # Convert mode to its string representation for libproton's runtime
     mode_str = _get_mode_str(backend, mode)
 
     _check_env(backend)
 
-    # Convert mode to its string representation for libproton's runtime
-    session = libproton.start(name, context, data, backend, mode_str, backend_path)
+    session = libproton.start(name, context, data, backend, backend_path, mode_str)
 
     if hook == "triton":
         HookManager.register(LaunchHook(), session)
@@ -134,7 +134,7 @@ def activate(session: Optional[int] = None) -> None:
     Returns:
         None
     """
-    if is_command_line() and session != 0:
+    if flags.command_line and session != 0:
         raise ValueError("Only one session can be activated when running from the command line.")
 
     HookManager.activate(session)
@@ -156,7 +156,7 @@ def deactivate(session: Optional[int] = None) -> None:
     Returns:
         None
     """
-    if is_command_line() and session != 0:
+    if flags.command_line and session != 0:
         raise ValueError("Only one session can be deactivated when running from the command line.")
 
     HookManager.deactivate(session)
@@ -183,10 +183,10 @@ def finalize(session: Optional[int] = None, output_format: Optional[str] = "") -
     HookManager.unregister(session)
 
     if session is None:
-        set_profiling_off()
+        flags.profiling_on = False
         libproton.finalize_all(output_format)
     else:
-        if is_command_line() and session != 0:
+        if flags.command_line and session != 0:
             raise ValueError("Only one session can be finalized when running from the command line.")
         libproton.finalize(session, output_format)
 
