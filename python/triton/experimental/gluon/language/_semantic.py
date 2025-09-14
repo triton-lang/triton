@@ -2,7 +2,7 @@ from typing import Sequence, List, TypeVar, Tuple, Callable
 import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
-from ._layouts import AutoLayout, DistributedLayout, SliceLayout
+from ._layouts import AutoLayout, DistributedLayout, SliceLayout, SharedLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
@@ -205,6 +205,20 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(value.dtype == mem_desc.dtype,
                lambda: f"source dtype {value.dtype} and destination dtype {mem_desc.dtype} must match")
         self.builder.create_local_store(mem_desc.handle, value.handle)
+
+    def bank_conflicts(self, reg_layout, shared_layout, shape, bitwidth):
+        reg_attr = reg_layout._to_ir(self.builder)
+        shared_attr = shared_layout._to_ir(self.builder)
+        return self.builder.get_shared_bank_conflicts(reg_attr, shared_attr, list(shape), bitwidth)
+
+    def to_linear_layout(self, layout, shape):
+        _check(isinstance(layout, (DistributedLayout, SharedLayout)),
+               lambda: f"Expected a DistributedLayout or SharedLayout, got {type(layout)}")
+
+        if not isinstance(shape, list):
+            shape = list(shape)
+
+        return self.builder.to_linear_layout(layout._to_ir(self.builder), shape)
 
     def shared_dealloc(self, mem_desc):
         self.builder.create_local_dealloc(mem_desc.handle)
