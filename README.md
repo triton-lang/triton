@@ -263,28 +263,14 @@ export TRITON_OVERRIDE_DIR=<override_dir>
 ```
 
 **Compiler Pipeline Inspection Steps**
-```bash
-# To introspect the pipeline add_stages, set the following environments:
-export TRITON_INSPECT_PASS_STAGES=1
-```
-
-And provide a hook like so:
+To introspect the pipeline `add_stages`, before running your kernels, simply set
+the add_stages_inspection_hook like so:
 
 ```python
-
 def inspect_stages(_self, stages, options, language, capability):
-    # inspect
-
+    # inspect or modify add_stages here
 triton.knobs.runtime.add_stages_inspection_hook = inspect_stages
-
 ```
-
-before running your kernels.
-
-An example of using compiler pipeline inspection coupled with the hook to configure/override
-the Triton pass pipeline stages (remove, reorder, replace passes) for a specific kernel can be
-found in this test python/test/backend/test_stages_override.py
-
 
 # Changelog
 
