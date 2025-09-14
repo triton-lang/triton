@@ -1465,7 +1465,7 @@ LinearLayout getSM120DotScaledScaleLayout(
     for (int offset = instrM * mWarps; offset < instrM * mWarps * mRep_warp;
          offset <<= 1)
       registerBase.push_back({0, offset});
-    for (int k = 1; k < kRep; k += 1)
+    for (int k = 1; k < kRep; k *= 2)
       registerBase.push_back({static_cast<int32_t>(groupSize << (k - 1)), 0});
     for (int w = mWarps; w < totalWarps; w <<= 1)
       warpBase.push_back({0, 0});
@@ -1483,7 +1483,7 @@ LinearLayout getSM120DotScaledScaleLayout(
     for (int offset = instrN * nWarps; offset < instrN * nWarps * nRep_warp;
          offset <<= 1)
       registerBase.push_back({0, offset});
-    for (int k = 1; k < kRep; k += 1)
+    for (int k = 1; k < kRep; k *= 2)
       registerBase.push_back({static_cast<int32_t>(groupSize << (k - 1)), 0});
 
     for (int offset = instrN; offset < instrN * nWarps; offset <<= 1)
