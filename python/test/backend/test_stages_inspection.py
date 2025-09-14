@@ -1,18 +1,6 @@
 import os
 import subprocess
 import pathlib
-import re
-
-import triton
-
-
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
-
 
 def test_override(tmp_path: pathlib.Path):
     dir_path = os.path.dirname(os.path.realpath(__file__))
