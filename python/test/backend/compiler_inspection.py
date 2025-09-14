@@ -1,6 +1,7 @@
 import os
 from triton import knobs
 
+
 def inspect_stages(self, stages, options, language, capability):
     if os.getenv('TRITON_MOCK_INSPECT_STAGES', '0') != '0':
         source_code = "# This is generated from Triton add_stages_inspection_hook"
@@ -12,10 +13,12 @@ def inspect_stages(self, stages, options, language, capability):
         stages["ttir"] = make_lambda(self.make_ttir)
         stages["ttgir"] = make_lambda(self.make_ttgir)
 
+
 def init():
     do_mock_inspect = os.getenv('TRITON_MOCK_INSPECT_STAGES', '0') != '0'
     do_mock_override = os.getenv('TRITON_MOCK_OVERRIDE_STAGES', '0') != '0'
     if do_mock_inspect or do_mock_override:
         knobs.runtime.add_stages_inspection_hook = inspect_stages
+
 
 init()

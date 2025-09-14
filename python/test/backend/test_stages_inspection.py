@@ -2,6 +2,7 @@ import os
 import subprocess
 import pathlib
 
+
 def test_inspection(tmp_path: pathlib.Path):
     dir_path = os.path.dirname(os.path.realpath(__file__))
 
