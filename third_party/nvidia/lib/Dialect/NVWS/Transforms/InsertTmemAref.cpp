@@ -77,7 +77,6 @@ struct TmemAccessDag {
     SmallVector<OpOperand *> uses;
     for (auto &use : tok.getUses())
       uses.push_back(&use);
-    assert(uses.size() == 2);
     assert(uses.size() == 2 && "expecting two uses of a token");
     auto useThen = uses[0];
     auto useElse = uses[1];
@@ -230,7 +229,7 @@ struct TmemAccessDag {
       return addOp(use, newNode);
     }
 
-    // Mutiple uses of token are expected only in IfOp: one in then and one in
+    // Multiple uses of token are expected only in IfOp: one in then and one in
     // else branches.
     return addIfOp(newTok, newNode);
   }
@@ -346,16 +345,16 @@ void assignStage(OpBuilder &b, Operation *op, StageCluster stageCluster) {
 }
 
 template <typename OpT, typename... Args>
-OpT createInto(OpBuilder &b, Location loc,
-               std::pair<std::optional<PartitionId>, StageCluster>
-                   parititionIdStageCluster,
-               Args &&...args) {
+OpT createInto(
+    OpBuilder &b, Location loc,
+    std::pair<std::optional<PartitionId>, StageCluster> partitionIdStageCluster,
+    Args &&...args) {
   auto op = b.create<OpT>(loc, std::forward<Args>(args)...);
-  if (parititionIdStageCluster.first) {
-    SetVector<int> pid;
-    pid.insert(*parititionIdStageCluster.first);
-    setPartition(op, pid);
-    assignStage(b, op, parititionIdStageCluster.second);
+  if (partitionIdStageCluster.first) {
+    SetVector<int> partitionIds;
+    partitionIds.insert(*partitionIdStageCluster.first);
+    setPartition(op, partitionIds);
+    assignStage(b, op, partitionIdStageCluster.second);
   }
   return op;
 }
@@ -436,6 +435,9 @@ struct TMEMAref {
 TmemAccessDag::Node *
 insertTmemArefImpl(TmemAccessDag::Node *node,
                    std::optional<PartitionId> curPartitionId, TMEMAref &state) {
+  // When entering a warp-specialized loop, curPartitionId is std::nullopt.
+  // We skip ownership changes here since there's an implicit synchronization
+  // barrier when entering the ws-loop that handles the transition safely.
   if (curPartitionId && node->partitionId != curPartitionId) {
     OpBuilder b(node->op);
     Operation *prevOp = nullptr;
