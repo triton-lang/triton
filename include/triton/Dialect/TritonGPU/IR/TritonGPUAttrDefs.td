@@ -1293,18 +1293,17 @@ Row |
     "unsigned": $version,
     "bool":$isTransposed,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    "CTALayoutAttr":$CTALayout
+    "CTALayoutAttr":$CTALayout,
+    ArrayRefParameter<"unsigned">:$instrShape
   );
 
   let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<int64_t> getElemsPerInstrForOperands(int kDim, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
-                                          Type elemType, int kWidth, int kDim, int opIdx) const;
+                                          Type elemType, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-    static SmallVector<unsigned> getMNKDimPerInstr();
 
     // Returns a swizzled shared layout matching this WMMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.

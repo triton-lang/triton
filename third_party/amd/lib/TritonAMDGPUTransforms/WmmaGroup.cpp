@@ -92,7 +92,7 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
 
       // wmma_f32_16x16x32_bf16
       TRITON_WMMA_v(3, 16, 16, bf16T, bf16T, 16, f32T, 32,
-                    "llvm.amdgcn.wmma.f32.16x16x32.bf16.bf16", 32, 16),
+                    "llvm.amdgcn.wmma.f32.16x16x32.bf16.bf16", 32, 8),
 
       // wmma_f32_16x16x16_f16
       TRITON_WMMA_v(1, 16, 16, f16T, f16T, 16, f32T, 32,
@@ -139,7 +139,7 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
 
       // wmma_f32_16x16x64_bf8_bf8
       TRITON_WMMA_v(3, 16, 16, ocpBf8T, ocpBf8T, 8, f32T, 32,
-                    "llvm.amdgcn.wmma.f32.16x16x64.bf8.bf8", 64, 32),
+                    "llvm.amdgcn.wmma.f32.16x16x64.bf8.bf8", 64, 8),
   };
 }
 

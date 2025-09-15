@@ -290,7 +290,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
       cast<RankedTensorType>(op.getResult().getType()).getEncoding());
   int wmmaVer = wmmaLayout.getVersion();
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
-  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerInstr();
+  auto mnkDim = wmmaLayout.getInstrShape();
 
   auto loc = op.getLoc();
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
@@ -320,13 +320,10 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
 
   auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
   auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
-  int kWidth = aEncoding.getKWidth();
   intrinsicName = maybeWmmaIntrinsic->name;
 
-  auto repA = wmmaLayout.getRepForOperand(aTensorTy.getShape(), aElemTy, kWidth,
-                                          kDim, 0);
-  auto repB = wmmaLayout.getRepForOperand(bTensorTy.getShape(), bElemTy, kWidth,
-                                          kDim, 1);
+  auto repA = wmmaLayout.getRepForOperand(aTensorTy.getShape(), aElemTy, 0);
+  auto repB = wmmaLayout.getRepForOperand(bTensorTy.getShape(), bElemTy, 1);
 
   assert(repA[2] == repB[1]);
 
@@ -338,16 +335,20 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto numRepK = repA[2];
   auto numRepB = repA[0];
 
+  unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
+  int depth = warpSize / mnkDim[0];
+  depth = wmmaVer == 1 ? depth / 2 : depth;
+  int vecSize = kDim / depth;
+
   ValueTable ha = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedA, numRepB, numRepM, numRepK,
-      kWidth, aTensorTy.getElementType(), loc);
+      vecSize, aTensorTy.getElementType(), loc);
   ValueTable hb = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedB, numRepB, numRepN, numRepK,
-      kWidth, aTensorTy.getElementType(), loc);
+      vecSize, aTensorTy.getElementType(), loc);
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
-  unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
   constexpr unsigned vgprElemBitWidth = 32;
   unsigned paddedOutputElemSize =
       wmmaVer == 1 ? vgprElemBitWidth / dstElemTy.getIntOrFloatBitWidth() : 1;
@@ -359,7 +360,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   bool tied = numRepM % 2 == 0 && paddedOutputElemSize == 2;
   int tiedGroup = tied ? 2 : 1;
 
-  intrinsicName = addInstructionSuffix(intrinsicName, kWidth, aElemTy, bElemTy,
+  intrinsicName = addInstructionSuffix(intrinsicName, vecSize, aElemTy, bElemTy,
                                        dElemTy, tied);
   for (int b = 0; b < numRepB; ++b) {
     for (int m = 0; m < numRepM / tiedGroup; ++m) {

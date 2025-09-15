@@ -23,7 +23,7 @@ def gemm_kernel(a_ptr, b_ptr, c_ptr,  #
                 BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, BLOCK_K: ttgl.constexpr):
 
     BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
-    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [2, 2])
+    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [2, 2], [16, 16, 32])
 
     pid = ttgl.program_id(axis=0)
     num_pid_m = ttgl.cdiv(M, BLOCK_M)
@@ -46,8 +46,8 @@ def gemm_kernel(a_ptr, b_ptr, c_ptr,  #
         a = ttgl.load(a_ptr + offs_a, mask=mask_a, other=0.0)
         b = ttgl.load(b_ptr + offs_b, mask=mask_b, other=0.0)
 
-        a = ttgl.convert_layout(a, ttgl.DotOperandLayout(0, WMMA_LAYOUT, 16))
-        b = ttgl.convert_layout(b, ttgl.DotOperandLayout(1, WMMA_LAYOUT, 16))
+        a = ttgl.convert_layout(a, ttgl.DotOperandLayout(0, WMMA_LAYOUT, 8))
+        b = ttgl.convert_layout(b, ttgl.DotOperandLayout(1, WMMA_LAYOUT, 8))
 
         accumulator = ttgl.amd.gfx1250.wmma(a, b, accumulator)
 
