@@ -1,5 +1,5 @@
-#ifndef PROTON_DRIVER_GPU_CUDA_H_
-#define PROTON_DRIVER_GPU_CUDA_H_
+#ifndef PROTON_DRIVER_GPU_CUDA_API_H_
+#define PROTON_DRIVER_GPU_CUDA_API_H_
 
 #include "Device.h"
 #include "cuda.h"
@@ -44,4 +44,4 @@ Device getDevice(uint64_t index);
 
 } // namespace proton
 
-#endif // PROTON_DRIVER_GPU_CUDA_H_
+#endif // PROTON_DRIVER_GPU_CUDA_API_H_

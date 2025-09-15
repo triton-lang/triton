@@ -1147,6 +1147,12 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
 LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
                                         TensorMemoryEncodingAttr encoding) {
+  // [Zeros in TMEM LinearLayouts]
+  // If there is a zero in bases rows=32,64 this means that there is
+  // broadcasting, i.e. the same tensor element is duplicated in different
+  // addressable blocks If the zero is in any other row/col (i.e. within a given
+  // warp-addressable tmem space) it means it is not defined
+
   // We model packed layouts as having the rows/cols dimensions of bitwidth=16
   // This means that a layout with unpacked=True is the same as one with
   // unpacked=False
@@ -1182,25 +1188,26 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   auto blockM = encoding.getBlockM();
   auto blockN = std::min<int32_t>(encoding.getBlockN(), shape[1]);
   assert(blockM == 64 || blockM == 128);
-  LinearLayout tile;
+  LinearLayout tile =
+      LinearLayout::zeros1D(encoding.getColStride(), kCol, dims[1]);
   if (blockM == 64) {
-    tile = LinearLayout::identity1D(16, kRow, dims[0]) *
-           LinearLayout::identity1D(blockN, kCol, dims[1]);
+    tile *= LinearLayout::identity1D(16, kRow, dims[0]) *
+            LinearLayout::identity1D(blockN, kCol, dims[1]);
     auto bases = tile.getBases();
     if (shape[0] > blockM) {
       bases[kRow].push_back({64, 0});
     } else if (shape[1] > blockN) {
       bases[kRow].push_back({0, blockN});
     } else {
-      // Empty. This is modelled as broadcasting, same as for TMA(fp4)
+      // Empty, meaning the element is not defined
       bases[kRow].push_back({0, 0});
     }
     bases[kRow].push_back({16, 0});
     bases[kRow].push_back({32, 0});
     tile = LinearLayout(bases, dims);
   } else {
-    tile = LinearLayout::identity1D(blockM, kRow, dims[0]) *
-           LinearLayout::identity1D(blockN, kCol, dims[1]);
+    tile *= LinearLayout::identity1D(blockM, kRow, dims[0]) *
+            LinearLayout::identity1D(blockN, kCol, dims[1]);
   }
   auto repsM = shape[0] / tile.getOutDimSize(dims[0]);
   auto repsN = shape[1] / tile.getOutDimSize(dims[1]);
@@ -1219,14 +1226,18 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
   auto kRow = S("row");
   auto kCol = S("col");
   auto dims = standardOutDimNames(ctx, 2);
-  // nb. this can be done with
-  // ensureLayoutNotSmallerThan/ensureLayoutNotLargerThan but it's a bit less
-  // clear IMO
+  // See [Zeros in TMEM LinearLayouts]
   // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma-scale-factor-a-layout-1x
   // We choose repOrder = [0, 1]
   auto tile =
       LinearLayout::identity1D(std::min<int>(32, shape[0]), kRow, dims[0]) *
+      // If shape[0] < 32, we have some rows undefined
+      LinearLayout::zeros1D(32 / std::min<int>(32, shape[0]), kRow, dims[0]) *
+      // Broadcasting
+      LinearLayout::zeros1D(4, kRow, dims[0]) *
       LinearLayout::identity1D(std::min<int>(4, shape[1]), kCol, dims[1]) *
+      // If shape[1] < 4, we have some cols undefined
+      LinearLayout::zeros1D(4 / std::min<int>(4, shape[1]), kCol, dims[1]) *
       // reps
       LinearLayout::identity1D(std::max<int>(1, shape[0] / 32), kCol, dims[0]) *
       LinearLayout::identity1D(std::max<int>(1, shape[1] / 4), kCol, dims[1]);
