@@ -704,10 +704,14 @@ class HIPDriver(GPUDriver):
         warp_size = device_properties['warpSize']
         return GPUTarget("hip", arch.split(':')[0], warp_size)
 
-    def get_active_torch_device(self):
+    def get_active_torch_device(self, idx:int=None):
         import torch
-        # when using hip devices, the device string in pytorch is "cuda"
-        return torch.device("cuda", self.get_current_device())
+        if idx is None:
+            idx = self.get_current_device()
+        if torch.cuda.device_count() <= idx:
+            raise ValueError(f"Invalid device index {idx}, only {torch.cuda.device_count()} devices available.")
+        torch.cuda.set_device(idx)
+        return torch.device("cuda", idx)
 
     def get_benchmarker(self):
         from triton.testing import do_bench

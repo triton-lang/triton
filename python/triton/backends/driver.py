@@ -33,7 +33,7 @@ class DriverBase(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def get_active_torch_device(self):
+    def get_active_torch_device(self, idx:int=None):
         pass
 
     @abstractmethod

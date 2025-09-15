@@ -727,9 +727,14 @@ class CudaDriver(GPUDriver):
         warp_size = 32
         return GPUTarget("cuda", capability, warp_size)
 
-    def get_active_torch_device(self):
+    def get_active_torch_device(self, idx:int=None):
         import torch
-        return torch.device("cuda", self.get_current_device())
+        if idx is None:
+            idx = self.get_current_device()
+        if torch.cuda.device_count() <= idx:
+            raise ValueError(f"Invalid device index {idx}, only {torch.cuda.device_count()} devices available.")
+        torch.cuda.set_device(idx)
+        return torch.device("cuda", idx)
 
     def get_device_interface(self):
         import torch
