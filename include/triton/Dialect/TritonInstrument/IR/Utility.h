@@ -24,12 +24,13 @@ FuncOp getEntryPoint(ModuleOp module);
 gpu::DistributedEncodingTrait
 getSingleDimSliceEncoding(gpu::BlockedEncodingAttr encoding, int dim);
 
-// Map from region to auxiliary data
+// Map from IR region to ConSan auxiliary data. Auxiliary data is a value
+// and an optional type, for values that are stored in the scratch memory.
 struct AuxDataMap {
   struct RegionToValueMap {
     struct ValueType {
       Value value;
-      Type type;
+      Type type = nullptr;
     };
     DenseMap<Region *, ValueType> values;
     ValueType &operator[](Region *region) { return values[region]; }
