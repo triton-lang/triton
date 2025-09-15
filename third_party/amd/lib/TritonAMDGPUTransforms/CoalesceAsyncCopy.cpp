@@ -89,19 +89,19 @@ struct CoalesceAsyncCopyWrites
 
     // Do not rewrite if we already use the correct contiguity (could be from a
     // previous rewrite)
-    auto contigPerThread = ttg::getContigPerThread(srcTy);
-    auto srcElemContig = contigPerThread[blockedEnc.getOrder()[0]];
-    if (!paddedEnc && srcElemContig == loadContig) {
-      return rewriter.notifyMatchFailure(copyOp,
-                                         "already using the correct layout");
-    }
-
     auto mod = copyOp->getParentOfType<ModuleOp>();
     int numWarps = triton::gpu::lookupNumWarps(copyOp);
     int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
 
     ttg::DistributedEncodingTrait newDistEnc;
+
     if (!paddedEnc) {
+      auto contigPerThread = ttg::getContigPerThread(srcTy);
+      auto srcElemContig = contigPerThread[blockedEnc.getOrder()[0]];
+      if (srcElemContig == loadContig) {
+        return rewriter.notifyMatchFailure(copyOp, "already writes coalesced");
+      }
+
       // Get new blocked encoding with loadContig as sizePerThread in the
       // fastest dim
       assert(srcElemContig >= loadContig);
@@ -119,10 +119,10 @@ struct CoalesceAsyncCopyWrites
       // Each warp has to write coalesced into LDS so we have to change the src
       // encoding to reflect the reordering of elements from the
       // linear_component of the padded encoding. This is done by taking bases
-      // from the linear component to build a new distributed shared encoding
-      // used for the global pointers:
+      // from the linear component to build a new distributed linear encoding
+      // used for the pointers into global memory:
       // 1) Take log2(loadContig) bases as reg bases to ensure our registers per
-      // load point to contiguous elements in LDS.
+      // load instruction point to contiguous elements in LDS.
       // 2) Take log2(threadsPerWarp) as lane bases to ensure lanes write
       // contiguous into LDS.
       // 3) Take log2(numWarps) as warp bases or add braodcasting bases if we
@@ -134,12 +134,12 @@ struct CoalesceAsyncCopyWrites
 
       auto rank = srcTy.getRank();
 
-      auto offsetBases = sharedLayout.getBases().lookup(kOffset);
-      auto remainingBases = ArrayRef(offsetBases);
-
       std::vector<std::vector<int>> regBases;
       std::vector<std::vector<int>> laneBases;
       std::vector<std::vector<int>> warpBases;
+
+      auto offsetBases = sharedLayout.getBases().lookup(kOffset);
+      auto remainingBases = ArrayRef(offsetBases);
 
       int log2LoadContig = llvm::Log2_32(loadContig);
       int log2ThreadsPerWarp = llvm::Log2_32(threadsPerWarp);
