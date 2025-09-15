@@ -541,23 +541,7 @@ def bank_conflicts(distr_ty, shared_ty, _semantic=None) -> int:
     """
     distr_ty = _unwrap_if_constexpr(distr_ty)
     shared_ty = _unwrap_if_constexpr(shared_ty)
-
-    if not isinstance(distr_ty, distributed_type):
-        raise TypeError(f"bank_conflicts expects the register layout to be a distributed_type, got {type(distr_ty)}")
-
-    if not isinstance(shared_ty, shared_memory_descriptor_type):
-        raise TypeError(
-            f"bank_conflicts expects the shared layout to be a shared_memory_descriptor_type, got {type(shared_ty)}")
-
-    if distr_ty.shape != shared_ty.shape:
-        raise ValueError(f"register shape {distr_ty.shape} and shared shape {shared_ty.shape} must match")
-    if shared_ty.element_ty != distr_ty.element_ty:
-        raise ValueError(
-            f"mismatched dtypes between register ({distr_ty.element_ty}) and shared ({shared_ty.element_ty}) layouts")
-
-    shape = list(distr_ty.shape)
-    bitwidth = distr_ty.element_ty.primitive_bitwidth
-    return _semantic.bank_conflicts(distr_ty.layout, shared_ty.layout, shape, bitwidth)
+    return _semantic.bank_conflicts(distr_ty, shared_ty)
 
 
 @builtin

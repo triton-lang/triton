@@ -206,10 +206,27 @@ class GluonSemantic(TritonSemantic[TensorTy]):
                lambda: f"source dtype {value.dtype} and destination dtype {mem_desc.dtype} must match")
         self.builder.create_local_store(mem_desc.handle, value.handle)
 
-    def bank_conflicts(self, reg_layout, shared_layout, shape, bitwidth):
-        reg_attr = reg_layout._to_ir(self.builder)
-        shared_attr = shared_layout._to_ir(self.builder)
-        return self.builder.get_shared_bank_conflicts(reg_attr, shared_attr, list(shape), bitwidth)
+    def bank_conflicts(self, distr_ty, shared_ty):
+        if not isinstance(distr_ty, ttgl.distributed_type):
+            raise TypeError(
+                f"bank_conflicts expects the register layout to be a distributed_type, got {type(distr_ty)}")
+
+        if not isinstance(shared_ty, ttgl.shared_memory_descriptor_type):
+            raise TypeError(
+                f"bank_conflicts expects the shared layout to be a shared_memory_descriptor_type, got {type(shared_ty)}"
+            )
+
+        if distr_ty.shape != shared_ty.shape:
+            raise ValueError(f"register shape {distr_ty.shape} and shared shape {shared_ty.shape} must match")
+        if shared_ty.element_ty != distr_ty.element_ty:
+            raise ValueError(
+                f"mismatched dtypes between register ({distr_ty.element_ty}) and shared ({shared_ty.element_ty}) layouts"
+            )
+
+        reg_attr = distr_ty.layout._to_ir(self.builder)
+        shared_attr = shared_ty.layout._to_ir(self.builder)
+        return self.builder.get_shared_bank_conflicts(reg_attr, shared_attr, list(distr_ty.shape),
+                                                      distr_ty.element_ty.primitive_bitwidth)
 
     def to_linear_layout(self, layout, shape):
         _check(isinstance(layout, (DistributedLayout, SharedLayout)),
