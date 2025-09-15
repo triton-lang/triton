@@ -530,7 +530,7 @@ def bank_conflicts(distr_ty, shared_ty, _semantic=None) -> int:
     Count the N-way bank conflicts of all the load/store instructions generated when
     reading/writing the distributed tensor from/to the shared memory descriptor.
 
-    Note that 1-way bank conflict is, confusingly enough, the same as being bank-conflcit free.
+    Note that 1-way bank conflict is, confusingly enough, the same as being bank-conflict free.
 
     Args:
         distr_ty (distributed_type): The distributed tensor.
