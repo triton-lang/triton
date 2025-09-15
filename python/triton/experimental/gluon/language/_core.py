@@ -68,6 +68,8 @@ __all__ = [
     "bfloat16",
     "float32",
     "float64",
+    "distributed_type",
+    "shared_memory_descriptor_type",
     "static_range",
     "tuple",
     "tuple_type",
@@ -133,6 +135,8 @@ where = builtin(tl_core.where)
 class distributed_type(block_type):
 
     def __init__(self, element_ty: dtype, shape: List[int], layout):
+        layout = _unwrap_if_constexpr(layout)
+        shape = _unwrap_if_constexpr(shape)
         super().__init__(element_ty, shape)
         self.layout = layout
         self.name = f"<{self.shape}, {self.element_ty}, {self.layout}>"
@@ -161,6 +165,9 @@ class distributed_type(block_type):
 class shared_memory_descriptor_type(base_type):
 
     def __init__(self, element_ty, shape, layout, alloc_shape):
+        shape = _unwrap_if_constexpr(shape)
+        alloc_shape = _unwrap_if_constexpr(alloc_shape)
+        layout = _unwrap_if_constexpr(layout)
         self.element_ty = element_ty
         self.shape = shape
         self.layout = layout
@@ -515,3 +522,30 @@ def thread_barrier(_semantic=None):
     Insert a barrier to synchronize threads within a CTA.
     """
     return _semantic.debug_barrier()
+
+
+@builtin
+def bank_conflicts(distr_ty, shared_ty, _semantic=None) -> int:
+    """
+    Count the N-way bank conflicts of all the load/store instructions generated when
+    reading/writing the distributed tensor from/to the shared memory descriptor.
+
+    Note that 1-way bank conflict is, confusingly enough, the same as being bank-conflict free.
+
+    Args:
+        distr_ty (distributed_type): The distributed tensor.
+        shared_ty (shared_memory_descriptor_type): The shared memory descriptor.
+
+    Returns:
+        int: The number of bank conflicts.
+    """
+    distr_ty = _unwrap_if_constexpr(distr_ty)
+    shared_ty = _unwrap_if_constexpr(shared_ty)
+    return _semantic.bank_conflicts(distr_ty, shared_ty)
+
+
+@builtin
+def to_linear_layout(layout, shape, _semantic=None):
+    layout = _unwrap_if_constexpr(layout)
+    shape = _unwrap_shape(shape)
+    return _semantic.to_linear_layout(layout, shape)

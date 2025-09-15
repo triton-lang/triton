@@ -45,6 +45,9 @@ std::pair<int, int> logBankConflictsLdSt(const LinearLayout &src,
                                          const LinearLayout &smem,
                                          int32_t bitwidth);
 
+int logBankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
+                            int32_t bitwidth);
+
 std::pair<int, int> logBankConflicts(llvm::ArrayRef<int32_t> tileSrc,
                                      llvm::ArrayRef<int32_t> tileDst,
                                      const LinearLayout &smem,
