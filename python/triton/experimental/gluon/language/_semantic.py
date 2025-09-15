@@ -222,6 +222,10 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             raise ValueError(
                 f"mismatched dtypes between register ({distr_ty.element_ty}) and shared ({shared_ty.element_ty}) layouts"
             )
+        if shared_ty.shape != shared_ty.alloc_shape[-len(shared_ty.shape):]:
+            raise ValueError(
+                f"bank_conflicts NYI for subslices. Got shape {shared_ty.shape} and alloc_shape {shared_ty.alloc_shape}"
+            )
 
         reg_attr = distr_ty.layout._to_ir(self.builder)
         shared_attr = shared_ty.layout._to_ir(self.builder)
