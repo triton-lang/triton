@@ -56,6 +56,16 @@ void assignUserProvidedLatencies(scf::ForOp forOp,
   }
 }
 
+static bool isHIP(Operation *module) {
+  StringAttr targetAttr =
+      module->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
+  if (!targetAttr)
+    return mlir::emitError(mod.getLoc(), "module missing target specification");
+
+  StringRef ref = targetAttr.strref();
+  return ref.starts_with("hip:");
+}
+
 class AssignLoadLatencies {
 public:
   AssignLoadLatencies(scf::ForOp forOp, int numStages,
@@ -72,6 +82,13 @@ public:
                                   numStages);
     if (loadOpToIndLevel.empty())
       return;
+
+    if (isHIP(moduleOp)) {
+      for (auto [loadOp, dist] : loadOpToIndLevel) {
+        opLatency[loadOp] = dist;
+      }
+      return;
+    }
 
     // Calculate the stage distance between applicable loads.
     int maxIndirectionLevel = 0;
@@ -154,6 +171,7 @@ public:
       : forOp(forOp), opLatency(opLatency) {};
 
   void run() {
+    ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
     DenseMap<Operation *, int> mmaSelfLatency;
     // Check if the load op (mma operand) is pipelineable.
     auto isLoadToBePipelined = [&](Operation *op) {
@@ -201,9 +219,11 @@ public:
               opLatency[&op] += 1;
           }
         }
+      } else if (isHIP(moduleOp) && isa<tt::DotOpInterface>(&op)) {
+        opLatency[&op] = 1;
       }
     }
-    serializeSelfLatencies(forOp->getParentOfType<ModuleOp>(), mmaSelfLatency);
+    serializeSelfLatencies(moduleOp, mmaSelfLatency);
   }
 
 private:
