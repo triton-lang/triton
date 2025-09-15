@@ -287,8 +287,8 @@ int logBankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
 
   int32_t vecSize = reg.invertAndCompose(smem).getNumConsecutiveInOut();
   int32_t bankSize =
-      std::min(32 * 32 / (vecSize * bitwidth), smem.getTotalOutDimSize());
-  int32_t segmentSize = smem.getTotalOutDimSize() / bankSize;
+      std::min(32 * 32 / (vecSize * bitwidth), smem.getTotalInDimSize());
+  int32_t segmentSize = smem.getTotalInDimSize() / (bankSize * vecSize);
   SmallVector<std::pair<StringAttr, int32_t>> newInDims = {
       {S("vector"), vecSize},
       {S("bank"), bankSize},
