@@ -373,11 +373,11 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   for (const Partition &partition : partitions.getPartitions()) {
     bool failed = false;
     auto callback = [&](OpResult output, OpOperand &use, unsigned distance) {
-      if (isInRootPartition(output.getDefiningOp(), partitions)) {
+      if (partitions.isInRootPartition(output.getDefiningOp())) {
         return;
       }
       auto partitionIds = getPartitionIds(use.getOwner());
-      if (isInRootPartition(use.getOwner(), partitions) ||
+      if (partitions.isInRootPartition(use.getOwner()) ||
           llvm::is_contained(*partitionIds, partition.getIndex()))
         return;
       failed = true;

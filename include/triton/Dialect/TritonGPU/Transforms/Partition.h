@@ -102,6 +102,12 @@ public:
   // Debug dump the partition set.
   LLVM_DUMP_METHOD void dump() const;
 
+  // Utility to be used when the op is known to belong to one partition
+  Partition *getPartition(Operation *op);
+
+  // Check if the operation belongs to all partitions
+  bool isInRootPartition(Operation *op);
+
 private:
   // WarpSpecialization tag
   int tag;
@@ -121,11 +127,6 @@ void setPartition(Operation *op, const SetVector<Partition *> &partitions);
 void setPartition(Operation *op, const SetVector<int> &partitionIds);
 
 std::optional<SetVector<int>> getPartitionIds(Operation *op);
-
-// Utility to be used when the op is known to belong to one partition
-Partition *getPartition(Operation *op, PartitionSet &partitions);
-
-bool isInRootPartition(Operation *op, PartitionSet &partitions);
 
 } // namespace mlir::triton::gpu
 

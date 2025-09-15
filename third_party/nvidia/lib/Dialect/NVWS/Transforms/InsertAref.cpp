@@ -260,7 +260,7 @@ SetVector<Operation *> getTransitiveConsumers(Operation *op,
           getTransitiveConsumers(user, consumerPartition, partitions);
       opConsumers.insert(consumers.begin(), consumers.end());
     } else {
-      if (getPartition(user, partitions) == consumerPartition) {
+      if (partitions.getPartition(user) == consumerPartition) {
         opConsumers.insert(user);
       }
     }
@@ -338,10 +338,10 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
   auto loc = results[0].getLoc();
 
   auto filterUse = [&](Operation *use) {
-    if (isInRootPartition(use, partitions)) {
+    if (partitions.isInRootPartition(use)) {
       return false;
     }
-    return getPartition(use, partitions) == consumerPartition;
+    return partitions.getPartition(use) == consumerPartition;
   };
   auto [stageClusterEnter, stageClusterExit] =
       getEnterAndExitStageClustersOfUses(results, filterUse, loop);
@@ -379,7 +379,7 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
     if (auto localAlloc = result.getDefiningOp<LocalAllocOp>()) {
       auto memDescType = cast<MemDescType>(result.getType());
       auto callback = [&](Operation *oldOp, Operation *newOp) {
-        assert(getPartition(oldOp, partitions) == consumerPartition);
+        assert(partitions.getPartition(oldOp) == consumerPartition);
         setPartition(newOp, consumerPartition);
       };
       replaceUsesAndPropagateType(builder, localAlloc, dataBuf, callback);
@@ -416,7 +416,7 @@ bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
   DenseMap<Partition *, SetVector<Value>> resultsPerPartition;
   auto processResultUses = [&](Value result) {
     for (auto user : result.getUsers()) {
-      Partition *userPartition = getPartition(user, partitions);
+      Partition *userPartition = partitions.getPartition(user);
       if (producedValue.partition != userPartition) {
         resultsPerPartition[userPartition].insert(result);
       }

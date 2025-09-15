@@ -213,14 +213,14 @@ LogicalResult PipelinedLoad::determineLiveRange(Block &container,
       // This is an in-register use of the load. The result must be live before
       // the op. Since it will be loaded out of shared memory, it only needs to
       // be live until the op as well.
-      regSinks[getPartition(user, partitions)].push_back(user);
+      regSinks[partitions.getPartition(user)].push_back(user);
       continue;
     }
     SmallVector<Operation *> sinkOps;
     if (failed(findSharedMemorySinkOps((*it)->getResult(0), sinkOps)))
       return failure();
     for (Operation *sinkOp : sinkOps)
-      shmemSinks[getPartition(sinkOp, partitions)].push_back(sinkOp);
+      shmemSinks[partitions.getPartition(sinkOp)].push_back(sinkOp);
   }
   SetVector<Partition *> userPartitions;
   userPartitions.insert_range(llvm::make_first_range(regSinks));
@@ -372,7 +372,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(PartitionSet &partitions,
   auto firstLoad = llvm::min_element(loads, [&](auto &lhs, auto &rhs) {
     return domInfo.properlyDominates(lhs.loadOp, rhs.loadOp);
   });
-  Partition &loadPartition = *getPartition(firstLoad->loadOp, partitions);
+  Partition &loadPartition = *partitions.getPartition(firstLoad->loadOp);
   PartitionBuilder b(getLoc(), firstLoad->loadOp);
   StageCluster stageCluster = getStageCluster(firstLoad->loadOp);
 
@@ -395,7 +395,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(PartitionSet &partitions,
   DenseMap<Partition *, ttng::ArriveBarrierOp> arriveOps;
   for (auto [i, liveBeforeOp] : llvm::enumerate(firstLoad->liveBeforeOps)) {
     b.setInsertionPoint(liveBeforeOp);
-    Partition &userPartition = *getPartition(liveBeforeOp, partitions);
+    Partition &userPartition = *partitions.getPartition(liveBeforeOp);
     StageCluster userStageCluster = getStageCluster(liveBeforeOp);
     b.createInto<ttng::WaitBarrierOp>(userPartition, userStageCluster,
                                       curLoadBar, phase);
@@ -414,7 +414,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(PartitionSet &partitions,
       b.setInsertionPoint(liveUntilOp);
       auto arriveOp = b.createInto<ttng::ArriveBarrierOp>(
           userPartition, userStageCluster, curEmptyBar, 1);
-      arriveOps[getPartition(liveUntilOp, partitions)] = arriveOp;
+      arriveOps[partitions.getPartition(liveUntilOp)] = arriveOp;
     }
   }
 
@@ -444,7 +444,7 @@ LogicalResult PipelinedLoadGroup::lowerLoads(PartitionSet &partitions,
     // If there are remaining users, they must be in-register.
     llvm::MapVector<Partition *, SmallVector<OpOperand *>> regUses;
     for (OpOperand &use : load.loadOp->getUses())
-      regUses[getPartition(use.getOwner(), partitions)].push_back(&use);
+      regUses[partitions.getPartition(use.getOwner())].push_back(&use);
     for (auto &[partition, uses] : regUses) {
       auto users = llvm::to_vector(llvm::map_range(
           uses, [](OpOperand *use) { return use->getOwner(); }));
@@ -673,7 +673,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       continue;
     defOp = inBody(defOp);
 
-    if (isInRootPartition(defOp, partitions)) {
+    if (partitions.isInRootPartition(defOp)) {
       // If the MMA operand is coming from outside the loop, move the alloc out.
       auto allocOp = dyn_cast<LocalAllocOp>(defOp);
       if (allocOp && loop.isDefinedOutsideOfLoop(allocOp.getSrc()))
@@ -681,7 +681,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       continue;
     }
 
-    Partition *defPartition = getPartition(defOp, partitions);
+    Partition *defPartition = partitions.getPartition(defOp);
 
     if (auto allocOp = operand.getDefiningOp<LocalAllocOp>()) {
       PartitionBuilder b(allocOp.getLoc(), allocOp);
@@ -717,7 +717,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   }
 
   for (Node &node : nodes) {
-    Partition *partition = getPartition(inBody(node.op), partitions);
+    Partition *partition = partitions.getPartition(inBody(node.op));
     PartitionBuilder b(node.op->getLoc(), loop);
 
     SmallVector<Operation *> defs;
@@ -809,7 +809,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
 
     b.setInsertionPoint(mmaOp);
     Value readyView2 = createSingleBufferView(b, readyBar, index);
-    b.createInto<ttng::WaitBarrierOp>(*getPartition(mmaOp, partitions),
+    b.createInto<ttng::WaitBarrierOp>(*partitions.getPartition(mmaOp),
                                       getStageCluster(mmaOp), readyView2,
                                       phase);
     Value emptyView2 = createSingleBufferView(b, emptyBar, index);

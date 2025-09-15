@@ -171,7 +171,7 @@ LogicalResult DependencyRewriter::run() {
       }
     };
     for (Operation *op : partition.getOps()) {
-      if (isInRootPartition(op, partitions)) {
+      if (partitions.isInRootPartition(op)) {
         // skip ops in the root partition
         continue;
       }
@@ -182,7 +182,7 @@ LogicalResult DependencyRewriter::run() {
 
     auto callback = [&](Value output, OpOperand &use, unsigned distance) {
       Operation *user = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
-      Partition *usePartition = getPartition(user, partitions);
+      Partition *usePartition = partitions.getPartition(user);
       // Ignore uses in the same partition in the future.
       if (usePartition == &partition) {
         assert(distance > 0 && "self-recursion must occur in the future");

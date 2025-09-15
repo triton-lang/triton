@@ -22,8 +22,20 @@ Partition *PartitionSet::addPartition(unsigned stage) {
 Partition *PartitionSet::getPartition(unsigned idx) {
   return partitions[idx].get();
 }
+
 const Partition *PartitionSet::getPartition(unsigned idx) const {
   return partitions[idx].get();
+}
+
+Partition *PartitionSet::getPartition(Operation *op) {
+  auto id = getPartitionIds(op);
+  assert(id && id->size() == 1);
+  return getPartition((*id)[0]);
+}
+
+bool PartitionSet::isInRootPartition(Operation *op) {
+  auto partitionIds = getPartitionIds(op);
+  return !partitionIds || partitionIds->size() == getNumPartitions();
 }
 
 FailureOr<PartitionSet> PartitionSet::fromLoop(scf::ForOp loop) {
@@ -120,18 +132,7 @@ std::optional<SetVector<int>> getPartitionIds(Operation *op) {
   return partitionIds;
 }
 
-Partition *getPartition(Operation *op, PartitionSet &partitions) {
-  auto id = getPartitionIds(op);
-  assert(id && id->size() == 1);
-  return partitions.getPartition((*id)[0]);
-}
-
 bool hasPartition(Operation *op) { return getPartitionIds(op) != std::nullopt; }
-
-bool isInRootPartition(Operation *op, PartitionSet &partitions) {
-  auto partitionIds = getPartitionIds(op);
-  return !partitionIds || partitionIds->size() == partitions.getNumPartitions();
-}
 
 void Partition::iterateInputs(scf::ForOp loop,
                               function_ref<void(OpOperand &)> callback) const {
