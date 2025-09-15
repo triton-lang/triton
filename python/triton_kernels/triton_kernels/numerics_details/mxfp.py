@@ -257,7 +257,7 @@ def cvt_e2m1_to_fp32(input_tensor):
     even_floats = outputs[evens]
     odd_floats = outputs[odds]
     output_tensor = torch.stack([even_floats, odd_floats], dim=-1)
-    output_tensor = output_tensor.view(*input_tensor.shape[:-1], -1)
+    output_tensor = output_tensor.view(*input_tensor.shape[:-1], input_tensor.shape[-1] * 2)
     return output_tensor
 
 
