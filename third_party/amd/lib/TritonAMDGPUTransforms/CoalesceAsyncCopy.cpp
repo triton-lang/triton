@@ -120,16 +120,16 @@ struct CoalesceAsyncCopyWrites
       // load point to contiguous elements in LDS.
       // 2) Take log2(threadsPerWarp) as lane bases to ensure lanes write
       // contiguous into LDS.
-      // 3) Take log2(numWarps) or add braodcasting bases if we run out of bases
+      // 3) Take log2(numWarps) as warp bases or add braodcasting bases if we
+      // run out of bases
       // 4) Take any remaining bases as additional reg bases
 
       auto *ctx = srcTy.getContext();
       StringAttr kOffset = StringAttr::get(ctx, "offset");
 
-      auto ll = paddedEnc.getLinearComponent();
       auto rank = srcTy.getRank();
 
-      auto offsetBases = ll.getBases().lookup(kOffset);
+      auto offsetBases = sharedLayout.getBases().lookup(kOffset);
       auto remainingBases = ArrayRef(offsetBases);
 
       std::vector<std::vector<int>> regBases;
@@ -141,7 +141,9 @@ struct CoalesceAsyncCopyWrites
       int log2NumWarps = llvm::Log2_32(numWarps);
 
       if (remainingBases.size() < log2LoadContig + log2ThreadsPerWarp) {
-        return rewriter.notifyMatchFailure(copyOp, "dst shape is too small");
+        return rewriter.notifyMatchFailure(
+            copyOp, "dst shape is too small. We require at least loadContig * "
+                    "threadsPerWarp elements");
       }
 
       // 1) take log2(loadContig) bases as regBases
@@ -175,7 +177,7 @@ struct CoalesceAsyncCopyWrites
       StringAttr kWarp = StringAttr::get(ctx, "warp");
       StringAttr kBlock = StringAttr::get(ctx, "block");
 
-      triton::LinearLayout paddedLayout(
+      triton::LinearLayout newRegLayout(
           {
               {kRegister, regBases},
               {kLane, laneBases},
@@ -183,10 +185,17 @@ struct CoalesceAsyncCopyWrites
           },
           standardOutDims);
 
-      paddedLayout = triton::gpu::combineCtaCgaWithShape(
-          paddedLayout, blockedEnc.getCTALayout(), srcTy.getShape());
+      newRegLayout = triton::gpu::combineCtaCgaWithShape(
+          newRegLayout, blockedEnc.getCTALayout(), srcTy.getShape());
 
-      newDistEnc = ttg::LinearEncodingAttr::get(ctx, paddedLayout);
+      auto newRegToShared = newRegLayout.invertAndCompose(sharedLayout);
+      if (newRegLayout.getNumConsecutiveInOut() < loadContig) {
+        return rewriter.notifyMatchFailure(
+            copyOp, "could not coalesce global addresses based on the linear "
+                    "component of the padded encoding");
+      }
+
+      newDistEnc = ttg::LinearEncodingAttr::get(ctx, newRegLayout);
     }
 
     // Convert layout of src, mask and other to new encoding
