@@ -174,21 +174,19 @@ struct CoalesceAsyncCopyWrites
         regBases.push_back(remainingBases.consume_front());
       }
 
-      auto standardOutDims = triton::standardOutDimNames(ctx, srcTy.getRank());
-      StringAttr kRegister = StringAttr::get(ctx, "register");
-      StringAttr kLane = StringAttr::get(ctx, "lane");
-      StringAttr kWarp = StringAttr::get(ctx, "warp");
-      StringAttr kBlock = StringAttr::get(ctx, "block");
-
       triton::LinearLayout newRegLayout(
-          {{kRegister, regBases}, {kLane, laneBases}, {kWarp, warpBases}},
-          standardOutDims);
+          {
+              {StringAttr::get(ctx, "register"), regBases},
+              {StringAttr::get(ctx, "lane"), laneBases},
+              {StringAttr::get(ctx, "warp"), warpBases},
+          },
+          triton::standardOutDimNames(ctx, rank));
 
       newRegLayout = triton::gpu::combineCtaCgaWithShape(
           newRegLayout, blockedEnc.getCTALayout(), srcTy.getShape());
 
       auto newRegToShared = newRegLayout.invertAndCompose(sharedLayout);
-      if (newRegToShared.getNumConsecutiveInOut() < loadContig) {
+      if (newRegLayout.getNumConsecutiveInOut() < loadContig) {
         return rewriter.notifyMatchFailure(
             copyOp, "could not coalesce global addresses based on the linear "
                     "component of the padded encoding");

@@ -22,7 +22,7 @@ tt.func @async_copy_1d(%input: tensor<1024x!tt.ptr<f32>, #blocked>,
 #shared = #ttg.padded_shared<[4:+4] {order = [0], shape = [1024]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-// Padded encoding with an identity mapping does produce coalesced writes so we should not rewrite
+// Padded encoding with an identity mapping does produce coalesced writes so we should not change the blocked encoding
 // CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 // CHECK-LABEL: async_copy_with_padding
 tt.func @async_copy_with_padding(%input: tensor<1024x!tt.ptr<f32>, #blocked>,
