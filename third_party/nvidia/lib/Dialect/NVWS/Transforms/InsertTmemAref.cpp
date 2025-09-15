@@ -92,7 +92,7 @@ struct TmemAccessDag {
     assert(ifOp.elseBlock() == useElse->getOwner()->getBlock());
 
     auto partitionId = getPartitionId(tok.getDefiningOp());
-    // Create access DAGs for then/else blocks. T
+    // Create access DAGs for then/else blocks.
     auto thenDag =
         std::make_unique<Node>(nullptr, nullptr, std::nullopt, nullptr);
     auto elseDag =
