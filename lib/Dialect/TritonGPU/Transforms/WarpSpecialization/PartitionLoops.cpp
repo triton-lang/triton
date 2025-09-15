@@ -367,8 +367,6 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   assignRootPartition(loop, partitions);
   assignRegionBodyPartition(loop, partitions);
 
-  //  loop->getParentOfType<ModuleOp>().dump();
-
   // Only the root node should have consumers at this point.
   for (const Partition &partition : partitions.getPartitions()) {
     bool failed = false;
@@ -380,6 +378,17 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
       if (partitions.isInRootPartition(use.getOwner()) ||
           llvm::is_contained(*partitionIds, partition.getIndex()))
         return;
+
+      // check if consumer partition set is a subset of the producer partitions
+      auto defOpPartitionIds = getPartitionIds(output.getDefiningOp());
+      bool isValidSubset = std::all_of(
+          partitionIds->begin(), partitionIds->end(), [&](int consumerId) {
+            return llvm::is_contained(*defOpPartitionIds, consumerId);
+          });
+
+      if (isValidSubset)
+        return; // Valid: consumer ⊆ producer
+
       failed = true;
       InFlightDiagnostic diag =
           mlir::emitWarning(output.getLoc(), "non-root partition #")
