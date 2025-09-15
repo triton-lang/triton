@@ -181,7 +181,7 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   auto arefTy = op.getType();
   auto arefBufTypes = llvm::to_vector(llvm::map_range(
       arefTy.getBaseType(), [](Type type) { return cast<MemDescType>(type); }));
-  auto depth = arefDepth(arefBufTypes[0]);
+  auto depth = getArefDepth(arefBufTypes[0]);
 
   SetVector<Operation *> arefUsers;
   for (auto user : op->getUsers())

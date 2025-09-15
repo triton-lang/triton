@@ -32,9 +32,9 @@ struct PartitionId : std::pair<int, int> {
 std::optional<PartitionId> getPartitionId(Operation *op);
 #endif
 
-gpu::MemDescType arefViewBufferType(gpu::MemDescType arefBufType);
-gpu::MemDescType arefMultiBufferedType(gpu::MemDescType arefBufType, int depth);
-int arefDepth(gpu::MemDescType bufTy);
+gpu::MemDescType getArefViewBufferType(gpu::MemDescType arefBufType);
+gpu::MemDescType getArefMultiBufferedType(gpu::MemDescType arefBufType, int depth);
+int getArefDepth(gpu::MemDescType bufTy);
 
 } // namespace mlir::triton::nvws
 

@@ -41,14 +41,14 @@ std::optional<PartitionId> getPartitionId(Operation *op) {
 }
 #endif
 
-int arefDepth(MemDescType bufTy) {
+int getArefDepth(MemDescType bufTy) {
   auto shape = bufTy.getShape();
   return isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(bufTy.getEncoding())
              ? 1
              : shape[0];
 }
 
-MemDescType arefViewBufferType(MemDescType bufTy) {
+MemDescType getArefViewBufferType(MemDescType bufTy) {
   auto isScalesEnc =
       isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(bufTy.getEncoding());
   auto shape = bufTy.getShape();
@@ -59,7 +59,7 @@ MemDescType arefViewBufferType(MemDescType bufTy) {
                                /*allocShape=*/bufTy.getAllocShape());
 }
 
-MemDescType arefMultiBufferedType(MemDescType bufTy, int depth) {
+MemDescType getArefMultiBufferedType(MemDescType bufTy, int depth) {
   auto shape = bufTy.getShape();
   SmallVector<int64_t> bufferShape(shape.begin(), shape.end());
   if (!isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(bufTy.getEncoding()))

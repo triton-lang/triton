@@ -47,7 +47,7 @@ template <typename T>
 static std::optional<Twine> verifySlice(T &origType, T &newType) {
   if (!origType || !newType)
     return "MLIR Types don't match";
-  if (isa<mlir::triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+  if (isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
           origType.getEncoding())) {
     if (origType.getElementType() != newType.getElementType() ||
         origType.getRank() != newType.getRank()) {
