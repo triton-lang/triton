@@ -95,7 +95,7 @@ ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
   };
 
   MemDescType memDescType;
-  if (isDescLoadAndAlloc<LocalAllocOp>(result)) {
+  if (result.getDefiningOp<LocalAllocOp>()) {
     memDescType = dyn_cast<MemDescType>(result.getType());
   } else if (auto opt = isDescLoadAndAlloc<TMEMAllocOp>(result)) {
     auto descLoadResult = opt->first.getSrc();
@@ -180,12 +180,9 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
   Partition *producerPartition = producedValue.partition;
 
   Type token{builder.getType<AsyncTokenType>()};
-  auto c0Enter = builder.intCst(0);
   auto putEnterOp = builder.createInto<ArefPutEnterOp>(
-      *producerPartition, stageCluster, SmallVector{dataBufType}, token, aref,
-      c0Enter, c0Enter);
+      *producerPartition, stageCluster, aref, TypeRange{dataBufType}, token);
   schedule.insert(producerPartition, putEnterOp);
-  schedule.insert(producerPartition, c0Enter.getDefiningOp());
   auto dataBuf = putEnterOp.getBuffers()[0];
 
   auto producerKind = AsyncOp::NONE;
@@ -206,6 +203,10 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
   } else if (isGlobalLoadAndAlloc<LocalAllocOp>(result) ||
              isGlobalLoadAndAlloc<TMEMAllocOp>(result)) {
     llvm_unreachable("cpasync not supported yet");
+  } else if (auto alloc = result.getDefiningOp<LocalAllocOp>()) {
+    builder.createInto<LocalStoreOp>(*producerPartition, stageCluster,
+                                     alloc.getSrc(), dataBuf);
+    staleOps.push_back(alloc);
   } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
     if (auto descOp = result.getDefiningOp<triton::DescriptorOpInterface>()) {
       createNVWSDescriptorLoadOp(builder, descOp, dataBuf, producerPartition,
@@ -225,13 +226,11 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
     llvm::report_fatal_error(msg.c_str());
   }
 
-  auto c0Exit = builder.intCst(0);
   auto putExitOp = builder.createInto<ArefPutExitOp>(
-      *producerPartition, stageCluster, aref, putEnterOp.getToken(), c0Exit,
+      *producerPartition, stageCluster, aref, putEnterOp.getToken(),
       builder.getArrayAttr(SmallVector<Attribute>{
           AsyncOpAttr::get(aref.getContext(), producerKind)}));
   schedule.insert(producerPartition, putExitOp);
-  schedule.insert(producerPartition, c0Exit.getDefiningOp());
 
   return staleOps;
 };
@@ -296,8 +295,7 @@ getEnterAndExitStageClustersOfUses(const SetVector<Value> &producedResults,
                                    scf::ForOp forOp) {
   CoarseSchedule coarseSchedule;
   if (failed(coarseSchedule.deSerialize(forOp))) {
-    llvm::report_fatal_error(
-        "Failed to deserialze stage and cluster annotations.");
+    return std::make_pair(std::nullopt, std::nullopt);
   }
 
   SmallVector<Operation *> ops;
@@ -336,12 +334,10 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
   auto arefBufType = cast<MemDescType>(aref.getOperand(0).getType());
   Type bufferType = getBufferViewType(arefBufType, /*mutable*/ false);
   Type tokenType = builder.getType<AsyncTokenType>();
-  auto c0Enter = builder.intCst(0);
   auto getEnterOp = builder.createInto<ArefGetEnterOp>(
-      *consumerPartition, stageClusterEnter, SmallVector{bufferType}, tokenType,
-      aref, c0Enter, c0Enter);
+      *consumerPartition, stageClusterEnter, aref, TypeRange{bufferType},
+      tokenType);
   schedule.insert(consumerPartition, getEnterOp);
-  schedule.insert(consumerPartition, c0Enter.getDefiningOp());
 
   auto consumers = getTransitiveConsumers(results, consumerPartition, schedule);
   assert(consumers.size() > 0);
@@ -390,12 +386,10 @@ void createArefGet(PartitionBuilder &builder, scf::ForOp loop,
 
   builder.setInsertionPointAfter(exitInsertPointAfter);
 
-  auto c0Exit = builder.intCst(0);
   auto getExitOp = builder.createInto<ArefGetExitOp>(
-      *consumerPartition, stageClusterExit, aref, token, c0Exit,
+      *consumerPartition, stageClusterExit, aref, token,
       builder.getArrayAttr(asyncKinds));
   schedule.insert(consumerPartition, getExitOp);
-  schedule.insert(consumerPartition, c0Exit.getDefiningOp());
 };
 
 bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
@@ -484,6 +478,8 @@ public:
               isDescLoadAndAlloc<TMEMAllocOp>(op->getResult(0)) ||
               (allowDescLoadRegUse &&
                (isa<triton::DescriptorOpInterface>(op)))) {
+            ops.push_back(op);
+          } else if (isa<LocalAllocOp>(op)) {
             ops.push_back(op);
           }
           return WalkResult::advance();

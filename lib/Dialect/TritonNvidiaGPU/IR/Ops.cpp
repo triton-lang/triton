@@ -22,13 +22,16 @@
  */
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
+#include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir::triton::gpu;
 
@@ -99,6 +102,16 @@ LogicalResult WarpGroupDotOp::verify() {
     return emitOpError("Cannot use F32 as the accumulator element type when "
                        "the max_num_imprecise_acc is less than 32");
   }
+
+  if (auto aTensorTy = dyn_cast<RankedTensorType>(getA().getType())) {
+    auto aDotOpEnc = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
+    unsigned kWidth = 32 / aTensorTy.getElementTypeBitWidth();
+    if (aDotOpEnc.getKWidth() != kWidth) {
+      return emitOpError("in-register LHS operand must have a kWidth of ")
+             << kWidth << " but got " << aDotOpEnc.getKWidth();
+    }
+  }
+
   return success();
 }
 
@@ -261,10 +274,78 @@ static void printToken(OpAsmPrinter &p, Operation *op, Value dep, Type token) {
   p << ']';
 }
 
+namespace {
+enum class MMADTypeKind { tf32, f16, f8f6f4, i8 };
+} // namespace
+
+static std::string strMMADTypeKind(MMADTypeKind kind) {
+  switch (kind) {
+  case MMADTypeKind::tf32:
+    return "tf32";
+  case MMADTypeKind::f16:
+    return "f16";
+  case MMADTypeKind::f8f6f4:
+    return "f8f6f4";
+  case MMADTypeKind::i8:
+    return "i8";
+  }
+  llvm_unreachable("unknown mma dtype kind");
+}
+
+static std::optional<std::pair<MMADTypeKind, SmallVector<Type>>>
+getMMAv5DTypeKindAndAcc(Type t) {
+  MLIRContext *ctx = t.getContext();
+  if (t.isF32()) {
+    return {{MMADTypeKind::tf32, {Float32Type::get(ctx)}}};
+  }
+  if (t.isF16() || t.isBF16()) {
+    return {
+        {MMADTypeKind::f16, {Float16Type::get(ctx), Float32Type::get(ctx)}}};
+  }
+  // TODO: float6 and explicit float4 types are not supported yet.
+  // TODO: tcgen05.mma supports ui8/si8 -> s32 MMA, but Triton does not.
+  // FIXME: i8 is used to represent float4 types.
+  if (isa<Float8E4M3FNType, Float8E5M2Type>(t) || t.isInteger(8)) {
+    return {
+        {MMADTypeKind::f8f6f4, {Float16Type::get(ctx), Float32Type::get(ctx)}}};
+  }
+  return std::nullopt;
+}
+
+static LogicalResult verifyMMADType(Operation *op, Type a, Type b, Type d) {
+  auto akind = getMMAv5DTypeKindAndAcc(a);
+  auto bkind = getMMAv5DTypeKindAndAcc(b);
+  if (!akind)
+    return op->emitOpError("unsupported LHS operand dtype: ") << a;
+  if (!bkind)
+    return op->emitOpError("unsupported RHS operand dtype: ") << b;
+  if (akind->first != bkind->first) {
+    return op->emitOpError(
+               "LHS and RHS operand dtypes kinds don't match: LHS kind is ")
+           << strMMADTypeKind(akind->first) << " but RHS kind is "
+           << strMMADTypeKind(bkind->first);
+  }
+  if (!llvm::is_contained(akind->second, d)) {
+    InFlightDiagnostic diag =
+        op->emitOpError("unsupported accumulator dtype for operand kind ")
+        << strMMADTypeKind(akind->first) << ", accumulator dtype is " << d
+        << " but must be one of [";
+    llvm::interleaveComma(akind->second, diag, [&](Type t) { diag << t; });
+    diag << "]";
+    return diag;
+  }
+  return success();
+}
+
 LogicalResult TCGen5MMAOp::verify() {
   if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
   }
+  Type atype = getA().getType().getElementType();
+  Type btype = getB().getType().getElementType();
+  Type dtype = getD().getType().getElementType();
+  if (failed(verifyMMADType(*this, atype, btype, dtype)))
+    return failure();
   return success();
 }
 
@@ -330,11 +411,19 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
         useTwoCTAs ? builder.getUnitAttr() : UnitAttr());
 }
 
+bool TCGen5MMAOp::isAsync() { return getIsAsync(); }
+
 // -- TCGen5MMAScaledOp --
 LogicalResult TCGen5MMAScaledOp::verify() {
   if (!getIsAsync() && !getBarriers().empty()) {
     return emitOpError("The op is synchronous but a barrier is present.");
   }
+  Type atype = getA().getType().getElementType();
+  Type btype = getB().getType().getElementType();
+  Type dtype = getD().getType().getElementType();
+  if (failed(verifyMMADType(*this, atype, btype, dtype)))
+    return failure();
+  return success();
   return success();
 }
 
@@ -497,6 +586,8 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
         barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr());
 }
 
+bool TCGen5MMAScaledOp::isAsync() { return getIsAsync(); }
+
 // -- TMEMStoreOp --
 static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
                                        MemDescType memdesc, StringRef regName) {
@@ -598,14 +689,27 @@ LogicalResult TMEMCopyOp::verify() {
   }
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
   auto sharedEnc =
+      dyn_cast<triton::gpu::SharedEncodingTrait>(srcTy.getEncoding());
+  if (sharedEnc.getAlignment() < 16) {
+    return emitOpError("Source must have at least 16-byte alignment to be "
+                       "representable in a matrix descriptor.");
+  }
+
+  auto mod = getOperation()->getParentOfType<ModuleOp>();
+  unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+  if (numCTAs != 1)
+    return emitOpError("NYI: Only one CTA is supported for now.");
+
+  auto nvmmaEnc =
       dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(srcTy.getEncoding());
-  if (!sharedEnc) {
+  if (!nvmmaEnc) {
     return emitOpError("Source must have nvmma layout.");
   }
-  if (sharedEnc.getTransposed() || sharedEnc.getFp4Padded())
-    return emitOpError("The source should not be transposed or passed");
+  // Fp4 we could lift if we needed
+  if (nvmmaEnc.getTransposed() || nvmmaEnc.getFp4Padded())
+    return emitOpError("The source should not be transposed or padded");
   if (isa<TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding())) {
-    if (sharedEnc.getSwizzlingByteWidth() != 0) {
+    if (nvmmaEnc.getSwizzlingByteWidth() != 0) {
       return emitOpError("The source should not be swizzled for now");
     }
     if (!triton::gpu::isInnermostContiguous(srcTy, 512)) {
@@ -624,9 +728,10 @@ LogicalResult TMEMCopyOp::verify() {
     if (tmemEnc.getBlockM() != 128) {
       return emitOpError("Tmem layout ahouls have M=128.");
     }
-    if (sharedEnc.getSwizzlingByteWidth() == 0) {
+    if (nvmmaEnc.getSwizzlingByteWidth() == 0) {
       return emitOpError("Source layout should be swizzled.");
     }
+    // When we lift this, we should make sure we handle unpacked cleanly
     if (srcTy.getElementType().getIntOrFloatBitWidth() != 32) {
       return emitOpError("Source element type should be 32-bit.");
     }
@@ -657,7 +762,7 @@ LogicalResult TMEMSubSliceOp::verify() {
   if (dstEncoding.getBlockM() != encoding.getBlockM() ||
       dstEncoding.getCTASplitM() != encoding.getCTASplitM() ||
       dstEncoding.getCTASplitN() != encoding.getCTASplitN() ||
-      dstEncoding.getUnpacked() != encoding.getUnpacked())
+      dstEncoding.getColStride() != encoding.getColStride())
     return emitOpError("The destination must have the same block size and "
                        "CTASplit size as the source.");
   return mlir::success();
@@ -673,7 +778,8 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
   unsigned newBlockN = std::min<unsigned>(encoding.getBlockN(), size);
   auto newEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
       builder.getContext(), encoding.getBlockM(), newBlockN,
-      encoding.getUnpacked(), encoding.getCTASplitM(), encoding.getCTASplitN());
+      encoding.getColStride(), encoding.getCTASplitM(),
+      encoding.getCTASplitN());
   auto subsliceType = gpu::MemDescType::get(
       shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),
       allocTy.getMutableMemory(), allocTy.getAllocShape());

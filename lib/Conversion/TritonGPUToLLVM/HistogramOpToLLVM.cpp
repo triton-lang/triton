@@ -25,7 +25,6 @@ static SmallVector<Value> computeWarpLevelHistogram(
   int numBits = llvm::Log2_64(numBins);
   int numBitsLaneId = llvm::Log2_64(numThreadPerWarp);
   unsigned numElementsPerThreads = getTotalElemsPerThread(srcType);
-  unsigned numThreadWithUniqueData = getThreadsPerWarp(srcType)[0];
   // The histogram is distributed across threads, each thread owns `numBins /
   // numThreadPerWarp` bins.
   SmallVector<Value> warpLevelHistogram(numBins / numThreadPerWarp, zero);
@@ -43,10 +42,6 @@ static SmallVector<Value> computeWarpLevelHistogram(
         numThreadPerWarp == 32 ? 0xFFFFFFFF : 0xFFFFFFFFFFFFFFFF;
     Value fullMask = b.int_val(numThreadPerWarp, fullMaskValue);
     Value mask = fullMask;
-    // If not all threads have unique data, mask out the redundant ones.
-    if (numThreadWithUniqueData < numThreadPerWarp) {
-      mask = b.int_val(numThreadPerWarp, (1ULL << numThreadWithUniqueData) - 1);
-    }
     for (int i = 0; i < numBitsLaneId; i++) {
       Value updateMask =
           b.select(b.icmp_ne(b.and_(threadId, b.i32_val(1 << i)), zero),
@@ -96,8 +91,6 @@ static SmallVector<Value> computeCrossWarpHistogram(
     Value threadId, int numWarps) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> histogramValues;
-  unsigned numWarpsWithUniqueData = mlir::triton::gpu::getWarpsPerCTA(
-      srcType.getEncoding(), srcType.getShape())[0];
   Value laneId = b.and_(threadId, b.i32_val(numThreadPerWarp - 1));
   // Initialize the shared memory with zeros.
   int64_t numElementPerThread =
@@ -112,19 +105,6 @@ static SmallVector<Value> computeCrossWarpHistogram(
   }
   b.barrier();
   Block *afterAtomics = nullptr;
-  // If some warps have replicated data we need to skip those warps when
-  // accumulating.
-  if (numWarpsWithUniqueData < numWarps) {
-    Block *currentBlock = rewriter.getInsertionBlock();
-    afterAtomics =
-        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
-    Block *atomicBlock = rewriter.createBlock(afterAtomics);
-    rewriter.setInsertionPointToEnd(currentBlock);
-    Value cond = b.icmp_ult(
-        threadId, b.i32_val(numWarpsWithUniqueData * numThreadPerWarp));
-    rewriter.create<LLVM::CondBrOp>(loc, cond, atomicBlock, afterAtomics);
-    rewriter.setInsertionPointToStart(atomicBlock);
-  }
   // Apply atomic add to update the histogram in shared memory.
   for (int i = 0; i < warpLevelHistogram.size(); ++i) {
     Value warpLevelHistogramValue = warpLevelHistogram[i];
@@ -208,6 +188,24 @@ public:
     SmallVector<Value> histogramValue = computeCrossWarpHistogram(
         loc, rewriter, srcType, baseSharedMemPtr, warpLevelHistogram, numBins,
         numThreadsPerWarp, innerDimIndices, threadId, numWarps);
+
+    // Depending on the layout, some threads may have duplicate data. We can
+    // account for this by calculating a "replication factor" and dividing the
+    // results by it to avoid overcounting.
+    auto replicationFactor = numWarps * numThreadsPerWarp;
+    auto threadsPerWarp = getThreadsPerWarp(srcType);
+    auto warpsPerCTA =
+        getWarpsPerCTA(srcType.getEncoding(), srcType.getShape());
+    replicationFactor /= std::accumulate(
+        threadsPerWarp.begin(), threadsPerWarp.end(), 1, std::multiplies<>());
+    replicationFactor /= std::accumulate(warpsPerCTA.begin(), warpsPerCTA.end(),
+                                         1, std::multiplies<>());
+
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    for (auto i = 0; i < histogramValue.size(); ++i) {
+      histogramValue[i] =
+          b.sdiv(histogramValue[i], b.i32_val(replicationFactor));
+    }
 
     Value results = packLLElements(loc, typeConverter, histogramValue, rewriter,
                                    op.getType());

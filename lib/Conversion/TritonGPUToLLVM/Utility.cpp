@@ -567,7 +567,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 std::function<Value(Value)> calcPaddedOffset,
                 Value affineOffset, uint64_t maskSpanAffineOffset,
                 RewriterBase &rewriter, const TargetInfoBase &targetInfo,
-                Operation *localLoadOp) {
+                std::optional<int> maybeMaxVecElems, Operation *localLoadOp) {
 
   bool isStore = !valsArray.empty();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -593,7 +593,7 @@ lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBase,
                    calcPaddedOffset, affineOffset, maskSpanAffineOffset, laneId,
-                   warpId, rewriter, targetInfo, {}, emitLdSt);
+                   warpId, rewriter, targetInfo, maybeMaxVecElems, emitLdSt);
 }
 
 SmallVector<Value> lowerLdSt(
@@ -728,9 +728,17 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   }
   auto affineOffset = smemObj.getShmemOffset(loc, rewriter, srcTy);
   auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(srcTy);
-  return lowerLdStShared(
-      loc, ctx, cvt, valsArray, llvmElemTy, smemObj.getBase(), calcPaddedOffset,
-      affineOffset, maskSpanAffineOffset, rewriter, targetInfo, localLoadOp);
+
+  std::optional<int> maybeMaxVecElems;
+  if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+          srcTy.getEncoding())) {
+    maybeMaxVecElems = paddedEnc.getMinInterval();
+  }
+
+  return lowerLdStShared(loc, ctx, cvt, valsArray, llvmElemTy,
+                         smemObj.getBase(), calcPaddedOffset, affineOffset,
+                         maskSpanAffineOffset, rewriter, targetInfo,
+                         maybeMaxVecElems, localLoadOp);
 }
 
 bool emitTransferBetweenRegistersAndShared(
@@ -753,8 +761,8 @@ bool emitTransferBetweenRegistersAndShared(
       dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedTy.getEncoding());
   LinearLayout regToSharedLayout = LinearLayout::empty();
   if (paddedEnc) {
-    regToSharedLayout =
-        triton::gpu::getPaddedRegToSharedLayout(regLayout, paddedEnc);
+    const auto &sharedLL = paddedEnc.getLinearComponent();
+    regToSharedLayout = regLayout.invertAndCompose(sharedLL);
   } else {
     auto sharedLL = triton::gpu::toLinearLayout(sharedTy);
     regToSharedLayout = regLayout.invertAndCompose(sharedLL);
@@ -1150,6 +1158,14 @@ SharedMemoryObject::getMaskSpanOffsets(triton::gpu::MemDescType srcTy) {
   if (allocShape == shape) {
     return 0;
   }
+  if (auto paddedEncoding = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+          srcTy.getEncoding())) {
+    // Mask is used in fusion of constant part of memory operation address as
+    // immediate operand. Padded layout has additional address computations
+    // between main offset computation and actual memory access, which breaks
+    // constand fusing. Full mask disables this optimization.
+    return ~uint64_t(0);
+  }
   auto totalLl = triton::gpu::toLinearLayout(allocShape, srcTy.getEncoding());
   auto dimNames = standardOutDimNames(ctx, shape.size());
   // Remove the kBlock dimension
@@ -1186,14 +1202,15 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
     return b.i32_val(0);
   }
 
+  LinearLayout ll;
   // We return the offset without the padding. The padding will be added in the
   // lowering
   if (auto paddedSharedEncoding =
           dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
               srcTy.getEncoding())) {
-    auto allocShape64 = srcTy.getAllocShape();
-    SmallVector<unsigned> allocShape(allocShape64.begin(), allocShape64.end());
-    return LLVM::linearize(rewriter, loc, offsets, allocShape);
+    ll = paddedSharedEncoding.getLinearComponent();
+  } else {
+    ll = triton::gpu::toLinearLayout(srcTy);
   }
 
   auto dimNames = standardOutDimNames(ctx, offsets.size());
@@ -1202,7 +1219,6 @@ Value SharedMemoryObject::getShmemOffset(Location loc, RewriterBase &rewriter,
     logicalOffsets.push_back({dim, offset});
   }
 
-  LinearLayout ll = triton::gpu::toLinearLayout(srcTy);
   ll = ll.sublayout({str_attr("offset")}, dimNames);
   auto offset =
       applyLinearLayout(loc, rewriter, ll.invert(), logicalOffsets)[0].second;

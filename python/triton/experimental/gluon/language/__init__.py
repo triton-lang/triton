@@ -46,6 +46,9 @@ from ._core import (
     device_assert,
     expand_dims,
     full,
+    gather,
+    num_warps,
+    histogram,
     inline_asm_elementwise,
     join,
     load,
@@ -81,6 +84,7 @@ from ._layouts import (
     NVMMASharedLayout,
     SwizzledSharedLayout,
     PaddedSharedLayout,
+    SharedLinearLayout,
 )
 from ._math import (
     umulhi,

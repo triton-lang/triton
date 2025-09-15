@@ -184,8 +184,9 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
 }
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
-// with which dot operand |inputValue| is fed into if possible.
-ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx) {
+// and |vecSize| with which dot operand |inputValue| is fed into if possible.
+ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
+                                        unsigned *vecSize) {
   if (!inputValue.hasOneUse())
     return nullptr;
 
@@ -194,13 +195,17 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx) {
       user->getBlock() != inputValue.getParentBlock())
     return nullptr;
 
+  LDBG("getDotEncoding user: " << *user);
   if (auto dotOp = dyn_cast<tt::DotOpInterface>(user)) {
     OpOperand &use = *inputValue.getUses().begin();
     *opIdx = use.getOperandNumber();
+    auto operandType = cast<RankedTensorType>(inputValue.getType());
+    *vecSize = ttg::toLinearLayout(operandType).getNumConsecutiveInOut();
     auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
     return dyn_cast<ttg::AMDMfmaEncodingAttr>(dotType.getEncoding());
   }
-  return getDotEncoding(user->getResult(0), opIdx);
+
+  return getDotEncoding(user->getResult(0), opIdx, vecSize);
 }
 
 // Adapted from
@@ -213,7 +218,7 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx) {
 // needs to be used to be compatible with users' layouts.
 std::optional<ttg::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
-  ttg::SwizzledSharedEncodingAttr attr;
+  llvm::SmallVector<ttg::SwizzledSharedEncodingAttr> sharedEncs;
   for (Operation *user : loadedValue.getUsers()) {
     LDBG(" getSharedEncIfAllUsersAreDotEnc current user: " << *user);
     if (user->getNumResults() != 1)
@@ -226,8 +231,11 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
       tempAttr = cast<ttg::SwizzledSharedEncodingAttr>(memDesc.getEncoding());
-      if (!getSharedEncIfAllUsersAreDotEnc(userResult).has_value())
+      LDBG("Deduced shared encoding candidate from memDesc: " << tempAttr);
+      if (!getSharedEncIfAllUsersAreDotEnc(userResult).has_value()) {
         return std::nullopt;
+      }
+      sharedEncs.push_back(tempAttr);
     } else {
       if (!(isa<ttg::ConvertLayoutOp>(user) ||
             user->hasTrait<OpTrait::LocalLoadTrait>()))
@@ -257,26 +265,53 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
         tempAttr = ttg::SwizzledSharedEncodingAttr::get(
             loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
             ctaLayout, bitWidth, /*needTrans=*/false);
+        LDBG("Deduced shared encoding candidate from dot layout: " << tempAttr);
+        sharedEncs.push_back(tempAttr);
       } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
         // We use linear layout directly for scaled dot fp8 operands. For such
         // cases, we need to look further down the def-use chain to find the dot
         // op for the mfma layout to deduce operand index and other information.
         unsigned opIdx;
-        if (auto dotEnc = getDotEncoding(userResult, &opIdx)) {
-          unsigned vecSize = llEnc.getLinearLayout().getNumConsecutiveInOut();
+        unsigned vecSize;
+        if (auto mfmaEnc = getDotEncoding(userResult, &opIdx, &vecSize)) {
           LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
-          tempAttr = dotEnc.composeSharedLayoutForOperand(
+          tempAttr = mfmaEnc.composeSharedLayoutForOperand(
               ctaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
               /*needTrans=*/false);
+          LDBG("Deduced shared encoding candidate from mfma layout: "
+               << tempAttr);
+          sharedEncs.push_back(tempAttr);
         }
       }
     }
-    // Check that the shared encodings needed by the users are compatible.
-    if (!tempAttr || (attr != nullptr && attr != tempAttr))
-      return std::nullopt;
-    attr = tempAttr;
   }
-  return attr;
+
+  auto equalSharedEncIgnoreVec = [](ttg::SwizzledSharedEncodingAttr a,
+                                    ttg::SwizzledSharedEncodingAttr b) {
+    if (!a || !b)
+      return false;
+    return (a.getPerPhase() == b.getPerPhase() &&
+            a.getMaxPhase() == b.getMaxPhase() &&
+            a.getOrder() == b.getOrder() &&
+            a.getCTALayout() == b.getCTALayout());
+  };
+  if (sharedEncs.empty() || !sharedEncs.front())
+    return std::nullopt;
+  auto maxVecSharedEnc = sharedEncs.front();
+
+  for (auto sharedEnc : sharedEncs) {
+    if (!equalSharedEncIgnoreVec(sharedEnc, maxVecSharedEnc)) {
+      LDBG("Incompatible shared encodings");
+      return std::nullopt;
+    }
+    if (sharedEnc.getVec() > maxVecSharedEnc.getVec()) {
+      maxVecSharedEnc = sharedEnc;
+    }
+  }
+
+  LDBG("Deduced shared encoding: " << maxVecSharedEnc);
+
+  return maxVecSharedEnc;
 }
 
 bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
@@ -376,6 +411,176 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
   return loadToStreamOp;
 }
 
+/// Returns true if for a given global load with loadType, loading instead with
+/// targetLLAttr maintains at least the same level of coalescing/vectorization
+/// with same amount of load ops.
+static bool isCoalesced(RankedTensorType loadType,
+                        ttg::LinearEncodingAttr targetLLAttr) {
+  // Expect a BlockedEncoding on the load.
+  auto *ctx = loadType.getContext();
+  auto loadEnc = loadType.getEncoding();
+  auto blockedEnc = dyn_cast_or_null<ttg::BlockedEncodingAttr>(loadEnc);
+  auto shape = loadType.getShape();
+  if (!blockedEnc)
+    return false;
+
+  // Contiguous (fastest) dimension as defined by the blocked encoding.
+  const unsigned contigDim = blockedEnc.getOrder()[0];
+  const unsigned originalContigPerThread =
+      blockedEnc.getSizePerThread()[contigDim];
+
+  // This is the correct way to compute vectorization instead of using
+  // getContigPerThread. However, currently global load vectorizer doesn't
+  // support vectorization that require in thread permutation (NOTE: local_load
+  // op lowering does support this!) such as: #ttg.linear<{register = [[0, 2],
+  // [0, 1]], ...}>, so we don't use largest vectorization here as well. This
+  // should be updated once vectorization in load op lowering is fixed..
+  //
+  // auto ctaLayout = ttg::getCTALayout(loadType.getEncoding());
+  // // Dummy shared layout that emulates global memory so we can use
+  // // largestVectorisation utility.
+  // auto sharedEncoding = ttg::SwizzledSharedEncodingAttr::get(
+  //     ctx, 1, 1, 1, blockedEnc.getOrder(), ctaLayout);
+  // auto sharedLL = triton::gpu::toLinearLayout(shape, sharedEncoding);
+  // auto invertedLL = ll.invertAndCompose(sharedLL).flattenOuts();
+
+  // auto [contigPerThreadLL, permutation] =
+  //     largestVectorisation(ctx, invertedLL, bitwidth, std::nullopt);
+
+  const unsigned targetContigPerThread =
+      targetLLAttr.getContigPerThread()[contigDim];
+  const unsigned targetContigPerWarp =
+      targetLLAttr.getContigPerWarp()[contigDim];
+  const unsigned originalContigPerWarp =
+      targetLLAttr.getContigPerWarp()[contigDim];
+  auto targetLL = targetLLAttr.toLinearLayout(shape);
+
+  // 1) Require that the linear layout provides at least as much per-thread and
+  // per-warp contiguity as the original load encoding.
+  if (targetContigPerThread < originalContigPerThread ||
+      targetContigPerWarp < originalContigPerWarp)
+    return false;
+
+  // 2) Check that there is no broadcasting along the warp dimension.
+  // Broadcasting would force multiple warps to share the same elements,
+  // resulting in additional global_load instructions compared to a blocked
+  // layout.
+  auto kWarp = StringAttr::get(ctx, "warp");
+
+  auto basesIt = targetLL.getBases().find(kWarp);
+  if (basesIt == targetLL.getBases().end())
+    return false;
+
+  const auto &bases = basesIt->second;
+  for (const auto &basis : bases) {
+    const bool allZero = std::all_of(basis.begin(), basis.end(),
+                                     [](int64_t v) { return v == 0; });
+    if (allZero)
+      return false;
+  }
+
+  return true;
+}
+
+/// Determine if it is safe to bypass LDS for dot operands.
+/// Normally, dot operation operands are consumed in the dot MFMA layout,
+/// which is not coalesced. To better utilize global memory bandwidth,
+/// operands are usually loaded in a coalesced "blocked" layout and then
+/// rearranged through LDS.
+///
+/// However, certain optimizations allow dot operands to be preshuffled in
+/// global memory. In that case, the operands can be loaded efficiently
+/// (in a coalesced way) and consumed directly by the dot operation.
+/// When preshuffling is used, a sequence of transpose and reshape ops
+/// must be applied to the operand.
+///
+/// To verify that preshuffling was done correctly and the final layout
+/// remains coalesced, we start from the dot MFMA layout and apply the
+/// inverse of each transpose/reshape op (while ignoring convert_layout
+/// ops) until we reach the load. We then inspect the resulting layout
+/// to decide if it is coalesced enough to load directly, without needing
+/// any further rearrangement.
+static Operation *bypassLDS(Operation *load, Operation *use) {
+  if (!load || !use)
+    return nullptr;
+
+  // Only applies to dot-like ops (scaled/regular) that conform to this
+  // interface.
+  if (!isa<tt::DotOpInterface>(use))
+    return nullptr;
+
+  // Find operands of 'use' that are in the forward slice of 'load'.
+  SetVector<Operation *> fwdSlice;
+  mlir::getForwardSlice(load, &fwdSlice);
+
+  SmallVector<Operation *> defs;
+  defs.reserve(use->getNumOperands());
+  for (Value opnd : use->getOperands()) {
+    if (Operation *def = opnd.getDefiningOp()) {
+      if (fwdSlice.contains(def))
+        defs.push_back(def);
+    }
+  }
+
+  // Expect that 'load' op matches with a single operand for dot op.
+  if (defs.size() != 1)
+    return nullptr;
+
+  Operation *def = defs.front();
+  if (!def)
+    return nullptr;
+
+  // Thread encodings from 'def' back to 'load', skipping explicit converts.
+  Attribute resultEnc =
+      cast<RankedTensorType>(def->getResult(0).getType()).getEncoding();
+  if (!resultEnc)
+    return nullptr;
+
+  Attribute srcEnc = nullptr;
+  Operation *cur = def;
+
+  while (cur && cur != load) {
+    if (!isa<triton::ReshapeOp, triton::TransposeOpInterface,
+             ttg::ConvertLayoutOp>(cur)) {
+      return nullptr;
+    }
+    // Skip explicit layout converts.
+    if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(cur)) {
+      cur = cvt.getSrc().getDefiningOp();
+      continue;
+    }
+
+    // Infer the source encoding that would produce 'resultEnc' from 'cur' op.
+    srcEnc = inferSrcEncoding(cur, resultEnc);
+    if (!srcEnc)
+      return nullptr;
+
+    resultEnc = srcEnc;
+    assert(cur->getNumOperands() == 1);
+
+    Value in = cur->getOperand(0);
+    cur = in.getDefiningOp();
+  }
+
+  // Must land exactly on the original load.
+  if (cur != load || !srcEnc)
+    return nullptr;
+
+  // Check coalescing under the inferred linear encoding.
+  auto loadType = cast<RankedTensorType>(load->getResult(0).getType());
+  auto distTrait = dyn_cast<ttg::DistributedEncodingTrait>(srcEnc);
+  if (!distTrait)
+    return nullptr;
+
+  auto srcLL = ttg::toLinearEncoding(distTrait, loadType.getShape());
+  if (!isCoalesced(loadType, srcLL))
+    return nullptr;
+
+  // Finally, rewrite the load to use the inferred (better) encoding.
+  auto newOp = convertDistributedOpEncoding(srcEnc, load);
+  return newOp;
+};
+
 LoadToInfoMap
 preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
                scf::ForOp &forOp, int numStages) {
@@ -385,7 +590,8 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
     isaFamily = triton::AMD::deduceISAFamily(*arch);
 
   bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
-  bool filterSmallVectors = isaFamily != triton::AMD::ISAFamily::CDNA4;
+  bool filterSmallVectors =
+      isaFamily != triton::AMD::ISAFamily::CDNA4 && !isRDNA(isaFamily);
   llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel =
       triton::gpu::loadOpsToIndirectionLevel(forOp, pipelineWithoutDot,
                                              axisInfoAnalysis, numStages,
@@ -403,9 +609,16 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
   LoadToInfoMap loadToInfo;
   for (const auto &[load, info] : loadOpToIndLevel) {
     auto [distance, use] = info;
-    auto sharedEncoding =
-        getSharedEncIfAllUsersAreDotEnc(load->getResult(0)).value_or(nullptr);
-    loadToInfo[load] = {sharedEncoding, distance, use};
+    auto newLoad = bypassLDS(load, use);
+    if (newLoad) {
+      loadToInfo[newLoad] = {nullptr, distance, use};
+    } else {
+      LDBG("Deduce shared encoding for: " << *load);
+      auto sharedEncoding =
+          getSharedEncIfAllUsersAreDotEnc(load->getResult(0)).value_or(nullptr);
+      loadToInfo[load] = {sharedEncoding, distance, use};
+      LDBG("Populate loadInfo with shared encoding: " << sharedEncoding);
+    }
   }
 
   return loadToInfo;
@@ -443,6 +656,7 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
                            int localPrefetch, bool useAsyncCopy,
                            bool waitAtTail, Clusters &clusters,
                            tt::CoarseSchedule &schedule) {
+  LDBG("Init SingleDotSchedule");
   int lastStage = numStages - 1;
   stages[SCHED_GLOBAL_LOAD] = 0;
   stages[SCHED_LOCAL_STORE] = globalPrefetch;
@@ -631,6 +845,7 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
               int globalPrefetch, int localPrefetch, bool useAsyncCopy,
               bool waitAtTail,
               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  LDBG("Build SingleDotSchedule");
   tt::CoarseSchedule schedule(numStages);
   Stages stages;
   Clusters clusters;
@@ -926,6 +1141,7 @@ tt::CoarseSchedule
 buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
               bool useAsyncCopy,
               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  LDBG("Build ChainedDotSchedule");
   tt::CoarseSchedule schedule(numStages);
   ChainedDotClusters clusters;
   std::generate(clusters.begin(), clusters.end(),

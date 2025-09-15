@@ -264,9 +264,9 @@ class AttentionConfig:
 
         qk_instr_shape = get_mma_instr_shape(self.qk_shape, gl.float32)
         o_instr_shape = get_mma_instr_shape(self.o_shape, gl.float32)
-        self.qk_tmem_layout = gl.constexpr(TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), unpacked=True))
-        self.o_tmem_layout = gl.constexpr(TensorMemoryLayout((o_instr_shape[0], o_instr_shape[1]), unpacked=True))
-        self.p_tmem_layout = gl.constexpr(TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), unpacked=False))
+        self.qk_tmem_layout = gl.constexpr(TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), col_stride=1))
+        self.o_tmem_layout = gl.constexpr(TensorMemoryLayout((o_instr_shape[0], o_instr_shape[1]), col_stride=1))
+        self.p_tmem_layout = gl.constexpr(TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), col_stride=1))
 
         self.qk_layout = gl.constexpr(
             get_tmem_32x32b_reg_layout(qk_instr_shape[0], qk_instr_shape[0], self.qk_shape, self.num_warps))
@@ -277,7 +277,7 @@ class AttentionConfig:
                                        (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR), self.num_warps))
         self.alpha_2d_layout = gl.constexpr(gl.BlockedLayout([1, 1], [32, 1], [self.num_warps, 1], [0, 1]))
 
-        is_fp16 = dtype.value in [gl.float16, gl.bfloat16]
+        is_fp16 = self.dtype.value in [gl.float16, gl.bfloat16]
         if is_fp16:
             self.num_kv_buffers = gl.constexpr(3 if HEAD_DIM == 128 else 6)
         else:
@@ -494,7 +494,7 @@ def _borrow_s_as_p(config, s_tmem):
 @gluon.jit
 def _borrow_s_as_alpha(config, s_tmem):
     alpha_tmem = s_tmem.slice(config.BLOCK_N // 2, 1)
-    alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=True)
+    alpha_layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], col_stride=1)
     return alpha_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], alpha_layout)
 
 
@@ -502,7 +502,7 @@ def _borrow_s_as_alpha(config, s_tmem):
 def _borrow_s_for_epilogue(config, s_tmem):
     m_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 1, 1)
     l_i_tmem = s_tmem.slice(config.BLOCK_N // 2 + 2, 1)
-    layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], unpacked=True)
+    layout: gl.constexpr = TensorMemoryLayout([config.SPLIT_M, 1], col_stride=1)
     m_i_tmem = m_i_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], layout)
     l_i_tmem = l_i_tmem._reinterpret(gl.float32, [config.SPLIT_M, 1], layout)
     return m_i_tmem, l_i_tmem

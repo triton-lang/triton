@@ -436,3 +436,48 @@ tt.func @async_copy_invalid_other_type(%input: tensor<64x64x!tt.ptr<f16>, #block
 
 // expected-error @below {{rank 0 memdesc is not allowed}}
 !memdesc = !ttg.memdesc<i64, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory>
+
+// -----
+
+#shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
+// expected-error @below {{padding rank must be equal to or one less than the shape size}}
+!rank_too_high = !ttg.memdesc<4x4x4x4xf32, #shared, #ttg.shared_memory>
+
+// -----
+
+#shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
+// expected-error @below {{padding rank must be equal to or one less than the shape size}}
+!rank_too_small = !ttg.memdesc<4xf32, #shared, #ttg.shared_memory>
+
+// -----
+
+#shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
+// expected-error @below {{Mismatch in expected shape for dimension 0. Expected: 2, got: 4}}
+!out_dim_too_small = !ttg.memdesc<2x2xf32, #shared, #ttg.shared_memory>
+
+// -----
+
+#shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
+// expected-error @below {{Mismatch in expected shape for dimension 0. Expected: 8, got: 4}}
+!out_dim_too_large = !ttg.memdesc<8x8xf32, #shared, #ttg.shared_memory>
+
+// -----
+
+// expected-error @below {{Mismatch of shape and order ranks in padded layout}}
+#shared = #ttg.padded_shared<[4:+4] {shape=[1, 2, 4], order=[1, 0]}>
+
+// -----
+
+#shared = #ttg.padded_shared<[4:+4] {shape=[32, 32], order=[1, 0]}>
+#smem = #ttg.shared_memory
+tt.func public @padded_subview_unsupported_size(%arg0: !ttg.memdesc<2x32x32xf32, #shared, #smem>) {
+    // expected-error @+1 {{SubSlice of low rank PaddedSharedEncoding from higher rank tensors is not supported yet}}
+    %a = ttg.memdesc_subslice %arg0 [0, 16, 0] : !ttg.memdesc<2x32x32xf32, #shared, #smem> -> !ttg.memdesc<2x16x32xf32, #shared, #smem, 2x32x32>
+    tt.return
+}
+
+// -----
+
+// expected-error @below {{alignment must be specified outside of the linear layout braces}}
+#shared = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [1, 0], [2, 0]], block = [], alignment = 16}>
+!alignment_in_layout = !ttg.memdesc<4x4xf32, #shared, #ttg.shared_memory>

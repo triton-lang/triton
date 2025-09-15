@@ -59,18 +59,21 @@ struct Descriptor {
   Value base;
   ValueRange shape;
   ValueRange strides;
+  Value paddingOption;
 };
 
 Descriptor unpackDescriptor(TensorDescType type, ValueRange pack) {
   int rank = type.getBlockType().getRank();
-  assert(pack.size() == 1 + 2 * static_cast<size_t>(rank) &&
+  assert(pack.size() == 1 + 2 * static_cast<size_t>(rank) + 1 &&
          "Expected tensor descriptors to consist of a pointer, "
-         "followed by 'rank' shape values and 'rank' stride values.");
+         "followed by 'rank' shape values and 'rank' stride values, "
+         "followed by a padding option value.");
 
   Descriptor res;
   res.base = pack[0];
   res.shape = pack.slice(1, rank);
   res.strides = pack.slice(1 + rank, rank);
+  res.paddingOption = pack[1 + 2 * rank];
   return res;
 }
 
@@ -211,16 +214,30 @@ Value generateMask(OpBuilder &builder, const Location &loc,
 }
 
 Value generateOther(OpBuilder &builder, Location loc, Type scalarTy,
-                    ArrayRef<int64_t> blockShape) {
+                    ArrayRef<int64_t> blockShape,
+                    Value paddingOption = nullptr) {
   auto blockTy = RankedTensorType::get(blockShape, scalarTy);
-  auto attr = builder.getZeroAttr(blockTy);
-  return builder.create<arith::ConstantOp>(loc, attr);
+  if (paddingOption && mlir::isa<FloatType>(scalarTy)) {
+    auto floatTy = mlir::cast<FloatType>(scalarTy);
+    auto nan = llvm::APFloat::getNaN(floatTy.getFloatSemantics());
+    auto nanValue = builder.create<arith::ConstantOp>(
+        loc,
+        SplatElementsAttr::get(blockTy, builder.getFloatAttr(floatTy, nan)));
+    auto zeroValue = builder.create<arith::ConstantOp>(
+        loc, SplatElementsAttr::get(blockTy, builder.getZeroAttr(floatTy)));
+    return builder.create<mlir::arith::SelectOp>(loc, paddingOption, nanValue,
+                                                 zeroValue);
+  } else {
+    auto attr = builder.getZeroAttr(blockTy);
+    return builder.create<arith::ConstantOp>(loc, attr);
+  }
 }
 
-Value generateOther(OpBuilder &builder, Location loc, TensorDescType descTy) {
+Value generateOther(OpBuilder &builder, Location loc, TensorDescType descTy,
+                    Value paddingOption = nullptr) {
   auto blockTy = descTy.getSignlessBlockType();
   return generateOther(builder, loc, blockTy.getElementType(),
-                       blockTy.getShape());
+                       blockTy.getShape(), paddingOption);
 }
 
 SmallVector<mlir::Value> castToI64(OpBuilder &builder,
@@ -237,12 +254,17 @@ struct RewriteMakeTensorDesc : OpConversionPattern<triton::MakeTensorDescOp> {
   llvm::LogicalResult
   matchAndRewrite(triton::MakeTensorDescOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    SmallVector<mlir::Value> ptrShapeStrides;
-    llvm::append_values(ptrShapeStrides, adaptor.getBase());
-    llvm::append_range(ptrShapeStrides,
+    SmallVector<mlir::Value> ptrShapeStridesPaddingOption;
+    llvm::append_values(ptrShapeStridesPaddingOption, adaptor.getBase());
+    llvm::append_range(ptrShapeStridesPaddingOption,
                        castToI64(rewriter, adaptor.getShape()));
-    llvm::append_range(ptrShapeStrides, adaptor.getStrides());
-    rewriter.replaceOpWithMultiple(op, {ptrShapeStrides});
+    llvm::append_range(ptrShapeStridesPaddingOption, adaptor.getStrides());
+    auto paddingOption = rewriter.create<mlir::arith::ConstantOp>(
+        op.getLoc(), rewriter.getI1Type(),
+        rewriter.getBoolAttr(adaptor.getPadding() ==
+                             triton::PaddingOption::PAD_NAN));
+    llvm::append_values(ptrShapeStridesPaddingOption, paddingOption);
+    rewriter.replaceOpWithMultiple(op, {ptrShapeStridesPaddingOption});
     return mlir::success();
   }
 };
@@ -258,12 +280,11 @@ struct RewriteLoadPattern : OpConversionPattern<triton::DescriptorLoadOp> {
     auto descTy = op.getDesc().getType();
     auto desc = unpackDescriptor(descTy, adaptor.getDesc());
     auto offsets = castToI64(rewriter, op.getIndices());
-
+    auto other = generateOther(rewriter, loc, descTy, desc.paddingOption);
     auto newLoad = rewriter.replaceOpWithNewOp<triton::LoadOp>(
         op, generatePtr(rewriter, loc, blockShape, desc, offsets),
-        generateMask(rewriter, loc, blockShape, desc, offsets),
-        generateOther(rewriter, loc, descTy), triton::CacheModifier::NONE,
-        triton::EvictionPolicy::NORMAL, false);
+        generateMask(rewriter, loc, blockShape, desc, offsets), other,
+        triton::CacheModifier::NONE, triton::EvictionPolicy::NORMAL, false);
     newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
 
     return llvm::success();
@@ -327,7 +348,7 @@ struct RewriteGatherPattern : OpConversionPattern<triton::DescriptorGatherOp> {
         rewriter, loc, blockShape, desc, op.getXOffsets(), op.getYOffset());
     auto other = generateOther(rewriter, loc,
                                descTy.getSignlessBlockType().getElementType(),
-                               blockShape);
+                               blockShape, desc.paddingOption);
     auto newLoad = rewriter.replaceOpWithNewOp<triton::LoadOp>(
         op, ptr, mask, other, triton::CacheModifier::NONE,
         triton::EvictionPolicy::NORMAL, false);
@@ -471,13 +492,14 @@ class TritonRewriteTensorDescriptorToPointerPass
     converter.addConversion([](mlir::triton::TensorDescType t,
                                llvm::SmallVectorImpl<mlir::Type> &out) {
       // We convert a tensor descriptor into an pointer, and a shape and stride
-      // for each dimension, i.e., we create 1+2*rank values. Note that tensor
-      // descriptors may be signed/unsigned integers whereas pointers should
-      // always be signless.
+      // for each dimension, and padding option. i.e., we create 1+2*rank+1
+      // values. Note that tensor descriptors may be signed/unsigned integers
+      // whereas pointers should always be signless.
       auto tensorType = t.getSignlessBlockType();
       out.push_back(triton::getPointerType(tensorType.getElementType()));
       out.insert(out.end(), 2 * tensorType.getRank(),
                  mlir::IntegerType::get(t.getContext(), 64));
+      out.push_back(mlir::IntegerType::get(t.getContext(), 1));
       return mlir::success();
     });
 

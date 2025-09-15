@@ -776,10 +776,10 @@ def get_git_version_suffix():
 
 
 # keep it separate for easy substitution
-TRITON_VERSION = "3.4.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
+TRITON_VERSION = "3.5.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
 
 # Dynamically define supported Python versions and classifiers
-MIN_PYTHON = (3, 9)
+MIN_PYTHON = (3, 10)
 MAX_PYTHON = (3, 14)
 
 PYTHON_REQUIRES = f">={MIN_PYTHON[0]}.{MIN_PYTHON[1]},<{MAX_PYTHON[0]}.{MAX_PYTHON[1] + 1}"
@@ -802,7 +802,6 @@ setup(
     description="A language and compiler for custom Deep Learning operations",
     long_description="",
     install_requires=[
-        "setuptools>=40.8.0",
         "importlib-metadata; python_version < '3.10'",
     ],
     packages=list(get_packages()),
