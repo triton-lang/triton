@@ -229,7 +229,7 @@ DistributedEncodingTrait getSingleDimSliceEncoding(BlockedEncodingAttr encoding,
   DistributedEncodingTrait sliceEncoding = encoding;
   for (int i = 0; i < rank; ++i) {
     if (i != dim) {
-      sliceEncoding = SliceEncodingAttr::get(ctx, i, encoding);
+      sliceEncoding = SliceEncodingAttr::get(ctx, i, sliceEncoding);
     }
   }
   return sliceEncoding;

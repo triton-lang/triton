@@ -12,20 +12,16 @@ include "triton/Dialect/TritonInstrument/IR/TritonInstrumentAttrDefs.td"
 // ConSan keeps auxilary data requied for tracking memory accesses in tensors.
 // These tensors are stored as a distributed tensor or in global scratch memory.
 //
-// Tensor name   | Storage | Type     | Description
-// ------------- | ------- | -------- | -----------
-// buffers       | tensor  | <Bxi64>  | List of base pointers of all the buffers and sub-buffers in the program
-// barriers      | tensor  | <Mxi64>  | List of pointers to all individual mbarriers in the program
-// writeState    | scratch | <Mxi8>   | Marks which buffers are being written to.
-//               |         |          | Entries in this tensor are set when write operation is issued. Entries are bitfields, where:
-//               |         |          | - bit 0: 1 if the buffer is being written to
-//               |         |          | - bit 1: 1 if the write is *not* hwPipelined
-// writeBars     | scratch | <BxMxi8> | Which barriers track writes to which buffers.
-//               |         |          | Entries in this tensor are set when commit with barrier is called.
-// readBars      | scratch | <BxMxi8> | Which barriers track reads from which buffers.
-//               |         |          | Entries in this tensor are set when read operation with barrier is issued.
-// asyncCpCommits | scratch | <Bxi8>  | Tracks number of outstanding commits for buffers written with cp-async.
-// wgmmaCommits  | scratch | <Bxi8>  | Tracks number of outstanding commits for buffers being read by wgmma.
+// Name            | Storage | Rank/Type       | Description
+// ----------------|---------|-----------------|------------
+// buffers         | tensor  | <B x i64>       | Base pointers of all (sub)buffers
+// barriers        | tensor  | <K x i64>       | Pointers to all individual mbarriers
+// writeVisibility | scratch | <B x i64>       | Per-buffer thread-visibility bitmask (bit i => thread i visible)
+// readVisibility  | scratch | <B x T x i64>   | Per-buffer, per-thread visibility lanes (row-updated; values are bitmasks)
+// writeTracking   | scratch | <B x K x i8>    | Map buffers -> barriers that track writes
+// readTracking    | scratch | <B x K x i64>   | Map buffers -> barriers that track reads
+// outstandingCommits
+//   (async/wgmma) | scratch | <B x T x i8>    | Number of outstanding commits per buffer/thread (2D replaces prior 1D)
 
 //
 // Interfaces
@@ -69,7 +65,7 @@ def TTI_ExperimentalBufferPointersOp : TTI_Op<"experimental_buffer_pointers", [P
 def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Acquire a lock.";
   let description = [{
-    Acquire a lock.
+    Enter a critical section by acquiring a lock with single thread.
   }];
   let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
   let assemblyFormat = [{
@@ -81,7 +77,7 @@ def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire", [MemoryE
 def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Release a lock.";
   let description = [{
-    Release a lock.
+    Leave a critical section by releasing a lock with single thread.
   }];
   let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
   let assemblyFormat = [{
@@ -115,7 +111,7 @@ def TTI_ExperimentalSetWriteVisibilityOp : TTI_Op<"experimental_set_write_visibi
 def TTI_ExperimentalClearWriteTrackingOp : TTI_Op<"experimental_clear_write_tracking", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "clear the write tracking for a buffer";
   let description = [{
-    Clear the write tracking for a buffer.
+    Clear all the information about threads writing to a buffer.
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
