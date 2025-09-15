@@ -11,6 +11,94 @@ using namespace triton;
 using namespace triton::gpu;
 
 //===----------------------------------------------------------------------===//
+// Partition
+//===----------------------------------------------------------------------===//
+
+bool Partition::hasOp(Operation *op) const {
+  auto partitionIds = getPartitionIds(op);
+  if (!partitionIds) {
+    return false;
+  }
+  return partitionIds->contains(getIndex());
+}
+
+void Partition::iterateInputs(scf::ForOp loop,
+                              function_ref<void(OpOperand &)> callback) const {
+  for (Operation *op : getOps()) {
+    visitNestedOperands(op, [&](OpOperand &operand) {
+      // Ignore implicit captures.
+      Value value = operand.get();
+      auto partitionIds = getPartitionIds(value.getDefiningOp());
+      if (value.getParentBlock() != loop.getBody())
+        return;
+      if (auto arg = dyn_cast<BlockArgument>(value)) {
+        assert(arg.getOwner() == loop.getBody());
+        // Ignore the induction variable.
+        if (arg == loop.getInductionVar())
+          return;
+        // This value originates from a previous iteration.
+        assert(llvm::is_contained(loop.getRegionIterArgs(), arg));
+        callback(operand);
+      } else if (!partitionIds ||
+                 !llvm::is_contained(*partitionIds, getIndex())) {
+        // This value originates from a different partition in the same
+        // iteration.
+        assert(value.getDefiningOp()->getParentOp() == loop);
+        callback(operand);
+      }
+    });
+  }
+}
+
+void Partition::iterateOutputs(
+    scf::ForOp loop,
+    function_ref<void(Operation *, OpOperand &)> callback) const {
+  for (Operation *op : getOps()) {
+    for (OpOperand &use : op->getUses()) {
+      Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+      auto partitionIds = getPartitionIds(owner);
+      if (isa<scf::YieldOp>(owner)) {
+        // This value is used in a subsequent iteration.
+        callback(owner, use);
+      } else if (!partitionIds ||
+                 !llvm::is_contained(*partitionIds, getIndex())) {
+        // This value is used in a different partition in the same iteration.
+        callback(owner, use);
+      }
+    }
+  }
+}
+
+void Partition::iterateDefs(
+    scf::ForOp loop, function_ref<void(OpResult, unsigned)> callback) const {
+  iterateInputs(loop, [&](OpOperand &input) {
+    auto [def, distance] = getDefinitionAndDistance(loop, input.get());
+    if (def && def.getParentBlock() == loop.getBody())
+      callback(def, distance);
+  });
+}
+
+void Partition::iterateUses(
+    scf::ForOp loop,
+    function_ref<void(OpResult, OpOperand &, unsigned)> callback) const {
+  SmallVector<std::tuple<OpResult, OpOperand *, unsigned>> uses;
+  iterateOutputs(loop, [&](Operation *owner, OpOperand &use) {
+    uses.emplace_back(cast<OpResult>(use.get()), &use, 0);
+  });
+  while (!uses.empty()) {
+    auto [output, use, distance] = uses.pop_back_val();
+    Operation *owner = loop.getBody()->findAncestorOpInBlock(*use->getOwner());
+    if (!isa<scf::YieldOp>(owner)) {
+      callback(output, *use, distance);
+      continue;
+    }
+    BlockArgument arg = loop.getRegionIterArg(use->getOperandNumber());
+    for (OpOperand &use : arg.getUses())
+      uses.emplace_back(output, &use, distance + 1);
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // PartitionSet
 //===----------------------------------------------------------------------===//
 
@@ -133,81 +221,5 @@ std::optional<SetVector<int>> getPartitionIds(Operation *op) {
 }
 
 bool hasPartition(Operation *op) { return getPartitionIds(op) != std::nullopt; }
-
-void Partition::iterateInputs(scf::ForOp loop,
-                              function_ref<void(OpOperand &)> callback) const {
-  for (Operation *op : getOps()) {
-    visitNestedOperands(op, [&](OpOperand &operand) {
-      // Ignore implicit captures.
-      Value value = operand.get();
-      auto partitionIds = getPartitionIds(value.getDefiningOp());
-      if (value.getParentBlock() != loop.getBody())
-        return;
-      if (auto arg = dyn_cast<BlockArgument>(value)) {
-        assert(arg.getOwner() == loop.getBody());
-        // Ignore the induction variable.
-        if (arg == loop.getInductionVar())
-          return;
-        // This value originates from a previous iteration.
-        assert(llvm::is_contained(loop.getRegionIterArgs(), arg));
-        callback(operand);
-      } else if (!partitionIds ||
-                 !llvm::is_contained(*partitionIds, getIndex())) {
-        // This value originates from a different partition in the same
-        // iteration.
-        assert(value.getDefiningOp()->getParentOp() == loop);
-        callback(operand);
-      }
-    });
-  }
-}
-
-void Partition::iterateOutputs(
-    scf::ForOp loop,
-    function_ref<void(Operation *, OpOperand &)> callback) const {
-  for (Operation *op : getOps()) {
-    for (OpOperand &use : op->getUses()) {
-      Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
-      auto partitionIds = getPartitionIds(owner);
-      if (isa<scf::YieldOp>(owner)) {
-        // This value is used in a subsequent iteration.
-        callback(owner, use);
-      } else if (!partitionIds ||
-                 !llvm::is_contained(*partitionIds, getIndex())) {
-        // This value is used in a different partition in the same iteration.
-        callback(owner, use);
-      }
-    }
-  }
-}
-
-void Partition::iterateDefs(
-    scf::ForOp loop, function_ref<void(OpResult, unsigned)> callback) const {
-  iterateInputs(loop, [&](OpOperand &input) {
-    auto [def, distance] = getDefinitionAndDistance(loop, input.get());
-    if (def && def.getParentBlock() == loop.getBody())
-      callback(def, distance);
-  });
-}
-
-void Partition::iterateUses(
-    scf::ForOp loop,
-    function_ref<void(OpResult, OpOperand &, unsigned)> callback) const {
-  SmallVector<std::tuple<OpResult, OpOperand *, unsigned>> uses;
-  iterateOutputs(loop, [&](Operation *owner, OpOperand &use) {
-    uses.emplace_back(cast<OpResult>(use.get()), &use, 0);
-  });
-  while (!uses.empty()) {
-    auto [output, use, distance] = uses.pop_back_val();
-    Operation *owner = loop.getBody()->findAncestorOpInBlock(*use->getOwner());
-    if (!isa<scf::YieldOp>(owner)) {
-      callback(output, *use, distance);
-      continue;
-    }
-    BlockArgument arg = loop.getRegionIterArg(use->getOperandNumber());
-    for (OpOperand &use : arg.getUses())
-      uses.emplace_back(output, &use, distance + 1);
-  }
-}
 
 } // namespace mlir::triton::gpu

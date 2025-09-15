@@ -38,6 +38,7 @@ public:
   int getStage() const { return stage; }
   ArrayRef<Operation *> getOps() const { return ops; }
   void addOp(Operation *op) { ops.push_back(op); }
+  bool hasOp(Operation *op) const;
 
   // Iterate the inputs of the partition. Input values are those that originate
   // from a different partition or a previous iteration of the current

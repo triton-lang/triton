@@ -154,14 +154,6 @@ static void scheduleUsers(scf::ForOp loop, PartitionSet &partitions,
   }
 }
 
-static bool isOpInPartition(Operation *op, const Partition *partition) {
-  auto partitionIds = getPartitionIds(op);
-  if (!partitionIds) {
-    return false;
-  }
-  return partitionIds->contains(partition->getIndex());
-}
-
 // Given a partitioning scheme, determine an initial schedule by performing a
 // first-order partition assignment to the operations in the scheme and its
 // users and/or dependencies. This sets up the initial partitioning of the ops.
@@ -230,11 +222,11 @@ static std::optional<PartitionSet> getInitialPartitions(scf::ForOp loop) {
       // Duplicate the op if necessary to ensure that the MMA partition is the
       // only user.
       if (!llvm::all_of(op->getUsers(), [&](Operation *user) {
-            return isOpInPartition(user, mmaPartition);
+            return mmaPartition->hasOp(user);
           })) {
         Operation *newOp = OpBuilder(op).clone(*op);
         op->replaceUsesWithIf(newOp->getResults(), [&](OpOperand &use) {
-          return isOpInPartition(use.getOwner(), mmaPartition);
+          return mmaPartition->hasOp(use.getOwner());
         });
         op = newOp;
       }
