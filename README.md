@@ -15,7 +15,7 @@ The 3rd Triton conference is scheduled to take place on October 21, 2025. Click 
 
 We invite members of the Triton community who are attending the Triton Developer Conference to present posters about their Triton-related technical work.
 
-Please submit basic information of your poster, including author information and abstract using this ![form](https://forms.gle/QfgTF8o1CWNENAnA7)
+Please submit basic information of your poster, including author information and abstract using this [form](https://forms.gle/QfgTF8o1CWNENAnA7).
 
 **Important Dates**
 - Submission: 10/1/2025
