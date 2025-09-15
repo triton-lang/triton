@@ -30,12 +30,11 @@ namespace mlir::triton::gpu {
 // relative to its consumers.
 class Partition {
 public:
-  Partition(int idx, int stage) : idx(idx), stage(stage) {}
-
-  int getIndex() const {
-    assert(idx >= 0);
-    return idx;
+  Partition(int idx, int stage) : idx(idx), stage(stage) {
+    assert(idx >= 0 && "A partition index must be nonnegative.");
   }
+
+  int getIndex() const { return idx; }
   int getStage() const { return stage; }
   ArrayRef<Operation *> getOps() const { return ops; }
   void addOp(Operation *op) { ops.push_back(op); }
@@ -110,6 +109,8 @@ private:
   SmallVector<std::unique_ptr<Partition>> partitions;
 };
 
+bool hasPartition(Operation *op);
+
 // Annotate the op with the partition index or indices, and add the op
 // to the partitions it belongs to.
 void setPartition(Operation *op, Partition *partition);
@@ -120,10 +121,10 @@ void setPartition(Operation *op, const SetVector<Partition *> &partitions);
 void setPartition(Operation *op, const SetVector<int> &partitionIds);
 
 std::optional<SetVector<int>> getPartitionIds(Operation *op);
+
 // Utility to be used when the op is known to belong to one partition
 Partition *getPartition(Operation *op, PartitionSet &partitions);
 
-bool hasPartition(Operation *op);
 bool isInRootPartition(Operation *op, PartitionSet &partitions);
 
 } // namespace mlir::triton::gpu

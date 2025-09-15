@@ -18,6 +18,7 @@ namespace ttng = triton::nvidia_gpu;
 //===----------------------------------------------------------------------===//
 // assignPartitions
 //===----------------------------------------------------------------------===//
+
 bool trySetPartition(Operation *op, Partition *partition) {
   if (hasPartition(op)) {
     return false;
