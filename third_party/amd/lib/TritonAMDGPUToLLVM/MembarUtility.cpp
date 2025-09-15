@@ -32,7 +32,7 @@ bool membarFilter(Operation *op1, Operation *op2) {
   return filterAsyncLocalLoadsDependencies(op1, op2);
 }
 
-void membarInsertBarrierCDNA4(Location loc, OpBuilder *builder) {
+void membarInsertBarrierCDNA(Location loc, OpBuilder *builder) {
   constexpr int32_t ldsOnlyBits = ~(0x1f << 8);
   builder->create<ROCDL::SWaitcntOp>(loc,
                                      builder->getI32IntegerAttr(ldsOnlyBits));

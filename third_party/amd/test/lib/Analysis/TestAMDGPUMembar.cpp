@@ -44,8 +44,8 @@ struct TestAMDGPUMembarPass : public OperationPass<ModuleOp> {
     ModuleAllocation allocation(moduleOp);
     MembarInsertBarrierFn insertBarrier = nullptr;
     auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName);
-    if (isaFamily == triton::AMD::ISAFamily::CDNA4)
-      insertBarrier = triton::AMD::membarInsertBarrierCDNA4;
+    if (isCDNA(isaFamily))
+      insertBarrier = triton::AMD::membarInsertBarrierCDNA;
     ModuleMembarAnalysis membarPass(&allocation, triton::AMD::membarFilter,
                                     insertBarrier);
     membarPass.run();

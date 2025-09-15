@@ -28,10 +28,10 @@ namespace mlir::triton::AMD {
 //     scf.yield
 bool membarFilter(Operation *op1, Operation *op2);
 
-// Custom inserter of barrier instructions for CDNA4.
+// Custom inserter of barrier instructions for CDNA cores.
 // Membar only syncs LDS and execution, so a gpu.barrier (the default) is too
 // strong so we want to instead insert the sequence s.waitcnt(lds) + s.barrier
-void membarInsertBarrierCDNA4(Location op, OpBuilder *builder);
+void membarInsertBarrierCDNA(Location op, OpBuilder *builder);
 
 } // namespace mlir::triton::AMD
 

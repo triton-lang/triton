@@ -102,8 +102,8 @@ struct ConvertTritonAMDGPUToLLVM
 
     AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
     MembarInsertBarrierFn insertBarrierFn = nullptr;
-    if (targetInfo.getISAFamily() == AMD::ISAFamily::CDNA4)
-      insertBarrierFn = mlir::triton::AMD::membarInsertBarrierCDNA4;
+    if (isCDNA(targetInfo.getISAFamily()))
+      insertBarrierFn = triton::AMD::membarInsertBarrierCDNA;
     ModuleMembarAnalysis membarPass(
         &allocation, mlir::triton::AMD::membarFilter, insertBarrierFn);
     membarPass.run();

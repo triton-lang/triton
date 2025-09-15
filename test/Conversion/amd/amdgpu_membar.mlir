@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-tritonamdgpu-membar | FileCheck %s --check-prefixes CHECK,CHECK-GENERIC
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect --convert-scf-to-cf --allocate-shared-memory -test-tritonamdgpu-membar="arch-generation-name=gfx950" | FileCheck %s --check-prefixes CHECK,CHECK-GFX950
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect --convert-scf-to-cf --allocate-shared-memory -test-tritonamdgpu-membar="arch-generation-name=gfx942" | FileCheck %s --check-prefixes CHECK,CHECK-GFX9
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect --convert-scf-to-cf --allocate-shared-memory -test-tritonamdgpu-membar="arch-generation-name=gfx950" | FileCheck %s --check-prefixes CHECK,CHECK-GFX9
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #A_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
@@ -26,8 +27,8 @@ tt.func @pipelined_async_copy_local_to_global(%A: !tt.ptr<f16>) {
   // CHECK-NOT: gpu.barrier
   // CHECK: ttg.async_wait
   // CHECK-GENERIC-NEXT: gpu.barrier
-  // CHECK-GFX950-NEXT: rocdl.s.waitcnt -7937
-  // CHECK-GFX950-NEXT: rocdl.s.barrier
+  // CHECK-GFX9-NEXT: rocdl.s.waitcnt -7937
+  // CHECK-GFX9-NEXT: rocdl.s.barrier
   // CHECK-NOT: gpu.barrier
   // CHECK: tt.return
   tt.return
@@ -53,8 +54,8 @@ tt.func @pipelined_async_copy_local_to_global_2(%A: !tt.ptr<f16>) {
   // CHECK-NOT: gpu.barrier
   // CHECK: ttg.async_wait
   // CHECK-GENERIC-NEXT: gpu.barrier
-  // CHECK-GFX950-NEXT: rocdl.s.waitcnt -7937
-  // CHECK-GFX950-NEXT: rocdl.s.barrier
+  // CHECK-GFX9-NEXT: rocdl.s.waitcnt -7937
+  // CHECK-GFX9-NEXT: rocdl.s.barrier
   // CHECK-NOT: gpu.barrier
   // CHECK: tt.return
   tt.return
@@ -94,8 +95,8 @@ tt.func @pipelined_async_copy_local_to_global_3(%A: !tt.ptr<f16>, %B: !tt.ptr<f1
   // CHECK-NOT: gpu.barrier
   // CHECK: ttg.async_wait
   // CHECK-GENERIC-NEXT: gpu.barrier
-  // CHECK-GFX950-NEXT: rocdl.s.waitcnt -7937
-  // CHECK-GFX950-NEXT: rocdl.s.barrier
+  // CHECK-GFX9-NEXT: rocdl.s.waitcnt -7937
+  // CHECK-GFX9-NEXT: rocdl.s.barrier
   // CHECK-NOT: gpu.barrier
   // CHECK: tt.return
   tt.return
@@ -120,8 +121,8 @@ tt.func @async_wait_in_previous_loop_iteration(%a_ptr: tensor<16x16x!tt.ptr<f16>
     // CHECK: ttg.async_wait
     %8 = ttg.async_wait %7 {num = 4 : i32}
     // CHECK-GENERIC: gpu.barrier
-    // CHECK-GFX950: rocdl.s.waitcnt -7937
-    // CHECK-GFX950: rocdl.s.barrier
+    // CHECK-GFX9: rocdl.s.waitcnt -7937
+    // CHECK-GFX9: rocdl.s.barrier
     // CHECK-NOT: gpu.barrier
     scf.yield %8: !ttg.async.token
   }
@@ -141,8 +142,8 @@ tt.func @intial_loop_token_is_not_from_async_wait(%a_ptr: tensor<16x16x!tt.ptr<f
     %6 = ttg.local_load %alloc token %arg10 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
     // CHECK: ttg.local_load
     // CHECK-GENERIC: gpu.barrier
-    // CHECK-GFX950-NEXT: rocdl.s.waitcnt -7937
-    // CHECK-GFX950-NEXT: rocdl.s.barrier
+    // CHECK-GFX9-NEXT: rocdl.s.waitcnt -7937
+    // CHECK-GFX9-NEXT: rocdl.s.barrier
     // CHECK: ttg.async_copy_global_to_local
     %7 = ttg.async_copy_global_to_local %a_ptr, %alloc : tensor<16x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
     %8 = ttg.async_wait %7 {num = 4 : i32}
@@ -165,8 +166,8 @@ tt.func @loop_carried_token_not_from_async_wait(%a_ptr: tensor<16x16x!tt.ptr<f16
     %6 = ttg.local_load %alloc token %arg10 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
     // CHECK: ttg.local_load
     // CHECK-GENERIC: gpu.barrier
-    // CHECK-GFX950-NEXT: rocdl.s.waitcnt -7937
-    // CHECK-GFX950-NEXT: rocdl.s.barrier
+    // CHECK-GFX9-NEXT: rocdl.s.waitcnt -7937
+    // CHECK-GFX9-NEXT: rocdl.s.barrier
     // CHECK: ttg.async_copy_global_to_local
     %7 = ttg.async_copy_global_to_local %a_ptr, %alloc : tensor<16x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
     scf.yield %7: !ttg.async.token
@@ -220,8 +221,8 @@ tt.func @non_async_wait_token_from_then(%cond: i1, %a_ptr: tensor<16x16x!tt.ptr<
     // We should get a barrier because the then branch does not yield an token from AsyncWait
     // CHECK: ttg.local_load
     // CHECK-GENERIC: gpu.barrier
-    // CHECK-GFX950-NEXT: rocdl.s.waitcnt -7937
-    // CHECK-GFX950-NEXT: rocdl.s.barrier
+    // CHECK-GFX9-NEXT: rocdl.s.waitcnt -7937
+    // CHECK-GFX9-NEXT: rocdl.s.barrier
     // CHECK: ttg.async_copy_global_to_local
     %7 = ttg.async_copy_global_to_local %a_ptr, %alloc : tensor<16x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
     %103 = scf.if %cond -> (!ttg.async.token) {
@@ -251,8 +252,8 @@ tt.func @non_async_wait_token_from_else(%cond: i1, %a_ptr: tensor<16x16x!tt.ptr<
     // We should get a barrier because the else branch does not yield an token from AsyncWait
     // CHECK: ttg.local_load
     // CHECK-GENERIC: gpu.barrier
-    // CHECK-GFX950-NEXT: rocdl.s.waitcnt -7937
-    // CHECK-GFX950-NEXT: rocdl.s.barrier
+    // CHECK-GFX9-NEXT: rocdl.s.waitcnt -7937
+    // CHECK-GFX9-NEXT: rocdl.s.barrier
     // CHECK: ttg.async_copy_global_to_local
     %7 = ttg.async_copy_global_to_local %a_ptr, %alloc : tensor<16x16x!tt.ptr<f16>, #AL> -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
     %103 = scf.if %cond -> (!ttg.async.token) {
