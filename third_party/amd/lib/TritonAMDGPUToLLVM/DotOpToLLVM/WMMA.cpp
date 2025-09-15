@@ -51,7 +51,7 @@ using ValueTable = std::map<std::tuple<unsigned, unsigned, unsigned>, Value>;
 
 ValueTable getValuesFromDotOperandLayoutStruct(
     ConversionPatternRewriter &rewriter, const LLVMTypeConverter *typeConverter,
-    int wmmaVer, Value value, int batch, int n0, int n1, int kWidth, Type type,
+    int wmmaVer, Value value, int batch, int n0, int n1, int kBase, Type type,
     Location loc) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto elems = unpackLLElements(loc, value, rewriter);
@@ -60,23 +60,23 @@ ValueTable getValuesFromDotOperandLayoutStruct(
     for (int i = 0; i < n0; i++) {
       for (int j = 0; j < n1; j++) {
         Type elemTy = typeConverter->convertType(type);
-        Type ty = vec_ty(elemTy, kWidth);
+        Type ty = vec_ty(elemTy, kBase);
         Value rawElems = tb.undef(ty);
-        for (int k = 0; k < kWidth; ++k) {
+        for (int k = 0; k < kBase; ++k) {
           rawElems = tb.insert_element(
               ty, rawElems,
-              elems[n0 * n1 * kWidth * b + kWidth * (n1 * i + j) + k],
+              elems[n0 * n1 * kBase * b + kBase * (n1 * i + j) + k],
               tb.i32_val(k));
         }
 
         Value convertedElems;
-        if (type.isF16() || (wmmaVer == 3 && type.isBF16() && kWidth == 16)) {
+        if (type.isF16() || (wmmaVer == 3 && type.isBF16())) {
           convertedElems = rawElems;
         } else if (type.isBF16()) {
-          convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kWidth));
+          convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kBase));
         } else {
           convertedElems = tb.bitcast(
-              rawElems, vec_ty(i32_ty, kWidth * type.getIntOrFloatBitWidth() /
+              rawElems, vec_ty(i32_ty, kBase * type.getIntOrFloatBitWidth() /
                                            i32_ty.getIntOrFloatBitWidth()));
         }
         vals[{b, i, j}] = convertedElems;
@@ -210,7 +210,7 @@ StringRef getWmmaIntrinsicName(Type aElTy, Type bElTy, Type dElTy, Type valATy,
   return intrinsics[h];
 }
 
-std::string addInstructionSuffix(std::string intrinsicName, unsigned kWidth,
+std::string addInstructionSuffix(std::string intrinsicName, unsigned kBase,
                                  Type aElTy, Type bElTy, Type dElTy,
                                  bool tied) {
   if (tied) {
@@ -218,8 +218,8 @@ std::string addInstructionSuffix(std::string intrinsicName, unsigned kWidth,
   } else {
     if (isa<FloatType>(aElTy) && aElTy.getIntOrFloatBitWidth() == 8)
       intrinsicName += "." + getTypeStr(bElTy);
-    intrinsicName += ".v" + std::to_string(kWidth) + getTypeStr(dElTy);
-    intrinsicName += ".v" + std::to_string(kWidth) + getTypeStr(aElTy);
+    intrinsicName += ".v" + std::to_string(kBase) + getTypeStr(dElTy);
+    intrinsicName += ".v" + std::to_string(kBase) + getTypeStr(aElTy);
   }
 
   return intrinsicName;
@@ -233,35 +233,46 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
 
   LLVM::FastmathFlagsAttr defaultFlags{};
   SmallVector<Value> operands;
-  int64_t kWidth = cast<VectorType>(valA.getType()).getNumElements();
 
-  if (aElType.isInteger())
-    operands.push_back(b.int_val(1, !aElType.isUnsignedInteger()));
-  if (wmmaVer == 3 && (kWidth == 16 && (aElType.isBF16() || aElType.isF16())))
-    operands.push_back(b.int_val(1, 0));
-  operands.push_back(valA);
+  if (wmmaVer == 1 || wmmaVer == 2) {
+    // arguments for v1 and v2:
+    // int:   %A_sign, %A, %B_sign, %B, %C, [%clamp]
+    // float: %A, %B, %C, [%tied_to_high]
+    if (aElType.isInteger())
+      operands.push_back(b.int_val(1, !aElType.isUnsignedInteger()));
+    operands.push_back(valA);
 
-  if (bElType.isInteger())
-    operands.push_back(b.int_val(1, !bElType.isUnsignedInteger()));
-  if (wmmaVer == 3 && (kWidth == 16 && (bElType.isBF16() || bElType.isF16())))
-    operands.push_back(b.int_val(1, 0));
-  operands.push_back(valB);
+    if (bElType.isInteger())
+      operands.push_back(b.int_val(1, !bElType.isUnsignedInteger()));
+    operands.push_back(valB);
 
-  if (wmmaVer == 3 &&
-      (kWidth == 16 || (kWidth == 8 && aElType.getIntOrFloatBitWidth() == 8)))
-    operands.push_back(b.int_val(16, 0));
+    operands.push_back(valC);
 
-  operands.push_back(valC);
+    if (tiedLower.has_value() || 32 / dElType.getIntOrFloatBitWidth() > 1 ||
+        dElType.isInteger(32))
+      operands.push_back(b.int_val(1, tiedLower.value_or(false)));
+  } else {
+    assert(wmmaVer == 3 && "unexpected wmma version");
+    // arguments for v3:
+    // int:       %A_mod, %A, %B_mod, %B, %C, %A_reuse, %B_reuse
+    // fp16/bf16: %A_mod, %A, %B_mod, %B, %C_mod, %C, %A_reuse, %B_reuse
+    // fp8/bf8:   %A, %B, %C_mod, %C, %A_reuse, %B_reuse
+    if (aElType.isInteger())
+      operands.push_back(b.int_val(1, !aElType.isUnsignedInteger()));
+    else if (aElType.isBF16() || aElType.isF16())
+      operands.push_back(b.int_val(1, 0));
+    operands.push_back(valA);
 
-  // Flag for using low bits in registers. Result could be already packed to
-  // int32. Set low bits by default for now.
-  if (tiedLower.has_value() || 32 / dElType.getIntOrFloatBitWidth() > 1 ||
-      dElType.isInteger(32)) {
-    operands.push_back(b.int_val(1, tiedLower.value_or(false)));
-  }
+    if (bElType.isInteger())
+      operands.push_back(b.int_val(1, !bElType.isUnsignedInteger()));
+    else if (bElType.isBF16() || bElType.isF16())
+      operands.push_back(b.int_val(1, 0));
+    operands.push_back(valB);
 
-  // Two additional operands for LLVM gfx1250 A/B reuse control
-  if (wmmaVer == 3) {
+    if ((bElType.isBF16() || bElType.isF16()) || aElType.isInteger())
+      operands.push_back(b.int_val(16, 0));
+    operands.push_back(valC);
+
     operands.push_back(b.i1_val(0));
     operands.push_back(b.i1_val(0));
   }
@@ -338,14 +349,14 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
   int depth = warpSize / mnkDim[0];
   depth = wmmaVer == 1 ? depth / 2 : depth;
-  int vecSize = kDim / depth;
+  int kBase = kDim / depth;
 
   ValueTable ha = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedA, numRepB, numRepM, numRepK,
-      vecSize, aTensorTy.getElementType(), loc);
+      kBase, aTensorTy.getElementType(), loc);
   ValueTable hb = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedB, numRepB, numRepN, numRepK,
-      vecSize, aTensorTy.getElementType(), loc);
+      kBase, aTensorTy.getElementType(), loc);
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
@@ -360,7 +371,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   bool tied = numRepM % 2 == 0 && paddedOutputElemSize == 2;
   int tiedGroup = tied ? 2 : 1;
 
-  intrinsicName = addInstructionSuffix(intrinsicName, vecSize, aElemTy, bElemTy,
+  intrinsicName = addInstructionSuffix(intrinsicName, kBase, aElemTy, bElemTy,
                                        dElemTy, tied);
   for (int b = 0; b < numRepB; ++b) {
     for (int m = 0; m < numRepM / tiedGroup; ++m) {
