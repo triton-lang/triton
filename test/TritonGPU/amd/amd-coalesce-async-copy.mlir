@@ -193,7 +193,7 @@ tt.func @async_copy_2d_swizzled(%input: tensor<64x64x!tt.ptr<f16>, #blocked>,
 #shared = #ttg.padded_shared<[64:+4] {offset = [[1], [2], [4], [8], [64], [128], [16], [32]], block = []}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-// We rearange in 4 blocks of 16 elements, check that we transfer it to the src encoding to write coalesced to lds
+// We rearrange in 4 blocks of 16 elements, check that we transfer it to the src encoding to write coalesced to lds
 // CHECK: #[[$NEW_SRC_ENCODING:.*]] = #ttg.linear
 // CHECK-SAME{LITERAL}: register = [], lane = [[1], [2], [4], [8], [64], [128]], warp = [[16], [32]], block = []
 // CHECK-LABEL: async_copy_padded_layout_with_simple_rearanging
@@ -211,7 +211,7 @@ tt.func @async_copy_padded_layout_with_simple_rearanging(%input: tensor<256x!tt.
 #shared = #ttg.padded_shared<[64:+4] {offset = [[1], [2], [4], [8], [16], [32], [256], [512], [64], [128]], block = []}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-// We rearange in 4 blocks of 16 elements, check that we transfer it to the src encoding to write coalesced to lds
+// We rearrange in 4 blocks of 16 elements, check that we transfer it to the src encoding to write coalesced to lds
 // CHECK: #[[$NEW_SRC_ENCODING:.*]] = #ttg.linear
 // CHECK-SAME{LITERAL}: register = [[1], [2]], lane = [[4], [8], [16], [32], [256], [512]], warp = [[64], [128]], block = []
 // CHECK-LABEL: async_copy_padded_layout_with_vectorization_and_rearanging
