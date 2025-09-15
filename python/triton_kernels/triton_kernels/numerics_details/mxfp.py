@@ -209,19 +209,25 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
         # Extract sign, exponent, and mantissa.
         signs = q_int & 0x80000000
         exponents = right_shift_unsigned(q_int, 23) & 0xFF
-        mantissas = q_int & 0x7FFFFF
+        mantissas_orig = q_int & 0x7FFFFF
 
         E8_BIAS = 127
         E2_BIAS = 1
         # Adjust mantissas for subnormals.
-        mantissas = torch.where(exponents < E8_BIAS, (0x400000 | right_shift_unsigned(mantissas, 1)) >>
-                                (E8_BIAS - exponents - 1), mantissas)
+        is_subnormal = exponents < E8_BIAS
+        shift = E8_BIAS - exponents - 1
+        mantissas_pre = (0x400000 | right_shift_unsigned(mantissas_orig, 1))
+        bit0_dropped = (mantissas_orig & 0x1) != 0
+        mask = (1 << shift.clamp(max=31)) - 1
+        dropped_post = (mantissas_pre & mask) != 0
+        sticky = is_subnormal & (bit0_dropped | dropped_post)
+        mantissas = torch.where(is_subnormal, mantissas_pre >> shift, mantissas_orig)
         exponents = torch.maximum(exponents, torch.tensor(E8_BIAS - E2_BIAS, device=device)) - (E8_BIAS - E2_BIAS)
         # Round to nearest, ties to even (RTNE)
         m2bits = right_shift_unsigned(mantissas, 21) & 0x3
         lsb_keep = right_shift_unsigned(m2bits, 1) & 0x1
         guard = m2bits & 0x1
-        sticky = (mantissas & ((1 << 21) - 1)) != 0
+        sticky |= (mantissas & ((1 << 21) - 1)) != 0
         round_inc = guard & (sticky.to(torch.int32) | lsb_keep)
         e2m1_tmp = right_shift_unsigned(((exponents << 2) | m2bits) + round_inc, 1)
         e2m1_tmp = torch.minimum(e2m1_tmp, torch.tensor(0x7, device=device))
