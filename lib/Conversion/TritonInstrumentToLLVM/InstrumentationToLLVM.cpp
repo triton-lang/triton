@@ -60,25 +60,6 @@ Value createMemDescToI64(RewriterBase &rewriter, Location loc,
   return b.add(offset, b.ptrtoint(i64Ty, smemObj.getBase()));
 }
 
-Type getBarsElType(OpBuilder &b) { return b.getIntegerType(64); }
-
-RankedTensorType getWriteBarsType(OpBuilder &b, RankedTensorType buffersType) {
-  int size = buffersType.getShape()[0];
-  assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
-  auto tensorType = RankedTensorType::get({size}, getBarsElType(b),
-                                          buffersType.getEncoding());
-  return tensorType;
-}
-
-RankedTensorType getReadBarsType(OpBuilder &b, RankedTensorType buffersType,
-                                 RankedTensorType barriersType) {
-  int size = buffersType.getShape()[0];
-  assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
-  auto tensorType = RankedTensorType::get({size}, getBarsElType(b),
-                                          buffersType.getEncoding());
-  return tensorType;
-}
-
 Value convertAndBroadcast(OpBuilder &b, Location loc, Value tensor, int dim,
                           RankedTensorType dstType) {
   auto shape = dstType.getShape();
@@ -141,24 +122,6 @@ createIfBlock(ConversionPatternRewriter &b, Location loc, Value cnd) {
   b.setInsertionPointToStart(thenBlock);
 
   return {prevBlock, ifBlock, thenBlock};
-}
-
-Value createMaxReduce(OpBuilder &b, Location loc, Value tensor, int axis) {
-  OpBuilder::InsertionGuard guard(b);
-  auto tensorType = cast<RankedTensorType>(tensor.getType());
-  auto reduceOp = b.create<tt::ReduceOp>(loc, std::vector<Value>{tensor}, axis);
-  auto &region = reduceOp.getRegion();
-  auto &block = region.emplaceBlock();
-  block.addArguments({tensorType.getElementType(), tensorType.getElementType()},
-                     {loc, loc});
-  auto arg0 = block.getArgument(0);
-  auto arg1 = block.getArgument(1);
-  b.setInsertionPointToStart(&block);
-  auto cmpOp =
-      b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, arg0, arg1);
-  auto result = b.create<arith::SelectOp>(loc, cmpOp, arg0, arg1);
-  auto returnOp = b.create<tt::ReduceReturnOp>(loc, std::vector<Value>{result});
-  return reduceOp->getResult(0);
 }
 
 Value createOrReduce(OpBuilder &b, Location loc, Value tensor, int axis) {
@@ -338,12 +301,6 @@ struct LockAcquireOpConversion
     b.setInsertionPoint(op);
     Value lock = op.getLock();
 
-    if (op.getPred()) {
-      auto [prevBlock, ifBlock, thenBlock] =
-          createIfBlock(b, loc, op.getPred());
-      b.setInsertionPointToStart(ifBlock);
-    }
-
     Type elType = cast<PointerType>(lock.getType()).getPointeeType();
     assert(elType == b.getI32Type() && "Expected i32 lock element type");
 
@@ -354,6 +311,9 @@ struct LockAcquireOpConversion
     Block *endBlock = b.splitBlock(whileBlock, whileBlock->begin());
     b.setInsertionPointToEnd(prevBlock2);
     Value elect = mlir::LLVM::NVIDIA::createElectPredicateWarp0(loc, b);
+    if (op.getPred()) {
+      elect = b.create<arith::AndIOp>(loc, elect, op.getPred());
+    }
     b.create<LLVM::CondBrOp>(loc, elect, whileBlock, endBlock);
 
     b.setInsertionPointToEnd(whileBlock);
@@ -696,10 +656,8 @@ struct TrackVisibleReadsOpConversion
     Value barriersEqBar = createCmpIntTensorScalar(b, loc, barriers, bar);
     barriersEqBar =
         convertAndBroadcast(b, loc, barriersEqBar, 0, readTrackingType);
-    // TODO: getSingleDimSliceEncoding
-    Attribute threadOneHotEncoding = SliceEncodingAttr::get(
-        b.getContext(), 0,
-        cast<BlockedEncodingAttr>(readVisibilityType.getEncoding()));
+    Attribute threadOneHotEncoding = tti::getSingleDimSliceEncoding(
+        cast<ttg::BlockedEncodingAttr>(readVisibilityType.getEncoding()), 0);
     Value threadOneHot = createOneHot(b, loc, readVisibilityType.getShape()[1],
                                       op.getThread(), threadOneHotEncoding);
     threadOneHot =
