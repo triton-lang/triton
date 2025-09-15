@@ -117,8 +117,9 @@ bool isChainDotTail(mlir::triton::DotOpInterface dotOp);
 
 // Software implementation of converting an 8-element vector of MXFP4 elements
 // to a wider type: BF16 or FP16
-SmallVector<Value, 8> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
-                                       bool toFp16, Value packedVec);
+SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
+                                    bool toFp16, Value packedVec,
+                                    Value scale = nullptr);
 
 template <typename ConvertOp>
 SmallVector<Value, 4>

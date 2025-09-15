@@ -41,13 +41,9 @@ public:
         Value v = xVals[i + j];
         packedVec = b.insert_element(packedVec, v, b.i32_val(j));
       }
-      SmallVector<Value, 4> v4i32 =
+      SmallVector<Value> upcast =
           upcast8xMxfp4_SW(rewriter, op, toFp16, packedVec);
-      for (int j = 0; j < 4; j++) {
-        Value elements = b.bitcast(v4i32[j], vec_ty(elemType, 2));
-        results.push_back(b.extract_element(elements, b.i32_val(0)));
-        results.push_back(b.extract_element(elements, b.i32_val(1)));
-      }
+      results.append(upcast.begin(), upcast.end());
     }
 
     Value result = packLLElements(loc, getTypeConverter(), results, rewriter,
