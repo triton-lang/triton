@@ -1303,7 +1303,7 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
-  SmallVector<unsigned> instrShape;
+  SmallVector<unsigned> instrShape = getDefaultInstrShape();
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "version") {
@@ -1334,6 +1334,7 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
         return {};
     }
     if (attr.getName() == "instrShape") {
+      instrShape.clear();
       if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed()) {
         return {};
       }
@@ -1359,16 +1360,34 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
 
-  printer << ", instrShape = [" << getInstrShape() << "]}>";
+  if (getInstrShape() != ArrayRef(getDefaultInstrShape())) {
+    printer << ", instrShape = [" << getInstrShape() << "]";
+  }
+  printer << "}>";
 }
 
 LogicalResult AMDWmmaEncodingAttr::verify(
     function_ref<mlir::InFlightDiagnostic()> emitError, unsigned version,
     bool isTransposed, llvm::ArrayRef<unsigned int> warpsPerCTA,
     CTALayoutAttr ctaLayout, llvm::ArrayRef<unsigned> instrShape) {
-  if (version != 1 && version != 2 && version != 3) {
+  if (!(version >= 1 && version <= 3))
     return emitError() << "WMMA version must be in the [1, 3] range";
-  }
+
+  auto shape = SmallVector<unsigned>(instrShape);
+  auto validShapesV1 = std::vector<llvm::SmallVector<unsigned>>{{16, 16, 16}};
+  if (version == 1 && !llvm::is_contained(validShapesV1, shape))
+    return emitError() << "invalid WMMA version 1 instruction shape";
+
+  auto validShapesV2 =
+      std::vector<llvm::SmallVector<unsigned>>{{16, 16, 16}, {16, 16, 32}};
+  if (version == 2 && !llvm::is_contained(validShapesV2, shape))
+    return emitError() << "invalid WMMA version 2 instruction shape";
+
+  auto validShapesV3 =
+      std::vector<llvm::SmallVector<unsigned>>{{16, 16, 32}, {16, 16, 64}};
+  if (version == 3 && !llvm::is_contained(validShapesV3, shape))
+    return emitError() << "invalid WMMA version 3 instruction shape";
+
   return success();
 }
 

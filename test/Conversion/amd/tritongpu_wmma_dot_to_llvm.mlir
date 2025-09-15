@@ -3,9 +3,9 @@
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-#mma1 = #ttg.amd_wmma<{version = 1, warpsPerCTA = [2, 2], instrShape = [16, 16, 16]}>
-#mma2 = #ttg.amd_wmma<{version = 2, warpsPerCTA = [2, 2], instrShape = [16, 16, 16]}>
-#mma2_transposed = #ttg.amd_wmma<{version = 2, warpsPerCTA = [2, 2], isTranspose = true, instrShape = [16, 16, 16]}>
+#mma1 = #ttg.amd_wmma<{version = 1, warpsPerCTA = [2, 2]}>
+#mma2 = #ttg.amd_wmma<{version = 2, warpsPerCTA = [2, 2]}>
+#mma2_transposed = #ttg.amd_wmma<{version = 2, warpsPerCTA = [2, 2], isTranspose = true}>
 #mma2_i4 = #ttg.amd_wmma<{version = 2, warpsPerCTA = [2, 2], isTranspose = true, instrShape = [16, 16, 32]}>
 #mma3 = #ttg.amd_wmma<{version = 3, warpsPerCTA = [2, 2], instrShape = [16, 16, 32]}>
 #mma3_transposed = #ttg.amd_wmma<{version = 3, warpsPerCTA = [2, 2], isTranspose = true, instrShape = [16, 16, 32]}>
@@ -298,7 +298,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0]}>
-#mma1 = #ttg.amd_wmma<{version = 1, warpsPerCTA = [2, 1, 4], instrShape = [16, 16, 16]}>
+#mma1 = #ttg.amd_wmma<{version = 1, warpsPerCTA = [2, 1, 4]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: wmma_dot_operand3d

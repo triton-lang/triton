@@ -126,7 +126,7 @@ class AMDWMMALayout(DistributedLayout):
     version: int
     transposed: bool
     warps_per_cta: List[int]
-    instr_shape: List[int]
+    instr_shape: Optional[List[int]] = None
     ctas_per_cga: Optional[List[int]] = None
     cta_split_num: Optional[List[int]] = None
     cta_order: Optional[List[int]] = None
@@ -135,10 +135,12 @@ class AMDWMMALayout(DistributedLayout):
         super().__setattr__("version", _unwrap_if_constexpr(self.version))
         super().__setattr__("transposed", _unwrap_if_constexpr(self.transposed))
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
-        super().__setattr__("instr_shape", _unwrap_if_constexpr(self.instr_shape))
         super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
         super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+
+        instr_shape = _unwrap_if_constexpr(self.instr_shape) if self.instr_shape is not None else [16, 16, 16]
+        super().__setattr__("instr_shape", _unwrap_if_constexpr(instr_shape))
         self.verify()
 
     def _to_ir(self, builder):
@@ -168,7 +170,7 @@ class AMDWMMALayout(DistributedLayout):
             self.version,
             self.transposed,
             tuple(self.warps_per_cta),
-            tuple(self.instr_shape),
+            tuple(self.instr_shape) if self.instr_shape else None,
             tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
             tuple(self.cta_split_num) if self.cta_split_num else None,
             tuple(self.cta_order) if self.cta_order else None,

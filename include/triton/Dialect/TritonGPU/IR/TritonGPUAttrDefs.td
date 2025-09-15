@@ -1305,6 +1305,10 @@ Row |
                                           Type elemType, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
 
+    static SmallVector<unsigned> getDefaultInstrShape() {
+      return {16, 16, 16};
+    }
+
     // Returns a swizzled shared layout matching this WMMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.
     SwizzledSharedEncodingAttr composeSharedLayoutForOperand(

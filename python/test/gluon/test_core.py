@@ -256,7 +256,7 @@ def test_amd_wmma(M, N, K, in_dtype):
     blocked = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
     wmma_version = 1 if is_hip_gfx11() else 2
     k_width = 16 if is_hip_gfx11() else 8
-    wmma = ttgl.amd.AMDWMMALayout(wmma_version, True, [2, 2], [16, 16, 16])
+    wmma = ttgl.amd.AMDWMMALayout(wmma_version, True, [2, 2])
     kernel[1, 1](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_SIZE_M=M,
                  BLOCK_SIZE_N=N, BLOCK_SIZE_K=K, BLOCKED_LAYOUT=blocked, WMMA_LAYOUT=wmma, K_WIDTH=k_width, num_warps=4)
 
