@@ -25,15 +25,16 @@ using ::mlir::LLVM::AMD::upcast8xMxfp4_SW;
 
 namespace {
 
-SmallVector<Value, 8> upcastMxfp4_SW(RewriterBase &rewriter,
-                                     amdgpu::UpcastMXFPOp upcastOp, bool toFp16,
-                                     ArrayRef<Value> values, int idx) {
+SmallVector<Value> upcastMxfp4_SW(RewriterBase &rewriter,
+                                  amdgpu::UpcastMXFPOp upcastOp, bool toFp16,
+                                  ArrayRef<Value> values, int idx,
+                                  Value scale = nullptr) {
   Location loc = upcastOp.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value packedVec = b.undef(vec_ty(i8_ty, 4));
   for (int i : llvm::seq(4))
     packedVec = b.insert_element(packedVec, values[idx + i], b.i32_val(i));
-  return upcast8xMxfp4_SW(rewriter, upcastOp, toFp16, packedVec);
+  return upcast8xMxfp4_SW(rewriter, upcastOp, toFp16, packedVec, scale);
 }
 
 Value mxfpScaleFp16(RewriterBase &rewriter, Location loc, Value v, Value scale,
@@ -84,6 +85,7 @@ static void upcast8xMxfp4(RewriterBase &rewriter, Location loc,
                           ArrayRef<Value> xVals, bool useFp16, int idx,
                           Value scale, SmallVector<Value> &yVals) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  /// fp4->bf16/f16 for cdna4
   if (isaFamily == AMD::ISAFamily::CDNA4) {
     Type retElemType = useFp16 ? f16_ty : bf16_ty;
     SmallVector<Value, 4> v4i32 =
@@ -98,52 +100,21 @@ static void upcast8xMxfp4(RewriterBase &rewriter, Location loc,
     }
     return;
   }
-  // v8f32 for fp4->bf16; v8f16 for fp4->f16
-  SmallVector<Value, 8> vecVals =
-      upcastMxfp4_SW(rewriter, op, useFp16, xVals, idx);
-  /// fp4->f16 below cdna4
+  /// fp4->f16 before cdna4
   if (useFp16) {
+    SmallVector<Value> v8f16 =
+        upcastMxfp4_SW(rewriter, op, useFp16, xVals, idx);
     for (int i = 0; i < 8; i++) {
       auto result =
-          mxfpScaleFp16(rewriter, loc, vecVals[i], scale, op.getFastMath());
+          mxfpScaleFp16(rewriter, loc, v8f16[i], scale, op.getFastMath());
       yVals.push_back(result);
     }
     return;
   }
-  /// fp4->bf16 below cdna4
-  // pack 2 values together to help llvm backend codegen
-  Value scaleF32 =
-      b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
-  Type v2f32 = vec_ty(f32_ty, 2);
-  Value pkScale = b.undef(v2f32);
-  pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(0));
-  pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(1));
-  Type v2i32 = vec_ty(i32_ty, 2);
-  SmallVector<Value, 4> pkScaledVals;
-  for (unsigned i = 0; i < 8; i += 2) {
-    Value pkVals = b.undef(v2f32);
-    pkVals = b.insert_element(pkVals, vecVals[i], b.i32_val(0));
-    pkVals = b.insert_element(pkVals, vecVals[i + 1], b.i32_val(1));
-    Value pkScaled = b.fmul(pkScale, pkVals);
-    pkScaledVals.push_back(b.bitcast(pkScaled, v2i32));
-  }
-  auto permU32FnTy =
-      LLVM::LLVMFunctionType::get(i32_ty, {i32_ty, i32_ty, i32_ty});
-  LLVM::LLVMFuncOp funcOp =
-      appendOrGetExternFuncOp(rewriter, op, "llvm.amdgcn.perm", permU32FnTy);
-  Value sel = b.i32_val(0x07060302);
-  for (unsigned i = 0; i < 4; i++) {
-    // v2f32->v2bf16: {e1.f32[31:16], e0.f32[31:16]}
-    Value first = b.extract_element(pkScaledVals[i], b.i32_val(0));
-    Value second = b.extract_element(pkScaledVals[i], b.i32_val(1));
-    Value res =
-        LLVM::createLLVMCallOp(rewriter, loc, funcOp, {second, first, sel})
-            .getResult();
-    Type v2bf16 = vec_ty(bf16_ty, 2);
-    res = b.bitcast(res, v2bf16);
-    yVals.push_back(b.extract_element(res, b.i32_val(0)));
-    yVals.push_back(b.extract_element(res, b.i32_val(1)));
-  }
+  /// fp4->bf16 before cdna4
+  SmallVector<Value> v8bf16 =
+      upcastMxfp4_SW(rewriter, op, useFp16, xVals, idx, scale);
+  yVals.append(v8bf16.begin(), v8bf16.end());
 }
 
 // Upcast 4 mxfp8 values from xVals starting at idx using the given scale
