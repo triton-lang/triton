@@ -90,8 +90,8 @@ struct CoalesceAsyncCopyWrites
     // Do not rewrite if we already use the correct contiguity (could be from a
     // previous rewrite)
     auto contigPerThread = ttg::getContigPerThread(srcTy);
-    auto blockedContig = contigPerThread[blockedEnc.getOrder()[0]];
-    if (!paddedEnc && blockedContig == loadContig) {
+    auto srcElemContig = contigPerThread[blockedEnc.getOrder()[0]];
+    if (!paddedEnc && srcElemContig == loadContig) {
       return rewriter.notifyMatchFailure(copyOp,
                                          "already using the correct layout");
     }
@@ -104,13 +104,18 @@ struct CoalesceAsyncCopyWrites
     if (!paddedEnc) {
       // Get new blocked encoding with loadContig as sizePerThread in the
       // fastest dim
-      assert(blockedContig >= loadContig);
+      assert(srcElemContig >= loadContig);
       contigPerThread[blockedEnc.getOrder()[0]] = loadContig;
       newDistEnc = BlockedEncodingAttr::get(
           copyOp.getContext(), srcTy.getShape(), contigPerThread,
           blockedEnc.getOrder(), numWarps, threadsPerWarp,
           blockedEnc.getCTALayout());
     } else {
+      if (LLVM::AMD::canCoalesceWriteIntoSharedMemory(
+              rewriter, regToSharedLayout, threadsPerWarp)) {
+        return rewriter.notifyMatchFailure(copyOp, "already writes coalesced");
+      }
+
       // Each warp has to write coalesced into LDS so we have to change the src
       // encoding to reflect the reordering of elements from the
       // linear_component of the padded encoding. This is done by taking bases
@@ -148,12 +153,10 @@ struct CoalesceAsyncCopyWrites
 
       // 1) take log2(loadContig) bases as regBases
       for (auto b : llvm::seq(log2LoadContig)) {
-        assert(!remainingBases.empty());
         regBases.push_back(remainingBases.consume_front());
       }
       // 2) take log2(threadsPerWarp) bases as laneBases
       for (auto b : llvm::seq(log2ThreadsPerWarp)) {
-        assert(!remainingBases.empty());
         laneBases.push_back(remainingBases.consume_front());
       }
       // 3) take log2(numWarps) bases as warpBases or broadcast
