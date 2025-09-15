@@ -26,21 +26,6 @@ ArefCreateOp createArefCreateOp(OpBuilder &builder, ArrayRef<Type> arefTypes,
   return builder.create<ArefCreateOp>(loc, arefTy, allocOps);
 }
 
-#if 0
-std::optional<PartitionId> getPartitionId(Operation *op) {
-  if (auto partitionAttr = op->getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
-    IntegerAttr tagAttr;
-    while (op && !tagAttr) {
-      tagAttr = op->getAttrOfType<IntegerAttr>(kWarpSpecializeTagAttrName);
-      op = op->getParentOp();
-    }
-    if (tagAttr)
-      return PartitionId(partitionAttr.getInt(), tagAttr.getInt());
-  }
-  return {};
-}
-#endif
-
 int getArefDepth(MemDescType bufTy) {
   auto shape = bufTy.getShape();
   return isa<nvidia_gpu::TensorMemoryScalesEncodingAttr>(bufTy.getEncoding())

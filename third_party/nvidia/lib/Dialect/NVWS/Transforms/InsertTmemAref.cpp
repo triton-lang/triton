@@ -114,7 +114,7 @@ struct TmemAccessDag {
 
     partitionId = getPartitionId(yieldOp.getOperand(tokPos).getDefiningOp());
     if (!partitionId) {
-      // if op producing token has no partition assigne, use the one from ifOp
+      // if op producing token has no partition assigned, use the one from ifOp
       // assigned by scheduler
       partitionId = getPartitionId(ifOp);
       auto newTokOp = yieldOp.getOperand(tokPos).getDefiningOp();
