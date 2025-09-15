@@ -366,12 +366,11 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
       continue;
     }
     buffers[iMemType][entryRegion] = {
-        createBufferPointersTensor(b, memType, bufValues[iMemType]), nullptr};
+        createBufferPointersTensor(b, memType, bufValues[iMemType])};
     createInWarpSpecialize(
         entryPoint, buffers[iMemType], [&](ImplicitLocOpBuilder &b) {
           return AuxDataMap::RegionToValueMap::ValueType{
-              createBufferPointersTensor(b, memType, bufValues[iMemType]),
-              nullptr};
+              createBufferPointersTensor(b, memType, bufValues[iMemType])};
         });
     int numBufs = bufValues[iMemType].size();
 
@@ -390,12 +389,10 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
   if (!barrierValues.empty()) {
     // Barriers allocations are in shared memory
     barriers[entryRegion] = {
-        createBufferPointersTensor(b, MemType::SHARED_MEM, barrierValues),
-        nullptr};
+        createBufferPointersTensor(b, MemType::SHARED_MEM, barrierValues)};
     createInWarpSpecialize(entryPoint, barriers, [&](ImplicitLocOpBuilder &b) {
       return AuxDataMap::RegionToValueMap::ValueType{
-          createBufferPointersTensor(b, MemType::SHARED_MEM, barrierValues),
-          nullptr};
+          createBufferPointersTensor(b, MemType::SHARED_MEM, barrierValues)};
     });
 
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
@@ -420,7 +417,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
 
   // Create lock variable allocation
   Value lockVal = createLockVariable(b);
-  lock[entryRegion] = {lockVal, nullptr};
+  lock[entryRegion] = {lockVal};
   passToWarpSpecialize(entryPoint, lock[entryRegion], lock);
 
   // Create write commits tensor for cp-async

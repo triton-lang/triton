@@ -355,6 +355,7 @@ struct LockAcquireOpConversion
     return success();
   }
 };
+
 struct LockReleaseOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalLockReleaseOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
