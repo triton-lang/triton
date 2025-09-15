@@ -5,6 +5,7 @@
 #include <dlfcn.h>
 #include <stdexcept>
 #include <string>
+#include <sstream>
 
 class HipBlasLtInstance {
   // Typedefs for hipblas functions
@@ -116,44 +117,44 @@ class HipBlasLtInstance {
 
   void successOrExit(hipblasStatus_t status, const std::string &context = "") {
     if (status != HIPBLAS_STATUS_SUCCESS) {
-      std::string error_msg =
-          "HIPBLAS Error in " + context + ": " + std::to_string(status);
+      std::ostringstream oss;
+      oss << "HIPBLAS Error in " << context << ": " << status;
 
       switch (status) {
       case HIPBLAS_STATUS_NOT_INITIALIZED:
-        error_msg += " (NOT_INITIALIZED)";
+        oss << " (NOT_INITIALIZED)";
         break;
       case HIPBLAS_STATUS_ALLOC_FAILED:
-        error_msg += " (ALLOC_FAILED)";
+        oss << " (ALLOC_FAILED)";
         break;
       case HIPBLAS_STATUS_INVALID_VALUE:
-        error_msg += " (INVALID_VALUE - Parameters are unexpectedly NULL, in "
-                     "conflict or in impossible configuration)";
+        oss <<
+            " (INVALID_VALUE - Parameters are unexpectedly NULL, in conflict or in impossible configuration)";
         break;
       case HIPBLAS_STATUS_MAPPING_ERROR:
-        error_msg += " (MAPPING_ERROR)";
+        oss << " (MAPPING_ERROR)";
         break;
       case HIPBLAS_STATUS_EXECUTION_FAILED:
-        error_msg += " (EXECUTION_FAILED)";
+        oss << " (EXECUTION_FAILED)";
         break;
       case HIPBLAS_STATUS_INTERNAL_ERROR:
-        error_msg += " (INTERNAL_ERROR)";
+        oss << " (INTERNAL_ERROR)";
         break;
       case HIPBLAS_STATUS_NOT_SUPPORTED:
-        error_msg += " (NOT_SUPPORTED)";
+        oss << " (NOT_SUPPORTED)";
         break;
       case HIPBLAS_STATUS_INVALID_ENUM:
-        error_msg +=
+        oss <<
             " (INVALID_ENUM - unsupported enum value was passed to function)";
         break;
       case HIPBLAS_STATUS_UNKNOWN:
-        error_msg += " (UNKNOWN)";
+        oss << " (UNKNOWN)";
         break;
       default:
-        error_msg += " (UNKNOWN_ERROR_CODE)";
+        oss << " (UNKNOWN_ERROR_CODE)";
       }
 
-      throw std::runtime_error(error_msg + "\n");
+      throw std::runtime_error(oss.str() + "\n");
     }
   }
 
@@ -176,7 +177,7 @@ class HipBlasLtInstance {
     hipblasComputeType_t computeType;
     if (dtype == HIP_R_32F) {
       computeType = HIPBLAS_COMPUTE_32F_FAST_TF32;
-    } else if (dtype == HIP_R_8F_E4M3_FNUZ) {
+    } else if (dtype == HIP_R_8F_E4M3_FNUZ || dtype == HIP_R_8F_E5M2_FNUZ) {
       computeType = HIPBLAS_COMPUTE_32F_FAST_8F_FNUZ;
     } else {
       computeType = HIPBLAS_COMPUTE_32F;
@@ -188,7 +189,9 @@ class HipBlasLtInstance {
     successOrExit(hipblasLtMatmulDescSetAttribute(
         matmulDesc, HIPBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(transb)));
 
-    auto c_dtype = dtype == HIP_R_8F_E4M3_FNUZ ? HIP_R_16F : dtype;
+    auto c_dtype = (dtype == HIP_R_8F_E4M3_FNUZ || dtype == HIP_R_8F_E5M2_FNUZ)
+                       ? HIP_R_16F
+                       : dtype;
 
     successOrExit(hipblasLtMatrixLayoutCreate(&Adesc, dtype, k, m, k));
     successOrExit(hipblasLtMatrixLayoutCreate(&Bdesc, dtype, k, n, k));
@@ -200,20 +203,17 @@ class HipBlasLtInstance {
         &heuristicResult, &returnedResults));
 
     if (returnedResults == 0) {
-      std::string error_msg =
-          "No valid algorithm found by hipblasLtMatmulAlgoGetHeuristic\n";
-      error_msg += "Matrix details:\n";
-      error_msg += "  A: dtype=" + std::to_string(dtype) + ", shape=(" +
-                   std::to_string(k) + "," + std::to_string(m) + ")\n";
-      error_msg += "  B: dtype=" + std::to_string(dtype) + ", shape=(" +
-                   std::to_string(k) + "," + std::to_string(n) + ")\n";
-      error_msg += "  C: dtype=" + std::to_string(c_dtype) + ", shape=(" +
-                   std::to_string(m) + "," + std::to_string(n) + ")\n";
-      error_msg += "  D: dtype=" + std::to_string(dtype) + ", shape=(" +
-                   std::to_string(m) + "," + std::to_string(n) + ")\n";
-      error_msg += "  Compute type: " + std::to_string(computeType) + "\n";
-      error_msg += "  Requested algorithms: 1\n";
-      throw std::runtime_error(error_msg);
+      std::ostringstream oss;
+      oss << "No valid algorithm found by hipblasLtMatmulAlgoGetHeuristic\n";
+      oss << "Matrix details:\n";
+      oss << "  A: dtype=" << dtype << ", shape=(" << k << "," << m << ")\n";
+      oss << "  B: dtype=" << dtype << ", shape=(" << k << "," << n << ")\n";
+      oss << "  C: dtype=" << c_dtype << ", shape=(" << m << "," << n
+          << ")\n";
+      oss << "  D: dtype=" << dtype << ", shape=(" << m << "," << n << ")\n";
+      oss << "  Compute type: " << computeType << "\n";
+      oss << "  Requested algorithms: 1\n";
+      throw std::runtime_error(oss.str());
     }
 
     if (heuristicResult.workspaceSize > workspaceSize) {

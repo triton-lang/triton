@@ -35,6 +35,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 #include <stdexcept>
+#include <sstream>
 
 namespace py = pybind11;
 
@@ -131,24 +132,49 @@ static void checkMatmulConstraints(const std::string &A_dtype,
                                    const std::vector<int> &A_shape,
                                    const std::vector<int> &B_shape,
                                    const std::vector<int> &C_shape) {
-  // Allow C to be float16 when A/B are FP8; otherwise all must match
-  bool ab_are_fp8 = (A_dtype == "torch.float8_e4m3fnuz" &&
-                     B_dtype == "torch.float8_e4m3fnuz");
-  bool c_is_f16 = (C_dtype == "torch.float16");
+  // Support FP32/FP16/BF16 and 8-bit FP8 (e4m3fnuz) and BF8 (e5m2fnuz).
+  const bool A_is_fp8 = (A_dtype == "torch.float8_e4m3fnuz" ||
+                         A_dtype == "torch.float8_e5m2fnuz");
+  const bool B_is_fp8 = (B_dtype == "torch.float8_e4m3fnuz" ||
+                         B_dtype == "torch.float8_e5m2fnuz");
+  const bool A_supported = (A_is_fp8 || A_dtype == "torch.float16" ||
+                            A_dtype == "torch.float32" ||
+                            A_dtype == "torch.bfloat16");
+  const bool B_supported = (B_is_fp8 || B_dtype == "torch.float16" ||
+                            B_dtype == "torch.float32" ||
+                            B_dtype == "torch.bfloat16");
+  const bool C_supported = (C_dtype == "torch.float16" ||
+                            C_dtype == "torch.float32" ||
+                            C_dtype == "torch.bfloat16" ||
+                            C_dtype == "torch.float8_e4m3fnuz" ||
+                            C_dtype == "torch.float8_e5m2fnuz");
 
-  if (ab_are_fp8) {
-    if (!c_is_f16) {
-      throw std::runtime_error(
-          "When A/B are torch.float8_e4m3fnuz, C must be torch.float16.");
+  if (!A_supported || !B_supported || !C_supported) {
+    std::ostringstream oss;
+    oss << "Unsupported data type. Got A=" << A_dtype << ", B=" << B_dtype
+        << ", C=" << C_dtype
+        << ". Supported: float32, float16, bfloat16, float8_e4m3fnuz, float8_e5m2fnuz.";
+    throw std::runtime_error(oss.str());
+  }
+
+  // For 8-bit inputs (any combination of FP8/BF8), restrict C to FP16 for now,
+  // matching the current hipBLAS wrapper behavior.
+  if (A_is_fp8 && B_is_fp8) {
+    if (C_dtype != "torch.float16") {
+      std::ostringstream oss;
+      oss << "When A/B are 8-bit (float8_e4m3fnuz or float8_e5m2fnuz), C must"
+          << " be torch.float16.";
+      throw std::runtime_error(oss.str());
     }
   } else {
+    // Otherwise require all dtypes to match
     if (!(A_dtype == B_dtype && A_dtype == C_dtype)) {
-      throw std::runtime_error("Data types do not match.");
+      std::ostringstream oss;
+      oss << "Data types do not match: A=" << A_dtype << ", B=" << B_dtype
+          << ", C=" << C_dtype << ". Expected all equal when not using 8-bit"
+          << " inputs.";
+      throw std::runtime_error(oss.str());
     }
-  }
-  if (A_dtype != "torch.float8_e4m3fnuz" && A_dtype != "torch.float16" &&
-      A_dtype != "torch.float32" && A_dtype != "torch.bfloat16") {
-    throw std::runtime_error("Unsupported data type.");
   }
 
   if (A_shape.size() != 2 || B_shape.size() != 2 || C_shape.size() != 2) {
@@ -157,31 +183,29 @@ static void checkMatmulConstraints(const std::string &A_dtype,
 
   int k = A_shape[1];
   if (k != B_shape[1]) {
-    throw std::runtime_error(
-        "Matrix dimensions do not match. A is [" + std::to_string(A_shape[0]) +
-        ", " + std::to_string(A_shape[1]) + "], B is [" +
-        std::to_string(B_shape[0]) + ", " + std::to_string(B_shape[1]) +
-        "]. Expected A.shape[1] == B.shape[1]. Note "
-        "that B needs to be transposed.");
+    std::ostringstream oss;
+    oss << "Matrix dimensions do not match. A is [" << A_shape[0] << ", "
+        << A_shape[1] << "], B is [" << B_shape[0] << ", " << B_shape[1]
+        << "]. Expected A.shape[1] == B.shape[1]. Note that B needs to be transposed.";
+    throw std::runtime_error(oss.str());
   }
 
   int m = A_shape[0];
   if (m != C_shape[0]) {
-    throw std::runtime_error(
-        "Matrix dimensions do not match. A is [" + std::to_string(A_shape[0]) +
-        ", " + std::to_string(A_shape[1]) + "], C is [" +
-        std::to_string(C_shape[0]) + ", " + std::to_string(C_shape[1]) +
-        "]. Expected A.shape[0] == C.shape[0].");
+    std::ostringstream oss;
+    oss << "Matrix dimensions do not match. A is [" << A_shape[0] << ", "
+        << A_shape[1] << "], C is [" << C_shape[0] << ", " << C_shape[1]
+        << "]. Expected A.shape[0] == C.shape[0].";
+    throw std::runtime_error(oss.str());
   }
 
   int n = B_shape[0];
   if (n != C_shape[1]) {
-    throw std::runtime_error(
-        "Matrix dimensions do not match. B is [" + std::to_string(B_shape[0]) +
-        ", " + std::to_string(B_shape[1]) + "], C is [" +
-        std::to_string(C_shape[0]) + ", " + std::to_string(C_shape[1]) +
-        "]. Expected B.shape[0] == C.shape[1]. Note "
-        "that B needs to be transposed.");
+    std::ostringstream oss;
+    oss << "Matrix dimensions do not match. B is [" << B_shape[0] << ", "
+        << B_shape[1] << "], C is [" << C_shape[0] << ", " << C_shape[1]
+        << "]. Expected B.shape[0] == C.shape[1]. Note that B needs to be transposed.";
+    throw std::runtime_error(oss.str());
   }
 }
 
@@ -445,6 +469,8 @@ void init_triton_amd(py::module &&m) {
 
              if (dtype_str == "float8_e4m3fnuz") {
                dtype = HIP_R_8F_E4M3_FNUZ;
+             } else if (dtype_str == "float8_e5m2fnuz") {
+               dtype = HIP_R_8F_E5M2_FNUZ;
              } else if (dtype_str == "float16") {
                dtype = HIP_R_16F;
              } else if (dtype_str == "float32") {
@@ -491,6 +517,8 @@ void init_triton_amd(py::module &&m) {
         if (dtype_str == "float8_e4m3fnuz") {
           dtype = HIP_R_8F_E4M3_FNUZ; // How should we direct whether or not to
                                       // use FNUZ?
+        } else if (dtype_str == "float8_e5m2fnuz") {
+          dtype = HIP_R_8F_E5M2_FNUZ;
         } else if (dtype_str == "float16") {
           dtype = HIP_R_16F;
         } else if (dtype_str == "float32") {
