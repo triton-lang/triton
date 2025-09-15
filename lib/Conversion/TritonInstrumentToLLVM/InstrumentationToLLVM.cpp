@@ -124,6 +124,15 @@ createIfBlock(ConversionPatternRewriter &b, Location loc, Value cnd) {
   return {prevBlock, ifBlock, thenBlock};
 }
 
+Value createColumnMask(OpBuilder &b, Location loc, int column,
+                       RankedTensorType tensorType) {
+  Attribute encoding = tti::getSingleDimSliceEncoding(
+      cast<ttg::BlockedEncodingAttr>(tensorType.getEncoding()), 1);
+  Value columnMask =
+      createOneHot(b, loc, tensorType.getShape()[1], column, encoding);
+  return convertAndBroadcast(b, loc, columnMask, 0, tensorType);
+}
+
 Value createOrReduce(OpBuilder &b, Location loc, Value tensor, int axis) {
   OpBuilder::InsertionGuard guard(b);
   auto tensorType = cast<RankedTensorType>(tensor.getType());
@@ -405,10 +414,6 @@ struct SetWriteVisibilityOpConversion
     writeVisibility = b.create<arith::SelectOp>(loc, buffersEqBuf, threadBit,
                                                 writeVisibility);
 
-    // Print
-    // b.create<tt::PrintOp>(loc, "wv: ", false, threadBit,
-    // std::vector<int32_t>{0});
-
     tti::createStoreScratchMemory(b, loc, op.getWriteVisibility(),
                                   writeVisibility, writeVisibilityType);
     b.eraseOp(op);
@@ -442,19 +447,14 @@ struct SetReadVisibilityOpConversion
     Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
     buffersEqBuf =
         convertAndBroadcast(b, loc, buffersEqBuf, 1, readVisibilityType);
-    Attribute threadOneHotEncoding = SliceEncodingAttr::get(
-        b.getContext(), 0,
-        cast<BlockedEncodingAttr>(readVisibilityType.getEncoding()));
-    Value threadOneHot = createOneHot(b, loc, readVisibilityType.getShape()[1],
-                                      op.getThread(), threadOneHotEncoding);
-    threadOneHot =
-        convertAndBroadcast(b, loc, threadOneHot, 0, readVisibilityType);
+    Value threadColumnMask =
+        createColumnMask(b, loc, op.getThread(), readVisibilityType);
     Value threadBit = tti::createConstIntTensor(b, loc, 1ULL << op.getThread(),
                                                 readVisibilityType);
     Value readVisibilityOrThreadBit =
         b.create<arith::OrIOp>(loc, readVisibility, threadBit);
     Value bufAndThread =
-        b.create<arith::AndIOp>(loc, buffersEqBuf, threadOneHot);
+        b.create<arith::AndIOp>(loc, buffersEqBuf, threadColumnMask);
     readVisibility = b.create<arith::SelectOp>(
         loc, bufAndThread, readVisibilityOrThreadBit, readVisibility);
     tti::createStoreScratchMemory(b, loc, op.getReadVisibility(),
@@ -656,16 +656,12 @@ struct TrackVisibleReadsOpConversion
     Value barriersEqBar = createCmpIntTensorScalar(b, loc, barriers, bar);
     barriersEqBar =
         convertAndBroadcast(b, loc, barriersEqBar, 0, readTrackingType);
-    Attribute threadOneHotEncoding = tti::getSingleDimSliceEncoding(
-        cast<ttg::BlockedEncodingAttr>(readVisibilityType.getEncoding()), 0);
-    Value threadOneHot = createOneHot(b, loc, readVisibilityType.getShape()[1],
-                                      op.getThread(), threadOneHotEncoding);
-    threadOneHot =
-        convertAndBroadcast(b, loc, threadOneHot, 0, readVisibilityType);
+    Value threadColumnMask =
+        createColumnMask(b, loc, op.getThread(), readVisibilityType);
     Value readVisibilityZero =
         tti::createConstIntTensor(b, loc, 0, readVisibilityType);
     Value visibleReads = b.create<arith::SelectOp>(
-        loc, threadOneHot, readVisibility, readVisibilityZero);
+        loc, threadColumnMask, readVisibility, readVisibilityZero);
     visibleReads = createOrReduce(b, loc, visibleReads, 1);
     visibleReads =
         convertAndBroadcast(b, loc, visibleReads, 1, readTrackingType);
@@ -774,15 +770,10 @@ struct TransferVisibleReadsOpConversion
         convertAndBroadcast(b, loc, trackingBar, 1, readVisibilityType);
     Value readVisibilityOrTracking =
         b.create<arith::OrIOp>(loc, readVisibility, trackingBar);
-    Attribute threadOneHotEncoding = SliceEncodingAttr::get(
-        b.getContext(), 0,
-        cast<BlockedEncodingAttr>(readVisibilityType.getEncoding()));
-    Value threadOneHot = createOneHot(b, loc, readVisibilityType.getShape()[1],
-                                      op.getThread(), threadOneHotEncoding);
-    threadOneHot =
-        convertAndBroadcast(b, loc, threadOneHot, 0, readVisibilityType);
+    Value threadColumnMask =
+        createColumnMask(b, loc, op.getThread(), readVisibilityType);
     readVisibility = b.create<arith::SelectOp>(
-        loc, threadOneHot, readVisibilityOrTracking, readVisibility);
+        loc, threadColumnMask, readVisibilityOrTracking, readVisibility);
     tti::createStoreScratchMemory(b, loc, op.getReadVisibility(),
                                   readVisibility, readVisibilityType);
     b.eraseOp(op);
@@ -876,19 +867,14 @@ struct VerifyReadVisibilityOpConversion
     Value bufVisibility = b.create<arith::SelectOp>(
         loc, buffersEqBuf, readVisibility, readVisibilityZero);
     Value totalVisibility = createOrReduce(b, loc, bufVisibility, 1);
-    Attribute threadOneHotEncoding = SliceEncodingAttr::get(
-        b.getContext(), 0,
-        cast<BlockedEncodingAttr>(readVisibilityType.getEncoding()));
-    Value threadOneHot = createOneHot(b, loc, readVisibilityType.getShape()[1],
-                                      op.getThread(), threadOneHotEncoding);
-    threadOneHot =
-        convertAndBroadcast(b, loc, threadOneHot, 0, readVisibilityType);
+    Value threadColumnMask =
+        createColumnMask(b, loc, op.getThread(), readVisibilityType);
     Value threadBit = tti::createConstIntTensor(b, loc, 1ULL << op.getThread(),
                                                 readVisibilityType);
     Value readVisibilityOrThreadBit =
         b.create<arith::OrIOp>(loc, readVisibility, threadBit);
     Value bufThreadVisibility = b.create<arith::SelectOp>(
-        loc, threadOneHot, bufVisibility, readVisibilityZero);
+        loc, threadColumnMask, bufVisibility, readVisibilityZero);
     bufThreadVisibility = createOrReduce(b, loc, bufThreadVisibility, 1);
     // Thread must have visivility that is a superset of read visibility of all
     // other threads
@@ -936,15 +922,10 @@ struct StageAccessForCommitOpConversion
     auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
     buffersEqBuf =
         convertAndBroadcast(b, loc, buffersEqBuf, 1, writeCommitsType);
-    Attribute threadOneHotEncoding = SliceEncodingAttr::get(
-        b.getContext(), 0,
-        cast<BlockedEncodingAttr>(writeCommitsType.getEncoding()));
-    Value threadOneHot = createOneHot(b, loc, writeCommitsType.getShape()[1],
-                                      op.getThread(), threadOneHotEncoding);
-    threadOneHot =
-        convertAndBroadcast(b, loc, threadOneHot, 0, writeCommitsType);
+    Value threadColumnMask =
+        createColumnMask(b, loc, op.getThread(), writeCommitsType);
     Value bufAndThread =
-        b.create<arith::AndIOp>(loc, buffersEqBuf, threadOneHot);
+        b.create<arith::AndIOp>(loc, buffersEqBuf, threadColumnMask);
     auto writeCommitsMinusOne =
         tti::createConstIntTensor(b, loc, -1, writeCommitsType);
     writeCommits = b.create<arith::SelectOp>(
@@ -992,18 +973,12 @@ struct CommitAccessesOpConversion
     Value writeCommitsOne =
         tti::createConstIntTensor(b, loc, 1, writeCommitsType);
 
-    Attribute threadOneHotEncoding = SliceEncodingAttr::get(
-        b.getContext(), 0,
-        cast<BlockedEncodingAttr>(writeCommitsType.getEncoding()));
-    Value threadOneHot = createOneHot(b, loc, writeCommitsType.getShape()[1],
-                                      op.getThread(), threadOneHotEncoding);
-    threadOneHot =
-        convertAndBroadcast(b, loc, threadOneHot, 0, writeCommitsType);
-
+    Value threadColumnMask =
+        createColumnMask(b, loc, op.getThread(), writeCommitsType);
     auto writeCommitsGtZero = createCmpIntTensorScalar(
         b, loc, writeCommits, zero, arith::CmpIPredicate::sgt);
     writeCommitsGtZero =
-        b.create<arith::AndIOp>(loc, writeCommitsGtZero, threadOneHot);
+        b.create<arith::AndIOp>(loc, writeCommitsGtZero, threadColumnMask);
     auto writeCommitsPlusOne =
         b.create<arith::AddIOp>(loc, writeCommits, writeCommitsOne);
     writeCommits = b.create<arith::SelectOp>(loc, writeCommitsGtZero,
@@ -1012,7 +987,7 @@ struct CommitAccessesOpConversion
     auto writeCommitsEqMinusOne =
         createCmpIntTensorScalar(b, loc, writeCommits, minusOne);
     writeCommitsEqMinusOne =
-        b.create<arith::AndIOp>(loc, writeCommitsEqMinusOne, threadOneHot);
+        b.create<arith::AndIOp>(loc, writeCommitsEqMinusOne, threadColumnMask);
     writeCommits = b.create<arith::SelectOp>(loc, writeCommitsEqMinusOne,
                                              writeCommitsOne, writeCommits);
     tti::createStoreScratchMemory(b, loc, op.getOutstandingCommits(),
@@ -1058,19 +1033,13 @@ struct ClearOutstandingCommitsSetWriteOpConversion
         b.getIntegerAttr(elementType, op.getOutstandingNum()));
     Value outstandingCommitsZero =
         tti::createConstIntTensor(b, loc, 0, outstandingCommitsType);
-    Attribute threadOneHotEncoding = SliceEncodingAttr::get(
-        b.getContext(), 0,
-        cast<BlockedEncodingAttr>(outstandingCommitsType.getEncoding()));
-    Value threadOneHot =
-        createOneHot(b, loc, outstandingCommitsType.getShape()[1],
-                     op.getThread(), threadOneHotEncoding);
-    threadOneHot =
-        convertAndBroadcast(b, loc, threadOneHot, 0, outstandingCommitsType);
+    Value threadColumnMask =
+        createColumnMask(b, loc, op.getThread(), outstandingCommitsType);
 
     auto outstandingCommitsGtOutstandingNum = createCmpIntTensorScalar(
         b, loc, outstandingCommits, outstandingNum, arith::CmpIPredicate::sgt);
     outstandingCommitsGtOutstandingNum = b.create<arith::AndIOp>(
-        loc, outstandingCommitsGtOutstandingNum, threadOneHot);
+        loc, outstandingCommitsGtOutstandingNum, threadColumnMask);
 
     // Update write visibility rows: reduce per-thread mask to row mask,
     // and set the current thread bit only for rows where mask is true.
@@ -1134,19 +1103,12 @@ struct ClearOutstandingCommitsSetReadOpConversion
         b.getIntegerAttr(elementType, op.getOutstandingNum()));
     Value outstandingCommitsZero =
         tti::createConstIntTensor(b, loc, 0, outstandingCommitsType);
-    Attribute threadOneHotEncoding = SliceEncodingAttr::get(
-        b.getContext(), 0,
-        cast<BlockedEncodingAttr>(outstandingCommitsType.getEncoding()));
-    Value threadOneHot =
-        createOneHot(b, loc, outstandingCommitsType.getShape()[1],
-                     op.getThread(), threadOneHotEncoding);
-    threadOneHot =
-        convertAndBroadcast(b, loc, threadOneHot, 0, outstandingCommitsType);
-
+    Value threadColumnMask =
+        createColumnMask(b, loc, op.getThread(), outstandingCommitsType);
     auto outstandingCommitsGtOutstandingNum = createCmpIntTensorScalar(
         b, loc, outstandingCommits, outstandingNum, arith::CmpIPredicate::sgt);
     outstandingCommitsGtOutstandingNum = b.create<arith::AndIOp>(
-        loc, outstandingCommitsGtOutstandingNum, threadOneHot);
+        loc, outstandingCommitsGtOutstandingNum, threadColumnMask);
 
     // Update read visibility: set current thread bit for rows with mask
     Value rowMask =
@@ -1198,12 +1160,6 @@ struct CheckOutstandingCommitsOpConversion
     Value buf = createMemDescToI64(b, loc, getTypeConverter(),
                                    op.getBuf().getType(), adaptor.getBuf());
     StringRef pendingAccessType = op.getPendingAccessType();
-
-    // clang-format off
-    // Gluon pseudo-code:
-    // curr_commits = tl.where(buf == buffers, outstanding_commits, 0)
-    // tl.device_assert(curr_commits == 0, "Accessing buffer with pending access. Pending access type: ")
-    // clang-format on
 
     Type elementType = outstandingCommitsType.getElementType();
     // Select the buffer row across all threads and check it equals zero
