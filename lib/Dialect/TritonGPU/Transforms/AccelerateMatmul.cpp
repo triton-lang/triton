@@ -802,7 +802,7 @@ public:
       return failure();
     if (numWarps != 4 && numWarps != 8)
       return failure();
-    if (retShapePerCTA[0] < 128 || retShapePerCTA[1] < 8)
+    if (retShapePerCTA[0] < 128 || retShapePerCTA[1] < 16)
       return failure();
     Location loc = dotOp.getLoc();
     // operands

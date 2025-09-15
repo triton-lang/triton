@@ -1238,8 +1238,9 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
       LinearLayout::identity1D(std::min<int>(4, shape[1]), kCol, dims[1]) *
       // If shape[1] < 4, we have some cols undefined
       LinearLayout::zeros1D(4 / std::min<int>(4, shape[1]), kCol, dims[1]) *
-      // If shape[0] < 64, we have some 1 col undefined
-      LinearLayout::zeros1D(shape[0] < 64 ? 2 : 0, kCol, dims[1]) *
+      // If shape[0] < 64, we have 1 col undefined
+      LinearLayout::zeros1D(2 / std::min<int>(2, shape[0] / 32), kCol,
+                            dims[1]) *
       // reps
       LinearLayout::identity1D(std::max<int>(1, shape[0] / 32), kCol, dims[0]) *
       LinearLayout::identity1D(std::max<int>(1, shape[1] / 4), kCol, dims[1]);
@@ -1748,10 +1749,6 @@ LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
   basisT warpBase = {{0, 0}, {0, 0}};
   for (int i = 32; i < M; i = i << 1) {
     regBase.push_back({i, 0});
-  }
-  // If M < 64, we need to pad.
-  for (int i = M; i < 64; i = i << 1) {
-    regBase.push_back({0, 0});
   }
   for (int i = 4; i < N; i = i << 1) {
     regBase.push_back({0, i});
