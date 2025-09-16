@@ -149,8 +149,7 @@ class HipBlasLtInstance {
         oss << " (NOT_SUPPORTED)";
         break;
       case HIPBLAS_STATUS_INVALID_ENUM:
-        oss << " (INVALID_ENUM - unsupported enum value was passed to "
-               "function)";
+        oss << " (INVALID_ENUM)";
         break;
       case HIPBLAS_STATUS_UNKNOWN:
         oss << " (UNKNOWN)";

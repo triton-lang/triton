@@ -31,6 +31,7 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
 #include <array>
+#include <optional>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
@@ -216,6 +217,73 @@ static void checkMatmulConstraints(const std::string &A_dtype,
            "transposed.";
     throw std::runtime_error(oss.str());
   }
+}
+
+struct HipBlasInit {
+  int m;
+  int n;
+  int k;
+  hipDataType dtype;
+};
+
+static HipBlasInit initialize_hipblas_op(py::object &A, py::object &B,
+                                         py::object &out,
+                                         std::optional<py::object> accumOpt) {
+  auto A_shape = A.attr("shape").cast<std::vector<int>>();
+  auto B_shape = B.attr("shape").cast<std::vector<int>>();
+  auto OUT_shape = out.attr("shape").cast<std::vector<int>>();
+
+  auto A_dtype = A.attr("dtype").attr("__str__")().cast<std::string>();
+  auto B_dtype = B.attr("dtype").attr("__str__")().cast<std::string>();
+  auto OUT_dtype = out.attr("dtype").attr("__str__")().cast<std::string>();
+
+  if (accumOpt.has_value()) {
+    auto C = accumOpt.value();
+    auto C_shape = C.attr("shape").cast<std::vector<int>>();
+    auto C_dtype = C.attr("dtype").attr("__str__")().cast<std::string>();
+
+    checkMatmulConstraints(A_dtype, B_dtype, OUT_dtype, A_shape, B_shape,
+                           OUT_shape);
+    if (C_dtype != "torch.float16") {
+      throw std::runtime_error("C dtype must be float16, got " + C_dtype);
+    }
+    if (C_shape != OUT_shape) {
+      throw std::runtime_error("C and D shapes must match");
+    }
+  } else {
+    checkMatmulConstraints(A_dtype, B_dtype, OUT_dtype, A_shape, B_shape,
+                           OUT_shape);
+  }
+
+  std::string dtype_str = A_dtype.substr(A_dtype.find_last_of('.') + 1);
+  hipDataType dtype;
+  if (dtype_str == "float8_e4m3fn") {
+    // supported for GFX950/MI350x.
+    dtype = HIP_R_8F_E4M3;
+  } else if (dtype_str == "float8_e5m2fn") {
+    // supported for GFX950/MI350x.
+    dtype = HIP_R_8F_E5M2;
+  } else if (dtype_str == "float8_e4m3fnuz") {
+    // supported for GFX942/MI300x.
+    dtype = HIP_R_8F_E4M3_FNUZ;
+  } else if (dtype_str == "float8_e5m2fnuz") {
+    // supported for GFX942/MI300x.
+    dtype = HIP_R_8F_E5M2_FNUZ;
+  } else if (dtype_str == "float16") {
+    dtype = HIP_R_16F;
+  } else if (dtype_str == "float32") {
+    dtype = HIP_R_32F;
+  } else if (dtype_str == "bfloat16") {
+    dtype = HIP_R_16BF;
+  } else {
+    throw std::runtime_error("Unsupported dtype for hipblasLt: " + dtype_str);
+  }
+
+  int m = A_shape[0];
+  int n = B_shape[0];
+  int k = A_shape[1];
+
+  return HipBlasInit{m, n, k, dtype};
 }
 
 static std::optional<std::string> lldInvoke(const char *inPath,
@@ -457,47 +525,9 @@ void init_triton_amd(py::module &&m) {
              auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
              auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
              auto C_ptr = C.attr("data_ptr")().cast<uint64_t>();
-
-             auto A_shape = A.attr("shape").cast<std::vector<int>>();
-             auto B_shape = B.attr("shape").cast<std::vector<int>>();
-             auto C_shape = C.attr("shape").cast<std::vector<int>>();
-
-             auto A_dtype =
-                 A.attr("dtype").attr("__str__")().cast<std::string>();
-             auto B_dtype =
-                 B.attr("dtype").attr("__str__")().cast<std::string>();
-             auto C_dtype =
-                 C.attr("dtype").attr("__str__")().cast<std::string>();
-
-             checkMatmulConstraints(A_dtype, B_dtype, C_dtype, A_shape, B_shape,
-                                    C_shape);
-
-             std::string dtype_str =
-                 A_dtype.substr(A_dtype.find_last_of('.') + 1);
-             hipDataType dtype;
-
-             if (dtype_str == "float8_e4m3fn") {
-               dtype = HIP_R_8F_E4M3;
-             } else if (dtype_str == "float8_e5m2fn") {
-               dtype = HIP_R_8F_E5M2;
-             } else if (dtype_str == "float8_e4m3fnuz") {
-               dtype = HIP_R_8F_E4M3_FNUZ;
-             } else if (dtype_str == "float8_e5m2fnuz") {
-               dtype = HIP_R_8F_E5M2_FNUZ;
-             } else if (dtype_str == "float16") {
-               dtype = HIP_R_16F;
-             } else if (dtype_str == "float32") {
-               // Use FP32 inputs with TF32 compute in hipblasLt (set in compute
-               // type)
-               dtype = HIP_R_32F;
-             } else if (dtype_str == "bfloat16") {
-               dtype = HIP_R_16BF;
-             } else {
-               throw std::runtime_error(
-                   "Unsupported dtype for hipblasLt.matmul: " + dtype_str);
-             }
-             self.matmul(A_shape[0], B_shape[0], A_shape[1], A_ptr, B_ptr,
-                         C_ptr, dtype);
+             auto init = initialize_hipblas_op(A, B, C, std::nullopt);
+             self.matmul(init.m, init.n, init.k, A_ptr, B_ptr, C_ptr,
+                         init.dtype);
            })
       .def("gemm", [](HipBlasLtInstance &self, py::object &A, py::object &B,
                       py::object &C, py::object &D, float alpha, float beta) {
@@ -505,52 +535,8 @@ void init_triton_amd(py::module &&m) {
         auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
         auto C_ptr = C.attr("data_ptr")().cast<uint64_t>();
         auto D_ptr = D.attr("data_ptr")().cast<uint64_t>();
-
-        auto A_shape = A.attr("shape").cast<std::vector<int>>();
-        auto B_shape = B.attr("shape").cast<std::vector<int>>();
-        auto C_shape = C.attr("shape").cast<std::vector<int>>();
-        auto D_shape = D.attr("shape").cast<std::vector<int>>();
-
-        auto A_dtype = A.attr("dtype").attr("__str__")().cast<std::string>();
-        auto B_dtype = B.attr("dtype").attr("__str__")().cast<std::string>();
-        auto C_dtype = C.attr("dtype").attr("__str__")().cast<std::string>();
-        auto D_dtype = D.attr("dtype").attr("__str__")().cast<std::string>();
-
-        checkMatmulConstraints(A_dtype, B_dtype, D_dtype, A_shape, B_shape,
-                               D_shape);
-        if (C_dtype != "torch.float16") {
-          throw std::runtime_error("C dtype must be float16, got " + C_dtype);
-        }
-        if (C_shape != D_shape) {
-          throw std::runtime_error("C and D shapes must match");
-        }
-
-        std::string dtype_str = A_dtype.substr(A_dtype.find_last_of('.') + 1);
-        hipDataType dtype;
-        if (dtype_str == "float8_e4m3fn") {
-          // supported for GFX950/MI350x.
-          dtype = HIP_R_8F_E4M3;
-        } else if (dtype_str == "float8_e5m2fn") {
-          // supported for GFX950/MI350x.
-          dtype = HIP_R_8F_E5M2;
-        } else if (dtype_str == "float8_e4m3fnuz") {
-          // supported for GFX942/MI300x.
-          dtype = HIP_R_8F_E4M3_FNUZ;
-        } else if (dtype_str == "float8_e5m2fnuz") {
-          // supported for GFX942/MI300x.
-          dtype = HIP_R_8F_E5M2_FNUZ;
-        } else if (dtype_str == "float16") {
-          dtype = HIP_R_16F;
-        } else if (dtype_str == "float32") {
-          dtype = HIP_R_32F;
-        } else if (dtype_str == "bfloat16") {
-          dtype = HIP_R_16BF;
-        } else {
-          throw std::runtime_error("Unsupported dtype for hipblasLt.gemm: " +
-                                   dtype_str);
-        }
-
-        self.gemm(A_shape[0], B_shape[0], A_shape[1], A_ptr, B_ptr, C_ptr,
-                  D_ptr, dtype, alpha, beta);
+        auto init = initialize_hipblas_op(A, B, D, C);
+        self.gemm(init.m, init.n, init.k, A_ptr, B_ptr, C_ptr, D_ptr,
+                  init.dtype, alpha, beta);
       });
 }

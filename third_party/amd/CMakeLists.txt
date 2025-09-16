@@ -1,34 +1,6 @@
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
 
-find_program(HIPCONFIG_EXECUTABLE hipconfig)
-if(HIPCONFIG_EXECUTABLE)
-    execute_process(COMMAND ${HIPCONFIG_EXECUTABLE} --path
-                   OUTPUT_VARIABLE ROCM_PATH
-                   OUTPUT_STRIP_TRAILING_WHITESPACE)
-    message(STATUS "Found ROCm at: ${ROCM_PATH}")
-endif()
-
-if(ROCM_PATH AND EXISTS "${ROCM_PATH}")
-    set(ROCM_INCLUDE_DIR "${ROCM_PATH}/include")
-    if(EXISTS "${ROCM_INCLUDE_DIR}/hipblas-common/hipblas-common.h")
-        include_directories("${ROCM_INCLUDE_DIR}/hipblas-common")
-        message(STATUS "Found hipblas-common.h in: ${ROCM_INCLUDE_DIR}/hipblas-common")
-    elseif(EXISTS "${ROCM_INCLUDE_DIR}/hipblas/hipblas-common.h")
-        include_directories("${ROCM_INCLUDE_DIR}/hipblas")
-        message(STATUS "Found hipblas-common.h in: ${ROCM_INCLUDE_DIR}/hipblas")
-    elseif(EXISTS "${ROCM_INCLUDE_DIR}/hipblas-common.h")
-        include_directories("${ROCM_INCLUDE_DIR}")
-        message(STATUS "Found hipblas-common.h in: ${ROCM_INCLUDE_DIR}")
-    else()
-        message(WARNING "hipblas-common.h not found in ROCm installation. Using fallback definitions.")
-    endif()
-    message(STATUS "Added ROCm include directories: ${ROCM_INCLUDE_DIR}")
-else()
-    # error out maybe?
-    message(WARNING "ROCm installation not found. HIP BLAS headers may not be available.")
-endif()
-
 add_subdirectory(include)
 add_subdirectory(lib)
 if(TRITON_BUILD_PYTHON_MODULE)
