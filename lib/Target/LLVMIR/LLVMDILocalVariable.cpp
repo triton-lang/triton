@@ -48,7 +48,7 @@ struct LLVMDILocalVariablePass
 
       // TODO: Those instantiation using defult is necessary for first viable
       // result, but no meaning for now
-      mlir::LLVM::DIFileAttr diFileAttr =
+      LLVM::DIFileAttr diFileAttr =
           LLVM::DIFileAttr::get(context, "<unknown>", "<unknown>");
 
       // Extracting type info into DITypeAttr
@@ -58,8 +58,8 @@ struct LLVMDILocalVariablePass
         // later assertion fault
         return;
       }
-      mlir::LLVM::DITypeAttr diTypeAttr = convertType(context, resultType);
-      mlir::LLVM::DIFlags diFlags = LLVM::DIFlags::Zero;
+      LLVM::DITypeAttr diTypeAttr = convertType(context, resultType);
+      LLVM::DIFlags diFlags = LLVM::DIFlags::Zero;
 
       // LLVM Dialect to LLVM translation requires DILocalScope when
       // DILocalVariable is present
@@ -87,13 +87,9 @@ struct LLVMDILocalVariablePass
     }
   }
 
-  unsigned calcBitWidth(mlir::Type type) {
-    if (type.isInteger()) {
+  auto calcBitWidth(mlir::Type type) -> std::optional<unsigned> {
+    if (type.isIntOrFloat()) {
       return type.getIntOrFloatBitWidth();
-    } else if (type.isF32()) {
-      return 32;
-    } else if (type.isF64()) {
-      return 64;
     } else if (mlir::isa<mlir::VectorType>(type)) {
       auto vectorType = dyn_cast<mlir::VectorType>(type);
       llvm::ArrayRef<int64_t> shape = vectorType.getShape();
@@ -103,49 +99,59 @@ struct LLVMDILocalVariablePass
       for (auto i : shape) {
         size *= i;
       }
-      return size * calcBitWidth(elementType);
+
+      if (auto elementTypeSize = calcBitWidth(elementType);
+          elementTypeSize.has_value()) {
+        return size * elementTypeSize.value();
+      }
     }
 
-    return 0;
+    return std::nullopt;
   }
 
   // Note: mlir does not provided any built-in conversion from mlir::Type to
   // mlir::LLVM::DITypeAttr
-  mlir::LLVM::DITypeAttr convertType(MLIRContext *context, mlir::Type type) {
+  LLVM::DITypeAttr convertType(MLIRContext *context, mlir::Type type) {
     if (type.isInteger(1)) {
-      return mlir::LLVM::DIBasicTypeAttr::get(
-          context, llvm::dwarf::DW_TAG_base_type,
-          mlir::StringAttr::get(context, "bool"), type.getIntOrFloatBitWidth(),
-          llvm::dwarf::DW_ATE_boolean);
+      return LLVM::DIBasicTypeAttr::get(context, llvm::dwarf::DW_TAG_base_type,
+                                        mlir::StringAttr::get(context, "bool"),
+                                        type.getIntOrFloatBitWidth(),
+                                        llvm::dwarf::DW_ATE_boolean);
     }
     if (type.isInteger()) {
-      return mlir::LLVM::DIBasicTypeAttr::get(
-          context, llvm::dwarf::DW_TAG_base_type,
-          mlir::StringAttr::get(context, "int"), type.getIntOrFloatBitWidth(),
-          llvm::dwarf::DW_ATE_signed);
+      return LLVM::DIBasicTypeAttr::get(context, llvm::dwarf::DW_TAG_base_type,
+                                        mlir::StringAttr::get(context, "int"),
+                                        type.getIntOrFloatBitWidth(),
+                                        llvm::dwarf::DW_ATE_signed);
     } else if (type.isF16()) {
-      return mlir::LLVM::DIBasicTypeAttr::get(
-          context, llvm::dwarf::DW_TAG_base_type,
-          mlir::StringAttr::get(context, "half"), type.getIntOrFloatBitWidth(),
-          llvm::dwarf::DW_ATE_float);
+      return LLVM::DIBasicTypeAttr::get(context, llvm::dwarf::DW_TAG_base_type,
+                                        mlir::StringAttr::get(context, "half"),
+                                        type.getIntOrFloatBitWidth(),
+                                        llvm::dwarf::DW_ATE_float);
     } else if (type.isF32()) {
-      return mlir::LLVM::DIBasicTypeAttr::get(
-          context, llvm::dwarf::DW_TAG_base_type,
-          mlir::StringAttr::get(context, "float"), type.getIntOrFloatBitWidth(),
-          llvm::dwarf::DW_ATE_float);
+      return LLVM::DIBasicTypeAttr::get(context, llvm::dwarf::DW_TAG_base_type,
+                                        mlir::StringAttr::get(context, "float"),
+                                        type.getIntOrFloatBitWidth(),
+                                        llvm::dwarf::DW_ATE_float);
     } else if (type.isF64()) {
-      return mlir::LLVM::DIBasicTypeAttr::get(
+      return LLVM::DIBasicTypeAttr::get(
           context, llvm::dwarf::DW_TAG_base_type,
           mlir::StringAttr::get(context, "double"),
           type.getIntOrFloatBitWidth(), llvm::dwarf::DW_ATE_float);
     } else if (mlir::isa<mlir::VectorType>(type)) {
-      return mlir::LLVM::DIBasicTypeAttr::get(
-          context, llvm::dwarf::DW_TAG_base_type,
-          mlir::StringAttr::get(context, "vector"), calcBitWidth(type),
-          llvm::dwarf::DW_ATE_float);
+      if (auto vectorTypeSize = calcBitWidth(type);
+          vectorTypeSize.has_value()) {
+        return LLVM::DIBasicTypeAttr::get(
+            context, llvm::dwarf::DW_TAG_base_type,
+            mlir::StringAttr::get(context, "vector"), vectorTypeSize.value(),
+            llvm::dwarf::DW_ATE_float);
+      } else {
+        // TODO: falling back to unknown_type, perhaps theres a better way to
+        // handle when element type size is not determined
+      }
     }
 
-    return mlir::LLVM::DIBasicTypeAttr::get(
+    return LLVM::DIBasicTypeAttr::get(
         context, llvm::dwarf::DW_TAG_base_type,
         mlir::StringAttr::get(context, "unknown_type"), 0,
         llvm::dwarf::DW_ATE_signed);
