@@ -1238,6 +1238,9 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
       LinearLayout::identity1D(std::min<int>(4, shape[1]), kCol, dims[1]) *
       // If shape[1] < 4, we have some cols undefined
       LinearLayout::zeros1D(4 / std::min<int>(4, shape[1]), kCol, dims[1]) *
+      // If shape[0] < 64, we have 1 col undefined
+      LinearLayout::zeros1D(
+          2 / std::min<int>(2, llvm::divideCeil(shape[0], 32)), kCol, dims[1]) *
       // reps
       LinearLayout::identity1D(std::max<int>(1, shape[0] / 32), kCol, dims[0]) *
       LinearLayout::identity1D(std::max<int>(1, shape[1] / 4), kCol, dims[1]);
