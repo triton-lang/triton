@@ -955,21 +955,6 @@ def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_of
     assert (output == ref_output).all()
 
 
-# ===-----------------------------------------------------------------------===#
-# float2
-# ===-----------------------------------------------------------------------===#
-
-
-@gluon.jit
-def _split2(x):
-    return x.reshape(x.shape[0], 2, x.shape[1] // 2).permute(0, 2, 1).split()
-
-
-@gluon.jit
-def _join2(x0, x1):
-    return ttgl.join(x0, x1).permute(0, 2, 1).reshape(x0.shape[0], x0.shape[1] * 2)
-
-
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 @pytest.mark.parametrize("op, tol", [("add", 0), ("sub", 0), ("mul", 0), ("fma", 1e-6)])
 def test_float2(op, tol):
@@ -991,9 +976,9 @@ def test_float2(op, tol):
         a = ttgl.load(a_ptr + offs_m * BLOCK_N + offs_n)
         b = ttgl.load(b_ptr + offs_m * BLOCK_N + offs_n)
         c = ttgl.load(c_ptr + offs_m * BLOCK_N + offs_n)
-        a = float2.pack(*_split2(a))
-        b = float2.pack(*_split2(b))
-        c = float2.pack(*_split2(c))
+        a = float2.pack(a, axis=1)
+        b = float2.pack(b, axis=1)
+        c = float2.pack(c, axis=1)
 
         if op == "add":
             out = a + b
@@ -1004,7 +989,7 @@ def test_float2(op, tol):
         elif op == "fma":
             out = float2.fma(a, b, c)
 
-        out = _join2(*float2.unpack(out))
+        out = float2.unpack(out, axis=1)
         ttgl.store(out_ptr + offs_m * BLOCK_N + offs_n, out)
 
     torch.manual_seed(0)

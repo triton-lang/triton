@@ -1,8 +1,10 @@
 from triton.language.core import _aggregate as aggregate
-from triton.experimental.gluon.language import _core as ttgl
-from triton.experimental.gluon._runtime import jit
+from triton.experimental.gluon.language import _core as ttgl, _standard as stdlib
+from triton.experimental.gluon._runtime import constexpr_function, jit
 
 __all__ = [
+    "pack2",
+    "unpack2",
     "pack",
     "unpack",
     "fma",
@@ -90,7 +92,7 @@ class Float2Tensor:
 
 
 @jit
-def pack(x0, x1):
+def pack2(x0, x1):
     value = ttgl.inline_asm_elementwise(
         """
         mov.b64 $0, { $1, $2 };
@@ -105,7 +107,7 @@ def pack(x0, x1):
 
 
 @jit
-def unpack(x):
+def unpack2(x):
     return ttgl.inline_asm_elementwise(
         """
         mov.b64 { $0, $1 }, $2;
@@ -116,6 +118,48 @@ def unpack(x):
         is_pure=True,
         pack=1,
     )
+
+
+@constexpr_function
+def _get_split_shape(shape, axis):
+    shape = [d for d in shape]
+    assert shape[axis] >= 2, f"not enough elements to pack along axis {axis}"
+    shape[axis] //= 2
+    shape.insert(axis + 1, 2)
+    permute = list(range(len(shape)))
+    permute[axis + 1], permute[len(permute) - 1] = permute[len(permute) - 1], permute[axis + 1]
+    return ttgl.tuple(shape), ttgl.tuple(permute)
+
+
+@constexpr_function
+def _get_join_shape(shape, axis):
+    shape = [d for d in shape]
+    shape[axis] *= 2
+    permute = list(range(len(shape)))
+    permute.insert(axis + 1, len(permute))
+    return ttgl.tuple(shape), ttgl.tuple(permute)
+
+
+@jit
+def pack(x, axis):
+    sp: ttgl.constexpr = _get_split_shape(x.shape, axis)
+    x0, x1 = x.reshape(*sp[0]).permute(*sp[1]).split()
+    return pack2(x0, x1)
+
+
+@jit
+def unpack(x, axis):
+    shape: ttgl.constexpr = x._value.shape
+    sp: ttgl.constexpr = _get_join_shape(shape, axis)
+    x0, x1 = unpack2(x)
+    return ttgl.join(x0, x1).permute(*sp[1]).reshape(*sp[0])
+
+
+@jit
+def full_like(x, fill_value):
+    ttgl.static_assert(fill_value.dtype == ttgl.float32, "fill_value must be a float32")
+    fill = stdlib.full_like(x._value, fill_value, dtype=ttgl.float32)
+    return pack2(fill, fill)
 
 
 @jit

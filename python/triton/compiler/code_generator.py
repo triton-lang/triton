@@ -8,7 +8,7 @@ import warnings
 import textwrap
 import itertools
 from dataclasses import dataclass
-from types import ModuleType
+from types import ModuleType, NotImplementedType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, List
 
 from .. import knobs, language
@@ -730,7 +730,10 @@ class CodeGenerator(ast.NodeVisitor):
             return getattr(rhs, reverse_method_name)(lhs, _semantic=self.semantic)
         if not isinstance(lhs, (constexpr, language.tuple)) and isinstance(rhs, constexpr):
             lhs = constexpr(lhs)
-        fn = self.get_Attribute(lhs, method_name)
+        if isinstance(lhs, constexpr):
+            fn = getattr(lhs, method_name)
+        else:
+            fn = self.get_Attribute(lhs, method_name)
         return self.call_Function(node, fn, [rhs], {})
 
     def visit_BinOp(self, node):
