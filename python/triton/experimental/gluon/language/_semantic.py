@@ -151,6 +151,16 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         value = super().reshape(input, dst_shape, can_reorder)
         return self._wrap_tensor_infer_layout(value)
 
+    def permute1(self, input: TensorTy, dims: Tuple[int], layout: DistributedLayout) -> TensorTy:
+        if len(input.shape) != len(dims):
+            raise ValueError("permute dims must have the same length as input shape")
+        if sorted(ttgl._unwrap_if_constexpr(d) for d in dims) != list(range(len(dims))):
+            raise ValueError(f"permute dims must be a permutation of 0, 1, ..., n-1, but were {dims}")
+
+        ret_type = ttgl.distributed_type(input.type.element_ty, [input.shape[d] for d in dims], layout)
+        return ttgl.tensor(self.builder.create_trans1(ret_type.to_ir(self.builder), input.handle, dims), ret_type)
+
+
     def splat(self, value, shape, layout):
         ret_ty = ttgl.distributed_type(value.dtype, shape, layout)
         handle = self.builder.create_splat(ret_ty.to_ir(self.builder), value.handle)

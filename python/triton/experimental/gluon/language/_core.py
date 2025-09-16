@@ -495,3 +495,28 @@ def thread_barrier(_semantic=None):
     Insert a barrier to synchronize threads within a CTA.
     """
     return _semantic.debug_barrier()
+
+from triton.language.core import _unwrap_iterable
+@builtin
+def permute(input, *dims, layout, _semantic=None):
+    """
+    Permutes the dimensions of a tensor.
+
+    :param input: The input tensor.
+    :type input: Block
+    :param dims: The desired ordering of dimensions.  For example,
+        :code:`(2, 1, 0)` reverses the order dims in a 3D tensor.
+
+    :code:`dims` can be passed as a tuple or as individual parameters: ::
+
+        # These are equivalent
+        permute(x, (2, 1, 0))
+        permute(x, 2, 1, 0)
+
+    :py:func:`trans` is equivalent to this function, except when
+    :code:`dims` is empty, it tries to do a (1,0) permutation.
+    """
+    dims = _unwrap_iterable(dims)
+    layout = _unwrap_if_constexpr(layout)
+    return _semantic.permute1(input, dims, layout)
+

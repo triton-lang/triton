@@ -687,6 +687,11 @@ void init_gluon_ir(py::module &&m) {
              return self.create<ttag::InThreadTransposeOp>(
                  resultType, arg);
            })
+      .def("create_trans1",
+           [](TritonOpBuilder &self, Type resultType, Value &arg,
+              std::vector<int> &order) -> Value { 
+              return self.create<tt::TransOp>(resultType, arg, order);
+          })
       .def("create_buffer_load",
            [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
               Value mask, Value other, tt::CacheModifier cache) -> Value {
