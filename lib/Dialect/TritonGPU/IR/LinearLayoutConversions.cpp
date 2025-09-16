@@ -1253,7 +1253,8 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
   auto tile = LinearLayout::identity1D(32, kRow, dims[0]) *
               // Broadcasting along 'warps'
               LinearLayout::zeros1D(4, kRow, dims[0]) *
-              LinearLayout::identity1D(8, kCol, dims[1]);
+              LinearLayout::identity1D(4, kCol, dims[1]);
+  LinearLayout::identity1D(2, kCol, dims[0]);
   // We choose repOrder = [0, 1]
   tile *= LinearLayout::identity1D(
               llvm::divideCeil(shape[0], tile.getOutDimSize(dims[0])), kCol,
