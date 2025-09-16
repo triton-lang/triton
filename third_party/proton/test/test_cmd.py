@@ -10,10 +10,6 @@ def test_help():
     subprocess.check_call(["proton", "-h"], stdout=subprocess.DEVNULL)
 
 
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
-
-
 @pytest.mark.parametrize("mode", ["script", "python", "pytest"])
 def test_exec(mode, tmp_path: pathlib.Path):
     file_path = __file__
