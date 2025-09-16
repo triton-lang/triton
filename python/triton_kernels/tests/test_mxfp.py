@@ -101,7 +101,7 @@ def test_mxfp_casting(
     rounding_mode: DequantScaleRoundingMode,
     device,
 ):
-    if "float8" in quant_dtype and (device == "cuda" and torch.cuda.get_device_capability()[0] < 9):
+    if "float8" in quant_dtype and (is_cuda() and torch.cuda.get_device_capability()[0] < 9):
         pytest.skip("Float8 not tested on A100")
     quant_torch_type = dtype_str_to_torch(quant_dtype)
     dequant_torch_type = dtype_str_to_torch(dequant_dtype)
