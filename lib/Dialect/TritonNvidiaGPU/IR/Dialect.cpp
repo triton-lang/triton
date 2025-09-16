@@ -55,19 +55,27 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   auto S = [&](StringRef str) { return StringAttr::get(ctx, str); };
   auto kRow = S("row");
   auto kCol = S("col");
-  // Remove broadcasting and empty dims along the kRow
-  auto ll = toLinearLayout(memDescType);
-  auto llNoBroadcast = ll.removeZeroBasesAlongDim(kRow);
-  // We always have 4 warps starting at row=32 and row=64 so we have
-  // to account for them if we have removed them in removeZeroBasesAlongDim
-  auto log2WarpRows = (ll.getBasis(kRow, llvm::Log2_32(32)) == ArrayRef{0, 0}) +
-                      (ll.getBasis(kRow, llvm::Log2_32(64)) == ArrayRef{0, 0});
-  auto nRow = ll.getInDimSize(kRow) * (1 << log2WarpRows);
-  auto nCol = ll.getInDimSize(kCol);
+  // Remove multibuffering if present
+  auto shape = memDescType.getShape().take_back(2);
+  auto ll = toLinearLayout(shape, memDescType.getEncoding());
+  auto bitwidth = memDescType.getElementTypeBitWidth();
+  int nRow = ll.getInDimSize(kRow);
+  int nCol = ll.getInDimSize(kCol) / (32 / bitwidth);
+  // If we have just one 16xcol block per warp, we don't allocate 128 rows
+  // we use 64 rows instead.
+  // We could generalise this to when we have more zeros in the layout, but
+  // the allocator does not support this yet
+  if (ll.getBasis(kRow, llvm::Log2_32(16)) == ArrayRef{0, 0}) {
+    nRow /= 2;
+  }
+
   // Hack: We should represent this in the LL. Remove the block dimension
   if (auto tmemEnc =
           dyn_cast<TensorMemoryEncodingAttr>(memDescType.getEncoding())) {
     nCol /= tmemEnc.getCTASplitM() * tmemEnc.getCTASplitN();
+  } else if (auto tmemScaleEnc = dyn_cast<TensorMemoryScalesEncodingAttr>(
+                 memDescType.getEncoding())) {
+    nCol /= tmemScaleEnc.getCTASplitM() * tmemScaleEnc.getCTASplitN();
   }
   return {nRow, nCol};
 }
