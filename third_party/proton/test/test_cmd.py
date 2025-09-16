@@ -1,4 +1,3 @@
-import triton
 import pytest
 import subprocess
 import json

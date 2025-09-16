@@ -6,8 +6,8 @@ import pytest
 
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2
 
-
 pytestmark = pytest.mark.skipif(is_hip_cdna2(), reason="old AMD GPUs are not supported")
+
 
 def test_override(tmp_path: pathlib.Path):
     dir_path = os.path.dirname(os.path.realpath(__file__))

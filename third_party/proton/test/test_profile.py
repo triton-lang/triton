@@ -18,7 +18,6 @@ import triton.profiler.hooks.launch as proton_launch
 from triton._internal_testing import is_hip
 
 
-
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_torch.hatchet"
