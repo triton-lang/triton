@@ -12,16 +12,9 @@ import triton.language.semantic
 import triton.profiler as proton
 import triton.profiler.language as pl
 from triton.tools.tensor_descriptor import TensorDescriptor
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2
 
 pl.enable_semantic("triton")
-
-
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
 def supports_tma():
@@ -33,7 +26,7 @@ def supports_ws():
 
 
 def unsupport_amd():
-    return is_hip() and triton.runtime.driver.active.get_current_target().arch in ["gfx90a"]
+    return is_hip_cdna2()
 
 
 # Skip all tests if the AMD GPU version is not supported
@@ -472,12 +465,8 @@ def test_warp_spec(tmp_path: pathlib.Path):
             return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
 
         matmul_kernel_tma[grid](
-            a_desc,
-            b_desc,
-            c_desc,  #
-            M,
-            N,
-            K,  #
+            a_desc, b_desc, c_desc,  #
+            M, N, K,  #
             BLOCK_SIZE_M=128,  #
             BLOCK_SIZE_N=256,  #
             BLOCK_SIZE_K=128,  #

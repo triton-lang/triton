@@ -5,18 +5,11 @@ import json
 import pytest
 
 import triton
-
-
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2
 
 
 def unsupport_amd():
-    return is_hip() and triton.runtime.driver.active.get_current_target().arch in ["gfx90a"]
+    return is_hip_cdna2()
 
 
 def test_override(tmp_path: pathlib.Path):
