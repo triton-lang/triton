@@ -506,8 +506,15 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
 
 bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
                                       const LinearLayout &srcToSharedLayout,
-                                      unsigned threadsPerWarp) {
+                                      unsigned threadsPerWarp,
+                                      unsigned vecSize) {
   auto contig = srcToSharedLayout.getNumConsecutiveInOut();
+  if (vecSize != srcToSharedLayout.getNumConsecutiveInOut()) {
+    LDBG("Load vectorization ("
+         << vecSize << ") and contiguity (" << contig
+         << ") do not match resulting in strided writes");
+    return false;
+  }
 
   StringAttr kLane = rewriter.getStringAttr("lane");
   for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
