@@ -1,6 +1,8 @@
 # isort: off
 # fmt: off
 from dataclasses import dataclass
+from math import sqrt
+
 import triton
 from triton_kernels.target_info import get_cdna_version
 import torch
@@ -165,7 +167,16 @@ def make_default_opt_flags_nvidia(
     elif enforce_bitwise_invariance:
         block_m = 128
     else:
-        block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
+        if tokens_per_expt <= 64 and False:
+            # likely memory bound. set the block size higher to ensure we do not frequently load weights
+            # more than once.
+            quantile = 1.036 # normal distribution quantile for 85%; from scipy.stats import norm; norm.ppf(0.85)
+            p = routing_data.n_expts_act / routing_data.n_expts_tot
+            std_dev = sqrt(m * p * (1 - p))  # std dev of binomial distribution
+            tokens_per_expt_block = triton.next_power_of_2(int(tokens_per_expt + std_dev * quantile))
+        else:
+            tokens_per_expt_block = triton.next_power_of_2(tokens_per_expt)
+        block_m = max(16, min(triton.next_power_of_2(tokens_per_expt_block), 128))
     # block n
     arch = None
     block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
