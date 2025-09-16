@@ -4,7 +4,6 @@ import pathlib
 import json
 import pytest
 
-import triton
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2
 
 

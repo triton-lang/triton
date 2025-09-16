@@ -12,7 +12,7 @@ import triton.language.semantic
 import triton.profiler as proton
 import triton.profiler.language as pl
 from triton.tools.tensor_descriptor import TensorDescriptor
-from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2
+from triton._internal_testing import is_cuda, is_hip_cdna2
 
 pl.enable_semantic("triton")
 
@@ -465,8 +465,12 @@ def test_warp_spec(tmp_path: pathlib.Path):
             return (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), )
 
         matmul_kernel_tma[grid](
-            a_desc, b_desc, c_desc,  #
-            M, N, K,  #
+            a_desc,
+            b_desc,
+            c_desc,  #
+            M,
+            N,
+            K,  #
             BLOCK_SIZE_M=128,  #
             BLOCK_SIZE_N=256,  #
             BLOCK_SIZE_K=128,  #
