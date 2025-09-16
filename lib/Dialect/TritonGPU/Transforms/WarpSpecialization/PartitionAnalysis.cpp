@@ -587,6 +587,8 @@ Node *Edge::getToNode() const { return to.getNode(); }
 size_t Edge::getToIdx() const { return to.getIdx(); }
 
 bool Edge::isDataValue() const {
+  if (!from.getNode())
+    return false;
   return from.getNode()->isDataValue(from.getIdx());
 }
 
@@ -610,7 +612,7 @@ struct VisualizationInfo {
 
 void visualize(std::string path, Graph *graph, VisualizationInfo &info);
 
-std::unique_ptr<Graph> buildGraph(ModuleOp m) {
+std::unique_ptr<Graph> buildGraph(Operation *region) {
   DenseMap<Operation *, Node *> nodes;
   DenseMap<std::pair<Operation *, size_t>, InputPort> operands;
   SmallVector<std::pair<OutputPort, Value>> values;
@@ -749,10 +751,15 @@ std::unique_ptr<Graph> buildGraph(ModuleOp m) {
         }
       };
 
-  auto graph = std::make_unique<Graph>(m.getOperation());
-  for (auto &block : m.getRegion())
-    for (auto &op : block)
-      visitOperation(graph->getRoot(), &op);
+  auto graph = std::make_unique<Graph>(region);
+  if (auto m = dyn_cast<ModuleOp>(region)) {
+    // Special case for analyzing entire module
+    for (auto &block : m.getRegion())
+      for (auto &op : block)
+        visitOperation(graph->getRoot(), &op);
+  } else {
+    visitOperation(graph->getRoot(), region);
+  }
 
   for (auto [outputPort, value] : values) {
     for (auto &use : value.getUses()) {
@@ -862,7 +869,7 @@ SmallVector<Edge> getOutCrossingEdges(Group *group) {
   return edges;
 }
 
-bool deserializeManualGroups(ModuleOp m, Graph *graph) {
+bool deserializeManualGroups(Operation *region, Graph *graph) {
   const auto &options = get_options();
 
   if (tools::getBoolEnv("PARTITION_ANALYSIS_NVWS_SERIALIZATION")) {
@@ -884,7 +891,7 @@ bool deserializeManualGroups(ModuleOp m, Graph *graph) {
               group->addFlag(Flags::MANUAL);
               group->name = name;
               auto attr =
-                  mlir::cast<mlir::DictionaryAttr>(m->getAttr(fullname));
+                  mlir::cast<mlir::DictionaryAttr>(region->getAttr(fullname));
               group->start_warp =
                   mlir::cast<IntegerAttr>(attr.get("start_warp")).getInt();
               group->num_warps =
@@ -918,7 +925,6 @@ bool deserializeManualGroups(ModuleOp m, Graph *graph) {
       if (op->hasAttr("ttg.partition")) {
         // Note: reads ttg.partition, but emits ttg.partitions
         auto id = cast<IntegerAttr>(op->getAttr("ttg.partition")).getInt();
-        std::cout << id << std::endl;
         if (manual_groups.find(id) == manual_groups.end()) {
           auto group = graph->addGroup();
           group->addFlag(Flags::MANUAL);
@@ -1757,7 +1763,7 @@ void propagateGroups(Graph *graph, std::string funcName,
           stack.pop_back();
 
           for (auto edge : node->getInEdges()) {
-            if (edge.isDataValue())
+            if (edge.isDataValue() || !edge.getFromNode())
               continue;
             auto fromNode = edge.getFromNode();
             auto numGroupsBefore = fromNode->getGroups().size();
@@ -2019,7 +2025,7 @@ bool isSimpleMMA(Group *group) {
   return true;
 }
 
-void assignWarpsAndRegisters(ModuleOp m, Graph *graph) {
+void assignWarpsAndRegisters(Operation *region, Graph *graph) {
   auto &options = get_options();
 
   // assign unique ids for groups
@@ -2034,19 +2040,25 @@ void assignWarpsAndRegisters(ModuleOp m, Graph *graph) {
   }
 
   // assign number of warps to each group
-  auto moduleNumWarps =
-      mlir::cast<mlir::IntegerAttr>(m->getAttr(ttg::AttrNumWarpsName)).getInt();
-  for (auto &group : graph->getGroups()) {
-    if (group->empty())
-      continue;
-    if (group->getFlags() & Flags::MANUAL)
-      continue;
-    if (isSimpleLoad(group.get()))
-      group->num_warps = options.load_num_warps;
-    else if (isSimpleMMA(group.get()))
-      group->num_warps = options.mma_num_warps;
-    else
-      group->num_warps = moduleNumWarps;
+  {
+    ModuleOp module = dyn_cast<ModuleOp>(region);
+    if (!module)
+      module = region->getParentOfType<ModuleOp>();
+    auto moduleNumWarps =
+        mlir::cast<mlir::IntegerAttr>(module->getAttr(ttg::AttrNumWarpsName))
+            .getInt();
+    for (auto &group : graph->getGroups()) {
+      if (group->empty())
+        continue;
+      if (group->getFlags() & Flags::MANUAL)
+        continue;
+      if (isSimpleLoad(group.get()))
+        group->num_warps = options.load_num_warps;
+      else if (isSimpleMMA(group.get()))
+        group->num_warps = options.mma_num_warps;
+      else
+        group->num_warps = moduleNumWarps;
+    }
   }
 
   // collect groups together based on flags
@@ -2195,7 +2207,7 @@ void assignWarpsAndRegisters(ModuleOp m, Graph *graph) {
   }
 }
 
-void serialize(ModuleOp m, Graph *graph) {
+void serialize(Operation *region, Graph *graph) {
   bool nvws = tools::getBoolEnv("PARTITION_ANALYSIS_NVWS_SERIALIZATION");
   std::string attrName = !nvws ? "ttg.partitions" : "groups";
 
@@ -2210,7 +2222,7 @@ void serialize(ModuleOp m, Graph *graph) {
       if (group->empty())
         continue;
       auto fullname = "nvws.group." + group->name;
-      if (m->hasAttr(fullname))
+      if (region->hasAttr(fullname))
         // skip manual groups
         continue;
 
@@ -2225,7 +2237,8 @@ void serialize(ModuleOp m, Graph *graph) {
         attrs.push_back({builder.getStringAttr("reg_count"),
                          builder.getI32IntegerAttr(group->reg_count)});
       }
-      m->setAttr(fullname, DictionaryAttr::get(context, NamedAttrList(attrs)));
+      region->setAttr(fullname,
+                      DictionaryAttr::get(context, NamedAttrList(attrs)));
     }
   }
 
@@ -2296,9 +2309,9 @@ void serialize(ModuleOp m, Graph *graph) {
   });
 }
 
-bool hasFlattenedEpilogue(ModuleOp m) {
+bool hasFlattenedEpilogue(Operation *op) {
   SmallVector<ttng::TMEMLoadOp> tmemLoadOps;
-  m.walk([&](ttng::TMEMLoadOp op) { tmemLoadOps.push_back(op); });
+  op->walk([&](ttng::TMEMLoadOp op) { tmemLoadOps.push_back(op); });
   for (auto tmemLoadOp : tmemLoadOps)
     if (auto tok = tmemLoadOp.getDep())
       if (auto op = tok.getDefiningOp())
@@ -2312,7 +2325,7 @@ bool hasFlattenedEpilogue(ModuleOp m) {
 }
 
 llvm::SmallVector<llvm::SmallVector<mlir::Operation *>>
-duplicateViewOps(ModuleOp m) {
+duplicateViewOps(Operation *region) {
   // Ensure all view ops/broadcast/expand dims have a single user, by
   // duplicating them where necessary. Ensures these ops do not span more
   // than one group
@@ -2321,15 +2334,14 @@ duplicateViewOps(ModuleOp m) {
   llvm::SmallVector<llvm::SmallVector<mlir::Operation *>> duplicatedViewOps;
   llvm::SmallVector<mlir::Operation *> viewOps;
 
-  m.walk([&](mlir::Operation *op) {
+  region->walk([&](mlir::Operation *op) {
     if (isa<tt::BroadcastOp, tt::ExpandDimsOp>(op) ||
-        op->hasTrait<OpTrait::MemDescViewTrait>()) {
+        op->hasTrait<OpTrait::MemDescViewTrait>())
       viewOps.push_back(op);
-    }
   });
 
   while (!viewOps.empty()) {
-    Operation *op = viewOps.pop_back_val();
+    auto op = viewOps.pop_back_val();
 
     assert(op->getResults().size() == 1);
     auto result = op->getResult(0);
@@ -2339,7 +2351,7 @@ duplicateViewOps(ModuleOp m) {
       if (first) {
         duplicatedViewOps.push_back({op});
       } else {
-        Operation *newOp = OpBuilder(op).clone(*op);
+        auto newOp = OpBuilder(op).clone(*op);
         use.set(newOp->getResult(0));
         duplicatedViewOps.back().push_back(newOp);
       }
@@ -2350,7 +2362,7 @@ duplicateViewOps(ModuleOp m) {
 }
 
 void deduplicateViewOps(
-    ModuleOp m,
+    Operation *region,
     llvm::SmallVector<llvm::SmallVector<mlir::Operation *>> duplicatedViewOps) {
   // get group assignment for the ops, and group them by it
   // merge ops that have the same group assignment
@@ -2410,13 +2422,41 @@ struct PartitionAnalysis
   using TritonGPUPartitionAnalysisBase::TritonGPUPartitionAnalysisBase;
 
   void runOnOperation() override;
+
+private:
+  void analyze(size_t idx, Operation *operation);
 };
 } // namespace
 
 void PartitionAnalysis::runOnOperation() {
-  ModuleOp m = getOperation();
-  auto duplicatedOps = duplicateViewOps(m);
-  auto func = cast<tt::FuncOp>(m.getRegion().front().front());
+  // find ops to warp specialize; either:
+  //   - top-level scf::For ops marked with "nvws.warp-specialize"
+  //   - or Module op if none found
+  SmallVector<Operation *> ops;
+  getOperation().walk([&](scf::ForOp op) {
+    if (op->hasAttr("nvws.warp-specialize"))
+      ops.push_back(op);
+  });
+  if (ops.empty())
+    ops.push_back(getOperation());
+
+  // run partitioner on each op
+  size_t idx = 0;
+  for (auto op : ops) {
+    analyze(idx, op);
+    idx++;
+  }
+}
+
+void PartitionAnalysis::analyze(size_t idx, Operation *op) {
+  auto duplicatedOps = duplicateViewOps(op);
+  tt::FuncOp func;
+  if (auto m = dyn_cast<ModuleOp>(op)) {
+    func = cast<tt::FuncOp>(m.getRegion().front().front());
+  } else {
+    func = op->getParentOfType<tt::FuncOp>();
+    assert(func);
+  }
 
   auto toInt = [](int dflt, std::string value) {
     if (value.size() == 0)
@@ -2447,38 +2487,33 @@ void PartitionAnalysis::runOnOperation() {
       toInt(24, tools::getStrEnv("PARTITION_ANALYSIS_MMA_REG_COUNT"));
 
   // FIXME: hack for one of the matmul test cases
-  if (hasFlattenedEpilogue(m) && ttg::lookupNumWarps(m) > 6) {
+  if (hasFlattenedEpilogue(op) && ttg::lookupNumWarps(op) > 6) {
     options.disable_simt = true;
     options.disable_epilogue = true;
   }
 
-  // std::cout << "\n";
-  // std::cout << "#########     disable simt = " << options.disable_simt <<
-  // "\n"; std::cout << "######### disable epilogue = " <<
-  // options.disable_epilogue
-  //           << "\n";
-
-  auto graph = buildGraph(m);
+  auto graph = buildGraph(op);
   auto initValues = initialDataValues(graph.get());
   propagateDataValues(initValues);
-  options.manual = deserializeManualGroups(m, graph.get());
+  options.manual = deserializeManualGroups(op, graph.get());
   VisualizationInfo vis_info;
+  auto key = func.getSymName().str() + "-" + std::to_string(idx);
   if (options.dump_dot)
-    visualize(std::string("graph-input-") + func.getSymName().str() + ".dot",
-              graph.get(), vis_info);
+    visualize(std::string("graph-input-") + key + ".dot", graph.get(),
+              vis_info);
   initialGroupAssignment(graph.get());
   if (options.dump_dot)
-    visualize(std::string("graph-initial-") + func.getSymName().str() + ".dot",
-              graph.get(), vis_info);
-  mergeGroups(graph.get(), func.getSymName().str(), vis_info);
+    visualize(std::string("graph-initial-") + key + ".dot", graph.get(),
+              vis_info);
+  mergeGroups(graph.get(), key, vis_info);
   if (options.dump_dot)
-    visualize(std::string("graph-merged-") + func.getSymName().str() + ".dot",
-              graph.get(), vis_info);
-  propagateGroups(graph.get(), func.getSymName().str(), vis_info);
+    visualize(std::string("graph-merged-") + key + ".dot", graph.get(),
+              vis_info);
+  propagateGroups(graph.get(), key, vis_info);
   if (options.dump_dot)
-    visualize(std::string("graph-final-") + func.getSymName().str() + ".dot",
-              graph.get(), vis_info);
-  assignWarpsAndRegisters(m, graph.get());
-  serialize(m, graph.get());
-  deduplicateViewOps(m, duplicatedOps);
+    visualize(std::string("graph-final-") + key + ".dot", graph.get(),
+              vis_info);
+  assignWarpsAndRegisters(op, graph.get());
+  serialize(op, graph.get());
+  deduplicateViewOps(op, duplicatedOps);
 }
