@@ -501,12 +501,12 @@ template <typename... Args> bool node_isa(Node *node) {
 }
 
 bool isSIMTOp(Operation *op) {
-  if (!op->getDialect() || !llvm::isa<arith::ArithDialect>(op->getDialect()))
+  if (!op->getDialect() || !isa<arith::ArithDialect>(op->getDialect()))
     return false;
-  if (llvm::isa<arith::TruncFOp>(op))
+  if (isa<arith::TruncFOp>(op))
     return false;
-  auto types = llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes());
-  for (Type type : types)
+  for (auto type :
+       llvm::concat<Type>(op->getOperandTypes(), op->getResultTypes()))
     if (isa<RankedTensorType>(type))
       return true;
   return false;
@@ -2340,7 +2340,7 @@ bool hasFlattenedEpilogue(Operation *op) {
   return false;
 }
 
-llvm::SmallVector<llvm::SmallVector<mlir::Operation *>>
+SmallVector<SmallVector<mlir::Operation *>>
 duplicateViewOps(Operation *region) {
   // Ensure all view ops/broadcast/expand dims have a single user, by
   // duplicating them where necessary. Ensures these ops do not span more
@@ -2348,8 +2348,8 @@ duplicateViewOps(Operation *region) {
   // Note: Duplicated ops within a single partition are deduplicated after
   // analysis
 
-  llvm::SmallVector<llvm::SmallVector<mlir::Operation *>> duplicatedViewOps;
-  llvm::SmallVector<mlir::Operation *> viewOps;
+  SmallVector<SmallVector<mlir::Operation *>> duplicatedViewOps;
+  SmallVector<mlir::Operation *> viewOps;
 
   region->walk([&](mlir::Operation *op) {
     if (isa<tt::BroadcastOp, tt::ExpandDimsOp>(op) ||
@@ -2380,17 +2380,16 @@ duplicateViewOps(Operation *region) {
 
 void deduplicateViewOps(
     Operation *region,
-    llvm::SmallVector<llvm::SmallVector<mlir::Operation *>> duplicatedViewOps) {
+    SmallVector<SmallVector<mlir::Operation *>> duplicatedViewOps) {
 
   bool nvws = tools::getBoolEnv("PARTITION_ANALYSIS_NVWS_SERIALIZATION");
 
-  // get partition assignment for the ops, and partition them by it
-  // merge ops that have the same partition assignment
+  // get partition assignments for the duplicated ops, and
+  // re-merge those that have the same partition assignment
   for (auto ops : duplicatedViewOps) {
 
     if (nvws) {
-      std::map<std::string, llvm::SmallVector<mlir::Operation *>>
-          partitionedOps;
+      std::map<std::string, SmallVector<mlir::Operation *>> partitionedOps;
       for (auto op : ops) {
         std::string partition;
         if (op->hasAttr("groups")) {
@@ -2418,8 +2417,7 @@ void deduplicateViewOps(
 
     } else {
       // main:
-      std::map<SmallVector<int>, llvm::SmallVector<mlir::Operation *>>
-          partitionedOps;
+      std::map<SmallVector<int>, SmallVector<mlir::Operation *>> partitionedOps;
       for (auto op : ops) {
         assert(op->hasAttr(kPartitionAttrName));
         auto partitionsRef =
