@@ -542,7 +542,8 @@ FailureOr<SmallVector<Value>>
 lowerTMemLdSt(Location loc, MLIRContext *ctx,
               ConversionPatternRewriter &rewriter, const LinearLayout &cvt,
               ArrayRef<Value> vals, Type llvmElemTy, Value tmemBase,
-              int maxnreg, Value pred, bool unpacked = false) {
+              int maxnreg, Value pred, bool isScales = false,
+              bool unpacked = false) {
   assert(cvt.getNumOutDims() == 2);
   bool isStore = !vals.empty();
   // Remove broadcasting in the registers
@@ -555,7 +556,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
     }
     auto outValsOr =
         lowerTMemLdSt(loc, ctx, rewriter, prmtCvt, inVals, llvmElemTy, tmemBase,
-                      maxnreg, pred, unpacked);
+                      maxnreg, pred, isScales, unpacked);
     if (failed(outValsOr))
       return failure();
     auto outVals = std::move(*outValsOr);
@@ -622,7 +623,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
     }
     auto outValsOr =
         lowerTMemLdSt(loc, ctx, rewriter, quot, inVals, packedElemTy, tmemBase,
-                      maxnreg, pred, unpacked);
+                      maxnreg, pred, isScales, unpacked);
     if (failed(outValsOr))
       return failure();
     auto outVals = std::move(*outValsOr);
@@ -666,6 +667,14 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
       auto row = reps.getBasis(kLane, 4, kRow);
       auto col = reps.getBasis(kLane, 4, kCol);
       secondHalfOffset = (row << 16) | col;
+      if (*secondHalfOffset == 0) {
+        // Workaround for ptxas bug, we cannot use secondHalfOffset = 0 to write
+        // only 16 elements. We use secondHalfOffset = 1 instead and we pad the
+        // allocation.
+        assert(isScales &&
+               "Only supported for scales as we pad the allocation.");
+        secondHalfOffset = 1;
+      }
       // We "quotient it out", meaning we remove the last basis from reps
       auto basis = reps.getBases();
       basis[kLane][4] = {0, 0};
@@ -736,8 +745,9 @@ static FailureOr<SmallVector<Value>> lowerTMemLdStFromTypes(
   assert(maybeQuot.has_value());
   auto quot = maybeQuot->unsqueezeIn(kBlock);
 
+  bool isScales = isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding());
   return lowerTMemLdSt(loc, ctx, rewriter, quot, vals, llvmElemTy, tmemBase,
-                       maxnreg, pred);
+                       maxnreg, pred, isScales);
 }
 
 struct TensorMemoryLoadOpConversion

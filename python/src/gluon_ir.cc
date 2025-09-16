@@ -554,8 +554,7 @@ void init_gluon_ir(py::module &&m) {
               int bitwidth) -> int {
              auto regLayout = ttg::toLinearLayout(shape, regLayoutAttr);
              auto smemLayout = ttg::toLinearLayout(shape, sharedLayoutAttr);
-             return 1 << ttg::logBankConflictsMemDesc(regLayout, smemLayout,
-                                                      bitwidth);
+             return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth);
            })
       .def("create_local_dealloc",
            [](GluonOpBuilder &self, Value memDesc) -> Operation * {

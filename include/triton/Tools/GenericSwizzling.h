@@ -40,18 +40,17 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
 LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
                                   const LinearLayout &dst, int32_t bitwidth);
 
-std::pair<int, int> logBankConflictsLdSt(const LinearLayout &src,
-                                         const LinearLayout &dst,
-                                         const LinearLayout &smem,
-                                         int32_t bitwidth);
+std::pair<int, int> bankConflictsLdSt(const LinearLayout &src,
+                                      const LinearLayout &dst,
+                                      const LinearLayout &smem,
+                                      int32_t bitwidth);
 
-int logBankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
-                            int32_t bitwidth);
+int bankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
+                         int32_t bitwidth);
 
-std::pair<int, int> logBankConflicts(llvm::ArrayRef<int32_t> tileSrc,
-                                     llvm::ArrayRef<int32_t> tileDst,
-                                     const LinearLayout &smem,
-                                     int32_t bitwidth);
+std::pair<int, int> bankConflicts(llvm::ArrayRef<int32_t> tileSrc,
+                                  llvm::ArrayRef<int32_t> tileDst,
+                                  const LinearLayout &smem);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_GENERIC_SWIZZLING_H

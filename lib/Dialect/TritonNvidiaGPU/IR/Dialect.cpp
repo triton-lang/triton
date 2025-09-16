@@ -60,7 +60,7 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
            "TODO handle multibuffering of scales.");
     int k = shapePerCTA[1];
     int m = shapePerCTA[0];
-    int numColumn = ceil<int>(m, 32) * ceil<int>(k, 4);
+    int numColumn = 2 * ceil<int>(m, 64) * ceil<int>(k, 4);
     return TMemAllocation(numColumn, numTmemRows);
   }
   assert(isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
