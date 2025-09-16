@@ -1,9 +1,16 @@
-import triton.experimental.gluon as gluon
 from triton.language.core import _aggregate as aggregate
 from triton.experimental.gluon.language import _core as ttgl
+from triton.experimental.gluon._runtime import jit
+
+__all__ = [
+    "pack",
+    "unpack",
+    "fma",
+    "Float2Tensor",
+]
 
 
-@gluon.jit
+@jit
 def _add_f32x2(a, b):
     return ttgl.inline_asm_elementwise(
         """
@@ -17,7 +24,7 @@ def _add_f32x2(a, b):
     )
 
 
-@gluon.jit
+@jit
 def _sub_f32x2(a, b):
     return ttgl.inline_asm_elementwise(
         """
@@ -31,7 +38,7 @@ def _sub_f32x2(a, b):
     )
 
 
-@gluon.jit
+@jit
 def _mul_f32x2(a, b):
     return ttgl.inline_asm_elementwise(
         """
@@ -45,7 +52,7 @@ def _mul_f32x2(a, b):
     )
 
 
-@gluon.jit
+@jit
 def _fma_f32x2(a, b, c):
     return ttgl.inline_asm_elementwise(
         """
@@ -66,23 +73,23 @@ class Float2Tensor:
     def __init__(self, value: ttgl.tensor):
         self._value = value
 
-    @gluon.jit
+    @jit
     def __add__(self, rhs):
         ttgl.static_assert(isinstance(rhs, Float2Tensor), "rhs must be a Float2Tensor")
         return Float2Tensor(_add_f32x2(self._value, rhs._value))
 
-    @gluon.jit
+    @jit
     def __sub__(self, rhs):
         ttgl.static_assert(isinstance(rhs, Float2Tensor), "rhs must be a Float2Tensor")
         return Float2Tensor(_sub_f32x2(self._value, rhs._value))
 
-    @gluon.jit
+    @jit
     def __mul__(self, rhs):
         ttgl.static_assert(isinstance(rhs, Float2Tensor), "rhs must be a Float2Tensor")
         return Float2Tensor(_mul_f32x2(self._value, rhs._value))
 
 
-@gluon.jit
+@jit
 def pack(x0, x1):
     value = ttgl.inline_asm_elementwise(
         """
@@ -97,7 +104,7 @@ def pack(x0, x1):
     return Float2Tensor(value)
 
 
-@gluon.jit
+@jit
 def unpack(x):
     return ttgl.inline_asm_elementwise(
         """
@@ -111,6 +118,6 @@ def unpack(x):
     )
 
 
-@gluon.jit
+@jit
 def fma(a, b, c):
     return Float2Tensor(_fma_f32x2(a._value, b._value, c._value))
