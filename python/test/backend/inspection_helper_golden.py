@@ -1,6 +1,5 @@
 import triton
 import triton.language as tl
-import compiler_inspection  # NOQA
 
 @triton.jit
 def dummy_kernel(n_elements, BLOCK_SIZE: tl.constexpr):
