@@ -629,8 +629,8 @@ def test_multibuffered_wgmma_loop(FAILURE, device, run_wrapper):
 
     input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
-    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
-    kernel[(1, )](input_desc, XBLOCK, FAILURE=FAILURE, num_warps=4)
+    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK.value, XBLOCK.value], shared_layout)
+    kernel[(1, )](input_desc, FAILURE=FAILURE, num_warps=4)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
