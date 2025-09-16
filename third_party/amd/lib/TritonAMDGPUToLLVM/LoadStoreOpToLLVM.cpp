@@ -321,8 +321,9 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
     unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
-    if (!hasSwizzling && !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
-                             rewriter, srcToSharedLayout, threadsPerWarp)) {
+    if (!hasSwizzling &&
+        !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
+            rewriter, srcToSharedLayout, threadsPerWarp, vectorSize)) {
       LDBG(op << " does not write coalesced into LDS and is not swizzled");
       return failure();
     }

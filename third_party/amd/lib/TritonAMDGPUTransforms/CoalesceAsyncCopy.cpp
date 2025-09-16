@@ -50,6 +50,12 @@ struct CoalesceAsyncCopyWrites
       return rewriter.notifyMatchFailure(copyOp,
                                          "src encoding must be #blocked");
 
+    if (!isa<ttg::SwizzledSharedEncodingAttr, ttg::PaddedSharedEncodingAttr>(
+            dstTy.getEncoding())) {
+      return rewriter.notifyMatchFailure(
+          copyOp, "dst encoding must be #swizzled or #padded");
+    }
+
     // We start from the precomputed contiguity we got from AxisAnalysis.
     unsigned loadContig = 0;
     if (auto it = asyncCopyContiguity.find(copyOp);
@@ -95,32 +101,33 @@ struct CoalesceAsyncCopyWrites
 
     ttg::DistributedEncodingTrait newDistEnc;
 
-    if (!paddedEnc) {
+    if (LLVM::AMD::canCoalesceWriteIntoSharedMemory(
+            rewriter, regToSharedLayout, threadsPerWarp, loadContig)) {
+      return rewriter.notifyMatchFailure(copyOp, "already writes coalesced");
+    }
+
+    if (isa<ttg::SwizzledSharedEncodingAttr>(dstTy.getEncoding())) {
+      // For swizzled layouts we apply the swizzling during lowering so we only
+      // adjust the sizePerThread of the blocked encoding to avoid strided
+      // writes into LDS
       auto contigPerThread = ttg::getContigPerThread(srcTy);
       auto srcElemContig = contigPerThread[blockedEnc.getOrder()[0]];
-      if (srcElemContig == loadContig) {
-        return rewriter.notifyMatchFailure(copyOp, "already writes coalesced");
-      }
-
-      // Get new blocked encoding with loadContig as sizePerThread in the
-      // fastest dim
       assert(srcElemContig >= loadContig);
       contigPerThread[blockedEnc.getOrder()[0]] = loadContig;
       newDistEnc = BlockedEncodingAttr::get(
           copyOp.getContext(), srcTy.getShape(), contigPerThread,
           blockedEnc.getOrder(), numWarps, threadsPerWarp,
           blockedEnc.getCTALayout());
-    } else {
-      if (LLVM::AMD::canCoalesceWriteIntoSharedMemory(
-              rewriter, regToSharedLayout, threadsPerWarp)) {
-        return rewriter.notifyMatchFailure(copyOp, "already writes coalesced");
-      }
-
-      // Each warp has to write coalesced into LDS so we have to change the src
-      // encoding to reflect the reordering of elements from the
-      // linear_component of the padded encoding. This is done by taking bases
-      // from the linear component to build a new distributed linear encoding
-      // used for the pointers into global memory:
+    } else if (paddedEnc) {
+      // For padded layouts the linear_component maps from LDS offsets to n-D
+      // tensor indices. This mapping might reorder elements resulting in
+      // scattered writes into LDS which is not supported on GFX9. To ensure
+      // coalesced writes we change the src layout to a linear encoding which
+      // effectivly copies/mimicks the linear_component so each warp (reg+lane
+      // bases) map to consecutive LDS offsets resulting in coalesced writes
+      // The new linear encoding is build by taking bases from the
+      // linear_component and assigning them to reg/lane/warp bases in the
+      // following steps:
       // 1) Take log2(loadContig) bases as reg bases to ensure our registers per
       // load instruction point to contiguous elements in LDS.
       // 2) Take log2(threadsPerWarp) as lane bases to ensure lanes write
@@ -134,45 +141,31 @@ struct CoalesceAsyncCopyWrites
 
       auto rank = srcTy.getRank();
 
-      std::vector<std::vector<int>> regBases;
-      std::vector<std::vector<int>> laneBases;
-      std::vector<std::vector<int>> warpBases;
-
       auto offsetBases = sharedLayout.getBases().lookup(kOffset);
-      auto remainingBases = ArrayRef(offsetBases);
 
       int log2LoadContig = llvm::Log2_32(loadContig);
       int log2ThreadsPerWarp = llvm::Log2_32(threadsPerWarp);
       int log2NumWarps = llvm::Log2_32(numWarps);
 
-      if (remainingBases.size() < log2LoadContig + log2ThreadsPerWarp) {
+      if (offsetBases.size() < log2LoadContig + log2ThreadsPerWarp) {
         return rewriter.notifyMatchFailure(
             copyOp, "dst shape is too small. We require at least loadContig * "
                     "threadsPerWarp elements");
       }
 
-      // 1) take log2(loadContig) bases as regBases
-      for (auto b : llvm::seq(log2LoadContig)) {
-        regBases.push_back(remainingBases.consume_front());
-      }
-      // 2) take log2(threadsPerWarp) bases as laneBases
-      for (auto b : llvm::seq(log2ThreadsPerWarp)) {
-        laneBases.push_back(remainingBases.consume_front());
-      }
-      // 3) take log2(numWarps) bases as warpBases or broadcast
-      for (auto b : llvm::seq(log2NumWarps)) {
-        if (!remainingBases.empty()) {
-          warpBases.push_back(remainingBases.consume_front());
-        } else {
-          // Broadcast since we need to exhaust numWarps
-          warpBases.push_back(std::vector<int32_t>(rank, 0));
-        }
-      }
-      // Remaining basis are added as reg to repeat the pattern
-      // 3) take remaining bases as additionl reg bases
-      while (!remainingBases.empty()) {
-        regBases.push_back(remainingBases.consume_front());
-      }
+      auto remainingBases = ArrayRef(offsetBases);
+      auto takeN = [&remainingBases](size_t n) {
+        auto take = std::min(remainingBases.size(), n);
+        auto v = remainingBases.take_front(take).vec();
+        remainingBases = remainingBases.drop_front(take);
+        return v;
+      };
+
+      auto regBases = takeN(log2LoadContig);
+      auto laneBases = takeN(log2ThreadsPerWarp);
+      auto warpBases = takeN(log2NumWarps);
+      warpBases.resize(log2NumWarps, std::vector<int32_t>(rank, 0));
+      append_range(regBases, remainingBases);
 
       triton::LinearLayout newRegLayout(
           {
@@ -193,6 +186,13 @@ struct CoalesceAsyncCopyWrites
       }
 
       newDistEnc = ttg::LinearEncodingAttr::get(ctx, newRegLayout);
+    } else {
+      assert(false && "Unsupported layout");
+    }
+
+    if (newDistEnc == srcTy.getEncoding()) {
+      return rewriter.notifyMatchFailure(
+          copyOp, "Unable to find a new src layout to coalesce writes to LDS");
     }
 
     // Convert layout of src, mask and other to new encoding

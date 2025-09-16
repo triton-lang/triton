@@ -18,12 +18,12 @@ tt.func @async_copy_1d(%input: tensor<1024x!tt.ptr<f32>, #blocked>,
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.padded_shared<[4:+4] {order = [0], shape = [1024]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // Padded encoding with an identity mapping does produce coalesced writes so we should not change the blocked encoding
-// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 // CHECK-LABEL: async_copy_with_padding
 tt.func @async_copy_with_padding(%input: tensor<1024x!tt.ptr<f32>, #blocked>,
     %view: !ttg.memdesc<1024xf32, #shared, #smem, mutable>) {
@@ -183,6 +183,24 @@ tt.func @async_copy_2d_swizzled(%input: tensor<64x64x!tt.ptr<f16>, #blocked>,
     %view: !ttg.memdesc<64x64xf16, #shared, #smem, mutable>) {
   // CHECK: %{{.*}} = ttg.async_copy_global_to_local {{.*}} -> <64x64xf16, #shared, #smem, mutable>
   %token = ttg.async_copy_global_to_local %input, %view: tensor<64x64x!tt.ptr<f16>, #blocked> -> <64x64xf16, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.padded_shared<[4:+4] {order = [0], shape = [256]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+// Padded encoding with an identity mapping has vec=1 whereas the blocked has vec=4 so we need to rewrite it
+// CHECK: #[[$NEW_SRC_ENCODING:.*]] = #ttg.linear
+// CHECK-SAME{LITERAL}: register = [[64], [128]], lane = [[1], [2], [4], [8], [16], [32]], warp = [], block = []
+// CHECK-LABEL: async_copy_with_padding_different_vec
+tt.func @async_copy_with_padding_different_vec(%input: tensor<256x!tt.ptr<f32>, #blocked>,
+    %view: !ttg.memdesc<256xf32, #shared, #smem, mutable>) {
+  // CHECK: %{{.*}} = ttg.async_copy_global_to_local %{{.*}}: tensor<256x!tt.ptr<f32>, #[[$NEW_SRC_ENCODING]]>
+  %token = ttg.async_copy_global_to_local %input, %view: tensor<256x!tt.ptr<f32>, #blocked> -> <256xf32, #shared, #smem, mutable>
   tt.return
 }
 }
