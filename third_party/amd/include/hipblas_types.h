@@ -39,27 +39,27 @@ typedef enum {
   HIPBLASLT_MATMUL_PREF_MAX = 2
 } hipblasLtMatmulPreferenceAttributes_t;
 
-typedef struct {
+typedef struct hipblasLtMatrixLayoutOpaque_st {
   uint64_t data[4];
 } hipblasLtMatrixLayoutOpaque_t;
 typedef hipblasLtMatrixLayoutOpaque_t *hipblasLtMatrixLayout_t;
 
-typedef struct {
+typedef struct hipblasLtMatmulPreferenceOpaque_st {
   uint64_t data[5];
 } hipblasLtMatmulPreferenceOpaque_t;
 
 typedef hipblasLtMatmulPreferenceOpaque_t *hipblasLtMatmulPreference_t;
 
-typedef struct {
-  uint64_t data[16] = {0};
-  size_t max_workspace_bytes = 0;
+typedef struct hipblasLtMatmulAlgo_st {
+  uint64_t data[16];
+  size_t max_workspace_bytes;
 } hipblasLtMatmulAlgo_t; // referencing all of this from rocm/rocm-libraries
 
 typedef struct _hipblasLtMatmulHeuristicResult_t {
   hipblasLtMatmulAlgo_t algo;
-  size_t workspaceSize = 0;
-  hipblasStatus_t state = HIPBLAS_STATUS_SUCCESS;
-  float wavesCount = 1.0;
+  size_t workspaceSize;
+  hipblasStatus_t state;
+  float wavesCount;
 } hipblasLtMatmulHeuristicResult_t;
 
 typedef enum hipDataType {
