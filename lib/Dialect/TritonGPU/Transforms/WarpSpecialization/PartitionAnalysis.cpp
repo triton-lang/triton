@@ -3,6 +3,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
@@ -2207,9 +2208,9 @@ void assignWarpsAndRegisters(Operation *region, Graph *graph) {
   }
 }
 
-void serialize(Operation *region, Graph *graph) {
+void serialize(size_t idx, Operation *region, Graph *graph) {
   bool nvws = tools::getBoolEnv("PARTITION_ANALYSIS_NVWS_SERIALIZATION");
-  std::string attrName = !nvws ? "ttg.partitions" : "groups";
+  std::string attrName = !nvws ? kPartitionAttrName : "groups";
 
   auto context = graph->getRoot()->getOp()->getContext();
   Builder b(context);
@@ -2240,6 +2241,9 @@ void serialize(Operation *region, Graph *graph) {
       region->setAttr(fullname,
                       DictionaryAttr::get(context, NamedAttrList(attrs)));
     }
+  } else {
+    // annotate loop with index
+    region->setAttr(kWarpSpecializeTagAttrName, b.getI32IntegerAttr(idx));
   }
 
   auto setGroupsAttr = [&](Operation *op, const std::string &attrName,
@@ -2252,10 +2256,7 @@ void serialize(Operation *region, Graph *graph) {
       for (auto group : node->getGroups())
         groups.push_back(group->id);
       std::sort(groups.begin(), groups.end());
-      SmallVector<Attribute, 4> groups_attr;
-      for (auto group : groups)
-        groups_attr.push_back(b.getI32IntegerAttr(group));
-      op->setAttr(attrName, ArrayAttr::get(op->getContext(), groups_attr));
+      op->setAttr(attrName, b.getDenseI32ArrayAttr(groups));
     } else {
       SmallVector<std::string> groups;
       for (auto group : node->getGroups())
@@ -2514,6 +2515,6 @@ void PartitionAnalysis::analyze(size_t idx, Operation *op) {
     visualize(std::string("graph-final-") + key + ".dot", graph.get(),
               vis_info);
   assignWarpsAndRegisters(op, graph.get());
-  serialize(op, graph.get());
+  serialize(idx, op, graph.get());
   deduplicateViewOps(op, duplicatedOps);
 }
