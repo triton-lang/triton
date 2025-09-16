@@ -28,13 +28,15 @@ namespace {
 SmallVector<Value> upcastMxfp4_SW(RewriterBase &rewriter,
                                   amdgpu::UpcastMXFPOp upcastOp, bool toFp16,
                                   ArrayRef<Value> values, int idx,
+                                  AMD::ISAFamily isaFamily,
                                   Value scale = nullptr) {
   Location loc = upcastOp.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value packedVec = b.undef(vec_ty(i8_ty, 4));
   for (int i : llvm::seq(4))
     packedVec = b.insert_element(packedVec, values[idx + i], b.i32_val(i));
-  return upcast8xMxfp4_SW(rewriter, upcastOp, toFp16, packedVec, scale);
+  return upcast8xMxfp4_SW(rewriter, upcastOp, toFp16, packedVec, isaFamily,
+                          scale);
 }
 
 Value mxfpScaleFp16(RewriterBase &rewriter, Location loc, Value v, Value scale,
@@ -100,21 +102,23 @@ static void upcast8xMxfp4(RewriterBase &rewriter, Location loc,
     }
     return;
   }
-  /// fp4->f16 before cdna4
-  if (useFp16) {
-    SmallVector<Value> v8f16 =
-        upcastMxfp4_SW(rewriter, op, useFp16, xVals, idx);
-    for (int i = 0; i < 8; i++) {
-      auto result =
-          mxfpScaleFp16(rewriter, loc, v8f16[i], scale, op.getFastMath());
-      yVals.push_back(result);
-    }
+  /// fp4->bf16 for cdna3
+  if (isaFamily == AMD::ISAFamily::CDNA3 && !useFp16) {
+    SmallVector<Value> v8bf16 =
+        upcastMxfp4_SW(rewriter, op, useFp16, xVals, idx, isaFamily, scale);
+    yVals.append(v8bf16.begin(), v8bf16.end());
     return;
   }
-  /// fp4->bf16 before cdna4
-  SmallVector<Value> v8bf16 =
-      upcastMxfp4_SW(rewriter, op, useFp16, xVals, idx, scale);
-  yVals.append(v8bf16.begin(), v8bf16.end());
+  /// fp4->f16 before cdna4, fp4->bf16 before cdna3
+  SmallVector<Value> vf16 =
+      upcastMxfp4_SW(rewriter, op, useFp16, xVals, idx, isaFamily);
+  for (int i = 0; i < 8; i++) {
+    auto result =
+        useFp16 ? mxfpScaleFp16(rewriter, loc, vf16[i], scale, op.getFastMath())
+                : mxfpScaleBf16ViaF32(rewriter, loc, vf16[i], scale,
+                                      op.getFastMath());
+    yVals.push_back(result);
+  }
 }
 
 // Upcast 4 mxfp8 values from xVals starting at idx using the given scale

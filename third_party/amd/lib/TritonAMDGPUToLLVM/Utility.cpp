@@ -620,7 +620,8 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
 }
 
 SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
-                                    bool toFp16, Value packedVec, Value scale) {
+                                    bool toFp16, Value packedVec,
+                                    ISAFamily isaFamily, Value scale) {
   assert((isa<triton::amdgpu::UpcastMXFPOp, triton::gpu::Fp4ToFpOp>(op)) &&
          "Expected UpcastMXFPOp or Fp4ToFpOp");
   Location loc = op->getLoc();
@@ -634,8 +635,8 @@ SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
   // | e7e6 | e5e4 | e3e2 | e1e0 |
   Value input = b.bitcast(packedVec, i32_ty);
 
-  // fp4 to bf16: fp4->fp8->fp32
-  if (!toFp16) {
+  // fp4 to bf16 for cdna3: fp4->fp8->fp32
+  if (isaFamily == ISAFamily::CDNA3 && !toFp16) {
     // Step 1: extract EM bits for elements 0,2,4,6 and 1,3,5,7 respectively.
     // e2m1_6420_idx = | 0[0e6EM] | 0[0e4EM] | 0[0e2EM] | 0[0e0EM] |
     Value e2m1_6420_idx = b.and_(input, b.i32_val(0x07070707));
@@ -833,8 +834,9 @@ SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
 
   SmallVector<Value, 4> pkVals{res_10, res_32, res_54, res_76};
   SmallVector<Value> results;
+  Type elmTy = toFp16 ? f16_ty : bf16_ty;
   for (int j = 0; j < 4; j++) {
-    Value elements = b.bitcast(pkVals[j], vec_ty(f16_ty, 2));
+    Value elements = b.bitcast(pkVals[j], vec_ty(elmTy, 2));
     results.push_back(b.extract_element(elements, b.i32_val(0)));
     results.push_back(b.extract_element(elements, b.i32_val(1)));
   }
