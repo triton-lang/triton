@@ -1351,7 +1351,12 @@ public:
     auto srcElTy = srcTy.getElementType();
     auto dstElTy = dstTy.getElementType();
     if (isFloat(srcElTy) && isFloat(dstElTy)) {
-      auto rmode =
+      // FIXME: When converting a floating - point number with a smaller
+      // precision (such as float16) to one with a larger precision
+      // (such as float32), no rounding occurs. There is no need for, nor does
+      // it involve, a rounding mode. This kind of conversion is exact and lossless.
+      RoundingModeAttr rmode = srcElTy.getIntOrFloatBitWidth() <
+          dstElTy.getIntOrFloatBitWidth() ? nullptr :
           RoundingModeAttr::get(rewriter.getContext(), RoundingMode::RTNE);
       return rewriter.create<FpToFpOp>(loc, dstTy, v, rmode);
     }

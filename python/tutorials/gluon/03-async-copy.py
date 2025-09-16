@@ -20,6 +20,11 @@ from triton.experimental.gluon import language as gl
 
 from triton.experimental.gluon.language.nvidia.ampere import async_copy as cp
 
+from triton._internal_testing import get_current_target
+
+target = get_current_target()
+GLOBAL_WARP_SIZE = gl.constexpr(target.warp_size if target is not None else 32)
+
 
 def is_ampere_or_newer():
     target = triton.runtime.driver.active.get_current_target()
@@ -41,7 +46,7 @@ if __name__ == "__main__" and not is_ampere_or_newer():
 def memcpy_1d_cpasync_kernel(in_ptr, out_ptr, xnumel, XBLOCK: gl.constexpr):
     pid = gl.program_id(0)
 
-    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+    layout: gl.constexpr = gl.BlockedLayout([1], [GLOBAL_WARP_SIZE], [4], [0])
     offsets = pid * XBLOCK + gl.arange(0, XBLOCK, layout=layout)
     mask = offsets < xnumel
 
@@ -95,7 +100,7 @@ def elementwise_add_kernel(  #
     pid = gl.program_id(0)
 
     # Compute the offset to the row this program will process.
-    layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+    layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, GLOBAL_WARP_SIZE], [1, 4], [1, 0])
     xoffs = pid * XBLOCK + gl.arange(0, XBLOCK, gl.SliceLayout(1, layout))
 
     a_ptrs = a_ptr + xstride_a * xoffs[:, None]
@@ -149,7 +154,7 @@ def elementwise_add_cpasync_kernel(  #
         smem_layout: gl.constexpr,  #
 ):
     pid = gl.program_id(0)
-    layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+    layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, GLOBAL_WARP_SIZE], [1, 4], [1, 0])
     xoffs = pid * XBLOCK + gl.arange(0, XBLOCK, gl.SliceLayout(1, layout))
     a_ptrs = a_ptr + xstride_a * xoffs[:, None]
     b_ptrs = b_ptr + xstride_b * xoffs[:, None]
@@ -289,7 +294,7 @@ def elementwise_add_pipelined_kernel(  #
         smem_layout: gl.constexpr, num_buffers: gl.constexpr,  #
 ):
     pid = gl.program_id(0)
-    layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+    layout: gl.constexpr = gl.BlockedLayout([1, 1], [1, GLOBAL_WARP_SIZE], [1, 4], [1, 0])
     xoffs = pid * XBLOCK + gl.arange(0, XBLOCK, gl.SliceLayout(1, layout))
     a_ptrs = a_ptr + xstride_a * xoffs[:, None]
     b_ptrs = b_ptr + xstride_b * xoffs[:, None]
