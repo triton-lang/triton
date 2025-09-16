@@ -346,11 +346,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto numRepK = repA[2];
   auto numRepB = repA[0];
 
-  unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
-  int depth = warpSize / mnkDim[0];
-  depth = wmmaVer == 1 ? depth / 2 : depth;
-  int kBase = kDim / depth;
-
+  int kBase = maybeWmmaIntrinsic->kBase;
   ValueTable ha = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedA, numRepB, numRepM, numRepK,
       kBase, aTensorTy.getElementType(), loc);
@@ -360,6 +356,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
+  unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
   constexpr unsigned vgprElemBitWidth = 32;
   unsigned paddedOutputElemSize =
       wmmaVer == 1 ? vgprElemBitWidth / dstElemTy.getIntOrFloatBitWidth() : 1;
