@@ -1202,15 +1202,16 @@ def AMDWmmaEncodingAttr : DistributedEncoding<"AMDWmmaEncoding", "amd_wmma_encod
   let description = [{
 An encoding for tensors that have been produced by WMMA matrix core instructions,
 available on AMD Radeon GPUs of RDNA architectures.
-- A `version` parameter specifies instruction version to lower in. The data
-  distribution within one warp is also depends on it. Following architectures are
-  supported:
-  - 1: gfx11
-  - 2: gfx12
-- A `warpsPerCTA` parameter characterizes data distribution between warps.
-  An important limitation of WMMA for layout is a shape for tiles processed
-  by a single warp. It is [16, 16].
-  This encoding assumes specific access to matrix elements by threads.
+
+It is characterized by the following parameters:
+- `version` indicates the GPU architecture:
+  - 1: RDNA3; e.g., gfx1100, gfx1101
+  - 2: RDNA4; e.g., gfx1200, gfx1201
+  - 3: gfx1250
+- `warpsPerCTA` indicates the warp layout in the block.
+- `instrShape` indicates the shape in the form of (M, N, K) of the matrix
+   operation performed by a single WMMA instruction. Defaults to (16, 16, 16).
+- `isTransposed` indicates the layout of the result tensor is transposed.
 
 Example:
 Suppose we have a tensor with shape [32, 64], `warpsPerCTA` set to [2, 2].
@@ -1239,7 +1240,7 @@ Row |                  warp 0                                    warp 1
 30  |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
 31  |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
 
-// ------------------------ version = 2, isTransposed = false ------------------------ //
+// ------------------------ version = 2/3, isTransposed = false ------------------------ //
 
 Row |       warp 0                warp 1
     |/--------^---------\ /---------^--------\
@@ -1267,7 +1268,7 @@ Row |       warp 0                warp 1
 30  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
 31  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
 
-// ------------------------ version = 2, isTransposed = true ------------------------ //
+// ------------------------ version = 2/3, isTransposed = true ------------------------ //
 
     |               warp 0                     warp 1
     |/----------------^----------------\ /-------^-------\
@@ -1305,7 +1306,7 @@ Row |
                                           Type elemType, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
 
-    static SmallVector<unsigned> getDefaultInstrShape() {
+    static SmallVector<unsigned, 3> getDefaultInstrShape() {
       return {16, 16, 16};
     }
 

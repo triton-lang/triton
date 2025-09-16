@@ -113,7 +113,7 @@ class AMDWMMALayout(DistributedLayout):
         version (int): Indicates the GPU architecture.
         transposed (bool): Indicates the result tensor is transposed.
         warps_per_cta (List[int]): Number of warps per CTA.
-        instr_shape (List[int]): Instruction shape (M, N, K).
+        instr_shape (Optional[List[int]]): Instruction shape (M, N, K). Defaults to (16, 16, 16).
         ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
         cta_split_num (Optional[List[int]]): Split factors for CTAs.
         cta_order (Optional[List[int]]): CTA ordering.
@@ -122,6 +122,7 @@ class AMDWMMALayout(DistributedLayout):
 
     - 1: RDNA3; e.g., gfx1100, gfx1101
     - 2: RDNA4; e.g., gfx1200, gfx1201
+    - 3: gfx1250
     """
     version: int
     transposed: bool

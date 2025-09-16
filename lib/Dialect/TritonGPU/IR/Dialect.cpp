@@ -1376,17 +1376,17 @@ LogicalResult AMDWmmaEncodingAttr::verify(
   auto shape = SmallVector<unsigned>(instrShape);
   auto validShapesV1 = std::vector<llvm::SmallVector<unsigned>>{{16, 16, 16}};
   if (version == 1 && !llvm::is_contained(validShapesV1, shape))
-    return emitError() << "invalid WMMA version 1 instruction shape";
+    return emitError() << "invalid WMMA v1 instruction shape";
 
   auto validShapesV2 =
       std::vector<llvm::SmallVector<unsigned>>{{16, 16, 16}, {16, 16, 32}};
   if (version == 2 && !llvm::is_contained(validShapesV2, shape))
-    return emitError() << "invalid WMMA version 2 instruction shape";
+    return emitError() << "invalid WMMA v2 instruction shape";
 
   auto validShapesV3 =
       std::vector<llvm::SmallVector<unsigned>>{{16, 16, 32}, {16, 16, 64}};
   if (version == 3 && !llvm::is_contained(validShapesV3, shape))
-    return emitError() << "invalid WMMA version 3 instruction shape";
+    return emitError() << "invalid WMMA v3 instruction shape";
 
   return success();
 }
@@ -2492,15 +2492,15 @@ LogicalResult DotOperandEncodingAttr::verify(
   if (auto parentAttr = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
     if (parentAttr.getVersion() == 1 && (kWidth != 8 && kWidth != 16))
       return emitError()
-             << "ttg.dot_op kWidth parameter must be 8/16 for gfx11 "
+             << "ttg.dot_op kWidth parameter must be 8/16 for WMMA v1 "
                 "(including packed cases for `scaled_dot`)";
     if (parentAttr.getVersion() == 2 &&
         (kWidth != 4 && kWidth != 8 && kWidth != 16))
       return emitError()
-             << "ttg.dot_op kWidth parameter must be 4/8/16 for gfx12 "
+             << "ttg.dot_op kWidth parameter must be 4/8/16 for WMMA v2 "
                 "(including packed cases for `scaled_dot`)";
     if (parentAttr.getVersion() == 3 && (kWidth != 8))
-      return emitError() << "ttg.dot_op kWidth parameter must be 8 for gfx1250";
+      return emitError() << "ttg.dot_op kWidth parameter must be 8 for WMMA v3";
     return success();
   }
 
