@@ -3,8 +3,7 @@
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
-#tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = false>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 module attributes {nvws.group.mma0 = {num_warps = 1 : i32, reg_count = 24 : i32, start_warp = 12 : i32}, nvws.group.mma1 = {num_warps = 1 : i32, reg_count = 24 : i32, start_warp = 13 : i32}, nvws.group.simt0 = {num_warps = 4 : i32, reg_count = 160 : i32, start_warp = 0 : i32}, nvws.group.simt1 = {num_warps = 4 : i32, reg_count = 160 : i32, start_warp = 4 : i32}, nvws.group.simt2 = {num_warps = 4 : i32, reg_count = 160 : i32, start_warp = 8 : i32}, nvws.group.tma_load = {num_warps = 1 : i32, reg_count = 24 : i32, start_warp = 14 : i32}, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
   tt.func public @attention_forward(%arg0: !ttg.memdesc<256x64xf16, #shared, #smem>, %arg1: !tt.tensordesc<tensor<64x64xf16, #shared>>, %arg2: !tt.tensordesc<tensor<64x64xf16, #shared>>, %arg3: f32, %arg4: i32) {
     %true = arith.constant {groups = [@nvws.group.mma0, @nvws.group.mma1, @nvws.group.simt1, @nvws.group.simt2]} true
@@ -46,9 +45,9 @@ module attributes {nvws.group.mma0 = {num_warps = 1 : i32, reg_count = 24 : i32,
       %21 = tt.descriptor_load %arg2[%arg5, %c0_i32] {groups = [@nvws.group.tma_load]} : !tt.tensordesc<tensor<64x64xf16, #shared>> -> tensor<64x64xf16, #blocked1>
       %22 = ttg.local_alloc %21 {groups = [@nvws.group.tma_load]} : (tensor<64x64xf16, #blocked1>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
       %23 = arith.truncf %8 {groups = [@nvws.group.simt0]} : tensor<256x64xf32, #blocked> to tensor<256x64xf16, #blocked>
-      %result_10 = ttng.tmem_alloc %23 {groups = [@nvws.group.simt0]} : (tensor<256x64xf16, #blocked>) -> !ttg.memdesc<256x64xf16, #tmem1, #ttng.tensor_memory>
+      %result_10 = ttng.tmem_alloc %23 {groups = [@nvws.group.simt0]} : (tensor<256x64xf16, #blocked>) -> !ttg.memdesc<256x64xf16, #tmem, #ttng.tensor_memory>
       %24 = ttng.tmem_store %16, %result_2[%token_9], %true {groups = [@nvws.group.simt2]} : tensor<256x64xf32, #blocked> -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable>
-      %25 = ttng.tc_gen5_mma %result_10, %22, %result_2[%24], %true, %true {groups = [@nvws.group.mma1]} : !ttg.memdesc<256x64xf16, #tmem1, #ttng.tensor_memory>, !ttg.memdesc<64x64xf16, #shared, #smem>, !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable>
+      %25 = ttng.tc_gen5_mma %result_10, %22, %result_2[%24], %true, %true {groups = [@nvws.group.mma1]} : !ttg.memdesc<256x64xf16, #tmem, #ttng.tensor_memory>, !ttg.memdesc<64x64xf16, #shared, #smem>, !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable>
       scf.yield %13, %6, %20, %token_7, %25 : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, !ttg.async.token, !ttg.async.token
     } {groups = [@nvws.group.mma0, @nvws.group.mma1, @nvws.group.simt0, @nvws.group.simt1, @nvws.group.simt2, @nvws.group.tma_load], groups.0 = [@nvws.group.simt1], groups.1 = [@nvws.group.simt0], groups.2 = [@nvws.group.simt2], groups.3 = [@nvws.group.simt0], groups.4 = [@nvws.group.mma1], tt.warp_specialize}
     %result_4, %token_5 = ttng.tmem_load %result_2[%1#4] {groups = [@nvws.group.simt1]} : !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x64xf32, #blocked>

@@ -4,7 +4,7 @@
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"nvws.warp-specialized" = true, "ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 3 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @matmul_scale_rhs_kernel(%arg0: !tt.tensordesc<tensor<128x64xf16, #shared>> loc(unknown), %arg1: i32 loc(unknown), %arg2: i32 loc(unknown), %arg3: i64 loc(unknown), %arg4: i64 loc(unknown), %arg5: !tt.tensordesc<tensor<128x64xf16, #shared>> loc(unknown), %arg6: i32 loc(unknown), %arg7: i32 loc(unknown), %arg8: i64 loc(unknown), %arg9: i64 loc(unknown), %arg10: !tt.ptr<f16> {tt.divisibility = 16 : i32} loc(unknown), %arg11: !tt.ptr<f16> {tt.divisibility = 16 : i32} loc(unknown), %arg12: i32 {tt.divisibility = 16 : i32} loc(unknown), %arg13: i32 {tt.divisibility = 16 : i32} loc(unknown), %arg14: i32 {tt.divisibility = 16 : i32} loc(unknown), %arg15: i32 {tt.divisibility = 16 : i32} loc(unknown)) attributes {noinline = false} {
     %false = arith.constant false
