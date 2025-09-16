@@ -37,6 +37,19 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
   return clock64;
 }
 
+Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
+                             Location loc) const {
+  // globaltimer is a 64-bit global clock counter in nanoseconds.
+  // Reference:
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/#special-registers-globaltimer
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  StringRef globalTimeIntrinsicName = "llvm.nvvm.read.ptx.sreg.globaltimer";
+  Value globalTimeVal = LLVM::createLLVMIntrinsicCallOp(
+                            rewriter, loc, globalTimeIntrinsicName, i64_ty, {})
+                            .getResult(0);
+  return globalTimeVal;
+}
+
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
                               Location loc) const {
   return rewriter.create<NVVM::SmIdOp>(loc, i32_ty);

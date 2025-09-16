@@ -2,19 +2,19 @@ import os
 import subprocess
 import pathlib
 import json
+import pytest
 
-import triton
-
-
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
+from triton._internal_testing import is_cuda, is_hip, is_hip_cdna2
 
 
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
+def unsupport_amd():
+    return is_hip_cdna2()
 
 
 def test_override(tmp_path: pathlib.Path):
+    if unsupport_amd():
+        pytest.skip("old AMD GPUs are not supported")
+
     dir_path = os.path.dirname(os.path.realpath(__file__))
 
     # Run once to get the file dumps

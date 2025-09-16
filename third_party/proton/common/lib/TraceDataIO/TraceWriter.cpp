@@ -43,9 +43,8 @@ void StreamChromeTraceWriter::write(std::ostream &outfile) {
 
   json object = {{"displayTimeUnit", "ns"}, {"traceEvents", json::array()}};
 
-  int totalKernelNum = streamTrace.size();
-  for (int i = 0; i < totalKernelNum; i++) {
-    writeKernel(object, streamTrace[i], kKernelTimeGap * i);
+  for (const auto &kernelTrace : streamTrace) {
+    writeKernel(object, kernelTrace);
   }
   outfile << object.dump() << "\n";
 }
@@ -55,19 +54,18 @@ using BlockTraceVec =
     std::vector<const CircularLayoutParserResult::BlockTrace *>;
 
 void populateTraceInfo(std::shared_ptr<CircularLayoutParserResult> result,
-                       uint64_t kernelTimeStart,
-                       std::map<int, int64_t> &cycleAdjust,
+                       std::map<int, uint64_t> &blockToMinCycle,
                        std::map<int, BlockTraceVec> &procToBlockTraces) {
-  uint64_t minStartTime;
   for (auto &bt : result->blockTraces) {
-    minStartTime = std::numeric_limits<uint64_t>::max();
+    // Find the minimum cycle for each block
+    uint64_t minCycle = std::numeric_limits<uint64_t>::max();
     for (auto &trace : bt.traces)
       for (auto &event : trace.profileEvents)
-        if (event.first->cycle < minStartTime)
-          minStartTime = event.first->cycle;
+        if (event.first->cycle < minCycle)
+          minCycle = event.first->cycle;
+    blockToMinCycle[bt.blockId] = minCycle;
 
-    cycleAdjust[bt.blockId] = static_cast<int64_t>(kernelTimeStart) -
-                              static_cast<int64_t>(minStartTime);
+    // Group block traces by proc id
     int procId = bt.procId;
     if (!procToBlockTraces.count(procId)) {
       procToBlockTraces[procId] = {};
@@ -146,8 +144,7 @@ std::vector<int> assignLineIds(
 } // namespace
 
 void StreamChromeTraceWriter::writeKernel(json &object,
-                                          const KernelTrace &kernelTrace,
-                                          uint64_t kernelTimeStart) {
+                                          const KernelTrace &kernelTrace) {
   auto result = kernelTrace.first;
   auto metadata = kernelTrace.second;
 
@@ -159,12 +156,12 @@ void StreamChromeTraceWriter::writeKernel(json &object,
   int curColorIndex = 0;
   // scope id -> color index in chrome color
   std::map<int, int> scopeColor;
-  // block id -> cycle adjust
-  std::map<int, int64_t> cycleAdjust;
+  // block id -> min cycle observed
+  std::map<int, uint64_t> blockToMinCycle;
   // proc id -> block traces
   std::map<int, BlockTraceVec> procToBlockTraces;
 
-  populateTraceInfo(result, kernelTimeStart, cycleAdjust, procToBlockTraces);
+  populateTraceInfo(result, blockToMinCycle, procToBlockTraces);
 
   std::string name;
   std::string pid;
@@ -186,8 +183,7 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           }
           const std::string &color = kChromeColor[scopeColor[scopeId]];
           pid = metadata->kernelName + " Core" + std::to_string(procId) +
-                " CTA" + std::to_string(ctaId) +
-                " [measure in clock cycle (assume 1GHz)]";
+                " CTA" + std::to_string(ctaId);
           tid = "warp " + std::to_string(warpId) + " (line " +
                 std::to_string(lineId) + ")";
           category = metadata->kernelName;
@@ -196,10 +192,16 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           else
             name = metadata->scopeName.at(scopeId);
 
-          int64_t ts =
-              static_cast<int64_t>(event.first->cycle) + cycleAdjust[ctaId];
-          int64_t dur =
-              static_cast<int64_t>(event.second->cycle) - event.first->cycle;
+          double freq = 1000; // Unit: MHz
+
+          double startCycle = event.first->cycle;      // Unit: cycle
+          double endCycle = event.second->cycle;       // Unit: cycle
+          double dur = (endCycle - startCycle) / freq; // Unit: us
+
+          double startCycleRel =
+              startCycle - blockToMinCycle[ctaId];       // Unit: cycle
+          double startTimeRel = startCycleRel / freq;    // Unit: us
+          double ts = bt->initTime / 1e3 + startTimeRel; // Unit: us
 
           json element;
           element["cname"] = color;
@@ -208,11 +210,11 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           element["ph"] = "X";
           element["pid"] = pid;
           element["tid"] = tid;
-          element["ts"] = static_cast<float>(ts) / 1000.0;
-          element["dur"] = static_cast<float>(dur) / 1000.0;
+          element["ts"] = ts;
+          element["dur"] = dur;
           json args;
-          args["Unit"] = "GPU cycle";
-          args["Kernel Gap"] = std::to_string(kKernelTimeGap) + "cycle(ns)";
+          args["Finalization Time (ns)"] = bt->postFinalTime - bt->preFinalTime;
+          args["Frequency (MHz)"] = freq;
           element["args"] = args;
           element["args"]["call_stack"] = callStack;
 

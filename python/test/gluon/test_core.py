@@ -589,15 +589,15 @@ def test_tmem_subslice_block_m_64():
         p_tmem = s_tmem.slice(0, N // 2)._reinterpret(ttgl.float16, [BLOCK_M, N], p_tmem_layout)
         p_tmem.store(ttgl.full((BLOCK_M, N), 0.0, dtype=ttgl.float16, layout=layout))
 
-        d1_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, 1), col_stride=1)
-        d1_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, 1, (BLOCK_M, 1), num_warps=4)
+        d1_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, 2), col_stride=1)
+        d1_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, 2, (BLOCK_M, 2), num_warps=4)
 
-        m_tmem = s_tmem.slice(N // 4, 1)._reinterpret(ttgl.float32, [BLOCK_M, 1], d1_tmem_layout)
-        m_tmem.store(ttgl.full((BLOCK_M, 1), 2.0, dtype=ttgl.float32, layout=d1_layout))
-        l_tmem = s_tmem.slice(N // 4 + 1, 1)._reinterpret(ttgl.float32, [BLOCK_M, 1], d1_tmem_layout)
-        l_tmem.store(ttgl.full((BLOCK_M, 1), 3.0, dtype=ttgl.float32, layout=d1_layout))
-        a_tmem = s_tmem.slice(N // 4 + 2, 1)._reinterpret(ttgl.float32, [BLOCK_M, 1], d1_tmem_layout)
-        a_tmem.store(ttgl.full((BLOCK_M, 1), 4.0, dtype=ttgl.float32, layout=d1_layout))
+        m_tmem = s_tmem.slice(N // 4, 2)._reinterpret(ttgl.float32, [BLOCK_M, 2], d1_tmem_layout)
+        m_tmem.store(ttgl.full((BLOCK_M, 2), 2.0, dtype=ttgl.float32, layout=d1_layout))
+        l_tmem = s_tmem.slice(N // 4 + 2, 2)._reinterpret(ttgl.float32, [BLOCK_M, 2], d1_tmem_layout)
+        l_tmem.store(ttgl.full((BLOCK_M, 2), 3.0, dtype=ttgl.float32, layout=d1_layout))
+        a_tmem = s_tmem.slice(N // 4 + 4, 2)._reinterpret(ttgl.float32, [BLOCK_M, 2], d1_tmem_layout)
+        a_tmem.store(ttgl.full((BLOCK_M, 2), 4.0, dtype=ttgl.float32, layout=d1_layout))
 
         s = s_tmem.load(layout)
 
@@ -636,9 +636,9 @@ def test_tmem_subslice_block_m_64():
     #   TMEM[16:32] = [s2, s3]
     #
     # Thus slicing S at  N//4 will obtain an offset to the beginning of s1.
-    out_ref[:, 32] = 2.0
-    out_ref[:, 33] = 3.0
-    out_ref[:, 34] = 4.0
+    out_ref[:, 32:34] = 2.0
+    out_ref[:, 34:36] = 3.0
+    out_ref[:, 36:38] = 4.0
 
     torch.testing.assert_close(out_ref, out_tri, atol=0, rtol=0)
 

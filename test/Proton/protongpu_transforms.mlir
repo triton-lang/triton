@@ -3,6 +3,7 @@
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: simple_record
   // CHECK: %[[SCRATCH:.*]] = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 1152 : i32} : !tt.ptr<i32>
+  // CHECK-NEXT: proton_gpu.initialize %[[SCRATCH]] : !tt.ptr<i32>
   // CHECK-NEXT: %[[BUF:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
   // CHECK-NEXT: %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[BUF]]
   // CHECK-NEXT: %[[START:.*]] = proton_gpu.read_counter : i32
@@ -24,6 +25,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: simple_record
   // CHECK: %[[SCRATCH:.*]] = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 1152 : i32} : !tt.ptr<i32>
+  // CHECK-NEXT: proton_gpu.initialize %[[SCRATCH]] : !tt.ptr<i32>
   // CHECK-NEXT: %[[BUF:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<256xi32, #shared, #smem, mutable>
   // CHECK-NEXT: %[[SEGMENT:.*]] = proton_gpu.segment_alloc %[[BUF]]
   // CHECK-NEXT: %[[START1:.*]] = proton_gpu.read_counter : i32
