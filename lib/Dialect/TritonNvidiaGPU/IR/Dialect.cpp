@@ -77,6 +77,11 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
                  memDescType.getEncoding())) {
     nCol /= tmemScaleEnc.getCTASplitM() * tmemScaleEnc.getCTASplitN();
   }
+  // If multibuffering is present, we need to allocate more cols
+  if (memDescType.getRank() > 2) {
+    assert(memDescType.getRank() == 3);
+    nCol *= memDescType.getDimSize(0);
+  }
   return {nRow, nCol};
 }
 
