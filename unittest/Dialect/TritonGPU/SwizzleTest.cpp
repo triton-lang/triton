@@ -194,8 +194,8 @@ TEST_F(SwizzleTest, Test128x128Float8Transpose) {
 
   auto smem = optimalSwizzlingLdSt(matrix, matrix_t, /*bitwidth=*/8);
   auto [r, w] = bankConflictsLdSt(matrix, matrix_t, smem, /*bitwidth=*/8);
-  EXPECT_EQ(r, 1);
-  EXPECT_EQ(w, 1);
+  EXPECT_EQ(r, 0);
+  EXPECT_EQ(w, 0);
 }
 
 TEST_F(SwizzleTest, Test16x16Bf16BlockedMma) {
@@ -213,8 +213,8 @@ TEST_F(SwizzleTest, Test16x16Bf16BlockedMma) {
 
   auto smem = optimalSwizzlingLdSt(blocked, mma, /*bitwidth=*/16);
   auto [r, w] = bankConflictsLdSt(blocked, mma, smem, /*bitwidth=*/16);
-  EXPECT_EQ(r, 1);
-  EXPECT_EQ(w, 1);
+  EXPECT_EQ(r, 0);
+  EXPECT_EQ(w, 0);
 }
 
 TEST_F(SwizzleTest, Test16x256U4Mma) {
@@ -234,8 +234,8 @@ TEST_F(SwizzleTest, Test16x256U4Mma) {
 
   auto smem = optimalSwizzlingLdSt(blocked, mma, /*bitwidth=*/4);
   auto [r, w] = bankConflictsLdSt(blocked, mma, smem, /*bitwidth=*/4);
-  EXPECT_EQ(r, 1);
-  EXPECT_EQ(w, 1);
+  EXPECT_EQ(r, 0);
+  EXPECT_EQ(w, 0);
 }
 
 TEST_F(SwizzleTest, Test32x16F32Transpose) {
@@ -252,8 +252,8 @@ TEST_F(SwizzleTest, Test32x16F32Transpose) {
                         /*requireSurjective=*/true);
   auto smem = optimalSwizzlingLdSt(matrix, matrix_t, /*bitwidth=*/32);
   auto [r, w] = bankConflictsLdSt(matrix, matrix_t, smem, /*bitwidth=*/32);
-  EXPECT_EQ(r, 1);
-  EXPECT_EQ(w, 1);
+  EXPECT_EQ(r, 0);
+  EXPECT_EQ(w, 0);
 }
 
 TEST_F(SwizzleTest, Test128x128F16Transpose) {
@@ -271,8 +271,8 @@ TEST_F(SwizzleTest, Test128x128F16Transpose) {
       /*requireSurjective=*/true);
   auto smem = optimalSwizzlingLdSt(matrix, matrix_t, /*bitwidth=*/16);
   auto [r, w] = bankConflictsLdSt(matrix, matrix_t, smem, /*bitwidth=*/16);
-  EXPECT_EQ(r, 1);
-  EXPECT_EQ(w, 1);
+  EXPECT_EQ(r, 0);
+  EXPECT_EQ(w, 0);
 }
 
 TEST_F(BankConflictTest, bankConflicts) {
