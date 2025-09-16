@@ -139,7 +139,7 @@ WmmaDatabase::WmmaDatabase(MLIRContext *context) {
 
       // wmma_f32_16x16x64_bf8_bf8
       TRITON_WMMA_v(3, 16, 16, ocpBf8T, ocpBf8T, 8, f32T, 32,
-                    "llvm.amdgcn.wmma.f32.16x16x64.bf8.bf8", 64, 16),
+                    "llvm.amdgcn.wmma.f32.16x16x64.bf8.bf8", 64, 32),
   };
 }
 
