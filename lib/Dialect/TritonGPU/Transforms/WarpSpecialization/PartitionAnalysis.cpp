@@ -119,9 +119,9 @@ size_t computeCost(Operation *op) {
   return 0;
 }
 
-class Group {
+class Partition {
 public:
-  explicit Group(Graph *graph) : graph(graph) {}
+  explicit Partition(Graph *graph) : graph(graph) {}
   void add(Node *node);
   void remove(Node *node) { nodes.remove(node); }
   void addFlag(Flags flag) { flags |= flag; }
@@ -131,10 +131,10 @@ public:
 
   size_t getCost() const { return cost; }
 
-  static void merge(Group *lhs, Group *rhs);
+  static void merge(Partition *lhs, Partition *rhs);
 
   void dump() const {
-    std::cout << "Group@" << this << " {\n"
+    std::cout << "Partition@" << this << " {\n"
               << "  name=" << name << "\n"
               << "  size=" << nodes.size() << "\n"
               << "  cost=" << cost << "\n"
@@ -209,7 +209,7 @@ public:
   size_t getToIdx() const;
 
   bool isDataValue() const;
-  bool crossesGroups() const;
+  bool crossesPartitions() const;
   Type getType() const;
 
 private:
@@ -415,33 +415,33 @@ public:
     llvm::report_fatal_error("unsuported value");
   }
 
-  void setGroup(Group *group) {
-    for (auto current_group : groups)
-      current_group->remove(this);
-    groups.clear();
-    groups.insert(group);
-    group->add(this);
+  void setPartition(Partition *partition) {
+    for (auto current_partition : partitions)
+      current_partition->remove(this);
+    partitions.clear();
+    partitions.insert(partition);
+    partition->add(this);
   }
 
-  void addGroup(Group *group) {
-    groups.insert(group);
-    group->add(this);
+  void addPartition(Partition *partition) {
+    partitions.insert(partition);
+    partition->add(this);
   }
 
-  void addGroups(const SetVector<Group *> &groups) {
-    this->groups.insert(groups.begin(), groups.end());
-    for (auto group : groups)
-      group->add(this);
+  void addPartitions(const SetVector<Partition *> &partitions) {
+    this->partitions.insert(partitions.begin(), partitions.end());
+    for (auto partition : partitions)
+      partition->add(this);
   }
 
-  bool hasGroup() const { return !groups.empty(); }
+  bool hasPartition() const { return !partitions.empty(); }
 
-  Group *getGroup() const {
-    assert(groups.size() == 1);
-    return *(groups.begin());
+  Partition *getPartition() const {
+    assert(partitions.size() == 1);
+    return *(partitions.begin());
   }
 
-  const SetVector<Group *> &getGroups() const { return groups; }
+  const SetVector<Partition *> &getPartitions() const { return partitions; }
 
   bool hasCost() const { return cost > 0; }
   size_t getCost() const {
@@ -464,7 +464,7 @@ private:
   SmallVector<SmallVector<InputPort>> outputs;
   SmallVector<bool> dataOutputs;
 
-  SetVector<Group *> groups;
+  SetVector<Partition *> partitions;
 };
 
 class Graph {
@@ -473,10 +473,12 @@ public:
 
   Node *getRoot() { return root.get(); }
 
-  Group *addGroup() { return groups.emplace_back(new Group(this)).get(); }
+  Partition *addPartition() {
+    return partitions.emplace_back(new Partition(this)).get();
+  }
 
-  const SmallVector<std::unique_ptr<Group>> &getGroups() const {
-    return groups;
+  const SmallVector<std::unique_ptr<Partition>> &getPartitions() const {
+    return partitions;
   }
 
   void walk(const std::function<void(Node *)> &fn) {
@@ -491,7 +493,7 @@ public:
 
 private:
   std::unique_ptr<Node> root;
-  SmallVector<std::unique_ptr<Group>> groups;
+  SmallVector<std::unique_ptr<Partition>> partitions;
 };
 
 template <typename... Args> bool node_isa(Node *node) {
@@ -514,7 +516,7 @@ bool isAsyncLoad(Node *node) {
   // Special case:
   // tt.load that occurs in a sequence:
   //    tt.load -> ttg.local_alloc -> ttng.tc_gen5_mma
-  // is placed in a load warp group, and later lowered to cp.async
+  // is placed in a load partition, and later lowered to cp.async
   if (node_isa<tt::LoadOp>(node)) {
     auto outs = node->getOutEdges();
     if (outs.size() == 1) {
@@ -555,30 +557,30 @@ Flags getNodeFlags(Node *node) {
   return Flags::NONE;
 }
 
-void Group::add(Node *node) {
+void Partition::add(Node *node) {
   nodes.insert(node);
   flags |= getNodeFlags(node);
-  // Note: don't set view flag for groups
+  // Note: don't set view flag for partitions
   flags = static_cast<Flags>(flags & ~Flags::VIEW);
   if (node->hasCost())
     cost += node->getCost();
 }
 
-void Group::merge(Group *lhs, Group *rhs) {
-  // Should never be merging MANUAL groups
+void Partition::merge(Partition *lhs, Partition *rhs) {
+  // Should never be merging MANUAL partitions
   assert(!((lhs->getFlags() & Flags::MANUAL) &&
            (rhs->getFlags() & Flags::MANUAL)));
 
-  // Always keep the MANUAL group,
-  // and prefer emptying the NONE group
+  // Always keep the MANUAL partition,
+  // and prefer emptying the NONE partition
   if (lhs->getFlags() & Flags::MANUAL || rhs->getFlags() == Flags::NONE)
     std::swap(lhs, rhs);
 
   auto nodes = lhs->getNodes();
   for (auto node : nodes) {
-    node->setGroup(rhs);
+    node->setPartition(rhs);
   }
-  // FIXME: remove empty groups
+  // FIXME: remove empty partitions
 }
 
 Node *Edge::getFromNode() const { return from.getNode(); }
@@ -593,10 +595,10 @@ bool Edge::isDataValue() const {
   return from.getNode()->isDataValue(from.getIdx());
 }
 
-bool Edge::crossesGroups() const {
-  return isDataValue() && from.getNode()->hasGroup() &&
-         to.getNode()->hasGroup() &&
-         from.getNode()->getGroup() != to.getNode()->getGroup();
+bool Edge::crossesPartitions() const {
+  return isDataValue() && from.getNode()->hasPartition() &&
+         to.getNode()->hasPartition() &&
+         from.getNode()->getPartition() != to.getNode()->getPartition();
 }
 
 Type Edge::getType() const {
@@ -607,8 +609,8 @@ Type Edge::getType() const {
 }
 
 struct VisualizationInfo {
-  DenseMap<Group *, size_t> group_ids;
-  DenseMap<Group *, std::string> group_colors;
+  DenseMap<Partition *, size_t> partition_ids;
+  DenseMap<Partition *, std::string> partition_colors;
 };
 
 void visualize(std::string path, Graph *graph, VisualizationInfo &info);
@@ -838,47 +840,47 @@ void propagateDataValues(const SmallVector<OutputPort> &values) {
   }
 }
 
-void initialGroupAssignment(Graph *graph) {
+void initialPartitionAssignment(Graph *graph) {
   graph->walk([&](Node *node) {
-    if (node->isData() && !node->hasGroup()) {
-      auto group = graph->addGroup();
-      node->setGroup(group);
+    if (node->isData() && !node->hasPartition()) {
+      auto partition = graph->addPartition();
+      node->setPartition(partition);
     }
   });
 }
 
 SmallVector<Edge> getCrossingEdges(Graph *graph) {
   SmallVector<Edge> edges;
-  for (auto &group : graph->getGroups())
-    for (auto node : group->getNodes())
+  for (auto &partition : graph->getPartitions())
+    for (auto node : partition->getNodes())
       for (auto edge : node->getOutEdges()) {
-        if (!edge.crossesGroups())
+        if (!edge.crossesPartitions())
           continue;
         edges.push_back(edge);
       }
   return edges;
 }
 
-SmallVector<Edge> getOutCrossingEdges(Group *group) {
+SmallVector<Edge> getOutCrossingEdges(Partition *partition) {
   SmallVector<Edge> edges;
-  for (auto node : group->getNodes())
+  for (auto node : partition->getNodes())
     for (auto edge : node->getOutEdges()) {
-      if (!edge.crossesGroups())
+      if (!edge.crossesPartitions())
         continue;
       edges.push_back(edge);
     }
   return edges;
 }
 
-bool deserializeManualGroups(Operation *region, Graph *graph) {
+bool deserializeManualPartitions(Operation *region, Graph *graph) {
   const auto &options = get_options();
 
   if (tools::getBoolEnv("PARTITION_ANALYSIS_NVWS_SERIALIZATION")) {
-    std::map<std::string, Group *> manual_groups;
+    std::map<std::string, Partition *> manual_partitions;
 
     graph->walk([&](Node *node) {
       if (!node->isData())
-        // ignore manual groups for non-data values
+        // ignore manual partitions for non-data values
         return;
       if (node->isOp()) {
         auto op = node->getOp();
@@ -887,124 +889,123 @@ bool deserializeManualGroups(Operation *region, Graph *graph) {
           for (auto attr : cast<ArrayAttr>(op->getAttr("groups"))) {
             auto fullname = cast<SymbolRefAttr>(attr).getRootReference().str();
             auto name = fullname.substr(11); // strip nvws.groups. prefix
-            if (manual_groups.find(name) == manual_groups.end()) {
-              auto group = graph->addGroup();
-              group->addFlag(Flags::MANUAL);
-              group->name = name;
+            if (manual_partitions.find(name) == manual_partitions.end()) {
+              auto partition = graph->addPartition();
+              partition->addFlag(Flags::MANUAL);
+              partition->name = name;
               auto attr =
                   mlir::cast<mlir::DictionaryAttr>(region->getAttr(fullname));
-              group->start_warp =
+              partition->start_warp =
                   mlir::cast<IntegerAttr>(attr.get("start_warp")).getInt();
-              group->num_warps =
+              partition->num_warps =
                   mlir::cast<IntegerAttr>(attr.get("num_warps")).getInt();
               if (attr.contains("reg_count")) {
-                group->reg_count =
+                partition->reg_count =
                     mlir::cast<IntegerAttr>(attr.get("reg_count")).getInt();
               }
-              manual_groups[name] = group;
+              manual_partitions[name] = partition;
 
               if (options.dump) {
-                std::cout << "deserialize manual group:";
-                group->dump();
+                std::cout << "deserialize manual partition:";
+                partition->dump();
               }
             }
-            node->addGroup(manual_groups[name]);
+            node->addPartition(manual_partitions[name]);
           }
         }
       }
     });
-    return !manual_groups.empty();
+    return !manual_partitions.empty();
   }
 
-  std::map<int, Group *> manual_groups;
+  std::map<int, Partition *> manual_partitions;
   graph->walk([&](Node *node) {
     // if (!node->isData())
-    //   // ignore manual groups for non-data values
+    //   // ignore manual partitions for non-data values
     //   return;
     if (node->isOp()) {
       auto op = node->getOp();
-      if (op->hasAttr("ttg.partition")) {
-        // Note: reads ttg.partition, but emits ttg.partitions
-        auto id = cast<IntegerAttr>(op->getAttr("ttg.partition")).getInt();
-        if (manual_groups.find(id) == manual_groups.end()) {
-          auto group = graph->addGroup();
-          group->addFlag(Flags::MANUAL);
-          group->name = std::to_string(id);
-          manual_groups[id] = group;
+      if (op->hasAttr(kPartitionAttrName)) {
+        auto id = cast<IntegerAttr>(op->getAttr(kPartitionAttrName)).getInt();
+        if (manual_partitions.find(id) == manual_partitions.end()) {
+          auto partition = graph->addPartition();
+          partition->addFlag(Flags::MANUAL);
+          partition->name = std::to_string(id);
+          manual_partitions[id] = partition;
 
           if (options.dump) {
-            std::cout << "deserialize manual group:";
-            group->dump();
+            std::cout << "deserialize manual partition:";
+            partition->dump();
           }
         }
-        node->addGroup(manual_groups[id]);
+        node->addPartition(manual_partitions[id]);
 
         // FIXME: Remove partition attribute - it's replaced with tt.partitions
-        op->removeAttr("ttg.partition");
+        op->removeAttr(kPartitionAttrName);
       }
     }
   });
 
-  return !manual_groups.empty();
+  return !manual_partitions.empty();
 }
 
 bool isNone(Node *node) {
-  auto group = node->getGroup();
-  auto flags = group->getFlags();
+  auto partition = node->getPartition();
+  auto flags = partition->getFlags();
   return flags == Flags::NONE || flags == Flags::MANUAL;
 }
 
 bool isOnlyNone(Node *node) {
-  auto group = node->getGroup();
-  auto flags = group->getFlags();
+  auto partition = node->getPartition();
+  auto flags = partition->getFlags();
   return flags == Flags::NONE;
 }
 
 bool isManual(Node *node) {
-  auto group = node->getGroup();
-  auto flags = group->getFlags();
+  auto partition = node->getPartition();
+  auto flags = partition->getFlags();
   return flags & Flags::MANUAL;
 }
 
 bool isLoad(Node *node) {
-  auto group = node->getGroup();
-  auto flags = group->getFlags();
+  auto partition = node->getPartition();
+  auto flags = partition->getFlags();
   return flags & Flags::LOAD;
 }
 
 bool isStore(Node *node) {
-  auto group = node->getGroup();
-  auto flags = group->getFlags();
+  auto partition = node->getPartition();
+  auto flags = partition->getFlags();
   return flags & Flags::STORE;
 }
 
 bool isMMA(Node *node) {
-  auto group = node->getGroup();
-  auto flags = group->getFlags();
+  auto partition = node->getPartition();
+  auto flags = partition->getFlags();
   return flags & Flags::MMA;
 }
 
 bool isSFU(Node *node) {
-  auto group = node->getGroup();
-  auto flags = group->getFlags();
+  auto partition = node->getPartition();
+  auto flags = partition->getFlags();
   return flags & Flags::SFU;
 }
 
 bool isCostlySFU(Node *node) {
-  auto group = node->getGroup();
-  auto flags = group->getFlags();
-  return (flags & Flags::SFU) && group->getCost() > 256;
+  auto partition = node->getPartition();
+  auto flags = partition->getFlags();
+  return (flags & Flags::SFU) && partition->getCost() > 256;
 }
 
 bool isSIMT(Node *node) {
-  auto group = node->getGroup();
-  auto flags = group->getFlags();
+  auto partition = node->getPartition();
+  auto flags = partition->getFlags();
   return flags & Flags::SIMT;
 }
 
 bool isOnlySIMT(Node *node) {
-  auto group = node->getGroup();
-  auto flags = group->getFlags();
+  auto partition = node->getPartition();
+  auto flags = partition->getFlags();
   return flags == Flags::SIMT;
 }
 
@@ -1027,14 +1028,14 @@ bool isIfResult(Node *node) {
 }
 
 SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
-    // load followed by local alloc always in same group
+    // load followed by local alloc always in same partition
     {"load_alloc",
      [](Edge edge) {
        return node_isa<tt::DescriptorLoadOp, tt::LoadOp>(edge.getFromNode()) &&
               node_isa<ttg::LocalAllocOp>(edge.getToNode());
      }},
 
-    // view op in same group as user
+    // view op in same partition as user
     // Note: view ops guaranteed to have been duplicated so there is one use/def
     {"view",
      [](Edge edge) { return getNodeFlags(edge.getFromNode()) & Flags::VIEW; }},
@@ -1066,16 +1067,16 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        return from->isOp() && to->isOp() && isNone(from) && isSIMT(to);
      }},
 
-    // merge SIMT group into following group, if the SIMT ops
+    // merge SIMT partition into following partition, if the SIMT ops
     // do not compute the LHS operand of an mma
-    {"simt_group_mma_lhs_only",
+    {"simt_partition_mma_lhs_only",
      [](Edge edge) {
        auto from = edge.getFromNode();
        auto to = edge.getToNode();
        if (!isOnlySIMT(from))
          return false;
        if (isOnlySIMT(from) && !isMMA(to))
-         // merge if simt -> non-mma group
+         // merge if simt -> non-mma partition
          return true;
        // have a simt -> mma
        // check the edge goes to the lhs operand of an mma op
@@ -1097,11 +1098,11 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
          return true;
        if (edge.getToIdx() != 0)
          return true;
-       // have simt -> mma lhs operand, don't merge the groups
+       // have simt -> mma lhs operand, don't merge the partitions
        return false;
      }},
 
-    // for op iter arg placed in same group as op that produces
+    // for op iter arg placed in same partition as op that produces
     // its value in the loop body
     {"for_op_iter_arg",
      [](Edge edge) {
@@ -1114,7 +1115,7 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        return true;
      }},
 
-    // if stmt result placed in same group as op that produces
+    // if stmt result placed in same partition as op that produces
     // its value, preferentially from the noop branch, otherwise the then branch
     {"if_result",
      [](Edge edge) {
@@ -1128,7 +1129,7 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        return false;
      }},
 
-    // merge connected STORE groups together
+    // merge connected STORE partitions together
     {"connected_stores",
      [](Edge edge) {
        auto from = edge.getFromNode();
@@ -1136,7 +1137,7 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        return isStore(from) && isStore(to);
      }},
 
-    // merge connected MMA groups together
+    // merge connected MMA partitions together
     {"connected_mmas",
      [](Edge edge) {
        auto from = edge.getFromNode();
@@ -1144,7 +1145,7 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        return isMMA(from) && isMMA(to);
      }},
 
-    // merge connected SFU groups together
+    // merge connected SFU partitions together
     {"sfu",
      [](Edge edge) {
        auto from = edge.getFromNode();
@@ -1152,10 +1153,11 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        return isSFU(from) && isSFU(to);
      }},
 
-    // groups entirely outside of a loop nest merge into group in the loop nest
-    // e.g. store group that appears outside of the loop
-    // Don't merge into MMA group (with a single warp)
-    {"non_loop_groups",
+    // partitions entirely outside of a loop nest merge into partition in the
+    // loop nest
+    // e.g. store partition that appears outside of the loop
+    // Don't merge into MMA partition (with a single warp)
+    {"non_loop_partitions",
      [](Edge edge) {
        auto from = edge.getFromNode();
        if (isMMA(from))
@@ -1163,14 +1165,14 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
        auto to = edge.getToNode();
        if (!to->isOp())
          return false;
-       // exit if any nodes in the group are in a for loop
-       for (auto node : to->getGroup()->getNodes()) {
+       // exit if any nodes in the partition are in a for loop
+       for (auto node : to->getPartition()->getNodes()) {
          if (!node->isOp())
            continue;
          if (node->getOp()->getParentOfType<scf::ForOp>())
            return false;
        }
-       // at this point, none of the ops in the group are inside a loop
+       // at this point, none of the ops in the partition are inside a loop
        return true;
      }},
 
@@ -1250,7 +1252,7 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
 };
 
 SmallVector<std::pair<std::string, std::function<bool(Edge)>>> constraints = {
-    // don't merge manual groups
+    // don't merge manual partitions
     {"manual",
      [](Edge edge) {
        auto from = edge.getFromNode();
@@ -1258,7 +1260,7 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> constraints = {
        return !(isManual(from) && isManual(to));
      }},
 
-    // don't merge tmem load into mma group
+    // don't merge tmem load into mma partition
     // unless epilogues are disabled
     {"tmem_load",
      [](Edge edge) {
@@ -1271,7 +1273,7 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> constraints = {
                 (isMMA(to) && node_isa<ttng::TMEMLoadOp>(from)));
      }},
 
-    // don't merge tmem store into mma group
+    // don't merge tmem store into mma partition
     // unless epilogues are disabled
     {"tmem_store",
      [](Edge edge) {
@@ -1284,7 +1286,7 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> constraints = {
                 (isMMA(from) && node_isa<ttng::TMEMStoreOp>(to)));
      }},
 
-    // don't merge tmem alloc (non-token form) into mma group
+    // don't merge tmem alloc (non-token form) into mma partition
     // unless epilogues are disabled
     {"tmem_alloc",
      [](Edge edge) {
@@ -1296,7 +1298,7 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> constraints = {
        return !(node_isa<ttng::TMEMAllocOp>(from) && isMMA(to));
      }},
 
-    // don't merge local load into mma group
+    // don't merge local load into mma partition
     {"local_load",
      [](Edge edge) {
        auto from = edge.getFromNode();
@@ -1305,10 +1307,10 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> constraints = {
      }},
 };
 
-bool isCritical(Group *group) {
+bool isCritical(Partition *partition) {
   SmallVector<Node *> stack;
   DenseSet<Node *> seen;
-  for (auto node : group->getNodes()) {
+  for (auto node : partition->getNodes()) {
     stack.push_back(node);
     seen.insert(node);
   }
@@ -1333,31 +1335,31 @@ bool isCritical(Group *group) {
   return false;
 };
 
-SetVector<Group *> getConsumingGroups(Group *group) {
-  SetVector<Group *> result;
-  for (auto node : group->getNodes()) {
+SetVector<Partition *> getConsumingPartitions(Partition *partition) {
+  SetVector<Partition *> result;
+  for (auto node : partition->getNodes()) {
     for (auto edge : node->getOutEdges()) {
-      auto outGroup = edge.getToNode()->getGroup();
-      if (outGroup != group)
-        result.insert(outGroup);
+      auto outPartition = edge.getToNode()->getPartition();
+      if (outPartition != partition)
+        result.insert(outPartition);
     }
   }
   return result;
 }
 
-DenseSet<Group *> getReachableGroups(Group *group) {
-  // look for all groups connected to this group via data edges
-  DenseSet<Group *> groups;
+DenseSet<Partition *> getReachablePartitions(Partition *partition) {
+  // look for all partitions connected to this partition via data edges
+  DenseSet<Partition *> partitions;
   SmallVector<Node *> stack;
   DenseSet<Node *> seen;
   auto addNode = [&](Node *node) {
     if (node->isData() && !seen.contains(node)) {
-      groups.insert(node->getGroup());
+      partitions.insert(node->getPartition());
       stack.push_back(node);
       seen.insert(node);
     }
   };
-  for (auto node : group->getNodes())
+  for (auto node : partition->getNodes())
     addNode(node);
 
   while (!stack.empty()) {
@@ -1369,14 +1371,15 @@ DenseSet<Group *> getReachableGroups(Group *group) {
       for (auto output : outputs)
         addNode(output.getNode());
   }
-  return groups;
+  return partitions;
 }
 
-SmallVector<std::pair<std::string, std::function<bool(Group *, Group *)>>>
-    group_heuristics = {
-        // merge load groups that are consumed by the same group
-        {"load_groups_with_same_consumer",
-         [](Group *a, Group *b) {
+SmallVector<
+    std::pair<std::string, std::function<bool(Partition *, Partition *)>>>
+    partition_heuristics = {
+        // merge load partitions that are consumed by the same partition
+        {"load_partitions_with_same_consumer",
+         [](Partition *a, Partition *b) {
            auto a_is_load = (a->getFlags() & Flags::LOAD &&
                              !(a->getFlags() & Flags::MANUAL));
            auto b_is_load = (b->getFlags() & Flags::LOAD &&
@@ -1384,20 +1387,21 @@ SmallVector<std::pair<std::string, std::function<bool(Group *, Group *)>>>
            if (!a_is_load || !b_is_load)
              return false;
 
-           auto a_consuming_groups = getConsumingGroups(a);
-           auto b_consuming_groups = getConsumingGroups(b);
-           for (auto ag : a_consuming_groups)
-             for (auto bg : b_consuming_groups)
+           auto a_consuming_partitions = getConsumingPartitions(a);
+           auto b_consuming_partitions = getConsumingPartitions(b);
+           for (auto ag : a_consuming_partitions)
+             for (auto bg : b_consuming_partitions)
                if (ag == bg)
                  return true;
            return false;
          }},
 
-        // vertically merge load groups
-        // groups that are reachable from one another are merged into the same
-        // group
-        {"load_groups_vertical",
-         [](Group *a, Group *b) {
+        // vertically merge load partitions
+        // partitions that are reachable from one another are merged into the
+        // same
+        // partition
+        {"load_partitions_vertical",
+         [](Partition *a, Partition *b) {
            auto a_is_load = (a->getFlags() & Flags::LOAD &&
                              !(a->getFlags() & Flags::MANUAL));
            auto b_is_load = (b->getFlags() & Flags::LOAD &&
@@ -1405,17 +1409,19 @@ SmallVector<std::pair<std::string, std::function<bool(Group *, Group *)>>>
            if (!a_is_load || !b_is_load)
              return false;
 
-           return getReachableGroups(a).contains(b);
+           return getReachablePartitions(a).contains(b);
          }}
 
-        // // merge simt groups if one of them is not on critical path to an mma
+        // // merge simt partitions if one of them is not on critical path to an
+        // mma
         // {"non_critical_simt",
-        //  [](Group *a, Group *b) {
+        //  [](Partition *a, Partition *b) {
         //    auto a_is_simt = (a->getFlags() & Flags::SIMT &&
         //                      !(a->getFlags() & Flags::MANUAL));
         //    auto b_is_simt = (b->getFlags() & Flags::SIMT &&
         //                      !(b->getFlags() & Flags::MANUAL));
-        //    // TODO: follow edges to check the group does not lead to an mma
+        //    // TODO: follow edges to check the partition does not lead to an
+        //    mma
         //    // within the loop
         //
         //    auto a_is_crit = isCritical(a);
@@ -1425,8 +1431,8 @@ SmallVector<std::pair<std::string, std::function<bool(Group *, Group *)>>>
         //  }},
 };
 
-void mergeGroups(Graph *graph, std::string funcName,
-                 VisualizationInfo &vis_info) {
+void mergePartitions(Graph *graph, std::string funcName,
+                     VisualizationInfo &vis_info) {
   // Note: this implementation is slow. It can be improved by incrementally
   // updating the data structures rather than rebuilding the whole lot when a
   // rule is applied
@@ -1452,28 +1458,29 @@ void mergeGroups(Graph *graph, std::string funcName,
           std::cout << "\n---- try " << name << " ----\n";
           std::cout << edge.getFromNode()->getLabel() << " -> "
                     << edge.getToNode()->getLabel() << "\n";
-          std::cout << "groups ";
-          if (edge.getFromNode()->getGroup()->name.empty())
-            std::cout << edge.getFromNode()->getGroup();
+          std::cout << "partitions ";
+          if (edge.getFromNode()->getPartition()->name.empty())
+            std::cout << edge.getFromNode()->getPartition();
           else
-            std::cout << edge.getFromNode()->getGroup()->name;
+            std::cout << edge.getFromNode()->getPartition()->name;
           std::cout << " -> ";
-          if (edge.getToNode()->getGroup()->name.empty())
-            std::cout << edge.getToNode()->getGroup();
+          if (edge.getToNode()->getPartition()->name.empty())
+            std::cout << edge.getToNode()->getPartition();
           else
-            std::cout << edge.getToNode()->getGroup()->name;
+            std::cout << edge.getToNode()->getPartition()->name;
           std::cout << "\n";
-          std::cout << "flags " << edge.getFromNode()->getGroup()->getFlags()
-                    << " -> " << edge.getToNode()->getGroup()->getFlags()
-                    << "\n";
+          std::cout << "flags "
+                    << edge.getFromNode()->getPartition()->getFlags() << " -> "
+                    << edge.getToNode()->getPartition()->getFlags() << "\n";
         }
 
         if (apply(edge)) {
 
           // check if applying the heuristic will observe the contraints
           bool ok = true;
-          // Note: constraints just prevent epilogue group ops merging into mma
-          // groups, so disable them if we don't want epilogue groups
+          // Note: constraints just prevent epilogue partition ops merging into
+          // mma partitions, so disable them if we don't want epilogue
+          // partitions
           for (auto [name, constraint] : constraints) {
             if (!constraint(edge)) {
               if (options.dump)
@@ -1487,26 +1494,27 @@ void mergeGroups(Graph *graph, std::string funcName,
               std::cout << "\n---- apply " << name << " ----\n";
               std::cout << edge.getFromNode()->getLabel() << " -> "
                         << edge.getToNode()->getLabel() << "\n";
-              std::cout << "groups ";
-              if (edge.getFromNode()->getGroup()->name.empty())
-                std::cout << edge.getFromNode()->getGroup();
+              std::cout << "partitions ";
+              if (edge.getFromNode()->getPartition()->name.empty())
+                std::cout << edge.getFromNode()->getPartition();
               else
-                std::cout << edge.getFromNode()->getGroup()->name;
+                std::cout << edge.getFromNode()->getPartition()->name;
               std::cout << " -> ";
-              if (edge.getToNode()->getGroup()->name.empty())
-                std::cout << edge.getToNode()->getGroup();
+              if (edge.getToNode()->getPartition()->name.empty())
+                std::cout << edge.getToNode()->getPartition();
               else
-                std::cout << edge.getToNode()->getGroup()->name;
+                std::cout << edge.getToNode()->getPartition()->name;
               std::cout << "\n";
               std::cout << "flags "
-                        << edge.getFromNode()->getGroup()->getFlags() << " -> "
-                        << edge.getToNode()->getGroup()->getFlags() << "\n";
+                        << edge.getFromNode()->getPartition()->getFlags()
+                        << " -> "
+                        << edge.getToNode()->getPartition()->getFlags() << "\n";
             }
 
-            // merge the groups
-            auto from_group = edge.getFromNode()->getGroup();
-            auto to_group = edge.getToNode()->getGroup();
-            Group::merge(from_group, to_group);
+            // merge the partitions
+            auto from_partition = edge.getFromNode()->getPartition();
+            auto to_partition = edge.getToNode()->getPartition();
+            Partition::merge(from_partition, to_partition);
 
             if (options.dump_dot) {
               std::stringstream name;
@@ -1536,24 +1544,25 @@ void mergeGroups(Graph *graph, std::string funcName,
   }
 
   {
-    // look at every pair of groups and check if they should be merged
-    auto merge_groups_step = [&]() {
-      SmallVector<Group *> all_groups;
-      for (auto &group : graph->getGroups()) {
-        all_groups.push_back(group.get());
+    // look at every pair of partitions and check if they should be merged
+    auto merge_partitions_step = [&]() {
+      SmallVector<Partition *> all_partitions;
+      for (auto &partition : graph->getPartitions()) {
+        all_partitions.push_back(partition.get());
       }
-      for (auto [name, apply] : group_heuristics) {
-        for (auto groupA : all_groups) {
-          for (auto groupB : all_groups) {
-            if (groupA == groupB || groupA->empty() || groupB->empty())
+      for (auto [name, apply] : partition_heuristics) {
+        for (auto partitionA : all_partitions) {
+          for (auto partitionB : all_partitions) {
+            if (partitionA == partitionB || partitionA->empty() ||
+                partitionB->empty())
               continue;
-            if (apply(groupA, groupB)) {
+            if (apply(partitionA, partitionB)) {
               if (options.dump) {
                 std::cout << "\n---- apply " << name << " ----\n";
-                groupA->dump();
-                groupB->dump();
+                partitionA->dump();
+                partitionB->dump();
               }
-              Group::merge(groupA, groupB);
+              Partition::merge(partitionA, partitionB);
               if (options.dump_dot) {
                 std::stringstream name;
                 name << "graph-merge-step-" << std::setfill('0') << std::setw(4)
@@ -1570,14 +1579,14 @@ void mergeGroups(Graph *graph, std::string funcName,
     };
 
     while (true) {
-      if (merge_groups_step())
+      if (merge_partitions_step())
         return;
     }
   }
 
-  // push broadcast ops into consumer group, to reduce shared memory pressure
-  // note: doesn't actually do anything, just checks this is the case as the
-  // heuristics should guarantee this could probably just be removed
+  // push broadcast ops into consumer partition, to reduce shared memory
+  // pressure note: doesn't actually do anything, just checks this is the case
+  // as the heuristics should guarantee this could probably just be removed
   {
     bool changed = false;
     do {
@@ -1590,13 +1599,13 @@ void mergeGroups(Graph *graph, std::string funcName,
         auto op = from->getOp();
         if (isa_and_nonnull<tt::BroadcastOp, tt::ExpandDimsOp>(op))
           assert(false &&
-                 "FIXME: push broadcast/expand dims into previous group");
+                 "FIXME: push broadcast/expand dims into previous partition");
       }
     } while (changed);
   }
 
-  // // groups that only exist outside a loop body,
-  // // should be merged with another similar group
+  // // partitions that only exist outside a loop body,
+  // // should be merged with another similar partition
   // // Note: handles case such as:
   // //   - causal attention where there is a tmem load/store between loops
   // //   - gemm kernels where there is an epilog following the loop body
@@ -1604,12 +1613,12 @@ void mergeGroups(Graph *graph, std::string funcName,
   //   bool changed = false;
   //   do {
   //     changed = false;
-  //     for (auto &group : graph->getGroups()) {
-  //       if (group->empty()) {
+  //     for (auto &partition : graph->getPartitions()) {
+  //       if (partition->empty()) {
   //         continue;
   //       }
   //       bool in_loop = false;
-  //       for (auto node : group->getNodes()) {
+  //       for (auto node : partition->getNodes()) {
   //         Operation *op;
   //         if (node->isOp()) {
   //           op = node->getOp();
@@ -1629,39 +1638,39 @@ void mergeGroups(Graph *graph, std::string funcName,
   //       }
   //
   //       if (!in_loop) {
-  //         // std::cout << "group " << group.get()
+  //         // std::cout << "partition " << partition.get()
   //         //           << "has no nodes in a loop, merge it" << std::endl;
-  //         // std::cout << "group contains:" << std::endl;
-  //         // for (auto node : group->getNodes()) {
+  //         // std::cout << "partition contains:" << std::endl;
+  //         // for (auto node : partition->getNodes()) {
   //         //   node->dump();
   //         // }
   //
-  //         // group not in a loop, merge with one that is
-  //         for (auto &candidate : graph->getGroups()) {
-  //           if (candidate == group) {
+  //         // partition not in a loop, merge with one that is
+  //         for (auto &candidate : graph->getPartitions()) {
+  //           if (candidate == partition) {
   //             // don't merge with self
   //             continue;
   //           }
   //           if ((candidate->getFlags() & Flags::MMA) !=
-  //               (group->getFlags() & MMA)) {
+  //               (partition->getFlags() & MMA)) {
   //             // don't merge mma with non-mma or vice versa
   //             continue;
   //           }
   //           if ((candidate->getFlags() & Flags::LOAD) !=
-  //               (group->getFlags() & LOAD)) {
+  //               (partition->getFlags() & LOAD)) {
   //             // don't merge load with non-load or vice versa
   //             continue;
   //           }
-  //           // std::cout << "found group " << candidate.get() << ";
+  //           // std::cout << "found partition " << candidate.get() << ";
   //           merging"
   //           //           << std::endl;
   //           //
-  //           // std::cout << group->getFlags() << std::endl;
+  //           // std::cout << partition->getFlags() << std::endl;
   //           // std::cout << candidate->getFlags() << std::endl;
   //           //
   //           // std::cout << "mma flags:" << std::endl;
   //           // std::cout << (int)(candidate->getFlags() & Flags::MMA) <<
-  //           // std::endl; std::cout << (int)(group->getFlags() &
+  //           // std::endl; std::cout << (int)(partition->getFlags() &
   //           Flags::MMA)
   //           <<
   //           // std::endl;
@@ -1669,10 +1678,10 @@ void mergeGroups(Graph *graph, std::string funcName,
   //           // std::cout << "load flags:" << std::endl;
   //           // std::cout << (int)(candidate->getFlags() & Flags::LOAD)
   //           //           << std::endl;
-  //           // std::cout << (int)(group->getFlags() & Flags::LOAD) <<
+  //           // std::cout << (int)(partition->getFlags() & Flags::LOAD) <<
   //           std::endl;
   //
-  //           Group::merge(group.get(), candidate.get());
+  //           Partition::merge(partition.get(), candidate.get());
   //           changed = true;
   //           break;
   //         }
@@ -1686,8 +1695,8 @@ void mergeGroups(Graph *graph, std::string funcName,
   // }
 }
 
-void propagateGroups(Graph *graph, std::string funcName,
-                     VisualizationInfo &vis_info) {
+void propagatePartitions(Graph *graph, std::string funcName,
+                         VisualizationInfo &vis_info) {
   auto &options = get_options();
 
   auto dump_name = [&](int idx) {
@@ -1700,7 +1709,7 @@ void propagateGroups(Graph *graph, std::string funcName,
   if (options.dump_dot)
     visualize(dump_name(0), graph, vis_info);
 
-  // propagate groups to parent ops
+  // propagate partitions to parent ops
   SmallVector<Node *> leaves;
 
   graph->walk([&](Node *node) {
@@ -1720,24 +1729,27 @@ void propagateGroups(Graph *graph, std::string funcName,
   bool changed = true;
   while (changed) {
     for (auto leaf : leaves) {
-      // groups for leaf are union of groups of all ops contained in the leaf
-      SetVector<Group *> groups;
+      // partitions for leaf are union of partitions of all ops contained in the
+      // leaf
+      SetVector<Partition *> partitions;
       for (auto &node : leaf->getNodes())
-        groups.insert(node->getGroups().begin(), node->getGroups().end());
-      leaf->addGroups(groups);
+        partitions.insert(node->getPartitions().begin(),
+                          node->getPartitions().end());
+      leaf->addPartitions(partitions);
 
       // propagate to parent nodes
       auto node = leaf->getParent();
       while (node) {
-        // include union of groups of ops in the parent
+        // include union of partitions of ops in the parent
         for (auto &child : node->getNodes())
-          groups.insert(child->getGroups().begin(), child->getGroups().end());
-        node->addGroups(groups);
+          partitions.insert(child->getPartitions().begin(),
+                            child->getPartitions().end());
+        node->addPartitions(partitions);
         node = node->getParent();
       }
     }
 
-    // propagate groups to non-data nodes
+    // propagate partitions to non-data nodes
     {
       SmallVector<Node *> nodes;
       // include nodes with regions
@@ -1746,8 +1758,8 @@ void propagateGroups(Graph *graph, std::string funcName,
           nodes.push_back(node);
       });
       // include data nodes
-      for (auto &group : graph->getGroups())
-        for (auto &node : group->getNodes())
+      for (auto &partition : graph->getPartitions())
+        for (auto &node : partition->getNodes())
           if (node->isData())
             nodes.push_back(node);
 
@@ -1755,7 +1767,7 @@ void propagateGroups(Graph *graph, std::string funcName,
       for (auto node : nodes) {
         SmallVector<Node *> stack;
         DenseSet<Node *> seen;
-        auto groups = node->getGroups();
+        auto partitions = node->getPartitions();
         stack.push_back(node);
         seen.insert(node);
 
@@ -1767,10 +1779,10 @@ void propagateGroups(Graph *graph, std::string funcName,
             if (edge.isDataValue() || !edge.getFromNode())
               continue;
             auto fromNode = edge.getFromNode();
-            auto numGroupsBefore = fromNode->getGroups().size();
-            fromNode->addGroups(groups);
-            auto numGroupsAfter = fromNode->getGroups().size();
-            changed |= (numGroupsBefore != numGroupsAfter);
+            auto numPartitionsBefore = fromNode->getPartitions().size();
+            fromNode->addPartitions(partitions);
+            auto numPartitionsAfter = fromNode->getPartitions().size();
+            changed |= (numPartitionsBefore != numPartitionsAfter);
 
             if (seen.count(edge.getFromNode()) == 0) {
               stack.push_back(fromNode);
@@ -1785,19 +1797,20 @@ void propagateGroups(Graph *graph, std::string funcName,
   if (options.dump_dot)
     visualize(dump_name(1), graph, vis_info);
 
-  // propagate groups of tt.reduce into its body
+  // propagate partitions of tt.reduce into its body
   graph->walk([&](Node *node) {
     if (node->isOp() && isa<tt::ReduceOp>(node->getOp())) {
-      auto groups = node->getGroups();
-      node->walk([&](Node *child_node) { child_node->addGroups(groups); });
+      auto partitions = node->getPartitions();
+      node->walk(
+          [&](Node *child_node) { child_node->addPartitions(partitions); });
     }
   });
 
   if (options.dump_dot)
     visualize(dump_name(2), graph, vis_info);
 
-  // Corner case: tmem store following tmem alloc should be in a warp group
-  // with 4 warps (i.e. a non-mma group)
+  // Corner case: tmem store following tmem alloc should be in a warp partition
+  // with 4 warps (i.e. a non-mma partition)
   SmallVector<Node *> patched_nodes;
 
   graph->walk([&](Node *node) {
@@ -1816,13 +1829,13 @@ void propagateGroups(Graph *graph, std::string funcName,
     if (!alloc || !alloc->isOp() || !isa<ttng::TMEMAllocOp>(alloc->getOp()))
       return;
 
-    // pick the first non-mma group
-    // does nothing if the only groups are mma
-    auto groups = alloc->getGroups();
-    for (auto group : groups) {
-      if (group->getFlags() & MMA)
+    // pick the first non-mma partition
+    // does nothing if the only partitions are mma
+    auto partitions = alloc->getPartitions();
+    for (auto partition : partitions) {
+      if (partition->getFlags() & MMA)
         continue;
-      node->setGroup(group);
+      node->setPartition(partition);
       patched_nodes.push_back(node);
       break;
     }
@@ -1831,11 +1844,11 @@ void propagateGroups(Graph *graph, std::string funcName,
   if (options.dump_dot)
     visualize(dump_name(3), graph, vis_info);
 
-  // propagate groups for patched up nodes to non-data nodes
+  // propagate partitions for patched up nodes to non-data nodes
   for (auto node : patched_nodes) {
     SmallVector<Node *> stack;
     DenseSet<Node *> seen;
-    auto groups = node->getGroups();
+    auto partitions = node->getPartitions();
     stack.push_back(node);
     seen.insert(node);
 
@@ -1847,7 +1860,7 @@ void propagateGroups(Graph *graph, std::string funcName,
         if (edge.isDataValue())
           continue;
         auto fromNode = edge.getFromNode();
-        fromNode->addGroups(groups);
+        fromNode->addPartitions(partitions);
 
         if (seen.count(edge.getFromNode()) == 0) {
           stack.push_back(fromNode);
@@ -1869,20 +1882,20 @@ void visualize(std::string path, Graph *graph, VisualizationInfo &info) {
 
   DenseMap<Node *, size_t> node_ids;
 
-  auto getGroupId = [&](Group *group) {
-    if (info.group_ids.count(group) == 0)
-      info.group_ids[group] = info.group_ids.size();
-    return info.group_ids[group];
+  auto getPartitionId = [&](Partition *partition) {
+    if (info.partition_ids.count(partition) == 0)
+      info.partition_ids[partition] = info.partition_ids.size();
+    return info.partition_ids[partition];
   };
 
-  auto getGroupColor = [&](Group *group) {
-    if (info.group_colors.count(group) == 0) {
-      size_t color = info.group_colors.size() + 1;
+  auto getPartitionColor = [&](Partition *partition) {
+    if (info.partition_colors.count(partition) == 0) {
+      size_t color = info.partition_colors.size() + 1;
       color = (color % 12) + 1;
-      info.group_colors[group] =
+      info.partition_colors[partition] =
           std::string("/set312/") + std::to_string(color);
     }
-    return info.group_colors[group];
+    return info.partition_colors[partition];
   };
 
   // add nodes
@@ -1921,14 +1934,14 @@ void visualize(std::string path, Graph *graph, VisualizationInfo &info) {
       dot << ">";
 
       dot << "<TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\"><TR>";
-      if (node->hasGroup()) {
-        for (auto group : node->getGroups()) {
-          auto name = std::to_string(getGroupId(group));
-          if (!group->name.empty())
-            name = group->name;
-          dot << "<TD BGCOLOR=\"" << getGroupColor(group) << "\">" << name
-              << "{" << group->getCost() << "}"
-              << "[" << group->getFlags() << "]</TD>";
+      if (node->hasPartition()) {
+        for (auto partition : node->getPartitions()) {
+          auto name = std::to_string(getPartitionId(partition));
+          if (!partition->name.empty())
+            name = partition->name;
+          dot << "<TD BGCOLOR=\"" << getPartitionColor(partition) << "\">"
+              << name << "{" << partition->getCost() << "}"
+              << "[" << partition->getFlags() << "]</TD>";
         }
       }
       dot << "<TD>" << node->getLabel();
@@ -1985,7 +1998,7 @@ void visualize(std::string path, Graph *graph, VisualizationInfo &info) {
         else
           dot << "in" << inputPort.getIdx();
         if (edge.isDataValue()) {
-          if (edge.crossesGroups())
+          if (edge.crossesPartitions())
             dot << "[color=\"red\"]";
           else
             dot << "[color=\"blue\"]";
@@ -2002,8 +2015,8 @@ void visualize(std::string path, Graph *graph, VisualizationInfo &info) {
   dot << "}\n";
 }
 
-bool isSimpleLoad(Group *group) {
-  for (auto node : group->getNodes()) {
+bool isSimpleLoad(Partition *partition) {
+  for (auto node : partition->getNodes()) {
     if (!node->isData() || !node->isOp())
       continue;
     auto op = node->getOp();
@@ -2015,8 +2028,8 @@ bool isSimpleLoad(Group *group) {
   return true;
 }
 
-bool isSimpleMMA(Group *group) {
-  for (auto node : group->getNodes()) {
+bool isSimpleMMA(Partition *partition) {
+  for (auto node : partition->getNodes()) {
     if (!node->isData() || !node->isOp())
       continue;
     auto op = node->getOp();
@@ -2029,18 +2042,18 @@ bool isSimpleMMA(Group *group) {
 void assignWarpsAndRegisters(Operation *region, Graph *graph) {
   auto &options = get_options();
 
-  // assign unique ids for groups
+  // assign unique ids for partitions
   {
     size_t idx = 0;
-    for (auto &group : graph->getGroups()) {
-      if (group->empty())
+    for (auto &partition : graph->getPartitions()) {
+      if (partition->empty())
         continue;
-      group->id = idx;
+      partition->id = idx;
       idx++;
     }
   }
 
-  // assign number of warps to each group
+  // assign number of warps to each partition
   {
     ModuleOp module = dyn_cast<ModuleOp>(region);
     if (!module)
@@ -2048,44 +2061,44 @@ void assignWarpsAndRegisters(Operation *region, Graph *graph) {
     auto moduleNumWarps =
         mlir::cast<mlir::IntegerAttr>(module->getAttr(ttg::AttrNumWarpsName))
             .getInt();
-    for (auto &group : graph->getGroups()) {
-      if (group->empty())
+    for (auto &partition : graph->getPartitions()) {
+      if (partition->empty())
         continue;
-      if (group->getFlags() & Flags::MANUAL)
+      if (partition->getFlags() & Flags::MANUAL)
         continue;
-      if (isSimpleLoad(group.get()))
-        group->num_warps = options.load_num_warps;
-      else if (isSimpleMMA(group.get()))
-        group->num_warps = options.mma_num_warps;
+      if (isSimpleLoad(partition.get()))
+        partition->num_warps = options.load_num_warps;
+      else if (isSimpleMMA(partition.get()))
+        partition->num_warps = options.mma_num_warps;
       else
-        group->num_warps = moduleNumWarps;
+        partition->num_warps = moduleNumWarps;
     }
   }
 
-  // collect groups together based on flags
-  std::map<Flags, SmallVector<Group *>> groups{{Flags::MANUAL, {}}, //
-                                               {Flags::LOAD, {}},   //
-                                               {Flags::MMA, {}},    //
-                                               {Flags::STORE, {}},  //
-                                               {Flags::SIMT, {}},   //
-                                               {Flags::NONE, {}}};
-  for (auto &group : graph->getGroups()) {
-    if (group->empty())
+  // collect partitions together based on flags
+  std::map<Flags, SmallVector<Partition *>> partitions{{Flags::MANUAL, {}}, //
+                                                       {Flags::LOAD, {}},   //
+                                                       {Flags::MMA, {}},    //
+                                                       {Flags::STORE, {}},  //
+                                                       {Flags::SIMT, {}},   //
+                                                       {Flags::NONE, {}}};
+  for (auto &partition : graph->getPartitions()) {
+    if (partition->empty())
       continue;
     bool added = false;
     for (auto flag : SmallVector<Flags>{Flags::MANUAL, Flags::LOAD, Flags::MMA,
                                         Flags::STORE, Flags::SIMT}) {
-      if (group->getFlags() & flag) {
-        groups[flag].push_back(group.get());
+      if (partition->getFlags() & flag) {
+        partitions[flag].push_back(partition.get());
         added = true;
         break;
       }
     }
     if (!added)
-      groups[Flags::NONE].push_back(group.get());
+      partitions[Flags::NONE].push_back(partition.get());
   }
 
-  // assign start warp and name to each group
+  // assign start warp and name to each partition
   auto getFlagName = [](Flags flag) {
     switch (flag) {
     case Flags::LOAD:
@@ -2101,83 +2114,84 @@ void assignWarpsAndRegisters(Operation *region, Graph *graph) {
     }
   };
   size_t start_warp = 0;
-  // update start warp to after the manual groups
-  // FIXME: could be smarter, and try to fit automatic groups between manual
-  // groups
+  // update start warp to after the manual partitions
+  // FIXME: could be smarter, and try to fit automatic partitions between manual
+  // partitions
   {
-    for (auto group : groups[Flags::MANUAL]) {
-      start_warp = std::max(start_warp, group->start_warp + group->num_warps);
+    for (auto partition : partitions[Flags::MANUAL]) {
+      start_warp =
+          std::max(start_warp, partition->start_warp + partition->num_warps);
     }
   }
-  // all groups that are 4 warp aligned first
+  // all partitions that are 4 warp aligned first
   for (auto flag : SmallVector<Flags>{Flags::STORE, Flags::SIMT, Flags::MMA,
                                       Flags::LOAD, Flags::NONE}) {
-    auto num_groups = groups[flag].size();
-    for (size_t i = 0; i < num_groups; i++) {
-      auto group = groups[flag][i];
-      if (group->num_warps % 4 == 0) {
-        group->start_warp = start_warp;
-        start_warp += group->num_warps;
-        group->name =
-            getFlagName(flag) + (num_groups == 1 ? "" : std::to_string(i));
+    auto num_partitions = partitions[flag].size();
+    for (size_t i = 0; i < num_partitions; i++) {
+      auto partition = partitions[flag][i];
+      if (partition->num_warps % 4 == 0) {
+        partition->start_warp = start_warp;
+        start_warp += partition->num_warps;
+        partition->name =
+            getFlagName(flag) + (num_partitions == 1 ? "" : std::to_string(i));
       }
     }
   }
-  // all remaining groups
+  // all remaining partitions
   for (auto flag : SmallVector<Flags>{Flags::STORE, Flags::SIMT, Flags::MMA,
                                       Flags::LOAD, Flags::NONE}) {
-    auto num_groups = groups[flag].size();
-    for (size_t i = 0; i < num_groups; i++) {
-      auto group = groups[flag][i];
-      if (group->num_warps % 4 != 0) {
-        group->start_warp = start_warp;
-        start_warp += group->num_warps;
-        group->name =
-            getFlagName(flag) + (num_groups == 1 ? "" : std::to_string(i));
+    auto num_partitions = partitions[flag].size();
+    for (size_t i = 0; i < num_partitions; i++) {
+      auto partition = partitions[flag][i];
+      if (partition->num_warps % 4 != 0) {
+        partition->start_warp = start_warp;
+        start_warp += partition->num_warps;
+        partition->name =
+            getFlagName(flag) + (num_partitions == 1 ? "" : std::to_string(i));
       }
     }
   }
 
-  // FIXME: collect groups into "parallel" groups, based on whether they appear
-  // in the same loop nest, and use that for num reg allocation Warps in the top
-  // level (outside a nest) can just have default num regs, as they don't
-  // overlap with other groups
+  // FIXME: collect partitions into "parallel" partitions, based on whether they
+  // appear in the same loop nest, and use that for num reg allocation Warps in
+  // the top level (outside a nest) can just have default num regs, as they
+  // don't overlap with other partitions
 
   // assign reg counts
-  //  - if we have sufficient registers, assign max regs to all warp groups
-  //  - if not, then set mma/load warp groups to 24 and split remaining
-  //    registers evenly between all other groups
-  // TODO: adjust reg counts based on what ops appear in groups
+  //  - if we have sufficient registers, assign max regs to all warp partitions
+  //  - if not, then set mma/load warp partitions to 24 and split remaining
+  //    registers evenly between all other partitions
+  // TODO: adjust reg counts based on what ops appear in partitions
   size_t totalNumWarps = 0;
-  for (auto &group : graph->getGroups()) {
-    if (group->empty())
+  for (auto &partition : graph->getPartitions()) {
+    if (partition->empty())
       continue;
-    totalNumWarps += group->num_warps;
+    totalNumWarps += partition->num_warps;
   }
   if (options.disable_reg_count || totalNumWarps <= 8) {
     // with at most 8 warps, can assign max num regs to each warp
-    for (auto &group : graph->getGroups()) {
-      if (group->empty())
+    for (auto &partition : graph->getPartitions()) {
+      if (partition->empty())
         continue;
-      group->reg_count = 256;
+      partition->reg_count = 256;
     }
   } else {
     size_t freeRegs = 65536 / 32;
     size_t allocatedNumWarps = 0;
     size_t allocatedRegCount = 0;
 
-    // assign regs to all mma and load groups
-    for (auto &group : graph->getGroups()) {
-      if (group->empty())
+    // assign regs to all mma and load partitions
+    for (auto &partition : graph->getPartitions()) {
+      if (partition->empty())
         continue;
-      if (isSimpleLoad(group.get())) {
-        group->reg_count = options.load_reg_count;
-      } else if (isSimpleMMA(group.get())) {
-        group->reg_count = options.mma_reg_count;
+      if (isSimpleLoad(partition.get())) {
+        partition->reg_count = options.load_reg_count;
+      } else if (isSimpleMMA(partition.get())) {
+        partition->reg_count = options.mma_reg_count;
       }
-      if (group->reg_count != 0) {
-        allocatedNumWarps += group->num_warps;
-        allocatedRegCount += group->reg_count;
+      if (partition->reg_count != 0) {
+        allocatedNumWarps += partition->num_warps;
+        allocatedRegCount += partition->reg_count;
       }
     }
 
@@ -2189,21 +2203,21 @@ void assignWarpsAndRegisters(Operation *region, Graph *graph) {
       regsPerWarp -= regsPerWarp % 8;
     regsPerWarp = std::clamp(regsPerWarp, 24ul, 256ul);
 
-    // divide remaining registers between other groups, within limits
-    for (auto &group : graph->getGroups()) {
-      if (group->empty())
+    // divide remaining registers between other partitions, within limits
+    for (auto &partition : graph->getPartitions()) {
+      if (partition->empty())
         continue;
-      if (group->reg_count == 0)
-        group->reg_count = regsPerWarp;
+      if (partition->reg_count == 0)
+        partition->reg_count = regsPerWarp;
     }
   }
 
   if (options.dump) {
-    std::cout << "final groups:\n";
-    for (auto &group : graph->getGroups()) {
-      if (group->empty())
+    std::cout << "final partitions:\n";
+    for (auto &partition : graph->getPartitions()) {
+      if (partition->empty())
         continue;
-      group->dump();
+      partition->dump();
     }
   }
 }
@@ -2216,27 +2230,27 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
   Builder b(context);
 
   if (nvws) {
-    // Create groups in module attributes for NVWS
+    // Create partitions in module attributes for NVWS
     // if they are not already manually set by passing wg_spec_override
-    // add group attributes to module
-    for (auto &group : graph->getGroups()) {
-      if (group->empty())
+    // add partition attributes to module
+    for (auto &partition : graph->getPartitions()) {
+      if (partition->empty())
         continue;
-      auto fullname = "nvws.group." + group->name;
+      auto fullname = "nvws.group." + partition->name;
       if (region->hasAttr(fullname))
-        // skip manual groups
+        // skip manual partitions
         continue;
 
       OpBuilder builder(context);
       std::vector<NamedAttribute> attrs{
           {builder.getStringAttr("start_warp"),
-           builder.getI32IntegerAttr(group->start_warp)},
+           builder.getI32IntegerAttr(partition->start_warp)},
           {builder.getStringAttr("num_warps"),
-           builder.getI32IntegerAttr(group->num_warps)},
+           builder.getI32IntegerAttr(partition->num_warps)},
       };
-      if (group->reg_count != 256) {
+      if (partition->reg_count != 256) {
         attrs.push_back({builder.getStringAttr("reg_count"),
-                         builder.getI32IntegerAttr(group->reg_count)});
+                         builder.getI32IntegerAttr(partition->reg_count)});
       }
       region->setAttr(fullname,
                       DictionaryAttr::get(context, NamedAttrList(attrs)));
@@ -2246,32 +2260,33 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
     region->setAttr(kWarpSpecializeTagAttrName, b.getI32IntegerAttr(idx));
   }
 
-  auto setGroupsAttr = [&](Operation *op, const std::string &attrName,
-                           Node *node) {
+  auto setPartitionsAttr = [&](Operation *op, const std::string &attrName,
+                               Node *node) {
     // not for func op
     if (isa<tt::FuncOp>(op))
       return;
     if (!nvws) {
-      SmallVector<int> groups;
-      for (auto group : node->getGroups())
-        groups.push_back(group->id);
-      std::sort(groups.begin(), groups.end());
-      op->setAttr(attrName, b.getDenseI32ArrayAttr(groups));
+      SmallVector<int> partitions;
+      for (auto partition : node->getPartitions())
+        partitions.push_back(partition->id);
+      std::sort(partitions.begin(), partitions.end());
+      op->setAttr(attrName, b.getDenseI32ArrayAttr(partitions));
     } else {
-      SmallVector<std::string> groups;
-      for (auto group : node->getGroups())
-        groups.push_back("nvws.group." + group->name);
-      std::sort(groups.begin(), groups.end());
-      SmallVector<Attribute, 4> group_syms;
-      for (auto group : groups)
-        group_syms.push_back(SymbolRefAttr::get(op->getContext(), group));
-      op->setAttr(attrName, ArrayAttr::get(op->getContext(), group_syms));
+      SmallVector<std::string> partitions;
+      for (auto partition : node->getPartitions())
+        partitions.push_back("nvws.group." + partition->name);
+      std::sort(partitions.begin(), partitions.end());
+      SmallVector<Attribute, 4> partition_syms;
+      for (auto partition : partitions)
+        partition_syms.push_back(
+            SymbolRefAttr::get(op->getContext(), partition));
+      op->setAttr(attrName, ArrayAttr::get(op->getContext(), partition_syms));
     }
   };
 
   graph->walk([&](Node *node) {
     if (node->isOp()) {
-      setGroupsAttr(node->getOp(), attrName, node);
+      setPartitionsAttr(node->getOp(), attrName, node);
     } else {
       auto value = node->getValue();
       if (auto blockArg = dyn_cast<BlockArgument>(value)) {
@@ -2283,10 +2298,10 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
             // nothing for induction variable
           } else {
             // for op iter args
-            setGroupsAttr(parentOp,
-                          attrName + "." +
-                              std::to_string(blockArg.getArgNumber() - 1),
-                          node);
+            setPartitionsAttr(parentOp,
+                              attrName + "." +
+                                  std::to_string(blockArg.getArgNumber() - 1),
+                              node);
           }
         } else {
           assert(false);
@@ -2297,7 +2312,7 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
           // do nothing (handled by block arg)
         } else if (isa<scf::IfOp>(op)) {
           // result of an if
-          setGroupsAttr(
+          setPartitionsAttr(
               op, attrName + "." + std::to_string(result.getResultNumber()),
               node);
         } else {
@@ -2329,8 +2344,9 @@ llvm::SmallVector<llvm::SmallVector<mlir::Operation *>>
 duplicateViewOps(Operation *region) {
   // Ensure all view ops/broadcast/expand dims have a single user, by
   // duplicating them where necessary. Ensures these ops do not span more
-  // than one group
-  // Note: Duplicated ops within a single group are deduplicated after analysis
+  // than one partition
+  // Note: Duplicated ops within a single partition are deduplicated after
+  // analysis
 
   llvm::SmallVector<llvm::SmallVector<mlir::Operation *>> duplicatedViewOps;
   llvm::SmallVector<mlir::Operation *> viewOps;
@@ -2365,34 +2381,34 @@ duplicateViewOps(Operation *region) {
 void deduplicateViewOps(
     Operation *region,
     llvm::SmallVector<llvm::SmallVector<mlir::Operation *>> duplicatedViewOps) {
-  // get group assignment for the ops, and group them by it
-  // merge ops that have the same group assignment
+  // get partition assignment for the ops, and partition them by it
+  // merge ops that have the same partition assignment
   for (auto ops : duplicatedViewOps) {
-    std::map<std::string, llvm::SmallVector<mlir::Operation *>> groupedOps;
+    std::map<std::string, llvm::SmallVector<mlir::Operation *>> partitionedOps;
     for (auto op : ops) {
-      std::string group;
+      std::string partition;
       // nvws:
       if (op->hasAttr("groups")) {
         for (auto attr : cast<ArrayAttr>(op->getAttr("groups"))) {
           auto fullname = cast<SymbolRefAttr>(attr).getRootReference().str();
-          group += fullname + ",";
+          partition += fullname + ",";
         }
       }
       // main:
-      if (op->hasAttr("ttg.partitions")) {
-        for (auto attr : cast<ArrayAttr>(op->getAttr("ttg.partitions"))) {
+      if (op->hasAttr(kPartitionAttrName)) {
+        for (auto attr : cast<ArrayAttr>(op->getAttr(kPartitionAttrName))) {
           auto name = std::to_string(cast<IntegerAttr>(attr).getInt());
-          group += name + ",";
+          partition += name + ",";
         }
       }
-      if (groupedOps.find(group) == groupedOps.end()) {
-        groupedOps[group] = {};
+      if (partitionedOps.find(partition) == partitionedOps.end()) {
+        partitionedOps[partition] = {};
       }
-      groupedOps[group].push_back(op);
+      partitionedOps[partition].push_back(op);
     }
 
-    for (auto group : groupedOps) {
-      auto &sameOps = group.second;
+    for (auto partition : partitionedOps) {
+      auto &sameOps = partition.second;
       if (sameOps.size() <= 1)
         continue;
       auto op = sameOps.front();
@@ -2496,21 +2512,21 @@ void PartitionAnalysis::analyze(size_t idx, Operation *op) {
   auto graph = buildGraph(op);
   auto initValues = initialDataValues(graph.get());
   propagateDataValues(initValues);
-  options.manual = deserializeManualGroups(op, graph.get());
+  options.manual = deserializeManualPartitions(op, graph.get());
   VisualizationInfo vis_info;
   auto key = func.getSymName().str() + "-" + std::to_string(idx);
   if (options.dump_dot)
     visualize(std::string("graph-input-") + key + ".dot", graph.get(),
               vis_info);
-  initialGroupAssignment(graph.get());
+  initialPartitionAssignment(graph.get());
   if (options.dump_dot)
     visualize(std::string("graph-initial-") + key + ".dot", graph.get(),
               vis_info);
-  mergeGroups(graph.get(), key, vis_info);
+  mergePartitions(graph.get(), key, vis_info);
   if (options.dump_dot)
     visualize(std::string("graph-merged-") + key + ".dot", graph.get(),
               vis_info);
-  propagateGroups(graph.get(), key, vis_info);
+  propagatePartitions(graph.get(), key, vis_info);
   if (options.dump_dot)
     visualize(std::string("graph-final-") + key + ".dot", graph.get(),
               vis_info);
