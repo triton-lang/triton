@@ -3,9 +3,14 @@
 
 #include "hipblas_types.h"
 #include <dlfcn.h>
+#include <sstream>
 #include <stdexcept>
 #include <string>
-#include <sstream>
+
+// this gets translated to rocblastlt_compute_f32_fast_f8 internally by
+// hipblasLt
+constexpr int HIPBLAS_COMPUTE_32F_FAST_F8 = 104;
+constexpr int HIPBLAS_COMPUTE_32F_FAST_FBF_OCP = 105;
 
 class HipBlasLtInstance {
   // Typedefs for hipblas functions
@@ -128,8 +133,8 @@ class HipBlasLtInstance {
         oss << " (ALLOC_FAILED)";
         break;
       case HIPBLAS_STATUS_INVALID_VALUE:
-        oss <<
-            " (INVALID_VALUE - Parameters are unexpectedly NULL, in conflict or in impossible configuration)";
+        oss << " (INVALID_VALUE - Parameters are unexpectedly NULL, in "
+               "conflict or in impossible configuration)";
         break;
       case HIPBLAS_STATUS_MAPPING_ERROR:
         oss << " (MAPPING_ERROR)";
@@ -144,8 +149,8 @@ class HipBlasLtInstance {
         oss << " (NOT_SUPPORTED)";
         break;
       case HIPBLAS_STATUS_INVALID_ENUM:
-        oss <<
-            " (INVALID_ENUM - unsupported enum value was passed to function)";
+        oss << " (INVALID_ENUM - unsupported enum value was passed to "
+               "function)";
         break;
       case HIPBLAS_STATUS_UNKNOWN:
         oss << " (UNKNOWN)";
@@ -177,8 +182,16 @@ class HipBlasLtInstance {
     hipblasComputeType_t computeType;
     if (dtype == HIP_R_32F) {
       computeType = HIPBLAS_COMPUTE_32F_FAST_TF32;
+    } else if (dtype == HIP_R_8F_E4M3 || dtype == HIP_R_8F_E5M2) {
+      computeType =
+          (dtype == HIP_R_8F_E4M3)
+              ? (hipblasComputeType_t)HIPBLAS_COMPUTE_32F_FAST_F8
+              : (hipblasComputeType_t)HIPBLAS_COMPUTE_32F_FAST_FBF_OCP;
     } else if (dtype == HIP_R_8F_E4M3_FNUZ || dtype == HIP_R_8F_E5M2_FNUZ) {
-      computeType = HIPBLAS_COMPUTE_32F_FAST_8F_FNUZ;
+      computeType =
+          (dtype == HIP_R_8F_E4M3_FNUZ)
+              ? (hipblasComputeType_t)HIPBLAS_COMPUTE_32F_FAST_F8
+              : (hipblasComputeType_t)HIPBLAS_COMPUTE_32F_FAST_FBF_OCP;
     } else {
       computeType = HIPBLAS_COMPUTE_32F;
     }
@@ -189,7 +202,20 @@ class HipBlasLtInstance {
     successOrExit(hipblasLtMatmulDescSetAttribute(
         matmulDesc, HIPBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(transb)));
 
-    auto c_dtype = (dtype == HIP_R_8F_E4M3_FNUZ || dtype == HIP_R_8F_E5M2_FNUZ)
+    if (dtype == HIP_R_8F_E4M3 || dtype == HIP_R_8F_E5M2 ||
+        dtype == HIP_R_8F_E4M3_FNUZ || dtype == HIP_R_8F_E5M2_FNUZ) {
+      hipDataType a_in = dtype;
+      hipDataType b_in = dtype;
+      successOrExit(hipblasLtMatmulDescSetAttribute(
+          matmulDesc, HIPBLASLT_MATMUL_DESC_COMPUTE_INPUT_TYPE_A_EXT, &a_in,
+          sizeof(a_in)));
+      successOrExit(hipblasLtMatmulDescSetAttribute(
+          matmulDesc, HIPBLASLT_MATMUL_DESC_COMPUTE_INPUT_TYPE_B_EXT, &b_in,
+          sizeof(b_in)));
+    }
+
+    auto c_dtype = (dtype == HIP_R_8F_E4M3 || dtype == HIP_R_8F_E5M2 ||
+                    dtype == HIP_R_8F_E4M3_FNUZ || dtype == HIP_R_8F_E5M2_FNUZ)
                        ? HIP_R_16F
                        : dtype;
 
@@ -206,11 +232,14 @@ class HipBlasLtInstance {
       std::ostringstream oss;
       oss << "No valid algorithm found by hipblasLtMatmulAlgoGetHeuristic\n";
       oss << "Matrix details:\n";
-      oss << "  A: dtype=" << dtype << ", shape=(" << k << "," << m << ")\n";
-      oss << "  B: dtype=" << dtype << ", shape=(" << k << "," << n << ")\n";
+      oss << "  A: dtype=" << dtype << ", shape=(" << m << "," << k
+          << "), leading_dim=" << m << "\n";
+      oss << "  B: dtype=" << dtype << ", shape=(" << n << "," << k
+          << "), leading_dim=" << n << " (will be transposed)\n";
       oss << "  C: dtype=" << c_dtype << ", shape=(" << m << "," << n
-          << ")\n";
-      oss << "  D: dtype=" << dtype << ", shape=(" << m << "," << n << ")\n";
+          << "), leading_dim=" << m << "\n";
+      oss << "  D: dtype=" << c_dtype << ", shape=(" << m << "," << n
+          << "), leading_dim=" << m << "\n";
       oss << "  Compute type: " << computeType << "\n";
       oss << "  Requested algorithms: 1\n";
       throw std::runtime_error(oss.str());

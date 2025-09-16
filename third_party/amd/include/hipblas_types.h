@@ -4,98 +4,38 @@
 #include "hipblas-common.h"
 #include <cstddef>
 #include <cstdint>
+
 // Forward declarations of hipBLAS types and functions.
 
 typedef enum {
-  HIPBLASLT_MATMUL_DESC_TRANSA =
-      0, /**<Specifies the type of transformation operation that should be
-            performed on matrix A. Default value is HIPBLAS_OP_N (for example,
-            non-transpose operation). See hipblasOperation_t. Data
-            Type:int32_t*/
-  HIPBLASLT_MATMUL_DESC_TRANSB =
-      1, /**<Specifies the type of transformation operation that should be
-            performed on matrix B. Default value is HIPBLAS_OP_N (for example,
-            non-transpose operation). See hipblasOperation_t. Data
-            Type:int32_t*/
-  HIPBLASLT_MATMUL_DESC_EPILOGUE =
-      2, /**<Epilogue function. See hipblasLtEpilogue_t. Default value is:
-            HIPBLASLT_EPILOGUE_DEFAULT. Data Type: uint32_t*/
-  HIPBLASLT_MATMUL_DESC_BIAS_POINTER =
-      3, /**<Bias or Bias gradient vector pointer in the device memory. Data
-            Type:void* /const void* */
-  HIPBLASLT_MATMUL_DESC_BIAS_DATA_TYPE =
-      4, /**<Type of the bias vector in the device memory. Can be set same as D
-            matrix type or Scale type. Bias case: see HIPBLASLT_EPILOGUE_BIAS.
-            Data Type:int32_t based on hipDataType*/
-  HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER =
-      5, /**<Device pointer to the scale factor value that converts data in
-            matrix A to the compute data type range. The scaling factor must
-            have the same type as the compute type. If not specified, or set to
-            NULL, the scaling factor is assumed to be 1. If set for an
-            unsupported matrix data, scale, and compute type combination,
-            calling hipblasLtMatmul() will return HIPBLAS_INVALID_VALUE. Default
-            value: NULL Data Type: void* /const void* */
-  HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER =
-      6, /**<Equivalent to HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER for matrix B.
-            Default value: NULL Type: void* /const void* */
-  HIPBLASLT_MATMUL_DESC_C_SCALE_POINTER =
-      7, /**<Equivalent to HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER for matrix C.
-            Default value: NULL Type: void* /const void* */
-  HIPBLASLT_MATMUL_DESC_D_SCALE_POINTER =
-      8, /**<Equivalent to HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER for matrix D.
-            Default value: NULL Type: void* /const void* */
-  HIPBLASLT_MATMUL_DESC_EPILOGUE_AUX_SCALE_POINTER =
-      9, /**<Equivalent to HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER for matrix AUX.
-            Default value: NULL Type: void* /const void* */
-  HIPBLASLT_MATMUL_DESC_EPILOGUE_AUX_POINTER =
-      10, /**<Epilogue auxiliary buffer pointer in the device memory. Data
-             Type:void* /const void* */
-  HIPBLASLT_MATMUL_DESC_EPILOGUE_AUX_LD =
-      11, /**<The leading dimension of the epilogue auxiliary buffer pointer in
-             the device memory. Data Type:int64_t */
-  HIPBLASLT_MATMUL_DESC_EPILOGUE_AUX_BATCH_STRIDE =
-      12, /**<The batch stride of the epilogue auxiliary buffer pointer in the
-             device memory. Data Type:int64_t */
-  HIPBLASLT_MATMUL_DESC_POINTER_MODE =
-      13, /**<Specifies alpha and beta are passed by reference, whether they are
-             scalars on the host or on the device, or device vectors. Default
-             value is: HIPBLASLT_POINTER_MODE_HOST (i.e., on the host). Data
-             Type: int32_t based on hipblasLtPointerMode_t*/
-  HIPBLASLT_MATMUL_DESC_AMAX_D_POINTER =
-      14, /**<Device pointer to the memory location that on completion will be
-             set to the maximum of absolute values in the output matrix. Data
-             Type:void* /const void* */
-  HIPBLASLT_MATMUL_DESC_EPILOGUE_AUX_DATA_TYPE =
-      22, /**<Type of the aux vector in the device memory. Default value is:
-             HIPBLASLT_DATATYPE_INVALID (using D matrix type). Data Type:int32_t
-             based on hipDataType*/
-  HIPBLASLT_MATMUL_DESC_A_SCALE_MODE =
-      31, /**<Scaling mode that defines how the matrix scaling factor for matrix
-             A is interpreted. See hipblasLtMatmulMatrixScale_t */
-  HIPBLASLT_MATMUL_DESC_B_SCALE_MODE =
-      32, /**<Scaling mode that defines how the matrix scaling factor for matrix
-             B is interpreted. See hipblasLtMatmulMatrixScale_t */
-  HIPBLASLT_MATMUL_DESC_COMPUTE_INPUT_TYPE_A_EXT =
-      100, /**<Compute input A types. Defines the data type used for the input A
-              of matrix multiply. */
-  HIPBLASLT_MATMUL_DESC_COMPUTE_INPUT_TYPE_B_EXT, /**<Compute input B types.
-                                                     Defines the data type used
-                                                     for the input B of matrix
-                                                     multiply. */
-  HIPBLASLT_MATMUL_DESC_EPILOGUE_ACT_ARG0_EXT, /**<first extra argument for the
-                                                  activation function. Data
-                                                  Type: float*/
-  HIPBLASLT_MATMUL_DESC_EPILOGUE_ACT_ARG1_EXT, /**<second extra argument for the
-                                                  activation function. Data
-                                                  Type: float*/
+  HIPBLASLT_MATMUL_DESC_TRANSA = 0,
+  HIPBLASLT_MATMUL_DESC_TRANSB = 1,
+  HIPBLASLT_MATMUL_DESC_EPILOGUE = 2,
+  HIPBLASLT_MATMUL_DESC_BIAS_POINTER = 3,
+  HIPBLASLT_MATMUL_DESC_BIAS_DATA_TYPE = 4,
+  HIPBLASLT_MATMUL_DESC_A_SCALE_POINTER = 5,
+  HIPBLASLT_MATMUL_DESC_B_SCALE_POINTER = 6,
+  HIPBLASLT_MATMUL_DESC_C_SCALE_POINTER = 7,
+  HIPBLASLT_MATMUL_DESC_D_SCALE_POINTER = 8,
+  HIPBLASLT_MATMUL_DESC_EPILOGUE_AUX_SCALE_POINTER = 9,
+  HIPBLASLT_MATMUL_DESC_EPILOGUE_AUX_POINTER = 10,
+  HIPBLASLT_MATMUL_DESC_EPILOGUE_AUX_LD = 11,
+  HIPBLASLT_MATMUL_DESC_EPILOGUE_AUX_BATCH_STRIDE = 12,
+  HIPBLASLT_MATMUL_DESC_POINTER_MODE = 13,
+  HIPBLASLT_MATMUL_DESC_AMAX_D_POINTER = 14,
+  HIPBLASLT_MATMUL_DESC_EPILOGUE_AUX_DATA_TYPE = 22,
+  HIPBLASLT_MATMUL_DESC_A_SCALE_MODE = 31,
+  HIPBLASLT_MATMUL_DESC_B_SCALE_MODE = 32,
+  HIPBLASLT_MATMUL_DESC_COMPUTE_INPUT_TYPE_A_EXT = 100,
+  HIPBLASLT_MATMUL_DESC_COMPUTE_INPUT_TYPE_B_EXT,
+  HIPBLASLT_MATMUL_DESC_EPILOGUE_ACT_ARG0_EXT,
+  HIPBLASLT_MATMUL_DESC_EPILOGUE_ACT_ARG1_EXT,
   HIPBLASLT_MATMUL_DESC_MAX,
 } hipblasLtMatmulDescAttributes_t;
 
 typedef enum {
   HIPBLASLT_MATMUL_PREF_SEARCH_MODE = 0, /**<Search mode. Data Type: uint32_t*/
-  HIPBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES =
-      1, /**<Maximum allowed workspace memory. Default is 0 (no workspace memory
-            allowed). Data Type: uint64_t*/
+  HIPBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES = 1,
   HIPBLASLT_MATMUL_PREF_MAX = 2
 } hipblasLtMatmulPreferenceAttributes_t;
 
@@ -116,17 +56,10 @@ typedef struct {
 } hipblasLtMatmulAlgo_t; // referencing all of this from rocm/rocm-libraries
 
 typedef struct _hipblasLtMatmulHeuristicResult_t {
-  hipblasLtMatmulAlgo_t algo; /**<Algo struct*/
-  size_t workspaceSize = 0;   /**<Actual size of workspace memory required.*/
-  hipblasStatus_t state =
-      HIPBLAS_STATUS_SUCCESS; /**<Result status. Other fields are valid only if,
-                                 after call to
-                                 hipblasLtMatmulAlgoGetHeuristic(), this member
-                                 is set to HIPBLAS_STATUS_SUCCESS..*/
-  float wavesCount = 1.0;     /**<Waves count is a device utilization metric. A
-                                 wavesCount value of 1.0f suggests that when the
-                                 kernel is launched it will fully occupy the GPU.*/
-  int reserved[4];            /**<Reserved.*/
+  hipblasLtMatmulAlgo_t algo;
+  size_t workspaceSize = 0;
+  hipblasStatus_t state = HIPBLAS_STATUS_SUCCESS;
+  float wavesCount = 1.0;
 } hipblasLtMatmulHeuristicResult_t;
 
 typedef enum hipDataType {

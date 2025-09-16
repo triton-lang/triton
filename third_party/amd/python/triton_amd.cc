@@ -34,8 +34,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
-#include <stdexcept>
 #include <sstream>
+#include <stdexcept>
 
 namespace py = pybind11;
 
@@ -132,28 +132,34 @@ static void checkMatmulConstraints(const std::string &A_dtype,
                                    const std::vector<int> &A_shape,
                                    const std::vector<int> &B_shape,
                                    const std::vector<int> &C_shape) {
-  // Support FP32/FP16/BF16 and 8-bit FP8 (e4m3fnuz) and BF8 (e5m2fnuz).
-  const bool A_is_fp8 = (A_dtype == "torch.float8_e4m3fnuz" ||
-                         A_dtype == "torch.float8_e5m2fnuz");
-  const bool B_is_fp8 = (B_dtype == "torch.float8_e4m3fnuz" ||
-                         B_dtype == "torch.float8_e5m2fnuz");
-  const bool A_supported = (A_is_fp8 || A_dtype == "torch.float16" ||
-                            A_dtype == "torch.float32" ||
-                            A_dtype == "torch.bfloat16");
-  const bool B_supported = (B_is_fp8 || B_dtype == "torch.float16" ||
-                            B_dtype == "torch.float32" ||
-                            B_dtype == "torch.bfloat16");
-  const bool C_supported = (C_dtype == "torch.float16" ||
-                            C_dtype == "torch.float32" ||
-                            C_dtype == "torch.bfloat16" ||
-                            C_dtype == "torch.float8_e4m3fnuz" ||
-                            C_dtype == "torch.float8_e5m2fnuz");
+  // Support FP32/FP16/BF16 and 8-bit FP8 (e4m3fn/e4m3fnuz) and BF8
+  // (e5m2fn/e5m2fnuz).
+  const bool A_is_fp8 =
+      (A_dtype == "torch.float8_e4m3fn" || A_dtype == "torch.float8_e5m2fn" ||
+       A_dtype == "torch.float8_e4m3fnuz" ||
+       A_dtype == "torch.float8_e5m2fnuz");
+  const bool B_is_fp8 =
+      (B_dtype == "torch.float8_e4m3fn" || B_dtype == "torch.float8_e5m2fn" ||
+       B_dtype == "torch.float8_e4m3fnuz" ||
+       B_dtype == "torch.float8_e5m2fnuz");
+  const bool A_supported =
+      (A_is_fp8 || A_dtype == "torch.float16" || A_dtype == "torch.float32" ||
+       A_dtype == "torch.bfloat16");
+  const bool B_supported =
+      (B_is_fp8 || B_dtype == "torch.float16" || B_dtype == "torch.float32" ||
+       B_dtype == "torch.bfloat16");
+  const bool C_supported =
+      (C_dtype == "torch.float16" || C_dtype == "torch.float32" ||
+       C_dtype == "torch.bfloat16" || C_dtype == "torch.float8_e4m3fn" ||
+       C_dtype == "torch.float8_e5m2fn" || C_dtype == "torch.float8_e4m3fnuz" ||
+       C_dtype == "torch.float8_e5m2fnuz");
 
   if (!A_supported || !B_supported || !C_supported) {
     std::ostringstream oss;
     oss << "Unsupported data type. Got A=" << A_dtype << ", B=" << B_dtype
         << ", C=" << C_dtype
-        << ". Supported: float32, float16, bfloat16, float8_e4m3fnuz, float8_e5m2fnuz.";
+        << ". Supported: float32, float16, bfloat16, float8_e4m3fn, "
+           "float8_e5m2fn, float8_e4m3fnuz, float8_e5m2fnuz.";
     throw std::runtime_error(oss.str());
   }
 
@@ -162,7 +168,8 @@ static void checkMatmulConstraints(const std::string &A_dtype,
   if (A_is_fp8 && B_is_fp8) {
     if (C_dtype != "torch.float16") {
       std::ostringstream oss;
-      oss << "When A/B are 8-bit (float8_e4m3fnuz or float8_e5m2fnuz), C must"
+      oss << "When A/B are 8-bit (float8_e4m3fn/e4m3fnuz or "
+             "float8_e5m2fn/e5m2fnuz), C must"
           << " be torch.float16.";
       throw std::runtime_error(oss.str());
     }
@@ -186,7 +193,8 @@ static void checkMatmulConstraints(const std::string &A_dtype,
     std::ostringstream oss;
     oss << "Matrix dimensions do not match. A is [" << A_shape[0] << ", "
         << A_shape[1] << "], B is [" << B_shape[0] << ", " << B_shape[1]
-        << "]. Expected A.shape[1] == B.shape[1]. Note that B needs to be transposed.";
+        << "]. Expected A.shape[1] == B.shape[1]. Note that B needs to be "
+           "transposed.";
     throw std::runtime_error(oss.str());
   }
 
@@ -204,7 +212,8 @@ static void checkMatmulConstraints(const std::string &A_dtype,
     std::ostringstream oss;
     oss << "Matrix dimensions do not match. B is [" << B_shape[0] << ", "
         << B_shape[1] << "], C is [" << C_shape[0] << ", " << C_shape[1]
-        << "]. Expected B.shape[0] == C.shape[1]. Note that B needs to be transposed.";
+        << "]. Expected B.shape[0] == C.shape[1]. Note that B needs to be "
+           "transposed.";
     throw std::runtime_error(oss.str());
   }
 }
@@ -467,7 +476,11 @@ void init_triton_amd(py::module &&m) {
                  A_dtype.substr(A_dtype.find_last_of('.') + 1);
              hipDataType dtype;
 
-             if (dtype_str == "float8_e4m3fnuz") {
+             if (dtype_str == "float8_e4m3fn") {
+               dtype = HIP_R_8F_E4M3;
+             } else if (dtype_str == "float8_e5m2fn") {
+               dtype = HIP_R_8F_E5M2;
+             } else if (dtype_str == "float8_e4m3fnuz") {
                dtype = HIP_R_8F_E4M3_FNUZ;
              } else if (dtype_str == "float8_e5m2fnuz") {
                dtype = HIP_R_8F_E5M2_FNUZ;
@@ -514,10 +527,17 @@ void init_triton_amd(py::module &&m) {
 
         std::string dtype_str = A_dtype.substr(A_dtype.find_last_of('.') + 1);
         hipDataType dtype;
-        if (dtype_str == "float8_e4m3fnuz") {
-          dtype = HIP_R_8F_E4M3_FNUZ; // How should we direct whether or not to
-                                      // use FNUZ?
+        if (dtype_str == "float8_e4m3fn") {
+          // supported for GFX950/MI350x.
+          dtype = HIP_R_8F_E4M3;
+        } else if (dtype_str == "float8_e5m2fn") {
+          // supported for GFX950/MI350x.
+          dtype = HIP_R_8F_E5M2;
+        } else if (dtype_str == "float8_e4m3fnuz") {
+          // supported for GFX942/MI300x.
+          dtype = HIP_R_8F_E4M3_FNUZ;
         } else if (dtype_str == "float8_e5m2fnuz") {
+          // supported for GFX942/MI300x.
           dtype = HIP_R_8F_E5M2_FNUZ;
         } else if (dtype_str == "float16") {
           dtype = HIP_R_16F;
