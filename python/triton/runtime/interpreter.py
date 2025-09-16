@@ -5,10 +5,11 @@ from typing import Tuple, List
 
 import math
 import numpy as np
+import os
 
 import triton
 import triton.language as tl
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from .errors import InterpreterError
 from functools import partial
 from .._C.libtriton import interpreter as _interpreter
@@ -119,6 +120,7 @@ class InterpreterOptions:
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
     backend_name: str = "interpreter"
+    program_id_width: int = 32
 
 
 def _get_signed_np_dtype(dtype):
@@ -276,6 +278,9 @@ class InterpreterBuilder:
     def __init__(self) -> None:
         self.arch = None
         self.options = InterpreterOptions()
+        env_width = os.getenv("TRITON_PROGRAM_ID_WIDTH")
+        if env_width:
+            self.options = replace(self.options, program_id_width=int(env_width))
         self.codegen_fns = {}
         self.codegen_fns["convert_custom_types"] = ExtraFunctions._convert_custom_types
         self.codegen_fns["min_dot_size"] = lambda lhsType, rhsType: (1, 1, 1)

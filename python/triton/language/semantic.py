@@ -24,10 +24,19 @@ class IncompatibleTypeErrorImpl(Exception):
 # ===----------------------------------------------------------------------===##
 
 
-def program_id(axis: int, builder: ir.builder) -> tl.tensor:
+def program_id(axis: int, builder: ir.builder, bitwidth: int | None = None) -> tl.tensor:
     if axis not in (0, 1, 2):
         raise ValueError(f"program_id axis must be 0, 1, or 2 but got {axis}")
-    return tl.tensor(builder.create_get_program_id(axis), tl.int32)
+    value = tl.tensor(builder.create_get_program_id(axis), tl.int32)
+    width = bitwidth
+    if width is None:
+        width = getattr(getattr(builder, "options", None), "program_id_width", 32)
+    if width == 32:
+        return value
+    if width == 64:
+        casted = builder.create_int_cast(value.handle, tl.int64.to_ir(builder), False)
+        return tl.tensor(casted, tl.int64)
+    raise ValueError(f"Unsupported program_id bitwidth {width}")
 
 
 def num_programs(axis: int, builder: ir.builder) -> tl.tensor:

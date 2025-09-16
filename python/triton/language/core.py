@@ -1440,12 +1440,14 @@ def _constexpr_to_value(v):
 
 
 @builtin
-def program_id(axis, _builder=None):
+def program_id(axis, bitwidth: constexpr | None = None, _builder=None):
     """
     Returns the id of the current program instance along the given :code:`axis`.
 
     :param axis: The axis of the 3D launch grid. Must be 0, 1 or 2.
     :type axis: int
+    :param bitwidth: Optional integer (32 or 64) overriding the width of the returned index.
+                     Defaults to the backend configuration, which is 32 bits unless changed.
     """
     # if axis == -1:
     #     pid0 = program_id(0, _builder)
@@ -1455,7 +1457,8 @@ def program_id(axis, _builder=None):
     #     npg1 = num_programs(1, _builder)
     #     return pid0 + pid1*npg0 + pid2*npg0*npg1
     axis = _constexpr_to_value(axis)
-    return semantic.program_id(axis, _builder)
+    width = None if bitwidth is None else _constexpr_to_value(bitwidth)
+    return semantic.program_id(axis, _builder, width)
 
 
 @builtin

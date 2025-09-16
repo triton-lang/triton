@@ -50,6 +50,7 @@ class HIPOptions:
     allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
     backend_name: str = 'hip'
+    program_id_width: int = 32
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
     # for all `tt.dot` operations in a kernel. The "none" variant preserves the default
@@ -82,6 +83,8 @@ class HIPOptions:
 
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
+        if self.program_id_width not in (32, 64):
+            raise ValueError("program_id_width must be 32 or 64")
 
         if self.arch == 'gfx950':
             assert self.kpack == 1, "gfx950 only accepts kpack == 1"
@@ -129,6 +132,12 @@ class HIPBackend(BaseBackend):
             args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
         args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() \
                      if k in opts and opts[k] is not None})
+        if 'program_id_width' not in args:
+            env_width = os.getenv("TRITON_PROGRAM_ID_WIDTH")
+            if env_width:
+                args['program_id_width'] = env_width
+        if 'program_id_width' in args:
+            args['program_id_width'] = int(args['program_id_width'])
         return HIPOptions(**args)
 
     def pack_metadata(self, metadata):

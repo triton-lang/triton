@@ -137,6 +137,7 @@ class CUDAOptions:
     debug: bool = False
     backend_name: str = 'cuda'
     sanitize_overflow: bool = True
+    program_id_width: int = 32
     arch: str = None
 
     def __post_init__(self):
@@ -147,6 +148,8 @@ class CUDAOptions:
         object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
                "num_warps must be a power of 2"
+        if self.program_id_width not in (32, 64):
+            raise ValueError("program_id_width must be 32 or 64")
 
     def hash(self):
         hash_dict = dict(self.__dict__)
@@ -175,6 +178,12 @@ class CUDABackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {'arch': os.getenv("TRITON_OVERRIDE_ARCH", f"sm{self.target.arch}")}
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
+        if 'program_id_width' not in args:
+            env_width = os.getenv("TRITON_PROGRAM_ID_WIDTH")
+            if env_width:
+                args['program_id_width'] = env_width
+        if 'program_id_width' in args:
+            args['program_id_width'] = int(args['program_id_width'])
         capability = int(self._parse_arch(args["arch"]))
 
         if "supported_fp8_dtypes" not in args:
