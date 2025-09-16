@@ -211,14 +211,14 @@ StringRef getWmmaIntrinsicName(Type aElTy, Type bElTy, Type dElTy, Type valATy,
 }
 
 std::string addInstructionSuffix(std::string intrinsicName, unsigned kBase,
-                                 Type aElTy, Type bElTy, Type dElTy,
-                                 bool tied) {
+                                 unsigned elemsPerVec, Type aElTy, Type bElTy,
+                                 Type dElTy, bool tied) {
   if (tied) {
     intrinsicName += ".tied";
   } else {
     if (isa<FloatType>(aElTy) && aElTy.getIntOrFloatBitWidth() == 8)
       intrinsicName += "." + getTypeStr(bElTy);
-    intrinsicName += ".v" + std::to_string(kBase) + getTypeStr(dElTy);
+    intrinsicName += ".v" + std::to_string(elemsPerVec) + getTypeStr(dElTy);
     intrinsicName += ".v" + std::to_string(kBase) + getTypeStr(aElTy);
   }
 
@@ -368,8 +368,8 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   bool tied = numRepM % 2 == 0 && paddedOutputElemSize == 2;
   int tiedGroup = tied ? 2 : 1;
 
-  intrinsicName = addInstructionSuffix(intrinsicName, kBase, aElemTy, bElemTy,
-                                       dElemTy, tied);
+  intrinsicName = addInstructionSuffix(intrinsicName, kBase, elemsPerVec,
+                                       aElemTy, bElemTy, dElemTy, tied);
   for (int b = 0; b < numRepB; ++b) {
     for (int m = 0; m < numRepM / tiedGroup; ++m) {
       for (int n = 0; n < numRepN; ++n) {
