@@ -1,136 +1,81 @@
-// RUN: triton-opt %s -o - --mlir-print-debuginfo --mlir-use-nameloc-as-prefix --enable-line-info --extract-variable-info | mlir-translate --mlir-to-llvmir | FileCheck %s
-// note that we have to enable both --enable-line-info --extract-variable-info to get DILocation and DILocalVariable when converting LLVMIR
-// otherwise they will be dropped
+// RUN: triton-opt %s -o - --mlir-print-debuginfo --mlir-use-nameloc-as-prefix --enable-line-info --extract-variable-info | \
+// RUN: mlir-translate --mlir-to-llvmir | FileCheck %s
 
-// CHECK: !DILocalVariable(name: "pid", scope:
-// CHECK: !DILocalVariable(name: "block_start", scope:
-// CHECK: !DILocalVariable(name: "offsets", scope:
-// CHECK: !DILocalVariable(name: "mask", scope:
-// CHECK: !DILocalVariable(name: "x", scope:
-// CHECK: !DILocalVariable(name: "y", scope:
-// CHECK: !DILocalVariable(name: "output", scope:
+// NOTE: that we have to enable both --enable-line-info --extract-variable-info
+// to get DILocation and DILocalVariable when converting LLVMIR otherwise they
+// will be dropped
 
 #di_file = #llvm.di_file<"01-vector-add.py" in "">
-#di_file1 = #llvm.di_file<"<unknown>" in "<unknown>">
 #di_null_type = #llvm.di_null_type
 #di_subroutine_type = #llvm.di_subroutine_type<callingConvention = DW_CC_normal>
-#loc = loc("01-vector-add.py":30:0)
-#di_compile_unit = #llvm.di_compile_unit<id = distinct[0]<>, sourceLanguage = DW_LANG_C, file = #di_file, producer = "triton", isOptimized = true, emissionKind = LineTablesOnly>
-#di_subprogram = #llvm.di_subprogram<id = distinct[0]<>, compileUnit = #di_compile_unit, scope = #di_file, name = "add_kernel", linkageName = "add_kernel", file = #di_file, line = 30, scopeLine = 30, subprogramFlags = "Definition|Optimized", type = #di_subroutine_type>
-#di_local_variable = #llvm.di_local_variable<scope = #di_subprogram, name = "pid", file = #di_file1, type = #di_null_type>
-#di_local_variable1 = #llvm.di_local_variable<scope = #di_subprogram, name = "block_start", file = #di_file1, type = #di_null_type>
-#di_local_variable2 = #llvm.di_local_variable<scope = #di_subprogram, name = "offsets", file = #di_file1, type = #di_null_type>
-#di_local_variable3 = #llvm.di_local_variable<scope = #di_subprogram, name = "mask", file = #di_file1, type = #di_null_type>
-#di_local_variable4 = #llvm.di_local_variable<scope = #di_subprogram, name = "x", file = #di_file1, type = #di_null_type>
-#di_local_variable5 = #llvm.di_local_variable<scope = #di_subprogram, name = "y", file = #di_file1, type = #di_null_type>
-#di_local_variable6 = #llvm.di_local_variable<scope = #di_subprogram, name = "output", file = #di_file1, type = #di_null_type>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8> loc(#loc)
-  llvm.func @add_kernel(%arg0: !llvm.ptr<1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32} loc("01-vector-add.py":30:0), %arg1: !llvm.ptr<1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32} loc("01-vector-add.py":30:0), %arg2: !llvm.ptr<1> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32} loc("01-vector-add.py":30:0), %arg3: i32 {tt.divisibility = 16 : i32} loc("01-vector-add.py":30:0), %arg4: !llvm.ptr<1> loc("01-vector-add.py":30:0)) attributes {noinline = false, nvvm.kernel = 1 : ui1, nvvm.reqntid = array<i32: 128>} {
-    %0 = llvm.mlir.undef : vector<4xf32> loc(#loc1)
-    %1 = llvm.mlir.constant(true) : i1 loc(#loc1)
-    %2 = llvm.mlir.constant(3 : index) : i32 loc(#loc1)
-    %3 = llvm.mlir.constant(2 : index) : i32 loc(#loc1)
-    %4 = llvm.mlir.constant(1 : index) : i32 loc(#loc1)
-    %5 = llvm.mlir.constant(4 : i32) : i32 loc(#loc1)
-    %6 = llvm.mlir.constant(-2147483648 : i32) : i32 loc(#loc1)
-    %7 = llvm.mlir.constant(2147483646 : i32) : i32 loc(#loc1)
-    %8 = llvm.mlir.constant(159744 : i32) : i32 loc(#loc1)
-    %9 = llvm.mlir.constant(0 : i16) : i16 loc(#loc1)
-    %10 = llvm.mlir.constant(3 : i32) : i32 loc(#loc1)
-    %11 = llvm.mlir.constant(1 : i32) : i32 loc(#loc1)
-    %12 = llvm.mlir.constant(2 : i32) : i32 loc(#loc1)
-    %13 = llvm.mlir.constant(255 : i32) : i32 loc(#loc1)
-    %14 = llvm.mlir.constant(6 : i32) : i32 loc(#loc1)
-    %15 = llvm.mlir.constant(0 : i32) : i32 loc(#loc1)
-    %16 = llvm.mlir.constant(64 : i32) : i32 loc(#loc1)
-    %17 = llvm.mlir.constant(0 : index) : i32 loc(#loc1)
-    %18 = llvm.mlir.constant(1024 : i32) : i32 loc(#loc1)
+
+#di_compile_unit = #llvm.di_compile_unit<id = distinct[0]<>, sourceLanguage = DW_LANG_C, file = #di_file,
+                                         producer = "triton", isOptimized = true, emissionKind = LineTablesOnly>
+#di_subprogram = #llvm.di_subprogram<id = distinct[0]<>, compileUnit = #di_compile_unit,
+                                     scope = #di_file, name = "add_kernel", linkageName = "add_kernel",
+                                     file = #di_file, line = 30, scopeLine = 30,
+                                     subprogramFlags = "Definition|Optimized", type = #di_subroutine_type>
+
+#di_local_variable0 = #llvm.di_local_variable<scope = #di_subprogram, name = "pid", file = #di_file, type = #di_null_type>
+#di_local_variable1 = #llvm.di_local_variable<scope = #di_subprogram, name = "block_start", file = #di_file, type = #di_null_type>
+#di_local_variable2 = #llvm.di_local_variable<scope = #di_subprogram, name = "offsets", file = #di_file, type = #di_null_type>
+#di_local_variable3 = #llvm.di_local_variable<scope = #di_subprogram, name = "mask", file = #di_file, type = #di_null_type>
+#di_local_variable4 = #llvm.di_local_variable<scope = #di_subprogram, name = "x", file = #di_file, type = #di_null_type>
+#di_local_variable5 = #llvm.di_local_variable<scope = #di_subprogram, name = "y", file = #di_file, type = #di_null_type>
+#di_local_variable6 = #llvm.di_local_variable<scope = #di_subprogram, name = "output", file = #di_file, type = #di_null_type>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  llvm.func @add_kernel(%arg0: !llvm.ptr<1>, %arg1: !llvm.ptr<1>,
+                        %arg2: !llvm.ptr<1>, %arg3: i32, %arg4: !llvm.ptr<1>) {
+    %constant_i32 = llvm.mlir.constant(9 : i32) : i32
+    %constant_i16 = llvm.mlir.constant(0 : i16) : i16
+
+    // CHECK: !DILocalVariable(name: "pid", scope:
     %pid = rocdl.workgroup.id.x : i32 loc(#loc14)
-    llvm.intr.dbg.value #di_local_variable = %pid : i32 loc(#loc2)
-    %block_start = llvm.mul %pid, %18 : i32 loc(#loc15)
+    llvm.intr.dbg.value #di_local_variable0 = %pid : i32 loc(#loc2)
+
+    // CHECK: !DILocalVariable(name: "block_start", scope:
+    %block_start = llvm.mul %pid, %constant_i32 : i32 loc(#loc15)
     llvm.intr.dbg.value #di_local_variable1 = %block_start : i32 loc(#loc3)
-    %19 = rocdl.workitem.id.x : i32 loc(#loc4)
-    %20 = llvm.urem %19, %16 : i32 loc(#loc4)
-    %21 = llvm.udiv %19, %16 : i32 loc(#loc4)
-    %22 = llvm.shl %20, %15 : i32 loc(#loc4)
-    %23 = llvm.or %15, %22 : i32 loc(#loc4)
-    %24 = llvm.shl %21, %14 : i32 loc(#loc4)
-    %25 = llvm.or %23, %24 : i32 loc(#loc4)
-    %26 = llvm.or %25, %15 : i32 loc(#loc4)
-    %27 = llvm.and %26, %13 : i32 loc(#loc4)
-    %28 = llvm.shl %27, %12 : i32 loc(#loc4)
-    %29 = llvm.xor %15, %28 : i32 loc(#loc4)
-    %30 = llvm.xor %15, %29 : i32 loc(#loc4)
-    %31 = llvm.xor %30, %15 : i32 loc(#loc4)
-    %32 = llvm.add %31, %17 : i32 loc(#loc4)
-    %offsets = llvm.add %block_start, %32 : i32 loc(#loc16)
+
+    // CHECK: !DILocalVariable(name: "offsets", scope:
+    %offsets = llvm.add %block_start, %constant_i32 : i32 loc(#loc16)
     llvm.intr.dbg.value #di_local_variable2 = %offsets : i32 loc(#loc5)
+
+    // CHECK: !DILocalVariable(name: "mask", scope:
     %mask = llvm.icmp "slt" %offsets, %arg3 : i32 loc(#loc17)
+    %mask_i1 = llvm.select %mask, %constant_i32, %constant_i32 : i1, i32 loc(#loc18)
     llvm.intr.dbg.value #di_local_variable3 = %mask : i1 loc(#loc6)
-    %33 = llvm.getelementptr %arg0[%block_start] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, f32 loc(#loc7)
-    %x = rocdl.make.buffer.rsrc %33, %9, %7, %8 : <1> to <8> loc(#loc18)
-    llvm.intr.dbg.value #di_local_variable4 = %x : !llvm.ptr<8> loc(#loc8)
-    %x_0 = llvm.mul %32, %5 : i32 loc(#loc18)
-    llvm.intr.dbg.value #di_local_variable4 = %x_0 : i32 loc(#loc8)
-    %x_1 = llvm.select %mask, %x_0, %6 : i1, i32 loc(#loc18)
-    llvm.intr.dbg.value #di_local_variable4 = %x_1 : i32 loc(#loc8)
-    %x_2 = rocdl.raw.ptr.buffer.load %x, %x_1, %15, %15 : vector<4xf32> loc(#loc18)
-    llvm.intr.dbg.value #di_local_variable4 = %x_2 : vector<4xf32> loc(#loc8)
-    %x_3 = llvm.extractelement %x_2[%17 : i32] : vector<4xf32> loc(#loc18)
-    llvm.intr.dbg.value #di_local_variable4 = %x_3 : f32 loc(#loc8)
-    %x_4 = llvm.extractelement %x_2[%4 : i32] : vector<4xf32> loc(#loc18)
-    llvm.intr.dbg.value #di_local_variable4 = %x_4 : f32 loc(#loc8)
-    %x_5 = llvm.extractelement %x_2[%3 : i32] : vector<4xf32> loc(#loc18)
-    llvm.intr.dbg.value #di_local_variable4 = %x_5 : f32 loc(#loc8)
-    %x_6 = llvm.extractelement %x_2[%2 : i32] : vector<4xf32> loc(#loc18)
-    llvm.intr.dbg.value #di_local_variable4 = %x_6 : f32 loc(#loc8)
-    %34 = llvm.getelementptr %arg1[%block_start] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, f32 loc(#loc9)
-    %y = rocdl.make.buffer.rsrc %34, %9, %7, %8 : <1> to <8> loc(#loc19)
-    llvm.intr.dbg.value #di_local_variable5 = %y : !llvm.ptr<8> loc(#loc10)
-    %y_7 = rocdl.raw.ptr.buffer.load %y, %x_1, %15, %15 : vector<4xf32> loc(#loc19)
-    llvm.intr.dbg.value #di_local_variable5 = %y_7 : vector<4xf32> loc(#loc10)
-    %y_8 = llvm.extractelement %y_7[%17 : i32] : vector<4xf32> loc(#loc19)
-    llvm.intr.dbg.value #di_local_variable5 = %y_8 : f32 loc(#loc10)
-    %y_9 = llvm.extractelement %y_7[%4 : i32] : vector<4xf32> loc(#loc19)
-    llvm.intr.dbg.value #di_local_variable5 = %y_9 : f32 loc(#loc10)
-    %y_10 = llvm.extractelement %y_7[%3 : i32] : vector<4xf32> loc(#loc19)
-    llvm.intr.dbg.value #di_local_variable5 = %y_10 : f32 loc(#loc10)
-    %y_11 = llvm.extractelement %y_7[%2 : i32] : vector<4xf32> loc(#loc19)
-    llvm.intr.dbg.value #di_local_variable5 = %y_11 : f32 loc(#loc10)
-    %output = llvm.fadd %x_3, %y_8 : f32 loc(#loc20)
+
+    // CHECK: !DILocalVariable(name: "x", scope:
+    %x_ptr = llvm.getelementptr %arg0[%block_start] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, f32
+    %x_buffer_ptr = rocdl.make.buffer.rsrc %x_ptr, %constant_i16, %constant_i32, %constant_i32 : <1> to <8> loc(#loc18)
+    llvm.intr.dbg.value #di_local_variable4 = %x_buffer_ptr : !llvm.ptr<8> loc(#loc8)
+    %x_val = rocdl.raw.ptr.buffer.load %x_buffer_ptr, %mask_i1, %constant_i32, %constant_i32 : vector<4xf32> loc(#loc18)
+    %x_scalar = llvm.extractelement %x_val[%constant_i32 : i32] : vector<4xf32> loc(#loc18)
+
+    // CHECK: !DILocalVariable(name: "y", scope:
+    %y_ptr = llvm.getelementptr %arg1[%block_start] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, f32
+    %y_buffer_ptr = rocdl.make.buffer.rsrc %y_ptr, %constant_i16, %constant_i32, %constant_i32 : <1> to <8> loc(#loc19)
+    llvm.intr.dbg.value #di_local_variable5 = %y_buffer_ptr : !llvm.ptr<8> loc(#loc10)
+    %y_val = rocdl.raw.ptr.buffer.load %y_buffer_ptr, %mask_i1, %constant_i32, %constant_i32 : vector<4xf32> loc(#loc19)
+    %y_scalar = llvm.extractelement %y_val[%constant_i32 : i32] : vector<4xf32> loc(#loc19)
+
+    // CHECK: !DILocalVariable(name: "output", scope:
+    %output = llvm.fadd %x_scalar, %y_scalar : f32 loc(#loc20)
     llvm.intr.dbg.value #di_local_variable6 = %output : f32 loc(#loc11)
-    %output_12 = llvm.fadd %x_4, %y_9 : f32 loc(#loc20)
-    llvm.intr.dbg.value #di_local_variable6 = %output_12 : f32 loc(#loc11)
-    %output_13 = llvm.fadd %x_5, %y_10 : f32 loc(#loc20)
-    llvm.intr.dbg.value #di_local_variable6 = %output_13 : f32 loc(#loc11)
-    %output_14 = llvm.fadd %x_6, %y_11 : f32 loc(#loc20)
-    llvm.intr.dbg.value #di_local_variable6 = %output_14 : f32 loc(#loc11)
-    %35 = llvm.getelementptr %arg2[%block_start] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, f32 loc(#loc12)
-    %36 = rocdl.make.buffer.rsrc %35, %9, %7, %8 : <1> to <8> loc(#loc13)
-    %37 = llvm.and %1, %mask : i1 loc(#loc13)
-    %38 = llvm.insertelement %output, %0[%15 : i32] : vector<4xf32> loc(#loc13)
-    %39 = llvm.insertelement %output_12, %38[%11 : i32] : vector<4xf32> loc(#loc13)
-    %40 = llvm.insertelement %output_13, %39[%12 : i32] : vector<4xf32> loc(#loc13)
-    %41 = llvm.insertelement %output_14, %40[%10 : i32] : vector<4xf32> loc(#loc13)
-    %42 = llvm.select %37, %x_0, %6 : i1, i32 loc(#loc13)
-    rocdl.raw.ptr.buffer.store %41, %36, %42, %15, %15 : vector<4xf32> loc(#loc13)
-    llvm.return loc(#loc1)
+
+    llvm.return
   } loc(#loc21)
-} loc(#loc)
-#loc1 = loc(unknown)
+}
+#loc = loc("01-vector-add.py":30:0)
 #loc2 = loc("01-vector-add.py":39:10)
 #loc3 = loc("01-vector-add.py":44:18)
-#loc4 = loc("01-vector-add.py":45:28)
 #loc5 = loc("01-vector-add.py":45:14)
 #loc6 = loc("01-vector-add.py":47:11)
-#loc7 = loc("01-vector-add.py":50:16)
 #loc8 = loc("01-vector-add.py":50:8)
-#loc9 = loc("01-vector-add.py":51:16)
 #loc10 = loc("01-vector-add.py":51:8)
 #loc11 = loc("01-vector-add.py":52:13)
-#loc12 = loc("01-vector-add.py":54:13)
-#loc13 = loc("01-vector-add.py":54:4)
 #loc14 = loc("pid"(#loc2))
 #loc15 = loc("block_start"(#loc3))
 #loc16 = loc("offsets"(#loc5))
