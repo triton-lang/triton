@@ -1,6 +1,3 @@
-0
-0
-1
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
   tt.func @optimize_broadcast(%arg0: i32) {
     %c0_i32 = arith.constant {ttg.partitions = [0 : i32, 1 : i32]} 0 : i32
