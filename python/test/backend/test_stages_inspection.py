@@ -1,10 +1,9 @@
 import triton
-import triton.language as tl
 from triton import knobs
-from triton._internal_testing import is_cuda, is_hip
 
 import os
 import pathlib
+
 
 def test_inspection(monkeypatch, tmp_path: pathlib.Path):
     stage_name = 'make_ttgir'
@@ -20,10 +19,12 @@ def test_inspection(monkeypatch, tmp_path: pathlib.Path):
     def inspect_stages_hook(self, stages, options, language, capability):
         nonlocal inspect_stages_hook_called
         inspect_stages_hook_called = True
+
         def make_ttgir_wrapper(src, metadata, options, capability):
             nonlocal make_ttgir_wrapper_called
             make_ttgir_wrapper_called = True
             return self.make_ttgir(src, metadata, options, capability)
+
         stages["ttgir"] = lambda src, metadata: make_ttgir_wrapper(src, metadata, options, capability)
 
     @triton.jit
