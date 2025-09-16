@@ -16,9 +16,14 @@ using ::mlir::LLVM::AMD::upcast8xMxfp4_SW;
 namespace {
 
 class Fp4ToFpOpPattern : public ConvertOpToLLVMPattern<Fp4ToFpOp> {
+private:
+  const AMD::TargetInfo &targetInfo;
+
 public:
-  Fp4ToFpOpPattern(LLVMTypeConverter &typeConverter, PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<Fp4ToFpOp>(typeConverter, benefit) {}
+  Fp4ToFpOpPattern(LLVMTypeConverter &typeConverter,
+                   const AMD::TargetInfo &targetInfo, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<Fp4ToFpOp>(typeConverter, benefit),
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(Fp4ToFpOp op, OpAdaptor adaptor,
@@ -41,8 +46,9 @@ public:
         Value v = xVals[i + j];
         packedVec = b.insert_element(packedVec, v, b.i32_val(j));
       }
+      auto isa = targetInfo.getISAFamily();
       SmallVector<Value> upcast =
-          upcast8xMxfp4_SW(rewriter, op, toFp16, packedVec);
+          upcast8xMxfp4_SW(rewriter, op, toFp16, packedVec, isa);
       results.append(upcast.begin(), upcast.end());
     }
 
@@ -56,6 +62,6 @@ public:
 
 void mlir::triton::AMD::populateFp4ToFpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<Fp4ToFpOpPattern>(typeConverter, benefit);
+    const TargetInfo &targetInfo, PatternBenefit benefit) {
+  patterns.add<Fp4ToFpOpPattern>(typeConverter, targetInfo, benefit);
 }
