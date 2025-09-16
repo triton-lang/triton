@@ -819,20 +819,17 @@ tt.func private @subslice_16x32bx2_interleaved_block4_offset(%arg0: !ttg.memdesc
 // -----
 
 #tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 1, colStride = 1>
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [0, 1]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [[0, 0], [0, 0], [0, 4]], block = []}>
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
 
-module attributes {"ttg.num-warps" = 4 : i32} {
-
+module attributes {"ttg.num-warps" = 8 : i32} {
 // CHECK-LABEL: @load_store_16x32bx1_broadcast
-tt.func private @load_store_16x32bx1_broadcast(%arg0: !ttg.memdesc<64x1xf32, #tmem, #ttng.tensor_memory, mutable>) {
+tt.func private @load_store_16x32bx1_broadcast(%arg0: !ttg.memdesc<16x8xi8, #tmem_scales, #ttng.tensor_memory, mutable>, %arg1: tensor<16x8xi8, #linear>) {
   %true = arith.constant true
-  // CHECK: tcgen05.ld.sync.aligned.16x32bx2.x1.b32 {$0}, [$1 + 0], 0
-  %0 = ttng.tmem_load %arg0 : !ttg.memdesc<64x1xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<64x1xf32, #blocked>
-  // CHECK: @$0 tcgen05.st.sync.aligned.16x32bx2.x1.b32 [$1 + 0], 0, {$2}
-  ttng.tmem_store %0, %arg0, %true : tensor<64x1xf32, #blocked> -> !ttg.memdesc<64x1xf32, #tmem, #ttng.tensor_memory, mutable>
+  // CHECK: @$0 tcgen05.st.sync.aligned.16x32bx2.x1.b32 [$1 + 0], 1, {$2}
+  ttng.tmem_store %arg1, %arg0, %true : tensor<16x8xi8, #linear> -> !ttg.memdesc<16x8xi8, #tmem_scales, #ttng.tensor_memory, mutable>
   tt.return
 }
-
 }
 // -----
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>

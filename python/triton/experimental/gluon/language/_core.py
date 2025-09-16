@@ -527,10 +527,13 @@ def thread_barrier(_semantic=None):
 @builtin
 def bank_conflicts(distr_ty, shared_ty, _semantic=None) -> int:
     """
-    Count the N-way bank conflicts of all the load/store instructions generated when
-    reading/writing the distributed tensor from/to the shared memory descriptor.
+    Count the bank conflicts per wavefront of each instruction generated when
+    reading/writing the distributed tensor from/to the shared memory descriptor
+    using ld.shared/st.shared instructions.
 
-    Note that 1-way bank conflict is, confusingly enough, the same as being bank-conflict free.
+    We define a bank conflict of N to be the excess number of memory accesses that each
+    wavefront needs to access the shared memory descriptor. When one uses no ld/st
+    vectorization, this is equal to t he number of excess memory accesses per instruction.
 
     Args:
         distr_ty (distributed_type): The distributed tensor.
