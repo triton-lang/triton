@@ -1263,7 +1263,7 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
               llvm::divideCeil(shape[1], tile.getOutDimSize(dims[1])), kCol,
               dims[1]);
   // See [Zeros in TMEM LinearLayouts]
-  // Set some rows/cols to 0 if shape is smaller than 32 x 8
+  // Set some rows/cols to 0 if shape is smaller than 64 x 4
   llvm::SmallDenseMap<StringAttr, int64_t> shapeMap;
   for (auto [dim, size] : llvm::zip(dims, shape)) {
     shapeMap[dim] = size;
