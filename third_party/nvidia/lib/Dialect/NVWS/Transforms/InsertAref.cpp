@@ -107,11 +107,14 @@ ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
   };
 
   MemDescType memDescType;
-  if (result.getDefiningOp<LocalAllocOp>()) {
-    memDescType = dyn_cast<MemDescType>(result.getType());
+  if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(result)) {
+    auto descLoadResult = opt->first.getSrc();
+    memDescType = getSmemDescType(descLoadResult);
   } else if (auto opt = isDescLoadAndAlloc<TMEMAllocOp>(result)) {
     auto descLoadResult = opt->first.getSrc();
     memDescType = getSmemDescType(descLoadResult);
+  } else if (result.getDefiningOp<LocalAllocOp>()) {
+    memDescType = dyn_cast<MemDescType>(result.getType());
   } else if (isa<RankedTensorType>(result.getType())) {
     memDescType = getSmemDescType(result);
   } else {
