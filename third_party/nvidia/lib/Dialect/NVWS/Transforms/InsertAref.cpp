@@ -82,7 +82,8 @@ template <typename AllocOp> auto isGlobalLoadAndAlloc(Value result) {
   return isLoadAndAlloc<AllocOp, triton::LoadOp>(result);
 }
 
-ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
+ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue,
+                        PartitionSet &partitions) {
   auto result = producedValue.result;
 
   auto getSmemDescType = [](Value tensorResult) {
@@ -107,14 +108,11 @@ ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
   };
 
   MemDescType memDescType;
-  if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(result)) {
-    auto descLoadResult = opt->first.getSrc();
-    memDescType = getSmemDescType(descLoadResult);
+  if (result.getDefiningOp<LocalAllocOp>()) {
+    memDescType = dyn_cast<MemDescType>(result.getType());
   } else if (auto opt = isDescLoadAndAlloc<TMEMAllocOp>(result)) {
     auto descLoadResult = opt->first.getSrc();
     memDescType = getSmemDescType(descLoadResult);
-  } else if (result.getDefiningOp<LocalAllocOp>()) {
-    memDescType = dyn_cast<MemDescType>(result.getType());
   } else if (isa<RankedTensorType>(result.getType())) {
     memDescType = getSmemDescType(result);
   } else {
@@ -202,7 +200,9 @@ SmallVector<Operation *> createArefPut(PartitionBuilder &builder,
 
   auto producerKind = AsyncOp::NONE;
   SmallVector<Operation *> staleOps;
-  if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(result)) {
+  if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(result);
+      opt && partitions.getPartition(opt->first) ==
+                 partitions.getPartition(opt->second)) {
     auto [alloc, descOp] = *opt;
     createNVWSDescriptorLoadOp(builder, descOp, dataBuf, producerPartition,
                                partitions, loc);
@@ -445,7 +445,7 @@ bool insertArefs(PartitionBuilder &builder, scf::ForOp loop,
   {
     OpBuilder::InsertionGuard g(builder);
     builder.setInsertionPoint(loop);
-    aref = createAref(builder, producedValue);
+    aref = createAref(builder, producedValue, partitions);
   }
 
   auto tag = "aref_" + std::to_string(arefTag);
@@ -486,19 +486,28 @@ public:
       // addition to being consumed by local_alloc op, we process
       // local_alloc(desc_load()) first, followed by remaining register uses of
       // desc_load results.
-      for (auto allowDescLoadRegUse : {false, true}) {
+      for (auto allowDescLoadRegUse : {false}) {
         SmallVector<Operation *> ops;
         loop.walk([&](Operation *op) {
           if (op->getNumResults() == 0) {
             return WalkResult::advance();
           }
           // Only handles load ops for now.
-          if (isDescLoadAndAlloc<LocalAllocOp>(op->getResult(0)) ||
-              isDescLoadAndAlloc<TMEMAllocOp>(op->getResult(0)) ||
-              (allowDescLoadRegUse &&
-               (isa<triton::DescriptorOpInterface>(op)))) {
+          if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(op->getResult(0));
+              opt && partitions->getPartition(opt->first) ==
+                         partitions->getPartition(opt->second)) {
+            // The common TMA producer case, where descriptor_load and
+            // local_alloc are in the same partition
+            llvm::outs() << "Process TMA producer\n";
+            ops.push_back(op);
+          } else if (isDescLoadAndAlloc<TMEMAllocOp>(op->getResult(0)) ||
+                     (allowDescLoadRegUse &&
+                      (isa<triton::DescriptorOpInterface>(op)))) {
+            // Other TMA producer cases
+            llvm::outs() << "Process other TMA producer\n";
             ops.push_back(op);
           } else if (isa<LocalAllocOp>(op)) {
+            llvm::outs() << "Process local alloc producer\n";
             ops.push_back(op);
           }
           return WalkResult::advance();
