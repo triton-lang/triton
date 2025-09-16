@@ -2396,8 +2396,10 @@ void deduplicateViewOps(
       }
       // main:
       if (op->hasAttr(kPartitionAttrName)) {
-        for (auto attr : cast<ArrayAttr>(op->getAttr(kPartitionAttrName))) {
-          auto name = std::to_string(cast<IntegerAttr>(attr).getInt());
+        for (auto attr :
+             cast<DenseI32ArrayAttr>(op->getAttr(kPartitionAttrName))
+                 .asArrayRef()) {
+          auto name = std::to_string(attr);
           partition += name + ",";
         }
       }
