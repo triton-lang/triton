@@ -12,6 +12,7 @@ from triton_kernels.numerics_details.mxfp import (
     upcast_from_mxfp,
     upcast_from_mxfp_torch,
 )
+from triton_kernels.target_info import is_cuda
 from triton_kernels.testing import assert_close, assert_equal
 
 
@@ -20,9 +21,9 @@ def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
 
 
 @pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
-def test_mxfp4_rounding_cases(dst_dtype):
+def test_mxfp4_rounding_cases(dst_dtype, device):
     dst_dtype = dtype_str_to_torch(dst_dtype)
-    x = torch.tensor([6, 0, 0.24, 0.25, 0.75, 0.99, 1.2, 1.3, 1.25, -1.25]).cuda().bfloat16().view(1, -1, 1)
+    x = torch.tensor([6, 0, 0.24, 0.25, 0.75, 0.99, 1.2, 1.3, 1.25, -1.25]).to(device).bfloat16().view(1, -1, 1)
     quant, scale = downcast_to_mxfp(x, torch.uint8, axis=1)
     dequant = upcast_from_mxfp(quant, scale, dst_dtype, axis=1)
     # Tie-breaking cases (RTNE):
@@ -46,8 +47,8 @@ def test_mxfp4_rounding_cases(dst_dtype):
 
 @pytest.mark.parametrize("src_dtype", ["float4_e2m1", "float8_e5m2", "float8_e4m3fn"])
 @pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
-def test_mxfp_quant_dequant(src_dtype, dst_dtype):
-    if "float8" in src_dtype and torch.cuda.get_device_capability()[0] < 9:
+def test_mxfp_quant_dequant(src_dtype, dst_dtype, device):
+    if "float8" in src_dtype and (is_cuda() and torch.cuda.get_device_capability()[0] < 9):
         pytest.skip("Float8 not tested on A100")
     limit_range = src_dtype == "float8_e5m2" and dst_dtype == "float16"
 
@@ -61,14 +62,14 @@ def test_mxfp_quant_dequant(src_dtype, dst_dtype):
         max_val = 128
 
     # These are all the valid mxfp4 positive values.
-    pos_vals = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, max_val], device="cuda", dtype=dst_dtype)
+    pos_vals = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, max_val], device=device, dtype=dst_dtype)
     neg_vals = -pos_vals
     k_dim = torch.cat([pos_vals, neg_vals])
     k_dim = k_dim.reshape([k_dim.shape[0], 1])
 
     # We pick power of 2 scales since both the scales and their inverse only require exponent bits to be exactly
     # represented. This means we can store the scales exactly in the e8m0 format.
-    powers = torch.arange(-8, 8, device="cuda", dtype=dst_dtype)
+    powers = torch.arange(-8, 8, device=device, dtype=dst_dtype)
     scales = 2**powers
     scales = scales.reshape([1, powers.shape[0]])
     weight = k_dim * scales
@@ -98,13 +99,14 @@ def test_mxfp_casting(
     quant_dtype: str,
     dequant_dtype: str,
     rounding_mode: DequantScaleRoundingMode,
+    device,
 ):
-    if "float8" in quant_dtype and torch.cuda.get_device_capability()[0] < 9:
+    if "float8" in quant_dtype and (is_cuda() and torch.cuda.get_device_capability()[0] < 9):
         pytest.skip("Float8 not tested on A100")
     quant_torch_type = dtype_str_to_torch(quant_dtype)
     dequant_torch_type = dtype_str_to_torch(dequant_dtype)
     # Generate random input tensor that is contiguous once axis is the last dimension
-    x = torch.randn(shape, device="cuda", dtype=dequant_torch_type)
+    x = torch.randn(shape, device=device, dtype=dequant_torch_type)
 
     # Quantize and check equivalence
     quant, scale = downcast_to_mxfp(x, quant_torch_type, axis, DEQUANT_SCALE_ROUNDING_MODE=rounding_mode)
