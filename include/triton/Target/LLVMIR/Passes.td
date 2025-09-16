@@ -8,8 +8,6 @@ def LLVMDIScope: Pass<"enable-line-info", "mlir::ModuleOp"> {
   let description = [{
     This pass materializes line mapping information for LLVM IR dialect operations.
   }];
-
-  let constructor = "mlir::createLLVMDIScopePass()";
 }
 
 #endif

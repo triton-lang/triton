@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.20)
 
 if(POLICY CMP0116)
 # Introduced in cmake 3.20
@@ -95,6 +95,10 @@ endif()
 # #########
 if(NOT MLIR_DIR)
   set(MLIR_DIR ${LLVM_LIBRARY_DIR}/cmake/mlir)
+endif()
+
+if(NOT LLD_DIR)
+  set(LLD_DIR ${LLVM_LIBRARY_DIR}/cmake/lld)
 endif()
 
 # MLIR
@@ -205,7 +209,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
   endif()
   # We always build proton dialect
   list(APPEND TRITON_PLUGIN_NAMES "proton")
-  add_subdirectory(third_party/proton/dialect)
+  add_subdirectory(third_party/proton/Dialect)
 
   get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
   get_property(triton_plugins GLOBAL PROPERTY TRITON_PLUGINS)
@@ -281,9 +285,11 @@ if(TRITON_BUILD_PYTHON_MODULE)
   add_compile_definitions(TRITON_BACKENDS_TUPLE=${TRITON_BACKENDS_TUPLE})
   add_library(triton SHARED ${PYTHON_SRC_PATH}/main.cc
                   ${PYTHON_SRC_PATH}/ir.cc
+                  ${PYTHON_SRC_PATH}/gluon_ir.cc
                   ${PYTHON_SRC_PATH}/passes.cc
                   ${PYTHON_SRC_PATH}/interpreter.cc
-                  ${PYTHON_SRC_PATH}/llvm.cc)
+                  ${PYTHON_SRC_PATH}/llvm.cc
+                  ${PYTHON_SRC_PATH}/specialize.cc)
 
   # Link triton with its dependencies
   target_link_libraries(triton PRIVATE ${TRITON_LIBRARIES})
@@ -295,6 +301,20 @@ if(TRITON_BUILD_PYTHON_MODULE)
     target_link_libraries(triton PRIVATE z)
   endif()
   target_link_options(triton PRIVATE ${LLVM_LDFLAGS})
+
+  if (NOT DEFINED LLVM_SYSPATH)
+      message(FATAL_ERROR "LLVM_SYSPATH must be set.")
+  endif()
+
+  if (NOT DEFINED TRITON_WHEEL_DIR)
+      message(FATAL_ERROR "TRITON_WHEEL_DIR must be set.")
+  endif()
+
+  configure_file(
+    "${LLVM_SYSPATH}/bin/FileCheck"
+    "${TRITON_WHEEL_DIR}/FileCheck"
+    COPYONLY)
+
 endif()
 
 if (UNIX AND NOT APPLE)
@@ -316,7 +336,7 @@ if(NOT TRITON_BUILD_PYTHON_MODULE)
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
-  add_subdirectory(third_party/proton/dialect)
+  add_subdirectory(third_party/proton/Dialect)
 endif()
 
 find_package(Threads REQUIRED)

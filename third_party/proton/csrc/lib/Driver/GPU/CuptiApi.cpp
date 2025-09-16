@@ -1,5 +1,5 @@
 #include "Driver/GPU/CuptiApi.h"
-#include "Driver/Device.h"
+#include "Device.h"
 #include "Driver/Dispatch.h"
 
 namespace proton {
@@ -111,6 +111,24 @@ DEFINE_DISPATCH(ExternLibCupti, pcSamplingStop, cuptiPCSamplingStop,
                 CUpti_PCSamplingStopParams *);
 
 void setLibPath(const std::string &path) { ExternLibCupti::defaultDir = path; }
+
+// TODO(Keren): generalize to AMD
+const std::string getLibPath() {
+  if (ExternLibCupti::lib == nullptr) {
+    // Force initialization
+    Dispatch<ExternLibCupti>::init(ExternLibCupti::name, &ExternLibCupti::lib);
+    if (ExternLibCupti::lib == nullptr) {
+      return "";
+    }
+  }
+  void *sym =
+      dlsym(ExternLibCupti::lib, "cuptiUnsubscribe"); // pick any known symbol
+  Dl_info info;
+  if (dladdr(sym, &info)) {
+    return info.dli_fname;
+  }
+  return "";
+}
 
 } // namespace cupti
 

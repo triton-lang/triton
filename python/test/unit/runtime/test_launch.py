@@ -1,18 +1,13 @@
 import gc
-# import importlib
-# import os
-# import sys
-# import tempfile
-# import textwrap
-# import time
 import tracemalloc
+import pytest
+import pathlib
+import os
 
 import torch
-
 import triton
 import triton.language as tl
-
-# from typing import Tuple
+from triton._internal_testing import is_cuda, is_hip
 
 
 def test_metadata() -> None:
@@ -37,9 +32,9 @@ def test_metadata() -> None:
         pass
 
     # launch kernel
-    triton.compiler.CompiledKernel.launch_enter_hook = hook
+    triton.knobs.runtime.launch_enter_hook.add(hook)
     kernel[(1, 3, 2)](6)
-    triton.compiler.CompiledKernel.launch_enter_hook = None
+    triton.knobs.runtime.launch_enter_hook.remove(hook)
     assert used_hook
 
 
@@ -71,64 +66,141 @@ def test_memory_leak(device) -> None:
         tracemalloc.stop()
 
 
-# LATENCY_THRESHOLD_US = 46
+def test_load_hook() -> None:
 
-# def test_kernel_launch_latency() -> None:
-#     def define_kernel(kernel_name: str, num_tensor_args: int) -> str:
-#         arg_str = ",".join([f"arg{i}: torch.Tensor" for i in range(num_tensor_args)])
-#         arg_str += ", n_elements: int, BLOCK_SIZE: tl.constexpr"
-#         func_str = f"""
-#         import torch
+    used_start_hook = False
+    start_hash = None
 
-#         import triton
-#         import triton.language as tl
+    def hook_start(module, function, name, metadata_group, hash):
+        nonlocal used_start_hook
+        nonlocal start_hash
+        start_hash = hash
+        used_start_hook = True
 
-#         @triton.jit
-#         def {kernel_name}({arg_str}):
-#             pass
-#         """
-#         with tempfile.NamedTemporaryFile(mode="w+t", suffix=".py", delete=False) as temp_file:
-#             temp_file.write(textwrap.dedent(func_str))
-#             temp_file_path = temp_file.name
+    used_end_hook = False
+    end_hash = None
 
-#         return temp_file_path
+    def hook_end(module, function, name, metadata_group, hash):
+        nonlocal used_end_hook
+        nonlocal end_hash
+        end_hash = hash
+        used_end_hook = True
 
-#     def import_kernel(file_path, kernel_name):
-#         directory, filename = os.path.split(file_path)
-#         module_name, _ = os.path.splitext(filename)
-#         sys.path.insert(0, directory)
+    @triton.jit
+    def kernel(x):
+        pass
 
-#         module = importlib.import_module(module_name)
-#         kernel = getattr(module, kernel_name)
-#         return kernel
+    # launch kernel
+    triton.knobs.runtime.kernel_load_start_hook.add(hook_start)
+    triton.knobs.runtime.kernel_load_end_hook.add(hook_end)
+    kernel[(1, 3, 2)](6)
+    assert used_start_hook
+    assert used_end_hook
+    assert start_hash == end_hash
+    triton.knobs.runtime.kernel_load_start_hook.remove(hook_start)
+    triton.knobs.runtime.kernel_load_end_hook.remove(hook_end)
 
-#     def empty(*kernel_args: Tuple[torch.Tensor]):
-#         first_arg = kernel_args[0]
-#         n_elements = first_arg.numel()
-#         grid = (triton.cdiv(n_elements, 1024),)
-#         device = torch.cuda.current_device()
-#         # Warmup
-#         empty_kernel[grid](*kernel_args, n_elements, BLOCK_SIZE=1024, device=device)
-#         torch.cuda.synchronize()
-#         # Measure launch overhead at steady state
-#         num_runs = 1000
-#         start_time = time.time()
-#         for i in range(num_runs):
-#             empty_kernel[grid](*kernel_args, n_elements, BLOCK_SIZE=1024, device=device)
-#         end_time = time.time()
-#         latency_us = (end_time - start_time) / num_runs * 1e6
 
-#         assert latency_us < LATENCY_THRESHOLD_US, "Kernel launch time has increased!"
+def test_multiple_hooks() -> None:
 
-#     num_tensor_args = 40
-#     kernel_name = 'empty_kernel'
-#     file_path = define_kernel(kernel_name, num_tensor_args)
-#     empty_kernel = import_kernel(file_path, kernel_name)
+    start0 = False
+    end0 = False
+    start1 = False
+    end1 = False
 
-#     # Initialize random tensors for the empty_kernel
-#     torch.manual_seed(0)
-#     size = 1024
-#     kernel_args = (torch.rand(size, device='cuda') for i in range(num_tensor_args))
+    def hook_start0(module, function, name, metadata_group, hash):
+        nonlocal start0
+        start0 = True
 
-#     # Run empty, which would run empty_kernel internally
-#     empty(*kernel_args)
+    def hook_end0(module, function, name, metadata_group, hash):
+        nonlocal end0
+        end0 = True
+
+    def hook_start1(module, function, name, metadata_group, hash):
+        nonlocal start1
+        start1 = True
+
+    def hook_end1(module, function, name, metadata_group, hash):
+        nonlocal end1
+        end1 = True
+
+    triton.knobs.runtime.kernel_load_start_hook.add(hook_start0)
+    triton.knobs.runtime.kernel_load_end_hook.add(hook_end0)
+    triton.knobs.runtime.kernel_load_start_hook.add(hook_start1)
+    triton.knobs.runtime.kernel_load_end_hook.add(hook_end1)
+
+    @triton.jit
+    def kernel(x):
+        pass
+
+    kernel[(1, )](6)
+
+    assert start0
+    assert end0
+    assert start1
+    assert end1
+
+    triton.knobs.runtime.kernel_load_start_hook.remove(hook_start0)
+    triton.knobs.runtime.kernel_load_end_hook.remove(hook_end0)
+    triton.knobs.runtime.kernel_load_start_hook.remove(hook_start1)
+    triton.knobs.runtime.kernel_load_end_hook.remove(hook_end1)
+
+
+@pytest.mark.parametrize("options", [
+    {"num_warps": 1},
+    {"enable_fp_fusion": False},
+    {"extern_libs": {}},
+])
+def test_launch_with_options(options) -> None:
+    if "extern_libs" in options:
+        # copied from tutorials/07-extern-functions.py
+        current_dir = pathlib.Path(os.path.dirname(os.path.abspath(__file__)))
+        if is_cuda():
+            libdir = current_dir.parent.parent.parent.parent / 'third_party/nvidia/backend/lib'
+            options["extern_libs"] = {"libdevice": str(libdir / 'libdevice.10.bc')}
+        elif is_hip():
+            libdir = current_dir.parent.parent.parent.parent / 'third_party/amd/backend/lib'
+            options["extern_libs"] = {"ocml": str(libdir / 'ocml.bc'), "ockl": str(libdir / 'ockl.bc')}
+
+    compile_info = {}
+    counter = 0
+
+    def compile_info_hook(key, repr, fn, compile, is_manual_warmup, already_compiled):
+        nonlocal compile_info
+        compile_info = compile
+
+    def cache_hook(*args, **kwargs):
+        nonlocal counter
+        counter += 1
+
+    @triton.jit
+    def kernel(x):
+        pass
+
+    triton.knobs.runtime.jit_post_compile_hook = compile_info_hook
+    triton.knobs.runtime.jit_cache_hook = cache_hook
+
+    # run first without options
+    kernel[(1, 1, 1)](6)
+    assert counter == 1
+
+    # run with options, should lead to new compilation
+    kernel[(1, 1, 1)](6, **options)
+    assert counter == 2
+
+    # run a second time for testing kernel-cache look-up
+    kernel[(1, 1, 1)](6, **options)
+    assert counter == 2
+
+    # check the options are passed on to compile_info correctly
+    option_key, option_val = next(iter(options.items()))
+    if option_key == "extern_libs":
+        # HIPOptions overwrite the extern_libs option, so we skip the test
+        # passing and specializing options still is tested
+        if not is_hip():
+            assert compile_info[option_key] == tuple(option_val.items())
+    else:
+        assert compile_info[option_key] == option_val
+
+    triton.knobs.runtime.jit_post_compile_hook = None
+    triton.knobs.runtime.jit_cache_hook = None

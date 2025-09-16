@@ -428,10 +428,12 @@ struct FpToFpOpConversion
              Fp16_to_Fp8E5M2_RTNE(computeCapability >= 89)},
             {{F16TyID, F8E5M2TyID, RoundingMode::RTZ}, Fp16_to_Fp8E5M2_RTZ},
             // F8 -> BF16
+            // mul{.rnd}.bf16 and mul{.rnd}.bf16x2 requires sm_90 or higher.
             {{F8E5M2TyID, BF16TyID, undefRounding},
-             Fp8E5M2_to_Bf16(computeCapability >= 89)},
+             Fp8E5M2_to_Bf16(computeCapability >= 90)},
+            // cvt with .bf16.f16' requires .target sm_90 or higher
             {{F8E4M3TyID, BF16TyID, undefRounding},
-             Fp8E4M3Nv_to_Bf16(computeCapability >= 89)},
+             Fp8E4M3Nv_to_Bf16(computeCapability >= 90)},
             // BF16 -> F8
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
              Bf16_to_Fp8E5M2(computeCapability >= 89)},
@@ -485,6 +487,12 @@ struct FpToFpOpConversion
             "Unsupported rounding mode for conversion to fp8: " +
             stringifyRoundingMode(roundingMode.value()) + "\n");
       }
+    }
+
+    if (srcElementType.isF16() && dstElementType.isF32()) {
+      return llvm::to_vector(llvm::map_range(operands[0], [&](Value v) {
+        return convertFp16ToFp32(loc, rewriter, v);
+      }));
     }
 
     if (srcElementType.isF32() && dstElementType.isF16()) {

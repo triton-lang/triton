@@ -5,6 +5,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "llvm/IR/Function.h"
 
 #include <memory>
 
@@ -30,6 +31,9 @@ namespace mlir::triton::AMD {
 /// @return created pass
 std::unique_ptr<OperationPass<ModuleOp>>
 createOptimizeLDSUsagePass(StringRef arch, int32_t customLDSLimit = 0);
+
+void runScalarizePackedFOpsPass(llvm::Function &F);
+
 } // namespace mlir::triton::AMD
 
 namespace mlir::triton {

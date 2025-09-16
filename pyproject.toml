@@ -1,5 +1,20 @@
 [build-system]
-requires = ["setuptools>=40.8.0", "wheel", "cmake>=3.18", "ninja>=1.11.1"]
+requires = ["setuptools>=40.8.0", "cmake>=3.20,<4.0", "ninja>=1.11.1", "pybind11>=2.13.1"]
+build-backend = "setuptools.build_meta"
+
+[tool.mypy]
+mypy_path = "$MYPY_CONFIG_FILE_DIR/python"
+files = [
+    "python/triton/knobs.py",
+    "python/triton/runtime/build.py",
+    "python/triton/runtime/driver.py",
+    "python/triton/_utils.py",
+    "python/test/unit/test_knobs.py",
+    "python/test/unit/runtime/test_build.py",
+    "python/test/unit/runtime/test_compilation_listener.py",
+]
+exclude = ["/build/"]
+follow_imports = "silent"
 
 [tool.yapf]
 based_on_style = "pep8"
@@ -9,8 +24,17 @@ each_dict_entry_on_separate_line=false
 split_before_named_assigns = false
 split_complex_comprehension = true
 
+# We're incrementally switching from autopep8 to ruff.
+[tool.autopep8]
+aggressive = 1
+ignore = "E501,E701,E731,W690,W503"
+max_line_length = 88
+
 [tool.ruff]
 line-length = 120
 
 [tool.ruff.lint]
 ignore = ["E501", "E701", "E731", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]

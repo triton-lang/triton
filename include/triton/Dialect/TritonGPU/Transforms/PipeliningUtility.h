@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace mlir {
+class DominanceInfo;
 class ImplicitLocOpBuilder;
 namespace triton {
 
@@ -18,22 +19,66 @@ static const char *kWarpSpecializeAttrName = "tt.warp_specialize";
 static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
 static const char *kScheduledMaxStageAttrName = "tt.scheduled_max_stage";
-static const char *kLatencyAttrName = "tt.latency";
+class CoarseSchedule;
+class ModuleAxisInfoAnalysis;
+//===----------------------------------------------------------------------===//
+// Hoisting Utilities
+//===----------------------------------------------------------------------===//
+
+// By default, an operation can be hoisted if it is pure scalar operation.
+bool isPureScalarOp(Operation *op);
+
+// Given a set of values and a reference operation, return true if all of the
+// values dominate the reference operation OR a set of "trivial" operations can
+// be moved before the reference operation such that the value set dominates the
+// reference operation.
+//
+// Returns false if it is not possible to make the values dominate the reference
+// operation. The function determines "trivial"-ness with the given callback.
+// By default, it determines that memory-effect-free and scalar operations are
+// trivial.
+bool getDominatingValueSetOpsToHoist(
+    DominanceInfo &domInfo, Operation *refOp, ArrayRef<Value> valueSet,
+    llvm::SetVector<Operation *> &toHoist,
+    function_ref<bool(Operation *)> canHoist = isPureScalarOp,
+    function_ref<bool(BlockArgument)> canUseArg = [](BlockArgument) {
+      return false;
+    });
+
+// Hoist the given set of operations above the reference operation.
+void hoistOpsBefore(Operation *refOp,
+                    const llvm::SetVector<Operation *> &toHoist);
+// Hoist the given set of operations before the iterator.
+void hoistOpsBefore(Block *block, Block::iterator it,
+                    const llvm::SetVector<Operation *> &toHoist);
+
+//===----------------------------------------------------------------------===//
+// Sinking Utilities
+//===----------------------------------------------------------------------===//
+
+// Sink a value redefinition into a block, provided that the block is dominated
+// by `in` and postdominated by `out`.
+Value sinkValueRedefinition(RewriterBase &rewriter, Value in, Value out,
+                            Block *block);
+
+//===----------------------------------------------------------------------===//
+// Loop Pipelining Utilities
+//===----------------------------------------------------------------------===//
 
 bool loopHasDistGreaterThanOne(scf::ForOp forOp);
 bool isOuterLoop(scf::ForOp forOp);
 
-Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
-                  Value pred);
-
 /// Function to mask operations during scheduling.
 Operation *predicateOp(RewriterBase &rewriter, Operation *op, Value pred);
 
-/// Replace all uses of `oldUse` with `val` and propagate the type if needed.
-/// This is useful when we need to change a memory descriptor from immutable to
-/// mutable.
-void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
-                                 Value val);
+/// Wrap the operation into a MaskOp using the provided predicate, enabling high
+/// level predication abstraction during pipelining.
+Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op, Value pred);
+
+// Utilize high level predication abstraction to perform optimizations before
+// lowering to predicated operations
+void resolveMaskOp(ModuleOp moduleOp,
+                   DenseSet<triton::gpu::MaskOp> &peeledMaskOps);
 
 // Return true if the given ForOp has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
@@ -54,9 +99,17 @@ std::pair<Operation *, int64_t> getDefiningOpAndDistance(scf::ForOp forOp,
 int getCopyVecBytes(RankedTensorType registerTy,
                     gpu::SharedEncodingTrait sharedEnc);
 
+bool canBeConvertedToAsyncLoad(
+    triton::LoadOp loadOp, triton::ModuleAxisInfoAnalysis &axisInfoAnalysis);
+
 // Serialize the latencies of the operations in the loops into the latency
 // attribute.
 void serializeLatencies(ModuleOp module, DenseMap<Operation *, int> &opLatency);
+
+// Serialize the self latencies of the operations in the loops into the
+// self_latency attribute.
+void serializeSelfLatencies(ModuleOp module,
+                            DenseMap<Operation *, int> &opSelfLatency);
 
 // Deserialize the latencies of the operations in the loops from the attribute.
 DenseMap<Operation *, int> deserializeLatencies(Operation *op);
@@ -65,20 +118,30 @@ DenseMap<Operation *, int> deserializeLatencies(Operation *op);
 Value createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
                         unsigned numBuffers);
 // Create an allocation and init the mbarriers.
-Value createBarrierAlloc(scf::ForOp forOp, int numBarriers);
+Value createBarrierAlloc(Operation *op, int numBarriers, int arriveCount = 1);
 // Create an allocation that can hold distance number of tensor shapes.
-Value createAlloc(scf::ForOp forOp, RankedTensorType ty, Location loc,
+Value createAlloc(Operation *insertBefore, RankedTensorType ty, Location loc,
                   gpu::SharedEncodingTrait sharedEnc, unsigned distance);
 
 // Determine if the operation is a TMA load.
 bool isTMALoad(Operation *op);
+
+// Determine if the operation can be lowered to an async load.
+bool canBeAsyncLoad(Operation *op);
 
 // Look for consecutive wait ops and combine them into a single wait op.
 void combineRedundantWaitOps(
     llvm::SmallSetVector<gpu::AsyncWaitOp, 8> &waitOps);
 
 // Get the type of the view of a multi-buffered tensor value.
-gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy);
+gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy,
+                                   bool mutableMemory = true);
+
+// Get a mutable, multi-buffered version of the given memdesc type, with
+// multiplicity "depth".
+gpu::MemDescType getMultiBufferedType(gpu::MemDescType memDescType,
+                                      int32_t depth);
+
 // Get a generic shared encoding for a tensor.
 gpu::SharedEncodingTrait getSharedEncoding(RankedTensorType ty);
 // Get a shared encoding for a tensor based on its uses.
@@ -88,42 +151,36 @@ gpu::SharedEncodingTrait getSharedEncoding(Operation *loadOp);
 // specified.
 int getNumStagesOrDefault(scf::ForOp forOp, int defaultNumStages);
 
-// Given a result of MemDescSubview, or Alloca, create a MemDescSubview with a
+// Given a result of MemDescIndex, or Alloca, create a MemDescIndex with a
 // single buffer slice (leading dimension equal to 1), at the given index.
-template <typename TBuilder>
-Value createSingleBufferView(TBuilder &builder, Value alloc, Value idx) {
-  assert(isa<triton::gpu::MemDescType>(alloc.getType()) &&
-         "Expected MemDescType");
-  auto allocDescType = cast<triton::gpu::MemDescType>(alloc.getType());
-  SmallVector<int64_t> shape;
-  if (allocDescType.getShape().size() > 1) {
-    shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
-                 allocDescType.getShape().end());
-  } else {
-    shape.push_back(1);
-  }
-  auto viewDescType = triton::gpu::MemDescType::get(
-      shape, allocDescType.getElementType(), allocDescType.getEncoding(),
-      allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
-      /*allocShape=*/allocDescType.getAllocShape());
-  SmallVector<Value> idxs = {idx};
-  if (allocDescType.getShape().size() > 1) {
-    Value zero =
-        builder.template create<arith::ConstantIntOp>(alloc.getLoc(), 0, 32);
-    for (unsigned i = 1; i < allocDescType.getShape().size(); i++) {
-      idxs.push_back(zero);
-    }
-  }
-  return builder.template create<triton::gpu::MemDescSubviewOp>(
-      alloc.getLoc(), viewDescType, alloc, idxs);
-}
+TypedValue<triton::gpu::MemDescType>
+createSingleBufferView(OpBuilder &builder, Value alloc, Value idx);
+// Given a result of MemDescIndex, or Alloca, create a MemDescIndex with a
+// single buffer slice (leading dimension equal to 1), at the given index.
+TypedValue<triton::gpu::MemDescType>
+createSingleBufferView(OpBuilder &builder, Value alloc, int idx);
 
-template <typename TBuilder>
-Value createSingleBufferView(TBuilder &builder, Value alloc, int idx) {
-  return createSingleBufferView(
-      builder, alloc,
-      builder.template create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32));
-}
+Value createIncrementModulo(OpBuilder &builder, Location loc, Value counter,
+                            Value modulus, Value zero, Value one,
+                            Value *outWrapCond = nullptr);
+
+scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule);
+
+DenseSet<Operation *>
+getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
+                       std::function<bool(Operation *)> filter = nullptr);
+
+// Return the "first" op in terms of the stage and cluser ordering
+Operation *
+getFirstUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                         CoarseSchedule &schedule,
+                         std::function<bool(Operation *)> filterUse = nullptr);
+
+// Return the "last" op in terms of the stage and cluser ordering
+Operation *
+getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
+                        CoarseSchedule &schedule,
+                        std::function<bool(Operation *)> filterUse = nullptr);
 
 } // namespace triton
 } // namespace mlir

@@ -1,42 +1,27 @@
 #include "NVGPUToLLVM/NVGPUToLLVMPass.h"
+#include "NVGPUToLLVM/Passes.h"
 
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
 
-using namespace mlir;
-using namespace mlir::triton;
-
-#define GEN_PASS_CLASSES
-#include "NVGPUToLLVM/Passes.h.inc"
-
 namespace ttn = mlir::triton::nvgpu;
 using ttn::Constraints;
 using ttn::OperandsAndConstraints;
 
-namespace {
+namespace mlir {
+namespace triton {
 
-const std::string kWgmmaFenceOp = "wgmma.fence.sync.aligned;";
-const std::string kWgmmaCommitGroupOp = "wgmma.commit_group.sync.aligned;";
-const std::string kClusterWaitOp = "barrier.cluster.wait.aligned;";
-const std::string kFenceMbarrierInitOp = "fence.mbarrier_init.release.cluster;";
-const std::string kClusterCtaIdOp = "{\n"
-                                    ".reg .u32 a<5>;              \n"
-                                    "mov.u32 a0, %cluster_ctaid.x;\n"  // x
-                                    "mov.u32 a1, %cluster_ctaid.y;\n"  // y
-                                    "mov.u32 a2, %cluster_ctaid.z;\n"  // z
-                                    "mov.u32 a3, %cluster_nctaid.x;\n" // nx
-                                    "mov.u32 a4, %cluster_nctaid.y;\n" // ny
-                                    "mad.lo.u32 a1, a2, a4, a1;     \n"
-                                    "mad.lo.u32 $0, a1, a3, a0;     \n"
-                                    "}";
+#define GEN_PASS_DEF_CONVERTNVGPUTOLLVM
+#include "NVGPUToLLVM/Passes.h.inc"
+
+namespace {
 
 bool isNumber(const std::string &s) {
   return !s.empty() && std::find_if(s.begin(), s.end(), [](unsigned char c) {
@@ -210,19 +195,6 @@ private:
   Constraints inputConstraints;
 };
 
-class FenceAsyncSharedOpPattern
-    : public OpRewritePattern<ttn::FenceAsyncSharedOp> {
-public:
-  using OpRewritePattern<ttn::FenceAsyncSharedOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ttn::FenceAsyncSharedOp op,
-                                PatternRewriter &rewriter) const override {
-    std::string ptxAsm = op.getBCluster() ? "fence.proxy.async.shared::cluster;"
-                                          : "fence.proxy.async.shared::cta;";
-    return rewriteAsPtxAsm(op, rewriter, std::move(ptxAsm));
-  }
-};
-
 class WarpIdOpPattern : public OpRewritePattern<ttn::WarpIdOp> {
 public:
   using OpRewritePattern<ttn::WarpIdOp>::OpRewritePattern;
@@ -231,6 +203,12 @@ public:
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    if (triton::gpu::lookupNumWarps(op) == 1) {
+      // If there is only one warp, the warp ID is always 0.
+      rewriter.replaceOp(op, b.i32_val(0));
+      return success();
+    }
 
     // If this is inside a warp specialize op, compute the relative thread ID
     // within the warp group.
@@ -249,16 +227,23 @@ public:
   }
 };
 
-class ClusterArriveOpPattern : public OpRewritePattern<ttn::ClusterArriveOp> {
-public:
-  using OpRewritePattern<ttn::ClusterArriveOp>::OpRewritePattern;
+class ClusterCTAIdOpPattern : public OpRewritePattern<ttn::ClusterCTAIdOp> {
+  using OpRewritePattern<ttn::ClusterCTAIdOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ttn::ClusterArriveOp op,
+  LogicalResult matchAndRewrite(ttn::ClusterCTAIdOp op,
                                 PatternRewriter &rewriter) const override {
-    std::string ptxAsm = op.getRelaxed()
-                             ? "barrier.cluster.arrive.relaxed.aligned;"
-                             : "barrier.cluster.arrive.aligned;";
-    return rewriteAsPtxAsm(op, rewriter, std::move(ptxAsm));
+    auto loc = op.getLoc();
+    auto a0 = rewriter.create<NVVM::BlockInClusterIdXOp>(loc, i32_ty);
+    auto a1 = rewriter.create<NVVM::BlockInClusterIdYOp>(loc, i32_ty);
+    auto a2 = rewriter.create<NVVM::BlockInClusterIdZOp>(loc, i32_ty);
+    auto a3 = rewriter.create<NVVM::ClusterDimBlocksXOp>(loc, i32_ty);
+    auto a4 = rewriter.create<NVVM::ClusterDimBlocksYOp>(loc, i32_ty);
+    auto p1 = rewriter.create<LLVM::MulOp>(loc, a2, a4);
+    auto s1 = rewriter.create<LLVM::AddOp>(loc, a1, p1);
+    auto p2 = rewriter.create<LLVM::MulOp>(loc, s1, a3);
+    auto res = rewriter.create<LLVM::AddOp>(loc, a0, p2);
+    rewriter.replaceOp(op, res);
+    return success();
   }
 };
 
@@ -275,7 +260,8 @@ public:
     // Template method for PTX assembly generation
     std::string ptxAsm =
         (llvm::Twine(ConcreteMatrixOpPattern::kOpCode) +
-         getPtxModifiers(vecSize, trans) + " " + getOperands(op, vecSize) + ";")
+         getPtxModifiers(vecSize, trans, op.getShape(), op.getBitWidth()) +
+         " " + getOperands(op, vecSize) + ";")
             .str();
 
     OperandsAndConstraints operandAndConstraints =
@@ -288,16 +274,29 @@ public:
 
 protected:
   // Shared helper methods
-  std::string getPtxModifiers(unsigned vecSize, bool trans) const {
-    auto ptxAsmBase = llvm::Twine(".sync.aligned.m8n8");
-    const std::string suffix = trans ? ".trans.shared.b16" : ".shared.b16";
+  std::string getPtxModifiers(unsigned vecSize, bool trans,
+                              triton::nvgpu::LoadMatrixShape shape,
+                              int bitWidth) const {
+    std::string ptxAsmBase = std::string(".sync.aligned");
+    switch (shape) {
+    case triton::nvgpu::LoadMatrixShape::m8n8:
+      ptxAsmBase += ".m8n8";
+      break;
+    case triton::nvgpu::LoadMatrixShape::m16n16:
+      ptxAsmBase += ".m16n16";
+      break;
+    default:
+      llvm_unreachable("Invalid load matrix shape");
+    }
+    std::string suffix = trans ? ".trans.shared" : ".shared";
+    suffix += ".b" + std::to_string(bitWidth);
     switch (vecSize) {
     case 1:
-      return (ptxAsmBase + ".x1" + suffix).str();
+      return ptxAsmBase + ".x1" + suffix;
     case 2:
-      return (ptxAsmBase + ".x2" + suffix).str();
+      return ptxAsmBase + ".x2" + suffix;
     case 4:
-      return (ptxAsmBase + ".x4" + suffix).str();
+      return ptxAsmBase + ".x4" + suffix;
     default:
       llvm_unreachable("Invalid vector size");
     }
@@ -328,42 +327,6 @@ protected:
   virtual unsigned getVectorSize(MatrixOpType op) const = 0;
 };
 
-// StoreMatrixOp Pattern
-class StoreMatrixOpPattern
-    : public MatrixOpPattern<ttn::StoreMatrixOp, StoreMatrixOpPattern> {
-public:
-  using MatrixOpPattern<ttn::StoreMatrixOp,
-                        StoreMatrixOpPattern>::MatrixOpPattern;
-  static constexpr const char *kOpCode = "stmatrix";
-
-protected:
-  unsigned getVectorSize(ttn::StoreMatrixOp op) const override {
-    return op.getVals().size();
-  }
-
-  std::string getOperands(ttn::StoreMatrixOp op,
-                          unsigned vecSize) const override {
-    return (llvm::Twine(getPtxAddrOperand(0)) + ", " +
-            getPtxRegOperands(1, vecSize))
-        .str();
-  }
-
-  OperandsAndConstraints
-  getOperandsAndConstraints(ttn::StoreMatrixOp op,
-                            unsigned vecSize) const override {
-    OperandsAndConstraints constraints = {{op.getAddr(), "r"}};
-    for (unsigned i = 0; i < vecSize; i++) {
-      constraints.push_back({op.getVals()[i], "r"});
-    }
-    return constraints;
-  }
-
-  Constraints getOutputConstraints(ttn::StoreMatrixOp op,
-                                   unsigned vecSize) const override {
-    return {}; // No output constraints for StoreMatrixOp
-  }
-};
-
 // LoadMatrixOp Pattern
 class LoadMatrixOpPattern
     : public MatrixOpPattern<ttn::LoadMatrixOp, LoadMatrixOpPattern> {
@@ -374,8 +337,11 @@ public:
 
 protected:
   unsigned getVectorSize(ttn::LoadMatrixOp op) const override {
-    auto resultType = cast<LLVM::LLVMStructType>(op.getType());
-    return resultType.getBody().size();
+    auto resultType = op.getType();
+    if (auto structTy = dyn_cast<LLVM::LLVMStructType>(resultType)) {
+      return structTy.getBody().size();
+    }
+    return 1;
   }
 
   std::string getOperands(ttn::LoadMatrixOp op,
@@ -694,6 +660,7 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
     auto ctx = ret->getContext();
     auto loc = ret.getLoc();
     auto voidTy = void_ty(ctx);
+    b.create<NVVM::Barrier0Op>(loc);
     PTXBuilder ptxBuilder;
     // Calculate the predicate in the inline asm to avoid creating long
     // liveranges.
@@ -756,7 +723,7 @@ static void lowerTensorMemoryAlloc(ModuleOp mod) {
   if (baseOps.empty())
     return;
   // TODO: Handle cases of matmul used in noinline functions.
-  assert(LLVM::isKernel(kernel));
+  assert(triton::isKernel(kernel));
   Value newBase = initTensorMemory(kernel);
   if (!newBase)
     return;
@@ -766,29 +733,21 @@ static void lowerTensorMemoryAlloc(ModuleOp mod) {
   }
 }
 
-class ConvertNVGPUToLLVM : public ConvertNVGPUToLLVMBase<ConvertNVGPUToLLVM> {
+} // anonymous namespace
 
+class ConvertNVGPUToLLVM
+    : public impl::ConvertNVGPUToLLVMBase<ConvertNVGPUToLLVM> {
 public:
-  explicit ConvertNVGPUToLLVM() {}
+  using impl::ConvertNVGPUToLLVMBase<
+      ConvertNVGPUToLLVM>::ConvertNVGPUToLLVMBase;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
 
-#define POPULATE_NVGPU_OP(SRC_OP, ASM)                                         \
-  patterns.add<NVGPUOpGenericPattern<SRC_OP>>(context, ASM, Constraints(),     \
-                                              Constraints());
-    POPULATE_NVGPU_OP(ttn::WGMMAFenceOp, kWgmmaFenceOp)
-    POPULATE_NVGPU_OP(ttn::WGMMACommitGroupOp, kWgmmaCommitGroupOp)
-    POPULATE_NVGPU_OP(ttn::ClusterWaitOp, kClusterWaitOp)
-#undef POPULATE_NVGPU_OP
-    patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
-        context, kClusterCtaIdOp, Constraints({"=r"}), Constraints());
-
     patterns
-        .add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
-             StoreMatrixOpPattern, ClusterArriveOpPattern, WGMMAOpPattern,
+        .add<ClusterCTAIdOpPattern, LoadMatrixOpPattern, WGMMAOpPattern,
              LoadAcquireOpPattern, WGMMAWaitGroupOpPattern, WarpIdOpPattern>(
             context);
 
@@ -799,11 +758,6 @@ public:
     makeAllWarpGroupsIsolatedFromAbove(mod);
   }
 };
-
-} // anonymous namespace
-
-namespace mlir {
-namespace triton {
 
 LogicalResult
 nvgpu::rewriteAsPtxAsm(Operation *op, PatternRewriter &rewriter,
@@ -834,10 +788,6 @@ nvgpu::rewriteAsPtxAsm(Operation *op, PatternRewriter &rewriter,
   }
 
   return success();
-}
-
-std::unique_ptr<OperationPass<ModuleOp>> createConvertNVGPUToLLVMPass() {
-  return std::make_unique<::ConvertNVGPUToLLVM>();
 }
 
 } // namespace triton

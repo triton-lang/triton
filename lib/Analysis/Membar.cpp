@@ -1,25 +1,24 @@
 #include "triton/Analysis/Membar.h"
-#include "triton/Analysis/Alias.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include <deque>
 
 namespace mlir {
 
-void MembarAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
+void MembarOrFenceAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
   FunctionOpInterface funcOp =
       dyn_cast<FunctionOpInterface>(allocation->getOperation());
   OpBuilder builder(funcOp.getContext());
   resolve(funcOp, &funcBlockInfoMap, &builder);
 }
 
-void MembarAnalysis::resolve(FunctionOpInterface funcOp,
-                             FuncBlockInfoMapT *funcBlockInfoMap,
-                             OpBuilder *builder) {
+void MembarOrFenceAnalysis::resolve(FunctionOpInterface funcOp,
+                                    FuncBlockInfoMapT *funcBlockInfoMap,
+                                    OpBuilder *builder) {
   // Initialize the blockList. Operations are organized into "virtual blocks",
   // which represent segments of straight-line code analyzed by each iteration
   // of the dataflow analysis. Virtual blocks abstract over both control flow
@@ -105,8 +104,8 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
   });
 }
 
-void MembarAnalysis::visitTerminator(Operation *op,
-                                     SmallVector<VirtualBlock> &successors) {
+void MembarOrFenceAnalysis::visitTerminator(
+    Operation *op, SmallVector<VirtualBlock> &successors) {
   if (isa<BranchOpInterface>(op)) {
     // Collect the block successors of the branch.
     for (Block *successor : op->getSuccessors())
@@ -216,6 +215,13 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
         }
       }
     }
+    // If this op is may be signalling other threads asynchronously, make sure
+    // all shared memory transactions are complete beforehand.
+    if (isa<triton::nvidia_gpu::ArriveBarrierOp>(op)) {
+      Interval<size_t> allIntervals(0, std::numeric_limits<size_t>::max());
+      curBlockInfo.syncWriteIntervals[allIntervals].insert(op);
+      curBlockInfo.syncReadIntervals[allIntervals].insert(op);
+    }
     scratchBufferId = allocation->getBufferId(op);
   }
 
@@ -224,6 +230,19 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   // read/write operations, and ending with a shared memory read, i.e., shared
   // memory write -> ... -> shared memory read.
   if (scratchBufferId != Allocation::InvalidBufferId) {
+    // Detect warp-synchronous convert-layout operations. These emit a
+    // warp-level barrier (warp.sync) rather than a CTA-wide barrier between
+    // the internal shared-memory write and read phases. For these ops, we must
+    // not globally clear pending dependencies.
+    bool isWarpSync = false;
+    if (auto cvt = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
+      auto srcTy = cast<RankedTensorType>(cvt.getSrc().getType());
+      auto dstTy = cast<RankedTensorType>(cvt.getType());
+      auto srcLayout = triton::gpu::toLinearLayout(srcTy);
+      auto dstLayout = triton::gpu::toLinearLayout(dstTy);
+      isWarpSync = mlir::isCvtWarpSync(srcLayout, dstLayout);
+    }
+
     if (!curBlockInfo.syncReadIntervals.empty() ||
         !curBlockInfo.syncWriteIntervals.empty()) {
       llvm::report_fatal_error(
@@ -232,12 +251,15 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     }
     auto interval = allocation->getAllocatedInterval(scratchBufferId);
     curBlockInfo.syncWriteIntervals[interval].insert(op);
-    if (blockInfo->isIntersected(curBlockInfo, filter)) {
+    auto insertCTABarrier = blockInfo->isIntersected(curBlockInfo, filter);
+    if (insertCTABarrier) {
       builder->setInsertionPoint(op);
       insertBarrier(op, builder);
     }
-    // Ops with a scratch buffer internally syncs read/write on shared memory
-    blockInfo->sync();
+    // Ops with a scratch buffer that don't use warp.sync internally sync
+    // read/write on shared memory
+    if (insertCTABarrier || !isWarpSync)
+      blockInfo->sync();
     curBlockInfo.syncReadIntervals[interval].insert(op);
   } else if (blockInfo->isIntersected(curBlockInfo, filter)) {
     builder->setInsertionPoint(op);

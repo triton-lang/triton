@@ -3,7 +3,7 @@ import time
 from functools import wraps
 from typing import Optional, Union
 
-from .flags import get_profiling_on
+from .flags import flags
 from triton._C.libproton import proton as libproton
 
 thread_local_scopes = threading.local()
@@ -40,7 +40,7 @@ class scope:
         self.id = None
 
     def _enter_scope(self):
-        if not get_profiling_on():
+        if not flags.profiling_on:
             return
         self.id = libproton.record_scope()
         libproton.enter_scope(self.id, self.name)
@@ -48,7 +48,7 @@ class scope:
             libproton.add_metrics(self.id, self.metrics)
 
     def _exit_scope(self):
-        if not get_profiling_on() or self.id is None:
+        if not flags.profiling_on or self.id is None:
             return
         libproton.exit_scope(self.id, self.name)
 
@@ -88,13 +88,13 @@ class cpu_timed_scope(scope):
             raise ValueError("The metric name 'cpu_time' is reserved.")
 
     def _enter_scope(self):
-        if not get_profiling_on():
+        if not flags.profiling_on:
             return
         self.start_time = time.time_ns()
         super()._enter_scope()
 
     def _exit_scope(self):
-        if not get_profiling_on():
+        if not flags.profiling_on:
             return
         super()._exit_scope()
         if self.start_time is not None:
@@ -102,29 +102,28 @@ class cpu_timed_scope(scope):
             libproton.add_metrics(self.id, {"cpu_time (ns)(exc)": cpu_time})
 
 
-def enter_scope(name: str, *, triton_op: bool = False, metrics: Optional[dict[str, MetricValueType]] = None) -> int:
-    if not get_profiling_on():
-        return -1
+def enter_scope(name: str, *, metrics: Optional[dict[str, MetricValueType]] = None) -> Optional[int]:
+    if not flags.profiling_on:
+        return None
     id = libproton.record_scope()
     thread_local_scopes.scopes = getattr(thread_local_scopes, "scopes", [])
     thread_local_scopes.scopes.append((id, name))
-    if triton_op:
-        libproton.enter_op(id, name)
-    else:
-        libproton.enter_scope(id, name)
+    libproton.enter_scope(id, name)
     if metrics:
         libproton.add_metrics(id, metrics)
     return id
 
 
-def exit_scope(triton_op: bool = False, metrics: Optional[dict[str, MetricValueType]] = None) -> int:
-    if not get_profiling_on():
-        return -1
-    id, name = thread_local_scopes.scopes.pop()
-    if triton_op:
-        libproton.exit_op(id, name)
-    else:
-        libproton.exit_scope(id, name)
+def exit_scope(name: Optional[str] = None, *, metrics: Optional[dict[str, MetricValueType]] = None) -> Optional[int]:
+    # `name` is an optional argument here, only to match the counterpart in enter_scope to make the API consistent with `proton.language.exit_scope`
+    if not flags.profiling_on:
+        return None
+    id, popped_name = thread_local_scopes.scopes.pop()
+    if name and name != popped_name:
+        raise ValueError(f"Scope name mismatch: {name} != {popped_name}")
+    elif not name:
+        name = popped_name
+    libproton.exit_scope(id, name)
     if metrics:
         libproton.add_metrics(id, metrics)
     return id

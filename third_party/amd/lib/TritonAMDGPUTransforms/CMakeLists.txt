@@ -5,10 +5,12 @@ add_triton_library(TritonAMDGPUTransforms
   CoalesceAsyncCopy.cpp
   ConvertToBufferOps.cpp
   OptimizeEpilogue.cpp
+  OptimizeDotOperands.cpp
   HoistLayoutConversions.cpp
   ReorderInstructions.cpp
   StreamPipeline.cpp
   MfmaGroup.cpp
+  WmmaGroup.cpp
   InThreadTranspose.cpp
   FoldTrueCmpIOp.cpp
   UpdateAsyncWaitCount.cpp

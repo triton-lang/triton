@@ -11,6 +11,13 @@ void populateExtractSliceOpToLLVMPatterns(
 
 void populateInThreadTransposeOpToTTGPatterns(mlir::RewritePatternSet &patterns,
                                               mlir::PatternBenefit benefit);
+void populateConcatOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
+                                    mlir::RewritePatternSet &patterns,
+                                    mlir::PatternBenefit benefit);
+
+void populateScaledUpcastOpToLLVMPatterns(
+    mlir::LLVMTypeConverter &typeConverter, mlir::RewritePatternSet &patterns,
+    mlir::PatternBenefit benefit);
 
 } // namespace mlir::triton::AMD
 

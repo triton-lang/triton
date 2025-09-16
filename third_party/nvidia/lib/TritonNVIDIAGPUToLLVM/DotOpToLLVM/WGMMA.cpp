@@ -23,6 +23,7 @@
 
 #include "MMAHelpers.h"
 #include "Utility.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Support/LLVM.h"
 
 using namespace mlir;
@@ -101,8 +102,17 @@ static Value createDescriptor(ConversionPatternRewriter &rewriter, Location loc,
   default:
     llvm::report_fatal_error("Unsupported swizzling size.");
   }
-  desc.strideDimensionBaseOffset = swizzling >> 1;
-  desc.leadDimensionBaseOffset = (swizzling * stride) >> 4;
+  if (swizzling == 0) {
+    // Because the descriptor normalizes spacing to 128-bit units, the
+    // normalized per-element stride is 16 bytes and LBO is defined as 8×that,
+    // i.e. 128 bytes.
+    desc.leadDimensionBaseOffset = 128 >> 4;
+    // Offset from first row to second row 16x16 bytes.
+    desc.strideDimensionBaseOffset = 256 >> 4;
+  } else {
+    desc.leadDimensionBaseOffset = (swizzling * stride) >> 4;
+    desc.strideDimensionBaseOffset = swizzling >> 1;
+  }
   return b.int_val(64, desc.descriptor);
 }
 
@@ -125,12 +135,12 @@ mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::DotOpMmaV3SmemLoader(
   uint32_t widthInByte = allocSwizzleShape[fastMovingDim] * elemBits / 8;
   int64_t swizzling = getSwizzlingFromLayout(sharedLayout, widthInByte);
 
-  descriptor =
-      createDescriptor(rewriter, loc, swizzling, shape[1 - fastMovingDim]);
+  descriptor = createDescriptor(rewriter, loc, swizzling,
+                                allocSwizzleShape[1 - fastMovingDim]);
 }
 
 Value mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::smemLoad(
-    int a, int b, ConversionPatternRewriter &rewriter, Location loc) {
+    int a, int b, ConversionPatternRewriter &rewriter, Location loc) const {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   Value k = tb.i32_val(b * instrShape[1]);
   Value m = tb.add(tb.i32_val(a * dimWpt * instrShape[0]),
@@ -138,27 +148,30 @@ Value mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::smemLoad(
   if (trans) {
     std::swap(k, m);
   }
-  Value leading_offset =
-      tb.mul(tb.udiv(k, elemsPerSwizzlingRowVal),
-             tb.i32_val(shape[1 - fastMovingDim] * elemsPerSwizzlingRow));
-  Value stride_offset = tb.mul(m, elemsPerSwizzlingRowVal);
-  Value offset = tb.add(tb.add(leading_offset, stride_offset),
-                        tb.urem(k, elemsPerSwizzlingRowVal));
   Value off1;
-  // Avoid the runtime udiv if we know the elements are byte multiples
-  if (elemBits % 8) {
-    off1 = tb.udiv(tb.mul(tb.i32_val(elemBits), offset), tb.i32_val(8));
+  if (elemsPerSwizzlingRow > 0) {
+    Value leading_offset =
+        tb.mul(tb.udiv(k, elemsPerSwizzlingRowVal),
+               tb.i32_val(shape[1 - fastMovingDim] * elemsPerSwizzlingRow));
+    Value stride_offset = tb.mul(m, elemsPerSwizzlingRowVal);
+    Value offset = tb.add(tb.add(leading_offset, stride_offset),
+                          tb.urem(k, elemsPerSwizzlingRowVal));
+    // Avoid the runtime udiv if we know the elements are byte multiples
+    if (elemBits % 8) {
+      off1 = tb.udiv(tb.mul(tb.i32_val(elemBits), offset), tb.i32_val(8));
+    } else {
+      off1 = tb.mul(tb.i32_val(elemBits / 8), offset);
+    }
   } else {
-    off1 = tb.mul(tb.i32_val(elemBits / 8), offset);
+    assert(a == 0 && instrShape[0] * elemBits == 16 * 8 &&
+           "Currently expect that unswizzled case only happens for "
+           "rhs <Kx16> cases and the inner dimension is 16bytes.");
+    off1 = tb.i32_val(512 * b);
   }
-  Value off_ = tb.zext(i64_ty, tb.udiv(off1, tb.i32_val(16)));
-
-  Value loadDesc = tb.add(descriptor, off_);
-  // Add the base at the end to make it easier to do loop invariant code
-  // motion.
-  loadDesc = tb.add(
-      loadDesc, tb.lshr(tb.shl(tb.ptrtoint(i64_ty, base), tb.int_val(64, 46)),
-                        tb.int_val(64, 50)));
+  Value smemBase = tb.ptrtoint(i32_ty, base);
+  smemBase = tb.add(smemBase, off1);
+  smemBase = tb.lshr(tb.and_(smemBase, tb.i32_val(0x3FFFF)), tb.i32_val(4));
+  Value loadDesc = tb.add(descriptor, tb.zext(i64_ty, smemBase));
   return loadDesc;
 }
 
@@ -352,7 +365,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          uint32_t maxNumImpreciseAcc, bool sync, Value thread) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
-  auto bTensorTy = cast<triton::gpu::TensorOrMemDesc>(b.getType());
+  auto bTensorTy = cast<triton::gpu::MemDescType>(b.getType());
   auto dTensorTy = cast<RankedTensorType>(d.getType());
   auto aSharedLayout =
       dyn_cast<NVMMASharedEncodingAttr>(aTensorTy.getEncoding());
@@ -362,15 +375,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   Value baseA;
   Value baseB;
   if (aSharedLayout)
-    baseA =
-        getSharedMemoryObjectFromStruct(
-            loc, loadedA,
-            typeConverter->convertType(aTensorTy.getElementType()), rewriter)
-            .getBase();
-  baseB = getSharedMemoryObjectFromStruct(
-              loc, loadedB,
-              typeConverter->convertType(bTensorTy.getElementType()), rewriter)
-              .getBase();
+    baseA = getOffsetedBase(loadedA, cast<MemDescType>(aTensorTy),
+                            typeConverter, rewriter, loc);
+  baseB = getOffsetedBase(loadedB, bTensorTy, typeConverter, rewriter, loc);
   if (aSharedLayout) {
     transA = aSharedLayout.getTransposed();
   }
@@ -412,7 +419,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                                               : triton::nvgpu::WGMMALayout::col;
 
   auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
-  Operation *startSequence = rewriter.create<triton::nvgpu::WGMMAFenceOp>(loc);
+  Operation *startSequence = rewriter.create<NVVM::WgmmaFenceAlignedOp>(loc);
   SmallVector<Value> mmaResults;
   for (int m = 0; m < numRepM; ++m) {
     for (int n = 0; n < numRepN; ++n) {
@@ -483,7 +490,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       }
     }
   }
-  rewriter.create<triton::nvgpu::WGMMACommitGroupOp>(loc);
+  rewriter.create<NVVM::WgmmaGroupSyncAlignedOp>(loc);
 
   if (sync)
     mmaResults = emitWait(rewriter, loc, mmaResults, 0);
@@ -506,10 +513,6 @@ LogicalResult convertWGMMA(triton::nvidia_gpu::WarpGroupDotOp op,
                            ConversionPatternRewriter &rewriter, Value thread) {
   auto AEnc = op.getA().getType().getEncoding();
   auto BEnc = op.getB().getType().getEncoding();
-  assert(mlir::isa<NVMMASharedEncodingAttr>(AEnc) ||
-         mlir::isa<DotOperandEncodingAttr>(AEnc));
-  assert(mlir::isa<NVMMASharedEncodingAttr>(BEnc) &&
-         "Operand B should use Shared layout.");
   return convertDot(typeConverter, rewriter, op.getLoc(), op.getOperation(),  //
                     op.getA(), op.getB(), op.getC(), op.getD(), op.getUseC(), //
                     adaptor.getA(), adaptor.getB(), adaptor.getC(),           //

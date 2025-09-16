@@ -54,8 +54,8 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
   //              3 = either swizzles or testing against offset field)
   // bits 30-31: Type (must be 0)
   uint32_t flags = (7 << 12) | (4 << 15);
-  if (targetInfo.getISAFamily() == ISAFamily::RDNA2 ||
-      targetInfo.getISAFamily() == ISAFamily::RDNA3) {
+  if (llvm::is_contained({ISAFamily::RDNA2, ISAFamily::RDNA3, ISAFamily::RDNA4},
+                         targetInfo.getISAFamily())) {
     flags |= (1 << 24);
     uint32_t oob = 3;
     flags |= (oob << 28);
@@ -104,15 +104,16 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
   return data;
 }
 
-void BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
-                                  Value offset, Value dst, Value pred,
-                                  triton::CacheModifier cm) {
+ROCDL::RawPtrBufferLoadLdsOp
+BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
+                             Value offset, Value dst, Value pred,
+                             triton::CacheModifier cm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value, 6> commonArgs;
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
                  commonArgs);
   Type bufferType = getBufferOpType(type, false);
-  rewriter.create<ROCDL::RawPtrBufferLoadLdsOp>(
+  return rewriter.create<ROCDL::RawPtrBufferLoadLdsOp>(
       loc, TypeRange{},
       ValueRange{
           commonArgs[0], // Buffer descriptor
@@ -124,6 +125,30 @@ void BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
           commonArgs[3], // AUX
       },
       ArrayRef<NamedAttribute>());
+}
+
+Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,
+                                   Value casCmpVal, Value casStoreVal,
+                                   Value pred, bool hasUsers) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  VectorType storeVecTy = cast<VectorType>(casStoreVal.getType());
+  VectorType cmpVecTy = cast<VectorType>(casCmpVal.getType());
+  Type bufferType = getBufferOpType(type, true);
+  if (storeVecTy != bufferType)
+    casStoreVal = b.bitcast(casStoreVal, bufferType);
+  if (cmpVecTy != bufferType)
+    casCmpVal = b.bitcast(casCmpVal, bufferType);
+  // Note: rocdl.raw.ptr.buffer.atomic.cmpswap expects
+  // val to be before cmp in the arg list. This is
+  // the opposite of the order in tl.atomic_cmpxchg
+  // and amdgpu.buffer_atomic_cas
+  SmallVector<Value, 6> args{casStoreVal, casCmpVal};
+  fillCommonArgsAtomics(type, rsrcDesc, offset, pred, hasUsers, args);
+
+  Value data = rewriter.create<ROCDL::RawPtrBufferAtomicCmpSwap>(
+      loc, bufferType, args, ArrayRef<NamedAttribute>());
+  data = b.bitcast(data, type);
+  return data;
 }
 
 Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,

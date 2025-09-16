@@ -20,6 +20,7 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+#include "Analysis/AMDGPUAllocation.h"
 #include "OptimizeLDSUtility.h"
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
@@ -93,6 +94,7 @@ class OptimizeAMDLDSUsage
     LDBG("Trying fit " << cvtOp << " into " << targetLDSSize << " bytes");
     OpBuilder builder(cvtOp);
 
+    auto ctx = builder.getContext();
     auto srcType = cvtOp.getSrc().getType();
     auto dstType = cvtOp.getType();
 
@@ -101,7 +103,6 @@ class OptimizeAMDLDSUsage
     auto dstEnc =
         cast<triton::gpu::DistributedEncodingTrait>(dstType.getEncoding());
 
-    auto ctx = srcEnc.getContext();
     auto rank = srcType.getRank();
 
     unsigned numWarps = triton::gpu::lookupNumWarps(cvtOp);
@@ -150,23 +151,51 @@ class OptimizeAMDLDSUsage
 
     unsigned minLDSUsage = 2 * LDSLimit;
     int minIdx = -1;
+    bool currentBestHasPadding = true;
+
     for (int i = 0; i < tmpLayouts.size(); i++) {
       auto resources = mlir::triton::AMD::estimateResourcesForReplacement(
           builder, cvtOp, tmpLayouts[i]);
-      LDBG("layout " << tmpLayouts[i] << " requires " << resources.LDS
-                     << " bytes");
-      // TODO analyze performance along with LDS consumption
-      if (resources.LDS < minLDSUsage) {
-        minLDSUsage = resources.LDS;
-        minIdx = i;
+
+      // Select between padded and swizzled variants of the same tmpLayout
+      // Prioritize swizzling: use swizzled if it fits in budget or uses less
+      // LDS
+      bool useSwizzling = (resources.LDSSwizzle < targetLDSSize) ||
+                          (resources.LDSSwizzle < resources.LDSPad);
+      int LDS = useSwizzling ? resources.LDSSwizzle : resources.LDSPad;
+
+      LDBG("layout " << tmpLayouts[i] << " requires " << LDS << " bytes of LDS "
+                     << (useSwizzling ? "without" : "with") << " padding");
+      // Now select the best layout among all valid candidates
+      if (LDS < targetLDSSize) {
+        bool hasBetterLDS =
+            (currentBestHasPadding != useSwizzling) && (LDS < minLDSUsage);
+        bool hasBetterLayout = currentBestHasPadding && useSwizzling;
+        if (hasBetterLDS || hasBetterLayout) {
+          minLDSUsage = LDS;
+          minIdx = i;
+          currentBestHasPadding = !useSwizzling;
+        }
       }
     }
 
     if (minIdx == -1 || minLDSUsage > targetLDSSize) {
       return;
     }
-
     assert(minIdx >= 0 && minIdx < tmpLayouts.size());
+
+    bool hasAttr = cvtOp->hasAttr(triton::AMD::AttrSharedMemPadded);
+    if (currentBestHasPadding && !hasAttr) {
+      cvtOp->setAttr(triton::AMD::AttrSharedMemPadded, UnitAttr::get(ctx));
+      // if padded layout drops LDS usage on itself, we are done, return
+      if (triton::AMD::getConvertLayoutScratchInBytes(
+              srcType, dstType, /*usePadding*/ true) <= targetLDSSize) {
+        return;
+      }
+    } else if (!currentBestHasPadding && hasAttr) {
+      cvtOp->removeAttr(triton::AMD::AttrSharedMemPadded);
+    }
+
     auto tmpLayout = tmpLayouts[minIdx];
     auto replacementCvts =
         mlir::triton::AMD::createNewConvertOps(builder, cvtOp, tmpLayout);
@@ -243,7 +272,8 @@ public:
       LDSLimit = targetInfo.getSharedMemorySize();
     }
 
-    ModuleAllocation allocAnalysis(mod);
+    ModuleAllocation allocAnalysis(
+        mod, mlir::triton::AMD::AMDAllocationAnalysisScratchSizeFn);
     if (allocAnalysis.getSharedMemorySize() <= LDSLimit)
       return;
 

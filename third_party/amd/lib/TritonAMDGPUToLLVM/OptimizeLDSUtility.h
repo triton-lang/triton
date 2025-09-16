@@ -5,10 +5,6 @@
 
 namespace mlir::triton::AMD {
 
-int getCvtOpLDSUsage(RankedTensorType srcTy, RankedTensorType dstTy);
-
-int getCvtOpLDSUsage(triton::gpu::ConvertLayoutOp op);
-
 std::vector<SmallVector<unsigned>> factorizePowerOf2(int n, int rank);
 
 /// Copy given layout with different warpsPerCTA parameter
@@ -36,7 +32,8 @@ createNewConvertOps(OpBuilder &builder, triton::gpu::ConvertLayoutOp &cvtOp,
                     Attribute tmpLayout);
 
 struct Resources {
-  int LDS;
+  int LDSPad;
+  int LDSSwizzle;
 };
 
 Resources

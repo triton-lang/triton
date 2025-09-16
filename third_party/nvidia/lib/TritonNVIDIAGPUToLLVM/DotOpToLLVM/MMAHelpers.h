@@ -23,12 +23,18 @@ union SMEMDescriptor {
   };
 };
 
+struct MemDescOperand {
+  Value base;
+  std::optional<int> offset;
+};
+
 // Abstract class to calculate the address of a shared or tensor memory slice.
 class DotOpMmaMemLoader {
 public:
   virtual ~DotOpMmaMemLoader() = default;
-  virtual Value memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                        Location loc) = 0;
+  virtual MemDescOperand memLoad(int a, int b,
+                                 ConversionPatternRewriter &rewriter,
+                                 Location loc) const = 0;
 };
 
 // Helper class to load shared memory slices following MMAv3 layout.
@@ -44,11 +50,11 @@ public:
   // Return a descriptor pointing to the shared memory slice at coordinates (a,
   // b)
   Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                 Location loc);
+                 Location loc) const;
 
-  Value memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                Location loc) override {
-    return smemLoad(a, b, rewriter, loc);
+  MemDescOperand memLoad(int a, int b, ConversionPatternRewriter &rewriter,
+                         Location loc) const override {
+    return {smemLoad(a, b, rewriter, loc), std::nullopt};
   }
 
 private:
@@ -66,6 +72,24 @@ private:
   Value descriptor;
 };
 
+// Helper class to load shared memory slices following MMAv5 layout.
+class DotOpMmaV5SmemLoader : public DotOpMmaV3SmemLoader {
+public:
+  using DotOpMmaV3SmemLoader::DotOpMmaV3SmemLoader;
+
+  // Return a descriptor pointing to the shared memory slice at coordinates (a,
+  // b), with bit 46 set.
+  Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
+                 Location loc) const {
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
+    Value desc = DotOpMmaV3SmemLoader::smemLoad(a, b, rewriter, loc);
+    // Set bit 46 as per
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-shared-memory-descriptor
+    Value mask = tb.int_val(64, 1ULL << 46);
+    return tb.or_(desc, mask, /*disjoint*/ true);
+  }
+};
+
 // Helper class to load tensor memory following MMAv5 layout.
 class DotOpMmaV5TmemLoader : public DotOpMmaMemLoader {
 public:
@@ -73,11 +97,11 @@ public:
   DotOpMmaV5TmemLoader(Value tensor, Value base,
                        SmallVector<unsigned int> instrShape, bool interleaved,
                        bool trans);
-  Value tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                 Location loc);
+  MemDescOperand tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
+                          Location loc) const;
 
-  Value memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                Location loc) override {
+  MemDescOperand memLoad(int a, int b, ConversionPatternRewriter &rewriter,
+                         Location loc) const override {
     return tmemLoad(a, b, rewriter, loc);
   }
 
@@ -89,7 +113,21 @@ private:
   SmallVector<unsigned int> instrShape;
   int numElementsPer32b;
   int numRepM;
+  int numSlicePerBlockN;
 };
+
+static Value getOffsetedBase(Value v, gpu::MemDescType memDescTy,
+                             const TypeConverter *typeConverter,
+                             ConversionPatternRewriter &rewriter,
+                             Location loc) {
+  TritonLLVMOpBuilder tb(loc, rewriter);
+  auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+  auto smemObj =
+      LLVM::getSharedMemoryObjectFromStruct(loc, v, llvmElemTy, rewriter);
+  auto offset = smemObj.getShmemOffset(loc, rewriter, memDescTy);
+  auto base = smemObj.getBase();
+  return tb.gep(base.getType(), llvmElemTy, base, offset);
+}
 
 } // namespace NVIDIA
 } // namespace triton
