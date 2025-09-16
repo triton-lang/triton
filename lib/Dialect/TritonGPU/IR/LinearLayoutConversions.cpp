@@ -1226,10 +1226,9 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
   auto kRow = S("row");
   auto kCol = S("col");
   auto dims = standardOutDimNames(ctx, 2);
-  // See [Zeros in TMEM LinearLayouts]
   // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma-scale-factor-a-layout-1x
   auto tile = LinearLayout::identity1D(32, kRow, dims[0]) *
-              // Broadcasting
+              // Broadcasting along 'warps'
               LinearLayout::zeros1D(4, kRow, dims[0]) *
               LinearLayout::identity1D(8, kCol, dims[1]);
   // We choose repOrder = [0, 1]
@@ -1239,7 +1238,8 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
           LinearLayout::identity1D(
               llvm::divideCeil(shape[1], tile.getOutDimSize(dims[1])), kCol,
               dims[1]);
-  // Broadcast if the 128 x 8 tile is larger than the shape
+  // See [Zeros in TMEM LinearLayouts]
+  // Set some rows/cols to 0 if shape is smaller than 32 x 8
   llvm::SmallDenseMap<StringAttr, int64_t> shapeMap;
   for (auto [dim, size] : llvm::zip(dims, shape)) {
     shapeMap[dim] = size;
