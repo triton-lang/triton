@@ -187,10 +187,9 @@ class HipBlasLtInstance {
               ? (hipblasComputeType_t)HIPBLAS_COMPUTE_32F_FAST_F8
               : (hipblasComputeType_t)HIPBLAS_COMPUTE_32F_FAST_FBF_OCP;
     } else if (dtype == HIP_R_8F_E4M3_FNUZ || dtype == HIP_R_8F_E5M2_FNUZ) {
-      computeType =
-          (dtype == HIP_R_8F_E4M3_FNUZ)
-              ? (hipblasComputeType_t)HIPBLAS_COMPUTE_32F_FAST_F8
-              : (hipblasComputeType_t)HIPBLAS_COMPUTE_32F_FAST_FBF_OCP;
+      computeType = (dtype == HIP_R_8F_E4M3_FNUZ)
+                        ? HIPBLAS_COMPUTE_32F_FAST_8F_FNUZ
+                        : HIPBLAS_COMPUTE_32F_FAST_8BF_FNUZ;
     } else {
       computeType = HIPBLAS_COMPUTE_32F;
     }
