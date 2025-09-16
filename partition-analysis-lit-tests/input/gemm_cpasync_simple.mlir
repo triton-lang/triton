@@ -5,7 +5,7 @@
 #loc = loc(unknown)
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, unpacked = true>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
 module attributes {"nvws.warp-specialized" = true, "ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 3 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @gemm_cpasync_simple(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32} loc(unknown), %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32} loc(unknown), %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32} loc(unknown), %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32} loc(unknown), %arg4: i32 {tt.divisibility = 16 : i32} loc(unknown), %arg5: i32 {tt.divisibility = 16 : i32} loc(unknown), %arg6: i32 {tt.divisibility = 16 : i32} loc(unknown), %arg7: i32 {tt.divisibility = 16 : i32} loc(unknown), %arg8: i32 {tt.divisibility = 16 : i32} loc(unknown), %arg9: i32 {tt.divisibility = 16 : i32} loc(unknown)) attributes {noinline = false} {
     %false = arith.constant false

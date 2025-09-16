@@ -7,9 +7,8 @@
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8}>
 #smem = #ttg.shared_memory
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, unpacked = true>
-#tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
-#tmem2 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, unpacked = false>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
+#tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"nvws.warp-specialized" = true, "ttg.num-ctas" = 1 : i32, "ttg.num-stages" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32, "ttg.use-ttg-ws" = true} {
   tt.func public @fmha_fp8(%arg0: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg3: !tt.tensordesc<tensor<128x128xf8E5M2, #shared>>, %arg4: i32, %arg5: i32, %arg6: i64, %arg7: i64, %arg8: !tt.tensordesc<tensor<256x128xf8E5M2, #shared>>, %arg9: i32, %arg10: i32, %arg11: i64, %arg12: i64, %arg13: !tt.tensordesc<tensor<128x256xf8E5M2, #shared>>, %arg14: i32, %arg15: i32, %arg16: i64, %arg17: i64, %arg18: !tt.tensordesc<tensor<128x128xf8E5M2, #shared>>, %arg19: i32, %arg20: i32, %arg21: i64, %arg22: i64, %arg23: !tt.tensordesc<tensor<128xf32, #shared1>>, %arg24: i32, %arg25: i64, %arg26: f32, %arg27: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg28: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg29: i32 {tt.divisibility = 16 : i32}, %arg30: i32 {tt.divisibility = 16 : i32}, %arg31: i32 {tt.divisibility = 16 : i32}, %arg32: i32 {tt.divisibility = 16 : i32}, %arg33: i32 {tt.divisibility = 16 : i32}, %arg34: i32 {tt.divisibility = 16 : i32}, %arg35: i32, %arg36: i32, %arg37: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %false = arith.constant {ttg.partitions = [0 : i32]} false
@@ -63,7 +62,7 @@ module attributes {"nvws.warp-specialized" = true, "ttg.num-ctas" = 1 : i32, "tt
         tt.reduce.return %56 {ttg.partitions = [4 : i32]} : f32
       }) {ttg.partitions = [4 : i32]} : (tensor<128x256xf32, #linear>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #linear}>>
       %42 = tt.fp_to_fp %40 {ttg.partitions = [4 : i32]}, rounding = rtne : tensor<128x256xf32, #linear> -> tensor<128x256xf8E5M2, #linear>
-      %result_9 = ttng.tmem_alloc %42 {ttg.partitions = [4 : i32]} : (tensor<128x256xf8E5M2, #linear>) -> !ttg.memdesc<128x256xf8E5M2, #tmem2, #ttng.tensor_memory>
+      %result_9 = ttng.tmem_alloc %42 {ttg.partitions = [4 : i32]} : (tensor<128x256xf8E5M2, #linear>) -> !ttg.memdesc<128x256xf8E5M2, #tmem, #ttng.tensor_memory>
       %43 = arith.mulf %arg40, %39 {ttg.partitions = [4 : i32]} : tensor<128xf32, #ttg.slice<{dim = 1, parent = #linear}>>
       %44 = arith.addf %43, %41 {ttg.partitions = [4 : i32]} : tensor<128xf32, #ttg.slice<{dim = 1, parent = #linear}>>
       %45 = tt.expand_dims %39 {axis = 1 : i32, ttg.partitions = [1 : i32]} : tensor<128xf32, #ttg.slice<{dim = 1, parent = #linear}>> -> tensor<128x1xf32, #linear>
@@ -76,7 +75,7 @@ module attributes {"nvws.warp-specialized" = true, "ttg.num-ctas" = 1 : i32, "tt
       %51 = ttg.local_alloc %50 {ttg.partitions = [2 : i32]} : (tensor<128x256xf8E5M2, #blocked3>) -> !ttg.memdesc<128x256xf8E5M2, #shared, #smem>
       %52 = ttg.memdesc_trans %51 {order = array<i32: 1, 0>, ttg.partitions = [3 : i32]} : !ttg.memdesc<128x256xf8E5M2, #shared, #smem> -> !ttg.memdesc<256x128xf8E5M2, #shared2, #smem>
       %53 = ttng.tmem_store %48, %result_3[%token_11], %true {ttg.partitions = [1 : i32]} : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem1, #ttng.tensor_memory, mutable>
-      %54 = ttng.tc_gen5_mma %result_9, %52, %result_3[%53], %true, %true {ttg.partitions = [3 : i32]} : !ttg.memdesc<128x256xf8E5M2, #tmem2, #ttng.tensor_memory>, !ttg.memdesc<256x128xf8E5M2, #shared2, #smem>, !ttg.memdesc<128x128xf32, #tmem1, #ttng.tensor_memory, mutable>
+      %54 = ttng.tc_gen5_mma %result_9, %52, %result_3[%53], %true, %true {ttg.partitions = [3 : i32]} : !ttg.memdesc<128x256xf8E5M2, #tmem, #ttng.tensor_memory>, !ttg.memdesc<256x128xf8E5M2, #shared2, #smem>, !ttg.memdesc<128x128xf32, #tmem1, #ttng.tensor_memory, mutable>
       %55 = arith.addi %arg41, %c256_i32 {ttg.partitions = [2 : i32]} : i32
       scf.yield %32, %44, %55, %token_8, %54 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #linear}>>, tensor<128xf32, #ttg.slice<{dim = 1, parent = #linear}>>, i32, !ttg.async.token, !ttg.async.token
     } {tt.divisibility_arg1 = dense<256> : tensor<1xi32>, ttg.partitions = [0 : i32, 1 : i32, 2 : i32, 3 : i32, 4 : i32], ttg.partitions.0 = [4 : i32], ttg.partitions.1 = [4 : i32], ttg.partitions.2 = [2 : i32], ttg.partitions.3 = [4 : i32], ttg.partitions.4 = [3 : i32]}
