@@ -2381,43 +2381,66 @@ duplicateViewOps(Operation *region) {
 void deduplicateViewOps(
     Operation *region,
     llvm::SmallVector<llvm::SmallVector<mlir::Operation *>> duplicatedViewOps) {
+
+  bool nvws = tools::getBoolEnv("PARTITION_ANALYSIS_NVWS_SERIALIZATION");
+
   // get partition assignment for the ops, and partition them by it
   // merge ops that have the same partition assignment
   for (auto ops : duplicatedViewOps) {
-    std::map<std::string, llvm::SmallVector<mlir::Operation *>> partitionedOps;
-    for (auto op : ops) {
-      std::string partition;
-      // nvws:
-      if (op->hasAttr("groups")) {
-        for (auto attr : cast<ArrayAttr>(op->getAttr("groups"))) {
-          auto fullname = cast<SymbolRefAttr>(attr).getRootReference().str();
-          partition += fullname + ",";
-        }
-      }
-      // main:
-      if (op->hasAttr(kPartitionAttrName)) {
-        for (auto attr :
-             cast<DenseI32ArrayAttr>(op->getAttr(kPartitionAttrName))
-                 .asArrayRef()) {
-          auto name = std::to_string(attr);
-          partition += name + ",";
-        }
-      }
-      if (partitionedOps.find(partition) == partitionedOps.end()) {
-        partitionedOps[partition] = {};
-      }
-      partitionedOps[partition].push_back(op);
-    }
 
-    for (auto partition : partitionedOps) {
-      auto &sameOps = partition.second;
-      if (sameOps.size() <= 1)
-        continue;
-      auto op = sameOps.front();
-      for (auto it = sameOps.begin() + 1; it != sameOps.end(); it++) {
-        // merge the two ops
-        (*it)->replaceAllUsesWith(op->getResults());
-        (*it)->erase();
+    if (nvws) {
+      std::map<std::string, llvm::SmallVector<mlir::Operation *>>
+          partitionedOps;
+      for (auto op : ops) {
+        std::string partition;
+        if (op->hasAttr("groups")) {
+          for (auto attr : cast<ArrayAttr>(op->getAttr("groups"))) {
+            auto fullname = cast<SymbolRefAttr>(attr).getRootReference().str();
+            partition += fullname + ",";
+          }
+        }
+        if (partitionedOps.find(partition) == partitionedOps.end()) {
+          partitionedOps[partition] = {};
+        }
+        partitionedOps[partition].push_back(op);
+      }
+      for (auto partition : partitionedOps) {
+        auto &sameOps = partition.second;
+        if (sameOps.size() <= 1)
+          continue;
+        auto op = sameOps.front();
+        for (auto it = sameOps.begin() + 1; it != sameOps.end(); it++) {
+          // merge the two ops
+          (*it)->replaceAllUsesWith(op->getResults());
+          (*it)->erase();
+        }
+      }
+
+    } else {
+      // main:
+      std::map<SmallVector<int>, llvm::SmallVector<mlir::Operation *>>
+          partitionedOps;
+      for (auto op : ops) {
+        assert(op->hasAttr(kPartitionAttrName));
+        auto partitionsRef =
+            cast<DenseI32ArrayAttr>(op->getAttr(kPartitionAttrName))
+                .asArrayRef();
+        SmallVector<int> partitions(partitionsRef.begin(), partitionsRef.end());
+        if (partitionedOps.find(partitions) == partitionedOps.end()) {
+          partitionedOps[partitions] = {};
+        }
+        partitionedOps[partitions].push_back(op);
+      }
+      for (auto partition : partitionedOps) {
+        auto &sameOps = partition.second;
+        if (sameOps.size() <= 1)
+          continue;
+        auto op = sameOps.front();
+        for (auto it = sameOps.begin() + 1; it != sameOps.end(); it++) {
+          // merge the two ops
+          (*it)->replaceAllUsesWith(op->getResults());
+          (*it)->erase();
+        }
       }
     }
   }
