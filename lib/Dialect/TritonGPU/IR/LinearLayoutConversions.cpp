@@ -1228,23 +1228,23 @@ tensorMemoryScalesToLinearLayout(ArrayRef<int64_t> shape,
   auto dims = standardOutDimNames(ctx, 2);
   // See [Zeros in TMEM LinearLayouts]
   // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma-scale-factor-a-layout-1x
+  auto tile = LinearLayout::identity1D(32, kRow, dims[0]) *
+              // Broadcasting
+              LinearLayout::zeros1D(4, kRow, dims[0]) *
+              LinearLayout::identity1D(8, kCol, dims[1]);
   // We choose repOrder = [0, 1]
-  auto tile =
-      LinearLayout::identity1D(std::min<int>(32, shape[0]), kRow, dims[0]) *
-      // If shape[0] < 32, we have some rows undefined
-      LinearLayout::zeros1D(32 / std::min<int>(32, shape[0]), kRow, dims[0]) *
-      // Broadcasting
-      LinearLayout::zeros1D(4, kRow, dims[0]) *
-      LinearLayout::identity1D(std::min<int>(4, shape[1]), kCol, dims[1]) *
-      // If shape[1] < 4, we have some cols undefined
-      LinearLayout::zeros1D(4 / std::min<int>(4, shape[1]), kCol, dims[1]) *
-      // If shape[0] < 64, we have 1 col undefined
-      LinearLayout::zeros1D(
-          2 / std::min<int>(2, llvm::divideCeil(shape[0], 32)), kCol, dims[1]) *
-      // reps
-      LinearLayout::identity1D(std::max<int>(1, shape[0] / 32), kCol, dims[0]) *
-      LinearLayout::identity1D(std::max<int>(1, shape[1] / 4), kCol, dims[1]);
-  return tile;
+  tile *= LinearLayout::identity1D(
+              llvm::divideCeil(shape[0], tile.getOutDimSize(dims[0])), kCol,
+              dims[0]) *
+          LinearLayout::identity1D(
+              llvm::divideCeil(shape[1], tile.getOutDimSize(dims[1])), kCol,
+              dims[1]);
+  // Broadcast if the 128 x 8 tile is larger than the shape
+  llvm::SmallDenseMap<StringAttr, int64_t> shapeMap;
+  for (auto [dim, size] : llvm::zip(dims, shape)) {
+    shapeMap[dim] = size;
+  }
+  return ensureLayoutNotLargerThan(tile, shapeMap);
 }
 
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
