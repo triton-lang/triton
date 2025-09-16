@@ -2,25 +2,10 @@ import os
 import subprocess
 import pathlib
 
-
 def test_inspection(tmp_path: pathlib.Path):
-    dir_path = os.path.dirname(os.path.realpath(__file__))
-
-    test_env = os.environ.copy()
-    test_env["TRITON_ALWAYS_COMPILE"] = "1"
-    test_env["TRITON_MOCK_INSPECT_STAGES"] = "1"
-    test_env["TRITON_DUMP_DIR"] = str(tmp_path)
-
-    subprocess.run(["python3", dir_path + "/inspection_helper.py"], env=test_env)
-
-    filename = tmp_path / "inspect_stages.py"
-    with open(filename, "r") as infile:
-        file_str = infile.readlines()
-
-    assert file_str == ["# This is generated from Triton add_stages_inspection_hook"]
-
-
-def test_inspection_integrity(tmp_path: pathlib.Path):
+    _run_test = lambda env, dir_path: subprocess.run(["python3", dir_path + "/inspection_helper.py"],
+                                                     env=env, capture_output=True, text=True)
+    curr_repro_path = tmp_path / ("../test_inspection0." + "make_ttgir" + ".repro.mlir")
     dir_path = os.path.dirname(os.path.realpath(__file__))
 
     # Run once to get the clean/golden repro dump
@@ -28,29 +13,14 @@ def test_inspection_integrity(tmp_path: pathlib.Path):
     golden_env["TRITON_ALWAYS_COMPILE"] = "1"
     golden_env["TRITON_DUMP_DIR"] = str(tmp_path)
     golden_env["TRITON_REPRODUCER_PATH"] = str(tmp_path)
-    minimal_kernel = "/inspection_helper.py"
-    subprocess.run(["python3", dir_path + minimal_kernel], env=golden_env)
 
-    curr_repro_path = tmp_path / ("../test_inspection_integrity0." + "make_ttir" + ".repro.mlir")
-    golden_ttir_repro = curr_repro_path.read_text()
-    curr_repro_path.unlink()
-    curr_repro_path = tmp_path / ("../test_inspection_integrity0." + "make_ttgir" + ".repro.mlir")
-    golden_ttgir_repro = curr_repro_path.read_text()
-    curr_repro_path.unlink()
-
-    # # Run again with pipeline inspection
-    test_env = os.environ.copy()
-    test_env["TRITON_ALWAYS_COMPILE"] = "1"
+    # Run again with pipeline inspection
+    test_env = golden_env.copy()
     test_env["TRITON_MOCK_OVERRIDE_STAGES"] = "1"
-    test_env["TRITON_REPRODUCER_PATH"] = str(tmp_path)
-    test_env["TRITON_DUMP_DIR"] = str(tmp_path)
     test_env["TRITON_OVERRIDE_DIR"] = str(tmp_path)
 
-    subprocess.run(["python3", dir_path + "/inspection_helper.py"], env=test_env)
-
-    curr_repro_path = tmp_path / ("../test_inspection_integrity0." + "make_ttir" + ".repro.mlir")
-    inspection_ttir_repro = curr_repro_path.read_text()
-    curr_repro_path = tmp_path / ("../test_inspection_integrity0." + "make_ttgir" + ".repro.mlir")
-    inspection_ttgir_repro = curr_repro_path.read_text()
-
-    assert golden_ttir_repro == inspection_ttir_repro and golden_ttgir_repro == inspection_ttgir_repro
+    assert "Called make_ttgir_wrapper" not in str(_run_test(golden_env, dir_path).stdout)
+    golden_ttgir_repro = curr_repro_path.read_text()
+    curr_repro_path.unlink()
+    assert "Called make_ttgir_wrapper" in str(_run_test(test_env, dir_path).stdout)
+    assert golden_ttgir_repro == curr_repro_path.read_text()
