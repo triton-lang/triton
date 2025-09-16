@@ -8,6 +8,8 @@ import triton.language as tl
 from triton._internal_testing import (
     is_ampere_or_newer,
     is_blackwell,
+    is_hip_gfx11,
+    is_hip_gfx12,
     is_hip_cdna3,
     is_hip_cdna4,
     is_hopper_or_newer,
@@ -200,6 +202,67 @@ def test_amd_direct_load_to_shared(use_buffer_load):
     else:
         assert re.search(r"global_load_lds", pgm.asm['amdgcn'], re.MULTILINE)
     assert 'vmcnt(0)' in pgm.asm['amdgcn']
+
+
+@pytest.mark.skipif(not (is_hip_gfx11() or is_hip_gfx12()), reason="Requires RDNA3 or RDNA4")
+@pytest.mark.parametrize("M, N, K", [(64, 64, 64)])
+@pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
+def test_amd_wmma(M, N, K, in_dtype):
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr,  #
+               stride_am, stride_ak,  #
+               stride_bk, stride_bn,  #
+               stride_cm, stride_cn,  #
+               BLOCK_SIZE_M: ttgl.constexpr,  #
+               BLOCK_SIZE_N: ttgl.constexpr,  #
+               BLOCK_SIZE_K: ttgl.constexpr,  #
+               BLOCKED_LAYOUT: ttgl.constexpr,  #
+               WMMA_LAYOUT: ttgl.constexpr,  #
+               K_WIDTH: ttgl.constexpr):
+        offs_am = ttgl.arange(0, BLOCK_SIZE_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
+        offs_bn = ttgl.arange(0, BLOCK_SIZE_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+
+        offs_ak = ttgl.arange(0, BLOCK_SIZE_K, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+        offs_bk = ttgl.arange(0, BLOCK_SIZE_K, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
+
+        offs_a = offs_am[:, None] * stride_am + offs_ak[None, :] * stride_ak
+        offs_b = offs_bk[:, None] * stride_bk + offs_bn[None, :] * stride_bn
+
+        a = ttgl.load(a_ptr + offs_a)
+        b = ttgl.load(b_ptr + offs_b)
+
+        a = ttgl.convert_layout(a, layout=ttgl.DotOperandLayout(0, WMMA_LAYOUT, K_WIDTH))
+        b = ttgl.convert_layout(b, layout=ttgl.DotOperandLayout(1, WMMA_LAYOUT, K_WIDTH))
+
+        acc = ttgl.zeros([BLOCK_SIZE_M, BLOCK_SIZE_N], ttgl.float32, WMMA_LAYOUT)
+        if WMMA_LAYOUT.version == 1:
+            c = ttgl.amd.rdna3.wmma(a, b, acc)
+        else:
+            ttgl.static_assert(WMMA_LAYOUT.version == 2, "WMMA_LAYOUT.version must be 1 or 2")
+            c = ttgl.amd.rdna4.wmma(a, b, acc)
+        c = c.to(a_ptr.dtype.element_ty)
+
+        offs_cm = ttgl.arange(0, BLOCK_SIZE_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
+        offs_cn = ttgl.arange(0, BLOCK_SIZE_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
+        offs_c = offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn
+        ttgl.store(c_ptr + offs_c, c)
+
+    elem_type = torch.float16 if in_dtype == 'float16' else torch.bfloat16
+    a = torch.randn((M, K), device='cuda', dtype=elem_type)
+    b = torch.randn((K, N), device='cuda', dtype=elem_type)
+    c = torch.empty((M, N), device=a.device, dtype=elem_type)
+
+    blocked = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+    wmma_version = 1 if is_hip_gfx11() else 2
+    k_width = 16 if is_hip_gfx11() else 8
+    wmma = ttgl.amd.AMDWMMALayout(wmma_version, True, [2, 2])
+    kernel[1, 1](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_SIZE_M=M,
+                 BLOCK_SIZE_N=N, BLOCK_SIZE_K=K, BLOCKED_LAYOUT=blocked, WMMA_LAYOUT=wmma, K_WIDTH=k_width, num_warps=4)
+
+    ref = torch.matmul(a, b)
+    triton_output = c
+    torch.testing.assert_close(ref, triton_output)
 
 
 @pytest.mark.parametrize("M, N, K", [(32, 32, 16), (16, 16, 32)])
@@ -482,7 +545,7 @@ def test_tmem_copy_2d():
         tcgen05_copy(smem, tmem)
         tcgen05_commit(barrier)
         mbarrier.wait(barrier, phase=0)
-        tmem_alias: ttgl.constexpr = TensorMemoryLayout((128, 32), unpacked=False)
+        tmem_alias: ttgl.constexpr = TensorMemoryLayout((128, 32), col_stride=1)
         tmem = tmem._reinterpret(ttgl.int8, (num_rows, num_cols), tmem_alias)
         value = tmem.load(blocked)
         ttgl.store(ttgl.set_auto_layout(out_ptrs, blocked), value)
@@ -509,7 +572,7 @@ def test_tmem_subslice_block_m_64():
         N: ttgl.constexpr = 128
         BLOCK_N: ttgl.constexpr = 64
 
-        tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), unpacked=True)
+        tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), col_stride=1)
         s_tmem = allocate_tensor_memory(ttgl.float32, (BLOCK_M, N), layout=tmem_layout)
         o_tmem = allocate_tensor_memory(ttgl.float32, (BLOCK_M, N), layout=tmem_layout)
 
@@ -522,19 +585,19 @@ def test_tmem_subslice_block_m_64():
         s_tmem.store(s)
         o_tmem.store(s)
 
-        p_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), unpacked=False)
+        p_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), col_stride=1)
         p_tmem = s_tmem.slice(0, N // 2)._reinterpret(ttgl.float16, [BLOCK_M, N], p_tmem_layout)
         p_tmem.store(ttgl.full((BLOCK_M, N), 0.0, dtype=ttgl.float16, layout=layout))
 
-        d1_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, 1), unpacked=True)
-        d1_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, 1, (BLOCK_M, 1), num_warps=4)
+        d1_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, 2), col_stride=1)
+        d1_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, 2, (BLOCK_M, 2), num_warps=4)
 
-        m_tmem = s_tmem.slice(N // 4, 1)._reinterpret(ttgl.float32, [BLOCK_M, 1], d1_tmem_layout)
-        m_tmem.store(ttgl.full((BLOCK_M, 1), 2.0, dtype=ttgl.float32, layout=d1_layout))
-        l_tmem = s_tmem.slice(N // 4 + 1, 1)._reinterpret(ttgl.float32, [BLOCK_M, 1], d1_tmem_layout)
-        l_tmem.store(ttgl.full((BLOCK_M, 1), 3.0, dtype=ttgl.float32, layout=d1_layout))
-        a_tmem = s_tmem.slice(N // 4 + 2, 1)._reinterpret(ttgl.float32, [BLOCK_M, 1], d1_tmem_layout)
-        a_tmem.store(ttgl.full((BLOCK_M, 1), 4.0, dtype=ttgl.float32, layout=d1_layout))
+        m_tmem = s_tmem.slice(N // 4, 2)._reinterpret(ttgl.float32, [BLOCK_M, 2], d1_tmem_layout)
+        m_tmem.store(ttgl.full((BLOCK_M, 2), 2.0, dtype=ttgl.float32, layout=d1_layout))
+        l_tmem = s_tmem.slice(N // 4 + 2, 2)._reinterpret(ttgl.float32, [BLOCK_M, 2], d1_tmem_layout)
+        l_tmem.store(ttgl.full((BLOCK_M, 2), 3.0, dtype=ttgl.float32, layout=d1_layout))
+        a_tmem = s_tmem.slice(N // 4 + 4, 2)._reinterpret(ttgl.float32, [BLOCK_M, 2], d1_tmem_layout)
+        a_tmem.store(ttgl.full((BLOCK_M, 2), 4.0, dtype=ttgl.float32, layout=d1_layout))
 
         s = s_tmem.load(layout)
 
@@ -573,9 +636,9 @@ def test_tmem_subslice_block_m_64():
     #   TMEM[16:32] = [s2, s3]
     #
     # Thus slicing S at  N//4 will obtain an offset to the beginning of s1.
-    out_ref[:, 32] = 2.0
-    out_ref[:, 33] = 3.0
-    out_ref[:, 34] = 4.0
+    out_ref[:, 32:34] = 2.0
+    out_ref[:, 34:36] = 3.0
+    out_ref[:, 36:38] = 4.0
 
     torch.testing.assert_close(out_ref, out_tri, atol=0, rtol=0)
 
@@ -601,8 +664,8 @@ def test_block_m_64_mma():
         b = ttgl.load(b_ptr + b_offsets)
         c = ttgl.load(c_ptr + a_offsets)
 
-        a_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), unpacked=False)
-        acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), unpacked=True)
+        a_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), col_stride=1)
+        acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), col_stride=1)
         al_tmem = allocate_tensor_memory(ttgl.float16, (BLOCK_M, N), layout=a_tmem_layout)
         ar_tmem = allocate_tensor_memory(ttgl.float16, (BLOCK_M, N), layout=a_tmem_layout)
         acc_tmem = allocate_tensor_memory(ttgl.float32, (BLOCK_M, N), layout=acc_tmem_layout)
@@ -758,7 +821,7 @@ def test_tmem_copy_no_scales(M, N, BLOCK_N, num_warps, swizzle):
         input = ttgl.load(in_ptr + offs)
         tmem_layout: ttgl.constexpr = TensorMemoryLayout(
             block=(128, BLOCK_N),
-            unpacked=True,
+            col_stride=32 // in_ptr.dtype.element_ty.primitive_bitwidth,
         )
 
         smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzle, element_bitwidth=32, rank=2)
@@ -811,3 +874,81 @@ def test_2d_tensor_early_return():
     out = torch.empty(1, dtype=torch.int32, device="cuda")
     compiled_kernel = kernel.warmup(N=100, out=out, grid=(1, ))
     assert compiled_kernel.asm["llir"].count("define") == 1
+
+
+@pytest.mark.skipif(not is_hip_cdna3() and not is_hip_cdna4(), reason="Requires CDNA3 or CDNA4")
+def test_inline_with_amdgpu_dialect():
+
+    @gluon.jit
+    def buffer_load(x, offsets):
+        return ttgl.amd.cdna3.buffer_load(ptr=x, offsets=offsets)
+
+    @gluon.jit
+    def kernel(x, y):
+        layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[64], warps_per_cta=[4],
+                                                    order=[0])
+        offsets = ttgl.arange(0, 64, layout=layout)
+
+        a = buffer_load(x, offsets)
+        ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=y, offsets=offsets)
+
+    input = torch.arange(64, device="cuda").to(torch.int32)
+    output = torch.empty_like(input)
+
+    compiled_kernel = kernel.warmup(input, output, grid=(1, ))
+    assert compiled_kernel.asm["ttgir"].count("tt.func private") == 0
+
+
+@pytest.mark.parametrize("interval_pairs", [[[32, 4]], [[16, 4]], [[16, 4], [64, 8]]])
+@pytest.mark.parametrize(
+    "shared_layout",
+    [{"order": [0, 1]}, {"order": [1, 0]},
+     {"offsets": [[0, 1], [0, 2], [0, 8], [0, 4], [0, 16], [0, 32], [2, 0], [1, 0], [4, 0], [8, 0], [16, 0], [32, 0]]}])
+@pytest.mark.parametrize("slice_m_offset, slice_n_offset, slice_m, slice_n", [(48, 16, 16, 16), (32, 48, 32, 16),
+                                                                              (48, 32, 16, 32)])
+def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_offset, slice_n_offset, slice_m, slice_n):
+    m = 64
+    n = 64
+    num_warps = 1
+    num_warps_cst = ttgl.constexpr(num_warps)
+    warp_size_cst = ttgl.constexpr(THREADS_PER_WARP)
+
+    shape = [m, n]
+    if "order" in shared_layout:
+        order = shared_layout["order"]
+        smem_layout = ttgl.constexpr(ttgl.PaddedSharedLayout.with_identity_for(interval_pairs, shape, order))
+    elif "offsets" in shared_layout:
+        offsets = shared_layout["offsets"]
+        blocks = []
+        smem_layout = ttgl.constexpr(ttgl.PaddedSharedLayout(interval_pairs, offsets, blocks, shape))
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, SLICE_M_OFFSET: ttgl.constexpr,
+               SLICE_N_OFFSET: ttgl.constexpr, SLICE_M: ttgl.constexpr, SLICE_N: ttgl.constexpr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [warp_size_cst, 1], [1, num_warps_cst], [1, 0])
+        offs_m_load = ttgl.arange(0, M, ttgl.SliceLayout(1, blocked))
+        offs_n_load = ttgl.arange(0, N, ttgl.SliceLayout(0, blocked))
+        in_offs = offs_m_load[:, None] * N + offs_n_load[None, :]
+
+        in_data = ttgl.load(in_ptr + in_offs)
+
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [M, N], smem_layout)
+        smem_slice0 = smem.slice(SLICE_M_OFFSET, SLICE_M, dim=0)
+        smem_slice1 = smem_slice0.slice(SLICE_N_OFFSET, SLICE_N, dim=1)
+
+        smem.store(in_data)
+
+        out_data = smem_slice1.load(blocked)
+
+        offs_m_store = ttgl.arange(0, SLICE_M, ttgl.SliceLayout(1, blocked))
+        offs_n_store = ttgl.arange(0, SLICE_N, ttgl.SliceLayout(0, blocked))
+        out_offs = offs_m_store[:, None] * SLICE_N + offs_n_store[None, :]
+        ttgl.store(out_ptr + out_offs, out_data)
+
+    input = torch.arange(m * n, device="cuda").reshape(m, n).to(torch.int32)
+    output = torch.zeros((slice_m, slice_n), dtype=torch.int32, device="cuda")
+    ref_output = input[slice_m_offset:slice_m_offset + slice_m, slice_n_offset:slice_n_offset + slice_n]
+
+    kernel[(1, )](input, output, m, n, slice_m_offset, slice_n_offset, slice_m, slice_n, num_warps=num_warps)
+
+    assert (output == ref_output).all()

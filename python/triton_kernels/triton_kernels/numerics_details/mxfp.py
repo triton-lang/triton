@@ -217,7 +217,13 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
         mantissas = torch.where(exponents < E8_BIAS, (0x400000 | right_shift_unsigned(mantissas, 1)) >>
                                 (E8_BIAS - exponents - 1), mantissas)
         exponents = torch.maximum(exponents, torch.tensor(E8_BIAS - E2_BIAS, device=device)) - (E8_BIAS - E2_BIAS)
-        e2m1_tmp = right_shift_unsigned(((exponents << 2) | right_shift_unsigned(mantissas, 21)) + 1, 1)
+        # Round to nearest, ties to even (RTNE)
+        m2bits = right_shift_unsigned(mantissas, 21) & 0x3
+        lsb_keep = right_shift_unsigned(m2bits, 1) & 0x1
+        guard = m2bits & 0x1
+        sticky = (mantissas & ((1 << 21) - 1)) != 0
+        round_inc = guard & (sticky.to(torch.int32) | lsb_keep)
+        e2m1_tmp = right_shift_unsigned(((exponents << 2) | m2bits) + round_inc, 1)
         e2m1_tmp = torch.minimum(e2m1_tmp, torch.tensor(0x7, device=device))
         e2m1_value = (right_shift_unsigned(signs, 28) | e2m1_tmp).to(torch.uint8)  # shape: (..., even_axis_shape)
 

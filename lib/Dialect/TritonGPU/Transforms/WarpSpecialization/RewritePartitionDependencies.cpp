@@ -64,16 +64,14 @@ namespace {
 struct AsyncRef {
   auto putView(PartitionBuilder &b, Partition &partition,
                StageCluster srcStageCluster) {
-    auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
     auto enterOp = b.createInto<triton::nvws::ArefPutEnterOp>(
-        partition, srcStageCluster, viewType, tokenType, aref, zero, zero);
+        partition, srcStageCluster, aref, TypeRange{viewType}, tokenType);
     auto token = enterOp.getToken();
 
     auto exitOp = [this, &partition, srcStageCluster,
                    token](PartitionBuilder &b) {
-      auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
       auto exitOp = b.createInto<triton::nvws::ArefPutExitOp>(
-          partition, srcStageCluster, aref, token, zero,
+          partition, srcStageCluster, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{triton::nvws::AsyncOpAttr::get(
               aref.getContext(), triton::nvws::AsyncOp::NONE)}));
     };
@@ -82,16 +80,14 @@ struct AsyncRef {
 
   auto getView(PartitionBuilder &b, Partition &partition,
                StageCluster srcStageCluster) {
-    auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
     auto enterOp = b.createInto<triton::nvws::ArefGetEnterOp>(
-        partition, srcStageCluster, viewType, tokenType, aref, zero, zero);
+        partition, srcStageCluster, aref, TypeRange{viewType}, tokenType);
     auto token = enterOp.getToken();
 
     auto exitOp = [this, &partition, srcStageCluster,
                    token](PartitionBuilder &b) {
-      auto zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
       auto exitOp = b.createInto<triton::nvws::ArefGetExitOp>(
-          partition, srcStageCluster, aref, token, zero,
+          partition, srcStageCluster, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{triton::nvws::AsyncOpAttr::get(
               aref.getContext(), triton::nvws::AsyncOp::NONE)}));
     };
@@ -110,8 +106,8 @@ struct AsyncRef {
 // Helper class for dependency rewriting.
 class DependencyRewriter {
 public:
-  DependencyRewriter(WarpSchedule &schedule, scf::ForOp &loop)
-      : schedule(schedule), loop(loop), b(loop.getLoc(), loop),
+  DependencyRewriter(PartitionSet &partitions, scf::ForOp &loop)
+      : partitions(partitions), loop(loop), b(loop.getLoc(), loop),
         endBuilder(loop.getLoc(), loop->getNextNode()) {}
 
   // Partition the loop.
@@ -121,8 +117,8 @@ private:
   AsyncRef allocateAsyncValue(RankedTensorType tensorType,
                               unsigned maxDistance);
 
-  // The schedule to apply.
-  WarpSchedule &schedule;
+  // The partition set to apply.
+  PartitionSet &partitions;
   // The loop to partition.
   scf::ForOp &loop;
   // The builders to use.
@@ -150,7 +146,7 @@ AsyncRef DependencyRewriter::allocateAsyncValue(RankedTensorType tensorType,
 LogicalResult DependencyRewriter::run() {
   SmallVector<llvm::MapVector<Value, UseInfo>> partitionUseInfo;
 
-  for (const Partition &partition : schedule.getPartitions()) {
+  for (const Partition &partition : partitions.getPartitions()) {
     // Find all consumers of all outputs of this partition, tracking the
     // specific Partition
     auto &useInfo = partitionUseInfo.emplace_back();
@@ -159,6 +155,7 @@ LogicalResult DependencyRewriter::run() {
     std::function<void(OpOperand &)> collectUses;
     collectUses = [&](OpOperand &use) {
       Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+      auto partitionIds = getPartitionIds(owner);
       if (isa<scf::YieldOp>(owner)) {
         // This value is used in a subsequent iteration.
         // collect the uses of the appropriate loop arg
@@ -167,12 +164,17 @@ LogicalResult DependencyRewriter::run() {
                                 .getUses()) {
           collectUses(newUse);
         }
-      } else if (schedule.getPartition(owner) != &partition) {
+      } else if (partitionIds &&
+                 !llvm::is_contained(*partitionIds, partition.getIndex())) {
         // This value is used in a different partition in the same iteration.
         uses.emplace_back(use.get(), &use, 0);
       }
     };
     for (Operation *op : partition.getOps()) {
+      if (partitions.isInRootPartition(op)) {
+        // skip ops in the root partition
+        continue;
+      }
       for (OpOperand &use : op->getUses()) {
         collectUses(use);
       }
@@ -180,13 +182,12 @@ LogicalResult DependencyRewriter::run() {
 
     auto callback = [&](Value output, OpOperand &use, unsigned distance) {
       Operation *user = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
-      Partition *usePartition = schedule.getPartition(user);
+      Partition *usePartition = partitions.getPartition(user);
       // Ignore uses in the same partition in the future.
       if (usePartition == &partition) {
         assert(distance > 0 && "self-recursion must occur in the future");
         return;
       }
-      Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
       UseInfo &info = useInfo[output];
       info.consumers[{usePartition, distance}].push_back(&use);
     };
@@ -202,7 +203,7 @@ LogicalResult DependencyRewriter::run() {
 
   // Cut all SSA dependencies by passing outputs through shared memory.
   for (auto [partition, useInfo] :
-       llvm::zip(schedule.getPartitions(), partitionUseInfo)) {
+       llvm::zip(partitions.getPartitions(), partitionUseInfo)) {
     // The amount of buffering is based on the longest distance to a user.
     for (auto &[output, info] : useInfo) {
       b.setLoc(output.getLoc());
@@ -289,8 +290,6 @@ LogicalResult DependencyRewriter::run() {
   // Rewrite the loop to add the new results. Calling this function with no
   // indices set will just resize the results.
   eraseLoopCarriedValues(loop, {});
-  // Update the schedule.
-  schedule.serialize(loop);
   return success();
 }
 
@@ -299,13 +298,11 @@ LogicalResult DependencyRewriter::run() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult triton::gpu::rewritePartitionDependencies(scf::ForOp &loop) {
-  FailureOr<WarpSchedule> scheduleOr = WarpSchedule::deserialize(loop);
-  if (failed(scheduleOr))
+  FailureOr<PartitionSet> partitionsOr = PartitionSet::fromLoop(loop);
+  if (failed(partitionsOr))
     return failure();
-  WarpSchedule schedule = std::move(*scheduleOr);
-  if (failed(schedule.verify(loop)))
-    return failure();
-  DependencyRewriter rewriter(schedule, loop);
+  PartitionSet partitions = std::move(*partitionsOr);
+  DependencyRewriter rewriter(partitions, loop);
   if (failed(rewriter.run()))
     return failure();
   return success();
@@ -333,7 +330,7 @@ struct RewritePartitionDependencies
 
 void RewritePartitionDependencies::runOnOperation() {
   // Collect for loops to warp specialize. This pass expects the loop to
-  // already be scheduled.
+  // already be annotated with partitions.
   SmallVector<scf::ForOp> loops;
   getOperation().walk([&](scf::ForOp loop) {
     if (loop->hasAttrOfType<ArrayAttr>(kPartitionStagesAttrName))

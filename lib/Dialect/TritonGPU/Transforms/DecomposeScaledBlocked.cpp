@@ -7,6 +7,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -134,11 +135,16 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::broadcastScale(
 }
 
 TypedValue<RankedTensorType> DecomposeScaledBlocked::maskNan(
-    PatternRewriter &rewriter, DotScaledOp scaledDotOp, ModuleOp mod,
+    PatternRewriter &rewriter, DotScaledOp scaledDotOp,
     TypedValue<RankedTensorType> mxfp, TypedValue<RankedTensorType> scale,
     int dim) const {
+  // Skip NaN checks if fastMath
+  if (scaledDotOp.getFastMath())
+    return mxfp;
+
   // Implement tl.where(scale == 0xFF, float("nan"), mxfp)
   auto loc = scale.getLoc();
+  auto mod = scaledDotOp->getParentOfType<ModuleOp>();
 
   // Scale is NaN
   auto scaleTy = scale.getType();
@@ -179,7 +185,6 @@ DecomposeScaledBlocked::scaleArg(PatternRewriter &rewriter,
   auto fastMath = scaledDotOp.getFastMath();
 
   auto loc = v.getLoc();
-  auto mod = scaledDotOp->getParentOfType<ModuleOp>();
   auto rank = v.getType().getRank();
   auto kDim = opIdx == 0 ? rank - 1 : rank - 2;
 
@@ -195,9 +200,33 @@ DecomposeScaledBlocked::scaleArg(PatternRewriter &rewriter,
   if (!scale)
     return v;
 
+  // 1) Cast scale to fp16/bf16, broadcast it and convert its layout
+  auto reshapeScale = extendAndBroadcastScale(rewriter, scaledDotOp, scale,
+                                              computeType, v.getType(), opIdx);
+
+  // 2) Multiply
+  auto mxfp = cast<TypedValue<RankedTensorType>>(
+      rewriter.create<arith::MulFOp>(loc, v, reshapeScale).getResult());
+
+  // 3) If the scale is NaN, return NaN, else return the scaled value.
+  return maskNan(rewriter, scaledDotOp, mxfp, scale, kDim);
+}
+
+TypedValue<RankedTensorType> DecomposeScaledBlocked::extendAndBroadcastScale(
+    PatternRewriter &rewriter, DotScaledOp scaledDotOp,
+    TypedValue<RankedTensorType> &scale, FloatType computeType,
+    RankedTensorType dstType, int opIdx) const {
+  auto loc = scale.getLoc();
+  auto mod = scaledDotOp->getParentOfType<ModuleOp>();
+  auto v = opIdx == 0 ? scaledDotOp.getA() : scaledDotOp.getB();
+  auto rank = v.getType().getRank();
+  auto kDim = opIdx == 0 ? rank - 1 : rank - 2;
+
   // For some weird reason, we take the scale with shape as if it were coming
   // from the lhs even when it's the rhs. In a normal world, we should accept
-  // this parametre transposed, as we do with the mxfp.
+  // this parameter transposed, as we do with the mxfp.
+  //
+  // Notice: this is an inplace change.
   if (opIdx == 1) {
     auto order = getTransposeOrder(rank);
     scale = rewriter.create<TransOp>(loc, scale, order);
@@ -206,21 +235,9 @@ DecomposeScaledBlocked::scaleArg(PatternRewriter &rewriter,
   // 1) Cast scale to compute type (fp16/bf16)
   auto scale16 = scaleTo16(rewriter, scale, computeType);
 
-  // 2) Broadcast scale to the same shape and layout as v
+  // 2) Broadcast scale to the same shape as v and convert the layout
   auto reshapeScale = broadcastScale(rewriter, scaledDotOp, mod, scale16, kDim);
-  reshapeScale =
-      rewriter.create<ConvertLayoutOp>(loc, v.getType(), reshapeScale);
-
-  // 3) Multiply
-  auto mxfp = cast<TypedValue<RankedTensorType>>(
-      rewriter.create<arith::MulFOp>(loc, v, reshapeScale).getResult());
-
-  // Skip NaN checks if fastMath
-  if (fastMath)
-    return mxfp;
-
-  // 4) If the scale is NaN, return NaN, else return the scaled value.
-  return maskNan(rewriter, scaledDotOp, mod, mxfp, scale, kDim);
+  return rewriter.create<ConvertLayoutOp>(loc, dstType, reshapeScale);
 }
 
 TypedValue<RankedTensorType>

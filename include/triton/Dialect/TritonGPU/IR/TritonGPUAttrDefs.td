@@ -428,7 +428,7 @@ and `pN` to mean padding:
      x1, x3, p2, p3
      ...]
 
-2. 2D single interval-padding with rearanged rows.
+2. 2D single interval-padding with rearranged rows.
 
     #ttg.padded_shared<[16:+1] {offset = [[0, 1], [0, 2], /*gap, stride by 2 rows*/[2, 0], [4, 0], [1, 0]]], block = []}>
     [
@@ -491,6 +491,36 @@ For identity mappings a short form based on order and shape is used to increase 
   }];
   let hasCustomAssemblyFormat = 1;
   let genVerifyDecl = 1;
+}
+
+def SharedLinearEncodingAttr
+    : TritonGPU_Attr<"SharedLinearEncoding", "shared_linear_encoding",
+                     [SharedEncodingTrait, DeclareLayoutEncodingMethods]> {
+  let mnemonic = "shared_linear";
+
+  let description = [{
+    Linear shared encodings mirror LinearEncodingAttr but operate on shared
+    memory layouts. The LinearLayout parameter captures how shared memory
+    offsets (and optionally blocks) map to logical tensor indices.
+  }];
+
+  let parameters = (ins LinearLayoutParam:$linearLayout, "unsigned":$layoutAlignment);
+
+  let extraClassDeclaration = [{
+    SmallVector<unsigned> basesPerDim(StringAttr dimName,
+                                      bool skipBroadcast = true) const;
+    SmallVector<unsigned> orderPerDim(StringAttr dimName,
+                                      ArrayRef<unsigned> defaultOrder) const;
+
+    SmallVector<unsigned> getOrder() const;
+
+    LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
+
+    int32_t getAlignment() const { return static_cast<int32_t>(getLayoutAlignment()); }
+  }];
+
+  let genVerifyDecl = 1;
+  let hasCustomAssemblyFormat = 1;
 }
 
 def NVMMASharedEncodingAttr : TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_shared_encoding", [DeclareSharedEncodingMethods, LayoutEncodingTrait]> {

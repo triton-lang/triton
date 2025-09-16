@@ -25,6 +25,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -101,6 +102,16 @@ LogicalResult WarpGroupDotOp::verify() {
     return emitOpError("Cannot use F32 as the accumulator element type when "
                        "the max_num_imprecise_acc is less than 32");
   }
+
+  if (auto aTensorTy = dyn_cast<RankedTensorType>(getA().getType())) {
+    auto aDotOpEnc = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
+    unsigned kWidth = 32 / aTensorTy.getElementTypeBitWidth();
+    if (aDotOpEnc.getKWidth() != kWidth) {
+      return emitOpError("in-register LHS operand must have a kWidth of ")
+             << kWidth << " but got " << aDotOpEnc.getKWidth();
+    }
+  }
+
   return success();
 }
 
@@ -678,14 +689,27 @@ LogicalResult TMEMCopyOp::verify() {
   }
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
   auto sharedEnc =
+      dyn_cast<triton::gpu::SharedEncodingTrait>(srcTy.getEncoding());
+  if (sharedEnc.getAlignment() < 16) {
+    return emitOpError("Source must have at least 16-byte alignment to be "
+                       "representable in a matrix descriptor.");
+  }
+
+  auto mod = getOperation()->getParentOfType<ModuleOp>();
+  unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+  if (numCTAs != 1)
+    return emitOpError("NYI: Only one CTA is supported for now.");
+
+  auto nvmmaEnc =
       dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(srcTy.getEncoding());
-  if (!sharedEnc) {
+  if (!nvmmaEnc) {
     return emitOpError("Source must have nvmma layout.");
   }
-  if (sharedEnc.getTransposed() || sharedEnc.getFp4Padded())
-    return emitOpError("The source should not be transposed or passed");
+  // Fp4 we could lift if we needed
+  if (nvmmaEnc.getTransposed() || nvmmaEnc.getFp4Padded())
+    return emitOpError("The source should not be transposed or padded");
   if (isa<TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding())) {
-    if (sharedEnc.getSwizzlingByteWidth() != 0) {
+    if (nvmmaEnc.getSwizzlingByteWidth() != 0) {
       return emitOpError("The source should not be swizzled for now");
     }
     if (!triton::gpu::isInnermostContiguous(srcTy, 512)) {
@@ -704,9 +728,10 @@ LogicalResult TMEMCopyOp::verify() {
     if (tmemEnc.getBlockM() != 128) {
       return emitOpError("Tmem layout ahouls have M=128.");
     }
-    if (sharedEnc.getSwizzlingByteWidth() == 0) {
+    if (nvmmaEnc.getSwizzlingByteWidth() == 0) {
       return emitOpError("Source layout should be swizzled.");
     }
+    // When we lift this, we should make sure we handle unpacked cleanly
     if (srcTy.getElementType().getIntOrFloatBitWidth() != 32) {
       return emitOpError("Source element type should be 32-bit.");
     }
@@ -737,7 +762,7 @@ LogicalResult TMEMSubSliceOp::verify() {
   if (dstEncoding.getBlockM() != encoding.getBlockM() ||
       dstEncoding.getCTASplitM() != encoding.getCTASplitM() ||
       dstEncoding.getCTASplitN() != encoding.getCTASplitN() ||
-      dstEncoding.getUnpacked() != encoding.getUnpacked())
+      dstEncoding.getColStride() != encoding.getColStride())
     return emitOpError("The destination must have the same block size and "
                        "CTASplit size as the source.");
   return mlir::success();
@@ -753,7 +778,8 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
   unsigned newBlockN = std::min<unsigned>(encoding.getBlockN(), size);
   auto newEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
       builder.getContext(), encoding.getBlockM(), newBlockN,
-      encoding.getUnpacked(), encoding.getCTASplitM(), encoding.getCTASplitN());
+      encoding.getColStride(), encoding.getCTASplitM(),
+      encoding.getCTASplitN());
   auto subsliceType = gpu::MemDescType::get(
       shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),
       allocTy.getMutableMemory(), allocTy.getAllocShape());

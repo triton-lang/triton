@@ -4,10 +4,12 @@
 #include "Driver/GPU/HipApi.h"
 #include "Driver/GPU/HsaApi.h"
 #include "Driver/GPU/RoctracerApi.h"
+#include "Utility/Env.h"
 
 #include "hip/amd_detail/hip_runtime_prof.h"
 #include "roctracer/roctracer_ext.h"
 #include "roctracer/roctracer_hip.h"
+#include "roctracer/roctracer_roctx.h"
 
 #include <cstdlib>
 #include <deque>
@@ -152,7 +154,7 @@ void processActivity(RoctracerProfiler::CorrIdToExternIdMap &corrIdToExternId,
 
 namespace {
 
-std::pair<bool, bool> matchKernelCbId(uint32_t cbId) {
+std::tuple<bool, bool> matchKernelCbId(uint32_t cbId) {
   bool isRuntimeApi = false;
   bool isDriverApi = false;
   switch (cbId) {
@@ -221,18 +223,17 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
 
 void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
     uint32_t domain, uint32_t cid, const void *callbackData, void *arg) {
-  auto [isRuntimeAPI, isDriverAPI] = matchKernelCbId(cid);
-
-  if (!(isRuntimeAPI || isDriverAPI)) {
-    return;
-  }
-
-  auto &profiler =
-      dynamic_cast<RoctracerProfiler &>(RoctracerProfiler::instance());
-  auto *pImpl = dynamic_cast<RoctracerProfiler::RoctracerProfilerPimpl *>(
-      profiler.pImpl.get());
   if (domain == ACTIVITY_DOMAIN_HIP_API) {
-    const hip_api_data_t *data = (const hip_api_data_t *)(callbackData);
+    auto [isRuntimeAPI, isDriverAPI] = matchKernelCbId(cid);
+    if (!(isRuntimeAPI || isDriverAPI)) {
+      return;
+    }
+    auto &profiler =
+        dynamic_cast<RoctracerProfiler &>(RoctracerProfiler::instance());
+    auto *pImpl = dynamic_cast<RoctracerProfiler::RoctracerProfilerPimpl *>(
+        profiler.pImpl.get());
+    const hip_api_data_t *data =
+        static_cast<const hip_api_data_t *>(callbackData);
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
       // Valid context and outermost level of the kernel launch
       threadState.enterOp();
@@ -322,6 +323,14 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
       // Track outstanding op for flush
       profiler.correlation.submit(data->correlation_id);
     }
+  } else if (domain == ACTIVITY_DOMAIN_ROCTX) {
+    const roctx_api_data_t *data =
+        static_cast<const roctx_api_data_t *>(callbackData);
+    if (cid == ROCTX_API_ID_roctxRangePushA) {
+      threadState.enterScope((data->args).message);
+    } else if (cid == ROCTX_API_ID_roctxRangePop) {
+      threadState.exitScope();
+    }
   }
 }
 
@@ -364,6 +373,10 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
+  if (getBoolEnv("TRITON_ENABLE_NVTX", true)) {
+    roctracer::enableDomainCallback<true>(ACTIVITY_DOMAIN_ROCTX, apiCallback,
+                                          nullptr);
+  }
   roctracer::enableDomainCallback<true>(ACTIVITY_DOMAIN_HIP_API, apiCallback,
                                         nullptr);
   // Activity Records
@@ -390,6 +403,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::doFlush() {
 void RoctracerProfiler::RoctracerProfilerPimpl::doStop() {
   roctracer::stop();
   roctracer::disableDomainCallback<true>(ACTIVITY_DOMAIN_HIP_API);
+  roctracer::disableDomainCallback<true>(ACTIVITY_DOMAIN_ROCTX);
   roctracer::disableDomainActivity<true>(ACTIVITY_DOMAIN_HIP_OPS);
   roctracer::closePool<true>();
 }

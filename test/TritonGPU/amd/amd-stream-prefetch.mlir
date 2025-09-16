@@ -4,14 +4,14 @@
 // RUN: triton-opt %s -tritonamdgpu-stream-pipeline="num_stages=2 local_prefetch=1" -canonicalize | FileCheck %s --check-prefixes=LOCAL_1
 
 // matmul: 128x32 @ 32x128 -> 128x128
-#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-#BL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#BL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #ALs0 = #ttg.slice<{parent=#AL, dim=0}>
 #BLs0 = #ttg.slice<{parent=#BL, dim=0}>
 #BLs1 = #ttg.slice<{parent=#BL, dim=1}>
-#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
-#A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
-#B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
+#C = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = true}>
+#A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 4}>
+#B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 4}>
 
 // An extra register buffer for global loads.
 // GLOBAL_1-LABEL: tt.func @matmul_loop
@@ -74,7 +74,7 @@
 // LOCAL_1: tt.dot
 // LOCAL_1-NOT: tt.dot
 
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
 tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
                   %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
                   %B : !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #C> {

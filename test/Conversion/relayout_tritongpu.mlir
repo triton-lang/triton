@@ -1,8 +1,8 @@
 // RUN: triton-opt %s -split-input-file -convert-triton-to-tritongpu='target=cuda:100 num-warps=4 enable-source-remat=true' -relayout-tritongpu | FileCheck %s
 
-#tmem0 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
-#tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
-#tmem2 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, unpacked = true>
+#tmem0 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+#tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+#tmem2 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 
 // CHECK-DAG: [[BLOCKN64:#.*]] = #ttg.blocked<{sizePerThread = [1, 64]

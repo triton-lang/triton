@@ -68,7 +68,7 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
         exponents = (quant_tensor >> 23) & 0xFF
         mantissas = (quant_tensor & 0x7FFFFF)
 
-        # 0.25 <= x < 0.75 maps to 0.5, a denormal number
+        # For RTNE: 0.25 < x < 0.75 maps to 0.5 (denormal); exactly 0.25 maps to 0.0
         E8_BIAS = 127
         E2_BIAS = 1
         # Move implicit bit 1 at the beginning to mantissa for denormals
@@ -79,8 +79,13 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
         exponents = tl.maximum(exponents, E8_BIAS - E2_BIAS) - (E8_BIAS - E2_BIAS)
 
         # Combine sign, exponent, and mantissa, while saturating
-        # rounding nearest with tie breaking up by adding +1 to one bit right of the LSB, then shift right
-        e2m1_tmp = tl.minimum((((exponents << 2) | (mantissas >> 21)) + 1) >> 1, 0x7)
+        # Round to nearest, ties to even (RTNE): use guard/sticky and LSB to decide increment
+        m2bits = mantissas >> 21
+        lsb_keep = (m2bits >> 1) & 0x1
+        guard = m2bits & 0x1
+        sticky = ((mantissas & 0x1FFFFF) != 0).to(tl.uint32)
+        round_inc = guard & (sticky | lsb_keep)
+        e2m1_tmp = tl.minimum((((exponents << 2) | m2bits) + round_inc) >> 1, 0x7)
         e2m1_value = ((signs >> 28) | e2m1_tmp).to(tl.uint8)
 
         e2m1_value = tl.reshape(e2m1_value, [BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_DIM // 2, 2])
