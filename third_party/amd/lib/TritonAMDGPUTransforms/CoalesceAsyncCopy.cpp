@@ -152,16 +152,8 @@ public:
 
     mlir::RewritePatternSet patterns(context);
 
-    switch (targetInfo.getISAFamily()) {
-    case triton::AMD::ISAFamily::CDNA1:
-    case triton::AMD::ISAFamily::CDNA2:
-    case triton::AMD::ISAFamily::CDNA3:
-    case triton::AMD::ISAFamily::CDNA4: {
-      break;
-    }
-    default:
-      return;
-    }
+    if (!AMD::isCDNA(targetInfo.getISAFamily()))
+      return; // This pass is CDNA specific.
 
     // Precompute the contiguity of all AsyncCopy ops based on the src and
     // mask contiguity/alignment to avoid rebuilding ModuleAxisInfoAnalysis

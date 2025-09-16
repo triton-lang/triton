@@ -276,6 +276,28 @@ std::pair<int, int> logBankConflictsLdSt(const LinearLayout &src,
   return logBankConflicts(srcLane, dstLane, smem, bitwidth);
 }
 
+int logBankConflictsMemDesc(const LinearLayout &reg, const LinearLayout &smem,
+                            int32_t bitwidth) {
+  auto *ctx = smem.getInDimNames().begin()->getContext();
+  auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
+
+  assert(smem.hasInDim(S("offset")) && "shared layout must have an offset dim");
+  assert(reg.hasInDim(S("register")) &&
+         "register layout must have a register dim");
+
+  int32_t vecSize = reg.invertAndCompose(smem).getNumConsecutiveInOut();
+  int32_t bankSize =
+      std::min(32 * 32 / (vecSize * bitwidth), smem.getTotalInDimSize());
+  int32_t segmentSize = smem.getTotalInDimSize() / (bankSize * vecSize);
+  SmallVector<std::pair<StringAttr, int32_t>> newInDims = {
+      {S("vector"), vecSize},
+      {S("bank"), bankSize},
+      {S("segment"), segmentSize},
+  };
+  auto smemReshaped = smem.reshapeIns(newInDims);
+  return logBankConflictsLdSt(reg, reg, smemReshaped, bitwidth).first;
+}
+
 std::optional<SmallVector<int32_t>> optimalSwizzlingTile(
     const LinearLayout &a, const LinearLayout &b, int32_t nRegA, int32_t nRegB,
     ArrayRef<int32_t> laneIdTileA, ArrayRef<int32_t> laneIdTileB) {

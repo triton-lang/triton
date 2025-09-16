@@ -1335,6 +1335,98 @@ def test_static_assert():
         run_parser(static_assert_kernel)
 
 
+@pytest.mark.parametrize("reg_layout, shared_layout, shape, bitwidth, ref_conflicts", [
+    (ttgl.BlockedLayout([1], [32], [4], [0]), ttgl.SwizzledSharedLayout(1, 1, 1, order=[0]), [32], 32, 1),
+    # FIXME: This one should be zero conflicts due to broadcasting.
+    (ttgl.BlockedLayout([1], [32], [4], [0]), ttgl.SwizzledSharedLayout(1, 1, 1, order=[0]), [32], 16, 2),
+    # MMAv3 accumulator tile lowered with the 128B swizzle (WGMMA default path).
+    (ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16]),
+     ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2), [128, 128], 16, 1),
+    # Small-M tiles disable swizzling entirely.
+    # MMAv2 rhs operand emitted with the 64B swizzle.
+    (ttgl.DotOperandLayout(
+        operand_index=1, parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[1, 4], instr_shape=[16, 8]),
+        k_width=2), ttgl.NVMMASharedLayout(swizzle_byte_width=64, element_bitwidth=16, rank=2), [64, 32], 16, 2),
+    # MMAv2 lhs operand uses the transposed 64B swizzle flavour.
+    (ttgl.DotOperandLayout(
+        operand_index=0, parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[1, 4], instr_shape=[16, 8]),
+        k_width=2), ttgl.NVMMASharedLayout(swizzle_byte_width=64, element_bitwidth=16, rank=2,
+                                           transposed=True), [32, 64], 16, 2),
+    # int8 tensor-core tiles follow the 32B swizzle path.
+    (ttgl.DotOperandLayout(
+        operand_index=1, parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[1, 4], instr_shape=[16, 8]),
+        k_width=1), ttgl.NVMMASharedLayout(swizzle_byte_width=32, element_bitwidth=8, rank=2), [8, 32], 8, 4),
+    # Small-M tiles disable swizzling entirely.
+    (ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], instr_shape=[16, 8]),
+     ttgl.NVMMASharedLayout(swizzle_byte_width=64, element_bitwidth=16, rank=2, transposed=True), [64, 64], 16, 2),
+    (ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[2, 2], instr_shape=[16, 32, 16]),
+     ttgl.NVMMASharedLayout(swizzle_byte_width=64, element_bitwidth=16, rank=2), [64, 32], 16, 1),
+    (ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], instr_shape=[16, 8]),
+     ttgl.NVMMASharedLayout(swizzle_byte_width=32, element_bitwidth=8, rank=2), [32, 32], 8, 2),
+    (ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 4], instr_shape=[16, 8]),
+     ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=16, rank=2), [4, 64], 16, 4),
+    (ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16]),
+     ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2), [128, 64], 32, 2),
+])
+def test_bank_conflicts(reg_layout, shared_layout, shape, bitwidth, ref_conflicts):
+    dtype = {8: ttgl.int8, 16: ttgl.float16, 32: ttgl.float32}[bitwidth]
+    args = (ttgl.distributed_type(dtype, shape,
+                                  reg_layout), ttgl.shared_memory_descriptor_type(dtype, shape, shared_layout,
+                                                                                  shape), ref_conflicts)
+
+    @gluon.jit
+    def kernel(reg_type: ttgl.constexpr, shared_type: ttgl.constexpr, ref_conflicts: ttgl.constexpr):
+        conflicts: ttgl.constexpr = ttgl.bank_conflicts(reg_type, shared_type)
+        ttgl.static_assert(conflicts == ref_conflicts)
+
+    run_parser(kernel, args=args, target=AMPERE_TARGET)
+
+
+@pytest.mark.parametrize(
+    "layout, expected",
+    [
+        (
+            ttgl.BlockedLayout([1], [4], [4], [0], [1], [1], [0]),
+            ttgl.DistributedLinearLayout(
+                reg_bases=[],
+                lane_bases=[[1], [2]],
+                warp_bases=[[4], [8]],
+                block_bases=[],
+                shape=[16],
+            ),
+        ),
+        (
+            ttgl.BlockedLayout([1], [4], [4], [0], [4], [2], [0]),
+            ttgl.DistributedLinearLayout(
+                reg_bases=[],
+                lane_bases=[[1], [2]],
+                warp_bases=[[4], [8]],
+                block_bases=[[16], [0]],
+                shape=[32],
+            ),
+        ),
+        (
+            ttgl.BlockedLayout([8, 1], [8, 4], [1, 4], [0, 1], [1, 2], [1, 2], [1, 0]),
+            ttgl.DistributedLinearLayout(
+                reg_bases=[[1, 0], [2, 0], [4, 0], [0, 16], [0, 32]],
+                lane_bases=[[8, 0], [16, 0], [32, 0], [0, 1], [0, 2]],
+                warp_bases=[[0, 4], [0, 8]],
+                block_bases=[[0, 64]],
+                shape=[64, 128],
+            ),
+        ),
+    ],
+)
+def test_to_linear_layout(layout, expected):
+
+    @gluon.jit
+    def kernel(layout: ttgl.constexpr, expected: ttgl.constexpr, shape: ttgl.constexpr):
+        computed: ttgl.constexpr = ttgl.to_linear_layout(layout, shape)
+        ttgl.static_assert(computed == expected)
+
+    run_parser(kernel, args=(layout, expected, tuple(expected.shape)), target=AMPERE_TARGET)
+
+
 @filecheck_test
 @gluon.jit
 def test_zeros():

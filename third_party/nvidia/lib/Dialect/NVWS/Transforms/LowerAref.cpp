@@ -65,11 +65,12 @@ namespace {
 
 // ----------------------------------------------------------------------------
 
-void assignStageCluster(Operation *op, std::optional<PartitionId> partitionId,
+void assignStageCluster(Operation *op,
+                        std::optional<SetVector<int>> partitionIds,
                         StageCluster stageCluster, OpBuilder &builder) {
-  if (partitionId) {
-    op->setAttr(kPartitionAttrName,
-                builder.getI32IntegerAttr(partitionId->index()));
+  if (partitionIds) {
+    setPartition(op, *partitionIds);
+
     if (stageCluster) {
       op->setAttr(triton::kLoopStageAttrName,
                   builder.getI32IntegerAttr(stageCluster->first));
@@ -110,19 +111,21 @@ SmallVector<AsyncOp> castAsyncOpAttrs(ArrayAttr opAttrs) {
 }
 
 BarrierCount getArrivalCount(ArefCreateOp op) {
-  std::set<PartitionId> producerGroups, consumerGroups;
+  SetVector<int> producerGroups, consumerGroups;
   BarrierCount count;
 
   for (auto user : op->getUsers()) {
-    auto partitionId = getPartitionId(user);
-    if (!partitionId)
+    auto partitionIds = getPartitionIds(user);
+    if (!partitionIds)
       continue;
 
+    assert(partitionIds->size() == 1);
+
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
-      if (producerGroups.count(*partitionId)) {
+      if (producerGroups.count(partitionIds->front())) {
         continue;
       }
-      producerGroups.insert(*partitionId);
+      producerGroups.insert(partitionIds->front());
       for (auto kind : castAsyncOpAttrs(putExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
@@ -135,10 +138,10 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         }
       }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-      if (consumerGroups.count(*partitionId)) {
+      if (consumerGroups.count(partitionIds->front())) {
         continue;
       }
-      consumerGroups.insert(*partitionId);
+      consumerGroups.insert(partitionIds->front());
       for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
@@ -178,8 +181,7 @@ ArefValue createAndInitMbar(ArefCreateOp op, PatternRewriter &rewriter) {
   auto arefTy = op.getType();
   auto arefBufTypes = llvm::to_vector(llvm::map_range(
       arefTy.getBaseType(), [](Type type) { return cast<MemDescType>(type); }));
-  auto shape = arefBufTypes[0].getShape();
-  auto depth = shape[0];
+  auto depth = getArefDepth(arefBufTypes[0]);
 
   SetVector<Operation *> arefUsers;
   for (auto user : op->getUsers())
@@ -226,7 +228,7 @@ void createTMALoad(triton::nvws::DescriptorLoadOp op, PatternRewriter &rewriter,
       rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
           op.getLoc(), op.getDesc(), indices, barrierAlloc, op.getResult(),
           pred);
-  assignStageCluster(newLoadOp, getPartitionId(op), getStageCluster(op),
+  assignStageCluster(newLoadOp, getPartitionIds(op), getStageCluster(op),
                      rewriter);
 };
 
@@ -236,7 +238,7 @@ void createTMAGather(triton::nvws::DescriptorGatherOp op,
   auto newGatherOp = rewriter.create<triton::nvidia_gpu::AsyncTMAGatherOp>(
       op.getLoc(), op.getDesc(), op.getXOffsets(), op.getYOffset(),
       barrierAlloc, op.getResult(), pred);
-  assignStageCluster(newGatherOp, getPartitionId(op), getStageCluster(op),
+  assignStageCluster(newGatherOp, getPartitionIds(op), getStageCluster(op),
                      rewriter);
 }
 
@@ -262,7 +264,7 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
   Value pred = rewriter.create<arith::ConstantIntOp>(loc, 1, 1);
   auto expectOp = rewriter.create<triton::nvidia_gpu::BarrierExpectOp>(
       loc, fullBarrier, txCount, pred);
-  assignStageCluster(expectOp, getPartitionId(op), getStageCluster(op),
+  assignStageCluster(expectOp, getPartitionIds(op), getStageCluster(op),
                      rewriter);
 
   for (auto loadOp : loadOps) {
@@ -282,7 +284,8 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
 void insertWaitOp(PatternRewriter &rewriter, Operation *op, Value barrier,
                   Value phase, Value stage) {
   auto waitOp = rewriter.create<WaitBarrierOp>(op->getLoc(), barrier, phase);
-  assignStageCluster(waitOp, getPartitionId(op), getStageCluster(op), rewriter);
+  assignStageCluster(waitOp, getPartitionIds(op), getStageCluster(op),
+                     rewriter);
 }
 
 void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
@@ -373,7 +376,7 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
 
 void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
                          PatternRewriter &rewriter, Value mbar,
-                         std::optional<PartitionId> partitionId,
+                         std::optional<SetVector<int>> partitionIds,
                          StageCluster stageCluster) {
   for (auto asyncOpEnum : asyncOps) {
     Operation *arriveOp = {};
@@ -394,7 +397,7 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
       llvm_unreachable("unknown async op");
     }
     if (arriveOp)
-      assignStageCluster(arriveOp, partitionId, stageCluster, rewriter);
+      assignStageCluster(arriveOp, partitionIds, stageCluster, rewriter);
   }
 }
 
@@ -404,7 +407,7 @@ void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
   rewriter.setInsertionPointAfter(op);
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage());
   insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
-                      fullBarrier, getPartitionId(op), getStageCluster(op));
+                      fullBarrier, getPartitionIds(op), getStageCluster(op));
 }
 
 void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
@@ -435,20 +438,20 @@ void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
 
   if (needFence) {
     auto fence = rewriter.create<FenceAsyncSharedOp>(loc, /*bCluster=*/false);
-    assignStageCluster(fence, getPartitionId(op), stageCluster, rewriter);
+    assignStageCluster(fence, getPartitionIds(op), stageCluster, rewriter);
   }
 
   Value emptyBarrier = getEmptyBarrier(rewriter, loc, arefVal, op.getStage());
   return insertArriveBarrier(loc, asyncKinds, rewriter, emptyBarrier,
-                             getPartitionId(op), stageCluster);
+                             getPartitionIds(op), stageCluster);
 }
 
 DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
   DenseSet<MMAv5OpInterface> mmav5Ops;
   for (auto arefUser : aref.getUsers()) {
     if (auto getEnter = dyn_cast<ArefGetEnterOp>(arefUser)) {
-      auto id = getPartitionId(getEnter);
-      if (id && id->index() == 0) {
+      auto id = getPartitionIds(getEnter);
+      if (id && id->front() == 0) {
         // Ignore mmav5 ops in the default partition. They are not warp
         // specialized.
         continue;
@@ -613,7 +616,7 @@ ExitOp createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   auto combinedEnter = builder.create<EnterOp>(
       firstEnter.getLoc(), arefEnterBuffers, builder.getType<AsyncTokenType>(),
       aref, zero, zero);
-  assignStageCluster(combinedEnter, getPartitionId(firstEnter),
+  assignStageCluster(combinedEnter, getPartitionIds(firstEnter),
                      getStageCluster(firstEnter), builder);
 
   builder.setInsertionPoint(lastExit);
@@ -622,7 +625,7 @@ ExitOp createCombinedArefOps(SmallVector<EnterOp> &enterOps,
   auto combinedExit = builder.create<ExitOp>(
       firstEnter.getLoc(), aref, combinedEnter.getToken(), zero,
       builder.getArrayAttr(AsyncOpAttrs));
-  assignStageCluster(combinedExit, getPartitionId(lastExit),
+  assignStageCluster(combinedExit, getPartitionIds(lastExit),
                      getStageCluster(lastExit), builder);
 
   std::function<void(Operation *, Operation *)> moveUserAfter =
@@ -699,12 +702,12 @@ void combineArefs(scf::ForOp loop) {
     SmallVector<ArefPutEnterOp> putEnterOps;
     SmallVector<ArefPutExitOp> putExitOps;
     SmallVector<ArefGetExitOp> getExitOps;
-    SmallVector<PartitionId> producerGroupIds;
+    SmallVector<int> producerGroupIds;
     for (auto aref : arefs) {
       for (auto user : aref->getUsers()) {
         if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(user)) {
           putEnterOps.push_back(putEnterOp);
-          producerGroupIds.push_back(*getPartitionId(putEnterOp));
+          producerGroupIds.push_back(getPartitionIds(putEnterOp)->front());
         } else if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
           putExitOps.push_back(putExitOp);
         } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {

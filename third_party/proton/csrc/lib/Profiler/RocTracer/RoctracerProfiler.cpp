@@ -4,6 +4,7 @@
 #include "Driver/GPU/HipApi.h"
 #include "Driver/GPU/HsaApi.h"
 #include "Driver/GPU/RoctracerApi.h"
+#include "Utility/Env.h"
 
 #include "hip/amd_detail/hip_runtime_prof.h"
 #include "roctracer/roctracer_ext.h"
@@ -372,8 +373,10 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
-  roctracer::enableDomainCallback<true>(ACTIVITY_DOMAIN_ROCTX, apiCallback,
-                                        nullptr);
+  if (getBoolEnv("TRITON_ENABLE_NVTX", true)) {
+    roctracer::enableDomainCallback<true>(ACTIVITY_DOMAIN_ROCTX, apiCallback,
+                                          nullptr);
+  }
   roctracer::enableDomainCallback<true>(ACTIVITY_DOMAIN_HIP_API, apiCallback,
                                         nullptr);
   // Activity Records

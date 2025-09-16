@@ -61,6 +61,25 @@ def NVWS_ArefCreateOp : NVWS_Op<"aref.create", [
   let hasVerifier = 1;
 }
 
+def NVWS_ArefBufferOp : NVWS_Op<"aref.buffer", [DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
+  let summary = "Get buffer from aref";
+
+  let arguments = (ins NVWS_ArefType:$aref,
+                        TTG_AsyncToken:$token,
+                        Optional<I32>:$stage);
+  let results = (outs Variadic<TTG_MemDescType>:$buffers);
+  let assemblyFormat = [{
+    $aref (`[` $stage^ `]`)? `,` $token attr-dict
+    `:` type($aref) `,` type($token) `->` type(results)
+  }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$aref, "TypeRange":$bufferTypes, "Value":$token), [{
+      build($_builder, $_state, bufferTypes, aref, token, Value());
+    }]>
+  ];
+}
+
 def NVWS_ArefGetEnterOp : NVWS_Op<"aref.get.enter", [AttrSizedOperandSegments, DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
   let summary = "Enter ArefGet region where the buffer can be used to read data";
   let description = [{ Enter a "region" where you can freely read from the buffer)
