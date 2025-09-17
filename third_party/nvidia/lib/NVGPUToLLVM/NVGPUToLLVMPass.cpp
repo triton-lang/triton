@@ -580,9 +580,9 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
   }
 
   int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
-  // Assume that 2CTAs is used if we have two CTAs this is pessimistic but
-  // should be fine for now.
-  bool useTwoCTAs = numCTAs == 2;
+  // 2CTA support in Triton is incomplete, and as of CUDA 13.0, we can no longer
+  // pick 1 or 2 CTA per op. Disable 2CTA for now.
+  bool useTwoCTAs = false;
   // This code is only executed by the default warp group.
   Value threadId = rewriter.create<NVVM::ThreadIdXOp>(loc, i32_ty);
   Value pred = b.icmp_ult(threadId, b.i32_val(32));

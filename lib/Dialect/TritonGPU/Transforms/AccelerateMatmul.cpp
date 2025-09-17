@@ -553,7 +553,9 @@ public:
       return failure();
     auto oldAType = dotOp.getA().getType();
     auto oldBType = dotOp.getB().getType();
-    bool useTwoCTAs = canUseTwoCTAs(dotOp);
+    // 2CTA support in Triton is incomplete, and as of CUDA 13.0, we can no
+    // longer pick 1 or 2 CTA per op. Disable 2CTA for now.
+    bool useTwoCTAs = false;
     if (useTwoCTAs) {
       b = splitBOperand(b, rewriter);
     }
