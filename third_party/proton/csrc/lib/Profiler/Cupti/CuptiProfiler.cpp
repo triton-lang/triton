@@ -289,23 +289,23 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
     if (cbId == CUPTI_CBID_RESOURCE_MODULE_LOADED) {
       auto *moduleResource = static_cast<CUpti_ModuleResourceData *>(
           resourceData->resourceDescriptor);
-      if (profiler.isPCSamplingEnabled()) {
+      if (profiler.pcSamplingEnabled) {
         pImpl->pcSampling.loadModule(moduleResource->pCubin,
                                      moduleResource->cubinSize);
       }
     } else if (cbId == CUPTI_CBID_RESOURCE_MODULE_UNLOAD_STARTING) {
       auto *moduleResource = static_cast<CUpti_ModuleResourceData *>(
           resourceData->resourceDescriptor);
-      if (profiler.isPCSamplingEnabled()) {
+      if (profiler.pcSamplingEnabled) {
         pImpl->pcSampling.unloadModule(moduleResource->pCubin,
                                        moduleResource->cubinSize);
       }
     } else if (cbId == CUPTI_CBID_RESOURCE_CONTEXT_CREATED) {
-      if (profiler.isPCSamplingEnabled()) {
+      if (profiler.pcSamplingEnabled) {
         pImpl->pcSampling.initialize(resourceData->context);
       }
     } else if (cbId == CUPTI_CBID_RESOURCE_CONTEXT_DESTROY_STARTING) {
-      if (profiler.isPCSamplingEnabled()) {
+      if (profiler.pcSamplingEnabled) {
         pImpl->pcSampling.finalize(resourceData->context);
       }
     } else {
@@ -372,11 +372,11 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                     << std::endl;
       }
       profiler.correlation.correlate(callbackData->correlationId, numInstances);
-      if (profiler.isPCSamplingEnabled() && isDriverAPILaunch(cbId)) {
+      if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
         pImpl->pcSampling.start(callbackData->context);
       }
     } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
-      if (profiler.isPCSamplingEnabled() && isDriverAPILaunch(cbId)) {
+      if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
         // XXX: Conservatively stop every GPU kernel for now
         auto scopeId = profiler.correlation.externIdQueue.back();
         pImpl->pcSampling.stop(
