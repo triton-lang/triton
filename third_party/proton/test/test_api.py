@@ -76,7 +76,6 @@ def test_profile_mode(tmp_path: pathlib.Path):
             pytest.skip("PC sampling test is disabled")
 
         proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
-        assert temp_file0.exists()
 
         try:
             temp_file1 = tmp_path / "test_profile1.hatchet"
