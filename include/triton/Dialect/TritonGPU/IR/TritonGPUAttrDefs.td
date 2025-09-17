@@ -1154,31 +1154,33 @@ w2 w2 w3 w3
     ins
     "unsigned": $version,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    ArrayRefParameter<"unsigned">:$tilesPerWarp,
-    "unsigned":$MDim,
-    "unsigned":$NDim,
+    ArrayRefParameter<"unsigned">:$instrShape,
     "bool":$isTransposed,
     "CTALayoutAttr":$CTALayout,
-    DefaultValuedParameter<"std::optional<Type>", "FloatType::get($_ctxt, 32)">:$elementType
+    ArrayRefParameter<"unsigned">:$tilesPerWarp,
+    "Type":$elementType
   );
 
   let builders = [
     AttrBuilder<(ins "unsigned":$version,
                      "ArrayRef<unsigned>":$warpsPerCTA,
-                     "unsigned":$MDim,
-                     "unsigned":$NDim,
+                     "ArrayRef<unsigned>":$instrShape,
                      "bool":$isTransposed,
                      "CTALayoutAttr":$CTALayout,
-                     "std::optional<Type>":$elementType), [{
-      SmallVector<unsigned> tilesPerWarp(warpsPerCTA.size(), 1);
-
-      return $_get(context, version, warpsPerCTA, tilesPerWarp, MDim, NDim, isTransposed, CTALayout, elementType);
+                     CArg<"ArrayRef<unsigned>", "{}">:$tpw,
+                     CArg<"Type", "nullptr">:$et), [{
+      SmallVector<unsigned> tilesPerWarp(tpw);
+      if (tilesPerWarp.empty())
+        tilesPerWarp = SmallVector<unsigned>(warpsPerCTA.size(), 1);
+      Type elementType = elementType;
+      if (elementType == nullptr)
+        elementType = Float32Type::get($_ctxt);
+      return $_get($_ctxt, version, warpsPerCTA, instrShape, isTransposed, CTALayout, tilesPerWarp, elementType);
     }]>
   ];
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
-    SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
+    SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
 
     // Check if tilesPerWarp is 1 in every dimension.
@@ -1194,6 +1196,7 @@ w2 w2 w3 w3
 
   let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
+  let skipDefaultBuilders = 1;
 }
 
 def AMDWmmaEncodingAttr : DistributedEncoding<"AMDWmmaEncoding", "amd_wmma_encoding", [MmaEncodingTrait]> {

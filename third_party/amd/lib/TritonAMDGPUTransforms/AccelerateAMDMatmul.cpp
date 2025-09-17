@@ -511,10 +511,8 @@ public:
     }
 
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        oldRetType.getContext(),
-        /*version*/ mfmaVersion, warpsPerTile, tilesPerWarp,
-        /*instrShape*/ mDim, nDim, /*isTransposed=*/isTransposed, CTALayout,
-        mfmaAccType);
+        oldRetType.getContext(), mfmaVersion, warpsPerTile, {mDim, nDim, kDim},
+        isTransposed, CTALayout, tilesPerWarp, mfmaAccType);
 
     // convert accumulator
     auto oldAcc = dotOp.getC();
@@ -697,8 +695,8 @@ public:
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        ctx, /*version=*/mfmaVersion, mfmaWarpsPerCTA, /*instrShape=*/mDim,
-        nDim, /*isTransposed=*/true, ctaLayout, oldRetType.getElementType());
+        ctx, mfmaVersion, mfmaWarpsPerCTA, {mDim, nDim, kDim},
+        /*isTransposed=*/true, ctaLayout, {}, oldRetType.getElementType());
 
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), mfmaEnc);
@@ -977,7 +975,6 @@ public:
     // instructions, since only one MFMA op spans the non-K dimension at the
     // minimal shuffling size.
     SmallVector<unsigned> tilesPerWarp = getTilesPerWarp(aScale, bScale);
-
     if (rank == 3) {
       tilesPerWarp.insert(tilesPerWarp.begin(), 1);
     }
@@ -985,17 +982,10 @@ public:
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
     mlir::Attribute mfmaEnc;
-    if (llvm::any_of(tilesPerWarp, [](int x) { return x != 1; })) {
-      mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-          ctx, /*verison=*/mfmaVersion, warpsPerTile, tilesPerWarp,
-          /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout,
-          oldRetType.getElementType());
-    } else {
-      mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-          ctx, /*verison=*/mfmaVersion, warpsPerTile,
-          /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout,
-          oldRetType.getElementType());
-    }
+    mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+        ctx, mfmaVersion, warpsPerTile, {mDim, nDim, kDim},
+        /*isTransposed=*/true, ctaLayout, tilesPerWarp,
+        oldRetType.getElementType());
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), mfmaEnc);
