@@ -899,7 +899,7 @@ TEST_F(LinearLayoutConversionsTest, SliceDot) {
                 {S("dim0")}));
 }
 
-TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps_tpw2x2) {
+TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps_tpw_2_2) {
   auto mfmaNT = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
                      /*isTransposed=*/false, /*tilesPerWarp=*/{2, 2});
 
@@ -964,7 +964,7 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps_tpw2x2) {
           {S("dim0"), S("dim1")}));
 }
 
-TEST_F(LinearLayoutConversionsTest, MFMA16_2x4Warps_2x2TPW) {
+TEST_F(LinearLayoutConversionsTest, MFMA16_2x4Warps_tpw_2_2) {
   auto mfmaNT = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
                      /*isTransposed=*/false, /*tilesPerWarp=*/{2, 2});
 
@@ -1535,7 +1535,7 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_warp1onK_rhs_kwidth8) {
                          {S("dim0"), S("dim1"), S("dim2")}));
 }
 
-TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_lhs_tpw2x2) {
+TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_lhs_tpw_2_2) {
   auto parentMfma32 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
                            /*isTransposed=*/false, /*tilesPerWarp=*/{2, 2});
   auto mfmaDotOp0_32 = mfmaDotOp(parentMfma32, /*opIdx=*/0, /*kWidth=*/4);
@@ -1587,7 +1587,7 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_lhs_tpw2x2) {
             toLinearLayout({256, 256}, mfmaDotOp0_32));
 }
 
-TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_tpw2x2) {
+TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_tpw_2_2) {
   auto parentMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
                            /*isTransposed=*/false, /*tilesPerWarp=*/{2, 2});
   auto mfmaDotOp0_16 = mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/4);
@@ -1718,7 +1718,7 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_kwidth4) {
             toLinearLayout({16, 16}, mfmaDotOp0_16));
 }
 
-TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_rhs_tpw2x2) {
+TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_rhs_tpw_2_2) {
   auto parentMfma32 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
                            /*isTransposed=*/false, /*tilesPerWarp=*/{2, 2});
   auto mfmaDotOp1_32 = mfmaDotOp(parentMfma32, /*opIdx=*/1, /*kWidth=*/4);
@@ -1766,7 +1766,7 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_rhs_tpw2x2) {
             toLinearLayout({256, 256}, mfmaDotOp1_32));
 }
 
-TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_tpw2x2) {
+TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_tpw_2_2) {
   auto parentMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
                            /*isTransposed=*/false, /*tilesPerWarp=*/{2, 2});
   auto mfmaDotOp1_16 = mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/4);
