@@ -5,6 +5,7 @@
 #include "Profiler/Instrumentation/CudaRuntime.h"
 #include "Profiler/Instrumentation/HipRuntime.h"
 #include "Utility/Numeric.h"
+#include "Utility/String.h"
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -46,9 +47,9 @@ InstrumentationProfiler::doSetMode(const std::vector<std::string> &modeAndOption
   if (modeAndOptions.empty()) {
     throw std::runtime_error("Mode cannot be empty");
   }
-  if (modeAndOptions[0] == DeviceTraits<DeviceType::CUDA>::name) {
+  if (modeAndOptions[0] == proton::toLower(DeviceTraits<DeviceType::CUDA>::name)) {
     runtime = std::make_unique<CudaRuntime>();
-  } else if (modeAndOptions[0] == DeviceTraits<DeviceType::HIP>::name) {
+  } else if (modeAndOptions[0] == proton::toLower(DeviceTraits<DeviceType::HIP>::name)) {
     runtime = std::make_unique<HipRuntime>();
   } else {
     throw std::runtime_error("Unknown device type: " + modeAndOptions[0]);

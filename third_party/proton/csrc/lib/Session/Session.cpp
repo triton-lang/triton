@@ -78,16 +78,17 @@ size_t Session::getContextDepth() { return contextSource->getDepth(); }
 
 Profiler *SessionManager::validateAndSetProfilerMode(Profiler *profiler,
                                                 const std::string &mode) {
-  for (auto &[id, session] : sessions) {
-    if (session->getMode() != mode && session->getProfiler() == profiler) {
-      throw std::runtime_error("Cannot add a session with the same profiler "
-                               "but a different mode than existing sessions");
-    }
-  }
-
   std::vector<std::string> modeAndOptions = proton::split(mode, ":");
   for (auto &option : modeAndOptions) {
     option = proton::toLower(option);
+  }
+
+  for (auto &[id, session] : sessions) {
+    if (session->getProfiler() == profiler &&
+        session->getProfiler()->getMode() != modeAndOptions) {
+      throw std::runtime_error("Cannot add a session with the same profiler "
+                               "but a different mode than existing sessions");
+    }
   }
   return profiler->setMode(modeAndOptions);
 }
@@ -101,7 +102,7 @@ std::unique_ptr<Session> SessionManager::makeSession(
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
   auto *session = new Session(id, path, profiler, std::move(contextSource),
-                              std::move(data), mode);
+                              std::move(data));
   return std::unique_ptr<Session>(session);
 }
 

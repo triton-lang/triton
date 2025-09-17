@@ -76,8 +76,14 @@ public:
 
   Profiler *setMode(const std::vector<std::string> &modeAndOptions) {
     std::unique_lock<std::shared_mutex> lock(mutex);
+    this->modeAndOptions = modeAndOptions;
     this->doSetMode(modeAndOptions);
     return this;
+  }
+
+  std::vector<std::string> getMode() const {
+    std::shared_lock<std::shared_mutex> lock(mutex);
+    return modeAndOptions;
   }
 
 protected:
@@ -93,6 +99,7 @@ protected:
 
 private:
   bool started{};
+  std::vector<std::string> modeAndOptions{};
 };
 
 } // namespace proton
