@@ -10,6 +10,7 @@ import pathlib
 from triton.profiler.hooks.hook import HookManager
 from triton.profiler.hooks.launch import LaunchHook
 from triton.profiler.hooks.instrumentation import InstrumentationHook
+from triton._internal_testing import is_hip
 
 
 def test_profile_single_session(tmp_path: pathlib.Path):
@@ -58,6 +59,33 @@ def test_profile_multiple_sessions(tmp_path: pathlib.Path):
     proton.finalize()
     assert temp_file2.exists()
     assert temp_file3.exists()
+
+
+def test_profile_mode(tmp_path: pathlib.Path):
+    temp_file0 = tmp_path / "test_profile0.hatchet"
+    if is_hip():
+        try:
+            proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
+        except Exception as e:
+            assert "Unsupported roctracer mode: pcsampling" in str(e)
+    else:
+        import os
+        import pytest
+
+        if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
+            pytest.skip("PC sampling test is disabled")
+
+        temp_file1 = tmp_path / "test_profile1.hatchet"
+
+        proton.start(str(temp_file1.with_suffix("")), mode="pcsampling")
+        proton.finalize()
+        assert temp_file1.exists()
+
+        try:
+            proton.start(str(temp_file0.with_suffix("")), mode="pc_sampling")
+            proton.start(str(temp_file1.with_suffix("")))
+        except Exception as e:
+            assert "Cannot add session with different mode to existing sessions" in str(e)
 
 
 def test_profile_decorator(tmp_path: pathlib.Path):

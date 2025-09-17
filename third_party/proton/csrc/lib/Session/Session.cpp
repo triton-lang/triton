@@ -18,11 +18,17 @@ Profiler *getProfiler(const std::string &name, const std::string &path,
   if (proton::toLower(name) == "cupti") {
     auto *profiler = &CuptiProfiler::instance();
     profiler->setLibPath(path);
-    if (proton::toLower(modeAndOptions[0]) == "pcsampling")
+    if (proton::toLower(modeAndOptions[0]) == "pcsampling") {
       profiler->enablePCSampling();
+    } else {
+      throw std::runtime_error("Unsupported cupti mode: " + mode);
+    }
     return profiler;
   }
   if (proton::toLower(name) == "roctracer") {
+    if (mode != "") {
+      throw std::runtime_error("Unsupported roctracer mode: " + mode);
+    }
     return &RoctracerProfiler::instance();
   }
   if (proton::toLower(name) == "instrumentation") {
@@ -81,6 +87,8 @@ void Session::finalize(const std::string &outputFormat) {
 }
 
 size_t Session::getContextDepth() { return contextSource->getDepth(); }
+
+std::string Session::getMode() { return mode; }
 
 std::unique_ptr<Session> SessionManager::makeSession(
     size_t id, const std::string &path, const std::string &profilerName,
@@ -166,6 +174,12 @@ size_t SessionManager::addSession(const std::string &path,
     auto sessionId = getSessionId(path);
     activateSessionImpl(sessionId);
     return sessionId;
+  }
+  for (auto &session : sessions) {
+    if (session.second->getMode() != mode) {
+      throw std::runtime_error(
+          "Cannot add session with different mode to existing sessions");
+    }
   }
   auto sessionId = nextSessionId++;
   sessionPaths[path] = sessionId;

@@ -33,12 +33,15 @@ public:
 
   size_t getContextDepth();
 
+  std::string getMode();
+
 private:
   Session(size_t id, const std::string &path, Profiler *profiler,
           std::unique_ptr<ContextSource> contextSource,
-          std::unique_ptr<Data> data)
+          std::unique_ptr<Data> data, const std::string &mode = "")
       : id(id), path(path), profiler(profiler),
-        contextSource(std::move(contextSource)), data(std::move(data)) {}
+        contextSource(std::move(contextSource)), data(std::move(data)),
+        mode(mode) {}
 
   template <typename T> std::vector<T *> getInterfaces() {
     std::vector<T *> interfaces;
@@ -62,6 +65,7 @@ private:
   Profiler *profiler{};
   std::unique_ptr<ContextSource> contextSource{};
   std::unique_ptr<Data> data{};
+  std::string mode{};
 
   friend class SessionManager;
 };
