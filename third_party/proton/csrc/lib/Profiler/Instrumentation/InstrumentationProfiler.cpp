@@ -42,14 +42,16 @@ void InstrumentationProfiler::doStop() {
   }
 }
 
-void
-InstrumentationProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
+void InstrumentationProfiler::doSetMode(
+    const std::vector<std::string> &modeAndOptions) {
   if (modeAndOptions.empty()) {
     throw std::runtime_error("Mode cannot be empty");
   }
-  if (modeAndOptions[0] == proton::toLower(DeviceTraits<DeviceType::CUDA>::name)) {
+  if (modeAndOptions[0] ==
+      proton::toLower(DeviceTraits<DeviceType::CUDA>::name)) {
     runtime = std::make_unique<CudaRuntime>();
-  } else if (modeAndOptions[0] == proton::toLower(DeviceTraits<DeviceType::HIP>::name)) {
+  } else if (modeAndOptions[0] ==
+             proton::toLower(DeviceTraits<DeviceType::HIP>::name)) {
     runtime = std::make_unique<HipRuntime>();
   } else {
     throw std::runtime_error("Unknown device type: " + modeAndOptions[0]);

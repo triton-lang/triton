@@ -24,7 +24,8 @@ protected:
   virtual void doStart() override;
   virtual void doFlush() override;
   virtual void doStop() override;
-  virtual void doSetMode(const std::vector<std::string> &modeAndOptions) override;
+  virtual void
+  doSetMode(const std::vector<std::string> &modeAndOptions) override;
 
   // InstrumentationInterface
   void initFunctionMetadata(
