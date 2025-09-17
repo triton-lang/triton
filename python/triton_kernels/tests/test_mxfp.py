@@ -85,6 +85,12 @@ def test_mxfp_quant_dequant(src_dtype, dst_dtype, device):
 @pytest.mark.parametrize(
     "shape, axis, quant_dtype, rounding_mode",
     [
+        # Zero-sized arrays
+        ((0, 4096, 1024), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP),
+        ((3, 4096, 0), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN),
+        ((10, 0, 1024), 2, "float8_e5m2", DequantScaleRoundingMode.ROUND_UP),
+        ((0, 0, 1024), 2, "float8_e4m3fn", DequantScaleRoundingMode.ROUND_DOWN),
+
         ((3, 4096, 1024), 1, "float4_e2m1", DequantScaleRoundingMode.ROUND_UP),
         ((10, 254, 60), 0, "float4_e2m1", DequantScaleRoundingMode.ROUND_DOWN),
         ((1, 320, 160), 2, "float8_e5m2", DequantScaleRoundingMode.ROUND_UP),

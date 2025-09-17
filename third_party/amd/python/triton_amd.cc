@@ -2,6 +2,8 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "amd/include/hipblas_instance.h"
+#include "amd/include/hipblas_types.h"
 #include "lld/Common/Driver.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
@@ -29,7 +31,11 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
 #include <array>
+#include <optional>
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include <pybind11/stl_bind.h>
+#include <sstream>
 #include <stdexcept>
 
 namespace py = pybind11;
@@ -120,6 +126,161 @@ void addControlConstant(llvm::Module *module, const char *name,
 } // namespace
 
 LLD_HAS_DRIVER(elf)
+
+static void checkMatmulConstraints(const std::string &A_dtype,
+                                   const std::string &B_dtype,
+                                   const std::string &C_dtype,
+                                   const std::vector<int> &A_shape,
+                                   const std::vector<int> &B_shape,
+                                   const std::vector<int> &C_shape) {
+  // Support FP32/FP16/BF16 and 8-bit FP8 (e4m3fn/e4m3fnuz) and BF8
+  // (e5m2fn/e5m2fnuz).
+  auto is_fp8 = [](const std::string &dtype) {
+    return dtype == "torch.float8_e4m3fn" || dtype == "torch.float8_e5m2fn" ||
+           dtype == "torch.float8_e4m3fnuz" || dtype == "torch.float8_e5m2fnuz";
+  };
+  auto is_fp16_family = [](const std::string &dtype) {
+    return dtype == "torch.float16" || dtype == "torch.bfloat16";
+  };
+  const bool A_is_fp8 = is_fp8(A_dtype);
+  const bool B_is_fp8 = is_fp8(B_dtype);
+  const bool A_supported =
+      (A_is_fp8 || is_fp16_family(A_dtype) || A_dtype == "torch.float32");
+  const bool B_supported =
+      (B_is_fp8 || is_fp16_family(B_dtype) || B_dtype == "torch.float32");
+  const bool C_supported = (is_fp16_family(C_dtype) ||
+                            C_dtype == "torch.float32" || is_fp8(C_dtype));
+
+  if (!A_supported || !B_supported || !C_supported) {
+    std::ostringstream oss;
+    oss << "Unsupported data type. Got A=" << A_dtype << ", B=" << B_dtype
+        << ", C=" << C_dtype
+        << ". Supported: float32, float16, bfloat16, float8_e4m3fn, "
+           "float8_e5m2fn, float8_e4m3fnuz, float8_e5m2fnuz.";
+    throw std::runtime_error(oss.str());
+  }
+
+  // For 8-bit inputs (any combination of FP8/BF8), restrict C to FP16 for now,
+  // matching the current hipBLAS wrapper behavior.
+  if (A_is_fp8 && B_is_fp8) {
+    if (C_dtype != "torch.float16") {
+      std::ostringstream oss;
+      oss << "When A/B are 8-bit (float8_e4m3fn/e4m3fnuz or "
+             "float8_e5m2fn/e5m2fnuz), C must"
+          << " be torch.float16.";
+      throw std::runtime_error(oss.str());
+    }
+  } else {
+    // Otherwise require all dtypes to match
+    if (!(A_dtype == B_dtype && A_dtype == C_dtype)) {
+      std::ostringstream oss;
+      oss << "Data types do not match: A=" << A_dtype << ", B=" << B_dtype
+          << ", C=" << C_dtype << ". Expected all equal when not using 8-bit"
+          << " inputs.";
+      throw std::runtime_error(oss.str());
+    }
+  }
+
+  if (A_shape.size() != 2 || B_shape.size() != 2 || C_shape.size() != 2) {
+    throw std::runtime_error("Only 2D matrices are supported.");
+  }
+
+  int k = A_shape[1];
+  if (k != B_shape[1]) {
+    std::ostringstream oss;
+    oss << "Matrix dimensions do not match. A is [" << A_shape[0] << ", "
+        << A_shape[1] << "], B is [" << B_shape[0] << ", " << B_shape[1]
+        << "]. Expected A.shape[1] == B.shape[1]. Note that B needs to be "
+           "transposed.";
+    throw std::runtime_error(oss.str());
+  }
+
+  int m = A_shape[0];
+  if (m != C_shape[0]) {
+    std::ostringstream oss;
+    oss << "Matrix dimensions do not match. A is [" << A_shape[0] << ", "
+        << A_shape[1] << "], C is [" << C_shape[0] << ", " << C_shape[1]
+        << "]. Expected A.shape[0] == C.shape[0].";
+    throw std::runtime_error(oss.str());
+  }
+
+  int n = B_shape[0];
+  if (n != C_shape[1]) {
+    std::ostringstream oss;
+    oss << "Matrix dimensions do not match. B is [" << B_shape[0] << ", "
+        << B_shape[1] << "], C is [" << C_shape[0] << ", " << C_shape[1]
+        << "]. Expected B.shape[0] == C.shape[1]. Note that B needs to be "
+           "transposed.";
+    throw std::runtime_error(oss.str());
+  }
+}
+
+struct HipBlasInit {
+  int m;
+  int n;
+  int k;
+  hipDataType dtype;
+};
+
+static HipBlasInit initialize_hipblas_op(py::object &A, py::object &B,
+                                         py::object &out,
+                                         std::optional<py::object> accumOpt) {
+  auto A_shape = A.attr("shape").cast<std::vector<int>>();
+  auto B_shape = B.attr("shape").cast<std::vector<int>>();
+  auto OUT_shape = out.attr("shape").cast<std::vector<int>>();
+
+  auto A_dtype = A.attr("dtype").attr("__str__")().cast<std::string>();
+  auto B_dtype = B.attr("dtype").attr("__str__")().cast<std::string>();
+  auto OUT_dtype = out.attr("dtype").attr("__str__")().cast<std::string>();
+
+  if (accumOpt.has_value()) {
+    auto C = accumOpt.value();
+    auto C_shape = C.attr("shape").cast<std::vector<int>>();
+    auto C_dtype = C.attr("dtype").attr("__str__")().cast<std::string>();
+
+    checkMatmulConstraints(A_dtype, B_dtype, OUT_dtype, A_shape, B_shape,
+                           OUT_shape);
+    if (C_dtype != "torch.float16") {
+      throw std::runtime_error("C dtype must be float16, got " + C_dtype);
+    }
+    if (C_shape != OUT_shape) {
+      throw std::runtime_error("C and D shapes must match");
+    }
+  } else {
+    checkMatmulConstraints(A_dtype, B_dtype, OUT_dtype, A_shape, B_shape,
+                           OUT_shape);
+  }
+
+  std::string dtype_str = A_dtype.substr(A_dtype.find_last_of('.') + 1);
+  hipDataType dtype;
+  if (dtype_str == "float8_e4m3fn") {
+    // supported for GFX950/MI350x.
+    dtype = HIP_R_8F_E4M3;
+  } else if (dtype_str == "float8_e5m2fn") {
+    // supported for GFX950/MI350x.
+    dtype = HIP_R_8F_E5M2;
+  } else if (dtype_str == "float8_e4m3fnuz") {
+    // supported for GFX942/MI300x.
+    dtype = HIP_R_8F_E4M3_FNUZ;
+  } else if (dtype_str == "float8_e5m2fnuz") {
+    // supported for GFX942/MI300x.
+    dtype = HIP_R_8F_E5M2_FNUZ;
+  } else if (dtype_str == "float16") {
+    dtype = HIP_R_16F;
+  } else if (dtype_str == "float32") {
+    dtype = HIP_R_32F;
+  } else if (dtype_str == "bfloat16") {
+    dtype = HIP_R_16BF;
+  } else {
+    throw std::runtime_error("Unsupported dtype for hipblasLt: " + dtype_str);
+  }
+
+  int m = A_shape[0];
+  int n = B_shape[0];
+  int k = A_shape[1];
+
+  return HipBlasInit{m, n, k, dtype};
+}
 
 static std::optional<std::string> lldInvoke(const char *inPath,
                                             const char *outPath) {
@@ -345,4 +506,33 @@ void init_triton_amd(py::module &&m) {
   m.def("add_scalarize_packed_fops_llvm_pass", [](llvm::Function *fn) {
     mlir::triton::AMD::runScalarizePackedFOpsPass(*fn);
   });
+
+  auto hipBlas = m.def_submodule("hipblas");
+  py::class_<HipBlasLtInstance>(hipBlas, "HipBlasLt")
+      .def(py::init<>([&](py::object &workspace) {
+        auto wrk_ptr = workspace.attr("data_ptr")().cast<uint64_t>();
+        auto wrk_size = workspace.attr("numel")().cast<size_t>() *
+                        workspace.attr("element_size")().cast<size_t>();
+        return new HipBlasLtInstance(wrk_ptr, wrk_size);
+      }))
+      .def("matmul",
+           [](HipBlasLtInstance &self, py::object &A, py::object &B,
+              py::object &C) {
+             auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
+             auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
+             auto C_ptr = C.attr("data_ptr")().cast<uint64_t>();
+             auto init = initialize_hipblas_op(A, B, C, std::nullopt);
+             self.matmul(init.m, init.n, init.k, A_ptr, B_ptr, C_ptr,
+                         init.dtype);
+           })
+      .def("gemm", [](HipBlasLtInstance &self, py::object &A, py::object &B,
+                      py::object &C, py::object &D, float alpha, float beta) {
+        auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
+        auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
+        auto C_ptr = C.attr("data_ptr")().cast<uint64_t>();
+        auto D_ptr = D.attr("data_ptr")().cast<uint64_t>();
+        auto init = initialize_hipblas_op(A, B, D, C);
+        self.gemm(init.m, init.n, init.k, A_ptr, B_ptr, C_ptr, D_ptr,
+                  init.dtype, alpha, beta);
+      });
 }
