@@ -649,7 +649,7 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     auto repB = mfmaLayout.getRepForOperand(shapeB, 1, 1);
     assert(repA[2] == repB[1]);
 
-    auto kDimInstrSize = kDim * 1;
+    auto kDimInstrSize = kDim;
     auto kDimOperandSize = shapeA.back();
 
     // For fp4 scaled mfma, each thread takes 1 element from scale. Will have
