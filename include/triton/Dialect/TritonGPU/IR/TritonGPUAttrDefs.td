@@ -1158,7 +1158,7 @@ w2 w2 w3 w3
     "bool":$isTransposed,
     "CTALayoutAttr":$CTALayout,
     ArrayRefParameter<"unsigned">:$tilesPerWarp,
-    "Type":$elementType
+    "unsigned":$elementBitWidth
   );
 
   let builders = [
@@ -1168,14 +1168,13 @@ w2 w2 w3 w3
                      "bool":$isTransposed,
                      "CTALayoutAttr":$CTALayout,
                      CArg<"ArrayRef<unsigned>", "{}">:$tpw,
-                     CArg<"Type", "nullptr">:$et), [{
+                     CArg<"unsigned", "0">:$elementBitWidth), [{
       SmallVector<unsigned> tilesPerWarp(tpw);
       if (tilesPerWarp.empty())
         tilesPerWarp = SmallVector<unsigned>(warpsPerCTA.size(), 1);
-      Type elementType = elementType;
-      if (elementType == nullptr)
-        elementType = Float32Type::get($_ctxt);
-      return $_get($_ctxt, version, warpsPerCTA, instrShape, isTransposed, CTALayout, tilesPerWarp, elementType);
+      if (elementBitWidth == 0)
+        elementBitWidth = 32;
+      return $_get($_ctxt, version, warpsPerCTA, instrShape, isTransposed, CTALayout, tilesPerWarp, elementBitWidth);
     }]>
   ];
 

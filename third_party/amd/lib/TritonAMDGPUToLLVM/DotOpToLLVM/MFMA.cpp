@@ -624,11 +624,11 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
 
     auto ctx = op.getContext();
     constexpr bool allowXF32 = false;
-    FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic = MfmaIntrinsic::selectFor(
-        op.getLoc(), mfmaVersion, mDim, nDim, kDim,
-        scaleDotElemTypeToMLIRType(ctx, aElemType),
-        scaleDotElemTypeToMLIRType(ctx, bElemType),
-        /*withScale=*/true, allowXF32);
+    FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic =
+        MfmaIntrinsic::selectFor(op.getLoc(), mfmaVersion, mDim, nDim, kDim,
+                                 scaleDotElemTypeToMLIRType(ctx, aElemType),
+                                 scaleDotElemTypeToMLIRType(ctx, bElemType),
+                                 /*withScale=*/true, allowXF32);
     if (failed(maybeMfmaIntrinsic))
       return op.emitError(
           "no matching matrix core intrinsic due to unsupported element type");

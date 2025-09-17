@@ -509,7 +509,8 @@ public:
   }
 
   triton::gpu::AMDMfmaEncodingAttr
-  createTransposedMFMA(ArrayRef<unsigned> instrShape, ArrayRef<unsigned> warpsPerCTA) {
+  createTransposedMFMA(ArrayRef<unsigned> instrShape,
+                       ArrayRef<unsigned> warpsPerCTA) {
     return triton::gpu::AMDMfmaEncodingAttr::get(
         &ctx, /*version=*/2, warpsPerCTA, instrShape,
         /*isTransposed=*/true, ctaLayout);

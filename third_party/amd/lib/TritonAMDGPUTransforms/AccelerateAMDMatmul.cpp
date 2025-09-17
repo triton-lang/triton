@@ -512,7 +512,8 @@ public:
 
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(), mfmaVersion, warpsPerTile, {mDim, nDim, kDim},
-        isTransposed, CTALayout, tilesPerWarp, mfmaAccType);
+        isTransposed, CTALayout, tilesPerWarp,
+        mfmaAccType.getIntOrFloatBitWidth());
 
     // convert accumulator
     auto oldAcc = dotOp.getC();
@@ -694,9 +695,10 @@ public:
 
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
+    auto elementBitWidth = oldRetType.getElementType().getIntOrFloatBitWidth();
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         ctx, mfmaVersion, mfmaWarpsPerCTA, {mDim, nDim, kDim},
-        /*isTransposed=*/true, ctaLayout, {}, oldRetType.getElementType());
+        /*isTransposed=*/true, ctaLayout, {}, elementBitWidth);
 
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), mfmaEnc);
@@ -982,10 +984,10 @@ public:
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
     mlir::Attribute mfmaEnc;
+    auto elementBitWidth = oldRetType.getElementType().getIntOrFloatBitWidth();
     mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         ctx, mfmaVersion, warpsPerTile, {mDim, nDim, kDim},
-        /*isTransposed=*/true, ctaLayout, tilesPerWarp,
-        oldRetType.getElementType());
+        /*isTransposed=*/true, ctaLayout, tilesPerWarp, elementBitWidth);
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), mfmaEnc);

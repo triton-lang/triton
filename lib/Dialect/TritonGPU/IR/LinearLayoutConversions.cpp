@@ -375,8 +375,8 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
   auto mDim = getInstrShape()[0];
   auto nDim = getInstrShape()[1];
-  auto elementType = getElementType();
-  int height = elementType.isF64() ? 1 : 4;
+  auto elementBitWidth = getElementBitWidth();
+  int height = elementBitWidth == 64 ? 1 : 4;
   constexpr int warpSize = 64;
 
   bool isTransposed = getIsTransposed();

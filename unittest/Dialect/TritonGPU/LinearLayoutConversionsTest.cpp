@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -61,7 +62,7 @@ public:
   AMDMfmaEncodingAttr mfma(unsigned version, ArrayRef<unsigned> warps,
                            ArrayRef<unsigned> instrShape, bool isTransposed,
                            ArrayRef<unsigned> tilesPerWarp = {},
-                           Type elementType = nullptr) {
+                           unsigned elementBitWidth = 0) {
     SmallVector<unsigned> cpg(warps.size(), 1u);
     SmallVector<unsigned> cSplit(warps.size(), 1u);
     SmallVector<unsigned> cOrd(warps.size());
@@ -70,7 +71,7 @@ public:
     auto ctaLayout = CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd);
     return AMDMfmaEncodingAttr::get(&ctx, version, warps, instrShape,
                                     isTransposed, ctaLayout, tilesPerWarp,
-                                    elementType);
+                                    elementBitWidth);
   }
 
   DotOperandEncodingAttr mfmaDotOp(AMDMfmaEncodingAttr mfma, unsigned opIdx,
@@ -1068,6 +1069,19 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_2x4Warps) {
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}}},
                  {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {4, 0}, {8, 0}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, MFMA16_2x4Warps_F64) {
+  auto mfmaNT =
+      mfma(/*version=*/3, /*warps=*/{2, 4}, /*instrShape=*/{16, 16, 4},
+           /*isTransposed=*/false, /*tilesPerWarp=*/{}, /*elementBitWidth=*/64);
+  EXPECT_EQ(toLinearLayout({16, 16}, mfmaNT),
+            LinearLayout(
+                {{S("register"), {{4, 0}, {8, 0}}},
+                 {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}}},
                  {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));

@@ -21,6 +21,7 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/MathExtras.h"
@@ -1174,7 +1175,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
   SmallVector<unsigned> tilesPerWarp = {};
-  Type elementType = nullptr;
+  unsigned elementBitWidth = 32;
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "version") {
@@ -1213,8 +1214,8 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
               .failed())
         return {};
     }
-    if (attr.getName() == "elementType") {
-      if (parseType(parser, attr, elementType, "elementType").failed())
+    if (attr.getName() == "elementBitWidth") {
+      if (parseUInt(parser, attr, elementBitWidth, "elementBitWidth").failed())
         return {};
     }
   }
@@ -1226,12 +1227,10 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
   if (tilesPerWarp.empty())
     tilesPerWarp = SmallVector<unsigned>(instrShape.size(), 1);
-  if (!elementType)
-    elementType = Float32Type::get(parser.getContext());
 
   return parser.getChecked<AMDMfmaEncodingAttr>(
       parser.getContext(), version, warpsPerCTA, instrShape, isTransposed,
-      *CTALayout, tilesPerWarp, elementType);
+      *CTALayout, tilesPerWarp, elementBitWidth);
 }
 
 void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
@@ -1249,9 +1248,9 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
   if (!hasUnitTilesPerWarp())
     printer << ", tilesPerWarp = [" << getTilesPerWarp() << "]";
 
-  auto elementType = getElementType();
-  if (elementType != Float32Type::get(getContext()))
-    printer << ", elementType = " << elementType;
+  auto elementBitWidth = getElementBitWidth();
+  if (elementBitWidth != 32)
+    printer << ", elementBitWidth = " << elementBitWidth;
 
   printer << "}>";
 }
@@ -1261,7 +1260,7 @@ LogicalResult AMDMfmaEncodingAttr::verify(
     llvm::ArrayRef<unsigned int> warpsPerCTA,
     llvm::ArrayRef<unsigned int> instrShape, bool isTransposed,
     mlir::triton::gpu::CTALayoutAttr, llvm::ArrayRef<unsigned int> tilesPerWarp,
-    Type elementType) {
+    unsigned elementBitWidth) {
   if (!(version >= 0 && version <= 4)) {
     return emitError() << "version must be in the [0, 4] range";
   }
@@ -1275,9 +1274,8 @@ LogicalResult AMDMfmaEncodingAttr::verify(
                        << nDim << ")";
   }
 
-  if (!(elementType.isF64() || elementType.isF32() ||
-        elementType.isInteger(32)))
-    return emitError() << "element type must be f64, f32, i32";
+  if (!(elementBitWidth == 32 || elementBitWidth == 64))
+    return emitError() << "elementBitWidth must be 32 or 64";
 
   return success();
 }
