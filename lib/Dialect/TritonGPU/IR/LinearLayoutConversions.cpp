@@ -477,6 +477,41 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(tileLayout, getCTALayout(), shape);
 }
 
+LinearLayout chooseLLDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
+                                       int32_t elemBitWidth) {
+  using BaseTy = std::vector<std::vector<int32_t>>;
+
+  auto rotatePrefixes = [](BaseTy &regBase, std::size_t numReg,
+                           BaseTy &laneBase, std::size_t numLane) {
+    // Concatenate prefixes of the two vectors, then roatete left by numReg
+    // A B | C D E F --> C D | E F A B
+    BaseTy prefixes(regBase.begin(), regBase.begin() + numReg);
+    prefixes.insert(prefixes.end(), laneBase.begin(),
+                    laneBase.begin() + numLane);
+    std::rotate(prefixes.begin(), prefixes.begin() + numReg, prefixes.end());
+
+    // Insert the rotated elements by overwriting the source bases
+    std::copy(prefixes.begin(), prefixes.begin() + numReg, regBase.begin());
+    std::copy(prefixes.begin() + numReg, prefixes.end(), laneBase.begin());
+  };
+
+  auto ctx = enc.getContext();
+  assert(elemBitWidth == 8 || elemBitWidth == 16);
+  // 2 lane bases describe 4 elements (B16), 3 lane bases describe 8 elements
+  // (B8)
+  unsigned numRegBases = elemBitWidth == 16 ? 2 : 3;
+  // 4 lane bases describe 16 lanes.
+  unsigned numLaneBases = 4;
+
+  auto ldsTransLayout = triton::gpu::toLinearLayout(shape, enc);
+  auto bases = ldsTransLayout.getBases();
+  auto kRegister = S("register");
+  auto kLane = S("lane");
+  rotatePrefixes(bases[kRegister], numRegBases, bases[kLane], numLaneBases);
+
+  return LinearLayout(bases, ldsTransLayout.getOutDims(), false);
+}
+
 LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
                                         ArrayRef<int64_t> shape,
                                         int32_t elemBitWidth) {
@@ -484,16 +519,11 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
   auto mDim = mfmaLayout.getMDim();
   assert(mDim == 16 || mDim == 32);
 
-  bool isFP4 = false;
-  if (elemBitWidth == 4) {
-    // When doing ds_read_tr4 we actually write the LL as if it were on i8
-    // elements this is becasue LL needs to be described for the i8 tensor
-    // elements.
-    elemBitWidth = 8;
-    isFP4 = true;
-  }
-
-  assert(elemBitWidth == 16 || elemBitWidth == 8);
+  assert(elemBitWidth == 4);
+  // When doing ds_read_tr4 we actually write the LL as if it were on i8
+  // elements this is becasue LL needs to be described for the i8 tensor
+  // elements.
+  elemBitWidth = 8;
 
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
@@ -554,109 +584,8 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
       laneBase.push_back({0, 32});
     }
   };
-  auto populateLL = [&registerBase, &laneBase](int elemBitWidth, int kSize,
-                                               int kWidthDot, int mDim) {
-    // Number of bits loaded by an LDS read. ds_read_tr primarily supports
-    // 64-bit loads for most element sizes (16b, 8b, 4b).
-    const int32_t ldsReadWidth = 64;
-    int32_t kWidthTransRead = ldsReadWidth / elemBitWidth;
-    const int elemByteWidth = elemBitWidth / 8;
-    const bool isMfma32 = (mDim == 32);
 
-    // For ds_read_b64_tr_* instructions, each thread accesses 64 bits (8 bytes)
-    // of data. The smallest unit for transposition is a
-    // [non-K, K] = {16, kWidthTransRead} sub-tile of elements,
-    // where each thread reads kWidthTransRead elements along the non-K
-    // dimension. Due to the transposition mechanism, each thread ends up with
-    // kWidthTransRead elements along the K dimension.
-    //
-    // The MFMA selection logic prioritizes double-rate MFMA instructions
-    // whenever possible:
-    //
-    // - For MFMA operations where M = N = 16, when blockK > k, mfma16x16x2*k
-    //   is selected; otherwise (blockK ≤ k), mfma16x16xk remains the choice.
-    //
-    // - For MFMA operations where M = N = 32, when blockK > k, mfma32x32x2*k is
-    //   selected; otherwise (blockK ≤ k), mfma32x32xk is used.
-    //
-    // NOTE: For fp8 and fp4, "double-rate" results in 4*k since scaled MFMA
-    // instructions are used.
-    //
-    // In "double-rate" MFMA instructions, each thread holds 2*kWidthTransRead
-    // elements along the K dimension:
-    // - The first kWidthTransRead elements belong to the first sub-tile.
-    // - The next kWidthTransRead elements belong to the second sub-tile.
-    //
-    // These elements are then grouped into larger tiles, each consisting of
-    // 8 {16, kWidthTransRead} sub-tiles. These tiles correspond to the data
-    // for one MFMA instruction. The shape of these tiles depends on the MFMA
-    // instruction used.
-    //
-    // For single-rate MFMA instructions, each thread holds kWidthTransRead
-    // elements along the K dimension. This means that the larger tile
-    // (corresponding to one MFMA instruction) consists of 4 {16,
-    // kWidthTransRead} sub-tiles.
-
-    // Populate register base for first subtile
-    for (int i = 1; i < kWidthTransRead; i *= 2) {
-      registerBase.push_back({i, 0});
-    }
-
-    const int threadsPerSubtileNonK = 16 / kWidthTransRead;
-    const int threadsPerSubtileK = kWidthTransRead;
-
-    // Populate lane base for first subtile
-    for (int i = 1; i < threadsPerSubtileNonK; i *= 2) {
-      laneBase.push_back({i * kWidthTransRead, 0});
-    }
-    for (int i = 1; i < threadsPerSubtileK; i *= 2) {
-      laneBase.push_back({0, i});
-    }
-
-    // Function to extend register base for multiple tiles K dim.
-    auto extendRegisterBaseForKDim = [&](int kTileSize,
-                                         int numSubtilesPerTile) {
-      const int regsPerTile = kWidthTransRead * numSubtilesPerTile;
-      int totalRegs = (kSize / kTileSize) * regsPerTile;
-
-      for (int reg = regsPerTile; reg < totalRegs; reg *= 2) {
-        registerBase.push_back({0, (reg / regsPerTile) * kTileSize});
-      }
-    };
-
-    // kDoubleTileSize is the k dimension of a tile when double rated
-    // mfma instructions are used.
-    const int kDoubleTileSize =
-        isMfma32 ? 32 / elemByteWidth : 64 / elemByteWidth;
-    // kTileSize is the actually k dimention of a tile, which is
-    // determined by kWidthDot.
-    const int kTileSize = kWidthDot * 64 / mDim;
-    // We use kDoubleTileSize as a reference to check whether the given
-    // kWidthDot leads to double or single sub-tiles in each tile.
-    const int numSubtilesPerTile = (kTileSize == kDoubleTileSize) ? 2 : 1;
-
-    // Extend register base for large K sizes.
-    if (numSubtilesPerTile == 2)
-      registerBase.push_back({0, threadsPerSubtileK}); // Second subtile
-
-    extendRegisterBaseForKDim(kTileSize, numSubtilesPerTile);
-
-    // Extend lane base based on MFMA size.
-    std::vector<std::vector<int32_t>> laneBaseExt;
-
-    if (isMfma32) {
-      laneBaseExt = {{16, 0}, {0, numSubtilesPerTile * threadsPerSubtileK}};
-    } else {
-      laneBaseExt = {{0, numSubtilesPerTile * threadsPerSubtileK},
-                     {0, 2 * numSubtilesPerTile * threadsPerSubtileK}};
-    }
-    laneBase.insert(laneBase.end(), laneBaseExt.begin(), laneBaseExt.end());
-  };
-
-  if (isFP4)
-    populateFP4LL(kSize, mDim);
-  else
-    populateLL(elemBitWidth, kSize, kWidthDot, mDim);
+  populateFP4LL(kSize, mDim);
 
   // Base vectors above are defined in a fixed order [non-k-dim, k-dim].
   // To assign them to actual matrix dimensions we associate with register
@@ -1441,8 +1370,12 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 
 LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
                                      int32_t elemBitWidth) {
-  auto dot = cast<DotOperandEncodingAttr>(enc);
-  return chooseDotDsReadB64TrLayout(dot, shape, elemBitWidth);
+  if (elemBitWidth == 4) {
+    auto dot = cast<DotOperandEncodingAttr>(enc);
+    return chooseDotDsReadB64TrLayout(dot, shape, elemBitWidth);
+  } else {
+    return chooseLLDsReadB64TrLayout(enc, shape, elemBitWidth);
+  }
 }
 
 // Warp-level block scaling (sm_120, m16n8k32)
