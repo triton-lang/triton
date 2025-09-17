@@ -1181,7 +1181,7 @@ w2 w2 w3 w3
   ];
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int opIdx) const;
+    SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kPack, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
 
     // Check if tilesPerWarp is 1 in every dimension.

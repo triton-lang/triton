@@ -2184,12 +2184,12 @@ AMDMfmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 }
 
 SmallVector<int64_t>
-AMDMfmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
+AMDMfmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape, int kPack,
                                       int opIdx) const {
   auto mnkDim = getInstrShape();
-  auto operandTileShape = opIdx == 0
-                              ? SmallVector<int64_t>{mnkDim[0], mnkDim[2]}
-                              : SmallVector<int64_t>{mnkDim[2], mnkDim[1]};
+  auto operandTileShape =
+      opIdx == 0 ? SmallVector<int64_t>{mnkDim[0], mnkDim[2] * kPack}
+                 : SmallVector<int64_t>{mnkDim[2] * kPack, mnkDim[1]};
 
   auto rank = operandShape.size();
   auto warpsPerCTA = getWarpsPerCTA();
