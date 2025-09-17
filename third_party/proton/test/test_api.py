@@ -79,6 +79,7 @@ def test_profile_mode(tmp_path: pathlib.Path):
         temp_file1 = tmp_path / "test_profile1.hatchet"
         proton.start(str(temp_file1.with_suffix("")), mode="pcsampling")
         proton.finalize()
+        assert temp_file1.exists()
 
         try:
             proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
