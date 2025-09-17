@@ -1045,8 +1045,8 @@ It is characterized by the following parameters:
 - `instrShape`: The shape in the form of (M, N, K) of the matrix.
 - `isTransposed`: Indicates the result tensor is transposed so that it can be converted to dotOperand layout
 without going to shared memory. This is used in the case of chained dot (E.g. Flash-Attention kernel).
-- `tiles_per_warp`: The tile layout within a warp. Defaults to unit tile layout, i.e., single tile on all dimensions.
-- `element_bitwidth`: Bit width of the output element type. Supported values are 32 and 64. Defaults to 32.
+- `tilesPerWarp`: The tile layout within a warp. Defaults to unit tile layout, i.e., single tile on all dimensions.
+- `elementBitWidth`: Bit width of the output element type. Supported values are 32 and 64. Defaults to 32.
 
 Example 1:
 Suppose we have a tensor with a shape of [32, 64], warpsPerCTA set to [1, 2] and MDim=NDim=32.
