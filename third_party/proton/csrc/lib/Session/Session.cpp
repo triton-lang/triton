@@ -174,7 +174,6 @@ size_t SessionManager::addSession(const std::string &path,
     return sessionId;
   }
   auto sessionId = nextSessionId++;
-  sessionPaths[path] = sessionId;
   auto newSession = makeSession(sessionId, path, profilerName, profilerPath,
                                 contextSourceName, dataName, mode);
   for (auto &[id, session] : sessions) {
@@ -184,6 +183,7 @@ size_t SessionManager::addSession(const std::string &path,
                                "but a different mode than existing sessions");
     }
   }
+  sessionPaths[path] = sessionId;
   sessions[sessionId] = std::move(newSession);
   return sessionId;
 }
