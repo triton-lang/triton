@@ -39,9 +39,8 @@ static Attribute pickDescriptorLoadStoreLayout(int numWarps, int threadsPerWarp,
   SmallVector<unsigned> sizePerThread(type.getRank(), 1);
   sizePerThread.back() = vectorSize;
 
-  SmallVector<unsigned, 4> order(type.getRank());
-  std::iota(order.begin(), order.end(), 0);
-  std::reverse(order.begin(), order.end());
+  SmallVector<unsigned> order =
+      getMatrixOrder(type.getRank(), /*rowMajor*/ true);
   auto CTALayout = triton::gpu::getCTALayout(type.getEncoding());
 
   Attribute layout = triton::gpu::BlockedEncodingAttr::get(
