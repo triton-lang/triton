@@ -620,8 +620,6 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
       llvm::report_fatal_error("NYI: mxfp6\n");
     }
 
-    // int64_t kDimOperandSize = aTensorTy.getShape().back();
-
     auto ctx = op.getContext();
     constexpr bool allowXF32 = false;
     FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic =
