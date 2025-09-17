@@ -33,20 +33,6 @@ namespace {
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 
-enum class WMMAInstrType : uint8_t {
-  // D = AB + C;
-  // typeof(D) == typeof(C)
-  // typeof(A) == typeof(B)
-  // typeof(D), typeof(A):
-  FP32_FP16,
-  FP32_BF16,
-  FP16_FP16,
-  BF16_BF16,
-  I32_I8,
-  I32_I4,
-  NOT_APPLICABLE,
-};
-
 using ValueTable = std::map<std::tuple<unsigned, unsigned, unsigned>, Value>;
 
 ValueTable getValuesFromDotOperandLayoutStruct(
@@ -86,75 +72,6 @@ ValueTable getValuesFromDotOperandLayoutStruct(
   return vals;
 }
 
-WMMAInstrType getWMMAInstrTypeFromDot(DotOp op) {
-  auto aOperandTy = op.getA().getType();
-  auto aTensorTy = cast<RankedTensorType>(aOperandTy);
-  auto aElemTy = aTensorTy.getElementType();
-  auto bOperandTy = op.getB().getType();
-  auto bTensorTy = cast<RankedTensorType>(bOperandTy);
-  auto bElemTy = bTensorTy.getElementType();
-  assert(aElemTy == bElemTy);
-  auto cOperandTy = op.getC().getType();
-  auto cTensorTy = cast<RankedTensorType>(cOperandTy);
-  auto cElemTy = cTensorTy.getElementType();
-  auto dOperandTy = op.getD().getType();
-  auto dTensorTy = cast<RankedTensorType>(dOperandTy);
-  auto dElemTy = dTensorTy.getElementType();
-  assert(cElemTy == dElemTy);
-
-  if (dElemTy.isF32() && aElemTy.isF16())
-    return WMMAInstrType::FP32_FP16;
-  if (dElemTy.isF32() && aElemTy.isBF16())
-    return WMMAInstrType::FP32_BF16;
-  if (dElemTy.isF16() && aElemTy.isF16())
-    return WMMAInstrType::FP16_FP16;
-  if (dElemTy.isBF16() && aElemTy.isBF16())
-    return WMMAInstrType::BF16_BF16;
-  if (dElemTy.isInteger(32) && aElemTy.isInteger(8))
-    return WMMAInstrType::I32_I8;
-  if (dElemTy.isInteger(32) && aElemTy.isInteger(4))
-    return WMMAInstrType::I32_I4;
-
-  return WMMAInstrType::NOT_APPLICABLE;
-}
-
-Value generateROCDLOp(ConversionPatternRewriter &rewriter, Location loc,
-                      WMMAInstrType wmmaType, Value valA, Value valB,
-                      Value valC, Type aElType, Type bElType) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto resType = valC.getType();
-  Value falseFlag = b.int_val(1, false);
-  switch (wmmaType) {
-  case WMMAInstrType::FP32_FP16:
-    return rewriter.create<ROCDL::wmma_f32_16x16x16_f16>(
-        loc, TypeRange{resType}, ValueRange{valA, valB, valC});
-  case WMMAInstrType::FP32_BF16:
-    return rewriter.create<ROCDL::wmma_f32_16x16x16_bf16>(
-        loc, TypeRange{resType}, ValueRange{valA, valB, valC});
-  case WMMAInstrType::FP16_FP16:
-    return rewriter.create<ROCDL::wmma_f16_16x16x16_f16>(
-        loc, TypeRange{resType}, ValueRange{valA, valB, valC, falseFlag});
-  case WMMAInstrType::BF16_BF16:
-    return rewriter.create<ROCDL::wmma_bf16_16x16x16_bf16>(
-        loc, TypeRange{resType}, ValueRange{valA, valB, valC, falseFlag});
-  case WMMAInstrType::I32_I8:
-    return rewriter.create<ROCDL::wmma_i32_16x16x16_iu8>(
-        loc, TypeRange{resType},
-        ValueRange{b.int_val(1, !aElType.isUnsignedInteger()), valA,
-                   b.int_val(1, !bElType.isUnsignedInteger()), valB, valC,
-                   falseFlag});
-  case WMMAInstrType::I32_I4:
-    return rewriter.create<ROCDL::wmma_i32_16x16x16_iu4>(
-        loc, TypeRange{resType},
-        ValueRange{b.int_val(1, !aElType.isUnsignedInteger()), valA,
-                   b.int_val(1, !bElType.isUnsignedInteger()), valB, valC,
-                   falseFlag});
-  default:
-    llvm::report_fatal_error("WMMA data type not supported");
-  }
-  return Value();
-}
-
 std::string getTypeStr(Type ty) {
   std::string scalarName;
   if (ty.isF32()) {
@@ -163,6 +80,10 @@ std::string getTypeStr(Type ty) {
     scalarName = "f16";
   } else if (ty.isBF16()) {
     scalarName = "bf16";
+  } else if (llvm::isa<Float8E4M3FNType>(ty)) {
+    scalarName = "fp8";
+  } else if (llvm::isa<Float8E5M2Type>(ty)) {
+    scalarName = "bf8";
   } else if (ty.isInteger(32)) {
     scalarName = "i32";
   } else if (ty.isInteger(16)) {
@@ -171,10 +92,6 @@ std::string getTypeStr(Type ty) {
     scalarName = "iu8";
   } else if (ty.isInteger(4)) {
     scalarName = "iu4";
-  } else if (llvm::isa<Float8E4M3FNType>(ty)) {
-    scalarName = "fp8";
-  } else if (llvm::isa<Float8E5M2Type>(ty)) {
-    scalarName = "bf8";
   } else if (auto vecTy = dyn_cast<VectorType>(ty)) {
     auto elemType = vecTy.getElementType();
     auto numElems = vecTy.getNumElements();
@@ -183,31 +100,6 @@ std::string getTypeStr(Type ty) {
     llvm::report_fatal_error("WMMA data type not supported");
   }
   return scalarName;
-}
-
-StringRef getWmmaIntrinsicName(Type aElTy, Type bElTy, Type dElTy, Type valATy,
-                               Type valCTy, bool tied) {
-  static llvm::SmallDenseMap<llvm::hash_code, std::string> intrinsics;
-  using MapInfo = llvm::DenseMapInfo<Type>;
-  llvm::hash_code h = llvm::hash_combine(
-      MapInfo::getHashValue(aElTy), MapInfo::getHashValue(bElTy),
-      MapInfo::getHashValue(dElTy), MapInfo::getHashValue(valATy),
-      MapInfo::getHashValue(valCTy), llvm::hash_value(tied));
-  if (!intrinsics.contains(h)) {
-    std::string name = "llvm.amdgcn.wmma.";
-    name += getTypeStr(dElTy);
-    name += ".16x16x16."; // TODO support 16x16x32 for i4 operands
-    name += getTypeStr(aElTy);
-    if (tied) {
-      name += ".tied";
-    } else {
-      if (isa<FloatType>(aElTy) && aElTy.getIntOrFloatBitWidth() == 8)
-        name += '.' + getTypeStr(bElTy);
-      name += '.' + getTypeStr(valCTy) + "." + getTypeStr(valATy);
-    }
-    intrinsics[h] = name;
-  }
-  return intrinsics[h];
 }
 
 std::string addInstructionSuffix(std::string intrinsicName, unsigned kBase,
