@@ -315,10 +315,11 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
     b = torch.randn((K, N), device='cuda', dtype=elem_type) - 0.5
     c = torch.empty((M, N), device=a.device, dtype=elem_type)
     nonkdim: ttgl.constexpr = 32
+    kdim: ttgl.constexpr = 8 if cdna_version == 3 else 16
     blocked: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[4, 4], threads_per_warp=[4, 16],
                                                  warps_per_cta=[num_warps, 1], order=[1, 0])
-    mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=cdna_version, instr_shape=[nonkdim, nonkdim],
-                                                         transposed=True, warps_per_cta=[num_warps, 1])
+    mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=cdna_version, warps_per_cta=[num_warps, 1],
+                                                         instr_shape=[nonkdim, nonkdim, kdim], transposed=True)
 
     kernel[1, 1](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_SIZE_M=M,
                  BLOCK_SIZE_N=N, BLOCK_SIZE_K=K, blocked=blocked, mfma_layout=mfma_layout, num_warps=num_warps)
@@ -394,8 +395,8 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
             reg_bases=[], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp_bases=[[16, 0], [0, 0]],
             block_bases=[], shape=[32, 4])
 
-        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[2, 2], tiles_per_warp=[1, 1],
-                                                             instr_shape=[16, 16], transposed=True)
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[2, 2], instr_shape=[16, 16, 128],
+                                                             transposed=True)
 
         zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=mfma_layout)
 
