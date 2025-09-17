@@ -721,7 +721,7 @@ class CodeGenerator(ast.NodeVisitor):
         args = [self.visit(x) for x in node.elts]
         return language.tuple(args)
 
-    def _apply_binary_method(self, method_name, lhs, rhs):
+    def _apply_binary_method(self, node, method_name, lhs, rhs):
         # TODO: raise something meaningful if getattr fails below, esp for reverse method
         if _is_triton_tensor(lhs):
             return getattr(lhs, method_name)(rhs, _semantic=self.semantic)
@@ -730,7 +730,11 @@ class CodeGenerator(ast.NodeVisitor):
             return getattr(rhs, reverse_method_name)(lhs, _semantic=self.semantic)
         if not isinstance(lhs, (constexpr, language.tuple)) and isinstance(rhs, constexpr):
             lhs = constexpr(lhs)
-        return getattr(lhs, method_name)(rhs)
+        if isinstance(lhs, constexpr):
+            fn = getattr(lhs, method_name)
+        else:
+            fn = self.get_Attribute(lhs, method_name)
+        return self.call_Function(node, fn, [rhs], {})
 
     def visit_BinOp(self, node):
         lhs = self.visit(node.left)
@@ -739,7 +743,7 @@ class CodeGenerator(ast.NodeVisitor):
         if method_name is None:
             raise self._unsupported(node,
                                     "AST binary operator '{}' is not (currently) implemented.".format(node.op.__name__))
-        return self._apply_binary_method(method_name, lhs, rhs)
+        return self._apply_binary_method(node, method_name, lhs, rhs)
 
     _method_name_for_bin_op: Dict[Type[ast.operator], str] = {
         ast.Add: '__add__',
@@ -1011,7 +1015,7 @@ class CodeGenerator(ast.NodeVisitor):
         if method_name is None:
             raise self._unsupported(
                 node, "AST comparison operator '{}' is not (currently) implemented.".format(node.ops[0].__name__))
-        return self._apply_binary_method(method_name, lhs, rhs)
+        return self._apply_binary_method(node, method_name, lhs, rhs)
 
     _method_name_for_comp_op: Dict[Type[ast.cmpop], str] = {
         ast.Eq: '__eq__', ast.NotEq: '__ne__', ast.Lt: '__lt__', ast.LtE: '__le__', ast.Gt: '__gt__', ast.GtE: '__ge__'
@@ -1353,7 +1357,7 @@ class CodeGenerator(ast.NodeVisitor):
                 # be in core.py.
                 raise CompilationError(self.jit_fn.src, node, str(e)) from e
 
-        if fn in self.builtin_namespace.values():
+        if fn in self.builtin_namespace.values() or (hasattr(fn, '__self__') and not _is_triton_value(fn.__self__)):
             args = map(_unwrap_if_constexpr, args)
         ret = fn(*args, **kws)
 
@@ -1440,7 +1444,7 @@ class CodeGenerator(ast.NodeVisitor):
         while len(nontrivial_values) >= 2:
             rhs = nontrivial_values.pop()
             lhs = nontrivial_values.pop()
-            res = self._apply_binary_method(method_name, lhs, rhs)
+            res = self._apply_binary_method(node, method_name, lhs, rhs)
             nontrivial_values.append(res)
 
         assert len(nontrivial_values) == 1
@@ -1448,17 +1452,20 @@ class CodeGenerator(ast.NodeVisitor):
 
     _method_name_for_bool_op: Dict[Type[ast.boolop], str] = {ast.And: 'logical_and', ast.Or: 'logical_or'}
 
-    def visit_Attribute(self, node):
-        lhs = self.visit(node.value)
-        if _is_triton_tensor(lhs) and node.attr == "T":
+    def get_Attribute(self, lhs, attr):
+        if _is_triton_tensor(lhs) and attr == "T":
             return self.semantic.permute(lhs, (1, 0))
         # NOTE: special case ".value" for BC
-        if isinstance(lhs, constexpr) and node.attr not in ("value", "type"):
+        if isinstance(lhs, constexpr) and attr not in ("value", "type"):
             lhs = lhs.value
-        attr = getattr(lhs, node.attr)
+        attr = getattr(lhs, attr)
         if _is_triton_value(lhs) and isinstance(attr, JITFunction):
             return BoundJITMethod(lhs, attr)
         return attr
+
+    def visit_Attribute(self, node):
+        lhs = self.visit(node.value)
+        return self.get_Attribute(lhs, node.attr)
 
     def visit_Expr(self, node):
         node.value._is_unused = True
