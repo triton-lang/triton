@@ -15,14 +15,7 @@ import threading
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
-
-
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
+from triton._internal_testing import is_hip
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])

@@ -235,6 +235,7 @@ py::object layoutToGluon(Attribute layout) {
     return layouts.AMDWMMALayout(amdWmma.getVersion(),
                                  amdWmma.getIsTransposed(),
                                  toStdVector(amdWmma.getWarpsPerCTA()),
+                                 toStdVector(amdWmma.getInstrShape()),
                                  toStdVector(ctaLayout.getCTAsPerCGA()),
                                  toStdVector(ctaLayout.getCTASplitNum()),
                                  toStdVector(ctaLayout.getCTAOrder()));
@@ -382,12 +383,13 @@ void init_gluon_ir(py::module &&m) {
               std::vector<unsigned> &warpsPerCta,
               std::vector<unsigned> &ctasPerCga,
               std::vector<unsigned> &ctaSplitNum,
-              std::vector<unsigned> &ctaOrder) -> Attribute {
+              std::vector<unsigned> &ctaOrder,
+              std::vector<unsigned> &instrShape) -> Attribute {
              auto ctx = self.getContext();
              auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
                  ctx, ctasPerCga, ctaSplitNum, ctaOrder);
-             return ttg::AMDWmmaEncodingAttr::get(ctx, version, transposed,
-                                                  warpsPerCta, ctaLayout);
+             return ttg::AMDWmmaEncodingAttr::get(
+                 ctx, version, transposed, warpsPerCta, ctaLayout, instrShape);
            })
       .def("get_padded_shared_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &intervals,
@@ -752,6 +754,14 @@ void init_gluon_ir(py::module &&m) {
               Value mask, tt::CacheModifier cache) {
              self.create<ttag::BufferStoreOp>(storedValue, ptr, offsets,
                                               Value() /*stride*/, cache, mask);
+           })
+      .def("create_buffer_atomic_rmw",
+           [](GluonOpBuilder &self, tt::RMWOp op, Value ptr, Value offsets,
+              Value value, tt::MemSemantic sem, tt::MemSyncScope scope,
+              Value mask) -> Value {
+             return self.create<ttag::BufferAtomicRMWOp>(
+                 value.getType(), op, ptr, offsets, value, Value() /*stride*/,
+                 sem, scope, mask);
            })
       .def("create_buffer_load_to_local",
            [](GluonOpBuilder &self, Value dest, Value ptr, Value offsets,

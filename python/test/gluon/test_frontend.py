@@ -2468,6 +2468,165 @@ def test_layout_zeros():
     ttgl.zeros([128], ttgl.float32, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
 
 
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
+def test_buffer_atomic_rmw(target):
+
+    @gluon.jit
+    def kernel(int32_ptr, uint32_ptr, int64_ptr, fp16_ptr, fp32_ptr):
+        BLOCK: ttgl.constexpr = 1
+        offsets = ttgl.arange(0, BLOCK, layout=ttgl.AutoLayout())
+
+        val = ttgl.full([BLOCK], 1, ttgl.int32, layout=ttgl.AutoLayout())
+        ttgl.amd.cdna3.buffer_atomic_rmw("smax", int32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_rmw("smin", int32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_rmw("and", int32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_rmw("or", int32_ptr, offsets, val)
+        #value broadcast
+        ttgl.amd.cdna3.buffer_atomic_rmw("xor", int32_ptr, offsets, value=1)
+
+        # operands should be unsigned
+        val = ttgl.full([BLOCK], 1, ttgl.uint32, layout=ttgl.AutoLayout())
+        ttgl.amd.cdna3.buffer_atomic_rmw("umax", uint32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_rmw("umin", uint32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_rmw("iadd", uint32_ptr, offsets, val)
+
+        val = val.cast(ttgl.int64)
+        #mask broadcast
+        ttgl.amd.cdna3.buffer_atomic_rmw("xchg", int64_ptr, offsets, val, mask=0)
+
+        mask = ttgl.full([BLOCK], True, ttgl.int32, layout=ttgl.AutoLayout())
+        val = ttgl.zeros([BLOCK], ttgl.float16, layout=ttgl.AutoLayout())
+        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp16_ptr, offsets, val, mask=mask)
+        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp16_ptr, offsets, val, mask=mask, scope="sys")
+        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp16_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
+
+        val = val.cast(ttgl.float32)
+        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp32_ptr, offsets, val, mask=mask)
+        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp32_ptr, offsets, val, mask=mask, scope="sys")
+        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp32_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
+
+    fp16_ptr = MockTensor(ttgl.float16)
+    fp32_ptr = MockTensor(ttgl.float32)
+    int_ptr = MockTensor(ttgl.int32)
+    uint_ptr = MockTensor(ttgl.uint32)
+    int64_ptr = MockTensor(ttgl.int64)
+    module = run_parser(kernel, *make_args(int_ptr, uint_ptr, int64_ptr, fp16_ptr, fp32_ptr), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = tt.make_range {end = 1 : i32, start = 0 : i32} : tensor<1xi32, #gluon.auto_encoding>
+    %c1_i32 = arith.constant 1 : i32
+    %cst = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
+    %1 = amdgpu.buffer_atomic_rmw max, acq_rel, gpu, %cst, %arg0[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %2 = amdgpu.buffer_atomic_rmw min, acq_rel, gpu, %cst, %arg0[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %3 = amdgpu.buffer_atomic_rmw and, acq_rel, gpu, %cst, %arg0[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %4 = amdgpu.buffer_atomic_rmw or, acq_rel, gpu, %cst, %arg0[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %c1_i32_0 = arith.constant 1 : i32
+    %cst_1 = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
+    %5 = amdgpu.buffer_atomic_rmw xor, acq_rel, gpu, %cst_1, %arg0[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %c1_i32_2 = arith.constant 1 : i32
+    %cst_3 = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
+    %6 = amdgpu.buffer_atomic_rmw umax, acq_rel, gpu, %cst_3, %arg1[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %7 = amdgpu.buffer_atomic_rmw umin, acq_rel, gpu, %cst_3, %arg1[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %8 = amdgpu.buffer_atomic_rmw add, acq_rel, gpu, %cst_3, %arg1[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %9 = arith.extui %cst_3 : tensor<1xi32, #gluon.auto_encoding> to tensor<1xi64, #gluon.auto_encoding>
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i32_4 = arith.constant 0 : i32
+    %10 = arith.cmpi ne, %c0_i32, %c0_i32_4 : i32
+    %11 = tt.splat %10 : i1 -> tensor<1xi1, #gluon.auto_encoding>
+    %12 = amdgpu.buffer_atomic_rmw exch, acq_rel, gpu, %9, %arg2[%0], %11 : tensor<1xi64, #gluon.auto_encoding>
+    %c1_i32_5 = arith.constant 1 : i32
+    %cst_6 = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
+    %13 = tt.call @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_1__(1,)cconstexpr_fp16__(2,)cconstexpr_AutoLayout()_"() : () -> tensor<1xf16, #gluon.auto_encoding>
+    %c0_i32_7 = arith.constant 0 : i32
+    %cst_8 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %14 = arith.cmpi ne, %cst_6, %cst_8 : tensor<1xi32, #gluon.auto_encoding>
+    %15 = amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu, %13, %arg3[%0], %14 : tensor<1xf16, #gluon.auto_encoding>
+    %c0_i32_9 = arith.constant 0 : i32
+    %cst_10 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %16 = arith.cmpi ne, %cst_6, %cst_10 : tensor<1xi32, #gluon.auto_encoding>
+    %17 = amdgpu.buffer_atomic_rmw fadd, acq_rel, sys, %13, %arg3[%0], %16 : tensor<1xf16, #gluon.auto_encoding>
+    %c0_i32_11 = arith.constant 0 : i32
+    %cst_12 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %18 = arith.cmpi ne, %cst_6, %cst_12 : tensor<1xi32, #gluon.auto_encoding>
+    %19 = amdgpu.buffer_atomic_rmw fadd, relaxed, cta, %13, %arg3[%0], %18 : tensor<1xf16, #gluon.auto_encoding>
+    %20 = arith.extf %13 : tensor<1xf16, #gluon.auto_encoding> to tensor<1xf32, #gluon.auto_encoding>
+    %c0_i32_13 = arith.constant 0 : i32
+    %cst_14 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %21 = arith.cmpi ne, %cst_6, %cst_14 : tensor<1xi32, #gluon.auto_encoding>
+    %22 = amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu, %20, %arg4[%0], %21 : tensor<1xf32, #gluon.auto_encoding>
+    %c0_i32_15 = arith.constant 0 : i32
+    %cst_16 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %23 = arith.cmpi ne, %cst_6, %cst_16 : tensor<1xi32, #gluon.auto_encoding>
+    %24 = amdgpu.buffer_atomic_rmw fadd, acq_rel, sys, %20, %arg4[%0], %23 : tensor<1xf32, #gluon.auto_encoding>
+    %c0_i32_17 = arith.constant 0 : i32
+    %cst_18 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %25 = arith.cmpi ne, %cst_6, %cst_18 : tensor<1xi32, #gluon.auto_encoding>
+    %26 = amdgpu.buffer_atomic_rmw fadd, relaxed, cta, %20, %arg4[%0], %25 : tensor<1xf32, #gluon.auto_encoding>
+    tt.return
+  }
+  tt.func private @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_1__(1,)cconstexpr_fp16__(2,)cconstexpr_AutoLayout()_"() -> tensor<1xf16, #gluon.auto_encoding> attributes {noinline = false} {
+    %cst = arith.constant 0.000000e+00 : f16
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<1xf16, #gluon.auto_encoding>
+    tt.return %cst_0 : tensor<1xf16, #gluon.auto_encoding>
+  ^bb1:  // no predecessors
+    %0 = ub.poison : tensor<1xf16, #gluon.auto_encoding>
+    tt.return %0 : tensor<1xf16, #gluon.auto_encoding>
+  }
+}
+""")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
+def test_buffer_atomic_rmw_bf16(target):
+
+    @gluon.jit
+    def kernel(bf16_ptr):
+        offsets = ttgl.arange(0, 1, layout=ttgl.AutoLayout())
+        val = ttgl.zeros([1], ttgl.bfloat16, layout=ttgl.AutoLayout())
+        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", bf16_ptr, offsets, val, mask=0)
+        mask = ttgl.full([1], True, ttgl.int32, layout=ttgl.AutoLayout())
+        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", bf16_ptr, offsets, val, mask=mask, scope="sys")
+        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", bf16_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
+
+    bf16_ptr = MockTensor(ttgl.bfloat16)
+    module = run_parser(kernel, *make_args(bf16_ptr), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = tt.make_range {end = 1 : i32, start = 0 : i32} : tensor<1xi32, #gluon.auto_encoding>
+    %1 = tt.call @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_1__(1,)cconstexpr_bf16__(2,)cconstexpr_AutoLayout()_"() : () -> tensor<1xbf16, #gluon.auto_encoding>
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i32_0 = arith.constant 0 : i32
+    %2 = arith.cmpi ne, %c0_i32, %c0_i32_0 : i32
+    %3 = tt.splat %2 : i1 -> tensor<1xi1, #gluon.auto_encoding>
+    %4 = amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu, %1, %arg0[%0], %3 : tensor<1xbf16, #gluon.auto_encoding>
+    %c1_i32 = arith.constant 1 : i32
+    %cst = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
+    %c0_i32_1 = arith.constant 0 : i32
+    %cst_2 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %5 = arith.cmpi ne, %cst, %cst_2 : tensor<1xi32, #gluon.auto_encoding>
+    %6 = amdgpu.buffer_atomic_rmw fadd, acq_rel, sys, %1, %arg0[%0], %5 : tensor<1xbf16, #gluon.auto_encoding>
+    %c0_i32_3 = arith.constant 0 : i32
+    %cst_4 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %7 = arith.cmpi ne, %cst, %cst_4 : tensor<1xi32, #gluon.auto_encoding>
+    %8 = amdgpu.buffer_atomic_rmw fadd, relaxed, cta, %1, %arg0[%0], %7 : tensor<1xbf16, #gluon.auto_encoding>
+    tt.return
+  }
+  tt.func private @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_1__(1,)cconstexpr_bf16__(2,)cconstexpr_AutoLayout()_"() -> tensor<1xbf16, #gluon.auto_encoding> attributes {noinline = false} {
+    %cst = arith.constant 0.000000e+00 : bf16
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<1xbf16, #gluon.auto_encoding>
+    tt.return %cst_0 : tensor<1xbf16, #gluon.auto_encoding>
+  ^bb1:  // no predecessors
+    %0 = ub.poison : tensor<1xbf16, #gluon.auto_encoding>
+    tt.return %0 : tensor<1xbf16, #gluon.auto_encoding>
+  }
+}
+""")
+
+
 @gluon.jit
 def print_num_warps():
     num_warps: ttgl.constexpr = ttgl.num_warps()
