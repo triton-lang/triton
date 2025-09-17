@@ -68,6 +68,8 @@ def test_profile_mode(tmp_path: pathlib.Path):
             proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
         except Exception as e:
             assert "Unsupported roctracer mode: pcsampling" in str(e)
+        finally:
+            proton.finalize()
     else:
         import os
         import pytest
@@ -86,6 +88,8 @@ def test_profile_mode(tmp_path: pathlib.Path):
             proton.start(str(temp_file1.with_suffix("")))
         except Exception as e:
             assert "Cannot add a session with the same profiler but a different mode than existing sessions" in str(e)
+        finally:
+            proton.finalize()
 
 
 def test_profile_decorator(tmp_path: pathlib.Path):
