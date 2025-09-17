@@ -16,6 +16,7 @@
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/OpInterfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -182,6 +183,8 @@ void LayoutRematerialization::cleanup() {
 // Return true if the op is an op with a layout we don't want to change. We will
 // propagate the layout starting from anchor ops.
 bool isLayoutAnchor(Operation *op) {
+  if (isa<DescriptorOpInterface>(op))
+    return true;
   if (isa<LoadOp, StoreOp>(op))
     return isExpensiveLoadOrStore(op);
   if (isa<DotOp, DotScaledOp, nvidia_gpu::WarpGroupDotOp, AtomicRMWOp,
@@ -1614,6 +1617,43 @@ void hoistConvert(ModuleOp module) {
     layoutRemat.cleanup();
   });
 }
+
+struct FoldConvertIntoDescriptorStore
+    : public mlir::OpInterfaceRewritePattern<
+          triton::DescriptorStoreLikeOpInterface> {
+  using OpInterfaceRewritePattern::OpInterfaceRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::DescriptorStoreLikeOpInterface op,
+                  PatternRewriter &rewriter) const override {
+    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
+    if (!convert)
+      return failure();
+    rewriter.modifyOpInPlace(
+        op, [&]() { op.getSrcMutable().assign(convert.getSrc()); });
+    return mlir::success();
+  }
+};
+
+struct FoldConvertIntoDescriptorLoad
+    : public mlir::OpRewritePattern<triton::gpu::ConvertLayoutOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::gpu::ConvertLayoutOp op,
+                  PatternRewriter &rewriter) const override {
+    auto descLoad = op.getSrc().getDefiningOp<triton::DescriptorOpInterface>();
+    if (!descLoad)
+      return failure();
+    if (!descLoad->hasOneUse())
+      return failure();
+    rewriter.modifyOpInPlace(
+        descLoad, [&]() { descLoad->getResult(0).setType(op.getType()); });
+    rewriter.replaceOp(op, descLoad);
+    return mlir::success();
+  }
+};
+
 } // namespace
 
 class TritonGPURemoveLayoutConversionsPass
@@ -1621,11 +1661,17 @@ class TritonGPURemoveLayoutConversionsPass
           TritonGPURemoveLayoutConversionsPass> {
 public:
   // Cleanup convert ops.
-  void cleanupConvertOps() {
+  void cleanupConvertOps(bool convertIntoDescriptorStore) {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
     RewritePatternSet cleanUpPatterns(context);
     ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns, context);
+    // If we couldn't remove the convert_layout before a descriptor store, we
+    // still want to fold it to avoid an unnecessary round trip to shared
+    // memory.
+    if (convertIntoDescriptorStore)
+      cleanUpPatterns.add<FoldConvertIntoDescriptorStore>(context);
+    cleanUpPatterns.add<FoldConvertIntoDescriptorLoad>(context);
     if (applyPatternsGreedily(m, std::move(cleanUpPatterns)).failed()) {
       signalPassFailure();
     }
@@ -1654,7 +1700,7 @@ public:
       m.dump();
     });
 
-    cleanupConvertOps();
+    cleanupConvertOps(/*foldConvertIntoDescriptorStore=*/false);
 
     // 2. For remaining convert ops, try to rematerialize the slice of producer
     // operation to avoid having to convert.
@@ -1665,7 +1711,7 @@ public:
     });
 
     // Cleanup dummy converts created during backward remat.
-    cleanupConvertOps();
+    cleanupConvertOps(/*foldConvertIntoDescriptorStore=*/true);
 
     // 3. For remaining converts, try to hoist them above cast generating larger
     // size types in order to reduce the cost of the convert op.
@@ -1682,6 +1728,9 @@ public:
     scf::ForOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
     scf::IfOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
     ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns2, context);
+    cleanUpPatterns2
+        .add<FoldConvertIntoDescriptorLoad, FoldConvertIntoDescriptorStore>(
+            context);
     if (applyPatternsGreedily(m, std::move(cleanUpPatterns2)).failed()) {
       signalPassFailure();
     }
