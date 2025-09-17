@@ -246,8 +246,6 @@ struct DotOpMFMAConversionHelper {
     auto nDim = mnkDim[1];
     auto kDim = mnkDim[2];
     auto mfmaVersion = mfmaLayout.getVersion();
-    assert((mDim == nDim && (mDim == 32 || mDim == 16)) ||
-           (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
 
     Value a = op.getA();
     Value b = op.getB();
@@ -264,7 +262,7 @@ struct DotOpMFMAConversionHelper {
         op.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
     StringRef intrinsicName;
     FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic = MfmaIntrinsic::selectFor(
-        op.getLoc(), mfmaVersion, mDim, nDim, kDimOperandSize, elemTyA, elemTyB,
+        op.getLoc(), mfmaVersion, mDim, nDim, kDim, elemTyA, elemTyB,
         /*withScale=*/false, allowXF32);
     if (failed(maybeMfmaIntrinsic))
       return op.emitError(
@@ -583,8 +581,6 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     auto nDim = mnkDim[1];
     auto kDim = mnkDim[2];
     auto mfmaVersion = mfmaLayout.getVersion();
-    assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
-           (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
 
     Value a = op.getA();
     Value b = op.getB();
