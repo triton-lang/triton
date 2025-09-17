@@ -141,6 +141,12 @@ LinearLayout reshapeLayout(MLIRContext *ctx, LinearLayout layout,
 // order.
 LinearLayout transposeLinearLayout(LinearLayout layout, ArrayRef<int> order);
 
+// Given a distributed into shmem layout, return the largest vectorisation
+// that can be used to lower the layout via ld/st.
+std::pair<int, ColumnAction>
+largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
+                     std::optional<int> maybeMaxVecElems = std::nullopt);
+
 } // namespace mlir::triton
 
 #endif // TRITON_TOOLS_LAYOUTUTILS_H

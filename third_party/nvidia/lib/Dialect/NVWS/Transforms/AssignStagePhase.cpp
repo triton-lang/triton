@@ -41,6 +41,7 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -69,17 +70,17 @@ template <class T> struct AssignStagePhase {
     Value token;
   };
   Value aref;
-  PartitionId partitionId;
+  int partitionId;
   DenseMap<Value, int> tokToStagePosMap;
 
-  AssignStagePhase(Value aref, PartitionId partitionId)
+  AssignStagePhase(Value aref, int partitionId)
       : aref(aref), partitionId(partitionId) {}
 
   T isValidOp(Operation *op) {
     if (auto opT = dyn_cast<T>(op)) {
       if (opT.getAref() == aref) {
-        auto opPartitionId = getPartitionId(op);
-        if (!opPartitionId || *opPartitionId == partitionId)
+        auto opPartitionIds = getPartitionIds(op);
+        if (!opPartitionIds || llvm::is_contained(*opPartitionIds, partitionId))
           return opT;
       }
     }
@@ -217,24 +218,45 @@ template <class T> struct AssignStagePhase {
   StagePhase assignArefIndexInBlock(Block *block, StagePhase index) {
     for (auto &op : llvm::make_early_inc_range(*block)) {
       if (auto opT = isValidOp(&op)) {
-        ImplicitLocOpBuilder b(opT.getLoc(), opT);
+        ImplicitLocOpBuilder builder(opT.getLoc(), opT);
+        auto partitionIds = getPartitionIds(&op);
+        auto stageCluster = getStageCluster(&op);
 
-        auto nextStage = b.create<arith::AddIOp>(
-            index.stage, b.create<arith::ConstantIntOp>(1, 32));
+        auto createInto = [&](auto opTy, auto... args) {
+          using ty = decltype(opTy);
+          ty op = builder.create<ty>(std::forward<decltype(args)>(args)...);
+          if (partitionIds) {
+            // phase & stage computations are cloned to partition 0 as well
+            auto ids = *partitionIds;
+            ids.insert(0);
+            setPartition(op, ids);
+            if (stageCluster) {
+              op->setAttr(kLoopStageAttrName,
+                          builder.getI32IntegerAttr(stageCluster->first));
+              op->setAttr(kLoopClusterAttrName,
+                          builder.getI32IntegerAttr(stageCluster->second));
+            }
+          }
+          return op;
+        };
+
+        auto nextStage = createInto(arith::AddIOp{}, index.stage,
+                                    createInto(arith::ConstantIntOp{}, 1, 32));
         auto arefBuf = opT.getAref()
                            .template getDefiningOp<nvws::ArefCreateOp>()
                            .getOperand(0);
-        auto depth = cast<MemDescType>(arefBuf.getType()).getShape().front();
+        auto depth = getArefDepth(cast<MemDescType>(arefBuf.getType()));
 
         auto cnd =
-            b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, nextStage,
-                                    b.create<arith::ConstantIntOp>(depth, 32));
-        auto zero = b.create<arith::ConstantIntOp>(0, 32);
-        index.stage = b.create<arith::SelectOp>(cnd, zero, nextStage);
+            createInto(arith::CmpIOp{}, arith::CmpIPredicate::eq, nextStage,
+                       createInto(arith::ConstantIntOp{}, depth, 32));
+        auto zero = createInto(arith::ConstantIntOp{}, 0, 32);
+        index.stage = createInto(arith::SelectOp{}, cnd, zero, nextStage);
 
-        auto nextPhase = b.create<arith::XOrIOp>(
-            index.phase, b.create<arith::ConstantIntOp>(1, 32));
-        index.phase = b.create<arith::SelectOp>(cnd, nextPhase, index.phase);
+        auto nextPhase = createInto(arith::XOrIOp{}, index.phase,
+                                    createInto(arith::ConstantIntOp{}, 1, 32));
+        index.phase =
+            createInto(arith::SelectOp{}, cnd, nextPhase, index.phase);
 
         index.token = opT.getToken();
         opT.getStageMutable().assign(index.stage);
@@ -273,15 +295,20 @@ template <class T> struct AssignStagePhase {
   }
 
   static LogicalResult run(ArefCreateOp arefOp) {
-
-    std::set<PartitionId> partitionIds;
+    std::set<int> partitionIds;
     for (auto user : arefOp->getUsers()) {
       // Each partition requires its own stage/phase tracking for proper
       // multi-user handling; collect partition IDs in which this aref is used
       if (isa<T>(user)) {
-        if (auto partitionId = getPartitionId(user))
-          partitionIds.insert(*partitionId);
+        if (auto ids = getPartitionIds(user))
+          partitionIds.insert(ids->begin(), ids->end());
       }
+    }
+    if (partitionIds.empty()) {
+      // if partitionIds is an empty set, it means aref ops used outside ttg.ws
+      // so we to insert a dummy partitionId for this aref, since we still need
+      // to assign correct phase
+      partitionIds.insert({0, 0});
     }
 
     // initialize indexes

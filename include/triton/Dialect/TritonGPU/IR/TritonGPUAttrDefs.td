@@ -428,7 +428,7 @@ and `pN` to mean padding:
      x1, x3, p2, p3
      ...]
 
-2. 2D single interval-padding with rearanged rows.
+2. 2D single interval-padding with rearranged rows.
 
     #ttg.padded_shared<[16:+1] {offset = [[0, 1], [0, 2], /*gap, stride by 2 rows*/[2, 0], [4, 0], [1, 0]]], block = []}>
     [
