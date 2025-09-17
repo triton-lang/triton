@@ -59,6 +59,11 @@
 
 // -----
 
+// expected-error@+1 {{invalid (mDim, nDim) combination}}
+#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [16, 8, 8], isTransposed = false}>
+
+// -----
+
 // expected-error@+1 {{element type must be f64, f32, i32}}
 #mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [16, 16, 16], isTransposed = false, elementType = f16}>
 

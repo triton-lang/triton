@@ -1266,6 +1266,15 @@ LogicalResult AMDMfmaEncodingAttr::verify(
     return emitError() << "version must be in the [0, 4] range";
   }
 
+  auto mDim = instrShape[0];
+  auto nDim = instrShape[1];
+  const std::array<std::pair<unsigned, unsigned>, 4> validDims = {
+      {{32, 32}, {16, 16}, {64, 4}, {4, 64}}};
+  if (!llvm::is_contained(validDims, std::make_pair(mDim, nDim))) {
+    return emitError() << "invalid (mDim, nDim) combination: (" << mDim << ", "
+                       << nDim << ")";
+  }
+
   if (!(elementType.isF64() || elementType.isF32() ||
         elementType.isInteger(32)))
     return emitError() << "element type must be f64, f32, i32";
