@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -42,6 +43,62 @@ constexpr TMemAccessAtom TMemAccess16x256b{
 
 constexpr TMemAccessAtom TMemAccess16x32bx2{
     .colsPerThread = 1, .rowsPerThread = 1, .opShape = "16x32bx2"};
+
+struct TMemCopyAtom {
+  int nRow;
+  int bCol;
+  // a multicast of n represents that warps with (warpId & n) != 0 are
+  // broadcasted
+  int multicast;
+};
+
+// .shape     = { .128x256b, .128x128b, .64x128b, .32x128b }
+// .multicast = { .warpx2::02_13 , .warpx2::01_23, .warpx4}
+// .shape = .4x256b NYI
+constexpr TMemCopyAtom TMemCopyAtomNone128{
+    .nRow = 128, .bCol = 128, .multicast = 0};
+
+constexpr TMemCopyAtom TMemCopyAtomNone256{
+    .nRow = 128, .bCol = 256, .multicast = 0};
+
+constexpr TMemCopyAtom TMemCopyAtomWarp02_13{
+    .nRow = 64, .bCol = 128, .multicast = 1};
+
+constexpr TMemCopyAtom TMemCopyAtomWarp01_23{
+    .nRow = 64, .bCol = 128, .multicast = 2};
+
+constexpr TMemCopyAtom TMemCopyAtomWarp4{
+    .nRow = 32, .bCol = 128, .multicast = 3};
+
+TMemCopyAtom getTMemCopyAtom(const LinearLayout &cvt, int bitwidth) {
+  auto *ctx = cvt.getInDimNames().begin()->getContext();
+  auto S = [&](StringRef str) { return StringAttr::get(ctx, str); };
+  auto kRow = S("row");
+  auto kCol = S("col");
+  assert(cvt.getInDimSize(kRow) == 128);
+  auto multicastBit = [&](int i) {
+    assert(i == 0 || i == 1);
+    return cvt.getBasis(kRow, llvm::Log2_32(32) + i) == ArrayRef{0};
+  };
+  auto multicast = multicastBit(0) | multicastBit(1) << 1;
+  if (multicast == 0) {
+    // TODO we will assert this in the verifier
+    if (cvt.getInDimSize(kCol) * bitwidth == 128) {
+      return TMemCopyAtomNone128;
+    } else {
+      assert(cvt.getInDimSize(kCol) * bitwidth >= 256);
+      return TMemCopyAtomNone256;
+    }
+  } else if (multicast == 1) {
+    return TMemCopyAtomWarp02_13;
+  } else if (multicast == 2) {
+    return TMemCopyAtomWarp01_23;
+  } else if (multicast == 3) {
+    return TMemCopyAtomWarp4;
+  } else {
+    llvm_unreachable("invalid multicast");
+  }
+}
 
 std::optional<LinearLayout> getReps(const LinearLayout &cvt,
                                     const LinearLayout &tile) {
@@ -871,24 +928,6 @@ struct TensorMemoryAllocOpConversion
   }
 };
 
-static Value
-createBlockedScalesSMEMDescriptor(ConversionPatternRewriter &rewriter,
-                                  Location loc, Value baseSrc) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  static_assert(sizeof(NVIDIA::SMEMDescriptor) == 8,
-                "Descriptor size should be 64 bits.");
-  NVIDIA::SMEMDescriptor desc;
-  desc.descriptor = 0;
-  desc.swizzlingMode = 0;                    // No swizzling for now
-  desc.leadDimensionBaseOffset = 16 >> 4;    // 16 bytes
-  desc.strideDimensionBaseOffset = 128 >> 4; // 8 x 16 bytes
-  // See matrix-descriptor-encode(x) function in the ptx doc.
-  // matrix-descriptor-encode(addr) = (addr & 0x3FFFF) >> 4
-  auto smemAddr = b.ptrtoint(i64_ty, baseSrc);
-  return b.add(b.int_val(64, desc.descriptor),
-               b.lshr(b.shl(smemAddr, b.int_val(64, 46)), b.int_val(64, 50)));
-}
-
 static void createCommit(ConversionPatternRewriter &rewriter, Location loc,
                          Value barrier, Value pred) {
   PTXBuilder ptxBuilder;
@@ -901,110 +940,29 @@ static void createCommit(ConversionPatternRewriter &rewriter, Location loc,
 
 static void createTcgen05Cp(ConversionPatternRewriter &rewriter, Location loc,
                             Value tmem_address, Value src_desc, Value pred,
-                            bool scales) {
+                            TMemCopyAtom atom) {
   PTXBuilder ptxBuilder;
   auto dst = ptxBuilder.newAddrOperand(tmem_address, "r");
   auto src = ptxBuilder.newOperand(src_desc, "l");
-  std::string opcode = scales ? "tcgen05.cp.cta_group::1.warpx4.32x128b"
-                              : "tcgen05.cp.cta_group::1.128x256b";
+  std::string warp;
+  if (atom.multicast == 1) {
+    warp = ".warpx2::02_13";
+  } else if (atom.multicast == 2) {
+    warp = ".warpx2::01_23";
+  } else if (atom.multicast == 3) {
+    warp = ".warpx4";
+  }
+  std::string opcode = "tcgen05.cp.cta_group::1" + warp + "." +
+                       std::to_string(atom.nRow) + "x" +
+                       std::to_string(atom.bCol) + "b";
   auto &op = *ptxBuilder.create<PTXInstr>(opcode);
   op({dst, src}).predicate(pred);
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
-static void copyScales(ConversionPatternRewriter &rewriter, Location loc,
-                       const TypeConverter *typeConverter,
-                       triton::nvidia_gpu::TMEMCopyOp op, Value src, Value dst,
-                       Value pred) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  MemDescType srcTy = op.getSrc().getType();
-  MemDescType dstTy = op.getDst().getType();
-  Type elemTy = typeConverter->convertType(srcTy.getElementType());
-  auto smemObj =
-      LLVM::getSharedMemoryObjectFromStruct(loc, src, elemTy, rewriter);
-  Value baseSrc = smemObj.getShmemAffineBase(loc, rewriter, srcTy);
-
-  Value baseDst = dst;
-  auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-  auto llvmElementTy = typeConverter->convertType(srcTy.getElementType());
-
-  auto ll = toLinearLayout(srcTy);
-  // flattenOuts flattens into fortran order, so need to transpose first to
-  // get C-order
-  auto ctx = op.getContext();
-  auto outDimNames = standardOutDimNames(ctx, srcTy.getRank());
-  std::reverse(outDimNames.begin(), outDimNames.end());
-  ll = ll.transposeOuts(outDimNames).flattenOuts();
-  auto invLayout = ll.flattenOuts().invert();
-  auto kDim = *ll.getOutDimNames().begin();
-  Value smemDesc = createBlockedScalesSMEMDescriptor(rewriter, loc, baseSrc);
-  auto createCopy = [&](int repMorN, int repK) {
-    for (int i = 0; i < repMorN; ++i) {
-      for (int j = 0; j < repK; ++j) {
-        // Multiple copies of 32x128b blocks are laid out along M/N first then
-        // K
-        auto colOffset = b.int_val(32, (j * repMorN + i) * 4);
-        auto tmemAddr = b.add(b.ptrtoint(i32_ty, baseDst), colOffset);
-        auto blockSize = (32 * 128) / llvmElementTy.getIntOrFloatBitWidth();
-        auto linearIdx = (i * repK + j) * blockSize;
-        auto smemOffset = applyLinearLayout(loc, rewriter, invLayout,
-                                            {{kDim, b.i32_val(linearIdx)}})[0]
-                              .second;
-        auto smemAddr = b.gep(elemPtrTy, llvmElementTy, baseSrc, smemOffset);
-        smemDesc = createBlockedScalesSMEMDescriptor(rewriter, loc, smemAddr);
-        createTcgen05Cp(rewriter, loc, tmemAddr, smemDesc, pred,
-                        /*scales=*/true);
-      }
-    }
-  };
-  // Break up src axes into rep_m x rep_k x 32x128b, where rep_m = BLOCK_M /
-  // 128 and rep_k = BLOCK_K / 128 32x128b blockes are contiguously laid out
-  // in SMEM. rep_m * rep_k copies of such blocks are consumed by one
-  // dot_scaled op for given BLOCK_M / BLOCK_K. Some axes of the scale shape
-  // can be flattened into one, to reduce the rank of the load. Since rep_m
-  // blocks are not contiguous in SMEM, we need to identify the original rep_m
-  // axis from the given input shape.
-
-  // The SMEM shapes are expected to be one of the followings. As long as
-  // rep_m and rep_k can be identified correctly, other patterns are allowed.
-  // * (rep_m x 32, 16B), meant only for TMEMCopy unit tests
-  // * (rep_m, rep_k * 32 x 4 x 4B), 2D scale load with cp.async
-  // * (rep_m, rep_k, 32, 16B), 4D scale load with TMA
-  // * (1, rep_m, rep_k, 2, 256B), 5D scale load with TMA
-  // * (rep_m, rep_k, 32, 4, 4B), 5D scale load with cp.async
-  auto elemBits = srcTy.getElementType().getIntOrFloatBitWidth();
-  int prodInner = 1;
-  int repMorN = 1;
-  int repK = 1;
-
-  for (int i = srcTy.getRank() - 1; i >= 0; --i) {
-    prodInner *= srcTy.getDimSize(i);
-    if (prodInner * elemBits >= 32 * 128) {
-      if (i == 0) {
-        repMorN = prodInner * elemBits / (32 * 128);
-        repK = 1;
-      } else if (i == 1) {
-        repMorN = srcTy.getDimSize(0);
-        repK = prodInner * elemBits / (32 * 128);
-      } else {
-        if (srcTy.getDimSize(0) == 1 &&
-            srcTy.getDimSize(srcTy.getRank() - 1) == 256) {
-          repMorN = srcTy.getDimSize(1);
-          repK = srcTy.getDimSize(2);
-        } else {
-          repMorN = srcTy.getDimSize(0);
-          repK = srcTy.getDimSize(1);
-        }
-      }
-      break;
-    }
-  }
-  createCopy(repMorN, repK);
-}
-
 static std::optional<std::tuple<int32_t, LinearLayout, LinearLayout,
-                                SmallVector<int64_t>, int32_t>>
-getSwizzling(MemDescType shmemTy, MemDescType tmemTy) {
+                                SmallVector<int64_t>, int32_t, int32_t>>
+getSwizzling(MemDescType shmemTy, MemDescType tmemTy, TMemCopyAtom atom) {
   // cvt is a map from Tmem to Shmem
   auto tmemLl = toLinearLayout(tmemTy);
   auto shmemLl = toLinearLayout(shmemTy);
@@ -1035,12 +993,9 @@ getSwizzling(MemDescType shmemTy, MemDescType tmemTy) {
   auto sbo =
       shmemLl.invert().getBasis(str_attr("dim0"), /*log2(8)=*/3, kOffset);
 
-  // TODO hardcoded to 128x256b for now
-  const SmallVector<int64_t> instrShape = {128, 256 / bitwidth};
+  const SmallVector<int64_t> instrShape = {atom.nRow, atom.bCol / bitwidth};
   // TODO Move to the verifier perhaps
   // Can we move the tile?
-  // TODO We should be able to move any descriptor tile with 128x256b
-  // (or 128x128b for unswizzled when it just has one tile)
   for (auto [inDimName, instrSize] : llvm::zip(inDimNames, instrShape)) {
     if (cvt.getInDimSize(inDimName) < instrSize) {
       return std::nullopt;
@@ -1083,6 +1038,15 @@ getSwizzling(MemDescType shmemTy, MemDescType tmemTy) {
     for (int i = 1; i < instrShape[0] / 8; i *= 2) {
       bases[kRow].push_back({sbo * i});
     }
+    // Broadcast
+    for (int i = instrShape[0]; i < 128; i *= 2) {
+      bases[kRow].push_back({0});
+    }
+    // If we multicast as warpx2::02_13, we need to swap the last two bases
+    if (atom.multicast == 1) {
+      auto n = bases[kRow].size();
+      std::swap(bases[kRow][n - 1], bases[kRow][n - 2]);
+    }
     cvtTile = LinearLayout(bases, {{kOffset, sbo * (instrShape[0] / 8)}},
                            /*requireSurjective=*/false);
 
@@ -1091,7 +1055,19 @@ getSwizzling(MemDescType shmemTy, MemDescType tmemTy) {
       if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(shmemEnc)) {
         assert(nvmma.getSwizzlingByteWidth() == swizzling);
       }
-      return std::make_tuple(swizzling, *quot, cvtTile, instrShape, sbo);
+      auto lbo = 0;
+      if (swizzling == 0) {
+        auto dim1 = str_attr("dim1");
+        auto endTile = shmemTile.getOutDimSizeLog2(dim1);
+        auto shmemInv = shmemLl.invert();
+        if (shmemInv.getInDimSizeLog2(dim1) > endTile) {
+          lbo = shmemInv.getBasis(dim1, endTile, kOffset);
+        } else {
+          // Choose where the tile ends
+          lbo = 16;
+        }
+      }
+      return std::make_tuple(swizzling, *quot, cvtTile, instrShape, lbo, sbo);
     }
   }
   return std::nullopt;
@@ -1115,12 +1091,14 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
       sharedLl.sublayout({kOffset}, to_vector(sharedLl.getOutDimNames()));
   auto tmemLl = toLinearLayout(dstTy);
   auto cvt = tmemLl.invertAndCompose(sharedLl);
-
   auto bitwidth = srcTy.getElementType().getIntOrFloatBitWidth();
+  auto atom = getTMemCopyAtom(cvt, bitwidth);
+
   // Need to find the shmem tile that matches
-  auto maybeSwizzling = getSwizzling(srcTy, dstTy);
+  auto maybeSwizzling = getSwizzling(srcTy, dstTy, atom);
   assert(maybeSwizzling.has_value());
-  auto [swizzling, quot, tile, tileShape, sbo] = std::move(*maybeSwizzling);
+  auto [swizzling, quot, tile, tileShape, lbo, sbo] =
+      std::move(*maybeSwizzling);
 
   auto reps = zerosLike(tile) * quot;
 
@@ -1133,12 +1111,16 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
       b.ptrtoint(i32_ty, smemObj.getShmemAffineBase(loc, rewriter, srcTy));
   // We checked in the verifier that the alignment is at least 16
   Value baseSrcIntShr4 = b.lshr(baseSrcInt, b.i32_val(4));
+  Value baseSrcDesc = b.zext(i64_ty, b.and_(baseSrcIntShr4, b.i32_val(0x3FFF)));
 
   // Set common fields in the SMEMDescriptor
   SMEMDescriptor desc;
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-shared-memory-descriptor
+  desc.descriptor = 1ULL << 46;
   desc.baseAddress = 0;
   // For K-contig, leadDimension is assumed to be 1
-  desc.leadDimensionBaseOffset = 1;
+  desc.leadDimensionBaseOffset =
+      swizzling == 0 ? (lbo * (bitwidth / 8)) >> 4 : 1;
   // SBO is in elements and we have to pass it to bits and right shift by 4
   desc.strideDimensionBaseOffset = ((sbo * (bitwidth / 8)) >> 4);
   desc.matrixBaseOffset = 0;
@@ -1168,10 +1150,6 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
     // Compute base offset for the swizzling pattern
     int32_t off = reps.apply({{kRow, 0}, {kCol, col}})[0].second;
     desc.matrixBaseOffset = (off * elementBytes / 128) & 0x7;
-    uint64_t descBase = desc.descriptor;
-    // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-shared-memory-descriptor
-    descBase |= (1ULL << 46);
-    Value descValBase = b.int_val(64, desc.descriptor);
     for (int offset = 0; offset < tile.getInDimSize(kCol);
          offset += tileShape[1]) {
       // Compute total offset of the current message
@@ -1179,16 +1157,13 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
           cvt.apply({{kRow, 0}, {kCol, col + offset}})[0].second;
       int32_t smemByteOffset = totalOffElems * elementBytes;
       int32_t smemByteOffsetShr4 = smemByteOffset >> 4;
-      // We could fold this add into the descBase if we wanted to
-      Value baseAddr = b.add(baseSrcIntShr4, b.i32_val(smemByteOffsetShr4));
-      Value baseSrcDesc = b.zext(i64_ty, b.and_(baseAddr, b.i32_val(0x3FFF)));
+      Value descValBase = b.int_val(64, desc.descriptor + smemByteOffsetShr4);
       // Add the base address to the descriptor
       Value descVal = b.or_(descValBase, baseSrcDesc, /*disjoint=*/true);
-      auto tmemAddr =
-          b.or_(b.ptrtoint(i32_ty, baseDst), b.i32_val(col + offset),
-                /*disjoint=*/true);
-      createTcgen05Cp(rewriter, loc, tmemAddr, descVal, pred,
-                      /*scales=*/false);
+      auto tmemAddr = b.or_(b.ptrtoint(i32_ty, baseDst),
+                            b.i32_val((col + offset) * elementBytes / 4),
+                            /*disjoint=*/true);
+      createTcgen05Cp(rewriter, loc, tmemAddr, descVal, pred, atom);
     }
   }
 }
@@ -1203,17 +1178,8 @@ struct TensorMemoryCopyOpConversion
     assert(lookupNumCTAs(rewriter) == 1 && "NYI");
     Location loc = op->getLoc();
     Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
-    if (isa<TensorMemoryScalesEncodingAttr>(
-            op.getDst().getType().getEncoding())) {
-      // Special case for copy of scales as they behave differently from other
-      // copies. This can be unified once we fix the smem layout representation
-      // of the source.
-      copyScales(rewriter, loc, typeConverter, op, adaptor.getSrc(),
-                 adaptor.getDst(), pred);
-    } else {
-      copySharedToTmem(rewriter, loc, typeConverter, op, adaptor.getSrc(),
-                       adaptor.getDst(), pred);
-    }
+    copySharedToTmem(rewriter, loc, typeConverter, op, adaptor.getSrc(),
+                     adaptor.getDst(), pred);
 
     if (op.getBarrier()) {
       auto barrier = LLVM::getSharedMemoryObjectFromStruct(
@@ -1269,8 +1235,10 @@ public:
   LogicalResult
   matchAndRewrite(MemDescReinterpretOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-            op.getSrc().getType().getEncoding())) {
+    auto srcTy = op.getSrc().getType();
+    auto tmem =
+        triton::nvidia_gpu::TensorMemorySpaceAttr::get(srcTy.getContext());
+    if (srcTy.getMemorySpace() != tmem) {
       return failure();
     }
     rewriter.replaceOp(op, adaptor.getSrc());
