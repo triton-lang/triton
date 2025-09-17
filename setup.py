@@ -775,8 +775,19 @@ def get_git_version_suffix():
         return get_git_commit_hash()
 
 
+def get_triton_version_suffix():
+    # Either "" or "+<githash>", "<githash>" itself does not contain any plus-characters.
+    git_sfx = get_git_version_suffix()
+    # Should start with "+" that will replaced with "-" if needed
+    env_sfx = os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
+    # version suffix can only contain one plus-character
+    if "+" in git_sfx and "+" in env_sfx:
+        env_sfx = env_sfx.replace("+", "-")
+    return git_sfx + env_sfx
+
+
 # keep it separate for easy substitution
-TRITON_VERSION = "3.5.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", "")
+TRITON_VERSION = "3.5.0" + get_triton_version_suffix()
 
 # Dynamically define supported Python versions and classifiers
 MIN_PYTHON = (3, 10)
