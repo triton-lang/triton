@@ -47,10 +47,10 @@ void InstrumentationProfiler::doSetMode(
   if (modeAndOptions.empty()) {
     throw std::runtime_error("Mode cannot be empty");
   }
-  if (modeAndOptions[0] ==
+  if (proton::toLower(modeAndOptions[0]) ==
       proton::toLower(DeviceTraits<DeviceType::CUDA>::name)) {
     runtime = std::make_unique<CudaRuntime>();
-  } else if (modeAndOptions[0] ==
+  } else if (proton::toLower(modeAndOptions[0]) ==
              proton::toLower(DeviceTraits<DeviceType::HIP>::name)) {
     runtime = std::make_unique<HipRuntime>();
   } else {
@@ -102,7 +102,7 @@ InstrumentationProfiler::getParserConfig(uint64_t functionId,
   config->scratchMemSize =
       functionMetadata.at(functionId).getScratchMemorySize();
   if (!(modeOptions.count("granularity") == 0 ||
-        modeOptions.at("granularity") == proton::toLower("GRANULARITY.WARP"))) {
+        modeOptions.at("granularity") == "GRANULARITY.WARP")) {
     throw std::runtime_error("Only warp granularity is supported for now");
   }
   config->totalUnits = functionMetadata.at(functionId).getNumWarps();

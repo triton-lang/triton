@@ -8,6 +8,7 @@
 #include "Profiler/Cupti/CuptiPCSampling.h"
 #include "Utility/Env.h"
 #include "Utility/Map.h"
+#include "Utility/String.h"
 
 #include <cstdlib>
 #include <iostream>
