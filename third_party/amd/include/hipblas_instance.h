@@ -180,17 +180,16 @@ class HipBlasLtInstance {
     hipblasLtMatmulHeuristicResult_t heuristicResult = {};
 
     hipblasComputeType_t computeType;
-    if (dtype == HIP_R_32F) {
+    if (dtype == HIP_R_8F_E4M3) {
+      computeType = (hipblasComputeType_t)HIPBLAS_COMPUTE_32F_FAST_F8;
+    } else if (dtype == HIP_R_8F_E5M2) {
+      computeType = (hipblasComputeType_t)HIPBLAS_COMPUTE_32F_FAST_FBF_OCP;
+    } else if (dtype == HIP_R_8F_E4M3_FNUZ) {
+      computeType = HIPBLAS_COMPUTE_32F_FAST_8F_FNUZ;
+    } else if (dtype == HIP_R_8F_E5M2_FNUZ) {
+      computeType = HIPBLAS_COMPUTE_32F_FAST_8BF_FNUZ;
+    } else if (dtype == HIP_R_32F) {
       computeType = HIPBLAS_COMPUTE_32F_FAST_TF32;
-    } else if (dtype == HIP_R_8F_E4M3 || dtype == HIP_R_8F_E5M2) {
-      computeType =
-          (dtype == HIP_R_8F_E4M3)
-              ? (hipblasComputeType_t)HIPBLAS_COMPUTE_32F_FAST_F8
-              : (hipblasComputeType_t)HIPBLAS_COMPUTE_32F_FAST_FBF_OCP;
-    } else if (dtype == HIP_R_8F_E4M3_FNUZ || dtype == HIP_R_8F_E5M2_FNUZ) {
-      computeType = (dtype == HIP_R_8F_E4M3_FNUZ)
-                        ? HIPBLAS_COMPUTE_32F_FAST_8F_FNUZ
-                        : HIPBLAS_COMPUTE_32F_FAST_8BF_FNUZ;
     } else {
       computeType = HIPBLAS_COMPUTE_32F;
     }
