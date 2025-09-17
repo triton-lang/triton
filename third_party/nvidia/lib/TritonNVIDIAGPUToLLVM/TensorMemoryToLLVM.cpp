@@ -160,8 +160,7 @@ std::optional<LinearLayout> getReps(const LinearLayout &cvt,
 
 // Similar to largestVectorisation in TritonGPUToLLVM/Utility.cpp
 std::optional<std::tuple<LinearLayout, ColumnAction, int>>
-getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg,
-       int bitwidth) {
+getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg) {
   auto *ctx = cvt.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kCol = StringAttr::get(ctx, "col");
@@ -174,7 +173,7 @@ getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg,
   // Heuristic:
   // If maxnreg is 256 and we need more than one message, we don't use max
   // vectorisation as ptxas' scheduler breaks...
-  if (maxnreg == 256 && cvt.getInDimSize(kReg) / (32 / bitwidth) > maxReg) {
+  if (maxnreg == 256 && cvt.getInDimSize(kReg) > maxReg) {
     maxReg /= 2;
   }
   auto maxVec = maxReg / tile.getInDimSize(kReg);
@@ -210,8 +209,8 @@ getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg,
                          (i / 2) * tile.getInDimSize(kReg));
 }
 
-LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, int bitwidth,
-                           bool unpacked, int nRow) {
+LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
+                           bool unpacked) {
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
@@ -232,30 +231,30 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, int bitwidth,
   } else {
     llvm_unreachable("Unsupported TMEM access atom");
   }
+  // Each register moves 32/bitwidth (= 2) columns when unpacked
+  if (unpacked) {
+    tile = LinearLayout::zeros1D(1, kReg, kCol, 2) * tile;
+  }
   auto nCol = tile.getOutDimSize(kCol);
   auto bases = tile.getBases();
   bases[kWarp].push_back({32, 0});
   bases[kWarp].push_back({64, 0});
   auto ret = LinearLayout(bases, {{kRow, 128}, {kCol, nCol}}, false);
-  // Broadcast the row dimension if it's smaller than 128
-  ret = ensureLayoutNotLargerThan(ret, {{kRow, nRow}, {kCol, nCol}}, true);
-  // For unpacked, the tile above is for 32-bit elements, so we have to multiply
-  // by identity1D(32 / bitwidth, kReg, kCol) to get the correct tile to allow
-  // us to divide the cvt layout by it
-  if (unpacked) {
-    ret = LinearLayout::identity1D(32 / bitwidth, kReg, kCol) * ret;
-  }
   return ret;
 }
 
 SmallVector<Value> pack(ArrayRef<Value> values, Type outType, Location loc,
-                        ConversionPatternRewriter &rewriter) {
+                        ConversionPatternRewriter &rewriter, bool pad = false) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  SmallVector<Value> packedValues;
   Type inType = values[0].getType();
+  if (inType == outType) {
+    return to_vector(values);
+  }
+
   auto inbitwidth = inType.getIntOrFloatBitWidth();
   auto outbitwidth = outType.getIntOrFloatBitWidth();
   assert(inbitwidth <= outbitwidth);
+  SmallVector<Value> packedValues;
   if (inbitwidth == outbitwidth) {
     for (auto &val : values) {
       packedValues.push_back(b.bitcast(val, outType));
@@ -265,9 +264,12 @@ SmallVector<Value> pack(ArrayRef<Value> values, Type outType, Location loc,
 
   auto vecSize = outbitwidth / inbitwidth;
   auto vecTy = vec_ty(inType, vecSize);
-  for (int i = 0; i < values.size(); i += vecSize) {
+
+  auto elemsPerVec = pad ? 1 : vecSize;
+  assert(values.size() % elemsPerVec == 0);
+  for (int i = 0; i < values.size(); i += elemsPerVec) {
     Value packed = b.undef(vecTy);
-    for (int j = 0; j < vecSize; j++) {
+    for (int j = 0; j < elemsPerVec; j++) {
       Value val = values[i + j];
       packed = b.insert_element(vecTy, packed, val, b.i32_val(j));
     }
@@ -278,24 +280,31 @@ SmallVector<Value> pack(ArrayRef<Value> values, Type outType, Location loc,
 }
 
 SmallVector<Value> unpack(ArrayRef<Value> packedValues, Type outType,
-                          Location loc, ConversionPatternRewriter &rewriter) {
+                          Location loc, ConversionPatternRewriter &rewriter,
+                          bool pad = false) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type inType = packedValues[0].getType();
+  if (inType == outType) {
+    return to_vector(packedValues);
+  }
+
   auto inbitwidth = inType.getIntOrFloatBitWidth();
   auto outbitwidth = outType.getIntOrFloatBitWidth();
   assert(inbitwidth >= outbitwidth);
   SmallVector<Value> unpackedValues;
   if (inbitwidth == outbitwidth) {
-    for (auto &val : packedValues) {
+    for (auto val : packedValues) {
       unpackedValues.push_back(b.bitcast(val, outType));
     }
     return unpackedValues;
   }
   auto vecSize = inbitwidth / outbitwidth;
   auto vecTy = vec_ty(outType, vecSize);
-  for (int i = 0; i < packedValues.size(); i++) {
-    Value packed = b.bitcast(packedValues[i], vecTy);
-    for (int j = 0; j < vecSize; j++) {
+
+  auto elemsPerVec = pad ? 1 : vecSize;
+  for (auto val : packedValues) {
+    Value packed = b.bitcast(val, vecTy);
+    for (int j = 0; j < elemsPerVec; j++) {
       unpackedValues.push_back(
           b.extract_element(outType, packed, b.i32_val(j)));
     }
@@ -479,35 +488,6 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   auto kRow = str_attr("row");
   bool isStore = !vals.empty();
 
-  // Pack into bitwidth=32 if it was not packed already
-  if (llvmElemTy.getIntOrFloatBitWidth() < 32) {
-    assert(unpacked);
-    SmallVector<Value> inVals;
-    if (isStore) {
-      inVals = pack(vals, i32_ty, loc, rewriter);
-    }
-    // kill the first logValsPerReg bases of kReg as they are now packed
-    // again, super hacky, we should probably do this when building the
-    // instruction
-    auto bases = reps.getBases();
-    auto valsPerReg = 32 / llvmElemTy.getIntOrFloatBitWidth();
-    auto logValsPerReg = llvm::Log2_32(valsPerReg);
-    assert(reps.getInDimSizeLog2(kReg) >= logValsPerReg);
-    auto &reg = bases[kReg];
-    reg.erase(reg.begin(), reg.begin() + logValsPerReg);
-    auto quot = LinearLayout(bases, reps.getOutDims(), /*isSurjective=*/false);
-    auto outValsOr = lowerTMemLdSt(
-        loc, ctx, rewriter, quot, inVals, atom, i32_ty, tmemBase, pred,
-        valsPerMessage / valsPerReg, unpacked, secondHalfOffset);
-    if (failed(outValsOr))
-      return failure();
-    auto outVals = std::move(*outValsOr);
-    if (!isStore) {
-      outVals = unpack(outVals, llvmElemTy, loc, rewriter);
-    }
-    return outVals;
-  }
-
   tmemBase = b.ptrtoint(i32_ty, tmemBase);
 
   assert(to_vector(reps.getOutDimNames()) ==
@@ -562,7 +542,8 @@ FailureOr<SmallVector<Value>>
 lowerTMemLdSt(Location loc, MLIRContext *ctx,
               ConversionPatternRewriter &rewriter, const LinearLayout &cvt,
               ArrayRef<Value> vals, Type llvmElemTy, Value tmemBase,
-              int maxnreg, bool unpacked, Value pred) {
+              int maxnreg, Value pred, bool isScales = false,
+              bool unpacked = false) {
   assert(cvt.getNumOutDims() == 2);
   bool isStore = !vals.empty();
   // Remove broadcasting in the registers
@@ -575,7 +556,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
     }
     auto outValsOr =
         lowerTMemLdSt(loc, ctx, rewriter, prmtCvt, inVals, llvmElemTy, tmemBase,
-                      maxnreg, unpacked, pred);
+                      maxnreg, pred, isScales, unpacked);
     if (failed(outValsOr))
       return failure();
     auto outVals = std::move(*outValsOr);
@@ -589,32 +570,71 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   auto kRow = str_attr("row");
   auto kCol = str_attr("col");
 
-  // There must be a better way to do this. We should follow something similar
-  // to what we do in shmem, where we pack/unpack just before the PTX instr
-  // creation
-  if (!unpacked && llvmElemTy.getIntOrFloatBitWidth() < 32) {
+  // Default to unpacked=false for bitwidth == 32
+  if (llvmElemTy.getIntOrFloatBitWidth() < 32) {
+    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    LinearLayout quot;
+    Type packedElemTy;
+    int bestContig = 1;
+    for (int contig = 1; bitwidth * contig <= 32; contig *= 2) {
+      auto maybeQuot =
+          divideLeft(cvt, LinearLayout::identity1D(contig, kReg, kCol));
+      if (!maybeQuot)
+        break;
+      quot = *maybeQuot;
+      bestContig = contig;
+    }
+    bool padding = false;
+    if (bestContig > 1) {
+      // There are contiguous elements along kCol, so we can pack them into a
+      // larger dtype
+      unpacked = false;
+      packedElemTy = int_ty(bitwidth * bestContig);
+    } else if (auto maybeQuot = divideLeft(
+                   cvt, LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth) *
+                            LinearLayout::identity1D(2, kReg, kCol));
+               bitwidth == 16 && maybeQuot) {
+      // Unpacked just supported for bitwidth 16
+      unpacked = true;
+      quot = *maybeQuot;
+      packedElemTy = i32_ty;
+    } else if (auto maybeQuot = divideLeft(
+                   cvt, LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth))) {
+      // We software-pad the elements when we either do not have enough elements
+      // to fill a full 32b register, e.g., colN = 1 and colStride != 1 or when
+      // bitwidth == 8 (this happens with scales with K=1).
+      // These two cases are mostly supported for testing purposes.
+      unpacked = bitwidth == 16;
+      quot = *maybeQuot;
+      packedElemTy = i32_ty;
+      padding = true;
+    } else {
+      emitError(loc, "Failed to lower TMEM load/store: TMEM layout is not "
+                     "packed or unpacked");
+      return failure();
+    }
+    // When unpacked each register moves 32/bitwidth (= 2) columns
+    if (unpacked) {
+      quot = LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth) * quot;
+    }
     SmallVector<Value> inVals;
     if (isStore) {
-      inVals = pack(vals, i32_ty, loc, rewriter);
+      inVals = pack(vals, packedElemTy, loc, rewriter, padding);
     }
-    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    auto maybeQuot =
-        divideLeft(cvt, LinearLayout::identity1D(32 / bitwidth, kReg, kCol));
-    assert(maybeQuot.has_value());
-    auto quot = *maybeQuot;
-    auto outValsOr = lowerTMemLdSt(loc, ctx, rewriter, quot, inVals, i32_ty,
-                                   tmemBase, maxnreg, unpacked, pred);
+    auto outValsOr =
+        lowerTMemLdSt(loc, ctx, rewriter, quot, inVals, packedElemTy, tmemBase,
+                      maxnreg, pred, isScales, unpacked);
     if (failed(outValsOr))
       return failure();
     auto outVals = std::move(*outValsOr);
     if (!isStore) {
-      outVals = unpack(outVals, llvmElemTy, loc, rewriter);
+      outVals = unpack(outVals, llvmElemTy, loc, rewriter, padding);
     }
     return outVals;
   }
+
   assert(!isStore || cvt.getInDimSize(kReg) == vals.size());
-  auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-  auto nRow = cvt.getOutDimSize(kRow);
+  assert(llvmElemTy.getIntOrFloatBitWidth() == 32);
 
   // The algorithm goes as:
   // - Try to match the tile with one of the standard messages
@@ -626,8 +646,8 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   std::optional<std::tuple<TMemAccessAtom, LinearLayout, ColumnAction, int>>
       msgInfo;
   for (auto atom : {TMemAccess32x32b, TMemAccess16x256b}) {
-    auto tile = getTileLayout(ctx, atom, bitwidth, unpacked, nRow);
-    auto maybeReps = getVec(cvt, tile, maxnreg, bitwidth);
+    auto tile = getTileLayout(ctx, atom, unpacked);
+    auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       // Cannot match more than one
       msgInfo = {atom, std::get<0>(*maybeReps), std::get<1>(*maybeReps),
@@ -639,15 +659,22 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   if (!msgInfo) {
     // Quotient by the smaller tile and then, if possible, we set the
     // secondHalfOffset to the last kLane basis
-    auto tile =
-        getTileLayout(ctx, TMemAccess16x32bx2, bitwidth, unpacked, nRow);
-    auto maybeReps = getVec(cvt, tile, maxnreg, bitwidth);
+    auto tile = getTileLayout(ctx, TMemAccess16x32bx2, unpacked);
+    auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       auto [reps, perm, numRegsPerMessage] = std::move(*maybeReps);
       // Find the last kLane basis and use it as secondHalfOffset
       auto row = reps.getBasis(kLane, 4, kRow);
       auto col = reps.getBasis(kLane, 4, kCol);
       secondHalfOffset = (row << 16) | col;
+      if (*secondHalfOffset == 0) {
+        // Workaround for ptxas bug, we cannot use secondHalfOffset = 0 to write
+        // only 16 elements. We use secondHalfOffset = 1 instead and we pad the
+        // allocation.
+        assert(isScales &&
+               "Only supported for scales as we pad the allocation.");
+        secondHalfOffset = 1;
+      }
       // We "quotient it out", meaning we remove the last basis from reps
       auto basis = reps.getBases();
       basis[kLane][4] = {0, 0};
@@ -657,7 +684,8 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   }
 
   if (!msgInfo) {
-    emitError(loc, "Failed to lower TMEM load/store: unsupported dst layout");
+    emitError(loc, "Failed to lower TMEM load/store: unsupported dst layout\n" +
+                       cvt.toString());
     return failure();
   }
   auto [atom, reps, perm, numRegsPerMessage] = std::move(msgInfo.value());
@@ -667,10 +695,9 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
     inVals = to_vector(vals);
     inVals = perm.apply(inVals);
   }
-  auto outValsOr = lowerTMemLdSt(
-      loc, ctx, rewriter, reps, inVals, atom, llvmElemTy, tmemBase, pred,
-      numRegsPerMessage, unpacked && llvmElemTy.getIntOrFloatBitWidth() == 16,
-      secondHalfOffset);
+  auto outValsOr = lowerTMemLdSt(loc, ctx, rewriter, reps, inVals, atom,
+                                 llvmElemTy, tmemBase, pred, numRegsPerMessage,
+                                 unpacked, secondHalfOffset);
   if (failed(outValsOr))
     return failure();
   auto outVals = std::move(*outValsOr);
@@ -684,10 +711,29 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
 static FailureOr<SmallVector<Value>> lowerTMemLdStFromTypes(
     Location loc, MLIRContext *ctx, ConversionPatternRewriter &rewriter,
     RankedTensorType regTy, MemDescType memTy, Value tmemBase, int maxnreg,
-    Value pred, Type llvmElemTy, ArrayRef<Value> storeVals) {
+    Value pred, Type llvmElemTy, ArrayRef<Value> vals) {
   auto memLayout = toLinearLayout(memTy);
   auto regLayout = toLinearLayout(regTy);
   auto cvt = regLayout.invertAndCompose(memLayout);
+  auto kWarp = str_attr("warp");
+  auto kRow = str_attr("row");
+  // Warps 0-3 must map to row=32 and row=64 whether with broadcasting or not
+  if (!(regLayout.getBasis(kWarp, 0) == memLayout.getBasis(kRow, 5) &&
+        regLayout.getBasis(kWarp, 1) == memLayout.getBasis(kRow, 6))) {
+    emitError(
+        loc,
+        "Failed to lower TMEM load/store: unsupported src/dst combination\n" +
+            regLayout.toString() + "\n" + memLayout.toString());
+    return failure();
+  }
+  // Map warp bases to row=32 and row=64 in the cvt. This would be done
+  // automatically in `invertAndCompose` if we had a different dimension name
+  // for these rows. We can do this in the future if needed.
+  auto bases = cvt.getBases();
+  bases[kWarp][0] = {32, 0};
+  bases[kWarp][1] = {64, 0};
+  cvt = LinearLayout(bases, cvt.getOutDims(),
+                     /*isSurjective=*/cvt.isSurjective());
 
   // tmemBase already encodes CTA/block offsets so we just remove them from the
   // cvt
@@ -698,46 +744,10 @@ static FailureOr<SmallVector<Value>> lowerTMemLdStFromTypes(
       divideRight(cvt, LinearLayout::identity1D(nCTAs, kBlock, kCol));
   assert(maybeQuot.has_value());
   auto quot = maybeQuot->unsqueezeIn(kBlock);
-  bool unpacked;
-  if (auto enc = dyn_cast<TensorMemoryEncodingAttr>(memTy.getEncoding())) {
-    unpacked = enc.getUnpacked();
-  } else {
-    assert(isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding()));
-    unpacked = false;
-  }
 
-  // Handle K = 1 and K = 2 cases
-  auto K = regTy.getDimSize(1);
-  auto undefShmem =
-      isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding()) && K < 4;
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  bool isStore = !storeVals.empty();
-  auto inVals = to_vector(storeVals);
-  auto packedLlvmElemTy = llvmElemTy;
-  auto packedLayout = std::move(quot);
-  if (undefShmem) {
-    auto kReg = str_attr("register");
-    auto tile = LinearLayout::identity1D(K, kReg, kCol) *
-                LinearLayout::zeros1D(4 / K, kReg, kCol);
-    auto maybePacked = divideLeft(packedLayout, tile);
-    assert(maybePacked.has_value());
-    packedLayout = std::move(*maybePacked);
-    if (isStore) {
-      inVals = pack(inVals, i32_ty, loc, rewriter);
-    }
-    packedLlvmElemTy = i32_ty;
-  }
-
-  auto resultValsOr =
-      lowerTMemLdSt(loc, ctx, rewriter, packedLayout, inVals, packedLlvmElemTy,
-                    tmemBase, maxnreg, unpacked, pred);
-  if (failed(resultValsOr))
-    return failure();
-  auto resultVals = std::move(*resultValsOr);
-  if (!isStore && undefShmem) {
-    resultVals = unpack(resultVals, llvmElemTy, loc, rewriter);
-  }
-  return resultVals;
+  bool isScales = isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding());
+  return lowerTMemLdSt(loc, ctx, rewriter, quot, vals, llvmElemTy, tmemBase,
+                       maxnreg, pred, isScales);
 }
 
 struct TensorMemoryLoadOpConversion
@@ -992,53 +1002,195 @@ static void copyScales(ConversionPatternRewriter &rewriter, Location loc,
   createCopy(repMorN, repK);
 }
 
+static std::optional<std::tuple<int32_t, LinearLayout, LinearLayout,
+                                SmallVector<int64_t>, int32_t>>
+getSwizzling(MemDescType shmemTy, MemDescType tmemTy) {
+  // cvt is a map from Tmem to Shmem
+  auto tmemLl = toLinearLayout(tmemTy);
+  auto shmemLl = toLinearLayout(shmemTy);
+  auto inDimNames = to_vector(tmemLl.getInDimNames());
+  auto *ctx = inDimNames[0].getContext();
+  assert(shmemLl.getInDimSize(str_attr("block")) == 1 && "NYI");
+  auto kOffset = str_attr("offset");
+  auto kRow = str_attr("row");
+  auto kCol = str_attr("col");
+  shmemLl = shmemLl.sublayout({kOffset}, to_vector(shmemLl.getOutDimNames()));
+  auto cvt = tmemLl.invertAndCompose(shmemLl);
+
+  int32_t bitwidth = tmemTy.getElementType().getIntOrFloatBitWidth();
+
+  // Check if the layout is large enough as to check SBO
+  // TODO Move to the verifier
+  if (shmemLl.getOutDimSizeLog2(str_attr("dim0")) < 4) {
+    return std::nullopt;
+  }
+  // TODO We may need to be careful here if we ever want to support fp4 padded
+  // layouts
+  if (!shmemLl.isInvertible()) {
+    return std::nullopt;
+  }
+
+  // This will be SBO for k-Contiguous layouts (like the ones used in
+  // tcgen05.cp)
+  auto sbo =
+      shmemLl.invert().getBasis(str_attr("dim0"), /*log2(8)=*/3, kOffset);
+
+  // TODO hardcoded to 128x256b for now
+  const SmallVector<int64_t> instrShape = {128, 256 / bitwidth};
+  // TODO Move to the verifier perhaps
+  // Can we move the tile?
+  // TODO We should be able to move any descriptor tile with 128x256b
+  // (or 128x128b for unswizzled when it just has one tile)
+  for (auto [inDimName, instrSize] : llvm::zip(inDimNames, instrShape)) {
+    if (cvt.getInDimSize(inDimName) < instrSize) {
+      return std::nullopt;
+    }
+  }
+
+  auto CTALayout = getCTALayout(shmemTy.getEncoding());
+
+  for (int swizzling : {0, 32, 64, 128}) {
+    // r = 0, 1, 2, 3
+    auto shmemEnc =
+        NVMMASharedEncodingAttr::get(ctx, swizzling, /*transposed=*/false,
+                                     bitwidth, /*fp4Padded=*/false, CTALayout);
+    auto shmemTile =
+        getCoreMatrixLinearLayout(shmemEnc, /*disableSwizzle=*/false);
+    // getCoreMatrixLinearLayout gives the k-contiguous tile
+    // shmemTile is a layout onto a matrix with shape
+    // If swizzling != 0: 8 x (8 * swizzling / bitwidth)
+    // If swizzling == 0: 8 x (8 * 16 / bitwidth)
+    assert(shmemTile.getOutDimSize(str_attr("dim0")) == 8);
+    assert(shmemTile.getOutDimSize(str_attr("dim1")) ==
+           8 * std::max(16, swizzling) / bitwidth);
+    // The shmemTile is mapped identically into the tmem, so we just need to
+    // rename the outDims in shmemTile from dim0, dim1 to row, col
+    auto cvtTileInverted =
+        LinearLayout(shmemTile.getBases(), {str_attr("row"), str_attr("col")});
+    // The tile should be invertible, so we consider it as a map from row, col
+    // to offset
+    // nb. Working with the map from row, col to offset is important to handle
+    // the tcgen05.cp instructions that do broadcasting
+    auto cvtTile = cvtTileInverted.invert();
+    // The sbo stride shall not touch the core tile
+    if (sbo < cvtTile.getOutDimSize(kOffset))
+      continue;
+
+    // As we are copying instrShape[0] columns in one go, to be able to
+    // represent this in the descriptor, we need to have a constant "stride"
+    // along the row dimension from row=8 until the last row.
+    auto bases = cvtTile.getBases();
+    for (int i = 1; i < instrShape[0] / 8; i *= 2) {
+      bases[kRow].push_back({sbo * i});
+    }
+    cvtTile = LinearLayout(bases, {{kOffset, sbo * (instrShape[0] / 8)}},
+                           /*requireSurjective=*/false);
+
+    auto quot = divideLeft(cvt, cvtTile);
+    if (quot.has_value()) {
+      if (auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(shmemEnc)) {
+        assert(nvmma.getSwizzlingByteWidth() == swizzling);
+      }
+      return std::make_tuple(swizzling, *quot, cvtTile, instrShape, sbo);
+    }
+  }
+  return std::nullopt;
+}
+
 static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
                              const TypeConverter *typeConverter,
                              triton::nvidia_gpu::TMEMCopyOp op, Value src,
-                             Value dst, Value pred) {
+                             Value baseDst, Value pred) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto *ctx = op.getContext();
+  auto kOffset = str_attr("offset");
+  auto kRow = str_attr("row");
+  auto kCol = str_attr("col");
+
   MemDescType srcTy = op.getSrc().getType();
   MemDescType dstTy = op.getDst().getType();
+
+  auto sharedLl = toLinearLayout(srcTy);
+  sharedLl =
+      sharedLl.sublayout({kOffset}, to_vector(sharedLl.getOutDimNames()));
+  auto tmemLl = toLinearLayout(dstTy);
+  auto cvt = tmemLl.invertAndCompose(sharedLl);
+
+  auto bitwidth = srcTy.getElementType().getIntOrFloatBitWidth();
+  // Need to find the shmem tile that matches
+  auto maybeSwizzling = getSwizzling(srcTy, dstTy);
+  assert(maybeSwizzling.has_value());
+  auto [swizzling, quot, tile, tileShape, sbo] = std::move(*maybeSwizzling);
+
+  auto reps = zerosLike(tile) * quot;
+
+  // Get shmem ptr
+  // TODO We should not allow splitting along the swizzling pattern
   Type elemTy = typeConverter->convertType(srcTy.getElementType());
   auto smemObj =
       LLVM::getSharedMemoryObjectFromStruct(loc, src, elemTy, rewriter);
-  Value baseSrc = smemObj.getShmemAffineBase(loc, rewriter, srcTy);
+  Value baseSrcInt =
+      b.ptrtoint(i32_ty, smemObj.getShmemAffineBase(loc, rewriter, srcTy));
+  // We checked in the verifier that the alignment is at least 16
+  Value baseSrcIntShr4 = b.lshr(baseSrcInt, b.i32_val(4));
 
-  Value baseDst = dst;
-  assert(srcTy.getElementType().getIntOrFloatBitWidth() == 32);
+  // Set common fields in the SMEMDescriptor
+  SMEMDescriptor desc;
+  desc.baseAddress = 0;
+  // For K-contig, leadDimension is assumed to be 1
+  desc.leadDimensionBaseOffset = 1;
+  // SBO is in elements and we have to pass it to bits and right shift by 4
+  desc.strideDimensionBaseOffset = ((sbo * (bitwidth / 8)) >> 4);
+  desc.matrixBaseOffset = 0;
+  switch (swizzling) {
+  case 0:
+    desc.swizzlingMode = 0;
+    break;
+  case 32:
+    desc.swizzlingMode = 3;
+    break;
+  case 64:
+    desc.swizzlingMode = 2;
+    break;
+  case 128:
+    desc.swizzlingMode = 1;
+    break;
+  default:
+    llvm::report_fatal_error("Unsupported swizzling size.");
+  }
 
-  int blockN =
-      cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(dstTy.getEncoding())
-          .getBlockN();
-  // Currently, hardcoded to 128x256b message.
-  std::array<int, 2> instShape = {128, 8};
-  int repNPerBlock = blockN / instShape[1];
-  auto createCopy = [&](int repM, int repN) {
-    Value zero = b.i32_val(0);
-    SmallVector<int64_t> shape(op.getSrc().getType().getShape());
-    DotOpMmaV3SmemLoader smemLoader = DotOpMmaV3SmemLoader(
-        op.getSrc(), baseSrc, shape, op.getSrc().getType().getAllocShape(),
-        zero, 1, /*trans=*/false, {128, 8},
-        op.getSrc().getType().getElementType().getIntOrFloatBitWidth(),
-        rewriter, loc);
-    for (int m = 0; m < repM; m++) {
-      for (int n = 0; n < repN; n++) {
-        int colIndx =
-            (n % repNPerBlock) * instShape[1] +
-            m * repNPerBlock * instShape[1] +
-            (n / repNPerBlock) * (srcTy.getDimSize(0) / instShape[0]) * blockN;
-        auto colOffset = b.i32_val(colIndx);
-        auto tmemAddr = b.add(b.ptrtoint(i32_ty, baseDst), colOffset);
-        Value smemDesc = smemLoader.smemLoad(m, n, rewriter, loc);
-        createTcgen05Cp(rewriter, loc, tmemAddr, smemDesc, pred,
-                        /*scales=*/false);
-      }
+  // Make sure we don't have to iterate along the rows
+  assert(tile.getInDimSize(kRow) == cvt.getInDimSize(kRow) && "NYI");
+  assert(tileShape[1] <= tile.getInDimSize(kCol) && "NYI");
+  int elementBytes = bitwidth / 8;
+  for (int col = 0; col < reps.getInDimSize(kCol);
+       col += tile.getInDimSize(kCol)) {
+    // Compute base offset for the swizzling pattern
+    int32_t off = reps.apply({{kRow, 0}, {kCol, col}})[0].second;
+    desc.matrixBaseOffset = (off * elementBytes / 128) & 0x7;
+    uint64_t descBase = desc.descriptor;
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-shared-memory-descriptor
+    descBase |= (1ULL << 46);
+    Value descValBase = b.int_val(64, desc.descriptor);
+    for (int offset = 0; offset < tile.getInDimSize(kCol);
+         offset += tileShape[1]) {
+      // Compute total offset of the current message
+      int32_t totalOffElems =
+          cvt.apply({{kRow, 0}, {kCol, col + offset}})[0].second;
+      int32_t smemByteOffset = totalOffElems * elementBytes;
+      int32_t smemByteOffsetShr4 = smemByteOffset >> 4;
+      // We could fold this add into the descBase if we wanted to
+      Value baseAddr = b.add(baseSrcIntShr4, b.i32_val(smemByteOffsetShr4));
+      Value baseSrcDesc = b.zext(i64_ty, b.and_(baseAddr, b.i32_val(0x3FFF)));
+      // Add the base address to the descriptor
+      Value descVal = b.or_(descValBase, baseSrcDesc, /*disjoint=*/true);
+      auto tmemAddr =
+          b.or_(b.ptrtoint(i32_ty, baseDst), b.i32_val(col + offset),
+                /*disjoint=*/true);
+      createTcgen05Cp(rewriter, loc, tmemAddr, descVal, pred,
+                      /*scales=*/false);
     }
-  };
-
-  int repM = srcTy.getDimSize(0) / instShape[0];
-  int repN = srcTy.getDimSize(1) / instShape[1];
-  createCopy(repM, repN);
+  }
 }
 
 struct TensorMemoryCopyOpConversion
@@ -1048,7 +1200,7 @@ struct TensorMemoryCopyOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMEMCopyOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-
+    assert(lookupNumCTAs(rewriter) == 1 && "NYI");
     Location loc = op->getLoc();
     Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
     if (isa<TensorMemoryScalesEncodingAttr>(
@@ -1164,9 +1316,10 @@ struct TMEMSubSliceOpConversion
       offsetCol -= blockN * (blockOffset / 2);
     }
 
-    if (!encoding.getUnpacked()) {
+    unsigned elementBitWidth = srcTy.getElementTypeBitWidth();
+    if (encoding.getColStride() * elementBitWidth != 32) {
       // Adjust the column offset based on the element size.
-      int numElementsPer32B = 32 / srcTy.getElementTypeBitWidth();
+      int numElementsPer32B = 32 / (encoding.getColStride() * elementBitWidth);
       if (offsetCol % numElementsPer32B != 0) {
         return failure();
       }

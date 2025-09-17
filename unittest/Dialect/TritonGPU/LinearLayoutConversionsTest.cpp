@@ -134,10 +134,17 @@ public:
         CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
-  TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN, bool unpacked,
-                                unsigned ctaSplitM, unsigned ctaSplitN) {
-    return TensorMemoryEncodingAttr::get(&ctx, blockM, blockN, unpacked,
+  TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN,
+                                unsigned colStride, unsigned ctaSplitM,
+                                unsigned ctaSplitN) {
+    return TensorMemoryEncodingAttr::get(&ctx, blockM, blockN, colStride,
                                          ctaSplitM, ctaSplitN);
+  }
+
+  TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN,
+                                unsigned ctaSplitM, unsigned ctaSplitN) {
+    // TODO Test colStride > 1
+    return tmem(blockM, blockN, 1, ctaSplitM, ctaSplitN);
   }
 
   StringAttr S(StringRef str) { return StringAttr::get(&ctx, str); }
@@ -3510,7 +3517,7 @@ TEST_F(LinearLayoutConversionsTest, MMAv5Fp4Padded) {
 }
 
 TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_64) {
-  auto enc = tmem(64, 64, /*unpacked=*/true, 1, 1);
+  auto enc = tmem(64, 64, 1, 1);
   auto d0 = S("dim0");
   auto d1 = S("dim1");
   auto kRow = S("row");
@@ -3543,7 +3550,7 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_64) {
 }
 
 TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_128) {
-  auto enc = tmem(128, 128, /*unpacked=*/true, 1, 1);
+  auto enc = tmem(128, 128, 1, 1);
   auto d0 = S("dim0");
   auto d1 = S("dim1");
   auto kRow = S("row");
@@ -3558,50 +3565,30 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_blockM_128) {
                 LinearLayout::identity1D(2, kCol, d1));
 }
 
-TEST_F(LinearLayoutConversionsTest, TensorMemory_Packed) {
-  auto d0 = S("dim0");
-  auto d1 = S("dim1");
-  auto rows = S("rows");
-  auto cols = S("cols");
-  auto enc = tmem(128, 128, /*unpacked*/ false, 1, 1);
-  auto encUnpacked = tmem(128, 128, /*unpacked*/ true, 1, 1);
-  // Packed and unpacked map to the same layout
-  // Packing is modelled as setting the M/N slot size to bitwidth=16
-  EXPECT_EQ(toLinearLayout({128, 256}, enc),
-            toLinearLayout({128, 256}, encUnpacked));
-  EXPECT_EQ(toLinearLayout({256, 256}, enc),
-            toLinearLayout({256, 256}, encUnpacked));
-  EXPECT_EQ(toLinearLayout({128, 512}, enc),
-            toLinearLayout({128, 512}, encUnpacked));
-  EXPECT_EQ(toLinearLayout({256, 512}, enc),
-            toLinearLayout({256, 512}, encUnpacked));
-}
-
 TEST_F(LinearLayoutConversionsTest, TensorMemory_CTASplit) {
   auto d0 = S("dim0");
   auto d1 = S("dim1");
   auto kRow = S("row");
   auto kCol = S("col");
-  auto enc = tmem(64, 128, /*unpacked*/ true, 2, 1);
-  auto enc1 = tmem(64, 128, /*unpacked*/ true, 1, 1);
+  auto enc = tmem(64, 128, 2, 1);
+  auto enc1 = tmem(64, 128, 1, 1);
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
             toLinearLayout({64, 128}, enc1) *
                 LinearLayout::identity1D(2, kCol, d0));
-  enc = tmem(128, 64, /*unpacked*/ true, 1, 2);
-  enc1 = tmem(128, 64, /*unpacked*/ true, 1, 1);
+  enc = tmem(128, 64, 1, 2);
+  enc1 = tmem(128, 64, 1, 1);
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
             toLinearLayout({128, 64}, enc1) *
                 LinearLayout::identity1D(2, kCol, d1));
-  enc = tmem(64, 64, /*unpacked*/ true, 2, 2);
-  enc1 = tmem(64, 64, /*unpacked*/ true, 1, 1);
+  enc = tmem(64, 64, 2, 2);
+  enc1 = tmem(64, 64, 1, 1);
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
             toLinearLayout({64, 64}, enc1) *
                 LinearLayout::identity1D(2, kCol, d0) *
                 LinearLayout::identity1D(2, kCol, d1));
   // The non-contiguous tile stays non-contiguous even in the multiCTA setup
-  auto noncontigTile =
-      toLinearLayout({64, 64}, tmem(64, 64, /*unpacked*/ true, 1, 1));
-  auto noncontigEnc = tmem(64, 64, /*unpacked*/ true, 2, 2);
+  auto noncontigTile = toLinearLayout({64, 64}, tmem(64, 64, 1, 1));
+  auto noncontigEnc = tmem(64, 64, 2, 2);
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
             noncontigTile * LinearLayout::identity1D(2, kCol, d0) *
                 LinearLayout::identity1D(2, kCol, d1));
