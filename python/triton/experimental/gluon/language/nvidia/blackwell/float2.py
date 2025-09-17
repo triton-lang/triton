@@ -90,6 +90,10 @@ class Float2Tensor:
         ttgl.static_assert(isinstance(rhs, Float2Tensor), "rhs must be a Float2Tensor")
         return Float2Tensor(_mul_f32x2(self._value, rhs._value))
 
+    @jit
+    def sum(self, axis: ttgl.constexpr):
+        return Float2Tensor(ttgl.reduce(self._value, axis=axis, combine_fn=_add_f32x2))
+
 
 @jit
 def pack2(x0, x1):
