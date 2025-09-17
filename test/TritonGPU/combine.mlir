@@ -3527,9 +3527,8 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
   // CHECK: tt.func @mma_v3_reg_push_elementwise_chained_descritor_load
   //    CHECK: %[[CST_DOTOP:.*]] = arith.constant dense<0.000000e+00> : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
-  //    CHECK: %[[A_BLOCK:.*]] = tt.descriptor_load %{{.*}} : !tt.tensordesc<tensor<128x64xsi8>> -> tensor<128x64xi8, #blocked>
-  //    CHECK: %[[A_DOTOP:.*]] = ttg.convert_layout %[[A_BLOCK]] : tensor<128x64xi8, #blocked> -> tensor<128x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
-  //    CHECK: %[[A_CASTED:.*]] = arith.sitofp %[[A_DOTOP]] : tensor<128x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> to tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+  //    CHECK: %[[A_BLOCK:.*]] = tt.descriptor_load %{{.*}} : !tt.tensordesc<tensor<128x64xsi8>> -> tensor<128x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+  //    CHECK: %[[A_CASTED:.*]] = arith.sitofp %[[A_BLOCK]] : tensor<128x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> to tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
   //    CHECK: %[[A_SCALED:.*]] = arith.mulf %[[A_CASTED]], %[[CST_DOTOP]] : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
   //    CHECK: %[[A_NEGATED:.*]] = arith.negf %[[A_SCALED]] : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
   //    CHECK: %[[R:.*]] = ttng.warp_group_dot %[[A_NEGATED]], %{{.*}}, %{{.*}} : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * !ttg.memdesc<64x64xf16, #shared, #smem> -> tensor<128x64xf32, #mma>
@@ -3929,6 +3928,29 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.th
     }
     %7 = ttg.convert_layout %1 : tensor<128x128xf32, #blocked1> -> tensor<128x128xf32, #blocked>
     tt.store %arg4, %7 : tensor<128x128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK: #[[$BLOCK:.+]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+// CHECK-LABEL: propagate_convert_from_descriptor
+  tt.func public @propagate_convert_from_descriptor(%arg0: !tt.tensordesc<tensor<64x64xf16>>, %arg1: f16) {
+    %c0_i32 = arith.constant 0 : i32
+    %cst = arith.constant dense<1.000000e+00> : tensor<64x64xf16, #blocked>
+    %0 = tt.splat %arg1 : f16 -> tensor<64x64xf16, #blocked>
+    %1 = arith.addf %0, %cst : tensor<64x64xf16, #blocked>
+    %2 = ttg.convert_layout %1 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #blocked1>
+    // CHECK: %[[CST:.+]] = arith.constant dense<1.000000e+00> : tensor<64x64xf16, #[[$BLOCK]]>
+    // CHECK: %[[S:.+]] = tt.splat %{{.+}} : f16 -> tensor<64x64xf16, #[[$BLOCK]]>
+    // CHECK: %[[A:.+]] = arith.addf %[[S]], %[[CST]] : tensor<64x64xf16, #[[$BLOCK]]>
+    // CHECK: tt.descriptor_store {{.*}}, %[[A]] : !tt.tensordesc<tensor<64x64xf16>>, tensor<64x64xf16, #[[$BLOCK]]>
+    tt.descriptor_store %arg0[%c0_i32, %c0_i32], %2 : !tt.tensordesc<tensor<64x64xf16>>, tensor<64x64xf16, #blocked1>
     tt.return
   }
 }
