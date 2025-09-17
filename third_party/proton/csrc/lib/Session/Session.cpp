@@ -12,27 +12,15 @@ namespace proton {
 
 namespace {
 
-Profiler *makeProfiler(const std::string &name, const std::string &path,
-                       const std::string &mode) {
-  std::vector<std::string> modeAndOptions = proton::split(mode, ":");
+Profiler *makeProfiler(const std::string &name, const std::string &path) {
   if (proton::toLower(name) == "cupti") {
-    auto *profiler = &CuptiProfiler::instance();
-    profiler->setLibPath(path);
-    if (proton::toLower(modeAndOptions[0]) == "pcsampling") {
-      profiler->enablePCSampling();
-    } else if (mode != "") {
-      throw std::runtime_error("Unsupported cupti mode: " + mode);
-    }
-    return profiler;
+    return &CuptiProfiler::instance().setLibPath(path);
   }
   if (proton::toLower(name) == "roctracer") {
-    if (mode != "") {
-      throw std::runtime_error("Unsupported roctracer mode: " + mode);
-    }
     return &RoctracerProfiler::instance();
   }
   if (proton::toLower(name) == "instrumentation") {
-    return InstrumentationProfiler::instance().setMode(modeAndOptions);
+    return &InstrumentationProfiler::instance();
   }
   throw std::runtime_error("Unknown profiler: " + name);
 }
@@ -88,11 +76,37 @@ void Session::finalize(const std::string &outputFormat) {
 
 size_t Session::getContextDepth() { return contextSource->getDepth(); }
 
+void SessionManager::validateAndSetProfilerMode(Profiler *profiler,
+                                                const std::string &mode) {
+  for (auto &[id, session] : sessions) {
+    if (session->getMode() != mode && session->getProfiler() == profiler) {
+      throw std::runtime_error("Cannot add a session with the same profiler "
+                               "but a different mode than existing sessions");
+    }
+  }
+
+  std::vector<std::string> modeAndOptions = proton::split(mode, ":");
+  if (auto *cuptiProfiler = dynamic_cast<CuptiProfiler *>(profiler)) {
+    cuptiProfiler->enablePCSampling();
+    if (!mode.empty()) {
+      throw std::runtime_error("Unsupported cupti mode: " + mode);
+    }
+  } else if (dynamic_cast<RoctracerProfiler *>(profiler)) {
+    if (!mode.empty()) {
+      throw std::runtime_error("Unsupported roctracer mode: " + mode);
+    }
+  } else if (auto *instrumentationProfiler =
+                 dynamic_cast<InstrumentationProfiler *>(profiler)) {
+    instrumentationProfiler->setMode(modeAndOptions);
+  }
+}
+
 std::unique_ptr<Session> SessionManager::makeSession(
     size_t id, const std::string &path, const std::string &profilerName,
     const std::string &profilerPath, const std::string &contextSourceName,
     const std::string &dataName, const std::string &mode) {
-  auto profiler = makeProfiler(profilerName, profilerPath, mode);
+  auto profiler = makeProfiler(profilerName, profilerPath);
+  validateAndSetProfilerMode(profiler, mode);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
   auto *session = new Session(id, path, profiler, std::move(contextSource),
@@ -176,13 +190,6 @@ size_t SessionManager::addSession(const std::string &path,
   auto sessionId = nextSessionId++;
   auto newSession = makeSession(sessionId, path, profilerName, profilerPath,
                                 contextSourceName, dataName, mode);
-  for (auto &[id, session] : sessions) {
-    if (session->getMode() != mode &&
-        session->getProfiler() == newSession->getProfiler()) {
-      throw std::runtime_error("Cannot add a session with the same profiler "
-                               "but a different mode than existing sessions");
-    }
-  }
   sessionPaths[path] = sessionId;
   sessions[sessionId] = std::move(newSession);
   return sessionId;
