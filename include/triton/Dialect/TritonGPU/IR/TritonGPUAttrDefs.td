@@ -1036,15 +1036,17 @@ An encoding for tensors that have been produced by MFMA matrix core instructions
 available on AMD Instinct GPUs of CDNA architectures.
 
 It is characterized by the following parameters:
-- `version` indicates the GPU architecture:
+- `version`: The GPU architecture:
   - 1: gfx908: CDNA1
   - 2: gfx90a: CDNA2
   - 3: gfx942: CDNA3
   - 4: gfx950: CDNA4
-- `warpsPerCTA` indicates the warp layout in the block.
-- `MDim` and `NDim` indicate the dimension of the output of the mfma instruction.
-- `isTransposed` indicates the result tensor is transposed so that it can be converted to dotOperand layout
+- `warpsPerCTA`: The warp layout in the block.
+- `instrShape`: The shape in the form of (M, N, K) of the matrix.
+- `isTransposed`: Indicates the result tensor is transposed so that it can be converted to dotOperand layout
 without going to shared memory. This is used in the case of chained dot (E.g. Flash-Attention kernel).
+- `tiles_per_warp`: The tile layout within a warp. Defaults to unit tile layout, i.e., single tile on all dimensions.
+- `element_bitwidth`: Bit width of the output element type. Supported values are 32 and 64. Defaults to 32.
 
 Example 1:
 Suppose we have a tensor with a shape of [32, 64], warpsPerCTA set to [1, 2] and MDim=NDim=32.

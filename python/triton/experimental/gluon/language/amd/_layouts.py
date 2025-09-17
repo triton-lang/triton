@@ -5,7 +5,6 @@ from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr
 
 from triton.experimental.gluon.language._layouts import _realize_cta_layout, DistributedLayout
-from triton.experimental.gluon import language as ttgl
 
 __all__ = [
     "AMDMFMALayout",
@@ -19,14 +18,14 @@ class AMDMFMALayout(DistributedLayout):
     Represents a layout for AMD MFMA (matrix core) operations.
 
     Args:
-        version (int): Indicates the GPU architecture.
-        instr_shape: (M, N) Dimension for the instrinsic shape.
+        version (int): The GPU architecture.
+        warps_per_cta (List[int]): The warp layout in the block.
+        instr_shape (List[int]): The shape in the form of (M, N, K) of the matrix.
         transposed (bool): Indicates the result tensor is transposed so that each thread holds consecutive elements in the same row instead of column, which is good for chained dot and global write.
-        warps_per_cta (List[int]): Number of warps per CTA.
         ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
         cta_split_num (Optional[List[int]]): Split factors for CTAs.
         cta_order (Optional[List[int]]): CTA ordering.
-        tiles_per_warp Optional(List[int]): Number of tiles per WARP. For mfma layout, if missing, use the default where we have unit tile size on all dimensions.
+        tiles_per_warp Optional(List[int]): The tile layout within a warp. Defaults to unit tile layout, i.e., single tile on all dimensions.
         element_bitwidth Optional(int): Bit width of the output element type. Supported values are 32 and 64. Defaults to 32.
 
     Current supported versions:
@@ -81,7 +80,6 @@ class AMDMFMALayout(DistributedLayout):
             return "_".join(map(str, x))
 
         return f"MFMA_{self.version}_{stringify(self.warps_per_cta)}_{stringify(self.instr_shape)}_{self.transposed}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_{stringify(self.tiles_per_warp)}_{self.element_bitwidth}_MFMA"
-
 
     def __hash__(self):
         return hash((
