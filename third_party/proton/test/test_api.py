@@ -82,7 +82,7 @@ def test_profile_mode(tmp_path: pathlib.Path):
         assert temp_file1.exists()
 
         try:
-            proton.start(str(temp_file0.with_suffix("")), mode="pc_sampling")
+            proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
             proton.start(str(temp_file1.with_suffix("")))
         except Exception as e:
             assert "Cannot add session with different mode to existing sessions" in str(e)
