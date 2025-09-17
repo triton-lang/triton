@@ -20,7 +20,7 @@ Profiler *getProfiler(const std::string &name, const std::string &path,
     profiler->setLibPath(path);
     if (proton::toLower(modeAndOptions[0]) == "pcsampling") {
       profiler->enablePCSampling();
-    } else if (mode != 0) {
+    } else if (mode != "") {
       throw std::runtime_error("Unsupported cupti mode: " + mode);
     }
     return profiler;
