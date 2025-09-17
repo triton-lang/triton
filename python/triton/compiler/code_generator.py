@@ -8,7 +8,7 @@ import warnings
 import textwrap
 import itertools
 from dataclasses import dataclass
-from types import ModuleType, NotImplementedType
+from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, List
 
 from .. import knobs, language
