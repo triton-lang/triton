@@ -270,13 +270,13 @@ struct DotOpMFMAConversionHelper {
 
     auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
     auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
-    int kWidth = aEncoding.getKWidth();
+    auto kWidth = aEncoding.getKWidth();
 
     // If we are using XF32, the kWidth (and kBase) is double that of F32.
     if (aTensorTy.getElementType().isF32() && allowXF32)
       kWidth *= 2;
 
-    int kPack = kWidth / kBase;
+    auto kPack = std::max(1u, kWidth / kBase);
     auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kPack, 0);
     auto repB = mfmaLayout.getRepForOperand(bTensorTy.getShape(), kPack, 1);
     assert(repA[2] == repB[1]);
@@ -636,9 +636,6 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
       shapeA[shapeA.size() - 1] *= 2;
     if (isBFp4)
       shapeB[shapeB.size() - 2] *= 2;
-    auto repA = mfmaLayout.getRepForOperand(shapeA, 1, 0);
-    auto repB = mfmaLayout.getRepForOperand(shapeB, 1, 1);
-    assert(repA[2] == repB[1]);
 
     // Pack kBase
     auto aKBase = isAFp4 ? kBase / 2 : kBase;
@@ -647,6 +644,10 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     // Assume kWidth is always kBase
     auto aKWidth = aKBase;
     auto bKWidth = bKBase;
+
+    auto repA = mfmaLayout.getRepForOperand(shapeA, 1, 0);
+    auto repB = mfmaLayout.getRepForOperand(shapeB, 1, 1);
+    assert(repA[2] == repB[1]);
 
     auto kDimInstrSize = kDim * 1;
     auto kDimOperandSize = shapeA.back();
