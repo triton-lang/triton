@@ -436,7 +436,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   if (profiler.pcSamplingEnabled) {
-    pcSamplingEnabled = false;
+    profiler.pcSamplingEnabled = false;
     CUcontext cuContext = nullptr;
     cuda::ctxGetCurrent<false>(&cuContext);
     if (cuContext)
