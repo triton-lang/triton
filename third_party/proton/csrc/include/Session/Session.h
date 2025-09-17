@@ -124,7 +124,8 @@ public:
   void setState(std::optional<Context> context);
 
 private:
-  void validateAndSetProfilerMode(Profiler *profiler, const std::string &mode);
+  Profiler *validateAndSetProfilerMode(Profiler *profiler,
+                                       const std::string &mode);
 
   std::unique_ptr<Session> makeSession(size_t id, const std::string &path,
                                        const std::string &profilerName,

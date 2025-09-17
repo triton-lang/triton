@@ -5,7 +5,6 @@
 #include "Profiler/Instrumentation/CudaRuntime.h"
 #include "Profiler/Instrumentation/HipRuntime.h"
 #include "Utility/Numeric.h"
-#include "Utility/String.h"
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -42,30 +41,28 @@ void InstrumentationProfiler::doStop() {
   }
 }
 
-InstrumentationProfiler *
-InstrumentationProfiler::setMode(const std::vector<std::string> &mode) {
-  if (mode.empty()) {
+void
+InstrumentationProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
+  if (modeAndOptions.empty()) {
     throw std::runtime_error("Mode cannot be empty");
   }
-  if (toLower(mode[0]) == toLower(DeviceTraits<DeviceType::CUDA>::name)) {
+  if (modeAndOptions[0] == DeviceTraits<DeviceType::CUDA>::name) {
     runtime = std::make_unique<CudaRuntime>();
-  } else if (toLower(mode[0]) == toLower(DeviceTraits<DeviceType::HIP>::name)) {
+  } else if (modeAndOptions[0] == DeviceTraits<DeviceType::HIP>::name) {
     runtime = std::make_unique<HipRuntime>();
   } else {
-    throw std::runtime_error("Unknown device type: " + mode[0]);
+    throw std::runtime_error("Unknown device type: " + modeAndOptions[0]);
   }
-  for (size_t i = 1; i < mode.size(); ++i) {
-    auto delimiterPos = mode[i].find('=');
+  for (size_t i = 1; i < modeAndOptions.size(); ++i) {
+    auto delimiterPos = modeAndOptions[i].find('=');
     if (delimiterPos != std::string::npos) {
-      std::string key = mode[i].substr(0, delimiterPos);
-      std::string value = mode[i].substr(delimiterPos + 1);
+      std::string key = modeAndOptions[i].substr(0, delimiterPos);
+      std::string value = modeAndOptions[i].substr(delimiterPos + 1);
       modeOptions[key] = value;
     } else {
-      modeOptions[mode[i]] = "";
+      modeOptions[modeAndOptions[i]] = "";
     }
   }
-
-  return this;
 }
 namespace {
 

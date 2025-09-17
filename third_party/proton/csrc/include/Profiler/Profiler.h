@@ -74,10 +74,17 @@ public:
     return dataSet;
   }
 
+  Profiler *setMode(const std::vector<std::string> &modeAndOptions) {
+    std::unique_lock<std::shared_mutex> lock(mutex);
+    this->doSetMode(modeAndOptions);
+    return this;
+  }
+
 protected:
   virtual void doStart() = 0;
   virtual void doFlush() = 0;
   virtual void doStop() = 0;
+  virtual void doSetMode(const std::vector<std::string> &modeAndOptions) = 0;
 
   // `dataSet` can be accessed by both the user thread and the background
   // threads

@@ -76,7 +76,7 @@ void Session::finalize(const std::string &outputFormat) {
 
 size_t Session::getContextDepth() { return contextSource->getDepth(); }
 
-void SessionManager::validateAndSetProfilerMode(Profiler *profiler,
+Profiler *SessionManager::validateAndSetProfilerMode(Profiler *profiler,
                                                 const std::string &mode) {
   for (auto &[id, session] : sessions) {
     if (session->getMode() != mode && session->getProfiler() == profiler) {
@@ -86,27 +86,18 @@ void SessionManager::validateAndSetProfilerMode(Profiler *profiler,
   }
 
   std::vector<std::string> modeAndOptions = proton::split(mode, ":");
-  if (auto *cuptiProfiler = dynamic_cast<CuptiProfiler *>(profiler)) {
-    cuptiProfiler->enablePCSampling();
-    if (!mode.empty()) {
-      throw std::runtime_error("Unsupported cupti mode: " + mode);
-    }
-  } else if (dynamic_cast<RoctracerProfiler *>(profiler)) {
-    if (!mode.empty()) {
-      throw std::runtime_error("Unsupported roctracer mode: " + mode);
-    }
-  } else if (auto *instrumentationProfiler =
-                 dynamic_cast<InstrumentationProfiler *>(profiler)) {
-    instrumentationProfiler->setMode(modeAndOptions);
+  for (auto &option : modeAndOptions) {
+    option = proton::toLower(option);
   }
+  return profiler->setMode(modeAndOptions);
 }
 
 std::unique_ptr<Session> SessionManager::makeSession(
     size_t id, const std::string &path, const std::string &profilerName,
     const std::string &profilerPath, const std::string &contextSourceName,
     const std::string &dataName, const std::string &mode) {
-  auto profiler = makeProfiler(profilerName, profilerPath);
-  validateAndSetProfilerMode(profiler, mode);
+  auto *profiler = makeProfiler(profilerName, profilerPath);
+  profiler = validateAndSetProfilerMode(profiler, mode);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
   auto *session = new Session(id, path, profiler, std::move(contextSource),

@@ -391,7 +391,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
 
 void CuptiProfiler::CuptiProfilerPimpl::doStart() {
   cupti::subscribe<true>(&subscriber, callbackFn, nullptr);
-  if (profiler.isPCSamplingEnabled()) {
+  if (profiler.pcSamplingEnabled) {
     setResourceCallbacks(subscriber, /*enable=*/true);
     // Continuous PC sampling is not compatible with concurrent kernel profiling
     cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_KERNEL);
@@ -435,8 +435,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {
-  if (profiler.isPCSamplingEnabled()) {
-    profiler.disablePCSampling();
+  if (profiler.pcSamplingEnabled) {
     CUcontext cuContext = nullptr;
     cuda::ctxGetCurrent<false>(&cuContext);
     if (cuContext)
@@ -460,5 +459,15 @@ CuptiProfiler::CuptiProfiler() {
 }
 
 CuptiProfiler::~CuptiProfiler() = default;
+
+void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
+  auto mode = modeAndOptions[0];
+  if (proton::toLower(mode) == "pcsampling") {
+    pcSamplingEnabled = true;
+  } else if (!mode.empty()) {
+    throw std::invalid_argument("[PROTON] CuptiProfiler: unsupported mode: " +
+                                mode);
+  }
+}
 
 } // namespace proton
