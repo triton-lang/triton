@@ -100,7 +100,7 @@ InstrumentationProfiler::getParserConfig(uint64_t functionId,
   config->scratchMemSize =
       functionMetadata.at(functionId).getScratchMemorySize();
   if (!(modeOptions.count("granularity") == 0 ||
-        modeOptions.at("granularity") == "GRANULARITY.WARP")) {
+        modeOptions.at("granularity") == proton::toLower("GRANULARITY.WARP"))) {
     throw std::runtime_error("Only warp granularity is supported for now");
   }
   config->totalUnits = functionMetadata.at(functionId).getNumWarps();
