@@ -13,7 +13,7 @@ namespace proton {
 namespace {
 
 Profiler *makeProfiler(const std::string &name, const std::string &path,
-                      const std::string &mode) {
+                       const std::string &mode) {
   std::vector<std::string> modeAndOptions = proton::split(mode, ":");
   if (proton::toLower(name) == "cupti") {
     auto *profiler = &CuptiProfiler::instance();
