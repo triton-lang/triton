@@ -520,13 +520,14 @@ public:
     auto newAcc = convertAndCastTensor(rewriter, oldAcc, mfmaEnc, mfmaAccType);
 
     // Here is a brief explanation of kWidth, kBase, and kDim
-    // 1. kWidth: the number of elements each thread loads from shared memory in
-    //    preparation for mfma instructions. In theory each thread can issue one
-    //    or more load instructions to load a total of kWidth elements, since
-    //    those elements are not required to be in contiguous addresses in
-    //    shared memory. But in practice, we make sure the kWidth elements can
-    //    be loaded from shared memory by a single ds_read instruction by
-    //    setting vecSize of the sharedLayout to be kWidth.
+    // 1. kWidth: the number of **consecutive** elements each thread loads from
+    //    shared memory in preparation for mfma instructions. In theory each
+    //    thread can issue one or more load instructions to load a total of
+    //    kWidth elements, since those elements are not required to be in
+    //    contiguous addresses in shared memory. But in practice, we make sure
+    //    the kWidth elements can be loaded from shared memory by a single
+    //    ds_read instruction by setting vecSize of the sharedLayout to be
+    //    kWidth.
     // 2. kDim: the k dimension size of the mfma instruction. E.g. instruction
     //    mfma_32x32x16 has kDim = 16, meaning this mfma instruction can compute
     //    a matmul of operands with shape 32x16 and 16x32.
