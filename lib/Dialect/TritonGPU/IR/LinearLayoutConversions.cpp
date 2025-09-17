@@ -785,7 +785,7 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   int nIndex = 1 + hasBatchDim;
   (void)mIndex, (void)nIndex;
 
-  SmallVector<unsigned> mnkDim = getMNKDimPerInstr();
+  auto mnkDim = getInstrShape();
   unsigned mDim = mnkDim[0], nDim = mnkDim[1];
   (void)mDim, (void)nDim;
 
@@ -827,10 +827,10 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   //
   // Please also check explaining comments in TritonGPUAttrDefs.td at the
   // AMDWmmaEncodingAttr section.
-  unsigned ver = getVersion();
-  assert(ver == 1 || ver == 2);
+  unsigned version = getVersion();
+  assert(version >= 1 && version <= 3 && "unexpected wmma version");
   LinearLayout tileLayout =
-      ver == 1
+      version == 1
           ? LinearLayout(
                 {{kRegister, {/*gap*/ {0, 2}, {0, 4}, {0, 8}}},
                  {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 1}}}},
@@ -869,57 +869,63 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
                                           ArrayRef<int64_t> shape) {
   auto wmmaLayout = llvm::cast<AMDWmmaEncodingAttr>(dotWmmaLayout.getParent());
+  unsigned version = wmmaLayout.getVersion();
+  assert(version >= 1 && version <= 3 && "unexpected wmma version");
+
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
-  auto kDim = dotWmmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
-  int32_t kSize = shape[kDim];
+
   MLIRContext *ctx = dotWmmaLayout.getContext();
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
+
   // lane order
   // operand A: [1, 0] / [2, 1, 0]
   // operand B: [0, 1] / [1, 2, 0]
   // for both cases it is [k, nonk]/[k, nonk, batch]
-  auto laneOrder =
+  auto order =
       getOrderForDotOperand(dotWmmaLayout.getOpIdx(), rank, /*kContig*/ true);
-  // generate continuous part of register bases(i.e. kWidth)
-  std::vector<std::vector<int32_t>> registerBase;
-  const int32_t kWidth = dotWmmaLayout.getKWidth();
-  for (int i = 1; i < kWidth; i *= 2)
-    registerBase.push_back(std::vector<int32_t>{i, 0});
-  std::vector<std::vector<int32_t>> laneBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}};
-  switch (wmmaLayout.getVersion()) {
-  case 1:
-    // WMMA version 1 duplicates values in lanes 0-15 and 16-31
-    laneBase.push_back({0, 0});
-    break;
-  case 2:
-    // WMMA version 2 offset values in lanes 0-15 and 16-31 across k dimensions
-    laneBase.push_back({kWidth, 0});
-    break;
-  default:
-    assert(false && "unexpected version");
-  }
-  // Generate layout for one wmma instruction
-  LinearLayout tileLayout(
-      {{kRegister, registerBase}, {kLane, laneBase}},
-      {outDimNames[laneOrder[0]], outDimNames[laneOrder[1]]});
+  auto dimK = outDimNames[order[0]];
+  auto dimNonK = outDimNames[order[1]];
+
+  auto mnkDim = wmmaLayout.getInstrShape();
+  auto kDim = mnkDim[2];
+  auto nonKDim = dotWmmaLayout.getOpIdx() == 0 ? mnkDim[0] : mnkDim[1];
+  auto kWidth = dotWmmaLayout.getKWidth();
+  constexpr int warpSize = 32;
+
+  // The relative order of registers and lanes is given by:
+  // - k dim: kWidth registers
+  // - non-k dim: nonKDim lanes
+  // - k dim: depth = warpSize / nonKDim lanes
+  //   version 1 duplicates these values across k dim
+  //   version 2/3 offsets these values across k dim
+  // - k dim: repeat kDim / (kWidth * depth) times to fit k dim
+  LinearLayout tileLayout;
+  int depth = warpSize / nonKDim;
+  tileLayout = LinearLayout::identity1D(kWidth, kRegister, dimK) *
+               LinearLayout::identity1D(nonKDim, kLane, dimNonK);
+  tileLayout *= version == 1 ? LinearLayout::zeros1D(depth, kLane, dimK)
+                             : LinearLayout::identity1D(depth, kLane, dimK);
+  tileLayout *=
+      LinearLayout::identity1D(kDim / (depth * kWidth), kRegister, dimK);
+
   if (hasBatchDim) {
-    assert(laneOrder[2] == 0);
+    assert(order[2] == 0);
     // Extend the base vector with one value to accommodate for the batch
     // dimension, which appears at the last.
-    tileLayout *=
-        LinearLayout::identity1D(1, kRegister, outDimNames[laneOrder[2]]);
-    tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[laneOrder[2]]);
+    tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[order[2]]);
+    tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[order[2]]);
   }
 
   // Generate warp layout
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
   auto warpOrder = getDefaultMmaOrder(wmmaLayout);
-  LinearLayout warpLayout =
-      broadcastedDotOperandLayout(ctx, warpsPerCTA, warpOrder, kDim, S("warp"));
+  auto kDimIdx = dotWmmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  LinearLayout warpLayout = broadcastedDotOperandLayout(
+      ctx, warpsPerCTA, warpOrder, kDimIdx, S("warp"));
 
   // reorder dim names in rep order, so combineCtaCgaWithShape generate proper
   // extension of layout

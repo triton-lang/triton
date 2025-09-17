@@ -113,6 +113,7 @@ class AMDWMMALayout(DistributedLayout):
         version (int): Indicates the GPU architecture.
         transposed (bool): Indicates the result tensor is transposed.
         warps_per_cta (List[int]): Number of warps per CTA.
+        instr_shape (Optional[List[int]]): Instruction shape (M, N, K). Defaults to (16, 16, 16).
         ctas_per_cga (Optional[List[int]]): CTAs per CGA grouping.
         cta_split_num (Optional[List[int]]): Split factors for CTAs.
         cta_order (Optional[List[int]]): CTA ordering.
@@ -121,10 +122,12 @@ class AMDWMMALayout(DistributedLayout):
 
     - 1: RDNA3; e.g., gfx1100, gfx1101
     - 2: RDNA4; e.g., gfx1200, gfx1201
+    - 3: gfx1250
     """
     version: int
     transposed: bool
     warps_per_cta: List[int]
+    instr_shape: Optional[List[int]] = None
     ctas_per_cga: Optional[List[int]] = None
     cta_split_num: Optional[List[int]] = None
     cta_order: Optional[List[int]] = None
@@ -136,11 +139,14 @@ class AMDWMMALayout(DistributedLayout):
         super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
         super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+
+        instr_shape = _unwrap_if_constexpr(self.instr_shape) if self.instr_shape is not None else [16, 16, 16]
+        super().__setattr__("instr_shape", _unwrap_if_constexpr(instr_shape))
         self.verify()
 
     def _to_ir(self, builder):
         return builder.get_amd_wmma_layout(self.version, self.transposed, self.warps_per_cta, self.ctas_per_cga,
-                                           self.cta_split_num, self.cta_order)
+                                           self.cta_split_num, self.cta_order, self.instr_shape)
 
     def mangle(self) -> str:
 
@@ -149,10 +155,10 @@ class AMDWMMALayout(DistributedLayout):
                 return ""
             return "_".join(map(str, x))
 
-        return f"WMMA_{self.version}_{self.transposed}_{stringify(self.warps_per_cta)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_WMMA"
+        return f"WMMA_{self.version}_{self.transposed}_{stringify(self.warps_per_cta)}_{stringify(self.instr_shape)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_WMMA"
 
     def verify(self):
-        assert self.version >= 1 and self.version <= 2, "version must be in the [1, 2] range"
+        assert self.version >= 1 and self.version <= 3, "version must be in the [1, 3] range"
 
         rank = len(self.warps_per_cta)
         _realize_cta_layout(self, rank)
@@ -165,6 +171,7 @@ class AMDWMMALayout(DistributedLayout):
             self.version,
             self.transposed,
             tuple(self.warps_per_cta),
+            tuple(self.instr_shape) if self.instr_shape else None,
             tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
             tuple(self.cta_split_num) if self.cta_split_num else None,
             tuple(self.cta_order) if self.cta_order else None,
