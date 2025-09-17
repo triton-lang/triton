@@ -135,25 +135,21 @@ static void checkMatmulConstraints(const std::string &A_dtype,
                                    const std::vector<int> &C_shape) {
   // Support FP32/FP16/BF16 and 8-bit FP8 (e4m3fn/e4m3fnuz) and BF8
   // (e5m2fn/e5m2fnuz).
-  const bool A_is_fp8 =
-      (A_dtype == "torch.float8_e4m3fn" || A_dtype == "torch.float8_e5m2fn" ||
-       A_dtype == "torch.float8_e4m3fnuz" ||
-       A_dtype == "torch.float8_e5m2fnuz");
-  const bool B_is_fp8 =
-      (B_dtype == "torch.float8_e4m3fn" || B_dtype == "torch.float8_e5m2fn" ||
-       B_dtype == "torch.float8_e4m3fnuz" ||
-       B_dtype == "torch.float8_e5m2fnuz");
+  auto is_fp8 = [](const std::string &dtype) {
+    return dtype == "torch.float8_e4m3fn" || dtype == "torch.float8_e5m2fn" ||
+           dtype == "torch.float8_e4m3fnuz" || dtype == "torch.float8_e5m2fnuz";
+  };
+  auto is_fp16_family = [](const std::string &dtype) {
+    return dtype == "torch.float16" || dtype == "torch.bfloat16";
+  };
+  const bool A_is_fp8 = is_fp8(A_dtype);
+  const bool B_is_fp8 = is_fp8(B_dtype);
   const bool A_supported =
-      (A_is_fp8 || A_dtype == "torch.float16" || A_dtype == "torch.float32" ||
-       A_dtype == "torch.bfloat16");
+      (A_is_fp8 || is_fp16_family(A_dtype) || A_dtype == "torch.float32");
   const bool B_supported =
-      (B_is_fp8 || B_dtype == "torch.float16" || B_dtype == "torch.float32" ||
-       B_dtype == "torch.bfloat16");
-  const bool C_supported =
-      (C_dtype == "torch.float16" || C_dtype == "torch.float32" ||
-       C_dtype == "torch.bfloat16" || C_dtype == "torch.float8_e4m3fn" ||
-       C_dtype == "torch.float8_e5m2fn" || C_dtype == "torch.float8_e4m3fnuz" ||
-       C_dtype == "torch.float8_e5m2fnuz");
+      (B_is_fp8 || is_fp16_family(B_dtype) || B_dtype == "torch.float32");
+  const bool C_supported = (is_fp16_family(C_dtype) ||
+                            C_dtype == "torch.float32" || is_fp8(C_dtype));
 
   if (!A_supported || !B_supported || !C_supported) {
     std::ostringstream oss;

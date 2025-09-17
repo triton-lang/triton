@@ -174,7 +174,8 @@ class HipBlasLtInstance {
 
     hipblasLtMatrixLayout_t Adesc = NULL, Bdesc = NULL, Cdesc = NULL,
                             Ddesc = NULL;
-
+    auto isFP8 = dtype == HIP_R_8F_E4M3 || dtype == HIP_R_8F_E5M2 ||
+                 dtype == HIP_R_8F_E4M3_FNUZ || dtype == HIP_R_8F_E5M2_FNUZ;
     int returnedResults = 0;
     hipblasLtMatmulHeuristicResult_t heuristicResult = {};
 
@@ -200,8 +201,7 @@ class HipBlasLtInstance {
     successOrExit(hipblasLtMatmulDescSetAttribute(
         matmulDesc, HIPBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(transb)));
 
-    if (dtype == HIP_R_8F_E4M3 || dtype == HIP_R_8F_E5M2 ||
-        dtype == HIP_R_8F_E4M3_FNUZ || dtype == HIP_R_8F_E5M2_FNUZ) {
+    if (isFP8) {
       hipDataType a_in = dtype;
       hipDataType b_in = dtype;
       successOrExit(hipblasLtMatmulDescSetAttribute(
@@ -212,10 +212,7 @@ class HipBlasLtInstance {
           sizeof(b_in)));
     }
 
-    auto c_dtype = (dtype == HIP_R_8F_E4M3 || dtype == HIP_R_8F_E5M2 ||
-                    dtype == HIP_R_8F_E4M3_FNUZ || dtype == HIP_R_8F_E5M2_FNUZ)
-                       ? HIP_R_16F
-                       : dtype;
+    auto c_dtype = (isFP8) ? HIP_R_16F : dtype;
 
     successOrExit(hipblasLtMatrixLayoutCreate(&Adesc, dtype, k, m, k));
     successOrExit(hipblasLtMatrixLayoutCreate(&Bdesc, dtype, k, n, k));
