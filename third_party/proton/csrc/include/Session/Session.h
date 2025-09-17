@@ -33,6 +33,8 @@ public:
 
   size_t getContextDepth();
 
+  Profiler *getProfiler() { return profiler; }
+
 private:
   Session(size_t id, const std::string &path, Profiler *profiler,
           std::unique_ptr<ContextSource> contextSource,
@@ -118,6 +120,9 @@ public:
   void setState(std::optional<Context> context);
 
 private:
+  Profiler *validateAndSetProfilerMode(Profiler *profiler,
+                                       const std::string &mode);
+
   std::unique_ptr<Session> makeSession(size_t id, const std::string &path,
                                        const std::string &profilerName,
                                        const std::string &profilerPath,
