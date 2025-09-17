@@ -75,14 +75,11 @@ def test_profile_mode(tmp_path: pathlib.Path):
         if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
             pytest.skip("PC sampling test is disabled")
 
-        temp_file1 = tmp_path / "test_profile1.hatchet"
-
-        proton.start(str(temp_file1.with_suffix("")), mode="pcsampling")
-        proton.finalize()
-        assert temp_file1.exists()
+        proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
+        assert temp_file0.exists()
 
         try:
-            proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
+            temp_file1 = tmp_path / "test_profile1.hatchet"
             proton.start(str(temp_file1.with_suffix("")))
         except Exception as e:
             assert "Cannot add session with different mode to existing sessions" in str(e)

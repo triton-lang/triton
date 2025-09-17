@@ -98,7 +98,7 @@ std::unique_ptr<Session> SessionManager::makeSession(
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
   auto *session = new Session(id, path, profiler, std::move(contextSource),
-                              std::move(data));
+                              std::move(data), mode);
   return std::unique_ptr<Session>(session);
 }
 
