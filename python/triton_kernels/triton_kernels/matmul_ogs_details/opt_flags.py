@@ -5,6 +5,7 @@ from math import sqrt
 
 import triton
 from triton_kernels.target_info import get_cdna_version
+from triton_kernels.tensor import FP4
 import torch
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 
@@ -167,7 +168,7 @@ def make_default_opt_flags_nvidia(
     elif enforce_bitwise_invariance:
         block_m = 128
     else:
-        if tokens_per_expt <= 64 and False:
+        if tokens_per_expt <= 64:
             # likely memory bound. set the block size higher to ensure we do not frequently load weights
             # more than once.
             quantile = 1.036 # normal distribution quantile for 85%; from scipy.stats import norm; norm.ppf(0.85)
@@ -199,6 +200,10 @@ def make_default_opt_flags_nvidia(
         block_k = constraints["block_k"]
     else:
         block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config)
+    if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4:
+        # Swap block_n and block_k for mxfp4 weights so that block_k is a full cacheline.
+        # TODO: swizzle the HBM layout of the weights instead
+        block_n, block_k = block_k, block_n
     # split_k
     if constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
