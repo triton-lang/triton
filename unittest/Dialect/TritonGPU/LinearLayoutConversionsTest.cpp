@@ -1,6 +1,5 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 
-#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
