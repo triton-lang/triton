@@ -77,12 +77,8 @@ void Session::finalize(const std::string &outputFormat) {
 size_t Session::getContextDepth() { return contextSource->getDepth(); }
 
 Profiler *SessionManager::validateAndSetProfilerMode(Profiler *profiler,
-                                                const std::string &mode) {
+                                                     const std::string &mode) {
   std::vector<std::string> modeAndOptions = proton::split(mode, ":");
-  for (auto &option : modeAndOptions) {
-    option = proton::toLower(option);
-  }
-
   for (auto &[id, session] : sessions) {
     if (session->getProfiler() == profiler &&
         session->getProfiler()->getMode() != modeAndOptions) {
