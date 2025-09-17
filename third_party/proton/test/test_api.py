@@ -76,9 +76,12 @@ def test_profile_mode(tmp_path: pathlib.Path):
             pytest.skip("PC sampling test is disabled")
 
         proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
+        temp_file1 = tmp_path / "test_profile1.hatchet"
+        proton.start(str(temp_file1.with_suffix("")), mode="pcsampling")
+        proton.finalize()
 
         try:
-            temp_file1 = tmp_path / "test_profile1.hatchet"
+            proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
             proton.start(str(temp_file1.with_suffix("")))
         except Exception as e:
             assert "Cannot add session with different mode to existing sessions" in str(e)
