@@ -9,7 +9,7 @@
 // CHECK: %2 = ttg.convert_layout %1 {{.*}}: {{.*}}#mma{{.*}}#mma1
 // CHECK: %3 = ttg.local_load %0 : {{.*}}#shared{{.*}}#ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 4}>>
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
-#mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 8], instrShape = [32, 32], isTransposed = false}>
+#mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 8], instrShape = [32, 32, 8], isTransposed = false}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
@@ -32,7 +32,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
 // CHECK: %2 = ttg.convert_layout %1 {{.*}}: {{.*}}#blocked1{{.*}}#mma
 // CHECK: %3 = ttg.local_load %0 : {{.*}}#shared{{.*}}#ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
-#mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 8], instrShape = [32, 32], isTransposed = false}>
+#mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 8], instrShape = [32, 32, 8], isTransposed = false}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
@@ -47,8 +47,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
 // -----
 
 // CHECK-DAG: [[$BLOCKED1:#.*]] = #ttg.blocked<{sizePerThread = [1, 8, 1], threadsPerWarp = [1, 16, 4], warpsPerCTA = [1, 1, 8], order = [0, 1, 2]}>
-// CHECK-DAG: [[$MMA:#.*]] = #ttg.amd_mfma<{version = 2, warpsPerCTA = [2, 4, 1], instrShape = [32, 32], isTransposed = false}>
-// CHECK-DAG: [[$MMA1:#.*]] = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 8], instrShape = [32, 32], isTransposed = false}>
+// CHECK-DAG: [[$MMA:#.*]] = #ttg.amd_mfma<{version = 2, warpsPerCTA = [2, 4, 1], instrShape = [32, 32, 8], isTransposed = false}>
+// CHECK-DAG: [[$MMA1:#.*]] = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 8], instrShape = [32, 32, 8], isTransposed = false}>
 
 // Check that optimization works with 3d tensors
 // in case of relatively small scratch buffer
@@ -59,7 +59,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
 // CHECK: [[V2:%.*]] = ttg.convert_layout [[V1]] {{.*}}: {{.*}}[[$MMA]]{{.*}}[[$MMA1]]
 // CHECK: [[V3:%.*]] = ttg.local_load [[V0]] : {{.*}}#ttg.dot_op<{opIdx = 0, parent = [[$MMA1]], kWidth = 4}>>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8, 1], threadsPerWarp = [1, 16, 4], warpsPerCTA = [1, 1, 8], order = [0, 1, 2]}>
-#mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 8], instrShape = [32, 32], isTransposed = false}>
+#mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 8], instrShape = [32, 32, 8], isTransposed = false}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1, 2]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
@@ -84,7 +84,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
 // CHECK-32KLIMIT: %2 = ttg.convert_layout %1 {{.*}}: {{.*}}#blocked1{{.*}}#mma
 // CHECK-32KLIMIT: %3 = ttg.local_load %0 : {{.*}}#shared{{.*}}#ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
 #blocked = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
-#mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 8], instrShape = [32, 32], isTransposed = false}>
+#mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 8], instrShape = [32, 32, 8], isTransposed = false}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
@@ -101,8 +101,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
 // Check that optimization correctly handles LDS shortcut (see #mma2 -> #dotop2 conversion)
 // CHECK-DAG: [[BLOCKED_1:#[a-z0-9]*]] = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
 // CHECK-DAG: [[BLOCKED_2:#[a-z0-9]*]] = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [2, 4], order = [0, 1]}>
-// CHECK-DAG: [[MMA_1:#[a-z0-9]*]] = #ttg.amd_mfma<{version = 2, warpsPerCTA = [8, 1], instrShape = [32, 32], isTransposed = true}>
-// CHECK-DAG: [[MMA_2:#[a-z0-9]*]] = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 8], instrShape = [32, 32], isTransposed = false}>
+// CHECK-DAG: [[MMA_1:#[a-z0-9]*]] = #ttg.amd_mfma<{version = 2, warpsPerCTA = [8, 1], instrShape = [32, 32, 8], isTransposed = true}>
+// CHECK-DAG: [[MMA_2:#[a-z0-9]*]] = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 8], instrShape = [32, 32, 8], isTransposed = false}>
 // CHECK-DAG: [[SHARED:#[a-z0-9]*]] = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>
 
 // CHECK: tt.func public @mfma_dot_shortcut([[ARG_0:%[a-z0-9]*]]: {{.*}}, [[ARG_1:%[a-z0-9]*]]: {{.*}}, [[ARG_2:%[a-z0-9]*]]: {{.*}})
@@ -112,8 +112,8 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
 // CHECK: [[CONVERT_2:%[0-9]+]] = ttg.convert_layout [[ARG_2]] {{.*}}: tensor<256x128xf16, [[MMA_1]]> -> tensor<256x128xf16, #ttg.dot_op<{opIdx = 0, parent = [[MMA_1]], kWidth = 4}>>
 // CHECK: [[LOAD:%[0-9]+]] = ttg.local_load [[ALLOC]] : !ttg.memdesc<128x128xf16, [[SHARED]], #smem> -> tensor<128x128xf16, #ttg.dot_op<{opIdx = 0, parent = [[MMA_2]], kWidth = 4}>>
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [16, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
-#mma1 = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 8], instrShape = [32, 32], isTransposed = false}>
-#mma2 = #ttg.amd_mfma<{version = 2, warpsPerCTA = [8, 1], instrShape = [32, 32], isTransposed = true}>
+#mma1 = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 8], instrShape = [32, 32, 8], isTransposed = false}>
+#mma2 = #ttg.amd_mfma<{version = 2, warpsPerCTA = [8, 1], instrShape = [32, 32, 8], isTransposed = true}>
 #dotop1 = #ttg.dot_op<{opIdx=0, parent=#mma1, kWidth=4}>
 #dotop2 = #ttg.dot_op<{opIdx=0, parent=#mma2, kWidth=4}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>
@@ -136,7 +136,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
 // CHECK-NEXT: ttg.convert_layout
 // CHECK-NEXT: ttg.local_load
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-#mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = true}>
+#mma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [4, 1], instrShape = [32, 32, 8], isTransposed = true}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
