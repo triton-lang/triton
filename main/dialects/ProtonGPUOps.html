@@ -93,22 +93,26 @@
 <li class="toctree-l4"><a class="reference internal" href="#id3">Operands:</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="#proton-gpu-initialize-triton-proton-gpu-initializeop"><code class="docutils literal notranslate"><span class="pre">proton_gpu.initialize</span></code> (triton::proton::gpu::InitializeOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id4">Operands:</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="#proton-gpu-read-counter-triton-proton-gpu-readcounterop"><code class="docutils literal notranslate"><span class="pre">proton_gpu.read_counter</span></code> (triton::proton::gpu::ReadCounterOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id4">Attributes:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id5">Results:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id5">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id6">Results:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#proton-gpu-restore-ctx-triton-proton-gpu-restorectxop"><code class="docutils literal notranslate"><span class="pre">proton_gpu.restore_ctx</span></code> (triton::proton::gpu::RestoreCtxOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id6">Operands:</a></li>
-</ul>
-</li>
-<li class="toctree-l3"><a class="reference internal" href="#proton-gpu-save-ctx-triton-proton-gpu-savectxop"><code class="docutils literal notranslate"><span class="pre">proton_gpu.save_ctx</span></code> (triton::proton::gpu::SaveCtxOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id7">Operands:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#proton-gpu-segment-alloc-triton-proton-gpu-segmentallocop"><code class="docutils literal notranslate"><span class="pre">proton_gpu.segment_alloc</span></code> (triton::proton::gpu::SegmentAllocOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#proton-gpu-save-ctx-triton-proton-gpu-savectxop"><code class="docutils literal notranslate"><span class="pre">proton_gpu.save_ctx</span></code> (triton::proton::gpu::SaveCtxOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id8">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id9">Results:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#proton-gpu-segment-alloc-triton-proton-gpu-segmentallocop"><code class="docutils literal notranslate"><span class="pre">proton_gpu.segment_alloc</span></code> (triton::proton::gpu::SegmentAllocOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id9">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id10">Results:</a></li>
 </ul>
 </li>
 </ul>
@@ -289,6 +293,33 @@ called inside <code class="docutils literal notranslate"><span class="pre">ttg.w
 </table>
 </section>
 </section>
+<section id="proton-gpu-initialize-triton-proton-gpu-initializeop">
+<h2><code class="docutils literal notranslate"><span class="pre">proton_gpu.initialize</span></code> (triton::proton::gpu::InitializeOp)<a class="headerlink" href="#proton-gpu-initialize-triton-proton-gpu-initializeop" title="Link to this heading">¶</a></h2>
+<p><em>Initialize the intra kernel profiler</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `proton_gpu.initialize` $scratchPtr attr-dict `:` qualified(type($scratchPtr))
+</pre></div>
+</div>
+<p>Initialize the intra kernel profiler by filling the auxiliary metadata to the header.
+<code class="docutils literal notranslate"><span class="pre">scratchPtr</span></code> is the base address of the profiling scratch buffer where the header is stored.</p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
+<section id="id4">
+<h3>Operands:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">scratchPtr</span></code></p></td>
+<td><p>ptr</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
 <section id="proton-gpu-read-counter-triton-proton-gpu-readcounterop">
 <h2><code class="docutils literal notranslate"><span class="pre">proton_gpu.read_counter</span></code> (triton::proton::gpu::ReadCounterOp)<a class="headerlink" href="#proton-gpu-read-counter-triton-proton-gpu-readcounterop" title="Link to this heading">¶</a></h2>
 <p><em>Read a GPU metric counter into a scalar register</em></p>
@@ -299,8 +330,8 @@ called inside <code class="docutils literal notranslate"><span class="pre">ttg.w
 <p>Read a GPU metric counter into a scalar register.</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource,</span> <span class="pre">MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
-<section id="id4">
-<h3>Attributes:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<section id="id5">
+<h3>Attributes:<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>metric</code></td><td>::mlir::triton::proton::MetricTypeAttr</td><td><details><summary>The type of metric to be profiled</summary>{{% markdown %}}
@@ -310,8 +341,8 @@ called inside <code class="docutils literal notranslate"><span class="pre">ttg.w
   {{% /markdown %}}</details></td></tr>
 </table>
 </section>
-<section id="id5">
-<h3>Results:<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<section id="id6">
+<h3>Results:<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -337,8 +368,8 @@ called inside <code class="docutils literal notranslate"><span class="pre">ttg.w
 <code class="docutils literal notranslate"><span class="pre">scratchPtr</span></code> (base address of the profiling scratch buffer).</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
-<section id="id6">
-<h3>Operands:<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<section id="id7">
+<h3>Operands:<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -367,8 +398,8 @@ called inside <code class="docutils literal notranslate"><span class="pre">ttg.w
 <code class="docutils literal notranslate"><span class="pre">scratchPtr</span></code> (base address of the profiling scratch buffer).</p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
-<section id="id7">
-<h3>Operands:<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<section id="id8">
+<h3>Operands:<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -398,8 +429,8 @@ This operation gets the location of the memory segment in the internal buffer.</
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id8">
-<h3>Operands:<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<section id="id9">
+<h3>Operands:<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -413,8 +444,8 @@ This operation gets the location of the memory segment in the internal buffer.</
 </tbody>
 </table>
 </section>
-<section id="id9">
-<h3>Results:<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<section id="id10">
+<h3>Results:<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>

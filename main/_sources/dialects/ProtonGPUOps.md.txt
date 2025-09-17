@@ -117,6 +117,30 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `scratchPtr` | ptr |
 
 
+### `proton_gpu.initialize` (triton::proton::gpu::InitializeOp)
+
+_Initialize the intra kernel profiler_
+
+Syntax:
+
+```
+operation ::= `proton_gpu.initialize` $scratchPtr attr-dict `:` qualified(type($scratchPtr))
+```
+
+Initialize the intra kernel profiler by filling the auxiliary metadata to the header.
+`scratchPtr` is the base address of the profiling scratch buffer where the header is stored.
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `scratchPtr` | ptr |
+
+
 ### `proton_gpu.read_counter` (triton::proton::gpu::ReadCounterOp)
 
 _Read a GPU metric counter into a scalar register_
