@@ -12,7 +12,7 @@ namespace proton {
 
 namespace {
 
-Profiler *getProfiler(const std::string &name, const std::string &path,
+Profiler *makeProfiler(const std::string &name, const std::string &path,
                       const std::string &mode) {
   std::vector<std::string> modeAndOptions = proton::split(mode, ":");
   if (proton::toLower(name) == "cupti") {
@@ -88,13 +88,11 @@ void Session::finalize(const std::string &outputFormat) {
 
 size_t Session::getContextDepth() { return contextSource->getDepth(); }
 
-std::string Session::getMode() { return mode; }
-
 std::unique_ptr<Session> SessionManager::makeSession(
     size_t id, const std::string &path, const std::string &profilerName,
     const std::string &profilerPath, const std::string &contextSourceName,
     const std::string &dataName, const std::string &mode) {
-  auto profiler = getProfiler(profilerName, profilerPath, mode);
+  auto profiler = makeProfiler(profilerName, profilerPath, mode);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
   auto *session = new Session(id, path, profiler, std::move(contextSource),
@@ -175,16 +173,18 @@ size_t SessionManager::addSession(const std::string &path,
     activateSessionImpl(sessionId);
     return sessionId;
   }
-  for (auto &session : sessions) {
-    if (session.second->getMode() != mode) {
-      throw std::runtime_error(
-          "Cannot add session with different mode to existing sessions");
-    }
-  }
   auto sessionId = nextSessionId++;
   sessionPaths[path] = sessionId;
-  sessions[sessionId] = makeSession(sessionId, path, profilerName, profilerPath,
-                                    contextSourceName, dataName, mode);
+  auto newSession = makeSession(sessionId, path, profilerName, profilerPath,
+                                contextSourceName, dataName, mode);
+  for (auto &[id, session] : sessions) {
+    if (session->getMode() != mode &&
+        session->getProfiler() == newSession->getProfiler()) {
+      throw std::runtime_error("Cannot add a session with the same profiler "
+                               "but a different mode than existing sessions");
+    }
+  }
+  sessions[sessionId] = std::move(newSession);
   return sessionId;
 }
 

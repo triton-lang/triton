@@ -85,7 +85,7 @@ def test_profile_mode(tmp_path: pathlib.Path):
             proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
             proton.start(str(temp_file1.with_suffix("")))
         except Exception as e:
-            assert "Cannot add session with different mode to existing sessions" in str(e)
+            assert "Cannot add a session with the same profiler but a different mode than existing sessions" in str(e)
 
 
 def test_profile_decorator(tmp_path: pathlib.Path):

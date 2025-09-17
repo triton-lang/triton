@@ -33,7 +33,9 @@ public:
 
   size_t getContextDepth();
 
-  std::string getMode();
+  Profiler *getProfiler() { return profiler; }
+
+  std::string getMode() { return mode; }
 
 private:
   Session(size_t id, const std::string &path, Profiler *profiler,
