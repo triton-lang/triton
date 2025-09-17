@@ -648,8 +648,6 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
            !triton::gpu::isExpensiveView(reshape.getSrc().getType(),
                                          newDstType);
   }
-  if (isa<triton::DescriptorOpInterface>(op) && op->hasOneUse())
-    return true;
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
              triton::MakeRangeOp, triton::SplatOp, triton::HistogramOp,
              triton::gpu::LocalAllocOp, triton::gpu::LocalLoadOp,

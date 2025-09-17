@@ -482,12 +482,6 @@ replaceCTALayout(DistributedEncodingTrait layout,
     return SliceEncodingAttr::get(
         layout.getContext(), sliceLayout.getDim(),
         replaceCTALayout(sliceLayout.getParent(), newCTALayout));
-  } else if (auto dotOp = mlir::dyn_cast<DotOperandEncodingAttr>(layout)) {
-    return DotOperandEncodingAttr::get(
-        layout.getContext(), dotOp.getOpIdx(),
-        replaceCTALayout(cast<DistributedEncodingTrait>(dotOp.getParent()),
-                         newCTALayout),
-        dotOp.getKWidth());
   } else {
     llvm::report_fatal_error("not implemented");
     return layout;
