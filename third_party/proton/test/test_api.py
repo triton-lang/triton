@@ -77,12 +77,14 @@ def test_profile_mode(tmp_path: pathlib.Path):
         if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
             pytest.skip("PC sampling test is disabled")
 
+        # Two sessions with the same mode can coexist
         proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
         temp_file1 = tmp_path / "test_profile1.hatchet"
         proton.start(str(temp_file1.with_suffix("")), mode="pcsampling")
         proton.finalize()
         assert temp_file1.exists()
 
+        # Two sessions with different modes cannot coexist
         try:
             proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
             proton.start(str(temp_file1.with_suffix("")))
@@ -90,6 +92,20 @@ def test_profile_mode(tmp_path: pathlib.Path):
             assert "Cannot add a session with the same profiler but a different mode than existing sessions" in str(e)
         finally:
             proton.finalize()
+
+        # Two sessions with different modes cannot coexist even if the first session is deactivated.
+        # In proton, once we deactivate a session, its profiler is not stopped, so changing the profiler mode is not allowed
+        # The only way to start a session with a different mode is to finalize all existing sessions first.
+        try: 
+            session_id = proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
+            proton.deactivate(session_id) 
+            temp_file1 = tmp_path / "test_profile1.hatchet"
+            proton.start(str(temp_file1.with_suffix("")))
+        except Exception as e:
+            assert "Cannot add a session with the same profiler but a different mode than existing sessions" in str(e)
+        finally:
+            proton.finalize()
+
 
 
 def test_profile_decorator(tmp_path: pathlib.Path):
