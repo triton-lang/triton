@@ -11,6 +11,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include <variant>
@@ -176,6 +178,197 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
   return getDotEncoding(user->getResult(0), opIdx, vecSize);
 }
 
+std::optional<triton::gpu::PaddedSharedEncodingAttr>
+composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
+                    ttg::TensorOrMemDesc srcTy, ArrayRef<unsigned> order,
+                    ArrayRef<unsigned> sharedOrder, unsigned bitWidth) {
+  // Check if we can load > 32 bit from source (requirement for AsyncCopy)
+  if (!isa<RankedTensorType>(srcTy) ||
+      ttg::getContigPerThread(cast<RankedTensorType>(srcTy))[order[0]] *
+              bitWidth <
+          32) {
+    return {};
+  }
+
+  auto mfmaEnc =
+      dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(dotOpEnc.getParent());
+  if (!mfmaEnc) {
+    return {};
+  }
+
+  auto operandIdx = dotOpEnc.getOpIdx();
+  int kDimIndex = operandIdx == 0 ? 1 : 0;
+  bool isKContig = sharedOrder[0] == kDimIndex;
+  auto mfmaNonKDim = operandIdx == 0 ? mfmaEnc.getMDim() : mfmaEnc.getNDim();
+  auto *ctx = srcTy.getContext();
+
+  // Do not use padding for scales
+  if (operandIdx >= 2) {
+    return {};
+  }
+
+  if (!llvm::is_contained({16, 32}, mfmaNonKDim)) {
+    return {};
+  }
+
+  int rank = order.size();
+  if (rank > 2) {
+    return {};
+  }
+
+  auto kWidth = dotOpEnc.getKWidth();
+  if (!llvm::is_contained({4, 8}, kWidth)) {
+    return {};
+  }
+
+  auto shape = srcTy.getShape();
+  auto kDim = shape[kDimIndex];
+  auto nonKDim = shape[(kDimIndex + 1) % 2];
+  if (std::min(kDim, nonKDim) < 64 || std::max(kDim, nonKDim) < 128) {
+    return {};
+  }
+
+  if (bitWidth != 16) {
+    return {};
+  }
+
+  // We hardcode sharedOrder == hbmOrder
+  unsigned contigSize = shape[isKContig ? kDimIndex : (kDimIndex + 1) % 2];
+  unsigned nonContigSize = shape[isKContig ? (kDimIndex + 1) % 2 : kDimIndex];
+
+  auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
+  unsigned innerD =
+      ttg::getShapePerCTA(ctaLayout.getCTASplitNum(), shape)[sharedOrder[0]];
+  unsigned byteWidth = std::max(bitWidth / 8u, 1u);
+  unsigned threadNumBytes = std::max(dotOpEnc.getKWidth() * byteWidth, 1u);
+  threadNumBytes = llvm::alignTo(
+      threadNumBytes, std::max(4u, byteWidth)); // Assume 32-bit per bank
+
+  if (isKContig) {
+    if (kWidth == 8)
+      threadNumBytes *= 2;
+  } else {
+    if (kWidth == 8)
+      threadNumBytes *= 2;
+    else
+      threadNumBytes *= 4;
+  }
+  // We also need to align with dwordx4 or dword loads
+  innerD = llvm::alignTo(innerD, (16 * 64) / byteWidth);
+  unsigned paddingInElems = threadNumBytes / byteWidth;
+
+  std::vector<std::vector<int>> offsetBases;
+
+  if (kDim == 64) {
+    if (isKContig) {
+      if (mfmaNonKDim == 16) {
+        offsetBases = {
+            {1, 0},  {2, 0},  {4, 0}, {8, 0}, {16, 0}, {32, 0}, {0, 16},
+            {0, 32}, {0, 64}, {0, 1}, {0, 2}, {0, 4},  {0, 8},
+        };
+      } else if (mfmaNonKDim == 32) {
+        offsetBases = {
+            {1, 0},  {2, 0},  {4, 0}, {0, 16}, {16, 0}, {32, 0}, {8, 0},
+            {0, 32}, {0, 64}, {0, 1}, {0, 2},  {0, 4},  {0, 8},
+        };
+      }
+    } else {
+      if (mfmaNonKDim == 16) {
+        if (dotOpEnc.getKWidth() == 4) {
+          offsetBases = {
+              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 16}, {0, 32}, {0, 64},
+              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
+          };
+        } else {
+          offsetBases = {
+              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 16}, {0, 32}, {0, 64},
+              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {8, 0},  {4, 0},
+          };
+        }
+      } else if (mfmaNonKDim == 32) {
+        if (dotOpEnc.getKWidth() == 4) {
+          offsetBases = {
+              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 32}, {0, 64}, {0, 16},
+              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
+          };
+        } else {
+          offsetBases = {
+              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 64}, {0, 32}, {0, 16},
+              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
+          };
+        }
+      }
+    }
+  } else if (kDim >= 128) {
+    if (isKContig) {
+      if (mfmaNonKDim == 16) {
+        offsetBases = {
+            {1, 0},  {2, 0},  {4, 0}, {8, 0}, {16, 0}, {32, 0}, {64, 0},
+            {0, 16}, {0, 32}, {0, 1}, {0, 2}, {0, 4},  {0, 8},
+        };
+      } else if (mfmaNonKDim == 32) {
+        offsetBases = {
+            {1, 0},  {2, 0},  {4, 0}, {0, 16}, {16, 0}, {32, 0}, {8, 0},
+            {0, 32}, {64, 0}, {0, 1}, {0, 2},  {0, 4},  {0, 8},
+        };
+      }
+    } else {
+      if (mfmaNonKDim == 16) {
+        if (dotOpEnc.getKWidth() == 4) {
+          offsetBases = {
+              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 16}, {0, 32}, {64, 0},
+              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
+          };
+        } else {
+          offsetBases = {
+              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 16}, {0, 32}, {64, 0},
+              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {8, 0},  {4, 0},
+          };
+        }
+      } else if (mfmaNonKDim == 32) {
+        if (dotOpEnc.getKWidth() == 4) {
+          offsetBases = {
+              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 32}, {64, 0}, {0, 16},
+              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
+          };
+        } else {
+          offsetBases = {
+              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {64, 0}, {0, 32}, {0, 16},
+              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
+          };
+        }
+      }
+    }
+  }
+
+  // llvm::outs() << "IsKContig: " << isKContig << "\n";
+  // llvm::outs() << "Order: " << order[0] << ", " << order[1] << "\n";
+  // llvm::outs() << "Shared order: " << sharedOrder[0] << ", " <<
+  // sharedOrder[1]
+  //              << "\n";
+  // llvm::outs() << "kDimIndex: " << kDimIndex << "\n";
+
+  // Tranpose bases if order != default order
+  if ((isKContig && kDimIndex == 1) || (!isKContig && kDimIndex == 1)) {
+    for (auto &p : offsetBases)
+      std::swap(p[0], p[1]);
+  }
+
+  triton::LinearLayout linearComponent(
+      {
+          {StringAttr::get(ctx, "offset"), offsetBases},
+      },
+      triton::standardOutDimNames(ctx, rank));
+  // llvm::outs() << "SrcTy: " << srcTy << "\n";
+  // llvm::outs() << "LL : " << linearComponent << "\n";
+  linearComponent = triton::gpu::combineCtaCgaWithShape(
+      linearComponent, ctaLayout, srcTy.getShape());
+  // llvm::outs() << "LL after reshape : " << linearComponent << "\n";
+
+  return ttg::PaddedSharedEncodingAttr::get(ctx, {{innerD, paddingInElems}},
+                                            linearComponent);
+}
+
 // Adapted from
 // lib/Dialect/TritonGPU/Transforms/Utility.cpp::getSharedEncIfAllUsersAreDotEnc
 // to support AMDMfmaEncodingAttr.
@@ -184,21 +377,21 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return true and get the shared encoding that
 // needs to be used to be compatible with users' layouts.
-std::optional<ttg::SwizzledSharedEncodingAttr>
+std::optional<ttg::SharedEncodingTrait>
 getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
-  llvm::SmallVector<ttg::SwizzledSharedEncodingAttr> sharedEncs;
+  llvm::SmallVector<ttg::SharedEncodingTrait> sharedEncs;
   for (Operation *user : loadedValue.getUsers()) {
     LDBG(" getSharedEncIfAllUsersAreDotEnc current user: " << *user);
     if (user->getNumResults() != 1)
       return std::nullopt;
 
-    ttg::SwizzledSharedEncodingAttr tempAttr;
+    ttg::SharedEncodingTrait tempAttr;
     Value userResult = user->getResult(0);
     Type userResType = userResult.getType();
     if (auto memDesc = dyn_cast<ttg::MemDescType>(userResType)) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
-      tempAttr = cast<ttg::SwizzledSharedEncodingAttr>(memDesc.getEncoding());
+      tempAttr = dyn_cast<ttg::SharedEncodingTrait>(memDesc.getEncoding());
       // If the immediate user is ttg::LocalAllocOp, likely it's created in
       // TritonAMDGPUOptimizeDotOperands. We should just respect it.
       if (!getSharedEncIfAllUsersAreDotEnc(userResult).has_value() &&
@@ -236,12 +429,21 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
         tempAttr = ttg::SwizzledSharedEncodingAttr::get(
             loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
             ctaLayout, bitWidth, /*needTrans=*/false);
-        LDBG("Deduced shared encoding candidate from dot layout: " << tempAttr);
+
+        // Check if we can use padded layouts
+        if (triton::tools::getBoolEnv("TRITON_HIP_USE_PADDED_SHARED_LAYOUT")) {
+          if (auto maybePadded = composePaddedLayout(dotOpEnc, srcTy, order,
+                                                     sharedOrder, bitWidth);
+              maybePadded.has_value()) {
+            tempAttr = *maybePadded;
+          }
+        }
         sharedEncs.push_back(tempAttr);
       } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
-        // We use linear layout directly for scaled dot fp8 operands. For such
-        // cases, we need to look further down the def-use chain to find the dot
-        // op for the mfma layout to deduce operand index and other information.
+        // We use linear layout directly for scaled dot fp8 operands. For
+        // such cases, we need to look further down the def-use chain to
+        // find the dot op for the mfma layout to deduce operand index and
+        // other information.
         unsigned opIdx;
         unsigned vecSize;
         if (auto mfmaEnc = getDotEncoding(userResult, &opIdx, &vecSize)) {
@@ -270,17 +472,18 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
     return std::nullopt;
   auto maxVecSharedEnc = sharedEncs.front();
 
-  for (auto sharedEnc : sharedEncs) {
-    if (!equalSharedEncIgnoreVec(sharedEnc, maxVecSharedEnc)) {
+  for (auto sharedEnc : llvm::drop_begin(sharedEncs, 1)) {
+    if (!equalSharedEncIgnoreVec(
+            dyn_cast<ttg::SwizzledSharedEncodingAttr>(sharedEnc),
+            dyn_cast<ttg::SwizzledSharedEncodingAttr>(maxVecSharedEnc))) {
       LDBG("Incompatible shared encodings");
       return std::nullopt;
     }
-    if (sharedEnc.getVec() > maxVecSharedEnc.getVec()) {
+    if (cast<ttg::SwizzledSharedEncodingAttr>(sharedEnc).getVec() >
+        cast<ttg::SwizzledSharedEncodingAttr>(maxVecSharedEnc).getVec()) {
       maxVecSharedEnc = sharedEnc;
     }
   }
-
-  LDBG("Deduced shared encoding: " << maxVecSharedEnc);
 
   return maxVecSharedEnc;
 }
@@ -305,8 +508,14 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   auto regLayout = triton::gpu::toLinearLayout(srcTy);
   // It's the allocation so we trim the multibuffer dimension
   auto srcShape = dstTy.getShape().take_back(srcTy.getRank());
-  auto sharedLayout =
-      triton::gpu::toLinearLayout(srcShape, dstTy.getEncoding());
+  triton::LinearLayout sharedLayout;
+  if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+          dstTy.getEncoding())) {
+    sharedLayout = paddedEnc.getLinearComponent();
+    return true;
+  } else {
+    sharedLayout = triton::gpu::toLinearLayout(srcShape, dstTy.getEncoding());
+  }
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
 
   unsigned vecSize = regToSharedLayout.getNumConsecutiveInOut();
