@@ -1,5 +1,5 @@
-#ifndef PROTON_DRIVER_GPU_ROCTRACER_H_
-#define PROTON_DRIVER_GPU_ROCTRACER_H_
+#ifndef PROTON_DRIVER_GPU_ROCTRACER_API_H_
+#define PROTON_DRIVER_GPU_ROCTRACER_API_H_
 
 #include "roctracer/roctracer.h"
 
@@ -82,4 +82,4 @@ activityPopExternalCorrelationId(activity_correlation_id_t *last_id);
 
 } // namespace proton
 
-#endif // PROTON_EXTERN_DISPATCH_H_
+#endif // PROTON_DRIVER_GPU_ROCTRACER_API_H_

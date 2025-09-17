@@ -14,7 +14,6 @@ using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::AMD::DppCtrl;
 using mlir::triton::AMD::ISAFamily;
 using mlir::triton::gpu::appendOrGetExternFuncOp;
-using mlir::triton::gpu::getFunctionType;
 
 namespace {
 enum class ShflKind : uint32_t {
@@ -23,57 +22,6 @@ enum class ShflKind : uint32_t {
   down = 2,
   idx = 3,
 };
-
-std::string getTypeString(Type ty) {
-  std::string str;
-  llvm::raw_string_ostream rso(str);
-  ty.print(rso);
-  rso.flush();
-  return str;
-}
-
-std::string mangleFunc(std::string name, Type type) {
-  auto funcType = dyn_cast<LLVM::LLVMFunctionType>(type);
-  assert(funcType && "Expecting an LLVMFunctionType");
-  std::string mangled = name + "_";
-  auto retTy = funcType.getReturnType();
-  mangled += getTypeString(retTy) + "_";
-  auto params = funcType.getParams();
-  for (auto paramType : params) {
-    mangled += getTypeString(paramType) + "_";
-  }
-  return mangled;
-}
-
-// Utility function to create a constant vector mask of length `vecSize` with
-// the same `pred` value
-Value createVectorMaskFromPredicate(RewriterBase &rewriter, Location loc,
-                                    Value pred, int64_t vecSize) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto vecMaskTy = LLVM::getVectorType(rewriter.getI1Type(), vecSize);
-  Value maskVal = b.undef(vecMaskTy);
-  for (size_t s = 0; s < vecSize; ++s) {
-    Value indexVal =
-        rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI64IntegerAttr(s));
-    maskVal = b.insert_element(vecMaskTy, maskVal, pred, indexVal);
-  }
-  return maskVal;
-}
-
-// Utility function to get the number of elements of a vector or a scalar
-int64_t getNumElements(Type ty) {
-  if (auto vecType = dyn_cast<VectorType>(ty))
-    return vecType.getNumElements();
-  return 1;
-}
-
-// Utility function to cast the given scalar or vector type to a vector type
-Type castToVectorType(Type ty) {
-  if (isa<VectorType>(ty))
-    return ty;
-  return LLVM::getVectorType(ty, 1);
-}
-
 } // namespace
 
 namespace mlir::LLVM::AMD {
@@ -558,8 +506,15 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
 
 bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
                                       const LinearLayout &srcToSharedLayout,
-                                      unsigned threadsPerWarp) {
+                                      unsigned threadsPerWarp,
+                                      unsigned vecSize) {
   auto contig = srcToSharedLayout.getNumConsecutiveInOut();
+  if (vecSize != srcToSharedLayout.getNumConsecutiveInOut()) {
+    LDBG("Load vectorization ("
+         << vecSize << ") and contiguity (" << contig
+         << ") do not match resulting in strided writes");
+    return false;
+  }
 
   StringAttr kLane = rewriter.getStringAttr("lane");
   for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {

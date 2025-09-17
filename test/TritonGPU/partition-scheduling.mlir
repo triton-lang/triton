@@ -50,7 +50,7 @@ tt.func public @attention_forward(
     %QK, %QK_load_tok = ttng.tmem_load %QK_tmem[%QK_mma_tok] : !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x64xf32, #blocked>
     %row_max = "compute_row_max"(%QK, %qk_scale) : (tensor<256x64xf32, #blocked>, f32) -> tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %QK_adj = "sub_row_max"(%QK, %row_max, %qk_scale) : (tensor<256x64xf32, #blocked>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, f32) -> tensor<256x64xf32, #blocked>
-    // CHECK: [[SOFTMAX:%.*]] = math.exp2 {{.*}} {ttg.partition = 0 : i32} : tensor<256x64xf32
+    // CHECK: [[SOFTMAX:%.*]] = math.exp2 {{.*}} {ttg.partition = array<i32: 0>} : tensor<256x64xf32
     %softmax = math.exp2 %QK_adj : tensor<256x64xf32, #blocked>
     %diff = arith.subf %m_i, %row_max : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %alpha = math.exp2 %diff : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
@@ -68,9 +68,9 @@ tt.func public @attention_forward(
 
     %acc_corrected = arith.mulf %acc, %alpha_1 : tensor<256x64xf32, #blocked>
 
-    // CHECK: [[X:%.*]] = arith.addf [[SOFTMAX]], [[SOFTMAX]] {ttg.partition = 0 : i32}
+    // CHECK: [[X:%.*]] = arith.addf [[SOFTMAX]], [[SOFTMAX]] {ttg.partition = array<i32: 0>}
     %x = arith.addf %softmax, %softmax : tensor<256x64xf32, #blocked>
-    // CHECK-NEXT: [[ACC_X:%.*]] = arith.addf %{{.*}}, [[X]] {ttg.partition = 3 : i32}
+    // CHECK-NEXT: [[ACC_X:%.*]] = arith.addf %{{.*}}, [[X]] {ttg.partition = array<i32: 3>}
     %acc_x = arith.addf %acc, %x : tensor<256x64xf32, #blocked>
     %e = "sum"(%acc_x) : (tensor<256x64xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %next_e_i = arith.addf %e_i, %e : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
@@ -113,22 +113,22 @@ tt.func public @mma_operand_view(
 
   scf.for %i = %c0_i32 to %n_tiles step %c64_i32 : i32 {
     %K = tt.descriptor_load %K_desc[%i, %c0_i32] : !tt.tensordesc<tensor<64x64xf16, #shared>> -> tensor<64x64xf16, #load_blocked>
-    // CHECK: [[K_SHARED:%.*]] = ttg.local_alloc {{.*}}partition = 2
+    // CHECK: [[K_SHARED:%.*]] = ttg.local_alloc {{.*}}partition = array<i32: 2>
     %K_shared = ttg.local_alloc %K : (tensor<64x64xf16, #load_blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem>
 
-    // CHECK-DAG: [[TRANS_MMA:%.*]] = ttg.memdesc_trans [[K_SHARED]] {{.*}}partition = 1
-    // CHECK-DAG: [[K_VIEW:%.*]] = ttg.memdesc_subslice [[TRANS_MMA]]{{.*}}partition = 1
-    // CHECK-DAG: [[TRANS_USER:%.*]] = ttg.memdesc_trans [[K_SHARED]] {{.*}}partition = 0
+    // CHECK-DAG: [[TRANS_MMA:%.*]] = ttg.memdesc_trans [[K_SHARED]] {{.*}}partition = array<i32: 1>
+    // CHECK-DAG: [[K_VIEW:%.*]] = ttg.memdesc_subslice [[TRANS_MMA]]{{.*}}partition = array<i32: 1>
+    // CHECK-DAG: [[TRANS_USER:%.*]] = ttg.memdesc_trans [[K_SHARED]] {{.*}}partition = array<i32: 0>
     %K_trans = ttg.memdesc_trans %K_shared {order = array<i32: 1, 0>} : !ttg.memdesc<64x64xf16, #shared, #smem> -> !ttg.memdesc<64x64xf16, #shared_T, #smem>
     %K_view = ttg.memdesc_subslice %K_trans [0, 0]  : !ttg.memdesc<64x64xf16, #shared_T, #smem> -> !ttg.memdesc<64x64xf16, #shared_T, #smem>
 
-    // CHECK: ttng.tc_gen5_mma %arg0, [[K_VIEW]]{{.*}}partition = 1
+    // CHECK: ttng.tc_gen5_mma %arg0, [[K_VIEW]]{{.*}}partition = array<i32: 1>
     %QK_mma_tok = ttng.tc_gen5_mma %Q_shared, %K_view, %QK_tmem[%QK_tok], %false, %true : !ttg.memdesc<256x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared_T, #smem>, !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable>
 
-    // CHECK: local_load [[TRANS_USER]] {{.*}}partition = 0
+    // CHECK: local_load [[TRANS_USER]] {{.*}}partition = array<i32: 0>
     %x = ttg.local_load %K_trans : !ttg.memdesc<64x64xf16, #shared_T, #smem> -> tensor<64x64xf16, #load_blocked>
 
-    // CHECK: tmem_load {{.*}}partition = 0
+    // CHECK: tmem_load {{.*}}partition = array<i32: 0>
     %QK, %QK_load_tok = ttng.tmem_load %QK_tmem[%QK_mma_tok] : !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x64xf32, #blocked>
 
     "use"(%x, %QK) : (tensor<64x64xf16, #load_blocked>, tensor<256x64xf32, #blocked>) -> ()
@@ -143,20 +143,20 @@ tt.func @optimize_broadcast(%arg0: i32) {
   %c1_i32 = arith.constant 1 : i32
   // CHECK: scf.for
   scf.for %i = %c0_i32 to %arg0 step %c1_i32 : i32 {
-    // CHECK: [[X:%.*]] = "producer"{{.*}}partition = 0
-    %x = "producer"() {ttg.partition = 0 : i32} : () -> tensor<128xf32>
+    // CHECK: [[X:%.*]] = "producer"{{.*}}partition = array<i32: 0>
+    %x = "producer"() {ttg.partition = array<i32: 0>} : () -> tensor<128xf32>
 
-    // CHECK-DAG: [[X0_P0:%.*]] = tt.expand_dims [[X]] {{.*}}partition = 0
-    // CHECK-DAG: [[X0_P1:%.*]] = tt.expand_dims [[X]] {{.*}}partition = 1
-    %x0 = tt.expand_dims %x {axis = 0 : i32} : tensor<128xf32> -> tensor<1x128xf32>
-    // CHECK-DAG: [[X1_P0:%.*]] = tt.broadcast [[X0_P0]] {{.*}}partition = 0
-    // CHECK-DAG: [[X1_P1:%.*]] = tt.broadcast [[X0_P1]] {{.*}}partition = 1
-    %x1 = tt.broadcast %x0 : tensor<1x128xf32> -> tensor<128x128xf32>
+    // CHECK-DAG: [[X0_P0:%.*]] = tt.expand_dims [[X]] {{.*}}partition = array<i32: 0>
+    // CHECK-DAG: [[X0_P1:%.*]] = tt.expand_dims [[X]] {{.*}}partition = array<i32: 1>
+    %x0 = tt.expand_dims %x {axis = 0 : i32, ttg.partition = array<i32: 0, 1>} : tensor<128xf32> -> tensor<1x128xf32>
+    // CHECK-DAG: [[X1_P0:%.*]] = tt.broadcast [[X0_P0]] {{.*}}partition = array<i32: 0>
+    // CHECK-DAG: [[X1_P1:%.*]] = tt.broadcast [[X0_P1]] {{.*}}partition = array<i32: 1>
+    %x1 = tt.broadcast %x0 {ttg.partition = array<i32: 0, 1>} : tensor<1x128xf32> -> tensor<128x128xf32>
 
-    // CHECK: "use"([[X1_P0]]) {{.*}}partition = 0
-    "use"(%x1) {ttg.partition = 0 : i32} : (tensor<128x128xf32>) -> ()
-    // CHECK: "use"([[X1_P1]]) {{.*}}partition = 1
-    "use"(%x1) {ttg.partition = 1 : i32} : (tensor<128x128xf32>) -> ()
+    // CHECK: "use"([[X1_P0]]) {{.*}}partition = array<i32: 0>
+    "use"(%x1) {ttg.partition = array<i32: 0>} : (tensor<128x128xf32>) -> ()
+    // CHECK: "use"([[X1_P1]]) {{.*}}partition = array<i32: 1>
+    "use"(%x1) {ttg.partition = array<i32: 1>} : (tensor<128x128xf32>) -> ()
   } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }

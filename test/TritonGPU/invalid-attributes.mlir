@@ -42,15 +42,30 @@
 
 // -----
 
-// expected-error@+2 {{ttg.dot_op kWidth parameter must be 8/16 for gfx11 and 4/8/16 for gfx12 (including packed cases for `scaled_dot`)}}
+// expected-error@+2 {{ttg.dot_op kWidth parameter must be 8/16 for WMMA v1 (including packed cases for `scaled_dot`)}}
 #wmma = #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 4]}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma}>
 
 // -----
 
-// expected-error@+2 {{ttg.dot_op kWidth parameter must be 8/16 for gfx11 and 4/8/16 for gfx12 (including packed cases for `scaled_dot`)}}
+// expected-error@+2 {{ttg.dot_op kWidth parameter must be 4/8/16 for WMMA v2 (including packed cases for `scaled_dot`)}}
 #wmma = #ttg.amd_wmma<{version = 2, warpsPerCTA = [1, 4]}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #wmma, kWidth = 32}>
+
+// -----
+
+// expected-error@+1 {{invalid WMMA v1 instruction shape}}
+#wmma = #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 1], instrShape = [16, 16, 32]}>
+
+// -----
+
+// expected-error@+1 {{invalid WMMA v2 instruction shape}}
+#wmma = #ttg.amd_wmma<{version = 2, warpsPerCTA = [1, 1], instrShape = [16, 16, 64]}>
+
+// -----
+
+// expected-error@+1 {{invalid WMMA v3 instruction shape}}
+#wmma = #ttg.amd_wmma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16, 16]}>
 
 // -----
 

@@ -1648,3 +1648,34 @@ tt.func @scalar_load(%lb : index, %ub : index, %step : index,
   tt.return
 }
 }
+
+// -----
+
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// Test for conditional store pipelining bugfix
+// This test reproduces the race condition where conditional code (scf.if) gets moved to
+// epilogue cluster, causing users of loads to be scheduled in later clusters than the loads themselves.
+// The fix allocates extra buffer space when this situation is detected.
+// CHECK-LABEL: @conditional_store_race_fix
+// CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x{{.*}}>
+// CHECK: scf.if %{{.*}} {
+
+tt.func @conditional_store_race_fix(%lb : index, %ub : index, %step : index,
+                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #blocked1> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                 %out_ptr : tensor<128x32x!tt.ptr<f16>, #blocked1>,
+                 %cnd : i1) -> () {
+  scf.for %iv = %lb to %ub step %step : index {
+    // Load is in cluster 0, stage 0 (early cluster)
+    %a = tt.load %a_ptr_init {loop.cluster = 0 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f16>, #blocked1>
+    // Conditional store is in cluster 2, stage 2 (later cluster than load: 2 > 0)
+    // This creates the race condition where the local load happens after
+    // the global-to-local copy for the next pipeline stage starts
+    scf.if %cnd {
+      tt.store %out_ptr, %a {loop.cluster = 2 : i32, loop.stage = 2 : i32} : tensor<128x32x!tt.ptr<f16>, #blocked1>
+    } {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+  } {tt.scheduled_max_stage = 2 : i32}
+  tt.return
+}
+}

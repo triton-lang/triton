@@ -189,6 +189,14 @@ def supports_tma(byval_only=False):
     return torch.cuda.get_device_capability()[0] >= 9 and cuda_version_tuple >= min_cuda_version
 
 
+def supports_ws():
+    if is_interpreter():
+        return True
+    if not is_cuda():
+        return False
+    return torch.cuda.get_device_capability()[0] >= 9
+
+
 def tma_skip_msg(byval_only=False):
     if byval_only:
         return "Requires __grid_constant__ TMA support (NVIDIA Hopper or higher, CUDA 12.0 or higher)"
