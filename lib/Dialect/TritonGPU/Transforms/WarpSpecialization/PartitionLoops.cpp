@@ -79,8 +79,7 @@ bool isTensorResultComputedBy(scf::ForOp loop, size_t resultIdx,
   if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
     partitionIds = getIfOpResultPartitionIds(ifOp, value);
   }
-  bool contained = llvm::is_contained(partitionIds, partition->getIndex());
-  return contained;
+  return llvm::is_contained(partitionIds, partition->getIndex());
 }
 
 SmallVector<size_t> getPartitionIds(Operation *op, size_t numPartitions) {
@@ -517,7 +516,7 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   return success();
 }
 
-LogicalResult inferIfStmtPartitions(scf::IfOp ifOp) {
+LogicalResult inferIfOpPartitions(scf::IfOp ifOp) {
   using PartitionSet = SetVector<int>;
   PartitionSet ifOpPartitions;
   SmallVector<std::optional<PartitionSet>> partitionIndices(
@@ -575,7 +574,7 @@ LogicalResult inferIfStmtPartitions(scf::IfOp ifOp) {
                 ArrayAttr::get(ifOp.getContext(), partitionAttrs));
   setPartition(ifOp, ifOpPartitions);
   return success();
-} // namespace
+}
 
 LogicalResult inferReduceOpPartitions(triton::ReduceOp reduceOp) {
   auto terminator = reduceOp.getRegion().getBlocks().front().getTerminator();
@@ -619,7 +618,7 @@ void PartitionLoops::runOnOperation() {
         signalPassFailure();
     });
     loop.walk([&](scf::IfOp ifOp) {
-      if (failed(inferIfStmtPartitions(ifOp)))
+      if (failed(inferIfOpPartitions(ifOp)))
         signalPassFailure();
     });
     if (failed(partitionLoop(loop)))
