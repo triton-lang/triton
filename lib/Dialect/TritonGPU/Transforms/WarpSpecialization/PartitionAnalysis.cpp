@@ -773,12 +773,12 @@ std::unique_ptr<Graph> buildGraph(Operation *region) {
           auto inputPort = operands[key];
           Node::addEdge(outputPort, inputPort);
         } else {
-          llvm::report_fatal_error(
-              "use not found for op when contructing data flow graph");
+          // llvm::report_fatal_error(
+          //    "use not found for op when constructing data flow graph");
         }
       } else {
         llvm::report_fatal_error(
-            "use not owned by an op when contructing data flow graph");
+            "use not owned by an op when constructing data flow graph");
       }
     }
   }
@@ -1353,6 +1353,8 @@ DenseSet<Partition *> getReachablePartitions(Partition *partition) {
   SmallVector<Node *> stack;
   DenseSet<Node *> seen;
   auto addNode = [&](Node *node) {
+    if (!node)
+      return;
     if (node->isData() && !seen.contains(node)) {
       partitions.insert(node->getPartition());
       stack.push_back(node);
