@@ -539,6 +539,11 @@ Flags getNodeFlags(Node *node) {
   const auto &options = get_options();
   if (node->isOp()) {
     auto op = node->getOp();
+
+    // if it is manually tagged with a node type
+    if (op->hasAttr("store"))
+      return Flags::STORE;
+
     if (isa<tt::DescriptorLoadOp>(op) || isAsyncLoad(node))
       return Flags::LOAD;
     if (!options.disable_epilogue &&
