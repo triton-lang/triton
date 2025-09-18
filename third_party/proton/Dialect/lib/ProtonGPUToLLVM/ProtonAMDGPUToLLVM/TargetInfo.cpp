@@ -76,8 +76,9 @@ static Value getSEID(ConversionPatternRewriter &rewriter, Location loc) {
   return builder.launch(rewriter, loc, i32_ty, false);
 }
 
-// gfx942 has 8 XCDs, each XCD contains 40 CUs per XCD but only 38/40 are active (total of 304 CUs)
-// gfx950 has 8 XCDs, each XCD contains 36 CUs per XCD but only 32/36 active CUs (total 256 CUs)
+// gfx942 has 8 XCDs, each XCD contains 40 CUs per XCD but only 38/40 are active
+// (total of 304 CUs) gfx950 has 8 XCDs, each XCD contains 36 CUs per XCD but
+// only 32/36 active CUs (total 256 CUs)
 static uint32_t getCU_PER_XCD(llvm::AMDGPU::GPUKind GPUKind) {
   switch (GPUKind) {
   case llvm::AMDGPU::GK_GFX942:
@@ -110,6 +111,8 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
   llvm::AMDGPU::GPUKind GPUKind = llvm::AMDGPU::parseArchAMDGCN(this->arch);
   // For now only support gfx942, and gfx950
   switch (GPUKind) {
+  case llvm::AMDGPU::GK_GFX90A:
+    break;
   case llvm::AMDGPU::GK_GFX942:
   case llvm::AMDGPU::GK_GFX950:
     xcc_id = getXCCID(rewriter, loc);
