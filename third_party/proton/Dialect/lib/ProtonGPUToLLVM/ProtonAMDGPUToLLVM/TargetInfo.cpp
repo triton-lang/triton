@@ -111,8 +111,6 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
   llvm::AMDGPU::GPUKind GPUKind = llvm::AMDGPU::parseArchAMDGCN(this->arch);
   // For now only support gfx942, and gfx950
   switch (GPUKind) {
-  case llvm::AMDGPU::GK_GFX90A:
-    break;
   case llvm::AMDGPU::GK_GFX942:
   case llvm::AMDGPU::GK_GFX950:
     xcc_id = getXCCID(rewriter, loc);
