@@ -40,41 +40,49 @@ Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
   return b.mul(globalTimeVal, b.i64_val(10));
 }
 
-// TODO(crobeck): move these into a util file
+// https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/include/hip/amd_detail/amd_device_functions.h#L898
+// XCC_ID Register bit structure for gfx940-942, gfx950
+// XCC_ID      3:0     XCC the wave is assigned to.
 static Value getXCCID(ConversionPatternRewriter &rewriter, Location loc) {
   GCNBuilder builder;
   auto &gethwid = *builder.create("s_getreg_b32");
   auto xcc_id = builder.newOperand("=s");
-  // 0=HW_REG_XCC_ID_OFFSET, 3=HW_REG_XCC_ID_SIZE
-  auto xcc_reg = builder.newConstantOperand("hwreg(HW_REG_XCC_ID, 0, 3)");
+  // HW_REG_XCC_ID_OFFSET=0, HW_REG_XCC_ID_SIZE=4
+  auto xcc_reg = builder.newConstantOperand("hwreg(HW_REG_XCC_ID, 0, 4)");
   gethwid(xcc_id, xcc_reg);
   return builder.launch(rewriter, loc, i32_ty, false);
 }
 
+// HW_ID Register bit structure for GCN and CDNA
+// CU_ID       11:8    Compute Unit the wave is assigned to.
 static Value getCUID(ConversionPatternRewriter &rewriter, Location loc) {
   GCNBuilder builder;
   auto &gethwid = *builder.create("s_getreg_b32");
   auto cu_id = builder.newOperand("=s");
-  // 8=HW_ID_CU_ID_OFFSET, 4=HW_ID_CU_ID_SIZE
+  // HW_ID_CU_ID_OFFSET=8, HW_ID_CU_ID_SIZE=4
   auto hwreg = builder.newConstantOperand("hwreg(HW_REG_HW_ID, 8, 4)");
   gethwid(cu_id, hwreg);
   return builder.launch(rewriter, loc, i32_ty, false);
 }
-
+// SE_ID       15:13   Shader Engine the wave is assigned to for gfx940-942,
+// gfx950
 static Value getSEID(ConversionPatternRewriter &rewriter, Location loc) {
   GCNBuilder builder;
   auto &gethwid = *builder.create("s_getreg_b32");
   auto se_id = builder.newOperand("=s");
-  // 13=HW_ID_SE_ID_OFFSET, 3=HW_ID_SE_ID_SIZE
+  // HW_ID_SE_ID_OFFSET=13, HW_ID_SE_ID_SIZE=3
   auto hwreg = builder.newConstantOperand("hwreg(HW_REG_HW_ID, 13, 3)");
   gethwid(se_id, hwreg);
   return builder.launch(rewriter, loc, i32_ty, false);
 }
 
+// gfx942 has 8 XCDs, each XCD contains 40 CUs per XCD but only 38/40 are active
+// (total of 304 CUs) gfx950 has 8 XCDs, each XCD contains 36 CUs per XCD but
+// only 32/36 active CUs (total 256 CUs)
 static uint32_t getCU_PER_XCD(llvm::AMDGPU::GPUKind GPUKind) {
   switch (GPUKind) {
   case llvm::AMDGPU::GK_GFX942:
-    return 40;
+    return 38;
   case llvm::AMDGPU::GK_GFX950:
     return 32;
   default:
@@ -101,10 +109,8 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
 
   Value xcc_id = b.i32_val(0);
   llvm::AMDGPU::GPUKind GPUKind = llvm::AMDGPU::parseArchAMDGCN(this->arch);
-  // For now only support gfx90a, gfx942, and gfx950
+  // For now only support gfx942, and gfx950
   switch (GPUKind) {
-  case llvm::AMDGPU::GK_GFX90A:
-    break;
   case llvm::AMDGPU::GK_GFX942:
   case llvm::AMDGPU::GK_GFX950:
     xcc_id = getXCCID(rewriter, loc);
@@ -112,7 +118,7 @@ Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
   default:
     llvm::report_fatal_error("unsupported arch");
   }
-  // on gfx90a the local cu_id == global cu_id
+
   Value cu_id = getCUID(rewriter, loc); // local CU ID
   Value se_id = getSEID(rewriter, loc);
   builder.create<>("s_waitcnt lgkmcnt(0)")->operator()();
