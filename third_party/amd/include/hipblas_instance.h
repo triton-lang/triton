@@ -12,7 +12,7 @@
 constexpr int HIPBLAS_COMPUTE_32F_FAST_F8 = 104;
 constexpr int HIPBLAS_COMPUTE_32F_FAST_FBF_OCP = 105;
 
-class HipBlasLtInstance {
+class HipblasLtInstance {
   // Typedefs for hipblas functions
   typedef hipblasStatus_t (*hipblasLtCreate_t)(hipblasLtHandle_t *);
   typedef hipblasStatus_t (*hipblasLtDestroy_t)(hipblasLtHandle_t);
@@ -264,7 +264,7 @@ class HipBlasLtInstance {
   }
 
 public:
-  HipBlasLtInstance(uint64_t workspace, size_t workspaceSize)
+  HipblasLtInstance(uint64_t workspace, size_t workspaceSize)
       : workspace((void *)workspace), workspaceSize(workspaceSize) {
     loadHipBlasDylib();
     successOrExit(hipblasLtCreate(&ltHandle));
@@ -273,7 +273,7 @@ public:
         preference, HIPBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspaceSize,
         sizeof(workspaceSize)));
   }
-  ~HipBlasLtInstance() {
+  ~HipblasLtInstance() {
     if (preference)
       successOrExit(hipblasLtMatmulPreferenceDestroy(preference));
 

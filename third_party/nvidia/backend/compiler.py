@@ -302,14 +302,14 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         passes.ttgpuir.add_coalesce_async_copy(pm)
         nvidia.passes.ttnvgpuir.add_optimize_tmem_layouts(pm)
+        if capability // 10 >= 9:
+            nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         nvidia.passes.ttnvgpuir.add_interleave_tmem(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if capability // 10 >= 9:
-            nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
         nvidia.passes.ttnvgpuir.add_fence_insertion(pm, capability)
         nvidia.passes.ttnvgpuir.add_lower_mma(pm)
         passes.common.add_sccp(pm)

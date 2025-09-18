@@ -1217,7 +1217,8 @@ FailureOr<WmmaIntrinsic> chooseWmmaInstruction(Location loc, int wmmaVersion,
       wmmaVersion, mDim, nDim, inputKSize, aElemType, bElemType, cElemType);
   if (failed(maybeWmmaIntrinsic))
     return emitError(loc, "no matching matrix core intrinsic due to "
-                          "unsupported element type");
+                          "unsupported element type: A=")
+           << aElemType << " B=" << bElemType << " C=" << cElemType;
 
   kDim = maybeWmmaIntrinsic->kDim;
   assert(kDim != 0);

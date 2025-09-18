@@ -30,6 +30,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_mma,
     tcgen05_commit,
     tcgen05_copy,
+    float2,
 )
 
 THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
@@ -952,6 +953,62 @@ def test_padded_shared_layout_subslice(interval_pairs, shared_layout, slice_m_of
     kernel[(1, )](input, output, m, n, slice_m_offset, slice_n_offset, slice_m, slice_n, num_warps=num_warps)
 
     assert (output == ref_output).all()
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+@pytest.mark.parametrize("op, tol", [("add", 0), ("sub", 0), ("mul", 0), ("fma", 1e-6)])
+def test_float2(op, tol):
+    BLOCK_M = ttgl.constexpr(128)
+    BLOCK_N = ttgl.constexpr(128)
+    threads_per_warp = ttgl.constexpr(THREADS_PER_WARP)
+    op = ttgl.constexpr(op)
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout(
+            size_per_thread=[1, BLOCK_N],
+            threads_per_warp=[threads_per_warp, 1],
+            warps_per_cta=[ttgl.num_warps(), 1],
+            order=[0, 1],
+        )
+        offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, layout))[:, None]
+        offs_n = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, layout))[None, :]
+        a = ttgl.load(a_ptr + offs_m * BLOCK_N + offs_n)
+        b = ttgl.load(b_ptr + offs_m * BLOCK_N + offs_n)
+        c = ttgl.load(c_ptr + offs_m * BLOCK_N + offs_n)
+        a = float2.pack(a, axis=1)
+        b = float2.pack(b, axis=1)
+        c = float2.pack(c, axis=1)
+
+        if op == "add":
+            out = a + b
+        elif op == "sub":
+            out = a - b
+        elif op == "mul":
+            out = a * b
+        elif op == "fma":
+            out = float2.fma(a, b, c)
+
+        out = float2.unpack(out, axis=1)
+        ttgl.store(out_ptr + offs_m * BLOCK_N + offs_n, out)
+
+    torch.manual_seed(0)
+    shape = [BLOCK_M.value, BLOCK_N.value]
+    a = torch.rand(shape, dtype=torch.float32, device="cuda")
+    b = torch.rand(shape, dtype=torch.float32, device="cuda")
+    c = torch.rand(shape, dtype=torch.float32, device="cuda")
+    out = torch.empty(shape, dtype=torch.float32, device="cuda")
+
+    kernel[(1, )](a, b, c, out)
+    if op == "add":
+        ref = a + b
+    elif op == "sub":
+        ref = a - b
+    elif op == "mul":
+        ref = a * b
+    elif op == "fma":
+        ref = a * b + c
+    torch.testing.assert_close(ref, out, atol=tol, rtol=tol)
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
