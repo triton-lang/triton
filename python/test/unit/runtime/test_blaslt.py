@@ -23,7 +23,7 @@ def test_blaslt(m, n, k, dtype_str, device):
         if dtype_str == "float8_e4m3fn" and not is_hip_cdna4():
             pytest.skip("float8_e4m3fn is only supported on HIP CDNA4")
         c_dtype = torch.float16 if dtype_str in ("float8_e4m3fnuz", "float8_e4m3fn") else dtype
-        make_handle = lambda workspace: vendor.hipblas.HipBlasLt(workspace)
+        make_handle = lambda workspace: vendor.hipblas.HipblasLt(workspace)
     else:
         pytest.skip("test_blaslt is only supported on CUDA or HIP")
 
