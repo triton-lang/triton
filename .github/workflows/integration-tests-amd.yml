@@ -81,8 +81,8 @@ jobs:
             ~/.triton/nvidia
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
-      - name: Install ccache
-        run: apt-get install -y ccache
+      - name: Install dependencies
+        run: apt-get install -y clang ccache
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
