@@ -107,7 +107,7 @@ def make_default_opt_flags_amd(
         epilogue_subtile = 1
 
     # specific configs for F16 x MXFP4 on MI355
-    # Notice these configs will exceed LDS usage with async copy enabled
+    # Note that these configs will exceed LDS usage with async copy enabled
     if is_cdna4 and bitwidth(lhs_dtype) == 16 and bitwidth(rhs_dtype) == 4 and precision_config.weight_scale is not None:
         split_k = 1
         if m <= 1024:
