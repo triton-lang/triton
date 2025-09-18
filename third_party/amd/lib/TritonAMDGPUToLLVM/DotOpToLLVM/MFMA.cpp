@@ -241,11 +241,11 @@ struct DotOpMFMAConversionHelper {
     auto setPrioOp = dyn_cast_or_null<ROCDL::SetPrioOp>(op->getPrevNode());
 
     auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
-    auto mnkDim = mfmaLayout.getInstrShape();
-    auto mDim = mnkDim[0];
-    auto nDim = mnkDim[1];
-    auto kDim = mnkDim[2];
+    auto mDim = mfmaLayout.getInstrShape()[0];
+    auto nDim = mfmaLayout.getInstrShape()[1];
     auto mfmaVersion = mfmaLayout.getVersion();
+    assert((mDim == nDim && (mDim == 32 || mDim == 16)) ||
+           (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
 
     Value a = op.getA();
     Value b = op.getB();
@@ -256,33 +256,36 @@ struct DotOpMFMAConversionHelper {
     auto elemTyA = aTensorTy.getElementType();
     auto elemTyB = bTensorTy.getElementType();
 
+    const auto kDimOperandSize = aTensorTy.getShape().back();
+
     bool allowXF32 =
         op.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
     StringRef intrinsicName;
     FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic = MfmaIntrinsic::selectFor(
-        op.getLoc(), mfmaVersion, mDim, nDim, kDim, elemTyA, elemTyB,
+        op.getLoc(), mfmaVersion, mDim, nDim, kDimOperandSize, elemTyA, elemTyB,
         /*withScale=*/false, allowXF32);
     if (failed(maybeMfmaIntrinsic))
       return op.emitError(
           "no matching matrix core intrinsic due to unsupported element type");
-    intrinsicName = maybeMfmaIntrinsic->name;
+
     unsigned kBase = maybeMfmaIntrinsic->kBase;
 
     auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
     auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
-    auto kWidth = aEncoding.getKWidth();
+    int kWidth = aEncoding.getKWidth();
+
+    intrinsicName = maybeMfmaIntrinsic->name;
 
     // If we are using XF32, the kWidth (and kBase) is double that of F32.
     if (aTensorTy.getElementType().isF32() && allowXF32)
       kWidth *= 2;
 
-    auto kPack = std::max(1u, kWidth / kBase);
-    auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kPack, 0);
-    auto repB = mfmaLayout.getRepForOperand(bTensorTy.getShape(), kPack, 1);
-    assert(repA[2] == repB[1]);
+    const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(kWidth, 0)[1];
 
-    auto kDimOperandSize = aTensorTy.getShape().back();
-    auto kDimInstrSize = kDim * kPack;
+    auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kWidth, 0);
+    auto repB = mfmaLayout.getRepForOperand(bTensorTy.getShape(), kWidth, 1);
+
+    assert(repA[2] == repB[1]);
 
     Value loadedA = adaptor.getA();
     Value loadedB = adaptor.getB();
@@ -575,11 +578,11 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     auto setPrioOp = dyn_cast_or_null<ROCDL::SetPrioOp>(op->getPrevNode());
 
     auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
-    auto mnkDim = mfmaLayout.getInstrShape();
-    auto mDim = mnkDim[0];
-    auto nDim = mnkDim[1];
-    auto kDim = mnkDim[2];
+    auto mDim = mfmaLayout.getInstrShape()[0];
+    auto nDim = mfmaLayout.getInstrShape()[1];
     auto mfmaVersion = mfmaLayout.getVersion();
+    assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
+           (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
 
     Value a = op.getA();
     Value b = op.getB();
@@ -602,8 +605,6 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     auto elemTyB = bTensorTy.getElementType();
     ScaleDotElemType aElemType = op.getAElemType();
     ScaleDotElemType bElemType = op.getBElemType();
-    auto isAFp4 = (aElemType == ScaleDotElemType::E2M1);
-    auto isBFp4 = (bElemType == ScaleDotElemType::E2M1);
 
     auto supportsTypes = [](ScaleDotElemType elemType) {
       return elemType == ScaleDotElemType::E2M1 ||
@@ -615,42 +616,35 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
       llvm::report_fatal_error("NYI: mxfp6\n");
     }
 
+    int64_t kDimOperandSize = aTensorTy.getShape().back();
+
     auto ctx = op.getContext();
     constexpr bool allowXF32 = false;
-    FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic =
-        MfmaIntrinsic::selectFor(op.getLoc(), mfmaVersion, mDim, nDim, kDim,
-                                 scaleDotElemTypeToMLIRType(ctx, aElemType),
-                                 scaleDotElemTypeToMLIRType(ctx, bElemType),
-                                 /*withScale=*/true, allowXF32);
+    FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic = MfmaIntrinsic::selectFor(
+        op.getLoc(), mfmaVersion, mDim, nDim,
+        aElemType == ScaleDotElemType::E2M1 ? kDimOperandSize * 2
+                                            : kDimOperandSize,
+        scaleDotElemTypeToMLIRType(ctx, aElemType),
+        scaleDotElemTypeToMLIRType(ctx, bElemType),
+        /*withScale=*/true, allowXF32);
     if (failed(maybeMfmaIntrinsic))
       return op.emitError(
           "no matching matrix core intrinsic due to unsupported element type");
 
     StringRef intrinsicName = maybeMfmaIntrinsic->name;
     unsigned kBase = maybeMfmaIntrinsic->kBase;
+    // Two fp4 are packed into an uint8.
+    unsigned aKBase = aElemType == ScaleDotElemType::E2M1 ? kBase / 2 : kBase;
+    unsigned bKBase = bElemType == ScaleDotElemType::E2M1 ? kBase / 2 : kBase;
 
-    // Unpack fp4 from uint8 to restore the tensor shape
-    auto shapeA = SmallVector<int64_t>(aTensorTy.getShape());
-    auto shapeB = SmallVector<int64_t>(bTensorTy.getShape());
-    if (isAFp4)
-      shapeA[shapeA.size() - 1] *= 2;
-    if (isBFp4)
-      shapeB[shapeB.size() - 2] *= 2;
+    int aKWidth = aKBase;
+    int bKWidth = bKBase;
 
-    // Pack kBase
-    auto aKBase = isAFp4 ? kBase / 2 : kBase;
-    auto bKBase = isBFp4 ? kBase / 2 : kBase;
+    const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(aKBase, 0)[1];
 
-    // Assume kWidth is always kBase
-    auto aKWidth = aKBase;
-    auto bKWidth = bKBase;
-
-    auto repA = mfmaLayout.getRepForOperand(shapeA, 1, 0);
-    auto repB = mfmaLayout.getRepForOperand(shapeB, 1, 1);
+    auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), aKWidth, 0);
+    auto repB = mfmaLayout.getRepForOperand(bTensorTy.getShape(), bKWidth, 1);
     assert(repA[2] == repB[1]);
-
-    auto kDimInstrSize = kDim;
-    auto kDimOperandSize = shapeA.back();
 
     // For fp4 scaled mfma, each thread takes 1 element from scale. Will have
     // better way to get it when adapting other data types. Similar to

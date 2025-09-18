@@ -61,11 +61,7 @@ class AMDMFMALayout(DistributedLayout):
         if self.element_bitwidth is None:
             object.__setattr__(self, "element_bitwidth", 32)
 
-        rank = len(self.warps_per_cta)
-        _realize_cta_layout(self, rank)
-        assert len(self.ctas_per_cga) == rank
-        assert len(self.cta_split_num) == rank
-        assert len(self.cta_order) == rank
+        self.verify()
 
     def _to_ir(self, builder):
         return builder.get_amd_mfma_layout(self.version, self.warps_per_cta, self.instr_shape, self.transposed,
@@ -80,6 +76,18 @@ class AMDMFMALayout(DistributedLayout):
             return "_".join(map(str, x))
 
         return f"MFMA_{self.version}_{stringify(self.warps_per_cta)}_{stringify(self.instr_shape)}_{self.transposed}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_{stringify(self.tiles_per_warp)}_{self.element_bitwidth}_MFMA"
+
+    def verify(self):
+        assert self.version >= 1 and self.version <= 4, "version must be in the [1, 4] range"
+        valid_shapes = [[32, 32], [16, 16], [64, 4], [4, 64]]
+        assert self.instr_shape in valid_shapes, "invalid intrinsic shape; accepted shapes are " + str(valid_shapes)
+        assert self.element_bitwidth in [32, 64], "element bitwidth must be 32 or 64"
+
+        rank = len(self.warps_per_cta)
+        _realize_cta_layout(self, rank)
+        assert len(self.ctas_per_cga) == rank
+        assert len(self.cta_split_num) == rank
+        assert len(self.cta_order) == rank
 
     def __hash__(self):
         return hash((
