@@ -508,15 +508,15 @@ void init_triton_amd(py::module &&m) {
   });
 
   auto hipBlas = m.def_submodule("hipblas");
-  py::class_<HipBlasLtInstance>(hipBlas, "HipBlasLt")
+  py::class_<HipblasLtInstance>(hipBlas, "HipblasLt")
       .def(py::init<>([&](py::object &workspace) {
         auto wrk_ptr = workspace.attr("data_ptr")().cast<uint64_t>();
         auto wrk_size = workspace.attr("numel")().cast<size_t>() *
                         workspace.attr("element_size")().cast<size_t>();
-        return new HipBlasLtInstance(wrk_ptr, wrk_size);
+        return new HipblasLtInstance(wrk_ptr, wrk_size);
       }))
       .def("matmul",
-           [](HipBlasLtInstance &self, py::object &A, py::object &B,
+           [](HipblasLtInstance &self, py::object &A, py::object &B,
               py::object &C) {
              auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
              auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
@@ -525,7 +525,7 @@ void init_triton_amd(py::module &&m) {
              self.matmul(init.m, init.n, init.k, A_ptr, B_ptr, C_ptr,
                          init.dtype);
            })
-      .def("gemm", [](HipBlasLtInstance &self, py::object &A, py::object &B,
+      .def("gemm", [](HipblasLtInstance &self, py::object &A, py::object &B,
                       py::object &C, py::object &D, float alpha, float beta) {
         auto A_ptr = A.attr("data_ptr")().cast<uint64_t>();
         auto B_ptr = B.attr("data_ptr")().cast<uint64_t>();
