@@ -81,6 +81,8 @@ jobs:
             ~/.triton/nvidia
             ~/.triton/json
           key: ${{ runner.os }}-${{ runner.arch }}-llvm-${{ steps.cache-key.outputs.llvm }}-nvidia-${{ steps.cache-key.outputs.nvidia }}-json-${{ steps.cache-key.outputs.json }}
+      - name: Install ccache
+        run: apt-get install ccache
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
@@ -88,7 +90,7 @@ jobs:
 
           mkdir -p ~/.ccache
           du -h -d 1 ~/.ccache
-      - name: Update compiler to clang
+      - name: Update compiler to Clang
         run: |
           export CC=/usr/bin/clang
           export CXX=/usr/bin/clang++
@@ -100,13 +102,13 @@ jobs:
 
           ccache --zero-stats
           make dev-install
-      - name: CCache Stats
+      - name: Print ccache stats
         run: ccache --print-stats
       - name: Run lit tests
         run: make test-lit
       - name: Run C++ unittests
         run: make test-cpp
-      - name: Run python tests on AMD
+      - name: Run Python tests on AMD
         run: |
           INSTRUMENTATION_LIB_DIR="${GITHUB_WORKSPACE}/python/triton/instrumentation"
           if [ ! -d "${INSTRUMENTATION_LIB_DIR}" ]; then
