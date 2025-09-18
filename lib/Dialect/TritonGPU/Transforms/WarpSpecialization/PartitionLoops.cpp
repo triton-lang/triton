@@ -312,6 +312,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
                      const PartitionSet &partitions) {
   for (auto &op_ : *block) {
     auto op = &op_;
+    auto partitionIndices = getPartitionIds(op, partitions.getNumPartitions());
 
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       cloneForOp(forOp, builders, partitions);
@@ -323,9 +324,6 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
       if (yieldOp.getOperands().empty()) {
         continue;
       }
-
-      auto partitionIndices =
-          getPartitionIds(op, partitions.getNumPartitions());
 
       for (size_t idx : partitionIndices) {
         auto &builder = builders[idx];
@@ -357,8 +355,6 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
         }
       }
     } else {
-      auto partitionIndices =
-          getPartitionIds(op, partitions.getNumPartitions());
       cloneOp(op, builders, partitionIndices);
     }
   }
