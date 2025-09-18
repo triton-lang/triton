@@ -89,17 +89,19 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: to
     tensor = tensor.transpose(axis, tensor.ndim - 1).contiguous()
     scale = scale.transpose(axis, scale.ndim - 1).contiguous()
     out = torch.empty((*tensor.shape[:-1], logical_quant_dim), dtype=target_dtype, device=tensor.device)
-    reshaped_out = out.view(-1, out.shape[-1])
-    reshaped_tensor = tensor.view(-1, tensor.shape[-1])
-    reshaped_scale = scale.view(-1, scale.shape[-1])
-    BLOCK_OUT_DIM = 128
-    BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value
-    blocks_out_dim = triton.cdiv(reshaped_out.shape[0], BLOCK_OUT_DIM)
-    blocks_quant_dim = triton.cdiv(reshaped_out.shape[1], BLOCK_QUANT_DIM)
-    _upcast_from_mxfp[(blocks_out_dim, blocks_quant_dim)](reshaped_out, *reshaped_out.stride(), reshaped_scale,
-                                                          *reshaped_scale.stride(), reshaped_tensor,
-                                                          *reshaped_tensor.stride(), *reshaped_out.shape, BLOCK_OUT_DIM,
-                                                          BLOCK_QUANT_DIM, num_warps=8)
+
+    if tensor.numel() > 0:
+        reshaped_out = out.view(-1, out.shape[-1])
+        reshaped_tensor = tensor.view(-1, tensor.shape[-1])
+        reshaped_scale = scale.view(-1, scale.shape[-1])
+        BLOCK_OUT_DIM = 128
+        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value
+        blocks_out_dim = triton.cdiv(reshaped_out.shape[0], BLOCK_OUT_DIM)
+        blocks_quant_dim = triton.cdiv(reshaped_out.shape[1], BLOCK_QUANT_DIM)
+        _upcast_from_mxfp[(blocks_out_dim, blocks_quant_dim)](reshaped_out, *reshaped_out.stride(), reshaped_scale,
+                                                              *reshaped_scale.stride(), reshaped_tensor,
+                                                              *reshaped_tensor.stride(), *reshaped_out.shape, BLOCK_OUT_DIM,
+                                                              BLOCK_QUANT_DIM, num_warps=8)
     out = out.transpose(axis, scale.ndim - 1).contiguous()
     return out
 
@@ -217,7 +219,13 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
         mantissas = torch.where(exponents < E8_BIAS, (0x400000 | right_shift_unsigned(mantissas, 1)) >>
                                 (E8_BIAS - exponents - 1), mantissas)
         exponents = torch.maximum(exponents, torch.tensor(E8_BIAS - E2_BIAS, device=device)) - (E8_BIAS - E2_BIAS)
-        e2m1_tmp = right_shift_unsigned(((exponents << 2) | right_shift_unsigned(mantissas, 21)) + 1, 1)
+        # Round to nearest, ties to even (RTNE)
+        m2bits = right_shift_unsigned(mantissas, 21) & 0x3
+        lsb_keep = right_shift_unsigned(m2bits, 1) & 0x1
+        guard = m2bits & 0x1
+        sticky = (mantissas & ((1 << 21) - 1)) != 0
+        round_inc = guard & (sticky.to(torch.int32) | lsb_keep)
+        e2m1_tmp = right_shift_unsigned(((exponents << 2) | m2bits) + round_inc, 1)
         e2m1_tmp = torch.minimum(e2m1_tmp, torch.tensor(0x7, device=device))
         e2m1_value = (right_shift_unsigned(signs, 28) | e2m1_tmp).to(torch.uint8)  # shape: (..., even_axis_shape)
 
@@ -249,7 +257,7 @@ def cvt_e2m1_to_fp32(input_tensor):
     even_floats = outputs[evens]
     odd_floats = outputs[odds]
     output_tensor = torch.stack([even_floats, odd_floats], dim=-1)
-    output_tensor = output_tensor.view(*input_tensor.shape[:-1], -1)
+    output_tensor = output_tensor.view(*input_tensor.shape[:-1], input_tensor.shape[-1] * 2)
     return output_tensor
 
 

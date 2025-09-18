@@ -36,30 +36,34 @@ class TensorMemoryLayout:
 
     Args:
         block (Tuple[int, int]): Tiling block dimensions (M/rows, N/cols).
-        unpacked (bool): For sub-32 bit elements, whether they are unpacked to 32 bits.
+        col_stride (int): Number of 32-bit columns to advance between logically
+            adjacent columns. Packed layouts use a stride of 1. Unpacked
+            layouts use ``32 / bitwidth``.
         cta_split_num (Optional[Tuple[int, int]]): CTA split factors. Defaults to None.
     """
     block: Tuple[int, int]
-    unpacked: bool
+    col_stride: int
     cta_split_num: Optional[Tuple[int, int]] = None
 
     def __post_init__(self):
         assert len(self.block) == 2
         assert self.cta_split_num is None or len(self.cta_split_num) == 2
+        assert self.col_stride >= 1 and (self.col_stride &
+                                         (self.col_stride - 1)) == 0, "tensor memory col_stride must be a power of two"
 
     def _to_ir(self, builder):
         cta_split_num = self.cta_split_num or [1, 1]
         return builder.get_tensor_memory_layout(
             self.block,
-            self.unpacked,
+            self.col_stride,
             cta_split_num,
         )
 
     def mangle(self) -> str:
         block_str = f"{self.block[0]}x{self.block[1]}"
-        unpacked_str = "U" if self.unpacked else "P"
-        cta_split_str = f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else ""
-        return f"TL{block_str}{unpacked_str}{cta_split_str}TL"
+        stride_str = f"C{self.col_stride}"
+        cta_split_str = (f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else "")
+        return f"TL{block_str}{stride_str}{cta_split_str}TL"
 
 
 @dataclass(frozen=True, eq=True)
@@ -250,8 +254,11 @@ class tensor_memory_descriptor(base_value):
         _check(isinstance(length, int), lambda: "length must be a constant int")
         shape = self.shape[:-1] + [length]
         layout = self.type.layout
-        layout = TensorMemoryLayout((layout.block[0], min(layout.block[1], length)), layout.unpacked,
-                                    layout.cta_split_num)
+        layout = TensorMemoryLayout(
+            (layout.block[0], min(layout.block[1], length)),
+            layout.col_stride,
+            layout.cta_split_num,
+        )
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
         builder = _semantic.builder
         ret.handle = builder.create_tmem_subslice(ret.type.to_ir(builder), self.handle, start)

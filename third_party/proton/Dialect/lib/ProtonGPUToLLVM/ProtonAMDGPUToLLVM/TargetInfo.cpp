@@ -27,7 +27,20 @@ Value TargetInfo::clock(ConversionPatternRewriter &rewriter, Location loc,
   return clockVal;
 }
 
-// ttps://github.com/triton-lang/triton/blob/main/third_party/amd/backend/include/hip/amd_detail/amd_device_functions.h#L898
+Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
+                             Location loc) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  StringRef globalTimeIntrinsicName = "llvm.amdgcn.s.memrealtime";
+  Value globalTimeVal = LLVM::createLLVMIntrinsicCallOp(
+                            rewriter, loc, globalTimeIntrinsicName, i64_ty, {})
+                            .getResult(0);
+  // The clock-generator runs at 100 MHz ==> 10 ns per clock.
+  // Reference: Section 3.4.11 in the RDNA4 ISA manual
+  // https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/instruction-set-architectures/rdna4-instruction-set-architecture.pdf
+  return b.mul(globalTimeVal, b.i64_val(10));
+}
+
+// https://github.com/triton-lang/triton/blob/main/third_party/amd/backend/include/hip/amd_detail/amd_device_functions.h#L898
 // XCC_ID Register bit structure for gfx940-942, gfx950
 // XCC_ID      3:0     XCC the wave is assigned to.
 static Value getXCCID(ConversionPatternRewriter &rewriter, Location loc) {
@@ -63,10 +76,12 @@ static Value getSEID(ConversionPatternRewriter &rewriter, Location loc) {
   return builder.launch(rewriter, loc, i32_ty, false);
 }
 
+// gfx942 has 8 XCDs, each XCD contains 40 CUs per XCD but only 38/40 are active (total of 304 CUs)
+// gfx950 has 8 XCDs, each XCD contains 36 CUs per XCD but only 32/36 active CUs (total 256 CUs)
 static uint32_t getCU_PER_XCD(llvm::AMDGPU::GPUKind GPUKind) {
   switch (GPUKind) {
   case llvm::AMDGPU::GK_GFX942:
-    return 40;
+    return 38;
   case llvm::AMDGPU::GK_GFX950:
     return 32;
   default:
