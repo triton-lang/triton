@@ -169,15 +169,10 @@ def make_default_opt_flags_nvidia(
         block_m = 128
     else:
         if tokens_per_expt <= 64:
-            # likely memory bound. set the block size higher to ensure we do not frequently load weights
-            # more than once.
-            quantile = 1.036 # normal distribution quantile for 85%; from scipy.stats import norm; norm.ppf(0.85)
-            p = routing_data.n_expts_act / routing_data.n_expts_tot
-            std_dev = sqrt(m * p * (1 - p))  # std dev of binomial distribution
-            tokens_per_expt_block = triton.next_power_of_2(int(tokens_per_expt + std_dev * quantile))
+            # Likely memory bound; set the block size higher to minimize loading weights more than once.
+            block_m = max(16, min(2 * triton.next_power_of_2(tokens_per_expt), 64))
         else:
-            tokens_per_expt_block = triton.next_power_of_2(tokens_per_expt)
-        block_m = max(16, min(triton.next_power_of_2(tokens_per_expt_block), 128))
+            block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
     # block n
     arch = None
     block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
