@@ -169,7 +169,7 @@ def make_default_opt_flags_nvidia(
     else:
         if tokens_per_expt <= 64 and routing_data is not None:
             # Likely memory bound; set the block size higher to minimize loading weights more than once.
-            block_m = max(16, min(2 * triton.next_power_of_2(tokens_per_expt), 64))
+            block_m = max(16, min(triton.next_power_of_2(2 * tokens_per_expt), 64))
         else:
             block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
     # block n
