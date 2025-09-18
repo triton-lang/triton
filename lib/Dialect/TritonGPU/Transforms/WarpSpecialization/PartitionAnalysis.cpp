@@ -2480,7 +2480,7 @@ void PartitionAnalysis::runOnOperation() {
   //   - or Module op if none found
   SmallVector<Operation *> ops;
   getOperation().walk([&](scf::ForOp op) {
-    if (op->hasAttr("nvws.warp-specialize"))
+    if (op->hasAttr("tt.warp_specialize"))
       ops.push_back(op);
   });
   if (ops.empty())
