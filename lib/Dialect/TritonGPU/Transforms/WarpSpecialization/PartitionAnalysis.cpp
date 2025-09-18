@@ -926,22 +926,26 @@ bool deserializeManualPartitions(Operation *region, Graph *graph) {
     if (node->isOp()) {
       auto op = node->getOp();
       if (op->hasAttr(kPartitionAttrName)) {
-        auto id = cast<IntegerAttr>(op->getAttr(kPartitionAttrName)).getInt();
-        if (manual_partitions.find(id) == manual_partitions.end()) {
-          auto partition = graph->addPartition();
-          partition->addFlag(Flags::MANUAL);
-          partition->name = std::to_string(id);
-          manual_partitions[id] = partition;
+        auto partitionIds =
+            cast<DenseI32ArrayAttr>(op->getAttr(kPartitionAttrName))
+                .asArrayRef();
+        for (auto id : partitionIds) {
+          if (manual_partitions.find(id) == manual_partitions.end()) {
+            auto partition = graph->addPartition();
+            partition->addFlag(Flags::MANUAL);
+            partition->name = std::to_string(id);
+            manual_partitions[id] = partition;
 
-          if (options.dump) {
-            std::cout << "deserialize manual partition:";
-            partition->dump();
+            if (options.dump) {
+              std::cout << "deserialize manual partition:";
+              partition->dump();
+            }
           }
+          node->addPartition(manual_partitions[id]);
         }
-        node->addPartition(manual_partitions[id]);
 
         // FIXME: Remove partition attribute - it's replaced with tt.partitions
-        op->removeAttr(kPartitionAttrName);
+        // op->removeAttr(kPartitionAttrName);
       }
     }
   });
