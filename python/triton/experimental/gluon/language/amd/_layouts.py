@@ -80,7 +80,7 @@ class AMDMFMALayout(DistributedLayout):
     def verify(self):
         assert self.version >= 1 and self.version <= 4, "version must be in the [1, 4] range"
         valid_shapes = [[32, 32], [16, 16], [64, 4], [4, 64]]
-        assert self.instr_shape in valid_shapes, "invalid intrinsic shape; accepted shapes are " + str(valid_shapes)
+        assert self.instr_shape[0:2] in valid_shapes, "invalid intrinsic shape; accepted shapes are " + str(valid_shapes)
         assert self.element_bitwidth in [32, 64], "element bitwidth must be 32 or 64"
 
         rank = len(self.warps_per_cta)
