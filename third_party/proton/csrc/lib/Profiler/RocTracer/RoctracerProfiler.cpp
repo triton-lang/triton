@@ -414,4 +414,13 @@ RoctracerProfiler::RoctracerProfiler() {
 
 RoctracerProfiler::~RoctracerProfiler() = default;
 
+void RoctracerProfiler::doSetMode(
+    const std::vector<std::string> &modeAndOptions) {
+  auto mode = modeAndOptions[0];
+  if (!mode.empty()) {
+    throw std::invalid_argument(
+        "[PROTON] RoctracerProfiler: unsupported mode: " + mode);
+  }
+}
+
 } // namespace proton

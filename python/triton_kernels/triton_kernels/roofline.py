@@ -1,11 +1,12 @@
 import ctypes
 import matplotlib.pyplot as plt
 import triton
-from triton._C.libtriton import nvidia
+from triton._C.libtriton import nvidia, amd
 import torch
 import csv
 from dataclasses import dataclass
 import inspect
+from .target_info import is_hip, is_cuda
 
 
 @dataclass
@@ -84,23 +85,48 @@ def compute_roofline(*args, \
 
 
 def get_memset_tbps():
-    # Measure device memory set bandwidth using CUDA driver API (cuMemsetD8Async)
-    if torch.version.cuda is None:
-        raise RuntimeError("get_memset_tbps is only supported on CUDA")
-    # load cuda
-    cuda = ctypes.CDLL("libcuda.so")
-    cuda.cuInit.argtypes = [ctypes.c_uint]
-    cuda.cuInit.restype = ctypes.c_int
-    if cuda.cuInit(0) != 0:
-        raise RuntimeError("cuInit failed")
-    # initialize cuMemsetD8Async
-    cuda.cuMemsetD8Async.argtypes = [ctypes.c_uint64, ctypes.c_ubyte, ctypes.c_size_t, ctypes.c_void_p]
-    cuda.cuMemsetD8Async.restype = ctypes.c_int
-    # benchmark `cuMemsetD8Async`
     n_bytes = 1 << 32
     buf = torch.empty(n_bytes, device="cuda", dtype=torch.uint8)
-    dptr = ctypes.c_uint64(buf.data_ptr())
-    fn = lambda: cuda.cuMemsetD8Async(dptr, ctypes.c_ubyte(0), ctypes.c_size_t(n_bytes), ctypes.c_void_p(0))
+    stream0 = ctypes.c_void_p(0)
+
+    if is_cuda():
+        libname = "libcuda.so"
+        init_name = "cuInit"
+        memset_name = "cuMemsetD8Async"
+        memset_argtypes = [ctypes.c_uint64, ctypes.c_ubyte, ctypes.c_size_t, ctypes.c_void_p]
+        dptr = ctypes.c_uint64(buf.data_ptr())
+        value = ctypes.c_ubyte(0)
+    elif is_hip():
+        libname = "libamdhip64.so"
+        init_name = "hipInit"
+        memset_name = "hipMemsetAsync"
+        memset_argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t, ctypes.c_void_p]
+        dptr = ctypes.c_void_p(buf.data_ptr())
+        value = ctypes.c_int(0)
+    else:
+        raise RuntimeError("Unsupported platform: neither CUDA nor ROCm detected")
+
+    lib = ctypes.CDLL(libname)
+
+    # optional init
+    if hasattr(lib, init_name):
+        init_fn = getattr(lib, init_name)
+        init_fn.argtypes = [ctypes.c_uint]
+        init_fn.restype = ctypes.c_int
+        init_fn(0)
+
+    if not hasattr(lib, memset_name):
+        raise RuntimeError(f"{memset_name} not found in {libname}")
+
+    memset_fn = getattr(lib, memset_name)
+    memset_fn.argtypes = memset_argtypes
+    memset_fn.restype = ctypes.c_int
+
+    def fn():
+        err = memset_fn(dptr, value, ctypes.c_size_t(n_bytes), stream0)
+        if err != 0:
+            raise RuntimeError(f"{memset_name} failed with error {err}")
+
     time_ms = triton.testing.do_bench(fn, rep=1000)
     tbps = (n_bytes / (time_ms * 1e-3)) * 1e-12
     return tbps
@@ -109,13 +135,20 @@ def get_memset_tbps():
 def get_cublas_tflops(dtype):
     dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[dtype]
     cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
-    cublas = nvidia.cublas.CublasLt(cublas_workspace)
+    if is_cuda():
+        cublas = nvidia.cublas.CublasLt(cublas_workspace)
+        bench_fn = cublas.matmul
+    elif is_hip():
+        hipblas = amd.hipblas.HipblasLt(cublas_workspace)
+        bench_fn = hipblas.matmul
+    else:
+        raise RuntimeError("Unsupported platform: neither CUDA nor ROCm detected")
     device = "cuda"
     M, N, K = 8192, 8192, 8192
     a = torch.randn(M, K, device=device, dtype=torch.float32).to(dtype)
     b = torch.randn(K, N, device=device, dtype=torch.float32).to(dtype).T
     c = torch.empty((M, N), device=device, dtype=dtype)
-    time_ms = triton.testing.do_bench(lambda: cublas.matmul(a, b, c), rep=1000)
+    time_ms = triton.testing.do_bench(lambda: bench_fn(a, b, c), rep=1000)
     return 2 * M * N * K / time_ms * 1e-9
 
 

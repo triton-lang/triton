@@ -896,10 +896,10 @@ def test_layout_mangling():
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @kernel() attributes {noinline = false} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<32x32xi32, #shared, #smem, mutable>
-    tt.call @"test_frontend.smem_and_layout_user__MDi32S32_32SLSSS_1_1_1_1_0_1_1_1_1_1_0_SSSLAS[32, 32]ASMD__(1,)cconstexpr_SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(1 ,0), ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"(%0) : (!ttg.memdesc<32x32xi32, #shared, #smem, mutable>) -> ()
+    tt.call @"test_frontend.smem_and_layout_user__MDi32S32_32SLSSS_1_1_1_1_0_1_1_1_1_1_0_SSSLAS[32, 32]ASMD__(1,)cconstexpr_SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(1, 0), ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"(%0) : (!ttg.memdesc<32x32xi32, #shared, #smem, mutable>) -> ()
     tt.return
   }
-  tt.func private @"test_frontend.smem_and_layout_user__MDi32S32_32SLSSS_1_1_1_1_0_1_1_1_1_1_0_SSSLAS[32, 32]ASMD__(1,)cconstexpr_SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(1 ,0), ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"(%arg0: !ttg.memdesc<32x32xi32, #shared, #smem, mutable>) attributes {noinline = false} {
+  tt.func private @"test_frontend.smem_and_layout_user__MDi32S32_32SLSSS_1_1_1_1_0_1_1_1_1_1_0_SSSLAS[32, 32]ASMD__(1,)cconstexpr_SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=(1, 0), ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"(%arg0: !ttg.memdesc<32x32xi32, #shared, #smem, mutable>) attributes {noinline = false} {
     tt.return
   }
 }
@@ -1333,6 +1333,97 @@ def static_assert_kernel():
 def test_static_assert():
     with pytest.raises(CompileTimeAssertionFailure):
         run_parser(static_assert_kernel)
+
+
+@pytest.mark.parametrize("reg_layout, shared_layout, shape, bitwidth, ref_conflicts", [
+    (ttgl.BlockedLayout([1], [32], [4], [0]), ttgl.SwizzledSharedLayout(1, 1, 1, order=[0]), [32], 32, 0),
+    (ttgl.BlockedLayout([1], [32], [4], [0]), ttgl.SwizzledSharedLayout(1, 1, 1, order=[0]), [32], 16, 0),
+    # MMAv3 accumulator tile lowered with the 128B swizzle (WGMMA default path).
+    (ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16]),
+     ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2), [128, 128], 16, 0),
+    # Small-M tiles disable swizzling entirely.
+    # MMAv2 rhs operand emitted with the 64B swizzle.
+    (ttgl.DotOperandLayout(
+        operand_index=1, parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[1, 4], instr_shape=[16, 8]),
+        k_width=2), ttgl.NVMMASharedLayout(swizzle_byte_width=64, element_bitwidth=16, rank=2), [64, 32], 16, 0),
+    # MMAv2 lhs operand uses the transposed 64B swizzle flavour.
+    (ttgl.DotOperandLayout(
+        operand_index=0, parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[1, 4], instr_shape=[16, 8]),
+        k_width=2), ttgl.NVMMASharedLayout(swizzle_byte_width=64, element_bitwidth=16, rank=2,
+                                           transposed=True), [32, 64], 16, 0),
+    # int8 tensor-core tiles follow the 32B swizzle path.
+    (ttgl.DotOperandLayout(
+        operand_index=1, parent=ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[1, 4], instr_shape=[16, 8]),
+        k_width=1), ttgl.NVMMASharedLayout(swizzle_byte_width=32, element_bitwidth=8, rank=2), [8, 32], 8, 0),
+    # Small-M tiles disable swizzling entirely.
+    (ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], instr_shape=[16, 8]),
+     ttgl.NVMMASharedLayout(swizzle_byte_width=64, element_bitwidth=16, rank=2, transposed=True), [64, 64], 16, 0),
+    (ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[2, 2], instr_shape=[16, 32, 16]),
+     ttgl.NVMMASharedLayout(swizzle_byte_width=64, element_bitwidth=16, rank=2), [64, 32], 16, 0),
+    (ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[4, 1], instr_shape=[16, 8]),
+     ttgl.NVMMASharedLayout(swizzle_byte_width=32, element_bitwidth=8, rank=2), [32, 32], 8, 0),
+    (ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 4], instr_shape=[16, 8]),
+     ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=16, rank=2), [4, 64], 16, 3),
+    (ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1], instr_shape=[16, 32, 16]),
+     ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2), [128, 64], 32, 1),
+])
+def test_bank_conflicts(reg_layout, shared_layout, shape, bitwidth, ref_conflicts):
+    dtype = {8: ttgl.int8, 16: ttgl.float16, 32: ttgl.float32}[bitwidth]
+    args = (ttgl.distributed_type(dtype, shape,
+                                  reg_layout), ttgl.shared_memory_descriptor_type(dtype, shape, shared_layout,
+                                                                                  shape), ref_conflicts)
+
+    @gluon.jit
+    def kernel(reg_type: ttgl.constexpr, shared_type: ttgl.constexpr, ref_conflicts: ttgl.constexpr):
+        conflicts: ttgl.constexpr = ttgl.bank_conflicts(reg_type, shared_type)
+        ttgl.static_assert(conflicts == ref_conflicts)
+
+    run_parser(kernel, args=args, target=AMPERE_TARGET)
+
+
+@pytest.mark.parametrize(
+    "layout, expected",
+    [
+        (
+            ttgl.BlockedLayout([1], [4], [4], [0], [1], [1], [0]),
+            ttgl.DistributedLinearLayout(
+                reg_bases=[],
+                lane_bases=[[1], [2]],
+                warp_bases=[[4], [8]],
+                block_bases=[],
+                shape=[16],
+            ),
+        ),
+        (
+            ttgl.BlockedLayout([1], [4], [4], [0], [4], [2], [0]),
+            ttgl.DistributedLinearLayout(
+                reg_bases=[],
+                lane_bases=[[1], [2]],
+                warp_bases=[[4], [8]],
+                block_bases=[[16], [0]],
+                shape=[32],
+            ),
+        ),
+        (
+            ttgl.BlockedLayout([8, 1], [8, 4], [1, 4], [0, 1], [1, 2], [1, 2], [1, 0]),
+            ttgl.DistributedLinearLayout(
+                reg_bases=[[1, 0], [2, 0], [4, 0], [0, 16], [0, 32]],
+                lane_bases=[[8, 0], [16, 0], [32, 0], [0, 1], [0, 2]],
+                warp_bases=[[0, 4], [0, 8]],
+                block_bases=[[0, 64]],
+                shape=[64, 128],
+            ),
+        ),
+    ],
+)
+def test_to_linear_layout(layout, expected):
+
+    @gluon.jit
+    def kernel(layout: ttgl.constexpr, expected: ttgl.constexpr, shape: ttgl.constexpr):
+        computed: ttgl.constexpr = ttgl.to_linear_layout(layout, shape)
+        ttgl.static_assert(computed == expected)
+
+    run_parser(kernel, args=(layout, expected, tuple(expected.shape)), target=AMPERE_TARGET)
 
 
 @filecheck_test
@@ -2231,12 +2322,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst_0 = arith.constant dense<1.000000e+00> : tensor<64x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
     %cst_1 = arith.constant 2.000000e+00 : f32
     %cst_2 = arith.constant dense<2.000000e+00> : tensor<32x64xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-    %0 = tt.call @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_64__(0, 1)cconstexpr_64__(1,)cconstexpr_fp32__(2,)cconstexpr_AMDMFMALayout(version=3, instr_shape=(32 ,32), transposed=True, warps_per_cta=(4 ,1), elem_type=triton_d_language_d_float32, tiles_per_warp=_1, 1_, ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"() : () -> tensor<64x64xf32, #mma>
+    %0 = tt.call @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_64__(0, 1)cconstexpr_64__(1,)cconstexpr_fp32__(2,)cconstexpr_AMDMFMALayout(version=3, instr_shape=(32, 32), transposed=True, warps_per_cta=(4, 1), elem_type=triton_d_language_d_float32, tiles_per_warp=_1, 1_, ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"() : () -> tensor<64x64xf32, #mma>
     %cst_3 = arith.constant 0.000000e+00 : f32
     %1 = tt.dot %cst_0, %cst_2, %0 : tensor<64x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<64x64xf32, #mma>
     tt.return
   }
-  tt.func private @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_64__(0, 1)cconstexpr_64__(1,)cconstexpr_fp32__(2,)cconstexpr_AMDMFMALayout(version=3, instr_shape=(32 ,32), transposed=True, warps_per_cta=(4 ,1), elem_type=triton_d_language_d_float32, tiles_per_warp=_1, 1_, ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"() -> tensor<64x64xf32, #mma> attributes {noinline = false} {
+  tt.func private @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_64__(0, 1)cconstexpr_64__(1,)cconstexpr_fp32__(2,)cconstexpr_AMDMFMALayout(version=3, instr_shape=(32, 32), transposed=True, warps_per_cta=(4, 1), elem_type=triton_d_language_d_float32, tiles_per_warp=_1, 1_, ctas_per_cga=_1, 1_, cta_split_num=_1, 1_, cta_order=_1, 0_)_"() -> tensor<64x64xf32, #mma> attributes {noinline = false} {
     %cst = arith.constant 0.000000e+00 : f32
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
     tt.return %cst_0 : tensor<64x64xf32, #mma>
@@ -2375,6 +2466,165 @@ def test_layout_zeros():
     # CHECK: #blocked = #ttg.blocked
     # CHECK: arith.constant dense<0.000000e+00> : tensor<128xf32, #blocked>
     ttgl.zeros([128], ttgl.float32, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
+def test_buffer_atomic_rmw(target):
+
+    @gluon.jit
+    def kernel(int32_ptr, uint32_ptr, int64_ptr, fp16_ptr, fp32_ptr):
+        BLOCK: ttgl.constexpr = 1
+        offsets = ttgl.arange(0, BLOCK, layout=ttgl.AutoLayout())
+
+        val = ttgl.full([BLOCK], 1, ttgl.int32, layout=ttgl.AutoLayout())
+        ttgl.amd.cdna3.buffer_atomic_rmw("smax", int32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_rmw("smin", int32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_rmw("and", int32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_rmw("or", int32_ptr, offsets, val)
+        #value broadcast
+        ttgl.amd.cdna3.buffer_atomic_rmw("xor", int32_ptr, offsets, value=1)
+
+        # operands should be unsigned
+        val = ttgl.full([BLOCK], 1, ttgl.uint32, layout=ttgl.AutoLayout())
+        ttgl.amd.cdna3.buffer_atomic_rmw("umax", uint32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_rmw("umin", uint32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_rmw("iadd", uint32_ptr, offsets, val)
+
+        val = val.cast(ttgl.int64)
+        #mask broadcast
+        ttgl.amd.cdna3.buffer_atomic_rmw("xchg", int64_ptr, offsets, val, mask=0)
+
+        mask = ttgl.full([BLOCK], True, ttgl.int32, layout=ttgl.AutoLayout())
+        val = ttgl.zeros([BLOCK], ttgl.float16, layout=ttgl.AutoLayout())
+        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp16_ptr, offsets, val, mask=mask)
+        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp16_ptr, offsets, val, mask=mask, scope="sys")
+        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp16_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
+
+        val = val.cast(ttgl.float32)
+        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp32_ptr, offsets, val, mask=mask)
+        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp32_ptr, offsets, val, mask=mask, scope="sys")
+        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp32_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
+
+    fp16_ptr = MockTensor(ttgl.float16)
+    fp32_ptr = MockTensor(ttgl.float32)
+    int_ptr = MockTensor(ttgl.int32)
+    uint_ptr = MockTensor(ttgl.uint32)
+    int64_ptr = MockTensor(ttgl.int64)
+    module = run_parser(kernel, *make_args(int_ptr, uint_ptr, int64_ptr, fp16_ptr, fp32_ptr), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = tt.make_range {end = 1 : i32, start = 0 : i32} : tensor<1xi32, #gluon.auto_encoding>
+    %c1_i32 = arith.constant 1 : i32
+    %cst = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
+    %1 = amdgpu.buffer_atomic_rmw max, acq_rel, gpu, %cst, %arg0[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %2 = amdgpu.buffer_atomic_rmw min, acq_rel, gpu, %cst, %arg0[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %3 = amdgpu.buffer_atomic_rmw and, acq_rel, gpu, %cst, %arg0[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %4 = amdgpu.buffer_atomic_rmw or, acq_rel, gpu, %cst, %arg0[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %c1_i32_0 = arith.constant 1 : i32
+    %cst_1 = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
+    %5 = amdgpu.buffer_atomic_rmw xor, acq_rel, gpu, %cst_1, %arg0[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %c1_i32_2 = arith.constant 1 : i32
+    %cst_3 = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
+    %6 = amdgpu.buffer_atomic_rmw umax, acq_rel, gpu, %cst_3, %arg1[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %7 = amdgpu.buffer_atomic_rmw umin, acq_rel, gpu, %cst_3, %arg1[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %8 = amdgpu.buffer_atomic_rmw add, acq_rel, gpu, %cst_3, %arg1[%0] : tensor<1xi32, #gluon.auto_encoding>
+    %9 = arith.extui %cst_3 : tensor<1xi32, #gluon.auto_encoding> to tensor<1xi64, #gluon.auto_encoding>
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i32_4 = arith.constant 0 : i32
+    %10 = arith.cmpi ne, %c0_i32, %c0_i32_4 : i32
+    %11 = tt.splat %10 : i1 -> tensor<1xi1, #gluon.auto_encoding>
+    %12 = amdgpu.buffer_atomic_rmw exch, acq_rel, gpu, %9, %arg2[%0], %11 : tensor<1xi64, #gluon.auto_encoding>
+    %c1_i32_5 = arith.constant 1 : i32
+    %cst_6 = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
+    %13 = tt.call @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_1__(1,)cconstexpr_fp16__(2,)cconstexpr_AutoLayout()_"() : () -> tensor<1xf16, #gluon.auto_encoding>
+    %c0_i32_7 = arith.constant 0 : i32
+    %cst_8 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %14 = arith.cmpi ne, %cst_6, %cst_8 : tensor<1xi32, #gluon.auto_encoding>
+    %15 = amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu, %13, %arg3[%0], %14 : tensor<1xf16, #gluon.auto_encoding>
+    %c0_i32_9 = arith.constant 0 : i32
+    %cst_10 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %16 = arith.cmpi ne, %cst_6, %cst_10 : tensor<1xi32, #gluon.auto_encoding>
+    %17 = amdgpu.buffer_atomic_rmw fadd, acq_rel, sys, %13, %arg3[%0], %16 : tensor<1xf16, #gluon.auto_encoding>
+    %c0_i32_11 = arith.constant 0 : i32
+    %cst_12 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %18 = arith.cmpi ne, %cst_6, %cst_12 : tensor<1xi32, #gluon.auto_encoding>
+    %19 = amdgpu.buffer_atomic_rmw fadd, relaxed, cta, %13, %arg3[%0], %18 : tensor<1xf16, #gluon.auto_encoding>
+    %20 = arith.extf %13 : tensor<1xf16, #gluon.auto_encoding> to tensor<1xf32, #gluon.auto_encoding>
+    %c0_i32_13 = arith.constant 0 : i32
+    %cst_14 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %21 = arith.cmpi ne, %cst_6, %cst_14 : tensor<1xi32, #gluon.auto_encoding>
+    %22 = amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu, %20, %arg4[%0], %21 : tensor<1xf32, #gluon.auto_encoding>
+    %c0_i32_15 = arith.constant 0 : i32
+    %cst_16 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %23 = arith.cmpi ne, %cst_6, %cst_16 : tensor<1xi32, #gluon.auto_encoding>
+    %24 = amdgpu.buffer_atomic_rmw fadd, acq_rel, sys, %20, %arg4[%0], %23 : tensor<1xf32, #gluon.auto_encoding>
+    %c0_i32_17 = arith.constant 0 : i32
+    %cst_18 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %25 = arith.cmpi ne, %cst_6, %cst_18 : tensor<1xi32, #gluon.auto_encoding>
+    %26 = amdgpu.buffer_atomic_rmw fadd, relaxed, cta, %20, %arg4[%0], %25 : tensor<1xf32, #gluon.auto_encoding>
+    tt.return
+  }
+  tt.func private @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_1__(1,)cconstexpr_fp16__(2,)cconstexpr_AutoLayout()_"() -> tensor<1xf16, #gluon.auto_encoding> attributes {noinline = false} {
+    %cst = arith.constant 0.000000e+00 : f16
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<1xf16, #gluon.auto_encoding>
+    tt.return %cst_0 : tensor<1xf16, #gluon.auto_encoding>
+  ^bb1:  // no predecessors
+    %0 = ub.poison : tensor<1xf16, #gluon.auto_encoding>
+    tt.return %0 : tensor<1xf16, #gluon.auto_encoding>
+  }
+}
+""")
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
+def test_buffer_atomic_rmw_bf16(target):
+
+    @gluon.jit
+    def kernel(bf16_ptr):
+        offsets = ttgl.arange(0, 1, layout=ttgl.AutoLayout())
+        val = ttgl.zeros([1], ttgl.bfloat16, layout=ttgl.AutoLayout())
+        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", bf16_ptr, offsets, val, mask=0)
+        mask = ttgl.full([1], True, ttgl.int32, layout=ttgl.AutoLayout())
+        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", bf16_ptr, offsets, val, mask=mask, scope="sys")
+        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", bf16_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
+
+    bf16_ptr = MockTensor(ttgl.bfloat16)
+    module = run_parser(kernel, *make_args(bf16_ptr), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @kernel(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %0 = tt.make_range {end = 1 : i32, start = 0 : i32} : tensor<1xi32, #gluon.auto_encoding>
+    %1 = tt.call @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_1__(1,)cconstexpr_bf16__(2,)cconstexpr_AutoLayout()_"() : () -> tensor<1xbf16, #gluon.auto_encoding>
+    %c0_i32 = arith.constant 0 : i32
+    %c0_i32_0 = arith.constant 0 : i32
+    %2 = arith.cmpi ne, %c0_i32, %c0_i32_0 : i32
+    %3 = tt.splat %2 : i1 -> tensor<1xi1, #gluon.auto_encoding>
+    %4 = amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu, %1, %arg0[%0], %3 : tensor<1xbf16, #gluon.auto_encoding>
+    %c1_i32 = arith.constant 1 : i32
+    %cst = arith.constant dense<1> : tensor<1xi32, #gluon.auto_encoding>
+    %c0_i32_1 = arith.constant 0 : i32
+    %cst_2 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %5 = arith.cmpi ne, %cst, %cst_2 : tensor<1xi32, #gluon.auto_encoding>
+    %6 = amdgpu.buffer_atomic_rmw fadd, acq_rel, sys, %1, %arg0[%0], %5 : tensor<1xbf16, #gluon.auto_encoding>
+    %c0_i32_3 = arith.constant 0 : i32
+    %cst_4 = arith.constant dense<0> : tensor<1xi32, #gluon.auto_encoding>
+    %7 = arith.cmpi ne, %cst, %cst_4 : tensor<1xi32, #gluon.auto_encoding>
+    %8 = amdgpu.buffer_atomic_rmw fadd, relaxed, cta, %1, %arg0[%0], %7 : tensor<1xbf16, #gluon.auto_encoding>
+    tt.return
+  }
+  tt.func private @"triton.experimental.gluon.language._standard.zeros____(0, 0)cconstexpr_1__(1,)cconstexpr_bf16__(2,)cconstexpr_AutoLayout()_"() -> tensor<1xbf16, #gluon.auto_encoding> attributes {noinline = false} {
+    %cst = arith.constant 0.000000e+00 : bf16
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<1xbf16, #gluon.auto_encoding>
+    tt.return %cst_0 : tensor<1xbf16, #gluon.auto_encoding>
+  ^bb1:  // no predecessors
+    %0 = ub.poison : tensor<1xbf16, #gluon.auto_encoding>
+    tt.return %0 : tensor<1xbf16, #gluon.auto_encoding>
+  }
+}
+""")
 
 
 @gluon.jit
