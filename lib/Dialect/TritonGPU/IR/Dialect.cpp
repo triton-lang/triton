@@ -2174,15 +2174,6 @@ bool AMDMfmaEncodingAttr::hasUnitTilesPerWarp() const {
   return !llvm::any_of(getTilesPerWarp(), [](int x) { return x != 1; });
 }
 
-SmallVector<unsigned> AMDMfmaEncodingAttr::getRepOrder() const {
-  return getMatrixOrder(getRank(), /*rowMajor*/ true);
-}
-
-SmallVector<unsigned>
-AMDMfmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
-  return getOrderForDotOperand(opIdx, getRank(), /*kContig*/ true);
-}
-
 SmallVector<int64_t>
 AMDMfmaEncodingAttr::getInstrShapeForOperand(int kWidth, int opIdx) const {
   auto mnkDim = getInstrShape();
@@ -2201,6 +2192,15 @@ AMDMfmaEncodingAttr::getInstrShapeForOperand(int kWidth, int opIdx) const {
   else
     assert(opIdx == 1);
   return {kDim, nDim};
+}
+
+SmallVector<unsigned> AMDMfmaEncodingAttr::getRepOrder() const {
+  return getMatrixOrder(getRank(), /*rowMajor*/ true);
+}
+
+SmallVector<unsigned>
+AMDMfmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
+  return getOrderForDotOperand(opIdx, getRank(), /*kContig*/ true);
 }
 
 SmallVector<int64_t>
