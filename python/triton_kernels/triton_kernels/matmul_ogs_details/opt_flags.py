@@ -1,7 +1,6 @@
 # isort: off
 # fmt: off
 from dataclasses import dataclass
-from math import sqrt
 
 import triton
 from triton_kernels.target_info import get_cdna_version
