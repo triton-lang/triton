@@ -122,10 +122,16 @@ def make_default_opt_flags_amd(
             block_k = 256
             num_warps = 8
 
+    def replace_with_valid_constraint(k: str, v):
+        if constraints.get(k, None) is not None:
+            return constraints[k]
+        else:
+            return v
+
     ret = OptFlags(
-        block_m=constraints.get("block_m", block_m),
-        block_n=constraints.get("block_n", block_n),
-        block_k=constraints.get("block_k", block_k),
+        block_m=replace_with_valid_constraint('block_m', block_m),
+        block_n=replace_with_valid_constraint('block_n', block_n),
+        block_k=replace_with_valid_constraint('block_k', block_k),
         num_warps=num_warps,
         num_stages=num_stages,
         group_m=group_m,
