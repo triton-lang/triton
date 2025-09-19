@@ -19,8 +19,7 @@ static void initProton(pybind11::module &&m) {
          const std::string &dataName, const std::string &profilerName,
          const std::string &mode) {
         auto sessionId = SessionManager::instance().addSession(
-            path, profilerName, contextSourceName, dataName,
-            mode);
+            path, profilerName, contextSourceName, dataName, mode);
         SessionManager::instance().activateSession(sessionId);
         return sessionId;
       },

@@ -1,9 +1,7 @@
 import functools
 import triton
 import os
-import pathlib
 
-from triton import knobs
 from triton._C.libproton import proton as libproton
 from .flags import flags
 from .hooks import HookManager, LaunchHook, InstrumentationHook
