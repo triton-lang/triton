@@ -32,11 +32,6 @@ struct Options {
   bool manual = false;
   bool disable_simt = false;
   bool disable_epilogue = false;
-  bool disable_reg_count = false;
-  int load_num_warps = 1;
-  int load_reg_count = 256;
-  int mma_num_warps = 1;
-  int mma_reg_count = 256;
 };
 
 Options &get_options() {
@@ -140,9 +135,6 @@ public:
               << "  cost=" << cost << "\n"
               << "  flags=" << flags << "\n"
               << "  id=" << id << "\n"
-              << "  start_warp=" << start_warp << "\n"
-              << "  num_warps=" << num_warps << "\n"
-              << "  reg_count=" << reg_count << "\n"
               << "}\n";
   }
 
@@ -155,9 +147,6 @@ private:
 public:
   size_t id = 0;
   std::string name;
-  size_t start_warp = 0;
-  size_t num_warps = 0;
-  size_t reg_count = 0;
 };
 
 class Port {
@@ -879,49 +868,6 @@ SmallVector<Edge> getOutCrossingEdges(Partition *partition) {
 
 bool deserializeManualPartitions(Operation *region, Graph *graph) {
   const auto &options = get_options();
-
-  if (tools::getBoolEnv("PARTITION_ANALYSIS_NVWS_SERIALIZATION")) {
-    std::map<std::string, Partition *> manual_partitions;
-
-    graph->walk([&](Node *node) {
-      if (!node->isData())
-        // ignore manual partitions for non-data values
-        return;
-      if (node->isOp()) {
-        auto op = node->getOp();
-
-        if (op->hasAttr("groups")) {
-          for (auto attr : cast<ArrayAttr>(op->getAttr("groups"))) {
-            auto fullname = cast<SymbolRefAttr>(attr).getRootReference().str();
-            auto name = fullname.substr(11); // strip nvws.groups. prefix
-            if (manual_partitions.find(name) == manual_partitions.end()) {
-              auto partition = graph->addPartition();
-              partition->addFlag(Flags::MANUAL);
-              partition->name = name;
-              auto attr =
-                  mlir::cast<mlir::DictionaryAttr>(region->getAttr(fullname));
-              partition->start_warp =
-                  mlir::cast<IntegerAttr>(attr.get("start_warp")).getInt();
-              partition->num_warps =
-                  mlir::cast<IntegerAttr>(attr.get("num_warps")).getInt();
-              if (attr.contains("reg_count")) {
-                partition->reg_count =
-                    mlir::cast<IntegerAttr>(attr.get("reg_count")).getInt();
-              }
-              manual_partitions[name] = partition;
-
-              if (options.dump) {
-                std::cout << "deserialize manual partition:";
-                partition->dump();
-              }
-            }
-            node->addPartition(manual_partitions[name]);
-          }
-        }
-      }
-    });
-    return !manual_partitions.empty();
-  }
 
   std::map<int, Partition *> manual_partitions;
   graph->walk([&](Node *node) {
@@ -2050,254 +1996,28 @@ bool isSimpleMMA(Partition *partition) {
   return true;
 }
 
-void assignWarpsAndRegisters(Operation *region, Graph *graph) {
-  auto &options = get_options();
-
-  // assign unique ids for partitions
-  {
-    size_t idx = 0;
-    for (auto &partition : graph->getPartitions()) {
-      if (partition->empty())
-        continue;
-      partition->id = idx;
-      idx++;
-    }
-  }
-
-  // assign number of warps to each partition
-  {
-    ModuleOp module = dyn_cast<ModuleOp>(region);
-    if (!module)
-      module = region->getParentOfType<ModuleOp>();
-    auto moduleNumWarps =
-        mlir::cast<mlir::IntegerAttr>(module->getAttr(ttg::AttrNumWarpsName))
-            .getInt();
-    for (auto &partition : graph->getPartitions()) {
-      if (partition->empty())
-        continue;
-      if (partition->getFlags() & Flags::MANUAL)
-        continue;
-      if (isSimpleLoad(partition.get()))
-        partition->num_warps = options.load_num_warps;
-      else if (isSimpleMMA(partition.get()))
-        partition->num_warps = options.mma_num_warps;
-      else
-        partition->num_warps = moduleNumWarps;
-    }
-  }
-
-  // collect partitions together based on flags
-  std::map<Flags, SmallVector<Partition *>> partitions{{Flags::MANUAL, {}}, //
-                                                       {Flags::LOAD, {}},   //
-                                                       {Flags::MMA, {}},    //
-                                                       {Flags::STORE, {}},  //
-                                                       {Flags::SIMT, {}},   //
-                                                       {Flags::NONE, {}}};
-  for (auto &partition : graph->getPartitions()) {
-    if (partition->empty())
-      continue;
-    bool added = false;
-    for (auto flag : SmallVector<Flags>{Flags::MANUAL, Flags::LOAD, Flags::MMA,
-                                        Flags::STORE, Flags::SIMT}) {
-      if (partition->getFlags() & flag) {
-        partitions[flag].push_back(partition.get());
-        added = true;
-        break;
-      }
-    }
-    if (!added)
-      partitions[Flags::NONE].push_back(partition.get());
-  }
-
-  // assign start warp and name to each partition
-  auto getFlagName = [](Flags flag) {
-    switch (flag) {
-    case Flags::LOAD:
-      return "tma_load";
-    case Flags::MMA:
-      return "mma";
-    case Flags::SIMT:
-      return "simt";
-    case Flags::STORE:
-      return "epilogue";
-    default:
-      return "g";
-    }
-  };
-  size_t start_warp = 0;
-  // update start warp to after the manual partitions
-  // FIXME: could be smarter, and try to fit automatic partitions between manual
-  // partitions
-  {
-    for (auto partition : partitions[Flags::MANUAL]) {
-      start_warp =
-          std::max(start_warp, partition->start_warp + partition->num_warps);
-    }
-  }
-  // all partitions that are 4 warp aligned first
-  for (auto flag : SmallVector<Flags>{Flags::STORE, Flags::SIMT, Flags::MMA,
-                                      Flags::LOAD, Flags::NONE}) {
-    auto num_partitions = partitions[flag].size();
-    for (size_t i = 0; i < num_partitions; i++) {
-      auto partition = partitions[flag][i];
-      if (partition->num_warps % 4 == 0) {
-        partition->start_warp = start_warp;
-        start_warp += partition->num_warps;
-        partition->name =
-            getFlagName(flag) + (num_partitions == 1 ? "" : std::to_string(i));
-      }
-    }
-  }
-  // all remaining partitions
-  for (auto flag : SmallVector<Flags>{Flags::STORE, Flags::SIMT, Flags::MMA,
-                                      Flags::LOAD, Flags::NONE}) {
-    auto num_partitions = partitions[flag].size();
-    for (size_t i = 0; i < num_partitions; i++) {
-      auto partition = partitions[flag][i];
-      if (partition->num_warps % 4 != 0) {
-        partition->start_warp = start_warp;
-        start_warp += partition->num_warps;
-        partition->name =
-            getFlagName(flag) + (num_partitions == 1 ? "" : std::to_string(i));
-      }
-    }
-  }
-
-  // FIXME: collect partitions into "parallel" partitions, based on whether they
-  // appear in the same loop nest, and use that for num reg allocation Warps in
-  // the top level (outside a nest) can just have default num regs, as they
-  // don't overlap with other partitions
-
-  // assign reg counts
-  //  - if we have sufficient registers, assign max regs to all warp partitions
-  //  - if not, then set mma/load warp partitions to 24 and split remaining
-  //    registers evenly between all other partitions
-  // TODO: adjust reg counts based on what ops appear in partitions
-  size_t totalNumWarps = 0;
-  for (auto &partition : graph->getPartitions()) {
-    if (partition->empty())
-      continue;
-    totalNumWarps += partition->num_warps;
-  }
-  if (options.disable_reg_count || totalNumWarps <= 8) {
-    // with at most 8 warps, can assign max num regs to each warp
-    for (auto &partition : graph->getPartitions()) {
-      if (partition->empty())
-        continue;
-      partition->reg_count = 256;
-    }
-  } else {
-    size_t freeRegs = 65536 / 32;
-    size_t allocatedNumWarps = 0;
-    size_t allocatedRegCount = 0;
-
-    // assign regs to all mma and load partitions
-    for (auto &partition : graph->getPartitions()) {
-      if (partition->empty())
-        continue;
-      if (isSimpleLoad(partition.get())) {
-        partition->reg_count = options.load_reg_count;
-      } else if (isSimpleMMA(partition.get())) {
-        partition->reg_count = options.mma_reg_count;
-      }
-      if (partition->reg_count != 0) {
-        allocatedNumWarps += partition->num_warps;
-        allocatedRegCount += partition->reg_count;
-      }
-    }
-
-    // assign remaining regs between other warps
-    // (must be a multiple of 8, min 24, max 256)
-    size_t remainingRegs = freeRegs - allocatedRegCount;
-    size_t regsPerWarp = remainingRegs / (totalNumWarps - allocatedNumWarps);
-    if (regsPerWarp % 8 != 0)
-      regsPerWarp -= regsPerWarp % 8;
-    regsPerWarp = std::clamp(regsPerWarp, 24ul, 256ul);
-
-    // divide remaining registers between other partitions, within limits
-    for (auto &partition : graph->getPartitions()) {
-      if (partition->empty())
-        continue;
-      if (partition->reg_count == 0)
-        partition->reg_count = regsPerWarp;
-    }
-  }
-
-  if (options.dump) {
-    std::cout << "final partitions:\n";
-    for (auto &partition : graph->getPartitions()) {
-      if (partition->empty())
-        continue;
-      partition->dump();
-    }
-  }
-}
-
 void serialize(size_t idx, Operation *region, Graph *graph) {
-  bool nvws = tools::getBoolEnv("PARTITION_ANALYSIS_NVWS_SERIALIZATION");
-  std::string attrName = !nvws ? kPartitionAttrName : "groups";
-
   auto context = graph->getRoot()->getOp()->getContext();
   Builder b(context);
 
-  if (nvws) {
-    // Create partitions in module attributes for NVWS
-    // if they are not already manually set by passing wg_spec_override
-    // add partition attributes to module
-    for (auto &partition : graph->getPartitions()) {
-      if (partition->empty())
-        continue;
-      auto fullname = "nvws.group." + partition->name;
-      if (region->hasAttr(fullname))
-        // skip manual partitions
-        continue;
-
-      OpBuilder builder(context);
-      std::vector<NamedAttribute> attrs{
-          {builder.getStringAttr("start_warp"),
-           builder.getI32IntegerAttr(partition->start_warp)},
-          {builder.getStringAttr("num_warps"),
-           builder.getI32IntegerAttr(partition->num_warps)},
-      };
-      if (partition->reg_count != 256) {
-        attrs.push_back({builder.getStringAttr("reg_count"),
-                         builder.getI32IntegerAttr(partition->reg_count)});
-      }
-      region->setAttr(fullname,
-                      DictionaryAttr::get(context, NamedAttrList(attrs)));
-    }
-  } else {
-    // annotate loop with index
-    region->setAttr(kWarpSpecializeTagAttrName, b.getI32IntegerAttr(idx));
-  }
+  // annotate loop with index
+  region->setAttr(kWarpSpecializeTagAttrName, b.getI32IntegerAttr(idx));
 
   auto setPartitionsAttr = [&](Operation *op, const std::string &attrName,
                                Node *node) {
     // not for func op
     if (isa<tt::FuncOp>(op))
       return;
-    if (!nvws) {
-      SmallVector<int> partitions;
-      for (auto partition : node->getPartitions())
-        partitions.push_back(partition->id);
-      std::sort(partitions.begin(), partitions.end());
-      op->setAttr(attrName, b.getDenseI32ArrayAttr(partitions));
-    } else {
-      SmallVector<std::string> partitions;
-      for (auto partition : node->getPartitions())
-        partitions.push_back("nvws.group." + partition->name);
-      std::sort(partitions.begin(), partitions.end());
-      SmallVector<Attribute, 4> partition_syms;
-      for (auto partition : partitions)
-        partition_syms.push_back(
-            SymbolRefAttr::get(op->getContext(), partition));
-      op->setAttr(attrName, ArrayAttr::get(op->getContext(), partition_syms));
-    }
+    SmallVector<int> partitions;
+    for (auto partition : node->getPartitions())
+      partitions.push_back(partition->id);
+    std::sort(partitions.begin(), partitions.end());
+    op->setAttr(attrName, b.getDenseI32ArrayAttr(partitions));
   };
 
   graph->walk([&](Node *node) {
     if (node->isOp()) {
-      setPartitionsAttr(node->getOp(), attrName, node);
+      setPartitionsAttr(node->getOp(), kPartitionAttrName, node);
     } else {
       auto value = node->getValue();
       if (auto blockArg = dyn_cast<BlockArgument>(value)) {
@@ -2310,7 +2030,7 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
           } else {
             // for op iter args
             setPartitionsAttr(parentOp,
-                              attrName + "." +
+                              std::string(kPartitionAttrName) + "." +
                                   std::to_string(blockArg.getArgNumber() - 1),
                               node);
           }
@@ -2323,9 +2043,10 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
           // do nothing (handled by block arg)
         } else if (isa<scf::IfOp>(op)) {
           // result of an if
-          setPartitionsAttr(
-              op, attrName + "." + std::to_string(result.getResultNumber()),
-              node);
+          setPartitionsAttr(op,
+                            std::string(kPartitionAttrName) + "." +
+                                std::to_string(result.getResultNumber()),
+                            node);
         } else {
           assert(false);
         }
@@ -2393,63 +2114,29 @@ void deduplicateViewOps(
     Operation *region,
     SmallVector<SmallVector<mlir::Operation *>> duplicatedViewOps) {
 
-  bool nvws = tools::getBoolEnv("PARTITION_ANALYSIS_NVWS_SERIALIZATION");
-
   // get partition assignments for the duplicated ops, and
   // re-merge those that have the same partition assignment
   for (auto ops : duplicatedViewOps) {
-
-    if (nvws) {
-      std::map<std::string, SmallVector<mlir::Operation *>> partitionedOps;
-      for (auto op : ops) {
-        std::string partition;
-        if (op->hasAttr("groups")) {
-          for (auto attr : cast<ArrayAttr>(op->getAttr("groups"))) {
-            auto fullname = cast<SymbolRefAttr>(attr).getRootReference().str();
-            partition += fullname + ",";
-          }
-        }
-        if (partitionedOps.find(partition) == partitionedOps.end()) {
-          partitionedOps[partition] = {};
-        }
-        partitionedOps[partition].push_back(op);
+    std::map<SmallVector<int>, SmallVector<mlir::Operation *>> partitionedOps;
+    for (auto op : ops) {
+      assert(op->hasAttr(kPartitionAttrName));
+      auto partitionsRef =
+          cast<DenseI32ArrayAttr>(op->getAttr(kPartitionAttrName)).asArrayRef();
+      SmallVector<int> partitions(partitionsRef.begin(), partitionsRef.end());
+      if (partitionedOps.find(partitions) == partitionedOps.end()) {
+        partitionedOps[partitions] = {};
       }
-      for (auto partition : partitionedOps) {
-        auto &sameOps = partition.second;
-        if (sameOps.size() <= 1)
-          continue;
-        auto op = sameOps.front();
-        for (auto it = sameOps.begin() + 1; it != sameOps.end(); it++) {
-          // merge the two ops
-          (*it)->replaceAllUsesWith(op->getResults());
-          (*it)->erase();
-        }
-      }
-
-    } else {
-      // main:
-      std::map<SmallVector<int>, SmallVector<mlir::Operation *>> partitionedOps;
-      for (auto op : ops) {
-        assert(op->hasAttr(kPartitionAttrName));
-        auto partitionsRef =
-            cast<DenseI32ArrayAttr>(op->getAttr(kPartitionAttrName))
-                .asArrayRef();
-        SmallVector<int> partitions(partitionsRef.begin(), partitionsRef.end());
-        if (partitionedOps.find(partitions) == partitionedOps.end()) {
-          partitionedOps[partitions] = {};
-        }
-        partitionedOps[partitions].push_back(op);
-      }
-      for (auto partition : partitionedOps) {
-        auto &sameOps = partition.second;
-        if (sameOps.size() <= 1)
-          continue;
-        auto op = sameOps.front();
-        for (auto it = sameOps.begin() + 1; it != sameOps.end(); it++) {
-          // merge the two ops
-          (*it)->replaceAllUsesWith(op->getResults());
-          (*it)->erase();
-        }
+      partitionedOps[partitions].push_back(op);
+    }
+    for (auto partition : partitionedOps) {
+      auto &sameOps = partition.second;
+      if (sameOps.size() <= 1)
+        continue;
+      auto op = sameOps.front();
+      for (auto it = sameOps.begin() + 1; it != sameOps.end(); it++) {
+        // merge the two ops
+        (*it)->replaceAllUsesWith(op->getResults());
+        (*it)->erase();
       }
     }
   }
@@ -2481,15 +2168,16 @@ private:
 
 void PartitionAnalysis::runOnOperation() {
   // find ops to warp specialize; either:
-  //   - top-level scf::For ops marked with "nvws.warp-specialize"
+  //   - top-level scf::For ops marked with "tt.warp_specialize"
   //   - or Module op if none found
   SmallVector<Operation *> ops;
   getOperation().walk([&](scf::ForOp op) {
-    if (op->hasAttr("tt.warp_specialize"))
+    if (op->hasAttr(kWarpSpecializeAttrName))
       ops.push_back(op);
   });
-  if (ops.empty())
-    ops.push_back(getOperation());
+  // FIXME: never run on whole module
+  // if (ops.empty())
+  //  ops.push_back(getOperation());
 
   // run partitioner on each op
   size_t idx = 0;
@@ -2526,16 +2214,6 @@ void PartitionAnalysis::analyze(size_t idx, Operation *op) {
       tools::getBoolEnv("PARTITION_ANALYSIS_DISABLE_SIMT_GROUPS");
   options.disable_epilogue =
       tools::getBoolEnv("PARTITION_ANALYSIS_DISABLE_EPILOGUE_GROUPS");
-  options.disable_reg_count =
-      tools::getBoolEnv("PARTITION_ANALYSIS_DISABLE_REG_COUNT");
-  options.load_num_warps =
-      toInt(1, tools::getStrEnv("PARTITION_ANALYSIS_LOAD_NUM_WARPS"));
-  options.load_reg_count =
-      toInt(24, tools::getStrEnv("PARTITION_ANALYSIS_LOAD_REG_COUNT"));
-  options.mma_num_warps =
-      toInt(1, tools::getStrEnv("PARTITION_ANALYSIS_MMA_NUM_WARPS"));
-  options.mma_reg_count =
-      toInt(24, tools::getStrEnv("PARTITION_ANALYSIS_MMA_REG_COUNT"));
 
   // FIXME: hack for one of the matmul test cases
   if (hasFlattenedEpilogue(op) && ttg::lookupNumWarps(op) > 6) {
@@ -2564,7 +2242,26 @@ void PartitionAnalysis::analyze(size_t idx, Operation *op) {
   if (options.dump_dot)
     visualize(std::string("graph-final-") + key + ".dot", graph.get(),
               vis_info);
-  assignWarpsAndRegisters(op, graph.get());
+
+  // assign unique ids for partitions
+  {
+    size_t idx = 0;
+    for (auto &partition : graph->getPartitions()) {
+      if (partition->empty())
+        continue;
+      partition->id = idx;
+      idx++;
+    }
+  }
+  if (options.dump) {
+    std::cout << "final partitions:\n";
+    for (auto &partition : graph->getPartitions()) {
+      if (partition->empty())
+        continue;
+      partition->dump();
+    }
+  }
+
   serialize(idx, op, graph.get());
   deduplicateViewOps(op, duplicatedOps);
 }
