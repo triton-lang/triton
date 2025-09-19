@@ -51,17 +51,35 @@ enum class LoopVarCategory {
   TensorResultFromOtherPartition,
 };
 
+SetVector<int> getIfOpResultPartitionIds(scf::IfOp ifOp, int pos) {
+  auto arrayAttr = ifOp->getAttrOfType<ArrayAttr>(kPartitionOutputsAttrName);
+  assert(arrayAttr.size() == ifOp.getResultTypes().size());
+  auto partitionIdsRef = cast<DenseI32ArrayAttr>(arrayAttr[pos]).asArrayRef();
+  return {partitionIdsRef.begin(), partitionIdsRef.end()};
+}
+
+SetVector<int> getIfOpResultPartitionIds(scf::IfOp ifOp, Value value) {
+  for (auto result : ifOp.getResults()) {
+    if (result == value) {
+      auto pos = result.getResultNumber();
+      return getIfOpResultPartitionIds(ifOp, pos);
+    }
+  }
+  llvm_unreachable("value is not a result of if-stmt");
+}
+
 bool isTensorResultComputedBy(scf::ForOp loop, size_t resultIdx,
                               const Partition *partition,
                               const PartitionSet &partitions) {
-  bool ret = false;
-  partition->iterateOutputs(loop, [&](Operation *op, OpOperand &use) {
-    if (isa<scf::YieldOp>(op) && use.getOperandNumber() == resultIdx &&
-        isa<RankedTensorType>(loop.getResult(resultIdx).getType())) {
-      ret = true;
-    }
-  });
-  return ret;
+  auto value = loop.getYieldedValues()[resultIdx];
+  if (!isa<RankedTensorType>(value.getType()))
+    return false;
+  auto defOp = value.getDefiningOp();
+  auto partitionIds = *getPartitionIds(defOp);
+  if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
+    partitionIds = getIfOpResultPartitionIds(ifOp, value);
+  }
+  return llvm::is_contained(partitionIds, partition->getIndex());
 }
 
 SmallVector<size_t> getPartitionIds(Operation *op, size_t numPartitions) {
@@ -78,9 +96,15 @@ SmallVector<size_t> getPartitionIds(Operation *op, size_t numPartitions) {
 SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
                                               const Partition *partition,
                                               const PartitionSet &partitions) {
-  auto inPartition = [&](Operation *op) {
-    auto opPartitionIds = getPartitionIds(op, partitions.getNumPartitions());
-    return llvm::is_contained(opPartitionIds, partition->getIndex());
+  auto inPartition = [&](OpOperand &opnd) {
+    auto op = opnd.getOwner();
+    auto partitionIds = getPartitionIds(op, partitions.getNumPartitions());
+    if (auto ifOp = dyn_cast<scf::IfOp>(op->getParentOp());
+        ifOp && isa<scf::YieldOp>(op)) {
+      auto ids = getIfOpResultPartitionIds(ifOp, opnd.getOperandNumber());
+      partitionIds = SmallVector<size_t>(ids.begin(), ids.end());
+    }
+    return llvm::is_contained(partitionIds, partition->getIndex());
   };
   auto isTensorResultFromOtherPartition = [&](int i) {
     for (auto otherPartition : partitions.getPartitions()) {
@@ -96,7 +120,7 @@ SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
 
   SmallVector<LoopVarCategory> categories(loop.getNumRegionIterArgs());
   for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
-    if (llvm::any_of(arg.getUsers(), inPartition)) {
+    if (llvm::any_of(arg.getUses(), inPartition)) {
       categories[i] = LoopVarCategory::Used;
     } else if (isTensorResultFromOtherPartition(i)) {
       categories[i] = LoopVarCategory::TensorResultFromOtherPartition;
@@ -194,19 +218,24 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
   for (size_t idx : partitionIndices) {
     auto &b = builders[idx];
     auto cond = b.mapping.lookupOrDefault(ifOp.getCondition());
-    auto newIfOp = b.create<scf::IfOp>(ifOp.getLoc(), ifOp.getResultTypes(),
-                                       cond, ifOp.elseBlock() ? true : false);
+    SmallVector<Type> newIfResultTypes;
+    SmallVector<int> newIfResultIndices;
+    for (auto pos = 0; pos < ifOp.getResultTypes().size(); ++pos) {
+      auto partitionIds = getIfOpResultPartitionIds(ifOp, pos);
+      if (llvm::is_contained(partitionIds, b.partitionId)) {
+        newIfResultTypes.push_back(ifOp.getResult(pos).getType());
+        newIfResultIndices.push_back(pos);
+      }
+    }
+    auto newIfOp = b.create<scf::IfOp>(ifOp.getLoc(), newIfResultTypes, cond,
+                                       ifOp.elseBlock() ? true : false);
     newIfOp->setAttrs(ifOp->getAttrs());
     newIfOps.push_back(newIfOp);
 
-    mapRange(ifOp.getResults(), newIfOp.getResults(), b.mapping);
-    mapRange(ifOp.thenBlock()->getArguments(),
-             newIfOp.thenBlock()->getArguments(), b.mapping);
-
-    if (ifOp.elseBlock()) {
-      mapRange(ifOp.elseBlock()->getArguments(),
-               newIfOp.elseBlock()->getArguments(), b.mapping);
+    for (auto [newIdx, oldIdx] : llvm::enumerate(newIfResultIndices)) {
+      b.mapping.map(ifOp.getResult(oldIdx), newIfOp.getResult(newIdx));
     }
+    assert(ifOp.thenBlock()->getNumArguments() == 0);
 
     b.setInsertionPointToStart(newIfOp.thenBlock());
   }
@@ -214,8 +243,8 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
   cloneOpsInBlock(ifOp.thenBlock(), builders, partitions);
 
   if (auto elseBlock = ifOp.elseBlock()) {
-    for (auto [builder, newIfOp] : llvm::zip(builders, newIfOps)) {
-      builder.setInsertionPointToStart(newIfOp.elseBlock());
+    for (auto [idx, newIfOp] : llvm::zip(partitionIndices, newIfOps)) {
+      builders[idx].setInsertionPointToStart(newIfOp.elseBlock());
     }
     cloneOpsInBlock(elseBlock, builders, partitions);
   }
@@ -305,8 +334,12 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
                   partitions)
                   .first;
         } else {
+          auto ifOp = cast<scf::IfOp>(yieldOp->getParentOp());
           for (size_t i = 0; i < yieldOp.getOperands().size(); ++i) {
-            newOperandIndices.push_back(i);
+            auto ids = getIfOpResultPartitionIds(ifOp, i);
+            if (llvm::is_contained(ids, builder.partitionId)) {
+              newOperandIndices.push_back(i);
+            }
           }
         }
 
@@ -326,36 +359,6 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
   }
 }
 
-void assignRootPartition(scf::ForOp loop, PartitionSet &partitions) {
-  auto ctx = loop.getContext();
-  Builder b(ctx);
-  SetVector<Partition *> root;
-  for (int i = 0; i < partitions.getNumPartitions(); ++i) {
-    root.insert(partitions.getPartition(i));
-  }
-
-  for (Operation &op : loop.getBody()->without_terminator()) {
-    if (!hasPartition(&op)) {
-      setPartition(&op, root);
-    }
-  }
-}
-
-void assignRegionBodyPartition(scf::ForOp loop, PartitionSet &partitions) {
-  loop->walk([&](Operation *op) {
-    if (!isa<scf::ForOp>(op) && !hasPartition(op)) {
-      auto parentOp = loop.getBody()->findAncestorOpInBlock(*op);
-      if (auto partitionIds = triton::gpu::getPartitionIds(parentOp)) {
-        SetVector<Partition *> parentPartitions;
-        for (auto id : *partitionIds) {
-          parentPartitions.insert(partitions.getPartition(id));
-        }
-        setPartition(op, parentPartitions);
-      }
-    }
-  });
-}
-
 } // namespace
 
 LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
@@ -363,9 +366,6 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   if (failed(partitionsOr))
     return failure();
   PartitionSet partitions = std::move(*partitionsOr);
-
-  assignRootPartition(loop, partitions);
-  assignRegionBodyPartition(loop, partitions);
 
   // Only the root node should have consumers at this point.
   for (const Partition &partition : partitions.getPartitions()) {
@@ -516,6 +516,75 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   return success();
 }
 
+LogicalResult inferIfOpPartitions(scf::IfOp ifOp) {
+  using PartitionSet = SetVector<int>;
+  PartitionSet ifOpPartitions;
+  SmallVector<std::optional<PartitionSet>> partitionIndices(
+      ifOp.getResultTypes().size());
+
+  auto processBlock = [&](Block *block) -> LogicalResult {
+    if (!block)
+      return success();
+
+    // for yield op, get partition of each result of if-stmt
+    auto yieldOp = cast<scf::YieldOp>(block->getTerminator());
+    for (auto &opnd : yieldOp->getOpOperands()) {
+      auto partitionIds = getPartitionIds(opnd.get().getDefiningOp());
+      if (!partitionIds)
+        continue;
+      auto idx = opnd.getOperandNumber();
+      if (partitionIndices[idx] && partitionIndices[idx] != partitionIds) {
+        return emitError(yieldOp.getLoc(),
+                         "inconsistent partitions for then/else "
+                         "branches yield operand");
+      }
+      partitionIndices[idx] = partitionIds;
+    }
+
+    // if-op partition set is the union of all op partitions in the block
+    for (auto &op : block->without_terminator()) {
+      auto opPartitions = getPartitionIds(&op);
+      for (auto p : *opPartitions) {
+        ifOpPartitions.insert(p);
+      }
+    }
+    return success();
+  };
+
+  if (failed(processBlock(ifOp.thenBlock())))
+    return failure();
+  if (failed(processBlock(ifOp.elseBlock())))
+    return failure();
+
+  llvm::SmallVector<Attribute> partitionAttrs;
+  for (auto [idx, partition] : llvm::enumerate(partitionIndices)) {
+    if (!partition) {
+      if (!isa<AsyncTokenType>(ifOp.getResult(idx).getType())) {
+        return emitError(ifOp.getLoc(),
+                         "partition not found for if-stmt result");
+      }
+      partition = SetVector<int>();
+      partition->insert(0);
+    }
+    ArrayRef<int> ids(partition->begin(), partition->end());
+    OpBuilder b(ifOp);
+    partitionAttrs.push_back(b.getDenseI32ArrayAttr(ids));
+  }
+  ifOp->setAttr(kPartitionOutputsAttrName,
+                ArrayAttr::get(ifOp.getContext(), partitionAttrs));
+  setPartition(ifOp, ifOpPartitions);
+  return success();
+}
+
+LogicalResult inferReduceOpPartitions(triton::ReduceOp reduceOp) {
+  auto terminator = reduceOp.getRegion().getBlocks().front().getTerminator();
+  auto partitionIds = getPartitionIds(terminator);
+  if (!partitionIds)
+    return emitError(reduceOp.getLoc(), "reduce op has no partition ids");
+  setPartition(reduceOp, *partitionIds);
+  return success();
+}
+
 //===----------------------------------------------------------------------===//
 // Pass Definition
 //===----------------------------------------------------------------------===//
@@ -544,6 +613,14 @@ void PartitionLoops::runOnOperation() {
   });
 
   for (scf::ForOp loop : loops) {
+    loop.walk([&](triton::ReduceOp reduceOp) {
+      if (failed(inferReduceOpPartitions(reduceOp)))
+        signalPassFailure();
+    });
+    loop.walk([&](scf::IfOp ifOp) {
+      if (failed(inferIfOpPartitions(ifOp)))
+        signalPassFailure();
+    });
     if (failed(partitionLoop(loop)))
       return signalPassFailure();
   }

@@ -67,7 +67,7 @@ std::optional<std::pair<AllocOp, LoadOp>> isLoadAndAlloc(Value result) {
   if (!alloc)
     return std::nullopt;
   if (auto load = alloc.getSrc().template getDefiningOp<LoadOp>();
-      *getPartitionIds(alloc) == *getPartitionIds(load)) {
+      load && *getPartitionIds(alloc) == *getPartitionIds(load)) {
     // if alloc and load are in different partitions, they are treated as two
     // different producer operations.
     return std::make_pair(alloc, load);
