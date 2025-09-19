@@ -93,6 +93,31 @@ def _dtype(dtype: str) -> str:
     return re.match(r'([a-zA-Z]+)', dtype).group(0)
 
 
+def test_float8e4m3fnuz_in_triton():
+    # Verify Triton exposes the dtype
+    assert hasattr(tl, "float8e4m3fnuz")
+    assert isinstance(tl.float8e4m3fnuz, tl.dtype)
+    assert str(tl.float8e4m3fnuz) == "fp8e4m3fnuz"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for float8 tests")
+@pytest.mark.skipif(not hasattr(torch, "float8_e4m3fnuz"), reason="PyTorch build does not expose float8_e4m3fnuz")
+def test_float8e4m3fnuz_roundtrip():
+    # Create random data
+    x = torch.randn(32, device="cuda", dtype=torch.float32)
+    # Cast to fp8e4m3fnuz
+    y = x.to(torch.float8_e4m3fnuz)
+    # Cast back to fp32
+    z = y.to(torch.float32)
+
+    # Shapes must match
+    assert z.shape == x.shape
+    # Result must still be a tensor
+    assert torch.is_tensor(z)
+    # Values should be approximately equal (fp8 is lossy)
+    assert torch.allclose(x, z, atol=1e-1, rtol=1e-1)
+
+
 def patch_kernel(template, to_replace):
     if is_interpreter():
         local_namespace = {}

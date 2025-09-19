@@ -377,7 +377,10 @@ def check_bit_width(value, shift_value):
 class dtype(base_type):
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
-    FP_TYPES = ['fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
+    FP_TYPES = [
+        'fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp8e4m4', 'fp8e4m3fnuz', 'fp16', 'bf16', 'fp32', 'fp64'
+    ]
+
     STANDARD_FP_TYPES = ['fp16', 'bf16', 'fp32', 'fp64']
     OTHER_TYPES = ['void']
 
@@ -430,6 +433,9 @@ class dtype(base_type):
             elif name == 'fp64':
                 self.fp_mantissa_width = 52
                 self.exponent_bias = 1023
+            elif name == 'fp8e4m3fnuz':
+                self.fp_mantissa_width = 3
+                self.exponent_bias = 8
             else:
                 raise RuntimeError(f'Unsupported floating-point type {name}')
 
@@ -802,6 +808,7 @@ float8e5b16 = dtype('fp8e5b16')
 float8e4nv = dtype('fp8e4nv')
 float8e4b8 = dtype('fp8e4b8')
 float8e4b15 = dtype('fp8e4b15')
+float8e4m3fnuz = dtype('fp8e4m3fnuz')
 float16 = dtype('fp16')
 bfloat16 = dtype('bf16')
 float32 = dtype('fp32')
