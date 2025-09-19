@@ -804,10 +804,6 @@ struct VerifyWriteVisibilityOpConversion
                                      writeVisibilityType)
             ->getResult(0);
 
-    // Print
-    // b.create<tt::PrintOp>(loc, "wv: ", false, writeVisibility,
-    // std::vector<int32_t>{0});
-
     Value buf = createMemDescToI64(b, loc, getTypeConverter(),
                                    op.getBuf().getType(), adaptor.getBuf());
     Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
