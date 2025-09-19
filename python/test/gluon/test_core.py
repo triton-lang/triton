@@ -1039,7 +1039,8 @@ def test_buffer_atomic_rmw_add_bf16():
 
 
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
-def test_mma_v2():
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+def test_mma_v2(dtype):
     torch.manual_seed(42)
     B = ttgl.constexpr(128)
     threads_per_warp = ttgl.constexpr(THREADS_PER_WARP)
@@ -1058,15 +1059,18 @@ def test_mma_v2():
         a = ttgl.convert_layout(ttgl.load(a_ptr + offs), lhs_layout)
         b = ttgl.convert_layout(ttgl.load(b_ptr + offs), rhs_layout)
         c = ttgl.convert_layout(ttgl.load(c_ptr + offs), acc_layout)
-        out = mma_v2(a, b, c, input_precision="tf32")
+        if c.dtype == ttgl.bfloat16:
+            out = mma_v2(a, b, c.to(ttgl.float32), input_precision="tf32").to(ttgl.bfloat16)
+        else:
+            out = mma_v2(a, b, c, input_precision="tf32")
         ttgl.store(out_ptr + offs, ttgl.convert_layout(out, layout))
 
-    a = torch.randn((B, B), dtype=torch.float16, device="cuda")
-    b = torch.randn((B, B), dtype=torch.float16, device="cuda")
-    c = torch.randn((B, B), dtype=torch.float16, device="cuda")
-    out = torch.empty((B, B), dtype=torch.float16, device="cuda")
+    a = torch.randn((B, B), dtype=dtype, device="cuda")
+    b = torch.randn((B, B), dtype=dtype, device="cuda")
+    c = torch.randn((B, B), dtype=dtype, device="cuda")
+    out = torch.empty((B, B), dtype=dtype, device="cuda")
     kernel[(1, )](a, b, c, out)
-    torch.testing.assert_close(out, torch.addmm(c, a, b), atol=1e-2, rtol=1e-2)
+    torch.testing.assert_close(out, torch.addmm(c, a, b), atol=0.05, rtol=1e-2)
 
 
 def test_dot_fma():
