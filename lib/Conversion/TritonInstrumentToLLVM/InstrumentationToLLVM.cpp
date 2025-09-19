@@ -92,17 +92,6 @@ Value createConvertLayout(OpBuilder &b, Location loc, Value tensor,
   return b.create<ttg::ConvertLayoutOp>(loc, dstType, tensor);
 }
 
-Value createOneHot(OpBuilder &b, Location loc, int size, int index,
-                   Attribute encoding) {
-  int start = 0;
-  int end = size;
-  RankedTensorType type =
-      RankedTensorType::get({size}, b.getI32Type(), encoding);
-  Value arange = b.create<tt::MakeRangeOp>(loc, type, start, end);
-  Value indexT = tti::createConstIntTensor(b, loc, index, type);
-  return b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, arange, indexT);
-}
-
 std::tuple<Block *, Block *, Block *>
 createIfBlock(ConversionPatternRewriter &b, Location loc, Value cnd) {
   // #prevBlock
@@ -124,6 +113,17 @@ createIfBlock(ConversionPatternRewriter &b, Location loc, Value cnd) {
   return {prevBlock, ifBlock, thenBlock};
 }
 
+Value createOneHot(OpBuilder &b, Location loc, int size, int index,
+                   Attribute encoding) {
+  int start = 0;
+  int end = size;
+  RankedTensorType type =
+      RankedTensorType::get({size}, b.getI32Type(), encoding);
+  Value arange = b.create<tt::MakeRangeOp>(loc, type, start, end);
+  Value indexT = tti::createConstIntTensor(b, loc, index, type);
+  return b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, arange, indexT);
+}
+
 Value createColumnMask(OpBuilder &b, Location loc, int column,
                        RankedTensorType tensorType) {
   Attribute encoding = tti::getSingleDimSliceEncoding(
@@ -131,6 +131,20 @@ Value createColumnMask(OpBuilder &b, Location loc, int column,
   Value columnMask =
       createOneHot(b, loc, tensorType.getShape()[1], column, encoding);
   return convertAndBroadcast(b, loc, columnMask, 0, tensorType);
+}
+
+Value createMultiColumnMask(OpBuilder &b, Location loc, uint64_t columnMask,
+                            RankedTensorType tensorType) {
+  RankedTensorType i1TensorType =
+      cast<RankedTensorType>(tensorType.cloneWith(std::nullopt, b.getI1Type()));
+  Value columnMaskVal = tti::createConstIntTensor(b, loc, 0, i1TensorType);
+  for (int i = 0; i < 64; i++) {
+    if (columnMask & (1ULL << i)) {
+      columnMaskVal = b.create<arith::OrIOp>(
+          loc, columnMaskVal, createColumnMask(b, loc, i, tensorType));
+    }
+  }
+  return columnMaskVal;
 }
 
 Value createOrReduce(OpBuilder &b, Location loc, Value tensor, int axis) {
@@ -409,9 +423,8 @@ struct SetWriteVisibilityOpConversion
     Value buf = createMemDescToI64(b, loc, getTypeConverter(),
                                    op.getBuf().getType(), adaptor.getBuf());
     Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
-    int thread = op.getThread();
-    Value threadBit =
-        tti::createConstIntTensor(b, loc, 1ULL << thread, writeVisibilityType);
+    Value threadBit = tti::createConstIntTensor(b, loc, op.getThreadMask(),
+                                                writeVisibilityType);
     writeVisibility = b.create<arith::SelectOp>(loc, buffersEqBuf, threadBit,
                                                 writeVisibility);
 
@@ -449,8 +462,8 @@ struct SetReadVisibilityOpConversion
     buffersEqBuf =
         convertAndBroadcast(b, loc, buffersEqBuf, 1, readVisibilityType);
     Value threadColumnMask =
-        createColumnMask(b, loc, op.getThread(), readVisibilityType);
-    Value threadBit = tti::createConstIntTensor(b, loc, 1ULL << op.getThread(),
+        createMultiColumnMask(b, loc, op.getThreadMask(), readVisibilityType);
+    Value threadBit = tti::createConstIntTensor(b, loc, op.getThreadMask(),
                                                 readVisibilityType);
     Value readVisibilityOrThreadBit =
         b.create<arith::OrIOp>(loc, readVisibility, threadBit);
@@ -706,8 +719,6 @@ struct TransferVisibleWritesOpConversion
                               ->getResult(0);
     Value bar = createMemDescToI64(b, loc, getTypeConverter(),
                                    op.getMbar().getType(), adaptor.getMbar());
-    Value thread =
-        tti::createConstIntTensor(b, loc, op.getThread(), writeVisibilityType);
     Value barriersEqBar = createCmpIntTensorScalar(b, loc, barriers, bar);
     barriersEqBar =
         convertAndBroadcast(b, loc, barriersEqBar, 0, writeTrackingType);
@@ -718,10 +729,18 @@ struct TransferVisibleWritesOpConversion
     trackingBuffers = createOrReduce(b, loc, trackingBuffers, 1);
     trackingBuffers = createConvertLayout(b, loc, trackingBuffers,
                                           writeVisibilityType.getEncoding());
-    trackingBuffers =
-        b.create<arith::ExtUIOp>(loc, writeVisibilityType, trackingBuffers);
-    Value trackingThreadBit =
-        b.create<arith::ShLIOp>(loc, trackingBuffers, thread);
+    RankedTensorType trackingBuffersType =
+        cast<RankedTensorType>(trackingBuffers.getType());
+    Value trackingBuffersOne =
+        tti::createConstIntTensor(b, loc, 1, trackingBuffersType);
+    trackingBuffers = b.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::eq, trackingBuffers, trackingBuffersOne);
+    Value threadMask = tti::createConstIntTensor(b, loc, op.getThreadMask(),
+                                                 writeVisibilityType);
+    Value writeVisibilityZero =
+        tti::createConstIntTensor(b, loc, 0, writeVisibilityType);
+    Value trackingThreadBit = b.create<arith::SelectOp>(
+        loc, trackingBuffers, threadMask, writeVisibilityZero);
     writeVisibility =
         b.create<arith::OrIOp>(loc, writeVisibility, trackingThreadBit);
     tti::createStoreScratchMemory(b, loc, op.getWriteVisibility(),
@@ -772,7 +791,7 @@ struct TransferVisibleReadsOpConversion
     Value readVisibilityOrTracking =
         b.create<arith::OrIOp>(loc, readVisibility, trackingBar);
     Value threadColumnMask =
-        createColumnMask(b, loc, op.getThread(), readVisibilityType);
+        createMultiColumnMask(b, loc, op.getThreadMask(), readVisibilityType);
     readVisibility = b.create<arith::SelectOp>(
         loc, threadColumnMask, readVisibilityOrTracking, readVisibility);
     tti::createStoreScratchMemory(b, loc, op.getReadVisibility(),
@@ -824,9 +843,13 @@ struct VerifyWriteVisibilityOpConversion
         loc, arith::CmpIPredicate::eq, bufferHasVisibility, bufferThreadBit);
     Value writeVisible =
         b.create<arith::OrIOp>(loc, noOneIsWriting, bufferHasVisibility);
-    b.create<tti::ExperimentalAssertInThreadOp>(
-        loc, writeVisible, "Buffer being accessed has outstanding writes",
-        /*check_any=*/false);
+    std::string message = "Buffer being accessed has outstanding writes.";
+    if (!op.getOperandName().str().empty()) {
+      message += " Operand: " + op.getOperandName().str();
+    }
+    b.create<tti::ExperimentalAssertInThreadOp>(loc, writeVisible,
+                                                b.getStringAttr(message),
+                                                /*check_any=*/false);
     b.eraseOp(op);
     return success();
   }
@@ -994,13 +1017,13 @@ struct CommitAccessesOpConversion
   }
 };
 
-struct ClearOutstandingCommitsSetWriteOpConversion
+struct ClearOutstandingCommitsTransferWritesOpConversion
     : public ConvertOpToLLVMPattern<
-          tti::ExperimentalClearOutstandingCommitsSetWriteOp> {
+          tti::ExperimentalClearOutstandingCommitsTransferWritesOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(tti::ExperimentalClearOutstandingCommitsSetWriteOp op,
+  matchAndRewrite(tti::ExperimentalClearOutstandingCommitsTransferWritesOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
@@ -1044,12 +1067,17 @@ struct ClearOutstandingCommitsSetWriteOpConversion
         createOrReduce(b, loc, outstandingCommitsGtOutstandingNum, 1);
     // writeVisibilityType can be rank-1 (e.g., tensor<2xi64>), so do NOT
     // broadcast along dim=1. The select condition should match the row shape.
-    Value threadBit = tti::createConstIntTensor(b, loc, 1ULL << op.getThread(),
-                                                writeVisibilityType);
+    Value transferThreadsBitsValue = tti::createConstIntTensor(
+        b, loc, op.getTransferThreadMask(), writeVisibilityType);
     Value writeVisibilityOrThreadBit =
-        b.create<arith::OrIOp>(loc, writeVisibility, threadBit);
+        b.create<arith::OrIOp>(loc, writeVisibility, transferThreadsBitsValue);
     writeVisibility = b.create<arith::SelectOp>(
         loc, rowMask, writeVisibilityOrThreadBit, writeVisibility);
+
+    // Print
+    // b.create<tt::PrintOp>(loc, "wv: ", false, writeVisibility,
+    //                       std::vector<int32_t>{0});
+
     tti::createStoreScratchMemory(b, loc, op.getWriteVisibility(),
                                   writeVisibility, writeVisibilityType);
 
@@ -1064,13 +1092,13 @@ struct ClearOutstandingCommitsSetWriteOpConversion
   }
 };
 
-struct ClearOutstandingCommitsSetReadOpConversion
+struct ClearOutstandingCommitsTransferReadsOpConversion
     : public ConvertOpToLLVMPattern<
-          tti::ExperimentalClearOutstandingCommitsSetReadOp> {
+          tti::ExperimentalClearOutstandingCommitsTransferReadsOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(tti::ExperimentalClearOutstandingCommitsSetReadOp op,
+  matchAndRewrite(tti::ExperimentalClearOutstandingCommitsTransferReadsOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
@@ -1111,10 +1139,10 @@ struct ClearOutstandingCommitsSetReadOpConversion
     Value rowMask =
         createOrReduce(b, loc, outstandingCommitsGtOutstandingNum, 1);
     rowMask = convertAndBroadcast(b, loc, rowMask, 1, readVisibilityType);
-    Value threadBit = tti::createConstIntTensor(b, loc, 1ULL << op.getThread(),
-                                                readVisibilityType);
+    Value transferThreadsBitsValue = tti::createConstIntTensor(
+        b, loc, op.getTransferThreadMask(), readVisibilityType);
     Value readVisibilityOrThreadBit =
-        b.create<arith::OrIOp>(loc, readVisibility, threadBit);
+        b.create<arith::OrIOp>(loc, readVisibility, transferThreadsBitsValue);
     readVisibility = b.create<arith::SelectOp>(
         loc, rowMask, readVisibilityOrThreadBit, readVisibility);
     tti::createStoreScratchMemory(b, loc, op.getReadVisibility(),
@@ -1202,7 +1230,8 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<VerifyReadVisibilityOpConversion>(typeConverter);
   patterns.add<StageAccessForCommitOpConversion>(typeConverter);
   patterns.add<CommitAccessesOpConversion>(typeConverter);
-  patterns.add<ClearOutstandingCommitsSetWriteOpConversion>(typeConverter);
-  patterns.add<ClearOutstandingCommitsSetReadOpConversion>(typeConverter);
+  patterns.add<ClearOutstandingCommitsTransferWritesOpConversion>(
+      typeConverter);
+  patterns.add<ClearOutstandingCommitsTransferReadsOpConversion>(typeConverter);
   patterns.add<CheckOutstandingCommitsOpConversion>(typeConverter);
 }

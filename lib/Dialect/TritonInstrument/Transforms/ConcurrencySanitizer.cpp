@@ -89,10 +89,15 @@ int getCurrentThread(Operation *op) {
 
 // Peer threads are the equivalent threads in the TMA, TC and normal
 // thread classes.
-SmallVector<int, 3> getThreadPeers(int thread) {
-  int baseThread = thread % NUM_THREADS;
-  return {baseThread, baseThread + TMA_THREAD_OFFSET,
-          baseThread + TC_THREAD_OFFSET};
+// If a thread is a base thread, return the mask with the peers, otherwise
+// return the mask with the thread itself.
+uint64_t getThreadPeersMask(int thread) {
+  uint64_t mask = 1ULL << thread;
+  if (thread < NUM_THREADS) {
+    mask |= 1ULL << (thread + TMA_THREAD_OFFSET);
+    mask |= 1ULL << (thread + TC_THREAD_OFFSET);
+  }
+  return mask;
 }
 
 } // namespace
@@ -142,20 +147,19 @@ private:
         for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
           if (auxData.writeVisibility[(int)memType][op].value) {
             // Transfer visible writes and reads to all peer threads
-            for (int peer : getThreadPeers(thread)) {
-              b.create<tti::ExperimentalTransferVisibleWritesOp>(
-                  barrier, peer, _barriers,
-                  auxData.writeVisibility[(int)memType][op].value,
-                  auxData.writeVisibility[(int)memType][op].type,
-                  auxData.writeTracking[(int)memType][op].value,
-                  auxData.writeTracking[(int)memType][op].type, pred);
-              b.create<tti::ExperimentalTransferVisibleReadsOp>(
-                  barrier, peer, _barriers,
-                  auxData.readVisibility[(int)memType][op].value,
-                  auxData.readVisibility[(int)memType][op].type,
-                  auxData.readTracking[(int)memType][op].value,
-                  auxData.readTracking[(int)memType][op].type, pred);
-            }
+            uint64_t peerMask = getThreadPeersMask(thread);
+            b.create<tti::ExperimentalTransferVisibleWritesOp>(
+                barrier, peerMask, _barriers,
+                auxData.writeVisibility[(int)memType][op].value,
+                auxData.writeVisibility[(int)memType][op].type,
+                auxData.writeTracking[(int)memType][op].value,
+                auxData.writeTracking[(int)memType][op].type, pred);
+            b.create<tti::ExperimentalTransferVisibleReadsOp>(
+                barrier, peerMask, _barriers,
+                auxData.readVisibility[(int)memType][op].value,
+                auxData.readVisibility[(int)memType][op].type,
+                auxData.readTracking[(int)memType][op].value,
+                auxData.readTracking[(int)memType][op].type, pred);
           }
         }
       }
@@ -203,12 +207,12 @@ private:
             auxData.asyncCpCommits[op].type, nullptr);
       }
       if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
-        b.create<tti::ExperimentalClearOutstandingCommitsSetWriteOp>(
-            thread, auxData.asyncCpCommits[op].value,
-            auxData.asyncCpCommits[op].type,
+        b.create<tti::ExperimentalClearOutstandingCommitsTransferWritesOp>(
+            thread, getThreadPeersMask(thread), asyncWaitOp.getNum(),
+            auxData.asyncCpCommits[op].value, auxData.asyncCpCommits[op].type,
             auxData.writeVisibility[(int)MemType::SHARED_MEM][op].value,
             auxData.writeVisibility[(int)MemType::SHARED_MEM][op].type,
-            asyncWaitOp.getNum(), nullptr);
+            nullptr);
       }
       if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
         if (wgmmaOp.getIsAsync() == true) {
@@ -220,12 +224,11 @@ private:
         }
       }
       if (auto wgmmaWaitOp = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
-        b.create<tti::ExperimentalClearOutstandingCommitsSetReadOp>(
-            thread, auxData.wgmmaCommits[op].value,
-            auxData.wgmmaCommits[op].type,
+        b.create<tti::ExperimentalClearOutstandingCommitsTransferReadsOp>(
+            thread, getThreadPeersMask(thread), wgmmaWaitOp.getPendings(),
+            auxData.wgmmaCommits[op].value, auxData.wgmmaCommits[op].type,
             auxData.readVisibility[(int)MemType::SHARED_MEM][op].value,
-            auxData.readVisibility[(int)MemType::SHARED_MEM][op].type,
-            wgmmaWaitOp.getPendings(), nullptr);
+            auxData.readVisibility[(int)MemType::SHARED_MEM][op].type, nullptr);
       }
       listener.maybeWrapWithCriticalSection(b, auxData, nullptr);
       b.setListener(nullptr);
@@ -241,6 +244,7 @@ private:
       asyncCpCommit
     } trackingKind = TrackingKind::None;
     Value buf;
+    std::string operandName = "";
     SmallVector<std::tuple<Value, Value>> barriersAndPreds;
     Value pred;
   };
@@ -261,11 +265,12 @@ private:
         if (effect.rw == MemEffects::RW::Read) {
           // For op that is reading, we only need to check if anything else
           // is writing to the same buffer.
-          addWriteChecks(b, op, buf, effect.pred, memType, thread);
+          addWriteChecks(b, op, buf, effect.pred, memType, thread,
+                         effect.operandName);
           if (effect.trackingKind == MemEffects::TrackingKind::Barrier &&
               _barriers) {
             b.create<tti::ExperimentalSetReadVisibilityOp>(
-                buf, thread, _buffers,
+                buf, getThreadPeersMask(thread), _buffers,
                 auxData.readVisibility[(int)memType][op].value,
                 auxData.readVisibility[(int)memType][op].type, effect.pred);
             // If the op has barriers, we treat it as a commit emitted for each
@@ -295,12 +300,14 @@ private:
         if (effect.rw == MemEffects::RW::Write) {
           // Op is writing to the buffer, we need to check if anything else
           // is reading or writing to the same buffer.
-          addWriteChecks(b, op, buf, effect.pred, memType, thread);
-          addReadChecks(b, op, buf, effect.pred, memType, thread);
+          addWriteChecks(b, op, buf, effect.pred, memType, thread,
+                         effect.operandName);
+          addReadChecks(b, op, buf, effect.pred, memType, thread,
+                        effect.operandName);
           if (effect.trackingKind == MemEffects::TrackingKind::Barrier &&
               _barriers) {
             b.create<tti::ExperimentalSetWriteVisibilityOp>(
-                buf, thread, _buffers,
+                buf, getThreadPeersMask(thread), _buffers,
                 auxData.writeVisibility[(int)memType][op].value,
                 auxData.writeVisibility[(int)memType][op].type, effect.pred);
             b.create<tti::ExperimentalClearWriteTrackingOp>(
@@ -345,12 +352,15 @@ private:
   }
 
   void addWriteChecks(ImplicitLocOpBuilder &b, Operation *op, Value buf,
-                      Value pred, MemType memType, int thread) {
+                      Value pred, MemType memType, int thread,
+                      std::string operandName) {
     auto buffers = auxData.buffers[(int)memType][op].value;
     if (!auxData.barriers.empty()) {
+      StringAttr operandNameAttr = b.getStringAttr(operandName);
       b.create<tti::ExperimentalVerifyWriteVisibilityOp>(
           buf, thread, buffers, auxData.writeVisibility[(int)memType][op].value,
-          auxData.writeVisibility[(int)memType][op].type, pred);
+          auxData.writeVisibility[(int)memType][op].type, operandNameAttr,
+          pred);
     }
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM && auxData.asyncCpCommits[op].value) {
@@ -361,12 +371,14 @@ private:
   }
 
   void addReadChecks(ImplicitLocOpBuilder &b, Operation *op, Value buf,
-                     Value pred, MemType memType, int thread) {
+                     Value pred, MemType memType, int thread,
+                     std::string operandName) {
     auto buffers = auxData.buffers[(int)memType][op].value;
     if (!auxData.barriers.empty()) {
+      StringAttr operandNameAttr = b.getStringAttr(operandName);
       b.create<tti::ExperimentalVerifyReadVisibilityOp>(
           buf, thread, buffers, auxData.readVisibility[(int)memType][op].value,
-          auxData.readVisibility[(int)memType][op].type, pred);
+          auxData.readVisibility[(int)memType][op].type, operandNameAttr, pred);
     }
     // commit-num-based synchronization is only supported for shared memory
     if (memType == MemType::SHARED_MEM && auxData.wgmmaCommits[op].value) {
@@ -459,6 +471,7 @@ private:
           MemEffects{.rw = MemEffects::RW::Read,
                      .trackingKind = MemEffects::TrackingKind::Barrier,
                      .buf = mmav5Op.getA(),
+                     .operandName = "A",
                      .barriersAndPreds = barriersAndPreds,
                      .pred = mmav5Op.getPred()});
 
@@ -466,6 +479,7 @@ private:
           MemEffects{.rw = MemEffects::RW::Read,
                      .trackingKind = MemEffects::TrackingKind::Barrier,
                      .buf = mmav5Op.getB(),
+                     .operandName = "B",
                      .barriersAndPreds = barriersAndPreds,
                      .pred = mmav5Op.getPred()});
 
@@ -473,6 +487,7 @@ private:
           MemEffects{.rw = MemEffects::RW::Write,
                      .trackingKind = MemEffects::TrackingKind::Barrier,
                      .buf = mmav5Op.getAccumulator(),
+                     .operandName = "Acc",
                      .barriersAndPreds = barriersAndPreds,
                      .pred = mmav5Op.getPred()});
     }
@@ -483,14 +498,16 @@ private:
           effects.emplace_back(
               MemEffects{.rw = MemEffects::RW::Read,
                          .trackingKind = MemEffects::TrackingKind::wgmmaCommit,
-                         .buf = wgmmaOp.getA()});
+                         .buf = wgmmaOp.getA(),
+                         .operandName = "A"});
         }
         if (isa<ttg::SharedEncodingTrait>(
                 wgmmaOp.getB().getType().getEncoding())) {
           effects.emplace_back(
               MemEffects{.rw = MemEffects::RW::Read,
                          .trackingKind = MemEffects::TrackingKind::wgmmaCommit,
-                         .buf = wgmmaOp.getB()});
+                         .buf = wgmmaOp.getB(),
+                         .operandName = "B"});
         }
       }
     }
