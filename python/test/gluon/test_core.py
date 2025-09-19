@@ -560,9 +560,12 @@ def test_tmem_copy_2d():
     kernel[(1, )](x, z_tri, smem_h, smem_w, num_rows, num_cols)
 
     # offset_bases=[[0, 1], [0, 2], [32, 0], [0, 4], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]],
-    x_res = x.reshape(2, 32, 2, 2, 4) \
-             .permute(1, 2, 3, 0, 4) \
-             .reshape(num_rows // 4, num_cols)
+    # Split into contiguous shmem chunks
+    x_res = x.reshape(2, 32, 2, 2, 4)
+    # Put tmem cols first then rows
+    x_res = x_res.permute(1, 2, 3, 0, 4)
+    # Reshape as 32xnum_cols
+    x_res = x_res.reshape(num_rows // 4, num_cols)
 
     warps = torch.chunk(z_tri, chunks=4, dim=0)
     for warp in warps:
