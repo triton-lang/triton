@@ -503,26 +503,27 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   // and sharedEncoding. We can only use AsyncCopy if the target supports the
   // requested or a smaller vecSize because we cannot stride when loading
   // directly to lds
-  auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
+
+  // Check that the src and dst encoding result in a valid direct-to-lds size.
+  // Note that this does not work for padded encodings because we require
+  // CoalesceAsyncCopy to rewrite the blocked encoding to guarantee this. So the
+  // layout selection already ensures this precondition
   auto dstTy = cast<ttg::MemDescType>(alloc.getType());
-  auto regLayout = triton::gpu::toLinearLayout(srcTy);
-  // It's the allocation so we trim the multibuffer dimension
-  auto srcShape = dstTy.getShape().take_back(srcTy.getRank());
-  triton::LinearLayout sharedLayout;
-  if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
-          dstTy.getEncoding())) {
-    sharedLayout = paddedEnc.getLinearComponent();
-    return true;
-  } else {
+  if (!isa<ttg::PaddedSharedEncodingAttr>(dstTy.getEncoding())) {
+    auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
+    auto regLayout = triton::gpu::toLinearLayout(srcTy);
+    // It's the allocation so we trim the multibuffer dimension
+    auto srcShape = dstTy.getShape().take_back(srcTy.getRank());
+    triton::LinearLayout sharedLayout;
     sharedLayout = triton::gpu::toLinearLayout(srcShape, dstTy.getEncoding());
+    auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+
+    unsigned vecSize = regToSharedLayout.getNumConsecutiveInOut();
+    unsigned elemBitWidth = dstTy.getElementTypeBitWidth();
+
+    if (fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo) == 0)
+      return false;
   }
-  auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
-
-  unsigned vecSize = regToSharedLayout.getNumConsecutiveInOut();
-  unsigned elemBitWidth = dstTy.getElementTypeBitWidth();
-
-  if (fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo) == 0)
-    return false;
 
   // Checks whether the global pointer's contiguity and mask alignment allows
   // for at least 32 bit wide loads
