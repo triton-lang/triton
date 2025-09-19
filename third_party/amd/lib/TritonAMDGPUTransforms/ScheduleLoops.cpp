@@ -444,7 +444,7 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   stages[SCHED_COMPUTE] = lastStage;
   stages[SCHED_ASYNC_WAIT] = stages[SCHED_LOCAL_LOAD];
 
-  bool pairedGlobalLoadLocalStore = globalPrefetch == 0;
+  bool pairedGlobalLoadLocalStore = stages[SCHED_LOCAL_STORE] == 0;
   stages[SCHED_LOCAL_STORE] += maxDist;
   if (waitAtTail) {
     stages[SCHED_ASYNC_WAIT] = std::max(0, stages[SCHED_LOCAL_LOAD] - 1);
@@ -488,7 +488,7 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   //   Initiate ttg.local_store before tt.load
   int globalLoadCluster = 1;
   int localStoreCluster = 3;
-  if (globalPrefetch != 0) {
+  if (!pairedGlobalLoadLocalStore) {
     globalLoadCluster = 3;
     localStoreCluster = 2;
   }
@@ -500,7 +500,7 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   // else
   //   schedule ttg.local_load in the middle
   int localLoadCluster = globalLoadCluster;
-  if ((lastStage - localPrefetch) == (globalPrefetch + maxDist)) {
+  if (stages[SCHED_LOCAL_LOAD] == stages[SCHED_LOCAL_STORE]) {
     localLoadCluster = std::max(3, localStoreCluster + 1);
   } else if (numBuffers == 1 && localLoadCluster >= localStoreCluster) {
     // For 1 buffer, ttg.local_load must occur before ttg.local_store
@@ -510,7 +510,7 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   // Schedule compute with ttg.local_load if paired
   // otherwise, schedule in the middle
   int computeCluster = 2;
-  if ((lastStage - localPrefetch) == stages[SCHED_COMPUTE]) {
+  if (stages[SCHED_LOCAL_LOAD] == stages[SCHED_COMPUTE]) {
     computeCluster = localLoadCluster;
   }
 
@@ -612,19 +612,6 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
   //                                       useAsyncCopy, axisInfoAnalysis);
   // scheduleStreamOps(loadToStreamOp, schedule, stages, clusters);
   // dumpSchedule("Coarse schedule stream ops:");
-
-  scheduleDependencies(forOp, schedule);
-  dumpSchedule("Coarse schedule with dependencies:");
-
-  triton::gpu::scheduleDistanceOneDependencies(forOp, schedule);
-  dumpSchedule("Coarse schedule with dist 1:");
-
-  tt::CoarseSchedule::Cluster computeCluster = clusters[SCHED_COMPUTE];
-  triton::gpu::scheduleRemainingToLastStage(forOp, schedule, computeCluster);
-  dumpSchedule("Final coarse schedule:");
-
-  // std::vector<std::pair<Operation *, unsigned>> coarseSchedule =
-  //     schedule.createFinalSchedule(forOp);
 
   return schedule;
 }
@@ -800,16 +787,6 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
   //   schedule.erase(l);
   //   l->erase();
   // }
-
-  scheduleDependencies(forOp, schedule);
-  dumpSchedule("Coarse schedule with dependencies:");
-
-  triton::gpu::scheduleDistanceOneDependencies(forOp, schedule);
-  dumpSchedule("Coarse schedule with dist 1:");
-
-  tt::CoarseSchedule::Cluster lastCluster = clusters.back();
-  triton::gpu::scheduleRemainingToLastStage(forOp, schedule, lastCluster);
-  dumpSchedule("Final coarse schedule:");
 
   return schedule;
 }

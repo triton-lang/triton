@@ -157,7 +157,7 @@ public:
   // Set <stage, cluster> based on CoarseSchedule.
   void serialize(scf::ForOp &forOp) const;
   // Create a CoarseSchedule based on forOp's <stage, cluster>.
-  LogicalResult deSerialize(scf::ForOp &forOp);
+  LogicalResult deSerialize(scf::ForOp &forOp, bool normalizeClusterId = true);
 
   static ClusterHash hashCluster(Cluster cluster) {
     return reinterpret_cast<ClusterHash>(&*cluster);

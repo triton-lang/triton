@@ -88,7 +88,13 @@ void expandLoops(ModuleOp moduleOp) {
     LDBG("Loop before sending to expander:\n" << *forOp);
 
     IRRewriter rewriter(forOp);
-    (void)tt::pipelineForLoop(rewriter, forOp, options);
+    FailureOr<scf::ForOp> newForOp =
+        tt::pipelineForLoop(rewriter, forOp, options);
+
+    if (failed(newForOp))
+      continue;
+
+    forOp = *newForOp;
   }
 
   // NOTE: Leave empty for now, until we utilize customEpiloguePeeling
@@ -105,6 +111,8 @@ struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
     lowerLoops(moduleOp, globalPrefetch, localPrefetch, useAsyncCopy,
                usePingpong);
     expandLoops(moduleOp);
+
+    tt::removeAttributes(moduleOp);
   }
 };
 } // namespace mlir

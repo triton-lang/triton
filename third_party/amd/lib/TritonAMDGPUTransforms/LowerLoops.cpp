@@ -262,10 +262,16 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
                           waitAtTail, clusters, schedule)))
     return;
 
+  // Convert the loads into shared memory allocations and loads from them.
   auto loadToStreamOps = createStreamOps(loadToInfo, forOp, numBuffers,
                                          useAsyncCopy, axisInfoAnalysis);
 
   scheduleStreamOps(loadToStreamOps, schedule, stages, clusters);
+
+  scheduleDependencies(forOp, schedule);
+  ttg::scheduleDistanceOneDependencies(forOp, schedule);
+  tt::CoarseSchedule::Cluster computeCluster = clusters[SCHED_COMPUTE];
+  ttg::scheduleRemainingToLastStage(forOp, schedule, computeCluster);
 }
 } // namespace SingleDotSchedule
 
@@ -364,6 +370,8 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
   // TODO support different numBuffers
   int numBuffers = useAsyncCopy ? 2 : 1;
 
+  // Convert the loads into shared memory allocations and loads from them.
+  // TODO support different numBuffers
   auto loadToStreamOps = createStreamOps(loadToInfo, forOp, numBuffers,
                                          useAsyncCopy, axisInfoAnalysis);
   scheduleStreamOps(loadToStreamOps, schedule, clusters);
@@ -372,6 +380,11 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
     schedule.erase(l);
     l->erase();
   }
+
+  scheduleDependencies(forOp, schedule);
+  triton::gpu::scheduleDistanceOneDependencies(forOp, schedule);
+  tt::CoarseSchedule::Cluster lastCluster = clusters.back();
+  triton::gpu::scheduleRemainingToLastStage(forOp, schedule, lastCluster);
 }
 } // namespace ChainedDotSchedule
 
@@ -380,7 +393,7 @@ void lowerLoop(scf::ForOp forOp,
                int globalPrefetch, int localPrefetch, bool useAsyncCopy,
                bool usePingpong) {
   tt::CoarseSchedule schedule;
-  if (failed(schedule.deSerialize(forOp))) {
+  if (failed(schedule.deSerialize(forOp, /*normalizeClusterId=*/false))) {
     return;
   }
 
@@ -399,7 +412,6 @@ void lowerLoop(scf::ForOp forOp,
         globalPrefetch, localPrefetch, useAsyncCopy, waitAtTail);
   }
 
-  scheduleDependencies(forOp, schedule);
   schedule.serialize(forOp);
 }
 
