@@ -122,8 +122,6 @@ bool hasPartition(Operation *op);
 // Annotate the op with the partition index or indices, and add the op
 // to the partitions it belongs to.
 void setPartition(Operation *op, Partition *partition);
-// Unset partition annotation from the op
-void unsetPartition(Operation *op);
 void setPartition(Operation *op, const SetVector<Partition *> &partitions);
 // Annotate the op with the partition indices. It should only be used in a pass
 // which does not work with Partition instances and iterate* functions, since

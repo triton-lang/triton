@@ -181,7 +181,6 @@ void setPartition(Operation *op, ArrayRef<int> partitionIds) {
   Builder b(op->getContext());
   op->setAttr(kPartitionAttrName, b.getDenseI32ArrayAttr(partitionIds));
 }
-void unsetPartition(Operation *op) { op->removeAttr(kPartitionAttrName); }
 
 void setPartition(Operation *op, const SetVector<int> &partitionIds) {
   SmallVector<int> partitions(partitionIds.begin(), partitionIds.end());

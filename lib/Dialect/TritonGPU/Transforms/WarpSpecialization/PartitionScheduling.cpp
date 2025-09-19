@@ -564,11 +564,11 @@ void assignRegionBodyPartition(scf::ForOp loop, PartitionSet &partitions) {
   });
 
   loop->walk([&](Operation *op) {
-    // unset partition in ops that have regions
+    // remove partition attribute in ops that have regions
     // such op's partition set will be inferred from regions
     // in partition-loops pass
     if (!isa<scf::ForOp>(op) && hasPartition(op) && op->getNumRegions() > 0) {
-      unsetPartition(op);
+      op->removeAttr(kPartitionAttrName);
     }
   });
 }
