@@ -143,7 +143,9 @@ class distributed_type(block_type):
         self.name = f"<{self.shape}, {self.element_ty}, {self.layout}>"
         assert isinstance(layout, DistributedLayout), "tensor layout must be a DistributedLayout"
         if not isinstance(layout, AutoLayout):
-            assert len(shape) == layout.rank, f"tensor shape and layout rank mismatch: shape={shape}, layout={layout}, shape rank={len(shape)}, layout rank={layout.rank}"
+            assert len(
+                shape
+            ) == layout.rank, f"tensor shape and layout rank mismatch: shape={shape}, layout={layout}, shape rank={len(shape)}, layout rank={layout.rank}"
 
     def to_ir(self, builder: ir.builder) -> ir.type:
         elem_ty = self.element_ty.to_ir(builder)

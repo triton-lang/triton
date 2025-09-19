@@ -2637,6 +2637,7 @@ def test_get_num_warps():
 
 
 def test_mismatch_shape_and_layout_rank():
+
     @gluon.jit
     def kernel():
         layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
