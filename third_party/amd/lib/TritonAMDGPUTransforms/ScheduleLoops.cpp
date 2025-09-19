@@ -250,140 +250,9 @@ static Operation *bypassLDS(Operation *load, Operation *use) {
   return newOp;
 };
 
-// Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
-// and |vecSize| with which dot operand |inputValue| is fed into if possible.
-ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
-                                        unsigned *vecSize) {
-  if (!inputValue.hasOneUse())
-    return nullptr;
-
-  Operation *user = *inputValue.getUsers().begin();
-  if (user->getNumResults() != 1 ||
-      user->getBlock() != inputValue.getParentBlock())
-    return nullptr;
-
-  LDBG("getDotEncoding user: " << *user);
-  if (auto dotOp = dyn_cast<tt::DotOpInterface>(user)) {
-    OpOperand &use = *inputValue.getUses().begin();
-    *opIdx = use.getOperandNumber();
-    auto operandType = cast<RankedTensorType>(inputValue.getType());
-    *vecSize = ttg::toLinearLayout(operandType).getNumConsecutiveInOut();
-    auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
-    return dyn_cast<ttg::AMDMfmaEncodingAttr>(dotType.getEncoding());
-  }
-
-  return getDotEncoding(user->getResult(0), opIdx, vecSize);
-}
-
-// Adapted from
-// lib/Dialect/TritonGPU/Transforms/Utility.cpp::getSharedEncIfAllUsersAreDotEnc
-// to support AMDMfmaEncodingAttr.
-// TODO(max): figure out how to refactor to use upstream
-//
-// If all the transitive uses of the given value have are used by a convert to
-// the same dot operand encoding, return true and get the shared encoding that
-// needs to be used to be compatible with users' layouts.
-std::optional<ttg::SwizzledSharedEncodingAttr>
-getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
-  llvm::SmallVector<ttg::SwizzledSharedEncodingAttr> sharedEncs;
-  for (Operation *user : loadedValue.getUsers()) {
-    LDBG(" getSharedEncIfAllUsersAreDotEnc current user: " << *user);
-    if (user->getNumResults() != 1)
-      return std::nullopt;
-
-    ttg::SwizzledSharedEncodingAttr tempAttr;
-    Value userResult = user->getResult(0);
-    Type userResType = userResult.getType();
-    if (auto memDesc = dyn_cast<ttg::MemDescType>(userResType)) {
-      // First time we find a shared encoding in the chain, save it and try to
-      // use it if it is compatible with the other users.
-      tempAttr = cast<ttg::SwizzledSharedEncodingAttr>(memDesc.getEncoding());
-      LDBG("Deduced shared encoding candidate from memDesc: " << tempAttr);
-      if (!getSharedEncIfAllUsersAreDotEnc(userResult).has_value()) {
-        return std::nullopt;
-      }
-      sharedEncs.push_back(tempAttr);
-    } else {
-      if (!(isa<ttg::ConvertLayoutOp>(user) ||
-            user->hasTrait<OpTrait::LocalLoadTrait>()))
-        return std::nullopt;
-
-      auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
-      auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
-      auto order = getOrderForMemory(srcTy);
-      unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
-      SmallVector<unsigned> sharedOrder;
-      int rank = order.size();
-      // TODO rework this when shared -> dotOperand conversions support
-      // arbitrary shared memory ordering
-      if (rank == 3) {
-        // Move the batch dimension (dim #0) to be the last so that it will be
-        // the slowest varying dimension.
-        for (unsigned i = 0; i < rank; ++i)
-          if (order[i] != 0)
-            sharedOrder.emplace_back(order[i]);
-        sharedOrder.emplace_back(0);
-      } else {
-        sharedOrder = order;
-      }
-
-      auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
-      if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
-        tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-            loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
-            ctaLayout, bitWidth, /*needTrans=*/false);
-        LDBG("Deduced shared encoding candidate from dot layout: " << tempAttr);
-        sharedEncs.push_back(tempAttr);
-      } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
-        // We use linear layout directly for scaled dot fp8 operands. For such
-        // cases, we need to look further down the def-use chain to find the dot
-        // op for the mfma layout to deduce operand index and other information.
-        unsigned opIdx;
-        unsigned vecSize;
-        if (auto mfmaEnc = getDotEncoding(userResult, &opIdx, &vecSize)) {
-          LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
-          tempAttr = mfmaEnc.composeSharedLayoutForOperand(
-              ctaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
-              /*needTrans=*/false);
-          LDBG("Deduced shared encoding candidate from mfma layout: "
-               << tempAttr);
-          sharedEncs.push_back(tempAttr);
-        }
-      }
-    }
-  }
-
-  auto equalSharedEncIgnoreVec = [](ttg::SwizzledSharedEncodingAttr a,
-                                    ttg::SwizzledSharedEncodingAttr b) {
-    if (!a || !b)
-      return false;
-    return (a.getPerPhase() == b.getPerPhase() &&
-            a.getMaxPhase() == b.getMaxPhase() &&
-            a.getOrder() == b.getOrder() &&
-            a.getCTALayout() == b.getCTALayout());
-  };
-  if (sharedEncs.empty() || !sharedEncs.front())
-    return std::nullopt;
-  auto maxVecSharedEnc = sharedEncs.front();
-
-  for (auto sharedEnc : sharedEncs) {
-    if (!equalSharedEncIgnoreVec(sharedEnc, maxVecSharedEnc)) {
-      LDBG("Incompatible shared encodings");
-      return std::nullopt;
-    }
-    if (sharedEnc.getVec() > maxVecSharedEnc.getVec()) {
-      maxVecSharedEnc = sharedEnc;
-    }
-  }
-
-  LDBG("Deduced shared encoding: " << maxVecSharedEnc);
-
-  return maxVecSharedEnc;
-}
-
-LoadToInfoMap
-preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-               scf::ForOp &forOp, int numStages) {
+llvm::MapVector<Operation *, std::pair<int, Operation *>>
+getIndirectLevel(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                 scf::ForOp &forOp, int numStages) {
   auto arch = getAMDArch(forOp->getParentOfType<ModuleOp>());
   triton::AMD::ISAFamily isaFamily = triton::AMD::ISAFamily::Unknown;
   if (arch)
@@ -397,31 +266,7 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                              axisInfoAnalysis, numStages,
                                              filterSmallVectors);
 
-  LLVM_DEBUG({
-    LDBG("Found " << loadOpToIndLevel.size() << " loads to pipeline:");
-    for (const auto &[l, i] : loadOpToIndLevel) {
-      LDBG("  - load: " << *l);
-      LDBG("    at distance: " << i.first);
-      LDBG("    used by op: " << *i.second);
-    }
-  });
-
-  LoadToInfoMap loadToInfo;
-  for (const auto &[load, info] : loadOpToIndLevel) {
-    auto [distance, use] = info;
-    auto newLoad = bypassLDS(load, use);
-    if (newLoad) {
-      loadToInfo[newLoad] = {nullptr, distance, use};
-    } else {
-      LDBG("Deduce shared encoding for: " << *load);
-      auto sharedEncoding =
-          getSharedEncIfAllUsersAreDotEnc(load->getResult(0)).value_or(nullptr);
-      loadToInfo[load] = {sharedEncoding, distance, use};
-      LDBG("Populate loadInfo with shared encoding: " << sharedEncoding);
-    }
-  }
-
-  return loadToInfo;
+  return loadOpToIndLevel;
 }
 
 namespace SingleDotSchedule {
@@ -797,7 +642,28 @@ void pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
   triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
       forOp->getParentOfType<ModuleOp>());
 
-  LoadToInfoMap loadToInfo = preprocessLoop(axisInfoAnalysis, forOp, numStages);
+  llvm::MapVector<Operation *, std::pair<int, Operation *>> loadOpToIndLevel =
+      getIndirectLevel(axisInfoAnalysis, forOp, numStages);
+
+  LLVM_DEBUG({
+    LDBG("Found " << loadOpToIndLevel.size() << " loads to pipeline:");
+    for (const auto &[l, i] : loadOpToIndLevel) {
+      LDBG("  - load: " << *l);
+      LDBG("    at distance: " << i.first);
+      LDBG("    used by op: " << *i.second);
+    }
+  });
+
+  LoadToInfoMap loadToInfo;
+  for (const auto &[load, info] : loadOpToIndLevel) {
+    auto [distance, use] = info;
+    auto newLoad = bypassLDS(load, use);
+    if (newLoad) {
+      loadToInfo[newLoad] = {nullptr, distance, use};
+    } else {
+      loadToInfo[load] = {nullptr, distance, use};
+    }
+  }
 
   if (loadToInfo.empty()) {
     LDBG("couldn't find any pipeline-able loads:\n" << *forOp);

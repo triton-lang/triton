@@ -18,9 +18,9 @@ struct LoadInfo {
 };
 using LoadToInfoMap = llvm::MapVector<Operation *, LoadInfo>;
 
-LoadToInfoMap
-preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-               scf::ForOp &forOp, int numStages);
+llvm::MapVector<Operation *, std::pair<int, Operation *>>
+getIndirectLevel(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                 scf::ForOp &forOp, int numStages);
 
 namespace SingleDotSchedule {
 // Define categories of scheduling details per Operation types.
