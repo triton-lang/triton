@@ -533,8 +533,7 @@ def test_tmem_copy_2d():
         value = ttgl.load(ttgl.set_auto_layout(in_ptrs, blocked))
 
         smem_layout: ttgl.constexpr = ttgl.SharedLinearLayout(
-            offset_bases=[[0, 1], [0, 2], [32, 0], [0, 4], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]],
-            block_bases=[], alignment=128)
+            offset_bases=[[0, 1], [0, 2], [32, 0], [0, 4], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]])
         tmem_layout: ttgl.constexpr = TensorMemoryScalesLayout()
         smem = ttgl.allocate_shared_memory(ttgl.int8, (smem_h, smem_w), layout=smem_layout)
         tmem = allocate_tensor_memory(ttgl.int8, (smem_h, smem_w), layout=tmem_layout)
@@ -560,12 +559,14 @@ def test_tmem_copy_2d():
     z_tri = torch.zeros(size=(num_rows, num_cols), dtype=torch.int8).to(device)
     kernel[(1, )](x, z_tri, smem_h, smem_w, num_rows, num_cols)
 
+    # offset_bases=[[0, 1], [0, 2], [32, 0], [0, 4], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]],
+    x_res = x.reshape(2, 32, 2, 2, 4) \
+             .permute(1, 2, 3, 0, 4) \
+             .reshape(num_rows // 4, num_cols)
+
     warps = torch.chunk(z_tri, chunks=4, dim=0)
-    x_reshaped = x.reshape(num_rows // 4, num_cols)
     for warp in warps:
-        print(warp[0])
-        print(x_reshaped[0])
-        torch.testing.assert_close(x_reshaped, warp)
+        torch.testing.assert_close(x_res, warp)
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
