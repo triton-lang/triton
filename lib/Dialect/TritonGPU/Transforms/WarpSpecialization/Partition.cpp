@@ -16,9 +16,6 @@ using namespace triton::gpu;
 
 bool Partition::hasOp(Operation *op) const {
   auto partitionIds = getPartitionIds(op);
-  if (partitionIds.empty()) {
-    return false;
-  }
   return partitionIds.contains(getIndex());
 }
 
