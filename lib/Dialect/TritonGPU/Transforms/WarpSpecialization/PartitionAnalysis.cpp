@@ -871,9 +871,6 @@ bool deserializeManualPartitions(Operation *region, Graph *graph) {
 
   std::map<int, Partition *> manual_partitions;
   graph->walk([&](Node *node) {
-    // if (!node->isData())
-    //   // ignore manual partitions for non-data values
-    //   return;
     if (node->isOp()) {
       auto op = node->getOp();
       if (op->hasAttr(kPartitionAttrName)) {
@@ -894,9 +891,6 @@ bool deserializeManualPartitions(Operation *region, Graph *graph) {
           }
           node->addPartition(manual_partitions[id]);
         }
-
-        // FIXME: Remove partition attribute - it's replaced with tt.partitions
-        // op->removeAttr(kPartitionAttrName);
       }
     }
   });
@@ -1560,96 +1554,6 @@ void mergePartitions(Graph *graph, std::string funcName,
       }
     } while (changed);
   }
-
-  // // partitions that only exist outside a loop body,
-  // // should be merged with another similar partition
-  // // Note: handles case such as:
-  // //   - causal attention where there is a tmem load/store between loops
-  // //   - gemm kernels where there is an epilog following the loop body
-  // {
-  //   bool changed = false;
-  //   do {
-  //     changed = false;
-  //     for (auto &partition : graph->getPartitions()) {
-  //       if (partition->empty()) {
-  //         continue;
-  //       }
-  //       bool in_loop = false;
-  //       for (auto node : partition->getNodes()) {
-  //         Operation *op;
-  //         if (node->isOp()) {
-  //           op = node->getOp();
-  //         } else {
-  //           auto value = node->getValue();
-  //           auto blockArg = dyn_cast<BlockArgument>(value);
-  //           if (!blockArg) {
-  //             continue;
-  //           }
-  //           // TODO: what about non block args?
-  //           op = blockArg.getOwner()->getParentOp();
-  //         }
-  //         while (op && !isa<scf::ForOp>(op)) {
-  //           op = op->getParentOp();
-  //         }
-  //         in_loop |= (op && isa<scf::ForOp>(op));
-  //       }
-  //
-  //       if (!in_loop) {
-  //         // std::cout << "partition " << partition.get()
-  //         //           << "has no nodes in a loop, merge it" << std::endl;
-  //         // std::cout << "partition contains:" << std::endl;
-  //         // for (auto node : partition->getNodes()) {
-  //         //   node->dump();
-  //         // }
-  //
-  //         // partition not in a loop, merge with one that is
-  //         for (auto &candidate : graph->getPartitions()) {
-  //           if (candidate == partition) {
-  //             // don't merge with self
-  //             continue;
-  //           }
-  //           if ((candidate->getFlags() & Flags::MMA) !=
-  //               (partition->getFlags() & MMA)) {
-  //             // don't merge mma with non-mma or vice versa
-  //             continue;
-  //           }
-  //           if ((candidate->getFlags() & Flags::LOAD) !=
-  //               (partition->getFlags() & LOAD)) {
-  //             // don't merge load with non-load or vice versa
-  //             continue;
-  //           }
-  //           // std::cout << "found partition " << candidate.get() << ";
-  //           merging"
-  //           //           << std::endl;
-  //           //
-  //           // std::cout << partition->getFlags() << std::endl;
-  //           // std::cout << candidate->getFlags() << std::endl;
-  //           //
-  //           // std::cout << "mma flags:" << std::endl;
-  //           // std::cout << (int)(candidate->getFlags() & Flags::MMA) <<
-  //           // std::endl; std::cout << (int)(partition->getFlags() &
-  //           Flags::MMA)
-  //           <<
-  //           // std::endl;
-  //           //
-  //           // std::cout << "load flags:" << std::endl;
-  //           // std::cout << (int)(candidate->getFlags() & Flags::LOAD)
-  //           //           << std::endl;
-  //           // std::cout << (int)(partition->getFlags() & Flags::LOAD) <<
-  //           std::endl;
-  //
-  //           Partition::merge(partition.get(), candidate.get());
-  //           changed = true;
-  //           break;
-  //         }
-  //         // std::cout << "done" << std::endl;
-  //       }
-  //       if (changed) {
-  //         break;
-  //       }
-  //     }
-  //   } while (changed);
-  // }
 }
 
 void propagatePartitions(Graph *graph, std::string funcName,
