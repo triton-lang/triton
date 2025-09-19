@@ -626,7 +626,8 @@ LogicalResult runOnFunction(triton::FuncOp funcOp) {
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
     // skip allocOps with source and > 1 partition
-    if (!allocOp.getSrc() || getPartitionIds(allocOp)->size() <= 1)
+    auto partitionIds = getPartitionIds(allocOp);
+    if (!allocOp.getSrc() || (partitionIds && partitionIds->size() == 1))
       tmemDags.push_back(TmemAccessDag::build(allocOp));
   });
 
