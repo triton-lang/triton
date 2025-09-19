@@ -1062,9 +1062,6 @@ getSwizzling(MemDescType shmemTy, MemDescType tmemTy, TMemCopyAtom atom) {
         auto shmemInv = shmemLl.invert();
         if (shmemInv.getInDimSizeLog2(dim1) > endTile) {
           lbo = shmemInv.getBasis(dim1, endTile, kOffset);
-        } else {
-          // Choose where the tile ends
-          lbo = 16;
         }
       }
       return std::make_tuple(swizzling, *quot, cvtTile, instrShape, lbo, sbo);
@@ -1118,9 +1115,7 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
   // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-shared-memory-descriptor
   desc.descriptor = 1ULL << 46;
   desc.baseAddress = 0;
-  // For K-contig, leadDimension is assumed to be 1
-  desc.leadDimensionBaseOffset =
-      swizzling == 0 ? (lbo * (bitwidth / 8)) >> 4 : 1;
+  desc.leadDimensionBaseOffset = lbo != 0 ? (lbo * (bitwidth / 8)) >> 4 : 1;
   // SBO is in elements and we have to pass it to bits and right shift by 4
   desc.strideDimensionBaseOffset = ((sbo * (bitwidth / 8)) >> 4);
   desc.matrixBaseOffset = 0;
