@@ -409,4 +409,80 @@ def TTI_ExperimentalCheckOutstandingCommitsOp : TTI_Op<"experimental_check_outst
   let hasVerifier = 1;
 }
 
+// ===== Deadlock detection ops =====
+
+def TTI_ExperimentalSetSignallingOp : TTI_Op<"experimental_set_signalling", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Mark a barrier as being signalled by a peer thread index";
+  let description = [{
+    For the barrier row matching mbar, set signalling[row] |= (1 << bitIndex).
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$mbar,
+    I32Attr:$bitIndex,
+    TT_Tensor:$barriers,
+    TT_PtrLike:$signalling,
+    TypeAttr:$signallingType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $mbar `,` $bitIndex `{` $barriers `,` $signalling `(` $signallingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($signalling)
+  }];
+}
+
+def TTI_ExperimentalMaybeSetWaitingOp : TTI_Op<"experimental_maybe_set_waiting", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "If barrier has no signalling peers, set waiting bit for base thread";
+  let description = [{
+    If signalling[row] == 0 for the matching barrier, set waiting[row] |= (1 << baseThread).
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$mbar,
+    I32Attr:$baseThread,
+    TT_Tensor:$barriers,
+    TT_PtrLike:$waiting,
+    TypeAttr:$waitingType,
+    TT_PtrLike:$signalling,
+    TypeAttr:$signallingType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $mbar `,` $baseThread `{` $barriers `,` $waiting `(` $waitingType `)` `,` $signalling `(` $signallingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($waiting) `,` type($signalling)
+  }];
+}
+
+def TTI_ExperimentalCheckAllActiveWaitingOp : TTI_Op<"experimental_check_all_active_waiting", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Assert that not all active threads are waiting";
+  let description = [{
+    OR-reduce waiting rows to a single mask and assert that (waitingMask & activeMask) != activeMask.
+  }];
+  let arguments = (ins
+    I32Attr:$activeMask,
+    TT_PtrLike:$waiting,
+    TypeAttr:$waitingType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $activeMask `,` $waiting `(` $waitingType `)` (`,` $pred^)? attr-dict `:` type($waiting)
+  }];
+}
+
+def TTI_ExperimentalClearWaitingAndSignallingOp : TTI_Op<"experimental_clear_waiting_and_signalling", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Clear waiting bit for base thread and reset signalling for barrier";
+  let description = [{
+    For the matching barrier row, clear waiting[row] bit for baseThread and set signalling[row] = 0.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$mbar,
+    I32Attr:$baseThread,
+    TT_Tensor:$barriers,
+    TT_PtrLike:$waiting,
+    TypeAttr:$waitingType,
+    TT_PtrLike:$signalling,
+    TypeAttr:$signallingType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $mbar `,` $baseThread `{` $barriers `,` $waiting `(` $waitingType `)` `,` $signalling `(` $signallingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($waiting) `,` type($signalling)
+  }];
+}
+
 #endif // TRITONINSTRUMENT_OPS

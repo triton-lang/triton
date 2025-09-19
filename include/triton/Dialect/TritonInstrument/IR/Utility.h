@@ -53,6 +53,11 @@ struct AuxDataMap {
   RegionToValueMap asyncCpCommits;
   RegionToValueMap wgmmaCommits;
   RegionToValueMap lock;
+  // Deadlock detection aux data
+  // waiting: per-barrier bitmask of base threads waiting (i16)
+  RegionToValueMap waiting;
+  // signalling: per-barrier bitmask of peer threads signalling (i32)
+  RegionToValueMap signalling;
 
   void populateAndPassToWarpSpecialize(ModuleOp module);
 

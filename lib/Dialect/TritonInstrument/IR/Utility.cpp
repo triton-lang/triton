@@ -224,9 +224,9 @@ namespace mlir::triton::instrument {
 TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
                                                   Location loc, int64_t val,
                                                   RankedTensorType tensorType) {
+  int bitWidth = tensorType.getElementType().getIntOrFloatBitWidth();
   auto denseAttr = DenseElementsAttr::get(
-      tensorType, APInt(tensorType.getElementType().getIntOrFloatBitWidth(),
-                        val, /*isSigned=*/true));
+      tensorType, APInt(bitWidth, val, /*isSigned=*/bitWidth > 1));
   return cast<TypedValue<RankedTensorType>>(
       builder.create<arith::ConstantOp>(loc, tensorType, denseAttr)
           .getResult());
@@ -359,11 +359,6 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
   SmallVector<int32_t> barrierValues;
   getBuffersAndBarriers(module, bufValues, barrierValues);
 
-  if (bufValues[(int)MemType::SHARED_MEM].empty() &&
-      bufValues[(int)MemType::TENSOR_MEM].empty()) {
-    return;
-  }
-
   FuncOp entryPoint = getEntryPoint(module);
   assert(entryPoint);
   Region *entryRegion = &entryPoint.getBody();
@@ -405,6 +400,16 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
       return AuxDataMap::RegionToValueMap::ValueType{
           createBufferPointersTensor(b, MemType::SHARED_MEM, barrierValues)};
     });
+
+    // Deadlock detection aux data: waiting (i16[K]) and signalling (i32[K])
+    int numBarriers = barrierValues.size();
+    waiting[entryRegion] = {createZeroInitStateTensor(b, numBarriers, 0, 16),
+                            getIntTensorType(entryRegion, {numBarriers}, 16)};
+    passToWarpSpecialize(entryPoint, waiting[entryRegion], waiting);
+    signalling[entryRegion] = {
+        createZeroInitStateTensor(b, numBarriers, 0, 32),
+        getIntTensorType(entryRegion, {numBarriers}, 32)};
+    passToWarpSpecialize(entryPoint, signalling[entryRegion], signalling);
 
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       int iMemType = (int)memType;

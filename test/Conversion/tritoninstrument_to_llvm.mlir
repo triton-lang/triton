@@ -12,6 +12,78 @@ tt.func private @experimental_buffer_pointers_tmem() {
 }
 
 // -----
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_set_signalling
+// CHECK: st.global
+tt.func private @experimental_set_signalling(
+  %mbar: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
+  %barriers: tensor<2xi64, #blocked>,
+  %signalling: !tt.ptr<i32>
+) {
+  tti.experimental_set_signalling %mbar, 3{%barriers, %signalling(tensor<2xi32, #blocked>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i32>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_maybe_set_waiting
+// CHECK: st.global
+tt.func private @experimental_maybe_set_waiting(
+  %mbar: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
+  %barriers: tensor<2xi64, #blocked>,
+  %waiting: !tt.ptr<i16>,
+  %signalling: !tt.ptr<i32>
+) {
+  tti.experimental_maybe_set_waiting %mbar, 5{%barriers, %waiting(tensor<2xi16, #blocked>), %signalling(tensor<2xi32, #blocked>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i16>, !tt.ptr<i32>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_check_all_active_waiting
+// CHECK: @__assertfail
+tt.func private @experimental_check_all_active_waiting(
+  %waiting: !tt.ptr<i16>
+) {
+  // active mask 3 -> two active base threads (bits 0 and 1)
+  tti.experimental_check_all_active_waiting 3, %waiting(tensor<2xi16, #blocked>) : !tt.ptr<i16>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
+// CHECK-LABEL: @experimental_clear_waiting_and_signalling
+// CHECK: st.global
+tt.func private @experimental_clear_waiting_and_signalling(
+  %mbar: !ttg.memdesc<32x32xf32, #shared, #smem, mutable>,
+  %barriers: tensor<2xi64, #blocked>,
+  %waiting: !tt.ptr<i16>,
+  %signalling: !tt.ptr<i32>
+) {
+  tti.experimental_clear_waiting_and_signalling %mbar, 7{%barriers, %waiting(tensor<2xi16, #blocked>), %signalling(tensor<2xi32, #blocked>)} : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i16>, !tt.ptr<i32>
+  tt.return
+}
+}
+
+// -----
 
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
@@ -472,6 +544,9 @@ tt.func private @experimental_assert_in_thread_all(
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_lock_acquire
 // CHECK: 09atom.global.acquire.gpu.cas.b32
@@ -487,6 +562,9 @@ tt.func private @experimental_lock_acquire(
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
 // CHECK-LABEL: @experimental_lock_release
 // CHECK: nvvm.barrier0

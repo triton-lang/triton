@@ -87,6 +87,10 @@ int getCurrentThread(Operation *op) {
   return thread;
 }
 
+int getBaseThread(int thread) { return thread % NUM_THREADS; }
+
+int getTCTMAThread(int thread) { return thread - TMA_THREAD_OFFSET; }
+
 // Peer threads are the equivalent threads in the TMA, TC and normal
 // thread classes.
 // If a thread is a base thread, return the mask with the peers, otherwise
@@ -98,6 +102,21 @@ uint64_t getThreadPeersMask(int thread) {
     mask |= 1ULL << (thread + TC_THREAD_OFFSET);
   }
   return mask;
+}
+
+int getActiveMask(Operation *op) {
+  int numParts = 1;
+
+  if (auto wsOp = op->getParentOfType<ttg::WarpSpecializeOp>()) {
+    numParts = wsOp.getPartitionRegions().size() + 1;
+  }
+  if (auto wsOp = op->getParentOfType<ttg::WarpSpecializePartitionsOp>()) {
+    numParts = wsOp.getPartitionRegions().size() + 1;
+  }
+  int activeMask = 0;
+  for (int i = 0; i < numParts; ++i)
+    activeMask |= (1 << i);
+  return activeMask;
 }
 
 } // namespace
@@ -125,6 +144,8 @@ private:
       b.setListener(&listener);
 
       int thread = getCurrentThread(op);
+      int baseThread = getBaseThread(thread);
+      int tctmaThread = getTCTMAThread(thread);
       b.setLoc(op->getLoc());
       b.setInsertionPoint(op);
       if (isa<ttg::LocalAllocOp, ttng::TMEMAllocOp, ttng::WaitBarrierOp>(op)) {
@@ -140,6 +161,30 @@ private:
       instrumentMemEffects(b, op, thread);
 
       if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
+        // Pre-wait: set waiting (unless signalling) and check for deadlock.
+        {
+          CriticalSectionListener preListener;
+          b.setListener(&preListener);
+          b.setInsertionPoint(waitOp);
+          auto pred = waitOp.getPred();
+          auto barrier = waitOp.getAlloc();
+          if (auxData.barriers[op].value && auxData.waiting[op].value &&
+              auxData.signalling[op].value) {
+            b.create<tti::ExperimentalMaybeSetWaitingOp>(
+                barrier, baseThread, auxData.barriers[op].value,
+                auxData.waiting[op].value, auxData.waiting[op].type,
+                auxData.signalling[op].value, auxData.signalling[op].type,
+                pred);
+            int activeMask = getActiveMask(op);
+
+            b.create<tti::ExperimentalCheckAllActiveWaitingOp>(
+                activeMask, auxData.waiting[op].value, auxData.waiting[op].type,
+                pred);
+          }
+          preListener.maybeWrapWithCriticalSection(b, auxData, pred);
+          b.setListener(&listener);
+          b.setInsertionPointAfter(waitOp);
+        }
         auto _barriers = auxData.barriers[op].value;
         assert(!auxData.barriers.empty());
         auto pred = waitOp.getPred();
@@ -162,6 +207,14 @@ private:
                 auxData.readTracking[(int)memType][op].type, pred);
           }
         }
+        // Post-wait: clear waiting and reset signalling for this barrier
+        if (auxData.barriers[op].value && auxData.waiting[op].value &&
+            auxData.signalling[op].value) {
+          b.create<tti::ExperimentalClearWaitingAndSignallingOp>(
+              barrier, baseThread, auxData.barriers[op].value,
+              auxData.waiting[op].value, auxData.waiting[op].type,
+              auxData.signalling[op].value, auxData.signalling[op].type, pred);
+        }
       }
       if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
         auto _barriers = auxData.barriers[op].value;
@@ -178,6 +231,13 @@ private:
               auxData.readVisibility[(int)memType][op].type,
               auxData.readTracking[(int)memType][op].value,
               auxData.readTracking[(int)memType][op].type, commitOp.getPred());
+        }
+        // Mark signalling by TC peer thread (bits 16..31)
+        if (auxData.barriers[op].value && auxData.signalling[op].value) {
+          b.create<tti::ExperimentalSetSignallingOp>(
+              commitOp.getBarrier(), tctmaThread, auxData.barriers[op].value,
+              auxData.signalling[op].value, auxData.signalling[op].type,
+              commitOp.getPred());
         }
       }
       if (auto arriveOp = dyn_cast<ttng::ArriveBarrierOp>(op)) {
@@ -227,8 +287,23 @@ private:
         b.create<tti::ExperimentalClearOutstandingCommitsTransferReadsOp>(
             thread, getThreadPeersMask(thread), wgmmaWaitOp.getPendings(),
             auxData.wgmmaCommits[op].value, auxData.wgmmaCommits[op].type,
-            auxData.readVisibility[(int)MemType::SHARED_MEM][op].value,
-            auxData.readVisibility[(int)MemType::SHARED_MEM][op].type, nullptr);
+            auxData.readVisibility[(int)MemType::SHARED_MEM][op].value, nullptr);
+      }
+      if (auto tmaLoad = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
+        if (auxData.barriers[op].value && auxData.signalling[op].value) {
+          b.create<tti::ExperimentalSetSignallingOp>(
+              tmaLoad.getBarrier(), baseThread, auxData.barriers[op].value,
+              auxData.signalling[op].value, auxData.signalling[op].type,
+              tmaLoad.getPred());
+        }
+      }
+      if (auto tmaGather = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
+        if (auxData.barriers[op].value && auxData.signalling[op].value) {
+          b.create<tti::ExperimentalSetSignallingOp>(
+              tmaGather.getBarrier(), baseThread, auxData.barriers[op].value,
+              auxData.signalling[op].value, auxData.signalling[op].type,
+              tmaGather.getPred());
+        }
       }
       listener.maybeWrapWithCriticalSection(b, auxData, nullptr);
       b.setListener(nullptr);
@@ -254,6 +329,7 @@ private:
 
   void instrumentMemEffects(ImplicitLocOpBuilder &b, Operation *op,
                             int thread) {
+    int tctmaThread = getTCTMAThread(thread);
     std::optional<MemEffectsOpInfo> opInfo = getMemEffectsOpInfo(op);
     if (!opInfo) {
       return;
@@ -344,6 +420,12 @@ private:
               auxData.readVisibility[(int)memType][op].type,
               auxData.readTracking[(int)memType][op].value,
               auxData.readTracking[(int)memType][op].type, pred);
+        }
+        if (auxData.barriers[op].value && auxData.signalling[op].value) {
+          b.create<tti::ExperimentalSetSignallingOp>(
+              barrier, tctmaThread, auxData.barriers[op].value,
+              auxData.signalling[op].value, auxData.signalling[op].type,
+              pred);
         }
       }
     }
