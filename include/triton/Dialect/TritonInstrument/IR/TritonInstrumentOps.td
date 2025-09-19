@@ -89,20 +89,20 @@ def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release", [MemoryE
 def TTI_ExperimentalSetWriteVisibilityOp : TTI_Op<"experimental_set_write_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "set the write visibility for a buffer";
   let description = [{
-    Set the write visibility for a buffer. Marks the buffer as visible to the thread
-    issuing the write. Clears out any other threads from the visibility bitmask. We know
+    Set the write visibility for a buffer. Marks the buffer as visible to the threads set in threadMask.
+    Clears out any other threads from the visibility bitmask. We know
     this is safe because there cannot be outstanding writes to this buffer at this point.
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
-    I32Attr:$thread,
+    I64Attr:$threadMask,
     TT_Tensor:$buffers,
     TT_PtrLike:$writeVisibility,
     TypeAttr:$writeVisibilityType,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `,` $thread `{` $buffers `,` $writeVisibility `(` $writeVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeVisibility)
+    $buf `,` $threadMask `{` $buffers `,` $writeVisibility `(` $writeVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeVisibility)
   }];
   let hasVerifier = 1;
 }
@@ -168,18 +168,18 @@ def TTI_ExperimentalClearReadTrackingOp : TTI_Op<"experimental_clear_read_tracki
 def TTI_ExperimentalSetReadVisibilityOp : TTI_Op<"experimental_set_read_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "set the read visibility for a buffer";
   let description = [{
-    Add the thread to the read visibility bitmask for the buffer.
+    Add the threads set in threadMask to the read visibility bitmask for the buffer.
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
-    I32Attr:$thread,
+    I64Attr:$threadMask,
     TT_Tensor:$buffers,
     TT_PtrLike:$readVisibility,
     TypeAttr:$readVisibilityType,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `,` $thread `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
+    $buf `,` $threadMask `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
   }];
   let hasVerifier = 1;
 }
@@ -232,11 +232,11 @@ def TTI_ExperimentalTrackVisibleReadsOp : TTI_Op<"experimental_track_visible_rea
 def TTI_ExperimentalTransferVisibleWritesOp : TTI_Op<"experimental_transfer_visible_writes", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "transfer all the writes tracked by a barrier to visible by thread";
   let description = [{
-    Transfer all the writes tracked by a barrier to visible by thread.
+    Transfer all the writes tracked by a barrier to visible by threads set in threadMask.
   }];
   let arguments = (ins
     TTG_MemDescType:$mbar,
-    I32Attr:$thread,
+    I64Attr:$threadMask,
     TT_Tensor:$barriers,
     TT_PtrLike:$writeVisibility,
     TypeAttr:$writeVisibilityType,
@@ -245,7 +245,7 @@ def TTI_ExperimentalTransferVisibleWritesOp : TTI_Op<"experimental_transfer_visi
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $mbar `,` $thread `{` $barriers `,` $writeVisibility `(` $writeVisibilityType `)` `,` $writeTracking `(` $writeTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeVisibility) `,` type($writeTracking)
+    $mbar `,` $threadMask `{` $barriers `,` $writeVisibility `(` $writeVisibilityType `)` `,` $writeTracking `(` $writeTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeVisibility) `,` type($writeTracking)
   }];
   let hasVerifier = 1;
 }
@@ -254,11 +254,11 @@ def TTI_ExperimentalTransferVisibleWritesOp : TTI_Op<"experimental_transfer_visi
 def TTI_ExperimentalTransferVisibleReadsOp : TTI_Op<"experimental_transfer_visible_reads", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "transfer all the reads tracked by a barrier to visible by thread";
   let description = [{
-    Transfer all the reads tracked by a barrier to visible by thread.
+    Transfer all the reads tracked by a barrier to visible by threads set in threadMask.
   }];
   let arguments = (ins
     TTG_MemDescType:$mbar,
-    I32Attr:$thread,
+    I64Attr:$threadMask,
     TT_Tensor:$barriers,
     TT_PtrLike:$readVisibility,
     TypeAttr:$readVisibilityType,
@@ -267,7 +267,7 @@ def TTI_ExperimentalTransferVisibleReadsOp : TTI_Op<"experimental_transfer_visib
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $mbar `,` $thread `{` $barriers `,` $readVisibility `(` $readVisibilityType `)` `,` $readTracking `(` $readTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readVisibility) `,` type($readTracking)
+    $mbar `,` $threadMask `{` $barriers `,` $readVisibility `(` $readVisibilityType `)` `,` $readTracking `(` $readTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readVisibility) `,` type($readTracking)
   }];
   let hasVerifier = 1;
 }
@@ -284,10 +284,11 @@ def TTI_ExperimentalVerifyWriteVisibilityOp : TTI_Op<"experimental_verify_write_
     TT_Tensor:$buffers,
     TT_PtrLike:$writeVisibility,
     TypeAttr:$writeVisibilityType,
+    StrAttr:$operandName,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `,` $thread `{` $buffers `,` $writeVisibility `(` $writeVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeVisibility)
+    $buf `,` $thread `{` $buffers `,` $writeVisibility `(` $writeVisibilityType `)` `}` `,` $operandName (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeVisibility)
   }];
   let hasVerifier = 1;
 }
@@ -304,10 +305,11 @@ def TTI_ExperimentalVerifyReadVisibilityOp : TTI_Op<"experimental_verify_read_vi
     TT_Tensor:$buffers,
     TT_PtrLike:$readVisibility,
     TypeAttr:$readVisibilityType,
+    StrAttr:$operandName,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `,` $thread `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
+    $buf `,` $thread `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` `,` $operandName (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
   }];
   let hasVerifier = 1;
 }
@@ -349,41 +351,43 @@ def TTI_ExperimentalCommitAccessesOp : TTI_Op<"experimental_commit_accesses", [M
   }];
 }
 
-def TTI_ExperimentalClearOutstandingCommitsSetWriteOp : TTI_Op<"experimental_clear_outstanding_commits_set_write", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+def TTI_ExperimentalClearOutstandingCommitsTransferWritesOp : TTI_Op<"experimental_clear_outstanding_commits_transfer_writes", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Clear distant outstanding commits and set write visibility for current thread.";
   let description = [{
     For all rows where outstanding commits are more distant than `outstandingNum` from the current thread,
-    clear those entries and mark the corresponding buffer as visible in the write visibility table for the current thread.
+    clear those entries and mark the corresponding buffer as visible in the write visibility table for the threads set in threadMask.
   }];
   let arguments = (ins
     I32Attr:$thread,
+    I64Attr:$transferThreadMask,
+    I32Attr:$outstandingNum,
     TT_PtrLike:$outstandingCommits,
     TypeAttr:$outstandingCommitsType,
     TT_PtrLike:$writeVisibility,
     TypeAttr:$writeVisibilityType,
-    I32Attr:$outstandingNum,
     Optional<I1>:$pred);
   let assemblyFormat = [{
-    $thread `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $writeVisibility `(` $writeVisibilityType `)` `,` $outstandingNum (`,` $pred^)? attr-dict `:` type($outstandingCommits) `,` type($writeVisibility)
+    $thread `,` $transferThreadMask `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $writeVisibility `(` $writeVisibilityType `)` (`,` $pred^)? attr-dict `:` type($outstandingCommits) `,` type($writeVisibility)
   }];
 }
 
-def TTI_ExperimentalClearOutstandingCommitsSetReadOp : TTI_Op<"experimental_clear_outstanding_commits_set_read", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+def TTI_ExperimentalClearOutstandingCommitsTransferReadsOp : TTI_Op<"experimental_clear_outstanding_commits_transfer_reads", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Clear distant outstanding commits and set read visibility for current thread.";
   let description = [{
     For all rows where outstanding commits are more distant than `outstandingNum` from the current thread,
-    clear those entries and mark the corresponding buffer as visible in the read visibility table for the current thread.
+    clear those entries and mark the corresponding buffer as visible in the read visibility table for the threads set in threadMask.
   }];
   let arguments = (ins
     I32Attr:$thread,
+    I64Attr:$transferThreadMask,
+    I32Attr:$outstandingNum,
     TT_PtrLike:$outstandingCommits,
     TypeAttr:$outstandingCommitsType,
     TT_PtrLike:$readVisibility,
     TypeAttr:$readVisibilityType,
-    I32Attr:$outstandingNum,
     Optional<I1>:$pred);
   let assemblyFormat = [{
-    $thread `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $readVisibility `(` $readVisibilityType `)` `,` $outstandingNum (`,` $pred^)? attr-dict `:` type($outstandingCommits) `,` type($readVisibility)
+    $thread `,` $transferThreadMask `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $readVisibility `(` $readVisibilityType `)` (`,` $pred^)? attr-dict `:` type($outstandingCommits) `,` type($readVisibility)
   }];
 }
 

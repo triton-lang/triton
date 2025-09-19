@@ -292,7 +292,7 @@ tt.func private @experimental_verify_write_visibility(
   %readTracking: !tt.ptr<i64>,
   %pred: i1
 ) {
-  tti.experimental_verify_write_visibility %buf, 16{%buffers, %writeVisibility(tensor<2xi64, #blocked>)}, %pred : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i64>
+  tti.experimental_verify_write_visibility %buf, 16{%buffers, %writeVisibility(tensor<2xi64, #blocked>)}, "", %pred : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i64>
   tt.return
 }
 }
@@ -320,7 +320,7 @@ tt.func private @experimental_verify_read_visibility(
   %readTracking: !tt.ptr<i64>,
   %pred: i1
 ) {
-  tti.experimental_verify_read_visibility %buf, 16{%buffers, %readVisibility(tensor<2x64xi64, #blocked3>)}, %pred : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i64>
+  tti.experimental_verify_read_visibility %buf, 16{%buffers, %readVisibility(tensor<2x64xi64, #blocked3>)}, "", %pred : !ttg.memdesc<32x32xf32, #shared, #smem, mutable>, tensor<2xi64, #blocked>, !tt.ptr<i64>
   tt.return
 }
 }
@@ -391,13 +391,13 @@ tt.func private @experimental_commit_accesses(
 #smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @experimental_clear_outstanding_commits_set_write
+// CHECK-LABEL: @experimental_clear_outstanding_commits_transfer_writes
 // CHECK: st.global
-tt.func private @experimental_clear_outstanding_commits_set_write(
+tt.func private @experimental_clear_outstanding_commits_transfer_writes(
   %outstandingCommits: !tt.ptr<i8>,
   %writeVisibility: !tt.ptr<i64>
 ) {
-  tti.experimental_clear_outstanding_commits_set_write 0{%outstandingCommits(tensor<2x16xi8, #blocked2>)}, %writeVisibility(tensor<2xi64, #blocked>), 42 : !tt.ptr<i8>, !tt.ptr<i64>
+  tti.experimental_clear_outstanding_commits_transfer_writes 0, 4294967296{%outstandingCommits(tensor<2x16xi8, #blocked2>)}, %writeVisibility(tensor<2xi64, #blocked>) {outstandingNum = 42 : i32} : !tt.ptr<i8>, !tt.ptr<i64>
   tt.return
 }
 }
@@ -409,13 +409,13 @@ tt.func private @experimental_clear_outstanding_commits_set_write(
 #blocked3 = #ttg.blocked<{sizePerThread = [2, 64], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:90"} {
-// CHECK-LABEL: @experimental_clear_outstanding_commits_set_read
+// CHECK-LABEL: @experimental_clear_outstanding_commits_transfer_reads
 // CHECK: st.global
-tt.func private @experimental_clear_outstanding_commits_set_read(
+tt.func private @experimental_clear_outstanding_commits_transfer_reads(
   %outstandingCommits: !tt.ptr<i8>,
   %readVisibility: !tt.ptr<i64>
 ) {
-  tti.experimental_clear_outstanding_commits_set_read 0{%outstandingCommits(tensor<2x16xi8, #blocked2>)}, %readVisibility(tensor<2x64xi64, #blocked3>), 42 : !tt.ptr<i8>, !tt.ptr<i64>
+  tti.experimental_clear_outstanding_commits_transfer_reads 0, 4294967296{%outstandingCommits(tensor<2x16xi8, #blocked2>)}, %readVisibility(tensor<2x64xi64, #blocked3>) {outstandingNum = 42 : i32} : !tt.ptr<i8>, !tt.ptr<i64>
   tt.return
 }
 }
