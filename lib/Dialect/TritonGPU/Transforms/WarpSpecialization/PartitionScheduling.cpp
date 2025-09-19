@@ -93,7 +93,8 @@ static bool hasDefPartition(scf::ForOp loop, Operation *op,
     if (!seen.insert(op).second)
       continue;
     auto partitionIds = getPartitionIds(op);
-    if (partitionIds && partitionIds->size() != partitions.getNumPartitions())
+    if (!partitionIds.empty() &&
+        partitionIds.size() != partitions.getNumPartitions())
       return true;
     iterateDefs(loop, op,
                 [&](OpResult def) { worklist.push_back(def.getDefiningOp()); });
@@ -369,10 +370,11 @@ void propagatePartitions(scf::ForOp loop, PartitionSet &partitions) {
     // Look at the definitions directly feeding into this operation.
     iterateDefs(loop, op, [&](OpResult def) {
       Operation *defOp = def.getDefiningOp();
-      if (auto partitionIds = getPartitionIds(defOp)) {
+      auto partitionIds = getPartitionIds(defOp);
+      if (!partitionIds.empty()) {
         // The input originates from an operation already assigned to a
         // partition. Add this as a def partition.
-        for (auto id : *partitionIds) {
+        for (auto id : partitionIds) {
           cluster->defPartitions.insert(partitions.getPartition(id));
         }
       } else {
@@ -396,10 +398,11 @@ void propagatePartitions(scf::ForOp loop, PartitionSet &partitions) {
     });
     // Check the users of the operation.
     iterateUsers(loop, op, [&](Operation *user) {
-      if (auto partitionIds = getPartitionIds(user)) {
+      auto partitionIds = getPartitionIds(user);
+      if (!partitionIds.empty()) {
         // If the user is already assigned to a partition, add that partition as
         // one of the sink partitions.
-        for (auto id : *partitionIds) {
+        for (auto id : partitionIds) {
           cluster->sinkPartitions.insert(partitions.getPartition(id));
         }
         return;
@@ -504,8 +507,8 @@ void rematerializeBroadcasts(PartitionSet &partitions, OpOperand *use) {
   while (isa_and_nonnull<BroadcastOp, ExpandDimsOp>(defOp)) {
     Operation *clone = OpBuilder(defOp).clone(*defOp);
     auto userPartitionIds = getPartitionIds(use->getOwner());
-    assert(userPartitionIds && "user not scheduled");
-    for (auto id : *userPartitionIds) {
+    assert(!userPartitionIds.empty() && "user not scheduled");
+    for (auto id : userPartitionIds) {
       Partition *userPartition = partitions.getPartition(id);
       setPartition(clone, userPartition);
     }
@@ -553,9 +556,10 @@ void assignRegionBodyPartition(scf::ForOp loop, PartitionSet &partitions) {
       return WalkResult::advance();
 
     auto parentOp = loop.getBody()->findAncestorOpInBlock(*op);
-    if (auto partitionIds = triton::gpu::getPartitionIds(parentOp)) {
+    auto partitionIds = triton::gpu::getPartitionIds(parentOp);
+    if (!partitionIds.empty()) {
       SetVector<Partition *> parentPartitions;
-      for (auto id : *partitionIds) {
+      for (auto id : partitionIds) {
         parentPartitions.insert(partitions.getPartition(id));
       }
       setPartition(op, parentPartitions);

@@ -80,7 +80,8 @@ template <class T> struct AssignStagePhase {
     if (auto opT = dyn_cast<T>(op)) {
       if (opT.getAref() == aref) {
         auto opPartitionIds = getPartitionIds(op);
-        if (!opPartitionIds || llvm::is_contained(*opPartitionIds, partitionId))
+        if (opPartitionIds.empty() ||
+            llvm::is_contained(opPartitionIds, partitionId))
           return opT;
       }
     }
@@ -226,8 +227,8 @@ template <class T> struct AssignStagePhase {
         auto createInto = [&](auto opTy, auto... args) {
           using ty = decltype(opTy);
           auto ids = partitionIds;
-          if (ids) {
-            ids->insert(0);
+          if (!ids.empty()) {
+            ids.insert(0);
           }
           return triton::gpu::createInto<ty>(
               builder, builder.getLoc(), ids, stageCluster,
@@ -296,8 +297,9 @@ template <class T> struct AssignStagePhase {
       // Each partition requires its own stage/phase tracking for proper
       // multi-user handling; collect partition IDs in which this aref is used
       if (isa<T>(user)) {
-        if (auto ids = getPartitionIds(user))
-          partitionIds.insert(ids->begin(), ids->end());
+        auto ids = getPartitionIds(user);
+        if (!ids.empty())
+          partitionIds.insert(ids.begin(), ids.end());
       }
     }
     if (partitionIds.empty()) {

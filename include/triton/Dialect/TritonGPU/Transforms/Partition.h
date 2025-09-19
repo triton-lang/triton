@@ -128,7 +128,7 @@ void setPartition(Operation *op, const SetVector<Partition *> &partitions);
 // it does not keep the op attributes and the op list of a partition in sync.
 void setPartition(Operation *op, const SetVector<int> &partitionIds);
 
-std::optional<SetVector<int>> getPartitionIds(Operation *op);
+SetVector<int> getPartitionIds(Operation *op);
 
 } // namespace mlir::triton::gpu
 

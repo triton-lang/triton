@@ -75,7 +75,7 @@ bool isTensorResultComputedBy(scf::ForOp loop, size_t resultIdx,
   if (!isa<RankedTensorType>(value.getType()))
     return false;
   auto defOp = value.getDefiningOp();
-  auto partitionIds = *getPartitionIds(defOp);
+  auto partitionIds = getPartitionIds(defOp);
   if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
     partitionIds = getIfOpResultPartitionIds(ifOp, value);
   }
@@ -84,12 +84,12 @@ bool isTensorResultComputedBy(scf::ForOp loop, size_t resultIdx,
 
 SmallVector<size_t> getPartitionIds(Operation *op, size_t numPartitions) {
   auto partitionIds = triton::gpu::getPartitionIds(op);
-  if (!partitionIds) {
+  if (partitionIds.empty()) {
     SmallVector<size_t> ret(numPartitions);
     std::iota(ret.begin(), ret.end(), 0);
     return ret;
   }
-  SmallVector<size_t> ret(partitionIds->begin(), partitionIds->end());
+  SmallVector<size_t> ret(partitionIds.begin(), partitionIds.end());
   return ret;
 }
 
@@ -376,14 +376,14 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
       }
       auto partitionIds = getPartitionIds(use.getOwner());
       if (partitions.isInRootPartition(use.getOwner()) ||
-          llvm::is_contained(*partitionIds, partition.getIndex()))
+          llvm::is_contained(partitionIds, partition.getIndex()))
         return;
 
       // check if consumer partition set is a subset of the producer partitions
       auto defOpPartitionIds = getPartitionIds(output.getDefiningOp());
       bool isValidSubset = std::all_of(
-          partitionIds->begin(), partitionIds->end(), [&](int consumerId) {
-            return llvm::is_contained(*defOpPartitionIds, consumerId);
+          partitionIds.begin(), partitionIds.end(), [&](int consumerId) {
+            return llvm::is_contained(defOpPartitionIds, consumerId);
           });
 
       if (isValidSubset)
@@ -394,7 +394,7 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
           mlir::emitWarning(output.getLoc(), "non-root partition #")
           << partition.getIndex() << " has direct SSA consumer";
 
-      for (auto partitionId : *partitionIds) {
+      for (auto partitionId : partitionIds) {
         diag.attachNote(use.getOwner()->getLoc())
             << "use at distance " << distance << " in partition #"
             << partitionId << " here";
@@ -450,9 +450,10 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
     auto wsTag = op->getAttrOfType<IntegerAttr>(kWarpSpecializeTagAttrName);
     if (!wsTag || wsTag.getInt() != partitions.getTag())
       continue;
-    if (auto partitionIds = triton::gpu::getPartitionIds(op)) {
+    auto partitionIds = triton::gpu::getPartitionIds(op);
+    if (!partitionIds.empty()) {
       cloneOp(op, builders,
-              SmallVector<size_t>{partitionIds->begin(), partitionIds->end()});
+              SmallVector<size_t>{partitionIds.begin(), partitionIds.end()});
       opsToErase.push_back(op);
     } else {
       assert(loop.getOperation() == op && "Unexpected op");
@@ -530,7 +531,7 @@ LogicalResult inferIfOpPartitions(scf::IfOp ifOp) {
     auto yieldOp = cast<scf::YieldOp>(block->getTerminator());
     for (auto &opnd : yieldOp->getOpOperands()) {
       auto partitionIds = getPartitionIds(opnd.get().getDefiningOp());
-      if (!partitionIds)
+      if (partitionIds.empty())
         continue;
       auto idx = opnd.getOperandNumber();
       if (partitionIndices[idx] && partitionIndices[idx] != partitionIds) {
@@ -544,7 +545,7 @@ LogicalResult inferIfOpPartitions(scf::IfOp ifOp) {
     // if-op partition set is the union of all op partitions in the block
     for (auto &op : block->without_terminator()) {
       auto opPartitions = getPartitionIds(&op);
-      for (auto p : *opPartitions) {
+      for (auto p : opPartitions) {
         ifOpPartitions.insert(p);
       }
     }
@@ -579,9 +580,9 @@ LogicalResult inferIfOpPartitions(scf::IfOp ifOp) {
 LogicalResult inferReduceOpPartitions(triton::ReduceOp reduceOp) {
   auto terminator = reduceOp.getRegion().getBlocks().front().getTerminator();
   auto partitionIds = getPartitionIds(terminator);
-  if (!partitionIds)
+  if (partitionIds.empty())
     return emitError(reduceOp.getLoc(), "reduce op has no partition ids");
-  setPartition(reduceOp, *partitionIds);
+  setPartition(reduceOp, partitionIds);
   return success();
 }
 

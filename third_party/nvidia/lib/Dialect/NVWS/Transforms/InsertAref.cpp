@@ -39,11 +39,11 @@ bool samePartition(Operation *op1, Operation *op2) {
   auto part1 = getPartitionIds(op1);
   auto part2 = getPartitionIds(op2);
 
-  if (!part1 || !part2) {
+  if (part1.empty() || part2.empty()) {
     return false;
   }
 
-  return *part1 == *part2;
+  return part1 == part2;
 }
 
 SmallVector<ProducedValueInfo> getProducedValues(Operation *op, Block *loopBody,
@@ -51,10 +51,10 @@ SmallVector<ProducedValueInfo> getProducedValues(Operation *op, Block *loopBody,
   SmallVector<ProducedValueInfo> producedValues;
   auto partitionIds = getPartitionIds(op);
 
-  if (partitionIds && partitionIds->size() == 1) {
+  if (!partitionIds.empty() && partitionIds.size() == 1) {
     for (auto result : op->getResults()) {
       producedValues.push_back(
-          {partitions.getPartition(partitionIds->front()), result});
+          {partitions.getPartition(partitionIds.front()), result});
     }
   }
 
@@ -67,7 +67,7 @@ std::optional<std::pair<AllocOp, LoadOp>> isLoadAndAlloc(Value result) {
   if (!alloc)
     return std::nullopt;
   if (auto load = alloc.getSrc().template getDefiningOp<LoadOp>();
-      load && *getPartitionIds(alloc) == *getPartitionIds(load)) {
+      load && getPartitionIds(alloc) == getPartitionIds(load)) {
     // if alloc and load are in different partitions, they are treated as two
     // different producer operations.
     return std::make_pair(alloc, load);

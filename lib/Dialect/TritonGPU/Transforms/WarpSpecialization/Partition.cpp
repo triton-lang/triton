@@ -16,10 +16,10 @@ using namespace triton::gpu;
 
 bool Partition::hasOp(Operation *op) const {
   auto partitionIds = getPartitionIds(op);
-  if (!partitionIds) {
+  if (partitionIds.empty()) {
     return false;
   }
-  return partitionIds->contains(getIndex());
+  return partitionIds.contains(getIndex());
 }
 
 void Partition::iterateInputs(scf::ForOp loop,
@@ -39,8 +39,8 @@ void Partition::iterateInputs(scf::ForOp loop,
         // This value originates from a previous iteration.
         assert(llvm::is_contained(loop.getRegionIterArgs(), arg));
         callback(operand);
-      } else if (!partitionIds ||
-                 !llvm::is_contained(*partitionIds, getIndex())) {
+      } else if (partitionIds.empty() ||
+                 !llvm::is_contained(partitionIds, getIndex())) {
         // This value originates from a different partition in the same
         // iteration.
         assert(value.getDefiningOp()->getParentOp() == loop);
@@ -60,8 +60,8 @@ void Partition::iterateOutputs(
       if (isa<scf::YieldOp>(owner)) {
         // This value is used in a subsequent iteration.
         callback(owner, use);
-      } else if (!partitionIds ||
-                 !llvm::is_contained(*partitionIds, getIndex())) {
+      } else if (partitionIds.empty() ||
+                 !llvm::is_contained(partitionIds, getIndex())) {
         // This value is used in a different partition in the same iteration.
         callback(owner, use);
       }
@@ -117,13 +117,13 @@ const Partition *PartitionSet::getPartition(unsigned idx) const {
 
 Partition *PartitionSet::getPartition(Operation *op) {
   auto id = getPartitionIds(op);
-  assert(id && id->size() == 1);
-  return getPartition((*id)[0]);
+  assert(!id.empty() && id.size() == 1);
+  return getPartition(id[0]);
 }
 
 bool PartitionSet::isInRootPartition(Operation *op) {
   auto partitionIds = getPartitionIds(op);
-  return !partitionIds || partitionIds->size() == getNumPartitions();
+  return partitionIds.empty() || partitionIds.size() == getNumPartitions();
 }
 
 FailureOr<PartitionSet> PartitionSet::fromLoop(scf::ForOp loop) {
@@ -149,8 +149,9 @@ FailureOr<PartitionSet> PartitionSet::fromLoop(scf::ForOp loop) {
   }
 
   for (Operation &op : loop.getBody()->without_terminator()) {
-    if (auto attrs = getPartitionIds(&op)) {
-      for (auto idx : *attrs) {
+    auto attrs = getPartitionIds(&op);
+    if (!attrs.empty()) {
+      for (auto idx : attrs) {
         if (idx < 0 || idx >= result.partitions.size())
           return mlir::emitError(op.getLoc(), "invalid partition index ")
                  << idx;
@@ -202,24 +203,24 @@ void setPartition(Operation *op, const SetVector<Partition *> &partitions) {
   setPartition(op, partitionIds);
 }
 
-std::optional<SetVector<int>> getPartitionIds(Operation *op) {
+SetVector<int> getPartitionIds(Operation *op) {
+  SetVector<int> partitionIds;
   if (!op) {
-    return std::nullopt;
+    return partitionIds;
   }
   auto attrs = op->getAttr(kPartitionAttrName);
   if (!attrs) {
-    return std::nullopt;
+    return partitionIds;
   }
 
   assert(isa<DenseI32ArrayAttr>(attrs));
 
-  SetVector<int> partitionIds;
   for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
     partitionIds.insert(id);
   }
   return partitionIds;
 }
 
-bool hasPartition(Operation *op) { return getPartitionIds(op) != std::nullopt; }
+bool hasPartition(Operation *op) { return !getPartitionIds(op).empty(); }
 
 } // namespace mlir::triton::gpu

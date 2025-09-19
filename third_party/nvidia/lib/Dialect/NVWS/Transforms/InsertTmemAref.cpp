@@ -40,10 +40,10 @@ using namespace triton::nvws;
 
 std::optional<int> getPartitionId(Operation *op) {
   auto partitionIds = getPartitionIds(op);
-  if (!partitionIds)
+  if (partitionIds.empty())
     return std::nullopt;
-  assert(partitionIds->size() == 1);
-  return *partitionIds->begin();
+  assert(partitionIds.size() == 1);
+  return *partitionIds.begin();
 }
 using PartitionId = int;
 
@@ -625,9 +625,8 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
 LogicalResult runOnFunction(triton::FuncOp funcOp) {
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
-    // skip allocOps with source and > 1 partition
-    auto partitionIds = getPartitionIds(allocOp);
-    if (!allocOp.getSrc() || (partitionIds && partitionIds->size() == 1))
+    // skip allocOps with source and that don't have exactly one partition
+    if (!allocOp.getSrc() || getPartitionIds(allocOp).size() == 1)
       tmemDags.push_back(TmemAccessDag::build(allocOp));
   });
 

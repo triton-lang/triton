@@ -62,11 +62,11 @@ bool samePartition(Operation *op1, Operation *op2) {
   auto part1 = getPartitionIds(op1);
   auto part2 = getPartitionIds(op2);
 
-  if (!part1 || !part2) {
+  if (part1.empty() || part2.empty()) {
     return false;
   }
 
-  return *part1 == *part2;
+  return part1 == part2;
 }
 
 static std::pair<SmallVector<PipelinedLoad>, SmallVector<PipelinedMMA>>

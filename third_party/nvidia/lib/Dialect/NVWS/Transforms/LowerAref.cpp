@@ -124,16 +124,16 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
 
   for (auto user : op->getUsers()) {
     auto partitionIds = getPartitionIds(user);
-    if (!partitionIds)
+    if (partitionIds.empty())
       continue;
 
-    assert(partitionIds->size() == 1);
+    assert(partitionIds.size() == 1);
 
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
-      if (producerGroups.count(partitionIds->front())) {
+      if (producerGroups.count(partitionIds.front())) {
         continue;
       }
-      producerGroups.insert(partitionIds->front());
+      producerGroups.insert(partitionIds.front());
       for (auto kind : castAsyncOpAttrs(putExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
@@ -146,10 +146,10 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         }
       }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-      if (consumerGroups.count(partitionIds->front())) {
+      if (consumerGroups.count(partitionIds.front())) {
         continue;
       }
-      consumerGroups.insert(partitionIds->front());
+      consumerGroups.insert(partitionIds.front());
       for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
@@ -494,7 +494,7 @@ DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
   for (auto arefUser : aref.getUsers()) {
     if (auto getEnter = dyn_cast<ArefGetEnterOp>(arefUser)) {
       auto id = getPartitionIds(getEnter);
-      if (id && id->front() == 0) {
+      if (!id.empty() && id.front() == 0) {
         // Ignore mmav5 ops in the default partition. They are not warp
         // specialized.
         continue;
@@ -752,7 +752,7 @@ void combineArefs(scf::ForOp loop) {
       for (auto user : aref->getUsers()) {
         if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(user)) {
           putEnterOps.push_back(putEnterOp);
-          producerGroupIds.push_back(getPartitionIds(putEnterOp)->front());
+          producerGroupIds.push_back(getPartitionIds(putEnterOp).front());
         } else if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
           putExitOps.push_back(putExitOp);
         } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
