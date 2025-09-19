@@ -95,6 +95,9 @@ bool isOperandPipelineable(Value v, scf::ForOp forOp) {
           v.getDefiningOp())) {
     return false;
   }
+  if (isa<ArefPutEnterOp, ArefGetEnterOp, ArefBufferOp>(v.getDefiningOp())) {
+    return true;
+  }
   auto localAlloc = dyn_cast<triton::gpu::LocalAllocOp>(v.getDefiningOp());
   if (!localAlloc) {
     return false;
