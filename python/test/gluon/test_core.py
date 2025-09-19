@@ -17,7 +17,7 @@ from triton._internal_testing import (
 )
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
-from triton.experimental.gluon.language.nvidia.ampere import async_copy
+from triton.experimental.gluon.language.nvidia.ampere import async_copy, mma_v2
 from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
@@ -1036,3 +1036,66 @@ def test_buffer_atomic_rmw_add_bf16():
 
     llir = compiled.asm["llir"]
     assert llir.count("tail call <2 x bfloat> @llvm.amdgcn.raw.ptr.buffer.atomic.fadd.v2bf16") == SIZE_PER_THREAD // 2
+
+
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+def test_mma_v2(dtype):
+    torch.manual_seed(42)
+    B = ttgl.constexpr(128)
+    threads_per_warp = ttgl.constexpr(THREADS_PER_WARP)
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [threads_per_warp, 1], [ttgl.num_warps(), 1], [1, 0])
+        acc_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[ttgl.num_warps(), 1],
+                                                                 instr_shape=[16, 8])
+        lhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=acc_layout, operand_index=0, k_width=8)
+        rhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=acc_layout, operand_index=1, k_width=8)
+
+        offs_m = ttgl.arange(0, B, layout=ttgl.SliceLayout(1, layout))[:, None]
+        offs_n = ttgl.arange(0, B, layout=ttgl.SliceLayout(0, layout))[None, :]
+        offs = offs_m * B + offs_n
+        a = ttgl.convert_layout(ttgl.load(a_ptr + offs), lhs_layout)
+        b = ttgl.convert_layout(ttgl.load(b_ptr + offs), rhs_layout)
+        c = ttgl.convert_layout(ttgl.load(c_ptr + offs), acc_layout)
+        if c.dtype == ttgl.bfloat16:
+            out = mma_v2(a, b, c.to(ttgl.float32), input_precision="tf32").to(ttgl.bfloat16)
+        else:
+            out = mma_v2(a, b, c, input_precision="tf32")
+        ttgl.store(out_ptr + offs, ttgl.convert_layout(out, layout))
+
+    a = torch.randn((B, B), dtype=dtype, device="cuda")
+    b = torch.randn((B, B), dtype=dtype, device="cuda")
+    c = torch.randn((B, B), dtype=dtype, device="cuda")
+    out = torch.empty((B, B), dtype=dtype, device="cuda")
+    kernel[(1, )](a, b, c, out)
+    torch.testing.assert_close(out, torch.addmm(c, a, b), atol=0.05, rtol=1e-2)
+
+
+def test_dot_fma():
+    torch.manual_seed(42)
+    B = ttgl.constexpr(32)
+    threads_per_warp = ttgl.constexpr(THREADS_PER_WARP)
+
+    @gluon.jit
+    def kernel(a_ptr, b_ptr, c_ptr, out_ptr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [threads_per_warp, 1], [ttgl.num_warps(), 1], [1, 0])
+        lhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=0, k_width=0)
+        rhs_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=layout, operand_index=1, k_width=0)
+
+        offs_m = ttgl.arange(0, B, layout=ttgl.SliceLayout(1, layout))[:, None]
+        offs_n = ttgl.arange(0, B, layout=ttgl.SliceLayout(0, layout))[None, :]
+        offs = offs_m * B + offs_n
+        a = ttgl.convert_layout(ttgl.load(a_ptr + offs), lhs_layout)
+        b = ttgl.convert_layout(ttgl.load(b_ptr + offs), rhs_layout)
+        c = ttgl.load(c_ptr + offs)
+        out = ttgl.dot_fma(a, b, c)
+        ttgl.store(out_ptr + offs, out)
+
+    a = torch.rand((B, B), dtype=torch.float32, device="cuda")
+    b = torch.ones((B, B), dtype=torch.float32, device="cuda")
+    c = torch.rand((B, B), dtype=torch.float32, device="cuda")
+    out = torch.empty((B, B), dtype=torch.float32, device="cuda")
+    kernel[(1, )](a, b, c, out)
+    torch.testing.assert_close(out, torch.addmm(c, a, b), atol=1e-2, rtol=1e-2)
