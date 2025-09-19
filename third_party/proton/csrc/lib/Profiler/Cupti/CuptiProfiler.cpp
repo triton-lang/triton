@@ -211,9 +211,6 @@ struct CuptiProfiler::CuptiProfilerPimpl
       : GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~CuptiProfilerPimpl() = default;
 
-  void setLibPath(const std::string &libPath) override {
-    cupti::setLibPath(libPath);
-  }
   void doStart() override;
   void doFlush() override;
   void doStop() override;
@@ -458,6 +455,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
 
 CuptiProfiler::CuptiProfiler() {
   pImpl = std::make_unique<CuptiProfilerPimpl>(*this);
+  cupti::setLibPath(getStrEnv("TRITON_CUPTI_LIB_PATH"));
 }
 
 CuptiProfiler::~CuptiProfiler() = default;
