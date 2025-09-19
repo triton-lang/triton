@@ -80,6 +80,59 @@ void assignStageCluster(Operation *op, std::optional<PartitionSet> partitionIds,
   }
 }
 
+bool isOperandPipelineable(Value v, scf::ForOp forOp) {
+  if (forOp.isDefinedOutsideOfLoop(v)) {
+    return true;
+  }
+  if (!v.getDefiningOp()) {
+    return false;
+  }
+  while (isa<triton::gpu::MemDescTransOp, triton::gpu::MemDescReshapeOp>(
+      v.getDefiningOp())) {
+    v = v.getDefiningOp()->getOperand(0);
+  }
+  if (isa<triton::nvidia_gpu::TMEMStoreOp, triton::nvidia_gpu::TMEMAllocOp>(
+          v.getDefiningOp())) {
+    return false;
+  }
+  auto localAlloc = dyn_cast<triton::gpu::LocalAllocOp>(v.getDefiningOp());
+  if (!localAlloc) {
+    return false;
+  }
+  if (!localAlloc.getSrc()) {
+    return false;
+  }
+  if (forOp.isDefinedOutsideOfLoop(localAlloc.getSrc())) {
+    return true;
+  }
+  return false;
+}
+
+void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp) {
+  bool isAsync = true;
+  auto forOp = mmaOp->getParentOfType<scf::ForOp>();
+  if (auto scaledOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAScaledOp>(
+          mmaOp.getOperation())) {
+    if (!isa<triton::gpu::SharedEncodingTrait>(
+            scaledOp.getAScale().getType().getEncoding()) &&
+            !forOp.isDefinedOutsideOfLoop(scaledOp.getAScale()) ||
+        !isa<triton::gpu::SharedEncodingTrait>(
+            scaledOp.getBScale().getType().getEncoding()) &&
+            !forOp.isDefinedOutsideOfLoop(scaledOp.getBScale())) {
+      // Undecidable, we could follow the tmem use-def chain to find the first
+      // tmem_load.
+      isAsync = false;
+    }
+    if (!isOperandPipelineable(scaledOp.getAScale(), forOp)) {
+      isAsync = false;
+    }
+    if (!isOperandPipelineable(scaledOp.getBScale(), forOp)) {
+      isAsync = false;
+    }
+  }
+  mmaOp.setIsAsync(isAsync);
+}
+
 struct ArefValue {
   Value emptyMbars;
   Value fullMbars;
@@ -358,7 +411,7 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
 
   if (llvm::any_of(asyncKinds, hasAsyncLoad)) {
     for (auto mmav5 : mmav5Ops) {
-      mmav5.setIsAsync(true);
+      setIsAsync(mmav5);
     }
   }
 
