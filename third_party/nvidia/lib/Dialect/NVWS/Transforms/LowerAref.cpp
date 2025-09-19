@@ -38,6 +38,7 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -70,45 +71,18 @@ void assignStageCluster(Operation *op, std::optional<PartitionSet> partitionIds,
                         StageCluster stageCluster, OpBuilder &builder) {
   if (partitionIds) {
     setPartition(op, *partitionIds);
-
-    if (stageCluster) {
-      op->setAttr(triton::kLoopStageAttrName,
-                  builder.getI32IntegerAttr(stageCluster->first));
-      op->setAttr(triton::kLoopClusterAttrName,
-                  builder.getI32IntegerAttr(stageCluster->second));
-    }
+    setStageCluster(builder, op, stageCluster);
   }
 }
 
 bool isOperandPipelineable(Value v, scf::ForOp forOp) {
-  if (forOp.isDefinedOutsideOfLoop(v)) {
-    return true;
-  }
-  if (!v.getDefiningOp()) {
-    return false;
-  }
-  while (isa<triton::gpu::MemDescTransOp, triton::gpu::MemDescReshapeOp>(
-      v.getDefiningOp())) {
-    v = v.getDefiningOp()->getOperand(0);
-  }
-  if (isa<triton::nvidia_gpu::TMEMStoreOp, triton::nvidia_gpu::TMEMAllocOp>(
-          v.getDefiningOp())) {
-    return false;
-  }
-  if (isa<ArefPutEnterOp, ArefGetEnterOp, ArefBufferOp>(v.getDefiningOp())) {
-    return true;
-  }
-  auto localAlloc = dyn_cast<triton::gpu::LocalAllocOp>(v.getDefiningOp());
-  if (!localAlloc) {
-    return false;
-  }
-  if (!localAlloc.getSrc()) {
-    return false;
-  }
-  if (forOp.isDefinedOutsideOfLoop(localAlloc.getSrc())) {
-    return true;
-  }
-  return false;
+  auto isPipelineable = [](Operation *op) {
+    return isa<ArefPutEnterOp, ArefGetEnterOp, ArefBufferOp>(op);
+  };
+
+  Operation *foundDef = nullptr;
+  return triton::nvidia_gpu::isOperandPipelineableBase(v, forOp, foundDef,
+                                                       isPipelineable);
 }
 
 void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp) {
@@ -116,14 +90,7 @@ void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp) {
   auto forOp = mmaOp->getParentOfType<scf::ForOp>();
   if (auto scaledOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAScaledOp>(
           mmaOp.getOperation())) {
-    if (!isa<triton::gpu::SharedEncodingTrait>(
-            scaledOp.getAScale().getType().getEncoding()) &&
-            !forOp.isDefinedOutsideOfLoop(scaledOp.getAScale()) ||
-        !isa<triton::gpu::SharedEncodingTrait>(
-            scaledOp.getBScale().getType().getEncoding()) &&
-            !forOp.isDefinedOutsideOfLoop(scaledOp.getBScale())) {
-      // Undecidable, we could follow the tmem use-def chain to find the first
-      // tmem_load.
+    if (!triton::nvidia_gpu::areScalesPipelineable(scaledOp, forOp)) {
       isAsync = false;
     }
     if (!isOperandPipelineable(scaledOp.getAScale(), forOp)) {
