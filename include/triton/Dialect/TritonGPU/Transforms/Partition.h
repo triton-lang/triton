@@ -17,6 +17,7 @@ class ForOp;
 } // namespace mlir
 
 static constexpr char kPartitionAttrName[] = "ttg.partition";
+static constexpr char kPartitionOutputsAttrName[] = "ttg.partition.outputs";
 static constexpr char kPartitionStagesAttrName[] = "ttg.partition.stages";
 static constexpr char kWarpSpecializeTagAttrName[] = "ttg.warp_specialize.tag";
 

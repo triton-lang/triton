@@ -2,12 +2,13 @@ from __future__ import annotations
 import math
 from typing import TypeVar, List, TYPE_CHECKING, Tuple
 from functools import wraps
+import warnings
 
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
 
-from ._layouts import SharedLayout, DistributedLayout
+from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
@@ -552,3 +553,27 @@ def to_linear_layout(layout, shape, _semantic=None):
     layout = _unwrap_if_constexpr(layout)
     shape = _unwrap_shape(shape)
     return _semantic.to_linear_layout(layout, shape)
+
+
+@builtin
+def dot_fma(a, b, acc, _semantic=None):
+    assert isinstance(a, tensor), "a must be a tensor"
+    assert isinstance(b, tensor), "b must be a tensor"
+    assert isinstance(acc, tensor), "acc must be a tensor"
+
+    mma_layout = acc.type.layout
+    assert isinstance(mma_layout, BlockedLayout), "acc must have a BlockedLayout"
+    assert isinstance(a.type.layout, DotOperandLayout), "a must have a DotOperandLayout"
+    assert isinstance(b.type.layout, DotOperandLayout), "b must have a DotOperandLayout"
+    assert a.type.layout.parent == mma_layout, "a's parent layout must be the same as acc's layout"
+    assert b.type.layout.parent == mma_layout, "b's parent layout must be the same as acc's layout"
+    assert a.type.layout.operand_index == 0, "a's operand index must be 0"
+    assert b.type.layout.operand_index == 1, "b's operand index must be 1"
+
+    M, N = acc.shape
+    K = a.shape[1]
+    if M * N * K > 2**19:
+        warnings.warn(f"Large dot FMA instruction size {M}x{N}x{K} may have slow compile times")
+
+    handle = _semantic.dot(a, b, acc, input_precision=None, max_num_imprecise_acc=None, out_dtype=acc.dtype).handle
+    return tensor(handle, acc.type)
