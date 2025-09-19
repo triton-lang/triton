@@ -35,15 +35,19 @@ struct AutomaticWarpSpecialization
 void AutomaticWarpSpecialization::runOnOperation() {
   OpPassManager pm;
   pm.addPass(createTritonGPUPartitionScheduling());
+  pm.addPass(createNVWSInsertAref());
+#if 0
+  pm.addPass(createNVWSInsertTmemAref());
+#else
   pm.addPass(createTritonGPULoadMMASpecialization({numStages}));
+#endif
   pm.addPass(createTritonGPURewritePartitionDependencies());
   // `int-range-optimizations` and SCCP are good at cleaning up loop arithmetic.
   // FIXME: Re-enable integer range analysis once it is fixed.
   // pm.addPass(arith::createIntRangeOptimizationsPass());
   pm.addPass(createSCCPPass());
   pm.addPass(createCSEPass());
-  pm.addPass(createNVWSAssignStagePhase());
-  pm.addPass(createNVWSLowerAref());
+  pm.addPass(createNVWSLowerAref({numStages}));
   pm.addPass(createTritonGPUPartitionLoops());
   pm.addPass(createNVWSLowerWarpGroup());
   if (failed(runPipeline(pm, getOperation())))

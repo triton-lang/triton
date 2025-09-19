@@ -82,10 +82,51 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
     // CHECK-DAG: rocdl.workgroup.id.z
     // CHECK-DAG: rocdl.grid.dim.x
     // CHECK-DAG: rocdl.grid.dim.y
-    // CHECK-DAG: %[[PID:.*]] = llvm.trunc %15 : i64 to i32
+    // CHECK-DAG: %[[PID:.*]] = llvm.trunc %{{.*}} : i64 to i32
     // CHECK-DAG: %[[SIZE:.*]] = llvm.mlir.constant(384 : i32)
     // CHECK-DAG: %{{.*}} = llvm.mul %[[PID]], %[[SIZE]] : i32
     %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
+    llvm.return
+  }
+}
+
+// -----
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
+  // CHECK-LABEL: convert_smem_initialize
+  // CHECK: llvm.cond_br %{{.*}}, ^bb1, ^bb2
+  // CHECK: ^bb1:
+
+  // CHECK-DAG: %[[PREAMBLE:.*]] = llvm.mlir.constant(-559038737 : i32)
+  // CHECK-DAG: %[[PREAMBLE_OFFSET:.*]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK-DAG: %[[PREAMBLE_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[PREAMBLE_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, i32
+  // CHECK-DAG: llvm.store %[[PREAMBLE]], %{{.*}} : i32, !llvm.ptr<1>
+
+  // CHECK-DAG: %[[PID:.*]] = llvm.trunc %{{.*}} : i64 to i32
+  // CHECK-DAG: %[[PID_OFFSET:.*]] = llvm.mlir.constant(1 : i32) : i32
+  // CHECK-DAG: %[[PID_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[PID_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>
+  // CHECK-DAG: llvm.store %[[PID]], %[[PID_PTR]] : i32, !llvm.ptr<1>
+
+  // CHECK-DAG: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_XCC_ID, 0, 4)", "=s"  : () -> i32
+  // CHECK-DAG: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_HW_ID, 8, 4)", "=s"  : () -> i32
+  // CHECK-DAG: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_HW_ID, 13, 3)", "=s"  : () -> i32
+  // CHECK-DAG: %[[SMID_OFFSET:.*]] = llvm.mlir.constant(2 : i32) : i32
+  // CHECK-DAG: %[[SMID_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[SMID_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>
+  // CHECK-DAG: llvm.store %{{.*}}, %[[SMID_PTR]] : i32, !llvm.ptr<1>
+
+  // CHECK-DAG: %[[INIT_TIME_RAW:.*]] = llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
+  // CHECK-DAG: %[[TEN:.*]] = llvm.mlir.constant(10 : i64) : i64
+  // CHECK-DAG: %[[INIT_TIME:.*]] = llvm.mul %[[INIT_TIME_RAW]], %[[TEN]] : i64
+  // CHECK-DAG: %[[INIT_TIME_OFFSET:.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK-DAG: %[[INIT_TIME_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[INIT_TIME_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>
+  // CHECK-DAG: llvm.store %[[INIT_TIME]], %[[INIT_TIME_PTR]] : i64, !llvm.ptr<1>
+
+  // CHECK: ^bb2:
+  // CHECK: llvm.return
+  llvm.func @convert_smem_initialize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
+    %0 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
+    proton_gpu.initialize %0 : !tt.ptr<i32>
     llvm.return
   }
 }
@@ -96,32 +137,12 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
   // CHECK-LABEL: convert_smem_finalize
-  // CHECK: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_XCC_ID, 0, 3)", "=s"  : () -> i32
-  // CHECK: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_HW_ID, 8, 4)", "=s"  : () -> i32
-  // CHECK: llvm.inline_asm asm_dialect = att operand_attrs = [] "s_getreg_b32 $0, hwreg(HW_REG_HW_ID, 13, 3)", "=s"  : () -> i32
-  // CONVERT-BUILTIN: llvm.cond_br %{{.*}}, ^bb1, ^bb9
-  // CONVERT-BUILTIN: ^bb1:  // pred: ^bb0
-  // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<1>
-  // CONVERT-BUILTIN: llvm.br ^bb2(%{{.*}} : i32)
-  // CONVERT-BUILTIN: ^bb2(%{{.*}}: i32):  // 2 preds: ^bb1, ^bb8
-  // CONVERT-BUILTIN: llvm.cond_br %1, ^bb3, ^bb4
-  // CONVERT-BUILTIN: bb3:  // pred: ^bb2
-  // CONVERT-BUILTIN: %{{.*}} = llvm.load %{{.*}} : !llvm.ptr<3> -> i32
-  // CONVERT-BUILTIN: llvm.br ^bb5(%{{.*}} : i32)
-  // CONVERT-BUILTIN: ^bb4:  // pred: ^bb2
-  // CONVERT-BUILTIN: llvm.br ^bb5(%{{.*}} : i32)
-  // CONVERT-BUILTIN: ^bb5(%{{.*}}: i32):  // 2 preds: ^bb3, ^bb4
-  // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<1>
-  // CONVERT-BUILTIN: llvm.cond_br %{{.*}}, ^bb6, ^bb7
-  // CONVERT-BUILTIN: ^bb6:  // pred: ^bb5
-  // CONVERT-BUILTIN: %{{.*}} = llvm.load %{{.*}} : !llvm.ptr<3> -> i32
-  // CONVERT-BUILTIN: llvm.br ^bb8(%{{.*}} : i32)
-  // CONVERT-BUILTIN: ^bb7:  // pred: ^bb5
-  // CONVERT-BUILTIN: llvm.br ^bb8(%{{.*}} : i32)
-  // CONVERT-BUILTIN: ^bb8(%{{.*}}: i32):  // 2 preds: ^bb6, ^bb7
-  // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<1>
-  // CONVERT-BUILTIN: llvm.cond_br %{{.*}}, ^bb2(%{{.*}} : i32), ^bb9
-  // CONVERT-BUILTIN: ^bb9:  // 2 preds: ^bb0, ^bb8
+  // CONVERT-BUILTIN: llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
+  // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i64, !llvm.ptr<1>
+  // CONVERT-BUILTIN: llvm.br ^bb{{.*}}(%{{.*}} : i32)
+  // CONVERT-BUILTIN: llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
+  // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i64, !llvm.ptr<1>
+  // CONVERT-BUILTIN: llvm.br ^bb{{.*}}
   // CHECK: llvm.return
   llvm.func @convert_smem_finalize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>

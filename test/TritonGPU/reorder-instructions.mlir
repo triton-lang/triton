@@ -25,6 +25,26 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
 
 // -----
 
+// CHECK-LABEL: no_move_alloc_for_scalar_src
+//       CHECK: %{{.*}} = arith.constant 0.000000e+00 : f32
+//       CHECK: %[[SPLAT:.*]] = tt.splat %{{.*}} : f32 -> tensor<32x32xf32, #blocked>
+//       CHECK: ttg.async_wait {num = 0 : i32}
+//       CHECK: ttg.local_alloc %[[SPLAT]] : (tensor<32x32xf32, #blocked>) -> !ttg.memdesc<32x32xf32, #shared, #smem>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 4, order = [0, 1]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @no_move_alloc_for_scalar_src() {
+    %cst = arith.constant 0.000000e+00 : f32
+    %t = tt.splat %cst : f32 -> tensor<32x32xf32, #blocked>
+    ttg.async_wait {num = 0 : i32}
+    %alloc = ttg.local_alloc %t : (tensor<32x32xf32, #blocked>) -> !ttg.memdesc<32x32xf32, #shared, #smem>
+    tt.return
+  }
+}
+
+// -----
+
 // CHECK-LABEL: sink_convert_dealloc
 //       CHECK: ttg.async_wait {num = 0 : i32}
 //       CHECK: ttg.local_dealloc %0 : !ttg.memdesc<4x128x64xf16, #shared, #smem, mutable>
