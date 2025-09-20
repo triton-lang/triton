@@ -266,7 +266,7 @@ def plot_roofline(series, flops_dtype, out_path, max_tbps="memset", max_tflops="
     xmin, xmax = xs[0], xs[-1]
     dx = 0.05 * (xmax - xmin) if xmax > xmin else 1.0
     ax.set_xlim(xmin - dx, xmax + dx)
-    ax.set_ylim(min(y_roof) * 0.8 if y_roof else 0.0, max_tflops * 1.05)
+    ax.set_ylim(min(min(perf) for perf in series_perf) * 0.8 if series_perf else 0.0, max_tflops * 1.05)
 
     # Points of interest
     if points_of_interest:
