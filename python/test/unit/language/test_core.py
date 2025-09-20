@@ -388,6 +388,219 @@ def test_dtype_codegen():
         full_name = f"triton.language.{dtype}"
         assert repr(eval(full_name)) == full_name
 
+# ---- FP8 e4m3fnuz alias + kernels (backend-aware) --------------------------------------
+import triton  # ensure available for JIT + error typing
+
+def _compile_allows_fp8_alias():
+    """
+    Returns (True, None) if we can JIT a trivial kernel that touches tl.float8e4m3fnuz,
+    otherwise (False, message). Used to decide skip vs run.
+    """
+    @triton.jit
+    def _probe(O):
+        x = tl.full((), 0.0, tl.float32)
+        y = x.to(tl.float8e4m3fnuz)
+        z = y.to(tl.float32)
+        tl.store(O, z)
+
+    try:
+        dummy = torch.empty(1, device="cuda", dtype=torch.float32)
+        _probe[(1,)](dummy, num_warps=1)
+        return True, None
+    except triton.compiler.errors.CompilationError as e:
+        msg = str(e)
+        if "supported fp8 dtypes" in msg or "type fp8" in msg:
+            return False, msg
+        raise
+
+def test_float8e4m3fnuz_alias_identity():
+    """
+    The user-facing alias must exist and map to a supported fp8 dtype.
+    Backends differ: some expose e4m3_fn (fp8e4nv), others e4m3_fnuz (fp8e4b8).
+    We assert the alias resolves to one of these.
+    """
+    assert hasattr(tl, "float8e4m3fnuz")
+    assert str(tl.float8e4m3fnuz) in {"fp8e4b8", "fp8e4nv"}
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA/HIP device required")
+@pytest.mark.skipif(
+    not hasattr(torch, "float8_e4m3fnuz"),
+    reason="PyTorch build does not expose torch.float8_e4m3fnuz",
+)
+def test_float8e4m3fnuz_roundtrip_triton_with_patch_kernel():
+    """
+    Build a Triton kernel via patch_kernel and round-trip fp32 -> fp8(alias) -> fp32.
+    Compare against a PyTorch reference using torch.float8_e4m3fnuz.
+    """
+    check_cuda_or_hip("cuda")
+    ok, why = _compile_allows_fp8_alias()
+    if not ok:
+        pytest.skip(why)
+
+    SIZE = 4096 + 123  # non-multiple to exercise mask
+    @triton.jit
+    def _template(Z, X, SIZE: tl.constexpr, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < SIZE
+        x = tl.load(X + offs, mask=mask, other=0.0)
+        z = GENERATE_TEST_HERE
+        tl.store(Z + offs, z, mask=mask)
+
+    expr = "x.to(tl.float8e4m3fnuz).to(tl.float32)"
+    kernel = patch_kernel(_template, {"GENERATE_TEST_HERE": expr})
+
+    rs = RandomState(0)
+    x_np = numpy_random(SIZE, dtype_str="float32", rs=rs)
+    x_np = np.clip(x_np * 2.5, -6.0, 6.0)
+
+    x_tri = to_triton(x_np, device="cuda", dst_type="float32")
+    z_tri = to_triton(np.empty_like(x_np), device="cuda", dst_type="float32")
+
+    BLOCK = 256
+    kernel[(triton.cdiv(SIZE, BLOCK),)](z_tri, x_tri, SIZE=SIZE, BLOCK=BLOCK, num_warps=4)
+
+    # PyTorch reference
+    x_t = torch.as_tensor(x_np, device="cuda", dtype=torch.float32)
+    y_t = x_t.to(torch.float8_e4m3fnuz).to(torch.float32)
+
+    z_np = to_numpy(z_tri)
+    torch.testing.assert_close(y_t.cpu(), torch.from_numpy(z_np), atol=1e-1, rtol=1e-1)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA/HIP device required")
+@pytest.mark.skipif(
+    not hasattr(torch, "float8_e4m3fnuz"),
+    reason="PyTorch build does not expose torch.float8_e4m3fnuz",
+)
+@pytest.mark.parametrize("BLOCK,num_warps", [(128, 2), (256, 4), (512, 8)])
+def test_float8e4m3fnuz_roundtrip_param_sweep(BLOCK, num_warps):
+    """
+    Same round-trip across a few BLOCK sizes / warp counts.
+    Ensures the alias works across common tuning knobs.
+    """
+    check_cuda_or_hip("cuda")
+    ok, why = _compile_allows_fp8_alias()
+    if not ok:
+        pytest.skip(why)
+
+    SIZE = 2048 + 17
+    @triton.jit
+    def _template(Z, X, SIZE: tl.constexpr, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < SIZE
+        x = tl.load(X + offs, mask=mask, other=0.0)
+        z = GENERATE_TEST_HERE
+        tl.store(Z + offs, z, mask=mask)
+
+    expr = "x.to(tl.float8e4m3fnuz).to(tl.float32)"
+    kernel = patch_kernel(_template, {"GENERATE_TEST_HERE": expr})
+
+    x_np = numpy_random(SIZE, dtype_str="float32", rs=RandomState(1))
+    x_np = np.clip(x_np, -6.0, 6.0)
+
+    x_tri = to_triton(x_np, device="cuda", dst_type="float32")
+    z_tri = to_triton(np.empty_like(x_np), device="cuda", dst_type="float32")
+
+    kernel[(triton.cdiv(SIZE, BLOCK),)](z_tri, x_tri, SIZE=SIZE, BLOCK=BLOCK, num_warps=num_warps)
+
+    x_t = torch.as_tensor(x_np, device="cuda", dtype=torch.float32)
+    y_t = x_t.to(torch.float8_e4m3fnuz).to(torch.float32)
+
+    z_np = to_numpy(z_tri)
+    torch.testing.assert_close(y_t.cpu(), torch.from_numpy(z_np), atol=1e-1, rtol=1e-1)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA/HIP device required")
+@pytest.mark.skipif(
+    not hasattr(torch, "float8_e4m3fnuz"),
+    reason="PyTorch build does not expose torch.float8_e4m3fnuz",
+)
+def test_float8e4m3fnuz_roundtrip_triton_no_dtype_kwargs():
+    """
+    Version of the round trip that DOES NOT use tl.store(..., dtype=...) or tl.load(..., dtype=...),
+    since those kwargs aren't supported on this Triton. Uses casts only.
+    """
+    check_cuda_or_hip("cuda")
+    ok, why = _compile_allows_fp8_alias()
+    if not ok:
+        pytest.skip(why)
+
+    SIZE = 4096 + 7
+    BLOCK = 256
+    NUM_WARPS = 4
+
+    rs = RandomState(123)
+    x_np = numpy_random(SIZE, dtype_str="float32", rs=rs)
+    x_np = np.clip(x_np * 2.0, -6.0, 6.0)
+
+    @triton.jit
+    def _kernel(X, Y, SIZE: tl.constexpr, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < SIZE
+        x = tl.load(X + offs, mask=mask, other=0.0)          # fp32
+        y = x.to(tl.float8e4m3fnuz).to(tl.float32)           # fp32 -> fp8(alias) -> fp32
+        tl.store(Y + offs, y, mask=mask)
+
+    src = to_triton(x_np, device="cuda", dst_type="float32")
+    dst = to_triton(np.empty_like(x_np), device="cuda", dst_type="float32")
+
+    grid = lambda meta: (triton.cdiv(SIZE, BLOCK),)
+    _kernel[grid](src, dst, SIZE=SIZE, BLOCK=BLOCK, num_warps=NUM_WARPS)
+
+    # PyTorch reference path
+    x_t = torch.as_tensor(x_np, device="cuda", dtype=torch.float32)
+    y_ref = x_t.to(torch.float8_e4m3fnuz).to(torch.float32)
+
+    z_np = to_numpy(dst)
+    torch.testing.assert_close(y_ref.cpu(), torch.from_numpy(z_np), atol=1e-1, rtol=1e-1)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA/HIP device required")
+@pytest.mark.skipif(
+    not hasattr(torch, "float8_e4m3fnuz"),
+    reason="PyTorch build does not expose torch.float8_e4m3fnuz",
+)
+@pytest.mark.parametrize("BLOCK,num_warps", [(64, 2), (128, 4), (256, 4), (512, 8)])
+def test_float8e4m3fnuz_kernel_robustness(BLOCK, num_warps):
+    """
+    Stress a small variety of launch configs with the fp8 alias inside the kernel.
+    Skips gracefully if the current arch doesn't support this fp8 variant.
+    """
+    check_cuda_or_hip("cuda")
+    ok, why = _compile_allows_fp8_alias()
+    if not ok:
+        pytest.skip(why)
+
+    SIZE = 8192 + 31  # non-multiple for masking
+
+    @triton.jit
+    def _kernel(X, Y, N: tl.constexpr, BLOCK: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK + tl.arange(0, BLOCK)
+        mask = offs < N
+        x = tl.load(X + offs, mask=mask, other=0.0)
+        z = x.to(tl.float8e4m3fnuz).to(tl.float32)
+        tl.store(Y + offs, z, mask=mask)
+
+    x_np = numpy_random(SIZE, dtype_str="float32", rs=RandomState(2024))
+    x_np = np.clip(x_np, -6.0, 6.0)
+
+    x = to_triton(x_np, device="cuda", dst_type="float32")
+    y = to_triton(np.empty_like(x_np), device="cuda", dst_type="float32")
+
+    grid = lambda meta: (triton.cdiv(SIZE, BLOCK),)
+    _kernel[grid](x, y, SIZE, BLOCK, num_warps=num_warps)
+
+    # PyTorch reference
+    x_t = torch.as_tensor(x_np, device="cuda", dtype=torch.float32)
+    y_ref = x_t.to(torch.float8_e4m3fnuz).to(torch.float32)
+
+    torch.testing.assert_close(y_ref.cpu(), torch.from_numpy(to_numpy(y)), atol=1e-1, rtol=1e-1)
+# ----------------------------------------------------------------------------------------
 
 # ---------------
 # test binary ops

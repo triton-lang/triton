@@ -816,6 +816,13 @@ float64 = dtype('fp64')
 # pointer types
 pi32_t = pointer_type(int32)
 
+# ----------------------------------
+# User-facing alias for PyTorch’s torch.float8_e4m3fnuz:
+# This alias maps to the existing backend dtype (fp8e4b8).
+# Keep both styles for ergonomics.
+float8e4m3fnuz = float8e4b8
+fp8e4m3fnuz = float8e4b8
+
 
 def get_int_dtype(bitwidth: int, signed: bool) -> dtype:
     if bitwidth == 1:
