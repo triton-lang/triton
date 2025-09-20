@@ -1,6 +1,7 @@
 #ifndef PROTON_DRIVER_GPU_CUPTI_API_H_
 #define PROTON_DRIVER_GPU_CUPTI_API_H_
 
+#include "Driver/Dispatch.h"
 #include "cupti.h"
 #include "cupti_pcsampling.h"
 #include <string>
@@ -8,6 +9,16 @@
 namespace proton {
 
 namespace cupti {
+
+struct ExternLibCupti : public ExternLibBase {
+  using RetType = CUptiResult;
+  static constexpr const char *name = "libcupti.so";
+  static inline std::string defaultDir{};
+  static constexpr RetType success = CUPTI_SUCCESS;
+  static inline void *lib = nullptr;
+};
+
+inline constexpr const char *kProbeSymbol = "cuptiUnsubscribe";
 
 template <bool CheckSuccess> CUptiResult getVersion(uint32_t *version);
 
@@ -106,10 +117,6 @@ CUptiResult pcSamplingStart(CUpti_PCSamplingStartParams *pParams);
 
 template <bool CheckSuccess>
 CUptiResult pcSamplingStop(CUpti_PCSamplingStopParams *pParams);
-
-void setLibPath(const std::string &path);
-
-const std::string getLibPath();
 
 } // namespace cupti
 

@@ -1,11 +1,22 @@
 #ifndef PROTON_DRIVER_GPU_ROCTRACER_API_H_
 #define PROTON_DRIVER_GPU_ROCTRACER_API_H_
 
+#include "Driver/Dispatch.h"
 #include "roctracer/roctracer.h"
 
 namespace proton {
 
 namespace roctracer {
+
+struct ExternLibRoctracer : public ExternLibBase {
+  using RetType = roctracer_status_t;
+  static constexpr const char *name = "libroctracer64.so";
+  static inline std::string defaultDir{};
+  static constexpr RetType success = ROCTRACER_STATUS_SUCCESS;
+  static inline void *lib = nullptr;
+};
+
+inline constexpr const char *kProbeSymbol = "roctracer_start";
 
 template <bool CheckSuccess>
 roctracer_status_t setProperties(roctracer_domain_t domain, void *properties);
