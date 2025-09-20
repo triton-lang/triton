@@ -40,7 +40,7 @@ def _check_env(backend: str) -> None:
     # Ensure default envs are set for Proton knobs if not already set by the user.
     for k, v in triton.knobs.proton.knobs.items():
         if os.getenv(k, None) is None and v is not None:
-            os.environ[k] = str(v)
+            os.environ[k] = v
 
 
 def start(
