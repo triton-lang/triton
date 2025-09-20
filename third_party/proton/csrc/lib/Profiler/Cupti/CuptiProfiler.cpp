@@ -455,7 +455,6 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
 
 CuptiProfiler::CuptiProfiler() {
   pImpl = std::make_unique<CuptiProfilerPimpl>(*this);
-  Dispatch<cupti::ExternLibCupti>::setLibPath(getenv("TRITON_CUPTI_LIB_PATH"));
 }
 
 CuptiProfiler::~CuptiProfiler() = default;

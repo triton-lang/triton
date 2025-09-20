@@ -62,7 +62,7 @@ public:
   static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
       // If not found, try to load it from the default path
-      auto dir = getStrEnv(ExternLib::pathEnv);
+      auto dir = ExternLib::pathEnv ? getStrEnv(ExternLib::pathEnv) : "";
       if (!dir.empty()) {
         auto fullPath = dir + "/" + name;
         *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
@@ -106,10 +106,6 @@ public:
       check(ret, functionName);
     }
     return ret;
-  }
-
-  static void setLibPath(const std::string &dir) {
-    ExternLib::defaultDir = dir;
   }
 
   static std::string getLibPath() {
