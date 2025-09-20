@@ -256,6 +256,19 @@ def test_passing_tuple_with_constexpr(device):
     torch.testing.assert_close(x, expected_x, rtol=0, atol=0)
 
 
+def test_passing_nested_tuple_with_constexpr(device):
+
+    @triton.jit
+    def test(x):
+        # This creates a new scope, which will force a copy of liveins. It's
+        # important for this to happen as it forces IR flattening/unflattening,
+        # which relies on the types being correct for the roundtrip to succeed.
+        for _ in range(1):
+            tl.static_assert(x[1][0] == 2)
+
+    test[(1, )](((1, ), (tl.constexpr(2), )))
+
+
 def test_passing_tuple_to_make_tensor_descriptor(device, with_allocator):
 
     @triton.jit
