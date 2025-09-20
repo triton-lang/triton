@@ -1,8 +1,7 @@
 import functools
 import triton
-import os
 
-from triton._C.libproton import proton as libproton # type: ignore
+from triton._C.libproton import proton as libproton  # type: ignore
 from triton._C.libtriton import getenv  # type: ignore
 from .flags import flags
 from .hooks import HookManager, LaunchHook, InstrumentationHook
