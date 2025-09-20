@@ -5,6 +5,7 @@
 
 #include <stdexcept>
 #include <string>
+#include "Utility/Env.h"
 
 #define DISPATCH_ARGS_0()
 #define DISPATCH_ARGS_1(t1) t1 v1
@@ -61,15 +62,11 @@ public:
   static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
       // If not found, try to load it from the default path
-      if (ExternLib::pathEnv != nullptr) {
-        auto *env = getenv(ExternLib::pathEnv);
-        auto dir = std::string(env ? env : "");
-        if (!dir.empty()) {
-          auto fullPath = dir + "/" + name;
-          *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
-        }
-      }
-      if (*lib == nullptr) {
+      auto dir = getStrEnv(ExternLib::pathEnv);
+      if (!dir.empty()) {
+        auto fullPath = dir + "/" + name;
+        *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
+      } else if (!*lib) {
         // Only if the default path is not set, we try to load it from the
         // system.
         // First reuse the existing handle
