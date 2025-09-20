@@ -36,7 +36,7 @@ def _check_env(backend: str) -> None:
                 raise ValueError(
                     f"Proton does not work when the environment variable {env} is set on AMD GPUs. Please unset it and use `ROCR_VISIBLE_DEVICES` instead"
                 )
-    
+
     # Ensure default envs are set for Proton knobs if not already set by the user.
     for k, v in triton.knobs.proton.knobs.items():
         if os.getenv(k, None) is None and v is not None:
