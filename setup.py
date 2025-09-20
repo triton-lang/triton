@@ -217,14 +217,10 @@ def get_llvm_package_info():
                 # Ubuntu 22 LTS (v2.35)
                 # Ubuntu 20 LTS (v2.31)
                 system_suffix = "ubuntu-x64"
-            elif vglibc > 217:
+            else:
                 # Manylinux_2.28 (v2.28)
                 # AlmaLinux 8 (v2.28)
                 system_suffix = "almalinux-x64"
-            else:
-                # Manylinux_2014 (v2.17)
-                # CentOS 7 (v2.17)
-                system_suffix = "centos-x64"
         else:
             print(
                 f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
