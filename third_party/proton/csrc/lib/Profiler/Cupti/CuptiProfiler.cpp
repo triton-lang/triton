@@ -211,9 +211,6 @@ struct CuptiProfiler::CuptiProfilerPimpl
       : GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~CuptiProfilerPimpl() = default;
 
-  void setLibPath(const std::string &libPath) override {
-    cupti::setLibPath(libPath);
-  }
   void doStart() override;
   void doFlush() override;
   void doStop() override;

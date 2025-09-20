@@ -3,6 +3,7 @@
 
 #include <dlfcn.h>
 
+#include "Utility/Env.h"
 #include <stdexcept>
 #include <string>
 
@@ -44,13 +45,14 @@ namespace proton {
 
 struct ExternLibBase {
   using RetType = int; // Generic type, can be overridden in derived structs
-  static constexpr const char *name = ""; // Placeholder
-  static constexpr RetType success = 0;   // Placeholder
+  static constexpr const char *name = "";    // Placeholder
+  static constexpr const char *symbolName{}; // Placeholder
+  static constexpr const char *pathEnv{};    // Placeholder
+  static constexpr RetType success = 0;      // Placeholder
   ExternLibBase() = delete;
   ExternLibBase(const ExternLibBase &) = delete;
   ExternLibBase &operator=(const ExternLibBase &) = delete;
   static inline void *lib{nullptr};
-  static inline std::string defaultDir{""};
 };
 
 template <typename ExternLib> class Dispatch {
@@ -60,8 +62,9 @@ public:
   static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
       // If not found, try to load it from the default path
-      auto dir = std::string(ExternLib::defaultDir);
-      if (dir.length() > 0) {
+      auto dir =
+          ExternLib::pathEnv == nullptr ? "" : getStrEnv(ExternLib::pathEnv);
+      if (!dir.empty()) {
         auto fullPath = dir + "/" + name;
         *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
       } else {
@@ -104,6 +107,25 @@ public:
       check(ret, functionName);
     }
     return ret;
+  }
+
+  static std::string getLibPath() {
+    if (ExternLib::lib == nullptr) {
+      // Force initialization
+      Dispatch<ExternLib>::init(ExternLib::name, &ExternLib::lib);
+      if (ExternLib::lib == nullptr) {
+        return "";
+      }
+    }
+    if (ExternLib::lib != nullptr) {
+      void *sym = dlsym(ExternLib::lib,
+                        ExternLib::symbolName); // pick any known symbol
+      Dl_info info;
+      if (dladdr(sym, &info)) {
+        return info.dli_fname;
+      }
+    }
+    return "";
   }
 };
 
