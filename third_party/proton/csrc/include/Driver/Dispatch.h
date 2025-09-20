@@ -67,7 +67,7 @@ public:
       if (!dir.empty()) {
         auto fullPath = dir + "/" + name;
         *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
-      } else if (!*lib) {
+      } else {
         // Only if the default path is not set, we try to load it from the
         // system.
         // First reuse the existing handle
