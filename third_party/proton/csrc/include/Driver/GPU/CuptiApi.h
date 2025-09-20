@@ -14,7 +14,7 @@ struct ExternLibCupti : public ExternLibBase {
   using RetType = CUptiResult;
   static constexpr const char *name = "libcupti.so";
   static constexpr const char *symbolName = "cuptiUnsubscribe";
-  static inline const std::string pathEnv = "TRITON_CUPTI_LIB_PATH";
+  static constexpr const char *pathEnv = "TRITON_CUPTI_LIB_PATH";
   static inline std::string defaultDir{};
   static constexpr RetType success = CUPTI_SUCCESS;
   static inline void *lib = nullptr;

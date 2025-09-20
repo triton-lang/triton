@@ -62,7 +62,7 @@ public:
   static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
       // If not found, try to load it from the default path
-      auto dir = ExternLib::pathEnv ? getStrEnv(ExternLib::pathEnv) : "";
+      auto dir = ExternLib::pathEnv == nullptr ? "" : getStrEnv(ExternLib::pathEnv);
       if (!dir.empty()) {
         auto fullPath = dir + "/" + name;
         *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
