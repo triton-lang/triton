@@ -91,7 +91,7 @@ private:
     auto bitwidth = this->typeConverter->convertType(dstTy.getElementType())
                         .getIntOrFloatBitWidth();
     int32_t kWidth = dotEnc.getKWidth();
-    const int32_t mDim = mfmaEnc.getMDim();
+    const int32_t mDim = mfmaEnc.getInstrShape()[0];
     if (mDim != 32 && mDim != 16)
       return false;
 

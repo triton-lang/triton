@@ -3,7 +3,7 @@
 // Hoist convert_layout out of the loop since the defining op of the src is out of the loop
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
-#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16], isTransposed = true}>
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16, 16], isTransposed = true}>
 #dotOp0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
 #dotOp1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
 // CHECK-LABEL: hoist_cvtToDotOp
@@ -33,7 +33,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
 // Keep convert_layout inside the loop since the defining op of the src is inside the loop
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
-#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16], isTransposed = true}>
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16, 16], isTransposed = true}>
 #dotOp0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
 #dotOp1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
 // CHECK-LABEL: defOp_in_loop
@@ -63,7 +63,7 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
 // Keep convert_layout inside the loop since the defining op is a block argument of the loop
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
-#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16], isTransposed = true}>
+#mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16, 16], isTransposed = true}>
 #dotOp0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
 #dotOp1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
 // CHECK-LABEL: defOp_blockArg

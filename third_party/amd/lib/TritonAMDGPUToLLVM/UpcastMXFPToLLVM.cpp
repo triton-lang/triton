@@ -206,7 +206,7 @@ public:
       return rewriter.notifyMatchFailure(op, "NYI: non-mfma dot operand");
     LDBG("mfma: " << mfmaEncoding);
 
-    int mDim = mfmaEncoding.getMDim();
+    int mDim = mfmaEncoding.getInstrShape()[0];
     if (mDim != 32 && mDim != 16)
       return rewriter.notifyMatchFailure(op, "NYI: non-mfma32/16 intrinsics");
 
