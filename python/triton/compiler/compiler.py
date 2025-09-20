@@ -57,13 +57,19 @@ class ASTSource:
         self.ext = "ttir"
         self.name = fn.__name__
         self.signature = signature
-        self.constants = dict()
-        if constexprs is not None:
-            for k, v in constexprs.items():
-                k = (fn.arg_names.index(k), ) if isinstance(k, str) else k
-                assert isinstance(k, tuple)
-                self.constants[k] = v
-        self.attrs = attrs or dict()
+
+        def _parse_arg_name_entries(dict_or_none):
+            result = dict()
+            if dict_or_none is not None:
+                for k, v in dict_or_none.items():
+                    k = (fn.arg_names.index(k), ) if isinstance(k, str) else k
+                    assert isinstance(k, tuple)
+                    result[k] = v
+            return result
+
+        self.constants = _parse_arg_name_entries(constexprs)
+        self.attrs = _parse_arg_name_entries(attrs)
+
         for k in self.signature.keys():
             if not isinstance(k, str):
                 raise TypeError("Signature keys must be string")
