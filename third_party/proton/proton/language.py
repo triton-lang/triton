@@ -53,14 +53,10 @@ def exit_scope(name: tl.constexpr, _semantic=None):
     record(is_start=False, scope_name=name, semantic=_semantic)
 
 
-class scope:
+tl.context_manager
 
-    def __init__(self, name: str, _semantic=None):
-        self.name = name
-        self.semantic = _semantic
 
-    def __enter__(self):
-        enter_scope(self.name, _semantic=self.semantic)
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        exit_scope(self.name, _semantic=self.semantic)
+def scope(name: str, _semantic=None):
+    enter_scope(name, _semantic=_semantic)
+    yield
+    exit_scope(name, _semantic=_semantic)
