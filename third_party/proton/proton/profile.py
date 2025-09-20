@@ -2,7 +2,8 @@ import functools
 import triton
 import os
 
-from triton._C.libproton import proton as libproton
+from triton._C.libproton import proton as libproton # type: ignore
+from triton._C.libtriton import getenv  # type: ignore
 from .flags import flags
 from .hooks import HookManager, LaunchHook, InstrumentationHook
 from .mode import BaseMode
@@ -32,7 +33,7 @@ def _check_env(backend: str) -> None:
     if backend == "roctracer":
         hip_device_envs = ["HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"]
         for env in hip_device_envs:
-            if os.getenv(env, None) is not None:
+            if getenv(env, None) is not None:
                 raise ValueError(
                     f"Proton does not work when the environment variable {env} is set on AMD GPUs. Please unset it and use `ROCR_VISIBLE_DEVICES` instead"
                 )
@@ -40,7 +41,7 @@ def _check_env(backend: str) -> None:
     # Ensure default envs are set for Proton knobs if not already set by the user.
     for attr, desc in triton.knobs.proton.knob_descriptors.items():
         key = desc.key
-        if os.getenv(key, None) is None:
+        if getenv(key, None) is None:
             val = getattr(triton.knobs.proton, attr)
             if val is not None:
                 if env_val := triton.knobs.toenv(val):
