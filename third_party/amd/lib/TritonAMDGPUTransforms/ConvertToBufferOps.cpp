@@ -254,7 +254,37 @@ bool canUseBufferOps(Value ptr,
     return false;
   LDBG("32 bit offset");
 
-  return verifyNonNegativeExpr(offset, assumptions, std::move(solver));
+  bool nonNegativeOffset = verifyNonNegativeExpr(offset, assumptions, solver);
+  // It's not sufficient to have a non-negative offset. We need to ensure this
+  // offset is non-negative in BYTES.
+  Type elementType = getElementTypeOrSelf(addPtrOp);
+  while (elementType.isa<triton::PointerType>()) {
+    elementType = dyn_cast<triton::PointerType>(elementType).getPointeeType();
+  }
+  const int valueElemNBits = std::max(8u, elementType.getIntOrFloatBitWidth());
+  const int elementByteWidth = valueElemNBits / 8;
+  if (nonNegativeOffset) {
+    // Check for initialization because not all code uses the RangeAnalysis
+    // at this time.
+    // TODO: Remove!!!!
+    if (const auto *r =
+            solver->lookupState<dataflow::IntegerValueRangeLattice>(offset)) {
+      if (r->getValue().isUninitialized())
+        return true;
+      if (AMD::isEmptyInitializedRange(r->getValue().getValue()))
+        return true;
+      if succeeded (dataflow::staticallyNonNegative(*solver, offset)) {
+        const ConstantIntRanges &range = r->getValue().getValue();
+        int64_t maxValue = range.smax().getSExtValue() * elementByteWidth;
+        return maxValue >= 0 && maxValue <= std::numeric_limits<int32_t>::max();
+      } else {
+        return true;
+      }
+    } else {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Extract stride of the blocked offset of LD/ST ops.
