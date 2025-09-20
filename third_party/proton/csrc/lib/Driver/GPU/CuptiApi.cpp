@@ -6,6 +6,8 @@ namespace proton {
 
 namespace cupti {
 
+ExternLibCupti::defaultDir = get
+
 DEFINE_DISPATCH(ExternLibCupti, getVersion, cuptiGetVersion, uint32_t *);
 
 DEFINE_DISPATCH(ExternLibCupti, getContextId, cuptiGetContextId, CUcontext,
