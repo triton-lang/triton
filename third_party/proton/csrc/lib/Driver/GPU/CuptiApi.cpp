@@ -6,8 +6,6 @@ namespace proton {
 
 namespace cupti {
 
-void *ExternLibCupti::lib = nullptr;
-
 DEFINE_DISPATCH(ExternLibCupti, getVersion, cuptiGetVersion, uint32_t *);
 
 DEFINE_DISPATCH(ExternLibCupti, getContextId, cuptiGetContextId, CUcontext,
