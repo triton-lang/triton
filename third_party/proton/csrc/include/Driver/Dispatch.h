@@ -64,9 +64,12 @@ public:
       if (ExternLib::pathEnv != nullptr) {
         auto *env = getenv(ExternLib::pathEnv);
         auto dir = std::string(env ? env : "");
-        auto fullPath = dir + "/" + name;
-        *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
-      } else {
+        if (!dir.empty()) {
+          auto fullPath = dir + "/" + name;
+          *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
+        }
+      }
+      if (*lib == nullptr) {
         // Only if the default path is not set, we try to load it from the
         // system.
         // First reuse the existing handle
