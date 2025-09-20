@@ -113,6 +113,10 @@ LinearLayout zerosLike(const LinearLayout &layout);
 std::optional<ColumnAction> regPermForDivide(const LinearLayout &A,
                                              const LinearLayout &B, bool left);
 
+std::pair<unsigned, ColumnAction>
+largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
+                     std::optional<int> maybeMaxVecElems = std::nullopt);
+
 // For a layout A with A.hasInDim(kReg), find a permutation of registers action
 // such that action.apply(A) has the broadcasted registers removed
 ColumnAction actionRemoveBroadcastedRegs(const LinearLayout &layout);
