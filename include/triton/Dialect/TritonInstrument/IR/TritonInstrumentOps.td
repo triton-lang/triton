@@ -12,20 +12,16 @@ include "triton/Dialect/TritonInstrument/IR/TritonInstrumentAttrDefs.td"
 // ConSan keeps auxilary data requied for tracking memory accesses in tensors.
 // These tensors are stored as a distributed tensor or in global scratch memory.
 //
-// Tensor name   | Storage | Type     | Description
-// ------------- | ------- | -------- | -----------
-// buffers       | tensor  | <Bxi64>  | List of base pointers of all the buffers and sub-buffers in the program
-// barriers      | tensor  | <Mxi64>  | List of pointers to all individual mbarriers in the program
-// writeState    | scratch | <Mxi8>   | Marks which buffers are being written to.
-//               |         |          | Entries in this tensor are set when write operation is issued. Entries are bitfields, where:
-//               |         |          | - bit 0: 1 if the buffer is being written to
-//               |         |          | - bit 1: 1 if the write is *not* hwPipelined
-// writeBars     | scratch | <BxMxi8> | Which barriers track writes to which buffers.
-//               |         |          | Entries in this tensor are set when commit with barrier is called.
-// readBars      | scratch | <BxMxi8> | Which barriers track reads from which buffers.
-//               |         |          | Entries in this tensor are set when read operation with barrier is issued.
-// asyncCpCommits | scratch | <Bxi8>  | Tracks number of outstanding commits for buffers written with cp-async.
-// wgmmaCommits  | scratch | <Bxi8>  | Tracks number of outstanding commits for buffers being read by wgmma.
+// Name            | Storage | Rank/Type       | Description
+// ----------------|---------|-----------------|------------
+// buffers         | tensor  | <B x i64>       | Base pointers of all (sub)buffers
+// barriers        | tensor  | <K x i64>       | Pointers to all individual mbarriers
+// writeVisibility | scratch | <B x i64>       | Per-buffer thread-visibility bitmask (bit i => thread i visible)
+// readVisibility  | scratch | <B x T x i64>   | Per-buffer, per-thread visibility lanes (row-updated; values are bitmasks)
+// writeTracking   | scratch | <B x K x i8>    | Map buffers -> barriers that track writes
+// readTracking    | scratch | <B x K x i64>   | Map buffers -> barriers that track reads
+// outstandingCommits
+//   (async/wgmma) | scratch | <B x T x i8>    | Number of outstanding commits per buffer/thread (2D replaces prior 1D)
 
 //
 // Interfaces
@@ -66,173 +62,254 @@ def TTI_ExperimentalBufferPointersOp : TTI_Op<"experimental_buffer_pointers", [P
 }
 
 
-def TTI_ExperimentalCheckWriteStateOp : TTI_Op<"experimental_check_write_state", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "check if there are outstanding writes to a buffer guarded by a mbar";
+def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Acquire a lock.";
   let description = [{
-    Check if the writeState tensor has non-zero value associated with the buffer.
+    Enter a critical section by acquiring a lock with single thread.
+  }];
+  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
+  let assemblyFormat = [{
+    $lock (`,` $pred^)? attr-dict `:` type($lock)
+  }];
+}
 
-    If hwPipelined is true, shift the bitfield by 1 to check the second bit - this
-    means that the error won't be triggered if another pipelined write is outstanding.
+
+def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Release a lock.";
+  let description = [{
+    Leave a critical section by releasing a lock with single thread.
+  }];
+  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
+  let assemblyFormat = [{
+    $lock (`,` $pred^)? attr-dict `:` type($lock)
+  }];
+}
+
+
+def TTI_ExperimentalSetWriteVisibilityOp : TTI_Op<"experimental_set_write_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "set the write visibility for a buffer";
+  let description = [{
+    Set the write visibility for a buffer. Marks the buffer as visible to the threads set in threadMask.
+    Clears out any other threads from the visibility bitmask. We know
+    this is safe because there cannot be outstanding writes to this buffer at this point.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    I64Attr:$threadMask,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$writeVisibility,
+    TypeAttr:$writeVisibilityType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $buf `,` $threadMask `{` $buffers `,` $writeVisibility `(` $writeVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeVisibility)
+  }];
+  let hasVerifier = 1;
+}
+
+
+def TTI_ExperimentalClearWriteTrackingOp : TTI_Op<"experimental_clear_write_tracking", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "clear the write tracking for a buffer";
+  let description = [{
+    Clear all the information about threads writing to a buffer.
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
     TT_Tensor:$buffers,
-    TT_PtrLike:$writeBars,
-    TypeAttr:$writeBarsType,
-    TT_PtrLike:$writeState,
-    TypeAttr:$writeStateType,
-    I1Attr:$hwPipelined,
+    TT_PtrLike:$writeTracking,
+    TypeAttr:$writeTrackingType,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `{` $buffers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? `pipelined` $hwPipelined attr-dict `:` type($buf) `,` type($buffers) `,` type($writeBars) `,` type($writeState)
+    $buf `{` $buffers `,` $writeTracking `(` $writeTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeTracking)
   }];
   let hasVerifier = 1;
 }
 
 
-def TTI_ExperimentalCheckReadBarriersOp : TTI_Op<"experimental_check_read_barriers", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "check if there are outstanding reads from a buffer guarded by a mbar";
+def TTI_ExperimentalClearReadVisibilityOp : TTI_Op<"experimental_clear_read_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "clear the read visibility for a buffer";
   let description = [{
-    Check if any of the entries in readBars in the row corresponding to the buffer is non-zero.
+    Clear the read visibility for a buffer.
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
     TT_Tensor:$buffers,
-    TT_PtrLike:$readBars,
-    TypeAttr:$readBarsType,
+    TT_PtrLike:$readVisibility,
+    TypeAttr:$readVisibilityType,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `{` $buffers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readBars)
+    $buf `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
   }];
   let hasVerifier = 1;
 }
 
 
-def TTI_ExperimentalSetWriteStateOp : TTI_Op<"experimental_set_write_state", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "mark a buffer as being written in writeState tensor";
+def TTI_ExperimentalClearReadTrackingOp : TTI_Op<"experimental_clear_read_tracking", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "clear the read tracking for a buffer";
   let description = [{
-    Mark a buffer as being written to. It is not yet tracked by a barrier, until
-    `commit_write_with_barrier` is called, at which point all the buffers being written
-    to are marked as tracked by the barrier in writeBars tensor.
-
-    If hwPipelined is true, the write won't trigger an error if another pipelined
-    write is executed later without waiting for the barrier.
+    Clear the read tracking for a buffer.
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
     TT_Tensor:$buffers,
-    TT_PtrLike:$writeState,
-    TypeAttr:$writeStateType,
-    I1Attr:$hwPipelined,
+    TT_PtrLike:$readTracking,
+    TypeAttr:$readTrackingType,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `{` $buffers `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? `pipelined` $hwPipelined attr-dict `:` type($buf) `,` type($buffers) `,` type($writeState)
+    $buf `{` $buffers `,` $readTracking `(` $readTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readTracking)
   }];
   let hasVerifier = 1;
 }
 
 
-def TTI_ExperimentalCommitWriteWithBarrierOp : TTI_Op<"experimental_commit_write_with_barrier", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Mark all buffers being currently written as tracked by the barrier.";
+def TTI_ExperimentalSetReadVisibilityOp : TTI_Op<"experimental_set_read_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "set the read visibility for a buffer";
   let description = [{
-    For all buffers currently marked in writeState tensor, mark them as tracked by the mbar in
-    writeBars tensor.
-  }];
-  let arguments = (ins
-    TTG_MemDescType:$mbar,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$writeBars,
-    TypeAttr:$writeBarsType,
-    TT_PtrLike:$writeState,
-    TypeAttr:$writeStateType,
-    Optional<I1>:$pred
-  );
-  let assemblyFormat = [{
-    $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars) `,` type($writeState)
-  }];
-  let hasVerifier = 1;
-}
-
-
-def TTI_ExperimentalSetReadBarrierOp : TTI_Op<"experimental_set_read_barrier", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "mark a buffer as being read from using mbar as a guard";
-  let description = [{
-    Set the entry under [buffer, mbar] in readBars tensor to 1, marking the buffer as tracked by the barrier.
+    Add the threads set in threadMask to the read visibility bitmask for the buffer.
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
-    TTG_MemDescType:$mbar,
+    I64Attr:$threadMask,
     TT_Tensor:$buffers,
-    TT_Tensor:$barriers,
-    TT_PtrLike:$readBars,
-    TypeAttr:$readBarsType,
+    TT_PtrLike:$readVisibility,
+    TypeAttr:$readVisibilityType,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `,` $mbar `{` $buffers `,` $barriers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($mbar) `,` type($buffers) `,` type($barriers) `,` type($readBars)
+    $buf `,` $threadMask `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
   }];
   let hasVerifier = 1;
 }
 
 
-def TTI_ExperimentalClearWriteBarrierOp : TTI_Op<"experimental_clear_write_barrier", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "clear the write state for buffers being guarded by an mbar";
+def TTI_ExperimentalTrackVisibleWritesOp : TTI_Op<"experimental_track_visible_writes", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "start tracking visible writes to a buffer";
   let description = [{
-    For each buffer that has [buffer, mbar] entry in writeBars tensor, set the corresponding entry in writeState tensor to 0.
-    Also, set the corresponding entry in writeBars tensor to 0.
+    For all buffers that are marked as visible to the thread, start tracking them with a barrier.
   }];
   let arguments = (ins
     TTG_MemDescType:$mbar,
+    I32Attr:$thread,
     TT_Tensor:$barriers,
-    TT_PtrLike:$writeBars,
-    TypeAttr:$writeBarsType,
-    TT_PtrLike:$writeState,
-    TypeAttr:$writeStateType,
+    TT_PtrLike:$writeVisibility,
+    TypeAttr:$writeVisibilityType,
+    TT_PtrLike:$writeTracking,
+    TypeAttr:$writeTrackingType,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `,` $writeState `(` $writeStateType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars) `,` type($writeState)
+    $mbar `,` $thread `{` $barriers `,` $writeVisibility `(` $writeVisibilityType `)` `,` $writeTracking `(` $writeTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeVisibility) `,` type($writeTracking)
   }];
   let hasVerifier = 1;
 }
 
 
-def TTI_ExperimentalClearReadBarrierOp : TTI_Op<"experimental_clear_read_barrier", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "clear the read state for buffers being guarded by an mbar";
+def TTI_ExperimentalTrackVisibleReadsOp : TTI_Op<"experimental_track_visible_reads", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "start tracking visible reads from a buffer";
   let description = [{
-    Set all the entries in the column corresponding to the mbar in readBars tensor to 0.
+    For all buffers that are marked as visible to the thread, start tracking them with a barrier.
   }];
   let arguments = (ins
     TTG_MemDescType:$mbar,
+    I32Attr:$thread,
     TT_Tensor:$barriers,
-    TT_PtrLike:$readBars,
-    TypeAttr:$readBarsType,
+    TT_PtrLike:$readVisibility,
+    TypeAttr:$readVisibilityType,
+    TT_PtrLike:$readTracking,
+    TypeAttr:$readTrackingType,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $mbar `{` $barriers `,` $readBars `(` $readBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readBars)
+    $mbar `,` $thread `{` $barriers `,` $readVisibility `(` $readVisibilityType `)` `,` $readTracking `(` $readTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readVisibility) `,` type($readTracking)
   }];
   let hasVerifier = 1;
 }
 
 
-def TTI_ExperimentalCheckBarrierWritesClearedOp : TTI_Op<"experimental_check_barrier_writes_cleared", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "verify that the barrier is not used to track any writes";
+def TTI_ExperimentalTransferVisibleWritesOp : TTI_Op<"experimental_transfer_visible_writes", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "transfer all the writes tracked by a barrier to visible by thread";
   let description = [{
-    Verify that the column corresponding to the mbar in writeBars tensor is all 0.
+    Transfer all the writes tracked by a barrier to visible by threads set in threadMask.
   }];
   let arguments = (ins
     TTG_MemDescType:$mbar,
+    I64Attr:$threadMask,
     TT_Tensor:$barriers,
-    TT_PtrLike:$writeBars,
-    TypeAttr:$writeBarsType,
+    TT_PtrLike:$writeVisibility,
+    TypeAttr:$writeVisibilityType,
+    TT_PtrLike:$writeTracking,
+    TypeAttr:$writeTrackingType,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $mbar `{` $barriers `,` $writeBars `(` $writeBarsType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeBars)
+    $mbar `,` $threadMask `{` $barriers `,` $writeVisibility `(` $writeVisibilityType `)` `,` $writeTracking `(` $writeTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($writeVisibility) `,` type($writeTracking)
+  }];
+  let hasVerifier = 1;
+}
+
+
+def TTI_ExperimentalTransferVisibleReadsOp : TTI_Op<"experimental_transfer_visible_reads", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "transfer all the reads tracked by a barrier to visible by thread";
+  let description = [{
+    Transfer all the reads tracked by a barrier to visible by threads set in threadMask.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$mbar,
+    I64Attr:$threadMask,
+    TT_Tensor:$barriers,
+    TT_PtrLike:$readVisibility,
+    TypeAttr:$readVisibilityType,
+    TT_PtrLike:$readTracking,
+    TypeAttr:$readTrackingType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $mbar `,` $threadMask `{` $barriers `,` $readVisibility `(` $readVisibilityType `)` `,` $readTracking `(` $readTrackingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($readVisibility) `,` type($readTracking)
+  }];
+  let hasVerifier = 1;
+}
+
+
+def TTI_ExperimentalVerifyWriteVisibilityOp : TTI_Op<"experimental_verify_write_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "verify that the buffer write is visible to the thread";
+  let description = [{
+    Verify that the buffer write is visible to the thread, or no threads are writing to the buffer.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    I32Attr:$thread,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$writeVisibility,
+    TypeAttr:$writeVisibilityType,
+    StrAttr:$operandName,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $buf `,` $thread `{` $buffers `,` $writeVisibility `(` $writeVisibilityType `)` `}` `,` $operandName (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($writeVisibility)
+  }];
+  let hasVerifier = 1;
+}
+
+
+def TTI_ExperimentalVerifyReadVisibilityOp : TTI_Op<"experimental_verify_read_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "verify that all the reads from a buffer are visible to the thread";
+  let description = [{
+    Verify that all the reads from a buffer are visible to the thread.
+  }];
+  let arguments = (ins
+    TTG_MemDescType:$buf,
+    I32Attr:$thread,
+    TT_Tensor:$buffers,
+    TT_PtrLike:$readVisibility,
+    TypeAttr:$readVisibilityType,
+    StrAttr:$operandName,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $buf `,` $thread `{` $buffers `,` $readVisibility `(` $readVisibilityType `)` `}` `,` $operandName (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($readVisibility)
   }];
   let hasVerifier = 1;
 }
@@ -246,13 +323,14 @@ def TTI_ExperimentalStageAccessForCommitOp : TTI_Op<"experimental_stage_access_f
   }];
   let arguments = (ins
     TTG_MemDescType:$buf,
+    I32Attr:$thread,
     TT_Tensor:$buffers,
     TT_PtrLike:$outstandingCommits,
     TypeAttr:$outstandingCommitsType,
     Optional<I1>:$pred
   );
   let assemblyFormat = [{
-    $buf `{` $buffers `,` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($outstandingCommits)
+    $buf `,` $thread `{` $buffers `,` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($buf) `,` type($buffers) `,` type($outstandingCommits)
   }];
   let hasVerifier = 1;
 }
@@ -264,26 +342,52 @@ def TTI_ExperimentalCommitAccessesOp : TTI_Op<"experimental_commit_accesses", [M
     Change all the `-1` entries in outstandingCommits tensor to 1, signifying 1 outstanding commit.
   }];
   let arguments = (ins
+    I32Attr:$thread,
     TT_PtrLike:$outstandingCommits,
     TypeAttr:$outstandingCommitsType,
     Optional<I1>:$pred);
   let assemblyFormat = [{
-    `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($outstandingCommits)
+    $thread `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` (`,` $pred^)? attr-dict `:` type($outstandingCommits)
   }];
 }
 
-def TTI_ExperimentalClearOutstandingCommitsOp : TTI_Op<"experimental_clear_outstanding_commits", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
-  let summary = "Clear all the outstanding commits more distant than `outstandingNum.";
+def TTI_ExperimentalClearOutstandingCommitsTransferWritesOp : TTI_Op<"experimental_clear_outstanding_commits_transfer_writes", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Clear distant outstanding commits and set write visibility for current thread.";
   let description = [{
-    Clear all the outstanding commits more distant than `outstandingNum` from the current thread.
+    For all rows where outstanding commits are more distant than `outstandingNum` from the current thread,
+    clear those entries and mark the corresponding buffer as visible in the write visibility table for the threads set in threadMask.
   }];
   let arguments = (ins
+    I32Attr:$thread,
+    I64Attr:$transferThreadMask,
+    I32Attr:$outstandingNum,
     TT_PtrLike:$outstandingCommits,
     TypeAttr:$outstandingCommitsType,
-    I32Attr:$outstandingNum,
+    TT_PtrLike:$writeVisibility,
+    TypeAttr:$writeVisibilityType,
     Optional<I1>:$pred);
   let assemblyFormat = [{
-    `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $outstandingNum (`,` $pred^)? attr-dict `:` type($outstandingCommits)
+    $thread `,` $transferThreadMask `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $writeVisibility `(` $writeVisibilityType `)` (`,` $pred^)? attr-dict `:` type($outstandingCommits) `,` type($writeVisibility)
+  }];
+}
+
+def TTI_ExperimentalClearOutstandingCommitsTransferReadsOp : TTI_Op<"experimental_clear_outstanding_commits_transfer_reads", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "Clear distant outstanding commits and set read visibility for current thread.";
+  let description = [{
+    For all rows where outstanding commits are more distant than `outstandingNum` from the current thread,
+    clear those entries and mark the corresponding buffer as visible in the read visibility table for the threads set in threadMask.
+  }];
+  let arguments = (ins
+    I32Attr:$thread,
+    I64Attr:$transferThreadMask,
+    I32Attr:$outstandingNum,
+    TT_PtrLike:$outstandingCommits,
+    TypeAttr:$outstandingCommitsType,
+    TT_PtrLike:$readVisibility,
+    TypeAttr:$readVisibilityType,
+    Optional<I1>:$pred);
+  let assemblyFormat = [{
+    $thread `,` $transferThreadMask `{` $outstandingCommits `(` $outstandingCommitsType `)` `}` `,` $readVisibility `(` $readVisibilityType `)` (`,` $pred^)? attr-dict `:` type($outstandingCommits) `,` type($readVisibility)
   }];
 }
 
