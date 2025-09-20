@@ -73,6 +73,7 @@ from .core import (
     float8e4b8,
     float8e5,
     float8e5b16,
+    float8e4m3fnuz,
     full,
     gather,
     histogram,
