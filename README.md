@@ -244,6 +244,7 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_FRONT_END_DEBUGGING=1` disables exception wrapping when an error occurs in the compiler frontend, allowing the full stack trace to be seen.
 - `TRITON_DISABLE_LINE_INFO=1` removes all line information from the module.
 - `PTXAS_OPTIONS` passes additional command-line options to the PTX assembler `ptxas` (only on NVIDIA).
+- `LLVM_EXTRACT_DI_LOCAL_VARIABLES` emit full debug info, allowing for eval of values in gpu debuggers (ie cuda-gdb, rocm-gdb etc)
 
 > [!NOTE]
 > Some of these environment variables don't have a knob in `knobs.py`-- those are only relevant to the C++ layer(s), hence they don't exist in the python layer.
