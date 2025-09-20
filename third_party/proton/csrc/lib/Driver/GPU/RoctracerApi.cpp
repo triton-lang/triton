@@ -5,6 +5,8 @@ namespace proton {
 
 namespace roctracer {
 
+void *ExternLibRoctracer::lib = nullptr;
+
 DEFINE_DISPATCH(ExternLibRoctracer, setProperties, roctracer_set_properties,
                 roctracer_domain_t, void *)
 

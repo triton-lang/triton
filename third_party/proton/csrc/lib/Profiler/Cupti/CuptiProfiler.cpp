@@ -6,8 +6,8 @@
 #include "Driver/GPU/CuptiApi.h"
 #include "Driver/GPU/NvtxApi.h"
 #include "Profiler/Cupti/CuptiPCSampling.h"
-#include "Utility/Map.h"
 #include "Utility/Env.h"
+#include "Utility/Map.h"
 #include "Utility/String.h"
 
 #include <cstdlib>
