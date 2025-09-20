@@ -45,6 +45,7 @@ namespace proton {
 struct ExternLibBase {
   using RetType = int; // Generic type, can be overridden in derived structs
   static constexpr const char *name = ""; // Placeholder
+  static constexpr const char *kSymbolName{}; // Placeholder
   static constexpr RetType success = 0;   // Placeholder
   ExternLibBase() = delete;
   ExternLibBase(const ExternLibBase &) = delete;
@@ -104,6 +105,29 @@ public:
       check(ret, functionName);
     }
     return ret;
+  }
+
+  static void setLibPath(const std::string &dir) {
+    ExternLib::defaultDir = dir;
+  }
+
+  static std::string getLibPath() {
+    if (ExternLib::lib == nullptr) {
+      // Force initialization
+      Dispatch<ExternLib>::init(ExternLib::name, &ExternLib::lib);
+      if (ExternLib::lib == nullptr) {
+        return "";
+      }
+    }
+    if (ExternLib::lib != nullptr) {
+      void *sym = dlsym(ExternLib::lib,
+                        ExternLib::kSymbolName); // pick any known symbol
+      Dl_info info;
+      if (dladdr(sym, &info)) {
+        return info.dli_fname;
+      }
+    }
+    return "";
   }
 };
 

@@ -6,7 +6,6 @@
 #include "Driver/GPU/CuptiApi.h"
 #include "Driver/GPU/NvtxApi.h"
 #include "Profiler/Cupti/CuptiPCSampling.h"
-#include "Utility/Env.h"
 #include "Utility/Map.h"
 #include "Utility/String.h"
 
@@ -455,8 +454,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
 
 CuptiProfiler::CuptiProfiler() {
   pImpl = std::make_unique<CuptiProfilerPimpl>(*this);
-  Dispatch<cupti::ExternLibCupti>::setLibraryDirectory(
-      getStrEnv("TRITON_CUPTI_LIB_PATH"));
+  Dispatch<cupti::ExternLibCupti>::setLibPath(getenv("TRITON_CUPTI_LIB_PATH"));
 }
 
 CuptiProfiler::~CuptiProfiler() = default;

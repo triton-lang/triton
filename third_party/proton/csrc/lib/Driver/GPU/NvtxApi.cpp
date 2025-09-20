@@ -20,7 +20,7 @@ namespace nvtx {
 void enable() {
   // Get cupti lib path and append it to NVTX_INJECTION64_PATH
   const std::string cuptiLibPath =
-      Dispatch<cupti::ExternLibCupti>::getLibraryPath(cupti::kProbeSymbol);
+      Dispatch<cupti::ExternLibCupti>::getLibPath();
   if (!cuptiLibPath.empty()) {
     setenv("NVTX_INJECTION64_PATH", cuptiLibPath.c_str(), 1);
   }

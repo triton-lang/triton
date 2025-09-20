@@ -13,12 +13,11 @@ namespace cupti {
 struct ExternLibCupti : public ExternLibBase {
   using RetType = CUptiResult;
   static constexpr const char *name = "libcupti.so";
+  static constexpr const char *kSymbolName = "cuptiUnsubscribe";
   static inline std::string defaultDir{};
   static constexpr RetType success = CUPTI_SUCCESS;
   static inline void *lib = nullptr;
 };
-
-inline constexpr const char *kProbeSymbol = "cuptiUnsubscribe";
 
 template <bool CheckSuccess> CUptiResult getVersion(uint32_t *version);
 
