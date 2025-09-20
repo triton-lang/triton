@@ -36,6 +36,7 @@
 
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/InitAllPasses.h"
 
 namespace mlir {
@@ -79,6 +80,8 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertNVGPUToLLVMPass();
   mlir::triton::registerAllocateSharedMemoryNvPass();
   mlir::registerLLVMDIScope();
+  mlir::LLVM::registerInlinerInterface(registry);
+  mlir::NVVM::registerInlinerInterface(registry);
 
   // TritonAMDGPUToLLVM passes
   mlir::triton::registerAllocateAMDGPUSharedMemory();

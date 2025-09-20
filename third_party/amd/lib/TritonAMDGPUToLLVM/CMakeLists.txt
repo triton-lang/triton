@@ -6,6 +6,7 @@ add_triton_library(TritonAMDGPUToLLVM
     ConvertLayoutOpToLLVM.cpp
     ConvertWarpPipeline.cpp
     MemoryOpToLLVM.cpp
+    MaskedOpsToLLVM.cpp
     DotOpToLLVM/FMA.cpp
     DotOpToLLVM/MFMA.cpp
     DotOpToLLVM/WMMA.cpp

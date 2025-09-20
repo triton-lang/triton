@@ -525,6 +525,10 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
     if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
       return {};
   }
+
+  if (isa<triton::gpu::UpcastFpOpInterface>(op))
+    return {};
+
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
@@ -558,6 +562,9 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
     if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
       return {};
   }
+  if (isa<triton::gpu::UpcastFpOpInterface>(op))
+    return {};
+
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
@@ -938,7 +945,13 @@ LogicalResult getConvertBackwardSlice(
         continue;
       }
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
-        auto srcEncoding = inferSrcEncoding(definingOp, encoding);
+        Attribute srcEncoding;
+        if (auto upcast =
+                dyn_cast<triton::gpu::UpcastFpOpInterface>(definingOp)) {
+          srcEncoding = upcast.inferSrcEncoding(i, encoding);
+        } else {
+          srcEncoding = inferSrcEncoding(definingOp, encoding);
+        }
         if (!srcEncoding)
           return failure();
         // If the infered layout matches the original one we don't need to keep
@@ -1174,6 +1187,16 @@ static Type getNewType(Type type, Attribute encoding) {
                                tensorType.getElementType(), encoding);
 }
 
+static bool skipOperand(Operation *op, unsigned operandNumber) {
+  if (auto gather = dyn_cast<DescriptorGatherOp>(op)) {
+    return operandNumber == gather.getXOffsetsMutable().getOperandNumber();
+  }
+  if (auto scatter = dyn_cast<DescriptorScatterOp>(op)) {
+    return operandNumber == scatter.getXOffsetsMutable().getOperandNumber();
+  }
+  return false;
+}
+
 Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
   OpBuilder builder(op);
   // Convert operands
@@ -1181,10 +1204,11 @@ Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
   // operands' type, we do this by changing the outputs' type of
   // `make_tensor_ptr`
   SmallVector<Value, 4> newArgs;
-  for (auto operand : op->getOperands()) {
+  for (auto &opOperand : op->getOpOperands()) {
+    Value operand = opOperand.get();
     auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
-    if (tensorType &&
-        !isa<triton::gpu::SharedEncodingTrait>(tensorType.getEncoding())) {
+    bool skip = skipOperand(op, opOperand.getOperandNumber());
+    if (tensorType && !skip) {
       Type newType = getNewType(tensorType, encoding);
       newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), newType, operand));
