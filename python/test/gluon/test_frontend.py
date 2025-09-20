@@ -7,7 +7,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
-from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, TensorMemoryScalesLayout, async_copy
+from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, async_copy
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.amd import _layouts as amd_layouts
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
@@ -611,23 +611,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
-
-
-@filecheck_test
-@gluon.jit
-def test_tcgen05_copy():
-    # CHECK-LABEL: test_tcgen05_copy
-    smem_h: ttgl.constexpr = 256
-    num_cols: ttgl.constexpr = smem_h * 4 // 32
-
-    shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=8, rank=2)
-    tmem_layout: ttgl.constexpr = TensorMemoryScalesLayout()
-    # CHECK: [[SRC:%.*]] = ttg.local_alloc
-    src = ttgl.allocate_shared_memory(ttgl.int8, [smem_h, 4], shared_layout)
-    # CHECK: [[DST:%.*]] = ttng.tmem_alloc
-    dst = blackwell.allocate_tensor_memory(ttgl.int8, [128, num_cols], tmem_layout)
-    # CHECK: ttng.tmem_copy [[SRC]], [[DST]]
-    blackwell.tcgen05_copy(src, dst)
 
 
 @filecheck_test
@@ -2651,3 +2634,39 @@ def test_get_num_warps():
     print_num_warps()
     ttgl.warp_specialize((), print_num_warps, (), [print_num_warps, print_num_warps, print_num_warps], [1, 2, 8],
                          [24, 24, 24])
+
+
+def test_non_scalar_loop_bounds():
+
+    @gluon.jit
+    def kernel():
+        x = ttgl.full([32], 0, ttgl.int32, layout=ttgl.BlockedLayout([1], [32], [1], [0]))
+        for _ in range(x, 10, 1):
+            pass
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "For lower bound must be a scalar, got" in str(e.value)
+
+    @gluon.jit
+    def kernel():
+        x = ttgl.full([32], 0, ttgl.int32, layout=ttgl.BlockedLayout([1], [32], [1], [0]))
+        for _ in range(1, x, 1):
+            pass
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "For upper bound must be a scalar, got" in str(e.value)
+
+    @gluon.jit
+    def kernel():
+        x = ttgl.full([32], 0, ttgl.int32, layout=ttgl.BlockedLayout([1], [32], [1], [0]))
+        for _ in range(1, 10, x):
+            pass
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "For step must be a scalar, got" in str(e.value)

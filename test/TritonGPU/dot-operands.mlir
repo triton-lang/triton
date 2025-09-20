@@ -136,7 +136,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: @scales_in_shmem
   // CHECK: %[[A_LA:.*]] = ttg.local_alloc
   // CHECK: %[[B_LA:.*]] = ttg.local_alloc
-  // CHECK: ttng.tc_gen5_mma_scaled {{.*}}, %[[A_LA]], %[[B_LA]],
+  // CHECK: %[[A_RS:.*]] = ttg.memdesc_reshape %[[A_LA]]
+  // CHECK: %[[A_TR:.*]] = ttg.memdesc_trans %[[A_RS]]
+  // CHECK: %[[A_FINAL:.*]] = ttg.memdesc_reshape %[[A_TR]]
+  // CHECK: %[[B_RS:.*]] = ttg.memdesc_reshape %[[B_LA]]
+  // CHECK: %[[B_TR:.*]] = ttg.memdesc_trans %[[B_RS]]
+  // CHECK: %[[B_FINAL:.*]] = ttg.memdesc_reshape %[[B_TR]]
+  // CHECK-NOT: ttg.local_load
+  // CHECK: ttng.tc_gen5_mma_scaled {{.*}}, %[[A_FINAL]], %[[B_FINAL]],
 
   tt.func public @scales_in_shmem(
     %scale: tensor<2x512x!tt.ptr<i8>, #blocked4> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32},
@@ -228,7 +235,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %desc = tt.make_tensor_descriptor %scale_desc_ptr, [%c1_i32, %c2_i32, %c1_i32, %c32_i32, %c16_i32], [%c1024_i64, %c512_i64, %c512_i64, %c16_i64, %c1_i64] : !tt.ptr<i8>, <tensor<1x2x1x32x16xi8>>
     // CHECK: %[[DESC_LOAD:.*]] = tt.descriptor_load {{.*}} !tt.tensordesc<tensor<1x2x1x32x16xi8>> -> tensor<1x2x1x32x16xi8, #[[BLOCKED5]]>
     %83 = tt.descriptor_load %desc[%c0_i32, %c0_i32, %c0_i32, %c0_i32, %c0_i32] : !tt.tensordesc<tensor<1x2x1x32x16xi8>> -> tensor<1x2x1x32x16xi8, #blocked5>
-    // CHECK: %[[SCALE_ALLOC:.*]] = ttg.local_alloc %[[DESC_LOAD]] : (tensor<1x2x1x32x16xi8, #[[BLOCKED5]]>) -> !ttg.memdesc<1x2x1x32x16xi8, #[[SHARED2]], #[[SMEM]]>
+    // CHECK: %[[DESC_LA:.*]] = ttg.local_alloc %[[DESC_LOAD]] : (tensor<1x2x1x32x16xi8, #[[BLOCKED5]]>) -> !ttg.memdesc<1x2x1x32x16xi8, #[[SHARED2]], #[[SMEM]]>
     %84 = ttg.local_alloc %83 : (tensor<1x2x1x32x16xi8, #blocked5>) -> !ttg.memdesc<1x2x1x32x16xi8, #shared2, #smem>
     // CHECK-NOT: ttg.local_load
     %85 = ttg.local_load %84 : !ttg.memdesc<1x2x1x32x16xi8, #shared2, #smem> -> tensor<1x2x1x32x16xi8, #linear1>
@@ -241,7 +248,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %89 = ttng.tmem_alloc %acc : (tensor<128x256xf32, #blocked1>) -> !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>
     %90 = ttng.tmem_alloc %cst_scales : (tensor<128x4xi8, #linear>) -> !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>
     %91 = ttng.tmem_alloc %88 : (tensor<256x4xi8, #linear4>) -> !ttg.memdesc<256x4xi8, #tmem_scales, #ttng.tensor_memory>
-    // CHECK: ttng.tc_gen5_mma_scaled {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[SCALE_ALLOC]], {{.*}} : {{.*}}, {{.*}}, {{.*}}, {{.*}}, !ttg.memdesc<1x2x1x32x16xi8, #[[SHARED2]], #[[SMEM]]>
+    // CHECK: %[[DESC_RS:.*]] = ttg.memdesc_reshape %[[DESC_LA]] : !ttg.memdesc<1x2x1x32x16xi8, #[[SHARED2]], #[[SMEM]]> -> !ttg.memdesc<2x1x32x4x4xi8, {{.*}}, #smem>
+    // CHECK: %[[DESC_TR:.*]] = ttg.memdesc_trans %[[DESC_RS]]
+    // CHECK: %[[SCALE_ALLOC:.*]] = ttg.memdesc_reshape %[[DESC_TR]] : !ttg.memdesc<2x4x32x1x4xi8, {{.*}}, #smem> -> !ttg.memdesc<256x4xi8, {{.*}}, #smem>
+    // CHECK: ttng.tc_gen5_mma_scaled {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[SCALE_ALLOC]], {{.*}}
     ttng.tc_gen5_mma_scaled %shmemA, %shmemB, %89, %90, %91, %true, %true lhs = e4m3 rhs = e2m1 : !ttg.memdesc<128x128xf8E4M3FN, #shared, #smem>, !ttg.memdesc<64x256xi8, #shared1, #smem>, !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x4xi8, #tmem_scales, #ttng.tensor_memory>, !ttg.memdesc<256x4xi8, #tmem_scales, #ttng.tensor_memory>
     tt.return
   }
@@ -256,7 +266,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK-DAG: #[[$SHARED:.+]] = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
 // CHECK-DAG: #[[$SHARED1:.+]] = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16, CTAsPerCGA = [1, 1, 1, 1], CTASplitNum = [1, 1, 1, 1], CTAOrder = [3, 2, 1, 0]}>
 module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: reshape_memedesc
+  // CHECK-LABEL: @reshape_memedesc
   tt.func @reshape_memedesc(%arg: tensor<32x1x4x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem> {
     // CHECK: [[A:.+]] = ttg.local_alloc %{{.+}} : (tensor<32x1x4x64xf16, #{{.*}}>) -> !ttg.memdesc<32x1x4x64xf16, #[[$SHARED1]], #smem>
     %r = tt.reshape %arg : tensor<32x1x4x64xf16, #blocked> -> tensor<128x64xf16, #blocked1>

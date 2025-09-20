@@ -1178,6 +1178,12 @@ class CodeGenerator(ast.NodeVisitor):
         # induction variable type
         if not lb.dtype.is_int() or not ub.dtype.is_int() or not step.dtype.is_int():
             raise TypeError(f"For loop bounds and step must all be ints, are ({lb.dtype}, {ub.dtype}, {step.dtype})")
+        if _is_non_scalar_tensor(lb):
+            raise TypeError(f"For lower bound must be a scalar, got {lb.type}")
+        if _is_non_scalar_tensor(ub):
+            raise TypeError(f"For upper bound must be a scalar, got {ub.type}")
+        if _is_non_scalar_tensor(step):
+            raise TypeError(f"For step must be a scalar, got {step.type}")
         iv_type = self.semantic.integer_promote_impl(lb.dtype, ub.dtype)
         iv_type = self.semantic.integer_promote_impl(iv_type, step.dtype)
         iv_ir_type = iv_type.to_ir(self.builder)
