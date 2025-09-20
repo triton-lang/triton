@@ -3641,6 +3641,11 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
                 torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = self.prev_value
 
         with AccumulateInFp32():
+            # FIXME: HIP backend not support torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction
+            #        need forcing an increase in the calculation precision of the reference.
+            if is_hip() and comp_dtype == torch.bfloat16:
+                return torch.matmul(x_upcast.type(torch.float32), y_upcast.type(torch.float32)).type(x_upcast.dtype)
+
             return torch.matmul(x_upcast, y_upcast)
 
     comp_dtype = torch.float16 if normal_type == "fp16" else torch.bfloat16

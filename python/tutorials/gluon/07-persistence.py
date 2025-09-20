@@ -53,7 +53,9 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_commit,
 )
 
-if torch.cuda.is_available():
+from triton._internal_testing import is_hip
+
+if torch.cuda.is_available() and (not is_hip()):
     from triton._C.libtriton import nvidia
     cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
     cublas = nvidia.cublas.CublasLt(cublas_workspace)
