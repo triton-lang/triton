@@ -32,6 +32,9 @@ def test_address_sanitizer():
     # Disable buffer ops given it has builtin support for out of bound access.
     os.environ["AMDGCN_USE_BUFFER_OPS"] = "0"
 
-    out = subprocess.Popen(["python", "address_sanitizer_helper.py"], stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+    # Workaround: Code hangs if kernel compilation and kernel launch are done in the same step
+    subprocess.check_call(["python", "address_sanitizer_helper.py", "warmup"])
+    out = subprocess.Popen(["python", "address_sanitizer_helper.py", "launch"], stderr=subprocess.PIPE,
+                           stdout=subprocess.PIPE)
     assert "Begin function __asan_report" in out.stdout.read().decode()
     assert "heap-buffer-overflow" in out.stderr.read().decode()
