@@ -208,7 +208,9 @@ def make_default_opt_flags_nvidia(
     else:
         block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config)
     # split_k
-    if constraints.get("split_k", None) is not None:
+    if batch_size > 1:
+        split_k = 1  # currently not supported
+    elif constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
     elif is_persistent or enforce_bitwise_invariance or precision_config.act_scale is not None or precision_config.out_scale is not None:
         split_k = 1
