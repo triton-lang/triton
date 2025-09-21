@@ -17,6 +17,7 @@ from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .matmul_ogs_details._reduce_grouped import _reduce_grouped
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
+from .tensor_details.layout_details.strided import StridedLayout
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints, InapplicableConstraint
 from .specialize import specialize
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor
@@ -339,6 +340,8 @@ def matmul_ogs(x, w, bias,
         # TODO: remove this code path; using uint8 for mxfp4 weight will bite us when we want to support uint8 for real
         dtype = FP4 if w.dtype == torch.uint8 else w.dtype
         w = wrap_torch_tensor(w, dtype=dtype)
+    if w_has_mx and (torch.cuda.get_device_capability()[0] < 10 or w.storage.layout is not None and not isinstance(w.storage.layout, StridedLayout)):
+        assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp and (swizzled or not on >=Blackwell)"
     if w_scale is not None and not isinstance(w_scale, Tensor):
         w_scale = Tensor(w_scale)
     if w_scale is not None:
