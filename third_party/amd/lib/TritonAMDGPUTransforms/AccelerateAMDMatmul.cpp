@@ -521,13 +521,13 @@ public:
 
     // Here is a brief explanation of kWidth, kBase, and kDim
     // 1. kWidth: the number of **consecutive** elements each thread loads from
-    //    shared memory in preparation for mfma instructions. In theory each
-    //    thread can issue one or more load instructions to load a total of
-    //    kWidth elements, since those elements are not required to be in
-    //    contiguous addresses in shared memory. But in practice, we make sure
-    //    the kWidth elements can be loaded from shared memory by a single
-    //    ds_read instruction by setting vecSize of the sharedLayout to be
-    //    kWidth.
+    //    shared memory in preparation for mfma instructions. In theory, each
+    //    thread can issue multiple ds_read to load elements from non-contiguous
+    //    addresses in shared memory for one mfma instruction, but that won't be
+    //    good for performance. So in practice for better vectorization, we
+    //    make sure the kWidth elements can be loaded from shared memory by a
+    //    single ds_read instruction by setting vecSize of the sharedLayout
+    //    to be kWidth.
     // 2. kDim: the k dimension size of the mfma instruction. E.g. instruction
     //    mfma_32x32x16 has kDim = 16, meaning this mfma instruction can compute
     //    a matmul of operands with shape 32x16 and 16x32.
