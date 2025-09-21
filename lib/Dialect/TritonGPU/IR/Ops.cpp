@@ -519,7 +519,25 @@ LogicalResult MemDescReshapeOp::verify() {
     return emitError(
         "The result alloc shape does not match the expected alloc shape.");
   }
-  if (expectedTy != dstType) {
+  if (expectedTy.getMemorySpace() != dstType.getMemorySpace() ||
+      expectedTy.getMutableMemory() != dstType.getMutableMemory()) {
+    return emitError("source and destination layout are incompatible.");
+  }
+
+  Attribute expectedEnc = expectedTy.getEncoding();
+  Attribute dstEnc = dstType.getEncoding();
+  if (expectedEnc == dstEnc) {
+    return success();
+  }
+
+  if (!expectedEnc || !dstEnc) {
+    return emitError("source and destination layout are incompatible.");
+  }
+
+  auto expectedLayout = dyn_cast<LayoutEncodingTrait>(expectedEnc);
+  auto dstLayout = dyn_cast<LayoutEncodingTrait>(dstEnc);
+  if (!expectedLayout || !dstLayout ||
+      !areLayoutsEquivalent(dstType.getShape(), expectedLayout, dstLayout)) {
     return emitError("source and destination layout are incompatible.");
   }
   return success();
