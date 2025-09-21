@@ -34,12 +34,6 @@ def alloc_rand(shape, device, dtype, requires_grad=True):
         return tmp.to(dtype).requires_grad_(requires_grad)
     return torch.randn(shape, device=device, dtype=dtype, requires_grad=requires_grad)
 
-# def alloc_ones(shape, device, dtype, requires_grad=True):
-#     return torch.ones(shape, device=device, dtype=dtype, requires_grad=requires_grad)
-
-# def alloc_zeros(shape, device, dtype, requires_grad=True):
-#     return torch.zeros(shape, device=device, dtype=dtype, requires_grad=requires_grad)
-
 
 def alloc_rand_like(x):
     return alloc_rand(x.shape, x.device, x.dtype, x.requires_grad)
@@ -168,7 +162,7 @@ class Case:
     x_transpose: bool = False
     w_transpose: bool = False
     y_transpose: bool = False
-    colmajor_mxfp_weight: bool = False
+    colmajor_mxfp_weight: bool = True
 
 
 @pytest.mark.parametrize(
