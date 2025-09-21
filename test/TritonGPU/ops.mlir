@@ -2,6 +2,7 @@
 
 // CHECK: #[[$WMMA_GEN1:.*]] = #ttg.amd_wmma<{{.*}}version = 1{{.*}}>
 // CHECK: #[[$WMMA_GEN2:.*]] = #ttg.amd_wmma<{{.*}}version = 2{{.*}}>
+// CHECK: #[[$WMMA_GEN3:.*]] = #ttg.amd_wmma<{{.*}}version = 3{{.*}}>
 #blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 
 module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -30,6 +31,20 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
   tt.func @wmma_gen2_dot_op_layout(%0: tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>) {
     %1 = ttg.convert_layout %0 : tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #ttg.amd_wmma<{version = 2, warpsPerCTA = [1, 1]}>, kWidth = 8}>>
     // CHECK:  %{{.+}} = ttg.convert_layout %{{.+}} : tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #{{.+}}}>> -> tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #[[$WMMA_GEN2]], kWidth = 8}>>
+    tt.return
+  }
+
+  // CHECK-LABEL: wmma_gen3_layout
+  tt.func @wmma_gen3_layout(%0: tensor<16x16xf32, #blocked>) {
+    %1 = ttg.convert_layout %0 : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #ttg.amd_wmma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16, 32]}>>
+    // CHECK:  %{{.+}} = ttg.convert_layout %{{.+}} : tensor<16x16xf32, #{{.+}}> -> tensor<16x16xf32, #[[$WMMA_GEN3]]>
+    tt.return
+  }
+
+  // CHECK-LABEL: wmma_gen3_dot_op_layout
+  tt.func @wmma_gen3_dot_op_layout(%0: tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>) {
+    %1 = ttg.convert_layout %0 : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> -> tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #ttg.amd_wmma<{version = 3, warpsPerCTA = [1, 1], instrShape = [16, 16, 32]}>, kWidth = 8}>>
+    // CHECK:  %{{.+}} = ttg.convert_layout %{{.+}} : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #{{.+}}}>> -> tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #[[$WMMA_GEN3]], kWidth = 8}>>
     tt.return
   }
 }

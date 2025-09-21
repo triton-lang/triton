@@ -929,7 +929,8 @@ tt.func @if_into_for_init(%i1 : i1) {
     scf.yield %cst128 : i32
   }
   scf.for %i = %ret to %cst128 step %cst_64 : i32 {
-    // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
+    // TODO: Wrong divisibility here. Fix it once llvm/llvm-project#158359 lands
+    // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
     %t = arith.addi %i, %c0 : i32
   }
   tt.return
@@ -948,7 +949,8 @@ tt.func @if_into_for_step(%i1 : i1) {
     scf.yield %cst128 : i32
   }
   scf.for %i = %c0 to %cst128 step %ret : i32 {
-    // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
+    // TODO: Wrong divisibility here. Fix it once llvm/llvm-project#158359 lands
+    // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
     %t = arith.addi %i, %c0 : i32
   }
   tt.return

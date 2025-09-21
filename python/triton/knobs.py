@@ -447,6 +447,12 @@ class JITHook(Protocol):
         ...
 
 
+class PipelineStagesHook(Protocol):
+
+    def __call__(self, stages, options, language, capability):
+        ...
+
+
 class runtime_knobs(base_knobs):
     interpret: env_bool = env_bool("TRITON_INTERPRET")
     # debug is on critical path for kernel launches
@@ -464,6 +470,9 @@ class runtime_knobs(base_knobs):
     # Hook to signal that a kernel is done compiling and inspect compiled function.
     # jit_cache_hook will always be called before compilation and jit_post_compile_hook after.
     jit_post_compile_hook: Optional[JITHook] = None
+
+    # Hook for inspecting compiler pipeline stages
+    add_stages_inspection_hook: Optional[PipelineStagesHook] = None
 
 
 class language_knobs(base_knobs):
@@ -504,7 +513,8 @@ class amd_knobs(base_knobs):
 
 
 class proton_knobs(base_knobs):
-    cupti_dir: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
+    cupti_lib_dir: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
+    enable_nvtx: env_bool = env_bool("TRITON_ENABLE_NVTX", True)
 
 
 build = build_knobs()
