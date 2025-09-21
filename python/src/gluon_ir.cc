@@ -206,12 +206,12 @@ py::object layoutToGluon(Attribute layout) {
   } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
     auto ctaLayout = amdMfma.getCTALayout();
     return layouts.AMDMFMALayout(
-        amdMfma.getVersion(), toStdVector(amdMfma.getWarpsPerCTA()),
-        toStdVector(amdMfma.getInstrShape()), amdMfma.getIsTransposed(),
+        amdMfma.getVersion(), toStdVector(amdMfma.getInstrShape()),
+        amdMfma.getIsTransposed(), toStdVector(amdMfma.getWarpsPerCTA()),
+        amdMfma.getElementBitWidth(), toStdVector(amdMfma.getTilesPerWarp()),
         toStdVector(ctaLayout.getCTAsPerCGA()),
         toStdVector(ctaLayout.getCTASplitNum()),
-        toStdVector(ctaLayout.getCTAOrder()),
-        toStdVector(amdMfma.getTilesPerWarp()), amdMfma.getElementBitWidth());
+        toStdVector(ctaLayout.getCTAOrder()));
   } else if (auto amdWmma = dyn_cast<ttg::AMDWmmaEncodingAttr>(layout)) {
     auto ctaLayout = amdWmma.getCTALayout();
     return layouts.AMDWMMALayout(amdWmma.getVersion(),

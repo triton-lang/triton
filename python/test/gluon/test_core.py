@@ -319,8 +319,8 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
     k_width: ttgl.constexpr = 4 if cdna_version == 3 else 8
     blocked: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[4, 4], threads_per_warp=[4, 16],
                                                  warps_per_cta=[num_warps, 1], order=[1, 0])
-    mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=cdna_version, warps_per_cta=[num_warps, 1],
-                                                         instr_shape=[nonkdim, nonkdim, kdim], transposed=True)
+    mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=cdna_version, instr_shape=[nonkdim, nonkdim, kdim],
+                                                         transposed=True, warps_per_cta=[num_warps, 1])
 
     kernel[1, 1](
         a, b, c,  #
@@ -402,8 +402,8 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
             reg_bases=[], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp_bases=[[16, 0], [0, 0]],
             block_bases=[], shape=[32, 4])
 
-        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[2, 2], instr_shape=[16, 16, 128],
-                                                             transposed=True)
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 128], transposed=True,
+                                                             warps_per_cta=[2, 2])
 
         zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=mfma_layout)
 

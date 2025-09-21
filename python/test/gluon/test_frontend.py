@@ -1701,27 +1701,27 @@ def test_atomic_cas():
 
 @gluon.jit
 def amd_mfma_layout_kernel():
-    ttgl.full([128, 32], 0, ttgl.float32, layout=amd_layouts.AMDMFMALayout(version=3, warps_per_cta=[4, 1],
-                                                                           instr_shape=[32, 32, 8], transposed=True))
+    ttgl.full([128, 32], 0, ttgl.float32, layout=amd_layouts.AMDMFMALayout(version=3, instr_shape=[32, 32, 8],
+                                                                           transposed=True, warps_per_cta=[4, 1]))
+
+    ttgl.full([128, 32], 0, ttgl.float32, layout=amd_layouts.AMDMFMALayout(version=3, instr_shape=[32, 32,
+                                                                                                   8], transposed=True,
+                                                                           warps_per_cta=[4, 1], tiles_per_warp=[2, 2]))
 
     ttgl.full([128, 32], 0, ttgl.float32,
-              layout=amd_layouts.AMDMFMALayout(version=3, warps_per_cta=[4, 1], instr_shape=[32, 32, 8],
-                                               transposed=True, tiles_per_warp=[2, 2]))
-
-    ttgl.full([128, 32], 0, ttgl.float32,
-              layout=amd_layouts.AMDMFMALayout(version=3, warps_per_cta=[4, 1], instr_shape=[32, 32, 8],
-                                               transposed=True, ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                               cta_order=[1, 0], tiles_per_warp=[1, 1]))
+              layout=amd_layouts.AMDMFMALayout(version=3, instr_shape=[32, 32, 8], transposed=True,  #
+                                               warps_per_cta=[4, 1], tiles_per_warp=[1, 1],  #
+                                               ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0]))
 
     ttgl.full([128, 32], 0, ttgl.float64,
-              layout=amd_layouts.AMDMFMALayout(version=3, warps_per_cta=[4, 1], instr_shape=[16, 16, 16],
-                                               transposed=True, ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                               cta_order=[1, 0], tiles_per_warp=[1, 1], element_bitwidth=64))
+              layout=amd_layouts.AMDMFMALayout(version=3, instr_shape=[16, 16, 16], transposed=True,  #
+                                               warps_per_cta=[4, 1], element_bitwidth=64, tiles_per_warp=[1, 1],  #
+                                               ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0]))
 
     ttgl.full([128, 32], 0, ttgl.int32,
-              layout=amd_layouts.AMDMFMALayout(version=3, warps_per_cta=[4, 1], instr_shape=[16, 16, 16],
-                                               transposed=True, ctas_per_cga=[1, 1], cta_split_num=[1, 1],
-                                               tiles_per_warp=[1, 1], element_bitwidth=32))
+              layout=amd_layouts.AMDMFMALayout(version=3, instr_shape=[16, 16, 16], transposed=True,  #
+                                               warps_per_cta=[4, 1], element_bitwidth=32,  #
+                                               ctas_per_cga=[1, 1], cta_split_num=[1, 1], tiles_per_warp=[1, 1]))
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
@@ -1759,8 +1759,8 @@ def add_int(a, b):
 
 @gluon.jit
 def infer_layout_for_amd_mfma_kernel():
-    layout: ttgl.constexpr = amd_layouts.AMDMFMALayout(version=3, warps_per_cta=[4, 1], instr_shape=[32, 32, 8],
-                                                       transposed=True, ctas_per_cga=[1, 1], cta_split_num=[1, 1],
+    layout: ttgl.constexpr = amd_layouts.AMDMFMALayout(version=3, instr_shape=[32, 32, 8], transposed=True,
+                                                       warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1],
                                                        cta_order=[1, 0])
     a = ttgl.full([128, 32], 1, ttgl.int32, layout)
     b = ttgl.reduce(a, 1, add_int)
@@ -2335,8 +2335,8 @@ def test_amd_mfma_scaled(target):
 
     @gluon.jit
     def kernel():
-        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[1, 1], instr_shape=[16, 16, 128],
-                                                             transposed=True)
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 128], transposed=True,
+                                                             warps_per_cta=[1, 1])
         scale_layout: ttgl.constexpr = ttgl.DistributedLinearLayout([],
                                                                     [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]],
                                                                     [], [], [16, 4])
