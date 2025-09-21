@@ -56,7 +56,7 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
         grid_out = triton.cdiv(kernel_src_tensor.shape[0], BLOCK_OUT_DIM)
         grid_quant = triton.cdiv(kernel_src_tensor.shape[1], BLOCK_QUANT_DIM)
 
-        _downcast_to_mxfp[(grid_out, grid_quant)](kernel_quant_tensor, *kernel_quant_tensor.stride(), kernel_scale,
+        _downcast_to_mxfp[(grid_quant, grid_out)](kernel_quant_tensor, *kernel_quant_tensor.stride(), kernel_scale,
                                                 *kernel_scale.stride(), kernel_src_tensor, *kernel_src_tensor.stride(),
                                                 *kernel_src_tensor.shape, BLOCK_OUT_DIM, BLOCK_QUANT_DIM,
                                                 DEQUANT_SCALE_ROUNDING_MODE.value, num_warps=8)
@@ -96,7 +96,7 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: to
     BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value
     blocks_out_dim = triton.cdiv(reshaped_out.shape[0], BLOCK_OUT_DIM)
     blocks_quant_dim = triton.cdiv(reshaped_out.shape[1], BLOCK_QUANT_DIM)
-    _upcast_from_mxfp[(blocks_out_dim, blocks_quant_dim)](reshaped_out, *reshaped_out.stride(), reshaped_scale,
+    _upcast_from_mxfp[(blocks_quant_dim, blocks_out_dim)](reshaped_out, *reshaped_out.stride(), reshaped_scale,
                                                           *reshaped_scale.stride(), reshaped_tensor,
                                                           *reshaped_tensor.stride(), *reshaped_out.shape, BLOCK_OUT_DIM,
                                                           BLOCK_QUANT_DIM, num_warps=8)

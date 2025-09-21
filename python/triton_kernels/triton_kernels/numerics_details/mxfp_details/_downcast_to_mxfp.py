@@ -110,8 +110,8 @@ def _downcast_to_mxfp(mx_tensor_ptr, stride_mxt_outer, stride_mxt_quant: tl.cons
     tl.static_assert((src_dtype == tl.bfloat16) or (src_dtype == tl.float16) or (src_dtype == tl.float32), f"{src_dtype=} must be bfloat16 or float16 or float32")
     is_fp4: tl.constexpr = mx_tensor_dtype == tl.uint8
 
-    outer_block = tl.program_id(0).to(tl.int64)
-    quant_block = tl.program_id(1).to(tl.int64)
+    quant_block = tl.program_id(0).to(tl.int64)
+    outer_block = tl.program_id(1).to(tl.int64)
 
     K_DIVISOR: tl.constexpr = 2 if is_fp4 else 1
     BLOCK_SIZE_QUANT_MX_SCALE: tl.constexpr = BLOCK_SIZE_QUANT_DIM // MXFP_BLOCK_SIZE

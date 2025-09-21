@@ -30,8 +30,8 @@ def _upcast_from_mxfp(out_ptr, stride_o_outer, stride_o_quant: tl.constexpr, mx_
     BLOCK_SIZE_QUANT_MX_TENSOR: tl.constexpr = BLOCK_SIZE_QUANT_DIM // K_DIVISOR
 
     # Compute starting indices for the quantized (packed) dimension and the outer dimension.
-    outer_block = tl.program_id(0).to(tl.int64)
-    quant_block = tl.program_id(1).to(tl.int64)
+    quant_block = tl.program_id(0).to(tl.int64)
+    outer_block = tl.program_id(1).to(tl.int64)
 
     start_mxt_quant = quant_block * BLOCK_SIZE_QUANT_MX_TENSOR
     start_out_quant = quant_block * BLOCK_SIZE_QUANT_DIM
