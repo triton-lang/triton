@@ -334,7 +334,6 @@ def matmul_ogs(x, w, bias,
     w_scale = precision_config.weight_scale
     w_has_mx = w_scale is not None
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and bitwidth(w.dtype) == 8
-    if w_has_mx: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp"
     if is_hopper_fp8: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     if not isinstance(w, Tensor):
         # TODO: remove this code path; using uint8 for mxfp4 weight will bite us when we want to support uint8 for real
