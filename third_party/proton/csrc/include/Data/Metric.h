@@ -3,6 +3,7 @@
 
 #include "Utility/String.h"
 #include "Utility/Traits.h"
+#include <stdexcept>
 #include <variant>
 #include <vector>
 
@@ -11,6 +12,21 @@ namespace proton {
 enum class MetricKind { Flexible, Kernel, PCSampling, Cycle, Count };
 
 using MetricValueType = std::variant<uint64_t, int64_t, double, std::string>;
+
+inline const char *typeNameForIndex(std::size_t idx) {
+  switch (idx) {
+  case 0:
+    return "uint64_t";
+  case 1:
+    return "int64_t";
+  case 2:
+    return "double";
+  case 3:
+    return "std::string";
+  default:
+    return "<unknown>";
+  }
+}
 
 /// A metric is a class that can be associated with a context.
 /// `Metric` is the base class for all metrics.
@@ -42,6 +58,14 @@ public:
 
   /// Update a specific value id with the new value.
   void updateValue(int valueId, MetricValueType value) {
+    // Enforce type consistency: once a valueId has a type, it must not change.
+    if (values[valueId].index() != value.index()) {
+      throw std::runtime_error(
+          std::string("Metric value type mismatch for valueId ") +
+          std::to_string(valueId) + " (" + getValueName(valueId) + ")" +
+          ": current=" + typeNameForIndex(values[valueId].index()) +
+          ", new=" + typeNameForIndex(value.index()));
+    }
     // Handle string and other values separately
     if (std::holds_alternative<std::string>(value)) {
       values[valueId] = std::get<std::string>(value);

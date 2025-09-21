@@ -680,6 +680,13 @@ LogicalResult TMEMCopyOp::verify() {
           getSrc().getType().getMemorySpace()))
     return emitOpError("The source must be a shared memory buffer");
 
+  auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
+  auto dstTy = cast<triton::gpu::MemDescType>(getDst().getType());
+  if (srcTy.getShape() != dstTy.getShape())
+    return emitOpError("source shape ")
+           << srcTy.getShape() << " must match destination shape "
+           << dstTy.getShape();
+
   if (getBarrier() && !isa<triton::gpu::SharedMemorySpaceAttr>(
                           getBarrier().getType().getMemorySpace())) {
     return emitOpError("The optional barrier should be a shared memory buffer");
@@ -687,7 +694,6 @@ LogicalResult TMEMCopyOp::verify() {
   if (!getDst().getType().getMutableMemory()) {
     return emitOpError("Cannot copy into an immutable alloc");
   }
-  auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
   auto sharedEnc =
       dyn_cast<triton::gpu::SharedEncodingTrait>(srcTy.getEncoding());
   if (sharedEnc.getAlignment() < 16) {
@@ -700,20 +706,15 @@ LogicalResult TMEMCopyOp::verify() {
   if (numCTAs != 1)
     return emitOpError("NYI: Only one CTA is supported for now.");
 
+  // Fp4 we could lift if we needed
   auto nvmmaEnc =
       dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(srcTy.getEncoding());
-  if (!nvmmaEnc) {
-    return emitOpError("Source must have nvmma layout.");
-  }
-  // Fp4 we could lift if we needed
-  if (nvmmaEnc.getTransposed() || nvmmaEnc.getFp4Padded())
+  if (nvmmaEnc && (nvmmaEnc.getTransposed() || nvmmaEnc.getFp4Padded())) {
     return emitOpError("The source should not be transposed or padded");
+  }
   if (isa<TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding())) {
-    if (nvmmaEnc.getSwizzlingByteWidth() != 0) {
+    if (nvmmaEnc && nvmmaEnc.getSwizzlingByteWidth() != 0) {
       return emitOpError("The source should not be swizzled for now");
-    }
-    if (!triton::gpu::isInnermostContiguous(srcTy, 512)) {
-      return emitOpError("The source must be in a row-major order.");
     }
   } else {
     if (getSrc().getType().getShape() != getDst().getType().getShape()) {
@@ -728,7 +729,7 @@ LogicalResult TMEMCopyOp::verify() {
     if (tmemEnc.getBlockM() != 128) {
       return emitOpError("Tmem layout ahouls have M=128.");
     }
-    if (nvmmaEnc.getSwizzlingByteWidth() == 0) {
+    if (nvmmaEnc && nvmmaEnc.getSwizzlingByteWidth() == 0) {
       return emitOpError("Source layout should be swizzled.");
     }
     // When we lift this, we should make sure we handle unpacked cleanly

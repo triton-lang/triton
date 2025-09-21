@@ -206,6 +206,12 @@ LogicalResult DependencyRewriter::run() {
        llvm::zip(partitions.getPartitions(), partitionUseInfo)) {
     // The amount of buffering is based on the longest distance to a user.
     for (auto &[output, info] : useInfo) {
+      // Skip AsyncTokenType outputs - they are handled correctly by design
+      // in a previous pass and should not be passed through shared memory
+      if (isa<AsyncTokenType>(output.getType())) {
+        continue;
+      }
+
       b.setLoc(output.getLoc());
       ImplicitLocOpBuilder endBuilder(b.getLoc(), loop->getNextNode());
 
