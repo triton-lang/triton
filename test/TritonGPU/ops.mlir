@@ -101,12 +101,29 @@ module attributes {"ttg.target" = "gfx950", "ttg.num-ctas" = 1 : i32, "ttg.num-w
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16,  CTAsPerCGA = [1,1,1,1], CTASplitNum = [1,1,1,1], CTAOrder = [3, 2, 1, 0]}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 32}>
+#shared_linear_16 = #ttg.shared_linear<{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [1, 0], [2, 4], [4, 8], [8, 0]]}, alignment = 512>
+#shared_linear_equiv = #ttg.shared_linear<{offset = [[0, 0, 1, 0], [0, 1, 0, 0], [0, 2, 0, 0], [0, 4, 0, 0], [0, 0, 0, 1], [0, 2, 0, 2], [0, 4, 0, 4], [0, 0, 0, 8]]}, alignment = 512>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: memdesc_reshape
   // CHECK: !ttg.memdesc<128x64xf16, #{{.+}}, mutable>
   tt.func @memdesc_reshape(%d : !ttg.memdesc<32x1x4x64xf16, #shared, #smem, mutable>){
     %1 = ttg.memdesc_reshape %d : !ttg.memdesc<32x1x4x64xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x64xf16, #shared1, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: memdesc_reshape_equiv
+  // CHECK: %[[R:.*]] = ttg.memdesc_reshape %{{.*}} : !ttg.memdesc<1x8x2x16xf32, #{{.*}}, #smem> -> !ttg.memdesc<16x16xf32, #{{.*}}, #smem>
+  tt.func @memdesc_reshape_equiv(%arg0 : !ttg.memdesc<1x8x2x16xf32, #shared_linear_equiv, #smem>) {
+    %0 = ttg.memdesc_reshape %arg0 : !ttg.memdesc<1x8x2x16xf32, #shared_linear_equiv, #smem> -> !ttg.memdesc<16x16xf32, #shared2, #smem>
+    tt.return
+  }
+
+  // CHECK-LABEL: memdesc_trans_equiv
+  // CHECK: %[[T:.*]] = ttg.memdesc_trans %{{.*}} {order = array<i32: 1, 0>} : !ttg.memdesc<16x16xf32, #{{.*}}, #smem> -> !ttg.memdesc<16x16xf32, #{{.*}}, #smem>
+  tt.func @memdesc_trans_equiv(%arg0 : !ttg.memdesc<16x16xf32, #shared_linear_16, #smem>) {
+    %0 = ttg.memdesc_trans %arg0 {order = array<i32: 1, 0>} : !ttg.memdesc<16x16xf32, #shared_linear_16, #smem> -> !ttg.memdesc<16x16xf32, #shared2, #smem>
     tt.return
   }
 }
