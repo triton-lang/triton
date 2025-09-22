@@ -480,26 +480,48 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 LinearLayout chooseLLDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
                                        int32_t elemBitWidth) {
   using BaseTy = std::vector<std::vector<int32_t>>;
+  // This function will derive the layout for the ds_read_b64_tr instruction
+  // based on the input layout (LL/DotLayout/...)
+  // The ds_read_b64_tr works on 64 bits per lane and in groups of 16 lanes.
+  // Each lane will load 4 elements and then the data is exchanged within
+  // the 4x16 block (for F16) in a transposed way.
 
+  // T0 T4 T8 T12
+  //  0  1  2  3           T0: 0 1 2 3
+  //  4  5  6  7      ---> T1: 4 5 6 7
+  //  8  9 10 11           T2: 8 9 10 11
+  // 12 13 14 15           T3: 12 13 14 15
+  //                       T4: 16 17 18 19
+  // T1 T5 T9 T13          T5: 20 21 22 23
+  // 16 17 18 19           ...
+  // 20 21 22 23
+  // 24 25 25 27
+  // 28 29 30 31
+  // ...
+
+  // Given the layout represented by `enc` and shape, we can derive the layout
+  // that ds_read_b64_tr need to have in order to perform a vectorized load of
+  // the elements. This can be done by transposing the inner 4x16 tile (for F16)
+  // and this can be done in the LL by rotating the first numReg register bases
+  // and the first numLane lane bases.
   auto rotatePrefixes = [](BaseTy &regBase, std::size_t numReg,
                            BaseTy &laneBase, std::size_t numLane) {
-    // Concatenate prefixes of the two vectors, then roatete left by numReg
-    // A B | C D E F --> C D | E F A B
-    BaseTy prefixes(regBase.begin(), regBase.begin() + numReg);
-    prefixes.insert(prefixes.end(), laneBase.begin(),
-                    laneBase.begin() + numLane);
-    std::rotate(prefixes.begin(), prefixes.begin() + numReg, prefixes.end());
+    // Concatenate prefixes of the two vectors. Lane first and then regs.
+    // C D E F | A B
+    // Then copy over numReg to the regBase and numLane to laneBase
+    // C D | E F A B
+    BaseTy baseUnit(laneBase.begin(), laneBase.begin() + numLane);
+    llvm::append_range(
+        baseUnit, llvm::make_range(regBase.begin(), regBase.begin() + numReg));
 
-    // Insert the rotated elements by overwriting the source bases
-    std::copy(prefixes.begin(), prefixes.begin() + numReg, regBase.begin());
-    std::copy(prefixes.begin() + numReg, prefixes.end(), laneBase.begin());
+    std::copy(baseUnit.begin(), baseUnit.begin() + numReg, regBase.begin());
+    std::copy(baseUnit.begin() + numReg, baseUnit.end(), laneBase.begin());
   };
 
   auto ctx = enc.getContext();
   assert(elemBitWidth == 8 || elemBitWidth == 16);
-  // 2 lane bases describe 4 elements (B16), 3 lane bases describe 8 elements
-  // (B8)
-  unsigned numRegBases = elemBitWidth == 16 ? 2 : 3;
+  // Get how many reg bases the ds_read_tr tile spans
+  unsigned numRegBases = llvm::Log2_32(64 / elemBitWidth);
   // 4 lane bases describe 16 lanes.
   unsigned numLaneBases = 4;
 
@@ -550,42 +572,39 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
 
   std::vector<std::vector<int32_t>> registerBase;
   std::vector<std::vector<int32_t>> laneBase;
-  auto populateFP4LL = [&registerBase, &laneBase](int kSize, int mDim) {
-    const bool isMfma32 = (mDim == 32);
-    // ds_read_b64_tr4 operates on FP4 values swapping the packing of them. Look
-    // at i8 values for the ownership of register/lane since it's the data type
-    // of the tensor. Register dimension: what i8 in the tile are held by thread
-    // 0? Lane dimension: what i8 in the tile are held in register 0 of each
-    // thread?
-    registerBase.push_back({1, 0});
-    registerBase.push_back({2, 0});
-    registerBase.push_back({4, 0});
-    registerBase.push_back({0, 16});
 
-    // If more than one tile needs to be loaded, populate registerBase
-    // dimension for the other tiles
-    const int kTileSize = isMfma32 ? 64 : 128;
-    for (int reg = kTileSize; reg < kSize; reg *= 2) {
-      registerBase.push_back({0, reg});
-    }
+  const bool isMfma32 = (mDim == 32);
+  // ds_read_b64_tr4 operates on FP4 values swapping the packing of them. Look
+  // at i8 values for the ownership of register/lane since it's the data type
+  // of the tensor. Register dimension: what i8 in the tile are held by thread
+  // 0? Lane dimension: what i8 in the tile are held in register 0 of each
+  // thread?
+  registerBase.push_back({1, 0});
+  registerBase.push_back({2, 0});
+  registerBase.push_back({4, 0});
+  registerBase.push_back({0, 16});
 
-    // When mDim == 16 we have 16x128 mfma, otherwise it's 16x64
-    // The LL for the two is different
-    laneBase.push_back({0, 1});
-    laneBase.push_back({0, 2});
-    laneBase.push_back({0, 4});
-    laneBase.push_back({0, 8});
-    if (mDim == 16) {
-      laneBase.push_back({0, 32});
-      laneBase.push_back({0, 64});
-    } else {
-      assert(mDim == 32);
-      laneBase.push_back({8, 0});
-      laneBase.push_back({0, 32});
-    }
-  };
+  // If more than one tile needs to be loaded, populate registerBase
+  // dimension for the other tiles
+  const int kTileSize = isMfma32 ? 64 : 128;
+  for (int reg = kTileSize; reg < kSize; reg *= 2) {
+    registerBase.push_back({0, reg});
+  }
 
-  populateFP4LL(kSize, mDim);
+  // When mDim == 16 we have 16x128 mfma, otherwise it's 16x64
+  // The LL for the two is different
+  laneBase.push_back({0, 1});
+  laneBase.push_back({0, 2});
+  laneBase.push_back({0, 4});
+  laneBase.push_back({0, 8});
+  if (mDim == 16) {
+    laneBase.push_back({0, 32});
+    laneBase.push_back({0, 64});
+  } else {
+    assert(mDim == 32);
+    laneBase.push_back({8, 0});
+    laneBase.push_back({0, 32});
+  }
 
   // Base vectors above are defined in a fixed order [non-k-dim, k-dim].
   // To assign them to actual matrix dimensions we associate with register
