@@ -513,16 +513,7 @@ LogicalResult MemDescReshapeOp::verify() {
   if (failed(inferReturnTypes(getContext(), getLoc(), srcType,
                               dstType.getShape(), expectedTy)))
     return failure();
-  // Check that the alloc shape separately to give a cleaner error, given that
-  // it's the most likely source of the error.
-  if (expectedTy.getAllocShape() != dstType.getAllocShape()) {
-    return emitError(
-        "The result alloc shape does not match the expected alloc shape.");
-  }
-  if (expectedTy != dstType) {
-    return emitError("source and destination layout are incompatible.");
-  }
-  return success();
+  return OpTrait::impl::verifyEquivalentType(expectedTy, dstType);
 }
 
 static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
