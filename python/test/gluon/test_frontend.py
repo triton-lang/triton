@@ -2636,6 +2636,19 @@ def test_get_num_warps():
                          [24, 24, 24])
 
 
+def test_mismatch_shape_and_layout_rank():
+
+    @gluon.jit
+    def kernel():
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+        _ = ttgl.full([1, 16, 16, 1, 16], 0, ttgl.float16, layout=layout)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "tensor shape and layout rank mismatch" in str(e.value.__cause__)
+
+
 def test_non_scalar_loop_bounds():
 
     @gluon.jit

@@ -988,6 +988,35 @@ public:
   }
 };
 
+class TransOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<triton::TransOp> {
+public:
+  using AxisInfoVisitorImpl<triton::TransOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(triton::TransOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    AxisInfo srcInfo = operands[0]->getValue();
+    auto order = op.getOrder();
+    auto rank = srcInfo.getRank();
+
+    // Apply the transpose permutation to all axis info properties
+    AxisInfo::DimVectorT contiguity;
+    AxisInfo::DimVectorT divisibility;
+    AxisInfo::DimVectorT constancy;
+
+    for (int d = 0; d < rank; ++d) {
+      int srcDim = order[d];
+      contiguity.push_back(srcInfo.getContiguity(srcDim));
+      divisibility.push_back(srcInfo.getDivisibility(srcDim));
+      constancy.push_back(srcInfo.getConstancy(srcDim));
+    }
+
+    return AxisInfo(contiguity, divisibility, constancy,
+                    srcInfo.getConstantValue());
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // AxisInfoAnalysis
 //===----------------------------------------------------------------------===//
@@ -1032,6 +1061,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
                   MaxMinOpAxisInfoVisitor<arith::MinSIOp>,
                   MaxMinOpAxisInfoVisitor<arith::MinUIOp>>();
   visitors.append<LoadOpAxisInfoVisitor>();
+  visitors.append<TransOpAxisInfoVisitor>();
 
   if (callback)
     callback(visitors);
