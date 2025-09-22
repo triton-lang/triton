@@ -44,6 +44,7 @@ jobs:
       PROTON_SKIP_PC_SAMPLING_TEST: 1
       PYTHON: "python3"
       CCACHE_COMPRESS: "true"
+      PIP_BREAK_SYSTEM_PACKAGES: 1
     container:
       image: ${{ matrix.image }}
       options: ${{ matrix.options }}
