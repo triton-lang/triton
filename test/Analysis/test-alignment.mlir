@@ -955,3 +955,12 @@ tt.func @if_into_for_step(%i1 : i1) {
   }
   tt.return
 }
+
+// -----
+
+tt.func @op_annotation(%i32 : i32) {
+  %c0 = arith.constant 0 : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [4096], constancy = [1], constant_value = <none>}}
+  %ret = arith.addi %c0, %i32 { tt.divisibility = 4096 : i32 } : i32
+  tt.return
+}           
