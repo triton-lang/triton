@@ -12,11 +12,28 @@ from triton_kernels.target_info import get_cdna_version
 import distributed as triton_dist
 from triton_kernels.tensor_details import layout
 from bench_utils import quantize_weight
+from functools import contextmanager
 import tempfile
 
 
 # Toggle
 SAVE_PROFILES = False
+
+@contextmanager
+def get_temp_fpath(out_path, rank, batch_per_expt):
+    if SAVE_PROFILES:
+        fpath = out_path / f"{rank}/b{batch_per_expt}"
+        fpath.mkdir(parents=True, exist_ok=True)
+    else:
+        fpath = Path(tempfile.mkdtemp()) / f"b{batch_per_expt}"
+    try:
+        yield fpath
+    finally:
+        if not SAVE_PROFILES:
+            # Remove temp folder
+            import shutil
+            shutil.rmtree(fpath)
+
 
 def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, out_path):
     assert n_expts_tot % EP == 0
@@ -73,33 +90,29 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
 
     input_x = torch.randn((batch // DP, dim1), device=dev)
     # run layer
-    if SAVE_PROFILES:
-        fpath = out_path / f"{rank}/b{batch_per_expt}"
-        fpath.mkdir(parents=True, exist_ok=True)
-    else:
-        fpath = Path(tempfile.mkdtemp()) / f"b{batch_per_expt}"
-    proton.start(str(fpath), hook="triton")
-    input_x = input_x.to(x_dtype)
-    xg = input_x.to(wg.dtype if n_expts_tot > 1 else input_x.dtype)
-    for i in range(100):
-        if n_expts_tot > 1:  # sparse
-            with proton.scope("logits"):
-                logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            with proton.scope("routing"):
-                x, rdata, gather_indx, scatter_indx, metadata = triton_dist.routing(input_x, logits, n_expts_act, EP=EP,
-                                                                                    TP=TP)
-        else:  # dense
-            with proton.scope("all_gather"):
-                x = triton_dist.all_gather(input_x, dim=0)
-            rdata, gather_indx, scatter_indx, metadata = None, None, None, None
-        if x.nelement() > 0:
-            with proton.scope("mlp1"):
-                x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, fused_activation=act)
-            with proton.scope("mlp2"):
-                x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=scatter_indx, precision_config=pc2)
-        with proton.scope("reduce_scatter"):
-            x = triton_dist.reduce_scatter(x, metadata=metadata, dim=0)
-    proton.finalize()
+    with get_temp_fpath(out_path, rank, batch_per_expt) as fpath:
+        proton.start(str(fpath), hook="triton")
+        input_x = input_x.to(x_dtype)
+        xg = input_x.to(wg.dtype if n_expts_tot > 1 else input_x.dtype)
+        for i in range(100):
+            if n_expts_tot > 1:  # sparse
+                with proton.scope("logits"):
+                    logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
+                with proton.scope("routing"):
+                    x, rdata, gather_indx, scatter_indx, metadata = triton_dist.routing(input_x, logits, n_expts_act, EP=EP,
+                                                                                        TP=TP)
+            else:  # dense
+                with proton.scope("all_gather"):
+                    x = triton_dist.all_gather(input_x, dim=0)
+                rdata, gather_indx, scatter_indx, metadata = None, None, None, None
+            if x.nelement() > 0:
+                with proton.scope("mlp1"):
+                    x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, fused_activation=act)
+                with proton.scope("mlp2"):
+                    x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=scatter_indx, precision_config=pc2)
+            with proton.scope("reduce_scatter"):
+                x = triton_dist.reduce_scatter(x, metadata=metadata, dim=0)
+        proton.finalize()
     return roofline.parse_profile(fpath.with_suffix(".hatchet"), useful_op_regex=".*matmul.*")
 
 
