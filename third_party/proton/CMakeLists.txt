@@ -53,9 +53,7 @@ add_subdirectory("${PROTON_COMMON_DIR}")
 add_subdirectory("${PROTON_SRC_DIR}")
 
 # ============ Add subdirectory with proton tests ============
-if(TRITON_BUILD_UT)
-  add_subdirectory(test)
-endif()
+add_subdirectory(test)
 
 # ============ Possibly handle macOS specifics ============
 if(APPLE)
