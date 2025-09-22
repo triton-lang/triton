@@ -746,7 +746,7 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
                 basis[dim] = stride
                 offset_bases.append(basis)
                 stride <<= 1
-        shared_layout = ttgl.SharedLinearLayout(offset_bases=offset_bases, block_bases=[], shape=list(shape))
+        shared_layout = ttgl.SharedLinearLayout(offset_bases=offset_bases)
 
     if isinstance(shared_layout, ttgl.NVMMASharedLayout):
         contig_dim = 0 if shared_layout.transposed else 1
