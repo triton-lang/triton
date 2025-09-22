@@ -55,17 +55,10 @@ def swizzle2d(pid, grid_m, grid_n, GROUP_M: tl.constexpr):
 
 
 @triton.jit
-def _load_tile_attrs(
-    tile_id, num_tiles, unpadded_m, grid_n,
-    M, K, ExptData, ExptHist, ExptOffs, ExptTileOffs,
-    EXPT_IS_INNER: tl.constexpr,
-    X_IS_PADDED: tl.constexpr,
-    W_IS_PADDED: tl.constexpr,
-    BLOCK_M: tl.constexpr,
-    BLOCK_K: tl.constexpr,
-    PACKED_BLOCK_K_W: tl.constexpr,
-    SPLIT_K: tl.constexpr,
-    GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr):
+def _load_tile_attrs(tile_id, num_tiles, unpadded_m, grid_n, M, K, ExptData, ExptHist, ExptOffs, ExptTileOffs,
+                     EXPT_IS_INNER: tl.constexpr, X_IS_PADDED: tl.constexpr, W_IS_PADDED: tl.constexpr,
+                     BLOCK_M: tl.constexpr, BLOCK_K: tl.constexpr, PACKED_BLOCK_K_W: tl.constexpr,
+                     SPLIT_K: tl.constexpr, GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr):
     # unpack and swizzle program ids
     pid_emnk = tile_id
     if XCD_SWIZZLE != 1:
@@ -125,9 +118,18 @@ def _load_tile_attrs(
     off_m = BLOCK_M * block_id
 
     return (
-        expt_id, pid_z, pid_z_out,
-        start_m, eM, off_m, pid_n,
-        k_tiles, pid_k, off_k_x, off_k_w, K_W,
+        expt_id,
+        pid_z,
+        pid_z_out,
+        start_m,
+        eM,
+        off_m,
+        pid_n,
+        k_tiles,
+        pid_k,
+        off_k_x,
+        off_k_w,
+        K_W,
     )
 
 

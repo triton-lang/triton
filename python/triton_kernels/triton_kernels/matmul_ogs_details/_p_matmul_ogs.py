@@ -19,7 +19,6 @@ from ._common import (
     make_matmul_repr,
     matmul_launch_metadata,
     swizzle2d,
-    xcd_swizzle,
 )
 
 
