@@ -43,11 +43,11 @@ enum SchedType {
 using Clusters = std::array<mlir::triton::CoarseSchedule::Cluster, SCHED_SIZE>;
 using Stages = std::array<int, SCHED_SIZE>;
 
-LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
-                           int &numBuffers, int globalPrefetch,
-                           int localPrefetch, bool useAsyncCopy,
-                           bool waitAtTail, Clusters &clusters,
-                           mlir::triton::CoarseSchedule &schedule);
+// LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
+//                            int &numBuffers, int globalPrefetch,
+//                            int localPrefetch, bool useAsyncCopy,
+//                            bool waitAtTail, Clusters &clusters,
+//                            mlir::triton::CoarseSchedule &schedule);
 } // namespace SingleDotSchedule
 
 namespace ChainedDotSchedule {

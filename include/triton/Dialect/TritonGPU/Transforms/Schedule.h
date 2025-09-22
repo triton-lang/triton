@@ -54,6 +54,7 @@ public:
     iterator end() { return orderClusters.end(); }
     const_iterator end() const { return orderClusters.end(); }
     size_t size() const { return orderClusters.size(); }
+    void clear() { orderClusters.clear(); }
     iterator newAtBack() {
       orderClusters.push_back(orderClusters.size());
       return std::prev(orderClusters.end());
