@@ -858,7 +858,7 @@ tt.func @tensor_ptr(%arg0: !tt.ptr<tensor<64x16xi32>, 1>) {
 
 // -----
 
-tt.func public @chained_for(%8: tensor<128x64x!tt.ptr<bf16>> {tt.divisibility = [16, 16] : i32}) {
+tt.func public @chained_for(%8: tensor<128x64x!tt.ptr<bf16>> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>}) {
   // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>}}
   %cst = arith.constant dense<0.000000e+00> : tensor<128x64xbf16>
   // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [1], constant_value = 16}}
