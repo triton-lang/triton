@@ -35,10 +35,7 @@ struct AutomaticWarpSpecialization
 
 void AutomaticWarpSpecialization::runOnOperation() {
   OpPassManager pm;
-  if (triton::tools::getBoolEnv("TRITON_ENABLE_OLD_WS_ANALYSIS"))
-    pm.addPass(createTritonGPUPartitionAnalysis());
-  else
-    pm.addPass(createTritonGPUPartitionScheduling());
+  pm.addPass(createTritonGPUPartitionScheduling());
   pm.addPass(createNVWSInsertAref());
   pm.addPass(createNVWSInsertTmemAref());
   pm.addPass(createTritonGPURewritePartitionDependencies());
