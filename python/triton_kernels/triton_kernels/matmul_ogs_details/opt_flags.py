@@ -87,7 +87,9 @@ def make_default_opt_flags_amd(
     )
     is_persistent = constraints.get("is_persistent", False)
     # split_k:
-    if constraints.get("split_k", None) is not None:
+    if batch_size > 1:
+        split_k = 1  # currently not supported
+    elif constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
     elif is_persistent or enforce_bitwise_invariance:
         split_k = 1
