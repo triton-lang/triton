@@ -85,6 +85,11 @@ def init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, n_
         w = w.transpose(-1, -2).contiguous().transpose(-1, -2)
 
     def _apply_padding_and_fill_unused_part_with_nan(t, is_padded):
+        nan_val = float("nan")
+        if t.element_size() == 1:
+            t = t.view(torch.int8)
+            nan_val = 127
+
         start = 0
         if is_padded:
             for this_expt_nrows in rdata.expt_hist.tolist():
@@ -93,11 +98,11 @@ def init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, n_
                 t[end:padding_end, :] = 0
                 start = padding_end
             assert start <= t.shape[0]
-            t[start:, :] = float("nan")
+            t[start:, :] = nan_val
         else:
             n_actual_rows = rdata.expt_hist.sum().item()
             if n_actual_rows + padding_block_k < t.shape[0]:
-                t[n_actual_rows+padding_block_k:, :] = float("nan")
+                t[n_actual_rows+padding_block_k:, :] = nan_val
 
     if inner_expt_opt is not None:
         bias = None
