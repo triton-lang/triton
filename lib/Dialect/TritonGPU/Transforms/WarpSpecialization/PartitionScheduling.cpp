@@ -166,23 +166,20 @@ public:
 
   void dump() const {
     llvm::errs() << "Partition@" << this << " {\n"
-                 << "  name=" << name << "\n"
+                 << "  id=" << id << "\n"
                  << "  size=" << nodes.size() << "\n"
                  << "  cost=" << cost << "\n"
                  << "  flags=" << flags << "\n"
-                 << "  id=" << id << "\n"
                  << "}\n";
   }
+
+  size_t id = 0;
 
 private:
   Graph *graph;
   Flags flags = Flags::NONE;
   size_t cost = 0;
   SetVector<Node *> nodes;
-
-public:
-  size_t id = 0;
-  std::string name;
 };
 
 class Port {
@@ -923,7 +920,6 @@ bool deserializeManualPartitions(Operation *region, Graph *graph) {
           if (manual_partitions.find(id) == manual_partitions.end()) {
             auto partition = graph->addPartition();
             partition->addFlag(Flags::MANUAL);
-            partition->name = std::to_string(id);
             manual_partitions[id] = partition;
 
             LLVM_DEBUG({
@@ -1464,17 +1460,9 @@ void mergePartitions(Graph *graph, std::string funcName,
               llvm::errs() << "\napply heuristic \"" << name << "\"\n";
               llvm::errs() << edge.getFromNode()->getLabel() << " -> "
                            << edge.getToNode()->getLabel() << "\n";
-              llvm::errs() << "partitions ";
-              if (edge.getFromNode()->getPartition()->name.empty())
-                llvm::errs() << edge.getFromNode()->getPartition();
-              else
-                llvm::errs() << edge.getFromNode()->getPartition()->name;
-              llvm::errs() << " -> ";
-              if (edge.getToNode()->getPartition()->name.empty())
-                llvm::errs() << edge.getToNode()->getPartition();
-              else
-                llvm::errs() << edge.getToNode()->getPartition()->name;
-              llvm::errs() << "\n";
+              llvm::errs() << "partitions "
+                           << edge.getFromNode()->getPartition() << " -> "
+                           << edge.getToNode()->getPartition() << "\n";
               llvm::errs() << "flags "
                            << edge.getFromNode()->getPartition()->getFlags()
                            << " -> "
@@ -1812,8 +1800,6 @@ void visualize(std::string path, Graph *graph, VisualizationInfo &info) {
       if (node->hasPartition()) {
         for (auto partition : node->getPartitions()) {
           auto name = std::to_string(getPartitionId(partition));
-          if (!partition->name.empty())
-            name = partition->name;
           dot << "<TD BGCOLOR=\"" << getPartitionColor(partition) << "\">"
               << name << "{" << partition->getCost() << "}"
               << "[" << partition->getFlags() << "]</TD>";
