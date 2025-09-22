@@ -74,6 +74,7 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     input_x = torch.randn((batch // DP, dim1), device=dev)
     # run layer
     fpath = out_path if SAVE_PROFILES else Path(tempfile.mkdtemp())
+    fpath.mkdir(parents=True, exist_ok=True)
     fpath = fpath / f"{rank}/b{batch_per_expt}"
     proton.start(str(fpath), hook="triton")
     input_x = input_x.to(x_dtype)
@@ -127,6 +128,8 @@ if __name__ == "__main__":
     dense_dtypes = ["fp8", "fp8"]
     quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
     rank, world_size = triton_dist.setup()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--save-profiles", action="store_true", default=False)
     if world_size > 1:
         # Running all workloads at once may cause OOM on some GPUs such as H100 80GB.
         # Thus we request users to run each workload separately.
@@ -139,12 +142,13 @@ if __name__ == "__main__":
         # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 1 --ep 4 --name gpt-oss-x2 --quantized
         # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 4 --ep 1 --name gpt-oss-x2 --quantized
         # torchrun --nproc-per-node=4 ./bench_mlp.py --tp 4 --ep 1 --name dense --quantized
-        parser = argparse.ArgumentParser()
         parser.add_argument("--tp", type=int, default=1)
         parser.add_argument("--ep", type=int, default=1)
         parser.add_argument("--name", type=str, choices=["dense", "gpt-oss-x2"])
         parser.add_argument("--quantized", action="store_true", default=False)
-        args = parser.parse_args()
+    args = parser.parse_args()
+    SAVE_PROFILES = args.save_profiles
+    if world_size > 1:
         dtypes = quantized_dtypes if args.quantized else dense_dtypes
         if args.name == "dense":
             assert args.ep == 1, "EP must be 1 for dense"
