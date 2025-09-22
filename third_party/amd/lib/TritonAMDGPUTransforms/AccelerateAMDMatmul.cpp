@@ -797,10 +797,6 @@ int deduceTilesPerWarp(TypedValue<RankedTensorType> scale, unsigned opIdx,
     return vecSize;
   }
 
-  MLIRContext *context = scale.getContext();
-  Builder b(context);
-  auto kReg = b.getStringAttr("register");
-
   // Source code have flexibility to preshuffle scale tensor to achieve better
   // global load vectorization. That preshuffle scheme is conveyed via some
   // tl.reshape and tl.trans op combinations. Instead of hardcoding one case or
@@ -836,6 +832,7 @@ int deduceTilesPerWarp(TypedValue<RankedTensorType> scale, unsigned opIdx,
 
     // Reuse existing shared memory vectorization utilities by constructing a
     // pass through layout that does linear element mapping.
+    MLIRContext *context = scale.getContext();
     auto passThruShared = ttg::SwizzledSharedEncodingAttr::get(
         context, 1, 1, 1, loadOrder, loadCTALayout);
     auto sharedLL =
