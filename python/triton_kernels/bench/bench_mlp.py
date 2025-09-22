@@ -73,9 +73,11 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
 
     input_x = torch.randn((batch // DP, dim1), device=dev)
     # run layer
-    fpath = out_path if SAVE_PROFILES else Path(tempfile.mkdtemp())
-    fpath.mkdir(parents=True, exist_ok=True)
-    fpath = fpath / f"{rank}/b{batch_per_expt}"
+    if SAVE_PROFILES:
+        fpath = out_path / f"{rank}/b{batch_per_expt}"
+        fpath.mkdir(parents=True, exist_ok=True)
+    else:
+        fpath = Path(tempfile.mkdtemp()) / f"{rank}/b{batch_per_expt}"
     proton.start(str(fpath), hook="triton")
     input_x = input_x.to(x_dtype)
     xg = input_x.to(wg.dtype if n_expts_tot > 1 else input_x.dtype)
