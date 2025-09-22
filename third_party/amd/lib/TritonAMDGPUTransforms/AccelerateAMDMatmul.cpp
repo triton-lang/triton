@@ -798,7 +798,8 @@ int deduceTilesPerWarp(TypedValue<RankedTensorType> scale, unsigned opIdx,
     return vecSize;
   }
 
-  Builder b(scale.getContext());
+  MLIRContext *context = scale.getContext();
+  Builder b(context);
   auto kReg = b.getStringAttr("register");
 
   // Source code have flexibility to preshuffle scale tensor to achieve better
@@ -818,7 +819,7 @@ int deduceTilesPerWarp(TypedValue<RankedTensorType> scale, unsigned opIdx,
     LinearLayout layout = ttg::chooseScaledMfmaScaleLayout(
         scale.getContext(), opIdx, scale.getType().getShape(), nonKDim, choice,
         warpsPerCTA);
-    LLVM_DEBUG(llvm::dbgs() << "current scale layout: " << layout << "\n");
+    LLVM_DEBUG(llvm::dbgs() << "trying scale layout: " << layout << "\n");
 
     // Infer source layout used for global load using the current scale layout.
     auto loadLayoutPair =
@@ -826,31 +827,29 @@ int deduceTilesPerWarp(TypedValue<RankedTensorType> scale, unsigned opIdx,
     if (!loadLayoutPair)
       continue;
     tt::LoadOp loadOp = loadLayoutPair->first;
-    const LinearLayout &srcLayout = loadLayoutPair->second;
-    LLVM_DEBUG(llvm::dbgs() << "inferred src layout: " << srcLayout << "\n");
-    unsigned fastDim =
-        ttg::getOrder(cast<RankedTensorType>(loadOp.getType()))[0];
-    auto outDim = llvm::to_vector(srcLayout.getOutDimNames())[fastDim];
-    LLVM_DEBUG(llvm::dbgs() << "fastest out dim: " << outDim << "\n");
+    const LinearLayout &inferredLayout = loadLayoutPair->second;
+    LLVM_DEBUG(llvm::dbgs()
+               << "inferred load layout: " << inferredLayout << "\n");
 
-    // Figure out the largest vector size.
-    LinearLayout tile, quot;
-    const int maxVecElems = 128 / 8; // Each scale value is 8 bit.
-    for (int v = maxVecElems; v > vecSize; v /= 2) {
-      tile = LinearLayout::identity1D(v, kReg, outDim);
-      std::optional<ColumnAction> perm =
-          regPermForDivide(srcLayout, tile, /*left=*/true);
-      if (!perm) {
-        LLVM_DEBUG(llvm::dbgs() << "cannot regPermForDivide\n");
-        continue;
-      }
-      auto newLayout = perm->apply(srcLayout);
-      if (divideLeft(newLayout, tile)) {
-        LLVM_DEBUG(llvm::dbgs() << "found vector size: " << v << "\n");
-        chosen = choice;
-        vecSize = v;
-        break;
-      }
+    auto loadType = cast<RankedTensorType>(loadOp.getType());
+    auto loadOrder = ttg::getOrder(loadType);
+    auto loadCTALayout = ttg::getCTALayout(loadType.getEncoding());
+
+    // Reuse existing shared memory vectorization utilities by constructing a
+    // pass through layout that does linear element mapping.
+    auto passThruShared = ttg::SwizzledSharedEncodingAttr::get(
+        context, 1, 1, 1, loadOrder, loadCTALayout);
+    auto sharedLL =
+        triton::gpu::toLinearLayout(loadType.getShape(), passThruShared);
+    auto composedLL = inferredLayout.invertAndCompose(sharedLL).flattenOuts();
+    auto [v, _] =
+        largestVectorisation(context, composedLL, /*bitwidth=*/8, std::nullopt);
+
+    if (v > vecSize) {
+      LLVM_DEBUG(llvm::dbgs() << "found vector size: " << v << "\n");
+      chosen = choice;
+      vecSize = v;
+      break;
     }
   }
   result->assign(chosen.begin(), chosen.end());
