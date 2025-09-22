@@ -159,8 +159,8 @@ tt.func @indirect_load(%lb : index, %ub : index, %step : index,
     %b_off = tt.load %b_ind_ptr : tensor<32x128x!tt.ptr<i32>, #BL>
     %next_a_ind_ptr = tt.addptr %a_ind_ptr, %a_ind_off : tensor<128x32x!tt.ptr<i32>, #AL>, tensor<128x32xi32, #AL>
     %next_b_ind_ptr = tt.addptr %b_ind_ptr, %b_ind_off : tensor<32x128x!tt.ptr<i32>, #BL>, tensor<32x128xi32, #BL>
-    %next_a_ptr = tt.addptr %a_ptr, %a_off {tt.divisibility = dense<16> : tensor<128x32xi32>, tt.contiguity = dense<32> : tensor<128x32xi32>, tt.constancy = dense<1> : tensor<128x32xi32>} : tensor<128x32x!tt.ptr<f16>, #AL>, tensor<128x32xi32, #AL>
-    %next_b_ptr = tt.addptr %b_ptr, %b_off {tt.divisibility = dense<16> : tensor<32x128xi32>, tt.contiguity = dense<32> : tensor<32x128xi32>, tt.constancy = dense<1> : tensor<32x128xi32>} : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
+    %next_a_ptr = tt.addptr %a_ptr, %a_off {tt.divisibility = dense<[16, 16]> : tensor<128x32xi32>, tt.contiguity = dense<[1, 32]> : tensor<128x32xi32>, tt.constancy = dense<[1, 1]> : tensor<128x32xi32>} : tensor<128x32x!tt.ptr<f16>, #AL>, tensor<128x32xi32, #AL>
+    %next_b_ptr = tt.addptr %b_ptr, %b_off {tt.divisibility = dense<[16, 16]> : tensor<32x128xi32>, tt.contiguity = dense<[1, 32]> : tensor<32x128xi32>, tt.constancy = dense<[1, 1]> : tensor<32x128xi32>} : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
     // CHECK: tt.load {{.*}} {tt.latency = 1 : i32}
     %a_ = tt.load %next_a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
     %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
@@ -187,7 +187,7 @@ tt.func @mixed_loads(%lb : index, %ub : index, %step : index,
     // CHECK: tt.load {{.*}} {tt.latency = 1 : i32}
     %a_off = tt.load %a_ind_ptr : tensor<128x32x!tt.ptr<i32>, #AL>
     %next_a_ind_ptr = tt.addptr %a_ind_ptr, %a_ind_off : tensor<128x32x!tt.ptr<i32>, #AL>, tensor<128x32xi32, #AL>
-    %next_a_ptr = tt.addptr %a_ptr, %a_off {tt.divisibility = dense<16> : tensor<128x32xi32>, tt.contiguity = dense<32> : tensor<128x32xi32>, tt.constancy = dense<1> : tensor<128x32xi32>} : tensor<128x32x!tt.ptr<f16>, #AL>, tensor<128x32xi32, #AL>
+    %next_a_ptr = tt.addptr %a_ptr, %a_off {tt.divisibility = dense<[16, 16]> : tensor<128x32xi32>, tt.contiguity = dense<[1, 32]> : tensor<128x32xi32>, tt.constancy = dense<[1, 1]> : tensor<128x32xi32>} : tensor<128x32x!tt.ptr<f16>, #AL>, tensor<128x32xi32, #AL>
     %next_b_ptr = tt.addptr %b_ptr, %b_off : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
     // CHECK: tt.load {{.*}} {tt.latency = 1 : i32}
     %a_ = tt.load %next_a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
@@ -263,8 +263,8 @@ tt.func @indirect_load_cust_stages(%lb : index, %ub : index, %step : index,
     %b_off = tt.load %b_ind_ptr : tensor<32x128x!tt.ptr<i32>, #BL>
     %next_a_ind_ptr = tt.addptr %a_ind_ptr, %a_ind_off : tensor<128x32x!tt.ptr<i32>, #AL>, tensor<128x32xi32, #AL>
     %next_b_ind_ptr = tt.addptr %b_ind_ptr, %b_ind_off : tensor<32x128x!tt.ptr<i32>, #BL>, tensor<32x128xi32, #BL>
-    %next_a_ptr = tt.addptr %a_ptr, %a_off {tt.divisibility = dense<16> : tensor<128x32xi32>, tt.contiguity = dense<32> : tensor<128x32xi32>, tt.constancy = dense<1> : tensor<128x32xi32>} : tensor<128x32x!tt.ptr<f16>, #AL>, tensor<128x32xi32, #AL>
-    %next_b_ptr = tt.addptr %b_ptr, %b_off {tt.divisibility = dense<16> : tensor<32x128xi32>, tt.contiguity = dense<32> : tensor<32x128xi32>, tt.constancy = dense<1> : tensor<32x128xi32>} : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
+    %next_a_ptr = tt.addptr %a_ptr, %a_off {tt.divisibility = dense<[16, 16]> : tensor<128x32xi32>, tt.contiguity = dense<[1, 32]> : tensor<128x32xi32>, tt.constancy = dense<[1, 1]> : tensor<128x32xi32>} : tensor<128x32x!tt.ptr<f16>, #AL>, tensor<128x32xi32, #AL>
+    %next_b_ptr = tt.addptr %b_ptr, %b_off {tt.divisibility = dense<[16, 16]> : tensor<32x128xi32>, tt.contiguity = dense<[1, 32]> : tensor<32x128xi32>, tt.constancy = dense<[1, 1]> : tensor<32x128xi32>} : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %a_ = tt.load %next_a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
     %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
@@ -297,8 +297,8 @@ tt.func @indirect_load_few_stages(%lb : index, %ub : index, %step : index,
     %b_off = tt.load %b_ind_ptr : tensor<32x128x!tt.ptr<i32>, #BL>
     %next_a_ind_ptr = tt.addptr %a_ind_ptr, %a_ind_off : tensor<128x32x!tt.ptr<i32>, #AL>, tensor<128x32xi32, #AL>
     %next_b_ind_ptr = tt.addptr %b_ind_ptr, %b_ind_off : tensor<32x128x!tt.ptr<i32>, #BL>, tensor<32x128xi32, #BL>
-    %next_a_ptr = tt.addptr %a_ptr, %a_off {tt.divisibility = dense<16> : tensor<128x32xi32>, tt.contiguity = dense<32> : tensor<128x32xi32>, tt.constancy = dense<1> : tensor<128x32xi32>} : tensor<128x32x!tt.ptr<f16>, #AL>, tensor<128x32xi32, #AL>
-    %next_b_ptr = tt.addptr %b_ptr, %b_off {tt.divisibility = dense<16> : tensor<32x128xi32>, tt.contiguity = dense<32> : tensor<32x128xi32>, tt.constancy = dense<1> : tensor<32x128xi32>} : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
+    %next_a_ptr = tt.addptr %a_ptr, %a_off {tt.divisibility = dense<[16, 16]> : tensor<128x32xi32>, tt.contiguity = dense<[1, 32]> : tensor<128x32xi32>, tt.constancy = dense<[1, 1]> : tensor<128x32xi32>} : tensor<128x32x!tt.ptr<f16>, #AL>, tensor<128x32xi32, #AL>
+    %next_b_ptr = tt.addptr %b_ptr, %b_off {tt.divisibility = dense<[16, 16]> : tensor<32x128xi32>, tt.contiguity = dense<[1, 32]> : tensor<32x128xi32>, tt.constancy = dense<[1, 1]> : tensor<32x128xi32>} : tensor<32x128x!tt.ptr<f16>, #BL>, tensor<32x128xi32, #BL>
     // CHECK: tt.load {{.*}} {tt.latency = 1 : i32}
     %a_ = tt.load %next_a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
     %a = ttg.convert_layout %a_ : tensor<128x32xf16, #AL> -> tensor<128x32xf16, #A>
@@ -810,8 +810,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 tt.func @tc_gen5_mma_scaled(%lb : index, %ub : index, %step : index,
                   %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
                   %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
-                  %A_sc_ptr: tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
-                  %B_sc_ptr: tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                  %A_sc_ptr: tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2> {tt.divisibility = dense<[16, 16, 16, 16, 16]> : tensor<5xi32>, tt.contiguity = dense<[1, 1, 1, 1, 1]> : tensor<5xi32>},
+                  %B_sc_ptr: tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2> {tt.divisibility = dense<[16, 16, 16, 16, 16]> : tensor<5xi32>, tt.contiguity = dense<[1, 1, 1, 1, 1]> : tensor<5xi32>},
                   %acc_init : tensor<128x128xf32, #blocked1>) -> () {
   %true = arith.constant true
   %acc_tm = ttng.tmem_alloc %acc_init : (tensor<128x128xf32, #blocked1>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
