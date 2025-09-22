@@ -4,8 +4,11 @@
 #include "Device.h"
 #include "Driver/GPU/CudaApi.h"
 #include "Driver/GPU/CuptiApi.h"
+#include "Driver/GPU/NvtxApi.h"
 #include "Profiler/Cupti/CuptiPCSampling.h"
+#include "Utility/Env.h"
 #include "Utility/Map.h"
+#include "Utility/String.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -176,6 +179,15 @@ void setResourceCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
 #undef CALLBACK_ENABLE
 }
 
+void setNvtxCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
+#define CALLBACK_ENABLE(id)                                                    \
+  cupti::enableCallback<true>(static_cast<uint32_t>(enable), subscriber,       \
+                              CUPTI_CB_DOMAIN_NVTX, id)
+  CALLBACK_ENABLE(CUPTI_CBID_NVTX_nvtxRangePushA);
+  CALLBACK_ENABLE(CUPTI_CBID_NVTX_nvtxRangePop);
+#undef CALLBACK_ENABLE
+}
+
 bool isDriverAPILaunch(CUpti_CallbackId cbId) {
   return cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunch ||
          cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid ||
@@ -278,23 +290,23 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
     if (cbId == CUPTI_CBID_RESOURCE_MODULE_LOADED) {
       auto *moduleResource = static_cast<CUpti_ModuleResourceData *>(
           resourceData->resourceDescriptor);
-      if (profiler.isPCSamplingEnabled()) {
+      if (profiler.pcSamplingEnabled) {
         pImpl->pcSampling.loadModule(moduleResource->pCubin,
                                      moduleResource->cubinSize);
       }
     } else if (cbId == CUPTI_CBID_RESOURCE_MODULE_UNLOAD_STARTING) {
       auto *moduleResource = static_cast<CUpti_ModuleResourceData *>(
           resourceData->resourceDescriptor);
-      if (profiler.isPCSamplingEnabled()) {
+      if (profiler.pcSamplingEnabled) {
         pImpl->pcSampling.unloadModule(moduleResource->pCubin,
                                        moduleResource->cubinSize);
       }
     } else if (cbId == CUPTI_CBID_RESOURCE_CONTEXT_CREATED) {
-      if (profiler.isPCSamplingEnabled()) {
+      if (profiler.pcSamplingEnabled) {
         pImpl->pcSampling.initialize(resourceData->context);
       }
     } else if (cbId == CUPTI_CBID_RESOURCE_CONTEXT_DESTROY_STARTING) {
-      if (profiler.isPCSamplingEnabled()) {
+      if (profiler.pcSamplingEnabled) {
         pImpl->pcSampling.finalize(resourceData->context);
       }
     } else {
@@ -322,6 +334,14 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         pImpl->graphIdToNumInstances.erase(graphId);
       }
     }
+  } else if (domain == CUPTI_CB_DOMAIN_NVTX) {
+    auto *nvtxData = static_cast<const CUpti_NvtxData *>(cbData);
+    if (cbId == CUPTI_CBID_NVTX_nvtxRangePushA) {
+      auto message = nvtx::getMessageFromRangePushA(nvtxData->functionParams);
+      threadState.enterScope(message);
+    } else if (cbId == CUPTI_CBID_NVTX_nvtxRangePop) {
+      threadState.exitScope();
+    } // TODO: else handle other NVTX range functions
   } else {
     const CUpti_CallbackData *callbackData =
         static_cast<const CUpti_CallbackData *>(cbData);
@@ -353,11 +373,11 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                     << std::endl;
       }
       profiler.correlation.correlate(callbackData->correlationId, numInstances);
-      if (profiler.isPCSamplingEnabled() && isDriverAPILaunch(cbId)) {
+      if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
         pImpl->pcSampling.start(callbackData->context);
       }
     } else if (callbackData->callbackSite == CUPTI_API_EXIT) {
-      if (profiler.isPCSamplingEnabled() && isDriverAPILaunch(cbId)) {
+      if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
         // XXX: Conservatively stop every GPU kernel for now
         auto scopeId = profiler.correlation.externIdQueue.back();
         pImpl->pcSampling.stop(
@@ -372,7 +392,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
 
 void CuptiProfiler::CuptiProfilerPimpl::doStart() {
   cupti::subscribe<true>(&subscriber, callbackFn, nullptr);
-  if (profiler.isPCSamplingEnabled()) {
+  if (profiler.pcSamplingEnabled) {
     setResourceCallbacks(subscriber, /*enable=*/true);
     // Continuous PC sampling is not compatible with concurrent kernel profiling
     cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_KERNEL);
@@ -383,6 +403,10 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
   setGraphCallbacks(subscriber, /*enable=*/true);
   setRuntimeCallbacks(subscriber, /*enable=*/true);
   setDriverCallbacks(subscriber, /*enable=*/true);
+  if (getBoolEnv("TRITON_ENABLE_NVTX", true)) {
+    nvtx::enable();
+    setNvtxCallbacks(subscriber, /*enable=*/true);
+  }
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
@@ -412,8 +436,8 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
 }
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {
-  if (profiler.isPCSamplingEnabled()) {
-    profiler.disablePCSampling();
+  if (profiler.pcSamplingEnabled) {
+    profiler.pcSamplingEnabled = false;
     CUcontext cuContext = nullptr;
     cuda::ctxGetCurrent<false>(&cuContext);
     if (cuContext)
@@ -426,6 +450,8 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   setGraphCallbacks(subscriber, /*enable=*/false);
   setRuntimeCallbacks(subscriber, /*enable=*/false);
   setDriverCallbacks(subscriber, /*enable=*/false);
+  nvtx::disable();
+  setNvtxCallbacks(subscriber, /*enable=*/false);
   cupti::unsubscribe<true>(subscriber);
   cupti::finalize<true>();
 }
@@ -435,5 +461,15 @@ CuptiProfiler::CuptiProfiler() {
 }
 
 CuptiProfiler::~CuptiProfiler() = default;
+
+void CuptiProfiler::doSetMode(const std::vector<std::string> &modeAndOptions) {
+  auto mode = modeAndOptions[0];
+  if (proton::toLower(mode) == "pcsampling") {
+    pcSamplingEnabled = true;
+  } else if (!mode.empty()) {
+    throw std::invalid_argument("[PROTON] CuptiProfiler: unsupported mode: " +
+                                mode);
+  }
+}
 
 } // namespace proton

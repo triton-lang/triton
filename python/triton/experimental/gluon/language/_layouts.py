@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 from triton.runtime.jit import constexpr_function
@@ -585,6 +585,43 @@ class PaddedSharedLayout(SharedLayout):
     def __hash__(self):
         return hash((tuple(map(tuple, self.interval_padding_pairs)), tuple(map(tuple, self.offset_bases)),
                      tuple(map(tuple, self.block_bases)), tuple(self.shape)))
+
+
+@dataclass(frozen=True)
+class SharedLinearLayout(SharedLayout):
+    """Represents a shared memory layout defined via an explicit LinearLayout."""
+
+    offset_bases: List[List[int]]
+    block_bases: List[List[int]] = field(default_factory=list)
+    alignment: int = 16
+
+    def __post_init__(self):
+        super().__setattr__("offset_bases", _unwrap_shape(self.offset_bases))
+        super().__setattr__("block_bases", _unwrap_shape(self.block_bases))
+        super().__setattr__("alignment", _unwrap_if_constexpr(self.alignment))
+
+        assert len(self.offset_bases) != 0, "SharedLinearLayout offset_bases must not be empty"
+        rank = len(self.offset_bases[0])
+        assert rank > 0, "SharedLinearLayout offset_bases must not be empty"
+        for basis in self.offset_bases:
+            assert len(basis) == rank
+        for basis in self.block_bases:
+            assert len(basis) == rank
+        assert self.alignment > 0 and (self.alignment & (self.alignment - 1)) == 0, \
+            "SharedLinearLayout alignment must be a positive power of two"
+
+    def _to_ir(self, builder):
+        return builder.get_shared_linear_layout(self.offset_bases, self.block_bases, self.alignment)
+
+    def mangle(self) -> str:
+        return f"SharedLinear_{self.offset_bases}_{self.block_bases}_{self.alignment}_SharedLinear"
+
+    def __hash__(self):
+        return hash((
+            tuple(map(tuple, self.offset_bases)),
+            tuple(map(tuple, self.block_bases)),
+            self.alignment,
+        ))
 
 
 # Python impl of LinearEncodingAttr::basesPerDim

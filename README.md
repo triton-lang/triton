@@ -1,10 +1,26 @@
-<div align="center">
-  <img src="https://lh5.googleusercontent.com/wzQKEsTFkrgNQO9JjhGH5wFvslJr1saLtLaJ_a6Fp_gNENpvt3VG7BmztwngU9hFJaU4CPwGiw1opQtDvTkLrxWRbO_a12Q-pdESWHgtmheIHcPbOL5ZMC4TSiJVe5ty1w=w3517" alt="Triton logo">
-</div>
 
 | **`Documentation`** | **`Nightly Wheels`** |
 |-------------------- | -------------------- |
 | [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
+
+# Triton Conference 2025
+
+![Triton Registration Banner](https://github.com/user-attachments/assets/b4b6972a-857c-417f-bf2c-f16f38a358c0)
+
+### Registration
+
+The 3rd Triton conference is scheduled to take place on October 21, 2025. Click [here](https://tritonconference.eventbuilder.com/TritonDeveloperConference) to register!
+
+### Poster Submission
+
+We invite members of the Triton community who are attending the Triton Developer Conference to present posters about their Triton-related technical work.
+
+Please submit basic information of your poster, including author information and abstract using this [form](https://forms.gle/QfgTF8o1CWNENAnA7).
+
+**Important Dates**
+- Submission: 10/1/2025
+- Author notification: 10/7/2025
+- Final version (PDF): 10/14/2025
 
 # Triton
 
@@ -22,7 +38,7 @@ You can install the latest stable release of Triton from pip:
 pip install triton
 ```
 
-Binary wheels are available for CPython 3.9-3.13.
+Binary wheels are available for CPython 3.10-3.14.
 
 # Install from source
 
@@ -227,6 +243,7 @@ See [`python/triton/knobs.py`](python/triton/knobs.py) for the full list of conf
 - `TRITON_F32_DEFAULT` sets the default input precision of `tl.dot` when using 32-bit floats, which can be either `ieee`, `tf32`, or `tf32x3`.
 - `TRITON_FRONT_END_DEBUGGING=1` disables exception wrapping when an error occurs in the compiler frontend, allowing the full stack trace to be seen.
 - `TRITON_DISABLE_LINE_INFO=1` removes all line information from the module.
+- `PTXAS_OPTIONS` passes additional command-line options to the PTX assembler `ptxas` (only on NVIDIA).
 
 > [!NOTE]
 > Some of these environment variables don't have a knob in `knobs.py`-- those are only relevant to the C++ layer(s), hence they don't exist in the python layer.
@@ -245,6 +262,15 @@ export TRITON_OVERRIDE_DIR=<override_dir>
 # Step 4: Run the kernel again to see the overridden result
 ```
 
+**Compiler Pipeline Inspection Steps**
+To introspect the pipeline `add_stages`, before running your kernels, simply set
+the add_stages_inspection_hook like so:
+
+```python
+def inspect_stages(_self, stages, options, language, capability):
+    # inspect or modify add_stages here
+triton.knobs.runtime.add_stages_inspection_hook = inspect_stages
+```
 
 # Changelog
 
