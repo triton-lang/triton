@@ -1530,7 +1530,7 @@ void mergePartitions(Graph *graph, std::string funcName,
 
     while (true) {
       if (merge_partitions_step())
-        return;
+        break;
     }
   }
 
