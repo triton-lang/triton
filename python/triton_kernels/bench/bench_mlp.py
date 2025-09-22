@@ -90,9 +90,9 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
                 x = triton_dist.all_gather(input_x, dim=0)
             rdata, gather_indx, scatter_indx, metadata = None, None, None, None
         if x.nelement() > 0:
-            with proton.scope("mlp0"):
-                x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, fused_activation=act)
             with proton.scope("mlp1"):
+                x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, fused_activation=act)
+            with proton.scope("mlp2"):
                 x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=scatter_indx, precision_config=pc2)
         with proton.scope("reduce_scatter"):
             x = triton_dist.reduce_scatter(x, metadata=metadata, dim=0)
