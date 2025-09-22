@@ -124,7 +124,7 @@ LogicalResult inferAutoLayouts(FuncOp func) {
       }
       LLVM_DEBUG({
         DBGS() << "Setting value:\n\t" << value << "\nto encoding:\n\t"
-               << it->second << "\n";
+               << it->second.encoding << "\n";
       });
       worklist.insert(value);
     }

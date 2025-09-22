@@ -1664,7 +1664,7 @@ void SharedLinearEncodingAttr::print(AsmPrinter &printer) const {
         layout.sublayout({kOffset}, llvm::to_vector(layout.getOutDimNames()));
   }
   printLinearLayout(printer, layout);
-  printer << "}, alignment = " << getAlignment() << "}>";
+  printer << "}, alignment = " << getAlignment() << ">";
 }
 
 Attribute SharedLinearEncodingAttr::parse(AsmParser &parser, Type type) {
@@ -2644,19 +2644,17 @@ struct TritonGPUInferLayoutInterface
     }
 
     if (auto enc = dyn_cast<NVMMASharedEncodingAttr>(operandEncoding)) {
-      if (failed(checkRank(enc.getRank())))
-        return failure();
-      if (order != ArrayRef<int32_t>({1, 0})) {
-        return emitOptionalError(
-            loc, "NVMMSharedEncoding can only be transposed in 2D");
-      }
+      if (order == ArrayRef<int32_t>({1, 0})) {
+        if (failed(checkRank(enc.getRank())))
+          return failure();
 
-      CTALayoutAttr ctaLayout =
-          permuteCTALayout(ctx, enc.getCTALayout(), order);
-      resultEncoding = NVMMASharedEncodingAttr::get(
-          ctx, enc.getSwizzlingByteWidth(), !enc.getTransposed(),
-          enc.getElementBitWidth(), enc.getFp4Padded(), ctaLayout);
-      return success();
+        CTALayoutAttr ctaLayout =
+            permuteCTALayout(ctx, enc.getCTALayout(), order);
+        resultEncoding = NVMMASharedEncodingAttr::get(
+            ctx, enc.getSwizzlingByteWidth(), !enc.getTransposed(),
+            enc.getElementBitWidth(), enc.getFp4Padded(), ctaLayout);
+        return success();
+      }
     }
 
     if (auto enc = dyn_cast<BlockedEncodingAttr>(operandEncoding)) {
@@ -2672,20 +2670,25 @@ struct TritonGPUInferLayoutInterface
           applyPermutation(invOrderUnsigned, enc.getOrder()), ctaLayout);
       return success();
     }
+    // Generic case
+    auto padded = dyn_cast<PaddedSharedEncodingAttr>(operandEncoding);
 
-    if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(operandEncoding)) {
-      if (failed(checkRank(enc.getRank())))
-        return failure();
-      const auto &transLL =
-          transposeLinearLayout(enc.getLinearComponent(), order);
-      resultEncoding = PaddedSharedEncodingAttr::get(
-          ctx, enc.getIntervals(), enc.getPaddings(), transLL);
-      return success();
-    }
-
-    auto ll = toLinearLayout(shape, operandEncoding);
+    auto ll = padded ? padded.getLinearComponent()
+                     : toLinearLayout(shape, operandEncoding);
+    if (failed(checkRank(ll.getNumOutDims())))
+      return failure();
     auto transposedLl = transposeLinearLayout(ll, order);
-    resultEncoding = LinearEncodingAttr::get(ctx, std::move(transposedLl));
+    if (isa<DistributedEncodingTrait>(operandEncoding)) {
+      resultEncoding = LinearEncodingAttr::get(ctx, std::move(transposedLl));
+    } else if (padded) {
+      resultEncoding = PaddedSharedEncodingAttr::get(ctx, padded.getIntervals(),
+                                                     padded.getPaddings(),
+                                                     std::move(transposedLl));
+    } else {
+      auto shared = cast<SharedEncodingTrait>(operandEncoding);
+      resultEncoding = SharedLinearEncodingAttr::get(
+          ctx, std::move(transposedLl), shared.getAlignment());
+    }
     return success();
   }
 
@@ -3006,8 +3009,8 @@ struct TritonGPUInferLayoutInterface
       return failure();
 
     // Check whether the encodings are structurally the same.
-    if (!areLayoutsEquivalent(shape, cast<DistributedEncodingTrait>(expected),
-                              cast<DistributedEncodingTrait>(got))) {
+    if (!areLayoutsEquivalent(shape, cast<LayoutEncodingTrait>(expected),
+                              cast<LayoutEncodingTrait>(got))) {
       return emitOptionalError(loc, "Expected result encoding ", expected,
                                " but was ", got);
     }
@@ -3061,8 +3064,8 @@ struct TritonGPUInferLayoutInterface
       Attribute splitEnc;
       auto result = inferSplitOpEncoding(parent, splitEnc, joinedShape, loc);
       if (succeeded(result) &&
-          areLayoutsEquivalent(shape, cast<DistributedEncodingTrait>(splitEnc),
-                               cast<DistributedEncodingTrait>(srcEnc))) {
+          areLayoutsEquivalent(shape, cast<LayoutEncodingTrait>(splitEnc),
+                               cast<LayoutEncodingTrait>(srcEnc))) {
         dstEnc = parent;
         return success();
       }
@@ -3751,8 +3754,8 @@ int triton::gpu::lookupNumCTAs(OpBuilder &rewriter) {
 }
 
 bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
-                                       DistributedEncodingTrait lhs,
-                                       DistributedEncodingTrait rhs) {
+                                       LayoutEncodingTrait lhs,
+                                       LayoutEncodingTrait rhs) {
   auto lhsLL = triton::gpu::toLinearLayout(shape, lhs);
   auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);
   return lhsLL == rhsLL;

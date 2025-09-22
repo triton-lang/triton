@@ -257,7 +257,24 @@ private:
     if (!isTmemCopyCompatible(localLoad.getSrc().getType(), usesTMAload))
       return failure();
 
-    opOperand.assign(localLoad.getSrc());
+    PatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(tmemAlloc);
+
+    Value shared = localLoad.getSrc();
+
+    Value reshaped5D = rewriter.create<MemDescReshapeOp>(
+        reshapeOp5D.getLoc(), shared, reshape5DShape);
+    SmallVector<int32_t> transposeOrder32(transposeOrder.begin(),
+                                          transposeOrder.end());
+    Value transposed = rewriter.create<MemDescTransOp>(
+        transOp.getLoc(), reshaped5D, transposeOrder32);
+    SmallVector<int64_t> scale2DShapeVec(scale2DShape.begin(),
+                                         scale2DShape.end());
+    Value reshaped2D = rewriter.create<MemDescReshapeOp>(
+        reshapeOp2D.getLoc(), transposed, scale2DShapeVec);
+
+    opOperand.assign(reshaped2D);
+    rewriter.eraseOp(tmemAlloc);
     return success();
   }
 

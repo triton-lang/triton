@@ -573,7 +573,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   for (int i = 0; i < nodes.size(); ++i) {
     Node &cur = nodes[i];
     Node &next = nodes[(i + 1) % nodes.size()];
-    if (!samePartition(inBody(cur.op), inBody(next.op))) {
+    if (!samePartition(cur.op, next.op)) {
       cur.barNext = createBarrierAlloc(loop, numMmaStages);
       next.barPrev = cur.barNext;
     }
@@ -616,6 +616,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       continue;
     b.setInsertionPoint(node.op);
     Value view = createSingleBufferView(b, allocOp, node.index);
+    b.assignPartition(view.getDefiningOp(), *partitions.getPartition(node.op));
     if (auto storeOp = dyn_cast<ttng::TMEMStoreOp>(node.op)) {
       storeOp.getDstMutable().assign(view);
       storeOp.getDepMutable().clear();
@@ -671,7 +672,6 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     Operation *defOp = operand.getDefiningOp();
     if (!defOp || loop.isDefinedOutsideOfLoop(operand))
       continue;
-    defOp = inBody(defOp);
 
     if (partitions.isInRootPartition(defOp)) {
       // If the MMA operand is coming from outside the loop, move the alloc out.
@@ -717,7 +717,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
   }
 
   for (Node &node : nodes) {
-    Partition *partition = partitions.getPartition(inBody(node.op));
+    Partition *partition = partitions.getPartition(node.op);
     PartitionBuilder b(node.op->getLoc(), loop);
 
     SmallVector<Operation *> defs;
@@ -746,11 +746,13 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
             domInfo.properlyDominates(mmaOp, userPred.getDefiningOp())) {
           b.restoreInsertionPoint(*incrementPt);
           Value bar = createSingleBufferView(b, node.barPrev, curIndex);
+          b.assignPartition(bar.getDefiningOp(), *partition);
           b.createInto<ttng::WaitBarrierOp>(*partition, nodeStageCluster, bar,
                                             curPhase, userPred);
         } else {
           b.setInsertionPoint(domOp);
           Value bar = createSingleBufferView(b, node.barPrev, node.index);
+          b.assignPartition(bar.getDefiningOp(), *partition);
           b.createInto<ttng::WaitBarrierOp>(*partition, nodeStageCluster, bar,
                                             node.phase, userPred);
         }
@@ -759,6 +761,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
         if (isa<scf::IfOp>(domOp->getParentOp()) && accIsMultiBuffered)
           b.setInsertionPointToStart(domOp->getBlock());
         Value bar = createSingleBufferView(b, node.barPrev, node.index);
+        b.assignPartition(bar.getDefiningOp(), *partition);
         b.createInto<ttng::WaitBarrierOp>(*partition, nodeStageCluster, bar,
                                           node.phase);
       }
@@ -767,6 +770,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
       if (mmaOp == node.op) {
         b.setInsertionPoint(mmaOp);
         Value bar = createSingleBufferView(b, node.barNext, node.index);
+        b.assignPartition(bar.getDefiningOp(), *partitions.getPartition(mmaOp));
         mmaOp.addCompletionBarrier(bar, userPred);
         mmaOp.setIsAsync(true);
       } else {
@@ -774,6 +778,7 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
         if (isa<scf::IfOp>(lastOp->getParentOp()) && accIsMultiBuffered)
           b.setInsertionPoint(lastOp->getBlock()->getTerminator());
         Value bar = createSingleBufferView(b, node.barNext, node.index);
+        b.assignPartition(bar.getDefiningOp(), *partition);
         b.createInto<ttng::ArriveBarrierOp>(*partition, nodeStageCluster, bar,
                                             1);
       }
@@ -799,20 +804,26 @@ static LogicalResult pipelineMMA(scf::ForOp &loop, PipelinedMMA &mma,
     StageCluster srcStageCluster = getStageCluster(domOp);
     b.setInsertionPoint(domOp);
     Value emptyView = createSingleBufferView(b, emptyBar, index);
+    b.assignPartition(emptyView.getDefiningOp(), *partition);
     b.createInto<ttng::WaitBarrierOp>(*partition, srcStageCluster, emptyView,
                                       phase);
 
     b.setInsertionPointAfter(lastOp);
     Value readyView = createSingleBufferView(b, readyBar, index);
+    b.assignPartition(readyView.getDefiningOp(), *partition);
     b.createInto<ttng::ArriveBarrierOp>(*partition, srcStageCluster, readyView,
                                         1);
 
     b.setInsertionPoint(mmaOp);
     Value readyView2 = createSingleBufferView(b, readyBar, index);
+    b.assignPartition(readyView2.getDefiningOp(),
+                      *partitions.getPartition(mmaOp));
     b.createInto<ttng::WaitBarrierOp>(*partitions.getPartition(mmaOp),
                                       getStageCluster(mmaOp), readyView2,
                                       phase);
     Value emptyView2 = createSingleBufferView(b, emptyBar, index);
+    b.assignPartition(emptyView2.getDefiningOp(),
+                      *partitions.getPartition(mmaOp));
     mmaOp.addCompletionBarrier(emptyView2, b.boolCst(true));
     mmaOp.setIsAsync(true);
   }

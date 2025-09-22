@@ -349,14 +349,15 @@ OpT createInto(
     OpBuilder &b, Location loc,
     std::pair<std::optional<PartitionId>, StageCluster> partitionIdStageCluster,
     Args &&...args) {
-  auto op = b.create<OpT>(loc, std::forward<Args>(args)...);
+  std::optional<SetVector<int>> partitionIds = SetVector<int>();
   if (partitionIdStageCluster.first) {
-    SetVector<int> partitionIds;
-    partitionIds.insert(*partitionIdStageCluster.first);
-    setPartition(op, partitionIds);
-    assignStage(b, op, partitionIdStageCluster.second);
+    partitionIds->insert(*partitionIdStageCluster.first);
+  } else {
+    partitionIds = std::nullopt;
   }
-  return op;
+  return triton::gpu::createInto<OpT>(b, loc, partitionIds,
+                                      partitionIdStageCluster.second,
+                                      std::forward<Args>(args)...);
 }
 
 struct TMEMAref {
@@ -624,8 +625,9 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
 LogicalResult runOnFunction(triton::FuncOp funcOp) {
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
-    // if allocOp has src and has no partition, we skip it
-    if (!allocOp.getSrc() || getPartitionId(allocOp))
+    // skip allocOps with source and > 1 partition
+    auto partitionIds = getPartitionIds(allocOp);
+    if (!allocOp.getSrc() || (partitionIds && partitionIds->size() == 1))
       tmemDags.push_back(TmemAccessDag::build(allocOp));
   });
 
