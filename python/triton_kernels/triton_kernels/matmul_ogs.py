@@ -466,7 +466,8 @@ def matmul_ogs(x, w, bias,
     x_scale_strides = (0, ) * (3 - len(x_scale_strides)) + x_scale_strides
     w_scale_strides = w_scale.stride() if w_has_mx and not w_scale_has_tma else (None, None, None)
     w_scale_strides = (0, ) * (3 - len(w_scale_strides)) + w_scale_strides
-    w_strides = (None, None, None) if opt_flags.is_persistent else w_storage.data.stride()
+    # w_strides = (None, None, None) if opt_flags.is_persistent else w_storage.data.stride()
+    w_strides = w_storage.data.stride()[-3:]
     out_matmul_scale_strides = out_matmul_scale.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = (0, ) * (4 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
     # launch kernel
@@ -474,11 +475,8 @@ def matmul_ogs(x, w, bias,
     # When stride(-2) == stride(-1) == 1, it's ambiguous whether W is transposed
     # (i.e. col-wise). Since this matters when w_has_mx is True and w_transpose
     # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
-    # w_transpose = w_storage.data.stride()[-1] != 1
     w_transpose = w_storage.data.stride()[-2] == 1
-    print("w_tensor_or_tma", w_tensor_or_tma.shape, w_tensor_or_tma.strides, w_tensor_or_tma.block_shape, w_transpose)
-    print(opt_flags.block_m, opt_flags.block_n, opt_flags.block_k)
-    k = (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
+    (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
                    *out_matmul_scale_strides[-4:],
@@ -529,10 +527,6 @@ def matmul_ogs(x, w, bias,
                    IS_EPILOGUE_QUANT_MXFP8=epilogue.specs.name == FnName.QUANTIZE_MXFP8.name,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
-    # with open(f"{k.name}.ttgir", "w") as f:
-    #     f.write(k.asm["ttgir"])
-    # with open(f"{k.name}.ptx", "w") as f:
-    #     f.write(k.asm["ptx"])
     # Build grouped reduction inputs in a uniform way
     group_indx = None if scatter_indx is None or opt_flags.fused_scatter else scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
     out_final, out_final_mx_scale = reduce_grouped(

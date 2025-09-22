@@ -310,10 +310,6 @@ def _p_matmul_ogs(
                     x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
 
             # --- load w ---
-            # tl.static_print("BLOCK_M", BLOCK_M)
-            # tl.static_print("BLOCK_N", BLOCK_N)
-            # tl.static_print("BLOCK_K", BLOCK_K)
-            # tl.static_print("shape", W.block_shape[1:])
             if SWIZZLE_MX_VALUE == "BLACKWELL_VALUE":
                 w = unswizzle_mx_value_bw(tl.reshape(W.load([expt_id, off_n // 2, off_k_w // 64, 0, 0]), W.block_shape[1:]))
             else:
@@ -346,13 +342,6 @@ def _p_matmul_ogs(
                 if SWAP_XW:
                     acc = tl.dot_scaled(w.T, w_scales, w_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
                 else:
-                    # tl.static_print("x", x.shape)
-                    # tl.static_print("w", w.shape)
-                    # tl.static_print("x_scales", x_scales.shape)
-                    # tl.static_print("w_scales", w_scales.shape)
-                    # tl.static_print("x_format", x_format)
-                    # tl.static_print("w_format", w_format)
-                    # tl.static_print("acc", acc.shape)
                     acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True)
                 if is_x_microscaled:
                     XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
