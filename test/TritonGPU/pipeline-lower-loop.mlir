@@ -594,8 +594,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
                       %lb : index, %ub : index, %step : index,
                       %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
                       %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
-                      %mask: tensor<128x128xi1, #blocked1> {tt.constancy = 128 : i32},
-                      %other: tensor<128x128xf16, #blocked1> {tt.constancy = 128 : i32}) -> tensor<128x128xf16, #mma> {
+                      %mask: tensor<128x128xi1, #blocked1> {tt.constancy = dense<[128, 128]> : tensor<2xi32>},
+                      %other: tensor<128x128xf16, #blocked1> {tt.constancy = dense<[128, 128]> : tensor<2xi32>}) -> tensor<128x128xf16, #mma> {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
     %c0_i32 = arith.constant 0 : i32
@@ -1590,7 +1590,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.tc_gen5_mma {{.*}} {is_async, loop.cluster = 2 : i32, loop.stage = 2 : i32}
   // CHECK: ttng.wait_barrier {{.*}} {loop.cluster = 1 : i32, loop.stage = 3 : i32}
   tt.func public @wait_before_tmem_alloc(%A: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.contiguity = dense<[1, 16]> : tensor<2xi32>, tt.divisibility = dense<[16, 16]> : tensor<2xi32>},
-                                         %B: tensor<128x128xf16, #blocked1> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32},
+                                         %B: tensor<128x128xf16, #blocked1> {tt.contiguity = dense<[1, 16]> : tensor<2xi32>, tt.divisibility = dense<[16, 16]> : tensor<2xi32>},
                                          %arg1: i32, %arg2: i32, %arg3: i32) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
     %true = arith.constant true
