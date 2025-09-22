@@ -32,7 +32,7 @@ def get_temp_fpath(out_path, rank, batch_per_expt):
         if not SAVE_PROFILES:
             # Remove temp folder
             import shutil
-            shutil.rmtree(fpath)
+            shutil.rmtree(fpath.parent)
 
 
 def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, out_path):
