@@ -77,7 +77,7 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
         fpath = out_path / f"{rank}/b{batch_per_expt}"
         fpath.mkdir(parents=True, exist_ok=True)
     else:
-        fpath = Path(tempfile.mkdtemp()) / f"{rank}/b{batch_per_expt}"
+        fpath = Path(tempfile.mkdtemp()) / f"b{batch_per_expt}"
     proton.start(str(fpath), hook="triton")
     input_x = input_x.to(x_dtype)
     xg = input_x.to(wg.dtype if n_expts_tot > 1 else input_x.dtype)
