@@ -5,6 +5,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/IR/ValueMap.h"
@@ -12,8 +13,16 @@
 
 #include <fstream>
 #include <iomanip>
-#include <iostream>
 #include <sstream>
+
+namespace mlir::triton::gpu {
+
+#define GEN_PASS_DEF_TRITONGPUPARTITIONSCHEDULING
+#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
+
+#define DEBUG_TYPE "tritongpu-partition-scheduling"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace {
 
@@ -25,7 +34,6 @@ namespace ttg = triton::gpu;
 namespace ttng = triton::nvidia_gpu;
 
 struct Options {
-  bool dump = false;
   bool dump_dot = false;
   bool dump_loop_only = false;
   bool dump_data_only = false;
@@ -59,6 +67,34 @@ Flags &operator|=(Flags &lhs, Flags rhs) {
 }
 
 std::ostream &operator<<(std::ostream &stream, Flags flags) {
+  std::vector<std::string> strs;
+  if (flags == Flags::NONE) {
+    strs.push_back("NONE");
+  } else {
+    if (flags & Flags::MANUAL)
+      strs.push_back("MANUAL");
+    if (flags & Flags::LOAD)
+      strs.push_back("LOAD");
+    if (flags & Flags::STORE)
+      strs.push_back("STORE");
+    if (flags & Flags::MMA)
+      strs.push_back("MMA");
+    if (flags & Flags::SFU)
+      strs.push_back("SFU");
+    if (flags & Flags::SIMT)
+      strs.push_back("SIMT");
+    if (flags & Flags::VIEW)
+      strs.push_back("VIEW");
+  }
+  for (size_t i = 0; i < strs.size(); i++) {
+    if (i != 0)
+      stream << "|";
+    stream << strs[i];
+  }
+  return stream;
+}
+
+llvm::raw_ostream &operator<<(llvm::raw_ostream &stream, Flags flags) {
   std::vector<std::string> strs;
   if (flags == Flags::NONE) {
     strs.push_back("NONE");
@@ -129,13 +165,13 @@ public:
   static void merge(Partition *lhs, Partition *rhs);
 
   void dump() const {
-    std::cout << "Partition@" << this << " {\n"
-              << "  name=" << name << "\n"
-              << "  size=" << nodes.size() << "\n"
-              << "  cost=" << cost << "\n"
-              << "  flags=" << flags << "\n"
-              << "  id=" << id << "\n"
-              << "}\n";
+    llvm::errs() << "Partition@" << this << " {\n"
+                 << "  name=" << name << "\n"
+                 << "  size=" << nodes.size() << "\n"
+                 << "  cost=" << cost << "\n"
+                 << "  flags=" << flags << "\n"
+                 << "  id=" << id << "\n"
+                 << "}\n";
   }
 
 private:
@@ -166,22 +202,27 @@ private:
 };
 
 } // namespace
-
+} // namespace mlir::triton::gpu
 namespace llvm {
-template <> struct DenseMapInfo<Port> {
-  static inline Port getEmptyKey() { return {}; }
+template <> struct DenseMapInfo<mlir::triton::gpu::Port> {
+  static inline mlir::triton::gpu::Port getEmptyKey() { return {}; }
 
-  static inline Port getTombstoneKey() { return Port(0, 1); }
+  static inline mlir::triton::gpu::Port getTombstoneKey() {
+    return mlir::triton::gpu::Port(0, 1);
+  }
 
-  static unsigned getHashValue(const Port &port) {
-    return std::hash<Node *>()(port.getNode()) ^
+  static unsigned getHashValue(const mlir::triton::gpu::Port &port) {
+    return std::hash<mlir::triton::gpu::Node *>()(port.getNode()) ^
            std::hash<size_t>()(port.getIdx());
   }
 
-  static bool isEqual(const Port &lhs, const Port &rhs) { return lhs == rhs; }
+  static bool isEqual(const mlir::triton::gpu::Port &lhs,
+                      const mlir::triton::gpu::Port &rhs) {
+    return lhs == rhs;
+  }
 };
 } // namespace llvm
-
+namespace mlir::triton::gpu {
 namespace {
 
 using InputPort = Port;
@@ -438,7 +479,7 @@ public:
     return cost;
   }
 
-  void dump() { std::cout << "node '" << getLabel() << "'\n"; }
+  void dump() { llvm::errs() << "node '" << getLabel() << "'\n"; }
 
 private:
   Node *parent = nullptr;
@@ -885,10 +926,10 @@ bool deserializeManualPartitions(Operation *region, Graph *graph) {
             partition->name = std::to_string(id);
             manual_partitions[id] = partition;
 
-            if (options.dump) {
-              std::cout << "deserialize manual partition:";
+            LLVM_DEBUG({
+              llvm::errs() << "deserialize manual partition:";
               partition->dump();
-            }
+            });
           }
           node->addPartition(manual_partitions[id]);
         }
@@ -986,7 +1027,8 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
      }},
 
     // view op in same partition as user
-    // Note: view ops guaranteed to have been duplicated so there is one use/def
+    // Note: view ops guaranteed to have been duplicated so there is one
+    // use/def
     {"view",
      [](Edge edge) { return getNodeFlags(edge.getFromNode()) & Flags::VIEW; }},
 
@@ -1066,7 +1108,8 @@ SmallVector<std::pair<std::string, std::function<bool(Edge)>>> heuristics = {
      }},
 
     // if stmt result placed in same partition as op that produces
-    // its value, preferentially from the noop branch, otherwise the then branch
+    // its value, preferentially from the noop branch, otherwise the then
+    // branch
     {"if_result",
      [](Edge edge) {
        auto from = edge.getFromNode();
@@ -1363,7 +1406,8 @@ SmallVector<
            return getReachablePartitions(a).contains(b);
          }}
 
-        // // merge simt partitions if one of them is not on critical path to an
+        // // merge simt partitions if one of them is not on critical path to
+        // an
         // mma
         // {"non_critical_simt",
         //  [](Partition *a, Partition *b) {
@@ -1388,79 +1432,55 @@ void mergePartitions(Graph *graph, std::string funcName,
   // updating the data structures rather than rebuilding the whole lot when a
   // rule is applied
   const auto &options = get_options();
-  if (options.dump) {
-    std::cout << "############### apply heuristics #####################"
-              << std::endl;
-  }
+  LLVM_DEBUG({ llvm::errs() << "#### applying heuristics...\n"; });
   int iter = 0;
   bool changed = false;
   do {
     changed = false;
 
     auto crossingEdges = getCrossingEdges(graph);
-    if (options.dump) {
-      std::cout << "#### " << crossingEdges.size() << " crossing edges"
-                << std::endl;
-    }
+    LLVM_DEBUG({
+      llvm::errs() << "\n"
+                   << crossingEdges.size() << " crossing edges remaining\n";
+    });
 
     for (auto [name, apply] : heuristics) {
       for (auto edge : crossingEdges) {
-        if (options.dump) {
-          std::cout << "\n---- try " << name << " ----\n";
-          std::cout << edge.getFromNode()->getLabel() << " -> "
-                    << edge.getToNode()->getLabel() << "\n";
-          std::cout << "partitions ";
-          if (edge.getFromNode()->getPartition()->name.empty())
-            std::cout << edge.getFromNode()->getPartition();
-          else
-            std::cout << edge.getFromNode()->getPartition()->name;
-          std::cout << " -> ";
-          if (edge.getToNode()->getPartition()->name.empty())
-            std::cout << edge.getToNode()->getPartition();
-          else
-            std::cout << edge.getToNode()->getPartition()->name;
-          std::cout << "\n";
-          std::cout << "flags "
-                    << edge.getFromNode()->getPartition()->getFlags() << " -> "
-                    << edge.getToNode()->getPartition()->getFlags() << "\n";
-        }
-
         if (apply(edge)) {
 
           // check if applying the heuristic will observe the contraints
           bool ok = true;
-          // Note: constraints just prevent epilogue partition ops merging into
-          // mma partitions, so disable them if we don't want epilogue
+          // Note: constraints just prevent epilogue partition ops merging
+          // into mma partitions, so disable them if we don't want epilogue
           // partitions
           for (auto [name, constraint] : constraints) {
             if (!constraint(edge)) {
-              if (options.dump)
-                std::cout << "\n---- failed constraint check ----\n";
               ok = false;
               break;
             }
           }
           if (ok) {
-            if (options.dump) {
-              std::cout << "\n---- apply " << name << " ----\n";
-              std::cout << edge.getFromNode()->getLabel() << " -> "
-                        << edge.getToNode()->getLabel() << "\n";
-              std::cout << "partitions ";
+            LLVM_DEBUG({
+              llvm::errs() << "\napply heuristic \"" << name << "\"\n";
+              llvm::errs() << edge.getFromNode()->getLabel() << " -> "
+                           << edge.getToNode()->getLabel() << "\n";
+              llvm::errs() << "partitions ";
               if (edge.getFromNode()->getPartition()->name.empty())
-                std::cout << edge.getFromNode()->getPartition();
+                llvm::errs() << edge.getFromNode()->getPartition();
               else
-                std::cout << edge.getFromNode()->getPartition()->name;
-              std::cout << " -> ";
+                llvm::errs() << edge.getFromNode()->getPartition()->name;
+              llvm::errs() << " -> ";
               if (edge.getToNode()->getPartition()->name.empty())
-                std::cout << edge.getToNode()->getPartition();
+                llvm::errs() << edge.getToNode()->getPartition();
               else
-                std::cout << edge.getToNode()->getPartition()->name;
-              std::cout << "\n";
-              std::cout << "flags "
-                        << edge.getFromNode()->getPartition()->getFlags()
-                        << " -> "
-                        << edge.getToNode()->getPartition()->getFlags() << "\n";
-            }
+                llvm::errs() << edge.getToNode()->getPartition()->name;
+              llvm::errs() << "\n";
+              llvm::errs() << "flags "
+                           << edge.getFromNode()->getPartition()->getFlags()
+                           << " -> "
+                           << edge.getToNode()->getPartition()->getFlags()
+                           << "\n";
+            });
 
             // merge the partitions
             auto from_partition = edge.getFromNode()->getPartition();
@@ -1478,21 +1498,12 @@ void mergePartitions(Graph *graph, std::string funcName,
             changed = true;
             break;
           }
-        } else {
-          if (options.dump)
-            std::cout << "\n---- does not apply ----\n";
         }
       }
       if (changed)
         break;
     }
-  } while (changed && iter < 10000);
-  // std::cout << "iter = " << iter << "\n";
-
-  if (options.dump) {
-    std::cout << "############### heuristics done #####################"
-              << std::endl;
-  }
+  } while (changed);
 
   {
     // look at every pair of partitions and check if they should be merged
@@ -1508,11 +1519,11 @@ void mergePartitions(Graph *graph, std::string funcName,
                 partitionB->empty())
               continue;
             if (apply(partitionA, partitionB)) {
-              if (options.dump) {
-                std::cout << "\n---- apply " << name << " ----\n";
+              LLVM_DEBUG({
+                llvm::errs() << "\nmerge \"" << name << "\" ----\n";
                 partitionA->dump();
                 partitionB->dump();
-              }
+              });
               Partition::merge(partitionA, partitionB);
               if (options.dump_dot) {
                 std::stringstream name;
@@ -1555,6 +1566,8 @@ void mergePartitions(Graph *graph, std::string funcName,
       }
     } while (changed);
   }
+
+  LLVM_DEBUG({ llvm::errs() << "\n#### heuristics done\n"; });
 }
 
 void propagatePartitions(Graph *graph, std::string funcName,
@@ -1591,8 +1604,8 @@ void propagatePartitions(Graph *graph, std::string funcName,
   bool changed = true;
   while (changed) {
     for (auto leaf : leaves) {
-      // partitions for leaf are union of partitions of all ops contained in the
-      // leaf
+      // partitions for leaf are union of partitions of all ops contained in
+      // the leaf
       SetVector<Partition *> partitions;
       for (auto &node : leaf->getNodes())
         partitions.insert(node->getPartitions().begin(),
@@ -1671,8 +1684,8 @@ void propagatePartitions(Graph *graph, std::string funcName,
   if (options.dump_dot)
     visualize(dump_name(2), graph, vis_info);
 
-  // Corner case: tmem store following tmem alloc should be in a warp partition
-  // with 4 warps (i.e. a non-mma partition)
+  // Corner case: tmem store following tmem alloc should be in a warp
+  // partition with 4 warps (i.e. a non-mma partition)
   SmallVector<Node *> patched_nodes;
 
   graph->walk([&](Node *node) {
@@ -2053,121 +2066,110 @@ void deduplicateViewOps(
 // Pass Definition
 //===----------------------------------------------------------------------===//
 
-namespace mlir::triton::gpu {
-#define GEN_PASS_DEF_TRITONGPUPARTITIONSCHEDULING
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
-} // namespace mlir::triton::gpu
-
-namespace {
 struct PartitionScheduling
-    : public triton::gpu::impl::TritonGPUPartitionSchedulingBase<
-          PartitionScheduling> {
+    : public impl::TritonGPUPartitionSchedulingBase<PartitionScheduling> {
   using TritonGPUPartitionSchedulingBase::TritonGPUPartitionSchedulingBase;
 
-  void runOnOperation() override;
+  void runOnOperation() override {
+    // find ops to partition; either:
+    //   - all scf::For ops marked with "tt.warp_specialize"
+    //   - or entire module if marked with "tt.warp_specialize"
+    SmallVector<Operation *> ops;
+    getOperation().walk([&](scf::ForOp op) {
+      if (op->hasAttr(kWarpSpecializeAttrName))
+        ops.push_back(op);
+    });
+    if (ops.empty() && getOperation()->hasAttr(kWarpSpecializeAttrName)) {
+      ops.push_back(getOperation());
+    }
 
-private:
-  void analyze(size_t idx, Operation *operation);
-};
-} // namespace
-
-void PartitionScheduling::runOnOperation() {
-  // find ops to partition; either:
-  //   - all scf::For ops marked with "tt.warp_specialize"
-  //   - or entire module if marked with "tt.warp_specialize"
-  SmallVector<Operation *> ops;
-  getOperation().walk([&](scf::ForOp op) {
-    if (op->hasAttr(kWarpSpecializeAttrName))
-      ops.push_back(op);
-  });
-  if (ops.empty() && getOperation()->hasAttr(kWarpSpecializeAttrName)) {
-    ops.push_back(getOperation());
-  }
-
-  // run partitioner on each op
-  size_t idx = 0;
-  for (auto op : ops) {
-    analyze(idx, op);
-    idx++;
-  }
-}
-
-void PartitionScheduling::analyze(size_t idx, Operation *op) {
-  auto duplicatedOps = duplicateViewOps(op);
-  tt::FuncOp func;
-  if (auto m = dyn_cast<ModuleOp>(op)) {
-    func = cast<tt::FuncOp>(m.getRegion().front().front());
-  } else {
-    func = op->getParentOfType<tt::FuncOp>();
-    assert(func);
-  }
-
-  auto toInt = [](int dflt, std::string value) {
-    if (value.size() == 0)
-      return dflt;
-    return std::stoi(value);
-  };
-
-  auto &options = get_options();
-  options.dump = tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_ENABLE_DUMP");
-  options.dump_dot =
-      tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_ENABLE_DUMP_DOT");
-  options.dump_data_only =
-      tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DUMP_DATA_ONLY");
-  options.dump_loop_only =
-      tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DUMP_LOOP_ONLY");
-  options.disable_simt =
-      tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DISABLE_SIMT_GROUPS");
-  options.disable_epilogue =
-      tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DISABLE_EPILOGUE_GROUPS");
-
-  // FIXME: hack for one of the matmul test cases
-  if (hasFlattenedEpilogue(op) && ttg::lookupNumWarps(op) > 6) {
-    options.disable_simt = true;
-    options.disable_epilogue = true;
-  }
-
-  auto graph = buildGraph(op);
-  auto initValues = initialDataValues(graph.get());
-  propagateDataValues(initValues);
-  options.manual = deserializeManualPartitions(op, graph.get());
-  VisualizationInfo vis_info;
-  auto key = func.getSymName().str() + "-" + std::to_string(idx);
-  if (options.dump_dot)
-    visualize(std::string("graph-input-") + key + ".dot", graph.get(),
-              vis_info);
-  initialPartitionAssignment(graph.get());
-  if (options.dump_dot)
-    visualize(std::string("graph-initial-") + key + ".dot", graph.get(),
-              vis_info);
-  mergePartitions(graph.get(), key, vis_info);
-  if (options.dump_dot)
-    visualize(std::string("graph-merged-") + key + ".dot", graph.get(),
-              vis_info);
-  propagatePartitions(graph.get(), key, vis_info);
-  if (options.dump_dot)
-    visualize(std::string("graph-final-") + key + ".dot", graph.get(),
-              vis_info);
-
-  // assign unique ids for partitions
-  {
+    // run partitioner on each op
     size_t idx = 0;
-    for (auto &partition : graph->getPartitions()) {
-      if (partition->empty())
-        continue;
-      partition->id = idx;
+    for (auto op : ops) {
+      analyze(idx, op);
       idx++;
     }
   }
-  if (options.dump) {
-    std::cout << "final partitions:\n";
-    for (auto &partition : graph->getPartitions()) {
-      if (partition->empty())
-        continue;
-      partition->dump();
-    }
-  }
 
-  serialize(idx, op, graph.get());
-  deduplicateViewOps(op, duplicatedOps);
-}
+private:
+  void analyze(size_t idx, Operation *op) {
+    auto duplicatedOps = duplicateViewOps(op);
+    tt::FuncOp func;
+    if (auto m = dyn_cast<ModuleOp>(op)) {
+      func = cast<tt::FuncOp>(m.getRegion().front().front());
+    } else {
+      func = op->getParentOfType<tt::FuncOp>();
+      assert(func);
+    }
+
+    auto toInt = [](int dflt, std::string value) {
+      if (value.size() == 0)
+        return dflt;
+      return std::stoi(value);
+    };
+
+    auto &options = get_options();
+    options.dump_dot =
+        tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_ENABLE_DUMP_DOT");
+    options.dump_data_only =
+        tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DUMP_DATA_ONLY");
+    options.dump_loop_only =
+        tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DUMP_LOOP_ONLY");
+    options.disable_simt =
+        tools::getBoolEnv("TRITON_PARTITION_SCHEDULING_DISABLE_SIMT_GROUPS");
+    options.disable_epilogue = tools::getBoolEnv(
+        "TRITON_PARTITION_SCHEDULING_DISABLE_EPILOGUE_GROUPS");
+
+    // FIXME: hack for one of the matmul test cases
+    if (hasFlattenedEpilogue(op) && ttg::lookupNumWarps(op) > 6) {
+      options.disable_simt = true;
+      options.disable_epilogue = true;
+    }
+
+    auto graph = buildGraph(op);
+    auto initValues = initialDataValues(graph.get());
+    propagateDataValues(initValues);
+    options.manual = deserializeManualPartitions(op, graph.get());
+    VisualizationInfo vis_info;
+    auto key = func.getSymName().str() + "-" + std::to_string(idx);
+    if (options.dump_dot)
+      visualize(std::string("graph-input-") + key + ".dot", graph.get(),
+                vis_info);
+    initialPartitionAssignment(graph.get());
+    if (options.dump_dot)
+      visualize(std::string("graph-initial-") + key + ".dot", graph.get(),
+                vis_info);
+    mergePartitions(graph.get(), key, vis_info);
+    if (options.dump_dot)
+      visualize(std::string("graph-merged-") + key + ".dot", graph.get(),
+                vis_info);
+    propagatePartitions(graph.get(), key, vis_info);
+    if (options.dump_dot)
+      visualize(std::string("graph-final-") + key + ".dot", graph.get(),
+                vis_info);
+
+    // assign unique ids for partitions
+    {
+      size_t idx = 0;
+      for (auto &partition : graph->getPartitions()) {
+        if (partition->empty())
+          continue;
+        partition->id = idx;
+        idx++;
+      }
+    }
+    LLVM_DEBUG({
+      llvm::errs() << "\nfinal partitions:\n";
+      for (auto &partition : graph->getPartitions()) {
+        if (partition->empty())
+          continue;
+        partition->dump();
+      }
+    });
+
+    serialize(idx, op, graph.get());
+    deduplicateViewOps(op, duplicatedOps);
+  }
+};
+
+} // namespace mlir::triton::gpu
