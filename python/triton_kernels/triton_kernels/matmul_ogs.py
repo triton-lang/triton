@@ -334,7 +334,8 @@ def matmul_ogs(x, w, bias,
     w_scale = precision_config.weight_scale
     w_has_mx = w_scale is not None
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and bitwidth(w.dtype) == 8
-    if w_has_mx: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp"
+    is_hopper_mx = is_cuda() and not target_info.cuda_capability_geq(10, 0) and w_scale is not None
+    if is_hopper_mx: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp on capability < 10"
     if is_hopper_fp8: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     if not isinstance(w, Tensor):
         # TODO: remove this code path; using uint8 for mxfp4 weight will bite us when we want to support uint8 for real
@@ -439,7 +440,7 @@ def matmul_ogs(x, w, bias,
     has_scatter_tma = opt_flags.fused_scatter and target_info.has_tma_gather()
     y = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if opt_flags.fused_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather_tma else 3, flex.lhs_data)
-    w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
+    w_storage = _canonicalize_storage(w.storage, 5 if w.storage.layout.name == "BLACKWELL_VALUE" else 3, flex.rhs_data)
     y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 3, flex.out_data)
     # create tma descriptor for x
     x_has_tma = opt_flags.is_persistent and (has_gather_tma or not has_gather)
@@ -465,6 +466,7 @@ def matmul_ogs(x, w, bias,
     x_scale_strides = (0, ) * (3 - len(x_scale_strides)) + x_scale_strides
     w_scale_strides = w_scale.stride() if w_has_mx and not w_scale_has_tma else (None, None, None)
     w_scale_strides = (0, ) * (3 - len(w_scale_strides)) + w_scale_strides
+    w_strides = (None, None, None) if opt_flags.is_persistent else w_storage.data.stride()
     out_matmul_scale_strides = out_matmul_scale.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = (0, ) * (4 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
     # launch kernel
@@ -474,14 +476,16 @@ def matmul_ogs(x, w, bias,
     # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
     # w_transpose = w_storage.data.stride()[-1] != 1
     w_transpose = w_storage.data.stride()[-2] == 1
-    (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
+    print("w_tensor_or_tma", w_tensor_or_tma.shape, w_tensor_or_tma.strides, w_tensor_or_tma.block_shape, w_transpose)
+    print(opt_flags.block_m, opt_flags.block_n, opt_flags.block_k)
+    k = (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
                    *out_matmul_scale_strides[-4:],
                    x_tensor_or_tma, x_storage.data, *x_strides, x_transpose,
                    flex.lhs_data.scale,
                    None if x_scale is None else x_scale.data.view(torch.uint8), *x_scale_strides,
-                   w_tensor_or_tma, w_storage.data, *w_storage.data.stride(), w_transpose,
+                   w_tensor_or_tma, w_storage.data, *w_strides, w_transpose,
                    flex.rhs_data.scale,
                    w_scale_tensor_or_tma, *w_scale_strides,
                    bias, bias_stride,
@@ -525,6 +529,10 @@ def matmul_ogs(x, w, bias,
                    IS_EPILOGUE_QUANT_MXFP8=epilogue.specs.name == FnName.QUANTIZE_MXFP8.name,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **opt_flags.target_kernel_kwargs)
+    # with open(f"{k.name}.ttgir", "w") as f:
+    #     f.write(k.asm["ttgir"])
+    # with open(f"{k.name}.ptx", "w") as f:
+    #     f.write(k.asm["ptx"])
     # Build grouped reduction inputs in a uniform way
     group_indx = None if scatter_indx is None or opt_flags.fused_scatter else scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
     out_final, out_final_mx_scale = reduce_grouped(
