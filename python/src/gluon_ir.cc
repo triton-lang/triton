@@ -179,8 +179,9 @@ py::object layoutToGluon(Attribute layout) {
         ll.getBases().lookup(kWarp), ll.getBases().lookup(kBlock),
         toStdVector(ll.getOutDimSizes()));
   } else if (auto dotOp = dyn_cast<ttg::DotOperandEncodingAttr>(layout)) {
-    return layouts.DotOperandLayout(
-        dotOp.getOpIdx(), layoutToGluon(dotOp.getParent()), dotOp.getKWidth());
+    return layouts.DotOperandLayout(dotOp.getOpIdx(),
+                                    layoutToGluon(dotOp.getParent()),
+                                    dotOp.getKWidth(), dotOp.getPacked());
   } else if (auto mma = dyn_cast<ttg::NvidiaMmaEncodingAttr>(layout)) {
     auto ctaLayout = mma.getCTALayout();
     return layouts.NVMMADistributedLayout(
@@ -356,9 +357,9 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("get_dot_operand_layout",
            [](GluonOpBuilder &self, unsigned opIdx, Attribute parent,
-              unsigned kWidth) -> Attribute {
+              unsigned kWidth, bool packed) -> Attribute {
              return self.getChecked<ttg::DotOperandEncodingAttr>(
-                 self.getContext(), opIdx, parent, kWidth);
+                 self.getContext(), opIdx, parent, kWidth, packed);
            })
       .def("get_mma_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &version,

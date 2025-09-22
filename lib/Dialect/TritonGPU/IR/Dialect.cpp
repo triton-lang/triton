@@ -1383,8 +1383,8 @@ LogicalResult AMDWmmaEncodingAttr::verify(
   if (version == 2 && !llvm::is_contained(validShapesV2, shape))
     return emitError() << "invalid WMMA v2 instruction shape";
 
-  auto validShapesV3 =
-      std::vector<llvm::SmallVector<unsigned>>{{16, 16, 32}, {16, 16, 64}};
+  auto validShapesV3 = std::vector<llvm::SmallVector<unsigned>>{
+      {16, 16, 32}, {16, 16, 64}, {16, 16, 128}};
   if (version == 3 && !llvm::is_contained(validShapesV3, shape))
     return emitError() << "invalid WMMA v3 instruction shape";
 
@@ -2466,7 +2466,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
 
 LogicalResult DotOperandEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
-    unsigned opIdx, Attribute parent, unsigned kWidth) {
+    unsigned opIdx, Attribute parent, unsigned kWidth, bool packed) {
   if (opIdx != 0 && opIdx != 1) {
     return emitError() << "ttg.dot_op opIdx parameter can be 0 or 1, got: "
                        << opIdx;
@@ -2499,8 +2499,9 @@ LogicalResult DotOperandEncodingAttr::verify(
       return emitError()
              << "ttg.dot_op kWidth parameter must be 4/8/16 for WMMA v2 "
                 "(including packed cases for `scaled_dot`)";
-    if (parentAttr.getVersion() == 3 && (kWidth != 8))
-      return emitError() << "ttg.dot_op kWidth parameter must be 8 for WMMA v3";
+    if (parentAttr.getVersion() == 3 && (kWidth != 8 && kWidth != 16))
+      return emitError()
+             << "ttg.dot_op kWidth parameter must be 8/16 for WMMA v3";
     return success();
   }
 

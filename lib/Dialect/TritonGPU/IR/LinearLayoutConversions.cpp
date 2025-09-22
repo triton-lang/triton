@@ -892,6 +892,7 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
 
   auto mnkDim = wmmaLayout.getInstrShape();
   auto kDim = mnkDim[2];
+  kDim = dotWmmaLayout.getPacked() ? (kDim / 2) : kDim;
   auto nonKDim = dotWmmaLayout.getOpIdx() == 0 ? mnkDim[0] : mnkDim[1];
   auto kWidth = dotWmmaLayout.getKWidth();
   constexpr int warpSize = 32;
