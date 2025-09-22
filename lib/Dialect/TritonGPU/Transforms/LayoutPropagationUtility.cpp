@@ -25,7 +25,7 @@ inferSourceLoadLayout(LinearEncodingAttr dstLayout, Operation *defOp) {
       break; // Found the load op; we are done here.
 
     if (auto cvtOp = dyn_cast<ConvertLayoutOp>(curOp)) {
-      // For convert op there is nothing to infer so we keep the current layout.
+      // For convert op we keep the current layout to push through further.
       curOp = cvtOp.getSrc().getDefiningOp();
     } else {
       if (curOp->getNumOperands() != 1)

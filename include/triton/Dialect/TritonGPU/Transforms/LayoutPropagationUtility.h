@@ -9,12 +9,12 @@
 namespace mlir::triton::gpu {
 
 // Given the result |dstLayout|, infer the source layout that we should use for
-// global load if we propagate through op def chain of |userOp|. Returns
+// global load if we propagate through op def chain of |defOp|. Returns
 // std::nullopt if fails to infer or cannot reach a global load.
 std::optional<std::pair<triton::LoadOp, LinearLayout>>
-inferSourceLoadLayout(const LinearLayout &dstLayout, Operation *userOp);
+inferSourceLoadLayout(const LinearLayout &dstLayout, Operation *defOp);
 std::optional<std::pair<triton::LoadOp, LinearLayout>>
-inferSourceLoadLayout(LinearEncodingAttr dstLayout, Operation *userOp);
+inferSourceLoadLayout(LinearEncodingAttr dstLayout, Operation *defOp);
 
 } // namespace mlir::triton::gpu
 
