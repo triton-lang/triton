@@ -2634,3 +2634,39 @@ def test_get_num_warps():
     print_num_warps()
     ttgl.warp_specialize((), print_num_warps, (), [print_num_warps, print_num_warps, print_num_warps], [1, 2, 8],
                          [24, 24, 24])
+
+
+def test_non_scalar_loop_bounds():
+
+    @gluon.jit
+    def kernel():
+        x = ttgl.full([32], 0, ttgl.int32, layout=ttgl.BlockedLayout([1], [32], [1], [0]))
+        for _ in range(x, 10, 1):
+            pass
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "For lower bound must be a scalar, got" in str(e.value)
+
+    @gluon.jit
+    def kernel():
+        x = ttgl.full([32], 0, ttgl.int32, layout=ttgl.BlockedLayout([1], [32], [1], [0]))
+        for _ in range(1, x, 1):
+            pass
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "For upper bound must be a scalar, got" in str(e.value)
+
+    @gluon.jit
+    def kernel():
+        x = ttgl.full([32], 0, ttgl.int32, layout=ttgl.BlockedLayout([1], [32], [1], [0]))
+        for _ in range(1, 10, x):
+            pass
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel)
+
+    assert "For step must be a scalar, got" in str(e.value)
