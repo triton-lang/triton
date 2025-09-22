@@ -1054,12 +1054,12 @@ LogicalResult AxisInfoAnalysis::visitOperation(
   auto newContiguity = curr.getContiguity();
   auto newDivisibility = curr.getDivisibility();
   auto newConstancy = curr.getConstancy();
-  AxisInfo::initDimVectorFromHint(
-      op->getDiscardableAttr("tt.contiguity"), &newContiguity);
-  AxisInfo::initDimVectorFromHint(
-      op->getDiscardableAttr("tt.divisibility"), &newDivisibility);
-  AxisInfo::initDimVectorFromHint(
-      op->getDiscardableAttr("tt.constancy"), &newConstancy);
+  AxisInfo::initDimVectorFromHint(op->getDiscardableAttr("tt.contiguity"),
+                                  &newContiguity);
+  AxisInfo::initDimVectorFromHint(op->getDiscardableAttr("tt.divisibility"),
+                                  &newDivisibility);
+  AxisInfo::initDimVectorFromHint(op->getDiscardableAttr("tt.constancy"),
+                                  &newConstancy);
   curr = AxisInfo(newContiguity, newDivisibility, newConstancy,
                   curr.getConstantValue());
   // join all lattice elements
