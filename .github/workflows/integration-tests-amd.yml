@@ -22,7 +22,7 @@ jobs:
             options: >-
               --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
               --volume /home/runner/.triton:/github/home/.triton
-          - image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
+          - image: pmylonamd/rocm7.0_ubuntu24.04_py3.12_pytorch_2.7.0_asan_gfx942
             runner: ["amd-gfx942"]
             # We add --env-file to pull in HIP_VISIBLE_DEVICES and ROCR_VISIBLE_DEVICES definition for GPU isolation.
             options: >-
@@ -157,7 +157,7 @@ jobs:
         run: |
           make test-distributed
       - name: Run asan tests on AMD
-        if: false
+        if: ${{ matrix.runner[0] == 'amd-gfx942' }}
         run: |
           cd third_party/amd/python/test/
           ulimit -s 1024
