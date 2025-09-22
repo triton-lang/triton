@@ -193,8 +193,42 @@ def is_linux_os(id):
     return False
 
 
+def get_system_glibcxx_version():
+    try:
+        ret = subprocess.run(["/sbin/ldconfig", "-p"], check=True, capture_output=True)
+    except subprocess.CalledProcessException:
+        return ()
+
+    # e.g. 'libstdc++.so.6 (libc6) => /usr/lib/libstdc++.so.6'
+    libstdcxx_matches = [x for x in ret.stdout.decode().split('\n') if "libstdc++" in x]
+    if len(libstdcxx_matches) != 1:
+        return ()
+
+    m = re.search("libstdc\+\+\S+\s*\(.*\)\s*=>\s*(.*)", libstdcxx_matches[0])
+    if not m or m.lastindex < 1:
+        return ()
+
+    libstdcxx_path = m.group(1)
+    try:
+        ret = subprocess.run(["strings", libstdcxx_path], check=True, capture_output=True)
+    except subprocess.CalledProcessException:
+        return ()
+
+    glibcxx_versions_raw = re.findall("GLIBCXX_([0-9.]+)", ret.stdout.decode())
+    glibcxx_versions = [tuple(int(y) for y in x.split(".")) for x in glibcxx_versions_raw]
+
+    return max(glibcxx_versions)
+
+
 # llvm
 def get_llvm_package_info():
+
+    def get_user_built_llvm(system, arch):
+        print(
+            f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
+        )
+        return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+
     system = platform.system()
     try:
         arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
@@ -210,31 +244,35 @@ def get_llvm_package_info():
         elif arch == 'arm64':
             system_suffix = 'ubuntu-arm64'
         elif arch == 'x64':
+            min_versions = {
+                # glibc: Ubuntu 24 LTS (v2.39), 22 LTS (v2.35), 20 LTS (2.31)
+                "ubuntu-x64": {"glibc": 229, "glibcxx": 3430},
+                # glibc: Manylinux_2.28 (v2.28), AlmaLinux 8 (v2.28)
+                "almalinux-x64": {"glibc": 218, "glibcxx": 3422},
+                # glibc: Maylinux_2014 (v2.17), CentOS 7 (v2.17)
+                "centos-x64": {"glibc": 0, "glibcxx": 3419},
+            }
             vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
             vglibc = vglibc[0] * 100 + vglibc[1]
-            if vglibc > 228:
-                # Ubuntu 24 LTS (v2.39)
-                # Ubuntu 22 LTS (v2.35)
-                # Ubuntu 20 LTS (v2.31)
-                system_suffix = "ubuntu-x64"
-            elif vglibc > 217:
-                # Manylinux_2.28 (v2.28)
-                # AlmaLinux 8 (v2.28)
-                system_suffix = "almalinux-x64"
+
+            vglibcxx = get_system_glibcxx_version()
+            if not vglibcxx or len(vglibcxx) != 2:
+                # if we weren't able to parse glibcxx version, assume it's new enough
+                vglibcxx = 9999
             else:
-                # Manylinux_2014 (v2.17)
-                # CentOS 7 (v2.17)
-                system_suffix = "centos-x64"
+                vglibcxx = vglibcxx[0] * 1000 + vglibcxx[1] * 100 + vglibcxx[2]
+            system_suffix = None
+            for system_name, min_version in min_versions.items():
+                if vglibc >= min_version["glibc"] and vglibcxx >= min_version["glibcxx"]:
+                    system_suffix = system_name
+                    break
+
+            if not system_suffix:
+                return get_user_built_llvm(system, arch)
         else:
-            print(
-                f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
-            )
-            return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+            return get_user_built_llvm(system, arch)
     else:
-        print(
-            f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
-        )
-        return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
+        return get_user_built_llvm(system, arch)
     # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     # release_suffix = "assert" if use_assert_enabled_llvm else "release"
     llvm_hash_path = os.path.join(get_base_dir(), "cmake", "llvm-hash.txt")
