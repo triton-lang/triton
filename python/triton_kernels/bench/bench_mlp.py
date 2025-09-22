@@ -15,7 +15,10 @@ from bench_utils import quantize_weight
 import tempfile
 
 
-def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP):
+# Toggle
+SAVE_PROFILES = False
+
+def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, out_path):
     assert n_expts_tot % EP == 0
     assert dim2 % TP == 0
     rank, world_size = triton_dist.setup()
@@ -70,23 +73,29 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
 
     input_x = torch.randn((batch // DP, dim1), device=dev)
     # run layer
-    fpath = Path(tempfile.mktemp())
+    fpath = out_path if SAVE_PROFILES else Path(tempfile.mkdtemp())
+    fpath = fpath / f"{rank}/b{batch_per_expt}"
     proton.start(str(fpath), hook="triton")
     input_x = input_x.to(x_dtype)
     xg = input_x.to(wg.dtype if n_expts_tot > 1 else input_x.dtype)
     for i in range(100):
         if n_expts_tot > 1:  # sparse
-            logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            x, rdata, gather_indx, scatter_indx, metadata = triton_dist.routing(input_x, logits, n_expts_act, EP=EP,
-                                                                                TP=TP)
+            with proton.scope("logits"):
+                logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
+            with proton.scope("routing"):
+                x, rdata, gather_indx, scatter_indx, metadata = triton_dist.routing(input_x, logits, n_expts_act, EP=EP,
+                                                                                    TP=TP)
         else:  # dense
-            x = triton_dist.all_gather(input_x, dim=0)
+            with proton.scope("all_gather"):
+                x = triton_dist.all_gather(input_x, dim=0)
             rdata, gather_indx, scatter_indx, metadata = None, None, None, None
         if x.nelement() > 0:
-            x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, fused_activation=act)
-            x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=scatter_indx,
-                           precision_config=pc2)
-        x = triton_dist.reduce_scatter(x, metadata=metadata, dim=0)
+            with proton.scope("mlp0"):
+                x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, fused_activation=act)
+            with proton.scope("mlp1"):
+                x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=scatter_indx, precision_config=pc2)
+        with proton.scope("reduce_scatter"):
+            x = triton_dist.reduce_scatter(x, metadata=metadata, dim=0)
     proton.finalize()
     return roofline.parse_profile(fpath.with_suffix(".hatchet"), useful_op_regex=".*matmul.*")
 
