@@ -187,7 +187,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK: scf.for
 // CHECK:   tt.load {{.*}} {loop.cluster = 2 : i32, loop.stage = 0 : i32}
 tt.func @one_dep_sync(%lb : index, %ub : index, %step : index,
-                 %a_ptr_init : tensor<1x!tt.ptr<f16>, #A> {tt.divisibility = dense<[16]> : tensor<1xi32>, tt.contiguity = dense<[16]> : tensor<ixi32>}) -> () {
+                 %a_ptr_init : tensor<1x!tt.ptr<f16>, #A> {tt.divisibility = dense<[16]> : tensor<1xi32>, tt.contiguity = dense<[16]> : tensor<1xi32>}) -> () {
   scf.for %iv = %lb to %ub step %step : index {
     %a = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<1x!tt.ptr<f16>, #A>
     "use"(%a) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<1xf16, #A>) -> ()
