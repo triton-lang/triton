@@ -12,7 +12,7 @@ from triton_kernels.target_info import get_cdna_version
 import distributed as triton_dist
 from triton_kernels.tensor_details import layout
 from bench_utils import quantize_weight
-from functools import contextmanager
+from contextlib import contextmanager
 import tempfile
 
 
