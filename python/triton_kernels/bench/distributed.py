@@ -53,6 +53,7 @@ TRITON_DTYPE_MAP = {
     torch.float32: tl.float32,
 }
 
+
 def _is_distributed_launch() -> bool:
     return int(os.environ.get("WORLD_SIZE", "1")) > 1
 
@@ -120,8 +121,8 @@ def _reduce_ep_torch(metadata: ReduceScatterMetadata, input_tensor: torch.Tensor
 
 @triton.jit
 def _reduce_ep_triton_kernel(ep_indx_ptr, output_tensor_ptr, output_list, n_tokens, n_expts, hidden_size,
-                             TP: tl.constexpr, EP: tl.constexpr,
-                             BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
+                             TP: tl.constexpr, EP: tl.constexpr, BLOCK_SIZE_M: tl.constexpr,
+                             BLOCK_SIZE_N: tl.constexpr, original_dtype: tl.constexpr, intermediate_dtype: tl.constexpr):
     offs_m = tl.program_id(0) * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_n = tl.arange(0, BLOCK_SIZE_N)
     world_size: tl.constexpr = TP * EP
@@ -134,9 +135,10 @@ def _reduce_ep_triton_kernel(ep_indx_ptr, output_tensor_ptr, output_list, n_toke
         mask = tl.reduce_or(ep_indx == ep_rank, axis=1)
 
         input_output_mask = mask[:, None] & (offs_n[None, :] < hidden_size) & (offs_m[:, None] < n_tokens)
-        output = tl.load(output_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], mask=input_output_mask)
-        input = tl.load(input_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], mask=input_output_mask)
+        output = tl.load(output_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], mask=input_output_mask).to(intermediate_dtype)
+        input = tl.load(input_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], mask=input_output_mask).to(intermediate_dtype)
         output += input
+        output = output.to(original_dtype)
         tl.store(output_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], output, mask=input_output_mask)
 
 
@@ -146,18 +148,21 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
     if op != dist.ReduceOp.SUM:
         raise NotImplementedError(f"Reduce operation {op} is not implemented.")
     n_tokens = metadata.ep_indx.size(dim)
-    n_expts = metadata.ep_indx.size(1-dim)
+    n_expts = metadata.ep_indx.size(1 - dim)
     other_dims = input_tensor.shape[1:]
     assert len(other_dims) == 1, "Only 2D tensors are supported in _reduce_ep_triton."
     hidden_size = other_dims[0]
     output_tensor = input_tensor.new_zeros((n_tokens, hidden_size), dtype=original_dtype)
+    triton_original_dtype = TRITON_DTYPE_MAP.get(original_dtype, tl.float32)
     triton_intermediate_dtype = TRITON_DTYPE_MAP.get(intermediate_dtype, tl.float32)
     BLOCK_SIZE_M = 128
     _reduce_ep_triton_kernel[(triton.cdiv(n_tokens, BLOCK_SIZE_M), )](
-        metadata.ep_indx, output_tensor, tuple(output_list), n_tokens, n_expts, hidden_size, #
-        TP=metadata.TP, EP=metadata.EP, #
+        metadata.ep_indx, output_tensor, tuple(output_list), n_tokens, n_expts, hidden_size,  #
+        TP=metadata.TP, EP=metadata.EP,  #
         BLOCK_SIZE_M=BLOCK_SIZE_M,  #
-        BLOCK_SIZE_N=triton.next_power_of_2(other_dims[0]))
+        BLOCK_SIZE_N=triton.next_power_of_2(other_dims[0]),  #
+        original_dtype=triton_original_dtype,  #
+        intermediate_dtype=triton_intermediate_dtype)
     return output_tensor.to(original_dtype)
 
 
