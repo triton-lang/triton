@@ -53,6 +53,14 @@ private:
   bool isOperandPipelineable(Value v, Operation *&foundDef);
 };
 
+bool areScalesPipelineable(TCGen5MMAScaledOp scaledOp, scf::ForOp forOp);
+bool isOperandPipelineableBase(
+    Value v, scf::ForOp forOp, Operation *&foundDef,
+    std::function<bool(Operation *)> isPipelineable =
+        [](Operation *) { return false; },
+    std::function<bool(Operation *)> isLoadToBePipelined =
+        [](Operation *) { return false; });
+
 //===----------------------------------------------------------------------===//
 // MMA Pipeline Rewriters
 //===----------------------------------------------------------------------===//

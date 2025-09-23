@@ -415,9 +415,6 @@ bool TCGen5MMAOp::isAsync() { return getIsAsync(); }
 
 // -- TCGen5MMAScaledOp --
 LogicalResult TCGen5MMAScaledOp::verify() {
-  if (!getIsAsync() && !getBarriers().empty()) {
-    return emitOpError("The op is synchronous but a barrier is present.");
-  }
   Type atype = getA().getType().getElementType();
   Type btype = getB().getType().getElementType();
   Type dtype = getD().getType().getElementType();
@@ -606,7 +603,9 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
              << " does not have any TMEM compatible layouts";
     }
     if (llvm::none_of(layouts, [&](DistributedEncodingTrait layout) {
-          return areLayoutsEquivalent(type.getShape(), layout, enc);
+          return areLayoutsEquivalent(type.getShape(),
+                                      cast<LayoutEncodingTrait>(layout),
+                                      cast<LayoutEncodingTrait>(enc));
         })) {
       InFlightDiagnostic diag = op->emitOpError(regName)
                                 << " layout is not TMEM compatible";
