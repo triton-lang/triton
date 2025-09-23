@@ -3127,8 +3127,7 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs) {
 TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs_mxfp4) {
   auto dot = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
                   /*instrShape=*/{16, 16, 64});
-  auto wmmaOperand =
-      wmmaDotOp(dot, /*opIdx=*/0, /*kWidth=*/16);
+  auto wmmaOperand = wmmaDotOp(dot, /*opIdx=*/0, /*kWidth=*/16);
 
   EXPECT_EQ(
       toLinearLayout({16, 32}, wmmaOperand),
@@ -3164,8 +3163,7 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs_mxfp4) {
 TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs_mxfp8) {
   auto dot = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
                   /*instrShape=*/{16, 16, 128});
-  auto wmmaOperand =
-      wmmaDotOp(dot, /*opIdx=*/0, /*kWidth=*/16);
+  auto wmmaOperand = wmmaDotOp(dot, /*opIdx=*/0, /*kWidth=*/16);
 
   EXPECT_EQ(
       toLinearLayout({16, 32}, wmmaOperand),
@@ -3204,8 +3202,7 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs_mxfp8) {
 TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs_mxfp4) {
   auto dot = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
                   /*instrShape=*/{16, 16, 64});
-  auto wmmaOperand =
-      wmmaDotOp(dot, /*opIdx=*/1, /*kWidth=*/16);
+  auto wmmaOperand = wmmaDotOp(dot, /*opIdx=*/1, /*kWidth=*/16);
 
   EXPECT_EQ(
       toLinearLayout({32, 16}, wmmaOperand),
@@ -3241,8 +3238,7 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs_mxfp4) {
 TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs_mxfp8) {
   auto dot = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
                   /*instrShape=*/{16, 16, 128});
-  auto wmmaOperand =
-      wmmaDotOp(dot, /*opIdx=*/1, /*kWidth=*/16);
+  auto wmmaOperand = wmmaDotOp(dot, /*opIdx=*/1, /*kWidth=*/16);
 
   EXPECT_EQ(
       toLinearLayout({32, 16}, wmmaOperand),
@@ -3277,7 +3273,6 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs_mxfp8) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
 }
-
 
 TEST_F(LinearLayoutConversionsTest, SliceOfBlocked) {
   auto parent = blocked({2, 4}, {4, 2}, {2, 2}, {2, 2}, {2, 2}, {1, 0}, {1, 0});
