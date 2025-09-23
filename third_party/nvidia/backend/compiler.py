@@ -194,15 +194,6 @@ class CUDABackend(BaseBackend):
 
         args["max_num_imprecise_acc_default"] = 2**30 if capability == 90 else 0
 
-        if knobs.compilation.enable_experimental_consan:
-            # ConSan requires a global memory allocation
-            def alloc_fn(size: int, alignment: int, stream: Optional[int]):
-                import torch
-                return torch.empty(size, device="cuda", dtype=torch.int8)
-
-            from triton.runtime import _allocation
-            _allocation.set_allocator(alloc_fn)
-
         return CUDAOptions(**args)
 
     def pack_metadata(self, metadata):
