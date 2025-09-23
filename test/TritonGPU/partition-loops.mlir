@@ -298,8 +298,8 @@ tt.func @future_conditional_self_use(%lb: i32, %ub: i32, %step: i32, %cond: i1) 
   scf.for %i = %lb to %ub step %step iter_args(%k = %c0_i32) -> i32 : i32 {
     %0 = "op_a"() {ttg.partition = array<i32: 0>} : () -> i32
     scf.if %cond {
-      "use"(%k) : (i32) -> ()
-    } {ttg.partition = array<i32: 0>}
+      "use"(%k) {ttg.partition = array<i32: 0>} : (i32) -> ()
+    }
     scf.yield %0 : i32
   } {ttg.partition.stages = [0], ttg.warp_specialize.tag = 0 : i32}
   tt.return
@@ -344,8 +344,8 @@ tt.func @dce_before_warp_allocation(%lb: i32, %ub: i32, %step: i32) {
   scf.for %i = %lb to %ub step %step iter_args(%idxs = %cst) -> tensor<128xi32, #blocked> : i32 {
     %do_prologue = "prologue_cond"(%i) : (i32) -> i1
     %0 = scf.if %do_prologue -> tensor<128xi32, #blocked> {
-      %1 = tt.splat %i : i32 -> tensor<128xi32, #blocked>
-      %2 = arith.addi %1, %idxs : tensor<128xi32, #blocked>
+      %1 = tt.splat %i {ttg.partition = array<i32: 0, 1, 2>} : i32 -> tensor<128xi32, #blocked>
+      %2 = arith.addi %1, %idxs {ttg.partition = array<i32: 0, 1, 2>} : tensor<128xi32, #blocked>
       scf.yield %2 : tensor<128xi32, #blocked>
     } else {
       scf.yield %idxs : tensor<128xi32, #blocked>
@@ -393,6 +393,48 @@ tt.func @clone_then_capture(%arg0: i32) {
     // CHECK: "use"([[V]])
     "use"(%1) {ttg.partition = array<i32: 1>} : (tensor<4xi32, #blocked>) -> ()
   } {ttg.partition.stages = [0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32}
+  tt.return
+}
+
+// CHECK-LABEL: @if_stmt_split
+tt.func @if_stmt_split(%arg1: !ty, %ub: i32, %lb: i32, %step: i32) {
+  %out:2 = scf.for %i = %lb to %ub step %step iter_args(%a = %arg1, %b = %arg1) -> (!ty, !ty) : i32 {
+    %cond = "cond"(%i) {ttg.partition = array<i32: 0, 1>} : (i32) -> i1
+    // CHECK: nvws.warp_group
+    // CHECK-NEXT: partition0
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT: "cond"
+    // CHECK-NEXT: [[C:%.*]] = scf.if
+    // CHECK-NEXT: [[A:%.*]] = "use1"
+    // CHECK-NEXT: scf.yield [[A]]
+    // CHECK-NEXT: } else {
+    // CHECK-NEXT: [[B:%.*]] = "use3"
+    // CHECK-NEXT: scf.yield [[B]]
+    // CHECK-NEXT: }
+    // CHECK-NEXT: scf.yield [[C]]
+
+    // CHECK: partition1
+    // CHECK-NEXT: scf.for
+    // CHECK-NEXT: "cond"
+    // CHECK-NEXT: [[C:%.*]] = scf.if
+    // CHECK-NEXT: [[A:%.*]] = "use2"
+    // CHECK-NEXT: scf.yield [[A]]
+    // CHECK-NEXT: } else {
+    // CHECK-NEXT: [[B:%.*]] = "use4"
+    // CHECK-NEXT: scf.yield [[B]]
+    // CHECK-NEXT: }
+    // CHECK-NEXT: scf.yield [[C]]
+    %ret:2 = scf.if %cond -> (!ty, !ty) {
+      %1 = "use1"(%a) {ttg.partition = array<i32: 0>} : (!ty) -> !ty
+      %2 = "use2"(%b) {ttg.partition = array<i32: 1>} : (!ty) -> !ty
+      scf.yield %1, %2 : !ty, !ty
+    }  else {
+       %3 = "use3"(%a) {ttg.partition = array<i32: 0>} : (!ty) -> !ty
+       %4 = "use4"(%b) {ttg.partition = array<i32: 1>} : (!ty) -> !ty
+       scf.yield %3, %4 : !ty, !ty
+    }
+    scf.yield %ret#0, %ret#1 : !ty, !ty
+  } {ttg.partition.stages = [0, 0], ttg.warp_specialize.tag = 0 : i32}
   tt.return
 }
 
