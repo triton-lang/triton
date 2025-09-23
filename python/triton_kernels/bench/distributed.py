@@ -1,5 +1,6 @@
 from enum import Enum
 import os
+import time
 import pytest
 import torch
 import torch.distributed as dist
@@ -530,6 +531,55 @@ def test_reduce_ep_triton():
                                intermediate_dtype)
 
     torch.testing.assert_close(actual, expected)
+
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for Triton kernel execution")
+@pytest.mark.parametrize("TP, EP", [(2, 4), (4, 2)])
+@pytest.mark.parametrize("n_tokens", [1024, 2048])
+@pytest.mark.parametrize("hidden_size", [1024])
+@pytest.mark.parametrize("routes_per_token", [4])
+def test_reduce_ep_triton_large(TP, EP, n_tokens, hidden_size, routes_per_token):
+    device = torch.device("cuda")
+    world_size = TP * EP
+
+    torch.manual_seed(0)
+    ep_indx = torch.randint(0, EP, (n_tokens, routes_per_token), device=device, dtype=torch.int32).contiguous()
+    metadata = ReduceScatterMetadata(
+        input_split_sizes=[n_tokens // world_size] * world_size,
+        ep_indx=ep_indx,
+        EP=EP,
+        TP=TP,
+    )
+
+    original_dtype = torch.float16
+    intermediate_dtype = torch.float16
+    input_tensor = torch.zeros((n_tokens, hidden_size), device=device, dtype=original_dtype)
+    output_list = []
+    for rank in range(world_size):
+        ep_rank = rank // TP
+        contrib = torch.zeros((n_tokens, hidden_size), device=device, dtype=intermediate_dtype)
+        mask = torch.any(ep_indx == ep_rank, dim=1)
+        if mask.any():
+            random_values = torch.randn(mask.sum().item(), hidden_size, device=device, dtype=intermediate_dtype)
+            contrib[mask] = random_values
+        output_list.append(contrib)
+
+    op = dist.ReduceOp.SUM
+
+    def triton_fn():
+        _reduce_ep_triton(metadata, input_tensor, output_list, world_size, 0, op, original_dtype, intermediate_dtype)
+
+    def torch_fn():
+        _reduce_ep_torch(metadata, input_tensor, output_list, world_size, 0, op, original_dtype, intermediate_dtype)
+
+    ret = triton_fn()
+    ref = torch_fn()
+    torch.testing.assert_close(ret, ref)
+
+    triton_time = triton.testing.do_bench_cudagraph(triton_fn)
+    torch_time = triton.testing.do_bench_cudagraph(torch_fn)
+    print(f"triton_time: {triton_time*1000:.3f}, torch_time: {torch_time*1000:.3f}")
 
 
 def test_routing_distributed_EP(monkeypatch):
