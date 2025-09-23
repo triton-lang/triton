@@ -1191,7 +1191,7 @@ def test_tensor_descriptor_reshape_matmul(dtype_str, device):
         return tf32_simulated
 
     # test a layout where block_m and block_N are split into two separate chunks.
-    A = numpy_random((M, K), dtype_str)
+    A = numpy_random((M, K), dtype_str) - 0.5
     if dtype_str == "float32":
         A = trunc_to_tf32(A)
 
@@ -1204,7 +1204,7 @@ def test_tensor_descriptor_reshape_matmul(dtype_str, device):
     A = to_triton(A, device=device, dst_type=dtype_str)
     A_reshaped = to_triton(A_reshaped, device=device, dst_type=dtype_str)
 
-    B = numpy_random((N, K), dtype_str)
+    B = numpy_random((N, K), dtype_str) - 0.5
     if dtype_str == "float32":
         B = trunc_to_tf32(B)
 
