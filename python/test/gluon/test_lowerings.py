@@ -799,8 +799,11 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
     _assert_close(y, x)
 
     y = torch.zeros_like(x)
-    kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
+    obj = kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
     _assert_close(y, x)
+    if (isinstance(shared_layout, ttgl.NVMMASharedLayout) and dist_layout in _ld_st_mma_layouts
+            and dist_layout.version[0] >= 3 and dtype == "float16"):
+        assert "stmatrix" in obj.asm["ptx"]
 
 
 _ld_st_3d_layouts = _filter_layouts([
