@@ -36,11 +36,16 @@ def test_torch(context, tmp_path: pathlib.Path):
         assert len(data[0]["children"]) == 1
         # bfs search until find the "elementwise_kernel" and then check its children
         queue = [data[0]]
+        import re
         while len(queue) > 0:
             parent_frame = queue.pop(0)
             for child in parent_frame["children"]:
                 if "elementwise_kernel" in child["frame"]["name"]:
                     assert len(child["children"]) == 0
+                    # check the regex of the parent name matches
+                    # file_name:line_number@function_name
+                    regex = r".+:\d+@.+"
+                    assert re.match(regex, parent_frame["frame"]["name"])
                     return
                 queue.append(child)
 
