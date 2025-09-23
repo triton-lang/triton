@@ -80,6 +80,7 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     pc2 = PrecisionConfig(flex_ctx=FlexCtx(rhs_data=w2_flex), weight_scale=w2_scale)
 
     # -- benchmark --
+    file_name = f"{rank}-{x_dtype}x-{w_dtype}w-TP{TP}-EP{EP}-B{batch_per_expt}"
     x_dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[x_dtype]
     # special treatment of fp8_e4m3 on AMD CDNA3 because it uses fp8_e4m3fnuz
     if x_dtype == torch.float8_e4m3fn and get_cdna_version() == 3:
@@ -110,7 +111,7 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
             x = triton_dist.reduce_scatter(x, metadata=metadata, dim=0)
 
     # run layer
-    with get_temp_fpath(out_path, f"{rank}-{x_dtype}x-{w_dtype}w-TP{TP}-EP{EP}-B{batch_per_expt}") as fpath:
+    with get_temp_fpath(out_path, file_name) as fpath:
         if CUDAGRAPH:
             g = torch.cuda.CUDAGraph()
             # warmup
