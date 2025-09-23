@@ -139,11 +139,11 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
     other_dims = input_tensor.shape[1:]
     output_tensor = input_tensor.new_zeros((n_tokens, ) + other_dims, dtype=intermediate_dtype)
     for i in range(world_size):
-        _reduce_ep_triton_kernel[(triton.cdiv(n_tokens, 128),)](
-            metadata.ep_indx, output_tensor,
-            output_list[i].to(intermediate_dtype), n_tokens, i,
-            tl.constexpr(metadata.TP), BLOCK_SIZE_M=tl.constexpr(128),
-            BLOCK_SIZE_N=tl.constexpr(other_dims[0] if other_dims else 1))
+        _reduce_ep_triton_kernel[(triton.cdiv(n_tokens,
+                                              128), )](metadata.ep_indx, output_tensor,
+                                                       output_list[i].to(intermediate_dtype), n_tokens, i,
+                                                       tl.constexpr(metadata.TP), BLOCK_SIZE_M=tl.constexpr(128),
+                                                       BLOCK_SIZE_N=tl.constexpr(other_dims[0] if other_dims else 1))
     return output_tensor.to(original_dtype)
 
 
@@ -499,7 +499,12 @@ def test_reduce_ep_triton():
     dim = 0
     # Assume the current ep rank is 0
     ep_indx = torch.tensor([[0, 1], [1, 0], [0, 0], [1, 0]], device=device, dtype=torch.int32)
-    metadata = ReduceScatterMetadata(input_split_sizes=[2, 2], ep_indx=ep_indx, EP=2, TP=1,)
+    metadata = ReduceScatterMetadata(
+        input_split_sizes=[2, 2],
+        ep_indx=ep_indx,
+        EP=2,
+        TP=1,
+    )
 
     original_dtype = torch.float32
     intermediate_dtype = torch.float32
@@ -519,11 +524,12 @@ def test_reduce_ep_triton():
     op = dist.ReduceOp.SUM
 
     expected = _reduce_ep_torch(metadata, input_tensor, output_list, world_size, dim, op, original_dtype,
-                                 intermediate_dtype)
+                                intermediate_dtype)
     actual = _reduce_ep_triton(metadata, input_tensor, output_list, world_size, dim, op, original_dtype,
                                intermediate_dtype)
 
     torch.testing.assert_close(actual, expected)
+
 
 def test_routing_distributed_EP(monkeypatch):
     # Test distributed routing with EP=1 (token_mask should be None)
