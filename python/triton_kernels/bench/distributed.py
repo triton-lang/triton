@@ -165,7 +165,7 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
         BLOCK_SIZE_N=triton.next_power_of_2(other_dims[0]),  #
         original_dtype=triton_original_dtype,  #
         intermediate_dtype=triton_intermediate_dtype)
-    return output_tensor.to(original_dtype)
+    return output_tensor
 
 
 def reduce_scatter(
