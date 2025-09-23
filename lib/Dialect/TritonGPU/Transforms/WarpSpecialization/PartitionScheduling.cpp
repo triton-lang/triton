@@ -160,6 +160,12 @@ public:
   const SetVector<Node *> &getNodes() const { return nodes; }
   bool empty() const { return nodes.empty(); }
 
+  size_t getStage() const {
+    // FIXME: correct behaviour?
+    if (flags & Flags::MMA)
+      return 1;
+    return 0;
+  }
   size_t getCost() const { return cost; }
 
   static void merge(Partition *lhs, Partition *rhs);
@@ -1907,8 +1913,7 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
   // annotate loop with index
   region->setAttr(kWarpSpecializeTagAttrName, b.getI32IntegerAttr(idx));
 
-  auto setPartitionsAttr = [&](Operation *op, const std::string &attrName,
-                               Node *node) {
+  auto setPartitionsAttr = [&](Operation *op, Node *node) {
     // not for func op
     if (isa<tt::FuncOp>(op))
       return;
@@ -1916,27 +1921,51 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
     for (auto partition : node->getPartitions())
       partitions.push_back(partition->id);
     std::sort(partitions.begin(), partitions.end());
-    op->setAttr(attrName, b.getDenseI32ArrayAttr(partitions));
+    op->setAttr(kPartitionAttrName, b.getDenseI32ArrayAttr(partitions));
+  };
+
+  auto setPartitionOutputsAttr = [&](Operation *op, size_t idx, size_t size,
+                                     Node *node) {
+    llvm::SmallVector<Attribute> partitionAttrs;
+    if (op->hasAttr(kPartitionOutputsAttrName)) {
+      // get existing partitions
+      for (auto attr :
+           op->getAttrOfType<ArrayAttr>(kPartitionOutputsAttrName)) {
+        partitionAttrs.push_back(attr);
+      }
+      assert(partitionAttrs.size() == size);
+    } else {
+      // initialize to no partitions
+      for (size_t i = 0; i < size; i++)
+        partitionAttrs.push_back(b.getDenseI32ArrayAttr({}));
+    }
+
+    // update partitions for this output
+    SmallVector<int> partitions;
+    for (auto partition : node->getPartitions())
+      partitions.push_back(partition->id);
+    std::sort(partitions.begin(), partitions.end());
+    partitionAttrs[idx] = b.getDenseI32ArrayAttr(partitions);
+    op->setAttr(kPartitionOutputsAttrName,
+                ArrayAttr::get(context, partitionAttrs));
   };
 
   graph->walk([&](Node *node) {
     if (node->isOp()) {
-      setPartitionsAttr(node->getOp(), kPartitionAttrName, node);
+      setPartitionsAttr(node->getOp(), node);
     } else {
       auto value = node->getValue();
       if (auto blockArg = dyn_cast<BlockArgument>(value)) {
         auto parentOp = blockArg.getOwner()->getParentOp();
         if (isa<tt::FuncOp>(parentOp)) {
           // nothing for func ops
-        } else if (isa<scf::ForOp>(parentOp)) {
+        } else if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
           if (blockArg.getArgNumber() == 0) {
             // nothing for induction variable
           } else {
             // for op iter args
-            setPartitionsAttr(parentOp,
-                              std::string(kPartitionAttrName) + "." +
-                                  std::to_string(blockArg.getArgNumber() - 1),
-                              node);
+            setPartitionOutputsAttr(parentOp, blockArg.getArgNumber() - 1,
+                                    forOp.getResultTypes().size(), node);
           }
         } else {
           assert(false);
@@ -1945,12 +1974,10 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
         auto op = result.getOwner();
         if (isa<scf::ForOp>(op)) {
           // do nothing (handled by block arg)
-        } else if (isa<scf::IfOp>(op)) {
+        } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
           // result of an if
-          setPartitionsAttr(op,
-                            std::string(kPartitionAttrName) + "." +
-                                std::to_string(result.getResultNumber()),
-                            node);
+          setPartitionOutputsAttr(op, result.getResultNumber(),
+                                  ifOp.getResultTypes().size(), node);
         } else {
           assert(false);
         }
@@ -1959,6 +1986,15 @@ void serialize(size_t idx, Operation *region, Graph *graph) {
       }
     }
   });
+
+  // set stages
+  SmallVector<Attribute> stages;
+  for (auto &partition : graph->getPartitions()) {
+    if (partition->empty())
+      continue;
+    stages.push_back(b.getI32IntegerAttr(partition->getStage()));
+  }
+  region->setAttr(kPartitionStagesAttrName, b.getArrayAttr(stages));
 }
 
 bool hasFlattenedEpilogue(Operation *op) {
