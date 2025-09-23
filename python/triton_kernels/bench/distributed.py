@@ -31,10 +31,12 @@ from triton_kernels.tensor import Bitmatrix
 
 from bench_utils import quantize_weight
 
+
 class CommKernelType(Enum):
     TORCH = "torch"
     TRITON = "triton"
     FUSE = "fuse"
+
 
 @dataclass
 class ReduceScatterMetadata:
@@ -94,16 +96,9 @@ def all_gather(x: torch.Tensor, dim=0) -> torch.Tensor:
         return x
 
 
-def _reduce_ep_torch(
-    metadata: ReduceScatterMetadata, 
-    input_tensor: torch.Tensor, 
-    output_list: list[torch.Tensor], 
-    world_size: int, 
-    dim: int, 
-    op: dist.ReduceOp.RedOpType, 
-    original_dtype: torch.dtype, 
-    intermediate_dtype: torch.dtype
-) -> torch.Tensor:
+def _reduce_ep_torch(metadata: ReduceScatterMetadata, input_tensor: torch.Tensor, output_list: list[torch.Tensor],
+                     world_size: int, dim: int, op: dist.ReduceOp.RedOpType, original_dtype: torch.dtype,
+                     intermediate_dtype: torch.dtype) -> torch.Tensor:
     n_tokens = metadata.ep_indx.size(dim)
     other_dims = input_tensor.shape[1:]
     output_tensor = input_tensor.new_zeros((n_tokens, ) + other_dims, dtype=intermediate_dtype)
@@ -118,41 +113,37 @@ def _reduce_ep_torch(
 
 
 @triton.jit
-def _reduce_ep_triton_kernel(ep_indx_ptr, output_tensor_ptr, input_tensor_ptr, n_expts, rank: int, TP: tl.constexpr, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
+def _reduce_ep_triton_kernel(ep_indx_ptr, output_tensor_ptr, input_tensor_ptr, n_expts, rank: int, TP: tl.constexpr,
+                             BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
     offs_m = tl.program_id(0) * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_n = tl.arange(0, BLOCK_SIZE_N)
 
     ep_rank = rank // TP
-    ep_indx = tl.load(ep_indx_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], 
-                      mask=offs_m[:, None] < n_expts)
+    ep_indx = tl.load(ep_indx_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], mask=offs_m[:, None] < n_expts)
     mask = tl.reduce_or(ep_indx == ep_rank, axis=1)
-    output = tl.load(output_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], mask=mask[:, None] & (offs_m[:, None] < n_expts))
-    input = tl.load(input_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], mask=mask[:, None] & (offs_m[:, None] < n_expts))
+    output = tl.load(output_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :],
+                     mask=mask[:, None] & (offs_m[:, None] < n_expts))
+    input = tl.load(input_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :],
+                    mask=mask[:, None] & (offs_m[:, None] < n_expts))
     output += input
-    tl.store(output_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], output, mask=mask[:, None] & (offs_m[:, None] < n_expts))
+    tl.store(output_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], output,
+             mask=mask[:, None] & (offs_m[:, None] < n_expts))
 
 
-
-def _reduce_ep_triton(
-    metadata: ReduceScatterMetadata, 
-    input_tensor: torch.Tensor, 
-    output_list: list[torch.Tensor], 
-    world_size: int, 
-    dim: int, 
-    op: dist.ReduceOp.RedOpType, 
-    original_dtype: torch.dtype, 
-    intermediate_dtype: torch.dtype
-) -> torch.Tensor:
+def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tensor, output_list: list[torch.Tensor],
+                      world_size: int, dim: int, op: dist.ReduceOp.RedOpType, original_dtype: torch.dtype,
+                      intermediate_dtype: torch.dtype) -> torch.Tensor:
     if op != dist.ReduceOp.SUM:
         raise NotImplementedError(f"Reduce operation {op} is not implemented.")
     n_tokens = metadata.ep_indx.size(dim)
     other_dims = input_tensor.shape[1:]
     output_tensor = input_tensor.new_zeros((n_tokens, ) + other_dims, dtype=intermediate_dtype)
     for i in range(world_size):
-        _reduce_ep_triton_kernel[(triton.cdiv(n_tokens, 128), )](
-            metadata.ep_indx, output_tensor, output_list[i].to(intermediate_dtype), n_tokens, i, tl.constexpr(metadata.TP),
-            BLOCK_SIZE_M=tl.constexpr(128), BLOCK_SIZE_N=tl.constexpr(other_dims[0] if other_dims else 1)
-        )
+        _reduce_ep_triton_kernel[(triton.cdiv(n_tokens, 128),)](
+            metadata.ep_indx, output_tensor,
+            output_list[i].to(intermediate_dtype), n_tokens, i,
+            tl.constexpr(metadata.TP), BLOCK_SIZE_M=tl.constexpr(128),
+            BLOCK_SIZE_N=tl.constexpr(other_dims[0] if other_dims else 1))
     return output_tensor.to(original_dtype)
 
 
@@ -179,9 +170,11 @@ def reduce_scatter(
             input_list = list(input_tensor.split(metadata.input_split_sizes, dim=0))
             output_list = all_to_all(input_list, dim=0)
             if metadata.comm == CommKernelType.TORCH:
-                return _reduce_ep_torch(metadata, input_tensor, output_list, world_size, dim, op, original_dtype, intermediate_dtype)
+                return _reduce_ep_torch(metadata, input_tensor, output_list, world_size, dim, op, original_dtype,
+                                        intermediate_dtype)
             elif metadata.comm == CommKernelType.TRITON:
-                return _reduce_ep_triton(metadata, input_tensor, output_list, world_size, dim, op, original_dtype, intermediate_dtype)
+                return _reduce_ep_triton(metadata, input_tensor, output_list, world_size, dim, op, original_dtype,
+                                         intermediate_dtype)
             else:
                 raise NotImplementedError(f"CommKernelType {metadata.comm} is not implemented.")
         else:
@@ -498,6 +491,39 @@ def test_reduce_scatter_distributed_with_metadata(monkeypatch):
     result = reduce_scatter(x, metadata=metadata, dim=0)
     torch.testing.assert_close(result, torch.tensor([[1, 2], [1, 2]], dtype=torch.float32))
 
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for Triton kernel execution")
+def test_reduce_ep_triton():
+    device = torch.device("cuda")
+    world_size = 2
+    dim = 0
+    # Assume the current ep rank is 0
+    ep_indx = torch.tensor([[0, 1], [1, 0], [0, 0], [1, 0]], device=device, dtype=torch.int32)
+    metadata = ReduceScatterMetadata(input_split_sizes=[2, 2], ep_indx=ep_indx, EP=2, TP=1,)
+
+    original_dtype = torch.float32
+    intermediate_dtype = torch.float32
+    input_tensor = torch.zeros((4, 2), device=device, dtype=original_dtype)
+    output_list = [
+        torch.tensor(
+            [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]],
+            device=device,
+            dtype=intermediate_dtype,
+        ),
+        torch.tensor(
+            [[9.0, 10.0], [11.0, 12.0], [13.0, 14.0], [15.0, 16.0]],
+            device=device,
+            dtype=intermediate_dtype,
+        ),
+    ]
+    op = dist.ReduceOp.SUM
+
+    expected = _reduce_ep_torch(metadata, input_tensor, output_list, world_size, dim, op, original_dtype,
+                                 intermediate_dtype)
+    actual = _reduce_ep_triton(metadata, input_tensor, output_list, world_size, dim, op, original_dtype,
+                               intermediate_dtype)
+
+    torch.testing.assert_close(actual, expected)
 
 def test_routing_distributed_EP(monkeypatch):
     # Test distributed routing with EP=1 (token_mask should be None)
