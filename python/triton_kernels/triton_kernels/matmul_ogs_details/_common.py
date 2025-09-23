@@ -62,9 +62,7 @@ def _load_tile_attrs(tile_id, num_tiles, unpadded_m, grid_n, M, K, ExptData, Exp
     # unpack and swizzle program ids
     pid_emnk = tile_id
     if XCD_SWIZZLE != 1:
-        # XXX in non-tma version we were not using "// SPLIT_K" below,
-        # probably oversight?
-        pid_emnk = xcd_swizzle(pid_emnk, num_tiles // SPLIT_K, XCD_SWIZZLE)
+        pid_emnk = xcd_swizzle(pid_emnk, num_tiles, XCD_SWIZZLE)
     pid_e = pid_emnk // (unpadded_m * grid_n * SPLIT_K)
     pid_mnk = pid_emnk % (unpadded_m * grid_n * SPLIT_K)
     if SPLIT_K > 1:
