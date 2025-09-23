@@ -23,7 +23,7 @@ class BlackwellMXValueLayout(Layout):
 
         align_to = lambda x, alignment: (x + alignment - 1) // alignment * alignment
 
-        pad_major = align_to(data.shape[major_dim], 64) - data.shape[major_dim]
+        pad_major = align_to(data.shape[major_dim], 128) - data.shape[major_dim]
         pad_minor = align_to(data.shape[minor_dim], 2) - data.shape[minor_dim]
 
         padding = []
