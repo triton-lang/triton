@@ -5,7 +5,7 @@ from triton_kernels.testing import assert_close
 from triton_kernels.testing import assert_equal
 
 
-def init_data(n_tokens, n_expts_tot, dtype=torch.float16, device="cuda"):
+def init_data(n_tokens, n_expts_tot, device, dtype=torch.float16):
     logits = torch.randn((n_tokens, n_expts_tot), dtype=dtype, device=device, requires_grad=True)
     return logits
 
@@ -32,7 +32,7 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, sm_first, use_
     ref_logits = tri_logits.clone().detach().requires_grad_(True)
 
     if use_expt_indx:
-        rand_idx = lambda: torch.randperm(n_expts_tot, device="cuda", dtype=torch.int64)
+        rand_idx = lambda: torch.randperm(n_expts_tot, device=device, dtype=torch.int64)
         tri_expt_indx = torch.stack([rand_idx()[:n_expts_act] for _ in range(n_tokens_pad)])
         tri_expt_indx, _ = torch.sort(tri_expt_indx, dim=1)
         tri_expt_indx[n_tokens_raw:] = -99999  # should not be used
@@ -76,11 +76,11 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, sm_first, use_
     assert_close(ref_logits.grad[:n_tokens_raw], tri_logits.grad[:n_tokens_raw])
 
 
-def bench_routing():
+def bench_routing(device):
     import triton.profiler as proton
     n_tokens = 8192
     n_expts_tot, n_expts_act = 128, 4
-    tri_logits = init_data(n_tokens, n_expts_tot)
+    tri_logits = init_data(n_tokens, n_expts_tot, device)
     proton.start("routing")
     proton.activate()
     for i in range(100):

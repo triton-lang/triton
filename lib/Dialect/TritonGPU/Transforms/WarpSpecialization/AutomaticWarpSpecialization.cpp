@@ -35,9 +35,12 @@ struct AutomaticWarpSpecialization
 void AutomaticWarpSpecialization::runOnOperation() {
   OpPassManager pm;
   pm.addPass(createTritonGPUPartitionScheduling());
-  // TODO: re-enable once the regression is fixed.
-  // pm.addPass(createNVWSInsertAref());
+  pm.addPass(createNVWSInsertAref());
+#if 0
+  pm.addPass(createNVWSInsertTmemAref());
+#else
   pm.addPass(createTritonGPULoadMMASpecialization({numStages}));
+#endif
   pm.addPass(createTritonGPURewritePartitionDependencies());
   // `int-range-optimizations` and SCCP are good at cleaning up loop arithmetic.
   // FIXME: Re-enable integer range analysis once it is fixed.

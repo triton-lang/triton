@@ -89,7 +89,8 @@ template <class T> struct AssignStagePhase {
 
   bool analyzeArefUseInBlock(Block *block) {
     for (auto &op : *block) {
-      if (isValidOp(&op)) {
+      if (isValidOp(&op) ||
+          (isa<ArefBufferOp>(op) && op.getOperand(0) == aref)) {
         return true;
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         if (analyzeArefUseInBlock(forOp.getBody()))
@@ -218,29 +219,42 @@ template <class T> struct AssignStagePhase {
   StagePhase assignArefIndexInBlock(Block *block, StagePhase index) {
     for (auto &op : llvm::make_early_inc_range(*block)) {
       if (auto opT = isValidOp(&op)) {
-        ImplicitLocOpBuilder b(opT.getLoc(), opT);
+        ImplicitLocOpBuilder builder(opT.getLoc(), opT);
+        auto partitionIds = getPartitionIds(&op);
+        auto stageCluster = getStageCluster(&op);
 
-        auto nextStage = b.create<arith::AddIOp>(
-            index.stage, b.create<arith::ConstantIntOp>(1, 32));
+        auto createInto = [&](auto opTy, auto... args) {
+          using ty = decltype(opTy);
+          auto ids = partitionIds;
+          if (ids) {
+            ids->insert(0);
+          }
+          return triton::gpu::createInto<ty>(
+              builder, builder.getLoc(), ids, stageCluster,
+              std::forward<decltype(args)>(args)...);
+        };
+
+        auto nextStage = createInto(arith::AddIOp{}, index.stage,
+                                    createInto(arith::ConstantIntOp{}, 1, 32));
         auto arefBuf = opT.getAref()
                            .template getDefiningOp<nvws::ArefCreateOp>()
                            .getOperand(0);
         auto depth = getArefDepth(cast<MemDescType>(arefBuf.getType()));
 
         auto cnd =
-            b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, nextStage,
-                                    b.create<arith::ConstantIntOp>(depth, 32));
-        auto zero = b.create<arith::ConstantIntOp>(0, 32);
-        index.stage = b.create<arith::SelectOp>(cnd, zero, nextStage);
+            createInto(arith::CmpIOp{}, arith::CmpIPredicate::eq, nextStage,
+                       createInto(arith::ConstantIntOp{}, depth, 32));
+        auto zero = createInto(arith::ConstantIntOp{}, 0, 32);
+        index.stage = createInto(arith::SelectOp{}, cnd, zero, nextStage);
 
-        auto nextPhase = b.create<arith::XOrIOp>(
-            index.phase, b.create<arith::ConstantIntOp>(1, 32));
-        index.phase = b.create<arith::SelectOp>(cnd, nextPhase, index.phase);
+        auto nextPhase = createInto(arith::XOrIOp{}, index.phase,
+                                    createInto(arith::ConstantIntOp{}, 1, 32));
+        index.phase =
+            createInto(arith::SelectOp{}, cnd, nextPhase, index.phase);
 
         index.token = opT.getToken();
         opT.getStageMutable().assign(index.stage);
         opT.getPhaseMutable().assign(index.phase);
-
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
         assignArefIndexInForOp(forOp, index);
       } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
@@ -260,13 +274,16 @@ template <class T> struct AssignStagePhase {
       visited.insert(owner);
       if (auto stageOp = dyn_cast<ArefStageInterface>(owner)) {
         stageOp.setStage(stage);
+      } else if (auto forOp = dyn_cast<scf::ForOp>(owner)) {
+        auto tokPos = tokUse.getOperandNumber() - 3;
+        auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+        auto stagePos = tokToStagePosMap.at(yieldOp.getOperand(tokPos));
+        propagateStage(forOp.getRegionIterArgs()[tokPos],
+                       forOp.getRegionIterArgs()[stagePos], visited);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(owner)) {
         auto tokPos = tokUse.getOperandNumber();
         auto stagePos = tokToStagePosMap.at(token);
         auto parentOp = yieldOp->getParentOp();
-        if (auto forOp = dyn_cast<scf::ForOp>(parentOp))
-          propagateStage(forOp.getRegionIterArgs()[tokPos],
-                         forOp.getRegionIterArgs()[stagePos], visited);
         propagateStage(parentOp->getResult(tokPos),
                        parentOp->getResult(stagePos), visited);
       }
@@ -295,7 +312,7 @@ template <class T> struct AssignStagePhase {
     ImplicitLocOpBuilder b(arefOp.getLoc(), arefOp);
     b.setInsertionPointAfter(arefOp);
     auto depth =
-        cast<MemDescType>(arefOp.getOperand(0).getType()).getShape().front();
+        getArefDepth(cast<MemDescType>(arefOp.getOperand(0).getType()));
     index.stage = b.create<arith::ConstantIntOp>(depth - 1, 32);
 
     static_assert(std::is_same_v<T, ArefPutEnterOp> ||
