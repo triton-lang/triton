@@ -86,7 +86,7 @@ def _p_matmul_ogs(
              X, XPtr, stride_x_z, stride_x_m, stride_x_k, X_TRANSPOSE: tl.constexpr,
              XScale,
              XMxScale, stride_x_mx_z, stride_x_mx_m, stride_x_mx_k,
-             W, WPtr, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
+             W, WPtr, stride_w_e, stride_w_n: tl.constexpr, stride_w_k: tl.constexpr, stride_w_1: tl.constexpr, stride_w_0: tl.constexpr, W_TRANSPOSE: tl.constexpr,
              WScale,
              WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n,
              B, stride_b_e, # Bias
@@ -311,7 +311,19 @@ def _p_matmul_ogs(
 
             # --- load w ---
             if SWIZZLE_MX_VALUE == "BLACKWELL_VALUE":
-                w = unswizzle_mx_value_bw(tl.reshape(W.load([expt_id, off_n // 2, off_k_w // 64, 0, 0]), W.block_shape[1:]))
+                offs_n = off_n // 2 + tl.arange(0, BLOCK_N // 2)
+                offs_k_w = off_k_w // 64 + tl.arange(0, PACKED_BLOCK_K_W // 64)
+
+                WPtrs = WPtr + (
+                    expt_id * stride_w_e +
+                    offs_n[:, None, None, None] * stride_w_n +
+                    offs_k_w[None, :, None, None] * stride_w_k +
+                    tl.arange(0, 2)[None, None, :, None] * 64 +
+                    tl.arange(0, 64)[None, None, None, :]
+                )
+                mask_w = (offs_n[:, None, None, None] < (N + 2 - 1) // 2) & (offs_k_w[None, :, None, None] < (K + 64 - 1) // 64)
+                w = unswizzle_mx_value_bw(tl.load(WPtrs, mask=mask_w, other=0.0))
+                # w = unswizzle_mx_value_bw(tl.reshape(W.load([expt_id, off_n // 2, off_k_w // 64, 0, 0]), W.block_shape[1:]))
             else:
                 w = tl.reshape(W.load([expt_id, off_n, off_k_w]), W.block_shape[1:])
             if W_TRANSPOSE:

@@ -467,7 +467,9 @@ def matmul_ogs(x, w, bias,
     w_scale_strides = w_scale.stride() if w_has_mx and not w_scale_has_tma else (None, None, None)
     w_scale_strides = (0, ) * (3 - len(w_scale_strides)) + w_scale_strides
     # w_strides = (None, None, None) if opt_flags.is_persistent else w_storage.data.stride()
-    w_strides = w_storage.data.stride()[-3:]
+    w_strides = w_storage.data.stride()
+    if len(w_strides) == 3:
+        w_strides = w_strides + (None, None)
     out_matmul_scale_strides = out_matmul_scale.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = (0, ) * (4 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
     # launch kernel
