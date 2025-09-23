@@ -465,6 +465,7 @@ Value goThruScaleDecomposition(Operation *op, int opIdx) {
 // the largest vector size and writes the choice to |result|.
 int deduceTilesPerWarp(TypedValue<RankedTensorType> v, unsigned opIdx,
                        unsigned nonKDim, ArrayRef<unsigned> warpsPerCTA,
+                       bool fromDecomposedScaledDot,
                        SmallVectorImpl<unsigned> *result) {
   std::array<unsigned, 2> chosen{1, 1};
   int vecSize = 1;
@@ -478,16 +479,20 @@ int deduceTilesPerWarp(TypedValue<RankedTensorType> v, unsigned opIdx,
   }
 
   Value scale = v;
-  Operation *defOp = v.getDefiningOp();
-  if (!defOp)
-    return false;
-  if (isa<arith::SelectOp, amdgpu::ScaledUpcastFp8Op,
-          amdgpu::ScaledUpcastFp4Op>(defOp)) {
+  if (fromDecomposedScaledDot) {
+    Operation *defOp = v.getDefiningOp();
+    if (!defOp || !isa<arith::SelectOp, amdgpu::ScaledUpcastFp8Op,
+                       amdgpu::ScaledUpcastFp4Op>(defOp)) {
+      result->assign(chosen.begin(), chosen.end());
+      return vecSize;
+    }
     scale = goThruScaleDecomposition(defOp, opIdx);
-  }
 
-  if (!scale)
-    return false;
+    if (!scale) {
+      result->assign(chosen.begin(), chosen.end());
+      return vecSize;
+    }
+  }
 
   // Source code have flexibility to preshuffle scale tensor to achieve better
   // global load vectorization. That preshuffle scheme is conveyed via some
@@ -628,9 +633,9 @@ public:
     unsigned rank = oldRetType.getRank();
     SmallVector<unsigned, 2> tilesA{1, 1}, tilesB{1, 1}, tilesPerWarp;
     int vecA = deduceTilesPerWarp(cast<TensorValue>(a), 0, mDim, warpsPerTile,
-                                  &tilesA);
+                                  /*fromDecomposedScaledDot=*/true, &tilesA);
     int vecB = deduceTilesPerWarp(cast<TensorValue>(b), 1, mDim, warpsPerTile,
-                                  &tilesB);
+                                  /*fromDecomposedScaledDot=*/true, &tilesB);
     tilesPerWarp = vecA > vecB ? tilesA : tilesB;
     LLVM_DEBUG(llvm::dbgs() << "chosen tilesPerWarp: [" << tilesPerWarp[0]
                             << ", " << tilesPerWarp[1] << "]\n");
@@ -1067,8 +1072,10 @@ public:
         warpsPerTileMFMA(dotOp, oldShape, numWarps, {mDim, nDim});
 
     SmallVector<unsigned, 2> tilesA{1, 1}, tilesB{1, 1}, tilesPerWarp;
-    int vecA = deduceTilesPerWarp(aScale, 0, mDim, warpsPerTile, &tilesA);
-    int vecB = deduceTilesPerWarp(bScale, 1, mDim, warpsPerTile, &tilesB);
+    int vecA = deduceTilesPerWarp(aScale, 0, mDim, warpsPerTile,
+                                  /*fromDecomposedScaledDot=*/false, &tilesA);
+    int vecB = deduceTilesPerWarp(bScale, 1, mDim, warpsPerTile,
+                                  /*fromDecomposedScaledDot=*/false, &tilesB);
     tilesPerWarp = vecA > vecB ? tilesA : tilesB;
     LLVM_DEBUG(llvm::dbgs() << "chosen tilesPerWarp: [" << tilesPerWarp[0]
                             << ", " << tilesPerWarp[1] << "]\n");
