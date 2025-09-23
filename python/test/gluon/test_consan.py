@@ -1162,7 +1162,7 @@ def test_ws_different_warp_sizes(MISSING_BAR, device, run_wrapper):
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4)
 
 
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 8, reason="Requires ampere or newer")
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_async_copy_commits(FAILURE, device, run_wrapper):
     if run_wrapper:
