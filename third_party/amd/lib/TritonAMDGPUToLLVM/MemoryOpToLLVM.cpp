@@ -272,6 +272,11 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     if (!isCDNA(targetInfo.getISAFamily()))
       return failure();
+    // In CDNA we can lower local_barrier to s_waitcnt + s_barrier
+    // - s_waitcnt specifies how many operations to VMEM/LDS can be outstanding
+    //   when the instruction completes.
+    //   In this case we require 0 outstanding LDS operations
+    // - s_barrier syncronizes the execution for the CTA
     constexpr int32_t ldsOnlyBits = ~(0x1f << 8);
     Location loc = op->getLoc();
     ROCDL::SWaitcntOp::create(rewriter, loc, ldsOnlyBits);
