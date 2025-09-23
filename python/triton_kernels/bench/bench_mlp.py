@@ -23,8 +23,8 @@ CUDAGRAPH = False
 @contextmanager
 def get_temp_fpath(out_path, file_name):
     if SAVE_PROFILES:
+        out_path.mkdir(parents=True, exist_ok=True)
         fpath = out_path / file_name
-        fpath.mkdir(parents=True, exist_ok=True)
         yield fpath
     else:
         with tempfile.TemporaryFile() as tmp_file:
