@@ -1199,11 +1199,11 @@ def test_tensor_descriptor_reshape_matmul(dtype_str, device):
         dtype = torch.bfloat16
 
     # test a layout where block_m and block_N are split into two separate chunks.
-    A = torch.rand((M, K), dtype=dtype, device=device)
+    A = torch.rand((M, K), dtype=dtype)
     if dtype == torch.bfloat16:
-        A = A.cpu().float().numpy()
+        A = A.float().numpy()
     else:
-        A = A.cpu().numpy()
+        A = A.numpy()
 
     if dtype_str == "float32":
         A = trunc_to_tf32(A)
@@ -1217,11 +1217,11 @@ def test_tensor_descriptor_reshape_matmul(dtype_str, device):
     A = to_triton(A, device=device, dst_type=dtype_str)
     A_reshaped = to_triton(A_reshaped, device=device, dst_type=dtype_str)
 
-    B = torch.rand((N, K), dtype=dtype, device=device)
+    B = torch.rand((N, K), dtype=dtype)
     if dtype == torch.bfloat16:
-        B = B.cpu().float().numpy()
+        B = B.float().numpy()
     else:
-        B = B.cpu().numpy()
+        B = B.numpy()
 
     if dtype_str == "float32":
         B = trunc_to_tf32(B)
