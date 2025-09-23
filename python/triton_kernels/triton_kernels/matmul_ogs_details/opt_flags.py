@@ -1,8 +1,10 @@
 # isort: off
 # fmt: off
 from dataclasses import dataclass
+
 import triton
 from triton_kernels.target_info import get_cdna_version
+from triton_kernels.tensor import FP4
 import torch
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 from triton_kernels.tensor import bitwidth
@@ -188,7 +190,11 @@ def make_default_opt_flags_nvidia(
     elif enforce_bitwise_invariance:
         block_m = 128
     else:
-        block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
+        if tokens_per_expt <= 64 and routing_data is not None and routing_data.expt_hist is not None:
+            # Ragged and likely memory bound; set the block size higher to minimize loading weights more than once.
+            block_m = max(16, min(triton.next_power_of_2(2 * tokens_per_expt), 64))
+        else:
+            block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
     # block n
     arch = None
     block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
@@ -211,6 +217,10 @@ def make_default_opt_flags_nvidia(
         block_k = constraints["block_k"]
     else:
         block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
+    if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and tokens_per_expt > 1:
+        # Swap block_n and block_k for mxfp4 weights so that block_k is a full cacheline, so long as K is sufficiently large.
+        # TODO: swizzle the HBM layout of the weights instead
+        block_n, block_k = block_k, block_n
     # split_k
     if batch_size > 1:
         split_k = 1  # currently not supported

@@ -37,7 +37,7 @@
 // -----
 
 // expected-error@+2 {{ttg.dot_op kWidth parameter is mandatory for MFMA parent}}
-#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
+#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [32, 32, 8], isTransposed = false}>
 #dot_op = #ttg.dot_op<{opIdx = 1, parent = #mfma}>
 
 // -----
@@ -70,17 +70,17 @@
 // -----
 
 // expected-error@+1 {{version must be in the [0, 4] range}}
-#mfma = #ttg.amd_mfma<{version = 10, warpsPerCTA = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
+#mfma = #ttg.amd_mfma<{version = 10, warpsPerCTA = [1, 1, 1], instrShape = [32, 32, 8], isTransposed = false}>
 
 // -----
 
 // expected-error@+1 {{invalid (mDim, nDim) combination}}
-#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [16, 8], isTransposed = false}>
+#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [16, 8, 8], isTransposed = false}>
 
 // -----
 
-// expected-error@+1 {{element type must be f64, f32, i32, or none}}
-#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [16, 16], isTransposed = false, elementType = f16}>
+// expected-error@+1 {{elementBitWidth must be 32 or 64}}
+#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [16, 16, 16], isTransposed = false, elementBitWidth = 16}>
 
 // -----
 

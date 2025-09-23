@@ -59,6 +59,11 @@ inline std::vector<std::string> split(const std::string &str,
   return result;
 }
 
+inline std::string formatFileLineFunction(const std::string &file, int line,
+                                          const std::string &function) {
+  return file + ":" + std::to_string(line) + "@" + function;
+}
+
 } // namespace proton
 
 #endif // PROTON_UTILITY_STRING_H_
