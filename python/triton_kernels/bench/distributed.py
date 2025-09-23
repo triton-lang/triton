@@ -584,10 +584,10 @@ def test_reduce_ep_triton_large(TP, EP, n_tokens, hidden_size, routes_per_token)
     op = dist.ReduceOp.SUM
 
     def triton_fn():
-        _reduce_ep_triton(metadata, input_tensor, output_list, world_size, 0, op, original_dtype, intermediate_dtype)
+        return _reduce_ep_triton(metadata, input_tensor, output_list, world_size, 0, op, original_dtype, intermediate_dtype)
 
     def torch_fn():
-        _reduce_ep_torch(metadata, input_tensor, output_list, world_size, 0, op, original_dtype, intermediate_dtype)
+        return _reduce_ep_torch(metadata, input_tensor, output_list, world_size, 0, op, original_dtype, intermediate_dtype)
 
     ret = triton_fn()
     ref = torch_fn()
