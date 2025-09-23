@@ -1,6 +1,5 @@
 from enum import Enum
 import os
-import time
 import pytest
 import torch
 import torch.distributed as dist
@@ -141,10 +140,10 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
     assert len(other_dims) == 1, "Only 2D tensors are supported in _reduce_ep_triton."
     output_tensor = input_tensor.new_zeros((n_tokens, ) + other_dims, dtype=intermediate_dtype)
     for i in range(world_size):
-        _reduce_ep_triton_kernel[(triton.cdiv(n_tokens, 128),)](
-            metadata.ep_indx, output_tensor, #
-            output_list[i].to(intermediate_dtype), n_tokens, i, #
-            tl.constexpr(metadata.TP), BLOCK_SIZE_M=128, #
+        _reduce_ep_triton_kernel[(triton.cdiv(n_tokens, 128), )](
+            metadata.ep_indx, output_tensor,  #
+            output_list[i].to(intermediate_dtype), n_tokens, i,  #
+            tl.constexpr(metadata.TP), BLOCK_SIZE_M=128,  #
             BLOCK_SIZE_N=triton.next_power_of_2(other_dims[0]))
     return output_tensor.to(original_dtype)
 
@@ -502,7 +501,7 @@ def test_reduce_ep_triton():
     # Assume the current ep rank is 0
     ep_indx = torch.tensor([[0, 1], [1, 0], [0, 1], [1, 0]], device=device, dtype=torch.int32)
     metadata = ReduceScatterMetadata(
-        input_split_sizes=None, # it doesn't matter in this test since we skipped all_to_all
+        input_split_sizes=None,  # it doesn't matter in this test since we skipped all_to_all
         ep_indx=ep_indx,
         EP=2,
         TP=1,
@@ -533,7 +532,6 @@ def test_reduce_ep_triton():
     torch.testing.assert_close(actual, expected)
 
 
-
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for Triton kernel execution")
 @pytest.mark.parametrize("TP, EP", [(2, 4), (4, 2)])
 @pytest.mark.parametrize("n_tokens", [1024, 2048])
@@ -558,12 +556,11 @@ def test_reduce_ep_triton_large(TP, EP, n_tokens, hidden_size, routes_per_token)
             contrib[mask] = random_values
         output_list.append(contrib)
     metadata = ReduceScatterMetadata(
-        input_split_sizes=None, # it doesn't matter in this test since we skipped all_to_all
+        input_split_sizes=None,  # it doesn't matter in this test since we skipped all_to_all
         ep_indx=ep_indx,
         EP=EP,
         TP=TP,
     )
-
 
     op = dist.ReduceOp.SUM
 
