@@ -51,20 +51,6 @@ class BlackwellMXValueLayout(Layout):
 
         return data
 
-    def swizzle_data_old(self, data):
-        # permutation needed to make `data` row major
-        to_row_major = sorted(range(data.ndim), key=lambda d: (data.stride(d), d))[::-1]
-        # permutation  needed to retrieve original order
-        inv = [0] * data.ndim
-        for i, d in enumerate(to_row_major):
-            inv[d] = i
-        # leading dimension must be padded to be aligned to 128
-        align_dim = lambda x: (x + 128 - 1) // 128 * 128
-        major_dim = data.stride().index(1)
-        pad = align_dim(data.shape[major_dim]) - data.shape[major_dim]
-        data = torch.nn.functional.pad(data.permute(to_row_major), (0, pad)).permute(inv)
-        return data
-
     def unswizzle_data(self, data: torch.Tensor):
         assert data.ndim == len(self.shape) + 2, "Rank mismatch between data and recorded shape"
         transpose = data.stride(-1) != 1
@@ -81,12 +67,6 @@ class BlackwellMXValueLayout(Layout):
 
         return data
 
-    def unswizzle_data_old(self, data: torch.Tensor):
-        # Trim padding along all dims back to the original shape recorded at init.
-        assert data.ndim == len(self.shape), "Rank mismatch between data and recorded shape"
-        sizes = [min(data.size(i), self.shape[i]) for i in range(data.ndim)]
-        return data[tuple(slice(0, s) for s in sizes)]
-
     def swizzle_block_shape(self, block_shape):
         *leading_shape, BLOCK_N, BLOCK_K = block_shape
         return (*leading_shape, BLOCK_N // 2, BLOCK_K // 64, 2, 64)
@@ -95,5 +75,6 @@ class BlackwellMXValueLayout(Layout):
 def unswizzle_mx_value_bw(x):
     shape_0: tl.constexpr = x.shape[0]
     shape_1: tl.constexpr = x.shape[1]
-    x = x.trans(0, 2, 1, 3).reshape(shape_0 * 2, shape_1 * 64)
+    tl.static_assert(x.shape[1] == 1, "unswizzle_mx_value_bw requires shape[1] == 1")
+    x = x.reshape(shape_0 * 2, shape_1 * 64)
     return x
