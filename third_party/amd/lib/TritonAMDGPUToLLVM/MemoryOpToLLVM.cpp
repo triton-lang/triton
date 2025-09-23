@@ -160,11 +160,7 @@ private:
     }
 
     // Determine how many consecutive registers map to consecutive shmem
-    // elements in out-dimension offsetN.  This is our load instruction's vector
-    // width.
-    //
-    // It's OK if the vector width we choose here is wider than the hardware
-    // supports; LLVM will legalize it.
+    // elements in out-dimension offsetN.
     int vecElems = std::min(regToSharedLayout.getNumConsecutiveInOut(),
                             std::numeric_limits<int>::max());
     if (paddedEnc) {
