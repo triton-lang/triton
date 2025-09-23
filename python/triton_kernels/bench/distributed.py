@@ -502,7 +502,7 @@ def test_reduce_ep_triton():
     # Assume the current ep rank is 0
     ep_indx = torch.tensor([[0, 1], [1, 0], [0, 1], [1, 0]], device=device, dtype=torch.int32)
     metadata = ReduceScatterMetadata(
-        input_split_sizes=[2, 2],
+        input_split_sizes=None, # it doesn't matter in this test since we skipped all_to_all
         ep_indx=ep_indx,
         EP=2,
         TP=1,
@@ -545,13 +545,6 @@ def test_reduce_ep_triton_large(TP, EP, n_tokens, hidden_size, routes_per_token)
 
     torch.manual_seed(0)
     ep_indx = torch.randint(0, EP, (n_tokens, routes_per_token), device=device, dtype=torch.int32).contiguous()
-    metadata = ReduceScatterMetadata(
-        input_split_sizes=[n_tokens // world_size] * world_size,
-        ep_indx=ep_indx,
-        EP=EP,
-        TP=TP,
-    )
-
     original_dtype = torch.float16
     intermediate_dtype = torch.float16
     input_tensor = torch.zeros((n_tokens, hidden_size), device=device, dtype=original_dtype)
@@ -564,6 +557,13 @@ def test_reduce_ep_triton_large(TP, EP, n_tokens, hidden_size, routes_per_token)
             random_values = torch.randn(mask.sum().item(), hidden_size, device=device, dtype=intermediate_dtype)
             contrib[mask] = random_values
         output_list.append(contrib)
+    metadata = ReduceScatterMetadata(
+        input_split_sizes=None, # it doesn't matter in this test since we skipped all_to_all
+        ep_indx=ep_indx,
+        EP=EP,
+        TP=TP,
+    )
+
 
     op = dist.ReduceOp.SUM
 
