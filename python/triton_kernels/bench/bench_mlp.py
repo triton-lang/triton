@@ -124,7 +124,7 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
                 for _ in range(100):
                     g.replay()
             else:
-                for _ in range(10):
+                for _ in range(100):
                     bench_fn()
         proton.finalize()
         return roofline.parse_profile(fpath.with_suffix(".hatchet"), useful_op_regex=".*matmul.*")
