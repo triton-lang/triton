@@ -3005,8 +3005,8 @@ struct TritonGPUInferLayoutInterface
       return failure();
 
     // Check whether the encodings are structurally the same.
-    if (!areLayoutsEquivalent(shape, cast<DistributedEncodingTrait>(expected),
-                              cast<DistributedEncodingTrait>(got))) {
+    if (!areLayoutsEquivalent(shape, cast<LayoutEncodingTrait>(expected),
+                              cast<LayoutEncodingTrait>(got))) {
       return emitOptionalError(loc, "Expected result encoding ", expected,
                                " but was ", got);
     }
@@ -3060,8 +3060,8 @@ struct TritonGPUInferLayoutInterface
       Attribute splitEnc;
       auto result = inferSplitOpEncoding(parent, splitEnc, joinedShape, loc);
       if (succeeded(result) &&
-          areLayoutsEquivalent(shape, cast<DistributedEncodingTrait>(splitEnc),
-                               cast<DistributedEncodingTrait>(srcEnc))) {
+          areLayoutsEquivalent(shape, cast<LayoutEncodingTrait>(splitEnc),
+                               cast<LayoutEncodingTrait>(srcEnc))) {
         dstEnc = parent;
         return success();
       }
@@ -3750,8 +3750,8 @@ int triton::gpu::lookupNumCTAs(OpBuilder &rewriter) {
 }
 
 bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
-                                       DistributedEncodingTrait lhs,
-                                       DistributedEncodingTrait rhs) {
+                                       LayoutEncodingTrait lhs,
+                                       LayoutEncodingTrait rhs) {
   auto lhsLL = triton::gpu::toLinearLayout(shape, lhs);
   auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);
   return lhsLL == rhsLL;

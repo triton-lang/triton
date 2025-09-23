@@ -178,8 +178,8 @@ bool isDistributedLayoutSplitMTmemLoadStore(RankedTensorType tensorType,
   if (!layout)
     return false;
   return areLayoutsEquivalent(
-      tensorType.getShape(), cast<DistributedEncodingTrait>(layout),
-      cast<DistributedEncodingTrait>(tensorType.getEncoding()));
+      tensorType.getShape(), cast<LayoutEncodingTrait>(layout),
+      cast<LayoutEncodingTrait>(tensorType.getEncoding()));
 }
 
 SmallVector<DistributedEncodingTrait>
@@ -226,9 +226,10 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
                                        gpu::MemDescType memType) {
   SmallVector<DistributedEncodingTrait> layouts =
       getTmemCompatibleLayouts(op, tensorType, memType);
-  auto enc = cast<DistributedEncodingTrait>(tensorType.getEncoding());
+  auto enc = cast<LayoutEncodingTrait>(tensorType.getEncoding());
   return llvm::any_of(layouts, [&](DistributedEncodingTrait layout) {
-    return areLayoutsEquivalent(tensorType.getShape(), layout, enc);
+    return areLayoutsEquivalent(tensorType.getShape(),
+                                cast<LayoutEncodingTrait>(layout), enc);
   });
 }
 
