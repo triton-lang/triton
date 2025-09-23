@@ -499,7 +499,7 @@ def test_reduce_ep_triton():
     world_size = 2
     dim = 0
     # Assume the current ep rank is 0
-    ep_indx = torch.tensor([[0, 1], [1, 0], [0, 0], [1, 0]], device=device, dtype=torch.int32)
+    ep_indx = torch.tensor([[0, 1], [1, 0], [0, 1], [1, 0]], device=device, dtype=torch.int32)
     metadata = ReduceScatterMetadata(
         input_split_sizes=[2, 2],
         ep_indx=ep_indx,
