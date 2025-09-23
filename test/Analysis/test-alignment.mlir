@@ -7,6 +7,10 @@ tt.func @cast() {
   %0 = arith.extsi %cst : i32 to i64
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = 1}}
   %cst_tensor = arith.constant dense<1> : tensor<128xi32>
+  // expected-remark @below {{contiguity = [4], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %cst_dense_tensor =  arith.constant dense<[1,2,3,4,8,9,10,11]> : tensor<8xi32>
+  // expected-remark @below {{contiguity = [1, 4], divisibility = [1, 2], constancy = [1, 1], constant_value = <none>}}
+  %cst_dense_tensor_2d = arith.constant dense<[[10,11,12,13,18,19,20,21], [20, 21, 22, 23, 28, 29, 30, 31]]> : tensor<2x8xi32>
   // Bitcast preserves axis info for same-width types.
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [128], constant_value = 1}}
   %1 = tt.bitcast %cst_tensor : tensor<128xi32> -> tensor<128xf32>
