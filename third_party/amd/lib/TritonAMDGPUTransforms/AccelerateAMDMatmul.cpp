@@ -516,23 +516,23 @@ public:
     }
 
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        oldRetType.getContext(),
-        /*version*/ mfmaVersion, warpsPerTile, tilesPerWarp,
-        /*instrShape*/ mDim, nDim, /*isTransposed=*/isTransposed, CTALayout,
-        mfmaAccType);
+        oldRetType.getContext(), mfmaVersion, warpsPerTile, {mDim, nDim, kDim},
+        isTransposed, CTALayout, tilesPerWarp,
+        mfmaAccType.getIntOrFloatBitWidth());
 
     // convert accumulator
     auto oldAcc = dotOp.getC();
     auto newAcc = convertAndCastTensor(rewriter, oldAcc, mfmaEnc, mfmaAccType);
 
     // Here is a brief explanation of kWidth, kBase, and kDim
-    // 1. kWidth: the number of elements each thread loads from shared memory in
-    //    preparation for mfma instructions. In theory each thread can issue one
-    //    or more load instructions to load a total of kWidth elements, since
-    //    those elements are not required to be in contiguous addresses in
-    //    shared memory. But in practice, we make sure the kWidth elements can
-    //    be loaded from shared memory by a single ds_read instruction by
-    //    setting vecSize of the sharedLayout to be kWidth.
+    // 1. kWidth: the number of **consecutive** elements each thread loads from
+    //    shared memory in preparation for mfma instructions. In theory, each
+    //    thread can issue multiple ds_read to load elements from non-contiguous
+    //    addresses in shared memory for one mfma instruction, but that won't be
+    //    good for performance. So in practice for better vectorization, we
+    //    make sure the kWidth elements can be loaded from shared memory by a
+    //    single ds_read instruction by setting vecSize of the sharedLayout
+    //    to be kWidth.
     // 2. kDim: the k dimension size of the mfma instruction. E.g. instruction
     //    mfma_32x32x16 has kDim = 16, meaning this mfma instruction can compute
     //    a matmul of operands with shape 32x16 and 16x32.
@@ -701,9 +701,10 @@ public:
 
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
+    auto elementBitWidth = oldRetType.getElementType().getIntOrFloatBitWidth();
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        ctx, /*version=*/mfmaVersion, mfmaWarpsPerCTA, /*instrShape=*/mDim,
-        nDim, /*isTransposed=*/true, ctaLayout, oldRetType.getElementType());
+        ctx, mfmaVersion, mfmaWarpsPerCTA, {mDim, nDim, kDim},
+        /*isTransposed=*/true, ctaLayout, {}, elementBitWidth);
 
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), mfmaEnc);
@@ -999,9 +1000,10 @@ public:
 
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
+    auto elementBitWidth = oldRetType.getElementType().getIntOrFloatBitWidth();
     mlir::Attribute mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        ctx, /*verison=*/mfmaVersion, warpsPerTile, tilesPerWarp, mDim, nDim,
-        /*isTransposed=*/true, ctaLayout, oldRetType.getElementType());
+        ctx, mfmaVersion, warpsPerTile, {mDim, nDim, kDim},
+        /*isTransposed=*/true, ctaLayout, tilesPerWarp, elementBitWidth);
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), mfmaEnc);
