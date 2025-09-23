@@ -120,12 +120,14 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
             with torch.cuda.graph(g):
                 bench_fn()
         proton.start(str(fpath), hook="triton")
-        if CUDAGRAPH:
-            for _ in range(100):
-                g.replay()
-        else:
-            for _ in range(10):
-                bench_fn()
+        with proton.cpu_timed_scope("bench"):
+            if CUDAGRAPH:
+                torch.cuda.synchronize()
+                for _ in range(100):
+                    g.replay()
+            else:
+                for _ in range(10):
+                    bench_fn()
         proton.finalize()
         return roofline.parse_profile(fpath.with_suffix(".hatchet"), useful_op_regex=".*matmul.*")
 
