@@ -47,6 +47,12 @@ class ReduceScatterMetadata:
     comm: CommKernelType = CommKernelType.TORCH
 
 
+TRITON_DTYPE_MAP = {
+    torch.float16: tl.float16,
+    torch.bfloat16: tl.bfloat16,
+    torch.float32: tl.float32,
+}
+
 def _is_distributed_launch() -> bool:
     return int(os.environ.get("WORLD_SIZE", "1")) > 1
 
@@ -113,21 +119,25 @@ def _reduce_ep_torch(metadata: ReduceScatterMetadata, input_tensor: torch.Tensor
 
 
 @triton.jit
-def _reduce_ep_triton_kernel(ep_indx_ptr, output_tensor_ptr, input_tensor_ptr, n_expts, rank: int, TP: tl.constexpr,
+def _reduce_ep_triton_kernel(ep_indx_ptr, output_tensor_ptr, output_list, n_tokens, n_expts, hidden_size,
+                             TP: tl.constexpr, EP: tl.constexpr,
                              BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
     offs_m = tl.program_id(0) * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_n = tl.arange(0, BLOCK_SIZE_N)
+    world_size: tl.constexpr = TP * EP
 
-    ep_rank = rank // TP
-    ep_indx = tl.load(ep_indx_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], mask=offs_m[:, None] < n_expts)
-    mask = tl.reduce_or(ep_indx == ep_rank, axis=1)
-    output = tl.load(output_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :],
-                     mask=mask[:, None] & (offs_m[:, None] < n_expts))
-    input = tl.load(input_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :],
-                    mask=mask[:, None] & (offs_m[:, None] < n_expts))
-    output += input
-    tl.store(output_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], output,
-             mask=mask[:, None] & (offs_m[:, None] < n_expts))
+    for rank in tl.static_range(world_size):
+        input_tensor_ptr = output_list[rank]
+        ep_rank = rank // TP
+        ep_indx_mask = (offs_m[:, None] < n_tokens) and (offs_n[None, :] < n_expts)
+        ep_indx = tl.load(ep_indx_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], mask=ep_indx_mask)
+        mask = tl.reduce_or(ep_indx == ep_rank, axis=1)
+
+        input_output_mask = mask[:, None] & (offs_n[None, :] < hidden_size) & (offs_m[:, None] < n_tokens)
+        output = tl.load(output_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], mask=input_output_mask)
+        input = tl.load(input_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], mask=input_output_mask)
+        output += input
+        tl.store(output_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], output, mask=input_output_mask)
 
 
 def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tensor, output_list: list[torch.Tensor],
@@ -136,15 +146,18 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
     if op != dist.ReduceOp.SUM:
         raise NotImplementedError(f"Reduce operation {op} is not implemented.")
     n_tokens = metadata.ep_indx.size(dim)
+    n_expts = metadata.ep_indx.size(1-dim)
     other_dims = input_tensor.shape[1:]
     assert len(other_dims) == 1, "Only 2D tensors are supported in _reduce_ep_triton."
-    output_tensor = input_tensor.new_zeros((n_tokens, ) + other_dims, dtype=intermediate_dtype)
-    for i in range(world_size):
-        _reduce_ep_triton_kernel[(triton.cdiv(n_tokens, 128), )](
-            metadata.ep_indx, output_tensor,  #
-            output_list[i].to(intermediate_dtype), n_tokens, i,  #
-            tl.constexpr(metadata.TP), BLOCK_SIZE_M=128,  #
-            BLOCK_SIZE_N=triton.next_power_of_2(other_dims[0]))
+    hidden_size = other_dims[0]
+    output_tensor = input_tensor.new_zeros((n_tokens, hidden_size), dtype=original_dtype)
+    triton_intermediate_dtype = TRITON_DTYPE_MAP.get(intermediate_dtype, tl.float32)
+    BLOCK_SIZE_M = 128
+    _reduce_ep_triton_kernel[(triton.cdiv(n_tokens, BLOCK_SIZE_M), )](
+        metadata.ep_indx, output_tensor, tuple(output_list), n_tokens, n_expts, hidden_size, #
+        TP=metadata.TP, EP=metadata.EP, #
+        BLOCK_SIZE_M=BLOCK_SIZE_M,  #
+        BLOCK_SIZE_N=triton.next_power_of_2(other_dims[0]))
     return output_tensor.to(original_dtype)
 
 
@@ -571,8 +584,8 @@ def test_reduce_ep_triton_large(TP, EP, n_tokens, hidden_size, routes_per_token)
     ref = torch_fn()
     torch.testing.assert_close(ret, ref)
 
-    triton_time = triton.testing.do_bench_cudagraph(triton_fn)
-    torch_time = triton.testing.do_bench_cudagraph(torch_fn)
+    triton_time = triton.testing.do_bench(triton_fn)
+    torch_time = triton.testing.do_bench(torch_fn)
     print(f"triton_time: {triton_time*1000:.3f}, torch_time: {torch_time*1000:.3f}")
 
 
