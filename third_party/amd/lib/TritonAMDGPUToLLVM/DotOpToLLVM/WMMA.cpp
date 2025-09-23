@@ -33,27 +33,12 @@ namespace {
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 
-enum class WMMAInstrType : uint8_t {
-  // D = AB + C;
-  // typeof(D) == typeof(C)
-  // typeof(A) == typeof(B)
-  // typeof(D), typeof(A):
-  FP32_FP16,
-  FP32_BF16,
-  FP16_FP16,
-  BF16_BF16,
-  I32_I8,
-  I32_I4,
-  NOT_APPLICABLE,
-};
-
 using ValueTable = std::map<std::tuple<unsigned, unsigned, unsigned>, Value>;
 
-ValueTable
-getValuesFromDotOperandLayoutStruct(ConversionPatternRewriter &rewriter,
-                                    const LLVMTypeConverter *typeConverter,
-                                    Value value, int batch, int n0, int n1,
-                                    int kWidth, Type type, Location loc) {
+ValueTable getValuesFromDotOperandLayoutStruct(
+    ConversionPatternRewriter &rewriter, const LLVMTypeConverter *typeConverter,
+    int wmmaVer, Value value, int batch, int n0, int n1, int kBase, Type type,
+    Location loc) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto elems = unpackLLElements(loc, value, rewriter);
   ValueTable vals;
@@ -61,23 +46,23 @@ getValuesFromDotOperandLayoutStruct(ConversionPatternRewriter &rewriter,
     for (int i = 0; i < n0; i++) {
       for (int j = 0; j < n1; j++) {
         Type elemTy = typeConverter->convertType(type);
-        Type ty = vec_ty(elemTy, kWidth);
+        Type ty = vec_ty(elemTy, kBase);
         Value rawElems = tb.undef(ty);
-        for (int k = 0; k < kWidth; ++k) {
+        for (int k = 0; k < kBase; ++k) {
           rawElems = tb.insert_element(
               ty, rawElems,
-              elems[n0 * n1 * kWidth * b + kWidth * (n1 * i + j) + k],
+              elems[n0 * n1 * kBase * b + kBase * (n1 * i + j) + k],
               tb.i32_val(k));
         }
 
         Value convertedElems;
-        if (type.isF16()) {
+        if (type.isF16() || (wmmaVer == 3 && type.isBF16())) {
           convertedElems = rawElems;
         } else if (type.isBF16()) {
-          convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kWidth));
+          convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kBase));
         } else {
           convertedElems = tb.bitcast(
-              rawElems, vec_ty(i32_ty, kWidth * type.getIntOrFloatBitWidth() /
+              rawElems, vec_ty(i32_ty, kBase * type.getIntOrFloatBitWidth() /
                                            i32_ty.getIntOrFloatBitWidth()));
         }
         vals[{b, i, j}] = convertedElems;
@@ -85,75 +70,6 @@ getValuesFromDotOperandLayoutStruct(ConversionPatternRewriter &rewriter,
     }
   }
   return vals;
-}
-
-WMMAInstrType getWMMAInstrTypeFromDot(DotOp op) {
-  auto aOperandTy = op.getA().getType();
-  auto aTensorTy = cast<RankedTensorType>(aOperandTy);
-  auto aElemTy = aTensorTy.getElementType();
-  auto bOperandTy = op.getB().getType();
-  auto bTensorTy = cast<RankedTensorType>(bOperandTy);
-  auto bElemTy = bTensorTy.getElementType();
-  assert(aElemTy == bElemTy);
-  auto cOperandTy = op.getC().getType();
-  auto cTensorTy = cast<RankedTensorType>(cOperandTy);
-  auto cElemTy = cTensorTy.getElementType();
-  auto dOperandTy = op.getD().getType();
-  auto dTensorTy = cast<RankedTensorType>(dOperandTy);
-  auto dElemTy = dTensorTy.getElementType();
-  assert(cElemTy == dElemTy);
-
-  if (dElemTy.isF32() && aElemTy.isF16())
-    return WMMAInstrType::FP32_FP16;
-  if (dElemTy.isF32() && aElemTy.isBF16())
-    return WMMAInstrType::FP32_BF16;
-  if (dElemTy.isF16() && aElemTy.isF16())
-    return WMMAInstrType::FP16_FP16;
-  if (dElemTy.isBF16() && aElemTy.isBF16())
-    return WMMAInstrType::BF16_BF16;
-  if (dElemTy.isInteger(32) && aElemTy.isInteger(8))
-    return WMMAInstrType::I32_I8;
-  if (dElemTy.isInteger(32) && aElemTy.isInteger(4))
-    return WMMAInstrType::I32_I4;
-
-  return WMMAInstrType::NOT_APPLICABLE;
-}
-
-Value generateROCDLOp(ConversionPatternRewriter &rewriter, Location loc,
-                      WMMAInstrType wmmaType, Value valA, Value valB,
-                      Value valC, Type aElType, Type bElType) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto resType = valC.getType();
-  Value falseFlag = b.int_val(1, false);
-  switch (wmmaType) {
-  case WMMAInstrType::FP32_FP16:
-    return rewriter.create<ROCDL::wmma_f32_16x16x16_f16>(
-        loc, TypeRange{resType}, ValueRange{valA, valB, valC});
-  case WMMAInstrType::FP32_BF16:
-    return rewriter.create<ROCDL::wmma_f32_16x16x16_bf16>(
-        loc, TypeRange{resType}, ValueRange{valA, valB, valC});
-  case WMMAInstrType::FP16_FP16:
-    return rewriter.create<ROCDL::wmma_f16_16x16x16_f16>(
-        loc, TypeRange{resType}, ValueRange{valA, valB, valC, falseFlag});
-  case WMMAInstrType::BF16_BF16:
-    return rewriter.create<ROCDL::wmma_bf16_16x16x16_bf16>(
-        loc, TypeRange{resType}, ValueRange{valA, valB, valC, falseFlag});
-  case WMMAInstrType::I32_I8:
-    return rewriter.create<ROCDL::wmma_i32_16x16x16_iu8>(
-        loc, TypeRange{resType},
-        ValueRange{b.int_val(1, !aElType.isUnsignedInteger()), valA,
-                   b.int_val(1, !bElType.isUnsignedInteger()), valB, valC,
-                   falseFlag});
-  case WMMAInstrType::I32_I4:
-    return rewriter.create<ROCDL::wmma_i32_16x16x16_iu4>(
-        loc, TypeRange{resType},
-        ValueRange{b.int_val(1, !aElType.isUnsignedInteger()), valA,
-                   b.int_val(1, !bElType.isUnsignedInteger()), valB, valC,
-                   falseFlag});
-  default:
-    llvm::report_fatal_error("WMMA data type not supported");
-  }
-  return Value();
 }
 
 std::string getTypeStr(Type ty) {
@@ -164,6 +80,10 @@ std::string getTypeStr(Type ty) {
     scalarName = "f16";
   } else if (ty.isBF16()) {
     scalarName = "bf16";
+  } else if (llvm::isa<Float8E4M3FNType>(ty)) {
+    scalarName = "fp8";
+  } else if (llvm::isa<Float8E5M2Type>(ty)) {
+    scalarName = "bf8";
   } else if (ty.isInteger(32)) {
     scalarName = "i32";
   } else if (ty.isInteger(16)) {
@@ -172,10 +92,6 @@ std::string getTypeStr(Type ty) {
     scalarName = "iu8";
   } else if (ty.isInteger(4)) {
     scalarName = "iu4";
-  } else if (llvm::isa<Float8E4M3FNType>(ty)) {
-    scalarName = "fp8";
-  } else if (llvm::isa<Float8E5M2Type>(ty)) {
-    scalarName = "bf8";
   } else if (auto vecTy = dyn_cast<VectorType>(ty)) {
     auto elemType = vecTy.getElementType();
     auto numElems = vecTy.getNumElements();
@@ -186,80 +102,87 @@ std::string getTypeStr(Type ty) {
   return scalarName;
 }
 
-StringRef getWmmaIntrinsicName(Type aElTy, Type bElTy, Type dElTy, Type valATy,
-                               Type valCTy, bool tied) {
-  static llvm::SmallDenseMap<llvm::hash_code, std::string> intrinsics;
-  using MapInfo = llvm::DenseMapInfo<Type>;
-  llvm::hash_code h = llvm::hash_combine(
-      MapInfo::getHashValue(aElTy), MapInfo::getHashValue(bElTy),
-      MapInfo::getHashValue(dElTy), MapInfo::getHashValue(valATy),
-      MapInfo::getHashValue(valCTy), llvm::hash_value(tied));
-  if (!intrinsics.contains(h)) {
-    std::string name = "llvm.amdgcn.wmma.";
-    name += getTypeStr(dElTy);
-    name += ".16x16x16."; // TODO support 16x16x32 for i4 operands
-    name += getTypeStr(aElTy);
-    if (tied) {
-      name += ".tied";
-    } else {
-      if (isa<FloatType>(aElTy) && aElTy.getIntOrFloatBitWidth() == 8)
-        name += '.' + getTypeStr(bElTy);
-      name += '.' + getTypeStr(valCTy) + "." + getTypeStr(valATy);
-    }
-    intrinsics[h] = name;
-  }
-  return intrinsics[h];
-}
-
-std::string addInstructionSuffix(std::string intrinsicName, unsigned kWidth,
-                                 Type aElTy, Type bElTy, Type dElTy,
-                                 bool tied) {
+std::string addInstructionSuffix(std::string intrinsicName, unsigned kBase,
+                                 unsigned elemsPerVec, Type aElTy, Type bElTy,
+                                 Type dElTy, bool tied) {
   if (tied) {
     intrinsicName += ".tied";
   } else {
     if (isa<FloatType>(aElTy) && aElTy.getIntOrFloatBitWidth() == 8)
       intrinsicName += "." + getTypeStr(bElTy);
-    intrinsicName += ".v" + std::to_string(kWidth) + getTypeStr(dElTy);
-    intrinsicName += ".v" + std::to_string(kWidth) + getTypeStr(aElTy);
+    intrinsicName += ".v" + std::to_string(elemsPerVec) + getTypeStr(dElTy);
+    intrinsicName += ".v" + std::to_string(kBase) + getTypeStr(aElTy);
   }
 
   return intrinsicName;
 }
 
 Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
-                            Value valA, Value valB, Value valC, Type aElType,
-                            Type bElType, Type dElType, StringRef name,
-                            std::optional<bool> tiedLower) {
+                            int wmmaVer, Value valA, Value valB, Value valC,
+                            Type aElType, Type bElType, Type dElType,
+                            StringRef name, std::optional<bool> tiedLower) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   LLVM::FastmathFlagsAttr defaultFlags{};
   SmallVector<Value> operands;
-  if (aElType.isInteger())
-    operands.push_back(b.int_val(1, !aElType.isUnsignedInteger()));
-  operands.push_back(valA);
-  if (bElType.isInteger())
-    operands.push_back(b.int_val(1, !bElType.isUnsignedInteger()));
-  operands.push_back(valB);
-  operands.push_back(valC);
-  // Flag for using low bits in registers. Result could be already packed to
-  // int32. Set low bits by default for now.
-  if (tiedLower.has_value() || 32 / dElType.getIntOrFloatBitWidth() > 1 ||
-      dElType.isInteger(32)) {
-    operands.push_back(b.int_val(1, tiedLower.value_or(false)));
+
+  if (wmmaVer == 1 || wmmaVer == 2) {
+    // arguments for v1 and v2:
+    // int:   %A_sign, %A, %B_sign, %B, %C, [%clamp]
+    // float: %A, %B, %C, [%tied_to_high]
+    if (aElType.isInteger())
+      operands.push_back(b.int_val(1, !aElType.isUnsignedInteger()));
+    operands.push_back(valA);
+
+    if (bElType.isInteger())
+      operands.push_back(b.int_val(1, !bElType.isUnsignedInteger()));
+    operands.push_back(valB);
+
+    operands.push_back(valC);
+
+    if (tiedLower.has_value() || 32 / dElType.getIntOrFloatBitWidth() > 1 ||
+        dElType.isInteger(32))
+      operands.push_back(b.int_val(1, tiedLower.value_or(false)));
+  } else {
+    assert(wmmaVer == 3 && "unexpected wmma version");
+    // arguments for v3:
+    // int:       %A_mod, %A, %B_mod, %B, %C, %A_reuse, %B_reuse
+    // fp16/bf16: %A_mod, %A, %B_mod, %B, %C_mod, %C, %A_reuse, %B_reuse
+    // fp8/bf8:   %A, %B, %C_mod, %C, %A_reuse, %B_reuse
+    if (aElType.isInteger())
+      operands.push_back(b.int_val(1, !aElType.isUnsignedInteger()));
+    else if (aElType.isBF16() || aElType.isF16())
+      operands.push_back(b.int_val(1, 0));
+    operands.push_back(valA);
+
+    if (bElType.isInteger())
+      operands.push_back(b.int_val(1, !bElType.isUnsignedInteger()));
+    else if (bElType.isBF16() || bElType.isF16())
+      operands.push_back(b.int_val(1, 0));
+    operands.push_back(valB);
+
+    if ((bElType.isBF16() || bElType.isF16()) || aElType.isInteger())
+      operands.push_back(b.int_val(16, 0));
+    operands.push_back(valC);
+
+    operands.push_back(b.i1_val(0));
+    operands.push_back(b.i1_val(0));
   }
+
   auto wmmaIntrinsic = LLVM::createLLVMIntrinsicCallOp(
       rewriter, loc, name, valC.getType(), operands);
   return wmmaIntrinsic.getResult(0);
 }
 
 Value generateWMMAOp(ConversionPatternRewriter &rewriter, Location loc,
-                     Value valA, Value valB, Value valC, Type aElType,
-                     Type bElType, Type dElType, StringRef intrinsicName,
-                     std::optional<bool> tiedLower) {
+                     int version, Value valA, Value valB, Value valC,
+                     Type aElType, Type bElType, Type dElType,
+                     StringRef intrinsicName, std::optional<bool> tiedLower) {
   // Independent of wmma version because builtin functions are backward
   // compatible
-  return generateWMMAIntrinsic(rewriter, loc, valA, valB, valC, aElType,
-                               bElType, dElType, intrinsicName, tiedLower);
+  return generateWMMAIntrinsic(rewriter, loc, version, valA, valB, valC,
+                               aElType, bElType, dElType, intrinsicName,
+                               tiedLower);
 }
 
 // Conduct the Dot conversion.
@@ -270,7 +193,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
       cast<RankedTensorType>(op.getResult().getType()).getEncoding());
   int wmmaVer = wmmaLayout.getVersion();
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
-  auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerInstr();
+  auto mnkDim = wmmaLayout.getInstrShape();
 
   auto loc = op.getLoc();
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
@@ -300,13 +223,10 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
 
   auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
   auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
-  int kWidth = aEncoding.getKWidth();
   intrinsicName = maybeWmmaIntrinsic->name;
 
-  auto repA = wmmaLayout.getRepForOperand(aTensorTy.getShape(), aElemTy, kWidth,
-                                          kDim, 0);
-  auto repB = wmmaLayout.getRepForOperand(bTensorTy.getShape(), bElemTy, kWidth,
-                                          kDim, 1);
+  auto repA = wmmaLayout.getRepForOperand(aTensorTy.getShape(), aElemTy, 0);
+  auto repB = wmmaLayout.getRepForOperand(bTensorTy.getShape(), bElemTy, 1);
 
   assert(repA[2] == repB[1]);
 
@@ -318,12 +238,13 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto numRepK = repA[2];
   auto numRepB = repA[0];
 
+  int kBase = maybeWmmaIntrinsic->kBase;
   ValueTable ha = getValuesFromDotOperandLayoutStruct(
-      rewriter, typeConverter, loadedA, numRepB, numRepM, numRepK, kWidth,
-      aTensorTy.getElementType(), loc);
+      rewriter, typeConverter, wmmaVer, loadedA, numRepB, numRepM, numRepK,
+      kBase, aTensorTy.getElementType(), loc);
   ValueTable hb = getValuesFromDotOperandLayoutStruct(
-      rewriter, typeConverter, loadedB, numRepB, numRepN, numRepK, kWidth,
-      aTensorTy.getElementType(), loc);
+      rewriter, typeConverter, wmmaVer, loadedB, numRepB, numRepN, numRepK,
+      kBase, aTensorTy.getElementType(), loc);
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
@@ -339,8 +260,8 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   bool tied = numRepM % 2 == 0 && paddedOutputElemSize == 2;
   int tiedGroup = tied ? 2 : 1;
 
-  intrinsicName = addInstructionSuffix(intrinsicName, kWidth, aElemTy, bElemTy,
-                                       dElemTy, tied);
+  intrinsicName = addInstructionSuffix(intrinsicName, kBase, elemsPerVec,
+                                       aElemTy, bElemTy, dElemTy, tied);
   for (int b = 0; b < numRepB; ++b) {
     for (int m = 0; m < numRepM / tiedGroup; ++m) {
       for (int n = 0; n < numRepN; ++n) {
@@ -364,16 +285,17 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
             auto optTied =
                 tied ? std::optional<bool>(subTied != 0) : std::nullopt;
             acc = wmmaLayout.getIsTransposed()
-                      ? generateWMMAOp(rewriter, loc, hb[{b, n, k}],
+                      ? generateWMMAOp(rewriter, loc, wmmaVer, hb[{b, n, k}],
                                        ha[{b, m * tiedGroup + subTied, k}], acc,
                                        bTensorTy.getElementType(),
                                        aTensorTy.getElementType(), dstElemTy,
                                        intrinsicName, optTied)
-                      : generateWMMAOp(
-                            rewriter, loc, ha[{b, m * tiedGroup + subTied, k}],
-                            hb[{b, n, k}], acc, aTensorTy.getElementType(),
-                            bTensorTy.getElementType(), dstElemTy,
-                            intrinsicName, optTied);
+                      : generateWMMAOp(rewriter, loc, wmmaVer,
+                                       ha[{b, m * tiedGroup + subTied, k}],
+                                       hb[{b, n, k}], acc,
+                                       aTensorTy.getElementType(),
+                                       bTensorTy.getElementType(), dstElemTy,
+                                       intrinsicName, optTied);
           }
         }
         for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {

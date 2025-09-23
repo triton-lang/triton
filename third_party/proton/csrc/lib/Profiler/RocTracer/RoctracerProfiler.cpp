@@ -4,6 +4,7 @@
 #include "Driver/GPU/HipApi.h"
 #include "Driver/GPU/HsaApi.h"
 #include "Driver/GPU/RoctracerApi.h"
+#include "Utility/Env.h"
 
 #include "hip/amd_detail/hip_runtime_prof.h"
 #include "roctracer/roctracer_ext.h"
@@ -191,7 +192,6 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
       : GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~RoctracerProfilerPimpl() = default;
 
-  void setLibPath(const std::string &libPath) override {}
   void doStart() override;
   void doFlush() override;
   void doStop() override;
@@ -372,8 +372,10 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
 }
 
 void RoctracerProfiler::RoctracerProfilerPimpl::doStart() {
-  roctracer::enableDomainCallback<true>(ACTIVITY_DOMAIN_ROCTX, apiCallback,
-                                        nullptr);
+  if (getBoolEnv("TRITON_ENABLE_NVTX", true)) {
+    roctracer::enableDomainCallback<true>(ACTIVITY_DOMAIN_ROCTX, apiCallback,
+                                          nullptr);
+  }
   roctracer::enableDomainCallback<true>(ACTIVITY_DOMAIN_HIP_API, apiCallback,
                                         nullptr);
   // Activity Records
@@ -410,5 +412,14 @@ RoctracerProfiler::RoctracerProfiler() {
 }
 
 RoctracerProfiler::~RoctracerProfiler() = default;
+
+void RoctracerProfiler::doSetMode(
+    const std::vector<std::string> &modeAndOptions) {
+  auto mode = modeAndOptions[0];
+  if (!mode.empty()) {
+    throw std::invalid_argument(
+        "[PROTON] RoctracerProfiler: unsupported mode: " + mode);
+  }
+}
 
 } // namespace proton

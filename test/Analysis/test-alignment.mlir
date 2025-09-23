@@ -929,7 +929,8 @@ tt.func @if_into_for_init(%i1 : i1) {
     scf.yield %cst128 : i32
   }
   scf.for %i = %ret to %cst128 step %cst_64 : i32 {
-    // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
+    // TODO: Wrong divisibility here. Fix it once llvm/llvm-project#158359 lands
+    // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
     %t = arith.addi %i, %c0 : i32
   }
   tt.return
@@ -948,8 +949,19 @@ tt.func @if_into_for_step(%i1 : i1) {
     scf.yield %cst128 : i32
   }
   scf.for %i = %c0 to %cst128 step %ret : i32 {
-    // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
+    // TODO: Wrong divisibility here. Fix it once llvm/llvm-project#158359 lands
+    // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
     %t = arith.addi %i, %c0 : i32
   }
+  tt.return
+}
+
+// -----
+
+tt.func public @load_4d_tensor_kernel(%arg0: tensor<32x32x32x32xi32> {tt.contiguity = dense<[32, 1, 1, 1]> : tensor<4xi32>, tt.divisibility = dense<[16, 1, 1, 1]> : tensor<4xi32>}) attributes {noinline = false} {
+  // expected-remark @below {{contiguity = [1, 1, 1, 32], divisibility = [1, 1, 1, 16], constancy = [1, 1, 1, 1], constant_value = <none>}}
+  %101 = tt.trans %arg0 {order = array<i32: 3, 2, 1, 0>} : tensor<32x32x32x32xi32> -> tensor<32x32x32x32xi32>
+  // expected-remark @below {{contiguity = [1, 32, 1, 1], divisibility = [1, 16, 1, 1], constancy = [1, 1, 1, 1], constant_value = <none>}}
+  %102 = tt.trans %arg0 {order = array<i32: 1, 0, 2, 3>} : tensor<32x32x32x32xi32> -> tensor<32x32x32x32xi32>
   tt.return
 }
