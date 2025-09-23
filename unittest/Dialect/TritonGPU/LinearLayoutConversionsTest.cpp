@@ -3058,30 +3058,30 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps) {
 }
 
 TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs) {
-  auto dot = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
+  auto dot32 = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
                   /*instrShape=*/{16, 16, 32});
-  auto wmmaOperand = wmmaDotOp(dot, 0, 8);
+  auto wmmaOperand32 = wmmaDotOp(dot32, 0, /*kWidth=*/8);
 
-  EXPECT_EQ(toLinearLayout({16, 32}, wmmaOperand),
+  EXPECT_EQ(toLinearLayout({16, 32}, wmmaOperand32),
             LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 16}}},
                           {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}}},
                           {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
                           {S("block"), {}}},
                          {S("dim0"), S("dim1")}));
-  EXPECT_EQ(toLinearLayout({32, 32}, wmmaOperand),
+  EXPECT_EQ(toLinearLayout({32, 32}, wmmaOperand32),
             LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 16}}},
                           {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}}},
                           {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
                           {S("block"), {}}},
                          {S("dim0"), S("dim1")}));
   EXPECT_EQ(
-      toLinearLayout({32, 64}, wmmaOperand),
+      toLinearLayout({32, 64}, wmmaOperand32),
       LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 16}, {0, 32}}},
                     {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}}},
                     {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
                     {S("block"), {}}},
                    {S("dim0"), S("dim1")}));
-  EXPECT_EQ(toLinearLayout({64, 128}, wmmaOperand),
+  EXPECT_EQ(toLinearLayout({64, 128}, wmmaOperand32),
             LinearLayout(
                 {{S("register"),
                   {{0, 1}, {0, 2}, {0, 4}, {0, 16}, {0, 32}, {0, 64}, {32, 0}}},
@@ -3089,182 +3089,100 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs) {
                  {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
+
+  auto dot64 = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
+                  /*instrShape=*/{16, 16, 64});
+  auto wmmaOperand64 = wmmaDotOp(dot64, /*opIdx=*/0, /*kWidth=*/16);
+
+  EXPECT_EQ(
+      toLinearLayout({16, 32}, wmmaOperand64),
+      LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 0}}},
+                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
+                    {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      toLinearLayout({32, 32}, wmmaOperand64),
+      LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 0}}},
+                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
+                    {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      toLinearLayout({32, 64}, wmmaOperand64),
+      LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 32}}},
+                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
+                    {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+  EXPECT_EQ(toLinearLayout({64, 128}, wmmaOperand64),
+            LinearLayout(
+                {{S("register"),
+                  {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 32}, {0, 64}, {32, 0}}},
+                 {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
 }
 
 TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs) {
-  auto dot = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
+  auto dot32 = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
                   /*instrShape=*/{16, 16, 32});
-  auto wmmaOperand = wmmaDotOp(dot, 1, 8);
+  auto wmmaOperand32 = wmmaDotOp(dot32, 1, 8);
 
-  EXPECT_EQ(toLinearLayout({32, 16}, wmmaOperand),
+  EXPECT_EQ(toLinearLayout({32, 16}, wmmaOperand32),
             LinearLayout({{S("register"), {{1, 0}, {2, 0}, {4, 0}, {16, 0}}},
                           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}}},
                           {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
                           {S("block"), {}}},
                          {S("dim0"), S("dim1")}));
-  EXPECT_EQ(toLinearLayout({32, 64}, wmmaOperand),
+  EXPECT_EQ(toLinearLayout({32, 64}, wmmaOperand32),
             LinearLayout({{S("register"), {{1, 0}, {2, 0}, {4, 0}, {16, 0}}},
                           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}}},
                           {S("warp"), {{0, 16}, {0, 32}, {0, 0}}},
                           {S("block"), {}}},
                          {S("dim0"), S("dim1")}));
   EXPECT_EQ(
-      toLinearLayout({64, 64}, wmmaOperand),
+      toLinearLayout({64, 64}, wmmaOperand32),
       LinearLayout({{S("register"), {{1, 0}, {2, 0}, {4, 0}, {16, 0}, {32, 0}}},
                     {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}}},
                     {S("warp"), {{0, 16}, {0, 32}, {0, 0}}},
                     {S("block"), {}}},
                    {S("dim0"), S("dim1")}));
-  EXPECT_EQ(toLinearLayout({64, 128}, wmmaOperand),
+  EXPECT_EQ(toLinearLayout({64, 128}, wmmaOperand32),
             LinearLayout({{S("register"),
                            {{1, 0}, {2, 0}, {4, 0}, {16, 0}, {32, 0}, {0, 64}}},
                           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {8, 0}}},
                           {S("warp"), {{0, 16}, {0, 32}, {0, 0}}},
                           {S("block"), {}}},
                          {S("dim0"), S("dim1")}));
-}
 
-TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs_mxfp4) {
-  auto dot = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
+  auto dot64 = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
                   /*instrShape=*/{16, 16, 64});
-  auto wmmaOperand = wmmaDotOp(dot, /*opIdx=*/0, /*kWidth=*/16);
+  auto wmmaOperand64 = wmmaDotOp(dot64, /*opIdx=*/1, /*kWidth=*/16);
 
   EXPECT_EQ(
-      toLinearLayout({16, 32}, wmmaOperand),
-      LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 0}}},
-                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
-                    {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
-                    {S("block"), {}}},
-                   {S("dim0"), S("dim1")}));
-  EXPECT_EQ(
-      toLinearLayout({32, 32}, wmmaOperand),
-      LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 0}}},
-                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
-                    {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
-                    {S("block"), {}}},
-                   {S("dim0"), S("dim1")}));
-  EXPECT_EQ(
-      toLinearLayout({32, 64}, wmmaOperand),
-      LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 32}}},
-                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
-                    {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
-                    {S("block"), {}}},
-                   {S("dim0"), S("dim1")}));
-  EXPECT_EQ(toLinearLayout({64, 128}, wmmaOperand),
-            LinearLayout(
-                {{S("register"),
-                  {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 32}, {0, 64}, {32, 0}}},
-                 {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
-                 {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
-                 {S("block"), {}}},
-                {S("dim0"), S("dim1")}));
-}
-
-TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs_mxfp8) {
-  auto dot = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
-                  /*instrShape=*/{16, 16, 128});
-  auto wmmaOperand = wmmaDotOp(dot, /*opIdx=*/0, /*kWidth=*/16);
-
-  EXPECT_EQ(
-      toLinearLayout({16, 32}, wmmaOperand),
-      LinearLayout(
-          {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 0}, {0, 0}}},
-           {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
-           {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
-           {S("block"), {}}},
-          {S("dim0"), S("dim1")}));
-  EXPECT_EQ(
-      toLinearLayout({32, 32}, wmmaOperand),
-      LinearLayout(
-          {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 0}, {0, 0}}},
-           {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
-           {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
-           {S("block"), {}}},
-          {S("dim0"), S("dim1")}));
-  EXPECT_EQ(
-      toLinearLayout({32, 64}, wmmaOperand),
-      LinearLayout(
-          {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 32}, {0, 0}}},
-           {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
-           {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
-           {S("block"), {}}},
-          {S("dim0"), S("dim1")}));
-  EXPECT_EQ(toLinearLayout({64, 128}, wmmaOperand),
-            LinearLayout(
-                {{S("register"),
-                  {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 32}, {0, 64}, {32, 0}}},
-                 {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
-                 {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
-                 {S("block"), {}}},
-                {S("dim0"), S("dim1")}));
-}
-
-TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs_mxfp4) {
-  auto dot = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
-                  /*instrShape=*/{16, 16, 64});
-  auto wmmaOperand = wmmaDotOp(dot, /*opIdx=*/1, /*kWidth=*/16);
-
-  EXPECT_EQ(
-      toLinearLayout({32, 16}, wmmaOperand),
+      toLinearLayout({32, 16}, wmmaOperand64),
       LinearLayout({{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 0}}},
                     {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {16, 0}}},
                     {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
                     {S("block"), {}}},
                    {S("dim0"), S("dim1")}));
   EXPECT_EQ(
-      toLinearLayout({32, 64}, wmmaOperand),
+      toLinearLayout({32, 64}, wmmaOperand64),
       LinearLayout({{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 0}}},
                     {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {16, 0}}},
                     {S("warp"), {{0, 16}, {0, 32}, {0, 0}}},
                     {S("block"), {}}},
                    {S("dim0"), S("dim1")}));
   EXPECT_EQ(
-      toLinearLayout({64, 64}, wmmaOperand),
+      toLinearLayout({64, 64}, wmmaOperand64),
       LinearLayout({{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {32, 0}}},
                     {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {16, 0}}},
                     {S("warp"), {{0, 16}, {0, 32}, {0, 0}}},
                     {S("block"), {}}},
                    {S("dim0"), S("dim1")}));
-  EXPECT_EQ(toLinearLayout({128, 128}, wmmaOperand),
-            LinearLayout(
-                {{S("register"),
-                  {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {32, 0}, {64, 0}, {0, 64}}},
-                 {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {16, 0}}},
-                 {S("warp"), {{0, 16}, {0, 32}, {0, 0}}},
-                 {S("block"), {}}},
-                {S("dim0"), S("dim1")}));
-}
-
-TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs_mxfp8) {
-  auto dot = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
-                  /*instrShape=*/{16, 16, 128});
-  auto wmmaOperand = wmmaDotOp(dot, /*opIdx=*/1, /*kWidth=*/16);
-
-  EXPECT_EQ(
-      toLinearLayout({32, 16}, wmmaOperand),
-      LinearLayout(
-          {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 0}, {0, 0}}},
-           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {16, 0}}},
-           {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
-           {S("block"), {}}},
-          {S("dim0"), S("dim1")}));
-  EXPECT_EQ(
-      toLinearLayout({32, 64}, wmmaOperand),
-      LinearLayout(
-          {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 0}, {0, 0}}},
-           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {16, 0}}},
-           {S("warp"), {{0, 16}, {0, 32}, {0, 0}}},
-           {S("block"), {}}},
-          {S("dim0"), S("dim1")}));
-  EXPECT_EQ(
-      toLinearLayout({64, 64}, wmmaOperand),
-      LinearLayout(
-          {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {32, 0}, {0, 0}}},
-           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {16, 0}}},
-           {S("warp"), {{0, 16}, {0, 32}, {0, 0}}},
-           {S("block"), {}}},
-          {S("dim0"), S("dim1")}));
-  EXPECT_EQ(toLinearLayout({128, 128}, wmmaOperand),
+  EXPECT_EQ(toLinearLayout({128, 128}, wmmaOperand64),
             LinearLayout(
                 {{S("register"),
                   {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {32, 0}, {64, 0}, {0, 64}}},
