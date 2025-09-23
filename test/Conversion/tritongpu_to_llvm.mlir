@@ -1,4 +1,11 @@
+<<<<<<< HEAD
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv --convert-triton-gpu-to-llvm -reconcile-unrealized-casts 2>/dev/null | FileCheck %s --dump-input-context 20
+=======
+// RUN: triton-opt %s -split-input-file \
+// RUN:   --allocate-shared-memory-nv --convert-triton-gpu-to-llvm \
+// RUN:   --reconcile-unrealized-casts 2>/dev/null \
+// RUN:   | FileCheck %s --dump-input-context 20
+>>>>>>> 0bf92bfbf ([BACKEND] Update LLVM version to https://github.com/llvm/llvm-project/commit/b8649098a7fcf598406d8d8b7d68891d1444e9c8 (#8263))
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: llvm.func @test_empty_kernel(%arg0: i32, %arg1: !llvm.ptr<1>, %arg2: !llvm.ptr<1>, %arg3: !llvm.ptr<1>)

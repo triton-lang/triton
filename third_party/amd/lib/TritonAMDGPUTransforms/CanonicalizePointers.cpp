@@ -1791,7 +1791,7 @@ public:
     if (auto integerAttr =
             llvm::dyn_cast_or_null<mlir::IntegerAttr>(maybeAttr)) {
       if (integerAttr.getValue() == 0) {
-        rewriter.replaceAllUsesWith(castOp.getResult(0), fatPtrBase);
+        rewriter.RewriterBase::replaceAllUsesWith(castOp.getResult(0), fatPtrBase);
         rewriter.eraseOp(castOp);
         return success();
       }
@@ -1801,7 +1801,7 @@ public:
         fatPtrs.at({fatPtrBase, fatPtrOffset});
     auto newPtr = createTensorPointer(rewriter, fatPtrBase, fatPtrOffset,
                                       castOp.getLoc(), fatPtrAttrs);
-    rewriter.replaceAllUsesWith(newPtr, fatPtrBase);
+    rewriter.RewriterBase::replaceAllUsesWith(newPtr, fatPtrBase);
     rewriter.eraseOp(castOp);
     return success();
   }
