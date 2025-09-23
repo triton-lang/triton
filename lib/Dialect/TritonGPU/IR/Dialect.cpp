@@ -2466,7 +2466,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
 
 LogicalResult DotOperandEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
-    unsigned opIdx, Attribute parent, unsigned kWidth, bool packed) {
+    unsigned opIdx, Attribute parent, unsigned kWidth) {
   if (opIdx != 0 && opIdx != 1) {
     return emitError() << "ttg.dot_op opIdx parameter can be 0 or 1, got: "
                        << opIdx;
