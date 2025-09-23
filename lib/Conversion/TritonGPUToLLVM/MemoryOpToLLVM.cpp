@@ -233,17 +233,17 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
-class LocalMemoryBarrierOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::LocalMemoryBarrierOp> {
+class LocalBarrierOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::LocalBarrierOp> {
 public:
-  LocalMemoryBarrierOpConversion(const LLVMTypeConverter &converter,
-                                 PatternBenefit benefit = 2)
-      : ConvertOpToLLVMPattern<triton::gpu::LocalMemoryBarrierOp>(converter,
-                                                                  benefit) {}
-  using OpAdaptor = typename triton::gpu::LocalMemoryBarrierOp::Adaptor;
+  LocalBarrierOpConversion(const LLVMTypeConverter &converter,
+                           PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::gpu::LocalBarrierOp>(converter,
+                                                            benefit) {}
+  using OpAdaptor = typename triton::gpu::LocalBarrierOp::Adaptor;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::LocalMemoryBarrierOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::LocalBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
     rewriter.replaceOpWithNewOp<mlir::gpu::BarrierOp>(op);
@@ -263,5 +263,5 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
-  patterns.add<LocalMemoryBarrierOpConversion>(typeConverter, benefit);
+  patterns.add<LocalBarrierOpConversion>(typeConverter, benefit);
 }

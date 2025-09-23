@@ -257,19 +257,18 @@ private:
   const AMD::TargetInfo &targetInfo;
 };
 
-class LocalMemoryBarrierOpConversion
-    : public ConvertOpToLLVMPattern<triton::gpu::LocalMemoryBarrierOp> {
+class LocalBarrierOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::LocalBarrierOp> {
 public:
-  LocalMemoryBarrierOpConversion(const LLVMTypeConverter &converter,
-                                 const AMD::TargetInfo &targetInfo,
-                                 PatternBenefit benefit = 2)
-      : ConvertOpToLLVMPattern<triton::gpu::LocalMemoryBarrierOp>(converter,
-                                                                  benefit),
+  LocalBarrierOpConversion(const LLVMTypeConverter &converter,
+                           const AMD::TargetInfo &targetInfo,
+                           PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::gpu::LocalBarrierOp>(converter, benefit),
         targetInfo(targetInfo) {}
-  using OpAdaptor = typename triton::gpu::LocalMemoryBarrierOp::Adaptor;
+  using OpAdaptor = typename triton::gpu::LocalBarrierOp::Adaptor;
 
   LogicalResult
-  matchAndRewrite(triton::gpu::LocalMemoryBarrierOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::gpu::LocalBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     if (!isCDNA(targetInfo.getISAFamily()))
       return failure();
@@ -298,6 +297,6 @@ void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
   patterns.add<
       TransLocalLoadOpConversion<triton::amdgpu::LocalLoadPackedTransposedOp>>(
       typeConverter, targetInfo, benefit);
-  patterns.add<LocalMemoryBarrierOpConversion>(typeConverter, targetInfo,
-                                               barrierBenefit);
+  patterns.add<LocalBarrierOpConversion>(typeConverter, targetInfo,
+                                         barrierBenefit);
 }
