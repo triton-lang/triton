@@ -1182,6 +1182,8 @@ def test_tensor_descriptor_reshape_matmul(dtype_str, device):
     BLOCK_SIZE_N = 64
     BLOCK_SIZE_K = 64
 
+    torch.manual_seed(42)
+
     # trunc float32 to avoid large precision differences.
     def trunc_to_tf32(tensor):
         int_view = tensor.view(np.uint32)
@@ -1191,7 +1193,7 @@ def test_tensor_descriptor_reshape_matmul(dtype_str, device):
         return tf32_simulated
 
     # test a layout where block_m and block_N are split into two separate chunks.
-    A = numpy_random((M, K), dtype_str) - 0.5
+    A = numpy_random((M, K), dtype_str) - 0.25
     if dtype_str == "float32":
         A = trunc_to_tf32(A)
 
@@ -1204,7 +1206,7 @@ def test_tensor_descriptor_reshape_matmul(dtype_str, device):
     A = to_triton(A, device=device, dst_type=dtype_str)
     A_reshaped = to_triton(A_reshaped, device=device, dst_type=dtype_str)
 
-    B = numpy_random((N, K), dtype_str) - 0.5
+    B = numpy_random((N, K), dtype_str) - 0.25
     if dtype_str == "float32":
         B = trunc_to_tf32(B)
 
