@@ -16,8 +16,9 @@ from contextlib import contextmanager
 import tempfile
 
 
-# Toggle
+# Toggles
 SAVE_PROFILES = False
+CUDAGRAPH = False
 
 @contextmanager
 def get_temp_fpath(out_path, rank, batch_per_expt):
@@ -89,29 +90,42 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
         x_dtype = torch.float8_e4m3fnuz
 
     input_x = torch.randn((batch // DP, dim1), device=dev)
+    input_x = input_x.to(x_dtype)
+    xg = input_x.to(wg.dtype if n_expts_tot > 1 else input_x.dtype)
+
+    def bench_fn():
+        if n_expts_tot > 1:  # sparse
+            with proton.scope("logits"):
+                logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
+            with proton.scope("routing"):
+                x, rdata, gather_indx, scatter_indx, metadata = triton_dist.routing(input_x, logits, n_expts_act, EP=EP,
+                                                                                    TP=TP)
+        else:  # dense
+            with proton.scope("all_gather"):
+                x = triton_dist.all_gather(input_x, dim=0)
+            rdata, gather_indx, scatter_indx, metadata = None, None, None, None
+        if x.nelement() > 0:
+            with proton.scope("mlp1"):
+                x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, fused_activation=act)
+            with proton.scope("mlp2"):
+                x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=scatter_indx, precision_config=pc2)
+        with proton.scope("reduce_scatter"):
+            x = triton_dist.reduce_scatter(x, metadata=metadata, dim=0)
+
     # run layer
     with get_temp_fpath(out_path, rank, batch_per_expt) as fpath:
+        if CUDAGRAPH:
+            g = torch.cuda.CUDAGraph()
+            # warmup
+            with torch.cuda.graph(g):
+                bench_fn()
         proton.start(str(fpath), hook="triton")
-        input_x = input_x.to(x_dtype)
-        xg = input_x.to(wg.dtype if n_expts_tot > 1 else input_x.dtype)
-        for i in range(100):
-            if n_expts_tot > 1:  # sparse
-                with proton.scope("logits"):
-                    logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-                with proton.scope("routing"):
-                    x, rdata, gather_indx, scatter_indx, metadata = triton_dist.routing(input_x, logits, n_expts_act, EP=EP,
-                                                                                        TP=TP)
-            else:  # dense
-                with proton.scope("all_gather"):
-                    x = triton_dist.all_gather(input_x, dim=0)
-                rdata, gather_indx, scatter_indx, metadata = None, None, None, None
-            if x.nelement() > 0:
-                with proton.scope("mlp1"):
-                    x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, fused_activation=act)
-                with proton.scope("mlp2"):
-                    x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=scatter_indx, precision_config=pc2)
-            with proton.scope("reduce_scatter"):
-                x = triton_dist.reduce_scatter(x, metadata=metadata, dim=0)
+        if CUDAGRAPH:
+            for _ in range(100):
+                g.replay()
+        else:
+            for _ in range(10):
+                bench_fn()
         proton.finalize()
         return roofline.parse_profile(fpath.with_suffix(".hatchet"), useful_op_regex=".*matmul.*")
 
@@ -145,6 +159,7 @@ if __name__ == "__main__":
     rank, world_size = triton_dist.setup()
     parser = argparse.ArgumentParser()
     parser.add_argument("--save-profiles", action="store_true", default=False)
+    parser.add_argument("--cudagraph", action="store_true", default=False)
     if world_size > 1:
         # Running all workloads at once may cause OOM on some GPUs such as H100 80GB.
         # Thus we request users to run each workload separately.
@@ -163,6 +178,7 @@ if __name__ == "__main__":
         parser.add_argument("--quantized", action="store_true", default=False)
     args = parser.parse_args()
     SAVE_PROFILES = args.save_profiles
+    CUDAGRAPH = args.cudagraph
     if world_size > 1:
         dtypes = quantized_dtypes if args.quantized else dense_dtypes
         if args.name == "dense":
