@@ -64,6 +64,9 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
   Value stride = b.int_val(16, 0);
   if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
                          targetInfo.getISAFamily())) {
+#if 0
+    // Turn off cache-swizzling for the time being as we don't know for sure
+    // the constraints imposed from the hardware side.
     if (blockStride) {
       Value enableSwizzle = b.int_val(16, 16384);
       Value mask14b = b.int_val(16, 16383);
@@ -78,6 +81,7 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
       // stride[14] = swizzle enabling bit
       stride = rewriter.create<LLVM::OrOp>(loc, enableSwizzle, strideSat);
     }
+#endif
   }
 
   Value flagsConst = b.int_val(32, flags);
