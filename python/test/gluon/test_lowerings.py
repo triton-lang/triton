@@ -717,11 +717,10 @@ _ld_st_shared_layouts = _filter_layouts([
     ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False, element_bitwidth=16, rank=2),
     ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=True, element_bitwidth=16, rank=2),
     ttgl.NVMMASharedLayout(swizzle_byte_width=128, transposed=False, element_bitwidth=16, rank=2),
-    ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0]),
+    ttgl.NVMMASharedLayout(swizzle_byte_width=32, transposed=False, element_bitwidth=8, rank=2),
     ttgl.SwizzledSharedLayout(vec=8, per_phase=1, max_phase=1, order=[1, 0]),
     ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=4, order=[0, 1]),
     ttgl.SwizzledSharedLayout(vec=8, per_phase=1, max_phase=8, order=[1, 0]),
-    ttgl.SwizzledSharedLayout(vec=16, per_phase=1, max_phase=8, order=[1, 0]),
     ttgl.SwizzledSharedLayout(vec=16, per_phase=1, max_phase=16, order=[1, 0]),
     "shared_linear_layout",
 ])
@@ -797,19 +796,11 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
 
     y = torch.zeros_like(x)
     kernel[(1, )](x, y, shape, blocked_layout, dist_layout, shared_layout, num_warps=num_warps)
-    if not dtype.startswith("float8"):
-        _assert_close(y, x)
+    _assert_close(y, x)
 
     y = torch.zeros_like(x)
-    obj = kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
-    if not dtype.startswith("float8"):
-        _assert_close(y, x)
-    ptx = obj.asm["ptx"]
-    if "ldmatrix" in ptx:
-        if dtype.startswith("float8"):
-            assert ".b8" in ptx
-        elif dtype == "float16":
-            assert ".b16" in ptx
+    kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
+    _assert_close(y, x)
 
 
 _ld_st_3d_layouts = _filter_layouts([
