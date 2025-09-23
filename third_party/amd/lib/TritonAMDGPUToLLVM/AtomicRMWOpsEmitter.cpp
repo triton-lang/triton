@@ -405,15 +405,28 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   Value done = b.icmp_eq(chosen, rmwPtr);
   Value mask = targetInfo.ballot(rewriter, loc, i64_ty, done);
   Value start = loopBody->getArgument(0);
+  NamedAttribute noundef = rewriter.getNamedAttr(
+      LLVM::LLVMDialect::getNoUndefAttrName(), rewriter.getUnitAttr());
+  NamedAttribute lowRange = rewriter.getNamedAttr(
+      LLVM::LLVMDialect::getRangeAttrName(),
+      LLVM::ConstantRangeAttr::get(rewriter.getContext(), APInt::getZero(32),
+                                   APInt(32, 32)));
+  NamedAttribute highRange = rewriter.getNamedAttr(
+      LLVM::LLVMDialect::getRangeAttrName(),
+      LLVM::ConstantRangeAttr::get(rewriter.getContext(), APInt::getZero(32),
+                                   APInt(32, 64)));
   Value cnt = b.trunc(i32_ty, generatePopcount64(rewriter, mask));
   Value maskLo = b.trunc(i32_ty, mask);
-  Value mbcntLoRes =
-      ROCDL::MbcntLoOp::create(rewriter, loc, i32_ty, maskLo, b.i32_val(0),
-                               /*arg_attrs=*/{}, /*res_attrs=*/{});
+  Value mbcntLoRes = ROCDL::MbcntLoOp::create(
+      rewriter, loc, i32_ty, maskLo, b.i32_val(0),
+      /*arg_attrs=*/{}, /*res_attrs=*/
+      rewriter.getArrayAttr(rewriter.getDictionaryAttr({noundef, lowRange})));
   Value maskHi = b.trunc(i32_ty, b.lshr(mask, b.i64_val(32)));
-  Value idx =
-      ROCDL::MbcntHiOp::create(rewriter, loc, i32_ty, maskHi, mbcntLoRes,
-                               /*arg_attrs=*/{}, /*res_attrs=*/{});
+  Value idx = ROCDL::MbcntHiOp::create(
+      rewriter, loc, i32_ty, maskHi, mbcntLoRes,
+      /*arg_attrs=*/{},
+      /*res_attrs=*/
+      rewriter.getArrayAttr(rewriter.getDictionaryAttr({noundef, highRange})));
   Value base = b.add(start, cnt);
   Value leader = b.icmp_eq(idx, b.i32_val(0));
   cnt = b.sub(cnt, idx);
