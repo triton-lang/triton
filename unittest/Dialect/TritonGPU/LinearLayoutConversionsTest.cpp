@@ -99,8 +99,8 @@ public:
   }
 
   DotOperandEncodingAttr wmmaDotOp(AMDWmmaEncodingAttr wmma, unsigned opIdx,
-                                   unsigned kWidth, bool packed = false) {
-    return DotOperandEncodingAttr::get(&ctx, opIdx, wmma, kWidth, packed);
+                                   unsigned kWidth) {
+    return DotOperandEncodingAttr::get(&ctx, opIdx, wmma, kWidth);
   }
 
   SliceEncodingAttr slice(DistributedEncodingTrait parent, int dim) {
@@ -3124,11 +3124,11 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs) {
                          {S("dim0"), S("dim1")}));
 }
 
-TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs_packed) {
+TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs_mxfp4) {
   auto dot = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
-                  /*instrShape=*/{16, 16, 128});
+                  /*instrShape=*/{16, 16, 64});
   auto wmmaOperand =
-      wmmaDotOp(dot, /*opIdx=*/0, /*kWidth=*/16, /*packed=*/true);
+      wmmaDotOp(dot, /*opIdx=*/0, /*kWidth=*/16);
 
   EXPECT_EQ(
       toLinearLayout({16, 32}, wmmaOperand),
@@ -3161,11 +3161,51 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs_packed) {
                 {S("dim0"), S("dim1")}));
 }
 
-TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs_packed) {
+TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs_mxfp8) {
   auto dot = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
                   /*instrShape=*/{16, 16, 128});
   auto wmmaOperand =
-      wmmaDotOp(dot, /*opIdx=*/1, /*kWidth=*/16, /*packed=*/true);
+      wmmaDotOp(dot, /*opIdx=*/0, /*kWidth=*/16);
+
+  EXPECT_EQ(
+      toLinearLayout({16, 32}, wmmaOperand),
+      LinearLayout(
+          {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 0}, {0, 0}}},
+           {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
+           {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      toLinearLayout({32, 32}, wmmaOperand),
+      LinearLayout(
+          {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 0}, {0, 0}}},
+           {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
+           {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      toLinearLayout({32, 64}, wmmaOperand),
+      LinearLayout(
+          {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 32}, {0, 0}}},
+           {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
+           {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+  EXPECT_EQ(toLinearLayout({64, 128}, wmmaOperand),
+            LinearLayout(
+                {{S("register"),
+                  {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 32}, {0, 64}, {32, 0}}},
+                 {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs_mxfp4) {
+  auto dot = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
+                  /*instrShape=*/{16, 16, 64});
+  auto wmmaOperand =
+      wmmaDotOp(dot, /*opIdx=*/1, /*kWidth=*/16);
 
   EXPECT_EQ(
       toLinearLayout({32, 16}, wmmaOperand),
@@ -3197,6 +3237,47 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs_packed) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
 }
+
+TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs_mxfp8) {
+  auto dot = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
+                  /*instrShape=*/{16, 16, 128});
+  auto wmmaOperand =
+      wmmaDotOp(dot, /*opIdx=*/1, /*kWidth=*/16);
+
+  EXPECT_EQ(
+      toLinearLayout({32, 16}, wmmaOperand),
+      LinearLayout(
+          {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 0}, {0, 0}}},
+           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {16, 0}}},
+           {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      toLinearLayout({32, 64}, wmmaOperand),
+      LinearLayout(
+          {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 0}, {0, 0}}},
+           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {16, 0}}},
+           {S("warp"), {{0, 16}, {0, 32}, {0, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      toLinearLayout({64, 64}, wmmaOperand),
+      LinearLayout(
+          {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {32, 0}, {0, 0}}},
+           {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {16, 0}}},
+           {S("warp"), {{0, 16}, {0, 32}, {0, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+  EXPECT_EQ(toLinearLayout({128, 128}, wmmaOperand),
+            LinearLayout(
+                {{S("register"),
+                  {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {32, 0}, {64, 0}, {0, 64}}},
+                 {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {16, 0}}},
+                 {S("warp"), {{0, 16}, {0, 32}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+}
+
 
 TEST_F(LinearLayoutConversionsTest, SliceOfBlocked) {
   auto parent = blocked({2, 4}, {4, 2}, {2, 2}, {2, 2}, {2, 2}, {1, 0}, {1, 0});

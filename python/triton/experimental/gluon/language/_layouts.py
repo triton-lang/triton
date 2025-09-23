@@ -205,28 +205,24 @@ class DotOperandLayout(DistributedLayout):
         operand_index (int): 0 for LHS and 1 for RHS of the dot operation.
         parent (DistributedLayout): The parent layout, representing the MMA.
         k_width (int): Number of elements per 32-bits.
-        packed (Optional[bool]): Whether this is for fp4 operand where 2 elements are packed in uint8. Defaults to False.
     """
     operand_index: int
     parent: DistributedLayout
     k_width: int
-    packed: Optional[bool] = None
 
     def __post_init__(self):
         super().__setattr__("operand_index", _unwrap_if_constexpr(self.operand_index))
         super().__setattr__("parent", _unwrap_if_constexpr(self.parent))
         super().__setattr__("k_width", _unwrap_if_constexpr(self.k_width))
-        super().__setattr__("packed", _unwrap_if_constexpr(self.packed) if self.packed is not None else False)
 
     def _to_ir(self, builder):
-        return builder.get_dot_operand_layout(self.operand_index, self.parent._to_ir(builder), self.k_width,
-                                              self.packed)
+        return builder.get_dot_operand_layout(self.operand_index, self.parent._to_ir(builder), self.k_width)
 
     def mangle(self) -> str:
-        return f"DO{self.operand_index}_{self.parent.mangle()}_{self.k_width}_{self.packed}DO"
+        return f"DO{self.operand_index}_{self.parent.mangle()}_{self.k_width}DO"
 
     def __hash__(self):
-        return hash((self.operand_index, self.parent, self.k_width, self.packed))
+        return hash((self.operand_index, self.parent, self.k_width))
 
 
 @dataclass(frozen=True, eq=True)

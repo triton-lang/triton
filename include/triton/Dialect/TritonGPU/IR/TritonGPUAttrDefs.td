@@ -1491,8 +1491,6 @@ kWidth defines number of consecutive elements stored by one thread along k dimen
 Some layouts do not use this parameter, either because they have a fixed number of
 elements along the K dim, or they use all elements of the tensor along the K dim.
 
-packed indicates whether this is for fp4 operand where 2 elements are packed in uint8.
-
 # WGMMA Notes
 We require kWidth to be provided for Hopper because the dtype at loading might be
 different from the dtype at WGMMA, due to casting. The kWidth is determined by the
@@ -1519,26 +1517,20 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
     ins
     "unsigned":$opIdx,
     "Attribute":$parent,
-    DefaultValuedParameter<"unsigned", "0">:$kWidth,
-    DefaultValuedParameter<"bool", "false">:$packed
+    DefaultValuedParameter<"unsigned", "0">:$kWidth
   );
 
   let builders = [
     AttrBuilder<(ins "unsigned":$opIdx,
                      "Attribute":$parent,
-                     "unsigned":$kWidth), [{
-      return $_get($_ctxt, opIdx, parent, kWidth, false);
-    }]>,
-    AttrBuilder<(ins "unsigned":$opIdx,
-                     "Attribute":$parent,
                      "Type":$eltTy), [{
       NvidiaMmaEncodingAttr parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent);
       if (!parentAttr || (!parentAttr.isAmpere() && !parentAttr.isHopper()))
-        return $_get(context, opIdx, parent, 0, false);
+        return $_get(context, opIdx, parent, 0);
       // For MMAV2 and V3
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
       unsigned kWidth = std::max(32 / bitwidth, 1u);
-      return $_get(context, opIdx, parent, kWidth, false);
+      return $_get(context, opIdx, parent, kWidth);
     }]>
   ];
 
