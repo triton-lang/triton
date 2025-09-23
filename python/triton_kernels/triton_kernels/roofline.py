@@ -61,7 +61,7 @@ def compute_roofline(*args, \
     def inject_proxy_and_call(val, args, kwargs):
         args_list = list(args)
         args_list.insert(pos_index, val)
-        return bench_fn(*args_list, out_path=out_path, **kwargs)
+        return bench_fn(*args_list, out_path=out_path.parent, **kwargs)
 
     # collect performance data
     perfs = []
