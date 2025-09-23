@@ -93,10 +93,8 @@ void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp) {
     if (!triton::nvidia_gpu::areScalesPipelineable(scaledOp, forOp)) {
       isAsync = false;
     }
-    if (!isOperandPipelineable(scaledOp.getAScale(), forOp)) {
-      isAsync = false;
-    }
-    if (!isOperandPipelineable(scaledOp.getBScale(), forOp)) {
+    if (!isOperandPipelineable(scaledOp.getAScale(), forOp) ||
+        !isOperandPipelineable(scaledOp.getBScale(), forOp)) {
       isAsync = false;
     }
   }
