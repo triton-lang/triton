@@ -235,8 +235,12 @@ struct TmemAccessDag {
   }
 
   static TmemAccessDag build(TMEMAllocOp allocOp) {
-    TmemAccessDag accessDag(std::make_unique<Node>(
-        allocOp, nullptr, getPartitionId(allocOp), nullptr));
+    std::optional<PartitionId> partitionId;
+    if (allocOp.getSrc()) {
+      partitionId = getPartitionId(allocOp);
+    }
+    TmemAccessDag accessDag(
+        std::make_unique<Node>(allocOp, nullptr, partitionId, nullptr));
     accessDag.op2dagMap.insert({allocOp, accessDag.getRootNode()});
 
     if (allocOp.getSrc()) {
@@ -582,6 +586,10 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
 
   auto stageCluster = getStageCluster(allocOp);
   auto partitionId = accessDag.getRootNode()->partitionId;
+  if (!allocOp.getSrc() && outerWsLoop) {
+    // if tmem_alloc inside ws-loop, the first owner is that of the first user
+    partitionId = accessDag.getRootNode()->user->partitionId;
+  }
 
   TMEMAref state(
       arefOp, allocOp.getResult(),
@@ -633,6 +641,7 @@ LogicalResult runOnFunction(triton::FuncOp funcOp) {
 
   for (auto &accessDag : tmemDags) {
     LLVM_DEBUG({ accessDag.printDag(llvm::dbgs()); });
+    accessDag.printDag(llvm::errs());
     auto partitions = accessDag.collectPartitions(accessDag.getRootNode());
     assert(partitions.size() <= 2 && "expecting at most 2 partitions");
     if (!partitions.empty())
