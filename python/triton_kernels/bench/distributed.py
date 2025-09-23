@@ -549,12 +549,9 @@ def test_reduce_ep_triton_large(TP, EP, n_tokens, hidden_size, routes_per_token)
     output_list = []
     for rank in range(world_size):
         ep_rank = rank // TP
-        contrib = torch.zeros((n_tokens, hidden_size), device=device, dtype=intermediate_dtype)
         mask = torch.any(ep_indx == ep_rank, dim=1)
-        if mask.any():
-            random_values = torch.randn(mask.sum().item(), hidden_size, device=device, dtype=intermediate_dtype)
-            contrib[mask] = random_values
-        output_list.append(contrib)
+        random_values = torch.randn(mask.sum().item(), hidden_size, device=device, dtype=intermediate_dtype)
+        output_list.append(random_values)
     metadata = ReduceScatterMetadata(
         input_split_sizes=None,  # it doesn't matter in this test since we skipped all_to_all
         ep_indx=ep_indx,
