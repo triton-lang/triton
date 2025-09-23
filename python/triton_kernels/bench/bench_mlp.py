@@ -21,19 +21,15 @@ CUDAGRAPH = False
 
 
 @contextmanager
-def get_temp_fpath(out_path, batch_per_expt):
+def get_temp_fpath(out_path, file_name):
     if SAVE_PROFILES:
-        fpath = out_path / f"b{batch_per_expt}"
+        fpath = out_path / file_name
         fpath.mkdir(parents=True, exist_ok=True)
-    else:
-        fpath = Path(tempfile.mkdtemp()) / f"b{batch_per_expt}"
-    try:
         yield fpath
-    finally:
-        if not SAVE_PROFILES:
-            # Remove temp folder
-            import shutil
-            shutil.rmtree(fpath.parent)
+    else:
+        with tempfile.TemporaryFile() as tmp_file:
+            fpath = Path(tmp_file.name)
+            yield fpath
 
 
 def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, out_path):
@@ -114,7 +110,7 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
             x = triton_dist.reduce_scatter(x, metadata=metadata, dim=0)
 
     # run layer
-    with get_temp_fpath(out_path / f"{rank}/{x_dtype}x-{w_dtype}w-TP{TP}-EP{EP}", batch_per_expt) as fpath:
+    with get_temp_fpath(out_path, f"{rank}-{x_dtype}x-{w_dtype}w-TP{TP}-EP{EP}-B{batch_per_expt}") as fpath:
         if CUDAGRAPH:
             g = torch.cuda.CUDAGraph()
             # warmup
