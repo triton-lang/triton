@@ -468,9 +468,9 @@ int deduceTilesPerWarp(TypedValue<RankedTensorType> v, unsigned opIdx,
                        bool fromDecomposedScaledDot,
                        SmallVectorImpl<unsigned> *result) {
   std::array<unsigned, 2> chosen{1, 1};
+  result->assign(chosen.begin(), chosen.end());
   int vecSize = 1;
   if (!v) {
-    result->assign(chosen.begin(), chosen.end());
     return vecSize;
   }
 
@@ -483,13 +483,11 @@ int deduceTilesPerWarp(TypedValue<RankedTensorType> v, unsigned opIdx,
     Operation *defOp = v.getDefiningOp();
     if (!defOp || !isa<arith::SelectOp, amdgpu::ScaledUpcastFp8Op,
                        amdgpu::ScaledUpcastFp4Op>(defOp)) {
-      result->assign(chosen.begin(), chosen.end());
       return vecSize;
     }
     scale = goThruScaleDecomposition(defOp, opIdx);
 
     if (!scale) {
-      result->assign(chosen.begin(), chosen.end());
       return vecSize;
     }
   }
@@ -631,14 +629,17 @@ public:
     auto is16BitElemTy = (aElemTy.isF16() || aElemTy.isBF16());
 
     unsigned rank = oldRetType.getRank();
-    SmallVector<unsigned, 2> tilesA{1, 1}, tilesB{1, 1}, tilesPerWarp;
-    int vecA = deduceTilesPerWarp(cast<TensorValue>(a), 0, mDim, warpsPerTile,
-                                  /*fromDecomposedScaledDot=*/true, &tilesA);
-    int vecB = deduceTilesPerWarp(cast<TensorValue>(b), 1, mDim, warpsPerTile,
-                                  /*fromDecomposedScaledDot=*/true, &tilesB);
-    tilesPerWarp = vecA > vecB ? tilesA : tilesB;
-    LLVM_DEBUG(llvm::dbgs() << "chosen tilesPerWarp: [" << tilesPerWarp[0]
-                            << ", " << tilesPerWarp[1] << "]\n");
+    SmallVector<unsigned, 2> tilesPerWarp{1, 1};
+    if (mDim == nDim && (mDim == 32 || mDim == 16)) {
+      SmallVector<unsigned, 2> tilesA{1, 1}, tilesB{1, 1};
+      int vecA = deduceTilesPerWarp(cast<TensorValue>(a), 0, mDim, warpsPerTile,
+                                    /*fromDecomposedScaledDot=*/true, &tilesA);
+      int vecB = deduceTilesPerWarp(cast<TensorValue>(b), 1, mDim, warpsPerTile,
+                                    /*fromDecomposedScaledDot=*/true, &tilesB);
+      tilesPerWarp = vecA > vecB ? tilesA : tilesB;
+      LLVM_DEBUG(llvm::dbgs() << "chosen tilesPerWarp: [" << tilesPerWarp[0]
+                              << ", " << tilesPerWarp[1] << "]\n");
+    }
 
     bool hasPreShuffledScale = (tilesPerWarp[0] > 1 && tilesPerWarp[1] > 1);
 
