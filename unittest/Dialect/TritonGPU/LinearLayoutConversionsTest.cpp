@@ -3059,7 +3059,7 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps) {
 
 TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs) {
   auto dot32 = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
-                  /*instrShape=*/{16, 16, 32});
+                    /*instrShape=*/{16, 16, 32});
   auto wmmaOperand32 = wmmaDotOp(dot32, 0, /*kWidth=*/8);
 
   EXPECT_EQ(toLinearLayout({16, 32}, wmmaOperand32),
@@ -3091,7 +3091,7 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs) {
                 {S("dim0"), S("dim1")}));
 
   auto dot64 = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
-                  /*instrShape=*/{16, 16, 64});
+                    /*instrShape=*/{16, 16, 64});
   auto wmmaOperand64 = wmmaDotOp(dot64, /*opIdx=*/0, /*kWidth=*/16);
 
   EXPECT_EQ(
@@ -3127,7 +3127,7 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_lhs) {
 
 TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs) {
   auto dot32 = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
-                  /*instrShape=*/{16, 16, 32});
+                    /*instrShape=*/{16, 16, 32});
   auto wmmaOperand32 = wmmaDotOp(dot32, 1, 8);
 
   EXPECT_EQ(toLinearLayout({32, 16}, wmmaOperand32),
@@ -3158,7 +3158,7 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs) {
                          {S("dim0"), S("dim1")}));
 
   auto dot64 = wmma(/*warps=*/{2, 4}, /*version=*/3, /*transposed=*/false,
-                  /*instrShape=*/{16, 16, 64});
+                    /*instrShape=*/{16, 16, 64});
   auto wmmaOperand64 = wmmaDotOp(dot64, /*opIdx=*/1, /*kWidth=*/16);
 
   EXPECT_EQ(
