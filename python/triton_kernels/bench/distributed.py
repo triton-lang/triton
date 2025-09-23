@@ -137,13 +137,14 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
         raise NotImplementedError(f"Reduce operation {op} is not implemented.")
     n_tokens = metadata.ep_indx.size(dim)
     other_dims = input_tensor.shape[1:]
+    assert len(other_dims) == 1, "Only 2D tensors are supported in _reduce_ep_triton."
     output_tensor = input_tensor.new_zeros((n_tokens, ) + other_dims, dtype=intermediate_dtype)
     for i in range(world_size):
-        _reduce_ep_triton_kernel[(triton.cdiv(n_tokens,
-                                              128), )](metadata.ep_indx, output_tensor,
-                                                       output_list[i].to(intermediate_dtype), n_tokens, i,
-                                                       tl.constexpr(metadata.TP), BLOCK_SIZE_M=tl.constexpr(128),
-                                                       BLOCK_SIZE_N=tl.constexpr(other_dims[0] if other_dims else 1))
+        _reduce_ep_triton_kernel[(triton.cdiv(n_tokens, 128),)](
+            metadata.ep_indx, output_tensor, #
+            output_list[i].to(intermediate_dtype), n_tokens, i, #
+            tl.constexpr(metadata.TP), BLOCK_SIZE_M=128, #
+            BLOCK_SIZE_N=triton.next_power_of_2(other_dims[0]))
     return output_tensor.to(original_dtype)
 
 
