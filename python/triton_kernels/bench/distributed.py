@@ -1,3 +1,4 @@
+from enum import Enum
 import os
 import pytest
 import torch
@@ -5,7 +6,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Tuple, Optional
 
 import triton
 import triton.language as tl
@@ -30,6 +31,10 @@ from triton_kernels.tensor import Bitmatrix
 
 from bench_utils import quantize_weight
 
+class CommKernelType(Enum):
+    TORCH = "torch"
+    TRITON = "triton"
+    FUSE = "fuse"
 
 @dataclass
 class ReduceScatterMetadata:
@@ -37,6 +42,7 @@ class ReduceScatterMetadata:
     ep_indx: torch.Tensor
     EP: int = 1
     TP: int = 1
+    comm: CommKernelType = CommKernelType.TORCH
 
 
 def _is_distributed_launch() -> bool:
@@ -88,9 +94,71 @@ def all_gather(x: torch.Tensor, dim=0) -> torch.Tensor:
         return x
 
 
+def _reduce_ep_torch(
+    metadata: ReduceScatterMetadata, 
+    input_tensor: torch.Tensor, 
+    output_list: list[torch.Tensor], 
+    world_size: int, 
+    dim: int, 
+    op: dist.ReduceOp.RedOpType, 
+    original_dtype: torch.dtype, 
+    intermediate_dtype: torch.dtype
+) -> torch.Tensor:
+    n_tokens = metadata.ep_indx.size(dim)
+    other_dims = input_tensor.shape[1:]
+    output_tensor = input_tensor.new_zeros((n_tokens, ) + other_dims, dtype=intermediate_dtype)
+    for i in range(world_size):
+        ep_rank = i // metadata.TP
+        mask = torch.any(metadata.ep_indx == ep_rank, dim=1)
+        if op == dist.ReduceOp.SUM:
+            output_tensor[mask] += output_list[i].to(intermediate_dtype)
+        else:
+            raise NotImplementedError(f"Reduce operation {op} is not implemented.")
+    return output_tensor.to(original_dtype)
+
+
+@triton.jit
+def _reduce_ep_triton_kernel(ep_indx_ptr, output_tensor_ptr, input_tensor_ptr, n_expts, rank: int, TP: tl.constexpr, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
+    offs_m = tl.program_id(0) * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_n = tl.arange(0, BLOCK_SIZE_N)
+
+    ep_rank = rank // TP
+    ep_indx = tl.load(ep_indx_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], 
+                      mask=offs_m[:, None] < n_expts)
+    mask = tl.reduce_or(ep_indx == ep_rank, axis=1)
+    output = tl.load(output_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], mask=mask[:, None] & (offs_m[:, None] < n_expts))
+    input = tl.load(input_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], mask=mask[:, None] & (offs_m[:, None] < n_expts))
+    output += input
+    tl.store(output_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], output, mask=mask[:, None] & (offs_m[:, None] < n_expts))
+
+
+
+def _reduce_ep_triton(
+    metadata: ReduceScatterMetadata, 
+    input_tensor: torch.Tensor, 
+    output_list: list[torch.Tensor], 
+    world_size: int, 
+    dim: int, 
+    op: dist.ReduceOp.RedOpType, 
+    original_dtype: torch.dtype, 
+    intermediate_dtype: torch.dtype
+) -> torch.Tensor:
+    if op != dist.ReduceOp.SUM:
+        raise NotImplementedError(f"Reduce operation {op} is not implemented.")
+    n_tokens = metadata.ep_indx.size(dim)
+    other_dims = input_tensor.shape[1:]
+    output_tensor = input_tensor.new_zeros((n_tokens, ) + other_dims, dtype=intermediate_dtype)
+    for i in range(world_size):
+        _reduce_ep_triton_kernel[(triton.cdiv(n_tokens, 128), )](
+            metadata.ep_indx, output_tensor, output_list[i].to(intermediate_dtype), n_tokens, i, tl.constexpr(metadata.TP),
+            BLOCK_SIZE_M=tl.constexpr(128), BLOCK_SIZE_N=tl.constexpr(other_dims[0] if other_dims else 1)
+        )
+    return output_tensor.to(original_dtype)
+
+
 def reduce_scatter(
     input_tensor: torch.Tensor,
-    metadata: ReduceScatterMetadata = None,
+    metadata: Optional[ReduceScatterMetadata] = None,
     dim: int = 0,
     op: dist.ReduceOp.RedOpType = dist.ReduceOp.SUM,
 ) -> torch.Tensor:
@@ -110,17 +178,12 @@ def reduce_scatter(
             assert dim == 0, "metadata only works with dim=0"
             input_list = list(input_tensor.split(metadata.input_split_sizes, dim=0))
             output_list = all_to_all(input_list, dim=0)
-            n_tokens = metadata.ep_indx.size(dim)
-            other_dims = input_tensor.shape[1:]
-            output_tensor = input_tensor.new_zeros((n_tokens, ) + other_dims, dtype=intermediate_dtype)
-            for i in range(world_size):
-                ep_rank = i // metadata.TP
-                mask = torch.any(metadata.ep_indx == ep_rank, dim=1)
-                if op == dist.ReduceOp.SUM:
-                    output_tensor[mask] += output_list[i].to(intermediate_dtype)
-                else:
-                    raise NotImplementedError(f"Reduce operation {op} is not implemented.")
-            return output_tensor.to(original_dtype)
+            if metadata.comm == CommKernelType.TORCH:
+                return _reduce_ep_torch(metadata, input_tensor, output_list, world_size, dim, op, original_dtype, intermediate_dtype)
+            elif metadata.comm == CommKernelType.TRITON:
+                return _reduce_ep_triton(metadata, input_tensor, output_list, world_size, dim, op, original_dtype, intermediate_dtype)
+            else:
+                raise NotImplementedError(f"CommKernelType {metadata.comm} is not implemented.")
         else:
             input_list = list(input_tensor.chunk(world_size, dim=dim))
             shape = input_list[0].shape
