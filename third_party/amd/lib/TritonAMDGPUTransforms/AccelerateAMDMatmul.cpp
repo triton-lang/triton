@@ -460,16 +460,18 @@ Value goThruScaleDecomposition(Operation *op, int opIdx) {
   return transOp.getSrc();
 }
 
-template <typename Op> Op getDefOpBeforeConvertLayout(Value op) {
-  while (auto cvtOp = op.getDefiningOp<ttg::ConvertLayoutOp>()) {
-    op = cvtOp.getSrc();
+// Figure out a best tilesPerWarp parameter that gives largest vector size for
+// global load for the given |scale| tensor feeding into dot_scaled op. Returns
+// the largest vector size and writes the choice to |result|.
+int deduceTilesPerWarp(TypedValue<RankedTensorType> v, unsigned opIdx,
+                       unsigned nonKDim, ArrayRef<unsigned> warpsPerCTA,
+                       SmallVectorImpl<unsigned> *result) {
+  std::array<unsigned, 2> chosen{1, 1};
+  int vecSize = 1;
+  if (!v) {
+    result->assign(chosen.begin(), chosen.end());
+    return vecSize;
   }
-  return op.getDefiningOp<Op>();
-}
-
-bool hasShuffledDotScale(Value v, int opIdx) {
-  if (!v)
-    return false;
 
   while (auto cvtOp = v.getDefiningOp<ttg::ConvertLayoutOp>()) {
     v = cvtOp.getSrc();
@@ -487,43 +489,60 @@ bool hasShuffledDotScale(Value v, int opIdx) {
   if (!scale)
     return false;
 
-  auto shape = cast<RankedTensorType>(scale.getType()).getShape();
+  // Source code have flexibility to preshuffle scale tensor to achieve better
+  // global load vectorization. That preshuffle scheme is conveyed via some
+  // tl.reshape and tl.trans op combinations. Instead of hardcoding one case or
+  // pattern match the op chain here, we try certain scale tensor layouts and
+  // see which one gives us better vectorization when pushed upwards to the
+  // global load.
+  //
+  // For 16x16x128 scaled MFMA intrinsic, each thread only reads one i8 value.
+  // For better vectorization, we prefer to stick 2x2 such intrinsic together so
+  // each thread can read 4xi8 values.
+  SmallVector<std::array<unsigned, 2>, 2> choices{{2, 2}, {1, 1}};
+  for (const auto &choice : choices) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "choice: [" << choice[0] << ", " << choice[1] << "]\n");
+    LinearLayout layout = ttg::chooseScaledMfmaScaleLayout(
+        scale.getContext(), opIdx,
+        cast<RankedTensorType>(scale.getType()).getShape(), nonKDim, choice,
+        warpsPerCTA);
+    LLVM_DEBUG(llvm::dbgs() << "trying scale layout: " << layout << "\n");
 
-  int rank = shape.size();
-  int blockNonK = shape[rank - 2];
-  // 1 scale always scales 32 elements along K dim
-  int blockK = shape[rank - 1] * 32;
+    // Infer source layout used for global load using the current scale layout.
+    auto loadLayoutPair =
+        ttg::inferSourceLoadLayout(layout, scale.getDefiningOp());
+    if (!loadLayoutPair)
+      continue;
+    tt::LoadOp loadOp = loadLayoutPair->first;
+    const LinearLayout &inferredLayout = loadLayoutPair->second;
+    LLVM_DEBUG(llvm::dbgs()
+               << "inferred load layout: " << inferredLayout << "\n");
 
-  auto reshapeOp2D = getDefOpBeforeConvertLayout<triton::ReshapeOp>(scale);
-  if (!reshapeOp2D || reshapeOp2D.getType().getShape() != shape) {
-    return false;
+    auto loadType = cast<RankedTensorType>(loadOp.getType());
+    auto loadOrder = ttg::getOrder(loadType);
+    auto loadCTALayout = ttg::getCTALayout(loadType.getEncoding());
+
+    // Reuse existing shared memory vectorization utilities by constructing a
+    // pass through layout that does linear element mapping.
+    MLIRContext *context = scale.getContext();
+    auto passThruShared = ttg::SwizzledSharedEncodingAttr::get(
+        context, 1, 1, 1, loadOrder, loadCTALayout);
+    auto sharedLL =
+        triton::gpu::toLinearLayout(loadType.getShape(), passThruShared);
+    auto composedLL = inferredLayout.invertAndCompose(sharedLL).flattenOuts();
+    auto [v, _] =
+        largestVectorisation(context, composedLL, /*bitwidth=*/8, std::nullopt);
+
+    if (v > vecSize) {
+      LLVM_DEBUG(llvm::dbgs() << "found vector size: " << v << "\n");
+      chosen = choice;
+      vecSize = v;
+      break;
+    }
   }
-
-  const std::array<int, 7> transposeOrder{0, 5, 3, 1, 4, 2, 6};
-  auto transOp =
-      getDefOpBeforeConvertLayout<triton::TransOp>(reshapeOp2D.getSrc());
-  if (!transOp || transOp.getOrder() != ArrayRef<int>(transposeOrder)) {
-    return false;
-  }
-
-  const std::array<int64_t, 7> reshape7DShape{
-      blockNonK / 32, blockK / 32 / 8, 4, 16, 2, 2, 1};
-  auto reshapeOp7D =
-      getDefOpBeforeConvertLayout<triton::ReshapeOp>(transOp.getSrc());
-
-  if (!reshapeOp7D ||
-      reshapeOp7D.getType().getShape() != ArrayRef<int64_t>(reshape7DShape)) {
-    return false;
-  }
-
-  return true;
-}
-
-SmallVector<unsigned, 2> getTilesPerWarp(Value opA, Value opB) {
-  if (hasShuffledDotScale(opA, 0) || hasShuffledDotScale(opB, 1)) {
-    return {2, 2};
-  }
-  return {1, 1};
+  result->assign(chosen.begin(), chosen.end());
+  return vecSize;
 }
 
 class BlockedToMFMA : public OpRewritePattern<tt::DotOp> {
@@ -539,6 +558,7 @@ public:
 
   LogicalResult matchAndRewrite(tt::DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
+    using TensorValue = TypedValue<RankedTensorType>;
     RankedTensorType oldRetType = dotOp.getType();
     if (!oldRetType.getEncoding() ||
         !isa<ttg::BlockedEncodingAttr>(oldRetType.getEncoding()))
@@ -606,8 +626,14 @@ public:
     auto is16BitElemTy = (aElemTy.isF16() || aElemTy.isBF16());
 
     unsigned rank = oldRetType.getRank();
-    SmallVector<unsigned, 2> tilesPerWarp =
-        getTilesPerWarp(dotOp.getA(), dotOp.getB());
+    SmallVector<unsigned, 2> tilesA{1, 1}, tilesB{1, 1}, tilesPerWarp;
+    int vecA = deduceTilesPerWarp(cast<TensorValue>(a), 0, mDim, warpsPerTile,
+                                  &tilesA);
+    int vecB = deduceTilesPerWarp(cast<TensorValue>(b), 1, mDim, warpsPerTile,
+                                  &tilesB);
+    tilesPerWarp = vecA > vecB ? tilesA : tilesB;
+    LLVM_DEBUG(llvm::dbgs() << "chosen tilesPerWarp: [" << tilesPerWarp[0]
+                            << ", " << tilesPerWarp[1] << "]\n");
 
     bool hasPreShuffledScale = (tilesPerWarp[0] > 1 && tilesPerWarp[1] > 1);
 
@@ -901,74 +927,6 @@ public:
     return success();
   }
 };
-
-// Figure out a best tilesPerWarp parameter that gives largest vector size for
-// global load for the given |scale| tensor feeding into dot_scaled op. Returns
-// the largest vector size and writes the choice to |result|.
-int deduceTilesPerWarp(TypedValue<RankedTensorType> scale, unsigned opIdx,
-                       unsigned nonKDim, ArrayRef<unsigned> warpsPerCTA,
-                       SmallVectorImpl<unsigned> *result) {
-  std::array<unsigned, 2> chosen{1, 1};
-  int vecSize = 1;
-  if (!scale) {
-    result->assign(chosen.begin(), chosen.end());
-    return vecSize;
-  }
-
-  // Source code have flexibility to preshuffle scale tensor to achieve better
-  // global load vectorization. That preshuffle scheme is conveyed via some
-  // tl.reshape and tl.trans op combinations. Instead of hardcoding one case or
-  // pattern match the op chain here, we try certain scale tensor layouts and
-  // see which one gives us better vectorization when pushed upwards to the
-  // global load.
-  //
-  // For 16x16x128 scaled MFMA intrinsic, each thread only reads one i8 value.
-  // For better vectorization, we prefer to stick 2x2 such intrinsic together so
-  // each thread can read 4xi8 values.
-  SmallVector<std::array<unsigned, 2>, 2> choices{{2, 2}, {1, 1}};
-  for (const auto &choice : choices) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "choice: [" << choice[0] << ", " << choice[1] << "]\n");
-    LinearLayout layout = ttg::chooseScaledMfmaScaleLayout(
-        scale.getContext(), opIdx, scale.getType().getShape(), nonKDim, choice,
-        warpsPerCTA);
-    LLVM_DEBUG(llvm::dbgs() << "trying scale layout: " << layout << "\n");
-
-    // Infer source layout used for global load using the current scale layout.
-    auto loadLayoutPair =
-        ttg::inferSourceLoadLayout(layout, scale.getDefiningOp());
-    if (!loadLayoutPair)
-      continue;
-    tt::LoadOp loadOp = loadLayoutPair->first;
-    const LinearLayout &inferredLayout = loadLayoutPair->second;
-    LLVM_DEBUG(llvm::dbgs()
-               << "inferred load layout: " << inferredLayout << "\n");
-
-    auto loadType = cast<RankedTensorType>(loadOp.getType());
-    auto loadOrder = ttg::getOrder(loadType);
-    auto loadCTALayout = ttg::getCTALayout(loadType.getEncoding());
-
-    // Reuse existing shared memory vectorization utilities by constructing a
-    // pass through layout that does linear element mapping.
-    MLIRContext *context = scale.getContext();
-    auto passThruShared = ttg::SwizzledSharedEncodingAttr::get(
-        context, 1, 1, 1, loadOrder, loadCTALayout);
-    auto sharedLL =
-        triton::gpu::toLinearLayout(loadType.getShape(), passThruShared);
-    auto composedLL = inferredLayout.invertAndCompose(sharedLL).flattenOuts();
-    auto [v, _] =
-        largestVectorisation(context, composedLL, /*bitwidth=*/8, std::nullopt);
-
-    if (v > vecSize) {
-      LLVM_DEBUG(llvm::dbgs() << "found vector size: " << v << "\n");
-      chosen = choice;
-      vecSize = v;
-      break;
-    }
-  }
-  result->assign(chosen.begin(), chosen.end());
-  return vecSize;
-}
 
 class DecomposeAMDScaledBlocked final : public ttg::DecomposeScaledBlocked {
 public:
