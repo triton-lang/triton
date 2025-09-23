@@ -128,7 +128,7 @@ def _reduce_ep_triton_kernel(ep_indx_ptr, output_tensor_ptr, output_list, n_toke
     world_size: tl.constexpr = TP * EP
 
     for rank in range(world_size):
-        input_tensor_ptr = tl.load(output_list + rank).to(tl.int64)
+        input_tensor_ptr = tl.load(output_list + rank).to(tl.pointer_type(tl.int64))
         ep_rank = rank // TP
         ep_indx_mask = (offs_m[:, None] < n_tokens) & (offs_n[None, :] < n_expts)
         ep_indx = tl.load(ep_indx_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], mask=ep_indx_mask)
