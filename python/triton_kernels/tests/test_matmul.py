@@ -352,6 +352,8 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
             pytest.skip("NYI: Persistent kernel not supported on AMD GPU")
         if split_k is not None and split_k > 1:
             pytest.skip("splitK hasn't been fully tested on AMD GPU.")
+        if inner_expt_opt is not None and is_hip_cdna4():
+            pytest.skip("Currently triggers a compiler bug.")
 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
