@@ -121,7 +121,7 @@ def _reduce_ep_torch(metadata: ReduceScatterMetadata, input_tensor: torch.Tensor
 
 
 @triton.jit
-def _count_ep_tokens_kernel(ep_indx_ptr, block_counts_ptr, n_tokens, n_expts,
+def _count_ep_tokens_kernel(ep_indx_ptr, block_counts_ptr, n_tokens, n_expts, num_blocks,
                             EP: tl.constexpr,
                             BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_E: tl.constexpr):
     pid = tl.program_id(0)
@@ -139,7 +139,7 @@ def _count_ep_tokens_kernel(ep_indx_ptr, block_counts_ptr, n_tokens, n_expts,
     for ep_rank in range(EP):
         token_mask = tl.reduce_or(ep_values == ep_rank, axis=1) & rows_mask
         count = tl.sum(token_mask.to(tl.int32), axis=0)
-        tl.store(block_counts_ptr + pid * EP + ep_rank, count)
+        tl.store(block_counts_ptr + ep_rank * num_blocks + pid, count)
 
 
 @triton.jit
@@ -160,7 +160,7 @@ def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs
     ).to(intermediate_dtype)
 
     positions = tl.load(
-        ep_positions_ptr + offs_m * EP + ep_rank,
+        ep_positions_ptr + ep_rank * n_tokens + offs_m,
         mask=rows_mask,
         other=-1,
     )
@@ -187,7 +187,7 @@ def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs
 
 
 @triton.jit
-def _write_ep_positions_kernel(ep_indx_ptr, positions_ptr, block_offsets_ptr, n_tokens, n_expts,
+def _write_ep_positions_kernel(ep_indx_ptr, positions_ptr, block_offsets_ptr, n_tokens, n_expts, num_blocks,
                                EP: tl.constexpr,
                                BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_E: tl.constexpr):
     pid = tl.program_id(0)
@@ -201,22 +201,17 @@ def _write_ep_positions_kernel(ep_indx_ptr, positions_ptr, block_offsets_ptr, n_
         mask=load_mask,
         other=-1,
     )
-    ep_range = tl.arange(0, EP)
-    positions = tl.full([BLOCK_SIZE_M, EP], -1, dtype=tl.int32)
-
     for ep_idx in range(EP):
-        base_offset = tl.load(block_offsets_ptr + pid * EP + ep_idx)
+        base_offset = tl.load(block_offsets_ptr + ep_idx * num_blocks + pid)
         row_has_ep = tl.reduce_or(ep_values == ep_idx, axis=1) & rows_mask
         inc = row_has_ep.to(tl.int32)
         exclusive = tl.cumsum(inc, axis=0) - inc
         values = tl.where(row_has_ep, base_offset + exclusive, -1)
-        positions = tl.where(ep_range[None, :] == ep_idx, values[:, None], positions)
-
-    tl.store(
-        positions_ptr + offs_m[:, None] * EP + ep_range[None, :],
-        positions,
-        mask=rows_mask[:, None],
-    )
+        tl.store(
+            positions_ptr + ep_idx * n_tokens + offs_m,
+            values,
+            mask=rows_mask,
+        )
 
 
 def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tensor, output_list: list[torch.Tensor],
@@ -235,8 +230,8 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
     BLOCK_SIZE_N = triton.next_power_of_2(hidden_size)
     BLOCK_SIZE_E = triton.next_power_of_2(n_expts)
     num_blocks = triton.cdiv(n_tokens, BLOCK_SIZE_M)
-    block_counts = torch.zeros((num_blocks, metadata.EP), dtype=torch.int32, device=input_tensor.device)
-    positions = torch.full((n_tokens, metadata.EP), -1, dtype=torch.int32, device=input_tensor.device)
+    block_counts = torch.zeros((metadata.EP, num_blocks), dtype=torch.int32, device=input_tensor.device)
+    positions = torch.full((metadata.EP, n_tokens), -1, dtype=torch.int32, device=input_tensor.device)
     block_offsets = torch.zeros_like(block_counts)
     pointer_list = torch.tensor([x.data_ptr() for x in output_list], device=input_tensor.device, dtype=torch.int64)
 
@@ -246,17 +241,19 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
             block_counts,
             n_tokens,
             n_expts,
+            num_blocks,
             EP=metadata.EP,
             BLOCK_SIZE_M=BLOCK_SIZE_M,
             BLOCK_SIZE_E=BLOCK_SIZE_E,
         )
-        block_offsets[1:] = block_counts.cumsum(dim=0)[:-1]
+        block_offsets[:, 1:] = block_counts[:, :-1].cumsum(dim=1)
         _write_ep_positions_kernel[(num_blocks,)](
             metadata.ep_indx,
             positions,
             block_offsets,
             n_tokens,
             n_expts,
+            num_blocks,
             EP=metadata.EP,
             BLOCK_SIZE_M=BLOCK_SIZE_M,
             BLOCK_SIZE_E=BLOCK_SIZE_E,
