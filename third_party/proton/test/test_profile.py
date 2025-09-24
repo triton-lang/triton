@@ -15,14 +15,7 @@ import threading
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
-
-
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
+from triton._internal_testing import is_hip
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -43,11 +36,16 @@ def test_torch(context, tmp_path: pathlib.Path):
         assert len(data[0]["children"]) == 1
         # bfs search until find the "elementwise_kernel" and then check its children
         queue = [data[0]]
+        import re
         while len(queue) > 0:
             parent_frame = queue.pop(0)
             for child in parent_frame["children"]:
                 if "elementwise_kernel" in child["frame"]["name"]:
                     assert len(child["children"]) == 0
+                    # check the regex of the parent name matches
+                    # file_name:line_number@function_name
+                    regex = r".+:\d+@.+"
+                    assert re.match(regex, parent_frame["frame"]["name"])
                     return
                 queue.append(child)
 

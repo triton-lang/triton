@@ -18,16 +18,16 @@ tt.func @async_copy_1d(%input: tensor<1024x!tt.ptr<f32>, #blocked>,
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.padded_shared<[4:+4] {order = [0], shape = [1024]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-// sizePerThread = [1] because we have no information about contiguity of src pointers
+// Padded encoding with an identity mapping does produce coalesced writes so we should not change the blocked encoding
 // CHECK: #[[$NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 // CHECK-LABEL: async_copy_with_padding
 tt.func @async_copy_with_padding(%input: tensor<1024x!tt.ptr<f32>, #blocked>,
     %view: !ttg.memdesc<1024xf32, #shared, #smem, mutable>) {
-  // CHECK: %{{.*}} = ttg.convert_layout %{{.*}} : {{.*}} -> tensor<1024x!tt.ptr<f32>, #[[$NEW_BLOCKED]]>
+  // CHECK-NOT: ttg.convert_layout
   // CHECK: %{{.*}} = ttg.async_copy_global_to_local %{{.*}}: tensor<1024x!tt.ptr<f32>, #[[$NEW_BLOCKED]]>
   %token = ttg.async_copy_global_to_local %input, %view: tensor<1024x!tt.ptr<f32>, #blocked> -> <1024xf32, #shared, #smem, mutable>
   tt.return
@@ -183,6 +183,78 @@ tt.func @async_copy_2d_swizzled(%input: tensor<64x64x!tt.ptr<f16>, #blocked>,
     %view: !ttg.memdesc<64x64xf16, #shared, #smem, mutable>) {
   // CHECK: %{{.*}} = ttg.async_copy_global_to_local {{.*}} -> <64x64xf16, #shared, #smem, mutable>
   %token = ttg.async_copy_global_to_local %input, %view: tensor<64x64x!tt.ptr<f16>, #blocked> -> <64x64xf16, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+#shared = #ttg.padded_shared<[4:+4] {order = [0], shape = [256]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+// Padded encoding with an identity mapping has vec=1 whereas the blocked has vec=4 so we need to rewrite it
+// CHECK: #[[$NEW_SRC_ENCODING:.*]] = #ttg.linear
+// CHECK-SAME{LITERAL}: register = [[64], [128]], lane = [[1], [2], [4], [8], [16], [32]], warp = [], block = []
+// CHECK-LABEL: async_copy_with_padding_different_vec
+tt.func @async_copy_with_padding_different_vec(%input: tensor<256x!tt.ptr<f32>, #blocked>,
+    %view: !ttg.memdesc<256xf32, #shared, #smem, mutable>) {
+  // CHECK: %{{.*}} = ttg.async_copy_global_to_local %{{.*}}: tensor<256x!tt.ptr<f32>, #[[$NEW_SRC_ENCODING]]>
+  %token = ttg.async_copy_global_to_local %input, %view: tensor<256x!tt.ptr<f32>, #blocked> -> <256xf32, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.padded_shared<[64:+4] {offset = [[1], [2], [4], [8], [64], [128], [16], [32]], block = []}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+// We rearrange in 4 blocks of 16 elements, check that we transfer it to the src encoding to write coalesced to lds
+// CHECK: #[[$NEW_SRC_ENCODING:.*]] = #ttg.linear
+// CHECK-SAME{LITERAL}: register = [], lane = [[1], [2], [4], [8], [64], [128]], warp = [[16], [32]], block = []
+// CHECK-LABEL: async_copy_padded_layout_with_simple_rearanging
+tt.func @async_copy_padded_layout_with_simple_rearanging(%input: tensor<256x!tt.ptr<f32>, #blocked>,
+    %view: !ttg.memdesc<256xf32, #shared, #smem, mutable>) {
+  // CHECK: %{{.*}} = ttg.async_copy_global_to_local %{{.*}}: tensor<256x!tt.ptr<f32>, #[[$NEW_SRC_ENCODING]]>
+  %token = ttg.async_copy_global_to_local %input, %view: tensor<256x!tt.ptr<f32>, #blocked> -> <256xf32, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.padded_shared<[64:+4] {offset = [[1], [2], [4], [8], [16], [32], [256], [512], [64], [128]], block = []}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+// We rearrange in 4 blocks of 16 elements, check that we transfer it to the src encoding to write coalesced to lds
+// CHECK: #[[$NEW_SRC_ENCODING:.*]] = #ttg.linear
+// CHECK-SAME{LITERAL}: register = [[1], [2]], lane = [[4], [8], [16], [32], [256], [512]], warp = [[64], [128]], block = []
+// CHECK-LABEL: async_copy_padded_layout_with_vectorization_and_rearanging
+tt.func @async_copy_padded_layout_with_vectorization_and_rearanging(%input: tensor<1024x!tt.ptr<f32>, #blocked> {tt.contiguity = 4 : i32, tt.divisibility = 16 : i32},
+    %view: !ttg.memdesc<1024xf32, #shared, #smem, mutable>) {
+  // CHECK: %{{.*}} = ttg.async_copy_global_to_local %{{.*}}: tensor<1024x!tt.ptr<f32>, #[[$NEW_SRC_ENCODING]]>
+  %token = ttg.async_copy_global_to_local %input, %view: tensor<1024x!tt.ptr<f32>, #blocked> -> <1024xf32, #shared, #smem, mutable>
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#shared = #ttg.padded_shared<[64:+4] {offset = [[1], [2], [4], [8], [64], [16], [32]], block = []}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+// Check that we add a broadcast in case not each lane in the WG can read unique data
+// CHECK: #[[$NEW_SRC_ENCODING:.*]] = #ttg.linear
+// CHECK-SAME{LITERAL}: register = [], lane = [[1], [2], [4], [8], [64], [16]], warp = [[32], [0]], block = []
+// CHECK-LABEL: async_copy_padded_layout_requiring_broadcasting
+tt.func @async_copy_padded_layout_requiring_broadcasting(%input: tensor<128x!tt.ptr<f32>, #blocked>,
+    %view: !ttg.memdesc<128xf32, #shared, #smem, mutable>) {
+  // CHECK: %{{.*}} = ttg.async_copy_global_to_local %{{.*}}: tensor<128x!tt.ptr<f32>, #[[$NEW_SRC_ENCODING]]>
+  %token = ttg.async_copy_global_to_local %input, %view: tensor<128x!tt.ptr<f32>, #blocked> -> <128xf32, #shared, #smem, mutable>
   tt.return
 }
 }

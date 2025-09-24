@@ -574,7 +574,7 @@ static LogicalResult parseBool(AsmParser &parser, const NamedAttribute &attr,
 };
 
 static LogicalResult parseType(AsmParser &parser, const NamedAttribute &attr,
-                               std::optional<Type> &value, StringRef desc) {
+                               Type &value, StringRef desc) {
   auto typeAttr = mlir::dyn_cast<TypeAttr>(attr.getValue());
   if (!typeAttr) {
     parser.emitError(parser.getNameLoc(), "expected a Type in ") << desc;
@@ -1168,33 +1168,27 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
   unsigned version = 0;
   SmallVector<unsigned> warpsPerCTA;
-  SmallVector<unsigned> tilesPerWarp;
   SmallVector<unsigned> instrShape;
   bool isTransposed;
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
-  std::optional<Type> elementType;
+  SmallVector<unsigned> tilesPerWarp = {};
+  unsigned elementBitWidth = 32;
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "version") {
-      if (parseUInt(parser, attr, version, "verison").failed())
+      if (parseUInt(parser, attr, version, "version").failed())
         return {};
     }
     if (attr.getName() == "warpsPerCTA") {
       if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
         return {};
     }
-    if (attr.getName() == "tilesPerWarp") {
-      if (parseIntArrayAttr(parser, attr, tilesPerWarp, "tilesPerWarp")
-              .failed())
-        return {};
-    }
     if (attr.getName() == "instrShape") {
       if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed())
         return {};
     }
-
     if (attr.getName() == "isTransposed") {
       if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
         return {};
@@ -1214,14 +1208,15 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
               .failed())
         return {};
     }
-    if (attr.getName() == "elementType") {
-      if (parseType(parser, attr, elementType, "elementType").failed())
+    if (attr.getName() == "tilesPerWarp") {
+      if (parseIntArrayAttr(parser, attr, tilesPerWarp, "tilesPerWarp")
+              .failed())
         return {};
     }
-  }
-
-  if (tilesPerWarp.empty()) {
-    tilesPerWarp.resize(warpsPerCTA.size(), 1);
+    if (attr.getName() == "elementBitWidth") {
+      if (parseUInt(parser, attr, elementBitWidth, "elementBitWidth").failed())
+        return {};
+    }
   }
 
   std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
@@ -1229,57 +1224,57 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
+  if (tilesPerWarp.empty())
+    tilesPerWarp = SmallVector<unsigned>(instrShape.size(), 1);
+
   return parser.getChecked<AMDMfmaEncodingAttr>(
-      parser.getContext(), version, warpsPerCTA, tilesPerWarp, instrShape[0],
-      instrShape[1], isTransposed, *CTALayout, elementType);
+      parser.getContext(), version, warpsPerCTA, instrShape, isTransposed,
+      *CTALayout, tilesPerWarp, elementBitWidth);
 }
 
 void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "version = " << getVersion() //
-          << ", warpsPerCTA = [" << getWarpsPerCTA() << "]";
+          << "version = " << getVersion()                   //
+          << ", warpsPerCTA = [" << getWarpsPerCTA() << "]" //
+          << ", instrShape = [" << getInstrShape() << "]";
 
-  auto tilesPerWarp = getTilesPerWarp();
-  if (!hasUnitTilesPerWarp()) {
-    printer << ", tilesPerWarp = [" << getTilesPerWarp() << "]";
-  }
+  printer << ", isTransposed = " << getIsTransposed();
 
-  printer << ", instrShape = [" << ArrayRef{getMDim(), getNDim()} << "]" //
-          << ", isTransposed = " << getIsTransposed();
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getRank());
-  if (getElementType() && !(getElementType()->isF32())) {
-    std::string typeStr;
-    llvm::raw_string_ostream rso(typeStr);
-    getElementType()->print(rso);
-    printer << ", elementType = " << rso.str();
-  }
+
+  auto tilesPerWarp = getTilesPerWarp();
+  if (!hasUnitTilesPerWarp())
+    printer << ", tilesPerWarp = [" << getTilesPerWarp() << "]";
+
+  auto elementBitWidth = getElementBitWidth();
+  if (elementBitWidth != 32)
+    printer << ", elementBitWidth = " << elementBitWidth;
+
   printer << "}>";
 }
 
 LogicalResult AMDMfmaEncodingAttr::verify(
     function_ref<mlir::InFlightDiagnostic()> emitError, unsigned version,
     llvm::ArrayRef<unsigned int> warpsPerCTA,
-    llvm::ArrayRef<unsigned int> tilesPerWarp, unsigned mDim, unsigned nDim,
-    bool isTransposed, mlir::triton::gpu::CTALayoutAttr,
-    std::optional<Type> elementType) {
+    llvm::ArrayRef<unsigned int> instrShape, bool isTransposed,
+    mlir::triton::gpu::CTALayoutAttr, llvm::ArrayRef<unsigned int> tilesPerWarp,
+    unsigned elementBitWidth) {
   if (!(version >= 0 && version <= 4)) {
     return emitError() << "version must be in the [0, 4] range";
   }
 
+  auto mDim = instrShape[0];
+  auto nDim = instrShape[1];
   const std::array<std::pair<unsigned, unsigned>, 4> validDims = {
       {{32, 32}, {16, 16}, {64, 4}, {4, 64}}};
   if (!llvm::is_contained(validDims, std::make_pair(mDim, nDim))) {
     return emitError() << "invalid (mDim, nDim) combination: (" << mDim << ", "
                        << nDim << ")";
   }
-  if (elementType && !(elementType->isF64() || elementType->isF32() ||
-                       elementType->isInteger(32))) {
-    std::string typeStr;
-    llvm::raw_string_ostream rso(typeStr);
-    elementType->print(rso);
-    return emitError() << "element type must be f64, f32, i32, or none";
-  }
+
+  if (!(elementBitWidth == 32 || elementBitWidth == 64))
+    return emitError() << "elementBitWidth must be 32 or 64";
 
   return success();
 }
@@ -1303,6 +1298,7 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
+  SmallVector<unsigned> instrShape = getDefaultInstrShape();
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "version") {
@@ -1332,6 +1328,12 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
               .failed())
         return {};
     }
+    if (attr.getName() == "instrShape") {
+      instrShape.clear();
+      if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed()) {
+        return {};
+      }
+    }
   }
 
   std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
@@ -1339,28 +1341,48 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
-  return parser.getChecked<AMDWmmaEncodingAttr>(
-      parser.getContext(), version, isTransposed, warpsPerCTA, *CTALayout);
+  return parser.getChecked<AMDWmmaEncodingAttr>(parser.getContext(), version,
+                                                isTransposed, warpsPerCTA,
+                                                *CTALayout, instrShape);
 }
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
           << "version = " << getVersion()
-          << ", isTranspose = " << getIsTransposed() << ", warpsPerCTA = ["
-          << ArrayRef(getWarpsPerCTA()) << "]";
+          << ", isTranspose = " << getIsTransposed() //
+          << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]";
+
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
+
+  if (getInstrShape() != ArrayRef(getDefaultInstrShape())) {
+    printer << ", instrShape = [" << getInstrShape() << "]";
+  }
   printer << "}>";
 }
 
-LogicalResult
-AMDWmmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
-                            unsigned version, bool isTransposed,
-                            llvm::ArrayRef<unsigned int> warpsPerCTA,
-                            mlir::triton::gpu::CTALayoutAttr) {
-  if (version != 1 && version != 2) {
-    return emitError() << "WMMA version must be in the [1, 2] range";
-  }
+LogicalResult AMDWmmaEncodingAttr::verify(
+    function_ref<mlir::InFlightDiagnostic()> emitError, unsigned version,
+    bool isTransposed, llvm::ArrayRef<unsigned int> warpsPerCTA,
+    CTALayoutAttr ctaLayout, llvm::ArrayRef<unsigned> instrShape) {
+  if (!(version >= 1 && version <= 3))
+    return emitError() << "WMMA version must be in the [1, 3] range";
+
+  auto shape = SmallVector<unsigned>(instrShape);
+  auto validShapesV1 = std::vector<llvm::SmallVector<unsigned>>{{16, 16, 16}};
+  if (version == 1 && !llvm::is_contained(validShapesV1, shape))
+    return emitError() << "invalid WMMA v1 instruction shape";
+
+  auto validShapesV2 =
+      std::vector<llvm::SmallVector<unsigned>>{{16, 16, 16}, {16, 16, 32}};
+  if (version == 2 && !llvm::is_contained(validShapesV2, shape))
+    return emitError() << "invalid WMMA v2 instruction shape";
+
+  auto validShapesV3 =
+      std::vector<llvm::SmallVector<unsigned>>{{16, 16, 32}, {16, 16, 64}};
+  if (version == 3 && !llvm::is_contained(validShapesV3, shape))
+    return emitError() << "invalid WMMA v3 instruction shape";
+
   return success();
 }
 
@@ -1637,7 +1659,7 @@ void SharedLinearEncodingAttr::print(AsmPrinter &printer) const {
         layout.sublayout({kOffset}, llvm::to_vector(layout.getOutDimNames()));
   }
   printLinearLayout(printer, layout);
-  printer << "}, alignment = " << getAlignment() << "}>";
+  printer << "}, alignment = " << getAlignment() << ">";
 }
 
 Attribute SharedLinearEncodingAttr::parse(AsmParser &parser, Type type) {
@@ -1932,8 +1954,8 @@ LogicalResult PaddedSharedEncodingAttr::verify(
     }
     // Ensure all non zero elements are a power of 2. Combined with the
     // broadcast check above this prevents per element swizzling. The intent of
-    // the linear component is to rearange whole rows or cache-line sized chunks
-    // of rows.
+    // the linear component is to rearrange whole rows or cache-line sized
+    // chunks of rows.
     if (!llvm::all_of(dimBases, [&](const auto &basis) {
           return llvm::all_of(
               basis, [](auto v) { return v == 0 || llvm::isPowerOf2_32(v); });
@@ -2154,8 +2176,9 @@ bool AMDMfmaEncodingAttr::hasUnitTilesPerWarp() const {
 
 SmallVector<int64_t>
 AMDMfmaEncodingAttr::getInstrShapeForOperand(int kWidth, int opIdx) const {
-  unsigned mDim = getMDim();
-  unsigned nDim = getNDim();
+  auto mnkDim = getInstrShape();
+  unsigned mDim = mnkDim[0];
+  unsigned nDim = mnkDim[1];
   assert((mDim == nDim) && (mDim == 32 || mDim == 16 || mDim == 4) ||
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
 
@@ -2252,7 +2275,7 @@ SwizzledSharedEncodingAttr AMDMfmaEncodingAttr::composeSharedLayoutForOperand(
       std::max(std::min(simdWidth / perPhase, innerDimLength / vectorSize), 1u);
 
   // TODO (zhanglx): figure out better parameters for mfma4
-  if (getMDim() == 4)
+  if (getInstrShape()[0] == 4)
     maxPhase = 4;
 
   return SwizzledSharedEncodingAttr::get(getContext(), vectorSize, perPhase,
@@ -2273,18 +2296,13 @@ AMDWmmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 }
 
 SmallVector<int64_t>
-AMDWmmaEncodingAttr::getElemsPerInstrForOperands(int kDim, int opIdx) const {
-  if (opIdx == 0)
-    return {16, kDim};
-  else
-    return {kDim, 16};
-}
-
-SmallVector<int64_t>
 AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
-                                      Type elemType, int kWidth, int kDim,
-                                      int opIdx) const {
-  auto operandTileShape = getElemsPerInstrForOperands(kDim, opIdx);
+                                      Type elemType, int opIdx) const {
+  auto mnkDim = getInstrShape();
+  auto operandTileShape = opIdx == 0
+                              ? SmallVector<int64_t>{mnkDim[0], mnkDim[2]}
+                              : SmallVector<int64_t>{mnkDim[2], mnkDim[1]};
+
   assert(operandTileShape.size() == 2);
   auto warpsPerCTA = getWarpsPerCTA();
   auto rank = operandShape.size();
@@ -2305,11 +2323,6 @@ AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
         std::max<int64_t>(1, operandShape[rank - 1] / (operandTileShape[1] *
                                                        warpsPerCTA[rank - 1]))};
   }
-}
-
-SmallVector<unsigned> AMDWmmaEncodingAttr::getMNKDimPerInstr() {
-  // TODO: move magic numbers out of the code
-  return {16, 16, 16};
 }
 
 SwizzledSharedEncodingAttr AMDWmmaEncodingAttr::composeSharedLayoutForOperand(
@@ -2340,7 +2353,7 @@ SwizzledSharedEncodingAttr AMDWmmaEncodingAttr::composeSharedLayoutForOperand(
   // for both RDNA3 and RDNA4, the M/N dimension of wmma is 16
   // This represents the max number of rows that can be accessed
   // at the same time
-  int mDim = getMNKDimPerInstr()[0];
+  int mDim = getInstrShape()[0];
   int maxPhase =
       std::max(std::min(mDim / perPhase, innerDimLength / vectorSize), 1);
 
@@ -2473,12 +2486,17 @@ LogicalResult DotOperandEncodingAttr::verify(
   }
 
   if (auto parentAttr = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
-    if (kWidth != 8 && kWidth != 16 && parentAttr.getVersion() == 1 ||
-        kWidth != 4 && kWidth != 8 && kWidth != 16 &&
-            parentAttr.getVersion() == 2)
-      return emitError() << "ttg.dot_op kWidth parameter must be 8/16 for "
-                            "gfx11 and 4/8/16 for gfx12 (including packed "
-                            "cases for `scaled_dot`)";
+    if (parentAttr.getVersion() == 1 && (kWidth != 8 && kWidth != 16))
+      return emitError()
+             << "ttg.dot_op kWidth parameter must be 8/16 for WMMA v1 "
+                "(including packed cases for `scaled_dot`)";
+    if (parentAttr.getVersion() == 2 &&
+        (kWidth != 4 && kWidth != 8 && kWidth != 16))
+      return emitError()
+             << "ttg.dot_op kWidth parameter must be 4/8/16 for WMMA v2 "
+                "(including packed cases for `scaled_dot`)";
+    if (parentAttr.getVersion() == 3 && (kWidth != 8))
+      return emitError() << "ttg.dot_op kWidth parameter must be 8 for WMMA v3";
     return success();
   }
 
@@ -2622,19 +2640,17 @@ struct TritonGPUInferLayoutInterface
     }
 
     if (auto enc = dyn_cast<NVMMASharedEncodingAttr>(operandEncoding)) {
-      if (failed(checkRank(enc.getRank())))
-        return failure();
-      if (order != ArrayRef<int32_t>({1, 0})) {
-        return emitOptionalError(
-            loc, "NVMMSharedEncoding can only be transposed in 2D");
-      }
+      if (order == ArrayRef<int32_t>({1, 0})) {
+        if (failed(checkRank(enc.getRank())))
+          return failure();
 
-      CTALayoutAttr ctaLayout =
-          permuteCTALayout(ctx, enc.getCTALayout(), order);
-      resultEncoding = NVMMASharedEncodingAttr::get(
-          ctx, enc.getSwizzlingByteWidth(), !enc.getTransposed(),
-          enc.getElementBitWidth(), enc.getFp4Padded(), ctaLayout);
-      return success();
+        CTALayoutAttr ctaLayout =
+            permuteCTALayout(ctx, enc.getCTALayout(), order);
+        resultEncoding = NVMMASharedEncodingAttr::get(
+            ctx, enc.getSwizzlingByteWidth(), !enc.getTransposed(),
+            enc.getElementBitWidth(), enc.getFp4Padded(), ctaLayout);
+        return success();
+      }
     }
 
     if (auto enc = dyn_cast<BlockedEncodingAttr>(operandEncoding)) {
@@ -2650,20 +2666,25 @@ struct TritonGPUInferLayoutInterface
           applyPermutation(invOrderUnsigned, enc.getOrder()), ctaLayout);
       return success();
     }
+    // Generic case
+    auto padded = dyn_cast<PaddedSharedEncodingAttr>(operandEncoding);
 
-    if (auto enc = dyn_cast<PaddedSharedEncodingAttr>(operandEncoding)) {
-      if (failed(checkRank(enc.getRank())))
-        return failure();
-      const auto &transLL =
-          transposeLinearLayout(enc.getLinearComponent(), order);
-      resultEncoding = PaddedSharedEncodingAttr::get(
-          ctx, enc.getIntervals(), enc.getPaddings(), transLL);
-      return success();
-    }
-
-    auto ll = toLinearLayout(shape, operandEncoding);
+    auto ll = padded ? padded.getLinearComponent()
+                     : toLinearLayout(shape, operandEncoding);
+    if (failed(checkRank(ll.getNumOutDims())))
+      return failure();
     auto transposedLl = transposeLinearLayout(ll, order);
-    resultEncoding = LinearEncodingAttr::get(ctx, std::move(transposedLl));
+    if (isa<DistributedEncodingTrait>(operandEncoding)) {
+      resultEncoding = LinearEncodingAttr::get(ctx, std::move(transposedLl));
+    } else if (padded) {
+      resultEncoding = PaddedSharedEncodingAttr::get(ctx, padded.getIntervals(),
+                                                     padded.getPaddings(),
+                                                     std::move(transposedLl));
+    } else {
+      auto shared = cast<SharedEncodingTrait>(operandEncoding);
+      resultEncoding = SharedLinearEncodingAttr::get(
+          ctx, std::move(transposedLl), shared.getAlignment());
+    }
     return success();
   }
 
@@ -2984,8 +3005,8 @@ struct TritonGPUInferLayoutInterface
       return failure();
 
     // Check whether the encodings are structurally the same.
-    if (!areLayoutsEquivalent(shape, cast<DistributedEncodingTrait>(expected),
-                              cast<DistributedEncodingTrait>(got))) {
+    if (!areLayoutsEquivalent(shape, cast<LayoutEncodingTrait>(expected),
+                              cast<LayoutEncodingTrait>(got))) {
       return emitOptionalError(loc, "Expected result encoding ", expected,
                                " but was ", got);
     }
@@ -3039,8 +3060,8 @@ struct TritonGPUInferLayoutInterface
       Attribute splitEnc;
       auto result = inferSplitOpEncoding(parent, splitEnc, joinedShape, loc);
       if (succeeded(result) &&
-          areLayoutsEquivalent(shape, cast<DistributedEncodingTrait>(splitEnc),
-                               cast<DistributedEncodingTrait>(srcEnc))) {
+          areLayoutsEquivalent(shape, cast<LayoutEncodingTrait>(splitEnc),
+                               cast<LayoutEncodingTrait>(srcEnc))) {
         dstEnc = parent;
         return success();
       }
@@ -3712,6 +3733,15 @@ int triton::gpu::lookupNumWarps(Operation *op) {
   return *numWarps;
 }
 
+int triton::gpu::lookupNumWarps(Region *region) {
+  if (auto partitions =
+          dyn_cast<WarpSpecializePartitionsOp>(region->getParentOp())) {
+    unsigned idx = region->getRegionNumber();
+    return partitions.getParentOp().getPartitionNumWarps()[idx];
+  }
+  return lookupNumWarps(region->getParentOp());
+}
+
 int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
   assert(rewriter.getInsertionBlock() && "expected an insertion point");
   Operation *op =
@@ -3729,8 +3759,8 @@ int triton::gpu::lookupNumCTAs(OpBuilder &rewriter) {
 }
 
 bool triton::gpu::areLayoutsEquivalent(ArrayRef<int64_t> shape,
-                                       DistributedEncodingTrait lhs,
-                                       DistributedEncodingTrait rhs) {
+                                       LayoutEncodingTrait lhs,
+                                       LayoutEncodingTrait rhs) {
   auto lhsLL = triton::gpu::toLinearLayout(shape, lhs);
   auto rhsLL = triton::gpu::toLinearLayout(shape, rhs);
   return lhsLL == rhsLL;
