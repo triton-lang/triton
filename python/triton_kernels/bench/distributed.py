@@ -1,5 +1,6 @@
 from enum import Enum
 import os
+import math
 import pytest
 import torch
 import torch.distributed as dist
@@ -143,7 +144,6 @@ def _reduce_ep_triton_kernel(ep_indx_ptr, output_tensor_ptr, output_list, n_toke
         output = output.to(original_dtype)
         tl.store(output_tensor_ptr + offs_m[:, None] * BLOCK_SIZE_N + offs_n[None, :], output, mask=input_output_mask)
 
-
 def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tensor, output_list: list[torch.Tensor],
                       world_size: int, dim: int, op: dist.ReduceOp.RedOpType, original_dtype: torch.dtype,
                       intermediate_dtype: torch.dtype) -> torch.Tensor:
@@ -152,9 +152,8 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
     n_tokens = metadata.ep_indx.size(dim)
     n_expts = metadata.ep_indx.size(1 - dim)
     other_dims = input_tensor.shape[1:]
-    assert len(other_dims) == 1, "Only 2D tensors are supported in _reduce_ep_triton."
-    hidden_size = other_dims[0]
-    output_tensor = input_tensor.new_zeros((n_tokens, hidden_size), dtype=original_dtype)
+    hidden_size = math.prod(other_dims)
+    output_tensor = input_tensor.new_zeros((n_tokens, ) + other_dims, dtype=original_dtype)
     triton_original_dtype = TRITON_DTYPE_MAP.get(original_dtype, tl.float32)
     triton_intermediate_dtype = TRITON_DTYPE_MAP.get(intermediate_dtype, tl.float32)
     BLOCK_SIZE_M = 128
