@@ -609,14 +609,14 @@ void PartitionLoops::runOnOperation() {
   });
 
   for (scf::ForOp loop : loops) {
-    loop.walk([&](triton::ReduceOp reduceOp) {
-      if (failed(inferReduceOpPartitions(reduceOp)))
-        signalPassFailure();
-    });
-    loop.walk([&](scf::IfOp ifOp) {
-      if (failed(inferIfOpPartitions(ifOp)))
-        signalPassFailure();
-    });
+    // loop.walk([&](triton::ReduceOp reduceOp) {
+    //   if (failed(inferReduceOpPartitions(reduceOp)))
+    //     signalPassFailure();
+    // });
+    // loop.walk([&](scf::IfOp ifOp) {
+    //   if (failed(inferIfOpPartitions(ifOp)))
+    //     signalPassFailure();
+    // });
     if (failed(partitionLoop(loop)))
       return signalPassFailure();
   }
