@@ -263,7 +263,6 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
         sharedOrder = order;
       }
 
-      bool isDecomposedScale = false;
       auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
       if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
         tempAttr = ttg::SwizzledSharedEncodingAttr::get(
