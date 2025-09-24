@@ -127,6 +127,9 @@ def _reduce_ep_triton_kernel(ep_indx_ptr, output_tensor_ptr, output_list, n_toke
     offs_m = tl.program_id(0) * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_n = tl.arange(0, BLOCK_SIZE_N)
     world_size: tl.constexpr = TP * EP
+    input_output_mask = (offs_n[None, :] < hidden_size) & (offs_m[:, None] < n_tokens)
+    output = tl.load(output_tensor_ptr + offs_m[:, None] * hidden_size + offs_n[None, :], \
+                     mask=input_output_mask, other=0).to(intermediate_dtype)
 
     for rank in range(world_size):
         input_tensor_ptr = tl.load(output_list + rank).to(tl.pointer_type(tl.int64))
@@ -134,15 +137,12 @@ def _reduce_ep_triton_kernel(ep_indx_ptr, output_tensor_ptr, output_list, n_toke
         ep_indx_mask = (offs_m[:, None] < n_tokens) & (offs_n[None, :] < n_expts)
         ep_indx = tl.load(ep_indx_ptr + offs_m[:, None] * n_expts + offs_n[None, :], mask=ep_indx_mask)
         mask = tl.reduce_or(ep_indx == ep_rank, axis=1)
-
-        input_output_mask = mask[:, None] & (offs_n[None, :] < hidden_size) & (offs_m[:, None] < n_tokens)
-        output = tl.load(output_tensor_ptr + offs_m[:, None] * hidden_size + offs_n[None, :],
-                         mask=input_output_mask).to(intermediate_dtype)
         input = tl.load(input_tensor_ptr + offs_m[:, None] * hidden_size + offs_n[None, :],
-                        mask=input_output_mask).to(intermediate_dtype)
+                        mask=input_output_mask & mask[:, None], other=0).to(intermediate_dtype)
         output += input
-        output = output.to(original_dtype)
-        tl.store(output_tensor_ptr + offs_m[:, None] * hidden_size + offs_n[None, :], output, mask=input_output_mask)
+
+    output = output.to(original_dtype)
+    tl.store(output_tensor_ptr + offs_m[:, None] * hidden_size + offs_n[None, :], output, mask=input_output_mask)
 
 def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tensor, output_list: list[torch.Tensor],
                       world_size: int, dim: int, op: dist.ReduceOp.RedOpType, original_dtype: torch.dtype,
