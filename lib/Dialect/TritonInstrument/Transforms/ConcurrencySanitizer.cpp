@@ -235,117 +235,115 @@ private:
     });
   }
 
-  struct MemEffects {
-    enum class RW { Read, Write } rw;
+  struct MemEffectsOpInfo {
+    struct Effects {
+      enum class RW { Read, Write } rw;
+      Value buf;
+      std::string operandName = "";
+    };
     enum class TrackingKind {
       None,
       Barrier,
       wgmmaCommit,
       asyncCpCommit
     } trackingKind = TrackingKind::None;
-    Value buf;
-    std::string operandName = "";
     SmallVector<std::tuple<Value, Value>> barriersAndPreds;
     Value pred;
+    SmallVector<Effects> operandEffects;
   };
 
   void instrumentMemEffects(ImplicitLocOpBuilder &b, Operation *op,
                             int thread) {
-    SmallVector<MemEffects> effects = getMemEffects(op);
-    if (!effects.empty()) {
-      auto _barriers = auxData.barriers[op].value;
-      for (MemEffects effect : effects) {
-        Value buf = effect.buf;
-        auto bufType = cast<ttg::MemDescType>(buf.getType());
-        MemType memType = MemType::TENSOR_MEM;
-        if (isa<ttg::SharedEncodingTrait>(bufType.getEncoding())) {
-          memType = MemType::SHARED_MEM;
+    std::optional<MemEffectsOpInfo> opInfo = getMemEffectsOpInfo(op);
+    if (!opInfo) {
+      return;
+    }
+    auto _barriers = auxData.barriers[op].value;
+    Value pred = opInfo->pred;
+    for (auto effect : opInfo->operandEffects) {
+      Value buf = effect.buf;
+      auto bufType = cast<ttg::MemDescType>(buf.getType());
+      MemType memType = MemType::TENSOR_MEM;
+      if (isa<ttg::SharedEncodingTrait>(bufType.getEncoding())) {
+        memType = MemType::SHARED_MEM;
+      }
+      auto _buffers = auxData.buffers[(int)memType][op].value;
+
+      if (effect.rw == MemEffectsOpInfo::Effects::RW::Read) {
+        // For op that is reading, we only need to check if anything else
+        // is writing to the same buffer.
+        addWriteChecks(b, op, buf, pred, memType, thread, effect.operandName);
+        if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier &&
+            _barriers) {
+          b.create<tti::ExperimentalSetReadVisibilityOp>(
+              buf, getThreadPeersMask(thread), _buffers,
+              auxData.readVisibility[(int)memType][op].value,
+              auxData.readVisibility[(int)memType][op].type, pred);
         }
-        auto _buffers = auxData.buffers[(int)memType][op].value;
-        if (effect.rw == MemEffects::RW::Read) {
-          // For op that is reading, we only need to check if anything else
-          // is writing to the same buffer.
-          addWriteChecks(b, op, buf, effect.pred, memType, thread,
-                         effect.operandName);
-          if (effect.trackingKind == MemEffects::TrackingKind::Barrier &&
-              _barriers) {
-            b.create<tti::ExperimentalSetReadVisibilityOp>(
-                buf, getThreadPeersMask(thread), _buffers,
-                auxData.readVisibility[(int)memType][op].value,
-                auxData.readVisibility[(int)memType][op].type, effect.pred);
-            // If the op has barriers, we treat it as a commit emitted for each
-            // barrier.
-            for (auto [barrier, pred] : effect.barriersAndPreds) {
-              if (pred && effect.pred) {
-                pred = b.create<arith::AndIOp>(effect.pred, pred);
-              }
-              b.create<tti::ExperimentalTrackVisibleReadsOp>(
-                  barrier, thread, _barriers,
-                  auxData.readVisibility[(int)memType][op].value,
-                  auxData.readVisibility[(int)memType][op].type,
-                  auxData.readTracking[(int)memType][op].value,
-                  auxData.readTracking[(int)memType][op].type, pred);
-            }
-          }
-          if (effect.trackingKind == MemEffects::TrackingKind::wgmmaCommit) {
-            assert(isa<ttng::WarpGroupDotOp>(op));
-            assert(memType == MemType::SHARED_MEM);
-            b.create<tti::ExperimentalStageAccessForCommitOp>(
-                buf, thread, _buffers, auxData.wgmmaCommits[op].value,
-                auxData.wgmmaCommits[op].type, effect.pred);
-          }
-          assert(effect.trackingKind !=
-                 MemEffects::TrackingKind::asyncCpCommit);
+        if (opInfo->trackingKind ==
+            MemEffectsOpInfo::TrackingKind::wgmmaCommit) {
+          assert(isa<ttng::WarpGroupDotOp>(op));
+          assert(memType == MemType::SHARED_MEM);
+          b.create<tti::ExperimentalStageAccessForCommitOp>(
+              buf, thread, _buffers, auxData.wgmmaCommits[op].value,
+              auxData.wgmmaCommits[op].type, pred);
         }
-        if (effect.rw == MemEffects::RW::Write) {
-          // Op is writing to the buffer, we need to check if anything else
-          // is reading or writing to the same buffer.
-          addWriteChecks(b, op, buf, effect.pred, memType, thread,
-                         effect.operandName);
-          addReadChecks(b, op, buf, effect.pred, memType, thread,
-                        effect.operandName);
-          if (effect.trackingKind == MemEffects::TrackingKind::Barrier &&
-              _barriers) {
-            b.create<tti::ExperimentalSetWriteVisibilityOp>(
-                buf, getThreadPeersMask(thread), _buffers,
-                auxData.writeVisibility[(int)memType][op].value,
-                auxData.writeVisibility[(int)memType][op].type, effect.pred);
-            b.create<tti::ExperimentalClearWriteTrackingOp>(
-                buf, _buffers, auxData.writeTracking[(int)memType][op].value,
-                auxData.writeTracking[(int)memType][op].type, effect.pred);
-            b.create<tti::ExperimentalClearReadVisibilityOp>(
-                buf, _buffers, auxData.readVisibility[(int)memType][op].value,
-                auxData.readVisibility[(int)memType][op].type, effect.pred);
-            b.create<tti::ExperimentalClearReadTrackingOp>(
-                buf, _buffers, auxData.readTracking[(int)memType][op].value,
-                auxData.readTracking[(int)memType][op].type, effect.pred);
-            // If the op has barriers, we treat it as a commit emitted for each
-            // barrier.
-            for (auto [barrier, pred] : effect.barriersAndPreds) {
-              if (pred && effect.pred) {
-                pred = b.create<arith::AndIOp>(effect.pred, pred);
-              }
-              b.create<tti::ExperimentalTrackVisibleWritesOp>(
-                  barrier, thread, _barriers,
-                  auxData.writeVisibility[(int)memType][op].value,
-                  auxData.writeVisibility[(int)memType][op].type,
-                  auxData.writeTracking[(int)memType][op].value,
-                  auxData.writeTracking[(int)memType][op].type, pred);
-              b.create<tti::ExperimentalTrackVisibleReadsOp>(
-                  barrier, thread, _barriers,
-                  auxData.readVisibility[(int)memType][op].value,
-                  auxData.readVisibility[(int)memType][op].type,
-                  auxData.readTracking[(int)memType][op].value,
-                  auxData.readTracking[(int)memType][op].type, pred);
-            }
+        assert(opInfo->trackingKind !=
+               MemEffectsOpInfo::TrackingKind::asyncCpCommit);
+      }
+      if (effect.rw == MemEffectsOpInfo::Effects::RW::Write) {
+        // Op is writing to the buffer, we need to check if anything else
+        // is reading or writing to the same buffer.
+        addWriteChecks(b, op, buf, pred, memType, thread, effect.operandName);
+        addReadChecks(b, op, buf, pred, memType, thread, effect.operandName);
+        if (opInfo->trackingKind == MemEffectsOpInfo::TrackingKind::Barrier &&
+            _barriers) {
+          b.create<tti::ExperimentalSetWriteVisibilityOp>(
+              buf, getThreadPeersMask(thread), _buffers,
+              auxData.writeVisibility[(int)memType][op].value,
+              auxData.writeVisibility[(int)memType][op].type, pred);
+          b.create<tti::ExperimentalClearWriteTrackingOp>(
+              buf, _buffers, auxData.writeTracking[(int)memType][op].value,
+              auxData.writeTracking[(int)memType][op].type, pred);
+          b.create<tti::ExperimentalClearReadVisibilityOp>(
+              buf, _buffers, auxData.readVisibility[(int)memType][op].value,
+              auxData.readVisibility[(int)memType][op].type, pred);
+          b.create<tti::ExperimentalClearReadTrackingOp>(
+              buf, _buffers, auxData.readTracking[(int)memType][op].value,
+              auxData.readTracking[(int)memType][op].type, pred);
+        }
+        if (opInfo->trackingKind ==
+            MemEffectsOpInfo::TrackingKind::asyncCpCommit) {
+          assert(memType == MemType::SHARED_MEM);
+          b.create<tti::ExperimentalStageAccessForCommitOp>(
+              buf, thread, _buffers, auxData.asyncCpCommits[op].value,
+              auxData.asyncCpCommits[op].type, pred);
+        }
+        assert(opInfo->trackingKind !=
+               MemEffectsOpInfo::TrackingKind::wgmmaCommit);
+      }
+      for (auto [barrier, pred] : opInfo->barriersAndPreds) {
+        // If the op has barriers, we treat it as a commit emitted for each
+        // barrier.
+        for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
+          if (!auxData.writeVisibility[(int)memType][op].value) {
+            continue;
           }
-          if (effect.trackingKind == MemEffects::TrackingKind::asyncCpCommit) {
-            assert(memType == MemType::SHARED_MEM);
-            b.create<tti::ExperimentalStageAccessForCommitOp>(
-                buf, thread, _buffers, auxData.asyncCpCommits[op].value,
-                auxData.asyncCpCommits[op].type, effect.pred);
+          if (pred && opInfo->pred) {
+            pred = b.create<arith::AndIOp>(opInfo->pred, pred);
           }
-          assert(effect.trackingKind != MemEffects::TrackingKind::wgmmaCommit);
+          b.create<tti::ExperimentalTrackVisibleWritesOp>(
+              barrier, thread, _barriers,
+              auxData.writeVisibility[(int)memType][op].value,
+              auxData.writeVisibility[(int)memType][op].type,
+              auxData.writeTracking[(int)memType][op].value,
+              auxData.writeTracking[(int)memType][op].type, pred);
+          b.create<tti::ExperimentalTrackVisibleReadsOp>(
+              barrier, thread, _barriers,
+              auxData.readVisibility[(int)memType][op].value,
+              auxData.readVisibility[(int)memType][op].type,
+              auxData.readTracking[(int)memType][op].value,
+              auxData.readTracking[(int)memType][op].type, pred);
         }
       }
     }
@@ -388,130 +386,106 @@ private:
     }
   }
 
-  SmallVector<MemEffects> getMemEffects(Operation *op) {
-    SmallVector<MemEffects> effects;
+  std::optional<MemEffectsOpInfo> getMemEffectsOpInfo(Operation *op) {
+    std::optional<MemEffectsOpInfo> info;
     if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-      effects.emplace_back(
-          MemEffects{.rw = MemEffects::RW::Write,
-                     .trackingKind = MemEffects::TrackingKind::Barrier,
-                     .buf = copyOp.getResult(),
-                     .barriersAndPreds = {{copyOp.getBarrier(), nullptr}},
-                     .pred = copyOp.getPred()});
+      info = {.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier,
+              .barriersAndPreds = {{copyOp.getBarrier(), nullptr}},
+              .pred = copyOp.getPred(),
+              .operandEffects = {{.rw = MemEffectsOpInfo::Effects::RW::Write,
+                                  .buf = copyOp.getResult()}}};
     }
     if (auto storeOp = dyn_cast<ttng::AsyncTMACopyLocalToGlobalOp>(op)) {
-      effects.emplace_back(MemEffects{
-          .rw = MemEffects::RW::Read,
-          .trackingKind = MemEffects::TrackingKind::None, // async tma writes
-                                                          // not modelled yet
-          .buf = storeOp.getSrc()});
+      info = {.trackingKind = MemEffectsOpInfo::TrackingKind::None,
+              .operandEffects = {{.rw = MemEffectsOpInfo::Effects::RW::Read,
+                                  .buf = storeOp.getSrc()}}};
     }
     if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
-      effects.emplace_back(
-          MemEffects{.rw = MemEffects::RW::Write,
-                     .trackingKind = MemEffects::TrackingKind::Barrier,
-                     .buf = gatherOp.getResult(),
-                     .barriersAndPreds = {{gatherOp.getBarrier(), nullptr}},
-                     .pred = gatherOp.getPred()});
+      info = {.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier,
+              .barriersAndPreds = {{gatherOp.getBarrier(), nullptr}},
+              .pred = gatherOp.getPred(),
+              .operandEffects = {{.rw = MemEffectsOpInfo::Effects::RW::Write,
+                                  .buf = gatherOp.getResult()}}};
     }
     if (auto scatterOp = dyn_cast<ttng::AsyncTMAScatterOp>(op)) {
-      effects.emplace_back(MemEffects{
-          .rw = MemEffects::RW::Read,
-          .trackingKind = MemEffects::TrackingKind::None, // async tma writes
-                                                          // not modelled yet
-          .buf = scatterOp.getSrc(),
-      });
+      info = {.trackingKind = MemEffectsOpInfo::TrackingKind::None,
+              .operandEffects = {{.rw = MemEffectsOpInfo::Effects::RW::Read,
+                                  .buf = scatterOp.getSrc()}}};
     }
     if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
-      effects.emplace_back(
-          MemEffects{.rw = MemEffects::RW::Write,
-                     .trackingKind = MemEffects::TrackingKind::asyncCpCommit,
-                     .buf = copyOp.getResult()});
+      info = {.trackingKind = MemEffectsOpInfo::TrackingKind::asyncCpCommit,
+              .operandEffects = {{.rw = MemEffectsOpInfo::Effects::RW::Write,
+                                  .buf = copyOp.getResult()}}};
     }
     if (auto loadOp = dyn_cast<ttg::LocalLoadOp>(op)) {
-      effects.emplace_back(
-          MemEffects{.rw = MemEffects::RW::Read,
-                     .trackingKind = MemEffects::TrackingKind::Barrier,
-                     .buf = loadOp.getSrc()});
+      info = {.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier,
+              .operandEffects = {{.rw = MemEffectsOpInfo::Effects::RW::Read,
+                                  .buf = loadOp.getSrc()}}};
     }
     if (auto storeOp = dyn_cast<ttg::LocalStoreOp>(op)) {
-      effects.emplace_back(
-          MemEffects{.rw = MemEffects::RW::Write,
-                     .trackingKind = MemEffects::TrackingKind::Barrier,
-                     .buf = storeOp.getDst()});
+      info = {.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier,
+              .operandEffects = {{.rw = MemEffectsOpInfo::Effects::RW::Write,
+                                  .buf = storeOp.getDst()}}};
     }
     if (auto allocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
       if (allocOp.getSrc()) {
-        effects.emplace_back(MemEffects{.rw = MemEffects::RW::Write,
-                                        .buf = allocOp.getResult()});
+        info = {.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier,
+                .operandEffects = {{.rw = MemEffectsOpInfo::Effects::RW::Write,
+                                    .buf = allocOp.getResult()}}};
       }
     }
     if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
-      effects.emplace_back(
-          MemEffects{.rw = MemEffects::RW::Read,
-                     .trackingKind = MemEffects::TrackingKind::Barrier,
-                     .buf = loadOp.getSrc()});
+      info = {.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier,
+              .operandEffects = {{.rw = MemEffectsOpInfo::Effects::RW::Read,
+                                  .buf = loadOp.getSrc()}}};
     }
     if (auto storeOp = dyn_cast<ttng::TMEMStoreOp>(op)) {
-      effects.emplace_back(
-          MemEffects{.rw = MemEffects::RW::Write,
-                     .trackingKind = MemEffects::TrackingKind::Barrier,
-                     .buf = storeOp.getDst()});
+      info = {.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier,
+              .operandEffects = {{.rw = MemEffectsOpInfo::Effects::RW::Write,
+                                  .buf = storeOp.getDst()}}};
     }
     if (auto allocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
       if (allocOp.getSrc()) {
-        effects.emplace_back(MemEffects{.rw = MemEffects::RW::Write,
-                                        .buf = allocOp.getResult()});
+        info = {.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier,
+                .operandEffects = {{.rw = MemEffectsOpInfo::Effects::RW::Write,
+                                    .buf = allocOp.getResult()}}};
       }
     }
     if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
-      SmallVector<std::tuple<Value, Value>> barriersAndPreds = llvm::to_vector(
-          llvm::zip(mmav5Op.getBarriers(), mmav5Op.getBarrierPreds()));
-
-      effects.emplace_back(
-          MemEffects{.rw = MemEffects::RW::Read,
-                     .trackingKind = MemEffects::TrackingKind::Barrier,
-                     .buf = mmav5Op.getA(),
-                     .operandName = "A",
-                     .barriersAndPreds = barriersAndPreds,
-                     .pred = mmav5Op.getPred()});
-
-      effects.emplace_back(
-          MemEffects{.rw = MemEffects::RW::Read,
-                     .trackingKind = MemEffects::TrackingKind::Barrier,
-                     .buf = mmav5Op.getB(),
-                     .operandName = "B",
-                     .barriersAndPreds = barriersAndPreds,
-                     .pred = mmav5Op.getPred()});
-
-      effects.emplace_back(
-          MemEffects{.rw = MemEffects::RW::Write,
-                     .trackingKind = MemEffects::TrackingKind::Barrier,
-                     .buf = mmav5Op.getAccumulator(),
-                     .operandName = "Acc",
-                     .barriersAndPreds = barriersAndPreds,
-                     .pred = mmav5Op.getPred()});
+      info = {.trackingKind = MemEffectsOpInfo::TrackingKind::Barrier,
+              .barriersAndPreds = llvm::to_vector(
+                  llvm::zip(mmav5Op.getBarriers(), mmav5Op.getBarrierPreds())),
+              .pred = mmav5Op.getPred(),
+              .operandEffects = {{.rw = MemEffectsOpInfo::Effects::RW::Read,
+                                  .buf = mmav5Op.getA(),
+                                  .operandName = "A"},
+                                 {.rw = MemEffectsOpInfo::Effects::RW::Read,
+                                  .buf = mmav5Op.getB(),
+                                  .operandName = "B"},
+                                 {.rw = MemEffectsOpInfo::Effects::RW::Write,
+                                  .buf = mmav5Op.getAccumulator(),
+                                  .operandName = "Acc"}}};
     }
     if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
       if (wgmmaOp.getIsAsync() == true) {
+        info = {.trackingKind = MemEffectsOpInfo::TrackingKind::wgmmaCommit};
         if (isa<ttg::SharedEncodingTrait>(
                 wgmmaOp.getA().getType().getEncoding())) {
-          effects.emplace_back(
-              MemEffects{.rw = MemEffects::RW::Read,
-                         .trackingKind = MemEffects::TrackingKind::wgmmaCommit,
-                         .buf = wgmmaOp.getA(),
-                         .operandName = "A"});
+          info->operandEffects.emplace_back(MemEffectsOpInfo::Effects{
+              .rw = MemEffectsOpInfo::Effects::RW::Read,
+              .buf = wgmmaOp.getA(),
+              .operandName = "A"});
         }
         if (isa<ttg::SharedEncodingTrait>(
                 wgmmaOp.getB().getType().getEncoding())) {
-          effects.emplace_back(
-              MemEffects{.rw = MemEffects::RW::Read,
-                         .trackingKind = MemEffects::TrackingKind::wgmmaCommit,
-                         .buf = wgmmaOp.getB(),
-                         .operandName = "B"});
+          info->operandEffects.emplace_back(MemEffectsOpInfo::Effects{
+              .rw = MemEffectsOpInfo::Effects::RW::Read,
+              .buf = wgmmaOp.getB(),
+              .operandName = "B"});
         }
       }
     }
-    return effects;
+    return info;
   }
 
   ModuleOp module;
