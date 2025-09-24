@@ -52,10 +52,6 @@ namespace mlir {
 // 1. The user provides a `num_stages` that specifies how many stages the
 //    pipeline will have. The number of stages must be larger than the distance
 //    from the first independent load to the compute in order to pipeline.
-//    1.a. User may also specify `global_prefetch=<s>` to set the number of
-//         stages between tt.load and ttg.local_store ops.
-//    1.b. User may also specify `local_prefetch=<s>` to set the number of
-//         stages between ttg.local_load and compute.
 // 2. A schedule is created based on the distance between the global loads
 //    in the first stages and the compute that uses the loaded values in the
 //    last stage (num_stages - 1). Each operation will be clustered in the
@@ -299,8 +295,6 @@ LogicalResult scheduleLoads(const LoadToInfoMap &loadToInfo, int maxDist,
 
 tt::CoarseSchedule
 buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
-              int globalPrefetch, int localPrefetch, bool useAsyncCopy,
-              bool waitAtTail,
               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   LDBG("Build SingleDotSchedule");
   tt::CoarseSchedule schedule(numStages);
@@ -319,12 +313,6 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
   for (auto &[l, info] : loadToInfo) {
     maxDist = std::max(maxDist, info.distToUse);
   }
-
-  int numBuffers = 1;
-  // if (failed(initSchedule(maxDist, stages, numStages, numBuffers,
-  //                         globalPrefetch, localPrefetch, useAsyncCopy,
-  //                         waitAtTail, clusters, schedule)))
-  //   return {};
 
   int lastStage = numStages - 1;
   stages[SCHED_GLOBAL_LOAD] = 0;
@@ -354,12 +342,6 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
                            schedule)))
     return {};
   dumpSchedule("Coarse schedule loads only:");
-
-  // Convert the loads into shared memory allocations and loads from them.
-  // auto loadToStreamOp = createStreamOps(loadToInfo, forOp, numBuffers,
-  //                                       useAsyncCopy, axisInfoAnalysis);
-  // scheduleStreamOps(loadToStreamOp, schedule, stages, clusters);
-  // dumpSchedule("Coarse schedule stream ops:");
 
   return schedule;
 }
@@ -490,7 +472,6 @@ LogicalResult scheduleOpsBetweenDots(scf::ForOp forOp,
 
 tt::CoarseSchedule
 buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
-              bool useAsyncCopy,
               triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   LDBG("Build ChainedDotSchedule");
   tt::CoarseSchedule schedule(numStages);
@@ -522,26 +503,11 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
   }
   dumpSchedule("Coarse schedule after schedule ops between dots:");
 
-  // // Convert the loads into shared memory allocations and loads from them.
-  // // TODO support different numBuffers
-  // int numBuffers = useAsyncCopy ? 2 : 1;
-  // auto loadToStreamOps =
-  //     createStreamOps(loadToInfo, forOp, /*numBuffers=*/numBuffers,
-  //                     useAsyncCopy, axisInfoAnalysis);
-  // scheduleStreamOps(loadToStreamOps, schedule, clusters);
-  // dumpSchedule("Coarse schedule stream ops:");
-
-  // for (auto [l, _] : loadToInfo) {
-  //   schedule.erase(l);
-  //   l->erase();
-  // }
-
   return schedule;
 }
 } // namespace ChainedDotSchedule
 
-void pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
-                  int localPrefetch, bool useAsyncCopy, bool waitAtTail) {
+void pipelineLoop(scf::ForOp forOp, int numStages) {
   triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
       forOp->getParentOfType<ModuleOp>());
 
@@ -577,12 +543,11 @@ void pipelineLoop(scf::ForOp forOp, int numStages, int globalPrefetch,
 
   if (succeeded(ChainedDotSchedule::checkPreconditions(forOp, numStages,
                                                        loadToInfo))) {
-    schedule = ChainedDotSchedule::buildSchedule(
-        forOp, numStages, loadToInfo, useAsyncCopy, axisInfoAnalysis);
+    schedule = ChainedDotSchedule::buildSchedule(forOp, numStages, loadToInfo,
+                                                 axisInfoAnalysis);
   } else {
-    schedule = SingleDotSchedule::buildSchedule(
-        forOp, numStages, loadToInfo, globalPrefetch, localPrefetch,
-        useAsyncCopy, waitAtTail, axisInfoAnalysis);
+    schedule = SingleDotSchedule::buildSchedule(forOp, numStages, loadToInfo,
+                                                axisInfoAnalysis);
   }
 
   if (schedule.empty()) {
@@ -598,18 +563,6 @@ struct ScheduleLoops : impl::TritonAMDGPUScheduleLoopsBase<ScheduleLoops> {
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
     // check numStages
-    if (globalPrefetch < 0 || globalPrefetch >= numStages) {
-      moduleOp.emitError("global prefetch control must be in [0, ")
-          << numStages << "); " << globalPrefetch << " is out of range";
-      return signalPassFailure();
-    }
-
-    if (localPrefetch < 0 || localPrefetch >= numStages) {
-      moduleOp.emitError("local prefetch control must be in [0, ")
-          << numStages << "); " << localPrefetch << " is out of range";
-      return signalPassFailure();
-    }
-
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) {
       // Bail out for loops with num_stage <= 1.
@@ -622,12 +575,8 @@ struct ScheduleLoops : impl::TritonAMDGPUScheduleLoopsBase<ScheduleLoops> {
         LDBG("Loop not safe to pipeline:\n" << *forOp);
         continue;
       }
-      // i.e., we can still disable `waitAtTail` by explicitly disabling
-      // pingpong, which is the only use case of this scheduling variant.
       int numStagesThis = tt::getNumStagesOrDefault(forOp, numStages);
-      bool waitAtTail = usePingpong && (numStagesThis == 3) && useAsyncCopy;
-      pipelineLoop(forOp, numStagesThis, globalPrefetch, localPrefetch,
-                   useAsyncCopy, waitAtTail);
+      pipelineLoop(forOp, numStagesThis);
     }
   }
 };

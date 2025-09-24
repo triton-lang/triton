@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline=num-stages=3 -canonicalize | FileCheck %s --check-prefixes=COMMON,CHECK
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops=num_stages=2 -tritonamdgpu-pipeline -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops="num_stages=3 global_prefetch=1 local_prefetch=1" -tritonamdgpu-pipeline="global_prefetch=1 local_prefetch=1" -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD_PREFETCH
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops="num_stages=3" -tritonamdgpu-pipeline -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD_PREFETCH
 
 // 4 warps
 // matmul: 128x32 @ 32x128 -> 128x128
@@ -111,17 +111,17 @@
 //       AMD_PREFETCH:   ttg.local_store
 //       AMD_PREFETCH:   ttg.local_store
 //       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_load
 //       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_load
+//       AMD_PREFETCH:   ttg.local_store
+//       AMD_PREFETCH:   ttg.local_store
 //       AMD_PREFETCH:   scf.for
-//       AMD_PREFETCH:     ttg.local_store
-//       AMD_PREFETCH:     ttg.local_store
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     ttg.local_load
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     ttg.local_load
 //       AMD_PREFETCH:     tt.dot
-//       AMD_PREFETCH:     tt.load
-//       AMD_PREFETCH:     ttg.local_load
-//       AMD_PREFETCH:     tt.load
-//       AMD_PREFETCH:     ttg.local_load
+//       AMD_PREFETCH:     ttg.local_store
+//       AMD_PREFETCH:     ttg.local_store
 //       AMD_PREFETCH:     scf.yield
 //       AMD_PREFETCH:   tt.dot
 //       AMD_PREFETCH:   tt.dot
@@ -337,12 +337,12 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 //       AMD_PREFETCH:   tt.load
 //       AMD_PREFETCH:   ttg.local_store
 //       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_load
+//       AMD_PREFETCH:   ttg.local_store
 //       AMD_PREFETCH:   scf.for
-//       AMD_PREFETCH:     ttg.local_store
-//       AMD_PREFETCH:     tt.dot
 //       AMD_PREFETCH:     tt.load
 //       AMD_PREFETCH:     ttg.local_load
+//       AMD_PREFETCH:     tt.dot
+//       AMD_PREFETCH:     ttg.local_store
 //       AMD_PREFETCH:     scf.yield
 //       AMD_PREFETCH:   tt.dot
 //       AMD_PREFETCH:   tt.dot
@@ -1266,12 +1266,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // AMD_PREFETCH:        tt.load
 // AMD_PREFETCH:        ttg.local_store
 // AMD_PREFETCH:        tt.load
-// AMD_PREFETCH:        ttg.local_load
+// AMD_PREFETCH:        ttg.local_store
 // AMD_PREFETCH:        scf.for
-// AMD_PREFETCH:          ttg.local_store
 // AMD_PREFETCH:          tt.load
-// AMD_PREFETCH:          tt.dot
 // AMD_PREFETCH:          ttg.local_load
+// AMD_PREFETCH:          tt.dot
+// AMD_PREFETCH:          ttg.local_store
 // AMD_PREFETCH:          scf.yield
 // AMD_PREFETCH:        ttg.local_dealloc
 
@@ -1619,10 +1619,10 @@ tt.func @matmul_nested_ops(%lb : index, %ub : index, %step : index,
 // AMD_PREFETCH-COUNT-4: tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
 // AMD_PREFETCH: scf.for
 // AMD_PREFETCH:   arith.select
-// AMD_PREFETCH:   arith.addf
-// AMD_PREFETCH:   tt.store
 // AMD_PREFETCH:   %[[A:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
 // AMD_PREFETCH:   %[[B:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
+// AMD_PREFETCH:   arith.addf
+// AMD_PREFETCH:   tt.store
 // AMD_PREFETCH:   scf.yield
 // AMD_PREFETCH: tt.store
 // AMD_PREFETCH: tt.store

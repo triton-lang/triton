@@ -330,15 +330,13 @@ namespace SingleDotSchedule {
 //   WARNING: Changing the order of schedule.clusters.newAtBack() calls
 //            can cause invalid schedules to be produced.
 LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
-                           int &numBuffers, int globalPrefetch,
-                           int localPrefetch, bool useAsyncCopy,
-                           bool waitAtTail, Clusters &clusters,
-                           tt::CoarseSchedule &schedule) {
+                           int &numBuffers, bool useAsyncCopy, bool waitAtTail,
+                           Clusters &clusters, tt::CoarseSchedule &schedule) {
   LDBG("Init SingleDotSchedule");
   int lastStage = numStages - 1;
   stages[SCHED_GLOBAL_LOAD] = 0;
-  stages[SCHED_LOCAL_STORE] = globalPrefetch;
-  stages[SCHED_LOCAL_LOAD] = lastStage - localPrefetch;
+  stages[SCHED_LOCAL_STORE] = 0;
+  stages[SCHED_LOCAL_LOAD] = lastStage;
   stages[SCHED_COMPUTE] = lastStage;
   stages[SCHED_ASYNC_WAIT] = stages[SCHED_LOCAL_LOAD];
 
@@ -524,8 +522,7 @@ void scheduleStreamOps(const LoadToStreamOpMap &loadToStreamOp,
 void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
                     tt::CoarseSchedule &schedule,
                     triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                    int numStages, int globalPrefetch, int localPrefetch,
-                    bool useAsyncCopy, bool waitAtTail) {
+                    int numStages, bool useAsyncCopy, bool waitAtTail) {
   LDBG("SingleDotSchedule::updateSchedule");
   Stages stages;
   Clusters clusters;
@@ -536,8 +533,7 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
   }
 
   int numBuffers = 1;
-  if (failed(initSchedule(maxDist, stages, numStages, numBuffers,
-                          globalPrefetch, localPrefetch, useAsyncCopy,
+  if (failed(initSchedule(maxDist, stages, numStages, numBuffers, useAsyncCopy,
                           waitAtTail, clusters, schedule)))
     return;
 
@@ -673,8 +669,7 @@ void updateSchedule(scf::ForOp &forOp, const LoadToInfoMap &loadToInfo,
 
 void lowerLoop(scf::ForOp forOp,
                triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-               int globalPrefetch, int localPrefetch, bool useAsyncCopy,
-               bool usePingpong) {
+               bool useAsyncCopy, bool usePingpong) {
   tt::CoarseSchedule schedule;
   if (failed(schedule.deSerialize(forOp, /*normalizeClusterId=*/false))) {
     return;
@@ -703,9 +698,9 @@ void lowerLoop(scf::ForOp forOp,
     ChainedDotSchedule::updateSchedule(forOp, loadToInfo, schedule,
                                        axisInfoAnalysis, useAsyncCopy);
   } else {
-    SingleDotSchedule::updateSchedule(
-        forOp, loadToInfo, schedule, axisInfoAnalysis, numStages,
-        globalPrefetch, localPrefetch, useAsyncCopy, waitAtTail);
+    SingleDotSchedule::updateSchedule(forOp, loadToInfo, schedule,
+                                      axisInfoAnalysis, numStages, useAsyncCopy,
+                                      waitAtTail);
   }
 
   dumpSchedule(schedule, "[lowerLoops]after updating schedule:");
@@ -713,16 +708,14 @@ void lowerLoop(scf::ForOp forOp,
   schedule.serialize(forOp);
 }
 
-void lowerLoops(ModuleOp moduleOp, int globalPrefetch, int localPrefetch,
-                bool useAsyncCopy, bool usePingpong) {
+void lowerLoops(ModuleOp moduleOp, bool useAsyncCopy, bool usePingpong) {
   triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
   if (loops.empty())
     return;
   for (auto forOp : loops) {
-    lowerLoop(forOp, axisInfoAnalysis, globalPrefetch, localPrefetch,
-              useAsyncCopy, usePingpong);
+    lowerLoop(forOp, axisInfoAnalysis, useAsyncCopy, usePingpong);
   }
   if (useAsyncCopy) {
     llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;

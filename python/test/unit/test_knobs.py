@@ -69,14 +69,7 @@ def test_knobs_utils(fresh_knobs) -> None:
 
 
 def test_knobs_scope(fresh_knobs, monkeypatch):
-    fresh_knobs.amd.global_prefetch = 4
-    fresh_knobs.amd.local_prefetch = 3
-
     # Update env *after* the __set__() does
-    monkeypatch.setenv("TRITON_HIP_LOCAL_PREFETCH", "17")
-
-    assert fresh_knobs.amd.global_prefetch == 4
-    assert fresh_knobs.amd.local_prefetch == 3
     assert fresh_knobs.amd.use_buffer_ops
 
     # Just to prove that use_buffer_ops is coming from env
@@ -86,17 +79,11 @@ def test_knobs_scope(fresh_knobs, monkeypatch):
     assert fresh_knobs.amd.use_buffer_ops
 
     with fresh_knobs.amd.scope():
-        fresh_knobs.amd.global_prefetch = 5
         # Use the environment
-        del fresh_knobs.amd.local_prefetch
         fresh_knobs.amd.use_buffer_ops = False
 
-        assert fresh_knobs.amd.global_prefetch == 5
-        assert fresh_knobs.amd.local_prefetch == 17
         assert not fresh_knobs.amd.use_buffer_ops
 
-    assert fresh_knobs.amd.global_prefetch == 4
-    assert fresh_knobs.amd.local_prefetch == 3
     assert fresh_knobs.amd.use_buffer_ops
 
     # Just to prove that use_buffer_ops is coming from env
@@ -200,7 +187,6 @@ def test_set_knob_directly(fresh_knobs, monkeypatch):
     # Just in case, lets check all the other datatypes too
     fresh_knobs.language.default_fp_fusion = False
     fresh_knobs.amd.use_block_pingpong = True
-    fresh_knobs.amd.global_prefetch = 5
     fresh_knobs.nvidia.mock_ptx_version = "42.0.1"
 
     from triton.runtime.cache import FileCacheManager
@@ -213,27 +199,23 @@ def test_set_knob_directly(fresh_knobs, monkeypatch):
     monkeypatch.setenv("TRITON_CUDART_PATH", "/tmp/the/real/cudart")
     monkeypatch.setenv("TRITON_DEFAULT_FP_FUSION", "1")
     monkeypatch.setenv("TRITON_HIP_USE_BLOCK_PINGPONG", "0")
-    monkeypatch.setenv("TRITON_HIP_GLOBAL_PREFETCH", "2")
     monkeypatch.setenv("TRITON_MOCK_PTX_VERSION", "1.0.0")
     monkeypatch.setenv("TRITON_CACHE_MANAGER", "triton.runtime.cache:FileCacheManager")
 
     assert not fresh_knobs.language.default_fp_fusion
     assert fresh_knobs.amd.use_block_pingpong
-    assert fresh_knobs.amd.global_prefetch == 5
     assert fresh_knobs.nvidia.mock_ptx_version == "42.0.1"
     assert fresh_knobs.cache.manager_class == TestManagerClass
 
     # Make sure both setting `.env` or deleting resets to env vars.
     fresh_knobs.language.default_fp_fusion = fresh_knobs.env
     fresh_knobs.amd.use_block_pingpong = fresh_knobs.env
-    fresh_knobs.amd.global_prefetch = fresh_knobs.env
     del fresh_knobs.nvidia.mock_ptx_version
     del fresh_knobs.cache.manager_class
 
     assert fresh_knobs.build.backend_dirs == {"/tmp/the/real/cudart"}
     assert fresh_knobs.language.default_fp_fusion
     assert not fresh_knobs.amd.use_block_pingpong
-    assert fresh_knobs.amd.global_prefetch == 2
     assert fresh_knobs.nvidia.mock_ptx_version == "1.0.0"
     assert fresh_knobs.cache.manager_class == FileCacheManager
 

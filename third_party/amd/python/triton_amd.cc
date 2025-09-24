@@ -85,11 +85,10 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi", mlir::createTritonAMDFoldTrueCmpI);
   ADD_PASS_OPTION_WRAPPER_1("add_block_pingpong",
                             mlir::createTritonAMDGPUBlockPingpong, int32_t);
-  ADD_PASS_OPTION_WRAPPER_4("add_pipeline", mlir::createTritonAMDGPUPipeline,
-                            int, int, bool, bool);
-  ADD_PASS_OPTION_WRAPPER_5("add_schedule_loops",
-                            mlir::createTritonAMDGPUScheduleLoops, int, int,
-                            int, bool, bool);
+  ADD_PASS_OPTION_WRAPPER_2("add_pipeline", mlir::createTritonAMDGPUPipeline,
+                            bool, bool);
+  ADD_PASS_WRAPPER_0("add_schedule_loops",
+                     mlir::createTritonAMDGPUScheduleLoops);
   ADD_PASS_OPTION_WRAPPER_1("add_coalesce_async_copy",
                             mlir::createTritonAMDGPUCoalesceAsyncCopy,
                             std::string);

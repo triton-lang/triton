@@ -13,12 +13,6 @@ def TritonAMDGPUPipeline : Pass<"tritonamdgpu-pipeline", "mlir::ModuleOp"> {
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
-    Option<"globalPrefetch", "global_prefetch",
-           "int32_t", /*default*/"0",
-           "Set global prefetch stage count">,
-    Option<"localPrefetch", "local_prefetch",
-           "int32_t", /*default*/"0",
-           "Set local prefetch stage count">,
     Option<"useAsyncCopy", "use_async_copy",
            "bool", /*default*/"false",
            "Use AsyncCopyGlobalToLocal to directly load to shared memory">,
@@ -41,18 +35,6 @@ def TritonAMDGPUScheduleLoops : Pass<"tritonamdgpu-schedule-loops", "mlir::Modul
     Option<"numStages", "num_stages",
            "int32_t", /*default*/"2",
            "Number of Pipeline stages">,
-    Option<"globalPrefetch", "global_prefetch",
-           "int32_t", /*default*/"0",
-           "Set global prefetch stage count">,
-    Option<"localPrefetch", "local_prefetch",
-           "int32_t", /*default*/"0",
-           "Set local prefetch stage count">,
-    Option<"useAsyncCopy", "use_async_copy",
-           "bool", /*default*/"false",
-           "Use AsyncCopyGlobalToLocal to directly load to shared memory">,
-    Option<"usePingpong", "use_pingpong",
-           "bool", /*default*/"false",
-           "Use schedules to enable block ping-pong">,
   ];
 }
 

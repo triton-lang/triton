@@ -108,8 +108,7 @@ struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
 
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
-    lowerLoops(moduleOp, globalPrefetch, localPrefetch, useAsyncCopy,
-               usePingpong);
+    lowerLoops(moduleOp, useAsyncCopy, usePingpong);
     expandLoops(moduleOp);
 
     tt::removeAttributes(moduleOp);
