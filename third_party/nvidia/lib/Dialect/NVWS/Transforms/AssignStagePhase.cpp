@@ -167,6 +167,20 @@ template <class T> struct AssignStagePhase {
       *arefIndexRefs[idx - nArgs] = forOp.getResult(idx);
     for (auto [idx, arefTokenRef] : arefTokenRefs)
       *arefTokenRef = forOp.getResult(idx);
+
+    // add partition ids for extra iterArgs to ForOp outputs
+    auto context = forOp->getContext();
+    Builder b(context);
+    llvm::SmallVector<Attribute> partitionAttrs;
+    for (auto attr :
+         forOp->getAttrOfType<ArrayAttr>(kPartitionOutputsAttrName)) {
+      partitionAttrs.push_back(attr);
+    }
+    for (auto i = 0; i < extraIterArgs.size(); i++) {
+      partitionAttrs.push_back(b.getDenseI32ArrayAttr({partitionId}));
+    }
+    forOp->setAttr(kPartitionOutputsAttrName,
+                   ArrayAttr::get(context, partitionAttrs));
   }
 
   void assignArefIndexInIfOp(scf::IfOp ifOp, StagePhase &index) {
@@ -229,6 +243,20 @@ template <class T> struct AssignStagePhase {
       *arefIndexRefs[idx - nArgs] = newIfOp.getResult(idx);
     for (auto [idx, arefTokenRef] : arefTokenRefs)
       *arefTokenRef = newIfOp.getResult(idx);
+
+    // add partition ids for extra result to IfOp outputs
+    auto context = newIfOp->getContext();
+    Builder b(context);
+    llvm::SmallVector<Attribute> partitionAttrs;
+    for (auto attr :
+         newIfOp->getAttrOfType<ArrayAttr>(kPartitionOutputsAttrName)) {
+      partitionAttrs.push_back(attr);
+    }
+    for (auto i = 0; i < extraIfResults.size(); i++) {
+      partitionAttrs.push_back(b.getDenseI32ArrayAttr({partitionId}));
+    }
+    newIfOp->setAttr(kPartitionOutputsAttrName,
+                     ArrayAttr::get(context, partitionAttrs));
   }
 
   StagePhase assignArefIndexInBlock(Block *block, StagePhase index) {
