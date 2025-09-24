@@ -630,6 +630,94 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
   return success();
 }
 
+void workaroundForLoopScheduler(triton::FuncOp funcOp) {
+  SmallVector<scf::IfOp> ifs;
+  funcOp.walk([&](scf::IfOp ifOp) {
+    auto firstOp = &*ifOp.thenBlock()->begin();
+    auto lastOp = ifOp.thenBlock()->getTerminator()->getPrevNode();
+    if (isa<ArefPutExitOp>(firstOp) && isa<ArefPutEnterOp>(lastOp)) {
+      ifs.push_back(ifOp);
+    }
+  });
+
+  // Transform if-statements that contain aref put.exit/put.enter pairs to work
+  // around loop scheduler limitations. The transformation splits a single if-op
+  // with token-producing operations into three separate if-ops to ensure proper
+  // scheduling and token handling.
+  //
+  // Original pattern:
+  //   %results, %token, %more = scf.if %condition {
+  //     aref.put.exit                    // Release tensor memory
+  //     <computation_code>               // User computation
+  //     %new_token = aref.put.enter      // Acquire tensor memory
+  //     scf.yield %values, %new_token, %other_values
+  //   } else {
+  //     scf.yield %alt_values, %old_token, %alt_other_values
+  //   }
+  //   ... use %token
+  //
+  // Transformed pattern:
+  //   scf.if %condition {
+  //     aref.put.exit                    // Separate exit operation
+  //   } { .. loop.stage = 1 .. }
+  //   %results, %more = scf.if %condition {
+  //     <computation_code>               // Main computation without token ops
+  //     scf.yield %values, %other_values
+  //   } else {
+  //     scf.yield %alt_values, %alt_other_values
+  //   }
+  //   %token = scf.if %condition {
+  //     %new_token = aref.put.enter      // Separate enter operation
+  //     scf.yield %new_token
+  //   } else {
+  //     scf.yield %old_token
+  //   } { .. loop.stage = 1 }
+  //   ... use %token
+
+  for (auto ifOp : ifs) {
+    ImplicitLocOpBuilder b(ifOp.getLoc(), ifOp);
+
+    // move putExitOp
+    b.setInsertionPoint(ifOp);
+    auto exitIf =
+        b.create<scf::IfOp>(SmallVector<Type>{}, ifOp.getCondition(), false);
+    auto putExitOp = cast<ArefPutExitOp>(*ifOp.thenBlock()->begin());
+    putExitOp->moveBefore(exitIf.thenBlock(), exitIf.thenBlock()->begin());
+
+    // move putEnterOp
+    b.setInsertionPointAfter(ifOp);
+    auto enterIf =
+        b.create<scf::IfOp>(SmallVector<Type>{b.getType<AsyncTokenType>()},
+                            ifOp.getCondition(), true);
+    auto putEnterOp =
+        cast<ArefPutEnterOp>(ifOp.thenBlock()->getTerminator()->getPrevNode());
+    putEnterOp->moveBefore(enterIf.thenBlock(), enterIf.thenBlock()->begin());
+
+    // replace token uses
+    auto tok = putEnterOp.getToken();
+    auto pos = *findValuePosInRange(ifOp.thenYield()->getOperands(), tok);
+    ifOp.getResult(pos).replaceAllUsesWith(enterIf.getResult(0));
+
+    // insert yield-ops inside enterIf
+    b.setInsertionPointToEnd(enterIf.thenBlock());
+    b.create<scf::YieldOp>(tok);
+    b.setInsertionPointToEnd(enterIf.elseBlock());
+    b.create<scf::YieldOp>(ifOp.elseYield().getOperand(pos));
+
+    // invalid tokens in main ifOp
+    b.setInsertionPoint(ifOp);
+    auto poisonToken = b.create<ub::PoisonOp>(b.getType<AsyncTokenType>());
+    ifOp.thenYield().setOperand(pos, poisonToken);
+    ifOp.elseYield().setOperand(pos, poisonToken);
+
+    // patch loop.stage=1
+    enterIf->setAttrs(ifOp->getAttrs());
+    exitIf->setAttrs(ifOp->getAttrs());
+    enterIf->setAttr(kLoopStageAttrName, b.getI32IntegerAttr(1));
+    exitIf->setAttr(kLoopStageAttrName, b.getI32IntegerAttr(1));
+  }
+}
+
 LogicalResult runOnFunction(triton::FuncOp funcOp) {
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
@@ -647,6 +735,9 @@ LogicalResult runOnFunction(triton::FuncOp funcOp) {
       if (failed(insertTmemAref(accessDag)))
         return failure();
   }
+
+  workaroundForLoopScheduler(funcOp);
+
   return success();
 }
 
