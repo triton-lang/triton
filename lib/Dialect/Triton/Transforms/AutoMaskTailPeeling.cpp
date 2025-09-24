@@ -1,15 +1,15 @@
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "llvm/ADT/STLExtras.h"
-#include "mlir/Analysis/SliceAnalysis.h"
-#include "mlir/IR/Matchers.h"
-#include "mlir/Support/LogicalResult.h"
 
 namespace mlir::triton {
 
@@ -149,7 +149,8 @@ static bool isLoadMaskAlwaysTrueInMainLoop(LoadOp load, mlir::scf::ForOp forOp,
 }
 
 // Remove the mask from the load op by rebuilding it without mask/other.
-static mlir::Operation *dropLoadMask(mlir::RewriterBase &rewriter, LoadOp load) {
+static mlir::Operation *dropLoadMask(mlir::RewriterBase &rewriter,
+                                     LoadOp load) {
   mlir::OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPoint(load);
   auto newLoad = rewriter.create<LoadOp>(
@@ -163,10 +164,10 @@ static mlir::Operation *dropLoadMask(mlir::RewriterBase &rewriter, LoadOp load) 
 struct AutoMaskTailPeelingPass
     : public impl::TritonAutoMaskTailPeelingBase<AutoMaskTailPeelingPass> {
 
-  void peelLoopEpilogue(
-      scf::ForOp forOp,
-      function_ref<Operation *(RewriterBase &, Operation *, bool)>
-          processPeeledOp) {
+  void
+  peelLoopEpilogue(scf::ForOp forOp,
+                   function_ref<Operation *(RewriterBase &, Operation *, bool)>
+                       processPeeledOp) {
     IRRewriter rewriter(forOp);
     Location loc = forOp.getLoc();
 
@@ -184,7 +185,7 @@ struct AutoMaskTailPeelingPass
         }
       }
     }
-    
+
     // Calculate the new upper bound for the main loop.
     Value diff = rewriter.create<arith::SubIOp>(loc, upperBound, lowerBound);
     Value tripCount = rewriter.create<arith::CeilDivSIOp>(loc, diff, step);
@@ -207,8 +208,7 @@ struct AutoMaskTailPeelingPass
       // Process main loop (isEpilogue = false)
       for (auto &op : llvm::make_early_inc_range(
                mainLoop.getBody()->without_terminator())) {
-        Operation *newOp =
-            processPeeledOp(rewriter, &op, /*isEpilogue=*/false);
+        Operation *newOp = processPeeledOp(rewriter, &op, /*isEpilogue=*/false);
         if (newOp && newOp != &op) {
           op.replaceAllUsesWith(newOp);
           rewriter.eraseOp(&op);
@@ -224,7 +224,8 @@ struct AutoMaskTailPeelingPass
 
   void runOnOperation() override {
     llvm::SmallVector<mlir::scf::ForOp> loops;
-    getOperation()->walk([&](mlir::scf::ForOp forOp) { loops.push_back(forOp); });
+    getOperation()->walk(
+        [&](mlir::scf::ForOp forOp) { loops.push_back(forOp); });
 
     for (mlir::scf::ForOp forOp : loops) {
       if (auto *def = forOp.getStep().getDefiningOp()) {
@@ -269,4 +270,3 @@ struct AutoMaskTailPeelingPass
 };
 
 } // namespace mlir::triton
-
