@@ -12,16 +12,18 @@ include "triton/Dialect/TritonInstrument/IR/TritonInstrumentAttrDefs.td"
 // ConSan keeps auxilary data requied for tracking memory accesses in tensors.
 // These tensors are stored as a distributed tensor or in global scratch memory.
 //
-// Name            | Storage | Rank/Type       | Description
-// ----------------|---------|-----------------|------------
-// buffers         | tensor  | <B x i64>       | Base pointers of all (sub)buffers
-// barriers        | tensor  | <K x i64>       | Pointers to all individual mbarriers
-// writeVisibility | scratch | <B x i64>       | Per-buffer thread-visibility bitmask (bit i => thread i visible)
-// readVisibility  | scratch | <B x T x i64>   | Per-buffer, per-thread visibility lanes (row-updated; values are bitmasks)
-// writeTracking   | scratch | <B x K x i8>    | Map buffers -> barriers that track writes
-// readTracking    | scratch | <B x K x i64>   | Map buffers -> barriers that track reads
+// Name              | Storage | Rank/Type       | Description
+// ------------------|---------|-----------------|------------
+// buffers           | tensor  | <B x i64>       | Base pointers of all (sub)buffers
+// barriers          | tensor  | <K x i64>       | Pointers to all individual mbarriers
+// barrierStates     | scratch | <K x i32>       | Packed barrier phase (bit 0) and arrival counts (bits[1..8] init, [9..16] current)
+// waiting           | scratch | <K x i32>       | Two bits per thread: waiting flag bit (LSB), stored phase bit (bit 1)
+// writeVisibility   | scratch | <B x i64>       | Per-buffer thread-visibility bitmask (bit i => thread i visible)
+// readVisibility    | scratch | <B x T x i64>   | Per-buffer, per-thread visibility lanes (row-updated; values are bitmasks)
+// writeTracking     | scratch | <B x K x i8>    | Map buffers -> barriers that track writes
+// readTracking      | scratch | <B x K x i64>   | Map buffers -> barriers that track reads
 // outstandingCommits
-//   (async/wgmma) | scratch | <B x T x i8>    | Number of outstanding commits per buffer/thread (2D replaces prior 1D)
+//   (async/wgmma)   | scratch | <B x T x i8>    | Number of outstanding commits per buffer/thread (2D replaces prior 1D)
 
 //
 // Interfaces
@@ -62,6 +64,9 @@ def TTI_ExperimentalBufferPointersOp : TTI_Op<"experimental_buffer_pointers", [P
 }
 
 
+// ===== Critical section lock ops =====
+
+
 def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Acquire a lock.";
   let description = [{
@@ -84,6 +89,9 @@ def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release", [MemoryE
     $lock (`,` $pred^)? attr-dict `:` type($lock)
   }];
 }
+
+
+// ===== Barrier based synchronization ops =====
 
 
 def TTI_ExperimentalSetWriteVisibilityOp : TTI_Op<"experimental_set_write_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
@@ -313,6 +321,9 @@ def TTI_ExperimentalVerifyReadVisibilityOp : TTI_Op<"experimental_verify_read_vi
   }];
   let hasVerifier = 1;
 }
+
+
+// ===== Commit-count–based synchronization ops =====
 
 
 def TTI_ExperimentalStageAccessForCommitOp : TTI_Op<"experimental_stage_access_for_commit", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {

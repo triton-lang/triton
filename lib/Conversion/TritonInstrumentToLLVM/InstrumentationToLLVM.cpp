@@ -22,22 +22,36 @@ namespace ttng = mlir::triton::nvidia_gpu;
 // Utility functions
 ////////////////////////////////////////////
 
-constexpr unsigned kBarrierPhaseShift = 0;
-constexpr unsigned kBarrierInitShift = 1;
-constexpr unsigned kBarrierCurrentShift = 9;
-constexpr unsigned kBarrierCountMask = 0xFF;
+namespace BarrierBits {
+constexpr unsigned phaseBit = 0;
+constexpr unsigned initCountLsb = 1;
+constexpr unsigned currentCountLsb = 9;
+constexpr unsigned countBitWidth = 8;
+constexpr unsigned countMask = (1u << countBitWidth) - 1;
+} // namespace BarrierBits
 
-constexpr unsigned kWaitingBitsPerThread = 2;
-constexpr unsigned kWaitingFlagShift = 0;
-constexpr unsigned kWaitingPhaseShift = 1;
-constexpr uint32_t kWaitingFlagMask = 0x55555555u;
-constexpr uint32_t kWaitingPhaseMask = 0xAAAAAAAAu;
+namespace WaitingBits {
+constexpr unsigned bitsPerThread = 2;
+constexpr unsigned flagBit = 0;
+constexpr unsigned phaseBit = 1;
+
+constexpr uint32_t makeInterleavedMask(unsigned bit) {
+  uint32_t mask = 0;
+  for (unsigned i = 0; i < tti::NUM_THREADS; ++i)
+    mask |= 1u << (bitsPerThread * i + bit);
+  return mask;
+}
+
+constexpr uint32_t flagMask = makeInterleavedMask(flagBit);
+constexpr uint32_t phaseMask = makeInterleavedMask(phaseBit);
+} // namespace WaitingBits
 
 static uint64_t expandActiveMask(uint64_t activeMask) {
   uint64_t expanded = 0;
   for (unsigned i = 0; i < tti::NUM_THREADS; ++i) {
     if (activeMask & (1ull << i))
-      expanded |= 1ull << (kWaitingBitsPerThread * i + kWaitingFlagShift);
+      expanded |=
+          1ull << (WaitingBits::bitsPerThread * i + WaitingBits::flagBit);
   }
   return expanded;
 }
@@ -1247,9 +1261,9 @@ struct InitBarrierStateOpConversion
                                    op.getMbar().getType(), adaptor.getMbar());
     Value mask = createCmpIntTensorScalar(b, loc, barriers, bar);
 
-    uint64_t count = op.getCount() & kBarrierCountMask;
-    uint64_t init =
-        (count << kBarrierInitShift) | (count << kBarrierCurrentShift);
+    uint64_t count = op.getCount() & BarrierBits::countMask;
+    uint64_t init = (count << BarrierBits::initCountLsb) |
+                    (count << BarrierBits::currentCountLsb);
     Value newState = tti::createConstIntTensor(b, loc, init, statesType);
     Value updated = b.create<arith::SelectOp>(loc, mask, newState, states);
     tti::createStoreScratchMemory(b, loc, op.getStates(), updated, statesType);
@@ -1285,15 +1299,15 @@ struct VerifyBarrierArriveOpConversion
 
     Value zero32 = tti::createConstIntTensor(b, loc, 0, statesType);
     Value maskFF =
-        tti::createConstIntTensor(b, loc, kBarrierCountMask, statesType);
-    Value shiftNine =
-        tti::createConstIntTensor(b, loc, kBarrierCurrentShift, statesType);
+        tti::createConstIntTensor(b, loc, BarrierBits::countMask, statesType);
+    Value shiftNine = tti::createConstIntTensor(
+        b, loc, BarrierBits::currentCountLsb, statesType);
 
     Value currentCount = b.create<arith::ShRUIOp>(loc, states, shiftNine);
     currentCount = b.create<arith::AndIOp>(loc, currentCount, maskFF);
 
     Value arriveCount = tti::createConstIntTensor(
-        b, loc, op.getCount() & kBarrierCountMask, statesType);
+        b, loc, op.getCount() & BarrierBits::countMask, statesType);
     Value newCurrent = b.create<arith::SubIOp>(loc, currentCount, arriveCount);
     Value newCurrentMasked =
         b.create<arith::SelectOp>(loc, mask, newCurrent, zero32);
@@ -1339,11 +1353,11 @@ struct UpdateBarrierStateOpConversion
     Value zero32 = tti::createConstIntTensor(b, loc, 0, statesType);
     Value one32 = tti::createConstIntTensor(b, loc, 1, statesType);
     Value maskFF =
-        tti::createConstIntTensor(b, loc, kBarrierCountMask, statesType);
-    Value shiftOne =
-        tti::createConstIntTensor(b, loc, kBarrierInitShift, statesType);
-    Value shiftNine =
-        tti::createConstIntTensor(b, loc, kBarrierCurrentShift, statesType);
+        tti::createConstIntTensor(b, loc, BarrierBits::countMask, statesType);
+    Value shiftOne = tti::createConstIntTensor(
+        b, loc, BarrierBits::initCountLsb, statesType);
+    Value shiftNine = tti::createConstIntTensor(
+        b, loc, BarrierBits::currentCountLsb, statesType);
 
     Value phase = b.create<arith::AndIOp>(loc, states, one32);
     Value initCount = b.create<arith::ShRUIOp>(loc, states, shiftOne);
@@ -1352,7 +1366,7 @@ struct UpdateBarrierStateOpConversion
     currentCount = b.create<arith::AndIOp>(loc, currentCount, maskFF);
 
     Value arriveCount = tti::createConstIntTensor(
-        b, loc, op.getCount() & kBarrierCountMask, statesType);
+        b, loc, op.getCount() & BarrierBits::countMask, statesType);
     Value newCurrent = b.create<arith::SubIOp>(loc, currentCount, arriveCount);
     Value newCurrentMasked =
         b.create<arith::SelectOp>(loc, mask, newCurrent, currentCount);
@@ -1376,12 +1390,6 @@ struct UpdateBarrierStateOpConversion
     return success();
   }
 };
-
-} // namespace
-
-// ===== Deadlock detection lowerings =====
-
-namespace {
 
 struct SetWaitingOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalSetWaitingOp> {
@@ -1407,9 +1415,10 @@ struct SetWaitingOpConversion
     Value barriersEqBar = createCmpIntTensorScalar(b, loc, barriers, bar);
 
     unsigned baseThread = op.getBaseThread();
-    unsigned flagShift = kWaitingBitsPerThread * baseThread + kWaitingFlagShift;
+    unsigned flagShift =
+        WaitingBits::bitsPerThread * baseThread + WaitingBits::flagBit;
     unsigned phaseShift =
-        kWaitingBitsPerThread * baseThread + kWaitingPhaseShift;
+        WaitingBits::bitsPerThread * baseThread + WaitingBits::phaseBit;
     uint32_t flagMask = 1u << flagShift;
     uint32_t phaseMask = 1u << phaseShift;
     uint32_t clearMask = ~(flagMask | phaseMask);
@@ -1466,9 +1475,9 @@ struct CheckAllActiveWaitingOpConversion
                               ->getResult(0);
 
     Value flagMaskTensor =
-        tti::createConstIntTensor(b, loc, kWaitingFlagMask, waitingType);
+        tti::createConstIntTensor(b, loc, WaitingBits::flagMask, waitingType);
     Value phaseMaskTensor =
-        tti::createConstIntTensor(b, loc, kWaitingPhaseMask, waitingType);
+        tti::createConstIntTensor(b, loc, WaitingBits::phaseMask, waitingType);
 
     Value flags = b.create<arith::AndIOp>(loc, waiting, flagMaskTensor);
     Value phases = b.create<arith::AndIOp>(loc, waiting, phaseMaskTensor);
@@ -1532,9 +1541,10 @@ struct ClearWaitingOpConversion
     Value barriersEqBar = createCmpIntTensorScalar(b, loc, barriers, bar);
 
     unsigned baseThread = op.getBaseThread();
-    unsigned flagShift = kWaitingBitsPerThread * baseThread + kWaitingFlagShift;
+    unsigned flagShift =
+        WaitingBits::bitsPerThread * baseThread + WaitingBits::flagBit;
     unsigned phaseShift =
-        kWaitingBitsPerThread * baseThread + kWaitingPhaseShift;
+        WaitingBits::bitsPerThread * baseThread + WaitingBits::phaseBit;
     uint32_t clearMask = ~((1u << flagShift) | (1u << phaseShift));
 
     Value clearMaskTensor =

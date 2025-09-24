@@ -44,6 +44,8 @@ struct AuxDataMap {
     Region *getEnclosingParitionOrFunctionRegion(Operation *op);
   };
 
+  // Please see TritonInstrumentOps.td for more information on the auxiliary
+  // data structures.
   RegionToValueMap buffers[numMemTypes];
   RegionToValueMap barriers;
   RegionToValueMap barrierStates;
@@ -55,8 +57,6 @@ struct AuxDataMap {
   RegionToValueMap asyncCpCommits;
   RegionToValueMap wgmmaCommits;
   RegionToValueMap lock;
-  // Deadlock detection aux data
-  // waiting: per-barrier bitmask storing waiting flag and phase per thread
   RegionToValueMap waiting;
 
   void populateAndPassToWarpSpecialize(ModuleOp module);

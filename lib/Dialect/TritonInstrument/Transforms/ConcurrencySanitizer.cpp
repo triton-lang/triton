@@ -89,8 +89,6 @@ int getCurrentThread(Operation *op) {
 
 int getBaseThread(int thread) { return thread % NUM_THREADS; }
 
-int getTCTMAThread(int thread) { return thread - TMA_THREAD_OFFSET; }
-
 // Peer threads are the equivalent threads in the TMA, TC and normal
 // thread classes.
 // If a thread is a base thread, return the mask with the peers, otherwise
@@ -159,6 +157,13 @@ private:
 
       instrumentMemEffects(b, op, thread);
 
+      if (auto initOp = dyn_cast<ttng::InitBarrierOp>(op)) {
+        if (auxData.barriers[op].value && auxData.barrierStates[op].value) {
+          b.create<tti::ExperimentalInitBarrierStateOp>(
+              initOp.getAlloc(), initOp.getCount(), auxData.barriers[op].value,
+              auxData.barrierStates[op].value, auxData.barrierStates[op].type);
+        }
+      }
       if (auto waitOp = dyn_cast<ttng::WaitBarrierOp>(op)) {
         // Pre-wait: mark waiting threads and check for deadlock.
         {
@@ -182,21 +187,12 @@ private:
                 pred);
           }
 
-          // Debug
-          // if (op->getParentOfType<ttg::WarpSpecializePartitionsOp>() !=
-          // nullptr)
-          // {
-          //   auto waiting = tti::createLoadScratchMemory(b, b.getLoc(),
-          //   auxData.waiting[op].value,
-          //   cast<RankedTensorType>(auxData.waiting[op].type))->getResult(0);
-          //   b.create<tt::PrintOp>("waiting", false, waiting,
-          //   std::vector<int32_t>{0});
-          // }
-
           preListener.maybeWrapWithCriticalSection(b, auxData, pred);
           b.setListener(&listener);
           b.setInsertionPointAfter(waitOp);
         }
+        // Post-wait: transfer visible writes and reads to all peer threads,
+        // and clear waiting for this barrier
         auto _barriers = auxData.barriers[op].value;
         assert(!auxData.barriers.empty());
         auto pred = waitOp.getPred();
@@ -219,18 +215,10 @@ private:
                 auxData.readTracking[(int)memType][op].type, pred);
           }
         }
-        // Post-wait: clear waiting for this barrier
         if (auxData.barriers[op].value && auxData.waiting[op].value) {
           b.create<tti::ExperimentalClearWaitingOp>(
               barrier, baseThread, auxData.barriers[op].value,
               auxData.waiting[op].value, auxData.waiting[op].type, pred);
-        }
-      }
-      if (auto initOp = dyn_cast<ttng::InitBarrierOp>(op)) {
-        if (auxData.barriers[op].value && auxData.barrierStates[op].value) {
-          b.create<tti::ExperimentalInitBarrierStateOp>(
-              initOp.getAlloc(), initOp.getCount(), auxData.barriers[op].value,
-              auxData.barrierStates[op].value, auxData.barrierStates[op].type);
         }
       }
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {

@@ -574,8 +574,6 @@ def test_multibuffered_wgmma_loop(FAILURE, device, run_wrapper):
 
     triton.set_allocator(alloc_fn)
 
-    # ---
-
     @gluon.jit
     def kernel(input_desc, FAILURE: ttgl.constexpr):
         num_buffers: ttgl.constexpr = 2 if FAILURE else 3
@@ -945,6 +943,7 @@ def test_ws_two_loads_two_bars_loop(MISSING_BAR, device, run_wrapper):
     kernel[(1, )](output, MISSING_BAR=MISSING_BAR, num_warps=4)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_ws_load_ordering(FAILURE, device, run_wrapper):
     if run_wrapper:
