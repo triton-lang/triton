@@ -45,6 +45,15 @@ std::optional<int> getPartitionId(Operation *op) {
   assert(partitionIds->size() == 1);
   return *partitionIds->begin();
 }
+
+std::optional<int> getOutputPartitionId(Operation *op, int idx) {
+  auto partitionIds = getOutputPartitionIds(op, idx);
+  if (!partitionIds)
+    return std::nullopt;
+  assert(partitionIds->size() == 1);
+  return *partitionIds->begin();
+}
+
 using PartitionId = int;
 
 struct TmemAccessDag {
@@ -204,7 +213,13 @@ struct TmemAccessDag {
       return tokOperand.get(); // return token back to the caller
 
     auto op = tokOperand.getOwner();
-    node->user.reset(new Node(op, &tokOperand, getPartitionId(op), node));
+    std::optional<int> partition_id = std::nullopt;
+    if (isa<scf::ForOp>(op))
+      partition_id =
+          getOutputPartitionId(op, tokOperand.getOperandNumber() - 3);
+    else
+      partition_id = getPartitionId(op);
+    node->user.reset(new Node(op, &tokOperand, partition_id, node));
     auto newNode = node->user.get();
     op2dagMap.insert({op, newNode});
     Value newTok;
