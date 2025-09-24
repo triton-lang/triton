@@ -66,6 +66,10 @@ class HIPOptions:
     # attention: enables a bunch of optimizations for attention kernels, including:
     #            - iglp 2 and sched.barrier around it
     #            - sink-insts-to-avoid-spills flag to avoid register spills
+    # iterative-ilp-scheduler: enables custom instruction scheduler in backend
+    #
+    # Option allows to set multiple variants divided by commas:
+    # schedule_hint="attention,iterative-ilp-scheduler"
     schedule_hint: str = 'none'
 
     def __post_init__(self):
@@ -444,8 +448,11 @@ class HIPBackend(BaseBackend):
         # into loops to avoid register spills in the MachineSinking pass, while it
         # can also lead to regression in some cases. But from current observation,
         # the regression is not significant. It would be better to have some heuristics.
-        if options.schedule_hint == 'attention':
-            flags.append('sink-insts-to-avoid-spills')
+        for hint in options.schedule_hint.split(","):
+            if hint == 'attention':
+                flags.append(('sink-insts-to-avoid-spills', True))
+            if hint == 'iterative-ilp-scheduler':
+                flags.append(('amdgpu-sched-strategy', 'iterative-ilp'))
         features = '-real-true16' if 'gfx11' in options.arch else ''
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
                                        False)
