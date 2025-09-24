@@ -122,20 +122,22 @@ def _reduce_ep_torch(metadata: ReduceScatterMetadata, input_tensor: torch.Tensor
 
 @triton.jit
 def _reduce_ep_triton_kernel(ep_indx_ptr, output_tensor_ptr, output_list, n_tokens, n_expts, hidden_size,
-                             TP: tl.constexpr, EP: tl.constexpr, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
+                             TP: tl.constexpr, EP: tl.constexpr,
+                             BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_E: tl.constexpr,
                              original_dtype: tl.constexpr, intermediate_dtype: tl.constexpr):
     offs_m = tl.program_id(0) * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
     offs_n = tl.arange(0, BLOCK_SIZE_N)
+    offs_e = tl.arange(0, BLOCK_SIZE_E)
     world_size: tl.constexpr = TP * EP
-    input_output_mask = (offs_n[None, :] < hidden_size) & (offs_m[:, None] < n_tokens)
+    input_output_mask = (offs_m[:, None] < n_tokens) & (offs_n[None, :] < hidden_size)
+    ep_indx_mask = (offs_m[:, None] < n_tokens) & (offs_e[None, :] < n_expts)
     output = tl.load(output_tensor_ptr + offs_m[:, None] * hidden_size + offs_n[None, :], \
                      mask=input_output_mask, other=0).to(intermediate_dtype)
 
     for rank in range(world_size):
         input_tensor_ptr = tl.load(output_list + rank).to(tl.pointer_type(original_dtype))
         ep_rank = rank // TP
-        ep_indx_mask = (offs_m[:, None] < n_tokens) & (offs_n[None, :] < n_expts)
-        ep_indx = tl.load(ep_indx_ptr + offs_m[:, None] * n_expts + offs_n[None, :], mask=ep_indx_mask)
+        ep_indx = tl.load(ep_indx_ptr + offs_m[:, None] * n_expts + offs_e[None, :], mask=ep_indx_mask)
         mask = tl.reduce_or(ep_indx == ep_rank, axis=1)
         input = tl.load(input_tensor_ptr + offs_m[:, None] * hidden_size + offs_n[None, :],
                         mask=input_output_mask & mask[:, None], other=0).to(intermediate_dtype)
@@ -143,6 +145,7 @@ def _reduce_ep_triton_kernel(ep_indx_ptr, output_tensor_ptr, output_list, n_toke
 
     output = output.to(original_dtype)
     tl.store(output_tensor_ptr + offs_m[:, None] * hidden_size + offs_n[None, :], output, mask=input_output_mask)
+
 
 def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tensor, output_list: list[torch.Tensor],
                       world_size: int, dim: int, op: dist.ReduceOp.RedOpType, original_dtype: torch.dtype,
@@ -165,6 +168,7 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
         TP=metadata.TP, EP=metadata.EP,  #
         BLOCK_SIZE_M=BLOCK_SIZE_M,  #
         BLOCK_SIZE_N=triton.next_power_of_2(hidden_size),  #
+        BLOCK_SIZE_E=triton.next_power_of_2(n_expts),  #
         original_dtype=triton_original_dtype,  #
         intermediate_dtype=triton_intermediate_dtype)
     return output_tensor
@@ -584,10 +588,12 @@ def test_reduce_ep_triton_large(TP, EP, n_tokens, hidden_size, routes_per_token)
     op = dist.ReduceOp.SUM
 
     def triton_fn():
-        return _reduce_ep_triton(metadata, input_tensor, output_list, world_size, 0, op, original_dtype, intermediate_dtype)
+        return _reduce_ep_triton(metadata, input_tensor, output_list, world_size, 0, op, original_dtype,
+                                 intermediate_dtype)
 
     def torch_fn():
-        return _reduce_ep_torch(metadata, input_tensor, output_list, world_size, 0, op, original_dtype, intermediate_dtype)
+        return _reduce_ep_torch(metadata, input_tensor, output_list, world_size, 0, op, original_dtype,
+                                intermediate_dtype)
 
     ret = triton_fn()
     ref = torch_fn()
