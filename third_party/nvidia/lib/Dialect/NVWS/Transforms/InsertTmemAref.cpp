@@ -550,6 +550,10 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
   auto rootNode = accessDag.getRootNode();
   auto allocOp = cast<TMEMAllocOp>(rootNode->op);
 
+  // do nothing for alloc with src, whose user is in the same partition
+  if (allocOp.getSrc() && rootNode->user->partitionId == rootNode->partitionId)
+    return success();
+
   std::optional<bool> isMultiStaged;
   for (auto user : allocOp.getResult().getUsers()) {
     if (auto mmaOp = dyn_cast<MMAv5OpInterface>(user)) {
