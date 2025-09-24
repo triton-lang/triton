@@ -158,12 +158,13 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
     triton_intermediate_dtype = TRITON_DTYPE_MAP.get(intermediate_dtype, tl.float32)
     BLOCK_SIZE_M = 128
     # Construct a device array of pointers to each tensor in output_list
-    output_list = torch.tensor([x.data_ptr() for x in output_list], device=input_tensor.device, dtype=torch.int64)
+    output_ptr_tensor = torch.tensor([x.data_ptr() for x in output_list], device=input_tensor.device, dtype=torch.int64)
     _reduce_ep_triton_kernel[(triton.cdiv(n_tokens, BLOCK_SIZE_M), )](
-        metadata.ep_indx, output_tensor, output_list, n_tokens, n_expts, hidden_size,  #
+        metadata.ep_indx, output_tensor, output_ptr_tensor,  #
+        n_tokens, n_expts, hidden_size,  #
         TP=metadata.TP, EP=metadata.EP,  #
         BLOCK_SIZE_M=BLOCK_SIZE_M,  #
-        BLOCK_SIZE_N=triton.next_power_of_2(other_dims[0]),  #
+        BLOCK_SIZE_N=triton.next_power_of_2(hidden_size),  #
         original_dtype=triton_original_dtype,  #
         intermediate_dtype=triton_intermediate_dtype)
     return output_tensor
