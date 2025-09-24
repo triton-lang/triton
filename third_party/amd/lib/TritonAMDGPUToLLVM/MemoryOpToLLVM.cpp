@@ -7,6 +7,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 
 using ::mlir::triton::gpu::MemDescType;
@@ -36,32 +37,32 @@ public:
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     unsigned bitwidth = llvmElemTy.getIntOrFloatBitWidth();
     // 64 is the number of bytes ds_read_tr
-    unsigned requiredContiguityReg = 64 / bitwidth;
+    unsigned needContigReg = 64 / bitwidth;
     // 16 is the number of lanes that participate in the data shuffle
-    unsigned requiredContiguityLane = 16;
+    unsigned needContigLane = 16;
 
-    if (canUseTransLoad(op, srcTy, dstTy, bitwidth, requiredContiguityReg,
-                        requiredContiguityLane)) {
-      auto shape = srcTy.getShape();
-      // FP4 are packed into i8 so the real bitwidth is different
-      auto llBitwidth = isPackedLoad ? 4 : llvmElemTy.getIntOrFloatBitWidth();
-      auto ldsTransLayout = triton::gpu::chooseDsReadB64TrLayout(
-          dstTy.getEncoding(), shape, llBitwidth);
-
-      int vecSize = getLayoutVectorization(srcTy, ldsTransLayout);
-      if (vecSize < requiredContiguityReg)
-        return failure();
-
-      return lowerSharedToDotOperandTransLL(op, ldsTransLayout, adaptor,
-                                            typeConverter, rewriter);
+    if (!canUseTransLoad(op, srcTy, dstTy, bitwidth, needContigReg,
+                         needContigLane)) {
+      return failure();
     }
-    return failure();
+    auto shape = srcTy.getShape();
+    // FP4 are packed into i8 so the real bitwidth is different
+    auto llBitwidth = isPackedLoad ? 4 : llvmElemTy.getIntOrFloatBitWidth();
+    auto ldsTransLayout = triton::gpu::chooseDsReadB64TrLayout(
+        dstTy.getEncoding(), shape, llBitwidth);
+
+    int vecSize = getLayoutVectorization(srcTy, ldsTransLayout);
+    if (vecSize < needContigReg)
+      return failure();
+
+    return lowerSharedToDotOperandTransLL(op, ldsTransLayout, adaptor,
+                                          typeConverter, rewriter);
   }
 
 private:
   bool checkLayoutProperties(MemDescType srcTy, RankedTensorType dstTy,
-                             unsigned requiredContiguityReg,
-                             unsigned requiredContiguityLane) const {
+                             unsigned needContigReg,
+                             unsigned needContigLane) const {
     auto srcOrder = triton::gpu::getOrder(srcTy);
     auto dstOrder = triton::gpu::getOrder(dstTy);
 
@@ -74,7 +75,7 @@ private:
     auto dstLL = triton::gpu::toLinearLayout(dstTy);
     SmallVector<StringAttr> outDimNames(dstLL.getOutDimNames());
     std::swap(outDimNames[0], outDimNames[1]);
-    auto transposedLL = dstLL.transposeOuts(outDimNames);
+    auto dstTrLL = dstLL.transposeOuts(outDimNames);
 
     // Check the main requirements for the ds_read_tr instruction: contiguity
     // of reg/lane. This is because ds_read_tr works on a block of 16 lanes
@@ -86,29 +87,25 @@ private:
     // can get the contiguity of the first component of the first
     // dimension.
     // Since the data might be dim0 or dim1 contiguous we need both the
-    // dstLL and the dstTransposedLL: one to check the register dimension
+    // dstLL and the dstTrLL: one to check the register dimension
     // contiguity and the other to check the lane dimension one.
-    unsigned kContig = dstOrder[0] == 1 ? 0 : 1;
-    auto dstLLKContig = kContig == 0 ? transposedLL : dstLL;
-    auto dstLLMNContig = kContig == 0 ? dstLL : transposedLL;
-    int contigRegisters = dstLLKContig.getNumConsecutiveInOut();
+    bool dim1Contig = dstOrder[0] == 1;
+    auto dstLLDim0Contig = dim1Contig ? dstTrLL : dstLL;
+    auto dstLLDim1Contig = dim1Contig ? dstLL : dstTrLL;
+    int contigRegisters = dstLLDim0Contig.getNumConsecutiveInOut();
 
-    assert(dstLLKContig.getBases().begin()->first == "register");
+    assert(dstLLDim0Contig.getBases().begin()->first == "register");
     SmallVector<StringAttr> subLayoutInDims(
-        llvm::drop_begin(dstLLKContig.getInDimNames()));
-    SmallVector<StringAttr> subLayoutOutDims(dstLLKContig.getOutDimNames());
+        llvm::drop_begin(dstLLDim0Contig.getInDimNames()));
+    SmallVector<StringAttr> subLayoutOutDims(dstLLDim0Contig.getOutDimNames());
     auto dstLLOnlyLaneWarp =
-        dstLLMNContig.sublayout(subLayoutInDims, subLayoutOutDims);
+        dstLLDim1Contig.sublayout(subLayoutInDims, subLayoutOutDims);
     int contigLanes = dstLLOnlyLaneWarp.getNumConsecutiveInOut();
 
-    // Check that the tile size used by ds_read_tr (4x16 in fp16) is
-    // contiguous both in terms of registers dimension and in terms of
-    // lane dimension. If that is the case then we can use ds_read_tr
-    if (contigRegisters < requiredContiguityReg)
-      return false;
-    if (contigLanes < requiredContiguityLane)
-      return false;
-    return true;
+    // Check that the tile size used by ds_read_tr (KxM/N = 4x16 for 16-bit
+    // elements) is contiguous both in terms of registers dimension and in
+    // terms of lane dimension. If that is the case then we can use ds_read_tr
+    return contigRegisters >= needContigReg && contigLanes >= needContigLane;
   }
 
   bool checkCurrentLimitation(unsigned bitwidth) const {
@@ -123,8 +120,7 @@ private:
 
   bool canUseTransLoad(Operation *localLoad, MemDescType srcTy,
                        RankedTensorType dstTy, unsigned bitwidth,
-                       unsigned requiredContiguityReg,
-                       unsigned requiredContiguityLane) const {
+                       unsigned needContigReg, unsigned needContigLane) const {
     // Packed loads need to always map to ds_read_tr
     if constexpr (isPackedLoad) {
       return true;
@@ -138,8 +134,7 @@ private:
       return false;
     }
 
-    if (!checkLayoutProperties(srcTy, dstTy, requiredContiguityReg,
-                               requiredContiguityLane)) {
+    if (!checkLayoutProperties(srcTy, dstTy, needContigReg, needContigLane)) {
       return false;
     }
 
@@ -161,8 +156,7 @@ private:
 
     // Determine how many consecutive registers map to consecutive shmem
     // elements in out-dimension offsetN.
-    int vecElems = std::min(regToSharedLayout.getNumConsecutiveInOut(),
-                            std::numeric_limits<int>::max());
+    int vecElems = regToSharedLayout.getNumConsecutiveInOut();
     if (paddedEnc) {
       vecElems = std::min(vecElems, int(paddedEnc.getMinInterval()));
     }

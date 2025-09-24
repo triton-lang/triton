@@ -482,27 +482,39 @@ LinearLayout chooseLLDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
   // This function will derive the layout for the ds_read_b64_tr instruction
   // based on the input layout (LL/DotLayout/...)
   // The ds_read_b64_tr works on 64 bits per lane and in groups of 16 lanes.
-  // Each lane will load 4 elements and then the data is exchanged within
-  // the 4x16 block (for F16) in a transposed way.
 
-  // T0 T4 T8 T12
-  //  0  1  2  3           T0: 0 1 2 3
-  //  4  5  6  7      ---> T1: 4 5 6 7
-  //  8  9 10 11           T2: 8 9 10 11
-  // 12 13 14 15           T3: 12 13 14 15
-  //                       T4: 16 17 18 19
-  // T1 T5 T9 T13          T5: 20 21 22 23
-  // 16 17 18 19           ...
-  // 20 21 22 23
-  // 24 25 25 27
-  // 28 29 30 31
-  // ...
+  // Using M-continuous 16-bit input tensor A as an example. Each lane will
+  // load 4 consecutive elements (64-bit in total) along M. There are 4
+  // consecutive lanes in total along M. Then the loaded elements are exchanged
+  // withthin the MxK=16x4 "base unit".
+  //        K0  K1  K2  K3
+  //      +---+---+---+---+
+  //  M0  |   |   |   |   |       M0, K[0-3]:  T0
+  //  M1  | T | T | T | T |       M1, K[0-3]:  T1
+  //  M2  | 0 | 4 | 8 |12 |       M2, K[0-3]:  T2
+  //  M3  |   |   |   |   |       M3, K[0-3]:  T3
+  //      +---+---+---+---+
+  //  M4  |   |   |   |   |       M4, K[0-3]:  T4
+  //  M5  | T | T | T | T |       M5, K[0-3]:  T5
+  //  M6  | 1 | 5 | 9 |13 |       M6, K[0-3]:  T6
+  //  M7  |   |   |   |   |       M7, K[0-3]:  T7
+  //      +---+---+---+---+  ==>
+  //  M8  |   |   |   |   |       M8, K[0-3]:  T8
+  //  M9  | T | T | T | T |       M9, K[0-3]:  T9
+  // M10  | 2 | 6 |10 |14 |      M10, K[0-3]: T10
+  // M11  |   |   |   |   |      M11, K[0-3]: T11
+  //      +---+---+---+---+
+  // M12  |   |   |   |   |      M12, K[0-3]: T12
+  // M13  | T | T | T | T |      M13, K[0-3]: T13
+  // M14  | 3 | 7 |11 |15 |      M14, K[0-3]: T14
+  // M15  |   |   |   |   |      M15, K[0-3]: T15
+  //      +---+---+---+---+
 
   // Given the layout represented by `enc` and shape, we can derive the layout
   // that ds_read_b64_tr need to have in order to perform a vectorized load of
-  // the elements. This can be done by transposing the inner 4x16 tile (for F16)
-  // and this can be done in the LL by rotating the first numReg register bases
-  // and the first numLane lane bases.
+  // the elements. This can be done by rearranging the inner 4x16 element base
+  // unit in the LL by rearranging the first numReg register bases and the
+  // first numLane lane bases.
   auto rotatePrefixes = [](BaseTy &regBase, std::size_t numReg,
                            BaseTy &laneBase, std::size_t numLane) {
     // Concatenate prefixes of the two vectors. Lane first and then regs.
