@@ -233,6 +233,7 @@ class CUDABackend(BaseBackend):
         passes.ttir.add_rewrite_tensor_pointer(pm)
         if capability // 10 < 9:
             passes.ttir.add_rewrite_tensor_descriptor_to_pointer(pm)
+        passes.ttir.add_auto_mask_tail_peeling(pm)
         passes.common.add_canonicalizer(pm)
         passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)

@@ -90,4 +90,29 @@ def TritonLoopAwareCSE : Pass<"triton-loop-aware-cse", "mlir::ModuleOp"> {
   }];
 }
 
+  def TritonAutoMaskTailPeeling : Pass</*cli-arg*/"triton-auto-mask-tail-peeling", /*Op*/"mlir::ModuleOp"> {
+    let summary = "Peel loop epilogue when tt.load mask is only needed in the last iteration (simple cases)";
+    let description = [{
+      This pass looks for scf.for loops that contain tt.load operations with a mask
+      that is a simple comparison of the induction variable against the loop upper bound
+      (e.g., `arith.cmpi slt, %iv, %ub`). For such cases, it peels the last iteration
+      using the existing peelLoopEpilogue utility so that the main loop runs with
+      the upper bound reduced by one step and the peeled epilogue handles the last iteration.
+
+      In the main loop body, the pass removes the mask from those tt.load operations,
+      relying on the fact that the mask is guaranteed to be true there. The peeled epilogue
+      retains the original masked tt.load so correctness is preserved.
+
+      This is a minimal, conservative implementation that recognizes only the simplest
+      pattern `cmpi slt (iv, ub)` (or swapped operands). It can be extended to support
+      more complex expressions (iv+const, broadcasts, etc.).
+    }];
+
+    let dependentDialects = [
+      "mlir::arith::ArithDialect",
+      "mlir::scf::SCFDialect",
+      "mlir::triton::TritonDialect"
+    ];
+  }
+
 #endif
