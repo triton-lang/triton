@@ -166,12 +166,13 @@ jobs:
           export LD_LIBRARY_PATH=$(find /opt -name libclang_rt.asan-x86_64.so -printf '%h\n' | head -n1):$LD_LIBRARY_PATH
           export LD_LIBRARY_PATH=$(find /opt -type d -wholename *lib/llvm/lib/asan):$LD_LIBRARY_PATH
           TORCH_PATH=$(find /opt -name libcaffe2_nvrtc.so -printf '%h\n')
-          rm -rf $TORCH_PATH/libamdhip64.so
+          mv $TORCH_PATH/libamdhip64.so $TORCH_PATH/libamdhip64_bck.so
           export LD_LIBRARY_PATH=$TORCH_PATH:$LD_LIBRARY_PATH
           export LD_LIBRARY_PATH=$(find /opt -wholename *lib/asan/libamdhip64.so -printf '%h\n'):$LD_LIBRARY_PATH
           export CLANG_ASAN_LIB=$(find /opt -name libclang_rt.asan-x86_64.so | head -n1)
           export HIP_ASAN_LIB=$(find /opt -wholename *lib/asan/libamdhip64.so)
           ASAN_OPTIONS=detect_leaks=0,alloc_dealloc_mismatch=0 LD_PRELOAD=$CLANG_ASAN_LIB:$HIP_ASAN_LIB python3 -m pytest -s test_address_sanitizer.py
+          mv $TORCH_PATH/libamdhip64_bck.so $TORCH_PATH/libamdhip64.so
       - name: Run regression tests
         run: |
           # Reenable test_functional_regression.py once it's fixed
