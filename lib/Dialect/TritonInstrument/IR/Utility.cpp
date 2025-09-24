@@ -223,10 +223,11 @@ namespace mlir::triton::instrument {
 
 TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
                                                   Location loc, int64_t val,
-                                                  RankedTensorType tensorType) {
+                                                  RankedTensorType tensorType,
+                                                  bool isSigned /*= false*/) {
   int bitWidth = tensorType.getElementType().getIntOrFloatBitWidth();
-  auto denseAttr = DenseElementsAttr::get(
-      tensorType, APInt(bitWidth, val, /*isSigned=*/bitWidth > 1));
+  auto denseAttr =
+      DenseElementsAttr::get(tensorType, APInt(bitWidth, val, isSigned));
   return cast<TypedValue<RankedTensorType>>(
       builder.create<arith::ConstantOp>(loc, tensorType, denseAttr)
           .getResult());
@@ -401,15 +402,17 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
           createBufferPointersTensor(b, MemType::SHARED_MEM, barrierValues)};
     });
 
-    // Deadlock detection aux data: waiting (i16[K]) and signalling (i32[K])
     int numBarriers = barrierValues.size();
-    waiting[entryRegion] = {createZeroInitStateTensor(b, numBarriers, 0, 16),
-                            getIntTensorType(entryRegion, {numBarriers}, 16)};
-    passToWarpSpecialize(entryPoint, waiting[entryRegion], waiting);
-    signalling[entryRegion] = {
+    barrierStates[entryRegion] = {
         createZeroInitStateTensor(b, numBarriers, 0, 32),
         getIntTensorType(entryRegion, {numBarriers}, 32)};
-    passToWarpSpecialize(entryPoint, signalling[entryRegion], signalling);
+    passToWarpSpecialize(entryPoint, barrierStates[entryRegion], barrierStates);
+
+    // Deadlock detection aux data: waiting (i32[K]) storing waiting flag and
+    // phase bits per thread (two bits per thread).
+    waiting[entryRegion] = {createZeroInitStateTensor(b, numBarriers, 0, 32),
+                            getIntTensorType(entryRegion, {numBarriers}, 32)};
+    passToWarpSpecialize(entryPoint, waiting[entryRegion], waiting);
 
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       int iMemType = (int)memType;

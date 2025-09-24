@@ -22,6 +22,26 @@ namespace ttng = mlir::triton::nvidia_gpu;
 // Utility functions
 ////////////////////////////////////////////
 
+constexpr unsigned kBarrierPhaseShift = 0;
+constexpr unsigned kBarrierInitShift = 1;
+constexpr unsigned kBarrierCurrentShift = 9;
+constexpr unsigned kBarrierCountMask = 0xFF;
+
+constexpr unsigned kWaitingBitsPerThread = 2;
+constexpr unsigned kWaitingFlagShift = 0;
+constexpr unsigned kWaitingPhaseShift = 1;
+constexpr uint32_t kWaitingFlagMask = 0x55555555u;
+constexpr uint32_t kWaitingPhaseMask = 0xAAAAAAAAu;
+
+static uint64_t expandActiveMask(uint64_t activeMask) {
+  uint64_t expanded = 0;
+  for (unsigned i = 0; i < tti::NUM_THREADS; ++i) {
+    if (activeMask & (1ull << i))
+      expanded |= 1ull << (kWaitingBitsPerThread * i + kWaitingFlagShift);
+  }
+  return expanded;
+}
+
 Value createFullLike(OpBuilder &builder, Location loc, Value scalar,
                      RankedTensorType tensorTy) {
   auto scalarTy = scalar.getType();
@@ -946,7 +966,7 @@ struct StageAccessForCommitOpConversion
     Value bufAndThread =
         b.create<arith::AndIOp>(loc, buffersEqBuf, threadColumnMask);
     auto writeCommitsMinusOne =
-        tti::createConstIntTensor(b, loc, -1, writeCommitsType);
+        tti::createConstIntTensor(b, loc, -1, writeCommitsType, true);
     writeCommits = b.create<arith::SelectOp>(
         loc, bufAndThread, writeCommitsMinusOne, writeCommits);
     tti::createStoreScratchMemory(b, loc, op.getOutstandingCommits(),
@@ -1207,16 +1227,166 @@ struct CheckOutstandingCommitsOpConversion
   }
 };
 
+struct InitBarrierStateOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalInitBarrierStateOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalInitBarrierStateOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
+    b.setInsertionPoint(op);
+
+    auto statesType = cast<RankedTensorType>(op.getStatesType());
+    Value states =
+        tti::createLoadScratchMemory(b, loc, op.getStates(), statesType)
+            ->getResult(0);
+    TypedValue<RankedTensorType> barriers = op.getBarriers();
+    Value bar = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getMbar().getType(), adaptor.getMbar());
+    Value mask = createCmpIntTensorScalar(b, loc, barriers, bar);
+
+    uint64_t count = op.getCount() & kBarrierCountMask;
+    uint64_t init =
+        (count << kBarrierInitShift) | (count << kBarrierCurrentShift);
+    Value newState = tti::createConstIntTensor(b, loc, init, statesType);
+    Value updated = b.create<arith::SelectOp>(loc, mask, newState, states);
+    tti::createStoreScratchMemory(b, loc, op.getStates(), updated, statesType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct VerifyBarrierArriveOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalVerifyBarrierArriveOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalVerifyBarrierArriveOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+
+    auto statesType = cast<RankedTensorType>(op.getStatesType());
+    Value states =
+        tti::createLoadScratchMemory(b, loc, op.getStates(), statesType)
+            ->getResult(0);
+    TypedValue<RankedTensorType> barriers = op.getBarriers();
+    Value bar = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getMbar().getType(), adaptor.getMbar());
+    Value mask = createCmpIntTensorScalar(b, loc, barriers, bar);
+
+    Value zero32 = tti::createConstIntTensor(b, loc, 0, statesType);
+    Value maskFF =
+        tti::createConstIntTensor(b, loc, kBarrierCountMask, statesType);
+    Value shiftNine =
+        tti::createConstIntTensor(b, loc, kBarrierCurrentShift, statesType);
+
+    Value currentCount = b.create<arith::ShRUIOp>(loc, states, shiftNine);
+    currentCount = b.create<arith::AndIOp>(loc, currentCount, maskFF);
+
+    Value arriveCount = tti::createConstIntTensor(
+        b, loc, op.getCount() & kBarrierCountMask, statesType);
+    Value newCurrent = b.create<arith::SubIOp>(loc, currentCount, arriveCount);
+    Value newCurrentMasked =
+        b.create<arith::SelectOp>(loc, mask, newCurrent, zero32);
+    Value nonNegative = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
+                                                newCurrentMasked, zero32);
+    b.create<tti::ExperimentalAssertInThreadOp>(
+        loc, nonNegative,
+        b.getStringAttr(
+            "Barrier arrive underflow: current count would become negative"),
+        false);
+
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct UpdateBarrierStateOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalUpdateBarrierStateOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalUpdateBarrierStateOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+
+    auto statesType = cast<RankedTensorType>(op.getStatesType());
+    Value states =
+        tti::createLoadScratchMemory(b, loc, op.getStates(), statesType)
+            ->getResult(0);
+    TypedValue<RankedTensorType> barriers = op.getBarriers();
+    Value bar = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getMbar().getType(), adaptor.getMbar());
+    Value mask = createCmpIntTensorScalar(b, loc, barriers, bar);
+    Value maskI32 = b.create<arith::ExtUIOp>(loc, statesType, mask);
+
+    Value zero32 = tti::createConstIntTensor(b, loc, 0, statesType);
+    Value one32 = tti::createConstIntTensor(b, loc, 1, statesType);
+    Value maskFF =
+        tti::createConstIntTensor(b, loc, kBarrierCountMask, statesType);
+    Value shiftOne =
+        tti::createConstIntTensor(b, loc, kBarrierInitShift, statesType);
+    Value shiftNine =
+        tti::createConstIntTensor(b, loc, kBarrierCurrentShift, statesType);
+
+    Value phase = b.create<arith::AndIOp>(loc, states, one32);
+    Value initCount = b.create<arith::ShRUIOp>(loc, states, shiftOne);
+    initCount = b.create<arith::AndIOp>(loc, initCount, maskFF);
+    Value currentCount = b.create<arith::ShRUIOp>(loc, states, shiftNine);
+    currentCount = b.create<arith::AndIOp>(loc, currentCount, maskFF);
+
+    Value arriveCount = tti::createConstIntTensor(
+        b, loc, op.getCount() & kBarrierCountMask, statesType);
+    Value newCurrent = b.create<arith::SubIOp>(loc, currentCount, arriveCount);
+    Value newCurrentMasked =
+        b.create<arith::SelectOp>(loc, mask, newCurrent, currentCount);
+
+    Value zeroCond = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                             newCurrentMasked, zero32);
+    zeroCond = b.create<arith::AndIOp>(loc, zeroCond, mask);
+    Value zeroCondI32 = b.create<arith::ExtUIOp>(loc, statesType, zeroCond);
+    Value newPhase = b.create<arith::XOrIOp>(loc, phase, zeroCondI32);
+    Value newCurrentValue =
+        b.create<arith::SelectOp>(loc, zeroCond, initCount, newCurrentMasked);
+
+    Value initField = b.create<arith::ShLIOp>(loc, initCount, shiftOne);
+    Value currentField =
+        b.create<arith::ShLIOp>(loc, newCurrentValue, shiftNine);
+    Value newState = b.create<arith::OrIOp>(loc, newPhase, initField);
+    newState = b.create<arith::OrIOp>(loc, newState, currentField);
+    Value updated = b.create<arith::SelectOp>(loc, mask, newState, states);
+    tti::createStoreScratchMemory(b, loc, op.getStates(), updated, statesType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
 } // namespace
 
 // ===== Deadlock detection lowerings =====
 
 namespace {
 
-struct SetSignallingOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalSetSignallingOp> {
+struct SetWaitingOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalSetWaitingOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-  LogicalResult matchAndRewrite(tti::ExperimentalSetSignallingOp op,
+  LogicalResult matchAndRewrite(tti::ExperimentalSetWaitingOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
@@ -1226,65 +1396,45 @@ struct SetSignallingOpConversion
           createIfBlock(b, loc, op.getPred());
       b.setInsertionPointToStart(ifBlock);
     }
-    auto signallingType = cast<RankedTensorType>(op.getSignallingType());
-    Value signalling =
-        tti::createLoadScratchMemory(b, loc, op.getSignalling(), signallingType)
-            ->getResult(0);
-    TypedValue<RankedTensorType> barriers = op.getBarriers();
-    Value bar = createMemDescToI64(b, loc, getTypeConverter(),
-                                   op.getMbar().getType(), adaptor.getMbar());
-    Value barriersEqBar = createCmpIntTensorScalar(b, loc, barriers, bar);
-    Value maskScalar = b.create<arith::ConstantOp>(
-        loc, signallingType.getElementType(),
-        b.getIntegerAttr(signallingType.getElementType(),
-                         (uint64_t)1 << op.getBitIndex()));
-    Value mask = createFullLike(b, loc, maskScalar, signallingType);
-    Value signalled = b.create<arith::OrIOp>(loc, signalling, mask);
-    Value selected =
-        b.create<arith::SelectOp>(loc, barriersEqBar, signalled, signalling);
-    tti::createStoreScratchMemory(b, loc, op.getSignalling(), selected,
-                                  signallingType);
-    b.eraseOp(op);
-    return success();
-  }
-};
 
-struct MaybeSetWaitingOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalMaybeSetWaitingOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-  LogicalResult matchAndRewrite(tti::ExperimentalMaybeSetWaitingOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
-    Location loc = op.getLoc();
-    b.setInsertionPoint(op);
-    if (op.getPred()) {
-      auto [prevBlock, ifBlock, thenBlock] =
-          createIfBlock(b, loc, op.getPred());
-      b.setInsertionPointToStart(ifBlock);
-    }
     auto waitingType = cast<RankedTensorType>(op.getWaitingType());
-    auto signallingType = cast<RankedTensorType>(op.getSignallingType());
     Value waiting =
         tti::createLoadScratchMemory(b, loc, op.getWaiting(), waitingType)
             ->getResult(0);
-    Value signalling =
-        tti::createLoadScratchMemory(b, loc, op.getSignalling(), signallingType)
-            ->getResult(0);
     TypedValue<RankedTensorType> barriers = op.getBarriers();
     Value bar = createMemDescToI64(b, loc, getTypeConverter(),
                                    op.getMbar().getType(), adaptor.getMbar());
     Value barriersEqBar = createCmpIntTensorScalar(b, loc, barriers, bar);
-    // signalling == 0
-    Value zero32 = tti::createConstIntTensor(b, loc, 0, signallingType);
-    Value noSignal = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                             signalling, zero32);
-    // combine conditions
-    Value cond = b.create<arith::AndIOp>(loc, barriersEqBar, noSignal);
-    // prepare bit
-    Value bit = tti::createConstIntTensor(b, loc, 1ULL << op.getBaseThread(),
-                                          waitingType);
-    Value waited = b.create<arith::OrIOp>(loc, waiting, bit);
-    Value newWaiting = b.create<arith::SelectOp>(loc, cond, waited, waiting);
+
+    unsigned baseThread = op.getBaseThread();
+    unsigned flagShift = kWaitingBitsPerThread * baseThread + kWaitingFlagShift;
+    unsigned phaseShift =
+        kWaitingBitsPerThread * baseThread + kWaitingPhaseShift;
+    uint32_t flagMask = 1u << flagShift;
+    uint32_t phaseMask = 1u << phaseShift;
+    uint32_t clearMask = ~(flagMask | phaseMask);
+
+    Value clearMaskTensor =
+        tti::createConstIntTensor(b, loc, clearMask, waitingType);
+    Value clearedWaiting =
+        b.create<arith::AndIOp>(loc, waiting, clearMaskTensor);
+
+    Value flagMaskTensor =
+        tti::createConstIntTensor(b, loc, flagMask, waitingType);
+    Value withFlag =
+        b.create<arith::OrIOp>(loc, clearedWaiting, flagMaskTensor);
+
+    Value phaseScalar = b.create<arith::AndIOp>(
+        loc, op.getPhase(), b.create<arith::ConstantIntOp>(loc, 1, 32));
+    Value phaseTensor =
+        b.create<triton::SplatOp>(loc, waitingType, phaseScalar);
+    Value shiftTensor =
+        tti::createConstIntTensor(b, loc, phaseShift, waitingType);
+    Value phaseBits = b.create<arith::ShLIOp>(loc, phaseTensor, shiftTensor);
+    Value pendingWaiting = b.create<arith::OrIOp>(loc, withFlag, phaseBits);
+
+    Value newWaiting =
+        b.create<arith::SelectOp>(loc, barriersEqBar, pendingWaiting, waiting);
     tti::createStoreScratchMemory(b, loc, op.getWaiting(), newWaiting,
                                   waitingType);
     b.eraseOp(op);
@@ -1305,22 +1455,46 @@ struct CheckAllActiveWaitingOpConversion
           createIfBlock(b, loc, op.getPred());
       b.setInsertionPointToStart(ifBlock);
     }
+
     auto waitingType = cast<RankedTensorType>(op.getWaitingType());
+    auto barrierStatesType = cast<RankedTensorType>(op.getBarrierStatesType());
     Value waiting =
         tti::createLoadScratchMemory(b, loc, op.getWaiting(), waitingType)
             ->getResult(0);
-    // OR-reduce waiting across axis 0 to a scalar
-    Value waitingOr = createOrReduce(b, loc, waiting, /*axis=*/0);
-    // Build constant active mask scalar of same element type as waitingOr
-    Type elemTy = waitingType.getElementType();
-    uint64_t activeMask = op.getActiveMask();
-    Value mask = b.create<arith::ConstantOp>(
-        loc, waitingType.getElementType(),
-        b.getIntegerAttr(waitingType.getElementType(), activeMask));
-    Value andMask = b.create<arith::AndIOp>(loc, waitingOr, mask);
-    Value eq =
-        b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, andMask, mask);
-    // ok = not deadlock = !eq
+    Value barrierStates = tti::createLoadScratchMemory(
+                              b, loc, op.getBarrierStates(), barrierStatesType)
+                              ->getResult(0);
+
+    Value flagMaskTensor =
+        tti::createConstIntTensor(b, loc, kWaitingFlagMask, waitingType);
+    Value phaseMaskTensor =
+        tti::createConstIntTensor(b, loc, kWaitingPhaseMask, waitingType);
+
+    Value flags = b.create<arith::AndIOp>(loc, waiting, flagMaskTensor);
+    Value phases = b.create<arith::AndIOp>(loc, waiting, phaseMaskTensor);
+    Value shiftOneTensor = tti::createConstIntTensor(b, loc, 1, waitingType);
+    Value phasesAligned = b.create<arith::ShRUIOp>(loc, phases, shiftOneTensor);
+
+    Value phasesComplement =
+        b.create<arith::XOrIOp>(loc, phasesAligned, flagMaskTensor);
+    Value waitingPhase0 = b.create<arith::AndIOp>(loc, flags, phasesComplement);
+    Value waitingPhase1 = b.create<arith::AndIOp>(loc, flags, phasesAligned);
+
+    Value oneState = tti::createConstIntTensor(b, loc, 1, barrierStatesType);
+    Value barrierPhase = b.create<arith::AndIOp>(loc, barrierStates, oneState);
+    Value phaseIsOne = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                               barrierPhase, oneState);
+
+    Value effectiveWaiting = b.create<arith::SelectOp>(
+        loc, phaseIsOne, waitingPhase1, waitingPhase0);
+    Value waitingOr = createOrReduce(b, loc, effectiveWaiting, /*axis=*/0);
+
+    uint64_t expandedMaskValue = expandActiveMask(op.getActiveMask());
+    Value expandedMask = b.create<arith::ConstantIntOp>(
+        loc, expandedMaskValue, waitingOr.getType().getIntOrFloatBitWidth());
+    Value waitingMasked = b.create<arith::AndIOp>(loc, waitingOr, expandedMask);
+    Value eq = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                       waitingMasked, expandedMask);
     Value vTrue = b.create<arith::ConstantOp>(
         loc, eq.getType(), b.getIntegerAttr(eq.getType(), 1));
     Value ok = b.create<arith::XOrIOp>(loc, eq, vTrue);
@@ -1334,11 +1508,10 @@ struct CheckAllActiveWaitingOpConversion
   }
 };
 
-struct ClearWaitingAndSignallingOpConversion
-    : public ConvertOpToLLVMPattern<
-          tti::ExperimentalClearWaitingAndSignallingOp> {
+struct ClearWaitingOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalClearWaitingOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-  LogicalResult matchAndRewrite(tti::ExperimentalClearWaitingAndSignallingOp op,
+  LogicalResult matchAndRewrite(tti::ExperimentalClearWaitingOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
@@ -1348,43 +1521,29 @@ struct ClearWaitingAndSignallingOpConversion
           createIfBlock(b, loc, op.getPred());
       b.setInsertionPointToStart(ifBlock);
     }
+
     auto waitingType = cast<RankedTensorType>(op.getWaitingType());
-    auto signallingType = cast<RankedTensorType>(op.getSignallingType());
     Value waiting =
         tti::createLoadScratchMemory(b, loc, op.getWaiting(), waitingType)
-            ->getResult(0);
-    Value signalling =
-        tti::createLoadScratchMemory(b, loc, op.getSignalling(), signallingType)
             ->getResult(0);
     TypedValue<RankedTensorType> barriers = op.getBarriers();
     Value bar = createMemDescToI64(b, loc, getTypeConverter(),
                                    op.getMbar().getType(), adaptor.getMbar());
     Value barriersEqBar = createCmpIntTensorScalar(b, loc, barriers, bar);
-    // Clear waiting bit for baseThread
-    Value bitScalar = b.create<arith::ConstantOp>(
-        loc, waitingType.getElementType(),
-        b.getIntegerAttr(waitingType.getElementType(),
-                         (uint64_t)1 << op.getBaseThread()));
-    Value bit = createFullLike(b, loc, bitScalar, waitingType);
-    Value notBit = b.create<arith::XOrIOp>(
-        loc, bit,
-        createFullLike(
-            b, loc,
-            b.create<arith::ConstantOp>(
-                loc, waitingType.getElementType(),
-                b.getIntegerAttr(waitingType.getElementType(), (uint64_t)-1)),
-            waitingType));
-    Value waitingCleared = b.create<arith::AndIOp>(loc, waiting, notBit);
+
+    unsigned baseThread = op.getBaseThread();
+    unsigned flagShift = kWaitingBitsPerThread * baseThread + kWaitingFlagShift;
+    unsigned phaseShift =
+        kWaitingBitsPerThread * baseThread + kWaitingPhaseShift;
+    uint32_t clearMask = ~((1u << flagShift) | (1u << phaseShift));
+
+    Value clearMaskTensor =
+        tti::createConstIntTensor(b, loc, clearMask, waitingType);
+    Value cleared = b.create<arith::AndIOp>(loc, waiting, clearMaskTensor);
     Value newWaiting =
-        b.create<arith::SelectOp>(loc, barriersEqBar, waitingCleared, waiting);
+        b.create<arith::SelectOp>(loc, barriersEqBar, cleared, waiting);
     tti::createStoreScratchMemory(b, loc, op.getWaiting(), newWaiting,
                                   waitingType);
-    // Reset signalling row to 0
-    Value zero32 = tti::createConstIntTensor(b, loc, 0, signallingType);
-    Value newSignalling =
-        b.create<arith::SelectOp>(loc, barriersEqBar, zero32, signalling);
-    tti::createStoreScratchMemory(b, loc, op.getSignalling(), newSignalling,
-                                  signallingType);
     b.eraseOp(op);
     return success();
   }
@@ -1416,9 +1575,11 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
       typeConverter);
   patterns.add<ClearOutstandingCommitsTransferReadsOpConversion>(typeConverter);
   patterns.add<CheckOutstandingCommitsOpConversion>(typeConverter);
+  patterns.add<InitBarrierStateOpConversion>(typeConverter);
+  patterns.add<VerifyBarrierArriveOpConversion>(typeConverter);
+  patterns.add<UpdateBarrierStateOpConversion>(typeConverter);
   // Deadlock detection
-  patterns.add<SetSignallingOpConversion>(typeConverter);
-  patterns.add<MaybeSetWaitingOpConversion>(typeConverter);
+  patterns.add<SetWaitingOpConversion>(typeConverter);
   patterns.add<CheckAllActiveWaitingOpConversion>(typeConverter);
-  patterns.add<ClearWaitingAndSignallingOpConversion>(typeConverter);
+  patterns.add<ClearWaitingOpConversion>(typeConverter);
 }

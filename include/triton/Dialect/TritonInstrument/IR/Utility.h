@@ -19,7 +19,8 @@ Operation *createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
 Value expandOuterSlicedDim(OpBuilder &b, Location loc, Value tensor);
 TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
                                                   Location loc, int64_t val,
-                                                  RankedTensorType tensorType);
+                                                  RankedTensorType tensorType,
+                                                  bool isSigned = false);
 FuncOp getEntryPoint(ModuleOp module);
 gpu::DistributedEncodingTrait
 getSingleDimSliceEncoding(gpu::BlockedEncodingAttr encoding, int dim);
@@ -45,6 +46,7 @@ struct AuxDataMap {
 
   RegionToValueMap buffers[numMemTypes];
   RegionToValueMap barriers;
+  RegionToValueMap barrierStates;
 
   RegionToValueMap writeVisibility[numMemTypes];
   RegionToValueMap writeTracking[numMemTypes];
@@ -54,10 +56,8 @@ struct AuxDataMap {
   RegionToValueMap wgmmaCommits;
   RegionToValueMap lock;
   // Deadlock detection aux data
-  // waiting: per-barrier bitmask of base threads waiting (i16)
+  // waiting: per-barrier bitmask storing waiting flag and phase per thread
   RegionToValueMap waiting;
-  // signalling: per-barrier bitmask of peer threads signalling (i32)
-  RegionToValueMap signalling;
 
   void populateAndPassToWarpSpecialize(ModuleOp module);
 
