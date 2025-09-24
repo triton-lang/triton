@@ -692,11 +692,13 @@ def test_reduce_ep_triton_large(TP, EP, n_tokens, hidden_size, routes_per_token)
     )
 
     op = dist.ReduceOp.SUM
+    import triton.profiler as proton
 
+    @proton.scope("triton_fn")
     def triton_fn():
         return _reduce_ep_triton(metadata, input_tensor, output_list, world_size, 0, op, original_dtype,
                                  intermediate_dtype)
-
+    @proton.scope("torch_fn")
     def torch_fn():
         return _reduce_ep_torch(metadata, input_tensor, output_list, world_size, 0, op, original_dtype,
                                 intermediate_dtype)
@@ -708,6 +710,16 @@ def test_reduce_ep_triton_large(TP, EP, n_tokens, hidden_size, routes_per_token)
     triton_time = triton.testing.do_bench(triton_fn)
     torch_time = triton.testing.do_bench(torch_fn)
     print(f"triton_time: {triton_time*1000:.3f}, torch_time: {torch_time*1000:.3f}")
+
+    import tempfile
+    import triton.profiler.viewer as viewer
+    with tempfile.NamedTemporaryFile() as f:
+        proton.start(f.name)
+        triton_fn()
+        torch_fn()
+        proton.finalize()
+        gf, metrics = viewer.parse(["time/ms"], f.name)
+        viewer.print_tree(gf, metrics)
 
 
 def test_routing_distributed_EP(monkeypatch):
