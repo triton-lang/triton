@@ -697,6 +697,7 @@ _ld_st_shared_layouts = _filter_layouts([
     ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=False, element_bitwidth=16, rank=2),
     ttgl.NVMMASharedLayout(swizzle_byte_width=64, transposed=True, element_bitwidth=16, rank=2),
     ttgl.NVMMASharedLayout(swizzle_byte_width=128, transposed=False, element_bitwidth=16, rank=2),
+    ttgl.NVMMASharedLayout(swizzle_byte_width=32, transposed=False, element_bitwidth=8, rank=2),
     ttgl.SwizzledSharedLayout(vec=8, per_phase=1, max_phase=1, order=[1, 0]),
     ttgl.SwizzledSharedLayout(vec=4, per_phase=2, max_phase=4, order=[0, 1]),
     ttgl.SwizzledSharedLayout(vec=8, per_phase=1, max_phase=8, order=[1, 0]),
@@ -763,13 +764,23 @@ def test_local_load_store_2d_layouts(shape, dtype, dist_layout, shared_layout, d
     else:
         x = torch.randn(shape, device=device, dtype=torch_dtype)
 
+    float8_dtypes = {torch.float8_e5m2}
+    if hasattr(torch, "float8_e4m3fn"):
+        float8_dtypes.add(torch.float8_e4m3fn)
+
+    def _assert_close(actual, expected):
+        if actual.dtype in float8_dtypes:
+            torch.testing.assert_close(actual.to(torch.float16), expected.to(torch.float16), rtol=0, atol=0)
+        else:
+            torch.testing.assert_close(actual, expected)
+
     y = torch.zeros_like(x)
     kernel[(1, )](x, y, shape, blocked_layout, dist_layout, shared_layout, num_warps=num_warps)
-    torch.testing.assert_close(y, x)
+    _assert_close(y, x)
 
     y = torch.zeros_like(x)
     obj = kernel[(1, )](x, y, shape, dist_layout, blocked_layout, shared_layout, num_warps=num_warps)
-    torch.testing.assert_close(y, x)
+    _assert_close(y, x)
     if (isinstance(shared_layout, ttgl.NVMMASharedLayout) and dist_layout in _ld_st_mma_layouts
             and dist_layout.version[0] >= 3 and dtype == "float16"):
         assert "stmatrix" in obj.asm["ptx"]
