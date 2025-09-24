@@ -455,14 +455,6 @@ def test_constexpr_cache_invalidation_recreated(device):
     assert test_run(1234) == 1234
 
 
-def test_constexpr_and_do_not_specialize_raises():
-    with pytest.raises(ValueError, match="N marked as constexpr and do_not_specialize"):
-
-        @triton.jit(do_not_specialize=["N"])
-        def kernel(N: tl.constexpr):
-            pass
-
-
 def test_jit_warmup_cache(device) -> None:
 
     @triton.jit

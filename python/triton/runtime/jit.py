@@ -301,10 +301,6 @@ class KernelParam:
         self.do_not_specialize = do_not_specialize
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
 
-        if self.is_constexpr and (self.do_not_specialize or self.do_not_specialize_on_alignment):
-            raise ValueError(f"{self.name} marked as constexpr and do_not_specialize/do_not_specialize_on_alignment. "
-                             "Remove constexpr designation to skip specialization.")
-
     @cached_property
     def name(self):
         return self._param.name
