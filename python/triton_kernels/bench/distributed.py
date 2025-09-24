@@ -201,21 +201,21 @@ def _write_ep_positions_kernel(ep_indx_ptr, positions_ptr, block_offsets_ptr, n_
         mask=load_mask,
         other=-1,
     )
-    positions_tile = tl.full([BLOCK_SIZE_M, EP], -1, dtype=tl.int32)
     ep_range = tl.arange(0, EP)
+    positions = tl.full([BLOCK_SIZE_M, EP], -1, dtype=tl.int32)
+    block_offsets = tl.load(block_offsets_ptr + pid * EP + ep_range)
 
     for ep_idx in range(EP):
-        base_offset = tl.load(block_offsets_ptr + pid * EP + ep_idx)
-        running = tl.zeros((), dtype=tl.int32)
-        for row in range(BLOCK_SIZE_M):
-            token_present = rows_mask[row] & tl.reduce_or(ep_values[row, :] == ep_idx, axis=0)
-            value = tl.where(token_present, base_offset + running, -1)
-            positions_tile[row, ep_idx] = value
-            running += token_present.to(tl.int32)
+        base_offset = block_offsets[ep_idx]
+        row_has_ep = tl.reduce_or(ep_values == ep_idx, axis=1) & rows_mask
+        inc = row_has_ep.to(tl.int32)
+        exclusive = tl.cumsum(inc, axis=0) - inc
+        values = tl.where(row_has_ep, base_offset + exclusive, -1)
+        positions = tl.where(ep_range[None, :] == ep_idx, values[:, None], positions)
 
     tl.store(
         positions_ptr + offs_m[:, None] * EP + ep_range[None, :],
-        positions_tile,
+        positions,
         mask=rows_mask[:, None],
     )
 
