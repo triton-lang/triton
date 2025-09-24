@@ -718,7 +718,7 @@ def test_reduce_ep_triton_large(TP, EP, n_tokens, hidden_size, routes_per_token)
         triton_fn()
         torch_fn()
         proton.finalize()
-        gf, metrics = viewer.parse(["time/ms"], f.name)
+        gf, metrics = viewer.parse(["time/ms"], f.name + ".hatchet")
         viewer.print_tree(gf, metrics)
 
 
