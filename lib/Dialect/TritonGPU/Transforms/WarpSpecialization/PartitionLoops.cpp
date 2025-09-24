@@ -450,15 +450,17 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
     auto wsTag = op->getAttrOfType<IntegerAttr>(kWarpSpecializeTagAttrName);
     if (!wsTag || wsTag.getInt() != partitions.getTag())
       continue;
-    if (auto partitionIds = triton::gpu::getPartitionIds(op)) {
-      cloneOp(op, builders,
-              SmallVector<size_t>{partitionIds->begin(), partitionIds->end()});
-      opsToErase.push_back(op);
-    } else {
+    auto partitionIds = triton::gpu::getPartitionIds(op);
+    assert(partitionIds);
+    if (isa<scf::ForOp>(op)) {
+      // FIXME: ignores partitionIds???
       assert(loop.getOperation() == op && "Unexpected op");
       cloneForOp(loop, builders, partitions);
-      opsToErase.push_back(loop);
+    } else {
+      cloneOp(op, builders,
+              SmallVector<size_t>{partitionIds->begin(), partitionIds->end()});
     }
+    opsToErase.push_back(op);
   }
 
   for (auto [b, region, partition] : llvm::zip(
