@@ -143,6 +143,10 @@ import triton
 from functools import partial
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
+from triton._internal_testing import get_current_target
+
+target = get_current_target()
+warp_size = target.warp_size if target is not None else 32
 
 # %%
 # This is a helper for toggling specific parts of the tutorial. Run the tutorial
@@ -234,7 +238,7 @@ def test_memcpy_1d(XBLOCK, xnumel, num_warps):
     torch.manual_seed(0)
     input = torch.randn(xnumel, device="cuda")
     output = torch.empty_like(input)
-    layout = gl.BlockedLayout([1], [32], [num_warps], [0])
+    layout = gl.BlockedLayout([1], [warp_size], [num_warps], [0])
     memcpy_1d_impl(input, output, XBLOCK, layout, num_warps=num_warps)
     torch.testing.assert_close(input, output, atol=0, rtol=0)
 
@@ -252,7 +256,7 @@ if __name__ == "__main__" and _enabled("R_vs_throughput"):
     compiled_kernels = []
     for i in range(0, 5):
         R = 2**i
-        layout = gl.BlockedLayout([R], [32], [num_warps], [0])
+        layout = gl.BlockedLayout([R], [warp_size], [num_warps], [0])
         impl = partial(kernel, layout=layout)
         compiled_kernel, throughput = bench_memcpy(impl)
         compiled_kernels.append((R, compiled_kernel))
@@ -350,7 +354,7 @@ if __name__ == "__main__" and _enabled("XBLOCK_R_vs_throughput"):
         kernel = partial(memcpy_1d_impl, XBLOCK=XBLOCK, num_warps=num_warps)
         for i in range(0, 5):
             R = 2**i
-            layout = gl.BlockedLayout([R], [32], [num_warps], [0])
+            layout = gl.BlockedLayout([R], [warp_size], [num_warps], [0])
             impl = partial(kernel, layout=layout)
             compiled_kernel, throughput = bench_memcpy(impl)
             print(f"{throughput:.3f}", end=" ")
@@ -502,7 +506,7 @@ def test_memcpy_2d(XBLOCK, YBLOCK, xnumel, ynumel, transposed, num_warps):
     # Transposing the tensor makes it non-contiguous along the inner dimension.
     input = input.T if transposed else input
     output = output.T if transposed else output
-    layout = gl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
+    layout = gl.BlockedLayout([1, 1], [1, warp_size], [1, num_warps], [1, 0])
     memcpy_2d_impl(input, output, XBLOCK, YBLOCK, layout, num_warps=num_warps)
     torch.testing.assert_close(input, output, atol=0, rtol=0)
 
@@ -533,7 +537,7 @@ if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
     print("======================")
     XBLOCK = 1
     YBLOCK = 2048
-    layout = gl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+    layout = gl.BlockedLayout([1, 1], [1, warp_size], [1, 4], [1, 0])
     impl = partial(memcpy_2d_impl, XBLOCK=XBLOCK, YBLOCK=YBLOCK, layout=layout, num_warps=4)
     _, throughput = bench_memcpy_2d(impl)
     print(f"Throughput: {throughput:.3f} TB/s")
@@ -557,7 +561,7 @@ if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
 # transposing the layout restores performance:
 
 if __name__ == "__main__" and _enabled("memcpy_2d_layout"):
-    layout = gl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1])
+    layout = gl.BlockedLayout([1, 1], [warp_size, 1], [4, 1], [0, 1])
     impl = partial(memcpy_2d_impl, XBLOCK=2048, YBLOCK=1, layout=layout, num_warps=4)
     _, throughput = bench_memcpy_2d(impl, transposed=True)
     print(f"Fixed throughput: {throughput:.3f} TB/s")
@@ -600,7 +604,7 @@ if __name__ == "__main__" and _enabled("memcpy_2d_contig"):
     assert not input.is_contiguous() and output.is_contiguous()
 
     # Benchmark 2D memcpy.
-    layout = gl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+    layout = gl.BlockedLayout([1, 1], [1, warp_size], [1, 4], [1, 0])
     impl = partial(memcpy_2d_impl, XBLOCK=1, YBLOCK=2048, layout=layout, num_warps=4)
     _, throughput = bench_memcpy_impl(input, output, impl)
     print(f"2D memcpy: {throughput:.3f} TB/s")
@@ -612,7 +616,7 @@ if __name__ == "__main__" and _enabled("memcpy_2d_contig"):
     print(f"torch.Tensor.contiguous: {throughput:.3f} TB/s")
 
     # We can eke out even more performance by using the transposed "trick".
-    layout = gl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1])
+    layout = gl.BlockedLayout([1, 1], [warp_size, 1], [4, 1], [0, 1])
     impl = partial(memcpy_2d_impl, XBLOCK=2048, YBLOCK=1, layout=layout, num_warps=4)
     _, throughput = bench_memcpy_impl(input.T, output.T, impl)
     print(f"2D memcpy (transposed): {throughput:.3f} TB/s")
@@ -645,13 +649,13 @@ if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
     output = torch.empty((input.shape[1], input.shape[0]), device="cuda").T
 
     # order=[1, 0]
-    layout = gl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+    layout = gl.BlockedLayout([1, 1], [1, warp_size], [1, 4], [1, 0])
     impl = partial(memcpy_2d_impl, XBLOCK=1, YBLOCK=2048, layout=layout, num_warps=4)
     _, throughput = bench_memcpy_impl(input, output, impl)
     print(f"2D memcpy (order=[1, 0]): {throughput:.3f} TB/s")
 
     # order=[0, 1]
-    layout = gl.BlockedLayout([1, 1], [32, 1], [4, 1], [0, 1])
+    layout = gl.BlockedLayout([1, 1], [warp_size, 1], [4, 1], [0, 1])
     impl = partial(memcpy_2d_impl, XBLOCK=2048, YBLOCK=1, layout=layout, num_warps=4)
     _, throughput = bench_memcpy_impl(input, output, impl)
     print(f"2D memcpy (order=[0, 1]): {throughput:.3f} TB/s")
@@ -670,14 +674,14 @@ if __name__ == "__main__" and _enabled("memcpy_2d_inout"):
 
 def get_layout_for_gmem_access(tensor, num_warps):
     if len(tensor.shape) == 1:
-        return gl.BlockedLayout([1], [32], [num_warps], [0])
+        return gl.BlockedLayout([1], [warp_size], [num_warps], [0])
 
     assert len(tensor.shape) == 2, "only 1D and 2D tensors are supported"
     assert 1 in tensor.stride(), "expected at least 1 contiguous dimension"
     if tensor.stride(1) == 1:
-        return gl.BlockedLayout([1, 1], [1, 32], [1, num_warps], [1, 0])
+        return gl.BlockedLayout([1, 1], [1, warp_size], [1, num_warps], [1, 0])
     else:
-        return gl.BlockedLayout([1, 1], [32, 1], [num_warps, 1], [0, 1])
+        return gl.BlockedLayout([1, 1], [warp_size, 1], [num_warps, 1], [0, 1])
 
 
 # %%
