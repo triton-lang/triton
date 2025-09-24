@@ -167,6 +167,13 @@ template <class T> struct AssignStagePhase {
       *arefIndexRefs[idx - nArgs] = forOp.getResult(idx);
     for (auto [idx, arefTokenRef] : arefTokenRefs)
       *arefTokenRef = forOp.getResult(idx);
+
+    // add partition ids for extra iterArgs to ForOp outputs
+    SetVector<int> partitionIds;
+    partitionIds.insert(0);
+    partitionIds.insert(partitionId);
+    for (size_t idx = nArgs; idx < forOp.getRegionIterArgs().size(); ++idx)
+      setOutputPartition(forOp.getOperation(), idx, partitionIds);
   }
 
   void assignArefIndexInIfOp(scf::IfOp ifOp, StagePhase &index) {
@@ -229,6 +236,13 @@ template <class T> struct AssignStagePhase {
       *arefIndexRefs[idx - nArgs] = newIfOp.getResult(idx);
     for (auto [idx, arefTokenRef] : arefTokenRefs)
       *arefTokenRef = newIfOp.getResult(idx);
+
+    // add partition ids for extra result to IfOp outputs
+    SetVector<int> partitionIds;
+    partitionIds.insert(0);
+    partitionIds.insert(partitionId);
+    for (size_t idx = nArgs; idx < newIfOp.getResults().size(); ++idx)
+      setOutputPartition(newIfOp.getOperation(), idx, partitionIds);
   }
 
   StagePhase assignArefIndexInBlock(Block *block, StagePhase index) {
@@ -319,7 +333,7 @@ template <class T> struct AssignStagePhase {
       // if partitionIds is an empty set, it means aref ops used outside ttg.ws
       // so we to insert a dummy partitionId for this aref, since we still need
       // to assign correct phase
-      partitionIds.insert({0, 0});
+      partitionIds.insert(0);
     }
 
     // initialize indexes
