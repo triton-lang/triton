@@ -208,28 +208,6 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
   return getDotEncoding(user->getResult(0), opIdx, vecSize);
 }
 
-static bool isScaleUsedByScaledUpcast(Value v) {
-  SmallVector<Value> worklist{v};
-  DenseSet<Value> seen;
-  while (!worklist.empty()) {
-    Value v = worklist.pop_back_val();
-    if (!seen.insert(v).second)
-      continue;
-    for (OpOperand &use : v.getUses()) {
-      auto op = use.getOwner();
-      if (isa<tt::amdgpu::ScaledUpcastFp4Op, tt::amdgpu::ScaledUpcastFp8Op>(
-              op)) {
-        return (use.getOperandNumber() == 1);
-      }
-      for (Value res : op->getResults()) {
-        worklist.push_back(res);
-      }
-    }
-  }
-
-  return false;
-}
-
 // Adapted from
 // lib/Dialect/TritonGPU/Transforms/Utility.cpp::getSharedEncIfAllUsersAreDotEnc
 // to support AMDMfmaEncodingAttr.
@@ -254,7 +232,10 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
       // use it if it is compatible with the other users.
       tempAttr = cast<ttg::SwizzledSharedEncodingAttr>(memDesc.getEncoding());
       LDBG("Deduced shared encoding candidate from memDesc: " << tempAttr);
-      if (!getSharedEncIfAllUsersAreDotEnc(userResult).has_value()) {
+      // If the immediate user is ttg::LocalAllocOp, likely it's created in
+      // TritonAMDGPUOptimizeDotOperands
+      if (!getSharedEncIfAllUsersAreDotEnc(userResult).has_value() &&
+          !isa<ttg::LocalAllocOp>(user)) {
         return std::nullopt;
       }
       sharedEncs.push_back(tempAttr);
@@ -304,22 +285,7 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
           LDBG("Deduced shared encoding candidate from mfma layout: "
                << tempAttr);
           sharedEncs.push_back(tempAttr);
-        } else if (isScaleUsedByScaledUpcast(userResult)) {
-          isDecomposedScale = true;
         }
-      } else if (isa<ttg::SliceEncodingAttr>(userResEnc) &&
-                 isScaleUsedByScaledUpcast(userResult)) {
-        isDecomposedScale = true;
-      }
-
-      if (isDecomposedScale) {
-        // Disable swizzling for scales
-        auto attr = ttg::SwizzledSharedEncodingAttr::get(
-            loadedValue.getContext(), 1, 1, 1, sharedOrder, ctaLayout);
-        LDBG("Deduced shared encoding candidate for scale in decomposed scaled "
-             "dot: "
-             << attr);
-        sharedEncs.push_back(attr);
       }
     }
   }

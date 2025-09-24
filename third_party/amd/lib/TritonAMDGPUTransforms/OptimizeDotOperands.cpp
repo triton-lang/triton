@@ -205,6 +205,69 @@ private:
   triton::AMD::ISAFamily isaFamily;
 };
 
+template <typename OpTy>
+class AllocSharedMemForUpcastedScales : public OpRewritePattern<OpTy> {
+public:
+  using OpRewritePattern<OpTy>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(OpTy op,
+                                PatternRewriter &rewriter) const override {
+    auto forOp = op->template getParentOfType<scf::ForOp>();
+    if (!forOp)
+      return rewriter.notifyMatchFailure(op,
+                                         "Don't alloc lds outside for loop");
+
+    BackwardSliceOptions options;
+    options.omitBlockArguments = true;
+    SetVector<Operation *> slice;
+    (void)getBackwardSlice(op.getOperand(1), &slice, options);
+    tt::LoadOp loadOp;
+    unsigned cnt = 0;
+    bool hasAllocatedLDS = false;
+    for (auto &op : slice) {
+      if (isa<tt::LoadOp>(op)) {
+        loadOp = dyn_cast<tt::LoadOp>(op);
+        cnt++;
+      } else if (isa<ttg::LocalAllocOp, ttg::LocalLoadOp>(op)) {
+        hasAllocatedLDS = true;
+        break;
+      }
+    }
+
+    if (hasAllocatedLDS)
+      return rewriter.notifyMatchFailure(
+          op, "There's already lds allocation in the def chain.");
+
+    if (!loadOp || cnt != 1)
+      return rewriter.notifyMatchFailure(
+          op, "Require exactly 1 load in the def chain.");
+
+    LDBG("Found load of scale: " << loadOp << " for ScaleUpcast: " << op);
+    auto srcTy = dyn_cast<RankedTensorType>(loadOp.getType());
+    auto sharedOrder = ttg::getOrderForMemory(srcTy);
+    auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
+
+    auto ctx = loadOp.getContext();
+    auto attr = ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, sharedOrder,
+                                                     ctaLayout);
+    Location loc = loadOp.getLoc();
+    auto sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
+    rewriter.setInsertionPointAfter(loadOp);
+    auto alloc = rewriter.create<ttg::LocalAllocOp>(
+        loc,
+        ttg::MemDescType::get(srcTy.getShape(), srcTy.getElementType(), attr,
+                              sharedMemorySpace),
+        loadOp.getResult());
+    LDBG("Create alloc: " << alloc);
+
+    auto localLoad = rewriter.create<ttg::LocalLoadOp>(loc, srcTy, alloc);
+    LDBG("Create localload: " << localLoad);
+
+    rewriter.replaceAllUsesExcept(loadOp.getResult(), localLoad, alloc);
+    auto module = loadOp->getParentOfType<ModuleOp>();
+    return success();
+  }
+};
 } // namespace
 
 #define GEN_PASS_DEF_TRITONAMDGPUOPTIMIZEDOTOPERANDS
@@ -223,6 +286,12 @@ public:
     mlir::RewritePatternSet patterns(context);
     auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName);
     patterns.add<ReuseShmemForDirectAndTransposedUse>(context, isaFamily);
+    patterns
+        .add<AllocSharedMemForUpcastedScales<tt::amdgpu::ScaledUpcastFp8Op>>(
+            context);
+    patterns
+        .add<AllocSharedMemForUpcastedScales<tt::amdgpu::ScaledUpcastFp4Op>>(
+            context);
     ttg::ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
