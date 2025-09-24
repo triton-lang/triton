@@ -170,7 +170,7 @@ def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs
 
     for tp_idx in range(TP):
         rank_index = ep_rank * TP + tp_idx
-        input_tensor_ptr = tl.load(input_ptrs[rank_index]).to(tl.pointer_type(original_dtype))
+        input_tensor_ptr = tl.load(input_ptrs + rank_index).to(tl.pointer_type(original_dtype))
         input_tensor_ptr = tl.multiple_of(input_tensor_ptr, 16)
         input = tl.load(
             input_tensor_ptr + row_offsets + offs_n[None, :],
@@ -235,6 +235,7 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
     block_counts = torch.zeros((metadata.EP, num_blocks), dtype=torch.int32, device=input_tensor.device)
     positions = torch.full((metadata.EP, n_tokens), -1, dtype=torch.int32, device=input_tensor.device)
     block_offsets = torch.zeros_like(block_counts)
+    pointer_list = torch.tensor([x.data_ptr() for x in output_list], device=input_tensor.device, dtype=torch.int64)
 
     if num_blocks > 0:
         _count_ep_tokens_kernel[(num_blocks,)](
@@ -264,7 +265,7 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
             _accumulate_ep_triton_kernel[(num_blocks,)](
                 positions,
                 output_tensor,
-                tuple(output_list),
+                pointer_list,
                 n_tokens,
                 hidden_size,
                 ep_rank=ep_rank,
