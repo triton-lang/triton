@@ -82,15 +82,10 @@ bool isTensorResultComputedBy(scf::ForOp loop, size_t resultIdx,
   return llvm::is_contained(partitionIds, partition->getIndex());
 }
 
-SmallVector<size_t> getPartitionIds(Operation *op, size_t numPartitions) {
+SmallVector<size_t> getPartitionIdsList(Operation *op) {
   auto partitionIds = triton::gpu::getPartitionIds(op);
-  if (!partitionIds) {
-    SmallVector<size_t> ret(numPartitions);
-    std::iota(ret.begin(), ret.end(), 0);
-    return ret;
-  }
-  SmallVector<size_t> ret(partitionIds->begin(), partitionIds->end());
-  return ret;
+  assert(partitionIds);
+  return SmallVector<size_t>(partitionIds->begin(), partitionIds->end());
 }
 
 SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
@@ -98,7 +93,7 @@ SmallVector<LoopVarCategory> classifyLoopVars(scf::ForOp loop,
                                               const PartitionSet &partitions) {
   auto inPartition = [&](OpOperand &opnd) {
     auto op = opnd.getOwner();
-    auto partitionIds = getPartitionIds(op, partitions.getNumPartitions());
+    auto partitionIds = getPartitionIdsList(op);
     if (auto ifOp = dyn_cast<scf::IfOp>(op->getParentOp());
         ifOp && isa<scf::YieldOp>(op)) {
       auto ids = getIfOpResultPartitionIds(ifOp, opnd.getOperandNumber());
@@ -212,7 +207,7 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
 
 void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
                const PartitionSet &partitions) {
-  auto partitionIndices = getPartitionIds(ifOp, partitions.getNumPartitions());
+  auto partitionIndices = getPartitionIdsList(ifOp);
 
   SmallVector<scf::IfOp> newIfOps;
   for (size_t idx : partitionIndices) {
@@ -257,8 +252,7 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
 void cloneReduceOp(triton::ReduceOp reduceOp,
                    SmallVector<WarpGroupBuilder> &builders,
                    const PartitionSet &partitions) {
-  auto partitionIndices =
-      getPartitionIds(reduceOp, partitions.getNumPartitions());
+  auto partitionIndices = getPartitionIdsList(reduceOp);
 
   SmallVector<ReduceOp> newReduceOps;
   for (size_t idx : partitionIndices) {
@@ -311,7 +305,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
                      const PartitionSet &partitions) {
   for (auto &op_ : *block) {
     auto op = &op_;
-    auto partitionIndices = getPartitionIds(op, partitions.getNumPartitions());
+    auto partitionIndices = getPartitionIdsList(op);
 
     if (auto forOp = dyn_cast<scf::ForOp>(op)) {
       cloneForOp(forOp, builders, partitions);
