@@ -156,7 +156,6 @@ def _prepare_ep_positions_kernel(ep_indx_ptr, positions_ptr, counters_ptr, n_tok
 
 @triton.jit
 def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs, n_tokens, hidden_size,
-                                 ep_rank: tl.constexpr,
                                  TP: tl.constexpr, EP: tl.constexpr,
                                  BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
                                  original_dtype: tl.constexpr, intermediate_dtype: tl.constexpr):
@@ -171,24 +170,25 @@ def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs
         other=0,
     ).to(intermediate_dtype)
 
-    positions = tl.load(
-        ep_positions_ptr + ep_rank * n_tokens + offs_m,
-        mask=token_mask,
-        other=-1,
-    )
-    has_token = positions != -1
-    row_offsets = positions.to(tl.int64) * hidden_size
-    col_offsets = row_offsets[:, None] + offs_n[None, :].to(tl.int64)
+    for ep_idx in range(EP):
+        positions = tl.load(
+            ep_positions_ptr + ep_idx * n_tokens + offs_m,
+            mask=token_mask,
+            other=-1,
+        )
+        has_token = positions != -1
+        row_offsets = positions.to(tl.int64) * hidden_size
+        col_offsets = row_offsets[:, None] + offs_n[None, :].to(tl.int64)
 
-    for tp_idx in range(TP):
-        rank_index = ep_rank * TP + tp_idx
-        input_tensor_ptr = tl.load(input_ptrs + rank_index).to(tl.pointer_type(original_dtype))
-        values = tl.load(
-            input_tensor_ptr + col_offsets,
-            mask=io_mask & has_token[:, None],
-            other=0,
-        ).to(intermediate_dtype)
-        output += values
+        for tp_idx in range(TP):
+            rank_index = ep_idx * TP + tp_idx
+            input_tensor_ptr = tl.load(input_ptrs + rank_index).to(tl.pointer_type(original_dtype))
+            values = tl.load(
+                input_tensor_ptr + col_offsets,
+                mask=io_mask & has_token[:, None],
+                other=0,
+            ).to(intermediate_dtype)
+            output += values
 
     output = output.to(original_dtype)
     tl.store(
@@ -235,21 +235,19 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
 
     BLOCK_SIZE_M = 4
     num_blocks = triton.cdiv(n_tokens, BLOCK_SIZE_M)
-    for ep_rank in range(metadata.EP):
-        _accumulate_ep_triton_kernel[(num_blocks,)](
-            positions,
-            output_tensor,
-            pointer_list,
-            n_tokens,
-            hidden_size,
-            ep_rank=ep_rank,
-            TP=metadata.TP,
-            EP=metadata.EP,
-            BLOCK_SIZE_M=BLOCK_SIZE_M,
-            BLOCK_SIZE_N=BLOCK_SIZE_N,
-            original_dtype=triton_original_dtype,
-            intermediate_dtype=triton_intermediate_dtype,
-        )
+    _accumulate_ep_triton_kernel[(num_blocks,)](
+        positions,
+        output_tensor,
+        pointer_list,
+        n_tokens,
+        hidden_size,
+        TP=metadata.TP,
+        EP=metadata.EP,
+        BLOCK_SIZE_M=BLOCK_SIZE_M,
+        BLOCK_SIZE_N=BLOCK_SIZE_N,
+        original_dtype=triton_original_dtype,
+        intermediate_dtype=triton_intermediate_dtype,
+    )
 
     return output_tensor
 
