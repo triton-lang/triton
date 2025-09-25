@@ -210,7 +210,7 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
     n_expts = ep_indx.size(1 - dim)
     other_dims = input_tensor.shape[1:]
     hidden_size = math.prod(other_dims)
-    output_tensor = input_tensor.new_zeros((n_tokens, ) + other_dims, dtype=original_dtype)
+    output_tensor = input_tensor.new_empty((n_tokens, ) + other_dims, dtype=original_dtype)
     triton_original_dtype = TRITON_DTYPE_MAP.get(original_dtype, tl.float32)
     triton_intermediate_dtype = TRITON_DTYPE_MAP.get(intermediate_dtype, tl.float32)
     BLOCK_SIZE_M = 512
