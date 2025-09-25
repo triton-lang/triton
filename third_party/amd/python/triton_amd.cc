@@ -253,12 +253,16 @@ static HipBlasInit initialize_hipblas_op(py::object &A, py::object &B,
 
   hipDataType dtype;
   if (A_dtype == "torch.float8_e4m3fn") {
+    // Supported for GFX950.
     dtype = HIP_R_8F_E4M3;
   } else if (A_dtype == "torch.float8_e5m2fn") {
+    // supported for GFX950.
     dtype = HIP_R_8F_E5M2;
   } else if (A_dtype == "torch.float8_e4m3fnuz") {
+    // Supported for GFX942.
     dtype = HIP_R_8F_E4M3_FNUZ;
   } else if (A_dtype == "torch.float8_e5m2fnuz") {
+    // Supported for GFX942.
     dtype = HIP_R_8F_E5M2_FNUZ;
   } else if (A_dtype == "torch.float16") {
     dtype = HIP_R_16F;
