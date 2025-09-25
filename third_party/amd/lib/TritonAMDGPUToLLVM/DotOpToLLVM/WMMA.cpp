@@ -161,7 +161,7 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
       operands.push_back(b.int_val(1, 0));
     operands.push_back(valB);
 
-    if ((bElType.isBF16() || bElType.isF16()) || aElType.isInteger())
+    if ((bElType.isBF16() || bElType.isF16()) || aElType.isFloat(8))
       operands.push_back(b.int_val(16, 0));
     operands.push_back(valC);
 
