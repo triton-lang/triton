@@ -161,7 +161,8 @@ static void checkMatmulConstraints(const std::string &A_dtype,
   }
 
   if (A_is_fp8 && B_is_fp8) {
-    if (C_dtype != "torch.float16" && C_dtype != "torch.float32" && C_dtype != "torch.bfloat16") {
+    if (C_dtype != "torch.float16" && C_dtype != "torch.float32" &&
+        C_dtype != "torch.bfloat16") {
       std::ostringstream oss;
       oss << "When A/B are 8-bit (float8_e4m3fn/e4m3fnuz or "
              "float8_e5m2fn/e5m2fnuz), C must"
@@ -277,7 +278,8 @@ static HipBlasInit initialize_hipblas_op(py::object &A, py::object &B,
   } else if (OUT_dtype == "torch.bfloat16") {
     out_dtype = HIP_R_16BF;
   } else {
-    throw std::runtime_error("Unsupported output dtype for hipblasLt: " + OUT_dtype);
+    throw std::runtime_error("Unsupported output dtype for hipblasLt: " +
+                             OUT_dtype);
   }
 
   int m = A_shape[0];

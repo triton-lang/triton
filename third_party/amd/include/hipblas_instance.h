@@ -163,8 +163,8 @@ class HipblasLtInstance {
   }
 
   void gemm_impl(int m, int n, int k, uint64_t A, uint64_t B, uint64_t C,
-                 uint64_t D, hipDataType dtype, hipDataType out_dtype, float alpha,
-                 float beta) {
+                 uint64_t D, hipDataType dtype, hipDataType out_dtype,
+                 float alpha, float beta) {
 
     hipblasLtMatmulDesc_t matmulDesc = NULL;
 
