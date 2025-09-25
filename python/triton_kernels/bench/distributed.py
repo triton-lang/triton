@@ -641,8 +641,8 @@ def test_reduce_ep_triton():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for Triton kernel execution")
 @pytest.mark.parametrize("TP, EP", [(2, 4), (4, 2)])
-@pytest.mark.parametrize("n_tokens", [1024, 2048])
-@pytest.mark.parametrize("hidden_size", [1024])
+@pytest.mark.parametrize("n_tokens", [1024, 8192])
+@pytest.mark.parametrize("hidden_size", [1024, 2048])
 @pytest.mark.parametrize("routes_per_token", [4])
 def test_reduce_ep_triton_large(TP, EP, n_tokens, hidden_size, routes_per_token):
     device = torch.device("cuda")
