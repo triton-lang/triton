@@ -146,7 +146,7 @@ def _prepare_ep_positions_kernel(ep_indx_ptr, positions_ptr, n_tokens, n_expts,
         tl.store(
             positions_ptr + ep_idx * n_tokens + offs_m,
             positions,
-            mask=row_has_ep,
+            mask=token_mask
         )
         increment = tl.sum(row_has_ep_i32, axis=0)
         base = base + increment
@@ -203,8 +203,6 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
         raise NotImplementedError(f"Reduce operation {op} is not implemented.")
     ep_indx = metadata.ep_indx.contiguous()
     n_tokens = ep_indx.size(dim)
-    if n_tokens == 0:
-        return input_tensor.new_zeros_like(input_tensor)
     n_expts = ep_indx.size(1 - dim)
     other_dims = input_tensor.shape[1:]
     hidden_size = math.prod(other_dims)
