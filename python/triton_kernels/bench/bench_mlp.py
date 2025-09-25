@@ -27,7 +27,7 @@ def get_temp_fpath(out_path, file_name):
         fpath = out_path / file_name
         yield fpath
     else:
-        with tempfile.TemporaryFile() as tmp_file:
+        with tempfile.NamedTemporaryFile(delete=True) as tmp_file:
             fpath = Path(tmp_file.name)
             yield fpath
 
