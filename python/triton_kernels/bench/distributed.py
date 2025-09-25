@@ -215,7 +215,7 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
     BLOCK_SIZE_N = triton.next_power_of_2(hidden_size if hidden_size > 0 else 1)
     BLOCK_SIZE_E = triton.next_power_of_2(n_expts if n_expts > 0 else 1)
 
-    positions = torch.full((metadata.EP, n_tokens), -1, dtype=torch.int32, device=input_tensor.device)
+    positions = torch.empty((metadata.EP, n_tokens), dtype=torch.int32, device=input_tensor.device)
     pointer_list = torch.tensor([x.data_ptr() for x in output_list], device=input_tensor.device, dtype=torch.int64)
 
     _prepare_ep_positions_kernel[(metadata.EP,)](
