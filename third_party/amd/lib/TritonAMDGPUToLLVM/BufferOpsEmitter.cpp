@@ -65,8 +65,8 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
   if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
                          targetInfo.getISAFamily())) {
 #if 0
-    // Turn off cache-swizzling for the time being as we don't know for sure
-    // the constraints imposed from the hardware side.
+    // Turn off cache-swizzling for the time being while we are figuring out
+    // how to safely use it.
     if (blockStride) {
       Value enableSwizzle = b.int_val(16, 16384);
       Value mask14b = b.int_val(16, 16383);
