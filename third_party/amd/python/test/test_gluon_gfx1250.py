@@ -113,15 +113,15 @@ def test_runtime_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype, k_di
 
     torch.manual_seed(42)
 
-    a_dtype = getattr(torch, a_dtype)
-    b_dtype = getattr(torch, b_dtype)
-
     def create_operand(shape, dtype):
         if dtype == torch.bfloat16:
             return torch.randn(shape, dtype=dtype)
         else:
             assert dtype == torch.float8_e5m2
             return torch.randint(0x04, 0x7B, shape, dtype=torch.uint8).view(dtype)
+
+    a_dtype = getattr(torch, a_dtype)
+    b_dtype = getattr(torch, b_dtype)
 
     a = create_operand((M, K), a_dtype)
     b = create_operand((K, N), b_dtype)
