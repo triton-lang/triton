@@ -202,7 +202,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<16xbf16>
     // GFX1250-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GFX1250-COUNT-8: llvm.insertelement {{.*}} : vector<8xf32>
-    // GFX1250: wmma.f32.16x16x32.bf16.bf16{{.*}} : (i1, vector<16xbf16>, i1, vector<16xbf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+    // GFX1250: wmma.f32.16x16x32.bf16.v8f32.v16bf16{{.*}} : (i1, vector<16xbf16>, i1, vector<16xbf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
     %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma3, kWidth = 8}>> * tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma3, kWidth = 8}>> -> tensor<16x16xf32, #mma3>
 
     %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma3>
@@ -216,7 +216,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // GFX1250-COUNT-16: llvm.insertelement {{.*}} : vector<16xbf16>
     // GFX1250-COUNT-8: llvm.extractvalue %{{.*}} : !llvm.struct<(f32, f32, f32, f32, f32, f32, f32, f32)>
     // GFX1250-COUNT-8: llvm.insertelement {{.*}} : vector<8xf32>
-    // GFX1250: wmma.f32.16x16x32.bf16.bf16{{.*}} : (i1, vector<16xbf16>, i1, vector<16xbf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
+    // GFX1250: wmma.f32.16x16x32.bf16.v8f32.v16bf16{{.*}} : (i1, vector<16xbf16>, i1, vector<16xbf16>, i16, vector<8xf32>, i1, i1) -> vector<8xf32>
     %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x32xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma3_transposed, kWidth = 8}>> * tensor<32x16xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma3_transposed, kWidth = 8}>> -> tensor<16x16xf32, #mma3_transposed>
 
     %ptr0 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<16x16x!tt.ptr<f32>, #mma3_transposed>
