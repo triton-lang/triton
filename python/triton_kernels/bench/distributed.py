@@ -231,8 +231,10 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
         EP=metadata.EP,
         BLOCK_SIZE_M=BLOCK_SIZE_M,
         BLOCK_SIZE_E=BLOCK_SIZE_E,
+        num_warps=8,
     )
 
+    BLOCK_SIZE_M = 16
     for ep_rank in range(metadata.EP):
         _accumulate_ep_triton_kernel[(num_blocks,)](
             positions,
