@@ -163,14 +163,14 @@ def _accumulate_ep_metadata(grid, kernel, args):
 @triton.jit(launch_metadata=_accumulate_ep_metadata)
 def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs, n_tokens, hidden_size,
                                  TP: tl.constexpr, EP: tl.constexpr,
-                                 BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
+                                 BLOCK_SIZE_N: tl.constexpr,
                                  original_dtype: tl.constexpr, intermediate_dtype: tl.constexpr):
     offs_m = tl.program_id(0)
     token_mask = offs_m < n_tokens
     offs_n = tl.arange(0, BLOCK_SIZE_N)
     feature_mask = offs_n < hidden_size
     io_mask = token_mask[:, None] & feature_mask[None, :]
-    output = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=intermediate_dtype)
+    output = tl.zeros((BLOCK_SIZE_N,), dtype=intermediate_dtype)
 
     for ep_idx in tl.static_range(EP):
         positions = tl.load(
@@ -178,8 +178,7 @@ def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs
             mask=token_mask,
             other=-1,
         )
-        has_token = positions != -1
-        if has_token:
+        if positions != -1:
             row_offsets = positions * hidden_size
             col_offsets = row_offsets[:, None] + offs_n[None, :]
 
@@ -235,7 +234,6 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
         hidden_size,
         TP=metadata.TP,
         EP=metadata.EP,
-        BLOCK_SIZE_M=BLOCK_SIZE_M,
         BLOCK_SIZE_N=BLOCK_SIZE_N,
         original_dtype=triton_original_dtype,
         intermediate_dtype=triton_intermediate_dtype,
