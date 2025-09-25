@@ -148,7 +148,7 @@ def _prepare_ep_positions_kernel(ep_indx_ptr, positions_ptr, counters_ptr, n_tok
             tl.store(
                 positions_ptr + ep_idx * n_tokens + offs_m,
                 positions,
-                mask=row_has_ep,
+                mask=token_mask,
             )
             increment = tl.sum(row_has_ep_i32, axis=0)
             tl.store(counters_ptr + ep_idx, base + increment)
@@ -213,11 +213,11 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
     output_tensor = input_tensor.new_zeros((n_tokens, ) + other_dims, dtype=original_dtype)
     triton_original_dtype = TRITON_DTYPE_MAP.get(original_dtype, tl.float32)
     triton_intermediate_dtype = TRITON_DTYPE_MAP.get(intermediate_dtype, tl.float32)
-    BLOCK_SIZE_M = 128
+    BLOCK_SIZE_M = 512
     BLOCK_SIZE_N = triton.next_power_of_2(hidden_size if hidden_size > 0 else 1)
     BLOCK_SIZE_E = triton.next_power_of_2(n_expts if n_expts > 0 else 1)
 
-    positions = torch.full((metadata.EP, n_tokens), -1, dtype=torch.int32, device=input_tensor.device)
+    positions = torch.empty((metadata.EP, n_tokens), dtype=torch.int32, device=input_tensor.device)
     counters = torch.zeros(metadata.EP, dtype=torch.int32, device=input_tensor.device)
     pointer_list = torch.tensor([x.data_ptr() for x in output_list], device=input_tensor.device, dtype=torch.int64)
 
@@ -233,7 +233,7 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
         num_warps=8,
     )
 
-    BLOCK_SIZE_M = 16
+    BLOCK_SIZE_M = 4
     num_blocks = triton.cdiv(n_tokens, BLOCK_SIZE_M)
     for ep_rank in range(metadata.EP):
         _accumulate_ep_triton_kernel[(num_blocks,)](
