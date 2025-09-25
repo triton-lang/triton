@@ -152,7 +152,14 @@ def _prepare_ep_positions_kernel(ep_indx_ptr, positions_ptr, n_tokens, n_expts,
         base = base + increment
 
 
-@triton.jit
+def _accumulate_ep_metadata(grid, kernel, args):
+    ret = {}
+    n_tokens, hidden_size = args["n_tokens"], args["hidden_size"]
+    TP, EP = args["TP"], args["EP"]
+    ret["name"] = f"{kernel.name} [n_tokens={n_tokens}, hidden_size={hidden_size}, TP={TP}, EP={EP}]"
+    return ret
+
+@triton.jit(launch_metadata=_accumulate_ep_metadata)
 def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs, n_tokens, hidden_size,
                                  TP: tl.constexpr, EP: tl.constexpr,
                                  BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
