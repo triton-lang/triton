@@ -150,7 +150,6 @@ def _prepare_ep_positions_kernel(ep_indx_ptr, positions_ptr, n_tokens, n_expts,
         )
         increment = tl.sum(row_has_ep_i32, axis=0)
         base = base + increment
-        tl.store(counters_ptr + ep_idx, base)
 
 
 @triton.jit
