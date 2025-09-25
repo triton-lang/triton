@@ -175,8 +175,8 @@ def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs
             other=-1,
         )
         has_token = positions != -1
-        row_offsets = positions.to(tl.int64) * hidden_size
-        col_offsets = row_offsets[:, None] + offs_n[None, :].to(tl.int64)
+        row_offsets = positions * hidden_size
+        col_offsets = row_offsets[:, None] + offs_n[None, :]
 
         for tp_idx in tl.static_range(TP):
             values = tl.load(
@@ -222,7 +222,7 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
         num_warps=8,
     )  # type: ignore
 
-    BLOCK_SIZE_M = 1
+    BLOCK_SIZE_M = 2
     num_blocks = triton.cdiv(n_tokens, BLOCK_SIZE_M)
     _accumulate_ep_triton_kernel[(num_blocks,)](
         positions,
