@@ -28,6 +28,7 @@ if [ -z "$CMAKE_ARGS" ]; then
               -DLLVM_ENABLE_PROJECTS="$LLVM_PROJECTS"
               -DCMAKE_INSTALL_PREFIX="$LLVM_INSTALL_PATH"
               -B"$LLVM_BUILD_PATH" "$LLVM_PROJECT_PATH/llvm"
+	      -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
         )
     else
         CMAKE_ARGS=("$@")
