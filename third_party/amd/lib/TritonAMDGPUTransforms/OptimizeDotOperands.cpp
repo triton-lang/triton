@@ -205,13 +205,30 @@ private:
   triton::AMD::ISAFamily isaFamily;
 };
 
+// This pattern creates LocalAllocOp and LocalLoadOp with unswizzled shared
+// layout for the scale operand used in ScaledUpcastFp4Op/ScaledUpcastFp8Op.
+// StreamPipeliner will respect the layout created here and pipeline ops
+// according to the need.
+//
+// It matches
+// tt.load -> ... -> amdgpu.scaled_upcast_x
+//
+// And rewrites it to
+// tt.load -> ttg.local_alloc -> ttg.local_load -> ... -> amdgpu.scaled_upcast_x
 template <typename OpTy>
 class AllocSharedMemForUpcastedScales : public OpRewritePattern<OpTy> {
 public:
   using OpRewritePattern<OpTy>::OpRewritePattern;
 
+  AllocSharedMemForUpcastedScales(MLIRContext *context,
+                                  triton::AMD::ISAFamily isaFamily)
+      : OpRewritePattern<OpTy>(context), isaFamily(isaFamily) {}
+
   LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const override {
+    if (isaFamily != mlir::triton::AMD::ISAFamily::CDNA4)
+      return rewriter.notifyMatchFailure(op, "NYI: Only supported on CDNA4");
+
     auto forOp = op->template getParentOfType<scf::ForOp>();
     if (!forOp)
       return rewriter.notifyMatchFailure(op,
@@ -228,7 +245,7 @@ public:
       if (isa<tt::LoadOp>(op)) {
         loadOp = dyn_cast<tt::LoadOp>(op);
         cnt++;
-      } else if (isa<ttg::LocalAllocOp, ttg::LocalLoadOp>(op)) {
+      } else if (isa<ttg::LocalLoadOp>(op)) {
         hasAllocatedLDS = true;
         break;
       }
@@ -264,9 +281,11 @@ public:
     LDBG("Create localload: " << localLoad);
 
     rewriter.replaceAllUsesExcept(loadOp.getResult(), localLoad, alloc);
-    auto module = loadOp->getParentOfType<ModuleOp>();
     return success();
   }
+
+private:
+  triton::AMD::ISAFamily isaFamily;
 };
 } // namespace
 
@@ -287,11 +306,9 @@ public:
     auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName);
     patterns.add<ReuseShmemForDirectAndTransposedUse>(context, isaFamily);
     patterns
-        .add<AllocSharedMemForUpcastedScales<tt::amdgpu::ScaledUpcastFp8Op>>(
-            context);
-    patterns
-        .add<AllocSharedMemForUpcastedScales<tt::amdgpu::ScaledUpcastFp4Op>>(
-            context);
+        .add<AllocSharedMemForUpcastedScales<tt::amdgpu::ScaledUpcastFp8Op>,
+             AllocSharedMemForUpcastedScales<tt::amdgpu::ScaledUpcastFp4Op>>(
+            context, isaFamily);
     ttg::ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
