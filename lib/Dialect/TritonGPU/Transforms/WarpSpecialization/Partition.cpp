@@ -222,4 +222,25 @@ std::optional<SetVector<int>> getPartitionIds(Operation *op) {
 
 bool hasPartition(Operation *op) { return getPartitionIds(op) != std::nullopt; }
 
+std::optional<SetVector<int>> getOutputPartitionIds(Operation *op, int idx) {
+  if (!op) {
+    return std::nullopt;
+  }
+  auto attr = op->getAttr(kPartitionOutputsAttrName);
+  if (!attr) {
+    return std::nullopt;
+  }
+  assert(isa<ArrayAttr>(attr));
+  assert(idx < op->getAttrOfType<ArrayAttr>(kPartitionOutputsAttrName).size());
+  auto attrs = op->getAttrOfType<ArrayAttr>(kPartitionOutputsAttrName)[idx];
+
+  assert(isa<DenseI32ArrayAttr>(attrs));
+
+  SetVector<int> partitionIds;
+  for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
+    partitionIds.insert(id);
+  }
+  return partitionIds;
+}
+
 } // namespace mlir::triton::gpu

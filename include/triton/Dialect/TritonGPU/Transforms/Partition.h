@@ -129,6 +129,7 @@ void setPartition(Operation *op, const SetVector<Partition *> &partitions);
 void setPartition(Operation *op, const SetVector<int> &partitionIds);
 
 std::optional<SetVector<int>> getPartitionIds(Operation *op);
+std::optional<SetVector<int>> getOutputPartitionIds(Operation *op, int idx);
 
 } // namespace mlir::triton::gpu
 
