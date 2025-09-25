@@ -32,6 +32,7 @@ namespace {
 
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::LinearEncodingAttr;
 
 using ValueTable = std::map<std::tuple<unsigned, unsigned, unsigned>, Value>;
 
@@ -73,6 +74,16 @@ ValueTable getValuesFromDotOperandLayoutStruct(
     }
   }
   return vals;
+}
+
+static inline int32_t getWmmaF8F6F4MatrixFormat(Type t) {
+  return llvm::TypeSwitch<Type, int32_t>(t)
+      .Case<Float8E4M3FNType>([](Type) { return 0; })
+      .Case<Float8E5M2Type>([](Type) { return 1; })
+      .Case<Float6E2M3FNType>([](Type) { return 2; })
+      .Case<Float6E3M2FNType>([](Type) { return 3; })
+      .Case<Float4E2M1FNType>([](Type) { return 4; })
+      .Default([](Type) { return -1; });
 }
 
 Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
@@ -127,6 +138,44 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
     operands.push_back(b.i1_val(0));
   }
 
+  auto wmmaIntrinsic = LLVM::createLLVMIntrinsicCallOp(
+      rewriter, loc, name, valC.getType(), operands);
+  return wmmaIntrinsic.getResult(0);
+}
+
+Value generateScaledWMMAIntrinsic(ConversionPatternRewriter &rewriter,
+                                  Location loc, Value valA, Value valScaleA,
+                                  Value valB, Value valScaleB, Value valC,
+                                  Type aElType, Type bElType, Type dElType,
+                                  int scaleKWidth) {
+  assert(scaleKWidth == 2 || scaleKWidth == 4 || scaleKWidth == 8);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  std::string name = "llvm.amdgcn.wmma.scale";
+  if (scaleKWidth == 8) {
+    name += "16";
+  }
+  name += ".f32.16x16x128.f8f6f4";
+
+  LLVM::FastmathFlagsAttr defaultFlags{};
+  SmallVector<Value> operands;
+
+  Value fmtA = b.i32_val(getWmmaF8F6F4MatrixFormat(aElType));
+  operands.push_back(fmtA);
+  operands.push_back(valA);
+  Value fmtB = b.i32_val(getWmmaF8F6F4MatrixFormat(bElType));
+  operands.push_back(fmtB);
+  operands.push_back(valB);
+  Value modC = b.i16_val(0);
+  operands.push_back(modC);
+  operands.push_back(valC);
+  operands.push_back(b.i32_val(0));
+  operands.push_back(b.i32_val(0));
+  operands.push_back(valScaleA);
+  operands.push_back(b.i32_val(0));
+  operands.push_back(b.i32_val(0));
+  operands.push_back(valScaleB);
+  operands.push_back(b.i1_val(0));
+  operands.push_back(b.i1_val(0));
   auto wmmaIntrinsic = LLVM::createLLVMIntrinsicCallOp(
       rewriter, loc, name, valC.getType(), operands);
   return wmmaIntrinsic.getResult(0);
@@ -277,6 +326,145 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   return success();
 }
 
+LogicalResult convertScaledDot(triton::DotScaledOp op,
+                               triton::DotScaledOp::Adaptor adaptor,
+                               ConversionPatternRewriter &rewriter,
+                               const LLVMTypeConverter *typeConverter) {
+  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(
+      cast<RankedTensorType>(op.getResult().getType()).getEncoding());
+  int wmmaVer = wmmaLayout.getVersion();
+  assert(wmmaVer == 3 && "Scaled dot not supported for wmma1/wmma2");
+  auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
+  auto mnkDim = wmmaLayout.getInstrShape();
+
+  auto loc = op.getLoc();
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
+  Value a = op.getA();
+  Value b = op.getB();
+  Value aScale = op.getAScale();
+  Value bScale = op.getBScale();
+  Value d = op.getD();
+  auto aTensorTy = cast<RankedTensorType>(a.getType());
+  auto aScaleTensorTy = cast<RankedTensorType>(aScale.getType());
+  auto bTensorTy = cast<RankedTensorType>(b.getType());
+  auto bScaleTensorTy = cast<RankedTensorType>(bScale.getType());
+  auto dTensorTy = cast<RankedTensorType>(d.getType());
+  auto elemTy = aTensorTy.getElementType();
+
+  unsigned kDim = mnkDim[2];
+  unsigned kBase = 64;
+
+  bool isFp4A = op.getAElemType() == triton::ScaleDotElemType::E2M1;
+  int kBaseA = isFp4A ? kBase / 2 : kBase;
+  int kDimA = isFp4A ? kDim / 2 : kDim;
+
+  bool isFp4B = op.getBElemType() == triton::ScaleDotElemType::E2M1;
+  int kBaseB = isFp4B ? kBase / 2 : kBase;
+  int kDimB = isFp4B ? kDim / 2 : kDim;
+
+  bool isFp6A = (op.getAElemType() == triton::ScaleDotElemType::E2M3) ||
+                (op.getAElemType() == triton::ScaleDotElemType::E3M2);
+  bool isFp6B = (op.getBElemType() == triton::ScaleDotElemType::E2M3) ||
+                (op.getBElemType() == triton::ScaleDotElemType::E3M2);
+
+  auto repA = wmmaLayout.getRepForOperand(aTensorTy.getShape(), kDimA, 0);
+  auto repB = wmmaLayout.getRepForOperand(bTensorTy.getShape(), kDimB, 1);
+
+  assert(repA[2] == repB[1]);
+
+  Value loadedA = adaptor.getA();
+  Value loadedAScale = adaptor.getAScale();
+  Value loadedB = adaptor.getB();
+  Value loadedBScale = adaptor.getBScale();
+  Value loadedC = adaptor.getC();
+  auto numRepM = repA[1];
+  auto numRepN = repB[2];
+  auto numRepK = repA[2];
+  auto numRepB = repA[0];
+
+  const auto kDimTensorA = aTensorTy.getShape().back();
+  const auto kWWMADim = 128;
+  int paddingFactor = 1;
+  if (kWWMADim > kDimTensorA) {
+    paddingFactor = kWWMADim / kDimTensorA;
+  }
+
+  auto scaleShapeA = aScaleTensorTy.getShape();
+  int scaleKWidthA = 4 / paddingFactor;
+  auto scaleShapeB = bScaleTensorTy.getShape();
+  int scaleKWidthB = 4 / paddingFactor;
+  constexpr int scaleKBase = 1;
+
+  ValueTable ha = getValuesFromDotOperandLayoutStruct(
+      rewriter, typeConverter, wmmaVer, loadedA, numRepB, numRepM, numRepK,
+      kBaseA, aTensorTy.getElementType(), isFp6A, loc);
+  ValueTable hb = getValuesFromDotOperandLayoutStruct(
+      rewriter, typeConverter, wmmaVer, loadedB, numRepB, numRepN, numRepK,
+      kBaseB, bTensorTy.getElementType(), isFp6B, loc);
+  ValueTable sa = getValuesFromDotOperandLayoutStruct(
+      rewriter, typeConverter, wmmaVer, loadedAScale, numRepB, numRepM, numRepK,
+      scaleKWidthA, aScaleTensorTy.getElementType(), false, loc);
+  ValueTable sb = getValuesFromDotOperandLayoutStruct(
+      rewriter, typeConverter, wmmaVer, loadedBScale, numRepB, numRepN, numRepK,
+      scaleKWidthB, bScaleTensorTy.getElementType(), false, loc);
+  auto dstElemTy = dTensorTy.getElementType();
+  auto fc = unpackLLElements(loc, loadedC, rewriter);
+
+  Type scaledAElemType =
+      LLVM::AMD::scaleDotElemTypeToMLIRType(op.getContext(), op.getAElemType());
+  Type scaledBElemType =
+      LLVM::AMD::scaleDotElemTypeToMLIRType(op.getContext(), op.getBElemType());
+
+  unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
+  constexpr unsigned vgprElemBitWidth = 32;
+  // compute number of output elements that each thread holds for one WMMA
+  // instruction.
+  auto elemsPerVec = mnkDim[0] * mnkDim[1] / warpSize;
+  auto dElemsToStorePerThread = mnkDim[0] * mnkDim[1] / warpSize;
+  auto vecTy = vec_ty(dstElemTy, elemsPerVec);
+  for (int b = 0; b < numRepB; ++b) {
+    for (int m = 0; m < numRepM; ++m) {
+      for (int n = 0; n < numRepN; ++n) {
+        auto batchOffIdx = b * numRepM * numRepN * dElemsToStorePerThread;
+        auto mRepOffId = m * numRepN * dElemsToStorePerThread;
+        auto nRepOffId = n * dElemsToStorePerThread;
+        auto fcThreadOffIdx = batchOffIdx + mRepOffId + nRepOffId;
+
+        Value acc = tb.undef(vecTy);
+        for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
+          acc = tb.insert_element(vecTy, acc, fc[fcThreadOffIdx + v],
+                                  tb.i32_val(v));
+        }
+        for (size_t k = 0; k < numRepK; k++) {
+          acc = wmmaLayout.getIsTransposed()
+                    ? generateScaledWMMAIntrinsic(
+                          rewriter, loc, hb[{b, n, k}], sb[{b, n, k}],
+                          ha[{b, m, k}], sa[{b, m, k}], acc, scaledBElemType,
+                          scaledAElemType, dstElemTy, scaleKWidthA)
+                    : generateScaledWMMAIntrinsic(
+                          rewriter, loc, ha[{b, m, k}], sa[{b, m, k}],
+                          hb[{b, n, k}], sb[{b, n, k}], acc, scaledAElemType,
+                          scaledBElemType, dstElemTy, scaleKWidthB);
+        }
+        for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
+          fc[fcThreadOffIdx + v] =
+              tb.extract_element(dstElemTy, acc, tb.i32_val(v));
+        }
+      }
+    }
+  }
+
+  Type structTy = LLVM::LLVMStructType::getLiteral(
+      wmmaLayout.getContext(), SmallVector<Type>(fc.size(), dstElemTy));
+  Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
+
+  // const size_t mmaCount = numRepB * numRepM * numRepN * numRepK;
+  // setNumGeneratedMMAs(op, mmaCount, mnkDim[0], mnkDim[1], mnkDim[2], elemTy);
+
+  rewriter.replaceOp(op, res);
+  return success();
+}
+
 } // namespace
 
 LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
@@ -300,5 +488,28 @@ LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
          "DotOp's $c operand should pass the same number of values as $d");
 
   return convertDot(op, adaptor, rewriter, typeConverter);
+}
+
+LogicalResult convertScaledWMMA(triton::DotScaledOp op,
+                                triton::DotScaledOp::Adaptor adaptor,
+                                const LLVMTypeConverter *typeConverter,
+                                ConversionPatternRewriter &rewriter) {
+  assert(isa<LinearEncodingAttr>(op.getAScale().getType().getEncoding()) &&
+         isa<LinearEncodingAttr>(op.getBScale().getType().getEncoding()) &&
+         "Both LhsScale and RhsScale should be linear layout.");
+
+  auto cTensorTy = op.getC().getType();
+  auto dTensorTy = op.getD().getType();
+  assert(isa<AMDWmmaEncodingAttr>(cTensorTy.getEncoding()) &&
+         "Currently, we only support C with a mfma layout.");
+
+  assert(cTensorTy.getShape()[0] == dTensorTy.getShape()[0] &&
+         cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
+         "DotOp's C operand should pass the same number of values as D.");
+
+  auto loc = op.getLoc();
+  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(
+      cast<RankedTensorType>(op.getResult().getType()).getEncoding());
+  return convertScaledDot(op, adaptor, rewriter, typeConverter);
 }
 } // namespace mlir::triton::AMD
