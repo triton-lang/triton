@@ -222,7 +222,7 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
         num_warps=8,
     )  # type: ignore
 
-    BLOCK_SIZE_M = 2
+    BLOCK_SIZE_M = 2 if hidden_size <= 1024 else 1
     num_blocks = triton.cdiv(n_tokens, BLOCK_SIZE_M)
     _accumulate_ep_triton_kernel[(num_blocks,)](
         positions,
@@ -588,55 +588,16 @@ def test_reduce_scatter_distributed_with_metadata(monkeypatch):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for Triton kernel execution")
-def test_reduce_ep_triton():
-    device = torch.device("cuda")
-    world_size = 2
-    dim = 0
-    # Assume the current ep rank is 0
-    ep_indx = torch.tensor([[0, 1], [1, 0], [0, 1], [1, 0]], device=device, dtype=torch.int32)
-    metadata = ReduceScatterMetadata(
-        input_split_sizes=None,  # it doesn't matter in this test since we skipped all_to_all
-        ep_indx=ep_indx,
-        EP=2,
-        TP=1,
-    )
-
-    original_dtype = torch.float32
-    intermediate_dtype = torch.float32
-    input_tensor = torch.zeros((4, 2), device=device, dtype=original_dtype)
-    output_list = [
-        torch.tensor(
-            [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]],
-            device=device,
-            dtype=intermediate_dtype,
-        ),
-        torch.tensor(
-            [[9.0, 10.0], [11.0, 12.0], [13.0, 14.0], [15.0, 16.0]],
-            device=device,
-            dtype=intermediate_dtype,
-        ),
-    ]
-    op = dist.ReduceOp.SUM
-
-    expected = _reduce_ep_torch(metadata, input_tensor, output_list, world_size, dim, op, original_dtype,
-                                intermediate_dtype)
-    actual = _reduce_ep_triton(metadata, input_tensor, output_list, world_size, dim, op, original_dtype,
-                               intermediate_dtype)
-
-    torch.testing.assert_close(actual, expected)
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for Triton kernel execution")
-@pytest.mark.parametrize("TP, EP", [(2, 4), (4, 2)])
+@pytest.mark.parametrize("TP, EP", [(4, 2), (1, 8), (2, 2)])
 @pytest.mark.parametrize("n_tokens", [1024, 8192])
-@pytest.mark.parametrize("hidden_size", [1024, 2048])
-@pytest.mark.parametrize("routes_per_token", [4])
-def test_reduce_ep_triton_large(TP, EP, n_tokens, hidden_size, routes_per_token):
+@pytest.mark.parametrize("hidden_size", [1024, 5760])
+@pytest.mark.parametrize("n_expt_act", [4])
+def test_reduce_ep_triton_large(TP, EP, n_tokens, hidden_size, n_expt_act):
     device = torch.device("cuda")
     world_size = TP * EP
 
     torch.manual_seed(0)
-    ep_indx = torch.randint(0, EP, (n_tokens, routes_per_token), device=device, dtype=torch.int32).contiguous()
+    ep_indx = torch.randint(0, EP, (n_tokens, n_expt_act), device=device, dtype=torch.int32).contiguous()
     original_dtype = torch.float16
     intermediate_dtype = torch.float16
     input_tensor = torch.zeros((n_tokens, hidden_size), device=device, dtype=original_dtype)
