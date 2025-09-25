@@ -222,7 +222,7 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
         num_warps=8,
     )  # type: ignore
 
-    BLOCK_SIZE_M = 4
+    BLOCK_SIZE_M = 1
     num_blocks = triton.cdiv(n_tokens, BLOCK_SIZE_M)
     _accumulate_ep_triton_kernel[(num_blocks,)](
         positions,
