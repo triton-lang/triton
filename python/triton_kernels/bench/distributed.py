@@ -179,9 +179,8 @@ def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs
         col_offsets = row_offsets[:, None] + offs_n[None, :].to(tl.int64)
 
         for tp_idx in tl.static_range(TP):
-            rank_index = ep_idx * TP + tp_idx
             values = tl.load(
-                input_ptrs[rank_index] + col_offsets,
+                input_ptrs[tl.constexpr(ep_idx * TP + tp_idx)] + col_offsets,
                 mask=io_mask & has_token[:, None],
                 other=0,
             ).to(intermediate_dtype)
@@ -206,13 +205,12 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
     other_dims = input_tensor.shape[1:]
     hidden_size = math.prod(other_dims)
     output_tensor = input_tensor.new_empty((n_tokens, ) + other_dims, dtype=original_dtype)
+    positions = torch.empty((metadata.EP, n_tokens), dtype=torch.int32, device=input_tensor.device)
     triton_original_dtype = TRITON_DTYPE_MAP.get(original_dtype, tl.float32)
     triton_intermediate_dtype = TRITON_DTYPE_MAP.get(intermediate_dtype, tl.float32)
     BLOCK_SIZE_M = 512
     BLOCK_SIZE_N = triton.next_power_of_2(hidden_size if hidden_size > 0 else 1)
     BLOCK_SIZE_E = triton.next_power_of_2(n_expts if n_expts > 0 else 1)
-
-    positions = torch.empty((metadata.EP, n_tokens), dtype=torch.int32, device=input_tensor.device)
 
     _prepare_ep_positions_kernel[(metadata.EP,)](
         ep_indx,
