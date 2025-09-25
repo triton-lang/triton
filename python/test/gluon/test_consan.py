@@ -1440,7 +1440,7 @@ def test_deadlock_underarrival(device, run_wrapper):
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_deadlock_different_phases(device, run_wrapper):
     if run_wrapper:
-        result = run_in_process(test_deadlock_underarrival, (device, False))
+        result = run_in_process(test_deadlock_different_phases, (device, False))
         assert result.exc is None
         assert result.driver_stderr_output == ""
         return
