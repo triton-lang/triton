@@ -162,11 +162,7 @@ def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs
     offs_n = tl.arange(0, BLOCK_SIZE_N)
     feature_mask = offs_n < hidden_size
     io_mask = token_mask[:, None] & feature_mask[None, :]
-    output = tl.load(
-        output_tensor_ptr + offs_m[:, None] * hidden_size + offs_n[None, :],
-        mask=io_mask,
-        other=0,
-    ).to(intermediate_dtype)
+    output = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=intermediate_dtype)
 
     for ep_idx in tl.static_range(EP):
         positions = tl.load(
@@ -596,7 +592,6 @@ def test_reduce_ep_triton_large(TP, EP, n_tokens, hidden_size, n_expt_act):
     device = torch.device("cuda")
     world_size = TP * EP
 
-    torch.manual_seed(0)
     ep_indx = torch.randint(0, EP, (n_tokens, n_expt_act), device=device, dtype=torch.int32).contiguous()
     original_dtype = torch.float16
     intermediate_dtype = torch.float16
