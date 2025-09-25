@@ -199,9 +199,8 @@ chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
   assert(kDim != 0);
   assert(enforcedNonKDim != 0 || (M % mDim == 0 && N % nDim == 0));
   // If inputKSize % kDim != 0 (including the case where inputKSize < kDim),
-  // this layout will introduce data duplication. We will not use MFMA layout
-  // in this case, except MFMA layout is enforced.
-  if (enforcedNonKDim == 0 && inputKSize % kDim != 0)
+  // this layout will introduce data duplication.
+  if (inputKSize % kDim != 0)
     return failure();
   return maybeMfmaIntrinsic;
 }
