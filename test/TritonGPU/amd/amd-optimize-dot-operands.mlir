@@ -161,7 +161,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.targ
         %10 = tt.reshape %9 : tensor<4x32x128xbf16, #linear2> -> tensor<128x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
         %11 = amdgpu.scaled_upcast_fp8 %arg1 scale %10 : tensor<128x128xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>, tensor<128x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
         %12 = ttg.convert_layout %11 : tensor<128x128xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xbf16, #blocked>
-        // %out1 = tt.addptr %out, %cst_1 : tensor<128x128x!tt.ptr<bf16>, #blocked>, tensor<128x128xi16, #blocked>
         %16 = arith.addf %15, %12 : tensor<128x128xbf16, #blocked>
         scf.yield %16 : tensor<128x128xbf16, #blocked>
       }
