@@ -581,8 +581,8 @@ LogicalResult Pipeliner::transformFourPPClusters(OpBuilder &builder,
   prependClusterBarrier(builder, loc);
 
   // Add a remark for user feedback
-  dotSliceOps[0]->emitRemark()
-      << "Performed four ping pong cluster transformation\n";
+  //dotSliceOps[0]->emitRemark()
+  //    << "Performed four ping pong cluster transformation\n";
   return success();
 }
 
@@ -1016,13 +1016,44 @@ void Pipeliner::getDotPingponged() {
             [&](auto asyncOp) { asyncWaitOps.push_back(asyncOp); });
   });
 
+
+
+  // Determine if we have a persistent GEMM. This will decide how we interpret
+  // any memory operations that we find in conditionals.
+  auto assumeNotTaken = isPersistentGemm(dotOps.size());
+  // Compute tile size, kWidth, and mfma type.
+  auto dotType = dotOps[0].getType();
+  auto dotShape = dotType.getShape();
+  auto aType = dotOps[0].getA().getType();
+  auto aShape = aType.getShape();
+  auto elemWidth = aType.getElementTypeBitWidth();
+  int64_t tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth;
+
+  const int64_t minTile = 262144;      // e.g. 32x128x64x16bit
+  const int64_t smallTile = 16777216;  // e.g. 128x128x64x16bit
+  const int64_t mediumTile = 33554432; // smallTile x 2
+  const int64_t largeTile = 67108864;  // e.g. 256x256x64x16bit
+
+  auto encoding = cast<RankedTensorType>(aType).getEncoding();
+  auto srcEncoding = cast<ttg::DotOperandEncodingAttr>(encoding);
+  kWidth = srcEncoding.getKWidth();
+  auto mfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(srcEncoding.getParent());
+  SmallVector<int64_t> intShape;
+  intShape.push_back(mfmaEncoding.getMDim());
+  intShape.push_back(mfmaEncoding.getNDim());
+
+/*
+
   // PoC scheduling reorder operations as F16 pingopng for MI350.
   // Proper one may or may not reorder ops.
-
   if (asyncWaitOps.size() > 1 || asyncWaitOps.size() == 0)
     return;
-  builder.setInsertionPointAfter(asyncBufferLoadOps[1]);
-  updateOpInsertion(asyncBufferLoadOps[1]);
+
+  //builder.setInsertionPointAfter(asyncBufferLoadOps[1]);
+  //updateOpInsertion(asyncBufferLoadOps[1]);
+  builder.setInsertionPointAfter(asyncCopyOps[1]);
+  updateOpInsertion(asyncCopyOps[1]);
+
   moveOpAndPredecessorsUpSameBlock(lLoadOps[0]);
   moveOpAndPredecessorsUpSameBlock(lLoadOps[1]);
 
@@ -1030,7 +1061,8 @@ void Pipeliner::getDotPingponged() {
   innerSBarrier->setAttr("embed", builder.getUnitAttr());
   appendOp(innerSBarrier);
 
-  appendOp(asyncBufferLoadOps[0]);
+  //appendOp(asyncBufferLoadOps[0]);
+  appendOp(asyncCopyOps[0]);
   appendOp(asyncCommitOps[0]);
 
   // The last point we need to guarantee async_copy has been completed.
@@ -1048,11 +1080,24 @@ void Pipeliner::getDotPingponged() {
   appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 4, 3, 0));
   appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
 
-  appendOp(asyncBufferLoadOps[1]);
+  //appendOp(asyncBufferLoadOps[1]);
+  appendOp(asyncCopyOps[1]);
+
   appendOp(asyncCommitOps[1]);
   appendOp(dotOps[0]);
 
   appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+
+*/
+
+//forOp->dump();
+
+if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed()) {
+        LDBG("Encountered failure when trying to execute the four ping pong "
+             "cluster transformation");
+        return;
+      }
+
 
   SmallVector<Operation *> containedOps;
   forOp->walk([&](Operation *op) {
@@ -1063,6 +1108,9 @@ void Pipeliner::getDotPingponged() {
       return;
     if (auto await = dyn_cast<ttg::AsyncWaitOp>(op))
       return;
+    if (auto gbar = dyn_cast<gpu::BarrierOp>(op))
+      return;
+
     if (auto sbar = dyn_cast<ROCDL::SchedBarrier>(op)){
       if (auto embedUnitAttr = op->getAttr("embed")) {
         containedOps.push_back(op);
@@ -1149,30 +1197,6 @@ void Pipeliner::getDotPingponged() {
     return;
 
   // dot case
-
-  // Determine if we have a persistent GEMM. This will decide how we interpret
-  // any memory operations that we find in conditionals.
-  auto assumeNotTaken = isPersistentGemm(dotOps.size());
-  // Compute tile size, kWidth, and mfma type.
-  auto dotType = dotOps[0].getType();
-  auto dotShape = dotType.getShape();
-  auto aType = dotOps[0].getA().getType();
-  auto aShape = aType.getShape();
-  auto elemWidth = aType.getElementTypeBitWidth();
-  int64_t tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth;
-
-  const int64_t minTile = 262144;      // e.g. 32x128x64x16bit
-  const int64_t smallTile = 16777216;  // e.g. 128x128x64x16bit
-  const int64_t mediumTile = 33554432; // smallTile x 2
-  const int64_t largeTile = 67108864;  // e.g. 256x256x64x16bit
-
-  auto encoding = cast<RankedTensorType>(aType).getEncoding();
-  auto srcEncoding = cast<ttg::DotOperandEncodingAttr>(encoding);
-  kWidth = srcEncoding.getKWidth();
-  auto mfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(srcEncoding.getParent());
-  SmallVector<int64_t> intShape;
-  intShape.push_back(mfmaEncoding.getMDim());
-  intShape.push_back(mfmaEncoding.getNDim());
 
   if (dotOps.size() == 1 && useAsyncCopy) {
     if (numWarps != 8) {

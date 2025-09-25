@@ -29,6 +29,15 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
+//#include "Allocation.h"
+#include "triton/Analysis/Membar.h"
+//#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+//#include "mlir/Interfaces/ControlFlowInterfaces.h"
+
+
+
 #define DEBUG_TYPE "convert-warp-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -42,6 +51,57 @@ namespace mlir::triton {
 
 namespace {
 
+static BlockInfo buildBlockInfoFromBlock(Block *block,
+                                         Allocation *allocation) {
+  BlockInfo info; // running fact for this block
+
+  for (Operation &opRef : *block) {
+    Operation *op = &opRef;
+
+    // Existing CTA barrier: clear any pending deps.
+    if (isa<gpu::BarrierOp>(op)) {
+      LDBG("synced by barrier ...");
+      info.sync();
+      continue;
+    }
+
+    //BlockInfo cur; // facts contributed by this single op
+
+    // Inter-procedural summary: calls contribute their callee summary.
+    if (isa<triton::CallOp>(op)) {
+      // assert 0
+    } else {
+      // Intra-procedural memory effects tied to concrete Values.
+      if (auto mei = dyn_cast<MemoryEffectOpInterface>(op)) {
+        SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effs;
+        mei.getEffects(effs);
+        for (auto &eff : effs) {
+          //op->dump();
+          if (Value v = eff.getValue()) {
+            for (auto bufId : allocation->getBufferIds(v)) {
+              if (bufId == Allocation::InvalidBufferId) continue;
+              auto interval = allocation->getAllocatedInterval(bufId);
+              if (isa<MemoryEffects::Write>(eff.getEffect())) {
+                info.syncWriteIntervals[interval].insert(op);
+              } else if (isa<MemoryEffects::Read>(eff.getEffect())) {
+                info.syncReadIntervals[interval].insert(op);
+              }
+              //info.dump();
+            }
+          }
+        }
+      }
+    }
+
+    // Merge this op's fact into the running block fact.
+    //info.join(cur);
+  }
+  //LDBG("returning ...");
+  //info.dump();
+  return info;
+}
+
+
 class ConvertWarpPipeline
     : public mlir::triton::impl::ConvertWarpPipelineBase<ConvertWarpPipeline> {
 
@@ -52,7 +112,7 @@ void emitClusterBarrier(OpBuilder &b, Location loc){
 }
 
     
-void emitPipelinedFor(OpBuilder &builder, Location loc, scf::ForOp forOp) {
+void emitPipelinedFor(OpBuilder &builder, Location loc, scf::ForOp forOp, Allocation *allocation) {
 
   //insert cond branch first,
   builder.setInsertionPointAfter(forOp);
@@ -86,10 +146,13 @@ void emitPipelinedFor(OpBuilder &builder, Location loc, scf::ForOp forOp) {
   // in case a loop begins with a barrier
   bool barrierAtTop = false;
   
-  //insert barrier when needed.
+  SmallVector<Block *> clusterBlocks;
+
+  //insert barrier whe.n needed.
   bool needBarrier = false;
   for (auto &op : *forOp.getBody()) {
     if(auto exeOp = dyn_cast<scf::ExecuteRegionOp>(op)) {
+      clusterBlocks.push_back(&exeOp->getRegion(0).front());
       if (needBarrier){
         //insert a barrier
         auto prevOp = exeOp->getPrevNode();
@@ -113,6 +176,50 @@ void emitPipelinedFor(OpBuilder &builder, Location loc, scf::ForOp forOp) {
     }
 
   }
+
+
+  SmallVector<BlockInfo> clusterInfo;
+  for (auto cb: clusterBlocks)
+    clusterInfo.push_back(buildBlockInfoFromBlock(cb, allocation));
+
+  //bool needFence = clusterInfo[0].isIntersected(clusterInfo[1], nullptr);
+  LDBG("cluster dependency analysis");
+  int numClusters = clusterInfo.size();
+  LDBG("total clusters : " << numClusters);
+
+  bool bars[numClusters];
+  for (int i=0; i<numClusters; i++)
+    bars[i] = false;
+
+  for (int j=0; j<numClusters; j++){
+    //clusterInfo[i].dump();
+    for (int i=0; i<numClusters; i++){
+      int next = (i+2+j)%numClusters;
+      int curr = i+1;
+      bool synced = false;
+      while (curr != i && curr != next){
+        if (bars[curr]){
+          synced = true;
+          break;
+        }
+        curr++;
+      }
+      // synced between i and j, no need to check.
+      if (synced)
+        continue;
+
+      bool needFence = clusterInfo[i].isIntersected(clusterInfo[next], nullptr);
+      if (needFence){
+        // insert fence/barrier before this cluster
+        bars[j] = true;
+        
+        LDBG("checking " << i << " need fence: " << needFence <<" to "<< next);
+        clusterInfo[i].dump();
+        clusterInfo[next].dump();
+      }
+    }
+  }
+
 }
 
 public:
@@ -122,17 +229,23 @@ public:
   }
 
   void runOnOperation() override {
+
+    LDBG("cluster dependency analysis open");
+
     ModuleOp m = getOperation();
     OpBuilder builder(m);
-  
+    ModuleAllocation moduleAllocation(m);
+    
     for (auto funcOp : m.getOps<mlir::triton::FuncOp>()) {
+      Allocation *allocation = moduleAllocation.getFuncData(funcOp);
       funcOp.walk([&](scf::ForOp forOp) {
         if (auto totalStages = forOp->getAttr("total_stages")){
           Location loc = forOp.getLoc();
-          emitPipelinedFor(builder, loc, forOp);
+          emitPipelinedFor(builder, loc, forOp, allocation);
         }
       });
     }
+    LDBG("cluster dependency analysis close");
   }
 };
 
