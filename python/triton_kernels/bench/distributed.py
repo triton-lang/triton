@@ -168,7 +168,7 @@ def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs
         other=0,
     ).to(intermediate_dtype)
 
-    for ep_idx in range(EP):
+    for ep_idx in tl.static_range(EP):
         positions = tl.load(
             ep_positions_ptr + ep_idx * n_tokens + offs_m,
             mask=token_mask,
@@ -178,7 +178,7 @@ def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs
         row_offsets = positions.to(tl.int64) * hidden_size
         col_offsets = row_offsets[:, None] + offs_n[None, :].to(tl.int64)
 
-        for tp_idx in range(TP):
+        for tp_idx in tl.static_range(TP):
             rank_index = ep_idx * TP + tp_idx
             input_tensor_ptr = tl.load(input_ptrs + rank_index).to(tl.pointer_type(original_dtype))
             values = tl.load(
