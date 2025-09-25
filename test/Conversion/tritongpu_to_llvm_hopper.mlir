@@ -205,11 +205,11 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
   tt.func @convert_mma_to_blocked(%a: tensor<128x256xf16, #mma>) {
     // CHECK-COUNT-8: llvm.store
     //          CHECK: nvvm.barrier0
-    // CHECK-COUNT-8: nvgpu.ldmatrix
+    // CHECK-COUNT-8: nvvm.ldmatrix
     //          CHECK: nvvm.barrier0
     // CHECK-COUNT-8: llvm.store
     //          CHECK: nvvm.barrier0
-    // CHECK-COUNT-8: nvgpu.ldmatrix
+    // CHECK-COUNT-8: nvvm.ldmatrix
     %c = ttg.convert_layout %a : tensor<128x256xf16, #mma> -> tensor<128x256xf16, #blocked>
     tt.return
   }
@@ -225,19 +225,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @convert_blocked_to_dot_rhs(%a: tensor<64x64xf16, #blocked>) {
     // CHECK-COUNT-1: llvm.store
     //          CHECK: nvvm.barrier0
-    // CHECK-COUNT-4: nvgpu.ldmatrix
+    // CHECK-COUNT-4: nvvm.ldmatrix
     //          CHECK: nvvm.barrier0
     // CHECK-COUNT-1: llvm.store
     //          CHECK: nvvm.barrier0
-    // CHECK-COUNT-4: nvgpu.ldmatrix
+    // CHECK-COUNT-4: nvvm.ldmatrix
     //          CHECK: nvvm.barrier0
     // CHECK-COUNT-1: llvm.store
     //          CHECK: nvvm.barrier0
-    // CHECK-COUNT-4: nvgpu.ldmatrix
+    // CHECK-COUNT-4: nvvm.ldmatrix
     //          CHECK: nvvm.barrier0
     // CHECK-COUNT-1: llvm.store
     //          CHECK: nvvm.barrier0
-    // CHECK-COUNT-4: nvgpu.ldmatrix
+    // CHECK-COUNT-4: nvvm.ldmatrix
     %b = ttg.convert_layout %a  : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
     tt.return
   }
