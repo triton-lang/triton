@@ -412,54 +412,6 @@ Value convertAndCastTensor(PatternRewriter &rewriter, Value value,
   return castedTensor;
 }
 
-Value goThruScaleDecomposition(Operation *op, int opIdx) {
-  if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
-    op = selectOp.getFalseValue().getDefiningOp();
-  }
-
-  Value scale;
-  if (auto upcastFp8Op = dyn_cast<amdgpu::ScaledUpcastFp8Op>(op)) {
-    scale = upcastFp8Op.getScale();
-  } else if (auto upcastFp4Op = dyn_cast<amdgpu::ScaledUpcastFp4Op>(op)) {
-    scale = upcastFp4Op.getScale();
-  } else {
-    return {};
-  }
-
-  auto scaleTy = dyn_cast<RankedTensorType>(scale.getType());
-  if (!scaleTy)
-    return {};
-
-  // First check whether the scale is encoded as a BF16 value.
-  if (!scaleTy.getElementType().isBF16())
-    return {};
-
-  // Go through various shape manipulation ops.
-  tt::BitcastOp bitcastOp = nullptr;
-  while (scale) {
-    llvm::TypeSwitch<Operation *>(scale.getDefiningOp())
-        .Case<tt::BroadcastOp, tt::ExpandDimsOp, tt::ReshapeOp, tt::TransOp,
-              ttg::ConvertLayoutOp>([&](auto op) { scale = op.getSrc(); })
-        .Case<tt::BitcastOp>([&](auto op) { bitcastOp = op, scale = nullptr; })
-        .Default([&](auto op) { scale = nullptr; });
-  }
-  if (!bitcastOp)
-    return {};
-  auto shlOp = bitcastOp.getSrc().getDefiningOp<arith::ShLIOp>();
-  if (!shlOp)
-    return {};
-  auto extOp = shlOp.getLhs().getDefiningOp<arith::ExtUIOp>();
-  if (!extOp)
-    return {};
-  if (opIdx == 0)
-    return extOp.getIn();
-
-  auto transOp = extOp.getIn().getDefiningOp<tt::TransOp>();
-  if (!transOp)
-    return {};
-  return transOp.getSrc();
-}
-
 // Figure out a best tilesPerWarp parameter that gives largest vector size for
 // global load for the given |scale| tensor feeding into dot_scaled op. Returns
 // the largest vector size and writes the choice to |result|.
@@ -478,18 +430,25 @@ int deduceTilesPerWarp(TypedValue<RankedTensorType> v, unsigned opIdx,
     v = cvtOp.getSrc();
   }
 
-  Value scale = v;
+  Value scale;
   if (fromDecomposedScaledDot) {
-    Operation *defOp = v.getDefiningOp();
-    if (!defOp || !isa<arith::SelectOp, amdgpu::ScaledUpcastFp8Op,
-                       amdgpu::ScaledUpcastFp4Op>(defOp)) {
-      return vecSize;
+    BackwardSliceOptions options;
+    options.omitBlockArguments = true;
+    SetVector<Operation *> slice;
+    (void)getBackwardSlice(v, &slice, options);
+    StringAttr attrName =
+        StringAttr::get(v.getContext(), "amdgpu.decomposed_dot_scaled_source");
+    for (auto &op : slice) {
+      if (op->hasAttr(attrName)) {
+        scale = op->getResult(0);
+        op->removeAttr(attrName);
+        break;
+      }
     }
-    scale = goThruScaleDecomposition(defOp, opIdx);
-
-    if (!scale) {
+    if (!scale)
       return vecSize;
-    }
+  } else {
+    scale = v;
   }
 
   // Source code have flexibility to preshuffle scale tensor to achieve better
@@ -978,6 +937,10 @@ public:
     bool isFp4 = (elemType == ScaleDotElemType::E2M1);
 
     RankedTensorType scaleType16 = getScaleType(vType16, kDim, isFp4);
+
+    // Mark scale to simplify pattern matching during deducing TilesPerWarp
+    scale.getDefiningOp()->setAttr("amdgpu.decomposed_dot_scaled_source",
+                                   StringAttr::get(rewriter.getContext(), ""));
 
     // 3) Cast scale to bf16, broadcast it and convert the layout
     FloatType bf16Type = rewriter.getBF16Type();
