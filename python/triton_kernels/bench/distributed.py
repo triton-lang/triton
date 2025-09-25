@@ -610,34 +610,12 @@ def test_reduce_ep(TP, EP, n_tokens, hidden_size, n_expt_act):
     )
 
     op = dist.ReduceOp.SUM
-    import triton.profiler as proton
-
-    @proton.scope("triton_fn")
-    def triton_fn():
-        return _reduce_ep_triton(metadata, input_tensor, output_list, world_size, 0, op, original_dtype,
-                                 intermediate_dtype)
-    @proton.scope("torch_fn")
-    def torch_fn():
-        return _reduce_ep_torch(metadata, input_tensor, output_list, world_size, 0, op, original_dtype,
-                                intermediate_dtype)
-
-    ret = triton_fn()
-    ref = torch_fn()
+    dim = 0 
+    ret = _reduce_ep_triton(metadata, input_tensor, output_list, world_size,
+                            dim, op, original_dtype, intermediate_dtype)
+    ref = _reduce_ep_torch(metadata, input_tensor, output_list, world_size,
+                           dim, op, original_dtype, intermediate_dtype)
     torch.testing.assert_close(ret, ref)
-
-    triton_time = triton.testing.do_bench(triton_fn)
-    torch_time = triton.testing.do_bench(torch_fn)
-    print(f"triton_time: {triton_time*1000:.3f}, torch_time: {torch_time*1000:.3f}")
-
-    import tempfile
-    import triton.profiler.viewer as viewer
-    with tempfile.NamedTemporaryFile() as f:
-        proton.start(f.name)
-        triton_fn()
-        torch_fn()
-        proton.finalize()
-        gf, metrics = viewer.parse(["time/ms"], f.name + ".hatchet")
-        viewer.print_tree(gf, metrics)
 
 
 def test_routing_distributed_EP(monkeypatch):
