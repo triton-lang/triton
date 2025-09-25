@@ -56,10 +56,13 @@ ValueTable getValuesFromDotOperandLayoutStruct(
         }
 
         Value convertedElems;
-        if (type.isF16() || (wmmaVer == 3 && type.isBF16())) {
+        if (type.isF16()) {
           convertedElems = rawElems;
         } else if (type.isBF16()) {
-          convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kBase));
+          convertedElems = rawElems;
+          // Before wmma v3, bf16 is converted to i16
+          if (wmmaVer < 3)
+            convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kBase));
         } else {
           convertedElems = tb.bitcast(
               rawElems, vec_ty(i32_ty, kBase * type.getIntOrFloatBitWidth() /
