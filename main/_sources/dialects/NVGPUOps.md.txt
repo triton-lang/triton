@@ -55,40 +55,6 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::Defa
 | `result` | floating-point or integer |
 
 
-### `nvgpu.ldmatrix` (triton::nvgpu::LoadMatrixOp)
-
-Syntax:
-
-```
-operation ::= `nvgpu.ldmatrix` $addr `,` $shape `,` $bit_width attr-dict `:` functional-type($addr, $result)
-```
-
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}`
-
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>shape</code></td><td>::mlir::triton::nvgpu::LoadMatrixShapeAttr</td><td>allowed 32-bit signless integer cases: 0, 1</td></tr>
-<tr><td><code>bit_width</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
-<tr><td><code>trans</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
-</table>
-
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `addr` | LLVM pointer in address space 3 |
-
-#### Results:
-
-| Result | Description |
-| :----: | ----------- |
-| `result` | LLVM structure type or 32-bit signless integer |
-
-
 ### `nvgpu.tensor_memory_base` (triton::nvgpu::TensorMemoryBaseAddress)
 
 Syntax:
