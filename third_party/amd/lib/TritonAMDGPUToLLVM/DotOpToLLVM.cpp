@@ -1,5 +1,6 @@
 #include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
 using namespace mlir;
 
@@ -23,6 +24,11 @@ LogicalResult convertScaledMFMA(triton::DotScaledOp op,
 LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
+
+LogicalResult convertScaledWMMA(triton::DotScaledOp op,
+                                triton::DotScaledOp::Adaptor adaptor,
+                                const LLVMTypeConverter *typeConverter,
+                                ConversionPatternRewriter &rewriter);
 } // namespace mlir::triton::AMD
 
 namespace {
@@ -60,7 +66,19 @@ struct ScaledDotOpConversion
   LogicalResult
   matchAndRewrite(triton::DotScaledOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    return AMD::convertScaledMFMA(op, adaptor, getTypeConverter(), rewriter);
+    Value D = op.getResult();
+
+    auto dEncoding = cast<RankedTensorType>(D.getType()).getEncoding();
+
+    if (isa<AMDMfmaEncodingAttr>(dEncoding)) {
+      return AMD::convertScaledMFMA(op, adaptor, getTypeConverter(), rewriter);
+    }
+    if (isa<AMDWmmaEncodingAttr>(dEncoding)) {
+      return AMD::convertScaledWMMA(op, adaptor, getTypeConverter(), rewriter);
+    }
+
+    llvm::report_fatal_error(
+        "Unsupported DotScaleOp found when converting TritonGPU to LLVM.");
   }
 };
 } // namespace
