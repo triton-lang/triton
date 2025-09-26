@@ -497,7 +497,7 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
         routing_data,
         gather_indx,
         scatter_indx,
-        ReduceScatterMetadata(input_split_sizes=output_split_sizes, ep_indx=ep_indx, EP=EP, TP=TP),
+        ReduceScatterMetadata(input_split_sizes=output_split_sizes, ep_indx=ep_indx, EP=EP, TP=TP, comm=CommKernelType.TRITON),
     )
 
 
