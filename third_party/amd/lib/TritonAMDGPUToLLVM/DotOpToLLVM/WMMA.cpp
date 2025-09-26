@@ -26,6 +26,7 @@
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 namespace mlir::triton::AMD {
 namespace {
@@ -230,8 +231,8 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
   intrinsicName = maybeWmmaIntrinsic->name;
 
-  auto repA = wmmaLayout.getRepForOperand(aTensorTy.getShape(), aElemTy, 0);
-  auto repB = wmmaLayout.getRepForOperand(bTensorTy.getShape(), bElemTy, 1);
+  auto repA = wmmaLayout.getRepForOperand(aTensorTy.getShape(), kDim, 0);
+  auto repB = wmmaLayout.getRepForOperand(bTensorTy.getShape(), kDim, 1);
 
   assert(repA[2] == repB[1]);
 
@@ -397,16 +398,16 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
 
   ValueTable ha = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedA, numRepB, numRepM, numRepK,
-      kBaseA, aTensorTy.getElementType(), isFp6A, loc);
+      kBaseA, aTensorTy.getElementType(), loc);
   ValueTable hb = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedB, numRepB, numRepN, numRepK,
-      kBaseB, bTensorTy.getElementType(), isFp6B, loc);
+      kBaseB, bTensorTy.getElementType(), loc);
   ValueTable sa = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedAScale, numRepB, numRepM, numRepK,
-      scaleKWidthA, aScaleTensorTy.getElementType(), false, loc);
+      scaleKWidthA, aScaleTensorTy.getElementType(), loc);
   ValueTable sb = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedBScale, numRepB, numRepN, numRepK,
-      scaleKWidthB, bScaleTensorTy.getElementType(), false, loc);
+      scaleKWidthB, bScaleTensorTy.getElementType(), loc);
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
