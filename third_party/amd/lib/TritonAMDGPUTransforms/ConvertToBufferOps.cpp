@@ -269,7 +269,7 @@ bool canUseBufferOps(Value ptr,
     return false;
   LDBG("Pattern matched");
 
-  // 2. check if offset is either 32 or 64-bit.
+  // 2. check if the offset is either 32 or 64-bit.
   Value offset = addPtrOp.getOffset();
   auto ofstBit =
       cast<RankedTensorType>(offset.getType()).getElementTypeBitWidth();
