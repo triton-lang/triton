@@ -157,6 +157,12 @@ def _accumulate_ep_metadata(grid, kernel, args):
     n_tokens, hidden_size = args["n_tokens"], args["hidden_size"]
     TP, EP = args["TP"], args["EP"]
     ret["name"] = f"{kernel.name} [n_tokens={n_tokens}, hidden_size={hidden_size}, TP={TP}, EP={EP}]"
+    ep_positions_ptr = args["ep_positions_ptr"]
+    output_tensor_ptr = args["output_tensor_ptr"]
+    input_ptrs = args["input_ptrs"]
+    ret["bytes"] = (ep_positions_ptr.element_size() * ep_positions_ptr.numel() +
+                    output_tensor_ptr.element_size() * output_tensor_ptr.numel() +
+                    sum([p.element_size() * p.numel() for p in input_ptrs]))
     return ret
 
 
