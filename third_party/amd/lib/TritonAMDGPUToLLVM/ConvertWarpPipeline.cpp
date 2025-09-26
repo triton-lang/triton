@@ -194,16 +194,22 @@ void emitPipelinedFor(OpBuilder &builder, Location loc, scf::ForOp forOp, Alloca
   for (int j=0; j<numClusters; j++){
     //clusterInfo[i].dump();
     for (int i=0; i<numClusters; i++){
+      
       int next = (i+2+j)%numClusters;
-      int curr = i+1;
+      //LDBG("checking " << i << " to "<< next);
+      int curr = (i+1)%numClusters;
       bool synced = false;
       while (curr != i && curr != next){
         if (bars[curr]){
           synced = true;
           break;
         }
-        curr++;
+        curr = (curr+1)%numClusters;
       }
+      // also if next can already have a fence 
+      if (bars[next])
+        synced = true;
+
       // synced between i and j, no need to check.
       if (synced)
         continue;
@@ -211,12 +217,14 @@ void emitPipelinedFor(OpBuilder &builder, Location loc, scf::ForOp forOp, Alloca
       bool needFence = clusterInfo[i].isIntersected(clusterInfo[next], nullptr);
       if (needFence){
         // insert fence/barrier before this cluster
-        bars[j] = true;
+        bars[next] = true;
         
-        LDBG("checking " << i << " need fence: " << needFence <<" to "<< next);
+        LDBG("cluster " << i << " need fence to "<< next);
         clusterInfo[i].dump();
         clusterInfo[next].dump();
       }
+      for (int i=0; i<numClusters; i++)
+        LDBG("bars [" << i << "] = "<< bars[i]);
     }
   }
 
