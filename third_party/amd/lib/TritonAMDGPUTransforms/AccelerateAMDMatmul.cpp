@@ -29,6 +29,9 @@ namespace mlir {
 namespace {
 using triton::AMD::ISAFamily;
 
+constexpr char AttrDecomposedDotScaledSource[] =
+    "amdgpu.decomposed_dot_scaled_source";
+
 int getMfmaVersion(ISAFamily isaFamily) {
   switch (isaFamily) {
   case ISAFamily::CDNA1:
@@ -412,6 +415,21 @@ Value convertAndCastTensor(PatternRewriter &rewriter, Value value,
   return castedTensor;
 }
 
+Value findScaleAsDecompositionSource(Value v) {
+  BackwardSliceOptions options;
+  options.omitBlockArguments = true;
+  SetVector<Operation *> slice;
+  (void)getBackwardSlice(v, &slice, options);
+  for (auto &op : slice) {
+    if (op->hasAttrOfType<BoolAttr>(AttrDecomposedDotScaledSource)) {
+      op->removeAttr(AttrDecomposedDotScaledSource);
+      return op->getResult(0);
+    }
+  }
+
+  return {};
+}
+
 // Figure out a best tilesPerWarp parameter that gives largest vector size for
 // global load for the given |scale| tensor feeding into dot_scaled op. Returns
 // the largest vector size and writes the choice to |result|.
@@ -430,26 +448,13 @@ int deduceTilesPerWarp(TypedValue<RankedTensorType> v, unsigned opIdx,
     v = cvtOp.getSrc();
   }
 
-  Value scale;
+  Value scale = v;
   if (fromDecomposedScaledDot) {
-    BackwardSliceOptions options;
-    options.omitBlockArguments = true;
-    SetVector<Operation *> slice;
-    (void)getBackwardSlice(v, &slice, options);
-    StringAttr attrName =
-        StringAttr::get(v.getContext(), "amdgpu.decomposed_dot_scaled_source");
-    for (auto &op : slice) {
-      if (op->hasAttr(attrName)) {
-        scale = op->getResult(0);
-        op->removeAttr(attrName);
-        break;
-      }
-    }
-    if (!scale)
-      return vecSize;
-  } else {
-    scale = v;
+    scale = findScaleAsDecompositionSource(v);
   }
+
+  if (!scale)
+    return vecSize;
 
   // Source code have flexibility to preshuffle scale tensor to achieve better
   // global load vectorization. That preshuffle scheme is conveyed via some
@@ -939,8 +944,8 @@ public:
     RankedTensorType scaleType16 = getScaleType(vType16, kDim, isFp4);
 
     // Mark scale to simplify pattern matching during deducing TilesPerWarp
-    scale.getDefiningOp()->setAttr("amdgpu.decomposed_dot_scaled_source",
-                                   StringAttr::get(rewriter.getContext(), ""));
+    scale.getDefiningOp()->setAttr(AttrDecomposedDotScaledSource,
+                                   BoolAttr::get(rewriter.getContext(), true));
 
     // 3) Cast scale to bf16, broadcast it and convert the layout
     FloatType bf16Type = rewriter.getBF16Type();
