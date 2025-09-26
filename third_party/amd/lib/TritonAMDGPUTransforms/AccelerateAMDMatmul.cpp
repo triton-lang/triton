@@ -583,12 +583,10 @@ public:
       SmallVector<unsigned, 2> tilesA{1, 1}, tilesB{1, 1};
       Value scaleA = findScaleAsDecompositionSource(a);
       Value scaleB = findScaleAsDecompositionSource(b);
-      int vecA = scaleA ? deduceTilesPerWarp(cast<TensorValue>(scaleA), 0, mDim,
-                                             warpsPerTile, &tilesA)
-                        : 1;
-      int vecB = scaleB ? deduceTilesPerWarp(cast<TensorValue>(scaleB), 1, mDim,
-                                             warpsPerTile, &tilesB)
-                        : 1;
+      int vecA = deduceTilesPerWarp(dyn_cast_if_present<TensorValue>(scaleA), 0,
+                                    mDim, warpsPerTile, &tilesA);
+      int vecB = deduceTilesPerWarp(dyn_cast_if_present<TensorValue>(scaleB), 1,
+                                    mDim, warpsPerTile, &tilesB);
       tilesPerWarp = vecA > vecB ? tilesA : tilesB;
       LLVM_DEBUG(llvm::dbgs() << "chosen tilesPerWarp: [" << tilesPerWarp[0]
                               << ", " << tilesPerWarp[1] << "]\n");
