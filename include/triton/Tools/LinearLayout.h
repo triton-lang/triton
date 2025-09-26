@@ -843,6 +843,10 @@ public:
   // Inverse of the action
   ColumnAction inverse() const;
 
+  // Given two permutations self, other seen as functions, returns
+  // ret(x) = other(self(x))
+  ColumnAction leftCompose(const ColumnAction &other) const;
+
   static ColumnAction identity(StringAttr inDim, size_t inSizeLog2) {
     return ColumnAction(llvm::to_vector(llvm::seq<size_t>(inSizeLog2)), inDim,
                         inSizeLog2);
@@ -853,6 +857,17 @@ public:
 
   std::string toString() const;
 };
+
+inline llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
+                                     const ColumnAction &action) {
+  os << action.toString();
+  return os;
+}
+
+inline std::ostream &operator<<(std::ostream &os, const ColumnAction &action) {
+  os << action.toString();
+  return os;
+}
 
 } // namespace mlir::triton
 

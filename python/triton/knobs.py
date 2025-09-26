@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sysconfig
+import pathlib
 
 from dataclasses import dataclass
 from contextlib import contextmanager
@@ -354,6 +355,7 @@ class cache_knobs(base_knobs):
 class compilation_knobs(base_knobs):
     override: env_bool = env_bool("TRITON_KERNEL_OVERRIDE")
     dump_ir: env_bool = env_bool("TRITON_KERNEL_DUMP")
+    dump_ir_extract_di_local_variables: env_bool = env_bool("LLVM_EXTRACT_DI_LOCAL_VARIABLES")
     store_binary_only: env_bool = env_bool("TRITON_STORE_BINARY_ONLY")
     always_compile: env_bool = env_bool("TRITON_ALWAYS_COMPILE")
     # TODO: Use enum to constrain / 'typecheck' the values
@@ -514,7 +516,9 @@ class amd_knobs(base_knobs):
 
 class proton_knobs(base_knobs):
     disable: env_bool = env_bool("TRITON_PROTON_DISABLE", False)
-    cupti_lib_dir: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
+    cupti_lib_dir: env_str = env_str(
+        "TRITON_CUPTI_LIB_PATH",
+        str(pathlib.Path(__file__).parent.absolute() / "backends" / "nvidia" / "lib" / "cupti"))
     enable_nvtx: env_bool = env_bool("TRITON_ENABLE_NVTX", True)
 
 

@@ -102,7 +102,6 @@ struct GluonLayouts {
   py::handle AMDMFMALayout;
   py::handle AMDWMMALayout;
   py::handle PaddedSharedLayout;
-  py::handle GluonDType;
 
   GluonLayouts() {
     auto layouts =
@@ -128,7 +127,6 @@ struct GluonLayouts {
         py::object(layouts.attr("PaddedSharedLayout")).release();
 
     auto core = py::module::import("triton.language.core");
-    GluonDType = py::object(core.attr("dtype")).release();
   }
 };
 
@@ -218,26 +216,10 @@ py::object layoutToGluon(Attribute layout) {
     return layouts.AutoLayout();
   } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
     auto ctaLayout = amdMfma.getCTALayout();
-    std::vector<unsigned> instrShape{amdMfma.getMDim(), amdMfma.getNDim()};
-    auto elemTypeOpt = amdMfma.getElementType();
-    const char *typeName = "fp32";
-    if (elemTypeOpt.has_value()) {
-      auto elemType = elemTypeOpt.value();
-      if (elemType.isF64()) {
-        typeName = "fp64";
-      } else if (elemType.isF32()) {
-        typeName = "fp32";
-      } else {
-        // The AMDMfmaEncodingAttr mlir attribute has already verified element
-        // type is fp64, fp32 or int32; so, the typeName here must be int32.
-        typeName = "int32";
-      }
-    }
-
     return layouts.AMDMFMALayout(
-        amdMfma.getVersion(), instrShape, amdMfma.getIsTransposed(),
-        toStdVector(amdMfma.getWarpsPerCTA()), layouts.GluonDType(typeName),
-        toStdVector(amdMfma.getTilesPerWarp()),
+        amdMfma.getVersion(), toStdVector(amdMfma.getInstrShape()),
+        amdMfma.getIsTransposed(), toStdVector(amdMfma.getWarpsPerCTA()),
+        amdMfma.getElementBitWidth(), toStdVector(amdMfma.getTilesPerWarp()),
         toStdVector(ctaLayout.getCTAsPerCGA()),
         toStdVector(ctaLayout.getCTASplitNum()),
         toStdVector(ctaLayout.getCTAOrder()));
@@ -376,18 +358,19 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("get_amd_mfma_layout",
            [](GluonOpBuilder &self, unsigned version,
+              std::vector<unsigned> &warpsPerCta,
               std::vector<unsigned> &instrShape, bool transposed,
-              std::vector<unsigned> &warpsPerCta, mlir::Type elemType,
-              std::vector<unsigned> &tilesPerWarp,
               std::vector<unsigned> &ctasPerCga,
               std::vector<unsigned> &ctaSplitNum,
-              std::vector<unsigned> &ctaOrder) -> Attribute {
+              std::vector<unsigned> &ctaOrder,
+              std::vector<unsigned> &tilesPerWarp,
+              unsigned elementBitWidth) -> Attribute {
              auto ctx = self.getContext();
              auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
                  ctx, ctasPerCga, ctaSplitNum, ctaOrder);
              return ttg::AMDMfmaEncodingAttr::get(
-                 ctx, version, warpsPerCta, tilesPerWarp, instrShape[0],
-                 instrShape[1], transposed, ctaLayout, elemType);
+                 ctx, version, warpsPerCta, instrShape, transposed, ctaLayout,
+                 tilesPerWarp, elementBitWidth);
            })
       .def("get_amd_wmma_layout",
            [](GluonOpBuilder &self, unsigned version, bool transposed,
