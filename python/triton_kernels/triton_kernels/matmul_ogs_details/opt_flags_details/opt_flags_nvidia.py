@@ -27,7 +27,7 @@ def compute_block_n(n: int, arch, precision_config):
         return max(8, target), max(16, target)
 
 
-def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_dtype, precision_config):
+def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in):
     lhs_width = bitwidth(lhs_dtype)
     rhs_width = bitwidth(rhs_dtype)
     # block_k needs to match the cacheline size (1024 bits)
@@ -41,6 +41,8 @@ def compute_block_k(m: int, k: int | None, is_persistent: bool, lhs_dtype, rhs_d
     has_mx_weight_scale = precision_config is not None and precision_config.weight_scale is not None
     if has_native_mxfp and is_persistent and has_mx_weight_scale:
         block_k = min(block_k, 128)
+    if has_y_acc_in and lhs_width == rhs_width == 16 and not target_info.cuda_capability_geq(10, 0):
+        block_k = min(block_k, 32)
     return block_k
 
 
@@ -73,8 +75,10 @@ def compute_num_stages(
     lhs_dtype,
     rhs_dtype,
     x_transpose,
-    epilogue_subtile,
     epilogue_effective_itemsize,
+    has_y_acc_in,
+    *,
+    epilogue_subtile,
 ):
     if precision_config.max_num_imprecise_acc is not None:
         return 3
@@ -92,10 +96,11 @@ def compute_num_stages(
     if is_persistent:
         # Per-stage wait barrier
         stage_size += 8
+        out_itemsize = out_dtype.itemsize * (1.25 if has_y_acc_in else 1.0)
         if target_info.cuda_capability_geq(10, 0):
-            acc_size = epilogue_effective_itemsize or out_dtype.itemsize
+            acc_size = epilogue_effective_itemsize or out_itemsize
         else:
-            acc_size = out_dtype.itemsize
+            acc_size = out_itemsize
         if target_info.cuda_capability_geq(10, 0) and epilogue_subtile is not None:
             acc_block_n = block_n // epilogue_subtile
         else:

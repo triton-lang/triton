@@ -986,6 +986,24 @@ private:
       newOffset = createTruncIOffset(rewriter, curLoc, newOffset,
                                      rewriter.getI32Type());
     }
+
+    // If the newOffset is not created in this function, chances are it could
+    // already be mapped to another value, say y. In that case, we need to
+    // use y instead of newOffset. Otherwise, consider the following sequence,
+    // this operation (op1) feeds its result to op2 as the operand0. When op2
+    // is visited, the framework will associate the op2.operand0, via
+    // OneToNOpAdaptor, with <fatPtrBase, y> instead of <fatPtrBase, newOffset>.
+    //
+    //   op1: r = this-addPtr ...
+    //   op2:   = op r, ...
+    //
+    // If we were using <fatPtrBase, newOffset> to set an entry in fatPtrs, we
+    // would not be able to lookup the entry when op2 is visited, as it will
+    // use index <fatPtrBase, y>.
+    if (auto remapped = rewriter.getRemappedValue(newOffset);
+        (remapped != nullptr) && (remapped != newOffset))
+      newOffset = remapped;
+
     LDBG("   -- new offset: " << newOffset);
 
     rewriter.replaceOpWithMultiple(addPtrOp, {{fatPtrBase, newOffset}});

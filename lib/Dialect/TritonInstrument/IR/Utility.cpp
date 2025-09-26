@@ -134,10 +134,21 @@ bool canAllocBeInstrumented(Operation *op) {
 }
 
 // Interpret local_allocs that are used in ttg.memdesc_index as multibuffered
-bool isMultiBuffered(Operation *op) {
-  return llvm::any_of(op->getUsers(), [](Operation *user) {
-    return isa<MemDescIndexOp>(user);
-  });
+bool isMultiBuffered(Value v) {
+  for (auto &use : v.getUses()) {
+    if (isa<MemDescIndexOp>(use.getOwner())) {
+      return true;
+    }
+    if (auto wsOp = dyn_cast<WarpSpecializeOp>(use.getOwner())) {
+      int opNumber = use.getOperandNumber();
+      for (Region *region : wsOp.getPartitionRegions()) {
+        if (isMultiBuffered(region->getArguments()[opNumber])) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 uint64_t getAllocationOffset(LocalAllocOp op) {

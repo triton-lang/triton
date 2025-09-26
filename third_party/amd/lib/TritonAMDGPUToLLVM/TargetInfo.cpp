@@ -579,8 +579,6 @@ bool TargetInfo::supportVectorizedAtomics() const {
 
 bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
   switch (getISAFamily()) {
-  case ISAFamily::CDNA1:
-  case ISAFamily::CDNA2:
   case ISAFamily::CDNA3:
     // Disable 8 and 16 bits because they get extended to 32 bit.
     return llvm::is_contained({32, /*16, 8*/}, bitWidth);
