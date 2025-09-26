@@ -65,6 +65,8 @@ ValueTable getValuesFromDotOperandLayoutStruct(
           // Before wmma v3, bf16 is converted to i16
           if (wmmaVer < 3)
             convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kBase));
+        } else if (kBase == 4 && type.getIntOrFloatBitWidth() == 8) {
+          convertedElems = tb.bitcast(rawElems, i32_ty);
         } else {
           convertedElems = tb.bitcast(
               rawElems, vec_ty(i32_ty, kBase * type.getIntOrFloatBitWidth() /
@@ -149,7 +151,7 @@ Value generateScaledWMMAIntrinsic(ConversionPatternRewriter &rewriter,
                                   Value valB, Value valScaleB, Value valC,
                                   Type aElType, Type bElType, Type dElType,
                                   int scaleKWidth) {
-  assert(scaleKWidth == 2 || scaleKWidth == 4 || scaleKWidth == 8);
+  assert(scaleKWidth == 4 || scaleKWidth == 8);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   std::string name = "llvm.amdgcn.wmma.scale";
   if (scaleKWidth == 8) {
@@ -383,18 +385,10 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   auto numRepK = repA[2];
   auto numRepB = repA[0];
 
-  const auto kDimTensorA = aTensorTy.getShape().back();
-  const auto kWWMADim = 128;
-  int paddingFactor = 1;
-  if (kWWMADim > kDimTensorA) {
-    paddingFactor = kWWMADim / kDimTensorA;
-  }
-
   auto scaleShapeA = aScaleTensorTy.getShape();
-  int scaleKWidthA = 4 / paddingFactor;
+  constexpr int scaleKWidthA = 4;
   auto scaleShapeB = bScaleTensorTy.getShape();
-  int scaleKWidthB = 4 / paddingFactor;
-  constexpr int scaleKBase = 1;
+  constexpr int scaleKWidthB = 4;
 
   ValueTable ha = getValuesFromDotOperandLayoutStruct(
       rewriter, typeConverter, wmmaVer, loadedA, numRepB, numRepM, numRepK,
