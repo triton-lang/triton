@@ -218,7 +218,7 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
     positions = torch.empty((metadata.EP, n_tokens), dtype=torch.int32, device=input_tensor.device)
     triton_original_dtype = TRITON_DTYPE_MAP.get(original_dtype, tl.float32)
     triton_intermediate_dtype = TRITON_DTYPE_MAP.get(intermediate_dtype, tl.float32)
-    BLOCK_SIZE_M = 512
+    BLOCK_SIZE_M = 2048 if n_tokens >= 2048 else triton.next_power_of_2(n_tokens if n_tokens > 0 else 1)
     BLOCK_SIZE_N = triton.next_power_of_2(hidden_size if hidden_size > 0 else 1)
     BLOCK_SIZE_E = triton.next_power_of_2(n_expts if n_expts > 0 else 1)
 
@@ -229,7 +229,7 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
         n_expts,
         BLOCK_SIZE_M=BLOCK_SIZE_M,
         BLOCK_SIZE_E=BLOCK_SIZE_E,
-        num_warps=8,
+        num_warps=16 if n_tokens >= 2048 else 8,
     )  # type: ignore
 
     _accumulate_ep_triton_kernel[(n_tokens,)](
