@@ -620,10 +620,8 @@ def test_reduce_ep(TP, EP, n_tokens, hidden_size, n_expt_act):
 
     op = dist.ReduceOp.SUM
     dim = 0
-    ret = _reduce_ep_triton(metadata, input_tensor, output_list, dim, op, original_dtype,
-                            intermediate_dtype)
-    ref = _reduce_ep_torch(metadata, input_tensor, output_list, dim, op, original_dtype,
-                           intermediate_dtype)
+    ret = _reduce_ep_triton(metadata, input_tensor, output_list, dim, op, original_dtype, intermediate_dtype)
+    ref = _reduce_ep_torch(metadata, input_tensor, output_list, dim, op, original_dtype, intermediate_dtype)
     torch.testing.assert_close(ret, ref)
 
 
