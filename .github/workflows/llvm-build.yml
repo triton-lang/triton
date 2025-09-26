@@ -106,7 +106,7 @@ jobs:
         -DLLVM_BUILD_UTILS=ON
         -DLLVM_BUILD_TOOLS=ON
         -DLLVM_ENABLE_ASSERTIONS=ON
-        -DMLIR_ENABLE_BINDINGS_PYTHON=ON
+        -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
         -DLLVM_ENABLE_PROJECTS="mlir;lld"
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
@@ -130,7 +130,7 @@ jobs:
         -DLLVM_BUILD_UTILS=ON
         -DLLVM_BUILD_TOOLS=ON
         -DLLVM_ENABLE_ASSERTIONS=ON
-        -DMLIR_ENABLE_BINDINGS_PYTHON=ON
+        -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
         -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld"
         -DLLVM_ENABLE_DIA_SDK=OFF
         -DLLVM_INSTALL_UTILS=ON
@@ -179,7 +179,7 @@ jobs:
         -DCLANG_TABLEGEN=$HOST_TOOLS/clang-tblgen \
         -DLLVM_ENABLE_ASSERTIONS=ON \
         -DCMAKE_LINKER=$LINKER \
-        -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
+        -DMLIR_ENABLE_BINDINGS_PYTHON=OFF \
         -DLLVM_ENABLE_ZSTD=OFF \
         -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF \
         -DLLVM_INSTALL_UTILS=ON \
@@ -202,12 +202,6 @@ jobs:
         -DLLVM_ENABLE_TERMINFO=OFF \
         llvm-project/llvm
         ninja -C llvm-project/build install
-        CURR_PWD="$(pwd)"
-        cd "${{ env.llvm_install_dir }}/python_packages/mlir_core/mlir/_mlir_libs/"
-        for file in *x86_64*; do
-          mv "$file" "${file/x86_64/aarch64}"
-        done
-        cd $CURR_PWD
         tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
     - name: Configure, Build, and Install LLVM (macOS arm64)
@@ -225,7 +219,7 @@ jobs:
         -DLLVM_BUILD_UTILS=ON
         -DLLVM_BUILD_TOOLS=ON
         -DLLVM_ENABLE_ASSERTIONS=ON
-        -DMLIR_ENABLE_BINDINGS_PYTHON=ON
+        -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
         -DLLVM_ENABLE_PROJECTS="mlir;lld"
         -DLLVM_ENABLE_ZSTD=OFF
         -DLLVM_INSTALL_UTILS=ON
