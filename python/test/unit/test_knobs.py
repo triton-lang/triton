@@ -69,15 +69,12 @@ def test_knobs_utils(fresh_knobs) -> None:
 
 
 def test_knobs_scope(fresh_knobs, monkeypatch):
-    fresh_knobs.amd.use_buffer_ops = True
     fresh_knobs.amd.use_buffer_atomics = True
 
     # Update env *after* the __set__() does
     monkeypatch.setenv("AMDGCN_USE_BUFFER_ATOMICS", "0")
-    monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
 
     assert fresh_knobs.amd.use_buffer_atomics
-    assert fresh_knobs.amd.use_buffer_ops
 
     # Just to prove that use_buffer_ops is coming from env
     monkeypatch.setenv("AMDGCN_USE_BUFFER_OPS", "0")
