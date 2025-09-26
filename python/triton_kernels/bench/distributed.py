@@ -173,14 +173,14 @@ def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs
     output = tl.zeros((BLOCK_SIZE_N,), dtype=intermediate_dtype)
 
     for ep_idx in tl.static_range(EP):
-        positions = tl.load(
+        position = tl.load(
             ep_positions_ptr + ep_idx * n_tokens + offs_m,
             mask=token_mask,
             other=-1,
         )
-        if positions != -1:
-            row_offsets = positions * hidden_size
-            col_offsets = row_offsets[:, None] + offs_n[None, :]
+        if position != -1:
+            row_offsets = position * hidden_size
+            col_offsets = row_offsets + offs_n
 
             for tp_idx in tl.static_range(TP):
                 values = tl.load(
