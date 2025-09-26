@@ -117,7 +117,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
 // CHECK-LABEL: @matmul_tma_and_regular_load
 tt.func @matmul_tma_and_regular_load(
   %a_desc: !tt.tensordesc<tensor<1x64xf16, #shared>>,
-  %b_ptr_init: tensor<64x128x!tt.ptr<f16>, #b_layout> {tt.divisibility = 16 : i32, tt.contiguity = 64 : i32}
+  %b_ptr_init: tensor<64x128x!tt.ptr<f16>, #b_layout> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 64]> : tensor<2xi32>}
 ) {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
@@ -142,7 +142,7 @@ tt.func @matmul_tma_and_regular_load(
 
     %a = tt.descriptor_gather %a_desc[%indices, %off_k] : (!tt.tensordesc<tensor<1x64xf16, #shared>>, tensor<128xi32, #indices_layout>, i32) -> tensor<128x64xf16, #oper_layout>
 
-    %b_ptrs = tt.addptr %b_ptr, %offs_n {tt.divisibility = dense<16> : tensor<64x128xi32>, tt.contiguity = dense<64> : tensor<64x128xi32>, tt.constancy = dense<1> : tensor<64x128xi32>} : tensor<64x128x!tt.ptr<f16>, #b_layout>, tensor<64x128xi32, #b_layout>
+    %b_ptrs = tt.addptr %b_ptr, %offs_n {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 64]> : tensor<2xi32>, tt.constancy = dense<[1, 1]> : tensor<2xi32>} : tensor<64x128x!tt.ptr<f16>, #b_layout>, tensor<64x128xi32, #b_layout>
     %b = tt.load %b_ptrs : tensor<64x128x!tt.ptr<f16>, #b_layout>
 
     %a_shared = ttg.local_alloc %a : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>

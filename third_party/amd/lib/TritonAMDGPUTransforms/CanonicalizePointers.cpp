@@ -1001,7 +1001,7 @@ private:
     // would not be able to lookup the entry when op2 is visited, as it will
     // use index <fatPtrBase, y>.
     if (auto remapped = rewriter.getRemappedValue(newOffset);
-        remapped != newOffset)
+        (remapped != nullptr) && (remapped != newOffset))
       newOffset = remapped;
 
     LDBG("   -- new offset: " << newOffset);

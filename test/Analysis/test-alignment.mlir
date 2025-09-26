@@ -858,7 +858,7 @@ tt.func @tensor_ptr(%arg0: !tt.ptr<tensor<64x16xi32>, 1>) {
 
 // -----
 
-tt.func public @chained_for(%8: tensor<128x64x!tt.ptr<bf16>> {tt.divisibility = 16 : i32}) {
+tt.func public @chained_for(%8: tensor<128x64x!tt.ptr<bf16>> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>}) {
   // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>}}
   %cst = arith.constant dense<0.000000e+00> : tensor<128x64xbf16>
   // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [1], constant_value = 16}}
@@ -958,7 +958,18 @@ tt.func @if_into_for_step(%i1 : i1) {
 
 // -----
 
-tt.func public @load_4d_tensor_kernel(%arg0: tensor<32x32x32x32xi32> {tt.contiguity = dense<[32, 1, 1, 1]> : tensor<4xi32>, tt.divisibility = dense<[16, 1, 1, 1]> : tensor<4xi32>}) attributes {noinline = false} {
+tt.func @op_annotation(%i32 : i32) {
+  %c0 = arith.constant 0 : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [4096], constancy = [1], constant_value = <none>}}
+  %ret0 = arith.addi %c0, %i32 { tt.divisibility = 4096 : i32 } : i32
+  // expected-remark @below {{contiguity = [1, 1], divisibility = [1024, 1024], constancy = [128, 64], constant_value = <none>}}
+  %ret1 = tt.splat %ret0 { tt.divisibility = dense<[1024, 1024]> : tensor<2xi32> } : i32 -> tensor<128x64xi32>
+  tt.return
+}
+
+// -----
+
+tt.func public @trans_4d_tensor_kernel(%arg0: tensor<32x32x32x32xi32> {tt.contiguity = dense<[32, 1, 1, 1]> : tensor<4xi32>, tt.divisibility = dense<[16, 1, 1, 1]> : tensor<4xi32>}) attributes {noinline = false} {
   // expected-remark @below {{contiguity = [1, 1, 1, 32], divisibility = [1, 1, 1, 16], constancy = [1, 1, 1, 1], constant_value = <none>}}
   %101 = tt.trans %arg0 {order = array<i32: 3, 2, 1, 0>} : tensor<32x32x32x32xi32> -> tensor<32x32x32x32xi32>
   // expected-remark @below {{contiguity = [1, 32, 1, 1], divisibility = [1, 16, 1, 1], constancy = [1, 1, 1, 1], constant_value = <none>}}

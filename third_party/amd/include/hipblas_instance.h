@@ -163,7 +163,8 @@ class HipblasLtInstance {
   }
 
   void gemm_impl(int m, int n, int k, uint64_t A, uint64_t B, uint64_t C,
-                 uint64_t D, hipDataType dtype, float alpha, float beta) {
+                 uint64_t D, hipDataType dtype, hipDataType out_dtype,
+                 float alpha, float beta) {
 
     hipblasLtMatmulDesc_t matmulDesc = NULL;
 
@@ -211,13 +212,11 @@ class HipblasLtInstance {
           sizeof(b_in)));
     }
 
-    auto c_dtype = (isFP8) ? HIP_R_16F : dtype;
-
     successOrExit(hipblasLtMatrixLayoutCreate(&Adesc, dtype, k, m, k));
     successOrExit(hipblasLtMatrixLayoutCreate(&Bdesc, dtype, k, n, k));
-    successOrExit(hipblasLtMatrixLayoutCreate(&Cdesc, c_dtype, m, n, m));
+    successOrExit(hipblasLtMatrixLayoutCreate(&Cdesc, out_dtype, m, n, m));
 
-    successOrExit(hipblasLtMatrixLayoutCreate(&Ddesc, c_dtype, m, n, m));
+    successOrExit(hipblasLtMatrixLayoutCreate(&Ddesc, out_dtype, m, n, m));
     successOrExit(hipblasLtMatmulAlgoGetHeuristic(
         ltHandle, matmulDesc, Adesc, Bdesc, Cdesc, Ddesc, preference, 1,
         &heuristicResult, &returnedResults));
@@ -230,9 +229,9 @@ class HipblasLtInstance {
           << "), leading_dim=" << m << "\n";
       oss << "  B: dtype=" << dtype << ", shape=(" << n << "," << k
           << "), leading_dim=" << n << " (will be transposed)\n";
-      oss << "  C: dtype=" << c_dtype << ", shape=(" << m << "," << n
+      oss << "  C: dtype=" << out_dtype << ", shape=(" << m << "," << n
           << "), leading_dim=" << m << "\n";
-      oss << "  D: dtype=" << c_dtype << ", shape=(" << m << "," << n
+      oss << "  D: dtype=" << out_dtype << ", shape=(" << m << "," << n
           << "), leading_dim=" << m << "\n";
       oss << "  Compute type: " << computeType << "\n";
       oss << "  Requested algorithms: 1\n";
@@ -282,17 +281,17 @@ public:
   }
 
   void matmul(int m, int n, int k, uint64_t A, uint64_t B, uint64_t C,
-              hipDataType dtype) {
+              hipDataType dtype, hipDataType out_dtype) {
     // HIP is column-major, while triton is row-major, therefore we need to
     // reverse the order of the matrices ( A * B = (B^T * A^T)^T ).
     // Note: HipBLAS requires a valid C pointer even when beta=0, so we pass C
     // instead of 0
-    gemm_impl(n, m, k, B, A, C, C, dtype, 1.0f, 0.0f);
+    gemm_impl(n, m, k, B, A, C, C, dtype, out_dtype, 1.0f, 0.0f);
   }
 
   void gemm(int m, int n, int k, uint64_t A, uint64_t B, uint64_t C, uint64_t D,
-            hipDataType dtype, float alpha, float beta) {
-    gemm_impl(n, m, k, B, A, C, D, dtype, alpha, beta);
+            hipDataType dtype, hipDataType out_dtype, float alpha, float beta) {
+    gemm_impl(n, m, k, B, A, C, D, dtype, out_dtype, alpha, beta);
   }
 };
 #endif // TRITON_HIPBLAS_INSTANCE_H
