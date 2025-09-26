@@ -433,28 +433,15 @@ Value findScaleAsDecompositionSource(Value v) {
 // Figure out a best tilesPerWarp parameter that gives largest vector size for
 // global load for the given |scale| tensor feeding into dot_scaled op. Returns
 // the largest vector size and writes the choice to |result|.
-int deduceTilesPerWarp(TypedValue<RankedTensorType> v, unsigned opIdx,
+int deduceTilesPerWarp(TypedValue<RankedTensorType> scale, unsigned opIdx,
                        unsigned nonKDim, ArrayRef<unsigned> warpsPerCTA,
-                       bool fromDecomposedScaledDot,
                        SmallVectorImpl<unsigned> *result) {
   std::array<unsigned, 2> chosen{1, 1};
-  result->assign(chosen.begin(), chosen.end());
   int vecSize = 1;
-  if (!v) {
+  if (!scale) {
+    result->assign(chosen.begin(), chosen.end());
     return vecSize;
   }
-
-  while (auto cvtOp = v.getDefiningOp<ttg::ConvertLayoutOp>()) {
-    v = cvtOp.getSrc();
-  }
-
-  Value scale = v;
-  if (fromDecomposedScaledDot) {
-    scale = findScaleAsDecompositionSource(v);
-  }
-
-  if (!scale)
-    return vecSize;
 
   // Source code have flexibility to preshuffle scale tensor to achieve better
   // global load vectorization. That preshuffle scheme is conveyed via some
@@ -471,8 +458,7 @@ int deduceTilesPerWarp(TypedValue<RankedTensorType> v, unsigned opIdx,
     LLVM_DEBUG(llvm::dbgs()
                << "choice: [" << choice[0] << ", " << choice[1] << "]\n");
     LinearLayout layout = ttg::chooseScaledMfmaScaleLayout(
-        scale.getContext(), opIdx,
-        cast<RankedTensorType>(scale.getType()).getShape(), nonKDim, choice,
+        scale.getContext(), opIdx, scale.getType().getShape(), nonKDim, choice,
         warpsPerCTA);
     LLVM_DEBUG(llvm::dbgs() << "trying scale layout: " << layout << "\n");
 
@@ -596,10 +582,14 @@ public:
     SmallVector<unsigned, 2> tilesPerWarp{1, 1};
     if (mDim == nDim && (mDim == 32 || mDim == 16)) {
       SmallVector<unsigned, 2> tilesA{1, 1}, tilesB{1, 1};
-      int vecA = deduceTilesPerWarp(cast<TensorValue>(a), 0, mDim, warpsPerTile,
-                                    /*fromDecomposedScaledDot=*/true, &tilesA);
-      int vecB = deduceTilesPerWarp(cast<TensorValue>(b), 1, mDim, warpsPerTile,
-                                    /*fromDecomposedScaledDot=*/true, &tilesB);
+      Value scaleA = findScaleAsDecompositionSource(a);
+      Value scaleB = findScaleAsDecompositionSource(b);
+      int vecA = scaleA ? deduceTilesPerWarp(cast<TensorValue>(scaleA), 0, mDim,
+                                             warpsPerTile, &tilesA)
+                        : 1;
+      int vecB = scaleB ? deduceTilesPerWarp(cast<TensorValue>(scaleB), 1, mDim,
+                                             warpsPerTile, &tilesB)
+                        : 1;
       tilesPerWarp = vecA > vecB ? tilesA : tilesB;
       LLVM_DEBUG(llvm::dbgs() << "chosen tilesPerWarp: [" << tilesPerWarp[0]
                               << ", " << tilesPerWarp[1] << "]\n");
@@ -1041,10 +1031,8 @@ public:
         warpsPerTileMFMA(dotOp, oldShape, numWarps, {mDim, nDim});
 
     SmallVector<unsigned, 2> tilesA{1, 1}, tilesB{1, 1}, tilesPerWarp;
-    int vecA = deduceTilesPerWarp(aScale, 0, mDim, warpsPerTile,
-                                  /*fromDecomposedScaledDot=*/false, &tilesA);
-    int vecB = deduceTilesPerWarp(bScale, 1, mDim, warpsPerTile,
-                                  /*fromDecomposedScaledDot=*/false, &tilesB);
+    int vecA = deduceTilesPerWarp(aScale, 0, mDim, warpsPerTile, &tilesA);
+    int vecB = deduceTilesPerWarp(bScale, 1, mDim, warpsPerTile, &tilesB);
     tilesPerWarp = vecA > vecB ? tilesA : tilesB;
     LLVM_DEBUG(llvm::dbgs() << "chosen tilesPerWarp: [" << tilesPerWarp[0]
                             << ", " << tilesPerWarp[1] << "]\n");
