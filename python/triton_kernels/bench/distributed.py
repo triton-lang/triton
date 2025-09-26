@@ -105,8 +105,9 @@ def all_gather(x: torch.Tensor, dim=0) -> torch.Tensor:
 
 
 def _reduce_ep_torch(metadata: ReduceScatterMetadata, input_tensor: torch.Tensor, output_list: list[torch.Tensor],
-                     world_size: int, dim: int, op: dist.ReduceOp.RedOpType, original_dtype: torch.dtype,
+                     dim: int, op: dist.ReduceOp.RedOpType, original_dtype: torch.dtype,
                      intermediate_dtype: torch.dtype) -> torch.Tensor:
+    world_size = metadata.TP * metadata.EP
     n_tokens = metadata.ep_indx.size(dim)
     other_dims = input_tensor.shape[1:]
     output_tensor = input_tensor.new_zeros((n_tokens, ) + other_dims, dtype=intermediate_dtype)
@@ -200,7 +201,7 @@ def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs
 
 
 def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tensor, output_list: list[torch.Tensor],
-                      world_size: int, dim: int, op: dist.ReduceOp.RedOpType, original_dtype: torch.dtype,
+                      dim: int, op: dist.ReduceOp.RedOpType, original_dtype: torch.dtype,
                       intermediate_dtype: torch.dtype) -> torch.Tensor:
     if op != dist.ReduceOp.SUM:
         raise NotImplementedError(f"Reduce operation {op} is not implemented.")
@@ -268,10 +269,10 @@ def reduce_scatter(
             # TODO(Keren): Implement a triton all-to-all kernel
             output_list = all_to_all(input_list, dim=0)
             if metadata.comm == CommKernelType.TORCH:
-                return _reduce_ep_torch(metadata, input_tensor, output_list, world_size, dim, op, original_dtype,
+                return _reduce_ep_torch(metadata, input_tensor, output_list, dim, op, original_dtype,
                                         intermediate_dtype)
             elif metadata.comm == CommKernelType.TRITON:
-                return _reduce_ep_triton(metadata, input_tensor, output_list, world_size, dim, op, original_dtype,
+                return _reduce_ep_triton(metadata, input_tensor, output_list, dim, op, original_dtype,
                                          intermediate_dtype)
             else:
                 raise NotImplementedError(f"CommKernelType {metadata.comm} is not implemented.")
@@ -493,7 +494,7 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
         routing_data,
         gather_indx,
         scatter_indx,
-        ReduceScatterMetadata(input_split_sizes=output_split_sizes, ep_indx=ep_indx, EP=EP, TP=TP),
+        ReduceScatterMetadata(input_split_sizes=output_split_sizes, ep_indx=ep_indx, EP=EP, TP=TP, comm=CommKernelType.TRITON),
     )
 
 
@@ -620,7 +621,8 @@ def test_reduce_ep(TP, EP, n_tokens, hidden_size, n_expt_act):
     dim = 0
     ret = _reduce_ep_triton(metadata, input_tensor, output_list, world_size, dim, op, original_dtype,
                             intermediate_dtype)
-    ref = _reduce_ep_torch(metadata, input_tensor, output_list, world_size, dim, op, original_dtype, intermediate_dtype)
+    ref = _reduce_ep_torch(metadata, input_tensor, output_list, world_size, dim, op, original_dtype,
+                           intermediate_dtype)
     torch.testing.assert_close(ret, ref)
 
 
