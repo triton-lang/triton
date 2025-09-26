@@ -192,7 +192,7 @@ def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs
 
     output = output.to(original_dtype)
     tl.store(
-        output_tensor_ptr + offs_m * hidden_size + offs_n[None, :],
+        output_tensor_ptr + offs_m * hidden_size + offs_n,
         output,
         mask=io_mask,
     )
