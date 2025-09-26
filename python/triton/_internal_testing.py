@@ -74,6 +74,11 @@ def is_hip_cdna4():
     return target is not None and target.backend == 'hip' and target.arch == 'gfx950'
 
 
+def is_hip_gfx11():
+    target = get_current_target()
+    return target is not None and target.backend == 'hip' and 'gfx11' in target.arch
+
+
 def is_hip_gfx12():
     target = get_current_target()
     return target is not None and target.backend == 'hip' and 'gfx12' in target.arch
@@ -182,6 +187,14 @@ def supports_tma(byval_only=False):
     cuda_version_tuple = tuple(map(int, cuda_version.split(".")))
     assert len(cuda_version_tuple) == 2, cuda_version_tuple
     return torch.cuda.get_device_capability()[0] >= 9 and cuda_version_tuple >= min_cuda_version
+
+
+def supports_ws():
+    if is_interpreter():
+        return True
+    if not is_cuda():
+        return False
+    return torch.cuda.get_device_capability()[0] >= 9
 
 
 def tma_skip_msg(byval_only=False):

@@ -2,12 +2,12 @@
 
 // RUN: triton-tensor-layout -i %s -alias-names="mfma" -t "tensor<16x16xf16>" | FileCheck %s --check-prefix=CHECK-MFMA
 
-// RUN: triton-tensor-layout -l "#ttg.amd_mfma<{version = 2, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>" -t "tensor<16x16xf16>" | FileCheck %s --check-prefix=CHECK-MFMA
+// RUN: triton-tensor-layout -l "#ttg.amd_mfma<{version = 2, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>" -t "tensor<16x16xf16>" | FileCheck %s --check-prefix=CHECK-MFMA
 
 // RUN: triton-tensor-layout -i %s -alias-names="mfma" -t "tensor<16x16xf16>" -use-hw-view | FileCheck %s --check-prefix=CHECK-HW
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>
+#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>
 tt.func @print(%A : !tt.ptr<f16>) {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #blocked>
   %cst1 = arith.constant dense<0.00e+00> : tensor<16x16xf16, #mfma>
@@ -33,7 +33,7 @@ tt.func @print(%A : !tt.ptr<f16>) {
 // CHECK-BLOCKED: T120:0|T124:0, T120:1|T124:1, T120:2|T124:2, T120:3|T124:3, T121:0|T125:0, T121:1|T125:1, T121:2|T125:2, T121:3|T125:3, T122:0|T126:0, T122:1|T126:1, T122:2|T126:2, T122:3|T126:3, T123:0|T127:0, T123:1|T127:1, T123:2|T127:2, T123:3|T127:3
 
 
-// CHECK-MFMA: Print layout attribute: {{.*}}#ttg.amd_mfma<{version = 2, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>
+// CHECK-MFMA: Print layout attribute: {{.*}}#ttg.amd_mfma<{version = 2, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>
 // CHECK-MFMA: T0:0| T64:0|T128:0|T192:0,   T0:1| T64:1|T128:1|T192:1,   T0:2| T64:2|T128:2|T192:2,   T0:3| T64:3|T128:3|T192:3,  T16:0| T80:0|T144:0|T208:0,  T16:1| T80:1|T144:1|T208:1,  T16:2| T80:2|T144:2|T208:2,  T16:3| T80:3|T144:3|T208:3,  T32:0| T96:0|T160:0|T224:0,  T32:1| T96:1|T160:1|T224:1,  T32:2| T96:2|T160:2|T224:2,  T32:3| T96:3|T160:3|T224:3,  T48:0|T112:0|T176:0|T240:0,  T48:1|T112:1|T176:1|T240:1,  T48:2|T112:2|T176:2|T240:2,  T48:3|T112:3|T176:3|T240:3
 // CHECK-MFMA: T1:0| T65:0|T129:0|T193:0,   T1:1| T65:1|T129:1|T193:1,   T1:2| T65:2|T129:2|T193:2,   T1:3| T65:3|T129:3|T193:3,  T17:0| T81:0|T145:0|T209:0,  T17:1| T81:1|T145:1|T209:1,  T17:2| T81:2|T145:2|T209:2,  T17:3| T81:3|T145:3|T209:3,  T33:0| T97:0|T161:0|T225:0,  T33:1| T97:1|T161:1|T225:1,  T33:2| T97:2|T161:2|T225:2,  T33:3| T97:3|T161:3|T225:3,  T49:0|T113:0|T177:0|T241:0,  T49:1|T113:1|T177:1|T241:1,  T49:2|T113:2|T177:2|T241:2,  T49:3|T113:3|T177:3|T241:3
 // CHECK-MFMA: T2:0| T66:0|T130:0|T194:0,   T2:1| T66:1|T130:1|T194:1,   T2:2| T66:2|T130:2|T194:2,   T2:3| T66:3|T130:3|T194:3,  T18:0| T82:0|T146:0|T210:0,  T18:1| T82:1|T146:1|T210:1,  T18:2| T82:2|T146:2|T210:2,  T18:3| T82:3|T146:3|T210:3,  T34:0| T98:0|T162:0|T226:0,  T34:1| T98:1|T162:1|T226:1,  T34:2| T98:2|T162:2|T226:2,  T34:3| T98:3|T162:3|T226:3,  T50:0|T114:0|T178:0|T242:0,  T50:1|T114:1|T178:1|T242:1,  T50:2|T114:2|T178:2|T242:2,  T50:3|T114:3|T178:3|T242:3

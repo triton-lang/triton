@@ -54,8 +54,8 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
   //              3 = either swizzles or testing against offset field)
   // bits 30-31: Type (must be 0)
   uint32_t flags = (7 << 12) | (4 << 15);
-  if (targetInfo.getISAFamily() == ISAFamily::RDNA2 ||
-      targetInfo.getISAFamily() == ISAFamily::RDNA3) {
+  if (llvm::is_contained({ISAFamily::RDNA2, ISAFamily::RDNA3, ISAFamily::RDNA4},
+                         targetInfo.getISAFamily())) {
     flags |= (1 << 24);
     uint32_t oob = 3;
     flags |= (oob << 28);
@@ -64,6 +64,9 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
   Value stride = b.int_val(16, 0);
   if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
                          targetInfo.getISAFamily())) {
+#if 0
+    // Turn off cache-swizzling for the time being while we are figuring out
+    // how to safely use it.
     if (blockStride) {
       Value enableSwizzle = b.int_val(16, 16384);
       Value mask14b = b.int_val(16, 16383);
@@ -78,6 +81,7 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
       // stride[14] = swizzle enabling bit
       stride = rewriter.create<LLVM::OrOp>(loc, enableSwizzle, strideSat);
     }
+#endif
   }
 
   Value flagsConst = b.int_val(32, flags);

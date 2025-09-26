@@ -55,6 +55,9 @@ public:
   virtual Value shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                            Value i) const = 0;
 
+  virtual Value permute(RewriterBase &rewriter, Location loc, Value a, Value b,
+                        Value selector) const = 0;
+
   virtual Value programId(RewriterBase &rewriter, Location loc,
                           ModuleOp moduleOp, ProgramIDDim axis) const = 0;
 
@@ -95,6 +98,7 @@ public:
 
   virtual bool supportLdMatrix() const { return false; }
   virtual bool supportStMatrix() const { return false; }
+  virtual bool supportLdStMatrixB8() const { return false; }
   virtual bool isCuda() const { return false; }
 
   // Annotate target specific information to local load operations during

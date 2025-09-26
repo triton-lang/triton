@@ -4,6 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace mlir {
 namespace LLVM {
@@ -113,8 +114,8 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 }
 
 Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
-              Value mask) {
-  Value args[] = {a, b, mask};
+              Value selector) {
+  Value args[] = {a, b, selector};
   auto op =
       createLLVMIntrinsicCallOp(rewriter, loc, "llvm.nvvm.prmt", i32_ty, args);
   return op.getResult(0);
@@ -160,133 +161,153 @@ LogicalResult lowerLdStMatrix(
   auto kWarp = S("warp");
   auto kBlock = S("block");
   auto kOffset = S("offset");
+  auto kAddr = S("addr");
   auto smemPtrTy = ptr_ty(ctx, 3);
   auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-  // In the transpose case, consecutive elements are not stored contiguously
-  // so we cannot split an fp32
-  // We could support bitwidth == 8, but it'd be a rather weird layout
-  // so we don't do that for now
-  if ((!transpose && bitwidth > 32) || (transpose && bitwidth != 16))
+  // In the contiguous case we can pack elements <= 32 bits
+  // In the transpose case we just have the b8 and b16 cases
+  if ((!transpose && bitwidth > 32) ||
+      (transpose && !(bitwidth == 16 ||
+                      (bitwidth == 8 && targetInfo.supportLdStMatrixB8()))))
     return failure();
   // Inter block stmatrix is not supported
   if (cvt.hasInDim(kBlock))
     return failure();
 
-  // We must have at least 32-bits worth of registers to use these instructions
-  if (transpose && cvt.getInDimSizeLog2(kReg) < llvm::Log2_32(32 / bitwidth)) {
-    return failure();
-  }
-
-  std::optional<ColumnAction> maybePermutation;
+  // Map onto offsets (contiguous part) and addr (non-contiguous part)
+  LinearLayout fullTile;
+  // Contiguous tile
   LinearLayout tile;
+  // Just used in the transpose case
+  ColumnAction permLanes, permReg;
+  // Accumulate the permutations to apply the inverse for loads
+  ColumnAction accPermReg =
+      ColumnAction::identity(kReg, cvt.getInDimSizeLog2(kReg));
   if (!transpose) {
     tile = LinearLayout::identity1D(32 / bitwidth, kReg, kOffset) *
            LinearLayout::identity1D(4, kLane, kOffset);
-    // Find if there is a register permutation that allows us to divideLeft
-    // We need to pass the map from regs to offsets, as is cvt
-    maybePermutation = regPermForDivide(cvt, tile, /*left=*/true);
-    if (!maybePermutation.has_value()) {
-      return failure();
-    }
-    auto permutation = maybePermutation.value();
-    // Check if the action indeed allows us to divideLeft
-    cvt = permutation.apply(cvt);
-    if (isStore) {
-      vals = permutation.apply(vals);
-    }
-  }
-
-  LinearLayout reps;
-  if (!transpose) {
-    auto maybeQuot = divideLeft(cvt, tile);
-    if (!maybeQuot.has_value()) {
-      return failure();
-    }
-    reps = zerosLike(tile) * maybeQuot.value();
+    fullTile = tile * LinearLayout::identity1D(8, kLane, kAddr);
   } else {
-    // Division does not quite work here. To define this properly, we would need
-    // to define a different multiplication that does:
-    // A *' B = [[0, A], [B, 0]] and define leftDivision for it
-    // We do it ad-hoc for now, as I beleive there's not much demand for this op
-    // outside of this lowering.
+    // We permute the lanes and registers of the layout to the front as to be
+    // able to divideLeft by the relevant tile
 
-    // We implement leftDivision as above for B = identity1D(8, kLane, kOffset)
-    // Divisibility in the sense above is the same as regular divisibility
-    // You need to see that the tile A is a sublayout of the matrix, and that
-    // it has zeros above it and to its right.
-
-    // In particular, offsets lanes 4, 8, 16 map to offsets 1, 2, 4...
-    auto bases = cvt.getBases();
-    auto &laneBases = bases[kLane];
-    for (int i = 0; i < 3; ++i) {
-      if (laneBases[i + 2][0] != (1 << i))
-        return failure();
-      laneBases[i + 2][0] = 0;
+    // Thank you PTX
+    auto contigRegs = (isStore && bitwidth == 8 ? 16 : 32) / bitwidth;
+    fullTile = LinearLayout::identity1D(contigRegs, kReg, kAddr) *
+               LinearLayout::identity1D(4, kLane, kAddr) *
+               LinearLayout::identity1D(8, kLane, kOffset) *
+               LinearLayout::identity1D(16 / bitwidth, kReg, kOffset);
+    // Not enough registers to cover the full tile
+    if (cvt.getInDimSize(kReg) < fullTile.getInDimSize(kReg)) {
+      return failure();
     }
-    // ... and no other basis should depend on 1, 2, 4
-    // Note that this gives us the usual alignment condition, but we have
-    // translated it to checking that the matrix to the left of A is all zeros
-    for (auto dim : cvt.getInDimNames()) {
-      for (auto basis : bases[dim]) {
-        if (basis[0] & 0b111)
-          return failure();
+    // Move offset to the front
+    std::vector<size_t> regBases, laneBases;
+    auto bases = fullTile.invert().getBases().lookup(kOffset);
+    for (const auto &basis : bases) {
+      assert(basis.size() == 2);
+      if (basis[0] != 0) {
+        regBases.push_back(llvm::Log2_32(basis[0]));
+      } else {
+        laneBases.push_back(llvm::Log2_32(basis[1]));
       }
     }
+    // quadratic but who cares
+    for (int i = 0; i < cvt.getInDimSizeLog2(kReg); i++) {
+      if (!llvm::is_contained(regBases, i)) {
+        regBases.push_back(i);
+      }
+    }
+    for (int i = 0; i < cvt.getInDimSizeLog2(kLane); i++) {
+      if (!llvm::is_contained(laneBases, i)) {
+        laneBases.push_back(i);
+      }
+    }
+    assert(laneBases == std::vector<size_t>({2, 3, 4, 0, 1}));
+    // Register depends on our beloved contigRegs
+    permReg = ColumnAction(regBases, kReg, cvt.getInDimSizeLog2(kReg));
+    permLanes = ColumnAction(laneBases, kLane, cvt.getInDimSizeLog2(kLane));
+    cvt = permReg.apply(cvt);
+    cvt = permLanes.apply(cvt);
+    if (isStore) {
+      vals = permReg.apply(vals);
+    } else {
+      accPermReg = accPermReg.leftCompose(permReg);
+    }
 
-    // Hack: We are not going to use in the rest of the function reps[kLane][2:]
-    // so we don't need to zero them out
-    reps = LinearLayout(bases, cvt.getOutDims(), false);
+    // This is the same as permuting the lanes and registers to the front in
+    // fullTile and taking the kOffset sublayout.
+    tile = (LinearLayout::identity1D(8, kLane, kOffset) *
+            LinearLayout::identity1D(16 / bitwidth, kReg, kOffset))
+               .transposeIns({kReg, kLane});
   }
 
-  // If we are lowering a subslice, the subslice offsets shall not touch the
-  // contiguous part of the tile
-  if (maskSpanAffineOffset & (llvm::Log2_32(128 / bitwidth) - 1)) {
+  // Find if there is a register permutation that allows us to divideLeft
+  ColumnAction permDivide;
+  if (auto maybePermutation = regPermForDivide(cvt, tile, /*left=*/true)) {
+    permDivide = maybePermutation.value();
+  } else {
     return failure();
   }
 
-  // Choose up to 4 packs of 32-bit elements indexed by the next (at most) two
-  // bases as the vectorisation factor. We don't consider the basis of the tile
-  // for vectorisation so we substract them
-  auto vec = std::min<int32_t>(2, reps.getInDimSizeLog2(kReg) -
-                                      llvm::Log2_32(32 / bitwidth));
-
-  // Map from kReg, kLane, kWarp to beginning of each tile
-  assert(reps.getOutDimSize(kOffset) == cvt.getOutDimSize(kOffset));
-
-  // Compute the addresses for the 0th tile
-  // Here we implement the stmatrix.x4 addressing. As per the PTX docs, the
-  // threads 0-7 hold the address of the first element of the 8 columns of the
-  // first submatrix, threads 8-15 for the second submatrix, etc. In general we
-  // map:
-  // - The lowest 3 bits of the laneId to the columns of each submatrix, which
-  // is
-  //   given by the 3 kLane bases of quotient that are not part of the tile
-  // - The top `vec` bits of the thread id to the submatrix number, which is
-  // given
-  //   by the first `vec` reg bases that are not part of the tile
-  std::vector<std::vector<int32_t>> laneBases;
-  if (!transpose) {
-    auto tileDimSizeReg = llvm::Log2_32(32 / bitwidth);
-    auto tileDimSizeLane = 2;
-    for (int i = 0; i < 3; ++i) {
-      laneBases.push_back(reps.getBasis(kLane, tileDimSizeLane + i));
-    }
-    for (int i = 0; i < vec; ++i) {
-      laneBases.push_back(reps.getBasis(kReg, tileDimSizeReg + i));
-    }
+  cvt = permDivide.apply(cvt);
+  if (isStore) {
+    vals = permDivide.apply(vals);
   } else {
-    // We choose the first basis of the register. In the future we could choose
-    // a basis that minimises the bank conflicts
-    laneBases.push_back(reps.getBasis(kReg, 0));
-    laneBases.push_back(reps.getBasis(kLane, 0));
-    laneBases.push_back(reps.getBasis(kLane, 1));
-    for (int i = 0; i < vec; ++i) {
-      laneBases.push_back(reps.getBasis(kReg, i + 1));
-    }
+    accPermReg = accPermReg.leftCompose(permDivide);
+  }
+  auto maybeQuot = divideLeft(cvt, tile);
+  if (!maybeQuot.has_value()) {
+    return failure();
   }
 
+  // From here on we perform the lowering
+  auto reps = zerosLike(tile) * maybeQuot.value();
+
+  // We revert all the permutations that we performed to be able to divideLeft
+  if (transpose) {
+    reps = permLanes.inverse().apply(reps);
+    reps = permReg.inverse().apply(reps);
+    if (isStore) {
+      vals = permReg.inverse().apply(vals);
+    } else {
+      accPermReg = accPermReg.leftCompose(permReg.inverse());
+    }
+  }
+  // Sanity check (of the asymmetry between ldmatrix.b8 and stmatrix.b8):
+  // All the instructions move 32 bytes of data on .x1 but ldmatrix.b8 which
+  // moves 64 bytes...
+  auto regsPerCoreTile = fullTile.getInDimSize(kReg);
+  assert(regsPerCoreTile * bitwidth ==
+         ((!isStore && bitwidth == 8 && transpose) ? 64 : 32));
+
+  // If we are lowering a subslice, the subslice offsets shall not touch the
+  // contiguous part of the tile
+  if (maskSpanAffineOffset & (tile.getOutDimSizeLog2(kOffset) - 1)) {
+    return failure();
+  }
+
+  // Choose the vectorisation factor
+  // We want to send at most 128 bits of data per thread as that's the maximum
+  // vectorisation for all the instructions (even the weird ldmatrix.b8)
+  auto vec = std::min<int32_t>(128 / bitwidth, reps.getInDimSize(kReg)) /
+             regsPerCoreTile;
+  assert(vec == 1 || vec == 2 || vec == 4);
+  auto fullTileVec = fullTile * LinearLayout::identity1D(vec, kReg, kAddr);
+  // just add warps as compose belowe requires the dimensions of both layouts to
+  // agree
+  fullTileVec *= LinearLayout::identity1D(1, kWarp, kAddr);
+  // fullTile.invert() is a map from kOffset, kAddr into kReg, kLane, kWarp
+  // addrToOffset gives us a map from kAddr into kOffset, which is the map of
+  // the addresses each lane should hold
+  auto addrToOffset = fullTileVec.invert().compose(reps);
+  // sanity check
+  assert(addrToOffset.getInDimSizeLog2(kAddr) >= 3 &&
+         addrToOffset.getInDimSizeLog2(kAddr) <= 5);
+
   LinearLayout addrLayout =
-      LinearLayout({{kLane, laneBases}, {kWarp, reps.getBases().lookup(kWarp)}},
+      LinearLayout({{kLane, addrToOffset.getBases().lookup(kAddr)},
+                    {kWarp, reps.getBases().lookup(kWarp)}},
                    {{kOffset, reps.getOutDimSize(kOffset)}}, false);
   // Compute the bits that are moved by one instruction
   // Compute elements for which we can swap the xor by an add
@@ -295,6 +316,8 @@ LogicalResult lowerLdStMatrix(
   reps = permStrides.apply(reps);
   if (isStore) {
     vals = permStrides.apply(vals);
+  } else {
+    accPermReg = accPermReg.leftCompose(permStrides);
   }
 
   // PTX expects the address increments to be done in bytes
@@ -321,15 +344,27 @@ LogicalResult lowerLdStMatrix(
   auto affineOffsetI8 = b.mul(affineOffset, b.i32_val(bitwidth / 8));
   regBase = b.xor_(regBase, affineOffsetI8);
 
+  // Instruction params
+  auto layout = transpose ? NVVM::MMALayout::col : NVVM::MMALayout::row;
+  auto eltType = transpose && bitwidth == 8 ? NVVM::LdStMatrixEltType::B8
+                                            : NVVM::LdStMatrixEltType::B16;
+  int m = fullTile.getOutDimSize(kAddr);
+  int n = fullTile.getOutDimSize(kOffset) * bitwidth /
+          (eltType == NVVM::LdStMatrixEltType::B8 ? 8 : 16);
+  if (transpose) {
+    std::swap(m, n);
+  }
+  auto shape = NVVM::LdStMatrixShapeAttr::get(ctx, m, n);
+
   // Elements per op
-  auto nVecs = 1 << vec;
+  auto elemsPerInstr = fullTileVec.getInDimSize(kReg);
   auto elemsPerVec = 32 / bitwidth;
   auto vecTy = vec_ty(llvmElemTy, elemsPerVec);
   for (int i = 0; i < cvt.getInDimSize(kReg); i += nAdditive) {
     auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
     auto regIdxI8 = regIdx * (bitwidth / 8);
     Value offset = b.xor_(regBase, b.i32_val(regIdxI8));
-    for (int i2 = 0; i2 < nAdditive; i2 += elemsPerVec * nVecs) {
+    for (int i2 = 0; i2 < nAdditive; i2 += elemsPerInstr) {
       // all these constants will go as immediate values to LDSM/STSM
       auto regIdxAdd =
           reps.apply({{kReg, i2}, {kLane, 0}, {kWarp, 0}})[0].second;
@@ -337,38 +372,38 @@ LogicalResult lowerLdStMatrix(
       Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
       auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, innerOffset,
                            LLVM::GEPNoWrapFlags::inbounds);
-      auto layout = transpose ? NVVM::MMALayout::col : NVVM::MMALayout::row;
       if (isStore) {
         // Pack into vector of i32
         SmallVector<Value> inputs;
-        for (int j = 0; j < nVecs; j++) {
+        for (int j = 0; j < elemsPerInstr; j += elemsPerVec) {
           Value input = b.undef(vecTy);
           for (int k = 0; k < elemsPerVec; k++) {
-            input = b.insert_element(
-                vecTy, input, vals[i + i2 + j * elemsPerVec + k], b.i32_val(k));
+            input = b.insert_element(vecTy, input, vals[i + i2 + j + k],
+                                     b.i32_val(k));
           }
           inputs.push_back(b.bitcast(input, i32_ty));
         }
-        rewriter.create<NVVM::StMatrixOp>(
-            loc, vecAddr, inputs, layout,
-            NVVM::LdStMatrixShapeAttr::get(ctx, 8, 8),
-            NVVM::LdStMatrixEltType::B16);
+        rewriter.create<NVVM::StMatrixOp>(loc, vecAddr, inputs, layout, shape,
+                                          eltType);
       } else {
-        Type matTy = nVecs == 1
-                         ? i32_ty
-                         : static_cast<Type>(LLVM::LLVMStructType::getLiteral(
-                               ctx, SmallVector<Type>(nVecs, i32_ty)));
-        auto res =
-            rewriter
-                .create<triton::nvgpu::LoadMatrixOp>(
-                    loc, matTy, vecAddr, triton::nvgpu::LoadMatrixShape::m8n8,
-                    /*bitWidth=*/16,
-                    /*needTrans=*/transpose)
-                .getResult();
+        unsigned numLdMatrix = elemsPerInstr / elemsPerVec;
+        assert(numLdMatrix > 0 &&
+               "ldmatrix must load at least one 8x8 tile per instruction");
+        Type ldResultTy =
+            elemsPerInstr == elemsPerVec
+                ? i32_ty
+                : static_cast<Type>(LLVM::LLVMStructType::getLiteral(
+                      ctx, SmallVector<Type>(numLdMatrix, i32_ty)));
+        auto res = rewriter
+                       .create<NVVM::LdMatrixOp>(loc, ldResultTy, vecAddr, vec,
+                                                 layout, shape, eltType)
+                       .getResult();
         // Extract result into srcVals
-        for (int j = 0; j < nVecs; j++) {
-          Value output = nVecs == 1 ? res : b.extract_val(i32_ty, res, j);
-          output = b.bitcast(output, vec_ty(llvmElemTy, elemsPerVec));
+        for (int j = 0; j < elemsPerInstr / elemsPerVec; j++) {
+          Value output = elemsPerInstr == elemsPerVec
+                             ? res
+                             : b.extract_val(i32_ty, res, j);
+          output = b.bitcast(output, vecTy);
           for (int k = 0; k < elemsPerVec; k++) {
             vals.push_back(b.extract_element(llvmElemTy, output, b.i32_val(k)));
           }
@@ -376,15 +411,10 @@ LogicalResult lowerLdStMatrix(
       }
     }
   }
-
   if (!isStore) {
+    // apply all the inverse permutations in the reverse order
     assert(vals.size() == cvt.getInDimSize(kReg));
-    auto invPermStrides = permStrides.inverse();
-    vals = invPermStrides.apply(vals);
-    if (maybePermutation.has_value()) {
-      auto invPerm = maybePermutation.value().inverse();
-      vals = invPerm.apply(vals);
-    }
+    vals = accPermReg.inverse().apply(vals);
   }
   return success();
 }

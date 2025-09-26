@@ -6,16 +6,6 @@ namespace proton {
 
 namespace cupti {
 
-struct ExternLibCupti : public ExternLibBase {
-  using RetType = CUptiResult;
-  static constexpr const char *name = "libcupti.so";
-  static inline std::string defaultDir = "";
-  static constexpr RetType success = CUPTI_SUCCESS;
-  static void *lib;
-};
-
-void *ExternLibCupti::lib = nullptr;
-
 DEFINE_DISPATCH(ExternLibCupti, getVersion, cuptiGetVersion, uint32_t *);
 
 DEFINE_DISPATCH(ExternLibCupti, getContextId, cuptiGetContextId, CUcontext,
@@ -109,8 +99,6 @@ DEFINE_DISPATCH(ExternLibCupti, pcSamplingStart, cuptiPCSamplingStart,
 
 DEFINE_DISPATCH(ExternLibCupti, pcSamplingStop, cuptiPCSamplingStop,
                 CUpti_PCSamplingStopParams *);
-
-void setLibPath(const std::string &path) { ExternLibCupti::defaultDir = path; }
 
 } // namespace cupti
 

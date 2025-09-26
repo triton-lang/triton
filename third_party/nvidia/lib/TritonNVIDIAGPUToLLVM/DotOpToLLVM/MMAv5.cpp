@@ -24,13 +24,13 @@ mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::DotOpMmaV5TmemLoader(
       trans(trans) {
   auto ty = cast<MemDescType>(tensor.getType());
   auto tmemEncoding = cast<ttng::TensorMemoryEncodingAttr>(ty.getEncoding());
-  unpacked = tmemEncoding.getUnpacked();
+  int elTyWidth = ty.getElementTypeBitWidth();
+  unpacked = tmemEncoding.getColStride() != 1;
   // When using TMEM to store operands mma operands the TMEM block size may be
   // smaller than mma k block. Therefore we need to adjust the offset
   // calculation.
   numSlicePerBlockN = tmemEncoding.getBlockN() / instrShape[1];
-  int elTyWidth = ty.getElementTypeBitWidth();
-  numElementsPer32b = unpacked ? 1 : 32 / elTyWidth;
+  numElementsPer32b = 32 / (elTyWidth * tmemEncoding.getColStride());
   auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
   numRepM = ceil<unsigned>(shapePerCTA[0], instrShape[0]);
 }
@@ -454,13 +454,13 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
                                                      interleaved, transA);
   } else {
     auto allocShapeA = getAllocShape(aTensorTy, 1);
-    aLoader = std::make_unique<DotOpMmaV3SmemLoader>(
+    aLoader = std::make_unique<DotOpMmaV5SmemLoader>(
         a, baseA, shapeA, allocShapeA, zero, 1, transA, aOperandShape,
         op.numBitsPerElementA, rewriter, loc);
   }
 
   auto allocShapeB = getAllocShape(bTensorTy, 0);
-  DotOpMmaV3SmemLoader bLoader = DotOpMmaV3SmemLoader(
+  DotOpMmaV5SmemLoader bLoader = DotOpMmaV5SmemLoader(
       b, baseB, shapeB, allocShapeB, zero, 1, transB, {mmaSizeN, mmaSizeK},
       op.numBitsPerElementB, rewriter, loc);
 
@@ -632,6 +632,7 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
         ttng::getTmemAllocSizes(cast<MemDescType>(op.getBScale().getType()))
             .numCols,
         numRepN * (ceil<int>(numRepK, 4 / scaleFactorColsPerSet)));
+    numColPerScaleBlockB = std::max(numColPerScaleBlockB, 2);
     int subWordIdx = k % (4 / scaleFactorColsPerSet);
     int wordIdx = k / (4 / scaleFactorColsPerSet);
     Value scaleA = tb.add(

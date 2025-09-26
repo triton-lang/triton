@@ -1,4 +1,5 @@
 #include "Utility.h"
+#include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
@@ -8,13 +9,11 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
-
 namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::AMD::DppCtrl;
 using mlir::triton::AMD::ISAFamily;
 using mlir::triton::gpu::appendOrGetExternFuncOp;
-using mlir::triton::gpu::getFunctionType;
 
 namespace {
 enum class ShflKind : uint32_t {
@@ -23,57 +22,6 @@ enum class ShflKind : uint32_t {
   down = 2,
   idx = 3,
 };
-
-std::string getTypeString(Type ty) {
-  std::string str;
-  llvm::raw_string_ostream rso(str);
-  ty.print(rso);
-  rso.flush();
-  return str;
-}
-
-std::string mangleFunc(std::string name, Type type) {
-  auto funcType = dyn_cast<LLVM::LLVMFunctionType>(type);
-  assert(funcType && "Expecting an LLVMFunctionType");
-  std::string mangled = name + "_";
-  auto retTy = funcType.getReturnType();
-  mangled += getTypeString(retTy) + "_";
-  auto params = funcType.getParams();
-  for (auto paramType : params) {
-    mangled += getTypeString(paramType) + "_";
-  }
-  return mangled;
-}
-
-// Utility function to create a constant vector mask of length `vecSize` with
-// the same `pred` value
-Value createVectorMaskFromPredicate(RewriterBase &rewriter, Location loc,
-                                    Value pred, int64_t vecSize) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto vecMaskTy = LLVM::getVectorType(rewriter.getI1Type(), vecSize);
-  Value maskVal = b.undef(vecMaskTy);
-  for (size_t s = 0; s < vecSize; ++s) {
-    Value indexVal =
-        rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI64IntegerAttr(s));
-    maskVal = b.insert_element(vecMaskTy, maskVal, pred, indexVal);
-  }
-  return maskVal;
-}
-
-// Utility function to get the number of elements of a vector or a scalar
-int64_t getNumElements(Type ty) {
-  if (auto vecType = dyn_cast<VectorType>(ty))
-    return vecType.getNumElements();
-  return 1;
-}
-
-// Utility function to cast the given scalar or vector type to a vector type
-Type castToVectorType(Type ty) {
-  if (isa<VectorType>(ty))
-    return ty;
-  return LLVM::getVectorType(ty, 1);
-}
-
 } // namespace
 
 namespace mlir::LLVM::AMD {
@@ -151,10 +99,11 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
       }
     } else {
       if (!llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
-                               ISAFamily::CDNA4, ISAFamily::RDNA3},
+                               ISAFamily::CDNA4, ISAFamily::RDNA3,
+                               ISAFamily::RDNA4},
                               isaFamily)) {
-        // DPP is only supported for CDNA2/CDNA3/CDNA4/RDNA3 right now, so we
-        // fallback to ds_swizzle for other architectures.
+        // DPP is only supported for CDNA2/CDNA3/CDNA4/RDNA3/RDNA4 right now, so
+        // we fallback to ds_swizzle for other architectures.
         //
         // This map facilates the butterfly shuffle pattern for a stride less
         // than 16. The pattern stride is the key of the map.
@@ -284,104 +233,21 @@ Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
                        b.i32_val(0x1f));
 }
 
-Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
-               ProgramIDDim axis) {
-  Value blockId =
-      rewriter.create<::mlir::gpu::BlockIdOp>(loc, mlir::gpu::Dimension(axis));
-  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
-}
-
-Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal, triton::CacheModifier cm,
-             bool forceNoAliasAsyncLoads) {
+Value permute(Location loc, RewriterBase &rewriter, Value x, Value y,
+              Value selector) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-  Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
-  auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
-  auto getLoadNameRaw = [](triton::CacheModifier cm) {
-    switch (cm) {
-    case triton::CacheModifier::CA:
-      return predicatedLoadCA;
-    case triton::CacheModifier::CG:
-      return predicatedLoadCG;
-    case triton::CacheModifier::CV:
-      return predicatedLoadCV;
-    default:
-      // Do not fail in compile time in the case of unsupported modifier.
-      // Just apply default config.
-      return predicatedLoad;
-    }
-  };
-  std::string funcName = getLoadNameRaw(cm);
-  if (forceNoAliasAsyncLoads)
-    funcName += noAliasAsyncLoads;
-
-  auto mangledName = mangleFunc(funcName, funcType);
-  LLVM::LLVMFuncOp funcOp =
-      appendOrGetExternFuncOp(rewriter, parent, mangledName, funcType);
-  return LLVM::createLLVMCallOp(rewriter, loc, funcOp,
-                                ValueRange({ptr, pred, falseVal}))
-      .getResult();
-}
-
-void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
-             Value pred, triton::CacheModifier cm,
-             bool forceNoAliasAsyncLoads) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-  auto ctx = ptr.getContext();
-  Type funcType = getFunctionType(void_ty(ctx), ValueRange({ptr, val, pred}));
-  auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
-
-  auto getStoreNameWithCacheMod = [](triton::CacheModifier cm) {
-    switch (cm) {
-    case triton::CacheModifier::WT:
-      return predicatedStoreWT;
-    case triton::CacheModifier::CG:
-      return predicatedStoreCG;
-    case triton::CacheModifier::CS:
-      return predicatedStoreCS;
-    default:
-      // Do not fail in compile time in the case of unsupported modifier.
-      // Just apply default config.
-      return predicatedStore;
-    }
-  };
-  std::string funcName = getStoreNameWithCacheMod(cm);
-  if (forceNoAliasAsyncLoads)
-    funcName += noAliasAsyncLoads;
-
-  auto mangledName = mangleFunc(funcName, funcType);
-  LLVM::LLVMFuncOp funcOp =
-      appendOrGetExternFuncOp(rewriter, parent, mangledName, funcType);
-  LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange({ptr, val, pred}));
-}
-
-static bool isPredicatedLoadCA(LLVM::CallOp callOp) {
-  return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoadCA);
-}
-
-static bool isPredicatedLoadCG(LLVM::CallOp callOp) {
-  return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoadCG);
-}
-
-static bool isPredicatedLoadCV(LLVM::CallOp callOp) {
-  return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoadCV);
-}
-
-static bool isPredicatedStoreCS(LLVM::CallOp callOp) {
-  return callOp.getCallee().value().contains(
-      mlir::LLVM::AMD::predicatedStoreCS);
-}
-
-static bool isPredicatedStoreCG(LLVM::CallOp callOp) {
-  return callOp.getCallee().value().contains(
-      mlir::LLVM::AMD::predicatedStoreCG);
-}
-
-static bool isPredicatedStoreWT(LLVM::CallOp callOp) {
-  return callOp.getCallee().value().contains(
-      mlir::LLVM::AMD::predicatedStoreWT);
+  Value prmt_mask = selector;
+  // convert from nybble mask to byte mask:
+  prmt_mask =
+      b.or_(b.and_(prmt_mask, b.i32_val(0x000000ff)),
+            b.shl(b.and_(prmt_mask, b.i32_val(0x0000ff00)), b.i32_val(8)));
+  prmt_mask =
+      b.or_(b.and_(prmt_mask, b.i32_val(0x000f000f)),
+            b.shl(b.and_(prmt_mask, b.i32_val(0x00f000f0)), b.i32_val(4)));
+  Value args[] = {x, y, prmt_mask};
+  auto op = createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.perm", i32_ty,
+                                      args);
+  return op.getResult(0);
 }
 
 // Utility function that returns flags <volatile, nontemporal> for a predicated
@@ -400,22 +266,60 @@ static bool isPredicatedStoreWT(LLVM::CallOp callOp) {
 //      | .wt |   T      | X
 // -----+-----+----------+---------
 std::pair<bool, bool>
-getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
-  if (isPredicatedLoadCA(callOp))
-    return std::make_pair(false, false);
-  if (isPredicatedLoadCG(callOp))
-    return std::make_pair(false, true);
-  if (isPredicatedLoadCV(callOp))
-    return std::make_pair(true, true);
-
-  if (isPredicatedStoreCG(callOp))
-    return std::make_pair(false, false);
-  if (isPredicatedStoreCS(callOp))
-    return std::make_pair(false, true);
-  if (isPredicatedStoreWT(callOp))
-    return std::make_pair(true, true);
-  // unsupported modifier
+getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm,
+                                  MemoryOp op) {
+  switch (op) {
+  case MemoryOp::Load: {
+    switch (cm) {
+    case triton::CacheModifier::CA:
+      return std::make_pair(false, false);
+    case triton::CacheModifier::CG:
+      return std::make_pair(false, true);
+    case triton::CacheModifier::CS:
+      return std::make_pair(false, true);
+    case triton::CacheModifier::CV:
+      return std::make_pair(true, true);
+    default:
+      return std::make_pair(false, false);
+    }
+  }
+  case MemoryOp::Store: {
+    switch (cm) {
+    case triton::CacheModifier::CG:
+      return std::make_pair(false, false);
+    case triton::CacheModifier::CS:
+      return std::make_pair(false, true);
+    case triton::CacheModifier::WT:
+      return std::make_pair(true, true);
+    default:
+      return std::make_pair(false, false);
+    }
+  }
+  }
   return std::make_pair(false, false);
+}
+
+Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
+               ProgramIDDim axis) {
+  Value blockId =
+      rewriter.create<::mlir::gpu::BlockIdOp>(loc, mlir::gpu::Dimension(axis));
+  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
+}
+
+Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
+             Value pred, Value falseVal, triton::CacheModifier cm,
+             bool forceNoAliasAsyncLoads) {
+  return rewriter
+      .create<triton::amdgpu::MaskedLoadOp>(loc, elemTy, ptr, pred, falseVal,
+                                            cm, forceNoAliasAsyncLoads)
+      .getResult();
+}
+
+void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
+             Value pred, triton::CacheModifier cm,
+             bool forceNoAliasAsyncLoads) {
+  rewriter.create<triton::amdgpu::MaskedStoreOp>(loc, ptr, val, pred, cm,
+                                                 forceNoAliasAsyncLoads);
 }
 
 // Create the auxiliary/cachepolicy value of ROCDL::RawPtrBufferLoad/StoreOp
@@ -602,8 +506,15 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
 
 bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
                                       const LinearLayout &srcToSharedLayout,
-                                      unsigned threadsPerWarp) {
+                                      unsigned threadsPerWarp,
+                                      unsigned vecSize) {
   auto contig = srcToSharedLayout.getNumConsecutiveInOut();
+  if (vecSize != srcToSharedLayout.getNumConsecutiveInOut()) {
+    LDBG("Load vectorization ("
+         << vecSize << ") and contiguity (" << contig
+         << ") do not match resulting in strided writes");
+    return false;
+  }
 
   StringAttr kLane = rewriter.getStringAttr("lane");
   for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
@@ -668,7 +579,7 @@ bool isUsedByDotScaledOp(Operation *op) {
       });
 }
 
-bool isChainDotHead(tt::DotOpInterface dotOp) {
+bool isChainDotHead(tt::DotOpInterface dotOp, unsigned opIdx) {
   auto isInSameRegion = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
@@ -679,34 +590,13 @@ bool isChainDotHead(tt::DotOpInterface dotOp) {
   for (Operation *op : fwdSlices) {
     if (auto dOp = dyn_cast<tt::DotOpInterface>(op)) {
       assert(dOp != dotOp);
-      auto opA = dOp.getA().getDefiningOp();
-      if (opA && fwdSlices.contains(opA)) {
+      Operation *dotOperand = (opIdx == 0) ? dOp.getA().getDefiningOp()
+                                           : dOp.getB().getDefiningOp();
+      if (dotOperand && fwdSlices.contains(dotOperand)) {
         return true;
       }
     }
   }
-  return false;
-}
-
-bool hasTransInDefChain(tt::DotOpInterface dotOp, unsigned opIdx) {
-  auto isInSameRegion = [&dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
-  };
-
-  BackwardSliceOptions bwdOpt;
-  bwdOpt.omitBlockArguments = true;
-  bwdOpt.filter = isInSameRegion;
-  SetVector<Operation *> bwdSlices;
-  Operation *dotOperand = (opIdx == 0) ? dotOp.getA().getDefiningOp()
-                                       : dotOp.getB().getDefiningOp();
-
-  if (!dotOperand)
-    return false;
-  (void)getBackwardSlice(dotOperand, &bwdSlices, bwdOpt);
-  if (llvm::find_if(bwdSlices, [](Operation *op) {
-        return isa<tt::TransOp>(op);
-      }) != bwdSlices.end())
-    return true;
   return false;
 }
 
@@ -729,12 +619,96 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
   return false;
 }
 
-SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
-                                       bool toFp16, Value packedVec) {
+SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
+                                    bool toFp16, Value packedVec,
+                                    ISAFamily isaFamily, Value scale) {
   assert((isa<triton::amdgpu::UpcastMXFPOp, triton::gpu::Fp4ToFpOp>(op)) &&
          "Expected UpcastMXFPOp or Fp4ToFpOp");
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto permU32FnTy =
+      LLVM::LLVMFunctionType::get(i32_ty, {i32_ty, i32_ty, i32_ty});
+  LLVM::LLVMFuncOp funcOp =
+      appendOrGetExternFuncOp(rewriter, op, "llvm.amdgcn.perm", permU32FnTy);
+
+  // Start with 8 mxfp4 elements in a single i32 register
+  // | e7e6 | e5e4 | e3e2 | e1e0 |
+  Value input = b.bitcast(packedVec, i32_ty);
+
+  // fp4 to bf16 for cdna3: fp4->fp8->fp32
+  if (isaFamily == ISAFamily::CDNA3 && !toFp16) {
+    // Step 1: extract EM bits for elements 0,2,4,6 and 1,3,5,7 respectively.
+    // e2m1_6420_idx = | 0[0e6EM] | 0[0e4EM] | 0[0e2EM] | 0[0e0EM] |
+    Value e2m1_6420_idx = b.and_(input, b.i32_val(0x07070707));
+    // e2m1_7531_idx = | [0e7EM]0 | [0e5EM]0 | [0e3EM]0 | [0e1EM]0 |
+    Value e2m1_7531_idx = b.and_(input, b.i32_val(0x70707070));
+    e2m1_7531_idx = b.lshr(e2m1_7531_idx, b.i32_val(4));
+
+    // Step 2: convert fp4 to fp8 using LUT
+    Value resLutLo = b.i32_val(0xc4c0b800);
+    Value resLutHi = b.i32_val(0xd4d0ccc8);
+    Value res_6420 = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                                            {resLutHi, resLutLo, e2m1_6420_idx})
+                         .getResult();
+    Value res_7531 = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                                            {resLutHi, resLutLo, e2m1_7531_idx})
+                         .getResult();
+
+    // Step 3: extract sign bits
+    Value s_6420 = b.or_(b.shl(input, b.i32_val(4)), b.i32_val(0x7f7f7f7f));
+    Value s_7531 = b.or_(input, b.i32_val(0x7f7f7f7f));
+
+    // Step 4:  assemble 4 packed fp8 values w/ sign
+    res_6420 = b.and_(res_6420, s_6420);
+    res_7531 = b.and_(res_7531, s_7531);
+
+    // Step 5: convert fp8 to fp32
+    Value res_20 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
+        loc, i64_ty, res_6420, rewriter.getIntegerAttr(i1_ty, 0));
+    Value res_64 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
+        loc, i64_ty, res_6420, rewriter.getIntegerAttr(i1_ty, 1));
+    Value res_31 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
+        loc, i64_ty, res_7531, rewriter.getIntegerAttr(i1_ty, 0));
+    Value res_75 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
+        loc, i64_ty, res_7531, rewriter.getIntegerAttr(i1_ty, 1));
+    SmallVector<Value> pkVals{res_20, res_64, res_31, res_75};
+    if (scale) {
+      // pack 2 values together to help llvm backend codegen
+      Value scaleF32 =
+          b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
+      Type v2f32 = vec_ty(f32_ty, 2);
+      Value pkScale = b.undef(v2f32);
+      pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(0));
+      pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(1));
+      Type v2i32 = vec_ty(i32_ty, 2);
+      for (unsigned i = 0; i < 4; i++) {
+        Value pkScaled = b.fmul(pkScale, b.bitcast(pkVals[i], v2f32));
+        pkVals[i] = (b.bitcast(pkScaled, v2i32));
+      }
+    }
+    Value e0 = b.extract_element(pkVals[0], b.i32_val(0));
+    Value e1 = b.extract_element(pkVals[2], b.i32_val(0));
+    Value e2 = b.extract_element(pkVals[0], b.i32_val(1));
+    Value e3 = b.extract_element(pkVals[2], b.i32_val(1));
+    Value e4 = b.extract_element(pkVals[1], b.i32_val(0));
+    Value e5 = b.extract_element(pkVals[3], b.i32_val(0));
+    Value e6 = b.extract_element(pkVals[1], b.i32_val(1));
+    Value e7 = b.extract_element(pkVals[3], b.i32_val(1));
+    SmallVector<Value, 8> f32Vals{e0, e1, e2, e3, e4, e5, e6, e7};
+    Value sel = b.i32_val(0x07060302);
+    SmallVector<Value> results;
+    for (unsigned i = 0; i < 8; i += 2) {
+      // v2f32->v2bf16: {e1.f32[31:16], e0.f32[31:16]}
+      Value res = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                                         {f32Vals[i + 1], f32Vals[i], sel})
+                      .getResult();
+      Type v2bf16 = vec_ty(bf16_ty, 2);
+      res = b.bitcast(res, v2bf16);
+      results.push_back(b.extract_element(res, b.i32_val(0)));
+      results.push_back(b.extract_element(res, b.i32_val(1)));
+    }
+    return results;
+  }
 
   // MXFP4 has 4 bits, S.EE.M, for Sign, Exponent, and Mantissa respectively.
   // For a specific S, we have a total of 8 bit patterns. We can encode all
@@ -764,15 +738,6 @@ SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
   // Encode Byte #1 (EM, non-S part) for BF16/FP16 in a LUT.
   Value resB1LutLoNoS = toFp16 ? b.i32_val(0x3e3c3800) : b.i32_val(0x3f3f3f00);
   Value resB1LutHiNoS = toFp16 ? b.i32_val(0x46444240) : b.i32_val(0x40404040);
-
-  Type i32Ty = rewriter.getI32Type();
-  auto permU32FnTy = LLVM::LLVMFunctionType::get(i32Ty, {i32Ty, i32Ty, i32Ty});
-  LLVM::LLVMFuncOp funcOp =
-      appendOrGetExternFuncOp(rewriter, op, "llvm.amdgcn.perm", permU32FnTy);
-
-  // Start with 8 mxfp4 elements in a single i32 register
-  // | e7e6 | e5e4 | e3e2 | e1e0 |
-  Value input = b.bitcast(packedVec, i32Ty);
 
   // Step 1: extract EM bits for elements 0,2,4,6 and 1,3,5,7 respectively.
   // e2m1_6420_idx = | 0[0e6EM] | 0[0e4EM] | 0[0e2EM] | 0[0e0EM] |
@@ -867,7 +832,15 @@ SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                         {res_75, res_64, b.i32_val(0x07060302)})
                      .getResult();
 
-  return {res_10, res_32, res_54, res_76};
+  SmallVector<Value, 4> pkVals{res_10, res_32, res_54, res_76};
+  SmallVector<Value> results;
+  Type elmTy = toFp16 ? f16_ty : bf16_ty;
+  for (int j = 0; j < 4; j++) {
+    Value elements = b.bitcast(pkVals[j], vec_ty(elmTy, 2));
+    results.push_back(b.extract_element(elements, b.i32_val(0)));
+    results.push_back(b.extract_element(elements, b.i32_val(1)));
+  }
+  return results;
 }
 
 } // namespace mlir::LLVM::AMD

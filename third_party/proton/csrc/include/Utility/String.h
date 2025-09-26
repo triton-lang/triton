@@ -2,6 +2,7 @@
 #define PROTON_UTILITY_STRING_H_
 
 #include <string>
+#include <vector>
 
 namespace proton {
 
@@ -56,6 +57,11 @@ inline std::vector<std::string> split(const std::string &str,
   }
   result.push_back(str.substr(start, end));
   return result;
+}
+
+inline std::string formatFileLineFunction(const std::string &file, int line,
+                                          const std::string &function) {
+  return file + ":" + std::to_string(line) + "@" + function;
 }
 
 } // namespace proton

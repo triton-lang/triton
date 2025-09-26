@@ -43,6 +43,23 @@ def NVWSLowerWarpGroup : Pass<"nvws-lower-warp-group", "mlir::ModuleOp"> {
   ];
 }
 
+def NVWSAssignStagePhase : Pass<"nvws-assign-stage-phase", "mlir::ModuleOp"> {
+  let summary = "Assign buffer stage to nvws.aref.*.";
+
+  let description = [{
+    Assign buffer stage & phase to nvws.aref.*
+
+    The pass will assign buffer stage to each aref op, and phase for enter ops.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
 def NVWSLowerAref : Pass<"nvws-lower-aref", "mlir::ModuleOp"> {
   let summary = "Convert nvws.aref.* to ttng.*barrier* ops.";
 
@@ -62,6 +79,11 @@ def NVWSLowerAref : Pass<"nvws-lower-aref", "mlir::ModuleOp"> {
     "mlir::triton::TritonDialect",
     "mlir::triton::gpu::TritonGPUDialect",
     "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
+  let options = [
+    Option<"numStages", "num-stages", "int32_t", /*default*/"3",
+           "number of pipeline stages">
   ];
 }
 
@@ -88,7 +110,25 @@ def NVWSInsertAref: Pass<"nvws-insert-aref", "mlir::ModuleOp"> {
     "mlir::triton::gpu::TritonGPUDialect",
     "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
   ];
+}
 
+def NVWSInsertTmemAref: Pass<"nvws-insert-tmem-aref", "mlir::ModuleOp"> {
+  let summary = "Insert tmem arefs between producer and consumer partitions.";
+
+  let description = [{
+    Insert arefs when TMEM partition ownership changes.
+
+    In contrast to the InsertAref pass, this pass uses ArefPut/ArefGet as ping-pong
+    ownership transfer between two groups. Currently, this pass limits ownership
+    of a specific TMEM buffer to no more than two groups.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::nvws::NVWSDialect",
+    "mlir::triton::TritonDialect",
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
 }
 
 #endif // NVWS_PASSES

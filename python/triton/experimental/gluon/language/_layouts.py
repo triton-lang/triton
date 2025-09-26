@@ -1,18 +1,8 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 from triton.runtime.jit import constexpr_function
-
-__all__ = [
-    "AutoLayout",
-    "BlockedLayout",
-    "SliceLayout",
-    "DistributedLinearLayout",
-    "DotOperandLayout",
-    "NVMMADistributedLayout",
-    "NVMMASharedLayout",
-    "SwizzledSharedLayout",
-]
+import math
 
 
 def _realize_cta_layout(layout, rank):
@@ -33,6 +23,10 @@ class DistributedLayout:
     def type(self):
         return constexpr_type(self)
 
+    @property
+    def rank(self):
+        return len(self.cta_order)
+
 
 @dataclass(frozen=True)
 class AutoLayout(DistributedLayout):
@@ -42,6 +36,10 @@ class AutoLayout(DistributedLayout):
 
     def mangle(self):
         return "AL"
+
+    @property
+    def rank(self):
+        raise ValueError("AutoLayout has no rank")
 
 
 @dataclass(frozen=True)
@@ -111,6 +109,17 @@ class BlockedLayout(DistributedLayout):
         cta_order = stringify(self.cta_order)
         return f"B{size_per_thread}B{threads_per_warp}B{warps_per_cta}B{order}B{ctas_per_cga}B{cta_split_num}B{cta_order}B"
 
+    def __hash__(self):
+        return hash((
+            tuple(self.size_per_thread),
+            tuple(self.threads_per_warp),
+            tuple(self.warps_per_cta),
+            tuple(self.order),
+            tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+            tuple(self.cta_split_num) if self.cta_split_num else None,
+            tuple(self.cta_order) if self.cta_order else None,
+        ))
+
 
 @dataclass(frozen=True)
 class SliceLayout(DistributedLayout):
@@ -136,6 +145,13 @@ class SliceLayout(DistributedLayout):
 
     def mangle(self) -> str:
         return f"SL{self.dim}_{self.parent.mangle()}SL"
+
+    def __hash__(self):
+        return hash((self.dim, self.parent))
+
+    @property
+    def rank(self):
+        return self.parent.rank - 1
 
 
 @dataclass(frozen=True)
@@ -182,6 +198,19 @@ class DistributedLinearLayout(DistributedLayout):
     def mangle(self):
         return f"DLL{self.reg_bases}_{self.lane_bases}_{self.warp_bases}_{self.block_bases}_{self.shape}DLL"
 
+    def __hash__(self):
+        return hash((
+            tuple(map(tuple, self.reg_bases)),
+            tuple(map(tuple, self.lane_bases)),
+            tuple(map(tuple, self.warp_bases)),
+            tuple(map(tuple, self.block_bases)),
+            tuple(self.shape),
+        ))
+
+    @property
+    def rank(self):
+        return len(self.shape)
+
 
 @dataclass(frozen=True)
 class DotOperandLayout(DistributedLayout):
@@ -208,8 +237,15 @@ class DotOperandLayout(DistributedLayout):
     def mangle(self) -> str:
         return f"DO{self.operand_index}_{self.parent.mangle()}_{self.k_width}DO"
 
+    def __hash__(self):
+        return hash((self.operand_index, self.parent, self.k_width))
 
-@dataclass(frozen=True)
+    @property
+    def rank(self):
+        return self.parent.rank
+
+
+@dataclass(frozen=True, eq=True)
 class NVMMADistributedLayout(DistributedLayout):
     """
     Represents a layout for NVIDIA MMA (tensor core) operations.
@@ -237,7 +273,7 @@ class NVMMADistributedLayout(DistributedLayout):
         super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
 
-        rank = 2
+        rank = len(self.warps_per_cta)
         _realize_cta_layout(self, rank)
         assert len(self.ctas_per_cga) == rank
         assert len(self.cta_split_num) == rank
@@ -249,6 +285,12 @@ class NVMMADistributedLayout(DistributedLayout):
 
     def mangle(self) -> str:
         return f"MMA_{self.version}_{self.warps_per_cta}_{self.instr_shape}_{self.ctas_per_cga}_{self.cta_split_num}_{self.cta_order}_MMA"
+
+    def __hash__(self):
+        return hash((tuple(self.version), tuple(self.warps_per_cta),
+                     tuple(self.instr_shape), tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+                     tuple(self.cta_split_num) if self.cta_split_num else None,
+                     tuple(self.cta_order) if self.cta_order else None))
 
 
 class SharedLayout:
@@ -369,6 +411,12 @@ class NVMMASharedLayout(SharedLayout):
     def mangle(self) -> str:
         return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_NVMMA"
 
+    def __hash__(self):
+        return hash((self.swizzle_byte_width, self.element_bitwidth, self.rank, self.transposed, self.fp4_padded,
+                     tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+                     tuple(self.cta_split_num) if self.cta_split_num else None,
+                     tuple(self.cta_order) if self.cta_order else None))
+
 
 @dataclass(frozen=True, eq=True)
 class SwizzledSharedLayout(SharedLayout):
@@ -426,3 +474,203 @@ class SwizzledSharedLayout(SharedLayout):
             return "_".join(map(str, x))
 
         return f"SSS_{self.vec}_{self.per_phase}_{self.max_phase}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_SSS"
+
+    def __hash__(self):
+        return hash((self.vec, self.per_phase, self.max_phase,
+                     tuple(self.order), tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
+                     tuple(self.cta_split_num) if self.cta_split_num else None,
+                     tuple(self.cta_order) if self.cta_order else None))
+
+
+@dataclass(frozen=True, eq=True)
+class PaddedSharedLayout(SharedLayout):
+    """
+    Represents a layout for the access to shared memory. Compared to SwizzledSharedLayout,
+    it combined padding and element reordering via linear transformation (e.g. row permutation)
+    to avoid shared memory bank conflicts. After every interval tensor elements, the
+    corresponding number of padding elements are inserted. If a position corresponds to
+    multiple intervals, the padding amounts are summed.
+
+    In the following example of a tensor,
+    `eM` represents original elements in the and `pN` represents padded element.
+
+    Before padding, the shared memory looks like:
+    [e0, e1,
+     e2, e3,
+     e4, e5,
+     e6, e7,
+     ...]
+
+    After padding with interval-padding list [[2, 1], [4, 2]] with an identity remapping,
+    the shared memory will be
+    [e0, e1, p0,
+     e2, e3, p1, p2, p3,
+     e4, e5, p4,
+     e6, e7, p5, p6, p7,
+     ...]
+
+    Furthermore this encoding allows for a linear remapping from the 1-D shared
+    memory offset to logical n-D tensor elements. The remapping is given in the form
+    of linear bases mapping from offset to [dim0, dim1...dimN-1].
+    See LinearLayout.h for more details how linear layouts are applied to remap
+    elements.
+    Some concrete examples using `xN` and `yN` to mean the logical n-D tensor elements
+    and `pN` to mean padding:
+
+    After padding for shape = [8] with interval-padding list [[2, 2]], offset_bases = [[2], [1]] and block_bases = []:
+    [x0, x2, p0 p1, x1, x3]
+
+    After padding for shape = [8, 4] with interval_padding_pairs = [[8, 1]], offset_bases = [[0, 1], [0, 2], /*gap, stride by 2 rows*/[2, 0], [4, 0], [1, 0]]] and block_bases = []:
+    [
+        x0y0, x0y1, x0y2, x0y3,
+        x2y0, x2y1, x2y2, x2y3,
+        p0,
+        x4y0, x4y1, x4y2, x4y3,
+        x6y0, x6y1, x6y2, x6y3,
+        p1,
+        x1y0, x1y1, x1y2, x1y3,
+        x3y0, x3y1, x3y2, x3y3,
+        p2,
+        x5y0, x5y1, x5y2, x5y3,
+        x7y0, x7y1, x7y2, x7y3,
+    ]
+
+    Args:
+        interval_padding_pairs (List[int]): List of [interval, padding] pair and both interval and padding must be powers of 2.
+        offset_bases (List[int]): Bases for shared memory offsets
+        block_bases (List[List[int]]): Bases for block-level shared memory offsets.
+        shape (List[int]): n-D logical shared memory shape
+    """
+    interval_padding_pairs: List[List[int]]
+    offset_bases: List[List[int]]
+    block_bases: List[List[int]]
+    shape: List[int]
+
+    def __post_init__(self):
+        super().__setattr__("interval_padding_pairs", _unwrap_shape(self.interval_padding_pairs))
+        super().__setattr__("offset_bases", _unwrap_shape(self.offset_bases))
+        super().__setattr__("block_bases", _unwrap_shape(self.block_bases))
+        super().__setattr__("shape", _unwrap_shape(self.shape))
+
+        rank = len(self.shape)
+
+        for basis in self.offset_bases:
+            assert len(basis) == rank
+        for basis in self.block_bases:
+            assert len(basis) == rank
+
+        self.verify()
+
+    def _to_ir(self, builder):
+        intervals, paddings = zip(*self.interval_padding_pairs)
+        return builder.get_padded_shared_layout(intervals, paddings, self.offset_bases, self.block_bases, self.shape)
+
+    def mangle(self) -> str:
+        return f"PaddedShared_{self.interval_padding_pairs}_{self.offset_bases}_{self.block_bases}_{self.shape}_PaddedShared"
+
+    def verify(self):
+        pairs = self.interval_padding_pairs
+        assert len(pairs) > 0, "PaddedSharedLayout interval_padding_pairs must have at least one interval-padding pair"
+        assert all(len(pair) == 2 for pair in pairs)
+        intervals, paddings = zip(*pairs)
+
+        unique_intervals = list(set(intervals))
+        assert len(unique_intervals) == len(intervals)
+
+        is_power_of_2 = lambda n: n > 0 and n & (n - 1) == 0
+        assert all(is_power_of_2(n) for n in intervals), "PaddedSharedLayout interval values must all be power of two"
+        assert all(is_power_of_2(n) for n in paddings), "PaddedSharedLayout padding values must all be power of two"
+
+        rank = len(self.shape)
+        assert rank > 0, "PaddedSharedLayout order must not be empty"
+
+    @staticmethod
+    @constexpr_function
+    def with_identity_for(interval_padding_pairs, shape, order):
+        """Returns a PaddedSharedLayout with the given interval and padding pairs and an identity mapping as the linear component for the given shape and order.
+        """
+        assert len(shape) == len(order)
+        is_power_of_2 = lambda n: n > 0 and n & (n - 1) == 0
+        assert all(is_power_of_2(n) for n in shape)
+
+        rank = len(shape)
+        # Create a idendity mapping based on shape + order
+        offset_bases = []
+        for dim in order:
+            for basis in range(int(math.log2(shape[dim]))):
+                offset_bases.append([1 << basis if i == dim else 0 for i in range(rank)])
+
+        return PaddedSharedLayout(interval_padding_pairs, offset_bases, [], shape)
+
+    def __hash__(self):
+        return hash((tuple(map(tuple, self.interval_padding_pairs)), tuple(map(tuple, self.offset_bases)),
+                     tuple(map(tuple, self.block_bases)), tuple(self.shape)))
+
+
+@dataclass(frozen=True)
+class SharedLinearLayout(SharedLayout):
+    """Represents a shared memory layout defined via an explicit LinearLayout."""
+
+    offset_bases: List[List[int]]
+    block_bases: List[List[int]] = field(default_factory=list)
+    alignment: int = 16
+
+    def __post_init__(self):
+        super().__setattr__("offset_bases", _unwrap_shape(self.offset_bases))
+        super().__setattr__("block_bases", _unwrap_shape(self.block_bases))
+        super().__setattr__("alignment", _unwrap_if_constexpr(self.alignment))
+
+        assert len(self.offset_bases) != 0, "SharedLinearLayout offset_bases must not be empty"
+        rank = len(self.offset_bases[0])
+        assert rank > 0, "SharedLinearLayout offset_bases must not be empty"
+        for basis in self.offset_bases:
+            assert len(basis) == rank
+        for basis in self.block_bases:
+            assert len(basis) == rank
+        assert self.alignment > 0 and (self.alignment & (self.alignment - 1)) == 0, \
+            "SharedLinearLayout alignment must be a positive power of two"
+
+    def _to_ir(self, builder):
+        return builder.get_shared_linear_layout(self.offset_bases, self.block_bases, self.alignment)
+
+    def mangle(self) -> str:
+        return f"SharedLinear_{self.offset_bases}_{self.block_bases}_{self.alignment}_SharedLinear"
+
+    def __hash__(self):
+        return hash((
+            tuple(map(tuple, self.offset_bases)),
+            tuple(map(tuple, self.block_bases)),
+            self.alignment,
+        ))
+
+
+# Python impl of LinearEncodingAttr::basesPerDim
+def bases_per_dim(bases, rank, skip_broadcast=True):
+    result = [1] * rank
+
+    if not bases:
+        return result
+
+    non_zero_idx = None
+
+    for basis in bases:
+        # Find the first non-zero index in the current basis
+        idx = next((i for i, v in enumerate(basis) if v != 0), None)
+        if idx is not None:
+            non_zero_idx = idx
+            result[idx] *= 2
+        elif not skip_broadcast:
+            # If no non-zero found and we're not skipping broadcasts, use the last found non-zero index
+            assert non_zero_idx is not None
+            result[non_zero_idx] *= 2
+
+    return result
+
+
+def warps_per_cta(layout, shape):
+    if isinstance(layout, DistributedLinearLayout):
+        return bases_per_dim(layout.warp_bases, len(shape))
+    elif isinstance(layout, (SliceLayout, DotOperandLayout)):
+        return warps_per_cta(layout.parent, shape)
+    else:
+        return layout.warps_per_cta

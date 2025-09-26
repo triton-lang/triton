@@ -148,6 +148,14 @@ Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
   return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, getISAFamily());
 }
 
+Value TargetInfo::permute(RewriterBase &rewriter, Location loc, Value a,
+                          Value b, Value selector) const {
+  // Warning: The `a` and `b` operands are ordered to align with Nvidia's `prmt`
+  // Both use little-endian ordering, but AMD puts the MSBs of the data in the
+  // 0-th operand.
+  return LLVM::AMD::permute(loc, rewriter, b, a, selector);
+}
+
 Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                             ModuleOp moduleOp, ProgramIDDim axis) const {
   return LLVM::AMD::llGetPid(loc, rewriter, moduleOp, axis);
@@ -290,7 +298,8 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     return false;
   if (isCDNA(getISAFamily()) && getISAFamily() == ISAFamily::CDNA1)
     return false;
-  if (isRDNA(getISAFamily()) && getISAFamily() != ISAFamily::RDNA3)
+  if (isRDNA(getISAFamily()) &&
+      llvm::is_contained({ISAFamily::RDNA1, ISAFamily::RDNA2}, getISAFamily()))
     return false;
 
   Operation *reduxOp = op.getSingleCombiner();
@@ -570,8 +579,6 @@ bool TargetInfo::supportVectorizedAtomics() const {
 
 bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
   switch (getISAFamily()) {
-  case ISAFamily::CDNA1:
-  case ISAFamily::CDNA2:
   case ISAFamily::CDNA3:
     // Disable 8 and 16 bits because they get extended to 32 bit.
     return llvm::is_contained({32, /*16, 8*/}, bitWidth);

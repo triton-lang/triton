@@ -3,6 +3,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 
 using namespace mlir;
@@ -561,8 +562,8 @@ struct MemDescReinterpretOpConversion
 
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(), srcElemTy, b);
-    SharedMemoryObject newObj(smemObj.getBase(), dstElemTy, dstTy.getRank(),
-                              loc, b);
+    Value newBase = smemObj.getShmemAffineBase(loc, b, srcTy);
+    SharedMemoryObject newObj(newBase, dstElemTy, dstTy.getRank(), loc, b);
     b.replaceOp(op, getStructFromSharedMemoryObject(loc, newObj, b));
     return success();
   }

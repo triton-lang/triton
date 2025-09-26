@@ -311,12 +311,19 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     }
     // Compute the blocked -> shared linear layout to check preconditions
     LinearLayout srcLayout = triton::gpu::toLinearLayout(srcTy);
-    LinearLayout sharedLayout = triton::gpu::toLinearLayout(dstTy);
+    LinearLayout sharedLayout;
+    if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+            dstTy.getEncoding())) {
+      sharedLayout = paddedEnc.getLinearComponent();
+    } else {
+      sharedLayout = triton::gpu::toLinearLayout(dstTy);
+    }
     LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
     unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
-    if (!hasSwizzling && !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
-                             rewriter, srcToSharedLayout, threadsPerWarp)) {
+    if (!hasSwizzling &&
+        !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
+            rewriter, srcToSharedLayout, threadsPerWarp, vectorSize)) {
       LDBG(op << " does not write coalesced into LDS and is not swizzled");
       return failure();
     }
@@ -334,8 +341,8 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
   SmallVector<Value>
   emitSwizzledLaneOffsets(RewriterBase &rewriter, Operation *op,
                           RankedTensorType srcTy, MemDescType swizzledTy,
-                          MemDescType flatTy, bool hasSwizzling, Value llDst,
-                          Type resElemTy, unsigned vec) const {
+                          MemDescType flatTy, Value llDst, Type resElemTy,
+                          unsigned vec) const {
     auto loc = op->getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
 
@@ -482,8 +489,14 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     srcLayout = removeBroadcastSrc.apply(srcLayout);
     loadVals = removeBroadcastSrc.apply(loadVals);
 
-    auto smemLayout = triton::gpu::toLinearLayout(dstTy);
-    auto cvt = srcLayout.invertAndCompose(smemLayout);
+    LinearLayout sharedLayout;
+    if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+            dstTy.getEncoding())) {
+      sharedLayout = paddedEnc.getLinearComponent();
+    } else {
+      sharedLayout = triton::gpu::toLinearLayout(dstTy);
+    }
+    auto cvt = srcLayout.invertAndCompose(sharedLayout);
     cvt = cvt.sublayout(
         {str_attr("register"), str_attr("lane"), str_attr("warp")},
         {str_attr("offset")});
@@ -493,11 +506,22 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     auto affineOffset = smemObj.getShmemOffset(loc, rewriter, dstTy);
     auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
     auto [_, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto calcPaddedOffset = [&](Value smemOffset) {
+      TritonLLVMOpBuilder b(loc, rewriter);
+      auto bitwidth = dstTy.getElementTypeBitWidth();
+      if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
+              dstTy.getEncoding())) {
+        // Apply the offset needed for padding.
+        Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitwidth,
+                                      smemOffset, /*offsetInBytes=*/true);
+        smemOffset = b.add(smemOffset, padOffset);
+      }
+      return smemOffset;
+    };
     // We pass laneId==0 because GFX9 requires a scalar base pointer into LDS
-    lowerLdSt(
-        loc, ctx, cvt, loadVals, resElemTy, smemObj.getBase(),
-        [](Value v) { return v; }, affineOffset, maskSpanAffineOffset,
-        b.i32_val(0), warpId, rewriter, targetInfo, vec, lowerInst);
+    lowerLdSt(loc, ctx, cvt, loadVals, resElemTy, smemObj.getBase(),
+              calcPaddedOffset, affineOffset, maskSpanAffineOffset,
+              b.i32_val(0), warpId, rewriter, targetInfo, vec, lowerInst);
   }
 
   void emitOtherStore(RewriterBase &rewriter, Location loc,
@@ -531,7 +555,6 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-
     // original values
     Value ptr = op.getPtr();
     Value mask = op.getMask();
@@ -742,10 +765,16 @@ struct BufferLoadToLocalOpConversion
       otherElems = unpackLLElements(loc, llOther, rewriter);
 
     auto dstTy = op.getDest().getType();
-    auto sharedEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
+    auto dstEnc = dstTy.getEncoding();
 
-    bool hasSwizzling = sharedEnc.getMaxPhase() != 1;
+    // For padded encodings restrict vec by the min interval
+    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstEnc)) {
+      vec = std::min(vec, padEnc.getMinInterval());
+    }
+
+    auto maybeSwizzledEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstEnc);
+    bool hasSwizzling = maybeSwizzledEnc && maybeSwizzledEnc.getMaxPhase() != 1;
     if (failed(canWriteCoalesced(rewriter, op, ptrType, dstTy, vec,
                                  hasSwizzling))) {
       return failure();
@@ -760,15 +789,13 @@ struct BufferLoadToLocalOpConversion
       // TODO (alex): this is only correct as long as the lds view is a
       // contiguous block. So this can break if we slice along the 2 minor
       // dimensions.
-      auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
-          op->getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
-          dstEnc.getCTALayout());
+          op->getContext(), maybeSwizzledEnc.getVec(), 1, 1,
+          maybeSwizzledEnc.getOrder(), maybeSwizzledEnc.getCTALayout());
       flatDstTy = MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
                                    flatSharedEnc, dstTy.getMemorySpace());
-      swizzledLaneOffsets =
-          emitSwizzledLaneOffsets(rewriter, op, ptrType, dstTy, flatDstTy,
-                                  hasSwizzling, llDst, resElemTy, vec);
+      swizzledLaneOffsets = emitSwizzledLaneOffsets(
+          rewriter, op, ptrType, dstTy, flatDstTy, llDst, resElemTy, vec);
     }
 
     auto offsetTy = offsetElems[0].getType();
@@ -859,14 +886,9 @@ struct AsyncCopyGlobalToLocalOpConversion
 
     auto srcTy = op.getSrc().getType();
 
-    if (!isa<BlockedEncodingAttr, SliceEncodingAttr>(srcTy.getEncoding()))
-      return rewriter.notifyMatchFailure(
-          op, "requires Blocked or Slice encoding for src");
-
     auto dstTy = op.getResult().getType();
-    auto sharedEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
+    auto dstEnc = dstTy.getEncoding();
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
-
     Value llDst = adaptor.getResult();
 
     // We can load N elements at a time if:
@@ -884,7 +906,13 @@ struct AsyncCopyGlobalToLocalOpConversion
     if (op.getOther())
       otherElems = unpackLLElements(loc, adaptor.getOther(), rewriter);
 
-    bool hasSwizzling = sharedEnc.getMaxPhase() != 1;
+    // For padded encodings restrict vec by the min interval
+    if (auto padEnc = dyn_cast<PaddedSharedEncodingAttr>(dstEnc)) {
+      vec = std::min(vec, padEnc.getMinInterval());
+    }
+
+    auto maybeSwizzledEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstEnc);
+    bool hasSwizzling = maybeSwizzledEnc && maybeSwizzledEnc.getMaxPhase() != 1;
     if (failed(
             canWriteCoalesced(rewriter, op, srcTy, dstTy, vec, hasSwizzling))) {
       return failure();
@@ -895,15 +923,13 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto flatDstTy = dstTy;
     SmallVector<Value> swizzledLaneOffsets;
     if (hasSwizzling) {
-      auto dstEnc = cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
       auto flatSharedEnc = SwizzledSharedEncodingAttr::get(
-          op->getContext(), dstEnc.getVec(), 1, 1, dstEnc.getOrder(),
-          dstEnc.getCTALayout());
+          op->getContext(), maybeSwizzledEnc.getVec(), 1, 1,
+          maybeSwizzledEnc.getOrder(), maybeSwizzledEnc.getCTALayout());
       flatDstTy = MemDescType::get(dstTy.getShape(), dstTy.getElementType(),
                                    flatSharedEnc, dstTy.getMemorySpace());
-      swizzledLaneOffsets =
-          emitSwizzledLaneOffsets(rewriter, op, srcTy, dstTy, flatDstTy,
-                                  hasSwizzling, llDst, resElemTy, vec);
+      swizzledLaneOffsets = emitSwizzledLaneOffsets(
+          rewriter, op, srcTy, dstTy, flatDstTy, llDst, resElemTy, vec);
     }
 
     Type srcPtrTy = srcElems[0].getType();

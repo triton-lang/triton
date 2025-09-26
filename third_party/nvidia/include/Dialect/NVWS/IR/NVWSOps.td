@@ -61,68 +61,111 @@ def NVWS_ArefCreateOp : NVWS_Op<"aref.create", [
   let hasVerifier = 1;
 }
 
-def NVWS_ArefGetEnterOp : NVWS_Op<"aref.get.enter"> {
+def NVWS_ArefBufferOp : NVWS_Op<"aref.buffer", [DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
+  let summary = "Get buffer from aref";
+
+  let arguments = (ins NVWS_ArefType:$aref,
+                        TTG_AsyncToken:$token,
+                        Optional<I32>:$stage);
+  let results = (outs Variadic<TTG_MemDescType>:$buffers);
+  let assemblyFormat = [{
+    $aref (`[` $stage^ `]`)? `,` $token attr-dict
+    `:` type($aref) `,` type($token) `->` type(results)
+  }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$aref, "TypeRange":$bufferTypes, "Value":$token), [{
+      build($_builder, $_state, bufferTypes, aref, token, Value());
+    }]>
+  ];
+}
+
+def NVWS_ArefGetEnterOp : NVWS_Op<"aref.get.enter", [AttrSizedOperandSegments, DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
   let summary = "Enter ArefGet region where the buffer can be used to read data";
   let description = [{ Enter a "region" where you can freely read from the buffer)
                       These ArefGet "regions" can span multiple iterations. }];
 
   let arguments = (ins NVWS_ArefType:$aref,
-                       I32:$stage,
-                       I32:$phase);
+                       Optional<I32>:$stage,
+                       Optional<I32>:$phase);
   let results = (outs Variadic<TTG_MemDescType>:$buffers,
                       TTG_AsyncToken:$token);
   let hasVerifier=1;
   let assemblyFormat = [{
-    $aref `[` $stage `,` $phase `]` attr-dict
+    $aref ( `[` $stage^ `,` $phase `]`)? attr-dict
     `:` type($aref) `->` type(results)
   }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$aref, "TypeRange":$bufferTypes, "Type":$tokenType), [{
+      build($_builder, $_state, bufferTypes, tokenType, aref, Value(), Value());
+    }]>
+  ];
 }
 
-def NVWS_ArefGetExitOp : NVWS_Op<"aref.get.exit"> {
+def NVWS_ArefGetExitOp : NVWS_Op<"aref.get.exit", [DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
   let summary = "Exit ArefGet region, where the buffer should no longer be used";
   let description = [{ Leave the region where you can freely read from the buffer).
                       These ArefGet "regions" can span multiple iterations. }];
 
   let arguments = (ins NVWS_ArefType:$aref,
                        TTG_AsyncToken:$token,
-                       I32:$stage,
+                       Optional<I32>:$stage,
                        NVWS_AsyncOpArrayAttr:$async_ops);
   let assemblyFormat = [{
-    $aref `[` $stage `]` `,` $token $async_ops attr-dict
+    $aref (`[` $stage^ `]`)? `,` $token $async_ops attr-dict
     `:` type($aref) `,` type($token)
  }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$aref, "Value":$token, "ArrayAttr":$async_ops), [{
+      build($_builder, $_state, aref, token, Value(), async_ops);
+    }]>
+  ];
 }
 
-def NVWS_ArefPutEnterOp : NVWS_Op<"aref.put.enter"> {
+def NVWS_ArefPutEnterOp : NVWS_Op<"aref.put.enter", [AttrSizedOperandSegments, DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
   let summary = "Enter ArefPut region where the buffer can be used to read data";
   let description = [{ Enter a "region" where you can freely write to the buffer)
                       These ArefPut "regions" can span multiple iterations. }];
 
   let arguments = (ins NVWS_ArefType:$aref,
-                       I32:$stage,
-                       I32:$phase);
+                       Optional<I32>:$stage,
+                       Optional<I32>:$phase);
   let results = (outs Variadic<TTG_MemDescType>:$buffers,
                       TTG_AsyncToken:$token);
   let hasVerifier=1;
   let assemblyFormat = [{
-    $aref `[` $stage `,` $phase `]` attr-dict
+    $aref ( `[` $stage^ `,` $phase `]`)? attr-dict
     `:` type($aref) `->` type(results)
   }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$aref, "TypeRange":$bufferTypes, "Type":$tokenType), [{
+      build($_builder, $_state, bufferTypes, tokenType, aref, Value(), Value());
+    }]>
+  ];
 }
 
-def NVWS_ArefPutExitOp : NVWS_Op<"aref.put.exit"> {
+def NVWS_ArefPutExitOp : NVWS_Op<"aref.put.exit", [DeclareOpInterfaceMethods<NVWS_ArefStageInterface>]> {
   let summary = "Exit ArefPut region, where the buffer should no longer be used";
   let description = [{ Leave the region where you can freely write to the buffer).
                       These ArefPut "regions" can span multiple iterations. }];
 
   let arguments = (ins NVWS_ArefType:$aref,
                        TTG_AsyncToken:$token,
-                       I32:$stage,
+                       Optional<I32>:$stage,
                        NVWS_AsyncOpArrayAttr:$async_ops);
   let assemblyFormat = [{
-    $aref`[` $stage `]` `,` $token  $async_ops attr-dict
+    $aref (`[` $stage^ `]`)? `,` $token  $async_ops attr-dict
     `:` type($aref) `,` type($token)
  }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$aref, "Value":$token, "ArrayAttr":$async_ops), [{
+      build($_builder, $_state, aref, token, Value(), async_ops);
+    }]>
+  ];
 }
 
 def NVWS_WarpGroupOp : NVWS_Op<"warp_group", [

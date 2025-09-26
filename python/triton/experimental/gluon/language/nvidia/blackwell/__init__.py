@@ -10,11 +10,11 @@ from triton.experimental.gluon.language._semantic import _check
 
 from . import tma
 from ..hopper import fence_async_shared, mbarrier
-from ..ampere import async_copy
+from ..ampere import async_copy, mma_v2
 
+from triton._C.libtriton import ir
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
-    from triton._C.libtriton import gluon_ir as ir
     from ..._semantic import GluonSemantic
 
 __all__ = [
@@ -26,6 +26,7 @@ __all__ = [
     "tensor_memory_descriptor",
     "TensorMemoryLayout",
     "tma",
+    "mma_v2",
 ]
 
 
@@ -36,30 +37,56 @@ class TensorMemoryLayout:
 
     Args:
         block (Tuple[int, int]): Tiling block dimensions (M/rows, N/cols).
-        unpacked (bool): For sub-32 bit elements, whether they are unpacked to 32 bits.
+        col_stride (int): Number of 32-bit columns to advance between logically
+            adjacent columns. Packed layouts use a stride of 1. Unpacked
+            layouts use ``32 / bitwidth``.
         cta_split_num (Optional[Tuple[int, int]]): CTA split factors. Defaults to None.
     """
     block: Tuple[int, int]
-    unpacked: bool
+    col_stride: int
     cta_split_num: Optional[Tuple[int, int]] = None
 
     def __post_init__(self):
         assert len(self.block) == 2
         assert self.cta_split_num is None or len(self.cta_split_num) == 2
+        assert self.col_stride >= 1 and (self.col_stride &
+                                         (self.col_stride - 1)) == 0, "tensor memory col_stride must be a power of two"
 
     def _to_ir(self, builder):
         cta_split_num = self.cta_split_num or [1, 1]
         return builder.get_tensor_memory_layout(
             self.block,
-            self.unpacked,
+            self.col_stride,
             cta_split_num,
         )
 
     def mangle(self) -> str:
         block_str = f"{self.block[0]}x{self.block[1]}"
-        unpacked_str = "U" if self.unpacked else "P"
+        stride_str = f"C{self.col_stride}"
+        cta_split_str = (f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else "")
+        return f"TL{block_str}{stride_str}{cta_split_str}TL"
+
+
+@dataclass(frozen=True, eq=True)
+class TensorMemoryScalesLayout:
+    """
+    Describes the layout for tensor memory scales in Blackwell architecture.
+
+    Args:
+        cta_split_num (Optional[Tuple[int, int]]): CTA split factors. Defaults to None.
+    """
+    cta_split_num: Optional[Tuple[int, int]] = None
+
+    def __post_init__(self):
+        assert self.cta_split_num is None or len(self.cta_split_num) == 2
+
+    def _to_ir(self, builder):
+        cta_split_num = self.cta_split_num or [1, 1]
+        return builder.get_tensor_memory_scales_layout(cta_split_num, )
+
+    def mangle(self) -> str:
         cta_split_str = f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else ""
-        return f"TL{block_str}{unpacked_str}{cta_split_str}TL"
+        return f"TLS{cta_split_str}TLS"
 
 
 @constexpr_function
@@ -115,7 +142,7 @@ class tensor_memory_descriptor_type(base_type):
         self.shape = shape
         self.layout = layout
         self.alloc_shape = alloc_shape
-        assert isinstance(layout, TensorMemoryLayout)
+        assert isinstance(layout, TensorMemoryLayout) or isinstance(layout, TensorMemoryScalesLayout)
 
     def to_ir(self, builder: GluonOpBuilder) -> None:
         return builder.get_tensor_mem_desc_ty(
@@ -228,8 +255,11 @@ class tensor_memory_descriptor(base_value):
         _check(isinstance(length, int), lambda: "length must be a constant int")
         shape = self.shape[:-1] + [length]
         layout = self.type.layout
-        layout = TensorMemoryLayout((layout.block[0], min(layout.block[1], length)), layout.unpacked,
-                                    layout.cta_split_num)
+        layout = TensorMemoryLayout(
+            (layout.block[0], min(layout.block[1], length)),
+            layout.col_stride,
+            layout.cta_split_num,
+        )
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
         builder = _semantic.builder
         ret.handle = builder.create_tmem_subslice(ret.type.to_ir(builder), self.handle, start)
@@ -302,6 +332,23 @@ def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None
 
 
 @builtin
+def tcgen05_copy(src, dst, _semantic=None):
+    """
+    Start an asynchronous copy from shared memory to tensor memory.
+
+    WARNING: The current semantics of the instruction are not well defined and
+    the API will change in the future. Use at your own risk.
+
+    Args:
+        src (shared_memory_descriptor): Shared memory to copy from.
+        dst (tensor_memory_descriptor): Tensor memory to copy to.
+    """
+    assert isinstance(src, ttgl.shared_memory_descriptor), "source must be a shared memory descriptor"
+    assert isinstance(dst, tensor_memory_descriptor), "destination must be a tensor memory descriptor"
+    _semantic.builder.create_tmem_copy(src.handle, dst.handle)
+
+
+@builtin
 def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_preds=None, _semantic=None):
     """
     Emit a 5th generation TensorCore MMA instruction.
@@ -337,4 +384,12 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
 
 @builtin
 def tcgen05_commit(barrier, _semantic=None):
+    """
+    This instruction causes the provided mbarrier to be arrived-on with a count
+    of 1 when all async tcgen05 MMA and copy instructions previously issued by
+    the thread are complete.
+
+    Args:
+        barrier (shared_memory_descriptor): The barrier to track completion of tcgen05 MMA and copy instructions.
+    """
     _semantic.builder.create_tcgen05_commit(barrier.handle)

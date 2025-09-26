@@ -5,7 +5,7 @@
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100"} {
 
@@ -123,12 +123,12 @@ tt.func @sink_alloc_op(%arg0: tensor<128x128xf32, #blocked1>) {
   %subview0 = ttg.memdesc_index %alloc0[%c0] : !ttg.memdesc<1x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   // CHECK: [[ALLOC1:%.+]] = ttng.tmem_alloc
   %alloc1 = ttng.tmem_alloc : () -> !ttg.memdesc<1x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-  // CHECK-NEXT: [[SUBVIEW1:%.+]] = ttg.memdesc_index [[ALLOC1]]
+  // CHECK: [[SUBVIEW1:%.+]] = ttg.memdesc_index [[ALLOC1]]
   %subview1 = ttg.memdesc_index %alloc1[%c0] : !ttg.memdesc<1x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   // CHECK-NEXT: tmem_store %arg0, [[SUBVIEW1]]
   ttng.tmem_store %arg0, %subview1, %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   // CHECK-NEXT: [[ALLOC0:%.+]] = ttng.tmem_alloc
-  // CHECK-NEXT: [[SUBVIEW0:%.+]] = ttg.memdesc_index [[ALLOC0]]
+  // CHECK: [[SUBVIEW0:%.+]] = ttg.memdesc_index [[ALLOC0]]
   // CHECK-NEXT: tmem_store %arg0, [[SUBVIEW0]]
   ttng.tmem_store %arg0, %subview0, %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   tt.return

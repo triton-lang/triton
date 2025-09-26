@@ -8,11 +8,12 @@ namespace py = pybind11;
 #define FOR_EACH_2(MACRO, X, ...) MACRO(X) FOR_EACH_1(MACRO, __VA_ARGS__)
 #define FOR_EACH_3(MACRO, X, ...) MACRO(X) FOR_EACH_2(MACRO, __VA_ARGS__)
 #define FOR_EACH_4(MACRO, X, ...) MACRO(X) FOR_EACH_3(MACRO, __VA_ARGS__)
+#define FOR_EACH_5(MACRO, X, ...) MACRO(X) FOR_EACH_4(MACRO, __VA_ARGS__)
 
 #define FOR_EACH_NARG(...) FOR_EACH_NARG_(__VA_ARGS__, FOR_EACH_RSEQ_N())
 #define FOR_EACH_NARG_(...) FOR_EACH_ARG_N(__VA_ARGS__)
-#define FOR_EACH_ARG_N(_1, _2, _3, _4, N, ...) N
-#define FOR_EACH_RSEQ_N() 4, 3, 2, 1, 0
+#define FOR_EACH_ARG_N(_1, _2, _3, _4, _5, N, ...) N
+#define FOR_EACH_RSEQ_N() 5, 4, 3, 2, 1, 0
 
 #define CONCATENATE(x, y) CONCATENATE1(x, y)
 #define CONCATENATE1(x, y) x##y
@@ -42,12 +43,14 @@ void init_triton_interpreter(pybind11::module &&m);
 void init_triton_passes(pybind11::module &&m);
 void init_triton_stacktrace_hook(pybind11::module &m);
 void init_gluon_ir(pybind11::module &&m);
+void init_native_specialize(pybind11::module &m);
 FOR_EACH_P(DECLARE_BACKEND, TRITON_BACKENDS_TUPLE)
 
 PYBIND11_MODULE(libtriton, m) {
   m.doc() = "Python bindings to the C++ Triton API";
   init_triton_stacktrace_hook(m);
   init_triton_env_vars(m);
+  init_native_specialize(m);
   init_triton_ir(m.def_submodule("ir"));
   init_triton_passes(m.def_submodule("passes"));
   init_triton_interpreter(m.def_submodule("interpreter"));
