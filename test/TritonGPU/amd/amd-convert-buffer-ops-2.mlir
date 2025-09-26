@@ -4,7 +4,7 @@
 //////////////////////////////////////////////////////////////////////////////
 //
 //   This file contains lit tests primarily for buffer-ops conversion for
-// small-tensor (size <= 2G) with skip-small-tensor-ofst-analysis being off
+// small-tensor (size <= 2G) with analyze-small-tensor-ofst being off
 // (default value).
 //
 //   The initial revision of this file is copied from amd-convert-buffer-ops.mlir
