@@ -19,7 +19,8 @@ Operation *createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
 Value expandOuterSlicedDim(OpBuilder &b, Location loc, Value tensor);
 TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
                                                   Location loc, int64_t val,
-                                                  RankedTensorType tensorType);
+                                                  RankedTensorType tensorType,
+                                                  bool isSigned = false);
 FuncOp getEntryPoint(ModuleOp module);
 gpu::DistributedEncodingTrait
 getSingleDimSliceEncoding(gpu::BlockedEncodingAttr encoding, int dim);
@@ -43,8 +44,11 @@ struct AuxDataMap {
     Region *getEnclosingParitionOrFunctionRegion(Operation *op);
   };
 
+  // Please see TritonInstrumentOps.td for more information on the auxiliary
+  // data structures.
   RegionToValueMap buffers[numMemTypes];
   RegionToValueMap barriers;
+  RegionToValueMap barrierStates;
 
   RegionToValueMap writeVisibility[numMemTypes];
   RegionToValueMap writeTracking[numMemTypes];
@@ -53,6 +57,7 @@ struct AuxDataMap {
   RegionToValueMap asyncCpCommits;
   RegionToValueMap wgmmaCommits;
   RegionToValueMap lock;
+  RegionToValueMap waiting;
 
   void populateAndPassToWarpSpecialize(ModuleOp module);
 
