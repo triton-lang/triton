@@ -246,6 +246,7 @@ public:
   }
 
   unsigned getContiguity(Value value);
+  std::pair<unsigned, ColumnAction> getContiguityWithPermutation(Value value);
   unsigned getAlignment(Value value);
 
   // Overloads of the above methods but have separated elementBitWidth to
@@ -259,6 +260,8 @@ public:
   // the contiguity on the offsets but use the pointee element type bit width
   // instead of the offset element type bit width for alignment
   unsigned getContiguity(Value offsetsValue, unsigned elementBitWidth);
+  std::pair<unsigned, ColumnAction>
+  getContiguityWithPermutation(Value offsetsValue, unsigned elementBitWidth);
   unsigned getAlignment(Value offsetsValue, unsigned elementBitWidth);
 
   unsigned getMaskAlignment(Value mask);
