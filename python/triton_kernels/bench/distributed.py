@@ -494,7 +494,8 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
         routing_data,
         gather_indx,
         scatter_indx,
-        ReduceScatterMetadata(input_split_sizes=output_split_sizes, ep_indx=ep_indx, EP=EP, TP=TP, comm=CommKernelType.TRITON),
+        ReduceScatterMetadata(input_split_sizes=output_split_sizes, ep_indx=ep_indx, EP=EP, TP=TP,
+                              comm=CommKernelType.TRITON),
     )
 
 
@@ -621,8 +622,7 @@ def test_reduce_ep(TP, EP, n_tokens, hidden_size, n_expt_act):
     dim = 0
     ret = _reduce_ep_triton(metadata, input_tensor, output_list, world_size, dim, op, original_dtype,
                             intermediate_dtype)
-    ref = _reduce_ep_torch(metadata, input_tensor, output_list, world_size, dim, op, original_dtype,
-                           intermediate_dtype)
+    ref = _reduce_ep_torch(metadata, input_tensor, output_list, world_size, dim, op, original_dtype, intermediate_dtype)
     torch.testing.assert_close(ret, ref)
 
 
