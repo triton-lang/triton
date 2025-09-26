@@ -1382,21 +1382,14 @@ def test_deadlock_overarrival(device, run_wrapper):
     triton.set_allocator(alloc_fn)
 
     @gluon.jit
-    def ws_default(bar):
-        mbarrier.arrive(bar.index(1), count=1)
-        mbarrier.arrive(bar.index(1), count=1)
-        mbarrier.wait(bar.index(0), phase=0)
-
-    @gluon.jit
-    def ws_1(bar):
-        mbarrier.wait(bar.index(1), phase=0)
-
-    @gluon.jit
     def kernel():
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [2, 1], mbarrier.MBarrierLayout())
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1, 1], mbarrier.MBarrierLayout())
         mbarrier.init(bar.index(0), count=1)
         mbarrier.init(bar.index(1), count=1)
-        ttgl.warp_specialize((bar, ), ws_default, (bar, ), [ws_1], [4], [32])
+
+        mbarrier.arrive(bar.index(0), count=1)
+        mbarrier.arrive(bar.index(0), count=1)
+        mbarrier.wait(bar.index(0), phase=0)
 
     kernel[(1, )](num_warps=4)
 
