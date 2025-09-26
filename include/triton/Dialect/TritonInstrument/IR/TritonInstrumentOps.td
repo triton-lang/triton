@@ -534,4 +534,41 @@ def TTI_ExperimentalClearWaitingOp : TTI_Op<"experimental_clear_waiting", [Memor
   }];
 }
 
+
+// ===== Visibility replication ops =====
+
+def TTI_ExperimentalCopyWriteVisibilityOp : TTI_Op<"experimental_copy_write_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "replicate write visibility from one thread to others";
+  let description = [{
+    Copy the write-visibility bit of sourceThread to every thread listed in destMask for all buffers. Destination bits are overwritten.
+  }];
+  let arguments = (ins
+    I32Attr:$sourceThread,
+    I64Attr:$destMask,
+    TT_PtrLike:$writeVisibility,
+    TypeAttr:$writeVisibilityType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $sourceThread `,` $destMask `{` $writeVisibility `(` $writeVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($writeVisibility)
+  }];
+}
+
+def TTI_ExperimentalCopyReadVisibilityOp : TTI_Op<"experimental_copy_read_visibility", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+  let summary = "replicate read visibility rows from one thread to others";
+  let description = [{
+    Copy the read-visibility row of sourceThread to every thread listed in destMask for all buffers. Destination rows are overwritten.
+  }];
+  let arguments = (ins
+    I32Attr:$sourceThread,
+    I64Attr:$destMask,
+    TT_PtrLike:$readVisibility,
+    TypeAttr:$readVisibilityType,
+    Optional<I1>:$pred
+  );
+  let assemblyFormat = [{
+    $sourceThread `,` $destMask `{` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($readVisibility)
+  }];
+}
+
 #endif // TRITONINSTRUMENT_OPS

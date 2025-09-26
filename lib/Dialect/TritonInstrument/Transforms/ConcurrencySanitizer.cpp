@@ -157,6 +157,30 @@ private:
 
       instrumentMemEffects(b, op, thread);
 
+      if (auto wsOp = dyn_cast<ttg::WarpSpecializeOp>(op)) {
+        auto partitionRegions = wsOp.getPartitionRegions();
+        if (!partitionRegions.empty()) {
+          uint64_t destMask = 0;
+          for (size_t idx = 0, e = partitionRegions.size(); idx < e; ++idx)
+            destMask |= getThreadPeersMask(idx + 1);
+          if (destMask) {
+            for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
+              auto writeVis = auxData.writeVisibility[(int)memType][op];
+              if (writeVis.value) {
+                b.create<tti::ExperimentalCopyWriteVisibilityOp>(
+                    thread, static_cast<int64_t>(destMask), writeVis.value,
+                    writeVis.type, nullptr);
+              }
+              auto readVis = auxData.readVisibility[(int)memType][op];
+              if (readVis.value) {
+                b.create<tti::ExperimentalCopyReadVisibilityOp>(
+                    thread, static_cast<int64_t>(destMask), readVis.value,
+                    readVis.type, nullptr);
+              }
+            }
+          }
+        }
+      }
       if (auto initOp = dyn_cast<ttng::InitBarrierOp>(op)) {
         if (auxData.barriers[op].value && auxData.barrierStates[op].value) {
           b.create<tti::ExperimentalInitBarrierStateOp>(

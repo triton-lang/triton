@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include <limits>
 
 namespace {
 
@@ -511,6 +512,109 @@ struct SetReadVisibilityOpConversion
   }
 };
 
+struct CopyWriteVisibilityOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalCopyWriteVisibilityOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalCopyWriteVisibilityOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+
+    RankedTensorType writeVisibilityType =
+        cast<RankedTensorType>(op.getWriteVisibilityType());
+    Value writeVisibility =
+        tti::createLoadScratchMemory(b, loc, op.getWriteVisibility(),
+                                     writeVisibilityType)
+            ->getResult(0);
+
+    constexpr uint64_t fullMask =
+        tti::THREADS_BITMASK_SIZE >= 64
+            ? std::numeric_limits<uint64_t>::max()
+            : ((1ull << tti::THREADS_BITMASK_SIZE) - 1);
+    uint64_t destMaskVal = static_cast<uint64_t>(op.getDestMask());
+    uint64_t clearMaskVal = fullMask & ~destMaskVal;
+
+    Value destMaskTensor = tti::createConstIntTensor(
+        b, loc, static_cast<int64_t>(destMaskVal), writeVisibilityType);
+    Value clearMaskTensor = tti::createConstIntTensor(
+        b, loc, static_cast<int64_t>(clearMaskVal), writeVisibilityType);
+    Value cleared =
+        b.create<arith::AndIOp>(loc, writeVisibility, clearMaskTensor);
+
+    uint64_t sourceMaskVal = 1ull << op.getSourceThread();
+    Value sourceMaskTensor = tti::createConstIntTensor(
+        b, loc, static_cast<int64_t>(sourceMaskVal), writeVisibilityType);
+    Value zeroTensor =
+        tti::createConstIntTensor(b, loc, 0, writeVisibilityType);
+    Value sourceBits =
+        b.create<arith::AndIOp>(loc, writeVisibility, sourceMaskTensor);
+    Value sourceIsSet = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
+                                                sourceBits, zeroTensor);
+    Value replicated =
+        b.create<arith::SelectOp>(loc, sourceIsSet, destMaskTensor, zeroTensor);
+
+    Value updated = b.create<arith::OrIOp>(loc, cleared, replicated);
+    tti::createStoreScratchMemory(b, loc, op.getWriteVisibility(), updated,
+                                  writeVisibilityType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct CopyReadVisibilityOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalCopyReadVisibilityOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalCopyReadVisibilityOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+
+    RankedTensorType readVisibilityType =
+        cast<RankedTensorType>(op.getReadVisibilityType());
+    Value readVisibility =
+        tti::createLoadScratchMemory(b, loc, op.getReadVisibility(),
+                                     readVisibilityType)
+            ->getResult(0);
+
+    Value zeroTensor = tti::createConstIntTensor(b, loc, 0, readVisibilityType);
+    Value destMaskTensor =
+        createMultiColumnMask(b, loc, op.getDestMask(), readVisibilityType);
+
+    Value cleared = b.create<arith::SelectOp>(loc, destMaskTensor, zeroTensor,
+                                              readVisibility);
+
+    Value sourceColumnMask =
+        createColumnMask(b, loc, op.getSourceThread(), readVisibilityType);
+    Value sourceColumn = b.create<arith::SelectOp>(loc, sourceColumnMask,
+                                                   readVisibility, zeroTensor);
+    Value sourceVector = createOrReduce(b, loc, sourceColumn, /*axis=*/1);
+    Value broadcastRow =
+        convertAndBroadcast(b, loc, sourceVector, 1, readVisibilityType);
+    Value replicated = b.create<arith::SelectOp>(loc, destMaskTensor,
+                                                 broadcastRow, zeroTensor);
+
+    Value updated = b.create<arith::OrIOp>(loc, cleared, replicated);
+    tti::createStoreScratchMemory(b, loc, op.getReadVisibility(), updated,
+                                  readVisibilityType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
 struct ClearWriteTrackingOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalClearWriteTrackingOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -876,6 +980,7 @@ struct VerifyWriteVisibilityOpConversion
         loc, arith::CmpIPredicate::eq, bufferHasVisibility, bufferThreadBit);
     Value writeVisible =
         b.create<arith::OrIOp>(loc, noOneIsWriting, bufferHasVisibility);
+
     std::string message = "Buffer being accessed has outstanding writes.";
     if (!op.getOperandName().str().empty()) {
       message += " Operand: " + op.getOperandName().str();
@@ -1570,6 +1675,8 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<LockReleaseOpConversion>(typeConverter);
   patterns.add<SetWriteVisibilityOpConversion>(typeConverter);
   patterns.add<SetReadVisibilityOpConversion>(typeConverter);
+  patterns.add<CopyWriteVisibilityOpConversion>(typeConverter);
+  patterns.add<CopyReadVisibilityOpConversion>(typeConverter);
   patterns.add<ClearWriteTrackingOpConversion>(typeConverter);
   patterns.add<ClearReadVisibilityOpConversion>(typeConverter);
   patterns.add<ClearReadTrackingOpConversion>(typeConverter);
