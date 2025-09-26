@@ -3932,3 +3932,53 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.th
     tt.return
   }
 }
+
+// -----
+
+// There was previously a bug where one of the layout conversions would be
+// incorrectly reused during backward rematerialization as an operand to an
+// instruction that preceded it.
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @kernel(%arg0: !tt.ptr<f32>) -> (tensor<8xf32, #blocked>, tensor<8xf32, #blocked>, tensor<8xf32, #blocked>) attributes {noinline = false} {
+    %0 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32, #blocked1>
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>, #blocked1>
+    %2 = tt.addptr %1, %0 : tensor<8x!tt.ptr<f32>, #blocked1>, tensor<8xi32, #blocked1>
+    %3 = tt.load %2 : tensor<8x!tt.ptr<f32>, #blocked1>
+    %4 = math.exp %3 : tensor<8xf32, #blocked1>
+    %5 = math.exp %4 : tensor<8xf32, #blocked1>
+    %6 = math.exp %5 : tensor<8xf32, #blocked1>
+    %7 = math.exp %6 : tensor<8xf32, #blocked1>
+    %8 = math.exp %7 : tensor<8xf32, #blocked1>
+    %9 = math.exp %8 : tensor<8xf32, #blocked1>
+    %10 = math.exp %9 : tensor<8xf32, #blocked1>
+    %11 = math.exp %10 : tensor<8xf32, #blocked1>
+    %12 = math.exp %11 : tensor<8xf32, #blocked1>
+    %13 = math.exp %12 : tensor<8xf32, #blocked1>
+    %14 = math.exp %13 : tensor<8xf32, #blocked1>
+    %15 = math.exp %14 : tensor<8xf32, #blocked1>
+    %16 = math.exp %15 : tensor<8xf32, #blocked1>
+    %17 = math.exp %16 : tensor<8xf32, #blocked1>
+    %18 = math.exp %17 : tensor<8xf32, #blocked1>
+    %19 = math.exp %18 : tensor<8xf32, #blocked1>
+    %20 = math.exp %19 : tensor<8xf32, #blocked1>
+    // %21 is too expensive to rematerialize, so we just record a mapping
+    // %19 -> %21 for future rematerializations.
+    %21 = ttg.convert_layout %19 : tensor<8xf32, #blocked1> -> tensor<8xf32, #blocked>
+    // %22 is just below the cost threshold, so we rematerialize the whole chain ending in %18.
+    %22 = ttg.convert_layout %18 : tensor<8xf32, #blocked1> -> tensor<8xf32, #blocked>
+    // Now that %18 is rematerialized in blocked1, the chain ending %20 is cheap
+    // enough to rematerialize. However, when rematerializing %19 as part of
+    // this chain, we must not consider %21, as it does not dominate %20.
+    %23 = ttg.convert_layout %20 : tensor<8xf32, #blocked1> -> tensor<8xf32, #blocked>
+    tt.return %21, %22, %23 : tensor<8xf32, #blocked>, tensor<8xf32, #blocked>, tensor<8xf32, #blocked>
+  }
+}
+
+// Only one layout conversion remains after optimization.
+// TODO: We should be able to eliminate all three by visiting the conversions
+// in the program order of their source operations, or by iterating to a fixed
+// point.
+// CHECK: ttg.convert_layout
+// CHECK-NOT: ttg.convert_layout
