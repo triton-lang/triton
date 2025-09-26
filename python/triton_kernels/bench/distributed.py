@@ -121,8 +121,8 @@ def _reduce_ep_torch(metadata: ReduceScatterMetadata, input_tensor: torch.Tensor
 
 
 @triton.jit
-def _prepare_ep_positions_kernel(ep_indx_ptr, positions_ptr, n_tokens, n_expts,
-                                 BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_E: tl.constexpr):
+def _prepare_ep_positions_kernel(ep_indx_ptr, positions_ptr, n_tokens, n_expts, BLOCK_SIZE_M: tl.constexpr,
+                                 BLOCK_SIZE_E: tl.constexpr):
     ep_idx = tl.program_id(0)
     token_offsets = tl.arange(0, BLOCK_SIZE_M)
     expert_offsets = tl.arange(0, BLOCK_SIZE_E)
@@ -143,11 +143,7 @@ def _prepare_ep_positions_kernel(ep_indx_ptr, positions_ptr, n_tokens, n_expts,
         row_has_ep_i32 = row_has_ep.to(tl.int32)
         prefix = tl.cumsum(row_has_ep_i32, axis=0) - row_has_ep_i32
         positions = tl.where(row_has_ep, base + prefix, -1)
-        tl.store(
-            positions_ptr + ep_idx * n_tokens + offs_m,
-            positions,
-            mask=token_mask
-        )
+        tl.store(positions_ptr + ep_idx * n_tokens + offs_m, positions, mask=token_mask)
         increment = tl.sum(row_has_ep_i32, axis=0)
         base = base + increment
 
@@ -168,15 +164,14 @@ def _accumulate_ep_metadata(grid, kernel, args):
 
 @triton.jit(launch_metadata=_accumulate_ep_metadata)
 def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs, n_tokens, hidden_size,
-                                 TP: tl.constexpr, EP: tl.constexpr,
-                                 BLOCK_SIZE_N: tl.constexpr,
+                                 TP: tl.constexpr, EP: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
                                  original_dtype: tl.constexpr, intermediate_dtype: tl.constexpr):
     offs_m = tl.program_id(0)
     token_mask = offs_m < n_tokens
     offs_n = tl.arange(0, BLOCK_SIZE_N)
     feature_mask = offs_n < hidden_size
     io_mask = token_mask[:] & feature_mask
-    output = tl.zeros((BLOCK_SIZE_N,), dtype=intermediate_dtype)
+    output = tl.zeros((BLOCK_SIZE_N, ), dtype=intermediate_dtype)
 
     for ep_idx in tl.static_range(EP):
         position = tl.load(
@@ -223,7 +218,7 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
     BLOCK_SIZE_E = triton.next_power_of_2(n_expts if n_expts > 0 else 1)
 
     # XXX(Keren): Do not over optimize this function for now, as the communication interface (all-to-all) is subject to change.
-    _prepare_ep_positions_kernel[(metadata.EP,)](
+    _prepare_ep_positions_kernel[(metadata.EP, )](
         ep_indx,
         positions,
         n_tokens,
@@ -233,7 +228,7 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
         num_warps=16 if n_tokens >= 2048 else 8,
     )  # type: ignore
 
-    _accumulate_ep_triton_kernel[(n_tokens,)](
+    _accumulate_ep_triton_kernel[(n_tokens, )](
         positions,
         output_tensor,
         tuple(output_list),
@@ -247,7 +242,6 @@ def _reduce_ep_triton(metadata: ReduceScatterMetadata, input_tensor: torch.Tenso
     )
 
     return output_tensor
-
 
 
 def reduce_scatter(
@@ -623,11 +617,10 @@ def test_reduce_ep(TP, EP, n_tokens, hidden_size, n_expt_act):
     )
 
     op = dist.ReduceOp.SUM
-    dim = 0 
-    ret = _reduce_ep_triton(metadata, input_tensor, output_list, world_size,
-                            dim, op, original_dtype, intermediate_dtype)
-    ref = _reduce_ep_torch(metadata, input_tensor, output_list, world_size,
-                           dim, op, original_dtype, intermediate_dtype)
+    dim = 0
+    ret = _reduce_ep_triton(metadata, input_tensor, output_list, world_size, dim, op, original_dtype,
+                            intermediate_dtype)
+    ref = _reduce_ep_torch(metadata, input_tensor, output_list, world_size, dim, op, original_dtype, intermediate_dtype)
     torch.testing.assert_close(ret, ref)
 
 
