@@ -188,7 +188,7 @@ def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs
                 values = tl.load(
                     input_ptrs[tl.constexpr(ep_idx * TP + tp_idx)] + col_offsets,
                     mask=io_mask,
-                    other=0,
+                    other=0.0,
                 ).to(intermediate_dtype)
                 output += values
 
