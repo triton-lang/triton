@@ -1,6 +1,7 @@
 import torch
 import triton
 import triton.language as tl
+import argparse
 
 size = 4096
 x = torch.rand(size, device='cuda')
@@ -28,6 +29,12 @@ def add_kernel(
     tl.store(output_ptr + offsets, output)
 
 
-pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
-amdgcn = pgm.asm['amdgcn']
-print(amdgcn)
+parser = argparse.ArgumentParser()
+parser.add_argument("mode", choices=["warmup", "launch"])
+args = parser.parse_args()
+if args.mode == "warmup":
+    add_kernel.warmup(x, y, output, n_elements, BLOCK_SIZE=1024, grid=grid)
+else:  # launch
+    pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    amdgcn = pgm.asm['amdgcn']
+    print(amdgcn)
