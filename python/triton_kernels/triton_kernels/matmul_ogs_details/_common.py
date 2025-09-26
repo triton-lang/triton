@@ -106,7 +106,7 @@ def _load_tile_attrs(tile_id, num_tiles, unpadded_m, grid_n, M, K, ExptData, Exp
             expt_id, pid_z, pid_z_out, start_m, block_id, eM = pid_e, pid_e, pid_e, 0, pid_m, M
         else:
             tl.static_assert(M is None)
-            expt_data = tl.load(ExptData + pid_m)
+            expt_data = tl.load(ExptData + tl.load(ExptTileOffs) + pid_m)
             expt_id = expt_data & 0x0000FFFF
             block_id = expt_data >> 16
             eM = tl.load(ExptHist + expt_id)

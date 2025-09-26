@@ -218,6 +218,7 @@ def _matmul_ogs(
                          BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K,
                          GROUP_M, XCD_SWIZZLE)
 
+
     # For split-k, advance to the output k slice
     if SPLIT_K > 1:
         Y += pid_k.to( index_type) * stride_y_k
@@ -320,8 +321,8 @@ def _matmul_ogs(
             if is_x_microscaled:
                 mask_x_k_scale = offs_x_k_scale * MX_PACK_DIVISOR < x_k_limit
 
-        x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
-        w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0.0, cache_modifier=W_CACHE_MODIFIER)
+        x = tl.load(XPtrs, mask=mask_k[None, :], other=0.)
+        w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0., cache_modifier=W_CACHE_MODIFIER)
         if is_w_microscaled:
             x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
             w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)

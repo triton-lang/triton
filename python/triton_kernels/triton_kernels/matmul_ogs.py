@@ -289,8 +289,9 @@ def _canonicalize_storage(storage, out_ndim, flex_data):
 
 #
 
-def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor, out_mx_scale: torch.Tensor,
-                   fused_activation, epilogue,
+def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor = None,
+                   out_mx_scale: torch.Tensor = None,
+                   fused_activation: FusedActivation = None, epilogue: Epilogue = None,
                    x_flex: InFlexData | None = None,
                    out_flex: OutFlexData | None = None, x_mx_scale: torch.Tensor | None = None,
                    out_dtype: bool = None, flexpoint_saturate_inf: bool = False):
@@ -333,6 +334,14 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor, out_m
         x_flex = InFlexData()
     if out_flex is None:
         out_flex = OutFlexData()
+    if fused_activation is None:
+        fused_activation = FusedActivation(FnSpecs.default(), tuple(), 1)
+    if epilogue is None:
+        epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
+    if x.ndim < 4:
+        x = x.view((1,) * (4 - x.ndim) + x.shape)
+    if out is None:
+        out = torch.empty((*x.shape[1:-2], num_groups, x.shape[-1]), device=x.device, dtype=x.dtype)
     K = 1 if indx is None else indx.shape[1]
     out_dtype = x.dtype if out_dtype is None else out_dtype
     assert x.shape[-1] % fused_activation.reduction_n == 0
@@ -597,7 +606,6 @@ def matmul_ogs(x, w, bias,
     # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
     # w_transpose = w_storage.data.stride()[-1] != 1
     w_transpose = w_storage.data.stride()[-2] == 1
-
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
