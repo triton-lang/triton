@@ -200,8 +200,19 @@ chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
   assert(enforcedNonKDim != 0 || (M % mDim == 0 && N % nDim == 0));
   // If inputKSize % kDim != 0 (including the case where inputKSize < kDim),
   // this layout will introduce data duplication.
-  if (inputKSize % kDim != 0)
-    return failure();
+  if (inputKSize % kDim != 0) {
+    mlir::emitError(loc)
+      << "MFMA intrinsic selection failed: BLOCK_K=" << inputKSize
+      << " is smaller than or not a multiple of the MFMA kDim requirement ("
+      << kDim << "). "
+      << "Selected MxN=" << mDim << "x" << nDim
+      << ", element types: " << aElemType << " x " << bElemType
+      << ", mfmaVersion=" << mfmaVersion
+      << (withScale ? ", with scale" : "")
+      << (allowXF32 ? ", allowing TF32" : "") << ". "
+      << "Please increase BLOCK_K to be a multiple of " << kDim << ".";
+      return failure();
+  }
   return maybeMfmaIntrinsic;
 }
 
