@@ -1,6 +1,8 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
+#include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+#include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -58,28 +60,19 @@ Value createMemDescToI64(RewriterBase &rewriter, Location loc,
   return b.add(offset, b.ptrtoint(i64Ty, smemObj.getBase()));
 }
 
-Type getBarsElType(OpBuilder &b) { return b.getIntegerType(64); }
-
-RankedTensorType getWriteBarsType(OpBuilder &b, RankedTensorType buffersType) {
-  int size = buffersType.getShape()[0];
-  assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
-  auto tensorType = RankedTensorType::get({size}, getBarsElType(b),
-                                          buffersType.getEncoding());
-  return tensorType;
-}
-
-RankedTensorType getReadBarsType(OpBuilder &b, RankedTensorType buffersType,
-                                 RankedTensorType barriersType) {
-  int size = buffersType.getShape()[0];
-  assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
-  auto tensorType = RankedTensorType::get({size}, getBarsElType(b),
-                                          buffersType.getEncoding());
-  return tensorType;
-}
-
 Value convertAndBroadcast(OpBuilder &b, Location loc, Value tensor, int dim,
-                          ArrayRef<int64_t> shape,
-                          ttg::BlockedEncodingAttr encoding) {
+                          RankedTensorType dstType) {
+  auto shape = dstType.getShape();
+  int j = 0;
+  for (int i = 0; i < shape.size(); i++) {
+    if (i != dim) {
+      assert(shape[i] ==
+                 cast<RankedTensorType>(tensor.getType()).getShape()[j] &&
+             "Expected shape to be the same");
+      j++;
+    }
+  }
+  auto encoding = cast<ttg::BlockedEncodingAttr>(dstType.getEncoding());
   auto tensorType = cast<RankedTensorType>(tensor.getType());
   auto resultType =
       RankedTensorType::get(shape, tensorType.getElementType(), encoding);
@@ -90,6 +83,13 @@ Value convertAndBroadcast(OpBuilder &b, Location loc, Value tensor, int dim,
   tensor = tti::expandOuterSlicedDim(b, loc, tensor);
   tensor = b.create<tt::BroadcastOp>(loc, resultType, tensor);
   return tensor;
+}
+
+Value createConvertLayout(OpBuilder &b, Location loc, Value tensor,
+                          Attribute encoding) {
+  RankedTensorType dstType =
+      cast<RankedTensorType>(tensor.getType()).cloneWithEncoding(encoding);
+  return b.create<ttg::ConvertLayoutOp>(loc, dstType, tensor);
 }
 
 std::tuple<Block *, Block *, Block *>
@@ -113,7 +113,41 @@ createIfBlock(ConversionPatternRewriter &b, Location loc, Value cnd) {
   return {prevBlock, ifBlock, thenBlock};
 }
 
-Value createMaxReduce(OpBuilder &b, Location loc, Value tensor, int axis) {
+Value createOneHot(OpBuilder &b, Location loc, int size, int index,
+                   Attribute encoding) {
+  int start = 0;
+  int end = size;
+  RankedTensorType type =
+      RankedTensorType::get({size}, b.getI32Type(), encoding);
+  Value arange = b.create<tt::MakeRangeOp>(loc, type, start, end);
+  Value indexT = tti::createConstIntTensor(b, loc, index, type);
+  return b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, arange, indexT);
+}
+
+Value createColumnMask(OpBuilder &b, Location loc, int column,
+                       RankedTensorType tensorType) {
+  Attribute encoding = tti::getSingleDimSliceEncoding(
+      cast<ttg::BlockedEncodingAttr>(tensorType.getEncoding()), 1);
+  Value columnMask =
+      createOneHot(b, loc, tensorType.getShape()[1], column, encoding);
+  return convertAndBroadcast(b, loc, columnMask, 0, tensorType);
+}
+
+Value createMultiColumnMask(OpBuilder &b, Location loc, uint64_t columnMask,
+                            RankedTensorType tensorType) {
+  RankedTensorType i1TensorType =
+      cast<RankedTensorType>(tensorType.cloneWith(std::nullopt, b.getI1Type()));
+  Value columnMaskVal = tti::createConstIntTensor(b, loc, 0, i1TensorType);
+  for (int i = 0; i < 64; i++) {
+    if (columnMask & (1ULL << i)) {
+      columnMaskVal = b.create<arith::OrIOp>(
+          loc, columnMaskVal, createColumnMask(b, loc, i, tensorType));
+    }
+  }
+  return columnMaskVal;
+}
+
+Value createOrReduce(OpBuilder &b, Location loc, Value tensor, int axis) {
   OpBuilder::InsertionGuard guard(b);
   auto tensorType = cast<RankedTensorType>(tensor.getType());
   auto reduceOp = b.create<tt::ReduceOp>(loc, std::vector<Value>{tensor}, axis);
@@ -124,9 +158,7 @@ Value createMaxReduce(OpBuilder &b, Location loc, Value tensor, int axis) {
   auto arg0 = block.getArgument(0);
   auto arg1 = block.getArgument(1);
   b.setInsertionPointToStart(&block);
-  auto cmpOp =
-      b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, arg0, arg1);
-  auto result = b.create<arith::SelectOp>(loc, cmpOp, arg0, arg1);
+  auto result = b.create<arith::OrIOp>(loc, arg0, arg1);
   auto returnOp = b.create<tt::ReduceReturnOp>(loc, std::vector<Value>{result});
   return reduceOp->getResult(0);
 }
@@ -282,11 +314,96 @@ struct BufferPointersOpConversion
   }
 };
 
-struct CheckWriteStateOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalCheckWriteStateOp> {
+struct LockAcquireOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalLockAcquireOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  LogicalResult matchAndRewrite(tti::ExperimentalLockAcquireOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    Value lock = op.getLock();
+
+    Type elType = cast<PointerType>(lock.getType()).getPointeeType();
+    assert(elType == b.getI32Type() && "Expected i32 lock element type");
+
+    // Build: do { old = atom.global.acquire.cas.b32 [lock], 0, 1; } while (old
+    // != 0);
+    Block *prevBlock2 = b.getInsertionBlock();
+    Block *whileBlock = b.splitBlock(prevBlock2, b.getInsertionPoint());
+    Block *endBlock = b.splitBlock(whileBlock, whileBlock->begin());
+    b.setInsertionPointToEnd(prevBlock2);
+    Value elect = mlir::LLVM::NVIDIA::createElectPredicateWarp0(loc, b);
+    if (op.getPred()) {
+      elect = b.create<arith::AndIOp>(loc, elect, op.getPred());
+    }
+    b.create<LLVM::CondBrOp>(loc, elect, whileBlock, endBlock);
+
+    b.setInsertionPointToEnd(whileBlock);
+
+    auto i32 = b.getI32Type();
+    Value zero =
+        b.create<arith::ConstantOp>(loc, i32, b.getIntegerAttr(i32, 0));
+    Value one = b.create<arith::ConstantOp>(loc, i32, b.getIntegerAttr(i32, 1));
+
+    // Inline PTX CAS: old = atom.global.acquire.gpu.cas.b32 [lock], 0, 1
+    // Use converted lock pointer from adaptor for addressing
+    PTXBuilder ptx;
+    auto *dstOpr = ptx.newOperand("=r", /*init=*/true);
+    auto *ptrOpr = ptx.newAddrOperand(adaptor.getLock(), "l");
+    auto *cmpOpr = ptx.newOperand(zero, "r");
+    auto *valOpr = ptx.newOperand(one, "r");
+    auto &atom = *ptx.create<PTXInstr>("atom");
+    atom.global().o("acquire").o("gpu").o("cas").o("b32");
+    atom(dstOpr, ptrOpr, cmpOpr, valOpr);
+    Value old = ptx.launch(b, loc, i32);
+
+    // while (old != 0) loop
+    Value cond =
+        b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne, old, zero);
+    b.create<LLVM::CondBrOp>(loc, cond, whileBlock, endBlock);
+
+    b.setInsertionPointToStart(endBlock);
+    b.create<mlir::gpu::BarrierOp>(loc);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct LockReleaseOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalLockReleaseOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  LogicalResult matchAndRewrite(tti::ExperimentalLockReleaseOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    Value lock = op.getLock();
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+
+    Type elType = cast<PointerType>(lock.getType()).getPointeeType();
+    assert(elType == b.getI32Type() && "Expected i32 lock element type");
+
+    b.create<mlir::gpu::BarrierOp>(loc);
+    Value zero =
+        b.create<arith::ConstantOp>(loc, elType, b.getIntegerAttr(elType, 0));
+    b.create<triton::AtomicRMWOp>(loc, elType, RMWOp::XCHG, lock, zero, nullptr,
+                                  MemSemantic::ACQUIRE_RELEASE,
+                                  MemSyncScope::GPU);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct SetWriteVisibilityOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalSetWriteVisibilityOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-  LogicalResult matchAndRewrite(tti::ExperimentalCheckWriteStateOp op,
+  LogicalResult matchAndRewrite(tti::ExperimentalSetWriteVisibilityOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
@@ -297,398 +414,498 @@ struct CheckWriteStateOpConversion
       b.setInsertionPointToStart(ifBlock);
     }
     TypedValue<RankedTensorType> buffers = op.getBuffers();
-    RankedTensorType writeStateType =
-        cast<RankedTensorType>(op.getWriteStateType());
-    Value writeState =
-        tti::createLoadScratchMemory(b, loc, op.getWriteState(), writeStateType)
+    RankedTensorType writeVisibilityType =
+        cast<RankedTensorType>(op.getWriteVisibilityType());
+    Value writeVisibility =
+        tti::createLoadScratchMemory(b, loc, op.getWriteVisibility(),
+                                     writeVisibilityType)
             ->getResult(0);
-    int hwPipelined = op.getHwPipelined() ? 1 : 0;
     Value buf = createMemDescToI64(b, loc, getTypeConverter(),
                                    op.getBuf().getType(), adaptor.getBuf());
-
-    // Gluon pseudo-code:
-    // curr_buf_state = tl.where(bufs == buf, write_state, 0)
-    // curr_buf_state = curr_buf_state >> 1 if hw_pipelined else 0
-    // tl.device_assert(curr_buf_state == ttgl.zeros_like(curr_buf_state),
-    // "Buffer being accessed has outstanding writes")
-
-    Value writeStateZero = tti::createConstIntTensor(b, loc, 0, writeStateType);
     Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
-    Value currBufState = b.create<arith::SelectOp>(loc, buffersEqBuf,
-                                                   writeState, writeStateZero);
-    auto shiftVal =
-        tti::createConstIntTensor(b, loc, hwPipelined, writeStateType);
-    currBufState = b.create<arith::ShRUIOp>(loc, currBufState, shiftVal);
-    Value currBufStateEqZero = b.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::eq, currBufState, writeStateZero);
+    Value threadBit = tti::createConstIntTensor(b, loc, op.getThreadMask(),
+                                                writeVisibilityType);
+    writeVisibility = b.create<arith::SelectOp>(loc, buffersEqBuf, threadBit,
+                                                writeVisibility);
+
+    tti::createStoreScratchMemory(b, loc, op.getWriteVisibility(),
+                                  writeVisibility, writeVisibilityType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct SetReadVisibilityOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalSetReadVisibilityOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalSetReadVisibilityOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    TypedValue<RankedTensorType> buffers = op.getBuffers();
+    RankedTensorType readVisibilityType =
+        cast<RankedTensorType>(op.getReadVisibilityType());
+    Value readVisibility =
+        tti::createLoadScratchMemory(b, loc, op.getReadVisibility(),
+                                     readVisibilityType)
+            ->getResult(0);
+    Value buf = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getBuf().getType(), adaptor.getBuf());
+    Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
+    buffersEqBuf =
+        convertAndBroadcast(b, loc, buffersEqBuf, 1, readVisibilityType);
+    Value threadColumnMask =
+        createMultiColumnMask(b, loc, op.getThreadMask(), readVisibilityType);
+    Value threadBit = tti::createConstIntTensor(b, loc, op.getThreadMask(),
+                                                readVisibilityType);
+    Value readVisibilityOrThreadBit =
+        b.create<arith::OrIOp>(loc, readVisibility, threadBit);
+    Value bufAndThread =
+        b.create<arith::AndIOp>(loc, buffersEqBuf, threadColumnMask);
+    readVisibility = b.create<arith::SelectOp>(
+        loc, bufAndThread, readVisibilityOrThreadBit, readVisibility);
+    tti::createStoreScratchMemory(b, loc, op.getReadVisibility(),
+                                  readVisibility, readVisibilityType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct ClearWriteTrackingOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalClearWriteTrackingOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalClearWriteTrackingOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+
+    TypedValue<RankedTensorType> buffers = op.getBuffers();
+    RankedTensorType writeTrackingType =
+        cast<RankedTensorType>(op.getWriteTrackingType());
+    Value writeTracking = tti::createLoadScratchMemory(
+                              b, loc, op.getWriteTracking(), writeTrackingType)
+                              ->getResult(0);
+    Value buf = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getBuf().getType(), adaptor.getBuf());
+    Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
+    buffersEqBuf =
+        convertAndBroadcast(b, loc, buffersEqBuf, 1, writeTrackingType);
+    Value zero = tti::createConstIntTensor(b, loc, 0, writeTrackingType);
+    writeTracking =
+        b.create<arith::SelectOp>(loc, buffersEqBuf, zero, writeTracking);
+    tti::createStoreScratchMemory(b, loc, op.getWriteTracking(), writeTracking,
+                                  writeTrackingType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct ClearReadVisibilityOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalClearReadVisibilityOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalClearReadVisibilityOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    TypedValue<RankedTensorType> buffers = op.getBuffers();
+    RankedTensorType readVisibilityType =
+        cast<RankedTensorType>(op.getReadVisibilityType());
+    Value readVisibility =
+        tti::createLoadScratchMemory(b, loc, op.getReadVisibility(),
+                                     readVisibilityType)
+            ->getResult(0);
+    Value buf = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getBuf().getType(), adaptor.getBuf());
+    Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
+    buffersEqBuf =
+        convertAndBroadcast(b, loc, buffersEqBuf, 1, readVisibilityType);
+    Value zero = tti::createConstIntTensor(b, loc, 0, readVisibilityType);
+    readVisibility =
+        b.create<arith::SelectOp>(loc, buffersEqBuf, zero, readVisibility);
+    tti::createStoreScratchMemory(b, loc, op.getReadVisibility(),
+                                  readVisibility, readVisibilityType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct ClearReadTrackingOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalClearReadTrackingOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalClearReadTrackingOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    TypedValue<RankedTensorType> buffers = op.getBuffers();
+    RankedTensorType readTrackingType =
+        cast<RankedTensorType>(op.getReadTrackingType());
+    Value readTracking = tti::createLoadScratchMemory(
+                             b, loc, op.getReadTracking(), readTrackingType)
+                             ->getResult(0);
+    Value buf = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getBuf().getType(), adaptor.getBuf());
+    Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
+    buffersEqBuf =
+        convertAndBroadcast(b, loc, buffersEqBuf, 1, readTrackingType);
+    Value zero = tti::createConstIntTensor(b, loc, 0, readTrackingType);
+    readTracking =
+        b.create<arith::SelectOp>(loc, buffersEqBuf, zero, readTracking);
+    tti::createStoreScratchMemory(b, loc, op.getReadTracking(), readTracking,
+                                  readTrackingType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct TrackVisibleWritesOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalTrackVisibleWritesOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalTrackVisibleWritesOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    TypedValue<RankedTensorType> barriers = op.getBarriers();
+    RankedTensorType writeVisibilityType =
+        cast<RankedTensorType>(op.getWriteVisibilityType());
+    Value writeVisibility =
+        tti::createLoadScratchMemory(b, loc, op.getWriteVisibility(),
+                                     writeVisibilityType)
+            ->getResult(0);
+    RankedTensorType writeTrackingType =
+        cast<RankedTensorType>(op.getWriteTrackingType());
+    Value writeTracking = tti::createLoadScratchMemory(
+                              b, loc, op.getWriteTracking(), writeTrackingType)
+                              ->getResult(0);
+    Value bar = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getMbar().getType(), adaptor.getMbar());
+    Value barriersEqBar = createCmpIntTensorScalar(b, loc, barriers, bar);
+    barriersEqBar =
+        convertAndBroadcast(b, loc, barriersEqBar, 0, writeTrackingType);
+    int thread = op.getThread();
+    Value threadBit =
+        tti::createConstIntTensor(b, loc, 1ULL << thread, writeVisibilityType);
+    Value visibleWrites =
+        b.create<arith::AndIOp>(loc, writeVisibility, threadBit);
+    visibleWrites = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                            visibleWrites, threadBit);
+    visibleWrites =
+        convertAndBroadcast(b, loc, visibleWrites, 1, writeTrackingType);
+    Value barAndVisible =
+        b.create<arith::AndIOp>(loc, barriersEqBar, visibleWrites);
+    Value writeTrackingOne =
+        tti::createConstIntTensor(b, loc, 1, writeTrackingType);
+    writeTracking = b.create<arith::SelectOp>(loc, barAndVisible,
+                                              writeTrackingOne, writeTracking);
+    tti::createStoreScratchMemory(b, loc, op.getWriteTracking(), writeTracking,
+                                  writeTrackingType);
+    b.eraseOp(op);
+
+    return success();
+  }
+};
+
+struct TrackVisibleReadsOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalTrackVisibleReadsOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalTrackVisibleReadsOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    TypedValue<RankedTensorType> barriers = op.getBarriers();
+    RankedTensorType readVisibilityType =
+        cast<RankedTensorType>(op.getReadVisibilityType());
+    Value readVisibility =
+        tti::createLoadScratchMemory(b, loc, op.getReadVisibility(),
+                                     readVisibilityType)
+            ->getResult(0);
+    RankedTensorType readTrackingType =
+        cast<RankedTensorType>(op.getReadTrackingType());
+    Value readTracking = tti::createLoadScratchMemory(
+                             b, loc, op.getReadTracking(), readTrackingType)
+                             ->getResult(0);
+    Value bar = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getMbar().getType(), adaptor.getMbar());
+    Value barriersEqBar = createCmpIntTensorScalar(b, loc, barriers, bar);
+    barriersEqBar =
+        convertAndBroadcast(b, loc, barriersEqBar, 0, readTrackingType);
+    Value threadColumnMask =
+        createColumnMask(b, loc, op.getThread(), readVisibilityType);
+    Value readVisibilityZero =
+        tti::createConstIntTensor(b, loc, 0, readVisibilityType);
+    Value visibleReads = b.create<arith::SelectOp>(
+        loc, threadColumnMask, readVisibility, readVisibilityZero);
+    visibleReads = createOrReduce(b, loc, visibleReads, 1);
+    visibleReads =
+        convertAndBroadcast(b, loc, visibleReads, 1, readTrackingType);
+    Value readTrackingOrVisible =
+        b.create<arith::OrIOp>(loc, readTracking, visibleReads);
+    readTracking = b.create<arith::SelectOp>(
+        loc, barriersEqBar, readTrackingOrVisible, readTracking);
+
+    tti::createStoreScratchMemory(b, loc, op.getReadTracking(), readTracking,
+                                  readTrackingType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct TransferVisibleWritesOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalTransferVisibleWritesOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalTransferVisibleWritesOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    TypedValue<RankedTensorType> barriers = op.getBarriers();
+    RankedTensorType writeVisibilityType =
+        cast<RankedTensorType>(op.getWriteVisibilityType());
+    Value writeVisibility =
+        tti::createLoadScratchMemory(b, loc, op.getWriteVisibility(),
+                                     writeVisibilityType)
+            ->getResult(0);
+    RankedTensorType writeTrackingType =
+        cast<RankedTensorType>(op.getWriteTrackingType());
+    Value writeTracking = tti::createLoadScratchMemory(
+                              b, loc, op.getWriteTracking(), writeTrackingType)
+                              ->getResult(0);
+    Value bar = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getMbar().getType(), adaptor.getMbar());
+    Value barriersEqBar = createCmpIntTensorScalar(b, loc, barriers, bar);
+    barriersEqBar =
+        convertAndBroadcast(b, loc, barriersEqBar, 0, writeTrackingType);
+    Value writeTrackingZero =
+        tti::createConstIntTensor(b, loc, 0, writeTrackingType);
+    Value trackingBuffers = b.create<arith::SelectOp>(
+        loc, barriersEqBar, writeTracking, writeTrackingZero);
+    trackingBuffers = createOrReduce(b, loc, trackingBuffers, 1);
+    trackingBuffers = createConvertLayout(b, loc, trackingBuffers,
+                                          writeVisibilityType.getEncoding());
+    RankedTensorType trackingBuffersType =
+        cast<RankedTensorType>(trackingBuffers.getType());
+    Value trackingBuffersOne =
+        tti::createConstIntTensor(b, loc, 1, trackingBuffersType);
+    trackingBuffers = b.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::eq, trackingBuffers, trackingBuffersOne);
+    Value threadMask = tti::createConstIntTensor(b, loc, op.getThreadMask(),
+                                                 writeVisibilityType);
+    Value writeVisibilityZero =
+        tti::createConstIntTensor(b, loc, 0, writeVisibilityType);
+    Value trackingThreadBit = b.create<arith::SelectOp>(
+        loc, trackingBuffers, threadMask, writeVisibilityZero);
+    writeVisibility =
+        b.create<arith::OrIOp>(loc, writeVisibility, trackingThreadBit);
+    tti::createStoreScratchMemory(b, loc, op.getWriteVisibility(),
+                                  writeVisibility, writeVisibilityType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct TransferVisibleReadsOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalTransferVisibleReadsOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalTransferVisibleReadsOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    TypedValue<RankedTensorType> barriers = op.getBarriers();
+    RankedTensorType readVisibilityType =
+        cast<RankedTensorType>(op.getReadVisibilityType());
+    Value readVisibility =
+        tti::createLoadScratchMemory(b, loc, op.getReadVisibility(),
+                                     readVisibilityType)
+            ->getResult(0);
+    RankedTensorType readTrackingType =
+        cast<RankedTensorType>(op.getReadTrackingType());
+    Value readTracking = tti::createLoadScratchMemory(
+                             b, loc, op.getReadTracking(), readTrackingType)
+                             ->getResult(0);
+    Value bar = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getMbar().getType(), adaptor.getMbar());
+    Value barriersEqBar = createCmpIntTensorScalar(b, loc, barriers, bar);
+    barriersEqBar =
+        convertAndBroadcast(b, loc, barriersEqBar, 0, readTrackingType);
+    Value readTrackingZero =
+        tti::createConstIntTensor(b, loc, 0, readTrackingType);
+    Value trackingBar = b.create<arith::SelectOp>(
+        loc, barriersEqBar, readTracking, readTrackingZero);
+    trackingBar = createOrReduce(b, loc, trackingBar, 1);
+    trackingBar =
+        convertAndBroadcast(b, loc, trackingBar, 1, readVisibilityType);
+    Value readVisibilityOrTracking =
+        b.create<arith::OrIOp>(loc, readVisibility, trackingBar);
+    Value threadColumnMask =
+        createMultiColumnMask(b, loc, op.getThreadMask(), readVisibilityType);
+    readVisibility = b.create<arith::SelectOp>(
+        loc, threadColumnMask, readVisibilityOrTracking, readVisibility);
+    tti::createStoreScratchMemory(b, loc, op.getReadVisibility(),
+                                  readVisibility, readVisibilityType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct VerifyWriteVisibilityOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalVerifyWriteVisibilityOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalVerifyWriteVisibilityOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    TypedValue<RankedTensorType> buffers = op.getBuffers();
+    RankedTensorType writeVisibilityType =
+        cast<RankedTensorType>(op.getWriteVisibilityType());
+    Value writeVisibility =
+        tti::createLoadScratchMemory(b, loc, op.getWriteVisibility(),
+                                     writeVisibilityType)
+            ->getResult(0);
+
+    Value buf = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getBuf().getType(), adaptor.getBuf());
+    Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
+    Value writeVisibilityZero =
+        tti::createConstIntTensor(b, loc, 0, writeVisibilityType);
+    Value bufVisibility = b.create<arith::SelectOp>(
+        loc, buffersEqBuf, writeVisibility, writeVisibilityZero);
+    Value noOneIsWriting = b.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::eq, bufVisibility, writeVisibilityZero);
+    Value thread =
+        tti::createConstIntTensor(b, loc, op.getThread(), writeVisibilityType);
+    buffersEqBuf =
+        b.create<arith::ExtUIOp>(loc, writeVisibilityType, buffersEqBuf);
+    Value bufferThreadBit = b.create<arith::ShLIOp>(loc, buffersEqBuf, thread);
+    Value bufferHasVisibility =
+        b.create<arith::AndIOp>(loc, bufVisibility, bufferThreadBit);
+    bufferHasVisibility = b.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::eq, bufferHasVisibility, bufferThreadBit);
+    Value writeVisible =
+        b.create<arith::OrIOp>(loc, noOneIsWriting, bufferHasVisibility);
+    std::string message = "Buffer being accessed has outstanding writes.";
+    if (!op.getOperandName().str().empty()) {
+      message += " Operand: " + op.getOperandName().str();
+    }
+    b.create<tti::ExperimentalAssertInThreadOp>(loc, writeVisible,
+                                                b.getStringAttr(message),
+                                                /*check_any=*/false);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct VerifyReadVisibilityOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalVerifyReadVisibilityOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult matchAndRewrite(tti::ExperimentalVerifyReadVisibilityOp op,
+                                OpAdaptor adaptor,
+                                ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    TypedValue<RankedTensorType> buffers = op.getBuffers();
+    RankedTensorType readVisibilityType =
+        cast<RankedTensorType>(op.getReadVisibilityType());
+    Value readVisibility =
+        tti::createLoadScratchMemory(b, loc, op.getReadVisibility(),
+                                     readVisibilityType)
+            ->getResult(0);
+
+    Value buf = createMemDescToI64(b, loc, getTypeConverter(),
+                                   op.getBuf().getType(), adaptor.getBuf());
+    Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
+    buffersEqBuf =
+        convertAndBroadcast(b, loc, buffersEqBuf, 1, readVisibilityType);
+    Value readVisibilityZero =
+        tti::createConstIntTensor(b, loc, 0, readVisibilityType);
+    Value bufVisibility = b.create<arith::SelectOp>(
+        loc, buffersEqBuf, readVisibility, readVisibilityZero);
+    Value totalVisibility = createOrReduce(b, loc, bufVisibility, 1);
+    Value threadColumnMask =
+        createColumnMask(b, loc, op.getThread(), readVisibilityType);
+    Value threadBit = tti::createConstIntTensor(b, loc, 1ULL << op.getThread(),
+                                                readVisibilityType);
+    Value readVisibilityOrThreadBit =
+        b.create<arith::OrIOp>(loc, readVisibility, threadBit);
+    Value bufThreadVisibility = b.create<arith::SelectOp>(
+        loc, threadColumnMask, bufVisibility, readVisibilityZero);
+    bufThreadVisibility = createOrReduce(b, loc, bufThreadVisibility, 1);
+    // Thread must have visivility that is a superset of read visibility of all
+    // other threads
+    Value threadAndTotalVisibility =
+        b.create<arith::AndIOp>(loc, bufThreadVisibility, totalVisibility);
+    Value hasVisibility =
+        b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                threadAndTotalVisibility, totalVisibility);
     b.create<tti::ExperimentalAssertInThreadOp>(
-        loc, currBufStateEqZero, "Buffer being accessed has outstanding writes",
+        loc, hasVisibility, "Buffer being accessed has outstanding reads",
         /*check_any=*/false);
-    b.eraseOp(op);
-
-    return success();
-  }
-};
-
-struct CheckReadBarriersOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalCheckReadBarriersOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  LogicalResult matchAndRewrite(tti::ExperimentalCheckReadBarriersOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
-    Location loc = op.getLoc();
-    OpBuilder::InsertionGuard guard(b);
-    b.setInsertionPoint(op);
-    if (op.getPred()) {
-      auto [prevBlock, ifBlock, thenBlock] =
-          createIfBlock(b, loc, op.getPred());
-      b.setInsertionPointToStart(ifBlock);
-    }
-    TypedValue<RankedTensorType> buffers = op.getBuffers();
-    RankedTensorType readBarsType =
-        cast<RankedTensorType>(op.getReadBarsType());
-    Value readBars =
-        tti::createLoadScratchMemory(b, loc, op.getReadBars(), readBarsType)
-            ->getResult(0);
-    Value buf = createMemDescToI64(b, loc, getTypeConverter(),
-                                   op.getBuf().getType(), adaptor.getBuf());
-
-    // clang-format off
-    // Gluon pseudo-code:
-    // bufsEqBuf = bufs == buf
-    // bufsEqBuf = ttgl.convert_layout(bufsEqBuf, ttgl.SliceLayout(1, read_bars_layout))[:, None]
-    // curr_buf_bars = tl.where(bufsEqBuf, read_bars, 0)
-    // tl.device_assert(curr_buf_bars == ttgl.zeros_like(curr_buf_bars), "Buffer being accessed has outstanding reads")
-    // clang-format on
-    auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
-    buffersEqBuf = convertAndBroadcast(
-        b, loc, buffersEqBuf, 1, readBarsType.getShape(),
-        cast<ttg::BlockedEncodingAttr>(readBarsType.getEncoding()));
-    auto readBarsZero = tti::createConstIntTensor(b, loc, 0, readBarsType);
-    auto currBufBar =
-        b.create<arith::SelectOp>(loc, buffersEqBuf, readBars, readBarsZero);
-    auto currBufBarEqZero = b.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::eq, currBufBar, readBarsZero);
-    b.create<tti::ExperimentalAssertInThreadOp>(
-        loc, currBufBarEqZero, "Buffer being accessed has outstanding reads",
-        /*check_any=*/false);
-    b.eraseOp(op);
-    return success();
-  }
-};
-
-struct SetWriteStateOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalSetWriteStateOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  LogicalResult matchAndRewrite(tti::ExperimentalSetWriteStateOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
-    Location loc = op.getLoc();
-    OpBuilder::InsertionGuard guard(b);
-    b.setInsertionPoint(op);
-    if (op.getPred()) {
-      auto [prevBlock, ifBlock, thenBlock] =
-          createIfBlock(b, loc, op.getPred());
-      b.setInsertionPointToStart(ifBlock);
-    }
-    TypedValue<RankedTensorType> buffers = op.getBuffers();
-    RankedTensorType writeStateType =
-        cast<RankedTensorType>(op.getWriteStateType());
-    Value writeState =
-        tti::createLoadScratchMemory(b, loc, op.getWriteState(), writeStateType)
-            ->getResult(0);
-    int notHwPipelined = op.getHwPipelined() ? 0 : 1;
-    Value buf = createMemDescToI64(b, loc, getTypeConverter(),
-                                   op.getBuf().getType(), adaptor.getBuf());
-
-    // Gluon pseudo-code:
-    // val = 1 | (not_hw_pipelined << 1)
-    // write_state = tl.where(bufs == buf, 1, write_state)
-
-    int val = 1 | (notHwPipelined << 1);
-    auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
-    writeState = b.create<arith::SelectOp>(
-        loc, buffersEqBuf,
-        tti::createConstIntTensor(b, loc, val, writeStateType), writeState);
-    tti::createStoreScratchMemory(b, loc, op.getWriteState(), writeState,
-                                  writeStateType);
-    b.eraseOp(op);
-    return success();
-  }
-};
-
-struct CommitWriteWithBarrierOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalCommitWriteWithBarrierOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  LogicalResult matchAndRewrite(tti::ExperimentalCommitWriteWithBarrierOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
-    Location loc = op.getLoc();
-    OpBuilder::InsertionGuard guard(b);
-    b.setInsertionPoint(op);
-    if (op.getPred()) {
-      auto [prevBlock, ifBlock, thenBlock] =
-          createIfBlock(b, loc, op.getPred());
-      b.setInsertionPointToStart(ifBlock);
-    }
-    TypedValue<RankedTensorType> barriers = op.getBarriers();
-    RankedTensorType writeBarsType =
-        cast<RankedTensorType>(op.getWriteBarsType());
-    Value writeBars =
-        tti::createLoadScratchMemory(b, loc, op.getWriteBars(), writeBarsType)
-            ->getResult(0);
-    RankedTensorType writeStateType =
-        cast<RankedTensorType>(op.getWriteStateType());
-    Value writeState =
-        tti::createLoadScratchMemory(b, loc, op.getWriteState(), writeStateType)
-            ->getResult(0);
-    Value mbar = createMemDescToI64(b, loc, getTypeConverter(),
-                                    op.getMbar().getType(), adaptor.getMbar());
-
-    // clang-format off
-    // Gluon pseudo-code:
-    // write_state = ttgl.convert_layout(write_state, ttgl.SliceLayout(1, write_bars_layout))[:, None]
-    // barsEqMbar = barriers == mbar
-    // barsEqMbar = ttgl.convert_layout(barsEqMbar, ttgl.SliceLayout(0, write_bars_layout))[None, :]
-    // stateAndBar = write_state & barsEqMbar
-    // write_bars = write_bars | stateAndBar
-    // clang-format on
-
-    writeState = convertAndBroadcast(
-        b, loc, writeState, 1, writeBarsType.getShape(),
-        cast<ttg::BlockedEncodingAttr>(writeBarsType.getEncoding()));
-    auto barriersEqMbar = createCmpIntTensorScalar(b, loc, barriers, mbar);
-    barriersEqMbar = convertAndBroadcast(
-        b, loc, barriersEqMbar, 0, writeBarsType.getShape(),
-        cast<ttg::BlockedEncodingAttr>(writeBarsType.getEncoding()));
-    barriersEqMbar =
-        b.create<arith::ExtUIOp>(loc, writeBarsType, barriersEqMbar);
-    Value stateAndBar =
-        b.create<arith::AndIOp>(loc, writeState, barriersEqMbar);
-    writeBars = b.create<arith::OrIOp>(loc, writeBars, stateAndBar);
-    tti::createStoreScratchMemory(b, loc, op.getWriteBars(), writeBars,
-                                  writeBarsType);
-    b.eraseOp(op);
-    return success();
-  }
-};
-
-struct SetReadBarrierOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalSetReadBarrierOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  LogicalResult matchAndRewrite(tti::ExperimentalSetReadBarrierOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
-    Location loc = op.getLoc();
-    OpBuilder::InsertionGuard guard(b);
-    b.setInsertionPoint(op);
-    if (op.getPred()) {
-      auto [prevBlock, ifBlock, thenBlock] =
-          createIfBlock(b, loc, op.getPred());
-      b.setInsertionPointToStart(ifBlock);
-    }
-    TypedValue<RankedTensorType> buffers = op.getBuffers();
-    TypedValue<RankedTensorType> barriers = op.getBarriers();
-    RankedTensorType readBarsType =
-        cast<RankedTensorType>(op.getReadBarsType());
-    Value readBars =
-        tti::createLoadScratchMemory(b, loc, op.getReadBars(), readBarsType)
-            ->getResult(0);
-    Value buf = createMemDescToI64(b, loc, getTypeConverter(),
-                                   op.getBuf().getType(), adaptor.getBuf());
-    Value mbar = createMemDescToI64(b, loc, getTypeConverter(),
-                                    op.getMbar().getType(), adaptor.getMbar());
-
-    // clang-format off
-    // Gluon pseudo-code:
-    // bufsEqBuf = bufs == buf
-    // bufsEqBuf = ttgl.convert_layout(bufsEqBuf, ttgl.SliceLayout(1, read_bars_layout))[:, None]
-    // barsEqMbar = bars == mbar
-    // barsEqMbar = ttgl.convert_layout(barsEqMbar, ttgl.SliceLayout(0, read_bars_layout))[None, :]
-    // bufAndBar = bufsEqBuf & barsEqMbar
-    // read_bars = read_bars | bufAndBar
-    // clang-format on
-
-    auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
-    buffersEqBuf = convertAndBroadcast(
-        b, loc, buffersEqBuf, 1, readBarsType.getShape(),
-        cast<ttg::BlockedEncodingAttr>(readBarsType.getEncoding()));
-    auto barriersEqMbar = createCmpIntTensorScalar(b, loc, barriers, mbar);
-    barriersEqMbar = convertAndBroadcast(
-        b, loc, barriersEqMbar, 0, readBarsType.getShape(),
-        cast<ttg::BlockedEncodingAttr>(readBarsType.getEncoding()));
-    Value bufAndBar =
-        b.create<arith::AndIOp>(loc, buffersEqBuf, barriersEqMbar);
-    bufAndBar = b.create<arith::ExtUIOp>(loc, readBarsType, bufAndBar);
-    readBars = b.create<arith::OrIOp>(loc, readBars, bufAndBar);
-
-    tti::createStoreScratchMemory(b, loc, op.getReadBars(), readBars,
-                                  readBarsType);
-    b.eraseOp(op);
-    return success();
-  }
-};
-
-struct ClearWriteBarrierOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalClearWriteBarrierOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  LogicalResult matchAndRewrite(tti::ExperimentalClearWriteBarrierOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
-    Location loc = op.getLoc();
-    OpBuilder::InsertionGuard guard(b);
-    b.setInsertionPoint(op);
-    if (op.getPred()) {
-      auto [prevBlock, ifBlock, thenBlock] =
-          createIfBlock(b, loc, op.getPred());
-      b.setInsertionPointToStart(ifBlock);
-    }
-    TypedValue<RankedTensorType> barriers = op.getBarriers();
-    RankedTensorType writeBarsType =
-        cast<RankedTensorType>(op.getWriteBarsType());
-    Value writeBars =
-        tti::createLoadScratchMemory(b, loc, op.getWriteBars(), writeBarsType)
-            ->getResult(0);
-    RankedTensorType writeStateType =
-        cast<RankedTensorType>(op.getWriteStateType());
-    Value writeState =
-        tti::createLoadScratchMemory(b, loc, op.getWriteState(), writeStateType)
-            ->getResult(0);
-    Value mbar = createMemDescToI64(b, loc, getTypeConverter(),
-                                    op.getMbar().getType(), adaptor.getMbar());
-
-    // clang-format off
-    // Gluon pseudo-code:
-    // barsEqMbar = barriers == mbar
-    // barsEqMbar = ttgl.convert_layout(barsEqMbar, ttgl.SliceLayout(0, write_bars_layout))[None, :]
-    // writeBarsForMbar = write_bars & barsEqMbar
-    // writeBarsForMbar = ttgl.reduce(writeBarsForMbar, axis=1, combine_fn=max)
-    // writeBarsForMbar is now a tensor of shape [num_buffers, 1] containing the
-    // non-zero entries where the buffer was being tracked by the barrier.
-    // write_state = tl.where(writeBarsForMbar != 0, 0, write_state)
-    // write_bars = tl.where(barsEqMbar, 0, write_bars)
-    // clang-format on
-
-    auto barriersEqMbar = createCmpIntTensorScalar(b, loc, barriers, mbar);
-    barriersEqMbar = convertAndBroadcast(
-        b, loc, barriersEqMbar, 0, writeBarsType.getShape(),
-        cast<ttg::BlockedEncodingAttr>(writeBarsType.getEncoding()));
-    Value barriersEqMbarI8 =
-        b.create<arith::ExtUIOp>(loc, writeBarsType, barriersEqMbar);
-    Value writeBarsForMbar =
-        b.create<arith::AndIOp>(loc, writeBars, barriersEqMbarI8);
-    writeBarsForMbar = createMaxReduce(b, loc, writeBarsForMbar, 1);
-    Value writeStateZero = tti::createConstIntTensor(b, loc, 0, writeStateType);
-    Value writeBarsForMbarNonZero = b.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::ne, writeBarsForMbar, writeStateZero);
-    writeState = b.create<arith::SelectOp>(loc, writeBarsForMbarNonZero,
-                                           writeStateZero, writeState);
-    tti::createStoreScratchMemory(b, loc, op.getWriteState(), writeState,
-                                  writeStateType);
-    Value writeBarsZero = tti::createConstIntTensor(b, loc, 0, writeBarsType);
-    writeBars = b.create<arith::SelectOp>(loc, barriersEqMbar, writeBarsZero,
-                                          writeBars);
-    tti::createStoreScratchMemory(b, loc, op.getWriteBars(), writeBars,
-                                  writeBarsType);
-    b.eraseOp(op);
-    return success();
-  }
-};
-
-struct ClearReadBarrierOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalClearReadBarrierOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  LogicalResult matchAndRewrite(tti::ExperimentalClearReadBarrierOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
-    Location loc = op.getLoc();
-    OpBuilder::InsertionGuard guard(b);
-    b.setInsertionPoint(op);
-    if (op.getPred()) {
-      auto [prevBlock, ifBlock, thenBlock] =
-          createIfBlock(b, loc, op.getPred());
-      b.setInsertionPointToStart(ifBlock);
-    }
-    TypedValue<RankedTensorType> barriers = op.getBarriers();
-    RankedTensorType readBarsType =
-        cast<RankedTensorType>(op.getReadBarsType());
-    Value readBars =
-        tti::createLoadScratchMemory(b, loc, op.getReadBars(), readBarsType)
-            ->getResult(0);
-    Value mbar = createMemDescToI64(b, loc, getTypeConverter(),
-                                    op.getMbar().getType(), adaptor.getMbar());
-
-    // clang-format off
-    // Gluon pseudo-code:
-    // barsEqMbar = bars == mbar
-    // barsEqMbar = ttgl.convert_layout(barsEqMbar, ttgl.SliceLayout(0, read_bars_layout))[None, :]
-    // read_bars = tl.where(barsEqMbar, 0, read_bars)
-    // clang format on
-
-    auto readBarsZero = tti::createConstIntTensor(b, loc, 0, readBarsType);
-    auto readBarsEqMbar = createCmpIntTensorScalar(b, loc, barriers, mbar);
-    readBarsEqMbar = convertAndBroadcast(
-        b, loc, readBarsEqMbar, 0, readBarsType.getShape(),
-        cast<ttg::BlockedEncodingAttr>(readBarsType.getEncoding()));
-    readBars =
-        b.create<arith::SelectOp>(loc, readBarsEqMbar, readBarsZero, readBars);
-    tti::createStoreScratchMemory(b, loc, op.getReadBars(), readBars,
-                                  readBarsType);
-    b.eraseOp(op);
-    return success();
-  }
-};
-
-struct CheckBarrierWritesClearedOpConversion
-    : public ConvertOpToLLVMPattern<tti::ExperimentalCheckBarrierWritesClearedOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  LogicalResult matchAndRewrite(tti::ExperimentalCheckBarrierWritesClearedOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
-    Location loc = op.getLoc();
-    OpBuilder::InsertionGuard guard(b);
-    b.setInsertionPoint(op);
-    if (op.getPred()) {
-      auto [prevBlock, ifBlock, thenBlock] =
-          createIfBlock(b, loc, op.getPred());
-      b.setInsertionPointToStart(ifBlock);
-    }
-    TypedValue<RankedTensorType> barriers = op.getBarriers();
-    RankedTensorType writeBarsType =
-        cast<RankedTensorType>(op.getWriteBarsType());
-    Value writeBars =
-        tti::createLoadScratchMemory(b, loc, op.getWriteBars(), writeBarsType)
-            ->getResult(0);
-    Value mbar = createMemDescToI64(b, loc, getTypeConverter(),
-                                    op.getMbar().getType(), adaptor.getMbar());
-
-    // clang-format off
-    // Gluon pseudo-code:
-    // barsEqMbar = bars == mbar
-    // barsEqMbar = ttgl.convert_layout(barsEqMbar, ttgl.SliceLayout(0, write_bars_layout))[None, :]
-    // currWriteBars = write_bars & barsEqMbar
-    // tl.device_assert(currWriteBars == 0, "Barrier is being reused while still tracking writes")
-    // clang-format on
-
-    auto writeBarsZero = tti::createConstIntTensor(b, loc, 0, writeBarsType);
-    auto barsEqMbar = createCmpIntTensorScalar(b, loc, barriers, mbar);
-    barsEqMbar = convertAndBroadcast(
-        b, loc, barsEqMbar, 0, writeBarsType.getShape(),
-        cast<ttg::BlockedEncodingAttr>(writeBarsType.getEncoding()));
-    barsEqMbar = b.create<arith::ExtUIOp>(loc, writeBarsType, barsEqMbar);
-    Value currWriteBars = b.create<arith::AndIOp>(loc, writeBars, barsEqMbar);
-    Value currWriteBarsEqZero = b.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::eq, currWriteBars, writeBarsZero);
-    b.create<tti::ExperimentalAssertInThreadOp>(
-        loc, currWriteBarsEqZero,
-        "Barrier is being reused while still tracking writes", false);
     b.eraseOp(op);
     return success();
   }
@@ -723,10 +940,16 @@ struct StageAccessForCommitOpConversion
     // write_commits = tl.where(bufs == buf, -1, write_commits)
 
     auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
+    buffersEqBuf =
+        convertAndBroadcast(b, loc, buffersEqBuf, 1, writeCommitsType);
+    Value threadColumnMask =
+        createColumnMask(b, loc, op.getThread(), writeCommitsType);
+    Value bufAndThread =
+        b.create<arith::AndIOp>(loc, buffersEqBuf, threadColumnMask);
     auto writeCommitsMinusOne =
         tti::createConstIntTensor(b, loc, -1, writeCommitsType);
     writeCommits = b.create<arith::SelectOp>(
-        loc, buffersEqBuf, writeCommitsMinusOne, writeCommits);
+        loc, bufAndThread, writeCommitsMinusOne, writeCommits);
     tti::createStoreScratchMemory(b, loc, op.getOutstandingCommits(),
                                   writeCommits, writeCommitsType);
     b.eraseOp(op);
@@ -770,8 +993,12 @@ struct CommitAccessesOpConversion
     Value writeCommitsOne =
         tti::createConstIntTensor(b, loc, 1, writeCommitsType);
 
+    Value threadColumnMask =
+        createColumnMask(b, loc, op.getThread(), writeCommitsType);
     auto writeCommitsGtZero = createCmpIntTensorScalar(
         b, loc, writeCommits, zero, arith::CmpIPredicate::sgt);
+    writeCommitsGtZero =
+        b.create<arith::AndIOp>(loc, writeCommitsGtZero, threadColumnMask);
     auto writeCommitsPlusOne =
         b.create<arith::AddIOp>(loc, writeCommits, writeCommitsOne);
     writeCommits = b.create<arith::SelectOp>(loc, writeCommitsGtZero,
@@ -779,6 +1006,8 @@ struct CommitAccessesOpConversion
 
     auto writeCommitsEqMinusOne =
         createCmpIntTensorScalar(b, loc, writeCommits, minusOne);
+    writeCommitsEqMinusOne =
+        b.create<arith::AndIOp>(loc, writeCommitsEqMinusOne, threadColumnMask);
     writeCommits = b.create<arith::SelectOp>(loc, writeCommitsEqMinusOne,
                                              writeCommitsOne, writeCommits);
     tti::createStoreScratchMemory(b, loc, op.getOutstandingCommits(),
@@ -788,14 +1017,15 @@ struct CommitAccessesOpConversion
   }
 };
 
-struct ClearOutstandingCommitsOpConversion
+struct ClearOutstandingCommitsTransferWritesOpConversion
     : public ConvertOpToLLVMPattern<
-          tti::ExperimentalClearOutstandingCommitsOp> {
+          tti::ExperimentalClearOutstandingCommitsTransferWritesOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-  LogicalResult matchAndRewrite(tti::ExperimentalClearOutstandingCommitsOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &b) const override {
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalClearOutstandingCommitsTransferWritesOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &b) const override {
     Location loc = op.getLoc();
     OpBuilder::InsertionGuard guard(b);
     b.setInsertionPoint(op);
@@ -810,11 +1040,12 @@ struct ClearOutstandingCommitsOpConversion
         tti::createLoadScratchMemory(b, loc, op.getOutstandingCommits(),
                                      outstandingCommitsType)
             ->getResult(0);
-
-    // clang-format off
-    // Gluon pseudo-code:
-    // outstanding_commits = tl.where(outstanding_commits > outstanding_num, 0, outstanding_commits)
-    // clang-format on
+    RankedTensorType writeVisibilityType =
+        cast<RankedTensorType>(op.getWriteVisibilityType());
+    Value writeVisibility =
+        tti::createLoadScratchMemory(b, loc, op.getWriteVisibility(),
+                                     writeVisibilityType)
+            ->getResult(0);
 
     Type elementType = outstandingCommitsType.getElementType();
     Value outstandingNum = b.create<arith::ConstantOp>(
@@ -822,8 +1053,102 @@ struct ClearOutstandingCommitsOpConversion
         b.getIntegerAttr(elementType, op.getOutstandingNum()));
     Value outstandingCommitsZero =
         tti::createConstIntTensor(b, loc, 0, outstandingCommitsType);
+    Value threadColumnMask =
+        createColumnMask(b, loc, op.getThread(), outstandingCommitsType);
+
     auto outstandingCommitsGtOutstandingNum = createCmpIntTensorScalar(
         b, loc, outstandingCommits, outstandingNum, arith::CmpIPredicate::sgt);
+    outstandingCommitsGtOutstandingNum = b.create<arith::AndIOp>(
+        loc, outstandingCommitsGtOutstandingNum, threadColumnMask);
+
+    // Update write visibility rows: reduce per-thread mask to row mask,
+    // and set the current thread bit only for rows where mask is true.
+    Value rowMask =
+        createOrReduce(b, loc, outstandingCommitsGtOutstandingNum, 1);
+    // writeVisibilityType can be rank-1 (e.g., tensor<2xi64>), so do NOT
+    // broadcast along dim=1. The select condition should match the row shape.
+    Value transferThreadsBitsValue = tti::createConstIntTensor(
+        b, loc, op.getTransferThreadMask(), writeVisibilityType);
+    Value writeVisibilityOrThreadBit =
+        b.create<arith::OrIOp>(loc, writeVisibility, transferThreadsBitsValue);
+    writeVisibility = b.create<arith::SelectOp>(
+        loc, rowMask, writeVisibilityOrThreadBit, writeVisibility);
+
+    // Print
+    // b.create<tt::PrintOp>(loc, "wv: ", false, writeVisibility,
+    //                       std::vector<int32_t>{0});
+
+    tti::createStoreScratchMemory(b, loc, op.getWriteVisibility(),
+                                  writeVisibility, writeVisibilityType);
+
+    // Clear outstanding commits entries
+    outstandingCommits =
+        b.create<arith::SelectOp>(loc, outstandingCommitsGtOutstandingNum,
+                                  outstandingCommitsZero, outstandingCommits);
+    tti::createStoreScratchMemory(b, loc, op.getOutstandingCommits(),
+                                  outstandingCommits, outstandingCommitsType);
+    b.eraseOp(op);
+    return success();
+  }
+};
+
+struct ClearOutstandingCommitsTransferReadsOpConversion
+    : public ConvertOpToLLVMPattern<
+          tti::ExperimentalClearOutstandingCommitsTransferReadsOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalClearOutstandingCommitsTransferReadsOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &b) const override {
+    Location loc = op.getLoc();
+    OpBuilder::InsertionGuard guard(b);
+    b.setInsertionPoint(op);
+    if (op.getPred()) {
+      auto [prevBlock, ifBlock, thenBlock] =
+          createIfBlock(b, loc, op.getPred());
+      b.setInsertionPointToStart(ifBlock);
+    }
+    RankedTensorType outstandingCommitsType =
+        cast<RankedTensorType>(op.getOutstandingCommitsType());
+    Value outstandingCommits =
+        tti::createLoadScratchMemory(b, loc, op.getOutstandingCommits(),
+                                     outstandingCommitsType)
+            ->getResult(0);
+    RankedTensorType readVisibilityType =
+        cast<RankedTensorType>(op.getReadVisibilityType());
+    Value readVisibility =
+        tti::createLoadScratchMemory(b, loc, op.getReadVisibility(),
+                                     readVisibilityType)
+            ->getResult(0);
+
+    Type elementType = outstandingCommitsType.getElementType();
+    Value outstandingNum = b.create<arith::ConstantOp>(
+        loc, elementType,
+        b.getIntegerAttr(elementType, op.getOutstandingNum()));
+    Value outstandingCommitsZero =
+        tti::createConstIntTensor(b, loc, 0, outstandingCommitsType);
+    Value threadColumnMask =
+        createColumnMask(b, loc, op.getThread(), outstandingCommitsType);
+    auto outstandingCommitsGtOutstandingNum = createCmpIntTensorScalar(
+        b, loc, outstandingCommits, outstandingNum, arith::CmpIPredicate::sgt);
+    outstandingCommitsGtOutstandingNum = b.create<arith::AndIOp>(
+        loc, outstandingCommitsGtOutstandingNum, threadColumnMask);
+
+    // Update read visibility: set current thread bit for rows with mask
+    Value rowMask =
+        createOrReduce(b, loc, outstandingCommitsGtOutstandingNum, 1);
+    rowMask = convertAndBroadcast(b, loc, rowMask, 1, readVisibilityType);
+    Value transferThreadsBitsValue = tti::createConstIntTensor(
+        b, loc, op.getTransferThreadMask(), readVisibilityType);
+    Value readVisibilityOrThreadBit =
+        b.create<arith::OrIOp>(loc, readVisibility, transferThreadsBitsValue);
+    readVisibility = b.create<arith::SelectOp>(
+        loc, rowMask, readVisibilityOrThreadBit, readVisibility);
+    tti::createStoreScratchMemory(b, loc, op.getReadVisibility(),
+                                  readVisibility, readVisibilityType);
+
+    // Clear outstanding commits entries
     outstandingCommits =
         b.create<arith::SelectOp>(loc, outstandingCommitsGtOutstandingNum,
                                   outstandingCommitsZero, outstandingCommits);
@@ -861,27 +1186,23 @@ struct CheckOutstandingCommitsOpConversion
                                    op.getBuf().getType(), adaptor.getBuf());
     StringRef pendingAccessType = op.getPendingAccessType();
 
-    // clang-format off
-    // Gluon pseudo-code:
-    // curr_commits = tl.where(buf == buffers, outstanding_commits, 0)
-    // tl.device_assert(curr_commits == 0, "Accessing buffer with pending access. Pending access type: ")
-    // clang-format on
-
     Type elementType = outstandingCommitsType.getElementType();
-    auto buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
-    auto zero = b.create<arith::ConstantOp>(loc, elementType,
-                                            b.getIntegerAttr(elementType, 0));
-    auto outstandingCommitsZero =
+    // Select the buffer row across all threads and check it equals zero
+    // (including -1 case).
+    Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
+    buffersEqBuf =
+        convertAndBroadcast(b, loc, buffersEqBuf, 1, outstandingCommitsType);
+    auto zeroTensor =
         tti::createConstIntTensor(b, loc, 0, outstandingCommitsType);
-    auto currCommits = b.create<arith::SelectOp>(
-        loc, buffersEqBuf, outstandingCommits, outstandingCommitsZero);
-    auto currCommitsEqZero =
-        createCmpIntTensorScalar(b, loc, currCommits, zero);
+    auto selectedRows = b.create<arith::SelectOp>(
+        loc, buffersEqBuf, outstandingCommits, zeroTensor);
+    auto selectedEqZero = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                                  selectedRows, zeroTensor);
     std::string message =
         "Accessing buffer with pending access. Pending access type: " +
         pendingAccessType.str();
     b.create<tti::ExperimentalAssertInThreadOp>(
-        loc, currCommitsEqZero, b.getStringAttr(message), false);
+        loc, selectedEqZero, b.getStringAttr(message), false);
     b.eraseOp(op);
     return success();
   }
@@ -894,16 +1215,23 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<AssertInThreadOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<BufferPointersOpConversion>(typeConverter);
-  patterns.add<CheckWriteStateOpConversion>(typeConverter);
-  patterns.add<CheckReadBarriersOpConversion>(typeConverter);
-  patterns.add<SetWriteStateOpConversion>(typeConverter);
-  patterns.add<CommitWriteWithBarrierOpConversion>(typeConverter);
-  patterns.add<SetReadBarrierOpConversion>(typeConverter);
-  patterns.add<ClearWriteBarrierOpConversion>(typeConverter);
-  patterns.add<ClearReadBarrierOpConversion>(typeConverter);
-  patterns.add<CheckBarrierWritesClearedOpConversion>(typeConverter);
+  patterns.add<LockAcquireOpConversion>(typeConverter);
+  patterns.add<LockReleaseOpConversion>(typeConverter);
+  patterns.add<SetWriteVisibilityOpConversion>(typeConverter);
+  patterns.add<SetReadVisibilityOpConversion>(typeConverter);
+  patterns.add<ClearWriteTrackingOpConversion>(typeConverter);
+  patterns.add<ClearReadVisibilityOpConversion>(typeConverter);
+  patterns.add<ClearReadTrackingOpConversion>(typeConverter);
+  patterns.add<TrackVisibleWritesOpConversion>(typeConverter);
+  patterns.add<TrackVisibleReadsOpConversion>(typeConverter);
+  patterns.add<TransferVisibleWritesOpConversion>(typeConverter);
+  patterns.add<TransferVisibleReadsOpConversion>(typeConverter);
+  patterns.add<VerifyWriteVisibilityOpConversion>(typeConverter);
+  patterns.add<VerifyReadVisibilityOpConversion>(typeConverter);
   patterns.add<StageAccessForCommitOpConversion>(typeConverter);
   patterns.add<CommitAccessesOpConversion>(typeConverter);
-  patterns.add<ClearOutstandingCommitsOpConversion>(typeConverter);
+  patterns.add<ClearOutstandingCommitsTransferWritesOpConversion>(
+      typeConverter);
+  patterns.add<ClearOutstandingCommitsTransferReadsOpConversion>(typeConverter);
   patterns.add<CheckOutstandingCommitsOpConversion>(typeConverter);
 }
