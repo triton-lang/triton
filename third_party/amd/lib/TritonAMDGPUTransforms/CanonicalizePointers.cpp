@@ -1919,6 +1919,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
 
   ConversionConfig config;
   config.buildMaterializations = false;
+  config.allowPatternRollback = false;
   ConversionTarget target(getContext());
   auto isLegal = [&opsToRewrite](Operation *op) {
     if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op)) {
