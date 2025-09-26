@@ -94,7 +94,7 @@ def start(
     Returns:
         session (int): The session ID of the profiling session.
     """
-    if flags.command_line or knobs.proton.disable:
+    if flags.command_line or triton.knobs.proton.disable:
         # Ignore the start() call if the script is run from the command line or profiling is disabled.
         return
 
