@@ -4,6 +4,7 @@ No GPU kernel should be declared in this test.
 Profile correctness tests involving GPU kernels should be placed in `test_profile.py`.
 """
 
+import pytest
 import json
 import triton.profiler as proton
 import pathlib
@@ -385,3 +386,17 @@ def test_throw(tmp_path: pathlib.Path):
     finally:
         proton.finalize()
     assert "Session has not been initialized: " + str(session_id + 1) in deactivate_error
+
+
+@pytest.mark.parametrize("disable", [True, False])
+def test_profile_disable(disable, fresh_knobs, tmp_path: pathlib.Path):
+    fresh_knobs.proton.disable = disable
+    temp_file = tmp_path / "test_profile_disable.hatchet"
+    proton.start(str(temp_file.with_suffix("")))
+    proton.enter_scope("test0")
+    proton.exit_scope()
+    proton.finalize()
+    if disable:
+        assert not temp_file.exists()
+    else:
+        assert temp_file.exists()
