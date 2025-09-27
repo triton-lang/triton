@@ -137,6 +137,9 @@ def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "ml
     Option<"allowBufferAtomics", "allow-buffer-atomics",
            "bool", /*default*/"true",
            "Allow buffer atomic operations when the hardware supports it.">,
+    Option<"analyzeSmallTensorOfst", "analyze-small-tensor-ofst",
+          "bool", /*default=*/"false",
+           "If base-pointer is a small-tensor's base, it normally does not need to analyze its offset's value range">,
   ];
 }
 
