@@ -137,6 +137,9 @@ def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "ml
     Option<"allowBufferAtomics", "allow-buffer-atomics",
            "bool", /*default*/"true",
            "Allow buffer atomic operations when the hardware supports it.">,
+    Option<"allowHeuristics", "allow-heuristics",
+           "bool", /*default*/"true",
+           "Allow heuristic decisions when converting to BufferOps that apply to most handwritten kernels.">,
   ];
 }
 
