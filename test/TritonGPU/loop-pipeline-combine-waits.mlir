@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline="num_stages=3 use_async_copy=1 use_pingpong=1" | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops="num_stages=3 use_async_copy=1 use_pingpong=1" -tritonamdgpu-pipeline="use_async_copy=1" | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
