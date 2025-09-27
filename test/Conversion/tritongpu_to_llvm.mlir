@@ -2451,6 +2451,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // CHECK-LABEL: @reinterpret_tensor_descriptor
 tt.func private @reinterpret_tensor_descriptor(%arg0: !tt.ptr<i8, 0>) -> !tt.tensordesc<tensor<128x64xf16, #shared>> {
+  // CHECK: builtin.unrealized_conversion_cast
   // CHECK-NEXT: llvm.addrspacecast %arg0 : !llvm.ptr to !llvm.ptr
   %0 = ttng.reinterpret_tensor_descriptor %arg0 : !tt.ptr<i8, 0> to !tt.tensordesc<tensor<128x64xf16, #shared>>
   tt.return %0 : !tt.tensordesc<tensor<128x64xf16, #shared>>
