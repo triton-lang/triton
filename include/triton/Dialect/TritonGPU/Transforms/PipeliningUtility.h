@@ -182,6 +182,7 @@ getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
                         CoarseSchedule &schedule,
                         std::function<bool(Operation *)> filterUse = nullptr);
 
+void removeAttributes(ModuleOp moduleOp);
 } // namespace triton
 } // namespace mlir
 

@@ -99,15 +99,6 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
 //       iterations must align with the prologue.
 //
 
-struct LoadInfo {
-  // Shared layout is used for loads feeding into dot ops.
-  ttg::SwizzledSharedEncodingAttr sharedEncoding = nullptr;
-  // The distance of this load's stage to its use' stage.
-  int distToUse = 0;
-  Operation *use = nullptr;
-};
-using LoadToInfoMap = llvm::MapVector<Operation *, LoadInfo>;
-
 struct StreamCopyChainOps {
   tt::LoadOp loadOp;
   ttg::MemDescIndexOp subviewOp;
@@ -624,26 +615,6 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
 }
 
 namespace SingleDotSchedule {
-// Define categories of scheduling details per Operation types.
-// The SingleDotSchedule schedules 5 types of operations:
-// 1. GLOBAL_LOAD: tt.load / ttg.async_copy_global_to_local
-// 2. LOCAL_STORE: ttg.local_store
-// 3. LOCAL_LOAD:  ttg.local_load
-// 4. COMPUTE:     ops that use the loaded data
-// 5. ASYNC_WAIT:  ttg.async_wait
-// Note that ttg ops mentioned in the above list are created during scheduling.
-enum SchedType {
-  SCHED_GLOBAL_LOAD,
-  SCHED_LOCAL_STORE,
-  SCHED_LOCAL_LOAD,
-  SCHED_COMPUTE,
-  SCHED_ASYNC_WAIT,
-  SCHED_SIZE
-};
-
-using Clusters = std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE>;
-using Stages = std::array<int, SCHED_SIZE>;
-
 // Init Schedule Config based on settings and loop characteristics.
 // Create clusters in order of ops in loop. This can interleave ops
 // from different stages in the same cluster to achieve better backend
@@ -903,48 +874,6 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 // double buffered and placed in between the dot/compute clusters. This
 // pipeliner is meant to be used in combination with pingpong
 namespace ChainedDotSchedule {
-
-// Defines the order of scheduling clusters. The suffix numbers for memory
-// operations define which dot the operations belongs to. So *_LOAD_1 loads a
-// tensor consumed by the first dot. If a memory operation is used by both dots
-// it has to be be assigned to the *_1 clusters to ensure a valid schedule.
-enum Clusters {
-  // ComputeCluster1
-  CLUSTER_DOT_1,
-  CLUSTER_AFTER_DOT_1,
-  // MemoryCluster1
-  CLUSTER_ASYNC_WAIT_2,
-  CLUSTER_LOCAL_WRITE_1,
-  CLUSTER_LOCAL_LOAD_2,
-  CLUSTER_GLOBAL_LOAD_1,
-  // ComputeCluster2
-  CLUSTER_DOT_2,
-  CLUSTER_AFTER_DOT_2,
-  // MemoryCluster2
-  CLUSTER_ASYNC_WAIT_1,
-  CLUSTER_LOCAL_WRITE_2,
-  CLUSTER_LOCAL_LOAD_1,
-  CLUSTER_GLOBAL_LOAD_2,
-
-  CLUSTER_COUNT
-};
-
-using ChainedDotClusters =
-    std::array<tt::CoarseSchedule::Cluster, CLUSTER_COUNT>;
-
-enum Stages {
-  STAGE_DOT_1 = 2,
-  STAGE_DOT_2 = 3,
-
-  STAGE_GLOBAL_LOAD_1 = 0,
-  STAGE_LOCAL_WRITE_1 = 1,
-  STAGE_LOCAL_LOAD_1 = 1,
-
-  STAGE_GLOBAL_LOAD_2 = 1,
-  STAGE_LOCAL_WRITE_2 = 2,
-  STAGE_LOCAL_LOAD_2 = 3,
-};
-
 LogicalResult checkPreconditions(scf::ForOp forOp, int numStages,
                                  LoadToInfoMap loadToInfo) {
   if (numStages != 4)
