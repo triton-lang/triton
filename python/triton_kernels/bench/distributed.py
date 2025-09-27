@@ -171,7 +171,7 @@ def _accumulate_ep_triton_kernel(ep_positions_ptr, output_tensor_ptr, input_ptrs
     token_mask = offs_m < n_tokens
     offs_n = tl.arange(0, BLOCK_SIZE_N)
     feature_mask = offs_n < hidden_size
-    io_mask = token_mask[:] & feature_mask
+    io_mask = token_mask & feature_mask
     output = tl.zeros((BLOCK_SIZE_N, ), dtype=intermediate_dtype)
 
     for ep_idx in tl.static_range(EP):
