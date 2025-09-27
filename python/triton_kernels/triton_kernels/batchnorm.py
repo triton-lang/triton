@@ -15,8 +15,32 @@ def batchnorm_forward(
     momentum: float = 0.1,
     layout: str = "NCHW",
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """BatchNorm forward (NCHW only) using Triton kernels.
-    Returns (y, saved_mean, saved_var). In eval mode, saved_* echo inputs.
+    """
+    BatchNorm forward (NCHW only) using Triton kernels.
+
+    Args:
+        x: Input tensor of shape (N, C, H, W) or (N, C), CUDA device.
+        gamma: Scale parameters of shape (C,), fp32 recommended.
+        beta: Bias parameters of shape (C,), fp32 recommended.
+        eps: Small epsilon added to variance for numerical stability.
+        training: If True, compute batch statistics; else use running stats.
+        running_mean: If provided and training=False, used as mean (shape (C,)).
+        running_var: If provided and training=False, used as var (shape (C,)).
+        momentum: Placeholder for API symmetry; running stats are not updated
+                  in this function. Callers can update externally if desired.
+        layout: Currently only "NCHW" supported.
+
+    Returns:
+        (y, saved_mean, saved_var):
+            y: Output tensor with same shape/dtype as x
+            saved_mean: Per-channel mean (fp32)
+            saved_var: Per-channel variance (population, fp32)
+
+    Notes:
+        - Statistics are accumulated in fp32; for half types accuracy is
+          generally sufficient and validated by tests.
+        - In eval mode, saved_mean/var mirror running_mean/var provided.
+        - This function does not update running statistics in-place.
     """
     if not x.is_cuda:
         raise ValueError("CUDA tensor required")
@@ -105,33 +129,26 @@ def _bn_stats_kernel(x_cf, mean_out, var_out, C, R, BLOCK_R: tl.constexpr):
         return
     # Pointers
     x_ptr = x_cf + c * R
-    # Welford accumulators in fp32
-    count = tl.float32(0)
-    mean = tl.float32(0)
-    M2 = tl.float32(0)
+    # Accumulators in fp32
+    s = 0.0
+    s2 = 0.0
+    cnt = 0.0
 
     offs = tl.arange(0, BLOCK_R)
-    for r0 in range(0, R, BLOCK_R):
+    r0 = 0
+    while r0 < R:
         idx = r0 + offs
         mask = idx < R
         vals = tl.load(x_ptr + idx, mask=mask, other=0).to(tl.float32)
-        # Process active elements
-        k_active = tl.sum(mask, axis=0)
-        # Iterate within the block (unrolled reduction)
-        # Convert to vector form: update per element
-        for i in range(0, BLOCK_R):
-            m = mask[i]
-            if m:
-                x = vals[i]
-                count_new = count + 1.0
-                delta = x - mean
-                mean = mean + delta / count_new
-                delta2 = x - mean
-                M2 = M2 + delta * delta2
-                count = count_new
+        s += tl.sum(vals, axis=0)
+        s2 += tl.sum(vals * vals, axis=0)
+        num = tl.sum(mask, axis=0)
+        cnt += num.to(tl.float32)
+        r0 += BLOCK_R
 
-    # Finalize
-    var = tl.where(count > 1.0, M2 / count, 0.0)
+    # Finalize (population variance)
+    mean = tl.where(cnt > 0.0, s / cnt, 0.0)
+    var = tl.where(cnt > 0.0, s2 / cnt - mean * mean, 0.0)
     tl.store(mean_out + c, mean)
     tl.store(var_out + c, var)
 
@@ -156,7 +173,6 @@ def _bn_norm_kernel(x_cf, y_cf, mean, inv_std, gamma, beta, C, R, BLOCK_R: tl.co
         x_f = x.to(tl.float32)
         y = (x_f - m) * istd
         y = y * g + b
-        y = y.to(tl.type_of(x))
         tl.store(y_ptr + idx, y, mask=mask)
 
 
