@@ -68,40 +68,21 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
     // 9.   copy dst element from computed tile and register
     auto ctx = rewriter.getContext();
     StringAttr kReg = StringAttr::get(ctx, "register");
-    auto srcRegBases = linearLayoutSrc.getBases().lookup(kReg);
     auto dstRegBases = linearLayoutDst.getBases().lookup(kReg);
 
-    using ElemLocationKey = decltype(linearLayoutSrc.apply({}));
-    llvm::MapVector<ElemLocationKey, unsigned> srcElemToReg;
-    int srcRegNum = 1 << srcRegBases.size();
-    // 1. for all registers in src tensor
-    for (int regId = 0; regId < srcRegNum; ++regId) {
-      // 2.   compute src location in tensor relative to tile beginnig
-      SmallVector<std::pair<StringAttr, int32_t>> hardwareLocation;
-      for (auto dimName : linearLayoutSrc.getInDimNames()) {
-        if (dimName == kReg)
-          hardwareLocation.push_back({dimName, regId});
-        else
-          hardwareLocation.push_back({dimName, 0});
-      }
-      auto elemCoords = linearLayoutSrc.apply(hardwareLocation);
-      // 3.  save mapping from src elem coordinates to register idx
-      srcElemToReg[elemCoords] = regId;
-    }
+    // Mapping from tensors element location to src register id
+    // Steps 1), 2) and 3).
+    auto srcElemToReg =
+        mlir::LLVM::AMD::mapRegToCoordinates(linearLayoutSrc, ctx);
+
     // for every output register get element coords,
     // find corresponding operand and copy src register
     int dstRegNum = 1 << dstRegBases.size();
     // 4. for all elements in dst tensor
     for (int regId = 0; regId < dstRegNum; ++regId) {
-      SmallVector<std::pair<StringAttr, int32_t>> hardwareLocation;
       // 5.   get dst value location in tensor
-      for (auto dimName : linearLayoutDst.getInDimNames()) {
-        if (dimName == kReg)
-          hardwareLocation.push_back({dimName, regId});
-        else
-          hardwareLocation.push_back({dimName, 0});
-      }
-      auto elemCoords = linearLayoutDst.apply(hardwareLocation);
+      auto elemCoords =
+          mlir::LLVM::AMD::getElemCoordsFromReg(linearLayoutDst, regId, ctx);
       auto elemCoordsArray =
           llvm::to_vector(llvm::make_second_range(elemCoords));
       // The n-dim destination tensor is built by arranging n-dim source tensors
