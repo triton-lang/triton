@@ -619,12 +619,96 @@ bool isChainDotTail(tt::DotOpInterface dotOp) {
   return false;
 }
 
-SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
-                                       bool toFp16, Value packedVec) {
+SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
+                                    bool toFp16, Value packedVec,
+                                    ISAFamily isaFamily, Value scale) {
   assert((isa<triton::amdgpu::UpcastMXFPOp, triton::gpu::Fp4ToFpOp>(op)) &&
          "Expected UpcastMXFPOp or Fp4ToFpOp");
   Location loc = op->getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto permU32FnTy =
+      LLVM::LLVMFunctionType::get(i32_ty, {i32_ty, i32_ty, i32_ty});
+  LLVM::LLVMFuncOp funcOp =
+      appendOrGetExternFuncOp(rewriter, op, "llvm.amdgcn.perm", permU32FnTy);
+
+  // Start with 8 mxfp4 elements in a single i32 register
+  // | e7e6 | e5e4 | e3e2 | e1e0 |
+  Value input = b.bitcast(packedVec, i32_ty);
+
+  // fp4 to bf16 for cdna3: fp4->fp8->fp32
+  if (isaFamily == ISAFamily::CDNA3 && !toFp16) {
+    // Step 1: extract EM bits for elements 0,2,4,6 and 1,3,5,7 respectively.
+    // e2m1_6420_idx = | 0[0e6EM] | 0[0e4EM] | 0[0e2EM] | 0[0e0EM] |
+    Value e2m1_6420_idx = b.and_(input, b.i32_val(0x07070707));
+    // e2m1_7531_idx = | [0e7EM]0 | [0e5EM]0 | [0e3EM]0 | [0e1EM]0 |
+    Value e2m1_7531_idx = b.and_(input, b.i32_val(0x70707070));
+    e2m1_7531_idx = b.lshr(e2m1_7531_idx, b.i32_val(4));
+
+    // Step 2: convert fp4 to fp8 using LUT
+    Value resLutLo = b.i32_val(0xc4c0b800);
+    Value resLutHi = b.i32_val(0xd4d0ccc8);
+    Value res_6420 = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                                            {resLutHi, resLutLo, e2m1_6420_idx})
+                         .getResult();
+    Value res_7531 = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                                            {resLutHi, resLutLo, e2m1_7531_idx})
+                         .getResult();
+
+    // Step 3: extract sign bits
+    Value s_6420 = b.or_(b.shl(input, b.i32_val(4)), b.i32_val(0x7f7f7f7f));
+    Value s_7531 = b.or_(input, b.i32_val(0x7f7f7f7f));
+
+    // Step 4:  assemble 4 packed fp8 values w/ sign
+    res_6420 = b.and_(res_6420, s_6420);
+    res_7531 = b.and_(res_7531, s_7531);
+
+    // Step 5: convert fp8 to fp32
+    Value res_20 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
+        loc, i64_ty, res_6420, rewriter.getIntegerAttr(i1_ty, 0));
+    Value res_64 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
+        loc, i64_ty, res_6420, rewriter.getIntegerAttr(i1_ty, 1));
+    Value res_31 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
+        loc, i64_ty, res_7531, rewriter.getIntegerAttr(i1_ty, 0));
+    Value res_75 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
+        loc, i64_ty, res_7531, rewriter.getIntegerAttr(i1_ty, 1));
+    SmallVector<Value> pkVals{res_20, res_64, res_31, res_75};
+    if (scale) {
+      // pack 2 values together to help llvm backend codegen
+      Value scaleF32 =
+          b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
+      Type v2f32 = vec_ty(f32_ty, 2);
+      Value pkScale = b.undef(v2f32);
+      pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(0));
+      pkScale = b.insert_element(pkScale, scaleF32, b.i32_val(1));
+      Type v2i32 = vec_ty(i32_ty, 2);
+      for (unsigned i = 0; i < 4; i++) {
+        Value pkScaled = b.fmul(pkScale, b.bitcast(pkVals[i], v2f32));
+        pkVals[i] = (b.bitcast(pkScaled, v2i32));
+      }
+    }
+    Value e0 = b.extract_element(pkVals[0], b.i32_val(0));
+    Value e1 = b.extract_element(pkVals[2], b.i32_val(0));
+    Value e2 = b.extract_element(pkVals[0], b.i32_val(1));
+    Value e3 = b.extract_element(pkVals[2], b.i32_val(1));
+    Value e4 = b.extract_element(pkVals[1], b.i32_val(0));
+    Value e5 = b.extract_element(pkVals[3], b.i32_val(0));
+    Value e6 = b.extract_element(pkVals[1], b.i32_val(1));
+    Value e7 = b.extract_element(pkVals[3], b.i32_val(1));
+    SmallVector<Value, 8> f32Vals{e0, e1, e2, e3, e4, e5, e6, e7};
+    Value sel = b.i32_val(0x07060302);
+    SmallVector<Value> results;
+    for (unsigned i = 0; i < 8; i += 2) {
+      // v2f32->v2bf16: {e1.f32[31:16], e0.f32[31:16]}
+      Value res = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                                         {f32Vals[i + 1], f32Vals[i], sel})
+                      .getResult();
+      Type v2bf16 = vec_ty(bf16_ty, 2);
+      res = b.bitcast(res, v2bf16);
+      results.push_back(b.extract_element(res, b.i32_val(0)));
+      results.push_back(b.extract_element(res, b.i32_val(1)));
+    }
+    return results;
+  }
 
   // MXFP4 has 4 bits, S.EE.M, for Sign, Exponent, and Mantissa respectively.
   // For a specific S, we have a total of 8 bit patterns. We can encode all
@@ -654,15 +738,6 @@ SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
   // Encode Byte #1 (EM, non-S part) for BF16/FP16 in a LUT.
   Value resB1LutLoNoS = toFp16 ? b.i32_val(0x3e3c3800) : b.i32_val(0x3f3f3f00);
   Value resB1LutHiNoS = toFp16 ? b.i32_val(0x46444240) : b.i32_val(0x40404040);
-
-  Type i32Ty = rewriter.getI32Type();
-  auto permU32FnTy = LLVM::LLVMFunctionType::get(i32Ty, {i32Ty, i32Ty, i32Ty});
-  LLVM::LLVMFuncOp funcOp =
-      appendOrGetExternFuncOp(rewriter, op, "llvm.amdgcn.perm", permU32FnTy);
-
-  // Start with 8 mxfp4 elements in a single i32 register
-  // | e7e6 | e5e4 | e3e2 | e1e0 |
-  Value input = b.bitcast(packedVec, i32Ty);
 
   // Step 1: extract EM bits for elements 0,2,4,6 and 1,3,5,7 respectively.
   // e2m1_6420_idx = | 0[0e6EM] | 0[0e4EM] | 0[0e2EM] | 0[0e0EM] |
@@ -757,7 +832,15 @@ SmallVector<Value, 4> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
                                         {res_75, res_64, b.i32_val(0x07060302)})
                      .getResult();
 
-  return {res_10, res_32, res_54, res_76};
+  SmallVector<Value, 4> pkVals{res_10, res_32, res_54, res_76};
+  SmallVector<Value> results;
+  Type elmTy = toFp16 ? f16_ty : bf16_ty;
+  for (int j = 0; j < 4; j++) {
+    Value elements = b.bitcast(pkVals[j], vec_ty(elmTy, 2));
+    results.push_back(b.extract_element(elements, b.i32_val(0)));
+    results.push_back(b.extract_element(elements, b.i32_val(1)));
+  }
+  return results;
 }
 
 } // namespace mlir::LLVM::AMD

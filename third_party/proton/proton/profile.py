@@ -1,10 +1,8 @@
 import functools
 import triton
-import os
-import pathlib
 
-from triton import knobs
-from triton._C.libproton import proton as libproton
+from triton._C.libproton import proton as libproton  # type: ignore
+from triton._C.libtriton import getenv  # type: ignore
 from .flags import flags
 from .hooks import HookManager, LaunchHook, InstrumentationHook
 from .mode import BaseMode
@@ -23,18 +21,6 @@ def _select_backend() -> str:
         raise ValueError("No backend is available for the current target.")
 
 
-def _get_backend_default_path(backend: str) -> str:
-    lib_path = ""
-    if backend == "cupti":
-        # First try to get the path from the environment variable that overrides the default path
-        lib_path = knobs.proton.cupti_lib_dir
-        if lib_path is None:
-            # Get the default path for the cupti backend,
-            # which is the most compatible with the current CUPTI header file triton is compiled with
-            lib_path = str(pathlib.Path(__file__).parent.parent.absolute() / "backends" / "nvidia" / "lib" / "cupti")
-    return lib_path
-
-
 def _get_mode_str(backend: str, mode: Optional[Union[str, BaseMode]]) -> str:
     if backend == "instrumentation":
         prefix = triton.runtime.driver.active.get_current_target().backend
@@ -46,10 +32,19 @@ def _check_env(backend: str) -> None:
     if backend == "roctracer":
         hip_device_envs = ["HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"]
         for env in hip_device_envs:
-            if os.getenv(env, None) is not None:
+            if getenv(env, None) is not None:
                 raise ValueError(
                     f"Proton does not work when the environment variable {env} is set on AMD GPUs. Please unset it and use `ROCR_VISIBLE_DEVICES` instead"
                 )
+
+    # Ensure default envs are set for Proton knobs if not already set by the user.
+    for attr, desc in triton.knobs.proton.knob_descriptors.items():
+        key = desc.key
+        if getenv(key, None) is None:
+            val = getattr(triton.knobs.proton, attr)
+            if val is not None:
+                if env_val := triton.knobs.toenv(val):
+                    triton.knobs.setenv(key, env_val[0])
 
 
 def start(
@@ -107,13 +102,12 @@ def start(
 
     name = DEFAULT_PROFILE_NAME if name is None else name
     backend = _select_backend() if backend is None else backend
-    backend_path = _get_backend_default_path(backend)
     # Convert mode to its string representation for libproton's runtime
     mode_str = _get_mode_str(backend, mode)
 
     _check_env(backend)
 
-    session = libproton.start(name, context, data, backend, backend_path, mode_str)
+    session = libproton.start(name, context, data, backend, mode_str)
 
     if hook == "triton":
         HookManager.register(LaunchHook(), session)

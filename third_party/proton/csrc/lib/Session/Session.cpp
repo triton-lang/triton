@@ -12,14 +12,12 @@ namespace proton {
 
 namespace {
 
-Profiler *makeProfiler(const std::string &name, const std::string &path) {
+Profiler *makeProfiler(const std::string &name) {
   if (proton::toLower(name) == "cupti") {
-    return &CuptiProfiler::instance().setLibPath(path);
-  }
-  if (proton::toLower(name) == "roctracer") {
+    return &CuptiProfiler::instance();
+  } else if (proton::toLower(name) == "roctracer") {
     return &RoctracerProfiler::instance();
-  }
-  if (proton::toLower(name) == "instrumentation") {
+  } else if (proton::toLower(name) == "instrumentation") {
     return &InstrumentationProfiler::instance();
   }
   throw std::runtime_error("Unknown profiler: " + name);
@@ -91,9 +89,9 @@ Profiler *SessionManager::validateAndSetProfilerMode(Profiler *profiler,
 
 std::unique_ptr<Session> SessionManager::makeSession(
     size_t id, const std::string &path, const std::string &profilerName,
-    const std::string &profilerPath, const std::string &contextSourceName,
-    const std::string &dataName, const std::string &mode) {
-  auto *profiler = makeProfiler(profilerName, profilerPath);
+    const std::string &contextSourceName, const std::string &dataName,
+    const std::string &mode) {
+  auto *profiler = makeProfiler(profilerName);
   profiler = validateAndSetProfilerMode(profiler, mode);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
@@ -165,7 +163,6 @@ void SessionManager::removeSession(size_t sessionId) {
 
 size_t SessionManager::addSession(const std::string &path,
                                   const std::string &profilerName,
-                                  const std::string &profilerPath,
                                   const std::string &contextSourceName,
                                   const std::string &dataName,
                                   const std::string &mode) {
@@ -176,7 +173,7 @@ size_t SessionManager::addSession(const std::string &path,
     return sessionId;
   }
   auto sessionId = nextSessionId++;
-  auto newSession = makeSession(sessionId, path, profilerName, profilerPath,
+  auto newSession = makeSession(sessionId, path, profilerName,
                                 contextSourceName, dataName, mode);
   sessionPaths[path] = sessionId;
   sessions[sessionId] = std::move(newSession);

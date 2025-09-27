@@ -8,7 +8,14 @@ from triton_kernels.tensor_details.layout_details.hopper_value import mxfp4_to_b
 from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_mx_scale_cdna4
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
-from ._common import make_matmul_repr, matmul_launch_metadata, swizzle2d, xcd_swizzle, get_scaled_dot_format_string
+from ._common import (
+    _load_tile_attrs,
+    get_scaled_dot_format_string,
+    make_matmul_repr,
+    matmul_launch_metadata,
+    swizzle2d,
+    xcd_swizzle,
+)
 
 
 @triton.jit
@@ -40,14 +47,20 @@ def _matmul_ogs(
              W, WPtr, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
              WScale,
              WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n,
+             OutAcc, stride_acc_z, stride_acc_m, stride_acc_n,
+             OutAccScale, Y_ACC_IS_Y: tl.constexpr,
              B, stride_b_e, # Bias
-             M, N, K, # shapes
+             M, N, K, K_W, # shapes
              # expt data
              Betas, Gammas,
              GatherIndx,
              ScatterSrcIndx, num_idxs,
              WriteBackIndx, writeback_size,
-             ExptHist, ExptOffs, ExptOffsSum, ExptData,
+             ExptHist, ExptOffs, ExptTileOffs, ExptData,
+             EXPT_IS_INNER: tl.constexpr,
+             X_IS_PADDED: tl.constexpr,
+             W_IS_PADDED: tl.constexpr,
+             ExptHistMax,
              # true grid size
              batch_size, grid_m, grid_n,
              # Out scale
@@ -61,7 +74,9 @@ def _matmul_ogs(
              # precision config
              MAX_NUM_IMPRECISE_ACC: tl.constexpr, ALLOW_TF32: tl.constexpr,
              FLEXPOINT_SATURATE_INF: tl.constexpr,
-             PER_BATCH_SCALE: tl.constexpr,
+             PER_BATCH_W_SCALE: tl.constexpr,
+             PER_BATCH_OUT_SCALE: tl.constexpr,
+             PER_BATCH_ACC_SCALE: tl.constexpr,
              # optimization config
              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
              GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr,
@@ -78,8 +93,8 @@ def _matmul_ogs(
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
              UPCAST_INDICES: tl.constexpr = False,
              SWAP_XW: tl.constexpr = False,
-             IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False):
-
+             IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False,
+             ):
     tl.assume(stride_y_k >= 0)
     tl.assume(stride_y_z >= 0)
     tl.assume(stride_y_m >= 0)
@@ -102,6 +117,7 @@ def _matmul_ogs(
     tl.assume(grid_m >= 0)
     tl.assume(grid_n >= 0)
 
+    is_x_microscaled: tl.constexpr = XMxScale is not None
     is_w_microscaled: tl.constexpr = WMxScale is not None
     MX_PACK_DIVISOR: tl.constexpr = MXFP_BLOCK_SIZE
     if is_w_microscaled:
@@ -112,95 +128,8 @@ def _matmul_ogs(
         tl.static_assert(WMxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
         tl.static_assert(SWIZZLE_MX_VALUE == "HOPPER_VALUE" or SWIZZLE_MX_VALUE is None, "Only Hopper swizzling is supported for values")
-    else:
-        tl.static_assert(SWIZZLE_MX_VALUE is None)
-        tl.static_assert(SWIZZLE_MX_SCALE is None)
-    is_x_microscaled: tl.constexpr = XMxScale is not None
-    if is_x_microscaled:
-        x_type: tl.constexpr = X.dtype.element_ty
-        tl.static_assert(is_w_microscaled)
-        tl.static_assert(x_type == tl.float8e4nv, "mx_act_ptr must be float8e4nv")
-        tl.static_assert(XMxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
-        tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
-    is_out_microscaled: tl.constexpr = stride_y_mx_z is not None
 
-    OUT_BLOCK_N: tl.constexpr = BLOCK_N // ACTIVATION_REDUCTION_N
-    yN = N // ACTIVATION_REDUCTION_N
-
-    pid = tl.program_id(0)
-    if ExptOffsSum is not None and XCD_SWIZZLE > 1:
-        # Determine how much padding there is on the expert data. This allows us to
-        # know the true grid size and avoid processing padding tiles.
-        padding_m = grid_m - tl.load(ExptOffsSum)
-    else:
-        padding_m: tl.constexpr = 0
-
-    HAS_FUSED_SCATTER: tl.constexpr = WriteBackIndx is not None
-    index_type: tl.constexpr = tl.int64 if UPCAST_INDICES else tl.int32
-
-    unpadded_m = grid_m - padding_m
-    tl.assume(unpadded_m >= 0)
-    total_actual_tiles = batch_size * unpadded_m * grid_n * SPLIT_K
-    if padding_m > 0 and pid >= total_actual_tiles:
-        tl.device_assert(batch_size == 0)
-        pid_mn = pid - total_actual_tiles
-        if pid_mn < padding_m * grid_n:
-            pid_m, pid_n = swizzle2d(pid_mn, padding_m, grid_n, GROUP_M)
-
-            # set masked out rows to 0
-            if HAS_FUSED_SCATTER and N_EXPTS_ACT == 1:
-                _zero_masked_rows(pid_m, pid_n, Y, stride_y_m, stride_y_n, yN, ScatterSrcIndx, num_idxs, BLOCK_M, OUT_BLOCK_N)
-        return
-
-    # swizzle program ids
-    pid_emnk = pid
-    if XCD_SWIZZLE != 1:
-        pid_emnk = xcd_swizzle(pid_emnk, total_actual_tiles, XCD_SWIZZLE)
-    pid_e = pid_emnk // (unpadded_m * grid_n * SPLIT_K)
-    pid_mnk = pid_emnk % (unpadded_m * grid_n * SPLIT_K)
-    pid_k = pid_mnk % SPLIT_K
-    pid_mn = pid_mnk // SPLIT_K
-    pid_m, pid_n = swizzle2d(pid_mn, unpadded_m, grid_n, GROUP_M)
-    # For split-k, advance to the output k slice
-    if SPLIT_K > 1:
-        Y += pid_k.to( index_type) * stride_y_k
-        if is_out_microscaled:
-            YActualScale += pid_k.to(index_type) * stride_y_mx_k
-    # set masked out rows to 0
-    if HAS_FUSED_SCATTER and N_EXPTS_ACT == 1:
-        _zero_masked_rows(pid_m, pid_n, Y, stride_y_m, stride_y_n, yN, ScatterSrcIndx, num_idxs, BLOCK_M, OUT_BLOCK_N)
-    # unpack expert data
-    if ExptData is None:
-        tl.static_assert(M is not None)
-        expt_id, start_z, start_m, block_id = pid_e, pid_e, 0, pid_m
-    else:
-        tl.static_assert(M is None)
-        expt_data = tl.load(ExptData + pid_m)
-        if expt_data == -1:
-            return
-        expt_id = expt_data & 0x0000FFFF
-        block_id = expt_data >> 16
-        M = tl.load(ExptHist + expt_id)
-        start_m = tl.load(ExptOffs + expt_id)
-        start_z = 0
-    expt_id, block_id = expt_id.to(index_type), block_id.to(index_type)
-    start_m, start_z = start_m.to(index_type), start_z.to(index_type)
-    pid_n, pid_k = pid_n.to(index_type), pid_k.to(index_type)
-    # A pointers
-    offs_x_m = BLOCK_M * block_id + tl.arange(0, BLOCK_M)
-    offs_x_m = tl.max_contiguous(tl.multiple_of(offs_x_m % M, BLOCK_M), BLOCK_M)
-    X += start_z * stride_x_z
-    if GatherIndx is None:
-        X += start_m * stride_x_m
-    else:
-        GatherIndx += start_m
-        # no needs to bounds-check here because `offs_x_m` wraps around M dim
-        offs_x_m = tl.load(GatherIndx + offs_x_m) // N_EXPTS_ACT
-    offs_k = BLOCK_K * pid_k + tl.arange(0, BLOCK_K)
-    XPtrs = X + offs_x_m.to(index_type)[:, None] * stride_x_m + offs_k.to(index_type)[None, :] * stride_x_k
-
-    # TODO: refactor if/else when triton front end improves
-    if is_w_microscaled:
+        # TODO: refactor if/else when triton front end improves
         if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
             tl.static_assert(is_mxfp4, "Only mxfp4 is supported for HOPPER swizzling")
             tl.static_assert(not is_x_microscaled)
@@ -226,7 +155,94 @@ def _matmul_ogs(
             PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
             PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N // W_K_DIVISOR
         MX_SCALE_BLOCK_K: tl.constexpr = BLOCK_K // MX_PACK_DIVISOR
+    else:
+        W_K_DIVISOR: tl.constexpr = 1
+        W_K_MULTIPLIER: tl.constexpr = 1
+        W_N_DIVISOR: tl.constexpr = 1
+        PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
+        PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N
+        tl.static_assert(SWIZZLE_MX_VALUE is None)
+        tl.static_assert(SWIZZLE_MX_SCALE is None)
+    if is_x_microscaled:
+        x_type: tl.constexpr = X.dtype.element_ty
+        tl.static_assert(is_w_microscaled)
+        tl.static_assert(x_type == tl.float8e4nv, "mx_act_ptr must be float8e4nv")
+        tl.static_assert(XMxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
+        tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
+    is_out_microscaled: tl.constexpr = stride_y_mx_z is not None
 
+    OUT_BLOCK_N: tl.constexpr = BLOCK_N // ACTIVATION_REDUCTION_N
+    yN = N // ACTIVATION_REDUCTION_N
+
+    pid = tl.program_id(0)
+    if ExptTileOffs is not None and (not EXPT_IS_INNER):
+        # Determine how much padding there is on the expert data. This allows us to
+        # know the true grid size and avoid processing padding tiles.
+        padding_m = grid_m - tl.load(ExptTileOffs + N_EXPTS_TOT)
+    else:
+        padding_m: tl.constexpr = 0
+
+    HAS_FUSED_SCATTER: tl.constexpr = WriteBackIndx is not None
+    index_type: tl.constexpr = tl.int64 if UPCAST_INDICES else tl.int32
+
+    unpadded_m = grid_m - padding_m
+    tl.assume(unpadded_m >= 0)
+    total_actual_tiles = batch_size * unpadded_m * grid_n * SPLIT_K
+
+    # set masked out rows to 0
+    # We are tiling Y here, so the tiling is independent of matmul (where we
+    # tile X & W and scatter to different rows of Y).
+    # TODO: refactor (same code in _p_matmul_ogs)
+    if HAS_FUSED_SCATTER and N_EXPTS_ACT == 1:
+        tl.device_assert(batch_size == 1)
+        pid_mnk = pid
+        if XCD_SWIZZLE != 1:
+            pid_mnk = xcd_swizzle(pid_mnk, grid_m * grid_n * SPLIT_K, XCD_SWIZZLE)
+        pid_k = pid_mnk % SPLIT_K
+        pid_mn = pid_mnk // SPLIT_K
+        pid_m, pid_n = swizzle2d(pid_mn, grid_m, grid_n, GROUP_M)
+        _zero_masked_rows(pid_m, pid_n,
+                          Y + pid_k.to(index_type) * stride_y_k, stride_y_m, stride_y_n,
+                          yN, ScatterSrcIndx, num_idxs, BLOCK_M, OUT_BLOCK_N)
+
+    if padding_m > 0 and pid >= total_actual_tiles:
+        return
+
+    (
+        expt_id, start_z, start_z_out,
+        start_m, eM, off_m, pid_n,
+        k_tiles, pid_k, off_k_x, off_k_w, K_W,
+    ) = _load_tile_attrs(pid, total_actual_tiles, unpadded_m, grid_n,
+                         M, K, ExptData, ExptHist, ExptOffs, ExptTileOffs,
+                         EXPT_IS_INNER, X_IS_PADDED, W_IS_PADDED,
+                         BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K,
+                         GROUP_M, XCD_SWIZZLE)
+
+    # For split-k, advance to the output k slice
+    if SPLIT_K > 1:
+        Y += pid_k.to( index_type) * stride_y_k
+        if is_out_microscaled:
+            YActualScale += pid_k.to(index_type) * stride_y_mx_k
+
+    expt_id, off_m = expt_id.to(index_type), off_m.to(index_type)
+    start_m, start_z = start_m.to(index_type), start_z.to(index_type)
+    pid_n, pid_k = pid_n.to(index_type), pid_k.to(index_type)
+    # A pointers
+    offs_x_m = off_m + tl.arange(0, BLOCK_M)
+    offs_x_m = tl.max_contiguous(tl.multiple_of(offs_x_m % eM, BLOCK_M), BLOCK_M)
+    X += start_z * stride_x_z
+    if GatherIndx is None:
+        X += start_m * stride_x_m
+    else:
+        GatherIndx += start_m
+        # no needs to bounds-check here because `offs_x_m` wraps around M dim
+        offs_x_m = tl.load(GatherIndx + offs_x_m) // N_EXPTS_ACT
+    offs_k = off_k_x + tl.arange(0, BLOCK_K)
+    XPtrs = X + offs_x_m.to(index_type)[:, None] * stride_x_m + offs_k.to(index_type)[None, :] * stride_x_k
+
+    # TODO: refactor if/else when triton front end improves
+    if is_w_microscaled:
+        tl.static_assert(not EXPT_IS_INNER, "Not supported yet")
         WMxScale += expt_id * stride_w_mx_e
 
         if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
@@ -265,11 +281,6 @@ def _matmul_ogs(
     else:
         WMxScalePtrs = None
         offs_k_scale = None
-        W_K_DIVISOR: tl.constexpr = 1
-        W_K_MULTIPLIER: tl.constexpr = 1
-        W_N_DIVISOR: tl.constexpr = 1
-        PACKED_BLOCK_K_W: tl.constexpr = BLOCK_K
-        PACKED_BLOCK_N_W: tl.constexpr = BLOCK_N
 
     # B pointers
     offs_w_n = pid_n * PACKED_BLOCK_N_W + tl.arange(0, PACKED_BLOCK_N_W)
@@ -284,12 +295,16 @@ def _matmul_ogs(
     else:
         XMxScalePtrs = None
 
-    offs_w_k = PACKED_BLOCK_K_W * pid_k + tl.arange(0, PACKED_BLOCK_K_W)
+    offs_w_k = off_k_w + tl.arange(0, PACKED_BLOCK_K_W)
     W += expt_id * stride_w_e
     WPtrs = W + (offs_w_k.to(index_type)[:, None] * stride_w_k + offs_w_n.to(index_type)[None, :] * stride_w_n)
     # compute output
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    for k in range(K, BLOCK_K * pid_k, -(BLOCK_K * SPLIT_K)):
+    x_k_limit = K + BLOCK_K * SPLIT_K
+    w_k_limit = K_W + PACKED_BLOCK_K_W * SPLIT_K
+    for ki in range(k_tiles):
+        x_k_limit -= BLOCK_K * SPLIT_K
+        w_k_limit -= PACKED_BLOCK_K_W * SPLIT_K
         if EVEN_K:
             mask_k = tl.full([BLOCK_K], True, dtype=tl.int1)
             mask_k_w = tl.full([PACKED_BLOCK_K_W], True, dtype=tl.int1)
@@ -298,12 +313,12 @@ def _matmul_ogs(
             if is_x_microscaled:
                 mask_x_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
         else:
-            mask_k = offs_k < k
-            mask_k_w = offs_w_k < ((k // (W_K_DIVISOR if W_TRANSPOSE else 1)) * W_K_MULTIPLIER)
+            mask_k = offs_k < x_k_limit
+            mask_k_w = offs_w_k < w_k_limit
             if is_w_microscaled and SWIZZLE_MX_SCALE is None:
-                mask_k_scale = offs_k_scale * MX_PACK_DIVISOR < k
+                mask_k_scale = offs_k_scale * MX_PACK_DIVISOR < x_k_limit
             if is_x_microscaled:
-                mask_x_k_scale = offs_x_k_scale * MX_PACK_DIVISOR < k
+                mask_x_k_scale = offs_x_k_scale * MX_PACK_DIVISOR < x_k_limit
 
         x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
         w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0.0, cache_modifier=W_CACHE_MODIFIER)
@@ -355,9 +370,9 @@ def _matmul_ogs(
         XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
         WPtrs += (PACKED_BLOCK_K_W * SPLIT_K) * stride_w_k
     # bias + scale
-    offs_m = BLOCK_M * block_id + tl.arange(0, BLOCK_M)
+    offs_m = off_m + tl.arange(0, BLOCK_M)
     offs_y_n = BLOCK_N * pid_n + tl.arange(0, BLOCK_N)
-    mask_m = offs_m < M
+    mask_m = offs_m < eM
     mask_n = offs_y_n < N
     if B is not None:
         BPtrs = B + expt_id * stride_b_e + offs_y_n
@@ -377,7 +392,7 @@ def _matmul_ogs(
         gammas = tl.full([BLOCK_M], 1, dtype=tl.float32)
     # flexpoint
     x_scale = load_scale(XScale)
-    if PER_BATCH_SCALE:
+    if PER_BATCH_W_SCALE:
         w_scale = load_scale(WScale + expt_id)
     else:
         w_scale = load_scale(WScale)
@@ -395,7 +410,7 @@ def _matmul_ogs(
         out = acc
     out *= gammas[:, None]
     # write-back
-    Y += start_z.to(index_type) * stride_y_z
+    Y += start_z_out.to(index_type) * stride_y_z
     if WriteBackIndx is not None:
         WriteBackIndx += start_m
         dst_idx = tl.load(WriteBackIndx + offs_m, mask=start_m + offs_m < writeback_size, other=-1)
@@ -407,6 +422,19 @@ def _matmul_ogs(
 
     YPtrs = Y + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
     mask = mask_m[:, None] & mask_n[None, :]
+
+    if OutAcc is not None:
+        if PER_BATCH_ACC_SCALE:
+            ScalePtr = OutAccScale + start_z_out
+        else:
+            ScalePtr = OutAccScale
+
+        if Y_ACC_IS_Y:
+            AccPtrs = YPtrs
+        else:
+            AccPtrs = OutAcc + start_z_out.to(index_type) * stride_acc_z + offs_y_m.to(index_type)[:, None] * stride_acc_m + offs_y_n.to(index_type)[None, :] * stride_acc_n
+        out += tl.load(AccPtrs, mask=mask, other=0.0) * load_scale(ScalePtr)
+
     if is_out_microscaled:
         MX_SCALE_BLOCK_N: tl.constexpr = OUT_BLOCK_N // MXFP_BLOCK_SIZE
         N_MX_BLOCK: tl.constexpr = tl.cdiv(N, MXFP_BLOCK_SIZE)
@@ -415,7 +443,7 @@ def _matmul_ogs(
         tl.static_assert(BLOCK_N % MX_SCALE_BLOCK_N == 0, "")
         offs_y_n_scale = MX_SCALE_BLOCK_N * pid_n + tl.arange(0, MX_SCALE_BLOCK_N)
         mask_n_scale = offs_y_n_scale < N_MX_BLOCK
-        YActualScale += start_z.to(index_type) * stride_y_mx_z
+        YActualScale += start_z_out.to(index_type) * stride_y_mx_z
         if WriteBackIndx is None:
             YActualScale += start_m * stride_y_mx_m
             YActualScalePtrs = YActualScale + offs_y_m.to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
@@ -423,6 +451,9 @@ def _matmul_ogs(
             YActualScalePtrs = YActualScale + (offs_y_m - num_idxs // N_EXPTS_ACT).to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
         tl.store(YActualScalePtrs, out_scale, mask=mask_m[:, None] & mask_n_scale[None, :])
     else:
+        if PER_BATCH_OUT_SCALE:
+            YExpectedScale = YExpectedScale + start_z_out
+            YActualScale = YActualScale + start_z_out
         out = float_to_flex(out, YExpectedScale, YActualScale, YChecksumScale, mask, Y, FLEXPOINT_SATURATE_INF)
         if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MXFP8:
             out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtrs.dtype.element_ty)

@@ -644,6 +644,12 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_arg(self, node):
         ast.NodeVisitor.generic_visit(self, node)
+        param = next(p for p in self.jit_fn.params if p.name == node.arg)
+        if param.is_constexpr and (param.do_not_specialize or param.do_not_specialize_on_alignment):
+            raise CompilationError(
+                self.jit_fn.src, node,
+                f"{node.arg} marked as constexpr and listed in do_not_specialize/do_not_specialize_on_alignment. "
+                "Remove constexpr designation to skip specialization.")
         return node.arg
 
     def visit_AnnAssign(self, node):

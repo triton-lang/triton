@@ -957,8 +957,9 @@ void Pingponger::getDotPingponged() {
   kWidth = srcEncoding.getKWidth();
   auto mfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(srcEncoding.getParent());
   SmallVector<int64_t> intShape;
-  intShape.push_back(mfmaEncoding.getMDim());
-  intShape.push_back(mfmaEncoding.getNDim());
+  auto mnkDim = mfmaEncoding.getInstrShape();
+  intShape.push_back(mnkDim[0]);
+  intShape.push_back(mnkDim[1]);
 
   if (dotOps.size() == 1 && useAsyncCopy) {
     if (numWarps != 8) {

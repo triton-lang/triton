@@ -3,6 +3,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Target/LLVMIR/Passes.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Path.h"
@@ -91,7 +92,13 @@ struct LLVMDIScopePass : public impl::LLVMDIScopeBase<LLVMDIScopePass> {
         compileUnitAttr = LLVM::DICompileUnitAttr::get(
             distinctId, llvm::dwarf::DW_LANG_C, fileAttr,
             StringAttr::get(context, "triton"),
-            /*isOptimized=*/true, LLVM::DIEmissionKind::LineTablesOnly);
+            /*isOptimized=*/true,
+            triton::tools::getBoolEnv("LLVM_EXTRACT_DI_LOCAL_VARIABLES")
+                ? LLVM::DIEmissionKind::Full
+                : LLVM::DIEmissionKind::
+                      LineTablesOnly); // DIEmissionKind::Full is required by
+                                       // emiting ptx with dbg-metadata
+                                       // (otherwise assertion fail)
       }
       subprogramFlags = subprogramFlags | LLVM::DISubprogramFlags::Definition;
     } else {
