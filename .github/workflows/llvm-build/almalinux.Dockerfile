@@ -1,4 +1,5 @@
-FROM almalinux:8
+# https://github.com/AlmaLinux/container-images/blob/9f9b3c8c8cf4a57fd42f362570ff47c75788031f/default/amd64/Dockerfile
+FROM almalinux:8.10-20250411
 ARG llvm_dir=llvm-project
 # Add the cache artifacts and the LLVM source tree to the container
 ADD sccache /sccache
@@ -8,6 +9,7 @@ ENV SCCACHE_CACHE_SIZE="2G"
 
 RUN dnf install --assumeyes llvm-toolset
 RUN dnf install --assumeyes python38-pip python38-devel git
+RUN alternatives --set python3 /usr/bin/python3.8
 
 RUN python3 -m pip install --upgrade pip
 RUN python3 -m pip install --upgrade cmake ninja sccache lit
@@ -26,6 +28,8 @@ RUN cmake -GNinja -Bbuild \
   -DCMAKE_CXX_FLAGS="-Wno-everything" \
   -DCMAKE_LINKER=lld \
   -DCMAKE_INSTALL_PREFIX="/install" \
+  -DPython3_EXECUTABLE="/usr/bin/python3.8" \
+  -DPython_EXECUTABLE="/usr/bin/python3.8" \
   -DLLVM_BUILD_UTILS=ON \
   -DLLVM_BUILD_TOOLS=ON \
   -DLLVM_ENABLE_ASSERTIONS=ON \
@@ -34,6 +38,7 @@ RUN cmake -GNinja -Bbuild \
   -DLLVM_ENABLE_TERMINFO=OFF \
   -DLLVM_INSTALL_UTILS=ON \
   -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU" \
+  -DLLVM_ENABLE_ZSTD=OFF \
   /source/llvm-project/llvm
 
 RUN ninja -C build install
