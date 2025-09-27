@@ -6,9 +6,10 @@
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 
 namespace mlir {
+namespace {
 struct LoadInfo {
   // Shared layout is used for loads feeding into dot ops.
-  ttg::SwizzledSharedEncodingAttr sharedEncoding = nullptr;
+  triton::gpu::SwizzledSharedEncodingAttr sharedEncoding = nullptr;
   // The distance of this load's stage to its use' stage.
   int distToUse = 0;
   Operation *use = nullptr;
@@ -33,7 +34,7 @@ enum SchedType {
   SCHED_SIZE
 };
 
-using Clusters = std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE>;
+using Clusters = std::array<triton::CoarseSchedule::Cluster, SCHED_SIZE>;
 using Stages = std::array<int, SCHED_SIZE>;
 } // namespace SingleDotSchedule
 
@@ -64,7 +65,7 @@ enum Clusters {
 };
 
 using ChainedDotClusters =
-    std::array<tt::CoarseSchedule::Cluster, CLUSTER_COUNT>;
+    std::array<triton::CoarseSchedule::Cluster, CLUSTER_COUNT>;
 
 enum Stages {
   STAGE_DOT_1 = 2,
@@ -82,6 +83,7 @@ enum Stages {
 LogicalResult checkPreconditions(scf::ForOp forOp, int numStages,
                                  LoadToInfoMap loadToInfo);
 } // namespace ChainedDotSchedule
+} // namespace
 } // namespace mlir
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTRANSFORMS_PIPELINEUTILITY_H_
