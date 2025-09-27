@@ -1468,8 +1468,9 @@ LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
 //   - In this implementation, each lane in a quad has the same scale factor.
 LinearLayout getSM120DotScaledScaleLayout(
     MLIRContext *ctx, int dotOperandIdx, ArrayRef<int64_t> dotOperandShape,
-    ArrayRef<unsigned> tilesPerWarp, ArrayRef<unsigned> warpsPerCTA,
-    unsigned mmaInstrM, unsigned mmaInstrN, CTALayoutAttr ctaLayoutAttr) {
+    unsigned groupSize, ArrayRef<unsigned> tilesPerWarp,
+    ArrayRef<unsigned> warpsPerCTA, unsigned mmaInstrM, unsigned mmaInstrN,
+    CTALayoutAttr ctaLayoutAttr) {
   unsigned rank = dotOperandShape.size();
   auto outDims = standardOutDimNames(ctx, rank);
 
@@ -1487,26 +1488,48 @@ LinearLayout getSM120DotScaledScaleLayout(
   const int totalWarps = mWarps * nWarps;
   const unsigned mRep_warp = tilesPerWarp[mIndex];
   const unsigned nRep_warp = tilesPerWarp[nIndex];
-  const unsigned kRep = std::min<unsigned>(kSize, 2);
-
+  // Each scale value covers `groupSize` elements along K. For e2m1(fp4),
+  // groupSize = 2 (each scale applies to 2 elements). For fp8, groupSize = 1.
+  const unsigned kRep = kSize / groupSize;
   std::vector<std::vector<int32_t>> registerBase;
   std::vector<std::vector<int32_t>> laneBase;
   std::vector<std::vector<int32_t>> warpBase;
   if (dotOperandIdx == 0) { // per-row A-scale
     laneBase = {{0, 8}, {0, 0}, {0, 1}, {0, 2}, {0, 4}};
+    if (groupSize == 2)
+      registerBase.push_back({1, 0});
+    else if (groupSize == 4) {
+      registerBase.push_back({1, 0});
+      registerBase.push_back({2, 0});
+    }
+
+    // Explicitly encode M tile replication into register basis
     for (int offset = instrM * mWarps; offset < instrM * mWarps * mRep_warp;
          offset <<= 1)
       registerBase.push_back({0, offset});
+    for (int _k = 1, offset = groupSize; _k < kRep; _k *= 2, offset <<= 1)
+      registerBase.push_back({offset, 0});
     for (int w = mWarps; w < totalWarps; w <<= 1)
       warpBase.push_back({0, 0});
     for (int offset = instrM; offset < instrM * mWarps; offset <<= 1)
       warpBase.push_back({0, offset});
   } else { // per-col B-scale
     laneBase = {{0, 0}, {0, 0}, {0, 1}, {0, 2}, {0, 4}};
-    if (nRep_warp > 1)
-      registerBase.push_back({0, nWarps * instrN});
-    for (int k = 1; k < kRep; k += 1)
-      registerBase.push_back({1 << (k - 1), 0});
+
+    if (groupSize == 2)
+      registerBase.push_back({1, 0});
+    else if (groupSize == 4) {
+      registerBase.push_back({1, 0});
+      registerBase.push_back({2, 0});
+    }
+
+    // Explicitly encode N tile replication into register basis
+    for (int offset = instrN * nWarps; offset < instrN * nWarps * nRep_warp;
+         offset <<= 1)
+      registerBase.push_back({0, offset});
+    for (int _k = 1, offset = groupSize; _k < kRep; _k *= 2, offset <<= 1)
+      registerBase.push_back({offset, 0});
+
     for (int offset = instrN; offset < instrN * nWarps; offset <<= 1)
       warpBase.push_back({0, offset});
     for (int w = nWarps; w < totalWarps; w <<= 1)
