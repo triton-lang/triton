@@ -67,6 +67,41 @@ Effects: `MemoryEffects::Effect{}`
 | `result` | ranked tensor of floating-point or integer or ptr values |
 
 
+### `tti.experimental_check_all_active_waiting` (triton::instrument::ExperimentalCheckAllActiveWaitingOp)
+
+_Assert that not all active threads are waiting on matching phases_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_check_all_active_waiting` $activeMask `,` $barriers `,` $waiting `(` $waitingType `)` `,` $barrierStates `(` $barrierStatesType `)` (`,` $pred^)? attr-dict `:` type($barriers) `,` type($waiting) `,` type($barrierStates)
+```
+
+Filter waiting threads to those whose recorded phase matches the current barrier phase, OR-reduce across barriers, and assert that (waitingMask & activeMask) != activeMask.
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>activeMask</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>waitingType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+<tr><td><code>barrierStatesType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `barriers` | ranked tensor of floating-point or integer or ptr values |
+| `waiting` | ptr or ranked tensor of ptr values |
+| `barrierStates` | ptr or ranked tensor of ptr values |
+| `pred` | 1-bit signless integer |
+
+
 ### `tti.experimental_check_outstanding_commits` (triton::instrument::ExperimentalCheckOutstandingCommitsOp)
 
 _Check if the buffer has an outstanding commit._
@@ -241,6 +276,40 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `pred` | 1-bit signless integer |
 
 
+### `tti.experimental_clear_waiting` (triton::instrument::ExperimentalClearWaitingOp)
+
+_Clear the waiting state for the given base thread_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_clear_waiting` $mbar `,` $baseThread `{` $barriers `,` $waiting `(` $waitingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($waiting)
+```
+
+For the barrier row matching mbar, clear both the waiting flag and stored phase for baseThread.
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>baseThread</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>waitingType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `mbar` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `barriers` | ranked tensor of floating-point or integer or ptr values |
+| `waiting` | ptr or ranked tensor of ptr values |
+| `pred` | 1-bit signless integer |
+
+
 ### `tti.experimental_clear_write_tracking` (triton::instrument::ExperimentalClearWriteTrackingOp)
 
 _Clear the write tracking for a buffer_
@@ -305,6 +374,105 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | :-----: | ----------- |
 | `outstandingCommits` | ptr or ranked tensor of ptr values |
 | `pred` | 1-bit signless integer |
+
+
+### `tti.experimental_copy_read_visibility` (triton::instrument::ExperimentalCopyReadVisibilityOp)
+
+_Replicate read visibility rows from one thread to others_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_copy_read_visibility` $sourceThread `,` $destMask `{` $readVisibility `(` $readVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($readVisibility)
+```
+
+Copy the read-visibility row of sourceThread to every thread listed in destMask for all buffers. Destination rows are overwritten.
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>sourceThread</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>destMask</code></td><td>::mlir::IntegerAttr</td><td>64-bit signless integer attribute</td></tr>
+<tr><td><code>readVisibilityType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `readVisibility` | ptr or ranked tensor of ptr values |
+| `pred` | 1-bit signless integer |
+
+
+### `tti.experimental_copy_write_visibility` (triton::instrument::ExperimentalCopyWriteVisibilityOp)
+
+_Replicate write visibility from one thread to others_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_copy_write_visibility` $sourceThread `,` $destMask `{` $writeVisibility `(` $writeVisibilityType `)` `}` (`,` $pred^)? attr-dict `:` type($writeVisibility)
+```
+
+Copy the write-visibility bit of sourceThread to every thread listed in destMask for all buffers. Destination bits are overwritten.
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>sourceThread</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>destMask</code></td><td>::mlir::IntegerAttr</td><td>64-bit signless integer attribute</td></tr>
+<tr><td><code>writeVisibilityType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `writeVisibility` | ptr or ranked tensor of ptr values |
+| `pred` | 1-bit signless integer |
+
+
+### `tti.experimental_init_barrier_state` (triton::instrument::ExperimentalInitBarrierStateOp)
+
+_Initialize the auxiliary barrier state_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_init_barrier_state` $mbar `,` $count `{` $barriers `,` $states `(` $statesType `)` `}` attr-dict `:` type($mbar) `,` type($barriers) `,` type($states)
+```
+
+Initialize the tracked barrier state to phase 0 and set both the initial and current arrival counts.
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>count</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>statesType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `mbar` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `barriers` | ranked tensor of floating-point or integer or ptr values |
+| `states` | ptr or ranked tensor of ptr values |
 
 
 ### `tti.experimental_lock_acquire` (triton::instrument::ExperimentalLockAcquireOp)
@@ -386,6 +554,41 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `buf` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `buffers` | ranked tensor of floating-point or integer or ptr values |
 | `readVisibility` | ptr or ranked tensor of ptr values |
+| `pred` | 1-bit signless integer |
+
+
+### `tti.experimental_set_waiting` (triton::instrument::ExperimentalSetWaitingOp)
+
+_Mark the base thread as waiting on the given barrier phase_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_set_waiting` $mbar `,` $baseThread `,` $phase `{` $barriers `,` $waiting `(` $waitingType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($waiting)
+```
+
+For the barrier row matching mbar, set the waiting flag for baseThread and record the barrier phase being waited on.
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>baseThread</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>waitingType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `mbar` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `phase` | 32-bit signless integer |
+| `barriers` | ranked tensor of floating-point or integer or ptr values |
+| `waiting` | ptr or ranked tensor of ptr values |
 | `pred` | 1-bit signless integer |
 
 
@@ -599,6 +802,74 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMe
 | `barriers` | ranked tensor of floating-point or integer or ptr values |
 | `writeVisibility` | ptr or ranked tensor of ptr values |
 | `writeTracking` | ptr or ranked tensor of ptr values |
+| `pred` | 1-bit signless integer |
+
+
+### `tti.experimental_update_barrier_state` (triton::instrument::ExperimentalUpdateBarrierStateOp)
+
+_Update the auxiliary barrier state after a verified arrive_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_update_barrier_state` $mbar `,` $count `{` $barriers `,` $states `(` $statesType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($states)
+```
+
+Apply an arrive count to the tracked barrier state, toggling the phase when the count reaches zero and reloading the current count from the initial count.
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>count</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>statesType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `mbar` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `barriers` | ranked tensor of floating-point or integer or ptr values |
+| `states` | ptr or ranked tensor of ptr values |
+| `pred` | 1-bit signless integer |
+
+
+### `tti.experimental_verify_barrier_arrive` (triton::instrument::ExperimentalVerifyBarrierArriveOp)
+
+_Verify an arrive count against the tracked barrier state_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_verify_barrier_arrive` $mbar `,` $count `{` $barriers `,` $states `(` $statesType `)` `}` (`,` $pred^)? attr-dict `:` type($mbar) `,` type($barriers) `,` type($states)
+```
+
+Check that applying the arrive count would not drive the tracked current count negative. Triggers an assertion on failure.
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>count</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>statesType</code></td><td>::mlir::TypeAttr</td><td>any type attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `mbar` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `barriers` | ranked tensor of floating-point or integer or ptr values |
+| `states` | ptr or ranked tensor of ptr values |
 | `pred` | 1-bit signless integer |
 
 
