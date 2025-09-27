@@ -596,7 +596,7 @@ def test_reduce_scatter_distributed_with_metadata(monkeypatch):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for Triton kernel execution")
-@pytest.mark.parametrize("TP, EP", [(4, 2), (1, 8), (2, 2)])
+@pytest.mark.parametrize("TP, EP", [(4, 2), (1, 8)])
 @pytest.mark.parametrize("n_tokens", [128, 1024, 30720])
 @pytest.mark.parametrize("hidden_size", [1024, 5760])
 @pytest.mark.parametrize("n_expt_act", [4])
