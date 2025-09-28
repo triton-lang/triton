@@ -24,6 +24,13 @@ def alloc_rand(shape, device, dtype, requires_grad=True):
 @pytest.mark.parametrize("limit", [1e-2, 10])
 def test_op(M, N, limit, device, alpha=0.5):
     torch.manual_seed(2)
+    # initialize expert data
+    n_expts_tot = 6
+    n_expts_act = 2
+    logits = init_routing_data(M, n_expts_tot, device).detach()
+    routing_data, _, _, _ = routing_torch(logits, n_expts_act)
+    n_tokens = routing_data.expt_hist.sum()
+
     # initialize data
     x = alloc_rand([M, N], device=device, dtype=torch.bfloat16)
     precision_config = PrecisionConfig(limit=limit)
