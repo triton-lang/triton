@@ -37,7 +37,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 // Smoke test to check that mfma 32 and dot operand layouts can work with small tensors, for example with shape 16x16
-#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [2, 2], instrShape = [32, 32], isTransposed = true}>
+#mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [2, 2], instrShape = [32, 32, 8], isTransposed = true}>
 #dotop0 = #ttg.dot_op<{opIdx = 0, parent = #mfma, kWidth=4}>
 #dotop1 = #ttg.dot_op<{opIdx = 1, parent = #mfma, kWidth=4}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -468,7 +468,7 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #shared = #ttg.padded_shared<[128:+4] {order = [1, 0], shape = [16, 32]}>
 #smem = #ttg.shared_memory
-#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 4], instrShape = [16, 16], isTransposed = true}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 4], instrShape = [16, 16, 32], isTransposed = true}>
 module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @padded_shared_layout_vectorization(%arg0: tensor<16x32xf16, #blocked>) {
     %0 = ttg.local_alloc %arg0 : (tensor<16x32xf16, #blocked>) -> !ttg.memdesc<16x32xf16, #shared, #smem, mutable>
@@ -483,7 +483,7 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #shared = #ttg.padded_shared<[4:+4] {offset=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0], [2, 0], [4, 0], [8, 0]], block=[]}>
 #smem = #ttg.shared_memory
-#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 4], instrShape = [16, 16], isTransposed = true}>
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 4], instrShape = [16, 16, 32], isTransposed = true}>
 module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: padded_shared_layout_vectorization_limited_by_min_interval
   tt.func @padded_shared_layout_vectorization_limited_by_min_interval(%arg0: tensor<16x32xf16, #blocked>) {
@@ -510,15 +510,39 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 
 // -----
 
+// CHECK-LABEL: padded_shared_layout_subslice_load_store
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [16, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
+#shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [32, 32]}>
+#smem = #ttg.shared_memory
+#mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [2, 1], instrShape = [16, 16, 32], isTransposed = true}>
+module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @padded_shared_layout_subslice_load_store(%arg0: tensor<32x32xf16, #blocked>) {
+    // CHECK: llvm.store {{.*}} : vector<8xf16>, !llvm.ptr<3>
+    // CHECK-NOT: llvm.store
+    %0 = ttg.local_alloc %arg0 : (tensor<32x32xf16, #blocked>) -> !ttg.memdesc<32x32xf16, #shared, #smem, mutable>
+    %1 = ttg.memdesc_subslice %0 [16, 0]  : !ttg.memdesc<32x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<16x32xf16, #shared, #smem, mutable, 32x32>
+    // CHECK-COUNT-2: llvm.load {{.*}} : !llvm.ptr<3> -> vector<4xf16>
+    // CHECK-NOT: llvm.load
+    %2 = ttg.local_load %1: !ttg.memdesc<16x32xf16, #shared, #smem, mutable, 32x32> -> tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+    // CHECK-COUNT-2: llvm.store {{.*}} : vector<4xf16>, !llvm.ptr<3>
+    // CHECK-NOT: llvm.store
+    ttg.local_store %2, %1 : tensor<16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> -> !ttg.memdesc<16x32xf16, #shared, #smem, mutable, 32x32>
+    tt.return
+  }
+}
+
+// -----
+
 // GFX950-LABEL: reduce_32x32
 // GFX950: llvm.call_intrinsic "llvm.amdgcn.permlane32.swap"
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  tt.func @reduce_32x32(%arg0: tensor<64x32xf32, #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = true}>>) {
+  tt.func @reduce_32x32(%arg0: tensor<64x32xf32, #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [32, 32, 8], isTransposed = true}>>) {
 %3101 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
 ^bb0(%arg24: f32, %arg25: f32):
   %3166 = "arith.maxnumf"(%arg24, %arg25) <{fastmath = #arith.fastmath<none>}> : (f32, f32) -> f32
   "tt.reduce.return"(%3166) : (f32) -> ()
-}) : (tensor<64x32xf32, #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = true}>>) -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = true}>}>>
+}) : (tensor<64x32xf32, #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [32, 32, 8], isTransposed = true}>>) -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [32, 32, 8], isTransposed = true}>}>>
   tt.return
   }
 }
@@ -529,12 +553,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // GFX950: llvm.call_intrinsic "llvm.amdgcn.permlane32.swap"
 // GFX950: llvm.call_intrinsic "llvm.amdgcn.permlane16.swap"
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  tt.func @reduce_16x16(%arg0: tensor<64x16xf32, #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>>){
+  tt.func @reduce_16x16(%arg0: tensor<64x16xf32, #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>>){
 %1 = "tt.reduce"(%arg0) <{axis = 1 : i32}> ({
 ^bb0(%arg24: f32, %arg25: f32):
   %3166 = "arith.maxnumf"(%arg24, %arg25) <{fastmath = #arith.fastmath<none>}> : (f32, f32) -> f32
   "tt.reduce.return"(%3166) : (f32) -> ()
-}) : (tensor<64x16xf32, #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>>) -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>}>>
+}) : (tensor<64x16xf32, #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>>) -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #ttg.amd_mfma<{versionMajor = 4, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>}>>
   tt.return
   }
 }

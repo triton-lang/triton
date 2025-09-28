@@ -452,20 +452,29 @@ tt.func @async_copy_invalid_other_type(%input: tensor<64x64x!tt.ptr<f16>, #block
 // -----
 
 #shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
-// expected-error @below {{Subslices with padded encodings are not yet implemented}}
-!unsupported_subslice = !ttg.memdesc<2x2xf32, #shared, #ttg.shared_memory, 4x4>
-
-// -----
-
-#shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
-// expected-error @below {{Mismatch in expected shape for dimension 0. Expected: 4, got: 2}}
+// expected-error @below {{Mismatch in expected shape for dimension 0. Expected: 2, got: 4}}
 !out_dim_too_small = !ttg.memdesc<2x2xf32, #shared, #ttg.shared_memory>
 
 // -----
 
 #shared = #ttg.padded_shared<[4:+4] {offset=[[1, 0], [2, 0], [0, 1], [0, 2]], block=[]}>
-// expected-error @below {{Mismatch in expected shape for dimension 0. Expected: 4, got: 8}}
+// expected-error @below {{Mismatch in expected shape for dimension 0. Expected: 8, got: 4}}
 !out_dim_too_large = !ttg.memdesc<8x8xf32, #shared, #ttg.shared_memory>
+
+// -----
+
+// expected-error @below {{Mismatch of shape and order ranks in padded layout}}
+#shared = #ttg.padded_shared<[4:+4] {shape=[1, 2, 4], order=[1, 0]}>
+
+// -----
+
+#shared = #ttg.padded_shared<[4:+4] {shape=[32, 32], order=[1, 0]}>
+#smem = #ttg.shared_memory
+tt.func public @padded_subview_unsupported_size(%arg0: !ttg.memdesc<2x32x32xf32, #shared, #smem>) {
+    // expected-error @+1 {{SubSlice of low rank PaddedSharedEncoding from higher rank tensors is not supported yet}}
+    %a = ttg.memdesc_subslice %arg0 [0, 16, 0] : !ttg.memdesc<2x32x32xf32, #shared, #smem> -> !ttg.memdesc<2x16x32xf32, #shared, #smem, 2x32x32>
+    tt.return
+}
 
 // -----
 

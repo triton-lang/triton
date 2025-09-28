@@ -120,13 +120,11 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
     if (shape.size() != 2 && shape.size() != 3) {
       return emitError() << "rank must be 2 or 3";
     }
-    auto bitwidth = elementType.getIntOrFloatBitWidth();
-    if (!enc.getUnpacked() && bitwidth > 16) {
-      return emitError() << "bitwidth must be <= 16 for packed tensor memory";
-    }
-    if (enc.getUnpacked() && (16 != bitwidth && 32 != bitwidth)) {
+    unsigned bitwidth = elementType.getIntOrFloatBitWidth();
+    if (bitwidth * enc.getColStride() > 32) {
       return emitError()
-             << "bitwidth must be either 16 or 32 for unpacked tensor memory";
+             << "bitwidth * colStride must be less than or equal to 32. Got "
+             << bitwidth << " and " << enc.getColStride();
     }
     shape = shape.take_back(2);
     allocShape = allocShape.take_back(2);
@@ -177,29 +175,19 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
                          << "the shape size when pipelining.";
     }
 
-    // Subslices are not yet implemented
-    auto subsliceAllocSize =
-        allocShape.drop_front(allocShape.size() - shape.size());
-    for (auto [allocDim, shapeDim] : llvm::zip(shape, subsliceAllocSize)) {
-      if (allocDim != shapeDim) {
-        return emitError() << "Subslices with padded encodings are not yet "
-                           << "implemented.";
-      }
-    }
-
     // Ensure linear component's outDims match the alloc size ignoring
     // pipelining dimension
     auto outDims = standardOutDimNames(ctx, rank);
     const auto &ll = enc.getLinearComponent();
-    auto expectedShape = shape;
-    if (shape.size() == allocShape.size() && shape.size() == rank + 1)
+    auto expectedShape = allocShape;
+    if (rank == allocShape.size() - 1)
       expectedShape = expectedShape.drop_front(1);
 
     for (auto d = 0; d < rank; d++) {
       if (ll.getOutDimSize(outDims[d]) != expectedShape[d]) {
         return emitError() << "Mismatch in expected shape for dimension " << d
-                           << ". Expected: " << ll.getOutDimSize(outDims[d])
-                           << ", got: " << expectedShape[d];
+                           << ". Expected: " << expectedShape[d]
+                           << ", got: " << ll.getOutDimSize(outDims[d]);
       }
     }
   }

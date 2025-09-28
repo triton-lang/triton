@@ -80,6 +80,8 @@ def _reduce_grouped(X, stride_xb: tl.uint64, stride_xm: tl.uint64, stride_xn,  #
             acc_scale = tl.reshape(acc_scale, [acc_scale.shape[-1]])
         # Convert to flexpoint output if configured (scalar scales)
         acc = float_to_flex(acc, OutExpectedScale, OutActualScale, OutChecksumScale, None, Out, FLEXPOINT_SATURATE_INF)
+        if not HAS_OUT_MX_SCALE and EPILOGUE_FN is not None:
+            acc = EPILOGUE_FN(acc, *epilogue_fn_args, target_dtype=Out.dtype.element_ty)
         # write-back for this tile
         out_ptr = OutPtrs + pid_t * stride_om
         tl.store(out_ptr, acc, mask=out_n_mask)

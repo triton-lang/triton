@@ -578,7 +578,7 @@ def matmul_warp_specialized_kernel(a_desc, b_desc, c_desc, SchedulerImpl: gl.con
         mbarrier.init(load_empty_bars.index(i), count=1)
         mbarrier.init(load_ready_bars.index(i), count=1)
 
-    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], unpacked=True)
+    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
     acc_bufs = allocate_tensor_memory(gl.float32, [2, BLOCK_M, BLOCK_N], tmem_layout)
     acc_empty_bars = gl.allocate_shared_memory(gl.int64, [2, 1], mbarrier.MBarrierLayout())
     acc_ready_bars = gl.allocate_shared_memory(gl.int64, [2, 1], mbarrier.MBarrierLayout())

@@ -513,56 +513,51 @@ LogicalResult MemDescReshapeOp::verify() {
   if (failed(inferReturnTypes(getContext(), getLoc(), srcType,
                               dstType.getShape(), expectedTy)))
     return failure();
-  // Check that the alloc shape separately to give a cleaner error, given that
-  // it's the most likely source of the error.
-  if (expectedTy.getAllocShape() != dstType.getAllocShape()) {
-    return emitError(
-        "The result alloc shape does not match the expected alloc shape.");
-  }
-  if (expectedTy != dstType) {
-    return emitError("source and destination layout are incompatible.");
-  }
-  return success();
+  return OpTrait::impl::verifyEquivalentType(expectedTy, dstType);
 }
 
 static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
                                                    Attribute srcEnc,
                                                    ArrayRef<int64_t> dstShape,
                                                    Attribute &dstEnc) {
+  // TODO Delete this once SharedLinearEncodingAttr is more widely supported.
   if (auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(srcEnc)) {
-    // TODO: supporting reshape of CTA layouts is non-trivial.
-    if (getNumCTAs(mmaEncoding) > 1)
-      return failure();
-    int innerDimDst =
-        mmaEncoding.getTransposed() ? dstShape.front() : dstShape.back();
-    int innerDimSrc =
-        mmaEncoding.getTransposed() ? srcShape.front() : srcShape.back();
-    // For now disallow reshape of the inner dimension.
-    if (innerDimDst != innerDimSrc)
-      return failure();
     auto *ctx = srcEnc.getContext();
-
-    // CTALayout can be all 1's because we bailed on multi-CTA layouts above.
-    auto CTALayout = CTALayoutAttr::get(
-        ctx,
-        /*CTAsPerCGA=*/SmallVector<unsigned>(dstShape.size(), 1),
-        /*CTASplitNum=*/SmallVector<unsigned>(dstShape.size(), 1),
-        /*CTAOrder=*/llvm::to_vector(llvm::seq<unsigned>(dstShape.size())));
-    dstEnc = NVMMASharedEncodingAttr::get(
-        ctx, mmaEncoding.getSwizzlingByteWidth(), mmaEncoding.getTransposed(),
-        mmaEncoding.getElementBitWidth(), mmaEncoding.getFp4Padded(),
-        CTALayout);
-    // Big guns, check linear layouts are equivalent
-    // We disallow reshaping memdesc_subslice in the verifier
-    // so allocShape == shape
-    auto srcLL = toLinearLayout(srcShape, srcEnc);
-    auto dstLL = toLinearLayout(dstShape, dstEnc);
-    if (reshapeLayout(ctx, srcLL, dstShape) != dstLL) {
-      return failure();
+    if (getNumCTAs(mmaEncoding) == 1) {
+      int innerDimDst =
+          mmaEncoding.getTransposed() ? dstShape.front() : dstShape.back();
+      int innerDimSrc =
+          mmaEncoding.getTransposed() ? srcShape.front() : srcShape.back();
+      // We can keep an NVMMAShared encoding only if the innermost dimension is
+      // preserved. Otherwise fall back to the generic shared-linear encoding
+      // logic below.
+      if (innerDimDst == innerDimSrc) {
+        auto CTALayout = CTALayoutAttr::get(
+            ctx,
+            /*CTAsPerCGA=*/SmallVector<unsigned>(dstShape.size(), 1),
+            /*CTASplitNum=*/SmallVector<unsigned>(dstShape.size(), 1),
+            /*CTAOrder=*/llvm::to_vector(llvm::seq<unsigned>(dstShape.size())));
+        auto candidateEncoding = NVMMASharedEncodingAttr::get(
+            ctx, mmaEncoding.getSwizzlingByteWidth(),
+            mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
+            mmaEncoding.getFp4Padded(), CTALayout);
+        auto srcLL = toLinearLayout(srcShape, srcEnc);
+        auto dstLL = toLinearLayout(dstShape, candidateEncoding);
+        if (reshapeLayout(ctx, srcLL, dstShape) == dstLL) {
+          dstEnc = candidateEncoding;
+          return success();
+        }
+      }
     }
-    return success();
   }
-  return failure();
+
+  // Generic LL case
+  auto sharedEnc = cast<SharedEncodingTrait>(srcEnc);
+  auto *ctx = srcEnc.getContext();
+  auto srcLL = toLinearLayout(srcShape, srcEnc);
+  auto dstLL = reshapeLayout(ctx, srcLL, dstShape);
+  dstEnc = SharedLinearEncodingAttr::get(ctx, dstLL, sharedEnc.getAlignment());
+  return success();
 }
 
 LogicalResult MemDescReshapeOp::inferReturnTypes(
@@ -815,7 +810,16 @@ LogicalResult MemDescSubsliceOp::verify() {
   }
 
   auto ctx = getContext();
-  auto ll = triton::gpu::toLinearLayout(srcTy);
+  LinearLayout ll;
+  if (auto paddedEncoding = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
+    if (paddedEncoding.getRank() < srcTy.getRank()) {
+      return emitError("SubSlice of low rank PaddedSharedEncoding from higher "
+                       "rank tensors is not supported yet");
+    }
+    ll = paddedEncoding.getLinearComponent();
+  } else {
+    ll = triton::gpu::toLinearLayout(srcTy);
+  }
   // NYI: We don't support non-trivial block dimension for now.
   auto kBlock = mlir::StringAttr::get(getContext(), "block");
   if (ll.getInDimSize(kBlock) != 1) {

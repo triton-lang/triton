@@ -48,7 +48,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = true>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: matmul_like_fence_mma_v5
   tt.func public @matmul_like_fence_mma_v5(%arg0: tensor<128x128xf16, #blocked>, %arg1: tensor<128x64xf16, #blocked2>) {
@@ -149,7 +149,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
-#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, unpacked = true>
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 
 module attributes {ttg.target = "cuda:100", "ttg.num-warps" = 4 : i32} {
 

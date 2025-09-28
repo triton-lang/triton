@@ -1,6 +1,6 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @alloc_tensor_memory() {
     // expected-error @+1 {{uninitialized alloc must have a mutable memdesc type}}
@@ -13,7 +13,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @alloc_tensor_memory() {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
@@ -31,11 +31,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #scales = #ttg.linear<{register = [[0, 1], [0, 2], [32, 0], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0]], block = []}>
 #tmem = #ttng.tensor_memory_scales_encoding<>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @alloc_tensor_memory(%arg: !ttg.memdesc<1x512xi8, #shared1, #ttg.shared_memory, mutable>) {
+  tt.func public @alloc_tensor_memory(%arg: !ttg.memdesc<128x4xi8, #shared1, #ttg.shared_memory, mutable>) {
     %cst = arith.constant dense<0> : tensor<128x4xi8, #scales>
     %0 = ttng.tmem_alloc %cst : (tensor<128x4xi8, #scales>) -> !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory>
     // expected-error @+1 {{Cannot copy into an immutable alloc}}
-    ttng.tmem_copy %arg, %0 : !ttg.memdesc<1x512xi8, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory>
+    ttng.tmem_copy %arg, %0 : !ttg.memdesc<128x4xi8, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<128x4xi8, #tmem, #ttng.tensor_memory>
     tt.return
   }
 }

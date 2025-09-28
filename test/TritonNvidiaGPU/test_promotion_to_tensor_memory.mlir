@@ -7,7 +7,7 @@
 // Incompatible access layout for tmem; tmem access requires one thread per datapath
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, unpacked = true>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: @no_tmem_promotion
   tt.func public @no_tmem_promotion(
@@ -42,7 +42,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
 // Compatible layout for tmem access
 #blocked3 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
-#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, unpacked = true>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
   // CHECK-LABEL: @promote_lhs_to_tmem
   tt.func public @promote_lhs_to_tmem(

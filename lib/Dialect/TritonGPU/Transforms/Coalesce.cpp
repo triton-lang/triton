@@ -22,6 +22,51 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUCOALESCE
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
+// Descriptor load/stores don't need to consider L1 coalescing but the
+// destination layout will affect the shared memory load/store generated. So we
+// still want to allow vectorization for the src/destination layout up to
+// 16bytes.
+static Attribute pickDescriptorLoadStoreLayout(int numWarps, int threadsPerWarp,
+                                               RankedTensorType type) {
+  auto shapePerCTA = triton::gpu::getShapePerCTA(type);
+  int numElems = product<int64_t>(shapePerCTA);
+  int numThreads = numWarps * threadsPerWarp;
+  int numElemsPerThread = std::max(numElems / numThreads, 1);
+
+  int maxVectorSize = 128 / type.getElementTypeBitWidth();
+
+  int vectorSize = std::min(numElemsPerThread, maxVectorSize);
+  SmallVector<unsigned> sizePerThread(type.getRank(), 1);
+  sizePerThread.back() = vectorSize;
+
+  SmallVector<unsigned> order =
+      getMatrixOrder(type.getRank(), /*rowMajor*/ true);
+  auto CTALayout = triton::gpu::getCTALayout(type.getEncoding());
+
+  Attribute layout = triton::gpu::BlockedEncodingAttr::get(
+      type.getContext(), type.getShape(), sizePerThread, order, numWarps,
+      threadsPerWarp, CTALayout);
+  return layout;
+}
+
+static void pickDescriptorLoadStoreLayout(
+    ModuleOp moduleOp, llvm::MapVector<Operation *, Attribute> &layoutMap) {
+  int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(moduleOp);
+  moduleOp.walk([&](Operation *op) {
+    int numWarps = lookupNumWarps(op);
+    if (auto load = dyn_cast<DescriptorOpInterface>(op)) {
+      if (load->getNumResults() == 1)
+        layoutMap[op] = pickDescriptorLoadStoreLayout(
+            numWarps, threadsPerWarp,
+            cast<RankedTensorType>(load->getResult(0).getType()));
+    }
+    if (auto store = dyn_cast<DescriptorStoreLikeOpInterface>(op)) {
+      layoutMap[op] = pickDescriptorLoadStoreLayout(numWarps, threadsPerWarp,
+                                                    store.getSrc().getType());
+    }
+  });
+}
+
 struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
   void
   setCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
@@ -132,6 +177,9 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       setCoalescedEncoding(axisInfoAnalysis, curr, numWarps, threadsPerWarp,
                            layoutMap);
     });
+
+    // Also pick a layout for descriptor load/store ops.
+    pickDescriptorLoadStoreLayout(moduleOp, layoutMap);
 
     // For each memory op that has a layout L1:
     // 1. Create a coalesced memory layout L2 of the pointer operands

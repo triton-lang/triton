@@ -231,10 +231,13 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
       tempAttr = cast<ttg::SwizzledSharedEncodingAttr>(memDesc.getEncoding());
-      LDBG("Deduced shared encoding candidate from memDesc: " << tempAttr);
-      if (!getSharedEncIfAllUsersAreDotEnc(userResult).has_value()) {
+      // If the immediate user is ttg::LocalAllocOp, likely it's created in
+      // TritonAMDGPUOptimizeDotOperands. We should just respect it.
+      if (!getSharedEncIfAllUsersAreDotEnc(userResult).has_value() &&
+          !isa<ttg::LocalAllocOp>(user)) {
         return std::nullopt;
       }
+      LDBG("Deduced shared encoding candidate from memDesc: " << tempAttr);
       sharedEncs.push_back(tempAttr);
     } else {
       if (!(isa<ttg::ConvertLayoutOp>(user) ||

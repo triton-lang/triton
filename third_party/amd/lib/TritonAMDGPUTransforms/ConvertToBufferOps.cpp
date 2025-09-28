@@ -153,32 +153,33 @@ bool verifyNonNegativeExpr(
     Value initValue = initArgs[initArgIdx];
     Value yieldValue = forOp.getTiedLoopYieldedValue(blockArg)->get();
 
-    // Set the non-negative result based off init value of block argumen.
-    // Once the UD-chain stops at the blockargument, the recursive call here
-    // will return with the inital value.
-    /*
-    scf.for ... iter_args(%block_arg0 = %c1)-> {
-        ...
-        %next_arg0_value = arith.addi %block_arg0, %cst_0
-        scf.yield %next_block_arg0
-    }
-    When we follow the UD-chain of the `block_arg0` above, based on the defition
-    of scf.forop, we will stop either at the `iter_args` of scf.forOp or some
-    fixed point inside the loop. The value used in `iter_args` is inital value
-    of `block_args`, and we will check it is nonnegative or not firstly.
-    */
-    bool nonNegative =
-        verifyNonNegativeExpr(initValue, visitedBlockArgs, assumptions, solver);
-    visitedBlockArgs[blockArg] = nonNegative;
-    if (!nonNegative) {
+    // Now to check loop-carried variables in (`iter_arg`).
+    // Because of the cyclic dataflow dependency across loop iterations
+    // (the value at `k+1` depends on the value from iteration `k`). The check
+    // has two parts:
+    // 1. Base Case: The property holds for the initial value (`initValue`).
+    // 2. Inductive Step: Assuming the property holds for the block argument at
+    // the start of an iteration (`P(k)`), we prove it also holds for the value
+    // yielded for the next iteration (`P(k+1)`).
+
+    // 1. The induction starts with the base case.
+    if (!verifyNonNegativeExpr(initValue, visitedBlockArgs, assumptions,
+                               solver)) {
       LDBG("   Cannot verify the intial value "
            << initValue << " of blockargument " << blockArg
            << " is non negative");
       return false;
     }
 
-    nonNegative = verifyNonNegativeExpr(yieldValue, visitedBlockArgs,
-                                        assumptions, solver);
+    // 2. Establish the inductive hypothesis and start the inductive step.
+    // We temporarily place an ASSUMPTION into the cache as the intermediate
+    // result.
+    visitedBlockArgs[blockArg] = true;
+
+    // 3. Record the FINAL VERDICT based on the result of the inductive step.
+    // The assumption is now replaced with the actual proven result.
+    auto nonNegative = verifyNonNegativeExpr(yieldValue, visitedBlockArgs,
+                                             assumptions, solver);
     visitedBlockArgs[blockArg] = nonNegative;
     if (!nonNegative) {
       LDBG("   Cannot verify the value " << yieldValue << " of blockargument "
@@ -188,9 +189,6 @@ bool verifyNonNegativeExpr(
     }
 
     return true;
-  } else {
-    LDBG("Block argument of a non scf.ForOp.");
-    return false;
   }
 
   bool nonNegative =

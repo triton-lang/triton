@@ -1,4 +1,5 @@
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx950 matrix-instruction-size=0" | FileCheck %s --check-prefixes CHECK
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul="arch-generation-name=gfx950 matrix-instruction-size=16" | FileCheck %s --check-prefixes MFMA16
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
@@ -226,34 +227,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-// CHECK-LABEL: mfma_dot_scaled_bf16_fp8e4
-#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
-#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @mfma_dot_scaled_bf16_fp8e4(
-      %arg0: tensor<32x64xbf16, #blocked2>,
-      %arg1: tensor<64x32xf8E4M3FN, #blocked>,
-      %arg2: tensor<32x2xi8, #blocked1>,
-      %arg3: tensor<32x32x!tt.ptr<f32>, #blocked>
-    ) {
-    // CHECK-NOT: tt.fp_to_fp
-    // CHECK-NOT: tt.dot_scaled
-    // CHECK: %[[A:.*]] = ttg.convert_layout %{{.*}} : tensor<32x64xbf16, #blocked{{.*}}> -> tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-    // CHECK: %[[B:.+]] = ttg.convert_layout %{{.*}} : tensor<64x32xf8E4M3FN, #blocked{{.*}}> -> tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-    // CHECK: %[[S:.+]] = ttg.convert_layout %{{.*}} : tensor<32x2xi8, #blocked{{.*}}> -> tensor<32x2xi8, #blocked{{.*}}>
-    // CHECK: %[[UB:.+]] = amdgpu.upcast_mxfp %[[B]], %[[S]] fp_type = e4m3 {fastMath = false} : tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>, tensor<32x2xi8, #blocked{{.*}}> -> tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-    // CHECK: %{{.*}} = tt.dot %[[A]], %[[UB]], %{{.*}} : tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<32x32xf32, #mma>
-    %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #blocked>
-    %1 = tt.dot_scaled %arg0, %arg1 scale %arg2, %cst lhs = bf16 rhs = e4m3 {fastMath = false} : tensor<32x64xbf16, #blocked2> * tensor<64x32xf8E4M3FN, #blocked>, tensor<32x2xi8, #blocked1> -> tensor<32x32xf32, #blocked>
-    tt.store %arg3, %1 : tensor<32x32x!tt.ptr<f32>, #blocked>
-    tt.return
-  }
-}
-
-
-// -----
-
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [2, 2], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
 // CHECK{LITERAL}: #shared = #ttg.swizzled_shared<{vec = 16, perPhase = 4, maxPhase = 4, order = [1, 0]}>
@@ -319,6 +292,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // CHECK: tt.dot_scaled %[[A]], %[[B]], %{{.*}} lhs = e2m1 rhs = e2m1 {fastMath = false}
     %accumulator_52 = tt.dot_scaled %a, %b1, %c lhs = e2m1 rhs = e2m1 {fastMath = false, lhs_k_pack = false, rhs_k_pack = false} : tensor<64x128xi8, #blocked> * tensor<128x64xi8, #blocked> -> tensor<128x128xf32, #blocked>
     tt.store %arg4, %accumulator_52 : tensor<128x128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Checks that for fp8 * fp8 problems with a K < 64, we don't promote to use
+// V_MFMA_SCALE_F32_*_F8F6F4 which requires shape 16x16x128 or 32x32x64.
+
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [1, 64], warpsPerCTA = [4, 2], order = [1, 0]}>
+// CHECK{LITERAL}: #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 8], instrShape = [16, 16, 32], isTransposed = true}>
+// CHECK-LABEL: mfma_dot_small_k
+// MFMA16{LITERAL}: #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [1, 8], instrShape = [16, 16, 32], isTransposed = true}>
+// MFMA16-LABEL: mfma_dot_small_k
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @mfma_dot_small_k(
+      %arg0: tensor<16x32xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>,
+      %arg1: tensor<32x256xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
+      %init: tensor<16x256xf32, #blocked>,
+      %arg4: tensor<16x256x!tt.ptr<f32>, #blocked>
+      ) {
+    // CHECK: tt.dot {{.*}} -> tensor<16x256xf32, #mma>
+    // MFMA16: tt.dot {{.*}} -> tensor<16x256xf32, #mma>
+    %1 = tt.dot %arg0, %arg1, %init : tensor<16x32xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<32x256xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x256xf32, #blocked>
+    tt.store %arg4, %1 : tensor<16x256x!tt.ptr<f32>, #blocked>
     tt.return
   }
 }

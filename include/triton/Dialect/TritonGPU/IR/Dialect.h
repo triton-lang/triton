@@ -48,6 +48,7 @@ constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
 
 // Find the contextual number of warps on which this operation is executed.
 int lookupNumWarps(Operation *op);
+int lookupNumWarps(Region *region);
 // Try to find the contextual number of warps on which this operation is
 // executed. Returns nullopt if a warp size cannot be find. This is used for
 // verifiers.
@@ -272,8 +273,8 @@ llvm::SmallVector<unsigned>
 expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o);
 
 // Return true if the two layouts represent the exact same mapping.
-bool areLayoutsEquivalent(ArrayRef<int64_t> shape, DistributedEncodingTrait lhs,
-                          DistributedEncodingTrait rhs);
+bool areLayoutsEquivalent(ArrayRef<int64_t> shape, LayoutEncodingTrait lhs,
+                          LayoutEncodingTrait rhs);
 
 // Return true if the innermost numElems are contiguous.
 bool isInnermostContiguous(MemDescType type, unsigned numElems);

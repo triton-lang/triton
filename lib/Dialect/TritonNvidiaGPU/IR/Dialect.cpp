@@ -51,53 +51,38 @@ namespace nvidia_gpu {
 static constexpr int numTmemRows = 128;
 
 TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
-  const int rowSizeInBytes = 4;
-  auto shapePerCTA = triton::gpu::getShapePerCTA(memDescType);
-  if (isa<TensorMemoryScalesEncodingAttr>(memDescType.getEncoding())) {
-    // For scales the data are packed and replicated 4 times.
-    assert(memDescType.getElementType().getIntOrFloatBitWidth() == 8);
-    assert(memDescType.getShape().size() == 2 &&
-           "TODO handle multibuffering of scales.");
-    int k = shapePerCTA[1];
-    int m = shapePerCTA[0];
-    int numColumn = ceil<int>(m, 32) * ceil<int>(k, 4);
-    return TMemAllocation(numColumn, numTmemRows);
+  auto *ctx = memDescType.getContext();
+  auto S = [&](StringRef str) { return StringAttr::get(ctx, str); };
+  auto kRow = S("row");
+  auto kCol = S("col");
+  // Remove multibuffering if present
+  auto shape = memDescType.getShape().take_back(2);
+  auto ll = toLinearLayout(shape, memDescType.getEncoding());
+  auto bitwidth = memDescType.getElementTypeBitWidth();
+  int nRow = ll.getInDimSize(kRow);
+  int nCol = ll.getInDimSize(kCol) / (32 / bitwidth);
+  // If we have just one 16xcol block per warp, we don't allocate 128 rows
+  // we use 64 rows instead.
+  // We could generalise this to when we have more zeros in the layout, but
+  // the allocator does not support this yet
+  if (ll.getBasis(kRow, llvm::Log2_32(16)) == ArrayRef{0, 0}) {
+    nRow /= 2;
   }
-  assert(isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-             memDescType.getEncoding()) &&
-         "Expecting a tensor memory encoding attribute");
-  triton::nvidia_gpu::TensorMemoryEncodingAttr attr =
-      cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
-          memDescType.getEncoding());
-  bool isUnpacked = attr.getUnpacked();
-  int64_t elementSizeInBytes =
-      isUnpacked ? rowSizeInBytes
-                 : memDescType.getElementType().getIntOrFloatBitWidth() / 8;
-  int sizeInBytes = product(shapePerCTA) * elementSizeInBytes;
-  int numRows = numTmemRows;
-  // BlockM of 64 is and interleaved format, where for single message only the
-  // first 16 rows are used. For multiple blocks, the rows are interleaved, i.e.
-  //  0                   N/2                     N
-  //  ---------------------------------------------
-  // 0  0,0 0,1... 0,N/2-1   0,N/2 0,N/2+1 ... 0, N-1  \
-  //...                                                  Block 0
-  // 15 15,0 15,1..15,N/2-1  15,N/2 15,N/2+1...15, N-1 /
-  // 16 0,0 0,1... 0,N/2-1   0,N/2 0,N/2+1 ... 0, N-1  \
-  //...                                                  Block 1
-  // 31 15,0 15,1..15,N/2-1  15,N/2 15,N/2+1...15, N-1 /
-  // Note that allocations that consists of single block of 64 rows are
-  // "sparse" and only half of the rows are used.
-  // Note that even for 3D shapes for which 2D slices are big enough to fit
-  // entire tensor block, we will use "sparse" allocation.
-  int blockM = attr.getBlockM();
-  int blockN = attr.getBlockN();
-  int lastDim = shapePerCTA.size() - 1;
-  int isSingleBlock =
-      (shapePerCTA[lastDim - 1] <= blockM) && (shapePerCTA[lastDim] <= blockN);
-  if (blockM == 64 && isSingleBlock)
-    numRows = 64;
-  int numColumn = ceil<int>(sizeInBytes, (numRows * rowSizeInBytes));
-  return TMemAllocation(numColumn, numRows);
+
+  // Hack: We should represent this in the LL. Remove the block dimension
+  if (auto tmemEnc =
+          dyn_cast<TensorMemoryEncodingAttr>(memDescType.getEncoding())) {
+    nCol /= tmemEnc.getCTASplitM() * tmemEnc.getCTASplitN();
+  } else if (auto tmemScaleEnc = dyn_cast<TensorMemoryScalesEncodingAttr>(
+                 memDescType.getEncoding())) {
+    nCol /= tmemScaleEnc.getCTASplitM() * tmemScaleEnc.getCTASplitN();
+  }
+  // If multibuffering is present, we need to allocate more cols
+  if (memDescType.getRank() > 2) {
+    assert(memDescType.getRank() == 3);
+    nCol *= memDescType.getDimSize(0);
+  }
+  return {nRow, nCol};
 }
 
 DistributedEncodingTrait getTmemLoadStoreLayout32x32b(unsigned M, unsigned N,
@@ -193,8 +178,8 @@ bool isDistributedLayoutSplitMTmemLoadStore(RankedTensorType tensorType,
   if (!layout)
     return false;
   return areLayoutsEquivalent(
-      tensorType.getShape(), cast<DistributedEncodingTrait>(layout),
-      cast<DistributedEncodingTrait>(tensorType.getEncoding()));
+      tensorType.getShape(), cast<LayoutEncodingTrait>(layout),
+      cast<LayoutEncodingTrait>(tensorType.getEncoding()));
 }
 
 SmallVector<DistributedEncodingTrait>
@@ -241,15 +226,18 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
                                        gpu::MemDescType memType) {
   SmallVector<DistributedEncodingTrait> layouts =
       getTmemCompatibleLayouts(op, tensorType, memType);
-  auto enc = cast<DistributedEncodingTrait>(tensorType.getEncoding());
+  auto enc = cast<LayoutEncodingTrait>(tensorType.getEncoding());
   return llvm::any_of(layouts, [&](DistributedEncodingTrait layout) {
-    return areLayoutsEquivalent(tensorType.getShape(), layout, enc);
+    return areLayoutsEquivalent(tensorType.getShape(),
+                                cast<LayoutEncodingTrait>(layout), enc);
   });
 }
 
-LogicalResult TensorMemoryEncodingAttr::verify(
-    function_ref<InFlightDiagnostic()> emitError, unsigned blockM,
-    unsigned blockN, bool unpacked, unsigned CTASplitM, unsigned CTASplitN) {
+LogicalResult
+TensorMemoryEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
+                                 unsigned blockM, unsigned blockN,
+                                 unsigned colStride, unsigned CTASplitM,
+                                 unsigned CTASplitN) {
   if (CTASplitM < 1 || CTASplitN < 1) {
     return emitError() << "CTASplitM and CTASplitN must be greater than 0";
   }
@@ -259,8 +247,10 @@ LogicalResult TensorMemoryEncodingAttr::verify(
   if (!llvm::isPowerOf2_32(blockN)) {
     return emitError() << "blockN must be a power of 2 but got " << blockN;
   }
-  if (!unpacked && blockN < 2) {
-    return emitError() << "blockN must be at least 2 for packed tensor memory";
+  if (!(colStride >= 1 && llvm::isPowerOf2_32(colStride))) {
+    return emitError()
+           << "colStride must be a power of two greater than or equal to 1 "
+           << "but got " << colStride;
   }
   return success();
 }

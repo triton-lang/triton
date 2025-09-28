@@ -9,7 +9,7 @@
 #ALs0 = #ttg.slice<{parent=#AL, dim=0}>
 #BLs0 = #ttg.slice<{parent=#BL, dim=0}>
 #BLs1 = #ttg.slice<{parent=#BL, dim=1}>
-#C = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32], isTransposed = true}>
+#C = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32, 16], isTransposed = true}>
 #A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 4}>
 #B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 4}>
 
