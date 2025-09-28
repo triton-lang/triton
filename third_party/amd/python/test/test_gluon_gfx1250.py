@@ -175,6 +175,6 @@ def test_runtime_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype, k_di
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
         INSTR_SHAPE_K=k_dim, K_WIDTH=2 if a_dtype == torch.float32 else 8)
 
-    c_triton = c_device.cpu().to(torch.float32)
+    c_triton = c_device.cpu()
     c_torch = a.to(torch.float32) @ b.to(torch.float32)
     torch.testing.assert_close(c_triton, c_torch, rtol=1e-4, atol=1e-4)
