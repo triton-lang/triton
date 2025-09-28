@@ -583,6 +583,11 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
     LDBG("Try to convert: " << op);
     Value ptr = op.getOperand(0);
 
+    if (toDodgeBug(op)) {
+      LDBG("To dodge a llc bug arising from f32 load fed to tt.dot " << op);
+      return rewriter.notifyMatchFailure(op, "Failed to convert LoadOp");
+    }
+
     if (canUseBufferOps(ptr, assumptions, solver, analyzeSmallTensorOfst)) {
       auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
       Value tensorPtr = addPtrOp.getPtr();
@@ -625,6 +630,26 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
   }
 
 private:
+  // Currently, we need to dodge a LLC bug arising from f32 load fed to
+  // tt.dot.
+  mutable std::optional<bool> hasDotOp;
+  bool toDodgeBug(SourceOp ld) const {
+    auto ty = getElementTypeOrSelf(ld.getResult());
+    if (!ty.isF32())
+      return false;
+
+    if (!hasDotOp.has_value()) {
+      auto func = ld->template getParentOfType<tt::FuncOp>();
+      if (!func) {
+        hasDotOp = true;
+      } else {
+        hasDotOp = false;
+        func.walk([&](tt::DotOp dot) { hasDotOp = true; });
+      }
+    }
+    return hasDotOp.value();
+  }
+
   // Assumptions collected through the function
   DenseMap<Value, SetVector<Operation *>> assumptions;
   std::shared_ptr<DataFlowSolver> solver;
