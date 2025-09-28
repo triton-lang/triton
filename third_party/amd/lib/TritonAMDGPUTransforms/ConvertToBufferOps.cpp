@@ -17,6 +17,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 #undef DEBUG_TYPE
@@ -632,22 +633,25 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
 private:
   // Currently, we need to dodge a LLC bug arising from f32 load fed to
   // tt.dot.
-  mutable std::optional<bool> hasDotOp;
+  mutable llvm::SmallMapVector<tt::FuncOp, std::optional<bool>, 2> hasDotOpMap;
   bool toDodgeBug(SourceOp ld) const {
     auto ty = getElementTypeOrSelf(ld.getResult());
     if (!ty.isF32())
       return false;
 
-    if (!hasDotOp.has_value()) {
-      auto func = ld->template getParentOfType<tt::FuncOp>();
-      if (!func) {
-        hasDotOp = true;
-      } else {
-        hasDotOp = false;
-        func.walk([&](tt::DotOp dot) { hasDotOp = true; });
-      }
+    auto func = ld->template getParentOfType<tt::FuncOp>();
+    if (!func)
+      return true;
+
+    bool mayHaveDot = false;
+    if (auto iter = hasDotOpMap.find(func); iter != hasDotOpMap.end()) {
+      mayHaveDot = iter->second.value();
+    } else {
+      mayHaveDot = false;
+      func.walk([&](tt::DotOp dot) { mayHaveDot = true; });
+      hasDotOpMap.insert(std::make_pair(func, std::optional<bool>(mayHaveDot)));
     }
-    return hasDotOp.value();
+    return mayHaveDot;
   }
 
   // Assumptions collected through the function
