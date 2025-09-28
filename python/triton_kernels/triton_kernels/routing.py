@@ -384,4 +384,4 @@ def routing_torch(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=No
     scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
     # compute expt_data
     expt_data = compute_expt_data_torch(hist, n_expts_tot, n_gates_pad)
-    return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act, expt_data), gather_indx, scatter_indx
+    return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act, expt_data), gather_indx, scatter_indx, expt_indx

@@ -39,10 +39,10 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, sm_first, use_
         ref_expt_indx = tri_expt_indx[:n_tokens_raw]
     else:
         tri_expt_indx = ref_expt_indx = None
-    ref_routing_data, ref_gather, ref_scatter = routing_torch(ref_logits, n_expts_act, sm_first, ref_expt_indx,
-                                                              n_rows=n_routing_rows)
-    tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act, sm_first, tri_expt_indx,
-                                                        n_rows=n_routing_rows)
+    ref_routing_data, ref_gather, ref_scatter, _ = routing_torch(ref_logits, n_expts_act, sm_first, ref_expt_indx,
+                                                                 n_rows=n_routing_rows)
+    tri_routing_data, tri_gather, tri_scatter, _ = routing(tri_logits, n_expts_act, sm_first, tri_expt_indx,
+                                                           n_rows=n_routing_rows)
 
     def _assert_indx_equal(ref, tri):
         assert_equal(ref, tri[:len(ref)])
