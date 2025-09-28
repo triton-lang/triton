@@ -339,12 +339,13 @@ def _canonicalize_storage(storage, out_ndim, flex_data):
 
 #
 
-def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor = None,
+def reduce_grouped(x: torch.Tensor, indx: torch.Tensor = None, out: torch.Tensor = None,
                    out_mx_scale: torch.Tensor = None,
                    fused_activation: FusedActivation = None, epilogue: Epilogue = None,
                    x_flex: InFlexData | None = None,
                    out_flex: OutFlexData | None = None, x_mx_scale: torch.Tensor | None = None,
-                   out_dtype: bool = None, flexpoint_saturate_inf: bool = False):
+                   out_dtype: bool = None, flexpoint_saturate_inf: bool = False,
+                   contig_group_size: int = None):
     """
     In-place grouped row reduction.
 
@@ -374,7 +375,9 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor = None
     Returns
     - The input tensor `x` (modified in place).
     """
-    M = x.shape[2]  # Only used for per-batch flex scale.
+    if contig_group_size is not None:
+        assert indx is None
+        indx = torch.arange(x.shape[-2], device=x.device).view(-1, contig_group_size)
     if indx is None and x.shape[0] == 1:
         return x.squeeze(0), None
     if indx is not None:
