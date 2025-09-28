@@ -129,84 +129,68 @@ bool verifyNonNegativeExpr(
     auto argNum = blockArg.getArgNumber();
     Operation *parentOp = blockArg.getOwner()->getParentOp();
 
-    // The value of block argument could from be various defining ops.
+    // The value of a block argument can have multiple defining ops.
     // Here we only do the analyis on scf.ForOp since the value is
     // either from the initial value defined outside the loop,
     // or scf.YieldOp in the terminator of scf.ForOp.
-    if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
-      if (argNum == 0) {
-        auto lb = forOp.getLowerBound();
-        auto ub = forOp.getUpperBound();
-        return verifyNonNegativeExpr(lb, visitedBlockArgs, assumptions,
-                                     solver) &&
-               verifyNonNegativeExpr(ub, visitedBlockArgs, assumptions, solver);
-      }
-
-      /*
-     clang-format off
-      for the loop carried block arguments like
-      scf.for %c0_i32 to %4 step %c1_i32 iter_args(%block_arg0 = %c1, %block_arg1 = %c1)-> {
-        %offsets = arith.add block_arg0, block_arg1
-        %a_24 = tt.addptr %a, %offsets
-        %a_25 = tt.load %a_24
-        ......
-        ......ops may or maynot change `next_block_arg0` or `next_block_arg1`
-        %next_arg0_value = arith.addi %block_arg0, %cst_0
-        %next_arg1_value = arith.addi %block_arg1, %cst_0
-        ....
-        scf.yield %next_block_arg0, %next_block_arg1
-       }
-
-       To make sure initial value and updated value per iteration of blockargment is non-negative:
-       1) first we check the initial value.
-       2) follow the UD chain to check the value could be non-negative per iteration.
-     clang-format on
-     */
-
-      if (forOp.getLoopRegions().size() != 1) {
-        LDBG("Only loops with single region are supported.");
-        return false;
-      }
-
-      mlir::Region &bodyRegion = *forOp.getLoopRegions().front();
-      if (!bodyRegion.hasOneBlock()) {
-        LDBG("Only loops with single block in the body are supported.");
-        return false;
-      }
-
-      mlir::ValueRange initArgs = forOp.getInits();
-      size_t initArgIdx = argNum - 1;
-      Value initValue = initArgs[initArgIdx];
-      Value yieldValue = forOp.getTiedLoopYieldedValue(blockArg)->get();
-
-      // Set the true or false as the initial value of blockargument.
-      // Once the UD-chain stops at the blockargument, the recursive call here
-      // will return with the inital value.
-      bool nonNegative = verifyNonNegativeExpr(initValue, visitedBlockArgs,
-                                               assumptions, solver);
-      visitedBlockArgs[blockArg] = nonNegative;
-      if (!nonNegative) {
-        LDBG("   Cannot verify the intial value "
-             << initValue << " of blockargument " << blockArg
-             << " is non negative");
-        return false;
-      }
-
-      nonNegative = verifyNonNegativeExpr(yieldValue, visitedBlockArgs,
-                                          assumptions, solver);
-      visitedBlockArgs[blockArg] = nonNegative;
-      if (!nonNegative) {
-        LDBG("   Cannot verify the value "
-             << yieldValue << " of blockargument " << blockArg
-             << " is non negative per iteration.");
-        return false;
-      }
-
-      return true;
-    } else {
+    if (!isa<scf::ForOp>(parentOp)) {
       LDBG("Block argument of a non scf.ForOp.");
       return false;
     }
+
+    auto forOp = cast<scf::ForOp>(parentOp);
+
+    if (argNum == 0) {
+      auto lb = forOp.getLowerBound();
+      auto ub = forOp.getUpperBound();
+      return verifyNonNegativeExpr(lb, visitedBlockArgs, assumptions, solver) &&
+             verifyNonNegativeExpr(ub, visitedBlockArgs, assumptions, solver);
+    }
+
+    mlir::Region &bodyRegion = *forOp.getLoopRegions().front();
+    mlir::ValueRange initArgs = forOp.getInits();
+    size_t initArgIdx = argNum - 1;
+    Value initValue = initArgs[initArgIdx];
+    Value yieldValue = forOp.getTiedLoopYieldedValue(blockArg)->get();
+
+    // Set the non-negative result based off init value of block argumen.
+    // Once the UD-chain stops at the blockargument, the recursive call here
+    // will return with the inital value.
+    /*
+    scf.for ... iter_args(%block_arg0 = %c1)-> {
+        ...
+        %next_arg0_value = arith.addi %block_arg0, %cst_0
+        scf.yield %next_block_arg0
+    }
+    When we follow the UD-chain of the `block_arg0` above, based on the defition
+    of scf.forop, we will stop either at the `iter_args` of scf.forOp or some
+    fixed point inside the loop. The value used in `iter_args` is inital value
+    of `block_args`, and we will check it is nonnegative or not firstly.
+    */
+    bool nonNegative =
+        verifyNonNegativeExpr(initValue, visitedBlockArgs, assumptions, solver);
+    visitedBlockArgs[blockArg] = nonNegative;
+    if (!nonNegative) {
+      LDBG("   Cannot verify the intial value "
+           << initValue << " of blockargument " << blockArg
+           << " is non negative");
+      return false;
+    }
+
+    nonNegative = verifyNonNegativeExpr(yieldValue, visitedBlockArgs,
+                                        assumptions, solver);
+    visitedBlockArgs[blockArg] = nonNegative;
+    if (!nonNegative) {
+      LDBG("   Cannot verify the value " << yieldValue << " of blockargument "
+                                         << blockArg
+                                         << " is non negative per iteration.");
+      return false;
+    }
+
+    return true;
+  } else {
+    LDBG("Block argument of a non scf.ForOp.");
+    return false;
   }
 
   bool nonNegative =
