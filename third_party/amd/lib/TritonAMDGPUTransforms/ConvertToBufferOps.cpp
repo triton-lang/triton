@@ -651,6 +651,7 @@ private:
       func.walk([&](tt::DotOp dot) { mayHaveDot = true; });
       hasDotOpMap.insert(std::make_pair(func, std::optional<bool>(mayHaveDot)));
     }
+
     return mayHaveDot;
   }
 
