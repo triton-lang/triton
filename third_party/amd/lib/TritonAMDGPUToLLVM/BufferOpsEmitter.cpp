@@ -86,7 +86,7 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
 
   Value flagsConst = b.int_val(32, flags);
   Type rsrcType = LLVM::LLVMPointerType::get(rewriter.getContext(), 8);
-  Value numRecordsByte = b.int_val(32, std::numeric_limits<int>::max() - 1);
+  Value numRecordsByte = b.int_val(64, std::numeric_limits<int>::max() - 1);
 
   Value resource = rewriter.createOrFold<ROCDL::MakeBufferRsrcOp>(
       loc, rsrcType, basePtr, stride, numRecordsByte, flagsConst);
