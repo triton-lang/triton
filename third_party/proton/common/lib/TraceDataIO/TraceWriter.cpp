@@ -210,7 +210,7 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           else
             name = metadata->scopeName.at(scopeId);
 
-          float freq = 1000.0; // Unit: MHz
+          double freq = 1000.0; // Unit: MHz
 
           int64_t cycleAdjust =
               static_cast<int64_t>(bt->initTime - minInitTime) -
@@ -226,8 +226,8 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           element["ph"] = "X";
           element["pid"] = pid;
           element["tid"] = tid;
-          element["ts"] = static_cast<float>(ts) / freq;
-          element["dur"] = static_cast<float>(dur) / freq;
+          element["ts"] = static_cast<double>(ts) / freq;
+          element["dur"] = static_cast<double>(dur) / freq;
           json args;
           args["Finalization Time (ns)"] = bt->postFinalTime - bt->preFinalTime;
           args["Frequency (MHz)"] = freq;
