@@ -39,15 +39,21 @@ def alloc_rand_like(x):
     return alloc_rand(x.shape, x.device, x.dtype, x.requires_grad)
 
 
+def mask_indx(idx, n_expts_act):
+    idx.src_indx[idx.dst_indx[-n_expts_act:]] = -1
+    idx.dst_indx[-n_expts_act:] = -1
+    return idx
+
+
 def init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter, device="cuda"):
     logits = torch.randn((m, n_expts_tot), dtype=torch.float16, device=device, requires_grad=True)
-    sparse_logits = topk(logits, n_expts_act)
-    dispatch_indx = sparse_logits.mask_metadata.col_sorted_indx
-    combine_indx = sparse_logits.mask_metadata.row_sorted_indx
-    ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
-    routing_data = RoutingData(None, ragged_batch_metadata.batch_sizes, n_expts_tot, n_expts_act, ragged_batch_metadata)
-    gather_idx = GatherIndx(combine_indx, dispatch_indx) if do_gather else None
-    scatter_idx =  ScatterIndx(dispatch_indx, combine_indx) if do_scatter else None
+    routing_data, gather_idx, scatter_idx, _ = routing(logits, n_expts_act)
+    routing_data.gate_scal = None
+    gather_idx = gather_idx if do_gather else None
+    scatter_idx = scatter_idx if do_scatter else None
+    # TODO: re-enable
+    # if do_gather and do_scatter and n_expts_act == 1 and n_expt_shards == 1:
+    #     scatter_idx = mask_indx(scatter_idx, n_expts_act)
     return m, routing_data, gather_idx, scatter_idx
 
 
@@ -314,7 +320,7 @@ class Case:
 @pytest.mark.parametrize("has_y_gammas", [False, True])
 @pytest.mark.parametrize("is_persistent", [False, True])
 def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
-            n_expts_act, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
+            n_expts_act, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, epilogue_subtile,
             x_transpose, w_transpose, y_transpose,
             device, opt_flags_scope):
     # TODO: remove when Triton FP8 supports proper RTNE
@@ -412,20 +418,19 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
     weight_dtype = dtype_str_to_torch(weight_dtype_str)
     act_dtype = dtype_str_to_torch(act_dtype_str)
     precision_opt = init_precision(act_dtype, act_is_float8, weight_dtype, weight_mxfp,
-                                   mode, n_expts_tot, expt_is_inner, device=device)
+                                   n_expts_tot, expt_is_inner, device=device)
     # precision_opt.x_pad_trans_requires_flexpoint = False
     if mode == "ragged":
-        m, rdata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter,
-                                                   device=device)
+        m, rdata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter, device=device)
     else:
         rdata = gindx = sindx = None
 
     padding_block_k = 32
     x_tri, w_tri, bias_tri, gs0_tri, gs1_tri = init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act,
-                                                                 mode, torch.bfloat16 if act_mxfp8 else act_dtype,  #
-                                                                 torch.bfloat16 if weight_mxfp else weight_dtype,
-                                                                 has_y_gammas, requires_grad=test_bwd, device=device,
-                                                                 inner_expt_opt=inner_expt_opt, padding_block_k=padding_block_k)
+                                                                mode, torch.bfloat16 if act_mxfp8 else act_dtype,  #
+                                                                torch.bfloat16 if weight_mxfp else weight_dtype,
+                                                                has_y_gammas, requires_grad=test_bwd, device=device,
+                                                                inner_expt_opt=inner_expt_opt, padding_block_k=padding_block_k)
     x_ref, w_ref, bias_ref, gs0_ref, gs1_ref = apply_precision(x_tri, w_tri, bias_tri, gs0_tri, gs1_tri, precision_opt)
 
     if x_transpose:
@@ -725,7 +730,7 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
     else:
         rdata = gindx = sindx = None
 
-    precision_opt = init_precision(act_dtype, str(act_dtype).startswith("torch.float8"), weight_dtype, False, mode, n_expts_tot, device=device)
+    precision_opt = init_precision(act_dtype, str(act_dtype).startswith("torch.float8"), weight_dtype, False, n_expts_tot, device=device)
     x, w, bias, _, _ = init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, mode,
                                          act_dtype, weight_dtype, False, requires_grad=False, device=device)
 
