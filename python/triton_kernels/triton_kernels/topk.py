@@ -45,6 +45,8 @@ def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=
     y_vals_bufs, y_vals, y_vals_hdl = make_empty((n_rows_out_max, k), x.dtype, dev, all_gather=all_gather)
     if y_indx is None:
         y_indx_bufs, y_indx, y_indx_hdl = make_empty((n_rows_out_max, k), torch.int16, dev, all_gather=all_gather)
+    else:
+        y_indx_bufs, y_indx_hdl = (y_indx, ), None
     # create bitmatrix in transposed memory layout:
     n_cols_pad = cdiv(n_cols, BLOCK_N) * BLOCK_N
     n_cols_words = n_cols_pad // 32
@@ -101,7 +103,7 @@ class TopK(torch.autograd.Function):
     def backward(ctx, dy_vals, _0, _1):
         x, y_indx = ctx.saved_tensors
         dx = topk_backward(x, y_indx, dy_vals, ctx.k, ctx.n_rows, ctx.apply_softmax)
-        return dx, None, None, None, None, None, None
+        return dx, None, None, None, None, None, None, None
 
 
 def topk(
