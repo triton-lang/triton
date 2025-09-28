@@ -465,7 +465,34 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
 void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
                       ArefValue arefVal) {
   auto loc = op->getLoc();
+  auto stageCluster = getStageCluster(op);
+  auto asyncKinds = castAsyncOpAttrs(op.getAsyncOps());
   rewriter.setInsertionPointAfter(op);
+
+  bool needFence = [&]() {
+    bool isGenericProxy = llvm::any_of(
+        asyncKinds, [](AsyncOp kind) { return kind == AsyncOp::NONE; });
+    if (!isGenericProxy) {
+      return false;
+    }
+    for (auto arefUser : op.getAref().getUsers()) {
+      if (auto getExit = dyn_cast<ArefGetExitOp>(arefUser)) {
+        bool isConsumerMMAv5 =
+            llvm::any_of(castAsyncOpAttrs(getExit.getAsyncOps()),
+                         [](AsyncOp kind) { return kind == AsyncOp::TC5MMA; });
+        if (isConsumerMMAv5) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }();
+
+  if (needFence) {
+    auto fence = rewriter.create<FenceAsyncSharedOp>(loc, /*bCluster=*/false);
+    assignStageCluster(fence, getPartitionIds(op), stageCluster, rewriter);
+  }
+
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage(),
                                      getPartitionIds(op), getStageCluster(op));
   insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
