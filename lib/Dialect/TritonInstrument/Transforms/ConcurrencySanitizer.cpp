@@ -568,7 +568,8 @@ private:
     }
     if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
       if (wgmmaOp.getIsAsync() == true) {
-        info = {.trackingKind = MemEffectsOpInfo::TrackingKind::wgmmaCommit};
+        info = {.trackingKind = MemEffectsOpInfo::TrackingKind::wgmmaCommit,
+                .barriers = {}};
         if (isa<ttg::SharedEncodingTrait>(
                 wgmmaOp.getA().getType().getEncoding())) {
           info->operandEffects.emplace_back(MemEffectsOpInfo::Effects{
