@@ -148,7 +148,7 @@ def test_runtime_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype, k_di
             # range from min normal (0 00001 00) to max normal (0 11110 11)
             return torch.randint(0x04, 0x7B, shape, dtype=torch.uint8).view(dtype)
         else:
-            # range from min normal (0 0000 001) to max normal (0 1110 111)
+            # range from min normal (0 0001 000) to max normal (0 1110 111)
             assert dtype == torch.float8_e4m3fn
             return torch.randint(0x08, 0x77, shape, dtype=torch.uint8).view(dtype)
 
