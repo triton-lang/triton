@@ -101,7 +101,7 @@ Proton supports three profiling backends: `cupti`, `roctracer`, and `instrumenta
 
 By default, Proton automatically selects either `cupti` or `roctracer` as the backend based on your GPU driver. The `instrumentation` backend offers a wide range of mode options for fine-grained profiling, as detailed in the `mode.py` file.
 
-#### Instruction Sampling
+#### Instruction sampling
 
 Proton supports instruction sampling on NVIDIA GPUs.
 You may experience ~20x end-to-end overhead when using instruction sampling, although the overhead for each individual GPU kernel is negligible.
