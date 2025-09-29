@@ -206,4 +206,46 @@ void setPartition(Operation *op, const SetVector<Partition *> &partitions) {
 
 bool hasPartition(Operation *op) { return getPartitionIds(op) != std::nullopt; }
 
+void setOutputPartition(Operation *op, int idx, ArrayRef<int> partitionIds) {
+  Builder b(op->getContext());
+  SmallVector<int> sortedPartitionIds(partitionIds.begin(), partitionIds.end());
+  std::sort(sortedPartitionIds.begin(), sortedPartitionIds.end());
+
+  llvm::SmallVector<Attribute> partitionAttrs;
+  if (op->hasAttr(kPartitionOutputsAttrName)) {
+    for (auto attr : op->getAttrOfType<ArrayAttr>(kPartitionOutputsAttrName)) {
+      partitionAttrs.push_back(attr);
+    }
+  }
+  for (int i = partitionAttrs.size(); i <= idx; ++i) {
+    partitionAttrs.push_back(b.getDenseI32ArrayAttr({}));
+  }
+  assert(idx < partitionAttrs.size());
+  partitionAttrs[idx] = b.getDenseI32ArrayAttr(sortedPartitionIds);
+
+  op->setAttr(kPartitionOutputsAttrName,
+              ArrayAttr::get(op->getContext(), partitionAttrs));
+}
+
+void setOutputPartition(Operation *op, int idx,
+                        const SetVector<int> &partitionIds) {
+  std::cout << "set output partition " << idx << "\n";
+  SmallVector<int> partitions(partitionIds.begin(), partitionIds.end());
+  setOutputPartition(op, idx, partitions);
+}
+
+void setOutputPartition(Operation *op, int idx, Partition *partition) {
+  SmallVector<int> partitions{partition->getIndex()};
+  setOutputPartition(op, idx, partitions);
+}
+
+void setOutputPartition(Operation *op, int idx,
+                        const SetVector<Partition *> &partitions) {
+  SmallVector<int> partitionIds;
+  for (auto partition : partitions) {
+    partitionIds.push_back(partition->getIndex());
+  }
+  setOutputPartition(op, idx, partitionIds);
+}
+
 } // namespace mlir::triton::gpu
