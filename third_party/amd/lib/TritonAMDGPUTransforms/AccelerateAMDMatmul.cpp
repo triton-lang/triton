@@ -205,7 +205,7 @@ chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
   // If inputKSize % kDim != 0 (including the case where inputKSize < kDim),
   // this layout will introduce data duplication.
   if (inputKSize % kDim != 0) {
-    mlir::emitError(loc)
+    mlir::emitRemark(loc)
       << "MFMA intrinsic selection failed: BLOCK_K=" << inputKSize
       << " is smaller than or not a multiple of the MFMA kDim requirement ("
       << kDim << "). "
@@ -213,8 +213,7 @@ chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
       << ", element types: " << aElemType << " x " << bElemType
       << ", mfmaVersion=" << mfmaVersion
       << (withScale ? ", with scale" : "")
-      << (allowXF32 ? ", allowing TF32" : "") << ". "
-      << "Please increase BLOCK_K to be a multiple of " << kDim << ".";
+      << (allowXF32 ? ", allowing TF32" : "") << ". ";
       return failure();
   }
   return maybeMfmaIntrinsic;
@@ -555,13 +554,18 @@ public:
     FailureOr<MfmaIntrinsic> mfmaInstr =
         chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, withScale);
     if (failed(mfmaInstr)) {
-      if (!withScale) {
+      if (withScale) {
+        dotOp.emitRemark()
+            << "Scaled MFMA variant not applicable; attempting to select regular MFMA.";
+      } else {
         return failure();
       }
       mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, false);
-      if (failed(mfmaInstr))
+      if (failed(mfmaInstr)) {
+        dotOp.emitWarning()
+            << "MFMA selection failed; will fall back to FMA.";
         return failure();
-
+      }
       withScale = false;
     }
 
