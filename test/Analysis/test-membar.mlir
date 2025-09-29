@@ -759,7 +759,7 @@ tt.func @warp_specialize_isolated_regions(%arg0: tensor<1xi64>) {
   %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
   // CHECK-NEXT: local_store
   ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
-  // CHECK-NEXT: barrier
+  // CHECK-NEXT: ttg.local_barrier
   // CHECK-NEXT: local_load
   ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
 
@@ -775,7 +775,7 @@ tt.func @warp_specialize_isolated_regions(%arg0: tensor<1xi64>) {
     %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
     // CHECK-NEXT: local_store
     ttg.local_store %cst, %1 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
-    // CHECK-NEXT: barrier
+    // CHECK-NEXT: ttg.local_barrier
     // CHECK-NEXT: local_load
     ttg.local_load %1 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
     // CHECK-NEXT: warp_return
@@ -795,10 +795,10 @@ tt.func @warp_specialize_into_default(%arg0: tensor<1xi64>) {
   ttg.warp_specialize()
   // CHECK-NEXT: default
   default {
-    // CHECK-NEXT: barrier
+    // CHECK-NEXT: ttg.local_barrier
     // CHECK-NEXT: local_load
     ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
-    // CHECK-NEXT: barrier
+    // CHECK-NEXT: ttg.local_barrier
     ttg.local_barrier
     // CHECK-NEXT: warp_yield
     ttg.warp_yield
@@ -819,13 +819,13 @@ tt.func @default_region_cfg(%arg0: tensor<1xi64>, %arg1: i1) {
   ttg.warp_specialize()
   // CHECK-NEXT: default
   default {
-    // CHECK-NEXT: barrier
+    // CHECK-NEXT: ttg.local_barrier
     // CHECK-NEXT: local_load
     ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
     cf.cond_br %arg1, ^bb1, ^bb2
   // CHECK: ^bb1:
   ^bb1:
-    // CHECK-NEXT: barrier
+    // CHECK-NEXT: ttg.local_barrier
     ttg.local_barrier
     cf.br ^bb3
   ^bb2:
@@ -856,7 +856,7 @@ tt.func @direct_backedge_within_loop(%arg0: index, %arg1: index, %arg2: index, %
   %cst = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #blocked>
   // CHECK-NEXT: local_alloc
   %0 = ttg.local_alloc %cst : (tensor<128x32xf16, #blocked>) -> !ttg.memdesc<128x32xf16, #shared, #smem>
-  // CHECK-NEXT: barrier
+  // CHECK-NEXT: ttg.local_barrier
   // CHECK-NEXT: local_load
   %1 = ttg.local_load %0 : !ttg.memdesc<128x32xf16, #shared, #smem> -> tensor<128x32xf16, #blocked>
   // CHECK-NEXT: br
@@ -865,14 +865,14 @@ tt.func @direct_backedge_within_loop(%arg0: index, %arg1: index, %arg2: index, %
   cf.cond_br %arg5, ^bb2, ^bb3
 // CHECK: ^bb2:
 ^bb2:
-  // CHECK-NEXT: barrier
+  // CHECK-NEXT: ttg.local_barrier
   // CHECK-NEXT: local_alloc
   %4 = ttg.local_alloc %cst : (tensor<128x32xf16, #blocked>) -> !ttg.memdesc<128x32xf16, #shared, #smem>
   // CHECK-NEXT: br
   cf.br ^bb1(%arg1, %4 : index, !ttg.memdesc<128x32xf16, #shared, #smem>)
 // CHECK: ^bb3
 ^bb3:
-  // CHECK-NEXT: barrier
+  // CHECK-NEXT: ttg.local_barrier
   // CHECK-NEXT: local_load
   %5 = ttg.local_load %3 : !ttg.memdesc<128x32xf16, #shared, #smem> -> tensor<128x32xf16, #blocked>
   // CHECK-NEXT: cond_br
@@ -940,10 +940,11 @@ tt.func @check_barrier_no_duplication(%arg0: tensor<1xi64>) {
   ttg.warp_specialize()
   // CHECK-NEXT: default
   default {
-    // CHECK-NEXT: barrier
+    // CHECK-NEXT: ttg.local_barrier
     // CHECK-NEXT: local_load
     ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
-    // CHECK-NEXT: barrier
+    // CHECK-NEXT: gpu.barrier
+    // CHECK-NOT: gpu.local_barrier
     gpu.barrier
     // CHECK-NEXT: warp_yield
     ttg.warp_yield
