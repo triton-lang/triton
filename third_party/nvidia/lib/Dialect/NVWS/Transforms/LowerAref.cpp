@@ -477,6 +477,8 @@ void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
     }
     auto tmem = TensorMemorySpaceAttr::get(op.getContext());
     auto arefType = cast<ArefType>(op.getAref().getType());
+    // Currently we assume that an aref does not contain both SMEM and TMEM.
+    // So checking only the first buffer is fine.
     auto arefBufType = cast<MemDescType>(arefType.getBaseType()[0]);
     if (arefBufType.getMemorySpace() == tmem) {
       return false;
