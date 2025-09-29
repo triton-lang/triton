@@ -385,9 +385,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   auto dShapePerCTA = getShapePerCTA(dTensorTy);
   auto instrShape = mmaEncoding.getInstrShape();
   auto accSize = 2 * (instrShape[1] / 4);
-  int M = 4 * instrShape[0];
-  int N = instrShape[1];
-  int K = instrShape[2];
+  unsigned M = 4 * instrShape[0];
+  unsigned N = instrShape[1];
+  unsigned K = instrShape[2];
   bool zeroAcc = isZeroConst(c);
   auto instrMNK = mmaEncoding.getInstrShape();
   auto warpSize = mmaEncoding.getWarpsPerCTA();
@@ -396,16 +396,18 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   int numRepM = ceil<unsigned>(dShapePerCTA[0], shapePerCTATile[0]);
   int numRepN = ceil<unsigned>(dShapePerCTA[1], shapePerCTATile[1]);
   int numRepK = ceil<unsigned>(aTensorTy.getShape()[1], instrShape[2]);
-  DotOpMmaV3SmemLoader aLoader;
+  DotOpMmaSmemLoader aLoader;
   SmallVector<Value> structA;
+  auto warpGroups = {warpSize[0] / 4, warpSize[1]};
   if (aSharedLayout) {
     aLoader =
-        loadA(typeConverter, rewriter, loc, mmaEncoding, a, baseA, thread);
+        DotOpMmaSmemLoader::build(loc, rewriter, cast<MemDescType>(aTensorTy),
+                                  baseA, {M, K}, 3, warpGroups, 0);
   } else {
     structA = unpackLLElements(loc, loadedA, rewriter);
   }
-  DotOpMmaV3SmemLoader bLoader =
-      loadB(typeConverter, rewriter, loc, mmaEncoding, b, baseB, thread);
+  DotOpMmaSmemLoader bLoader = DotOpMmaSmemLoader::build(
+      loc, rewriter, bTensorTy, baseB, {K, N}, 3, warpGroups, 1);
 
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
@@ -460,7 +462,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
               SmallVector<Type>(regA.size(), regA[0].getType()));
           a = packLLElements(loc, typeConverter, regA, rewriter, regATy);
         }
-        auto b = bLoader.smemLoad(n, k, rewriter, loc);
+        auto b = bLoader.smemLoad(k, n, rewriter, loc);
         numLowPrecisionAcc += K;
         // If using native accumulation would cause use to do more low precion
         // accumulation than allowed do a separate allocation.
