@@ -23,6 +23,10 @@ class DistributedLayout:
     def type(self):
         return constexpr_type(self)
 
+    @property
+    def rank(self):
+        return len(self.cta_order)
+
 
 @dataclass(frozen=True)
 class AutoLayout(DistributedLayout):
@@ -32,6 +36,10 @@ class AutoLayout(DistributedLayout):
 
     def mangle(self):
         return "AL"
+
+    @property
+    def rank(self):
+        raise ValueError("AutoLayout has no rank")
 
 
 @dataclass(frozen=True)
@@ -141,6 +149,10 @@ class SliceLayout(DistributedLayout):
     def __hash__(self):
         return hash((self.dim, self.parent))
 
+    @property
+    def rank(self):
+        return self.parent.rank - 1
+
 
 @dataclass(frozen=True)
 class DistributedLinearLayout(DistributedLayout):
@@ -195,6 +207,10 @@ class DistributedLinearLayout(DistributedLayout):
             tuple(self.shape),
         ))
 
+    @property
+    def rank(self):
+        return len(self.shape)
+
 
 @dataclass(frozen=True)
 class DotOperandLayout(DistributedLayout):
@@ -223,6 +239,10 @@ class DotOperandLayout(DistributedLayout):
 
     def __hash__(self):
         return hash((self.operand_index, self.parent, self.k_width))
+
+    @property
+    def rank(self):
+        return self.parent.rank
 
 
 @dataclass(frozen=True, eq=True)

@@ -38,6 +38,7 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -70,14 +71,34 @@ void assignStageCluster(Operation *op, std::optional<PartitionSet> partitionIds,
                         StageCluster stageCluster, OpBuilder &builder) {
   if (partitionIds) {
     setPartition(op, *partitionIds);
+    setStageCluster(builder, op, stageCluster);
+  }
+}
 
-    if (stageCluster) {
-      op->setAttr(triton::kLoopStageAttrName,
-                  builder.getI32IntegerAttr(stageCluster->first));
-      op->setAttr(triton::kLoopClusterAttrName,
-                  builder.getI32IntegerAttr(stageCluster->second));
+bool isOperandPipelineable(Value v, scf::ForOp forOp) {
+  auto isPipelineable = [](Operation *op) {
+    return isa<ArefPutEnterOp, ArefGetEnterOp, ArefBufferOp>(op);
+  };
+
+  Operation *foundDef = nullptr;
+  return triton::nvidia_gpu::isOperandPipelineableBase(v, forOp, foundDef,
+                                                       isPipelineable);
+}
+
+void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp) {
+  bool isAsync = true;
+  auto forOp = mmaOp->getParentOfType<scf::ForOp>();
+  if (auto scaledOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAScaledOp>(
+          mmaOp.getOperation())) {
+    if (!triton::nvidia_gpu::areScalesPipelineable(scaledOp, forOp)) {
+      isAsync = false;
+    }
+    if (!isOperandPipelineable(scaledOp.getAScale(), forOp) ||
+        !isOperandPipelineable(scaledOp.getBScale(), forOp)) {
+      isAsync = false;
     }
   }
+  mmaOp.setIsAsync(isAsync);
 }
 
 struct ArefValue {
@@ -358,7 +379,7 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
 
   if (llvm::any_of(asyncKinds, hasAsyncLoad)) {
     for (auto mmav5 : mmav5Ops) {
-      mmav5.setIsAsync(true);
+      setIsAsync(mmav5);
     }
   }
 
