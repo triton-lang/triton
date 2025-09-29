@@ -3718,7 +3718,7 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
            << attr.getName() << " which is not expected on `scf.yield` ops";
   }
 
-  // Verify that partition id lists are sorted with no duplicates
+  // Verify that partition id lists are non-empty, sorted and have no duplicates
   auto verifyPartitionIds =
       [&](const ArrayRef<int> &partitionIds) -> LogicalResult {
     SetVector<int> idSet;
@@ -3728,6 +3728,9 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
                << attr.getName();
       idSet.insert(id);
     }
+    if (idSet.empty())
+      return op->emitOpError("has no partition ids in attribute ")
+             << attr.getName();
     auto ids = idSet.takeVector();
     SmallVector<int> sortedIds(ids.begin(), ids.end());
     std::sort(sortedIds.begin(), sortedIds.end());
@@ -3780,15 +3783,28 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
     }
   }
 
-  // Verify that op partitions are union of op output partitions
   if (attr.getName() == kPartitionOutputsAttrName) {
     if (!isa<scf::ForOp, scf::IfOp>(op))
       return op->emitOpError("has unexpected attribute ") << attr.getName();
+
+    // Verify that number of output partitions matches number of For/If results
+    size_t numResults = 0;
+    if (isa<scf::ForOp>(op)) {
+      numResults = cast<scf::ForOp>(op).getResults().size();
+    } else {
+      numResults = cast<scf::IfOp>(op).getResults().size();
+    }
+    if (cast<ArrayAttr>(attr.getValue()).size() != numResults) {
+      return op->emitOpError("does not have expected number of output "
+                             "partition sets in attr ")
+             << kPartitionAttrName << "; should match number of results";
+    }
+
+    // Verify that op partitions are union of op output partitions
     if (!op->hasAttr(kPartitionAttrName))
       return op->emitOpError("does not have expected attribute ")
              << kPartitionAttrName << " which is expected for ops with attr "
              << kPartitionOutputsAttrName;
-
     auto partitionIds = getPartitionIds(op);
 
     SetVector<int> outputPartitionIdsUnion;
@@ -3840,8 +3856,8 @@ std::optional<int> triton::gpu::maybeLookupNumWarps(Operation *op) {
 int triton::gpu::lookupNumWarps(Operation *op) {
   std::optional<int> numWarps = maybeLookupNumWarps(op);
   if (!numWarps) {
-    op->emitOpError(
-        "is not contained within a context that specifies the number of warps");
+    op->emitOpError("is not contained within a context that specifies the "
+                    "number of warps");
     llvm::report_fatal_error("failed to lookup the number of warps, the "
                              "surrounding module should contain a " +
                              Twine(AttrNumWarpsName) + " attribute");
