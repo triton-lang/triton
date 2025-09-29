@@ -475,13 +475,10 @@ void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
     if (!isGenericProxy) {
       return false;
     }
-    auto putEnter = op.getToken().getDefiningOp<ArefPutEnterOp>();
-    if (!putEnter) {
-      return false;
-    }
     auto tmem = TensorMemorySpaceAttr::get(op.getContext());
-    auto arefBufType = putEnter.getBuffers()[0].getType();
-    if (cast<MemDescType>(arefBufType).getMemorySpace() == tmem) {
+    auto arefType = cast<ArefType>(op.getAref().getType());
+    auto arefBufType = cast<MemDescType>(arefType.getBaseType()[0]);
+    if (arefBufType.getMemorySpace() == tmem) {
       return false;
     }
     for (auto arefUser : op.getAref().getUsers()) {
