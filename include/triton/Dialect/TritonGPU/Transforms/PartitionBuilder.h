@@ -13,6 +13,10 @@ using StageCluster = std::optional<std::pair<int, int>>;
 // Get the stage and cluster for an operation, if it has one assigned.
 void setStageCluster(OpBuilder &b, Operation *op, StageCluster stageCluster);
 StageCluster getStageCluster(Operation *op);
+// Propagate partitions to surrounding ops
+// up to the warp specialization boundary
+void propagatePartitions(Operation *op, Partition &partition);
+void propagatePartitions(Operation *op, const SetVector<int> &partitionSet);
 
 struct PartitionBuilder : public ImplicitLocOpBuilder {
   using ImplicitLocOpBuilder::ImplicitLocOpBuilder;
@@ -28,6 +32,7 @@ struct PartitionBuilder : public ImplicitLocOpBuilder {
     auto op = create<OpT>(std::forward<Args>(args)...);
     assignPartition(op, partition);
     setStageCluster(*this, op, stageCluster);
+    propagatePartitions(op, partition);
     return op;
   }
 };
@@ -40,6 +45,7 @@ OpT createInto(OpBuilder &b, Location loc,
   if (partitionSet) {
     setPartition(op, *partitionSet);
     setStageCluster(b, op, stageCluster);
+    propagatePartitions(op, *partitionSet);
   }
   return op;
 }
