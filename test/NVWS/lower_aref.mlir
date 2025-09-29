@@ -614,7 +614,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       nvws.aref.put.exit %9, %token_32 [#nvws.async_op<none>] {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : <[!ttg.memdesc<1x256x64xf16, #shared, #smem, mutable>]>, !ttg.async.token
       %buffers_33, %token_34 = nvws.aref.get.enter %9 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x256x64xf16, #shared, #smem, mutable>]> -> !ttg.memdesc<256x64xf16, #shared, #smem, 1x256x64>, !ttg.async.token
       // CHECK: tmem_store
-      // CHECK: ttng.fence_async_shared
+      // CHECK-NOT: ttng.fence_async_shared
       // CHECK: arrive_barrier
       %42 = ttng.tmem_store %40, %38[], %true {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : tensor<256x64xf32, #blocked> -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 1x256x64>
       nvws.aref.put.exit %1, %arg10 [#nvws.async_op<none>] {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : <[!ttg.memdesc<1x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>, !ttg.async.token
