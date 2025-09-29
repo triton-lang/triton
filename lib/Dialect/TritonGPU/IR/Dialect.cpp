@@ -3691,6 +3691,123 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
            << " which is expected only on `module` or `tt.func` ops";
   }
 
+  // Verify that all ops in a tt.warp_specialize op have partition ids
+  if (attr.getName() == "tt.warp_specialize") {
+    if (!isa<scf::ForOp>(op)) {
+      return op->emitOpError("has unexpected attribute ")
+             << attr.getName() << " which is expected only on `scf.for` ops";
+    }
+    Operation *failedOp = nullptr;
+    op->walk([&](Operation *childOp) {
+      if (!childOp->hasAttr(kPartitionAttrName)) {
+        failedOp = childOp;
+        WalkResult::interrupt();
+      }
+    });
+    if (failedOp) {
+      return failedOp->emitOpError("does not have expected attribute ")
+             << kPartitionAttrName
+             << " which is expected on all child ops of an op with "
+                "attribute `tt.warp_specialize`";
+    }
+  }
+
+  // Verify that op partitions do not appear on yield ops
+  if (attr.getName() == kPartitionAttrName && isa<scf::YieldOp>(op)) {
+    return op->emitOpError("has unexpected attribute ")
+           << attr.getName() << " which is not expected on `scf.yield` ops";
+  }
+
+  // Verify that partition id lists are sorted with no duplicates
+  auto verifyPartitionIds =
+      [&](const ArrayRef<int> &partitionIds) -> LogicalResult {
+    SetVector<int> idSet;
+    for (auto id : partitionIds) {
+      if (idSet.contains(id))
+        return op->emitOpError("has duplicated partition ids in attribute ")
+               << attr.getName();
+      idSet.insert(id);
+    }
+    auto ids = idSet.takeVector();
+    SmallVector<int> sortedIds(ids.begin(), ids.end());
+    std::sort(sortedIds.begin(), sortedIds.end());
+    if (ids != sortedIds)
+      return op->emitOpError("partition ids not in sorted order in attribute ")
+             << attr.getName();
+    return success();
+  };
+
+  if (attr.getName() == kPartitionAttrName) {
+    auto result = verifyPartitionIds(
+        cast<DenseI32ArrayAttr>(attr.getValue()).asArrayRef());
+    if (failed(result))
+      return result;
+  }
+  if (attr.getName() == kPartitionOutputsAttrName) {
+    auto arrayAttr = cast<ArrayAttr>(attr.getValue());
+    for (auto idx = 0; idx < arrayAttr.size(); idx++) {
+      auto result = verifyPartitionIds(
+          cast<DenseI32ArrayAttr>(arrayAttr[idx]).asArrayRef());
+      if (failed(result))
+        return result;
+    }
+  }
+
+  // Verify that op partitions include partitions of all child ops
+  if (attr.getName() == kPartitionAttrName && op->getNumRegions() != 0) {
+    SetVector<int> expectedIds;
+    for (auto &region : op->getRegions()) {
+      for (auto &block : region.getBlocks()) {
+        for (auto &childOp : block.getOperations()) {
+          if (isa<scf::YieldOp>(childOp))
+            continue;
+          if (!childOp.hasAttr(kPartitionAttrName))
+            return childOp.emitOpError("does not have expected attribute ")
+                   << kPartitionAttrName
+                   << " which is expected for ops whose parent has partitions";
+          auto ids = *getPartitionIds(&childOp);
+          expectedIds.insert(ids.begin(), ids.end());
+        }
+      }
+    }
+    auto partitionIds = *getPartitionIds(op);
+    for (auto id : expectedIds) {
+      if (!partitionIds.contains(id)) {
+        return op->emitOpError("partition ids in attr ")
+               << attr.getName()
+               << " does not contain partition ids of all child ops";
+      }
+    }
+  }
+
+  // Verify that op partitions are union of op output partitions
+  if (attr.getName() == kPartitionOutputsAttrName) {
+    if (!isa<scf::ForOp, scf::IfOp>(op))
+      return op->emitOpError("has unexpected attribute ") << attr.getName();
+    if (!op->hasAttr(kPartitionAttrName))
+      return op->emitOpError("does not have expected attribute ")
+             << kPartitionAttrName << " which is expected for ops with attr "
+             << kPartitionOutputsAttrName;
+
+    auto partitionIds = getPartitionIds(op);
+
+    SetVector<int> outputPartitionIdsUnion;
+    for (auto idx = 0; idx < *getNumOutputPartitionIds(op); idx++) {
+      auto outputPartitionIds = getOutputPartitionIds(op, idx);
+      for (auto partitionId : *outputPartitionIds)
+        outputPartitionIdsUnion.insert(partitionId);
+    }
+    auto outputPartitionIdsUnionVec = outputPartitionIdsUnion.takeVector();
+    std::sort(outputPartitionIdsUnionVec.begin(),
+              outputPartitionIdsUnionVec.end());
+    outputPartitionIdsUnion.insert(outputPartitionIdsUnionVec.begin(),
+                                   outputPartitionIdsUnionVec.end());
+    if (partitionIds != outputPartitionIdsUnion)
+      return op->emitOpError("partition ids in attr ")
+             << kPartitionAttrName
+             << " must be the union of all partition ids in " << attr.getName();
+  }
+
   return success();
 }
 
@@ -3790,4 +3907,52 @@ LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
   assert(product(srcTy.getShape()) == product(dstShape));
   auto dst = reshapeLayout(ctx, src, dstShape);
   return dst;
+}
+
+std::optional<SetVector<int>> triton::gpu::getPartitionIds(Operation *op) {
+  if (!op) {
+    return std::nullopt;
+  }
+  auto attrs = op->getAttr(kPartitionAttrName);
+  if (!attrs) {
+    return std::nullopt;
+  }
+
+  SmallVector<int> partitionIds;
+  for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
+    partitionIds.push_back(id);
+  }
+  std::sort(partitionIds.begin(), partitionIds.end());
+  return SetVector<int>(partitionIds.begin(), partitionIds.end());
+}
+
+std::optional<int> triton::gpu::getNumOutputPartitionIds(Operation *op) {
+  if (!op) {
+    return std::nullopt;
+  }
+  auto attr = op->getAttr(kPartitionOutputsAttrName);
+  if (!attr) {
+    return std::nullopt;
+  }
+  return cast<ArrayAttr>(attr).size();
+}
+
+std::optional<SetVector<int>> triton::gpu::getOutputPartitionIds(Operation *op,
+                                                                 int idx) {
+  if (!op) {
+    return std::nullopt;
+  }
+  auto attr = op->getAttr(kPartitionOutputsAttrName);
+  if (!attr) {
+    return std::nullopt;
+  }
+  assert(idx < cast<ArrayAttr>(attr).size());
+  auto attrs = cast<ArrayAttr>(attr)[idx];
+
+  SmallVector<int> partitionIds;
+  for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
+    partitionIds.push_back(id);
+  }
+  std::sort(partitionIds.begin(), partitionIds.end());
+  return SetVector<int>(partitionIds.begin(), partitionIds.end());
 }

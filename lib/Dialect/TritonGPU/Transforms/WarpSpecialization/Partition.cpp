@@ -179,7 +179,9 @@ namespace mlir::triton::gpu {
 
 void setPartition(Operation *op, ArrayRef<int> partitionIds) {
   Builder b(op->getContext());
-  op->setAttr(kPartitionAttrName, b.getDenseI32ArrayAttr(partitionIds));
+  SmallVector<int> sortedPartitionIds(partitionIds.begin(), partitionIds.end());
+  std::sort(sortedPartitionIds.begin(), sortedPartitionIds.end());
+  op->setAttr(kPartitionAttrName, b.getDenseI32ArrayAttr(sortedPartitionIds));
 }
 
 void setPartition(Operation *op, const SetVector<int> &partitionIds) {
@@ -202,45 +204,6 @@ void setPartition(Operation *op, const SetVector<Partition *> &partitions) {
   setPartition(op, partitionIds);
 }
 
-std::optional<SetVector<int>> getPartitionIds(Operation *op) {
-  if (!op) {
-    return std::nullopt;
-  }
-  auto attrs = op->getAttr(kPartitionAttrName);
-  if (!attrs) {
-    return std::nullopt;
-  }
-
-  assert(isa<DenseI32ArrayAttr>(attrs));
-
-  SetVector<int> partitionIds;
-  for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
-    partitionIds.insert(id);
-  }
-  return partitionIds;
-}
-
 bool hasPartition(Operation *op) { return getPartitionIds(op) != std::nullopt; }
-
-std::optional<SetVector<int>> getOutputPartitionIds(Operation *op, int idx) {
-  if (!op) {
-    return std::nullopt;
-  }
-  auto attr = op->getAttr(kPartitionOutputsAttrName);
-  if (!attr) {
-    return std::nullopt;
-  }
-  assert(isa<ArrayAttr>(attr));
-  assert(idx < op->getAttrOfType<ArrayAttr>(kPartitionOutputsAttrName).size());
-  auto attrs = op->getAttrOfType<ArrayAttr>(kPartitionOutputsAttrName)[idx];
-
-  assert(isa<DenseI32ArrayAttr>(attrs));
-
-  SetVector<int> partitionIds;
-  for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
-    partitionIds.insert(id);
-  }
-  return partitionIds;
-}
 
 } // namespace mlir::triton::gpu
