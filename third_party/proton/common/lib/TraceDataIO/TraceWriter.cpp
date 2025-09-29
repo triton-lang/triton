@@ -210,8 +210,11 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           else
             name = metadata->scopeName.at(scopeId);
 
-          double freq = 1000.0; // Unit: MHz
+          // Unit: MHz, we assume freq is 1000MHz (1GHz)
+          double freq = 1000.0;
 
+          // Global time is in `ns` unit. With 1GHz assumption, we
+          // could subtract with blockToMInCycle: (ns - ns) / 1GHz - cycle
           int64_t cycleAdjust =
               static_cast<int64_t>(bt->initTime - minInitTime) -
               static_cast<int64_t>(blockToMinCycle[ctaId]);
