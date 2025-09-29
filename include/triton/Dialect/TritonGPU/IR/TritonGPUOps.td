@@ -587,6 +587,8 @@ def TTG_LocalBarrierOp : TTG_Op<"local_barrier"> {
 
     Data hazards between threads accessing the same memory can be avoided by synchronizing the
     CTA in-between these accesses with a `local_barrier`.
+
+    A `local_barrier` operation does not provide syncronization guarantees on global memory.
   }];
   let assemblyFormat = "attr-dict";
 }
