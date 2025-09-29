@@ -199,7 +199,7 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
   auto operandIdx = dotOpEnc.getOpIdx();
   int kDimIndex = operandIdx == 0 ? 1 : 0;
   bool isKContig = sharedOrder[0] == kDimIndex;
-  auto mfmaNonKDim = operandIdx == 0 ? mfmaEnc.getMDim() : mfmaEnc.getNDim();
+  auto mfmaNonKDim = mfmaEnc.getInstrShape()[operandIdx];
   auto *ctx = srcTy.getContext();
 
   // Do not use padding for scales
