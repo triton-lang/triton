@@ -425,21 +425,9 @@ struct DotOpMFMAConversionHelper {
     // Now we have a vector of kBase elements of desired type.
     // Then we need to prepare vec for results.
     if (type.getIntOrFloatBitWidth() == 8) {
-      if (1 == kBase) {
+      if (1 == kBase)
         // This is only for the scale operands of scaled mfma on CDNA4
-        if (isConstantScale) {
-          // If the scale is constant(created by arith::ConstantOp), it will
-          // be put in a sgpr instead of vgpr. In that case, instead of
-          // vgpr[7:0], the instruction reads sgpr[30:23] as the scale value.
-          // So we need to manually left shift the scale by 23 bits to meet
-          // the requirement.
-          results = b.shl(i32_ty, b.zext(i32_ty, b.bitcast(vec, i8_ty)),
-                          b.i32_val(23));
-        } else {
-          results = b.zext(i32_ty, b.bitcast(vec, i8_ty));
-        }
-      }
-
+        results = b.zext(i32_ty, b.bitcast(vec, i8_ty));
       if (2 == kBase)
         // This case can occur during scale tensor packing when there aren't
         // enough elements to fill all 4 opSel slots. For example, with an A
