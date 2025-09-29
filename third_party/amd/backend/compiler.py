@@ -236,7 +236,8 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
         passes.common.add_canonicalizer(pm)
         if options.schedule_hint.lower() != "none":
-            amd.passes.ttgpuir.insert_instruction_sched_hints(pm, options.schedule_hint)
+            for hint in options.schedule_hint.split(","):
+                amd.passes.ttgpuir.insert_instruction_sched_hints(pm, hint)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if is_in_thread_transpose_enabled(options.arch):

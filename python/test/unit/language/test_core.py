@@ -6654,3 +6654,38 @@ def test_dot_multidim(rank, trans_a, trans_b, device):
     d = a.to(torch.float32) @ b.to(torch.float32)
 
     assert torch.equal(c, d)
+
+
+def test_schedule_hint(device):
+    if not is_hip():
+        pytest.skip("schedule_hint option is defined only for HIP")
+
+    @triton.jit
+    def kernel(X, Y, Z, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+        off_m = tl.arange(0, BLOCK_M)
+        off_n = tl.arange(0, BLOCK_N)
+        off_k = tl.arange(0, BLOCK_K)
+        Xs = X + off_m[:, None] * BLOCK_K + off_k[None, :] * 1
+        Ys = Y + off_k[:, None] * 1 + off_n[None, :] * BLOCK_K
+        Zs = Z + off_m[:, None] * BLOCK_N + off_n[None, :] * 1
+        x = tl.load(Xs)
+        y = tl.load(Ys)
+        z = tl.dot(x, y)
+        tl.store(Zs, z)
+
+    M = 128
+    N = 128
+    K = 128
+
+    pgm_default = kernel.warmup(torch.float32, torch.float32, torch.float32, M, N, K, grid=(1, ))
+    pgm_ilp = kernel.warmup(torch.float32, torch.float32, torch.float32, M, N, K,
+                            schedule_hint="iterative-ilp-scheduler", grid=(1, ))
+
+    def get_num_vgprs(text):
+        for line in text.split("\n"):
+            if ".vgpr_count" in line:
+                return int(line.split(" ")[-1])
+
+    default_vgprs = get_num_vgprs(pgm_default.asm['amdgcn'])
+    ilp_vgprs = get_num_vgprs(pgm_ilp.asm['amdgcn'])
+    assert ilp_vgprs != default_vgprs
