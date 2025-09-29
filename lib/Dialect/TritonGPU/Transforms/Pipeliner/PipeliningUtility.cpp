@@ -926,7 +926,7 @@ triton::getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
       });
 }
 
-void triton::removeAttributes(ModuleOp moduleOp) {
+void triton::removePipeliningAttributes(ModuleOp moduleOp) {
   moduleOp->walk([&](Operation *op) {
     op->removeAttr(mlir::triton::kLoopStageAttrName);
     op->removeAttr(mlir::triton::kLoopClusterAttrName);

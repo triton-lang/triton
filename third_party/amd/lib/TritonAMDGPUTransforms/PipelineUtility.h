@@ -6,7 +6,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 
 namespace mlir {
-namespace {
 struct LoadInfo {
   // Shared layout is used for loads feeding into dot ops.
   triton::gpu::SwizzledSharedEncodingAttr sharedEncoding = nullptr;
@@ -83,7 +82,6 @@ enum Stages {
 LogicalResult checkPreconditions(scf::ForOp forOp, int numStages,
                                  LoadToInfoMap loadToInfo);
 } // namespace ChainedDotSchedule
-} // namespace
 } // namespace mlir
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTRANSFORMS_PIPELINEUTILITY_H_

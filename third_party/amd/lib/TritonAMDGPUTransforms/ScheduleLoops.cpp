@@ -596,6 +596,8 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
 }
 
 namespace SingleDotSchedule {
+using namespace mlir::SingleDotSchedule;
+
 // Init Schedule Config based on settings and loop characteristics.
 // Create clusters in order of ops in loop. This can interleave ops
 // from different stages in the same cluster to achieve better backend
@@ -852,6 +854,8 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 // double buffered and placed in between the dot/compute clusters. This
 // pipeliner is meant to be used in combination with pingpong
 namespace ChainedDotSchedule {
+using namespace mlir::ChainedDotSchedule;
+
 LogicalResult checkPreconditions(scf::ForOp forOp, int numStages,
                                  LoadToInfoMap loadToInfo) {
   if (numStages != 4)

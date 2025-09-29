@@ -172,7 +172,7 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     }
 
     // Cleanup the IR from the pipeline attributes.
-    removeAttributes(moduleOp);
+    removePipeliningAttributes(moduleOp);
 
     pipelineWgmma(moduleOp, numStages);
 

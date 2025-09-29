@@ -34,7 +34,6 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
 }
 
 void expandLoops(ModuleOp moduleOp, bool useAsyncCopy) {
-  // TODO: Add contents
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
   for (scf::ForOp forOp : loops) {
@@ -115,7 +114,7 @@ struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
     ModuleOp moduleOp = getOperation();
     expandLoops(moduleOp, useAsyncCopy);
 
-    tt::removeAttributes(moduleOp);
+    tt::removePipeliningAttributes(moduleOp);
   }
 };
 } // namespace mlir
