@@ -83,7 +83,7 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 // -----
 
 // MFMA0-NOT: amd_mfma
-// MFMA16: amd_mfma
+// MFMA16-NOT: amd_mfma
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [2, 4], order = [1, 0]}>
 // CHECK-LABEL: mfma_dot_small_k
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {

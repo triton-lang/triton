@@ -752,7 +752,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // COMMON-LABEL: @reject_fp64_pipelining_with_async_copy_gfx942
 // ASYNC-NOT: ttg.async_copy_global_to_local
 tt.func @reject_fp64_pipelining_with_async_copy_gfx942(
-                  %a_ptr : tensor<128x32x!tt.ptr<f64>, #AL> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
+                  %a_ptr : tensor<128x32x!tt.ptr<f64>, #AL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
                   %B : tensor<32x128xf64, #B>, %lb: i32, %ub: i32, %step: i32) -> tensor<128x128xf64, #C> {
   %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf64, #C>
   %loop = scf.for %iv = %lb to %ub step %step iter_args(%prev_c = %c_init) -> (tensor<128x128xf64, #C>) : i32 {
@@ -782,8 +782,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // ASYNC: ttg.async_copy_global_to_local
 // ASYNC: tt.load
 tt.func @pipeline_fp64_with_async_copy_gfx950(
-                  %a_ptr : tensor<128x32x!tt.ptr<f64>, #AL> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32},
-                  %b_ptr : tensor<32x128x!tt.ptr<f64>, #BL> {tt.divisibility = 16 : i32, tt.contiguity = 2 : i32},
+                  %a_ptr : tensor<128x32x!tt.ptr<f64>, #AL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
+                  %b_ptr : tensor<32x128x!tt.ptr<f64>, #BL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 2]> : tensor<2xi32>},
                   %lb: i32, %ub: i32, %step: i32) -> tensor<128x128xf64, #C> {
   %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf64, #C>
   %loop = scf.for %iv = %lb to %ub step %step iter_args(%prev_c = %c_init) -> (tensor<128x128xf64, #C>) : i32 {

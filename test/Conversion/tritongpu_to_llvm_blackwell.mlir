@@ -750,6 +750,35 @@ module attributes {"ttg.target" = "cuda:100", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 // -----
 
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 1], instrShape = [16, 8]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32} {
+  // CHECK-LABEL: lower_ldmatrix_trans_b8
+  tt.func @lower_ldmatrix_trans_b8(%A: !ttg.memdesc<128x64xf8E4M3FN, #shared, #smem, mutable, 1x128x64>) {
+    %0 = ttg.local_load %A : !ttg.memdesc<128x64xf8E4M3FN, #shared, #smem, mutable, 1x128x64> -> tensor<128x64xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    // CHECK-COUNT-16: nvvm.ldmatrix %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b8>, layout = #nvvm.mma_layout<col>{{.*}}} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+    tt.return
+  }
+}
+
+// -----
+
+#linear3 = #ttg.linear<{register = [[0, 0, 0, 1, 0], [0, 0, 0, 0, 8], [0, 0, 0, 8, 0], [0, 0, 0, 0, 16], [0, 0, 0, 0, 128]], lane = [[0, 0, 0, 2, 0], [0, 0, 0, 4, 0], [0, 0, 0, 0, 1], [0, 0, 0, 0, 2], [0, 0, 0, 0, 4]], warp = [[0, 0, 0, 0, 32], [0, 0, 0, 0, 64]], block = []}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8, CTAsPerCGA = [1, 1, 1, 1, 1], CTASplitNum = [1, 1, 1, 1, 1], CTAOrder = [4, 3, 2, 1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @stmatrix_b8_trans_linear
+  tt.func public @stmatrix_b8_trans_linear(%data: tensor<1x1x1x16x256xf8E4M3FN, #linear3>) {
+    // CHECK-COUNT-2: nvvm.stmatrix %{{.*}} {eltType = #nvvm.ld_st_matrix_elt_type<b8>, layout = #nvvm.mma_layout<col>{{.*}}} : !llvm.ptr<3>, i32, i32, i32, i32
+    %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1x1x1x16x256xf8E4M3FN, #shared, #smem, mutable>
+    ttg.local_store %data, %0 : tensor<1x1x1x16x256xf8E4M3FN, #linear3> -> !ttg.memdesc<1x1x1x16x256xf8E4M3FN, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #bm64_bn128 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 1>
 #bm64_bn64 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 

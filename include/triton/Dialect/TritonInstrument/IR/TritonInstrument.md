@@ -31,6 +31,8 @@ All types are generated on-demand (per partition) based on:
 - readVisibility (scratch, <B x 64 x i64>): Per-buffer, per-thread lanes. Each lane stores a 64-bit mask of other threads whose reads are visible to that lane’s thread
 - writeTracking (scratch, <B x K x i8>): Map buffers → barriers tracking writes (boolean stored in i8)
 - readTracking (scratch, <B x K x i64>): Map buffers → barriers tracking reads (bitmask of threads)
+- barrierStates (scratch, <K x i32>): Packed barrier metadata. Bit 0 stores the current phase, bits [1..8] the initial arrival count, bits [9..16] the current arrival count. The verifier checks underflow before updating, and flips the phase when the current count reaches zero.
+- waiting (scratch, <K x i32>): Per-barrier bitfield describing waiting threads. Each base thread gets two bits: bit (2 * thread + 0) is the waiting flag, bit (2 * thread + 1) stores the phase the thread is waiting on.
 - outstandingCommits (scratch, <B x 16 x i8>): Per-buffer, per-base-thread commit counters for cp.async and wgmma
 
 ## Visibility and legality rules
@@ -52,6 +54,20 @@ ConSan separates “tracking” from “visibility transfer”:
   - experimental_track_visible_reads / experimental_track_visible_writes snapshots current per-buffer visibility into readTracking/writeTracking for the given barrier.
 - At arrive/commit sites (e.g., tc commit, arrive on mbarrier): ConSan emits the track ops for both reads and writes.
 - At waits: experimental_transfer_visible_reads / experimental_transfer_visible_writes propagates tracked visibility from the barrier back into the waiting thread’s visibility, and this transfer is repeated to peer threads (base, TMA, TC) to keep the three classes consistent.
+
+### Barrier phase/count tracking
+
+- experimental_init_barrier_state(barrier, count, barrierStates) initializes the per-barrier state with phase = 0 and both initial/current arrival counts = `count`.
+- experimental_verify_barrier_arrive(barrier, count, barrierStates) checks that subtracting `count` from the current arrival count would not underflow. The codegen emits an assert if it would.
+- experimental_update_barrier_state(barrier, count, barrierStates) applies the arrive: subtracts `count`, flips the phase when the count reaches zero, and reloads the current count from the initial count.
+
+### Deadlock detection
+
+ConSan records which phase each thread is waiting on:
+
+- experimental_set_waiting(barrier, baseThread, phase, barriers, waiting) sets the waiting flag for `baseThread` and stores the requested `phase`. The flag/phase bits share the waiting bitfield (two bits per base thread).
+- experimental_check_all_active_waiting(activeMask, barriers, waiting, barrierStates) filters waiting threads to those whose stored phase matches the current barrier phase. If all active threads are waiting on matching phases, it raises a deadlock assert.
+- experimental_clear_waiting(barrier, baseThread, barriers, waiting) clears the waiting bits for `baseThread`. Each wait clears its own state after the wait completes.
 
 ## Commit-count–based synchronization
 
