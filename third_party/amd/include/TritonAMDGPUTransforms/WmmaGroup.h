@@ -13,6 +13,10 @@ struct WmmaIntrinsic {
                                             unsigned nDim, unsigned inputKDim,
                                             Type aElemType, Type bElemType,
                                             Type dElemType);
+  // Gets the wmma intrinsic based on exact match of all parameters.
+  static FailureOr<WmmaIntrinsic> get(int version, unsigned mDim, unsigned nDim,
+                                      unsigned kDim, Type aElemType,
+                                      Type bElemType, Type dElemType);
 
   WmmaIntrinsic(StringRef symbol, unsigned m, unsigned n, unsigned k,
                 unsigned kB, Type aET, Type bET, Type dET)

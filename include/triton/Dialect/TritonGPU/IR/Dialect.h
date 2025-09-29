@@ -48,6 +48,7 @@ constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
 
 // Find the contextual number of warps on which this operation is executed.
 int lookupNumWarps(Operation *op);
+int lookupNumWarps(Region *region);
 // Try to find the contextual number of warps on which this operation is
 // executed. Returns nullopt if a warp size cannot be find. This is used for
 // verifiers.
