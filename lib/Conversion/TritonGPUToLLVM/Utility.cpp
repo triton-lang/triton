@@ -368,25 +368,22 @@ Value getThreadId(OpBuilder &rewriter, Location loc) {
       rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
   tid = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
 
-  Operation *lookupPt = &rewriter.getInsertionBlock()->front();
-  int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
-  int numWarps = triton::gpu::lookupNumWarps(lookupPt);
-  int upperBound = numWarps * threadsPerWarp;
-
-  TritonLLVMOpBuilder b(loc, rewriter);
-
   // If this is being created inside a warp specialize op, compute the relative
   // thread ID within the warp group.
   if (std::optional<int> startId =
           getWarpGroupStartThreadId(rewriter.getInsertionBlock())) {
+    TritonLLVMOpBuilder b(loc, rewriter);
     tid = rewriter.create<arith::SubIOp>(loc, tid, b.i32_val(*startId));
   }
 
-  assert(llvm::isPowerOf2_32(upperBound));
-  // help LLVM's known bits analysis:
-  tid = b.and_(tid, b.i32_val(upperBound - 1));
-
   return tid;
+}
+
+Value getLaneId(OpBuilder &rewriter, Location loc) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  Value tid = getThreadId(rewriter, loc);
+  int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
+  return b.urem(tid, b.i32_val(threadsPerWarp));
 }
 
 std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
@@ -394,24 +391,17 @@ std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
   Value tid = getThreadId(rewriter, loc);
   int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
   Value warpSizeVal = b.i32_val(threadsPerWarp);
+  Value laneId = b.urem(tid, warpSizeVal);
 
   // If there is only one warp, the warp ID is always 0.
   Operation *lookupPt = &rewriter.getInsertionBlock()->front();
-  Value laneId;
   Value warpId;
-  if (triton::gpu::lookupNumWarps(lookupPt) == 1) {
-    laneId = tid;
+  if (triton::gpu::lookupNumWarps(lookupPt) == 1)
     warpId = b.i32_val(0);
-  } else {
-    laneId = b.urem(tid, warpSizeVal);
+  else
     warpId = b.udiv(tid, warpSizeVal);
-  }
 
   return {laneId, warpId};
-}
-
-Value getLaneId(OpBuilder &rewriter, Location loc) {
-  return getLaneAndWarpId(rewriter, loc).first;
 }
 
 // Helper function: applies linear layout vectorized over register indices
@@ -460,7 +450,6 @@ applyLinearLayoutVec(Location loc, RewriterBase &rewriter,
   return ret;
 }
 
-// Refactored emitIndices function using applyLinearLayoutVec
 SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset) {

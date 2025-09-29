@@ -811,6 +811,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
+#linear0 = #ttg.linear<{register=[[1, 0], [2, 0], [4, 0]], lane=[[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], warp=[], block=[]}>
+#linear1 = #ttg.linear<{register=[[1, 0], [2, 0], [0, 1]], lane=[[4, 0], [0, 2], [0, 4], [0, 8], [0, 16]], warp=[], block=[]}>
+module attributes {"ttg.num-warps" = 1 : i32} {
+  //CHECK-LABEL: @convert_layout_shuffle_packed_4xi1
+  tt.func @convert_layout_shuffle_packed_4xi1(%arg0: tensor<8x32xi1, #linear0>) {
+    //CHECK: llvm.select
+    //CHECK: nvvm.shfl.sync
+    //CHECK-COUNT-2: llvm.select
+    %0 = ttg.convert_layout %arg0 : tensor<8x32xi1, #linear0> -> tensor<8x32xi1, #linear1>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [2, 2], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
