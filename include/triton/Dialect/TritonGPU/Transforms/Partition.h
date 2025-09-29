@@ -123,6 +123,13 @@ void setPartition(Operation *op, const SetVector<Partition *> &partitions);
 // it does not keep the op attributes and the op list of a partition in sync.
 void setPartition(Operation *op, const SetVector<int> &partitionIds);
 
+// Annotate the op with partitions for one of its outputs
+void setOutputPartition(Operation *op, int idx, Partition *partition);
+void setOutputPartition(Operation *op, int idx,
+                        const SetVector<Partition *> &partitions);
+void setOutputPartition(Operation *op, int idx,
+                        const SetVector<int> &partitionIds);
+
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_TRITONGPU_TRANSFORM_PIPELINE_PARTITION_H_
