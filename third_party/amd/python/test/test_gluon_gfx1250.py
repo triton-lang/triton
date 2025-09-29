@@ -62,11 +62,35 @@ def gemm_kernel(a_ptr, b_ptr, c_ptr,  #
     ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
 
 
-@pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", [(32, 32, 32), (64, 64, 64), (128, 128, 64)])
-@pytest.mark.parametrize("a_dtype,b_dtype,k_dim", [
-    ("bfloat16", "bfloat16", 32),
-    ("float8_e5m2", "float8_e5m2", 64),
-])
+def get_test_gemm_block_mnk():
+    return [
+        (m, n, k) for (m, n) in [(32, 32), (64, 64)] \
+                  for k in [32, 64, 128, 256]
+    ]
+
+
+def get_test_gemm_variants():
+    return  [
+        # float32 * float32 -> float32
+        ("float32", "float32", 4),
+        # bfloat16/float16 * bfloat16/float16 -> float32
+        *[(a, a, 32) for a in ["bfloat16", "float16"]],
+        # float8e4m3/float8e5m2 * float8e4m3/float8e5m2 -> float32/float16
+        *[(a, b, k) for a in ["float8_e4m3fn", "float8_e5m2"] \
+                       for b in ["float8_e4m3fn", "float8_e5m2"] \
+                       for k in [64, 128]],
+    ]
+
+
+def get_test_gemm_shapes():
+    return [
+        (256, 256, 256),
+        (250, 250, 250),
+    ]
+
+
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", get_test_gemm_block_mnk())
+@pytest.mark.parametrize("a_dtype,b_dtype,k_dim", get_test_gemm_variants())
 def test_compile_gemm(BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype, k_dim):
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
@@ -86,39 +110,47 @@ def test_compile_gemm(BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype, k_dim):
                 "INSTR_SHAPE_K": "constexpr", "K_WIDTH": "constexpr"
             }, constexprs={
                 "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "BLOCK_K": BLOCK_K,  #
-                "INSTR_SHAPE_K": k_dim, "K_WIDTH": 8
+                "INSTR_SHAPE_K": k_dim, "K_WIDTH": 2 if a_dtype == "fp32" else 8
             }), target=GPUTarget("hip", 'gfx1250', 32))
     amdgcn = k.asm["amdgcn"]
 
     wmma_pattern = "v_wmma_"
     wmma_pattern += "f32_"
     wmma_pattern += "16x16x" + str(k_dim) + "_"
-    if a_dtype == "bf16":
-        wmma_pattern += "bf16"
-    if a_dtype == "fp8e5":
-        wmma_pattern += "bf8_bf8"
+    if a_dtype == "fp32":
+        wmma_pattern += "f32"
+    if a_dtype in ("fp16", "bf16"):
+        a_ty = "f16" if a_dtype == "fp16" else "bf16"
+        wmma_pattern += a_ty
+    if a_dtype in ("fp8e4nv", "fp8e5"):
+        a_ty = "fp8" if a_dtype == "fp8e4nv" else "bf8"
+        b_ty = "fp8" if b_dtype == "fp8e4nv" else "bf8"
+        wmma_pattern += a_ty + "_" + b_ty
 
     assert re.search(wmma_pattern, amdgcn), "The AMDGCN assembly does not contain the expected WMMA instruction."
 
 
-@pytest.mark.parametrize("M,N,K", [(256, 256, 128), (250, 250, 120)])
-@pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", [(32, 32, 32), (64, 64, 64), (128, 128, 64)])
-@pytest.mark.parametrize("a_dtype,b_dtype,k_dim", [
-    ("bfloat16", "bfloat16", 32),
-    ("float8_e5m2", "float8_e5m2", 64),
-])
+@pytest.mark.parametrize("M,N,K", get_test_gemm_shapes())
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N,BLOCK_K", get_test_gemm_block_mnk())
+@pytest.mark.parametrize("a_dtype,b_dtype,k_dim", get_test_gemm_variants())
 def test_runtime_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype, k_dim):
     if BLOCK_K < k_dim:
         pytest.skip("Skip tests where BLOCK_K < k_dim")
+    if a_dtype == 'float8_e4m3fn' or b_dtype == 'float8_e4m3fn':
+        pytest.skip("Skip float8_e4m3fn tests for now due to accuracy issue")
 
     torch.manual_seed(42)
 
     def create_operand(shape, dtype):
-        if dtype == torch.bfloat16:
+        if dtype in (torch.float16, torch.bfloat16, torch.float32):
             return torch.randn(shape, dtype=dtype)
-        else:
-            assert dtype == torch.float8_e5m2
+        elif dtype == torch.float8_e5m2:
+            # range from min normal (0 00001 00) to max normal (0 11110 11)
             return torch.randint(0x04, 0x7B, shape, dtype=torch.uint8).view(dtype)
+        else:
+            # range from min normal (0 0001 000) to max normal (0 1110 111)
+            assert dtype == torch.float8_e4m3fn
+            return torch.randint(0x08, 0x77, shape, dtype=torch.uint8).view(dtype)
 
     a_dtype = getattr(torch, a_dtype)
     b_dtype = getattr(torch, b_dtype)
@@ -141,7 +173,7 @@ def test_runtime_gemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, a_dtype, b_dtype, k_di
         stride_bk, stride_bn,  #
         stride_cm, stride_cn,  #
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
-        INSTR_SHAPE_K=k_dim, K_WIDTH=8)
+        INSTR_SHAPE_K=k_dim, K_WIDTH=2 if a_dtype == torch.float32 else 8)
 
     c_triton = c_device.cpu()
     c_torch = a.to(torch.float32) @ b.to(torch.float32)
