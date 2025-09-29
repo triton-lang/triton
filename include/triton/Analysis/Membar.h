@@ -16,9 +16,11 @@ using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
 
 struct BlockInfo {
   using IntervalMapT = std::map<Interval<size_t>, std::set<Operation *>>;
+  using BufferLayoutMapT = std::map<Allocation::BufferId, Attribute>;
 
   IntervalMapT syncReadIntervals;
   IntervalMapT syncWriteIntervals;
+  BufferLayoutMapT bufferLayouts;
 
   BlockInfo() = default;
 
@@ -30,6 +32,8 @@ struct BlockInfo {
     for (auto &interval : other.syncWriteIntervals)
       syncWriteIntervals[interval.first].insert(interval.second.begin(),
                                                 interval.second.end());
+    for (auto &[bufferId, layout] : other.bufferLayouts)
+      bufferLayouts[bufferId] = layout;
     return *this;
   }
 
@@ -38,14 +42,14 @@ struct BlockInfo {
     err << "Block Interval:\n";
     err << "  Read Intervals:\n";
     for (auto &[interval, ops] : syncReadIntervals) {
-      err << "    [" << interval.start() << ", " << interval.end() << "] ";
+      err << "    [" << interval.start() << ", " << interval.end() << ") ";
       for (auto &op : ops)
         err << op->getName() << " ";
       err << "\n";
     }
     err << "  Write Intervals:\n";
     for (auto &[interval, ops] : syncWriteIntervals) {
-      err << "    [" << interval.start() << ", " << interval.end() << "] ";
+      err << "    [" << interval.start() << ", " << interval.end() << ") ";
       for (auto &op : ops)
         err << op->getName() << " ";
       err << "\n";
@@ -62,16 +66,18 @@ struct BlockInfo {
            isIntersected(syncWriteIntervals, other.syncWriteIntervals, filter);
   }
 
-  /// Clears the intervals because a barrier is inserted.
+  /// Clears the intervals and layout tracking because a barrier is inserted.
   void sync() {
     syncReadIntervals.clear();
     syncWriteIntervals.clear();
+    bufferLayouts.clear();
   }
 
   /// Compares two BlockInfo objects.
   bool operator==(const BlockInfo &other) const {
     return syncReadIntervals == other.syncReadIntervals &&
-           syncWriteIntervals == other.syncWriteIntervals;
+           syncWriteIntervals == other.syncWriteIntervals &&
+           bufferLayouts == other.bufferLayouts;
   }
 
   bool operator!=(const BlockInfo &other) const { return !(*this == other); }
