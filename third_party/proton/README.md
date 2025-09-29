@@ -253,7 +253,7 @@ More options can be found by running the following command.
 proton-viewer -h
 ```
 
-#### Proton knobs
+## Knobs
 
 Triton's runtime has a centralized configuration system called *knobs* that controls various features and behaviors, including the following knobs are defined for Proton:
 
