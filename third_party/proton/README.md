@@ -88,7 +88,7 @@ with proton.scope("test2", {"bytes": 3000}):
 #### NVTX compatibility
 
 Proton scopes coexist with NVTX ranges.
-NVTX pushes and pops (for example, `torch.cuda.nvtx.range_push`) appear as nested scopes in the Proton profile, letting you correlate custom NVTX annotations with Proton's aggregated metrics. 
+NVTX pushes and pops (for example, `torch.cuda.nvtx.range_push`) appear as nested scopes in the Proton profile, letting you correlate custom NVTX annotations with Proton's aggregated metrics.
 
 
 ### Backend and mode
@@ -259,7 +259,7 @@ Triton's runtime has a centralized configuration system called *knobs* that cont
 
 - `triton.knobs.proton.enable_nvtx` or `TRITON_ENABLE_NVTX` (default: `True`): Whether to enable NVTX ranges in Proton.
 
-- `triton.knobs.proton.cupti_lib_dir` or `TRITON_CUPTI_LIB_DIR` (default: `<triton_root>/backends/nvidia/lib/cupti`): The directory of the CUPTI library. 
+- `triton.knobs.proton.cupti_lib_dir` or `TRITON_CUPTI_LIB_DIR` (default: `<triton_root>/backends/nvidia/lib/cupti`): The directory of the CUPTI library.
 
 ## Advanced features and knowledge
 
