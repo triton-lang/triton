@@ -2,7 +2,7 @@
 
 ## Introduction
 
-Proton is a lightweight profiler for Triton, collecting insightful information about the program context, metadata, and hardware performance metrics of the GPU kernels invoked, while maintaining low overhead and small profile size.
+Proton is a lightweight profiler for Triton that captures rich information about program context, metadata, and GPU kernel performance metrics, while keeping both runtime overhead and profile size minimal.
 
 ## Installation
 
@@ -90,13 +90,6 @@ with proton.scope("test2", {"bytes": 3000}):
 Proton scopes coexist with NVTX ranges.
 NVTX pushes and pops (for example, `torch.cuda.nvtx.range_push`) appear as nested scopes in the Proton profile, letting you correlate custom NVTX annotations with Proton's aggregated metrics. 
 
-#### Proton knobs
-
-Triton's runtime has a centralized configuration system called *knobs* that controls various features and behaviors, including the following knobs are defined for Proton:
-
-- `triton.knobs.proton.enable_nvtx` or `TRITON_ENABLE_NVTX` (default: `True`): Whether to enable NVTX callbacks in Proton.
-
-- `triton.knobs.proton.cupti_lib_dir` or `TRITON_CUPTI_LIB_DIR` (default: `<triton_root>/backends/nvidia/lib/cupti`): The directory of the CUPTI library. 
 
 ### Backend and mode
 
@@ -248,21 +241,25 @@ proton.start(name="profile_name", data="trace")
 
 The dumped trace will be in the chrome trace format and can be visualized using the `chrome://tracing` tool in Chrome or the [perfetto](https://perfetto.dev) tool.
 
-### Visualizing sorted profile data
-
 In addition visualizing the profile data on terminal through Hatchet. A sorted list of the kernels by the first metric can be done using the --print-sorted flag with proton-viewer
 
 ```bash
 proton-viewer -m time/ns,time/% <profile.hatchet> --print-sorted
 ```
 
-prints the sorted kernels by the time/ns since it is the first listed.
-
 More options can be found by running the following command.
 
 ```bash
 proton-viewer -h
 ```
+
+#### Proton knobs
+
+Triton's runtime has a centralized configuration system called *knobs* that controls various features and behaviors, including the following knobs are defined for Proton:
+
+- `triton.knobs.proton.enable_nvtx` or `TRITON_ENABLE_NVTX` (default: `True`): Whether to enable NVTX callbacks in Proton.
+
+- `triton.knobs.proton.cupti_lib_dir` or `TRITON_CUPTI_LIB_DIR` (default: `<triton_root>/backends/nvidia/lib/cupti`): The directory of the CUPTI library. 
 
 ## Advanced features and knowledge
 
@@ -341,7 +338,7 @@ The call path of `foo1` will be `test->test1->state0`.
 | Aspect | Proton | Nsight Systems | Nsight Compute |
 | --- | --- | --- | --- |
 | Runtime overhead | Lower overhead | Higher overhead | Higher overhead |
-| Profile size | Compact traces | Large traces | Large traces |
+| Profile size | Compact profiles and traces | Large traces | Large traces |
 | Portability | Multi vendor | Nvidia only | Nvidia only |
 | Triton insights | Metadata hooks | No hooks | No hooks |
 | Metric depth | Lightweight metrics | Timeline metrics | Detailed metrics |
