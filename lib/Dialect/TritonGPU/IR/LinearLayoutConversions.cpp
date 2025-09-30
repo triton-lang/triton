@@ -373,10 +373,10 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto dimM = outDimNames[order[1]];
   auto dimN = outDimNames[order[0]];
 
-  unsigned mDim = getMDim();
-  unsigned nDim = getNDim();
-  auto elementType = getElementType();
-  int height = (elementType && elementType->isF64()) ? 1 : 4;
+  auto mDim = getInstrShape()[0];
+  auto nDim = getInstrShape()[1];
+  auto elementBitWidth = getElementBitWidth();
+  int height = elementBitWidth == 64 ? 1 : 4;
   constexpr int warpSize = 64;
 
   bool isTransposed = getIsTransposed();
@@ -453,8 +453,7 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   // the first argument is 0), an empty layout is created, so this identity
   // layout will not introduce any new registers.
   tileLayout *= LinearLayout::identity1D(
-      shape[nIndex] / (getNDim() * warpsPerCTAN * tilesPerWarpN), kRegister,
-      dimN);
+      shape[nIndex] / (nDim * warpsPerCTAN * tilesPerWarpN), kRegister, dimN);
   tileLayout *= LinearLayout::identity1D(tilesPerWarpM, kRegister, dimM);
 
   // Finally, extend the layout across warps in the M dimension.
@@ -481,7 +480,7 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
                                         ArrayRef<int64_t> shape,
                                         int32_t elemBitWidth) {
   auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
-  auto mDim = mfmaLayout.getMDim();
+  auto mDim = mfmaLayout.getInstrShape()[0];
   assert(mDim == 16 || mDim == 32);
 
   bool isFP4 = false;
@@ -697,8 +696,8 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   auto tilesPerWarp = mfmaLayout.getTilesPerWarp();
   auto tilePerWarpNonK = tilesPerWarp[nonKDimIndex];
 
-  auto mDim = mfmaLayout.getMDim();
-  auto nDim = mfmaLayout.getNDim();
+  auto mDim = mfmaLayout.getInstrShape()[0];
+  auto nDim = mfmaLayout.getInstrShape()[1];
   auto opIdx = dotMfmaLayout.getOpIdx();
   auto nonKDim = opIdx == 0 ? mDim : nDim;
   constexpr int warpSize = 64;
@@ -1619,8 +1618,9 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
 
   // We currently only support transposed [B]F16 MFMA32x32 and MFMA16x16 on
   // CDNA4.
-  bool isMfma32 = mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32;
-  bool isMfma16 = mfmaLayout.getMDim() == 16 && mfmaLayout.getNDim() == 16;
+  auto mnkDim = mfmaLayout.getInstrShape();
+  bool isMfma32 = mnkDim[0] == 32 && mnkDim[1] == 32;
+  bool isMfma16 = mnkDim[0] == 16 && mnkDim[1] == 16;
 
   auto valShape = valType.getShape();
   // For mfma16x16, to use in-wavefront swap, we need to make sure the tiles

@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ._semantic import GluonSemantic
 
-from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout
+from ._layouts import SharedLayout, DistributedLayout, BlockedLayout, DotOperandLayout, AutoLayout
 from triton._C.libtriton import ir
 import triton.language.core as tl_core
 from triton.language.core import (
@@ -141,7 +141,11 @@ class distributed_type(block_type):
         super().__init__(element_ty, shape)
         self.layout = layout
         self.name = f"<{self.shape}, {self.element_ty}, {self.layout}>"
-        assert isinstance(layout, DistributedLayout)
+        assert isinstance(layout, DistributedLayout), "tensor layout must be a DistributedLayout"
+        if not isinstance(layout, AutoLayout):
+            assert len(
+                shape
+            ) == layout.rank, f"tensor shape and layout rank mismatch: shape={shape}, layout={layout}, shape rank={len(shape)}, layout rank={layout.rank}"
 
     def to_ir(self, builder: ir.builder) -> ir.type:
         elem_ty = self.element_ty.to_ir(builder)
@@ -505,6 +509,10 @@ def warp_specialize(default_args, default_partition, worker_args, worker_partiti
     """
     worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
     worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
+    if not isinstance(default_args, tuple):
+        default_args = (default_args, )
+    if not isinstance(worker_args, tuple):
+        worker_args = (worker_args, )
     return _semantic.warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps,
                                      worker_num_regs, _generator)
 

@@ -56,10 +56,13 @@ ValueTable getValuesFromDotOperandLayoutStruct(
         }
 
         Value convertedElems;
-        if (type.isF16() || (wmmaVer == 3 && type.isBF16())) {
+        if (type.isF32() || type.isF16()) {
           convertedElems = rawElems;
         } else if (type.isBF16()) {
-          convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kBase));
+          convertedElems = rawElems;
+          // Before wmma v3, bf16 is converted to i16
+          if (wmmaVer < 3)
+            convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kBase));
         } else {
           convertedElems = tb.bitcast(
               rawElems, vec_ty(i32_ty, kBase * type.getIntOrFloatBitWidth() /
@@ -70,51 +73,6 @@ ValueTable getValuesFromDotOperandLayoutStruct(
     }
   }
   return vals;
-}
-
-std::string getTypeStr(Type ty) {
-  std::string scalarName;
-  if (ty.isF32()) {
-    scalarName = "f32";
-  } else if (ty.isF16()) {
-    scalarName = "f16";
-  } else if (ty.isBF16()) {
-    scalarName = "bf16";
-  } else if (llvm::isa<Float8E4M3FNType>(ty)) {
-    scalarName = "fp8";
-  } else if (llvm::isa<Float8E5M2Type>(ty)) {
-    scalarName = "bf8";
-  } else if (ty.isInteger(32)) {
-    scalarName = "i32";
-  } else if (ty.isInteger(16)) {
-    scalarName = "i16";
-  } else if (ty.isInteger(8)) {
-    scalarName = "iu8";
-  } else if (ty.isInteger(4)) {
-    scalarName = "iu4";
-  } else if (auto vecTy = dyn_cast<VectorType>(ty)) {
-    auto elemType = vecTy.getElementType();
-    auto numElems = vecTy.getNumElements();
-    scalarName = "v" + std::to_string(numElems) + getTypeStr(elemType);
-  } else {
-    llvm::report_fatal_error("WMMA data type not supported");
-  }
-  return scalarName;
-}
-
-std::string addInstructionSuffix(std::string intrinsicName, unsigned kBase,
-                                 unsigned elemsPerVec, Type aElTy, Type bElTy,
-                                 Type dElTy, bool tied) {
-  if (tied) {
-    intrinsicName += ".tied";
-  } else {
-    if (isa<FloatType>(aElTy) && aElTy.getIntOrFloatBitWidth() == 8)
-      intrinsicName += "." + getTypeStr(bElTy);
-    intrinsicName += ".v" + std::to_string(elemsPerVec) + getTypeStr(dElTy);
-    intrinsicName += ".v" + std::to_string(kBase) + getTypeStr(aElTy);
-  }
-
-  return intrinsicName;
 }
 
 Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
@@ -146,22 +104,22 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
   } else {
     assert(wmmaVer == 3 && "unexpected wmma version");
     // arguments for v3:
-    // int:       %A_mod, %A, %B_mod, %B, %C, %A_reuse, %B_reuse
-    // fp16/bf16: %A_mod, %A, %B_mod, %B, %C_mod, %C, %A_reuse, %B_reuse
-    // fp8/bf8:   %A, %B, %C_mod, %C, %A_reuse, %B_reuse
+    // int:          %A_mod, %A, %B_mod, %B, %C, %A_reuse, %B_reuse
+    // f32/f16/bf16: %A_mod, %A, %B_mod, %B, %C_mod, %C, %A_reuse, %B_reuse
+    // f8/bf8:       %A, %B, %C_mod, %C, %A_reuse, %B_reuse
     if (aElType.isInteger())
       operands.push_back(b.int_val(1, !aElType.isUnsignedInteger()));
-    else if (aElType.isBF16() || aElType.isF16())
+    else if (aElType.isFloat(16) || aElType.isF32())
       operands.push_back(b.int_val(1, 0));
     operands.push_back(valA);
 
     if (bElType.isInteger())
       operands.push_back(b.int_val(1, !bElType.isUnsignedInteger()));
-    else if (bElType.isBF16() || bElType.isF16())
+    else if (bElType.isFloat(16) || bElType.isF32())
       operands.push_back(b.int_val(1, 0));
     operands.push_back(valB);
 
-    if ((bElType.isBF16() || bElType.isF16()) || aElType.isInteger())
+    if (bElType.isFloat(16) || bElType.isF32() || aElType.isFloat(8))
       operands.push_back(b.int_val(16, 0));
     operands.push_back(valC);
 
@@ -210,11 +168,9 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   const auto kDimOperandSize = aTensorTy.getShape().back();
 
   std::string intrinsicName;
-  FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic =
-      WmmaIntrinsic::selectFor(wmmaVer, mnkDim[0], mnkDim[1], kDimOperandSize,
-                               aElemTy, bElemTy, dElemTy);
+  FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic = WmmaIntrinsic::get(
+      wmmaVer, mnkDim[0], mnkDim[1], mnkDim[2], aElemTy, bElemTy, dElemTy);
   if (failed(maybeWmmaIntrinsic)) {
-
     return op.emitError(
         "no matching matrix core intrinsic due to unsupported element type");
   }
@@ -257,11 +213,12 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto elemsPerVec = mnkDim[0] * mnkDim[1] * paddedOutputElemSize / warpSize;
   auto dElemsToStorePerThread = mnkDim[0] * mnkDim[1] / warpSize;
   auto vecTy = vec_ty(dstElemTy, elemsPerVec);
+
   bool tied = numRepM % 2 == 0 && paddedOutputElemSize == 2;
   int tiedGroup = tied ? 2 : 1;
+  if (tied)
+    intrinsicName += ".tied";
 
-  intrinsicName = addInstructionSuffix(intrinsicName, kBase, elemsPerVec,
-                                       aElemTy, bElemTy, dElemTy, tied);
   for (int b = 0; b < numRepB; ++b) {
     for (int m = 0; m < numRepM / tiedGroup; ++m) {
       for (int n = 0; n < numRepN; ++n) {

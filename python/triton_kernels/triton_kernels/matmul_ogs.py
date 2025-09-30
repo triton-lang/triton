@@ -102,6 +102,78 @@ def should_upcast_indices(*args):
     return any(tensor is not None and can_overflow_int32(tensor) for tensor in args)
 
 
+# This supports computing dw for ragged matmul.  Note the correspondence:
+#   fwd pass:      y = matmul_ogs(x, w, ...)
+#   bwd pass (dw): dw = matmul_ogs(x.T, dy, ...)
+#
+# Thus, "our" x, w, and y (as seen by matmul_ogs) correspond to x.T, dy, dw, respectively.
+# To avoid confusion, now we'll stick to "x, w, y" terminology.
+#
+# Assume that y.shape == (N_EXPTS, M, N), x.shape == (M, K), w.shape = (K_W, N).
+#
+# To make things feasible, we require that x and w satisfy the following condition:
+#   (1) We don't support gather/scatter indices: in x, all columns for expt #0 are grouped at
+#       the leftmost part, followed by expt #1, and so on.  Ditto for w (top to bottom).
+#   (2) At least one of x and w are padded: each expert uses a multiple of block_k columns
+#       (or rows), and unused values are filled with zero.
+#   (3) No inf or nan are allowed in x or w (except for the final padding - see below).
+#       This is because we use "multiplying by padded zero region" in lieu of masking.
+#   (4) The number of actually used columns/rows equals self.base.expt_hist.sum() and may be
+#       less than K or K_W.  In this case, the final "unused" values can be left uninitialized.
+#       However, if x or w is unpadded, the first block_k columns/rows of the unused part must
+#       not contain nan or inf.
+#
+# For example, assume N_EXPTS == 5, block_k == 32, and expt_hist == [60, 33, 0, 32, 25].
+#
+#               if unpadded     if padded
+#               -----------     ---------
+#   x: expt #0: x[:, :60]       x[:, :60]
+#                               x[:, 60:64] - zero padded
+#      expt #1: x[:, 60:93]     x[:, 64:97]
+#                               x[:, 97:128] - zero padded
+#      expt #3: x[:, 93:125]    x[:, 128:160]
+#      expt #4: x[:, 125:150]   x[:, 160:185]
+#                               x[:, 185:192] - zero padded
+#               x[:, 150:min(182, K)] - must not contain inf/nan
+#
+#               x[:, 182:]      x[:, 192:] - unused (may contain garbage, including inf/nan)
+#
+#   w is the same, except that rows columns are flipped.
+@dataclass
+class InnerRoutingData:
+    base: RoutingData | None = None
+    block_k: int | None = None
+    x_is_padded: bool = False
+    w_is_padded: bool = False
+
+    # Return value contains: ExptHist, ExptOffs, ExptTileOffs, ExptData,
+    #                        EXPT_IS_INNER, X_IS_PADDED, W_IS_PADDED, ExptHistMax
+    @staticmethod
+    def make_kernel_args(data, block_m):
+        if isinstance(data, RoutingData):
+            expt_data, block = data.expt_data, block_m
+            args = (False, False, False, None)
+        elif isinstance(data, InnerRoutingData):
+            expt_data, block = data.base.expt_data, data.block_k
+            args = (
+                True, data.x_is_padded, data.w_is_padded, expt_data.hist.max()
+            )
+        elif data is None:
+            expt_data = None
+        else:
+            assert None
+
+        if expt_data is None:
+            return (None, None, None, None, False, False, False, None)
+
+        return (
+            expt_data.hist,
+            expt_data.token_offs_raw,
+            expt_data.token_offs_pad[block],
+            expt_data.block_pid_map[block],
+        ) + args
+
+
 # ---------------------
 # Numerics
 # ---------------------
@@ -113,6 +185,7 @@ class FlexCtx:
     lhs_data: InFlexData = InFlexData()
     rhs_data: InFlexData = InFlexData()
     out_data: OutFlexData = OutFlexData()
+    acc_data: InFlexData = InFlexData()
 
 @dataclass
 class PrecisionConfig:
@@ -145,7 +218,8 @@ class MatmulAllocation:
     output: tuple[tuple[int], torch.dtype]
     scratchpads: dict[str, tuple]
 
-def init_allocation(x, w, precision_config, fused_activation, routing_data, gather_indx, scatter_indx, opt_flags):
+def init_allocation(x, w, precision_config, fused_activation,
+                    routing_data, gather_indx, scatter_indx, inner_routing_data, opt_flags):
     # ---- output ------
     N = w.shape[-1]
     # by default - M is number of rows in the activations
@@ -159,7 +233,10 @@ def init_allocation(x, w, precision_config, fused_activation, routing_data, gath
     else:
         Mc = scatter_indx.src_indx.shape[0] // routing_data.n_expts_act # compressed number of rows
         y_rows = Mc
-    batch_dim = x.shape[0] if x.ndim == 3 else 1
+    if inner_routing_data is not None:
+        batch_dim = inner_routing_data.base.n_expts_tot
+    else:
+        batch_dim = x.shape[0] if x.ndim == 3 else 1
     out_shape = (batch_dim, y_rows, N // fused_activation.reduction_n)
     out_dtype = precision_config.out_dtype or x.dtype
     output = (out_shape, out_dtype)
@@ -204,8 +281,7 @@ def _canonicalize_storage(storage, out_ndim, flex_data):
     # Our check t_view is col-wise fails since t_view.stride(-2) != 1
     # This case is covered by (m, n, k) == (1000, 700, 2) in test_matmul.py
     new_storage_shape = [1] * (out_ndim - storage.data.ndim) + list(storage.data.shape)
-    new_storage_view = storage.data.view(new_storage_shape)
-    new_storage_stride = [new_storage_view.stride(0)] * (out_ndim - storage.data.ndim) + list(storage.data.stride())
+    new_storage_stride = [0] * (out_ndim - storage.data.ndim) + list(storage.data.stride())
     new_storage_data = storage.data.as_strided(new_storage_shape, new_storage_stride)
     if flex_data is not None:
         new_storage_data = flex_data.reinterpret(new_storage_data)
@@ -309,6 +385,8 @@ def matmul_ogs(x, w, bias,
                y: torch.Tensor | None = None,
                fused_activation: FusedActivation | None = None,
                epilogue: Epilogue | None = None,
+               y_acc_in: torch.Tensor | None = None,
+               inner_routing_data: InnerRoutingData | None = None,
                ):
     """
     Y[:, :] = 0.
@@ -320,7 +398,13 @@ def matmul_ogs(x, w, bias,
         assert gather_indx is None, "gather not supported in batched mode"
         assert scatter_indx is None, "scatter not supported in batched mode"
         assert routing_data is None, "routing not supported in batched mode"
+        assert inner_routing_data is None, "routing not supported in batched mode"
         assert w.ndim == 3 and w.shape[0] == x.shape[0]
+    if inner_routing_data is not None:
+        assert routing_data is None
+        assert gather_indx is None
+        assert scatter_indx is None
+        routing_data = RoutingData(None, None, inner_routing_data.base.n_expts_tot, 1)
     # canonicalize inputs
     if precision_config is None:
         precision_config = PrecisionConfig()
@@ -358,9 +442,16 @@ def matmul_ogs(x, w, bias,
     has_scatter = scatter_indx is not None
     is_ragged = routing_data.expt_hist is not None
     M = x.shape[-2] if gather_indx is None else gather_indx.src_indx.shape[0]
-    batch_size = w.shape[0] if routing_data.expt_hist is None and w.ndim == 3 else 1
-    K, N = w.shape[-2:]
-    assert K == x.shape[-1]
+    if inner_routing_data is not None:
+        batch_size = inner_routing_data.base.n_expts_tot
+    else:
+        batch_size = w.shape[0] if routing_data.expt_hist is None and w.ndim == 3 else 1
+    if y_acc_in is not None:
+        y_acc_is_y = y_acc_in.data_ptr() == y.data_ptr() and y_acc_in.stride() == y.stride()
+    else:
+        y_acc_is_y = None
+    K = x.shape[-1]
+    K_W, N = w.shape[-2:]
     if x.ndim == 3 and w.ndim == 3:
         assert x.shape[0] == w.shape[0]
     # compute optimization flags
@@ -371,17 +462,42 @@ def matmul_ogs(x, w, bias,
         (w_scale is None or w_scale.storage.is_tma_compliant()) and
         (not is_ragged or x.stride(-1) == 1) and
         # Currently we don't support tma if y is column major; may revisit later if this becomes an issue.
-        (y is None or y.stride(-1) == 1)
+        (y is None or y.stride(-1) == 1) and
+        (y_acc_in is None or y_acc_is_y) and
+        # If we use inner_routing_data, w must be either padded or row major, otherwise we get
+        # unaligned access.
+        (inner_routing_data is None or w.stride(-1) == 1 or inner_routing_data.w_is_padded)
     )
+    has_gather_tma = has_gather and target_info.has_tma_gather()
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
     can_use_fused_scatter = has_scatter and (fused_activation.specs.fn is None) and (epilogue.specs.fn is None) and (routing_data.n_expts_act == 1)
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
-        batch_size, M, N, K, routing_data, can_use_tma, can_use_fused_scatter,
-        epilogue.effective_itemsize, x_transpose,
+        batch_size, M, N, w.shape[-2], routing_data,
+        can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
+        x_transpose, y_acc_in is not None,
+        inner_routing_data.block_k if inner_routing_data is not None else None,
     )
     if not can_use_fused_scatter and opt_flags.fused_scatter:
         raise InapplicableConstraint("Fused scatter is not supported")
+    if inner_routing_data is not None:
+        assert opt_flags.block_k == inner_routing_data.block_k
+        assert opt_flags.split_k == 1
+        batch_size = inner_routing_data.base.n_expts_tot
+        # For unpadded (row major) x, we cannot use tma because memory access isn't aligned.
+        x_has_tma = opt_flags.is_persistent and (x.stride(-1) != 1 or inner_routing_data.x_is_padded)
+        # If TMA is used, limit is handled automatically, so we can pretend K is "even".
+        # (For unpadded input, we assume that the first block_k unused rows are zero-filled,
+        # when routing_data.expt_hist.sum() is less than K or K_W.)
+        if opt_flags.is_persistent:
+            even_K = x_has_tma or inner_routing_data.x_is_padded
+        else:
+            even_K = inner_routing_data.x_is_padded and inner_routing_data.w_is_padded
+    else:
+        batch_size = w.shape[0] if routing_data.expt_hist is None and w.ndim == 3 else 1
+        assert K == K_W
+        x_has_tma = opt_flags.is_persistent and (has_gather_tma or not has_gather)
+        even_K = (K % opt_flags.block_k == 0)
     if w_scale is not None and opt_flags.is_persistent and not target_info.has_native_mxfp():
         raise NotImplementedError("Must use non-persistent kernel for simulated MXFP")
     if w_scale is not None and w_scale.storage.layout.name is not None and not opt_flags.is_persistent and target_info.has_native_mxfp():
@@ -393,7 +509,7 @@ def matmul_ogs(x, w, bias,
         matmul_fused_activation, reduce_fused_activation = reduce_fused_activation, matmul_fused_activation
     # allocate output/scratchpad memory
     allocation = init_allocation(x, w, precision_config, fused_activation,
-        routing_data, gather_indx, scatter_indx, opt_flags)
+        routing_data, gather_indx, scatter_indx, inner_routing_data, opt_flags)
     memory = apply_allocation(allocation, y)
     # early exit
     if batch_size * M * N == 0:
@@ -421,33 +537,40 @@ def matmul_ogs(x, w, bias,
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
     # moe metadata
-    expt_data = routing_data.expt_data
     block_m = opt_flags.block_m
-    expt_hist = None if expt_data is None else expt_data.hist
-    expt_hist_sum = None if expt_data is None else expt_data.token_offs_pad[block_m][-1]
-    expt_token_offs_raw = None if expt_data is None else expt_data.token_offs_raw
-    expt_block_pid_map = None if expt_data is None else expt_data.block_pid_map[block_m]
+    expt_data_args = InnerRoutingData.make_kernel_args(inner_routing_data or routing_data, block_m)
     # spmd grid
     grid_m = triton.cdiv(M, opt_flags.block_m)
-    if expt_block_pid_map is not None:
+    if routing_data.expt_data is not None:
         grid_m = routing_data.n_blocks(M, opt_flags.block_m)
     grid_n = triton.cdiv(N, opt_flags.block_n)
     max_grid = batch_size * grid_m * grid_n * opt_flags.split_k
     grid = min(target_info.num_sms() - opt_flags.idle_sms, max_grid) if opt_flags.is_persistent else max_grid
     # canonicalize storage
-    has_gather_tma = has_gather and target_info.has_tma_gather()
     has_scatter_tma = opt_flags.fused_scatter and target_info.has_tma_gather()
     y = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if opt_flags.fused_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather_tma else 3, flex.lhs_data)
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
     y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 3, flex.out_data)
     # create tma descriptor for x
-    x_has_tma = opt_flags.is_persistent and (has_gather_tma or not has_gather)
+    if y_acc_in is not None:
+        assert opt_flags.split_k == 1, "y_acc_in + split_k is not supported."
+        assert scatter_indx is None, "y_acc_in + scatter is not supported."
+        if y_acc_in.ndim == 2:
+            y_acc_in = y_acc_in.unsqueeze(0)
+        assert y_acc_in.shape == out_matmul.shape[-3:]
+        y_acc_strides = y_acc_in.stride()
+    else:
+        y_acc_strides = (None, None, None)
+
     x_tma_block_size = [1, opt_flags.block_k] if has_gather_tma else [1, opt_flags.block_m, opt_flags.block_k]
     x_tma_mode = None if not x_has_tma else "ragged" if is_ragged and not has_gather_tma else "dense"
     x_tensor_or_tma = x_storage.make_tma(x_tma_block_size, x_tma_mode) if x_has_tma else x_storage.data
     # create tma descriptor for y
-    y_has_tma = opt_flags.is_persistent and (has_scatter_tma or not opt_flags.fused_scatter)
+    y_has_tma = (
+        opt_flags.is_persistent and (has_scatter_tma or not opt_flags.fused_scatter)
+        and (y_acc_in is None or y_acc_is_y)
+    )
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.reduction_n
     y_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
     y_tma_mode = None if not y_has_tma else "ragged" if is_ragged and not has_scatter_tma else "dense"
@@ -474,6 +597,7 @@ def matmul_ogs(x, w, bias,
     # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
     # w_transpose = w_storage.data.stride()[-1] != 1
     w_transpose = w_storage.data.stride()[-2] == 1
+
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
@@ -484,16 +608,18 @@ def matmul_ogs(x, w, bias,
                    w_tensor_or_tma, w_storage.data, *w_storage.data.stride(), w_transpose,
                    flex.rhs_data.scale,
                    w_scale_tensor_or_tma, *w_scale_strides,
+                   flex.acc_data.reinterpret(y_acc_in), *y_acc_strides,
+                   flex.acc_data.scale, y_acc_is_y,
                    bias, bias_stride,
                    x.shape[-2] if routing_data.expt_hist is None else None,
-                   N, K,
+                   N, K, K_W,
                    betas, gammas,
                    None if gather_indx is None else gather_indx.src_indx,
                    None if scatter_indx is None else scatter_indx.src_indx,
                    num_indx,
                    None if not opt_flags.fused_scatter else scatter_indx.dst_indx,
                    None if not opt_flags.fused_scatter else scatter_indx.dst_indx.shape[0],
-                   expt_hist, expt_token_offs_raw, expt_hist_sum, expt_block_pid_map,
+                   *expt_data_args,
                    batch_size, grid_m, grid_n,
                    out_alpha,
                    *matmul_fused_activation.fn_args, matmul_fused_activation.reduction_n,
@@ -503,6 +629,8 @@ def matmul_ogs(x, w, bias,
                    precision_config.allow_tf32,
                    precision_config.flexpoint_saturate_inf,
                    flex.rhs_data.is_per_batch,
+                   flex.out_data.is_per_batch,
+                   flex.acc_data.is_per_batch,
                    opt_flags.block_m,
                    opt_flags.block_n,
                    opt_flags.block_k,
@@ -512,7 +640,7 @@ def matmul_ogs(x, w, bias,
                    SWIZZLE_MX_SCALE=None if w_scale is None else w_scale.storage.layout.name,
                    EPILOGUE_SUBTILE=opt_flags.epilogue_subtile,
                    SPLIT_K=opt_flags.split_k,
-                   EVEN_K=K % opt_flags.block_k == 0,
+                   EVEN_K=even_K,
                    W_CACHE_MODIFIER=opt_flags.w_cache_modifier,
                    TOKENS_PER_EXPT_FOR_ANNOTATION=routing_data.expected_tokens_per_expt,
                    num_warps=opt_flags.num_warps,
@@ -540,7 +668,7 @@ def matmul_ogs(x, w, bias,
         out_dtype=memory["output"].dtype,
         flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf,
     )
-    if not is_input_batched:
+    if not (is_input_batched or inner_routing_data is not None):
         out_final = out_final.squeeze(0)
     if out_final_mx_scale is not None:
         precision_config.out_scale = out_final_mx_scale
@@ -557,8 +685,28 @@ def matmul_ogs_torch(x, w, bias,
                  precision_config: PrecisionConfig = None,
                  betas = None,
                  gammas = None,
+                 inner_routing_data: InnerRoutingData | None = None,
                  round_x = None, round_y = None,
                  ):
+    if inner_routing_data is not None:
+        assert bias is None, "Not supported yet"
+        m, n = x.shape[-2], w.shape[-1]
+        block_k = inner_routing_data.block_k
+        n_expts_tot = inner_routing_data.base.n_expts_tot
+        out = torch.zeros((n_expts_tot, m, n), dtype=torch.float32, device=x.device)
+        start_x = start_w = 0
+        for expt in range(n_expts_tot):
+            k = inner_routing_data.base.expt_hist[expt].item()
+            if k > 0:
+                out[expt] = matmul_ogs_torch(
+                    x[:, start_x:start_x+k], w[start_w:start_w+k, :], None,
+                    None, None, None, None, betas, gammas, None, round_x, round_y
+                )
+            padded_k = triton.cdiv(k, block_k) * block_k
+            start_x += padded_k if inner_routing_data.x_is_padded else k
+            start_w += padded_k if inner_routing_data.w_is_padded else k
+        return out
+
     is_input_batched = x.ndim == 3
     assert x.dtype.itemsize > 1
     assert w.dtype.itemsize > 1
