@@ -1,10 +1,10 @@
 import torch
 import torch.distributed as dist
 import triton
-from triton_kernels.distributed import convert_rdata_to_ep, convert_dp_to_ep, convert_ep_to_dp
+from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp
 from triton_kernels.matmul_ogs import matmul_ogs, reduce_grouped
-from triton_kernels.routing import routing
-from test_routing import make_expt_dict_random, make_expt_assignment
+from triton_kernels.routing import routing, RoutingData
+from test_routing import make_expt_dict_random, make_expt_assignment, filter_expt_data
 
 
 def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act):
@@ -14,9 +14,17 @@ def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_ac
 
 
 def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, expt_assignment, n_expts_act):
+    rank = dist.get_rank()
     rdata_global, combine_indx, dispatch_indx, expt_indx = routing(l_dp_local, n_expts_act, all_gather=True)
     y_ep_local = convert_dp_to_ep(x_dp_local, expt_assignment, expt_indx, dispatch_indx.src_indx)
-    rdata_ep_local = convert_rdata_to_ep(rdata_global, expt_assignment)
+    expt_data_local = filter_expt_data(rdata_global.expt_data, expt_assignment, rank)
+    rdata_ep_local = RoutingData(
+        gate_scal=rdata_global.gate_scal,
+        expt_hist=expt_data_local.hist,
+        n_expts_tot=expt_assignment.n_expts_per_shard[rank],
+        n_expts_act=rdata_global.n_expts_act,
+        expt_data=expt_data_local,
+    )
     y_ep_local = matmul_ogs(y_ep_local, w_ep_local, b_ep_local, rdata_ep_local)
     y_dp_local = convert_ep_to_dp(y_ep_local, expt_assignment, expt_indx, combine_indx.src_indx)
     z_dp_local = reduce_grouped(y_dp_local, contig_group_size=n_expts_act)[0]
