@@ -3,10 +3,10 @@ import triton
 from dataclasses import dataclass, field
 from .routing_details._routing_compute import _combined_routing_compute
 from .routing_details._routing_compute import _combined_routing_memset
-from .routing_details._routing_compute import _routing_clear_bitmatrix
 from .routing_details._expt_data import _expt_data_memset
 from .routing_details._expt_data import _expt_data_compute
 from .target_info import is_hip
+from .topk import topk, topk_torch
 
 
 @dataclass
@@ -162,37 +162,6 @@ def sort_tokens(expt_scal, expt_indx, n_expts_tot, bitmatrix):
 
 
 # --------------------------
-# prune routing
-# --------------------------
-
-
-class PruneRouting(torch.autograd.Function):
-
-    @staticmethod
-    def forward(ctx, expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep):
-        from .compaction import compaction
-        n_tokens_pad = expt_scal.shape[0]
-        assert n_expts_tot % simulated_ep == 0
-        _routing_clear_bitmatrix[(n_tokens_pad, )](
-            bitmatrix.storage.data,
-            bitmatrix.storage.data.stride(0),
-            bitmatrix.storage.data.stride(1),
-            bitmatrix.storage.data.shape[1],
-            n_expts_tot // simulated_ep,
-            BLOCK_N=512,
-        )
-        # perform compaction to update expt_scal / expt_indx
-        expt_scal, expt_indx = compaction(expt_scal, expt_indx, bitmatrix)
-        n_expts_tot = n_expts_tot // simulated_ep
-        bitmatrix.shape[-1] = n_expts_tot
-        return expt_scal, expt_indx, bitmatrix
-
-
-def prune_routing(expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep):
-    return PruneRouting.apply(expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep)
-
-
-# --------------------------
 # expt_data
 # --------------------------
 
@@ -282,15 +251,12 @@ def routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx, n_expts_tot, n_expts
     token_offs_pad = _unpack_into_dict(token_offs_pad)
     block_pid_map = _unpack_into_dict(block_pid_map)
     expt_data = ExptData(hist, token_offs_raw, token_offs_pad, block_pid_map)
-
-    # pack the matmul data structure
     gather_indx = GatherIndx(src_indx=topk_indx, dst_indx=gate_indx)
     scatter_indx = ScatterIndx(src_indx=gate_indx, dst_indx=topk_indx)
     return RoutingData(gate_scal, hist, n_expts_tot, n_expts_act, expt_data), gather_indx, scatter_indx, expt_indx
 
 
 def routing(logits, n_expts_act, sm_first=False, expt_indx=None, all_gather=False, n_rows=None):
-    from .topk import topk
     if sm_first:
         logits = torch.softmax(logits, dim=-1)
     expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act, all_gather=all_gather,  #
@@ -329,30 +295,12 @@ def compute_expt_data_torch(hist, n_expts_tot, n_gates):
         token_offs_pad[block_m] = token_offs_pad[block_m].int()
         # compute data required to drive ragged batch matmul
         block_pid_map[block_m] = -torch.ones(max_n_tiles, dtype=torch.int32, device=device)
-
-        # for e in range(n_expts_tot):
-        #     offset = token_offs_pad[block_m][e]
-        #     for b in range(n_tiles[e]):
-        #         block_pid_map[block_m][offset + b] = (b << 16) + e
-
         col = torch.arange(max_n_tiles, device=device)
         map_vals = torch.arange(n_expts_tot, device=device)[:, None] + (col << 16)[None, :]
         map_idxs = token_offs_pad[block_m][:-1, None] + col[None, :]
         mask = col[None, :] < n_tiles[:, None]
         block_pid_map[block_m].index_put_((map_idxs[mask], ), map_vals.int()[mask])
     return ExptData(hist, token_offs_raw, token_offs_pad, block_pid_map)
-
-
-def topk_torch(vals, k, expt_indx, has_user_provided_indx=False):
-    # topk of experts
-    if has_user_provided_indx:
-        tk_indx = expt_indx
-    else:
-        tk_indx = torch.argsort(-vals, dim=1, stable=True)[:, :k]
-    tk_indx = tk_indx.long()
-    tk_val = torch.take_along_dim(vals, tk_indx, dim=1)
-    tk_indx = tk_indx.int()
-    return tk_val, tk_indx
 
 
 def routing_torch(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None):
@@ -364,7 +312,7 @@ def routing_torch(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=No
     _, n_expts_tot = logits.shape
     if sm_first:
         logits = torch.softmax(logits, dim=-1)
-    expt_scal, expt_indx = topk_torch(logits, n_expts_act, expt_indx, has_user_provided_indx=has_user_provided_indx)
+    expt_scal, expt_indx = topk_torch(logits, n_expts_act, expt_indx)
     if not sm_first:
         expt_scal = torch.softmax(expt_scal, dim=-1)
     # sort each token's selections by expert

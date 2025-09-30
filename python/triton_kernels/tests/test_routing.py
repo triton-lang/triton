@@ -55,11 +55,8 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, sm_first, use_
     tri_expt_data = tri_routing_data.expt_data
     assert_equal(ref_expt_data.hist, tri_expt_data.hist)
     assert_equal(ref_expt_data.token_offs_raw, tri_expt_data.token_offs_raw)
-    assert len(ref_expt_data.token_offs_pad) == len(tri_expt_data.token_offs_pad)
-    assert len(ref_expt_data.block_pid_map) == len(tri_expt_data.block_pid_map)
-    for block_m in ref_expt_data.token_offs_pad.keys():
-        assert_equal(ref_expt_data.token_offs_pad[block_m], tri_expt_data.token_offs_pad[block_m])
-        assert_equal(ref_expt_data.block_pid_map[block_m], tri_expt_data.block_pid_map[block_m])
+    assert_equal(ref_expt_data.token_offs_pad_data, tri_expt_data.token_offs_pad_data)
+    assert_equal(ref_expt_data.block_pid_map_data, tri_expt_data.block_pid_map_data)
 
     assert ref_routing_data.n_expts_tot == ref_routing_data.n_expts_tot
     assert ref_routing_data.n_expts_act == ref_routing_data.n_expts_act
