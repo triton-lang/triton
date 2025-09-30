@@ -12,20 +12,25 @@ namespace gpu {
 namespace {
 
 template <typename T>
-auto convertValue(const Value &value, const FloatType &scalarToType, PatternRewriter &rewriter) -> mlir::Value {
+auto convertValue(const Value &value, const FloatType &scalarToType,
+                  PatternRewriter &rewriter) -> mlir::Value {
   auto fromType = cast<RankedTensorType>(value.getType());
-  auto toType = RankedTensorType::get(fromType.getShape(), scalarToType, fromType.getEncoding());
+  auto toType = RankedTensorType::get(fromType.getShape(), scalarToType,
+                                      fromType.getEncoding());
   return rewriter.create<T>(value.getLoc(), toType, value).getResult();
 }
 
-auto SplitF32(Value input, unsigned N, PatternRewriter &rewriter) -> llvm::SmallVector<Value, 3> {
+auto SplitF32(Value input, unsigned N, PatternRewriter &rewriter)
+    -> llvm::SmallVector<Value, 3> {
   llvm::SmallVector<Value, 3> split_inputs;
   for (unsigned i = 0; i < N; ++i) {
-    Value input_as_bf16 = convertValue<arith::TruncFOp>(input, rewriter.getBF16Type(), rewriter);
+    Value input_as_bf16 =
+        convertValue<arith::TruncFOp>(input, rewriter.getBF16Type(), rewriter);
     if (i != N - 1) {
-      Value input_as_f32 = convertValue<arith::ExtFOp>(input_as_bf16, rewriter.getF32Type(), rewriter);
-      input = rewriter.create<arith::SubFOp>(input.getLoc(), input,
-                                             input_as_f32);
+      Value input_as_f32 = convertValue<arith::ExtFOp>(
+          input_as_bf16, rewriter.getF32Type(), rewriter);
+      input =
+          rewriter.create<arith::SubFOp>(input.getLoc(), input, input_as_f32);
     }
     split_inputs.push_back(input_as_bf16);
   }
@@ -110,7 +115,8 @@ struct BF16xN : public OpRewritePattern<DotOp> {
 
     result = replaceNansWithZeros(result);
     result = dot(lhs_parts[hi], rhs_parts[hi], result);
-    result = rewriter.create<arith::AddFOp>(dotOp.getLoc(), result, dotOp.getC());
+    result =
+        rewriter.create<arith::AddFOp>(dotOp.getLoc(), result, dotOp.getC());
 
     rewriter.replaceOp(dotOp, result);
     return success();
