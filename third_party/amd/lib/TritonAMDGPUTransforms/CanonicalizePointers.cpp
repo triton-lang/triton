@@ -1302,15 +1302,16 @@ public:
     SmallVector<Value> trueOperands = flattenValues(remappedTrueOperands);
     SmallVector<Value> falseOperands = flattenValues(remappedFalseOperands);
 
-    rewriter.replaceOpWithNewOp<cf::CondBranchOp>(
-        branchOp, branchOp.getCondition(), branchOp.getTrueDest(), trueOperands,
-        branchOp.getFalseDest(), falseOperands);
+    auto newOp = rewriter.create<cf::CondBranchOp>(
+        branchOp.getLoc(), branchOp.getCondition(), branchOp.getTrueDest(),
+        trueOperands, branchOp.getFalseDest(), falseOperands);
 
     convertSimpleBlockSignature(branchOp.getTrueDest(), remappedTrueOperands,
                                 rewriter, fatPtrs);
     convertSimpleBlockSignature(branchOp.getFalseDest(), remappedFalseOperands,
                                 rewriter, fatPtrs);
 
+    rewriter.replaceOp(branchOp, newOp);
     return success();
   }
 };
@@ -1481,10 +1482,11 @@ public:
     ArrayRef<ValueRange> remappedDestOperands = adaptor.getDestOperands();
     SmallVector<Value> trueOperands = flattenValues(remappedDestOperands);
 
-    rewriter.replaceOpWithNewOp<cf::BranchOp>(branchOp, branchOp.getDest(),
-                                              trueOperands);
+    auto newOp = rewriter.create<cf::BranchOp>(
+        branchOp.getLoc(), branchOp.getDest(), trueOperands);
     convertSimpleBlockSignature(branchOp.getDest(), remappedDestOperands,
                                 rewriter, fatPtrs);
+    rewriter.replaceOp(branchOp, newOp);
     return success();
   }
 };
