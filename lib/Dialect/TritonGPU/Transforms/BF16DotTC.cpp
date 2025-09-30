@@ -65,12 +65,6 @@ public:
                                     InputPrecision::BF16,
                                     dotOp.getMaxNumImpreciseAcc());
     };
-    auto replaceNansWithZeros = [&](Value value) -> Value {
-      auto nans = rewriter.create<arith::CmpFOp>(
-          dotOp->getLoc(), arith::CmpFPredicate::UNO, value, value);
-      return rewriter.create<arith::SelectOp>(dotOp->getLoc(), nans, zero,
-                                              value);
-    };
 
     const unsigned hi = 0;
     const unsigned mid = 1;
@@ -104,6 +98,13 @@ public:
       result = dot(lhs_parts[mid], rhs_parts[hi], result);
       result = dot(lhs_parts[hi], rhs_parts[mid], result);
     }
+
+    auto replaceNansWithZeros = [&](Value value) -> Value {
+      auto nans = rewriter.create<arith::CmpFOp>(
+          dotOp->getLoc(), arith::CmpFPredicate::UNO, value, value);
+      return rewriter.create<arith::SelectOp>(dotOp->getLoc(), nans, zero,
+                                              value);
+    };
 
     result = replaceNansWithZeros(result);
     result = dot(lhs_parts[hi], rhs_parts[hi], result);
