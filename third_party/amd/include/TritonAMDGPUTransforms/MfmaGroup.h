@@ -19,7 +19,7 @@ struct MfmaIntrinsic {
                                             unsigned inputKDim, Type aElemType,
                                             Type bElemType, bool withScale,
                                             bool useTF32);
-  // Gets the wmma intrinsic based on exact match of all parameters.
+  // Gets the mfma intrinsic based on exact match of all parameters.
   static FailureOr<MfmaIntrinsic> get(Location loc, int version, unsigned mDim,
                                       unsigned nDim, unsigned kDim,
                                       Type aElemType, Type bElemType,
