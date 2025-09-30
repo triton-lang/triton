@@ -80,14 +80,12 @@ struct BF16xN : public OpRewritePattern<DotOp> {
     auto zeroLike = [&]() -> Value {
       return rewriter.create<SplatOp>(
           loc, dotOp.getC().getType(),
-          rewriter.create<arith::ConstantOp>(loc,
-                                             rewriter.getF32FloatAttr(0)));
+          rewriter.create<arith::ConstantOp>(loc, rewriter.getF32FloatAttr(0)));
     };
     auto replaceNansWithZeros = [&](Value value) -> Value {
       auto isNaN = rewriter.create<arith::CmpFOp>(
           loc, arith::CmpFPredicate::UNO, value, value);
-      return rewriter.create<arith::SelectOp>(loc, isNaN,
-                                              zeroLike(), value);
+      return rewriter.create<arith::SelectOp>(loc, isNaN, zeroLike(), value);
     };
 
     // Starting Values: a(0), a(1), a(2), b(0), b(1), b(2) and zero accumulator
@@ -121,8 +119,7 @@ struct BF16xN : public OpRewritePattern<DotOp> {
 
     result = replaceNansWithZeros(result);
     result = dot(lhs_parts[hi], rhs_parts[hi], result);
-    result =
-        rewriter.create<arith::AddFOp>(loc, result, dotOp.getC());
+    result = rewriter.create<arith::AddFOp>(loc, result, dotOp.getC());
 
     rewriter.replaceOp(dotOp, result);
     return success();
