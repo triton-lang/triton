@@ -1095,18 +1095,19 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
 
     auto smemEnc =
         llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
-    if (!smemEnc)
-      return rewriter.notifyMatchFailure(op,
-                                         "TDM requires padded shared layout");
-    if (smemEnc.getIntervals().size() != 1 || smemEnc.getPaddings().size() != 1)
-      return rewriter.notifyMatchFailure(
-          op, "TDM only supports a single interval-padding pair");
-
     Type llvmElemTy = getTypeConverter()->convertType(smemTy.getElementType());
     auto elementBitWidth = llvmElemTy.getIntOrFloatBitWidth();
 
-    unsigned padInterval = smemEnc.getIntervals()[0];
-    unsigned padAmount = smemEnc.getPaddings()[0];
+    unsigned padInterval = 0;
+    unsigned padAmount = 0;
+    if (smemEnc) {
+      if (smemEnc.getIntervals().size() != 1 ||
+          smemEnc.getPaddings().size() != 1)
+        return rewriter.notifyMatchFailure(
+            op, "TDM only supports a single interval-padding pair");
+      padInterval = smemEnc.getIntervals()[0];
+      padAmount = smemEnc.getPaddings()[0];
+    }
     unsigned dwordSize = 32;
     auto padIntervalInDwords = padInterval * elementBitWidth / dwordSize;
     auto padAmountInDwords = padAmount * elementBitWidth / dwordSize;
@@ -1166,9 +1167,11 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         loc, adaptor.getResult(), llvmElemTy, rewriter);
     Value dstBase = dstMemObj.getBase();
     Value dstOffset = b.mul(b.i32_val(outerBlockStride), outerOffset);
-    Value padding =
-        emitPadding(loc, rewriter, smemEnc, elementBitWidth, dstOffset, false);
-    dstOffset = b.add(dstOffset, padding);
+    if (smemEnc) {
+      Value padding = emitPadding(loc, rewriter, smemEnc, elementBitWidth,
+                                  dstOffset, false);
+      dstOffset = b.add(dstOffset, padding);
+    }
     dstBase = b.gep(sharedPtrTy, llvmElemTy, dstBase, dstOffset);
 
     // Update tensor shape and block shape based on offset
