@@ -743,16 +743,4 @@ def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_wait"> {
   let assemblyFormat = "$asyncToken attr-dict";
 }
 
-//===----------------------------------------------------------------------===//
-// WaveIdOp
-//===----------------------------------------------------------------------===//
-
-def WaveIdOp : TT_AMDGPU_Op<"wave_id", [Pure]> {
-    let arguments = (ins);
-
-    let results = (outs I32:$result);
-
-    let assemblyFormat = "attr-dict `:` type($result)";
-}
-
 #endif

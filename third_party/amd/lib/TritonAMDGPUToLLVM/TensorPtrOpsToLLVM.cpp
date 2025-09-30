@@ -25,12 +25,11 @@ struct MakeTensorDescOpConversion
     auto result = op.getResult();
 
     SmallVector<Value> elems;
+    elems.push_back(basePtr);
     for (auto s : tensorShape)
       elems.push_back(s);
     for (auto stride : tensorStride)
       elems.push_back(stride);
-
-    elems.push_back(basePtr);
 
     auto newValue = packLLElements(op.getLoc(), getTypeConverter(), elems,
                                    rewriter, result.getType());
