@@ -59,9 +59,6 @@ public:
     auto add = [&](Value a, Value b) -> Value {
       return rewriter.create<arith::AddFOp>(dotOp.getLoc(), a, b);
     };
-    auto sub = [&](Value a, Value b) -> Value {
-      return rewriter.create<arith::SubFOp>(dotOp.getLoc(), a, b);
-    };
     auto dot = [&](Value a, Value b, Value c) -> Value {
       return rewriter.create<DotOp>(dotOp->getLoc(), c.getType(), a, b, c,
                                     InputPrecision::BF16,
