@@ -5,6 +5,38 @@ from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp
 from triton_kernels.matmul_ogs import matmul_ogs, reduce_grouped
 from triton_kernels.routing import routing, RoutingData
 from test_routing import make_expt_dict_random, make_expt_assignment, filter_expt_data
+import pytest
+import os
+
+# torchrun --standalone --nproc_per_node=2 -m pytest -vs ./test_distributed.py
+
+# ------------------------------------------------------------
+# fixture
+# ------------------------------------------------------------
+
+
+@pytest.fixture(scope="session", autouse=True)
+def init_distributed():
+    # Skip nicely if not launched with torchrun or no CUDA
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required for this distributed GPU test")
+    if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
+        pytest.skip("Launch with torchrun, e.g.: "
+                    "torchrun --standalone --nproc_per_node=2 -m pytest -q")
+    # Bind to the correct GPU *before* initializing NCCL
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    if local_rank >= torch.cuda.device_count():
+        pytest.skip(f"LOCAL_RANK {local_rank} >= cuda device count {torch.cuda.device_count()}")
+    torch.cuda.set_device(local_rank)
+    if not dist.is_initialized():
+        dist.init_process_group(backend="nccl", init_method="env://")
+    dist.barrier()
+    yield
+    dist.barrier()
+    dist.destroy_process_group()
+
+
+# ------------------------------------------------------------
 
 
 def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act):
@@ -31,11 +63,12 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
     return z_dp_local
 
 
+@pytest.mark.parametrize("n_tokens", [16])
+@pytest.mark.parametrize("d_model, n_expts_tot, n_expts_act", [(16, 4, 4)])
 def test_expert_sharding(n_tokens, d_model, n_expts_tot, n_expts_act):
     torch.manual_seed(0)
     rank = dist.get_rank()
     n_shards = dist.get_world_size()
-    torch.cuda.set_device(rank)
     dev = torch.cuda.current_device()
     expt_dict = make_expt_dict_random(n_shards, n_expts_tot)
     expt_assignment = make_expt_assignment(n_shards, n_expts_tot, expt_dict, device=dev)
@@ -59,12 +92,3 @@ def test_expert_sharding(n_tokens, d_model, n_expts_tot, n_expts_act):
     y_global_tri = torch.empty_like(y_global_ref)
     dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
     triton.testing.assert_close(y_global_ref, y_global_tri)
-
-
-# ------------------------------------------------------------
-
-if __name__ == "__main__":
-    dist.init_process_group(backend="nccl", init_method="env://")
-    # test_compaction()
-    # test_filter_expt_data()
-    test_expert_sharding(16, 4, 4, 2)
