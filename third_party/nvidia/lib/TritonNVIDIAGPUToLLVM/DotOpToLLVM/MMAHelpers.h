@@ -129,16 +129,21 @@ public:
       // There is a handshake between this code and the mmav3 layout
       // The PTX docs asks that every warpgroup points to its part of shmem, so
       // we have to know how are we tiling the warps along the MN dimension
+      auto wg = std::move(warpGroups.value());
       auto mndim = MNdim.value();
       // Each warp has to have the offset of the part of shmem that the 0th warp
       // of the warpgroup owns
       // The warpGroup order for mmav3 is [0, 1] so we split warpId accordingly
       auto logWarpsBeforeWarp0 = 2;
       if (mndim == 1) {
-        logWarpsBeforeWarp0 += llvm::Log2_32(warpGroups.value()[0]);
+        logWarpsBeforeWarp0 += llvm::Log2_32(wg[0]);
       }
       Value warpId = b.lshr(rewriter.create<nvgpu::WarpIdOp>(loc),
                             b.i32_val(logWarpsBeforeWarp0));
+      if (mndim == 0 && wg[1] > 1) {
+        // We need to mask mask out the first warpGroup[0] warp groups
+        warpId = b.and_(warpId, b.i32_val(wg[0] - 1));
+      }
       // We know that the lbo/sbo is constant, and we assume that the warps tile
       // along the MN dimension
       auto warpStrideElem = llInv.getBasis(
@@ -146,7 +151,7 @@ public:
       auto warpStrideb128 = warpStrideElem * bitwidth / 128;
       baseSrcb128 =
           b.add(baseSrcb128, b.mul(warpId, b.i32_val(warpStrideb128)));
-      blockInstrShape[mndim] *= warpGroups.value()[MNdim.value()];
+      blockInstrShape[mndim] *= wg[MNdim.value()];
     }
 
     Value baseb128 = b.zext(i64_ty, b.and_(baseSrcb128, b.i32_val(0x3FFF)));
