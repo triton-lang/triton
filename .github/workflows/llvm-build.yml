@@ -9,6 +9,8 @@ on:
   pull_request:
     paths:
       - .github/workflows/llvm-build.yml
+      - .github/workflows/llvm-build/almalinux.Dockerfile
+      - .github/workflows/llvm-build/centos.Dockerfile
   workflow_dispatch:
 
 env:
@@ -136,6 +138,7 @@ jobs:
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_TERMINFO=OFF
+        -DLLVM_ENABLE_ZSTD=OFF
         llvm-project/llvm
 
         ninja -C llvm-project/build check-mlir install
@@ -245,7 +248,11 @@ jobs:
       run: |
         # if this step crashes, it can leave behind a stale docker container
         docker container prune -f
-        docker rmi -f $(docker images -q)
+
+        images=$(docker images -q)
+        if [ -n "$images" ]; then
+          docker rmi -f $images
+        fi
 
         docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
           -f llvm-build/.github/workflows/llvm-build/centos.Dockerfile .
@@ -268,7 +275,11 @@ jobs:
       run: |
         # if this step crashes, it can leave behind a stale docker container
         docker container prune -f
-        docker rmi -f $(docker images -q)
+
+        images=$(docker images -q)
+        if [ -n "$images" ]; then
+          docker rmi -f $images
+        fi
 
         docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
           -f llvm-build/.github/workflows/llvm-build/almalinux.Dockerfile .
@@ -296,7 +307,7 @@ jobs:
           ${{ github.workspace }}/llvm-*-${{ matrix.config.target-os }}-${{ matrix.config.arch }}.tar.gz
 
     - name: Azure Login
-      if: ${{ (github.repository == 'triton-lang/triton') }}
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
       uses: azure/login@v2
       with:
         client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -304,7 +315,7 @@ jobs:
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
     - name: Upload LLVM Artifacts to Azure
-      if: ${{ (github.repository == 'triton-lang/triton') }}
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
       shell: bash -el {0}
       run: |
         az storage blob upload --account-name oaitriton --auth-mode login --container-name public --file "${{ env.llvm_install_dir }}.tar.gz" --name "llvm-builds/${{ env.llvm_install_dir }}.tar.gz" --overwrite
@@ -313,7 +324,7 @@ jobs:
         echo "Blob URL: ${URL}"
 
     - name: Azure Logout
-      if: ${{ (github.repository == 'triton-lang/triton') }}
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
       run: |
         az logout
         az cache purge

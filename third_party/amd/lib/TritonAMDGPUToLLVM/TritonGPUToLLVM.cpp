@@ -26,6 +26,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/TargetParser/TargetParser.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONAMDGPUTOLLVM
@@ -109,7 +110,8 @@ struct ConvertTritonAMDGPUToLLVM
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       mlir::triton::populateFuncOpConversionPattern(
-          typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
+          typeConverter, funcPatterns, targetInfo, patternBenefitDefault,
+          /*symTable=*/nullptr);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
       if (failed(
