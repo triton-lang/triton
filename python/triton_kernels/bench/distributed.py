@@ -392,7 +392,7 @@ def routing(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None,
         else:
             raise ValueError(f"Unknown backend: {backend}")
     else:
-        return x, *triton_kernels.routing.routing(logits, n_expts_act, sm_first, expt_indx, EP, n_rows), None
+        return x, *triton_kernels.routing.routing(logits, n_expts_act, sm_first, expt_indx, n_rows), None
 
 
 # The following dummy methods simulate the behavior of distributed operations
