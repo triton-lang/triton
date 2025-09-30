@@ -749,7 +749,7 @@ def _find_free_port() -> int:
 @pytest.mark.parametrize("n_tokens", [1024])
 @pytest.mark.parametrize("hidden_size", [128])
 @pytest.mark.parametrize("world_size", [4])
-def test_all_to_all(monkeypatch, world_size, hidden_size, n_tokens):
+def test_all_to_all_triton(monkeypatch, world_size, hidden_size, n_tokens):
     if symm_mem is None:
         pytest.skip("Symmetric memory is not available in this build.")
     if torch.cuda.device_count() < world_size:
@@ -759,8 +759,8 @@ def test_all_to_all(monkeypatch, world_size, hidden_size, n_tokens):
     monkeypatch.setenv("MASTER_ADDR", "127.0.0.1")
     monkeypatch.setenv("MASTER_PORT", "12355")
 
-    def _all_to_all_triton_worker(rank: int) -> None:
-        dist.init_process_group("nccl", rank=rank)
+    def _worker(rank: int) -> None:
+        dist.init_process_group("nccl", rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)
 
         try:
@@ -770,12 +770,13 @@ def test_all_to_all(monkeypatch, world_size, hidden_size, n_tokens):
             output_ref = all_to_all(input_list, dim=0)
             output = all_to_all(input_list, dim=0, comm=CommKernelType.TRITON)
             dist.barrier()
+            torch.testing.assert_close(output, output_ref)
         finally:
             dist.destroy_process_group()
 
     for rank in range(world_size):
         mp.spawn(
-            _all_to_all_triton_worker,
+            _worker,
             args=(rank,),
             nprocs=world_size,
             join=True,
@@ -787,7 +788,7 @@ def test_all_to_all(monkeypatch, world_size, hidden_size, n_tokens):
 @pytest.mark.parametrize("n_tokens", [128, 1024, 30720])
 @pytest.mark.parametrize("hidden_size", [1024, 5760])
 @pytest.mark.parametrize("n_expt_act", [4])
-def test_reduce_ep(TP, EP, n_tokens, hidden_size, n_expt_act):
+def test_reduce_ep_triton(TP, EP, n_tokens, hidden_size, n_expt_act):
     device = torch.device("cuda")
     world_size = TP * EP
 
