@@ -224,9 +224,10 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
   auto shape = srcTy.getShape();
   auto kDim = shape[kDimIndex];
   auto nonKDim = shape[(kDimIndex + 1) % 2];
-  // if (std::min(kDim, nonKDim) < 64 || std::max(kDim, nonKDim) < 128) {
-  //   return {};
-  // }
+  if (std::min(kDim, nonKDim) < 64 || std::max(kDim, nonKDim) < 128) {
+    if (kDim != 32 || nonKDim != 256)
+      return {};
+  }
 
   if (bitWidth != 16) {
     return {};
