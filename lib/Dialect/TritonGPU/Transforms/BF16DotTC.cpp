@@ -107,22 +107,16 @@ public:
       result = dot(lhs_parts[lo], rhs_parts[hi], result);
       result = dot(lhs_parts[hi], rhs_parts[lo], result);
 
-      result = dot(lhs_parts[med], rhs_parts[hi], result);
-      result = dot(lhs_parts[hi], rhs_parts[med], result);
-
     } else if (dotOp.getInputPrecision() == InputPrecision::BF16x6) {
       result = dot(lhs_parts[med], rhs_parts[med], result);
 
       result = dot(lhs_parts[lo], rhs_parts[hi], result);
       result = dot(lhs_parts[hi], rhs_parts[lo], result);
-
-      result = dot(lhs_parts[med], rhs_parts[hi], result);
-      result = dot(lhs_parts[hi], rhs_parts[med], result);
-
-    } else if (dotOp.getInputPrecision() == InputPrecision::BF16x3) {
-      result = dot(lhs_parts[med], rhs_parts[hi], result);
-      result = dot(lhs_parts[hi], rhs_parts[med], result);
     }
+
+    // BF16x3, BF16x6, BF16x9 all need this
+    result = dot(lhs_parts[med], rhs_parts[hi], result);
+    result = dot(lhs_parts[hi], rhs_parts[med], result);
 
     result = replaceNansWithZeros(result);
     result = dot(lhs_parts[hi], rhs_parts[hi], result);
