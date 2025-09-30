@@ -62,6 +62,7 @@ struct BF16xN : public OpRewritePattern<DotOp> {
     const unsigned mid = 1;
     const unsigned lo = 2;
     const unsigned N = getBF16Count(dotOp.getInputPrecision());
+    Location loc = dotOp.getLoc();
 
     // Checks for FP32 inputs and BF16 InputPrecision
     if (N == 0)
@@ -72,20 +73,20 @@ struct BF16xN : public OpRewritePattern<DotOp> {
 
     // Helper Lambdas
     auto dot = [&](Value a, Value b, Value c) -> Value {
-      return rewriter.create<DotOp>(dotOp->getLoc(), c.getType(), a, b, c,
+      return rewriter.create<DotOp>(loc, c.getType(), a, b, c,
                                     InputPrecision::BF16,
                                     dotOp.getMaxNumImpreciseAcc());
     };
     auto zeroLike = [&]() -> Value {
       return rewriter.create<SplatOp>(
-          dotOp->getLoc(), dotOp.getC().getType(),
-          rewriter.create<arith::ConstantOp>(dotOp->getLoc(),
+          loc, dotOp.getC().getType(),
+          rewriter.create<arith::ConstantOp>(loc,
                                              rewriter.getF32FloatAttr(0)));
     };
     auto replaceNansWithZeros = [&](Value value) -> Value {
       auto isNaN = rewriter.create<arith::CmpFOp>(
-          dotOp->getLoc(), arith::CmpFPredicate::UNO, value, value);
-      return rewriter.create<arith::SelectOp>(dotOp->getLoc(), isNaN,
+          loc, arith::CmpFPredicate::UNO, value, value);
+      return rewriter.create<arith::SelectOp>(loc, isNaN,
                                               zeroLike(), value);
     };
 
@@ -121,7 +122,7 @@ struct BF16xN : public OpRewritePattern<DotOp> {
     result = replaceNansWithZeros(result);
     result = dot(lhs_parts[hi], rhs_parts[hi], result);
     result =
-        rewriter.create<arith::AddFOp>(dotOp.getLoc(), result, dotOp.getC());
+        rewriter.create<arith::AddFOp>(loc, result, dotOp.getC());
 
     rewriter.replaceOp(dotOp, result);
     return success();
