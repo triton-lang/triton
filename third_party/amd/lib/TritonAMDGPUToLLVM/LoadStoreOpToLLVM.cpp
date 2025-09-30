@@ -996,6 +996,196 @@ struct AsyncCopyGlobalToLocalOpConversion
   }
 };
 
+struct AsyncTDMCopyGlobalToLocalOpConversion
+    : public ConvertOpToLLVMPattern<
+          triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>,
+      public LoadStoreConversionBase {
+  AsyncTDMCopyGlobalToLocalOpConversion(
+      LLVMTypeConverter &converter, const AMD::TargetInfo &targetInfo,
+      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  std::pair<Value, Value> createTDMDescriptors(
+      RewriterBase &rewriter, Location loc, int64_t elementSizesByte,
+      ArrayRef<Value> tensorShape, ArrayRef<int64_t> blockShape,
+      ArrayRef<Value> tensorStride, Value origPtr, Value dstPtr, Value pred,
+      Value multicastMask, unsigned padAmount, unsigned padInterval) const {
+    // Please note that we have the shapes such that dim0 is the outer dimension
+    // (row dim) and dim1 is the inner dimension (col dim) In the manual, dim0
+    // refers to the inner dimension, and dim1 refers to the outer dimension.
+    // This means that here we have to invert those shapes.
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    // Let's split the 128 and 256 fields manually. This is because the backend
+    // has issues in dealing with illegal types (like i128 or i256)
+    Value ldsAddr = b.ptrtoint(i32_ty, dstPtr);
+    Value globalAddr = b.ptrtoint(i64_ty, origPtr);
+    SmallVector<Value, 8> group0(4, b.i32_val(0));
+    group0[0] = b.zext(i32_ty, pred);
+    group0[1] = ldsAddr;
+    group0[2] = b.trunc(i32_ty, globalAddr);
+    group0[3] = b.trunc(i32_ty, b.lshr(globalAddr, b.i64_val(32)));
+    group0[3] = b.or_(group0[3], b.i32_val(0x80000000));
+    VectorType vecTy0 = vec_ty(i32_ty, 4);
+    Value group0Vec = b.undef(vecTy0);
+    for (int ii = 0; ii < 4; ++ii) {
+      Value iiVal = createIndexAttrConstant(
+          rewriter, loc, getTypeConverter()->getIndexType(), ii);
+      group0Vec = b.insert_element(vecTy0, group0Vec, group0[ii], iiVal);
+    }
+
+    SmallVector<Value, 8> group1(8, b.i32_val(0));
+    group1[0] = multicastMask;
+    group1[0] =
+        b.or_(group1[0], b.i32_val(int32_t(log2(elementSizesByte)) << 16));
+    group1[1] = b.shl(tensorShape[1], b.i32_val(16));
+    group1[2] = b.lshr(tensorShape[1], b.i32_val(16));
+    group1[2] = b.or_(group1[2], b.shl(tensorShape[0], b.i32_val(16)));
+    group1[3] = b.lshr(tensorShape[0], b.i32_val(16));
+    group1[3] = b.or_(group1[3], b.i32_val(blockShape[1] << 16));
+    group1[4] = b.i32_val(blockShape[0]);
+    group1[5] = tensorStride[0];
+    group1[6] = b.shl(tensorStride[1], b.i32_val(16));
+
+    if (padAmount > 0 && padInterval > 0) {
+      assert(llvm::isPowerOf2_32(padAmount) &&
+             "Pad amount needs to be a power of two.");
+      group1[0] = b.or_(group1[0], b.i32_val(1 << 20));
+      group1[0] =
+          b.or_(group1[0], b.i32_val(int32_t(log2(padInterval) - 1) << 22));
+      group1[0] = b.or_(group1[0], b.i32_val((padAmount - 1) << 25));
+    }
+
+    VectorType vecTy1 = vec_ty(i32_ty, 8);
+    Value group1Vec = b.undef(vecTy1);
+    for (int ii = 0; ii < 8; ++ii) {
+      Value iiVal = createIndexAttrConstant(
+          rewriter, loc, getTypeConverter()->getIndexType(), ii);
+      group1Vec = b.insert_element(vecTy1, group1Vec, group1[ii], iiVal);
+    }
+    return {group0Vec, group1Vec};
+  }
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::AsyncTDMCopyGlobalToLocalOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto mod = op->getParentOfType<ModuleOp>();
+    auto tensorDescTy = op.getDesc().getType();
+    auto smemTy = op.getResult().getType();
+    auto smemEnc =
+        llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
+    if (!smemEnc)
+      return rewriter.notifyMatchFailure(op,
+                                         "TDM requires padded shared layout");
+
+    // [shape0, shape1, stride0, stride1, basePtr]
+    SmallVector<Value, 5> descriptorFields =
+        unpackLLElements(loc, adaptor.getDesc(), rewriter);
+    if (descriptorFields.size() != 5)
+      return rewriter.notifyMatchFailure(
+          op, "TDM only supports 2D tensor descriptors");
+    SmallVector<Value, 2> tensorShape{descriptorFields[0], descriptorFields[1]};
+    SmallVector<Value, 2> tensorStride{descriptorFields[2],
+                                       descriptorFields[3]};
+    Value basePtr = descriptorFields[4];
+
+    // Cast shape and stride to i32
+    tensorShape[0] = b.trunc(i32_ty, tensorShape[0]);
+    tensorShape[1] = b.trunc(i32_ty, tensorShape[1]);
+    tensorStride[0] = b.trunc(i32_ty, tensorStride[0]);
+    tensorStride[1] = b.trunc(i32_ty, tensorStride[1]);
+
+    SmallVector<Value, 2> offset = adaptor.getIndices();
+    SmallVector<int64_t> blockShape =
+        llvm::to_vector(tensorDescTy.getBlockType().getShape());
+    SmallVector<int64_t> blockShapePerCTA = blockShape;
+    // Take clusters into account (if they are enabled)
+    int numCTAs = TritonGPUDialect::getNumCTAs(mod);
+    Value multicastMask = b.i32_val(0);
+    if (numCTAs > 1) {
+      return rewriter.notifyMatchFailure(op, "TDM only supports single CTA");
+    }
+
+    Type llvmElemTy =
+        typeConverter->convertType(op.getResult().getType().getElementType());
+    auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getResult(), llvmElemTy, rewriter);
+    auto voidTy = void_ty(op->getContext());
+    Value ptrNewOffset = b.add(b.mul(tensorStride[1], offset[1]),
+                               b.mul(tensorStride[0], offset[0]));
+
+    Type elemPtrTy = ptr_ty(rewriter.getContext(), 1);
+    Value newPtr = b.gep(elemPtrTy, llvmElemTy, basePtr, ptrNewOffset);
+
+    tensorShape[0] = b.sub(tensorShape[0], offset[0]);
+    tensorShape[1] = b.sub(tensorShape[1], offset[1]);
+    // Now we moved to the right place. Let's consider waveId
+    int numWaves = cast<IntegerAttr>(mod->getAttr("ttg.num-warps")).getInt();
+    int waveSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    Value waveId = rewriter.create<amdgpu::WaveIdOp>(loc);
+
+    // This is dealing with multiple warps. There are different strategies we
+    // may adopt but we are selecting the following:
+    // - If we have a tile MxN to copy, we want to split the copy in
+    // [M/numWarps]. Each wave will read 1/numwarps x N.
+    int elementSizeInBytes =
+        op.getResult().getType().getElementType().getIntOrFloatBitWidth() / 8;
+    int outerBlockSize = blockShapePerCTA[0];
+    int outerBlockRowsPerWarp = ceil(outerBlockSize, numWaves);
+
+    // Update the pointers
+    Value destBasePtr = dstMemObj.getBase();
+    Value newRow = b.mul(waveId, b.i32_val(outerBlockRowsPerWarp));
+
+    // Global Ptr
+    Value globalOffset = b.mul(newRow, tensorStride[0]);
+    Value newBasePtr = b.gep(elemPtrTy, llvmElemTy, newPtr, globalOffset);
+
+    // Shared Ptr
+    Value ldsOffset = b.mul(newRow, b.i32_val(blockShapePerCTA[1]));
+    unsigned padAmount = 0;
+    unsigned padInterval = 0;
+    Value padding =
+        emitPadding(loc, rewriter, smemEnc, llvmElemTy.getIntOrFloatBitWidth(),
+                    ldsOffset, false);
+    ldsOffset = b.add(ldsOffset, padding);
+    padAmount = smemEnc.getPaddings()[0];
+    padInterval = smemEnc.getIntervals()[0];
+    Type elemPtrTy3 = ptr_ty(rewriter.getContext(), 3);
+    Value newDestPtr = b.gep(elemPtrTy3, llvmElemTy, destBasePtr, ldsOffset);
+
+    // Update the block sizes (all the rest should stay the same, I think)
+    blockShapePerCTA[0] = outerBlockRowsPerWarp;
+
+    // Update the tensor sizes
+    tensorShape[0] = b.smax(b.i32_val(0), b.sub(tensorShape[0], newRow));
+
+    // Padding information
+    auto memDesc = cast<MemDescType>(op.getResult().getType());
+    unsigned wordLen = 32;
+    unsigned padAmountWords =
+        (padAmount * llvmElemTy.getIntOrFloatBitWidth()) / wordLen;
+    unsigned padIntervalWords =
+        (padInterval * llvmElemTy.getIntOrFloatBitWidth()) / wordLen;
+
+    // Issue the tensor copy
+    auto [group0, group1] = createTDMDescriptors(
+        rewriter, loc, elementSizeInBytes, tensorShape, blockShapePerCTA,
+        tensorStride, newBasePtr, newDestPtr, op.getPred(), multicastMask,
+        padAmountWords, padIntervalWords);
+    LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                    "llvm.amdgcn.tensor.load.to.lds.d2", {},
+                                    {group0, group1, b.i32_val(0)});
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                            public LoadStoreConversionBase {
   StoreOpConversion(LLVMTypeConverter &converter,
@@ -1776,6 +1966,24 @@ private:
   const AMD::TargetInfo &targetInfo;
 };
 
+struct AsyncTDMWaitConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::AsyncTDMWait> {
+  AsyncTDMWaitConversion(LLVMTypeConverter &converter, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::AsyncTDMWait op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                    "llvm.amdgcn.s.wait.tensorcnt", {},
+                                    {b.i16_val(op.getNum())});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct AsyncCommitGroupOpConversion
     : public ConvertOpToLLVMPattern<AsyncCommitGroupOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -1799,13 +2007,15 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit) {
-  patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
-               StoreOpConversion, BufferLoadOpConversion,
-               BufferLoadToLocalOpConversion, BufferStoreOpConversion,
-               BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion,
-               BufferAtomicCASOpConversion>(typeConverter, targetInfo,
-                                            axisInfoAnalysis, benefit);
+  patterns
+      .add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
+           StoreOpConversion, BufferLoadOpConversion,
+           BufferLoadToLocalOpConversion, BufferStoreOpConversion,
+           BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion,
+           AsyncTDMCopyGlobalToLocalOpConversion, BufferAtomicCASOpConversion>(
+          typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<AsyncTDMWaitConversion>(typeConverter, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
 }
 } // namespace mlir::triton::AMD

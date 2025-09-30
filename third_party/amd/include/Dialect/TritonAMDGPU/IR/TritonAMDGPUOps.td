@@ -696,4 +696,62 @@ def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed", [L
   let hasVerifier = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// AsyncTDMCopyGlobalToLocalOp
+//===----------------------------------------------------------------------===//
+
+def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local"> {
+  let summary = "copy data based on descriptor from global memory to local memory asynchronously";
+
+  let description = [{
+    This operation copies data from global memory to local memory
+    asynchronously.  This is analogue to tt.load except the data are copied to
+    local memory pointed by the memory descriptor instead of a distributed
+    tensor. The data copied depends on the global memory descriptor pointed to
+    by `desc`.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    Variadic<I32>:$indices,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
+    I1:$pred
+  );
+
+  let results = (outs TTG_AsyncToken:$token);
+
+  let assemblyFormat = [{
+    $desc `[` $indices `]` $result `,` $pred
+    attr-dict `:` qualified(type($desc)) `->` qualified(type($result))
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// AsyncTDMWait
+//===----------------------------------------------------------------------===//
+
+def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_store_wait"> {
+  let summary = "wait until all the inputs are read.";
+  let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num);
+  let description = [{
+    Wait until all the read operations are done from the associated store operations.
+    This is needed before the shared memory can be written to.
+  }];
+  let results = (outs TTG_AsyncToken:$retToken);
+
+  let assemblyFormat = "$asyncToken attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// WaveIdOp
+//===----------------------------------------------------------------------===//
+
+def WaveIdOp : TT_AMDGPU_Op<"wave_id", [Pure]> {
+    let arguments = (ins);
+
+    let results = (outs I32:$result);
+
+    let assemblyFormat = "attr-dict `:` type($result)";
+}
+
 #endif

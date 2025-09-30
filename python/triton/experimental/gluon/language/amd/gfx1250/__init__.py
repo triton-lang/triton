@@ -1,7 +1,8 @@
 from ..._core import builtin
 from .._ops import _wmma
+from . import tdm
 
-__all__ = ["wmma"]
+__all__ = ["tdm", "wmma"]
 
 
 @builtin

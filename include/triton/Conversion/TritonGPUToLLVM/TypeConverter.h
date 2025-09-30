@@ -27,6 +27,7 @@ public:
   Type convertMemDescType(triton::gpu::MemDescType type,
                           const TargetInfoBase &targetInfo);
   Type convertAsyncTokenType(triton::gpu::AsyncTokenType type);
+  Type convertTensorDescType(triton::TensorDescType type);
 
   template <typename... T> void convertFP8Type() {
     (addConversion([&](T type) -> std::optional<Type> {

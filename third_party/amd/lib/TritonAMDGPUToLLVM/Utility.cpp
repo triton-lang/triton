@@ -250,6 +250,35 @@ Value permute(Location loc, RewriterBase &rewriter, Value x, Value y,
   return op.getResult(0);
 }
 
+Value getGroupMask(RewriterBase &rewriter, Location loc, ArrayRef<Value> wid,
+                   ArrayRef<unsigned> ctasPerCga, ArrayRef<unsigned> splits,
+                   ArrayRef<unsigned> order) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  SmallVector<unsigned> strides = {ctasPerCga[order[0]], 1};
+  Value mask = b.i32_val(0);
+
+  int broadCastDim = 0;
+  int groupSize = 1;
+  for (unsigned dim = 0; dim < splits.size(); dim++) {
+    groupSize = ctasPerCga[dim] / splits[dim];
+    if (groupSize > 1) {
+      broadCastDim = dim;
+      break;
+    }
+  }
+  if (groupSize == 1)
+    return mask;
+
+  SmallVector<Value> coords = llvm::to_vector(wid);
+  for (int i = 0; i < groupSize; i++) {
+    coords[broadCastDim] = b.i32_val(i);
+    Value l = linearize(rewriter, loc, coords, ctasPerCga, order);
+    Value bit = b.shl(b.i32_val(1), l);
+    mask = b.xor_(mask, bit);
+  }
+  return mask;
+}
+
 // Utility function that returns flags <volatile, nontemporal> for a predicated
 // Load or Store
 // ---------------------------------
