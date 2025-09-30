@@ -233,7 +233,6 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
     return {};
   }
 
-  // We hardcode sharedOrder == hbmOrder
   unsigned contigSize = shape[isKContig ? kDimIndex : (kDimIndex + 1) % 2];
   unsigned nonContigSize = shape[isKContig ? (kDimIndex + 1) % 2 : kDimIndex];
 
@@ -260,26 +259,49 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
 
   std::vector<std::vector<int>> offsetBases;
 
-  if (kDim == 64) {
-    if (isKContig) {
-      if (mfmaNonKDim == 16) {
-        // My variant
+  if (isKContig) {
+    if (mfmaNonKDim == 16) {
+      if (kDim == 32) {
+        offsetBases = {
+            {1, 0},  {2, 0},  {4, 0}, {8, 0}, {16, 0}, {0, 128}, {0, 16},
+            {0, 32}, {0, 64}, {0, 1}, {0, 2}, {0, 4},  {0, 8},
+        };
+      } else if (kDim == 64) {
         offsetBases = {
             {1, 0},  {2, 0},  {4, 0}, {8, 0}, {16, 0}, {32, 0}, {0, 16},
             {0, 32}, {0, 64}, {0, 1}, {0, 2}, {0, 4},  {0, 8},
         };
-
-        // ASM
-        // offsetBases = {{1, 0}, {2, 0}, {4, 0},  {8, 0}, {16, 0}, {32, 0},
-        //                {0, 1}, {0, 4}, {0, 16}, {0, 2}, {0, 8}};
-      } else if (mfmaNonKDim == 32) {
+      } else if (kDim >= 128) {
+        offsetBases = {
+            {1, 0},  {2, 0},  {4, 0}, {8, 0}, {16, 0}, {32, 0}, {64, 0},
+            {0, 16}, {0, 32}, {0, 1}, {0, 2}, {0, 4},  {0, 8},
+        };
+      }
+    } else if (mfmaNonKDim == 32) {
+      if (kDim == 32) {
+        assert(false);
+      } else if (kDim == 64) {
         offsetBases = {
             {1, 0},  {2, 0},  {4, 0}, {0, 16}, {16, 0}, {32, 0}, {8, 0},
             {0, 32}, {0, 64}, {0, 1}, {0, 2},  {0, 4},  {0, 8},
         };
+      } else if (kDim >= 128) {
+        offsetBases = {
+            {1, 0},  {2, 0},  {4, 0}, {0, 16}, {16, 0}, {32, 0}, {8, 0},
+            {0, 32}, {64, 0}, {0, 1}, {0, 2},  {0, 4},  {0, 8},
+        };
       }
     } else {
-      if (mfmaNonKDim == 16) {
+      assert(false);
+    }
+  } else {
+    if (mfmaNonKDim == 16) {
+      if (kDim == 32) {
+        offsetBases = {
+            {0, 1},  {0, 2},   {0, 4}, {0, 8}, {0, 16}, {0, 32}, {0, 64},
+            {16, 0}, {0, 128}, {1, 0}, {2, 0}, {8, 0},  {4, 0},
+        };
+      } else if (kDim == 64) {
         if (dotOpEnc.getKWidth() == 4) {
           offsetBases = {
               {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 16}, {0, 32}, {0, 64},
@@ -291,7 +313,25 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
               {16, 0}, {32, 0}, {1, 0}, {2, 0}, {8, 0},  {4, 0},
           };
         }
-      } else if (mfmaNonKDim == 32) {
+      } else if (kDim >= 128) {
+        if (dotOpEnc.getKWidth() == 4) {
+          offsetBases = {
+              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 16}, {0, 32}, {64, 0},
+              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
+          };
+        } else {
+          offsetBases = {
+              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 16}, {0, 32}, {64, 0},
+              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {8, 0},  {4, 0},
+          };
+        }
+      } else {
+        assert(false);
+      }
+    } else if (mfmaNonKDim == 32) {
+      if (kDim == 32) {
+        assert(false);
+      } else if (kDim == 64) {
         if (dotOpEnc.getKWidth() == 4) {
           offsetBases = {
               {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 32}, {0, 64}, {0, 16},
@@ -303,35 +343,7 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
               {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
           };
         }
-      }
-    }
-  } else if (kDim >= 128) {
-    if (isKContig) {
-      if (mfmaNonKDim == 16) {
-        offsetBases = {
-            {1, 0},  {2, 0},  {4, 0}, {8, 0}, {16, 0}, {32, 0}, {64, 0},
-            {0, 16}, {0, 32}, {0, 1}, {0, 2}, {0, 4},  {0, 8},
-        };
-      } else if (mfmaNonKDim == 32) {
-        offsetBases = {
-            {1, 0},  {2, 0},  {4, 0}, {0, 16}, {16, 0}, {32, 0}, {8, 0},
-            {0, 32}, {64, 0}, {0, 1}, {0, 2},  {0, 4},  {0, 8},
-        };
-      }
-    } else {
-      if (mfmaNonKDim == 16) {
-        if (dotOpEnc.getKWidth() == 4) {
-          offsetBases = {
-              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 16}, {0, 32}, {64, 0},
-              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
-          };
-        } else {
-          offsetBases = {
-              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 16}, {0, 32}, {64, 0},
-              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {8, 0},  {4, 0},
-          };
-        }
-      } else if (mfmaNonKDim == 32) {
+      } else if (kDim == 128) {
         if (dotOpEnc.getKWidth() == 4) {
           offsetBases = {
               {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 32}, {64, 0}, {0, 16},
@@ -343,41 +355,11 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
               {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
           };
         }
-      }
-    }
-  } else if (kDim == 32) {
-    if (isKContig) {
-      if (mfmaNonKDim == 16) {
-        // My variant
-
-        // offsetBases = {
-        //     {1, 0}, {2, 0},  {4, 0}, {8, 0}, {16, 0}, {0, 16},  {0, 32},
-        //     {0, 8}, {0, 64}, {0, 1}, {0, 2}, {0, 4},  {0, 128},
-        // };
-
-        offsetBases = {
-            {1, 0},  {2, 0},  {4, 0}, {8, 0}, {16, 0}, {0, 128}, {0, 16},
-            {0, 32}, {0, 64}, {0, 1}, {0, 2}, {0, 4},  {0, 8},
-        };
-
-        // ASM
-        // offsetBases = {{1, 0}, {2, 0}, {4, 0},  {8, 0}, {16, 0}, {32, 0},
-        //                {0, 1}, {0, 4}, {0, 16}, {0, 2}, {0, 8}};
-      } else if (mfmaNonKDim == 32) {
-        offsetBases = {
-            {1, 0},  {2, 0},  {4, 0}, {0, 16},  {16, 0}, {32, 0}, {8, 0},
-            {0, 32}, {0, 64}, {0, 1}, {0, 128}, {0, 4},  {0, 8},
-        };
-      }
-    } else {
-      if (mfmaNonKDim == 16) {
-        offsetBases = {
-            {0, 1},  {0, 2},   {0, 4}, {0, 8}, {0, 16}, {0, 32}, {0, 64},
-            {16, 0}, {0, 128}, {1, 0}, {2, 0}, {8, 0},  {4, 0},
-        };
       } else {
         assert(false);
       }
+    } else {
+      assert(false);
     }
   }
 
