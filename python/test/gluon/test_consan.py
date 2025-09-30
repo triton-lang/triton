@@ -69,6 +69,61 @@ def run_in_process(client_fn, args=(), kwargs={}):
 XBLOCK = ttgl.constexpr(128)
 
 
+@gluon.jit
+def failing_kernel(input):
+    smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], smem_layout)
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
+                                                        warps_per_cta=[4, 1], order=[0, 1])
+    offs_m = ttgl.arange(0, XBLOCK, layout=ttgl.SliceLayout(dim=1, parent=blocked_layout))[:, None]
+    offs_n = ttgl.arange(0, XBLOCK, layout=ttgl.SliceLayout(dim=0, parent=blocked_layout))[None, :]
+    offs = offs_m * XBLOCK + offs_n
+    ampere.async_copy.async_copy_global_to_shared(smem, input + offs)
+    ampere.async_copy.commit_group()
+
+    ampere.async_copy.async_copy_global_to_shared(smem, input + offs)
+    ampere.async_copy.commit_group()
+    ampere.async_copy.wait_group(0)
+
+
+def run_failing_kernel(device):
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    failing_kernel[(1, )](input)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+def test_cache_miss_knob(device):
+    # First run without consan
+    knobs.compilation.enable_experimental_consan = False
+    run_failing_kernel(device)
+
+    # Then run with consan and assert that if fails
+    knobs.compilation.enable_experimental_consan = True
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+    result = run_in_process(run_failing_kernel, (device, ))
+    assert "device-side assert" in str(result.exc)
+
+
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
+def test_cache_miss_env(device):
+    # First run without consan
+    knobs.compilation.enable_experimental_consan = False
+    run_failing_kernel(device)
+
+    # Then run with consan and assert that if fails
+    os.environ["TRITON_ENABLE_EXPERIMENTAL_CONSAN"] = "1"
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+    result = run_in_process(run_failing_kernel, (device, ))
+    os.environ.pop("TRITON_ENABLE_EXPERIMENTAL_CONSAN")
+    assert "device-side assert" in str(result.exc)
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_async_tma_kernel(FAILURE, device, run_wrapper):
