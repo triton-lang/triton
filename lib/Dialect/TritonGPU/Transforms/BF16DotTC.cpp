@@ -32,23 +32,33 @@ auto SplitF32(Value input, unsigned N, PatternRewriter &rewriter) -> llvm::Small
   return split_inputs;
 }
 
+auto getBF16Count(triton::InputPrecision precision) -> unsigned {
+  switch (precision) {
+  default:
+    return 0;
+  case InputPrecision::BF16:
+    return 1;
+  case InputPrecision::BF16x3:
+    return 2;
+  case InputPrecision::BF16x6:
+  case InputPrecision::BF16x9:
+    return 3;
+  }
+}
+
 // Implement 3xBF16 https://arxiv.org/abs/1904.06376
-class BF16x3 : public OpRewritePattern<DotOp> {
-public:
+struct BF16xN : public OpRewritePattern<DotOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
-    switch (dotOp.getInputPrecision()) {
-      case InputPrecision::BF16:
-      case InputPrecision::BF16x3:
-      case InputPrecision::BF16x6:
-      case InputPrecision::BF16x9:
-        break;
-      default:
-        return failure();
-    }
+    const unsigned hi = 0;
+    const unsigned mid = 1;
+    const unsigned lo = 2;
+    const unsigned N = getBF16Count(dotOp.getInputPrecision());
 
+    if (N == 0)
+      return failure();
     for (auto type : {dotOp.getA().getType(), dotOp.getB().getType()})
       if (!cast<RankedTensorType>(type).getElementType().isF32())
         return failure();
@@ -63,11 +73,6 @@ public:
                                     dotOp.getMaxNumImpreciseAcc());
     };
 
-    const unsigned hi = 0;
-    const unsigned mid = 1;
-    const unsigned lo = 2;
-
-    const unsigned N = 3;
     auto lhs_parts = SplitF32(dotOp.getA(), N, rewriter);
     auto rhs_parts = SplitF32(dotOp.getB(), N, rewriter);
 
@@ -120,7 +125,7 @@ struct BF16DotTCPass : public impl::TritonGPUBF16DotTCBase<BF16DotTCPass> {
     ModuleOp m = getOperation();
 
     RewritePatternSet decomposePatterns(context);
-    decomposePatterns.add<BF16x3>(context);
+    decomposePatterns.add<BF16xN>(context);
     if (applyPatternsGreedily(m, std::move(decomposePatterns)).failed()) {
       signalPassFailure();
     }
