@@ -85,11 +85,11 @@ struct BF16xN : public OpRewritePattern<DotOp> {
     auto replaceNansWithZeros = [&](Value value) -> Value {
       auto isNaN = rewriter.create<arith::CmpFOp>(
           dotOp->getLoc(), arith::CmpFPredicate::UNO, value, value);
-      return rewriter.create<arith::SelectOp>(dotOp->getLoc(), isNaN, zeroLike(),
-                                              value);
+      return rewriter.create<arith::SelectOp>(dotOp->getLoc(), isNaN,
+                                              zeroLike(), value);
     };
 
-    // Starting Values: a(0), a(1), a(2), b(0), b(1), b(2) and zero accumulator start value
+    // Starting Values: a(0), a(1), a(2), b(0), b(1), b(2) and zero accumulator
     auto lhs_parts = SplitF32(dotOp.getA(), N, rewriter);
     auto rhs_parts = SplitF32(dotOp.getB(), N, rewriter);
     auto result = zeroLike();
