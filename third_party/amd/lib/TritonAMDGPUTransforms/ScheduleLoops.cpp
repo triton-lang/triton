@@ -224,9 +224,9 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
   auto shape = srcTy.getShape();
   auto kDim = shape[kDimIndex];
   auto nonKDim = shape[(kDimIndex + 1) % 2];
-  if (std::min(kDim, nonKDim) < 64 || std::max(kDim, nonKDim) < 128) {
-    return {};
-  }
+  // if (std::min(kDim, nonKDim) < 64 || std::max(kDim, nonKDim) < 128) {
+  //   return {};
+  // }
 
   if (bitWidth != 16) {
     return {};
@@ -262,10 +262,15 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
   if (kDim == 64) {
     if (isKContig) {
       if (mfmaNonKDim == 16) {
+        // My variant
         offsetBases = {
             {1, 0},  {2, 0},  {4, 0}, {8, 0}, {16, 0}, {32, 0}, {0, 16},
             {0, 32}, {0, 64}, {0, 1}, {0, 2}, {0, 4},  {0, 8},
         };
+
+        // ASM
+        // offsetBases = {{1, 0}, {2, 0}, {4, 0},  {8, 0}, {16, 0}, {32, 0},
+        //                {0, 1}, {0, 4}, {0, 16}, {0, 2}, {0, 8}};
       } else if (mfmaNonKDim == 32) {
         offsetBases = {
             {1, 0},  {2, 0},  {4, 0}, {0, 16}, {16, 0}, {32, 0}, {8, 0},
@@ -339,6 +344,40 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
         }
       }
     }
+  } else if (kDim == 32) {
+    if (isKContig) {
+      if (mfmaNonKDim == 16) {
+        // My variant
+
+        // offsetBases = {
+        //     {1, 0}, {2, 0},  {4, 0}, {8, 0}, {16, 0}, {0, 16},  {0, 32},
+        //     {0, 8}, {0, 64}, {0, 1}, {0, 2}, {0, 4},  {0, 128},
+        // };
+
+        offsetBases = {
+            {1, 0},  {2, 0},  {4, 0}, {8, 0}, {16, 0}, {0, 128}, {0, 16},
+            {0, 32}, {0, 64}, {0, 1}, {0, 2}, {0, 4},  {0, 8},
+        };
+
+        // ASM
+        // offsetBases = {{1, 0}, {2, 0}, {4, 0},  {8, 0}, {16, 0}, {32, 0},
+        //                {0, 1}, {0, 4}, {0, 16}, {0, 2}, {0, 8}};
+      } else if (mfmaNonKDim == 32) {
+        offsetBases = {
+            {1, 0},  {2, 0},  {4, 0}, {0, 16},  {16, 0}, {32, 0}, {8, 0},
+            {0, 32}, {0, 64}, {0, 1}, {0, 128}, {0, 4},  {0, 8},
+        };
+      }
+    } else {
+      if (mfmaNonKDim == 16) {
+        offsetBases = {
+            {0, 1},  {0, 2},   {0, 4}, {0, 8}, {0, 16}, {0, 32}, {0, 64},
+            {16, 0}, {0, 128}, {1, 0}, {2, 0}, {8, 0},  {4, 0},
+        };
+      } else {
+        assert(false);
+      }
+    }
   }
 
   // llvm::outs() << "IsKContig: " << isKContig << "\n";
@@ -349,7 +388,7 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
   // llvm::outs() << "kDimIndex: " << kDimIndex << "\n";
 
   // Tranpose bases if order != default order
-  if ((isKContig && kDimIndex == 1) || (!isKContig && kDimIndex == 1)) {
+  if (kDimIndex == 1) {
     for (auto &p : offsetBases)
       std::swap(p[0], p[1]);
   }
