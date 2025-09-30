@@ -229,7 +229,6 @@ void setOutputPartition(Operation *op, int idx, ArrayRef<int> partitionIds) {
 
 void setOutputPartition(Operation *op, int idx,
                         const SetVector<int> &partitionIds) {
-  std::cout << "set output partition " << idx << "\n";
   SmallVector<int> partitions(partitionIds.begin(), partitionIds.end());
   setOutputPartition(op, idx, partitions);
 }
