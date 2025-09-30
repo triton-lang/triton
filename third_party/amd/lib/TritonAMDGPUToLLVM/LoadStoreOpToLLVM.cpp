@@ -1086,8 +1086,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     SmallVector<Value, 5> descriptorFields =
         unpackLLElements(loc, adaptor.getDesc(), rewriter);
     if (descriptorFields.size() != 5)
-      return rewriter.notifyMatchFailure(
-          op, "TDM only supports 2D tensor descriptors");
+      return rewriter.notifyMatchFailure(op, "NYI: TDM > 2D cases.");
     SmallVector<Value, 2> tensorShape{descriptorFields[0], descriptorFields[1]};
     SmallVector<Value, 2> tensorStride{descriptorFields[2],
                                        descriptorFields[3]};

@@ -63,6 +63,38 @@ public:
   }
 };
 
+class TritonAMDGPUToLLVMTypeConverter : public TritonGPUToLLVMTypeConverter {
+public:
+  TritonAMDGPUToLLVMTypeConverter(MLIRContext *ctx,
+                                  const LowerToLLVMOptions &options,
+                                  const TargetInfoBase &targetInfo,
+                                  const DataLayoutAnalysis *analysis = nullptr)
+      : TritonGPUToLLVMTypeConverter(ctx, options, targetInfo, analysis) {
+    addConversion([&](TensorDescType type) -> std::optional<Type> {
+      return convertTensorDescType(type);
+    });
+  }
+
+  Type convertTensorDescType(triton::TensorDescType type) {
+    auto ctx = type.getContext();
+
+    RankedTensorType rankedTensorType = type.getBlockType();
+    auto eleType = rankedTensorType.getElementType();
+    auto shape = rankedTensorType.getShape();
+    SmallVector<Type, 4> types;
+    // 32 bit shapes
+    for (size_t i = 0; i < shape.size(); ++i)
+      types.push_back(IntegerType::get(ctx, 32));
+    // 64 bit strides
+    for (size_t i = 0; i < shape.size(); ++i)
+      types.push_back(IntegerType::get(ctx, 64));
+    // base ptr
+    types.push_back(LLVM::LLVMPointerType::get(ctx, 1));
+
+    return LLVM::LLVMStructType::getLiteral(ctx, types);
+  }
+};
+
 struct ConvertTritonAMDGPUToLLVM
     : public triton::impl::ConvertTritonAMDGPUToLLVMBase<
           ConvertTritonAMDGPUToLLVM> {
@@ -90,7 +122,7 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
 
-    TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
+    TritonAMDGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     TritonLLVMConversionTarget convTarget(*context);
 
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);

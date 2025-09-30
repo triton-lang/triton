@@ -2714,7 +2714,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c2_i32 = arith.constant 2 : i32
     %true = arith.constant true
     %2 = amdgpu.async_tdm_copy_global_to_local %0[%c0_i32, %c2_i32] %1, %true : !tt.tensordesc<tensor<16x64xf32>> -> !ttg.memdesc<16x64xf32, #shared, #smem, mutable>
-    %3 = amdgpu.async_tdm_store_wait  {num = 0 : i32}
+    %3 = amdgpu.async_tdm_wait  {num = 0 : i32}
     %4 = ttg.local_load %1 : !ttg.memdesc<16x64xf32, #shared, #smem, mutable> -> tensor<16x64xf32, #blocked>
     tt.return
   }

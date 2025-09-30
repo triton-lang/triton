@@ -23,7 +23,7 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
   });
   addConversion([&](TensorDescType type) -> std::optional<Type> {
-    return convertTensorDescType(type);
+    return LLVM::LLVMPointerType::get(ctx, 0);
   });
   addConversion([&](RankedTensorType type) -> std::optional<Type> {
     return convertTritonTensorType(type, targetInfo);
@@ -37,31 +37,6 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
 
   convertFP8Type<mlir::Float8E4M3FNUZType, mlir::Float8E4M3FNType,
                  mlir::Float8E5M2Type, mlir::Float8E5M2FNUZType>();
-}
-
-Type TritonGPUToLLVMTypeConverter::convertTensorDescType(TensorDescType type) {
-  auto ctx = type.getContext();
-
-  auto ptrType = LLVM::LLVMPointerType::get(ctx, 0);
-  auto descBlockType = type.getBlockType();
-  Attribute encoding = descBlockType.getEncoding();
-  if (encoding)
-    return ptrType;
-
-  RankedTensorType rankedTensorType = type.getBlockType();
-  auto eleType = rankedTensorType.getElementType();
-  auto shape = rankedTensorType.getShape();
-  SmallVector<Type, 4> types;
-  // 32 bit shapes
-  for (size_t i = 0; i < shape.size(); ++i)
-    types.push_back(IntegerType::get(ctx, 32));
-  // 64 bit strides
-  for (size_t i = 0; i < shape.size(); ++i)
-    types.push_back(IntegerType::get(ctx, 64));
-  // base ptr
-  types.push_back(LLVM::LLVMPointerType::get(ctx, 1));
-
-  return LLVM::LLVMStructType::getLiteral(ctx, types);
 }
 
 Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
