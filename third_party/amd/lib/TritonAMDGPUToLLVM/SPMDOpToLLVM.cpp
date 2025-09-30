@@ -50,6 +50,7 @@ struct CondBarrierOpConversion
     return success();
   }
 };
+
 } // namespace
 
 void mlir::triton::AMD::populateSPMDOpToLLVMPattern(
