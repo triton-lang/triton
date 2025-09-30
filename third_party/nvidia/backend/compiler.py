@@ -329,6 +329,7 @@ class CUDABackend(BaseBackend):
 
         passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
+        passes.gluon.add_canonicalizer(pm)
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
