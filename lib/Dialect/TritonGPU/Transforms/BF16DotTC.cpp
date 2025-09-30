@@ -1,7 +1,6 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "llvm/Support/raw_ostream.h"
 
 namespace mlir {
 namespace triton {
