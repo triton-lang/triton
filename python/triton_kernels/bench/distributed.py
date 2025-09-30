@@ -1,10 +1,15 @@
 from enum import Enum
 import os
+import socket
 import math
 import pytest
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+try:
+    import torch.distributed._symmetric_memory as symm_mem
+except ImportError:  # pragma: no cover - optional dependency
+    symm_mem = None
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Tuple, Optional
@@ -158,11 +163,10 @@ def _accumulate_ep_metadata(grid, kernel, args):
     n_tokens, hidden_size = args["n_tokens"], args["hidden_size"]
     TP, EP = args["TP"], args["EP"]
     ret["name"] = f"{kernel.name} [n_tokens={n_tokens}, hidden_size={hidden_size}, TP={TP}, EP={EP}]"
-    ep_positions_ptr = args["ep_positions_ptr"]
+    # Don't count the ep_positions buffer as it's a scratchpad buffer that we don't want to keep in the "ideal"
     output_tensor_ptr = args["output_tensor_ptr"]
     input_ptrs = args["input_ptrs"]
-    ret["bytes"] = (ep_positions_ptr.element_size() * ep_positions_ptr.numel() +
-                    output_tensor_ptr.element_size() * output_tensor_ptr.numel() +
+    ret["bytes"] = (output_tensor_ptr.element_size() * output_tensor_ptr.numel() +
                     sum([p.element_size() * p.numel() for p in input_ptrs]))
     return ret
 
@@ -271,11 +275,12 @@ def reduce_scatter(
         if metadata and metadata.input_split_sizes:
             assert dim == 0, "metadata only works with dim=0"
             input_list = list(input_tensor.split(metadata.input_split_sizes, dim=0))
-            output_list = all_to_all(input_list, dim=0)
             if metadata.comm == CommKernelType.TORCH:
+                output_list = all_to_all(input_list, dim=0, comm=CommKernelType.TORCH)
                 return _reduce_ep_torch(metadata, input_tensor, output_list, dim, op, original_dtype,
                                         intermediate_dtype)
             elif metadata.comm == CommKernelType.TRITON:
+                output_list = all_to_all(input_list, dim=0, comm=CommKernelType.TRITON)
                 return _reduce_ep_triton(metadata, input_tensor, output_list, dim, op, original_dtype,
                                          intermediate_dtype)
             else:
@@ -291,26 +296,165 @@ def reduce_scatter(
         return input_tensor
 
 
-def all_to_all(input_list: list[torch.Tensor], dim: int = 0) -> list[torch.Tensor]:
-    if _is_distributed_launch():
-        # Check if all tensors have only one dimension with different sizes
-        for t in input_list:
-            for d in range(t.dim()):
-                if d != dim and t.size(d) != input_list[0].size(d):
-                    raise ValueError("All tensors must have the same size in all dimensions except the specified one.")
-        input_sizes = [t.size(dim) for t in input_list]
-        input_sizes = torch.tensor(input_sizes, device=input_list[0].device).unsqueeze(0)
-        input_sizes = all_gather(input_sizes, dim=0)
-        output_split_sizes = input_sizes[:, dist.get_rank()].tolist()
-        other_dims = list(input_list[0].shape[:dim] + input_list[0].shape[dim + 1:])
-        output_list = [
-            torch.empty([size] + other_dims, dtype=input_list[0].dtype, device=input_list[0].device)
-            for size in output_split_sizes
-        ]
-        dist.all_to_all(output_list, input_list)
-        return output_list
-    else:
+def _prepare_all_to_all_metadata(input_list: list[torch.Tensor], dim: int) -> tuple[int, list[int], int]:
+    if not input_list:
+        raise ValueError("input_list must not be empty")
+
+    ref = input_list[0]
+    dim_norm = dim if dim >= 0 else dim + ref.dim()
+    if dim_norm < 0 or dim_norm >= ref.dim():
+        raise ValueError(f"dim={dim} is out of range for tensors with {ref.dim()} dims")
+    if dim_norm != 0:
+        raise NotImplementedError("all_to_all currently supports only dim=0 tensors.")
+
+    other_dims = list(ref.shape[:dim_norm] + ref.shape[dim_norm + 1:])
+
+    for tensor in input_list:
+        if tensor.dim() != ref.dim():
+            raise ValueError("All tensors must have the same rank for all_to_all.")
+        if tensor.dtype != ref.dtype:
+            raise ValueError("All tensors must share the same dtype for all_to_all.")
+        if tensor.device != ref.device:
+            raise ValueError("All tensors must reside on the same device for all_to_all.")
+        if not tensor.is_contiguous():
+            raise ValueError("all_to_all expects contiguous tensors; call contiguous() before invoking.")
+        for d in range(tensor.dim()):
+            if d != dim_norm and tensor.size(d) != ref.size(d):
+                raise ValueError("All tensors must have the same size in all non-sharded dimensions.")
+
+    inner_size = math.prod(other_dims) if other_dims else 1
+    return dim_norm, other_dims, inner_size
+
+
+def _all_to_all_torch(input_list: list[torch.Tensor], dim: int) -> list[torch.Tensor]:
+    _, other_dims, _ = _prepare_all_to_all_metadata(input_list, dim)
+    input_sizes = torch.tensor(
+        [tensor.size(0) for tensor in input_list],
+        device=input_list[0].device,
+        dtype=torch.int64,
+    ).unsqueeze(0)
+    gathered_sizes = all_gather(input_sizes, dim=0)
+    output_split_sizes = gathered_sizes[:, dist.get_rank()].tolist()
+    output_list_transformed = [
+        torch.empty([size] + other_dims, dtype=input_list[0].dtype, device=input_list[0].device)
+        for size in output_split_sizes
+    ]
+    dist.all_to_all(output_list_transformed, input_list)
+    return output_list_transformed
+
+
+@triton.jit
+def _symm_mem_send_kernel(
+    dest_offsets_tensor,
+    inner_size,
+    send_counts,
+    input_list,
+    dst_ptrs,
+    rank: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+    WORLD_SIZE: tl.constexpr
+):
+    token_id = tl.program_id(0)
+    offsets = tl.arange(0, BLOCK_SIZE)
+    tile_base = token_id * inner_size
+    element_offsets = (tile_base + offsets).to(tl.int64)
+    total = 0
+    for input_idx in tl.static_range(send_counts):
+        total += send_counts[input_idx]
+        if token_id < total:
+            input = input_list[input_idx]
+            output = dst_ptrs[input_idx]
+            dst_offset = dest_offsets_tensor[tl.constexpr(input_idx * WORLD_SIZE + rank)]
+            values = tl.load(input + element_offsets, mask=offsets < inner_size, other=0)
+            tl.store(output + (dst_offset * inner_size + element_offsets), values, mask=offsets < inner_size)
+
+
+def _all_to_all_triton(input_list: list[torch.Tensor], dim: int) -> list[torch.Tensor]:
+    if symm_mem is None:
+        raise RuntimeError("Symmetric memory backend is not available in this PyTorch build.")
+
+    _, other_dims, inner_size = _prepare_all_to_all_metadata(input_list, dim)
+
+    if input_list[0].device.type != "cuda":
+        raise RuntimeError("Symmetric memory all-to-all requires CUDA tensors.")
+
+    world_size = dist.get_world_size()
+    rank = dist.get_rank()
+    if len(input_list) != world_size:
+        raise ValueError(
+            f"Expected exactly one tensor per destination ({world_size}), got {len(input_list)}."
+        )
+
+    group = dist.group.WORLD
+    if group is None:
+        raise RuntimeError("Symmetric memory requires an initialized default process group.")
+
+    send_counts_list = [tensor.size(0) for tensor in input_list]
+    send_counts = torch.tensor(
+        send_counts_list,
+        device=input_list[0].device,
+        dtype=torch.int32,
+    )
+    gathered = [torch.zeros_like(send_counts) for _ in range(world_size)]
+    dist.all_gather(gathered, send_counts)
+    size_matrix = torch.stack(gathered, dim=0)
+    column_prefix = torch.cumsum(size_matrix, dim=0) - size_matrix
+
+    recv_counts = size_matrix[:, rank]
+    recv_offsets = column_prefix[:, rank]
+    local_total_rows = int(recv_counts.sum().item())
+    buffer = symm_mem.empty(
+        (local_total_rows, inner_size),
+        dtype=input_list[0].dtype,
+        device=input_list[0].device,
+    )
+    symm_handle = symm_mem.rendezvous(buffer, group)
+    dst_ptrs = [symm_handle.get_buffer(dst_rank, (local_total_rows, inner_size), input_list[0].dtype, 0,) for dst_rank in range(world_size)]
+    dest_offsets_tensor = column_prefix[rank]
+
+    BLOCK_SIZE = triton.next_power_of_2(inner_size if inner_size > 0 else 1)
+    _symm_mem_send_kernel[(sum(send_counts_list),)](
+        dest_offsets_tensor,
+        inner_size,
+        tuple(send_counts_list),
+        tuple(input_list),
+        tuple(dst_ptrs),
+        rank,
+        BLOCK_SIZE=BLOCK_SIZE,
+        WORLD_SIZE=world_size,
+    )
+
+    symm_handle.barrier()
+
+    output_list: list[torch.Tensor] = []
+    recv_counts_list = recv_counts.tolist()
+    recv_offsets_list = recv_offsets.tolist()
+    for src_rank, rows in enumerate(recv_counts_list):
+        rows_int = int(rows)
+        shape = [rows_int] + other_dims
+        if rows_int > 0:
+            offset = int(recv_offsets_list[src_rank])
+            chunk_view = buffer[offset:offset + rows_int]
+            chunk = chunk_view.view(shape)
+        else:
+            chunk = input_list[0].new_empty(shape)
+        output_list.append(chunk)
+
+    symm_handle.barrier()
+
+    return output_list
+
+
+def all_to_all(input_list: list[torch.Tensor], dim: int = 0, comm: CommKernelType = CommKernelType.TORCH) -> list[torch.Tensor]:
+    if not _is_distributed_launch():
         return input_list
+
+    if comm == CommKernelType.TORCH:
+        return _all_to_all_torch(input_list, dim)
+    elif comm == CommKernelType.TRITON:
+        return _all_to_all_triton(input_list, dim)
+    else:
+        raise NotImplementedError(f"CommKernelType {comm} is not implemented for all_to_all.")
 
 
 def _apply_parallelism(
@@ -593,6 +737,49 @@ def test_reduce_scatter_distributed_with_metadata(monkeypatch):
 
     result = reduce_scatter(x, metadata=metadata, dim=0)
     torch.testing.assert_close(result, torch.tensor([[1, 2], [1, 2]], dtype=torch.float32))
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for Triton kernel execution")
+@pytest.mark.parametrize("n_tokens", [1024])
+@pytest.mark.parametrize("hidden_size", [128])
+@pytest.mark.parametrize("world_size", [4])
+def test_all_to_all(monkeypatch, world_size, hidden_size, n_tokens):
+    if symm_mem is None:
+        pytest.skip("Symmetric memory is not available in this build.")
+    if torch.cuda.device_count() < world_size:
+        pytest.skip(f"Requires at least {world_size} CUDA devices.")
+
+    monkeypatch.setenv("WORLD_SIZE", world_size)
+    monkeypatch.setenv("MASTER_ADDR", "127.0.0.1")
+    monkeypatch.setenv("MASTER_PORT", "12355")
+
+    def _all_to_all_triton_worker(rank: int) -> None:
+        dist.init_process_group("nccl", rank=rank)
+        torch.cuda.set_device(rank)
+
+        try:
+            data = torch.randn((n_tokens, hidden_size), device=torch.device(f"cuda:{rank}"), dtype=torch.float16)
+            input_list = list(data.chunk(world_size, dim=0))
+            input_split_sizes = [tensor.size(0) for tensor in input_list]
+            output_ref = all_to_all(input_list, dim=0)
+            output = all_to_all(input_list, dim=0, comm=CommKernelType.TRITON)
+            dist.barrier()
+        finally:
+            dist.destroy_process_group()
+
+    for rank in range(world_size):
+        mp.spawn(
+            _all_to_all_triton_worker,
+            args=(rank,),
+            nprocs=world_size,
+            join=True,
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for Triton kernel execution")
