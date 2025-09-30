@@ -776,13 +776,12 @@ def test_all_to_all_triton(monkeypatch, world_size, hidden_size, n_tokens):
     monkeypatch.setenv("MASTER_ADDR", "127.0.0.1")
     monkeypatch.setenv("MASTER_PORT", "12355")
 
-    for rank in range(world_size):
-        mp.spawn(
-            _all_to_all_triton_worker,
-            args=(world_size, hidden_size, n_tokens),
-            nprocs=world_size,
-            join=True,
-        )
+    mp.spawn(
+        _all_to_all_triton_worker,
+        args=(world_size, hidden_size, n_tokens),
+        nprocs=world_size,
+        join=True,
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for Triton kernel execution")
