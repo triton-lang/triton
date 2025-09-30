@@ -59,15 +59,14 @@ public:
   static DotOpMmaSmemLoader
   build(Location loc, RewriterBase &rewriter, triton::gpu::MemDescType tensor,
         Value smemBase, ArrayRef<unsigned> instrShape, int mmaVersion,
-        std::optional<ArrayRef<unsigned>> warpGroups = std::nullopt,
+        std::optional<RankedTensorType> mmaTy = std::nullopt,
         std::optional<unsigned> MNdim = std::nullopt) {
     auto ctx = tensor.getContext();
     assert(mmaVersion == 3 || mmaVersion == 5);
     // Just needed for MMAv3
-    assert(warpGroups.has_value() == (mmaVersion == 3));
+    assert(mmaTy.has_value() == (mmaVersion == 3));
     assert(MNdim.has_value() == (mmaVersion == 3));
     if (mmaVersion == 3) {
-      assert(warpGroups.value().size() == 2);
       assert(MNdim.value() < 2);
     }
     assert(instrShape.size() == 2);
@@ -125,33 +124,43 @@ public:
     auto llInv = identity.invertAndCompose(ll);
 
     auto blockInstrShape = to_vector(instrShape);
-    if (mmaVersion == 3 && warpGroups.value()[MNdim.value()] > 1) {
-      // There is a handshake between this code and the mmav3 layout
-      // The PTX docs asks that every warpgroup points to its part of shmem, so
-      // we have to know how are we tiling the warps along the MN dimension
-      auto wg = std::move(warpGroups.value());
+    if (mmaVersion == 3) {
       auto mndim = MNdim.value();
-      // Each warp has to have the offset of the part of shmem that the 0th warp
-      // of the warpgroup owns
-      // The warpGroup order for mmav3 is [0, 1] so we split warpId accordingly
-      auto logWarpsBeforeWarp0 = 2;
-      if (mndim == 1) {
-        logWarpsBeforeWarp0 += llvm::Log2_32(wg[0]);
+      auto mmaLl = gpu::toLinearLayout(mmaTy.value());
+      auto outDims = to_vector(mmaLl.getOutDimNames());
+      auto kWarp = str_attr("warp");
+      // Map from warps into the MN dimension
+      auto mmaWarps = mmaLl.sublayout({kWarp}, {outDims[mndim]}) *
+                      LinearLayout::identity1D(1, kWarp, outDims[1 - mndim]);
+      // Map from warps to offsets in bitwidth elements
+      auto warpToOffset = mmaWarps.compose(llInv);
+      // Map from warps to offsets in 128b elements
+      auto maybeWarpToOffsetb128 =
+          divideLeft(warpToOffset,
+                     LinearLayout::zeros1D(1, kWarp, kOffset, 128 / bitwidth));
+      assert(maybeWarpToOffsetb128.has_value());
+      // zero out the first two warp bases to have a warpgroup to offset map
+      assert(maybeWarpToOffsetb128->getNumOutDims() == 2);
+      auto bases = maybeWarpToOffsetb128->getBases();
+      bases[kWarp][0] = {0, 0};
+      bases[kWarp][1] = {0, 0};
+      auto warpGroupToOffsetb128 = LinearLayout(
+          bases, warpToOffset.getOutDims(), /*requireSurjective=*/false);
+      Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
+      Value warpStrideb128 =
+          applyLinearLayout(loc, rewriter, warpGroupToOffsetb128,
+                            {{kWarp, warpId}})[0]
+              .second;
+      baseSrcb128 = b.add(baseSrcb128, warpStrideb128);
+      // Increase the instruction shape to describe the size at a warp level
+      // A bit hacky but well
+      int logwgAlongMN = 0;
+      for (int i = 0; i < warpGroupToOffsetb128.getInDimSizeLog2(kWarp); i++) {
+        if (warpGroupToOffsetb128.getBasis(kWarp, i, kOffset) != 0) {
+          logwgAlongMN++;
+        }
       }
-      Value warpId = b.lshr(rewriter.create<nvgpu::WarpIdOp>(loc),
-                            b.i32_val(logWarpsBeforeWarp0));
-      if (mndim == 0 && wg[1] > 1) {
-        // We need to mask mask out the first warpGroup[0] warp groups
-        warpId = b.and_(warpId, b.i32_val(wg[0] - 1));
-      }
-      // We know that the lbo/sbo is constant, and we assume that the warps tile
-      // along the MN dimension
-      auto warpStrideElem = llInv.getBasis(
-          outDims[mndim], llvm::Log2_32(instrShape[mndim]), kOffset);
-      auto warpStrideb128 = warpStrideElem * bitwidth / 128;
-      baseSrcb128 =
-          b.add(baseSrcb128, b.mul(warpId, b.i32_val(warpStrideb128)));
-      blockInstrShape[mndim] *= wg[MNdim.value()];
+      blockInstrShape[mndim] *= (1 << logwgAlongMN);
     }
 
     Value baseb128 = b.zext(i64_ty, b.and_(baseSrcb128, b.i32_val(0x3FFF)));
