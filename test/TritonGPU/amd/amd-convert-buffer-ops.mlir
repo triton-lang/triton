@@ -788,3 +788,200 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// To test if scf.yield returns the block arugment directly, the nonnegative analysis still works.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @add(
+  %in_ptr: !tt.ptr<f32>  {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+  %out_ptr: !tt.ptr<f32>  {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %cst = arith.constant dense<true> : tensor<32x32xi1, #blocked>
+    %c31 = arith.constant 31 : i32
+    %c1 = arith.constant 1 : i32
+    %cst_0 = arith.constant dense<32> : tensor<32x32xi32, #blocked>
+    %pid = tt.get_program_id x : i32
+    %in_ptrs = tt.splat %pid : i32 -> tensor<32x32xi32, #blocked>
+    %out_ptrs = tt.splat %pid : i32 -> tensor<32x32xi32, #blocked>
+    %out_ptrs_20:2 = scf.for %out_ptrs_21 = %c1 to %c31 step %c0 iter_args(%blk_arg_0 = %in_ptrs, %blk_arg_1 = %out_ptrs) -> (tensor<32x32xi32, #blocked>, tensor<32x32xi32, #blocked>)  : i32 {
+      %a = tt.splat %in_ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+      %a_24 = tt.addptr %a, %blk_arg_0 : tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xi32, #blocked>
+      // COMMON: %[[VAL:.*]] = amdgpu.buffer_load
+      // COMMON-NEXT: amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu, %[[VAL]]
+      %a_25 = tt.load %a_24 : tensor<32x32x!tt.ptr<f32>, #blocked>
+      %5 = tt.splat %out_ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+      %6 = tt.addptr %5, %blk_arg_1 : tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xi32, #blocked>
+      %7 = tt.atomic_rmw fadd, acq_rel, gpu, %6, %a_25, %cst : (tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xf32, #blocked>, tensor<32x32xi1, #blocked>) -> tensor<32x32xf32, #blocked>
+      scf.yield %blk_arg_0, %blk_arg_1 : tensor<32x32xi32, #blocked>, tensor<32x32xi32, #blocked>
+    }
+
+    tt.return
+  }
+}
+
+// -----
+
+// To test if the block argument is updated with value which must be nonnegative, the conversion will be applied.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @add(
+  %in_ptr: !tt.ptr<f32>  {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+  %out_ptr: !tt.ptr<f32>  {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %cst = arith.constant dense<true> : tensor<32x32xi1, #blocked>
+    %c31 = arith.constant 31 : i32
+    %c1 = arith.constant 1 : i32
+    %cst_0 = arith.constant dense<32> : tensor<32x32xi32, #blocked>
+    %pid = tt.get_program_id x : i32
+    %in_ptrs = tt.splat %pid : i32 -> tensor<32x32xi32, #blocked>
+    %out_ptrs = tt.splat %pid : i32 -> tensor<32x32xi32, #blocked>
+    %out_ptrs_20:2 = scf.for %out_ptrs_21 = %c1 to %c31 step %c0 iter_args(%blk_arg_0 = %in_ptrs, %blk_arg_1 = %out_ptrs) -> (tensor<32x32xi32, #blocked>, tensor<32x32xi32, #blocked>)  : i32 {
+      %a = tt.splat %in_ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+      %a_24 = tt.addptr %a, %blk_arg_0 : tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xi32, #blocked>
+      // COMMON: %[[VAL:.*]] = amdgpu.buffer_load
+      // COMMON-NEXT: amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu, %[[VAL]]
+      %a_25 = tt.load %a_24 : tensor<32x32x!tt.ptr<f32>, #blocked>
+      %5 = tt.splat %out_ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+      %6 = tt.addptr %5, %blk_arg_1 : tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xi32, #blocked>
+      %7 = tt.atomic_rmw fadd, acq_rel, gpu, %6, %a_25, %cst : (tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xf32, #blocked>, tensor<32x32xi1, #blocked>) -> tensor<32x32xf32, #blocked>
+      %blk_arg_0_1 = arith.addi %blk_arg_0, %cst_0 : tensor<32x32xi32, #blocked>
+      %blk_arg_1_1 = arith.addi %blk_arg_1, %cst_0 : tensor<32x32xi32, #blocked>
+      scf.yield %blk_arg_0_1, %blk_arg_1_1 : tensor<32x32xi32, #blocked>, tensor<32x32xi32, #blocked>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// To test
+// the %block_m is the function argument without assume, the nonnegative analysis will assume it is negative.
+// 1) if the block argument %blk_arg_1 is initialized with %block_m, the conversion will not be applied.
+// 2) if the block argument %blk_arg_0 is updated with %block_m, the conversion will not be applied.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @add(
+  %in_ptr: !tt.ptr<f32>  {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+  %out_ptr: !tt.ptr<f32>  {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+  %stride_m: i32 {tt.divisibility = 16 : i32}) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %cst = arith.constant dense<true> : tensor<32x32xi1, #blocked>
+    %c31 = arith.constant 31 : i32
+    %c1 = arith.constant 1 : i32
+    %cst_0 = arith.constant dense<32> : tensor<32x32xi32, #blocked>
+    %pid = tt.get_program_id x : i32
+    %in_ptrs = tt.splat %pid : i32 -> tensor<32x32xi32, #blocked>
+    %blocked_m = tt.splat %stride_m : i32 -> tensor<32x32xi32, #blocked>
+    %out_ptrs_20:2 = scf.for %out_ptrs_21 = %c1 to %c31 step %c0 iter_args(%blk_arg_0 = %in_ptrs, %blk_arg_1 = %blocked_m) -> (tensor<32x32xi32, #blocked>, tensor<32x32xi32, #blocked>)  : i32 {
+      %a = tt.splat %in_ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+      %a_24 = tt.addptr %a, %blk_arg_0 : tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xi32, #blocked>
+      // COMMON-NOT: %[[VAL:.*]] = amdgpu.buffer_load
+      // COMMON-NOT: amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu
+      %a_25 = tt.load %a_24 : tensor<32x32x!tt.ptr<f32>, #blocked>
+      %5 = tt.splat %out_ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+      %6 = tt.addptr %5, %blk_arg_1 : tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xi32, #blocked>
+      %7 = tt.atomic_rmw fadd, acq_rel, gpu, %6, %a_25, %cst : (tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xf32, #blocked>, tensor<32x32xi1, #blocked>) -> tensor<32x32xf32, #blocked>
+      %blk_arg_0_1 = arith.addi %blk_arg_0, %blocked_m : tensor<32x32xi32, #blocked>
+      %blk_arg_1_1 = arith.addi %blk_arg_1, %cst_0 : tensor<32x32xi32, #blocked>
+      scf.yield %blk_arg_0_1, %blk_arg_1_1 : tensor<32x32xi32, #blocked>, tensor<32x32xi32, #blocked>
+    }
+    tt.return
+  }
+}
+
+
+// -----
+
+// In this test, there are some intersections between the UD chains of the block argument %blk_arg_0 and %blk_arg_1.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @add(
+  %in_ptr: !tt.ptr<f32>  {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+  %out_ptr: !tt.ptr<f32>  {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+  %stride_m: i32 {tt.divisibility = 16 : i32}) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %cst = arith.constant dense<true> : tensor<32x32xi1, #blocked>
+    %c31 = arith.constant 31 : i32
+    %c1 = arith.constant 1 : i32
+    %cst_0 = arith.constant dense<32> : tensor<32x32xi32, #blocked>
+    %pid = tt.get_program_id x : i32
+    %in_ptrs = tt.splat %pid : i32 -> tensor<32x32xi32, #blocked>
+    %out_ptrs = tt.splat %pid : i32 -> tensor<32x32xi32, #blocked>
+    %out_ptrs_20:2 = scf.for %out_ptrs_21 = %c1 to %c31 step %c0 iter_args(%blk_arg_0 = %in_ptrs, %blk_arg_1 = %out_ptrs) -> (tensor<32x32xi32, #blocked>, tensor<32x32xi32, #blocked>)  : i32 {
+      %a = tt.splat %in_ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+      %a_24 = tt.addptr %a, %blk_arg_0 : tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xi32, #blocked>
+      // COMMON: %[[VAL:.*]] = amdgpu.buffer_load
+      // COMMON: amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu
+      %a_25 = tt.load %a_24 : tensor<32x32x!tt.ptr<f32>, #blocked>
+      %5 = tt.splat %out_ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+      %6 = tt.addptr %5, %blk_arg_1 : tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xi32, #blocked>
+      %7 = tt.atomic_rmw fadd, acq_rel, gpu, %6, %a_25, %cst : (tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xf32, #blocked>, tensor<32x32xi1, #blocked>) -> tensor<32x32xf32, #blocked>
+      %blk_arg_1_1 = arith.addi %blk_arg_0, %cst_0 : tensor<32x32xi32, #blocked>
+      %blk_arg_0_1 = arith.addi %blk_arg_1, %cst_0 : tensor<32x32xi32, #blocked>
+      %blk_arg_1_2 = arith.addi %blk_arg_0_1, %cst_0 : tensor<32x32xi32, #blocked>
+      %blk_arg_0_2 = arith.addi %blk_arg_1_1, %cst_0 : tensor<32x32xi32, #blocked>
+      scf.yield %blk_arg_0_2, %blk_arg_1_2 : tensor<32x32xi32, #blocked>, tensor<32x32xi32, #blocked>
+    }
+    tt.return
+  }
+}
+
+// -----
+
+// In this test, there are some intersections between the UD chains of the block argument %blk_arg_0 and %blk_arg_1.
+// And more comments are inlined.
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @add(
+  %in_ptr: !tt.ptr<f32>  {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+  %out_ptr: !tt.ptr<f32>  {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+  %stride_m: i32 {tt.divisibility = 16 : i32}) {
+    %c0 = arith.constant 0 : i32
+    %true = arith.constant true
+    %cst = arith.constant dense<true> : tensor<32x32xi1, #blocked>
+    %c31 = arith.constant 31 : i32
+    %c1 = arith.constant 1 : i32
+    %cst_0 = arith.constant dense<32> : tensor<32x32xi32, #blocked>
+    %pid = tt.get_program_id x : i32
+    %in_ptrs = tt.splat %pid : i32 -> tensor<32x32xi32, #blocked>
+    %out_ptrs = tt.splat %pid : i32 -> tensor<32x32xi32, #blocked>
+    %block_m = tt.splat %stride_m: i32 -> tensor<32x32xi32, #blocked>
+    %out_ptrs_20:2 = scf.for %out_ptrs_21 = %c1 to %c31 step %c0 iter_args(%blk_arg_0 = %in_ptrs, %blk_arg_1 = %out_ptrs) -> (tensor<32x32xi32, #blocked>, tensor<32x32xi32, #blocked>)  : i32 {
+      %a = tt.splat %in_ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+      %a_24 = tt.addptr %a, %blk_arg_0 : tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xi32, #blocked>
+      // COMMON: %[[VAL:.*]] = amdgpu.buffer_load
+      // COMMON-NOT: amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu
+      %a_25 = tt.load %a_24 : tensor<32x32x!tt.ptr<f32>, #blocked>
+      %5 = tt.splat %out_ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>, #blocked>
+      %6 = tt.addptr %5, %blk_arg_1 : tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xi32, #blocked>
+      %7 = tt.atomic_rmw fadd, acq_rel, gpu, %6, %a_25, %cst : (tensor<32x32x!tt.ptr<f32>, #blocked>, tensor<32x32xf32, #blocked>, tensor<32x32xi1, #blocked>) -> tensor<32x32xf32, #blocked>
+
+      // %blk_arg_1_1 is nonnegative
+      %blk_arg_1_1 = arith.addi %blk_arg_0, %cst_0 : tensor<32x32xi32, #blocked>
+
+      // %blk_arg_0_1 could be negative since %block_m could be negative
+      %blk_arg_0_1 = arith.addi %blk_arg_1, %block_m : tensor<32x32xi32, #blocked>
+
+      // %blk_arg_1_2 could be negative since %blk_arg_0_1 could be negative
+      %blk_arg_1_2 = arith.addi %blk_arg_0_1, %cst_0 : tensor<32x32xi32, #blocked>
+
+      // %blk_arg_0_2 is nonnegative since %blk_arg_1_1 is nonnegative
+      %blk_arg_0_2 = arith.addi %blk_arg_1_1, %cst_0 : tensor<32x32xi32, #blocked>
+
+      // For next iteration,
+      // %blk_arg_0 is nonnegative since %blk_arg_0_2 is yielded
+      // %blk_arg_1 could be negative since %blk_arg_1_2 is yielded
+      // So,
+      // tt.load will be convertted to buffer_load since it uses offset %blk_arg_0
+      // tt.atomic_rmw will not be converted since it uses offset %blk_arg_1
+      scf.yield %blk_arg_0_2, %blk_arg_1_2 : tensor<32x32xi32, #blocked>, tensor<32x32xi32, #blocked>
+    }
+    tt.return
+  }
+}
