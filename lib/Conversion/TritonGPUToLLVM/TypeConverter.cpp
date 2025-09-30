@@ -45,10 +45,8 @@ Type TritonGPUToLLVMTypeConverter::convertTensorDescType(TensorDescType type) {
   auto ptrType = LLVM::LLVMPointerType::get(ctx, 0);
   auto descBlockType = type.getBlockType();
   Attribute encoding = descBlockType.getEncoding();
-  if (encoding) {
-    if (isa<triton::gpu::NVMMASharedEncodingAttr>(encoding))
-      return ptrType;
-  }
+  if (encoding)
+    return ptrType;
 
   RankedTensorType rankedTensorType = type.getBlockType();
   auto eleType = rankedTensorType.getElementType();
