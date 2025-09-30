@@ -356,8 +356,6 @@ def _symm_mem_all_to_all_kernel(
 ):
     token_id = tl.program_id(0)
     offsets = tl.arange(0, BLOCK_SIZE)
-    tile_base = token_id * inner_size
-    element_offsets = (tile_base + offsets).to(tl.int64)
     total = 0
     for input_idx in tl.static_range(WORLD_SIZE):
         total += send_counts[input_idx]
@@ -365,7 +363,7 @@ def _symm_mem_all_to_all_kernel(
             input = src_ptrs[input_idx]
             output = dst_ptrs[input_idx]
             dst_offset = column_prefix[tl.constexpr(src_rank * WORLD_SIZE + input_idx)]
-            values = tl.load(input + element_offsets, mask=offsets < inner_size, other=0)
+            values = tl.load(input + token_id * inner_size + offsets, mask=offsets < inner_size, other=0)
             tl.store(output + dst_offset * inner_size + offsets, values, mask=offsets < inner_size)
             return
 
@@ -418,7 +416,7 @@ def _all_to_all_triton(input_list: list[torch.Tensor], dim: int) -> list[torch.T
         inner_size,
         tuple(column_prefix),
         tuple(send_counts_list),
-        tuple(src_ptrs),
+        tuple(input_list),
         tuple(dst_ptrs),
         src_rank=rank,
         BLOCK_SIZE=BLOCK_SIZE,
