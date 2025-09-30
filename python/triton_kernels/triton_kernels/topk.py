@@ -141,3 +141,15 @@ def topk(
     """
     ret = TopK.apply(x, k, apply_softmax, dim, return_bitmatrix, y_indx, n_rows, all_gather)
     return ret
+
+
+def topk_torch(vals, k, expt_indx):
+    # topk of experts
+    if expt_indx is not None:
+        tk_indx = expt_indx
+    else:
+        tk_indx = torch.argsort(-vals, dim=1, stable=True)[:, :k]
+    tk_indx = tk_indx.long()
+    tk_val = torch.take_along_dim(vals, tk_indx, dim=1)
+    tk_indx = tk_indx.int()
+    return tk_val, tk_indx
