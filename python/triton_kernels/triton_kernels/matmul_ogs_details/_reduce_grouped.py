@@ -45,7 +45,7 @@ def _reduce_grouped(X, stride_xb: tl.uint64, stride_xm: tl.uint64, stride_xn,  #
     if PER_BATCH_OUT_SCALE:
         out_batch_idx = pid_t // M
         OutExpectedScale += out_batch_idx
-        OutActualSclae += out_batch_idx
+        OutActualScale += out_batch_idx
         if OutChecksumScale is not None:
             OutChecksumScale += out_batch_idx
     x_scale = load_scale(XScale)

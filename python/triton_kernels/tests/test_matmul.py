@@ -117,7 +117,7 @@ def init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, n_
 # ---------------
 
 
-def init_precision(out_dtype, act_use_flexpoint, weight_dtype, weight_mxfp, n_expts_tot=1, expt_is_inner=False, device="cuda"):
+def init_precision(out_dtype, act_use_flexpoint, weight_dtype, weight_mxfp, mode, n_expts_tot=1, expt_is_inner=False, device="cuda"):
     weight_use_flexpoint = weight_dtype.itemsize == 1 and not weight_mxfp
     # flexpoint
     make_tensor = lambda val0, val1: torch.tensor([val0, val1] * (n_expts_tot // 2) +
@@ -136,8 +136,8 @@ def init_precision(out_dtype, act_use_flexpoint, weight_dtype, weight_mxfp, n_ex
         ) if weight_use_flexpoint else InFlexData(),
         out_data=OutFlexData(
             dtype=out_dtype,
-            expected_scale=make(4.00, 5.00, expt_is_inner),
-            actual_scale=make(0, 0, expt_is_inner),
+            expected_scale=make(4.00, 5.00, mode == "batched" or expt_is_inner),
+            actual_scale=make(0, 0, mode == "batched" or expt_is_inner),
             checksum_scale=None,
         ) if act_use_flexpoint else OutFlexData(),
     )
@@ -425,7 +425,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
     weight_dtype = dtype_str_to_torch(weight_dtype_str)
     act_dtype = dtype_str_to_torch(act_dtype_str)
     precision_opt = init_precision(act_dtype, act_is_float8, weight_dtype, weight_mxfp,
-                                   n_expts_tot // n_expt_shards, expt_is_inner, device=device)
+                                   mode, n_expts_tot // n_expt_shards, expt_is_inner, device=device)
     # precision_opt.x_pad_trans_requires_flexpoint = False
     if mode == "ragged":
         m, rdata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_scatter,
@@ -694,7 +694,7 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
     else:
         rdata = gindx = sindx = None
 
-    precision_opt = init_precision(act_dtype, str(act_dtype).startswith("torch.float8"), weight_dtype, False, n_expts_tot // n_expt_shards, device=device)
+    precision_opt = init_precision(act_dtype, str(act_dtype).startswith("torch.float8"), weight_dtype, False, mode, n_expts_tot // n_expt_shards, device=device)
     x, w, bias, _, _ = init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, n_expt_shards, mode,
                                          act_dtype, weight_dtype, False, requires_grad=False, device=device)
 
