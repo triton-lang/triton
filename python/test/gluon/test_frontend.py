@@ -2695,7 +2695,7 @@ def amd_tdm_kernel(ptr):
 @pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
 def test_amd_tdm(target):
 
-    ptr = MockTensor(ttgl.float32)
+    ptr = MockTensor(ttgl.float16)
     module = run_parser(amd_tdm_kernel, *make_args(ptr), target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
@@ -2703,19 +2703,19 @@ def test_amd_tdm(target):
 #shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [16, 64]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @amd_tdm_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @amd_tdm_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %c32_i32 = arith.constant 32 : i32
     %c128_i32 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
     %c1_i64 = arith.constant 1 : i64
-    %0 = tt.make_tensor_descriptor %arg0, [%c32_i32, %c128_i32], [%c128_i64, %c1_i64] : <f32>, <tensor<16x64xf32>>
-    %1 = ttg.local_alloc : () -> !ttg.memdesc<16x64xf32, #shared, #smem, mutable>
+    %0 = tt.make_tensor_descriptor %arg0, [%c32_i32, %c128_i32], [%c128_i64, %c1_i64] : <f16>, <tensor<16x64xf16>>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
     %c0_i32 = arith.constant 0 : i32
     %c2_i32 = arith.constant 2 : i32
     %true = arith.constant true
-    %2 = amdgpu.async_tdm_copy_global_to_local %0[%c0_i32, %c2_i32] into %1, %true : !tt.tensordesc<tensor<16x64xf32>> -> !ttg.memdesc<16x64xf32, #shared, #smem, mutable>
+    %2 = amdgpu.async_tdm_copy_global_to_local %0[%c0_i32, %c2_i32] into %1, %true : !tt.tensordesc<tensor<16x64xf16>> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
     %3 = amdgpu.async_tdm_wait  {num = 0 : i32}
-    %4 = ttg.local_load %1 : !ttg.memdesc<16x64xf32, #shared, #smem, mutable> -> tensor<16x64xf32, #blocked>
+    %4 = ttg.local_load %1 : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
     tt.return
   }
 }
