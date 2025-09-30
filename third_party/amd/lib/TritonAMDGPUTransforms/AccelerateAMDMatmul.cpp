@@ -196,8 +196,20 @@ chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
                                aElemType, bElemType, withScale, allowXF32);
 
   // Fallback to FMA if the M/N dim is not supported by MFMA.
-  if (failed(maybeMfmaIntrinsic))
+  if (failed(maybeMfmaIntrinsic)) {
+    mlir::emitRemark(loc)
+        << "Unable to select MFMA intrinsic for the request: "
+        << "version=" << mfmaVersion << ", result-shape=(" << M << "x" << N
+        << "), selected-tiles=(" << mDim << "x" << nDim << "), inputKSize="
+        << inputKSize << ", aElemType=" << aElemType
+        << ", bElemType=" << bElemType << ", withScale="
+        << (withScale ? "true" : "false")
+        << ", allowXF32=" << (allowXF32 ? "true" : "false")
+        << (enforcedNonKDim != 0
+                ? (llvm::Twine(", enforcedNonKDim=") + llvm::Twine(enforcedNonKDim)).str()
+                : "");
     return failure();
+  }
 
   kDim = maybeMfmaIntrinsic->kDim;
   assert(kDim != 0);
@@ -206,15 +218,11 @@ chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
   // this layout will introduce data duplication.
   if (inputKSize % kDim != 0) {
     mlir::emitRemark(loc)
-      << "MFMA intrinsic selection failed: BLOCK_K=" << inputKSize
-      << " is smaller than or not a multiple of the MFMA kDim requirement ("
-      << kDim << "). "
-      << "Selected MxN=" << mDim << "x" << nDim
-      << ", element types: " << aElemType << " x " << bElemType
-      << ", mfmaVersion=" << mfmaVersion
-      << (withScale ? ", with scale" : "")
-      << (allowXF32 ? ", allowing TF32" : "") << ". ";
-      return failure();
+        << "Unable to select MFMA intrinsic '"
+        << maybeMfmaIntrinsic->name << "' as MFMA intrinsic k-dimension size kDim=" << kDim
+        << ", which is not a multiple of tile k-dimension size inputKSize=" << inputKSize
+        << ". Using this intrinsic would require data duplication.";
+    return failure();
   }
   return maybeMfmaIntrinsic;
 }
@@ -554,18 +562,13 @@ public:
     FailureOr<MfmaIntrinsic> mfmaInstr =
         chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, withScale);
     if (failed(mfmaInstr)) {
-      if (withScale) {
-        dotOp.emitRemark()
-            << "Scaled MFMA variant not applicable; attempting to select regular MFMA.";
-      } else {
+      if (!withScale) {
         return failure();
       }
       mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, false);
-      if (failed(mfmaInstr)) {
-        dotOp.emitWarning()
-            << "MFMA selection failed; will fall back to FMA.";
+      if (failed(mfmaInstr))
         return failure();
-      }
+
       withScale = false;
     }
 
@@ -907,6 +910,13 @@ public:
       : ttg::DecomposeScaledBlocked(context, benefit) {}
   using TensorValue = TypedValue<RankedTensorType>;
 
+  LogicalResult matchAndRewrite(tt::DotScaledOp dotOp,
+                                PatternRewriter &rewriter) const override {
+    dotOp.emitRemark()
+      << "Decomposing scaled dot operation into regular dot operation with explicit scaling.";
+    return ttg::DecomposeScaledBlocked::matchAndRewrite(dotOp, rewriter);
+  }
+
   RankedTensorType getScaleType(RankedTensorType vType, int32_t kDim,
                                 bool isFp4) const {
     if (!isFp4)
@@ -1030,9 +1040,12 @@ public:
     // Choose a suitable Scaled MFMA instruction for this scaled dot op.
     FailureOr<MfmaIntrinsic> mfmaInstr =
         chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
-    if (failed(mfmaInstr))
+    if (failed(mfmaInstr)) {
+      dotOp.emitRemark()
+        << "Unable to choose double-rated MFMA intrinsic for scaled dot operation.";
       return rewriter.notifyMatchFailure(dotOp,
                                          "cannot choose scaled mfma intrinsic");
+      }
 
     auto mDim = mfmaInstr->mDim;
     auto nDim = mfmaInstr->nDim;
