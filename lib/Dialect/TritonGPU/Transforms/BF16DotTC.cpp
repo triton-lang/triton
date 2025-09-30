@@ -56,9 +56,6 @@ public:
           rewriter.create<arith::ConstantOp>(dotOp->getLoc(),
                                              rewriter.getF32FloatAttr(0)));
     };
-    auto add = [&](Value a, Value b) -> Value {
-      return rewriter.create<arith::AddFOp>(dotOp.getLoc(), a, b);
-    };
     auto dot = [&](Value a, Value b, Value c) -> Value {
       return rewriter.create<DotOp>(dotOp->getLoc(), c.getType(), a, b, c,
                                     InputPrecision::BF16,
@@ -120,7 +117,7 @@ public:
 
     result = replaceNansWithZeros(result);
     result = dot(lhs_parts[hi], rhs_parts[hi], result);
-    result = add(result, dotOp.getC());
+    result = rewriter.create<arith::AddFOp>(dotOp.getLoc(), result, dotOp.getC());
 
     rewriter.replaceOp(dotOp, result);
     return success();
