@@ -193,7 +193,7 @@ def _matmul_ogs(
     # We are tiling Y here, so the tiling is independent of matmul (where we
     # tile X & W and scatter to different rows of Y).
     # TODO: refactor (same code in _p_matmul_ogs)
-    if HAS_FUSED_SCATTER and N_EXPTS_ACT == 1:
+    if HAS_FUSED_SCATTER:
         tl.device_assert(batch_size == 1)
         pid_mnk = pid
         if XCD_SWIZZLE != 1:
@@ -449,7 +449,7 @@ def _matmul_ogs(
             YActualScale += start_m * stride_y_mx_m
             YActualScalePtrs = YActualScale + offs_y_m.to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
         else:
-            YActualScalePtrs = YActualScale + (offs_y_m - num_idxs // N_EXPTS_ACT).to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
+            YActualScalePtrs = YActualScale + (offs_y_m - num_idxs).to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
         tl.store(YActualScalePtrs, out_scale, mask=mask_m[:, None] & mask_n_scale[None, :])
     else:
         if PER_BATCH_OUT_SCALE:
