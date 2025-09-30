@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx942"| FileCheck %s --check-prefixes=COMMON,GFX942-ONLY
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx950"| FileCheck %s --check-prefixes=COMMON,GFX950-ONLY
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx942 analyze-small-tensor-ofst=false" | FileCheck %s --check-prefixes=COMMON,GFX942-ONLY
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx950 analyze-small-tensor-ofst=false" | FileCheck %s --check-prefixes=COMMON,GFX950-ONLY
 
 //////////////////////////////////////////////////////////////////////////////
 //
