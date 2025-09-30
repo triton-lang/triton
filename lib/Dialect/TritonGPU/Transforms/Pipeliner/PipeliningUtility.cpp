@@ -925,3 +925,11 @@ triton::getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
                 current->isBeforeInBlock(candidate));
       });
 }
+
+void triton::removePipeliningAttributes(ModuleOp moduleOp) {
+  moduleOp->walk([&](Operation *op) {
+    op->removeAttr(mlir::triton::kLoopStageAttrName);
+    op->removeAttr(mlir::triton::kLoopClusterAttrName);
+    op->removeAttr(mlir::triton::kScheduledMaxStageAttrName);
+  });
+}
