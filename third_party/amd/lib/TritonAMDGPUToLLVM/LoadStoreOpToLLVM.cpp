@@ -1072,7 +1072,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
 
     VectorType vecTy1 = vec_ty(i32_ty, 8);
     Value group1Vec = b.undef(vecTy1);
-    for (int ii = 0; ii < 8; ++ii) {
+    for (unsigned ii = 0; ii < 8; ++ii) {
       Value vecIdx = createIndexAttrConstant(rewriter, loc,
                                              typeConverter->getIndexType(), ii);
       group1Vec = b.insert_element(vecTy1, group1Vec, group1[ii], vecIdx);
