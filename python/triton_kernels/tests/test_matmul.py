@@ -243,6 +243,7 @@ class Case:
             Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2, split_k=9),
             Case(16, 16, 1000, "batched", "float16", "float16", 5, 1, split_k=None),
             Case(16, 16, 1000, "batched", "float8_e5m2", "float8_e5m2", 5, 1, split_k=None),
+            Case(16, 16, 2048, "batched", "float8_e5m2", "float8_e5m2", 6, 1, split_k=5),
             # mx types:
             Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1),
             Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True),
