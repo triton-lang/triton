@@ -49,12 +49,9 @@ public:
         return failure();
     }
 
-    auto isF32 = [](Value operand) {
-      return cast<RankedTensorType>(operand.getType()).getElementType().isF32();
-    };
-    if (!isF32(dotOp.getA()) || !isF32(dotOp.getB())) {
-      return failure();
-    }
+    for (auto type : {dotOp.getA().getType(), dotOp.getB().getType()})
+      if (!cast<RankedTensorType>(type).getElementType().isF32())
+        return failure();
 
     Value zero = rewriter.create<SplatOp>(
         dotOp->getLoc(), dotOp.getC().getType(),
