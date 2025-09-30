@@ -276,10 +276,10 @@ bool canUseBufferOps(Value ptr,
       cast<RankedTensorType>(offset.getType()).getElementTypeBitWidth();
   LLVM_DEBUG(llvm::dbgs() << "offset bits:" << ofstBit << "\n");
 
-  // TODO: step 3 and 4 need to be transposed. When the base-ptr is func
-  // argument and has tt.pointer_range=32 attribute, it's safe to promote
-  // the mem-op into buffer-op even if offset is a 64-bit value. If this is
-  // the case, offset need to be cast down to 32-bit.
+  // TODO: step 3 and 4 can be reversed to further optimize for performance.
+  // When the base-ptr is func argument and has tt.pointer_range=32 attribute,
+  // it's safe to promote the mem-op into buffer-op even if offset is a 64-bit
+  // value. If this is the case, offset need to be cast down to 32-bit.
 
   // 3. Bail out if ofst cannot fit in 32-bit.
   if (ofstBit != 32)
@@ -420,9 +420,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
       : mlir::OpRewritePattern<triton::AtomicRMWOp>(context),
         assumptions(assumptions), axisAnalysisPass(axisAnalysisPass),
         solver(std::move(solver)), isaFamily(isaFamily),
-        analyzeSmallTensorOfst(analyzeSmallTensorOfst_) {
-    analyzeSmallTensorOfst = true;
-  }
+        analyzeSmallTensorOfst(analyzeSmallTensorOfst_) {}
 
   mlir::LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op,

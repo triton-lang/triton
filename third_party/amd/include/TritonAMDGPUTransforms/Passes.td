@@ -145,7 +145,7 @@ def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "ml
            "Allow buffer atomic operations when the hardware supports it.">,
     Option<"analyzeSmallTensorOfst", "analyze-small-tensor-ofst",
           "bool", /*default=*/"false",
-           "If base-pointer is a small-tensor's base, it normally does not need to analyze its offset's value range">,
+           "Whether to still analyze index range for tensors whose base has tt.pointer_range = 32 specialization. If false load/store from such tensors will go down buffer ops without analzying index range.">
   ];
 }
 
