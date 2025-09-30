@@ -35,10 +35,6 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis);
 
-Value getGroupMask(RewriterBase &rewriter, Location loc, ArrayRef<Value> wid,
-                   ArrayRef<unsigned> ctasPerCga, ArrayRef<unsigned> splits,
-                   ArrayRef<unsigned> order);
-
 std::pair<bool, bool>
 getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm, MemoryOp op);
 
