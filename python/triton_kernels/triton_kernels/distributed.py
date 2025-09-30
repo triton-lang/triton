@@ -5,21 +5,6 @@ import torch.distributed as dist
 import torch.distributed._symmetric_memory as symm_mem
 import triton
 import triton.language as tl
-from triton_kernels.routing import RoutingData, filter_expt_data
-
-
-def convert_rdata_to_ep(routing_data, expt_assignment):
-    rank = dist.get_rank()
-    expt_data = filter_expt_data(routing_data.expt_data, expt_assignment, rank)
-    routing_data = RoutingData(
-        gate_scal=routing_data.gate_scal,
-        expt_hist=expt_data.hist,
-        n_expts_tot=expt_assignment.n_expts_per_shard[rank],
-        n_expts_act=routing_data.n_expts_act,
-        expt_data=expt_data,
-    )
-    return routing_data
-
 
 
 # ------------------------------------------------------------

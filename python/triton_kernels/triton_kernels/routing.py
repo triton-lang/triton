@@ -138,7 +138,8 @@ class SortTokens(torch.autograd.Function):
         token_offs_raw, token_offs_pad = token_offs_combined[0], token_offs_combined[1:]
 
         # grid sizes
-        blocks1a = exact_div(block_pid_map.storage().size(), MEMSET_BLOCK_A) + token_offs_combined.shape[0]
+        block_pid_map_n_elts = block_pid_map.untyped_storage().size() // block_pid_map.dtype.itemsize
+        blocks1a = exact_div(block_pid_map_n_elts, MEMSET_BLOCK_A) + token_offs_combined.shape[0]
         blocks1b = cdiv(n_gates_pad * 2, MEMSET_BLOCK) + n_expts_tot + 1
         blocks2a = n_expts_tot * token_offs_pad.shape[0]
         blocks2b = cdiv(n_tokens_pad, HIST_BLOCK_M)
