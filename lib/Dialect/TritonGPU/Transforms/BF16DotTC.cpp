@@ -11,6 +11,27 @@ namespace gpu {
 
 namespace {
 
+template <typename T>
+auto convertValue(const Value &value, const FloatType &scalarToType, PatternRewriter &rewriter) -> mlir::Value {
+  auto fromType = cast<RankedTensorType>(value.getType());
+  auto toType = RankedTensorType::get(fromType.getShape(), scalarToType, fromType.getEncoding());
+  return rewriter.create<T>(value.getLoc(), toType, value).getResult();
+}
+
+auto SplitF32(Value input, unsigned N, PatternRewriter &rewriter) -> llvm::SmallVector<Value, 3> {
+  llvm::SmallVector<Value, 3> split_inputs;
+  for (unsigned i = 0; i < N; ++i) {
+    Value input_as_bf16 = convertValue<arith::TruncFOp>(input, rewriter.getBF16Type(), rewriter);
+    if (i != N - 1) {
+      Value input_as_f32 = convertValue<arith::ExtFOp>(input_as_bf16, rewriter.getF32Type(), rewriter);
+      input = rewriter.create<arith::SubFOp>(input.getLoc(), input,
+                                             input_as_f32);
+    }
+    split_inputs.push_back(input_as_bf16);
+  }
+  return split_inputs;
+}
+
 // Implement 3xBF16 https://arxiv.org/abs/1904.06376
 class BF16x3 : public OpRewritePattern<DotOp> {
 public:
@@ -35,21 +56,6 @@ public:
       return failure();
     }
 
-    // Aux functions
-    auto f32ToBF16 = [&](Value value) -> Value {
-      auto fp32Type = cast<RankedTensorType>(value.getType());
-      auto bf16Type =
-          RankedTensorType::get(fp32Type.getShape(), rewriter.getBF16Type(), fp32Type.getEncoding());
-      return rewriter.create<arith::TruncFOp>(dotOp.getLoc(), bf16Type, value)
-          .getResult();
-    };
-    auto bf16ToF32 = [&](Value value) -> Value {
-      auto bf16Type = cast<RankedTensorType>(value.getType());
-      auto fp32Type =
-          RankedTensorType::get(bf16Type.getShape(), rewriter.getF32Type(), bf16Type.getEncoding());
-      return rewriter.create<arith::ExtFOp>(dotOp.getLoc(), fp32Type, value)
-          .getResult();
-    };
     Value zero = rewriter.create<SplatOp>(
         dotOp->getLoc(), dotOp.getC().getType(),
         rewriter.create<arith::ConstantOp>(dotOp->getLoc(),
@@ -66,28 +72,13 @@ public:
                                               value);
     };
 
-    auto SplitF32 = [&](Value input, unsigned N) -> std::vector<Value> {
-      std::vector<Value> split_inputs;
-      split_inputs.reserve(N);
-      for (unsigned i = 0; i < N; ++i) {
-        Value input_as_bf16 = f32ToBF16(input);
-        if (i != N - 1) {
-          Value input_as_f32 = bf16ToF32(input_as_bf16);
-          input = rewriter.create<arith::SubFOp>(dotOp->getLoc(), input,
-                                                 input_as_f32);
-        }
-        split_inputs.push_back(input_as_bf16);
-      }
-      return split_inputs;
-    };
-
     const unsigned hi = 0;
     const unsigned mid = 1;
     const unsigned lo = 2;
 
     const unsigned N = 3;
-    auto lhs_parts = SplitF32(dotOp.getA(), N);
-    auto rhs_parts = SplitF32(dotOp.getB(), N);
+    auto lhs_parts = SplitF32(dotOp.getA(), N, rewriter);
+    auto rhs_parts = SplitF32(dotOp.getB(), N, rewriter);
 
     auto result = zero;
 
