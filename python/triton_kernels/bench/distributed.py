@@ -344,13 +344,13 @@ def _all_to_all_torch(input_list: list[torch.Tensor], dim: int) -> list[torch.Te
 
 
 @triton.jit
-def _symm_mem_send_kernel(
-    dest_offsets_tensor,
+def _symm_mem_all_to_all_kernel(
     inner_size,
+    column_prefix,
     send_counts,
-    input_list,
+    src_ptrs,
     dst_ptrs,
-    rank: tl.constexpr,
+    src_rank: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
     WORLD_SIZE: tl.constexpr
 ):
@@ -359,14 +359,15 @@ def _symm_mem_send_kernel(
     tile_base = token_id * inner_size
     element_offsets = (tile_base + offsets).to(tl.int64)
     total = 0
-    for input_idx in tl.static_range(send_counts):
+    for input_idx in tl.static_range(WORLD_SIZE):
         total += send_counts[input_idx]
         if token_id < total:
-            input = input_list[input_idx]
+            input = src_ptrs[input_idx]
             output = dst_ptrs[input_idx]
-            dst_offset = dest_offsets_tensor[tl.constexpr(input_idx * WORLD_SIZE + rank)]
+            dst_offset = column_prefix[tl.constexpr(src_rank * WORLD_SIZE + input_idx)]
             values = tl.load(input + element_offsets, mask=offsets < inner_size, other=0)
             tl.store(output + (dst_offset * inner_size + element_offsets), values, mask=offsets < inner_size)
+            return
 
 
 def _all_to_all_triton(input_list: list[torch.Tensor], dim: int) -> list[torch.Tensor]:
@@ -410,16 +411,16 @@ def _all_to_all_triton(input_list: list[torch.Tensor], dim: int) -> list[torch.T
     )
     symm_handle = symm_mem.rendezvous(buffer, group)
     dst_ptrs = [symm_handle.get_buffer(dst_rank, (local_total_rows, inner_size), input_list[0].dtype, 0,) for dst_rank in range(world_size)]
-    dest_offsets_tensor = column_prefix[rank]
+    column_prefix = column_prefix.flatten().tolist()
 
     BLOCK_SIZE = triton.next_power_of_2(inner_size if inner_size > 0 else 1)
-    _symm_mem_send_kernel[(sum(send_counts_list),)](
-        dest_offsets_tensor,
+    _symm_mem_all_to_all_kernel[(sum(send_counts_list),)](
         inner_size,
+        tuple(column_prefix),
         tuple(send_counts_list),
         tuple(input_list),
         tuple(dst_ptrs),
-        rank,
+        src_rank=rank,
         BLOCK_SIZE=BLOCK_SIZE,
         WORLD_SIZE=world_size,
     )
