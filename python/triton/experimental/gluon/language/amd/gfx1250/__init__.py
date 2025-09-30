@@ -53,9 +53,15 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
         assert isinstance(wmma_layout, AMDWMMALayout) and wmma_layout.instr_shape == (16, 16, 64), \
             "e2m1 format expects instr_shape to be (16, 16, 64)"
 
+    acc_layout = acc.type.layout
+    assert isinstance(acc_layout, AMDWMMALayout) and acc_layout.instr_shape == (16, 16, 128), \
+    "accumulator tensor's layout must be (16, 16, 128)"
+
     # TODO: Add more formats
     assert a_format.value in {"e2m1"}, f"Unsupported lhs_format: {a_format.value}"
     assert b_format.value in {"e2m1"}, f"Unsupported rhs_format: {b_format.value}"
+
+    assert a_scale is not None and b_scale is not None, "Scales must not be None"
 
     handle = _semantic.dot_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, fast_math=False, lhs_k_pack=True,
                                   rhs_k_pack=True, out_dtype=acc.dtype).handle

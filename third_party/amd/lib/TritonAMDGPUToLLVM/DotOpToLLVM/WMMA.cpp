@@ -162,21 +162,29 @@ Value generateScaledWMMAIntrinsic(ConversionPatternRewriter &rewriter,
   LLVM::FastmathFlagsAttr defaultFlags{};
   SmallVector<Value> operands;
 
+  // Reference: llvm/include/llvm/IR/IntrinsicsAMDGPU.td,
+  // int_amdgcn_wmma_scale_f32_16x16x128_f8f6f4
   Value fmtA = b.i32_val(getWmmaF8F6F4MatrixFormat(aElType));
   operands.push_back(fmtA);
   operands.push_back(valA);
   Value fmtB = b.i32_val(getWmmaF8F6F4MatrixFormat(bElType));
   operands.push_back(fmtB);
   operands.push_back(valB);
+  // C_mod is unused. Should be set to 0
   Value modC = b.i16_val(0);
   operands.push_back(modC);
   operands.push_back(valC);
+  // Set a_scale mantissa to zero as use E8M0 format (no mantissa bits)
   operands.push_back(b.i32_val(0));
+  // Set a_scale_fmt to 0 = E8M0
   operands.push_back(b.i32_val(0));
   operands.push_back(valScaleA);
+  // Set b_scale mantissa to zero as we use E8M0 format (no mantissa bits)
   operands.push_back(b.i32_val(0));
+  // Set b_scale fmt to 0 = E8M0
   operands.push_back(b.i32_val(0));
   operands.push_back(valScaleB);
+  // Set "Reuse matrix A" and "Reuse matrix B" to 0.
   operands.push_back(b.i1_val(0));
   operands.push_back(b.i1_val(0));
   auto wmmaIntrinsic = LLVM::createLLVMIntrinsicCallOp(
@@ -365,11 +373,6 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   int kBaseB = isFp4B ? kBase / 2 : kBase;
   int kDimB = isFp4B ? kDim / 2 : kDim;
 
-  bool isFp6A = (op.getAElemType() == triton::ScaleDotElemType::E2M3) ||
-                (op.getAElemType() == triton::ScaleDotElemType::E3M2);
-  bool isFp6B = (op.getBElemType() == triton::ScaleDotElemType::E2M3) ||
-                (op.getBElemType() == triton::ScaleDotElemType::E3M2);
-
   auto repA = wmmaLayout.getRepForOperand(aTensorTy.getShape(), kDimA, 0);
   auto repB = wmmaLayout.getRepForOperand(bTensorTy.getShape(), kDimB, 1);
 
@@ -452,9 +455,6 @@ LogicalResult convertScaledDot(triton::DotScaledOp op,
   Type structTy = LLVM::LLVMStructType::getLiteral(
       wmmaLayout.getContext(), SmallVector<Type>(fc.size(), dstElemTy));
   Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
-
-  // const size_t mmaCount = numRepB * numRepM * numRepN * numRepK;
-  // setNumGeneratedMMAs(op, mmaCount, mnkDim[0], mnkDim[1], mnkDim[2], elemTy);
 
   rewriter.replaceOp(op, res);
   return success();

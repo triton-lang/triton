@@ -1504,61 +1504,6 @@ LinearLayout chooseScaledWmmaScaleLayout(
   return newLL;
 }
 
-LinearLayout
-chooseScaledWmmaOperandLayout(AMDWmmaEncodingAttr wmmaEnc, int kWidth,
-                              int dotOperandIdx, ScaleDotElemType elemType,
-                              llvm::ArrayRef<int64_t> dotOperandShape) {
-  MLIRContext *ctx = wmmaEnc.getContext();
-
-  // For mxfp8, each lane contains 32 elements, consisting of two blocks
-  // of 16 consecutive elements. There's a gap between these two blocks,
-  // which is not supported by normal dot layout.
-  using basisT = std::vector<std::vector<int32_t>>;
-  unsigned rank = dotOperandShape.size();
-  auto standardOutDims = standardOutDimNames(ctx, rank);
-  auto warpOrder = getDefaultMmaOrder(wmmaEnc);
-
-  StringAttr kRegister = StringAttr::get(ctx, "register");
-  StringAttr kLane = StringAttr::get(ctx, "lane");
-  StringAttr kWarp = StringAttr::get(ctx, "warp");
-
-  basisT regBase = {{0, 1}, {0, 2}, {0, 4}, {0, 16}, {0, 32}, {0, 64}};
-  basisT laneBase = {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 8}};
-  int64_t kSize = dotOperandIdx == 0 ? dotOperandShape[1] : dotOperandShape[0];
-  int64_t tileSize = 128;
-
-  if (elemType == ScaleDotElemType::E2M1) {
-    regBase = basisT({{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 32}});
-    laneBase = basisT({{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 16}});
-    tileSize = tileSize / 2;
-  } else if (elemType == ScaleDotElemType::E2M3 ||
-             elemType == ScaleDotElemType::E3M2) {
-    regBase = basisT({{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 64}});
-    laneBase = basisT({{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 32}});
-  }
-
-  for (int32_t elem = tileSize; elem < kSize; elem *= 2) {
-    regBase.emplace_back(std::vector<int32_t>{0, elem});
-  }
-
-  // Order of dimensionality changes on A/B operand, so here we need to reverse
-  // if it's operand B.
-  std::vector<int> repOrder = {0, 1};
-  if (dotOperandIdx == 1) {
-    std::reverse(repOrder.begin(), repOrder.end());
-  }
-
-  auto regLanes = LinearLayout(
-      {{kRegister, regBase}, {kLane, laneBase}},
-      {standardOutDims[repOrder[0]], standardOutDims[repOrder[1]]});
-
-  auto warps = identityStandardND(kWarp, wmmaEnc.getWarpsPerCTA(), warpOrder);
-
-  return combineCtaCgaWithShape(regLanes.transposeOuts(standardOutDims) *
-                                    warps.transposeOuts(standardOutDims),
-                                wmmaEnc.getCTALayout(), dotOperandShape);
-}
-
 // Warp-level block scaling (sm_120, m16n8k32)
 // Reference: NVIDIA PTX ISA "Warp-level block scaling"
 // https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-block-scaling

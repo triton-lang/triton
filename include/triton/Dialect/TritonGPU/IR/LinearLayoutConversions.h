@@ -18,7 +18,6 @@ class NVMMASharedEncodingAttr;
 class TensorOrMemDesc;
 class MemDescType;
 class CTALayoutAttr;
-class AMDWmmaEncodingAttr;
 
 // - BlockedEncodingAttrs have the following input dimensions.
 //

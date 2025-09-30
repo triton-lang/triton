@@ -49,12 +49,13 @@ int getMfmaVersion(ISAFamily isaFamily) {
 }
 
 int getWmmaVersion(StringRef archGen) {
-  if (archGen.contains("gfx11"))
+  if (archGen.starts_with("gfx11"))
     return 1;
-  if (archGen.contains("gfx1250"))
-    return 3;
-  if (archGen.contains("gfx12"))
+  if (archGen.starts_with("gfx12") && !archGen.ends_with("50"))
     return 2;
+  if (archGen == "gfx1250")
+    return 3;
+
   return 0;
 }
 
@@ -1183,17 +1184,16 @@ class ScaledBlockedToScaledWMMAF8F6F4 final
 
 public:
   ScaledBlockedToScaledWMMAF8F6F4(MLIRContext *context, int wmmaVersion,
-                                  int nonKDim, PatternBenefit benefit = 1)
+                                  PatternBenefit benefit = 1)
       : OpRewritePattern(context, benefit), wmmaVersion(wmmaVersion) {}
 
   LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
                                 PatternRewriter &rewriter) const override {
-    int nonKDim = 16;
     using TensorValue = TypedValue<RankedTensorType>;
 
     if (wmmaVersion != 3) {
       return rewriter.notifyMatchFailure(
-          dotOp, "F8F6F4 scaled dot is only natively supported on gfx1251");
+          dotOp, "F8F6F4 scaled dot is only natively supported on gfx1250");
     }
 
     RankedTensorType oldRetType = dotOp.getType();
@@ -1228,18 +1228,18 @@ public:
     ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
     unsigned numWarps = ttg::lookupNumWarps(dotOp);
 
-    unsigned mDim = 16;
-    unsigned nDim = 16;
-    unsigned kDim = 128;
+    constexpr unsigned mDim = 16;
+    constexpr unsigned nDim = 16;
+    constexpr unsigned kDim = 128;
 
-    auto warpsPerTile = warpsPerTileWMMA(dotOp, oldShape, numWarps, {16, 16});
+    auto warpsPerTile =
+        warpsPerTileWMMA(dotOp, oldShape, numWarps, {mDim, nDim});
 
     auto wmmaEnc = ttg::AMDWmmaEncodingAttr::get(
-        ctx, /*versionMajor=*/wmmaVersion, true, warpsPerTile, ctaLayout,
-        {mDim, nDim, kDim});
-    auto wmmaPackedEnc = ttg::AMDWmmaEncodingAttr::get(
-        ctx, /*versionMajor=*/wmmaVersion, true, warpsPerTile, ctaLayout,
-        {mDim, nDim, kDim / 2});
+        ctx, wmmaVersion, true, warpsPerTile, ctaLayout, {mDim, nDim, kDim});
+    auto wmmaPackedEnc =
+        ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, true, warpsPerTile,
+                                      ctaLayout, {mDim, nDim, kDim / 2});
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), wmmaEnc);
@@ -1255,10 +1255,6 @@ public:
     auto order = ttg::getMatrixOrder(rank, /*rowMajor=*/true);
     auto standardOutDims = standardOutDimNames(ctx, rank);
 
-    // For the wmma_scale_f32_*_f8f6f4 instructions, each thread consumes 64
-    // elements. But since two fp4 elements are packed into one int8, the
-    // kWidth is 32 for fp4.
-    const unsigned kWidth = 64;
     using basisT = std::vector<std::vector<int32_t>>;
 
     auto aShape = a.getType().getShape();
@@ -1731,7 +1727,7 @@ struct TritonAMDGPUAccelerateMatmulPass
     switch (auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName)) {
     case ISAFamily::GFX1250:
       mfmaPatterns.add<ScaledBlockedToScaledWMMAF8F6F4>(
-          context, getWmmaVersion(archGenerationName), 16, /*benefit=*/3);
+          context, getWmmaVersion(archGenerationName), /*benefit=*/3);
       break;
     case ISAFamily::CDNA4:
       mfmaPatterns.add<::ScaledBlockedToScaledMFMAF8F6F4>(

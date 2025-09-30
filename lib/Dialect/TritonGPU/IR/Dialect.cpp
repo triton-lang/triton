@@ -2299,8 +2299,8 @@ SmallVector<int64_t>
 AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape, int kDim,
                                       int opIdx) const {
   auto mnkDim = getInstrShape();
-  auto operandTileShape = opIdx == 0 ? SmallVector<int64_t>{mnkDim[0], kDim}
-                                     : SmallVector<int64_t>{kDim, mnkDim[1]};
+  SmallVector<int64_t, 2> operandTileShape{opIdx == 0 ? mnkDim[0] : kDim,
+                                           opIdx == 0 ? kDim : mnkDim[1]};
 
   assert(operandTileShape.size() == 2);
   auto warpsPerCTA = getWarpsPerCTA();
