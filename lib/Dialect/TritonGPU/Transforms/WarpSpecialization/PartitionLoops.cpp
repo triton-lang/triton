@@ -202,7 +202,11 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
   for (auto [i, newForOp] : enumerate(newForOps)) {
     builders[i].setInsertionPointAfter(newForOp);
     newForOp.walk([&](Operation *op) { op->removeAttr(kPartitionAttrName); });
+    newForOp->removeAttr("tt.warp_specialize");
+    newForOp->removeAttr(kPartitionAttrName);
     newForOp->removeAttr(kPartitionStagesAttrName);
+    newForOp->removeAttr(kPartitionOutputsAttrName);
+    newForOp->removeAttr(kWarpSpecializeTagAttrName);
   }
 }
 
@@ -247,6 +251,8 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
 
   for (auto [idx, newIfOp] : llvm::zip(partitionIndices, newIfOps)) {
     builders[idx].setInsertionPointAfter(newIfOp);
+    newIfOp->removeAttr(kPartitionAttrName);
+    newIfOp->removeAttr(kPartitionOutputsAttrName);
   }
 }
 
@@ -299,6 +305,7 @@ void cloneOp(Operation *op, SmallVector<WarpGroupBuilder> &builders,
     auto &builder = builders[idx];
     auto newOp = builder.clone(*op, builder.mapping);
     mapRange(op->getResults(), newOp->getResults(), builder.mapping);
+    newOp->removeAttr(kPartitionAttrName);
   }
 }
 
