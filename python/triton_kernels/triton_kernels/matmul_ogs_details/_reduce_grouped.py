@@ -9,8 +9,7 @@ def _reduce_grouped(X, stride_xb: tl.uint64, stride_xm: tl.uint64, stride_xn,  #
                     XScale,  # input scalar flex scale
                     Out, stride_om: tl.uint64, stride_on,  # output tensor
                     OutExpectedScale, OutActualScale, OutChecksumScale,  # output scalar flex scales
-                    PER_BATCH_OUT_SCALE: tl.constexpr,
-                    InIndx, B, M, N,  #
+                    PER_BATCH_OUT_SCALE: tl.constexpr, InIndx, B, M, N,  #
                     XMxScale, stride_mxb: tl.uint64,
                     stride_mxs: tl.uint64,  # optional per-32-col output MXFP scales (uint8)
                     OutMxScale, stride_omxs: tl.uint64,  # optional per-32-col output MXFP scales (uint8)
