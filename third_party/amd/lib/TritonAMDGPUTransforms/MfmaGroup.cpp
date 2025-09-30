@@ -299,4 +299,28 @@ MfmaIntrinsic::selectFor(Location loc, int version, unsigned mDim,
   auto [symbol, k, kBase] = values.back();
   return MfmaIntrinsic(symbol, mDim, nDim, k, kBase, aElemType, bElemType);
 }
+
+FailureOr<MfmaIntrinsic> MfmaIntrinsic::get(Location loc, int version,
+                                            unsigned mDim, unsigned nDim,
+                                            unsigned kDim, Type aElemType,
+                                            Type bElemType, bool withScale,
+                                            bool useTF32) {
+  const MfmaMap &mfmaMap = MfmaDatabase::get(aElemType.getContext());
+  MfmaKey key = composeMfmaKeyFor(loc, version, mDim, nDim, aElemType,
+                                  bElemType, withScale, useTF32);
+
+  auto it = mfmaMap.find(key);
+  if (it == mfmaMap.end())
+    return failure();
+
+  const SmallVector<MfmaMapValue, 2> &values = it->second;
+  auto match = llvm::find_if(values, [&](const MfmaMapValue &val) {
+    return std::get<1>(val) == kDim;
+  });
+  if (match == values.end())
+    return failure();
+
+  auto [symbol, k, kBase] = *match;
+  return MfmaIntrinsic(symbol, mDim, nDim, k, kBase, aElemType, bElemType);
+}
 } // namespace mlir
