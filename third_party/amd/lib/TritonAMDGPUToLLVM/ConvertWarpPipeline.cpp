@@ -105,10 +105,11 @@ static BlockInfo buildBlockInfoFromBlock(Block *block,
 class ConvertWarpPipeline
     : public mlir::triton::impl::ConvertWarpPipelineBase<ConvertWarpPipeline> {
 
-void emitClusterBarrier(OpBuilder &b, Location loc){
+Operation* emitClusterBarrier(OpBuilder &b, Location loc){
   b.create<ROCDL::SchedBarrier>(loc, 0);
-  b.create<ROCDL::SBarrierOp>(loc);
+  Operation *bar = b.create<ROCDL::SBarrierOp>(loc);
   b.create<ROCDL::SchedBarrier>(loc, 0);
+  return bar;
 }
 
     
@@ -147,25 +148,34 @@ void emitPipelinedFor(OpBuilder &builder, Location loc, scf::ForOp forOp, Alloca
   bool barrierAtTop = false;
   
   SmallVector<Block *> clusterBlocks;
+  SmallVector<Operation *> barrierOps;
+  SmallVector<bool> bars;
 
-  //insert barrier whe.n needed.
+  //insert barrier when needed.
   bool needBarrier = false;
+  
   for (auto &op : *forOp.getBody()) {
     if(auto exeOp = dyn_cast<scf::ExecuteRegionOp>(op)) {
       clusterBlocks.push_back(&exeOp->getRegion(0).front());
+      // no fence added.
+      if (clusterBlocks.size() > bars.size())
+        bars.push_back(false);
       if (needBarrier){
         //insert a barrier
         auto prevOp = exeOp->getPrevNode();
         builder.setInsertionPointAfter(prevOp);
-        emitClusterBarrier(builder, loc);
+        auto bar = emitClusterBarrier(builder, loc);
+        barrierOps.push_back(bar);
       }
       else{
         needBarrier = true;
       }
     }
     // skip inserting a barrier if there's one already
-    else if (isa<ROCDL::BarrierOp, ROCDL::SBarrierOp, triton::gpu::AsyncWaitOp>(op))
+    else if (isa<ROCDL::BarrierOp, ROCDL::SBarrierOp, triton::gpu::AsyncWaitOp>(op)){
       needBarrier = false;
+      barrierOps.push_back(&op);
+    }
     else if(auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
       if (needBarrier && !barrierAtTop){
         //insert a barrier
@@ -173,6 +183,9 @@ void emitPipelinedFor(OpBuilder &builder, Location loc, scf::ForOp forOp, Alloca
         builder.setInsertionPointAfter(prevOp);
         emitClusterBarrier(builder, loc);
       }
+    }
+    else if (0) {// check if local_barrier is already set
+      bars.push_back(true);
     }
 
   }
@@ -187,9 +200,7 @@ void emitPipelinedFor(OpBuilder &builder, Location loc, scf::ForOp forOp, Alloca
   int numClusters = clusterInfo.size();
   LDBG("total clusters : " << numClusters);
 
-  bool bars[numClusters];
-  for (int i=0; i<numClusters; i++)
-    bars[i] = false;
+
 
   for (int j=0; j<numClusters; j++){
     //clusterInfo[i].dump();
@@ -220,14 +231,21 @@ void emitPipelinedFor(OpBuilder &builder, Location loc, scf::ForOp forOp, Alloca
         bars[next] = true;
         
         LDBG("cluster " << i << " need fence to "<< next);
-        clusterInfo[i].dump();
-        clusterInfo[next].dump();
+        //clusterInfo[i].dump();
+        //clusterInfo[next].dump();
       }
       for (int i=0; i<numClusters; i++)
         LDBG("bars [" << i << "] = "<< bars[i]);
     }
   }
-
+    
+  constexpr int32_t ldsOnlyBits = ~(0x1f << 8);
+  for(int i=0; i<numClusters; i++){
+    if (bars[i]) {
+      builder.setInsertionPoint(barrierOps[i]);
+      builder.create<ROCDL::SWaitcntOp>(loc, ldsOnlyBits);
+    }
+  }
 }
 
 public:

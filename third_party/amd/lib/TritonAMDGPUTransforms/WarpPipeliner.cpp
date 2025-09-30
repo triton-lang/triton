@@ -179,9 +179,10 @@ void Pipeliner::appendSlicedLoadAB(int slice) {
 SmallVector<Operation *> Pipeliner::genClusterBarrier(OpBuilder &builder,
                                                        Location loc) {
   //  MembarAnalysis can recognize gpu::BarrierOp and skip inserting additional
-  auto barrierOp = builder.create<gpu::BarrierOp>(loc);
+  //auto barrierOp = builder.create<gpu::BarrierOp>(loc);
   auto schedBarrierOp = builder.create<ROCDL::SchedBarrier>(loc, 0);
-  return {barrierOp, schedBarrierOp};
+  //return {barrierOp, schedBarrierOp};
+  return {schedBarrierOp};
 }
 void Pipeliner::appendClusterBarrier(OpBuilder &builder, Location loc) {
   for (auto &&op : genClusterBarrier(builder, loc))
@@ -1039,8 +1040,9 @@ void Pipeliner::getDotPingponged() {
   kWidth = srcEncoding.getKWidth();
   auto mfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(srcEncoding.getParent());
   SmallVector<int64_t> intShape;
-  intShape.push_back(mfmaEncoding.getMDim());
-  intShape.push_back(mfmaEncoding.getNDim());
+  auto mnkDim = mfmaEncoding.getInstrShape();
+  intShape.push_back(mnkDim[0]);
+  intShape.push_back(mnkDim[1]);
 
 /*
 
@@ -1116,8 +1118,10 @@ if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed()) {
         containedOps.push_back(op);
         return;
       }
-      if(!containedOps.empty())
+      if(!containedOps.empty()) {
         createStage(builder, loc, containedOps);
+        op->erase();
+      }
       containedOps.clear();
       return;
     }
