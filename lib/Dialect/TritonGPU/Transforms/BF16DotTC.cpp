@@ -50,12 +50,10 @@ public:
       return rewriter.create<arith::ExtFOp>(dotOp.getLoc(), fp32Type, value)
           .getResult();
     };
-    auto zeroLike = [&](Value c) -> Value {
-      return rewriter.create<SplatOp>(
-          dotOp->getLoc(), c.getType(),
-          rewriter.create<arith::ConstantOp>(dotOp->getLoc(),
-                                             rewriter.getF32FloatAttr(0)));
-    };
+    Value zero = rewriter.create<SplatOp>(
+        dotOp->getLoc(), dotOp.getC().getType(),
+        rewriter.create<arith::ConstantOp>(dotOp->getLoc(),
+                                           rewriter.getF32FloatAttr(0)));
     auto dot = [&](Value a, Value b, Value c) -> Value {
       return rewriter.create<DotOp>(dotOp->getLoc(), c.getType(), a, b, c,
                                     InputPrecision::BF16,
@@ -64,7 +62,6 @@ public:
     auto replaceNansWithZeros = [&](Value value) -> Value {
       auto nans = rewriter.create<arith::CmpFOp>(
           dotOp->getLoc(), arith::CmpFPredicate::UNO, value, value);
-      auto zero = zeroLike(value);
       return rewriter.create<arith::SelectOp>(dotOp->getLoc(), nans, zero,
                                               value);
     };
@@ -92,7 +89,7 @@ public:
     auto lhs_parts = SplitF32(dotOp.getA(), N);
     auto rhs_parts = SplitF32(dotOp.getB(), N);
 
-    auto result = zeroLike(dotOp.getC());
+    auto result = zero;
 
     if (dotOp.getInputPrecision() == InputPrecision::BF16x9) {
       result = dot(lhs_parts[lo], rhs_parts[lo], result);
