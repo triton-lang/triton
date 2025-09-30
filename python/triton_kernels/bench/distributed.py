@@ -746,11 +746,12 @@ def _find_free_port() -> int:
 
 
 def _all_to_all_triton_worker(rank: int, world_size: int, hidden_size: int, n_tokens: int) -> None:
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    dev = torch.device(f"cuda:{rank}")
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, device_id=dev)
     torch.cuda.set_device(rank)
 
     try:
-        data = torch.randn((n_tokens, hidden_size), device=torch.device(f"cuda:{rank}"), dtype=torch.float16)
+        data = torch.randn((n_tokens, hidden_size), device=dev, dtype=torch.float16)
         input_list = list(data.chunk(world_size, dim=0))
         input_split_sizes = [tensor.size(0) for tensor in input_list]
         output_ref = all_to_all(input_list, dim=0)
@@ -778,7 +779,7 @@ def test_all_to_all_triton(monkeypatch, world_size, hidden_size, n_tokens):
     for rank in range(world_size):
         mp.spawn(
             _all_to_all_triton_worker,
-            args=(rank, world_size, hidden_size, n_tokens),
+            args=(world_size, hidden_size, n_tokens),
             nprocs=world_size,
             join=True,
         )
