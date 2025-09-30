@@ -217,10 +217,8 @@ def compute_expt_data(expt_hist, n_expts_tot, n_gates):
     MEMSET_BLOCK = 512
     dtype = torch.int32
     device = expt_hist.device
-    token_offs_combined = empty_aligned((block_m_num + 1, n_expts_tot + 1), dtype=dtype, device=device,
-                                        align=MEMSET_BLOCK)
-    block_pid_map = empty_aligned((block_m_num, max_n_tiles(n_expts_tot, n_gates)), dtype=dtype, device=device,
-                                  align=MEMSET_BLOCK)
+    token_offs_combined = empty_aligned((block_m_num + 1, n_expts_tot + 1), dtype, device, MEMSET_BLOCK)
+    block_pid_map = empty_aligned((block_m_num, max_n_tiles(n_expts_tot, n_gates)), dtype, device, MEMSET_BLOCK)
     token_offs_raw, token_offs_pad = token_offs_combined[0], token_offs_combined[1:]
     n_memset_blocks = exact_div(block_pid_map.storage().size(), MEMSET_BLOCK)
 
