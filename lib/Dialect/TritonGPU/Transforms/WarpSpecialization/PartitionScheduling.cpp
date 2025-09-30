@@ -2171,10 +2171,22 @@ private:
                 vis_info);
 
     // assign unique ids for partitions
+    // starting with store partitions, followed by everything else
+    // FIXME: this is a hack
     {
       size_t idx = 0;
       for (auto &partition : graph->getPartitions()) {
         if (partition->empty())
+          continue;
+        if (!(partition->getFlags() & Flags::STORE))
+          continue;
+        partition->id = idx;
+        idx++;
+      }
+      for (auto &partition : graph->getPartitions()) {
+        if (partition->empty())
+          continue;
+        if (partition->getFlags() & Flags::STORE)
           continue;
         partition->id = idx;
         idx++;
