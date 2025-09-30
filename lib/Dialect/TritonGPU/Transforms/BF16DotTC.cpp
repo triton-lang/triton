@@ -112,8 +112,10 @@ public:
     }
 
     // BF16x3, BF16x6, BF16x9 all need this
-    result = dot(lhs_parts[med], rhs_parts[hi], result);
-    result = dot(lhs_parts[hi], rhs_parts[med], result);
+    if (dotOp.getInputPrecision() != InputPrecision::BF16) {
+      result = dot(lhs_parts[med], rhs_parts[hi], result);
+      result = dot(lhs_parts[hi], rhs_parts[med], result);
+    }
 
     result = replaceNansWithZeros(result);
     result = dot(lhs_parts[hi], rhs_parts[hi], result);
