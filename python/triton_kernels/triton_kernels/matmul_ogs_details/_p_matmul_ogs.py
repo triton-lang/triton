@@ -173,7 +173,7 @@ def _p_matmul_ogs(
     yN = N // ACTIVATION_REDUCTION_N
 
     # set masked out rows to 0
-    if HAS_SCATTER and N_EXPTS_ACT == 1:
+    if HAS_SCATTER:
         # Iterate with reversed pids so that later pids will get more tiles if the number of
         # tiles isn't evenly divisible by the number of SMs.
         # The main loop after this iterates in the forward direction such that earlier

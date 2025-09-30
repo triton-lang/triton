@@ -214,10 +214,10 @@ class InnerRoutingData:
             return (None, None, None, None, False, False, False, None)
 
         return (
-            expt_data.batch_sizes,
-            expt_data.batch_offs,
-            expt_data.block_offs(block),
-            expt_data.block_schedule(block),
+            expt_data.hist,
+            expt_data.token_offs_raw,
+            expt_data.token_offs_pad(block),
+            expt_data.block_pid_map(block),
         ) + args
 
 
