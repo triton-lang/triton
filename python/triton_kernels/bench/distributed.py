@@ -759,7 +759,7 @@ def test_all_to_all_triton(monkeypatch, world_size, hidden_size, n_tokens):
     monkeypatch.setenv("MASTER_ADDR", "127.0.0.1")
     monkeypatch.setenv("MASTER_PORT", "12355")
 
-    def _worker(rank: int) -> None:
+    def _worker(rank: int, world_size: int, hidden_size: int, n_tokens: int) -> None:
         dist.init_process_group("nccl", rank=rank, world_size=world_size)
         torch.cuda.set_device(rank)
 
@@ -777,7 +777,7 @@ def test_all_to_all_triton(monkeypatch, world_size, hidden_size, n_tokens):
     for rank in range(world_size):
         mp.spawn(
             _worker,
-            args=(rank,),
+            args=(rank, world_size, hidden_size, n_tokens),
             nprocs=world_size,
             join=True,
         )
