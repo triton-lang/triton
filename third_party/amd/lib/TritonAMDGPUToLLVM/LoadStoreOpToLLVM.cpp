@@ -1103,7 +1103,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     SmallVector<int64_t> blockShape =
         llvm::to_vector(tensorDescTy.getBlockType().getShape());
     SmallVector<int64_t> blockShapePerCTA = blockShape;
-    // Take clusters into account (if they are enabled)
+
     int numCTAs = TritonGPUDialect::getNumCTAs(mod);
     Value multicastMask = b.i32_val(0);
     if (numCTAs > 1) {
@@ -1114,7 +1114,6 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         typeConverter->convertType(op.getResult().getType().getElementType());
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), llvmElemTy, rewriter);
-    auto voidTy = void_ty(op->getContext());
     Value ptrNewOffset = b.add(b.mul(tensorStride[1], offset[1]),
                                b.mul(tensorStride[0], offset[0]));
 
@@ -1147,14 +1146,12 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
 
     // Shared Ptr
     Value ldsOffset = b.mul(newRow, b.i32_val(blockShapePerCTA[1]));
-    unsigned padAmount = 0;
-    unsigned padInterval = 0;
     Value padding =
         emitPadding(loc, rewriter, smemEnc, llvmElemTy.getIntOrFloatBitWidth(),
                     ldsOffset, false);
     ldsOffset = b.add(ldsOffset, padding);
-    padAmount = smemEnc.getPaddings()[0];
-    padInterval = smemEnc.getIntervals()[0];
+    unsigned padAmount = smemEnc.getPaddings()[0];
+    unsigned padInterval = smemEnc.getIntervals()[0];
     Type elemPtrTy3 = ptr_ty(rewriter.getContext(), 3);
     Value newDestPtr = b.gep(elemPtrTy3, llvmElemTy, destBasePtr, ldsOffset);
 
