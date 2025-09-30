@@ -57,37 +57,49 @@ struct BF16xN : public OpRewritePattern<DotOp> {
 
   LogicalResult matchAndRewrite(DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
+    // BF16 indices and count
     const unsigned hi = 0;
     const unsigned mid = 1;
     const unsigned lo = 2;
     const unsigned N = getBF16Count(dotOp.getInputPrecision());
 
+    // Checks for FP32 inputs and BF16 InputPrecision
     if (N == 0)
       return failure();
     for (auto type : {dotOp.getA().getType(), dotOp.getB().getType()})
       if (!cast<RankedTensorType>(type).getElementType().isF32())
         return failure();
 
-    Value zero = rewriter.create<SplatOp>(
-        dotOp->getLoc(), dotOp.getC().getType(),
-        rewriter.create<arith::ConstantOp>(dotOp->getLoc(),
-                                           rewriter.getF32FloatAttr(0)));
+    // Helper Lambdas
     auto dot = [&](Value a, Value b, Value c) -> Value {
       return rewriter.create<DotOp>(dotOp->getLoc(), c.getType(), a, b, c,
                                     InputPrecision::BF16,
                                     dotOp.getMaxNumImpreciseAcc());
     };
+    auto zeroLike = [&]() -> Value {
+      return rewriter.create<SplatOp>(
+          dotOp->getLoc(), dotOp.getC().getType(),
+          rewriter.create<arith::ConstantOp>(dotOp->getLoc(),
+                                             rewriter.getF32FloatAttr(0)));
+    };
+    auto replaceNansWithZeros = [&](Value value) -> Value {
+      auto isNaN = rewriter.create<arith::CmpFOp>(
+          dotOp->getLoc(), arith::CmpFPredicate::UNO, value, value);
+      return rewriter.create<arith::SelectOp>(dotOp->getLoc(), isNaN, zeroLike(),
+                                              value);
+    };
 
+    // Starting Values: a(0), a(1), a(2), b(0), b(1), b(2) and zero accumulator start value
     auto lhs_parts = SplitF32(dotOp.getA(), N, rewriter);
     auto rhs_parts = SplitF32(dotOp.getB(), N, rewriter);
-
-    auto result = zero;
+    auto result = zeroLike();
 
     if (dotOp.getInputPrecision() == InputPrecision::BF16x9) {
       result = dot(lhs_parts[lo], rhs_parts[lo], result);
       result = dot(lhs_parts[mid], rhs_parts[lo], result);
       result = dot(lhs_parts[lo], rhs_parts[mid], result);
 
+      // Identical to BF16x6 handling code:
       result = dot(lhs_parts[mid], rhs_parts[mid], result);
 
       result = dot(lhs_parts[lo], rhs_parts[hi], result);
@@ -105,13 +117,6 @@ struct BF16xN : public OpRewritePattern<DotOp> {
       result = dot(lhs_parts[mid], rhs_parts[hi], result);
       result = dot(lhs_parts[hi], rhs_parts[mid], result);
     }
-
-    auto replaceNansWithZeros = [&](Value value) -> Value {
-      auto nans = rewriter.create<arith::CmpFOp>(
-          dotOp->getLoc(), arith::CmpFPredicate::UNO, value, value);
-      return rewriter.create<arith::SelectOp>(dotOp->getLoc(), nans, zero,
-                                              value);
-    };
 
     result = replaceNansWithZeros(result);
     result = dot(lhs_parts[hi], rhs_parts[hi], result);
