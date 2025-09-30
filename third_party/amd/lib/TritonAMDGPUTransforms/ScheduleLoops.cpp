@@ -2,6 +2,7 @@
 #include "amd/lib/TritonAMDGPUToLLVM/AsyncUtility.h"
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
+#include "third_party/amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/OpInterfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -24,7 +25,7 @@
 // expander to generate the prologue and new loop and epilogue.
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "tritonamdgpu-stream-pipeline"
+#define DEBUG_TYPE "tritonamdgpu-schedule-loops"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -33,30 +34,10 @@ namespace ttg = mlir::triton::gpu;
 
 namespace mlir {
 
-#define GEN_PASS_DEF_TRITONAMDGPUSTREAMPIPELINE
+#define GEN_PASS_DEF_TRITONAMDGPUSCHEDULELOOPS
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
 namespace {
-
-Operation *streamPredication(RewriterBase &rewriter, Operation *op,
-                             Value pred) {
-  // The epilogue peeling generates a select for the stage output. This causes
-  // too much register pressure with the loop result and the epilogue-dot in
-  // regs for the select. Conditionally executing the dot will allow the backend
-  // to optimize the select away as redundant.
-  if (auto dotOp = dyn_cast<tt::DotOpInterface>(op)) {
-    auto loc = dotOp->getLoc();
-    auto ifOp = rewriter.create<scf::IfOp>(loc, dotOp->getResult(0).getType(),
-                                           pred, /*withElseRegion=*/true);
-    auto thenB = ifOp.getThenBodyBuilder();
-    auto yield = thenB.create<scf::YieldOp>(loc, dotOp->getResult(0));
-    dotOp->moveBefore(yield);
-    ifOp.getElseBodyBuilder().create<scf::YieldOp>(loc, dotOp->getOperand(2));
-    return ifOp;
-  }
-  return tt::wrapInMaskOp(rewriter, op, pred);
-}
-
 //===----------------------------------------------------------------------===//
 // Software pipelining generally works by anchoring on global load ops in the
 // main loop and rotating the loop to schedule global load ops for future loop
@@ -98,15 +79,6 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
 //       bounds may be shorter than num_stages. In this case, the epilogue
 //       iterations must align with the prologue.
 //
-
-struct LoadInfo {
-  // Shared layout is used for loads feeding into dot ops.
-  ttg::SwizzledSharedEncodingAttr sharedEncoding = nullptr;
-  // The distance of this load's stage to its use' stage.
-  int distToUse = 0;
-  Operation *use = nullptr;
-};
-using LoadToInfoMap = llvm::MapVector<Operation *, LoadInfo>;
 
 struct StreamCopyChainOps {
   tt::LoadOp loadOp;
@@ -624,25 +596,7 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
 }
 
 namespace SingleDotSchedule {
-// Define categories of scheduling details per Operation types.
-// The SingleDotSchedule schedules 5 types of operations:
-// 1. GLOBAL_LOAD: tt.load / ttg.async_copy_global_to_local
-// 2. LOCAL_STORE: ttg.local_store
-// 3. LOCAL_LOAD:  ttg.local_load
-// 4. COMPUTE:     ops that use the loaded data
-// 5. ASYNC_WAIT:  ttg.async_wait
-// Note that ttg ops mentioned in the above list are created during scheduling.
-enum SchedType {
-  SCHED_GLOBAL_LOAD,
-  SCHED_LOCAL_STORE,
-  SCHED_LOCAL_LOAD,
-  SCHED_COMPUTE,
-  SCHED_ASYNC_WAIT,
-  SCHED_SIZE
-};
-
-using Clusters = std::array<tt::CoarseSchedule::Cluster, SCHED_SIZE>;
-using Stages = std::array<int, SCHED_SIZE>;
+using namespace mlir::SingleDotSchedule;
 
 // Init Schedule Config based on settings and loop characteristics.
 // Create clusters in order of ops in loop. This can interleave ops
@@ -885,9 +839,6 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
   triton::gpu::scheduleRemainingToLastStage(forOp, schedule, computeCluster);
   dumpSchedule("Final coarse schedule:");
 
-  std::vector<std::pair<Operation *, unsigned>> coarseSchedule =
-      schedule.createFinalSchedule(forOp);
-
   return schedule;
 }
 } // namespace SingleDotSchedule
@@ -903,47 +854,7 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 // double buffered and placed in between the dot/compute clusters. This
 // pipeliner is meant to be used in combination with pingpong
 namespace ChainedDotSchedule {
-
-// Defines the order of scheduling clusters. The suffix numbers for memory
-// operations define which dot the operations belongs to. So *_LOAD_1 loads a
-// tensor consumed by the first dot. If a memory operation is used by both dots
-// it has to be be assigned to the *_1 clusters to ensure a valid schedule.
-enum Clusters {
-  // ComputeCluster1
-  CLUSTER_DOT_1,
-  CLUSTER_AFTER_DOT_1,
-  // MemoryCluster1
-  CLUSTER_ASYNC_WAIT_2,
-  CLUSTER_LOCAL_WRITE_1,
-  CLUSTER_LOCAL_LOAD_2,
-  CLUSTER_GLOBAL_LOAD_1,
-  // ComputeCluster2
-  CLUSTER_DOT_2,
-  CLUSTER_AFTER_DOT_2,
-  // MemoryCluster2
-  CLUSTER_ASYNC_WAIT_1,
-  CLUSTER_LOCAL_WRITE_2,
-  CLUSTER_LOCAL_LOAD_1,
-  CLUSTER_GLOBAL_LOAD_2,
-
-  CLUSTER_COUNT
-};
-
-using ChainedDotClusters =
-    std::array<tt::CoarseSchedule::Cluster, CLUSTER_COUNT>;
-
-enum Stages {
-  STAGE_DOT_1 = 2,
-  STAGE_DOT_2 = 3,
-
-  STAGE_GLOBAL_LOAD_1 = 0,
-  STAGE_LOCAL_WRITE_1 = 1,
-  STAGE_LOCAL_LOAD_1 = 1,
-
-  STAGE_GLOBAL_LOAD_2 = 1,
-  STAGE_LOCAL_WRITE_2 = 2,
-  STAGE_LOCAL_LOAD_2 = 3,
-};
+using namespace mlir::ChainedDotSchedule;
 
 LogicalResult checkPreconditions(scf::ForOp forOp, int numStages,
                                  LoadToInfoMap loadToInfo) {
@@ -1194,9 +1105,8 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 }
 } // namespace ChainedDotSchedule
 
-FailureOr<scf::ForOp> pipelineLoop(scf::ForOp forOp, int numStages,
-                                   bool useAsyncCopy, bool waitAtTail) {
-
+void pipelineLoop(scf::ForOp forOp, int numStages, bool useAsyncCopy,
+                  bool waitAtTail) {
   triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
       forOp->getParentOfType<ModuleOp>());
 
@@ -1204,7 +1114,7 @@ FailureOr<scf::ForOp> pipelineLoop(scf::ForOp forOp, int numStages,
 
   if (loadToInfo.empty()) {
     LDBG("couldn't find any pipeline-able loads:\n" << *forOp);
-    return failure();
+    return;
   }
 
   tt::CoarseSchedule schedule;
@@ -1220,59 +1130,14 @@ FailureOr<scf::ForOp> pipelineLoop(scf::ForOp forOp, int numStages,
   }
 
   if (schedule.empty()) {
-    return failure();
+    return;
   }
 
-  // Create the final schedule for the kernel loop. This will dictate the
-  // stages and order of operations to the pipeline expander.
-  auto coarseSchedule = schedule.createFinalSchedule(forOp);
-
-  tt::PipeliningOption options;
-  options.supportDynamicLoops = true;
-  options.peelEpilogue = true;
-  options.predicateFn = streamPredication;
-  // Annotate loadOp in prologue for further moving up
-  options.annotateFn = [](Operation *op,
-                          tt::PipeliningOption::PipelinerPart part,
-                          unsigned stage) {
-    if (part != tt::PipeliningOption::PipelinerPart::Prologue)
-      return;
-
-    auto annotateLoad = [](Operation *loadOp) {
-      loadOp->setAttr("amd.pipeliner_part",
-                      StringAttr::get(loadOp->getContext(), "prologue"));
-    };
-
-    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      annotateLoad(loadOp);
-      return;
-    }
-    // loadOp may be wrapped by a MaskOp as predicateFn execution
-    // precedes annotation
-    if (auto maskOp = dyn_cast<ttg::MaskOp>(op)) {
-      for (auto &innerOp : maskOp.getBody()->without_terminator()) {
-        if (auto loadOp = dyn_cast<tt::LoadOp>(&innerOp)) {
-          annotateLoad(loadOp);
-          return;
-        }
-      }
-    }
-  };
-  // Set the final schedule as our scheduling function
-  options.getScheduleFn =
-      [coarseSchedule](scf::ForOp,
-                       std::vector<std::pair<Operation *, unsigned>> &s) {
-        s = std::move(coarseSchedule);
-      };
-
-  LDBG("Loop before sending to expander:\n" << *forOp);
-
-  IRRewriter rewriter(forOp);
-  return tt::pipelineForLoop(rewriter, forOp, options);
+  schedule.serialize(forOp);
 }
 } // namespace
 
-struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
+struct ScheduleLoops : impl::TritonAMDGPUScheduleLoopsBase<ScheduleLoops> {
   using Base::Base;
 
   void runOnOperation() override {
@@ -1294,17 +1159,7 @@ struct PipelinePass : impl::TritonAMDGPUStreamPipelineBase<PipelinePass> {
       // pingpong, which is the only use case of this scheduling variant.
       int numStagesThis = tt::getNumStagesOrDefault(forOp, numStages);
       bool waitAtTail = usePingpong && (numStagesThis == 3) && useAsyncCopy;
-      (void)pipelineLoop(forOp, numStagesThis, useAsyncCopy, waitAtTail);
-    }
-
-    // NOTE: Leave empty for now, until we utilize customEpiloguePeeling
-    DenseSet<ttg::MaskOp> peeledMaskOps;
-    tt::resolveMaskOp(moduleOp, peeledMaskOps);
-
-    if (useAsyncCopy) {
-      llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
-      moduleOp.walk([&](ttg::AsyncWaitOp waitOp) { waitOps.insert(waitOp); });
-      tt::combineRedundantWaitOps(waitOps);
+      pipelineLoop(forOp, numStagesThis, useAsyncCopy, waitAtTail);
     }
   }
 };

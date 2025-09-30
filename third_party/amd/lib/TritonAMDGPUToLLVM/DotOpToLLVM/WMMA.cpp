@@ -56,10 +56,13 @@ ValueTable getValuesFromDotOperandLayoutStruct(
         }
 
         Value convertedElems;
-        if (type.isF16() || (wmmaVer == 3 && type.isBF16())) {
+        if (type.isF32() || type.isF16()) {
           convertedElems = rawElems;
         } else if (type.isBF16()) {
-          convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kBase));
+          convertedElems = rawElems;
+          // Before wmma v3, bf16 is converted to i16
+          if (wmmaVer < 3)
+            convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kBase));
         } else {
           convertedElems = tb.bitcast(
               rawElems, vec_ty(i32_ty, kBase * type.getIntOrFloatBitWidth() /
@@ -101,22 +104,22 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
   } else {
     assert(wmmaVer == 3 && "unexpected wmma version");
     // arguments for v3:
-    // int:       %A_mod, %A, %B_mod, %B, %C, %A_reuse, %B_reuse
-    // fp16/bf16: %A_mod, %A, %B_mod, %B, %C_mod, %C, %A_reuse, %B_reuse
-    // fp8/bf8:   %A, %B, %C_mod, %C, %A_reuse, %B_reuse
+    // int:          %A_mod, %A, %B_mod, %B, %C, %A_reuse, %B_reuse
+    // f32/f16/bf16: %A_mod, %A, %B_mod, %B, %C_mod, %C, %A_reuse, %B_reuse
+    // f8/bf8:       %A, %B, %C_mod, %C, %A_reuse, %B_reuse
     if (aElType.isInteger())
       operands.push_back(b.int_val(1, !aElType.isUnsignedInteger()));
-    else if (aElType.isBF16() || aElType.isF16())
+    else if (aElType.isFloat(16) || aElType.isF32())
       operands.push_back(b.int_val(1, 0));
     operands.push_back(valA);
 
     if (bElType.isInteger())
       operands.push_back(b.int_val(1, !bElType.isUnsignedInteger()));
-    else if (bElType.isBF16() || bElType.isF16())
+    else if (bElType.isFloat(16) || bElType.isF32())
       operands.push_back(b.int_val(1, 0));
     operands.push_back(valB);
 
-    if ((bElType.isBF16() || bElType.isF16()) || aElType.isFloat(8))
+    if (bElType.isFloat(16) || bElType.isF32() || aElType.isFloat(8))
       operands.push_back(b.int_val(16, 0));
     operands.push_back(valC);
 
@@ -165,11 +168,9 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   const auto kDimOperandSize = aTensorTy.getShape().back();
 
   std::string intrinsicName;
-  FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic =
-      WmmaIntrinsic::selectFor(wmmaVer, mnkDim[0], mnkDim[1], kDimOperandSize,
-                               aElemTy, bElemTy, dElemTy);
+  FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic = WmmaIntrinsic::get(
+      wmmaVer, mnkDim[0], mnkDim[1], mnkDim[2], aElemTy, bElemTy, dElemTy);
   if (failed(maybeWmmaIntrinsic)) {
-
     return op.emitError(
         "no matching matrix core intrinsic due to unsupported element type");
   }

@@ -515,3 +515,128 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
   }
 
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+  tt.func public @attention_forward(%arg0: !ttg.memdesc<256x64xf16, #shared, #smem>, %arg1: !tt.tensordesc<tensor<64x64xf16, #shared>>, %arg2: !tt.tensordesc<tensor<64x64xf16, #shared>>, %arg3: f32, %arg4: i32, %arg5: !tt.ptr<f32>) {
+    %cst = arith.constant dense<1.000000e+00> : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<256x64xf32, #blocked>
+    %cst_1 = arith.constant dense<0xFF800000> : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %c64_i32 = arith.constant 64 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %false = arith.constant false
+    %true = arith.constant true
+    %result = ttng.tmem_alloc : () -> !ttg.memdesc<2x256x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    %0 = nvws.aref.create %result : <[!ttg.memdesc<2x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>
+    %buffers, %token = nvws.aref.put.enter %0 : <[!ttg.memdesc<2x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]> -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 2x256x64>, !ttg.async.token
+    %result_2 = ttng.tmem_alloc : () -> !ttg.memdesc<1x256x64xf32, #tmem, #ttng.tensor_memory, mutable>
+    %1 = nvws.aref.create %result_2 : <[!ttg.memdesc<1x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>
+    %buffers_3, %token_4 = nvws.aref.put.enter %1 : <[!ttg.memdesc<1x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]> -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 1x256x64>, !ttg.async.token
+    %2 = nvws.aref.buffer %1, %token_4 : <[!ttg.memdesc<1x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>, !ttg.async.token -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 1x256x64>
+    %3 = ttng.tmem_store %cst_0, %2[], %true : tensor<256x64xf32, #blocked> -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 1x256x64>
+    %4 = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
+    %5 = nvws.aref.create %4 : <[!ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>]>
+    %6 = ttg.local_alloc : () -> !ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>
+    %7 = nvws.aref.create %6 : <[!ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>]>
+    %8 = ttg.local_alloc : () -> !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable>
+    %9 = nvws.aref.create %8 : <[!ttg.memdesc<1x256x64xf16, #shared, #smem, mutable>]>
+    %10 = ttg.local_alloc : () -> !ttg.memdesc<1x256xf32, #shared1, #smem, mutable>
+    %11 = nvws.aref.create %10 : <[!ttg.memdesc<1x256xf32, #shared1, #smem, mutable>]>
+    %12 = ttg.local_alloc : () -> !ttg.memdesc<1x256xf32, #shared1, #smem, mutable>
+    %13 = nvws.aref.create %12 : <[!ttg.memdesc<1x256xf32, #shared1, #smem, mutable>]>
+    %14:4 = scf.for %arg6 = %c0_i32 to %arg4 step %c64_i32 iter_args(%arg7 = %cst, %arg8 = %cst_1, %arg9 = %token, %arg10 = %token_4) -> (tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, !ttg.async.token, !ttg.async.token)  : i32 {
+      %buffers_9, %token_10 = nvws.aref.put.enter %11 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : <[!ttg.memdesc<1x256xf32, #shared1, #smem, mutable>]> -> !ttg.memdesc<256xf32, #shared1, #smem, mutable, 1x256>, !ttg.async.token
+      ttg.local_store %arg8, %buffers_9 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> !ttg.memdesc<256xf32, #shared1, #smem, mutable, 1x256>
+      nvws.aref.put.exit %11, %token_10 [#nvws.async_op<none>] {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : <[!ttg.memdesc<1x256xf32, #shared1, #smem, mutable>]>, !ttg.async.token
+      %buffers_11, %token_12 = nvws.aref.put.enter %5 {loop.cluster = 4 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 2>} : <[!ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>]> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 1x64x64>, !ttg.async.token
+      nvws.descriptor_load %arg1[%arg6, %c0_i32] 8192 %buffers_11 {loop.cluster = 4 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 2>} : !tt.tensordesc<tensor<64x64xf16, #shared>>, i32, i32, !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 1x64x64>
+      nvws.aref.put.exit %5, %token_12 [#nvws.async_op<tma_load>] {loop.cluster = 4 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 2>} : <[!ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>]>, !ttg.async.token
+      %buffers_13, %token_14 = nvws.aref.get.enter %5 {loop.cluster = 2 : i32, loop.stage = 2 : i32, ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>]> -> !ttg.memdesc<64x64xf16, #shared, #smem, 1x64x64>, !ttg.async.token
+      %16 = ttg.memdesc_trans %buffers_13 {loop.cluster = 2 : i32, loop.stage = 2 : i32, order = array<i32: 1, 0>, ttg.partition = array<i32: 1>} : !ttg.memdesc<64x64xf16, #shared, #smem, 1x64x64> -> !ttg.memdesc<64x64xf16, #shared2, #smem, 1x64x64>
+      %17 = nvws.aref.buffer %0, %arg9 {loop.cluster = 2 : i32, loop.stage = 2 : i32, ttg.partition = array<i32: 1>} : <[!ttg.memdesc<2x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>, !ttg.async.token -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 2x256x64>
+      %18 = ttng.tc_gen5_mma %arg0, %16, %17[], %false, %true {loop.cluster = 2 : i32, loop.stage = 2 : i32, tt.self_latency = 1 : i32, ttg.partition = array<i32: 1>} : !ttg.memdesc<256x64xf16, #shared, #smem>, !ttg.memdesc<64x64xf16, #shared2, #smem, 1x64x64>, !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 2x256x64>
+      nvws.aref.put.exit %0, %arg9 [#nvws.async_op<tc5mma>] {loop.cluster = 2 : i32, loop.stage = 2 : i32, ttg.partition = array<i32: 1>} : <[!ttg.memdesc<2x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>, !ttg.async.token
+      nvws.aref.get.exit %5, %token_14 [#nvws.async_op<tc5mma>] {loop.cluster = 2 : i32, loop.stage = 2 : i32, ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>]>, !ttg.async.token
+      %buffers_15, %token_16 = nvws.aref.get.enter %0 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : <[!ttg.memdesc<2x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]> -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 2x256x64>, !ttg.async.token
+      %19 = nvws.aref.buffer %0, %token_16 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : <[!ttg.memdesc<2x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>, !ttg.async.token -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 2x256x64>
+      %result_17, %token_18 = ttng.tmem_load %19[] {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 2x256x64> -> tensor<256x64xf32, #blocked>
+      nvws.aref.get.exit %0, %token_16 [#nvws.async_op<none>] {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : <[!ttg.memdesc<2x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>, !ttg.async.token
+      %20 = "compute_row_max"(%result_17, %arg3) {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : (tensor<256x64xf32, #blocked>, f32) -> tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %buffers_19, %token_20 = nvws.aref.put.enter %13 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : <[!ttg.memdesc<1x256xf32, #shared1, #smem, mutable>]> -> !ttg.memdesc<256xf32, #shared1, #smem, mutable, 1x256>, !ttg.async.token
+      ttg.local_store %20, %buffers_19 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> !ttg.memdesc<256xf32, #shared1, #smem, mutable, 1x256>
+      nvws.aref.put.exit %13, %token_20 [#nvws.async_op<none>] {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : <[!ttg.memdesc<1x256xf32, #shared1, #smem, mutable>]>, !ttg.async.token
+      %21 = "sub_row_max"(%result_17, %20, %arg3) {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : (tensor<256x64xf32, #blocked>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, f32) -> tensor<256x64xf32, #blocked>
+      %22 = math.exp2 %21 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : tensor<256x64xf32, #blocked>
+      %buffers_21, %token_22 = nvws.aref.get.enter %11 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : <[!ttg.memdesc<1x256xf32, #shared1, #smem, mutable>]> -> !ttg.memdesc<256xf32, #shared1, #smem, mutable, 1x256>, !ttg.async.token
+      %23 = ttg.local_load %buffers_21 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : !ttg.memdesc<256xf32, #shared1, #smem, mutable, 1x256> -> tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      nvws.aref.get.exit %11, %token_22 [#nvws.async_op<none>] {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : <[!ttg.memdesc<1x256xf32, #shared1, #smem, mutable>]>, !ttg.async.token
+      %buffers_23, %token_24 = nvws.aref.get.enter %13 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : <[!ttg.memdesc<1x256xf32, #shared1, #smem, mutable>]> -> !ttg.memdesc<256xf32, #shared1, #smem, mutable, 1x256>, !ttg.async.token
+      %24 = ttg.local_load %buffers_23 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : !ttg.memdesc<256xf32, #shared1, #smem, mutable, 1x256> -> tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      nvws.aref.get.exit %13, %token_24 [#nvws.async_op<none>] {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : <[!ttg.memdesc<1x256xf32, #shared1, #smem, mutable>]>, !ttg.async.token
+      %25 = arith.subf %23, %24 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %26 = arith.subf %arg8, %20 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %27 = math.exp2 %25 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %28 = math.exp2 %26 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %29 = "tt.reduce"(%22) <{axis = 1 : i32}> ({
+      ^bb0(%arg11: f32, %arg12: f32):
+        %45 = arith.addf %arg11, %arg12 {ttg.partition = array<i32: 0>} : f32
+        tt.reduce.return %45 {ttg.partition = array<i32: 0>} : f32
+      }) {loop.cluster = 0 : i32, loop.stage = 4 : i32} : (tensor<256x64xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %30 = arith.mulf %arg7, %28 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %31 = arith.addf %30, %29 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %32 = tt.expand_dims %27 {axis = 1 : i32, loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xf32, #blocked>
+      %33 = tt.expand_dims %28 {axis = 1 : i32, loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xf32, #blocked>
+      %34 = tt.broadcast %32 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : tensor<256x1xf32, #blocked> -> tensor<256x64xf32, #blocked>
+      %35 = tt.addptr %arg5, %arg6 {loop.cluster = 2 : i32, loop.stage = 2 : i32, ttg.partition = array<i32: 0, 2, 1, 3>} : !tt.ptr<f32>, i32
+      %36 = tt.load %35 {loop.cluster = 2 : i32, loop.stage = 2 : i32, ttg.partition = array<i32: 0, 2, 1, 3>} : !tt.ptr<f32>
+      %37 = tt.splat %36 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : f32 -> tensor<256x64xf32, #blocked>
+      %38 = nvws.aref.buffer %1, %arg10 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : <[!ttg.memdesc<1x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>, !ttg.async.token -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 1x256x64>
+      %result_25, %token_26 = ttng.tmem_load %38[] {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 1x256x64> -> tensor<256x64xf32, #blocked>
+      %39 = arith.mulf %result_25, %34 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : tensor<256x64xf32, #blocked>
+      %40 = arith.addf %39, %37 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : tensor<256x64xf32, #blocked>
+      %buffers_27, %token_28 = nvws.aref.put.enter %7 {loop.cluster = 2 : i32, loop.stage = 2 : i32, ttg.partition = array<i32: 2>} : <[!ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>]> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 1x64x64>, !ttg.async.token
+      nvws.descriptor_load %arg2[%arg6, %c0_i32] 8192 %buffers_27 {loop.cluster = 2 : i32, loop.stage = 2 : i32, ttg.partition = array<i32: 2>} : !tt.tensordesc<tensor<64x64xf16, #shared>>, i32, i32, !ttg.memdesc<64x64xf16, #shared, #smem, mutable, 1x64x64>
+      nvws.aref.put.exit %7, %token_28 [#nvws.async_op<tma_load>] {loop.cluster = 2 : i32, loop.stage = 2 : i32, ttg.partition = array<i32: 2>} : <[!ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>]>, !ttg.async.token
+      %buffers_29, %token_30 = nvws.aref.get.enter %7 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>]> -> !ttg.memdesc<64x64xf16, #shared, #smem, 1x64x64>, !ttg.async.token
+      %41 = arith.truncf %22 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : tensor<256x64xf32, #blocked> to tensor<256x64xf16, #blocked>
+      // CHECK: local_store
+      // CHECK: ttng.fence_async_shared
+      // CHECK: arrive_barrier
+      %buffers_31, %token_32 = nvws.aref.put.enter %9 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : <[!ttg.memdesc<1x256x64xf16, #shared, #smem, mutable>]> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable, 1x256x64>, !ttg.async.token
+      ttg.local_store %41, %buffers_31 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : tensor<256x64xf16, #blocked> -> !ttg.memdesc<256x64xf16, #shared, #smem, mutable, 1x256x64>
+      nvws.aref.put.exit %9, %token_32 [#nvws.async_op<none>] {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 0>} : <[!ttg.memdesc<1x256x64xf16, #shared, #smem, mutable>]>, !ttg.async.token
+      %buffers_33, %token_34 = nvws.aref.get.enter %9 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x256x64xf16, #shared, #smem, mutable>]> -> !ttg.memdesc<256x64xf16, #shared, #smem, 1x256x64>, !ttg.async.token
+      // CHECK: tmem_store
+      // CHECK-NOT: ttng.fence_async_shared
+      // CHECK: arrive_barrier
+      %42 = ttng.tmem_store %40, %38[], %true {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : tensor<256x64xf32, #blocked> -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 1x256x64>
+      nvws.aref.put.exit %1, %arg10 [#nvws.async_op<none>] {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : <[!ttg.memdesc<1x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>, !ttg.async.token
+      %buffers_35, %token_36 = nvws.aref.get.enter %1 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]> -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 1x256x64>, !ttg.async.token
+      %43 = nvws.aref.buffer %1, %token_36 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>, !ttg.async.token -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 1x256x64>
+      %44 = ttng.tc_gen5_mma %buffers_33, %buffers_29, %43[], %true, %true {loop.cluster = 0 : i32, loop.stage = 4 : i32, tt.self_latency = 1 : i32, ttg.partition = array<i32: 1>} : !ttg.memdesc<256x64xf16, #shared, #smem, 1x256x64>, !ttg.memdesc<64x64xf16, #shared, #smem, 1x64x64>, !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 1x256x64>
+      nvws.aref.get.exit %1, %token_36 [#nvws.async_op<tc5mma>] {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>, !ttg.async.token
+      nvws.aref.get.exit %9, %token_34 [#nvws.async_op<tc5mma>] {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x256x64xf16, #shared, #smem, mutable>]>, !ttg.async.token
+      nvws.aref.get.exit %7, %token_30 [#nvws.async_op<tc5mma>] {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 1>} : <[!ttg.memdesc<1x64x64xf16, #shared, #smem, mutable>]>, !ttg.async.token
+      %buffers_37, %token_38 = nvws.aref.put.enter %0 {loop.cluster = 2 : i32, loop.stage = 2 : i32, ttg.partition = array<i32: 1>} : <[!ttg.memdesc<2x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]> -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 2x256x64>, !ttg.async.token
+      %buffers_39, %token_40 = nvws.aref.put.enter %1 {loop.cluster = 0 : i32, loop.stage = 4 : i32, ttg.partition = array<i32: 3>} : <[!ttg.memdesc<1x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]> -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 1x256x64>, !ttg.async.token
+      scf.yield {ttg.partition = array<i32: 0, 2, 1, 3>} %31, %20, %token_38, %token_40 : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, !ttg.async.token, !ttg.async.token
+    } {tt.scheduled_max_stage = 4 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32}
+    ttg.local_dealloc %12 : !ttg.memdesc<1x256xf32, #shared1, #smem, mutable>
+    ttg.local_dealloc %10 : !ttg.memdesc<1x256xf32, #shared1, #smem, mutable>
+    nvws.aref.put.exit %1, %14#3 [#nvws.async_op<tc5mma>] : <[!ttg.memdesc<1x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>, !ttg.async.token
+    nvws.aref.put.exit %0, %14#2 [#nvws.async_op<none>] : <[!ttg.memdesc<2x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>, !ttg.async.token
+    %buffers_5, %token_6 = nvws.aref.get.enter %1 : <[!ttg.memdesc<1x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]> -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 1x256x64>, !ttg.async.token
+    %15 = nvws.aref.buffer %1, %token_6 : <[!ttg.memdesc<1x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>, !ttg.async.token -> !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 1x256x64>
+    %result_7, %token_8 = ttng.tmem_load %15[] : !ttg.memdesc<256x64xf32, #tmem, #ttng.tensor_memory, mutable, 1x256x64> -> tensor<256x64xf32, #blocked>
+    nvws.aref.get.exit %1, %token_6 [#nvws.async_op<none>] : <[!ttg.memdesc<1x256x64xf32, #tmem, #ttng.tensor_memory, mutable>]>, !ttg.async.token
+    "use"(%14#0, %result_7, %14#1) : (tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>, tensor<256x64xf32, #blocked>, tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>) -> ()
+    tt.return
+  }
+}

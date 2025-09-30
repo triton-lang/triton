@@ -2,7 +2,7 @@
 
 ## Introduction
 
-Proton is a lightweight profiler for Triton, designed to be used for code written in Python and to invoke underlying GPU kernels. Proton provides insightful information about the program context, metadata, and hardware performance metrics of the GPU kernels invoked.
+Proton is a lightweight profiler for Triton that captures rich information about program context, metadata, and GPU kernel performance metrics, while keeping both runtime overhead and profile size minimal.
 
 ## Installation
 
@@ -85,6 +85,12 @@ with proton.scope("test2", {"bytes": 3000}):
     foo[1,](x, y)
 ```
 
+#### NVTX compatibility
+
+Proton scopes coexist with NVTX ranges.
+NVTX pushes and pops (for example, `torch.cuda.nvtx.range_push`) appear as nested scopes in the Proton profile, letting you correlate custom NVTX annotations with Proton's aggregated metrics.
+
+
 ### Backend and mode
 
 Proton supports three profiling backends: `cupti`, `roctracer`, and `instrumentation`.
@@ -95,7 +101,7 @@ Proton supports three profiling backends: `cupti`, `roctracer`, and `instrumenta
 
 By default, Proton automatically selects either `cupti` or `roctracer` as the backend based on your GPU driver. The `instrumentation` backend offers a wide range of mode options for fine-grained profiling, as detailed in the `mode.py` file.
 
-#### Instruction Sampling
+#### Instruction sampling
 
 Proton supports instruction sampling on NVIDIA GPUs.
 You may experience ~20x end-to-end overhead when using instruction sampling, although the overhead for each individual GPU kernel is negligible.
@@ -106,7 +112,7 @@ The following example demonstrates how to use instruction sampling:
 ```python
 import triton.profiler as proton
 
-proton.start(name="profile_name", context="shadow", backend="cupti_pcsampling")
+proton.start(name="profile_name", context="shadow", backend="cupti", mode="pcsampling")
 ```
 
 #### Instrumentation
@@ -124,6 +130,16 @@ proton.start(
     backend="instrumentation",
     mode="<mode0>=<option0>:<mode1>=<option1>:..."
 )
+
+# or
+
+import triton.profiler.mode as pmode
+
+proton.start(
+    name="profile_name",
+    backend="instrumentation",
+    mode=pmode.Default(granularity="warp_2") # collect metrics from every 2 warps
+)
 ```
 
 **Kernel-side usage:**
@@ -132,6 +148,7 @@ proton.start(
 Instrumenting kernels written in Triton DSL is disable because Triton's higher-level IR undergoes
 aggressive compiler rewrites (loop pipelining, instruction re-ordering, IR duplication, etc.).
 These transformations can invalidate naïve instrumentation and lead to misleading results.
+To enable instrumentation for Triton DSL, call `pl.enable_semantic("triton")` before `proton.start`.
 
 ```python
 from triton.experimental import gluon
@@ -152,21 +169,6 @@ def kernel(...):
 
 Advanced users can instrument either the `ttir` or `ttgir` intermediate representations for even finer-grained measurement. The relevant IR instructions are `proton.record start` and `proton.record end`. This can be combined with the environment variable `TRITON_KERNEL_OVERRIDE=1` for custom kernel overrides. For detailed steps, refer to the Triton [documentation](https://github.com/triton-lang/triton?tab=readme-ov-file#tips-for-hacking) under the **Kernel Override Steps** section. We have also assembled a [tutorial](tutorials/ttgir_override) that demonstrates how to use the IR-based instrumentation.
 
-#### Merging profiles for postmortem analysis
-
-We could use concurrent sessions to profile the same code region using different backends, and then merge the profiles using hatchet for postmortem analysis. In the following example, the `cupti` backend obtains different metrics than the `instrumentation` backend, and thus it makes sense to merge them using `GraphFrame.add` directly. Otherwise, if there are duplicate metrics, we could customize the `merge` logic or manipulate the dataframes.
-
-```python
-
-import triton.profiler as proton
-
-proton.start(name="profile_name0", context="shadow", backend="cupti")
-proton.start(name="profile_name1", context="shadow", backend="instrumentation")
-
-...
-
-proton.finalize()
-```
 
 ### Hook
 
@@ -206,6 +208,7 @@ bytes: int  # The number of bytes expected to be transferred
 
 Proton can be used as a command-line tool to profile Python scripts and Pytest tests.
 The following examples demonstrate how to use Proton command-line.
+Detailed options can be found by running `proton -h`.
 
 ```bash
 proton [options] script.py [script_args] [script_options]
@@ -214,7 +217,8 @@ python -m triton.profiler.proton [options] script.py [script_args] [script_optio
 proton --instrument=[instrumentation pass] script.py
 ```
 
-When profiling in the command line mode, the `proton.start` and `proton.finalize` functions are automatically called before and after the script execution. Any `proton.start` and `proton.finalize` functions in the script are ignored. Also, in the command line mode, only a single *session* is supported. Therefore, `proton.deactivate(session_id=1)` is invalid, while `proton.deactivate(session_id=0)` is valid.
+When profiling in the command line mode, the `proton.start` and `proton.finalize` functions are automatically called before and after the script execution. Any `proton.start` and `proton.finalize` functions in the script are ignored. Also, in the command line mode, only a single *session* is supported.
+Therefore, `proton.deactivate(session_id=1)` is invalid, while `proton.deactivate(session_id=0)` is valid.
 
 ### Visualizing the profile data
 
@@ -237,21 +241,25 @@ proton.start(name="profile_name", data="trace")
 
 The dumped trace will be in the chrome trace format and can be visualized using the `chrome://tracing` tool in Chrome or the [perfetto](https://perfetto.dev) tool.
 
-### Visualizing sorted profile data
-
 In addition visualizing the profile data on terminal through Hatchet. A sorted list of the kernels by the first metric can be done using the --print-sorted flag with proton-viewer
 
 ```bash
 proton-viewer -m time/ns,time/% <profile.hatchet> --print-sorted
 ```
 
-prints the sorted kernels by the time/ns since it is the first listed.
-
 More options can be found by running the following command.
 
 ```bash
 proton-viewer -h
 ```
+
+## Knobs
+
+Triton's runtime has a centralized configuration system called *knobs* that controls various features and behaviors, including the following knobs are defined for Proton:
+
+- `triton.knobs.proton.enable_nvtx` or `TRITON_ENABLE_NVTX` (default: `True`): Whether to enable NVTX ranges in Proton.
+
+- `triton.knobs.proton.cupti_lib_dir` or `TRITON_CUPTI_LIB_DIR` (default: `<triton_root>/backends/nvidia/lib/cupti`): The directory of the CUPTI library.
 
 ## Advanced features and knowledge
 
@@ -325,35 +333,25 @@ with proton.scope("test"):
 
 The call path of `foo1` will be `test->test1->state0`.
 
-## Proton *vs* nsys
+## Proton *vs* Nsight tools
 
-- Runtime overhead (up to 1.5x)
+| Aspect | Proton | Nsight Systems | Nsight Compute |
+| --- | --- | --- | --- |
+| Runtime overhead | Lower overhead | Higher overhead | Higher overhead |
+| Profile size | Compact profiles and traces | Large traces | Large traces |
+| Portability | Multi vendor | Nvidia only | Nvidia only |
+| Triton insights | Metadata hooks | No hooks | No hooks |
+| Metric depth | Lightweight metrics | Timeline metrics | Detailed metrics |
 
-Proton has a lower profiling overhead than nsys. Even for workload with a large number of small GPU kernels, proton triggers less than ~1.5x overhead.
+**Runtime overhead.** Proton typically keeps slowdown below roughly 1.5×, even for workloads with many short-lived kernels, because it collects fewer metrics and registers fewer callbacks. Nsight Systems and Nsight Compute both impose higher overhead, though they behave similarly to Proton on purely GPU-bound workloads.
 
-For GPU-bound workload, both proton and nsys has similar overhead, with little impact on the workload.
+**Profile size.** Proton aggregates kernels that share a calling context, so profile files stay compact—sometimes thousands of times smaller than Nsight traces. Both Nsight tools record each GPU kernel individually, which grows traces quickly during long runs.
 
-The lower overhead of proton is due to its less profiling metrics and callbacks compared to nsys.
+**Portability.** Proton already runs on AMD and NVIDIA GPUs and has a roadmap to extend instruction sampling to AMD hardware. Nsight Systems and Nsight Compute target NVIDIA GPUs exclusively.
 
-- Profile size (significantly smaller than nsys)
+**Triton insights.** Proton can register Triton-specific hooks that surface kernel metadata for richer analysis, at the cost of a small extra overhead. Neither Nsight tool offers comparable Triton integration.
 
-nsys traces and records every GPU kernel, while proton aggregates the metrics of GPU kernels under the same calling context.
-
-As a result, proton's profile size can be up to thousands of times smaller than nsys's profile size, depending on the running time.
-
-- Portability (support different GPUs)
-
-Proton is designed to be portable and can be used on AMD GPUs. nsys only supports NVIDIA GPUs.
-
-- Insights (more insightful than nsys on triton kernels)
-
-Proton can register hooks to analyze the metadata of triton kernels, while nsys cannot. **Note** that the hooks do add additional overhead to proton.
-
-## Proton *vs* ncu
-
-Similar to the comparison between Proton and Nsight Systems (Nsys), Proton has a lower profiling overhead than Nsight Compute (NCU). We also plan to support instruction sampling on AMD GPUs.
-However, Nsight Compute supports the collection of more detailed metrics than Proton, such as memory access patterns, memory transactions, and other instruction-level metrics.
-In contrast, Proton only supports instruction sampling and is designed to be lightweight and portable.
+**Metric depth.** Proton emphasizes lightweight metrics and instruction sampling for portability and fast iteration. Nsight Systems focuses on timeline-oriented metrics for NVIDIA GPUs, while Nsight Compute dives deeper into instruction-level details such as memory transactions and access patterns.
 
 ## Known issues
 
