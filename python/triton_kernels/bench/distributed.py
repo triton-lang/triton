@@ -745,6 +745,22 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _all_to_all_triton_worker(rank: int, world_size: int, hidden_size: int, n_tokens: int) -> None:
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+
+    try:
+        data = torch.randn((n_tokens, hidden_size), device=torch.device(f"cuda:{rank}"), dtype=torch.float16)
+        input_list = list(data.chunk(world_size, dim=0))
+        input_split_sizes = [tensor.size(0) for tensor in input_list]
+        output_ref = all_to_all(input_list, dim=0)
+        output = all_to_all(input_list, dim=0, comm=CommKernelType.TRITON)
+        dist.barrier()
+        torch.testing.assert_close(output, output_ref)
+    finally:
+        dist.destroy_process_group()
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for Triton kernel execution")
 @pytest.mark.parametrize("n_tokens", [1024])
 @pytest.mark.parametrize("hidden_size", [128])
@@ -755,28 +771,13 @@ def test_all_to_all_triton(monkeypatch, world_size, hidden_size, n_tokens):
     if torch.cuda.device_count() < world_size:
         pytest.skip(f"Requires at least {world_size} CUDA devices.")
 
-    monkeypatch.setenv("WORLD_SIZE", world_size)
+    monkeypatch.setenv("WORLD_SIZE", f"{world_size}")
     monkeypatch.setenv("MASTER_ADDR", "127.0.0.1")
     monkeypatch.setenv("MASTER_PORT", "12355")
 
-    def _worker(rank: int, world_size: int, hidden_size: int, n_tokens: int) -> None:
-        dist.init_process_group("nccl", rank=rank, world_size=world_size)
-        torch.cuda.set_device(rank)
-
-        try:
-            data = torch.randn((n_tokens, hidden_size), device=torch.device(f"cuda:{rank}"), dtype=torch.float16)
-            input_list = list(data.chunk(world_size, dim=0))
-            input_split_sizes = [tensor.size(0) for tensor in input_list]
-            output_ref = all_to_all(input_list, dim=0)
-            output = all_to_all(input_list, dim=0, comm=CommKernelType.TRITON)
-            dist.barrier()
-            torch.testing.assert_close(output, output_ref)
-        finally:
-            dist.destroy_process_group()
-
     for rank in range(world_size):
         mp.spawn(
-            _worker,
+            _all_to_all_triton_worker,
             args=(rank, world_size, hidden_size, n_tokens),
             nprocs=world_size,
             join=True,
