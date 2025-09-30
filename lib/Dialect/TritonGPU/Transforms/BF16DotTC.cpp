@@ -72,7 +72,7 @@ public:
     auto SplitF32 = [&](Value input, unsigned N) -> std::vector<Value> {
       std::vector<Value> split_inputs;
       split_inputs.reserve(N);
-      for (int i = 0; i < N; ++i) {
+      for (unsigned i = 0; i < N; ++i) {
         Value input_as_bf16 = f32ToBF16(input);
         if (i != N - 1) {
           Value input_as_f32 = bf16ToF32(input_as_bf16);
@@ -84,9 +84,9 @@ public:
       return split_inputs;
     };
 
-    const int hi = 0;
-    const int med = 1;
-    const int lo = 2;
+    const unsigned hi = 0;
+    const unsigned mid = 1;
+    const unsigned lo = 2;
 
     const unsigned N = 3;
     auto lhs_parts = SplitF32(dotOp.getA(), N);
@@ -96,16 +96,16 @@ public:
 
     if (dotOp.getInputPrecision() == InputPrecision::BF16x9) {
       result = dot(lhs_parts[lo], rhs_parts[lo], result);
-      result = dot(lhs_parts[med], rhs_parts[lo], result);
-      result = dot(lhs_parts[lo], rhs_parts[med], result);
+      result = dot(lhs_parts[mid], rhs_parts[lo], result);
+      result = dot(lhs_parts[lo], rhs_parts[mid], result);
 
-      result = dot(lhs_parts[med], rhs_parts[med], result);
+      result = dot(lhs_parts[mid], rhs_parts[mid], result);
 
       result = dot(lhs_parts[lo], rhs_parts[hi], result);
       result = dot(lhs_parts[hi], rhs_parts[lo], result);
 
     } else if (dotOp.getInputPrecision() == InputPrecision::BF16x6) {
-      result = dot(lhs_parts[med], rhs_parts[med], result);
+      result = dot(lhs_parts[mid], rhs_parts[mid], result);
 
       result = dot(lhs_parts[lo], rhs_parts[hi], result);
       result = dot(lhs_parts[hi], rhs_parts[lo], result);
@@ -113,8 +113,8 @@ public:
 
     // BF16x3, BF16x6, BF16x9 all need this
     if (dotOp.getInputPrecision() != InputPrecision::BF16) {
-      result = dot(lhs_parts[med], rhs_parts[hi], result);
-      result = dot(lhs_parts[hi], rhs_parts[med], result);
+      result = dot(lhs_parts[mid], rhs_parts[hi], result);
+      result = dot(lhs_parts[hi], rhs_parts[mid], result);
     }
 
     result = replaceNansWithZeros(result);
