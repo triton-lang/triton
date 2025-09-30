@@ -496,7 +496,7 @@ LogicalResult convertScaledWMMA(triton::DotScaledOp op,
   auto cTensorTy = op.getC().getType();
   auto dTensorTy = op.getD().getType();
   assert(isa<AMDWmmaEncodingAttr>(cTensorTy.getEncoding()) &&
-         "Currently, we only support C with a mfma layout.");
+         "Currently, we only support C with a wmma layout.");
 
   assert(cTensorTy.getShape()[0] == dTensorTy.getShape()[0] &&
          cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
