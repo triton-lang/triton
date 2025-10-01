@@ -454,15 +454,13 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
                                                      interleaved, transA);
   } else {
     auto allocShapeA = getAllocShape(aTensorTy, 1);
-    aLoader = std::make_unique<DotOpMmaV5SmemLoader>(
-        a, baseA, shapeA, allocShapeA, zero, 1, transA, aOperandShape,
-        op.numBitsPerElementA, rewriter, loc);
+    aLoader = std::make_unique<DotOpMmaSmemLoader>(DotOpMmaSmemLoader::build(
+        loc, rewriter, aTensorTy, baseA, aOperandShape, 5));
   }
 
   auto allocShapeB = getAllocShape(bTensorTy, 0);
-  DotOpMmaV5SmemLoader bLoader = DotOpMmaV5SmemLoader(
-      b, baseB, shapeB, allocShapeB, zero, 1, transB, {mmaSizeN, mmaSizeK},
-      op.numBitsPerElementB, rewriter, loc);
+  DotOpMmaSmemLoader bLoader = DotOpMmaSmemLoader::build(
+      loc, rewriter, bTensorTy, baseB, {mmaSizeK, mmaSizeN}, 5);
 
   DotConversion::InstDesc desc{mmaSizeM, mmaSizeN, {numRepM, numRepN, numRepK},
                                transA,   transB,   interleaved,
@@ -473,7 +471,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
       MemDescOperand accAddress = op.getAccAddress(rewriter, loc, m, n, desc);
       for (int k = 0; k < numRepK; k++) {
         MemDescOperand a = aLoader->memLoad(m, k, rewriter, loc);
-        Value b = bLoader.smemLoad(n, k, rewriter, loc);
+        Value b = bLoader.smemLoad(k, n, rewriter, loc);
         op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
                          desc, m, n, k);
         useInitAcc = tb.i1_val(1);
