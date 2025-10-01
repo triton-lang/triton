@@ -419,11 +419,11 @@ void init_triton_amd(py::module &&m) {
 
         const llvm::MCTargetOptions mcOptions;
         std::unique_ptr<llvm::MCRegisterInfo> mri(
-            target->createMCRegInfo(amdTargetTriple));
+            target->createMCRegInfo(triple));
         std::unique_ptr<llvm::MCAsmInfo> mai(
-            target->createMCAsmInfo(*mri, amdTargetTriple, mcOptions));
+            target->createMCAsmInfo(*mri, triple, mcOptions));
         std::unique_ptr<llvm::MCSubtargetInfo> sti(
-            target->createMCSubtargetInfo(amdTargetTriple, arch, features));
+            target->createMCSubtargetInfo(triple, arch, features));
 
         llvm::MCContext ctx(triple, mai.get(), mri.get(), sti.get(), &srcMgr,
                             &mcOptions);
@@ -472,7 +472,7 @@ void init_triton_amd(py::module &&m) {
     if (!target)
       throw std::runtime_error("target lookup error: " + error);
     std::unique_ptr<llvm::MCSubtargetInfo> sti(
-        target->createMCSubtargetInfo(amdTargetTriple, arch, ""));
+        target->createMCSubtargetInfo(triple, arch, ""));
     return sti->checkFeatures("+architected-sgprs");
   });
 
