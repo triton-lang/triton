@@ -81,15 +81,13 @@ public:
     RankedTensorType rankedTensorType = type.getBlockType();
     auto eleType = rankedTensorType.getElementType();
     auto shape = rankedTensorType.getShape();
-    SmallVector<Type, 4> types;
+    SmallVector<Type, 5> types;
     // base ptr
     types.push_back(LLVM::LLVMPointerType::get(ctx, 1));
     // 32 bit shapes
-    for (size_t i = 0; i < shape.size(); ++i)
-      types.push_back(IntegerType::get(ctx, 32));
+    types.append(shape.size(), IntegerType::get(ctx, 32));
     // 64 bit strides
-    for (size_t i = 0; i < shape.size(); ++i)
-      types.push_back(IntegerType::get(ctx, 64));
+    types.append(shape.size(), IntegerType::get(ctx, 64));
 
     return LLVM::LLVMStructType::getLiteral(ctx, types);
   }

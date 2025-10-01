@@ -26,10 +26,8 @@ struct MakeTensorDescOpConversion
 
     SmallVector<Value> elems;
     elems.push_back(basePtr);
-    for (auto s : tensorShape)
-      elems.push_back(s);
-    for (auto stride : tensorStride)
-      elems.push_back(stride);
+    llvm::append_range(elems, tensorShape);
+    llvm::append_range(elems, tensorStride);
 
     auto newValue = packLLElements(op.getLoc(), getTypeConverter(), elems,
                                    rewriter, result.getType());

@@ -150,4 +150,4 @@ def async_wait(num_outstanding=0, _semantic=None) -> None:
         num_outstanding (int): number of outstanding async tensor operations to wait for.
     """
     num_outstanding = _unwrap_if_constexpr(num_outstanding)
-    _semantic.builder.create_async_tdm_store_wait(num_outstanding)
+    _semantic.builder.create_async_tdm_wait(num_outstanding)

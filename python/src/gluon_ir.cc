@@ -770,7 +770,7 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(descPtr, indices,
                                                             result, pred);
            })
-      .def("create_async_tdm_store_wait", [](GluonOpBuilder &self, int num) {
+      .def("create_async_tdm_wait", [](GluonOpBuilder &self, int num) {
         ValueRange tokens;
         self.create<ttag::AsyncTDMWait>(tokens, num);
       });
