@@ -4,8 +4,9 @@ from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._semantic import _check
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDWMMALayout
+from . import tdm
 
-__all__ = ["wmma", "wmma_scaled"]
+__all__ = ["tdm", "wmma", "wmma_scaled"]
 
 
 @builtin
