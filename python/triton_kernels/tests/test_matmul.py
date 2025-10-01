@@ -45,19 +45,16 @@ def mask_indx(idx, n_expts_act):
     return idx
 
 
-def init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_scatter, device="cuda"):
+def init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter, device="cuda"):
     logits = torch.randn((m, n_expts_tot), dtype=torch.float16, device=device, requires_grad=True)
-    routing_data, gather_idx, scatter_idx = routing(logits, n_expts_act, simulated_ep=n_expt_shards)
+    routing_data, gather_idx, scatter_idx = routing(logits, n_expts_act)
     routing_data.gate_scal = None
     gather_idx = gather_idx if do_gather else None
     scatter_idx = scatter_idx if do_scatter else None
-    # TODO: re-enable
-    # if do_gather and do_scatter and n_expts_act == 1 and n_expt_shards == 1:
-    #     scatter_idx = mask_indx(scatter_idx, n_expts_act)
     return m, routing_data, gather_idx, scatter_idx
 
 
-def init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, n_expt_shards, mode, act_dtype, weight_dtype,
+def init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, mode, act_dtype, weight_dtype,
                       has_y_gammas, requires_grad=True, device="cuda",
                       inner_expt_opt=None, padding_block_k=None):
     torch.manual_seed(0)
@@ -70,7 +67,7 @@ def init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, n_
     else:
         in_m = m * (n_expts_act if gindx is None else 1)
     shape_x = (n_expts_tot, in_m, k) if mode == 'batched' else (in_m, k)
-    shape_batch = tuple() if (mode == "plain" or inner_expt_opt is not None) else (n_expts_tot // n_expt_shards, )
+    shape_batch = tuple() if (mode == "plain" or inner_expt_opt is not None) else (n_expts_tot, )
     x = alloc_rand(shape_x, device=device, dtype=act_dtype, requires_grad=requires_grad)
     w = alloc_rand(shape_batch + (k, n), device=device, dtype=weight_dtype, requires_grad=requires_grad)
     bias = alloc_rand(shape_batch + (n, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
@@ -194,7 +191,6 @@ class Case:
     weight_dtype_str: str
     n_expts_tot: int = 1
     n_expts_act: int = 1
-    n_expt_shards: int = 1
     split_k: int = 1
     hbm_swizzling: bool = False
     epilogue_subtile: Union[int, None] = None
@@ -216,10 +212,6 @@ class Case:
             Case(5, 7, 0, "batched", "float16", "float16"),
             # Non-mx types:
             Case(16, 256, 256, "ragged", "float16", "float16", 128, 4),
-            Case(16, 256, 256, "ragged", "float16", "float16", 128, 4, n_expt_shards=2),
-            Case(16, 256, 256, "ragged", "float16", "float16", 128, 4, n_expt_shards=4),
-            Case(400, 300, 500, "ragged", "float16", "float16", 32, 4, n_expt_shards=4),
-            Case(16, 256, 256, "ragged", "float16", "float16", 4, 1, n_expt_shards=2),
             Case(16, 256, 256, "ragged", "float16", "float16", 128, 4, split_k=3),
             Case(16, 256, 256, "ragged", "float16", "float16", 128, 4, split_k=3),
             Case(300, 400, 400, "batched", "float8_e5m2", "float8_e5m2", 5, 1),
@@ -235,8 +227,6 @@ class Case:
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=2),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=4),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2),
-            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, n_expt_shards=2),
-            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 1, n_expt_shards=2),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, split_k=2),
             Case(1000, 400, 400, "ragged", "float16", "float16", 3, 1),
             Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2),
@@ -291,19 +281,17 @@ class Case:
             Case(300, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz"),
             Case(1000, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", 3, 1),
             Case(600, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", 4, 2),
-            Case(600, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", 4, 2, n_expt_shards=2),
             Case(600, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", 4, 2, split_k=2),
             Case(300, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn"),
             Case(1000, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 3, 1),
             Case(600, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 4, 2),
-            Case(600, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 4, 2, n_expt_shards=2),
         ] + [
-            Case(320, 400, 400, mode, dtype, dtype, n_expts_tot, n_expts_act, n_expt_shards=n_expt_shards,
+            Case(320, 400, 400, mode, dtype, dtype, n_expts_tot, n_expts_act,
                  x_transpose=x_transpose, w_transpose=w_transpose, y_transpose=y_transpose)
-            for (mode, n_expts_tot, n_expts_act, n_expt_shards) in (
-                ("batched", 1, 1, 1),
-                ("ragged", 8, 4, 1),
-                ("ragged", 32, 4, 4),
+            for (mode, n_expts_tot, n_expts_act) in (
+                ("batched", 1, 1),
+                ("ragged", 8, 4),
+                ("ragged", 32, 4),
             )
             for dtype in ("float16", "float8_e5m2")
             for x_transpose in (False, True)
@@ -326,7 +314,7 @@ class Case:
 @pytest.mark.parametrize("has_y_gammas", [False, True])
 @pytest.mark.parametrize("is_persistent", [False, True])
 def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
-            n_expts_act, n_expt_shards, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, epilogue_subtile,
+            n_expts_act, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, epilogue_subtile,
             x_transpose, w_transpose, y_transpose,
             device, opt_flags_scope, fresh_knobs):
     # TODO: remove when Triton FP8 supports proper RTNE
@@ -424,17 +412,17 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
     weight_dtype = dtype_str_to_torch(weight_dtype_str)
     act_dtype = dtype_str_to_torch(act_dtype_str)
     precision_opt = init_precision(act_dtype, act_is_float8, weight_dtype, weight_mxfp,
-                                   n_expts_tot // n_expt_shards, expt_is_inner, device=device)
+                                   n_expts_tot, expt_is_inner, device=device)
     # precision_opt.x_pad_trans_requires_flexpoint = False
     if mode == "ragged":
-        m, rdata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_scatter,
+        m, rdata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter,
                                                    device=device)
     else:
         rdata = gindx = sindx = None
 
     padding_block_k = 32
     x_tri, w_tri, bias_tri, gs0_tri, gs1_tri = init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act,
-                                                                 n_expt_shards, mode, torch.bfloat16 if act_mxfp8 else act_dtype,  #
+                                                                 mode, torch.bfloat16 if act_mxfp8 else act_dtype,  #
                                                                  torch.bfloat16 if weight_mxfp else weight_dtype,
                                                                  has_y_gammas, requires_grad=test_bwd, device=device,
                                                                  inner_expt_opt=inner_expt_opt, padding_block_k=padding_block_k)
@@ -446,9 +434,9 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
         w_tri = w_tri.detach().transpose(-1, -2).contiguous().transpose(-1, -2).requires_grad_(test_bwd)
     if y_transpose:
         if mode == "batched":
-            yT_shape = (n_expts_tot // n_expt_shards, n, x_tri.shape[-2])
+            yT_shape = (n_expts_tot, n, x_tri.shape[-2])
         elif expt_is_inner:
-            yT_shape = (n_expts_tot // n_expt_shards, n, k)
+            yT_shape = (n_expts_tot, n, k)
         elif sindx is not None:
             yT_shape = (n, m)
         else:
@@ -549,20 +537,6 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
             assert val.ndim == 3
             return val / scal[:, None, None]
 
-    if n_expt_shards > 1:
-        if do_scatter:
-            indx = sindx.dst_indx[sindx.dst_indx != -1]
-            ref_y = ref_y[indx // n_expts_act, :]
-            if act_is_float8:
-                tri_y = tri_y.view(torch.int8)
-            tri_y = tri_y[indx // n_expts_act, :]
-            if act_is_float8:
-                tri_y = tri_y.view(act_dtype)
-        elif not expt_is_inner:
-            n_rows = rdata.expt_hist.sum()
-            assert n_rows > 0
-            ref_y = ref_y[:n_rows]
-            tri_y = tri_y[:n_rows]
     if act_mxfp8:
         tri_y = upcast_from_mxfp(tri_y, precision_opt.out_scale, target_dtype=torch.bfloat16, axis=-1).to(ref_y.dtype)
         ref_y_quant, ref_y_scale = downcast_to_mxfp_torch(ref_y, act_dtype, axis=-1)
@@ -683,18 +657,18 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
         "split_k": split_k,
         "fused_scatter": fused_scatter,
     }
-    n_expts_tot, n_expts_act, n_expt_shards = 1, 1, 1
+    n_expts_tot, n_expts_act = 1, 1
     opt_flags.update_opt_flags_constraints(constraints)
 
     weight_dtype, act_dtype = torch.float16, torch.float16
     if mode == "ragged":
-        m, rdata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, n_expt_shards, do_gather, do_scatter,
+        m, rdata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter,
                                                    device=device)
     else:
         rdata = gindx = sindx = None
 
-    precision_opt = init_precision(act_dtype, str(act_dtype).startswith("torch.float8"), weight_dtype, False, n_expts_tot // n_expt_shards, device=device)
-    x, w, bias, _, _ = init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, n_expt_shards, mode,
+    precision_opt = init_precision(act_dtype, str(act_dtype).startswith("torch.float8"), weight_dtype, False, n_expts_tot, device=device)
+    x, w, bias, _, _ = init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, mode,
                                          act_dtype, weight_dtype, False, requires_grad=False, device=device)
 
     if mode == "batched":
