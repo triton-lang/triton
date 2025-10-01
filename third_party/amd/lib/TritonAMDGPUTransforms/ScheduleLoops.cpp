@@ -96,26 +96,27 @@ namespace {
 // consists of multiple stages, where ops from different stages can overlap
 // executions because the dependencies are loop carried.
 //
-// The general flow of this process is:
+// The general flow of this process is(This is an overview. Some passes or
+// functions are in other files):
 //
 // 1. The user provides a `num_stages` that specifies how many stages the
 //    pipeline will have. The number of stages must be larger than the distance
 //    from the first independent load to the compute in order to pipeline.
-// 2. A schedule is created based on the distance between the global loads
-//    in the first stages and the compute that uses the loaded values in the
-//    last stage (num_stages - 1). Each operation will be clustered in the
-//    order to best overlap with other operations (see details below in the
-//    initSchedule methods).
-// 3. When the compute is a tt.dot, the scheduler will insert a shared
-//    memory allocation between the global load and tt.dot. The global load
-//    value will be saved to shared memory, via ttg.local_store or via
+// 2. In this pass, a schedule is created based on the distance between the
+//    global loads in the first stages and the compute that uses the loaded
+//    values in the last stage (num_stages - 1). Each operation will be
+//    clustered in the order to best overlap with other operations.
+// 3. In lowerLoops, when the compute is a tt.dot, the scheduler will insert a
+//    shared memory allocation between the global load and tt.dot. The global
+//    load value will be saved to shared memory, via ttg.local_store or via
 //    ttg.async_copy_global_to_local writing directly to shared memory, and the
 //    ttg.local_load will load the relevant tiles for the tt.dot. These
 //    operations will be scheduled according to various scheduling schemes
-//    outlined below in the initSchedule methods (see details there).
-// 4. Finally the schedule will be passed to the PipelineExpander to rewrite
-//    accordingly. The new implementation will consist of:
-//    a. Prologue: containing the ramp-up of num_stages-1 stages for
+//    outlined in the initSchedule methods in LowerLoops.cpp (see details
+//    there).
+// 4. Finally in TritonAMDGPUPipeline pass, the schedule will be passed to the
+//    PipelineExpander to rewrite accordingly. The new implementation will
+//    consist of: a. Prologue: containing the ramp-up of num_stages-1 stages for
 //       iteratorions i=[0, num_stages-1).
 //    b. New loop: ordered by cluster and iterated on each operation by
 //       `i + (num_stages-op_stage)`.

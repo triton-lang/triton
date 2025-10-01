@@ -15,13 +15,9 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
 //===----------------------------------------------------------------------===//
-// This file will create a schedule that will be handed over to the pipeline
-// expander.
-// Software pipeliners are usually separated into two pieces, one that create a
-// modulo schedule and an expander that rewrites the loop and emits a prologue
-// and epilogue. This pass first calls a helper that will pre-process the IR
-// to create stream operations and create a modulo schedule. Then we call the
-// expander to generate the prologue and new loop and epilogue.
+// This file will conditionally allocate lds memory, create local/async load
+// operations, and create schedule for these operations. After lowerLoops,
+// schedule will be passed to expandLoops and eventually to PipelineExpander.
 //===----------------------------------------------------------------------===//
 
 using mlir::triton::AMD::AttrBypassLDS;
@@ -339,6 +335,36 @@ static void dumpSchedule(tt::CoarseSchedule &schedule, llvm::StringRef msg) {
 
 namespace SingleDotSchedule {
 using namespace mlir::SingleDotSchedule;
+using ClusterMap = DenseMap<tt::CoarseSchedule::ClusterHash, int>;
+
+ClusterMap createClusterMap(tt::CoarseSchedule &schedule) {
+  DenseMap<tt::CoarseSchedule::ClusterHash, int> clusterMap;
+  for (auto &[op, stageAndCluster] : schedule.opToStageAndCluster) {
+    auto [stage, cluster] = stageAndCluster;
+    tt::CoarseSchedule::ClusterHash clusterHash =
+        tt::CoarseSchedule::hashCluster(cluster);
+    clusterMap[clusterHash] = *cluster;
+  }
+
+  return clusterMap;
+}
+
+// Remap global and compute clusters to the right place
+void remapClusters(tt::CoarseSchedule &schedule, ClusterMap clusterMap,
+                   Clusters &clusters) {
+  for (auto &[op, stageAndCluster] : schedule.opToStageAndCluster) {
+    auto [stage, cluster] = stageAndCluster;
+    tt::CoarseSchedule::ClusterHash clusterHash =
+        tt::CoarseSchedule::hashCluster(stageAndCluster.second);
+    int oldClusterId = clusterMap[clusterHash];
+    if (oldClusterId == 0) {
+      stageAndCluster.second = clusters[SCHED_GLOBAL_LOAD];
+    } else {
+      assert(oldClusterId == 1);
+      stageAndCluster.second = clusters[SCHED_COMPUTE];
+    }
+  }
+}
 
 // Init Schedule Config based on settings and loop characteristics.
 // Create clusters in order of ops in loop. This can interleave ops
@@ -427,20 +453,13 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
     computeCluster = localLoadCluster;
   }
 
-  bool recoverCluster = schedule.clusters.size() > 0;
-  DenseMap<tt::CoarseSchedule::ClusterHash, int> clusterMap;
-  if (recoverCluster) {
-    for (auto &[op, stageAndCluster] : schedule.opToStageAndCluster) {
-      auto [stage, cluster] = stageAndCluster;
-      tt::CoarseSchedule::ClusterHash clusterHash =
-          tt::CoarseSchedule::hashCluster(cluster);
-      clusterMap[clusterHash] = *cluster;
-    }
-    schedule.clusters.clear();
-  }
+  // Create a hash map to associate cluster hash in old schedule with its
+  // clusterID
+  ClusterMap clusterMap = createClusterMap(schedule);
 
   // Make assignments
   Clusters clusterVec;
+  schedule.clusters.clear();
   std::generate(clusterVec.begin(), clusterVec.end(),
                 [&]() { return schedule.clusters.newAtBack(); });
 
@@ -450,21 +469,7 @@ LogicalResult initSchedule(int maxDist, Stages &stages, int numStages,
   clusters[SCHED_COMPUTE] = clusterVec[computeCluster];
   clusters[SCHED_ASYNC_WAIT] = clusterVec[asyncWaitCluster];
 
-  // Put global and compute clusters in right place
-  if (recoverCluster) {
-    for (auto &[op, stageAndCluster] : schedule.opToStageAndCluster) {
-      auto [stage, cluster] = stageAndCluster;
-      tt::CoarseSchedule::ClusterHash clusterHash =
-          tt::CoarseSchedule::hashCluster(stageAndCluster.second);
-      int oldClusterId = clusterMap[clusterHash];
-      if (oldClusterId == 0) {
-        stageAndCluster.second = clusters[SCHED_GLOBAL_LOAD];
-      } else {
-        assert(oldClusterId == 1);
-        stageAndCluster.second = clusters[SCHED_COMPUTE];
-      }
-    }
-  }
+  remapClusters(schedule, clusterMap, clusters);
 
   LDBG("Cluster schedule:" << "  GLOBAL_LOAD cluster = " << globalLoadCluster
                            << ", LOCAL_STORE cluster = " << localStoreCluster
@@ -743,11 +748,6 @@ void lowerLoops(ModuleOp moduleOp, bool useAsyncCopy, bool usePingpong) {
     return;
   for (auto forOp : loops) {
     lowerLoop(forOp, axisInfoAnalysis, useAsyncCopy, usePingpong);
-  }
-  if (useAsyncCopy) {
-    llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
-    moduleOp.walk([&](ttg::AsyncWaitOp waitOp) { waitOps.insert(waitOp); });
-    tt::combineRedundantWaitOps(waitOps);
   }
 }
 

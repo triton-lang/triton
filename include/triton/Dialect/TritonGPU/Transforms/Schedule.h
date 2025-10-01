@@ -158,7 +158,7 @@ public:
   // Set <stage, cluster> based on CoarseSchedule.
   void serialize(scf::ForOp &forOp) const;
   // Create a CoarseSchedule based on forOp's <stage, cluster>.
-  // If normalizeClusterId is true, cluster will be mapped to a sequence
+  // If normalizeClusterId is true, clusters will be mapped to a sequence
   // starting from 0.
   LogicalResult deSerialize(scf::ForOp &forOp, bool normalizeClusterId = true);
 
