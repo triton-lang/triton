@@ -4,11 +4,13 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
+#include "triton/Tools/LinearLayout.h"
 
-using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
-using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MemDescType;
 
 namespace {
@@ -32,103 +34,82 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
     MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
-    Attribute srcLayout = srcTy.getEncoding();
-    Attribute dstLayout = dstTy.getEncoding();
+    auto typeConverter = this->getTypeConverter();
+    auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
+    unsigned bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    // 64 is the number of bytes ds_read_tr
+    unsigned needContigReg = 64 / bitwidth;
+    // 16 is the number of lanes that participate in the data shuffle
+    unsigned needContigLane = 16;
 
-    if (isPackedLoad || canUseTransLoad(op, srcTy, dstTy)) {
-      return lowerSharedToDotOperandTransLL(op, adaptor,
-                                            this->getTypeConverter(), rewriter);
+    if (!canUseTransLoad(op, srcTy, dstTy, bitwidth, needContigReg,
+                         needContigLane)) {
+      return failure();
     }
-    return failure();
+    auto shape = srcTy.getShape();
+    // FP4 are packed into i8 so the real bitwidth is different
+    auto llBitwidth = isPackedLoad ? 4 : llvmElemTy.getIntOrFloatBitWidth();
+    auto ldsTransLayout = triton::gpu::chooseDsReadB64TrLayout(
+        dstTy.getEncoding(), shape, llBitwidth);
+
+    int vecSize = getLayoutVectorization(srcTy, ldsTransLayout);
+    if (vecSize < needContigReg)
+      return failure();
+
+    return lowerSharedToDotOperandTransLL(op, ldsTransLayout, adaptor,
+                                          typeConverter, rewriter);
   }
 
 private:
-  bool checkLayoutProperties(MemDescType srcTy, RankedTensorType dstTy) const {
-    // Verify the layout properties required for using the ds_read_tr
-    // instruction. This instruction is used to load non-k contiguous tensors
-    // from shared memory into a dot layout with an MFMA layout parent.
-    auto dotEnc = llvm::dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-    if (!dotEnc) {
-      return false;
-    }
+  bool checkLayoutProperties(MemDescType srcTy, RankedTensorType dstTy,
+                             unsigned needContigReg,
+                             unsigned needContigLane) const {
+    auto srcOrder = triton::gpu::getOrder(srcTy);
+    auto dstOrder = triton::gpu::getOrder(dstTy);
 
-    auto mfmaEnc = llvm::dyn_cast<AMDMfmaEncodingAttr>(dotEnc.getParent());
-    if (!mfmaEnc) {
-      return false;
-    }
-
-    auto tilesPerWarp = mfmaEnc.getTilesPerWarp();
-    if (!mfmaEnc.hasUnitTilesPerWarp()) {
-      return false;
-    }
-
-    auto sharedEnc =
-        dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
-    if (!sharedEnc)
+    // Check that the contiguity of srcTy and dstTy don't match
+    // this is because ds_read_tr will reshuffle the data to
+    // the opposite contiguity
+    if (dstOrder[0] == srcOrder[0])
       return false;
 
-    int rank = dstTy.getRank();
-    const int kDim = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
-    return kDim != sharedEnc.getOrder()[0];
+    auto dstLL = triton::gpu::toLinearLayout(dstTy);
+    SmallVector<StringAttr> outDimNames(dstLL.getOutDimNames());
+    std::swap(outDimNames[0], outDimNames[1]);
+    auto dstTrLL = dstLL.transposeOuts(outDimNames);
+
+    // Check the main requirements for the ds_read_tr instruction: contiguity
+    // of reg/lane. This is because ds_read_tr works on a block of 16 lanes
+    // with each holding 64 bits of data. Each lane will load 64 bits of
+    // contiguous data and then share it among the lane dimension.
+    // This means that there needs to be a check that each lane owns
+    // 64 bit of contig data and that the communicating lanes are contiguous.
+    // In order to do this, we use ll.getNumConsecutiveInOut() which
+    // can get the contiguity of the first component of the first
+    // dimension.
+    // Since the data might be dim0 or dim1 contiguous we need both the
+    // dstLL and the dstTrLL: one to check the register dimension
+    // contiguity and the other to check the lane dimension one.
+    bool dim1Contig = dstOrder[0] == 1;
+    auto dstLLDim0Contig = dim1Contig ? dstTrLL : dstLL;
+    auto dstLLDim1Contig = dim1Contig ? dstLL : dstTrLL;
+    int contigRegisters = dstLLDim0Contig.getNumConsecutiveInOut();
+
+    assert(dstLLDim0Contig.getBases().begin()->first == "register");
+    SmallVector<StringAttr> subLayoutInDims(
+        llvm::drop_begin(dstLLDim0Contig.getInDimNames()));
+    SmallVector<StringAttr> subLayoutOutDims(dstLLDim0Contig.getOutDimNames());
+    auto dstLLOnlyLaneWarp =
+        dstLLDim1Contig.sublayout(subLayoutInDims, subLayoutOutDims);
+    int contigLanes = dstLLOnlyLaneWarp.getNumConsecutiveInOut();
+
+    // Check that the tile size used by ds_read_tr (KxM/N = 4x16 for 16-bit
+    // elements) is contiguous both in terms of registers dimension and in
+    // terms of lane dimension. If that is the case then we can use ds_read_tr
+    return contigRegisters >= needContigReg && contigLanes >= needContigLane;
   }
 
-  bool checkKWidth(MemDescType srcTy, RankedTensorType dstTy) const {
-    // Single rate MFMA insts:
-    // fp16, bf16: mfma32x32x8, mfma16x16x16
-    // fp8, bf8: mfma32x32x16, mfma16x16x32
-    // int8: mfma32x32x16, mfma16x16x32
-    //
-    // Double rate MFMA insts:
-    // fp16, bf16: mfma32x32x16, mfma16x16x32
-    // fp8, bf8: mfma32x32x64, mfma16x16x128
-    // int8: mfma32x32x32, mfma16x16x64
-    //
-    // Check that kWidth of the dst dotOp layout is large enough to
-    // work with the transposed lds load instructions.
-    auto dotEnc = llvm::cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-    auto mfmaEnc = llvm::cast<AMDMfmaEncodingAttr>(dotEnc.getParent());
-
-    int rank = dstTy.getRank();
-    auto bitwidth = this->typeConverter->convertType(dstTy.getElementType())
-                        .getIntOrFloatBitWidth();
-    int32_t kWidth = dotEnc.getKWidth();
-    const int32_t mDim = mfmaEnc.getInstrShape()[0];
-    if (mDim != 32 && mDim != 16)
-      return false;
-
-    const int kFactor = 16 / bitwidth;
-    const int kSizeDoubleRateMfma32 = 16 * kFactor;
-    const int kSizeDoubleRateMfma16 = 32 * kFactor;
-    int largeTileThreshold =
-        (mDim == 32) ? kSizeDoubleRateMfma32 : kSizeDoubleRateMfma16;
-
-    // For FP8, wider MFMA instructions (scaled MFMA) have a k-dimension
-    // that is four times of regular MFMA instructions.
-    if (dstTy.getElementType().isFloat() && bitwidth == 8) {
-      largeTileThreshold *= 2;
-    }
-
-    const auto shape = dstTy.getShape();
-    const int kDim = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
-    const bool isLargeTile = shape[kDim] >= largeTileThreshold;
-
-    const int kWidthLargeTile = 8 * kFactor;
-    const int kWidthSmallTile = 4 * kFactor;
-    // For largeTile, i.e. double rated mfma is an option, it's accepted to
-    // have kWidth set for both double and single rated mfma
-    // For smallTile, it's only accepted to have kWidth set to single rate
-    // mfma. Smaller kWidth is not allowed to use transposed lds load.
-    return (isLargeTile &&
-            llvm::is_contained({kWidthLargeTile, kWidthSmallTile}, kWidth)) ||
-           (kWidth == kWidthSmallTile);
-  }
-
-  bool checkCurrentLimitation(Operation *localLoad,
-                              RankedTensorType dstTy) const {
-
-    auto bitwidth = this->typeConverter->convertType(dstTy.getElementType())
-                        .getIntOrFloatBitWidth();
-
+  bool checkCurrentLimitation(unsigned bitwidth) const {
     // FP4 is represented as i8 and, when packed along K, can be
     // transposed using ds_read_tr8 which doesn't change packing.
     if (bitwidth != 16 && bitwidth != 8) {
@@ -139,35 +120,54 @@ private:
   }
 
   bool canUseTransLoad(Operation *localLoad, MemDescType srcTy,
-                       RankedTensorType dstTy) const {
-    auto bitwidth = this->typeConverter->convertType(dstTy.getElementType())
-                        .getIntOrFloatBitWidth();
+                       RankedTensorType dstTy, unsigned bitwidth,
+                       unsigned needContigReg, unsigned needContigLane) const {
+    // Packed loads need to always map to ds_read_tr
+    if constexpr (isPackedLoad) {
+      return true;
+    }
 
-    // 1. Check GPU arch properties.
     if (!targetInfo.canUseLDSTransLoad(bitwidth)) {
       return false;
     }
 
-    // 2. Check layout properties.
-    if (!checkLayoutProperties(srcTy, dstTy)) {
+    if (!checkCurrentLimitation(bitwidth)) {
       return false;
     }
 
-    // 3. Check current limitations.
-    if (!checkCurrentLimitation(localLoad, dstTy)) {
-      return false;
-    }
-
-    // 4. Check kWidth
-    if (!checkKWidth(srcTy, dstTy)) {
+    if (!checkLayoutProperties(srcTy, dstTy, needContigReg, needContigLane)) {
       return false;
     }
 
     return true;
   }
 
+  int getLayoutVectorization(MemDescType srcTy,
+                             LinearLayout ldsTransLayout) const {
+    auto paddedEnc =
+        dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(srcTy.getEncoding());
+    LinearLayout regToSharedLayout = LinearLayout::empty();
+    if (paddedEnc) {
+      const auto &sharedLL = paddedEnc.getLinearComponent();
+      regToSharedLayout = ldsTransLayout.invertAndCompose(sharedLL);
+    } else {
+      auto sharedLL = triton::gpu::toLinearLayout(srcTy);
+      regToSharedLayout = ldsTransLayout.invertAndCompose(sharedLL);
+    }
+
+    // Determine how many consecutive registers map to consecutive shmem
+    // elements in out-dimension offsetN.
+    int vecElems = regToSharedLayout.getNumConsecutiveInOut();
+    if (paddedEnc) {
+      vecElems = std::min(vecElems, int(paddedEnc.getMinInterval()));
+    }
+
+    return vecElems;
+  }
+
   LogicalResult
-  lowerSharedToDotOperandTransLL(LocalLoadOpType op, OpAdaptor adaptor,
+  lowerSharedToDotOperandTransLL(LocalLoadOpType op,
+                                 LinearLayout ldsTransLayout, OpAdaptor adaptor,
                                  const LLVMTypeConverter *typeConverter,
                                  ConversionPatternRewriter &rewriter) const {
     auto ctx = rewriter.getContext();
@@ -175,12 +175,8 @@ private:
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto dstTy = cast<RankedTensorType>(op.getType());
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
-    auto dotEnc = cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-    auto shape = isPackedLoad ? srcTy.getShape() : dstTy.getShape();
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
-    auto llBitwidth = isPackedLoad ? 4 : llvmElemTy.getIntOrFloatBitWidth();
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    auto ldsTransLayout = chooseDsReadB64TrLayout(dotEnc, shape, llBitwidth);
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
     SmallVector<Value> outVals;
