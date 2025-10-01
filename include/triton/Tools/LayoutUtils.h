@@ -147,6 +147,41 @@ std::pair<int, ColumnAction>
 largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
                      std::optional<int> maybeMaxVecElems = std::nullopt);
 
+// Close cousin of doing zerosLike(tile) * divideLeft(cvt, tile)
+// This one is a tad more general in the sense that it allows to divide
+//  cvt:
+// - register=1 -> (0, 1)
+//   register=2 -> (8, 0)
+//   register=4 -> (0, 8)
+//   register=8 -> (0, 16)
+//   register=16 -> (0, 32)
+//   register=32 -> (0, 64)
+//   register=64 -> (16, 0)
+// - lane=1 -> (0, 2)
+//   lane=2 -> (0, 4)
+//   lane=4 -> (1, 0)
+//   lane=8 -> (2, 0)
+//   lane=16 -> (4, 0)
+// - warp=1 -> (32, 0)
+//   warp=2 -> (64, 0)
+// - block is a size 1 dimension
+// where out dims are: [row (size 128), col (size 128)]
+// tile:
+//  - register=1 -> (0, 1)
+//    register=2 -> (8, 0)
+//  - lane=1 -> (0, 2)
+//    lane=2 -> (0, 4)
+//    lane=4 -> (1, 0)
+//    lane=8 -> (2, 0)
+//    lane=16 -> (4, 0)
+//  - warp=1 -> (32, 0)
+//    warp=2 -> (64, 0)
+// where out dims are: [row (size 128), col (size 8)]
+// which would not be possible to lower via the divideLeft approach as we
+// cannot divide by the tile given the `register=64 -> (16, 0)` basis.
+std::optional<LinearLayout> getReps(const LinearLayout &cvt,
+                                    const LinearLayout &tile);
+
 } // namespace mlir::triton
 
 #endif // TRITON_TOOLS_LAYOUTUTILS_H

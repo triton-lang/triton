@@ -156,6 +156,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return self._wrap_tensor_infer_layout(value)
 
     def splat(self, value, shape, layout):
+        if len(shape) == 0:
+            return value
         ret_ty = ttgl.distributed_type(value.dtype, shape, layout)
         handle = self.builder.create_splat(ret_ty.to_ir(self.builder), value.handle)
         return ttgl.tensor(handle, ret_ty)
