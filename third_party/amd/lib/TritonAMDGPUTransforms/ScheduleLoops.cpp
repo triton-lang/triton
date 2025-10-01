@@ -253,115 +253,60 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
     else
       threadNumBytes *= 4;
   }
-  // We also need to align with dwordx4 or dword loads
-  innerD = llvm::alignTo(innerD, (16 * 64) / byteWidth);
-  unsigned paddingInElems = threadNumBytes / byteWidth;
 
   std::vector<std::vector<int>> offsetBases;
 
+  auto createBaseLayout = [](int kDim, int contigDim = 0) {
+    std::vector<std::vector<int>> offsetBasesNew;
+    for (int k2 = 0; k2 < llvm::Log2_32(kDim); k2++)
+      offsetBasesNew.push_back({1 << k2, 0});
+    // We need to pad until 9 bases (1024 bytes) and start at 16
+    int nonKPointer = llvm::Log2_32(16);
+    while (offsetBasesNew.size() < 9)
+      offsetBasesNew.push_back({0, 1 << nonKPointer++});
+
+    for (int k2 = 0; k2 < llvm::Log2_32(16); k2++)
+      offsetBasesNew.push_back({0, 1 << k2});
+
+    if (contigDim == 1) {
+      for (auto &b : offsetBasesNew) {
+        std::swap(b[0], b[1]);
+      }
+    }
+
+    return offsetBasesNew;
+  };
+
+  auto printBases = [](auto bases) {
+    for (auto b : bases) {
+      llvm::outs() << b[0] << ", " << b[1] << "\n";
+    }
+  };
+
   if (isKContig) {
-    if (mfmaNonKDim == 16) {
-      if (kDim == 32) {
-        offsetBases = {
-            {1, 0},  {2, 0},  {4, 0}, {8, 0}, {16, 0}, {0, 128}, {0, 16},
-            {0, 32}, {0, 64}, {0, 1}, {0, 2}, {0, 4},  {0, 8},
-        };
-      } else if (kDim == 64) {
-        offsetBases = {
-            {1, 0},  {2, 0},  {4, 0}, {8, 0}, {16, 0}, {32, 0}, {0, 16},
-            {0, 32}, {0, 64}, {0, 1}, {0, 2}, {0, 4},  {0, 8},
-        };
-      } else if (kDim >= 128) {
-        offsetBases = {
-            {1, 0},  {2, 0},  {4, 0}, {8, 0}, {16, 0}, {32, 0}, {64, 0},
-            {0, 16}, {0, 32}, {0, 1}, {0, 2}, {0, 4},  {0, 8},
-        };
-      }
-    } else if (mfmaNonKDim == 32) {
-      if (kDim == 32) {
-        assert(false);
-      } else if (kDim == 64) {
-        offsetBases = {
-            {1, 0},  {2, 0},  {4, 0}, {0, 16}, {16, 0}, {32, 0}, {8, 0},
-            {0, 32}, {0, 64}, {0, 1}, {0, 2},  {0, 4},  {0, 8},
-        };
-      } else if (kDim >= 128) {
-        offsetBases = {
-            {1, 0},  {2, 0},  {4, 0}, {0, 16}, {16, 0}, {32, 0}, {8, 0},
-            {0, 32}, {64, 0}, {0, 1}, {0, 2},  {0, 4},  {0, 8},
-        };
-      }
-    } else {
-      assert(false);
+    offsetBases = createBaseLayout(kDim);
+    if (mfmaNonKDim == 32) {
+      int row16Index = kDim == 32 ? 5 : (kDim == 64 ? 6 : 7);
+      std::swap(offsetBases[row16Index], offsetBases[7]);
+      threadNumBytes /= 2;
     }
   } else {
+    offsetBases = createBaseLayout(nonKDim, 1);
     if (mfmaNonKDim == 16) {
-      if (kDim == 32) {
-        offsetBases = {
-            {0, 1},  {0, 2},   {0, 4}, {0, 8}, {0, 16}, {0, 32}, {0, 64},
-            {16, 0}, {0, 128}, {1, 0}, {2, 0}, {8, 0},  {4, 0},
-        };
-      } else if (kDim == 64) {
-        if (dotOpEnc.getKWidth() == 4) {
-          offsetBases = {
-              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 16}, {0, 32}, {0, 64},
-              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
-          };
-        } else {
-          offsetBases = {
-              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 16}, {0, 32}, {0, 64},
-              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {8, 0},  {4, 0},
-          };
-        }
-      } else if (kDim >= 128) {
-        if (dotOpEnc.getKWidth() == 4) {
-          offsetBases = {
-              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 16}, {0, 32}, {64, 0},
-              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
-          };
-        } else {
-          offsetBases = {
-              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 16}, {0, 32}, {64, 0},
-              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {8, 0},  {4, 0},
-          };
-        }
-      } else {
-        assert(false);
+      threadNumBytes = 32;
+      if (dotOpEnc.getKWidth() == 8) {
+        std::swap(offsetBases[11], offsetBases[12]);
       }
     } else if (mfmaNonKDim == 32) {
-      if (kDim == 32) {
-        assert(false);
-      } else if (kDim == 64) {
-        if (dotOpEnc.getKWidth() == 4) {
-          offsetBases = {
-              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 32}, {0, 64}, {0, 16},
-              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
-          };
-        } else {
-          offsetBases = {
-              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 64}, {0, 32}, {0, 16},
-              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
-          };
-        }
-      } else if (kDim == 128) {
-        if (dotOpEnc.getKWidth() == 4) {
-          offsetBases = {
-              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {0, 32}, {64, 0}, {0, 16},
-              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
-          };
-        } else {
-          offsetBases = {
-              {0, 1},  {0, 2},  {0, 4}, {0, 8}, {64, 0}, {0, 32}, {0, 16},
-              {16, 0}, {32, 0}, {1, 0}, {2, 0}, {4, 0},  {8, 0},
-          };
-        }
-      } else {
-        assert(false);
-      }
+      threadNumBytes = 64;
     } else {
       assert(false);
     }
   }
+
+  // We also need to align with dwordx4 or dword loads
+  innerD = llvm::alignTo(innerD, (16 * 64) / byteWidth);
+  unsigned paddingInElems = threadNumBytes / byteWidth;
 
   // llvm::outs() << "IsKContig: " << isKContig << "\n";
   // llvm::outs() << "Order: " << order[0] << ", " << order[1] << "\n";
