@@ -111,7 +111,8 @@ private:
                              DenseSet<ttg::LocalStoreOp> &dotLocalStores);
   template <typename T>
   void findClosestPredOps(Value v, DenseSet<T> &matchingOps);
-  scf::ExecuteRegionOp createStage(OpBuilder &b, Location loc, SmallVector<Operation *> &ops);
+  scf::ExecuteRegionOp createStage(OpBuilder &b, Location loc,
+                                   SmallVector<Operation *> &ops);
 };
 
 void Pipeliner::updateOpInsertion(Operation *op) { lastInsertedOp = op; }
@@ -177,11 +178,11 @@ void Pipeliner::appendSlicedLoadAB(int slice) {
 // Also, SchedBarrier with `0` is set here to tell compiler backend not to
 // reorder any instruction across this point.
 SmallVector<Operation *> Pipeliner::genClusterBarrier(OpBuilder &builder,
-                                                       Location loc) {
+                                                      Location loc) {
   //  MembarAnalysis can recognize gpu::BarrierOp and skip inserting additional
-  //auto barrierOp = builder.create<gpu::BarrierOp>(loc);
+  // auto barrierOp = builder.create<gpu::BarrierOp>(loc);
   auto schedBarrierOp = builder.create<ROCDL::SchedBarrier>(loc, 0);
-  //return {barrierOp, schedBarrierOp};
+  // return {barrierOp, schedBarrierOp};
   return {schedBarrierOp};
 }
 void Pipeliner::appendClusterBarrier(OpBuilder &builder, Location loc) {
@@ -193,7 +194,7 @@ void Pipeliner::prependClusterBarrier(OpBuilder &builder, Location loc) {
     prependOp(op, false);
 }
 void Pipeliner::appendOpWithPrio(OpBuilder &builder, Operation *op,
-                                  Location loc) {
+                                 Location loc) {
   appendOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority));
   appendOp(op);
   appendOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority));
@@ -312,7 +313,7 @@ size_t Pipeliner::countIfMemoryOps(scf::IfOp ifOp, bool assumeNotTaken) {
 // influence on cluster setup.
 template <typename T>
 size_t Pipeliner::estimateNonDotMemoryImpact(T *start, T *end,
-                                              bool assumeNotTaken) {
+                                             bool assumeNotTaken) {
   DenseSet<Operation *> visitedParents;
   size_t count = 0;
   for (auto it = start; it != end; it++) {
@@ -413,7 +414,7 @@ void Pipeliner::transformOnePPClusters(OpBuilder &builder, Location loc) {
 }
 
 void Pipeliner::genOffsetConstants(Location loc, OpBuilder &builder,
-                                    unsigned numSlices, int64_t sliceWidth) {
+                                   unsigned numSlices, int64_t sliceWidth) {
   for (int i = 0; i < numSlices; i++) {
     int64_t offset = sliceWidth * i;
     constOffsets.push_back(offset);
@@ -424,9 +425,8 @@ void Pipeliner::genOffsetConstants(Location loc, OpBuilder &builder,
 // function tries to slice the local_load into the given number of the slices,
 // generates ops when succeed, return fail() otherwise.
 LogicalResult Pipeliner::genLocalSlice(OpBuilder &builder, Value v,
-                                        Attribute dotEncoding, unsigned opIdx,
-                                        unsigned numSlices,
-                                        int64_t sliceWidth) {
+                                       Attribute dotEncoding, unsigned opIdx,
+                                       unsigned numSlices, int64_t sliceWidth) {
   SmallVector<Operation *> slices;
   SmallVector<Operation *> subviews;
   // TODO: support transformed input to dot
@@ -471,7 +471,7 @@ LogicalResult Pipeliner::genLocalSlice(OpBuilder &builder, Value v,
 // when it needs to schedule multiple dot clusters. Calls genLocalSlice to
 // create corresponding local_load slices.
 LogicalResult Pipeliner::sliceDot(OpBuilder &builder, Location loc,
-                                   tt::DotOp op, unsigned numSlices) {
+                                  tt::DotOp op, unsigned numSlices) {
   builder.setInsertionPointToStart(forOp.getBody());
   auto typeB = op.getB().getType();
   auto shapeB = typeB.getShape();
@@ -528,7 +528,7 @@ LogicalResult Pipeliner::sliceDot(OpBuilder &builder, Location loc,
 // dot3: dot A(4/4) * B(4/4)
 
 LogicalResult Pipeliner::transformFourPPClusters(OpBuilder &builder,
-                                                  Location loc) {
+                                                 Location loc) {
   // First, slice local_loads and dot into 4 parts
   if (sliceDot(builder, loc, dotOps[0], 4).failed())
     return failure();
@@ -582,7 +582,7 @@ LogicalResult Pipeliner::transformFourPPClusters(OpBuilder &builder,
   prependClusterBarrier(builder, loc);
 
   // Add a remark for user feedback
-  //dotSliceOps[0]->emitRemark()
+  // dotSliceOps[0]->emitRemark()
   //    << "Performed four ping pong cluster transformation\n";
   return success();
 }
@@ -591,7 +591,7 @@ LogicalResult Pipeliner::transformFourPPClusters(OpBuilder &builder,
 // This is useful for the medium sized tile which doesn't fit to either one/four
 // cluster scheduling.
 LogicalResult Pipeliner::transformTwoPPClusters(OpBuilder &builder,
-                                                 Location loc) {
+                                                Location loc) {
   // First, slice local_loads and dot into 2 parts
   if (sliceDot(builder, loc, dotOps[0], 2).failed())
     return failure();
@@ -649,7 +649,7 @@ LogicalResult Pipeliner::transformTwoPPClusters(OpBuilder &builder,
 // two groups of mfmas, so ds_read instructions can only reside together with
 // the first mfma group.
 LogicalResult Pipeliner::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
-                                                             Location loc) {
+                                                            Location loc) {
   if (asyncCopyOps.size() == 0)
     return failure();
   builder.setInsertionPointAfter(asyncWaitOps[0]);
@@ -674,7 +674,7 @@ LogicalResult Pipeliner::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
 }
 
 LogicalResult Pipeliner::setReadPrioOverWrite(OpBuilder &builder,
-                                                      Location loc) {
+                                              Location loc) {
   // Helping cases not using async copy.
   // Assuming operations are scheduled by the pipeliner as below
   // global_load -> local_load -> dot -> local_store
@@ -689,46 +689,45 @@ LogicalResult Pipeliner::setReadPrioOverWrite(OpBuilder &builder,
   return success();
 }
 
-LogicalResult Pipeliner::transformNew(OpBuilder &builder,
-                                                      Location loc) {
- // if (asyncCopyOps.size() > 0)
+LogicalResult Pipeliner::transformNew(OpBuilder &builder, Location loc) {
+  // if (asyncCopyOps.size() > 0)
   //  return failure();
   updateOpInsertion(asyncCopyOps[0]);
-  for (auto acop: asyncCopyOps)
+  for (auto acop : asyncCopyOps)
     moveOpAndPredecessorsUpSameBlock(acop);
-  for (auto acop: asyncCommitOps)
+  for (auto acop : asyncCommitOps)
     moveOpAndPredecessorsUpSameBlock(acop);
-appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-
-  //builder.setInsertionPointToStart(forOp.getBody());
-  //builder.create<ROCDL::SBarrierOp>(loc);
-
-  //updateOpInsertion(gLoadOps[0]);
-//  appendOp(builder.create<ROCDL::SetPrioOp>(loc, 3));
-/*
-  for (auto glop: gLoadOps)
-    appendOp(glop);
   appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-//  appendOp(builder.create<ROCDL::SetPrioOp>(loc, 3));
 
-  for (auto glop: gLoadOps)
-    appendOp(glop);
-  //for (auto lsop: lStoreOps)
-  //updateOpInsertion(lsop);
-  //appendOp(builder.create<ROCDL::IglpOpt>(loc, 2));
-*/
-/*
-  for (auto [glop, llop] : zip(gLoadOps, lLoadOps)) {
-    appendOp(glop);
+  // builder.setInsertionPointToStart(forOp.getBody());
+  // builder.create<ROCDL::SBarrierOp>(loc);
+
+  // updateOpInsertion(gLoadOps[0]);
+  //  appendOp(builder.create<ROCDL::SetPrioOp>(loc, 3));
+  /*
+    for (auto glop: gLoadOps)
+      appendOp(glop);
     appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-    appendOp(llop);
+  //  appendOp(builder.create<ROCDL::SetPrioOp>(loc, 3));
+
+    for (auto glop: gLoadOps)
+      appendOp(glop);
+    //for (auto lsop: lStoreOps)
+    //updateOpInsertion(lsop);
+    //appendOp(builder.create<ROCDL::IglpOpt>(loc, 2));
+  */
+  /*
+    for (auto [glop, llop] : zip(gLoadOps, lLoadOps)) {
+      appendOp(glop);
+      appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+      appendOp(llop);
+      appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+    }
+  //  appendOp(dotOps[0]);
+    updateOpInsertion(dotOps[0]);
     appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-  }
-//  appendOp(dotOps[0]);
-  updateOpInsertion(dotOps[0]);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-*/
-  //appendOp(builder.create<ROCDL::SBarrierOp>(loc));
+  */
+  // appendOp(builder.create<ROCDL::SBarrierOp>(loc));
   return success();
 }
 
@@ -738,7 +737,7 @@ appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
 // at the bounaries and give higher priority to memory clusters
 // See StreamPipeliner.cpp:ChainedDotSchedule for details about the schedule
 LogicalResult Pipeliner::transformChainedDotSchedule(OpBuilder &builder,
-                                                      Location loc) {
+                                                     Location loc) {
   assert(dotOps.size() == 2);
 
   // Memory clusters start with either ttg.async_wait or ttg.local_store
@@ -805,7 +804,7 @@ LogicalResult Pipeliner::transformChainedDotSchedule(OpBuilder &builder,
 // loading cycles. Suitable for large LDS using async copy.
 LogicalResult
 Pipeliner::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
-                                                   Location loc) {
+                                                  Location loc) {
   Operation *gLoadRhs = useAsyncCopy ? asyncCopyOps[1] : gLoadOps[1];
   builder.setInsertionPointAfter(gLoadRhs);
   updateOpInsertion(gLoadRhs);
@@ -894,52 +893,49 @@ void Pipeliner::addAsymmetricSyncToLoop(OpBuilder &builder, Location loc) {
   auto condBarrierLow = builder.create<tt::amdgpu::CondBarrierOp>(loc, warpLow);
 }
 
-
-
-scf::ExecuteRegionOp Pipeliner::createStage(OpBuilder &b, Location loc, SmallVector<Operation *> &ops) {
-LDBG("######### creating region");
-  for (auto op: ops){
+scf::ExecuteRegionOp Pipeliner::createStage(OpBuilder &b, Location loc,
+                                            SmallVector<Operation *> &ops) {
+  LDBG("######### creating region");
+  for (auto op : ops) {
     LDBG("######### adding an op");
-    //op->dump();
+    // op->dump();
   }
 
-  //OpBuilder::InsertionGuard g(b);
+  // OpBuilder::InsertionGuard g(b);
   auto ip = b.saveInsertionPoint();
-  //ops.back()->dump();
+  // ops.back()->dump();
   b.setInsertionPoint(ops.back());
   SmallVector<Type> resTypes;
   SmallVector<Value> results;
   SmallVector<Operation *> opsHaveExternUse;
   SmallVector<bool> hasExternUse;
-  for(auto op: ops){
+  for (auto op : ops) {
     auto res = op->getResults();
-    if(res.size() > 0) {
+    if (res.size() > 0) {
       bool allInGroup = true;
-      for (auto user: op->getUsers()){
+      for (auto user : op->getUsers()) {
         auto it = std::find(ops.begin(), ops.end(), user);
-        if (it == ops.end()){
+        if (it == ops.end()) {
           allInGroup = false;
           break;
         }
       }
-      if (!allInGroup){
-        //opsHaveExternUse.push_back(op);
+      if (!allInGroup) {
+        // opsHaveExternUse.push_back(op);
         resTypes.push_back(res[0].getType());
         hasExternUse.push_back(true);
-      }
-      else
+      } else
         hasExternUse.push_back(false);
-    }
-    else
-        hasExternUse.push_back(false);
+    } else
+      hasExternUse.push_back(false);
   }
   scf::ExecuteRegionOp executeRegionOp =
       scf::ExecuteRegionOp::create(b, loc, resTypes);
   {
-    //OpBuilder::InsertionGuard g(b);
+    // OpBuilder::InsertionGuard g(b);
     b.setInsertionPointToStart(&executeRegionOp.getRegion().emplaceBlock());
 
-    for (auto [op, ret]: zip(ops, hasExternUse)) {
+    for (auto [op, ret] : zip(ops, hasExternUse)) {
       Operation *clonedOp = b.clone(*op);
       if (ret) {
         results.push_back(clonedOp->getResult(0));
@@ -953,24 +949,21 @@ LDBG("######### creating region");
     b.create<scf::YieldOp>(loc, results);
 
     // replace external use
-    for (auto [op, res] : zip(opsHaveExternUse, executeRegionOp.getResults())){
-        op->getResult(0).replaceUsesWithIf(res, [&](OpOperand &use) {
-          if(auto owner = use.getOwner())
-            return owner->getParentOp() != executeRegionOp;
-          return false;
-        });
+    for (auto [op, res] : zip(opsHaveExternUse, executeRegionOp.getResults())) {
+      op->getResult(0).replaceUsesWithIf(res, [&](OpOperand &use) {
+        if (auto owner = use.getOwner())
+          return owner->getParentOp() != executeRegionOp;
+        return false;
+      });
     }
-    
   }
   executeRegionOp.setNoInline(true);
   executeRegionOp->setAttr("warp_pipelined", b.getUnitAttr());
   b.restoreInsertionPoint(ip);
   LDBG("######### created region");
-  
+
   return executeRegionOp;
 }
-
-
 
 void Pipeliner::getDotPingponged() {
 
@@ -990,8 +983,9 @@ void Pipeliner::getDotPingponged() {
         .Case<tt::LoadOp>([&](auto gLoadOp) { gLoadOps.push_back(gLoadOp); })
         .Case<ttg::AsyncCopyGlobalToLocalOp>(
             [&](auto asyncCopyOp) { asyncCopyOps.push_back(asyncCopyOp); })
-        .Case<tt::amdgpu::BufferLoadToLocalOp>(
-            [&](auto asyncCopyOp) { asyncBufferLoadOps.push_back(asyncCopyOp); })
+        .Case<tt::amdgpu::BufferLoadToLocalOp>([&](auto asyncCopyOp) {
+          asyncBufferLoadOps.push_back(asyncCopyOp);
+        })
         .Case<ttg::LocalLoadOp>([&](auto lLoad) {
           // This scheduling doesn't help hiding intra-warp latency. So, we only
           // collect local_load ops that are software pipelined, which means
@@ -1016,8 +1010,6 @@ void Pipeliner::getDotPingponged() {
         .Case<ttg::AsyncWaitOp>(
             [&](auto asyncOp) { asyncWaitOps.push_back(asyncOp); });
   });
-
-
 
   // Determine if we have a persistent GEMM. This will decide how we interpret
   // any memory operations that we find in conditionals.
@@ -1044,66 +1036,65 @@ void Pipeliner::getDotPingponged() {
   intShape.push_back(mnkDim[0]);
   intShape.push_back(mnkDim[1]);
 
-/*
+  /*
 
-  // PoC scheduling reorder operations as F16 pingopng for MI350.
-  // Proper one may or may not reorder ops.
-  if (asyncWaitOps.size() > 1 || asyncWaitOps.size() == 0)
+    // PoC scheduling reorder operations as F16 pingopng for MI350.
+    // Proper one may or may not reorder ops.
+    if (asyncWaitOps.size() > 1 || asyncWaitOps.size() == 0)
+      return;
+
+    //builder.setInsertionPointAfter(asyncBufferLoadOps[1]);
+    //updateOpInsertion(asyncBufferLoadOps[1]);
+    builder.setInsertionPointAfter(asyncCopyOps[1]);
+    updateOpInsertion(asyncCopyOps[1]);
+
+    moveOpAndPredecessorsUpSameBlock(lLoadOps[0]);
+    moveOpAndPredecessorsUpSameBlock(lLoadOps[1]);
+
+    auto innerSBarrier = builder.create<ROCDL::SchedBarrier>(loc, 0);
+    innerSBarrier->setAttr("embed", builder.getUnitAttr());
+    appendOp(innerSBarrier);
+
+    //appendOp(asyncBufferLoadOps[0]);
+    appendOp(asyncCopyOps[0]);
+    appendOp(asyncCommitOps[0]);
+
+    // The last point we need to guarantee async_copy has been completed.
+    // w0 : local_load 0 - Dot 0                 - local_load 1
+    // w1 :              - local_load 0 (*wait 1)- Dot 0
+    appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+    appendOp(asyncWaitOps[0]);
+    appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+
+    // Give hint to backend so it can interleave instructions better.
+    // This tries to interleave 3 SALU instructions per each MFMA
+    appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
+    appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 4, 3, 0));
+    appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
+    appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 4, 3, 0));
+    appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
+
+    //appendOp(asyncBufferLoadOps[1]);
+    appendOp(asyncCopyOps[1]);
+
+    appendOp(asyncCommitOps[1]);
+    appendOp(dotOps[0]);
+
+    appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+
+  */
+
+  // forOp->dump();
+
+  if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed()) {
+    LDBG("Encountered failure when trying to execute the four ping pong "
+         "cluster transformation");
     return;
-
-  //builder.setInsertionPointAfter(asyncBufferLoadOps[1]);
-  //updateOpInsertion(asyncBufferLoadOps[1]);
-  builder.setInsertionPointAfter(asyncCopyOps[1]);
-  updateOpInsertion(asyncCopyOps[1]);
-
-  moveOpAndPredecessorsUpSameBlock(lLoadOps[0]);
-  moveOpAndPredecessorsUpSameBlock(lLoadOps[1]);
-
-  auto innerSBarrier = builder.create<ROCDL::SchedBarrier>(loc, 0);
-  innerSBarrier->setAttr("embed", builder.getUnitAttr());
-  appendOp(innerSBarrier);
-
-  //appendOp(asyncBufferLoadOps[0]);
-  appendOp(asyncCopyOps[0]);
-  appendOp(asyncCommitOps[0]);
-
-  // The last point we need to guarantee async_copy has been completed.
-  // w0 : local_load 0 - Dot 0                 - local_load 1
-  // w1 :              - local_load 0 (*wait 1)- Dot 0
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-  appendOp(asyncWaitOps[0]);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-
-  // Give hint to backend so it can interleave instructions better.
-  // This tries to interleave 3 SALU instructions per each MFMA
-  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
-  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 4, 3, 0));
-  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
-  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 4, 3, 0));
-  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
-
-  //appendOp(asyncBufferLoadOps[1]);
-  appendOp(asyncCopyOps[1]);
-
-  appendOp(asyncCommitOps[1]);
-  appendOp(dotOps[0]);
-
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-
-*/
-
-//forOp->dump();
-
-if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed()) {
-        LDBG("Encountered failure when trying to execute the four ping pong "
-             "cluster transformation");
-        return;
-      }
-
+  }
 
   SmallVector<Operation *> containedOps;
   forOp->walk([&](Operation *op) {
-    //op->dump();
+    // op->dump();
     if (auto fop = dyn_cast<scf::ForOp>(op))
       return;
     if (auto yop = dyn_cast<scf::YieldOp>(op))
@@ -1113,12 +1104,12 @@ if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed()) {
     if (auto gbar = dyn_cast<gpu::BarrierOp>(op))
       return;
 
-    if (auto sbar = dyn_cast<ROCDL::SchedBarrier>(op)){
+    if (auto sbar = dyn_cast<ROCDL::SchedBarrier>(op)) {
       if (auto embedUnitAttr = op->getAttr("embed")) {
         containedOps.push_back(op);
         return;
       }
-      if(!containedOps.empty()) {
+      if (!containedOps.empty()) {
         createStage(builder, loc, containedOps);
         op->erase();
       }
@@ -1128,7 +1119,7 @@ if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed()) {
     containedOps.push_back(op);
   });
   LDBG("######### dump done");
-  if(!containedOps.empty())
+  if (!containedOps.empty())
     createStage(builder, loc, containedOps);
 
   forOp->setAttr("total_stages", builder.getI32IntegerAttr(2));
@@ -1274,19 +1265,19 @@ if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed()) {
   lStoreOps.erase(lStoreIt, lStoreOps.end());
 
   if (transformNew(builder, dotOps[0]->getLoc()).failed()) {
-        LDBG("Encountered failure  transformation");
-        return;
-      }
-    addAsymmetricSyncToLoop(builder, loc);
+    LDBG("Encountered failure  transformation");
     return;
-
+  }
+  addAsymmetricSyncToLoop(builder, loc);
+  return;
 
   // Mixed type gemm with scale case.
-  bool isGemmWithScale = dotOps.size() == 1 && gLoadOps.size() > 2 && lLoadOps.size() > 2;
+  bool isGemmWithScale =
+      dotOps.size() == 1 && gLoadOps.size() > 2 && lLoadOps.size() > 2;
   if (isGemmWithScale && numWarps == 4 && numStages == 2) {
     // NxK = 128x256
     if (dotShape[1] == 128 && aShape[1] == 256 && elemWidth == 16) {
-      if(setReadPrioOverWrite(builder, dotOps[0]->getLoc()).failed()) {
+      if (setReadPrioOverWrite(builder, dotOps[0]->getLoc()).failed()) {
         LDBG("Failed during inserting setprio to local_load/store");
       }
       return;

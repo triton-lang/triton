@@ -28,15 +28,8 @@
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-
-//#include "Allocation.h"
 #include "triton/Analysis/Membar.h"
-//#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
-
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
-//#include "mlir/Interfaces/ControlFlowInterfaces.h"
-
-
 
 #define DEBUG_TYPE "convert-warp-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -51,192 +44,175 @@ namespace mlir::triton {
 
 namespace {
 
-static BlockInfo buildBlockInfoFromBlock(Block *block,
-                                         Allocation *allocation) {
+static BlockInfo buildBlockInfoFromBlock(Block *block, Allocation *allocation) {
   BlockInfo info; // running fact for this block
-
   for (Operation &opRef : *block) {
     Operation *op = &opRef;
-
-    // Existing CTA barrier: clear any pending deps.
-    if (isa<gpu::BarrierOp>(op)) {
-      LDBG("synced by barrier ...");
-      info.sync();
-      continue;
-    }
-
-    //BlockInfo cur; // facts contributed by this single op
-
-    // Inter-procedural summary: calls contribute their callee summary.
-    if (isa<triton::CallOp>(op)) {
-      // assert 0
-    } else {
-      // Intra-procedural memory effects tied to concrete Values.
-      if (auto mei = dyn_cast<MemoryEffectOpInterface>(op)) {
-        SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effs;
-        mei.getEffects(effs);
-        for (auto &eff : effs) {
-          //op->dump();
-          if (Value v = eff.getValue()) {
-            for (auto bufId : allocation->getBufferIds(v)) {
-              if (bufId == Allocation::InvalidBufferId) continue;
-              auto interval = allocation->getAllocatedInterval(bufId);
-              if (isa<MemoryEffects::Write>(eff.getEffect())) {
-                info.syncWriteIntervals[interval].insert(op);
-              } else if (isa<MemoryEffects::Read>(eff.getEffect())) {
-                info.syncReadIntervals[interval].insert(op);
-              }
+    if (auto mei = dyn_cast<MemoryEffectOpInterface>(op)) {
+      SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effs;
+      mei.getEffects(effs);
+      for (auto &eff : effs) {
+        // op->dump();
+        if (Value v = eff.getValue()) {
+          for (auto bufId : allocation->getBufferIds(v)) {
+            if (bufId == Allocation::InvalidBufferId)
+              continue;
+            auto interval = allocation->getAllocatedInterval(bufId);
+            if (isa<MemoryEffects::Write>(eff.getEffect())) {
+              info.syncWriteIntervals[interval].insert(op);
+            } else if (isa<MemoryEffects::Read>(eff.getEffect())) {
+              info.syncReadIntervals[interval].insert(op);
             }
           }
         }
       }
     }
-
-    // Merge this op's fact into the running block fact.
-    //info.join(cur);
   }
-  //LDBG("returning ...");
-  //info.dump();
   return info;
 }
-
 
 class ConvertWarpPipeline
     : public mlir::triton::impl::ConvertWarpPipelineBase<ConvertWarpPipeline> {
 
-void emitClusterBarrier(OpBuilder &b, Location loc, bool needLocal){
-  b.create<ROCDL::SchedBarrier>(loc, 0);
-  //if (needLocal)
-  b.create<ROCDL::SBarrierOp>(loc);
-  b.create<ROCDL::SBarrierOp>(loc);
-  b.create<ROCDL::SchedBarrier>(loc, 0);
-}
-
-    
-void emitPipelinedFor(OpBuilder &builder, Location loc, scf::ForOp forOp, Allocation *allocation) {
-
-  //insert cond branch first,
-  builder.setInsertionPointAfter(forOp);
-  // Set barrier before starting the loop. This resolves any remaining required
-  // synchronization before beginning the specialized asymmetric
-  // synchronization.
-  auto preBarrier = builder.create<gpu::BarrierOp>(loc);
-  preBarrier->moveBefore(forOp);
-  builder.setInsertionPointAfter(preBarrier);
-
-  // Insert condbarrier::second_half before starting the loop
-  // FIXME : correctly calculate numbers by the given num_warps.
-  auto i32ty = builder.getIntegerType(32);
-  auto workIDX = builder.create<ROCDL::ThreadIdXOp>(loc, i32ty);
-  auto constZero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-  auto constWarpSize = builder.create<arith::ConstantIntOp>(loc, 256, 32);
-  auto warpIDX = builder.create<arith::DivSIOp>(loc, workIDX, constWarpSize);
-  auto warpLow = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                               warpIDX, constZero);
-  auto warpHigh = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
-                                                warpIDX, constZero);
-
-  // duplicate condBarrier for lead_stages
-  auto condBarrierHigh =
-      builder.create<mlir::triton::amdgpu::CondBarrierOp>(loc, warpHigh);
-
-  // Insert condbarrier::first_half after the end of the loop
-  builder.setInsertionPointAfter(forOp);
-  auto condBarrierLow = builder.create<mlir::triton::amdgpu::CondBarrierOp>(loc, warpLow);
-
-  // in case a loop begins with a barrier
-  bool barrierAtTop = false;
-  
-  SmallVector<Block *> clusterBlocks;
-  SmallVector<Operation *> barrierOps;
-  SmallVector<bool> bars;
-  std::map<int, Operation*> existingBarrierMap;
-  Operation terminatorOp;
-
-  //insert barrier when needed.
-  //bool needBarrier = false;
-  //bool opened = true;
-  
-  for (auto &op : *forOp.getBody()) {
-    if(auto exeOp = dyn_cast<scf::ExecuteRegionOp>(op)) {
-      exeOp.setNoInline(false);
-      clusterBlocks.push_back(&exeOp->getRegion(0).front());
-    }
-    else if (isa<triton::gpu::AsyncWaitOp>(op)){
-      waitAtTop = true;
-    else if (isa<ROCDL::BarrierOp, ROCDL::SBarrierOp, triton::gpu::AsyncWaitOp>(op)){
-      int currCluster = clusterBlocks.size();
-      if(existingBarrierMap.find(currCluster))
-        return; // FIXME: this is invalid. fail and cancel whole pass.
-      existingBarrierMap[currCluster] = &op;
-    }
-    else if(auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
-      terminatorOp = op;
-    }
+  void emitClusterBarrier(OpBuilder &b, Location loc, bool needLocal) {
+    b.create<ROCDL::SchedBarrier>(loc, 0);
+    if (needLocal)
+      b.create<mlir::triton::gpu::LocalBarrierOp>(loc);
+    else
+      b.create<ROCDL::SBarrierOp>(loc);
+    b.create<ROCDL::SchedBarrier>(loc, 0);
   }
 
-  SmallVector<BlockInfo> clusterInfo;
-  for (auto cb: clusterBlocks)
-    clusterInfo.push_back(buildBlockInfoFromBlock(cb, allocation));
+  void emitPipelinedFor(OpBuilder &builder, Location loc, scf::ForOp forOp,
+                        Allocation *allocation) {
 
-  //bool needFence = clusterInfo[0].isIntersected(clusterInfo[1], nullptr);
-  LDBG("cluster dependency analysis");
-  int numClusters = clusterInfo.size();
-  LDBG("total clusters : " << numClusters);
+    // insert cond branch first,
+    builder.setInsertionPointAfter(forOp);
+    // Set barrier before starting the loop. This resolves any remaining
+    // required synchronization before beginning the specialized asymmetric
+    // synchronization.
+    auto preBarrier = builder.create<gpu::BarrierOp>(loc);
+    preBarrier->moveBefore(forOp);
+    builder.setInsertionPointAfter(preBarrier);
 
-  for (int j=0; j<numClusters; j++){
-    //clusterInfo[i].dump();
-    for (int i=0; i<numClusters; i++){
-      
-      int next = (i+2+j)%numClusters;
-      //LDBG("checking " << i << " to "<< next);
-      int curr = (i+1)%numClusters;
-      bool synced = false;
-      while (curr != i && curr != next){
-        if (bars[curr]){
-          synced = true;
-          break;
+    // Insert condbarrier::second_half before starting the loop
+    // FIXME : correctly calculate numbers by the given num_warps.
+    auto i32ty = builder.getIntegerType(32);
+    auto workIDX = builder.create<ROCDL::ThreadIdXOp>(loc, i32ty);
+    auto constZero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
+    auto constWarpSize = builder.create<arith::ConstantIntOp>(loc, 256, 32);
+    auto warpIDX = builder.create<arith::DivSIOp>(loc, workIDX, constWarpSize);
+    auto warpLow = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+                                                 warpIDX, constZero);
+    auto warpHigh = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
+                                                  warpIDX, constZero);
+
+    // FIXME: duplicate condBarrier for lead_stages
+    auto condBarrierHigh =
+        builder.create<mlir::triton::amdgpu::CondBarrierOp>(loc, warpHigh);
+
+    // Insert condbarrier::first_half after the end of the loop
+    builder.setInsertionPointAfter(forOp);
+    auto condBarrierLow =
+        builder.create<mlir::triton::amdgpu::CondBarrierOp>(loc, warpLow);
+
+    // in case a loop begins with a barrier
+    bool barrierAtTop = false;
+
+    SmallVector<Block *> clusterBlocks;
+    SmallVector<Operation *> clusterOps;
+    SmallVector<bool> bars;
+    std::map<int, Operation *> existingBarrierMap;
+    Operation *terminatorOp;
+
+    for (auto &op : *forOp.getBody()) {
+      if (auto exeOp = dyn_cast<scf::ExecuteRegionOp>(op)) {
+        exeOp.setNoInline(false);
+        clusterOps.push_back(&op);
+        clusterBlocks.push_back(&exeOp->getRegion(0).front());
+        bars.push_back(false);
+      } else if (isa<ROCDL::BarrierOp, ROCDL::SBarrierOp,
+                     triton::gpu::AsyncWaitOp>(op)) {
+        int currCluster = clusterBlocks.size();
+        if (existingBarrierMap.find(currCluster) != existingBarrierMap.end())
+          return; // FIXME: this is invalid. fail and cancel whole pass.
+
+        existingBarrierMap[currCluster] = &op;
+      } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
+        terminatorOp = &op;
+      }
+    }
+
+    SmallVector<BlockInfo> clusterInfo;
+    for (auto cb : clusterBlocks)
+      clusterInfo.push_back(buildBlockInfoFromBlock(cb, allocation));
+
+    LDBG("cluster dependency analysis");
+    int numClusters = clusterInfo.size();
+    LDBG("total clusters : " << numClusters);
+
+    auto topBar = existingBarrierMap.find(0);
+    auto bottomBar = existingBarrierMap.find(numClusters);
+    if (bottomBar != existingBarrierMap.end()) {
+      if (topBar != existingBarrierMap.end())
+        return; // FIXME: unreachable
+      existingBarrierMap[0] = bottomBar->second;
+      existingBarrierMap.erase(bottomBar);
+    }
+
+    for (int j = 0; j < numClusters; j++) {
+      for (int i = 0; i < numClusters; i++) {
+        int next = (i + 2 + j) % numClusters;
+        int curr = (i + 1) % numClusters;
+        bool synced = false;
+        while (curr != i && curr != next) {
+          if (bars[curr]) {
+            synced = true;
+            break;
+          }
+          curr = (curr + 1) % numClusters;
         }
-        curr = (curr+1)%numClusters;
-      }
-      // also if next can already have a fence 
-      if (bars[next])
-        synced = true;
+        // also if next can already have a fence
+        if (bars[next])
+          synced = true;
 
-      // synced between i and j, no need to check.
-      if (synced)
-        continue;
+        // synced between i and j, no need to check.
+        if (synced)
+          continue;
 
-      bool needFence = clusterInfo[i].isIntersected(clusterInfo[next], nullptr);
-      if (needFence){
-        // insert fence/barrier before this cluster
-        bars[next] = true;
-        
-        LDBG("cluster " << i << " need fence to "<< next);
-        //clusterInfo[i].dump();
-        //clusterInfo[next].dump();
+        bool needFence =
+            clusterInfo[i].isIntersected(clusterInfo[next], nullptr);
+        if (needFence) {
+          // insert fence/barrier before this cluster
+          bars[next] = true;
+          LDBG("cluster " << i << " need fence to " << next);
+        }
+        for (int i = 0; i < numClusters; i++)
+          LDBG("bars [" << i << "] = " << bars[i]);
       }
-      for (int i=0; i<numClusters; i++)
-        LDBG("bars [" << i << "] = "<< bars[i]);
+    }
+
+    for (int i = 0; i < numClusters; i++) {
+      if (auto exBar = existingBarrierMap.find(i);
+          exBar != existingBarrierMap.end()) {
+        if (bars[i]) {
+          auto exBarOp = exBar->second;
+          builder.setInsertionPointAfter(exBarOp);
+          emitClusterBarrier(builder, loc, true);
+          if (!isa<triton::gpu::AsyncWaitOp>(exBarOp))
+            exBarOp->erase();
+        } // else do nothing.
+      } else {
+        builder.setInsertionPoint(clusterOps[i]);
+        if (i == 0 && topBar == existingBarrierMap.end())
+          builder.setInsertionPoint(terminatorOp);
+        emitClusterBarrier(builder, loc, bars[i]);
+      }
     }
   }
-    
-  //constexpr int32_t ldsOnlyBits = ~(0x1f << 8);
-  for(int i = 0; i < numClusters; i++){
-    if (bars[i]) {
-      builder.setInsertionPoint(barrierOps[i]);
-      //builder.create<ROCDL::SWaitcntOp>(loc, ldsOnlyBits);
-      builder.create<gpu::BarrierOp>(loc);
-      barrierOps[i]->erase();
-    }
-  }
-}
 
 public:
-  ConvertWarpPipeline()
-      : ConvertWarpPipelineBase<ConvertWarpPipeline>() {
-
-  }
+  ConvertWarpPipeline() : ConvertWarpPipelineBase<ConvertWarpPipeline>() {}
 
   void runOnOperation() override {
 
@@ -245,11 +221,11 @@ public:
     ModuleOp m = getOperation();
     OpBuilder builder(m);
     ModuleAllocation moduleAllocation(m);
-    
+
     for (auto funcOp : m.getOps<mlir::triton::FuncOp>()) {
       Allocation *allocation = moduleAllocation.getFuncData(funcOp);
       funcOp.walk([&](scf::ForOp forOp) {
-        if (auto totalStages = forOp->getAttr("total_stages")){
+        if (auto totalStages = forOp->getAttr("total_stages")) {
           Location loc = forOp.getLoc();
           emitPipelinedFor(builder, loc, forOp, allocation);
         }
@@ -263,10 +239,8 @@ public:
 
 namespace mlir::triton::AMD {
 
-std::unique_ptr<OperationPass<ModuleOp>>
-createConvertWarpPipelinePass() {
+std::unique_ptr<OperationPass<ModuleOp>> createConvertWarpPipelinePass() {
   return std::make_unique<ConvertWarpPipeline>();
 }
 
 } // namespace mlir::triton::AMD
-
