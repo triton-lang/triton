@@ -4,6 +4,7 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
@@ -256,15 +257,51 @@ private:
   const AMD::TargetInfo &targetInfo;
 };
 
+class LocalBarrierOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::LocalBarrierOp> {
+public:
+  LocalBarrierOpConversion(const LLVMTypeConverter &converter,
+                           const AMD::TargetInfo &targetInfo,
+                           PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::gpu::LocalBarrierOp>(converter, benefit),
+        targetInfo(targetInfo) {}
+  using OpAdaptor = typename triton::gpu::LocalBarrierOp::Adaptor;
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::LocalBarrierOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (!isCDNA(targetInfo.getISAFamily()))
+      return failure();
+    // In CDNA we can lower local_barrier to s_waitcnt + s_barrier
+    // - s_waitcnt specifies how many operations to VMEM/LDS can be outstanding
+    //   when the instruction completes.
+    //   In this case we require 0 outstanding LDS operations
+    // - s_barrier syncronizes the execution for the CTA
+    constexpr int32_t ldsOnlyBits = ~(0x1f << 8);
+    Location loc = op->getLoc();
+    ROCDL::SWaitcntOp::create(rewriter, loc, ldsOnlyBits);
+    rewriter.replaceOpWithNewOp<ROCDL::SBarrierOp>(op);
+
+    return success();
+  }
+
+private:
+  const AMD::TargetInfo &targetInfo;
+};
+
 } // namespace
 
 void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfo &targetInfo, PatternBenefit benefit) {
   PatternBenefit transBenefit = PatternBenefit(benefit.getBenefit() + 1);
+  PatternBenefit barrierBenefit = PatternBenefit(benefit.getBenefit() + 1);
+
   patterns.add<TransLocalLoadOpConversion<triton::gpu::LocalLoadOp>>(
       typeConverter, targetInfo, transBenefit);
   patterns.add<
       TransLocalLoadOpConversion<triton::amdgpu::LocalLoadPackedTransposedOp>>(
       typeConverter, targetInfo, benefit);
+  patterns.add<LocalBarrierOpConversion>(typeConverter, targetInfo,
+                                         barrierBenefit);
 }
