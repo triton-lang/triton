@@ -1093,20 +1093,29 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto tensorDescTy = op.getDesc().getType();
     auto smemTy = op.getResult().getType();
 
-    auto smemEnc =
+    auto swizzledEnc =
+        llvm::dyn_cast<SwizzledSharedEncodingAttr>(smemTy.getEncoding());
+    if (swizzledEnc && swizzledEnc.getMaxPhase() != 1)
+      return rewriter.notifyMatchFailure(op, "TDM does not support swizzling");
+
+    auto paddedEnc =
         llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
+    if (!paddedEnc && !swizzledEnc)
+      return rewriter.notifyMatchFailure(
+          op, "Invalid shared memory layout for TDM.");
+
     Type llvmElemTy = getTypeConverter()->convertType(smemTy.getElementType());
     auto elementBitWidth = llvmElemTy.getIntOrFloatBitWidth();
 
     unsigned padInterval = 0;
     unsigned padAmount = 0;
-    if (smemEnc) {
-      if (smemEnc.getIntervals().size() != 1 ||
-          smemEnc.getPaddings().size() != 1)
+    if (paddedEnc) {
+      if (paddedEnc.getIntervals().size() != 1 ||
+          paddedEnc.getPaddings().size() != 1)
         return rewriter.notifyMatchFailure(
             op, "NYI: Multiple interval-padding pairs in TDM.");
-      padInterval = smemEnc.getIntervals()[0];
-      padAmount = smemEnc.getPaddings()[0];
+      padInterval = paddedEnc.getIntervals()[0];
+      padAmount = paddedEnc.getPaddings()[0];
     }
     unsigned dwordSize = 32;
     auto padIntervalInDwords = padInterval * elementBitWidth / dwordSize;
@@ -1167,8 +1176,8 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         loc, adaptor.getResult(), llvmElemTy, rewriter);
     Value dstBase = dstMemObj.getBase();
     Value dstOffset = b.mul(b.i32_val(outerBlockStride), outerOffset);
-    if (smemEnc) {
-      Value padding = emitPadding(loc, rewriter, smemEnc, elementBitWidth,
+    if (paddedEnc) {
+      Value padding = emitPadding(loc, rewriter, paddedEnc, elementBitWidth,
                                   dstOffset, false);
       dstOffset = b.add(dstOffset, padding);
     }
