@@ -364,9 +364,9 @@ def _symm_mem_all_to_all_kernel(
             input = src_ptrs[input_idx]
             output = dst_ptrs[input_idx]
             dst_start = column_prefix[tl.constexpr(src_rank * WORLD_SIZE + input_idx)]
-            dst_offset = token_id - exclusive
-            values = tl.load(input + token_id * inner_size + offsets, mask=offsets < inner_size, other=0)
-            tl.store(output + (dst_start + dst_offset) * inner_size + offsets, values, mask=offsets < inner_size)
+            token_offset = token_id - exclusive
+            values = tl.load(input + token_offset * inner_size + offsets, mask=offsets < inner_size, other=0)
+            tl.store(output + (dst_start + token_offset) * inner_size + offsets, values, mask=offsets < inner_size)
             return
         exclusive += send_counts[input_idx]
 
@@ -411,7 +411,7 @@ def _all_to_all_triton(input_list: list[torch.Tensor], dim: int) -> list[torch.T
         device=input_list[0].device,
     )
     symm_handle = symm_mem.rendezvous(buffer, group)
-    dst_ptrs = [symm_handle.get_buffer(dst_rank, (local_total_rows, inner_size), input_list[0].dtype, 0,) for dst_rank in range(world_size)]
+    dst_ptrs = [symm_handle.get_buffer(dst_rank, (local_total_rows, inner_size), input_list[0].dtype,) for dst_rank in range(world_size)]
     column_prefix = column_prefix.flatten().tolist()
 
     BLOCK_SIZE = triton.next_power_of_2(inner_size if inner_size > 0 else 1)
