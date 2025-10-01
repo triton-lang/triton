@@ -54,6 +54,7 @@ public:
     iterator end() { return orderClusters.end(); }
     const_iterator end() const { return orderClusters.end(); }
     size_t size() const { return orderClusters.size(); }
+    void clear() { orderClusters.clear(); }
     iterator newAtBack() {
       orderClusters.push_back(orderClusters.size());
       return std::prev(orderClusters.end());
@@ -157,7 +158,9 @@ public:
   // Set <stage, cluster> based on CoarseSchedule.
   void serialize(scf::ForOp &forOp) const;
   // Create a CoarseSchedule based on forOp's <stage, cluster>.
-  LogicalResult deSerialize(scf::ForOp &forOp);
+  // If normalizeClusterId is true, cluster will be mapped to a sequence
+  // starting from 0.
+  LogicalResult deSerialize(scf::ForOp &forOp, bool normalizeClusterId = true);
 
   static ClusterHash hashCluster(Cluster cluster) {
     return reinterpret_cast<ClusterHash>(&*cluster);

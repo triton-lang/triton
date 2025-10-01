@@ -6,6 +6,13 @@
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 
 namespace mlir {
+
+namespace triton::AMD {
+constexpr char AttrBypassLDS[] = "amdgpu.bypass_lds_load";
+}
+
+void lowerLoops(ModuleOp moduleOp, bool useAsyncCopy, bool usePingpong);
+
 struct LoadInfo {
   // Shared layout is used for loads feeding into dot ops.
   triton::gpu::SwizzledSharedEncodingAttr sharedEncoding = nullptr;
@@ -14,6 +21,10 @@ struct LoadInfo {
   Operation *use = nullptr;
 };
 using LoadToInfoMap = llvm::MapVector<Operation *, LoadInfo>;
+
+llvm::MapVector<Operation *, std::pair<int, Operation *>>
+getIndirectLevel(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                 scf::ForOp &forOp, int numStages);
 
 namespace SingleDotSchedule {
 // Define categories of scheduling details per Operation types.

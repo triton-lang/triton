@@ -16,13 +16,7 @@ def TritonAMDGPUScheduleLoops : Pass<"tritonamdgpu-schedule-loops", "mlir::Modul
   let options = [
     Option<"numStages", "num_stages",
            "int32_t", /*default*/"2",
-           "Number of Pipeline stages">,
-    Option<"useAsyncCopy", "use_async_copy",
-           "bool", /*default*/"false",
-           "Use AsyncCopyGlobalToLocal to directly load to shared memory">,
-    Option<"usePingpong", "use_pingpong",
-           "bool", /*default*/"false",
-           "Use schedules to enable block ping-pong">,
+           "Number of Pipeline stages">
   ];
 }
 
@@ -38,6 +32,9 @@ def TritonAMDGPUPipeline : Pass<"tritonamdgpu-pipeline", "mlir::ModuleOp"> {
     Option<"useAsyncCopy", "use_async_copy",
            "bool", /*default*/"false",
            "Use AsyncCopyGlobalToLocal to directly load to shared memory">,
+    Option<"usePingpong", "use_pingpong",
+           "bool", /*default*/"false",
+           "Use schedules to enable block ping-pong">
   ];
 }
 
