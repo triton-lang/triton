@@ -353,6 +353,7 @@ def test_runtime_amd_wmma_scaled(BLOCK_M, BLOCK_N, BLOCK_K, mxfp_type, hasScale)
     torch.testing.assert_close(z.cpu(), z_ref.cpu(), rtol=1e-5, atol=1e-5)
 
 
+@gluon.jit
 def tensor_copy_kernel(a_ptr, b_ptr,  #
                        M, N,  #
                        BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr):
