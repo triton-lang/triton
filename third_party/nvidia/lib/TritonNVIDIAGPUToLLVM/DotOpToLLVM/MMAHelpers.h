@@ -53,15 +53,50 @@ public:
 
   DotOpMmaSmemLoader(MMASMEMDescriptor desc, Value baseb128, LinearLayout llInv,
                      ArrayRef<unsigned> instrShape)
-      : desc(desc), baseb128(baseb128), llInv(std::move(llInv)),
+      : desc(desc), baseb128(baseb128), ll(std::move(llInv)),
         instrShape(instrShape) {}
 
   static DotOpMmaSmemLoader
-  build(Location loc, RewriterBase &rewriter, triton::gpu::MemDescType tensor,
+  build(Location loc, RewriterBase &rewriter, gpu::MemDescType memTy,
         Value smemBase, ArrayRef<unsigned> instrShape, int mmaVersion,
+        bool isFp4 = false,
         std::optional<RankedTensorType> mmaTy = std::nullopt,
         std::optional<unsigned> MNdim = std::nullopt) {
-    auto ctx = tensor.getContext();
+    auto ctx = rewriter.getContext();
+    auto kOffset = str_attr("offset");
+    auto ll = toLinearLayout(memTy);
+    // Handle subviews by composing with the identity of the right shape
+    auto shape = memTy.getShape();
+    auto outDims = to_vector(ll.getOutDimNames());
+    auto identity = LinearLayout::identity1D(shape[0], outDims[0], outDims[0]) *
+                    LinearLayout::identity1D(shape[1], outDims[1], outDims[1]);
+    auto llInv = identity.invertAndCompose(ll);
+    auto bitwidth = memTy.getElementType().getIntOrFloatBitWidth();
+    if (isFp4) {
+      // hacky but well
+      auto dims = to_vector(llInv.getInDimNames());
+      auto trans = llInv.getBasis(dims[0], 0, kOffset) == 1;
+      llInv = LinearLayout::identity1D(2, dims[trans ? 0 : 1], kOffset) * llInv;
+      bitwidth /= 2;
+      // The instr_shape comes in number of elements already
+    }
+    return build(loc, rewriter, llInv, bitwidth, smemBase, instrShape,
+                 mmaVersion, mmaTy, MNdim);
+  }
+
+  static DotOpMmaSmemLoader
+  build(Location loc, RewriterBase &rewriter, const LinearLayout &ll,
+        int bitwidth, Value smemBase, ArrayRef<unsigned> instrShape,
+        int mmaVersion, std::optional<RankedTensorType> mmaTy = std::nullopt,
+        std::optional<unsigned> MNdim = std::nullopt) {
+    // ll is a map from two dimensions (dim0, dim1) or (row, col) into offsets
+    // and blocks
+    auto ctx = rewriter.getContext();
+    auto kOffset = str_attr("offset");
+    auto kBlock = str_attr("block");
+    assert(ll.getNumOutDims() == 2);
+    assert(ll.hasOutDim(kOffset) && ll.hasOutDim(kBlock));
+
     assert(mmaVersion == 3 || mmaVersion == 5);
     // Just needed for MMAv3
     assert(mmaTy.has_value() == (mmaVersion == 3));
@@ -71,57 +106,20 @@ public:
     }
     assert(instrShape.size() == 2);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    // TODO Assert that calling getShmemAffineBase is valid!
-
     // Due to the alignment, we can transform ((base + offset) & 0x3FFFF) >> 4
     // into ((base >> 4) & 0x3FFF + (offset >> 4) where offset is in the inner
     // loop and ((base >> 4) & 0x3FFF) can be computed once.
-    assert(cast<triton::gpu::SharedEncodingTrait>(tensor.getEncoding())
-               .getAlignment() >= 16);
+    // TODO We should assert in the verifier that the alignment is at least 16
 
     smemBase = b.ptrtoint(i32_ty, smemBase);
     Value baseSrcb128 = b.lshr(smemBase, b.i32_val(4));
-    int bitwidth = tensor.getElementType().getIntOrFloatBitWidth();
 
-    auto ll = toLinearLayout(tensor);
-    auto kOffset = str_attr("offset");
-    assert(ll.getNumOutDims() == 2);
-    auto dims = to_vector(ll.getOutDimNames());
-    // The linear layout for fp4 represents the matrix as i8s
-    // For it to play ball with instrShape, which is in terms of the original
-    // tensor, we need to represent it as i4s
-    // Interestingly enough, we support i8 x i8 matmul by the looks of it
-    auto isFp4 =
-        tensor.getElementType() == IntegerType::get(ctx, 8) && mmaVersion == 5;
-    auto shape = to_vector(tensor.getShape());
-    if (isFp4) {
-      // hacky but well
-      auto trans = ll.getBasis(kOffset, 0)[0] != 0;
-      ll = LinearLayout::identity1D(2, kOffset, dims[trans ? 0 : 1]) * ll;
-      shape[trans ? 0 : 1] *= 2;
-      bitwidth /= 2;
-      // The instr_shape comes in number of elements already
-    }
-
-    for (auto [dim, instrSize] : llvm::zip(ll.getOutDimNames(), instrShape)) {
-      assert(instrSize <= ll.getOutDimSize(dim) &&
+    for (auto [dim, instrSize] : llvm::zip(ll.getInDimNames(), instrShape)) {
+      assert(instrSize <= ll.getInDimSize(dim) &&
              "Instr shape is too large for the layout");
     }
 
-    // TODO Add this to the verifier
-    // We represent fp4 padded tensors as i8s
     auto desc = getDescriptor(ll, instrShape, bitwidth, mmaVersion);
-
-    // In case it was a subview, we resize it by composing it with the identity
-    // of shape getShape (rather than shape getAllocShape, as toLinearLayout
-    // returns)
-    // Also in the case of mutlicta where the different CTAs have broadcasting
-    // (so no 2-CTA MMA) we effectively need to pseudoinvert. This also achieves
-    // that
-    auto outDims = to_vector(ll.getOutDimNames());
-    auto identity = LinearLayout::identity1D(shape[0], outDims[0], outDims[0]) *
-                    LinearLayout::identity1D(shape[1], outDims[1], outDims[1]);
-    auto llInv = identity.invertAndCompose(ll);
 
     auto blockInstrShape = to_vector(instrShape);
     if (mmaVersion == 3) {
@@ -133,7 +131,7 @@ public:
       auto mmaWarps = mmaLl.sublayout({kWarp}, {outDims[mndim]}) *
                       LinearLayout::identity1D(1, kWarp, outDims[1 - mndim]);
       // Map from warps to offsets in bitwidth elements
-      auto warpToOffset = mmaWarps.compose(llInv);
+      auto warpToOffset = mmaWarps.compose(ll);
       // Map from warps to offsets in 128b elements
       auto maybeWarpToOffsetb128 =
           divideLeft(warpToOffset,
@@ -164,22 +162,21 @@ public:
     }
 
     Value baseb128 = b.zext(i64_ty, b.and_(baseSrcb128, b.i32_val(0x3FFF)));
-    return DotOpMmaSmemLoader(desc, baseb128, llInv, blockInstrShape);
+    return {desc, baseb128, ll, blockInstrShape};
   }
 
   Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
                  Location loc) const {
     auto *ctx = loc.getContext();
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
-    auto dims = to_vector(llInv.getInDimNames());
-    assert((a + 1) * instrShape[0] <= llInv.getInDimSize(dims[0]));
-    assert((b + 1) * instrShape[1] <= llInv.getInDimSize(dims[1]));
-    assert(to_vector(llInv.getOutDimNames()) ==
+    auto dims = to_vector(ll.getInDimNames());
+    assert((a + 1) * instrShape[0] <= ll.getInDimSize(dims[0]));
+    assert((b + 1) * instrShape[1] <= ll.getInDimSize(dims[1]));
+    assert(to_vector(ll.getOutDimNames()) ==
            llvm::to_vector(
                ArrayRef<StringAttr>{str_attr("offset"), str_attr("block")}));
-    int32_t totalOffElems = llInv
-                                .apply({{dims[0], a * instrShape[0]},
-                                        {dims[1], b * instrShape[1]}})[0]
+    int32_t totalOffElems = ll.apply({{dims[0], a * instrShape[0]},
+                                      {dims[1], b * instrShape[1]}})[0]
                                 .second;
     int32_t smemByteOffsetb8 = totalOffElems * desc.bitwidth / 8;
     auto currDesc = desc.descriptor;
@@ -198,33 +195,38 @@ public:
     return {smemLoad(a, b, rewriter, loc), std::nullopt};
   }
 
+  MMASMEMDescriptor &getDescriptor() { return desc; }
+
 private:
   MMASMEMDescriptor desc;
   Value baseb128;
-  LinearLayout llInv;
+  LinearLayout ll;
   SmallVector<unsigned> instrShape;
 
   static MMASMEMDescriptor getDescriptor(const LinearLayout &ll,
                                          ArrayRef<unsigned> instrShape,
                                          int bitwidth, int mmaVersion) {
     // ll is a map from allocShape into offsets and blocks
-    auto inv = ll.pseudoinvert();
-    auto dims = to_vector(inv.getInDimNames());
+    auto dims = to_vector(ll.getInDimNames());
     auto ctx = dims[0].getContext();
     auto kOffset = str_attr("offset");
+    auto kBlock = str_attr("block");
 
     // Detect tcgen05.mma.cta_group::2 as having two CTAs that are not
     // broadcasting
-    auto kBlock = str_attr("block");
-    auto twoCTAs = ll.getInDimSize(kBlock) > 1 &&
-                   ll.getBasis(kBlock, 0) != ArrayRef<int32_t>({0, 0});
     SmallVector<unsigned> instrShapePerCTA = to_vector(instrShape);
-    if (twoCTAs) {
+    bool twoCTAs = false;
+    if (ll.getOutDimSize(kBlock) > 1) {
       // In 2CTA mode we split the tensor into two CTAs
-      assert(ll.getInDimSize(kBlock) == 2);
-      if (ll.getBasis(kBlock, 0, dims[0]) != 0) {
+      // Check the last basis see if it maps to the second CTA
+      assert(ll.getOutDimSize(kBlock) == 2 && "NYI");
+      auto lastBasisDim0 = ll.getInDimSizeLog2(dims[0]) - 1;
+      auto lastBasisDim1 = ll.getInDimSizeLog2(dims[1]) - 1;
+      if (ll.getBasis(dims[0], lastBasisDim0, kBlock) != 0) {
+        twoCTAs = true;
         instrShapePerCTA[0] /= 2;
-      } else {
+      } else if (ll.getBasis(dims[1], lastBasisDim1, kBlock) != 0) {
+        twoCTAs = true;
         instrShapePerCTA[1] /= 2;
       }
     }
@@ -242,11 +244,19 @@ private:
               CTALayout);
           auto shmemTile =
               getCoreMatrixLinearLayout(shmemEnc, /*disableSwizzle=*/false);
-          // We unpack the bitwidth == 8 tile
+          // Rename out dims to match the original layout (in case the dims were
+          // (row, col))
+          auto outDims = to_vector(shmemTile.getOutDims());
+          outDims[0].first = dims[0];
+          outDims[1].first = dims[1];
+          shmemTile = LinearLayout(shmemTile.getBases(), outDims,
+                                   /*requireSurjective=*/false);
+          // unpack the fp4 layout
           if (bitwidth == 4) {
             shmemTile =
                 LinearLayout::identity1D(2, kOffset, dims[1]) * shmemTile;
           }
+
           // getCoreMatrixLinearLayout gives the k-contiguous tile
           // shmemTile is a layout onto a matrix with shape
           // If swizzling != 0: 8 x (8 * swizzling / bitwidth)
@@ -266,10 +276,10 @@ private:
           // The PTX docs are wrong in a number of ways:
           // 1) LBO can be specified for !transposed && swizzled != 0
           //    PTX says it's assumed to be 1, but  we can in fact use it
-          // 2) LBO / SBO are swapped also for !transposed && swizzled != 0
+          // 2) LBO / SBO are swapped also for !transposed && swizzled == 0
           //    PTX just reports this for the transposed case
-          // Luckily enough the generic logic is much simpler than what's
-          // described in the docs
+          //    EVEN MORE this happens to be the case for tcgen05.cp, but not
+          //    for descriptors for wgmma or tcgen05.mma!
           int lbo = 0, sbo = 0;
           int leadingDim = transposed ? 0 : 1;
           int stridedDim = transposed ? 1 : 0;
@@ -279,13 +289,15 @@ private:
             std::swap(leadingDim, stridedDim);
           }
           auto log2RowsTile = shmemTileInv.getInDimSizeLog2(dims[leadingDim]);
-          if (inv.getInDimSizeLog2(dims[leadingDim]) > log2RowsTile) {
-            lbo = inv.getBasis(dims[leadingDim], log2RowsTile, kOffset);
+          if (std::min<int>(ll.getInDimSizeLog2(dims[leadingDim]),
+                            instrShapePerCTA[leadingDim]) > log2RowsTile) {
+            lbo = ll.getBasis(dims[leadingDim], log2RowsTile, kOffset);
           }
 
           auto log2ColsTile = shmemTileInv.getInDimSizeLog2(dims[stridedDim]);
-          if (inv.getInDimSizeLog2(dims[stridedDim]) > log2ColsTile) {
-            sbo = inv.getBasis(dims[stridedDim], log2ColsTile, kOffset);
+          if (std::min<int>(ll.getInDimSizeLog2(dims[stridedDim]),
+                            instrShapePerCTA[stridedDim]) > log2ColsTile) {
+            sbo = ll.getBasis(dims[stridedDim], log2ColsTile, kOffset);
           }
 
           // Pad the tile up to the full instruction shape with the relevant
@@ -296,7 +308,7 @@ private:
             for (int i = 1;
                  i < instrShapePerCTA[d] / shmemTileInv.getInDimSize(dims[d]);
                  i *= 2) {
-              auto stride = inv.getBasis(
+              auto stride = ll.getBasis(
                   dims[d], shmemTileInv.getInDimSizeLog2(dims[d]), kOffset);
               bases[dims[d]].push_back({stride * i});
             }
@@ -316,8 +328,8 @@ private:
           shmemTileInv *=
               LinearLayout::identity1D(1, dims[0], str_attr("block"));
 
-          auto quot = getReps(inv, shmemTileInv);
-          if (quot.has_value()) {
+          auto reps = getReps(ll, shmemTileInv);
+          if (reps.has_value()) {
             SMEMDescriptor desc;
             desc.descriptor = mmaVersion == 5 ? 1ULL << 46 : 0ULL;
             // The lbo / sbo is defined wrt. the 128 tile

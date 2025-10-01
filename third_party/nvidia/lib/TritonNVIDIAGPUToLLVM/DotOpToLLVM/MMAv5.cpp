@@ -453,14 +453,15 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
     aLoader = std::make_unique<DotOpMmaV5TmemLoader>(a, baseA, aOperandShape,
                                                      interleaved, transA);
   } else {
-    auto allocShapeA = getAllocShape(aTensorTy, 1);
+    auto isFp4a = op.numBitsPerElementA == 4;
     aLoader = std::make_unique<DotOpMmaSmemLoader>(DotOpMmaSmemLoader::build(
-        loc, rewriter, aTensorTy, baseA, aOperandShape, 5));
+        loc, rewriter, aTensorTy, baseA, aOperandShape, 5, isFp4a));
   }
 
+  auto isFp4b = op.numBitsPerElementB == 4;
   auto allocShapeB = getAllocShape(bTensorTy, 0);
   DotOpMmaSmemLoader bLoader = DotOpMmaSmemLoader::build(
-      loc, rewriter, bTensorTy, baseB, {mmaSizeK, mmaSizeN}, 5);
+      loc, rewriter, bTensorTy, baseB, {mmaSizeK, mmaSizeN}, 5, isFp4b);
 
   DotConversion::InstDesc desc{mmaSizeM, mmaSizeN, {numRepM, numRepN, numRepK},
                                transA,   transB,   interleaved,
@@ -548,6 +549,10 @@ int64_t getFormatBitSize(ScaleDotElemType type) {
     return 6;
   case ScaleDotElemType::E2M1:
     return 4;
+  case ScaleDotElemType::BF16:
+    return 16;
+  case ScaleDotElemType::FP16:
+    return 16;
   default:
     llvm_unreachable("Unsupported type.");
   }
@@ -594,10 +599,8 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
     dot.shapeB[0] *= 2;
   }
 
-  dot.numBitsPerElementA = opKindIsMXFP4 ? getFormatBitSize(op.getAType())
-                                         : aTensorTy.getElementTypeBitWidth();
-  dot.numBitsPerElementB = opKindIsMXFP4 ? getFormatBitSize(op.getBType())
-                                         : bTensorTy.getElementTypeBitWidth();
+  dot.numBitsPerElementA = getFormatBitSize(op.getAType());
+  dot.numBitsPerElementB = getFormatBitSize(op.getBType());
 
   TritonLLVMOpBuilder tb(loc, rewriter);
   Value baseD = tb.ptrtoint(i32_ty, adaptor.getD());
