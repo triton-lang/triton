@@ -307,7 +307,7 @@ class PruneRouting(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep):
-        from .triton_kernels.compaction import compaction
+        from triton_kernels.compaction import compaction
         n_tokens_pad = expt_scal.shape[0]
         assert n_expts_tot % simulated_ep == 0
         _routing_clear_bitmatrix[(n_tokens_pad, )](
