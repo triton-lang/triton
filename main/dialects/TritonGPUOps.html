@@ -113,6 +113,7 @@
 <li class="toctree-l4"><a class="reference internal" href="#id15">Results:</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="#ttg-local-barrier-triton-gpu-localbarrierop"><code class="docutils literal notranslate"><span class="pre">ttg.local_barrier</span></code> (triton::gpu::LocalBarrierOp)</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#ttg-local-dealloc-triton-gpu-localdeallocop"><code class="docutils literal notranslate"><span class="pre">ttg.local_dealloc</span></code> (triton::gpu::LocalDeallocOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id16">Operands:</a></li>
 </ul>
@@ -555,6 +556,24 @@ returned buffer must be mutable.</p>
 </tbody>
 </table>
 </section>
+</section>
+<section id="ttg-local-barrier-triton-gpu-localbarrierop">
+<h2><code class="docutils literal notranslate"><span class="pre">ttg.local_barrier</span></code> (triton::gpu::LocalBarrierOp)<a class="headerlink" href="#ttg-local-barrier-triton-gpu-localbarrierop" title="Link to this heading">¶</a></h2>
+<p><em>Synchronizes execution and shared memory reads/writes for all threads in a CTA.</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.local_barrier` attr-dict
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">local_barrier</span></code> op synchronizes the execution and all operations
+between shared memory and registers for all threads in a CTA.
+It is used to coordinate communication between the threads of the CTA.</p>
+<p>This operation waits until all threads in the CTA have reached a <code class="docutils literal notranslate"><span class="pre">local_barrier</span></code>
+and operations between shared memory and registers made by these threads prior
+to the op are visible to all threads in the CTA.</p>
+<p>Data hazards between threads accessing the same memory can be avoided by synchronizing the
+CTA in-between these accesses with a <code class="docutils literal notranslate"><span class="pre">local_barrier</span></code>.</p>
+<p>A <code class="docutils literal notranslate"><span class="pre">local_barrier</span></code> operation does not provide syncronization guarantees on global memory.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 </section>
 <section id="ttg-local-dealloc-triton-gpu-localdeallocop">
 <h2><code class="docutils literal notranslate"><span class="pre">ttg.local_dealloc</span></code> (triton::gpu::LocalDeallocOp)<a class="headerlink" href="#ttg-local-dealloc-triton-gpu-localdeallocop" title="Link to this heading">¶</a></h2>

@@ -251,6 +251,32 @@ Interfaces: `MemoryEffectOpInterface`
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
+### `ttg.local_barrier` (triton::gpu::LocalBarrierOp)
+
+_Synchronizes execution and shared memory reads/writes for all threads in a CTA._
+
+Syntax:
+
+```
+operation ::= `ttg.local_barrier` attr-dict
+```
+
+The `local_barrier` op synchronizes the execution and all operations
+between shared memory and registers for all threads in a CTA.
+It is used to coordinate communication between the threads of the CTA.
+
+This operation waits until all threads in the CTA have reached a `local_barrier`
+and operations between shared memory and registers made by these threads prior
+to the op are visible to all threads in the CTA.
+
+Data hazards between threads accessing the same memory can be avoided by synchronizing the
+CTA in-between these accesses with a `local_barrier`.
+
+A `local_barrier` operation does not provide syncronization guarantees on global memory.
+
+Traits: `VerifyTensorLayoutsTrait`
+
+
 ### `ttg.local_dealloc` (triton::gpu::LocalDeallocOp)
 
 _Dealloc buffer_
