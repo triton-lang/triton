@@ -52,6 +52,13 @@ class FnName(Enum):
     QUANTIZE_MXFP8 = auto()
 
 
+@dataclass(frozen=True)
+class FusedComm:
+    out_handles: torch.Tensor
+    scatter_shard_indx: torch.Tensor | None = None
+    reduce_rank: int = 0
+    n_reduce_shards: int = 1
+
 EpilogueSpecs = FnSpecs  # TODO: remove this alias when callers are updated
 
 _kernels = dict()
@@ -391,10 +398,7 @@ def matmul_ogs(x, w, bias,
                gammas: torch.Tensor | None = None,
                out_alpha: float | None = None,
                y: torch.Tensor | None = None,
-               pYs: torch.Tensor | None = None,
-               scatter_shard_indx: torch.Tensor | None = None,
-               reduce_rank: int = 0,
-               n_reduce_shards: int = 1,
+               fused_comm: FusedComm | None = None,
                fused_activation: FusedActivation | None = None,
                epilogue: Epilogue | None = None,
                y_acc_in: torch.Tensor | None = None,
@@ -405,12 +409,11 @@ def matmul_ogs(x, w, bias,
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
 
-    matmul can be optionally fused with all gather or scatter at the end for the output. When pYs is specified, the m-th row of the output will be stored to (m * n_reduce_shards + reduce_rank) -th row
+    matmul can be optionally fused with all gather or scatter at the end for the output. When fused_comm is specified, the m-th row of the output will be stored to (m * n_reduce_shards + reduce_rank) -th row
     of each rank id in range [scatter_shard_indx[m] * n_reduce_shards, (scatter_shard_indx[m] + 1) * n_reduce_shards) if scatter_shard_indx is not None, otherwise the output will be all gathered across all reduce ranks.
     When scatter_shard_indx is specified, the caller should ensure that the indices of different shards do not conflict.
 
-    pYs: torch.Tensor((world_size,), uint64). pYs[i] is the pointer to the pre-allocated output tensor for rank i.
-         Each tensor has shape (n_rows * n_reduce_shards, n_cols)
+    The output buffer for fused comm should be pre-allocated and passed in via fused_comm.out_handles, which contains ipc handles to the output tensors, each with shape (n_rows * n_reduce_shards, n_cols).
     """
     is_input_batched = x.ndim == 3
     if is_input_batched:
@@ -418,7 +421,7 @@ def matmul_ogs(x, w, bias,
         assert scatter_indx is None, "scatter not supported in batched mode"
         assert routing_data is None, "routing not supported in batched mode"
         assert inner_routing_data is None, "routing not supported in batched mode"
-        assert pYs is None, "fused comm is not supported in batched mode"
+        assert fused_comm is None, "fused comm is not supported in batched mode"
         assert w.ndim == 3 and w.shape[0] == x.shape[0]
     if inner_routing_data is not None:
         assert routing_data is None
@@ -529,7 +532,7 @@ def matmul_ogs(x, w, bias,
         matmul_fused_activation, reduce_fused_activation = reduce_fused_activation, matmul_fused_activation
     # allocate output/scratchpad memory
     allocation = init_allocation(x, w, precision_config, fused_activation,
-        routing_data, gather_indx, scatter_indx, inner_routing_data, n_reduce_shards, opt_flags)
+        routing_data, gather_indx, scatter_indx, inner_routing_data, fused_comm.n_reduce_shards if fused_comm is not None else 1, opt_flags)
     memory = apply_allocation(allocation, y)
     # early exit
     if batch_size * M * N == 0:
@@ -589,7 +592,7 @@ def matmul_ogs(x, w, bias,
     # create tma descriptor for y
     y_has_tma = (
         opt_flags.is_persistent and (has_scatter_tma or not opt_flags.fused_scatter)
-        and (y_acc_in is None or y_acc_is_y) and pYs is None
+        and (y_acc_in is None or y_acc_is_y) and fused_comm is None
     )
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.reduction_n
     y_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
@@ -617,6 +620,12 @@ def matmul_ogs(x, w, bias,
     # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
     # w_transpose = w_storage.data.stride()[-1] != 1
     w_transpose = w_storage.data.stride()[-2] == 1
+    fused_comm_kwargs = {
+        "pYPtrs": fused_comm.out_handles,
+        "ScatterShardIndx": fused_comm.scatter_shard_indx,
+        "reduce_rank": fused_comm.reduce_rank,
+        "n_reduce_shards": fused_comm.n_reduce_shards,
+    } if fused_comm is not None else {}
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
@@ -671,11 +680,7 @@ def matmul_ogs(x, w, bias,
                    SWAP_XW=get_swap_xw(precision_config, opt_flags),
                    IS_EPILOGUE_QUANT_MXFP8=epilogue.specs.name == FnName.QUANTIZE_MXFP8.name,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
-                   # args for fused comms
-                   pYPtrs=pYs,
-                   ScatterShardIndx=scatter_shard_indx,
-                   reduce_rank=reduce_rank,
-                   n_reduce_shards=n_reduce_shards,
+                   **fused_comm_kwargs,
                    **opt_flags.target_kernel_kwargs)
     # Build grouped reduction inputs in a uniform way
     group_indx = None if scatter_indx is None or opt_flags.fused_scatter else scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
