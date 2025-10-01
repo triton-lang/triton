@@ -831,7 +831,6 @@ def post_matmul_comm_torch(y: torch.Tensor, rank: int, n_reduce_shards: int,
 
         assert len(out_shape) == 2, "batched mode not supported"
         result = torch.zeros(out_shape, device=y.device, dtype=y.dtype)
-        reduce_rank = rank % n_reduce_shards
         reduce_shard_id = rank // n_reduce_shards
 
         for i in range(world_size // n_reduce_shards):

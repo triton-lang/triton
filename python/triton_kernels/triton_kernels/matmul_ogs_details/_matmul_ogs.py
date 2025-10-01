@@ -15,6 +15,7 @@ from ._common import (
     matmul_launch_metadata,
     swizzle2d,
     xcd_swizzle,
+    threadfence_system,
 )
 
 
@@ -483,3 +484,6 @@ def _matmul_ogs(
                 tl.multiple_of(peer_Y_ptr, 16)
                 offs_y_mn = offs_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
                 tl.store(peer_Y_ptr + offs_y_mn, out, mask=mask)
+
+    if pYPtrs is not None:
+        threadfence_system()

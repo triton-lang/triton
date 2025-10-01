@@ -19,6 +19,7 @@ from ._common import (
     make_matmul_repr,
     matmul_launch_metadata,
     swizzle2d,
+    threadfence_system,
 )
 
 
@@ -563,6 +564,8 @@ def _p_matmul_ogs(
     if USE_LOCAL_ABSMAX:
         tl.atomic_max(YActualScale, compute_scale(local_absmax.to(tl.float32, bitcast=True), YPtr), sem="relaxed")
 
+    if pYPtrs is not None:
+        threadfence_system()
 
 _per_device_alloc_fns = {}
 def get_per_device_per_stream_alloc_fn(device):
