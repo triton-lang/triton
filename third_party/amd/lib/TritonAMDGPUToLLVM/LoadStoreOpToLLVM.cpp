@@ -1104,7 +1104,7 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       if (smemEnc.getIntervals().size() != 1 ||
           smemEnc.getPaddings().size() != 1)
         return rewriter.notifyMatchFailure(
-            op, "TDM only supports a single interval-padding pair");
+            op, "NYI: Multiple interval-padding pairs in TDM.");
       padInterval = smemEnc.getIntervals()[0];
       padAmount = smemEnc.getPaddings()[0];
     }
