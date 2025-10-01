@@ -30,6 +30,7 @@ HIP_TARGET_RDNA3 = GPUTarget("hip", "gfx1100", 32)
 HIP_TARGET_RDNA4 = GPUTarget("hip", "gfx1200", 32)
 HIP_TARGET_CDNA3 = GPUTarget("hip", "gfx942", 64)
 HIP_TARGET_CDNA4 = GPUTarget("hip", "gfx950", 64)
+HIP_TARGET_GFX1250 = GPUTarget("hip", "gfx1250", 32)
 
 ALL_TARGETS = [AMPERE_TARGET, HOPPER_TARGET, BLACKWELL_TARGET, HIP_TARGET_RDNA4]
 
@@ -1435,6 +1436,9 @@ def test_zeros():
     # CHECK: arith.constant dense<7> : tensor<8x8xi16, [[BLOCKED2D]]>
     ttgl.full_like(a, 7, shape=[8, 8], dtype=ttgl.int16, layout=layout_2d)
 
+    # CHECK: arith.constant 0.000000e+00 : f32
+    ttgl.zeros((), ttgl.float32, layout)
+
 
 @filecheck_test
 @gluon.jit
@@ -2358,6 +2362,58 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 """)
 
 
+@pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
+def test_amd_wmma_scaled(target):
+
+    @gluon.jit
+    def kernel():
+        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warps_per_cta=[2, 2],
+                                                             instr_shape=[16, 16, 128])
+        wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warps_per_cta=[2, 2],
+                                                                    instr_shape=[16, 16, 64])
+        a_scale_linear_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2]], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]],
+            warp_bases=[[0, 0], [16, 0]], block_bases=[], shape=[32, 4])
+        b_scale_linear_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
+            reg_bases=[[0, 1], [0, 2]], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]],
+            warp_bases=[[16, 0], [0, 0]], block_bases=[], shape=[32, 4])
+
+        a = ttgl.full([32, 64], 0x11, ttgl.uint8,
+                      ttgl.DotOperandLayout(operand_index=0, parent=wmma_layout_packed, k_width=16))
+        b = ttgl.full([64, 32], 0x22, ttgl.uint8,
+                      ttgl.DotOperandLayout(operand_index=1, parent=wmma_layout_packed, k_width=16))
+        a_scale = ttgl.full([32, 4], 0x02, ttgl.uint8, a_scale_linear_layout)
+        b_scale = ttgl.full([32, 4], 0x01, ttgl.uint8, b_scale_linear_layout)
+        acc = ttgl.full([32, 32], 0, ttgl.float32, wmma_layout)
+        ttgl.amd.gfx1250.wmma_scaled(a, a_scale, 'e2m1', b, b_scale, 'e2m1', acc)
+
+    module = run_parser(kernel, *make_args(num_warps=4), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [[0, 0], [16, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [[16, 0], [0, 0]], block = []}>
+#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, warpsPerCTA = [2, 2], instrShape = [16, 16, 64]}>
+#mma1 = #ttg.amd_wmma<{version = 3, isTranspose = true, warpsPerCTA = [2, 2], instrShape = [16, 16, 128]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %c17_i8 = arith.constant 17 : i8
+    %cst = arith.constant dense<17> : tensor<32x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
+    %c34_i8 = arith.constant 34 : i8
+    %cst_0 = arith.constant dense<34> : tensor<64x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>
+    %c2_i8 = arith.constant 2 : i8
+    %cst_1 = arith.constant dense<2> : tensor<32x4xi8, #linear>
+    %c1_i8 = arith.constant 1 : i8
+    %cst_2 = arith.constant dense<1> : tensor<32x4xi8, #linear1>
+    %cst_3 = arith.constant 0.000000e+00 : f32
+    %cst_4 = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma1>
+    %cst_5 = arith.constant 0.000000e+00 : f32
+    %0 = tt.dot_scaled %cst scale %cst_1, %cst_0 scale %cst_2, %cst_4 lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<32x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<32x4xi8, #linear> * tensor<64x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<32x4xi8, #linear1> -> tensor<32x32xf32, #mma1>
+    tt.return
+  }
+}
+""")
+
+
 @gluon.jit
 def padded_shared_layout_kernel():
     shape: ttgl.constexpr = [64, 64]
@@ -2451,33 +2507,33 @@ def test_buffer_atomic_rmw(target):
         offsets = ttgl.arange(0, BLOCK, layout=ttgl.AutoLayout())
 
         val = ttgl.full([BLOCK], 1, ttgl.int32, layout=ttgl.AutoLayout())
-        ttgl.amd.cdna3.buffer_atomic_rmw("smax", int32_ptr, offsets, val)
-        ttgl.amd.cdna3.buffer_atomic_rmw("smin", int32_ptr, offsets, val)
-        ttgl.amd.cdna3.buffer_atomic_rmw("and", int32_ptr, offsets, val)
-        ttgl.amd.cdna3.buffer_atomic_rmw("or", int32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_max(int32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_min(int32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_and(int32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_or(int32_ptr, offsets, val)
         #value broadcast
-        ttgl.amd.cdna3.buffer_atomic_rmw("xor", int32_ptr, offsets, value=1)
+        ttgl.amd.cdna3.buffer_atomic_xor(int32_ptr, offsets, value=1)
 
         # operands should be unsigned
         val = ttgl.full([BLOCK], 1, ttgl.uint32, layout=ttgl.AutoLayout())
-        ttgl.amd.cdna3.buffer_atomic_rmw("umax", uint32_ptr, offsets, val)
-        ttgl.amd.cdna3.buffer_atomic_rmw("umin", uint32_ptr, offsets, val)
-        ttgl.amd.cdna3.buffer_atomic_rmw("iadd", uint32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_max(uint32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_min(uint32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_add(uint32_ptr, offsets, val)
 
         val = val.cast(ttgl.int64)
         #mask broadcast
-        ttgl.amd.cdna3.buffer_atomic_rmw("xchg", int64_ptr, offsets, val, mask=0)
+        ttgl.amd.cdna3.buffer_atomic_xchg(int64_ptr, offsets, val, mask=0)
 
         mask = ttgl.full([BLOCK], True, ttgl.int32, layout=ttgl.AutoLayout())
         val = ttgl.zeros([BLOCK], ttgl.float16, layout=ttgl.AutoLayout())
-        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp16_ptr, offsets, val, mask=mask)
-        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp16_ptr, offsets, val, mask=mask, scope="sys")
-        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp16_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
+        ttgl.amd.cdna3.buffer_atomic_add(fp16_ptr, offsets, val, mask=mask)
+        ttgl.amd.cdna3.buffer_atomic_add(fp16_ptr, offsets, val, mask=mask, scope="sys")
+        ttgl.amd.cdna3.buffer_atomic_add(fp16_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
 
         val = val.cast(ttgl.float32)
-        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp32_ptr, offsets, val, mask=mask)
-        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp32_ptr, offsets, val, mask=mask, scope="sys")
-        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp32_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
+        ttgl.amd.cdna3.buffer_atomic_add(fp32_ptr, offsets, val, mask=mask)
+        ttgl.amd.cdna3.buffer_atomic_add(fp32_ptr, offsets, val, mask=mask, scope="sys")
+        ttgl.amd.cdna3.buffer_atomic_add(fp32_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
 
     fp16_ptr = MockTensor(ttgl.float16)
     fp32_ptr = MockTensor(ttgl.float32)
@@ -2559,10 +2615,10 @@ def test_buffer_atomic_rmw_bf16(target):
     def kernel(bf16_ptr):
         offsets = ttgl.arange(0, 1, layout=ttgl.AutoLayout())
         val = ttgl.zeros([1], ttgl.bfloat16, layout=ttgl.AutoLayout())
-        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", bf16_ptr, offsets, val, mask=0)
+        ttgl.amd.cdna4.buffer_atomic_add(bf16_ptr, offsets, val, mask=0)
         mask = ttgl.full([1], True, ttgl.int32, layout=ttgl.AutoLayout())
-        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", bf16_ptr, offsets, val, mask=mask, scope="sys")
-        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", bf16_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
+        ttgl.amd.cdna4.buffer_atomic_add(bf16_ptr, offsets, val, mask=mask, scope="sys")
+        ttgl.amd.cdna4.buffer_atomic_add(bf16_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
 
     bf16_ptr = MockTensor(ttgl.bfloat16)
     module = run_parser(kernel, *make_args(bf16_ptr), target=target)
@@ -2674,3 +2730,48 @@ def test_non_scalar_loop_bounds():
         run_parser(kernel)
 
     assert "For step must be a scalar, got" in str(e.value)
+
+
+@gluon.jit
+def amd_tdm_kernel(ptr):
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [16, 64], [1, 0])
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+
+    desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=ptr, shape=(32, 128), strides=(128, 1),
+                                                       block_shape=(16, 64), layout=SHARED_LAYOUT)
+
+    buffer = ttgl.allocate_shared_memory(desc.dtype, shape=desc.block_shape, layout=desc.layout)
+    ttgl.amd.gfx1250.tdm.async_load(desc, offsets=[0, 2], dest=buffer)
+
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+    buffer.load(layout=BLOCKED_LAYOUT)
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
+def test_amd_tdm(target):
+
+    ptr = MockTensor(ttgl.float16)
+    module = run_parser(amd_tdm_kernel, *make_args(ptr), target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [16, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @amd_tdm_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c32_i32 = arith.constant 32 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c128_i64 = arith.constant 128 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c32_i32, %c128_i32], [%c128_i64, %c1_i64] : <f16>, <tensor<16x64xf16>>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    %c0_i32 = arith.constant 0 : i32
+    %c2_i32 = arith.constant 2 : i32
+    %true = arith.constant true
+    %2 = amdgpu.async_tdm_copy_global_to_local %0[%c0_i32, %c2_i32] into %1, %true : !tt.tensordesc<tensor<16x64xf16>> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    %3 = amdgpu.async_tdm_wait  {num = 0 : i32}
+    %4 = ttg.local_load %1 : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+    tt.return
+  }
+}
+""")

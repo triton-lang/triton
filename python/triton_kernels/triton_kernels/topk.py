@@ -122,3 +122,14 @@ def topk(
     """
     ret = TopK.apply(x, k, apply_softmax, dim, return_bitmatrix, y_indx, n_rows)
     return ret
+
+
+def topk_torch(x, k, y_indx):
+    if y_indx is not None:
+        tk_indx = y_indx
+    else:
+        tk_indx = torch.argsort(-x, dim=1, stable=True)[:, :k]
+    tk_indx = tk_indx.long()
+    tk_val = torch.take_along_dim(x, tk_indx, dim=1)
+    tk_indx = tk_indx.int()
+    return tk_val, tk_indx

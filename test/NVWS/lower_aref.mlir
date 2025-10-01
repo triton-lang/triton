@@ -386,7 +386,7 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
       // CHECK-NEXT: tc_gen5_mma {{.*}}, {{.*}}, [[VIEW]][]
       %9 = nvws.aref.buffer %0, %arg3 {ttg.partition = array<i32: 1>} : <[!ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>]>, !ttg.async.token -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 2x128x128>
       %10 = ttng.tc_gen5_mma %7, %8, %9[], %true, %true {ttg.partition = array<i32: 1>} : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable, 2x128x128>
-      %11 = arith.cmpi eq, %arg2, %c0_i32 : i32
+      %11 = arith.cmpi eq, %arg2, %c0_i32 {ttg.partition = array<i32: 1, 0>} : i32
       // CHECK: [[RET_IF:%.*]]:4 = scf.if
       %12 = scf.if %11 -> (!ttg.async.token) {
         // CHECK: tc_gen5_commit

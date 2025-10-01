@@ -240,12 +240,8 @@ template <class T> struct AssignStagePhase {
 
         auto createInto = [&](auto opTy, auto... args) {
           using ty = decltype(opTy);
-          auto ids = partitionIds;
-          if (ids) {
-            ids->insert(0);
-          }
           return triton::gpu::createInto<ty>(
-              builder, builder.getLoc(), ids, stageCluster,
+              builder, builder.getLoc(), partitionIds, stageCluster,
               std::forward<decltype(args)>(args)...);
         };
 
@@ -356,7 +352,46 @@ template <class T> struct AssignStagePhase {
   }
 };
 
-static LogicalResult assignStagePhase(triton::FuncOp funcOp) {
+void visitBackwardSlice(scf::ForOp wsLoop, Value value,
+                        std::function<void(Operation *)> callback,
+                        DenseSet<Value> &visited) {
+  if (!visited.insert(value).second)
+    return;
+
+  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+    if (auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp())) {
+      if (forOp->hasAttr(kWarpSpecializeAttrName))
+        return;
+      auto pos = findValuePosInRange(forOp.getRegionIterArgs(), value);
+      assert(pos);
+      visitBackwardSlice(wsLoop, forOp.getInitArgs()[*pos], callback, visited);
+    }
+  } else if (auto defOp = value.getDefiningOp();
+             isa<scf::IfOp, scf::ForOp>(defOp)) {
+    auto pos = findValuePosInRange(defOp->getResults(), value);
+    assert(pos);
+    if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
+      visitBackwardSlice(wsLoop, ifOp.thenYield()->getOperand(*pos), callback,
+                         visited);
+      if (ifOp.elseBlock())
+        visitBackwardSlice(wsLoop, ifOp.elseYield()->getOperand(*pos), callback,
+                           visited);
+      visitBackwardSlice(wsLoop, ifOp.getCondition(), callback, visited);
+    } else {
+      auto forOp = cast<scf::ForOp>(defOp);
+      visitBackwardSlice(wsLoop,
+                         forOp.getBody()->getTerminator()->getOperand(*pos),
+                         callback, visited);
+    }
+  } else if (wsLoop.getBody()->findAncestorOpInBlock(*defOp)) {
+    callback(defOp);
+    for (auto operand : defOp->getOperands()) {
+      visitBackwardSlice(wsLoop, operand, callback, visited);
+    }
+  }
+}
+
+LogicalResult assignStagePhase(triton::FuncOp funcOp) {
   SmallVector<ArefCreateOp> arefOps;
   funcOp.walk([&](ArefCreateOp arefOp) { arefOps.push_back(arefOp); });
   for (auto arefOp : arefOps) {
@@ -365,6 +400,31 @@ static LogicalResult assignStagePhase(triton::FuncOp funcOp) {
     if (failed(AssignStagePhase<ArefGetEnterOp>::run(arefOp)))
       return failure();
   }
+
+  auto callback = [&](Operation *op) {
+    if (!isa<scf::YieldOp, scf::IfOp, scf::ForOp, triton::ReduceOp>(op)) {
+      auto partitionIds = getPartitionIds(op);
+      assert(partitionIds);
+      partitionIds->insert(0);
+      setPartition(op, *partitionIds);
+    }
+  };
+
+  funcOp.walk([&](scf::ForOp forOp) {
+    DenseSet<Value> visited;
+    if (forOp->hasAttr(kWarpSpecializeAttrName)) {
+      for (auto result : forOp.getResults()) {
+        // if result is of scalar type and is used outside of for-op, visit
+        // all dependencies and assign default partition to them
+        if (isa<IntegerType, FloatType>(result.getType()) &&
+            !result.use_empty()) {
+          auto arg = forOp.getBody()->getTerminator()->getOperand(
+              result.getResultNumber());
+          visitBackwardSlice(forOp, arg, callback, visited);
+        }
+      }
+    }
+  });
   return success();
 }
 
