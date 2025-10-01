@@ -644,6 +644,12 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_arg(self, node):
         ast.NodeVisitor.generic_visit(self, node)
+        param = next(p for p in self.jit_fn.params if p.name == node.arg)
+        if param.is_constexpr and (param.do_not_specialize or param.do_not_specialize_on_alignment):
+            raise CompilationError(
+                self.jit_fn.src, node,
+                f"{node.arg} marked as constexpr and listed in do_not_specialize/do_not_specialize_on_alignment. "
+                "Remove constexpr designation to skip specialization.")
         return node.arg
 
     def visit_AnnAssign(self, node):
@@ -1583,16 +1589,24 @@ class CodeGenerator(ast.NodeVisitor):
 
 def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None):
     arg_types = [None] * len(fn.arg_names)
-    const_iter = iter(src.constants.items())
-    kc, vc = next(const_iter, (None, None))
 
-    for i, (ks, v) in enumerate(src.signature.items()):
-        idx = fn.arg_names.index(ks)
-        cexpr = None
-        if kc is not None and kc[0] == i:
-            cexpr = vc
-            kc, vc = next(const_iter, (None, None))
-        arg_types[idx] = str_to_ty(v, cexpr)
+    for k, v in src.signature.items():
+        idx = fn.arg_names.index(k)
+        arg_types[idx] = str_to_ty(v, None)
+
+    def apply_constexpr_types(argument, indices, value):
+        index = indices.pop()
+        if len(indices) == 0:
+            if isinstance(argument, list):
+                argument[index] = constexpr(value).type
+            else:
+                argument.types[index] = constexpr(value).type
+        else:
+            apply_constexpr_types(argument[index], indices, value)
+
+    for path, value in src.constants.items():
+        apply_constexpr_types(arg_types, list(path)[::-1], value)
+
     prototype = ASTFunction([], arg_types, src.constants, src.attrs)
     file_name, begin_line = get_jit_fn_file_line(fn)
     # query function representation

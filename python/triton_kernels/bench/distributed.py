@@ -18,12 +18,10 @@ from triton_kernels.routing import (
     ScatterIndx,
     compute_expt_data_torch,
     topk_torch,
-    prune_routing,
     routing_from_bitmatrix,
 )
 from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
-from triton_kernels.routing_details._routing_compute import _routing_clear_bitmatrix
 from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor import Bitmatrix
@@ -291,6 +289,46 @@ def pack_bitmatrix(
         tl.store(bitmatrix_ptrs, y, mask=offsets_m[:, None] < n_rows)
 
 
+@triton.jit
+def _routing_clear_bitmatrix(Bitmatrix, stride_bm, stride_bn, shape_bn, cutoff, BLOCK_N: tl.constexpr):
+    pid_m = tl.program_id(0)
+    cutoff_word = cutoff // 32
+    cutoff_bit = cutoff % 32
+    cutoff_mask = (1 << (cutoff_bit)) - 1
+    for start_n in range(0, shape_bn, BLOCK_N):
+        offs_n = start_n + tl.arange(0, BLOCK_N)
+        values = tl.load(Bitmatrix + pid_m * stride_bm + offs_n * stride_bn, mask=offs_n < shape_bn)
+        values = tl.where(offs_n == cutoff_word, values & cutoff_mask, values)
+        values = tl.where(offs_n > cutoff_word, 0, values)
+        tl.store(Bitmatrix + pid_m * stride_bm + offs_n * stride_bn, values, mask=offs_n < shape_bn)
+
+
+class PruneRouting(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep):
+        from triton_kernels.compaction import compaction
+        n_tokens_pad = expt_scal.shape[0]
+        assert n_expts_tot % simulated_ep == 0
+        _routing_clear_bitmatrix[(n_tokens_pad, )](
+            bitmatrix.storage.data,
+            bitmatrix.storage.data.stride(0),
+            bitmatrix.storage.data.stride(1),
+            bitmatrix.storage.data.shape[1],
+            n_expts_tot // simulated_ep,
+            BLOCK_N=512,
+        )
+        # perform compaction to update expt_scal / expt_indx
+        expt_scal, expt_indx = compaction(expt_scal, expt_indx, bitmatrix)
+        n_expts_tot = n_expts_tot // simulated_ep
+        bitmatrix.shape[-1] = n_expts_tot
+        return expt_scal, expt_indx, bitmatrix
+
+
+def prune_routing(expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep):
+    return PruneRouting.apply(expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep)
+
+
 def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1, TP=1):
     _, n_expts_tot = logits.shape
 
@@ -354,7 +392,7 @@ def routing(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None,
         else:
             raise ValueError(f"Unknown backend: {backend}")
     else:
-        return x, *triton_kernels.routing.routing(logits, n_expts_act, sm_first, expt_indx, EP, n_rows), None
+        return x, *triton_kernels.routing.routing(logits, n_expts_act, sm_first, expt_indx, n_rows), None
 
 
 # The following dummy methods simulate the behavior of distributed operations

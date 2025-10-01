@@ -330,6 +330,93 @@ public:
   }
 };
 
+// Optimize tmem_load -> local_store when the layout 16x256b allows better
+// code generation for local_store lowering.
+class TMemToSharedMemPattern : public OpRewritePattern<TMEMLoadOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(TMEMLoadOp tmemLoadOp,
+                                PatternRewriter &rewriter) const override {
+    auto tmemEnc = dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+        tmemLoadOp.getSrc().getType().getEncoding());
+    if (!tmemEnc)
+      return failure();
+    int M = tmemEnc.getBlockM();
+    int N = tmemEnc.getBlockN();
+    int numWarps = ttg::lookupNumWarps(tmemLoadOp);
+    // Compute the alternative layout.
+    std::optional<LinearLayout> ll =
+        gpu::getTmemLoadStoreLayout16x256(M, N, tmemLoadOp.getType(), numWarps);
+    if (!ll)
+      return failure();
+    Attribute newEncoding =
+        gpu::LinearEncodingAttr::get(tmemLoadOp.getContext(), *ll);
+    auto newType = RankedTensorType::get(tmemLoadOp.getType().getShape(),
+                                         tmemLoadOp.getType().getElementType(),
+                                         newEncoding);
+    if (newType == tmemLoadOp.getType())
+      return failure();
+
+    SetVector<Value> slice;
+    DenseMap<Value, Attribute> layoutMap;
+    SmallVector<std::pair<Value, Attribute>> uses;
+    uses.push_back({tmemLoadOp.getResult(), newEncoding});
+    bool foundImprovedStore = false;
+    while (!uses.empty()) {
+      auto [v, encoding] = uses.pop_back_val();
+      for (auto user : v.getUsers()) {
+        if (auto localStore = dyn_cast<gpu::LocalStoreOp>(user)) {
+          // Check if the store benefits from the new layout.
+          // 16x256b is optimized for 16bits load.
+          auto srcType = localStore.getSrc().getType();
+          if (srcType.getElementType().getIntOrFloatBitWidth() >= 32)
+            continue;
+          LinearLayout regLayout = gpu::toLinearLayout(srcType);
+          LinearLayout smemLayout =
+              gpu::toLinearLayout(localStore.getDst().getType());
+          int vecDim =
+              regLayout.invertAndCompose(smemLayout).getNumConsecutiveInOut();
+          // If we find a 8 or 16bits store that cannot be vectorized use the
+          // alternative layout.
+          // TODO: we could refine the logic to make sure the new layout would
+          // help by allowing stmatrix if we can isolate good helpers.
+          if (vecDim != 1)
+            continue;
+          foundImprovedStore = true;
+          break;
+        }
+        // Don't iterate though control flow ops.
+        if (isa<RegionBranchOpInterface, scf::YieldOp, BranchOpInterface>(user))
+          continue;
+        Attribute userEncoding = inferDstEncoding(user, encoding);
+        if (!userEncoding) {
+          if (isa<ttg::ConvertLayoutOp>(user)) {
+            userEncoding = encoding;
+          } else {
+            continue;
+          }
+        }
+        for (auto result : user->getResults()) {
+          uses.push_back({result, userEncoding});
+        }
+      }
+    }
+    if (!foundImprovedStore)
+      return failure();
+    // Use the new layout and rely on RemoveLayoutConversions pass to propagate
+    // the convert_layout.
+    Type oldType = tmemLoadOp.getType();
+    rewriter.modifyOpInPlace(
+        tmemLoadOp, [&]() { tmemLoadOp.getResult().setType(newType); });
+    rewriter.setInsertionPointAfter(tmemLoadOp);
+    auto cvt = rewriter.create<ttg::ConvertLayoutOp>(
+        tmemLoadOp.getLoc(), oldType, tmemLoadOp.getResult());
+    rewriter.replaceAllUsesExcept(tmemLoadOp.getResult(), cvt, cvt);
+    return success();
+  }
+};
+
 } // anonymous namespace
 
 class TritonNvidiaGPUOptimizeTMemLayoutsPass
@@ -345,8 +432,9 @@ public:
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    patterns.add<TMemSplitLoadPattern, TMemStoreJoinPattern,
-                 TMemLoadReducePattern, TMemFromSharedMemPattern>(context);
+    patterns
+        .add<TMemSplitLoadPattern, TMemStoreJoinPattern, TMemLoadReducePattern,
+             TMemFromSharedMemPattern, TMemToSharedMemPattern>(context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
   }

@@ -986,6 +986,24 @@ private:
       newOffset = createTruncIOffset(rewriter, curLoc, newOffset,
                                      rewriter.getI32Type());
     }
+
+    // If the newOffset is not created in this function, chances are it could
+    // already be mapped to another value, say y. In that case, we need to
+    // use y instead of newOffset. Otherwise, consider the following sequence,
+    // this operation (op1) feeds its result to op2 as the operand0. When op2
+    // is visited, the framework will associate the op2.operand0, via
+    // OneToNOpAdaptor, with <fatPtrBase, y> instead of <fatPtrBase, newOffset>.
+    //
+    //   op1: r = this-addPtr ...
+    //   op2:   = op r, ...
+    //
+    // If we were using <fatPtrBase, newOffset> to set an entry in fatPtrs, we
+    // would not be able to lookup the entry when op2 is visited, as it will
+    // use index <fatPtrBase, y>.
+    if (auto remapped = rewriter.getRemappedValue(newOffset);
+        (remapped != nullptr) && (remapped != newOffset))
+      newOffset = remapped;
+
     LDBG("   -- new offset: " << newOffset);
 
     rewriter.replaceOpWithMultiple(addPtrOp, {{fatPtrBase, newOffset}});
@@ -1284,15 +1302,16 @@ public:
     SmallVector<Value> trueOperands = flattenValues(remappedTrueOperands);
     SmallVector<Value> falseOperands = flattenValues(remappedFalseOperands);
 
-    rewriter.replaceOpWithNewOp<cf::CondBranchOp>(
-        branchOp, branchOp.getCondition(), branchOp.getTrueDest(), trueOperands,
-        branchOp.getFalseDest(), falseOperands);
+    auto newOp = rewriter.create<cf::CondBranchOp>(
+        branchOp.getLoc(), branchOp.getCondition(), branchOp.getTrueDest(),
+        trueOperands, branchOp.getFalseDest(), falseOperands);
 
     convertSimpleBlockSignature(branchOp.getTrueDest(), remappedTrueOperands,
                                 rewriter, fatPtrs);
     convertSimpleBlockSignature(branchOp.getFalseDest(), remappedFalseOperands,
                                 rewriter, fatPtrs);
 
+    rewriter.replaceOp(branchOp, newOp);
     return success();
   }
 };
@@ -1463,10 +1482,11 @@ public:
     ArrayRef<ValueRange> remappedDestOperands = adaptor.getDestOperands();
     SmallVector<Value> trueOperands = flattenValues(remappedDestOperands);
 
-    rewriter.replaceOpWithNewOp<cf::BranchOp>(branchOp, branchOp.getDest(),
-                                              trueOperands);
+    auto newOp = rewriter.create<cf::BranchOp>(
+        branchOp.getLoc(), branchOp.getDest(), trueOperands);
     convertSimpleBlockSignature(branchOp.getDest(), remappedDestOperands,
                                 rewriter, fatPtrs);
+    rewriter.replaceOp(branchOp, newOp);
     return success();
   }
 };
@@ -1901,6 +1921,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
 
   ConversionConfig config;
   config.buildMaterializations = false;
+  config.allowPatternRollback = false;
   ConversionTarget target(getContext());
   auto isLegal = [&opsToRewrite](Operation *op) {
     if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op)) {
