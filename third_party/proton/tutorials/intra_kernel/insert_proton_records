@@ -18,9 +18,7 @@ def add_proton_records(input_file):
 
     # Assert no proton.record already exists
     if "proton.record" in content:
-        raise AssertionError(
-            f"File already contains `proton.record` statements! Please clean-up."
-        )
+        raise AssertionError("File already contains `proton.record` statements! Please clean-up.")
 
     # Reset file pointer and read lines again
     with open(input_file, "r") as f:
@@ -47,13 +45,9 @@ def add_proton_records(input_file):
             match = re.search(r"%(\w+)_\d+\s*=\s*tt\.load", line)
             if match:
                 var_name = match.group(1)
-                result_lines.append(
-                    f'      proton.record start "load_{var_name}_issue"\n'
-                )
+                result_lines.append(f'      proton.record start "load_{var_name}_issue"\n')
                 result_lines.append(line)
-                result_lines.append(
-                    f'      proton.record end "load_{var_name}_issue"\n'
-                )
+                result_lines.append(f'      proton.record end "load_{var_name}_issue"\n')
                 continue
 
         # Add load_and_add record end after arithmetic operation
@@ -94,9 +88,7 @@ def find_and_process_ttgir():
         sys.exit(1)
 
     # Process the ttgir file
-    ttgir_files = glob.glob(
-        os.path.join(ttgir_dump_path, "**", "*.ttgir"), recursive=True
-    )
+    ttgir_files = glob.glob(os.path.join(ttgir_dump_path, "**", "*.ttgir"), recursive=True)
 
     if not ttgir_files:
         print(f"No ttgir files found in {ttgir_dump_path}")

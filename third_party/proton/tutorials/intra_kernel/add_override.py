@@ -10,7 +10,7 @@ Workflow:
 1. Generate TTGIR dump files:
    This creates the original TTGIR files in the `ttgir_dump/` directory:
 
-   ../../scripts/dump_ttgir.sh python3 add_override.py 
+   ../../scripts/dump_ttgir.sh python3 add_override.py
 
 2. Insert profiling instrumentation:
    Modify the generated TTGIR files by adding proton.record operators at desired
@@ -39,14 +39,13 @@ DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
 @triton.jit()
-def add_kernel(
-    x_ptr,  # *Pointer* to first input vector.
-    y_ptr,  # *Pointer* to second input vector.
-    output_ptr,  # *Pointer* to output vector.
-    n_elements,  # Size of the vector.
-    BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
-    # NOTE: `constexpr` so it can be used as a shape value.
-):
+def add_kernel(x_ptr,  # *Pointer* to first input vector.
+               y_ptr,  # *Pointer* to second input vector.
+               output_ptr,  # *Pointer* to output vector.
+               n_elements,  # Size of the vector.
+               BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
+               # NOTE: `constexpr` so it can be used as a shape value.
+               ):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -58,9 +57,7 @@ def add_kernel(
 
 
 def add(x: torch.Tensor, y: torch.Tensor):
-    parser = argparse.ArgumentParser(
-        description="TTGIR override example with Triton intra kernel profiling"
-    )
+    parser = argparse.ArgumentParser(description="TTGIR override example with Triton intra kernel profiling")
     parser.add_argument(
         "--increase-accuracy",
         action="store_true",
@@ -72,7 +69,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
     output = torch.empty_like(x)
     assert x.device == DEVICE and y.device == DEVICE and output.device == DEVICE
     n_elements = output.numel()
-    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
 
     if args.increase_accuracy:
         proton.start(
