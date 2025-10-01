@@ -3,12 +3,12 @@
 
 include "mlir/Pass/PassBase.td"
 
-def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::ModuleOp"> {
-  let summary = "pipeline";
+def TritonAMDGPUScheduleLoops : Pass<"tritonamdgpu-schedule-loops", "mlir::ModuleOp"> {
+  let summary = "Generate schedule for loops";
 
   let description = [{
-    Pipeline global loads through registers to shared memory while computing on previous
-    tile
+    Create a schedule for loops that will be handed over to the pipeline expander to
+    implement software pipelining
   }];
 
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
@@ -17,18 +17,27 @@ def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::Mod
     Option<"numStages", "num_stages",
            "int32_t", /*default*/"2",
            "Number of Pipeline stages">,
-    Option<"globalPrefetch", "global_prefetch",
-           "int32_t", /*default*/"0",
-           "Set global prefetch stage count">,
-    Option<"localPrefetch", "local_prefetch",
-           "int32_t", /*default*/"0",
-           "Set local prefetch stage count">,
     Option<"useAsyncCopy", "use_async_copy",
            "bool", /*default*/"false",
            "Use AsyncCopyGlobalToLocal to directly load to shared memory">,
     Option<"usePingpong", "use_pingpong",
            "bool", /*default*/"false",
            "Use schedules to enable block ping-pong">,
+  ];
+}
+
+def TritonAMDGPUPipeline : Pass<"tritonamdgpu-pipeline", "mlir::ModuleOp"> {
+  let summary = "pipeline";
+  let description = [{
+    Allocate LDS buffer, convert some loads to async loads, and expand loops
+  }];
+
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
+
+  let options = [
+    Option<"useAsyncCopy", "use_async_copy",
+           "bool", /*default*/"false",
+           "Use AsyncCopyGlobalToLocal to directly load to shared memory">,
   ];
 }
 

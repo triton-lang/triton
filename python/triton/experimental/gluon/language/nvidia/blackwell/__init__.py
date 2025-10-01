@@ -23,10 +23,10 @@ __all__ = [
     "fence_async_shared",
     "get_tmem_32x32b_reg_layout",
     "mbarrier",
+    "mma_v2",
     "tensor_memory_descriptor",
     "TensorMemoryLayout",
     "tma",
-    "mma_v2",
 ]
 
 

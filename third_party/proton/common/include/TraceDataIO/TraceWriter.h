@@ -50,7 +50,8 @@ public:
   void write(std::ostream &outfile) override final;
 
 private:
-  void writeKernel(nlohmann::json &object, const KernelTrace &kernelTrace);
+  void writeKernel(nlohmann::json &object, const KernelTrace &kernelTrace,
+                   const uint64_t minInitTime);
 
   const std::vector<std::string> kChromeColor = {"cq_build_passed",
                                                  "cq_build_failed",
