@@ -353,60 +353,6 @@ private:
   }
 };
 
-// Abstract class to calculate the address of a shared or tensor memory slice.
-// Helper class to load shared memory slices following MMAv3 layout.
-class DotOpMmaV3SmemLoader : public DotOpMmaMemLoader {
-public:
-  DotOpMmaV3SmemLoader() {}
-  DotOpMmaV3SmemLoader(Value tensor, Value base, SmallVector<int64_t> shape,
-                       ArrayRef<int64_t> allocSwizzleShape, Value warpId,
-                       unsigned int dimWpt, bool trans,
-                       SmallVector<unsigned int> instrShape,
-                       int64_t elementBitwidth,
-                       ConversionPatternRewriter &rewriter, Location loc);
-  // Return a descriptor pointing to the shared memory slice at coordinates (a,
-  // b)
-  Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                 Location loc) const;
-
-  MemDescOperand memLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                         Location loc) const override {
-    return {smemLoad(a, b, rewriter, loc), std::nullopt};
-  }
-
-private:
-  Value base;
-  SmallVector<int64_t> shape;
-  SmallVector<int64_t> allocSwizzleShape;
-  Value warpId;
-  int dimWpt;
-  bool trans;
-  int fastMovingDim;
-  Value elemsPerSwizzlingRowVal;
-  SmallVector<unsigned int> instrShape;
-  int elemsPerSwizzlingRow;
-  int64_t elemBits;
-  Value descriptor;
-};
-
-// Helper class to load shared memory slices following MMAv5 layout.
-class DotOpMmaV5SmemLoader : public DotOpMmaV3SmemLoader {
-public:
-  using DotOpMmaV3SmemLoader::DotOpMmaV3SmemLoader;
-
-  // Return a descriptor pointing to the shared memory slice at coordinates (a,
-  // b), with bit 46 set.
-  Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                 Location loc) const {
-    auto tb = TritonLLVMOpBuilder(loc, rewriter);
-    Value desc = DotOpMmaV3SmemLoader::smemLoad(a, b, rewriter, loc);
-    // Set bit 46 as per
-    // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-shared-memory-descriptor
-    Value mask = tb.int_val(64, 1ULL << 46);
-    return tb.or_(desc, mask, /*disjoint*/ true);
-  }
-};
-
 // Helper class to load tensor memory following MMAv5 layout.
 class DotOpMmaV5TmemLoader : public DotOpMmaMemLoader {
 public:
