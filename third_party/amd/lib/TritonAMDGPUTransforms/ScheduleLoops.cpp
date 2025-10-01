@@ -241,6 +241,24 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
   threadNumBytes = llvm::alignTo(
       threadNumBytes, std::max(4u, byteWidth)); // Assume 32-bit per bank
 
+  // On GFX9 we can only add padding after each direct-to-lds load. Since we
+  // have 64 lanes and generally want to load 128bit per lane we end up with a
+  // padding interval of 1024bytes.
+  // To avoid bank conflicts when reading the data we want to stagger contiguous
+  // rows to shift their start to different banks. Since rows are generally
+  // shorter than 1024bytes we reorder rows in shared memory so pairs of 8
+  // consecutive rows are strided by 1024bytes so they can be padded to
+  // different banks. If we assume one row is 256bytes we reorder the rows as
+  // follows:
+  //  [row0, row16, row32, row 48, row1, row17, row33, row 49, row2, row17..]
+  //  [0,    256,   512,   768,    1024, ..] byte offsets
+  // This naturally extends to different row sizes, e.g. for 128bytes:
+  // [r0, r16, r32, r48, r64, r80, r96, r112, r1, r17, ..]
+  // [0,  128, 256, 384, ..                 , 1024, ..]
+  // Overall this pattern works if our block size is 8KB or larger since we want
+  // to stagger 8 rows.
+
+  // Create the above desribed layout a linear bases from dim0, dim1 -> offset
   auto createBaseLayout = [](int kDim, bool kContig) {
     std::vector<std::vector<int>> bases;
     // Add log2(kDim) bases
@@ -266,19 +284,35 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
   auto offsetBases = createBaseLayout(std::min(256U, contigSize), isKContig);
 
   if (isKContig) {
+    // kWidth=8 will use ds_read_b128 in this case which resolves bank conflicts
+    // in 4 pairs of lanes (0-4, 12-15, 20-23, 24-27).
+    // kWidth=4 will use ds_read_b64 which splits lanes into 2 groups of 32
+    // consecutive rows
+
+    // For kWidth=8 lane groups read 16 elements contiguous on a single row so
+    // we pad by 16 elements
+    // For kWidth=4 lane groups load 4 byte contiguous so we just pad by 4
+    // elements
     threadNumBytes = kWidth == 8 ? 32 : 8;
     if (mfmaNonKDim == 32) {
+      // In this case we access 16 elements along nonK so we place row16 to the
+      // other half of LDS. Depending on the kDim the index is shifted. We can
+      // then simply pad by 4 bytes
       int row16Index = kDim == 32 ? 5 : (kDim == 64 ? 6 : 7);
       std::swap(offsetBases[row16Index], offsetBases[7]);
       threadNumBytes = 4;
     }
   } else {
     if (mfmaNonKDim == 16) {
+      // Accesses 16 elements contiguous so we can pad by 16 elements
       threadNumBytes = 32;
       if (dotOpEnc.getKWidth() == 8) {
+        // Here we wrap at row 8 so we have to exchange row4 and 8 to avoid
+        // conflicts
         std::swap(offsetBases[11], offsetBases[12]);
       }
     } else if (mfmaNonKDim == 32) {
+      // Accesses 32 elements contiguous so we can pad by 32 elements
       threadNumBytes = 64;
     } else {
       assert(false);
