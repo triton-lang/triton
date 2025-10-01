@@ -233,9 +233,6 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
     return {};
   }
 
-  unsigned contigSize = shape[isKContig ? kDimIndex : (kDimIndex + 1) % 2];
-  unsigned nonContigSize = shape[isKContig ? (kDimIndex + 1) % 2 : kDimIndex];
-
   auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
   unsigned innerD =
       ttg::getShapePerCTA(ctaLayout.getCTASplitNum(), shape)[sharedOrder[0]];
@@ -244,54 +241,38 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
   threadNumBytes = llvm::alignTo(
       threadNumBytes, std::max(4u, byteWidth)); // Assume 32-bit per bank
 
-  if (isKContig) {
-    if (kWidth == 8)
-      threadNumBytes *= 2;
-  } else {
-    if (kWidth == 8)
-      threadNumBytes *= 2;
-    else
-      threadNumBytes *= 4;
-  }
-
-  std::vector<std::vector<int>> offsetBases;
-
-  auto createBaseLayout = [](int kDim, int contigDim = 0) {
-    std::vector<std::vector<int>> offsetBasesNew;
+  auto createBaseLayout = [](int kDim, bool kContig) {
+    std::vector<std::vector<int>> bases;
+    // Add log2(kDim) bases
     for (int k2 = 0; k2 < llvm::Log2_32(kDim); k2++)
-      offsetBasesNew.push_back({1 << k2, 0});
+      bases.push_back({1 << k2, 0});
     // We need to pad until 9 bases (1024 bytes) and start at 16
     int nonKPointer = llvm::Log2_32(16);
-    while (offsetBasesNew.size() < 9)
-      offsetBasesNew.push_back({0, 1 << nonKPointer++});
-
+    while (bases.size() < 9)
+      bases.push_back({0, 1 << nonKPointer++});
+    // Add rows < 16 afterwards
     for (int k2 = 0; k2 < llvm::Log2_32(16); k2++)
-      offsetBasesNew.push_back({0, 1 << k2});
-
-    if (contigDim == 1) {
-      for (auto &b : offsetBasesNew) {
+      bases.push_back({0, 1 << k2});
+    // If we are non kContig we swap the dims
+    if (!kContig) {
+      for (auto &b : bases) {
         std::swap(b[0], b[1]);
       }
     }
-
-    return offsetBasesNew;
+    return bases;
   };
 
-  auto printBases = [](auto bases) {
-    for (auto b : bases) {
-      llvm::outs() << b[0] << ", " << b[1] << "\n";
-    }
-  };
+  unsigned contigSize = isKContig ? kDim : nonKDim;
+  auto offsetBases = createBaseLayout(std::min(256U, contigSize), isKContig);
 
   if (isKContig) {
-    offsetBases = createBaseLayout(kDim);
+    threadNumBytes = kWidth == 8 ? 32 : 8;
     if (mfmaNonKDim == 32) {
       int row16Index = kDim == 32 ? 5 : (kDim == 64 ? 6 : 7);
       std::swap(offsetBases[row16Index], offsetBases[7]);
-      threadNumBytes /= 2;
+      threadNumBytes = 4;
     }
   } else {
-    offsetBases = createBaseLayout(nonKDim, 1);
     if (mfmaNonKDim == 16) {
       threadNumBytes = 32;
       if (dotOpEnc.getKWidth() == 8) {
@@ -308,13 +289,6 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
   innerD = llvm::alignTo(innerD, (16 * 64) / byteWidth);
   unsigned paddingInElems = threadNumBytes / byteWidth;
 
-  // llvm::outs() << "IsKContig: " << isKContig << "\n";
-  // llvm::outs() << "Order: " << order[0] << ", " << order[1] << "\n";
-  // llvm::outs() << "Shared order: " << sharedOrder[0] << ", " <<
-  // sharedOrder[1]
-  //              << "\n";
-  // llvm::outs() << "kDimIndex: " << kDimIndex << "\n";
-
   // Tranpose bases if order != default order
   if (kDimIndex == 1) {
     for (auto &p : offsetBases)
@@ -326,11 +300,8 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
           {StringAttr::get(ctx, "offset"), offsetBases},
       },
       triton::standardOutDimNames(ctx, rank));
-  // llvm::outs() << "SrcTy: " << srcTy << "\n";
-  // llvm::outs() << "LL : " << linearComponent << "\n";
   linearComponent = triton::gpu::combineCtaCgaWithShape(
       linearComponent, ctaLayout, srcTy.getShape());
-  // llvm::outs() << "LL after reshape : " << linearComponent << "\n";
 
   return ttg::PaddedSharedEncodingAttr::get(ctx, {{innerD, paddingInElems}},
                                             linearComponent);
