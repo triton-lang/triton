@@ -111,16 +111,15 @@ def test_cache_miss_knob(device):
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
-def test_cache_miss_env(device):
+def test_cache_miss_env(device, monkeypatch):
     # First run without consan
     knobs.compilation.enable_experimental_consan = False
     run_failing_kernel(device)
 
     # Then run with consan and assert that if fails
-    os.environ["TRITON_ENABLE_EXPERIMENTAL_CONSAN"] = "1"
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
     result = run_in_process(run_failing_kernel, (device, ))
-    os.environ.pop("TRITON_ENABLE_EXPERIMENTAL_CONSAN")
     assert "device-side assert" in str(result.exc)
 
 
