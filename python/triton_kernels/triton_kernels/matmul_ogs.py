@@ -244,8 +244,9 @@ def init_allocation(x, w, precision_config, fused_activation,
     scratchpad = dict()
     if opt_flags.split_k > 1 or (scatter_indx is not None and not opt_flags.fused_scatter):
         scratch_out_dtype = torch.float32 if opt_flags.split_k > 1 else out_dtype
-        scratchpad["matmul"] = ((opt_flags.split_k, 1, M, N), scratch_out_dtype)
+        scratchpad["matmul"] = ((opt_flags.split_k, batch_dim, M, N), scratch_out_dtype)
     if "matmul" in scratchpad and precision_config.out_scale is not None:
+        assert batch_dim == 1, "batch_dim > 1 not supported yet"
         scratchpad["mx_out_scale"] = ((opt_flags.split_k, 1, M, triton.cdiv(N, MXFP_BLOCK_SIZE)), torch.uint8)
     return MatmulAllocation(x.device, output, scratchpad)
 
@@ -323,11 +324,14 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor, out_m
     Returns
     - The input tensor `x` (modified in place).
     """
+    M = x.shape[2]  # Only used for per-batch flex scale.
     if indx is None and x.shape[0] == 1:
         return x.squeeze(0), None
     if indx is not None:
         num_groups = indx.shape[0]
     else:
+        # Handle batched matmul (K, B, M, N) by pretending it to be (K, 1, B*M, N).
+        x = x.view(x.shape[0], 1, x.shape[1] * x.shape[2], x.shape[3])
         num_groups = x.shape[-2]
     if x_flex is None:
         x_flex = InFlexData()
@@ -351,8 +355,10 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor, out_m
         x_flex.reinterpret(x), x.stride(0), x.stride(2), x.stride(3),  #
         x_expected_scale,  # scalar input scale
         out_flex.reinterpret(out), out.stride(1), out.stride(2),  #
-        out_expected_scale, out_actual_scale, out_checksum_scale, indx,  #
-        x.shape[0], x.shape[-1],  #
+        out_expected_scale, out_actual_scale, out_checksum_scale,
+        out_flex is not None and out_flex.is_per_batch,
+        indx,
+        x.shape[0], M, x.shape[-1],  #
         x_mx_scale, stride_mxb, stride_mxs,  #
         out_mx_scale, stride_omxs,  #
         *fused_activation.fn_args, fused_activation.reduction_n,
@@ -629,7 +635,7 @@ def matmul_ogs(x, w, bias,
                    precision_config.allow_tf32,
                    precision_config.flexpoint_saturate_inf,
                    flex.rhs_data.is_per_batch,
-                   flex.out_data.is_per_batch,
+                   out_matmul_flex.is_per_batch,
                    flex.acc_data.is_per_batch,
                    opt_flags.block_m,
                    opt_flags.block_n,
