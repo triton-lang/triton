@@ -169,8 +169,8 @@ class InnerRoutingData:
         return (
             expt_data.hist,
             expt_data.token_offs_raw,
-            expt_data.token_offs_pad[block],
-            expt_data.block_pid_map[block],
+            expt_data.token_offs_pad(block),
+            expt_data.block_pid_map(block),
         ) + args
 
 

@@ -1037,7 +1037,7 @@ def test_buffer_atomic_rmw_add_bf16():
         blocked: ttgl.constexpr = ttgl.BlockedLayout([SIZE_PER_THREAD], [64], [4], [0])
         offsets = ttgl.arange(0, BLOCK, layout=blocked)
         val = ttgl.full([BLOCK], 1.0, ttgl.bfloat16, layout=blocked)
-        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", a, offsets, val, mask=1, scope="cta", sem="relaxed")
+        ttgl.amd.cdna4.buffer_atomic_add(a, offsets, val, mask=1, scope="cta", sem="relaxed")
 
     a = torch.randn((BLOCK), dtype=elem_type, device="cuda")
     origin_a = a.clone()
@@ -1114,3 +1114,28 @@ def test_dot_fma():
     out = torch.empty((B, B), dtype=torch.float32, device="cuda")
     kernel[(1, )](a, b, c, out)
     torch.testing.assert_close(out, torch.addmm(c, a, b), atol=1e-2, rtol=1e-2)
+
+
+@gluon.jit
+def kernel_auto_layout_constant(threads_per_warp: ttgl.constexpr):
+    BLOCK: ttgl.constexpr = 16
+    SIZE: ttgl.constexpr = 10
+
+    mask = ttgl.full(
+        (BLOCK, BLOCK),
+        True,
+        ttgl.int1,
+        ttgl.BlockedLayout(
+            size_per_thread=[1, 1],
+            threads_per_warp=[1, threads_per_warp],
+            warps_per_cta=[1, 4],
+            order=[1, 0],
+        ),
+    )
+
+    mask &= (ttgl.arange(0, BLOCK, ttgl.AutoLayout()) < SIZE).expand_dims(0)
+    mask &= (ttgl.arange(0, BLOCK, ttgl.AutoLayout()) < SIZE).expand_dims(1)
+
+
+def test_auto_layout_constant():
+    kernel_auto_layout_constant.warmup(THREADS_PER_WARP, grid=(1, ))
