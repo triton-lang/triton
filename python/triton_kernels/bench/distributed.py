@@ -60,6 +60,22 @@ TRITON_DTYPE_MAP = {
 }
 
 
+_CPU_COMM_GROUP: Optional[dist.ProcessGroup] = None
+
+
+def _get_cpu_comm_group() -> dist.ProcessGroup:
+    global _CPU_COMM_GROUP
+    if _CPU_COMM_GROUP is not None:
+        return _CPU_COMM_GROUP
+    if not dist.is_initialized():
+        raise RuntimeError("Distributed process group must be initialized before creating the CPU communication group.")
+    try:
+        _CPU_COMM_GROUP = dist.new_group(backend="gloo")
+    except RuntimeError as err:  # pragma: no cover - backend availability depends on build
+        raise RuntimeError("Failed to create Gloo process group required for CPU communication.") from err
+    return _CPU_COMM_GROUP
+
+
 def _is_distributed_launch() -> bool:
     return int(os.environ.get("WORLD_SIZE", "1")) > 1
 
@@ -82,6 +98,8 @@ def cleanup():
     if _is_distributed_launch():
         dist.barrier()
         dist.destroy_process_group()
+        global _CPU_COMM_GROUP
+        _CPU_COMM_GROUP = None
     else:
         pass
 
@@ -392,14 +410,29 @@ def _all_to_all_triton(input_list: list[torch.Tensor], dim: int) -> list[torch.T
         raise RuntimeError("Symmetric memory requires an initialized default process group.")
 
     send_counts_list = [tensor.size(0) for tensor in input_list]
-    send_counts = torch.tensor(
-        send_counts_list,
-        device=input_list[0].device,
-        dtype=torch.int32,
-    )
-    gathered = [torch.zeros_like(send_counts) for _ in range(world_size)]
-    dist.all_gather(gathered, send_counts)
-    size_matrix = torch.stack(gathered, dim=0)
+    try:
+        cpu_group = _get_cpu_comm_group()
+    except RuntimeError:
+        cpu_group = None
+
+    if cpu_group is not None:
+        send_counts_tensor = torch.tensor(
+            send_counts_list,
+            device="cpu",
+            dtype=torch.int32,
+        )
+        gathered_counts = [torch.zeros_like(send_counts_tensor) for _ in range(world_size)]
+        dist.all_gather(gathered_counts, send_counts_tensor, group=cpu_group)
+        size_matrix = torch.stack(gathered_counts, dim=0)
+    else:
+        send_counts_tensor = torch.tensor(
+            send_counts_list,
+            device=input_list[0].device,
+            dtype=torch.int32,
+        )
+        gathered_counts = [torch.zeros_like(send_counts_tensor) for _ in range(world_size)]
+        dist.all_gather(gathered_counts, send_counts_tensor)
+        size_matrix = torch.stack(gathered_counts, dim=0).cpu()
     column_prefix = torch.cumsum(size_matrix, dim=0) - size_matrix
 
     recv_counts = size_matrix[:, rank]
