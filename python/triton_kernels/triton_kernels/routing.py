@@ -254,8 +254,8 @@ def routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx, n_expts_tot, n_expts
 def routing(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None):
     if sm_first:
         logits = torch.softmax(logits, dim=-1)
-    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act,  #
-                                           apply_softmax=not sm_first, y_indx=expt_indx, n_rows=n_rows)
+    expt_scal, expt_indx, bitmatrix = topk(logits, n_expts_act, apply_softmax=not sm_first, y_indx=expt_indx,
+                                           n_rows=n_rows)
     return routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx, logits.shape[-1], n_expts_act)
 
 
