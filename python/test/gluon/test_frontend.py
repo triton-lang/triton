@@ -1436,6 +1436,9 @@ def test_zeros():
     # CHECK: arith.constant dense<7> : tensor<8x8xi16, [[BLOCKED2D]]>
     ttgl.full_like(a, 7, shape=[8, 8], dtype=ttgl.int16, layout=layout_2d)
 
+    # CHECK: arith.constant 0.000000e+00 : f32
+    ttgl.zeros((), ttgl.float32, layout)
+
 
 @filecheck_test
 @gluon.jit
