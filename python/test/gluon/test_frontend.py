@@ -2507,33 +2507,33 @@ def test_buffer_atomic_rmw(target):
         offsets = ttgl.arange(0, BLOCK, layout=ttgl.AutoLayout())
 
         val = ttgl.full([BLOCK], 1, ttgl.int32, layout=ttgl.AutoLayout())
-        ttgl.amd.cdna3.buffer_atomic_rmw("smax", int32_ptr, offsets, val)
-        ttgl.amd.cdna3.buffer_atomic_rmw("smin", int32_ptr, offsets, val)
-        ttgl.amd.cdna3.buffer_atomic_rmw("and", int32_ptr, offsets, val)
-        ttgl.amd.cdna3.buffer_atomic_rmw("or", int32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_max(int32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_min(int32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_and(int32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_or(int32_ptr, offsets, val)
         #value broadcast
-        ttgl.amd.cdna3.buffer_atomic_rmw("xor", int32_ptr, offsets, value=1)
+        ttgl.amd.cdna3.buffer_atomic_xor(int32_ptr, offsets, value=1)
 
         # operands should be unsigned
         val = ttgl.full([BLOCK], 1, ttgl.uint32, layout=ttgl.AutoLayout())
-        ttgl.amd.cdna3.buffer_atomic_rmw("umax", uint32_ptr, offsets, val)
-        ttgl.amd.cdna3.buffer_atomic_rmw("umin", uint32_ptr, offsets, val)
-        ttgl.amd.cdna3.buffer_atomic_rmw("iadd", uint32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_max(uint32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_min(uint32_ptr, offsets, val)
+        ttgl.amd.cdna3.buffer_atomic_add(uint32_ptr, offsets, val)
 
         val = val.cast(ttgl.int64)
         #mask broadcast
-        ttgl.amd.cdna3.buffer_atomic_rmw("xchg", int64_ptr, offsets, val, mask=0)
+        ttgl.amd.cdna3.buffer_atomic_xchg(int64_ptr, offsets, val, mask=0)
 
         mask = ttgl.full([BLOCK], True, ttgl.int32, layout=ttgl.AutoLayout())
         val = ttgl.zeros([BLOCK], ttgl.float16, layout=ttgl.AutoLayout())
-        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp16_ptr, offsets, val, mask=mask)
-        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp16_ptr, offsets, val, mask=mask, scope="sys")
-        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp16_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
+        ttgl.amd.cdna3.buffer_atomic_add(fp16_ptr, offsets, val, mask=mask)
+        ttgl.amd.cdna3.buffer_atomic_add(fp16_ptr, offsets, val, mask=mask, scope="sys")
+        ttgl.amd.cdna3.buffer_atomic_add(fp16_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
 
         val = val.cast(ttgl.float32)
-        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp32_ptr, offsets, val, mask=mask)
-        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp32_ptr, offsets, val, mask=mask, scope="sys")
-        ttgl.amd.cdna3.buffer_atomic_rmw("fadd", fp32_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
+        ttgl.amd.cdna3.buffer_atomic_add(fp32_ptr, offsets, val, mask=mask)
+        ttgl.amd.cdna3.buffer_atomic_add(fp32_ptr, offsets, val, mask=mask, scope="sys")
+        ttgl.amd.cdna3.buffer_atomic_add(fp32_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
 
     fp16_ptr = MockTensor(ttgl.float16)
     fp32_ptr = MockTensor(ttgl.float32)
@@ -2615,10 +2615,10 @@ def test_buffer_atomic_rmw_bf16(target):
     def kernel(bf16_ptr):
         offsets = ttgl.arange(0, 1, layout=ttgl.AutoLayout())
         val = ttgl.zeros([1], ttgl.bfloat16, layout=ttgl.AutoLayout())
-        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", bf16_ptr, offsets, val, mask=0)
+        ttgl.amd.cdna4.buffer_atomic_add(bf16_ptr, offsets, val, mask=0)
         mask = ttgl.full([1], True, ttgl.int32, layout=ttgl.AutoLayout())
-        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", bf16_ptr, offsets, val, mask=mask, scope="sys")
-        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", bf16_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
+        ttgl.amd.cdna4.buffer_atomic_add(bf16_ptr, offsets, val, mask=mask, scope="sys")
+        ttgl.amd.cdna4.buffer_atomic_add(bf16_ptr, offsets, val, mask=mask, scope="cta", sem="relaxed")
 
     bf16_ptr = MockTensor(ttgl.bfloat16)
     module = run_parser(kernel, *make_args(bf16_ptr), target=target)

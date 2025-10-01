@@ -1037,7 +1037,7 @@ def test_buffer_atomic_rmw_add_bf16():
         blocked: ttgl.constexpr = ttgl.BlockedLayout([SIZE_PER_THREAD], [64], [4], [0])
         offsets = ttgl.arange(0, BLOCK, layout=blocked)
         val = ttgl.full([BLOCK], 1.0, ttgl.bfloat16, layout=blocked)
-        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", a, offsets, val, mask=1, scope="cta", sem="relaxed")
+        ttgl.amd.cdna4.buffer_atomic_add(a, offsets, val, mask=1, scope="cta", sem="relaxed")
 
     a = torch.randn((BLOCK), dtype=elem_type, device="cuda")
     origin_a = a.clone()
