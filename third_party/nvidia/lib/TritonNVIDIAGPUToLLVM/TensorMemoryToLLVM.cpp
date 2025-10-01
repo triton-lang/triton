@@ -884,6 +884,8 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
                                           smemBase, instrShape, 5);
   assert(!loader.getDescriptor().transposed);
 
+  // The lbo/sbo are swapped for swizzling == 0 when passing a descriptor to
+  // tcgen05.cp vs passing it to wgmma/tcgen05.mma!!
   auto &descData = loader.getDescriptor();
   if (descData.swizzlingByteWidth == 0) {
     auto lbo = descData.descriptor.leadDimensionBaseOffset;
