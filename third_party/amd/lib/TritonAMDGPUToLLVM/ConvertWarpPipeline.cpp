@@ -22,14 +22,14 @@
  */
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "triton/Analysis/Membar.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Analysis/Membar.h"
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 
 #define DEBUG_TYPE "convert-warp-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -52,17 +52,15 @@ static BlockInfo buildBlockInfoFromBlock(Block *block, Allocation *allocation) {
       SmallVector<SideEffects::EffectInstance<MemoryEffects::Effect>> effs;
       mei.getEffects(effs);
       for (auto &eff : effs) {
-        // op->dump();
         if (Value v = eff.getValue()) {
           for (auto bufId : allocation->getBufferIds(v)) {
             if (bufId == Allocation::InvalidBufferId)
               continue;
             auto interval = allocation->getAllocatedInterval(bufId);
-            if (isa<MemoryEffects::Write>(eff.getEffect())) {
+            if (isa<MemoryEffects::Write>(eff.getEffect()))
               info.syncWriteIntervals[interval].insert(op);
-            } else if (isa<MemoryEffects::Read>(eff.getEffect())) {
+            else if (isa<MemoryEffects::Read>(eff.getEffect()))
               info.syncReadIntervals[interval].insert(op);
-            }
           }
         }
       }
@@ -163,9 +161,10 @@ class ConvertWarpPipeline
     for (int j = 0; j < numClusters; j++) {
       for (int i = 0; i < numClusters; i++) {
         int next = (i + 2 + j) % numClusters;
+        int barLoc = (i + 1 + j) % numClusters;
         int curr = (i + 1) % numClusters;
         bool synced = false;
-        while (curr != i && curr != next) {
+        while (curr != i && curr != barLoc) {
           if (bars[curr]) {
             synced = true;
             break;
@@ -173,7 +172,7 @@ class ConvertWarpPipeline
           curr = (curr + 1) % numClusters;
         }
         // also if next can already have a fence
-        if (bars[next])
+        if (bars[barLoc])
           synced = true;
 
         // synced between i and j, no need to check.
@@ -184,8 +183,9 @@ class ConvertWarpPipeline
             clusterInfo[i].isIntersected(clusterInfo[next], nullptr);
         if (needFence) {
           // insert fence/barrier before this cluster
-          bars[next] = true;
-          LDBG("cluster " << i << " need fence to " << next);
+          bars[barLoc] = true;
+          LDBG("cluster " << i << " need fence to " << next
+                          << " placing barrier at " << barLoc);
         }
         for (int i = 0; i < numClusters; i++)
           LDBG("bars [" << i << "] = " << bars[i]);
