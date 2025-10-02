@@ -28,7 +28,6 @@ from triton_kernels.distributed import (
 )
 from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, reduce_grouped, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
-from triton_kernels.routing_details._routing_compute import _routing_clear_bitmatrix
 from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor import Bitmatrix
