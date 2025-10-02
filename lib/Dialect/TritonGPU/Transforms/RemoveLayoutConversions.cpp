@@ -426,8 +426,17 @@ void LayoutPropagation::rewriteRegion(Region &region) {
           auto it = layouts.find(operand.get());
           if (it == layouts.end())
             continue;
-          Attribute encoding =
-              cast<RankedTensorType>(operand.get().getType()).getEncoding();
+
+          Attribute encoding;
+          if (isa<triton::nvidia_gpu::TMEMStoreOp>(&op)) {
+            LayoutInfo &info = it->second;
+            assert(info.encodings.size() == 1 &&
+                   "we should have resolved to a single encoding");
+            encoding = *info.encodings.begin();
+          } else {
+            encoding =
+                cast<RankedTensorType>(operand.get().getType()).getEncoding();
+          }
           Value newOperand = getValueAs(operand.get(), encoding);
           op.setOperand(operand.getOperandNumber(), newOperand);
         }
