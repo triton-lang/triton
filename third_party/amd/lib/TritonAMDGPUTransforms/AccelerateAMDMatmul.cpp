@@ -563,11 +563,16 @@ public:
         chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, withScale);
     if (failed(mfmaInstr)) {
       if (!withScale) {
+        dotOp.emitRemark()
+          << "Unable to choose double-rated MFMA intrinsic for dot operation.";
         return failure();
       }
       mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, false);
-      if (failed(mfmaInstr))
+      if (failed(mfmaInstr)) {
+        dotOp.emitRemark()
+          << "Unable to choose MFMA intrinsic for dot operation.";
         return failure();
+      }
 
       withScale = false;
     }
@@ -1564,6 +1569,9 @@ public:
                                 PatternRewriter &rewriter) const override {
     if (!isa<BlockedEncodingAttr>(dotOp.getD().getType().getEncoding()))
       return failure();
+
+    dotOp.emitRemark()
+      << "Attempting to map dot operation to FMA intrinsic.";
 
     DotElTypes dotTypes;
     dotTypes.a = dotOp.getA().getType().getElementType();
