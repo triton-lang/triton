@@ -75,7 +75,7 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     expt_dict = {}
     for i in range(TP):
         for j in range(EP):
-            expt_dict[i + j * TP] = list(*range(j * n_expts_tot // EP, (j + 1) * n_expts_tot // EP))
+            expt_dict[i + j * TP] = list(range(j * n_expts_tot // EP, (j + 1) * n_expts_tot // EP))
     expt_assignment = make_expt_assignment(EP, n_expts_tot, expt_dict, device=dev)
 
     # run layer
