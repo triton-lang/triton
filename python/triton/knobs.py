@@ -366,7 +366,7 @@ class compilation_knobs(base_knobs):
     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
     # Instrumentation mode is checked on every run, which is expensive.
     # We cache the value here to avoid the expensive check on every run.
-    instrumentation_mode: Union[str, None] = env_opt_str("TRITON_INSTRUMENTATION_MODE").get()
+    instrumentation_mode: str = env_str("TRITON_INSTRUMENTATION_MODE", "").get()
     listener: Union[CompilationListener, None] = None
 
 
@@ -535,4 +535,4 @@ proton = proton_knobs()
 
 def refresh_knobs():
     runtime.debug = env_bool("TRITON_DEBUG").get()
-    compilation.instrumentation_mode = env_opt_str("TRITON_INSTRUMENTATION_MODE").get()
+    compilation.instrumentation_mode = env_str("TRITON_INSTRUMENTATION_MODE", "").get()

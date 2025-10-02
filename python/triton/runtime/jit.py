@@ -650,10 +650,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
-
-        if knobs.compilation.instrumentation_mode is not None and \
-            knobs.compilation.instrumentation_mode != "":
-            kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
+        kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
 
         # parse options
         device = driver.active.get_current_device()
