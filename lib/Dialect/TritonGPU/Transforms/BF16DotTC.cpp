@@ -47,8 +47,6 @@ auto getBF16Count(triton::InputPrecision precision) -> unsigned {
   switch (precision) {
   default:
     return 0;
-  case InputPrecision::BF16:
-    return 1;
   case InputPrecision::BF16x3:
     return 2;
   case InputPrecision::BF16x6:
