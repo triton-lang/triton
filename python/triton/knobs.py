@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from contextlib import contextmanager
 from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
 
-from triton._C.libtriton import getenv, getenv_bool, get_cache_invalidating_env_var_names  # type: ignore
+from triton._C.libtriton import getenv, getenv_bool  # type: ignore
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
@@ -291,13 +291,6 @@ class base_knobs:
             delattr(self, knob)
         return self
 
-    def get_cache_key(self) -> dict[str, Any]:
-        key = {}
-        for [name, knob] in self.knob_descriptors.items():
-            if knob.key in get_cache_invalidating_env_var_names():
-                key[knob.key] = self.knobs[name]
-        return key
-
     @contextmanager
     def scope(self) -> Generator[None, None, None]:
         try:
@@ -536,21 +529,6 @@ language = language_knobs()
 nvidia = nvidia_knobs()
 amd = amd_knobs()
 proton = proton_knobs()
-
-
-def get_cache_key() -> dict[str, Any]:
-    key = {}
-    key.update(build.get_cache_key())
-    key.update(redis.get_cache_key())
-    key.update(cache.get_cache_key())
-    key.update(compilation.get_cache_key())
-    key.update(autotuning.get_cache_key())
-    key.update(runtime.get_cache_key())
-    key.update(language.get_cache_key())
-    key.update(nvidia.get_cache_key())
-    key.update(amd.get_cache_key())
-    key.update(proton.get_cache_key())
-    return key
 
 
 def refresh_knobs():

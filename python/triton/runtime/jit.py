@@ -541,13 +541,13 @@ class JitFunctionInfo:
     jit_function: JITFunction
 
 
-def compute_cache_key(kernel_key_cache, specialization, options, knobs_key):
-    key = (tuple(specialization), str(options), str(knobs_key))
+def compute_cache_key(kernel_key_cache, specialization, options):
+    key = (tuple(specialization), str(options))
     cache_key = kernel_key_cache.get(key, None)
     if cache_key is not None:
         return cache_key
 
-    cache_key = str(specialization) + str(options) + str(knobs_key)
+    cache_key = str(specialization) + str(options)
     kernel_key_cache[key] = cache_key
     return cache_key
 
@@ -650,6 +650,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
+        kwargs["consan"] = knobs.compilation.enable_experimental_consan
 
         # parse options
         device = driver.active.get_current_device()
@@ -664,8 +665,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
 
-        knobs_key = knobs.get_cache_key()
-        key = compute_cache_key(kernel_key_cache, specialization, options, knobs_key)
+        key = compute_cache_key(kernel_key_cache, specialization, options)
         kernel = kernel_cache.get(key, None)
 
         # Kernel is not cached; we have to compile.
