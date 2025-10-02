@@ -101,21 +101,7 @@ def run_failing_kernel(device, enable_consan, mode):
             knobs.compilation.instrumentation_mode = "consan"
 
     input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
-    if enable_consan and mode == "arg":
-        failing_kernel[(1, )](input, instrumentation_mode="consan")
-    else:
-        failing_kernel[(1, )](input)
-
-
-@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
-def test_cache_miss_arg(device, monkeypatch):
-    # First run without consan
-    run_in_process(run_failing_kernel, (device, False, "arg"))
-
-    # Then run with consan and assert that if fails
-    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
-    result = run_in_process(run_failing_kernel, (device, True, "arg"))
-    assert "device-side assert" in str(result.exc)
+    failing_kernel[(1, )](input)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
