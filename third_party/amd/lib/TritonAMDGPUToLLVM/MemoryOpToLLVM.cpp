@@ -46,17 +46,8 @@ public:
                          needContigLane)) {
       return failure();
     }
-    auto shape = srcTy.getShape();
-    // FP4 are packed into i8 so the real bitwidth is different
-    auto llBitwidth = isPackedLoad ? 4 : llvmElemTy.getIntOrFloatBitWidth();
-    auto ldsTransLayout = triton::gpu::chooseDsReadB64TrLayout(
-        dstTy.getEncoding(), shape, llBitwidth);
 
-    int vecSize = getLayoutVectorization(srcTy, ldsTransLayout);
-    if (vecSize < needContigReg)
-      return failure();
-
-    return lowerSharedToDotOperandTransLL(op, ldsTransLayout, adaptor,
+    return lowerSharedToDotOperandTransLL(op, needContigReg, adaptor,
                                           typeConverter, rewriter);
   }
 
@@ -142,32 +133,9 @@ private:
     return true;
   }
 
-  int getLayoutVectorization(MemDescType srcTy,
-                             LinearLayout ldsTransLayout) const {
-    auto paddedEnc =
-        dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(srcTy.getEncoding());
-    LinearLayout regToSharedLayout = LinearLayout::empty();
-    if (paddedEnc) {
-      const auto &sharedLL = paddedEnc.getLinearComponent();
-      regToSharedLayout = ldsTransLayout.invertAndCompose(sharedLL);
-    } else {
-      auto sharedLL = triton::gpu::toLinearLayout(srcTy);
-      regToSharedLayout = ldsTransLayout.invertAndCompose(sharedLL);
-    }
-
-    // Determine how many consecutive registers map to consecutive shmem
-    // elements in out-dimension offsetN.
-    int vecElems = regToSharedLayout.getNumConsecutiveInOut();
-    if (paddedEnc) {
-      vecElems = std::min(vecElems, int(paddedEnc.getMinInterval()));
-    }
-
-    return vecElems;
-  }
-
   LogicalResult
-  lowerSharedToDotOperandTransLL(LocalLoadOpType op,
-                                 LinearLayout ldsTransLayout, OpAdaptor adaptor,
+  lowerSharedToDotOperandTransLL(LocalLoadOpType op, unsigned needContigReg,
+                                 OpAdaptor adaptor,
                                  const LLVMTypeConverter *typeConverter,
                                  ConversionPatternRewriter &rewriter) const {
     auto ctx = rewriter.getContext();
@@ -196,9 +164,28 @@ private:
       return smemOffset;
     };
 
-    auto maxVecElems = 64 / bitwidth;
-    auto smemLayout = triton::gpu::toLinearLayout(srcTy);
-    auto cvt = ldsTransLayout.invertAndCompose(smemLayout);
+    auto shape = srcTy.getShape();
+    // FP4 are packed into i8 so the real bitwidth is different
+    auto llBitwidth = isPackedLoad ? 4 : llvmElemTy.getIntOrFloatBitWidth();
+    auto ldsTransLayout = triton::gpu::chooseDsReadB64TrLayout(
+        dstTy.getEncoding(), shape, llBitwidth);
+    auto paddedEnc =
+        dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(srcTy.getEncoding());
+    LinearLayout cvt = LinearLayout::empty();
+    if (paddedEnc) {
+      const auto &sharedLL = paddedEnc.getLinearComponent();
+      cvt = ldsTransLayout.invertAndCompose(sharedLL);
+    } else {
+      auto sharedLL = triton::gpu::toLinearLayout(srcTy);
+      cvt = ldsTransLayout.invertAndCompose(sharedLL);
+    }
+    // Check that we will be able to vectorize the load.
+    // Need to have exactly needContigReg, otherwise we can't use ds_read_tr
+    auto [elemsPerVec, permutation] =
+        largestVectorisation(ctx, cvt, bitwidth, needContigReg);
+    if (elemsPerVec != needContigReg)
+      return failure();
+
     cvt = cvt.sublayout(
         {str_attr("register"), str_attr("lane"), str_attr("warp")},
         {str_attr("offset")});
@@ -234,8 +221,8 @@ private:
     SmallVector<Value> outVals = lowerLdSt(
         loc, rewriter.getContext(), cvt, {}, // Input for store, output for load
         llvmElemTy, smemObj.getBase(), calcPaddedOffset, affineOffset,
-        maskSpanAffineOffset, laneId, warpId, rewriter, targetInfo, maxVecElems,
-        lowerInst);
+        maskSpanAffineOffset, laneId, warpId, rewriter, targetInfo,
+        needContigReg, lowerInst);
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, retTy);
     rewriter.replaceOp(op, result);
     return success();
