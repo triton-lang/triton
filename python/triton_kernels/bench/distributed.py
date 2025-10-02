@@ -20,6 +20,7 @@ from triton_kernels.routing import (
     topk_torch,
     routing_from_bitmatrix,
     filter_expt_data,
+    make_expt_assignment,
     ExptAssignment
 )
 from triton_kernels.distributed import (
@@ -71,7 +72,7 @@ def cleanup():
         pass
 
 
-def broadcast(x: torch.Tensor, src: int = 0, groups: list = None, group_idx: int = None) -> torch.Tensor:
+def broadcast(x: torch.Tensor, src: int = 0, groups: Optional[list] = None, group_idx: int = 0) -> torch.Tensor:
     if _is_distributed_launch():
         group = None
         if groups:
