@@ -364,7 +364,9 @@ class compilation_knobs(base_knobs):
     disable_line_info: env_bool = env_bool("TRITON_DISABLE_LINE_INFO")
     front_end_debugging: env_bool = env_bool("TRITON_FRONT_END_DEBUGGING")
     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
-    instrumentation_mode: env_opt_str = env_opt_str("TRITON_INSTRUMENTATION_MODE")
+    # Instrumentation mode is checked on every run, which is expensive.
+    # We cache the value here to avoid the expensive check on every run.
+    instrumentation_mode: str | None = env_opt_str("TRITON_INSTRUMENTATION_MODE").get()
     listener: Union[CompilationListener, None] = None
 
 
@@ -533,3 +535,4 @@ proton = proton_knobs()
 
 def refresh_knobs():
     runtime.debug = env_bool("TRITON_DEBUG").get()
+    compilation.instrumentation_mode = env_opt_str("TRITON_INSTRUMENTATION_MODE").get()
