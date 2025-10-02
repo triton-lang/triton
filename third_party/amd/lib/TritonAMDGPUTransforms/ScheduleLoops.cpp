@@ -16,9 +16,59 @@
 #include <variant>
 
 //===----------------------------------------------------------------------===//
-// This file will create a symbolic schedule for global memory access and
-// compute operations. Conditionally some optimizations will take places, e.g.
-// bypassLDS, etc.
+// Software pipelining generally works by anchoring on global load ops in the
+// main loop and rotating the loop to schedule global load ops for future loop
+// iterations together with compute for the current iteration. In this way, we
+// can 1) issue memory operations earlier to hide the latency and 2) break the
+// strong dependency inside on loop iteration to give backends flexibility to
+// better interleave instructions for better instruction-level parallelism.
+//
+// The code here creates the pipelining schedule and calls the
+// PipelineExpander to rewrite the `scf.for` loop accordingly. A schedule
+// consists of multiple stages, where ops from different stages can overlap
+// executions because the dependencies are loop carried.
+//
+// The general flow of this process is(This is an overview. Some passes or
+// functions are in other files):
+//
+// 1. The user provides a `num_stages` that specifies how many stages the
+//    pipeline will have. The number of stages must be larger than the distance
+//    from the first independent load to the compute in order to pipeline.
+// 2. In this pass, a schedule is created based on the distance between the
+//    global loads in the first stages and the compute that uses the loaded
+//    values in the last stage (num_stages - 1). Each operation will be
+//    clustered in the order to best overlap with other operations.
+// 3. In lowerLoops, when the compute is a tt.dot, the scheduler will insert a
+//    shared memory allocation between the global load and tt.dot. The global
+//    load value will be saved to shared memory, via ttg.local_store or via
+//    ttg.async_copy_global_to_local writing directly to shared memory, and the
+//    ttg.local_load will load the relevant tiles for the tt.dot. These
+//    operations will be scheduled according to various scheduling schemes
+//    outlined in the initSchedule methods in LowerLoops.cpp (see details
+//    there).
+// 4. Finally in TritonAMDGPUPipeline pass, the schedule will be passed to the
+//    PipelineExpander to rewrite accordingly. The new implementation will
+//    consist of: a. Prologue: containing the ramp-up of num_stages-1 stages for
+//       iteratorions i=[0, num_stages-1).
+//    b. New loop: ordered by cluster and iterated on each operation by
+//       `i + (num_stages-op_stage)`.
+//    c. Epilogue: ramp-down of the last `num_stages-1` iterations for the
+//       ops in stages 1 to last_stage. This must consider that the loop
+//       bounds may be shorter than num_stages. In this case, the epilogue
+//       iterations must align with the prologue.
+//
+//
+// This file implements the first stage of software pipelining. It builds a
+// symbolic schedule for global memory access and compute operations. Certain
+// optimizations (e.g. bypassLDS) are applied conditionally.
+//
+// Two additional stages follow:
+// 1. lowerLoops in LowerLoops.cpp creates LDS alloc/load/store or async
+//    load/commit/await ops as needed and produces a schedule for them.
+// 2. expandLoops in Pipeline.cpp invokes PipelineExpander to apply the schedule
+//    to the loops and then performs post-processing.
+//
+// These stages are connected via the schedule serialized in the IR.
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "tritonamdgpu-schedule-loops"
@@ -83,49 +133,6 @@ mlir::ChainedDotSchedule::checkPreconditions(scf::ForOp forOp, int numStages,
 }
 
 namespace {
-//===----------------------------------------------------------------------===//
-// Software pipelining generally works by anchoring on global load ops in the
-// main loop and rotating the loop to schedule global load ops for future loop
-// iterations together with compute for the current iteration. In this way, we
-// can 1) issue memory operations earlier to hide the latency and 2) break the
-// strong dependency inside on loop iteration to give backends flexibility to
-// better interleave instructions for better instruction-level parallelism.
-//
-// The code here creates the pipelining schedule and calls the
-// PipelineExpander to rewrite the `scf.for` loop accordingly. A schedule
-// consists of multiple stages, where ops from different stages can overlap
-// executions because the dependencies are loop carried.
-//
-// The general flow of this process is(This is an overview. Some passes or
-// functions are in other files):
-//
-// 1. The user provides a `num_stages` that specifies how many stages the
-//    pipeline will have. The number of stages must be larger than the distance
-//    from the first independent load to the compute in order to pipeline.
-// 2. In this pass, a schedule is created based on the distance between the
-//    global loads in the first stages and the compute that uses the loaded
-//    values in the last stage (num_stages - 1). Each operation will be
-//    clustered in the order to best overlap with other operations.
-// 3. In lowerLoops, when the compute is a tt.dot, the scheduler will insert a
-//    shared memory allocation between the global load and tt.dot. The global
-//    load value will be saved to shared memory, via ttg.local_store or via
-//    ttg.async_copy_global_to_local writing directly to shared memory, and the
-//    ttg.local_load will load the relevant tiles for the tt.dot. These
-//    operations will be scheduled according to various scheduling schemes
-//    outlined in the initSchedule methods in LowerLoops.cpp (see details
-//    there).
-// 4. Finally in TritonAMDGPUPipeline pass, the schedule will be passed to the
-//    PipelineExpander to rewrite accordingly. The new implementation will
-//    consist of: a. Prologue: containing the ramp-up of num_stages-1 stages for
-//       iteratorions i=[0, num_stages-1).
-//    b. New loop: ordered by cluster and iterated on each operation by
-//       `i + (num_stages-op_stage)`.
-//    c. Epilogue: ramp-down of the last `num_stages-1` iterations for the
-//       ops in stages 1 to last_stage. This must consider that the loop
-//       bounds may be shorter than num_stages. In this case, the epilogue
-//       iterations must align with the prologue.
-//
-
 /// Returns true if for a given global load with loadType, loading instead with
 /// targetLLAttr maintains at least the same level of coalescing/vectorization
 /// with same amount of load ops.

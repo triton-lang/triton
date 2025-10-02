@@ -91,8 +91,6 @@ void expandLoops(ModuleOp moduleOp) {
 
     if (failed(newForOp))
       continue;
-
-    forOp = *newForOp;
   }
 
   // NOTE: Leave empty for now, until we utilize customEpiloguePeeling
