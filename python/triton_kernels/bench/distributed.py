@@ -708,7 +708,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     for i in range(TP):
         for j in range(EP):
             expt_dict[i + j * TP] = list(range(j * n_expts_tot // EP, (j + 1) * n_expts_tot // EP))
-    expt_assignment = make_expt_assignment(EP, n_expts_tot, expt_dict, device=dev)
+    expt_assignment = make_expt_assignment(EP * TP, n_expts_tot, expt_dict, device=dev)
 
     # single-GPU pass
     def single(x):
