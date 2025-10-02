@@ -25,6 +25,12 @@ void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, bool ftz,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
     const TargetInfo &targetInfo, PatternBenefit benefit);
+
+void populateAdjustModeRegisterLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                            RewritePatternSet &patterns,
+                                            const TargetInfo &targetInfo,
+                                            PatternBenefit benefit);
+
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfo &targetInfo,
                                        RewritePatternSet &patterns,
