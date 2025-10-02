@@ -7,22 +7,26 @@ import triton
 import triton.language as tl
 
 
-@triton.jit
-def add_kernel(
-    x_ptr,
-    y_ptr,
-    output_ptr,
-    n_elements,
-    BLOCK_SIZE: tl.constexpr,
-):
-    pid = tl.program_id(axis=0)
-    block_start = pid * BLOCK_SIZE
-    offsets = block_start + tl.arange(0, BLOCK_SIZE)
-    mask = offsets < n_elements
-    x = tl.load(x_ptr + offsets, mask=mask)
-    y = tl.load(y_ptr + offsets, mask=mask)
-    output = x + y
-    tl.store(output_ptr + offsets, output, mask=mask)
+def kernel_factory():
+    # to avoid reusing the cached kernel
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        pid = tl.program_id(axis=0)
+        block_start = pid * BLOCK_SIZE
+        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask)
+        y = tl.load(y_ptr + offsets, mask=mask)
+        output = x + y
+        tl.store(output_ptr + offsets, output, mask=mask)
+
+    return add_kernel
 
 
 def checkDbgInfo(llir, hasDbgInfo):
@@ -47,7 +51,6 @@ def test_triton_debuginfo_on(lineInfoKey, diLocalVarKey, hasDbgInfo, device, mon
         monkeypatch.setenv(lineInfoKeyName, lineInfoKey)
     if diLocalVarKey is not None:
         monkeypatch.setenv(diLocalVarKeyName, diLocalVarKey)
-    monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
 
     isEnvSet = lambda env, str: env.get(str, None) is not None
     if hasDbgInfo == "infer":
@@ -61,5 +64,5 @@ def test_triton_debuginfo_on(lineInfoKey, diLocalVarKey, hasDbgInfo, device, mon
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
-    h = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    h = kernel_factory()[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     checkDbgInfo(h.asm['llir'], hasDbgInfo)
