@@ -8,11 +8,13 @@ profiling hooks.
 
 Workflow:
 1. Generate TTGIR dump files:
+
    This creates the original TTGIR files in the `ttgir_dump/` directory:
 
-   ../../scripts/dump_ttgir.sh python3 add_override.py
+   ../../scripts/dump_ttgir.sh python3 example_override.py --increase-accuracy
 
 2. Insert profiling instrumentation:
+
    Modify the generated TTGIR files by adding proton.record operators at desired
    profiling points. Example script that adds proton ops in the above ttgir:
 
@@ -20,7 +22,7 @@ Workflow:
 
 3. Execute with TTGIR override:
 
-   TRITON_ALWAYS_COMPILE=1 TRITON_KERNEL_OVERRIDE=1 TRITON_OVERRIDE_DIR=ttgir_dump python3 add_override.py
+   TRITON_ALWAYS_COMPILE=1 TRITON_KERNEL_OVERRIDE=1 TRITON_OVERRIDE_DIR=ttgir_dump python3 example_override.py --increase-accuracy
 
    - TRITON_ALWAYS_COMPILE=1: Forces recompilation on each run
    - TRITON_KERNEL_OVERRIDE=1: Enables TTGIR override mechanism
@@ -38,14 +40,15 @@ from triton.profiler.mode import Default
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
-@triton.jit()
-def add_kernel(x_ptr,  # *Pointer* to first input vector.
-               y_ptr,  # *Pointer* to second input vector.
-               output_ptr,  # *Pointer* to output vector.
-               n_elements,  # Size of the vector.
-               BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
-               # NOTE: `constexpr` so it can be used as a shape value.
-               ):
+@triton.jit
+def add_kernel(
+    x_ptr,  # *Pointer* to first input vector.
+    y_ptr,  # *Pointer* to second input vector.
+    output_ptr,  # *Pointer* to output vector.
+    n_elements,  # Size of the vector.
+    BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
+    # NOTE: `constexpr` so it can be used as a shape value.
+):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -57,19 +60,21 @@ def add_kernel(x_ptr,  # *Pointer* to first input vector.
 
 
 def add(x: torch.Tensor, y: torch.Tensor):
-    parser = argparse.ArgumentParser(description="TTGIR override example with Triton intra kernel profiling")
+    parser = argparse.ArgumentParser(
+        description="TTGIR override example with Triton intra kernel profiling"
+    )
     parser.add_argument(
         "--increase-accuracy",
         action="store_true",
-        default=True,
-        help="Enable increased-accuracy during profiling (default: True)",
+        default=False,
+        help="Enable increased-accuracy during profiling (default: False)",
     )
     args = parser.parse_args()
 
     output = torch.empty_like(x)
     assert x.device == DEVICE and y.device == DEVICE and output.device == DEVICE
     n_elements = output.numel()
-    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
 
     if args.increase_accuracy:
         proton.start(
@@ -81,7 +86,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
     else:
         proton.start("add", data="trace", backend="instrumentation")
 
-    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
 
     proton.finalize()
     return output
@@ -93,3 +98,4 @@ x = torch.rand(size, device=DEVICE)
 y = torch.rand(size, device=DEVICE)
 output_torch = x + y
 output_triton = add(x, y)
+torch.testing.assert_close(output_torch, output_triton, rtol=1e-3, atol=1e-1)

@@ -7,11 +7,11 @@ A comprehensive tutorial demonstrating how to use the Proton intra-kernel profil
 The Proton intra-kernel profiler captures fine-grained timing information within GPU kernels, enabling performance bottleneck identification and optimization opportunities. This tutorial provides two distinct profiling approaches:
 
 - **TTGIR Override Approach** - For profiling existing Triton DSL kernels by injecting instrumentation
-- **Proton DSL Approach** - For native integration with Gluon DSL kernels using embedded profiling scopes
+- **Proton DSL Approach** - For native integration with Triton and Gluon DSL kernels using embedded profiling scopes
 
 ## Examples
 
-### 1. TTGIR Override Approach (`add_override.py`)
+### 1. TTGIR Override Approach (`example_override.py`)
 
 **Use Case**: Profile existing Triton DSL kernels without modifying source code
 
@@ -20,7 +20,7 @@ The Proton intra-kernel profiler captures fine-grained timing information within
 **Workflow**:
 1. **Generate TTGIR dump files**:
    ```bash
-   ../../scripts/dump_ttgir.sh python3 add_override.py
+   ../../scripts/dump_ttgir.sh python3 example_override.py --increase-accuracy
    ```
    Creates original TTGIR files in `ttgir_dump/` directory
 
@@ -32,32 +32,32 @@ The Proton intra-kernel profiler captures fine-grained timing information within
 
 3. **Execute with TTGIR override**:
    ```bash
-   TRITON_ALWAYS_COMPILE=1 TRITON_KERNEL_OVERRIDE=1 TRITON_OVERRIDE_DIR=ttgir_dump python3 add_override.py
+   TRITON_ALWAYS_COMPILE=1 TRITON_KERNEL_OVERRIDE=1 TRITON_OVERRIDE_DIR=ttgir_dump python3 example_override.py --increase-accuracy
    ```
    - `TRITON_ALWAYS_COMPILE=1`: Forces recompilation on each run
    - `TRITON_KERNEL_OVERRIDE=1`: Enables TTGIR override mechanism
    - `TRITON_OVERRIDE_DIR=ttgir_dump`: Specifies directory with modified TTGIR files
 
-### 2. Proton DSL Approach (`matmul_dsl.py`)
+### 2. Proton DSL Approach (`example_dsl.py`)
 
-**Use Case**: Native profiling integration for Gluon DSL kernels
+**Use Case**: Native profiling DSL integration for Triton and Gluon DSL kernels
 
-**Example**: Matrix multiplication using NVIDIA Hopper architecture features (WGMMA, TMA)
+**Example**: Triton vector-add and Gluon matrix multiplication using NVIDIA Hopper architecture features (WGMMA, TMA)
 
 
 **Command Line Options**:
 ```bash
 # Timeline trace mode (default)
-python3 matmul_dsl.py
+python3 example_dsl.py
 
 # Operation measurement mode
-python3 matmul_dsl.py --op-measure
+python3 example_dsl.py --op-measure
 
 # Enable warp sampling with specific warp IDs
-python3 matmul_dsl.py --warp-sampling --warp-ids "0,1,2,3"
+python3 example_dsl.py --warp-sampling --warp-ids "0,1,2,3"
 
 # High accuracy profiling (recommended)
-python3 matmul_dsl.py --increase-accuracy
+python3 example_dsl.py --increase-accuracy
 ```
 
 ## Understanding Timeline Traces
@@ -70,7 +70,7 @@ python3 matmul_dsl.py --increase-accuracy
 ### Circular Buffer System
 - **Backend Storage**: Uses circular buffer for runtime profiling on each CTA
 - **Buffer Overflow**: When full, earlier events are dropped with warnings in trace generation
-- **Event Window**: Displays sliding window of most recent events in timeline
+- **Event Window**: Displays sliding window (the latest window) of recorded events in timeline
 
 ### Finalize Time Measurement
 - **Definition**: Captures `Finalize Time` when kernel execution completes
@@ -91,7 +91,7 @@ python3 matmul_dsl.py --increase-accuracy
 
 | Parameter | Options | Description |
 |-----------|---------|-------------|
-| `buffer_type` | `shared_mem`, `global_mem` | Storage location for profiling buffer (only `shared_mem` currently supported) |
+| `buffer_type` | `shared_mem`| Storage location for profiling buffer |
 | `buffer_size` | `N` | Byte size of the profiling buffer (default: infer a small fraction of shared memory) |
 
 ### Sampling Configuration
@@ -107,7 +107,7 @@ python3 matmul_dsl.py --increase-accuracy
 
 ### Timeline Traces
 - **Format**: Chrome trace format (`.chrome_trace` files)
-- **Viewer**: Chrome browser at `chrome://tracing` or `Perfetto`
+- **Viewer**: Chrome browser at `chrome://tracing` or [`Perfetto`](https://ui.perfetto.dev/)
 - **Content**: Detailed timeline with scope durations
 
 ### Operation Measurements
