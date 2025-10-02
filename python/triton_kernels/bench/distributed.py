@@ -18,7 +18,6 @@ from triton_kernels.routing import (
     ScatterIndx,
     compute_expt_data_torch,
     topk_torch,
-    prune_routing,
     routing_from_bitmatrix,
     filter_expt_data,
     ExptAssignment
@@ -272,6 +271,31 @@ def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows
         scatter_indx,
         ReduceScatterMetadata(input_split_sizes=output_split_sizes, ep_indx=ep_indx, EP=EP, TP=TP),
     )
+
+class PruneRouting(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep):
+        from triton_kernels.compaction import compaction
+        n_tokens_pad = expt_scal.shape[0]
+        assert n_expts_tot % simulated_ep == 0
+        _routing_clear_bitmatrix[(n_tokens_pad, )](
+            bitmatrix.storage.data,
+            bitmatrix.storage.data.stride(0),
+            bitmatrix.storage.data.stride(1),
+            bitmatrix.storage.data.shape[1],
+            n_expts_tot // simulated_ep,
+            BLOCK_N=512,
+        )
+        # perform compaction to update expt_scal / expt_indx
+        expt_scal, expt_indx = compaction(expt_scal, expt_indx, bitmatrix)
+        n_expts_tot = n_expts_tot // simulated_ep
+        bitmatrix.shape[-1] = n_expts_tot
+        return expt_scal, expt_indx, bitmatrix
+
+
+def prune_routing(expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep):
+    return PruneRouting.apply(expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep)
 
 
 @triton.jit
