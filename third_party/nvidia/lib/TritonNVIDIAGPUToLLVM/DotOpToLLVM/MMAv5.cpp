@@ -549,10 +549,6 @@ int64_t getFormatBitSize(ScaleDotElemType type) {
     return 6;
   case ScaleDotElemType::E2M1:
     return 4;
-  case ScaleDotElemType::BF16:
-    return 16;
-  case ScaleDotElemType::FP16:
-    return 16;
   default:
     llvm_unreachable("Unsupported type.");
   }

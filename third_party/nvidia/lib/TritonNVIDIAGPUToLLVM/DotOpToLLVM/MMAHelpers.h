@@ -289,14 +289,12 @@ private:
             std::swap(leadingDim, stridedDim);
           }
           auto log2RowsTile = shmemTileInv.getInDimSizeLog2(dims[leadingDim]);
-          if (std::min<int>(ll.getInDimSizeLog2(dims[leadingDim]),
-                            instrShapePerCTA[leadingDim]) > log2RowsTile) {
+          if (llvm::Log2_32(instrShapePerCTA[leadingDim]) > log2RowsTile) {
             lbo = ll.getBasis(dims[leadingDim], log2RowsTile, kOffset);
           }
 
           auto log2ColsTile = shmemTileInv.getInDimSizeLog2(dims[stridedDim]);
-          if (std::min<int>(ll.getInDimSizeLog2(dims[stridedDim]),
-                            instrShapePerCTA[stridedDim]) > log2ColsTile) {
+          if (llvm::Log2_32(instrShapePerCTA[stridedDim]) > log2ColsTile) {
             sbo = ll.getBasis(dims[stridedDim], log2ColsTile, kOffset);
           }
 
