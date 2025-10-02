@@ -182,11 +182,14 @@ std::optional<triton::gpu::PaddedSharedEncodingAttr>
 composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
                     ttg::TensorOrMemDesc srcTy, ArrayRef<unsigned> order,
                     ArrayRef<unsigned> sharedOrder, unsigned bitWidth) {
+  auto *ctx = srcTy.getContext();
+
+  if (!isa<RankedTensorType>(srcTy))
+    return {};
+
   // Check if we can load > 32 bit from source (requirement for AsyncCopy)
-  if (!isa<RankedTensorType>(srcTy) ||
-      ttg::getContigPerThread(cast<RankedTensorType>(srcTy))[order[0]] *
-              bitWidth <
-          32) {
+  auto contig = ttg::getContigPerThread(cast<RankedTensorType>(srcTy));
+  if (!isa<RankedTensorType>(srcTy) || contig[order[0]] * bitWidth < 32) {
     return {};
   }
 
@@ -197,12 +200,16 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
   }
 
   auto operandIdx = dotOpEnc.getOpIdx();
+  auto kWidth = dotOpEnc.getKWidth();
   int kDimIndex = operandIdx == 0 ? 1 : 0;
   bool isKContig = sharedOrder[0] == kDimIndex;
   auto mfmaNonKDim = mfmaEnc.getInstrShape()[operandIdx];
-  auto *ctx = srcTy.getContext();
+  auto shape = srcTy.getShape();
+  auto kDim = shape[kDimIndex];
+  auto nonKDim = shape[(kDimIndex + 1) % 2];
+  int rank = shape.size();
 
-  // Do not use padding for scales
+  // NYI: padding for scales
   if (operandIdx >= 2) {
     return {};
   }
@@ -211,134 +218,133 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
     return {};
   }
 
-  int rank = order.size();
-  if (rank > 2) {
+  if (rank != 2) {
     return {};
   }
 
-  auto kWidth = dotOpEnc.getKWidth();
   if (!llvm::is_contained({4, 8}, kWidth)) {
     return {};
-  }
-
-  auto shape = srcTy.getShape();
-  auto kDim = shape[kDimIndex];
-  auto nonKDim = shape[(kDimIndex + 1) % 2];
-  if (std::min(kDim, nonKDim) < 64 || std::max(kDim, nonKDim) < 128) {
-    if (kDim != 32 || nonKDim != 256)
-      return {};
   }
 
   if (bitWidth != 16) {
     return {};
   }
 
-  auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
-  unsigned innerD =
-      ttg::getShapePerCTA(ctaLayout.getCTASplitNum(), shape)[sharedOrder[0]];
-  unsigned byteWidth = std::max(bitWidth / 8u, 1u);
-  unsigned threadNumBytes = std::max(dotOpEnc.getKWidth() * byteWidth, 1u);
-  threadNumBytes = llvm::alignTo(
-      threadNumBytes, std::max(4u, byteWidth)); // Assume 32-bit per bank
+  auto blockBytes = kDim * nonKDim * std::max(1U, bitWidth / 8);
+  if (blockBytes < 16384) {
+    return {};
+  }
 
   // On GFX9 we can only add padding after each direct-to-lds load. Since we
   // have 64 lanes and generally want to load 128bit per lane we end up with a
-  // padding interval of 1024bytes.
-  // To avoid bank conflicts when reading the data we want to stagger contiguous
-  // rows to shift their start to different banks. Since rows are generally
-  // shorter than 1024bytes we reorder rows in shared memory so pairs of 8
-  // consecutive rows are strided by 1024bytes so they can be padded to
-  // different banks. If we assume one row is 256bytes we reorder the rows as
-  // follows:
+  // padding interval of at least 1024bytes.
+  // To avoid bank conflicts when reading the tensor we want to stagger
+  // contiguous rows by adding padding to shift their start to different shared
+  // memory banks. For MFMA layouts we read data from up to 16 consecutive rows
+  // which means we need to place groups of 16 rows strided by 1024 bytes into
+  // shared memory. For this we compute a mapping from logical tensor rows to
+  // shared memory offset so rows strided by 16 are contiguous in LDS and repeat
+  // it until we hit 1024bytes. As an example assume one row is 256bytes which
+  // means we need to add row0 and row1 sepeated by 4 rows in shared memory:
+  // The resulting order of rows and their offsets are depicted below:
   //  [row0, row16, row32, row 48, row1, row17, row33, row 49, row2, row17..]
   //  [0,    256,   512,   768,    1024, ..] byte offsets
   // This naturally extends to different row sizes, e.g. for 128bytes:
   // [r0, r16, r32, r48, r64, r80, r96, r112, r1, r17, ..]
   // [0,  128, 256, 384, ..                 , 1024, ..]
-  // Overall this pattern works if our block size is 8KB or larger since we want
-  // to stagger 8 rows.
+  // This pattern works bank conflict free as long as the amount of data loaded
+  // is larger than 16KB.
+  // TODO (alex): implement smaller block sizes + different dtypes
 
-  // Create the above desribed layout a linear bases from dim0, dim1 -> offset
-  auto createBaseLayout = [](int kDim, bool kContig) {
-    std::vector<std::vector<int>> bases;
-    // Add log2(kDim) bases
-    for (int k2 = 0; k2 < llvm::Log2_32(kDim); k2++)
-      bases.push_back({1 << k2, 0});
-    // We need to pad until 9 bases (1024 bytes) and start at 16
-    int nonKPointer = llvm::Log2_32(16);
-    while (bases.size() < 9)
-      bases.push_back({0, 1 << nonKPointer++});
-    // Add rows < 16 afterwards
-    for (int k2 = 0; k2 < llvm::Log2_32(16); k2++)
-      bases.push_back({0, 1 << k2});
-    // If we are non kContig we swap the dims
-    if (!kContig) {
-      for (auto &b : bases) {
-        std::swap(b[0], b[1]);
-      }
-    }
-    return bases;
-  };
-
+  // Create the 16 strided mapping from [contigDim, nonContigDim] -> offset.
   unsigned contigSize = isKContig ? kDim : nonKDim;
-  auto offsetBases = createBaseLayout(std::min(256U, contigSize), isKContig);
+  // We clamp contigSize to 256 and repeat the tile. Note this does not affect
+  // performance because we are not splitting cache lines
+  contigSize = std::min(256U, contigSize);
 
+  std::vector<std::vector<int>> bases;
+  // Keep contigSize numbers of elments contig in shared memory
+  for (int elemLog2 = 0; elemLog2 < llvm::Log2_32(contigSize); elemLog2++)
+    bases.push_back({1 << elemLog2, 0});
+
+  // Add strided rows (by 16) until we reach 1024byte (9 bases)
+  for (int rowBase = llvm::Log2_32(16); bases.size() < 9; rowBase++)
+    bases.push_back({0, 1 << rowBase});
+
+  // Add rows 1..16 afterwards
+  for (int rowLog2 = 0; rowLog2 < llvm::Log2_32(16); rowLog2++)
+    bases.push_back({0, 1 << rowLog2});
+
+  unsigned paddingInBanks = 0;
+
+  // To compute the required amount of padding to avoid bank conflicts we look
+  // at the number of contiguous banks loaded for a single row this directly
+  // gives us the padding we require.
   if (isKContig) {
-    // kWidth=8 will use ds_read_b128 in this case which resolves bank conflicts
-    // in 4 pairs of lanes (0-4, 12-15, 20-23, 24-27).
-    // kWidth=4 will use ds_read_b64 which splits lanes into 2 groups of 32
-    // consecutive rows
+    // kWidth=4 will use ds_read_b64 which splits lanes into 2
+    // groups of 32 consecutive rows
 
-    // For kWidth=8 lane groups read 16 elements contiguous on a single row so
-    // we pad by 16 elements
-    // For kWidth=4 lane groups load 4 byte contiguous so we just pad by 4
-    // elements
-    threadNumBytes = kWidth == 8 ? 32 : 8;
+    // For kWidth=8 we will use ds_read_b128. Since we have
+    // 64 lanes and load 4 banks per lane we read in total 256 banks, so 16
+    // lanes access LDS at a time which define our bank conflcit pattern.
+    // These (lane)groups are:
+    //  1: 0-3, 12-15, 20-23, 24-27
+    //  2: 4-7, 8-11, 16-19, 28-31
+    // Repeat for second half of the warp
+
+    if (mfmaNonKDim == 16) {
+      // For kWidth=8 lane groups read 8 contiguous banks
+      // For kWidth=4 lane groups load 2 contiguous banks
+      paddingInBanks = kWidth == 8 ? 8 : 2;
+    }
+
     if (mfmaNonKDim == 32) {
-      // In this case we access 16 elements along nonK so we place row16 to the
-      // other half of LDS. Depending on the kDim the index is shifted. We can
-      // then simply pad by 4 bytes
-      int row16Index = kDim == 32 ? 5 : (kDim == 64 ? 6 : 7);
-      std::swap(offsetBases[row16Index], offsetBases[7]);
-      threadNumBytes = 4;
+      // For mfma32 lane groups read 4 contiguous banks
+      paddingInBanks = 2;
+      // Because we load 32 rows we need to place every 16th row into the second
+      // half of banks to spread loads over all banks. This is done by swapping
+      // the bases representing offset 128 (32banks) which is [7] and the base
+      // of the 16th row which depends on the contigSize
+      int row16Index = contigSize == 32 ? 5 : (contigSize == 64 ? 6 : 7);
+      std::swap(bases[7], bases[row16Index]);
     }
   } else {
     if (mfmaNonKDim == 16) {
-      // Accesses 16 elements contiguous so we can pad by 16 elements
-      threadNumBytes = 32;
-      if (dotOpEnc.getKWidth() == 8) {
-        // Here we wrap at row 8 so we have to exchange row4 and 8 to avoid
-        // conflicts
-        std::swap(offsetBases[11], offsetBases[12]);
+      // For mfma16 lane groups read 8 contiguous banks
+      paddingInBanks = 8;
+      if (kWidth == 8) {
+        // For kWidth=8 lane groups wrap at row 8 so we have to exchange row4
+        // and 8 to avoid conflicts
+        std::swap(bases[bases.size() - 1], bases[bases.size() - 2]);
       }
     } else if (mfmaNonKDim == 32) {
-      // Accesses 32 elements contiguous so we can pad by 32 elements
-      threadNumBytes = 64;
-    } else {
-      assert(false);
+      // For mfma32 lane groups read 16 contiguous banks
+      paddingInBanks = 16;
     }
   }
 
-  // We also need to align with dwordx4 or dword loads
-  innerD = llvm::alignTo(innerD, (16 * 64) / byteWidth);
-  unsigned paddingInElems = threadNumBytes / byteWidth;
-
-  // Tranpose bases if order != default order
-  if (kDimIndex == 1) {
-    for (auto &p : offsetBases)
+  // Swap bases to match srcTy dimension order
+  if ((isKContig && kDimIndex == 1) || (!isKContig && kDimIndex == 0)) {
+    for (auto &p : bases)
       std::swap(p[0], p[1]);
   }
 
+  auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
   triton::LinearLayout linearComponent(
       {
-          {StringAttr::get(ctx, "offset"), offsetBases},
+          {StringAttr::get(ctx, "offset"), bases},
       },
       triton::standardOutDimNames(ctx, rank));
   linearComponent = triton::gpu::combineCtaCgaWithShape(
       linearComponent, ctaLayout, srcTy.getShape());
 
-  return ttg::PaddedSharedEncodingAttr::get(ctx, {{innerD, paddingInElems}},
-                                            linearComponent);
+  // We also need to align with dwordx4 or dword loads
+  unsigned byteWidth = std::max(bitWidth / 8u, 1u);
+  unsigned paddingInterval = 1024 / byteWidth;
+  unsigned bankWidth = 4;
+  unsigned paddingInElems = (paddingInBanks * bankWidth) / byteWidth;
+  return ttg::PaddedSharedEncodingAttr::get(
+      ctx, {{paddingInterval, paddingInElems}}, linearComponent);
 }
 
 // Adapted from
