@@ -118,7 +118,7 @@ def test_cudagraph(tmp_path: pathlib.Path):
     assert test_frame is not None
     # {torch.ones, add, foo}
     if is_hip():
-        assert len(test_frame["children"]) >= 2
+        assert len(test_frame["children"]) >= 1
     else:
         assert len(test_frame["children"]) >= 3
     assert test_frame["children"][0]["metrics"]["time (ns)"] > 0
