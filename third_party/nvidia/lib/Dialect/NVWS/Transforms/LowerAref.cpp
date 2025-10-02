@@ -38,6 +38,7 @@
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PartitionBuilder.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -70,14 +71,34 @@ void assignStageCluster(Operation *op, std::optional<PartitionSet> partitionIds,
                         StageCluster stageCluster, OpBuilder &builder) {
   if (partitionIds) {
     setPartition(op, *partitionIds);
+    setStageCluster(builder, op, stageCluster);
+  }
+}
 
-    if (stageCluster) {
-      op->setAttr(triton::kLoopStageAttrName,
-                  builder.getI32IntegerAttr(stageCluster->first));
-      op->setAttr(triton::kLoopClusterAttrName,
-                  builder.getI32IntegerAttr(stageCluster->second));
+bool isOperandPipelineable(Value v, scf::ForOp forOp) {
+  auto isPipelineable = [](Operation *op) {
+    return isa<ArefPutEnterOp, ArefGetEnterOp, ArefBufferOp>(op);
+  };
+
+  Operation *foundDef = nullptr;
+  return triton::nvidia_gpu::isOperandPipelineableBase(v, forOp, foundDef,
+                                                       isPipelineable);
+}
+
+void setIsAsync(triton::nvidia_gpu::MMAv5OpInterface mmaOp) {
+  bool isAsync = true;
+  auto forOp = mmaOp->getParentOfType<scf::ForOp>();
+  if (auto scaledOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAScaledOp>(
+          mmaOp.getOperation())) {
+    if (!triton::nvidia_gpu::areScalesPipelineable(scaledOp, forOp)) {
+      isAsync = false;
+    }
+    if (!isOperandPipelineable(scaledOp.getAScale(), forOp) ||
+        !isOperandPipelineable(scaledOp.getBScale(), forOp)) {
+      isAsync = false;
     }
   }
+  mmaOp.setIsAsync(isAsync);
 }
 
 struct ArefValue {
@@ -358,7 +379,7 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
 
   if (llvm::any_of(asyncKinds, hasAsyncLoad)) {
     for (auto mmav5 : mmav5Ops) {
-      mmav5.setIsAsync(true);
+      setIsAsync(mmav5);
     }
   }
 
@@ -444,7 +465,42 @@ void insertArriveBarrier(Location loc, ArrayRef<AsyncOp> asyncOps,
 void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
                       ArefValue arefVal) {
   auto loc = op->getLoc();
+  auto stageCluster = getStageCluster(op);
+  auto asyncKinds = castAsyncOpAttrs(op.getAsyncOps());
   rewriter.setInsertionPointAfter(op);
+
+  bool needFence = [&]() {
+    bool isGenericProxy = llvm::any_of(
+        asyncKinds, [](AsyncOp kind) { return kind == AsyncOp::NONE; });
+    if (!isGenericProxy) {
+      return false;
+    }
+    auto tmem = TensorMemorySpaceAttr::get(op.getContext());
+    auto arefType = cast<ArefType>(op.getAref().getType());
+    // Currently we assume that an aref does not contain both SMEM and TMEM.
+    // So checking only the first buffer is fine.
+    auto arefBufType = cast<MemDescType>(arefType.getBaseType()[0]);
+    if (arefBufType.getMemorySpace() == tmem) {
+      return false;
+    }
+    for (auto arefUser : op.getAref().getUsers()) {
+      if (auto getExit = dyn_cast<ArefGetExitOp>(arefUser)) {
+        bool isConsumerMMAv5 =
+            llvm::any_of(castAsyncOpAttrs(getExit.getAsyncOps()),
+                         [](AsyncOp kind) { return kind == AsyncOp::TC5MMA; });
+        if (isConsumerMMAv5) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }();
+
+  if (needFence) {
+    auto fence = rewriter.create<FenceAsyncSharedOp>(loc, /*bCluster=*/false);
+    assignStageCluster(fence, getPartitionIds(op), stageCluster, rewriter);
+  }
+
   Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage(),
                                      getPartitionIds(op), getStageCluster(op));
   insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,

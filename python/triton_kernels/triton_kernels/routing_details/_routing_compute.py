@@ -98,20 +98,6 @@ def _combined_routing_compute(GatherIndx, ScatterIndx, GateScal, ExptScal, ExptI
 
 
 @triton.jit
-def _routing_clear_bitmatrix(Bitmatrix, stride_bm, stride_bn, shape_bn, cutoff, BLOCK_N: tl.constexpr):
-    pid_m = tl.program_id(0)
-    cutoff_word = cutoff // 32
-    cutoff_bit = cutoff % 32
-    cutoff_mask = (1 << (cutoff_bit)) - 1
-    for start_n in range(0, shape_bn, BLOCK_N):
-        offs_n = start_n + tl.arange(0, BLOCK_N)
-        values = tl.load(Bitmatrix + pid_m * stride_bm + offs_n * stride_bn, mask=offs_n < shape_bn)
-        values = tl.where(offs_n == cutoff_word, values & cutoff_mask, values)
-        values = tl.where(offs_n > cutoff_word, 0, values)
-        tl.store(Bitmatrix + pid_m * stride_bm + offs_n * stride_bn, values, mask=offs_n < shape_bn)
-
-
-@triton.jit
 def _combined_routing_memset(Indx, size, sentinel, BLOCK: tl.constexpr, ExpertHist, FinalExpertOffs, hist_size,
                              n_expts_tot, PartialHist, shape_pm, stride_pm, stride_pn, MDStarts, tile_starts_stridem,
                              blocks1a, MDTileInfo, first_tile_dim_log2, SIZES: tl.constexpr, BLOCK_A: tl.constexpr,

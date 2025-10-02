@@ -296,7 +296,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #BL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 #A = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #B = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
-#C = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 4], instrShape = [32, 32], isTransposed = false}>
+#C = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 4], instrShape = [32, 32, 8], isTransposed = false}>
 #A_OP = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 2}>
 #B_OP = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 2}>
 #smem = #ttg.shared_memory

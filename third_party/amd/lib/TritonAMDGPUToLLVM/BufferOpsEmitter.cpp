@@ -64,6 +64,9 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
   Value stride = b.int_val(16, 0);
   if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
                          targetInfo.getISAFamily())) {
+#if 0
+    // Turn off cache-swizzling for the time being while we are figuring out
+    // how to safely use it.
     if (blockStride) {
       Value enableSwizzle = b.int_val(16, 16384);
       Value mask14b = b.int_val(16, 16383);
@@ -78,11 +81,12 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
       // stride[14] = swizzle enabling bit
       stride = rewriter.create<LLVM::OrOp>(loc, enableSwizzle, strideSat);
     }
+#endif
   }
 
   Value flagsConst = b.int_val(32, flags);
   Type rsrcType = LLVM::LLVMPointerType::get(rewriter.getContext(), 8);
-  Value numRecordsByte = b.int_val(32, std::numeric_limits<int>::max() - 1);
+  Value numRecordsByte = b.int_val(64, std::numeric_limits<int>::max() - 1);
 
   Value resource = rewriter.createOrFold<ROCDL::MakeBufferRsrcOp>(
       loc, rsrcType, basePtr, stride, numRecordsByte, flagsConst);

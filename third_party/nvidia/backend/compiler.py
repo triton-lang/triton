@@ -329,6 +329,7 @@ class CUDABackend(BaseBackend):
 
         passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
+        passes.gluon.add_canonicalizer(pm)
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
@@ -369,12 +370,33 @@ class CUDABackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.convert.add_nvvm_to_llvm(pm)
-        if not knobs.compilation.disable_line_info:
+
+        if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)
+
         if CUDABackend.instrumentation:
             CUDABackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
 
         pm.run(mod, 'make_llir')
+
+        if knobs.compilation.dump_ir_extract_di_local_variables:
+            # comments below on why separate it
+            if not knobs.compilation.disable_line_info:
+                pm = ir.pass_manager(mod.context)
+                pm.enable_debug()
+                passes.llvmir.add_di_scope(pm)
+                pm.run(mod, 'make_llir.disable_line_info')
+
+            # insert dbg intrinsic with several DI Attribute including source
+            # var name and type info note: unknown reason for now, but this
+            # pass and add_di_scope has to be run separately, otherwise if we
+            # put them into previous pipline, it trigger a segmentfault without
+            # any error message; could be due to a bug in mlir or pybind11
+            pm = ir.pass_manager(mod.context)
+            pm.enable_debug()
+            passes.llvmir.add_di_local_variable(pm)
+            pm.run(mod, 'make_llir.dump_ir_extract_di_local_variables')
+
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
@@ -417,7 +439,8 @@ class CUDABackend(BaseBackend):
         triple = 'nvptx64-nvidia-cuda'
         proc = sm_arch_from_capability(capability)
         features = get_features(opt, self.target.arch)
-        ret = llvm.translate_to_asm(src, triple, proc, features, [], opt.enable_fp_fusion, False)
+        flags = ["nvptx-mad-wide-opt"]
+        ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False)
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
         assert len(names) == 1
@@ -426,8 +449,11 @@ class CUDABackend(BaseBackend):
         ptx_version = f'{ptx_version//10}.{ptx_version%10}'
         ret = re.sub(r'\.version \d+\.\d+', f'.version {ptx_version}', ret, flags=re.MULTILINE)
         ret = re.sub(r'\.target sm_\d+', f'.target sm_{capability}', ret, flags=re.MULTILINE)
-        # Remove the debug flag that prevents ptxas from optimizing the code
-        ret = re.sub(r",\s*debug|debug,\s*", "", ret)
+        if not knobs.compilation.dump_ir_extract_di_local_variables:
+            # Remove the debug flag that prevents ptxas from optimizing the code
+            # Note: if this flag is removed, the source var name and type info will be lost when ptx was compiled into cubin
+            #           and we may not be able to see them in cuda-gdb
+            ret = re.sub(r",\s*debug|debug,\s*", "", ret)
         if knobs.nvidia.dump_nvptx:
             print("// -----// NVPTX Dump //----- //")
             print(ret)

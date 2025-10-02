@@ -34,7 +34,7 @@ def test_op():
 @pytest.mark.parametrize("source", ["shadow", "python"])
 def test_context(source: str, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_context.hatchet"
-    session_id = libproton.start(str(temp_file.with_suffix("")), source, "tree", _select_backend(), "")
+    session_id = libproton.start(str(temp_file.with_suffix("")), source, "tree", _select_backend())
     depth = libproton.get_context_depth(session_id)
     libproton.finalize(session_id, "hatchet")
     assert depth >= 0

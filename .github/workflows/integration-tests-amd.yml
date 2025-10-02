@@ -175,9 +175,7 @@ jobs:
           mv $TORCH_PATH/libamdhip64_bck.so $TORCH_PATH/libamdhip64.so
       - name: Run regression tests
         run: |
-          # Reenable test_functional_regression.py once it's fixed
-          cd python/test/regression
-          python3 -m pytest -s -n 8 ./test_cast_matmul.py
+          make test-regression
       - name: Run microbenchmark tests
         run: |
           python3 python/test/microbenchmark/launch_overhead.py
