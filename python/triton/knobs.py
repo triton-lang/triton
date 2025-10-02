@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from contextlib import contextmanager
 from typing import cast, Any, Callable, Generator, Generic, Optional, Protocol, Type, TypeVar, TypedDict, TYPE_CHECKING, Union
 
-from triton._C.libtriton import getenv, getenv_bool  # type: ignore
+from triton._C.libtriton import getenv, getenv_bool, get_cache_invalidating_env_var_names  # type: ignore
 
 if TYPE_CHECKING:
     from .runtime.cache import CacheManager, RemoteCacheBackend
@@ -291,6 +291,13 @@ class base_knobs:
             delattr(self, knob)
         return self
 
+    def get_cache_hash(self) -> str:
+        hash = ""
+        for [name, knob] in self.knob_descriptors.items():
+            if name in get_cache_invalidating_env_var_names():
+                hash += name + knob.get() + "_"
+        return hash
+
     @contextmanager
     def scope(self) -> Generator[None, None, None]:
         try:
@@ -529,6 +536,14 @@ language = language_knobs()
 nvidia = nvidia_knobs()
 amd = amd_knobs()
 proton = proton_knobs()
+
+
+def get_cache_hash() -> str:
+    return build.get_cache_hash() + redis.get_cache_hash() + \
+    cache.get_cache_hash() + compilation.get_cache_hash() + \
+    autotuning.get_cache_hash() + runtime.get_cache_hash() + \
+    language.get_cache_hash() + nvidia.get_cache_hash() + \
+    amd.get_cache_hash() + proton.get_cache_hash()
 
 
 def refresh_knobs():

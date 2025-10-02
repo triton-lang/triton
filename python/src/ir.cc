@@ -2020,5 +2020,10 @@ void init_triton_env_vars(py::module &m) {
           }
           return ret;
         });
+  m.def("get_cache_invalidating_env_var_names",
+        []() -> std::vector<std::string> {
+          return std::vector<std::string>(CACHE_INVALIDATING_ENV_VARS.begin(),
+                                          CACHE_INVALIDATING_ENV_VARS.end());
+        });
   PyModule_AddFunctions(m.ptr(), ModuleMethods);
 }
