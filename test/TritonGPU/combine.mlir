@@ -3948,6 +3948,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       %acc_109 = arith.truncf %p_102 : tensor<128x64xf32, #linear> to tensor<128x64xbf16, #linear>
       // CHECK-NOT: ttg.convert_layout
       %acc_110 = ttg.convert_layout %acc_109 : tensor<128x64xbf16, #linear> -> tensor<128x64xbf16, #blocked3>
+      // CHECK: ttng.tmem_store %{{.*}} : tensor<128x64xbf16, #linear> ->
       ttng.tmem_store %acc_110, %acc_49, %true : tensor<128x64xbf16, #blocked3> -> !ttg.memdesc<128x64xbf16, #tmem2, #ttng.tensor_memory, mutable>
       tt.return
   }
