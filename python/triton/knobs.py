@@ -294,7 +294,6 @@ class base_knobs:
     def get_cache_key(self) -> dict[str, Any]:
         key = {}
         for [name, knob] in self.knob_descriptors.items():
-            # print(f"DEBUG: name: {knob.key}, knob: {self.knobs[name]}")
             if knob.key in get_cache_invalidating_env_var_names():
                 key[knob.key] = self.knobs[name]
         return key
