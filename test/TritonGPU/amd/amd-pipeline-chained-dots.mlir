@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops="num_stages=4 use_async_copy=1" -tritonamdgpu-pipeline="use_async_copy=1" -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops="num_stages=4" -tritonamdgpu-pipeline="use_async_copy=1" -canonicalize | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
 #mma = #ttg.amd_mfma<{version = 4, warpsPerCTA = [4, 1], instrShape = [32, 32, 16], isTransposed = true}>

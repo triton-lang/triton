@@ -224,8 +224,8 @@ class HIPBackend(BaseBackend):
         use_async_copy = knobs.amd.use_async_copy
         use_block_pingpong = is_pingpong_schedule_enabled(options.arch, use_async_copy)
 
-        amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages, use_async_copy, use_block_pingpong)
-        amd.passes.ttgpuir.add_pipeline(pm, use_async_copy)
+        amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages)
+        amd.passes.ttgpuir.add_pipeline(pm, use_async_copy, use_block_pingpong)
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
         passes.common.add_canonicalizer(pm)
