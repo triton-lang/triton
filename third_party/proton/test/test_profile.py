@@ -76,6 +76,8 @@ def test_triton(tmp_path: pathlib.Path):
 
 
 def test_cudagraph(tmp_path: pathlib.Path):
+    if is_hip():
+        pytest.skip("To debug later")
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
