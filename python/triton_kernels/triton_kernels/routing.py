@@ -399,7 +399,7 @@ class ExptAssignment:
     n_expts_per_shard: list[int]
 
 
-def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int]], device):
+def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int]], device) -> ExptAssignment:
     """
     n_expt_shard: int
     n_expt_tot: int
