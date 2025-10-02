@@ -238,6 +238,21 @@ def test_set_knob_directly(fresh_knobs, monkeypatch):
     assert fresh_knobs.cache.manager_class == FileCacheManager
 
 
+def test_fresh_knobs_preserves_env(monkeypatch):
+    """Regression: ensure kernel dump env survives ``_fresh_knobs_impl`` reset."""
+
+    monkeypatch.setenv("TRITON_KERNEL_DUMP", "1")
+    from triton._internal_testing import _fresh_knobs_impl
+
+    fresh_function, reset_function = _fresh_knobs_impl()
+    try:
+        knobs = fresh_function()
+        assert os.environ.get("TRITON_KERNEL_DUMP") == "1"
+        assert knobs.compilation.dump_ir
+    finally:
+        reset_function()
+
+
 @pytest.mark.skipif(
     is_hip(),
     reason="PTXAS is not installed on AMD",

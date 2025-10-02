@@ -239,6 +239,13 @@ def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
 
     def fresh_function():
         nonlocal env_to_unset
+        env_snapshot = {
+            knob.key: os.environ[knob.key]
+            for knobset in knobs_map.values()
+            for knob in knobset.knob_descriptors.values()
+            if knob.key in os.environ
+        }
+
         for name, knobset in knobs_map.items():
             setattr(knobs, name, knobset.copy().reset())
             for knob in knobset.knob_descriptors.values():
@@ -246,6 +253,10 @@ def _fresh_knobs_impl(skipped_attr: Optional[Set[str]] = None):
                     monkeypatch.delenv(knob.key, raising=False)
                 else:
                     env_to_unset.append(knob.key)
+
+        for key, value in env_snapshot.items():
+            monkeypatch.setenv(key, value)
+
         knobs.propagate_env = True
         return knobs
 
