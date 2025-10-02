@@ -37,6 +37,12 @@ auto SplitF32(Value input, unsigned N, PatternRewriter &rewriter)
   return split_inputs;
 }
 
+Value IEEEDot(PatternRewriter &rewriter, Value lhs, Value rhs, Value acc) {
+  return rewriter.create<DotOp>(lhs.getLoc(), lhs, rhs, acc,
+                               /*inputPrecision=*/InputPrecision::IEEE,
+                               /*maxNumImpreciseAcc=*/0);
+}
+
 auto getBF16Count(triton::InputPrecision precision) -> unsigned {
   switch (precision) {
   default:
@@ -51,7 +57,9 @@ auto getBF16Count(triton::InputPrecision precision) -> unsigned {
   }
 }
 
-// Implement 3xBF16 https://arxiv.org/abs/1904.06376
+// Implements 3xBF16 https://arxiv.org/abs/1904.06376
+// See also https://github.com/openxla/xla/blob/e33f93fb7220d408811afdc926cf10baaf49c64e/xla/backends/gpu/codegen/triton/dot_algorithms.cc#L152
+// As well as https://github.com/ROCm/rocm-libraries/blob/develop/projects/hipblaslt/tensilelite/Tensile/Components/LocalRead.py#L288-L330
 struct BF16xN : public OpRewritePattern<DotOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -63,62 +71,55 @@ struct BF16xN : public OpRewritePattern<DotOp> {
     const unsigned lo = 2;
     const unsigned N = getBF16Count(dotOp.getInputPrecision());
     Location loc = dotOp.getLoc();
+    auto typeA = dotOp.getA().getType();
+    auto typeB = dotOp.getB().getType();
 
-    // Checks for FP32 inputs and BF16 InputPrecision
-    if (N == 0)
+    if (!cast<RankedTensorType>(typeA).getElementType().isF32() ||
+        !cast<RankedTensorType>(typeB).getElementType().isF32() || !N)
       return failure();
-    for (auto type : {dotOp.getA().getType(), dotOp.getB().getType()})
-      if (!cast<RankedTensorType>(type).getElementType().isF32())
-        return failure();
 
-    // Helper Lambdas
-    auto dot = [&](Value a, Value b, Value c) -> Value {
-      return rewriter.create<DotOp>(loc, c.getType(), a, b, c,
-                                    InputPrecision::BF16,
-                                    dotOp.getMaxNumImpreciseAcc());
-    };
-    auto zeroLike = [&]() -> Value {
+    // Aux functions
+    auto zeroLike = [&](Value c) -> Value {
       return rewriter.create<SplatOp>(
-          loc, dotOp.getC().getType(),
-          rewriter.create<arith::ConstantOp>(loc, rewriter.getF32FloatAttr(0)));
+          dotOp->getLoc(), c.getType(),
+          rewriter.create<arith::ConstantOp>(dotOp->getLoc(),
+                                             rewriter.getF32FloatAttr(0)));
     };
     auto replaceNansWithZeros = [&](Value value) -> Value {
-      auto isNaN = rewriter.create<arith::CmpFOp>(
-          loc, arith::CmpFPredicate::UNO, value, value);
-      return rewriter.create<arith::SelectOp>(loc, isNaN, zeroLike(), value);
+      auto nans = rewriter.create<arith::CmpFOp>(
+          dotOp->getLoc(), arith::CmpFPredicate::UNO, value, value);
+      auto zero = zeroLike(value);
+      return rewriter.create<arith::SelectOp>(dotOp->getLoc(), nans, zero,
+                                              value);
     };
 
     // Starting Values: a(0), a(1), a(2), b(0), b(1), b(2) and zero accumulator
-    auto lhs_parts = SplitF32(dotOp.getA(), N, rewriter);
-    auto rhs_parts = SplitF32(dotOp.getB(), N, rewriter);
-    auto result = zeroLike();
+    const auto lhs_parts = SplitF32(dotOp.getA(), N, rewriter);
+    const auto rhs_parts = SplitF32(dotOp.getB(), N, rewriter);
+    auto result = zeroLike(dotOp.getC());
 
-    if (dotOp.getInputPrecision() == InputPrecision::BF16x9) {
-      result = dot(lhs_parts[lo], rhs_parts[lo], result);
-      result = dot(lhs_parts[mid], rhs_parts[lo], result);
-      result = dot(lhs_parts[lo], rhs_parts[mid], result);
+    switch (dotOp.getInputPrecision()) {
+    default:
+      assert(false && "BF16DotTCPass expects BF16x9, BF16x6 or BF16x3");
+      return failure();
+    case InputPrecision::BF16x9:
+      result = IEEEDot(rewriter, lhs_parts[lo], rhs_parts[lo], result);
+      result = IEEEDot(rewriter, lhs_parts[mid], rhs_parts[lo], result);
+      result = IEEEDot(rewriter, lhs_parts[lo], rhs_parts[mid], result);
 
-      // Identical to BF16x6 handling code:
-      result = dot(lhs_parts[mid], rhs_parts[mid], result);
+    case InputPrecision::BF16x6:
+      result = IEEEDot(rewriter, lhs_parts[mid], rhs_parts[mid], result);
 
-      result = dot(lhs_parts[lo], rhs_parts[hi], result);
-      result = dot(lhs_parts[hi], rhs_parts[lo], result);
+      result = IEEEDot(rewriter, lhs_parts[lo], rhs_parts[hi], result);
+      result = IEEEDot(rewriter, lhs_parts[hi], rhs_parts[lo], result);
 
-    } else if (dotOp.getInputPrecision() == InputPrecision::BF16x6) {
-      result = dot(lhs_parts[mid], rhs_parts[mid], result);
-
-      result = dot(lhs_parts[lo], rhs_parts[hi], result);
-      result = dot(lhs_parts[hi], rhs_parts[lo], result);
-    }
-
-    // BF16x3, BF16x6, BF16x9 all need this
-    if (dotOp.getInputPrecision() != InputPrecision::BF16) {
-      result = dot(lhs_parts[mid], rhs_parts[hi], result);
-      result = dot(lhs_parts[hi], rhs_parts[mid], result);
+    case InputPrecision::BF16x3:
+      result = IEEEDot(rewriter, lhs_parts[mid], rhs_parts[hi], result);
+      result = IEEEDot(rewriter, lhs_parts[hi], rhs_parts[mid], result);
     }
 
     result = replaceNansWithZeros(result);
-    result = dot(lhs_parts[hi], rhs_parts[hi], result);
+    result = IEEEDot(rewriter, lhs_parts[hi], rhs_parts[hi], result);
     result = rewriter.create<arith::AddFOp>(loc, result, dotOp.getC());
 
     rewriter.replaceOp(dotOp, result);
