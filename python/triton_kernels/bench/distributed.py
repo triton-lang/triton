@@ -132,7 +132,7 @@ def reduce_scatter(
             return output_tensor.to(original_dtype)
         elif metadata and metadata.combine_indx and metadata.dispatch_indx: # ep sharded
             output = convert_ep_to_dp(input_tensor, expt_assignment, metadata.ep_indx, metadata.combine_indx.src_indx)
-            output = reduce_grouped(output, contig_group_size=n_expts_act)[0]
+            output = reduce_grouped(output, contig_group_size=n_expts_act)[0].squeeze(0)
             return output
         else:
             input_list = list(input_tensor.chunk(world_size, dim=dim))
@@ -397,7 +397,7 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
 def routing_triton_ep_sharded(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, expt_assignment=None, EP=1, TP=1):
     rank = dist.get_rank()
     rdata_global, combine_indx, dispatch_indx, expt_indx = triton_kernels.routing.routing(
-        logits, n_expts_act, sm_first=sm_first, expt_indx=None, all_gather=False, n_rows=n_rows)
+        logits, n_expts_act, sm_first=sm_first, expt_indx=None, all_gather=True, n_rows=n_rows)
     y_ep_local = convert_dp_to_ep(x, expt_assignment, expt_indx, dispatch_indx.src_indx)
     expt_data_local = filter_expt_data(rdata_global.expt_data, expt_assignment, rank)
     routing_data = RoutingData(
@@ -732,7 +732,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
             rdata = gi = si = metadata = None
         x = matmul_ogs(x, w1, b1, rdata, gather_indx=gi, precision_config=pc1, fused_activation=act)
         x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=si, precision_config=pc2)
-        x = reduce_scatter(x, n_expts_act, metadata=metadata, dim=0)
+        x = reduce_scatter(x, n_expts_act, expt_assignment=expt_assignment, metadata=metadata, dim=0)
         # gather the result from all GPUs, just for verification
         return all_gather(x, dim=0)
 
