@@ -72,7 +72,10 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     input_x = torch.randn((batch // DP, dim1), device=dev)
 
     # create a balanced expt_dict
-    expt_dict = {i: [i * n_expts_tot // EP + j for j in range(n_expts_tot // EP)] for i in range(EP)}
+    expt_dict = {}
+    for i in range(TP):
+        for j in range(EP):
+            expt_dict[i + j * TP] = list(*range(j * n_expts_tot // EP, (j + 1) * n_expts_tot // EP))
     expt_assignment = make_expt_assignment(EP, n_expts_tot, expt_dict, device=dev)
 
     # run layer
