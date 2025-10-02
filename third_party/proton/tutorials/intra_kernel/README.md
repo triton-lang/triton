@@ -56,7 +56,7 @@ python3 example_dsl.py --op-measure
 # Enable warp sampling with specific warp IDs
 python3 example_dsl.py --warp-sampling --warp-ids "0,1,2,3"
 
-# High accuracy profiling (recommended)
+# High accuracy profiling
 python3 example_dsl.py --increase-accuracy
 ```
 
@@ -113,5 +113,6 @@ python3 example_dsl.py --increase-accuracy
 ### Operation Measurements
 - **Format**: Hatchet format (`.hatchet` files)
 - **Viewer**: `proton-viewer -m normalized_cycles <filename>.hatchet`
+(with `-m cycles` showing sum of all cycles across the GPU, `normalized_cycles` for per-warp averaged cycles)
 - **Content**: Scope-level performance metrics and statistics
 - **Note**: Cycle counts are averaged across warps/CTAs
