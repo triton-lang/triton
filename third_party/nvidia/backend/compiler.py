@@ -125,7 +125,6 @@ class CUDAOptions:
     max_num_imprecise_acc_default: bool = None
     extern_libs: dict = None
     debug: bool = False
-    consan: bool = False
     backend_name: str = 'cuda'
     sanitize_overflow: bool = True
     arch: str = None
