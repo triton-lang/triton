@@ -308,7 +308,6 @@ void init_triton_ir(py::module &&m) {
       .value("TF32", InputPrecision::TF32)
       .value("TF32x3", InputPrecision::TF32x3)
       .value("IEEE", InputPrecision::IEEE)
-      .value("BF16", InputPrecision::BF16)
       .value("BF16x3", InputPrecision::BF16x3)
       .value("BF16x6", InputPrecision::BF16x6)
       .value("BF16x9", InputPrecision::BF16x9)
