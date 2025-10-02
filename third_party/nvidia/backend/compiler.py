@@ -171,7 +171,7 @@ class CUDABackend(BaseBackend):
 
     def parse_options(self, opts) -> Any:
         # Enable debug mode for ConSan, so device-side assertions are not optimized out
-        if opts["instrumentation_mode"] == "consan":
+        if "instrumentation_mode" in opts and opts["instrumentation_mode"] == "consan":
             opts["debug"] = True
 
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
