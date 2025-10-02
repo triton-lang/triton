@@ -204,25 +204,26 @@ private:
         {str_attr("offset")});
     auto lowerInst = [&](RewriterBase &rewriter, Location loc,
                          ArrayRef<Value> inVals, Value vecAddr, int idx,
-                         VectorType vecTy) {
-      Value dsRead;
+                         VectorType vTy) {
+      Value dsReadTr;
       if (bitwidth == 16) {
-        dsRead = rewriter.create<ROCDL::ds_read_tr16_b64>(loc, vecTy, vecAddr);
+        dsReadTr = rewriter.create<ROCDL::ds_read_tr16_b64>(loc, vTy, vecAddr);
       } else {
-        auto numElems = vecTy.getNumElements();
+        assert(bitwidth == 8);
+        auto numElems = vTy.getNumElements();
         auto numElemsI32 = (numElems * bitwidth / 32);
-        auto v = VectorType::get(numElemsI32, i32_ty);
+        auto ty = VectorType::get(numElemsI32, i32_ty);
         if (isPackedLoad) {
-          dsRead = rewriter.create<ROCDL::ds_read_tr4_b64>(loc, v, vecAddr);
+          dsReadTr = rewriter.create<ROCDL::ds_read_tr4_b64>(loc, ty, vecAddr);
         } else {
-          dsRead = rewriter.create<ROCDL::ds_read_tr8_b64>(loc, v, vecAddr);
+          dsReadTr = rewriter.create<ROCDL::ds_read_tr8_b64>(loc, ty, vecAddr);
         }
       }
       AMD::addLocalLoadNoAliasScope(
-          op, dyn_cast<LLVM::AliasAnalysisOpInterface>(dsRead.getDefiningOp()));
-      Value vecVal = b.bitcast(dsRead, vecTy);
+          op, cast<LLVM::AliasAnalysisOpInterface>(dsReadTr.getDefiningOp()));
+      Value vecVal = b.bitcast(dsReadTr, vTy);
       SmallVector<Value> loadedVals;
-      for (int v = 0; v < vecTy.getNumElements(); v++) {
+      for (int v = 0; v < vTy.getNumElements(); v++) {
         loadedVals.push_back(
             b.extract_element(llvmElemTy, vecVal, b.i32_val(v)));
       }
