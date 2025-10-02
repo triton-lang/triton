@@ -420,7 +420,7 @@ def routing_triton_ep_sharded(x, logits, n_expts_act, sm_first=False, expt_indx=
 def routing(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, expt_assignment=None, EP=1, TP=1,
             backend="triton_ep_sharded") -> Tuple[RoutingData, GatherIndx, ScatterIndx, ReduceScatterMetadata]:
     if _is_distributed_launch():
-        assert backend in ["torch", "triton"], "backend must be either 'torch' or 'triton'"
+        assert backend in ["torch", "triton", "triton_ep_sharded"], "backend must be either 'torch' or 'triton'"
         if backend == "torch":
             return routing_torch(x, logits, n_expts_act, sm_first, expt_indx, n_rows, EP, TP)
         elif backend == "triton":
