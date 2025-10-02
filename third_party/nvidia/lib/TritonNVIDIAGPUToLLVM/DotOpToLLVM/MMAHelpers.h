@@ -63,13 +63,13 @@ public:
         std::optional<unsigned> MNdim = std::nullopt) {
     auto ctx = rewriter.getContext();
     auto kOffset = str_attr("offset");
-    auto ll = toLinearLayout(memTy);
-    // Handle subviews by composing with the identity of the right shape
-    auto shape = memTy.getShape();
-    auto outDims = to_vector(ll.getOutDimNames());
-    auto identity = LinearLayout::identity1D(shape[0], outDims[0], outDims[0]) *
-                    LinearLayout::identity1D(shape[1], outDims[1], outDims[1]);
-    auto llInv = identity.invertAndCompose(ll);
+    // The handling of subviews is not as fine as it could be
+    // We could compose with the identity of the memTy.getShape()
+    // (at the moment llInv will be of allocShape), but then
+    // we would need to handle the getReps part more carefuly
+    // This way we could support more subviews that we don't
+    // We can implement this generalisation in the future if needed
+    auto llInv = toLinearLayout(memTy).pseudoinvert();
     auto bitwidth = memTy.getElementType().getIntOrFloatBitWidth();
     if (isFp4) {
       // hacky but well
