@@ -3932,3 +3932,23 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.th
     tt.return
   }
 }
+
+// -----
+
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 32]], warp = [[32, 0], [64, 0], [16, 0]], block = []}>
+#tmem2 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, unpacked = false>
+// CHECK-LABEL: remove_layout_tmem_store
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @remove_layout_tmem_store(
+    %p_102: tensor<128x64xf32, #linear>
+  ) {
+      %true = arith.constant true
+      %acc_49 = ttng.tmem_alloc : () -> !ttg.memdesc<128x64xbf16, #tmem2, #ttng.tensor_memory, mutable>
+      %acc_109 = arith.truncf %p_102 : tensor<128x64xf32, #linear> to tensor<128x64xbf16, #linear>
+      // CHECK-NOT: ttg.convert_layout
+      %acc_110 = ttg.convert_layout %acc_109 : tensor<128x64xbf16, #linear> -> tensor<128x64xbf16, #blocked3>
+      ttng.tmem_store %acc_110, %acc_49, %true : tensor<128x64xbf16, #blocked3> -> !ttg.memdesc<128x64xbf16, #tmem2, #ttng.tensor_memory, mutable>
+      tt.return
+  }
+}
