@@ -668,7 +668,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         kernel = kernel_cache.get(key, None)
 
         # Kernel is not cached; we have to compile.
-        if kernel is None:
+        if kernel is None or knobs.compilation.always_compile:
             options, signature, constexprs, attrs = self._pack_args(backend, kwargs, bound_args, specialization,
                                                                     options)
 
