@@ -39,11 +39,11 @@ class ExptData:
     # token_offs_raw[i] is the offset of the first token routed
     # to expert i in an expert-sorted array
     token_offs_raw: torch.Tensor
-    # token_offs_pad_data[i, :] is the offset of the first token routed
+    # token_offs_pad_data[:, i] is the offset of the first token routed
     # to expert i in an expert-sorted array, assuming histogram
     # rounded to the next multiple of `block = 16 * i`
     token_offs_pad_data: torch.Tensor
-    # block_id_map_data[i] contain one value for each `pid`` launched by
+    # block_id_map_data[i] contain one value for each `pid` launched by
     # the matrix multiplication kernel launched with BLOCK_M=i*16:
     # - the value is -1 if the `pid` has no work to do
     # - otherwise, the value is two int16 (packed as an int32) that
@@ -130,7 +130,7 @@ class SortTokens(torch.autograd.Function):
         combined_indx = torch.empty(n_gates_pad * 2, dtype=torch.int32, device=device)
         gate_scal = torch.empty(n_gates_pad, dtype=dtype, device=device)
         token_offs_combined = empty_aligned((block_m_num + 1, n_expts_tot + 1), torch.int32, device, MEMSET_BLOCK_A)
-        block_pid_map = empty_aligned((block_m_num, max_n_tiles(n_expts_tot, n_gates_pad)), torch.int32, device,
+        block_pid_map = empty_aligned((block_m_num, get_max_n_tiles(n_expts_tot, n_gates_pad)), torch.int32, device,
                                       MEMSET_BLOCK_A)
         # slice padded allocations
         combine_indx = combined_indx[:n_gates_pad]
@@ -202,9 +202,11 @@ def empty_aligned(shape, dtype, device, pad_size):
     return ret[ret_slices]
 
 
-def max_n_tiles(n_expts_tot, n_gates):
+def get_max_n_tiles(n_expts_tot, n_gates):
     if n_gates <= n_expts_tot:
         return n_gates
+    # ceil_div(n_gates - n_experts + 1, d_tile) + n_experts - 1
+    # ceil_div(x, y): -(-x // y)
     return n_expts_tot - 1 - ((n_expts_tot - n_gates - 1) // ExptData.block_ms()[0])
 
 
@@ -220,7 +222,7 @@ def compute_expt_data(expt_hist, n_expts_tot, n_gates):
     device = expt_hist.device
     token_offs_combined = empty_aligned((block_m_num + 1, n_expts_tot + 1), dtype=dtype, device=device,
                                         align=MEMSET_BLOCK)
-    block_pid_map = empty_aligned((block_m_num, max_n_tiles(n_expts_tot, n_gates)), dtype=dtype, device=device,
+    block_pid_map = empty_aligned((block_m_num, get_max_n_tiles(n_expts_tot, n_gates)), dtype=dtype, device=device,
                                   align=MEMSET_BLOCK)
     token_offs_raw, token_offs_pad = token_offs_combined[0], token_offs_combined[1:]
     n_memset_blocks = exact_div(block_pid_map.storage().size(), MEMSET_BLOCK)
@@ -306,10 +308,11 @@ def _filter_expt_data(expt_hist_out, expt_hist_inp, token_offs_raw_out, token_of
                 BLOCK=BLOCK)
     _compaction(token_offs_raw_out, _compact_expt_id, (token_offs_raw_inp, expt_filter, n_expts_tot), -1,
                 n_expts_tot + 1, BLOCK=BLOCK)
-    _compaction(token_offs_pad_out, _compact_expt_id, (token_offs_pad_inp, expt_filter, n_expts_tot), -1,
-                n_expts_tot + 1, BLOCK=BLOCK)
-    _compaction(block_pid_map_out, _compact_block_id_map, (block_pid_map_inp, expt_map, expt_filter, n_blocks), -1,
+    compacted_tile_count = _compaction(token_offs_pad_out, _compact_expt_id, (token_offs_pad_inp, expt_filter, n_expts_tot), -1, n_expts_tot + 1, BLOCK=BLOCK)
+    compacted_block_count = _compaction(block_pid_map_out, _compact_block_id_map, (block_pid_map_inp, expt_map, expt_filter, n_blocks), -1,
                 n_blocks, BLOCK=BLOCK)
+    # Record the total number of tiles in the trailing slot
+    tl.store(token_offs_pad_out + compacted_tile_count, compacted_block_count)
 
 
 def filter_expt_data(expt_data, expt_assignment, rank):
@@ -475,12 +478,7 @@ def compute_expt_data_torch(hist, n_expts_tot, n_gates):
     token_offs_raw = torch.cat((torch.zeros(1, device=device), token_offs_raw))
     token_offs_raw = token_offs_raw.int()
     # maximum number of tiles for all values of `block_m` considered
-    if n_gates <= n_expts_tot:
-        max_n_tiles = n_gates
-    else:
-        # ceil_div(n_gates - n_experts + 1, d_tile) + n_experts - 1
-        # ceil_div(x, y): -(-x // y)
-        max_n_tiles = n_expts_tot - 1 - ((n_expts_tot - n_gates - 1) // min(ExptData.block_ms()))
+    max_n_tiles = get_max_n_tiles(n_expts_tot, n_gates)
     # fill up tile offset/infos for each block
     token_offs_pad = dict()
     block_pid_map = dict()
