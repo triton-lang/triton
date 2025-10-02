@@ -460,8 +460,17 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   auto isFp4b = op.numBitsPerElementB == 4;
   auto allocShapeB = getAllocShape(bTensorTy, 0);
+  // [Instr shape twoCTAs]
+  // This division by 2 in 2CTA mode a bit subtle:
+  // The issue here is that in 2CTA you multiply in one instruction a tensor
+  // of shape MNK = 256, K, N, and you put it into TMEM of shape 128, K, N*2.
+  // So to compute the shapePerCTA, on the lhs we can look at the TMEM shape,
+  // but to compute the shapePerCTA on the rhs, we need to divide by 2.
+  // Something similar happens when we multiply by 2 the mmaSizeM when creating
+  // It's a massive code smell tho
   DotOpMmaSmemLoader bLoader = DotOpMmaSmemLoader::build(
-      loc, rewriter, bTensorTy, baseB, {mmaSizeK, mmaSizeN}, 5, isFp4b);
+      loc, rewriter, bTensorTy, baseB, {mmaSizeK, mmaSizeN / (twoCTAs ? 2 : 1)},
+      5, isFp4b);
 
   DotConversion::InstDesc desc{mmaSizeM, mmaSizeN, {numRepM, numRepN, numRepK},
                                transA,   transB,   interleaved,
@@ -523,6 +532,8 @@ void convertDot(const LLVMTypeConverter &typeConverter,
                           Value pred, Value useInitAcc,
                           const DotConversion::InstDesc &desc, int m, int n,
                           int k) {
+    // To understand this multiplication by 2, see the comment
+    // [Instr shape twoCTAs]
     Value instDescriptor = createInstDescriptor(
         rewriter, op, twoCTAs ? desc.mmaSizeM * 2 : desc.mmaSizeM,
         desc.mmaSizeN, desc.transA, desc.transB);
