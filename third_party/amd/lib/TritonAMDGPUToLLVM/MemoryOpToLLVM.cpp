@@ -202,54 +202,39 @@ private:
     cvt = cvt.sublayout(
         {str_attr("register"), str_attr("lane"), str_attr("warp")},
         {str_attr("offset")});
+    auto lowerInst = [&](RewriterBase &rewriter, Location loc,
+                         ArrayRef<Value> inVals, Value vecAddr, int idx,
+                         VectorType vecTy) {
+      Value dsRead;
+      if (bitwidth == 16) {
+        dsRead = rewriter.create<ROCDL::ds_read_tr16_b64>(loc, vecTy, vecAddr);
+      } else {
+        auto numElems = vecTy.getNumElements();
+        auto numElemsI32 = (numElems * bitwidth / 32);
+        auto v = VectorType::get(numElemsI32, i32_ty);
+        if (isPackedLoad) {
+          dsRead = rewriter.create<ROCDL::ds_read_tr4_b64>(loc, v, vecAddr);
+        } else {
+          dsRead = rewriter.create<ROCDL::ds_read_tr8_b64>(loc, v, vecAddr);
+        }
+      }
+      AMD::addLocalLoadNoAliasScope(
+          op, dyn_cast<LLVM::AliasAnalysisOpInterface>(dsRead.getDefiningOp()));
+      Value vecVal = b.bitcast(dsRead, vecTy);
+      SmallVector<Value> loadedVals;
+      for (int v = 0; v < vecTy.getNumElements(); v++) {
+        loadedVals.push_back(
+            b.extract_element(llvmElemTy, vecVal, b.i32_val(v)));
+      }
+
+      return loadedVals;
+    };
+
     SmallVector<Value> outVals = lowerLdSt(
         loc, rewriter.getContext(), cvt, {}, // Input for store, output for load
         llvmElemTy, smemObj.getBase(), calcPaddedOffset, affineOffset,
         maskSpanAffineOffset, laneId, warpId, rewriter, targetInfo, maxVecElems,
-        [&](RewriterBase &rewriter, Location loc, ArrayRef<Value> inVals,
-            Value vecAddr, int a, VectorType vecTy) {
-          SmallVector<Value> loadedVals;
-
-          if constexpr (isPackedLoad) {
-            assert(bitwidth == 8);
-            auto numElems = vecTy.getNumElements();
-            auto numElemsI32 = (numElems * bitwidth / 32);
-            auto i32VecTy = VectorType::get(numElemsI32, i32_ty);
-            auto dsReadOp =
-                rewriter.create<ROCDL::ds_read_tr4_b64>(loc, i32VecTy, vecAddr);
-            auto res = b.bitcast(dsReadOp.getResult(), vecTy);
-            Value vecVal = res.getResult();
-            for (int v = 0; v < vecTy.getNumElements(); v++) {
-              loadedVals.push_back(
-                  b.extract_element(llvmElemTy, vecVal, b.i32_val(v)));
-            }
-          } else if (bitwidth == 16) {
-            auto dsReadOp =
-                rewriter.create<ROCDL::ds_read_tr16_b64>(loc, vecTy, vecAddr);
-            AMD::addLocalLoadNoAliasScope(op, dsReadOp);
-            Value vecVal = dsReadOp.getResult();
-            for (int v = 0; v < vecTy.getNumElements(); v++) {
-              loadedVals.push_back(
-                  b.extract_element(llvmElemTy, vecVal, b.i32_val(v)));
-            }
-          } else {
-            auto numElems = vecTy.getNumElements();
-            auto numElemsI32 = (numElems * bitwidth / 32);
-            auto i32VecTy = VectorType::get(numElemsI32, i32_ty);
-
-            auto dsReadOp =
-                rewriter.create<ROCDL::ds_read_tr8_b64>(loc, i32VecTy, vecAddr);
-            AMD::addLocalLoadNoAliasScope(op, dsReadOp);
-            auto res = b.bitcast(dsReadOp.getResult(), vecTy);
-            Value vecVal = res.getResult();
-            for (int v = 0; v < vecTy.getNumElements(); v++) {
-              loadedVals.push_back(
-                  b.extract_element(llvmElemTy, vecVal, b.i32_val(v)));
-            }
-          }
-
-          return loadedVals;
-        });
+        lowerInst);
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, retTy);
     rewriter.replaceOp(op, result);
     return success();
