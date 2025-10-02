@@ -400,7 +400,7 @@ def routing_triton_ep_sharded(x, logits, n_expts_act, sm_first=False, expt_indx=
         logits, n_expts_act, sm_first=sm_first, expt_indx=None, all_gather=False, n_rows=n_rows)
     y_ep_local = convert_dp_to_ep(x, expt_assignment, expt_indx, dispatch_indx.src_indx)
     expt_data_local = filter_expt_data(rdata_global.expt_data, expt_assignment, rank)
-    rdata_ep_local = RoutingData(
+    routing_data = RoutingData(
         gate_scal=rdata_global.gate_scal,
         expt_hist=expt_data_local.hist,
         n_expts_tot=expt_assignment.n_expts_per_shard[rank],
@@ -409,7 +409,7 @@ def routing_triton_ep_sharded(x, logits, n_expts_act, sm_first=False, expt_indx=
     )
     return (
         y_ep_local,
-        rdata_ep_local,
+        routing_data,
         None,
         None,
         ReduceScatterMetadata(input_split_sizes=None, ep_indx=expt_indx, combine_indx=combine_indx, dispatch_indx=dispatch_indx, EP=EP, TP=TP),
@@ -418,7 +418,7 @@ def routing_triton_ep_sharded(x, logits, n_expts_act, sm_first=False, expt_indx=
 
 
 def routing(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, expt_assignment=None, EP=1, TP=1,
-            backend="triton_ep_sharded") -> Tuple[RoutingData, GatherIndx, ScatterIndx, ReduceScatterMetadata]:
+            backend="triton_ep_sharded") -> Tuple[torch.Tensor, RoutingData, GatherIndx, ScatterIndx, Optional[ReduceScatterMetadata]]:
     if _is_distributed_launch():
         assert backend in ["torch", "triton", "triton_ep_sharded"], "backend must be either 'torch' or 'triton'"
         if backend == "torch":
@@ -430,7 +430,8 @@ def routing(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None,
         else:
             raise ValueError(f"Unknown backend: {backend}")
     else:
-        return x, *triton_kernels.routing.routing(logits, n_expts_act, sm_first, expt_indx, EP, n_rows), None
+        routing_data, gather_indx, scatter_indx, expt_indx = triton_kernels.routing.routing(logits, n_expts_act, sm_first, expt_indx, EP, n_rows)
+        return x, routing_data, gather_indx, scatter_indx, None
 
 
 # The following dummy methods simulate the behavior of distributed operations
