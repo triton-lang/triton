@@ -3084,7 +3084,7 @@ def get_test_dot_base_cases():
     return [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype, 1, None)
             for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
             for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
-            for input_precision in ['tf32', 'tf32x3', 'ieee', 'bf16', 'bf16x3']
+            for input_precision in ['tf32', 'tf32x3', 'ieee', 'bf16x3', 'bf16x6', 'bf16x9']
             for in_dtype, out_dtype in [('float16', 'float16'), ('float16',
                                                                  'float32'), ('float32',
                                                                               'float32'), ('float64', 'float64')]
@@ -3238,7 +3238,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip(f"{in_dtype} only supported on CDNA4 and gfx12")
             if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
                 pytest.skip(f"{in_dtype} only supported on CDNA3")
-            if not ((input_precision == "bf16x3") or (input_precision == "ieee") or
+            if not ((input_precision == "bf16x3") or (input_precision == "bf16x6") or
+                    (input_precision == "bf16x9") or (input_precision == "ieee") or
                     (input_precision == "tf32" and is_hip_cdna3())):
                 pytest.skip(f"{input_precision} not supported on HIP")
             if kpack == 2 and in_dtype == 'int8' and K < 64:
