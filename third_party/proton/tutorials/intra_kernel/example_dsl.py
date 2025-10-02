@@ -86,14 +86,13 @@ def config_helper(description: str):
 
 
 @triton.jit
-def add_kernel(
-    x_ptr,  # *Pointer* to first input vector.
-    y_ptr,  # *Pointer* to second input vector.
-    output_ptr,  # *Pointer* to output vector.
-    n_elements,  # Size of the vector.
-    BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
-    # NOTE: `constexpr` so it can be used as a shape value.
-):
+def add_kernel(x_ptr,  # *Pointer* to first input vector.
+               y_ptr,  # *Pointer* to second input vector.
+               output_ptr,  # *Pointer* to output vector.
+               n_elements,  # Size of the vector.
+               BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
+               # NOTE: `constexpr` so it can be used as a shape value.
+               ):
     pl.enter_scope("kernel")
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
@@ -113,7 +112,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
     output = torch.empty_like(x)
     assert x.device == DEVICE and y.device == DEVICE and output.device == DEVICE
     n_elements = output.numel()
-    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
+    grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]), )
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=NUM_WARPS)
     return output
 
@@ -201,12 +200,8 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     pl.enter_scope("blocked_matmul_pipelined_kernel")
 
     # Allocate 2 buffers for each A and B.
-    a_smem = gl.allocate_shared_memory(
-        dtype, [2] + a_desc.block_type.shape, a_desc.layout
-    )
-    b_smem = gl.allocate_shared_memory(
-        dtype, [2] + b_desc.block_type.shape, b_desc.layout
-    )
+    a_smem = gl.allocate_shared_memory(dtype, [2] + a_desc.block_type.shape, a_desc.layout)
+    b_smem = gl.allocate_shared_memory(dtype, [2] + b_desc.block_type.shape, b_desc.layout)
     index = 0
 
     pid_m = gl.program_id(axis=0)
@@ -215,9 +210,7 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     off_n = pid_n * BLOCK_N
 
     mma_layout: gl.constexpr = pick_wgmma_layout(dtype, BLOCK_M, BLOCK_N, num_warps)
-    acc = warpgroup_mma_init(
-        gl.zeros((BLOCK_M, BLOCK_N), dtype=gl.float32, layout=mma_layout)
-    )
+    acc = warpgroup_mma_init(gl.zeros((BLOCK_M, BLOCK_N), dtype=gl.float32, layout=mma_layout))
 
     bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
@@ -241,7 +234,7 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
         # flight, we can overlap the WGMMA by waiting first, then issuing the
         # async WGMMA.
         with pl.scope("wgmma_wait"):
-            acc = warpgroup_mma_wait(num_outstanding=0, deps=(acc,))
+            acc = warpgroup_mma_wait(num_outstanding=0, deps=(acc, ))
 
         with pl.scope("wgmma_issue"):
             acc = warpgroup_mma(a, b, acc, is_async=True)
@@ -252,7 +245,7 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
 
     # Wait for the last WGMMA to complete.
     with pl.scope("wgmma_last_wait"):
-        acc = warpgroup_mma_wait(num_outstanding=0, deps=(acc,))
+        acc = warpgroup_mma_wait(num_outstanding=0, deps=(acc, ))
 
     mbarrier.invalidate(bar)
 
