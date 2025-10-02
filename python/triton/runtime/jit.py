@@ -541,13 +541,13 @@ class JitFunctionInfo:
     jit_function: JITFunction
 
 
-def compute_cache_key(kernel_key_cache, specialization, options, knobs_hash):
-    key = (tuple(specialization), str(options), str(knobs_hash))
+def compute_cache_key(kernel_key_cache, specialization, options, knobs_key):
+    key = (tuple(specialization), str(options), str(knobs_key))
     cache_key = kernel_key_cache.get(key, None)
     if cache_key is not None:
         return cache_key
 
-    cache_key = str(specialization) + str(options) + str(knobs_hash)
+    cache_key = str(specialization) + str(options) + str(knobs_key)
     kernel_key_cache[key] = cache_key
     return cache_key
 
@@ -664,8 +664,8 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
 
-        knobs_hash = knobs.get_cache_hash()
-        key = compute_cache_key(kernel_key_cache, specialization, options, knobs_hash)
+        knobs_key = knobs.get_cache_key()
+        key = compute_cache_key(kernel_key_cache, specialization, options, knobs_key)
         kernel = kernel_cache.get(key, None)
 
         # Kernel is not cached; we have to compile.

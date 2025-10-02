@@ -291,12 +291,13 @@ class base_knobs:
             delattr(self, knob)
         return self
 
-    def get_cache_hash(self) -> str:
-        hash = ""
+    def get_cache_key(self) -> dict[str, Any]:
+        key = {}
         for [name, knob] in self.knob_descriptors.items():
-            if name in get_cache_invalidating_env_var_names():
-                hash += name + knob.get() + "_"
-        return hash
+            # print(f"DEBUG: name: {knob.key}, knob: {self.knobs[name]}")
+            if knob.key in get_cache_invalidating_env_var_names():
+                key[knob.key] = self.knobs[name]
+        return key
 
     @contextmanager
     def scope(self) -> Generator[None, None, None]:
@@ -538,12 +539,19 @@ amd = amd_knobs()
 proton = proton_knobs()
 
 
-def get_cache_hash() -> str:
-    return build.get_cache_hash() + redis.get_cache_hash() + \
-    cache.get_cache_hash() + compilation.get_cache_hash() + \
-    autotuning.get_cache_hash() + runtime.get_cache_hash() + \
-    language.get_cache_hash() + nvidia.get_cache_hash() + \
-    amd.get_cache_hash() + proton.get_cache_hash()
+def get_cache_key() -> dict[str, Any]:
+    key = {}
+    key.update(build.get_cache_key())
+    key.update(redis.get_cache_key())
+    key.update(cache.get_cache_key())
+    key.update(compilation.get_cache_key())
+    key.update(autotuning.get_cache_key())
+    key.update(runtime.get_cache_key())
+    key.update(language.get_cache_key())
+    key.update(nvidia.get_cache_key())
+    key.update(amd.get_cache_key())
+    key.update(proton.get_cache_key())
+    return key
 
 
 def refresh_knobs():
