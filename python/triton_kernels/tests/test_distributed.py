@@ -33,13 +33,9 @@ class _DistributedContext:
 
 
 def _distributed_worker(rank, fn, world_size, kwargs):
-    dist.init_process_group(
-        backend="nccl",
-        init_method="env://",
-        world_size=world_size,
-        rank=rank,
-    )
-    torch.cuda.set_device(rank)
+    dev = f"cuda:{rank}"
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, device_id=torch.device(dev))
+    torch.cuda.set_device(dev)
     try:
         worker_ctx = _DistributedContext(is_worker=True, world_size=dist.get_world_size())
         call_kwargs = dict(kwargs)
@@ -70,8 +66,6 @@ def distributed_launcher(request):
     os.environ["WORLD_SIZE"] = str(n_gpus)
     os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
     os.environ.setdefault("MASTER_PORT", str(master_port))
-    os.environ["PYTEST_DISTRIBUTED_WORKER"] = "1"
-
     mp.spawn(
         _distributed_worker,
         args=(request.function, n_gpus, call_kwargs),
