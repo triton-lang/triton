@@ -70,7 +70,7 @@ def distributed_launcher(request):
         return _DistributedContext(is_worker=True, world_size=world_size_env)
 
     param = getattr(request, "param", None)
-    world_sizes = [1] if param is None else param.get("n_gpus", [1])
+    world_sizes = [1] if param is None else param
     if any(ws <= 0 for ws in world_sizes):
         raise ValueError("GPU counts must be positive integers")
 
