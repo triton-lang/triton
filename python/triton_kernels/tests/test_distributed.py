@@ -1,5 +1,4 @@
 import contextlib
-import functools
 import os
 import socket
 
@@ -51,7 +50,6 @@ def distributed_test(*, n_gpus):
 
     def decorator(fn):
         @pytest.mark.parametrize("n_gpus", n_gpus_list)
-        @functools.wraps(fn)
         def wrapped(*args, n_gpus, **kwargs):
             if not torch.cuda.is_available():
                 pytest.skip("CUDA required for distributed GPU test")
