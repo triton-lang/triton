@@ -3800,7 +3800,7 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
     if (cast<ArrayAttr>(attr.getValue()).size() != numResults) {
       return op->emitOpError("does not have expected number of output "
                              "partition sets in attr ")
-             << kPartitionAttrName << "; should match number of results";
+             << attr.getName() << "; should match number of results";
     }
 
     // Verify that union of op output partitions is a subset of op partitions
