@@ -120,6 +120,7 @@ def reduce_scatter(
                     raise NotImplementedError(f"Reduce operation {op} is not implemented.")
             return output_tensor.to(original_dtype)
         elif metadata and metadata.backend == "triton_ep_sharded":  # ep sharded
+            assert metadata.gather_indx is not None and metadata.scatter_indx is not None
             output = convert_ep_to_dp(input_tensor, expt_assignment, metadata.ep_indx, metadata.gather_indx.src_indx)
             output = reduce_grouped(output, contig_group_size=n_expts_act)[0].squeeze(0)
             return output
@@ -387,7 +388,7 @@ def routing_triton_ep_sharded(x, logits, n_expts_act, sm_first=False, expt_indx=
     rank = dist.get_rank()
     routing_data, gather_indx, scatter_indx, expt_indx = triton_kernels.routing.routing(
         logits, n_expts_act, sm_first=sm_first, expt_indx=None, all_gather=True, n_rows=n_rows)
-    y = convert_dp_to_ep(x, expt_assignment, expt_indx, scatter_indx.src_indx)
+    x = convert_dp_to_ep(x, expt_assignment, expt_indx, scatter_indx.src_indx)
     expt_data = filter_expt_data(routing_data.expt_data, expt_assignment, rank)
     routing_data = RoutingData(
         gate_scal=routing_data.gate_scal,
@@ -400,7 +401,7 @@ def routing_triton_ep_sharded(x, logits, n_expts_act, sm_first=False, expt_indx=
                                      scatter_indx=scatter_indx, EP=EP, TP=TP)
 
     return (
-        y,
+        x,
         routing_data,
         metadata,
     )
