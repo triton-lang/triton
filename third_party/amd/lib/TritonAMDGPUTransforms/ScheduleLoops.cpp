@@ -178,23 +178,82 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
   return getDotEncoding(user->getResult(0), opIdx, vecSize);
 }
 
-std::optional<triton::gpu::PaddedSharedEncodingAttr>
-composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
-                    ttg::TensorOrMemDesc srcTy, ArrayRef<unsigned> order,
-                    ArrayRef<unsigned> sharedOrder, unsigned bitWidth) {
+bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
+                               ttg::SharedEncodingTrait sharedEnc,
+                               tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                               const tt::AMD::TargetInfo &targetInfo) {
+  // If we have a single buffer we would require another barrier after the
+  // local_reads so instead we fall back to pipeline with registers
+  // Removing this check will create incorrect IR, see
+  // MembarUtility.h:membarFilter
+  if (numBuffers <= 1)
+    return false;
+
+  // Compute the final vecSize we can use for the combination of sourceEncoding
+  // and sharedEncoding. We can only use AsyncCopy if the target supports the
+  // requested or a smaller vecSize because we cannot stride when loading
+  // directly to lds
+
+  // Check that the src and dst encoding result in a valid direct-to-lds size.
+  // Note that this does not work for padded encodings because we require
+  // CoalesceAsyncCopy to rewrite the blocked encoding to guarantee this. So the
+  // layout selection already ensures this precondition
+  if (sharedEnc && !isa<ttg::PaddedSharedEncodingAttr>(sharedEnc)) {
+    auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
+    auto regLayout = triton::gpu::toLinearLayout(srcTy);
+    // It's the allocation so we trim the multibuffer dimension
+    auto srcShape = srcTy.getShape();
+    triton::LinearLayout sharedLayout;
+    sharedLayout = triton::gpu::toLinearLayout(srcShape, sharedEnc);
+    auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+
+    unsigned vecSize = regToSharedLayout.getNumConsecutiveInOut();
+    unsigned elemBitWidth = triton::getPointeeBitWidth(srcTy);
+
+    if (fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo) == 0)
+      return false;
+  }
+
+  // Checks whether the global pointer's contiguity and mask alignment allows
+  // for at least 32 bit wide loads
+  return triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis);
+}
+
+// On GFX9 we can only add padding after each direct-to-lds load (hw requires
+// warps to write contiguous to shared memory). Therefore, with 64 lanes we
+// can add padding in intervals of 256 bytes for dword loads and 1024 bytes
+// for dwordx4 loads. To avoid bank conflicts when reading the tensor in MFMA
+// layout we want to stagger continuous rows (nonKDim) by adding padding to
+// shift their start to different shared memory banks. For MFMA layouts
+// we read data from up to 16 consecutive rows which means we need to pad
+// blocks of 16 continuous rows. We compute a linear mapping from logical
+// tensor elements to shared memory offsets which maps groups of 16 continuous
+// rows strided by 1024 bytes. If rows are 256bytes they need to be sepeated by
+// 4 rows in shared memory. Resulting in the following reordering:
+// logical order of rows:
+//  [row0, row16, row32, row 48, row1, row17, row33, row 49, row2, row17..]
+// Byte offsets of the rows depicted above:
+//  [0,    256,   512,   768,    1024, ..]
+// This naturally extends to different row sizes, e.g. for 128bytes:
+// [r0, r16, r32, r48, r64, r80, r96, r112, r1, r17, ..]
+// [0,  128, 256, 384, ..                 , 1024, ..]
+// Since we pad groups of 16 rows we need to have 16KB (16*1024) of data for
+// this layout
+// TODO (alex): implement smaller block sizes (with conflicts) + different
+// dtypes
+std::optional<ttg::PaddedSharedEncodingAttr>
+composePaddedLayoutCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
+                         ttg::TensorOrMemDesc srcTy, ArrayRef<unsigned> order,
+                         ArrayRef<unsigned> sharedOrder, unsigned bitWidth,
+                         bool useAsyncCopy) {
   auto *ctx = srcTy.getContext();
 
-  if (!isa<RankedTensorType>(srcTy))
-    return {};
-
-  // Check if we can load > 32 bit from source (requirement for AsyncCopy)
-  auto contig = ttg::getContigPerThread(cast<RankedTensorType>(srcTy));
-  if (!isa<RankedTensorType>(srcTy) || contig[order[0]] * bitWidth < 32) {
+  // NYI: padded layouts for tt.load->local_write
+  if (!useAsyncCopy) {
     return {};
   }
 
-  auto mfmaEnc =
-      dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(dotOpEnc.getParent());
+  auto mfmaEnc = dyn_cast<ttg::AMDMfmaEncodingAttr>(dotOpEnc.getParent());
   if (!mfmaEnc) {
     return {};
   }
@@ -226,6 +285,7 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
     return {};
   }
 
+  // NYI: make it generic for all dtypes
   if (bitWidth != 16) {
     return {};
   }
@@ -235,29 +295,9 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
     return {};
   }
 
-  // On GFX9 we can only add padding after each direct-to-lds load. Since we
-  // have 64 lanes and generally want to load 128bit per lane we end up with a
-  // padding interval of at least 1024bytes.
-  // To avoid bank conflicts when reading the tensor we want to stagger
-  // contiguous rows by adding padding to shift their start to different shared
-  // memory banks. For MFMA layouts we read data from up to 16 consecutive rows
-  // which means we need to place groups of 16 rows strided by 1024 bytes into
-  // shared memory. For this we compute a mapping from logical tensor rows to
-  // shared memory offset so rows strided by 16 are contiguous in LDS and repeat
-  // it until we hit 1024bytes. As an example assume one row is 256bytes which
-  // means we need to add row0 and row1 sepeated by 4 rows in shared memory:
-  // The resulting order of rows and their offsets are depicted below:
-  //  [row0, row16, row32, row 48, row1, row17, row33, row 49, row2, row17..]
-  //  [0,    256,   512,   768,    1024, ..] byte offsets
-  // This naturally extends to different row sizes, e.g. for 128bytes:
-  // [r0, r16, r32, r48, r64, r80, r96, r112, r1, r17, ..]
-  // [0,  128, 256, 384, ..                 , 1024, ..]
-  // This pattern works bank conflict free as long as the amount of data loaded
-  // is larger than 16KB.
-  // TODO (alex): implement smaller block sizes + different dtypes
-
-  // Create the 16 strided mapping from [contigDim, nonContigDim] -> offset.
+  // Determine row(contig) size
   unsigned contigSize = isKContig ? kDim : nonKDim;
+
   // We clamp contigSize to 256 and repeat the tile. Note this does not affect
   // performance because we are not splitting cache lines
   contigSize = std::min(256U, contigSize);
@@ -339,12 +379,23 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
       linearComponent, ctaLayout, srcTy.getShape());
 
   // We also need to align with dwordx4 or dword loads
-  unsigned byteWidth = std::max(bitWidth / 8u, 1u);
-  unsigned paddingInterval = 1024 / byteWidth;
+  unsigned elemByteWidth = std::max(bitWidth / 8u, 1u);
+  unsigned paddingInterval = 1024 / elemByteWidth;
   unsigned bankWidth = 4;
-  unsigned paddingInElems = (paddingInBanks * bankWidth) / byteWidth;
+  unsigned paddingInElems = (paddingInBanks * bankWidth) / elemByteWidth;
   return ttg::PaddedSharedEncodingAttr::get(
       ctx, {{paddingInterval, paddingInElems}}, linearComponent);
+}
+
+std::optional<ttg::PaddedSharedEncodingAttr> composePaddedLayout(
+    const tt::AMD::TargetInfo &targetInfo, ttg::DotOperandEncodingAttr dotOpEnc,
+    ttg::TensorOrMemDesc srcTy, ArrayRef<unsigned> order,
+    ArrayRef<unsigned> sharedOrder, unsigned bitWidth, bool useAsyncCopy) {
+  if (targetInfo.getISAFamily() == triton::AMD::ISAFamily::CDNA4) {
+    return composePaddedLayoutCDNA4(dotOpEnc, srcTy, order, sharedOrder,
+                                    bitWidth, useAsyncCopy);
+  }
+  return {};
 }
 
 // Adapted from
@@ -355,8 +406,11 @@ composePaddedLayout(triton::gpu::DotOperandEncodingAttr dotOpEnc,
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return true and get the shared encoding that
 // needs to be used to be compatible with users' layouts.
-std::optional<ttg::SharedEncodingTrait>
-getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
+std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEncAMD(
+    Operation *loadOp, triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    const triton::AMD::TargetInfo &targetInfo, bool useAsyncCopy) {
+  Value loadedValue = loadOp->getResult(0);
+
   llvm::SmallVector<ttg::SharedEncodingTrait> sharedEncs;
   for (Operation *user : loadedValue.getUsers()) {
     LDBG(" getSharedEncIfAllUsersAreDotEnc current user: " << *user);
@@ -372,7 +426,9 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
       tempAttr = dyn_cast<ttg::SharedEncodingTrait>(memDesc.getEncoding());
       // If the immediate user is ttg::LocalAllocOp, likely it's created in
       // TritonAMDGPUOptimizeDotOperands. We should just respect it.
-      if (!getSharedEncIfAllUsersAreDotEnc(userResult).has_value() &&
+      if (!getSharedEncIfAllUsersAreDotEncAMD(user, axisInfoAnalysis,
+                                              targetInfo, useAsyncCopy)
+               .has_value() &&
           !isa<ttg::LocalAllocOp>(user)) {
         return std::nullopt;
       }
@@ -403,18 +459,24 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
       }
 
       auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
-      if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
-        tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-            loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
-            ctaLayout, bitWidth, /*needTrans=*/false);
 
-        // Check if we can use padded layouts
-        if (triton::tools::getBoolEnv("TRITON_HIP_USE_PADDED_SHARED_LAYOUT")) {
-          if (auto maybePadded = composePaddedLayout(dotOpEnc, srcTy, order,
-                                                     sharedOrder, bitWidth);
-              maybePadded.has_value()) {
-            tempAttr = *maybePadded;
-          }
+      if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
+        // Determine if we can use padded layouts and fallback to swizzled
+        // layouts if not
+        bool canUseAsyncCopy = false;
+        if (useAsyncCopy && isa<tt::LoadOp>(loadOp)) {
+          canUseAsyncCopy = canBeConvertedToAsyncLoad(
+              2, cast<tt::LoadOp>(loadOp), {}, axisInfoAnalysis, targetInfo);
+        }
+        llvm::outs() << "Can use async copy: " << canUseAsyncCopy << "\n";
+        if (auto maybePadded =
+                composePaddedLayout(targetInfo, dotOpEnc, srcTy, order,
+                                    sharedOrder, bitWidth, canUseAsyncCopy)) {
+          tempAttr = *maybePadded;
+        } else {
+          tempAttr = ttg::SwizzledSharedEncodingAttr::get(
+              loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
+              ctaLayout, bitWidth, /*needTrans=*/false);
         }
         sharedEncs.push_back(tempAttr);
       } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
@@ -466,48 +528,6 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
   return maxVecSharedEnc;
 }
 
-bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
-                               Value alloc,
-                               tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                               const tt::AMD::TargetInfo &targetInfo) {
-  // If we have a single buffer we would require another barrier after the
-  // local_reads so instead we fall back to pipeline with registers
-  // Removing this check will create incorrect IR, see
-  // MembarUtility.h:membarFilter
-  if (numBuffers <= 1)
-    return false;
-
-  // Compute the final vecSize we can use for the combination of sourceEncoding
-  // and sharedEncoding. We can only use AsyncCopy if the target supports the
-  // requested or a smaller vecSize because we cannot stride when loading
-  // directly to lds
-
-  // Check that the src and dst encoding result in a valid direct-to-lds size.
-  // Note that this does not work for padded encodings because we require
-  // CoalesceAsyncCopy to rewrite the blocked encoding to guarantee this. So the
-  // layout selection already ensures this precondition
-  auto dstTy = cast<ttg::MemDescType>(alloc.getType());
-  if (!isa<ttg::PaddedSharedEncodingAttr>(dstTy.getEncoding())) {
-    auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
-    auto regLayout = triton::gpu::toLinearLayout(srcTy);
-    // It's the allocation so we trim the multibuffer dimension
-    auto srcShape = dstTy.getShape().take_back(srcTy.getRank());
-    triton::LinearLayout sharedLayout;
-    sharedLayout = triton::gpu::toLinearLayout(srcShape, dstTy.getEncoding());
-    auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
-
-    unsigned vecSize = regToSharedLayout.getNumConsecutiveInOut();
-    unsigned elemBitWidth = dstTy.getElementTypeBitWidth();
-
-    if (fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo) == 0)
-      return false;
-  }
-
-  // Checks whether the global pointer's contiguity and mask alignment allows
-  // for at least 32 bit wide loads
-  return triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis);
-}
-
 // Convert load ops into shared memory allocation loads and apply
 // multi-buffering based on the required number of buffers.
 LoadToStreamOpMap
@@ -553,14 +573,14 @@ createStreamOps(const LoadToInfoMap &loadToInfo, scf::ForOp &forOp,
     auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
     Value alloc = triton::createAlloc(forOp, ty, loadOp->getLoc(),
                                       info.sharedEncoding, numBuffers);
-    assert(alloc && "Failed to create alloc for the async load.");
+    assert(alloc && "Failed to create alloc for the pipelined load.");
     auto arch = getAMDArch(loadOp->getParentOfType<ModuleOp>());
     triton::AMD::TargetInfo targetInfo(arch ? arch->str() : "");
 
     // Replace the old load with multi-buffered loads
     if (useAsyncCopy &&
-        canBeConvertedToAsyncLoad(numBuffers, loadOp, alloc, axisInfoAnalysis,
-                                  targetInfo)) {
+        canBeConvertedToAsyncLoad(numBuffers, loadOp, info.sharedEncoding,
+                                  axisInfoAnalysis, targetInfo)) {
       loadToStreamOp[loadOp] = createAsyncCopy(loadOp, alloc, extractIdx);
     } else {
       loadToStreamOp[loadOp] = createStreamCopy(loadOp, alloc, extractIdx);
@@ -742,11 +762,10 @@ static Operation *bypassLDS(Operation *load, Operation *use) {
 
 LoadToInfoMap
 preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-               scf::ForOp &forOp, int numStages) {
+               scf::ForOp &forOp, int numStages, bool useAsyncCopy) {
   auto arch = getAMDArch(forOp->getParentOfType<ModuleOp>());
-  triton::AMD::ISAFamily isaFamily = triton::AMD::ISAFamily::Unknown;
-  if (arch)
-    isaFamily = triton::AMD::deduceISAFamily(*arch);
+  triton::AMD::TargetInfo targetInfo(arch.value_or("").str());
+  triton::AMD::ISAFamily isaFamily = targetInfo.getISAFamily();
 
   bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
   bool filterSmallVectors =
@@ -768,13 +787,14 @@ preprocessLoop(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
   LoadToInfoMap loadToInfo;
   for (const auto &[load, info] : loadOpToIndLevel) {
     auto [distance, use] = info;
-    auto newLoad = bypassLDS(load, use);
-    if (newLoad) {
+    if (auto newLoad = bypassLDS(load, use)) {
       loadToInfo[newLoad] = {nullptr, distance, use};
     } else {
       LDBG("Deduce shared encoding for: " << *load);
       auto sharedEncoding =
-          getSharedEncIfAllUsersAreDotEnc(load->getResult(0)).value_or(nullptr);
+          getSharedEncIfAllUsersAreDotEncAMD(load, axisInfoAnalysis, targetInfo,
+                                             useAsyncCopy)
+              .value_or(nullptr);
       loadToInfo[load] = {sharedEncoding, distance, use};
       LDBG("Populate loadInfo with shared encoding: " << sharedEncoding);
     }
@@ -1298,7 +1318,8 @@ void pipelineLoop(scf::ForOp forOp, int numStages, bool useAsyncCopy,
   triton::AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(
       forOp->getParentOfType<ModuleOp>());
 
-  LoadToInfoMap loadToInfo = preprocessLoop(axisInfoAnalysis, forOp, numStages);
+  LoadToInfoMap loadToInfo =
+      preprocessLoop(axisInfoAnalysis, forOp, numStages, useAsyncCopy);
 
   if (loadToInfo.empty()) {
     LDBG("couldn't find any pipeline-able loads:\n" << *forOp);
