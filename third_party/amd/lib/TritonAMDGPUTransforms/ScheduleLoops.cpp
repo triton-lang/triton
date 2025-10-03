@@ -310,7 +310,7 @@ composePaddedLayoutForAsyncCopyCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
 
     if (mfmaNonKDim == 32) {
       // For mfma32 lane groups read 16 contiguous bytes
-      paddingBytes = 8;
+      paddingBytes = 16;
       // Because we load 32 rows we need to place every 16th row into the second
       // half of banks to spread loads over all banks. This is done by swapping
       // the bases representing offset 128 (32banks) and the base of the 16th
