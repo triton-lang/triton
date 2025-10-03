@@ -129,6 +129,8 @@ void setOutputPartition(Operation *op, int idx,
                         const SetVector<Partition *> &partitions);
 void setOutputPartition(Operation *op, int idx,
                         const SetVector<int> &partitionIds);
+void clearOutputPartitions(Operation *op);
+void removeOutputPartitions(Operation *op, int idx);
 
 } // namespace mlir::triton::gpu
 

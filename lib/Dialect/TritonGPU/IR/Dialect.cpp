@@ -3803,12 +3803,12 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
              << kPartitionAttrName << "; should match number of results";
     }
 
-    // Verify that op partitions are union of op output partitions
+    // Verify that union of op output partitions is a subset of op partitions
     if (!op->hasAttr(kPartitionAttrName))
       return op->emitOpError("does not have expected attribute ")
              << kPartitionAttrName << " which is expected for ops with attr "
              << kPartitionOutputsAttrName;
-    auto partitionIds = getPartitionIds(op);
+    auto partitionIds = *getPartitionIds(op);
 
     SetVector<int> outputPartitionIdsUnion;
     for (auto idx = 0; idx < *getNumOutputPartitionIds(op); idx++) {
@@ -3816,15 +3816,13 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
       for (auto partitionId : *outputPartitionIds)
         outputPartitionIdsUnion.insert(partitionId);
     }
-    auto outputPartitionIdsUnionVec = outputPartitionIdsUnion.takeVector();
-    std::sort(outputPartitionIdsUnionVec.begin(),
-              outputPartitionIdsUnionVec.end());
-    outputPartitionIdsUnion.insert(outputPartitionIdsUnionVec.begin(),
-                                   outputPartitionIdsUnionVec.end());
-    if (partitionIds != outputPartitionIdsUnion)
+    if (!std::all_of(outputPartitionIdsUnion.begin(),
+                     outputPartitionIdsUnion.end(),
+                     [&](int id) { return partitionIds.contains(id); })) {
       return op->emitOpError("partition ids in attr ")
              << kPartitionAttrName
              << " must be the union of all partition ids in " << attr.getName();
+    }
   }
 
   return success();
