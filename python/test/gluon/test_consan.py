@@ -86,40 +86,43 @@ def failing_kernel(input):
     ampere.async_copy.wait_group(0)
 
 
-def run_failing_kernel(device):
+def run_failing_kernel(device, enable_consan, mode):
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
         return torch.empty(size, device="cuda", dtype=torch.int8)
 
     triton.set_allocator(alloc_fn)
 
+    if enable_consan:
+        if mode == "env":
+            os.environ["TRITON_INSTRUMENTATION_MODE"] = "consan"
+            knobs.refresh_knobs()
+        elif mode == "knob":
+            knobs.compilation.instrumentation_mode = "consan"
+
     input = torch.randn((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
     failing_kernel[(1, )](input)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
-def test_cache_miss_knob(device, fresh_knobs, monkeypatch):
+def test_cache_miss_knob(device, monkeypatch):
     # First run without consan
-    knobs.compilation.enable_experimental_consan = False
-    run_failing_kernel(device)
+    run_in_process(run_failing_kernel, (device, False, "knob"))
 
     # Then run with consan and assert that if fails
-    knobs.compilation.enable_experimental_consan = True
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
-    result = run_in_process(run_failing_kernel, (device, ))
+    result = run_in_process(run_failing_kernel, (device, True, "knob"))
     assert "device-side assert" in str(result.exc)
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper")
 def test_cache_miss_env(device, monkeypatch):
     # First run without consan
-    knobs.compilation.enable_experimental_consan = False
-    run_failing_kernel(device)
+    run_in_process(run_failing_kernel, (device, False, "env"))
 
     # Then run with consan and assert that if fails
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
-    result = run_in_process(run_failing_kernel, (device, ))
+    result = run_in_process(run_failing_kernel, (device, True, "env"))
     assert "device-side assert" in str(result.exc)
 
 
@@ -133,8 +136,9 @@ def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch):
             assert "Buffer being accessed has outstanding writes" in result.driver_stderr_output
         return
 
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -182,8 +186,9 @@ def test_tma_interleave_kernel(FAILURE, device, run_wrapper, monkeypatch):
             assert result.driver_stderr_output == ""
         return
 
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -240,8 +245,9 @@ def test_async_copy(FAILURE, device, run_wrapper, monkeypatch):
             assert result.driver_stderr_output == ""
         return
 
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -292,8 +298,9 @@ def test_tcgen5_mma(FAILURE, MEM_ACCESS_KIND, device, run_wrapper, monkeypatch):
             assert result.driver_stderr_output == ""
         return
 
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -355,8 +362,9 @@ def test_warpgroup_mma(FAILURE, device, run_wrapper, monkeypatch):
             assert result.driver_stderr_output == ""
         return
 
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -399,8 +407,9 @@ def test_warpgroup_mma2(FAILURE, device, run_wrapper, monkeypatch):
             assert result.driver_stderr_output == ""
         return
 
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -447,8 +456,9 @@ def test_tcgen5_mma_multibar(BUF_IDX, BAR_IDX, device, run_wrapper, monkeypatch)
             assert result.exc is None
             assert result.driver_stderr_output == ""
         return
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -505,8 +515,9 @@ def test_multibuffered_loop(FAILURE, device, run_wrapper, monkeypatch):
             assert result.driver_stderr_output == ""
         return
 
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -619,8 +630,9 @@ def test_multibuffered_wgmma_loop(FAILURE, device, run_wrapper, monkeypatch):
             assert result.driver_stderr_output == ""
         return
 
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -699,8 +711,9 @@ def test_ws_store_wait_load(FAILURE, device, run_wrapper, monkeypatch):
             assert result.exc is None
             assert result.driver_stderr_output == ""
         return
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -752,8 +765,9 @@ def test_ws_load_wait_store(FAILURE, device, run_wrapper, monkeypatch):
             assert result.exc is None
             assert result.driver_stderr_output == ""
         return
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -805,8 +819,9 @@ def test_ws_two_loads_two_bars(MISSING_BAR, device, run_wrapper, monkeypatch):
             assert result.exc is None
             assert result.driver_stderr_output == ""
         return
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -867,8 +882,9 @@ def test_ws_two_loads_one_bar(FAILURE, device, run_wrapper, monkeypatch):
             assert result.exc is None
             assert result.driver_stderr_output == ""
         return
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -929,8 +945,9 @@ def test_ws_two_loads_two_bars_loop(MISSING_BAR, device, run_wrapper, monkeypatc
             assert result.exc is None
             assert result.driver_stderr_output == ""
         return
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -1009,8 +1026,9 @@ def test_ws_load_ordering(FAILURE, device, run_wrapper, monkeypatch):
             assert result.exc is None
             assert result.driver_stderr_output == ""
         return
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -1073,8 +1091,9 @@ def test_ws_two_producers_two_consumers(MISSING_BAR, device, run_wrapper, monkey
             assert result.exc is None
             assert result.driver_stderr_output == ""
         return
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -1160,8 +1179,9 @@ def test_ws_different_warp_sizes(MISSING_BAR, device, run_wrapper, monkeypatch):
             assert result.exc is None
             assert result.driver_stderr_output == ""
         return
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -1229,8 +1249,9 @@ def test_ws_async_copy_commits(FAILURE, device, run_wrapper, monkeypatch):
             assert result.driver_stderr_output == ""
         return
 
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
         return torch.empty(size, device="cuda", dtype=torch.int8)
@@ -1292,8 +1313,9 @@ def test_ws_async_copy_wait_visibility(FAILURE, device, run_wrapper, monkeypatch
             assert result.driver_stderr_output == ""
         return
 
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
         return torch.empty(size, device="cuda", dtype=torch.int8)
@@ -1344,8 +1366,9 @@ def test_ws_wgmma_wait_visibility(FAILURE, device, run_wrapper, monkeypatch):
             assert result.driver_stderr_output == ""
         return
 
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
         return torch.empty(size, device="cuda", dtype=torch.int8)
@@ -1392,8 +1415,9 @@ def test_deadlock_two_partitions(device, run_wrapper, monkeypatch):
         assert "device-side assert" in str(result.exc)
         assert "Deadlock detected" in result.driver_stderr_output
         return
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -1426,8 +1450,9 @@ def test_deadlock_overarrival(device, run_wrapper, monkeypatch):
         assert "device-side assert" in str(result.exc)
         assert "Deadlock detected" in result.driver_stderr_output
         return
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -1455,8 +1480,9 @@ def test_deadlock_underarrival(device, run_wrapper, monkeypatch):
         assert "device-side assert" in str(result.exc)
         assert "Deadlock detected" in result.driver_stderr_output
         return
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -1491,8 +1517,9 @@ def test_deadlock_different_phases(device, run_wrapper, monkeypatch):
         assert result.exc is None
         assert result.driver_stderr_output == ""
         return
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -1526,8 +1553,9 @@ def test_deadlock_exempt_when_tma_signals(device, run_wrapper, monkeypatch):
         assert result.exc is None
         assert result.driver_stderr_output == ""
         return
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -1569,8 +1597,9 @@ def test_barrier_underflow(device, run_wrapper, monkeypatch):
         assert "device-side assert" in str(result.exc)
         assert "Barrier arrive underflow: current count would become negative" in result.driver_stderr_output
         return
-    monkeypatch.setenv("TRITON_ENABLE_EXPERIMENTAL_CONSAN", "1")
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
     monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
 
     # ConSan requires a global memory allocation
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):

@@ -19,6 +19,7 @@ from ._common import (
     make_matmul_repr,
     matmul_launch_metadata,
     swizzle2d,
+    threadfence_system,
 )
 
 
@@ -100,9 +101,13 @@ def _p_matmul_ogs(
              X_TMA_MODE: tl.constexpr,
              Y_TMA_MODE: tl.constexpr,
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
-             UPCAST_INDICES:tl.constexpr=False,
+             UPCAST_INDICES: tl.constexpr=False,
              SWAP_XW: tl.constexpr = False,
              IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False,
+             pYPtrs=None,
+             ScatterShardIndx=None,
+             reduce_rank=0,
+             n_reduce_shards: tl.constexpr = 1,
              ):
     # tl.static_assert(SWIZZLE_MX_VALUE is None, "NYI. Value swizzling")
 
@@ -199,7 +204,7 @@ def _p_matmul_ogs(
         tile_id1 = tl.program_id(0) - NUM_SMS
 
     # Keep track of local max for updating flexpoint scales.
-    USE_LOCAL_ABSMAX: tl.constexpr = (YActualScale is not None) and (not PER_BATCH_OUT_SCALE) and (not is_out_microscaled)
+    USE_LOCAL_ABSMAX: tl.constexpr = (YActualScale is not None) and (not PER_BATCH_OUT_SCALE) and (not is_out_microscaled) and (pYPtrs is None)
     if USE_LOCAL_ABSMAX:
         THREADS_PER_BLOCK: tl.constexpr = tl.extra.cuda.num_threads()
         local_absmax = tl.full([THREADS_PER_BLOCK], 0.0, tl.uint32)
@@ -360,7 +365,7 @@ def _p_matmul_ogs(
                 tl.device_assert(stride_y_k // stride_y_m == tl.cdiv(stride_y_k, stride_y_m))
                 split_k_row_offs = pid_k1 * (stride_y_k // stride_y_m)
                 offs_y_m = tl.where(mask_m, offs_y_m + split_k_row_offs, offs_y_m)
-        elif Y_TMA_MODE is None:
+        elif Y_TMA_MODE is None and pYPtrs is None:
             tl.static_assert(HAS_SCATTER)
             offs_y_m, mask_m = _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, start_m1 + offs_m, mask_m)
             MASK_ACC: tl.constexpr = USE_FLEXPOINT_SCALE
@@ -512,31 +517,55 @@ def _p_matmul_ogs(
                     out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtr.dtype.element_ty, pid=len(accs)*tile_id1 + a_i)
 
             out = out.to(YPtr.dtype.element_ty)
-            if USE_SCATTER_TMA:
-                # Convert -1 offsets to INT_MAX. We do this by clearing the leading bit. Note that
-                # there shouldn't be any other negative values.
-                offs_y_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
-                Y.scatter(out, offs_y_m, out_off_n)
-            elif Y_TMA_MODE == "dense":
-                out = tl.reshape(out, [1] + out.shape)
-                off_kz = pid_k * batch_size + start_z1
-                Y.store([off_kz, off_m1, out_off_n], out)
-            elif Y_TMA_MODE == "ragged":
-                out = tl.reshape(out, [1] + out.shape)
-                store_ragged(Y, start_m1, eM1, [pid_k, off_m1, out_off_n], out, ragged_dim=1)
+
+            if pYPtrs is None:
+                if USE_SCATTER_TMA:
+                    # Convert -1 offsets to INT_MAX. We do this by clearing the leading bit. Note that
+                    # there shouldn't be any other negative values.
+                    offs_y_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
+                    Y.scatter(out, offs_y_m, out_off_n)
+                elif Y_TMA_MODE == "dense":
+                    tl.device_print("dense tma")
+                    out = tl.reshape(out, [1] + out.shape)
+                    off_kz = pid_k * batch_size + start_z1
+                    Y.store([off_kz, off_m1, out_off_n], out)
+                elif Y_TMA_MODE == "ragged":
+                    out = tl.reshape(out, [1] + out.shape)
+                    store_ragged(Y, start_m1, eM1, [pid_k, off_m1, out_off_n], out, ragged_dim=1)
+                else:
+                    tl.static_assert(Y_TMA_MODE is None)
+                    offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
+                    mask_n = offs_y_n < yN
+                    mask = mask_m[:, None] & mask_n[None, :]
+                    offs_kzmn = pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
+                    tl.store(YPtr + offs_kzmn, out, mask=mask)
             else:
-                tl.static_assert(Y_TMA_MODE is None)
+                tl.static_assert(Y_TMA_MODE is None, "TMA is not supported with fused comms")
                 offs_y_n = out_off_n + tl.arange(0, OUT_BLOCK_N)
                 mask_n = offs_y_n < yN
-
-                YPtrs = YPtr + pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_m.to(index_type)[:, None] * stride_y_m + offs_y_n[None, :] * stride_y_n
                 mask = mask_m[:, None] & mask_n[None, :]
-                tl.store(YPtrs, out, mask=mask)
+                offs_kzmn = pid_k1.to(index_type) * stride_y_k + start_z1.to(index_type) * stride_y_z + offs_y_n[None, :] * stride_y_n +offs_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m
+                if ScatterShardIndx is not None:
+                    dst_shard_idx = tl.load(ScatterShardIndx + offs_y_m, mask=mask_m)
+                    for i in tl.static_range(n_reduce_shards):
+                        peer = dst_shard_idx * n_reduce_shards + (reduce_rank + i) % n_reduce_shards
+                        peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(YPtr.type.element_ty))
+                        tl.multiple_of(peer_Y_ptr, 16)
+                        tl.store(peer_Y_ptr[:, None] + offs_kzmn, out, mask=mask)
+                else:
+                    # full all gather
+                    for i in tl.static_range(n_reduce_shards):
+                        peer = (reduce_rank + i) % n_reduce_shards
+                        peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(YPtr.type.element_ty))
+                        tl.multiple_of(peer_Y_ptr, 16)
+                        tl.store(peer_Y_ptr + offs_kzmn, out, mask=mask)
 
     # Update the flexpoint scales
     if USE_LOCAL_ABSMAX:
         tl.atomic_max(YActualScale, compute_scale(local_absmax.to(tl.float32, bitcast=True), YPtr), sem="relaxed")
 
+    if pYPtrs is not None:
+        threadfence_system()
 
 _per_device_alloc_fns = {}
 def get_per_device_per_stream_alloc_fn(device):

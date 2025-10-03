@@ -2,7 +2,7 @@
 #include "amd/lib/TritonAMDGPUTransforms/PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 
-#define DEBUG_TYPE "tritonamdgpu-pipeline"
+#define DEBUG_TYPE "tritonamdgpu-pipeline-expand-loops"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -33,7 +33,7 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
   return tt::wrapInMaskOp(rewriter, op, pred);
 }
 
-void expandLoops(ModuleOp moduleOp, bool useAsyncCopy) {
+void expandLoops(ModuleOp moduleOp) {
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
   for (scf::ForOp forOp : loops) {
@@ -91,19 +91,11 @@ void expandLoops(ModuleOp moduleOp, bool useAsyncCopy) {
 
     if (failed(newForOp))
       continue;
-
-    forOp = *newForOp;
   }
 
   // NOTE: Leave empty for now, until we utilize customEpiloguePeeling
   DenseSet<ttg::MaskOp> peeledMaskOps;
   tt::resolveMaskOp(moduleOp, peeledMaskOps);
-
-  if (useAsyncCopy) {
-    llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
-    moduleOp.walk([&](ttg::AsyncWaitOp waitOp) { waitOps.insert(waitOp); });
-    tt::combineRedundantWaitOps(waitOps);
-  }
 }
 } // namespace
 
@@ -112,7 +104,14 @@ struct PipelinePass : impl::TritonAMDGPUPipelineBase<PipelinePass> {
 
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
-    expandLoops(moduleOp, useAsyncCopy);
+    lowerLoops(moduleOp, useAsyncCopy, usePingpong);
+    expandLoops(moduleOp);
+
+    if (useAsyncCopy) {
+      llvm::SmallSetVector<ttg::AsyncWaitOp, 8> waitOps;
+      moduleOp.walk([&](ttg::AsyncWaitOp waitOp) { waitOps.insert(waitOp); });
+      tt::combineRedundantWaitOps(waitOps);
+    }
 
     tt::removePipeliningAttributes(moduleOp);
   }

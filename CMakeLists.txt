@@ -70,10 +70,6 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE "Release")
 endif()
 
-if(NOT WIN32)
-  find_library(TERMINFO_LIBRARY tinfo)
-endif()
-
 if(TRITON_BUILD_UT)
   # This is an aggregate target for all unit tests.
   add_custom_target(TritonUnitTests)
