@@ -155,7 +155,8 @@ LogicalResult inferAutoLayouts(FuncOp func) {
         if (failed(updateEncoding(tiedArgs, info)))
           return failure();
       } else if (isa<scf::YieldOp>(op)) {
-        auto tiedArgs = getTiedArgs(op, use.getOperandNumber());
+        auto parentOp = op->getParentOp();
+        auto tiedArgs = getTiedArgs(parentOp, use.getOperandNumber());
         if (failed(updateEncoding(tiedArgs, info)))
           return failure();
       } else {

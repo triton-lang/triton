@@ -68,6 +68,26 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @infer_if1(%arg0: i1, %idx: i32) {
+    // CHECK-DAG: [[BLOCKED:#.*]] = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+    // CHECK: scf.if {{.*}} -> (tensor<64x64xf32, [[BLOCKED]]>
+    %0:1 = scf.if %arg0 -> (tensor<64x64xf32, #gluon.auto_encoding>) {
+      %x = arith.constant dense<1.0> : tensor<64x64xf32, #gluon.auto_encoding>
+      %1 = gluon.set_auto_layout %x : tensor<64x64xf32, #gluon.auto_encoding> -> tensor<64x64xf32, #blocked>
+      scf.yield %x : tensor<64x64xf32, #gluon.auto_encoding>
+    } else {
+      %y = arith.constant dense<2.0> : tensor<64x64xf32, #gluon.auto_encoding>
+      %2 = gluon.set_auto_layout %y : tensor<64x64xf32, #gluon.auto_encoding> -> tensor<64x64xf32, #blocked>
+      scf.yield %y : tensor<64x64xf32, #gluon.auto_encoding>
+    }
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
