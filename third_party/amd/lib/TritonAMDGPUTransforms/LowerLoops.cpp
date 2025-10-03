@@ -187,7 +187,6 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
 
       auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
       if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
-
         // Determine if we can use padded layouts and fallback to swizzled
         // layouts if not
         bool canUseAsyncCopy = false;
@@ -240,7 +239,8 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
     return std::nullopt;
   auto maxVecSharedEnc = sharedEncs.front();
 
-  // TODO add heuristic support for padded layouts
+  // TODO add support for padded layouts. Right now they will use a separate
+  // allocation
   for (auto sharedEnc : llvm::drop_begin(sharedEncs, 1)) {
     if (!equalSharedEncIgnoreVec(
             dyn_cast<ttg::SwizzledSharedEncodingAttr>(sharedEnc),
@@ -290,11 +290,10 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
     }
     auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
 
-    unsigned vecSize = regToSharedLayout.getNumConsecutiveInOut();
-    if (paddedEnc) {
-      vecSize = std::min(vecSize, paddedEnc.getMinInterval());
-    }
     unsigned elemBitWidth = tt::getPointeeBitWidth(srcTy);
+    unsigned vecSize = regToSharedLayout.getNumConsecutiveInOut();
+    if (paddedEnc)
+      vecSize = std::min(vecSize, paddedEnc.getMinInterval());
 
     if (fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo) == 0)
       return false;
