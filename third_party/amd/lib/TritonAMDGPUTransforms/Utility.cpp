@@ -206,8 +206,10 @@ composePaddedLayoutForAsyncCopyCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
   // below) and simply repeat the tile to the full tensor size.
   contigDim = std::min(512U / elemByteWidth, contigDim);
 
+  // We create linear bases mapping from [contigDim, nonContigDim] -> offset,
+  // representing the row reordering as described above
   std::vector<std::vector<int>> bases;
-  // Keep contigSize numbers of elments contig in shared memory
+  // Keep contigSize numbers of elments contiguous in shared memory
   for (int elemLog2 = 0; elemLog2 < llvm::Log2_32(contigDim); elemLog2++)
     bases.push_back({1 << elemLog2, 0});
 
