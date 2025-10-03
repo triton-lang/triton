@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <numeric>
 
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/OperationSupport.h"
@@ -3762,8 +3763,10 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
     for (auto &region : op->getRegions()) {
       for (auto &block : region.getBlocks()) {
         for (auto &childOp : block.getOperations()) {
-          if (isa<scf::YieldOp>(childOp))
+          if (isa<scf::YieldOp, ub::PoisonOp>(childOp)) {
+            // yield ops and ub.poison do not need partition ids
             continue;
+          }
           if (!childOp.hasAttr(kPartitionAttrName))
             return childOp.emitOpError("does not have expected attribute ")
                    << kPartitionAttrName
