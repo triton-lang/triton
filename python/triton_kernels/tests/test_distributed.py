@@ -1,6 +1,9 @@
 import contextlib
+import importlib
+import inspect
 import os
 import socket
+from typing import Optional
 
 import torch
 import torch.distributed as dist
@@ -21,7 +24,15 @@ def _get_free_tcp_port():
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
 
-def _distributed_worker(rank, fn, master_port, world_size, args, kwargs):
+class _DistributedContext:
+    __slots__ = ("is_worker", "world_size")
+
+    def __init__(self, *, is_worker: bool, world_size: Optional[int]):
+        self.is_worker = is_worker
+        self.world_size = world_size
+
+
+def _distributed_worker(rank, fn_module, fn_name, master_port, world_size, kwargs):
     os.environ["LOCAL_RANK"] = str(rank)
     os.environ["RANK"] = str(rank)
     os.environ["WORLD_SIZE"] = str(world_size)
@@ -39,34 +50,56 @@ def _distributed_worker(rank, fn, master_port, world_size, args, kwargs):
     )
 
     try:
-        fn(*args, **kwargs)
+        module = importlib.import_module(fn_module)
+        target = module
+        for attr in fn_name.split("."):
+            target = getattr(target, attr)
+        worker_ctx = _DistributedContext(is_worker=True, world_size=world_size)
+        call_kwargs = dict(kwargs)
+        call_kwargs["distributed_launcher"] = worker_ctx
+        target(**call_kwargs)
         dist.barrier()
     finally:
         dist.destroy_process_group()
 
 
-def distributed_test(n_gpus):
-    n_gpus_list = n_gpus if isinstance(n_gpus, (list, tuple)) else [n_gpus]
+@pytest.fixture
+def distributed_launcher(request):
+    if os.environ.get("PYTEST_DISTRIBUTED_WORKER") == "1":
+        world_size_env = int(os.environ["WORLD_SIZE"])
+        return _DistributedContext(is_worker=True, world_size=world_size_env)
 
-    def decorator(fn):
-        def wrapped(*args, **kwargs):
-            for n_gpus in n_gpus_list:
-                if not torch.cuda.is_available():
-                    pytest.skip("CUDA required for distributed GPU test")
-                if torch.cuda.device_count() < n_gpus:
-                    pytest.skip(f"requires {n_gpus} CUDA devices, found {torch.cuda.device_count()}")
+    param = getattr(request, "param", None)
+    world_sizes = [1] if param is None else param.get("n_gpus", [1])
+    if any(ws <= 0 for ws in world_sizes):
+        raise ValueError("GPU counts must be positive integers")
 
-                master_port = _get_free_tcp_port()
-                mp.spawn(
-                    _distributed_worker,
-                    args=(fn, master_port, n_gpus, args, kwargs),
-                    nprocs=n_gpus,
-                    join=True,
-                )
+    max_world = max(world_sizes)
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required for distributed GPU test")
+    if torch.cuda.device_count() < max_world:
+        pytest.skip(f"requires up to {max_world} CUDA devices, found {torch.cuda.device_count()}")
 
-        return wrapped
+    signature = inspect.signature(request.function)
+    call_kwargs = {}
+    for name in signature.parameters:
+        if name == "distributed_launcher":
+            continue
+        call_kwargs[name] = request.getfixturevalue(name)
 
-    return decorator
+    module_name = request.function.__module__
+    fn_name = request.function.__name__
+
+    for world_size in world_sizes:
+        master_port = _get_free_tcp_port()
+        mp.spawn(
+            _distributed_worker,
+            args=(module_name, fn_name, master_port, world_size, call_kwargs),
+            nprocs=world_size,
+            join=True,
+        )
+
+    return _DistributedContext(is_worker=False, world_size=None)
 
 
 # ------------------------------------------------------------
@@ -96,10 +129,11 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
     return z_dp_local
 
 
-@distributed_test(n_gpus=[1, 2])
+
+@pytest.mark.parametrize("distributed_launcher", [1, 2], indirect=True)
 @pytest.mark.parametrize("n_tokens", [16])
 @pytest.mark.parametrize("d_model, n_expts_tot, n_expts_act", [(16, 4, 4)])
-def test_expert_sharding(n_tokens, d_model, n_expts_tot, n_expts_act):
+def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n_expts_act):
     torch.manual_seed(0)
 
     rank = dist.get_rank()
