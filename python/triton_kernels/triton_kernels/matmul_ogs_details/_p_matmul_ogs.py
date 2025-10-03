@@ -525,7 +525,6 @@ def _p_matmul_ogs(
                     offs_y_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
                     Y.scatter(out, offs_y_m, out_off_n)
                 elif Y_TMA_MODE == "dense":
-                    tl.device_print("dense tma")
                     out = tl.reshape(out, [1] + out.shape)
                     off_kz = pid_k * batch_size + start_z1
                     Y.store([off_kz, off_m1, out_off_n], out)
