@@ -45,24 +45,24 @@ def _distributed_worker(rank, fn, master_port, world_size, args, kwargs):
         dist.destroy_process_group()
 
 
-def distributed_test(*, n_gpus):
+def distributed_test(n_gpus):
     n_gpus_list = n_gpus if isinstance(n_gpus, (list, tuple)) else [n_gpus]
 
     def decorator(fn):
-        @pytest.mark.parametrize("n_gpus", n_gpus_list)
-        def wrapped(*args, n_gpus, **kwargs):
-            if not torch.cuda.is_available():
-                pytest.skip("CUDA required for distributed GPU test")
-            if torch.cuda.device_count() < n_gpus:
-                pytest.skip(f"requires {n_gpus} CUDA devices, found {torch.cuda.device_count()}")
+        def wrapped(*args, **kwargs):
+            for n_gpus in n_gpus_list:
+                if not torch.cuda.is_available():
+                    pytest.skip("CUDA required for distributed GPU test")
+                if torch.cuda.device_count() < n_gpus:
+                    pytest.skip(f"requires {n_gpus} CUDA devices, found {torch.cuda.device_count()}")
 
-            master_port = _get_free_tcp_port()
-            mp.spawn(
-                _distributed_worker,
-                args=(fn, master_port, n_gpus, args, kwargs),
-                nprocs=n_gpus,
-                join=True,
-            )
+                master_port = _get_free_tcp_port()
+                mp.spawn(
+                    _distributed_worker,
+                    args=(fn, master_port, n_gpus, args, kwargs),
+                    nprocs=n_gpus,
+                    join=True,
+                )
 
         return wrapped
 
