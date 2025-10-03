@@ -188,10 +188,10 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
 // - Padding intervals must be multiples of 1024 bytes for 16-byte loads.
 // To avoid bank conflicts when reading tensors in MFMA layout, we stagger
 // continuous rows (non contig dimension) by adding padding that shifts their
-// start addresses to different shared memory banks.
-// To avoid bank conflicts its generally enough to pad 16 continous rows (see
-// exception below for mfma32 kContig) Therefore, we implement a linear mapping
-// from logical tensor elements to shared memory offsets that:
+// start addresses to different shared memory banks. Generally it's enough to
+// pad 16 continous rows (see exception below for mfma32 kContig). Therefore, we
+// implement a linear mapping from logical tensor elements to shared memory
+// offsets that:
 // - Strides 16 consecutive rows by 1024 bytes in shared memory.
 // - Fills "holes" by rows which are a multiple of 16
 // For example, if each row is 256 bytes, four rows are required to fill the
@@ -206,10 +206,11 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
 // Since padding is applied in groups of 16 rows, the total data size for this
 // layout must be at least 16 KB (16 * 1024 bytes).
 std::optional<ttg::PaddedSharedEncodingAttr>
-composePaddedLayoutCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
-                         ttg::TensorOrMemDesc srcTy, ArrayRef<unsigned> order,
-                         ArrayRef<unsigned> sharedOrder, unsigned bitWidth,
-                         bool useAsyncCopy) {
+composePaddedLayoutForAsyncCopyCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
+                                     ttg::TensorOrMemDesc srcTy,
+                                     ArrayRef<unsigned> order,
+                                     ArrayRef<unsigned> sharedOrder,
+                                     unsigned bitWidth, bool useAsyncCopy) {
   auto *ctx = srcTy.getContext();
 
   // NYI: padded layouts for tt.load/local_write which is more flexible
@@ -230,8 +231,8 @@ composePaddedLayoutCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
   }
 
   unsigned elemByteWidth = std::max(bitWidth / 8u, 1u);
-  auto blockBytes = shape[0] * shape[1] * elemByteWidth;
-  if (blockBytes < 16384) {
+  auto loadBytes = shape[0] * shape[1] * elemByteWidth;
+  if (loadBytes < 16384) {
     return {};
   }
 
@@ -273,9 +274,8 @@ composePaddedLayoutCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
   for (int elemLog2 = 0; elemLog2 < llvm::Log2_32(contigSize); elemLog2++)
     bases.push_back({1 << elemLog2, 0});
 
-  // Add strided rows (by 16) until we reach 1024byte (9 bases)
+  // Add strided rows (by 16) to pad to 1024bytes
   auto requiredNumBases = llvm::Log2_32(1024U / elemByteWidth);
-
   for (int rowBase = llvm::Log2_32(16); bases.size() < requiredNumBases;
        rowBase++)
     bases.push_back({0, 1 << rowBase});
@@ -336,6 +336,8 @@ composePaddedLayoutCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
     }
   }
 
+  assert(paddingBytes != 0);
+
   // Swap bases to match srcTy dimension order
   if ((isKContig && kDimIndex == 1) || (!isKContig && kDimIndex == 0)) {
     for (auto &p : bases)
@@ -351,7 +353,6 @@ composePaddedLayoutCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
   linearComponent = triton::gpu::combineCtaCgaWithShape(
       linearComponent, ctaLayout, srcTy.getShape());
 
-  // We also need to align with dwordx4 or dword loads
   unsigned paddingInterval = 1024 / elemByteWidth;
   unsigned paddingInElems = paddingBytes / elemByteWidth;
   return ttg::PaddedSharedEncodingAttr::get(
@@ -362,9 +363,10 @@ std::optional<ttg::PaddedSharedEncodingAttr> composePaddedLayout(
     const tt::AMD::TargetInfo &targetInfo, ttg::DotOperandEncodingAttr dotOpEnc,
     ttg::TensorOrMemDesc srcTy, ArrayRef<unsigned> order,
     ArrayRef<unsigned> sharedOrder, unsigned bitWidth, bool useAsyncCopy) {
-  if (targetInfo.getISAFamily() == triton::AMD::ISAFamily::CDNA4) {
-    return composePaddedLayoutCDNA4(dotOpEnc, srcTy, order, sharedOrder,
-                                    bitWidth, useAsyncCopy);
+  if (useAsyncCopy &&
+      targetInfo.getISAFamily() == triton::AMD::ISAFamily::CDNA4) {
+    return composePaddedLayoutForAsyncCopyCDNA4(
+        dotOpEnc, srcTy, order, sharedOrder, bitWidth, useAsyncCopy);
   }
   return {};
 }
