@@ -1,9 +1,6 @@
 import contextlib
-import importlib
-import inspect
 import os
 import socket
-from typing import Optional
 
 import torch
 import torch.distributed as dist
@@ -19,17 +16,11 @@ import pytest
 # fixture
 # ------------------------------------------------------------
 
+
 def _get_free_tcp_port():
     with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
-
-class _DistributedContext:
-    __slots__ = ("is_worker", "world_size")
-
-    def __init__(self, *, is_worker: bool, world_size: Optional[int]):
-        self.is_worker = is_worker
-        self.world_size = world_size
 
 
 def _distributed_worker(rank, fn, world_size, kwargs):
@@ -37,10 +28,7 @@ def _distributed_worker(rank, fn, world_size, kwargs):
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, device_id=torch.device(dev))
     torch.cuda.set_device(dev)
     try:
-        worker_ctx = _DistributedContext(is_worker=True, world_size=dist.get_world_size())
-        call_kwargs = dict(kwargs)
-        call_kwargs["distributed_launcher"] = worker_ctx
-        fn(**call_kwargs)
+        fn(rank=rank, world_size=world_size, **kwargs)
         dist.barrier()
     finally:
         dist.destroy_process_group()
@@ -54,27 +42,22 @@ def distributed_launcher(request):
     if torch.cuda.device_count() < n_gpus:
         pytest.skip(f"requires up to {n_gpus} CUDA devices, found {torch.cuda.device_count()}")
 
-    signature = inspect.signature(request.function)
-    call_kwargs = {}
-    for name in signature.parameters:
-        if name == "distributed_launcher":
-            continue
-        call_kwargs[name] = request.getfixturevalue(name)
-
     master_port = _get_free_tcp_port()
 
     os.environ["WORLD_SIZE"] = str(n_gpus)
     os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
     os.environ.setdefault("MASTER_PORT", str(master_port))
-    mp.spawn(
-        _distributed_worker,
-        args=(request.function, n_gpus, call_kwargs),
-        nprocs=n_gpus,
-        join=True,
-    )
 
-    return _DistributedContext(is_worker=False, world_size=n_gpus)
+    def launch(fn, **kwargs):
+        mp.spawn(
+            _distributed_worker,
+            args=(fn, n_gpus, kwargs),
+            nprocs=n_gpus,
+            join=True,
+        )
 
+    launch.world_size = n_gpus
+    return launch
 
 
 # ------------------------------------------------------------
@@ -104,18 +87,8 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
     return z_dp_local
 
 
-
-@pytest.mark.parametrize("distributed_launcher", [1, 2], indirect=True)
-@pytest.mark.parametrize("n_tokens", [16])
-@pytest.mark.parametrize("d_model, n_expts_tot, n_expts_act", [(16, 4, 4)])
-def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n_expts_act):
-    if not distributed_launcher.is_worker:
-        return
-
+def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_expts_act):
     torch.manual_seed(0)
-
-    rank = dist.get_rank()
-    world_size = dist.get_world_size()
 
     dev = torch.cuda.current_device()
     n_shards = world_size
@@ -148,3 +121,16 @@ def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n
     y_global_tri = torch.empty_like(y_global_ref)
     dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
     triton.testing.assert_close(y_global_ref, y_global_tri)
+
+
+@pytest.mark.parametrize("distributed_launcher", [1, 2], indirect=True)
+@pytest.mark.parametrize("n_tokens", [16])
+@pytest.mark.parametrize("d_model, n_expts_tot, n_expts_act", [(16, 4, 4)])
+def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n_expts_act):
+    distributed_launcher(
+        _run_expert_sharding,
+        n_tokens=n_tokens,
+        d_model=d_model,
+        n_expts_tot=n_expts_tot,
+        n_expts_act=n_expts_act,
+    )
