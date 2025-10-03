@@ -4,7 +4,7 @@ import triton
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp
 from triton_kernels.matmul_ogs import matmul_ogs, reduce_grouped
 from triton_kernels.routing import routing, RoutingData
-from test_routing import make_expt_dict_random, make_expt_assignment, filter_expt_data
+from .test_routing import make_expt_dict_random, make_expt_assignment, filter_expt_data
 import pytest
 import os
 
