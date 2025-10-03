@@ -311,7 +311,8 @@ def _p_matmul_ogs(
                         mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
                     else:
                         mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
-                    x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
+                    mask_m = off_m + tl.arange(0, BLOCK_M) < eM
+                    x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
                 elif x_format == "fp16" or x_format == "bf16":
                     x_scales: tl.constexpr = None
                 else:
