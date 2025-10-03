@@ -75,7 +75,6 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_local,)
-    hdl.barrier(channel=0)
     _convert_dp_to_ep[grid](
         peer_dst_ptrs, dst_local.stride(0),
         src, src.stride(0), src.shape[1],
@@ -87,7 +86,6 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
         N_RANKS=n_ranks,
         BLOCK=BLOCK,
     )
-    torch.cuda.synchronize()
     hdl.barrier(channel=0)
     return dst_local
 

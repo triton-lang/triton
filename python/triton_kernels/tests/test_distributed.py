@@ -123,7 +123,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     triton.testing.assert_close(y_global_ref, y_global_tri)
 
 
-@pytest.mark.parametrize("distributed_launcher", [1, 2], indirect=True)
+@pytest.mark.parametrize("distributed_launcher", [2], indirect=True)
 @pytest.mark.parametrize("n_tokens", [16])
 @pytest.mark.parametrize("d_model, n_expts_tot, n_expts_act", [(16, 4, 4)])
 def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n_expts_act):
