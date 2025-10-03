@@ -1,4 +1,3 @@
-import functools
 from typing import Dict, Optional, Union, Any
 
 import triton
@@ -9,7 +8,6 @@ from triton._C.libtriton import nvidia as triton_nvidia
 from triton._C.libtriton import passes as triton_passes
 from triton._C.libproton import proton as libproton
 from triton.compiler import LazyDict
-from triton.runtime.jit import JITFunction
 from triton.runtime._allocation import set_profile_allocator, NullAllocator
 from triton.backends import backends
 
@@ -211,7 +209,7 @@ class InstrumentationHook(Hook):
         flags.instrumentation_on = False
 
         # Restore the instrumentation mode
-        triton.knobs.compilation.instrumentation_mode = "" 
+        triton.knobs.compilation.instrumentation_mode = ""
 
         # Reset profile allocator
         set_profile_allocator(NullAllocator())
