@@ -91,9 +91,8 @@ struct CanonicalizeConvertFromTMEMStore
       return failure();
     }
 
-    rewriter.replaceOpWithNewOp<nvidia_gpu::TMEMStoreOp>(
-        op, op->getResultTypes(), op.getDst(), op.getDep(), convert.getSrc(),
-        op.getPred());
+    rewriter.modifyOpInPlace(
+        op, [&]() { op.getSrcMutable().assign(convert.getSrc()); });
     return mlir::success();
   }
 };
