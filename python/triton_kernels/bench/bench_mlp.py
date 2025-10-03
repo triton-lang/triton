@@ -86,13 +86,16 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     for i in range(100):
         if n_expts_tot > 1:  # sparse
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            x, rdata, metadata = triton_dist.routing(input_x, logits, n_expts_act, expt_assignment=expt_assignment, EP=EP, TP=TP)
+            x, rdata, metadata = triton_dist.routing(input_x, logits, n_expts_act, expt_assignment=expt_assignment,
+                                                     EP=EP, TP=TP)
         else:  # dense
             x = triton_dist.all_gather(input_x, dim=0)
             rdata = None
-            metadata = triton_dist.ReduceScatterMetadata(input_split_sizes=None, ep_indx=None, gather_indx=None, scatter_indx=None, EP=EP, TP=TP)
+            metadata = triton_dist.ReduceScatterMetadata(input_split_sizes=None, ep_indx=None, gather_indx=None,
+                                                         scatter_indx=None, EP=EP, TP=TP)
         if x.nelement() > 0:
-            x = matmul_ogs(x, w1, b1, rdata, gather_indx=metadata.gather_indx, precision_config=pc1, fused_activation=act)
+            x = matmul_ogs(x, w1, b1, rdata, gather_indx=metadata.gather_indx, precision_config=pc1,
+                           fused_activation=act)
             x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=metadata.scatter_indx,
                            precision_config=pc2)
         x = triton_dist.reduce_scatter(x, n_expts_act, expt_assignment=expt_assignment, metadata=metadata, dim=0)
