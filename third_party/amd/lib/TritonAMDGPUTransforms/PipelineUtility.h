@@ -6,6 +6,21 @@
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 
 namespace mlir {
+
+namespace triton::AMD {
+constexpr char AttrBypassLDS[] = "amdgpu.bypass_lds_load";
+}
+
+// This function will
+// - deserialize schedule and numStages from IR.
+// - calculate stages and clusters taking all factors into account, and remap
+//   symbolic clusters of global load and compute ops to their real clusters.
+// - create lds alloc/dealloc/load/store or async load/commit/wait ops if
+//   possible.
+// - schedule these new ops.
+// - serialize schedule to IR for the next expandLoops function.
+void lowerLoops(ModuleOp moduleOp, bool useAsyncCopy, bool usePingpong);
+
 struct LoadInfo {
   // Shared layout is used for loads feeding into dot ops.
   triton::gpu::SwizzledSharedEncodingAttr sharedEncoding = nullptr;
@@ -14,6 +29,13 @@ struct LoadInfo {
   Operation *use = nullptr;
 };
 using LoadToInfoMap = llvm::MapVector<Operation *, LoadInfo>;
+
+// A slim wrapper of ttg::loadOpsToIndirectionLevel, to get the indirection
+// levels and final users of load ops. For details you can check the comment of
+// ttg::loadOpsToIndirectionLevel.
+llvm::MapVector<Operation *, std::pair<int, Operation *>>
+getIndirectLevel(triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                 scf::ForOp &forOp, int numStages);
 
 namespace SingleDotSchedule {
 // Define categories of scheduling details per Operation types.
