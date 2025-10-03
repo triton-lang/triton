@@ -241,6 +241,11 @@ composePaddedLayoutForAsyncCopyCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
     return {};
   }
 
+  // NYI: requires different stride factor
+  if (std::min(shape[0], shape[1]) < 32) {
+    return {};
+  }
+
   auto operandIdx = dotOpEnc.getOpIdx();
   auto kWidth = dotOpEnc.getKWidth();
   int kDimIndex = operandIdx == 0 ? 1 : 0;
@@ -263,15 +268,15 @@ composePaddedLayoutForAsyncCopyCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
   }
 
   // Determine row(contig) size
-  unsigned contigSize = isKContig ? kDim : nonKDim;
+  unsigned contigDim = isKContig ? kDim : nonKDim;
 
   // We clamp contigSize to 512 bytes (to reduce the number of cases handled
   // below) and simply repeat the tile to the full tensor size.
-  contigSize = std::min(512U / elemByteWidth, contigSize);
+  contigDim = std::min(512U / elemByteWidth, contigDim);
 
   std::vector<std::vector<int>> bases;
   // Keep contigSize numbers of elments contig in shared memory
-  for (int elemLog2 = 0; elemLog2 < llvm::Log2_32(contigSize); elemLog2++)
+  for (int elemLog2 = 0; elemLog2 < llvm::Log2_32(contigDim); elemLog2++)
     bases.push_back({1 << elemLog2, 0});
 
   // Add strided rows (by 16) to pad to 1024bytes
@@ -288,24 +293,25 @@ composePaddedLayoutForAsyncCopyCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
   unsigned paddingBytes = 0;
 
   // To compute the required amount of padding to avoid bank conflicts we look
-  // at the number of contiguous banks loaded for a single row this directly
-  // gives us the padding we require.
+  // at the number of contiguous bytes loaded for a single row this directly
+  // gives us the padding we require. Note for contigBytesPerLane == 16 we use a
+  // different mfma layout (wide) compared to contigBytesPerLane == 8 (narrow)
+  int contigBytesPerLane = kWidth * elemByteWidth;
+  bool useWideLayout = contigBytesPerLane == 16;
   if (isKContig) {
-    // kWidth=4 will use ds_read_b64 which splits lanes into 2
-    // groups of 32 consecutive rows
-
-    // For kWidth=8 we will use ds_read_b128. Since we have
-    // 64 lanes and load 4 banks per lane we read in total 256 banks, so 16
-    // lanes access LDS at a time which define our bank conflcit pattern.
-    // These (lane)groups are:
+    // For wide layouts we will use ds_read_b128. Lanes access LDS
+    // (bank conflicts) in 4 pairs of 16 lanes since we have 64 banks and each
+    // lane loads 4 banks. These (lane)groups are:
     //  1: 0-3, 12-15, 20-23, 24-27
     //  2: 4-7, 8-11, 16-19, 28-31
-    // Repeat for second half of the warp
+    // The upper half of the lanes follow the same pattern.
+    // For narrow layouts we will use ds_read_b64 which splits conseuctive
+    // lanes into 2 groups which access LDS one after another
 
     if (mfmaNonKDim == 16) {
-      // For kWidth=8 lane groups read 32 contiguous bytes
-      // For kWidth=4 lane groups load 8 contiguous bytes
-      paddingBytes = kWidth == 8 ? 32 : 8;
+      // For wide layouts lane groups read 32 contiguous bytes
+      // For narrow layouts lane groups load 8 contiguous bytes
+      paddingBytes = useWideLayout ? 32 : 8;
     }
 
     if (mfmaNonKDim == 32) {
@@ -314,8 +320,8 @@ composePaddedLayoutForAsyncCopyCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
       // Because we load 32 rows we need to place every 16th row into the second
       // half of banks to spread loads over all banks. This is done by swapping
       // the bases representing offset 128 (32banks) and the base of the 16th
-      // row which depends on the contigSize
-      int row16Index = contigSize == 32 ? 5 : (contigSize == 64 ? 6 : 7);
+      // row which depends on the contigDim
+      int row16Index = contigDim == 32 ? 5 : (contigDim == 64 ? 6 : 7);
       int upperBankIndex = llvm::Log2_32(128 / elemByteWidth);
       assert(row16Index < bases.size());
       assert(upperBankIndex < bases.size());
@@ -325,9 +331,9 @@ composePaddedLayoutForAsyncCopyCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
     if (mfmaNonKDim == 16) {
       // For mfma16 lane groups read 32 contiguous bytes
       paddingBytes = 32;
-      if (kWidth == 8) {
-        // For kWidth=8 lane groups wrap at row 8 so we have to exchange row4
-        // and 8 to avoid conflicts
+      if (useWideLayout) {
+        // For for the wide layout lane groups wrap at row 8 so we have to
+        // exchange row4 and row8 to avoid conflicts (last two bases)
         std::swap(bases[bases.size() - 1], bases[bases.size() - 2]);
       }
     } else if (mfmaNonKDim == 32) {
