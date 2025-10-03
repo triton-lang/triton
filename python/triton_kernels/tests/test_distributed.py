@@ -73,6 +73,8 @@ def distributed_launcher(request):
         join=True,
     )
 
+    return _DistributedContext(is_worker=False, world_size=n_gpus)
+
 
 
 # ------------------------------------------------------------
@@ -107,6 +109,9 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
 @pytest.mark.parametrize("n_tokens", [16])
 @pytest.mark.parametrize("d_model, n_expts_tot, n_expts_act", [(16, 4, 4)])
 def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n_expts_act):
+    if not distributed_launcher.is_worker:
+        return
+
     torch.manual_seed(0)
 
     rank = dist.get_rank()
