@@ -12,7 +12,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include <variant>
@@ -99,6 +98,11 @@ struct AsyncCopyChainOps {
 using StreamOpVariant = std::variant<StreamCopyChainOps, AsyncCopyChainOps>;
 using LoadToStreamOpMap = llvm::MapVector<Operation *, StreamOpVariant>;
 
+bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
+                               ttg::SharedEncodingTrait sharedEnc,
+                               tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                               const tt::AMD::TargetInfo &targetInfo);
+
 AsyncCopyChainOps createAsyncCopy(tt::LoadOp loadOp, Value alloc,
                                   Value extractIdx) {
   OpBuilder builder(loadOp);
@@ -176,47 +180,6 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
   }
 
   return getDotEncoding(user->getResult(0), opIdx, vecSize);
-}
-
-bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
-                               ttg::SharedEncodingTrait sharedEnc,
-                               tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                               const tt::AMD::TargetInfo &targetInfo) {
-  // If we have a single buffer we would require another barrier after the
-  // local_reads so instead we fall back to pipeline with registers
-  // Removing this check will create incorrect IR, see
-  // MembarUtility.h:membarFilter
-  if (numBuffers <= 1)
-    return false;
-
-  // Compute the final vecSize we can use for the combination of sourceEncoding
-  // and sharedEncoding. We can only use AsyncCopy if the target supports the
-  // requested or a smaller vecSize because we cannot stride when loading
-  // directly to lds
-
-  // Check that the src and dst encoding result in a valid direct-to-lds size.
-  // Note that this does not work for padded encodings because we require
-  // CoalesceAsyncCopy to rewrite the blocked encoding to guarantee this. So the
-  // layout selection already ensures this precondition
-  if (sharedEnc && !isa<ttg::PaddedSharedEncodingAttr>(sharedEnc)) {
-    auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
-    auto regLayout = triton::gpu::toLinearLayout(srcTy);
-    // It's the allocation so we trim the multibuffer dimension
-    auto srcShape = srcTy.getShape();
-    triton::LinearLayout sharedLayout;
-    sharedLayout = triton::gpu::toLinearLayout(srcShape, sharedEnc);
-    auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
-
-    unsigned vecSize = regToSharedLayout.getNumConsecutiveInOut();
-    unsigned elemBitWidth = triton::getPointeeBitWidth(srcTy);
-
-    if (fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo) == 0)
-      return false;
-  }
-
-  // Checks whether the global pointer's contiguity and mask alignment allows
-  // for at least 32 bit wide loads
-  return triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis);
 }
 
 // On GFX9 we can only add padding after each direct-to-lds load (hw requires
@@ -526,6 +489,47 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEncAMD(
   }
 
   return maxVecSharedEnc;
+}
+
+bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
+                               ttg::SharedEncodingTrait sharedEnc,
+                               tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                               const tt::AMD::TargetInfo &targetInfo) {
+  // If we have a single buffer we would require another barrier after the
+  // local_reads so instead we fall back to pipeline with registers
+  // Removing this check will create incorrect IR, see
+  // MembarUtility.h:membarFilter
+  if (numBuffers <= 1)
+    return false;
+
+  // Compute the final vecSize we can use for the combination of sourceEncoding
+  // and sharedEncoding. We can only use AsyncCopy if the target supports the
+  // requested or a smaller vecSize because we cannot stride when loading
+  // directly to lds
+
+  // Check that the src and dst encoding result in a valid direct-to-lds size.
+  // Note that this does not work for padded encodings because we require
+  // CoalesceAsyncCopy to rewrite the blocked encoding to guarantee this. So the
+  // layout selection already ensures this precondition
+  if (sharedEnc && !isa<ttg::PaddedSharedEncodingAttr>(sharedEnc)) {
+    auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
+    auto regLayout = triton::gpu::toLinearLayout(srcTy);
+    // It's the allocation so we trim the multibuffer dimension
+    auto srcShape = srcTy.getShape();
+    triton::LinearLayout sharedLayout;
+    sharedLayout = triton::gpu::toLinearLayout(srcShape, sharedEnc);
+    auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+
+    unsigned vecSize = regToSharedLayout.getNumConsecutiveInOut();
+    unsigned elemBitWidth = triton::getPointeeBitWidth(srcTy);
+
+    if (fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo) == 0)
+      return false;
+  }
+
+  // Checks whether the global pointer's contiguity and mask alignment allows
+  // for at least 32 bit wide loads
+  return triton::canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis);
 }
 
 // Convert load ops into shared memory allocation loads and apply
