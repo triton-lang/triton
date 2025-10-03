@@ -672,15 +672,6 @@ public:
     if (numCTAs != 1) {
       return failure();
     }
-
-    // TODO: support mxfp4 variants.
-    if (!((dotOp.getAElemType() == ScaleDotElemType::E5M2 ||
-           dotOp.getAElemType() == ScaleDotElemType::E4M3) &&
-          (dotOp.getBElemType() == ScaleDotElemType::E5M2 ||
-           dotOp.getBElemType() == ScaleDotElemType::E4M3))) {
-      return rewriter.notifyMatchFailure(dotOp, "only E5M2/E4M3 is supported");
-    }
-
     // Skip if any scale is missing. This pattern requires both scales.
     if (!dotOp.getAScale() || !dotOp.getBScale())
       return failure();
@@ -760,7 +751,6 @@ public:
     SmallVector<unsigned, 2> tilesPerWarp{computeTilePerWarp(newA, 0),
                                           computeTilePerWarp(newB, 1)};
     const auto mmaWarps = mmaResult.mmaEnc.getWarpsPerCTA(); // [wM, wN]
-
     // Convert scales to Linear layout
     auto convertScale = [&](Value scale, int opIdx) -> Value {
       auto ty = cast<RankedTensorType>(scale.getType());

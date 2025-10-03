@@ -3784,7 +3784,6 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   EXPECT_EQ(ll, layout);
 
-  // A operand (dotOperandIdx=0) with larger tile
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/0, /*dotOperandShape=*/{256, 32},
       /*tilesPerWarp=*/{4, 4}, /*warpsPerCTA=*/{2, 2},

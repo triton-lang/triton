@@ -1446,12 +1446,21 @@ LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
 
 // PTX ISA - Warp-level MMA Block Scaling
 //   https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-block-scaling
+<<<<<<< HEAD
+=======
+// Scale matrix shapes by scale_vec_size
+//   1X: scale_A = M x 1, scale_B = 1 x N
+//   2X: scale_A = M x 2, scale_B = 2 x N
+//   4X: scale_A = M x 4, scale_B = 4 x N
+>>>>>>> 331d9d392 (add fp4 scaled matmul)
 //
 // This function generates layouts for scale tensors used in scaled dot
 // operations.
 //
 // Supported .kind x scale_vec_size:
 //   mxf8f6f4 with UE8M0 scales -> .scale_vec::1X
+//   mxf4nvf4 with UE8M0 scales -> .scale_vec::2X
+//   mxf4nvf4 with UE4M3 scales -> .scale_vec::4X
 //
 // Implementation notes:
 //   - We support only scale_vec::1X for now.
