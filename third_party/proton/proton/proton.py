@@ -19,7 +19,7 @@ def parse_arguments():
                         choices=["shadow", "python"])
     parser.add_argument("-m", "--mode", type=str, help="Profiling mode", default=None)
     parser.add_argument("-d", "--data", type=str, help="Profiling data", default="tree", choices=["tree", "trace"])
-    parser.add_argument("-k", "--hook", type=str, help="Profiling hook", default=None, choices=[None, "launch"])
+    parser.add_argument("-k", "--hook", type=str, help="Profiling hook", default=None, choices=[None, "triton"])
     parser.add_argument('target_args', nargs=argparse.REMAINDER, help='Subcommand and its arguments')
     args = parser.parse_args()
     return args, args.target_args
