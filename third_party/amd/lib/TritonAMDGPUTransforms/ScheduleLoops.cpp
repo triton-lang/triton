@@ -380,8 +380,8 @@ std::optional<ttg::PaddedSharedEncodingAttr> composePaddedLayout(
 // the same dot operand encoding, return true and get the shared encoding that
 // needs to be used to be compatible with users' layouts.
 std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEncAMD(
-    Operation *loadOp, triton::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    const triton::AMD::TargetInfo &targetInfo, bool useAsyncCopy) {
+    Operation *loadOp, tt::AMD::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    const tt::AMD::TargetInfo &targetInfo, bool useAsyncCopy) {
   Value loadedValue = loadOp->getResult(0);
 
   llvm::SmallVector<ttg::SharedEncodingTrait> sharedEncs;
@@ -396,7 +396,7 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEncAMD(
     if (auto memDesc = dyn_cast<ttg::MemDescType>(userResType)) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
-      tempAttr = dyn_cast<ttg::SharedEncodingTrait>(memDesc.getEncoding());
+      tempAttr = cast<ttg::SharedEncodingTrait>(memDesc.getEncoding());
       // If the immediate user is ttg::LocalAllocOp, likely it's created in
       // TritonAMDGPUOptimizeDotOperands. We should just respect it.
       if (!getSharedEncIfAllUsersAreDotEncAMD(user, axisInfoAnalysis,
@@ -432,7 +432,6 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEncAMD(
       }
 
       auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
-
       if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
         // Determine if we can use padded layouts and fallback to swizzled
         // layouts if not
@@ -441,7 +440,6 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEncAMD(
           canUseAsyncCopy = canBeConvertedToAsyncLoad(
               2, cast<tt::LoadOp>(loadOp), {}, axisInfoAnalysis, targetInfo);
         }
-        llvm::outs() << "Can use async copy: " << canUseAsyncCopy << "\n";
         if (auto maybePadded =
                 composePaddedLayout(targetInfo, dotOpEnc, srcTy, order,
                                     sharedOrder, bitWidth, canUseAsyncCopy)) {
@@ -485,6 +483,7 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEncAMD(
     return std::nullopt;
   auto maxVecSharedEnc = sharedEncs.front();
 
+  // TODO add heuristic support for padded layouts
   for (auto sharedEnc : llvm::drop_begin(sharedEncs, 1)) {
     if (!equalSharedEncIgnoreVec(
             dyn_cast<ttg::SwizzledSharedEncodingAttr>(sharedEnc),
