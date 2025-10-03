@@ -515,6 +515,7 @@ class amd_knobs(base_knobs):
 
 
 class proton_knobs(base_knobs):
+    disable: env_bool = env_bool("TRITON_PROTON_DISABLE", False)
     cupti_lib_dir: env_str = env_str(
         "TRITON_CUPTI_LIB_PATH",
         str(pathlib.Path(__file__).parent.absolute() / "backends" / "nvidia" / "lib" / "cupti"))

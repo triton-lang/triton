@@ -30,17 +30,19 @@ class tensor_descriptor_type(ttgl.base_type):
         cursor += 1
         shape, cursor = self.shape_type._unflatten_ir(handles, cursor)
         strides, cursor = self.strides_type._unflatten_ir(handles, cursor)
-        value = tensor_descriptor(handle, shape, strides, self.block_type, self.layout)
+        value = tensor_descriptor(handle, shape, strides, self)
         return value, cursor
 
-    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+    def _to_ir(self, builder: ir.builder) -> ir.type:
         is_signed = self.block_type.element_ty.is_int_signed()
-        ty = builder.get_tensor_descriptor_layout_type(
+        return builder.get_tensor_descriptor_layout_type(
             self.block_type.to_ir(builder),
             is_signed,
             self.layout._to_ir(builder),
         )
-        out.append(ty)
+
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        out.append(self._to_ir(builder))
         self.shape_type._flatten_ir_types(builder, out)
         self.strides_type._flatten_ir_types(builder, out)
 
@@ -48,20 +50,14 @@ class tensor_descriptor_type(ttgl.base_type):
         return f"TD{self.block_type.mangle()}_{self.shape_type.mangle()}_{self.strides_type.mangle()}_{self.layout.mangle()}TD"
 
 
+@dataclass
 class tensor_descriptor(ttgl.base_value):
     """A descriptor representing a tensor in global memory."""
 
-    def __init__(self, handle: ir.value, shape: List[ttgl.tensor], strides: List[ttgl.tensor],
-                 block_type: ttgl.distributed_type, layout: PaddedSharedLayout):
-        self.handle = handle
-        self.shape = ttgl.tuple(shape)
-        self.strides = ttgl.tuple(strides)
-        self.type = tensor_descriptor_type(
-            block_type,
-            shape_type=self.shape.type,
-            strides_type=self.strides.type,
-            layout=layout,
-        )
+    handle: ir.value
+    shape: ttgl.tuple
+    strides: ttgl.tuple
+    type: tensor_descriptor_type
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         handles.append(self.handle)
@@ -111,21 +107,20 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
     layout = _unwrap_if_constexpr(layout)
     assert isinstance(layout, PaddedSharedLayout), "Expected layout to be a PaddedSharedLayout"
 
-    # convert tensor into scalar
     base_handle = base.handle
-    shape_handles = _semantic._convert_to_ir_values(shape, require_i64=False)
-    stride_handles = _semantic._convert_to_ir_values(strides,
-                                                     require_i64=True)  # strides must be i64 for make_tensor_descriptor
+    shape_handles = _semantic._convert_to_ir_values(shape, require_i64=False)  # i32 shape
+    stride_handles = _semantic._convert_to_ir_values(strides, require_i64=True)  # i64 stride
 
-    # fill default arguments for create_make_tensor_descriptor
-    is_signed_int = base.type.element_ty.is_int_signed()
+    shape = ttgl.tuple(shape)
+    strides = ttgl.tuple(strides)
+    block_type = ttgl.block_type(base.type.element_ty, block_shape)
+    type = tensor_descriptor_type(block_type, shape.type, strides.type, layout)
+
     padding = _semantic._str_to_padding_option("zero")
+    handle = _semantic.builder.create_make_tensor_descriptor(type._to_ir(_semantic.builder), base_handle, shape_handles,
+                                                             stride_handles, padding)
 
-    handle = _semantic.builder.create_make_tensor_descriptor(base_handle, shape_handles, stride_handles, block_shape,
-                                                             is_signed_int, padding)
-    type = ttgl.block_type(base.type.element_ty, block_shape)
-
-    return tensor_descriptor(handle, shape, strides, type, layout)
+    return tensor_descriptor(handle, shape, strides, type)
 
 
 @builtin
