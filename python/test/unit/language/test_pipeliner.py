@@ -542,3 +542,36 @@ def test_scatter_pipeline(device):
     torch.testing.assert_close(c, ref)
 
     assert kernel.asm["ttgir"].count("tma_store_wait") == 2, "expected pipelined TMA scatter"
+
+
+@pytest.mark.parametrize("num_stages", [1, 2, 3])
+def test_conditional_store_pipeline(num_stages, device):
+    """
+    Test for the conditional store pipelining bugfix.
+    This reproduces the race condition where conditional code gets moved to epilogue cluster,
+    causing users of loads to be scheduled in later clusters than the loads themselves.
+    """
+    check_capabilities()
+
+    @triton.jit
+    def conditional_store_kernel(
+        arange_ptr,
+        output_ptr,
+        loop_stages: tl.constexpr,
+        N: tl.constexpr,
+        always_true_but_not_constexpr,
+    ):
+        for i in tl.range(0, N, num_stages=loop_stages):
+            out_idx = tl.load(arange_ptr + i + tl.arange(0, 1))
+            if always_true_but_not_constexpr:
+                tl.store(output_ptr + out_idx, i + 1)
+
+    N = 17
+    arange = torch.arange(N, dtype=torch.int32, device=device)
+    output = torch.zeros((N, ), dtype=torch.int32, device=device)
+
+    conditional_store_kernel[(1, )](arange, output, num_stages, N, True)
+
+    # Expected output: [1, 2, 3, 4, ..., N]
+    expected = torch.arange(1, N + 1, dtype=torch.int32, device=device)
+    assert torch.equal(output, expected)

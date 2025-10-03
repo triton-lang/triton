@@ -632,6 +632,7 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
         ttng::getTmemAllocSizes(cast<MemDescType>(op.getBScale().getType()))
             .numCols,
         numRepN * (ceil<int>(numRepK, 4 / scaleFactorColsPerSet)));
+    numColPerScaleBlockB = std::max(numColPerScaleBlockB, 2);
     int subWordIdx = k % (4 / scaleFactorColsPerSet);
     int wordIdx = k / (4 / scaleFactorColsPerSet);
     Value scaleA = tb.add(

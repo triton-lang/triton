@@ -1,6 +1,6 @@
 from __future__ import annotations
 from triton.compiler.code_generator import unflatten_ir_values
-from ..ampere import async_copy
+from ..ampere import async_copy, mma_v2
 from . import mbarrier, tma
 from ... import _core
 
@@ -8,7 +8,7 @@ from typing import List, Tuple, TYPE_CHECKING
 if TYPE_CHECKING:
     from triton._C.libtriton import ir
 
-__all__ = ["async_copy", "fence_async_shared", "mbarrier", "tma", "warpgroup_mma", "warpgroup_mma_wait"]
+__all__ = ["async_copy", "fence_async_shared", "mbarrier", "tma", "warpgroup_mma", "warpgroup_mma_wait", "mma_v2"]
 
 
 @_core.builtin

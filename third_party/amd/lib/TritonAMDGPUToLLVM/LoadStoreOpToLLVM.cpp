@@ -321,8 +321,9 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
     unsigned threadsPerWarp = lookupThreadsPerWarp(rewriter);
-    if (!hasSwizzling && !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
-                             rewriter, srcToSharedLayout, threadsPerWarp)) {
+    if (!hasSwizzling &&
+        !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
+            rewriter, srcToSharedLayout, threadsPerWarp, vectorSize)) {
       LDBG(op << " does not write coalesced into LDS and is not swizzled");
       return failure();
     }
@@ -884,10 +885,6 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     auto srcTy = op.getSrc().getType();
-
-    if (!isa<BlockedEncodingAttr, SliceEncodingAttr>(srcTy.getEncoding()))
-      return rewriter.notifyMatchFailure(
-          op, "requires Blocked or Slice encoding for src");
 
     auto dstTy = op.getResult().getType();
     auto dstEnc = dstTy.getEncoding();

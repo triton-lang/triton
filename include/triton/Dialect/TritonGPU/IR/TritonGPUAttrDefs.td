@@ -428,7 +428,7 @@ and `pN` to mean padding:
      x1, x3, p2, p3
      ...]
 
-2. 2D single interval-padding with rearanged rows.
+2. 2D single interval-padding with rearranged rows.
 
     #ttg.padded_shared<[16:+1] {offset = [[0, 1], [0, 2], /*gap, stride by 2 rows*/[2, 0], [4, 0], [1, 0]]], block = []}>
     [
@@ -1036,15 +1036,17 @@ An encoding for tensors that have been produced by MFMA matrix core instructions
 available on AMD Instinct GPUs of CDNA architectures.
 
 It is characterized by the following parameters:
-- `version` indicates the GPU architecture:
+- `version`: The GPU architecture:
   - 1: gfx908: CDNA1
   - 2: gfx90a: CDNA2
   - 3: gfx942: CDNA3
   - 4: gfx950: CDNA4
-- `warpsPerCTA` indicates the warp layout in the block.
-- `MDim` and `NDim` indicate the dimension of the output of the mfma instruction.
-- `isTransposed` indicates the result tensor is transposed so that it can be converted to dotOperand layout
+- `warpsPerCTA`: The warp layout in the block.
+- `instrShape`: The shape in the form of (M, N, K) of the matrix.
+- `isTransposed`: Indicates the result tensor is transposed so that it can be converted to dotOperand layout
 without going to shared memory. This is used in the case of chained dot (E.g. Flash-Attention kernel).
+- `tilesPerWarp`: The tile layout within a warp. Defaults to unit tile layout, i.e., single tile on all dimensions.
+- `elementBitWidth`: Bit width of the output element type. Supported values are 32 and 64. Defaults to 32.
 
 Example 1:
 Suppose we have a tensor with a shape of [32, 64], warpsPerCTA set to [1, 2] and MDim=NDim=32.
@@ -1154,25 +1156,27 @@ w2 w2 w3 w3
     ins
     "unsigned": $version,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    ArrayRefParameter<"unsigned">:$tilesPerWarp,
-    "unsigned":$MDim,
-    "unsigned":$NDim,
+    ArrayRefParameter<"unsigned">:$instrShape,
     "bool":$isTransposed,
     "CTALayoutAttr":$CTALayout,
-    DefaultValuedParameter<"std::optional<Type>", "FloatType::get($_ctxt, 32)">:$elementType
+    ArrayRefParameter<"unsigned">:$tilesPerWarp,
+    "unsigned":$elementBitWidth
   );
 
   let builders = [
     AttrBuilder<(ins "unsigned":$version,
                      "ArrayRef<unsigned>":$warpsPerCTA,
-                     "unsigned":$MDim,
-                     "unsigned":$NDim,
+                     "ArrayRef<unsigned>":$instrShape,
                      "bool":$isTransposed,
                      "CTALayoutAttr":$CTALayout,
-                     "std::optional<Type>":$elementType), [{
-      SmallVector<unsigned> tilesPerWarp(warpsPerCTA.size(), 1);
-
-      return $_get(context, version, warpsPerCTA, tilesPerWarp, MDim, NDim, isTransposed, CTALayout, elementType);
+                     CArg<"ArrayRef<unsigned>", "{}">:$tpw,
+                     CArg<"unsigned", "0">:$elementBitWidth), [{
+      SmallVector<unsigned> tilesPerWarp(tpw);
+      if (tilesPerWarp.empty())
+        tilesPerWarp = SmallVector<unsigned>(warpsPerCTA.size(), 1);
+      if (elementBitWidth == 0)
+        elementBitWidth = 32;
+      return $_get($_ctxt, version, warpsPerCTA, instrShape, isTransposed, CTALayout, tilesPerWarp, elementBitWidth);
     }]>
   ];
 
@@ -1194,6 +1198,7 @@ w2 w2 w3 w3
 
   let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
+  let skipDefaultBuilders = 1;
 }
 
 def AMDWmmaEncodingAttr : DistributedEncoding<"AMDWmmaEncoding", "amd_wmma_encoding", [MmaEncodingTrait]> {
@@ -1202,15 +1207,16 @@ def AMDWmmaEncodingAttr : DistributedEncoding<"AMDWmmaEncoding", "amd_wmma_encod
   let description = [{
 An encoding for tensors that have been produced by WMMA matrix core instructions,
 available on AMD Radeon GPUs of RDNA architectures.
-- A `version` parameter specifies instruction version to lower in. The data
-  distribution within one warp is also depends on it. Following architectures are
-  supported:
-  - 1: gfx11
-  - 2: gfx12
-- A `warpsPerCTA` parameter characterizes data distribution between warps.
-  An important limitation of WMMA for layout is a shape for tiles processed
-  by a single warp. It is [16, 16].
-  This encoding assumes specific access to matrix elements by threads.
+
+It is characterized by the following parameters:
+- `version` indicates the GPU architecture:
+  - 1: RDNA3; e.g., gfx1100, gfx1101
+  - 2: RDNA4; e.g., gfx1200, gfx1201
+  - 3: gfx1250
+- `warpsPerCTA` indicates the warp layout in the block.
+- `instrShape` indicates the shape in the form of (M, N, K) of the matrix
+   operation performed by a single WMMA instruction. Defaults to (16, 16, 16).
+- `isTransposed` indicates the layout of the result tensor is transposed.
 
 Example:
 Suppose we have a tensor with shape [32, 64], `warpsPerCTA` set to [2, 2].
@@ -1239,7 +1245,7 @@ Row |                  warp 0                                    warp 1
 30  |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
 31  |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
 
-// ------------------------ version = 2, isTransposed = false ------------------------ //
+// ------------------------ version = 2/3, isTransposed = false ------------------------ //
 
 Row |       warp 0                warp 1
     |/--------^---------\ /---------^--------\
@@ -1267,7 +1273,7 @@ Row |       warp 0                warp 1
 30  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
 31  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
 
-// ------------------------ version = 2, isTransposed = true ------------------------ //
+// ------------------------ version = 2/3, isTransposed = true ------------------------ //
 
     |               warp 0                     warp 1
     |/----------------^----------------\ /-------^-------\
@@ -1293,18 +1299,21 @@ Row |
     "unsigned": $version,
     "bool":$isTransposed,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    "CTALayoutAttr":$CTALayout
+    "CTALayoutAttr":$CTALayout,
+    ArrayRefParameter<"unsigned">:$instrShape
   );
 
   let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<int64_t> getElemsPerInstrForOperands(int kDim, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
-                                          Type elemType, int kWidth, int kDim, int opIdx) const;
+                                          Type elemType, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-    static SmallVector<unsigned> getMNKDimPerInstr();
+
+    static SmallVector<unsigned, 3> getDefaultInstrShape() {
+      return {16, 16, 16};
+    }
 
     // Returns a swizzled shared layout matching this WMMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.

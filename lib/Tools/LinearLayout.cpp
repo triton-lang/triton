@@ -1344,6 +1344,17 @@ SmallVector<Value> ColumnAction::apply(ValueRange values) const {
   return ret;
 }
 
+ColumnAction ColumnAction::leftCompose(const ColumnAction &other) const {
+  assert(inDim == other.inDim);
+  assert(inSizeLog2 == other.inSizeLog2);
+  assert(action.size() == other.action.size());
+  auto newAction = SmallVector<size_t>(action.size());
+  for (size_t i = 0; i < action.size(); i++) {
+    newAction[i] = action[other.action[i]];
+  }
+  return ColumnAction(newAction, inDim, inSizeLog2);
+}
+
 ColumnAction ColumnAction::inverse() const {
   auto invPerm = SmallVector<size_t>(action.size());
   for (size_t i = 0; i < action.size(); i++) {

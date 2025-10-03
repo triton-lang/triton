@@ -525,41 +525,6 @@ Value emitPadding(Location loc, RewriterBase &rewriter,
   return padOffset;
 }
 
-namespace {
-std::pair<int, ColumnAction>
-largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
-                     std::optional<int> maybeMaxVecElems = std::nullopt) {
-  // Find the largest vectorisation we can use:
-  StringAttr kReg = str_attr("register");
-  StringAttr kOffset = str_attr("offset");
-  LinearLayout quot;
-  LinearLayout tile;
-  ColumnAction permutation;
-  // If there are restrictions on the vectorisation, we don't allow
-  // permutations.
-  auto allowPerm = !maybeMaxVecElems.has_value();
-  auto maxVecElems = maybeMaxVecElems.value_or(128 / bitwidth);
-  for (int v = maxVecElems; v >= 1; v /= 2) {
-    tile = LinearLayout::identity1D(v, kReg, kOffset);
-    auto maybePerm = regPermForDivide(cvt, tile, /*left=*/true);
-    if (!maybePerm) {
-      continue;
-    }
-    permutation = *maybePerm;
-    if (!allowPerm && !permutation.isIdentity()) {
-      continue;
-    }
-    auto newCvt = permutation.apply(cvt);
-    auto maybeQuot = divideLeft(newCvt, tile);
-    if (!maybeQuot) {
-      continue;
-    }
-    return {v, permutation};
-  }
-  llvm_unreachable("Vectorization < 1 is not valid");
-}
-} // namespace
-
 SmallVector<Value>
 lowerLdStShared(Location loc, MLIRContext *ctx, LinearLayout cvt,
                 ArrayRef<Value> valsArray, // Input for store, output for load

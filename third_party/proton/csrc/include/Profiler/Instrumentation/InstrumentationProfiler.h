@@ -19,13 +19,13 @@ public:
   InstrumentationProfiler() = default;
   virtual ~InstrumentationProfiler();
 
-  InstrumentationProfiler *setMode(const std::vector<std::string> &mode);
-
 protected:
   // Profiler
   virtual void doStart() override;
   virtual void doFlush() override;
   virtual void doStop() override;
+  virtual void
+  doSetMode(const std::vector<std::string> &modeAndOptions) override;
 
   // InstrumentationInterface
   void initFunctionMetadata(
