@@ -73,7 +73,7 @@ def distributed_launcher(request):
 
     mp.spawn(
         _distributed_worker,
-        args=(request.function, master_port, n_gpus, call_kwargs),
+        args=(request.function, n_gpus, call_kwargs),
         nprocs=n_gpus,
         join=True,
     )
