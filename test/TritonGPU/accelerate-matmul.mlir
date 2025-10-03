@@ -730,6 +730,34 @@ module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 // -----
 
+// Verify that for SM_120 with FP4 inputs, tt.dot_scaled is preserved and
+// scales are converted to linear layout for hardware acceleration.
+
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#blocked2_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+
+module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @sm120_dot_scaled_fp4_native
+  // CHECK-DAG: tt.dot_scaled
+  // CHECK-DAG: #linear
+  // CHECK-DAG: #linear1
+  tt.func public @sm120_dot_scaled_fp4_native(
+    %a: tensor<128x32xi8, #blocked2_k>,
+    %scale_a: tensor<128x2xi8, #blocked2>,
+    %b: tensor<32x128xi8, #blocked2>,
+    %scale_b: tensor<128x2xi8, #blocked2>
+  ) -> tensor<128x128xf32, #blocked2> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked2>
+    %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e2m1 rhs = e2m1 {fastMath = false}
+      : tensor<128x32xi8, #blocked2_k>, tensor<128x2xi8, #blocked2>
+        * tensor<32x128xi8, #blocked2>, tensor<128x2xi8, #blocked2>
+        -> tensor<128x128xf32, #blocked2>
+    tt.return %d : tensor<128x128xf32, #blocked2>
+  }
+}
+
+// -----
+
 // Verify that for SM_100 (Blackwell), tt.dot_scaled uses the specialized
 // MMAv5 path with tensor memory and tc_gen5_mma_scaled instruction.
 

@@ -296,6 +296,9 @@ enum class TensorCoreType : uint8_t {
   FP32_FP8E4M3FN_FP8E5M2_FP32_SCALE_VEC_1X,
   FP32_FP8E4M3FN_FP8E4M3FN_FP32_SCALE_VEC_1X,
   //
+  FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X,
+  FP32_NVFP4_NVFP4_FP32_SCALE_VEC_4X,
+  //
   NOT_APPLICABLE,
 };
 
@@ -339,6 +342,8 @@ static Type getMmaRetType(TensorCoreType mmaType, MLIRContext *ctx) {
   case TensorCoreType::FP32_FP8E5M2_FP8E4M3FN_FP32_SCALE_VEC_1X:
   case TensorCoreType::FP32_FP8E4M3FN_FP8E5M2_FP32_SCALE_VEC_1X:
   case TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32_SCALE_VEC_1X:
+  case TensorCoreType::FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X:
+  case TensorCoreType::FP32_NVFP4_NVFP4_FP32_SCALE_VEC_4X:
     return fp32x4Ty;
   default:
     llvm::report_fatal_error("Unsupported mma type found");
@@ -366,6 +371,15 @@ static TensorCoreType getMmaTypeDotScaled(DotScaledOp op, RankedTensorType aTy,
     if (llvm::isa<Float8E4M3FNType>(aTy.getElementType()) &&
         llvm::isa<Float8E4M3FNType>(bTy.getElementType())) {
       return TensorCoreType::FP32_FP8E4M3FN_FP8E4M3FN_FP32_SCALE_VEC_1X;
+    }
+    if (op.getBElemType() == ScaleDotElemType::E2M1 &&
+        op.getAElemType() == ScaleDotElemType::E2M1) {
+      if (isa<mlir::Float8E4M3FNType>(
+              op.getBScale().getType().getElementType())) {
+        return TensorCoreType::FP32_NVFP4_NVFP4_FP32_SCALE_VEC_4X;
+      } else {
+        return TensorCoreType::FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X;
+      }
     }
   }
   return TensorCoreType::NOT_APPLICABLE;
@@ -493,6 +507,14 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxScaled = {
      "mma.sync.aligned.m16n8k32.row.col."
      "kind::mxf8f6f4.block_scale.scale_vec::"
      "1X.f32.e4m3.e4m3.f32.ue8m0"},
+    {TensorCoreType::FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X,
+     "mma.sync.aligned.m16n8k64.row.col."
+     "kind::mxf4nvf4.block_scale.scale_vec::"
+     "2X.f32.e2m1.e2m1.f32.ue8m0"},
+    {TensorCoreType::FP32_NVFP4_NVFP4_FP32_SCALE_VEC_4X,
+     "mma.sync.aligned.m16n8k64.row.col."
+     "kind::mxf4nvf4.block_scale.scale_vec::"
+     "4X.f32.e2m1.e2m1.f32.ue4m3"},
 };
 
 static void callMmaTuringInt8(PTXBuilder &builder, int b,
@@ -890,13 +912,12 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
   TensorCoreType mmaType =
       getMmaTypeDotScaled(op, aTensorTy, bTensorTy, dTensorTy);
 
-  NumRegisters numRegisters = {2, 1, 2};
-
   SmallVector<Value> unpackedAScale =
       unpackLLElements(op.getLoc(), adaptor.getAScale(), rewriter);
   SmallVector<Value> unpackedBScale =
       unpackLLElements(op.getLoc(), adaptor.getBScale(), rewriter);
 
+  NumRegisters numRegisters = {2, 1, 2};
   EmitMmaCallback emit = [&](PTXBuilder &builder, int b, int m, int n, int k,
                              mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                              unsigned colsPerThread, unsigned batchOffset,
@@ -906,8 +927,34 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
     auto tb = TritonLLVMOpBuilder(op.getLoc(), rewriter);
     auto i32 = IntegerType::get(op->getContext(), 32);
 
-    Value aScaleValue = tb.zext(i32, unpackedAScale[m * repK + k]);
-    Value bScaleValue = tb.zext(i32, unpackedBScale[n * repK + k]);
+    auto packElements = [&](ArrayRef<Value> bytes, int loc,
+                            int numBytes) -> Value {
+      Value packed = tb.zext(i32, bytes[loc]);
+      for (int i = 1; i < numBytes; ++i) {
+        Value byte = tb.zext(i32, bytes[loc + i]);
+        Value shifted = tb.shl(byte, tb.i32_val(i * 8));
+        packed = tb.or_(packed, shifted);
+      }
+      return packed;
+    };
+
+    int scaleVecMode;
+    if (mmaInstrPtxScaled.at(mmaType).find("1X") != std::string::npos) {
+      scaleVecMode = 1;
+    } else if (mmaType ==
+               TensorCoreType::FP32_FP4E2M1_FP4E2M1_FP32_SCALE_VEC_2X) {
+      scaleVecMode = 2;
+    } else if (mmaType == TensorCoreType::FP32_NVFP4_NVFP4_FP32_SCALE_VEC_4X) {
+      scaleVecMode = 4;
+    } else {
+      llvm_unreachable("Unsupported scale vector mode!");
+    }
+    Value aScaleValue =
+        packElements(unpackedAScale, m * repK * scaleVecMode + k * scaleVecMode,
+                     scaleVecMode);
+    Value bScaleValue =
+        packElements(unpackedBScale, n * repK * scaleVecMode + k * scaleVecMode,
+                     scaleVecMode);
 
     BaseOffset base{numRegisters.m * m, numRegisters.n * n, numRegisters.k * k};
     callMmaScaled(builder, b, base, mma, numMmaRets, colsPerThread, aTable,

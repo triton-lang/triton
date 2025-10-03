@@ -1502,6 +1502,8 @@ LinearLayout chooseScaledWmmaScaleLayout(
 //
 // Supported .kind x scale_vec_size:
 //   mxf8f6f4 with UE8M0 scales -> .scale_vec::1X
+//   mxf4nvf4 with UE8M0 scales -> .scale_vec::2X
+//   mxf4nvf4 with UE4M3 scales -> .scale_vec::4X
 //
 // Implementation notes:
 //   - We support only scale_vec::1X for now.
