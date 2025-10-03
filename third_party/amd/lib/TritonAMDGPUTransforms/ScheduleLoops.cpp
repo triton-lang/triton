@@ -517,29 +517,38 @@ bool canBeConvertedToAsyncLoad(unsigned numBuffers, tt::LoadOp loadOp,
   if (numBuffers <= 1)
     return false;
 
-  // Compute the final vecSize we can use for the combination of sourceEncoding
-  // and sharedEncoding. We can only use AsyncCopy if the target supports the
-  // requested or a smaller vecSize because we cannot stride when loading
-  // directly to lds
+  using triton::AMD::ISAFamily;
+  if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                         targetInfo.getISAFamily())) {
+    // Compute the final vecSize we can use for the combination of
+    // sourceEncoding and sharedEncoding (if provided). We can only use
+    // AsyncCopy if the target supports the requested or a smaller vecSize
+    // because we cannot stride when loading directly to lds on GFX9
+    if (sharedEnc) {
+      auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
+      auto regLayout = triton::gpu::toLinearLayout(srcTy);
+      // It's the allocation so we trim the multibuffer dimension
+      auto srcShape = srcTy.getShape();
+      triton::LinearLayout sharedLayout;
+      auto paddedEnc =
+          dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
+      if (paddedEnc) {
+        sharedLayout = paddedEnc.getLinearComponent();
+      } else {
+        sharedLayout = triton::gpu::toLinearLayout(srcShape, sharedEnc);
+      }
+      auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
 
-  // Check that the src and dst encoding result in a valid direct-to-lds size.
-  // Note that this does not work for padded encodings because we require
-  // CoalesceAsyncCopy to rewrite the blocked encoding to guarantee this. So the
-  // layout selection already ensures this precondition
-  if (sharedEnc && !isa<ttg::PaddedSharedEncodingAttr>(sharedEnc)) {
-    auto srcTy = cast<RankedTensorType>(loadOp.getPtr().getType());
-    auto regLayout = triton::gpu::toLinearLayout(srcTy);
-    // It's the allocation so we trim the multibuffer dimension
-    auto srcShape = srcTy.getShape();
-    triton::LinearLayout sharedLayout;
-    sharedLayout = triton::gpu::toLinearLayout(srcShape, sharedEnc);
-    auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+      unsigned vecSize = regToSharedLayout.getNumConsecutiveInOut();
+      unsigned elemBitWidth = triton::getPointeeBitWidth(srcTy);
 
-    unsigned vecSize = regToSharedLayout.getNumConsecutiveInOut();
-    unsigned elemBitWidth = triton::getPointeeBitWidth(srcTy);
+      if (paddedEnc) {
+        vecSize = std::min(vecSize, paddedEnc.getMinInterval());
+      }
 
-    if (fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo) == 0)
-      return false;
+      if (fitToValidDirectToLdsVecSize(vecSize, elemBitWidth, targetInfo) == 0)
+        return false;
+    }
   }
 
   // Checks whether the global pointer's contiguity and mask alignment allows
