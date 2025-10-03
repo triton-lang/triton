@@ -1675,7 +1675,7 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
               newOp.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range"))
         bitness = pointerRangeAttr.getInt();
 
-      LDBG(idx << "-th argument: " << arg << ", bitness: " << bitness << "\n");
+      LDBG(idx << "-th argument: " << arg << ", bitness: " << bitness);
       if (!enableLargeTensorPtrCanon && (bitness == 64)) {
         LDBG("Do not init argument of large-tensor pointer: " << arg);
         continue;
