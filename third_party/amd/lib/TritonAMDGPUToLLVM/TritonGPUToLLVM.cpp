@@ -16,7 +16,6 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Allocation.h"
@@ -267,16 +266,7 @@ struct ConvertTritonAMDGPUToLLVM
       return signalPassFailure();
     }
 
-    {
-      RewritePatternSet patterns(context);
-      AMD::populateAdjustModeRegisterLLVMPatterns(typeConverter, patterns,
-                                                  targetInfo, AMDBenefit);
-
-      if (failed(applyPatternsGreedily(mod, std::move(patterns)))) {
-        return signalPassFailure();
-      }
-    }
-
+    AMD::adjustModeRegister(mod, targetInfo);
     fixUpLoopAnnotation(mod);
   }
 

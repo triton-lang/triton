@@ -1,3 +1,4 @@
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -1845,6 +1846,17 @@ struct FpToFpOpConversion
       }
     }
 
+    if (dstType.isFloat() && (dstType.getIntOrFloatBitWidth() == 8)) {
+      auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
+      if (func) {
+        using attrType = triton::amdgpu::SetFP8ClampingAttr;
+        auto attrName = attrType::getMnemonic();
+        if (!func->hasAttrOfType<attrType>(attrName)) {
+          func->setAttr(attrName, attrType::get(op->getContext()));
+        }
+      }
+    }
+
     inVals.resize(numElements, b.undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals;
     if (srcType != dstType) {
@@ -2313,54 +2325,41 @@ struct PreciseSqrtOpConversion
 private:
   bool ftz;
 };
-
-class AdjustModeRegister : public OpRewritePattern<LLVM::LLVMFuncOp> {
-public:
-  explicit AdjustModeRegister(MLIRContext *ctx, PatternBenefit benefit,
-                              AMD::ISAFamily isaFamily)
-      : OpRewritePattern<LLVM::LLVMFuncOp>(ctx, benefit), isaFamily(isaFamily) {
-  }
-
-  using OpRewritePattern<LLVM::LLVMFuncOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(LLVM::LLVMFuncOp func,
-                                PatternRewriter &rewriter) const override {
-    MLIRContext *ctx = func->getContext();
-    auto loc = func->getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-    StringRef attrName = "AMD::ModeRegSet";
-    if (func->hasAttr(attrName)) {
-      return failure();
-    }
-
-    rewriter.modifyOpInPlace(func, [&]() {
-      auto &body = func.getBody().front();
-      rewriter.setInsertionPoint(&body.front());
-
-      // This is the location of the fp16_ovfl flag in the Mode register. It's
-      // calculated following this formula:
-      //     (mode register ID = 1) | (Offset << 6) | ((Width - 1) << 11)
-      // In this case, Offset = 23 and Width = 1.
-      // When the bit is 0/1, the conversion from fp32/fp16/bf16 to fp8/bf8 is
-      // in non-saturation/saturation mode.
-      Value fp16OVFLModeRegLoc = b.i32_val(1473);
-      LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.s.setreg", {},
-                                      {fp16OVFLModeRegLoc, b.i32_val(1)});
-    });
-
-    func->setAttr(mlir::StringAttr::get(ctx, attrName),
-                  mlir::UnitAttr::get(ctx));
-    return success();
-  }
-
-private:
-  AMD::ISAFamily isaFamily;
-};
-
 } // namespace
 
 namespace mlir::triton::AMD {
+void adjustModeRegister(ModuleOp mod, const TargetInfo &targetInfo) {
+  MLIRContext *ctx = mod->getContext();
+  Location loc = mod->getLoc();
+  mlir::OpBuilder builder(ctx);
+  auto auxBuilder = TritonLLVMOpBuilder(loc, builder);
+
+  mod->walk([&](LLVM::LLVMFuncOp func) {
+    using attrType = triton::amdgpu::SetFP8ClampingAttr;
+    auto attrName = attrType::getMnemonic();
+    if (!func->hasAttrOfType<attrType>(attrName))
+      return;
+    else
+      func->removeAttr(attrName);
+
+    if (func.getBody().empty())
+      return;
+    auto &body = func.getBody().front();
+    builder.setInsertionPoint(&body.front());
+
+    // This is the location of the fp16_ovfl flag in the Mode register. It's
+    // calculated following this formula:
+    //     (mode register ID = 1) | (Offset << 6) | ((Width - 1) << 11)
+    // In this case, Offset = 23 and Width = 1.
+    // When the bit is 0/1, the conversion from fp32/fp16/bf16 to fp8/bf8 is
+    // in non-saturation/saturation mode.
+    Value fp16OVFLModeRegLoc = auxBuilder.i32_val(1473);
+    LLVM::createLLVMIntrinsicCallOp(
+        builder, loc, "llvm.amdgcn.s.setreg", {},
+        {fp16OVFLModeRegLoc, auxBuilder.i32_val(1)});
+  });
+}
+
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, bool ftz,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
@@ -2410,12 +2409,5 @@ void populateElementwiseOpToLLVMPatterns(
                                          hwNanPropagationSupported, benefit);
   triton::populateClampFOpToLLVMPattern(typeConverter, patterns,
                                         axisInfoAnalysis, targetInfo, benefit);
-}
-
-void populateAdjustModeRegisterLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                            RewritePatternSet &patterns,
-                                            const TargetInfo &targetInfo,
-                                            PatternBenefit benefit) {
-  patterns.add<AdjustModeRegister>(&typeConverter.getContext(), benefit);
 }
 } // namespace mlir::triton::AMD
