@@ -39,6 +39,7 @@ def _distributed_worker(rank, fn, world_size, kwargs):
         world_size=world_size,
         rank=rank,
     )
+    torch.cuda.set_device(rank)
     try:
         worker_ctx = _DistributedContext(is_worker=True, world_size=dist.get_world_size())
         call_kwargs = dict(kwargs)
