@@ -228,12 +228,12 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   if (aSharedLayout) {
     aLoader =
         DotOpMmaSmemLoader::build(loc, rewriter, cast<MemDescType>(aTensorTy),
-                                  baseA, {M, K}, 3, dTensorTy, 0);
+                                  baseA, {M, K}, 3, false, dTensorTy, 0);
   } else {
     structA = unpackLLElements(loc, loadedA, rewriter);
   }
   DotOpMmaSmemLoader bLoader = DotOpMmaSmemLoader::build(
-      loc, rewriter, bTensorTy, baseB, {K, N}, 3, dTensorTy, 1);
+      loc, rewriter, bTensorTy, baseB, {K, N}, 3, false, dTensorTy, 1);
 
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 

@@ -692,8 +692,6 @@ def test_tmem_copy_2d():
         tmem_alias: ttgl.constexpr = TensorMemoryLayout((num_rows, num_cols), col_stride=1)
         tmem = tmem._reinterpret(ttgl.int8, (num_rows, num_cols), tmem_alias)
         value = tmem.load(blocked)
-        ttgl.static_print(ttgl.to_linear_layout(blocked, (smem_h, smem_w)))
-        ttgl.static_print(ttgl.to_linear_layout(blocked, (num_rows, num_cols)))
         ttgl.store(ttgl.set_auto_layout(out_ptrs, blocked), value)
 
     torch.manual_seed(0)
