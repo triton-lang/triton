@@ -27,9 +27,8 @@ def init_distributed():
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     if local_rank >= torch.cuda.device_count():
         pytest.skip(f"LOCAL_RANK {local_rank} >= cuda device count {torch.cuda.device_count()}")
-    torch.cuda.set_device(local_rank)
     if not dist.is_initialized():
-        dist.init_process_group(backend="nccl", init_method="env://")
+        dist.init_process_group(backend="nccl", init_method="env://", device_id=local_rank)
     dist.barrier()
     yield
     dist.barrier()
