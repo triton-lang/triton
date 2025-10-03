@@ -39,10 +39,10 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, sm_first, use_
         ref_expt_indx = tri_expt_indx[:n_tokens_raw]
     else:
         tri_expt_indx = ref_expt_indx = None
-    ref_routing_data, ref_gather, ref_scatter = routing_torch(ref_logits, n_expts_act, sm_first, ref_expt_indx,
-                                                              n_rows=n_routing_rows)
-    tri_routing_data, tri_gather, tri_scatter = routing(tri_logits, n_expts_act, sm_first, tri_expt_indx,
-                                                        n_rows=n_routing_rows)
+    ref_routing_data, ref_combine_indx, ref_dispatch_indx = routing_torch(ref_logits, n_expts_act, sm_first,
+                                                                          ref_expt_indx, n_rows=n_routing_rows)
+    tri_routing_data, tri_combine_indx, tri_dispatch_indx = routing(tri_logits, n_expts_act, sm_first, tri_expt_indx,
+                                                                    n_rows=n_routing_rows)
 
     def _assert_indx_equal(ref, tri):
         assert_equal(ref, tri[:len(ref)])
@@ -53,18 +53,16 @@ def test_op(n_tokens_pad, n_tokens_raw, n_expts_tot, n_expts_act, sm_first, use_
 
     ref_expt_data = ref_routing_data.expt_data
     tri_expt_data = tri_routing_data.expt_data
-    assert_equal(ref_expt_data.hist, tri_expt_data.hist)
-    assert_equal(ref_expt_data.token_offs_raw, tri_expt_data.token_offs_raw)
-    assert_equal(ref_expt_data.token_offs_pad_data, tri_expt_data.token_offs_pad_data)
-    assert_equal(ref_expt_data.block_pid_map_data, tri_expt_data.block_pid_map_data)
+    assert_equal(ref_expt_data.batch_sizes, tri_expt_data.batch_sizes)
+    assert_equal(ref_expt_data.batch_offs, tri_expt_data.batch_offs)
+    assert_equal(ref_expt_data.block_offs_data, tri_expt_data.block_offs_data)
+    assert_equal(ref_expt_data.block_schedule_data, tri_expt_data.block_schedule_data)
 
     assert ref_routing_data.n_expts_tot == ref_routing_data.n_expts_tot
     assert ref_routing_data.n_expts_act == ref_routing_data.n_expts_act
 
-    _assert_indx_equal(ref_gather.src_indx, tri_gather.src_indx)
-    _assert_indx_equal(ref_gather.dst_indx, tri_gather.dst_indx)
-    _assert_indx_equal(ref_scatter.src_indx, tri_scatter.src_indx)
-    _assert_indx_equal(ref_scatter.dst_indx, tri_scatter.dst_indx)
+    _assert_indx_equal(ref_combine_indx, tri_combine_indx)
+    _assert_indx_equal(ref_dispatch_indx, tri_dispatch_indx)
 
     scales_grad = torch.randn_like(tri_routing_data.gate_scal)
     ref_routing_data.gate_scal.backward(scales_grad[:n_gates_raw])

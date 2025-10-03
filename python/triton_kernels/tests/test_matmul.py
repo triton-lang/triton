@@ -39,12 +39,6 @@ def alloc_rand_like(x):
     return alloc_rand(x.shape, x.device, x.dtype, x.requires_grad)
 
 
-def mask_indx(idx, n_expts_act):
-    idx.src_indx[idx.dst_indx[-n_expts_act:]] = -1
-    idx.dst_indx[-n_expts_act:] = -1
-    return idx
-
-
 def init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter, device="cuda"):
     logits = torch.randn((m, n_expts_tot), dtype=torch.float16, device=device, requires_grad=True)
     routing_data, gather_idx, scatter_idx = routing(logits, n_expts_act)

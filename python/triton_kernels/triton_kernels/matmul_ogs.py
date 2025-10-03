@@ -10,7 +10,7 @@ import math
 # utilities
 from triton_kernels import target_info
 from triton_kernels.numerics import InFlexData, OutFlexData
-from triton_kernels.routing import GatherIndx, RoutingData, ScatterIndx
+from triton_kernels.routing import RoutingData
 from triton_kernels.target_info import is_cuda
 # details
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
@@ -21,6 +21,26 @@ from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_const
 from .specialize import specialize
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor
 
+@dataclass
+class GatherIndx:
+    """
+    Indices for an operation that performs:
+    Y = X[src_idx, :]
+    """
+    # array such that `dst_idx[src_idx] = arange(0, N)`
+    src_indx: torch.Tensor
+    dst_indx: torch.Tensor
+
+
+@dataclass
+class ScatterIndx:
+    """
+    Indices for an operation that performs:
+    Y[dst_idx, :] = X
+    """
+    # array such that `dst_idx[src_idx] = arange(0, N)`
+    src_indx: torch.Tensor
+    dst_indx: torch.Tensor
 
 @dataclass(frozen=True)
 class FnSpecs:
@@ -168,8 +188,8 @@ class InnerRoutingData:
 
         return (
             expt_data.hist,
-            expt_data.token_offs_raw,
-            expt_data.token_offs_pad(block),
+            expt_data.token_offs,
+            expt_data.block_offs(block),
             expt_data.block_pid_map(block),
         ) + args
 
