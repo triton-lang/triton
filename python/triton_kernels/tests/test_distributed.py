@@ -65,20 +65,11 @@ def _distributed_worker(rank, fn_module, fn_name, master_port, world_size, kwarg
 
 @pytest.fixture
 def distributed_launcher(request):
-    if os.environ.get("PYTEST_DISTRIBUTED_WORKER") == "1":
-        world_size_env = int(os.environ["WORLD_SIZE"])
-        return _DistributedContext(is_worker=True, world_size=world_size_env)
-
-    param = getattr(request, "param", None)
-    world_sizes = [1] if param is None else param
-    if any(ws <= 0 for ws in world_sizes):
-        raise ValueError("GPU counts must be positive integers")
-
-    max_world = max(world_sizes)
+    n_gpus = getattr(request, "param", None)
     if not torch.cuda.is_available():
         pytest.skip("CUDA required for distributed GPU test")
-    if torch.cuda.device_count() < max_world:
-        pytest.skip(f"requires up to {max_world} CUDA devices, found {torch.cuda.device_count()}")
+    if torch.cuda.device_count() < n_gpus:
+        pytest.skip(f"requires up to {n_gpus} CUDA devices, found {torch.cuda.device_count()}")
 
     signature = inspect.signature(request.function)
     call_kwargs = {}
@@ -89,17 +80,15 @@ def distributed_launcher(request):
 
     module_name = request.function.__module__
     fn_name = request.function.__name__
+    master_port = _get_free_tcp_port()
 
-    for world_size in world_sizes:
-        master_port = _get_free_tcp_port()
-        mp.spawn(
-            _distributed_worker,
-            args=(module_name, fn_name, master_port, world_size, call_kwargs),
-            nprocs=world_size,
-            join=True,
-        )
+    mp.spawn(
+        _distributed_worker,
+        args=(module_name, fn_name, master_port, n_gpus, call_kwargs),
+        nprocs=n_gpus,
+        join=True,
+    )
 
-    return _DistributedContext(is_worker=False, world_size=None)
 
 
 # ------------------------------------------------------------
