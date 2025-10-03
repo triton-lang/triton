@@ -217,8 +217,7 @@ class InstrumentationHook(Hook):
         set_profile_allocator(NullAllocator())
 
         # Reset host memory for external processing
-        if InstrumentationHook.enable_host_buffer:
-            InstrumentationHook.host_buffer = None
+        InstrumentationHook.host_buffer = None
 
         # Reset the buffer reference
         self.buffer = None
