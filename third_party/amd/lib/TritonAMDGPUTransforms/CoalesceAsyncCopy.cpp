@@ -179,7 +179,7 @@ struct CoalesceAsyncCopyWrites
           newRegLayout, blockedEnc.getCTALayout(), srcTy.getShape());
 
       auto newRegToShared = newRegLayout.invertAndCompose(sharedLayout);
-      if (newRegLayout.getNumConsecutiveInOut() < loadContig) {
+      if (newRegToShared.getNumConsecutiveInOut() < loadContig) {
         return rewriter.notifyMatchFailure(
             copyOp, "could not coalesce global addresses based on the linear "
                     "component of the padded encoding");
