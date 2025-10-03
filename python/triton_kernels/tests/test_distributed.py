@@ -32,32 +32,18 @@ class _DistributedContext:
         self.world_size = world_size
 
 
-def _distributed_worker(rank, fn_module, fn_name, master_port, world_size, kwargs):
-    os.environ["LOCAL_RANK"] = str(rank)
-    os.environ["RANK"] = str(rank)
-    os.environ["WORLD_SIZE"] = str(world_size)
-    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
-    os.environ.setdefault("MASTER_PORT", str(master_port))
-    os.environ["PYTEST_DISTRIBUTED_WORKER"] = "1"
-
-    torch.cuda.set_device(rank)
-
+def _distributed_worker(rank, fn, world_size, kwargs):
     dist.init_process_group(
         backend="nccl",
         init_method="env://",
         world_size=world_size,
         rank=rank,
     )
-
     try:
-        module = importlib.import_module(fn_module)
-        target = module
-        for attr in fn_name.split("."):
-            target = getattr(target, attr)
-        worker_ctx = _DistributedContext(is_worker=True, world_size=world_size)
+        worker_ctx = _DistributedContext(is_worker=True, world_size=dist.get_world_size())
         call_kwargs = dict(kwargs)
         call_kwargs["distributed_launcher"] = worker_ctx
-        target(**call_kwargs)
+        fn(**call_kwargs)
         dist.barrier()
     finally:
         dist.destroy_process_group()
@@ -78,13 +64,16 @@ def distributed_launcher(request):
             continue
         call_kwargs[name] = request.getfixturevalue(name)
 
-    module_name = request.function.__module__
-    fn_name = request.function.__name__
     master_port = _get_free_tcp_port()
+
+    os.environ["WORLD_SIZE"] = str(n_gpus)
+    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+    os.environ.setdefault("MASTER_PORT", str(master_port))
+    os.environ["PYTEST_DISTRIBUTED_WORKER"] = "1"
 
     mp.spawn(
         _distributed_worker,
-        args=(module_name, fn_name, master_port, n_gpus, call_kwargs),
+        args=(request.function, master_port, n_gpus, call_kwargs),
         nprocs=n_gpus,
         join=True,
     )
