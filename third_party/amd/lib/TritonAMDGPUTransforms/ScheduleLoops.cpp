@@ -182,28 +182,29 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
   return getDotEncoding(user->getResult(0), opIdx, vecSize);
 }
 
-// On GFX9 we can only add padding after each direct-to-lds load (hw requires
-// warps to write contiguous to shared memory). Therefore, with 64 lanes we
-// can add padding in intervals of 256 bytes for dword loads and 1024 bytes
-// for dwordx4 loads. To avoid bank conflicts when reading the tensor in MFMA
-// layout we want to stagger continuous rows (nonKDim) by adding padding to
-// shift their start to different shared memory banks. For MFMA layouts
-// we read data from up to 16 consecutive rows which means we need to pad
-// blocks of 16 continuous rows. We compute a linear mapping from logical
-// tensor elements to shared memory offsets which maps groups of 16 continuous
-// rows strided by 1024 bytes. If rows are 256bytes they need to be sepeated by
-// 4 rows in shared memory. Resulting in the following reordering:
-// logical order of rows:
-//  [row0, row16, row32, row 48, row1, row17, row33, row 49, row2, row17..]
-// Byte offsets of the rows depicted above:
-//  [0,    256,   512,   768,    1024, ..]
-// This naturally extends to different row sizes, e.g. for 128bytes:
-// [r0, r16, r32, r48, r64, r80, r96, r112, r1, r17, ..]
-// [0,  128, 256, 384, ..                 , 1024, ..]
-// Since we pad groups of 16 rows we need to have 16KB (16*1024) of data for
-// this layout
-// TODO (alex): implement smaller block sizes (with conflicts) + different
-// dtypes
+// On GFX9, lanes in a warp have to write contiguously to shared memory which
+// means we can only add padding at warp boundaries. With 64 lanes, this means:
+// - Padding intervals must be multiples of 256 bytes for 4-byte loads.
+// - Padding intervals must be multiples of 1024 bytes for 16-byte loads.
+// To avoid bank conflicts when reading tensors in MFMA layout, we stagger
+// continuous rows (non contig dimension) by adding padding that shifts their
+// start addresses to different shared memory banks.
+// To avoid bank conflicts its generally enough to pad 16 continous rows (see
+// exception below for mfma32 kContig) Therefore, we implement a linear mapping
+// from logical tensor elements to shared memory offsets that:
+// - Strides 16 consecutive rows by 1024 bytes in shared memory.
+// - Fills "holes" by rows which are a multiple of 16
+// For example, if each row is 256 bytes, four rows are required to fill the
+// hole. The resulting reordering of rows in logical order is:
+//   [r0, r16, r32, r48, r1, row17, row33, row49, row2, row18, ...]
+// Corresponding byte offsets for these rows are:
+//   [0,  256, 512, 768, 1024, ...]
+// This approach naturally generalizes to other row sizes. For example, with
+// 128-byte rows:
+//   Logical row order: [r0, r16, r32, r48, r64, r80, r96, r112, r1, r17, ...]
+//   Byte offsets:      [0,  128, 256, 384, ...,                 1024, ...]
+// Since padding is applied in groups of 16 rows, the total data size for this
+// layout must be at least 16 KB (16 * 1024 bytes).
 std::optional<ttg::PaddedSharedEncodingAttr>
 composePaddedLayoutCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
                          ttg::TensorOrMemDesc srcTy, ArrayRef<unsigned> order,
@@ -211,7 +212,7 @@ composePaddedLayoutCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
                          bool useAsyncCopy) {
   auto *ctx = srcTy.getContext();
 
-  // NYI: padded layouts for tt.load->local_write
+  // NYI: padded layouts for tt.load/local_write which is more flexible
   if (!useAsyncCopy) {
     return {};
   }
@@ -221,15 +222,31 @@ composePaddedLayoutCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
     return {};
   }
 
+  auto shape = srcTy.getShape();
+  int rank = shape.size();
+
+  if (rank != 2) {
+    return {};
+  }
+
+  unsigned elemByteWidth = std::max(bitWidth / 8u, 1u);
+  auto blockBytes = shape[0] * shape[1] * elemByteWidth;
+  if (blockBytes < 16384) {
+    return {};
+  }
+
+  // NYI: dtypes != 16bit
+  if (elemByteWidth != 2) {
+    return {};
+  }
+
   auto operandIdx = dotOpEnc.getOpIdx();
   auto kWidth = dotOpEnc.getKWidth();
   int kDimIndex = operandIdx == 0 ? 1 : 0;
   bool isKContig = sharedOrder[0] == kDimIndex;
   auto mfmaNonKDim = mfmaEnc.getInstrShape()[operandIdx];
-  auto shape = srcTy.getShape();
   auto kDim = shape[kDimIndex];
   auto nonKDim = shape[(kDimIndex + 1) % 2];
-  int rank = shape.size();
 
   // NYI: padding for scales
   if (operandIdx >= 2) {
@@ -240,30 +257,16 @@ composePaddedLayoutCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
     return {};
   }
 
-  if (rank != 2) {
-    return {};
-  }
-
   if (!llvm::is_contained({4, 8}, kWidth)) {
-    return {};
-  }
-
-  // NYI: make it generic for all dtypes
-  if (bitWidth != 16) {
-    return {};
-  }
-
-  auto blockBytes = kDim * nonKDim * std::max(1U, bitWidth / 8);
-  if (blockBytes < 16384) {
     return {};
   }
 
   // Determine row(contig) size
   unsigned contigSize = isKContig ? kDim : nonKDim;
 
-  // We clamp contigSize to 256 and repeat the tile. Note this does not affect
-  // performance because we are not splitting cache lines
-  contigSize = std::min(256U, contigSize);
+  // We clamp contigSize to 512 bytes (to reduce the number of cases handled
+  // below) and simply repeat the tile to the full tensor size.
+  contigSize = std::min(512U / elemByteWidth, contigSize);
 
   std::vector<std::vector<int>> bases;
   // Keep contigSize numbers of elments contig in shared memory
@@ -271,14 +274,18 @@ composePaddedLayoutCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
     bases.push_back({1 << elemLog2, 0});
 
   // Add strided rows (by 16) until we reach 1024byte (9 bases)
-  for (int rowBase = llvm::Log2_32(16); bases.size() < 9; rowBase++)
+  auto requiredNumBases = llvm::Log2_32(1024U / elemByteWidth);
+
+  for (int rowBase = llvm::Log2_32(16); bases.size() < requiredNumBases;
+       rowBase++)
     bases.push_back({0, 1 << rowBase});
 
-  // Add rows 1..16 afterwards
+  // Add rows 1..16 afterwards to complete the tile
   for (int rowLog2 = 0; rowLog2 < llvm::Log2_32(16); rowLog2++)
     bases.push_back({0, 1 << rowLog2});
 
-  unsigned paddingInBanks = 0;
+  // Compute required padding (in bytes) to avoid conflicts when accessing rows
+  unsigned paddingBytes = 0;
 
   // To compute the required amount of padding to avoid bank conflicts we look
   // at the number of contiguous banks loaded for a single row this directly
@@ -296,33 +303,36 @@ composePaddedLayoutCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
     // Repeat for second half of the warp
 
     if (mfmaNonKDim == 16) {
-      // For kWidth=8 lane groups read 8 contiguous banks
-      // For kWidth=4 lane groups load 2 contiguous banks
-      paddingInBanks = kWidth == 8 ? 8 : 2;
+      // For kWidth=8 lane groups read 32 contiguous bytes
+      // For kWidth=4 lane groups load 8 contiguous bytes
+      paddingBytes = kWidth == 8 ? 32 : 8;
     }
 
     if (mfmaNonKDim == 32) {
-      // For mfma32 lane groups read 4 contiguous banks
-      paddingInBanks = 2;
+      // For mfma32 lane groups read 16 contiguous bytes
+      paddingBytes = 8;
       // Because we load 32 rows we need to place every 16th row into the second
       // half of banks to spread loads over all banks. This is done by swapping
-      // the bases representing offset 128 (32banks) which is [7] and the base
-      // of the 16th row which depends on the contigSize
+      // the bases representing offset 128 (32banks) and the base of the 16th
+      // row which depends on the contigSize
       int row16Index = contigSize == 32 ? 5 : (contigSize == 64 ? 6 : 7);
-      std::swap(bases[7], bases[row16Index]);
+      int upperBankIndex = llvm::Log2_32(128 / elemByteWidth);
+      assert(row16Index < bases.size());
+      assert(upperBankIndex < bases.size());
+      std::swap(bases[upperBankIndex], bases[row16Index]);
     }
   } else {
     if (mfmaNonKDim == 16) {
-      // For mfma16 lane groups read 8 contiguous banks
-      paddingInBanks = 8;
+      // For mfma16 lane groups read 32 contiguous bytes
+      paddingBytes = 32;
       if (kWidth == 8) {
         // For kWidth=8 lane groups wrap at row 8 so we have to exchange row4
         // and 8 to avoid conflicts
         std::swap(bases[bases.size() - 1], bases[bases.size() - 2]);
       }
     } else if (mfmaNonKDim == 32) {
-      // For mfma32 lane groups read 16 contiguous banks
-      paddingInBanks = 16;
+      // For mfma32 lane groups read 64 contiguous bytes
+      paddingBytes = 64;
     }
   }
 
@@ -342,10 +352,8 @@ composePaddedLayoutCDNA4(ttg::DotOperandEncodingAttr dotOpEnc,
       linearComponent, ctaLayout, srcTy.getShape());
 
   // We also need to align with dwordx4 or dword loads
-  unsigned elemByteWidth = std::max(bitWidth / 8u, 1u);
   unsigned paddingInterval = 1024 / elemByteWidth;
-  unsigned bankWidth = 4;
-  unsigned paddingInElems = (paddingInBanks * bankWidth) / elemByteWidth;
+  unsigned paddingInElems = paddingBytes / elemByteWidth;
   return ttg::PaddedSharedEncodingAttr::get(
       ctx, {{paddingInterval, paddingInElems}}, linearComponent);
 }
