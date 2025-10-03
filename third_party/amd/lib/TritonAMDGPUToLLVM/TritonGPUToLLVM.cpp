@@ -267,16 +267,7 @@ struct ConvertTritonAMDGPUToLLVM
       return signalPassFailure();
     }
 
-    {
-      RewritePatternSet patterns(context);
-      AMD::populateAdjustModeRegisterLLVMPatterns(typeConverter, patterns,
-                                                  targetInfo, AMDBenefit);
-
-      if (failed(applyPatternsGreedily(mod, std::move(patterns)))) {
-        return signalPassFailure();
-      }
-    }
-
+    AMD::adjustModeRegister(mod, targetInfo);
     fixUpLoopAnnotation(mod);
   }
 
