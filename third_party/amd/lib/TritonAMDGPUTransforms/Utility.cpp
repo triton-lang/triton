@@ -24,11 +24,14 @@ int deduceMinCountBetweeOps(Operation *beginOp, Operation *endOp,
           deduceMinCountInBlock(ifOp.getElseRegion().front(), countFunc);
       count += std::min(minThen, minElse);
     } else if (auto forOp = llvm::dyn_cast<scf::ForOp>(op)) {
-      auto tripCount = constantTripCount(forOp.getLowerBound(),
-                                         forOp.getUpperBound(), forOp.getStep())
-                           .value_or(0);
-      if (tripCount > 0) {
-        count += tripCount * deduceMinCountInBlock(*forOp.getBody(), countFunc);
+      if (std::optional<APInt> tripCount = forOp.getStaticTripCount()) {
+        uint64_t tcVal = 0;
+        if (forOp.getUnsignedCmp() && tripCount->ugt(0))
+          tcVal = tripCount->getZExtValue();
+        else if (!forOp.getUnsignedCmp() && tripCount->sgt(0))
+          tcVal = tripCount->getSExtValue();
+        if (tcVal > 0)
+          count += tcVal * deduceMinCountInBlock(*forOp.getBody(), countFunc);
       }
     } else {
       count += countFunc(op);

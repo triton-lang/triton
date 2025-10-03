@@ -24,13 +24,13 @@ mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::DotOpMmaV5TmemLoader(
       trans(trans) {
   auto ty = cast<MemDescType>(tensor.getType());
   auto tmemEncoding = cast<ttng::TensorMemoryEncodingAttr>(ty.getEncoding());
-  unpacked = tmemEncoding.getUnpacked();
+  int elTyWidth = ty.getElementTypeBitWidth();
+  unpacked = tmemEncoding.getColStride() != 1;
   // When using TMEM to store operands mma operands the TMEM block size may be
   // smaller than mma k block. Therefore we need to adjust the offset
   // calculation.
   numSlicePerBlockN = tmemEncoding.getBlockN() / instrShape[1];
-  int elTyWidth = ty.getElementTypeBitWidth();
-  numElementsPer32b = unpacked ? 1 : 32 / elTyWidth;
+  numElementsPer32b = 32 / (elTyWidth * tmemEncoding.getColStride());
   auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
   numRepM = ceil<unsigned>(shapePerCTA[0], instrShape[0]);
 }
@@ -453,16 +453,24 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
     aLoader = std::make_unique<DotOpMmaV5TmemLoader>(a, baseA, aOperandShape,
                                                      interleaved, transA);
   } else {
-    auto allocShapeA = getAllocShape(aTensorTy, 1);
-    aLoader = std::make_unique<DotOpMmaV3SmemLoader>(
-        a, baseA, shapeA, allocShapeA, zero, 1, transA, aOperandShape,
-        op.numBitsPerElementA, rewriter, loc);
+    auto isFp4a = op.numBitsPerElementA == 4;
+    aLoader = std::make_unique<DotOpMmaSmemLoader>(DotOpMmaSmemLoader::build(
+        loc, rewriter, aTensorTy, baseA, aOperandShape, 5, isFp4a));
   }
 
+  auto isFp4b = op.numBitsPerElementB == 4;
   auto allocShapeB = getAllocShape(bTensorTy, 0);
-  DotOpMmaV3SmemLoader bLoader = DotOpMmaV3SmemLoader(
-      b, baseB, shapeB, allocShapeB, zero, 1, transB, {mmaSizeN, mmaSizeK},
-      op.numBitsPerElementB, rewriter, loc);
+  // [Instr shape twoCTAs]
+  // This division by 2 in 2CTA mode a bit subtle:
+  // The issue here is that in 2CTA you multiply in one instruction a tensor
+  // of shape MNK = 256, K, N, and you put it into TMEM of shape 128, K, N*2.
+  // So to compute the shapePerCTA, on the lhs we can look at the TMEM shape,
+  // but to compute the shapePerCTA on the rhs, we need to divide by 2.
+  // Something similar happens when we multiply by 2 the mmaSizeM when creating
+  // It's a massive code smell tho
+  DotOpMmaSmemLoader bLoader = DotOpMmaSmemLoader::build(
+      loc, rewriter, bTensorTy, baseB, {mmaSizeK, mmaSizeN / (twoCTAs ? 2 : 1)},
+      5, isFp4b);
 
   DotConversion::InstDesc desc{mmaSizeM, mmaSizeN, {numRepM, numRepN, numRepK},
                                transA,   transB,   interleaved,
@@ -473,7 +481,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
       MemDescOperand accAddress = op.getAccAddress(rewriter, loc, m, n, desc);
       for (int k = 0; k < numRepK; k++) {
         MemDescOperand a = aLoader->memLoad(m, k, rewriter, loc);
-        Value b = bLoader.smemLoad(n, k, rewriter, loc);
+        Value b = bLoader.smemLoad(k, n, rewriter, loc);
         op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
                          desc, m, n, k);
         useInitAcc = tb.i1_val(1);
@@ -524,6 +532,8 @@ void convertDot(const LLVMTypeConverter &typeConverter,
                           Value pred, Value useInitAcc,
                           const DotConversion::InstDesc &desc, int m, int n,
                           int k) {
+    // To understand this multiplication by 2, see the comment
+    // [Instr shape twoCTAs]
     Value instDescriptor = createInstDescriptor(
         rewriter, op, twoCTAs ? desc.mmaSizeM * 2 : desc.mmaSizeM,
         desc.mmaSizeN, desc.transA, desc.transB);
@@ -596,10 +606,8 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
     dot.shapeB[0] *= 2;
   }
 
-  dot.numBitsPerElementA = opKindIsMXFP4 ? getFormatBitSize(op.getAType())
-                                         : aTensorTy.getElementTypeBitWidth();
-  dot.numBitsPerElementB = opKindIsMXFP4 ? getFormatBitSize(op.getBType())
-                                         : bTensorTy.getElementTypeBitWidth();
+  dot.numBitsPerElementA = getFormatBitSize(op.getAType());
+  dot.numBitsPerElementB = getFormatBitSize(op.getBType());
 
   TritonLLVMOpBuilder tb(loc, rewriter);
   Value baseD = tb.ptrtoint(i32_ty, adaptor.getD());
@@ -632,6 +640,7 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
         ttng::getTmemAllocSizes(cast<MemDescType>(op.getBScale().getType()))
             .numCols,
         numRepN * (ceil<int>(numRepK, 4 / scaleFactorColsPerSet)));
+    numColPerScaleBlockB = std::max(numColPerScaleBlockB, 2);
     int subWordIdx = k % (4 / scaleFactorColsPerSet);
     int wordIdx = k / (4 / scaleFactorColsPerSet);
     Value scaleA = tb.add(

@@ -413,3 +413,39 @@ tt.func @test_rank_reduce_desc_load(%0: !tt.tensordesc<tensor<1x128x64xf16>>) ->
   %r = tt.reshape %l : tensor<1x128x64xf16> -> tensor<128x64xf16>
   tt.return %r :  tensor<128x64xf16>
 }
+
+// CHECK-LABEL: @test_combine_dot_add_no_fold_when_imprecise_allowed
+tt.func @test_combine_dot_add_no_fold_when_imprecise_allowed() -> (tensor<128x128xf32>) {
+    // CHECK-DAG: %[[D:.*]] = arith.constant dense<3.000000e+00> : tensor<128x128xf32>
+    %a    = arith.constant dense<1.0> : tensor<128x128xf32>
+    %b    = arith.constant dense<2.0> : tensor<128x128xf32>
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32>
+    %d    = arith.constant dense<3.0> : tensor<128x128xf32>
+
+    %dot_out = tt.dot %a, %b, %zero {maxNumImpreciseAcc = 1 : i32}
+               : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
+
+    // CHECK: arith.addf %{{.*}}, %[[D]] : tensor<128x128xf32>
+    // CHECK-NEXT: tt.return %{{.*}} : tensor<128x128xf32>
+    %res = arith.addf %dot_out, %d : tensor<128x128xf32>
+    tt.return %res : tensor<128x128xf32>
+}
+
+// CHECK-LABEL: @test_combine_dot_add_fold_when_precise_required
+tt.func @test_combine_dot_add_fold_when_precise_required() -> (tensor<128x128xf32>) {
+    // CHECK-DAG: %[[D:.*]] = arith.constant dense<3.000000e+00> : tensor<128x128xf32>
+    // CHECK-DAG: %[[B:.*]] = arith.constant dense<2.000000e+00> : tensor<128x128xf32>
+    // CHECK-DAG: %[[A:.*]] = arith.constant dense<1.000000e+00> : tensor<128x128xf32>
+    %a    = arith.constant dense<1.0> : tensor<128x128xf32>
+    %b    = arith.constant dense<2.0> : tensor<128x128xf32>
+    %zero = arith.constant dense<0.0> : tensor<128x128xf32>
+    %d    = arith.constant dense<3.0> : tensor<128x128xf32>
+
+    %dot_out = tt.dot %a, %b, %zero {maxNumImpreciseAcc = 0 : i32}
+               : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
+
+    // CHECK-NEXT: %[[RES:.*]] = tt.dot %[[A]], %[[B]], %[[D]] : tensor<128x128xf32> * tensor<128x128xf32> -> tensor<128x128xf32>
+    // CHECK-NEXT: tt.return %[[RES]] : tensor<128x128xf32>
+    %res = arith.addf %dot_out, %d : tensor<128x128xf32>
+    tt.return %res : tensor<128x128xf32>
+}

@@ -3,8 +3,10 @@ add_triton_library(TritonAMDGPUToLLVM
     AtomicRMWOpsEmitter.cpp
     AllocateSharedMemory.cpp
     BufferOpsEmitter.cpp
+    TensorPtrOpsToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
     MemoryOpToLLVM.cpp
+    MaskedOpsToLLVM.cpp
     DotOpToLLVM/FMA.cpp
     DotOpToLLVM/MFMA.cpp
     DotOpToLLVM/WMMA.cpp

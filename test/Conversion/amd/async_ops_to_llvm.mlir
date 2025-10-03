@@ -21,6 +21,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.padded_shared<[4:+4] {order = [1, 0], shape = [32, 64]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: async_copy_padded
+  tt.func public @async_copy_padded(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
+                                %arg1: i32 {tt.divisibility = 16 : i32},
+                                %arg2: !ttg.memdesc<32x64xf32, #shared, #smem, mutable>) {
+    // We need the splat to allow the AxisAnalysis to work during lowering
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x64x!tt.ptr<f32>, #blocked>
+    // Each thread needs to load 8 elements and we load 1 () per global.load.lds
+    // CHECK-COUNT-8: rocdl.global.load.lds
+    // CHECK-NOT: rocdl.global.load.lds
+    %2 = ttg.async_copy_global_to_local %1, %arg2 : tensor<32x64x!tt.ptr<f32>, #blocked> -> <32x64xf32, #shared, #smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [2, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
@@ -84,20 +104,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
                              %arg2: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
     // The waitcnt stores all counters in one i32 bits 15:14 and 3:0 store the vmcnt we have to wait on
     // CHECK: rocdl.s.waitcnt -49168
-    // CHECK: rocdl.barrier
+    // CHECK: rocdl.s.waitcnt -7937
+    // CHECK: rocdl.s.barrier
     ttg.async_wait {num = 0 : i32}
     // CHECK: rocdl.s.waitcnt -49167
-    // CHECK: rocdl.barrier
+    // CHECK: rocdl.s.waitcnt -7937
+    // CHECK: rocdl.s.barrier
     ttg.async_wait {num = 1 : i32}
     // CHECK: rocdl.s.waitcnt -2
-    // CHECK: rocdl.barrier
+    // CHECK: rocdl.s.waitcnt -7937
+    // CHECK: rocdl.s.barrier
     ttg.async_wait {num = 62 : i32}
     // CHECK: rocdl.s.waitcnt -1
-    // CHECK: rocdl.barrier
+    // CHECK: rocdl.s.waitcnt -7937
+    // CHECK: rocdl.s.barrier
     ttg.async_wait {num = 63 : i32}
     // Check that we clamp values > 63
     // CHECK: rocdl.s.waitcnt -1
-    // CHECK: rocdl.barrier
+    // CHECK: rocdl.s.waitcnt -7937
+    // CHECK: rocdl.s.barrier
     ttg.async_wait {num = 64 : i32}
     tt.return
   }
@@ -156,22 +181,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: llvm.cond_br
     // CHECK: rocdl.global.load.lds
     // CHECK-NEXT: llvm.br
-    // CHECK: _predicated_store
+    // CHECK: llvm.cond_br
+    // CHECK: llvm.store
 
     // CHECK: llvm.cond_br
     // CHECK: rocdl.global.load.lds
     // CHECK-NEXT: llvm.br
-    // CHECK: _predicated_store
+    // CHECK: llvm.cond_br
+    // CHECK: llvm.store
 
     // CHECK: llvm.cond_br
     // CHECK: rocdl.global.load.lds
     // CHECK-NEXT: llvm.br
-    // CHECK: _predicated_store
+    // CHECK: llvm.cond_br
+    // CHECK: llvm.store
 
     // CHECK: llvm.cond_br
     // CHECK: rocdl.global.load.lds
     // CHECK-NEXT: llvm.br
-    // CHECK: _predicated_store
+    // CHECK: llvm.cond_br
+    // CHECK: llvm.store
 
     %2 = ttg.async_copy_global_to_local %1, %arg2 mask %67 other %cst_0 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return
@@ -216,28 +245,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: llvm.cond_br
     // CHECK: rocdl.global.load.lds
     // CHECK-NEXT: llvm.br
-    // CHECK: _predicated_store
+    // CHECK: llvm.cond_br
+    // CHECK: llvm.store
 
     // CHECK: rocdl.ds_bpermute
     // CHECK: rocdl.ballot
     // CHECK: llvm.cond_br
     // CHECK: rocdl.global.load.lds
     // CHECK-NEXT: llvm.br
-    // CHECK: _predicated_store
+    // CHECK: llvm.cond_br
+    // CHECK: llvm.store
 
     // CHECK: rocdl.ds_bpermute
     // CHECK: rocdl.ballot
     // CHECK: llvm.cond_br
     // CHECK: rocdl.global.load.lds
     // CHECK-NEXT: llvm.br
-    // CHECK: _predicated_store
+    // CHECK: llvm.cond_br
+    // CHECK: llvm.store
 
     // CHECK: rocdl.ds_bpermute
     // CHECK: rocdl.ballot
     // CHECK: llvm.cond_br
     // CHECK: rocdl.global.load.lds
     // CHECK-NEXT: llvm.br
-    // CHECK: _predicated_store
+    // CHECK: llvm.cond_br
+    // CHECK: llvm.store
 
     %2 = ttg.async_copy_global_to_local %1, %arg2 mask %67 other %cst_0 : tensor<32x32x!tt.ptr<f32>, #blocked> -> <32x32xf32, #shared, #smem, mutable>
     tt.return

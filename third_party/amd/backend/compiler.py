@@ -30,7 +30,7 @@ def is_in_thread_transpose_enabled(arch):
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
-    waves_per_eu: int = 1
+    waves_per_eu: int = 0
     num_stages: int = 2
     num_ctas: int = 1
     extern_libs: dict = None
@@ -73,7 +73,7 @@ class HIPOptions:
         warp_size = 32 if gfx_major >= 10 else 64
         object.__setattr__(self, 'warp_size', warp_size)
         assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
-               "num_warps must be a power of 2"
+            "num_warps must be a power of 2"
 
         if (self.arch == 'gfx950') and (self.kpack != 1):
             warnings.warn(
@@ -94,6 +94,7 @@ class HIPOptions:
 
 class HIPBackend(BaseBackend):
     instrumentation = None
+    supports_native_tensor_specialization = False
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -129,8 +130,7 @@ class HIPBackend(BaseBackend):
 
         if "enable_fp_fusion" not in opts:
             args["enable_fp_fusion"] = knobs.language.default_fp_fusion
-        args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() \
-                     if k in opts and opts[k] is not None})
+        args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts and opts[k] is not None})
         return HIPOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -175,11 +175,9 @@ class HIPBackend(BaseBackend):
         return ret
 
     @staticmethod
-    def get_arg_specialization(arg, ty, **kwargs):
-        ret = BaseBackend.get_arg_specialization(arg, ty, **kwargs)
-        # Only attempt to do buffer ops specialization if buffer ops are enabled.
-        # Otherwise the is_within_2gb check is unnecessary overhead.
-        if knobs.amd.use_buffer_ops and ty == "tensor" and HIPBackend.is_within_2gb(arg):
+    def get_tensor_specialization(arg, **kwargs):
+        ret = BaseBackend.get_tensor_specialization(arg, **kwargs)
+        if knobs.amd.use_buffer_ops and HIPBackend.is_within_2gb(arg):
             ret += "S"
         return ret
 
@@ -197,7 +195,7 @@ class HIPBackend(BaseBackend):
         passes.ttir.add_triton_licm(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
-        pm.run(mod)
+        pm.run(mod, 'make_ttir')
         return mod
 
     @staticmethod
@@ -206,7 +204,7 @@ class HIPBackend(BaseBackend):
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, f"hip:{options.arch}", options.num_warps, options.warp_size,
                                            options.num_ctas)
-        pm.run(mod)
+        pm.run(mod, 'make_ttgir_early')
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttgpuir.add_coalesce(pm)
@@ -223,13 +221,11 @@ class HIPBackend(BaseBackend):
         passes.ttir.add_triton_licm(pm)
         passes.common.add_canonicalizer(pm)
 
-        global_prefetch = knobs.amd.global_prefetch
-        local_prefetch = knobs.amd.local_prefetch
         use_async_copy = knobs.amd.use_async_copy
         use_block_pingpong = is_pingpong_schedule_enabled(options.arch, use_async_copy)
 
-        amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch, use_async_copy,
-                                               use_block_pingpong)
+        amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages)
+        amd.passes.ttgpuir.add_pipeline(pm, use_async_copy, use_block_pingpong)
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
         passes.common.add_canonicalizer(pm)
@@ -255,7 +251,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if use_async_copy:
             amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
-        pm.run(mod)
+        pm.run(mod, 'make_ttgir')
         return mod
 
     @staticmethod
@@ -271,7 +267,7 @@ class HIPBackend(BaseBackend):
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
-        pm.run(mod)
+        pm.run(mod, 'gluon_to_ttgir')
         return mod
 
     @staticmethod
@@ -288,6 +284,7 @@ class HIPBackend(BaseBackend):
         custom_lds_size = 0
         amd.passes.ttgpuir.add_optimize_lds_usage(pm, options.arch, custom_lds_size)
         passes.convert.add_scf_to_cf(pm)
+        passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
 
         amd.passes.ttgpuir.add_allocate_shared_memory(pm)
@@ -319,11 +316,29 @@ class HIPBackend(BaseBackend):
         if HIPBackend.instrumentation:
             HIPBackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
 
-        if not knobs.compilation.disable_line_info:
+        if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)
 
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
-        pm.run(mod)
+        pm.run(mod, 'make_llir')
+
+        if knobs.compilation.dump_ir_extract_di_local_variables:
+            # comments below on why separate it
+            if not knobs.compilation.disable_line_info:
+                pm = ir.pass_manager(mod.context)
+                pm.enable_debug()
+                passes.llvmir.add_di_scope(pm)
+                pm.run(mod, 'make_llir.disable_line_info')
+
+            # insert dbg intrinsic with several DI Attribute including source
+            # var name and type info note: unknown reason for now, but this
+            # pass and add_di_scope has to be run separately, otherwise if we
+            # put them into previous pipline, it trigger a segmentfault without
+            # any error message; could be due to a bug in mlir or pybind11
+            pm = ir.pass_manager(mod.context)
+            pm.enable_debug()
+            passes.llvmir.add_di_local_variable(pm)
+            pm.run(mod, 'make_llir.dump_ir_extract_di_local_variables')
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
@@ -352,11 +367,13 @@ class HIPBackend(BaseBackend):
         # LLVM AMDGPU backend supports the attribute "amdgpu-waves-per-eu"="<min>[, <max>]".
         # This attribute may be attached to a kernel function definition and is an optimization hint.
         # <min> parameter specifies the requested minimum number of waves per EU, and optional <max> parameter
-        # specifies the requested maximum number of waves per EU (must be greater than <min> if specified).
+        # specifies the requested maximum number of waves per EU (must be >= <min> if specified).
         # If <max> is omitted, then there is no restriction on the maximum number of waves per EU other than
         # the one dictated by the hardware for which the kernel is compiled. Passing 0, 0 as <min>, <max>
         # implies the default behavior (no limits).
-        fns[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
+        # Specifying N, N forces LLVM to focus on a single register count, simplifies some heuristics
+        # and may improve scheduling.
+        fns[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}, {options.waves_per_eu}")
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         fns[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
         if knobs.compilation.enable_asan:
@@ -454,6 +471,8 @@ class HIPBackend(BaseBackend):
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)
+        if knobs.runtime.add_stages_inspection_hook is not None:
+            knobs.runtime.add_stages_inspection_hook(self, stages, options, language, None)
 
     @functools.lru_cache()
     def hash(self):

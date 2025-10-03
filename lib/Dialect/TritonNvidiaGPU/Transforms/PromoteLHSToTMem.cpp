@@ -63,10 +63,10 @@ public:
     if (elemBitWidth != 16 && elemBitWidth != 32) {
       return failure();
     }
-    bool unpacked = elemBitWidth != 16;
+    const unsigned colStride = 1;
     auto aTMemEncoding = TensorMemoryEncodingAttr::get(
         context, accTMemEncoding.getBlockM(), lhs.getType().getShape()[1],
-        /*unpacked=*/unpacked, CTASplitNum[0], CTASplitNum[1]);
+        colStride, CTASplitNum[0], CTASplitNum[1]);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     ttg::MemDescType lhsMemDescType = ttg::MemDescType::get(

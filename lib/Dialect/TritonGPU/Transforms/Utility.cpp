@@ -6,7 +6,6 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -14,7 +13,6 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "llvm/ADT/SetOperations.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "ttg-utility"
@@ -525,6 +523,10 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
     if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
       return {};
   }
+
+  if (isa<triton::gpu::UpcastFpOpInterface>(op))
+    return {};
+
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
@@ -558,6 +560,9 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
     if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
       return {};
   }
+  if (isa<triton::gpu::UpcastFpOpInterface>(op))
+    return {};
+
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::Elementwise>() ||
@@ -938,7 +943,13 @@ LogicalResult getConvertBackwardSlice(
         continue;
       }
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
-        auto srcEncoding = inferSrcEncoding(definingOp, encoding);
+        Attribute srcEncoding;
+        if (auto upcast =
+                dyn_cast<triton::gpu::UpcastFpOpInterface>(definingOp)) {
+          srcEncoding = upcast.inferSrcEncoding(i, encoding);
+        } else {
+          srcEncoding = inferSrcEncoding(definingOp, encoding);
+        }
         if (!srcEncoding)
           return failure();
         // If the infered layout matches the original one we don't need to keep
@@ -1166,6 +1177,66 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
     attr = tempAttr;
   }
   return attr;
+}
+
+static Type getNewType(Type type, Attribute encoding) {
+  RankedTensorType tensorType = cast<RankedTensorType>(type);
+  return RankedTensorType::get(tensorType.getShape(),
+                               tensorType.getElementType(), encoding);
+}
+
+static bool skipOperand(Operation *op, unsigned operandNumber) {
+  if (auto gather = dyn_cast<DescriptorGatherOp>(op)) {
+    return operandNumber == gather.getXOffsetsMutable().getOperandNumber();
+  }
+  if (auto scatter = dyn_cast<DescriptorScatterOp>(op)) {
+    return operandNumber == scatter.getXOffsetsMutable().getOperandNumber();
+  }
+  return false;
+}
+
+Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
+  OpBuilder builder(op);
+  // Convert operands
+  // For load/store with tensor pointers, we don't have to change the
+  // operands' type, we do this by changing the outputs' type of
+  // `make_tensor_ptr`
+  SmallVector<Value, 4> newArgs;
+  for (auto &opOperand : op->getOpOperands()) {
+    Value operand = opOperand.get();
+    auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
+    bool skip = skipOperand(op, opOperand.getOperandNumber());
+    if (tensorType && !skip) {
+      Type newType = getNewType(tensorType, encoding);
+      newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
+          op->getLoc(), newType, operand));
+    } else {
+      newArgs.push_back(operand);
+    }
+  }
+
+  // Convert output types
+  SmallVector<Type, 4> newTypes;
+  for (auto t : op->getResultTypes()) {
+    bool isAsync = isa<triton::gpu::AsyncCopyGlobalToLocalOp>(op);
+    newTypes.push_back(isAsync ? t : getNewType(t, encoding));
+  }
+
+  // Construct new op with the new encoding
+  Operation *newOp = builder.create(op->getLoc(), op->getName().getIdentifier(),
+                                    newArgs, newTypes, op->getAttrs());
+
+  // Cast the results back to the original layout
+  for (size_t i = 0; i < op->getNumResults(); i++) {
+    Value newResult = newOp->getResult(i);
+    if (newTypes[i] != op->getResultTypes()[i]) {
+      newResult = builder.create<triton::gpu::ConvertLayoutOp>(
+          op->getLoc(), op->getResult(i).getType(), newResult);
+    }
+    op->getResult(i).replaceAllUsesWith(newResult);
+  }
+  op->erase();
+  return newOp;
 }
 
 namespace {

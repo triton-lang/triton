@@ -1,4 +1,5 @@
 import importlib
+import os
 import inspect
 import sys
 from dataclasses import dataclass
@@ -36,6 +37,24 @@ class Backend:
 
 def _discover_backends() -> dict[str, Backend]:
     backends = dict()
+    # Fast path: optionally skip entry point discovery (which can be slow) and
+    # discover only in-tree backends under the `triton.backends` namespace.
+    skip_entrypoints_env = os.environ.get("TRITON_BACKENDS_IN_TREE", "")
+
+    if skip_entrypoints_env == "1":
+        root = os.path.dirname(__file__)
+        for name in os.listdir(root):
+            if not os.path.isdir(os.path.join(root, name)):
+                continue
+            if name.startswith('__'):
+                continue
+            compiler = importlib.import_module(f"triton.backends.{name}.compiler")
+            driver = importlib.import_module(f"triton.backends.{name}.driver")
+            backends[name] = Backend(_find_concrete_subclasses(compiler, BaseBackend),
+                                     _find_concrete_subclasses(driver, DriverBase))
+        return backends
+
+    # Default path: discover via entry points for out-of-tree/downstream plugins.
     for ep in entry_points().select(group="triton.backends"):
         compiler = importlib.import_module(f"{ep.value}.compiler")
         driver = importlib.import_module(f"{ep.value}.driver")

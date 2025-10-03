@@ -33,6 +33,7 @@ include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUOpInterfaces.td"
 
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
@@ -520,6 +521,117 @@ def TTG_UpcastMXFPOp : TT_AMDGPU_Op<"upcast_mxfp", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// MaskedLoadOp
+//===----------------------------------------------------------------------===//
+def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
+  let summary = "Masked load operation";
+  let description = [{
+    Load operation with masking support. If the mask is true, loads from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.
+  }];
+  let arguments = (ins
+    LLVM_AnyPointer:$ptr,
+    I1:$mask,
+    LLVM_Type:$falseVal,
+    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<BoolAttr, "false">:$forceNoAlias
+  );
+
+  let results = (outs LLVM_Type:$result);
+
+  let assemblyFormat = [{
+    $ptr `,` $mask `,` $falseVal
+    oilist(`cacheModifier` `=` $cache)
+    (`forceNoAlias` $forceNoAlias^)?
+    attr-dict `:` functional-type(operands, results)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// MaskedStoreOp
+//===----------------------------------------------------------------------===//
+def MaskedStoreOp : TT_AMDGPU_Op<"masked_store", []> {
+  let summary = "Masked Store operation";
+  let description = [{
+    Store operation with masking support. If the mask is true, Store from the given pointer. Works with LLVM types as a utility op for making LLVM conversion easier.
+  }];
+  let arguments = (ins
+    LLVM_AnyPointer:$ptr,
+    LLVM_Type:$value,
+    I1:$mask,
+    DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+    DefaultValuedAttr<BoolAttr, "false">:$forceNoAlias
+  );
+
+  let assemblyFormat = [{
+    $ptr `,` $value `,` $mask
+    oilist(`cacheModifier` `=` $cache)
+    (`forceNoAlias` $forceNoAlias^)?
+    attr-dict `:` type(operands)
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// ScaledUpcastFp4Op
+//===----------------------------------------------------------------------===//
+
+def ScaledUpcastFp4Op : TT_AMDGPU_Op<"scaled_upcast_fp4", [Pure, DeclareOpInterfaceMethods<UpcastFpOpInterface>]> {
+  let summary = "Upcast fp4 and then multiply scale";
+
+  let description = [{
+    Upcast fp4 (e2m1) values packed as i8 values and multiply with the given
+    E8M0 scale encoded as BF16. This maps to `v_cvt_scalef32_*` intrinsics
+    on the AMD CDNA4 architecture.
+
+    The lower 4 bits of the i8s represent the first fp4 element, and the upper
+    4 bits the second fp4 element.
+
+    The `axis` attribute specifies the axis along which the fp4 elements are
+    packed.
+  }];
+
+  let arguments = (ins
+    RankedTensorOf<[I8]>:$input,
+    RankedTensorOf<[BF16]>:$scale,
+    I32Attr:$axis);
+  let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16, F32]>]>:$output);
+
+  let assemblyFormat = [{
+    $input `scale` $scale attr-dict
+        `:` type($input) `,` type($scale) `->` type($output)
+  }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// ScaledUpcastFp8Op
+//===----------------------------------------------------------------------===//
+
+def ScaledUpcastFp8Op : TT_AMDGPU_Op<"scaled_upcast_fp8", [
+    Pure,
+    Elementwise,
+    SameOperandsAndResultShape,
+    SameOperandsAndResultEncoding,
+    DeclareOpInterfaceMethods<UpcastFpOpInterface>]> {
+  let summary = "Upcast Fp8 and then multiply scale";
+
+  let description = [{
+    Upcast fp8 (e4m3/e5m2) values and multiply with the given E8M0 scale
+    encoded as BF16. This maps to `v_cvt_scalef32_*` intrinsics
+    on the AMD CDNA4 architecture.
+  }];
+
+  let arguments = (ins
+    RankedTensorOf<[AnyTypeOf<[F8E4M3FN, F8E5M2]>]>:$input,
+    RankedTensorOf<[BF16]>:$scale);
+  let results = (outs RankedTensorOf<[AnyTypeOf<[F16, BF16, F32]>]>:$output);
+
+  let assemblyFormat = [{
+    $input `scale` $scale attr-dict
+        `:` type($input) `,` type($scale) `->` type($output)
+  }];
+}
+//===----------------------------------------------------------------------===//
 // InThreadTransposeOp
 //===----------------------------------------------------------------------===//
 
@@ -582,6 +694,53 @@ def LocalLoadPackedTransposedOp : TT_AMDGPU_Op<"local_load_packed_tranposed", [L
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)}];
   let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// AsyncTDMCopyGlobalToLocalOp
+//===----------------------------------------------------------------------===//
+
+def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local"> {
+  let summary = "Copy data based on descriptor from global memory to local memory asynchronously";
+
+  let description = [{
+    This operation copies data from global memory to local memory
+    asynchronously. This is analogue to tt.load except the data are copied to
+    local memory pointed by `result` instead of a distributed tensor. The data
+    copied depends on the global memory descriptor pointed to by `desc`. Set
+    `pred` to false will disable the copy.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemRead<GlobalMemory>]>:$desc,
+    Variadic<I32>:$indices,
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$result,
+    I1:$pred
+  );
+
+  let results = (outs TTG_AsyncToken:$token);
+
+  let assemblyFormat = [{
+    $desc `[` $indices `]` `into` $result `,` $pred
+    attr-dict `:` qualified(type($desc)) `->` qualified(type($result))
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// AsyncTDMWait
+//===----------------------------------------------------------------------===//
+
+def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_wait"> {
+  let summary = "Wait until there are less than or equal to the given number of outstanding TDM operations";
+  let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num);
+  let description = [{
+    This operation waits until there are less than or equal to the given number
+    of outstanding TDM operations, including both loads and stores. This is
+    necessary to ensure that data is available in the LDS before it is used.
+  }];
+  let results = (outs TTG_AsyncToken:$retToken);
+
+  let assemblyFormat = "$asyncToken attr-dict";
 }
 
 #endif

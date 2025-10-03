@@ -81,7 +81,7 @@ public:
     // Expand dimensions
     Value expandedResult =
         builder.create<arith::AddIOp>(loc, splatOffset, i64Range);
-    for (uint j = 0; j < tensorShape.size(); ++j) {
+    for (size_t j = 0; j < tensorShape.size(); ++j) {
       if (j == i)
         continue;
       expandedResult =
@@ -259,7 +259,7 @@ public:
     // Calculate new offsets
     assert(info.length() == op.getOffsets().size());
     SmallVector<Value> newOffsets;
-    for (uint i = 0; i < info.length(); ++i) {
+    for (size_t i = 0; i < info.length(); ++i) {
       Value i64Offset = builder.create<arith::ExtSIOp>(
           op.getLoc(), builder.getI64Type(), op.getOffsets()[i]);
       Value newOffset = builder.create<arith::AddIOp>(

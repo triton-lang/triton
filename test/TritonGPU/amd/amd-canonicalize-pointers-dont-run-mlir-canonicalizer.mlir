@@ -24,41 +24,33 @@ module attributes {"ttg.num-warps" = 4 : i32} {
   }
 }
 
-// CHECK-LABEL:   tt.func @ifOpTwoYields(
-// CHECK-SAME:                           %[[VAL_0:.*]]: !tt.ptr<f32>,
-// CHECK-SAME:                           %[[VAL_1:.*]]: tensor<1024xf32>,
-// CHECK-SAME:                           %[[VAL_2:.*]]: i1) -> (tensor<1024xf32>, tensor<1024xf32>) {
-// CHECK-DAG:       %[[VAL_3:.*]] = arith.constant 0 : i64
-// CHECK-DAG:       %[[VAL_4:.*]] = arith.constant 1024 : i32
-// CHECK:           %[[VAL_5:.*]] = tt.get_program_id x : i32
-// CHECK:           %[[VAL_6:.*]] = arith.muli %[[VAL_5]], %[[VAL_4]] : i32
-// CHECK:           %[[VAL_7:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
-// CHECK:           %[[VAL_8:.*]] = tt.splat %[[VAL_6]] : i32 -> tensor<1024xi32>
-// CHECK:           %[[VAL_9:.*]] = arith.addi %[[VAL_8]], %[[VAL_7]] : tensor<1024xi32>
-// CHECK:           %[[VAL_10:.*]] = tt.splat %[[VAL_3]] : i64 -> tensor<1024xi64>
-// CHECK:           %[[VAL_11:.*]]:4 = scf.if %[[VAL_2]] -> (!tt.ptr<f32>, tensor<1024xi64>, !tt.ptr<f32>, tensor<1024xi64>) {
-// CHECK-DAG:         %[[VAL_12:.*]] = arith.constant dense<0> : tensor<1024xi32>
-// CHECK-DAG:         %[[VAL_13:.*]] = arith.constant 0 : i32
-// CHECK:             %[[VAL_14:.*]] = arith.addi %[[VAL_6]], %[[VAL_13]] : i32
-// CHECK:             %[[VAL_15:.*]] = arith.addi %[[VAL_12]], %[[VAL_7]] : tensor<1024xi32>
-// CHECK:             %[[VAL_16:.*]] = tt.addptr %[[VAL_0]], %[[VAL_14]] : !tt.ptr<f32>, i32
-// CHECK:             %[[VAL_17:.*]] = arith.extsi %[[VAL_15]] : tensor<1024xi32> to tensor<1024xi64>
-// CHECK:             %[[VAL_18:.*]] = arith.addi %[[VAL_17]], %[[VAL_10]] : tensor<1024xi64>
-// CHECK:             scf.yield %[[VAL_16]], %[[VAL_18]], %[[VAL_16]], %[[VAL_18]] : !tt.ptr<f32>, tensor<1024xi64>, !tt.ptr<f32>, tensor<1024xi64>
-// CHECK:           } else {
-// CHECK:             %[[VAL_19:.*]] = tt.addptr %[[VAL_0]], %[[VAL_6]] : !tt.ptr<f32>, i32
-// CHECK:             scf.yield %[[VAL_19]], %[[VAL_10]], %[[VAL_19]], %[[VAL_10]] : !tt.ptr<f32>, tensor<1024xi64>, !tt.ptr<f32>, tensor<1024xi64>
-// CHECK:           }
-// CHECK:           %[[VAL_20:.*]] = arith.trunci %[[VAL_21:.*]]#1 : tensor<1024xi64> to tensor<1024xi32>
-// CHECK:           %[[VAL_22:.*]] = tt.splat %[[VAL_21]]#0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
-// CHECK:           %[[VAL_23:.*]] = tt.addptr %[[VAL_22]], %[[VAL_20]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
-// CHECK:           %[[VAL_24:.*]] = tt.load %[[VAL_23]] : tensor<1024x!tt.ptr<f32>>
-// CHECK:           %[[VAL_25:.*]] = arith.trunci %[[VAL_21]]#3 : tensor<1024xi64> to tensor<1024xi32>
-// CHECK:           %[[VAL_26:.*]] = tt.splat %[[VAL_21]]#2 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
-// CHECK:           %[[VAL_27:.*]] = tt.addptr %[[VAL_26]], %[[VAL_25]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
-// CHECK:           %[[VAL_28:.*]] = tt.load %[[VAL_27]] : tensor<1024x!tt.ptr<f32>>
-// CHECK:           tt.return %[[VAL_24]], %[[VAL_28]] : tensor<1024xf32>, tensor<1024xf32>
-// CHECK:         }
+// CHECK-LABEL:  tt.func @ifOpTwoYields(
+// CHECK-SAME:        %arg0: !tt.ptr<f32>,
+// CHECK-SAME:        %arg1: tensor<1024xf32>,
+// CHECK-SAME:        %arg2: i1) -> (tensor<1024xf32>, tensor<1024xf32>) {
+// CHECK:           %[[const0:.*]] = arith.constant 0 : i64
+// CHECK:           %[[C1024:.*]] = arith.constant 1024 : i32
+// CHECK:           %[[PID:.*]] = tt.get_program_id x : i32
+// CHECK:           %[[PID_time_1024:.*]] = arith.muli %[[PID]], %[[C1024]] : i32
+// CHECK:           %[[MAKE_RANGE_1024:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+// CHECK:           %[[CONST_ZERO_SPLAT:.*]] = tt.splat %[[const0]] : i64 -> tensor<1024xi64>
+// CHECK:           %[[SCF:.*]]:4 = scf.if %arg2 -> (!tt.ptr<f32>, tensor<1024xi64>, !tt.ptr<f32>, tensor<1024xi64>) {
+// CHECK:             %[[ADDPTR1:.*]] = tt.addptr %arg0, %[[PID_time_1024]] : !tt.ptr<f32>, i32
+// CHECK:             %[[EXT_RANGE:.*]] = arith.extsi %[[MAKE_RANGE_1024]] : tensor<1024xi32> to tensor<1024xi64>
+// CHECK:             scf.yield %[[ADDPTR1]], %[[EXT_RANGE]], %[[ADDPTR1]], %[[EXT_RANGE]] : !tt.ptr<f32>, tensor<1024xi64>, !tt.ptr<f32>, tensor<1024xi64>
+//                  } else {
+// CHECK:             %[[ADDPTR2:.*]] = tt.addptr %arg0, %[[PID_time_1024]] : !tt.ptr<f32>, i32
+// CHECK:             scf.yield %[[ADDPTR2]], %[[CONST_ZERO_SPLAT]], %[[ADDPTR2]], %[[CONST_ZERO_SPLAT]] : !tt.ptr<f32>, tensor<1024xi64>, !tt.ptr<f32>, tensor<1024xi64>
+//                  }
+// CHECK:           %[[dont_care_5:.*]] = arith.trunci %[[SCF]]#1 : tensor<1024xi64> to tensor<1024xi32>
+// CHECK:           %[[dont_care_6:.*]] = tt.splat %[[SCF]]#0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[dont_care_7:.*]] = tt.addptr %[[dont_care_6]], %[[dont_care_5]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           %[[dont_care_8:.*]] = tt.load %[[dont_care_7]] : tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[dont_care_9:.*]] = arith.trunci %[[SCF]]#3 : tensor<1024xi64> to tensor<1024xi32>
+// CHECK:           %[[dont_care_10:.*]] = tt.splat %[[SCF]]#2 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[dont_care_11:.*]] = tt.addptr %[[dont_care_10]], %[[dont_care_9]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           %[[dont_care_12:.*]] = tt.load %[[dont_care_11]] : tensor<1024x!tt.ptr<f32>>
+// CHECK:           tt.return %[[dont_care_8]], %[[dont_care_12]] : tensor<1024xf32>, tensor<1024xf32>
 
 // -----
 
@@ -76,7 +68,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
       scf.yield %8, %8, %0 : tensor<1024x!tt.ptr<f32>>, tensor<1024x!tt.ptr<f32>>, i32
     } else {
       %8 = tt.addptr %5, %3 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
-      scf.yield %8, %8, %0 : tensor<1024x!tt.ptr<f32>>, tensor<1024x!tt.ptr<f32>>, i32
+      %9 = arith.muli %1, %1 : i32
+      scf.yield %8, %8, %9 : tensor<1024x!tt.ptr<f32>>, tensor<1024x!tt.ptr<f32>>, i32
     }
     %7 = tt.load %6#0 : tensor<1024x!tt.ptr<f32>>
     %8 = tt.load %6#1 : tensor<1024x!tt.ptr<f32>>
@@ -85,41 +78,33 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 }
 
 // CHECK-LABEL:   tt.func @ifOpTwoYieldsAndNonPtr(
-// CHECK-SAME:                                    %[[VAL_0:.*]]: !tt.ptr<f32>,
-// CHECK-SAME:                                    %[[VAL_1:.*]]: tensor<1024xf32>,
-// CHECK-SAME:                                    %[[VAL_2:.*]]: i1) -> (tensor<1024xf32>, tensor<1024xf32>, i32) {
-// CHECK-DAG:       %[[VAL_3:.*]] = arith.constant 0 : i64
-// CHECK-DAG:       %[[VAL_4:.*]] = arith.constant 1024 : i32
-// CHECK:           %[[VAL_5:.*]] = tt.get_program_id x : i32
-// CHECK:           %[[VAL_6:.*]] = arith.muli %[[VAL_5]], %[[VAL_4]] : i32
-// CHECK:           %[[VAL_7:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
-// CHECK:           %[[VAL_8:.*]] = tt.splat %[[VAL_6]] : i32 -> tensor<1024xi32>
-// CHECK:           %[[VAL_9:.*]] = arith.addi %[[VAL_8]], %[[VAL_7]] : tensor<1024xi32>
-// CHECK:           %[[VAL_10:.*]] = tt.splat %[[VAL_3]] : i64 -> tensor<1024xi64>
-// CHECK:           %[[VAL_11:.*]]:5 = scf.if %[[VAL_2]] -> (!tt.ptr<f32>, tensor<1024xi64>, !tt.ptr<f32>, tensor<1024xi64>, i32) {
-// CHECK-DAG:         %[[VAL_12:.*]] = arith.constant dense<0> : tensor<1024xi32>
-// CHECK-DAG:         %[[VAL_13:.*]] = arith.constant 0 : i32
-// CHECK:             %[[VAL_14:.*]] = arith.addi %[[VAL_6]], %[[VAL_13]] : i32
-// CHECK:             %[[VAL_15:.*]] = arith.addi %[[VAL_12]], %[[VAL_7]] : tensor<1024xi32>
-// CHECK:             %[[VAL_16:.*]] = tt.addptr %[[VAL_0]], %[[VAL_14]] : !tt.ptr<f32>, i32
-// CHECK:             %[[VAL_17:.*]] = arith.extsi %[[VAL_15]] : tensor<1024xi32> to tensor<1024xi64>
-// CHECK:             %[[VAL_18:.*]] = arith.addi %[[VAL_17]], %[[VAL_10]] : tensor<1024xi64>
-// CHECK:             scf.yield %[[VAL_16]], %[[VAL_18]], %[[VAL_16]], %[[VAL_18]], %[[VAL_5]] : !tt.ptr<f32>, tensor<1024xi64>, !tt.ptr<f32>, tensor<1024xi64>, i32
-// CHECK:           } else {
-// CHECK:             %[[VAL_19:.*]] = tt.addptr %[[VAL_0]], %[[VAL_6]] : !tt.ptr<f32>, i32
-// CHECK:             scf.yield %[[VAL_19]], %[[VAL_10]], %[[VAL_19]], %[[VAL_10]], %[[VAL_5]] : !tt.ptr<f32>, tensor<1024xi64>, !tt.ptr<f32>, tensor<1024xi64>, i32
-// CHECK:           }
-// CHECK:           %[[VAL_20:.*]] = arith.trunci %[[VAL_21:.*]]#1 : tensor<1024xi64> to tensor<1024xi32>
-// CHECK:           %[[VAL_22:.*]] = tt.splat %[[VAL_21]]#0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
-// CHECK:           %[[VAL_23:.*]] = tt.addptr %[[VAL_22]], %[[VAL_20]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
-// CHECK:           %[[VAL_24:.*]] = tt.load %[[VAL_23]] : tensor<1024x!tt.ptr<f32>>
-// CHECK:           %[[VAL_25:.*]] = arith.trunci %[[VAL_21]]#3 : tensor<1024xi64> to tensor<1024xi32>
-// CHECK:           %[[VAL_26:.*]] = tt.splat %[[VAL_21]]#2 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
-// CHECK:           %[[VAL_27:.*]] = tt.addptr %[[VAL_26]], %[[VAL_25]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
-// CHECK:           %[[VAL_28:.*]] = tt.load %[[VAL_27]] : tensor<1024x!tt.ptr<f32>>
-// CHECK:           tt.return %[[VAL_24]], %[[VAL_28]], %[[VAL_21]]#4 : tensor<1024xf32>, tensor<1024xf32>, i32
-// CHECK:         }
-
+// CHECK-SAME:        %arg0: !tt.ptr<f32>,
+// CHECK-SAME:        %arg1: tensor<1024xf32>,
+// CHECK-SAME:        %arg2: i1) -> (tensor<1024xf32>, tensor<1024xf32>, i32) {
+// CHECK-DAG:         %c0_i64 = arith.constant 0 : i64
+// CHECK:             %[[C1024:.*]] = arith.constant 1024 : i32
+// CHECK:             %[[PID:.*]] = tt.get_program_id x : i32
+// CHECK:             %[[PID_TIME_1024:.*]] = arith.muli %[[PID]], %[[C1024]] : i32
+// CHECK:             %[[MK_RANGE:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+// CHECK:             %[[CONST0_SPLAT:.*]] = tt.splat %c0_i64 : i64 -> tensor<1024xi64>
+// CHECK:             %[[SCF_IF:.*]]:5 = scf.if %arg2 -> (!tt.ptr<f32>, tensor<1024xi64>, !tt.ptr<f32>, tensor<1024xi64>, i32) {
+// CHECK:               %[[PTR_BASE_0:.*]] = tt.addptr %arg0, %[[PID_TIME_1024]] : !tt.ptr<f32>, i32
+// CHECK:               %[[EXT_MK_RANGE:.*]] = arith.extsi %[[MK_RANGE]] : tensor<1024xi32> to tensor<1024xi64>
+// CHECK:               scf.yield %[[PTR_BASE_0]], %[[EXT_MK_RANGE]], %[[PTR_BASE_0]], %[[EXT_MK_RANGE]], %[[PID]] : !tt.ptr<f32>, tensor<1024xi64>, !tt.ptr<f32>, tensor<1024xi64>, i32
+//                  } else {
+// CHECK:               %[[BASE_PTR_1:.*]] = tt.addptr %arg0, %[[PID_TIME_1024]] : !tt.ptr<f32>, i32
+// CHECK:               %[[OFST_2:.*]] = arith.muli %[[PID_TIME_1024]], %[[PID_TIME_1024]] : i32
+//                      scf.yield %[[BASE_PTR_1]], %[[CONST0_SPLAT]], %[[BASE_PTR_1]], %[[CONST0_SPLAT]], %[[OFST_2]] : !tt.ptr<f32>, tensor<1024xi64>, !tt.ptr<f32>, tensor<1024xi64>, i32
+//                  }
+// CHECK:          %[[dont_care_5:.*]] = arith.trunci %[[SCF_IF]]#1 : tensor<1024xi64> to tensor<1024xi32>
+// CHECK:          %[[dont_care_6:.*]] = tt.splat %[[SCF_IF]]#0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:          %[[dont_care_7:.*]] = tt.addptr %[[dont_care_6]], %[[dont_care_5]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:          %[[dont_care_8:.*]] = tt.load %[[dont_care_7]] : tensor<1024x!tt.ptr<f32>>
+// CHECK:          %[[dont_care_9:.*]] = arith.trunci %[[SCF_IF]]#3 : tensor<1024xi64> to tensor<1024xi32>
+// CHECK:          %[[dont_care_10:.*]] = tt.splat %[[SCF_IF]]#2 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:          %[[dont_care_11:.*]] = tt.addptr %[[dont_care_10]], %[[dont_care_9]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:          %[[dont_care_12:.*]] = tt.load %[[dont_care_11]] : tensor<1024x!tt.ptr<f32>>
+// CHECK:          tt.return %[[dont_care_8]], %[[dont_care_12]], %[[SCF_IF]]#4 : tensor<1024xf32>, tensor<1024xf32>, i32
 
 // -----
 
@@ -137,7 +122,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
       scf.yield %8, %0, %8 : tensor<1024x!tt.ptr<f32>>, i32, tensor<1024x!tt.ptr<f32>>
     } else {
       %8 = tt.addptr %5, %3 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
-      scf.yield %8, %0, %8 : tensor<1024x!tt.ptr<f32>>, i32, tensor<1024x!tt.ptr<f32>>
+      %9 = arith.muli %1, %1 : i32
+      scf.yield %8, %9, %8 : tensor<1024x!tt.ptr<f32>>, i32, tensor<1024x!tt.ptr<f32>>
     }
     %7 = tt.load %6#0 : tensor<1024x!tt.ptr<f32>>
     %8 = tt.load %6#2 : tensor<1024x!tt.ptr<f32>>
@@ -146,37 +132,30 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 }
 
 // CHECK-LABEL:   tt.func @ifOpTwoYieldsAndNonPtrReordered(
-// CHECK-SAME:                                             %[[VAL_0:.*]]: !tt.ptr<f32>,
-// CHECK-SAME:                                             %[[VAL_1:.*]]: tensor<1024xf32>,
-// CHECK-SAME:                                             %[[VAL_2:.*]]: i1) -> (tensor<1024xf32>, tensor<1024xf32>, i32) {
-// CHECK-DAG:       %[[VAL_3:.*]] = arith.constant 0 : i64
-// CHECK-DAG:       %[[VAL_4:.*]] = arith.constant 1024 : i32
-// CHECK:           %[[VAL_5:.*]] = tt.get_program_id x : i32
-// CHECK:           %[[VAL_6:.*]] = arith.muli %[[VAL_5]], %[[VAL_4]] : i32
-// CHECK:           %[[VAL_7:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
-// CHECK:           %[[VAL_8:.*]] = tt.splat %[[VAL_6]] : i32 -> tensor<1024xi32>
-// CHECK:           %[[VAL_9:.*]] = arith.addi %[[VAL_8]], %[[VAL_7]] : tensor<1024xi32>
-// CHECK:           %[[VAL_10:.*]] = tt.splat %[[VAL_3]] : i64 -> tensor<1024xi64>
-// CHECK:           %[[VAL_11:.*]]:5 = scf.if %[[VAL_2]] -> (!tt.ptr<f32>, tensor<1024xi64>, i32, !tt.ptr<f32>, tensor<1024xi64>) {
-// CHECK-DAG:         %[[VAL_12:.*]] = arith.constant dense<0> : tensor<1024xi32>
-// CHECK-DAG:         %[[VAL_13:.*]] = arith.constant 0 : i32
-// CHECK:             %[[VAL_14:.*]] = arith.addi %[[VAL_6]], %[[VAL_13]] : i32
-// CHECK:             %[[VAL_15:.*]] = arith.addi %[[VAL_12]], %[[VAL_7]] : tensor<1024xi32>
-// CHECK:             %[[VAL_16:.*]] = tt.addptr %[[VAL_0]], %[[VAL_14]] : !tt.ptr<f32>, i32
-// CHECK:             %[[VAL_17:.*]] = arith.extsi %[[VAL_15]] : tensor<1024xi32> to tensor<1024xi64>
-// CHECK:             %[[VAL_18:.*]] = arith.addi %[[VAL_17]], %[[VAL_10]] : tensor<1024xi64>
-// CHECK:             scf.yield %[[VAL_16]], %[[VAL_18]], %[[VAL_5]], %[[VAL_16]], %[[VAL_18]] : !tt.ptr<f32>, tensor<1024xi64>, i32, !tt.ptr<f32>, tensor<1024xi64>
-// CHECK:           } else {
-// CHECK:             %[[VAL_19:.*]] = tt.addptr %[[VAL_0]], %[[VAL_6]] : !tt.ptr<f32>, i32
-// CHECK:             scf.yield %[[VAL_19]], %[[VAL_10]], %[[VAL_5]], %[[VAL_19]], %[[VAL_10]] : !tt.ptr<f32>, tensor<1024xi64>, i32, !tt.ptr<f32>, tensor<1024xi64>
-// CHECK:           }
-// CHECK:           %[[VAL_20:.*]] = arith.trunci %[[VAL_21:.*]]#1 : tensor<1024xi64> to tensor<1024xi32>
-// CHECK:           %[[VAL_22:.*]] = tt.splat %[[VAL_21]]#0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
-// CHECK:           %[[VAL_23:.*]] = tt.addptr %[[VAL_22]], %[[VAL_20]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
-// CHECK:           %[[VAL_24:.*]] = tt.load %[[VAL_23]] : tensor<1024x!tt.ptr<f32>>
-// CHECK:           %[[VAL_25:.*]] = arith.trunci %[[VAL_21]]#4 : tensor<1024xi64> to tensor<1024xi32>
-// CHECK:           %[[VAL_26:.*]] = tt.splat %[[VAL_21]]#3 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
-// CHECK:           %[[VAL_27:.*]] = tt.addptr %[[VAL_26]], %[[VAL_25]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
-// CHECK:           %[[VAL_28:.*]] = tt.load %[[VAL_27]] : tensor<1024x!tt.ptr<f32>>
-// CHECK:           tt.return %[[VAL_24]], %[[VAL_28]], %[[VAL_21]]#2 : tensor<1024xf32>, tensor<1024xf32>, i32
-// CHECK:         }
+// CHECK-SAME:        %arg0: !tt.ptr<f32>,
+// CHECK-SAME:        %arg1: tensor<1024xf32>,
+// CHECK-SAME:        %arg2: i1) -> (tensor<1024xf32>, tensor<1024xf32>, i32) {
+// CHECK:           %[[C0:.*]] = arith.constant 0 : i64
+// CHECK:           %[[C1024:.*]] = arith.constant 1024 : i32
+// CHECK:           %[[PID:.*]] = tt.get_program_id x : i32
+// CHECK:           %[[PID_TIME_1024:.*]] = arith.muli %[[PID]], %[[C1024]] : i32
+// CHECK:           %[[MK_RANGE_1024:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+// CHECK:           %[[C0_SPLAT:.*]] = tt.splat %[[C0]] : i64 -> tensor<1024xi64>
+// CHECK:           %[[SCF_IF:.*]]:5 = scf.if %arg2 -> (!tt.ptr<f32>, tensor<1024xi64>, i32, !tt.ptr<f32>, tensor<1024xi64>) {
+// CHECK:             %[[PTR_BASE_1:.*]] = tt.addptr %arg0, %[[PID_TIME_1024]] : !tt.ptr<f32>, i32
+// CHECK:             %[[EXT_MK_RANGE:.*]] = arith.extsi %[[MK_RANGE_1024]] : tensor<1024xi32> to tensor<1024xi64>
+// CHECK:             scf.yield %[[PTR_BASE_1]], %[[EXT_MK_RANGE]], %[[PID]], %[[PTR_BASE_1]], %[[EXT_MK_RANGE]] : !tt.ptr<f32>, tensor<1024xi64>, i32, !tt.ptr<f32>, tensor<1024xi64>
+//                  } else {
+// CHECK:             %[[PTR_BASE_2:.*]] = tt.addptr %arg0, %[[PID_TIME_1024]] : !tt.ptr<f32>, i32
+// CHECK:             %[[EXT_MK_RANGE:.*]] = arith.muli %[[PID_TIME_1024]], %[[PID_TIME_1024]] : i32
+// CHECK:             scf.yield %[[PTR_BASE_2]], %[[C0_SPLAT]], %[[EXT_MK_RANGE]], %[[PTR_BASE_2]], %[[C0_SPLAT]] : !tt.ptr<f32>, tensor<1024xi64>, i32, !tt.ptr<f32>, tensor<1024xi64>
+//                  }
+// CHECK:           %[[dont_care_5:.*]] = arith.trunci %[[SCF_IF]]#1 : tensor<1024xi64> to tensor<1024xi32>
+// CHECK:           %[[dont_care_6:.*]] = tt.splat %[[SCF_IF]]#0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[dont_care_7:.*]] = tt.addptr %[[dont_care_6]], %[[dont_care_5]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           %[[dont_care_8:.*]] = tt.load %[[dont_care_7]] : tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[dont_care_9:.*]] = arith.trunci %[[SCF_IF]]#4 : tensor<1024xi64> to tensor<1024xi32>
+// CHECK:           %[[dont_care_10:.*]] = tt.splat %[[SCF_IF]]#3 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[dont_care_11:.*]] = tt.addptr %[[dont_care_10]], %[[dont_care_9]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           %[[dont_care_12:.*]] = tt.load %[[dont_care_11]] : tensor<1024x!tt.ptr<f32>>
+// CHECK:           tt.return %[[dont_care_8]], %[[dont_care_12]], %[[SCF_IF]]#2 : tensor<1024xf32>, tensor<1024xf32>, i32

@@ -19,29 +19,24 @@
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
+using ::mlir::LLVM::AMD::upcast4xMxfp8_HW;
+using ::mlir::LLVM::AMD::upcast8xMxfp4_HW;
 using ::mlir::LLVM::AMD::upcast8xMxfp4_SW;
 
 namespace {
 
-SmallVector<Value, 8> upcastMxfp4_SW(RewriterBase &rewriter,
-                                     amdgpu::UpcastMXFPOp upcastOp, bool toFp16,
-                                     ArrayRef<Value> values, int idx) {
+SmallVector<Value> upcastMxfp4_SW(RewriterBase &rewriter,
+                                  amdgpu::UpcastMXFPOp upcastOp, bool toFp16,
+                                  ArrayRef<Value> values, int idx,
+                                  AMD::ISAFamily isaFamily,
+                                  Value scale = nullptr) {
   Location loc = upcastOp.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-  SmallVector<Value, 8> results;
-  Type elemType = toFp16 ? f16_ty : bf16_ty;
   Value packedVec = b.undef(vec_ty(i8_ty, 4));
   for (int i : llvm::seq(4))
     packedVec = b.insert_element(packedVec, values[idx + i], b.i32_val(i));
-  SmallVector<Value, 4> v4i32 =
-      upcast8xMxfp4_SW(rewriter, upcastOp, toFp16, packedVec);
-  for (int j = 0; j < 4; j++) {
-    Value elements = b.bitcast(v4i32[j], vec_ty(elemType, 2));
-    results.push_back(b.extract_element(elements, b.i32_val(0)));
-    results.push_back(b.extract_element(elements, b.i32_val(1)));
-  }
-  return results;
+  return upcast8xMxfp4_SW(rewriter, upcastOp, toFp16, packedVec, isaFamily,
+                          scale);
 }
 
 Value mxfpScaleFp16(RewriterBase &rewriter, Location loc, Value v, Value scale,
@@ -85,54 +80,6 @@ Value mxfpScaleBf16ViaF32(RewriterBase &rewriter, Location loc, Value v,
   return b.select(scaleIsNan, nanBf16, mulBf16);
 };
 
-template <typename ConvertOp>
-SmallVector<Value, 4> upcast8xMxfp4_HW(RewriterBase &rewriter, Location loc,
-                                       ArrayRef<Value> xVals, int idx,
-                                       Value scale) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value packedVec = b.undef(vec_ty(i8_ty, 4));
-  for (int i : llvm::seq(4))
-    packedVec = b.insert_element(packedVec, xVals[idx + i], b.i32_val(i));
-  packedVec = b.bitcast(packedVec, i32_ty);
-  Type retElemType = bf16_ty;
-  if constexpr (std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF16Fp4Op>)
-    retElemType = f16_ty;
-  Type resType = vec_ty(retElemType, 2);
-  Value scaleF32 =
-      b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
-  SmallVector<Value, 4> results;
-  for (int srcSelIndex : llvm::seq(4))
-    results.push_back(rewriter.create<ConvertOp>(loc, resType, packedVec,
-                                                 scaleF32, srcSelIndex));
-  return results;
-}
-
-template <typename ConvertOp>
-SmallVector<Value, 2> upcast4xMxfp8_HW(RewriterBase &rewriter, Location loc,
-                                       ArrayRef<Value> xVals, int idx,
-                                       Value scale) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value packedVec = b.undef(vec_ty(i8_ty, 4));
-  for (int i : llvm::seq(4))
-    packedVec = b.insert_element(packedVec, xVals[idx + i], b.i32_val(i));
-  packedVec = b.bitcast(packedVec, i32_ty);
-  Type retElemType = bf16_ty;
-  if constexpr (std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF16Fp8Op> ||
-                std::is_same_v<ConvertOp, ROCDL::CvtScaleF32PkF16Bf8Op>)
-    retElemType = f16_ty;
-  Type resType = vec_ty(retElemType, 2);
-  Value scaleF32 =
-      b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)), f32_ty);
-  SmallVector<Value, 2> results;
-  results.push_back(rewriter.create<ConvertOp>(loc, resType, packedVec,
-                                               scaleF32,
-                                               /*srcLoHiSel=*/false));
-  results.push_back(rewriter.create<ConvertOp>(loc, resType, packedVec,
-                                               scaleF32,
-                                               /*srcLoHiSel=*/true));
-  return results;
-}
-
 // Upcast 8 mxfp4 values from xVals starting at idx using the given scale
 // factor, and store the results into yVals
 static void upcast8xMxfp4(RewriterBase &rewriter, Location loc,
@@ -140,6 +87,7 @@ static void upcast8xMxfp4(RewriterBase &rewriter, Location loc,
                           ArrayRef<Value> xVals, bool useFp16, int idx,
                           Value scale, SmallVector<Value> &yVals) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
+  /// fp4->bf16/f16 for cdna4
   if (isaFamily == AMD::ISAFamily::CDNA4) {
     Type retElemType = useFp16 ? f16_ty : bf16_ty;
     SmallVector<Value, 4> v4i32 =
@@ -152,19 +100,25 @@ static void upcast8xMxfp4(RewriterBase &rewriter, Location loc,
       yVals.push_back(b.extract_element(elements, b.i32_val(0)));
       yVals.push_back(b.extract_element(elements, b.i32_val(1)));
     }
-  } else {
-    SmallVector<Value, 8> vf16 =
-        upcastMxfp4_SW(rewriter, op, useFp16, xVals, idx);
-    for (int i = 0; i < 8; i++) {
-      auto result = useFp16 ? mxfpScaleFp16(rewriter, loc, vf16[i], scale,
-                                            op.getFastMath())
-                            : mxfpScaleBf16ViaF32(rewriter, loc, vf16[i], scale,
-                                                  op.getFastMath());
-      yVals.push_back(result);
-    }
+    return;
   }
-
-  return;
+  /// fp4->bf16 for cdna3
+  if (isaFamily == AMD::ISAFamily::CDNA3 && !useFp16) {
+    SmallVector<Value> v8bf16 =
+        upcastMxfp4_SW(rewriter, op, useFp16, xVals, idx, isaFamily, scale);
+    yVals.append(v8bf16.begin(), v8bf16.end());
+    return;
+  }
+  /// fp4->f16 before cdna4, fp4->bf16 before cdna3
+  SmallVector<Value> vf16 =
+      upcastMxfp4_SW(rewriter, op, useFp16, xVals, idx, isaFamily);
+  for (int i = 0; i < 8; i++) {
+    auto result =
+        useFp16 ? mxfpScaleFp16(rewriter, loc, vf16[i], scale, op.getFastMath())
+                : mxfpScaleBf16ViaF32(rewriter, loc, vf16[i], scale,
+                                      op.getFastMath());
+    yVals.push_back(result);
+  }
 }
 
 // Upcast 4 mxfp8 values from xVals starting at idx using the given scale
@@ -252,7 +206,7 @@ public:
       return rewriter.notifyMatchFailure(op, "NYI: non-mfma dot operand");
     LDBG("mfma: " << mfmaEncoding);
 
-    int mDim = mfmaEncoding.getMDim();
+    int mDim = mfmaEncoding.getInstrShape()[0];
     if (mDim != 32 && mDim != 16)
       return rewriter.notifyMatchFailure(op, "NYI: non-mfma32/16 intrinsics");
 

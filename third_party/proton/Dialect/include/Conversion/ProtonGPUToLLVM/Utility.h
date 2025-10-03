@@ -45,6 +45,8 @@ CircularStoreDataPack
 lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
                            ConversionPatternRewriter &rewriter);
 
+SmallVector<FunctionOpInterface> getTritonFunctions(ModuleOp mod);
+
 } // namespace proton::gpu
 } // namespace triton
 

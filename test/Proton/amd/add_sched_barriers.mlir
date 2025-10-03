@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file  -add-sched-barriers --verify-diagnostics | FileCheck --check-prefix=CHECK %s
+// RUN: triton-opt %s -split-input-file -add-sched-barriers --verify-diagnostics | FileCheck --check-prefix=CHECK %s
 
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -18,6 +18,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignment = 128 : i32, ttg.profile_scratch_memory_size = 384 : i32} {
   // CHECK-LABEL: nested_record
   llvm.func @nested_record(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
+  // CHECK: proton_gpu.initialize
   // CHECK: rocdl.sched.barrier 0
   // CHECK: proton_gpu.read_counter
   // CHECK: proton_gpu.circular_store
@@ -53,6 +54,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
     %c0 = arith.constant 0 : index
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
     %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32, offset = 0 : i32} : !tt.ptr<i32>
+    proton_gpu.initialize %1 : !tt.ptr<i32>
     %2 = proton_gpu.segment_alloc %0 : !ttg.memdesc<512xi32, #shared, #smem, mutable> -> !proton_gpu.segment<2048, #smem, warp>
     %3 = proton_gpu.read_counter : i32
     proton_gpu.circular_store start %2, %3 {scopeId = 0 : i32} : !proton_gpu.segment<2048, #smem, warp>, i32
@@ -73,5 +75,16 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
     gpu.barrier
     proton_gpu.finalize %2, %1 : !proton_gpu.segment<2048, #smem, warp>, !tt.ptr<i32>
     llvm.return
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 3072 : i32, ttg.target = "hip:gfx90a", "ttg.threads-per-warp" = 64 : i32} {
+  llvm.func @llvm.exp2.f32(f32) -> f32 attributes {libname = "", libpath = ""}
+  // CHECK-LABEL: two_functions
+  llvm.func @two_functions(%arg: f32) -> f32 {
+    %1 = llvm.call @llvm.exp2.f32(%arg) : (f32) -> f32
+    llvm.return %1 : f32
   }
 }

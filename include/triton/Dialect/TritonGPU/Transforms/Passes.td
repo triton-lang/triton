@@ -176,24 +176,6 @@ def TritonGPUPartitionScheduling : Pass<"tritongpu-partition-scheduling", "mlir:
   }];
 }
 
-def TritonGPULoadMMASpecialization : Pass<"tritongpu-load-mma-specialization", "mlir::ModuleOp"> {
-  let summary = "load MMA specialization";
-
-  let description = [{
-    The `tritongpu-load-mma-specialization` pass looks for matmul loops in the
-    module and attempts to create a partition schedule, separating async loads
-    and async MMAs into separate partitions.
-  }];
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
-
-  let options = [
-    Option<"numStages", "num-stages", "int32_t", /*default*/"3",
-           "number of pipeline stages">
-  ];
-}
-
 def TritonGPUF32DotTC : Pass<"tritongpu-F32DotTC", "mlir::ModuleOp"> {
   let summary = "3xTF32 trick";
 

@@ -107,7 +107,7 @@ def tmem_example_kernel(in_ptr, out_ptr, M: gl.constexpr, N: gl.constexpr, num_w
     # Allocate some tensor memory.
     tmem_layout: gl.constexpr = TensorMemoryLayout(
         block=(64, 64),
-        unpacked=True,
+        col_stride=32 // in_ptr.dtype.element_ty.primitive_bitwidth,
     )
 
     tmem = allocate_tensor_memory(
@@ -183,7 +183,10 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
 
     # Copy operands into TMEM.
     # TODO: Use `tcgen05.cp` when it is exposed in Gluon.
-    acc_tmem_layout: gl.constexpr = TensorMemoryLayout(tmem_block.value, unpacked=True)
+    acc_tmem_layout: gl.constexpr = TensorMemoryLayout(
+        tmem_block.value,
+        col_stride=32 // d_desc.dtype.primitive_bitwidth,
+    )
     acc_tmem = allocate_tensor_memory(d_desc.dtype, [M, N], acc_tmem_layout)
     acc_reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(tmem_block[0], tmem_block[1], [M, N], num_warps)
     acc = c_smem.load(acc_reg_layout)
@@ -191,7 +194,10 @@ def small_mma_kernel(a_desc, b_desc, c_desc, d_desc, tmem_block: gl.constexpr,  
 
     if LHS_IN_TMEM:
         # When the LHS operand is fp16 or fp8, it is packed in TMEM.
-        lhs_tmem_layout: gl.constexpr = TensorMemoryLayout(tmem_block.value, unpacked=False)
+        lhs_tmem_layout: gl.constexpr = TensorMemoryLayout(
+            tmem_block.value,
+            col_stride=1,
+        )
         lhs_tmem = allocate_tensor_memory(a_desc.dtype, [M, K], lhs_tmem_layout)
 
         lhs_reg_layout: gl.constexpr = get_tmem_32x32b_reg_layout(M, K, [M, K], num_warps)
@@ -315,7 +321,7 @@ def blocked_matmul_kernel(a_desc, b_desc, c_desc, TRANSPOSE_B: gl.constexpr, num
     phase = 0
 
     # Determine the TMEM layout.
-    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], unpacked=True)
+    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
     acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
 
     # We can zero-initialize the accumulator by setting `use_acc=False` on the
@@ -492,7 +498,7 @@ def blocked_matmul_pipelined_kernel(a_desc, b_desc, c_desc, num_warps: gl.conste
     b_bufs = gl.allocate_shared_memory(dtype, [2] + b_desc.block_type.shape, b_desc.layout)
 
     # Use two accumulators!
-    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], unpacked=True)
+    tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
     ub_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
     vb_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], tmem_layout)
 

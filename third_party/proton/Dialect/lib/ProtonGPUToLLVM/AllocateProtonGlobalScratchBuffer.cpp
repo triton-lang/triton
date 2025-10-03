@@ -1,4 +1,5 @@
 #include "Conversion/ProtonGPUToLLVM/Passes.h"
+#include "Conversion/ProtonGPUToLLVM/Utility.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -17,25 +18,13 @@ struct AllocateProtonGlobalScratchBufferPass
     MLIRContext *ctx = &getContext();
     OpBuilder builder(ctx);
 
-    int numFuncOps = 0;
-    FunctionOpInterface func;
-    mod.walk([&](FunctionOpInterface op) {
-      // Ignore any intrinsic functions. On AMD the predicate load/store ops
-      // are currently pseduo instrunctions at this point and will get picked up
-      // here and trigger the FunctionOpInterface range based assert below
-      StringRef funcName(op.getNameAttr());
-      if (!funcName.contains("__")) {
-        numFuncOps += 1;
-        func = op;
-      }
-    });
-
-    assert(numFuncOps == 1);
+    auto funcOps = triton::proton::gpu::getTritonFunctions(mod);
+    assert(funcOps.size() == 1 && "Expected exactly one funcOp");
 
     int32_t cumulativeMemorySize = 0; // bytes
     std::vector<uint32_t> alignments;
 
-    func.walk([&](proton::gpu::GlobalScratchAllocOp op) {
+    funcOps[0].walk([&](proton::gpu::GlobalScratchAllocOp op) {
       int offset = llvm::alignTo(cumulativeMemorySize,
                                  proton::gpu::getBytesPerClockEntry());
       op->setAttr("offset",

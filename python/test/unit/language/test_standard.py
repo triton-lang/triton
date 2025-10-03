@@ -26,7 +26,7 @@ def test_maximum_minium(dtype, op, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("M, N", [[1, 512], [8, 64], [256, 16], [512, 8]])
+@pytest.mark.parametrize("M, N", [[1, 1], [1, 512], [8, 64], [256, 16], [512, 8]])
 @pytest.mark.parametrize("k", [None, 8])
 @pytest.mark.parametrize("descending", [False, True])
 @pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32', 'bfloat16'])
@@ -40,7 +40,7 @@ def test_sort(M, N, k, descending, dtype_str, device):
         offs_z_n = offs_x_n if k is None else tl.arange(0, k)
         offs_x = offs_m[:, None] * stride_xm + offs_x_n[None, :]
         x = tl.load(X + offs_x)
-        if k is None:
+        if k is None or x.numel < k:
             z = tl.sort(x, descending=descending)
         else:
             z = tl.topk(x, k)
@@ -51,7 +51,7 @@ def test_sort(M, N, k, descending, dtype_str, device):
     x = numpy_random((M, N), dtype_str=dtype_str)
     x = torch.from_numpy(x).to(device)
     z = torch.empty(z_shape, dtype=x.dtype, device=x.device)
-    if k is None:
+    if k is None or x.numel() < k:
         y = torch.sort(x, descending=descending)[0]
     else:
         y = torch.topk(x, k=k).values

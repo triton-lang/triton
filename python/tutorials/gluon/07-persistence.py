@@ -145,7 +145,7 @@ class MMAv5:
 
     @gluon.jit
     def initialize(dtype: gl.constexpr, BLOCK_M: gl.constexpr, BLOCK_N: gl.constexpr, num_warps: gl.constexpr):
-        layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], unpacked=True)
+        layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
         acc_tmem = allocate_tensor_memory(gl.float32, [BLOCK_M, BLOCK_N], layout)
         bar = gl.allocate_shared_memory(gl.int64, [1], mbarrier.MBarrierLayout())
         mbarrier.init(bar, count=1)

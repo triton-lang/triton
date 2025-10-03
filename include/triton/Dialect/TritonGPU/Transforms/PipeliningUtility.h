@@ -40,7 +40,10 @@ bool isPureScalarOp(Operation *op);
 bool getDominatingValueSetOpsToHoist(
     DominanceInfo &domInfo, Operation *refOp, ArrayRef<Value> valueSet,
     llvm::SetVector<Operation *> &toHoist,
-    function_ref<bool(Operation *)> canHoist = isPureScalarOp);
+    function_ref<bool(Operation *)> canHoist = isPureScalarOp,
+    function_ref<bool(BlockArgument)> canUseArg = [](BlockArgument) {
+      return false;
+    });
 
 // Hoist the given set of operations above the reference operation.
 void hoistOpsBefore(Operation *refOp,
@@ -179,6 +182,8 @@ getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
                         CoarseSchedule &schedule,
                         std::function<bool(Operation *)> filterUse = nullptr);
 
+// Clean up attributes passing over schedules across stages in pipelining
+void removePipeliningAttributes(ModuleOp moduleOp);
 } // namespace triton
 } // namespace mlir
 

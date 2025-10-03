@@ -10,7 +10,7 @@
 using namespace mlir;
 
 const int mlir::triton::proton::gpu::getBytesPerClockEntry() { return 8; }
-const int mlir::triton::proton::gpu::getCircularHeaderSize() { return 16; }
+const int mlir::triton::proton::gpu::getCircularHeaderSize() { return 40; }
 
 void mlir::triton::proton::gpu::ProtonGPUDialect::initialize() {
   registerTypes();

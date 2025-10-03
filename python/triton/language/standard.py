@@ -441,7 +441,7 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
     n_dims: core.constexpr = _log2(x.numel)
 
     # reshape to hypercube:
-    h = core.reshape(x, [2] * n_dims)
+    h = core.reshape(x, [2] * n_dims if n_dims else [1])
 
     # run first log_k bitonic sort iterations:
     for i in core.static_range(1, log_k + 1):

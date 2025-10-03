@@ -15,10 +15,9 @@ enum class ScaleDotElemType : uint32_t;
 namespace mlir::triton::gpu {
 class SwizzledSharedEncodingAttr;
 class NVMMASharedEncodingAttr;
-class AMDRotatingSharedEncodingAttr;
-class AMDMfmaEncodingAttr;
 class TensorOrMemDesc;
 class MemDescType;
+class CTALayoutAttr;
 
 // - BlockedEncodingAttrs have the following input dimensions.
 //
@@ -73,6 +72,16 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
 // `inDimNames`. The latter does not modify the output sizes.
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout);
 
+// Combines the layout of a CTA (input dims [register, lane, warp]) with the
+// layout of a CGA (i.e. a block), and ensures that the resulting layout has the
+// given shape.
+//
+// See the nomenclature note at the top of LinearLayoutConversions.cpp for why
+// the variable with type CTALayoutAttr is called cgaLayoutAttr.
+LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
+                                    CTALayoutAttr cgaLayoutAttr,
+                                    ArrayRef<int64_t> shape);
+
 // In this function, we construct a linear layout representing the
 // <shared memory offset, iteration, block> -> <tensor element index> mapping
 // for entire `src` and `dst` tensors.  We determine the shape of the
@@ -126,6 +135,18 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<unsigned> tilesPerWarp,
                                          ArrayRef<unsigned> warpsPerCTA);
 
+LinearLayout chooseScaledWmmaScaleLayout(
+    MLIRContext *ctx, int dotOperandIdx,
+    const std::vector<std::vector<int32_t>> &dotOperandWarpBasis,
+    ArrayRef<int64_t> dotOperandShape);
+
+LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
+                                          ArrayRef<int64_t> dotOperandShape,
+                                          ArrayRef<unsigned> tilesPerWarp,
+                                          ArrayRef<unsigned> warpsPerCTA,
+                                          unsigned instrM, unsigned instrN,
+                                          CTALayoutAttr ctaLayoutAttr);
+
 // Create LinearLayout for nvidia mma tile.
 LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
                            unsigned kWidth, ArrayRef<unsigned> order,
@@ -136,6 +157,10 @@ LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
 // store instructions. Since it closely resembles mfmaLayout, conversion between
 // the two can be done using transferWithinWarp, without involving LDS
 std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
+
+// Create the core layout (atom in the PTX manual) a given nvmma shared encoding
+LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
+                                       bool disableSwizzle);
 
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

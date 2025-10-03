@@ -1,11 +1,12 @@
 import ctypes
 import matplotlib.pyplot as plt
 import triton
-from triton._C.libtriton import nvidia
+from triton._C.libtriton import nvidia, amd
 import torch
 import csv
 from dataclasses import dataclass
 import inspect
+from .target_info import is_hip, is_cuda
 
 
 @dataclass
@@ -74,7 +75,8 @@ def compute_roofline(*args, \
         if verbose:
             tflops = perfs[-1].flops / perfs[-1].time_ns * 1e-3
             tbps = perfs[-1].bytes / perfs[-1].time_ns * 1e-3
-            print(f"{intensity_proxy_name}: {val:5d} | TFLOPS: {tflops:#.4g} | TBPS: {tbps:.2f}")
+            ms = perfs[-1].time_ns / 1e6
+            print(f"{intensity_proxy_name}: {val:5d} | MS: {ms:.2f} | TFLOPS: {tflops:#.4g} | TBPS: {tbps:.2f}")
     # write to csv
     return write_csv(intensity_proxy_values, perfs, out_path)
 
@@ -83,23 +85,48 @@ def compute_roofline(*args, \
 
 
 def get_memset_tbps():
-    # Measure device memory set bandwidth using CUDA driver API (cuMemsetD8Async)
-    if torch.version.cuda is None:
-        raise RuntimeError("get_memset_tbps is only supported on CUDA")
-    # load cuda
-    cuda = ctypes.CDLL("libcuda.so")
-    cuda.cuInit.argtypes = [ctypes.c_uint]
-    cuda.cuInit.restype = ctypes.c_int
-    if cuda.cuInit(0) != 0:
-        raise RuntimeError("cuInit failed")
-    # initialize cuMemsetD8Async
-    cuda.cuMemsetD8Async.argtypes = [ctypes.c_uint64, ctypes.c_ubyte, ctypes.c_size_t, ctypes.c_void_p]
-    cuda.cuMemsetD8Async.restype = ctypes.c_int
-    # benchmark `cuMemsetD8Async`
     n_bytes = 1 << 32
     buf = torch.empty(n_bytes, device="cuda", dtype=torch.uint8)
-    dptr = ctypes.c_uint64(buf.data_ptr())
-    fn = lambda: cuda.cuMemsetD8Async(dptr, ctypes.c_ubyte(0), ctypes.c_size_t(n_bytes), ctypes.c_void_p(0))
+    stream0 = ctypes.c_void_p(0)
+
+    if is_cuda():
+        libname = "libcuda.so"
+        init_name = "cuInit"
+        memset_name = "cuMemsetD8Async"
+        memset_argtypes = [ctypes.c_uint64, ctypes.c_ubyte, ctypes.c_size_t, ctypes.c_void_p]
+        dptr = ctypes.c_uint64(buf.data_ptr())
+        value = ctypes.c_ubyte(0)
+    elif is_hip():
+        libname = "libamdhip64.so"
+        init_name = "hipInit"
+        memset_name = "hipMemsetAsync"
+        memset_argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t, ctypes.c_void_p]
+        dptr = ctypes.c_void_p(buf.data_ptr())
+        value = ctypes.c_int(0)
+    else:
+        raise RuntimeError("Unsupported platform: neither CUDA nor ROCm detected")
+
+    lib = ctypes.CDLL(libname)
+
+    # optional init
+    if hasattr(lib, init_name):
+        init_fn = getattr(lib, init_name)
+        init_fn.argtypes = [ctypes.c_uint]
+        init_fn.restype = ctypes.c_int
+        init_fn(0)
+
+    if not hasattr(lib, memset_name):
+        raise RuntimeError(f"{memset_name} not found in {libname}")
+
+    memset_fn = getattr(lib, memset_name)
+    memset_fn.argtypes = memset_argtypes
+    memset_fn.restype = ctypes.c_int
+
+    def fn():
+        err = memset_fn(dptr, value, ctypes.c_size_t(n_bytes), stream0)
+        if err != 0:
+            raise RuntimeError(f"{memset_name} failed with error {err}")
+
     time_ms = triton.testing.do_bench(fn, rep=1000)
     tbps = (n_bytes / (time_ms * 1e-3)) * 1e-12
     return tbps
@@ -108,13 +135,20 @@ def get_memset_tbps():
 def get_cublas_tflops(dtype):
     dtype = {"fp16": torch.float16, "bf16": torch.bfloat16, "fp8": torch.float8_e4m3fn}[dtype]
     cublas_workspace = torch.empty(32 * 1024 * 1024, device="cuda", dtype=torch.uint8)
-    cublas = nvidia.cublas.CublasLt(cublas_workspace)
+    if is_cuda():
+        cublas = nvidia.cublas.CublasLt(cublas_workspace)
+        bench_fn = cublas.matmul
+    elif is_hip():
+        hipblas = amd.hipblas.HipblasLt(cublas_workspace)
+        bench_fn = hipblas.matmul
+    else:
+        raise RuntimeError("Unsupported platform: neither CUDA nor ROCm detected")
     device = "cuda"
     M, N, K = 8192, 8192, 8192
     a = torch.randn(M, K, device=device, dtype=torch.float32).to(dtype)
     b = torch.randn(K, N, device=device, dtype=torch.float32).to(dtype).T
     c = torch.empty((M, N), device=device, dtype=dtype)
-    time_ms = triton.testing.do_bench(lambda: cublas.matmul(a, b, c), rep=1000)
+    time_ms = triton.testing.do_bench(lambda: bench_fn(a, b, c), rep=1000)
     return 2 * M * N * K / time_ms * 1e-9
 
 
@@ -145,51 +179,107 @@ def validate_perfs(perfs):
                 raise ValueError(f"x mismatch between series[0] and series[{i}]")
 
 
-def plot_roofline(series, flops_dtype, out_path, max_tbps, max_tflops, title="", xlabel="", labels=None):
+def plot_roofline(series, flops_dtype, out_path, max_tbps="memset", max_tflops="cublas", title="", xlabel="",
+                  labels=None, points_of_interest=None):
     from bisect import bisect_left
     from pathlib import Path
+
     perfs = [load_perf_csv(p) for p in series]
     validate_perfs(perfs)
     xs, flops_ref, bytes_ref, _ = perfs[0]
+    n = len(xs)
+
     if not isinstance(max_tbps, int):
         assert max_tbps == "memset"
         max_tbps = get_memset_tbps()
     if not isinstance(max_tflops, int):
         assert max_tflops == "cublas"
         max_tflops = get_cublas_tflops(flops_dtype)
+
+    grey = "#7f7f7f"
+    opints = [f / b for f, b in zip(flops_ref, bytes_ref)]  # arithmetic intensity per sample
+    kappa = max_tflops / max_tbps  # intensity at the knee
+
+    # --- knee interpolation ---
+    knee_idx = bisect_left(opints, kappa)
+    if knee_idx <= 0:
+        x_knee = xs[0]
+    elif knee_idx >= n:
+        x_knee = xs[-1]
+    else:
+        i0, i1 = knee_idx - 1, knee_idx
+        t = (kappa - opints[i0]) / (opints[i1] - opints[i0])
+        x_knee = xs[i0] + t * (xs[i1] - xs[i0])
+
+    # --- piecewise roofline segments (for plotting the grey guideline) ---
+    if knee_idx >= n:
+        bw_x, bw_y = xs[:], [op * max_tbps for op in opints]
+        comp_x, comp_y = [], []
+    elif knee_idx <= 0:
+        bw_x, bw_y = [], []
+        comp_x, comp_y = xs[:], [max_tflops] * n
+    else:
+        bw_x = xs[:knee_idx] + [x_knee]
+        bw_y = [op * max_tbps for op in opints[:knee_idx]] + [max_tflops]
+        comp_x = [x_knee] + xs[knee_idx:]
+        comp_y = [max_tflops] * (1 + (n - knee_idx))
+
+    y_roof = [min(op * max_tbps, max_tflops) for op in opints]
+
+    # --- helpers ---
+    def interp(yxs, yys, x):
+        """Linear interpolation on (xs, ys), clamped at the ends."""
+        j = bisect_left(yxs, x)
+        if j <= 0:
+            return yys[0]
+        if j >= len(yxs):
+            return yys[-1]
+        x0, x1 = yxs[j - 1], yxs[j]
+        y0, y1 = yys[j - 1], yys[j]
+        t = (x - x0) / (x1 - x0) if x1 != x0 else 0.0
+        return y0 + t * (y1 - y0)
+
+    # Prepare series curves
+    series_perf, series_labels = [], []
+    for idx, (pth, (_, f, b, t)) in enumerate(zip(series, perfs)):
+        perf = [ff / tt * 1e-3 if tt > 0 else 0.0 for ff, tt in zip(f, t)]
+        series_perf.append(perf)
+        series_labels.append(labels[idx] if labels and idx < len(labels) else Path(pth).stem)
+
+    # --- draw ---
     fig, ax = plt.subplots(figsize=(7, 5), dpi=120)
     ax.set_xlabel(xlabel)
     ax.set_ylabel("performance  [TFLOP/s]")
     ax.set_title(title)
-    xmin, xmax = min(xs), max(xs)
+
+    # Grey roofline (guides)
+    if bw_x:
+        ax.plot(bw_x, bw_y, ls="--", color=grey, label=f"BW-bound - {max_tbps:.1f} TB/s [memset]")
+    if comp_x:
+        ax.plot(comp_x, comp_y, ls=":", color=grey, label=f"Compute-bound - {max_tflops:.0f} TFLOP/s [cuBLAS]")
+
+    # Series
+    for lab, perf in zip(series_labels, series_perf):
+        ax.plot(xs, perf, label=lab, lw=1.8, zorder=2)
+
+    # Layout (full extent)
+    xmin, xmax = xs[0], xs[-1]
     dx = 0.05 * (xmax - xmin) if xmax > xmin else 1.0
     ax.set_xlim(xmin - dx, xmax + dx)
-    ax.set_ylim(100, max_tflops + 500)
+    ax.set_ylim(min(min(perf) for perf in series_perf) * 0.8 if series_perf else 0.0, max_tflops * 1.05)
 
-    # roofline from operational intensity (identical across series)
-    opints = [f / b for f, b in zip(flops_ref, bytes_ref)]
-    knee = bisect_left(opints, max_tflops / max_tbps)
-    if knee > 0:
-        x_bw = [xs[0], xs[knee - 1]]
-        y_bw = [opints[0] * max_tbps, max_tflops]
-    else:
-        x_bw = y_bw = []
-    x_comp = xs[max(knee - 1, 0):]
-    y_comp = [max_tflops] * len(x_comp)
-    grey = "#7f7f7f"
-    ax.plot(x_bw, y_bw, linestyle="--", color=grey, label=f"BW-bound - {max_tbps:.1f} TB/s [memset]", zorder=1)
-    ax.plot(x_comp, y_comp, linestyle=":", color=grey, label=f"Compute-bound  - {max_tflops:.0f} TFLOP/s [cuBLAS]",
-            zorder=1)
-
-    # Plot each series as a lineplot of TFLOP/s
-    for idx, (pth, (_, f, b, t)) in enumerate(zip(series, perfs)):
-        perf_tflops = [ff / tt * 1e-3 if tt > 0 else 0.0 for ff, tt in zip(f, t)]
-        label = (labels[idx] if labels and idx < len(labels) else Path(pth).stem)
-        ax.plot(xs, perf_tflops, label=label, linewidth=1.8, zorder=2)
+    # Points of interest
+    if points_of_interest:
+        for x_pt, label in points_of_interest.items():
+            y_pt = interp(xs, series_perf[0], x_pt)
+            y_rf = interp(xs, y_roof, x_pt)
+            ax.plot([x_pt], [y_pt], marker="o", ms=4, mfc="white", mec="black", zorder=3)
+            ax.annotate(f"{label}\n{int(y_pt)} TFLOP/s ({int(y_pt/y_rf*100)}%)", xy=(x_pt, y_pt), xytext=(5, -25),
+                        textcoords="offset points", fontsize=7, ha="left", va="bottom")
 
     ax.legend(frameon=False, loc="lower right")
     ax.grid(True, which="both", ls=":", lw=0.5)
-    fig.tight_layout()
+
     plt.savefig(out_path)
 
 

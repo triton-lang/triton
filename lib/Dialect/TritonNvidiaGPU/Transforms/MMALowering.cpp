@@ -1,3 +1,4 @@
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
@@ -16,15 +17,14 @@ namespace nvidia_gpu {
 
 namespace {
 
-template <typename TCGen5MMAOpTy>
-class SyncMMALowering : public OpRewritePattern<TCGen5MMAOpTy> {
+class SyncMMALowering : public OpInterfaceRewritePattern<MMAv5OpInterface> {
 public:
-  using OpRewritePattern<TCGen5MMAOpTy>::OpRewritePattern;
+  using OpInterfaceRewritePattern<MMAv5OpInterface>::OpInterfaceRewritePattern;
 
-  LogicalResult matchAndRewrite(TCGen5MMAOpTy op,
+  LogicalResult matchAndRewrite(MMAv5OpInterface op,
                                 PatternRewriter &rewriter) const override {
     // If the op doesn't have synchronous semantic skip the pattern.
-    if (op.getIsAsync())
+    if (op.isAsync())
       return failure();
     MLIRContext *ctx = op.getContext();
     Location loc = op.getLoc();
@@ -46,7 +46,7 @@ public:
 
     rewriter.setInsertionPointAfter(op);
     Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-    rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase, op.getPred());
+    rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase, op.getPredicate());
     rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
     return success();
   }
@@ -101,6 +101,103 @@ struct TCGen5MMAScaleSharedToTmemConversion
   }
 };
 
+std::pair<SmallVector<TCGen5CommitOp>, SmallVector<Value>>
+collectCommitOpsAfter(MMAv5OpInterface mmaOp) {
+  auto isConstTrue = [](Value v) {
+    if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
+      if (auto attr = dyn_cast<BoolAttr>(constOp.getValueAttr())) {
+        return attr.getValue();
+      }
+    }
+    return false;
+  };
+
+  SmallVector<TCGen5CommitOp> commitOps;
+  SmallVector<Value> commitPredicates;
+  auto mmaPred = mmaOp.getPredicate();
+  Operation *nextOp = mmaOp->getNextNode();
+
+  while (nextOp) {
+    if (auto commit = dyn_cast<TCGen5CommitOp>(nextOp)) {
+      // If the mma predicate is true, or mma and commit ops use the same
+      // predicate, it is safe to merge them
+      if (isConstTrue(mmaPred) || mmaPred == commit.getPred()) {
+        commitOps.push_back(commit);
+        commitPredicates.push_back(commit.getPred());
+      }
+    } else if (!isPure(nextOp)) {
+      // Only move commits across pure ops. We also bail here when encountering
+      // another MMAv5 op.
+      break;
+    }
+    nextOp = nextOp->getNextNode();
+  }
+
+  return {commitOps, commitPredicates};
+}
+
+// Return false if defining ops cannot be moved above the target op
+bool moveDefiningOpsBefore(Value val, Operation *target) {
+  SetVector<Operation *> toMove;
+
+  std::function<bool(Value)> collectOpsToMove = [&](Value val) {
+    if (auto defOp = val.getDefiningOp()) {
+      if (defOp->getBlock() == target->getBlock() &&
+          target->isBeforeInBlock(defOp)) {
+        if (!isPure(defOp)) {
+          // This defOp needs to move above the target op, but it is unsafe due
+          // to impurity.
+          return false;
+        }
+        for (Value operand : defOp->getOperands()) {
+          if (!collectOpsToMove(operand)) {
+            return false;
+          }
+        }
+        toMove.insert(defOp);
+      }
+    }
+    return true;
+  };
+
+  if (!collectOpsToMove(val)) {
+    return false;
+  }
+
+  for (Operation *op : toMove) {
+    op->moveBefore(target);
+  }
+
+  return true;
+}
+
+class MergeCommitIntoMMA : public OpInterfaceRewritePattern<MMAv5OpInterface> {
+public:
+  using OpInterfaceRewritePattern<MMAv5OpInterface>::OpInterfaceRewritePattern;
+
+  LogicalResult matchAndRewrite(MMAv5OpInterface op,
+                                PatternRewriter &rewriter) const override {
+    auto [commitOps, predicates] = collectCommitOpsAfter(op);
+    if (commitOps.size() == 0) {
+      return llvm::failure();
+    }
+    for (auto [commit, pred] : llvm::zip(commitOps, predicates)) {
+      if (!pred) {
+        pred = rewriter.create<arith::ConstantIntOp>(op.getLoc(), true, 1);
+      }
+      if (!moveDefiningOpsBefore(commit.getBarrier(), op) ||
+          !moveDefiningOpsBefore(pred, op)) {
+        // Give up merging a commit if its defining ops cannot be moved above
+        // the mma op.
+        continue;
+      }
+      op.addCompletionBarrier(commit.getBarrier(), pred);
+      rewriter.eraseOp(commit);
+    }
+    return success();
+  }
+};
+
 } // anonymous namespace
 
 class TritonNvidiaGPUMMALoweringPass
@@ -112,9 +209,9 @@ public:
     ModuleOp m = getOperation();
 
     mlir::RewritePatternSet patterns(context);
-    patterns
-        .add<SyncMMALowering<TCGen5MMAOp>, SyncMMALowering<TCGen5MMAScaledOp>,
-             TCGen5MMAScaleSharedToTmemConversion>(context);
+    patterns.add<SyncMMALowering, TCGen5MMAScaleSharedToTmemConversion,
+                 MergeCommitIntoMMA>(context);
+
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }
