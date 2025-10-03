@@ -247,4 +247,21 @@ void setOutputPartition(Operation *op, int idx,
   setOutputPartition(op, idx, partitionIds);
 }
 
+void clearOutputPartitions(Operation *op) {
+  op->setAttr(kPartitionOutputsAttrName, ArrayAttr::get(op->getContext(), {}));
+}
+
+void removeOutputPartitions(Operation *op, int idx) {
+  Builder b(op->getContext());
+  llvm::SmallVector<Attribute> partitionAttrs;
+  assert(op->hasAttr(kPartitionOutputsAttrName));
+  for (auto attr : op->getAttrOfType<ArrayAttr>(kPartitionOutputsAttrName)) {
+    partitionAttrs.push_back(attr);
+  }
+  assert(idx < partitionAttrs.size());
+  partitionAttrs.erase(partitionAttrs.begin() + idx);
+  op->setAttr(kPartitionOutputsAttrName,
+              ArrayAttr::get(op->getContext(), partitionAttrs));
+}
+
 } // namespace mlir::triton::gpu

@@ -679,11 +679,12 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
   //   scf.if %condition {
   //     aref.put.exit                    // Separate exit operation
   //   } { .. loop.stage = 1 .. }
+  //   %poisoned_token = ub.poison
   //   %results, %more = scf.if %condition {
   //     <computation_code>               // Main computation without token ops
-  //     scf.yield %values, %other_values
+  //     scf.yield %values, %poisoned_token, %other_values
   //   } else {
-  //     scf.yield %alt_values, %alt_other_values
+  //     scf.yield %alt_values, %poisoned_token, %alt_other_values
   //   }
   //   %token = scf.if %condition {
   //     %new_token = aref.put.enter      // Separate enter operation
@@ -700,6 +701,7 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
     b.setInsertionPoint(ifOp);
     auto exitIf =
         b.create<scf::IfOp>(SmallVector<Type>{}, ifOp.getCondition(), false);
+    exitIf->setAttrs(ifOp->getAttrs());
     auto putExitOp = cast<ArefPutExitOp>(*ifOp.thenBlock()->begin());
     putExitOp->moveBefore(exitIf.thenBlock(), exitIf.thenBlock()->begin());
 
@@ -708,6 +710,7 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
     auto enterIf =
         b.create<scf::IfOp>(SmallVector<Type>{b.getType<AsyncTokenType>()},
                             ifOp.getCondition(), true);
+    enterIf->setAttrs(ifOp->getAttrs());
     auto putEnterOp =
         cast<ArefPutEnterOp>(ifOp.thenBlock()->getTerminator()->getPrevNode());
     putEnterOp->moveBefore(enterIf.thenBlock(), enterIf.thenBlock()->begin());
@@ -730,10 +733,14 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
     ifOp.elseYield().setOperand(pos, poisonToken);
 
     // patch loop.stage=1
-    enterIf->setAttrs(ifOp->getAttrs());
-    exitIf->setAttrs(ifOp->getAttrs());
     enterIf->setAttr(kLoopStageAttrName, b.getI32IntegerAttr(1));
     exitIf->setAttr(kLoopStageAttrName, b.getI32IntegerAttr(1));
+
+    // patch output partition attributes
+    clearOutputPartitions(exitIf);
+    auto tokPartitionIds = *getOutputPartitionIds(ifOp, pos);
+    clearOutputPartitions(enterIf);
+    setOutputPartition(enterIf, 0, tokPartitionIds);
   }
 }
 
