@@ -705,6 +705,11 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
     auto putExitOp = cast<ArefPutExitOp>(*ifOp.thenBlock()->begin());
     putExitOp->moveBefore(exitIf.thenBlock(), exitIf.thenBlock()->begin());
 
+    // set partition ids for exitIf
+    auto exitPartitionIds = *getPartitionIds(putExitOp);
+    setPartition(exitIf, exitPartitionIds);
+    clearOutputPartitions(exitIf);
+
     // move putEnterOp
     b.setInsertionPointAfter(ifOp);
     auto enterIf =
@@ -714,6 +719,12 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
     auto putEnterOp =
         cast<ArefPutEnterOp>(ifOp.thenBlock()->getTerminator()->getPrevNode());
     putEnterOp->moveBefore(enterIf.thenBlock(), enterIf.thenBlock()->begin());
+
+    // set partition ids for enterIf
+    auto enterPartitionIds = *getPartitionIds(putEnterOp);
+    setPartition(enterIf, enterPartitionIds);
+    clearOutputPartitions(enterIf);
+    setOutputPartition(enterIf, 0, enterPartitionIds);
 
     // replace token uses
     auto tok = putEnterOp.getToken();
@@ -736,11 +747,21 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
     enterIf->setAttr(kLoopStageAttrName, b.getI32IntegerAttr(1));
     exitIf->setAttr(kLoopStageAttrName, b.getI32IntegerAttr(1));
 
-    // patch output partition attributes
-    clearOutputPartitions(exitIf);
-    auto tokPartitionIds = *getOutputPartitionIds(ifOp, pos);
-    clearOutputPartitions(enterIf);
-    setOutputPartition(enterIf, 0, tokPartitionIds);
+    // patch partitions for ifOp
+    SetVector<int> partitionIds;
+    ifOp->walk([&](Operation *op) {
+      if (op == ifOp)
+        return;
+      auto ids = getPartitionIds(op);
+      if (ids)
+        partitionIds.insert(ids->begin(), ids->end());
+    });
+    setPartition(ifOp, partitionIds);
+    // set poisoned token output to the first partition id of the ifOp
+    // Note: will prefer partition 0 if used by the ifOp
+    SetVector<int> tokenPartitions;
+    tokenPartitions.insert(getPartitionIds(ifOp)->front());
+    setOutputPartition(ifOp, pos, tokenPartitions);
   }
 }
 
