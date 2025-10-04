@@ -1445,52 +1445,20 @@ LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
 }
 
 // PTX ISA - Warp-level MMA Block Scaling
-// Spec link:
 //   https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-block-scaling
-//  (see Sec. 9.7.14.3 in the PTX ISA)
-//
-// Block scaling multiplies A and B by per-row/column scale factors before the
-// MMA:
-//   D = (A * scale_A) * (B * scale_B) + C
-// Terminology
-// - scale_A / scale_B: scale matrices (not scalars).
-// - SF_A / SF_B: the selected scalar element taken from scale_A / scale_B.
-//
 // Scale matrix shapes by scale_vec_size
 //   1X: scale_A = M x 1, scale_B = 1 x N
 //
-// Valid .kind x scale_vec_size (supported in this implementation)
+// Supported .kind x scale_vec_size
 //   mxf8f6f4 with UE8M0 scales -> .scale_vec::1X
 //
-// K-chunking model used in this implementation
-// We assume each scale applies to a contiguous run of K/groupSize elements:
-//   - FP8:     groupSize = 1  => 1X (32 elems per scale)
-//
-// Broadcast direction
-// - A * SF_A is broadcast along K within each row of A.
-// - B * SF_B is broadcast along K within each column of B.
-// Selector tuples (provider and byte selectors)
-// Selectors are used to decide broadcasting rule for A * SF_A and B * SF_B.
-// Selectors are per warp-quad (4 lanes). Lanes in a quad are indexed {0, 1, 2,
-// 3}.
-//
-// Providers:
-//   - For A (thread-id-a in {0,1}):
-//       0 -> lane-pair {0,1}   (lower pair)
-//       1 -> lane-pair {2,3}   (upper pair)
-//   - For B (thread-id-b in {0,1,2,3}):
-//       selects a single lane within the quad.
-//
-// Byte selectors (which sub-field of the 32-bit metadata is used):
-//   - For scale_vec 1X: any byte {0,1,2,3}
-// Data/selector operand types:
-//   - scale-a-data / scale-b-data are .b32
-//   - {byte-id-a, thread-id-a}, {byte-id-b, thread-id-b} are unsigned 16-bit
 // Implementation notes:
 //   - We support only scale_vec::1X for now.
 //   - We choose a fixed provider for A (thread-id-a = 0) and B (thread-id-b =
 //   0)
-//   - In this implementation, each lane in a quad has the same scale factor.
+//   - We choose a fixed byte selector for A (byte-id-a = 0) and B (byte-id-b =
+//   0)
+//   - Each lane in a quad has the same scale factor.
 LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                           ArrayRef<int64_t> dotOperandShape,
                                           ArrayRef<unsigned> tilesPerWarp,
@@ -1531,7 +1499,7 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
     L = L * LinearLayout::zeros1D(totalWarps / nWarps, kWarp, outDims[mnIdx]);
     L = L * LinearLayout::identity1D(nRep_warp, kRegister, outDims[mnIdx]);
   }
-
+  L = L * LinearLayout::identity1D(kSize, kRegister, outDims[kIdx]);
   return combineCtaCgaWithShape(L, ctaLayoutAttr, dotOperandShape);
 }
 

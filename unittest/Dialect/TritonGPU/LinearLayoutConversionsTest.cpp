@@ -3727,13 +3727,14 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_CTASplit) {
 }
 
 // Tests for SM120 DotScaled Scale Layout
-TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_AScale_Basic) {
-  auto layout = getSM120DotScaledScaleLayout(
+TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_Basic) {
+  LinearLayout layout, ll;
+  layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/0, /*dotOperandShape=*/{128, 32},
       /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{4, 1},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
 
-  auto ll = LinearLayout(
+  ll = LinearLayout(
       {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {64, 0}}},
        {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
        {S("warp"), {{16, 0}, {32, 0}}},
@@ -3741,14 +3742,12 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_AScale_Basic) {
       {S("dim0"), S("dim1")});
 
   EXPECT_EQ(ll, layout);
-}
 
-TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_BScale_Basic) {
-  auto layout = getSM120DotScaledScaleLayout(
+  layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/1, /*dotOperandShape=*/{32, 128},
       /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{1, 4},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
-  auto ll = LinearLayout(
+  ll = LinearLayout(
       {{S("register"),
         {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 32}, {0, 64}}},
        {S("lane"), {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
@@ -3759,7 +3758,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_BScale_Basic) {
   EXPECT_EQ(ll, layout);
 }
 
-TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_MultiWarp) {
+TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_Large) {
   LinearLayout layout, ll;
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/0, /*dotOperandShape=*/{256, 64},
@@ -3803,10 +3802,6 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_MultiWarp) {
                     {S("dim0"), S("dim1")});
 
   EXPECT_EQ(ll, layout);
-}
-
-TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_Large) {
-  LinearLayout layout, ll;
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/0, /*dotOperandShape=*/{256, 128},
       /*tilesPerWarp=*/{2, 2}, /*warpsPerCTA=*/{2, 2},

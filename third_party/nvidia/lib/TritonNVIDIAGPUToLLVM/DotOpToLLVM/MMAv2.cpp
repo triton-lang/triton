@@ -864,20 +864,20 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
     auto tb = TritonLLVMOpBuilder(op.getLoc(), rewriter);
     auto i32 = IntegerType::get(op->getContext(), 32);
 
-    // Split bytes into kRep equal chunks and return the i-th chunk
-    auto getKRepChunk = [&](ArrayRef<Value> bytes, int kRep,
+    // Split bytes into repK equal chunks and return the i-th chunk
+    auto getRepKChunk = [&](ArrayRef<Value> bytes,
                             int chunkIdx) -> ArrayRef<Value> {
       int total = static_cast<int>(bytes.size());
-      int base = total / kRep;
-      int rem = total % kRep;
+      int base = total / repK;
+      int rem = total % repK;
       int start = chunkIdx * base + std::min(chunkIdx, rem);
       if (start >= total)
         return bytes.slice(total, 0);
       int len = std::min(base + (chunkIdx < rem ? 1 : 0), total - start);
       return bytes.slice(start, std::max(0, len));
     };
-    auto aScaleBytes = getKRepChunk(unpackedAScale, repK, k / 2);
-    auto bScaleBytes = getKRepChunk(unpackedBScale, repK, k / 2);
+    auto aScaleBytes = getRepKChunk(unpackedAScale, k / 2);
+    auto bScaleBytes = getRepKChunk(unpackedBScale, k / 2);
     Value aScaleValue = tb.zext(i32, aScaleBytes[m / 2]);
     Value bScaleValue = tb.zext(i32, bScaleBytes[n]);
 
