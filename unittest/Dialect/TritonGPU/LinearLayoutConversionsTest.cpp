@@ -3733,6 +3733,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_AScale_Basic) {
   // warpsPerCTA = [4, 1], instrM = 16, instrN = 8
   auto layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/0, /*dotOperandShape=*/{128, 32},
+      /*groupSize=*/1,
       /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{4, 1},
       /*mmaInstrM=*/16, /*mmaInstrN=*/8,
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
@@ -3753,6 +3754,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_BScale_Basic) {
   // warpsPerCTA = [1, 4], instrM = 16, instrN = 8
   auto layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/1, /*dotOperandShape=*/{32, 128},
+      /*groupSize=*/1,
       /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{1, 4},
       /*mmaInstrM=*/16, /*mmaInstrN=*/8,
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
@@ -3772,6 +3774,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_MultiWarp) {
   // A-scale with 2x2 warp layout
   auto layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/0, /*dotOperandShape=*/{256, 64},
+      /*groupSize=*/1,
       /*tilesPerWarp=*/{2, 1}, /*warpsPerCTA=*/{2, 2},
       /*mmaInstrM=*/16, /*mmaInstrN=*/8,
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
@@ -3794,6 +3797,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_MultiWarp) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/1, /*dotOperandShape=*/{256, 64},
+      /*groupSize=*/1,
       /*tilesPerWarp=*/{2, 1}, /*warpsPerCTA=*/{2, 2},
       /*mmaInstrM=*/16, /*mmaInstrN=*/8,
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
@@ -3812,6 +3816,51 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_MultiWarp) {
                      {S("warp"), {{8, 0}, {0, 0}}},
                      {S("block"), {}}},
                     {S("dim0"), S("dim1")});
+
+  EXPECT_EQ(ll, layout);
+}
+
+// Additional tests to exercise groupSize > 1 path (k doubling)
+TEST_F(LinearLayoutConversionsTest,
+       SM120DotScaledScaleLayout_AScale_GroupSize2) {
+  // dotOperandIdx = 0 (A-scale), shape = [128, 64], groupSize = 2
+  // Simple config to isolate K-doubling sequence: tilesPerWarp = [1,1],
+  // warpsPerCTA = [1,1]
+  auto layout = getSM120DotScaledScaleLayout(
+      &ctx, /*dotOperandIdx=*/0, /*dotOperandShape=*/{128, 64},
+      /*groupSize=*/2,
+      /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{1, 1},
+      /*mmaInstrM=*/16, /*mmaInstrN=*/8,
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
+
+  auto ll = LinearLayout(
+      {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {32, 0}}},
+       {S("lane"), {{0, 8}, {0, 0}, {0, 1}, {0, 2}, {0, 4}}},
+       {S("warp"), {}},
+       {S("block"), {}}},
+      {S("dim0"), S("dim1")});
+
+  EXPECT_EQ(ll, layout);
+}
+
+TEST_F(LinearLayoutConversionsTest,
+       SM120DotScaledScaleLayout_BScale_GroupSize2) {
+  // dotOperandIdx = 1 (B-scale), shape = [64, 128], groupSize = 2
+  // Simple config to isolate K-doubling sequence: tilesPerWarp = [1,1],
+  // warpsPerCTA = [1,1]
+  auto layout = getSM120DotScaledScaleLayout(
+      &ctx, /*dotOperandIdx=*/1, /*dotOperandShape=*/{64, 128},
+      /*groupSize=*/2,
+      /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{1, 1},
+      /*mmaInstrM=*/16, /*mmaInstrN=*/8,
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
+
+  auto ll = LinearLayout(
+      {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {32, 0}}},
+       {S("lane"), {{0, 0}, {0, 0}, {0, 1}, {0, 2}, {0, 4}}},
+       {S("warp"), {}},
+       {S("block"), {}}},
+      {S("dim0"), S("dim1")});
 
   EXPECT_EQ(ll, layout);
 }
