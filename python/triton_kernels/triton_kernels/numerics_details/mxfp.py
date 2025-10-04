@@ -297,6 +297,17 @@ def upcast_from_mxfp_torch(tensor: torch.Tensor, scale: torch.Tensor, target_dty
     padded_tensor = padded_tensor.view(*new_shape)
     dq_scale_padded = dq_scale.unsqueeze(-1)  # shape: [..., ceil(axis_shape/32), 1]
     out_padded = padded_tensor * dq_scale_padded
+    # Need to clamp since due to rounding, we can have overflow that was within
+    # the range before quantization.
+    # e.g., 3.3895e+38 -> log2(3.3895e+38 / max_fp8e4m3=448) ~= 119.17 -> round
+    # up to 120 + exp_bias=127 -> scale=247
+    # 3.3895e+38 / 2**120 ~= 254.9976 -> round to 256 in fp8e4m3fn
+    # Dequantization: 256 * 2**120 > 3.4e38 overflowing 3.38953139e38
+    finfo = torch.finfo(target_dtype)
+    out_padded = (padded_tensor * dq_scale_padded).clamp(finfo.min, finfo.max)
+    if tensor.dtype == torch.float8_e5m2:
+        # fp8e5m2 can have inf and we want to preserve so separately handle
+        out_padded = out_padded.where(~padded_tensor.isinf(), padded_tensor.to(target_dtype))
 
     # Flatten back and remove the padded tail
     out_padded = out_padded.view(*fp32_tensor.shape[:-1], new_axis_shape)
