@@ -4,15 +4,14 @@ from typing import Type
 import torch
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton.tools.ragged_tma import create_ragged_descriptor
-
-from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from .target_info import cuda_capability_geq
 from .tensor_details.layout import Layout, StridedLayout
-from .target_info import is_hip
-from .tensor_details._bitmatrix_metadata import _bitmatrix_metadata_compute, _bitmatrix_metadata_memset
-from .tensor_details._ragged_tensor_metadata import _ragged_tensor_metadata_compute, _ragged_tensor_metadata_memset
+from .tensor_details.ragged_tensor import RaggedTensorMetadata
+from .tensor_details.bitmatrix import BitmatrixMetadata
 
 
+# storage
+# ---------------------------------------------------------------------------- #
 @dataclass
 class Storage:
     data: torch.Tensor
@@ -71,6 +70,8 @@ class Storage:
         return create_ragged_descriptor(self.data, block_shape, ragged_dim=ragged_dim)
 
 
+# data types
+# ---------------------------------------------------------------------------- #
 @dataclass
 class IntegerType:
     bitwidth: int
@@ -94,6 +95,10 @@ def bitwidth(type: IntegerType | FloatType | torch.dtype):
     if isinstance(type, torch.dtype):
         return type.itemsize * 8
     return type.bitwidth
+
+
+# main tensor class
+# ---------------------------------------------------------------------------- #
 
 
 @dataclass
@@ -167,208 +172,27 @@ class Tensor:
 
 @dataclass
 class Bitmatrix(Tensor):
-    """
-    Represents a boolean matrix in a packed format where each element occupies
-    a single bit of memory.
-
-    _scratchpad is either None or an all-zero array of size >= shape[-1]; we pass it along
-    with the actual bitmatrix to avoid having to launch a separate memset
-    kernel when we call Bitmatrix::sum().
-    """
-
-    scratchpad: torch.Tensor = None
-
-    def __init__(self, storage, shape, shape_max=None, scratchpad=None):
-        super().__init__(storage, dtype=BIT, shape=shape, shape_max=shape_max)
-        self.scratchpad = scratchpad
-
-    def sum(self, partials_block_size):
-        _, n_cols = self.shape
-        dev = self.device
-        if self.scratchpad is None:
-            self.scratchpad = clear_sums(n_cols, dev)
-        out_ret = self.scratchpad[:n_cols]
-        self.scratchpad = None  # throw error if we try to sum again
-        return sum_bitmatrix_rows(self, out_ret, partials_block_size)
-
-
-# ---------------------------------------------------------------------------- #
-#  Metadata
-# ---------------------------------------------------------------------------- #
-
-# ragged tensor metadata
-
-
-@dataclass
-class RaggedTensorMetadata:
-    """
-    Example:
-    `batch_sizes`= [15 17 0 127]
-    `batch_offs`= [0 15 32 32 332]
-    `block_offs_data` = {
-        16: [0 1 3 3 11]
-        32: [0 1 2 2 6]
-        64: [0 1 2 2 4]
-        128: [0 1 2 2 3]
-    }
-    `block_schedule_data` = {
-        16:  [(0, 0), (0, 1), (0, 3), (1, 3), (2, 3), ..., (7, 3), -1, ..., -1]
-        32:  [(0, 0), (0, 1), (0, 3), (1, 3), (2, 3), (3, 3), -1, ...,      -1]
-        64:  [(0, 0), (0, 1), (0, 3), (1, 3), (2, 3), -1, ...,              -1]
-        128: [(0, 0), (0, 1), (0, 3), (1, 3), -1, ...,                      -1]
-    }
-    """
-    # batch_sizes[i] is the number of tokens in batch i
-    batch_sizes: torch.Tensor
-    # batch_offs = [0] + cumsum(batch_sizes)
-    # i.e., batch_offs[i] is the offset of the first token for
-    # batch `i` in a `batch_sizes`-shaped ragged tensor
-    batch_offs: torch.Tensor
-    # block_offs_data[k] = [0] + cumsum(ceil_div(batch_sizes, 16 * k))
-    # i.e., `block_offs_data[k][i]` is the offset of the first block of
-    # `16*k`` token for batch `i` in a `bath_sizes`-shaped ragged tensor
-    block_offs_data: torch.Tensor
-    # let `num_blocks[k] = block_offs_data[k, 1:] - block_offs_data[k, :-1]
-    # block_schedule_data[k] = cat(*[[(batch, blk) for blk in range(blks)] for batch, blks in enumerate(num_blocks)])
-    # i.e., if the schedule of batch `i` is [(i, 0), (i, 1), ..., (i, num_blocks[k][i] - 1)]
-    # then `block_schedule_data[k]` is the concatenation of the schedules for all batches
-    # NOTE 1: `block_schedule_data[k][j]` is a packed 32-bit integer
-    # NOTE 2: because the size of `block_schedule_data[k]` is data-dependent, we pad it with -1s
-    # up to an user-provided upper bound
-    block_schedule_data: torch.Tensor
+    metadata: BitmatrixMetadata = None
 
     def __post_init__(self):
-        assert self.block_offs_data.shape[0] == len(RaggedTensorMetadata.block_sizes())
-        assert self.block_schedule_data.shape[0] == len(RaggedTensorMetadata.block_sizes())
-        assert self.block_offs_data.dtype == torch.int32
-        assert self.block_schedule_data.dtype == torch.int32
-        if self.batch_sizes is not None:
-            assert self.batch_sizes.dtype == torch.int32
-        if self.batch_offs is not None:
-            assert self.batch_offs.dtype == torch.int32
-
-    def block_offs(self, block_size):
-        return self.block_offs_data[RaggedTensorMetadata.block_sizes().index(block_size)]
-
-    def block_schedule(self, block_size):
-        return self.block_schedule_data[RaggedTensorMetadata.block_sizes().index(block_size)]
-
-    @staticmethod
-    def block_sizes_log2():
-        return range(4, 9) if is_hip() else range(4, 8)
-
-    @staticmethod
-    def block_sizes():
-        return [2**x for x in RaggedTensorMetadata.block_sizes_log2()]
+        assert self.dtype == BIT
 
 
-def exact_div(x, y):
-    assert x % y == 0
-    return x // y
-
-
-def empty_aligned(shape, dtype, device, pad_size):
-    cdiv = lambda x, y: (x + y - 1) // y
-    pad = lambda x: cdiv(x, pad_size) * pad_size
-    ret = torch.empty((*shape[:-1], pad(shape[-1])), dtype=dtype, device=device)
-    ret_slices = (*[slice(None)] * (len(shape) - 1), slice(0, shape[-1]))
-    return ret[ret_slices]
-
-
-def max_n_tiles(n_expts_tot, n_gates):
-    if n_gates <= n_expts_tot:
-        return n_gates
-    return n_expts_tot - 1 - ((n_expts_tot - n_gates - 1) // RaggedTensorMetadata.block_sizes()[0])
-
-
-def make_ragged_tensor_metadata(expt_hist, n_expts_tot, n_gates):
-
-    if expt_hist is None:
-        return RaggedTensorMetadata(None, None, None, None)
-
-    block_sizes_log2 = RaggedTensorMetadata.block_sizes_log2()
-    block_size_num = len(block_sizes_log2)
-    MEMSET_BLOCK = 512
-    dtype = torch.int32
-    device = expt_hist.device
-    batch_offs_combined = empty_aligned((block_size_num + 1, n_expts_tot + 1), dtype, device, MEMSET_BLOCK)
-    block_schedule_data = empty_aligned((block_size_num, max_n_tiles(n_expts_tot, n_gates)), dtype, device,
-                                        MEMSET_BLOCK)
-    batch_offs, block_offs_data = batch_offs_combined[0], batch_offs_combined[1:]
-    n_memset_blocks = exact_div(block_schedule_data.storage().size(), MEMSET_BLOCK)
-
-    _ragged_tensor_metadata_memset[(batch_offs_combined.shape[0] + n_memset_blocks, )](
-        expt_hist, n_expts_tot,  #
-        batch_offs_combined, batch_offs_combined.stride(0),  #
-        block_schedule_data,  #
-        block_sizes_log2[0], SIZES=len(block_sizes_log2), BLOCK=MEMSET_BLOCK,  # optimization parameters
-        num_warps=4)
-
-    _ragged_tensor_metadata_compute[(block_size_num * n_expts_tot, )](
-        expt_hist, block_offs_data, block_offs_data.stride(0), block_schedule_data,
-        block_schedule_data.stride(0),  # outputs
-        block_sizes_log2[0], SIZES=len(block_sizes_log2), BLOCK=512,  # optimization parameters
-        num_warps=4)
-
-    return RaggedTensorMetadata(expt_hist, batch_offs, block_offs_data, block_schedule_data)
-
-
-# bitmatrix metadata
 @dataclass
-class BitmatrixMetadata:
-    """
-    Example:
-    `bitmatrix` = [0 0 1 0 1 1 0
-                   0 1 0 0 0 1 0
-                   1 1 1 0 0 0 1
-                   0 0 1 0 1 0 0]
-    `col_sum` = [1 2 3 0 2 2 1]
-    `row_sorted_indx` = cat([3 6 8], [1 9], [0 2 4 10], [5 7])
-    `col_sorted_indx` = cat([5], [3 6], [0 7], [], [9 1 10], [2 4], [8])
-    """
-    # the number of entries equal to 1 in each column
-    col_sum: torch.Tensor
-    # indices of nonzero values numbered col-major, grouped by rows, concatenated
-    row_sorted_indx: torch.Tensor
-    # indices of nonzero values numbered row-major, grouped by cols, concatenated
-    col_sorted_indx: torch.Tensor
+class RaggedTensor:
+    batch_sizes: torch.Tensor
+    data: torch.Tensor
+    metadata: RaggedTensorMetadata
 
 
-def make_bitmatrix_metadata(expt_indx, bitmatrix):
-    HIST_BLOCK_M = 32
-    cdiv = lambda x, y: (x + y - 1) // y
-    device = bitmatrix.device
-    col_sum, col_partial_sum = bitmatrix.sum(partials_block_size=HIST_BLOCK_M)
-    assert col_sum.dtype == torch.int32
-    # allocate memory
-    n_indx = expt_indx.numel()
-    n_cols = bitmatrix.shape[1]
-    col_offs = torch.empty(n_cols, dtype=torch.int32, device=device)
-    combined_indx = torch.empty(n_indx * 2, dtype=torch.int32, device=device)
-    col_sorted_indx = combined_indx[:n_indx]
-    row_sorted_indx = combined_indx[n_indx:]
-    # memset the output
-    MEMSET_BLOCK = 1024
-    INDX_OFFS_BLOCK_M = 512
-    memset_grid = (cdiv(n_indx * 2, MEMSET_BLOCK) + n_cols + 1, )
-    _bitmatrix_metadata_memset[memset_grid](
-        combined_indx, n_indx * 2, -1, MEMSET_BLOCK, col_sum,  #
-        col_offs, col_sum.shape[0], n_cols, col_partial_sum,  # inputs
-        col_partial_sum.shape[0], col_partial_sum.stride(0), col_partial_sum.stride(1),  # outputs
-        BLOCK_N=512, BLOCK_M=INDX_OFFS_BLOCK_M,  # tunable parameters
-    )
-    # compute the output
-    compute_grid = (cdiv(bitmatrix.shape_max[0], HIST_BLOCK_M), )
-    _bitmatrix_metadata_compute[compute_grid](
-        col_sorted_indx, row_sorted_indx,  # outputs
-        expt_indx, col_partial_sum, col_partial_sum.stride(0), col_partial_sum.stride(1),  # inputs
-        col_offs, bitmatrix.shape[0],  # input shape
-        HIST_BLOCK_M, expt_indx.shape[-1],  # constants
-    )
-
-    return BitmatrixMetadata(col_sum, col_sorted_indx, row_sorted_indx)
+@dataclass
+class SparseMatrix:
+    indx: torch.Tensor
+    vals: torch.Tensor
+    mask: Bitmatrix
 
 
+# layout utilities
 # ---------------------------------------------------------------------------- #
 
 
