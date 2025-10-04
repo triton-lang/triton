@@ -864,23 +864,11 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
     auto tb = TritonLLVMOpBuilder(op.getLoc(), rewriter);
     auto i32 = IntegerType::get(op->getContext(), 32);
 
-    // Split bytes into repK equal chunks and return the i-th chunk
-    auto getRepKChunk = [&](ArrayRef<Value> bytes,
-                            int chunkIdx) -> ArrayRef<Value> {
-      int total = static_cast<int>(bytes.size());
-      int base = total / repK;
-      int rem = total % repK;
-      int start = chunkIdx * base + std::min(chunkIdx, rem);
-      if (start >= total)
-        return bytes.slice(total, 0);
-      int len = std::min(base + (chunkIdx < rem ? 1 : 0), total - start);
-      return bytes.slice(start, std::max(0, len));
-    };
-    auto aScaleBytes = getRepKChunk(unpackedAScale, k / 2);
-    auto bScaleBytes = getRepKChunk(unpackedBScale, k / 2);
-    Value aScaleValue = tb.zext(i32, aScaleBytes[m / 2]);
-    Value bScaleValue = tb.zext(i32, bScaleBytes[n]);
-
+    int chunkASize = unpackedAScale.size() / repK;
+    int chunkBSize = unpackedBScale.size() / repK;
+    Value aScaleValue =
+        tb.zext(i32, unpackedAScale[(k / 2) * chunkASize + m / 2]);
+    Value bScaleValue = tb.zext(i32, unpackedBScale[(k / 2) * chunkBSize + n]);
     callMmaScaled(builder, b, m, n, k, mma, numMmaRets, colsPerThread, aTable,
                   bTable, cValues, aScaleValue, bScaleValue);
   };
