@@ -138,7 +138,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   tt.func public @async_commit_group(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                      %arg1: i32 {tt.divisibility = 16 : i32},
                                      %arg2: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
-    // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.return
     ttg.async_commit_group
     tt.return

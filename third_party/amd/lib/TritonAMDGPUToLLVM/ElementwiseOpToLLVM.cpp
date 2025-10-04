@@ -237,16 +237,6 @@ cvtScalePkDowncastToFp8(Location loc, ConversionPatternRewriter &rewriter,
   assert(v.size() == 4);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  // This is the location of the fp16_ovfl flag in the Mode register. It's
-  // calculated following this formula:
-  //     (mode register ID = 1) | (Offset << 6) | ((Width - 1) << 11)
-  // In this case, Offset = 23 and Width = 1.
-  // When the bit is 0/1, the conversion from fp32/fp16/bf16 to fp8/bf8 is in
-  // non-saturation/saturation mode.
-  Value fp16OVFLModeRegLoc = b.i32_val(1473);
-  LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.s.setreg", {},
-                                  {fp16OVFLModeRegLoc, b.i32_val(1)});
-
   Type v2I16Ty = vec_ty(i16_ty, 2);
   Value v2I16Vec = b.undef(v2I16Ty);
   Value scale = b.f32_val(1);
@@ -2323,10 +2313,41 @@ struct PreciseSqrtOpConversion
 private:
   bool ftz;
 };
-
 } // namespace
 
 namespace mlir::triton::AMD {
+void adjustModeRegister(ModuleOp mod, const TargetInfo &targetInfo) {
+  MLIRContext *ctx = mod->getContext();
+  Location loc = mod->getLoc();
+  mlir::OpBuilder builder(ctx);
+  auto auxBuilder = TritonLLVMOpBuilder(loc, builder);
+
+  if ((targetInfo.getISAFamily() == AMD::ISAFamily::CDNA1) ||
+      (targetInfo.getISAFamily() == AMD::ISAFamily::CDNA2) ||
+      (targetInfo.getISAFamily() == AMD::ISAFamily::RDNA1) ||
+      (targetInfo.getISAFamily() == AMD::ISAFamily::RDNA2)) {
+    return;
+  }
+
+  mod->walk([&](LLVM::LLVMFuncOp func) {
+    if (func.getBody().empty())
+      return;
+    auto &body = func.getBody().front();
+    builder.setInsertionPoint(&body.front());
+
+    // This is the location of the fp16_ovfl flag in the Mode register. It's
+    // calculated following this formula:
+    //     (mode register ID = 1) | (Offset << 6) | ((Width - 1) << 11)
+    // In this case, Offset = 23 and Width = 1.
+    // When the bit is 0/1, the conversion from fp32/fp16/bf16 to fp8/bf8 is
+    // in non-saturation/saturation mode.
+    Value fp16OVFLModeRegLoc = auxBuilder.i32_val(1473);
+    LLVM::createLLVMIntrinsicCallOp(
+        builder, loc, "llvm.amdgcn.s.setreg", {},
+        {fp16OVFLModeRegLoc, auxBuilder.i32_val(1)});
+  });
+}
+
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, bool ftz,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
