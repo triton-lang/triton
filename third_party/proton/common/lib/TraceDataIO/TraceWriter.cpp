@@ -8,6 +8,21 @@
 using namespace proton;
 using json = nlohmann::json;
 
+namespace {
+
+uint64_t getMinInitTime(const std::vector<KernelTrace> &streamTrace) {
+  uint64_t minInitTime = std::numeric_limits<uint64_t>::max();
+  for (const auto &kernelTrace : streamTrace)
+    for (const auto &bt : kernelTrace.first->blockTraces) {
+      if (bt.initTime < minInitTime) {
+        minInitTime = bt.initTime;
+      }
+    }
+  return minInitTime;
+}
+
+} // namespace
+
 StreamTraceWriter::StreamTraceWriter(
     const std::vector<KernelTrace> &streamTrace, const std::string &path)
     : streamTrace(streamTrace), path(path) {}
@@ -43,8 +58,10 @@ void StreamChromeTraceWriter::write(std::ostream &outfile) {
 
   json object = {{"displayTimeUnit", "ns"}, {"traceEvents", json::array()}};
 
+  const auto minInitTime = getMinInitTime(streamTrace);
+
   for (const auto &kernelTrace : streamTrace) {
-    writeKernel(object, kernelTrace);
+    writeKernel(object, kernelTrace, minInitTime);
   }
   outfile << object.dump() << "\n";
 }
@@ -144,7 +161,8 @@ std::vector<int> assignLineIds(
 } // namespace
 
 void StreamChromeTraceWriter::writeKernel(json &object,
-                                          const KernelTrace &kernelTrace) {
+                                          const KernelTrace &kernelTrace,
+                                          const uint64_t minInitTime) {
   auto result = kernelTrace.first;
   auto metadata = kernelTrace.second;
 
@@ -192,16 +210,17 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           else
             name = metadata->scopeName.at(scopeId);
 
-          double freq = 1000; // Unit: MHz
+          // Unit: MHz, we assume freq is 1000MHz (1GHz)
+          double freq = 1000.0;
 
-          double startCycle = event.first->cycle;      // Unit: cycle
-          double endCycle = event.second->cycle;       // Unit: cycle
-          double dur = (endCycle - startCycle) / freq; // Unit: us
-
-          double startCycleRel =
-              startCycle - blockToMinCycle[ctaId];       // Unit: cycle
-          double startTimeRel = startCycleRel / freq;    // Unit: us
-          double ts = bt->initTime / 1e3 + startTimeRel; // Unit: us
+          // Global time is in `ns` unit. With 1GHz assumption, we
+          // could subtract with blockToMInCycle: (ns - ns) / 1GHz - cycle
+          int64_t cycleAdjust =
+              static_cast<int64_t>(bt->initTime - minInitTime) -
+              static_cast<int64_t>(blockToMinCycle[ctaId]);
+          int64_t ts = static_cast<int64_t>(event.first->cycle) + cycleAdjust;
+          int64_t dur =
+              static_cast<int64_t>(event.second->cycle) - event.first->cycle;
 
           json element;
           element["cname"] = color;
@@ -210,8 +229,8 @@ void StreamChromeTraceWriter::writeKernel(json &object,
           element["ph"] = "X";
           element["pid"] = pid;
           element["tid"] = tid;
-          element["ts"] = ts;
-          element["dur"] = dur;
+          element["ts"] = static_cast<double>(ts) / freq;
+          element["dur"] = static_cast<double>(dur) / freq;
           json args;
           args["Finalization Time (ns)"] = bt->postFinalTime - bt->preFinalTime;
           args["Frequency (MHz)"] = freq;

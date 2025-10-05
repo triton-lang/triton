@@ -532,7 +532,81 @@ void optimizePartitions(scf::ForOp loop, PartitionSet &partitions) {
 //       nested control flow structures (if/reduce/for operations).
 //       While we don't currently have use cases requiring this,
 //       implementing it would prepare for when it is needed.
-void assignRootPartition(scf::ForOp loop, PartitionSet &partitions) {
+LogicalResult assignMissingPartitions(scf::ForOp loop,
+                                      PartitionSet &partitions) {
+  // For operations that have no partitions assigned, assign a partition set
+  // that is the union of all partition sets of its direct users.
+  auto isScalarOp = [](Operation *op) {
+    return llvm::all_of(op->getResultTypes(), [](Type type) {
+      return isa<FloatType, IntegerType>(type);
+    });
+  };
+
+  llvm::MapVector<Operation *, SetVector<Operation *>> opsMap;
+  DenseMap<Operation *, DenseSet<int>> partitionMap;
+  for (auto &op_ : *loop.getBody()) {
+    auto op = &op_;
+
+    DenseSet<int> ids;
+    if (auto partitionIds = getPartitionIds(op)) {
+      ids.insert(partitionIds->begin(), partitionIds->end());
+    } else if (isScalarOp(op)) {
+      for (int i = 0; i < partitions.getNumPartitions(); ++i) {
+        ids.insert(i);
+      }
+    }
+    partitionMap[op] = ids;
+
+    if (hasPartition(op) || isScalarOp(op) || isa<scf::YieldOp>(op))
+      continue;
+
+    SetVector<Operation *> useOps;
+    for (auto &use : op->getUses()) {
+      auto useOp = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+      if (isa<scf::YieldOp>(useOp)) {
+        auto forOp = cast<scf::ForOp>(useOp->getParentOp());
+        auto arg = forOp.getRegionIterArg(use.getOperandNumber());
+        for (auto &use : arg.getUses()) {
+          auto useOp = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+          useOps.insert(useOp);
+        }
+      } else {
+        useOps.insert(useOp);
+      }
+    }
+
+    opsMap[op] = useOps;
+  }
+
+  int maxIter = 100;
+  while (maxIter-- > 0) {
+    bool converged = true;
+    for (auto [op, useOps] : opsMap) {
+      auto oldPartitionIds = partitionMap[op];
+      auto newPartitionIds = oldPartitionIds;
+      for (auto useOp : useOps) {
+        auto partitionIds = partitionMap[useOp];
+        newPartitionIds.insert(partitionIds.begin(), partitionIds.end());
+      }
+      converged = converged && oldPartitionIds == newPartitionIds;
+      partitionMap[op] = newPartitionIds;
+    }
+    if (converged)
+      break;
+  }
+  if (maxIter <= 0) {
+    return emitError(loop.getLoc(),
+                     "assignMissingPartitions failed to converge");
+  }
+
+  for (auto [op, partitionIds] : partitionMap) {
+    if (!partitionIds.empty()) {
+      setPartition(op,
+                   SetVector<int>(partitionIds.begin(), partitionIds.end()));
+    }
+  }
+
+  // remaining unannotated ops are assigned to all partitions
   auto ctx = loop.getContext();
   Builder b(ctx);
   SetVector<Partition *> root;
@@ -545,6 +619,7 @@ void assignRootPartition(scf::ForOp loop, PartitionSet &partitions) {
       setPartition(&op, root);
     }
   }
+  return success();
 }
 
 void assignRegionBodyPartition(scf::ForOp loop, PartitionSet &partitions) {
@@ -602,7 +677,8 @@ void PartitionScheduling::runOnOperation() {
     if (std::optional<PartitionSet> partitions = getInitialPartitions(loop)) {
       propagatePartitions(loop, *partitions);
       optimizePartitions(loop, *partitions);
-      assignRootPartition(loop, *partitions);
+      if (failed(assignMissingPartitions(loop, *partitions)))
+        return signalPassFailure();
       assignRegionBodyPartition(loop, *partitions);
       loop->setAttr(
           kWarpSpecializeTagAttrName,

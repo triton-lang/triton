@@ -91,9 +91,10 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi", mlir::createTritonAMDFoldTrueCmpI);
   ADD_PASS_OPTION_WRAPPER_1("add_block_pingpong",
                             mlir::createTritonAMDGPUBlockPingpong, int32_t);
-  ADD_PASS_OPTION_WRAPPER_5("add_stream_pipeline",
-                            mlir::createTritonAMDGPUStreamPipeline, int, int,
-                            int, bool, bool);
+  ADD_PASS_OPTION_WRAPPER_1("add_schedule_loops",
+                            mlir::createTritonAMDGPUScheduleLoops, int);
+  ADD_PASS_OPTION_WRAPPER_2("add_pipeline", mlir::createTritonAMDGPUPipeline,
+                            bool, bool);
   ADD_PASS_OPTION_WRAPPER_1("add_coalesce_async_copy",
                             mlir::createTritonAMDGPUCoalesceAsyncCopy,
                             std::string);
@@ -160,18 +161,16 @@ static void checkMatmulConstraints(const std::string &A_dtype,
     throw std::runtime_error(oss.str());
   }
 
-  // For 8-bit inputs (any combination of FP8/BF8), restrict C to FP16 for now,
-  // matching the current hipBLAS wrapper behavior.
   if (A_is_fp8 && B_is_fp8) {
-    if (C_dtype != "torch.float16") {
+    if (C_dtype != "torch.float16" && C_dtype != "torch.float32" &&
+        C_dtype != "torch.bfloat16") {
       std::ostringstream oss;
       oss << "When A/B are 8-bit (float8_e4m3fn/e4m3fnuz or "
              "float8_e5m2fn/e5m2fnuz), C must"
-          << " be torch.float16.";
+          << " be torch.float16, torch.float32, or torch.bfloat16.";
       throw std::runtime_error(oss.str());
     }
   } else {
-    // Otherwise require all dtypes to match
     if (!(A_dtype == B_dtype && A_dtype == C_dtype)) {
       std::ostringstream oss;
       oss << "Data types do not match: A=" << A_dtype << ", B=" << B_dtype
@@ -220,6 +219,7 @@ struct HipBlasInit {
   int n;
   int k;
   hipDataType dtype;
+  hipDataType out_dtype;
 };
 
 static HipBlasInit initialize_hipblas_op(py::object &A, py::object &B,
@@ -240,8 +240,9 @@ static HipBlasInit initialize_hipblas_op(py::object &A, py::object &B,
 
     checkMatmulConstraints(A_dtype, B_dtype, OUT_dtype, A_shape, B_shape,
                            OUT_shape);
-    if (C_dtype != "torch.float16") {
-      throw std::runtime_error("C dtype must be float16, got " + C_dtype);
+    if (C_dtype != OUT_dtype) {
+      throw std::runtime_error("C dtype must match output dtype, got C=" +
+                               C_dtype + ", D=" + OUT_dtype);
     }
     if (C_shape != OUT_shape) {
       throw std::runtime_error("C and D shapes must match");
@@ -251,35 +252,46 @@ static HipBlasInit initialize_hipblas_op(py::object &A, py::object &B,
                            OUT_shape);
   }
 
-  std::string dtype_str = A_dtype.substr(A_dtype.find_last_of('.') + 1);
   hipDataType dtype;
-  if (dtype_str == "float8_e4m3fn") {
-    // supported for GFX950/MI350x.
+  if (A_dtype == "torch.float8_e4m3fn") {
+    // Supported for GFX950.
     dtype = HIP_R_8F_E4M3;
-  } else if (dtype_str == "float8_e5m2fn") {
-    // supported for GFX950/MI350x.
+  } else if (A_dtype == "torch.float8_e5m2fn") {
+    // supported for GFX950.
     dtype = HIP_R_8F_E5M2;
-  } else if (dtype_str == "float8_e4m3fnuz") {
-    // supported for GFX942/MI300x.
+  } else if (A_dtype == "torch.float8_e4m3fnuz") {
+    // Supported for GFX942.
     dtype = HIP_R_8F_E4M3_FNUZ;
-  } else if (dtype_str == "float8_e5m2fnuz") {
-    // supported for GFX942/MI300x.
+  } else if (A_dtype == "torch.float8_e5m2fnuz") {
+    // Supported for GFX942.
     dtype = HIP_R_8F_E5M2_FNUZ;
-  } else if (dtype_str == "float16") {
+  } else if (A_dtype == "torch.float16") {
     dtype = HIP_R_16F;
-  } else if (dtype_str == "float32") {
+  } else if (A_dtype == "torch.float32") {
     dtype = HIP_R_32F;
-  } else if (dtype_str == "bfloat16") {
+  } else if (A_dtype == "torch.bfloat16") {
     dtype = HIP_R_16BF;
   } else {
-    throw std::runtime_error("Unsupported dtype for hipblasLt: " + dtype_str);
+    throw std::runtime_error("Unsupported dtype for hipblasLt: " + A_dtype);
+  }
+
+  hipDataType out_dtype;
+  if (OUT_dtype == "torch.float16") {
+    out_dtype = HIP_R_16F;
+  } else if (OUT_dtype == "torch.float32") {
+    out_dtype = HIP_R_32F;
+  } else if (OUT_dtype == "torch.bfloat16") {
+    out_dtype = HIP_R_16BF;
+  } else {
+    throw std::runtime_error("Unsupported output dtype for hipblasLt: " +
+                             OUT_dtype);
   }
 
   int m = A_shape[0];
   int n = B_shape[0];
   int k = A_shape[1];
 
-  return HipBlasInit{m, n, k, dtype};
+  return HipBlasInit{m, n, k, dtype, out_dtype};
 }
 
 static std::optional<std::string> lldInvoke(const char *inPath,
@@ -406,11 +418,11 @@ void init_triton_amd(py::module &&m) {
 
         const llvm::MCTargetOptions mcOptions;
         std::unique_ptr<llvm::MCRegisterInfo> mri(
-            target->createMCRegInfo(amdTargetTriple));
+            target->createMCRegInfo(triple));
         std::unique_ptr<llvm::MCAsmInfo> mai(
-            target->createMCAsmInfo(*mri, amdTargetTriple, mcOptions));
+            target->createMCAsmInfo(*mri, triple, mcOptions));
         std::unique_ptr<llvm::MCSubtargetInfo> sti(
-            target->createMCSubtargetInfo(amdTargetTriple, arch, features));
+            target->createMCSubtargetInfo(triple, arch, features));
 
         llvm::MCContext ctx(triple, mai.get(), mri.get(), sti.get(), &srcMgr,
                             &mcOptions);
@@ -459,7 +471,7 @@ void init_triton_amd(py::module &&m) {
     if (!target)
       throw std::runtime_error("target lookup error: " + error);
     std::unique_ptr<llvm::MCSubtargetInfo> sti(
-        target->createMCSubtargetInfo(amdTargetTriple, arch, ""));
+        target->createMCSubtargetInfo(triple, arch, ""));
     return sti->checkFeatures("+architected-sgprs");
   });
 
@@ -523,7 +535,7 @@ void init_triton_amd(py::module &&m) {
              auto C_ptr = C.attr("data_ptr")().cast<uint64_t>();
              auto init = initialize_hipblas_op(A, B, C, std::nullopt);
              self.matmul(init.m, init.n, init.k, A_ptr, B_ptr, C_ptr,
-                         init.dtype);
+                         init.dtype, init.out_dtype);
            })
       .def("gemm", [](HipblasLtInstance &self, py::object &A, py::object &B,
                       py::object &C, py::object &D, float alpha, float beta) {
@@ -533,6 +545,6 @@ void init_triton_amd(py::module &&m) {
         auto D_ptr = D.attr("data_ptr")().cast<uint64_t>();
         auto init = initialize_hipblas_op(A, B, D, C);
         self.gemm(init.m, init.n, init.k, A_ptr, B_ptr, C_ptr, D_ptr,
-                  init.dtype, alpha, beta);
+                  init.dtype, init.out_dtype, alpha, beta);
       });
 }

@@ -1,6 +1,7 @@
 import torch
 import pytest
 import re
+from itertools import product
 
 import triton
 import triton.language as tl
@@ -124,29 +125,28 @@ def test_async_copy_mbarrier():
 
 
 @gluon.jit
-def warpgroup_mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, ASYNC: ttgl.constexpr):
-    block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
-    mma_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1],
-                                                             instr_shape=[16, 32, 16])
-    nvmma_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, element_bitwidth=16, rank=2)
-
+def warpgroup_mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr,
+                         block_layout: ttgl.constexpr, mma_layout: ttgl.constexpr, shared_layout_a: ttgl.constexpr,
+                         shared_layout_b: ttgl.constexpr, acc_dtype: ttgl.constexpr, ASYNC: ttgl.constexpr):
     a_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, block_layout))[:, None]
-    a_offs_n = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, block_layout))[None, :]
-    b_offs_m = ttgl.arange(0, K, layout=ttgl.SliceLayout(1, block_layout))[:, None]
+    a_offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, block_layout))[None, :]
+    b_offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(1, block_layout))[:, None]
     b_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, block_layout))[None, :]
 
     out_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, mma_layout))[:, None]
     out_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, mma_layout))[None, :]
 
-    acc = ttgl.zeros([M, N], dtype=a.dtype.element_ty, layout=mma_layout)
-    A = ttgl.load(a + a_offs_m * K + a_offs_n)
-    B = ttgl.load(b + b_offs_m * N + b_offs_n)
+    operand_dtype = a.dtype.element_ty
+    a_tile = ttgl.load(a + a_offs_m * K + a_offs_k)
+    b_tile = ttgl.load(b + b_offs_k * N + b_offs_n)
 
-    a_shmem = ttgl.allocate_shared_memory(ttgl.float16, [M, K], nvmma_layout, A)
-    b_shmem = ttgl.allocate_shared_memory(ttgl.float16, [K, N], nvmma_layout, B)
+    smem_a = ttgl.allocate_shared_memory(operand_dtype, [M, K], shared_layout_a, a_tile)
+    smem_b = ttgl.allocate_shared_memory(operand_dtype, [K, N], shared_layout_b, b_tile)
 
     fence_async_shared()
-    acc = hopper.warpgroup_mma(a_shmem, b_shmem, acc, is_async=ASYNC)
+
+    acc = ttgl.zeros([M, N], dtype=acc_dtype, layout=mma_layout)
+    acc = hopper.warpgroup_mma(smem_a, smem_b, acc, is_async=ASYNC)
 
     if ASYNC:
         acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=[acc])
@@ -159,14 +159,150 @@ def warpgroup_mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttg
 def test_warpgroup_mma(ASYNC):
     torch.manual_seed(0)
     M, N, K = 64, 32, 32
+    warps = [4, 1]
+    block_layout = ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0])
+    mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=[16, 32, 16])
+    shared_layout_a = ttgl.NVMMASharedLayout.get_default_for([M, K], ttgl.float16)
+    shared_layout_b = ttgl.NVMMASharedLayout.get_default_for([K, N], ttgl.float16)
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16)
     out = torch.zeros((M, N), device="cuda", dtype=torch.float16)
-    warpgroup_mma_kernel[(1, )](a, b, out, M, N, K, ASYNC)
+    warpgroup_mma_kernel[(1, )](
+        a,
+        b,
+        out,
+        M,
+        N,
+        K,
+        block_layout,
+        mma_layout,
+        shared_layout_a,
+        shared_layout_b,
+        ttgl.float16,
+        ASYNC,
+        num_warps=warps[0] * warps[1],
+    )
 
     ref = torch.matmul(a, b)
 
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
+
+
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
+@pytest.mark.parametrize("bitwidth, transpose_a, transpose_b, acc_dtype",
+                         [(bitwidth, transpose_a, transpose_b, acc_dtype)
+                          for bitwidth in [8, 16, 32]
+                          for (transpose_a, transpose_b) in product([False, True], repeat=2)
+                          for acc_dtype in [torch.float16, torch.float32]
+                          if bitwidth == 16 or (acc_dtype == torch.float32 and not transpose_a and transpose_b)])
+@pytest.mark.parametrize("warps", ([8, 1], [4, 2], [4, 1]))
+# Swizzling 0 does not map to a valid memory descriptor lol
+@pytest.mark.parametrize("swizzling_a, swizzling_b", product([32, 64, 128], repeat=2))
+@pytest.mark.parametrize("shape_m, shape_n, shape_k", [(1, 1, 1), (2, 4, 1), (2, 2, 4)])
+def test_warpgroup_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b,
+                                     shape_m, shape_n, shape_k):
+
+    torch_dtype_map = {
+        8: torch.float8_e4m3fn,
+        16: torch.float16,
+        32: torch.float32,
+    }
+    acc_dtype_map = {
+        torch.float16: ttgl.float16,
+        torch.float32: ttgl.float32,
+    }
+
+    # We'll choose a larger instr shape along N, but sure
+    instr_shape_k_map = {8: 32, 16: 16, 32: 8}
+    instr_shape = [16, 32, instr_shape_k_map[bitwidth]]
+    M = instr_shape[0] * warps[0]
+    N = instr_shape[1] * warps[1]
+    K = instr_shape[2]
+
+    def min_shape(swizzling, dim0, dim1, trans):
+        tile_cols = (8 * max(16, swizzling)) // bitwidth
+        outer_dim, contig_dim = (dim0, dim1)
+        if trans:
+            outer_dim, contig_dim = contig_dim, outer_dim
+        contig_dim = max(contig_dim, tile_cols)
+        outer_dim = max(outer_dim, 8)
+        if trans:
+            outer_dim, contig_dim = contig_dim, outer_dim
+        return outer_dim, contig_dim
+
+    # Get the minimum shape for the given swizzling / transpose
+    M, K = min_shape(swizzling_a, M, K, transpose_a)
+    K, N = min_shape(swizzling_b, K, N, transpose_b)
+    M *= shape_m
+    N *= shape_n
+    K *= shape_k
+    instr_shape[1] *= shape_n
+
+    shared_mem_accum = M * K * bitwidth // 8 + K * N * bitwidth // 8
+    if triton.runtime.driver.active.utils.get_device_properties(
+            triton.runtime.driver.active.get_current_device())["max_shared_mem"] < shared_mem_accum:
+        pytest.skip("Skipped due to insufficient shared memory on this GPU.")
+
+    torch_dtype = torch_dtype_map[bitwidth]
+    gl_acc_dtype = acc_dtype_map[acc_dtype]
+    out_dtype = torch.float32
+
+    block_layout = ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0])
+    shared_layout_a = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_a, element_bitwidth=bitwidth, rank=2,
+                                             transposed=transpose_a)
+    shared_layout_b = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_b, element_bitwidth=bitwidth, rank=2,
+                                             transposed=transpose_b)
+    mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=instr_shape)
+
+    torch.manual_seed(0)
+
+    def cast(x, dtype):
+        if dtype != torch.float32:
+            return x.to(torch_dtype)
+        else:
+            # zero-out the lower 13 bits
+            x = x.view(torch.int32)
+            x = x & ~((1 << 13) - 1)
+            return x.view(dtype)
+
+    # Sample bf16 as tf32 does not use the full range
+    a = cast(torch.randn((M, K), device="cuda", dtype=torch.float32), torch_dtype)
+    b = cast(torch.randn((K, N), device="cuda", dtype=torch.float32), torch_dtype)
+    out = torch.zeros((M, N), device="cuda", dtype=out_dtype)
+
+    warpgroup_mma_kernel[(1, )](
+        a,
+        b,
+        out,
+        M,
+        N,
+        K,
+        block_layout,
+        mma_layout,
+        shared_layout_a,
+        shared_layout_b,
+        gl_acc_dtype,
+        False,
+        num_warps=warps[0] * warps[1],
+    )
+
+    try:
+        allow_tf32 = torch.backends.cuda.matmul.allow_tf32
+        torch.backends.cuda.matmul.allow_tf32 = True
+        allow_fp16_red = torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction
+        torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = acc_dtype == torch.float16
+        ref = torch.matmul(a.to(acc_dtype), b.to(acc_dtype)).to(out_dtype)
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+        torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = allow_fp16_red
+
+    if bitwidth == 8:
+        atol, rtol = 0.5, 0.5
+    elif bitwidth == 16:
+        atol, rtol = 3e-2, 1e-1
+    else:
+        atol, rtol = 5e-4, 5e-3
+    torch.testing.assert_close(out, ref, atol=atol, rtol=rtol)
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
@@ -266,19 +402,27 @@ def test_amd_wmma(M, N, K, in_dtype):
     torch.testing.assert_close(ref, triton_output)
 
 
+@pytest.mark.skipif(not (is_hip_cdna3() or is_hip_cdna4()), reason="Requires CDNA3 or CDNA4")
 @pytest.mark.parametrize("M, N, K", [(32, 32, 16), (16, 16, 32)])
 @pytest.mark.parametrize("in_dtype", ['float16', 'bfloat16'])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("cdna_version", [3, 4])
 def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
+    if is_hip_cdna3() and cdna_version != 3:
+        pytest.skip("On CDNA3 target, skip if mfma version is not 3")
+
+    if is_hip_cdna4() and cdna_version != 4:
+        pytest.skip("On CDNA4 target, skip if mfma version is not 4")
 
     @gluon.jit
-    def kernel(a_ptr, b_ptr, c_ptr, stride_am, stride_ak,  #
+    def kernel(a_ptr, b_ptr, c_ptr,  #
+               stride_am, stride_ak,  #
                stride_bk, stride_bn,  #
-               stride_cm, stride_cn, BLOCK_SIZE_M: ttgl.constexpr, BLOCK_SIZE_N: ttgl.constexpr,
-               BLOCK_SIZE_K: ttgl.constexpr, blocked: ttgl.constexpr, mfma_layout: ttgl.constexpr):
-        dot_a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=8)
-        dot_b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=8)
+               stride_cm, stride_cn,  #
+               BLOCK_SIZE_M: ttgl.constexpr, BLOCK_SIZE_N: ttgl.constexpr, BLOCK_SIZE_K: ttgl.constexpr,
+               blocked: ttgl.constexpr, k_width: ttgl.constexpr, mfma_layout: ttgl.constexpr):
+        dot_a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=k_width)
+        dot_b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=k_width)
 
         offs_am = ttgl.arange(0, BLOCK_SIZE_M, layout=ttgl.SliceLayout(1, blocked))
         offs_bn = ttgl.arange(0, BLOCK_SIZE_N, layout=ttgl.SliceLayout(0, blocked))
@@ -302,27 +446,26 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
         offs_c = offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn
         ttgl.amd.cdna3.buffer_store(stored_value=c, ptr=c_ptr, offsets=offs_c)
 
-    if not is_hip_cdna4() and not is_hip_cdna3():
-        pytest.skip("mfma quires target to be CDNA3 or CDNA4")
-
-    if is_hip_cdna3() and cdna_version != 3:
-        pytest.skip("On CDNA3 target, skip if mfma version is not 3")
-
-    if is_hip_cdna4() and cdna_version != 4:
-        pytest.skip("On CDNA4 target, skip if mfma version is not 4")
-
     elem_type = torch.float16 if in_dtype == 'float16' else torch.bfloat16
     a = torch.randn((M, K), device='cuda', dtype=elem_type) - 0.5
     b = torch.randn((K, N), device='cuda', dtype=elem_type) - 0.5
     c = torch.empty((M, N), device=a.device, dtype=elem_type)
     nonkdim: ttgl.constexpr = 32
+    kdim: ttgl.constexpr = 8 if cdna_version == 3 else 16
+    k_width: ttgl.constexpr = 4 if cdna_version == 3 else 8
     blocked: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[4, 4], threads_per_warp=[4, 16],
                                                  warps_per_cta=[num_warps, 1], order=[1, 0])
-    mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=cdna_version, instr_shape=[nonkdim, nonkdim],
+    mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=cdna_version, instr_shape=[nonkdim, nonkdim, kdim],
                                                          transposed=True, warps_per_cta=[num_warps, 1])
 
-    kernel[1, 1](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_SIZE_M=M,
-                 BLOCK_SIZE_N=N, BLOCK_SIZE_K=K, blocked=blocked, mfma_layout=mfma_layout, num_warps=num_warps)
+    kernel[1, 1](
+        a, b, c,  #
+        a.stride(0), a.stride(1),  #
+        b.stride(0), b.stride(1),  #
+        c.stride(0), c.stride(1),  #
+        BLOCK_SIZE_M=M, BLOCK_SIZE_N=N, BLOCK_SIZE_K=K,  #
+        blocked=blocked, k_width=k_width, mfma_layout=mfma_layout,  #
+        num_warps=num_warps)
 
     ref = torch.matmul(a, b)
     triton_output = c
@@ -395,8 +538,8 @@ def test_amd_mfma_scaled(M, N, K, rhs_scale, mxfp_type, normal_type):
             reg_bases=[], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]], warp_bases=[[16, 0], [0, 0]],
             block_bases=[], shape=[32, 4])
 
-        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, warps_per_cta=[2, 2], tiles_per_warp=[1, 1],
-                                                             instr_shape=[16, 16], transposed=True)
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(version=4, instr_shape=[16, 16, 128], transposed=True,
+                                                             warps_per_cta=[2, 2])
 
         zero = ttgl.zeros([BLOCK_M, BLOCK_N], dtype=ttgl.float32, layout=mfma_layout)
 
@@ -549,8 +692,6 @@ def test_tmem_copy_2d():
         tmem_alias: ttgl.constexpr = TensorMemoryLayout((num_rows, num_cols), col_stride=1)
         tmem = tmem._reinterpret(ttgl.int8, (num_rows, num_cols), tmem_alias)
         value = tmem.load(blocked)
-        ttgl.static_print(ttgl.to_linear_layout(blocked, (smem_h, smem_w)))
-        ttgl.static_print(ttgl.to_linear_layout(blocked, (num_rows, num_cols)))
         ttgl.store(ttgl.set_auto_layout(out_ptrs, blocked), value)
 
     torch.manual_seed(0)
@@ -1030,7 +1171,7 @@ def test_buffer_atomic_rmw_add_bf16():
         blocked: ttgl.constexpr = ttgl.BlockedLayout([SIZE_PER_THREAD], [64], [4], [0])
         offsets = ttgl.arange(0, BLOCK, layout=blocked)
         val = ttgl.full([BLOCK], 1.0, ttgl.bfloat16, layout=blocked)
-        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", a, offsets, val, mask=1, scope="cta", sem="relaxed")
+        ttgl.amd.cdna4.buffer_atomic_add(a, offsets, val, mask=1, scope="cta", sem="relaxed")
 
     a = torch.randn((BLOCK), dtype=elem_type, device="cuda")
     origin_a = a.clone()
@@ -1107,3 +1248,28 @@ def test_dot_fma():
     out = torch.empty((B, B), dtype=torch.float32, device="cuda")
     kernel[(1, )](a, b, c, out)
     torch.testing.assert_close(out, torch.addmm(c, a, b), atol=1e-2, rtol=1e-2)
+
+
+@gluon.jit
+def kernel_auto_layout_constant(threads_per_warp: ttgl.constexpr):
+    BLOCK: ttgl.constexpr = 16
+    SIZE: ttgl.constexpr = 10
+
+    mask = ttgl.full(
+        (BLOCK, BLOCK),
+        True,
+        ttgl.int1,
+        ttgl.BlockedLayout(
+            size_per_thread=[1, 1],
+            threads_per_warp=[1, threads_per_warp],
+            warps_per_cta=[1, 4],
+            order=[1, 0],
+        ),
+    )
+
+    mask &= (ttgl.arange(0, BLOCK, ttgl.AutoLayout()) < SIZE).expand_dims(0)
+    mask &= (ttgl.arange(0, BLOCK, ttgl.AutoLayout()) < SIZE).expand_dims(1)
+
+
+def test_auto_layout_constant():
+    kernel_auto_layout_constant.warmup(THREADS_PER_WARP, grid=(1, ))
