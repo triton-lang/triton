@@ -234,8 +234,8 @@ def make_bitmatrix_metadata(nonzero_indx, bitmatrix):
     _, n_cols = bitmatrix.shape
 
     blocks = cdiv(n_cols, MEMSET_BLOCK)
-    scratchpad = torch.zeros((blocks * MEMSET_BLOCK, ), device=device, dtype=torch.int32)[:n_cols]
-    col_sum, col_partial_sum = sum_bitmatrix_rows(bitmatrix, scratchpad, HIST_BLOCK_M)
+    col_sum = torch.zeros((blocks * MEMSET_BLOCK, ), device=device, dtype=torch.int32)[:n_cols]
+    col_sum, col_partial_sum = sum_bitmatrix_rows(bitmatrix, col_sum, HIST_BLOCK_M)
 
     assert col_sum.dtype == torch.int32
     nonzero_indx = nonzero_indx.to(torch.int32)
