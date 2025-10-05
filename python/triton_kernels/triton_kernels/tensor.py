@@ -8,6 +8,7 @@ from .target_info import cuda_capability_geq
 from .tensor_details.layout import Layout, StridedLayout
 from .tensor_details import ragged_tensor as ragged_tensor_details
 from .tensor_details import bitmatrix as bitmatrix_details
+from .tensor_details.ragged_tensor import RaggedTensorMetadata
 
 
 # storage
@@ -186,7 +187,7 @@ make_bitmatrix_metadata_torch = bitmatrix_details.make_bitmatrix_metadata_torch
 class RaggedTensor:
     batch_sizes: torch.Tensor
     data: torch.Tensor
-    metadata: ragged_tensor_details.RaggedTensorMetadata
+    metadata: RaggedTensorMetadata
 
 
 make_ragged_tensor_metadata = ragged_tensor_details.make_ragged_tensor_metadata

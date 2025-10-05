@@ -161,7 +161,9 @@ def _ragged_tensor_metadata_compute(Hist, MDTileStarts, tile_starts_stridem, MDT
         tl.store(MDTileInfo + block_offs, data, mask=block_offs < n_blocks)
 
 
-def make_ragged_tensor_metadata(batch_sizes, n_batches, n_gates):
+def make_ragged_tensor_metadata(batch_sizes, n_gates):
+    assert batch_sizes.ndim == 1
+    n_batches = batch_sizes.shape[0]
     block_sizes_log2 = RaggedTensorMetadata.block_sizes_log2()
     block_size_num = len(block_sizes_log2)
     MEMSET_BLOCK = 512
@@ -192,7 +194,9 @@ def make_ragged_tensor_metadata(batch_sizes, n_batches, n_gates):
 # --------------------------------------------------------- #
 
 
-def make_ragged_tensor_metadata_torch(batch_sizes, n_batches, n_gates):
+def make_ragged_tensor_metadata_torch(batch_sizes, n_gates):
+    assert batch_sizes.ndim == 1
+    n_batches = batch_sizes.shape[0]
     # offset for each experts
     device = batch_sizes.device
     batch_offs = torch.cumsum(batch_sizes, dim=0)

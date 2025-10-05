@@ -1,6 +1,6 @@
 # isort: off
 # fmt: off
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import itertools
 import sys
 import torch
@@ -10,7 +10,6 @@ import math
 # utilities
 from triton_kernels import target_info
 from triton_kernels.numerics import InFlexData, OutFlexData
-from triton_kernels.routing import RoutingData
 from triton_kernels.target_info import is_cuda
 # details
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
@@ -20,6 +19,7 @@ from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import specialize
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor
+from .tensor_details.ragged_tensor import RaggedTensorMetadata
 
 @dataclass
 class GatherIndx:
@@ -159,6 +159,26 @@ def should_upcast_indices(*args):
 #               x[:, 182:]      x[:, 192:] - unused (may contain garbage, including inf/nan)
 #
 #   w is the same, except that rows columns are flipped.
+
+@dataclass
+class RoutingData:
+    gate_scal: torch.Tensor = field()
+    expt_hist: torch.Tensor = field()
+    n_expts_tot: int = field()
+    n_expts_act: int = field()
+    expt_data: RaggedTensorMetadata = None
+
+    # Used to make perf annotation cleaner: when we use expert sharding, we can
+    # use this to tell the "expected" number of local tokens per expert, because
+    # the actual number can vary per each input.
+    expected_tokens_per_expt: int = field(default=None)
+
+    def n_blocks(self, n_rows, block_m):
+        if n_rows <= self.n_expts_tot:
+            return n_rows
+        else:
+            return triton.cdiv(max(n_rows - self.n_expts_tot + 1, 0), block_m) + self.n_expts_tot - 1
+
 @dataclass
 class InnerRoutingData:
     base: RoutingData | None = None
@@ -176,7 +196,7 @@ class InnerRoutingData:
         elif isinstance(data, InnerRoutingData):
             expt_data, block = data.base.expt_data, data.block_k
             args = (
-                True, data.x_is_padded, data.w_is_padded, expt_data.hist.max()
+                True, data.x_is_padded, data.w_is_padded, expt_data.batch_sizes.max()
             )
         elif data is None:
             expt_data = None
@@ -187,11 +207,13 @@ class InnerRoutingData:
             return (None, None, None, None, False, False, False, None)
 
         return (
-            expt_data.hist,
-            expt_data.token_offs,
+            expt_data.batch_sizes,
+            expt_data.batch_offs,
             expt_data.block_offs(block),
-            expt_data.block_pid_map(block),
+            expt_data.block_schedule(block),
         ) + args
+
+
 
 
 # ---------------------
