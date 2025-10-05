@@ -62,7 +62,7 @@ def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=
         bitmatrix_bufs, bitmatrix.stride(0), bitmatrix.stride(1),  # output [bitmatrix]
         n_rows, n_cols,  # shapes
         scratchpad, BLOCK_S, s_blocks,  # thing to memset to zero
-        dist.get_rank() * n_rows_max if all_gather else 0, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,  # tunable parameter
+        dist.get_rank() * n_rows if all_gather else 0, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,  # tunable parameter
         APPLY_SOFTMAX=apply_softmax, N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
     )
     if all_gather:

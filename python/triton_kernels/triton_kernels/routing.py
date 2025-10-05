@@ -43,7 +43,7 @@ class ExptData:
     # to expert i in an expert-sorted array, assuming histogram
     # rounded to the next multiple of `block = 16 * i`
     token_offs_pad_data: torch.Tensor
-    # block_id_map_data[i] contain one value for each `pid`` launched by
+    # block_id_map_data[i] contain one value for each `pid` launched by
     # the matrix multiplication kernel launched with BLOCK_M=i*16:
     # - the value is -1 if the `pid` has no work to do
     # - otherwise, the value is two int16 (packed as an int32) that
@@ -306,8 +306,9 @@ def _filter_expt_data(expt_hist_out, expt_hist_inp, token_offs_raw_out, token_of
                 BLOCK=BLOCK)
     _compaction(token_offs_raw_out, _compact_expt_id, (token_offs_raw_inp, expt_filter, n_expts_tot), -1,
                 n_expts_tot + 1, BLOCK=BLOCK)
-    _compaction(token_offs_pad_out, _compact_expt_id, (token_offs_pad_inp, expt_filter, n_expts_tot), -1,
-                n_expts_tot + 1, BLOCK=BLOCK)
+    compacted_tile_count = _compaction(token_offs_pad_out, _compact_expt_id, (token_offs_pad_inp, expt_filter, n_expts_tot), -1, n_expts_tot + 1, BLOCK=BLOCK,)
+    # Record the total number of tiles in the trailing slot
+    tl.store(token_offs_pad_out + compacted_tile_count, compacted_tile_count)
     _compaction(block_pid_map_out, _compact_block_id_map, (block_pid_map_inp, expt_map, expt_filter, n_blocks), -1,
                 n_blocks, BLOCK=BLOCK)
 
