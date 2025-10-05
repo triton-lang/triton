@@ -5,7 +5,6 @@
 #include <functional>
 #include <pybind11/pybind11.h>
 #include <string>
-#include <unistd.h>
 #include <unordered_map>
 #include <utility>
 

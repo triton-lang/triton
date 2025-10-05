@@ -192,7 +192,6 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
       : GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~RoctracerProfilerPimpl() = default;
 
-  void setLibPath(const std::string &libPath) override {}
   void doStart() override;
   void doFlush() override;
   void doStop() override;
@@ -413,5 +412,14 @@ RoctracerProfiler::RoctracerProfiler() {
 }
 
 RoctracerProfiler::~RoctracerProfiler() = default;
+
+void RoctracerProfiler::doSetMode(
+    const std::vector<std::string> &modeAndOptions) {
+  auto mode = modeAndOptions[0];
+  if (!mode.empty()) {
+    throw std::invalid_argument(
+        "[PROTON] RoctracerProfiler: unsupported mode: " + mode);
+  }
+}
 
 } // namespace proton

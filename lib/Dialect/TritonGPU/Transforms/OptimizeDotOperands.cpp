@@ -110,27 +110,15 @@ public:
     auto allocEncoding = cast<NVMMASharedEncodingAttr>(allocType.getEncoding());
     RankedTensorType srcTy = trans.getSrc().getType();
 
-    // MMAv3 with transpose only supports f16 and bf16.  Fall back to MMAv3
-    // without transpose for other data types.)
-    auto newInnerCvtOrder = getOrderForMemory(srcTy);
-    if (auto cvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>()) {
-      newInnerCvtOrder = getOrderForMemory(cvt.getSrc().getType());
-    }
-    auto srcElemTy = allocType.getElementType();
-    if (!srcElemTy.isF16() && !srcElemTy.isBF16()) {
-      if (allocOp.getResult() == dot->getOperand(0)) {
-        newInnerCvtOrder = {0, 1};
-      } else if (allocOp.getResult() == dot->getOperand(1)) {
-        newInnerCvtOrder = {1, 0};
-      }
-    }
-
     auto ctx = getContext();
-    auto newCTALayout =
-        permuteCTALayout(ctx, allocEncoding.getCTALayout(), {1, 0});
-    auto newInnerEnc = NVMMASharedEncodingAttr::get(
-        getContext(), srcTy.getShape(), newInnerCvtOrder, newCTALayout,
-        srcTy.getElementType(), allocEncoding.getFp4Padded());
+    Dialect &dialect = allocEncoding.getDialect();
+    auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
+    Attribute newInnerEnc;
+    if (failed(inferLayoutInterface->inferTransOpEncoding(
+            allocEncoding, srcTy.getShape(), trans.getOrder(), newInnerEnc,
+            allocOp.getLoc()))) {
+      return failure();
+    }
 
     MemDescType innerTy =
         MemDescType::get(srcTy.getShape(), srcTy.getElementType(), newInnerEnc,
@@ -175,6 +163,12 @@ public:
     MemDescType innerTy;
     if (failed(MemDescReshapeOp::inferReturnTypes(
             getContext(), allocOp.getLoc(), allocType, srcShape, innerTy)))
+      return failure();
+
+    // For now don't apply the transformation if the new encoding is not an
+    // MMAv3/v5 encoding as it may not be compatible with the user.
+    // The heuristic can be refined once we have more flexible mma ops.
+    if (!isa<NVMMASharedEncodingAttr>(innerTy.getEncoding()))
       return failure();
 
     auto newAlloc = rewriter.create<LocalAllocOp>(allocOp.getLoc(), innerTy,
@@ -269,7 +263,24 @@ private:
     if (!isTmemCopyCompatible(localLoad.getSrc().getType(), usesTMAload))
       return failure();
 
-    opOperand.assign(localLoad.getSrc());
+    PatternRewriter::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(tmemAlloc);
+
+    Value shared = localLoad.getSrc();
+
+    Value reshaped5D = rewriter.create<MemDescReshapeOp>(
+        reshapeOp5D.getLoc(), shared, reshape5DShape);
+    SmallVector<int32_t> transposeOrder32(transposeOrder.begin(),
+                                          transposeOrder.end());
+    Value transposed = rewriter.create<MemDescTransOp>(
+        transOp.getLoc(), reshaped5D, transposeOrder32);
+    SmallVector<int64_t> scale2DShapeVec(scale2DShape.begin(),
+                                         scale2DShape.end());
+    Value reshaped2D = rewriter.create<MemDescReshapeOp>(
+        reshapeOp2D.getLoc(), transposed, scale2DShapeVec);
+
+    opOperand.assign(reshaped2D);
+    rewriter.eraseOp(tmemAlloc);
     return success();
   }
 

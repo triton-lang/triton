@@ -63,6 +63,36 @@ public:
   }
 };
 
+class TritonAMDGPUToLLVMTypeConverter : public TritonGPUToLLVMTypeConverter {
+public:
+  TritonAMDGPUToLLVMTypeConverter(MLIRContext *ctx,
+                                  const LowerToLLVMOptions &options,
+                                  const TargetInfoBase &targetInfo,
+                                  const DataLayoutAnalysis *analysis = nullptr)
+      : TritonGPUToLLVMTypeConverter(ctx, options, targetInfo, analysis) {
+    addConversion([&](TensorDescType type) -> std::optional<Type> {
+      return convertTensorDescType(type);
+    });
+  }
+
+  Type convertTensorDescType(triton::TensorDescType type) {
+    auto ctx = type.getContext();
+
+    RankedTensorType rankedTensorType = type.getBlockType();
+    auto eleType = rankedTensorType.getElementType();
+    auto shape = rankedTensorType.getShape();
+    SmallVector<Type, 5> types;
+    // base ptr
+    types.push_back(LLVM::LLVMPointerType::get(ctx, 1));
+    // 32 bit shapes
+    types.append(shape.size(), IntegerType::get(ctx, 32));
+    // 64 bit strides
+    types.append(shape.size(), IntegerType::get(ctx, 64));
+
+    return LLVM::LLVMStructType::getLiteral(ctx, types);
+  }
+};
+
 struct ConvertTritonAMDGPUToLLVM
     : public triton::impl::ConvertTritonAMDGPUToLLVMBase<
           ConvertTritonAMDGPUToLLVM> {
@@ -90,7 +120,7 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
 
-    TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
+    TritonAMDGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     TritonLLVMConversionTarget convTarget(*context);
 
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
@@ -175,6 +205,8 @@ struct ConvertTritonAMDGPUToLLVM
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
                                            axisInfoAnalysis, AMDBenefit);
     AMD::populateMaskedOpsToLLVMPatterns(patterns);
+    AMD::populateTensorPtrOpsToLLVMPatterns(typeConverter, patterns,
+                                            AMDBenefit);
 
     populatePatterns7(mlir::triton::populateReduceOpToLLVMPatterns,
                       commonBenefit);
@@ -206,7 +238,7 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::triton::AMD::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
                                                         targetInfo, AMDBenefit);
     mlir::triton::AMD::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
-                                                     AMDBenefit);
+                                                     targetInfo, AMDBenefit);
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
     // to help convert scalar expression to LLVM.
@@ -254,7 +286,7 @@ private:
         loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
         "global_smem", /*value=*/Attribute(), /*alignment=*/16,
         // Add ROCm support.
-        static_cast<unsigned>(NVVM::NVVMMemorySpace::kSharedMemorySpace));
+        static_cast<unsigned>(NVVM::NVVMMemorySpace::Shared));
   }
 };
 

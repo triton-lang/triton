@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 @dataclass
 class ProfilerFlags:
-    # Whether to enable profiling. Default is False.
+    # Whether profiling is enabled. Default is False.
     profiling_on: bool = False
     # Whether instrumentation is enabled. Default is False.
     instrumentation_on: bool = False

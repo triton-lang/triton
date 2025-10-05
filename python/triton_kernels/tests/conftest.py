@@ -1,5 +1,6 @@
 import pytest
 import tempfile
+import os
 
 
 def pytest_addoption(parser):
@@ -29,3 +30,11 @@ def fresh_triton_cache():
         with knobs.cache.scope(), knobs.runtime.scope():
             knobs.cache.dir = tmpdir
             yield tmpdir
+
+
+def pytest_configure(config):
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER")
+    if worker_id is not None and worker_id.startswith("gw"):
+        import torch
+        gpu_id = int(worker_id[2:])  # map gw0 → 0, gw1 → 1, ...
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id % torch.cuda.device_count())

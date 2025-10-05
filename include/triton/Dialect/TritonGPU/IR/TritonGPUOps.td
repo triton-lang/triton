@@ -574,4 +574,23 @@ def TTG_WarpReturnOp : TTG_Op<"warp_return", [
   let assemblyFormat = "attr-dict";
 }
 
+def TTG_LocalBarrierOp : TTG_Op<"local_barrier"> {
+  let summary = "Synchronizes execution and shared memory reads/writes for all threads in a CTA.";
+  let description = [{
+    The `local_barrier` op synchronizes the execution and all operations
+    between shared memory and registers for all threads in a CTA.
+    It is used to coordinate communication between the threads of the CTA.
+
+    This operation waits until all threads in the CTA have reached a `local_barrier`
+    and operations between shared memory and registers made by these threads prior
+    to the op are visible to all threads in the CTA.
+
+    Data hazards between threads accessing the same memory can be avoided by synchronizing the
+    CTA in-between these accesses with a `local_barrier`.
+
+    A `local_barrier` operation does not provide syncronization guarantees on global memory.
+  }];
+  let assemblyFormat = "attr-dict";
+}
+
 #endif // TRITONGPU_OPS

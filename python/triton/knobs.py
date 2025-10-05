@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sysconfig
+import pathlib
 
 from dataclasses import dataclass
 from contextlib import contextmanager
@@ -354,6 +355,7 @@ class cache_knobs(base_knobs):
 class compilation_knobs(base_knobs):
     override: env_bool = env_bool("TRITON_KERNEL_OVERRIDE")
     dump_ir: env_bool = env_bool("TRITON_KERNEL_DUMP")
+    dump_ir_extract_di_local_variables: env_bool = env_bool("LLVM_EXTRACT_DI_LOCAL_VARIABLES")
     store_binary_only: env_bool = env_bool("TRITON_STORE_BINARY_ONLY")
     always_compile: env_bool = env_bool("TRITON_ALWAYS_COMPILE")
     # TODO: Use enum to constrain / 'typecheck' the values
@@ -362,7 +364,9 @@ class compilation_knobs(base_knobs):
     disable_line_info: env_bool = env_bool("TRITON_DISABLE_LINE_INFO")
     front_end_debugging: env_bool = env_bool("TRITON_FRONT_END_DEBUGGING")
     allow_non_constexpr_globals: env_bool = env_bool("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS")
-    enable_experimental_consan: env_bool = env_bool("TRITON_ENABLE_EXPERIMENTAL_CONSAN")
+    # Instrumentation mode is checked on every run, which is expensive.
+    # We cache the value here to avoid the expensive check on every run.
+    instrumentation_mode: str = env_str("TRITON_INSTRUMENTATION_MODE", "").get()
     listener: Union[CompilationListener, None] = None
 
 
@@ -447,6 +451,12 @@ class JITHook(Protocol):
         ...
 
 
+class PipelineStagesHook(Protocol):
+
+    def __call__(self, stages, options, language, capability):
+        ...
+
+
 class runtime_knobs(base_knobs):
     interpret: env_bool = env_bool("TRITON_INTERPRET")
     # debug is on critical path for kernel launches
@@ -464,6 +474,9 @@ class runtime_knobs(base_knobs):
     # Hook to signal that a kernel is done compiling and inspect compiled function.
     # jit_cache_hook will always be called before compilation and jit_post_compile_hook after.
     jit_post_compile_hook: Optional[JITHook] = None
+
+    # Hook for inspecting compiler pipeline stages
+    add_stages_inspection_hook: Optional[PipelineStagesHook] = None
 
 
 class language_knobs(base_knobs):
@@ -497,14 +510,15 @@ class amd_knobs(base_knobs):
     use_block_pingpong: env_opt_bool = env_opt_bool("TRITON_HIP_USE_BLOCK_PINGPONG")
     use_in_thread_transpose: env_opt_bool = env_opt_bool("TRITON_HIP_USE_IN_THREAD_TRANSPOSE")
 
-    global_prefetch: env_int = env_int("TRITON_HIP_GLOBAL_PREFETCH")
-    local_prefetch: env_int = env_int("TRITON_HIP_LOCAL_PREFETCH")
     use_async_copy: env_bool = env_bool("TRITON_HIP_USE_ASYNC_COPY")
     scalarize_packed_fops: env_bool = env_bool("AMDGCN_SCALARIZE_PACKED_FOPS")
 
 
 class proton_knobs(base_knobs):
-    cupti_lib_dir: env_opt_str = env_opt_str("TRITON_CUPTI_LIB_PATH")
+    disable: env_bool = env_bool("TRITON_PROTON_DISABLE", False)
+    cupti_lib_dir: env_str = env_str(
+        "TRITON_CUPTI_LIB_PATH",
+        str(pathlib.Path(__file__).parent.absolute() / "backends" / "nvidia" / "lib" / "cupti"))
     enable_nvtx: env_bool = env_bool("TRITON_ENABLE_NVTX", True)
 
 
@@ -522,3 +536,4 @@ proton = proton_knobs()
 
 def refresh_knobs():
     runtime.debug = env_bool("TRITON_DEBUG").get()
+    compilation.instrumentation_mode = env_str("TRITON_INSTRUMENTATION_MODE", "").get()
