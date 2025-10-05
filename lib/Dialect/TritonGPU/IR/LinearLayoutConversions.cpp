@@ -1490,6 +1490,7 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   }
   LinearLayout laneLayout({{kLane, laneBase}}, {outDims[kIdx], outDims[mnIdx]});
   L = L * laneLayout;
+  L = L * LinearLayout::identity1D(kSize, kRegister, outDims[kIdx]);
   if (dotOperandIdx == 0) {
     L = L * LinearLayout::zeros1D(totalWarps / mWarps, kWarp, outDims[mnIdx]);
     L = L * LinearLayout::identity1D(mWarps, kWarp, outDims[mnIdx]);
@@ -1499,7 +1500,6 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
     L = L * LinearLayout::zeros1D(totalWarps / nWarps, kWarp, outDims[mnIdx]);
     L = L * LinearLayout::identity1D(nRep_warp, kRegister, outDims[mnIdx]);
   }
-  L = L * LinearLayout::identity1D(kSize, kRegister, outDims[kIdx]);
   return combineCtaCgaWithShape(L, ctaLayoutAttr, dotOperandShape);
 }
 

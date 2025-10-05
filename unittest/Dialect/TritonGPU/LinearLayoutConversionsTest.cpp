@@ -3727,51 +3727,20 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_CTASplit) {
 }
 
 // Tests for SM120 DotScaled Scale Layout
-TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_Basic) {
-  LinearLayout layout, ll;
-  layout = getSM120DotScaledScaleLayout(
-      &ctx, /*dotOperandIdx=*/0, /*dotOperandShape=*/{128, 32},
-      /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{4, 1},
-      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
-
-  ll = LinearLayout(
-      {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {64, 0}}},
-       {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
-       {S("warp"), {{16, 0}, {32, 0}}},
-       {S("block"), {}}},
-      {S("dim0"), S("dim1")});
-
-  EXPECT_EQ(ll, layout);
-
-  layout = getSM120DotScaledScaleLayout(
-      &ctx, /*dotOperandIdx=*/1, /*dotOperandShape=*/{32, 128},
-      /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{1, 4},
-      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
-  ll = LinearLayout(
-      {{S("register"),
-        {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 32}, {0, 64}}},
-       {S("lane"), {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
-       {S("warp"), {{8, 0}, {16, 0}}},
-       {S("block"), {}}},
-      {S("dim0"), S("dim1")});
-
-  EXPECT_EQ(ll, layout);
-}
-
-TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_Large) {
+TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
   LinearLayout layout, ll;
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/0, /*dotOperandShape=*/{256, 64},
       /*tilesPerWarp=*/{2, 1}, /*warpsPerCTA=*/{2, 2},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout({{S("register"),
-                      {{32, 0},
-                       {0, 1},
+                      {{0, 1},
                        {0, 2},
                        {0, 4},
                        {0, 8},
                        {0, 16},
                        {0, 32},
+                       {32, 0},
                        {64, 0},
                        {128, 0}}},
                      {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
@@ -3807,14 +3776,14 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_Large) {
       /*tilesPerWarp=*/{2, 2}, /*warpsPerCTA=*/{2, 2},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout({{S("register"),
-                      {{32, 0},
-                       {0, 1},
+                      {{0, 1},
                        {0, 2},
                        {0, 4},
                        {0, 8},
                        {0, 16},
                        {0, 32},
                        {0, 64},
+                       {32, 0},
                        {64, 0},
                        {128, 0}}},
                      {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
@@ -3829,8 +3798,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_Large) {
       /*tilesPerWarp=*/{2, 2}, /*warpsPerCTA=*/{2, 2},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout({{S("register"),
-                      {{32, 0},
-                       {0, 1},
+                      {{0, 1},
                        {0, 2},
                        {0, 4},
                        {0, 8},
@@ -3838,6 +3806,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_Large) {
                        {0, 32},
                        {0, 64},
                        {0, 128},
+                       {32, 0},
                        {64, 0},
                        {128, 0}}},
                      {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
@@ -3852,8 +3821,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_Large) {
       /*tilesPerWarp=*/{2, 2}, /*warpsPerCTA=*/{2, 2},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout({{S("register"),
-                      {{16, 0},
-                       {0, 1},
+                      {{0, 1},
                        {0, 2},
                        {0, 4},
                        {0, 8},
@@ -3862,6 +3830,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_Large) {
                        {0, 64},
                        {0, 128},
                        {0, 256},
+                       {16, 0},
                        {32, 0},
                        {64, 0},
                        {128, 0}}},
@@ -3869,6 +3838,56 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout_Large) {
                      {S("warp"), {{8, 0}, {0, 0}}},
                      {S("block"), {}}},
                     {S("dim0"), S("dim1")});
+
+  EXPECT_EQ(ll, layout);
+
+  // Same result regardless of tilesPerWarp when warpsPerCTA is [2,2]
+  layout = getSM120DotScaledScaleLayout(
+      &ctx, /*dotOperandIdx=*/1, /*dotOperandShape=*/{256, 512},
+      /*tilesPerWarp=*/{4, 4}, /*warpsPerCTA=*/{2, 2},
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
+  ll = LinearLayout({{S("register"),
+                      {{0, 1},
+                       {0, 2},
+                       {0, 4},
+                       {0, 8},
+                       {0, 16},
+                       {0, 32},
+                       {0, 64},
+                       {0, 128},
+                       {0, 256},
+                       {16, 0},
+                       {32, 0},
+                       {64, 0},
+                       {128, 0}}},
+                     {S("lane"), {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
+                     {S("warp"), {{8, 0}, {0, 0}}},
+                     {S("block"), {}}},
+                    {S("dim0"), S("dim1")});
+  EXPECT_EQ(ll, layout);
+  // With more warps (4x4), register pressure decreases
+  layout = getSM120DotScaledScaleLayout(
+      &ctx, /*dotOperandIdx=*/1, /*dotOperandShape=*/{256, 512},
+      /*tilesPerWarp=*/{4, 4}, /*warpsPerCTA=*/{4, 4},
+      /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
+  ll = LinearLayout(
+      {{S("register"),
+        {{0, 1},
+         {0, 2},
+         {0, 4},
+         {0, 8},
+         {0, 16},
+         {0, 32},
+         {0, 64},
+         {0, 128},
+         {0, 256},
+         {32, 0},
+         {64, 0},
+         {128, 0}}},
+       {S("lane"), {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
+       {S("warp"), {{8, 0}, {16, 0}, {0, 0}, {0, 0}}}, // 4 warp bits
+       {S("block"), {}}},
+      {S("dim0"), S("dim1")});
 
   EXPECT_EQ(ll, layout);
 }

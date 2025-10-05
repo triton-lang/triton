@@ -864,11 +864,14 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
     auto tb = TritonLLVMOpBuilder(op.getLoc(), rewriter);
     auto i32 = IntegerType::get(op->getContext(), 32);
 
-    int chunkASize = unpackedAScale.size() / repK;
-    int chunkBSize = unpackedBScale.size() / repK;
-    Value aScaleValue =
-        tb.zext(i32, unpackedAScale[(k / 2) * chunkASize + m / 2]);
-    Value bScaleValue = tb.zext(i32, unpackedBScale[(k / 2) * chunkBSize + n]);
+    int numVecK = 2;
+    int kIdx = k / numVecK;
+    int mIdx = m / 2;
+    int nIdx = n;
+
+    Value aScaleValue = tb.zext(i32, unpackedAScale[mIdx * repK + kIdx]);
+    Value bScaleValue = tb.zext(i32, unpackedBScale[nIdx * repK + kIdx]);
+
     callMmaScaled(builder, b, m, n, k, mma, numMmaRets, colsPerThread, aTable,
                   bTable, cValues, aScaleValue, bScaleValue);
   };
