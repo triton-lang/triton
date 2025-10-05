@@ -2,7 +2,6 @@ from dataclasses import dataclass
 import triton
 import triton.language as tl
 import torch
-from ..reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 
 
 @dataclass
@@ -71,46 +70,34 @@ def _keyed_add(x, y):
 
 
 @triton.jit
-def _bitmatrix_metadata_compute_indx(pid_m, GatherIndx, ScatterIndx, ExptIndx, PartialOffs, stride_pm, stride_pn,
-                                     TokensStart, n_tokens, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
+def _bitmatrix_metadata_compute_indx(ColSortedIndx, RowSortedIndx, NonzeroIndx, nonzero_indx_size, ColPartialSum,
+                                     stride_pm, stride_pn, ColOffs, BLOCK_SIZE: tl.constexpr):
+    tl.static_assert(BLOCK_SIZE <= 32768)
+    pid_m = tl.program_id(0)
 
-    if isinstance(n_tokens, tl.tensor) and n_tokens.dtype.is_ptr():
-        n_tokens = tl.load(n_tokens)
-    n_gates = n_tokens * N_EXPTS_ACT
+    offs_local = tl.arange(0, BLOCK_SIZE)
+    offs_global = pid_m * BLOCK_SIZE + offs_local
+    mask = offs_global < nonzero_indx_size
+    col_indx = tl.load(NonzeroIndx + offs_global, mask=mask, other=-1).to(tl.uint32)
 
-    tl.static_assert(N_EXPTS_ACT * BLOCK_M <= 32768)
-
-    local_offs = tl.arange(0, N_EXPTS_ACT * BLOCK_M)
-    offs = pid_m * BLOCK_M * N_EXPTS_ACT + local_offs
-    expert = tl.load(ExptIndx + offs, mask=(offs < n_gates), other=-1).to(tl.uint32)
-
-    # stable-sort by expert ID:
-    kv_pairs = ((expert << 16) | local_offs).to(tl.uint32)
+    # stable-sort by columns index
+    kv_pairs = ((col_indx << 16) | offs_local).to(tl.uint32)
     kv_pairs = tl.sort(kv_pairs, 0)
-    expert = kv_pairs >> 16
-    offs = pid_m * BLOCK_M * N_EXPTS_ACT + (kv_pairs & 0xffff)
-    mask = expert != 0xffff
+    col_indx = kv_pairs >> 16
+    offs_global = pid_m * BLOCK_SIZE + (kv_pairs & 0xffff)
+    mask = col_indx != 0xffff
 
-    # compute run lengths in expert-sorted order:
+    # compute run lengths in column-sorted order:
     x = (kv_pairs & 0xffff0000 | 0x00000001)
-    expts_and_inclusive_run_lengths = tl.associative_scan(x, 0, _keyed_add)
-    exclusive_run_lengths = (expts_and_inclusive_run_lengths - 1) & 0xffff
+    cols_and_inclusive_run_lengths = tl.associative_scan(x, 0, _keyed_add)
+    exclusive_run_lengths = (cols_and_inclusive_run_lengths - 1) & 0xffff
 
-    gates = tl.load(PartialOffs + pid_m * stride_pm + expert * stride_pn, mask=mask)
-    gates += tl.load(TokensStart + expert, mask=mask)
-    gates += exclusive_run_lengths
+    row_sorted_indx = tl.load(ColPartialSum + pid_m * stride_pm + col_indx * stride_pn, mask=mask)
+    row_sorted_indx += tl.load(ColOffs + col_indx, mask=mask)
+    row_sorted_indx += exclusive_run_lengths
 
-    tl.store(ScatterIndx + offs, gates, mask=mask)
-    tl.store(GatherIndx + gates, offs, mask=mask)
-
-
-@triton.jit
-def _bitmatrix_metadata_compute(GatherIndx, ScatterIndx, ExptIndx, PartialOffs, stride_pm, stride_pn, TokensStart,
-                                n_tokens, BLOCK_M: tl.constexpr, N_EXPTS_ACT: tl.constexpr):
-
-    pid = tl.program_id(0)
-    _bitmatrix_metadata_compute_indx(pid, GatherIndx, ScatterIndx, ExptIndx, PartialOffs, stride_pm, stride_pn,
-                                     TokensStart, n_tokens, BLOCK_M, N_EXPTS_ACT)
+    tl.store(RowSortedIndx + offs_global, row_sorted_indx, mask=mask)
+    tl.store(ColSortedIndx + row_sorted_indx, offs_global, mask=mask)
 
 
 @triton.jit
@@ -145,20 +132,113 @@ def _bitmatrix_metadata_memset(Indx, size, sentinel, BLOCK: tl.constexpr, Expert
         tl.store(Indx + offs, sentinel, mask=mask)
 
 
-def sum_bitmatrix(bitmatrix, partials_block_size):
-    _, n_cols = bitmatrix.shape
-    scratchpad = clear_sums(n_cols, bitmatrix.device)
-    out_ret = scratchpad[:n_cols]
-    return sum_bitmatrix_rows(bitmatrix, out_ret, partials_block_size)
+@triton.jit
+def vpopc(x):
+    """
+    Vertical popcount
+    Input  x : uint32[..., N]
+    Output y : uint32[..., 32]
+    semantics : y[..., i] = sum_j((x[..., j] >> i) & 1)
+    credits: @apgoucher
+    """
+
+    tl.static_assert(x.dtype == tl.uint32, "x should consist of 32-bit unsigned integers")
+
+    BLOCK_N: tl.constexpr = x.shape[-1]  # summation axis
+    BATCHES: tl.constexpr = x.numel // BLOCK_N  # number of batches
+    if BLOCK_N >= 8:
+        sa1: tl.constexpr = 8
+    else:
+        sa1: tl.constexpr = BLOCK_N
+    # create 8-way sums in 4-bit fields:
+    y = tl.reshape(x, [BATCHES, BLOCK_N // sa1, sa1, 1])
+    y = (y >> tl.arange(0, 4)[None, None, None, :]) & 0x11111111
+    y = tl.sum(y, 2)  # [BATCHES, BLOCK_N // sa1, 4]
+    if BLOCK_N >= 128:
+        sa2: tl.constexpr = 16
+    else:
+        sa2: tl.constexpr = BLOCK_N // sa1
+    # create 128-way sums in 8-bit fields:
+    y = tl.reshape(y, [BATCHES, BLOCK_N // (sa1 * sa2), sa2, 1, 4])
+    y = (y >> (4 * tl.arange(0, 2))[None, None, None, :, None]) & 0x0f0f0f0f
+    y = tl.sum(y, 2)  # [BATCHES, BLOCK_N // (sa1 * sa2), 2, 4]
+    sa3: tl.constexpr = BLOCK_N // (sa1 * sa2)
+    # create N-way sums in 32-bit fields:
+    y = tl.reshape(y, [BATCHES, 1, sa3, 8])
+    y = (y >> (8 * tl.arange(0, 4))[None, :, None, None]) & 0x000000ff
+    y = tl.sum(y, 2)  # [BATCHES, 4, 8]
+    y = tl.reshape(y, x.shape[:-1] + [32])
+    return y
+
+
+@triton.jit
+def _sum_bitmatrix_rows(B, shape_bm, stride_bm: tl.constexpr, stride_bn: tl.constexpr,  # input bitmatrix
+                        Ret, Partials, stride_pm: tl.constexpr, stride_pn, shape_pn,  # outputs
+                        BLOCK_MM: tl.constexpr, BLOCK_M: tl.constexpr):
+
+    tl.static_assert(BLOCK_MM % BLOCK_M == 0)
+    TILE_SIZE: tl.constexpr = BLOCK_MM // BLOCK_M
+    if isinstance(shape_bm, tl.tensor) and shape_bm.dtype.is_ptr():
+        shape_bm = tl.load(shape_bm)
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    offs_m = pid_m * BLOCK_MM + tl.arange(0, BLOCK_MM)
+    offs_n = pid_n * 32 + tl.arange(0, 32)
+    n_rows = shape_bm
+    bits = tl.load(B + pid_n * stride_bn + offs_m * stride_bm, mask=offs_m < n_rows, other=0)
+    bits = tl.reshape(bits, [TILE_SIZE, BLOCK_M])
+    ret = vpopc(bits)  # [TILE_SIZE, 32]
+
+    offs_t = pid_m * TILE_SIZE + tl.arange(0, TILE_SIZE)
+
+    tl.atomic_add(Ret + offs_n, tl.sum(ret, 0), sem="relaxed")
+    tl.store(Partials + offs_t[:, None] * stride_pm + offs_n[None, :] * stride_pn, ret)
+
+
+def sum_bitmatrix_rows(x, out_ret, partials_block_size=None):
+    assert partials_block_size is not None
+    cdiv = triton.cdiv
+    PARTIALS_BLOCK_M = partials_block_size
+    n_rows, n_cols = x.shape
+    n_rows_max = x.shape_max[0]
+    assert out_ret.shape == (n_cols, )
+
+    TILE_SIZE = max(1, 128 // PARTIALS_BLOCK_M)
+    BLOCK_MM = PARTIALS_BLOCK_M * TILE_SIZE
+
+    pids_x = cdiv(n_rows_max, BLOCK_MM)
+    pids_y = cdiv(n_cols, 32)
+    out_partials = torch.empty((pids_y * 32, pids_x * TILE_SIZE), device=out_ret.device, dtype=torch.int32)
+    out_partials = torch.transpose(out_partials, 0, 1)
+
+    # output tensors
+    _sum_bitmatrix_rows[(pids_x, pids_y)](
+        x.storage.data, n_rows, x.stride(0), x.stride(1),  # input
+        out_ret,  # output [final reduction]
+        out_partials, out_partials.stride(0), out_partials.stride(1),
+        out_partials.shape[1],  # output [partial reductions]
+        BLOCK_M=PARTIALS_BLOCK_M, BLOCK_MM=BLOCK_MM,  # constants
+        num_warps=8)
+
+    out_partials = out_partials[:cdiv(n_rows_max, PARTIALS_BLOCK_M), :]
+
+    return out_ret, out_partials
 
 
 def make_bitmatrix_metadata(nonzero_indx, bitmatrix):
-    # TODO: `nonzero_indx` can be computed from `bitmatrix`; remove from API
     HIST_BLOCK_M = 32
+    MEMSET_BLOCK = 512
+
     cdiv = lambda x, y: (x + y - 1) // y
     device = bitmatrix.device
-    col_sum, col_partial_sum = sum_bitmatrix(bitmatrix, partials_block_size=HIST_BLOCK_M)
+    _, n_cols = bitmatrix.shape
+
+    blocks = cdiv(n_cols, MEMSET_BLOCK)
+    scratchpad = torch.zeros((blocks * MEMSET_BLOCK, ), device=device, dtype=torch.int32)[:n_cols]
+    col_sum, col_partial_sum = sum_bitmatrix_rows(bitmatrix, scratchpad, HIST_BLOCK_M)
+
     assert col_sum.dtype == torch.int32
+    nonzero_indx = nonzero_indx.to(torch.int32)
     # allocate memory
     n_indx = nonzero_indx.numel()
     n_cols = bitmatrix.shape[1]
@@ -177,12 +257,14 @@ def make_bitmatrix_metadata(nonzero_indx, bitmatrix):
         BLOCK_N=512, BLOCK_M=INDX_OFFS_BLOCK_M,  # tunable parameters
     )
     # compute the output
+    n_indx = nonzero_indx.numel()
+    toks_per_row = nonzero_indx.shape[-1]
     compute_grid = (cdiv(bitmatrix.shape_max[0], HIST_BLOCK_M), )
-    _bitmatrix_metadata_compute[compute_grid](
+    _bitmatrix_metadata_compute_indx[compute_grid](
         col_sorted_indx, row_sorted_indx,  # outputs
-        nonzero_indx, col_partial_sum, col_partial_sum.stride(0), col_partial_sum.stride(1),  # inputs
-        col_offs, bitmatrix.shape[0],  # input shape
-        HIST_BLOCK_M, nonzero_indx.shape[-1],  # constants
+        nonzero_indx, nonzero_indx.numel(), col_partial_sum, col_partial_sum.stride(0),
+        col_partial_sum.stride(1),  # inputs
+        col_offs, BLOCK_SIZE=HIST_BLOCK_M * toks_per_row,  # constants (rows per tile * toks_per_row)
     )
     return BitmatrixMetadata(col_sum, col_sorted_indx, row_sorted_indx)
 

@@ -6,8 +6,8 @@ from triton.tools.tensor_descriptor import TensorDescriptor
 from triton.tools.ragged_tma import create_ragged_descriptor
 from .target_info import cuda_capability_geq
 from .tensor_details.layout import Layout, StridedLayout
-from .tensor_details.ragged_tensor import RaggedTensorMetadata
-from .tensor_details.bitmatrix import BitmatrixMetadata
+from .tensor_details import ragged_tensor as ragged_tensor_details
+from .tensor_details import bitmatrix as bitmatrix_details
 
 
 # storage
@@ -172,17 +172,25 @@ class Tensor:
 
 @dataclass
 class Bitmatrix(Tensor):
-    metadata: BitmatrixMetadata = None
+    metadata: bitmatrix_details.BitmatrixMetadata = None
 
     def __post_init__(self):
         assert self.dtype == BIT
+
+
+make_bitmatrix_metadata = bitmatrix_details.make_bitmatrix_metadata
+make_bitmatrix_metadata_torch = bitmatrix_details.make_bitmatrix_metadata_torch
 
 
 @dataclass
 class RaggedTensor:
     batch_sizes: torch.Tensor
     data: torch.Tensor
-    metadata: RaggedTensorMetadata
+    metadata: ragged_tensor_details.RaggedTensorMetadata
+
+
+make_ragged_tensor_metadata = ragged_tensor_details.make_ragged_tensor_metadata
+make_ragged_tensor_metadata_torch = ragged_tensor_details.make_ragged_tensor_metadata_torch
 
 
 @dataclass
