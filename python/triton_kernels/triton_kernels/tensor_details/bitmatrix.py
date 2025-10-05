@@ -25,7 +25,7 @@ class BitmatrixMetadata:
     col_sorted_indx: torch.Tensor
 
 
-# `make_bitmatrix_metadata`: triton implementation
+# `make_bitmatrix_metadata`: entry point for optimized implementation
 # ---------------------------------------------------------------------------- #
 
 
@@ -140,7 +140,7 @@ def make_bitmatrix_metadata(nonzero_indx, bitmatrix):
     return BitmatrixMetadata(col_sum, col_sorted_indx, row_sorted_indx)
 
 
-# `make_bitmatrix_metadata`: reference implementation
+# `make_bitmatrix_metadata_torch`: entry point for reference implementation
 # ---------------------------------------------------------------------------- #
 
 

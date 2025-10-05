@@ -2,13 +2,14 @@ import pytest
 import torch
 from triton_kernels.topk import topk, topk_torch
 from triton_kernels.testing import assert_equal, assert_close
+from triton_kernels.tensor import SparseMatrix
 
 
-def canonicalize(vals, idx):
-    order = torch.argsort(vals, dim=1, descending=True, stable=True)
-    vals_sorted = torch.take_along_dim(vals, order, dim=1)
-    idx_sorted = torch.take_along_dim(idx, order, dim=1)
-    return vals_sorted, idx_sorted.int()
+def canonicalize(sparse_x: SparseMatrix) -> SparseMatrix:
+    order = torch.argsort(sparse_x.vals, dim=1, descending=True, stable=True)
+    vals_sorted = torch.take_along_dim(sparse_x.vals, order, dim=1)
+    indx_sorted = torch.take_along_dim(sparse_x.indx, order, dim=1)
+    return SparseMatrix(vals=vals_sorted, indx=indx_sorted.int(), mask=sparse_x.mask)
 
 
 @pytest.mark.parametrize("n_rows", [1, 7, 256, 300])
@@ -21,12 +22,10 @@ def test_topk(n_rows, n_cols, k, apply_softmax, dtype):
     torch.manual_seed(0)
     dtype = getattr(torch, dtype)
     x = torch.randn((n_rows, n_cols), dtype=torch.float32, device=device)
-    y_vals_tri, y_indx_tri, bitmatrix_tri = topk(x, k, apply_softmax=apply_softmax)
-    y_vals_ref, y_indx_ref, bitmatrix_ref = topk_torch(x, k, apply_softmax=apply_softmax)
-    y_vals_tri_sorted, y_indx_tri_sorted = canonicalize(y_vals_tri, y_indx_tri)
-    y_vals_ref_sorted, y_indx_ref_sorted = canonicalize(y_vals_ref, y_indx_ref)
-    assert_close(y_vals_tri_sorted, y_vals_ref_sorted)
-    assert_equal(y_indx_tri_sorted, y_indx_ref_sorted)
-    assert_equal(bitmatrix_tri.storage.data, bitmatrix_ref.storage.data)
-    assert bitmatrix_tri.storage.data.stride() == bitmatrix_ref.storage.data.stride()
-    assert bitmatrix_tri.storage.data.shape == bitmatrix_ref.storage.data.shape
+    sparse_x_tri = canonicalize(topk(x, k, apply_softmax=apply_softmax))
+    sparse_x_ref = canonicalize(topk_torch(x, k, apply_softmax=apply_softmax))
+    assert_close(sparse_x_tri.vals, sparse_x_ref.vals)
+    assert_equal(sparse_x_tri.indx, sparse_x_ref.indx)
+    assert_equal(sparse_x_tri.mask.storage.data, sparse_x_ref.mask.storage.data)
+    assert sparse_x_tri.mask.storage.data.stride() == sparse_x_ref.mask.storage.data.stride()
+    assert sparse_x_tri.mask.storage.data.shape == sparse_x_ref.mask.storage.data.shape

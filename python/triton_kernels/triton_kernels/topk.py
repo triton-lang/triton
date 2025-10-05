@@ -2,7 +2,8 @@ import torch
 import triton
 from triton_kernels.topk_details._topk_forward import _topk_forward
 from triton_kernels.topk_details._topk_backward import _topk_backward
-from triton_kernels.tensor import Tensor, Bitmatrix, BIT
+from triton_kernels.tensor import SparseMatrix, Tensor
+from triton_kernels.tensor import Bitmatrix, BIT, make_bitmatrix_metadata
 from typing import Optional, Union
 
 
@@ -41,9 +42,13 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None):
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,  # tunable parameter
         APPLY_SOFTMAX=apply_softmax, N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
     )
-    bitmatrix_shape = [n_rows, n_cols]
-    bitmatrix_shape_max = [n_rows_max, None]
-    bitmatrix = Bitmatrix(bitmatrix_data, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
+    bitmatrix = Bitmatrix(
+        bitmatrix_data,
+        dtype=BIT,
+        shape=[n_rows, n_cols],
+        shape_max=[n_rows_max, None],
+    )
+    bitmatrix.metadata = make_bitmatrix_metadata(y_indx, bitmatrix)
     return y_vals, y_indx, bitmatrix
 
 
@@ -107,10 +112,10 @@ def topk(
 
     Returns
     -------
-    (expt_scal, expt_indx, bitmatrix) : Tuple[torch.Tensor, torch.Tensor, Bitmatrix]
+    SparseMatrix: sparse matrix equal to `x` with non-selected entries set to 0
     """
-    ret = TopK.apply(x, k, apply_softmax, dim, y_indx, n_rows)
-    return ret
+    y_vals, y_indx, bitmatrix = TopK.apply(x, k, apply_softmax, dim, y_indx, n_rows)
+    return SparseMatrix(vals=y_vals, indx=y_indx, mask=bitmatrix)
 
 
 def topk_torch(
@@ -119,7 +124,7 @@ def topk_torch(
     apply_softmax: bool = True,
     dim: int = 1,
     y_indx: Optional[torch.Tensor] = None,
-):
+) -> SparseMatrix:
     cdiv = lambda a, b: (a + b - 1) // b
     device = x.device
     assert dim == 1
@@ -144,4 +149,4 @@ def topk_torch(
     bitmatrix = Bitmatrix(bitmatrix_data, shape=x.shape, dtype=BIT)
     if apply_softmax:
         y_vals = torch.softmax(y_vals.float(), dim=-1).to(x.dtype)
-    return y_vals, y_indx, bitmatrix
+    return SparseMatrix(vals=y_vals, indx=y_indx, mask=bitmatrix)
