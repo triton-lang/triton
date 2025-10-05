@@ -24,8 +24,8 @@ def test_make_ragged_tensor_metadata(n_gates, n_batches):
     assert_equal(meta.block_schedule_data, ref.block_schedule_data)
 
 
-@pytest.mark.parametrize("n_rows", [1, 7, 256])
-@pytest.mark.parametrize("n_cols", [13, 32, 128])
+@pytest.mark.parametrize("n_rows", [7, 256, 17111])
+@pytest.mark.parametrize("n_cols", [13, 32, 128, 811])
 @pytest.mark.parametrize("k", [1, 4, 8])
 def test_make_bitmatrix_metadata(n_rows, n_cols, k):
     if k > n_cols:
