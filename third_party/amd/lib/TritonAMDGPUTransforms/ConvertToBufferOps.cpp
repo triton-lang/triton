@@ -61,9 +61,16 @@ bool isByteOffsetSmallerThan2GB(triton::AddPtrOp addPtrOp,
   // step 1: get the value range of the element index
   const auto *lattice =
       solver->lookupState<dataflow::IntegerValueRangeLattice>(elemIdx);
+  if (!lattice) {
+    // Note not always able to get lattice, e.g. the offset is obtained from
+    // tt.load.
+    LDBG("cannot get lattice associated with the offset");
+    return false;
+  }
+
   const mlir::IntegerValueRange &vr = lattice->getValue();
   if (vr.isUninitialized() || AMD::isEmptyInitializedRange(vr.getValue())) {
-    LDBG("cannot get meaningful value range");
+    LDBG("Cannot get value range of the offset");
     return false;
   };
 
