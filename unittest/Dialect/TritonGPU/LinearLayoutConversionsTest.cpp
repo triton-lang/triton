@@ -3841,7 +3841,6 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   EXPECT_EQ(ll, layout);
 
-  // Same result regardless of tilesPerWarp when warpsPerCTA is [2,2]
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/1, /*dotOperandShape=*/{256, 512},
       /*tilesPerWarp=*/{4, 4}, /*warpsPerCTA=*/{2, 2},
@@ -3865,7 +3864,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
                      {S("block"), {}}},
                     {S("dim0"), S("dim1")});
   EXPECT_EQ(ll, layout);
-  // With more warps (4x4), register pressure decreases
+
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/1, /*dotOperandShape=*/{256, 512},
       /*tilesPerWarp=*/{4, 4}, /*warpsPerCTA=*/{4, 4},
