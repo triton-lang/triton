@@ -300,7 +300,7 @@ static Operation *bypassLDS(Operation *load, Operation *use) {
 
   // Finally, rewrite the load to use the inferred (better) encoding.
   auto newOp = convertDistributedOpEncoding(srcEnc, load);
-  newOp->setAttr(AttrBypassLDS, BoolAttr::get(load->getContext(), true));
+  newOp->setAttr(AttrBypassLDS, BoolAttr::get(newOp->getContext(), true));
   return newOp;
 };
 
