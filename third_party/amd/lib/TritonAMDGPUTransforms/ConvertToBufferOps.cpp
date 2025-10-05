@@ -53,12 +53,14 @@ bool isSplatOneConstTensor(const Value v) {
   return false;
 }
 
-bool isByteOffsetSmallerThan2GB(triton::AddPtrOp addPtrOp, std::shared_ptr<DataFlowSolver> solver) {
+bool isByteOffsetSmallerThan2GB(triton::AddPtrOp addPtrOp,
+                                std::shared_ptr<DataFlowSolver> solver) {
   Value elemIdx = addPtrOp.getOffset();
   LDBG("Determing element index value range: " << elemIdx);
 
   // step 1: get the value range of the element index
-  const auto *lattice = solver->lookupState<dataflow::IntegerValueRangeLattice>(elemIdx);
+  const auto *lattice =
+      solver->lookupState<dataflow::IntegerValueRangeLattice>(elemIdx);
   const mlir::IntegerValueRange &vr = lattice->getValue();
   if (vr.isUninitialized() || AMD::isEmptyInitializedRange(vr.getValue())) {
     LDBG("cannot get meaningful value range");
@@ -80,13 +82,14 @@ bool isByteOffsetSmallerThan2GB(triton::AddPtrOp addPtrOp, std::shared_ptr<DataF
   // step 3: check of byte-offset is within 2G
   int64_t elemBitSz = elemTy.getIntOrFloatBitWidth();
   int64_t elemMaxIdx = smax.getSExtValue();
-  int64_t byteOfst = (elemBitSz * elemMaxIdx + elemBitSz + 7)/8;
+  int64_t byteOfst = (elemBitSz * elemMaxIdx + elemBitSz + 7) / 8;
   int64_t szLimit2GB = (1L << 31) - 1;
 
-  LDBG("element bit sz:" << elemBitSz << ", max byte offset:" << byteOfst <<
-       ((szLimit2GB > byteOfst) ? ", out or range" : ",in range"));
+  LDBG("element bit sz:" << elemBitSz << ", max byte offset:" << byteOfst
+                         << ((szLimit2GB > byteOfst) ? ", out or range"
+                                                     : ",in range"));
 
-  return byteOfst <= szLimit2GB ;
+  return byteOfst <= szLimit2GB;
 }
 
 bool isFuncArgWith32bitPtrRange(mlir::Value value) {
@@ -579,8 +582,8 @@ struct TritonAMDGPUConvertToBufferOpsPass
     std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
 
     AMD::TritonIntegerRangeAnalysis *rangeAnalysis =
-        solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions,
-            &getAnalysis<DominanceInfo>());
+        solver->load<AMD::TritonIntegerRangeAnalysis>(
+            assumptions, &getAnalysis<DominanceInfo>());
     AMD::initializeFuncOps(mod, rangeAnalysis);
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();

@@ -1008,7 +1008,7 @@ struct FoldTrueCmpIOp : OpRewritePattern<arith::CmpIOp> {
   using OpRewritePattern::OpRewritePattern;
 
   FoldTrueCmpIOp(MLIRContext *context, DataFlowSolver *solver)
-      : OpRewritePattern(context), solver(solver){};
+      : OpRewritePattern(context), solver(solver) {};
 
   LogicalResult matchAndRewrite(arith::CmpIOp cmpOp,
                                 PatternRewriter &rewriter) const override {
