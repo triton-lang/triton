@@ -762,7 +762,25 @@ void init_gluon_ir(py::module &&m) {
               tt::CacheModifier cacheModifier) {
              self.create<ttag::BufferLoadToLocalOp>(
                  dest, ptr, offsets, mask, other, stride, cacheModifier);
-           });
+           })
+      .def("create_make_tensor_descriptor",
+           [](TritonOpBuilder &self, Type resultTy, Value &base,
+              std::vector<Value> &shape, std::vector<Value> &strides,
+              tt::PaddingOption paddingOption) -> Value {
+             return self.create<tt::MakeTensorDescOp>(resultTy, base, shape,
+                                                      strides, paddingOption);
+           })
+      .def("create_async_tdm_copy_global_to_local",
+           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
+              Value result) {
+             Value pred = self.create<arith::ConstantIntOp>(1, 1);
+             self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(descPtr, indices,
+                                                            result, pred);
+           })
+      .def("create_async_tdm_wait", [](GluonOpBuilder &self, int num) {
+        ValueRange tokens;
+        self.create<ttag::AsyncTDMWait>(tokens, num);
+      });
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",
                                              py::module_local())

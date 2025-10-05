@@ -3,4 +3,5 @@ add_mlir_library(TritonTestProton
 
   LINK_LIBS PUBLIC
   MLIRPass
+  ProtonAnalysis
 )

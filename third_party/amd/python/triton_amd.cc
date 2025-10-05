@@ -91,11 +91,10 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi", mlir::createTritonAMDFoldTrueCmpI);
   ADD_PASS_OPTION_WRAPPER_1("add_block_pingpong",
                             mlir::createTritonAMDGPUBlockPingpong, int32_t);
-  ADD_PASS_OPTION_WRAPPER_3("add_schedule_loops",
-                            mlir::createTritonAMDGPUScheduleLoops, int, bool,
-                            bool);
-  ADD_PASS_OPTION_WRAPPER_1("add_pipeline", mlir::createTritonAMDGPUPipeline,
-                            bool);
+  ADD_PASS_OPTION_WRAPPER_1("add_schedule_loops",
+                            mlir::createTritonAMDGPUScheduleLoops, int);
+  ADD_PASS_OPTION_WRAPPER_2("add_pipeline", mlir::createTritonAMDGPUPipeline,
+                            bool, bool);
   ADD_PASS_OPTION_WRAPPER_1("add_coalesce_async_copy",
                             mlir::createTritonAMDGPUCoalesceAsyncCopy,
                             std::string);
@@ -419,11 +418,11 @@ void init_triton_amd(py::module &&m) {
 
         const llvm::MCTargetOptions mcOptions;
         std::unique_ptr<llvm::MCRegisterInfo> mri(
-            target->createMCRegInfo(amdTargetTriple));
+            target->createMCRegInfo(triple));
         std::unique_ptr<llvm::MCAsmInfo> mai(
-            target->createMCAsmInfo(*mri, amdTargetTriple, mcOptions));
+            target->createMCAsmInfo(*mri, triple, mcOptions));
         std::unique_ptr<llvm::MCSubtargetInfo> sti(
-            target->createMCSubtargetInfo(amdTargetTriple, arch, features));
+            target->createMCSubtargetInfo(triple, arch, features));
 
         llvm::MCContext ctx(triple, mai.get(), mri.get(), sti.get(), &srcMgr,
                             &mcOptions);
@@ -472,7 +471,7 @@ void init_triton_amd(py::module &&m) {
     if (!target)
       throw std::runtime_error("target lookup error: " + error);
     std::unique_ptr<llvm::MCSubtargetInfo> sti(
-        target->createMCSubtargetInfo(amdTargetTriple, arch, ""));
+        target->createMCSubtargetInfo(triple, arch, ""));
     return sti->checkFeatures("+architected-sgprs");
   });
 

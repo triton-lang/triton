@@ -13,6 +13,7 @@ import triton.language as tl
 from triton.backends.compiler import GPUTarget
 from triton._internal_testing import str_to_triton_dtype
 from triton._internal_testing import is_hip_gfx1250
+from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
 
@@ -309,45 +310,115 @@ def test_runtime_amd_wmma_scaled(BLOCK_M, BLOCK_N, BLOCK_K, mxfp_type, hasScale)
         out_ptr = out + tl.arange(0, BLOCK_M)[:, None] * BLOCK_N + tl.arange(0, BLOCK_N)[None, :]
         tl.store(out_ptr, c)
 
+    def torch_gemm_mxfp(a, b, a_scale, b_scale, scale_block, M, N, K):
+        a_scale_f32 = a_scale.to(torch.float32).repeat_interleave(scale_block, dim=1)[:M, :K]
+        b_scale_f32 = b_scale.to(torch.float32).repeat_interleave(scale_block, dim=1).T.contiguous()[:K, :N]
+
+        a_f32 = a.to(torch.float32)
+        b_f32 = b.to(torch.float32)
+
+        return torch.matmul(a_f32 * a_scale_f32, b_f32 * b_scale_f32).to(torch.float32)
+
     torch.manual_seed(0)
 
     type_a = mxfp_type
     type_b = mxfp_type
 
-    DIV_FACTOR_A = 2 if type_a == "e2m1" else 1
-    DIV_FACTOR_B = 2 if type_b == "e2m1" else 1
+    a_mxfp4 = MXFP4Tensor(size=(BLOCK_M, BLOCK_K)).random()
+    b_mxfp4 = MXFP4Tensor(size=(BLOCK_K, BLOCK_N)).random()
 
-    x = torch.randint(20, 40, (BLOCK_M, BLOCK_K // DIV_FACTOR_A), dtype=torch.uint8).cuda()
-    y = torch.randint(20, 40, (BLOCK_K // DIV_FACTOR_B, BLOCK_N), dtype=torch.uint8).cuda()
+    scale_a_size = (BLOCK_M, (BLOCK_K + 32 - 1) // 32)
+    scale_b_size = (BLOCK_N, (BLOCK_K + 32 - 1) // 32)
 
     if hasScale:
-        min_scale, max_scale = (0, 142)
-        scale_x = torch.randint(min_scale, max_scale + 1, (BLOCK_M, BLOCK_K // 32), dtype=torch.uint8).cuda()
-        scale_y = torch.randint(min_scale, max_scale + 1, (BLOCK_N, BLOCK_K // 32), dtype=torch.uint8).cuda()
+        scale_a_mxfp4 = MXScaleTensor(size=scale_a_size).random(high=32.0)
+        scale_b_mxfp4 = MXScaleTensor(size=scale_b_size).random(high=32.0)
     else:
-        scale_x = None
-        scale_y = None
+        scale_a_mxfp4 = torch.ones(scale_a_size, dtype=torch.float32)
+        scale_b_mxfp4 = torch.ones(scale_b_size, dtype=torch.float32)
 
-    def make_finite(x, dtype):
-        if dtype not in ("e5m2", "e4m3"):
-            return x
-        mask = 0x7C if dtype == "e5m2" else 0x7F
-        finite = torch.arange(x.numel(), dtype=torch.uint8).cuda().reshape_as(x) % mask
-        x_finite = torch.where(x & mask == mask, finite | (0x80 & x), x)
-        x.copy_(x_finite)
-        return x
+    c_torch = torch_gemm_mxfp(a_mxfp4, b_mxfp4, scale_a_mxfp4, scale_b_mxfp4, 32, BLOCK_M, BLOCK_N, BLOCK_K)
 
-    x = make_finite(x, type_a)
-    y = make_finite(y, type_b)
+    a = a_mxfp4.to_packed_tensor(dim=1).data.contiguous().cuda()
+    b = b_mxfp4.to_packed_tensor(dim=0).data.contiguous().cuda()
 
-    z = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float32).cuda()
-    pgm = dot_mxfp_gluon_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z, BLOCK_M, BLOCK_N, BLOCK_K,
+    if hasScale:
+        scale_a = scale_a_mxfp4.data.cuda()
+        scale_b = scale_b_mxfp4.data.cuda()
+    else:
+        scale_a = None
+        scale_b = None
+
+    c = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float32).cuda()
+    pgm = dot_mxfp_gluon_kernel[(1, )](a, *a.stride(), scale_a, b, *b.stride(), scale_b, c, BLOCK_M, BLOCK_N, BLOCK_K,
                                        type_a, type_b)
     assert "v_wmma_scale_f32_16x16x128_f8f6f4" in pgm.asm[
         "amdgcn"], "The AMDGCN assembly does not contain the expected scaled WMMA instruction."
 
-    z_ref = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float32).cuda()
-    dot_mxfp_triton_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z_ref, BLOCK_M, BLOCK_N, BLOCK_K,
+    c_ref = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float32).cuda()
+    dot_mxfp_triton_kernel[(1, )](a, *a.stride(), scale_a, b, *b.stride(), scale_b, c_ref, BLOCK_M, BLOCK_N, BLOCK_K,
                                   type_a, type_b)
 
-    torch.testing.assert_close(z.cpu(), z_ref.cpu(), rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(c.cpu(), c_ref.cpu(), rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(c.cpu(), c_torch, rtol=1e-5, atol=1e-5)
+
+
+@gluon.jit
+def tensor_copy_kernel(a_ptr, b_ptr,  #
+                       M, N,  #
+                       BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr):
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+
+    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+
+    a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, shape=a_desc.block_shape, layout=a_desc.layout)
+    ttgl.amd.gfx1250.tdm.async_load(a_desc, [pid_m * BLOCK_M, pid_n * BLOCK_N], a_buffer)
+
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+    a = a_buffer.load(layout=BLOCKED_LAYOUT)
+
+    b_offsets = (pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT)))[:, None] * N + \
+                (pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT)))[None, :]
+    ttgl.store(b_ptr + b_offsets, a)
+
+
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64)])
+def test_compile_tensor_copy(BLOCK_M, BLOCK_N):
+    k = triton.compile(
+        gluon._runtime.GluonASTSource(
+            fn=tensor_copy_kernel, signature={
+                "a_ptr": "*bf16", "b_ptr": "*bf16", "M": "i32", "N": "i32", "BLOCK_M": "constexpr", "BLOCK_N":
+                "constexpr"
+            }, constexprs={"BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N}), target=GPUTarget("hip", 'gfx1250', 32))
+
+    amdgcn = k.asm["amdgcn"]
+
+    tensor_pattern = r"tensor_load_to_lds"
+    assert re.search(tensor_pattern, amdgcn)
+
+    wait_pattern = r"s_wait_tensorcnt 0x0"
+    assert re.search(wait_pattern, amdgcn)
+
+
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64)])
+def test_runtime_tensor_copy(BLOCK_M, BLOCK_N):
+    M, N = 1024, 1024
+
+    torch.manual_seed(42)
+    a = torch.randint(0x0, 0xFFFF, (M, N), dtype=torch.uint16)
+    b = torch.zeros_like(a)
+
+    a_device = a.cuda()
+    b_device = b.cuda()
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    tensor_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N)
+
+    b_triton = b_device.cpu()
+    assert torch.equal(b_triton, a)

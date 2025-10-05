@@ -15,6 +15,7 @@ from ._common import (
     matmul_launch_metadata,
     swizzle2d,
     xcd_swizzle,
+    threadfence_system,
 )
 
 
@@ -70,7 +71,7 @@ def _matmul_ogs(
              # epilogue transform
              EPILOGUE_FN: tl.constexpr, epilogue_fn_args,
              # MoE config
-             N_EXPTS_TOT: tl.constexpr,
+             N_EXPTS_TOT: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
              # precision config
              MAX_NUM_IMPRECISE_ACC: tl.constexpr, ALLOW_TF32: tl.constexpr,
              FLEXPOINT_SATURATE_INF: tl.constexpr,
@@ -94,6 +95,10 @@ def _matmul_ogs(
              UPCAST_INDICES: tl.constexpr = False,
              SWAP_XW: tl.constexpr = False,
              IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False,
+             pYPtrs=None,
+             ScatterShardIndx=None,
+             reduce_rank = 0,
+             n_reduce_shards: tl.constexpr = 1,
              ):
     tl.assume(stride_y_k >= 0)
     tl.assume(stride_y_z >= 0)
@@ -193,7 +198,7 @@ def _matmul_ogs(
     # We are tiling Y here, so the tiling is independent of matmul (where we
     # tile X & W and scatter to different rows of Y).
     # TODO: refactor (same code in _p_matmul_ogs)
-    if HAS_FUSED_SCATTER:
+    if HAS_FUSED_SCATTER and N_EXPTS_ACT == 1:
         tl.device_assert(batch_size == 1)
         pid_mnk = pid
         if XCD_SWIZZLE != 1:
@@ -218,7 +223,6 @@ def _matmul_ogs(
                          BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K,
                          GROUP_M, XCD_SWIZZLE)
 
-
     # For split-k, advance to the output k slice
     if SPLIT_K > 1:
         Y += pid_k.to( index_type) * stride_y_k
@@ -237,7 +241,7 @@ def _matmul_ogs(
     else:
         GatherIndx += start_m
         # no needs to bounds-check here because `offs_x_m` wraps around M dim
-        offs_x_m = tl.load(GatherIndx + offs_x_m)
+        offs_x_m = tl.load(GatherIndx + offs_x_m) // N_EXPTS_ACT
     offs_k = off_k_x + tl.arange(0, BLOCK_K)
     XPtrs = X + offs_x_m.to(index_type)[:, None] * stride_x_m + offs_k.to(index_type)[None, :] * stride_x_k
 
@@ -321,8 +325,8 @@ def _matmul_ogs(
             if is_x_microscaled:
                 mask_x_k_scale = offs_x_k_scale * MX_PACK_DIVISOR < x_k_limit
 
-        x = tl.load(XPtrs, mask=mask_k[None, :], other=0.)
-        w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0., cache_modifier=W_CACHE_MODIFIER)
+        x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
+        w = tl.load(WPtrs, mask=mask_k_w[:, None], other=0.0, cache_modifier=W_CACHE_MODIFIER)
         if is_w_microscaled:
             x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
             w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
@@ -367,6 +371,8 @@ def _matmul_ogs(
             if is_x_microscaled:
                 XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
         else:
+            # if w.dtype.is_fp8() and not x.dtype.is_fp8():
+            #     w = w.to(x.dtype)
             acc = tl.dot(x, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
         XPtrs += (BLOCK_K * SPLIT_K) * stride_x_k
         WPtrs += (PACKED_BLOCK_K_W * SPLIT_K) * stride_w_k
@@ -449,7 +455,7 @@ def _matmul_ogs(
             YActualScale += start_m * stride_y_mx_m
             YActualScalePtrs = YActualScale + offs_y_m.to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
         else:
-            YActualScalePtrs = YActualScale + (offs_y_m - num_idxs).to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
+            YActualScalePtrs = YActualScale + (offs_y_m - num_idxs // N_EXPTS_ACT).to(index_type)[:, None] * stride_y_mx_m + offs_y_n_scale.to(index_type)[None, :] * stride_y_mx_n
         tl.store(YActualScalePtrs, out_scale, mask=mask_m[:, None] & mask_n_scale[None, :])
     else:
         if PER_BATCH_OUT_SCALE:
@@ -458,4 +464,26 @@ def _matmul_ogs(
         out = float_to_flex(out, YExpectedScale, YActualScale, YChecksumScale, mask, Y, FLEXPOINT_SATURATE_INF)
         if EPILOGUE_FN is not None and not IS_EPILOGUE_QUANT_MXFP8:
             out = EPILOGUE_FN(out, *epilogue_fn_args, target_dtype=YPtrs.dtype.element_ty)
-    tl.store(YPtrs, out, mask=mask)
+    if pYPtrs is None:
+        tl.store(YPtrs, out, mask=mask)
+    else:
+        tl.static_assert(Y_TMA_MODE is None, "TMA is not supported with fused comms")
+        if ScatterShardIndx is not None:
+            dst_shard_idx = tl.load(ScatterShardIndx + offs_y_m, mask=mask_m)
+            for i in tl.static_range(n_reduce_shards):
+                peer = dst_shard_idx * n_reduce_shards + (reduce_rank + i) % n_reduce_shards
+                peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(Y.type.element_ty))
+                tl.multiple_of(peer_Y_ptr, 16)
+                offs_y_mn = offs_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
+                tl.store(peer_Y_ptr[:, None] + offs_y_mn, out, mask=mask)
+        else:
+            # full all gather
+            for i in tl.static_range(n_reduce_shards):
+                peer = (reduce_rank + i) % n_reduce_shards
+                peer_Y_ptr = tl.load(pYPtrs + peer).to(tl.pointer_type(Y.type.element_ty))
+                tl.multiple_of(peer_Y_ptr, 16)
+                offs_y_mn = offs_y_m.to(index_type)[:, None] * stride_y_m * n_reduce_shards + reduce_rank * stride_y_m + offs_y_n.to(index_type)[None, :] * stride_y_n
+                tl.store(peer_Y_ptr + offs_y_mn, out, mask=mask)
+
+    if pYPtrs is not None:
+        threadfence_system()
