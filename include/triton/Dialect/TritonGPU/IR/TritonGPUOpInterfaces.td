@@ -2,6 +2,7 @@
 #define TRITONGPU_OP_INTERFACES
 
 include "mlir/IR/OpBase.td"
+include "mlir/Interfaces/SideEffectInterfaces.td"
 
 def UpcastFpOpInterface : OpInterface<"UpcastFpOpInterface"> {
     let description = [{
@@ -25,5 +26,10 @@ def UpcastFpOpInterface : OpInterface<"UpcastFpOpInterface"> {
         >
     ];
 }
+
+def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
+
+def MBarAtomic: MemoryEffect<"::mlir::MemoryEffects::MBarAtomic", SharedMemory, 0, PartialEffect>;
 
 #endif // TRITONGPU_OP_INTERFACES

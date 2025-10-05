@@ -1,6 +1,7 @@
 #include "triton/Analysis/Membar.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -165,7 +166,8 @@ void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                             FuncBlockInfoMapT *funcBlockInfoMap,
                             OpBuilder *builder) {
-  if (isa<gpu::BarrierOp, triton::gpu::LocalBarrierOp>(op)) {
+  if (isa<gpu::BarrierOp, triton::gpu::LocalBarrierOp,
+          triton::nvidia_gpu::WaitBarrierOp>(op)) {
     // If the current op is a barrier, we sync previous reads and writes
     blockInfo->sync();
     return;
@@ -210,6 +212,12 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
                     .syncReadIntervals[allocation->getAllocatedInterval(
                         bufferId)]
                     .insert(op);
+              else if (isa<MemoryEffects::MBarAtomic>(
+                           effectInstance.getEffect()))
+                curBlockInfo
+                    .syncAtomicIntervals[allocation->getAllocatedInterval(
+                        bufferId)]
+                    .insert(op);
             }
           }
         }
@@ -244,7 +252,8 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
     }
 
     if (!curBlockInfo.syncReadIntervals.empty() ||
-        !curBlockInfo.syncWriteIntervals.empty()) {
+        !curBlockInfo.syncWriteIntervals.empty() ||
+        !curBlockInfo.syncAtomicIntervals.empty()) {
       llvm::report_fatal_error(
           "scratch buffer operations should not have any shared memory "
           "dependencies");
