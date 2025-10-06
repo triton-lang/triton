@@ -2,9 +2,7 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Tools/LayoutUtils.h"
 
-namespace mlir {
-namespace triton {
-namespace NVIDIA {
+namespace mlir::triton::NVIDIA {
 
 // The descriptor format is described in the spec:
 // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#asynchronous-warpgroup-level-matrix-shared-memory-layout-matrix-descriptor
@@ -124,6 +122,4 @@ static Value getOffsetedBase(Value v, gpu::MemDescType memDescTy,
   return tb.gep(base.getType(), llvmElemTy, base, offset);
 }
 
-} // namespace NVIDIA
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::NVIDIA
