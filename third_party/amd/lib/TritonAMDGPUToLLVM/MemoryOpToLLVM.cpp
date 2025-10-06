@@ -183,6 +183,10 @@ private:
     // Need to have exactly needContigReg, otherwise we can't use ds_read_tr
     auto [elemsPerVec, permutation] =
         largestVectorisation(ctx, cvt, bitwidth, needContigReg);
+
+    if (paddedEnc)
+      elemsPerVec = std::min<int>(elemsPerVec, paddedEnc.getMinInterval());
+
     if (elemsPerVec != needContigReg)
       return failure();
 
