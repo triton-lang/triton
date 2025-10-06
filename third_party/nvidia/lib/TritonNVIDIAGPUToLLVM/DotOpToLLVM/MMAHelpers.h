@@ -49,7 +49,9 @@ public:
   DotOpMmaSmemLoader() = default;
 
   DotOpMmaSmemLoader(MMASMEMDescriptor desc, Value baseb128, LinearLayout llInv,
-                     ArrayRef<unsigned> instrShape);
+                     ArrayRef<unsigned> instrShape)
+      : desc(desc), baseb128(baseb128), ll(std::move(llInv)),
+        instrShape(instrShape) {}
 
   static DotOpMmaSmemLoader
   build(Location loc, RewriterBase &rewriter, gpu::MemDescType memTy,

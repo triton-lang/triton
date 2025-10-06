@@ -2,12 +2,6 @@
 
 namespace mlir::triton::NVIDIA {
 
-DotOpMmaSmemLoader::DotOpMmaSmemLoader(MMASMEMDescriptor desc, Value baseb128,
-                                       LinearLayout llInv,
-                                       ArrayRef<unsigned> instrShape)
-    : desc(desc), baseb128(baseb128), ll(std::move(llInv)),
-      instrShape(instrShape) {}
-
 DotOpMmaSmemLoader DotOpMmaSmemLoader::build(
     Location loc, RewriterBase &rewriter, gpu::MemDescType memTy,
     Value smemBase, ArrayRef<unsigned> instrShape, int mmaVersion, bool isFp4,
