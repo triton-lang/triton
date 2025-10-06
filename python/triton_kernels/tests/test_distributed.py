@@ -1,39 +1,64 @@
+import contextlib
+import os
+import socket
+
 import torch
 import torch.distributed as dist
+import torch.multiprocessing as mp
 import triton
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp
 from triton_kernels.matmul_ogs import matmul_ogs, reduce_grouped
 from triton_kernels.routing import routing, RoutingData
-from test_routing import make_expt_dict_random, make_expt_assignment, filter_expt_data
+from triton_kernels.target_info import is_hip
+from .test_routing import make_expt_dict_random, make_expt_assignment, filter_expt_data
 import pytest
-import os
-
-# torchrun --standalone --nproc_per_node=2 -m pytest -vs ./test_distributed.py
 
 # ------------------------------------------------------------
 # fixture
 # ------------------------------------------------------------
 
 
-@pytest.fixture(scope="session", autouse=True)
-def init_distributed():
-    # Skip nicely if not launched with torchrun or no CUDA
+def _get_free_tcp_port():
+    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _distributed_worker(rank, fn, world_size, kwargs):
+    dev = f"cuda:{rank}"
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size, device_id=torch.device(dev))
+    torch.cuda.set_device(dev)
+    try:
+        fn(rank=rank, world_size=world_size, **kwargs)
+        dist.barrier()
+    finally:
+        dist.destroy_process_group()
+
+
+@pytest.fixture
+def distributed_launcher(request):
+    n_gpus = getattr(request, "param", None)
     if not torch.cuda.is_available():
-        pytest.skip("CUDA required for this distributed GPU test")
-    if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
-        pytest.skip("Launch with torchrun, e.g.: "
-                    "torchrun --standalone --nproc_per_node=2 -m pytest -q")
-    # Bind to the correct GPU *before* initializing NCCL
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    if local_rank >= torch.cuda.device_count():
-        pytest.skip(f"LOCAL_RANK {local_rank} >= cuda device count {torch.cuda.device_count()}")
-    torch.cuda.set_device(local_rank)
-    if not dist.is_initialized():
-        dist.init_process_group(backend="nccl", init_method="env://")
-    dist.barrier()
-    yield
-    dist.barrier()
-    dist.destroy_process_group()
+        pytest.skip("CUDA required for distributed GPU test")
+    if torch.cuda.device_count() < n_gpus:
+        pytest.skip(f"requires up to {n_gpus} CUDA devices, found {torch.cuda.device_count()}")
+
+    master_port = _get_free_tcp_port()
+
+    os.environ["WORLD_SIZE"] = str(n_gpus)
+    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+    os.environ.setdefault("MASTER_PORT", str(master_port))
+
+    def launch(fn, **kwargs):
+        mp.spawn(
+            _distributed_worker,
+            args=(fn, n_gpus, kwargs),
+            nprocs=n_gpus,
+            join=True,
+        )
+
+    launch.world_size = n_gpus
+    return launch
 
 
 # ------------------------------------------------------------
@@ -63,13 +88,12 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
     return z_dp_local
 
 
-@pytest.mark.parametrize("n_tokens", [16])
-@pytest.mark.parametrize("d_model, n_expts_tot, n_expts_act", [(16, 4, 4)])
-def test_expert_sharding(n_tokens, d_model, n_expts_tot, n_expts_act):
+def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_expts_act):
     torch.manual_seed(0)
-    rank = dist.get_rank()
-    n_shards = dist.get_world_size()
+
     dev = torch.cuda.current_device()
+    n_shards = world_size
+
     expt_dict = make_expt_dict_random(n_shards, n_expts_tot)
     expt_assignment = make_expt_assignment(n_shards, n_expts_tot, expt_dict, device=dev)
     # reference data
@@ -87,8 +111,34 @@ def test_expert_sharding(n_tokens, d_model, n_expts_tot, n_expts_act):
     l_dp_local = l_global[first_token_indx:last_token_indx, :]
     # routing
     y_global_ref = mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act)
-    y_dp_local_tri = mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, expt_assignment,
-                                               n_expts_act)
+    y_dp_local_tri = mixture_of_expt_epsharded(
+        x_dp_local,
+        l_dp_local,
+        w_ep_local,
+        b_ep_local,
+        expt_assignment,
+        n_expts_act,
+    )
     y_global_tri = torch.empty_like(y_global_ref)
     dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
     triton.testing.assert_close(y_global_ref, y_global_tri)
+
+
+@pytest.mark.parametrize("distributed_launcher", [2, 4], indirect=True)
+@pytest.mark.parametrize("n_tokens", [16, 128, 4096])
+@pytest.mark.parametrize("d_model, n_expts_tot, n_expts_act", [(16, 4, 4), (5760, 128, 4)])
+def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n_expts_act):
+    if is_hip():
+        pytest.skip("Distributed test is not supported on AMD GPU")
+    if n_tokens < distributed_launcher.world_size:
+        raise ValueError("n_tokens must be >= number of gpus")
+    if n_tokens % distributed_launcher.world_size != 0:
+        raise ValueError("n_tokens must be divisible by number of gpus")
+
+    distributed_launcher(
+        _run_expert_sharding,
+        n_tokens=n_tokens,
+        d_model=d_model,
+        n_expts_tot=n_expts_tot,
+        n_expts_act=n_expts_act,
+    )
