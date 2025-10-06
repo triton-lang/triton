@@ -2805,6 +2805,7 @@ def map_elementwise(
     builder = _semantic.builder
     block = builder.new_block()
     scalar_args = []
+    original_loc = builder.get_loc()
     for i, ty in enumerate(in_scalar_tys):
         for j in builtins.range(pack):
             block.add_argument(ty.to_ir(builder))
@@ -2832,6 +2833,7 @@ def map_elementwise(
         region = elementwise_op.get_region(0)
         region.push_back(block)
 
+    builder.set_loc(original_loc)
     result = _semantic.map_elementwise(args, scalar_result_types, pack, make_elementwise_region)
     return result[0] if is_single else result
 
