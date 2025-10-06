@@ -5,18 +5,25 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Tuple, Optional
+from typing import Tuple
 
 import triton
 import triton.language as tl
 import triton_kernels
 import triton_kernels.routing
 import triton_kernels.swiglu
-from triton_kernels.routing import (RoutingData, GatherIndx, ScatterIndx, compute_expt_data_torch, topk_torch,
-                                    routing_from_bitmatrix, filter_expt_data, make_expt_assignment, ExptAssignment)
-from triton_kernels.distributed import (convert_dp_to_ep, convert_ep_to_dp)
+from triton_kernels.routing import (
+    RoutingData,
+    GatherIndx,
+    ScatterIndx,
+    compute_expt_data_torch,
+    topk_torch,
+    prune_routing,
+    routing_from_bitmatrix,
+)
 from triton_kernels.topk import topk
-from triton_kernels.matmul_ogs import matmul_ogs, reduce_grouped, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
+from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
+from triton_kernels.routing_details._routing_compute import _routing_clear_bitmatrix
 from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor import Bitmatrix
@@ -26,11 +33,8 @@ from bench_utils import quantize_weight
 
 @dataclass
 class ReduceScatterMetadata:
-    backend: str = ""
-    input_split_sizes: Optional[list[int]] = None
-    ep_indx: Optional[torch.Tensor] = None
-    gather_indx: Optional[GatherIndx] = None  # use in ep_sharded
-    scatter_indx: Optional[ScatterIndx] = None  # use in ep_sharded
+    input_split_sizes: list[int]
+    ep_indx: torch.Tensor
     EP: int = 1
     TP: int = 1
 
@@ -61,7 +65,7 @@ def cleanup():
         pass
 
 
-def broadcast(x: torch.Tensor, src: int = 0, groups: Optional[list] = None, group_idx: int = 0) -> torch.Tensor:
+def broadcast(x: torch.Tensor, src: int = 0, groups: list = None, group_idx: int = None) -> torch.Tensor:
     if _is_distributed_launch():
         group = None
         if groups:
@@ -86,9 +90,7 @@ def all_gather(x: torch.Tensor, dim=0) -> torch.Tensor:
 
 def reduce_scatter(
     input_tensor: torch.Tensor,
-    n_expts_act: int,
-    expt_assignment: Optional[ExptAssignment] = None,
-    metadata: Optional[ReduceScatterMetadata] = None,
+    metadata: ReduceScatterMetadata = None,
     dim: int = 0,
     op: dist.ReduceOp.RedOpType = dist.ReduceOp.SUM,
 ) -> torch.Tensor:
@@ -104,7 +106,7 @@ def reduce_scatter(
         world_size = dist.get_world_size()
         original_dtype = input_tensor.dtype
         intermediate_dtype = dtype_cast(original_dtype)
-        if metadata and (metadata.backend == "torch" or metadata.backend == "triton"):  # torch or triton routing
+        if metadata and metadata.input_split_sizes:
             assert dim == 0, "metadata only works with dim=0"
             input_list = list(input_tensor.split(metadata.input_split_sizes, dim=0))
             output_list = all_to_all(input_list, dim=0)
@@ -119,11 +121,6 @@ def reduce_scatter(
                 else:
                     raise NotImplementedError(f"Reduce operation {op} is not implemented.")
             return output_tensor.to(original_dtype)
-        elif metadata and metadata.backend == "triton_ep_sharded":  # ep sharded
-            assert metadata.gather_indx is not None and metadata.scatter_indx is not None
-            output = convert_ep_to_dp(input_tensor, expt_assignment, metadata.ep_indx, metadata.gather_indx.src_indx)
-            output = reduce_grouped(output, contig_group_size=n_expts_act)[0].squeeze(0)
-            return output
         else:
             input_list = list(input_tensor.chunk(world_size, dim=dim))
             shape = input_list[0].shape
@@ -253,55 +250,18 @@ def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows
     scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
     n_gates = mask.sum().item()
     expt_data = compute_expt_data_torch(hist, chunk_size, n_gates)
-    routing_data = RoutingData(gate_scal, hist, chunk_size, n_expts_act, expt_data=expt_data),
-    metadata = ReduceScatterMetadata(backend="torch", input_split_sizes=output_split_sizes, ep_indx=ep_indx,
-                                     gather_indx=gather_indx, scatter_indx=scatter_indx, EP=EP, TP=TP),
 
-    return (x, routing_data, metadata)
-
-
-@triton.jit
-def _routing_clear_bitmatrix(Bitmatrix, stride_bm, stride_bn, shape_bn, cutoff, BLOCK_N: tl.constexpr):
-    pid_m = tl.program_id(0)
-    cutoff_word = cutoff // 32
-    cutoff_bit = cutoff % 32
-    cutoff_mask = (1 << (cutoff_bit)) - 1
-    for start_n in range(0, shape_bn, BLOCK_N):
-        offs_n = start_n + tl.arange(0, BLOCK_N)
-        values = tl.load(Bitmatrix + pid_m * stride_bm + offs_n * stride_bn, mask=offs_n < shape_bn)
-        values = tl.where(offs_n == cutoff_word, values & cutoff_mask, values)
-        values = tl.where(offs_n > cutoff_word, 0, values)
-        tl.store(Bitmatrix + pid_m * stride_bm + offs_n * stride_bn, values, mask=offs_n < shape_bn)
-
-
-class PruneRouting(torch.autograd.Function):
-
-    @staticmethod
-    def forward(ctx, expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep):
-        from triton_kernels.compaction import compaction
-        n_tokens_pad = expt_scal.shape[0]
-        assert n_expts_tot % simulated_ep == 0
-        _routing_clear_bitmatrix[(n_tokens_pad, )](
-            bitmatrix.storage.data,
-            bitmatrix.storage.data.stride(0),
-            bitmatrix.storage.data.stride(1),
-            bitmatrix.storage.data.shape[1],
-            n_expts_tot // simulated_ep,
-            BLOCK_N=512,
-        )
-        # perform compaction to update expt_scal / expt_indx
-        expt_scal, expt_indx = compaction(expt_scal, expt_indx, bitmatrix)
-        n_expts_tot = n_expts_tot // simulated_ep
-        bitmatrix.shape[-1] = n_expts_tot
-        return expt_scal, expt_indx, bitmatrix
-
-
-def prune_routing(expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep):
-    return PruneRouting.apply(expt_scal, expt_indx, bitmatrix, n_expts_tot, simulated_ep)
+    return (
+        x,
+        RoutingData(gate_scal, hist, chunk_size, n_expts_act, expt_data=expt_data),
+        gather_indx,
+        scatter_indx,
+        ReduceScatterMetadata(input_split_sizes=output_split_sizes, ep_indx=ep_indx, EP=EP, TP=TP),
+    )
 
 
 @triton.jit
-def _pack_bitmatrix(
+def pack_bitmatrix(
     bitmatrix,
     expt_indx,
     n_rows,
@@ -357,7 +317,7 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     bitmatrix = torch.zeros((n_rows, n_cols), dtype=torch.uint32, device=expt_indx.device)
     grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), )
 
-    _pack_bitmatrix[grid](
+    pack_bitmatrix[grid](
         bitmatrix,
         expt_indx,
         n_rows,
@@ -373,58 +333,28 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmatrix, n_expts_tot, EP)
     routing_data, gather_indx, scatter_indx = routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx, n_expts_tot // EP,
                                                                      n_expts_act)
-    metadata = ReduceScatterMetadata(backend="triton", input_split_sizes=output_split_sizes, ep_indx=ep_indx,
-                                     gather_indx=gather_indx, scatter_indx=scatter_indx, EP=EP, TP=TP)
 
     return (
         x,
         routing_data,
-        metadata,
+        gather_indx,
+        scatter_indx,
+        ReduceScatterMetadata(input_split_sizes=output_split_sizes, ep_indx=ep_indx, EP=EP, TP=TP),
     )
 
 
-def routing_triton_ep_sharded(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, expt_assignment=None,
-                              EP=1, TP=1):
-    rank = dist.get_rank()
-    routing_data, gather_indx, scatter_indx, expt_indx = triton_kernels.routing.routing(
-        logits, n_expts_act, sm_first=sm_first, expt_indx=None, all_gather=True, n_rows=n_rows)
-    x = convert_dp_to_ep(x, expt_assignment, expt_indx, scatter_indx.src_indx)
-    expt_data = filter_expt_data(routing_data.expt_data, expt_assignment, rank)
-    routing_data = RoutingData(
-        gate_scal=routing_data.gate_scal,
-        expt_hist=expt_data.hist,
-        n_expts_tot=expt_assignment.n_expts_per_shard[rank],
-        n_expts_act=routing_data.n_expts_act,
-        expt_data=expt_data,
-    )
-    metadata = ReduceScatterMetadata(input_split_sizes=None, ep_indx=expt_indx, gather_indx=gather_indx,
-                                     scatter_indx=scatter_indx, EP=EP, TP=TP)
-
-    return (
-        x,
-        routing_data,
-        metadata,
-    )
-
-
-def routing(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, expt_assignment=None, EP=1, TP=1,
-            backend="triton_ep_sharded") -> Tuple[torch.Tensor, RoutingData, ReduceScatterMetadata]:
+def routing(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None, EP=1, TP=1,
+            backend="triton") -> Tuple[RoutingData, GatherIndx, ScatterIndx, ReduceScatterMetadata]:
     if _is_distributed_launch():
-        assert backend in ["torch", "triton", "triton_ep_sharded"], "backend must be either 'torch' or 'triton'"
+        assert backend in ["torch", "triton"], "backend must be either 'torch' or 'triton'"
         if backend == "torch":
             return routing_torch(x, logits, n_expts_act, sm_first, expt_indx, n_rows, EP, TP)
         elif backend == "triton":
             return routing_triton(x, logits, n_expts_act, sm_first, expt_indx, n_rows, EP, TP)
-        elif backend == "triton_ep_sharded":
-            return routing_triton_ep_sharded(x, logits, n_expts_act, sm_first, expt_indx, n_rows, expt_assignment, EP,
-                                             TP)
         else:
             raise ValueError(f"Unknown backend: {backend}")
     else:
-        routing_data, gather_indx, scatter_indx, expt_indx = triton_kernels.routing.routing(
-            logits, n_expts_act, sm_first, expt_indx, EP, n_rows)
-        return x, routing_data, ReduceScatterMetadata(backend="none", input_split_sizes=None, ep_indx=None,
-                                                      gather_indx=gather_indx, scatter_indx=scatter_indx, EP=1, TP=1)
+        return x, *triton_kernels.routing.routing(logits, n_expts_act, sm_first, expt_indx, EP, n_rows), None
 
 
 # The following dummy methods simulate the behavior of distributed operations
@@ -561,7 +491,7 @@ def test_pack_bitmatrix():
     BLOCK_SIZE_K = 32
     grid = (triton.cdiv(n_rows, BLOCK_SIZE_M), )
 
-    _pack_bitmatrix[grid](
+    pack_bitmatrix[grid](
         bitmatrix,
         expt_indx,
         n_rows,
@@ -696,19 +626,12 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     xd = torch.randn((batch // world_size, dim1), device=dev).to(dtype_map[x_dtype])
     x0 = all_gather(xd, dim=0)
 
-    # create a balanced expt_dict
-    expt_dict = {}
-    for i in range(TP):
-        for j in range(EP):
-            expt_dict[j] = list(range(j * n_expts_tot // EP, (j + 1) * n_expts_tot // EP))
-    expt_assignment = make_expt_assignment(EP, n_expts_tot, expt_dict, device=dev)
-
     # single-GPU pass
     def single(x):
         xg = x.to(wg.dtype if n_expts_tot > 1 else x.dtype)
         if n_expts_tot > 1:
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            rdata, gi, si, _ = triton_kernels.routing.routing(logits, n_expts_act)
+            rdata, gi, si = triton_kernels.routing.routing(logits, n_expts_act)
         else:
             rdata = gi = si = None
         x = matmul_ogs(x, w1_full, b1_full, rdata, gather_indx=gi, precision_config=pc1_full, fused_activation=act)
@@ -719,16 +642,13 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
         xg = x.to(wg.dtype if n_expts_tot > 1 else x.dtype)
         if n_expts_tot > 1:  # sparse
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            x, rdata, metadata = routing(x, logits, n_expts_act, expt_assignment=expt_assignment, EP=EP, TP=TP)
+            x, rdata, gi, si, metadata = routing(x, logits, n_expts_act, EP=EP, TP=TP)
         else:  # dense
             x = all_gather(x, dim=0)
-            rdata = None
-            metadata = ReduceScatterMetadata(input_split_sizes=None, ep_indx=None, gather_indx=None, scatter_indx=None,
-                                             EP=EP, TP=TP)
-        x = matmul_ogs(x, w1, b1, rdata, gather_indx=metadata.gather_indx, precision_config=pc1, fused_activation=act)
-        x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=metadata.scatter_indx,
-                       precision_config=pc2)
-        x = reduce_scatter(x, n_expts_act, expt_assignment=expt_assignment, metadata=metadata, dim=0)
+            rdata = gi = si = metadata = None
+        x = matmul_ogs(x, w1, b1, rdata, gather_indx=gi, precision_config=pc1, fused_activation=act)
+        x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=si, precision_config=pc2)
+        x = reduce_scatter(x, metadata=metadata, dim=0)
         # gather the result from all GPUs, just for verification
         return all_gather(x, dim=0)
 

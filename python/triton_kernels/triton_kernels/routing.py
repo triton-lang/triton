@@ -39,12 +39,12 @@ class ExptData:
     # token_offs_raw[i] is the offset of the first token routed
     # to expert i in an expert-sorted array
     token_offs_raw: torch.Tensor
-    # token_offs_pad_data[:, i] is the offset of the first token routed
+    # token_offs_pad_data[j, i] is the offset of the first token routed
     # to expert i in an expert-sorted array, assuming histogram
-    # rounded to the next multiple of `block = 16 * i`
+    # rounded to the next multiple of `BLOCK_M=16*j`
     token_offs_pad_data: torch.Tensor
     # block_id_map_data[i] contain one value for each `pid` launched by
-    # the matrix multiplication kernel launched with BLOCK_M=i*16:
+    # the matrix multiplication kernel launched with `BLOCK_M=i*16`:
     # - the value is -1 if the `pid` has no work to do
     # - otherwise, the value is two int16 (packed as an int32) that
     #   correspond respectively to (1) the expert assigned to

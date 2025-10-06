@@ -7,7 +7,6 @@ import argparse
 import triton_kernels
 import triton_kernels.roofline as roofline
 import triton_kernels.swiglu
-from triton_kernels.routing import make_expt_assignment
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.target_info import get_cdna_version
 import distributed as triton_dist
@@ -70,14 +69,6 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
         x_dtype = torch.float8_e4m3fnuz
 
     input_x = torch.randn((batch // DP, dim1), device=dev)
-
-    # create a balanced expt_dict
-    expt_dict = {}
-    for i in range(TP):
-        for j in range(EP):
-            expt_dict[j] = list(range(j * n_expts_tot // EP, (j + 1) * n_expts_tot // EP))
-    expt_assignment = make_expt_assignment(EP, n_expts_tot, expt_dict, device=dev)
-
     # run layer
     fpath = Path(tempfile.mktemp())
     proton.start(str(fpath), hook="triton")
@@ -86,19 +77,16 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     for i in range(100):
         if n_expts_tot > 1:  # sparse
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            x, rdata, metadata = triton_dist.routing(input_x, logits, n_expts_act, expt_assignment=expt_assignment,
-                                                     EP=EP, TP=TP)
+            x, rdata, gather_indx, scatter_indx, metadata = triton_dist.routing(input_x, logits, n_expts_act, EP=EP,
+                                                                                TP=TP)
         else:  # dense
             x = triton_dist.all_gather(input_x, dim=0)
-            rdata = None
-            metadata = triton_dist.ReduceScatterMetadata(input_split_sizes=None, ep_indx=None, gather_indx=None,
-                                                         scatter_indx=None, EP=EP, TP=TP)
+            rdata, gather_indx, scatter_indx, metadata = None, None, None, None
         if x.nelement() > 0:
-            x = matmul_ogs(x, w1, b1, rdata, gather_indx=metadata.gather_indx, precision_config=pc1,
-                           fused_activation=act)
-            x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=metadata.scatter_indx,
+            x = matmul_ogs(x, w1, b1, rdata, gather_indx=gather_indx, precision_config=pc1, fused_activation=act)
+            x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=scatter_indx,
                            precision_config=pc2)
-        x = triton_dist.reduce_scatter(x, n_expts_act, expt_assignment=expt_assignment, metadata=metadata, dim=0)
+        x = triton_dist.reduce_scatter(x, metadata=metadata, dim=0)
     proton.finalize()
     return roofline.parse_profile(fpath.with_suffix(".hatchet"), useful_op_regex=".*matmul.*")
 
