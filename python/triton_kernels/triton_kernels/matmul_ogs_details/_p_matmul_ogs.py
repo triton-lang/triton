@@ -311,7 +311,8 @@ def _p_matmul_ogs(
                         mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
                     else:
                         mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
-                    x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :], other=0.0)
+                    mask_m = off_m + tl.arange(0, BLOCK_M) < eM
+                    x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
                 elif x_format == "fp16" or x_format == "bf16":
                     x_scales: tl.constexpr = None
                 else:
@@ -525,7 +526,6 @@ def _p_matmul_ogs(
                     offs_y_m = (offs_y_m.to(tl.uint32, bitcast=True) & 0x7FFFFFFF).to(tl.int32, bitcast=True)
                     Y.scatter(out, offs_y_m, out_off_n)
                 elif Y_TMA_MODE == "dense":
-                    tl.device_print("dense tma")
                     out = tl.reshape(out, [1] + out.shape)
                     off_kz = pid_k * batch_size + start_z1
                     Y.store([off_kz, off_m1, out_off_n], out)

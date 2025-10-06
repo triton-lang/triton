@@ -509,10 +509,6 @@ def warp_specialize(default_args, default_partition, worker_args, worker_partiti
     """
     worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
     worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
-    if not isinstance(default_args, tuple):
-        default_args = (default_args, )
-    if not isinstance(worker_args, tuple):
-        worker_args = (worker_args, )
     return _semantic.warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps,
                                      worker_num_regs, _generator)
 

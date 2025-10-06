@@ -528,32 +528,6 @@ Value emitPadding(Location loc, RewriterBase &rewriter,
                   triton::gpu::PaddedSharedEncodingAttr layout,
                   unsigned bitwidth, Value smemOffset, bool offsetInBytes);
 
-// Emits IR to load data from shared memory into registers, or to store data
-// from registers into shared memory.
-//
-// You supply perVectorCallback, which is called once per group of register
-// elements to transfer.  You can use this callback to emit IR to load or store
-// data from or to shared memory.
-//
-// elemLlvmTy should be dstTy's element type converted to an LLVM-dialect type.
-//
-// If maxVecElems is provided, we won't vectorize more than this many elements.
-//
-// Returns true on success.
-[[nodiscard]] bool emitTransferBetweenRegistersAndShared(
-    RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
-    Type elemLlvmTy, std::optional<int32_t> maxVecElems,
-    const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
-    const TargetInfoBase &target,
-    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
-
-[[nodiscard]] bool emitTransferBetweenRegistersAndShared(
-    LinearLayout &regLayout, triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
-    std::optional<int32_t> maxVecElems, const SharedMemoryObject &smemObj,
-    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
-    Value laneId, Value warpId,
-    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
-
 // Close cousin of lowerLdStMatrix in MemoryOpToLLVM.cpp
 // We might want to merge them at some point, but having to support
 // ldmatrix.trans makes the code in lowerLdStMatrix a bit specific
