@@ -16,6 +16,8 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include "mlir/Tools/Plugins/PassPlugin.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace py = pybind11;
 
@@ -94,6 +96,46 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUCoalesceAsyncCopy);
   ADD_PASS_WRAPPER_0("add_concurrency_sanitizer",
                      createTritonInstrumentConcurrencySanitizer);
+m.def("add_concurrency_sanitizer_plugin", [](mlir ::PassManager &pm, ModuleOp &mod) {
+    std::string filename =
+      mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+
+  std::string error;
+  auto library =
+      llvm::sys::DynamicLibrary::getPermanentLibrary(filename.c_str(), &error);
+
+  if(!library.isValid()) {
+    llvm::errs() << "Failed to load plugin library: " << error << "\n";
+    throw std::runtime_error("Failed to load plugin library");
+  }
+
+  intptr_t getDetailsFn =
+      (intptr_t)library.getAddressOfSymbol("addTritonPluginPass");
+
+  if (!getDetailsFn) {
+    llvm::errs() << "Failed to get symbol: " << error << "\n";
+    throw std::runtime_error("Failed to get symbol");
+  }
+
+  // void (*createPluginPass)(mlir ::PassManager &pm, ModuleOp &mod) = reinterpret_cast<void (*)(mlir ::PassManager &, ModuleOp &)>(getDetailsFn);
+  std::function<void(mlir::PassManager *, ModuleOp *)> createPluginPass =
+      reinterpret_cast<void (*)(mlir::PassManager *, ModuleOp *)>(getDetailsFn);
+
+    llvm::errs() << "Outside dynamic library\n";
+    llvm::errs() << mod->getName() << "\n";
+    // llvm::errs() << mod->isRegistered() << "\n";
+    llvm::errs() << sizeof(mod) << "\n";
+    llvm::errs() << typeid(mod).name() << "\n";
+    // llvm::errs() << "ModuleOp address: " << mod->getAsOpaquePointer() << "\n";
+    mlir::ModuleOp op = mlir::ModuleOp::getFromOpaquePointer(mod);
+    llvm::errs() << "ModuleOp address: " << op.getAsOpaquePointer() << "\n";
+    llvm::errs() << "typeid(mod): " << (void*)&typeid(mlir::ModuleOp) << "\n";
+    llvm::errs() << "typeid(mlir::Attribute): " << (void*)&typeid(mlir::Attribute) << "\n";
+    // llvm::errs() << mod << "\n";
+    createPluginPass(&pm, &op);
+  });
+
+
 }
 
 void init_plugin_passes(py::module &&m) {
