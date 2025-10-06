@@ -308,9 +308,10 @@ def _filter_expt_data(expt_hist_out, expt_hist_inp, token_offs_raw_out, token_of
                 BLOCK=BLOCK)
     _compaction(token_offs_raw_out, _compact_expt_id, (token_offs_raw_inp, expt_filter, n_expts_tot), -1,
                 n_expts_tot + 1, BLOCK=BLOCK)
-    compacted_tile_count = _compaction(token_offs_pad_out, _compact_expt_id, (token_offs_pad_inp, expt_filter, n_expts_tot), -1, n_expts_tot + 1, BLOCK=BLOCK)
-    compacted_block_count = _compaction(block_pid_map_out, _compact_block_id_map, (block_pid_map_inp, expt_map, expt_filter, n_blocks), -1,
-                n_blocks, BLOCK=BLOCK)
+    compacted_tile_count = _compaction(token_offs_pad_out, _compact_expt_id,
+                                       (token_offs_pad_inp, expt_filter, n_expts_tot), -1, n_expts_tot + 1, BLOCK=BLOCK)
+    compacted_block_count = _compaction(block_pid_map_out, _compact_block_id_map,
+                                        (block_pid_map_inp, expt_map, expt_filter, n_blocks), -1, n_blocks, BLOCK=BLOCK)
     # Record the total number of tiles in the trailing slot
     tl.store(token_offs_pad_out + compacted_tile_count, compacted_block_count)
 
