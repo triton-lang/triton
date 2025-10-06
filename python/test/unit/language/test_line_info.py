@@ -425,7 +425,9 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
     check_template = inspect.getsource(kernel_basic_while.fn)
     run_filecheck("placeholder", h.asm["ttir"], check_template)
 
+
 def test_map_elementwise_has_lineinfo():
+
     @triton.jit
     def compare(x, y):
         if x < y:
@@ -434,11 +436,11 @@ def test_map_elementwise_has_lineinfo():
 
     @triton.jit
     def kernel(X, Y):
-       # CHECK-NOT: loc(unknown)
-       x = tl.load(X + tl.arange(0, 4))
-       y = tl.load(Y + tl.arange(0, 4))
-       z = tl.map_elementwise(compare, x, y)
-       tl.device_print("", z)
+        # CHECK-NOT: loc(unknown)
+        x = tl.load(X + tl.arange(0, 4))
+        y = tl.load(Y + tl.arange(0, 4))
+        z = tl.map_elementwise(compare, x, y)
+        tl.device_print("", z)
 
     kernel_info = kernel.warmup(torch.float32, torch.float32, grid=(1, ))
     check_template = inspect.getsource(kernel.fn)
