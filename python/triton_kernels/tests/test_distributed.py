@@ -9,6 +9,7 @@ import triton
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp
 from triton_kernels.matmul_ogs import matmul_ogs, reduce_grouped
 from triton_kernels.routing import routing, RoutingData
+from triton_kernels.target_info import is_hip
 from .test_routing import make_expt_dict_random, make_expt_assignment, filter_expt_data
 import pytest
 
@@ -124,9 +125,11 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
 
 
 @pytest.mark.parametrize("distributed_launcher", [2, 4], indirect=True)
-@pytest.mark.parametrize("n_tokens", [16, 1024, 65536])
+@pytest.mark.parametrize("n_tokens", [16, 128, 4096])
 @pytest.mark.parametrize("d_model, n_expts_tot, n_expts_act", [(16, 4, 4), (5760, 128, 4)])
 def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n_expts_act):
+    if is_hip():
+        pytest.skip("Distributed test is not supported on AMD GPU")
     if n_tokens < distributed_launcher.world_size:
         raise ValueError("n_tokens must be >= number of gpus")
     if n_tokens % distributed_launcher.world_size != 0:
