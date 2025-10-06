@@ -96,20 +96,20 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
 
     expt_dict = make_expt_dict_random(n_shards, n_expts_tot)
     expt_assignment = make_expt_assignment(n_shards, n_expts_tot, expt_dict, device=dev)
-
+    # reference data
     n_tokens_global = n_tokens
     x_global = torch.randn(n_tokens_global, d_model, device=dev, dtype=torch.bfloat16)
     l_global = torch.rand(n_tokens_global, n_expts_tot, device=dev, dtype=torch.float32)
     w_global = torch.randn((n_expts_tot, d_model, d_model), device=dev, dtype=torch.bfloat16)
     b_global = torch.randn((n_expts_tot, d_model), device=dev, dtype=torch.float32)
-
+    # initialize data shard
     n_tokens_local = n_tokens_global // n_shards
     first_token_indx, last_token_indx = rank * n_tokens_local, (rank + 1) * n_tokens_local
     w_ep_local = w_global[expt_assignment.expt_boolmask[rank, :], :, :]
     b_ep_local = b_global[expt_assignment.expt_boolmask[rank, :], :]
     x_dp_local = x_global[first_token_indx:last_token_indx, :]
     l_dp_local = l_global[first_token_indx:last_token_indx, :]
-
+    # routing
     y_global_ref = mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act)
     y_dp_local_tri = mixture_of_expt_epsharded(
         x_dp_local,
