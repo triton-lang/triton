@@ -59,8 +59,8 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     "accumulator tensor's layout must be (16, 16, 128)"
 
     # TODO: Add more formats
-    assert a_format.value in {"e2m1"}, f"Unsupported lhs_format: {a_format.value}"
-    assert b_format.value in {"e2m1"}, f"Unsupported rhs_format: {b_format.value}"
+    assert a_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format.value}"
+    assert b_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format.value}"
 
     assert a_scale is not None and b_scale is not None, "Scales must not be None"
 
