@@ -247,17 +247,22 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     }
 
     if (mfmaNonKDim == 32) {
-      // For mfma32 lane groups read 16 contiguous bytes
-      paddingBytes = 16;
-      // Because we load 32 rows we need to place every 16th row into the second
-      // half of banks to spread loads over all banks. This is done by swapping
-      // the bases representing offset 128 (32banks) and the base of the 16th
-      // row which depends on the contigDim
-      int row16Index = contigDim == 32 ? 5 : (contigDim == 64 ? 6 : 7);
-      int upperBankIndex = llvm::Log2_32(128 / elemByteWidth);
+      // For mfma32 32 lanes read 32 continuous rows. So for narrow layouts we
+      // read 8 contiguous bytes and for wide layouts 16 bytes.
+      paddingBytes = useWideLayout ? 16 : 8;
+
+      // For narrow layouts we need to shift every 16th row to the other half of
+      // shared memory banks to read from all banks. For the wide layout we need
+      // to ensure every 16th rows start at the same bank so lane groups access
+      // different banks. This is done by swapping the bases representing offset
+      // 256 (64banks) for wide layouts or 128 (32banks) for narrow layouts with
+      // the base of the "16th" row which is after log2(contigDim) bases.
+      int offsetBytes = useWideLayout ? 256 : 128;
+      int offsetIndex = llvm::Log2_32(offsetBytes);
+      int row16Index = llvm::Log2_32(contigDim);
       assert(row16Index < bases.size());
-      assert(upperBankIndex < bases.size());
-      std::swap(bases[upperBankIndex], bases[row16Index]);
+      assert(offsetIndex < bases.size());
+      std::swap(bases[offsetIndex], bases[row16Index]);
     }
   } else {
     if (mfmaNonKDim == 16) {
