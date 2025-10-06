@@ -266,6 +266,7 @@ struct ConvertTritonAMDGPUToLLVM
       return signalPassFailure();
     }
 
+    AMD::adjustModeRegister(mod, targetInfo);
     fixUpLoopAnnotation(mod);
   }
 
