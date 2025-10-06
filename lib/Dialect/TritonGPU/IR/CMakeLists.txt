@@ -1,3 +1,11 @@
+add_custom_target(TritonGPUIR.Interface
+  DEPENDS
+  TritonGPUTableGen
+  TritonGPUAttrDefsIncGen
+  TritonGPUTypeInterfacesIncGen
+  TritonGPUOpInterfacesIncGen
+)
+
 add_triton_library(TritonGPUIR
   Dialect.cpp
   LinearLayoutConversions.cpp
@@ -6,10 +14,7 @@ add_triton_library(TritonGPUIR
   Types.cpp
 
   DEPENDS
-  TritonGPUTableGen
-  TritonGPUAttrDefsIncGen
-  TritonGPUTypeInterfacesIncGen
-  TritonGPUOpInterfacesIncGen
+  TritonGPUIR.Interface
 
   LINK_LIBS PUBLIC
   MLIRGPUDialect
