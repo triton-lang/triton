@@ -16,6 +16,8 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include "mlir/Tools/Plugins/PassPlugin.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace py = pybind11;
 
