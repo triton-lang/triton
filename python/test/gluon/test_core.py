@@ -229,6 +229,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
                            shape_n, shape_k, fresh_knobs):
 
     # FIXME: Workaround for a bug in PTXAS when the shared layout is transposed and the swizzling is 0
+    # This is fixed in PTXAS 13.0.88. Remove once we upgrade
     if bitwidth == 16 and ((transpose_a and swizzling_a == 0 and shape_m > 1) or
                            (not transpose_b and swizzling_b == 0 and shape_n > 1)):
         fresh_knobs.nvidia.disable_ptxas_opt = True
