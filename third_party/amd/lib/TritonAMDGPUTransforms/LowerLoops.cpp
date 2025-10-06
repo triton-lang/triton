@@ -153,10 +153,9 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
       tempAttr = cast<ttg::SharedEncodingTrait>(memDesc.getEncoding());
       // If the immediate user is ttg::LocalAllocOp, likely it's created in
       // TritonAMDGPUOptimizeDotOperands. We should just respect it.
-      if (!getSharedEncIfAllUsersAreDotEnc(user, axisInfoAnalysis, targetInfo,
-                                           useAsyncCopy)
-               .has_value() &&
-          !isa<ttg::LocalAllocOp>(user)) {
+      if (!isa<ttg::LocalAllocOp>(user) &&
+          !getSharedEncIfAllUsersAreDotEnc(user, axisInfoAnalysis, targetInfo,
+                                           useAsyncCopy)) {
         return std::nullopt;
       }
       LDBG("Deduced shared encoding candidate from memDesc: " << tempAttr);
@@ -196,11 +195,9 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
           canUseAsyncCopy = canBeConvertedToAsyncLoad(
               2, cast<tt::LoadOp>(loadOp), {}, axisInfoAnalysis, targetInfo);
         }
-        if (auto maybePadded =
-                composePaddedLayout(targetInfo, dotOpEnc, srcTy, order,
-                                    sharedOrder, bitWidth, canUseAsyncCopy)) {
-          tempAttr = *maybePadded;
-        } else {
+        tempAttr = composePaddedLayout(targetInfo, dotOpEnc, srcTy, sharedOrder,
+                                       canUseAsyncCopy);
+        if (!tempAttr) {
           tempAttr = ttg::SwizzledSharedEncodingAttr::get(
               loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
               ctaLayout, bitWidth, /*needTrans=*/false);
@@ -242,14 +239,16 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
   // TODO add support for padded layouts. Right now they will use a separate
   // allocation
   for (auto sharedEnc : llvm::drop_begin(sharedEncs, 1)) {
-    if (!equalSharedEncIgnoreVec(
-            dyn_cast<ttg::SwizzledSharedEncodingAttr>(sharedEnc),
-            dyn_cast<ttg::SwizzledSharedEncodingAttr>(maxVecSharedEnc))) {
+    auto maybeSwizzShared =
+        dyn_cast<ttg::SwizzledSharedEncodingAttr>(sharedEnc);
+    auto maybeSwizzMaxVec =
+        dyn_cast<ttg::SwizzledSharedEncodingAttr>(maxVecSharedEnc);
+
+    if (!equalSharedEncIgnoreVec(maybeSwizzShared, maybeSwizzMaxVec)) {
       LDBG("Incompatible shared encodings");
       return std::nullopt;
     }
-    if (cast<ttg::SwizzledSharedEncodingAttr>(sharedEnc).getVec() >
-        cast<ttg::SwizzledSharedEncodingAttr>(maxVecSharedEnc).getVec()) {
+    if (maybeSwizzShared.getVec() > maybeSwizzMaxVec.getVec()) {
       maxVecSharedEnc = sharedEnc;
     }
   }

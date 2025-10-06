@@ -20,11 +20,10 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
 
 // Returns a padded shared encoding minimizing bank conflicts for the given
 // tensor and dot encoding.
-std::optional<triton::gpu::PaddedSharedEncodingAttr>
+triton::gpu::PaddedSharedEncodingAttr
 composePaddedLayout(const triton::AMD::TargetInfo &targetInfo,
                     triton::gpu::DotOperandEncodingAttr dotOpEnc,
                     triton::gpu::TensorOrMemDesc srcTy,
-                    ArrayRef<unsigned> order, ArrayRef<unsigned> sharedOrder,
-                    unsigned bitWidth, bool useAsyncCopy);
+                    ArrayRef<unsigned> sharedOrder, bool useAsyncCopy);
 
 #endif
