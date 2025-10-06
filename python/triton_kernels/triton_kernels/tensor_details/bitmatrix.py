@@ -147,7 +147,8 @@ def make_bitmatrix_metadata(nonzero_indx, bitmatrix):
 def make_bitmatrix_metadata_torch(nonzero_indx, bitmatrix):
     n_batches = bitmatrix.shape[1]
     nonzero_indx = nonzero_indx.reshape(-1).to(torch.int32)
-    col_sorted_indx = torch.argsort(nonzero_indx, stable=True).int()
-    row_sorted_indx = torch.argsort(col_sorted_indx, stable=True).int()
+    pad = lambda x, total_size: torch.cat((x, torch.full((total_size - x.shape[0], ), -1, device=x.device)))
+    col_sorted_indx = pad(torch.argsort(nonzero_indx[nonzero_indx != -1], stable=True), nonzero_indx.numel())
+    row_sorted_indx = pad(torch.argsort(col_sorted_indx[col_sorted_indx != -1], stable=True), nonzero_indx.numel())
     col_sum = torch.histc(nonzero_indx, bins=n_batches, max=n_batches - 1).int()
     return BitmatrixMetadata(col_sum, col_sorted_indx, row_sorted_indx)

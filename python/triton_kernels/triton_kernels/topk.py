@@ -3,7 +3,7 @@ import triton
 from triton_kernels.topk_details._topk_forward import _topk_forward
 from triton_kernels.topk_details._topk_backward import _topk_backward
 from triton_kernels.tensor import SparseMatrix, Tensor
-from triton_kernels.tensor import Bitmatrix, BIT, make_bitmatrix_metadata
+from triton_kernels.tensor import Bitmatrix, BIT, make_bitmatrix_metadata, make_bitmatrix_metadata_torch
 from typing import Optional, Union
 
 
@@ -124,22 +124,33 @@ def topk_torch(
     apply_softmax: bool = True,
     dim: int = 1,
     y_indx: Optional[torch.Tensor] = None,
+    n_rows: Optional[int] = None,
 ) -> SparseMatrix:
+    if n_rows is None:
+        n_rows = x.shape[0]
+    has_user_provided_indx = y_indx is not None
     cdiv = lambda a, b: (a + b - 1) // b
     device = x.device
     assert dim == 1
     assert not isinstance(x, Tensor)
-    if y_indx is None:
+    if not has_user_provided_indx:
         y_indx = torch.argsort(-x, dim=1, stable=True)[:, :k]
     y_indx = y_indx.long()
-    y_vals = torch.take_along_dim(x, y_indx, dim=1)
+    y_vals = torch.take_along_dim(x[:n_rows, :], y_indx[:n_rows, :], dim=1)
+    y_vals = torch.cat([y_vals, x[n_rows:, :k]], dim=0)
     y_indx = y_indx.int()
     # compute bitmatrix
-    n_rows, n_cols = x.shape
+    _, n_cols = x.shape
     bitmatrix_data = torch.zeros((cdiv(n_cols, 32), cdiv(x.shape[0], 32) * 32), dtype=torch.int32, device=device)
     bitmatrix_data = torch.transpose(bitmatrix_data, 0, 1)[:x.shape[0]]
     # fill bitmatrix
-    rows = torch.arange(n_rows, device=device).unsqueeze(1).expand(-1, y_indx.shape[1]).reshape(-1)
+    if apply_softmax:
+        y_vals = torch.softmax(y_vals.float(), dim=-1).to(x.dtype)
+    if not has_user_provided_indx:
+        y_indx, sort_indices = torch.sort(y_indx, dim=1)
+        y_vals = torch.gather(y_vals, 1, sort_indices)
+    y_indx[n_rows:, :] = -1
+    rows = torch.arange(x.shape[0], device=device).unsqueeze(1).expand(-1, y_indx.shape[1]).reshape(-1)
     cols = y_indx.reshape(-1)  # 64-bit safe for div/mod
     word_idx = torch.div(cols, 32, rounding_mode='floor')
     bit_idx = cols % 32
@@ -147,6 +158,5 @@ def topk_torch(
     bitmatrix_data.index_put_((rows, word_idx), masks, accumulate=True)
     bitmatrix_data = bitmatrix_data.view(torch.uint32)
     bitmatrix = Bitmatrix(bitmatrix_data, shape=x.shape, dtype=BIT)
-    if apply_softmax:
-        y_vals = torch.softmax(y_vals.float(), dim=-1).to(x.dtype)
+    bitmatrix.metadata = make_bitmatrix_metadata_torch(y_indx, bitmatrix)
     return SparseMatrix(vals=y_vals, indx=y_indx, mask=bitmatrix)
