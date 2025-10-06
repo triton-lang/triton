@@ -200,7 +200,12 @@ def test_warpgroup_mma(ASYNC):
 @pytest.mark.parametrize("swizzling_a, swizzling_b", product([0, 32, 64, 128], repeat=2))
 @pytest.mark.parametrize("shape_m, shape_n, shape_k", [(1, 1, 1), (2, 4, 1), (2, 2, 4)])
 def test_warpgroup_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b,
-                                     shape_m, shape_n, shape_k):
+                                     shape_m, shape_n, shape_k, fresh_knobs):
+
+    # FIXME: Workaround for a bug in PTXAS when the shared layout is transposed and the swizzling is 0
+    if bitwidth == 16 and ((transpose_a and swizzling_a == 0 and shape_m > 1) or
+                           (not transpose_b and swizzling_b == 0 and shape_n > 1)):
+        fresh_knobs.nvidia.disable_ptxas_opt = True
 
     torch_dtype_map = {
         8: torch.float8_e4m3fn,
