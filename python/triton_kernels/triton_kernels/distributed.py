@@ -33,7 +33,7 @@ def _convert_dp_to_ep(
     offs_r = tl.arange(0, N_RANKS)
     expt_filter_ptr_rows = expt_filter_ptr + offs_r[:, None] * expt_filter_stride_m
     expt_filter = (tl.load(expt_filter_ptr_rows + (expt_indx // 32)[None, :]) >> (expt_indx % 32)) & 1
-    expt_rank = tl.sum(offs_r[:, None] * expt_filter, axis=0) > 0
+    expt_rank = tl.sum(offs_r[:, None] * expt_filter, axis=0)
     # load dst indxs
     dst_row_indx = tl.load(dst_row_indx_ptr + off_m_global*dst_row_indx_stride_m + offs_e)
     # set src and d
@@ -75,7 +75,6 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_local,)
-    hdl.barrier(channel=0)
     _convert_dp_to_ep[grid](
         peer_dst_ptrs, dst_local.stride(0),
         src, src.stride(0), src.shape[1],
@@ -87,7 +86,6 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
         N_RANKS=n_ranks,
         BLOCK=BLOCK,
     )
-    torch.cuda.synchronize()
     hdl.barrier(channel=0)
     return dst_local
 
