@@ -1,3 +1,4 @@
+import inspect
 import subprocess
 import tempfile
 
@@ -7,6 +8,7 @@ import torch
 import triton
 import triton.language as tl
 from triton._internal_testing import is_interpreter
+from triton._filecheck import run_filecheck
 
 
 @triton.jit
@@ -254,8 +256,6 @@ def test_line_info_ir_source(monkeypatch, status, tmp_path):
 
 
 def test_use_name_loc_as_prefix(fresh_triton_cache):
-    import inspect
-    from triton._filecheck import run_filecheck
 
     @triton.jit
     def kernel_basic(src, N, BLOCK_SIZE: tl.constexpr):
@@ -424,3 +424,22 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
     h = triton.compile(triton.compiler.ASTSource(fn=kernel_basic_while, signature={"N": "i32"}, constexprs={}))
     check_template = inspect.getsource(kernel_basic_while.fn)
     run_filecheck("placeholder", h.asm["ttir"], check_template)
+
+def test_map_elementwise_has_lineinfo():
+    @triton.jit
+    def compare(x, y):
+        if x < y:
+            return x
+        return y
+
+    @triton.jit
+    def kernel(X, Y):
+       # CHECK-NOT: loc(unknown)
+       x = tl.load(X + tl.arange(0, 4))
+       y = tl.load(Y + tl.arange(0, 4))
+       z = tl.map_elementwise(compare, x, y)
+       tl.device_print("", z)
+
+    kernel_info = kernel.warmup(torch.float32, torch.float32, grid=(1, ))
+    check_template = inspect.getsource(kernel.fn)
+    run_filecheck("test", kernel_info.asm["ttir"], check_template)

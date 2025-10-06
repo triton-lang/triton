@@ -2808,7 +2808,7 @@ def map_elementwise(
     original_loc = builder.get_loc()
     for i, ty in enumerate(in_scalar_tys):
         for j in builtins.range(pack):
-            block.add_argument(ty.to_ir(builder))
+            block.add_argument_at(ty.to_ir(builder), original_loc)
             scalar_args.append(tensor(block.arg(i * pack + j), ty))
 
     with _insertion_guard(builder):
@@ -2820,6 +2820,7 @@ def map_elementwise(
             scalar_results = scalar_results,
 
         handles = [r.handle for r in scalar_results]
+        builder.set_loc(original_loc)
         builder.create_map_elementwise_ret(handles)
 
     fn_result_types = [x.type for x in scalar_results]
