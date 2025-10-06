@@ -18,6 +18,7 @@ add_triton_ut(
     MLIRParser
     TritonGPUIR
     TritonGPUTransforms
+    TritonNvidiaGPUIR
     TritonNvidiaGPUTransforms
 )
 add_triton_ut(

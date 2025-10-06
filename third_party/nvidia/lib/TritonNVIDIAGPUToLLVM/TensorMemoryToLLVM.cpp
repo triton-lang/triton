@@ -29,21 +29,6 @@ static constexpr int maxRegisters = 256;
 
 namespace {
 
-struct TMemAccessAtom {
-  int colsPerThread;
-  int rowsPerThread;
-  const char *opShape;
-};
-
-constexpr TMemAccessAtom TMemAccess32x32b{
-    1 /*colsPerThread*/, 1 /*rowsPerThread*/, "32x32b" /*opShape*/};
-
-constexpr TMemAccessAtom TMemAccess16x256b{
-    2 /*colsPerThread*/, 2 /*rowsPerThread*/, "16x256b" /*opShape*/};
-
-constexpr TMemAccessAtom TMemAccess16x32bx2{
-    1 /*colsPerThread*/, 1 /*rowsPerThread*/, "16x32bx2" /*opShape*/};
-
 struct TMemCopyAtom {
   int nRow;
   int bCol;
@@ -152,40 +137,6 @@ getVec(const LinearLayout &cvt, const LinearLayout &tile, int maxnreg) {
                          (i / 2) * tile.getInDimSize(kReg));
 }
 
-LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
-                           bool unpacked) {
-  auto kReg = str_attr("register");
-  auto kLane = str_attr("lane");
-  auto kWarp = str_attr("warp");
-  auto kRow = str_attr("row");
-  auto kCol = str_attr("col");
-  // Set the output order to be kRow, kCol and the input order to be kReg first
-  LinearLayout tile = LinearLayout::identity1D(1, kReg, kRow) *
-                      LinearLayout::identity1D(1, kReg, kCol);
-  if (atom.opShape == std::string("32x32b")) {
-    tile *= LinearLayout::identity1D(32, kLane, kRow);
-  } else if (atom.opShape == std::string("16x32bx2")) {
-    tile *= LinearLayout::identity1D(16, kLane, kRow);
-  } else if (atom.opShape == std::string("16x256b")) {
-    tile *= LinearLayout::identity1D(2, kReg, kCol) *
-            LinearLayout::identity1D(4, kLane, kCol) *
-            LinearLayout::identity1D(8, kLane, kRow) *
-            LinearLayout::identity1D(2, kReg, kRow);
-  } else {
-    llvm_unreachable("Unsupported TMEM access atom");
-  }
-  // Each register moves 32/bitwidth (= 2) columns when unpacked
-  if (unpacked) {
-    tile = LinearLayout::zeros1D(1, kReg, kCol, 2) * tile;
-  }
-  auto nCol = tile.getOutDimSize(kCol);
-  auto bases = tile.getBases();
-  bases[kWarp].push_back({32, 0});
-  bases[kWarp].push_back({64, 0});
-  auto ret = LinearLayout(bases, {{kRow, 128}, {kCol, nCol}}, false);
-  return ret;
-}
-
 SmallVector<Value> pack(ArrayRef<Value> values, Type outType, Location loc,
                         ConversionPatternRewriter &rewriter, bool pad = false) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -262,7 +213,7 @@ void createTensorMemoryStore(Location loc, Value address, int colOffset,
                              ConversionPatternRewriter &rewriter) {
   PTXBuilder ptxBuilder;
   std::string packedStr = unpacked ? ".unpack::16b" : "";
-  unsigned numRepeats = srcs.size() / (atom.rowsPerThread * atom.colsPerThread);
+  unsigned numRepeats = srcs.size() / atom.elementsPerThread;
   std::string opcode = "@$0 tcgen05.st.sync.aligned." +
                        std::string(atom.opShape) + ".x" +
                        std::to_string(numRepeats) + packedStr;
@@ -349,8 +300,7 @@ Value createTensorMemoryLoad(Location loc, MLIRContext *ctx, Value address,
   PTXBuilder ptxBuilder;
   // If the memory is unpacked we need to pack on the fly when loading.
   std::string packedStr = unpacked ? ".pack::16b" : "";
-  unsigned numRepeats =
-      numRegPerMessage / (atom.rowsPerThread * atom.colsPerThread);
+  unsigned numRepeats = numRegPerMessage / atom.elementsPerThread;
   std::string opcode = "tcgen05.ld.sync.aligned." + std::string(atom.opShape) +
                        ".x" + std::to_string(numRepeats) + packedStr + ".b32 {";
 
@@ -588,7 +538,8 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
   // the number of registers per message
   std::optional<std::tuple<TMemAccessAtom, LinearLayout, ColumnAction, int>>
       msgInfo;
-  for (auto atom : {TMemAccess32x32b, TMemAccess16x256b}) {
+  for (auto atom : {TMemAccess32x32b, TMemAccess16x256b, TMemAccess16x64b,
+                    TMemAccess16x128b}) {
     auto tile = getTileLayout(ctx, atom, unpacked);
     auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {

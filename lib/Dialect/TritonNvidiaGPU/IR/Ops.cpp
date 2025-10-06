@@ -610,6 +610,10 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
         })) {
       InFlightDiagnostic diag = op->emitOpError(regName)
                                 << " layout is not TMEM compatible";
+      diag.attachNote() << "original layout: "
+                        << toLinearLayout(type).toString();
+      diag.attachNote() << "memory layout: "
+                        << toLinearLayout(memdesc).toString();
       for (Attribute layout : layouts)
         diag.attachNote() << "potential TMEM layout: " << layout;
       return diag;
