@@ -45,8 +45,9 @@ def cacheable_kernel():
     return get_specialized_kernel()
 
 
-def test_cacheable(device, fresh_triton_cache):
+def test_cacheable(device, fresh_triton_cache, monkeypatch):
     specialized_kernel = get_specialized_kernel()
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "0")
 
     specialization_data = None
     fn_name = None
