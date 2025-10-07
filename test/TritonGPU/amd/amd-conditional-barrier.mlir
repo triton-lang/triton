@@ -4,8 +4,8 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
   tt.func @conditional_barrier() {
     // CHECK-LABEL: llvm.func @conditional_barrier
 
-    // CHECK:   %[[CMP0:.+]] = llvm.icmp "ne" %3, %1 : i32
-    // CHECK:   %[[CMP1:.+]] = llvm.icmp "eq" %3, %1 : i32
+    // CHECK:   %[[CMP0:.+]] = llvm.icmp "ne" %[[OP0:.+]], %[[OP1:.+]] : i32
+    // CHECK:   %[[CMP1:.+]] = llvm.icmp "eq" %[[OP0]], %[[OP1]] : i32
     // CHECK:   llvm.cond_br %[[CMP0]], ^bb1, ^bb2
     // CHECK: ^bb1:
     // CHECK:   rocdl.s.barrier

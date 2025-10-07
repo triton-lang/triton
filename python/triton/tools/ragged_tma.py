@@ -90,3 +90,19 @@ def store_ragged(TMA, batch_offset, batch_size, coords, data, ragged_dim: tl.con
     c0, c1, c2 = to_ragged_indices(batch_offset, batch_size, coords[ragged_dim])
     data = tl.reshape(data, [1, 1] + data.shape)
     TMA.store([c0, c1] + coords[:ragged_dim] + [c2] + coords[ragged_dim + 1:], data)
+
+
+@triton.jit
+def atomic_add_ragged(TMA, batch_offset, batch_size, coords, data, ragged_dim: tl.constexpr = 0):
+    """
+    Atomic add into a subarray T[batch_offset : batch_offset + batch_size] with
+    hardware bounds-checking, where adds outside the subarray are masked
+    correctly.
+
+    Coords should be an appropriately-sized list of integers, just like in
+    TMA.atomic_add().
+    """
+
+    c0, c1, c2 = to_ragged_indices(batch_offset, batch_size, coords[ragged_dim])
+    data = tl.reshape(data, [1, 1] + data.shape)
+    TMA.atomic_add([c0, c1] + coords[:ragged_dim] + [c2] + coords[ragged_dim + 1:], data)

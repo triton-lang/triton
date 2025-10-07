@@ -12,21 +12,13 @@ namespace proton {
 
 namespace {
 
-Profiler *getProfiler(const std::string &name, const std::string &path,
-                      const std::string &mode) {
-  std::vector<std::string> modeAndOptions = proton::split(mode, ":");
+Profiler *makeProfiler(const std::string &name) {
   if (proton::toLower(name) == "cupti") {
-    auto *profiler = &CuptiProfiler::instance();
-    profiler->setLibPath(path);
-    if (proton::toLower(modeAndOptions[0]) == "pcsampling")
-      profiler->enablePCSampling();
-    return profiler;
-  }
-  if (proton::toLower(name) == "roctracer") {
+    return &CuptiProfiler::instance();
+  } else if (proton::toLower(name) == "roctracer") {
     return &RoctracerProfiler::instance();
-  }
-  if (proton::toLower(name) == "instrumentation") {
-    return InstrumentationProfiler::instance().setMode(modeAndOptions);
+  } else if (proton::toLower(name) == "instrumentation") {
+    return &InstrumentationProfiler::instance();
   }
   throw std::runtime_error("Unknown profiler: " + name);
 }
@@ -82,11 +74,25 @@ void Session::finalize(const std::string &outputFormat) {
 
 size_t Session::getContextDepth() { return contextSource->getDepth(); }
 
+Profiler *SessionManager::validateAndSetProfilerMode(Profiler *profiler,
+                                                     const std::string &mode) {
+  std::vector<std::string> modeAndOptions = proton::split(mode, ":");
+  for (auto &[id, session] : sessions) {
+    if (session->getProfiler() == profiler &&
+        session->getProfiler()->getMode() != modeAndOptions) {
+      throw std::runtime_error("Cannot add a session with the same profiler "
+                               "but a different mode than existing sessions");
+    }
+  }
+  return profiler->setMode(modeAndOptions);
+}
+
 std::unique_ptr<Session> SessionManager::makeSession(
     size_t id, const std::string &path, const std::string &profilerName,
-    const std::string &profilerPath, const std::string &contextSourceName,
-    const std::string &dataName, const std::string &mode) {
-  auto profiler = getProfiler(profilerName, profilerPath, mode);
+    const std::string &contextSourceName, const std::string &dataName,
+    const std::string &mode) {
+  auto *profiler = makeProfiler(profilerName);
+  profiler = validateAndSetProfilerMode(profiler, mode);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
   auto *session = new Session(id, path, profiler, std::move(contextSource),
@@ -157,7 +163,6 @@ void SessionManager::removeSession(size_t sessionId) {
 
 size_t SessionManager::addSession(const std::string &path,
                                   const std::string &profilerName,
-                                  const std::string &profilerPath,
                                   const std::string &contextSourceName,
                                   const std::string &dataName,
                                   const std::string &mode) {
@@ -168,9 +173,10 @@ size_t SessionManager::addSession(const std::string &path,
     return sessionId;
   }
   auto sessionId = nextSessionId++;
+  auto newSession = makeSession(sessionId, path, profilerName,
+                                contextSourceName, dataName, mode);
   sessionPaths[path] = sessionId;
-  sessions[sessionId] = makeSession(sessionId, path, profilerName, profilerPath,
-                                    contextSourceName, dataName, mode);
+  sessions[sessionId] = std::move(newSession);
   return sessionId;
 }
 

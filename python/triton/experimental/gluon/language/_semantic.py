@@ -2,7 +2,7 @@ from typing import Sequence, List, TypeVar, Tuple, Callable
 import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
-from ._layouts import AutoLayout, DistributedLayout, SliceLayout
+from ._layouts import AutoLayout, DistributedLayout, SliceLayout, SharedLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
@@ -156,6 +156,8 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return self._wrap_tensor_infer_layout(value)
 
     def splat(self, value, shape, layout):
+        if len(shape) == 0:
+            return value
         ret_ty = ttgl.distributed_type(value.dtype, shape, layout)
         handle = self.builder.create_splat(ret_ty.to_ir(self.builder), value.handle)
         return ttgl.tensor(handle, ret_ty)
@@ -205,6 +207,41 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(value.dtype == mem_desc.dtype,
                lambda: f"source dtype {value.dtype} and destination dtype {mem_desc.dtype} must match")
         self.builder.create_local_store(mem_desc.handle, value.handle)
+
+    def bank_conflicts(self, distr_ty, shared_ty):
+        if not isinstance(distr_ty, ttgl.distributed_type):
+            raise TypeError(
+                f"bank_conflicts expects the register layout to be a distributed_type, got {type(distr_ty)}")
+
+        if not isinstance(shared_ty, ttgl.shared_memory_descriptor_type):
+            raise TypeError(
+                f"bank_conflicts expects the shared layout to be a shared_memory_descriptor_type, got {type(shared_ty)}"
+            )
+
+        if distr_ty.shape != shared_ty.shape:
+            raise ValueError(f"register shape {distr_ty.shape} and shared shape {shared_ty.shape} must match")
+        if shared_ty.element_ty != distr_ty.element_ty:
+            raise ValueError(
+                f"mismatched dtypes between register ({distr_ty.element_ty}) and shared ({shared_ty.element_ty}) layouts"
+            )
+        if shared_ty.shape != shared_ty.alloc_shape[-len(shared_ty.shape):]:
+            raise ValueError(
+                f"bank_conflicts NYI for subslices. Got shape {shared_ty.shape} and alloc_shape {shared_ty.alloc_shape}"
+            )
+
+        reg_attr = distr_ty.layout._to_ir(self.builder)
+        shared_attr = shared_ty.layout._to_ir(self.builder)
+        return self.builder.get_shared_bank_conflicts(reg_attr, shared_attr, list(distr_ty.shape),
+                                                      distr_ty.element_ty.primitive_bitwidth)
+
+    def to_linear_layout(self, layout, shape):
+        _check(isinstance(layout, (DistributedLayout, SharedLayout)),
+               lambda: f"Expected a DistributedLayout or SharedLayout, got {type(layout)}")
+
+        if not isinstance(shape, list):
+            shape = list(shape)
+
+        return self.builder.to_linear_layout(layout._to_ir(self.builder), shape)
 
     def shared_dealloc(self, mem_desc):
         self.builder.create_local_dealloc(mem_desc.handle)
@@ -383,6 +420,10 @@ class GluonSemantic(TritonSemantic[TensorTy]):
     def warp_specialize(self, default_args, default_partition, worker_args, worker_partitions,
                         worker_num_warps: Sequence[int], worker_num_regs: Sequence[int], generator):
         num_partitions = len(worker_partitions)
+        _check(isinstance(default_args, (tuple, ttgl.tuple)),
+               lambda: f"default_args must be a tuple of arguments, but got {type(default_args)}")
+        _check(isinstance(worker_args, (tuple, ttgl.tuple)),
+               lambda: f"worker_args must be a tuple of arguments, but got {type(worker_args)}")
         assert num_partitions == len(
             worker_num_warps
         ), f"warp specialize got {num_partitions} partitions but {len(worker_num_warps)} warp counts"

@@ -68,6 +68,94 @@ protected:
   const proton::gpu::TargetInfoBase &targetInfo;
 };
 
+struct InitializeOpConversion
+    : public ConvertOpToLLVMPattern<mlir::triton::proton::gpu::InitializeOp> {
+  explicit InitializeOpConversion(LLVMTypeConverter &typeConverter,
+                                  const proton::gpu::TargetInfoBase &targetInfo,
+                                  PatternBenefit benefit)
+      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::gpu::InitializeOp>(
+            typeConverter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(mlir::triton::proton::gpu::InitializeOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    Value scratchPtr = adaptor.getScratchPtr();
+    auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
+
+    // Header layout (total: circularHeaderSize bytes)
+    //  +-------------------------------+ 0
+    //  | preamble (1 word)             |
+    //  +-------------------------------+ 1
+    //  | program id (1 word)           |
+    //  +-------------------------------+ 2
+    //  | hw id (1 word)                |
+    //  +-------------------------------+ 3
+    //  | buffer size (1 word)          |
+    //  +-------------------------------+ 4
+    //  | init time                     |
+    //  | (2 words)                     |
+    //  +-------------------------------+ 6
+    //  | pre-final time                |
+    //  | (2 words)                     |
+    //  +-------------------------------+ 8
+    //  | post-final time               |
+    //  | (2 words)                     |
+    //  +-------------------------------+ 10
+
+    Value threadId = getThreadId(rewriter, loc);
+    Value isFirstThread = b.icmp_eq(threadId, b.i32_val(0));
+
+    Block *prevBlock = op->getBlock();
+
+    // Add the 'if' block.
+    Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
+    rewriter.setInsertionPointToStart(ifBlock);
+
+    // Write back 'preamble'.
+    Value preamble = b.i32_val(0xdeadbeef);
+    Value gmemPreambleOffset = b.i32_val(0);
+    Value gmemPreamblePtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPreambleOffset);
+    b.store(preamble, gmemPreamblePtr);
+
+    // Write back 'program id'.
+    Value gmemPidOffset = b.i32_val(1);
+    Value gmemPidPtr = b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPidOffset);
+    Value pid = getLinearId(loc, rewriter);
+    b.store(pid, gmemPidPtr);
+
+    // Write back 'hw id'.
+    Value gmemHwidOffset = b.i32_val(2);
+    Value gmemHwidPtr = b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemHwidOffset);
+    Value hwid = targetInfo.processorId(rewriter, loc);
+    b.store(hwid, gmemHwidPtr);
+
+    // Write back 'init time'.
+    Value gmemInitTimeOffset = b.i32_val(4);
+    Value gmemInitTimePtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemInitTimeOffset);
+    Value initTime = targetInfo.globalTime(rewriter, loc);
+    b.store(initTime, gmemInitTimePtr);
+
+    // Add the 'else' block and the condition.
+    Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+    rewriter.setInsertionPointToEnd(prevBlock);
+    rewriter.create<cf::CondBranchOp>(loc, isFirstThread, ifBlock, thenBlock);
+    rewriter.setInsertionPointToEnd(ifBlock);
+    rewriter.create<cf::BranchOp>(loc, thenBlock);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+protected:
+  const proton::gpu::TargetInfoBase &targetInfo;
+};
+
 struct FinalizeOpConversion
     : public ConvertOpToLLVMPattern<mlir::triton::proton::gpu::FinalizeOp> {
   explicit FinalizeOpConversion(LLVMTypeConverter &typeConverter,
@@ -100,9 +188,6 @@ struct FinalizeOpConversion
     const int bufferSizeInWords = op.getSegment().getType().getNBytes() / 4;
     const int circularHeaderWordSize = proton::gpu::getCircularHeaderSize() / 4;
 
-    // Header: preamble (1 word), threadblock id (1 word), SM id (1 word),
-    // buffer size (1 word)
-
     // Circular strategy memory layout (total: allocprofileScratchSize bytes)
     //  +-----------------------------------------------+
     //  | header (circularHeaderSize bytes)             |
@@ -115,8 +200,6 @@ struct FinalizeOpConversion
     const int scratchWordSize = metadataWordSize + bufferSizeInWords;
 
     auto &tritonTargetInfo = targetInfo.getTritonTargetInfo();
-
-    Value hwid = targetInfo.processorId(rewriter, loc);
 
     auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
 
@@ -149,29 +232,19 @@ struct FinalizeOpConversion
       Value gmemPtr = b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemOffset);
       b.store(load, gmemPtr);
     };
-    // Write back 'preamble'.
-    Value preamble = b.i32_val(0xdeadbeef);
-    Value gmemPreambleOffset = b.i32_val(0);
-    Value gmemPreamblePtr =
-        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPreambleOffset);
-    b.store(preamble, gmemPreamblePtr);
-
-    // Write back 'program id'.
-    Value gmemPidOffset = b.i32_val(1);
-    Value gmemPidPtr = b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPidOffset);
-    Value pid = getLinearId(loc, rewriter);
-    b.store(pid, gmemPidPtr);
-
-    // Write back 'hw id'.
-    Value gmemHwidOffset = b.i32_val(2);
-    Value gmemHwidPtr = b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemHwidOffset);
-    b.store(hwid, gmemHwidPtr);
 
     // Write back 'buffer size in byte'.
     Value gmemBufSizeOffset = b.i32_val(3);
     Value gmemBufSizePtr =
         b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemBufSizeOffset);
     b.store(b.i32_val(bufferSizeInWords * 4), gmemBufSizePtr);
+
+    // Write back 'pre-final time'.
+    Value gmemPreFinalTimeOffset = b.i32_val(6);
+    Value gmemPreFinalTimePtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPreFinalTimeOffset);
+    Value preFinalTime = targetInfo.globalTime(rewriter, loc);
+    b.store(preFinalTime, gmemPreFinalTimePtr);
 
     // Add the 'else' block and the condition.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
@@ -205,8 +278,37 @@ struct FinalizeOpConversion
     rewriter.setInsertionPointToEnd(ifBlock);
     rewriter.create<cf::BranchOp>(loc, writeBackBlock, initIdx);
 
+    writeBackPostFinalTime(b, rewriter, op, isFirstThread, scratchPtr);
+
     rewriter.eraseOp(op);
     return success();
+  }
+
+private:
+  void writeBackPostFinalTime(TritonLLVMOpBuilder &b,
+                              ConversionPatternRewriter &rewriter,
+                              mlir::triton::proton::gpu::FinalizeOp op,
+                              Value isFirstThread, Value scratchPtr) const {
+    Block *prevBlock = op->getBlock();
+    auto loc = op.getLoc();
+    auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
+
+    // Add the 'if' block.
+    Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
+    rewriter.setInsertionPointToStart(ifBlock);
+
+    Value gmemPostFinalTimeOffset = b.i32_val(8);
+    Value gmemPostFinalTimePtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPostFinalTimeOffset);
+    Value postFinalTime = targetInfo.globalTime(rewriter, loc);
+    b.store(postFinalTime, gmemPostFinalTimePtr);
+
+    // Add the 'else' block and the condition.
+    Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+    rewriter.setInsertionPointToEnd(prevBlock);
+    rewriter.create<cf::CondBranchOp>(loc, isFirstThread, ifBlock, thenBlock);
+    rewriter.setInsertionPointToEnd(ifBlock);
+    rewriter.create<cf::BranchOp>(loc, thenBlock);
   }
 
 protected:
@@ -566,6 +668,7 @@ void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit) {
   patterns.add<ReadCounterOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<InitializeOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<FinalizeOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<SegmentAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<GlobalScratchAllocOpConversion>(typeConverter, targetInfo,

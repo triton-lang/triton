@@ -119,6 +119,16 @@ def _upcast_from_mxfp(out_ptr, stride_o_outer, stride_o_quant: tl.constexpr, mx_
     scale = scale.reshape(dst_scale.shape)
 
     out_tensor = dst_tensor * dst_scale
+    if dst_dtype == tl.float32:
+        max_fin = 3.4028234663852886e+38
+    elif dst_dtype == tl.bfloat16:
+        max_fin = 3.3895313892515355e+38
+    else:
+        tl.static_assert(dst_dtype == tl.float16)
+        max_fin = 65504
+    # TODO: handle infinity same as upcast_from_mxfp_torch together with the
+    # above FIXME
+    out_tensor = tl.clamp(out_tensor, min=-max_fin, max=max_fin)
     # Correct any NaNs encoded via the scale.
     out_tensor = tl.where(scale == 0xFF, float("nan"), out_tensor)
     out_tensor = out_tensor.reshape([BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_DIM])

@@ -168,7 +168,7 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
                           Operation *op = nullptr /*only for diagnostic*/) {
   OpBuilder::InsertionGuard g(rewriter);
   Value arg = v;
-  if (auto cvtOp = v.getDefiningOp<ConvertLayoutOp>())
+  while (auto cvtOp = arg.getDefiningOp<ConvertLayoutOp>())
     arg = cvtOp.getSrc();
   auto argType = cast<RankedTensorType>(arg.getType());
   assert(argType.getEncoding() && "unexpected tensor type");
@@ -802,7 +802,7 @@ public:
       return failure();
     if (numWarps != 4 && numWarps != 8)
       return failure();
-    if (retShapePerCTA[0] < 128 || retShapePerCTA[1] < 8)
+    if (retShapePerCTA[0] < 128 || retShapePerCTA[1] < 16)
       return failure();
     Location loc = dotOp.getLoc();
     // operands

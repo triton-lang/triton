@@ -17,11 +17,12 @@ class ForOp;
 } // namespace mlir
 
 static constexpr char kPartitionAttrName[] = "ttg.partition";
+static constexpr char kPartitionOutputsAttrName[] = "ttg.partition.outputs";
 static constexpr char kPartitionStagesAttrName[] = "ttg.partition.stages";
 static constexpr char kWarpSpecializeTagAttrName[] = "ttg.warp_specialize.tag";
 
 //===----------------------------------------------------------------------===//
-// WarpSchedule
+// PartitionSet
 //===----------------------------------------------------------------------===//
 
 namespace mlir::triton::gpu {
@@ -30,15 +31,41 @@ namespace mlir::triton::gpu {
 // relative to its consumers.
 class Partition {
 public:
-  Partition(int idx, int stage) : idx(idx), stage(stage) {}
+  Partition(int idx, int stage) : idx(idx), stage(stage) {
+    assert(idx >= 0 && "A partition index must be nonnegative.");
+  }
 
   int getIndex() const { return idx; }
   int getStage() const { return stage; }
   ArrayRef<Operation *> getOps() const { return ops; }
+  void addOp(Operation *op) { ops.push_back(op); }
+  bool hasOp(Operation *op) const;
+
+  // Iterate the inputs of the partition. Input values are those that originate
+  // from a different partition or a previous iteration of the current
+  // partition. E.g. partition B(i) may have inputs from A(i) or B(i-1). Note
+  // that the same value may be visited more than once.
+  void iterateInputs(scf::ForOp loop,
+                     function_ref<void(OpOperand &)> callback) const;
+  // Iterate the outputs of the partition. Output values are those that are
+  // consumed by a different partition or a future iteration of the current
+  // partition. E.g. partition A(i) may have outputs to B(i) or A(i+1). Note
+  // that the same value may be visited more than once.
+  void
+  iterateOutputs(scf::ForOp loop,
+                 function_ref<void(Operation *, OpOperand &)> callback) const;
+  // Iterate the defining ops of the inputs to the partition in the current and
+  // previous iterations, including the distance in the past.
+  void iterateDefs(scf::ForOp loop,
+                   function_ref<void(OpResult, unsigned)> callback) const;
+  // Iterate the uses of all outputs of the partition in the current iteration
+  // and in future iterations, including the distance in the future.
+  void iterateUses(
+      scf::ForOp loop,
+      function_ref<void(OpResult, OpOperand &, unsigned)> callback) const;
 
 private:
   void setIndex(int idx) { this->idx = idx; }
-  friend class WarpSchedule;
 
   // The partition number.
   int idx;
@@ -48,12 +75,10 @@ private:
   SmallVector<Operation *> ops;
 };
 
-// A warp schedule divides a loop into multiple partitions. Ops in a loop are
-// assigned at most one partition. A warp schedule represents asynchronous
+// A partition set divides a loop into multiple partitions. Ops in a loop are
+// assigned at most one partition. A partition set represents asynchronous
 // execution of the loop body, where partitions may execute simultaneously.
-class WarpSchedule {
-  static constexpr int kSentinel = -1;
-
+class PartitionSet {
 public:
   // Get WarpSpecialization tag
   int getTag() const { return tag; }
@@ -61,84 +86,50 @@ public:
   // Create a new partition with a stage.
   Partition *addPartition(unsigned stage);
 
-  // Get the partition the op belongs to.
-  Partition *getPartition(Operation *op);
-  // Get the partition the op belongs to.
-  const Partition *getPartition(Operation *op) const;
   // Get the partition at the index.
   Partition *getPartition(unsigned idx);
   // Get the partition at the index.
   const Partition *getPartition(unsigned idx) const;
-  // Insert an operation into a partition.
-  void insert(Partition *partition, Operation *op);
   // Return an iterator range over the partitions.
   auto getPartitions() { return llvm::make_pointee_range(partitions); }
   // Return an iterator range over the partitions.
   auto getPartitions() const { return llvm::make_pointee_range(partitions); }
   // Get the number of partitions.
   unsigned getNumPartitions() const { return partitions.size(); }
-  // Get the root partition.
-  Partition *getRootPartition() { return rootPartition.get(); }
-  // Get the root partition.
-  const Partition *getRootPartition() const { return rootPartition.get(); }
 
-  // Return true if an operation is assigned to a partition.
-  bool isScheduled(Operation *op) const;
-  // Schedule an operation to a partition if it is not already scheduled. Return
-  // true if the operation was scheduled.
-  bool trySchedule(Partition *partition, Operation *op);
-
-  // Deserialize a warp schedule from an `scf.for` op using the attributes
+  // Deserialize a partition set from an `scf.for` op using the attributes
   // tagged on operations in its body.
-  static FailureOr<WarpSchedule> deserialize(scf::ForOp loop);
-  // Serialize a warp schedule by writing the partition stage and mappings
-  // as attributes on operations in the loop.
-  void serialize(scf::ForOp loop) const;
-  // Verify that the warp schedule is valid by checking the SSA dependencies
-  // between the schedules.
-  LogicalResult verify(scf::ForOp loop) const;
-  // Remove partition attributes.
-  static void eraseFrom(scf::ForOp loop);
+  static FailureOr<PartitionSet> fromLoop(scf::ForOp loop);
 
-  // Iterate the inputs of the partition. Input values are those that originate
-  // from a different partition or a previous iteration of the current
-  // partition. E.g. partition B(i) may have inputs from A(i) or B(i-1). Note
-  // that the same value may be visited more than once.
-  void iterateInputs(scf::ForOp loop, const Partition *partition,
-                     function_ref<void(OpOperand &)> callback) const;
-  // Iterate the outputs of the partition. Output values are those that are
-  // consumed by a different partition or a future iteration of the current
-  // partition. E.g. partition A(i) may have outputs to B(i) or A(i+1). Note
-  // that the same value may be visited more than once.
-  void
-  iterateOutputs(scf::ForOp loop, const Partition *partition,
-                 function_ref<void(Operation *, OpOperand &)> callback) const;
-  // Iterate the defining ops of the inputs to the partition in the current and
-  // previous iterations, including the distance in the past.
-  void iterateDefs(scf::ForOp loop, const Partition *partition,
-                   function_ref<void(OpResult, unsigned)> callback) const;
-  // Iterate the uses of all outputs of the partition in the current iteration
-  // and in future iterations, including the distance in the future.
-  void iterateUses(
-      scf::ForOp loop, const Partition *partition,
-      function_ref<void(OpResult, OpOperand &, unsigned)> callback) const;
-
-  // Debug dump the schedule.
+  // Debug dump the partition set.
   LLVM_DUMP_METHOD void dump() const;
+
+  // Utility to be used when the op is known to belong to one partition
+  Partition *getPartition(Operation *op);
+
+  // Check if the operation belongs to all partitions
+  bool isInRootPartition(Operation *op);
 
 private:
   // WarpSpecialization tag
   int tag;
   // Partitions are numbered [0, N).
   SmallVector<std::unique_ptr<Partition>> partitions;
-  // A mapping from operation to its partition.
-  DenseMap<Operation *, Partition *> opToPartition;
-  // The root partition contains operations that are not assigned to a
-  // partition. Operations not assigned to partitions are assumed to be "free"
-  // and can be cloned as necessary.
-  std::unique_ptr<Partition> rootPartition =
-      std::make_unique<Partition>(kSentinel, kSentinel);
 };
+
+bool hasPartition(Operation *op);
+
+// Annotate the op with the partition index or indices, and add the op
+// to the partitions it belongs to.
+void setPartition(Operation *op, Partition *partition);
+void setPartition(Operation *op, const SetVector<Partition *> &partitions);
+// Annotate the op with the partition indices. It should only be used in a pass
+// which does not work with Partition instances and iterate* functions, since
+// it does not keep the op attributes and the op list of a partition in sync.
+void setPartition(Operation *op, const SetVector<int> &partitionIds);
+
+std::optional<SetVector<int>> getPartitionIds(Operation *op);
+
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_TRITONGPU_TRANSFORM_PIPELINE_PARTITION_H_

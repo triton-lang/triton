@@ -1,4 +1,5 @@
 #include "Context/Python.h"
+#include "Utility/String.h"
 #include "pybind11/pybind11.h"
 #include <algorithm>
 #include <string>
@@ -25,32 +26,15 @@ PyObject *_Py_XNewRef(PyObject *obj) {
 #define Py_XNewRef(obj) _Py_XNewRef((PyObject *)(obj))
 #endif
 
-// bpo-40421 added PyFrame_GetCode() to Python 3.9.0b1
-#if PY_VERSION_HEX < 0x030900B1
-PyCodeObject *getFrameCodeObject(PyFrameObject *frame) {
-  assert(frame != nullptr);
-  assert(frame->f_code != nullptr);
-  return (PyCodeObject *)(Py_NewRef(frame->f_code));
-}
-#else
 PyCodeObject *getFrameCodeObject(PyFrameObject *frame) {
   assert(frame != nullptr);
   return PyFrame_GetCode(frame);
 }
-#endif
 
-// bpo-40421 added PyFrame_GetBack() to Python 3.9.0b1
-#if PY_VERSION_HEX < 0x030900B1
-PyFrameObject *getFrameBack(PyFrameObject *frame) {
-  assert(frame != nullptr);
-  return (PyFrameObject *)(Py_XNewRef(frame->f_back));
-}
-#else
 PyFrameObject *getFrameBack(PyFrameObject *frame) {
   assert(frame != nullptr);
   return PyFrame_GetBack(frame);
 }
-#endif
 
 std::string unpackPyobject(PyObject *pyObject) {
   if (PyBytes_Check(pyObject)) {
@@ -84,7 +68,7 @@ std::vector<Context> PythonContextSource::getContextsImpl() {
     size_t firstLineNo = f_code->co_firstlineno;
     std::string file = unpackPyobject(f_code->co_filename);
     std::string function = unpackPyobject(f_code->co_name);
-    auto pythonFrame = file + ":" + function + "@" + std::to_string(lineno);
+    auto pythonFrame = formatFileLineFunction(file, lineno, function);
     contexts.push_back(Context(pythonFrame));
     auto newFrame = getFrameBack(frame);
     Py_DECREF(frame);

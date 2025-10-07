@@ -104,20 +104,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
                              %arg2: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
     // The waitcnt stores all counters in one i32 bits 15:14 and 3:0 store the vmcnt we have to wait on
     // CHECK: rocdl.s.waitcnt -49168
-    // CHECK: rocdl.barrier
+    // CHECK: rocdl.s.waitcnt -7937
+    // CHECK: rocdl.s.barrier
     ttg.async_wait {num = 0 : i32}
     // CHECK: rocdl.s.waitcnt -49167
-    // CHECK: rocdl.barrier
+    // CHECK: rocdl.s.waitcnt -7937
+    // CHECK: rocdl.s.barrier
     ttg.async_wait {num = 1 : i32}
     // CHECK: rocdl.s.waitcnt -2
-    // CHECK: rocdl.barrier
+    // CHECK: rocdl.s.waitcnt -7937
+    // CHECK: rocdl.s.barrier
     ttg.async_wait {num = 62 : i32}
     // CHECK: rocdl.s.waitcnt -1
-    // CHECK: rocdl.barrier
+    // CHECK: rocdl.s.waitcnt -7937
+    // CHECK: rocdl.s.barrier
     ttg.async_wait {num = 63 : i32}
     // Check that we clamp values > 63
     // CHECK: rocdl.s.waitcnt -1
-    // CHECK: rocdl.barrier
+    // CHECK: rocdl.s.waitcnt -7937
+    // CHECK: rocdl.s.barrier
     ttg.async_wait {num = 64 : i32}
     tt.return
   }
@@ -133,7 +138,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   tt.func public @async_commit_group(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                      %arg1: i32 {tt.divisibility = 16 : i32},
                                      %arg2: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
-    // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
+    // CHECK: llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.return
     ttg.async_commit_group
     tt.return

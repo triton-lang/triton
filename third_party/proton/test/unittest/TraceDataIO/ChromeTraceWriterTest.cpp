@@ -77,6 +77,7 @@ TEST_F(ChromeTraceWriterTest, SingleBlock) {
   auto result = createDefaultResult(1, 1, metadata->scopeName.size());
   result->blockTraces[0].blockId = 1;
   result->blockTraces[0].procId = 120;
+  result->blockTraces[0].initTime = 0;
   result->blockTraces[0].traces[0].uid = 2;
   result->blockTraces[0].traces[0].profileEvents[0].first->cycle = 122;
   result->blockTraces[0].traces[0].profileEvents[0].second->cycle = 162;
@@ -96,8 +97,8 @@ TEST_F(ChromeTraceWriterTest, SingleBlock) {
   EXPECT_EQ(data["traceEvents"].size(), 2);
   EXPECT_EQ(data["traceEvents"][0]["name"], "s1");
   EXPECT_EQ(data["traceEvents"][1]["name"], "scope_7");
-  EXPECT_EQ(data["traceEvents"][0]["ts"], 0.0);
-  EXPECT_EQ(data["traceEvents"][1]["ts"], 0.1);
+  EXPECT_DOUBLE_EQ(data["traceEvents"][0]["ts"], 0.0);
+  EXPECT_DOUBLE_EQ(data["traceEvents"][1]["ts"], 0.1);
 }
 
 TEST_F(ChromeTraceWriterTest, MultiBlockMultiWarp) {
@@ -144,12 +145,8 @@ TEST_F(ChromeTraceWriterTest, MultiBlockMultiWarp) {
     pidCount[data["traceEvents"][i]["pid"]] += 1;
     tidCount[data["traceEvents"][i]["tid"]] += 1;
   }
-  EXPECT_EQ(
-      pidCount["kernel2 Core121 CTA2 [measure in clock cycle (assume 1GHz)]"],
-      12);
-  EXPECT_EQ(
-      pidCount["kernel2 Core120 CTA1 [measure in clock cycle (assume 1GHz)]"],
-      12);
+  EXPECT_EQ(pidCount["kernel2 Core121 CTA2"], 12);
+  EXPECT_EQ(pidCount["kernel2 Core120 CTA1"], 12);
   EXPECT_EQ(tidCount["warp 0 (line 0)"], 4);
   EXPECT_EQ(tidCount["warp 0 (line 1)"], 4);
   EXPECT_EQ(tidCount["warp 1 (line 0)"], 4);
@@ -168,6 +165,7 @@ TEST_F(ChromeTraceWriterTest, MultiKernel) {
     for (int j = 0; j < 1; j++) {
       result1->blockTraces[j].blockId = j;
       result1->blockTraces[j].procId = j;
+      result1->blockTraces[j].initTime = 0;
       result1->blockTraces[j].traces[i].uid = i;
       result1->blockTraces[j].traces[i].profileEvents[0].first->cycle = 1220000;
       result1->blockTraces[j].traces[i].profileEvents[0].second->cycle =
@@ -186,11 +184,11 @@ TEST_F(ChromeTraceWriterTest, MultiKernel) {
     for (int j = 0; j < 2; j++) {
       result2->blockTraces[j].blockId = j;
       result2->blockTraces[j].procId = j;
+      result2->blockTraces[j].initTime = 10000000;
       result2->blockTraces[j].traces[i].uid = i;
-      result2->blockTraces[j].traces[i].profileEvents[0].first->cycle =
-          2 * kKernelTimeGap + 1220000;
+      result2->blockTraces[j].traces[i].profileEvents[0].first->cycle = 1220000;
       result2->blockTraces[j].traces[i].profileEvents[0].second->cycle =
-          2 * kKernelTimeGap + 1620000;
+          1620000;
       result2->blockTraces[j].traces[i].profileEvents[0].first->scopeId = 1;
       result2->blockTraces[j].traces[i].profileEvents[0].second->scopeId = 1;
     }
@@ -204,10 +202,10 @@ TEST_F(ChromeTraceWriterTest, MultiKernel) {
 
   EXPECT_EQ(data.empty(), false);
   EXPECT_EQ(data["traceEvents"][0]["cat"], "kernel1");
-  EXPECT_EQ(data["traceEvents"][0]["ts"], 0.0);
-  EXPECT_EQ(data["traceEvents"][0]["dur"], 400.0);
+  EXPECT_DOUBLE_EQ(data["traceEvents"][0]["ts"], 0.0);
+  EXPECT_DOUBLE_EQ(data["traceEvents"][0]["dur"], 400.0);
   EXPECT_EQ(data["traceEvents"][1]["cat"], "kernel1");
   EXPECT_EQ(data["traceEvents"][2]["cat"], "kernel2");
-  EXPECT_EQ(data["traceEvents"][2]["ts"], 10000.0);
-  EXPECT_EQ(data["traceEvents"][2]["dur"], 400.0);
+  EXPECT_DOUBLE_EQ(data["traceEvents"][2]["ts"], 10000.0);
+  EXPECT_DOUBLE_EQ(data["traceEvents"][2]["dur"], 400.0);
 }

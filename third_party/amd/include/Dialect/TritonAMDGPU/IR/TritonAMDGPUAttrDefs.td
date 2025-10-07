@@ -34,6 +34,10 @@ class TritonAMDGPU_Attr<string name, list<Trait> traits = [],
   : AttrDef<TritonAMDGPU_Dialect, name, traits, baseCppClass> {
 }
 
+def SetFP8Clamping : TritonAMDGPU_Attr<"SetFP8Clamping"> {
+  let mnemonic = "amdgcn.set.fp8.clamping";
+}
+
 class TritonAMDGPU_I32Enum<string name, string description, list<I32EnumAttrCase> cases>
     : I32EnumAttr<name, description, cases> {
   let genSpecializedAttr = 0;

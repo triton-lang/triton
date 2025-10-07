@@ -181,6 +181,11 @@ public:
       return failure();
     if (alloc->getBlock() != store->getBlock())
       return failure();
+    if (auto srcDef = store.getSrc().getDefiningOp()) {
+      if (alloc->getBlock() == srcDef->getBlock() &&
+          alloc->isBeforeInBlock(srcDef))
+        return failure();
+    }
     alloc.getSrcMutable().assign(store.getSrc());
     rewriter.replaceOp(store, alloc.getToken());
     return success();

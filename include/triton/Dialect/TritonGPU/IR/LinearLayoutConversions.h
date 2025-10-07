@@ -135,6 +135,11 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<unsigned> tilesPerWarp,
                                          ArrayRef<unsigned> warpsPerCTA);
 
+LinearLayout chooseScaledWmmaScaleLayout(
+    MLIRContext *ctx, int dotOperandIdx,
+    const std::vector<std::vector<int32_t>> &dotOperandWarpBasis,
+    ArrayRef<int64_t> dotOperandShape);
+
 LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                           ArrayRef<int64_t> dotOperandShape,
                                           ArrayRef<unsigned> tilesPerWarp,

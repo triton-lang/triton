@@ -6,7 +6,6 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -14,7 +13,6 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "llvm/ADT/SetOperations.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "ttg-utility"
@@ -1187,6 +1185,16 @@ static Type getNewType(Type type, Attribute encoding) {
                                tensorType.getElementType(), encoding);
 }
 
+static bool skipOperand(Operation *op, unsigned operandNumber) {
+  if (auto gather = dyn_cast<DescriptorGatherOp>(op)) {
+    return operandNumber == gather.getXOffsetsMutable().getOperandNumber();
+  }
+  if (auto scatter = dyn_cast<DescriptorScatterOp>(op)) {
+    return operandNumber == scatter.getXOffsetsMutable().getOperandNumber();
+  }
+  return false;
+}
+
 Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
   OpBuilder builder(op);
   // Convert operands
@@ -1194,10 +1202,11 @@ Operation *convertDistributedOpEncoding(Attribute encoding, Operation *op) {
   // operands' type, we do this by changing the outputs' type of
   // `make_tensor_ptr`
   SmallVector<Value, 4> newArgs;
-  for (auto operand : op->getOperands()) {
+  for (auto &opOperand : op->getOpOperands()) {
+    Value operand = opOperand.get();
     auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
-    if (tensorType &&
-        !isa<triton::gpu::SharedEncodingTrait>(tensorType.getEncoding())) {
+    bool skip = skipOperand(op, opOperand.getOperandNumber());
+    if (tensorType && !skip) {
       Type newType = getNewType(tensorType, encoding);
       newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
           op->getLoc(), newType, operand));

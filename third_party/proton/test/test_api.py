@@ -4,12 +4,14 @@ No GPU kernel should be declared in this test.
 Profile correctness tests involving GPU kernels should be placed in `test_profile.py`.
 """
 
+import pytest
 import json
 import triton.profiler as proton
 import pathlib
 from triton.profiler.hooks.hook import HookManager
 from triton.profiler.hooks.launch import LaunchHook
 from triton.profiler.hooks.instrumentation import InstrumentationHook
+from triton._internal_testing import is_hip
 
 
 def test_profile_single_session(tmp_path: pathlib.Path):
@@ -58,6 +60,52 @@ def test_profile_multiple_sessions(tmp_path: pathlib.Path):
     proton.finalize()
     assert temp_file2.exists()
     assert temp_file3.exists()
+
+
+def test_profile_mode(tmp_path: pathlib.Path):
+    temp_file0 = tmp_path / "test_profile0.hatchet"
+    if is_hip():
+        try:
+            proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
+        except Exception as e:
+            assert "RoctracerProfiler: unsupported mode: pcsampling" in str(e)
+        finally:
+            proton.finalize()
+    else:
+        import os
+        import pytest
+
+        if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
+            pytest.skip("PC sampling test is disabled")
+
+        # Two sessions with the same mode can coexist
+        proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
+        temp_file1 = tmp_path / "test_profile1.hatchet"
+        proton.start(str(temp_file1.with_suffix("")), mode="pcsampling")
+        proton.finalize()
+        assert temp_file1.exists()
+
+        # Two sessions with different modes cannot coexist
+        try:
+            proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
+            proton.start(str(temp_file1.with_suffix("")))
+        except Exception as e:
+            assert "Cannot add a session with the same profiler but a different mode than existing sessions" in str(e)
+        finally:
+            proton.finalize()
+
+        # Two sessions with different modes cannot coexist even if the first session is deactivated.
+        # In proton, once we deactivate a session, its profiler is not stopped, so changing the profiler mode is not allowed
+        # The only way to start a session with a different mode is to finalize all existing sessions first.
+        try:
+            session_id = proton.start(str(temp_file0.with_suffix("")), mode="pcsampling")
+            proton.deactivate(session_id)
+            temp_file1 = tmp_path / "test_profile1.hatchet"
+            proton.start(str(temp_file1.with_suffix("")))
+        except Exception as e:
+            assert "Cannot add a session with the same profiler but a different mode than existing sessions" in str(e)
+        finally:
+            proton.finalize()
 
 
 def test_profile_decorator(tmp_path: pathlib.Path):
@@ -184,6 +232,7 @@ def test_scope_metrics(tmp_path: pathlib.Path):
     proton.exit_scope(metrics={"b": 1.0})
 
     proton.finalize()
+
     assert temp_file.exists()
     with temp_file.open() as f:
         data = json.load(f)
@@ -193,6 +242,26 @@ def test_scope_metrics(tmp_path: pathlib.Path):
             assert child["metrics"]["a"] == 2.0
         elif child["frame"]["name"] == "test4":
             assert child["metrics"]["b"] == 1.0
+
+
+def test_scope_metrics_invalid(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_scope_metrics.hatchet"
+    proton.start(str(temp_file.with_suffix("")))
+
+    error = None
+
+    try:
+        with proton.scope("test0", {"a": 1.0}):
+            pass
+
+        with proton.scope("test0", {"a": 1}):
+            pass
+    except Exception as e:
+        error = str(e)
+    finally:
+        proton.finalize()
+
+    assert error is not None and "Metric value type mismatch for valueId 0 (a): current=double, new=uint64_t" in error
 
 
 def test_scope_properties(tmp_path: pathlib.Path):
@@ -317,3 +386,17 @@ def test_throw(tmp_path: pathlib.Path):
     finally:
         proton.finalize()
     assert "Session has not been initialized: " + str(session_id + 1) in deactivate_error
+
+
+@pytest.mark.parametrize("disable", [True, False])
+def test_profile_disable(disable, fresh_knobs, tmp_path: pathlib.Path):
+    fresh_knobs.proton.disable = disable
+    temp_file = tmp_path / "test_profile_disable.hatchet"
+    proton.start(str(temp_file.with_suffix("")))
+    proton.enter_scope("test0")
+    proton.exit_scope()
+    proton.finalize()
+    if disable:
+        assert not temp_file.exists()
+    else:
+        assert temp_file.exists()

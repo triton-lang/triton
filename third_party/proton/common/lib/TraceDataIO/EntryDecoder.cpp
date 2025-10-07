@@ -13,6 +13,12 @@ template <> void proton::decodeFn<I32Entry>(ByteSpan &buffer, I32Entry &entry) {
   entry.value = buffer.readInt32();
 }
 
+void I64Entry::print(std::ostream &os) const { os << value; }
+
+template <> void proton::decodeFn<I64Entry>(ByteSpan &buffer, I64Entry &entry) {
+  entry.value = buffer.readInt64();
+}
+
 void CycleEntry::print(std::ostream &os) const {
   std::string prefix = isStart ? "S" : "E";
   os << prefix + std::to_string(scopeId) + "C" + std::to_string(cycle);

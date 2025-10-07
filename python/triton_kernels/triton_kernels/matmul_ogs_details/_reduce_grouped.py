@@ -9,7 +9,7 @@ def _reduce_grouped(X, stride_xb: tl.uint64, stride_xm: tl.uint64, stride_xn,  #
                     XScale,  # input scalar flex scale
                     Out, stride_om: tl.uint64, stride_on,  # output tensor
                     OutExpectedScale, OutActualScale, OutChecksumScale,  # output scalar flex scales
-                    InIndx, B, N,  #
+                    PER_BATCH_OUT_SCALE: tl.constexpr, InIndx, B, M, N,  #
                     XMxScale, stride_mxb: tl.uint64,
                     stride_mxs: tl.uint64,  # optional per-32-col output MXFP scales (uint8)
                     OutMxScale, stride_omxs: tl.uint64,  # optional per-32-col output MXFP scales (uint8)
@@ -42,6 +42,12 @@ def _reduce_grouped(X, stride_xb: tl.uint64, stride_xm: tl.uint64, stride_xn,  #
         XScalePtrs = XMxScale + tl.arange(0, BLOCK_N // 32) * stride_xn
     if HAS_OUT_MX_SCALE:
         OutScalePtrs = OutMxScale + tl.arange(0, BLOCK_N_OUT // 32) * stride_on
+    if PER_BATCH_OUT_SCALE:
+        out_batch_idx = pid_t // M
+        OutExpectedScale += out_batch_idx
+        OutActualScale += out_batch_idx
+        if OutChecksumScale is not None:
+            OutChecksumScale += out_batch_idx
     x_scale = load_scale(XScale)
     for n_curr in tl.range(0, N, BLOCK_N, num_stages=4):
         acc = tl.zeros([BLOCK_N_OUT], dtype=tl.float32)
@@ -80,6 +86,8 @@ def _reduce_grouped(X, stride_xb: tl.uint64, stride_xm: tl.uint64, stride_xn,  #
             acc_scale = tl.reshape(acc_scale, [acc_scale.shape[-1]])
         # Convert to flexpoint output if configured (scalar scales)
         acc = float_to_flex(acc, OutExpectedScale, OutActualScale, OutChecksumScale, None, Out, FLEXPOINT_SATURATE_INF)
+        if not HAS_OUT_MX_SCALE and EPILOGUE_FN is not None:
+            acc = EPILOGUE_FN(acc, *epilogue_fn_args, target_dtype=Out.dtype.element_ty)
         # write-back for this tile
         out_ptr = OutPtrs + pid_t * stride_om
         tl.store(out_ptr, acc, mask=out_n_mask)

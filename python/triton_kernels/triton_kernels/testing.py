@@ -186,10 +186,11 @@ def compute_sanitizer(**target_kwargs):
     return decorator
 
 
-def compute_actual_scale(x, dtype):
+def compute_actual_scale(x, dtype, per_batch_scale=False):
     max_finite = {
         torch.float8_e5m2: MAX_FINITE_FLOAT8E5,
         torch.float8_e4m3fn: MAX_FINITE_FLOAT8E4NV,
         torch.float8_e4m3fnuz: MAX_FINITE_FLOAT8E4B8,
     }[dtype]
-    return x.abs().max() / max_finite
+    maxvals = x.abs().amax(dim=tuple(range(1, x.ndim))) if per_batch_scale else x.abs().max()
+    return maxvals / max_finite

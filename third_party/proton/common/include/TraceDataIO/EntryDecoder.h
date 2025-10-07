@@ -50,6 +50,16 @@ struct I32Entry : public EntryBase {
 
 template <> void decodeFn<I32Entry>(ByteSpan &buffer, I32Entry &entry);
 
+struct I64Entry : public EntryBase {
+  I64Entry() = default;
+
+  void print(std::ostream &os) const override;
+
+  int64_t value = 0;
+};
+
+template <> void decodeFn<I64Entry>(ByteSpan &buffer, I64Entry &entry);
+
 struct CycleEntry : public EntryBase {
   CycleEntry() = default;
 

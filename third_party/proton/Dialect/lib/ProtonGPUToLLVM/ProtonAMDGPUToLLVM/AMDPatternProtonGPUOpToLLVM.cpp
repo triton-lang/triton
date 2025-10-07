@@ -39,11 +39,9 @@ struct CircularStoreOpConversion
       // memory
       llvm::report_fatal_error("unimplemented");
     } else if (addrSpace == 3) {
-      // Setting predicate always true has bank conflicts but it is
-      // expected and stable.
       targetInfo.getTritonTargetInfo().storeDShared(
           rewriter, loc, dataPack.ptr, std::nullopt, dataPack.record,
-          /*predicate=*/b.true_val());
+          dataPack.isWriter);
     } else {
       llvm::report_fatal_error("unsupported address space in circular store");
     }

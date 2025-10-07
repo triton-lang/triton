@@ -108,10 +108,13 @@ public:
 
   std::optional<int64_t> getConstantValue() const { return constantValue; }
 
-  template <class T>
-  static void
-  initPessimisticStateFromFunc(int argNumber, T funcOp, DimVectorT *contiguity,
-                               DimVectorT *divisibility, DimVectorT *constancy);
+  static void initPessimisticStateFromFunc(int argNumber,
+                                           FunctionOpInterface funcOp,
+                                           DimVectorT *contiguity,
+                                           DimVectorT *divisibility,
+                                           DimVectorT *constancy);
+
+  static void initDimVectorFromHint(Attribute attr, DimVectorT *vec);
 
   bool operator==(const AxisInfo &other) const {
     return contiguity == other.contiguity &&

@@ -2,6 +2,7 @@ from triton.experimental.gluon.language import _core as ttgl
 from ..._core import builtin, float32
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
+from ..cdna3 import _buffer_atomic_rmw_impl
 from ..cdna3 import *  # NOQA: F403
 from ..cdna3 import __all__ as __cdna3_all
 from . import async_copy
@@ -42,7 +43,63 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     assert a_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format.value}"
     assert b_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format.value}"
 
+    assert a_scale is not None and b_scale is not None, "Scales must not be None"
+
     tensor = _semantic.dot_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, False, True, True, float32)
 
     ret_ty = ttgl.distributed_type(tensor.dtype, tensor.shape, layout)
     return ttgl.tensor(tensor.handle, ret_ty)
+
+
+"""
+buffer_atomic_rmw of cnda4 shares the same signature and functionalities as cdna3.buffer_atomic_rmw.
+The cdna4 version additionally supports `fadd` with `bf16`.
+"""
+
+
+@builtin
+def buffer_atomic_max(ptr, offsets, value, mask=None, sem=None, scope=None, _semantic=None):
+    return _buffer_atomic_rmw_impl('max', ptr, offsets, value, "cdna4", mask=mask, sem=sem, scope=scope,
+                                   _semantic=_semantic)
+
+
+@builtin
+def buffer_atomic_min(ptr, offsets, value, mask=None, sem=None, scope=None, _semantic=None):
+
+    return _buffer_atomic_rmw_impl('min', ptr, offsets, value, "cdna4", mask=mask, sem=sem, scope=scope,
+                                   _semantic=_semantic)
+
+
+@builtin
+def buffer_atomic_add(ptr, offsets, value, mask=None, sem=None, scope=None, _semantic=None):
+
+    return _buffer_atomic_rmw_impl('add', ptr, offsets, value, "cdna4", mask=mask, sem=sem, scope=scope,
+                                   _semantic=_semantic)
+
+
+@builtin
+def buffer_atomic_and(ptr, offsets, value, mask=None, sem=None, scope=None, _semantic=None):
+
+    return _buffer_atomic_rmw_impl('and', ptr, offsets, value, "cdna4", mask=mask, sem=sem, scope=scope,
+                                   _semantic=_semantic)
+
+
+@builtin
+def buffer_atomic_or(ptr, offsets, value, mask=None, sem=None, scope=None, _semantic=None):
+
+    return _buffer_atomic_rmw_impl('or', ptr, offsets, value, "cdna4", mask=mask, sem=sem, scope=scope,
+                                   _semantic=_semantic)
+
+
+@builtin
+def buffer_atomic_xor(ptr, offsets, value, mask=None, sem=None, scope=None, _semantic=None):
+
+    return _buffer_atomic_rmw_impl('xor', ptr, offsets, value, "cdna4", mask=mask, sem=sem, scope=scope,
+                                   _semantic=_semantic)
+
+
+@builtin
+def buffer_atomic_xchg(ptr, offsets, value, mask=None, sem=None, scope=None, _semantic=None):
+
+    return _buffer_atomic_rmw_impl('xchg', ptr, offsets, value, "cdna4", mask=mask, sem=sem, scope=scope,
+                                   _semantic=_semantic)

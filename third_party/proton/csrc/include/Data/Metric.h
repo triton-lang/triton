@@ -3,6 +3,7 @@
 
 #include "Utility/String.h"
 #include "Utility/Traits.h"
+#include <stdexcept>
 #include <variant>
 #include <vector>
 
@@ -11,6 +12,21 @@ namespace proton {
 enum class MetricKind { Flexible, Kernel, PCSampling, Cycle, Count };
 
 using MetricValueType = std::variant<uint64_t, int64_t, double, std::string>;
+
+inline const char *typeNameForIndex(std::size_t idx) {
+  switch (idx) {
+  case 0:
+    return "uint64_t";
+  case 1:
+    return "int64_t";
+  case 2:
+    return "double";
+  case 3:
+    return "std::string";
+  default:
+    return "<unknown>";
+  }
+}
 
 /// A metric is a class that can be associated with a context.
 /// `Metric` is the base class for all metrics.
@@ -42,6 +58,14 @@ public:
 
   /// Update a specific value id with the new value.
   void updateValue(int valueId, MetricValueType value) {
+    // Enforce type consistency: once a valueId has a type, it must not change.
+    if (values[valueId].index() != value.index()) {
+      throw std::runtime_error(
+          std::string("Metric value type mismatch for valueId ") +
+          std::to_string(valueId) + " (" + getValueName(valueId) + ")" +
+          ": current=" + typeNameForIndex(values[valueId].index()) +
+          ", new=" + typeNameForIndex(value.index()));
+    }
     // Handle string and other values separately
     if (std::holds_alternative<std::string>(value)) {
       values[valueId] = std::get<std::string>(value);
@@ -259,6 +283,9 @@ public:
     DeviceId,
     DeviceType,
     TimeShiftCost,
+    InitTime,
+    PreFinalTime,
+    PostFinalTime,
     Count,
   };
 
@@ -268,7 +295,8 @@ public:
               double normalizedDuration, uint64_t kernelId,
               const std::string &kernelName, uint64_t blockId,
               uint64_t processorId, uint64_t unitId, uint64_t deviceId,
-              uint64_t deviceType, uint64_t timeShiftCost)
+              uint64_t deviceType, uint64_t timeShiftCost, uint64_t initTime,
+              uint64_t preFinalTime, uint64_t postFinalTime)
       : CycleMetric() {
     this->values[StartCycle] = startCycle;
     this->values[EndCycle] = endCycle;
@@ -282,6 +310,9 @@ public:
     this->values[DeviceId] = deviceId;
     this->values[DeviceType] = deviceType;
     this->values[TimeShiftCost] = timeShiftCost;
+    this->values[InitTime] = initTime;
+    this->values[PreFinalTime] = preFinalTime;
+    this->values[PostFinalTime] = postFinalTime;
   }
 
   virtual const std::string getName() const { return "CycleMetric"; }
@@ -296,14 +327,16 @@ public:
 
 private:
   const static inline bool PROPERTY[CycleMetricKind::Count] = {
-      false, false, false, false, true, true,
-      true,  true,  true,  true,  true, true};
+      false, false, false, false, true,  true,  true, true,
+      true,  true,  true,  true,  false, false, false};
   const static inline bool EXCLUSIVE[CycleMetricKind::Count] = {
-      false, false, true, true, true, true, true, true, true, true, true, true};
+      false, false, true, true, true,  true,  true, true,
+      true,  true,  true, true, false, false, false};
   const static inline std::string VALUE_NAMES[CycleMetricKind::Count] = {
-      "start_cycle", "end_cycle",   "cycles",      "normalized_cycles",
-      "kernel_id",   "kernel_name", "block_id",    "processor_id",
-      "unit_id",     "device_id",   "device_type", "time_shift_cost"};
+      "start_cycle", "end_cycle",      "cycles",         "normalized_cycles",
+      "kernel_id",   "kernel_name",    "block_id",       "processor_id",
+      "unit_id",     "device_id",      "device_type",    "time_shift_cost",
+      "init_time",   "pre_final_time", "post_final_time"};
 };
 
 } // namespace proton

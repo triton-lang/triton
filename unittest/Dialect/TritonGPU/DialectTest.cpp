@@ -501,18 +501,19 @@ class AMDMfmaLayoutTest : public AMDLayoutTest {
 public:
   AMDMfmaLayoutTest() = default;
 
-  triton::gpu::AMDMfmaEncodingAttr createMFMA(int mDim, int nDim,
+  triton::gpu::AMDMfmaEncodingAttr createMFMA(ArrayRef<unsigned> instrShape,
                                               ArrayRef<unsigned> warpsPerCTA) {
     return triton::gpu::AMDMfmaEncodingAttr::get(
-        &ctx, /*version=*/2, warpsPerCTA, mDim, nDim,
-        /*isTransposed=*/false, ctaLayout, std::nullopt);
+        &ctx, /*version=*/2, warpsPerCTA, instrShape,
+        /*isTransposed=*/false, ctaLayout);
   }
 
   triton::gpu::AMDMfmaEncodingAttr
-  createTransposedMFMA(int mDim, int nDim, ArrayRef<unsigned> warpsPerCTA) {
+  createTransposedMFMA(ArrayRef<unsigned> instrShape,
+                       ArrayRef<unsigned> warpsPerCTA) {
     return triton::gpu::AMDMfmaEncodingAttr::get(
-        &ctx, /*version=*/2, warpsPerCTA, mDim, nDim,
-        /*isTransposed=*/true, ctaLayout, std::nullopt);
+        &ctx, /*version=*/2, warpsPerCTA, instrShape,
+        /*isTransposed=*/true, ctaLayout);
   }
 };
 

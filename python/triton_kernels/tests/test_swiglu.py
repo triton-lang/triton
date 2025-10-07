@@ -30,7 +30,7 @@ def test_op(M, N, limit, device, alpha=0.5):
     # initialize expert data
     n_expts_tot = 6
     n_expts_act = 2
-    logits = init_routing_data(M, n_expts_tot).detach()
+    logits = init_routing_data(M, n_expts_tot, device).detach()
     routing_data, _, _ = routing_torch(logits, n_expts_act)
     n_tokens = routing_data.expt_hist.sum()
 

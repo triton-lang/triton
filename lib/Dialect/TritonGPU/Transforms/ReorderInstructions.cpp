@@ -15,6 +15,7 @@
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
@@ -96,6 +97,10 @@ public:
         return;
       Operation *argOp = op.getSrc().getDefiningOp();
       if (!argOp)
+        return;
+      // Don't hoist alloc if the src is a scalar as this may increase smem
+      // pressure for no benefits.
+      if (isa<arith::ConstantOp, triton::SplatOp>(argOp))
         return;
       moveAfter(op, argOp);
     });

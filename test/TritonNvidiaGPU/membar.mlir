@@ -6,7 +6,7 @@
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: init_barrier
 	// CHECK: local_alloc
-	// CHECK-NEXT: gpu.barrier
+	// CHECK-NEXT: ttg.local_barrier
 	// CHECK-NEXT: init_barrier
   tt.func @init_barrier() {
   	%cst = arith.constant dense<0> : tensor<1xi64, #blocked0>
@@ -24,9 +24,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: inval_barrier
 	// CHECK: local_alloc
-	// CHECK-NEXT: gpu.barrier
+	// CHECK-NEXT: ttg.local_barrier
 	// CHECK-NEXT: init_barrier
-	// CHECK-NEXT: gpu.barrier
+	// CHECK-NEXT: ttg.local_barrier
 	// CHECK-NEXT: inval_barrier
   tt.func @inval_barrier() {
   	%cst = arith.constant dense<0> : tensor<1xi64, #blocked0>
@@ -45,9 +45,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: barrier_expect
 	// CHECK: local_alloc
-	// CHECK-NEXT: gpu.barrier
+	// CHECK-NEXT: ttg.local_barrier
 	// CHECK-NEXT: init_barrier
-	// CHECK-NEXT: gpu.barrier
+	// CHECK-NEXT: ttg.local_barrier
 	// CHECK-NEXT: barrier_expect
   tt.func @barrier_expect(%pred : i1) {
   	%cst = arith.constant dense<0> : tensor<1xi64, #blocked0>
@@ -66,9 +66,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: wait_barrier
 	// CHECK: local_alloc
-	// CHECK-NEXT: gpu.barrier
+	// CHECK-NEXT: ttg.local_barrier
 	// CHECK-NEXT: init_barrier
-	// CHECK-NEXT: gpu.barrier
+	// CHECK-NEXT: ttg.local_barrier
 	// CHECK-NEXT: wait_barrier
   tt.func @wait_barrier(%phase : i32) {
   	%cst = arith.constant dense<0> : tensor<1xi64, #blocked0>
@@ -91,7 +91,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 		// CHECK: local_dealloc
 		// CHECK-NEXT: local_alloc
 		// CHECK-NEXT: local_alloc
-		// CHECK-NEXT: gpu.barrier
+		// CHECK-NEXT: ttg.local_barrier
 		// CHECK-NEXT: init_barrier
   	%cst = arith.constant dense<0> : tensor<128x64xi64, #blocked0>
   	%alloc = ttg.local_alloc %cst : (tensor<128x64xi64, #blocked0>) -> !ttg.memdesc<128x64xi64, #shared0, #smem, mutable>
@@ -110,7 +110,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-LABEL: tma_store
 //       CHECK: ttg.local_alloc
 //       CHECK-NEXT: ttg.local_dealloc
-//       CHECK-NEXT: gpu.barrier
+//       CHECK-NEXT: ttg.local_barrier
 //       CHECK-NEXT: ttg.local_alloc
   tt.func public @tma_store(%arg0: !tt.tensordesc<tensor<128x256xf32, #shared0>>, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: tensor<128x256xf32, #blocked0>) {
   	%cst = arith.constant dense<0> : tensor<128x64xi64, #blocked0>

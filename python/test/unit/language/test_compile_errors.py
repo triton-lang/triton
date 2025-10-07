@@ -476,3 +476,16 @@ def test_unused_result():
     obtained_err_msg = str(e.value).split('\n')[-1]
 
     assert expected_err_msg == obtained_err_msg
+
+
+def test_err_constexpr_and_do_not_specialize():
+
+    @triton.jit(do_not_specialize=["N"])
+    def kernel(N: tl.constexpr):
+        pass
+
+    with pytest.raises(CompilationError, match="N marked as constexpr and listed in do_not_specialize"):
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={"N": 5}))
+
+    with pytest.raises(CompilationError, match="N marked as constexpr and listed in do_not_specialize"):
+        kernel[(1, )](5)

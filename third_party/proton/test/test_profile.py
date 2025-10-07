@@ -15,14 +15,7 @@ import threading
 import triton.language as tl
 from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 import triton.profiler.hooks.launch as proton_launch
-
-
-def is_cuda():
-    return triton.runtime.driver.active.get_current_target().backend == "cuda"
-
-
-def is_hip():
-    return triton.runtime.driver.active.get_current_target().backend == "hip"
+from triton._internal_testing import is_hip
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
@@ -43,11 +36,16 @@ def test_torch(context, tmp_path: pathlib.Path):
         assert len(data[0]["children"]) == 1
         # bfs search until find the "elementwise_kernel" and then check its children
         queue = [data[0]]
+        import re
         while len(queue) > 0:
             parent_frame = queue.pop(0)
             for child in parent_frame["children"]:
                 if "elementwise_kernel" in child["frame"]["name"]:
                     assert len(child["children"]) == 0
+                    # check the regex of the parent name matches
+                    # file_name:line_number@function_name
+                    regex = r".+:\d+@.+"
+                    assert re.match(regex, parent_frame["frame"]["name"])
                     return
                 queue.append(child)
 
@@ -481,7 +479,10 @@ def test_scope_multiple_threads(tmp_path: pathlib.Path):
     assert names == expected
 
 
-def test_nvtx_range_push_pop(tmp_path: pathlib.Path):
+@pytest.mark.parametrize("enable_nvtx", [None, True, False])
+def test_nvtx_range_push_pop(enable_nvtx, fresh_knobs, tmp_path: pathlib.Path):
+    if enable_nvtx is not None:
+        fresh_knobs.proton.enable_nvtx = enable_nvtx
     temp_file = tmp_path / "test_nvtx_range_push_pop.hatchet"
     proton.start(str(temp_file.with_suffix("")))
 
@@ -502,12 +503,15 @@ def test_nvtx_range_push_pop(tmp_path: pathlib.Path):
     proton_scope = children[0]
     assert proton_scope["frame"]["name"] == "proton_scope"
     assert len(proton_scope["children"]) == 1
-    nvtx_range0 = proton_scope["children"][0]
-    assert nvtx_range0["frame"]["name"] == "nvtx_range0"
-    assert len(nvtx_range0["children"]) == 1
-    nvtx_range1 = nvtx_range0["children"][0]
-    assert nvtx_range1["frame"]["name"] == "nvtx_range1"
-    assert len(nvtx_range1["children"]) == 1
-    kernel = nvtx_range1["children"][0]
+    if enable_nvtx or enable_nvtx is None:
+        nvtx_range0 = proton_scope["children"][0]
+        assert nvtx_range0["frame"]["name"] == "nvtx_range0"
+        assert len(nvtx_range0["children"]) == 1
+        nvtx_range1 = nvtx_range0["children"][0]
+        assert nvtx_range1["frame"]["name"] == "nvtx_range1"
+        assert len(nvtx_range1["children"]) == 1
+        kernel = nvtx_range1["children"][0]
+    else:
+        kernel = proton_scope["children"][0]
     assert "elementwise" in kernel["frame"]["name"]
     assert kernel["metrics"]["count"] == 1

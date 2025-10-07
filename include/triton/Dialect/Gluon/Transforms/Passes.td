@@ -35,4 +35,14 @@ def GluonInline: Pass<"gluon-inline"> {
   let dependentDialects = [];
 }
 
+def GluonSimplifyControlFlow: Pass<"gluon-slimplify-control-flow"> {
+  let summary = "simplications for control flow ops";
+
+  let description = [{
+    The `gluon-inline` pass applies a reduced set of simplification
+    and canonicalization patterns to the module.
+  }];
+  let dependentDialects = [];
+}
+
 #endif

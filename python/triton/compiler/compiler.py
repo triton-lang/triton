@@ -347,17 +347,6 @@ def compile(src, target=None, options=None, _env_vars=None):
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                              binary=False)
     fn_cache_manager.put_group(metadata_filename, metadata_group)
-    # Compilation completed, disabling multithreading in context.
-    # This is needed to safely finalize threads pool inside context: if current process forks before
-    # python GC deletes context object, thread pool in child process will be invalid, which could
-    # lead to child crash or hang.
-    #
-    # However disabling multithreading causes the code to hang if the ASAN pass is enabled
-    # this is likely due to the llvm-symbolizer forking a process
-    # TODO: Reconcile the difference here between the ASAN and non-ASAN path with enabling
-    # multithreading in the MLIR context
-    if not knobs.compilation.enable_asan:
-        context.disable_multithreading()
 
     # notify any listener
     if compilation_listener:

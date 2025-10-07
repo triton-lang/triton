@@ -10,7 +10,7 @@ from triton.experimental.gluon.language._semantic import _check
 
 from . import tma
 from ..hopper import fence_async_shared, mbarrier
-from ..ampere import async_copy
+from ..ampere import async_copy, mma_v2
 
 from triton._C.libtriton import ir
 if TYPE_CHECKING:
@@ -23,6 +23,7 @@ __all__ = [
     "fence_async_shared",
     "get_tmem_32x32b_reg_layout",
     "mbarrier",
+    "mma_v2",
     "tensor_memory_descriptor",
     "TensorMemoryLayout",
     "tma",
