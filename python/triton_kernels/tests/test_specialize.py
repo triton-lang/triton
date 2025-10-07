@@ -72,8 +72,6 @@ def test_cacheable(device, fresh_triton_cache, monkeypatch):
     # check line info in ttir
     ttir = k.asm["ttir"]
     loc = None
-    # XXX debug
-    print(ttir)
     for line in ttir.split("\n"):
         if loc and loc in line:
             assert "test_specialize.py" in line
