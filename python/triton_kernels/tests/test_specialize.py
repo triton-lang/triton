@@ -1,13 +1,21 @@
-import torch
 import importlib
+import re
+
+import torch
 from triton_kernels.specialize import cacheable, specialize
 import triton
 import triton.language as tl
 
 
 @triton.jit
-def template_kernel(o):
+def identity(x):
+    return x
+
+
+@triton.jit
+def template_kernel(o, fn: tl.constexpr):
     cst = 1.0
+    cst = fn(cst)
     tl.store(o, cst)
 
 
@@ -25,7 +33,7 @@ def get_specialized_kernel():
     if _specialized_kernel is not None:
         return _specialized_kernel
     import types
-    spec_constants = {}
+    spec_constants = {"fn": identity}
     spec_tuples = {}
     module = types.ModuleType("specialized_kernel")
     module.specialized = specialize(template_kernel, module, spec_constants, spec_tuples)
@@ -60,6 +68,11 @@ def test_cacheable(device, fresh_triton_cache):
     assert o.item() == 1.0
     assert module_name == "tests.test_specialize"
     assert fn_name == "cacheable_kernel"
+
+    # check line info in ttir
+    ttir = k.asm["ttir"]
+    store_match = re.search(r'tt\\.store.*loc\\(".*test_specialize.py",\\s*17,', ttir)
+    assert store_match is not None, f"Expected tt.store to map to line 17, got: {ttir}"
 
     compile_count = 0
 
