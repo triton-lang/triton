@@ -132,4 +132,14 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
     if do_not_specialize:
         attrs["do_not_specialize"] = do_not_specialize
     ret = define_kernel(new_src, module, attrs, **globals)
+
+    # Reuse the original kernel's metadata so that stack traces and other
+    # source-based tooling report the correct file and line numbers.
+    ret.raw_src = list(fn.raw_src)
+    ret.starting_line_number = fn.starting_line_number
+    orig_code = fn.fn.__code__
+    ret.fn.__code__ = ret.fn.__code__.replace(
+        co_filename=orig_code.co_filename,
+        co_firstlineno=orig_code.co_firstlineno,
+    )
     return ret
