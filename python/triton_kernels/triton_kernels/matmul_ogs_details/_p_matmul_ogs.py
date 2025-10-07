@@ -249,7 +249,7 @@ def _p_matmul_ogs(
             XMxScalePtrs = XMxScale + start_z.to(index_type) * stride_x_mx_z
             if GatherIndx is None:
                 XMxScalePtrs += start_m * stride_x_mx_m
-            offs_k_scale = MX_SCALE_BLOCK_K * pid_k + tl.arange(0, MX_SCALE_BLOCK_K)
+            offs_k_scale = off_k_x0 // MXFP_BLOCK_SIZE + tl.arange(0, MX_SCALE_BLOCK_K)
             XMxScalePtrs += (offs_x_m if USE_GATHER_TMA else offs_m).to(index_type)[:, None] * stride_x_mx_m
             XMxScalePtrs += offs_k_scale.to(index_type)[None, :] * stride_x_mx_k
         else:
