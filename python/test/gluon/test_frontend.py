@@ -76,6 +76,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@gluon.jit
+def assume_kernel(arg: tl.int32):
+    ttgl.assume(arg > 1)
+
+
+@pytest.mark.parametrize("target", ALL_TARGETS)
+def test_assume(target):
+    arg = 100
+    mod = run_parser(
+        assume_kernel,
+        *make_args(arg),
+        target=target,
+    )
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @assume_kernel(%arg0: i32) attributes {noinline = false} {
+    %c1_i32 = arith.constant 1 : i32
+    %0 = arith.cmpi sgt, %arg0, %c1_i32 : i32
+    llvm.intr.assume %0 : i1
+    tt.return
+  }
+}
+""")
+
+
 @filecheck_test
 @gluon.jit
 def test_histogram_frontend():
