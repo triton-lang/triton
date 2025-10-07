@@ -71,7 +71,11 @@ def test_cacheable(device, fresh_triton_cache):
 
     # check line info in ttir
     ttir = k.asm["ttir"]
-    store_match = re.search(r'tt\\.store.*loc\\(".*test_specialize.py",\\s*17,', ttir)
+    store_match = re.search(
+        r'tt\.store.*loc\(".*test_specialize\.py",\s*17,',
+        ttir,
+        flags=re.DOTALL,
+    )
     assert store_match is not None, f"Expected tt.store to map to line 17, got: {ttir}"
 
     compile_count = 0
