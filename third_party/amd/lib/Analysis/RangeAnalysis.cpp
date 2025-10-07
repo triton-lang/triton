@@ -15,6 +15,53 @@
 #include <numeric>
 #include <optional>
 
+// Some implementation notes:
+// 1: tl.assume statements
+//  - A value may have multiple assume-operations (assume-ops for short)
+//    associated with it. At point p, we only take into account those assume-ops
+//    whose enclosing basic blocks dominate the basic-block where p belong to.
+//  - See some examples in the comment to maybeGetAssumedRangeHelper().
+//  - The assumed value-range is inferred right before an operation is visited,
+//    but the assume value-range does not directly apply to the lattice.
+//  - After the operation is visited, if lattices of the results remain in
+//    "bottom" state (i.e. uninitialized), the assumed value-range will be used
+//    instead.
+//  - The transfer-function is supposed to apply intersection between inferred
+//    value-range and assume value-range. However, the
+//    IntegerValueRangeLattice::meet() seems to be a silent no-op. For now,
+//    the transfer-function only use assumed-value range. Intersecting the
+//    inferred value-range with assume value-range still guarantee monotonicity
+//    of the transfer function.
+//
+// 2. SCF.
+//  - Unfortunately, the data-flow framework does not understand SCF! Running
+//    this pass together DCE and constant-propagation analysis make things even
+//    more complicated.
+//  - The override function visitOperaion() does not visit yieldOp, because
+//    it has no result and is ignored by the framework.
+//  - On top of that, while the framework provides a way to visit SCF's
+//    LHs/incoming-value (via visitRegionSuccessors), it does not provide a hook
+//    for processing the RHS.
+//  - To workaround this problem, right after an operation is visited, we check
+//    if it is used by a yield-op. If so, process the yield-op immediately.
+//  - Here is the steps about how SCF.if is handled.
+//
+//    x, y = scf.if cond {
+//      then-clause
+//      yield a, b
+//    } else {
+//      else-clause
+//      yield c, d
+//    }
+//    z = add x, y
+//
+//   o. visitRegionSuccessors(scf.if) is called, which does nothing. Once it
+//      returns, the base-class return immediately, and hence the
+//      visitOperation(scf.if) is not called.
+//   o. The DCE analysis initially mark blocks of then- and else-clause as
+//      "dead", and they are skipped for now.
+//   o.
+//
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-range-analysis"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -80,6 +127,7 @@ void inferResultRanges(tt::MakeRangeOp *op, SetIntRangeFn setResultRange) {
   assert(llvm::isa<IntegerType>(resTy.getElementType()) && "expected int type");
   IntegerType elTy = llvm::cast<IntegerType>(resTy.getElementType());
   auto bitWidth = mlir::ConstantIntRanges::getStorageBitwidth(elTy);
+  // NOTE: make_range(begin, end) yields a half open interval, [begin, end).
   setResultRange(result,
                  ConstantIntRanges::range(
                      /*min*/ {/*numBits*/ bitWidth, /*val*/ op->getStart(),
@@ -163,8 +211,9 @@ maybeGetAssumedRangeHelper(Operation *assumption, Value anchor, Block *useBlock,
     return {};
   }
 
-  Block *anchorBlock = anchor.getParentBlock();
-  if (!anchorBlock || !domInfo->dominates(anchorBlock, useBlock))
+  // The block where tl.assume resides must dominate the block where the value
+  // is referenced!
+  if (!useBlock || !domInfo->dominates(cmpOp->getBlock(), useBlock))
     return {};
 
   bool isSigned = true;
@@ -277,8 +326,17 @@ maybeGetAssumedRange(const SetVector<Operation *> &allAssumptions, Value anchor,
   return result;
 }
 
-// arith dialect in general does not differentiate signed int and unsigned int;
-// integer value is signed or unsigned depends on how it's used.
+// Many operations in arith dialect do not differentiate signed int and unsigned
+// int, e.g., arith::AddIOp, arith::MullOp. This function try to extrapolate the
+// type (sint or uint) of the Operation from the its UD and DU chains.
+//
+// TODO: This function seems to be useful for proving a quantity is a
+// non-negative. However, it is less so in proving a quantity is smaller than
+// specified upper bound. In fact, turning off this feature only sees 5 lines
+// difference in amd-range-analysis.mlir. For now, it is turned on only in
+// TestAMDRangeAnalysis.cpp. For now, we just keep this code for a while and
+// see if it will be useful for some real world applications.
+//
 static void collectValueOfSignedInt(Operation *top, DenseSet<Value> &valueSet) {
   SetVector<Value> worklist;
 
@@ -485,7 +543,8 @@ bool cmpIIsStaticallyTrue(const DataFlowSolver &solver, arith::CmpIOp cmpOp) {
 
 LogicalResult TritonIntegerRangeAnalysis::initialize(Operation *top) {
   signedIntValues.clear();
-  collectValueOfSignedInt(top, signedIntValues);
+  if (assumeNoArithOverflow)
+    collectValueOfSignedInt(top, signedIntValues);
   return Base::initialize(top);
 }
 
@@ -704,7 +763,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
     ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
     ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices) {
 
-  // step 1: Figure out the implied value-range of result-value.
+  // step 1: Figure out the implied value-range of result and source operands
   opResultAssumption.clear();
   for (mlir::OpResult result : op->getResults()) {
     auto assumedRange = maybeGetAssumedRange(result, op->getBlock());
@@ -712,11 +771,32 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
       opResultAssumption.insert(std::pair(result, *assumedRange));
   }
 
-  // step 2: call helper function inferring the value range. If assumed value-
+  llvm::SmallVector<const dataflow::IntegerValueRangeLattice *, 4>
+      opndValueRanges;
+
+  llvm::SmallVector<std::unique_ptr<dataflow::IntegerValueRangeLattice>, 4>
+      newSrcLattices;
+
+  for (auto [index, opnd] : llvm::enumerate(op->getOperands())) {
+    auto assumedRange = maybeGetAssumedRange(opnd, op->getBlock());
+    if (!assumedRange.has_value()) {
+      opndValueRanges.push_back(operands[index]);
+      continue;
+    }
+
+    auto newLattice =
+        std::make_unique<dataflow::IntegerValueRangeLattice>(opnd);
+    (void)newLattice->join(IntegerValueRange(*assumedRange));
+    opndValueRanges.push_back(newLattice.get());
+    newSrcLattices.push_back(std::move(newLattice));
+  }
+  assert(opndValueRanges.size() == operands.size() && "size disagree");
+
+  // step 3: call helper function inferring the value range. If assumed value-
   // range is present, the transfer-function will intersect the assumed value-
   // value with the inferred value range.
   LogicalResult visitResult =
-      visitOperationHelper(op, operands, resultsLattices);
+      visitOperationHelper(op, opndValueRanges, resultsLattices);
 
   // step 3: If previous step failed to infer value-range, apply assumed
   //  value-range is present.

@@ -1726,3 +1726,254 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+//def scfif_range1(x, y, output_ptr,n_elements, BLOCK_SIZE: tl.constexpr, ):
+//    tl.assume(y < 100)
+//    tl.assume(y > 1)
+//    pid = tl.program_id(axis=0)
+//    block_start = pid * BLOCK_SIZE
+//    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+//    mask = offsets < n_elements
+//    if x > y:
+//      z = x + 3
+//    else:
+//      z = y + 4;   # to check z in [6, 103]
+//    z2 = z + 1     # to check z2 in [0, umax]/[smin, smax]
+//    tl.store(output_ptr + offsets, z2, mask)
+//
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @scfif_range1(%x: i32, %y: i32, %output_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %n_elements: i32 {tt.divisibility = 16 : i32}) {
+    %c4_i32 = arith.constant 4 : i32
+    %c3_i32 = arith.constant 3 : i32
+    %c1024_i32 = arith.constant 1024 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c100_i32 = arith.constant 100 : i32
+    %0 = arith.cmpi slt, %y, %c100_i32 : i32
+    llvm.intr.assume %0 : i1
+    %1 = arith.cmpi sgt, %y, %c1_i32 : i32
+    llvm.intr.assume %1 : i1
+    %2 = tt.get_program_id x : i32
+    %3 = arith.muli %2, %c1024_i32 : i32
+    %4 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %5 = tt.splat %3 : i32 -> tensor<1024xi32, #blocked>
+    %6 = arith.addi %5, %4 : tensor<1024xi32, #blocked>
+    %7 = tt.splat %n_elements : i32 -> tensor<1024xi32, #blocked>
+    %8 = arith.cmpi slt, %6, %7 : tensor<1024xi32, #blocked>
+    %9 = arith.cmpi sgt, %x, %y : i32
+    %10 = scf.if %9 -> (i32) {
+      %z = arith.addi %x, %c3_i32 : i32
+      scf.yield %z : i32
+    } else {
+      // expected-remark@+1 {{unsigned : [6, 103] signed : [6, 103]}}
+      %z = arith.addi %y, %c4_i32 : i32
+      scf.yield %z : i32
+    }
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %11 = arith.addi %10, %c1_i32 : i32
+    %12 = arith.addi %5, %4 : tensor<1024xi32, #blocked>
+    %13 = arith.sitofp %11 : i32 to f32
+    %14 = tt.splat %13 : f32 -> tensor<1024xf32, #blocked>
+    %15 = tt.splat %output_ptr : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %16 = tt.addptr %15, %12 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    tt.store %16, %14, %8 : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+//def scfif_range2(x, y, output_ptr,n_elements, BLOCK_SIZE: tl.constexpr, ):
+//    tl.assume(y < 100)
+//    tl.assume(y > 1)
+//    tl.assume(x < 20)
+//    tl.assume(x > 0)
+//    pid = tl.program_id(axis=0)
+//    block_start = pid * BLOCK_SIZE
+//    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+//    mask = offsets < n_elements
+//    if x > y:
+//      z = x + 3   // check z in [4, 22]
+//    else:
+//      z = y + 4;  // check z in [6, 103]
+//    z2 = z + 1    // check z2 in [5, 104]
+//    tl.store(output_ptr + offsets, z2, mask)
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @scfif_range2(%x: i32, %y: i32, %output_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %n_elements: i32 {tt.divisibility = 16 : i32}) {
+    %c4_i32 = arith.constant 4 : i32
+    %c3_i32 = arith.constant 3 : i32
+    %c1024_i32 = arith.constant 1024 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c20_i32 = arith.constant 20 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c100_i32 = arith.constant 100 : i32
+    %0 = arith.cmpi slt, %y, %c100_i32 : i32
+    llvm.intr.assume %0 : i1
+    %1 = arith.cmpi sgt, %y, %c1_i32 : i32
+    llvm.intr.assume %1 : i1
+    %2 = arith.cmpi slt, %x, %c20_i32 : i32
+    llvm.intr.assume %2 : i1
+    %3 = arith.cmpi sgt, %x, %c0_i32 : i32
+    llvm.intr.assume %3 : i1
+    %4 = tt.get_program_id x : i32
+    %5 = arith.muli %4, %c1024_i32 : i32
+    %6 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %7 = tt.splat %5 : i32 -> tensor<1024xi32, #blocked>
+    %8 = arith.addi %7, %6 : tensor<1024xi32, #blocked>
+    %9 = tt.splat %n_elements : i32 -> tensor<1024xi32, #blocked>
+    %10 = arith.cmpi slt, %8, %9 : tensor<1024xi32, #blocked>
+    %11 = arith.cmpi sgt, %x, %y : i32
+    %12 = scf.if %11 -> (i32) {
+      // expected-remark@+1 {{unsigned : [4, 22] signed : [4, 22]}}
+      %z = arith.addi %x, %c3_i32 : i32
+      scf.yield %z : i32
+    } else {
+      // expected-remark@+1 {{unsigned : [6, 103] signed : [6, 103]}}
+      %z = arith.addi %y, %c4_i32 : i32
+      scf.yield %z : i32
+    }
+    // expected-remark@+1 {{unsigned : [5, 104] signed : [5, 104]}}
+    %13 = arith.addi %12, %c1_i32 : i32
+    %14 = arith.addi %7, %6 : tensor<1024xi32, #blocked>
+    %15 = arith.sitofp %13 : i32 to f32
+    %16 = tt.splat %15 : f32 -> tensor<1024xf32, #blocked>
+    %17 = tt.splat %output_ptr : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %18 = tt.addptr %17, %14 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    tt.store %18, %16, %10 : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+//def scfif_range3(x, y, output_ptr,n_elements, BLOCK_SIZE: tl.constexpr, ):
+//    tl.assume(y < 100)
+//    tl.assume(y > 1)
+//    pid = tl.program_id(axis=0)
+//    block_start = pid * BLOCK_SIZE
+//    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+//    mask = offsets < n_elements
+//    if x > y:
+//      z = x + 3
+//    else:
+//      tl.assume(x < 20) # should not have impact to the x occurrences in then block!
+//      tl.assume(x > 0)
+//      z = y + 4;
+//    z2 = z + 1
+//    tl.store(output_ptr + offsets, z2, mask)
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @scfif_range3(%x: i32, %y: i32, %output_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %n_elements: i32 {tt.divisibility = 16 : i32}) {
+    %c4_i32 = arith.constant 4 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c20_i32 = arith.constant 20 : i32
+    %c3_i32 = arith.constant 3 : i32
+    %c1024_i32 = arith.constant 1024 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c100_i32 = arith.constant 100 : i32
+    %0 = arith.cmpi slt, %y, %c100_i32 : i32
+    llvm.intr.assume %0 : i1
+    %1 = arith.cmpi sgt, %y, %c1_i32 : i32
+    llvm.intr.assume %1 : i1
+    %2 = tt.get_program_id x : i32
+    %3 = arith.muli %2, %c1024_i32 : i32
+    %4 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %5 = tt.splat %3 : i32 -> tensor<1024xi32, #blocked>
+    %6 = arith.addi %5, %4 : tensor<1024xi32, #blocked>
+    %7 = tt.splat %n_elements : i32 -> tensor<1024xi32, #blocked>
+    %8 = arith.cmpi slt, %6, %7 : tensor<1024xi32, #blocked>
+    %9 = arith.cmpi sgt, %x, %y : i32
+    %10 = scf.if %9 -> (i32) {
+      // expected-remark@+1 {{[0, 4294967295] signed : [-2147483648, 2147483647]}}
+      %z = arith.addi %x, %c3_i32 : i32
+      scf.yield %z : i32
+    } else {
+      %17 = arith.cmpi slt, %x, %c20_i32 : i32
+      llvm.intr.assume %17 : i1
+      %18 = arith.cmpi sgt, %x, %c0_i32 : i32
+      llvm.intr.assume %18 : i1
+      // expected-remark@+1 {{[6, 103] signed : [6, 103]}}
+      %z = arith.addi %y, %c4_i32 : i32
+      scf.yield %z : i32
+    }
+    // expected-remark@+1 {{[0, 4294967295] signed : [-2147483648, 2147483647]}}
+    %11 = arith.addi %10, %c1_i32 : i32
+    %12 = arith.addi %5, %4 : tensor<1024xi32, #blocked>
+    %13 = arith.sitofp %11 : i32 to f32
+    %14 = tt.splat %13 : f32 -> tensor<1024xf32, #blocked>
+    %15 = tt.splat %output_ptr : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %16 = tt.addptr %15, %12 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    tt.store %16, %14, %8 : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+//def scfif_range4(x, y, output_ptr,n_elements, BLOCK_SIZE: tl.constexpr, ):
+//    tl.assume(y < 100)
+//    tl.assume(y > 1)
+//    pid = tl.program_id(axis=0)
+//    block_start = pid * BLOCK_SIZE
+//    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+//    mask = offsets < n_elements
+//    if x > y:
+//      z = x + 3  // check the tl.assume is applicable to this statement
+//      tl.assume(x < 20)
+//      tl.assume(x > 0)
+//    else:
+//      z = y + 4;
+//    z2 = z + 1
+//    tl.store(output_ptr + offsets, z2, mask)
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @scfif_range4(%x: i32 loc("x"), %y: i32 loc("y"), %output_ptr: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32} loc("output_ptr"), %n_elements: i32 {tt.divisibility = 16 : i32} loc("n_elements")) attributes {noinline = false} {
+    %c4_i32 = arith.constant 4 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c20_i32 = arith.constant 20 : i32
+    %c3_i32 = arith.constant 3 : i32
+    %c1024_i32 = arith.constant 1024 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c100_i32 = arith.constant 100 : i32
+    %0 = arith.cmpi slt, %y, %c100_i32 : i32
+    llvm.intr.assume %0 : i1
+    %1 = arith.cmpi sgt, %y, %c1_i32 : i32
+    llvm.intr.assume %1 : i1
+    %2 = tt.get_program_id x : i32
+    %3 = arith.muli %2, %c1024_i32 : i32
+    %4 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %5 = tt.splat %3 : i32 -> tensor<1024xi32, #blocked>
+    %6 = arith.addi %5, %4 : tensor<1024xi32, #blocked>
+    %7 = tt.splat %n_elements : i32 -> tensor<1024xi32, #blocked>
+    %8 = arith.cmpi slt, %6, %7 : tensor<1024xi32, #blocked>
+    %9 = arith.cmpi sgt, %x, %y : i32
+    %10 = scf.if %9 -> (i32) {
+      %17 = arith.cmpi slt, %x, %c20_i32 : i32
+      llvm.intr.assume %17 : i1
+      %18 = arith.cmpi sgt, %x, %c0_i32 : i32
+      llvm.intr.assume %18 : i1
+      // expected-remark@+1 {{unsigned : [4, 22] signed : [4, 22]}}
+      %z = arith.addi %x, %c3_i32 : i32
+      scf.yield %z : i32
+    } else {
+      // expected-remark@+1 {{unsigned : [6, 103] signed : [6, 103]}}
+      %z = arith.addi %y, %c4_i32 : i32
+      scf.yield %z : i32
+    }
+    // expected-remark@+1 {{unsigned : [5, 104] signed : [5, 104]}}
+    %11 = arith.addi %10, %c1_i32 : i32
+    %12 = arith.addi %5, %4 : tensor<1024xi32, #blocked>
+    %13 = arith.sitofp %11 : i32 to f32
+    %14 = tt.splat %13 : f32 -> tensor<1024xf32, #blocked>
+    %15 = tt.splat %output_ptr : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %16 = tt.addptr %15, %12 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    tt.store %16, %14, %8 : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}

@@ -37,9 +37,9 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   TritonIntegerRangeAnalysis(
       DataFlowSolver &solver,
       const DenseMap<Value, SetVector<Operation *>> &assumptions,
-      DominanceInfo *dominanceInfo)
+      DominanceInfo *dominanceInfo, bool assumeNoArithOverflow_ = false)
       : dataflow::IntegerRangeAnalysis(solver), assumptions(assumptions),
-        domInfo(dominanceInfo) {}
+        domInfo(dominanceInfo), assumeNoArithOverflow(assumeNoArithOverflow_) {}
 
   void setToEntryState(dataflow::IntegerValueRangeLattice *lattice) override;
 
@@ -162,6 +162,7 @@ private:
   DenseSet<Value> signedIntValues;
   llvm::SmallMapVector<Value, ConstantIntRanges, 2> opResultAssumption;
   DominanceInfo *domInfo = nullptr;
+  bool assumeNoArithOverflow = false;
 };
 
 std::optional<SmallVector<std::optional<ConstantIntRanges>>>
