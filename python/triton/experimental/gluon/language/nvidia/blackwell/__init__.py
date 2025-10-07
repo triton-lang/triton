@@ -383,6 +383,50 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
 
 
 @builtin
+def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=True, pred=True, mbarriers=None,
+                       mbarrier_preds=None, _semantic=None):
+    """
+    Emit a 5th generation TensorCore MMA scaled instruction.
+    acc = (a * a_scale) * (b * b_scale) + (acc if use_acc else 0)
+
+    Args:
+        a (shared_memory_descriptor): Left hand side operand in shared memory.
+        b (shared_memory_descriptor or tensor_memory_descriptor): Right hand side operand in shared or tensor memory.
+        acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
+        a_scale (tensor): Scale factor for operand A.
+        b_scale (tensor): Scale factor for operand B.
+        a_type (str): Type of operand A. One of {"e2m1", "e4m3", "e5m2"}.
+        b_type (str): Type of operand B. One of {"e2m1", "e4m3", "e5m2"}.
+        use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
+        pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
+        mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
+    """
+    use_acc = _semantic.to_tensor(use_acc)
+    pred = _semantic.to_tensor(pred)
+
+    if mbarriers is None:
+        assert mbarrier_preds is None
+        mbarriers = []
+        mbarrier_preds = []
+    else:
+        mbarriers = [bar.handle for bar in mbarriers]
+        if mbarrier_preds is None:
+            true = _semantic.to_tensor(True)
+            mbarrier_preds = [true.handle] * len(mbarriers)
+        else:
+            mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
+
+    allowed_formats = {"e2m1", "e4m3", "e5m2"}
+    assert a_type.value in allowed_formats, f"Unsupported lhs_format: {a_type.value}"
+    assert b_type.value in allowed_formats, f"Unsupported rhs_format: {b_type.value}"
+    a_type = _semantic._str_to_fp_type(a_type.value)
+    b_type = _semantic._str_to_fp_type(b_type.value)
+    _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
+                                                b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds)
+
+
+@builtin
 def tcgen05_commit(barrier, _semantic=None):
     """
     This instruction causes the provided mbarrier to be arrived-on with a count
