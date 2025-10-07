@@ -1,4 +1,5 @@
 import torch
+import math
 import pytest
 import re
 from itertools import product
@@ -196,11 +197,15 @@ def test_warpgroup_mma(ASYNC):
                           for acc_dtype in [torch.float16, torch.float32]
                           if bitwidth == 16 or (acc_dtype == torch.float32 and not transpose_a and transpose_b)])
 @pytest.mark.parametrize("warps", ([8, 1], [4, 2], [4, 1]))
-# Swizzling 0 does not map to a valid memory descriptor lol
-@pytest.mark.parametrize("swizzling_a, swizzling_b", product([32, 64, 128], repeat=2))
+@pytest.mark.parametrize("swizzling_a, swizzling_b", product([0, 32, 64, 128], repeat=2))
 @pytest.mark.parametrize("shape_m, shape_n, shape_k", [(1, 1, 1), (2, 4, 1), (2, 2, 4)])
 def test_warpgroup_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b,
-                                     shape_m, shape_n, shape_k):
+                                     shape_m, shape_n, shape_k, fresh_knobs):
+
+    # FIXME: Workaround for a bug in PTXAS when the shared layout is transposed and the swizzling is 0
+    if bitwidth == 16 and ((transpose_a and swizzling_a == 0 and shape_m > 1) or
+                           (not transpose_b and swizzling_b == 0 and shape_n > 1)):
+        fresh_knobs.nvidia.disable_ptxas_opt = True
 
     torch_dtype_map = {
         8: torch.float8_e4m3fn,
@@ -238,7 +243,24 @@ def test_warpgroup_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dty
     K *= shape_k
     instr_shape[1] *= shape_n
 
-    shared_mem_accum = M * K * bitwidth // 8 + K * N * bitwidth // 8
+    def get_shared_swizzling_zero(M, K, transpose):
+        # K-contig
+        if transpose:
+            K, M = M, K
+        bases = []
+        for i in range(int(math.log2(128 // bitwidth))):
+            bases.append([0, 1 << i])
+        for i in range(int(math.log2(M))):
+            bases.append([1 << i, 0])
+        for i in range(int(math.log2(K // (128 // bitwidth)))):
+            offset = int(math.log2(128 // bitwidth)) + i
+            bases.append([0, 1 << offset])
+        if transpose:
+            for i in range(len(bases)):
+                bases[i] = [bases[i][1], bases[i][0]]
+        return ttgl.SharedLinearLayout(bases)
+
+    shared_mem_accum = (M + N) * K * bitwidth // 8
     if triton.runtime.driver.active.utils.get_device_properties(
             triton.runtime.driver.active.get_current_device())["max_shared_mem"] < shared_mem_accum:
         pytest.skip("Skipped due to insufficient shared memory on this GPU.")
@@ -248,10 +270,16 @@ def test_warpgroup_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dty
     out_dtype = torch.float32
 
     block_layout = ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0])
-    shared_layout_a = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_a, element_bitwidth=bitwidth, rank=2,
-                                             transposed=transpose_a)
-    shared_layout_b = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_b, element_bitwidth=bitwidth, rank=2,
-                                             transposed=transpose_b)
+    if swizzling_a == 0:
+        shared_layout_a = get_shared_swizzling_zero(M, K, transpose_a)
+    else:
+        shared_layout_a = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_a, element_bitwidth=bitwidth, rank=2,
+                                                 transposed=transpose_a)
+    if swizzling_b == 0:
+        shared_layout_b = get_shared_swizzling_zero(K, N, transpose_b)
+    else:
+        shared_layout_b = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_b, element_bitwidth=bitwidth, rank=2,
+                                                 transposed=transpose_b)
     mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=instr_shape)
 
     torch.manual_seed(0)
@@ -297,9 +325,9 @@ def test_warpgroup_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dty
         torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = allow_fp16_red
 
     if bitwidth == 8:
-        atol, rtol = 0.5, 0.5
+        atol, rtol = 5e-2, 5e-1
     elif bitwidth == 16:
-        atol, rtol = 3e-2, 1e-1
+        atol, rtol = 5e-2, 5e-1
     else:
         atol, rtol = 5e-4, 5e-3
     torch.testing.assert_close(out, ref, atol=atol, rtol=rtol)

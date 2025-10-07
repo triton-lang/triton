@@ -34,7 +34,7 @@ using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::MemDescType;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
-using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
+using ::mlir::triton::gpu::SharedEncodingTrait;
 
 triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
   auto dTy = cast<RankedTensorType>(d.getType()).getElementType();
@@ -193,21 +193,16 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
   auto bTensorTy = cast<triton::gpu::MemDescType>(b.getType());
   auto dTensorTy = cast<RankedTensorType>(d.getType());
-  auto aSharedLayout =
-      dyn_cast<NVMMASharedEncodingAttr>(aTensorTy.getEncoding());
-  auto bSharedLayout = cast<NVMMASharedEncodingAttr>(bTensorTy.getEncoding());
+  bool aInShared = isa<SharedEncodingTrait>(aTensorTy.getEncoding());
   auto mmaEncoding = cast<NvidiaMmaEncodingAttr>(dTensorTy.getEncoding());
-  bool transA = false;
+  std::optional<SharedMemoryObject> smemObjA;
   Value baseA;
-  Value baseB;
-  if (aSharedLayout)
+  if (aInShared) {
     baseA = getOffsetedBase(loadedA, cast<MemDescType>(aTensorTy),
                             typeConverter, rewriter, loc);
-  baseB = getOffsetedBase(loadedB, bTensorTy, typeConverter, rewriter, loc);
-  if (aSharedLayout) {
-    transA = aSharedLayout.getTransposed();
   }
-  bool transB = !bSharedLayout.getTransposed();
+  auto baseB = getOffsetedBase(loadedB, cast<MemDescType>(bTensorTy),
+                               typeConverter, rewriter, loc);
   auto dShapePerCTA = getShapePerCTA(dTensorTy);
   auto instrShape = mmaEncoding.getInstrShape();
   auto accSize = 2 * (instrShape[1] / 4);
@@ -225,15 +220,18 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   DotOpMmaSmemLoader aLoader;
   SmallVector<Value> structA;
   auto warpGroups = {warpSize[0] / 4, warpSize[1]};
-  if (aSharedLayout) {
+  bool transA = false;
+  if (aInShared) {
     aLoader =
         DotOpMmaSmemLoader::build(loc, rewriter, cast<MemDescType>(aTensorTy),
-                                  baseA, {M, K}, 3, false, dTensorTy, 0);
+                                  baseA, {M, K}, 0, 3, false, dTensorTy);
+    transA = aLoader.getDescriptor().transposed;
   } else {
     structA = unpackLLElements(loc, loadedA, rewriter);
   }
   DotOpMmaSmemLoader bLoader = DotOpMmaSmemLoader::build(
-      loc, rewriter, bTensorTy, baseB, {K, N}, 3, false, dTensorTy, 1);
+      loc, rewriter, bTensorTy, baseB, {K, N}, 1, 3, false, dTensorTy);
+  bool transB = !bLoader.getDescriptor().transposed;
 
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
@@ -271,7 +269,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       Value partialAcc;
       for (int k = 0; k < numRepK; ++k) {
         Value a;
-        if (aSharedLayout) {
+        if (aInShared) {
           a = aLoader.smemLoad(m, k, rewriter, loc);
         } else {
           auto aDotOpEnc =
