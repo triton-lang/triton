@@ -175,7 +175,7 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
 // encoding propagation.
 LogicalResult getConvertBackwardSlice(
     OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
-    DenseMap<Value, Attribute> &layout,
+    DenseMap<Value, Attribute> &layout, bool propagateThroughForOp = false,
     std::function<bool(Operation *)> stopPropagation = nullptr,
     std::function<Value(OpOperand &, Attribute)> getExistingConversion =
         nullptr);

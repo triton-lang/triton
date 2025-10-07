@@ -856,7 +856,7 @@ static bool isFreeConvert(Operation *op) {
 
 LogicalResult getConvertBackwardSlice(
     OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
-    DenseMap<Value, Attribute> &layout,
+    DenseMap<Value, Attribute> &layout, bool propagateThroughForOp,
     std::function<bool(Operation *)> stopPropagation,
     std::function<Value(OpOperand &, Attribute)> getExistingConversion) {
   DenseSet<std::pair<OpOperand *, Attribute>> seen;
@@ -887,9 +887,7 @@ LogicalResult getConvertBackwardSlice(
     queue.pop_back();
     if (!isa<RankedTensorType>(currentValue.getType()))
       continue;
-    // Skip propagating through for op results for now.
-    // TODO: enable this based on needs.
-    if (currentValue.getDefiningOp<scf::ForOp>())
+    if (!propagateThroughForOp && currentValue.getDefiningOp<scf::ForOp>())
       return failure();
     if (failed(updateLayout(currentValue, encoding)))
       return failure();
@@ -900,6 +898,16 @@ LogicalResult getConvertBackwardSlice(
       if (failed(updateLayout(existing, encoding)))
         return failure();
       currentValue = existing;
+    }
+
+    if (auto forOp = currentValue.getDefiningOp<scf::ForOp>()) {
+      if (stopPropagation && stopPropagation(forOp))
+        continue;
+
+      unsigned argIdx = cast<OpResult>(currentValue).getResultNumber();
+      enqueue(forOp.getBody()->getTerminator()->getOpOperand(argIdx), encoding);
+
+      continue;
     }
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
