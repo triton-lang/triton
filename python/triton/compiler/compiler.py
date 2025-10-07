@@ -460,7 +460,7 @@ class CompiledKernel:
         if knobs.runtime.kernel_load_start_hook is not None:
             knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
-        log_loading_binary = os.environ.get("TRITON_LOG_LOADING_BINARY", "0") == "1"
+        log_loading_binary = True#os.environ.get("TRITON_LOG_LOADING_BINARY", "0") == "1"
         if log_loading_binary:
             print(f"\n\n ===== Start loading binary for {self.name} ====== \n\n")
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
