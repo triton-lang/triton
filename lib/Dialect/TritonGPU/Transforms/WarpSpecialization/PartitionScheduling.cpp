@@ -2138,6 +2138,63 @@ void assignPartitionIds(Graph *graph) {
       idx++;
     }
   }
+
+  // auto topLevelForOp = graph->getRoot()->getOp();
+  //
+  // graph->walk([&](Node *node) {
+  //   // find nodes that are iter args for the top level ForOp
+  //   if (node->isOp())
+  //     return;
+  //   auto blockArg = dyn_cast<BlockArgument>(node->getValue());
+  //   if (!blockArg)
+  //     return;
+  //   auto parentOp = blockArg.getOwner()->getParentOp();
+  //   auto forOp = dyn_cast<scf::ForOp>(parentOp);
+  //   if (!forOp || forOp != topLevelForOp)
+  //     return;
+  //   if (blockArg.getArgNumber() == 0)
+  //     // not the induction variable
+  //     return;
+  //
+  //   // get for op result
+  //   auto result = forOp.getResult(blockArg.getArgNumber() - 1);
+  //
+  //   // check if for op result is has a use, and if so,
+  //   // which partitions produce it
+  //   if (!result.use_empty()) {
+  //     std::cout << blockArg.getArgNumber()
+  //               << " use outside warp specialized region" << std::endl;
+  //     std::cout << "partitions:" << std::endl;
+  //     for (auto partition : node->getPartitions()) {
+  //       partition->dump();
+  //     }
+  //   } else {
+  //     std::cout << blockArg.getArgNumber()
+  //               << " no use outside warp specialized region" << std::endl;
+  //   }
+  // });
+
+  // find partition with direct SSA uses
+  // this must be partition 0 (default partition)
+  // Partition *defaultPartition = nullptr;
+  // for (auto &partition : graph->getPartitions()) {
+  //   for (auto node : partitio->getNodes()) {
+  //     if (!node->isOp()) {
+  //       continue;
+  //     }
+  //     auto op = node->getOp();
+  //
+  //   }
+  //   defaultPartition = &partition;
+  // }
+
+  // size_t idx = 0;
+  // for (auto &partition : graph->getPartitions()) {
+  //   if (partition->empty())
+  //     continue;
+  //   partition->id = idx;
+  //   idx++;
+  // }
 }
 
 } // namespace
