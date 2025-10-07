@@ -170,7 +170,6 @@ template <class T> struct AssignStagePhase {
 
     // add partition ids for extra iterArgs to ForOp outputs
     SetVector<int> partitionIds;
-    partitionIds.insert(0);
     partitionIds.insert(partitionId);
     for (size_t idx = nArgs; idx < forOp.getRegionIterArgs().size(); ++idx)
       setOutputPartition(forOp.getOperation(), idx, partitionIds);
@@ -239,7 +238,6 @@ template <class T> struct AssignStagePhase {
 
     // add partition ids for extra result to IfOp outputs
     SetVector<int> partitionIds;
-    partitionIds.insert(0);
     partitionIds.insert(partitionId);
     for (size_t idx = nArgs; idx < newIfOp.getResults().size(); ++idx)
       setOutputPartition(newIfOp.getOperation(), idx, partitionIds);
