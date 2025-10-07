@@ -15,53 +15,105 @@
 #include <numeric>
 #include <optional>
 
-// Some implementation notes:
-// 1: tl.assume statements
-//  - A value may have multiple assume-operations (assume-ops for short)
+// Some notes:
+//
+// 1. Framework
+//  1.1) This pass is based on MLIR's dataflow framework. In hindsight, maybe it
+//    is ill-fit for what we need.
+//  1.2) If I understand correctly, the MLIR's dataflow framework is a
+//  combination
+//     of traditional iterative dataflow analysis and Sparse Conditional
+//     Constant propagation (SCCP).
+//  1.3) Iterative dataflow analysis requires transfer function to be monotone.
+//    However, not all value-ranges keep increasing when the analysis progress.
+//    Consider the expression x - y, while x and y's value-range may keep
+//    increasing, the difference between them does not necessarily keep
+//    increasing as well.
+//  1.4) SCCP part is not necessary for this pass. We don't expect many dead
+//  code at
+//    the moment this analysis is invoked. The SCCP part only make the anlaysis
+//    take longer time to converge, and it make more complicated to workaround
+//    the framework's limitations.
+//  1.5) The MLIR dataflow framework does not understand SCF. On top of that it
+//    provides little interfaces to customize it. So, we have to rely on hack
+//    to sidestep these limitations.
+//  1.6 Maybe just walking the code top-dowm is suffice for range-analysis?
+//    For loops, figuring out IVs' value-ranges before loops are entered, and
+//    progress to loop-body, without visiting back-edge for non-SCF loops.
+//  1.7 As with SCCP which maintain two worklists, one for control-flow
+//    dependence, one for data-flow dependence. The framework seems to maintain
+//    a single unified worklist, with each item being a pair of
+//    <particular-analysis, operation-to-be-analyzed>.
+//
+// 2: tl.assume statements
+//  2.1) A value may have multiple assume-operations (assume-ops for short)
 //    associated with it. At point p, we only take into account those assume-ops
-//    whose enclosing basic blocks dominate the basic-block where p belong to.
-//  - See some examples in the comment to maybeGetAssumedRangeHelper().
-//  - The assumed value-range is inferred right before an operation is visited,
-//    but the assume value-range does not directly apply to the lattice.
-//  - After the operation is visited, if lattices of the results remain in
-//    "bottom" state (i.e. uninitialized), the assumed value-range will be used
-//    instead.
-//  - The transfer-function is supposed to apply intersection between inferred
-//    value-range and assume value-range. However, the
-//    IntegerValueRangeLattice::meet() seems to be a silent no-op. For now,
-//    the transfer-function only use assumed-value range. Intersecting the
-//    inferred value-range with assume value-range still guarantee monotonicity
-//    of the transfer function.
+//    whose enclosing basic blocks dominate the basic-block where p belongs to.
+//  2.2) See some examples in the comment to maybeGetAssumedRangeHelper().
+//  2.3) The assumed value-range for source and result operands are inferred
+//  right
+//    before an operation is visited.
+//  2.4) For now, if a value a assumed value-range, we use assumed value-range.
+//    We should use the intersection of assumed-value-range and inferred-value-
+//    range. However, it is not always possible: iterative dataflow analysis
+//    requires that the transfer function must be monotone; in general it's
+//    dangerous to use both meet() and join() operations. In this pass,
+//    intersecting inferred value-range with assumed-value-range still guarantee
+//    its monotonicity. However, the underlying lattice's meet() operation is
+//    a silent no-op.
 //
-// 2. SCF.
-//  - Unfortunately, the data-flow framework does not understand SCF! Running
-//    this pass together DCE and constant-propagation analysis make things even
-//    more complicated.
-//  - The override function visitOperaion() does not visit yieldOp, because
-//    it has no result and is ignored by the framework.
-//  - On top of that, while the framework provides a way to visit SCF's
-//    LHs/incoming-value (via visitRegionSuccessors), it does not provide a hook
-//    for processing the RHS.
-//  - To workaround this problem, right after an operation is visited, we check
-//    if it is used by a yield-op. If so, process the yield-op immediately.
-//  - Here is the steps about how SCF.if is handled.
+// 3. SCF.
+//  3.1 As mentioned above, MLIR's dataflow framework does not understand SCF.
+//  3.2 For example, yield-op will not be visited by subclass's
+//  visitOperation().
+//    That is because the base-class think yield-op has zero result and take
+//    for granted it has no value to analyze.
+//  3.3 The built-in SCCP part makes the visit order somewhat complicated.
+//    Operations are not visited in forward order.
+//  3.4 This is an example explaining how to SCF is processed, and how we
+//    workaround this problem.
 //
+//    op0: cond = ...
 //    x, y = scf.if cond {
-//      then-clause
-//      yield a, b
+//      // then-block
+//      op1: a = ...
+//      op2: yield a, b
 //    } else {
-//      else-clause
-//      yield c, d
+//      // else-block
+//      op3: d =
+//      op4: yield c, d
 //    }
-//    z = add x, y
+//    op5: z = add x, y
 //
-//   o. visitRegionSuccessors(scf.if) is called, which does nothing. Once it
-//      returns, the base-class return immediately, and hence the
-//      visitOperation(scf.if) is not called.
-//   o. The DCE analysis initially mark blocks of then- and else-clause as
-//      "dead", and they are skipped for now.
-//   o.
-//
+//  step 1: as mentioned in 1.7, multiple analyses comprise the framework with
+//    an unified worklist. DCE kick in first, when it visit the scf.if, the
+//    "cond" does not have lattice associated with it. So it initially
+//    considered both then-block and else-block are dead.
+//  step 2: after DCE going over all items in the worklist, range-analysis gets
+//    the chance. op0 is visited, a non-bottom lattice is created for op0's LHS.
+//  step 3. The baseclass (belong to framework) visits the scf.if
+//    it calls this class's visitRegionSuccessors(). Basically,
+//    visitRegionSuccessors() gives subclass a chance to prepare for RHS for
+//    SCF operations. This class does nothing for scf.if.
+//  step 3: The base-class returns once sub-class's visitRegionSuccessors()
+//    returns. Therefor, this class (subclass)'s visitOperand() function is
+//    *NOT* called with with scf.if.
+//  step 4: The base-class tries to visit the sub-regions (i.e. then- and else-
+//   blocks), only finds they are dead (due to step 1) and hence skip them.
+//  step 5: after step 4, the lattice of x and y are in "bottom" state.
+//   When op5 is visit, range-analysis find one of source operands is in
+//   "bottom" state, and do not update z's state.
+//  ...
+//  next round starts.
+//  step 5: DCE found "cond" has non-bottom state associated with it, and mark
+//    then- and else-block "live" accordingly.
+//  step 6: Range-analysis get a chance to visit the then- and else-block.
+//  step 7: when op1 is visited. *HACK KICK IN*. Range-analysis found op1 is
+//   used by yield-op, it then in turn updates x's state.
+//  step 8: likewise, then op3's visited, y's state is updated as well.
+//  step 9: finally, x and y has non-bottom state, when op5 is visited, z's
+//   state is updated.
+
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-range-analysis"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
