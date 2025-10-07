@@ -65,7 +65,6 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 // -----
 
 // MFMA0-NOT: amd_mfma
-// MFMA16: #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 2], instrShape = [16, 16, 16], isTransposed = true}>
 // CHECK-LABEL: small_m_size_fma
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [1, 64], warpsPerCTA = [1, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 64 : i32} {
@@ -74,11 +73,12 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
     %b: tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>)
     -> tensor<1x128xf32, #blocked> {
     %zero_f32 = arith.constant dense<0.000000e+00> : tensor<1x128xf32, #blocked>
+    // expected-remark @+2 {{Unable to select MFMA intrinsic}}
+    // expected-remark @+1 {{Attempting to map dot operation to FMA intrinsic.}}
     %result = tt.dot %a, %b, %zero_f32 : tensor<1x64xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<1x128xf32, #blocked>
     tt.return %result : tensor<1x128xf32, #blocked>
   }
 }
-
 
 // -----
 
@@ -92,6 +92,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       %arg1: tensor<4x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
       %arg2: tensor<128x256x!tt.ptr<f32>, #blocked> ) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #blocked>
+    // expected-remark @+2 {{Unable to select MFMA intrinsic}}
+    // expected-remark @+1 {{Attempting to map dot operation to FMA intrinsic.}}
     %1 = tt.dot %arg0, %arg1, %cst : tensor<128x4xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<4x256xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x256xf32, #blocked>
     tt.store %arg2, %1 : tensor<128x256x!tt.ptr<f32>, #blocked>
     tt.return
