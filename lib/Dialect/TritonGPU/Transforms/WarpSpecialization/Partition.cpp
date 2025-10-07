@@ -123,7 +123,8 @@ Partition *PartitionSet::getPartition(Operation *op) {
 
 bool PartitionSet::isInRootPartition(Operation *op) {
   auto partitionIds = getPartitionIds(op);
-  return !partitionIds || partitionIds->size() == getNumPartitions();
+  // return !partitionIds || partitionIds->size() == getNumPartitions();
+  return partitionIds->contains(0);
 }
 
 FailureOr<PartitionSet> PartitionSet::fromLoop(scf::ForOp loop) {
