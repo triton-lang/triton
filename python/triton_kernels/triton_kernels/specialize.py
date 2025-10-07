@@ -109,6 +109,7 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
         f"    {key} = {'(' + ','.join(value) + (',' if len(value)>=1 else '') + ')'}" for key, value in tuples.items()
     ]
     new_src = "\n".join(["@triton.jit", new_signature] + constexpr_lines + tuple_lines + body_lines)
+    line_offset = len(constexpr_lines) + len(tuple_lines)
     # find function parameters
     sig = inspect.signature(triton.runtime.jit.JITFunction.__init__)
     params = list(sig.parameters.values())[2:]
@@ -136,10 +137,11 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
     # Reuse the original kernel's metadata so that stack traces and other
     # source-based tooling report the correct file and line numbers.
     ret.raw_src = list(fn.raw_src)
-    ret.starting_line_number = fn.starting_line_number
+    adjusted_start = max(1, fn.starting_line_number - line_offset)
+    ret.starting_line_number = adjusted_start
     orig_code = fn.fn.__code__
     ret.fn.__code__ = ret.fn.__code__.replace(
         co_filename=orig_code.co_filename,
-        co_firstlineno=orig_code.co_firstlineno,
+        co_firstlineno=max(1, orig_code.co_firstlineno - line_offset),
     )
     return ret
