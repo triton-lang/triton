@@ -86,7 +86,7 @@ def empty_aligned(shape, dtype, device, pad_size):
     pad = lambda x: cdiv(x, pad_size) * pad_size
     ret = torch.empty((*shape[:-1], pad(shape[-1])), dtype=dtype, device=device)
     ret_slices = (*[slice(None)] * (len(shape) - 1), slice(0, shape[-1]))
-    return ret[ret_slices]
+    return ret[ret_slices], ret.numel()
 
 
 def max_n_tiles(n_batches, n_gates):
@@ -169,10 +169,11 @@ def make_ragged_tensor_metadata(batch_sizes, n_gates):
     MEMSET_BLOCK = 512
     dtype = torch.int32
     device = batch_sizes.device
-    batch_offs_combined = empty_aligned((block_size_num + 1, n_batches + 1), dtype, device, MEMSET_BLOCK)
-    block_schedule_data = empty_aligned((block_size_num, max_n_tiles(n_batches, n_gates)), dtype, device, MEMSET_BLOCK)
+    batch_offs_combined, _ = empty_aligned((block_size_num + 1, n_batches + 1), dtype, device, MEMSET_BLOCK)
+    block_schedule_data, n_memset_elts = empty_aligned((block_size_num, max_n_tiles(n_batches, n_gates)), dtype, device,
+                                                       MEMSET_BLOCK)
     batch_offs, block_offs_data = batch_offs_combined[0], batch_offs_combined[1:]
-    n_memset_blocks = exact_div(block_schedule_data.storage().size(), MEMSET_BLOCK)
+    n_memset_blocks = exact_div(n_memset_elts, MEMSET_BLOCK)
 
     _ragged_tensor_metadata_memset[(batch_offs_combined.shape[0] + n_memset_blocks, )](
         batch_sizes, n_batches,  #
