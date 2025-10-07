@@ -25,6 +25,12 @@ void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, bool ftz,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
     const TargetInfo &targetInfo, PatternBenefit benefit);
+
+// Manipulates with execution mode register which is per-wavefront one.
+// The register controls execution of instructions - e.g., rounding modes,
+// exception handling, etc.
+void adjustModeRegister(ModuleOp mod, const TargetInfo &targetInfo);
+
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfo &targetInfo,
                                        RewritePatternSet &patterns,

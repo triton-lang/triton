@@ -7,7 +7,7 @@ from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
 from triton.experimental.gluon.language.nvidia import blackwell
 from triton.experimental.gluon.language.nvidia import hopper
-from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, async_copy
+from triton.experimental.gluon.language.nvidia.blackwell import mbarrier, tma, TensorMemoryLayout, TensorMemoryScalesLayout, async_copy
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
 from triton.experimental.gluon.language.amd import _layouts as amd_layouts
 from triton.experimental.gluon.language.amd.cdna4 import async_copy as cdna4_async_copy
@@ -70,6 +70,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func public @convert_layout_kernel() attributes {noinline = false} {
     %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked>
     %1 = ttg.convert_layout %0 : tensor<128xi32, #blocked> -> tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked1}>>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def assume_kernel(arg: tl.int32):
+    ttgl.assume(arg > 1)
+
+
+@pytest.mark.parametrize("target", ALL_TARGETS)
+def test_assume(target):
+    arg = 100
+    mod = run_parser(
+        assume_kernel,
+        *make_args(arg),
+        target=target,
+    )
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @assume_kernel(%arg0: i32) attributes {noinline = false} {
+    %c1_i32 = arith.constant 1 : i32
+    %0 = arith.cmpi sgt, %arg0, %c1_i32 : i32
+    llvm.intr.assume %0 : i1
     tt.return
   }
 }
@@ -572,6 +598,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %true = arith.constant true
     %true_0 = arith.constant true
     %2 = ttng.tc_gen5_mma %0, %1, %result[], %true, %true_0 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def tcgen05_mma_scaled_kernel(nvmma_layout: ttgl.constexpr, acc_layout: ttgl.constexpr, scale_layout: ttgl.constexpr):
+    a = ttgl.allocate_shared_memory(ttgl.float8e5, [128, 128], nvmma_layout)
+    b = ttgl.allocate_shared_memory(ttgl.float8e5, [128, 128], nvmma_layout)
+    scale_a = blackwell.allocate_tensor_memory(ttgl.int8, [128, 32], scale_layout)
+    scale_b = blackwell.allocate_tensor_memory(ttgl.int8, [128, 32], scale_layout)
+    acc = blackwell.allocate_tensor_memory(ttgl.float16, [128, 128], acc_layout)
+    blackwell.tcgen05_mma_scaled(a, b, acc, scale_a, scale_b, "e5m2", "e5m2")
+
+
+def test_tcgen05_mma_scaled():
+    nvmma_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    scale_layout = TensorMemoryScalesLayout()
+    acc_layout = TensorMemoryLayout([128, 128], col_stride=2)
+
+    mod = run_parser(tcgen05_mma_scaled_kernel, *make_args(nvmma_layout, acc_layout, scale_layout),
+                     target=BLACKWELL_TARGET)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 2>
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @tcgen05_mma_scaled_kernel() attributes {noinline = false} {
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf8E5M2, #shared, #smem, mutable>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<128x128xf8E5M2, #shared, #smem, mutable>
+    %result = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+    %result_0 = ttng.tmem_alloc : () -> !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+    %result_1 = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
+    %true = arith.constant true
+    %true_2 = arith.constant true
+    %2 = ttng.tc_gen5_mma_scaled %0, %1, %result_1[], %result, %result_0, %true, %true_2 lhs = e5m2 rhs = e5m2 : !ttg.memdesc<128x128xf8E5M2, #shared, #smem, mutable>, !ttg.memdesc<128x128xf8E5M2, #shared, #smem, mutable>, !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x32xi8, #tmem_scales, #ttng.tensor_memory, mutable>
     tt.return
   }
 }
