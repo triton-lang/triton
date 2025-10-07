@@ -173,10 +173,10 @@ class Tensor:
 
 @dataclass
 class Bitmatrix(Tensor):
-    metadata: bitmatrix_details.BitmatrixMetadata = None
 
     def __post_init__(self):
         assert self.dtype == BIT
+        super().__post_init__()
 
 
 make_bitmatrix_metadata = bitmatrix_details.make_bitmatrix_metadata
@@ -199,6 +199,9 @@ class SparseMatrix:
     indx: torch.Tensor
     vals: torch.Tensor
     mask: Bitmatrix
+
+    def __post_init__(self):
+        self.mask_metadata = make_bitmatrix_metadata(self.indx, self.mask)
 
 
 # layout utilities

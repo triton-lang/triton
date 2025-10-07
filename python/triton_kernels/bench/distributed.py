@@ -17,7 +17,7 @@ from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
 from triton_kernels.tensor_details import layout
-from triton_kernels.tensor import BIT, SparseMatrix, Bitmatrix, make_ragged_tensor_metadata, make_bitmatrix_metadata
+from triton_kernels.tensor import BIT, SparseMatrix, Bitmatrix, make_ragged_tensor_metadata
 
 from bench_utils import quantize_weight
 
@@ -384,7 +384,6 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     bitmatrix_shape = [n_rows, triton.cdiv(chunk_size, BLOCK_SIZE_K) * 32]
     bitmatrix_shape_max = [n_rows, None]
     bitmatrix = Bitmatrix(bitmatrix, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
-    bitmatrix.metadata = make_bitmatrix_metadata(expt_indx, bitmatrix)
     expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmatrix, n_expts_tot, EP)
     routing_data, gather_indx, scatter_indx = legacy_routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx,
                                                                             n_expts_tot // EP, n_expts_act)

@@ -3,7 +3,7 @@ import triton
 from triton_kernels.topk_details._topk_forward import _topk_forward
 from triton_kernels.topk_details._topk_backward import _topk_backward
 from triton_kernels.tensor import SparseMatrix, Tensor
-from triton_kernels.tensor import Bitmatrix, BIT, make_bitmatrix_metadata, make_bitmatrix_metadata_torch
+from triton_kernels.tensor import Bitmatrix, BIT, make_bitmatrix_metadata
 from typing import Optional, Union
 
 
@@ -158,5 +158,4 @@ def topk_torch(
     bitmatrix_data.index_put_((rows, word_idx), masks, accumulate=True)
     bitmatrix_data = bitmatrix_data.view(torch.uint32)
     bitmatrix = Bitmatrix(bitmatrix_data, shape=x.shape, dtype=BIT)
-    bitmatrix.metadata = make_bitmatrix_metadata_torch(y_indx, bitmatrix)
     return SparseMatrix(vals=y_vals, indx=y_indx, mask=bitmatrix)
