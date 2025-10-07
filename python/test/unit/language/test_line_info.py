@@ -158,24 +158,24 @@ def test_line_info(func: str):
 
     file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     if func == "single":
-        assert (check_file_lines(file_lines, "test_line_info.py", 14))
-        assert (check_file_lines(file_lines, "test_line_info.py", 15))
+        assert (check_file_lines(file_lines, "test_line_info.py", 16))
+        assert (check_file_lines(file_lines, "test_line_info.py", 17))
     elif func == "call":
-        assert (check_file_lines(file_lines, "test_line_info.py", 25))
         assert (check_file_lines(file_lines, "test_line_info.py", 27))
+        assert (check_file_lines(file_lines, "test_line_info.py", 29))
     elif func == "call_noinline":
-        assert (check_file_lines(file_lines, "test_line_info.py", 39))
-        assert (check_file_lines(file_lines, "test_line_info.py", 32))
-        assert (check_file_lines(file_lines, "test_line_info.py", 32))
+        assert (check_file_lines(file_lines, "test_line_info.py", 41))
+        assert (check_file_lines(file_lines, "test_line_info.py", 34))
+        assert (check_file_lines(file_lines, "test_line_info.py", 34))
     elif func == "autotune":
-        assert (check_file_lines(file_lines, "test_line_info.py", 50))
-        assert (check_file_lines(file_lines, "test_line_info.py", 51))
         assert (check_file_lines(file_lines, "test_line_info.py", 52))
+        assert (check_file_lines(file_lines, "test_line_info.py", 53))
+        assert (check_file_lines(file_lines, "test_line_info.py", 54))
     elif func == "dot_combine":
-        assert (check_file_lines(file_lines, "test_line_info.py", 62))
-        assert (check_file_lines(file_lines, "test_line_info.py", 63, should_contain=False))
+        assert (check_file_lines(file_lines, "test_line_info.py", 64))
+        assert (check_file_lines(file_lines, "test_line_info.py", 65, should_contain=False))
     elif func == "cdiv":
-        assert (check_file_lines(file_lines, "test_line_info.py", 72))
+        assert (check_file_lines(file_lines, "test_line_info.py", 74))
 
 
 @pytest.mark.interpreter
@@ -188,22 +188,22 @@ def test_line_info_interpreter(func: str):
     expected_def_lineno = 0
     if func == "single":
         kernel = kernel_single
-        expected_def_lineno = 13
+        expected_def_lineno = 15
     elif func == "call":
         kernel = kernel_call
-        expected_def_lineno = 24
+        expected_def_lineno = 26
     elif func == "call_noinline":
         kernel = kernel_call_noinline
-        expected_def_lineno = 38
+        expected_def_lineno = 40
     elif func == "autotune":
         kernel = kernel_autotune.fn
-        expected_def_lineno = 49
+        expected_def_lineno = 51
     elif func == "dot_combine":
         kernel = kernel_dot_combine
-        expected_def_lineno = 59
+        expected_def_lineno = 61
     elif func == "cdiv":
         kernel = kernel_cdiv
-        expected_def_lineno = 69
+        expected_def_lineno = 71
     kernel.rewrite()
     assert kernel.rewriter.def_file_lineno == expected_def_lineno
 
