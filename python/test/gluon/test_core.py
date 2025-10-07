@@ -242,8 +242,8 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         torch.float32: ttgl.float32,
     }
 
-    instr_shape_k = 256 // bitwidth
-    instr_shape = [16, 32 * shape_n, instr_shape_k]
+    # We'll choose a larger instr shape along N, but sure
+    instr_shape = [16, 32, 256 // bitwidth]
     M = instr_shape[0] * warps[0]
     N = instr_shape[1] * warps[1]
     K = instr_shape[2]
@@ -265,6 +265,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     M *= shape_m
     N *= shape_n
     K *= shape_k
+    instr_shape[1] *= shape_n
 
     if use_tcgen05:
         M = 128
