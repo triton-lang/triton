@@ -73,11 +73,11 @@ def test_cacheable(device, fresh_triton_cache):
     ttir = k.asm["ttir"]
     loc = None
     for line in ttir.split("\n"):
-        if "store" in line:
-            loc = line.split("(", 1)[1].split(")", 1)[0]
         if loc and loc in line:
             assert "test_specialize.py" in line
             assert ":19" in line
+        if "store" in line:
+            loc = line.split("(", 1)[1].split(")", 1)[0]
     assert loc is not None, f"Expected to find a store instruction with location info, got: {ttir}"
 
     compile_count = 0
