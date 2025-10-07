@@ -78,6 +78,7 @@ def test_cacheable(device, fresh_triton_cache):
         if loc and loc in line:
             assert "test_specialize.py" in line
             assert ":19" in line
+    assert loc is not None, f"Expected to find a store instruction with location info, got: {ttir}"
 
     compile_count = 0
 
