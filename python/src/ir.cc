@@ -455,6 +455,8 @@ void init_triton_ir(py::module &&m) {
              auto loc = UnknownLoc::get(ty.getContext());
              self.addArgument(ty, loc);
            })
+      .def("add_argument_at", [](Block &self, Type ty,
+                                 Location loc) { self.addArgument(ty, loc); })
       .def("get_num_arguments", &Block::getNumArguments)
       .def("get_argument", &Block::getArgument)
       .def("dump", &Block::dump)

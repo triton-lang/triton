@@ -30,7 +30,7 @@ def is_in_thread_transpose_enabled(arch):
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
-    waves_per_eu: int = 1
+    waves_per_eu: int = 0
     num_stages: int = 2
     num_ctas: int = 1
     extern_libs: dict = None
@@ -224,8 +224,8 @@ class HIPBackend(BaseBackend):
         use_async_copy = knobs.amd.use_async_copy
         use_block_pingpong = is_pingpong_schedule_enabled(options.arch, use_async_copy)
 
-        amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages, use_async_copy, use_block_pingpong)
-        amd.passes.ttgpuir.add_pipeline(pm, use_async_copy)
+        amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages)
+        amd.passes.ttgpuir.add_pipeline(pm, use_async_copy, use_block_pingpong)
         if use_async_copy:
             amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
         passes.common.add_canonicalizer(pm)

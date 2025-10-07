@@ -90,9 +90,7 @@ def make_default_opt_flags_amd(
     )
     is_persistent = constraints.get("is_persistent", False)
     # split_k:
-    if batch_size > 1:
-        split_k = 1  # currently not supported
-    elif constraints.get("split_k", None) is not None:
+    if constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
     elif is_persistent or enforce_bitwise_invariance:
         split_k = 1
@@ -222,9 +220,7 @@ def make_default_opt_flags_nvidia(
         # TODO: swizzle the HBM layout of the weights instead
         block_n, block_k = block_k, block_n
     # split_k
-    if batch_size > 1:
-        split_k = 1  # currently not supported
-    elif constraints.get("split_k", None) is not None:
+    if constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
     elif is_persistent or enforce_bitwise_invariance or precision_config.act_scale is not None or precision_config.out_scale is not None:
         split_k = 1

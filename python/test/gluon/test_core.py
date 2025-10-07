@@ -1,6 +1,8 @@
 import torch
+import math
 import pytest
 import re
+from itertools import product
 
 import triton
 import triton.language as tl
@@ -124,32 +126,54 @@ def test_async_copy_mbarrier():
 
 
 @gluon.jit
-def warpgroup_mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, ASYNC: ttgl.constexpr):
-    block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
-    mma_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=[4, 1],
-                                                             instr_shape=[16, 32, 16])
-    nvmma_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=64, element_bitwidth=16, rank=2)
-
+def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, block_layout: ttgl.constexpr,
+               mma_layout: ttgl.constexpr, shared_layout_a: ttgl.constexpr, shared_layout_b: ttgl.constexpr,
+               acc_dtype: ttgl.constexpr, ASYNC: ttgl.constexpr, USE_TCGEN05: ttgl.constexpr):
     a_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, block_layout))[:, None]
-    a_offs_n = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, block_layout))[None, :]
-    b_offs_m = ttgl.arange(0, K, layout=ttgl.SliceLayout(1, block_layout))[:, None]
+    a_offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, block_layout))[None, :]
+    b_offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(1, block_layout))[:, None]
     b_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, block_layout))[None, :]
 
     out_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, mma_layout))[:, None]
     out_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, mma_layout))[None, :]
 
-    acc = ttgl.zeros([M, N], dtype=a.dtype.element_ty, layout=mma_layout)
-    A = ttgl.load(a + a_offs_m * K + a_offs_n)
-    B = ttgl.load(b + b_offs_m * N + b_offs_n)
+    operand_dtype = a.dtype.element_ty
+    a_tile = ttgl.load(a + a_offs_m * K + a_offs_k)
+    b_tile = ttgl.load(b + b_offs_k * N + b_offs_n)
 
-    a_shmem = ttgl.allocate_shared_memory(ttgl.float16, [M, K], nvmma_layout, A)
-    b_shmem = ttgl.allocate_shared_memory(ttgl.float16, [K, N], nvmma_layout, B)
-
+    smem_a = ttgl.allocate_shared_memory(operand_dtype, [M, K], shared_layout_a, a_tile)
+    smem_b = ttgl.allocate_shared_memory(operand_dtype, [K, N], shared_layout_b, b_tile)
     fence_async_shared()
-    acc = hopper.warpgroup_mma(a_shmem, b_shmem, acc, is_async=ASYNC)
 
-    if ASYNC:
-        acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=[acc])
+    if USE_TCGEN05:
+        tmem_layout: ttgl.constexpr = TensorMemoryLayout((M, N), col_stride=32 // acc_dtype.primitive_bitwidth)
+
+        num_warps: ttgl.constexpr = ttgl.num_warps()
+        tmem_reg_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(
+            M=M,
+            N=N,
+            shape=[M, N],
+            num_warps=num_warps,
+        )
+
+        mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(mma_barrier, count=1)
+
+        acc_zero = ttgl.zeros([M, N], dtype=acc_dtype, layout=tmem_reg_layout)
+        acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], tmem_layout, acc_zero)
+
+        tcgen05_mma(smem_a, smem_b, acc_tmem, use_acc=False)
+        tcgen05_commit(mma_barrier)
+        mbarrier.wait(mma_barrier, phase=0)
+        mbarrier.invalidate(mma_barrier)
+        acc = acc_tmem.load(tmem_reg_layout)
+        acc = ttgl.convert_layout(acc, layout=mma_layout)
+    else:
+        acc = ttgl.zeros([M, N], dtype=acc_dtype, layout=mma_layout)
+        acc = hopper.warpgroup_mma(smem_a, smem_b, acc, is_async=ASYNC)
+
+        if ASYNC:
+            acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=[acc])
 
     ttgl.store(out + out_offs_m * N + out_offs_n, acc)
 
@@ -159,14 +183,182 @@ def warpgroup_mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttg
 def test_warpgroup_mma(ASYNC):
     torch.manual_seed(0)
     M, N, K = 64, 32, 32
+    warps = [4, 1]
+    block_layout = ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0])
+    mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=[16, 32, 16])
+    shared_layout_a = ttgl.NVMMASharedLayout.get_default_for([M, K], ttgl.float16)
+    shared_layout_b = ttgl.NVMMASharedLayout.get_default_for([K, N], ttgl.float16)
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16)
     out = torch.zeros((M, N), device="cuda", dtype=torch.float16)
-    warpgroup_mma_kernel[(1, )](a, b, out, M, N, K, ASYNC)
+    mma_kernel[(1, )](
+        a,
+        b,
+        out,
+        M,
+        N,
+        K,
+        block_layout,
+        mma_layout,
+        shared_layout_a,
+        shared_layout_b,
+        ttgl.float16,
+        ASYNC,
+        False,
+        num_warps=warps[0] * warps[1],
+    )
 
     ref = torch.matmul(a, b)
 
     torch.testing.assert_close(out, ref, atol=1e-3, rtol=1e-1)
+
+
+@pytest.mark.skipif(not (is_hopper() or is_blackwell()), reason="Requires Hopper or Blackwell")
+@pytest.mark.parametrize("bitwidth, transpose_a, transpose_b, acc_dtype",
+                         [(bitwidth, transpose_a, transpose_b, acc_dtype)
+                          for bitwidth in [8, 16, 32]
+                          for (transpose_a, transpose_b) in product([False, True], repeat=2)
+                          for acc_dtype in [torch.float16, torch.float32]
+                          if bitwidth == 16 or (acc_dtype == torch.float32 and not transpose_a and transpose_b)])
+@pytest.mark.parametrize("warps", ([8, 1], [4, 2], [4, 1]))
+@pytest.mark.parametrize("swizzling_a, swizzling_b", product([0, 32, 64, 128], repeat=2))
+@pytest.mark.parametrize("shape_m, shape_n, shape_k", [(1, 1, 1), (2, 4, 1), (2, 2, 4)])
+def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b, shape_m,
+                           shape_n, shape_k, fresh_knobs):
+
+    # FIXME: Workaround for a bug in PTXAS when the shared layout is transposed and the swizzling is 0
+    if bitwidth == 16 and ((transpose_a and swizzling_a == 0 and shape_m > 1) or
+                           (not transpose_b and swizzling_b == 0 and shape_n > 1)):
+        fresh_knobs.nvidia.disable_ptxas_opt = True
+    use_tcgen05 = is_blackwell()
+
+    torch_dtype_map = {
+        8: torch.float8_e4m3fn,
+        16: torch.float16,
+        32: torch.float32,
+    }
+    acc_dtype_map = {
+        torch.float16: ttgl.float16,
+        torch.float32: ttgl.float32,
+    }
+
+    # We'll choose a larger instr shape along N, but sure
+    instr_shape = [16, 32, 256 // bitwidth]
+    M = instr_shape[0] * warps[0]
+    N = instr_shape[1] * warps[1]
+    K = instr_shape[2]
+
+    def min_shape(swizzling, dim0, dim1, trans):
+        tile_cols = (8 * max(16, swizzling)) // bitwidth
+        outer_dim, contig_dim = (dim0, dim1)
+        if trans:
+            outer_dim, contig_dim = contig_dim, outer_dim
+        contig_dim = max(contig_dim, tile_cols)
+        outer_dim = max(outer_dim, 8)
+        if trans:
+            outer_dim, contig_dim = contig_dim, outer_dim
+        return outer_dim, contig_dim
+
+    # Get the minimum shape for the given swizzling / transpose
+    M, K = min_shape(swizzling_a, M, K, transpose_a)
+    K, N = min_shape(swizzling_b, K, N, transpose_b)
+    M *= shape_m
+    N *= shape_n
+    K *= shape_k
+    instr_shape[1] *= shape_n
+
+    if use_tcgen05:
+        M = 128
+
+    def get_shared_swizzling_zero(M, K, transpose):
+        # K-contig
+        if transpose:
+            K, M = M, K
+        bases = []
+        for i in range(int(math.log2(128 // bitwidth))):
+            bases.append([0, 1 << i])
+        for i in range(int(math.log2(M))):
+            bases.append([1 << i, 0])
+        for i in range(int(math.log2(K // (128 // bitwidth)))):
+            offset = int(math.log2(128 // bitwidth)) + i
+            bases.append([0, 1 << offset])
+        if transpose:
+            for i in range(len(bases)):
+                bases[i] = [bases[i][1], bases[i][0]]
+        return ttgl.SharedLinearLayout(bases)
+
+    shared_mem_accum = (M + N) * K * bitwidth // 8
+    if triton.runtime.driver.active.utils.get_device_properties(
+            triton.runtime.driver.active.get_current_device())["max_shared_mem"] < shared_mem_accum:
+        pytest.skip("Skipped due to insufficient shared memory on this GPU.")
+
+    torch_dtype = torch_dtype_map[bitwidth]
+    gl_acc_dtype = acc_dtype_map[acc_dtype]
+    out_dtype = torch.float32
+
+    block_layout = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0])
+    if swizzling_a == 0:
+        shared_layout_a = get_shared_swizzling_zero(M, K, transpose_a)
+    else:
+        shared_layout_a = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_a, element_bitwidth=bitwidth, rank=2,
+                                                 transposed=transpose_a)
+    if swizzling_b == 0:
+        shared_layout_b = get_shared_swizzling_zero(K, N, transpose_b)
+    else:
+        shared_layout_b = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_b, element_bitwidth=bitwidth, rank=2,
+                                                 transposed=transpose_b)
+    mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=instr_shape)
+
+    torch.manual_seed(0)
+
+    def cast(x, dtype):
+        if dtype != torch.float32:
+            return x.to(torch_dtype)
+        else:
+            # zero-out the lower 13 bits
+            x = x.view(torch.int32)
+            x = x & ~((1 << 13) - 1)
+            return x.view(dtype)
+
+    # Sample bf16 as tf32 does not use the full range
+    a = cast(torch.randn((M, K), device="cuda", dtype=torch.float32), torch_dtype)
+    b = cast(torch.randn((K, N), device="cuda", dtype=torch.float32), torch_dtype)
+    out = torch.zeros((M, N), device="cuda", dtype=out_dtype)
+
+    mma_kernel[(1, )](
+        a,
+        b,
+        out,
+        M,
+        N,
+        K,
+        block_layout,
+        mma_layout,
+        shared_layout_a,
+        shared_layout_b,
+        gl_acc_dtype,
+        False,
+        use_tcgen05,
+        num_warps=warps[0] * warps[1],
+    )
+
+    try:
+        allow_tf32 = torch.backends.cuda.matmul.allow_tf32
+        torch.backends.cuda.matmul.allow_tf32 = True
+        allow_fp16_red = torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction
+        torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = acc_dtype == torch.float16
+        ref = torch.matmul(a.to(acc_dtype), b.to(acc_dtype)).to(out_dtype)
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+        torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = allow_fp16_red
+
+    if bitwidth == 8:
+        atol, rtol = 5e-2, 5e-1
+    elif bitwidth == 16:
+        atol, rtol = 5e-2, 5e-1
+    else:
+        atol, rtol = 5e-4, 5e-3
+    torch.testing.assert_close(out, ref, atol=atol, rtol=rtol)
 
 
 @pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
@@ -556,8 +748,6 @@ def test_tmem_copy_2d():
         tmem_alias: ttgl.constexpr = TensorMemoryLayout((num_rows, num_cols), col_stride=1)
         tmem = tmem._reinterpret(ttgl.int8, (num_rows, num_cols), tmem_alias)
         value = tmem.load(blocked)
-        ttgl.static_print(ttgl.to_linear_layout(blocked, (smem_h, smem_w)))
-        ttgl.static_print(ttgl.to_linear_layout(blocked, (num_rows, num_cols)))
         ttgl.store(ttgl.set_auto_layout(out_ptrs, blocked), value)
 
     torch.manual_seed(0)
@@ -1037,7 +1227,7 @@ def test_buffer_atomic_rmw_add_bf16():
         blocked: ttgl.constexpr = ttgl.BlockedLayout([SIZE_PER_THREAD], [64], [4], [0])
         offsets = ttgl.arange(0, BLOCK, layout=blocked)
         val = ttgl.full([BLOCK], 1.0, ttgl.bfloat16, layout=blocked)
-        ttgl.amd.cdna4.buffer_atomic_rmw("fadd", a, offsets, val, mask=1, scope="cta", sem="relaxed")
+        ttgl.amd.cdna4.buffer_atomic_add(a, offsets, val, mask=1, scope="cta", sem="relaxed")
 
     a = torch.randn((BLOCK), dtype=elem_type, device="cuda")
     origin_a = a.clone()
@@ -1114,3 +1304,28 @@ def test_dot_fma():
     out = torch.empty((B, B), dtype=torch.float32, device="cuda")
     kernel[(1, )](a, b, c, out)
     torch.testing.assert_close(out, torch.addmm(c, a, b), atol=1e-2, rtol=1e-2)
+
+
+@gluon.jit
+def kernel_auto_layout_constant(threads_per_warp: ttgl.constexpr):
+    BLOCK: ttgl.constexpr = 16
+    SIZE: ttgl.constexpr = 10
+
+    mask = ttgl.full(
+        (BLOCK, BLOCK),
+        True,
+        ttgl.int1,
+        ttgl.BlockedLayout(
+            size_per_thread=[1, 1],
+            threads_per_warp=[1, threads_per_warp],
+            warps_per_cta=[1, 4],
+            order=[1, 0],
+        ),
+    )
+
+    mask &= (ttgl.arange(0, BLOCK, ttgl.AutoLayout()) < SIZE).expand_dims(0)
+    mask &= (ttgl.arange(0, BLOCK, ttgl.AutoLayout()) < SIZE).expand_dims(1)
+
+
+def test_auto_layout_constant():
+    kernel_auto_layout_constant.warmup(THREADS_PER_WARP, grid=(1, ))
