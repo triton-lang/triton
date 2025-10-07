@@ -2805,9 +2805,10 @@ def map_elementwise(
     builder = _semantic.builder
     block = builder.new_block()
     scalar_args = []
+    original_loc = builder.get_loc()
     for i, ty in enumerate(in_scalar_tys):
         for j in builtins.range(pack):
-            block.add_argument(ty.to_ir(builder))
+            block.add_argument_at(ty.to_ir(builder), original_loc)
             scalar_args.append(tensor(block.arg(i * pack + j), ty))
 
     with _insertion_guard(builder):
@@ -2819,6 +2820,7 @@ def map_elementwise(
             scalar_results = scalar_results,
 
         handles = [r.handle for r in scalar_results]
+        builder.set_loc(original_loc)
         builder.create_map_elementwise_ret(handles)
 
     fn_result_types = [x.type for x in scalar_results]
@@ -2832,6 +2834,7 @@ def map_elementwise(
         region = elementwise_op.get_region(0)
         region.push_back(block)
 
+    builder.set_loc(original_loc)
     result = _semantic.map_elementwise(args, scalar_result_types, pack, make_elementwise_region)
     return result[0] if is_single else result
 
