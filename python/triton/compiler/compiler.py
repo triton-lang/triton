@@ -10,6 +10,7 @@ from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager, get_cache_key
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass
+from triton._C.libtriton import getenv_bool 
 from pathlib import Path
 import re
 import functools
@@ -459,8 +460,13 @@ class CompiledKernel:
         if knobs.runtime.kernel_load_start_hook is not None:
             knobs.runtime.kernel_load_start_hook(self.module, self.function, self.name, self.metadata_group, self.hash)
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
+        log_loading_binary = os.environ.get("TRITON_LOG_LOADING_BINARY", "0") == "1"
+        if log_loading_binary:
+            print(f"\n\n ===== Start loading binary for {self.name} ====== \n\n")
         self.module, self.function, self.n_regs, self.n_spills, self.n_max_threads = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
+        if log_loading_binary:
+            print(f"\n\n ===== Finished loading binary for {self.name} ====== \n\n")
         warp_size = driver.active.get_current_target().warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise_(OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads"))
