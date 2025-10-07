@@ -56,15 +56,15 @@ bool isSplatOneConstTensor(const Value v) {
 bool isByteOffsetSmallerThan2GB(triton::AddPtrOp addPtrOp,
                                 std::shared_ptr<DataFlowSolver> solver) {
   Value elemIdx = addPtrOp.getOffset();
-  LDBG("Determing element index value range: " << elemIdx);
+  LDBG("Determing value-range of element-index: " << elemIdx);
 
-  // step 1: get the value range of the element index
+  // step 1: Get the value range of the element index
   const auto *lattice =
       solver->lookupState<dataflow::IntegerValueRangeLattice>(elemIdx);
   if (!lattice) {
-    // Note not always able to get lattice, e.g. the offset is obtained from
-    // tt.load.
-    LDBG("cannot get lattice associated with the offset");
+    // Note that it is not always able to get lattice, e.g. the element-index
+    // is defined by a tt.load.
+    LDBG("Cannot get lattice");
     return false;
   }
 
@@ -77,14 +77,22 @@ bool isByteOffsetSmallerThan2GB(triton::AddPtrOp addPtrOp,
   const auto &smin = vr.getValue().smin();
   const auto &smax = vr.getValue().smax();
 
-  LDBG("Element idx range: " << smin << " : " << smax);
+  LDBG("Element-index value-range: " << smin << " : " << smax);
   if (smin.isNegative() || smax.isNegative())
     return false;
 
-  // step 2: get element size
+  // step 2: Get element type and size.
+  // e.g. addPtrOp.getType is tensor<64x64x!tt.ptr<f16>, then elemTy is
+  // !tt.ptr<f16>, and dereferencing elemTy gets f16.
+  // TODO: Not sure if we need to keep dereferencing in a loop.
   Type elemTy = getElementTypeOrSelf(addPtrOp.getType());
   while (auto ptrTy = dyn_cast<triton::PointerType>(elemTy))
     elemTy = ptrTy.getPointeeType();
+
+  if (!elemTy || !elemTy.isIntOrFloat()) {
+    LDBG("unknown element type: " << elemTy);
+    return false;
+  }
 
   // step 3: check of byte-offset is within 2G
   int64_t elemBitSz = elemTy.getIntOrFloatBitWidth();
