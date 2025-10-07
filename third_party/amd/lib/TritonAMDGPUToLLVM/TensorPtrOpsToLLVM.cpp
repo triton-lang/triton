@@ -1,4 +1,5 @@
 #include "PatternTritonGPUOpToLLVM.h"
+#include "TDMUtility.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -19,19 +20,15 @@ struct MakeTensorDescOpConversion
                   ConversionPatternRewriter &rewriter) const override {
 
     auto loc = op.getLoc();
+    auto basePtr = adaptor.getBase();
     auto tensorShape = adaptor.getShape();
     auto tensorStride = adaptor.getStrides();
-    auto basePtr = adaptor.getBase();
     auto result = op.getResult();
 
-    SmallVector<Value> elems;
-    elems.push_back(basePtr);
-    llvm::append_range(elems, tensorShape);
-    llvm::append_range(elems, tensorStride);
-
-    auto newValue = packLLElements(op.getLoc(), getTypeConverter(), elems,
-                                   rewriter, result.getType());
-    rewriter.replaceOp(op, newValue);
+    Value desc =
+        LLVM::AMD::packTensorDesc(rewriter, loc, getTypeConverter(), basePtr,
+                                  tensorShape, tensorStride, result.getType());
+    rewriter.replaceOp(op, desc);
     return success();
   }
 };

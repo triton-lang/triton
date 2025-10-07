@@ -2733,7 +2733,7 @@ def test_non_scalar_loop_bounds():
 
 
 @gluon.jit
-def amd_tdm_kernel(ptr):
+def amd_tdm_load_kernel(ptr):
     SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [16, 64], [1, 0])
     BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
 
@@ -2748,17 +2748,17 @@ def amd_tdm_kernel(ptr):
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
-def test_amd_tdm(target):
+def test_amd_tdm_load(target):
 
     ptr = MockTensor(ttgl.float16)
-    module = run_parser(amd_tdm_kernel, *make_args(ptr), target)
+    module = run_parser(amd_tdm_load_kernel, *make_args(ptr), target)
     expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [16, 64]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @amd_tdm_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @amd_tdm_load_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %c32_i32 = arith.constant 32 : i32
     %c128_i32 = arith.constant 128 : i32
     %c128_i64 = arith.constant 128 : i64
@@ -2771,6 +2771,51 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %2 = amdgpu.async_tdm_copy_global_to_local %0[%c0_i32, %c2_i32] into %1, %true : !tt.tensordesc<tensor<16x64xf16, #shared>> -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
     %3 = amdgpu.async_tdm_wait  {num = 0 : i32}
     %4 = ttg.local_load %1 : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> tensor<16x64xf16, #blocked>
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def amd_tdm_store_kernel(ptr):
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+
+    desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=ptr, shape=(32, 128), strides=(128, 1),
+                                                       block_shape=(16, 64), layout=SHARED_LAYOUT)
+
+    value = ttgl.full([16, 64], 1.0, ttgl.float16, layout=BLOCKED_LAYOUT)
+    buffer = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, value)
+
+    ttgl.amd.gfx1250.tdm.async_store(desc, offsets=[0, 2], src=buffer)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
+def test_amd_tdm_store(target):
+
+    ptr = MockTensor(ttgl.float16)
+    module = run_parser(amd_tdm_store_kernel, *make_args(ptr), target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @amd_tdm_store_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c32_i32 = arith.constant 32 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %c128_i64 = arith.constant 128 : i64
+    %c1_i64 = arith.constant 1 : i64
+    %0 = tt.make_tensor_descriptor %arg0, [%c32_i32, %c128_i32], [%c128_i64, %c1_i64] : <f16>, <tensor<16x64xf16, #shared>>
+    %cst = arith.constant 1.000000e+00 : f16
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<16x64xf16, #blocked>
+    %1 = ttg.local_alloc %cst_0 : (tensor<16x64xf16, #blocked>) -> !ttg.memdesc<16x64xf16, #shared, #smem, mutable>
+    %c0_i32 = arith.constant 0 : i32
+    %c2_i32 = arith.constant 2 : i32
+    amdgpu.async_tdm_copy_local_to_global %0[%c0_i32, %c2_i32] from %1 : !ttg.memdesc<16x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<16x64xf16, #shared>>
+    %2 = amdgpu.async_tdm_wait  {num = 0 : i32}
     tt.return
   }
 }
