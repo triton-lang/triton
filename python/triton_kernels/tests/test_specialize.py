@@ -77,7 +77,7 @@ def test_cacheable(device, fresh_triton_cache):
             loc = line.split("(", 1)[1].split(")", 1)[0]
         if loc and loc in line:
             assert "test_specialize.py" in line
-            assert ":17" in line
+            assert ":19" in line
 
     compile_count = 0
 
