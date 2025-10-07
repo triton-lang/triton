@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-pipeline=num-stages=3 -canonicalize | FileCheck %s --check-prefixes=COMMON,CHECK
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline=num_stages=2 -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline="num_stages=3 global_prefetch=1 local_prefetch=1" -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD_PREFETCH
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops=num_stages=2 -tritonamdgpu-pipeline -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-schedule-loops="num_stages=3" -tritonamdgpu-pipeline -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD_3_STAGES
 
 // 4 warps
 // matmul: 128x32 @ 32x128 -> 128x128
@@ -99,33 +99,29 @@
 //       AMD:   ttg.local_dealloc %{{.*}}
 //       AMD:   ttg.local_dealloc %{{.*}}
 
-// Prefetch pipelining adds another stage in between global load and compute.
-// This stage will local_store, then local_load, creating a prefetch from shared
-// memory into a register buffer for compute.
-//
-// AMD_PREFETCH-LABEL: tt.func @matmul_loop
-//       AMD_PREFETCH:   ttg.local_alloc
-//       AMD_PREFETCH:   ttg.local_alloc
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_store
-//       AMD_PREFETCH:   ttg.local_store
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_load
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_load
-//       AMD_PREFETCH:   scf.for
-//       AMD_PREFETCH:     ttg.local_store
-//       AMD_PREFETCH:     ttg.local_store
-//       AMD_PREFETCH:     tt.dot
-//       AMD_PREFETCH:     tt.load
-//       AMD_PREFETCH:     ttg.local_load
-//       AMD_PREFETCH:     tt.load
-//       AMD_PREFETCH:     ttg.local_load
-//       AMD_PREFETCH:     scf.yield
-//       AMD_PREFETCH:   tt.dot
-//       AMD_PREFETCH:   tt.dot
-//       AMD_PREFETCH:   tt.return
+// AMD_3_STAGES-LABEL: tt.func @matmul_loop
+//       AMD_3_STAGES:   ttg.local_alloc
+//       AMD_3_STAGES:   ttg.local_alloc
+//       AMD_3_STAGES:   tt.load
+//       AMD_3_STAGES:   tt.load
+//       AMD_3_STAGES:   ttg.local_store
+//       AMD_3_STAGES:   ttg.local_store
+//       AMD_3_STAGES:   tt.load
+//       AMD_3_STAGES:   tt.load
+//       AMD_3_STAGES:   ttg.local_store
+//       AMD_3_STAGES:   ttg.local_store
+//       AMD_3_STAGES:   scf.for
+//       AMD_3_STAGES:     tt.load
+//       AMD_3_STAGES:     ttg.local_load
+//       AMD_3_STAGES:     tt.load
+//       AMD_3_STAGES:     ttg.local_load
+//       AMD_3_STAGES:     tt.dot
+//       AMD_3_STAGES:     ttg.local_store
+//       AMD_3_STAGES:     ttg.local_store
+//       AMD_3_STAGES:     scf.yield
+//       AMD_3_STAGES:   tt.dot
+//       AMD_3_STAGES:   tt.dot
+//       AMD_3_STAGES:   tt.return
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
@@ -237,7 +233,7 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // AMD-COUNT-2:  ttg.local_dealloc
 //         AMD:  scf.yield %[[SEL1]]
 
-// AMD_PREFETCH-LABEL: tt.func @matmul_loop_nested
+// AMD_3_STAGES-LABEL: tt.func @matmul_loop_nested
 
 tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
                          %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
@@ -332,21 +328,21 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 //       AMD:       scf.yield %[[ADDPTR_32]], %[[DOT_31]], %[[SELECT_36]], %[[MEMDESC_SUBVIEW_37]]
 //       AMD:  ttg.local_dealloc %[[LOCAL_ALLOC_12]]
 
-// AMD_PREFETCH-LABEL: tt.func @matmul_loop_single_pipeline
-//       AMD_PREFETCH:   ttg.local_alloc
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_store
-//       AMD_PREFETCH:   tt.load
-//       AMD_PREFETCH:   ttg.local_load
-//       AMD_PREFETCH:   scf.for
-//       AMD_PREFETCH:     ttg.local_store
-//       AMD_PREFETCH:     tt.dot
-//       AMD_PREFETCH:     tt.load
-//       AMD_PREFETCH:     ttg.local_load
-//       AMD_PREFETCH:     scf.yield
-//       AMD_PREFETCH:   tt.dot
-//       AMD_PREFETCH:   tt.dot
-//       AMD_PREFETCH:   tt.return
+// AMD_3_STAGES-LABEL: tt.func @matmul_loop_single_pipeline
+//       AMD_3_STAGES:   ttg.local_alloc
+//       AMD_3_STAGES:   tt.load
+//       AMD_3_STAGES:   ttg.local_store
+//       AMD_3_STAGES:   tt.load
+//       AMD_3_STAGES:   ttg.local_store
+//       AMD_3_STAGES:   scf.for
+//       AMD_3_STAGES:     tt.load
+//       AMD_3_STAGES:     ttg.local_load
+//       AMD_3_STAGES:     tt.dot
+//       AMD_3_STAGES:     ttg.local_store
+//       AMD_3_STAGES:     scf.yield
+//       AMD_3_STAGES:   tt.dot
+//       AMD_3_STAGES:   tt.dot
+//       AMD_3_STAGES:   tt.return
 
 tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
                                   %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
@@ -518,7 +514,7 @@ tt.func @indirect_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
 //       AMD:    ttg.local_store
 //       AMD:    scf.yield
 
-// AMD_PREFETCH-LABEL: tt.func @indirect_bmm_scalar_dist_one
+// AMD_3_STAGES-LABEL: tt.func @indirect_bmm_scalar_dist_one
 
 tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
                    %76: index,
@@ -617,7 +613,7 @@ tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
 //       AMD:     ttg.local_store %[[LOAD_56]], %[[MEMDESC_SUBVIEW_63]]
 //       AMD:     scf.yield %[[DOT_58]], %[[ADDPTR_47]], %[[ADDPTR_48]], %[[SELECT_61]], %[[MEMDESC_SUBVIEW_62]], %[[LOAD_51]], %[[MEMDESC_SUBVIEW_63]]
 
-// AMD_PREFETCH-LABEL: tt.func @indirect_bmm_vector
+// AMD_3_STAGES-LABEL: tt.func @indirect_bmm_vector
 
 tt.func @indirect_bmm_vector(%77: tensor<16x16xi64, #BL> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.constancy = dense<[16, 16]> : tensor<2xi32>},
                    %76: index,
@@ -1259,21 +1255,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // AMD:          scf.yield
 // AMD:        ttg.local_dealloc
 
-// AMD_PREFETCH-LABEL:  tt.func public @nested_loops
-// AMD_PREFETCH-NOT:  ttg.local_alloc
-// AMD_PREFETCH:      scf.for
-// AMD_PREFETCH:        ttg.local_alloc
-// AMD_PREFETCH:        tt.load
-// AMD_PREFETCH:        ttg.local_store
-// AMD_PREFETCH:        tt.load
-// AMD_PREFETCH:        ttg.local_load
-// AMD_PREFETCH:        scf.for
-// AMD_PREFETCH:          ttg.local_store
-// AMD_PREFETCH:          tt.load
-// AMD_PREFETCH:          tt.dot
-// AMD_PREFETCH:          ttg.local_load
-// AMD_PREFETCH:          scf.yield
-// AMD_PREFETCH:        ttg.local_dealloc
+// AMD_3_STAGES-LABEL:  tt.func public @nested_loops
+// AMD_3_STAGES-NOT:  ttg.local_alloc
+// AMD_3_STAGES:      scf.for
+// AMD_3_STAGES:        ttg.local_alloc
+// AMD_3_STAGES:        tt.load
+// AMD_3_STAGES:        ttg.local_store
+// AMD_3_STAGES:        tt.load
+// AMD_3_STAGES:        ttg.local_store
+// AMD_3_STAGES:        scf.for
+// AMD_3_STAGES:          tt.load
+// AMD_3_STAGES:          ttg.local_load
+// AMD_3_STAGES:          tt.dot
+// AMD_3_STAGES:          ttg.local_store
+// AMD_3_STAGES:          scf.yield
+// AMD_3_STAGES:        ttg.local_dealloc
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [2, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 2], instrShape = [16, 8]}>
@@ -1614,18 +1610,18 @@ tt.func @matmul_nested_ops(%lb : index, %ub : index, %step : index,
 // AMD: tt.store
 // AMD: tt.store
 
-// AMD_PREFETCH-LABEL: @masked_add_kernel
-// AMD_PREFETCH: %[[CONSTANT:.*]] = arith.constant dense<0xFF800000>
-// AMD_PREFETCH-COUNT-4: tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
-// AMD_PREFETCH: scf.for
-// AMD_PREFETCH:   arith.select
-// AMD_PREFETCH:   arith.addf
-// AMD_PREFETCH:   tt.store
-// AMD_PREFETCH:   %[[A:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
-// AMD_PREFETCH:   %[[B:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
-// AMD_PREFETCH:   scf.yield
-// AMD_PREFETCH: tt.store
-// AMD_PREFETCH: tt.store
+// AMD_3_STAGES-LABEL: @masked_add_kernel
+// AMD_3_STAGES: %[[CONSTANT:.*]] = arith.constant dense<0xFF800000>
+// AMD_3_STAGES-COUNT-4: tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
+// AMD_3_STAGES: scf.for
+// AMD_3_STAGES:   arith.select
+// AMD_3_STAGES:   %[[A:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
+// AMD_3_STAGES:   %[[B:.*]] = tt.load {{.*}}, %{{.*}}, %[[CONSTANT]]
+// AMD_3_STAGES:   arith.addf
+// AMD_3_STAGES:   tt.store
+// AMD_3_STAGES:   scf.yield
+// AMD_3_STAGES: tt.store
+// AMD_3_STAGES: tt.store
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {

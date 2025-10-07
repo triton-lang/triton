@@ -1,5 +1,4 @@
 import torch
-
 import triton
 import triton.language as tl
 
@@ -55,10 +54,27 @@ def swizzle2d(pid, grid_m, grid_n, GROUP_M: tl.constexpr):
 
 
 @triton.jit
-def _load_tile_attrs(tile_id, num_tiles, unpadded_m, grid_n, M, K, ExptData, ExptHist, ExptOffs, ExptTileOffs,
-                     EXPT_IS_INNER: tl.constexpr, X_IS_PADDED: tl.constexpr, W_IS_PADDED: tl.constexpr,
-                     BLOCK_M: tl.constexpr, BLOCK_K: tl.constexpr, PACKED_BLOCK_K_W: tl.constexpr,
-                     SPLIT_K: tl.constexpr, GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr):
+def _load_tile_attrs(
+    tile_id,
+    num_tiles,
+    unpadded_m,
+    grid_n,
+    M,
+    K,
+    ExptData,
+    ExptHist,
+    ExptOffs,
+    ExptTileOffs,
+    EXPT_IS_INNER: tl.constexpr,
+    X_IS_PADDED: tl.constexpr,
+    W_IS_PADDED: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    PACKED_BLOCK_K_W: tl.constexpr,
+    SPLIT_K: tl.constexpr,
+    GROUP_M: tl.constexpr,
+    XCD_SWIZZLE: tl.constexpr,
+):
     # unpack and swizzle program ids
     pid_emnk = tile_id
     if XCD_SWIZZLE != 1:
@@ -234,7 +250,7 @@ def matmul_launch_metadata(grid, kernel, args):
             # recreate inverse GatherIndx.
             dst = torch.full_like(gindx, -1)
             idx = torch.arange(len(gindx), device=gindx.device, dtype=torch.int32)
-            mask = (gindx != -1)
+            mask = gindx != -1
             dst[gindx[mask]] = idx[mask]
             n_read_rows = (dst.view((-1, n_expts_act)) != -1).any(dim=1).sum()
         else:
@@ -252,3 +268,9 @@ def matmul_launch_metadata(grid, kernel, args):
     ret["bytes"] = int(n_x_bytes + n_y_bytes + n_w_bytes)
 
     return ret
+
+
+@triton.jit
+def threadfence_system():
+    tl.inline_asm_elementwise("mov.u32 $0, 0x0; fence.sc.sys;", args=(), dtype=(tl.int32, ), is_pure=False, pack=1,
+                              constraints="=r")

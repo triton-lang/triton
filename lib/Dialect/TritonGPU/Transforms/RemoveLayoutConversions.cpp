@@ -135,20 +135,30 @@ public:
   void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp);
   void hoistConvertIntoConditionals();
   void hoistConvertIntoConditionals(ConvertLayoutOp convertOp);
-  void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
-                    ConvertLayoutOp convertOp, IRMapping &mapping);
-  void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
-                    ConvertLayoutOp convertOp);
+  void rewriteSlice(
+      SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
+      const DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
+      ConvertLayoutOp convertOp, IRMapping &mapping);
+  void rewriteSlice(
+      SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
+      const DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
+      ConvertLayoutOp convertOp);
 
-  LogicalResult
-  getConvertBackwardSlice(OpOperand &root, Attribute rootEncoding,
-                          SetVector<Value> &slice,
-                          DenseMap<Value, Attribute> &layout,
-                          std::function<bool(Operation *)> stopPropagation);
+  /// Invokes the utility function getConvertBackwardSlice with a callback for
+  /// checking whether a rematerialization for a particular value already
+  /// exists. Any value that has an existing rematerialization for all of its
+  /// uses will have that rematerialization inserted in \p existingRemats, and
+  /// will not have its operands traversed for inclusion in \p slice.
+  LogicalResult getConvertBackwardSlice(
+      OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
+      DenseMap<Value, Attribute> &layout,
+      DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
+      std::function<bool(Operation *)> stopPropagation);
 
   LogicalResult getRematerializableSlice(
       OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
       DenseMap<Value, Attribute> &layout,
+      DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
       std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
@@ -791,10 +801,10 @@ void LayoutRematerialization::updateRematMapping(
   }
 }
 
-void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
-                                           DenseMap<Value, Attribute> &layout,
-                                           ConvertLayoutOp convertOp,
-                                           IRMapping &mapping) {
+void LayoutRematerialization::rewriteSlice(
+    SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
+    const DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
+    ConvertLayoutOp convertOp, IRMapping &mapping) {
   SetVector<Operation *> opsToRewrite;
   // Keep track of yield operands that need to be duplicated.
   DenseMap<Operation *, SmallVector<int>> yieldOperandsMap;
@@ -805,8 +815,10 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   for (Value v : slice) {
     auto layoutIt = layout.find(v);
     assert(layoutIt != layout.end());
-    // If we already have a remat value for this value, use it.
-    if (Value remat = getRematValue(v, layoutIt->second)) {
+    // If we found a valid rematerialization for this value while constructing
+    // the slice, use that.
+    if (Value remat = existingRemats.lookup({v, layoutIt->second})) {
+      assert(getRematValue(v, layoutIt->second) == remat && "remat mismatch");
       mapping.map(v, remat);
       valuesWithExistingRemat.insert(v);
       continue;
@@ -957,20 +969,20 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     opToDelete.insert(op);
 }
 
-void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
-                                           DenseMap<Value, Attribute> &layout,
-                                           ConvertLayoutOp convertOp) {
+void LayoutRematerialization::rewriteSlice(
+    SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
+    const DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
+    ConvertLayoutOp convertOp) {
   IRMapping mapping;
-  rewriteSlice(slice, layout, convertOp, mapping);
+  rewriteSlice(slice, layout, existingRemats, convertOp, mapping);
 }
 
 LogicalResult LayoutRematerialization::getConvertBackwardSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
+    DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
     std::function<bool(Operation *)> stopPropagation) {
-  // Allow re-using existing conversions for a value. Check dominance of any
-  // reusable materializations against the root value. This is sufficient
-  // because the conversions are processed in post-order.
+  // Allow re-using existing conversions for a value if it dominates the use.
   auto getExistingConversion = [&](OpOperand &value, Attribute encoding) {
     Value remat = getRematValue(value.get(), encoding);
     if (!remat)
@@ -979,6 +991,7 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
     // dominates the current use of value.
     Operation *user = value.getOwner();
     if (domInfo.properlyDominates(remat, user)) {
+      existingRemats.try_emplace({value.get(), encoding}, remat);
       return remat;
     }
     // FIXME: If the current user is a conversion, then we know it will become
@@ -992,6 +1005,10 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
     //   }
     //   return remat;
     // }
+
+    // There is an existing rematerialization, but it doesn't dominate all the
+    // uses we care about, so ensure it isn't used.
+    existingRemats[{value.get(), encoding}] = Value();
     return Value();
   };
 
@@ -1002,9 +1019,10 @@ LogicalResult LayoutRematerialization::getConvertBackwardSlice(
 LogicalResult LayoutRematerialization::getRematerializableSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
+    DenseMap<std::pair<Value, Attribute>, Value> &existingRemats,
     std::function<bool(Operation *)> stopPropagation) {
-  LogicalResult result = getConvertBackwardSlice(root, rootEncoding, slice,
-                                                 layout, stopPropagation);
+  LogicalResult result = getConvertBackwardSlice(
+      root, rootEncoding, slice, layout, existingRemats, stopPropagation);
   if (result.failed() || slice.empty())
     return failure();
 
@@ -1124,8 +1142,10 @@ void LayoutRematerialization::backwardRematerialization(
   // rematerialized.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
+  DenseMap<std::pair<Value, Attribute>, Value> existingRemats;
   LogicalResult result = getRematerializableSlice(
-      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout);
+      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout,
+      existingRemats);
   if (result.failed()) {
     LDBG("  getRematerializableSlice failed");
     return;
@@ -1250,7 +1270,7 @@ void LayoutRematerialization::backwardRematerialization(
   });
 
   // 3. Rewrite the slice.
-  rewriteSlice(slice, layout, convertOp);
+  rewriteSlice(slice, layout, existingRemats, convertOp);
 }
 
 void LayoutRematerialization::hoistConvertDotOperand() {
@@ -1322,9 +1342,11 @@ void LayoutRematerialization::hoistConvertDotOperand(
 
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
+  DenseMap<std::pair<Value, Attribute>, Value> existingRemats;
   // Set-up the conversion "cache"
   LogicalResult result = getConvertBackwardSlice(
-      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout, stop);
+      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout,
+      existingRemats, stop);
   if (result.failed())
     return;
 
@@ -1374,7 +1396,7 @@ void LayoutRematerialization::hoistConvertDotOperand(
       DBGS() << "    " << v << '\n';
   });
 
-  rewriteSlice(innerSlice, layout, convertOp, mapping);
+  rewriteSlice(innerSlice, layout, existingRemats, convertOp, mapping);
 }
 
 // For convert left we try to hoist them above type extension to reduce the cost
@@ -1401,9 +1423,10 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   // 1. Take a backward slice of all the tensor dependencies.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
+  DenseMap<std::pair<Value, Attribute>, Value> existingRemats;
   LogicalResult result = getRematerializableSlice(
       convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout,
-      isExtOrBroadcastOp);
+      existingRemats, isExtOrBroadcastOp);
   if (result.failed())
     return;
 
@@ -1417,11 +1440,13 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     if (isExtOrBroadcastOp(op)) {
       SetVector<Value> tempSlice;
       DenseMap<Value, Attribute> tempLayout;
+      DenseMap<std::pair<Value, Attribute>, Value> tempExistingRemats;
       Attribute srcEncoding = inferSrcEncoding(op, layout[v]);
       if (!srcEncoding)
         return;
-      LogicalResult result = getRematerializableSlice(
-          op->getOpOperand(0), srcEncoding, tempSlice, tempLayout);
+      LogicalResult result =
+          getRematerializableSlice(op->getOpOperand(0), srcEncoding, tempSlice,
+                                   tempLayout, tempExistingRemats);
 
       // If a value is already assigned to a _different_ layout,
       // we cannot propagate past this op (as it would conflict with
@@ -1474,7 +1499,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   mapping.map(extOrBroadcastOp->getResult(0), newExtOrBroadcast->getResult(0));
   slice.remove(extOrBroadcastOp->getResult(0));
   // 3. Rewrite the slice.
-  rewriteSlice(slice, layout, convertOp, mapping);
+  rewriteSlice(slice, layout, existingRemats, convertOp, mapping);
 }
 
 void LayoutRematerialization::hoistConvertIntoConditionals(
@@ -1483,10 +1508,11 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   // stopping at conditionals. This subslice is used to initialize the analysis.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
+  DenseMap<std::pair<Value, Attribute>, Value> existingRemats;
   auto isIfOp = [](Operation *op) { return isa<scf::IfOp>(op); };
   if (failed(getRematerializableSlice(convertOp.getSrcMutable(),
                                       convertOp.getType().getEncoding(), slice,
-                                      layout, isIfOp)))
+                                      layout, existingRemats, isIfOp)))
     return;
 
   // These are the conditional edges above which conversions should be hoisted.
@@ -1520,11 +1546,12 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
 
     SetVector<Value> thenSlice, elseSlice;
     DenseMap<Value, Attribute> thenLayout, elseLayout;
+    DenseMap<std::pair<Value, Attribute>, Value> thenRemats, elseRemats;
 
     LogicalResult thenResult = getRematerializableSlice(
-        thenRes, rootLayout, thenSlice, thenLayout, isIfOp);
+        thenRes, rootLayout, thenSlice, thenLayout, thenRemats, isIfOp);
     LogicalResult elseResult = getRematerializableSlice(
-        elseRes, rootLayout, elseSlice, elseLayout, isIfOp);
+        elseRes, rootLayout, elseSlice, elseLayout, elseRemats, isIfOp);
 
     // If propagation across both edges of this conditional succeeded, then we
     // don't need to hoist across it. Merge into the current slice.
@@ -1589,7 +1616,7 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
     OpBuilder b(edge->getOwner());
     hoistRemat(b, edge->get(), layout.at(result));
   }
-  rewriteSlice(slice, layout, convertOp, mapping);
+  rewriteSlice(slice, layout, existingRemats, convertOp, mapping);
 }
 
 void backwardRematerialization(ModuleOp module) {
