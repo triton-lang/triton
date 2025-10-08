@@ -1046,11 +1046,11 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
         loc, adaptor.getResult(), elementType, rewriter);
     Value dstPtr = dstMemObj.getBase();
     SmallVector<Value> offset = adaptor.getIndices();
-    int numWraps = triton::gpu::lookupNumWarps(op);
+    int numWarps = triton::gpu::lookupNumWarps(op);
 
     auto [group0, group1] = LLVM::AMD::createTDMDescriptor(
         rewriter, loc, getTypeConverter(), elementType, blockShape, tensorShape,
-        tensorStride, offset, srcPtr, dstPtr, op.getPred(), numWraps,
+        tensorStride, offset, srcPtr, dstPtr, op.getPred(), numWarps,
         padInterval, padAmount);
     LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
                                     "llvm.amdgcn.tensor.load.to.lds.d2", {},
@@ -1091,12 +1091,12 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
         loc, adaptor.getSrc(), elementType, rewriter);
     Value dstPtr = dstMemObj.getBase();
     SmallVector<Value> offset = adaptor.getIndices();
-    int numWraps = triton::gpu::lookupNumWarps(op);
+    int numWarps = triton::gpu::lookupNumWarps(op);
     Value pred = b.true_val();
 
     auto [group0, group1] = LLVM::AMD::createTDMDescriptor(
         rewriter, loc, getTypeConverter(), elementType, blockShape, tensorShape,
-        tensorStride, offset, srcPtr, dstPtr, pred, numWraps,
+        tensorStride, offset, srcPtr, dstPtr, pred, numWarps,
         /*padInterval=*/0, /*padAmount=*/0);
     LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
                                     "llvm.amdgcn.tensor.store.from.lds.d2", {},
