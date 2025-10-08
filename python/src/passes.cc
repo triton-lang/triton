@@ -98,6 +98,35 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonInstrumentConcurrencySanitizer);
   ADD_PASS_WRAPPER_0("add_optimize_partition_warps",
                      createTritonGPUOptimizePartitionWarps);
+  }
+
+void init_plugin_passes(py::module &&m) {
+ m.def("add_plugin", [](mlir ::PassManager &pm) {
+    std::string filename =
+      mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+    if (filename.empty())
+      return;
+
+  std::string error;
+  auto library =
+      llvm::sys::DynamicLibrary::getPermanentLibrary(filename.c_str(), &error);
+
+  if(!library.isValid()) {
+    llvm::errs() << "Failed to load plugin library: " << error << "\n";
+    throw std::runtime_error("Failed to load plugin library");
+  }
+
+  intptr_t getDetailsFn =
+      (intptr_t)library.getAddressOfSymbol("addTritonPluginPass");
+
+  if (!getDetailsFn) {
+    llvm::errs() << "Failed to get symbol: " << error << "\n";
+    throw std::runtime_error("Failed to get symbol");
+  }
+  std::function<void(mlir::PassManager &)> createPluginPass =
+      reinterpret_cast<void (*)(mlir::PassManager &)>(getDetailsFn);
+    createPluginPass(pm);
+  });
 }
 
 void init_plugin_passes(py::module &&m) {
