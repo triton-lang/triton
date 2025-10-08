@@ -167,6 +167,7 @@ def make_default_opt_flags_amd(
         target_kernel_kwargs=target_kernel_kwargs,
     )
     # check constraints
+    # TODO(afroz): Update this later.
     assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
     return ret
 
@@ -302,6 +303,7 @@ def make_default_opt_flags_nvidia(
         idle_sms=constraints.get("idle_sms", 0),
     )
     # check constraints
+    # TODO(afroz): Update this later.
     assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
     return ret
 
