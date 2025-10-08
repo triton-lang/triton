@@ -16,8 +16,6 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include "mlir/Tools/Plugins/PassPlugin.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace py = pybind11;
 
@@ -98,12 +96,12 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonInstrumentConcurrencySanitizer);
   ADD_PASS_WRAPPER_0("add_optimize_partition_warps",
                      createTritonGPUOptimizePartitionWarps);
-  }
+}
 
 void init_plugin_passes(py::module &&m) {
- m.def("add_plugin", [](mlir ::PassManager &pm) {
+  m.def("add_plugin", [](mlir ::PassManager &pm) {
     std::string filename =
-      mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+        mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
     if (filename.empty())
       return;
 
@@ -119,12 +117,12 @@ void init_plugin_passes(py::module &&m) {
     intptr_t getDetailsFn =
         (intptr_t)library.getAddressOfSymbol("addTritonPluginPass");
 
-  if (!getDetailsFn) {
-    llvm::errs() << "Failed to get symbol: " << error << "\n";
-    throw std::runtime_error("Failed to get symbol");
-  }
-  std::function<void(mlir::PassManager &)> createPluginPass =
-      reinterpret_cast<void (*)(mlir::PassManager &)>(getDetailsFn);
+    if (!getDetailsFn) {
+      llvm::errs() << "Failed to get symbol: " << error << "\n";
+      throw std::runtime_error("Failed to get symbol");
+    }
+    std::function<void(mlir::PassManager &)> createPluginPass =
+        reinterpret_cast<void (*)(mlir::PassManager &)>(getDetailsFn);
     createPluginPass(pm);
   });
 }
