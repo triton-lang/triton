@@ -294,8 +294,13 @@ public:
     SetVector<Value> slice;
     DenseMap<Value, Attribute> layoutMap;
     // Check how it may propagate up the SSA chain.
-    LogicalResult result = getConvertBackwardSlice(
-        tmemStoreOp.getSrcMutable(), slice, newEncoding, layoutMap);
+    auto stopOnForOp = [](Operation *op) {
+      return isa<scf::ForOp>(op) ? TraversalAction::AbortWithError
+                                 : TraversalAction::Continue;
+    };
+    LogicalResult result =
+        getConvertBackwardSlice(tmemStoreOp.getSrcMutable(), slice, newEncoding,
+                                layoutMap, stopOnForOp);
     if (result.failed())
       return failure();
     bool foundImprovedLoad = false;

@@ -2233,8 +2233,8 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: rematerialize_through_loop
-  tt.func public @rematerialize_through_loop(%arg0: !tt.ptr<f16>) {
+  // CHECK-LABEL: rematerialize_ptr_type_through_loop
+  tt.func public @rematerialize_ptr_type_through_loop(%arg0: !tt.ptr<f16>) {
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %c128_i32 = arith.constant 128 : i32

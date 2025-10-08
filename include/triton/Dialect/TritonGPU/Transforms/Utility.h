@@ -172,11 +172,13 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
                               IRMapping &mapping);
 
 // Get backward slice of tensor values starting from the root node along with
-// encoding propagation.
+// encoding propagation. Backwards propagation can be controlled via
+// propagationAction to stop the current chain or aborting signalling an error
+enum class TraversalAction { Continue, Stop, AbortWithError };
 LogicalResult getConvertBackwardSlice(
     OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
-    DenseMap<Value, Attribute> &layout, bool propagateThroughForOp = false,
-    std::function<bool(Operation *)> stopPropagation = nullptr,
+    DenseMap<Value, Attribute> &layout,
+    std::function<TraversalAction(Operation *)> propagationAction = nullptr,
     std::function<Value(OpOperand &, Attribute)> getExistingConversion =
         nullptr);
 
