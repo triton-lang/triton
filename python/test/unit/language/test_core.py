@@ -2556,8 +2556,8 @@ def test_sum_dtype(device):
     torch.testing.assert_close(out[0], torch.tensor(32 * 32, dtype=torch.bfloat16, device=device))
 
 
-@triton.jit
 # trivial associative but not commutative function
+@triton.jit
 def get_first_element(a, b):
     return a
 
