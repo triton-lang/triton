@@ -52,7 +52,7 @@ class SwiGLU(torch.autograd.Function):
                 grid = (min(M_BLOCKS * N_BLOCKS, 4 * num_sms), )
         n_tokens = None
         if routing_data is not None:
-            n_tokens = routing_data.expt_data.token_offs_raw[routing_data.n_expts_tot]
+            n_tokens = routing_data.expt_data.token_offs[routing_data.n_expts_tot]
         _swiglu[grid](
             flex_ctx.out_data.reinterpret(out),
             flex_ctx.out_data.expected_scale,
