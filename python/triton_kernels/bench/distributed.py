@@ -24,9 +24,9 @@ from bench_utils import quantize_weight
 
 def legacy_routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx, n_expts_tot, n_expts_act):
     sparse_logits = SparseMatrix(indx=expt_indx, vals=expt_scal, mask=bitmatrix)
-    dispatch_indx = sparse_logits.mask.metadata.col_sorted_indx
-    combine_indx = sparse_logits.mask.metadata.row_sorted_indx
-    ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask.metadata.col_sum, dispatch_indx.shape[0])
+    dispatch_indx = sparse_logits.mask_metadata.col_sorted_indx
+    combine_indx = sparse_logits.mask_metadata.row_sorted_indx
+    ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
     gate_scal = sparse_logits.vals.flatten()[combine_indx]
     routing_data = RoutingData(gate_scal, ragged_batch_metadata.batch_sizes, n_expts_tot, n_expts_act,
                                ragged_batch_metadata)
