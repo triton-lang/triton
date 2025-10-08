@@ -1,35 +1,55 @@
 # fmt: off
 
+import numpy as np
 import pytest
 import torch
 import triton
 import triton.language as tl
 
+from triton.language.extra import libdevice
+
+
+# -----------------------
+# test extern functions
+# -----------------------
+
 
 @triton.jit
-def fast_log2(x):
+def tanh_kernel(
+    x_ptr,
+    y_ptr,
+    n_elements,
+    direct_import: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask)
 
-    return tl.extra.libdevice.fast_log2f(x)
+    if direct_import:
+        y = libdevice.tanh(x)
+    else:
+        y = tl.extra.libdevice.tanh(x)
+
+    tl.store(y_ptr + offsets, y, mask=mask)
 
 
-@triton.jit
-def fast_log2_inplace(X, n, N : tl.constexpr = 256):
-
-    idxs = tl.arange(0, N)
-    mask = idxs < n
-    x = tl.load(X + idxs, mask=mask, other=1.0)
-    x = fast_log2(x)
-    tl.store(X + idxs, x, mask=mask)
-
-
-def test_libdevice():
+@pytest.mark.parametrize("direct_import", [False, True])
+@pytest.mark.parametrize("dtype_str", ['float32', 'float64'])
+def test_math_extern(dtype_str, direct_import):
 
     if not torch.cuda.is_available():
         pytest.skip("Test requires CUDA target.")
         return
 
-    x = torch.tensor([2.0, 4.0, 8.0], device="cuda", dtype=torch.float32)
-    fast_log2_inplace[(1,)](x, x.shape[0])
-    y = torch.tensor([1.0, 2.0, 3.0], device="cuda", dtype=torch.float32)
+    torch.manual_seed(42)
 
-    assert torch.equal(x, y)
+    x = torch.randn((100,), dtype=getattr(torch, dtype_str), device="cuda")
+
+    y_tri = torch.empty_like(x)
+    tanh_kernel[(1, )](x, y_tri, x.shape[0], direct_import, BLOCK_SIZE=128)
+
+    y_ref = torch.tanh(x)
+    np.testing.assert_allclose(y_ref.cpu().numpy(), y_tri.cpu().numpy(), rtol=0, atol=1.0e-6)
