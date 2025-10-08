@@ -41,9 +41,13 @@ def _keyed_add(x, y):
 
 
 @triton.jit
-def _bitmatrix_metadata_compute_stage2(ColSortedIndx, RowSortedIndx, NonzeroIndx, nonzero_indx_size, ColPartialSum,
-                                       stride_pm, stride_pn, ColOffs, BLOCK_SIZE: tl.constexpr):
+def _bitmatrix_metadata_compute_stage2(ColSortedIndx, RowSortedIndx, NonzeroIndx, n_tokens, ColPartialSum, stride_pm,
+                                       stride_pn, ColOffs, TOKS_PER_ROW: tl.constexpr, BLOCK_PER_TOK: tl.constexpr):
+    BLOCK_SIZE: tl.constexpr = BLOCK_PER_TOK * TOKS_PER_ROW
     tl.static_assert(BLOCK_SIZE <= 32768)
+    if isinstance(n_tokens, tl.tensor) and n_tokens.dtype.is_ptr():
+        n_tokens = tl.load(n_tokens)
+    nonzero_indx_size = n_tokens * TOKS_PER_ROW
     pid_m = tl.program_id(0)
     # load column indices
     offs_local = tl.arange(0, BLOCK_SIZE)
@@ -104,6 +108,7 @@ def cdiv(x, y):
 
 
 def make_bitmatrix_metadata(nonzero_indx, bitmatrix):
+    assert nonzero_indx.ndim == 2
     PARTIAL_BLOCK_M = 32
     col_sum, col_partial_sum = sum_bitmatrix_rows(bitmatrix, partials_block_size=PARTIAL_BLOCK_M)
     # allocate memory
@@ -133,9 +138,10 @@ def make_bitmatrix_metadata(nonzero_indx, bitmatrix):
     compute_grid = (cdiv(bitmatrix.shape_max[0], PARTIAL_BLOCK_M), )
     _bitmatrix_metadata_compute_stage2[compute_grid](
         col_sorted_indx, row_sorted_indx,  # outputs
-        nonzero_indx, nonzero_indx.numel(), col_partial_sum, col_partial_sum.stride(0),
+        nonzero_indx, bitmatrix.shape[0], col_partial_sum, col_partial_sum.stride(0),
         col_partial_sum.stride(1),  # inputs
-        col_offs, BLOCK_SIZE=PARTIAL_BLOCK_M * toks_per_row,  # constants (rows per tile * toks_per_row)
+        col_offs,  #
+        TOKS_PER_ROW=toks_per_row, BLOCK_PER_TOK=PARTIAL_BLOCK_M,  #
     )
     return BitmatrixMetadata(col_sum, col_sorted_indx, row_sorted_indx)
 
