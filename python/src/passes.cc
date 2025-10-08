@@ -94,9 +94,14 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUCoalesceAsyncCopy);
   ADD_PASS_WRAPPER_0("add_concurrency_sanitizer",
                      createTritonInstrumentConcurrencySanitizer);
-m.def("add_concurrency_sanitizer_plugin", [](mlir ::PassManager &pm, ModuleOp &mod) {
+  }
+
+void init_plugin_passes(py::module &&m) {
+ m.def("add_plugin", [](mlir ::PassManager &pm) {
     std::string filename =
       mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+    if (filename.empty())
+      return;
 
   std::string error;
   auto library =
@@ -114,26 +119,10 @@ m.def("add_concurrency_sanitizer_plugin", [](mlir ::PassManager &pm, ModuleOp &m
     llvm::errs() << "Failed to get symbol: " << error << "\n";
     throw std::runtime_error("Failed to get symbol");
   }
-
-  // void (*createPluginPass)(mlir ::PassManager &pm, ModuleOp &mod) = reinterpret_cast<void (*)(mlir ::PassManager &, ModuleOp &)>(getDetailsFn);
-  std::function<void(mlir::PassManager *, ModuleOp *)> createPluginPass =
-      reinterpret_cast<void (*)(mlir::PassManager *, ModuleOp *)>(getDetailsFn);
-
-    llvm::errs() << "Outside dynamic library\n";
-    llvm::errs() << mod->getName() << "\n";
-    // llvm::errs() << mod->isRegistered() << "\n";
-    llvm::errs() << sizeof(mod) << "\n";
-    llvm::errs() << typeid(mod).name() << "\n";
-    // llvm::errs() << "ModuleOp address: " << mod->getAsOpaquePointer() << "\n";
-    mlir::ModuleOp op = mlir::ModuleOp::getFromOpaquePointer(mod);
-    llvm::errs() << "ModuleOp address: " << op.getAsOpaquePointer() << "\n";
-    llvm::errs() << "typeid(mod): " << (void*)&typeid(mlir::ModuleOp) << "\n";
-    llvm::errs() << "typeid(mlir::Attribute): " << (void*)&typeid(mlir::Attribute) << "\n";
-    // llvm::errs() << mod << "\n";
-    createPluginPass(&pm, &op);
+  std::function<void(mlir::PassManager &)> createPluginPass =
+      reinterpret_cast<void (*)(mlir::PassManager &)>(getDetailsFn);
+    createPluginPass(pm);
   });
-
-
 }
 
 void init_triton_passes_convert(py::module &&m) {
@@ -168,4 +157,5 @@ void init_triton_passes(py::module &&m) {
   init_triton_passes_ttgpuir(m.def_submodule("ttgpuir"));
   init_triton_passes_llvmir(m.def_submodule("llvmir"));
   init_gluon_passes(m.def_submodule("gluon"));
+  init_plugin_passes(m.def_submodule("plugin"));
 }
