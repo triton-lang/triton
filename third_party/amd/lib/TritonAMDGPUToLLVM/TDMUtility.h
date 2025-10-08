@@ -8,26 +8,22 @@ using mlir::triton::AMD::TargetInfo;
 
 namespace mlir::LLVM::AMD {
 
-// Create a TDM descriptor, divided into 2 groups.
-std::pair<Value, Value> createTDMDescriptor(
-    RewriterBase &rewriter, Location loc,
-    const LLVMTypeConverter *typeConverter, Type elementType,
-    SmallVector<int64_t> blockShape, SmallVector<Value> tensorShape,
-    SmallVector<Value> tensorStride, SmallVector<Value> tensorOffset,
-    Value srcPtr, Value dstPtr, Value pred, int numWarps, unsigned padInterval,
-    unsigned padAmount);
+// Create a TDM descriptor, divided into 2 group vectors.
+std::pair<SmallVector<Value>, SmallVector<Value>>
+createTDMDescriptor(RewriterBase &rewriter, Location loc,
+                    const LLVMTypeConverter *typeConverter, Type elementType,
+                    SmallVector<int64_t> blockShape, int numWarps,
+                    unsigned padInterval, unsigned padAmount,
+                    SmallVector<Value> tensorShape,
+                    SmallVector<Value> tensorStride, Value srcPtr);
 
-// Pack base pointer, shape, and stride from a tensor descriptor into a single
-// llvm struct value.
-Value packTensorDesc(RewriterBase &rewriter, Location loc,
-                     const LLVMTypeConverter *typeConverter, Value base,
-                     ValueRange tensorShape, ValueRange tensorStride,
-                     Type resultTy);
-
-// Unpack a tensor descriptor from a single llvm struct value into
-// (base, [shape0, shape1, ...], [stride0, stride1, ...]).
-std::tuple<Value, SmallVector<Value>, SmallVector<Value>>
-unpackTensorDesc(RewriterBase &rewriter, Location loc, Value desc);
+// Fill a TDM descriptor with offset, shared memory address, and pred.
+void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
+                       const LLVMTypeConverter *typeConverter, Type elementType,
+                       SmallVector<int64_t> blockShape, int numWarps,
+                       unsigned padInterval, unsigned padAmount,
+                       SmallVector<Value> &group0, SmallVector<Value> &group1,
+                       SmallVector<Value> offset, Value dstPtr, Value pred);
 
 } // namespace mlir::LLVM::AMD
 

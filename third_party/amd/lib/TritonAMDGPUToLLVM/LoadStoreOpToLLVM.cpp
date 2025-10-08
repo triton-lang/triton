@@ -1020,15 +1020,12 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     auto paddedEnc =
         llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
-    auto elementBitWidth = elementType.getIntOrFloatBitWidth();
 
     unsigned padInterval = 0;
     unsigned padAmount = 0;
     if (paddedEnc) {
-      if (paddedEnc.getIntervals().size() != 1 ||
-          paddedEnc.getPaddings().size() != 1)
-        return rewriter.notifyMatchFailure(
-            op, "NYI: Multiple interval-padding pairs in TDM.");
+      assert(paddedEnc.getIntervals().size() == 1 &&
+             paddedEnc.getPaddings().size() == 1);
       padInterval = paddedEnc.getIntervals()[0];
       padAmount = paddedEnc.getPaddings()[0];
     }
@@ -1038,20 +1035,27 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
     if (numCTAs > 1)
       return rewriter.notifyMatchFailure(op, "NYI: Support multicast.");
 
+    SmallVector<Value> desc =
+        unpackLLElements(loc, adaptor.getDesc(), rewriter);
+    assert(desc.size() == 12);
+    auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
+    auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
+
     SmallVector<int64_t> blockShape =
         llvm::to_vector(tensorDescTy.getBlockType().getShape());
-    auto [srcPtr, tensorShape, tensorStride] =
-        LLVM::AMD::unpackTensorDesc(rewriter, loc, adaptor.getDesc());
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), elementType, rewriter);
     Value dstPtr = dstMemObj.getBase();
     SmallVector<Value> offset = adaptor.getIndices();
     int numWarps = triton::gpu::lookupNumWarps(op);
 
-    auto [group0, group1] = LLVM::AMD::createTDMDescriptor(
-        rewriter, loc, getTypeConverter(), elementType, blockShape, tensorShape,
-        tensorStride, offset, srcPtr, dstPtr, op.getPred(), numWarps,
-        padInterval, padAmount);
+    LLVM::AMD::fillTDMDescriptor(rewriter, loc, getTypeConverter(), elementType,
+                                 blockShape, numWarps, padInterval, padAmount,
+                                 group0Vec, group1Vec, offset, dstPtr,
+                                 op.getPred());
+
+    auto group0 = packLLVector(loc, group0Vec, rewriter);
+    auto group1 = packLLVector(loc, group1Vec, rewriter);
     LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
                                     "llvm.amdgcn.tensor.load.to.lds.d2", {},
                                     {group0, group1, b.i32_val(0)});
@@ -1083,21 +1087,27 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
     auto smemTy = op.getSrc().getType();
     Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
 
+    SmallVector<Value> desc =
+        unpackLLElements(loc, adaptor.getDesc(), rewriter);
+    assert(desc.size() == 12);
+    auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
+    auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
+
     SmallVector<int64_t> blockShape =
         llvm::to_vector(tensorDescTy.getBlockType().getShape());
-    auto [srcPtr, tensorShape, tensorStride] =
-        LLVM::AMD::unpackTensorDesc(rewriter, loc, adaptor.getDesc());
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(), elementType, rewriter);
     Value dstPtr = dstMemObj.getBase();
     SmallVector<Value> offset = adaptor.getIndices();
     int numWarps = triton::gpu::lookupNumWarps(op);
-    Value pred = b.true_val();
 
-    auto [group0, group1] = LLVM::AMD::createTDMDescriptor(
-        rewriter, loc, getTypeConverter(), elementType, blockShape, tensorShape,
-        tensorStride, offset, srcPtr, dstPtr, pred, numWarps,
-        /*padInterval=*/0, /*padAmount=*/0);
+    LLVM::AMD::fillTDMDescriptor(rewriter, loc, getTypeConverter(), elementType,
+                                 blockShape, numWarps, /*padInterval=*/0,
+                                 /*padAmount=*/0, group0Vec, group1Vec, offset,
+                                 dstPtr, b.true_val());
+
+    auto group0 = packLLVector(loc, group0Vec, rewriter);
+    auto group1 = packLLVector(loc, group1Vec, rewriter);
     LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
                                     "llvm.amdgcn.tensor.store.from.lds.d2", {},
                                     {group0, group1, b.i32_val(0)});
