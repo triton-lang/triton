@@ -1165,63 +1165,10 @@ SetVector<Operation *> multiRootGetSlice(Operation *op,
   return multiRootTopologicalSort(slice);
 }
 
-namespace {
-// Copied from TestDeadCodeAnalysis.cpp, because some dead code analysis
-// interacts with constant propagation, but SparseConstantPropagation
-// doesn't seem to be sufficient.
-class ConstantAnalysis : public DataFlowAnalysis {
-public:
-  using DataFlowAnalysis::DataFlowAnalysis;
-
-  LogicalResult initialize(Operation *top) override {
-    WalkResult result = top->walk([&](Operation *op) {
-      ProgramPoint programPoint(op);
-      if (failed(visit(&programPoint)))
-        return WalkResult::interrupt();
-      return WalkResult::advance();
-    });
-    return success(!result.wasInterrupted());
-  }
-
-  LogicalResult visit(ProgramPoint *point) override {
-    Operation *op = point->getOperation();
-    Attribute value;
-    if (matchPattern(op, m_Constant(&value))) {
-      auto *constant = getOrCreate<dataflow::Lattice<dataflow::ConstantValue>>(
-          op->getResult(0));
-      propagateIfChanged(constant, constant->join(dataflow::ConstantValue(
-                                       value, op->getDialect())));
-      return success();
-    }
-    // Dead code analysis requires every operands has initialized ConstantValue
-    // state before it is visited.
-    // https://github.com/llvm/llvm-project/blob/2ec1aba2b69faa1de5f71832a48e25aa3b5d5314/mlir/lib/Analysis/DataFlow/DeadCodeAnalysis.cpp#L322
-    // That's why we need to set all operands to unknown constants.
-    setAllToUnknownConstants(op->getResults());
-    for (Region &region : op->getRegions()) {
-      for (Block &block : region.getBlocks())
-        setAllToUnknownConstants(block.getArguments());
-    }
-    return success();
-  }
-
-private:
-  /// Set all given values as not constants.
-  void setAllToUnknownConstants(ValueRange values) {
-    dataflow::ConstantValue unknownConstant(nullptr, nullptr);
-    for (Value value : values) {
-      auto *constant =
-          getOrCreate<dataflow::Lattice<dataflow::ConstantValue>>(value);
-      propagateIfChanged(constant, constant->join(unknownConstant));
-    }
-  }
-};
-} // namespace
-
 std::unique_ptr<DataFlowSolver> createDataFlowSolver() {
   auto solver = std::make_unique<DataFlowSolver>();
   solver->load<dataflow::DeadCodeAnalysis>();
-  solver->load<ConstantAnalysis>();
+  solver->load<dataflow::SparseConstantPropagation>();
   return solver;
 }
 

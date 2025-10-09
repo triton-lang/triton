@@ -306,7 +306,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                                   bool hasSwizzling) const {
     int vecBits = vectorSize * dstTy.getElementTypeBitWidth();
     if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
-      LDBG(op << " results in unsupported load bitwidth: " << vecBits);
+      LDBG(*op << " results in unsupported load bitwidth: " << vecBits);
       return failure();
     }
     // Compute the blocked -> shared linear layout to check preconditions
@@ -324,13 +324,13 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     if (!hasSwizzling &&
         !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
             rewriter, srcToSharedLayout, threadsPerWarp, vectorSize)) {
-      LDBG(op << " does not write coalesced into LDS and is not swizzled");
+      LDBG(*op << " does not write coalesced into LDS and is not swizzled");
       return failure();
     }
 
     if (hasSwizzling && !LLVM::AMD::doesSwizzleInsideWarp(
                             rewriter, srcToSharedLayout, threadsPerWarp)) {
-      LDBG(op << " does swizzle across warp boundaries");
+      LDBG(*op << " does swizzle across warp boundaries");
       return failure();
     }
     return success();
