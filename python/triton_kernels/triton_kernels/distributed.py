@@ -326,4 +326,3 @@ def filter_expt_data_torch(expt_data, expt_assignment, rank):
     block_pid_map_data = [compact(v, make_mask(v), -1) for v in expt_data.block_pid_map_data]
     block_pid_map_data = torch.stack([map_expt_id(v) for v in block_pid_map_data], dim=0)
     return RaggedTensorMetadata(expt_hist, token_offs_raw, token_offs_pad_data, block_pid_map_data)
-

@@ -6,7 +6,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import triton
-from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_random, make_expt_assignment, filter_expt_data, filter_expt_data_torch
+from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment, filter_expt_data, filter_expt_data_torch
 from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, reduce_grouped, RoutingData, GatherIndx, ScatterIndx
 from triton_kernels.target_info import is_hip
@@ -65,6 +65,7 @@ def distributed_launcher(request):
 # filtering
 # ------------------------------------------------------------
 
+
 @pytest.mark.parametrize("n_expt_shard, n_expt_tot", [(8, 512), (16, 64)])
 @pytest.mark.parametrize("affinity_mode", ["uniform", "random"])
 def test_make_expt_assignment(n_expt_shard, n_expt_tot, affinity_mode):
@@ -106,6 +107,8 @@ def test_filter_expt_data():
 
 
 # ------------------------------------------------------------
+# expert sharding
+# ------------------------------------------------------------
 
 
 def routing(logits, n_expts_act, all_gather=False):
@@ -119,76 +122,6 @@ def routing(logits, n_expts_act, all_gather=False):
     gather_idx = GatherIndx(combine_indx, dispatch_indx)
     scatter_idx = ScatterIndx(dispatch_indx, combine_indx)
     return routing_data, gather_idx, scatter_idx
-
-def make_expt_dict_uniform(n_expt_shard, n_expt_tot):
-    """
-    create expert assignment dictionary where shard i owns:
-    [i*(n_expt_tot//n_expt_shard)...(i+1)*(n_expt_tot//n_expt_shard))
-    """
-    expt_dict = dict()
-    for i in range(n_expt_shard):
-        start = (n_expt_tot // n_expt_shard) * i
-        end = (n_expt_tot // n_expt_shard) * (i + 1)
-        expt_dict[i] = list(range(start, end))
-    return expt_dict
-
-
-def make_expt_dict_random(n_expt_shard, n_expt_tot):
-    """
-    create expert assignment dictionary where each shard owns
-    a disjoint random subset of experts
-    """
-    expt_dict = dict()
-    # random permutation of experts
-    rng = random.Random(0)
-    perm = list(range(n_expt_tot))
-    rng.shuffle(perm)
-    # random (distinct) cut points; ensures no empty shard
-    cuts = [0] + sorted(rng.sample(range(1, n_expt_tot), n_expt_shard - 1)) + [n_expt_tot]
-    for i in range(n_expt_shard):
-        a, b = cuts[i], cuts[i + 1]
-        expt_dict[i] = perm[a:b]
-    return expt_dict
-
-
-@pytest.mark.parametrize("n_expt_shard, n_expt_tot", [(8, 512), (16, 64)])
-@pytest.mark.parametrize("affinity_mode", ["uniform", "random"])
-def test_make_expt_assignment(n_expt_shard, n_expt_tot, affinity_mode):
-    device = "cuda"
-    expt_dict = {
-        "uniform": make_expt_dict_uniform,
-        "random": make_expt_dict_random,
-    }[affinity_mode](n_expt_shard, n_expt_tot)
-    expt_assignment = make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict, device)
-    # mask correctness & uniqueness: each expert set exactly once, and on the right shard
-    for shard in range(n_expt_shard):
-        bitmask = expt_assignment.expt_bitmask[shard, :]
-        bitmask = (bitmask >> torch.arange(32, device=bitmask.device)[:, None]) & 1
-        experts = bitmask.T.flatten().nonzero()[:, 0].tolist()
-        assert sorted(expt_dict[shard]) == experts
-        expt_map = torch.full((n_expt_tot, ), -1, device=device)
-        expt_map[experts] = torch.arange(len(experts), device=expt_map.device)
-        assert torch.all(expt_map == expt_assignment.expt_map[shard, :])
-
-
-def test_filter_expt_data():
-    device = "cuda"
-    dtype = torch.float32
-    n_expts_tot = 128
-    n_expts_act = 4
-    n_tokens = 1024
-    n_shards = 4
-    logits = torch.randn((n_tokens, n_expts_tot), dtype=dtype, device=device, requires_grad=True)
-    routing_global, _, _, _ = routing(logits, n_expts_act)
-    expt_data = routing_global.expt_data
-    expt_dict = make_expt_dict_uniform(n_shards, n_expts_tot)
-    expt_assignment = make_expt_assignment(n_shards, n_expts_tot, expt_dict, device)
-    routing_local_ref = filter_expt_data_torch(expt_data, expt_assignment, 1)
-    routing_local_tri = filter_expt_data(expt_data, expt_assignment, 1)
-    assert torch.all(routing_local_ref.hist == routing_local_tri.hist)
-    assert torch.all(routing_local_ref.token_offs_raw == routing_local_tri.token_offs_raw)
-    assert torch.all(routing_local_ref.token_offs_pad_data == routing_local_tri.token_offs_pad_data)
-    assert torch.all(routing_local_ref.block_pid_map_data == routing_local_tri.block_pid_map_data)
 
 
 def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act):
