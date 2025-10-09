@@ -10,7 +10,7 @@ import textwrap
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
+from typing import Callable, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
 
 from triton.backends import BaseBackend
 from types import ModuleType
@@ -19,6 +19,7 @@ from .driver import driver
 from . import _async_compile
 from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict
 from .cache import get_cache_key
+from .kernel import KernelInterface
 from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl
 
 TRITON_MODULE = "triton.language"
@@ -347,18 +348,6 @@ def mangle_type(arg, specialize=False):
     return native_specialize_impl(BaseBackend, arg, is_const, specialize, align)[0]
 
 
-class KernelInterface(Generic[T]):
-    run: T
-
-    def __getitem__(self, grid) -> T:
-        """
-        A JIT function is launched with: fn[grid](*args, **kwargs).
-        Hence JITFunction.__getitem__ returns a callable proxy that
-        memorizes the grid.
-        """
-        return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
-        # return cast(T, functools.partial(cast(Callable, self.run), grid=grid))
-
 
 def serialize_specialization_data(name, signature, constants, attrs, options, key):
     constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
@@ -523,7 +512,7 @@ class JITCallable:
         self.hash = None
         self._src = new_src
 
-    def _set_src(self):
+    def _set_src(self, value):
         raise AttributeError("Cannot set attribute 'src' directly. "
                              "Use '_unsafe_update_src()' and manually clear `.hash` of all callers"
                              "instead.")
@@ -552,7 +541,7 @@ def compute_cache_key(kernel_key_cache, specialization, options):
     return cache_key
 
 
-class JITFunction(JITCallable, KernelInterface[T]):
+class JITFunction(JITCallable, KernelInterface):
 
     def is_gluon(self):
         return False
@@ -820,7 +809,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
 
 @overload
-def jit(fn: T) -> JITFunction[T]:
+def jit(fn: T) -> KernelInterface:
     ...
 
 
@@ -834,7 +823,7 @@ def jit(
     do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
-) -> Callable[[T], JITFunction[T]]:
+) -> Callable[[T], KernelInterface]:
     ...
 
 
@@ -848,7 +837,7 @@ def jit(
     do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
-) -> Union[JITFunction[T], Callable[[T], JITFunction[T]]]:
+) -> Union[KernelInterface, Callable[[T], KernelInterface]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
 
@@ -867,7 +856,7 @@ def jit(
     :type fn: Callable
     """
 
-    def decorator(fn: T) -> JITFunction[T]:
+    def decorator(fn: T) -> KernelInterface:
         assert callable(fn)
         if knobs.runtime.interpret:
             from .interpreter import InterpretedFunction
