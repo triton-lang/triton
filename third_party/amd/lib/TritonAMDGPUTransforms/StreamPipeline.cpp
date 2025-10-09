@@ -186,7 +186,7 @@ StreamCopyChainOps createStreamCopy(tt::LoadOp loadOp, Value alloc,
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // and |vecSize| with which dot operand |inputValue| is fed into if possible.
 ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
-                                        unsigned *vecSize) {
+                                        unsigned *vecSize, unsigned* dotOpBitWidth) {
   if (!inputValue.hasOneUse())
     return nullptr;
 
@@ -200,12 +200,13 @@ ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx,
     OpOperand &use = *inputValue.getUses().begin();
     *opIdx = use.getOperandNumber();
     auto operandType = cast<RankedTensorType>(inputValue.getType());
+    *dotOpBitWidth = operandType.getElementType().getIntOrFloatBitWidth();
     *vecSize = ttg::toLinearLayout(operandType).getNumConsecutiveInOut();
     auto dotType = cast<RankedTensorType>(dotOp->getResult(0).getType());
     return dyn_cast<ttg::AMDMfmaEncodingAttr>(dotType.getEncoding());
   }
 
-  return getDotEncoding(user->getResult(0), opIdx, vecSize);
+  return getDotEncoding(user->getResult(0), opIdx, vecSize, dotOpBitWidth);
 }
 
 // Adapted from
@@ -265,10 +266,26 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
 
       auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
       if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
-        tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-            loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
-            ctaLayout, bitWidth, /*needTrans=*/false);
-        LDBG("Deduced shared encoding candidate from dot layout: " << tempAttr);
+        unsigned opIdx;
+        unsigned vecSize;
+        unsigned opBitWidth;
+        if (auto mfmaEnc = getDotEncoding(userResult, &opIdx, &vecSize, &opBitWidth)) {
+          LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
+          // if dequantization is between ds_read and dot, we can double the vecSize
+          // for the lds layout
+          if (bitWidth == 8 && opBitWidth == 16) {
+            vecSize *= 2;
+          }
+
+          tempAttr = mfmaEnc.composeSharedLayoutForOperand(
+              ctaLayout, opIdx, srcTy.getShape(), order, vecSize,
+              bitWidth, /*needTrans=*/false);
+        }
+        else {
+          tempAttr = ttg::SwizzledSharedEncodingAttr::get(
+              loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
+              ctaLayout, bitWidth, /*needTrans=*/false);
+        }
         sharedEncs.push_back(tempAttr);
       } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
         // We use linear layout directly for scaled dot fp8 operands. For such
@@ -276,8 +293,8 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
         // op for the mfma layout to deduce operand index and other information.
         unsigned opIdx;
         unsigned vecSize;
-        if (auto mfmaEnc = getDotEncoding(userResult, &opIdx, &vecSize)) {
-          LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
+        unsigned opBitWidth;
+        if (auto mfmaEnc = getDotEncoding(userResult, &opIdx, &vecSize, &opBitWidth)) {
           tempAttr = mfmaEnc.composeSharedLayoutForOperand(
               ctaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
               /*needTrans=*/false);
