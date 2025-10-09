@@ -4,9 +4,9 @@ import triton.language as tl
 import torch
 from .base import Layout
 
-SWIZZLE_ALIGN_INNER = 8
-SWIZZLE_SIZE_INNER = 4
-SWIZZLE_SIZE_OUTER = 128
+SWIZZLE_ALIGN_INNER = tl.constexpr(8)
+SWIZZLE_SIZE_INNER = tl.constexpr(4)
+SWIZZLE_SIZE_OUTER = tl.constexpr(128)
 
 
 class BlackwellMXScaleLayout(Layout):
