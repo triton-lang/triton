@@ -155,18 +155,22 @@ def make_matmul_repr(base_name, order):
         reorder = lambda L: [L[i] for i in order]
         layout = lambda stride: "N" if stride in constants else "T"
 
-        def convert_dtype(dtype):
+        def convert_dtype(dtype, name):
             if "tensordesc" in dtype:
-                ret = convert_dtype(dtype.split("<")[1].split("[")[0])
+                ret = convert_dtype(dtype.split("<")[1].split("[")[0], name)
                 return ret
             elif "u8" in dtype:
                 return "mxfp4"
+            elif name == "X" and "fp8e4nv" in dtype and signature["stride_x_mx_z"] != 0:
+                return "mxfp8"
+            elif name == "Y" and "fp8e4nv" in dtype and signature["stride_y_mx_z"] != 0:
+                return "mxfp8"
             elif dtype[0] == "*":
                 return dtype[1:]
             else:
                 return dtype
 
-        dtypes = "x".join([convert_dtype(f"{signature[i]}") for i in reorder(["Y", "X", "W"])])
+        dtypes = "x".join([convert_dtype(f"{signature[i]}", i) for i in reorder(["Y", "X", "W"])])
         layouts = "".join([f"{layout(i)}" for i in reorder(["stride_y_n", "stride_x_k", "stride_w_n"])])
         blocks = "x".join([f"{constants[i]}" for i in ["BLOCK_M", "BLOCK_N", "BLOCK_K", "SPLIT_K"]])
         suffix = "_acc" if "OutAcc" in signature and "OutAcc" not in constants else ""
