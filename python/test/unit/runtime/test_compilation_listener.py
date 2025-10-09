@@ -6,7 +6,7 @@ from triton.knobs import CompileTimes
 from triton.compiler.compiler import ASTSource, IRSource
 from triton.runtime.jit import JITFunction
 
-from typing import Any, Union
+from typing import Any, Union, cast
 
 import pytest
 import torch
@@ -52,7 +52,8 @@ def test_compile_stats(device: str, fresh_knobs_except_libraries: Any, fresh_tri
     if not isinstance(cumsum_kernel, JITFunction):
         pytest.skip("device caches are only available for JIT-compiled kernels")
 
-    cumsum_kernel.device_caches.clear()
+    jit_kernel = cast(JITFunction, cumsum_kernel)
+    jit_kernel.device_caches.clear()
     captured = None
     cumsum_kernel[(1, )](x)
 
