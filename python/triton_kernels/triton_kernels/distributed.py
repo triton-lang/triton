@@ -6,7 +6,7 @@ import torch.distributed._symmetric_memory as symm_mem
 import triton
 import triton.language as tl
 import random
-from tensor import RaggedTensorMetadata
+from .tensor import RaggedTensorMetadata
 from dataclasses import dataclass
 
 @dataclass
