@@ -55,6 +55,7 @@ def make_expt_dict_random(n_expt_shard, n_expt_tot):
         expt_dict[i] = perm[a:b]
     return expt_dict
 
+
 def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int]], device) -> ExptAssignment:
     """
     n_expt_shard: int
@@ -95,8 +96,6 @@ def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int
     # number of experts per shard
     n_expts_per_shard = [len(experts) for experts in expt_dict.values()]
     return ExptAssignment(expt_bitmask, expt_boolmask, expt_map, n_expts_per_shard)
-
-
 
 
 # ------------------------------------------------------------
