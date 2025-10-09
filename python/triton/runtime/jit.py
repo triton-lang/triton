@@ -836,7 +836,7 @@ def jit(
     do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
-) -> Union[KernelInterface, Callable[[T], Union[KernelInterface, JITFunction]]]:
+) -> Union[Union[KernelInterface, JITFunction], Callable[[T], Union[KernelInterface, JITFunction]]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
 
