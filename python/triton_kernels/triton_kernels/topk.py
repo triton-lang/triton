@@ -3,7 +3,7 @@ import triton
 from triton_kernels.topk_details._topk_forward import _topk_forward
 from triton_kernels.topk_details._topk_backward import _topk_backward
 from triton_kernels.tensor import SparseMatrix, Tensor
-from triton_kernels.tensor import Bitmatrix, BIT, make_bitmatrix_metadata
+from triton_kernels.tensor import Bitmatrix, BIT
 from typing import Optional, Union
 import torch.distributed._symmetric_memory as symm_mem
 import torch.distributed as dist
@@ -49,13 +49,14 @@ def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=
     # create bitmatrix in transposed memory layout:
     n_cols_pad = cdiv(n_cols, BLOCK_N) * BLOCK_N
     n_cols_words = n_cols_pad // 32
-    bitmatrix_data = torch.empty((n_cols_words, cdiv(n_rows_max, 32) * 32), dtype=torch.uint32, device=dev)
+    bitmatrix_bufs, bitmatrix_data, bitmatrix_hdl = make_empty((n_cols_words, cdiv(n_rows_out_max, 32) * 32), torch.uint32,
+                                                        dev, all_gather=all_gather)
     bitmatrix_data = torch.transpose(bitmatrix_data, 0, 1)[:n_rows_max]
     pids = cdiv(n_rows_max, BLOCK_M)
     _topk_forward[(pids, )](
         x, x.stride(0),  # inputs
         y_vals_bufs, y_indx_bufs, y_vals.stride(0), use_provided_indx,  # output [topk]
-        bitmatrix_bufs, bitmatrix.stride(0), bitmatrix.stride(1),  # output [bitmatrix]
+        bitmatrix_bufs, bitmatrix_data.stride(0), bitmatrix_data.stride(1),  # output [bitmatrix]
         n_rows, n_cols,  # shapes
         dist.get_rank() * n_rows_max if all_gather else 0, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,  # tunable parameter
         APPLY_SOFTMAX=apply_softmax, N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
@@ -66,7 +67,7 @@ def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=
         bitmatrix_hdl.barrier(channel=0)
     bitmatrix_shape = [n_rows * dist.get_world_size() if all_gather else n_rows, n_cols_words * 32]
     bitmatrix_shape_max = [n_rows_out_max, None]
-    bitmatrix = Bitmatrix(bitmatrix, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max, scratchpad=scratchpad)
+    bitmatrix = Bitmatrix(bitmatrix_data, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
     return y_vals, y_indx, bitmatrix
 
 
