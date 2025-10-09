@@ -8,7 +8,9 @@ using mlir::triton::AMD::TargetInfo;
 
 namespace mlir::LLVM::AMD {
 
-// Create a TDM descriptor, divided into 2 group vectors.
+// Create a TDM descriptor, divided into 2 group vectors. This creates a
+// partially filled descriptor, with shared memory address and pred set to zero.
+// User of the descriptor is expected to fill these fields later.
 std::pair<SmallVector<Value>, SmallVector<Value>>
 createTDMDescriptor(RewriterBase &rewriter, Location loc,
                     const LLVMTypeConverter *typeConverter, Type elementType,
@@ -17,7 +19,8 @@ createTDMDescriptor(RewriterBase &rewriter, Location loc,
                     SmallVector<Value> tensorShape,
                     SmallVector<Value> tensorStride, Value srcPtr);
 
-// Fill a TDM descriptor with offset, shared memory address, and pred.
+// Update the global memory address with offset, and fill the shared memory
+// address and pred in a given TDM descriptor.
 void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        const LLVMTypeConverter *typeConverter, Type elementType,
                        SmallVector<int64_t> blockShape, int numWarps,
