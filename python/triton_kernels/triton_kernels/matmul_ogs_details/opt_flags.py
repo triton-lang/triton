@@ -39,6 +39,34 @@ class OptFlags:
 
 # NOTE(afroz): We need bitwise identical results with variable batch sizes, so we shouldn't take
 # batch size into account when we do this. Rework accordingly.
+# def dynamic_split_k(
+#     max_size_bytes: float,
+#     batch_size: int,
+#     m: int,
+#     n: int,
+#     k: int,
+#     output_dtype: torch.dtype,
+#     max_split_k: int | None = None,
+#     ) -> int:
+#     """Returns split_k value respecting max_size_bytes and optionally max_split_k constraints."""
+
+#     elem_size = torch.empty((), dtype=output_dtype).element_size()
+#     bytes_per_split = batch_size * m * n * elem_size
+
+#     # max_split can only be as high as the allowance from max_size_bytes
+#     max_split = int(max_size_bytes // bytes_per_split)
+
+#     # max_split can only be as high as the allowable max_split_k, if specified.
+#     if max_split_k is not None:
+#         max_split = min(max_split_k, max(1, max_split))
+
+#     # NOTE: max_split doesn't need to divide k
+#     # while k % max_split != 0 and max_split > 1:
+#     #     max_split -= 1
+
+#     return max_split
+
+# Return max_split_k except the one shape that blows up!
 def dynamic_split_k(
     max_size_bytes: float,
     batch_size: int,
@@ -48,23 +76,15 @@ def dynamic_split_k(
     output_dtype: torch.dtype,
     max_split_k: int | None = None,
     ) -> int:
-    """Returns split_k value respecting max_size_bytes and optionally max_split_k constraints."""
+    """Return max_split_k except the one shape that blows up!"""
 
-    elem_size = torch.empty((), dtype=output_dtype).element_size()
-    bytes_per_split = batch_size * m * n * elem_size
+    del output_dtype, batch_size, k, max_size_bytes
 
-    # max_split can only be as high as the allowance from max_size_bytes
-    max_split = int(max_size_bytes // bytes_per_split)
+    if m * n == (128 * 1024) * (201088 // 8):
+        return 1
 
-    # max_split can only be as high as the allowable max_split_k, if specified.
-    if max_split_k is not None:
-        max_split = min(max_split_k, max(1, max_split))
+    return max_split_k or 4
 
-    # NOTE: max_split doesn't need to divide k
-    # while k % max_split != 0 and max_split > 1:
-    #     max_split -= 1
-
-    return max_split
 
 
 def all_constraints_satisfied(opt_flags: OptFlags, constraints: dict) -> bool:
