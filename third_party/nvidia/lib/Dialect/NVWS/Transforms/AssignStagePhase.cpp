@@ -48,6 +48,8 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/ErrorHandling.h"
 
+#include <iostream>
+
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using namespace mlir::triton::nvidia_gpu;
@@ -323,11 +325,16 @@ template <class T> struct AssignStagePhase {
           partitionIds.insert(ids->begin(), ids->end());
       }
     }
+    std::cout << "run with partition ids" << std::endl;
+    for (auto id : partitionIds) {
+      std::cout << " - " << id << std::endl;
+    }
     if (partitionIds.empty()) {
       // if partitionIds is an empty set, it means aref ops used outside ttg.ws
       // so we to insert a dummy partitionId for this aref, since we still need
       // to assign correct phase
-      partitionIds.insert(0);
+      assert(false);
+      // partitionIds.insert(0);
     }
 
     // initialize indexes
@@ -455,6 +462,7 @@ public:
       if (failed(assignStagePhase(funcOp)))
         signalPassFailure();
     });
+    m.dump();
   }
 }; // namespace triton
 
