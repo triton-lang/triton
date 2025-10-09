@@ -21,7 +21,7 @@ def make_empty(shape, dtype, device, all_gather):
     return (ret, ), ret, None
 
 
-def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=None, n_rows=None, all_gather=False):
+def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_gather=False):
     if not isinstance(x, Tensor):
         x_shape = [x.shape[0] if n_rows is None else n_rows, x.shape[1]]
         x_shape_max = [x.shape[0], x.shape[1]]
@@ -33,7 +33,6 @@ def topk_forward(x, k, apply_softmax=True, dim=1, return_bitmatrix=True, y_indx=
     assert len(x.shape) == 2
     assert x.shape_max[-1] < 32768
     assert dim == 1
-    assert return_bitmatrix
     assert not all_gather or not use_provided_indx
     n_rows, n_cols = x.shape
     n_rows_max, _ = x.shape_max
@@ -86,8 +85,8 @@ def topk_backward(x, y_indx, dy_vals, k, n_rows, apply_softmax):
 class TopK(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, x, k, apply_softmax, dim, return_bitmatrix, y_indx, n_rows, all_gather):
-        y_vals, y_indx, bitmatrix = topk_forward(x, k, apply_softmax, dim, return_bitmatrix, y_indx, n_rows, all_gather)
+    def forward(ctx, x, k, apply_softmax, dim, y_indx, n_rows, all_gather):
+        y_vals, y_indx, bitmatrix = topk_forward(x, k, apply_softmax, dim, y_indx, n_rows, all_gather)
         ctx.save_for_backward(x, y_indx)
         ctx.apply_softmax = apply_softmax
         ctx.k = k
