@@ -7,6 +7,22 @@ import triton
 import triton.language as tl
 import random
 from tensor import RaggedTensorMetadata
+from dataclasses import dataclass
+
+@dataclass
+class ExptAssignment:
+    # torch.Tensor[n_expt_shard, n_expt_tot // 32]
+    # (expt_bitmask[i, j//32] >> j%32) & 1 == 1 iff expert j is owned by shard i
+    expt_bitmask: torch.Tensor
+    # torch.Tensor[n_expt_shard, n_expt_tot]
+    # expt_boolmask[i, j] == True iff expert j is owned by shard i
+    expt_boolmask: torch.Tensor
+    # torch.Tensor[n_expt_shard, n_expt_tot]
+    # expt_map[i, j] is the local expert id of expert j in shard i,
+    # or -1 if expert j is not owned by shard i
+    expt_map: torch.Tensor
+    # number of experts per shard
+    n_expts_per_shard: list[int]
 
 
 def make_expt_dict_uniform(n_expt_shard, n_expt_tot):
@@ -38,6 +54,49 @@ def make_expt_dict_random(n_expt_shard, n_expt_tot):
         a, b = cuts[i], cuts[i + 1]
         expt_dict[i] = perm[a:b]
     return expt_dict
+
+def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int]], device) -> ExptAssignment:
+    """
+    n_expt_shard: int
+    n_expt_tot: int
+    expt_dict: dict[int, list[int]]
+      expt_dict[i] is the list of expert ids owned by shard i
+    """
+    # make expt_bitmask
+    words = (n_expt_tot + 31) // 32  # safe even if n_expt_tot not multiple of 32
+    expt_bitmask = torch.zeros((n_expt_shard, words), dtype=torch.int32)
+    expt_boolmask = torch.zeros((n_expt_shard, n_expt_tot), dtype=torch.bool)
+    counts = {expt_id: 0 for expt_id in range(n_expt_tot)}
+    for shard, experts in expt_dict.items():
+        if len(experts) == 0:
+            raise ValueError(f"shard {shard} has no experts")
+        if shard < 0 or shard >= n_expt_shard:
+            raise ValueError(f"shard {shard} out of range [0, {n_expt_shard})")
+        if not isinstance(experts, (list, tuple)):
+            raise TypeError(f"expt_dict[{shard}] must be a list/tuple of ints")
+        for e in experts:
+            counts[e] += 1
+            if not (0 <= e < n_expt_tot):
+                raise ValueError(f"expert id {e} out of range [0, {n_expt_tot})")
+            word = e >> 5  # e // 32
+            bit = e & 31  # e % 32
+            expt_bitmask[shard, word] |= (1 << bit)
+            expt_boolmask[shard, e] = True
+    if not all(counts[e] == 1 for e in range(n_expt_tot)):
+        raise ValueError("each expert must be owned by exactly one shard")
+    expt_bitmask = expt_bitmask.to(device)
+    expt_boolmask = expt_boolmask.to(device)
+    # make expt_map
+    expt_map = torch.full((n_expt_shard, n_expt_tot), -1, dtype=torch.int32)
+    for shard, experts in expt_dict.items():
+        for local_id, global_id in enumerate(sorted(experts)):
+            expt_map[shard, global_id] = local_id
+    expt_map = expt_map.to(device)
+    # number of experts per shard
+    n_expts_per_shard = [len(experts) for experts in expt_dict.values()]
+    return ExptAssignment(expt_bitmask, expt_boolmask, expt_map, n_expts_per_shard)
+
+
 
 
 # ------------------------------------------------------------
