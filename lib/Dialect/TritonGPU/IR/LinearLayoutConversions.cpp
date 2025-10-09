@@ -1480,15 +1480,17 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   const unsigned nRep_warp = tilesPerWarp[nIndex];
   const unsigned kIdx = (dotOperandShape[0] == 1) ? 0 : 1;
   const unsigned mnIdx = 1 - kIdx;
+
   LinearLayout L = identityStandardND(kRegister, SmallVector<unsigned>(rank, 1),
-                                      ArrayRef<unsigned>({kIdx, mnIdx}));
+                                      ArrayRef<unsigned>({mnIdx, kIdx}));
   std::vector<std::vector<int32_t>> laneBase;
   if (dotOperandIdx == 0) {
-    laneBase = {{0, 8}, {0, 0}, {0, 1}, {0, 2}, {0, 4}};
+    laneBase = {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
   } else {
-    laneBase = {{0, 0}, {0, 0}, {0, 1}, {0, 2}, {0, 4}};
+    laneBase = {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
   }
-  LinearLayout laneLayout({{kLane, laneBase}}, {outDims[kIdx], outDims[mnIdx]});
+  LinearLayout laneLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]});
+
   L = L * laneLayout;
   L = L * LinearLayout::identity1D(kSize, kRegister, outDims[kIdx]);
   if (dotOperandIdx == 0) {
