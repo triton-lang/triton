@@ -66,7 +66,7 @@ def distributed_launcher(request):
 
 
 def routing(logits, n_expts_act):
-    sparse_logits = topk(logits, n_expts_act, y_indx=sparse_logits.indx)
+    sparse_logits = topk(logits, n_expts_act)
     dispatch_indx = sparse_logits.mask_metadata.col_sorted_indx
     combine_indx = sparse_logits.mask_metadata.row_sorted_indx
     ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])

@@ -374,6 +374,7 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor, out_m
     Returns
     - The input tensor `x` (modified in place).
     """
+    M = x.shape[2]  # Only used for per-batch flex scale.
     if contig_group_size is not None:
         assert indx is None
         indx = torch.arange(x.shape[-2], device=x.device).view(-1, contig_group_size)
