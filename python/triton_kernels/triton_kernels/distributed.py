@@ -5,6 +5,39 @@ import torch.distributed as dist
 import torch.distributed._symmetric_memory as symm_mem
 import triton
 import triton.language as tl
+import random
+from tensor import RaggedTensorMetadata
+
+
+def make_expt_dict_uniform(n_expt_shard, n_expt_tot):
+    """
+    create expert assignment dictionary where shard i owns:
+    [i*(n_expt_tot//n_expt_shard)...(i+1)*(n_expt_tot//n_expt_shard))
+    """
+    expt_dict = dict()
+    for i in range(n_expt_shard):
+        start = (n_expt_tot // n_expt_shard) * i
+        end = (n_expt_tot // n_expt_shard) * (i + 1)
+        expt_dict[i] = list(range(start, end))
+    return expt_dict
+
+
+def make_expt_dict_random(n_expt_shard, n_expt_tot):
+    """
+    create expert assignment dictionary where each shard owns
+    a disjoint random subset of experts
+    """
+    expt_dict = dict()
+    # random permutation of experts
+    rng = random.Random(0)
+    perm = list(range(n_expt_tot))
+    rng.shuffle(perm)
+    # random (distinct) cut points; ensures no empty shard
+    cuts = [0] + sorted(rng.sample(range(1, n_expt_tot), n_expt_shard - 1)) + [n_expt_tot]
+    for i in range(n_expt_shard):
+        a, b = cuts[i], cuts[i + 1]
+        expt_dict[i] = perm[a:b]
+    return expt_dict
 
 
 # ------------------------------------------------------------
@@ -155,3 +188,142 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
     )
     hdl.barrier(channel=0)
     return dst_local
+
+
+# ------------------------------------------------------------
+
+@triton.jit
+def _compaction(Out, compute_vals_and_cond_fn, compute_vals_and_cond_fn_args, sentinel, N, BLOCK: tl.constexpr):
+    curr_sum = 0
+    for start in range(0, N, BLOCK):
+        offs = start + tl.arange(0, BLOCK)
+        vals, conds = compute_vals_and_cond_fn(*compute_vals_and_cond_fn_args, offs)
+        # compute values
+        exc_cumsum = curr_sum + tl.cumsum(conds, 0) - conds
+        active_flags = conds.to(tl.int1)
+        rev_arange = N - start - 1 - tl.arange(0, BLOCK)
+        write_indx = exc_cumsum + tl.where(active_flags, 0, rev_arange)
+        out = tl.where(active_flags, vals, sentinel)
+        # store
+        tl.store(Out + write_indx, out, mask=offs < N)
+        # update running sum
+        curr_sum += tl.sum(conds, 0)
+    return curr_sum
+
+
+@triton.jit
+def _compact_expt_id(vals_ptr, expt_filter_ptr, n_expts_tot, offs):
+    expt_ids = offs
+    div = expt_ids // 32
+    rem = expt_ids % 32
+    mask = expt_ids < n_expts_tot
+    conds = (tl.load(expt_filter_ptr + div, mask=mask, other=0) >> rem) & 1
+    vals = tl.load(vals_ptr + offs, mask=mask)
+    return vals, conds
+
+
+@triton.jit
+def _compact_block_id_map(block_pid_map, expt_map_ptr, expt_filter_ptr, n_blocks, offs):
+    block_id = tl.load(block_pid_map + offs, mask=offs < n_blocks, other=-1)
+    block_id = block_id.to(tl.uint32, bitcast=True)
+    expt_id = block_id & 0x0000FFFF
+    div = expt_id // 32
+    rem = expt_id % 32
+    mask = expt_id != 65535
+    conds = (tl.load(expt_filter_ptr + div, mask=mask, other=0) >> rem) & 1
+    block_id = block_id.to(tl.int32, bitcast=True)
+    conds = conds.to(tl.int32, bitcast=True)
+    new_expt_id = tl.load(expt_map_ptr + expt_id, mask=mask)
+    pid_mask = tl.full([
+        1,
+    ], 0xFFFF0000, dtype=tl.uint32)
+    new_block_id = ((block_id & pid_mask) | new_expt_id).to(tl.int32, bitcast=True)
+    return new_block_id, conds
+
+@triton.jit
+def _filter_expt_data(expt_hist_out, expt_hist_inp, token_offs_raw_out, token_offs_raw_inp, token_offs_pad_out,
+                      token_offs_pad_out_stride_m, token_offs_pad_inp, token_offs_pad_inp_stride_m, block_pid_map_out,
+                      block_pid_map_out_stride_m, block_pid_map_inp, block_pid_map_inp_stride_m, expt_filter, expt_map,
+                      n_expts_tot, n_blocks, BLOCK: tl.constexpr):
+    pid_m = tl.program_id(0)
+    token_offs_pad_out += pid_m * token_offs_pad_out_stride_m
+    token_offs_pad_inp += pid_m * token_offs_pad_inp_stride_m
+    block_pid_map_out += pid_m * block_pid_map_out_stride_m
+    block_pid_map_inp += pid_m * block_pid_map_inp_stride_m
+    _compaction(expt_hist_out, _compact_expt_id, (expt_hist_inp, expt_filter, n_expts_tot), -1, n_expts_tot,
+                BLOCK=BLOCK)
+    _compaction(token_offs_raw_out, _compact_expt_id, (token_offs_raw_inp, expt_filter, n_expts_tot), -1,
+                n_expts_tot + 1, BLOCK=BLOCK)
+    compacted_tile_count = _compaction(token_offs_pad_out, _compact_expt_id,
+                                       (token_offs_pad_inp, expt_filter, n_expts_tot), -1, n_expts_tot + 1, BLOCK=BLOCK)
+    compacted_block_count = _compaction(block_pid_map_out, _compact_block_id_map,
+                                        (block_pid_map_inp, expt_map, expt_filter, n_blocks), -1, n_blocks, BLOCK=BLOCK)
+    # Record the total number of tiles in the trailing slot
+    tl.store(token_offs_pad_out + compacted_tile_count, compacted_block_count)
+
+
+def filter_expt_data(expt_data, expt_assignment, rank):
+    expt_hist = torch.empty_like(expt_data.hist)
+    token_offs_raw = torch.empty_like(expt_data.token_offs_raw)
+    token_offs_pad_data = torch.empty_like(expt_data.token_offs_pad_data)
+    block_pid_map_data = torch.empty_like(expt_data.block_pid_map_data)
+
+    _filter_expt_data[(token_offs_pad_data.shape[0], )](
+        expt_hist,
+        expt_data.hist,
+        token_offs_raw,
+        expt_data.token_offs_raw,
+        token_offs_pad_data,
+        token_offs_pad_data.stride(0),
+        expt_data.token_offs_pad_data,
+        expt_data.token_offs_pad_data.stride(0),
+        block_pid_map_data,
+        block_pid_map_data.stride(0),
+        expt_data.block_pid_map_data,
+        expt_data.block_pid_map_data.stride(0),
+        expt_assignment.expt_bitmask[rank, :],
+        expt_assignment.expt_map[rank, :],
+        len(expt_hist),
+        block_pid_map_data.shape[-1],
+        BLOCK=128,
+    )
+    return RaggedTensorMetadata(expt_hist, token_offs_raw, token_offs_pad_data, block_pid_map_data)
+
+
+def filter_expt_data_torch(expt_data, expt_assignment, rank):
+
+    expt_bitmask = expt_assignment.expt_bitmask[rank, :]
+    expt_map = expt_assignment.expt_map[rank, :]
+
+    def compact(vals, conds, sentinel):
+        assert conds.shape == vals.shape
+        keep = conds.nonzero().flatten()
+        sentinels = torch.full(((conds == 0).sum().item(), ), sentinel, dtype=vals.dtype, device=vals.device)
+        return torch.cat((vals[keep], sentinels))
+
+    def make_mask(block_pid_map):
+        expt_id = (block_pid_map & 0x0000FFFF)
+        valid_id = expt_id != 65535
+        valid_expt_id = expt_id[valid_id]
+        mask = torch.zeros_like(expt_id)
+        mask[valid_id] = (expt_bitmask[valid_expt_id // 32] >> (valid_expt_id % 32)) & 1
+        return mask
+
+    def map_expt_id(block_pid_map):
+        expt_id = (block_pid_map & 0x0000FFFF)
+        valid_id = expt_id != 65535
+        expt_id[valid_id] = expt_map[expt_id[valid_id]]
+        return (block_pid_map & 0xFFFF0000) | expt_id
+
+    n_expts_tot = len(expt_data.hist)
+    expt_global = torch.arange(n_expts_tot, device=expt_data.hist.device)
+    expt_local = (expt_bitmask[expt_global // 32] >> (expt_global % 32)) & 1
+    expt_mask = torch.cat((expt_local, torch.zeros((1, ), dtype=torch.bool, device=expt_local.device)))
+    expt_hist = compact(expt_data.hist, expt_mask[:-1], -1)
+    token_offs_raw = compact(expt_data.token_offs_raw, expt_mask, -1)
+
+    token_offs_pad_data = torch.stack([compact(v, expt_mask, -1) for v in expt_data.token_offs_pad_data], dim=0)
+    block_pid_map_data = [compact(v, make_mask(v), -1) for v in expt_data.block_pid_map_data]
+    block_pid_map_data = torch.stack([map_expt_id(v) for v in block_pid_map_data], dim=0)
+    return RaggedTensorMetadata(expt_hist, token_offs_raw, token_offs_pad_data, block_pid_map_data)
+
