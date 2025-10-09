@@ -37,17 +37,41 @@ class OptFlags:
             raise ValueError("Not supported")
 
 
-def get_split_k_from_constraints(
-        constraints_split_k: int | CallableSplitK,
-        batch_size: int,
-        m: int,
-        n: int,
-        k: int,
-        out_dtype: torch.dtype) -> int:
-    if isinstance(constraints_split_k, int):
-        return constraints_split_k
+# NOTE(afroz): We need bitwise identical results with variable batch sizes, so we shouldn't take
+# batch size into account when we do this. Rework accordingly.
+def dynamic_split_k(
+    max_size_bytes: float,
+    batch_size: int,
+    m: int,
+    n: int,
+    k: int,
+    output_dtype: torch.dtype,
+    max_split_k: int | None = None,
+    ) -> int:
+    """Returns split_k value respecting max_size_bytes and optionally max_split_k constraints."""
 
-    return constraints_split_k(batch_size, m, n, k, out_dtype)
+    elem_size = torch.empty((), dtype=output_dtype).element_size()
+    bytes_per_split = batch_size * m * n * elem_size
+
+    # max_split can only be as high as the allowance from max_size_bytes
+    max_split = int(max_size_bytes // bytes_per_split)
+
+    # max_split can only be as high as the allowable max_split_k, if specified.
+    if max_split_k is not None:
+        max_split = min(max_split_k, max(1, max_split))
+
+    # NOTE: max_split doesn't need to divide k
+    # while k % max_split != 0 and max_split > 1:
+    #     max_split -= 1
+
+    return max_split
+
+
+def all_constraints_satisfied(opt_flags: OptFlags, constraints: dict) -> bool:
+    _split_k_constraints = ['split_k', 'dynamic_split_k', 'dynamic_split_k_max_size_bytes', 'dynamic_split_k_max_split_k']
+    assert all(getattr(opt_flags, ck) == cv for ck, cv in constraints.items() if cv is not None and ck not in _split_k_constraints)
+    if constraints.get('split_k') and not constraints.get('dynamic_split_k'):
+        assert opt_flags.split_k == constraints['split_k']
 
 
 def make_default_opt_flags_amd(
@@ -68,7 +92,8 @@ def make_default_opt_flags_amd(
     has_y_acc_in,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_n", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile"]
+    constraints_supported = ["block_m", "block_n", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile",
+                             "dynamic_split_k", "dynamic_split_k_max_size_bytes", "dynamic_split_k_max_split_k"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None:
@@ -107,9 +132,18 @@ def make_default_opt_flags_amd(
     )
     is_persistent = constraints.get("is_persistent", False)
     # split_k:
-    if constraints.get("split_k", None) is not None:
-        split_k = get_split_k_from_constraints(
-            constraints["split_k"], batch_size, m, n, k, out_dtype)
+    if constraints.get("dynamic_split_k", False):
+        split_k = dynamic_split_k(
+            constraints["dynamic_split_k_max_size_bytes"],
+            batch_size,
+            m,
+            n,
+            k,
+            out_dtype,
+            constraints.get("dynamic_split_k_max_split_k"),
+        )
+    elif constraints.get("split_k", None) is not None:
+        split_k = constraints["split_k"]
     elif is_persistent or enforce_bitwise_invariance:
         split_k = 1
     else:
@@ -168,7 +202,8 @@ def make_default_opt_flags_amd(
     )
     # check constraints
     # TODO(afroz): Update this later.
-    assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
+    # assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
+    all_constraints_satisfied(ret, constraints)
     return ret
 
 def make_default_opt_flags_nvidia(
@@ -189,7 +224,8 @@ def make_default_opt_flags_nvidia(
     has_y_acc_in,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "fused_scatter", "epilogue_subtile", "num_stages", "idle_sms"]
+    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "fused_scatter", "epilogue_subtile", "num_stages",
+                             "idle_sms", "dynamic_split_k", "dynamic_split_k_max_size_bytes", "dynamic_split_k_max_split_k"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None or batch_size > 1:
@@ -239,9 +275,18 @@ def make_default_opt_flags_nvidia(
         # TODO: swizzle the HBM layout of the weights instead
         block_n, block_k = block_k, block_n
     # split_k
-    if constraints.get("split_k", None) is not None:
-        split_k = get_split_k_from_constraints(
-            constraints["split_k"], batch_size, m, n, k, out_dtype)
+    if constraints.get("dynamic_split_k", False):
+        split_k = dynamic_split_k(
+            constraints["dynamic_split_k_max_size_bytes"],
+            batch_size,
+            m,
+            n,
+            k,
+            out_dtype,
+            constraints.get("dynamic_split_k_max_split_k"),
+        )
+    elif constraints.get("split_k", None) is not None:
+        split_k = constraints["split_k"]
     elif is_persistent or enforce_bitwise_invariance or precision_config.act_scale is not None or precision_config.out_scale is not None:
         split_k = 1
     else:
@@ -303,8 +348,7 @@ def make_default_opt_flags_nvidia(
         idle_sms=constraints.get("idle_sms", 0),
     )
     # check constraints
-    # TODO(afroz): Update this later.
-    assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
+    all_constraints_satisfied(ret, constraints)
     return ret
 
 # --------------
@@ -352,6 +396,13 @@ def make_opt_flags(
         raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")
     if _opt_flags_constraints.get("fused_scatter", False) and not can_use_fused_scatter:
         raise InapplicableConstraint("cannot enforce `fused_scatter=True` constraint")
+    if _opt_flags_constraints.get("dynamic_split_k"):
+        # Ensure dynamic_split_k_max_size_bytes
+        if _opt_flags_constraints.get("dynamic_split_k_max_size_bytes", 0) <= 0:
+            raise InapplicableConstraint("dynamic_split_k_max_size_bytes must be > 0.")
+        # dynamic_split_k_max_split_k - If specified, must be at least 1
+        if "dynamic_split_k_max_split_k" in _opt_flags_constraints and _opt_flags_constraints["dynamic_split_k_max_split_k"] < 1:
+            raise InapplicableConstraint("dynamic_split_k_max_split_k must be at least 1 if specified")
     enforce_bitwise_invariance = precision_config.enforce_bitwise_invariance
     if _opt_flags is not None:
         assert not _opt_flags_constraints

@@ -67,53 +67,8 @@ def setup_nvidia(monkeypatch):
     )
 
 
-def make_split_k_limiter(
-    max_size_bytes: float,
-    max_split_k: int,
-) -> Callable[[int, int, int, int, torch.dtype], int]:
-    """Create a ki_split_k callback that respects a memory ceiling and max_split_k.
-
-    Args:
-        max_size_bytes: Maximum intermediate size in bytes.
-        max_split_k: Maximum allowable split_k value.
-
-    Returns:
-        A callable that computes the maximum split_k that keeps the
-        intermediate matrix ``split_k * b * m * n`` of the provided dtype under the
-        size limit. The value is clamped between 1 and ``max_split_k`` for positive shapes and
-        raises ``ValueError`` for non-positive arguments or invalid dtypes.
-    """
-
-    if max_size_bytes <= 0:
-        raise ValueError("max_size_bytes must be positive")
-    if max_split_k < 1:
-        raise ValueError("max_split_k must be at least 1")
-
-    def _limit_split_k(b: int, m: int, n: int, k: int, dtype: torch.dtype) -> int:
-        del k  # unused but kept for signature compatibility
-        elem_size = torch.empty((), dtype=dtype).element_size()
-        bytes_per_split = b * m * n * elem_size
-
-        if bytes_per_split <= 0:
-            raise ValueError(
-                "Invalid arguments: "
-                f"{bytes_per_split=} = {b=} * {m=} * {n=} * size(dtype)={elem_size}"
-            )
-
-        max_split = int(max_size_bytes // bytes_per_split)
-        return min(max_split_k, max(1, max_split))
-
-    return _limit_split_k
-
-
-def test_make_default_opt_flags_amd_split_k_callable(monkeypatch):
+def test_make_default_opt_flags_amd_split_k_constraint(monkeypatch):
     setup_amd(monkeypatch)
-
-    captured_args = {}
-
-    def split_k_callable(batch_size, m, n, k, out_dtype):
-        captured_args["value"] = (batch_size, m, n, k, out_dtype)
-        return 5
 
     precision_config = _DummyPrecisionConfig()
     flags = opt_flags.make_default_opt_flags_amd(
@@ -132,21 +87,14 @@ def test_make_default_opt_flags_amd_split_k_callable(monkeypatch):
         0,
         False,
         False,
-        {"split_k": split_k_callable},
+        {"split_k": 5},
     )
 
     assert flags.split_k == 5
-    assert captured_args["value"] == (2, 128, 64, 32, torch.float16)
 
 
-def test_make_default_opt_flags_nvidia_split_k_callable(monkeypatch):
+def test_make_default_opt_flags_nvidia_split_k_constraint(monkeypatch):
     setup_nvidia(monkeypatch)
-
-    captured_args = {}
-
-    def split_k_callable(batch_size, m, n, k, out_dtype):
-        captured_args["value"] = (batch_size, m, n, k, out_dtype)
-        return 3
 
     precision_config = _DummyPrecisionConfig()
     flags = opt_flags.make_default_opt_flags_nvidia(
@@ -165,22 +113,23 @@ def test_make_default_opt_flags_nvidia_split_k_callable(monkeypatch):
         0,
         False,
         False,
-        {"split_k": split_k_callable},
+        {"split_k": 3},
     )
 
     assert flags.split_k == 3
-    assert captured_args["value"] == (4, 256, 128, 64, torch.float16)
 
 
-def test_split_k_callable_with_max_size_callable(monkeypatch):
+def test_dynamic_split_k(monkeypatch):
     setup_nvidia(monkeypatch)
 
-    batch_size, m, n, k = 4, 256, 128, 64
+    batch_size, m, n = 4, 256, 128
+    k = (2**6) * 3
+
     bytes_float16 = 2
     intermediate_size = batch_size * m * n * bytes_float16
 
-    def get_flags(_split_k_callable):
-
+    def get_flags(split_k, dynamic_split_k_max_size_bytes, dynamic_split_k_max_split_k):
+        dynamic_split_k = dynamic_split_k_max_size_bytes is not None
         return opt_flags.make_default_opt_flags_nvidia(
             torch.float16,
             torch.float16,
@@ -197,30 +146,47 @@ def test_split_k_callable_with_max_size_callable(monkeypatch):
             0,
             False,
             False,
-            { "split_k": _split_k_callable},
+            {
+                "split_k": split_k,
+                "dynamic_split_k": dynamic_split_k,
+                "dynamic_split_k_max_size_bytes": dynamic_split_k_max_size_bytes,
+                "dynamic_split_k_max_split_k": dynamic_split_k_max_split_k,
+            },
         )
 
-    # Test with a very small allowance that only allows split_k=allowance
-    allowance = 2
-    max_allowable_split_k = 4
-    split_k_callable = make_split_k_limiter(allowance * intermediate_size, max_allowable_split_k)
-    flags = get_flags(split_k_callable)
+    # If `dynamic_split_k` is not specified, we get the specified split_k
+    for split_k in [1, 2, 4, 8]:
+        flags = get_flags(split_k, None, None)
+        assert flags.split_k == split_k
 
-    assert flags.split_k == allowance
+    # If `dynamic_split_k` is specified, then it is computed, and the specified split_k is ignored.
+    possible_splits = 6
+    # So 6 splits are possible
+    assert k % possible_splits == 0
+    allowance = possible_splits * intermediate_size
+    given_split_k = 3
+    flags = get_flags(given_split_k, allowance, None)
+    assert flags.split_k == possible_splits
 
-    # With a larger allowance, we should bump against the max allowable split_k
-    allowance = 8
-    max_allowable_split_k = 4
-    split_k_callable = make_split_k_limiter(allowance * intermediate_size, max_allowable_split_k)
-    flags = get_flags(split_k_callable)
+    # If we specify a max split size in the above scenario, it is respected, even though more splits are possible.
+    max_split_k = 4
+    flags = get_flags(given_split_k, allowance, max_split_k)
+    assert flags.split_k == max_split_k
 
-    assert flags.split_k == max_allowable_split_k
+    # When the allowance is low enough, no splits are possible.
+    allowance = intermediate_size
+    flags = get_flags(given_split_k, allowance, max_split_k)
+    assert flags.split_k == 1
 
-    # If we bump up the max_allowable_split_k, we should get the allowance
-    allowance = 8
-    max_allowable_split_k = 8
-    split_k_callable = make_split_k_limiter(allowance * intermediate_size, max_allowable_split_k)
-    flags = get_flags(split_k_callable)
+    # Extreme case, split_k = k
+    allowance = k * intermediate_size
+    flags = get_flags(given_split_k, allowance, None)
+    assert flags.split_k == k
 
-    assert flags.split_k == max_allowable_split_k
+    # Split k doesn't need to be a divisor of k
+    non_divisor_k = 5
+    assert k % non_divisor_k != 0
+    allowance = non_divisor_k * intermediate_size
+    flags = get_flags(None, allowance, None)
+    assert flags.split_k == non_divisor_k
 
