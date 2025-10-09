@@ -214,10 +214,10 @@ class InnerRoutingData:
             return (None, None, None, None, False, False, False, None)
 
         return (
-            expt_data.hist,
-            expt_data.token_offs_raw,
-            expt_data.token_offs_pad(block),
-            expt_data.block_pid_map(block),
+            expt_data.batch_sizes,
+            expt_data.batch_offs,
+            expt_data.block_offs(block),
+            expt_data.block_schedule(block),
         ) + args
 
 
@@ -339,9 +339,8 @@ def _canonicalize_storage(storage, out_ndim, flex_data):
 
 #
 
-def reduce_grouped(x: torch.Tensor, indx: torch.Tensor = None, out: torch.Tensor = None,
-                   out_mx_scale: torch.Tensor = None,
-                   fused_activation: FusedActivation = None, epilogue: Epilogue = None,
+def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor, out_mx_scale: torch.Tensor,
+                   fused_activation, epilogue,
                    x_flex: InFlexData | None = None,
                    out_flex: OutFlexData | None = None, x_mx_scale: torch.Tensor | None = None,
                    out_dtype: bool = None, flexpoint_saturate_inf: bool = False,
@@ -390,14 +389,6 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor = None, out: torch.Tensor
         x_flex = InFlexData()
     if out_flex is None:
         out_flex = OutFlexData()
-    if fused_activation is None:
-        fused_activation = FusedActivation(FnSpecs.default(), tuple(), 1)
-    if epilogue is None:
-        epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
-    if x.ndim < 4:
-        x = x.view((1,) * (4 - x.ndim) + x.shape)
-    if out is None:
-        out = torch.empty((*x.shape[1:-2], num_groups, x.shape[-1]), device=x.device, dtype=x.dtype)
     K = 1 if indx is None else indx.shape[1]
     out_dtype = x.dtype if out_dtype is None else out_dtype
     assert x.shape[-1] % fused_activation.reduction_n == 0

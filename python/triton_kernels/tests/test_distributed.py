@@ -7,9 +7,10 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import triton
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp
-from triton_kernels.matmul_ogs import matmul_ogs, reduce_grouped
-from triton_kernels.routing import routing, RoutingData
+from triton_kernels.topk import topk
+from triton_kernels.matmul_ogs import matmul_ogs, reduce_grouped, RoutingData, GatherIndx, ScatterIndx
 from triton_kernels.target_info import is_hip
+from triton_kernels.tensor import make_ragged_tensor_metadata
 from .test_routing import make_expt_dict_random, make_expt_assignment, filter_expt_data
 import pytest
 
@@ -62,6 +63,19 @@ def distributed_launcher(request):
 
 
 # ------------------------------------------------------------
+
+
+def routing(logits, n_expts_act):
+    sparse_logits = topk(logits, n_expts_act, y_indx=sparse_logits.indx)
+    dispatch_indx = sparse_logits.mask_metadata.col_sorted_indx
+    combine_indx = sparse_logits.mask_metadata.row_sorted_indx
+    ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
+    gate_scal = sparse_logits.vals.flatten()[combine_indx]
+    routing_data = RoutingData(gate_scal, ragged_batch_metadata.batch_sizes, logits.shape[-1], n_expts_act,
+                               ragged_batch_metadata)
+    gather_idx = GatherIndx(combine_indx, dispatch_indx)
+    scatter_idx = ScatterIndx(dispatch_indx, combine_indx)
+    return routing_data, gather_idx, scatter_idx
 
 
 def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act):

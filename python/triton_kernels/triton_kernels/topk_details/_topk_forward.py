@@ -92,7 +92,6 @@ def _topk_forward(X, stride_xm,  # inputs
                   USE_PROVIDED_INDX: tl.constexpr, PeerBits, stride_rm: tl.constexpr,
                   stride_rn: tl.constexpr,  # bitmatrix
                   n_rows, n_expts_tot,  # shape
-                  S, BLOCK_S: tl.constexpr, s_blocks,  # thing to memset
                   dst_offs_m, APPLY_SOFTMAX: tl.constexpr,  # constant
                   BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr, BLOCK_N: tl.constexpr):
 
