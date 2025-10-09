@@ -18,17 +18,14 @@ from triton.experimental.gluon.language.nvidia.blackwell import tma as tma_black
 @gluon.jit
 def tl_dot(a, b, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=ttgl.float32):
     # TODO: check if MMAv5 cannot be used and fallback to mmav2
-    # Shapes (constexpr)
     M: ttgl.constexpr = a.type.shape[0]
     N: ttgl.constexpr = b.type.shape[1]
     K: ttgl.constexpr = a.type.shape[1]
     # Shared memory layouts for inputs (simple default)
     nvmma_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=32, transposed=False,
                                                           element_bitwidth=a.dtype.primitive_bitwidth, rank=2)
-    # Allocate shared memory and initialize with values
     a_smem = ttgl.allocate_shared_memory(a.dtype, [M, K], nvmma_layout, a)
     b_smem = ttgl.allocate_shared_memory(b.dtype, [K, N], nvmma_layout, b)
-    # Allocate TMEM accumulator initialized with current acc
     acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, N], col_stride=1)
     tmem_reg_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(M, N, [M, N], ttgl.num_warps())
     if acc is not None:
@@ -36,13 +33,12 @@ def tl_dot(a, b, acc=None, input_precision=None, allow_tf32=None, max_num_imprec
     else:
         acc_temp = ttgl.zeros([M, N], out_dtype, layout=tmem_reg_layout)
     acc_tmem = allocate_tensor_memory(acc_temp.dtype, [M, N], acc_tmem_layout, acc_temp)
-    # Barrier for commit
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
-    # MMA into TMEM, accumulating into existing TMEM contents
     tcgen05_mma(a_smem, b_smem, acc_tmem, use_acc=True)
     tcgen05_commit(bar)
     mbarrier.wait(bar, phase=0)
+
     # Load back from TMEM using a register layout and convert to acc layout
     out = acc_tmem.load(tmem_reg_layout)
     ret_layout: ttgl.constexpr = default_blocked_layout([M, N], ttgl.num_warps())
@@ -54,7 +50,6 @@ def tl_dot(a, b, acc=None, input_precision=None, allow_tf32=None, max_num_imprec
 def tl_dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, fast_math=False, lhs_k_pack=True,
                   rhs_k_pack=True, out_dtype=ttgl.float32):
     # TODO: check if MMAv5_scaled cannot be used and fallback to mmav5/mmav3 or mmav2
-    # Shapes (constexpr)
     M: ttgl.constexpr = lhs_scale.type.shape[0]
     N: ttgl.constexpr = rhs_scale.type.shape[0]
 
@@ -65,10 +60,8 @@ def tl_dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=No
     nvmma_layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=32, transposed=True, element_bitwidth=8,
                                                             rank=2, fp4_padded=fp4_padded_b)
 
-    # Allocate shared memory and initialize with values
     a_smem = ttgl.allocate_shared_memory(lhs.dtype, lhs.shape, nvmma_layout_a, lhs)
     b_smem = ttgl.allocate_shared_memory(rhs.dtype, rhs.shape, nvmma_layout_b, rhs)
-    # Allocate TMEM accumulator initialized with current acc
     acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, N], col_stride=1)
     tmem_reg_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(M, N, [M, N], ttgl.num_warps())
     if acc is not None:
@@ -76,7 +69,6 @@ def tl_dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=No
     else:
         acc_temp = ttgl.zeros([M, N], out_dtype, layout=tmem_reg_layout)
     acc_tmem = allocate_tensor_memory(acc_temp.dtype, [M, N], acc_tmem_layout, acc_temp)
-    # Barrier for commit
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
     scale_layout: ttgl.constexpr = TensorMemoryScalesLayout()
@@ -89,7 +81,6 @@ def tl_dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=No
     a_scale_tmem = allocate_tensor_memory(lhs_scale.dtype, lhs_scale.shape, scale_layout, lhs_scale)
     b_scale_tmem = allocate_tensor_memory(rhs_scale.dtype, rhs_scale.shape, scale_layout, rhs_scale)
 
-    # MMA into TMEM, accumulating into existing TMEM contents
     tcgen05_mma_scaled(a_smem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, lhs_format, rhs_format, use_acc=True)
     tcgen05_commit(bar)
     mbarrier.wait(bar, phase=0)
@@ -107,7 +98,6 @@ def get_num_threads_per_warp() -> ttgl.constexpr:
 
 @gluon.constexpr_function
 def default_blocked_layout(shape: ttgl.constexpr, num_warps: ttgl.constexpr) -> ttgl.constexpr:
-    # shape: list of positive ints (constexpr)
     rank = len(shape)
     # 1 element per thread for all dimensions
     size_per_thread = [1 for _ in range(rank)]
@@ -177,9 +167,7 @@ def tl_store_tensor_descriptor(desc, offsets, value):
 
 @gluon.jit
 def tl_load_tensor_descriptor(desc, offsets):
-    # Allocate shared memory tile matching descriptor block
     smem = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
-    # Allocate and initialize an mbarrier for the async TMA load
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
     # Issue async copy from global (descriptor) to shared memory and wait for completion
@@ -195,7 +183,6 @@ def tl_load_tensor_descriptor(desc, offsets):
 
 @gluon.jit
 def tl_arange(start: ttgl.constexpr, stop: ttgl.constexpr = None):
-    # Normalize signature: tl.arange(N) -> (0, N)
     _start: ttgl.constexpr = start if stop is not None else 0
     _stop: ttgl.constexpr = stop if stop is not None else start
     layout: ttgl.constexpr = default_blocked_layout([_stop - _start], ttgl.num_warps())
@@ -227,9 +214,7 @@ def reset_to_default_layout(value):
 
 @gluon.constexpr_function
 def get_split_src_layout(shape: ttgl.constexpr, num_warps: ttgl.constexpr) -> ttgl.constexpr:
-    # shape: list of positive ints (constexpr)
     rank = len(shape)
-    # set the most inner dimension to 2
     size_per_thread = [1 if i != rank - 1 else 2 for i in range(rank)]
     # Distribute 32 threads per warp across dimensions (simple heuristic: last-fastest)
     threads_per_warp = [1 for _ in range(rank)]

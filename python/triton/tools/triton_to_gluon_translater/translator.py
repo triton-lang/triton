@@ -232,11 +232,8 @@ class TritonToGluonTransformer(ast.NodeTransformer):
             # or the tl.dtype class itself (e.g., tl.float16 or tl.dtype.float16 / tl.dtype)
             resolved_obj = self.resolve_value(node)
             if resolved_obj is not None:
-                try:
-                    if isinstance(resolved_obj, tlc.dtype):
-                        return self.ttgl_attr(last_part)
-                except Exception:
-                    pass
+                if isinstance(resolved_obj, tlc.dtype):
+                    return self.ttgl_attr(last_part)
                 if resolved_obj is tlc.dtype and last_part == "dtype":
                     return self.ttgl_attr("dtype")
                 if resolved_obj is tlc.tensor and last_part == "tensor":
