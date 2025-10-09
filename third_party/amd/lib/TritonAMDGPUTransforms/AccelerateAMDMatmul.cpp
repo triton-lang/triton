@@ -574,9 +574,11 @@ public:
       mfmaAccType = rewriter.getF32Type();
 
     // Use transposed mfma layout to enable larger vectorization for global
-    // store instructions. We can not support transposed mfma 4x64 as it
-    // requires to broadcast the operand A.
-    bool isTransposed = !(mDim == 4 && nDim == 64);
+    // store instructions along dimension 1. Use an untransposed mfma layout to
+    // enable vectorization along dimension 0. Note that we can not support
+    // transposed mfma 4x64 as it requires to broadcast the operand A.
+    bool isTransposed = !(mDim == 4 && nDim == 64) &&
+                        !(mlir::LLVM::AMD::isStoredAlongDim0(dotOp));
     auto aElemTy = mfmaInstr->aElementType;
     auto is16BitElemTy = (aElemTy.isF16() || aElemTy.isBF16());
 
