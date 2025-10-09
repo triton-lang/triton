@@ -1030,14 +1030,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // ASYNC-NOT: ttg.swizzled_shared
 // ASYNC: [[PADDED_ENC:#.*]] = #ttg.padded_shared
+// ASYNC-SAME{LITERAL}: {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [32, 0], [16, 0], [1, 0], [2, 0], [4, 0], [8, 0], [64, 0]], block = []}
 // ASYNC-NOT: ttg.padded_shared
 // ASYNC-NOT: ttg.swizzled_shared
 
 // SYNC-NOT: ttg.padded_shared
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
-  // COMMON-LABEL: loop_except_padded_layouts
-  tt.func public @loop_except_padded_layouts(%arg0: i32, %arg1: tensor<128x128x!tt.ptr<f16>, #blocked> {tt.constancy = dense<1> : tensor<2xi32>, tt.contiguity = dense<[1, 8]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}, %arg2: tensor<128x128x!tt.ptr<f16>, #mma>) {
+  // COMMON-LABEL: loop_expect_padded_layouts
+  tt.func public @loop_expect_padded_layouts(%arg0: i32, %arg1: tensor<128x128x!tt.ptr<f16>, #blocked> {tt.constancy = dense<1> : tensor<2xi32>, tt.contiguity = dense<[1, 8]> : tensor<2xi32>, tt.divisibility = dense<[1, 16]> : tensor<2xi32>}, %arg2: tensor<128x128x!tt.ptr<f16>, #mma>) {
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #mma>
