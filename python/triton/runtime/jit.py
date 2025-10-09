@@ -808,7 +808,7 @@ class JITFunction(JITCallable, KernelInterface):
 
 
 @overload
-def jit(fn: T) -> KernelInterface:
+def jit(fn: T) -> Union[KernelInterface, JITFunction]:
     ...
 
 
@@ -822,7 +822,7 @@ def jit(
     do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
-) -> Callable[[T], KernelInterface]:
+) -> Callable[[T], Union[KernelInterface, JITFunction]]:
     ...
 
 
@@ -836,7 +836,7 @@ def jit(
     do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
-) -> Union[KernelInterface, Callable[[T], KernelInterface]]:
+) -> Union[KernelInterface, Callable[[T], Union[KernelInterface, JITFunction]]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
 
@@ -855,7 +855,7 @@ def jit(
     :type fn: Callable
     """
 
-    def decorator(fn: T) -> KernelInterface:
+    def decorator(fn: T) -> Union[KernelInterface, JITFunction]:
         assert callable(fn)
         if knobs.runtime.interpret:
             from .interpreter import InterpretedFunction
