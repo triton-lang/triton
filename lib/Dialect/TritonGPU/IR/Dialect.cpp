@@ -3714,12 +3714,6 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
     }
   }
 
-  // Verify that op partitions do not appear on yield ops
-  if (attr.getName() == kPartitionAttrName && isa<scf::YieldOp>(op)) {
-    return op->emitOpError("has unexpected attribute ")
-           << attr.getName() << " which is not expected on `scf.yield` ops";
-  }
-
   // Verify that partition id lists are non-empty, sorted and have no duplicates
   auto verifyPartitionIds =
       [&](const ArrayRef<int> &partitionIds) -> LogicalResult {
@@ -3764,8 +3758,8 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
     for (auto &region : op->getRegions()) {
       for (auto &block : region.getBlocks()) {
         for (auto &childOp : block.getOperations()) {
-          if (isa<scf::YieldOp, ub::PoisonOp>(childOp)) {
-            // yield ops and ub.poison do not need partition ids
+          if (isa<ub::PoisonOp>(childOp)) {
+            // ub.poison ops do not need partition ids
             continue;
           }
           if (!childOp.hasAttr(kPartitionAttrName))
@@ -3788,15 +3782,17 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
   }
 
   if (attr.getName() == kPartitionOutputsAttrName) {
-    if (!isa<scf::ForOp, scf::IfOp>(op))
+    if (!isa<scf::ForOp, scf::IfOp, scf::ReduceOp>(op))
       return op->emitOpError("has unexpected attribute ") << attr.getName();
 
     // Verify that number of output partitions matches number of For/If results
     size_t numResults = 0;
     if (isa<scf::ForOp>(op)) {
       numResults = cast<scf::ForOp>(op).getResults().size();
-    } else {
+    } else if (isa<scf::IfOp>(op)) {
       numResults = cast<scf::IfOp>(op).getResults().size();
+    } else {
+      numResults = cast<triton::ReduceOp>(op).getResults().size();
     }
     if (cast<ArrayAttr>(attr.getValue()).size() != numResults) {
       return op->emitOpError("does not have expected number of output "
