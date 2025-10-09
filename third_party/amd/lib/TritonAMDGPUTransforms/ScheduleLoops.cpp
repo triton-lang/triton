@@ -390,7 +390,7 @@ buildSchedule(scf::ForOp &forOp, int numStages, const LoadToInfoMap &loadToInfo,
 } // namespace SingleDotSchedule
 
 // Builds a schedule for loops containing chained dots. This schedule aims to
-// better interleave mfams with alu ops which can be co-executed on GFX9. It
+// better interleave mma with alu ops which can be co-executed on GFX9. It
 // works for loops which have 2 dots where the result of the first is
 // transformed and used by the second dot. The dot ops will be scheduled with a
 // distance of one and the ops in between will be spit into 2 parts. The first
