@@ -200,17 +200,19 @@ chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
 
   // Fallback to FMA if the M/N dim is not supported by MFMA.
   if (failed(maybeMfmaIntrinsic)) {
-    mlir::emitRemark(loc)
-        << "Unable to select MFMA intrinsic for the request: "
-        << "version=" << mfmaVersion << ", result-shape=(" << M << "x" << N
-        << "), selected-tiles=(" << mDim << "x" << nDim << "), inputKSize="
-        << inputKSize << ", aElemType=" << aElemType
-        << ", bElemType=" << bElemType << ", withScale="
-        << (withScale ? "true" : "false")
-        << ", allowXF32=" << (allowXF32 ? "true" : "false")
-        << (enforcedNonKDim != 0
-                ? (llvm::Twine(", enforcedNonKDim=") + llvm::Twine(enforcedNonKDim)).str()
-                : "");
+    mlir::emitRemark(loc) << "Unable to select MFMA intrinsic for the request: "
+                          << "version=" << mfmaVersion << ", result-shape=("
+                          << M << "x" << N << "), selected-tiles=(" << mDim
+                          << "x" << nDim << "), inputKSize=" << inputKSize
+                          << ", aElemType=" << aElemType
+                          << ", bElemType=" << bElemType
+                          << ", withScale=" << (withScale ? "true" : "false")
+                          << ", allowXF32=" << (allowXF32 ? "true" : "false")
+                          << (enforcedNonKDim != 0
+                                  ? (llvm::Twine(", enforcedNonKDim=") +
+                                     llvm::Twine(enforcedNonKDim))
+                                        .str()
+                                  : "");
     return failure();
   }
 
@@ -221,9 +223,10 @@ chooseMfmaInstruction(Location loc, int mfmaVersion, RankedTensorType cType,
   // this layout will introduce data duplication.
   if (inputKSize % kDim != 0) {
     mlir::emitRemark(loc)
-        << "Unable to select MFMA intrinsic '"
-        << maybeMfmaIntrinsic->name << "' as MFMA intrinsic k-dimension size kDim=" << kDim
-        << ", which is not a multiple of tile k-dimension size inputKSize=" << inputKSize
+        << "Unable to select MFMA intrinsic '" << maybeMfmaIntrinsic->name
+        << "' as MFMA intrinsic k-dimension size kDim=" << kDim
+        << ", which is not a multiple of tile k-dimension size inputKSize="
+        << inputKSize
         << ". Using this intrinsic would introduce data duplication.";
     return failure();
   }
@@ -566,11 +569,14 @@ public:
         chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, withScale);
     if (failed(mfmaInstr)) {
       if (!withScale) {
-        return rewriter.notifyMatchFailure(dotOp, "Unable to choose preferable MFMA intrinsic for dot operation.");
+        return rewriter.notifyMatchFailure(
+            dotOp,
+            "Unable to choose preferable MFMA intrinsic for dot operation.");
       }
       mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, false);
       if (failed(mfmaInstr)) {
-        return rewriter.notifyMatchFailure(dotOp, "Unable to choose MFMA intrinsic for dot operation.");
+        return rewriter.notifyMatchFailure(
+            dotOp, "Unable to choose MFMA intrinsic for dot operation.");
       }
 
       withScale = false;
@@ -788,7 +794,8 @@ public:
     FailureOr<MfmaIntrinsic> mfmaInstr =
         chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, useFp16);
     if (failed(mfmaInstr))
-      return rewriter.notifyMatchFailure(dotOp, "Unable to choose MFMA intrinsic for scaled dot operation.");
+      return rewriter.notifyMatchFailure(
+          dotOp, "Unable to choose MFMA intrinsic for scaled dot operation.");
 
     if (useFp16) {
       dotOp.emitRemark(
@@ -916,8 +923,8 @@ public:
 
   LogicalResult matchAndRewrite(tt::DotScaledOp dotOp,
                                 PatternRewriter &rewriter) const override {
-    dotOp.emitRemark()
-      << "Decomposing scaled dot operation into regular dot operation with explicit scaling.";
+    dotOp.emitRemark() << "Decomposing scaled dot operation into regular dot "
+                          "operation with explicit scaling.";
     return ttg::DecomposeScaledBlocked::matchAndRewrite(dotOp, rewriter);
   }
 
@@ -1045,8 +1052,10 @@ public:
     FailureOr<MfmaIntrinsic> mfmaInstr =
         chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
     if (failed(mfmaInstr)) {
-      return rewriter.notifyMatchFailure(dotOp, "Unable to choose preferable MFMA intrinsic for scaled dot operation.");
-      }
+      return rewriter.notifyMatchFailure(dotOp,
+                                         "Unable to choose preferable MFMA "
+                                         "intrinsic for scaled dot operation.");
+    }
 
     auto mDim = mfmaInstr->mDim;
     auto nDim = mfmaInstr->nDim;
@@ -1500,7 +1509,8 @@ public:
     FailureOr<WmmaIntrinsic> wmmaInstr =
         chooseWmmaInstruction(dotOp, operandTypes, wmmaVersion, nonKDim);
     if (failed(wmmaInstr)) {
-      return rewriter.notifyMatchFailure(dotOp, "Unable to choose WMMA intrinsic for dot operation.");
+      return rewriter.notifyMatchFailure(
+          dotOp, "Unable to choose WMMA intrinsic for dot operation.");
     }
 
     auto mDim = wmmaInstr->mDim;
@@ -1651,7 +1661,8 @@ public:
   LogicalResult tryAccelerateF16WithVDot(DotOp dotOp, PatternRewriter &rewriter,
                                          const DotElTypes &dotTypes) const {
     if (!AMD::supportsVDot(arch))
-      return rewriter.notifyMatchFailure(dotOp, "Target architecture does not support V_DOT instruction.");
+      return rewriter.notifyMatchFailure(
+          dotOp, "Target architecture does not support V_DOT instruction.");
 
     // If this is fp16 x fp16 ->fp16 case prioritize using v_dot.
     auto aOpType = dotOp.getA().getType();
@@ -1667,7 +1678,8 @@ public:
       rewriter.replaceOp(dotOp, newD);
       return success();
     }
-    return rewriter.notifyMatchFailure(dotOp, "Unable to choose V_DOT instruction for dot operation.");
+    return rewriter.notifyMatchFailure(
+        dotOp, "Unable to choose V_DOT instruction for dot operation.");
   }
 
   LogicalResult tryLegalizeFMA(DotOp dotOp, PatternRewriter &rewriter,
@@ -1713,10 +1725,10 @@ public:
   LogicalResult matchAndRewrite(DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
     if (!isa<BlockedEncodingAttr>(dotOp.getD().getType().getEncoding()))
-      return rewriter.notifyMatchFailure(dotOp, "expected blocked encoding result tensor");
+      return rewriter.notifyMatchFailure(
+          dotOp, "expected blocked encoding result tensor");
 
-    dotOp.emitRemark()
-      << "Attempting to map dot operation to FMA intrinsic.";
+    dotOp.emitRemark() << "Attempting to map dot operation to FMA intrinsic.";
 
     DotElTypes dotTypes;
     dotTypes.a = dotOp.getA().getType().getElementType();
@@ -1726,7 +1738,8 @@ public:
 
     // Check that dot is not legalized already
     if (isLegalFMAForm(dotOp, dotTypes)) {
-      return rewriter.notifyMatchFailure(dotOp, "Dot operation is already in FMA form.");
+      return rewriter.notifyMatchFailure(
+          dotOp, "Dot operation is already in FMA form.");
     }
 
     // TODO: enable this condition, when fp32 -> fp16 cast works correctly
