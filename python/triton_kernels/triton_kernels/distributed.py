@@ -237,7 +237,8 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
     dst_local = symm_mem.empty((n_tokens_local, d_model), dtype=src.dtype, device=device)
     hdl = symm_mem.rendezvous(dst_local, dist.group.WORLD)
     peer_bufs = [hdl.get_buffer(r, dst_local.shape, dst_local.dtype) for r in range(n_ranks)]
-    peer_dst_ptrs = torch.tensor([int(buf.data_ptr()) for buf in peer_bufs], device=device)
+    peer_dst_ptrs = torch.empty((n_ranks, ), dtype=torch.int64, device=device)
+    _create_tensor_from_tuples[(1, )](peer_dst_ptrs, tuple([int(buf.data_ptr()) for buf in peer_bufs]))
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_global,)
