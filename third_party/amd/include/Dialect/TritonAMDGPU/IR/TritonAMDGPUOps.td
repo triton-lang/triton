@@ -707,8 +707,9 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local">
     This operation copies data from global memory to local memory
     asynchronously. This is analogue to tt.load except the data are copied to
     local memory pointed by `result` instead of a distributed tensor. The data
-    copied depends on the global memory descriptor pointed to by `desc`. Set
-    `pred` to false will disable the copy.
+    copied depends on the global memory pointed to by `desc`. Set `pred` to
+    false will disable the copy. This operation does not support shared memory
+    swizzling.
   }];
 
   let arguments = (ins
@@ -724,6 +725,37 @@ def AsyncTDMCopyGlobalToLocalOp : TT_AMDGPU_Op<"async_tdm_copy_global_to_local">
     $desc `[` $indices `]` `into` $result `,` $pred
     attr-dict `:` qualified(type($desc)) `->` qualified(type($result))
   }];
+
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// AsyncTDMCopyLocalToGlobalOp
+//===----------------------------------------------------------------------===//
+
+def AsyncTDMCopyLocalToGlobalOp : TT_AMDGPU_Op<"async_tdm_copy_local_to_global"> {
+  let summary = "Copy data based on descriptor from local memory to global memory asynchronously";
+
+  let description = [{
+    This operation copies data from local memory to global memory
+    asynchronously. This is analogue to tt.store except the data are copied from
+    local memory pointed by `src` instead of a distributed tensor. The copy
+    destination depends on the global memory pointed to by `desc`. This
+    operation does not support shared memory padding or swizzling.
+  }];
+
+  let arguments = (ins
+    Arg<TT_TensorDescType, "", [MemWrite<GlobalMemory>]>:$desc,
+    Variadic<I32>:$indices,
+    Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src
+  );
+
+  let assemblyFormat = [{
+    $desc `[` $indices `]` `from` $src
+    attr-dict `:` qualified(type($src)) `->` qualified(type($desc))
+  }];
+
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//

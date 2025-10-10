@@ -77,18 +77,8 @@ public:
 
   Type convertTensorDescType(triton::TensorDescType type) {
     auto ctx = type.getContext();
-
-    RankedTensorType rankedTensorType = type.getBlockType();
-    auto eleType = rankedTensorType.getElementType();
-    auto shape = rankedTensorType.getShape();
-    SmallVector<Type, 5> types;
-    // base ptr
-    types.push_back(LLVM::LLVMPointerType::get(ctx, 1));
-    // 32 bit shapes
-    types.append(shape.size(), IntegerType::get(ctx, 32));
-    // 64 bit strides
-    types.append(shape.size(), IntegerType::get(ctx, 64));
-
+    // 4 for group0, 8 for group1
+    auto types = SmallVector<Type>(4 + 8, IntegerType::get(ctx, 32));
     return LLVM::LLVMStructType::getLiteral(ctx, types);
   }
 };
