@@ -63,9 +63,9 @@ def tl_dot(a, b, acc=None, input_precision=None, allow_tf32=None, max_num_imprec
 def tl_dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, fast_math=False, lhs_k_pack=True,
                   rhs_k_pack=True, out_dtype=ttgl.float32):
     # TODO: check if MMAv5_scaled cannot be used and fallback to mmav5/mmav3 or mmav2
-    M: ttgl.constexpr = lhs_scale.type.shape[0]
-    N: ttgl.constexpr = rhs_scale.type.shape[0]
-    K: ttgl.constexpr = lhs_scale.type.shape[1] * 32
+    M: ttgl.constexpr = lhs_scale.shape[0]
+    N: ttgl.constexpr = rhs_scale.shape[0]
+    K: ttgl.constexpr = lhs_scale.shape[1] * 32
     ttgl.static_assert(M >= 128 and N >= 16 and K >= 16, "TODO: support smaller shapes using mmav2")
     fp4_padded_a: ttgl.constexpr = lhs_format == "e2m1" and rhs_format != "e2m1"
     fp4_padded_b: ttgl.constexpr = lhs_format != "e2m1" and rhs_format == "e2m1"
