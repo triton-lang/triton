@@ -780,21 +780,24 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
     }
   };
 
-  // Each MMA instruction operates on tiles in both M and K dimensions (m16n8k*
-  // format):
+  // Each MMA instruction operates on a 2D tile fragment within the MxN output
+  // (m16n8k* format):
   //
   // M dimension:
-  //   - Each MMA processes 2 consecutive rows
-  //   - Loop variable 'm' is a logical index: callMma expands to 2*m and 2*m+1
+  //   - Each lane covers 2 physical rows (row = groupID, row = groupID + 8)
+  //   - callMma expands to 2*m and 2*m+1
+  //
+  // N dimension:
+  //   - Each lane covers 2 columns (col = 2*threadID_in_group + {0,1})
   //
   // K dimension:
-  //   - Each MMA processes numVecK elements (2 for most types, 4 for fp64)
-  //   - Loop variable 'k' is a logical index: callMma expands to k*numVecK+0 ..
-  //   k*numVecK+numVecK-1
+  //   - Each MMA consumes numVecK contiguous elements along K
+  //     numVecK = 2 for fp16/bf16/fp8, numVecK = 4 for fp64
+  //   - callMma expands to k*numVecK + [0 .. numVecK-1]
   //
-  //   - Data indexing: callMma functions use ha[{b, 2*m, k*numVecK+vk}]
-  //   - Scale indexing: scaled MMA callbacks directly use m and k for scale
-  //   factor lookup
+  // Indexing conventions:
+  //   - Data: callMma uses ha[{b, 2*m, k*numVecK + vk}] (2*m+1 for the next row)
+  //   - Scaled MMA: scale factors are indexed directly by logical m and k
   for (int b = 0; b < repBatch; ++b)
     for (int k = 0; k < repK; ++k)
       for (int m = 0; m < repM; ++m)
