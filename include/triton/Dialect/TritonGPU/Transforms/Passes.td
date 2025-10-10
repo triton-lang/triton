@@ -189,7 +189,7 @@ def TritonGPUF32DotTC : Pass<"tritongpu-F32DotTC", "mlir::ModuleOp"> {
 }
 
 def TritonGPUBF16DotTC : Pass<"tritongpu-BF16DotTC", "mlir::ModuleOp"> {
-  let summary = "3xBF16 trick";
+  let summary = "Use 3xBF16 dot ops to compute F32 dot result";
 
   let description = [{
     Decompose fp32 `DotOp` instructions into BF16 operations.
