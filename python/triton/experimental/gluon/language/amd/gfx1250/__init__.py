@@ -47,16 +47,16 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     _verify_wmma(3, a, b, acc)
     if a_format.value == "e2m1":
         wmma_layout = a.type.layout.parent
-        assert isinstance(wmma_layout, AMDWMMALayout) and wmma_layout.instr_shape == (16, 16, 64), \
-            "e2m1 format expects instr_shape to be (16, 16, 64)"
+        assert isinstance(wmma_layout, AMDWMMALayout) and wmma_layout.instr_shape == [16, 16, 64], \
+            "e2m1 format expects instr_shape to be [16, 16, 64]"
     if b_format.value == "e2m1":
         wmma_layout = b.type.layout.parent
-        assert isinstance(wmma_layout, AMDWMMALayout) and wmma_layout.instr_shape == (16, 16, 64), \
-            "e2m1 format expects instr_shape to be (16, 16, 64)"
+        assert isinstance(wmma_layout, AMDWMMALayout) and wmma_layout.instr_shape == [16, 16, 64], \
+            "e2m1 format expects instr_shape to be [16, 16, 64]"
 
     acc_layout = acc.type.layout
-    assert isinstance(acc_layout, AMDWMMALayout) and acc_layout.instr_shape == (16, 16, 128), \
-    "accumulator tensor's layout must be (16, 16, 128)"
+    assert isinstance(acc_layout, AMDWMMALayout) and acc_layout.instr_shape == [16, 16, 128], \
+    "accumulator tensor's layout must be [16, 16, 128]"
 
     # TODO: Add more formats
     assert a_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format.value}"
