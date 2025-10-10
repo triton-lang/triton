@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Sequence, List, TypeVar, Tuple, Callable
 import math
 from triton.language.semantic import TritonSemantic
@@ -244,6 +245,72 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             shape = list(shape)
 
         return self.builder.to_linear_layout(layout._to_ir(self.builder), shape)
+
+    def get_tmem_reg_layout(self, element_ty, shape, layout, num_warps, instr_variant, ctas_per_cga, cta_split_num,
+                            cta_order):
+        _check(isinstance(instr_variant, str), lambda: "instr_variant must be a string")
+        _check(instr_variant in ("32x32b", "16x64b", "16x128b", "16x256b", "16x32bx2", "32x32b_splitn"),
+               lambda: f"unknown instr_variant: {instr_variant}")
+        _check(isinstance(num_warps, int), lambda: f"num_warps must be an int but got {type(num_warps)!r}")
+        _check(num_warps >= 4 and (num_warps & (num_warps - 1)) == 0,
+               lambda: "num_warps must be a power of two and >= 4")
+
+        shape = list(shape)
+        _check(all(isinstance(dim, int) for dim in shape), lambda: f"shape entries must be ints but got {shape}")
+        rank = len(shape)
+        _check(rank == 2, lambda: "expected a 2D tensor")
+
+        ctas_per_cga = list(ctas_per_cga)
+        cta_split_num = list(cta_split_num)
+        cta_order = list(cta_order)
+        splitn = instr_variant == "32x32b_splitn"
+        if splitn:
+            instr_variant = "32x32b"
+
+        _check(len(ctas_per_cga) == rank, lambda: "ctas_per_cga rank mismatch")
+        _check(len(cta_split_num) == rank, lambda: "cta_split_num rank mismatch")
+        _check(len(cta_order) == rank, lambda: "cta_order rank mismatch")
+
+        element_ty_ir = element_ty.to_ir(self.builder)
+        layout_attr = layout._to_ir(self.builder)
+        mem_desc_ty = self.builder.get_tensor_mem_desc_ty(
+            element_ty_ir,
+            shape,
+            layout_attr,
+            shape,
+        )
+        cta_layout_attr = self.builder.get_cta_layout(
+            ctas_per_cga,
+            cta_split_num,
+            cta_order,
+        )
+        result = self.builder.get_distributed_layout_for_tmem_ldst(
+            mem_desc_ty,
+            instr_variant,
+            num_warps,
+            cta_layout_attr,
+        )
+        _check(result is not None,
+               lambda: f"TMEM layout '{instr_variant}' unsupported for shape {shape} and num_warps {num_warps}")
+        if splitn:
+            bitwidth = element_ty.primitive_bitwidth
+            _check(
+                len(result.reg_bases) * bitwidth > 32,
+                lambda: "splitn requires register bases of more than 2 32 bit registers")
+            N = shape[1]
+
+            def split_layout(layout):
+                reg_bases = layout.reg_bases
+                for bases_str in ("lane_bases", "warp_bases"):
+                    bases = getattr(layout, bases_str)
+                    for i, basis in enumerate(bases):
+                        if basis == [0, N / 2]:
+                            reg_bases[-1], bases[i] = bases[i], reg_bases[-1]
+                            return replace(layout, reg_bases=reg_bases, **{bases_str: bases})
+                assert False, "splitn requires at least one basis of [0, N / 2]"
+
+            result = split_layout(result)
+        return result
 
     def shared_dealloc(self, mem_desc):
         self.builder.create_local_dealloc(mem_desc.handle)

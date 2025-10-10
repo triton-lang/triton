@@ -866,7 +866,8 @@ def test_block_m_64_mma():
 
         a_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), col_stride=1)
         acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), col_stride=1)
-        a_layout: ttgl.constexpr = get_tmem_reg_layout(ttgl.float16, (BLOCK_M, N), a_tmem_layout, num_warps=4)
+        a_layout: ttgl.constexpr = get_tmem_reg_layout(ttgl.float16, (BLOCK_M, N), a_tmem_layout, num_warps=4,
+                                                       instr_variant="32x32b_splitn")
         b_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
         a_offsets = ttgl.set_auto_layout(a_offsets, a_layout)
         b_offsets = ttgl.set_auto_layout(b_offsets, b_layout)
@@ -879,9 +880,7 @@ def test_block_m_64_mma():
         ar_tmem = allocate_tensor_memory(ttgl.float16, (BLOCK_M, N), layout=a_tmem_layout)
         acc_tmem = allocate_tensor_memory(ttgl.float32, (BLOCK_M, N), layout=acc_tmem_layout)
 
-        a_blocked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
-        a_blocked = ttgl.convert_layout(a, a_blocked_layout)
-        a0, a1 = a_blocked.reshape((BLOCK_M, 2, N // 2)).permute(0, 2, 1).split()
+        a0, a1 = a.reshape((BLOCK_M, 2, N // 2)).permute(0, 2, 1).split()
 
         al = ttgl.join(a0, a1).permute(0, 2, 1).reshape((BLOCK_M, N))
         ar = ttgl.join(a1, a0).permute(0, 2, 1).reshape((BLOCK_M, N))
