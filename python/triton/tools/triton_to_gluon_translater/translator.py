@@ -404,6 +404,4 @@ def convert_triton_to_gluon(src: triton.runtime.jit.JITCallable) -> str:
     for line in unparse_original_assignments(constexpr_globals):
         out = line + "\n" + out
 
-    # Prepend required Gluon imports
-    out = GLUON_IMPORT_LINES + "\n\n" + out
     return out
