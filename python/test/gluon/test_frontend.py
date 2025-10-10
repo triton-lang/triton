@@ -2445,6 +2445,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 """)
 
 
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
+def test_amd_mfma_scaled_none(target):
+
+    @gluon.jit
+    def kernel():
+        mfma_layout: ttgl.constexpr = ttgl.amd.AMDMFMALayout(4, [16, 16, 128], True, [1, 1])
+        scale_layout: ttgl.constexpr = ttgl.DistributedLinearLayout([],
+                                                                    [[1, 0], [2, 0], [4, 0], [8, 0], [0, 1], [0, 2]],
+                                                                    [], [], [16, 4])
+
+        a = ttgl.full([16, 64], 0x11, ttgl.uint8, ttgl.DotOperandLayout(0, mfma_layout, 16))
+        b = ttgl.full([64, 16], 0x22, ttgl.uint8, ttgl.DotOperandLayout(1, mfma_layout, 16))
+
+        b_scale = ttgl.full([16, 4], 0x01, ttgl.uint8, scale_layout)
+        acc = ttgl.full([16, 16], 0, ttgl.float32, mfma_layout)
+        ttgl.amd.cdna4.mfma_scaled(a, None, 'e2m1', b, b_scale, 'e2m1', acc)
+
+    with pytest.raises(CompilationError) as e:
+        run_parser(kernel, target=target)
+
+    assert "Scales must not be None" in str(e.value)
+
+
 @pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
 def test_amd_wmma_scaled(target):
 
