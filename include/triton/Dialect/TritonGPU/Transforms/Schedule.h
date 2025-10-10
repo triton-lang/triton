@@ -127,6 +127,8 @@ public:
   int count(Operation *op) const { return opToStageAndCluster.count(op); }
 
   std::pair<int, Cluster> operator[](Operation *op) {
+    assert(opToStageAndCluster.count(op) &&
+           "An op is missing stage / cluster annotation.");
     return opToStageAndCluster[op];
   }
 
