@@ -433,17 +433,10 @@ def unparse_original_assignments(constexpr_globals: dict) -> list[str]:
 
 def convert_triton_to_gluon(src: triton.runtime.jit.JITCallable) -> str:
     """Convert a Triton JIT entry point into a Gluon source string."""
-    tree = ast.parse(src._src)
-    capture_scope = getattr(src, "__globals__", {}) or {}
     shared_jit_set: set = set()
-    function_queue: list = []
+    function_queue: list = [src]
     constexpr_globals: dict = {}
-    transformer = TritonToGluonTransformer(globals_map=capture_scope, shared_jit_set=shared_jit_set,
-                                           shared_queue=function_queue, is_jit=True,
-                                           constexpr_globals=constexpr_globals)
-    new_tree = transformer.visit(tree)
-    ast.fix_missing_locations(new_tree)
-    out = ast.unparse(new_tree)
+    out = GLUON_IMPORT_LINES
     # Process discovered callee JITFunctions, converting and appending them
     while function_queue:
         callee = function_queue.pop(0)
