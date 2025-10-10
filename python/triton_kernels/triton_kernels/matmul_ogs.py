@@ -374,7 +374,11 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor | None = None, out: torch
     Returns
     - The input tensor `x` (modified in place).
     """
-    M = x.shape[2]  # Only used for per-batch flex scale.
+    if x.ndim < 4:
+        x = x.view((1,) * (4 - x.ndim) + x.shape)
+    if out is None:
+        out = torch.empty((*x.shape[1:-2], num_groups, x.shape[-1]), device=x.device, dtype=x.dtype)
+    M = x.shape[2]
     if contig_group_size is not None:
         assert indx is None
         indx = torch.arange(x.shape[-2], device=x.device).view(-1, contig_group_size)
@@ -394,10 +398,6 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor | None = None, out: torch
         fused_activation = FusedActivation(FnSpecs.default(), tuple(), 1)
     if epilogue is None:
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
-    if x.ndim < 4:
-        x = x.view((1,) * (4 - x.ndim) + x.shape)
-    if out is None:
-        out = torch.empty((*x.shape[1:-2], num_groups, x.shape[-1]), device=x.device, dtype=x.dtype)
     K = 1 if indx is None else indx.shape[1]
     out_dtype = x.dtype if out_dtype is None else out_dtype
     assert x.shape[-1] % fused_activation.reduction_n == 0
