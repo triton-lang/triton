@@ -137,7 +137,7 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
     expt_data_local = filter_expt_data(rdata_global.expt_data, expt_assignment, rank)
     rdata_ep_local = RoutingData(
         gate_scal=rdata_global.gate_scal,
-        expt_hist=expt_data_local.hist,
+        expt_hist=expt_data_local.batch_sizes,
         n_expts_tot=expt_assignment.n_expts_per_shard[rank],
         n_expts_act=rdata_global.n_expts_act,
         expt_data=expt_data_local,

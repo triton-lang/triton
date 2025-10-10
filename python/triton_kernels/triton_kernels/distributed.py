@@ -320,7 +320,7 @@ def _filter_expt_data(expt_hist_out, expt_hist_inp, token_offs_raw_out, token_of
     tl.store(token_offs_pad_out + compacted_tile_count, compacted_block_count)
 
 
-def filter_expt_data(expt_data: RaggedTensorMetadata, expt_assignment: ExptAssignment, rank):
+def filter_expt_data(expt_data: RaggedTensorMetadata, expt_assignment: ExptAssignment, rank) -> RaggedTensorMetadata:
     expt_hist = torch.empty_like(expt_data.batch_sizes)
     token_offs_raw = torch.empty_like(expt_data.batch_offs)
     token_offs_pad_data = torch.empty_like(expt_data.block_offs_data)
