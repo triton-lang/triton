@@ -1,6 +1,7 @@
 # isort: off
 # fmt: off
 from enum import Enum
+import math
 import triton
 import torch
 import torch.nn.functional as F
@@ -13,7 +14,10 @@ from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, MXFP_BLOCK_SIZE, 
 
 
 class DequantScaleRoundingMode(Enum):
+    # 2^round_up(log2(max/max_q)) avoids clipping the max value
     ROUND_UP = 0
+    # 2^round_down(log2(max/max_power_of_2_q)) follows the OCP standard ~50% of
+    # chance of clipping the max value.
     ROUND_DOWN = 1
 
 
@@ -176,7 +180,10 @@ def downcast_to_mxfp_torch(src_tensor: torch.Tensor, out_quant_type: torch.dtype
 
     # Choose a max quantization value depending on type.
     max_quant_val = get_max_quant_val(out_quant_type)
-    dequant_scale = max_val / max_quant_val  # shape: (..., padded_axis_shape//32, 1)
+    if DEQUANT_SCALE_ROUNDING_MODE == DequantScaleRoundingMode.ROUND_UP:
+        dequant_scale = max_val / max_quant_val  # shape: (..., padded_axis_shape//32, 1)
+    else:
+        dequant_scale = max_val / (2 ** math.floor(math.log2(max_quant_val)))
 
     # Convert to int to round the FP32 scale, prior to quantization!
     ds_int = dequant_scale.view(torch.int32)
