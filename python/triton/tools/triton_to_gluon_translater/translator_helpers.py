@@ -100,6 +100,7 @@ def tl_dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=No
     tcgen05_mma_scaled(a_smem, b_smem, acc_tmem, a_scale_tmem, b_scale_tmem, lhs_format, rhs_format, use_acc=True)
     tcgen05_commit(bar)
     mbarrier.wait(bar, phase=0)
+    mbarrier.invalidate(bar)
     # Load back from TMEM using a register layout and convert to acc layout
     out = acc_tmem.load(tmem_reg_layout)
     ret_layout: ttgl.constexpr = default_blocked_layout([M, N], ttgl.num_warps())
