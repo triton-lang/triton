@@ -39,10 +39,7 @@ def max_allowable_mn(
     n: int,
     split_k: int,
     ) -> int:
-    if m * n >= max_mn:
-        return 1
-
-    return split_k
+    return 1 if m * n >= max_mn else split_k
 
 
 def all_constraints_satisfied(opt_flags: OptFlags, constraints: dict) -> bool:

@@ -1,10 +1,10 @@
 # isort: off
 # fmt: off
-import types
-from typing import Callable
 import pytest
+import types
 
-torch = pytest.importorskip("torch")
+import torch
+import triton
 
 import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
 
@@ -29,6 +29,12 @@ def setup_amd(monkeypatch):
         opt_flags.opt_flags_amd,
         "compute_block_nk",
         lambda *args, **kwargs: (64, 32),
+    )
+
+    fake_target = types.SimpleNamespace(backend="hip")
+    monkeypatch.setattr(
+        "triton.runtime.driver.active.get_current_target",
+        lambda: fake_target,
     )
 
 
@@ -64,6 +70,12 @@ def setup_nvidia(monkeypatch):
         opt_flags.opt_flags_nvidia,
         "compute_num_warps",
         lambda block_m, block_n, is_persistent, precision_config: 4,
+    )
+
+    fake_target = types.SimpleNamespace(backend="cuda")
+    monkeypatch.setattr(
+        "triton.runtime.driver.active.get_current_target",
+        lambda: fake_target,
     )
 
 
@@ -118,17 +130,52 @@ def test_make_default_opt_flags_nvidia_split_k_constraint(monkeypatch):
 
     assert flags.split_k == 3
 
+def test_max_allowable_mn_and_split_k_constraints(monkeypatch):
+    setup_nvidia(monkeypatch)
+
+    opt_flags._opt_flags = None
+    opt_flags.reset_opt_flags_constraints()
+    opt_flags.update_opt_flags_constraints(
+        {
+            "max_allowable_mn": 256,
+            # Without split_k, this should raise an error
+        }
+    )
+
+    with pytest.raises(opt_flags.InapplicableConstraint):
+        opt_flags.make_opt_flags(
+                    torch.float16,
+                    torch.float16,
+                    torch.float16,
+                    _DummyPrecisionConfig(),
+                    1,
+                    256,
+                    256,
+                    256,
+                    None,
+                    False,
+                    False,
+                    False,
+                    0,
+                    False,
+                    None,
+                )
 
 def test_max_allowable_mn(monkeypatch):
     setup_nvidia(monkeypatch)
 
     batch_size, m, n, k = 1, 256, 256, 256
 
-    bytes_float16 = 2
-    intermediate_size = batch_size * m * n * bytes_float16
-
     def get_flags(split_k, max_mn):
-        return opt_flags.make_default_opt_flags_nvidia(
+        opt_flags._opt_flags = None
+        opt_flags.reset_opt_flags_constraints()
+        opt_flags.update_opt_flags_constraints(
+            {
+                "split_k": split_k,
+                "max_allowable_mn": max_mn,
+            }
+        )
+        return opt_flags.make_opt_flags(
             torch.float16,
             torch.float16,
             torch.float16,
@@ -143,19 +190,17 @@ def test_max_allowable_mn(monkeypatch):
             False,
             0,
             False,
-            False,
-            {
-                "split_k": split_k,
-                "max_allowable_mn": max_mn,
-            },
+            None,
         )
 
     split_k = 6
+    # Allowable mn is less than actual mn, so split_k should be set to 1
     max_mn = (m * n) // 2
     flags = get_flags(split_k, max_mn)
     assert flags.split_k == 1
 
     split_k = 6
+    # Allowable mn is more than actual mn, so split_k should be unchanged
     max_mn = (m * n) * 2
     flags = get_flags(split_k, max_mn)
     assert flags.split_k == split_k
