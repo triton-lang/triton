@@ -4,8 +4,8 @@ from typing import Optional, Tuple, List, TYPE_CHECKING
 from dataclasses import dataclass
 from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
-from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
-from triton.experimental.gluon.language._layouts import BlockedLayout, _get_shape_per_cta, DistributedLinearLayout
+from triton.experimental.gluon.language._core import builtin, base_type, base_value
+from triton.experimental.gluon.language._layouts import DistributedLinearLayout, DistributedLinearLayout
 from triton.experimental.gluon.language._semantic import _check
 
 from . import tma
@@ -17,11 +17,18 @@ if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ..._semantic import GluonSemantic
 
+
+def _load_dialects(ctx):
+    ir.load_dialects(ctx)
+
+
+_load_dialects.__triton_builtin__ = True
+
 __all__ = [
     "allocate_tensor_memory",
     "async_copy",
     "fence_async_shared",
-    "get_tmem_32x32b_reg_layout",
+    "get_tmem_reg_layout",
     "get_tmem_scales_reg_layout",
     "mbarrier",
     "mma_v2",
@@ -91,49 +98,136 @@ class TensorMemoryScalesLayout:
 
 
 @constexpr_function
-def _cdiv(x, div):
-    return (x + div - 1) // div
+def get_tmem_reg_layout(
+    element_ty,
+    shape,
+    layout,
+    num_warps,
+    instr_variant="32x32b",
+    ctas_per_cga=None,
+    cta_split_num=None,
+    cta_order=None,
+):
+    """
+    Returns a DistributedLinearLayout compatible with TMEM load/store instructions.
+
+    Args:
+        element_ty (dtype): Element type stored in tensor memory.
+        shape (Sequence[int]): Global tensor shape addressed by the TMEM descriptor.
+        layout (TensorMemoryLayout): Tensor memory layout descriptor.
+        num_warps (int): Number of warps participating in the operation.
+        instr_variant (str): TMEM instruction variant (e.g. ``\"32x32b\"``).
+        ctas_per_cga (Optional[Sequence[int]]): CTA grouping along each dimension.
+        cta_split_num (Optional[Sequence[int]]): CTA split factors along each dimension.
+        cta_order (Optional[Sequence[int]]): CTA visitation order.
+    """
+    from triton._C.libtriton.gluon_ir import GluonOpBuilder
+
+    def _unwrap(value):
+        while hasattr(value, "value"):
+            value = value.value
+        return value
+
+    element_ty = _unwrap(element_ty)
+    layout = _unwrap(layout)
+    num_warps = _unwrap(num_warps)
+    instr_variant = _unwrap(instr_variant)
+    shape = [_unwrap(s) for s in shape]
+
+    if not isinstance(layout, TensorMemoryLayout):
+        raise TypeError("layout must be a TensorMemoryLayout")
+    if not hasattr(element_ty, "to_ir"):
+        raise TypeError("element_ty must be a Triton dtype")
+    if not isinstance(instr_variant, str):
+        raise TypeError("instr_variant must be a string")
+    if num_warps < 4 or (num_warps & (num_warps - 1)) != 0:
+        raise ValueError("num_warps must be a power of two and >= 4")
+
+    rank = len(shape)
+    if rank != 2:
+        raise ValueError("expected a 2D tensor")
+
+    if ctas_per_cga is None:
+        ctas_per_cga = [1] * rank
+    else:
+        ctas_per_cga = [_unwrap(x) for x in ctas_per_cga]
+    if cta_split_num is None:
+        cta_split_num = [1] * rank
+    else:
+        cta_split_num = [_unwrap(x) for x in cta_split_num]
+    if cta_order is None:
+        cta_order = list(reversed(range(rank)))
+    else:
+        cta_order = [_unwrap(x) for x in cta_order]
+
+    if len(ctas_per_cga) != rank:
+        raise ValueError("ctas_per_cga rank mismatch")
+    if len(cta_split_num) != rank:
+        raise ValueError("cta_split_num rank mismatch")
+    if len(cta_order) != rank:
+        raise ValueError("cta_order rank mismatch")
+
+    context = ir.context()
+    _load_dialects(context)
+    builder = GluonOpBuilder(context)
+    element_ty_ir = element_ty.to_ir(builder)
+    layout_attr = layout._to_ir(builder)
+    mem_desc_ty = builder.get_tensor_mem_desc_ty(element_ty_ir, shape, layout_attr, shape)
+    cta_layout_attr = builder.get_cta_layout(ctas_per_cga, cta_split_num, cta_order)
+    result = builder.get_distributed_layout_for_tmem_ldst(mem_desc_ty, instr_variant, num_warps, cta_layout_attr)
+    if result is None:
+        raise ValueError(f"TMEM layout '{instr_variant}' unsupported for shape {shape} and num_warps {num_warps}")
+    assert isinstance(result, DistributedLinearLayout)
+    return result
 
 
 @constexpr_function
-def get_tmem_32x32b_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_split_num=None, cta_order=None):
-    """Returns a BlockedLayout compatible with load/store on tensor memory with the 32x32b instruction variant.
+def get_tmem_scales_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_split_num=None, cta_order=None):
+    """Return a linear layout that is compatible with tmem scaled layout.
     """
     assert len(shape) == 2, "expected a 2D tensor"
     assert num_warps in [4, 8], "expected 4 or 8 warps"
 
+    # Use per-CTA shape to build the linear layout bases
     shape_per_cta = _get_shape_per_cta(shape, cta_split_num)
-    blocks_per_tile = [shape_per_cta[0] // M, shape_per_cta[1] // N]
-    num_blocks = blocks_per_tile[0] * blocks_per_tile[1]
+    M_cta, N_cta = shape_per_cta[0], shape_per_cta[1]
 
-    num_warp_groups = num_warps // 4
-    if M == 64:
-        threads_per_warp = [16, 2]
-        if num_blocks == 1:
-            size_per_thread = [1, _cdiv(N, num_warp_groups * 2)]
-            warps_per_cta = [4, num_warp_groups]
+    # Register bases: pack 4 scales together along N; if fewer than 4, replicate.
+    reg_bases = []
+    i = 1
+    while i < 4:
+        if i >= N_cta:
+            reg_bases.append([0, 0])
         else:
             size_per_thread = [1, _cdiv(N, 2)]
             warps_per_cta = [4 * min(blocks_per_tile[0], num_warp_groups)]
             warps_per_cta.append(_cdiv(num_warp_groups, warps_per_cta[0] // 4))
     else:
-        if shape[0] > 128:
-            size_per_thread = [1, N]
-            threads_per_warp = [32, 1]
-            warps_per_cta = [4 * num_warp_groups, 1]
-        else:
-            size_per_thread = [1, _cdiv(N, num_warp_groups)]
-            threads_per_warp = [32, 1]
-            warps_per_cta = [4, num_warp_groups]
-    return BlockedLayout(
-        size_per_thread=size_per_thread,
-        threads_per_warp=threads_per_warp,
-        warps_per_cta=warps_per_cta,
-        order=[0, 1],
-        ctas_per_cga=ctas_per_cga,
-        cta_split_num=cta_split_num,
-        cta_order=cta_order,
-    )
+        cta_split_num = [_unwrap(x) for x in cta_split_num]
+    if cta_order is None:
+        cta_order = list(reversed(range(rank)))
+    else:
+        cta_order = [_unwrap(x) for x in cta_order]
+
+    if len(ctas_per_cga) != rank:
+        raise ValueError("ctas_per_cga rank mismatch")
+    if len(cta_split_num) != rank:
+        raise ValueError("cta_split_num rank mismatch")
+    if len(cta_order) != rank:
+        raise ValueError("cta_order rank mismatch")
+
+    context = ir.context()
+    _load_dialects(context)
+    builder = GluonOpBuilder(context)
+    element_ty_ir = element_ty.to_ir(builder)
+    layout_attr = layout._to_ir(builder)
+    mem_desc_ty = builder.get_tensor_mem_desc_ty(element_ty_ir, shape, layout_attr, shape)
+    cta_layout_attr = builder.get_cta_layout(ctas_per_cga, cta_split_num, cta_order)
+    result = builder.get_distributed_layout_for_tmem_ldst(mem_desc_ty, instr_variant, num_warps, cta_layout_attr)
+    if result is None:
+        raise ValueError(f"TMEM layout '{instr_variant}' unsupported for shape {shape} and num_warps {num_warps}")
+    assert isinstance(result, DistributedLinearLayout)
+    return result
 
 
 @constexpr_function
@@ -270,7 +364,7 @@ class tensor_memory_descriptor(base_value):
         Returns:
             tensor: A distributed tensor containing the loaded data.
         """
-        layout = _unwrap_if_constexpr(layout)
+        layout = ttgl._unwrap_if_constexpr(layout)
         ret_ty = ttgl.distributed_type(self.dtype, self.shape, layout)
         builder = _semantic.builder
         handle = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle)
@@ -285,7 +379,7 @@ class tensor_memory_descriptor(base_value):
             value (tensor): The tensor to store.
             pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         """
-        pred = _unwrap_if_constexpr(pred)
+        pred = ttgl._unwrap_if_constexpr(pred)
         pred = _semantic.to_tensor(pred)
         assert value.shape == self.shape, f"source shape {value.shape} does not match destination shape {self.shape}"
         assert value.dtype == self.dtype, f"source dtype {value.dtype} does not match destination dtype {self.dtype}"
@@ -303,8 +397,8 @@ class tensor_memory_descriptor(base_value):
         Returns:
             tensor_memory_descriptor: Descriptor for the subslice.
         """
-        start = _unwrap_if_constexpr(start)
-        length = _unwrap_if_constexpr(length)
+        start = ttgl._unwrap_if_constexpr(start)
+        length = ttgl._unwrap_if_constexpr(length)
         _check(isinstance(start, int), lambda: "start must be a constant int")
         _check(isinstance(length, int), lambda: "length must be a constant int")
         shape = self.shape[:-1] + [length]
@@ -351,9 +445,9 @@ class tensor_memory_descriptor(base_value):
         Returns:
             tensor_memory_descriptor: Descriptor with updated type and layout.
         """
-        dtype = _unwrap_if_constexpr(dtype)
-        shape = [_unwrap_if_constexpr(s) for s in shape]
-        layout = _unwrap_if_constexpr(layout)
+        dtype = ttgl._unwrap_if_constexpr(dtype)
+        shape = [ttgl._unwrap_if_constexpr(s) for s in shape]
+        layout = ttgl._unwrap_if_constexpr(layout)
 
         ty = tensor_memory_descriptor_type(dtype, shape, layout, shape)
         handle = _semantic.builder.create_memdesc_reinterpret(ty.to_ir(_semantic.builder), self.handle)
@@ -374,9 +468,9 @@ def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None
     Returns:
         tensor_memory_descriptor: Descriptor for the allocated memory.
     """
-    element_ty = _unwrap_if_constexpr(element_ty)
-    shape = _unwrap_if_constexpr(shape)
-    layout = _unwrap_if_constexpr(layout)
+    element_ty = ttgl._unwrap_if_constexpr(element_ty)
+    shape = ttgl._unwrap_if_constexpr(shape)
+    layout = ttgl._unwrap_if_constexpr(layout)
     value = value.handle if value is not None else None
 
     ty = tensor_memory_descriptor_type(element_ty, shape, layout, shape)
