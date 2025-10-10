@@ -574,6 +574,10 @@ bool isStoredAlongDim0(Operation *op) {
   getForwardSlice(op, &forwardSliceSet, fwdOpt);
 
   for (Operation *op : forwardSliceSet) {
+    // If we see ConvertLayoutOp, immediately fail
+    if (isa<triton::gpu::ConvertLayoutOp>(op))
+      return false;
+
     Value ptr = llvm::TypeSwitch<Operation *, Value>(op)
                     .Case<triton::StoreOp, triton::amdgpu::MaskedStoreOp,
                           triton::amdgpu::BufferStoreOp,
