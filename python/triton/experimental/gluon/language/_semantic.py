@@ -177,7 +177,9 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         ret_ty = ttgl.distributed_type(ty.element_ty, ty.shape, layout)
         ret_ty_ir = ret_ty.to_ir(self.builder)
         if assert_trivial and not self.builder.is_convert_layout_trivial(ret_ty_ir, value.handle):
-            raise TypeError(f"layout conversion from {ty.layout} to {layout} is not trivial")
+            raise TypeError(
+                f"layout conversion from {ty.layout} to {layout} is not trivial.\nThe linear layouts are:\n{self.to_linear_layout(ty.layout, ty.shape)}\n{self.to_linear_layout(layout, ty.shape)}"
+            )
         handle = self.builder.create_convert_layout(ret_ty_ir, value.handle)
         return ttgl.tensor(handle, ret_ty)
 

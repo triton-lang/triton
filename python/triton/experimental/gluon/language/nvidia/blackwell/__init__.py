@@ -99,14 +99,14 @@ class TensorMemoryScalesLayout:
 
 @constexpr_function
 def get_tmem_reg_layout(
-    element_ty,
-    shape,
-    layout,
-    num_warps,
-    instr_variant="32x32b",
-    ctas_per_cga=None,
-    cta_split_num=None,
-    cta_order=None,
+        element_ty,
+        shape,
+        layout,
+        num_warps,
+        instr_variant="32x32b",
+        ctas_per_cga=(1, 1),
+        cta_split_num=(1, 1),
+        cta_order=(1, 0),
 ):
     """
     Returns a DistributedLinearLayout compatible with TMEM load/store instructions.
@@ -117,9 +117,9 @@ def get_tmem_reg_layout(
         layout (TensorMemoryLayout): Tensor memory layout descriptor.
         num_warps (int): Number of warps participating in the operation.
         instr_variant (str): TMEM instruction variant (e.g. ``\"32x32b\"``).
-        ctas_per_cga (Optional[Sequence[int]]): CTA grouping along each dimension.
-        cta_split_num (Optional[Sequence[int]]): CTA split factors along each dimension.
-        cta_order (Optional[Sequence[int]]): CTA visitation order.
+        ctas_per_cga (tuple[int, int]): CTA grouping along each dimension.
+        cta_split_num (tuple[int, int]): CTA split factors along each dimension.
+        cta_order (tuple[int, int]): CTA order.
     """
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
 
@@ -147,18 +147,9 @@ def get_tmem_reg_layout(
     if rank != 2:
         raise ValueError("expected a 2D tensor")
 
-    if ctas_per_cga is None:
-        ctas_per_cga = [1] * rank
-    else:
-        ctas_per_cga = [_unwrap(x) for x in ctas_per_cga]
-    if cta_split_num is None:
-        cta_split_num = [1] * rank
-    else:
-        cta_split_num = [_unwrap(x) for x in cta_split_num]
-    if cta_order is None:
-        cta_order = list(reversed(range(rank)))
-    else:
-        cta_order = [_unwrap(x) for x in cta_order]
+    ctas_per_cga = [_unwrap(x) for x in ctas_per_cga]
+    cta_split_num = [_unwrap(x) for x in cta_split_num]
+    cta_order = [_unwrap(x) for x in cta_order]
 
     if len(ctas_per_cga) != rank:
         raise ValueError("ctas_per_cga rank mismatch")
