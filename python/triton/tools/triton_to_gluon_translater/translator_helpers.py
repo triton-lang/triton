@@ -15,17 +15,29 @@ from triton.experimental.gluon.language.nvidia.hopper import tma
 from triton.experimental.gluon.language.nvidia.blackwell import tma as tma_blackwell
 
 
+@gluon.constexpr_function
+def get_swizzle_byte_width(bitwidth):
+    swizzle = min(bitwidth, 128)
+    swizzle = 0 if swizzle < 32 else swizzle
+    return swizzle
+
+
 @gluon.jit
 def tl_dot(a, b, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=ttgl.float32):
     # TODO: check if MMAv5 cannot be used and fallback to mmav2
     M: ttgl.constexpr = a.type.shape[0]
     N: ttgl.constexpr = b.type.shape[1]
     K: ttgl.constexpr = a.type.shape[1]
+    ttgl.static_assert(M >= 64 and N >= 16 and K >= 16, "TODO: support smaller shapes using mmav2")
     # Shared memory layouts for inputs (simple default)
-    nvmma_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=32, transposed=False,
-                                                          element_bitwidth=a.dtype.primitive_bitwidth, rank=2)
-    a_smem = ttgl.allocate_shared_memory(a.dtype, [M, K], nvmma_layout, a)
-    b_smem = ttgl.allocate_shared_memory(b.dtype, [K, N], nvmma_layout, b)
+    swizzle_byte_with_a: ttgl.constexpr = get_swizzle_byte_width(a.dtype.primitive_bitwidth * K)
+    swizzle_byte_with_b: ttgl.constexpr = get_swizzle_byte_width(b.dtype.primitive_bitwidth * N)
+    nvmma_layout_a: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzle_byte_with_a, transposed=False,
+                                                            element_bitwidth=a.dtype.primitive_bitwidth, rank=2)
+    nvmma_layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzle_byte_with_b, transposed=True,
+                                                            element_bitwidth=a.dtype.primitive_bitwidth, rank=2)
+    a_smem = ttgl.allocate_shared_memory(a.dtype, [M, K], nvmma_layout_a, a)
+    b_smem = ttgl.allocate_shared_memory(b.dtype, [K, N], nvmma_layout_b, b)
     acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, N], col_stride=1)
     tmem_reg_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(M, N, [M, N], ttgl.num_warps())
     if acc is not None:
@@ -52,13 +64,16 @@ def tl_dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=No
     # TODO: check if MMAv5_scaled cannot be used and fallback to mmav5/mmav3 or mmav2
     M: ttgl.constexpr = lhs_scale.type.shape[0]
     N: ttgl.constexpr = rhs_scale.type.shape[0]
-
-    fp4_padded_a = lhs_format == "e2m1" and rhs_format != "e2m1"
-    fp4_padded_b = lhs_format != "e2m1" and rhs_format == "e2m1"
-    nvmma_layout_a: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=32, transposed=False, element_bitwidth=8,
-                                                            rank=2, fp4_padded=fp4_padded_a)
-    nvmma_layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=32, transposed=True, element_bitwidth=8,
-                                                            rank=2, fp4_padded=fp4_padded_b)
+    K: ttgl.constexpr = lhs_scale.type.shape[1] * 32
+    ttgl.static_assert(M >= 128 and N >= 16 and K >= 16, "TODO: support smaller shapes using mmav2")
+    fp4_padded_a: ttgl.constexpr = lhs_format == "e2m1" and rhs_format != "e2m1"
+    fp4_padded_b: ttgl.constexpr = lhs_format != "e2m1" and rhs_format == "e2m1"
+    swizzle_byte_with_a: ttgl.constexpr = get_swizzle_byte_width(lhs.dtype.primitive_bitwidth * K)
+    swizzle_byte_with_b: ttgl.constexpr = get_swizzle_byte_width(rhs.dtype.primitive_bitwidth * N)
+    nvmma_layout_a: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzle_byte_with_a, transposed=False,
+                                                            element_bitwidth=8, rank=2, fp4_padded=fp4_padded_a)
+    nvmma_layout_b: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzle_byte_with_b, transposed=True,
+                                                            element_bitwidth=8, rank=2, fp4_padded=fp4_padded_b)
 
     a_smem = ttgl.allocate_shared_memory(lhs.dtype, lhs.shape, nvmma_layout_a, lhs)
     b_smem = ttgl.allocate_shared_memory(rhs.dtype, rhs.shape, nvmma_layout_b, rhs)

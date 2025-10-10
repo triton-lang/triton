@@ -108,8 +108,8 @@ class TritonToGluonTransformer(ast.NodeTransformer):
             return None
         return None
 
-    def forward_call(self, node: ast.Call, target_func: ast.expr) -> ast.Call:
-        new_keywords = [kw for kw in node.keywords if kw.arg not in {"can_reorder"}]
+    def forward_call(self, node: ast.Call, target_func: ast.expr, filter_keywords: list[str] = []) -> ast.Call:
+        new_keywords = [kw for kw in node.keywords if kw.arg not in filter_keywords]
         return ast.Call(func=target_func, args=list(node.args), keywords=list(new_keywords))
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -164,8 +164,12 @@ class TritonToGluonTransformer(ast.NodeTransformer):
                     "num_threads": ast.Name(id="get_num_threads_per_warp", ctx=ast.Load()),
                 }
                 mapped_target = builtin_mapping.get(builtin_name)
+                filter_keywords = []
+                # for reshape drop the can_reorder keyword, it is just an optimization and doesn't help much in Gluon.
+                if builtin_name == "reshape":
+                    filter_keywords = ["can_reorder"]
                 if mapped_target is not None:
-                    node = self.forward_call(node, mapped_target)
+                    node = self.forward_call(node, mapped_target, filter_keywords)
                     # For split, apply on the source argument rather than wrapping destination
                     if builtin_name == "split":
                         source_arg = node.args[0]
@@ -174,7 +178,7 @@ class TritonToGluonTransformer(ast.NodeTransformer):
                         node.args[0] = ast.copy_location(wrapped_src, source_arg)
                     # For shape/layout changing ops, wrap to reset layout
                     if builtin_name in {"reshape", "trans", "join", "reduce", "split"}:
-                        forwarded_call = self.forward_call(node, mapped_target)
+                        forwarded_call = self.forward_call(node, mapped_target, filter_keywords)
                         reset_layout_wrapped = ast.Call(func=ast.Name(id="reset_to_default_layout", ctx=ast.Load()),
                                                         args=[forwarded_call], keywords=[])
                         node = ast.copy_location(reset_layout_wrapped, node)
