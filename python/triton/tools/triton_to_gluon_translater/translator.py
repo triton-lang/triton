@@ -157,7 +157,7 @@ class TritonToGluonTransformer(ast.NodeTransformer):
                     node,
                 )
             if resolved_callable is triton.language.core.static_range:
-                return self.forward_call(node, ast.Name(id="ttgl.static_range", ctx=ast.Load()))
+                return self.forward_call(node, self.ttgl_attr("static_range"))
         else:
             if isinstance(node.func, ast.Attribute) and node.func.attr in ["store", "load", "gather"]:
                 helper_name = "tl_obj_" + node.func.attr
