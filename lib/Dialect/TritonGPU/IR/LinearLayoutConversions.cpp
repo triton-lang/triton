@@ -1446,10 +1446,14 @@ LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
 
 // PTX ISA - Warp-level MMA Block Scaling
 //   https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-block-scaling
-// Scale matrix shapes by scale_vec_size
-//   1X: scale_A = M x 1, scale_B = 1 x N
 //
-// Supported .kind x scale_vec_size
+// This function generates layouts for scale tensors used in scaled dot
+// operations. Scale tensor shapes:
+//   scale_A (dotOperandIdx=0): M x K (where M is rows, K is number of scale
+//   groups) scale_B (dotOperandIdx=1): N x K (where N is cols, K is number of
+//   scale groups)
+//
+// Supported .kind x scale_vec_size:
 //   mxf8f6f4 with UE8M0 scales -> .scale_vec::1X
 //
 // Implementation notes:
@@ -1478,8 +1482,9 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   const int totalWarps = mWarps * nWarps;
   const unsigned mRep_warp = tilesPerWarp[mIndex];
   const unsigned nRep_warp = tilesPerWarp[nIndex];
-  const unsigned kIdx = (dotOperandShape[0] == 1) ? 0 : 1;
-  const unsigned mnIdx = 1 - kIdx;
+
+  const unsigned kIdx = 1;  // K dimension is always at index 1
+  const unsigned mnIdx = 0; // M/N dimension is always at index 0
 
   LinearLayout L = identityStandardND(kRegister, SmallVector<unsigned>(rank, 1),
                                       ArrayRef<unsigned>({mnIdx, kIdx}));
@@ -1494,12 +1499,12 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   L = L * laneLayout;
   L = L * LinearLayout::identity1D(kSize, kRegister, outDims[kIdx]);
   if (dotOperandIdx == 0) {
-    L = L * LinearLayout::zeros1D(totalWarps / mWarps, kWarp, outDims[mnIdx]);
+    L = L * LinearLayout::zeros1D(nWarps, kWarp, outDims[mnIdx]);
     L = L * LinearLayout::identity1D(mWarps, kWarp, outDims[mnIdx]);
     L = L * LinearLayout::identity1D(mRep_warp, kRegister, outDims[mnIdx]);
   } else {
     L = L * LinearLayout::identity1D(nWarps, kWarp, outDims[mnIdx]);
-    L = L * LinearLayout::zeros1D(totalWarps / nWarps, kWarp, outDims[mnIdx]);
+    L = L * LinearLayout::zeros1D(mWarps, kWarp, outDims[mnIdx]);
     L = L * LinearLayout::identity1D(nRep_warp, kRegister, outDims[mnIdx]);
   }
   return combineCtaCgaWithShape(L, ctaLayoutAttr, dotOperandShape);
