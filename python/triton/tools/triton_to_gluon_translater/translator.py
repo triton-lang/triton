@@ -383,7 +383,7 @@ def convert_triton_to_gluon(src: triton.runtime.jit.JITCallable) -> str:
     shared_jit_set: set = set()
     function_queue: list = [src]
     constexpr_globals: dict = {}
-    out = GLUON_IMPORT_LINES
+    out = ""
     # Process discovered callee JITFunctions, converting and appending them
     while function_queue:
         callee = function_queue.pop(0)
@@ -403,5 +403,8 @@ def convert_triton_to_gluon(src: triton.runtime.jit.JITCallable) -> str:
     # Pull constexpr globals from the original source code
     for line in unparse_original_assignments(constexpr_globals):
         out = line + "\n" + out
+
+    # Prepend required Gluon imports
+    out = GLUON_IMPORT_LINES + "\n\n" + out
 
     return out
