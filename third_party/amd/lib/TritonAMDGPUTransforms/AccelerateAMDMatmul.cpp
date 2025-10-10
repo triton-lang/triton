@@ -600,10 +600,13 @@ public:
 
     // Use transposed mfma layout to enable larger vectorization for global
     // store instructions along dimension 1. Use an untransposed mfma layout to
-    // enable vectorization along dimension 0. Note that we can not support
-    // transposed mfma 4x64 as it requires to broadcast the operand A.
+    // enable vectorization along dimension 0. There are two special cases:
+    // 1. We can not support transposed mfma 4x64 as it requires to broadcast
+    // the operand A.
+    // 2. We always transpose 64x4 mfma in order to use the mfma broadcast.
     bool isTransposed = !(mDim == 4 && nDim == 64) &&
-                        !(mlir::LLVM::AMD::isStoredAlongDim0(dotOp));
+                            !(mlir::LLVM::AMD::isStoredAlongDim0(dotOp)) ||
+                        (mDim == 64 && nDim == 4);
     auto aElemTy = mfmaInstr->aElementType;
     auto is16BitElemTy = (aElemTy.isF16() || aElemTy.isBF16());
 
