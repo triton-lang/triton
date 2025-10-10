@@ -148,6 +148,12 @@ def _create_tensor_from_tuples(Dst, Srcs: tl.tuple):
         tl.store(Dst + i, Srcs[i].to(tl.int64, bitcast=True))
 
 
+def create_tensor_from_tuples(dst_shape, src_tuples, dtype, device):
+    dst = torch.empty(dst_shape, dtype=dtype, device=device)
+    _create_tensor_from_tuples[(1, )](dst, src_tuples)
+    return dst
+
+
 def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
     expt_bitmask = expt_assignment.expt_bitmask
     # extract problem dimensions
@@ -168,8 +174,7 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
     # create tensor of peer pointers
     hdl = symm_mem.rendezvous(dst_local, dist.group.WORLD)
     peer_bufs = [hdl.get_buffer(r, dst_local.shape, dst_local.dtype) for r in range(n_ranks)]
-    peer_dst_ptrs = torch.empty((n_ranks, ), dtype=torch.int64, device=device)
-    _create_tensor_from_tuples[(1, )](peer_dst_ptrs, tuple([int(buf.data_ptr()) for buf in peer_bufs]))
+    peer_dst_ptrs = create_tensor_from_tuples((n_ranks, ), tuple([int(buf.data_ptr()) for buf in peer_bufs]), dtype=torch.int64, device=device)
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_local,)
@@ -237,8 +242,7 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
     dst_local = symm_mem.empty((n_tokens_local, d_model), dtype=src.dtype, device=device)
     hdl = symm_mem.rendezvous(dst_local, dist.group.WORLD)
     peer_bufs = [hdl.get_buffer(r, dst_local.shape, dst_local.dtype) for r in range(n_ranks)]
-    peer_dst_ptrs = torch.empty((n_ranks, ), dtype=torch.int64, device=device)
-    _create_tensor_from_tuples[(1, )](peer_dst_ptrs, tuple([int(buf.data_ptr()) for buf in peer_bufs]))
+    peer_dst_ptrs = create_tensor_from_tuples((n_ranks, ), tuple([int(buf.data_ptr()) for buf in peer_bufs]), dtype=torch.int64, device=device)
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_global,)
