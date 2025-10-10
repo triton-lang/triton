@@ -14,8 +14,9 @@ operation ::= `amdgpu.async_tdm_copy_global_to_local` $desc `[` $indices `]` `in
 This operation copies data from global memory to local memory
 asynchronously. This is analogue to tt.load except the data are copied to
 local memory pointed by `result` instead of a distributed tensor. The data
-copied depends on the global memory descriptor pointed to by `desc`. Set
-`pred` to false will disable the copy.
+copied depends on the global memory pointed to by `desc`. Set `pred` to
+false will disable the copy. This operation does not support shared memory
+swizzling.
 
 Interfaces: `InferTypeOpInterface`
 
@@ -33,6 +34,32 @@ Interfaces: `InferTypeOpInterface`
 | Result | Description |
 | :----: | ----------- |
 | `token` | async token type |
+
+
+### `amdgpu.async_tdm_copy_local_to_global` (triton::amdgpu::AsyncTDMCopyLocalToGlobalOp)
+
+_Copy data based on descriptor from local memory to global memory asynchronously_
+
+Syntax:
+
+```
+operation ::= `amdgpu.async_tdm_copy_local_to_global` $desc `[` $indices `]` `from` $src
+              attr-dict `:` qualified(type($src)) `->` qualified(type($desc))
+```
+
+This operation copies data from local memory to global memory
+asynchronously. This is analogue to tt.store except the data are copied from
+local memory pointed by `src` instead of a distributed tensor. The copy
+destination depends on the global memory pointed to by `desc`. This
+operation does not support shared memory padding or swizzling.
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system |
+| `indices` | variadic of 32-bit signless integer |
+| `src` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 
 
 ### `amdgpu.async_tdm_wait` (triton::amdgpu::AsyncTDMWait)
