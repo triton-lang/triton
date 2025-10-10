@@ -4,6 +4,7 @@
 #include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
+#include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
 using namespace mlir;
@@ -23,7 +24,7 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
 triton::gpu::PaddedSharedEncodingAttr
 composePaddedLayout(const triton::AMD::TargetInfo &targetInfo,
                     triton::gpu::DotOperandEncodingAttr dotOpEnc,
-                    triton::gpu::TensorOrMemDesc srcTy,
+                    triton::TensorOrMemDesc srcTy,
                     ArrayRef<unsigned> sharedOrder, bool useAsyncCopy);
 
 #endif

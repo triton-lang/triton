@@ -1146,7 +1146,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
     } else {
       if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
         return std::nullopt;
-      auto srcTy = cast<triton::gpu::TensorOrMemDesc>(val.getType());
+      auto srcTy = cast<triton::TensorOrMemDesc>(val.getType());
       auto dstTy = cast<RankedTensorType>(user->getResult(0).getType());
 
       // FIXME This may not be correct for multiple CTA, but getCTALayout is NYI
@@ -1157,8 +1157,8 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
 
       if (auto dot =
               dyn_cast<ttg::DotOperandEncodingAttr>(dstTy.getEncoding())) {
-        auto order = getOrderForMemory(srcTy);
-        unsigned bitWidth = srcTy.getElementTypeBitWidth();
+        auto order = triton::gpu::getOrderForMemory(srcTy);
+        unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
         tempAttr = ttg::SwizzledSharedEncodingAttr::get(
             val.getContext(), dot, srcTy.getShape(), order, CTALayout, bitWidth,
             /*needTrans=*/false);

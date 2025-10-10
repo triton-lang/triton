@@ -9,6 +9,4 @@
 #define GET_TYPEDEF_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Types.h.inc"
 
-#include "triton/Dialect/TritonGPU/IR/TypeInterfaces.h.inc"
-
 #endif // TRITON_IR_TYPES_H_

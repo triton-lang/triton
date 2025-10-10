@@ -7,7 +7,7 @@ include "mlir/IR/OpBase.td"
 // memory-descriptor-like types, exposing common layout and element properties.
 // Implementations may be dynamically attached by target backends (e.g.,
 // TritonGPU for RankedTensorType and MemDescType).
-def TT_TensorOrMemDescLike : TypeInterface<"TensorOrMemDescLike"> {
+def TT_TensorOrMemDesc : TypeInterface<"TensorOrMemDesc"> {
   let cppNamespace = "::mlir::triton";
   let methods = [
     InterfaceMethod<"Returns the encoding attribute, if any",

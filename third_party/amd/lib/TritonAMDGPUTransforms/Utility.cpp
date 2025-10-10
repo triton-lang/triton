@@ -138,7 +138,7 @@ int deduceMinCountOnDefChain(Value defValue, Operation *consumerOp,
 // Since padding is applied in groups of 16 rows, the total data size for this
 // layout must be at least 16 KB (16 * 1024 bytes).
 ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
-    ttg::DotOperandEncodingAttr dotOpEnc, ttg::TensorOrMemDesc srcTy,
+    ttg::DotOperandEncodingAttr dotOpEnc, triton::TensorOrMemDesc srcTy,
     ArrayRef<unsigned> sharedOrder, bool useAsyncCopy) {
   auto *ctx = srcTy.getContext();
 
@@ -305,8 +305,8 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
 ttg::PaddedSharedEncodingAttr
 composePaddedLayout(const tt::AMD::TargetInfo &targetInfo,
                     ttg::DotOperandEncodingAttr dotOpEnc,
-                    ttg::TensorOrMemDesc srcTy, ArrayRef<unsigned> sharedOrder,
-                    bool useAsyncCopy) {
+                    triton::TensorOrMemDesc srcTy,
+                    ArrayRef<unsigned> sharedOrder, bool useAsyncCopy) {
   if (useAsyncCopy &&
       targetInfo.getISAFamily() == triton::AMD::ISAFamily::CDNA4) {
     return composePaddedLayoutForAsyncCopyCDNA4(dotOpEnc, srcTy, sharedOrder,

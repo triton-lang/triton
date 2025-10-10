@@ -8,7 +8,6 @@ add_triton_library(TritonGPUIR
   DEPENDS
   TritonGPUTableGen
   TritonGPUAttrDefsIncGen
-  TritonGPUTypeInterfacesIncGen
   TritonGPUOpInterfacesIncGen
 
   LINK_LIBS PUBLIC

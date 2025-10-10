@@ -10,8 +10,8 @@ using namespace mlir;
 LogicalResult OpTrait::impl::verifyEquivalentType(Type typeA, Type typeB) {
   // Prefer interface-based comparison when available (covers MemDesc-like
   // types without creating a dependency on TritonGPU).
-  if (auto aLike = dyn_cast<triton::TensorOrMemDescLike>(typeA)) {
-    if (auto bLike = dyn_cast<triton::TensorOrMemDescLike>(typeB)) {
+  if (auto aLike = dyn_cast<triton::TensorOrMemDesc>(typeA)) {
+    if (auto bLike = dyn_cast<triton::TensorOrMemDesc>(typeB)) {
       if (aLike.getShape() != bLike.getShape())
         return failure();
       if (aLike.getAllocShape() != bLike.getAllocShape())
