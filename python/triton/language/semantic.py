@@ -1471,8 +1471,6 @@ class TritonSemantic(Generic[TensorTy]):
             input_precision = "BF16x3"
         if input_precision == "BF16X6":
             input_precision = "BF16x6"
-        if input_precision == "BF16X9":
-            input_precision = "BF16x9"
         return getattr(ir.INPUT_PRECISION, input_precision)
 
     def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],

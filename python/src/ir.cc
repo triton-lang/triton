@@ -310,7 +310,6 @@ void init_triton_ir(py::module &&m) {
       .value("IEEE", InputPrecision::IEEE)
       .value("BF16x3", InputPrecision::BF16x3)
       .value("BF16x6", InputPrecision::BF16x6)
-      .value("BF16x9", InputPrecision::BF16x9)
       .export_values();
 
   py::enum_<ScaleDotElemType>(m, "ScaleDotElemTypeTY", py::module_local())
