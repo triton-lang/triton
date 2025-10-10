@@ -320,25 +320,25 @@ def _filter_expt_data(expt_hist_out, expt_hist_inp, token_offs_raw_out, token_of
     tl.store(token_offs_pad_out + compacted_tile_count, compacted_block_count)
 
 
-def filter_expt_data(expt_data, expt_assignment, rank):
-    expt_hist = torch.empty_like(expt_data.hist)
-    token_offs_raw = torch.empty_like(expt_data.token_offs_raw)
-    token_offs_pad_data = torch.empty_like(expt_data.token_offs_pad_data)
-    block_pid_map_data = torch.empty_like(expt_data.block_pid_map_data)
+def filter_expt_data(expt_data: RaggedTensorMetadata, expt_assignment: ExptAssignment, rank):
+    expt_hist = torch.empty_like(expt_data.batch_sizes)
+    token_offs_raw = torch.empty_like(expt_data.batch_offs)
+    token_offs_pad_data = torch.empty_like(expt_data.block_offs_data)
+    block_pid_map_data = torch.empty_like(expt_data.block_schedule_data)
 
     _filter_expt_data[(token_offs_pad_data.shape[0], )](
         expt_hist,
-        expt_data.hist,
+        expt_data.batch_sizes,
         token_offs_raw,
-        expt_data.token_offs_raw,
+        expt_data.batch_offs,
         token_offs_pad_data,
         token_offs_pad_data.stride(0),
-        expt_data.token_offs_pad_data,
-        expt_data.token_offs_pad_data.stride(0),
+        expt_data.block_offs_data,
+        expt_data.block_offs_data.stride(0),
         block_pid_map_data,
         block_pid_map_data.stride(0),
-        expt_data.block_pid_map_data,
-        expt_data.block_pid_map_data.stride(0),
+        expt_data.block_schedule_data,
+        expt_data.block_schedule_data.stride(0),
         expt_assignment.expt_bitmask[rank, :],
         expt_assignment.expt_map[rank, :],
         len(expt_hist),
