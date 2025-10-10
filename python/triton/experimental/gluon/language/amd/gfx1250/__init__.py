@@ -1,8 +1,6 @@
-from ..._core import builtin
+from ..._core import builtin, _unwrap_if_constexpr
 from .._ops import _wmma, _verify_wmma
 from triton.experimental.gluon.language import _core as ttgl
-from triton.experimental.gluon.language._semantic import _check
-from ..._layouts import DotOperandLayout
 from .._layouts import AMDWMMALayout
 from . import tdm
 
@@ -62,6 +60,8 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     assert a_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format.value}"
     assert b_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format.value}"
 
+    a_scale = _unwrap_if_constexpr(a_scale)
+    b_scale = _unwrap_if_constexpr(b_scale)
     assert a_scale is not None and b_scale is not None, "Scales must not be None"
 
     handle = _semantic.dot_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, fast_math=False, lhs_k_pack=True,
