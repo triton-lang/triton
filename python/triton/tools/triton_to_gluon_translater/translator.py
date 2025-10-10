@@ -42,7 +42,7 @@ class TritonToGluonTransformer(ast.NodeTransformer):
 
     def as_ttgl_constexpr(self) -> ast.expr:
         # Build ttgl.constexpr
-        return ast.Attribute(value=ast.Name(id="ttgl", ctx=ast.Load()), attr="constexpr", ctx=ast.Load())
+        return self.ttgl_attr("constexpr")
 
     def maybe_rewrite_constexpr_annotation(self, ann: Optional[ast.expr]) -> Optional[ast.expr]:
         if ann is None:
