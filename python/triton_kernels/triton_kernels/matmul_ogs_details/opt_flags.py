@@ -8,10 +8,6 @@ from triton_kernels.tensor import FP4
 import torch
 from .opt_flags_details import opt_flags_amd, opt_flags_nvidia
 from triton_kernels.tensor import bitwidth
-from typing import Callable
-
-# Function type: takes four ints (batch_size, m, n, k) and a output dtype, returns an int
-CallableSplitK = Callable[[int, int, int, int, torch.dtype], int]
 
 
 @dataclass
@@ -174,8 +170,6 @@ def make_default_opt_flags_amd(
         target_kernel_kwargs=target_kernel_kwargs,
     )
     # check constraints
-    # TODO(afroz): Update this later.
-    # assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
     all_constraints_satisfied(ret, constraints)
     return ret
 
