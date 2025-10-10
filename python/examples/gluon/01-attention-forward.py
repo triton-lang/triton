@@ -13,7 +13,7 @@ from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     allocate_tensor_memory,
-    get_tmem_32x32b_reg_layout,
+    get_tmem_reg_layout,
     tensor_memory_descriptor,
     tma,
     mbarrier,
@@ -38,7 +38,8 @@ def get_mma_instr_shape(shape, element_ty):
 @gluon.constexpr_function
 def get_mma_reg_layout(shape, num_warps, dtype=gl.float32):
     instr_shape = get_mma_instr_shape(shape, dtype)
-    return get_tmem_32x32b_reg_layout(*instr_shape[:2], shape, num_warps)
+    tmem_layout = TensorMemoryLayout((instr_shape[0], instr_shape[1]), col_stride=1)
+    return get_tmem_reg_layout(dtype, shape, tmem_layout, num_warps)
 
 
 # ===-----------------------------------------------------------------------===#
@@ -268,12 +269,17 @@ class AttentionConfig:
         self.p_tmem_layout = gl.constexpr(TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), col_stride=1))
 
         self.qk_layout = gl.constexpr(
-            get_tmem_32x32b_reg_layout(qk_instr_shape[0], qk_instr_shape[0], self.qk_shape, self.num_warps))
-        self.o_layout = gl.constexpr(
-            get_tmem_32x32b_reg_layout(o_instr_shape[0], o_instr_shape[1], self.o_shape, self.num_warps))
+            get_tmem_reg_layout(gl.float32, self.qk_shape, self.qk_tmem_layout, self.num_warps))
+        self.o_layout = gl.constexpr(get_tmem_reg_layout(gl.float32, self.o_shape, self.o_tmem_layout, self.num_warps))
+        self.o_splitn_tmem_layout = gl.constexpr(
+            TensorMemoryLayout((o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR), col_stride=1))
         self.o_splitn_layout = gl.constexpr(
-            get_tmem_32x32b_reg_layout(o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR,
-                                       (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR), self.num_warps))
+            get_tmem_reg_layout(
+                gl.float32,
+                (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR),
+                self.o_splitn_tmem_layout,
+                self.num_warps,
+            ))
         self.alpha_2d_layout = gl.constexpr(gl.BlockedLayout([1, 1], [32, 1], [self.num_warps, 1], [0, 1]))
 
         is_fp16 = self.dtype.value in [gl.float16, gl.bfloat16]
