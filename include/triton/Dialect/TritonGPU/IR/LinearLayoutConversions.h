@@ -112,8 +112,9 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 
 // The primary goal of this function is to efficiently load 2D tiles of a
 // tensor from shared memory using the `ds_read_tr` instruction for AMD GPUs.
-LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
-                                     int32_t elemBitWidth);
+LinearLayout chooseDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
+                                  int32_t elemBitWidth, unsigned instBitWidth,
+                                  unsigned numLanesInShuffleGroup);
 
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
                                            int numWarps);
