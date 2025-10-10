@@ -4,6 +4,7 @@ import socket
 
 import torch
 import torch.distributed as dist
+import torch.distributed._symmetric_memory as symm_mem
 import torch.multiprocessing as mp
 import triton
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment, filter_expt_data, filter_expt_data_torch
@@ -172,31 +173,112 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     # routing
     # test correctness
     y_global_ref = mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act)
-    y_dp_local_tri = mixture_of_expt_epsharded(
-        x_dp_local,
-        l_dp_local,
-        w_ep_local,
-        b_ep_local,
-        expt_assignment,
-        n_expts_act,
-    )
-    y_global_tri = torch.empty_like(y_global_ref)
-    dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
-    triton.testing.assert_close(y_global_ref, y_global_tri)
+    # Record symmetric memory allocations so we can replay them outside the CUDA graph capture.
+    orig_symm_empty = symm_mem.empty
+    orig_symm_rendezvous = symm_mem.rendezvous
+    recorded_empty_calls = []
+    recorded_rendezvous_calls = []
+    buffer_id_to_index = {}
 
-    # test cudagraph
-    with torch.cuda.stream(torch.cuda.Stream()):
-        g = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(g):
-            y_dp_local_tri = mixture_of_expt_epsharded(
-                x_dp_local,
-                l_dp_local,
-                w_ep_local,
-                b_ep_local,
-                expt_assignment,
-                n_expts_act,
-            )
-        g.replay()
+    def recording_empty(*args, **kwargs):
+        buf = orig_symm_empty(*args, **kwargs)
+        idx = len(recorded_empty_calls)
+        buffer_id_to_index[id(buf)] = idx
+        recorded_empty_calls.append((args, kwargs))
+        return buf
+
+    def recording_rendezvous(buf, *args, **kwargs):
+        hdl = orig_symm_rendezvous(buf, *args, **kwargs)
+        idx = buffer_id_to_index[id(buf)]
+        recorded_rendezvous_calls.append((idx, args, kwargs))
+        return hdl
+
+    symm_mem.empty = recording_empty
+    symm_mem.rendezvous = recording_rendezvous
+    try:
+        y_dp_local_tri = mixture_of_expt_epsharded(
+            x_dp_local,
+            l_dp_local,
+            w_ep_local,
+            b_ep_local,
+            expt_assignment,
+            n_expts_act,
+        )
+        y_global_tri = torch.empty_like(y_global_ref)
+        dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
+        triton.testing.assert_close(y_global_ref, y_global_tri)
+    finally:
+        symm_mem.empty = orig_symm_empty
+        symm_mem.rendezvous = orig_symm_rendezvous
+
+    # Preallocate the symmetric memory buffers and rendezvous handles up-front.
+    prepared_empty_buffers = [
+        orig_symm_empty(*args, **kwargs) for args, kwargs in recorded_empty_calls
+    ]
+    prepared_handles = [
+        orig_symm_rendezvous(prepared_empty_buffers[idx], *args, **kwargs)
+        for idx, args, kwargs in recorded_rendezvous_calls
+    ]
+
+    capture_stream = torch.cuda.Stream()
+    g = torch.cuda.CUDAGraph()
+    if recorded_empty_calls:
+        empty_idx = 0
+        rendezvous_idx = 0
+
+        def reuse_empty(*_args, **_kwargs):
+            nonlocal empty_idx
+            if empty_idx >= len(prepared_empty_buffers):
+                raise RuntimeError("symm_mem.empty called more times than recorded")
+            expected_args, expected_kwargs = recorded_empty_calls[empty_idx]
+            if expected_args != _args or expected_kwargs != _kwargs:
+                raise RuntimeError("symm_mem.empty called with unexpected arguments")
+            buf = prepared_empty_buffers[empty_idx]
+            empty_idx += 1
+            return buf
+
+        def reuse_rendezvous(buf, *_args, **_kwargs):
+            nonlocal rendezvous_idx
+            if rendezvous_idx >= len(prepared_handles):
+                raise RuntimeError("symm_mem.rendezvous called more times than recorded")
+            expected_empty_idx, expected_args, expected_kwargs = recorded_rendezvous_calls[rendezvous_idx]
+            expected_buf = prepared_empty_buffers[expected_empty_idx]
+            if buf is not expected_buf:
+                raise RuntimeError("symm_mem.rendezvous received unexpected buffer")
+            if expected_args != _args or expected_kwargs != _kwargs:
+                raise RuntimeError("symm_mem.rendezvous called with unexpected arguments")
+            handle = prepared_handles[rendezvous_idx]
+            rendezvous_idx += 1
+            return handle
+
+        symm_mem.empty = reuse_empty
+        symm_mem.rendezvous = reuse_rendezvous
+        try:
+            with torch.cuda.stream(capture_stream):
+                with torch.cuda.graph(g):
+                    y_dp_local_tri = mixture_of_expt_epsharded(
+                        x_dp_local,
+                        l_dp_local,
+                        w_ep_local,
+                        b_ep_local,
+                        expt_assignment,
+                        n_expts_act,
+                    )
+        finally:
+            symm_mem.empty = orig_symm_empty
+            symm_mem.rendezvous = orig_symm_rendezvous
+    else:
+        with torch.cuda.stream(capture_stream):
+            with torch.cuda.graph(g):
+                y_dp_local_tri = mixture_of_expt_epsharded(
+                    x_dp_local,
+                    l_dp_local,
+                    w_ep_local,
+                    b_ep_local,
+                    expt_assignment,
+                    n_expts_act,
+                )
+    g.replay()
 
 
 @pytest.mark.parametrize("distributed_launcher", [2, 4], indirect=True)
