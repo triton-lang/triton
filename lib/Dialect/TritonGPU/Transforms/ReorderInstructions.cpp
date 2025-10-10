@@ -60,11 +60,10 @@ static bool crossWriteSideEffectingOp(Operation *start, Operation *end) {
     return true;
   Operation *nextOp = start->getNextNode();
   while (nextOp) {
-    if (nextOp == ancestor)
-      return false;
-
     if ((hasWriteSideEffect(nextOp)))
       return true;
+    if (nextOp == ancestor)
+      return false;
     nextOp = nextOp->getNextNode();
   }
   assert(false && "op doesn't dominate other");
