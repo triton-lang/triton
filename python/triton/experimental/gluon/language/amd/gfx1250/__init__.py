@@ -38,10 +38,10 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     Args:
         a (tensor): The operand A to be multiplied.
         a_scale (tensor): Scale factor for operand A.
-        a_format (str): Format of the operand A. Available formats: `e2m1'.
+        a_format (str): Format of the operand A. Available formats: `e2m1`, `e4m3`, `e5m2`.
         b (tensor): The operand B to be multiplied.
         b_scale (tensor): Scale factor for operand B.
-        b_format (str): Format of the operand B. Available formats: `e2m1'.
+        b_format (str): Format of the operand B. Available formats: `e2m1`, `e4m3`, `e5m2`.
         acc (tensor): Accumulator tensor.
     """
     _verify_wmma(3, a, b, acc)
@@ -58,7 +58,6 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     assert isinstance(acc_layout, AMDWMMALayout) and acc_layout.instr_shape == [16, 16, 128], \
     "accumulator tensor's layout must be [16, 16, 128]"
 
-    # TODO: Add more formats
     assert a_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format.value}"
     assert b_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format.value}"
 
