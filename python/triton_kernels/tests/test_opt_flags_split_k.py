@@ -119,17 +119,15 @@ def test_make_default_opt_flags_nvidia_split_k_constraint(monkeypatch):
     assert flags.split_k == 3
 
 
-def test_dynamic_split_k(monkeypatch):
+def test_max_allowable_mn(monkeypatch):
     setup_nvidia(monkeypatch)
 
-    batch_size, m, n = 4, 256, 128
-    k = (2**6) * 3
+    batch_size, m, n, k = 1, 256, 256, 256
 
     bytes_float16 = 2
     intermediate_size = batch_size * m * n * bytes_float16
 
-    def get_flags(split_k, dynamic_split_k_max_size_bytes, dynamic_split_k_max_split_k):
-        dynamic_split_k = dynamic_split_k_max_size_bytes is not None
+    def get_flags(split_k, max_mn):
         return opt_flags.make_default_opt_flags_nvidia(
             torch.float16,
             torch.float16,
@@ -148,45 +146,16 @@ def test_dynamic_split_k(monkeypatch):
             False,
             {
                 "split_k": split_k,
-                "dynamic_split_k": dynamic_split_k,
-                "dynamic_split_k_max_size_bytes": dynamic_split_k_max_size_bytes,
-                "dynamic_split_k_max_split_k": dynamic_split_k_max_split_k,
+                "max_allowable_mn": max_mn,
             },
         )
 
-    # If `dynamic_split_k` is not specified, we get the specified split_k
-    for split_k in [1, 2, 4, 8]:
-        flags = get_flags(split_k, None, None)
-        assert flags.split_k == split_k
-
-    # If `dynamic_split_k` is specified, then it is computed, and the specified split_k is ignored.
-    possible_splits = 6
-    # So 6 splits are possible
-    assert k % possible_splits == 0
-    allowance = possible_splits * intermediate_size
-    given_split_k = 3
-    flags = get_flags(given_split_k, allowance, None)
-    assert flags.split_k == possible_splits
-
-    # If we specify a max split size in the above scenario, it is respected, even though more splits are possible.
-    max_split_k = 4
-    flags = get_flags(given_split_k, allowance, max_split_k)
-    assert flags.split_k == max_split_k
-
-    # When the allowance is low enough, no splits are possible.
-    allowance = intermediate_size
-    flags = get_flags(given_split_k, allowance, max_split_k)
+    split_k = 6
+    max_mn = (m * n) // 2
+    flags = get_flags(split_k, max_mn)
     assert flags.split_k == 1
 
-    # Extreme case, split_k = k
-    allowance = k * intermediate_size
-    flags = get_flags(given_split_k, allowance, None)
-    assert flags.split_k == k
-
-    # Split k doesn't need to be a divisor of k
-    non_divisor_k = 5
-    assert k % non_divisor_k != 0
-    allowance = non_divisor_k * intermediate_size
-    flags = get_flags(None, allowance, None)
-    assert flags.split_k == non_divisor_k
-
+    split_k = 6
+    max_mn = (m * n) * 2
+    flags = get_flags(split_k, max_mn)
+    assert flags.split_k == split_k
