@@ -170,6 +170,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     x_dp_local = x_global[first_token_indx:last_token_indx, :]
     l_dp_local = l_global[first_token_indx:last_token_indx, :]
     # routing
+    # test correctness
     y_global_ref = mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act)
     y_dp_local_tri = mixture_of_expt_epsharded(
         x_dp_local,
@@ -182,6 +183,20 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     y_global_tri = torch.empty_like(y_global_ref)
     dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
     triton.testing.assert_close(y_global_ref, y_global_tri)
+
+    # test cudagraph
+    with torch.cuda.stream(torch.cuda.Stream()):
+        g = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(g):
+            y_dp_local_tri = mixture_of_expt_epsharded(
+                x_dp_local,
+                l_dp_local,
+                w_ep_local,
+                b_ep_local,
+                expt_assignment,
+                n_expts_act,
+            )
+        g.replay()
 
 
 @pytest.mark.parametrize("distributed_launcher", [2, 4], indirect=True)
