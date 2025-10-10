@@ -7,6 +7,7 @@ from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value
 from triton.experimental.gluon.language._layouts import DistributedLinearLayout
 from triton.experimental.gluon.language._semantic import _check
+from triton.experimental.gluon.language import _semantic
 
 from . import tma
 from ..hopper import fence_async_shared, mbarrier
@@ -120,55 +121,25 @@ def get_tmem_reg_layout(
         cta_split_num (tuple[int, int]): CTA split factors along each dimension.
         cta_order (tuple[int, int]): CTA order.
     """
-    from triton._C.libtriton.gluon_ir import GluonOpBuilder
+    element_ty = ttgl._unwrap_if_constexpr(element_ty)
+    layout = ttgl._unwrap_if_constexpr(layout)
+    num_warps = ttgl._unwrap_if_constexpr(num_warps)
+    instr_variant = ttgl._unwrap_if_constexpr(instr_variant)
+    shape = [ttgl._unwrap_if_constexpr(s) for s in shape]
+    ctas_per_cga = [ttgl._unwrap_if_constexpr(x) for x in ctas_per_cga]
+    cta_split_num = [ttgl._unwrap_if_constexpr(x) for x in cta_split_num]
+    cta_order = [ttgl._unwrap_if_constexpr(x) for x in cta_order]
 
-    def _unwrap(value):
-        while hasattr(value, "value"):
-            value = value.value
-        return value
-
-    element_ty = _unwrap(element_ty)
-    layout = _unwrap(layout)
-    num_warps = _unwrap(num_warps)
-    instr_variant = _unwrap(instr_variant)
-    shape = [_unwrap(s) for s in shape]
-
-    if not isinstance(layout, TensorMemoryLayout):
-        raise TypeError("layout must be a TensorMemoryLayout")
-    if not hasattr(element_ty, "to_ir"):
-        raise TypeError("element_ty must be a Triton dtype")
-    if not isinstance(instr_variant, str):
-        raise TypeError("instr_variant must be a string")
-    if num_warps < 4 or (num_warps & (num_warps - 1)) != 0:
-        raise ValueError("num_warps must be a power of two and >= 4")
-
-    rank = len(shape)
-    if rank != 2:
-        raise ValueError("expected a 2D tensor")
-
-    ctas_per_cga = [_unwrap(x) for x in ctas_per_cga]
-    cta_split_num = [_unwrap(x) for x in cta_split_num]
-    cta_order = [_unwrap(x) for x in cta_order]
-
-    if len(ctas_per_cga) != rank:
-        raise ValueError("ctas_per_cga rank mismatch")
-    if len(cta_split_num) != rank:
-        raise ValueError("cta_split_num rank mismatch")
-    if len(cta_order) != rank:
-        raise ValueError("cta_order rank mismatch")
-
-    context = ir.context()
-    _load_dialects(context)
-    builder = GluonOpBuilder(context)
-    element_ty_ir = element_ty.to_ir(builder)
-    layout_attr = layout._to_ir(builder)
-    mem_desc_ty = builder.get_tensor_mem_desc_ty(element_ty_ir, shape, layout_attr, shape)
-    cta_layout_attr = builder.get_cta_layout(ctas_per_cga, cta_split_num, cta_order)
-    result = builder.get_distributed_layout_for_tmem_ldst(mem_desc_ty, instr_variant, num_warps, cta_layout_attr)
-    if result is None:
-        raise ValueError(f"TMEM layout '{instr_variant}' unsupported for shape {shape} and num_warps {num_warps}")
-    assert isinstance(result, DistributedLinearLayout)
-    return result
+    return _semantic.get_tmem_reg_layout(
+        element_ty,
+        shape,
+        layout,
+        num_warps,
+        instr_variant,
+        ctas_per_cga,
+        cta_split_num,
+        cta_order,
+    )
 
 
 class tensor_memory_descriptor_type(base_type):
