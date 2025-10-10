@@ -1,46 +1,42 @@
 #include "triton/Dialect/Triton/IR/Traits.h"
 
-#include <numeric>
-
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/TypeInterfaces.h.inc"
 #include "triton/Dialect/Triton/IR/Types.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Types.h"
-#include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir;
-using namespace mlir::triton::gpu;
 
 LogicalResult OpTrait::impl::verifyEquivalentType(Type typeA, Type typeB) {
-  auto memdescA = dyn_cast<MemDescType>(typeA);
-  auto memdescB = dyn_cast<MemDescType>(typeB);
-  if (memdescA || memdescB) {
-    if (!memdescA || !memdescB)
-      return failure();
-    if (memdescA.getShape() != memdescB.getShape())
-      return failure();
-    if (memdescA.getAllocShape() != memdescB.getAllocShape())
-      return failure();
-    if (memdescA.getElementType() != memdescB.getElementType())
-      return failure();
-    if (memdescA.getMemorySpace() != memdescB.getMemorySpace())
-      return failure();
-    if (memdescA.getMutableMemory() != memdescB.getMutableMemory())
-      return failure();
+  // Prefer interface-based comparison when available (covers MemDesc-like
+  // types without creating a dependency on TritonGPU).
+  if (auto aLike = dyn_cast<triton::TensorOrMemDescLike>(typeA)) {
+    if (auto bLike = dyn_cast<triton::TensorOrMemDescLike>(typeB)) {
+      if (aLike.getShape() != bLike.getShape())
+        return failure();
+      if (aLike.getAllocShape() != bLike.getAllocShape())
+        return failure();
+      if (aLike.getElementType() != bLike.getElementType())
+        return failure();
+      if (aLike.getMemorySpace() != bLike.getMemorySpace())
+        return failure();
+      if (aLike.getMutableMemory() != bLike.getMutableMemory())
+        return failure();
 
-    Attribute encodingA = memdescA.getEncoding();
-    Attribute encodingB = memdescB.getEncoding();
-    if (encodingA == encodingB)
-      return success();
-    if (static_cast<bool>(encodingA) != static_cast<bool>(encodingB))
-      return failure();
+      Attribute encodingA = aLike.getEncoding();
+      Attribute encodingB = bLike.getEncoding();
+      if (encodingA == encodingB)
+        return success();
+      if (static_cast<bool>(encodingA) != static_cast<bool>(encodingB))
+        return failure();
 
-    auto layoutInterface =
-        cast<triton::DialectInferLayoutInterface>(&encodingA.getDialect());
-    return layoutInterface->verifyLayoutsAreEqual(memdescA.getShape(),
-                                                  encodingA, encodingB, {});
+      auto layoutInterface =
+          cast<triton::DialectInferLayoutInterface>(&encodingA.getDialect());
+      return layoutInterface->verifyLayoutsAreEqual(aLike.getShape(), encodingA,
+                                                    encodingB, {});
+    }
   }
+
   auto tensorTypeA = dyn_cast<RankedTensorType>(typeA);
   auto tensorTypeB = dyn_cast<RankedTensorType>(typeB);
   if (!(bool(tensorTypeA) && bool(tensorTypeB)))

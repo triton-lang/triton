@@ -25,6 +25,9 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/MathExtras.h"
 
+// IR-level type interfaces
+#include "triton/Dialect/Triton/IR/Interfaces.h"
+
 // Include TableGen'erated code
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
 #include "triton/Dialect/TritonGPU/IR/OpInterfaces.cpp.inc"
@@ -320,12 +323,12 @@ SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
 }
 
 SmallVector<int64_t> getShapePerCTA(Type type) {
-  auto tensorType = cast<TensorOrMemDesc>(type);
+  auto tensorType = cast<triton::gpu::TensorOrMemDesc>(type);
   return getShapePerCTA(tensorType.getEncoding(), tensorType.getShape());
 }
 
 SmallVector<int64_t> getAllocationShapePerCTA(Type type) {
-  auto tensorType = cast<TensorOrMemDesc>(type);
+  auto tensorType = cast<triton::gpu::TensorOrMemDesc>(type);
   return getAllocationShapePerCTA(tensorType.getEncoding(),
                                   tensorType.getShape());
 }
@@ -3038,8 +3041,8 @@ struct TritonGPUInferLayoutInterface
     auto ctx = srcEnc.getContext();
     auto fp32Type = IntegerType::get(ctx, 32, IntegerType::Unsigned);
     auto srcTy = RankedTensorType::get(srcShape, fp32Type, srcEnc);
-    LinearLayout ll =
-        inferReshapeLinearLayout(cast<TensorOrMemDesc>(srcTy), dstShape);
+    LinearLayout ll = inferReshapeLinearLayout(
+        cast<triton::gpu::TensorOrMemDesc>(srcTy), dstShape);
 
     dstEnc = LinearEncodingAttr::get(srcEnc.getContext(), ll);
     return success();
@@ -3655,6 +3658,50 @@ struct MemDescModel
 };
 } // namespace
 
+namespace {
+struct IRTensorModel
+    : public triton::TensorOrMemDescLike::ExternalModel<IRTensorModel,
+                                                        RankedTensorType> {
+  Attribute getEncoding(Type ty) const {
+    return cast<RankedTensorType>(ty).getEncoding();
+  }
+  Type getElementType(Type ty) const {
+    return cast<RankedTensorType>(ty).getElementType();
+  }
+  ArrayRef<int64_t> getShape(Type ty) const {
+    return cast<RankedTensorType>(ty).getShape();
+  }
+  ArrayRef<int64_t> getAllocShape(Type ty) const {
+    return cast<RankedTensorType>(ty).getShape();
+  }
+  Attribute getMemorySpace(Type) const { return {}; }
+  bool getMutableMemory(Type) const { return true; }
+};
+
+struct IRMemDescModel
+    : public triton::TensorOrMemDescLike::ExternalModel<IRMemDescModel,
+                                                        MemDescType> {
+  Attribute getEncoding(Type ty) const {
+    return cast<MemDescType>(ty).getEncoding();
+  }
+  Type getElementType(Type ty) const {
+    return cast<MemDescType>(ty).getElementType();
+  }
+  ArrayRef<int64_t> getShape(Type ty) const {
+    return cast<MemDescType>(ty).getShape();
+  }
+  ArrayRef<int64_t> getAllocShape(Type ty) const {
+    return cast<MemDescType>(ty).getAllocShape();
+  }
+  Attribute getMemorySpace(Type ty) const {
+    return cast<MemDescType>(ty).getMemorySpace();
+  }
+  bool getMutableMemory(Type ty) const {
+    return cast<MemDescType>(ty).getMutableMemory();
+  }
+};
+} // namespace
+
 void TritonGPUDialect::initialize() {
   registerTypes();
 
@@ -3674,6 +3721,8 @@ void TritonGPUDialect::initialize() {
 
   RankedTensorType::attachInterface<TensorModel>(*getContext());
   MemDescType::attachInterface<MemDescModel>(*getContext());
+  RankedTensorType::attachInterface<IRTensorModel>(*getContext());
+  MemDescType::attachInterface<IRMemDescModel>(*getContext());
 }
 
 LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
