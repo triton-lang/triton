@@ -183,9 +183,7 @@ def _capture_with_prepared_symm_mem(fn):
         symm_mem.empty = orig_symm_empty
         symm_mem.rendezvous = orig_symm_rendezvous
 
-    prepared_empty_buffers = [
-        orig_symm_empty(*args, **kwargs) for args, kwargs in recorded_empty_calls
-    ]
+    prepared_empty_buffers = [orig_symm_empty(*args, **kwargs) for args, kwargs in recorded_empty_calls]
     prepared_handles = [
         orig_symm_rendezvous(prepared_empty_buffers[idx], *args, **kwargs)
         for idx, args, kwargs in recorded_rendezvous_calls
