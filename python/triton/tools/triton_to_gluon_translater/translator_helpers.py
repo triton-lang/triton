@@ -114,6 +114,11 @@ def get_num_threads_per_warp() -> ttgl.constexpr:
 
 
 @gluon.constexpr_function
+def get_num_threads_per_program():
+    return ttgl.num_warps() * get_num_threads_per_warp()
+
+
+@gluon.constexpr_function
 def default_blocked_layout(shape: ttgl.constexpr, num_warps: ttgl.constexpr) -> ttgl.constexpr:
     rank = len(shape)
     # 1 element per thread for all dimensions
@@ -162,7 +167,7 @@ def tl_obj_gather(obj, x_offsets, y_offset):
         x_offsets_layout: ttgl.constexpr = ttgl.SliceLayout(
             0, ttgl.BlockedLayout([1, 4], [get_num_threads_per_warp(), 1], [1, ttgl.num_warps()], [1, 0]))
         x_offsets = ttgl.convert_layout(x_offsets, x_offsets_layout)
-        mbarrier.expect(bar, desc_shape[0] * desc_shape[1] * alloc.type.element_ty.primitive_bitwidth // 8)
+        mbarrier.expect(bar, x_offsets.shape[0] * obj.block_type.nbytes)
         tma_blackwell.async_gather(desc, x_offsets, y_offset, bar, alloc)
         mbarrier.wait(bar, phase=0)
         mbarrier.invalidate(bar)
@@ -200,10 +205,8 @@ def tl_load_tensor_descriptor(desc, offsets):
 
 @gluon.jit
 def tl_arange(start: ttgl.constexpr, stop: ttgl.constexpr = None):
-    _start: ttgl.constexpr = start if stop is not None else 0
-    _stop: ttgl.constexpr = stop if stop is not None else start
-    layout: ttgl.constexpr = default_blocked_layout([_stop - _start], ttgl.num_warps())
-    return ttgl.arange(_start, _stop, layout=layout)
+    layout: ttgl.constexpr = default_blocked_layout([stop - start], ttgl.num_warps())
+    return ttgl.arange(start, stop, layout=layout)
 
 
 @gluon.jit
@@ -221,12 +224,11 @@ def reset_to_default_layout(value):
             r = ttgl.convert_layout(value[i], layout=default_blocked_layout(value[i].type.shape, ttgl.num_warps()))
             out = out + (r, )
         return out
+    elif isinstance(value, ttgl.tensor) and isinstance(value.type, ttgl.distributed_type):
+        layout: ttgl.constexpr = default_blocked_layout(ty.shape, ttgl.num_warps())
+        return ttgl.convert_layout(value, layout=layout)
     else:
-        if hasattr(ty, "shape"):
-            layout: ttgl.constexpr = default_blocked_layout(ty.shape, ttgl.num_warps())
-            return ttgl.convert_layout(value, layout=layout)
-        else:
-            return value
+        return value
 
 
 @gluon.constexpr_function

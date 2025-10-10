@@ -54,58 +54,15 @@ class TritonToGluonTransformer(ast.NodeTransformer):
     def ttgl_attr(self, name: str) -> ast.AST:
         return ast.Attribute(value=ast.Name(id="ttgl", ctx=ast.Load()), attr=name, ctx=ast.Load())
 
-    def flatten_attr(self, node: ast.AST) -> list[str] | None:
-        parts, current = [], node
-        while isinstance(current, ast.Attribute):
-            parts.insert(0, current.attr)
-            current = current.value
-        if isinstance(current, ast.Name):
-            parts.insert(0, current.id)
-            return parts
-        return None
-
     def resolve_value(self, expr: ast.expr):
-        # Resolve Name or dotted Attribute from recorded globals
         if isinstance(expr, ast.Name):
-            # Try scope first, then loaded modules, then importable module
-            value = self.scope.get(expr.id)
-            if value is None:
-                value = sys.modules.get(expr.id)
-            if value is None:
-                try:
-                    value = importlib.import_module(expr.id)
-                except Exception:
-                    value = None
+            value = self.scope.get(expr.id) or sys.modules.get(expr.id)
             return value
         if isinstance(expr, ast.Attribute):
-            parts = self.flatten_attr(expr)
-            if not parts:
+            base = self.resolve_value(expr.value)
+            if base is None:
                 return None
-            # Try from most-specific module/object root down to least
-            for split_index in range(len(parts), 0, -1):
-                root = ".".join(parts[:split_index])
-                # 1) scope can contain fully-qualified names
-                resolved = self.scope.get(root)
-                # 2) already-loaded modules
-                if resolved is None:
-                    resolved = sys.modules.get(root)
-                # 3) importable modules
-                if resolved is None:
-                    try:
-                        resolved = importlib.import_module(root)
-                    except Exception:
-                        resolved = None
-                if resolved is None:
-                    continue
-                # Walk remaining attributes
-                remaining_attrs = parts[split_index:]
-                for attr in remaining_attrs:
-                    resolved = getattr(resolved, attr, None)
-                    if resolved is None:
-                        break
-                if resolved is not None:
-                    return resolved
-            return None
+            return getattr(base, expr.attr, None)
         return None
 
     def forward_call(self, node: ast.Call, target_func: ast.expr, filter_keywords: list[str] = []) -> ast.Call:
@@ -161,7 +118,7 @@ class TritonToGluonTransformer(ast.NodeTransformer):
                     "make_tensor_descriptor": ast.Name(id="tl_make_tensor_descriptor", ctx=ast.Load()),
                     "load_tensor_descriptor": ast.Name(id="tl_load_tensor_descriptor", ctx=ast.Load()),
                     "store_tensor_descriptor": ast.Name(id="tl_store_tensor_descriptor", ctx=ast.Load()),
-                    "num_threads": ast.Name(id="get_num_threads_per_warp", ctx=ast.Load()),
+                    "num_threads": ast.Name(id="get_num_threads_per_program", ctx=ast.Load()),
                 }
                 mapped_target = builtin_mapping.get(builtin_name)
                 filter_keywords = []
@@ -229,23 +186,21 @@ class TritonToGluonTransformer(ast.NodeTransformer):
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         node = self.generic_visit(node)
-        parts = self.flatten_attr(node)
-        if parts:
-            last_part = parts[-1]
-            # Only rewrite dtypes when the resolved object is a tl.dtype instance
-            # or the tl.dtype class itself (e.g., tl.float16 or tl.dtype.float16 / tl.dtype)
-            resolved_obj = self.resolve_value(node)
-            if resolved_obj is not None:
-                if isinstance(resolved_obj, tlc.dtype):
-                    return self.ttgl_attr(last_part)
-                if resolved_obj is tlc.dtype and last_part == "dtype":
-                    return self.ttgl_attr("dtype")
-                if resolved_obj is tlc.tensor and last_part == "tensor":
-                    return self.ttgl_attr("tensor")
-                if resolved_obj is tlc.constexpr and last_part == "constexpr":
-                    return self.ttgl_attr("constexpr")
-            if last_part == "tensor_descriptor":
-                return self.ttgl_attr("nvidia.hopper.tma.tensor_descriptor")
+        last_part = node.attr
+        # Only rewrite dtypes when the resolved object is a tl.dtype instance
+        # or the tl.dtype class itself (e.g., tl.float16 or tl.dtype.float16 / tl.dtype)
+        resolved_obj = self.resolve_value(node)
+        if resolved_obj is not None:
+            if isinstance(resolved_obj, tlc.dtype):
+                return self.ttgl_attr(last_part)
+            if resolved_obj is tlc.dtype and last_part == "dtype":
+                return self.ttgl_attr("dtype")
+            if resolved_obj is tlc.tensor and last_part == "tensor":
+                return self.ttgl_attr("tensor")
+            if resolved_obj is tlc.constexpr and last_part == "constexpr":
+                return self.ttgl_attr("constexpr")
+        if last_part == "tensor_descriptor":
+            return self.ttgl_attr("nvidia.hopper.tma.tensor_descriptor")
         return node
 
     def visit_Name(self, node):
@@ -335,14 +290,6 @@ class TritonToGluonTransformer(ast.NodeTransformer):
             node.decorator_list.insert(
                 0, ast.Attribute(value=ast.Name(id="gluon", ctx=ast.Load()), attr="constexpr_function", ctx=ast.Load()))
         # Process body
-        return self.generic_visit(node)
-
-    # Simplified: per-op helpers removed in favor of mapping in visit_Call
-
-    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
-        return self.generic_visit(node)
-
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
         return self.generic_visit(node)
 
 

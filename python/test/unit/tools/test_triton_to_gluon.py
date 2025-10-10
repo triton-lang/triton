@@ -263,3 +263,22 @@ def test_split(tmp_path):
     ref = torch.empty_like(x[:n])
     split_kernel[grid](x, ref)
     torch.testing.assert_close(out, ref)
+
+
+@triton.jit
+def reduce_to_scalar_kernel(out_ptr):
+    x = tl.arange(0, 16)
+    x = tl.sum(x)
+    tl.store(out_ptr, x)
+
+
+@pytest.mark.skipif(not (is_blackwell()), reason="Requires Blackwell")
+def test_reduce_to_scalar(tmp_path):
+    kernel = convert_kernel(reduce_to_scalar_kernel, "reduce_to_scalar_kernel", tmp_path)
+    grid = (1, )
+
+    out = torch.empty((1, ), device="cuda", dtype=torch.int32)
+    kernel[grid](out)
+    ref = torch.empty_like(out)
+    reduce_to_scalar_kernel[grid](ref)
+    torch.testing.assert_close(out, ref)
