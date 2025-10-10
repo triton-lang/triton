@@ -50,6 +50,7 @@ def tl_dot(a, b, acc=None, input_precision=None, allow_tf32=None, max_num_imprec
     tcgen05_mma(a_smem, b_smem, acc_tmem, use_acc=True)
     tcgen05_commit(bar)
     mbarrier.wait(bar, phase=0)
+    mbarrier.invalidate(bar)
 
     # Load back from TMEM using a register layout and convert to acc layout
     out = acc_tmem.load(tmem_reg_layout)
