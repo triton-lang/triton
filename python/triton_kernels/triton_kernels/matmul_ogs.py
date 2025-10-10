@@ -376,8 +376,6 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor | None = None, out: torch
     """
     if x.ndim < 4:
         x = x.view((1,) * (4 - x.ndim) + x.shape)
-    if out is None:
-        out = torch.empty((*x.shape[1:-2], num_groups, x.shape[-1]), device=x.device, dtype=x.dtype)
     M = x.shape[2]
     if contig_group_size is not None:
         assert indx is None
@@ -390,6 +388,8 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor | None = None, out: torch
         # Handle batched matmul (K, B, M, N) by pretending it to be (K, 1, B*M, N).
         x = x.view(x.shape[0], 1, x.shape[1] * x.shape[2], x.shape[3])
         num_groups = x.shape[-2]
+    if out is None:
+        out = torch.empty((*x.shape[1:-2], num_groups, x.shape[-1]), device=x.device, dtype=x.dtype)
     if x_flex is None:
         x_flex = InFlexData()
     if out_flex is None:
