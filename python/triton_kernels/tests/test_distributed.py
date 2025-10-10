@@ -121,7 +121,7 @@ def routing(logits, n_expts_act, all_gather=False):
                                ragged_batch_metadata)
     gather_idx = GatherIndx(combine_indx, dispatch_indx)
     scatter_idx = ScatterIndx(dispatch_indx, combine_indx)
-    return routing_data, gather_idx, scatter_idx
+    return routing_data, gather_idx, scatter_idx, sparse_logits.indx
 
 
 def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act):
