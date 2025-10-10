@@ -114,9 +114,12 @@ struct BF16xN : public OpRewritePattern<DotOp> {
     case InputPrecision::BF16x3:
       result = IEEEDot(rewriter, lhs_parts[mid], rhs_parts[hi], result);
       result = IEEEDot(rewriter, lhs_parts[hi], rhs_parts[mid], result);
+      result = replaceNansWithZeros(result);
+
+      // NOTE: For BF16x1 bail without replaceNansWithZeros
+      // case InputPrecision::BF16x1: break;
     }
 
-    result = replaceNansWithZeros(result);
     result = IEEEDot(rewriter, lhs_parts[hi], rhs_parts[hi], result);
     result = rewriter.create<arith::AddFOp>(loc, result, dotOp.getC());
 
