@@ -4,7 +4,6 @@ import pytest
 import types
 
 import torch
-import triton
 
 import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
 
