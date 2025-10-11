@@ -42,8 +42,7 @@
 //    whose enclosing basic blocks dominate the basic-block where p belongs to.
 //  2.2) See some examples in the comment to maybeGetAssumedRangeHelper().
 //  2.3) The assumed value-range for source and result operands are inferred
-//  right
-//    before an operation is visited.
+//  right before an operation is visited.
 //  2.4) For now, if a value has a assumed value-range, we use assumed
 //    value-range and ignore its inferred value range. It would be nice to
 //    use the intersection of assumed-value-range and inferred-value-range.
@@ -87,10 +86,12 @@ tt::FuncOp getEnclosingFunction(Value v) {
       definingOp = blk->getParentOp();
 
   if (definingOp) {
-    funcOp = dyn_cast_or_null<tt::FuncOp>(definingOp);
-    if (!funcOp)
+    if (auto selfIsFunc = dyn_cast<tt::FuncOp>(definingOp))
+      funcOp = selfIsFunc;
+    else
       funcOp = definingOp->getParentOfType<tt::FuncOp>();
   }
+
   assert(funcOp && "No enclosing tt::FuncOp");
   return funcOp;
 }
@@ -319,114 +320,6 @@ maybeGetAssumedRange(const SetVector<Operation *> &allAssumptions, Value anchor,
   return result;
 }
 
-// Many operations in arith dialect do not differentiate signed int and unsigned
-// int, e.g., arith::AddIOp, arith::MullOp. This function try to extrapolate the
-// type (sint or uint) of the Operation from the its UD and DU chains.
-//
-// TODO: This function seems to be useful for proving a quantity is a
-// non-negative. However, it is less so in proving a quantity is smaller than
-// specified upper bound. In fact, turning off this feature only sees 5 lines
-// difference in amd-range-analysis.mlir. For now, it is turned on only in
-// TestAMDRangeAnalysis.cpp. For now, we just keep this code for a while and
-// see if it will be useful for some real world applications.
-//
-static void collectValueOfSignedInt(Operation *top, DenseSet<Value> &valueSet) {
-  SetVector<Value> worklist;
-
-  // Initialize the worklist with some known signed interger values.
-  top->walk<WalkOrder::PreOrder>([&](Operation *op) {
-    llvm::TypeSwitch<Operation *>(op)
-        .Case<triton::AddPtrOp>(
-            [&](auto addPtrOp) { worklist.insert(addPtrOp.getOffset()); })
-        .Case<arith::ShRSIOp, arith::CeilDivSIOp, arith::DivSIOp,
-              arith::MaxSIOp, arith::MinSIOp, arith::RemSIOp>([&](auto binop) {
-          worklist.insert(binop.getResult());
-          worklist.insert(binop.getOperand(0));
-          worklist.insert(binop.getOperand(1));
-        })
-        .Case<arith::ExtSIOp>(
-            [&](auto sExt) { worklist.insert(sExt.getResult()); })
-        .Case<arith::CmpIOp>([&](auto cmpOp) {
-          switch (cmpOp.getPredicate()) {
-          case arith::CmpIPredicate::sgt:
-          case arith::CmpIPredicate::sge:
-          case arith::CmpIPredicate::sle:
-          case arith::CmpIPredicate::slt:
-            worklist.insert(cmpOp.getOperand(0));
-            worklist.insert(cmpOp.getOperand(1));
-            break;
-          case arith::CmpIPredicate::uge:
-          case arith::CmpIPredicate::ugt:
-          case arith::CmpIPredicate::ule:
-          case arith::CmpIPredicate::ult:
-            worklist.insert(cmpOp.getOperand(0));
-            worklist.insert(cmpOp.getOperand(1));
-            break;
-          default:
-            break;
-          };
-        });
-  });
-
-  valueSet.clear();
-  auto addToWorklist = [&](Value v) {
-    if (!valueSet.count(v))
-      worklist.insert(v);
-  };
-
-  while (!worklist.empty()) {
-    auto v = worklist.back();
-    worklist.pop_back();
-    Operation *op = v.getDefiningOp();
-
-    // If the result of this op is signed int, then its source operands are
-    // singed int.
-    if (op) {
-      llvm::TypeSwitch<Operation *>(op)
-          .Case<arith::AddIOp, arith::SubIOp>([&](auto binOp) {
-            addToWorklist(binOp.getOperand(0));
-            addToWorklist(binOp.getOperand(1));
-          })
-          .Case<triton::SplatOp, arith::TruncIOp>(
-              [&](auto unary) { addToWorklist(unary.getOperand()); });
-    }
-
-    SmallVector<Value> results;
-    if (op)
-      results = op->getResults();
-    else
-      results.push_back(v);
-
-    for (auto result : results) {
-      if (valueSet.count(result))
-        continue;
-
-      valueSet.insert(result);
-
-      for (mlir::OpOperand &use : result.getUses()) {
-        llvm::TypeSwitch<Operation *>(use.getOwner())
-            .Case<triton::SplatOp, arith::TruncIOp,
-                  triton::amdgpu::ExtractSliceOp>(
-                [&](auto op) { addToWorklist(op.getResult()); })
-            .Case<arith::AddIOp, arith::MulIOp>(
-                [&](auto binOp) { addToWorklist(binOp.getResult()); });
-      }
-    }
-  }
-
-  LLVM_DEBUG({
-    DBGS() << "Values considered as signed int (begin)\n";
-    OpPrintingFlags flags;
-    flags.skipRegions(true);
-    for (auto v : valueSet) {
-      DBGS() << " - ";
-      v.print(llvm::dbgs(), flags);
-      llvm::dbgs() << "\n";
-    }
-    DBGS() << "Values considered as signed int (end)\n";
-  });
-}
-
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -536,8 +429,6 @@ bool cmpIIsStaticallyTrue(const DataFlowSolver &solver, arith::CmpIOp cmpOp) {
 
 LogicalResult TritonIntegerRangeAnalysis::initialize(Operation *top) {
   signedIntValues.clear();
-  if (assumeNoArithOverflow)
-    collectValueOfSignedInt(top, signedIntValues);
   return Base::initialize(top);
 }
 
@@ -603,15 +494,7 @@ void TritonIntegerRangeAnalysis::defaultTransferFunc(
       resultsLattices[result.getResultNumber()];
   IntegerValueRange incomingRange_ = incomingRange;
 
-  // step 2: Some range value in MLIR lib is too conservative, update the
-  //  value-range before it is jointed to the lattice.
-  if (auto inferrable = dyn_cast<InferIntRangeInterface>(op)) {
-    auto res = rectifyInfferableRange(inferrable, srcLattices, incomingRange_);
-    if (res.has_value())
-      incomingRange_ = std::move(*res);
-  }
-
-  // step 3: If there is assumed value range, the assumed one take precedence.
+  // step 2: If there is assumed value range, the assumed one take precedence.
   // TODO: I think this is bit conservative, the better way is:
   //  final_range = (old_range ∪ incomingRange) ∩ assume_range
   if (auto iter = opResultAssumption.find(resultVal);
@@ -619,11 +502,11 @@ void TritonIntegerRangeAnalysis::defaultTransferFunc(
     const auto &range = iter->second;
     if (auto maybeRange = maybeGetAssumedRange(resultVal, op->getBlock())) {
       incomingRange_ =
-          IntegerValueRange(incomingRange.getValue().intersection(range));
+          IntegerValueRange(incomingRange_.getValue().intersection(range));
     }
   }
 
-  // step 4: Update the value range. Note that we are using `join` operation
+  // step 3: Update the value range. Note that we are using `join` operation
   //  which means `union`. Transfer function must be monotone! The resolver
   //  would otherwise fall into infinite loop.
   ChangeResult changed = lattice->join(incomingRange_);
@@ -637,82 +520,9 @@ void TritonIntegerRangeAnalysis::defaultTransferFunc(
                  << ", in value-range: " << incomingRange_ << "\n";
   });
 
-  // step 5: Add those ops that depends on this op to the worklist. The resolver
+  // step 4: Add those ops that depends on this op to the worklist. The resolver
   // will iterate all items in the worklist until it become empty.
   propagateIfChanged(lattice, changed);
-}
-
-std::optional<IntegerValueRange>
-TritonIntegerRangeAnalysis::rectifyInfferableRange(
-    InferIntRangeInterface rface,
-    ArrayRef<const dataflow::IntegerValueRangeLattice *> srcLattices,
-    const IntegerValueRange &range) {
-
-  auto op = rface.getOperation();
-
-  // step 1: rule out some operations we cannot handle
-  if (!llvm::isa<arith::AddIOp, arith::SubIOp, arith::MinSIOp, arith::MulIOp,
-                 arith::DivSIOp, arith::TruncIOp>(op) ||
-      range.isUninitialized()) {
-    return std::nullopt;
-  }
-
-  auto isPos = [](const ConstantIntRanges &range) {
-    // Return true iff in both unsigned and signed representation, the most
-    // significant bit is always 0.
-    return range.umax().isNonNegative() && range.smax().isNonNegative() &&
-           range.smin().isNonNegative();
-  };
-
-  // Not applicable to those bin-ops yielding unsigned int.
-  if (!signedIntValues.count(op->getResult(0)))
-    return std::nullopt;
-
-  // step 2: Do nothing if the value-range is already a non-negative range.
-  const ConstantIntRanges &resultRange = range.getValue();
-
-  if (isPos(resultRange))
-    return std::nullopt;
-
-  // step 3: special handling of arith::TruncIOp
-  if (llvm::isa<arith::TruncIOp>(op)) {
-    if (!srcLattices[0] || srcLattices[0]->getValue().isUninitialized())
-      return std::nullopt;
-
-    const ConstantIntRanges srcRange = srcLattices[0]->getValue().getValue();
-    if (!isPos(srcRange))
-      return std::nullopt;
-
-    // assume NSW
-    APInt umax = APInt::getSignedMaxValue(resultRange.umax().getBitWidth());
-    return ConstantIntRanges::fromUnsigned(resultRange.umin(), umax);
-  }
-
-  // step 4: rule out some messy situations
-  // If the MSB of umin is "1", bailout
-  if (!resultRange.umin().isNonNegative())
-    return std::nullopt;
-
-  // If the value-ranges of operands are somehow missing, we can do nothing
-  if (!srcLattices[0] || !srcLattices[1] ||
-      srcLattices[0]->getValue().isUninitialized() ||
-      srcLattices[1]->getValue().isUninitialized())
-    return std::nullopt;
-
-  auto opndRange0 = srcLattices[0]->getValue().getValue();
-  auto opndRange1 = srcLattices[1]->getValue().getValue();
-
-  // bail out if one of operands' is not non-negative
-  if (!isPos(opndRange0) || !isPos(opndRange1))
-    return std::nullopt;
-
-  APInt umax(resultRange.umax());
-  if (!umax.isNonNegative()) {
-    // Saturate umax to 0x7f...f
-    umax = APInt::getSignedMaxValue(umax.getBitWidth());
-  }
-
-  return ConstantIntRanges::fromUnsigned(resultRange.umin(), umax);
 }
 
 LogicalResult TritonIntegerRangeAnalysis::visitOperation(

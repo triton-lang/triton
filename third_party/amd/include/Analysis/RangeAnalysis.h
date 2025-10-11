@@ -154,11 +154,6 @@ private:
       ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
       ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices);
 
-  std::optional<IntegerValueRange> rectifyInfferableRange(
-      InferIntRangeInterface interface,
-      ArrayRef<const dataflow::IntegerValueRangeLattice *> srcLattices,
-      const IntegerValueRange &range);
-
   DenseSet<Value> signedIntValues;
   llvm::SmallMapVector<Value, ConstantIntRanges, 2> opResultAssumption;
   DominanceInfo *domInfo = nullptr;
