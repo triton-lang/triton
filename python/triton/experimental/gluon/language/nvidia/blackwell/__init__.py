@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
-from triton.experimental.gluon.language._layouts import BlockedLayout, _get_shape_per_cta
+from triton.experimental.gluon.language._layouts import BlockedLayout, _get_shape_per_cta, DistributedLinearLayout
 from triton.experimental.gluon.language._semantic import _check
 
 from . import tma
@@ -22,11 +22,12 @@ __all__ = [
     "async_copy",
     "fence_async_shared",
     "get_tmem_32x32b_reg_layout",
+    "get_tmem_scales_reg_layout",
     "mbarrier",
+    "mma_v2",
     "tensor_memory_descriptor",
     "TensorMemoryLayout",
     "tma",
-    "mma_v2",
 ]
 
 
@@ -132,6 +133,59 @@ def get_tmem_32x32b_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_sp
         ctas_per_cga=ctas_per_cga,
         cta_split_num=cta_split_num,
         cta_order=cta_order,
+    )
+
+
+@constexpr_function
+def get_tmem_scales_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_split_num=None, cta_order=None):
+    """Return a linear layout that is compatible with tmem scaled layout.
+    """
+    assert len(shape) == 2, "expected a 2D tensor"
+    assert num_warps in [4, 8], "expected 4 or 8 warps"
+
+    # Use per-CTA shape to build the linear layout bases
+    shape_per_cta = _get_shape_per_cta(shape, cta_split_num)
+    M_cta, N_cta = shape_per_cta[0], shape_per_cta[1]
+
+    # Register bases: pack 4 scales together along N; if fewer than 4, replicate.
+    reg_bases = []
+    i = 1
+    while i < 4:
+        if i >= N_cta:
+            reg_bases.append([0, 0])
+        else:
+            reg_bases.append([0, i])
+        i <<= 1
+
+    # Lane bases: distribute 32 rows of M along a warp.
+    lane_bases = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]]
+
+    # Warp bases: replicate across warps within a warpgroup by default.
+    warp_bases = [[0, 0], [0, 0]]
+
+    # Extend register bases for larger M and N beyond the initial pack.
+    i = 32
+    while i < M_cta:
+        reg_bases.append([i, 0])
+        i <<= 1
+
+    i = 4
+    while i < N_cta:
+        reg_bases.append([0, i])
+        i <<= 1
+
+    # For 8 warps, distribute the last dimension on the second warpgoup.
+    if num_warps == 8:
+        warp_bases.append(reg_bases[-1])
+        reg_bases.pop()
+
+    # No explicit CTA mapping here; the register layout is per-CTA.
+    return DistributedLinearLayout(
+        reg_bases=reg_bases,
+        lane_bases=lane_bases,
+        warp_bases=warp_bases,
+        block_bases=[],
+        shape=shape_per_cta,
     )
 
 
@@ -380,6 +434,50 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
 
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
                                          mbarrier_preds)
+
+
+@builtin
+def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=True, pred=True, mbarriers=None,
+                       mbarrier_preds=None, _semantic=None):
+    """
+    Emit a 5th generation TensorCore MMA scaled instruction.
+    acc = (a * a_scale) * (b * b_scale) + (acc if use_acc else 0)
+
+    Args:
+        a (shared_memory_descriptor): Left hand side operand in shared memory.
+        b (shared_memory_descriptor or tensor_memory_descriptor): Right hand side operand in shared or tensor memory.
+        acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
+        a_scale (tensor): Scale factor for operand A.
+        b_scale (tensor): Scale factor for operand B.
+        a_type (str): Type of operand A. One of {"e2m1", "e4m3", "e5m2"}.
+        b_type (str): Type of operand B. One of {"e2m1", "e4m3", "e5m2"}.
+        use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
+        pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
+        mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
+    """
+    use_acc = _semantic.to_tensor(use_acc)
+    pred = _semantic.to_tensor(pred)
+
+    if mbarriers is None:
+        assert mbarrier_preds is None
+        mbarriers = []
+        mbarrier_preds = []
+    else:
+        mbarriers = [bar.handle for bar in mbarriers]
+        if mbarrier_preds is None:
+            true = _semantic.to_tensor(True)
+            mbarrier_preds = [true.handle] * len(mbarriers)
+        else:
+            mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
+
+    allowed_formats = {"e2m1", "e4m3", "e5m2"}
+    assert a_type.value in allowed_formats, f"Unsupported lhs_format: {a_type.value}"
+    assert b_type.value in allowed_formats, f"Unsupported rhs_format: {b_type.value}"
+    a_type = _semantic._str_to_fp_type(a_type.value)
+    b_type = _semantic._str_to_fp_type(b_type.value)
+    _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
+                                                b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds)
 
 
 @builtin

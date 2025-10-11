@@ -37,7 +37,7 @@ jobs:
           docker container prune -f
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # The LATEST_DATE here should be kept in sync with the one in Patch setup.py
       - id: check-version
@@ -51,7 +51,7 @@ jobs:
             echo "new_commit=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 

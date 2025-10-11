@@ -30,7 +30,7 @@ jobs:
           echo "enable_integration=true" >> $GITHUB_ENV
       - name: Checkout post-submit commits
         if: github.event_name == 'push'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           # Only fetch two commits to check the latest changed files.
           fetch-depth: 2

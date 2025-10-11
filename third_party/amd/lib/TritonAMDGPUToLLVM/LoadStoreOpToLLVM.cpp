@@ -3,6 +3,7 @@
 #include "BufferOpsEmitter.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "TDMUtility.h"
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
@@ -306,7 +307,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
                                   bool hasSwizzling) const {
     int vecBits = vectorSize * dstTy.getElementTypeBitWidth();
     if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
-      LDBG(op << " results in unsupported load bitwidth: " << vecBits);
+      LDBG(*op << " results in unsupported load bitwidth: " << vecBits);
       return failure();
     }
     // Compute the blocked -> shared linear layout to check preconditions
@@ -324,13 +325,13 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     if (!hasSwizzling &&
         !LLVM::AMD::canCoalesceWriteIntoSharedMemory(
             rewriter, srcToSharedLayout, threadsPerWarp, vectorSize)) {
-      LDBG(op << " does not write coalesced into LDS and is not swizzled");
+      LDBG(*op << " does not write coalesced into LDS and is not swizzled");
       return failure();
     }
 
     if (hasSwizzling && !LLVM::AMD::doesSwizzleInsideWarp(
                             rewriter, srcToSharedLayout, threadsPerWarp)) {
-      LDBG(op << " does swizzle across warp boundaries");
+      LDBG(*op << " does swizzle across warp boundaries");
       return failure();
     }
     return success();
@@ -992,6 +993,126 @@ struct AsyncCopyGlobalToLocalOpConversion
         op.getLoc(), IntegerType::get(op.getContext(), 32),
         rewriter.getI32IntegerAttr(0));
     rewriter.replaceOp(op, zero);
+    return success();
+  }
+};
+
+struct AsyncTDMCopyGlobalToLocalOpConversion
+    : public ConvertOpToLLVMPattern<
+          triton::amdgpu::AsyncTDMCopyGlobalToLocalOp>,
+      public LoadStoreConversionBase {
+  AsyncTDMCopyGlobalToLocalOpConversion(
+      LLVMTypeConverter &converter, const AMD::TargetInfo &targetInfo,
+      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::AsyncTDMCopyGlobalToLocalOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    auto tensorDescTy = op.getDesc().getType();
+    auto smemTy = op.getResult().getType();
+    auto paddedEnc =
+        llvm::dyn_cast<PaddedSharedEncodingAttr>(smemTy.getEncoding());
+    Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
+
+    unsigned padInterval = 0;
+    unsigned padAmount = 0;
+    if (paddedEnc) {
+      assert(paddedEnc.getIntervals().size() == 1 &&
+             paddedEnc.getPaddings().size() == 1);
+      padInterval = paddedEnc.getIntervals()[0];
+      padAmount = paddedEnc.getPaddings()[0];
+    }
+
+    auto mod = op->getParentOfType<ModuleOp>();
+    int numCTAs = TritonGPUDialect::getNumCTAs(mod);
+    if (numCTAs > 1)
+      return rewriter.notifyMatchFailure(op, "NYI: Support multicast.");
+
+    SmallVector<Value> desc =
+        unpackLLElements(loc, adaptor.getDesc(), rewriter);
+    assert(desc.size() == 12);
+    auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
+    auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
+
+    SmallVector<int64_t> blockShape =
+        llvm::to_vector(tensorDescTy.getBlockType().getShape());
+    auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getResult(), elementType, rewriter);
+    Value dstPtr = dstMemObj.getBase();
+    SmallVector<Value> offset = adaptor.getIndices();
+    int numWarps = triton::gpu::lookupNumWarps(op);
+
+    LLVM::AMD::fillTDMDescriptor(rewriter, loc, getTypeConverter(), elementType,
+                                 blockShape, numWarps, padInterval, padAmount,
+                                 group0Vec, group1Vec, offset, dstPtr,
+                                 op.getPred());
+
+    auto group0 = packLLVector(loc, group0Vec, rewriter);
+    auto group1 = packLLVector(loc, group1Vec, rewriter);
+    LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                    "llvm.amdgcn.tensor.load.to.lds.d2", {},
+                                    {group0, group1, b.i32_val(0)});
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct AsyncTDMCopyLocalToGlobalOpConversion
+    : public ConvertOpToLLVMPattern<
+          triton::amdgpu::AsyncTDMCopyLocalToGlobalOp>,
+      public LoadStoreConversionBase {
+  AsyncTDMCopyLocalToGlobalOpConversion(
+      LLVMTypeConverter &converter, const AMD::TargetInfo &targetInfo,
+      ModuleAxisInfoAnalysis &axisAnalysisPass, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::AsyncTDMCopyLocalToGlobalOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    auto tensorDescTy = op.getDesc().getType();
+    auto smemTy = op.getSrc().getType();
+    Type elementType = getTypeConverter()->convertType(smemTy.getElementType());
+
+    SmallVector<Value> desc =
+        unpackLLElements(loc, adaptor.getDesc(), rewriter);
+    assert(desc.size() == 12);
+    auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
+    auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
+
+    SmallVector<int64_t> blockShape =
+        llvm::to_vector(tensorDescTy.getBlockType().getShape());
+    auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
+        loc, adaptor.getSrc(), elementType, rewriter);
+    Value dstPtr = dstMemObj.getBase();
+    SmallVector<Value> offset = adaptor.getIndices();
+    int numWarps = triton::gpu::lookupNumWarps(op);
+
+    LLVM::AMD::fillTDMDescriptor(rewriter, loc, getTypeConverter(), elementType,
+                                 blockShape, numWarps, /*padInterval=*/0,
+                                 /*padAmount=*/0, group0Vec, group1Vec, offset,
+                                 dstPtr, b.true_val());
+
+    auto group0 = packLLVector(loc, group0Vec, rewriter);
+    auto group1 = packLLVector(loc, group1Vec, rewriter);
+    LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                    "llvm.amdgcn.tensor.store.from.lds.d2", {},
+                                    {group0, group1, b.i32_val(0)});
+
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -1776,6 +1897,24 @@ private:
   const AMD::TargetInfo &targetInfo;
 };
 
+struct AsyncTDMWaitConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::AsyncTDMWait> {
+  AsyncTDMWaitConversion(LLVMTypeConverter &converter, PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::AsyncTDMWait op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                    "llvm.amdgcn.s.wait.tensorcnt", {},
+                                    {b.i16_val(op.getNum())});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct AsyncCommitGroupOpConversion
     : public ConvertOpToLLVMPattern<AsyncCommitGroupOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -1799,13 +1938,16 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit) {
-  patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
-               StoreOpConversion, BufferLoadOpConversion,
-               BufferLoadToLocalOpConversion, BufferStoreOpConversion,
-               BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion,
-               BufferAtomicCASOpConversion>(typeConverter, targetInfo,
-                                            axisInfoAnalysis, benefit);
+  patterns
+      .add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
+           StoreOpConversion, BufferLoadOpConversion,
+           BufferLoadToLocalOpConversion, BufferStoreOpConversion,
+           BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion,
+           BufferAtomicCASOpConversion, AsyncTDMCopyGlobalToLocalOpConversion,
+           AsyncTDMCopyLocalToGlobalOpConversion>(typeConverter, targetInfo,
+                                                  axisInfoAnalysis, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<AsyncTDMWaitConversion>(typeConverter, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
 }
 } // namespace mlir::triton::AMD

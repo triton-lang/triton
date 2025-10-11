@@ -6,8 +6,6 @@ if(POLICY CMP0116)
   cmake_policy(SET CMP0116 OLD)
 endif()
 
-include(ExternalProject)
-
 set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
@@ -68,10 +66,6 @@ endif()
 if(NOT CMAKE_BUILD_TYPE)
   message(STATUS "Default build type: Release")
   set(CMAKE_BUILD_TYPE "Release")
-endif()
-
-if(NOT WIN32)
-  find_library(TERMINFO_LIBRARY tinfo)
 endif()
 
 if(TRITON_BUILD_UT)

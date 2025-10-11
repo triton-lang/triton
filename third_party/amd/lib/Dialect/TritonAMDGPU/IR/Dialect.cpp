@@ -607,4 +607,57 @@ void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
   patterns.add(foldConcatOpFromSingleSource);
 }
 
+LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
+  auto tensorDescTy = getDesc().getType();
+  auto smemTy = getResult().getType();
+
+  auto swizzledEnc =
+      llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(smemTy.getEncoding());
+  if (swizzledEnc && swizzledEnc.getMaxPhase() != 1)
+    return emitOpError("TDM does not support swizzling");
+
+  auto paddedEnc =
+      llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
+  if (!paddedEnc && !swizzledEnc)
+    return emitOpError("Invalid shared memory layout for TDM");
+
+  Type elementType = smemTy.getElementType();
+  auto elementBitWidth = elementType.getIntOrFloatBitWidth();
+  if (paddedEnc) {
+    unsigned dwordSize = 32;
+    for (auto [interval, padding] :
+         llvm::zip(paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
+      auto intervalInDwords = interval * elementBitWidth / dwordSize;
+      if (intervalInDwords < 2)
+        return emitOpError("TDM padding interval must be at least 2 dwords");
+
+      auto paddingInDwords = padding * elementBitWidth / dwordSize;
+      if (paddingInDwords < 1)
+        return emitOpError("TDM padding amount must be at least 1 dword");
+    }
+  }
+
+  return success();
+}
+
+LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
+  auto tensorDescTy = getDesc().getType();
+  auto smemTy = getSrc().getType();
+
+  auto swizzledEnc =
+      llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(smemTy.getEncoding());
+  if (swizzledEnc && swizzledEnc.getMaxPhase() != 1)
+    return emitOpError("TDM does not support swizzling");
+
+  auto paddedEnc =
+      llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
+  if (paddedEnc)
+    return emitOpError("TDM store does not support padding");
+
+  if (!paddedEnc && !swizzledEnc)
+    return emitOpError("Invalid shared memory layout for TDM");
+
+  return success();
+}
+
 } // namespace mlir::triton::amdgpu
