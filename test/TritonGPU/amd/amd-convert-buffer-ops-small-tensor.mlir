@@ -36,13 +36,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
     // COMMON: buffer_load %arg0[%[[offset]]]
     %9 = tt.load %6 : tensor<256x!tt.ptr<f32>, #blocked0>
-    // COMMON: buffer_load %arg1[%[[offset]]]
+    // Note: offset = pid * 256 + arange(0, 256); byte-ofst="offset * sizeof(i32)" may not fall into range of 2G.
+    // COMMON-NOT: buffer_load %arg1[%[[offset]]]
     %10 = tt.load %8 : tensor<256x!tt.ptr<f32>, #blocked0>
     // COMMON: %[[data:.*]] = arith.addf
     %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>
     %12 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked0>
     %13 = tt.addptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
-    // COMMON: buffer_store %[[data]], %arg2[%[[offset]]]
+    // Note: see the explanation above
+    // COMMON-NOT: buffer_store %[[data]], %arg2[%[[offset]]]
     tt.store %13, %11 : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
@@ -70,7 +72,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %5 = tt.addptr %arg0, %1 : !tt.ptr<f32>, i32
     %8 = tt.splat %5 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
     %9 = tt.addptr %8, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-    // COMMON: buffer_load %[[scalar_ptr]][%[[offset]]]
+    // Note: the base "scalar_ptr" points to arg0 which is a large-tensor.
+    //  the offset="%sub + arange(0,1024)" where "%sub=pid*1024-128",
+    //  We can prove "offset > 0", but cannot prove byte-offset < 2G.
+    // COMMON-NOT: buffer_load %[[scalar_ptr]][%[[offset]]]
     %10 = tt.load %9 : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return %10 : tensor<1024xf32, #blocked>
   }
@@ -122,7 +127,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32}  {
     // COMMON: %[[offset_32_bit:.*]] = arith.trunci
     %narrow4 = arith.trunci %4 : tensor<1024xi64, #blocked> to tensor <1024xi32, #blocked>
     %9 = tt.addptr %8, %narrow4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-    // COMMON: buffer_load %[[scalar_ptr]][%[[offset_32_bit]]]
+    // Note: base is arg0 which is large-tensor, the offset=int(long(pid*1024) * long(arange(0, 1024))
+    // offset is in [0, i32-max].
+    // COMMON-NOT: buffer_load %[[scalar_ptr]][%[[offset_32_bit]]]
     %10 = tt.load %9 : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return %10 : tensor<1024xf32, #blocked>
   }
@@ -555,7 +562,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %5 = tt.addptr %arg0, %1 : !tt.ptr<f32>, i32
     %6 = tt.splat %5 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
     %7 = tt.addptr %6, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-    // COMMON: %[[loaded:.*]] = amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu, %arg1, %[[scalar_ptr]][%[[offset]]]
+    // Note: the large tensor is accessed, offset is in the range of [0, smax].
+    // without tl.assume the range would be [-128, smax]
+    // COMMON-NOT: amdgpu.buffer_atomic_rmw
     %8 = tt.atomic_rmw fadd, acq_rel, gpu, %7, %arg1 : (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>) -> tensor<1024xf32, #blocked>
     tt.return %8 : tensor<1024xf32, #blocked>
   }

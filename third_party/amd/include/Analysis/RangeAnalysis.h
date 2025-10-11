@@ -4,6 +4,7 @@
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 
 namespace mlir::triton {
@@ -32,14 +33,19 @@ namespace mlir::triton::AMD {
 /// See visitRegionSuccessors.
 struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   using dataflow::IntegerRangeAnalysis::IntegerRangeAnalysis;
+  using Base = dataflow::IntegerRangeAnalysis;
   TritonIntegerRangeAnalysis(
       DataFlowSolver &solver,
-      const DenseMap<Value, SetVector<Operation *>> &assumptions)
-      : dataflow::IntegerRangeAnalysis(solver), assumptions(assumptions) {}
+      const DenseMap<Value, SetVector<Operation *>> &assumptions,
+      DominanceInfo *dominanceInfo, bool assumeNoArithOverflow_ = false)
+      : dataflow::IntegerRangeAnalysis(solver), assumptions(assumptions),
+        domInfo(dominanceInfo), assumeNoArithOverflow(assumeNoArithOverflow_) {}
 
   void setToEntryState(dataflow::IntegerValueRangeLattice *lattice) override;
 
   void initializeFuncOp(triton::FuncOp funcOp);
+
+  LogicalResult initialize(Operation *top) override;
 
   LogicalResult visitOperation(
       Operation *op,
@@ -95,7 +101,8 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   ///   llvm.intr.assume %assumesltlhs : i1
   /// for %K, will produce a final range
   ///   [0, 2147483647] ∩ [-2147483648, 128] = [0, 128]
-  std::optional<ConstantIntRanges> maybeGetAssumedRange(Value anchor) const;
+  std::optional<ConstantIntRanges> maybeGetAssumedRange(Value anchor,
+                                                        Block *useBlock) const;
 
   int64_t getTotalLoopTripCount(LoopLikeOpInterface loop);
 
@@ -125,6 +132,32 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   /// If one uses collectAssumptions below then `assumptions` will look like
   /// %K -> {arith.cmpi slt..., arith.cmpi sge}.
   llvm::DenseMap<Value, SetVector<Operation *>> assumptions;
+
+  /// The defaultTransferFunc is the default transfer function for this dataflow
+  /// problem.
+  /// @param[in] op: the Operation in question
+  /// @param[in] result: a particular value defined by this op. Note that op
+  ///            may define multiple values.
+  /// @param[in] srcLattices: lattices of all source operands
+  /// @param[in] destLattices: lattices all all result values
+  /// @param[in] incomingRange: the value-range inffered for result
+  void defaultTransferFunc(
+      Operation *op, Value result,
+      ArrayRef<const dataflow::IntegerValueRangeLattice *> srcLattices,
+      ArrayRef<dataflow::IntegerValueRangeLattice *> destLattices,
+      const IntegerValueRange &incomingRange);
+
+private:
+  void visitYieldHelper(Operation *yieldOp, Value value);
+  LogicalResult visitOperationHelper(
+      Operation *op,
+      ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
+      ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices);
+
+  DenseSet<Value> signedIntValues;
+  llvm::SmallMapVector<Value, ConstantIntRanges, 2> opResultAssumption;
+  DominanceInfo *domInfo = nullptr;
+  bool assumeNoArithOverflow = false;
 };
 
 std::optional<SmallVector<std::optional<ConstantIntRanges>>>
