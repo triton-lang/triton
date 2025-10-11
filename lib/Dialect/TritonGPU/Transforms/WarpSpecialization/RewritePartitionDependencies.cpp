@@ -152,20 +152,32 @@ LogicalResult DependencyRewriter::run() {
     auto &useInfo = partitionUseInfo.emplace_back();
     SmallVector<std::tuple<Value, OpOperand *, unsigned>> uses;
 
-    std::function<void(OpOperand &)> collectUses;
-    collectUses = [&](OpOperand &use) {
+    std::function<void(Operation *, OpOperand &)> collectUses;
+    collectUses = [&](Operation *producer, OpOperand &use) {
       Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
-      auto partitionIds = getPartitionIds(owner);
+      auto producerPartitionIds = getPartitionIds(producer);
+      auto consumerPartitionIds = getPartitionIds(owner);
+
+      auto overlap = [&](SetVector<int> &producerPartitionIds,
+                         SetVector<int> &consumerPartitionIds) {
+        for (int id : consumerPartitionIds) {
+          if (!producerPartitionIds.contains(id)) {
+            return false;
+          }
+        }
+        return true;
+      };
+
       if (isa<scf::YieldOp>(owner)) {
         // This value is used in a subsequent iteration.
         // collect the uses of the appropriate loop arg
         for (auto &newUse : loop.getBody()
                                 ->getArgument(use.getOperandNumber() + 1)
                                 .getUses()) {
-          collectUses(newUse);
+          collectUses(producer, newUse);
         }
-      } else if (partitionIds &&
-                 !llvm::is_contained(*partitionIds, partition.getIndex())) {
+      } else if (producerPartitionIds && consumerPartitionIds &&
+                 !overlap(*producerPartitionIds, *consumerPartitionIds)) {
         // This value is used in a different partition in the same iteration.
         uses.emplace_back(use.get(), &use, 0);
       }
@@ -176,7 +188,7 @@ LogicalResult DependencyRewriter::run() {
         continue;
       }
       for (OpOperand &use : op->getUses()) {
-        collectUses(use);
+        collectUses(op, use);
       }
     }
 

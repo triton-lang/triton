@@ -45,6 +45,15 @@ std::optional<int> getPartitionId(Operation *op) {
   assert(partitionIds->size() == 1);
   return *partitionIds->begin();
 }
+
+std::optional<int> getOutputPartitionId(Operation *op, int idx) {
+  auto partitionIds = getOutputPartitionIds(op, idx);
+  if (!partitionIds)
+    return std::nullopt;
+  assert(partitionIds->size() == 1);
+  return *partitionIds->begin();
+}
+
 using PartitionId = int;
 
 struct TmemAccessDag {
@@ -204,7 +213,13 @@ struct TmemAccessDag {
       return tokOperand.get(); // return token back to the caller
 
     auto op = tokOperand.getOwner();
-    node->user.reset(new Node(op, &tokOperand, getPartitionId(op), node));
+    std::optional<int> partition_id = std::nullopt;
+    if (isa<scf::ForOp>(op))
+      partition_id =
+          getOutputPartitionId(op, tokOperand.getOperandNumber() - 3);
+    else
+      partition_id = getPartitionId(op);
+    node->user.reset(new Node(op, &tokOperand, partition_id, node));
     auto newNode = node->user.get();
     op2dagMap.insert({op, newNode});
     Value newTok;
@@ -664,11 +679,12 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
   //   scf.if %condition {
   //     aref.put.exit                    // Separate exit operation
   //   } { .. loop.stage = 1 .. }
+  //   %poisoned_token = ub.poison
   //   %results, %more = scf.if %condition {
   //     <computation_code>               // Main computation without token ops
-  //     scf.yield %values, %other_values
+  //     scf.yield %values, %poisoned_token, %other_values
   //   } else {
-  //     scf.yield %alt_values, %alt_other_values
+  //     scf.yield %alt_values, %poisoned_token, %alt_other_values
   //   }
   //   %token = scf.if %condition {
   //     %new_token = aref.put.enter      // Separate enter operation
@@ -685,17 +701,30 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
     b.setInsertionPoint(ifOp);
     auto exitIf =
         b.create<scf::IfOp>(SmallVector<Type>{}, ifOp.getCondition(), false);
+    exitIf->setAttrs(ifOp->getAttrs());
     auto putExitOp = cast<ArefPutExitOp>(*ifOp.thenBlock()->begin());
     putExitOp->moveBefore(exitIf.thenBlock(), exitIf.thenBlock()->begin());
+
+    // set partition ids for exitIf
+    auto exitPartitionIds = *getPartitionIds(putExitOp);
+    setPartition(exitIf, exitPartitionIds);
+    clearOutputPartitions(exitIf);
 
     // move putEnterOp
     b.setInsertionPointAfter(ifOp);
     auto enterIf =
         b.create<scf::IfOp>(SmallVector<Type>{b.getType<AsyncTokenType>()},
                             ifOp.getCondition(), true);
+    enterIf->setAttrs(ifOp->getAttrs());
     auto putEnterOp =
         cast<ArefPutEnterOp>(ifOp.thenBlock()->getTerminator()->getPrevNode());
     putEnterOp->moveBefore(enterIf.thenBlock(), enterIf.thenBlock()->begin());
+
+    // set partition ids for enterIf
+    auto enterPartitionIds = *getPartitionIds(putEnterOp);
+    setPartition(enterIf, enterPartitionIds);
+    clearOutputPartitions(enterIf);
+    setOutputPartition(enterIf, 0, enterPartitionIds);
 
     // replace token uses
     auto tok = putEnterOp.getToken();
@@ -715,10 +744,24 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
     ifOp.elseYield().setOperand(pos, poisonToken);
 
     // patch loop.stage=1
-    enterIf->setAttrs(ifOp->getAttrs());
-    exitIf->setAttrs(ifOp->getAttrs());
     enterIf->setAttr(kLoopStageAttrName, b.getI32IntegerAttr(1));
     exitIf->setAttr(kLoopStageAttrName, b.getI32IntegerAttr(1));
+
+    // patch partitions for ifOp
+    SetVector<int> partitionIds;
+    ifOp->walk([&](Operation *op) {
+      if (op == ifOp)
+        return;
+      auto ids = getPartitionIds(op);
+      if (ids)
+        partitionIds.insert(ids->begin(), ids->end());
+    });
+    setPartition(ifOp, partitionIds);
+    // set poisoned token output to the first partition id of the ifOp
+    // Note: will prefer partition 0 if used by the ifOp
+    SetVector<int> tokenPartitions;
+    tokenPartitions.insert(getPartitionIds(ifOp)->front());
+    setOutputPartition(ifOp, pos, tokenPartitions);
   }
 }
 
