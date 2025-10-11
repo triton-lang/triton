@@ -24,13 +24,14 @@ import pytest
 import torch
 import triton
 import importlib
+import sys
 from functools import partial
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
 from triton.language.core import _aggregate as aggregate
 from triton.experimental.gluon.nvidia.hopper import TensorDescriptor
-from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared
+from triton.experimental.gluon.language.nvidia.hopper import tma, mbarrier, fence_async_shared, warpgroup_mma_wait, warpgroup_mma, warpgroup_mma_init
 from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     tensor_memory_descriptor,
@@ -55,6 +56,11 @@ t4 = importlib.import_module("04-tma")
 def is_hopper_or_newer():
     target = triton.runtime.driver.active.get_current_target()
     return target.backend == "cuda" and torch.cuda.get_device_capability()[0] >= 9
+
+
+def is_hopper():
+    target = triton.runtime.driver.active.get_current_target()
+    return target.backend == "cuda" and torch.cuda.get_device_capability()[0] == 9
 
 
 def is_blackwell():
@@ -673,3 +679,278 @@ if __name__ == "__main__" and is_blackwell():
 # Much better! We are beating cublas on small K, even though there is still lots
 # of tuning we can do to improve performance. On Blackwell, warp specialization
 # is critical for achieving peak performance.
+
+
+# Helper class for passing arguments around partitions.
+@aggregate
+class WGMMAPartitionArgs:
+    a_desc: tma.tensor_descriptor
+    b_desc: tma.tensor_descriptor
+    c_desc: tma.tensor_descriptor
+    a_bufs: gl.shared_memory_descriptor
+    b_bufs: gl.shared_memory_descriptor
+    c_bufs: gl.shared_memory_descriptor
+    load_empty_bars: gl.shared_memory_descriptor
+    load_ready_bars: gl.shared_memory_descriptor
+    load_empty_arrive_count: gl.constexpr
+    load_ready_arrive_count: gl.constexpr
+    c_empty_bars: gl.shared_memory_descriptor
+    c_ready_bars: gl.shared_memory_descriptor
+    c_empty_arrive_count: gl.constexpr
+    c_ready_arrive_count: gl.constexpr
+    num_warps: gl.constexpr
+    num_buffers: gl.constexpr
+
+    def __init__(self, a_desc, b_desc, c_desc, a_bufs, b_bufs, c_bufs, load_empty_bars, load_ready_bars,
+                 load_empty_arrive_count, load_ready_arrive_count, c_empty_bars, c_ready_bars, c_empty_arrive_count,
+                 c_ready_arrive_count, num_warps, num_buffers):
+        self.a_desc = a_desc
+        self.b_desc = b_desc
+        self.c_desc = c_desc
+        self.a_bufs = a_bufs
+        self.b_bufs = b_bufs
+        self.c_bufs = c_bufs
+        self.load_empty_bars = load_empty_bars
+        self.load_ready_bars = load_ready_bars
+        self.load_empty_arrive_count = load_empty_arrive_count
+        self.load_ready_arrive_count = load_ready_arrive_count
+        self.c_empty_arrive_count = c_empty_arrive_count
+        self.c_ready_arrive_count = c_ready_arrive_count
+        self.c_empty_bars = c_empty_bars
+        self.c_ready_bars = c_ready_bars
+        self.num_warps = num_warps
+        self.num_buffers = num_buffers
+
+
+@gluon.jit
+def matmul_load_partition_hopper(p, SchedulerImpl: gl.constexpr):
+    BLOCK_M: gl.constexpr = p.c_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = p.c_desc.block_type.shape[1]
+    BLOCK_K: gl.constexpr = p.a_desc.block_type.shape[1]
+    K = p.a_desc.shape[1]
+    num_buffers: gl.constexpr = p.num_buffers
+
+    empty_bars = p.load_empty_bars
+    ready_bars = p.load_ready_bars
+
+    # Just loop over all tiles and issue loads.
+    scheduler = SchedulerImpl.initialize(p.c_desc.shape[0], p.c_desc.shape[1], BLOCK_M, BLOCK_N)
+
+    state = Counter.create(1, num_buffers)
+    nt = scheduler.get_num_tiles()
+    for idx in range(nt):
+        pid_m, pid_n = scheduler.get_tile(idx)
+        off_m = pid_m * BLOCK_M
+        off_n = pid_n * BLOCK_N
+        for k in range(0, K, BLOCK_K):
+            # Acquire buffers, issue loads, and complete them asynchronously.
+            r_bar = ready_bars.index(state.index)
+            mbarrier.wait(empty_bars.index(state.index), state.phase)
+            mbarrier.expect(r_bar, p.a_desc.block_type.nbytes + p.b_desc.block_type.nbytes)
+            tma.async_copy_global_to_shared(p.a_desc, [off_m, k], r_bar, p.a_bufs.index(state.index))
+            tma.async_copy_global_to_shared(p.b_desc, [k, off_n], r_bar, p.b_bufs.index(state.index))
+            state = state.next()
+
+
+@gluon.jit
+def matmul_mma_partition_hopper(p, SchedulerImpl: gl.constexpr):
+    BLOCK_M: gl.constexpr = p.c_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = p.c_desc.block_type.shape[1]
+    BLOCK_K: gl.constexpr = p.a_desc.block_type.shape[1]
+    a_dtype: gl.constexpr = p.a_desc.dtype
+    num_warps: gl.constexpr = p.num_warps
+    mma_layout: gl.constexpr = t5.pick_wgmma_layout(a_dtype, BLOCK_M, BLOCK_N, num_warps)
+
+    K = p.a_desc.shape[1]
+    c_dtype = p.c_desc.dtype
+
+    a_bufs = p.a_bufs
+    b_bufs = p.b_bufs
+    load_empty_bars = p.load_empty_bars
+    load_ready_bars = p.load_ready_bars
+    load_empty_arrive_count: gl.constexpr = p.load_empty_arrive_count
+    num_buffers: gl.constexpr = load_empty_bars.shape[0]
+
+    c_bufs = p.c_bufs
+    c_empty_bars = p.c_empty_bars
+    c_ready_bars = p.c_ready_bars
+    c_empty_state = Counter.create(1, c_empty_bars.shape[0])
+    c_ready_state = Counter.create(0, c_empty_bars.shape[0])
+    c_ready_arrive_count: gl.constexpr = p.c_ready_arrive_count
+
+    scheduler = SchedulerImpl.initialize(p.c_desc.shape[0], p.c_desc.shape[1], BLOCK_M, BLOCK_N)
+    load_ready_state = Counter.create(0, num_buffers)
+    load_empty_state = Counter.create(1, num_buffers)
+    nt = scheduler.get_num_tiles()
+    for _ in range(nt):
+        # Acquire the accumulator for the entire inner loop.
+        use_acc = False
+        acc = warpgroup_mma_init(gl.zeros((BLOCK_M, BLOCK_N), dtype=gl.float32, layout=mma_layout))
+        for k in range(0, K, BLOCK_K):
+            mbarrier.wait(load_ready_bars.index(load_ready_state.index), load_ready_state.phase)
+            acc = warpgroup_mma(a_bufs.index(load_ready_state.index), b_bufs.index(load_ready_state.index), acc,
+                                is_async=True, use_acc=use_acc)
+            load_ready_state = load_ready_state.next()
+            use_acc = True
+            warpgroup_mma_wait(0, (acc, ))
+            mbarrier.arrive(load_empty_bars.index(load_empty_state.index), count=load_empty_arrive_count)
+            load_empty_state = load_empty_state.next()
+        acc = warpgroup_mma_wait(0, (acc, ))
+        acc = acc.to(c_dtype)
+        mbarrier.wait(c_empty_bars.index(c_empty_state.index), c_empty_state.phase)
+        c_empty_state = c_empty_state.next()
+        c_bufs.store(acc)
+        fence_async_shared()
+        mbarrier.arrive(c_ready_bars.index(c_ready_state.index), count=c_ready_arrive_count)
+        c_ready_state = c_ready_state.next()
+
+
+@gluon.jit
+def matmul_epilogue_partition_hopper(p, SchedulerImpl: gl.constexpr):
+    BLOCK_M: gl.constexpr = p.c_desc.block_type.shape[0]
+    BLOCK_N: gl.constexpr = p.c_desc.block_type.shape[1]
+    c_desc = p.c_desc
+
+    c_bufs = p.c_bufs
+    c_empty_arrive_count: gl.constexpr = p.c_empty_arrive_count
+    c_empty_bars = p.c_empty_bars
+    c_ready_bars = p.c_ready_bars
+    c_empty_state = Counter.create(1, c_empty_bars.shape[0])
+    c_ready_state = Counter.create(0, c_empty_bars.shape[0])
+
+    scheduler = SchedulerImpl.initialize(p.c_desc.shape[0], p.c_desc.shape[1], BLOCK_M, BLOCK_N)
+    nt = scheduler.get_num_tiles()
+    for idx in range(nt):
+        pid_m, pid_n = scheduler.get_tile(idx)
+        off_m = pid_m * BLOCK_M
+        off_n = pid_n * BLOCK_N
+
+        # Wait for the accumulator. Since BLOCK_N=256, we need to interleave
+        # the TMEM loads with the SMEM stores to avoid spilling.
+        mbarrier.wait(c_ready_bars.index(c_ready_state.index), c_ready_state.phase)
+        c_ready_state = c_ready_state.next()
+
+        fence_async_shared()
+        tma.async_copy_shared_to_global(c_desc, [off_m, off_n], c_bufs)
+        tma.store_wait(pendings=0)
+        mbarrier.arrive(c_empty_bars.index(c_empty_state.index), count=c_empty_arrive_count)
+        c_empty_state = c_empty_state.next()
+
+
+@gluon.jit
+def matmul_warp_specialized_kernel_hopper(a_desc, b_desc, c_desc, SchedulerImpl: gl.constexpr,
+                                          num_buffers: gl.constexpr, num_warps: gl.constexpr):
+    dtype: gl.constexpr = a_desc.dtype
+    c_dtype: gl.constexpr = c_desc.dtype
+
+    num_mma_warp: gl.constexpr = num_warps
+    num_tma_warp: gl.constexpr = 1
+    num_epi_warp: gl.constexpr = 1
+
+    a_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + a_desc.block_type.shape, a_desc.layout)
+    b_bufs = gl.allocate_shared_memory(dtype, [num_buffers] + b_desc.block_type.shape, b_desc.layout)
+    c_bufs = gl.allocate_shared_memory(c_dtype, c_desc.block_type.shape, b_desc.layout)
+    load_empty_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
+    load_ready_bars = gl.allocate_shared_memory(gl.int64, [num_buffers, 1], mbarrier.MBarrierLayout())
+    load_empty_arrive_count: gl.constexpr = num_mma_warp
+    load_ready_arrive_count: gl.constexpr = num_tma_warp
+
+    c_empty_bars = gl.allocate_shared_memory(gl.int64, [1, 1], mbarrier.MBarrierLayout())
+    c_ready_bars = gl.allocate_shared_memory(gl.int64, [1, 1], mbarrier.MBarrierLayout())
+    c_ready_arrive_count: gl.constexpr = num_mma_warp
+    c_empty_arrive_count: gl.constexpr = num_epi_warp
+
+    for i in gl.static_range(num_buffers):
+        mbarrier.init(load_empty_bars.index(i), count=load_empty_arrive_count)
+        mbarrier.init(load_ready_bars.index(i), count=load_ready_arrive_count)
+
+    mbarrier.init(c_empty_bars.index(0), count=c_empty_arrive_count)
+    mbarrier.init(c_ready_bars.index(0), count=c_ready_arrive_count)
+
+    p = WGMMAPartitionArgs(a_desc, b_desc, c_desc, a_bufs, b_bufs, c_bufs, load_empty_bars, load_ready_bars,
+                           load_empty_arrive_count, load_empty_arrive_count, c_empty_bars, c_ready_bars,
+                           c_empty_arrive_count, c_ready_arrive_count, num_warps, num_buffers)
+
+    gl.warp_specialize(
+        default_args=(p, SchedulerImpl),
+        default_partition=matmul_mma_partition_hopper,
+        worker_args=(p, SchedulerImpl),
+        worker_partitions=[matmul_load_partition_hopper, matmul_epilogue_partition_hopper],
+        worker_num_warps=[num_tma_warp, num_epi_warp],
+        worker_num_regs=[24, 24],
+    )
+
+
+t5 = importlib.import_module("05-wgmma")
+hopper_scheduler = t7.GroupedPersistentTileScheduler(8)
+hopper_benchmark_mnk = [(8192, 8192, K) for K in [2**i for i in range(9, 15)]]
+
+
+def matmul_warp_specialized_hopper(A, B, C):
+    BLOCK_M = 128
+    BLOCK_N = 256
+    BLOCK_K = 64
+    num_buffers = 3
+    num_warps = 8
+
+    M, N = C.shape
+
+    a_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_K], gl.float16)
+    b_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_K, BLOCK_N], gl.float16)
+    c_layout = gl.NVMMASharedLayout.get_default_for([BLOCK_M, BLOCK_N], gl.float16)
+
+    a_desc = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_K], a_layout)
+    b_desc = TensorDescriptor.from_tensor(B, [BLOCK_K, BLOCK_N], b_layout)
+    c_desc = TensorDescriptor.from_tensor(C, [BLOCK_M, BLOCK_N], c_layout)
+
+    num_sms = torch.cuda.get_device_properties("cuda").multi_processor_count
+    num_pid = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
+    num_pg = min(num_sms, num_pid)
+    grid = (num_pg, )
+    matmul_warp_specialized_kernel_hopper[grid](a_desc, b_desc, c_desc, hopper_scheduler, num_buffers,
+                                                num_warps=num_warps)
+
+
+@pytest.mark.parametrize("M, N, K", hopper_benchmark_mnk)
+@pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
+def test_matmul_warp_specialized_hopper(M, N, K):
+    torch.manual_seed(0)
+    A = torch.randn(M, K, device="cuda", dtype=torch.float16)
+    B = torch.randn(K, N, device="cuda", dtype=torch.float16)
+    C = torch.empty(M, N, device="cuda", dtype=torch.float16)
+    matmul_warp_specialized_hopper(A, B, C)
+    torch.testing.assert_close(A @ B, C, rtol=1e-3, atol=1e-1)
+
+
+if __name__ == "__main__" and is_hopper():
+    profiling_with_ncu = len(sys.argv) > 1 and sys.argv[1] == "profile"
+    print("Benchmarking matmul_warp_specialized on hopper")
+    print("====================================")
+    print("    K  warp-specialized    cublas")
+    for M, N, K in hopper_benchmark_mnk:
+        as_flops = partial(t7.get_flops, M=M, N=N, K=K)
+        A = torch.randn(M, K, device="cuda", dtype=torch.float16)
+        B = torch.randn(K, N, device="cuda", dtype=torch.float16)
+        C = torch.empty(M, N, device="cuda", dtype=torch.float16)
+        # FIXME: this is not fair, but triton's cublasLt inferface has no support for non-tranposed B, while gluon has no support for transposed B.
+        BT = B.T.contiguous()
+        if profiling_with_ncu:
+            matmul_warp_specialized_hopper(A, B, C)
+            cublas.matmul(A, BT, C)
+        else:
+            r0 = as_flops(triton.testing.do_bench_cudagraph(lambda: matmul_warp_specialized_hopper(A, B, C)))
+            r1 = as_flops(triton.testing.do_bench(lambda: cublas.matmul(A, BT, C)))
+            print(f"{K:>5} {r0:>17.2f} {r1:>9.2f}")
+
+# %%
+# Benchmarking matmul_warp_specialized on hopper
+# ====================================
+#     K  warp-specialized    cublas
+#   512            541.77    579.82
+#  1024            611.26    634.68
+#  2048            653.32    632.08
+#  4096            632.88    656.14
+#  8192            677.25    644.80
+# 16384            682.12    683.16
+#
+# If you profile with ncu, you will see this kernel is as good as cublas form K=1024 onwards.
