@@ -1448,10 +1448,7 @@ LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
 //   https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-block-scaling
 //
 // This function generates layouts for scale tensors used in scaled dot
-// operations. Scale tensor shapes:
-//   scale_A (dotOperandIdx=0): M x K (where M is rows, K is number of scale
-//   groups) scale_B (dotOperandIdx=1): N x K (where N is cols, K is number of
-//   scale groups)
+// operations.
 //
 // Supported .kind x scale_vec_size:
 //   mxf8f6f4 with UE8M0 scales -> .scale_vec::1X
