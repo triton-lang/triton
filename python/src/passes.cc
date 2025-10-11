@@ -2,6 +2,7 @@
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Tools/Plugins/PassPlugin.h"
 #include "passes.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
@@ -12,6 +13,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 #include "triton/Target/LLVMIR/Passes.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -94,6 +96,35 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonInstrumentConcurrencySanitizer);
 }
 
+void init_plugin_passes(py::module &&m) {
+  m.def("add_plugin", [](mlir ::PassManager &pm) {
+    std::string filename =
+        mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+    if (filename.empty())
+      return;
+
+    std::string error;
+    auto library = llvm::sys::DynamicLibrary::getPermanentLibrary(
+        filename.c_str(), &error);
+
+    if (!library.isValid()) {
+      llvm::errs() << "Failed to load plugin library: " << error << "\n";
+      throw std::runtime_error("Failed to load plugin library");
+    }
+
+    intptr_t getDetailsFn =
+        (intptr_t)library.getAddressOfSymbol("addTritonPluginPass");
+
+    if (!getDetailsFn) {
+      llvm::errs() << "Failed to get symbol: " << error << "\n";
+      throw std::runtime_error("Failed to get symbol");
+    }
+    std::function<void(mlir::PassManager &)> createPluginPass =
+        reinterpret_cast<void (*)(mlir::PassManager &)>(getDetailsFn);
+    createPluginPass(pm);
+  });
+}
+
 void init_triton_passes_convert(py::module &&m) {
   using namespace mlir;
   ADD_PASS_WRAPPER_0("add_scf_to_cf", createSCFToControlFlowPass);
@@ -126,4 +157,5 @@ void init_triton_passes(py::module &&m) {
   init_triton_passes_ttgpuir(m.def_submodule("ttgpuir"));
   init_triton_passes_llvmir(m.def_submodule("llvmir"));
   init_gluon_passes(m.def_submodule("gluon"));
+  init_plugin_passes(m.def_submodule("plugin"));
 }
