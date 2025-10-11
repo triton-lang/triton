@@ -1291,13 +1291,17 @@ LinearLayout toLinearLayout(MemDescType type) {
   return toLinearLayout(shape, type.getEncoding());
 }
 
-LinearLayout toLinearLayout(TensorOrMemDesc type) {
-  if (auto ranked = dyn_cast<RankedTensorType>(type)) {
+LinearLayout toLinearLayout(::mlir::Type type) {
+  if (auto ranked = dyn_cast<RankedTensorType>(type))
     return toLinearLayout(ranked);
-  } else {
-    auto memDesc = cast<MemDescType>(type);
+  if (auto memDesc = dyn_cast<MemDescType>(type))
     return toLinearLayout(memDesc);
-  }
+  auto t = dyn_cast<::mlir::triton::TensorOrMemDesc>(type);
+  assert(t && "expected TensorOrMemDesc or RankedTensorType/MemDescType");
+  if (auto ranked2 = dyn_cast<RankedTensorType>(t))
+    return toLinearLayout(ranked2);
+  auto mem2 = cast<MemDescType>(t);
+  return toLinearLayout(mem2);
 }
 
 // UNSAFE OVERLOAD!
