@@ -101,8 +101,8 @@ bool isByteOffsetSmallerThan2GB(triton::AddPtrOp addPtrOp,
   int64_t szLimit2GB = (1L << 31) - 1;
 
   LDBG("element bit sz:" << elemBitSz << ", max byte offset:" << byteOfst
-                         << ((szLimit2GB > byteOfst) ? ", out or range"
-                                                     : ",in range"));
+                         << ((szLimit2GB > byteOfst) ? ", out of range"
+                                                     : ", in range"));
 
   return byteOfst <= szLimit2GB;
 }

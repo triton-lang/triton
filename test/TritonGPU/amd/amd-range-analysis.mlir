@@ -1316,7 +1316,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // expected-remark@+1 {{non-neg}}
     %6 = tt.splat %5 : i32 -> tensor<8xi32>
     %7 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
-    // expected-remark@+1 {{unsigned : [0, 2147483647] signed : [0, 2147483647]}}
+    // expected-remark@+1 {{unsigned : [0, 2147483654] signed : [-2147483648, 2147483647]}}
     %8 = arith.addi %6, %7 : tensor<8xi32>
     tt.return
   }
@@ -1556,10 +1556,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     // expected-remark@+2 {{unsigned : [1, 2147483647] signed : [1, 2147483647]}}
     // expected-remark@+1 {{non-neg}}
     %2 = tt.splat %arg6 : i32 -> tensor<256x1xi32, #blocked>
-    // expected-remark@+1 {{unsigned : [0, 2147483647] signed : [0, 2147483647]}}
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
     %3 = arith.muli %1, %2 : tensor<256x1xi32, #blocked>
     %4 = tt.addptr %arg0, %c32_i32 : !tt.ptr<f16>, i32
-    // expected-remark@+1 {{unsigned : [0, 2147483647] signed : [0, 2147483647]}}
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
     %5 = tt.broadcast %3 : tensor<256x1xi32, #blocked> -> tensor<256x64xi32, #blocked>
     %6 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
     // expected-remark@+2 {{unsigned : [0, 63] signed : [0, 63]}}
@@ -1568,7 +1568,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     // expected-remark@+2 {{unsigned : [0, 63] signed : [0, 63]}}
     // expected-remark@+1 {{non-neg}}
     %8 = tt.broadcast %7 : tensor<1x64xi32, #blocked> -> tensor<256x64xi32, #blocked>
-    // expected-remark@+1 {{unsigned : [0, 2147483647] signed : [0, 2147483647]}}
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
     %9 = arith.addi %8, %5 : tensor<256x64xi32, #blocked>
     %10 = tt.splat %4 : !tt.ptr<f16> -> tensor<256x64x!tt.ptr<f16>, #blocked>
     %11 = tt.addptr %10, %9 : tensor<256x64x!tt.ptr<f16>, #blocked>, tensor<256x64xi32, #blocked>
@@ -1714,7 +1714,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     // expected-remark@+2 {{unsigned : [0, 65536] signed : [0, 65536]}}
     // expected-remark@+1 {{non-neg}}
     %20 = tt.splat %2 : i32 -> tensor<32xi32, #blocked>
-    // expected-remark@+1 {{unsigned : [0, 2147483647] signed : [0, 2147483647]}}
+    // expected-remark@+1 {{unsigned : [0, 4294967295] signed : [-2147483648, 2147483647]}}
     %21 = arith.muli %6, %20 : tensor<32xi32, #blocked>
     %22 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>, #blocked>
     %23 = tt.addptr %22, %21 : tensor<32x!tt.ptr<f32>, #blocked>, tensor<32xi32, #blocked>
