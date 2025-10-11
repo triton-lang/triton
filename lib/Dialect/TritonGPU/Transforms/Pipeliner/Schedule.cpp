@@ -263,7 +263,8 @@ void tt::CoarseSchedule::serialize(scf::ForOp &forOp) const {
 }
 
 // Create a CoarseSchedule based on forOp's <stage, cluster>.
-LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
+LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp,
+                                              bool normalizeClusterId) {
   auto [minClusterId, maxClusterId] = getMinMaxCluster(forOp);
   std::optional<int> maxStage = tryGetMaxStage(forOp);
   if (!maxStage) {
@@ -272,9 +273,16 @@ LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
   numStages = *maxStage + 1;
 
   DenseMap<int, tt::CoarseSchedule::Cluster> clustersMap;
-  for (int i = minClusterId; i < maxClusterId + 1; i++) {
-    clustersMap.insert({i, clusters.newAtBack()});
+  if (normalizeClusterId) {
+    for (int i = minClusterId; i < maxClusterId + 1; i++) {
+      clustersMap.insert({i, clusters.newAtBack()});
+    }
+  } else {
+    for (int i = 0; i < maxClusterId + 1; i++) {
+      clustersMap.insert({i, clusters.newAtBack()});
+    }
   }
+
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (!op.hasAttr(mlir::triton::kLoopStageAttrName))
       continue;

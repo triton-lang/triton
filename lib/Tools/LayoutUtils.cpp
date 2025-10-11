@@ -477,4 +477,89 @@ largestVectorisation(MLIRContext *ctx, const LinearLayout &cvt, int bitwidth,
   llvm_unreachable("Vectorization < 1 is not valid");
 }
 
+std::optional<LinearLayout> getReps(const LinearLayout &cvt,
+                                    const LinearLayout &tile) {
+
+  // Ensure tile out-dims are subset of cvt out-dims.
+  for (auto od : tile.getOutDimNames())
+    assert(cvt.hasOutDim(od) && "tile out-dims must be contained in cvt");
+
+  // Precompute tile out-dim bit-widths.
+  llvm::SmallDenseMap<StringAttr, int> outBLog2;
+  for (StringAttr od : cvt.getOutDimNames())
+    outBLog2[od] = tile.hasOutDim(od) ? tile.getOutDimSizeLog2(od) : 0;
+
+  // Build a per-out-dimension mask by OR-ing all tile bases that touch it.
+  llvm::SmallDenseMap<StringAttr, int32_t> tileMaskPerOutDim;
+  for (StringAttr od : cvt.getOutDimNames())
+    tileMaskPerOutDim[od] = 0;
+  for (auto &[inDim, inBases] : tile.getBases()) {
+    (void)inDim;
+    for (auto &basis : inBases) {
+      int idx = 0;
+      for (StringAttr od : tile.getOutDimNames()) {
+        tileMaskPerOutDim[od] |= basis[idx++];
+      }
+    }
+  }
+
+  // Build reps with the same in/out dims as cvt, but zeroing out the leading
+  // inB bases (per in-dim) and keeping the remainder bases unchanged from cvt.
+  LinearLayout::BasesT repsBases;
+  for (StringAttr id : cvt.getInDimNames()) {
+    int inA = cvt.getInDimSizeLog2(id);
+    int inB = tile.hasInDim(id) ? tile.getInDimSizeLog2(id) : 0;
+    if (inB > inA) {
+      return std::nullopt;
+    }
+
+    std::vector<std::vector<int32_t>> basesForDim;
+    basesForDim.reserve(inA);
+
+    // 1) Validate the starting bases match exactly.
+    for (int i = 0; i < inB; ++i) {
+      for (StringAttr od : cvt.getOutDimNames()) {
+        int a = cvt.getBasis(id, i, od);
+        int b = tile.getBasis(id, i, od);
+        if (a != b) {
+          return std::nullopt;
+        }
+      }
+    }
+
+    // 2) Validate no overlap: the remaining cvt bases must have zeros in all
+    //    tile-bit positions (computed as OR of all tile bases) for each
+    //    out-dim.
+    for (int i = inB; i < inA; ++i) {
+      for (StringAttr od : cvt.getOutDimNames()) {
+        int32_t mask = tileMaskPerOutDim.lookup(od);
+        if (mask == 0)
+          continue;
+        int v = cvt.getBasis(id, i, od);
+        if ((v & mask) != 0) {
+          return std::nullopt;
+        }
+      }
+    }
+
+    // 3) Emit reps bases: first inB as all-zeros; remainder copied from cvt.
+    for (int i = 0; i < inB; ++i) {
+      std::vector<int32_t> zero(cvt.getNumOutDims(), 0);
+      basesForDim.push_back(std::move(zero));
+    }
+    for (int i = inB; i < inA; ++i) {
+      std::vector<int32_t> keep;
+      keep.reserve(cvt.getNumOutDims());
+      for (StringAttr od : cvt.getOutDimNames())
+        keep.push_back(cvt.getBasis(id, i, od));
+      basesForDim.push_back(std::move(keep));
+    }
+
+    repsBases[id] = std::move(basesForDim);
+  }
+
+  return LinearLayout(std::move(repsBases), cvt.getOutDims(),
+                      /*requireSurjective=*/false);
+}
+
 } // namespace mlir::triton

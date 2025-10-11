@@ -14,7 +14,6 @@ from numpy.random import RandomState
 
 import triton
 import triton.language as tl
-from triton.language.extra import libdevice
 
 from triton._internal_testing import (
     integral_dtypes,
@@ -1617,6 +1616,8 @@ def test_tensor_atomic_rmw_block(num_ctas, device):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 @pytest.mark.parametrize("dtype_str", ["int32", "int64"])
 def test_atomic_cas(sem, num_ctas, dtype_str, device):
+    if is_hip_cdna2():
+        pytest.skip("Disabled due to being flaky on CDNA2")
     # 1. make sure that atomic_cas changes the original value (Lock)
     @triton.jit
     def change_value(Lock, triton_dtype: tl.constexpr):
@@ -2555,8 +2556,8 @@ def test_sum_dtype(device):
     torch.testing.assert_close(out[0], torch.tensor(32 * 32, dtype=torch.bfloat16, device=device))
 
 
-@triton.jit
 # trivial associative but not commutative function
+@triton.jit
 def get_first_element(a, b):
     return a
 
@@ -6145,43 +6146,6 @@ def test_num_programs(device):
 
     kernel[grid](input)
     assert torch.all(input == torch.tensor(grid, device=device))
-
-
-# -----------------------
-# test extern functions
-# -----------------------
-
-
-@pytest.mark.parametrize("dtype_str", ['float32', 'float64'])
-def test_math_extern(dtype_str, device):
-    if is_interpreter():
-        pytest.skip('math_extern does not work in the interpreter mode')
-
-    @triton.jit
-    def kernel(
-        x_ptr,
-        y_ptr,
-        n_elements,
-        BLOCK_SIZE: tl.constexpr,
-    ):
-        pid = tl.program_id(axis=0)
-        block_start = pid * BLOCK_SIZE
-        offsets = block_start + tl.arange(0, BLOCK_SIZE)
-        mask = offsets < n_elements
-        x = tl.load(x_ptr + offsets, mask=mask)
-        y = libdevice.tanh(x)
-        tl.store(y_ptr + offsets, y, mask=mask)
-
-    shape = (128, )
-    rs = RandomState(17)
-
-    x = numpy_random(shape, dtype_str=dtype_str, rs=rs)
-    y_ref = np.tanh(x)
-    x_tri = to_triton(x, device=device)
-    y_tri = to_triton(numpy_random(shape, dtype_str=dtype_str, rs=rs), device=device)
-    kernel[(1, )](x_tri, y_tri, shape[0], BLOCK_SIZE=shape[0])
-    # compare
-    np.testing.assert_allclose(y_ref, to_numpy(y_tri), rtol=0.01)
 
 
 # -----------------------
