@@ -47,8 +47,8 @@ std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
                     bool enable_fp_fusion, const std::string &features) {
   std::string error;
-  auto target = llvm::TargetRegistry::lookupTarget(
-      module->getTargetTriple().str(), error);
+  auto target =
+      llvm::TargetRegistry::lookupTarget(module->getTargetTriple(), error);
   llvm::TargetOptions opt;
   bool disableLLVMOpt = mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (enable_fp_fusion)
@@ -278,15 +278,16 @@ void init_triton_llvm(py::module &&m) {
                                 const std::string proc,
                                 const std::string features) {
     std::string error;
-    auto target = llvm::TargetRegistry::lookupTarget(triple, error);
+    llvm::Triple targetTriple(triple);
+    auto target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
     if (!target) {
       throw std::runtime_error("target lookup error: " + error);
     }
     llvm::TargetOptions opt;
     // Target machine is only used to create the data layout.
     std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
-        llvm::Triple(triple), proc, features, opt, llvm::Reloc::PIC_,
-        std::nullopt, llvm::CodeGenOptLevel::None)};
+        targetTriple, proc, features, opt, llvm::Reloc::PIC_, std::nullopt,
+        llvm::CodeGenOptLevel::None)};
     // set data layout
     mod->setDataLayout(machine->createDataLayout());
   });
