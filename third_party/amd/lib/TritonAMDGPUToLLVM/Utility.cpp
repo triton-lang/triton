@@ -9,6 +9,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "llvm/ADT/TypeSwitch.h"
 namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::AMD::DppCtrl;
@@ -565,6 +566,32 @@ bool doesSwizzleInsideWarp(RewriterBase &rewriter,
     }
   }
   return true;
+}
+
+bool isStoredAlongDim0(Operation *op) {
+  const ForwardSliceOptions fwdOpt;
+  SetVector<mlir::Operation *> forwardSliceSet;
+  getForwardSlice(op, &forwardSliceSet, fwdOpt);
+
+  for (Operation *op : forwardSliceSet) {
+    Value ptr = llvm::TypeSwitch<Operation *, Value>(op)
+                    .Case<triton::StoreOp, triton::amdgpu::MaskedStoreOp,
+                          triton::amdgpu::BufferStoreOp,
+                          triton::amdgpu::BufferAtomicRMWOp,
+                          triton::amdgpu::BufferAtomicCASOp>(
+                        [&](auto storeOp) -> Value { return storeOp.getPtr(); })
+                    .Default([&](Operation *) -> Value { return Value(); });
+
+    if (!ptr)
+      continue;
+
+    if (auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType())) {
+      auto order = triton::gpu::getOrder(tensorTy);
+      return (order.size() == 2 && order[0] == 0 ||
+              order.size() == 3 && order[0] == 1);
+    }
+  }
+  return false;
 }
 
 bool isUsedByDotScaledOp(Operation *op) {
