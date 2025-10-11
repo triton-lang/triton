@@ -242,13 +242,16 @@ def _capture_with_prepared_symm_mem(fn):
     return warmup_result, graph
 
 
-def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_expts_act):
+def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_expts_act, assignment):
     torch.manual_seed(0)
 
     dev = torch.cuda.current_device()
     n_shards = world_size
 
-    expt_dict = make_expt_dict_random(n_shards, n_expts_tot)
+    expt_dict = {
+        "uniform": make_expt_dict_uniform,
+        "random": make_expt_dict_random,
+    }[assignment](n_shards, n_expts_tot)
     expt_assignment = make_expt_assignment(n_shards, n_expts_tot, expt_dict, device=dev)
     # reference data
     n_tokens_global = n_tokens
@@ -294,7 +297,8 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
 @pytest.mark.parametrize("distributed_launcher", [2, 4], indirect=True)
 @pytest.mark.parametrize("n_tokens", [16, 128, 4096])
 @pytest.mark.parametrize("d_model, n_expts_tot, n_expts_act", [(16, 4, 4), (5760, 128, 4)])
-def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n_expts_act):
+@pytest.mark.parametrize("assignment", ["uniform", "random"])
+def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n_expts_act, assignment):
     if is_hip():
         pytest.skip("Distributed test is not supported on AMD GPU")
     if n_tokens < distributed_launcher.world_size:
@@ -308,4 +312,5 @@ def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n
         d_model=d_model,
         n_expts_tot=n_expts_tot,
         n_expts_act=n_expts_act,
+        assignment=assignment,
     )
