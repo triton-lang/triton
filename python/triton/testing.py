@@ -57,7 +57,14 @@ def _summarize_statistics(times, quantiles, return_mode):
         return statistics.median(times)
 
 
-def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mode="mean"):
+def do_bench_cudagraph(
+    fn,
+    rep=20,
+    grad_to_none=None,
+    quantiles=None,
+    return_mode="mean",
+    clear_cache=False,
+):
     """
     Benchmark the runtime of the provided function.
 
@@ -69,12 +76,22 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
     :type grad_to_none: torch.tensor, optional
     :param return_mode: The statistical measure to return. Options are "min", "max", "mean", "median", or "all". Default is "mean".
     :type return_mode: str
+    :param clear_cache: If True, zero the benchmarking cache tensor before each
+        invocation of `fn` to mimic the behaviour of `do_bench` with explicit L2
+        cache flushes. Default is False.
     """
     import torch
     assert return_mode in ["min", "max", "mean", "median", "all"]
 
+    cache = (runtime.driver.active.get_empty_cache_for_benchmark() if clear_cache else None)
+
+    def maybe_clear_cache():
+        if cache is not None:
+            cache.zero_()
+
     with torch.cuda.stream(torch.cuda.Stream()):
         # warmup
+        maybe_clear_cache()
         fn()
         if grad_to_none is not None:
             for x in grad_to_none:
@@ -91,6 +108,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
         end_event = torch.cuda.Event(enable_timing=True)
         start_event.record()
         for _ in range(5):
+            maybe_clear_cache()
             fn()
         end_event.record()
         torch.cuda.synchronize()
@@ -108,6 +126,7 @@ def do_bench_cudagraph(fn, rep=20, grad_to_none=None, quantiles=None, return_mod
                 if grad_to_none is not None:
                     for x in grad_to_none:
                         x.grad = None
+                maybe_clear_cache()
                 fn()
         torch.cuda.synchronize()
         # measure time and return
