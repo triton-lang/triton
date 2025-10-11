@@ -67,37 +67,40 @@ def distributed_launcher(request):
 # ------------------------------------------------------------
 
 
-@pytest.mark.parametrize("n_expt_shard, n_expt_tot", [(8, 512), (16, 64)])
+@pytest.mark.parametrize("n_expts_shard, n_expts_tot", [(8, 512), (16, 64)])
 @pytest.mark.parametrize("affinity_mode", ["uniform", "random"])
-def test_make_expt_assignment(n_expt_shard, n_expt_tot, affinity_mode):
+def test_make_expt_assignment(n_expts_shard, n_expts_tot, affinity_mode):
     device = "cuda"
     expt_dict = {
         "uniform": make_expt_dict_uniform,
         "random": make_expt_dict_random,
-    }[affinity_mode](n_expt_shard, n_expt_tot)
-    expt_assignment = make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict, device)
+    }[affinity_mode](n_expts_shard, n_expts_tot)
+    expt_assignment = make_expt_assignment(n_expts_shard, n_expts_tot, expt_dict, device)
     # mask correctness & uniqueness: each expert set exactly once, and on the right shard
-    for shard in range(n_expt_shard):
+    for shard in range(n_expts_shard):
         bitmask = expt_assignment.expt_bitmask[shard, :]
         bitmask = (bitmask >> torch.arange(32, device=bitmask.device)[:, None]) & 1
         experts = bitmask.T.flatten().nonzero()[:, 0].tolist()
         assert sorted(expt_dict[shard]) == experts
-        expt_map = torch.full((n_expt_tot, ), -1, device=device)
+        expt_map = torch.full((n_expts_tot, ), -1, device=device)
         expt_map[experts] = torch.arange(len(experts), device=expt_map.device)
         assert torch.all(expt_map == expt_assignment.expt_map[shard, :])
 
 
-def test_filter_expt_data():
+@pytest.mark.parametrize("n_expts_tot, n_expts_act", [(128, 2), (128, 4)])
+@pytest.mark.parametrize("n_shards", [4, 8])
+@pytest.mark.parametrize("affinity_mode", ["uniform", "random"])
+@pytest.mark.parametrize("n_tokens", [256, 1024, 16384])
+def test_filter_expt_data(n_expts_tot, n_expts_act, n_shards, affinity_mode, n_tokens):
     device = "cuda"
     dtype = torch.float32
-    n_expts_tot = 128
-    n_expts_act = 4
-    n_tokens = 1024
-    n_shards = 4
     logits = torch.randn((n_tokens, n_expts_tot), dtype=dtype, device=device, requires_grad=True)
     routing_global, _, _, _ = routing(logits, n_expts_act)
     expt_data = routing_global.expt_data
-    expt_dict = make_expt_dict_uniform(n_shards, n_expts_tot)
+    expt_dict = {
+        "uniform": make_expt_dict_uniform,
+        "random": make_expt_dict_random,
+    }[affinity_mode](n_shards, n_expts_tot)
     expt_assignment = make_expt_assignment(n_shards, n_expts_tot, expt_dict, device)
     routing_local_ref = filter_expt_data_torch(expt_data, expt_assignment, 1)
     routing_local_tri = filter_expt_data(expt_data, expt_assignment, 1)
@@ -242,7 +245,7 @@ def _capture_with_prepared_symm_mem(fn):
     return warmup_result, graph
 
 
-def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_expts_act, assignment):
+def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_expts_act, affinity_mode):
     torch.manual_seed(0)
 
     dev = torch.cuda.current_device()
@@ -251,7 +254,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     expt_dict = {
         "uniform": make_expt_dict_uniform,
         "random": make_expt_dict_random,
-    }[assignment](n_shards, n_expts_tot)
+    }[affinity_mode](n_shards, n_expts_tot)
     expt_assignment = make_expt_assignment(n_shards, n_expts_tot, expt_dict, device=dev)
     # reference data
     n_tokens_global = n_tokens
@@ -292,13 +295,14 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     graph.replay()
     dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
     triton.testing.assert_close(y_global_ref, y_global_tri)
+    
 
 
 @pytest.mark.parametrize("distributed_launcher", [2, 4], indirect=True)
 @pytest.mark.parametrize("n_tokens", [16, 128, 4096])
 @pytest.mark.parametrize("d_model, n_expts_tot, n_expts_act", [(16, 4, 4), (5760, 128, 4)])
-@pytest.mark.parametrize("assignment", ["uniform", "random"])
-def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n_expts_act, assignment):
+@pytest.mark.parametrize("affinity_mode", ["uniform", "random"])
+def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n_expts_act, affinity_mode):
     if is_hip():
         pytest.skip("Distributed test is not supported on AMD GPU")
     if n_tokens < distributed_launcher.world_size:
@@ -312,5 +316,5 @@ def test_expert_sharding(distributed_launcher, n_tokens, d_model, n_expts_tot, n
         d_model=d_model,
         n_expts_tot=n_expts_tot,
         n_expts_act=n_expts_act,
-        assignment=assignment,
+        affinity_mode=affinity_mode,
     )
