@@ -61,10 +61,23 @@ Value loadC(Value tensor, Value llTensor,
   return llTensor;
 }
 
+// MMA instruction shape dimensions for m16n8k* instructions:
+//   - numVecM: Number of register fragments per lane in M dimension (typically
+//   2)
+//   - numVecN: Number of register fragments per lane in N dimension (typically
+//   1)
+//   - numVecK: Number of operand vectors in K dimension (2 for most types, 4
+//   for fp64)
+struct MmaInstrShape {
+  int numVecM;
+  int numVecN;
+  int numVecK;
+};
+
 ValueTableV2 getValuesFromDotOperandLayoutStruct(
     const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
-    int repK, RankedTensorType type) {
+    int repK, RankedTensorType type, const MmaInstrShape &instrShape) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto elems = unpackLLElements(loc, value, rewriter);
   auto eltTy = typeConverter->convertType(type.getElementType());
@@ -230,24 +243,22 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     }
   }
 
-  auto numVecM = 2;
-  auto numVecN = 1;
-  auto numVecK = bitwidth == 64 ? 4 : 2;
-
   if (dot.getOpIdx() == 0) {
     for (auto b = 0; b < batch; ++b)
       for (auto m = 0; m < repOuter; ++m)
         for (auto k = 0; k < repK; ++k)
-          for (auto vk = 0; vk < numVecK; ++vk)
-            for (auto vm = 0; vm < numVecM; ++vm)
-              packVec({b, m * numVecM + vm, k * numVecK + vk});
+          for (auto vk = 0; vk < instrShape.numVecK; ++vk)
+            for (auto vm = 0; vm < instrShape.numVecM; ++vm)
+              packVec({b, m * instrShape.numVecM + vm,
+                       k * instrShape.numVecK + vk});
   } else {
     for (auto b = 0; b < batch; ++b)
       for (auto n = 0; n < repOuter; ++n)
         for (auto k = 0; k < repK; ++k)
-          for (auto vk = 0; vk < numVecK; ++vk)
-            for (auto vn = 0; vn < numVecN; ++vn)
-              packVec({b, n * numVecN + vn, k * numVecK + vk});
+          for (auto vk = 0; vk < instrShape.numVecK; ++vk)
+            for (auto vn = 0; vn < instrShape.numVecN; ++vn)
+              packVec({b, n * instrShape.numVecN + vn,
+                       k * instrShape.numVecK + vk});
   }
   return vals;
 }
@@ -484,43 +495,49 @@ static void callMmaTuringInt8(PTXBuilder &builder, int b, int m, int n, int k,
                               mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                               unsigned colsPerThread, int numCPackedElem,
                               ValueTableV2 &ha, ValueTableV2 &hb,
-                              const SmallVector<Value> &fc) {
+                              const SmallVector<Value> &fc,
+                              const MmaInstrShape &instrShape) {
+  // Turing int8: typically numVecK=2, numVecM=2
+  int kBase = k * instrShape.numVecK;
+
   auto retArgs1 = builder.newListOperand(numMmaRets / 2, "=r");
   auto retArgs2 = builder.newListOperand(numMmaRets / 2, "=r");
   auto cArgs1 = builder.newListOperand();
   for (int i = 0; i < numMmaRets / 2; ++i) {
-    cArgs1->listAppend(
-        builder.newOperand(fc[(m * colsPerThread + 4 * n) / numCPackedElem + i],
-                           std::to_string(i)));
+    cArgs1->listAppend(builder.newOperand(
+        fc[(instrShape.numVecM * m * colsPerThread + 4 * n) / numCPackedElem +
+           i],
+        std::to_string(i)));
     // reuse the output registers
   }
   auto cArgs2 = builder.newListOperand();
   for (int i = numMmaRets / 2; i < numMmaRets; ++i) {
-    cArgs2->listAppend(
-        builder.newOperand(fc[(m * colsPerThread + 4 * n) / numCPackedElem + i],
-                           std::to_string(i)));
+    cArgs2->listAppend(builder.newOperand(
+        fc[(instrShape.numVecM * m * colsPerThread + 4 * n) / numCPackedElem +
+           i],
+        std::to_string(i)));
     // reuse the output registers
   }
   auto aArgs1 = builder.newListOperand({
-      {ha[{b, m, k}], "r"},
+      {ha[{b, instrShape.numVecM * m, kBase}], "r"},
   });
   auto bArgs1 = builder.newListOperand({
-      {hb[{b, n, k}], "r"},
+      {hb[{b, n, kBase}], "r"},
   });
   auto aArgs2 = builder.newListOperand({
-      {ha[{b, m, k + 1}], "r"},
+      {ha[{b, instrShape.numVecM * m, kBase + 1}], "r"},
   });
-  auto bArgs2 = builder.newListOperand({{hb[{b, n, k + 1}], "r"}});
+  auto bArgs2 = builder.newListOperand({{hb[{b, n, kBase + 1}], "r"}});
   auto aArgs3 = builder.newListOperand({
-      {ha[{b, m + 1, k}], "r"},
+      {ha[{b, instrShape.numVecM * m + 1, kBase}], "r"},
   });
   auto bArgs3 = builder.newListOperand({
-      {hb[{b, n, k}], "r"},
+      {hb[{b, n, kBase}], "r"},
   });
   auto aArgs4 = builder.newListOperand({
-      {ha[{b, m + 1, k + 1}], "r"},
+      {ha[{b, instrShape.numVecM * m + 1, kBase + 1}], "r"},
   });
-  auto bArgs4 = builder.newListOperand({{hb[{b, n, k + 1}], "r"}});
+  auto bArgs4 = builder.newListOperand({{hb[{b, n, kBase + 1}], "r"}});
   mma(retArgs1, aArgs1, bArgs1, cArgs1);
   mma(retArgs1, aArgs2, bArgs2, cArgs1);
   mma(retArgs2, aArgs3, bArgs3, cArgs2);
@@ -531,25 +548,30 @@ static void callMmaTuringFp16(PTXBuilder &builder, int b, int m, int n, int k,
                               mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                               unsigned colsPerThread, int numCPackedElem,
                               ValueTableV2 &ha, ValueTableV2 &hb,
-                              const SmallVector<Value> &fc, bool isAccF16) {
+                              const SmallVector<Value> &fc, bool isAccF16,
+                              const MmaInstrShape &instrShape) {
+  // Turing fp16: typically numVecK=2, numVecM=2
+  int kBase = k * instrShape.numVecK;
+
   auto retArgs = builder.newListOperand(numMmaRets, isAccF16 ? "=r" : "=f");
   auto cArgs = builder.newListOperand();
   for (int i = 0; i < numMmaRets; ++i) {
-    cArgs->listAppend(
-        builder.newOperand(fc[(m * colsPerThread + 4 * n) / numCPackedElem + i],
-                           std::to_string(i)));
+    cArgs->listAppend(builder.newOperand(
+        fc[(instrShape.numVecM * m * colsPerThread + 4 * n) / numCPackedElem +
+           i],
+        std::to_string(i)));
     // reuse the output registers
   }
   auto aArgs1 = builder.newListOperand({
-      {ha[{b, m, k}], "r"},
-      {ha[{b, m + 1, k}], "r"},
+      {ha[{b, instrShape.numVecM * m, kBase}], "r"},
+      {ha[{b, instrShape.numVecM * m + 1, kBase}], "r"},
   });
-  auto bArgs1 = builder.newListOperand({{hb[{b, n, k}], "r"}});
+  auto bArgs1 = builder.newListOperand({{hb[{b, n, kBase}], "r"}});
   auto aArgs2 = builder.newListOperand({
-      {ha[{b, m, k + 1}], "r"},
-      {ha[{b, m + 1, k + 1}], "r"},
+      {ha[{b, instrShape.numVecM * m, kBase + 1}], "r"},
+      {ha[{b, instrShape.numVecM * m + 1, kBase + 1}], "r"},
   });
-  auto bArgs2 = builder.newListOperand({{hb[{b, n, k + 1}], "r"}});
+  auto bArgs2 = builder.newListOperand({{hb[{b, n, kBase + 1}], "r"}});
   mma(retArgs, aArgs1, bArgs1, cArgs);
   mma(retArgs, aArgs2, bArgs2, cArgs);
 }
@@ -559,31 +581,38 @@ static void callMmaAmpereFp64(PTXBuilder &builder, int b, int m, int n, int k,
                               mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                               unsigned colsPerThread, int numCPackedElem,
                               unsigned batchOffset, ValueTableV2 &ha,
-                              ValueTableV2 &hb, const SmallVector<Value> &fc) {
+                              ValueTableV2 &hb, const SmallVector<Value> &fc,
+                              const MmaInstrShape &instrShape) {
+  // Ampere fp64: typically numVecK=4, numVecM=2 (repeat m8n8k4 four times along
+  // K to form m16n8k16)
+  int kBase = k * instrShape.numVecK;
+
   auto retArgs1 = builder.newListOperand(numMmaRets / 2, "=d");
   auto retArgs2 = builder.newListOperand(numMmaRets / 2, "=d");
   auto cArgs1 = builder.newListOperand();
   for (int i = 0; i < numMmaRets / 2; ++i) {
     cArgs1->listAppend(builder.newOperand(
-        fc[(m * colsPerThread + 4 * n) / numCPackedElem + i + batchOffset * b],
+        fc[(instrShape.numVecM * m * colsPerThread + 4 * n) / numCPackedElem +
+           i + batchOffset * b],
         std::to_string(i)));
     // reuse the output registers
   }
   auto cArgs2 = builder.newListOperand();
   for (int i = numMmaRets / 2; i < numMmaRets; ++i) {
     cArgs2->listAppend(builder.newOperand(
-        fc[(m * colsPerThread + 4 * n) / numCPackedElem + i + batchOffset * b],
+        fc[(instrShape.numVecM * m * colsPerThread + 4 * n) / numCPackedElem +
+           i + batchOffset * b],
         std::to_string(i)));
     // reuse the output registers
   }
 
-  for (int vk = 0; vk < 4; ++vk) {
+  for (int vk = 0; vk < instrShape.numVecK; ++vk) {
     auto aArgs1 = builder.newListOperand({
-        {ha[{b, m, k + vk}], "d"},
+        {ha[{b, instrShape.numVecM * m, kBase + vk}], "d"},
     });
-    auto bArgs = builder.newListOperand({{hb[{b, n, k + vk}], "d"}});
+    auto bArgs = builder.newListOperand({{hb[{b, n, kBase + vk}], "d"}});
     auto aArgs2 = builder.newListOperand({
-        {ha[{b, m + 1, k + vk}], "d"},
+        {ha[{b, instrShape.numVecM * m + 1, kBase + vk}], "d"},
     });
     mma(retArgs1, aArgs1, bArgs, cArgs1);
     mma(retArgs2, aArgs2, bArgs, cArgs2);
@@ -597,25 +626,32 @@ static void callMmaV2(PTXBuilder &builder, int b, int m, int n, int k,
                       unsigned batchOffset, ValueTableV2 &ha, ValueTableV2 &hb,
                       const SmallVector<Value> &fc,
                       const std::string &constraintRet,
-                      const std::string &constraintAB, int numVecK) {
+                      const std::string &constraintAB,
+                      const MmaInstrShape &instrShape) {
+  // numVecK varies by data type: 2 for most types (fp16, bf16, fp8), 4 for fp64
+  int kBase = k * instrShape.numVecK;
+
   auto retArgs = builder.newListOperand(numMmaRets, constraintRet);
   auto cArgs = builder.newListOperand();
   for (int i = 0; i < numMmaRets; ++i) {
     cArgs->listAppend(builder.newOperand(
-        fc[(m * colsPerThread + 4 * n) / numCPackedElem + i + batchOffset * b],
+        fc[(instrShape.numVecM * m * colsPerThread + 4 * n) / numCPackedElem +
+           i + batchOffset * b],
         std::to_string(i)));
     // reuse the output registers
   }
 
   auto aArgs = builder.newListOperand();
-  for (int vk = 0; vk < numVecK; ++vk) {
-    aArgs->listAppend(builder.newOperand(ha[{b, m, k + vk}], constraintAB));
-    aArgs->listAppend(builder.newOperand(ha[{b, m + 1, k + vk}], constraintAB));
+  for (int vk = 0; vk < instrShape.numVecK; ++vk) {
+    aArgs->listAppend(builder.newOperand(
+        ha[{b, instrShape.numVecM * m, kBase + vk}], constraintAB));
+    aArgs->listAppend(builder.newOperand(
+        ha[{b, instrShape.numVecM * m + 1, kBase + vk}], constraintAB));
   }
 
   auto bArgs = builder.newListOperand();
-  for (int vk = 0; vk < numVecK; ++vk) {
-    bArgs->listAppend(builder.newOperand(hb[{b, n, k + vk}], constraintAB));
+  for (int vk = 0; vk < instrShape.numVecK; ++vk) {
+    bArgs->listAppend(builder.newOperand(hb[{b, n, kBase + vk}], constraintAB));
   }
 
   mma(retArgs, aArgs, bArgs, cArgs);
@@ -626,24 +662,31 @@ static void callMmaScaled(PTXBuilder &builder, int b, int m, int n, int k,
                           unsigned colsPerThread, ValueTableV2 &aTable,
                           ValueTableV2 &bTable,
                           const SmallVector<Value> &cValues, Value aScaleValue,
-                          Value bScaleValue) {
+                          Value bScaleValue, const MmaInstrShape &instrShape) {
+  // Scaled MMA (mxfp8): typically numVecK=2, numVecM=2
+  int kBase = k * instrShape.numVecK;
+
   int numCPackedElem = 4 / static_cast<int>(numMmaRets);
   auto retArgs = builder.newListOperand(numMmaRets, "=f");
   auto cArgs = builder.newListOperand();
   for (int i = 0; i < numMmaRets; ++i)
     cArgs->listAppend(builder.newOperand(
-        cValues[(m * colsPerThread + 4 * n) / numCPackedElem + i],
+        cValues[(instrShape.numVecM * m * colsPerThread + 4 * n) /
+                    numCPackedElem +
+                i],
         std::to_string(i)));
 
   auto aArgs = builder.newListOperand();
-  for (int vk = 0; vk < 2; ++vk) {
-    aArgs->listAppend(builder.newOperand(aTable[{b, m, k + vk}], "r"));
-    aArgs->listAppend(builder.newOperand(aTable[{b, m + 1, k + vk}], "r"));
+  for (int vk = 0; vk < instrShape.numVecK; ++vk) {
+    aArgs->listAppend(builder.newOperand(
+        aTable[{b, instrShape.numVecM * m, kBase + vk}], "r"));
+    aArgs->listAppend(builder.newOperand(
+        aTable[{b, instrShape.numVecM * m + 1, kBase + vk}], "r"));
   }
 
   auto bArgs = builder.newListOperand();
-  for (int vk = 0; vk < 2; ++vk)
-    bArgs->listAppend(builder.newOperand(bTable[{b, n, k + vk}], "r"));
+  for (int vk = 0; vk < instrShape.numVecK; ++vk)
+    bArgs->listAppend(builder.newOperand(bTable[{b, n, kBase + vk}], "r"));
 
   SmallVector<PTXBuilder::Operand *> ops{retArgs, aArgs, bArgs, cArgs};
 
@@ -655,12 +698,8 @@ static void callMmaScaled(PTXBuilder &builder, int b, int m, int n, int k,
     ops.push_back(sel);
   };
 
-  unsigned aByte = (m / 2) & 0x3;
-  unsigned bByte = n & 0x3;
-  // byteId, threadId selection logic for the scale factor
-  // depends on getSM120DotScaledScaleLayout
-  appendScale(aScaleValue, aByte, /*threadId*/ 0);
-  appendScale(bScaleValue, bByte, /*threadId*/ 0);
+  appendScale(aScaleValue, 0, 0);
+  appendScale(bScaleValue, 0, 0);
 
   mma(ops);
 }
@@ -675,6 +714,7 @@ LogicalResult
 convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
                const LLVMTypeConverter *typeConverter,
                ConversionPatternRewriter &rewriter, TensorCoreType mmaType,
+               const MmaInstrShape &instrShape,
                const std::map<TensorCoreType, std::string> &mmaInstructions,
                const EmitMmaCallback &emitMma) {
   auto loc = op.getLoc();
@@ -719,14 +759,16 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
   assert(dotOpA.getRepOrder() == getOrderForDotOperand(dotOpA.getOpIdx(),
                                                        aShapePerCTA.size(),
                                                        /*kContig=*/true));
-  auto ha = getValuesFromDotOperandLayoutStruct(
-      typeConverter, loc, rewriter, llvmA, repBatch, repM, repK, aTensorTy);
+  auto ha = getValuesFromDotOperandLayoutStruct(typeConverter, loc, rewriter,
+                                                llvmA, repBatch, repM, repK,
+                                                aTensorTy, instrShape);
 
   assert(dotOpB.getRepOrder() == getOrderForDotOperand(dotOpB.getOpIdx(),
                                                        bShapePerCTA.size(),
                                                        /*kContig=*/true));
-  auto hb = getValuesFromDotOperandLayoutStruct(
-      typeConverter, loc, rewriter, llvmB, repBatch, repN, repK, bTensorTy);
+  auto hb = getValuesFromDotOperandLayoutStruct(typeConverter, loc, rewriter,
+                                                llvmB, repBatch, repN, repK,
+                                                bTensorTy, instrShape);
 
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
@@ -754,17 +796,21 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
 
     Type elemTy = cast<LLVM::LLVMStructType>(mmaOut.getType()).getBody()[0];
     for (int i = 0; i < numMmaRets; ++i) {
-      fc[(m * colsPerThread + 4 * n) / numCPackedElem + i + batchOffset * b] =
-          tb.extract_val(elemTy, mmaOut, i);
+      fc[(instrShape.numVecM * m * colsPerThread + 4 * n) / numCPackedElem + i +
+         batchOffset * b] = tb.extract_val(elemTy, mmaOut, i);
     }
   };
 
+  // Indexing conventions for MMA operations:
+  //   - A: ha[{b, numVecM*m + vm, k*numVecK + vk}] where vm \in [0, numVecM)
+  //   - B: hb[{b, numVecN*n + vn, k*numVecK + vk}] where vn \in [0, numVecN)
+  //   - Accumulator: fc[{b, numVecM*m + vm, numVecN*n + vn}]
+  //   - Scaled MMA: scale factors indexed by logical m and k
   for (int b = 0; b < repBatch; ++b)
     for (int k = 0; k < repK; ++k)
       for (int m = 0; m < repM; ++m)
         for (int n = 0; n < repN; ++n) {
-          auto numVecK = bitwidth == 64 ? 4 : 2;
-          callMma(b, 2 * m, n, k * numVecK);
+          callMma(b, m, n, k);
         }
 
   Type resElemTy = dTensorTy.getElementType();
@@ -798,6 +844,15 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
 
+  // Define MMA instruction shape dimensions
+  MmaInstrShape instrShape;
+  if (isTuring) {
+    instrShape = {2, 1, 2};
+  } else {
+    int bitwidth = aTensorTy.getElementType().getIntOrFloatBitWidth();
+    instrShape = {2, 1, (bitwidth == 64 ? 4 : 2)};
+  }
+
   const auto &instrMap =
       isTuring ? mmaInstrPtxTuring
                : (isHopperF64 ? mmaInstrPtxHopper : mmaInstrPtxAmpere);
@@ -816,29 +871,32 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
       assert(b == 0 && "Turing only supports batch size 1");
       if (isIntMMA)
         callMmaTuringInt8(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
-                          numCPackedElem, ha, hb, fc);
+                          numCPackedElem, ha, hb, fc, instrShape);
       else
         callMmaTuringFp16(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
-                          numCPackedElem, ha, hb, fc, isAccF16);
+                          numCPackedElem, ha, hb, fc, isAccF16, instrShape);
     } else {
       if (isFp64MMA) {
         if (!isHopperF64) {
           callMmaAmpereFp64(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
-                            numCPackedElem, batchOffset, ha, hb, fc);
+                            numCPackedElem, batchOffset, ha, hb, fc,
+                            instrShape);
         } else {
           callMmaV2(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
-                    numCPackedElem, batchOffset, ha, hb, fc, "=d", "d", 4);
+                    numCPackedElem, batchOffset, ha, hb, fc, "=d", "d",
+                    instrShape);
         }
       } else {
         callMmaV2(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
                   numCPackedElem, batchOffset, ha, hb, fc,
-                  isIntMMA || isAccF16 ? "=r" : "=f", "r", 2);
+                  isIntMMA || isAccF16 ? "=r" : "=f", "r", instrShape);
       }
     }
   };
 
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
-                        typeConverter, rewriter, mmaType, instrMap, emit);
+                        typeConverter, rewriter, mmaType, instrShape, instrMap,
+                        emit);
 }
 
 LogicalResult convertMMADotScaled(triton::DotScaledOp op,
@@ -851,6 +909,9 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
 
   TensorCoreType mmaType =
       getMmaTypeDotScaled(op, aTensorTy, bTensorTy, dTensorTy);
+
+  // Define MMA instruction shape dimensions for scaled MMA
+  MmaInstrShape instrShape = {2, 1, 2};
 
   const auto &instrMap = mmaInstrPtxScaled;
 
@@ -865,84 +926,19 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
                              ValueTableV2 &aTable, ValueTableV2 &bTable,
                              const SmallVector<Value> &cValues,
                              RankedTensorType dTy, int repK) {
-    const unsigned numCPackedElem = 4u / numMmaRets;
-
-    // aScaleValue, bScaleValue selection logic for the scale factor
-    // depends on the layout selection in
-    // LinearLayoutConversions.cpp::getSM120DotScaledScaleLayout
-    auto tb2 = TritonLLVMOpBuilder(op.getLoc(), rewriter);
+    auto tb = TritonLLVMOpBuilder(op.getLoc(), rewriter);
     auto i32 = IntegerType::get(op->getContext(), 32);
-    auto toI32 = [&](Value v) -> Value {
-      if (v.getType().isInteger(32))
-        return v;
-      return tb2.zext(i32, v);
-    };
-    auto pack4BytesToI32 = [&](ArrayRef<Value> bytes) -> Value {
-      Value acc = tb2.i32_val(0);
-      for (int i = 0; i < 4; ++i) {
-        Value bv = (i < (int)bytes.size()) ? toI32(bytes[i]) : tb2.i32_val(0);
-        acc = tb2.or_(acc, tb2.shl(bv, tb2.i32_val(8 * i)));
-      }
-      return acc;
-    };
-    auto pack4ByGroupedIndex = [&](ArrayRef<Value> bytes, int idx,
-                                   int groupSize) -> Value {
-      int blocks = bytes.size() / 4;
-      int maxIdx = blocks * groupSize;
-      if (idx < maxIdx) {
-        int base = (idx / groupSize) * 4;
-        return pack4BytesToI32(bytes.slice(base, 4));
-      }
-      return pack4BytesToI32(bytes);
-    };
 
-    int chooseK = k / 2;
-    bool interleavedB = (repK > 1);
-    SmallVector<Value> KsliceBuf;
-    auto Kslice = [&](ArrayRef<Value> bytes,
-                      bool interleaved) -> ArrayRef<Value> {
-      int sz = bytes.size();
-      if (repK == 1)
-        return bytes;
-      assert(sz % repK == 0);
-      int chunk = (sz / repK);
-      if (!interleaved) {
-        int beg = chooseK * chunk;
-        return bytes.slice(beg, chunk);
-      } else {
-        KsliceBuf.clear();
-        KsliceBuf.reserve(chunk);
-        const int elementsPerGroup = 2;
-        for (int group = 0; group < chunk / elementsPerGroup; ++group) {
-          for (int elem = 0; elem < elementsPerGroup; ++elem) {
-            int idx = group * elementsPerGroup * repK +
-                      chooseK * elementsPerGroup + elem;
-            if (idx < sz) {
-              KsliceBuf.push_back(bytes[idx]);
-            }
-          }
-        }
-        if (chunk % elementsPerGroup != 0) {
-          for (int nn = (chunk / elementsPerGroup) * elementsPerGroup;
-               nn < chunk; ++nn) {
-            int idx = nn * repK + chooseK;
-            if (idx < sz) {
-              KsliceBuf.push_back(bytes[idx]);
-            }
-          }
-        }
-        return ArrayRef<Value>(KsliceBuf);
-      }
-    };
-    Value aScaleValue =
-        pack4ByGroupedIndex(Kslice(unpackedAScale, false), m, 8);
-    Value bScaleValue =
-        pack4ByGroupedIndex(Kslice(unpackedBScale, interleavedB), n, 4);
+    // m and k are now natural loop indices (not scaled), use them directly for
+    // scale indexing
+    Value aScaleValue = tb.zext(i32, unpackedAScale[m * repK + k]);
+    Value bScaleValue = tb.zext(i32, unpackedBScale[n * repK + k]);
 
     callMmaScaled(builder, b, m, n, k, mma, numMmaRets, colsPerThread, aTable,
-                  bTable, cValues, aScaleValue, bScaleValue);
+                  bTable, cValues, aScaleValue, bScaleValue, instrShape);
   };
 
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
-                        typeConverter, rewriter, mmaType, instrMap, emit);
+                        typeConverter, rewriter, mmaType, instrShape, instrMap,
+                        emit);
 }
