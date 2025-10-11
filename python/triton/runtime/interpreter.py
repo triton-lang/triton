@@ -2,7 +2,7 @@ from __future__ import annotations
 import ast
 import textwrap
 import inspect
-from typing import Tuple, List, Dict, Callable
+from typing import Tuple, List, Dict, Callable, Any
 
 import math
 import numpy as np
@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from triton.language.semantic import TritonSemantic
 from triton.tools.tensor_descriptor import TensorDescriptor
 from .errors import InterpreterError
+from .kernel import KernelInterface
 from functools import partial
 from .._C.libtriton import interpreter as _interpreter
 from .._C.libtriton import ir as _ir
@@ -1373,7 +1374,7 @@ class FunctionRewriter:
         return local_namespace[self.fn.__name__]
 
 
-class InterpretedFunction:
+class InterpretedFunction(KernelInterface):
     # Cache all rewritten functions
     rewritten_fn: Dict[Callable, Callable] = {}
 
@@ -1400,7 +1401,7 @@ class InterpretedFunction:
     def __name__(self):
         return self.fn.__name__
 
-    def __getitem__(self, grid):
+    def __getitem__(self, grid) -> Callable[..., Any]:
         fn = self.rewrite()
         return GridExecutor(fn, self.arg_names, grid)
 
