@@ -188,6 +188,17 @@ def TritonGPUF32DotTC : Pass<"tritongpu-F32DotTC", "mlir::ModuleOp"> {
                            "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
 }
 
+def TritonGPUBF16DotTC : Pass<"tritongpu-BF16DotTC", "mlir::ModuleOp"> {
+  let summary = "Use 3xBF16 dot ops to compute F32 dot result";
+
+  let description = [{
+    Decompose fp32 `DotOp` instructions into BF16 operations.
+    See https://arxiv.org/abs/1904.06376
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+}
+
 def TritonGPUPrefetch : Pass<"tritongpu-prefetch", "mlir::ModuleOp"> {
   let summary = "prefetch";
 
