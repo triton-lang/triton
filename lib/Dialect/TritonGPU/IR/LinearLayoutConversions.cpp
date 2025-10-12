@@ -1473,35 +1473,47 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   StringAttr kWarp = StringAttr::get(ctx, "warp");
 
   const int kSize = scaleShape[1];
-  const int mWarps = warpsPerCTA[0];
-  const int nWarps = warpsPerCTA[1];
-  const int totalWarps = mWarps * nWarps;
-  const unsigned mRep_warp = tilesPerWarp[0];
-  const unsigned nRep_warp = tilesPerWarp[1];
+  const int warpsAlongFirstWarpAxis = warpsPerCTA[0];
+  const int warpsAlongSecondWarpAxis = warpsPerCTA[1];
+  const unsigned repsPerWarpFirstAxis = tilesPerWarp[0];
+  const unsigned repsPerWarpSecondAxis = tilesPerWarp[1];
 
-  const unsigned kIdx = 1;  // K dimension is always at index 1
-  const unsigned mnIdx = 0; // M/N dimension is always at index 0
+  const unsigned kIdx = 1; // K dimension is always at index 1
+  const unsigned majorAxisIdx =
+      0; // Operand-major (M for A-scale, N for B-scale)
 
-  LinearLayout L = identityStandardND(kRegister, SmallVector<unsigned>(rank, 1),
-                                      ArrayRef<unsigned>({mnIdx, kIdx}));
+  LinearLayout L =
+      identityStandardND(kRegister, SmallVector<unsigned>(rank, 1),
+                         SmallVector<unsigned>{majorAxisIdx, kIdx});
   std::vector<std::vector<int32_t>> laneBase;
   if (dotOperandIdx == 0) {
     laneBase = {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
   } else {
     laneBase = {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
   }
-  LinearLayout laneLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]});
+  LinearLayout laneLayout({{kLane, laneBase}},
+                          {outDims[majorAxisIdx], outDims[kIdx]});
 
   L = L * laneLayout;
   L = L * LinearLayout::identity1D(kSize, kRegister, outDims[kIdx]);
   if (dotOperandIdx == 0) {
-    L = L * LinearLayout::zeros1D(nWarps, kWarp, outDims[mnIdx]);
-    L = L * LinearLayout::identity1D(mWarps, kWarp, outDims[mnIdx]);
-    L = L * LinearLayout::identity1D(mRep_warp, kRegister, outDims[mnIdx]);
+    // A-scale: invariant to second warp axis, advances along first warp axis
+    // and per-warp replication
+    L = L * LinearLayout::zeros1D(warpsAlongSecondWarpAxis, kWarp,
+                                  outDims[majorAxisIdx]);
+    L = L * LinearLayout::identity1D(warpsAlongFirstWarpAxis, kWarp,
+                                     outDims[majorAxisIdx]);
+    L = L * LinearLayout::identity1D(repsPerWarpFirstAxis, kRegister,
+                                     outDims[majorAxisIdx]);
   } else {
-    L = L * LinearLayout::identity1D(nWarps, kWarp, outDims[mnIdx]);
-    L = L * LinearLayout::zeros1D(mWarps, kWarp, outDims[mnIdx]);
-    L = L * LinearLayout::identity1D(nRep_warp, kRegister, outDims[mnIdx]);
+    // B-scale: advances along second warp axis, invariant to first warp axis
+    // and per-warp replication
+    L = L * LinearLayout::identity1D(warpsAlongSecondWarpAxis, kWarp,
+                                     outDims[majorAxisIdx]);
+    L = L * LinearLayout::zeros1D(warpsAlongFirstWarpAxis, kWarp,
+                                  outDims[majorAxisIdx]);
+    L = L * LinearLayout::identity1D(repsPerWarpSecondAxis, kRegister,
+                                     outDims[majorAxisIdx]);
   }
   return combineCtaCgaWithShape(L, ctaLayoutAttr, scaleShape);
 }
