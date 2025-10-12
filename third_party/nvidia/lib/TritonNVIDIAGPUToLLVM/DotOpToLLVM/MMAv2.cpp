@@ -61,7 +61,9 @@ Value loadC(Value tensor, Value llTensor,
   return llTensor;
 }
 
-// MMA register fragment counts per thread for each dimension:
+// A "fragment" is the the number of registers used per-thread by a single MMA
+// op. MmaFragmentCounts records how many such chunks each thread holds per
+// dimension:
 //   - numVecM: Number of register fragments per lane in M dimension
 //   - numVecN: Number of register fragments per lane in N dimension
 //   - numVecK: Number of operand vectors in K dimension
@@ -695,6 +697,8 @@ static void callMmaScaled(PTXBuilder &builder, int b, int m, int n, int k,
     ops.push_back(sel);
   };
 
+  // Use only byteId=0 since each thread sign-extends a single i8 scale
+  // into i32 instead of packing 4 bytes.
   appendScale(aScaleValue, 0, 0);
   appendScale(bScaleValue, 0, 0);
 
