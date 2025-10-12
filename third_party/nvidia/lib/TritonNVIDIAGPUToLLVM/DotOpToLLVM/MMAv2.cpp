@@ -61,9 +61,9 @@ Value loadC(Value tensor, Value llTensor,
   return llTensor;
 }
 
-// A "fragment" is the the number of registers used per-thread by a single MMA
-// op. MmaFragmentCounts records how many such chunks each thread holds per
-// dimension:
+// A "fragment" is the the number of registers for axis used per-warp by a
+// single MMA op. MmaFragmentCounts records how many such chunks each thread
+// holds per dimension:
 //   - numVecM: Number of register fragments per lane in M dimension
 //   - numVecN: Number of register fragments per lane in N dimension
 //   - numVecK: Number of operand vectors in K dimension
