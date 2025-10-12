@@ -1461,24 +1461,23 @@ LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
 //   0)
 //   - Each lane in a quad has the same scale factor.
 LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
-                                          ArrayRef<int64_t> dotOperandShape,
+                                          ArrayRef<int64_t> scaleShape,
                                           ArrayRef<unsigned> tilesPerWarp,
                                           ArrayRef<unsigned> warpsPerCTA,
                                           CTALayoutAttr ctaLayoutAttr) {
-  unsigned rank = dotOperandShape.size();
+  unsigned rank = scaleShape.size();
   auto outDims = standardOutDimNames(ctx, rank);
 
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
   StringAttr kWarp = StringAttr::get(ctx, "warp");
 
-  const unsigned mIndex = 0, nIndex = 1;
-  const int kSize = dotOperandShape[1];
-  const int mWarps = warpsPerCTA[mIndex];
-  const int nWarps = warpsPerCTA[nIndex];
+  const int kSize = scaleShape[1];
+  const int mWarps = warpsPerCTA[0];
+  const int nWarps = warpsPerCTA[1];
   const int totalWarps = mWarps * nWarps;
-  const unsigned mRep_warp = tilesPerWarp[mIndex];
-  const unsigned nRep_warp = tilesPerWarp[nIndex];
+  const unsigned mRep_warp = tilesPerWarp[0];
+  const unsigned nRep_warp = tilesPerWarp[1];
 
   const unsigned kIdx = 1;  // K dimension is always at index 1
   const unsigned mnIdx = 0; // M/N dimension is always at index 0
@@ -1504,7 +1503,7 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
     L = L * LinearLayout::zeros1D(mWarps, kWarp, outDims[mnIdx]);
     L = L * LinearLayout::identity1D(nRep_warp, kRegister, outDims[mnIdx]);
   }
-  return combineCtaCgaWithShape(L, ctaLayoutAttr, dotOperandShape);
+  return combineCtaCgaWithShape(L, ctaLayoutAttr, scaleShape);
 }
 
 LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
