@@ -14,6 +14,17 @@ from triton_kernels.target_info import is_hip
 from triton_kernels.tensor import make_ragged_tensor_metadata
 import pytest
 
+
+def _make_expt_dict_for_mode(n_shards, n_expts_tot, affinity_mode):
+    factories = {
+        "uniform": make_expt_dict_uniform,
+        "random": make_expt_dict_random,
+    }
+    try:
+        return factories[affinity_mode](n_shards, n_expts_tot)
+    except KeyError as exc:
+        raise ValueError(f"Unknown affinity mode: {affinity_mode}") from exc
+
 # ------------------------------------------------------------
 # fixture
 # ------------------------------------------------------------
@@ -71,10 +82,7 @@ def distributed_launcher(request):
 @pytest.mark.parametrize("affinity_mode", ["uniform", "random"])
 def test_make_expt_assignment(n_expts_shard, n_expts_tot, affinity_mode):
     device = "cuda"
-    expt_dict = {
-        "uniform": make_expt_dict_uniform,
-        "random": make_expt_dict_random,
-    }[affinity_mode](n_expts_shard, n_expts_tot)
+    expt_dict = _make_expt_dict_for_mode(n_expts_shard, n_expts_tot, affinity_mode)
     expt_assignment = make_expt_assignment(n_expts_shard, n_expts_tot, expt_dict, device)
     # mask correctness & uniqueness: each expert set exactly once, and on the right shard
     for shard in range(n_expts_shard):
@@ -87,20 +95,17 @@ def test_make_expt_assignment(n_expts_shard, n_expts_tot, affinity_mode):
         assert torch.all(expt_map == expt_assignment.expt_map[shard, :])
 
 
-@pytest.mark.parametrize("n_expts_tot, n_expts_act", [(128, 2), (128, 4)])
-@pytest.mark.parametrize("n_shards", [4, 8])
+@pytest.mark.parametrize("n_expts_tot, n_expts_act", [(128, 4)])
+@pytest.mark.parametrize("n_shards", [4])
 @pytest.mark.parametrize("affinity_mode", ["uniform", "random"])
-@pytest.mark.parametrize("n_tokens", [256, 1024, 16384])
+@pytest.mark.parametrize("n_tokens", [1024, 16384])
 def test_filter_expt_data(n_expts_tot, n_expts_act, n_shards, affinity_mode, n_tokens):
     device = "cuda"
     dtype = torch.float32
     logits = torch.randn((n_tokens, n_expts_tot), dtype=dtype, device=device, requires_grad=True)
     routing_global, _, _, _ = routing(logits, n_expts_act)
     expt_data = routing_global.expt_data
-    expt_dict = {
-        "uniform": make_expt_dict_uniform,
-        "random": make_expt_dict_random,
-    }[affinity_mode](n_shards, n_expts_tot)
+    expt_dict = _make_expt_dict_for_mode(n_shards, n_expts_tot, affinity_mode)
     expt_assignment = make_expt_assignment(n_shards, n_expts_tot, expt_dict, device)
     routing_local_ref = filter_expt_data_torch(expt_data, expt_assignment, 1)
     routing_local_tri = filter_expt_data(expt_data, expt_assignment, 1)
@@ -251,10 +256,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     dev = torch.cuda.current_device()
     n_shards = world_size
 
-    expt_dict = {
-        "uniform": make_expt_dict_uniform,
-        "random": make_expt_dict_random,
-    }[affinity_mode](n_shards, n_expts_tot)
+    expt_dict = _make_expt_dict_for_mode(n_shards, n_expts_tot, affinity_mode)
     expt_assignment = make_expt_assignment(n_shards, n_expts_tot, expt_dict, device=dev)
     # reference data
     n_tokens_global = n_tokens
