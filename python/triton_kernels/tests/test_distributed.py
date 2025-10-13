@@ -125,6 +125,7 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
     rdata_global, combine_indx, dispatch_indx, expt_indx = routing(l_dp_local, n_expts_act, all_gather=True)
     y_ep_local = convert_dp_to_ep(x_dp_local, expt_assignment, expt_indx, dispatch_indx.src_indx)
     expt_data_local = remap_ragged_tensor_metadata(rdata_global.expt_data, expt_assignment.expt_map[rank, :])
+    print(expt_data_local)
     rdata_ep_local = RoutingData(
         gate_scal=rdata_global.gate_scal,
         expt_hist=expt_data_local.slice_sizes,

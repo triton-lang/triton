@@ -264,7 +264,7 @@ def _generic_compaction(Out, compute_vals_and_cond_fn, compute_vals_and_cond_fn_
 
 
 @triton.jit
-def _compact_from_bitmask(Vals, SliceMap, n_slices, offs):
+def _compact_from_slice_map(Vals, SliceMap, n_slices, offs):
     slice_ids = offs
     mask = slice_ids < n_slices
     conds = (tl.load(SliceMap + slice_ids, mask=mask, other=-1) != -1).to(tl.int32)
@@ -307,15 +307,15 @@ def _remap_ragged_tensor_metadata(BatchSizesOut, BatchSizesInp,  #
     BlockScheduleOut += pid_m * block_schedule_out_stride_m
     BlockScheduleInp += pid_m * block_schedule_in_stride_m
     # compute batch sizes for this slice by compacting input batch sizes
-    _generic_compaction(BatchSizesOut, _compact_from_bitmask,  #
+    _generic_compaction(BatchSizesOut, _compact_from_slice_map,  #
                         (BatchSizesInp, SliceMap, n_slices), -1, n_slices,  #
                         BLOCK=BLOCK)
     # compute batch offsets for this slice by compacting input batch offsets
-    _generic_compaction(BatchOffsOut, _compact_from_bitmask,  #
+    _generic_compaction(BatchOffsOut, _compact_from_slice_map,  #
                         (BatchOffsInp, SliceMap, n_slices), -1, n_slices + 1,  #
                         BLOCK=BLOCK)
     # compute block offsets
-    n_compacted_blocks = _generic_compaction(BlockOffsOut, _compact_from_bitmask,  #
+    n_compacted_blocks = _generic_compaction(BlockOffsOut, _compact_from_slice_map,  #
                                              (BlockOffsInp, SliceMap, n_slices), -1, n_slices + 1,  #
                                              BLOCK=BLOCK)
     # compute block schedule
