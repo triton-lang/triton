@@ -17,6 +17,19 @@ from .cache import get_cache_manager, triton_key
 from triton._C.libtriton import get_cache_invalidating_env_vars
 
 
+class AutotunerThreadState:
+    """
+       Per thread (thread-local) auto-tuner cache/configs
+    """
+
+    __slots__ = ("cache", "configs_timings", "bench_time")
+
+    def __init__(self):
+        self.cache: Dict[Tuple, Config] = {}
+        self.configs_timings: Dict[Config, List[float]] | None = None
+        self.bench_time: float | None = None
+
+
 class Autotuner(KernelInterface):
 
     def __init__(self, fn, arg_names, configs, key, reset_to_zero, restore_value, pre_hook=None, post_hook=None,
@@ -35,9 +48,7 @@ class Autotuner(KernelInterface):
         else:
             self.configs = configs
         self.keys = key
-        self.cache: Dict[Tuple, Config] = {}
-        self._tuning_locks: Dict[Tuple, threading.Lock] = {}
-        self._tuning_locks_guard = threading.Lock()
+        self._thread_state = threading.local()
         self.arg_names = arg_names
         self.cache_results = cache_results or (knobs.autotuning.cache and not knobs.runtime.interpret)
 
@@ -128,6 +139,13 @@ class Autotuner(KernelInterface):
             return driver.active.get_benchmarker()
         return self._do_bench
 
+    def _get_thread_state(self) -> AutotunerThreadState:
+        state = getattr(self._thread_state, "value", None)
+        if state is None:
+            state = AutotunerThreadState()
+            self._thread_state.value = state
+        return state
+
     def _bench(self, nargs, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
 
@@ -170,7 +188,7 @@ class Autotuner(KernelInterface):
                 print(f"Autotuning failed with {e}")
             return [float("inf"), float("inf"), float("inf")]
 
-    def check_disk_cache(self, tuning_key, configs, bench_fn):
+    def check_disk_cache(self, tuning_key, configs, bench_fn, state: AutotunerThreadState):
         # We can't serialize prehooks, so just give up and run the benchmarks.
         if not tuning_key or any(cfg.pre_hook for cfg in configs):
             bench_fn()
@@ -198,8 +216,8 @@ class Autotuner(KernelInterface):
             with open(path, "r") as cached_configs:
                 timings = json.load(cached_configs)["configs_timings"]
                 timings = {Config(**config): timing for config, timing in timings}
-                self.cache[tuning_key] = builtins.min(timings, key=timings.get)
-                self.configs_timings = timings
+                state.cache[tuning_key] = builtins.min(timings, key=timings.get)
+                state.configs_timings = timings
             return True
 
         bench_fn()
@@ -208,19 +226,17 @@ class Autotuner(KernelInterface):
                 "key":
                 tuning_key,
                 "configs_timings":
-                [(config.__dict__, timings) for config, timings in self.configs_timings.items() if not config.pre_hook],
+                [
+                    (config.__dict__, timings)
+                    for config, timings in (state.configs_timings or {}).items()
+                    if not config.pre_hook
+                ],
             }), file_name, binary=False)
         return False
 
-    def _get_tuning_lock(self, key: Tuple):
-        with self._tuning_locks_guard:
-            lock = self._tuning_locks.get(key)
-            if lock is None:
-                lock = threading.Lock()
-                self._tuning_locks[key] = lock
-            return lock
-
     def run(self, *args, **kwargs):
+        state = self._get_thread_state()
+        cache = state.cache
         nargs = dict(zip(self.arg_names, args))
         used_cached_result = True
         key = None
@@ -232,39 +248,37 @@ class Autotuner(KernelInterface):
                 if hasattr(arg, "dtype"):
                     key_values.append(str(arg.dtype))
             key = tuple(key_values)
-            if key not in self.cache:
-                lock = self._get_tuning_lock(key)
-                with lock:
-                    if key not in self.cache:
-                        used_cached_result = False
-                        pruned_configs = self.prune_configs(kwargs, nargs)
+            if key not in cache:
+                used_cached_result = False
+                pruned_configs = self.prune_configs(kwargs, nargs)
 
-                        def benchmark():
-                            bench_start = time.time()
-                            timings = {
-                                config: self._bench(nargs, *args, config=config, **kwargs)
-                                for config in pruned_configs
-                            }
-                            bench_end = time.time()
-                            self.bench_time = bench_end - bench_start
-                            best_config = builtins.min(timings, key=timings.get)
-                            self.cache[key] = best_config
-                            full_nargs = {**nargs, **kwargs, **best_config.all_kwargs()}
-                            self.pre_hook(full_nargs, reset_only=True)
-                            self.configs_timings = timings
+                def benchmark():
+                    bench_start = time.time()
+                    timings = {
+                        config: self._bench(nargs, *args, config=config, **kwargs)
+                        for config in pruned_configs
+                    }
+                    bench_end = time.time()
+                    state.bench_time = bench_end - bench_start
+                    best_config = builtins.min(timings, key=timings.get)
+                    cache[key] = best_config
+                    full_nargs_local = {**nargs, **kwargs, **best_config.all_kwargs()}
+                    self.pre_hook(full_nargs_local, reset_only=True)
+                    state.configs_timings = timings
 
-                        if self.cache_results:
-                            used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
-                        else:
-                            benchmark()
+                if self.cache_results:
+                    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark, state)
+                else:
+                    benchmark()
 
-            config = self.cache[key]
+            config = cache[key]
         else:
             config = self.configs[0]
         self.best_config = config
         if knobs.autotuning.print and key is not None and not used_cached_result:
+            bench_time = state.bench_time or 0.0
             print(f"Triton autotuning for function {self.base_fn.__name__},\nwith key as {key},\n"
-                  f"finished after {self.bench_time:.2f}s,\nbest config selected: {self.best_config};")
+                  f"finished after {bench_time:.2f}s,\nbest config selected: {self.best_config};")
         full_nargs = {**nargs, **kwargs, **config.all_kwargs()}
         if config.pre_hook is not None:
             config.pre_hook(full_nargs)
