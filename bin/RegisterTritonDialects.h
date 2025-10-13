@@ -45,6 +45,9 @@
 #include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 
+#include "mlir/Tools/Plugins/PassPlugin.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
+
 namespace mlir {
 namespace test {
 void registerTestAliasPass();
@@ -135,6 +138,33 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::proton::gpu::registerAllocateProtonGlobalScratchBufferPass();
   mlir::triton::proton::gpu::registerScheduleBufferStorePass();
   mlir::triton::proton::gpu::registerAddSchedBarriersPass();
+
+  // Plugin passes
+  std::string filename =
+      mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+  if (!filename.empty()) {
+    std::string error;
+    auto library = llvm::sys::DynamicLibrary::getPermanentLibrary(
+        filename.c_str(), &error);
+
+    if (!library.isValid()) {
+      auto msg = llvm::Twine("Failed to load plugin library: " + error + "\n");
+      llvm::report_fatal_error(msg);
+    }
+
+    intptr_t getDetailsFn =
+        (intptr_t)library.getAddressOfSymbol("registerTritonPluginPass");
+
+    if (!getDetailsFn) {
+      auto msg = llvm::Twine("Failed to get symbol: " + error + "\n");
+      llvm::report_fatal_error(msg);
+    }
+    std::function<void()> registerTritonPluginPass =
+        reinterpret_cast<void (*)()>(getDetailsFn);
+    registerTritonPluginPass();
+
+    registerTritonPluginPass();
+  }
 
   registry.insert<
       mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
