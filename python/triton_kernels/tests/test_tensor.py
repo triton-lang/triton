@@ -1,8 +1,7 @@
 import pytest
 import torch
+from triton_kernels.tensor import Bitmatrix, BIT
 from triton_kernels.tensor import (
-    Bitmatrix,
-    BIT,
     make_ragged_tensor_metadata,
     make_ragged_tensor_metadata_torch,
     remap_ragged_tensor_metadata,
@@ -65,8 +64,7 @@ def test_make_bitmatrix_metadata(n_rows, n_cols, k):
     # create bitmask
     rows = torch.arange(n_rows, device=device).unsqueeze(1).expand_as(indx)
     bitmask_data = torch.zeros((n_rows, (n_cols + 31) // 32), dtype=torch.int32, device=device)
-    bitmask_data.index_put_((rows.flatten(), (indx // 32).flatten()), (1 << (indx % 32)).int().flatten(),
-                            accumulate=True)
+    bitmask_data.index_put_((rows, indx // 32), 1 << (indx % 32), accumulate=True)
     bitmask = Bitmatrix(bitmask_data.view(torch.uint32), dtype=BIT, shape=(n_rows, n_cols))
     # make metadata and compare
     metadata_tri = make_bitmatrix_metadata(indx, bitmask)
