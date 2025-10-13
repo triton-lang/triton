@@ -2,6 +2,7 @@
 #include "pybind11/pybind11.h"
 #include <pybind11/stl.h>
 
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
@@ -762,6 +763,11 @@ void init_gluon_ir(py::module &&m) {
               tt::CacheModifier cacheModifier) {
              self.create<ttag::BufferLoadToLocalOp>(
                  dest, ptr, offsets, mask, other, stride, cacheModifier);
+           })
+      .def("create_warp_pipeline_border",
+           [](GluonOpBuilder &self) {
+             auto border = self.create<ROCDL::SchedBarrier>(0);
+             border->setAttr("pipeline_border", self.getBuilder().getUnitAttr());
            });
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",

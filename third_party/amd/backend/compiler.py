@@ -277,6 +277,8 @@ class HIPBackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        if use_block_pingpong:
+            amd.passes.ttgpuir.add_warp_pipeline(pm, options.num_stages)
         # custom_lds_size is an experimental parameter that defines amount of LDS available
         # for one thread block. Measured in bytes.
         #

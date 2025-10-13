@@ -103,3 +103,7 @@ def buffer_atomic_xchg(ptr, offsets, value, mask=None, sem=None, scope=None, _se
 
     return _buffer_atomic_rmw_impl('xchg', ptr, offsets, value, "cdna4", mask=mask, sem=sem, scope=scope,
                                    _semantic=_semantic)
+
+@builtin
+def split_warp_pipeline(_semantic: GluonSemantic = None):
+    return _semantic.builder.create_warp_pipeline_border()
