@@ -597,9 +597,7 @@ static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
     return success();
 
   auto maxnreg = getContextualMaxNReg(op);
-  auto encodingInfoOr =
-      computeTMemLdStEncodingInfo(op->getLoc(), type, memdesc, maxnreg);
-  if (succeeded(encodingInfoOr))
+  if (isDistributedLayoutTMemCompatible(op, type, memdesc))
     return success();
 
   // If it failed, give the user a hint

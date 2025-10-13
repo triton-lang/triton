@@ -35,6 +35,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TensorMemoryUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
@@ -392,13 +393,9 @@ getTmemCompatibleLayouts(Operation *op, RankedTensorType tensorType,
 bool isDistributedLayoutTMemCompatible(Operation *op,
                                        RankedTensorType tensorType,
                                        gpu::MemDescType memType) {
-  SmallVector<DistributedEncodingTrait> layouts =
-      getTmemCompatibleLayouts(op, tensorType, memType);
-  auto enc = cast<LayoutEncodingTrait>(tensorType.getEncoding());
-  return llvm::any_of(layouts, [&](DistributedEncodingTrait layout) {
-    return areLayoutsEquivalent(tensorType.getShape(),
-                                cast<LayoutEncodingTrait>(layout), enc);
-  });
+  int numWarps = lookupNumWarps(op);
+  return succeeded(
+      computeTMemLdStEncodingInfo(op->getLoc(), tensorType, memType, numWarps));
 }
 
 LogicalResult
