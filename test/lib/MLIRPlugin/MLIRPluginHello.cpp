@@ -1,76 +1,51 @@
-#include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/PassManager.h"
-#include "llvm/Pass.h"
-#include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
-#include "llvm/Support/raw_ostream.h"
-#include <iostream>
-#include <vector>
-using namespace llvm;
-using namespace std;
+#include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "mlir/Transforms/Passes.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include <Python.h>
 
-namespace {
 
-struct MLIRPluginHello : public PassInfoMixin<MLIRPluginHello> {
-  PreservedAnalyses run(Module &module, ModuleAnalysisManager &) {
-    bool modifiedCodeGen = runOnModule(module);
+namespace mlir {
+namespace triton {
+namespace plugin {
 
-    return (modifiedCodeGen ? llvm::PreservedAnalyses::none()
-                            : llvm::PreservedAnalyses::all());
-  }
-  bool runOnModule(llvm::Module &module);
-  // isRequired being set to true keeps this pass from being skipped
-  // if it has the optnone LLVM attribute
-  static bool isRequired() { return true; }
-};
 
-} // end anonymous namespace
+#define GEN_PASS_DEF_TRITONGPUHELLOEXTENSION
+#include "Passes.h.inc"
 
-bool MLIRPluginHello::runOnModule(Module &module) {
-  bool modifiedCodeGen = false;
 
-  for (auto &function : module) {
-    if (function.isIntrinsic())
-      continue;
-    StringRef functionName = function.getName();
-    if (function.getCallingConv() == CallingConv::AMDGPU_KERNEL ||
-        function.getCallingConv() == CallingConv::PTX_Kernel ||
-        functionName.contains("kernel")) {
-      for (Function::iterator basicBlock = function.begin();
-           basicBlock != function.end(); basicBlock++) {
-        for (BasicBlock::iterator inst = basicBlock->begin();
-             inst != basicBlock->end(); inst++) {
-          DILocation *debugLocation =
-              dyn_cast<Instruction>(inst)->getDebugLoc();
-          std::string sourceInfo =
-              (function.getName() + "\t" + debugLocation->getFilename() + ":" +
-               Twine(debugLocation->getLine()) + ":" +
-               Twine(debugLocation->getColumn()))
-                  .str();
+struct HelloExtensionPass :
+  public impl::TritonGPUHelloExtensionBase<HelloExtensionPass> {
+  void runOnOperation() override {
 
-          errs() << "Hello From First Instruction of GPU Kernel: " << sourceInfo
-                 << "\n";
-          return modifiedCodeGen;
-        }
-      }
+    MLIRContext *context = &getContext();
+    ModuleOp mod = getOperation();
+    mod.walk([&](arith::AddFOp addOp) {
+      llvm::errs() << addOp;
     }
+    );
+
+
   }
-  return modifiedCodeGen;
-}
-
-static PassPluginLibraryInfo getPassPluginInfo() {
-  const auto callback = [](PassBuilder &pb) {
-    pb.registerOptimizerLastEPCallback([&](ModulePassManager &mpm, auto, auto) {
-      mpm.addPass(MLIRPluginHello());
-      return true;
-    });
-  };
-
-  return {LLVM_PLUGIN_API_VERSION, "mlir-plugin-hello", LLVM_VERSION_STRING, callback};
 };
 
-extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
-llvmGetPassPluginInfo() {
-  return getPassPluginInfo();
+} // namespace plugin
+} // namespace triton
+} // namespace mlir
+
+extern "C" void addTritonPluginPass(mlir::PassManager* pm) {
+  pm->addPass(mlir::triton::plugin::createTritonGPUHelloExtension());
 }
+
+extern "C" void registerTritonPluginPass() {
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return mlir::triton::plugin::createTritonGPUHelloExtension();
+  });
+}
+
+// extern "C" void registerTritonPluginDialect(mlir::DialectRegistry *registry){
+//   llvm::errs() << "registerTritonPluginDialect" << "\n";
+//   // registry.insert<mlir::triton::HelloDialect>();
+// }
