@@ -3,7 +3,7 @@ from typing import Sequence, List, TypeVar, Tuple, Callable
 import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
-from ._layouts import AutoLayout, DistributedLayout, SliceLayout, SharedLayout
+from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, SliceLayout, SharedLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
@@ -178,9 +178,9 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         ret_ty = ttgl.distributed_type(ty.element_ty, ty.shape, layout)
         ret_ty_ir = ret_ty.to_ir(self.builder)
         if assert_trivial and not self.builder.is_convert_layout_trivial(ret_ty_ir, value.handle):
-            raise TypeError(
-                f"layout conversion from {ty.layout} to {layout} is not trivial.\nThe linear layouts are:\n{self.to_linear_layout(ty.layout, ty.shape)}\n{self.to_linear_layout(layout, ty.shape)}"
-            )
+            raise TypeError(f"layout conversion from {ty.layout} to {layout} is not trivial.\n"
+                            f"The linear layouts are:\n{self.to_linear_layout(ty.layout, ty.shape)}\n"
+                            f"{self.to_linear_layout(layout, ty.shape)}")
         handle = self.builder.create_convert_layout(ret_ty_ir, value.handle)
         return ttgl.tensor(handle, ret_ty)
 
@@ -244,7 +244,12 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         if not isinstance(shape, list):
             shape = list(shape)
 
-        return self.builder.to_linear_layout(layout._to_ir(self.builder), shape)
+        layout = ttgl._unwrap_if_constexpr(layout)
+
+        if isinstance(layout, (AutoLayout, DistributedLinearLayout)):
+            return ttgl.constexpr(layout)
+
+        return ttgl.constexpr(self.builder.to_linear_layout(layout._to_ir(self.builder), shape))
 
     def get_tmem_reg_layout(self, element_ty, shape, layout, num_warps, instr_variant, ctas_per_cga, cta_split_num,
                             cta_order):
