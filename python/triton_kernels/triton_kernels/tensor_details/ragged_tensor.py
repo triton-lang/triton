@@ -88,12 +88,6 @@ def empty_aligned(shape, dtype, device, pad_size):
     return ret[ret_slices], ret.numel()
 
 
-def max_n_tiles(n_slices, n_gates):
-    if n_gates <= n_slices:
-        return n_gates
-    return n_slices - 1 - ((n_slices - n_gates - 1) // RaggedTensorMetadata.block_sizes()[0])
-
-
 # triton implementation
 # --------------------------------------------------------- #
 
@@ -159,7 +153,7 @@ def _ragged_tensor_metadata_compute(SliceSizes,  #
         tl.store(BlockSchedule + block_offs, data, mask=block_offs < n_blocks)
 
 
-def make_ragged_tensor_metadata(slice_sizes, n_gates):
+def make_ragged_tensor_metadata(slice_sizes, max_n_blocks):
     assert slice_sizes.ndim == 1
     n_slices = slice_sizes.shape[0]
     block_sizes_log2 = RaggedTensorMetadata.block_sizes_log2()
@@ -168,8 +162,7 @@ def make_ragged_tensor_metadata(slice_sizes, n_gates):
     dtype = torch.int32
     device = slice_sizes.device
     slice_offs_combined, _ = empty_aligned((block_size_num + 1, n_slices + 1), dtype, device, MEMSET_BLOCK)
-    block_schedule_data, n_memset_elts = empty_aligned((block_size_num, max_n_tiles(n_slices, n_gates)), dtype, device,
-                                                       MEMSET_BLOCK)
+    block_schedule_data, n_memset_elts = empty_aligned((block_size_num, max_n_blocks), dtype, device, MEMSET_BLOCK)
     slice_offs, block_offs_data = slice_offs_combined[0], slice_offs_combined[1:]
     n_memset_blocks = exact_div(n_memset_elts, MEMSET_BLOCK)
 
@@ -193,7 +186,7 @@ def make_ragged_tensor_metadata(slice_sizes, n_gates):
 # --------------------------------------------------------- #
 
 
-def make_ragged_tensor_metadata_torch(slice_sizes, n_gates):
+def make_ragged_tensor_metadata_torch(slice_sizes, max_n_blocks):
     assert slice_sizes.ndim == 1
     n_slices = slice_sizes.shape[0]
     # offset for each experts
@@ -201,27 +194,20 @@ def make_ragged_tensor_metadata_torch(slice_sizes, n_gates):
     slice_offs = torch.cumsum(slice_sizes, dim=0)
     slice_offs = torch.cat((torch.zeros(1, device=device), slice_offs))
     slice_offs = slice_offs.int()
-    # maximum number of tiles for all values of `block_size` considered
-    if n_gates <= n_slices:
-        max_n_tiles = n_gates
-    else:
-        # ceil_div(n_gates - n_experts + 1, d_tile) + n_experts - 1
-        # ceil_div(x, y): -(-x // y)
-        max_n_tiles = n_slices - 1 - ((n_slices - n_gates - 1) // min(RaggedTensorMetadata.block_sizes()))
     # fill up tile offset/infos for each block
-    col = torch.arange(max_n_tiles, device=device)
+    col = torch.arange(max_n_blocks, device=device)
     slice_vals = torch.arange(n_slices, device=device)[:, None]
 
-    def _build_schedule(block_off, n_tiles):
+    def _build_schedule(block_off, n_blocks):
         total_tiles = int(block_off[-1].item())
-        out = -torch.ones(max_n_tiles, dtype=torch.int32, device=device)
+        out = -torch.ones(max_n_blocks, dtype=torch.int32, device=device)
         if total_tiles == 0:
             return out
         tmp = -torch.ones(total_tiles, dtype=torch.int32, device=device)
         map_idxs = block_off[:-1, None] + col[None, :]
-        mask = col[None, :] < n_tiles[:, None]
+        mask = col[None, :] < n_blocks[:, None]
         tmp.index_put_((map_idxs[mask], ), (slice_vals + (col << 16)[None, :]).int()[mask])
-        take = min(max_n_tiles, total_tiles)
+        take = min(max_n_blocks, total_tiles)
         out[:take] = tmp[:take]
         return out
 

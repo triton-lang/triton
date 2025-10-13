@@ -8,7 +8,7 @@ import torch.distributed._symmetric_memory as symm_mem
 import torch.multiprocessing as mp
 import triton
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment
-from triton_kernels.tensor import filter_ragged_tensor_metadata
+from triton_kernels.tensor_details.ragged_tensor import filter_ragged_tensor_metadata
 from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, reduce_grouped, RoutingData, GatherIndx, ScatterIndx
 from triton_kernels.target_info import is_hip
