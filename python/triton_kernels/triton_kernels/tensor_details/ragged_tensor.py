@@ -63,6 +63,12 @@ class RaggedTensorMetadata:
         return self.block_schedule_data[RaggedTensorMetadata.block_sizes().index(block_size)]
 
     @staticmethod
+    def max_n_tiles(n_slices, n_total_rows):
+        if n_total_rows <= n_slices:
+            return n_total_rows
+        return n_slices - 1 - ((n_slices - n_total_rows - 1) // RaggedTensorMetadata.block_sizes()[0])
+
+    @staticmethod
     def block_sizes_log2():
         return range(4, 9) if is_hip() else range(4, 8)
 
@@ -157,7 +163,7 @@ def _ragged_tensor_metadata_compute(SliceSizes,  #
         tl.store(BlockSchedule + block_offs, data, mask=block_offs < n_blocks)
 
 
-def make_ragged_tensor_metadata(slice_sizes, max_n_blocks):
+def make_ragged_tensor_metadata(slice_sizes, n_total_rows):
     assert slice_sizes.ndim == 1
     n_slices = slice_sizes.shape[0]
     block_sizes_log2 = RaggedTensorMetadata.block_sizes_log2()
@@ -165,6 +171,7 @@ def make_ragged_tensor_metadata(slice_sizes, max_n_blocks):
     MEMSET_BLOCK = 512
     dtype = torch.int32
     device = slice_sizes.device
+    max_n_blocks = RaggedTensorMetadata.max_n_tiles(n_slices, n_total_rows)
     slice_offs_combined, _ = empty_aligned((block_size_num + 1, n_slices + 1), dtype, device, MEMSET_BLOCK)
     block_schedule_data, n_memset_elts = empty_aligned((block_size_num, max_n_blocks), dtype, device, MEMSET_BLOCK)
     slice_offs, block_offs_data = slice_offs_combined[0], slice_offs_combined[1:]
@@ -190,9 +197,10 @@ def make_ragged_tensor_metadata(slice_sizes, max_n_blocks):
 # ---------------------------------------------------------------------------- #
 
 
-def make_ragged_tensor_metadata_torch(slice_sizes, max_n_blocks):
+def make_ragged_tensor_metadata_torch(slice_sizes, n_total_rows):
     assert slice_sizes.ndim == 1
     n_slices = slice_sizes.shape[0]
+    max_n_blocks = RaggedTensorMetadata.max_n_tiles(n_slices, n_total_rows)
     # offset for each experts
     device = slice_sizes.device
     slice_offs = torch.cumsum(slice_sizes, dim=0)
