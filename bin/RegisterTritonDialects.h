@@ -162,8 +162,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
     std::function<void()> registerTritonPluginPass =
         reinterpret_cast<void (*)()>(getDetailsFn);
     registerTritonPluginPass();
-
-    registerTritonPluginPass();
   }
 
   registry.insert<
