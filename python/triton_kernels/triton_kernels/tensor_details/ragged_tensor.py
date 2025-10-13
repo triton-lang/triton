@@ -88,8 +88,12 @@ def empty_aligned(shape, dtype, device, pad_size):
     return ret[ret_slices], ret.numel()
 
 
-# triton implementation
-# --------------------------------------------------------- #
+# ---------------------------------------------------------------------------- #
+# make_ragged_tensor_metadata
+# ---------------------------------------------------------------------------- #
+
+# optimized implementation
+# ---------------------------------------------------------------------------- #
 
 
 @triton.jit
@@ -183,7 +187,7 @@ def make_ragged_tensor_metadata(slice_sizes, max_n_blocks):
 
 
 # reference implementation
-# --------------------------------------------------------- #
+# ---------------------------------------------------------------------------- #
 
 
 def make_ragged_tensor_metadata_torch(slice_sizes, max_n_blocks):
@@ -224,7 +228,12 @@ def make_ragged_tensor_metadata_torch(slice_sizes, max_n_blocks):
     return RaggedTensorMetadata(slice_sizes, slice_offs, block_offs, block_pid_map)
 
 
-# --------------------------------------------------------- #
+# ---------------------------------------------------------------------------- #
+# remap_ragged_tensor_metadata
+# ---------------------------------------------------------------------------- #
+
+# optimized implementation
+# ---------------------------------------------------------------------------- #
 
 
 @triton.jit
@@ -335,6 +344,10 @@ def remap_ragged_tensor_metadata(ragged_tensor_metadata: RaggedTensorMetadata,
         BLOCK=128,
     )
     return RaggedTensorMetadata(slice_sizes, slice_offs, block_offs_data, block_schedule_data)
+
+
+# reference implementation
+# ---------------------------------------------------------------------------- #
 
 
 def remap_ragged_tensor_metadata_torch(ragged_tensor_metadata, slice_map):
