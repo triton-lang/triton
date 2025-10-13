@@ -1,23 +1,23 @@
 set(LLVM_TARGET_DEFINITIONS Passes.td)
-mlir_tablegen(Passes.h.inc -gen-pass-decls -name Extensions)
-add_public_tablegen_target(TritonGPUExtensionIncGen)
+mlir_tablegen(Passes.h.inc -gen-pass-decls -name MLIRPlugin)
+add_public_tablegen_target(TritonMLIRPluginIncGen)
 
 llvm_canonicalize_cmake_booleans(
   MLIR_ENABLE_BINDINGS_PYTHON
 )
 
-set(GPU_EXTENSION_PASSES
-    GPUExtensionTestLib
+set(MLIR_PLUGIN_PASSES
+    MLIRPluginTestLib
     )
 
-set(GPUExtensionTestLib_SOURCES
+set(MLIRPluginTestLib_SOURCES
     MLIRPluginHello.cpp
     )
 
 get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
 get_property(f2reduce_libs GLOBAL PROPERTY F2REDUCE2_LIBS)
 
-foreach( plugin ${GPU_EXTENSION_PASSES} )
+foreach( plugin ${MLIR_PLUGIN_PASSES} )
     add_mlir_library(${plugin}
         ${${plugin}_SOURCES}
         SHARED
@@ -28,7 +28,7 @@ foreach( plugin ${GPU_EXTENSION_PASSES} )
         DEPENDS
         TritonTableGen
         TritonCanonicalizeIncGen
-        TritonGPUExtensionIncGen
+        TritonMLIRPluginIncGen
 
         LINK_LIBS PUBLIC
         ${triton_libs}

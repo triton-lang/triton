@@ -12,11 +12,11 @@ namespace triton {
 namespace plugin {
 
 
-#define GEN_PASS_DEF_TRITONGPUHELLOEXTENSION
+#define GEN_PASS_DEF_TRITONGPUHELLOMLIRPLUGIN
 #include "Passes.h.inc"
 
-struct HelloExtensionPass :
-  public impl::TritonGPUHelloExtensionBase<HelloExtensionPass> {
+struct HelloMLIRPluginPass :
+  public impl::TritonGPUHelloMLIRPluginBase<HelloMLIRPluginPass> {
   void runOnOperation() override {
 
     MLIRContext *context = &getContext();
@@ -35,11 +35,11 @@ struct HelloExtensionPass :
 } // namespace mlir
 
 extern "C" void addTritonPluginPass(mlir::PassManager* pm) {
-  pm->addPass(mlir::triton::plugin::createTritonGPUHelloExtension());
+  pm->addPass(mlir::triton::plugin::createTritonGPUHelloMLIRPlugin());
 }
 
 extern "C" void registerTritonPluginPass() {
   ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
-    return mlir::triton::plugin::createTritonGPUHelloExtension();
+    return mlir::triton::plugin::createTritonGPUHelloMLIRPlugin();
   });
 }
