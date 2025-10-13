@@ -15,18 +15,17 @@ namespace plugin {
 #define GEN_PASS_DEF_TRITONGPUHELLOEXTENSION
 #include "Passes.h.inc"
 
-
 struct HelloExtensionPass :
   public impl::TritonGPUHelloExtensionBase<HelloExtensionPass> {
   void runOnOperation() override {
 
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
-    mod.walk([&](arith::AddFOp addOp) {
-      llvm::errs() << addOp;
+    mod.walk([&](FunctionOpInterface funcOp) {
+      StringAttr funcNameAttr = funcOp.getNameAttr();
+      funcOp.setName("foo");
     }
     );
-
 
   }
 };
@@ -44,8 +43,3 @@ extern "C" void registerTritonPluginPass() {
     return mlir::triton::plugin::createTritonGPUHelloExtension();
   });
 }
-
-// extern "C" void registerTritonPluginDialect(mlir::DialectRegistry *registry){
-//   llvm::errs() << "registerTritonPluginDialect" << "\n";
-//   // registry.insert<mlir::triton::HelloDialect>();
-// }
