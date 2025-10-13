@@ -66,7 +66,7 @@ class RaggedTensorMetadata:
     def max_n_tiles(n_slices, n_total_rows):
         if n_total_rows <= n_slices:
             return n_total_rows
-        return n_slices - 1 - ((n_slices - n_total_rows - 1) // RaggedTensorMetadata.block_sizes()[0])
+        return n_slices - 1 - ((n_slices - n_total_rows - 1) // min(RaggedTensorMetadata.block_sizes()))
 
     @staticmethod
     def block_sizes_log2():
