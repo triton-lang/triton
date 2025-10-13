@@ -464,7 +464,7 @@ LogicalResult Fp4ToFpOp::verifyFp4ToFp(mlir::Operation *op,
   if (failed(dialect->inferFp4ToFpOpEncoding(
           resTy.getShape(), axis, resTy.getEncoding(), inferSrc,
           /*fwdInference*/ false, std::nullopt))) {
-    return failure();
+    return op->emitError() << "failed to infer encoding";
   }
   if (!areLayoutsEquivalent(srcTy.getShape(),
                             cast<LayoutEncodingTrait>(inferSrc),
