@@ -3,10 +3,11 @@ import torch
 from triton_kernels.tensor import (
     make_ragged_tensor_metadata,
     make_ragged_tensor_metadata_torch,
+    remap_ragged_tensor_metadata,
+    remap_ragged_tensor_metadata_torch,
     make_bitmatrix_metadata,
     make_bitmatrix_metadata_torch,
 )
-from triton_kernels.tensor_details.ragged_tensor import filter_ragged_tensor_metadata, filter_ragged_tensor_metadata_torch
 from triton_kernels.topk import topk
 from triton_kernels.testing import assert_equal
 from triton_kernels.distributed import make_expt_assignment
@@ -33,7 +34,7 @@ def test_make_ragged_tensor_metadata(n_slices):
 @pytest.mark.parametrize("n_shards", [1, 2, 4, 8])
 @pytest.mark.parametrize("rank", range(8))
 @pytest.mark.parametrize("affinity_mode", ["uniform", "random"])
-def test_filter_ragged_tensor_metadata(n_slices, n_shards, rank, affinity_mode):
+def test_remap_ragged_tensor_metadata(n_slices, n_shards, rank, affinity_mode):
     if n_slices % n_shards != 0 and affinity_mode == "uniform":
         pytest.skip("n_slices must be divisible by n_shards for uniform affinity mode")
     if rank >= n_shards:
@@ -45,11 +46,11 @@ def test_filter_ragged_tensor_metadata(n_slices, n_shards, rank, affinity_mode):
     batch_sizes[torch.randint(0, n_slices, (1, ))] = 0
     expt_dict = _make_expt_dict_for_mode(n_shards, n_slices, affinity_mode)
     expt_assignment = make_expt_assignment(n_shards, n_slices, expt_dict, device)
-    expt_bitmask, expt_map = expt_assignment.expt_bitmask, expt_assignment.expt_map
+    expt_map = expt_assignment.expt_map
     tri_metadata = make_ragged_tensor_metadata(batch_sizes, max_n_blocks)
     ref_metadata = make_ragged_tensor_metadata_torch(batch_sizes, max_n_blocks)
-    tri_metadata = filter_ragged_tensor_metadata(tri_metadata, expt_bitmask[rank, :], expt_map[rank, :])
-    ref_metadata = filter_ragged_tensor_metadata_torch(ref_metadata, expt_bitmask[rank, :], expt_map[rank, :])
+    tri_metadata = remap_ragged_tensor_metadata(tri_metadata, expt_map[rank, :])
+    ref_metadata = remap_ragged_tensor_metadata_torch(ref_metadata, expt_map[rank, :])
     assert_equal(tri_metadata.slice_sizes, ref_metadata.slice_sizes)
     assert_equal(tri_metadata.slice_offs, ref_metadata.slice_offs)
     assert_equal(tri_metadata.block_offs_data, ref_metadata.block_offs_data)

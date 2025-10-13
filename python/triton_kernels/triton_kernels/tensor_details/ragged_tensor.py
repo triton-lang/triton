@@ -247,28 +247,24 @@ def _generic_compaction(Out, compute_vals_and_cond_fn, compute_vals_and_cond_fn_
 
 
 @triton.jit
-def _compact_from_bitmask(Vals, Bitmask, n_slices, offs):
+def _compact_from_bitmask(Vals, SliceMap, n_slices, offs):
     slice_ids = offs
-    div = slice_ids // 32
-    rem = slice_ids % 32
     mask = slice_ids < n_slices
-    conds = (tl.load(Bitmask + div, mask=mask, other=0) >> rem) & 1
+    conds = (tl.load(SliceMap + slice_ids, mask=mask, other=-1) != -1).to(tl.int32)
     vals = tl.load(Vals + offs, mask=mask)
     return vals, conds
 
 
 @triton.jit
-def _compact_block_schedule(BlockSchedule, Map, Bitmask, n_blocks, offs):
+def _compact_block_schedule(BlockSchedule, SliceMap, n_blocks, offs):
     block_id = tl.load(BlockSchedule + offs, mask=offs < n_blocks, other=-1)
     block_id = block_id.to(tl.uint32, bitcast=True)
     slice_id = block_id & 0x0000FFFF
-    div = slice_id // 32
-    rem = slice_id % 32
     mask = slice_id != 65535
-    conds = (tl.load(Bitmask + div, mask=mask, other=0) >> rem) & 1
+    conds = (tl.load(SliceMap + slice_id, mask=mask, other=-1) != -1).to(tl.int32)
     block_id = block_id.to(tl.int32, bitcast=True)
     conds = conds.to(tl.int32, bitcast=True)
-    new_slice_id = tl.load(Map + slice_id, mask=mask)
+    new_slice_id = tl.load(SliceMap + slice_id, mask=mask)
     pid_mask = tl.full([
         1,
     ], 0xFFFF0000, dtype=tl.uint32)
@@ -277,16 +273,16 @@ def _compact_block_schedule(BlockSchedule, Map, Bitmask, n_blocks, offs):
 
 
 @triton.jit
-def _filter_ragged_tensor_metadata(BatchSizesOut, BatchSizesInp,  #
-                                   BatchOffsOut, BatchOffsInp,  #
-                                   BlockOffsOut, block_offs_out_stride_m,  #
-                                   BlockOffsInp, block_offs_in_stride_m,  #
-                                   BlockScheduleOut, block_schedule_out_stride_m,  #
-                                   BlockScheduleInp, block_schedule_in_stride_m,  #
-                                   Bitmask, Map,  #
-                                   n_slices, n_blocks,  #
-                                   BLOCK: tl.constexpr  #
-                                   ):
+def _remap_ragged_tensor_metadata(BatchSizesOut, BatchSizesInp,  #
+                                  BatchOffsOut, BatchOffsInp,  #
+                                  BlockOffsOut, block_offs_out_stride_m,  #
+                                  BlockOffsInp, block_offs_in_stride_m,  #
+                                  BlockScheduleOut, block_schedule_out_stride_m,  #
+                                  BlockScheduleInp, block_schedule_in_stride_m,  #
+                                  SliceMap,  #
+                                  n_slices, n_blocks,  #
+                                  BLOCK: tl.constexpr  #
+                                  ):
     pid_m = tl.program_id(0)
     # offset pointers
     BlockOffsOut += pid_m * block_offs_out_stride_m
@@ -295,44 +291,45 @@ def _filter_ragged_tensor_metadata(BatchSizesOut, BatchSizesInp,  #
     BlockScheduleInp += pid_m * block_schedule_in_stride_m
     # compute batch sizes for this slice by compacting input batch sizes
     _generic_compaction(BatchSizesOut, _compact_from_bitmask,  #
-                        (BatchSizesInp, Bitmask, n_slices), -1, n_slices,  #
+                        (BatchSizesInp, SliceMap, n_slices), -1, n_slices,  #
                         BLOCK=BLOCK)
     # compute batch offsets for this slice by compacting input batch offsets
     _generic_compaction(BatchOffsOut, _compact_from_bitmask,  #
-                        (BatchOffsInp, Bitmask, n_slices), -1, n_slices + 1,  #
+                        (BatchOffsInp, SliceMap, n_slices), -1, n_slices + 1,  #
                         BLOCK=BLOCK)
-    compacted_tile_count = _generic_compaction(BlockOffsOut, _compact_from_bitmask,  #
-                                               (BlockOffsInp, Bitmask, n_slices), -1, n_slices + 1,  #
-                                               BLOCK=BLOCK)
-    compacted_block_count = _generic_compaction(BlockScheduleOut, _compact_block_schedule,  #
-                                                (BlockScheduleInp, Map, Bitmask, n_blocks), -1, n_blocks,  #
-                                                BLOCK=BLOCK)
+    # compute block offsets
+    n_compacted_blocks = _generic_compaction(BlockOffsOut, _compact_from_bitmask,  #
+                                             (BlockOffsInp, SliceMap, n_slices), -1, n_slices + 1,  #
+                                             BLOCK=BLOCK)
+    # compute block schedule
+    n_total_blocks = _generic_compaction(BlockScheduleOut, _compact_block_schedule,  #
+                                         (BlockScheduleInp, SliceMap, n_blocks), -1, n_blocks,  #
+                                         BLOCK=BLOCK)
     # Record the total number of tiles in the trailing slot
-    tl.store(BlockOffsOut + compacted_tile_count, compacted_block_count)
+    tl.store(BlockOffsOut + n_compacted_blocks, n_total_blocks)
 
 
-def filter_ragged_tensor_metadata(ragged_tensor_metadata: RaggedTensorMetadata, slice_bitmask: torch.Tensor,
-                                  slice_map: torch.Tensor) -> RaggedTensorMetadata:
+def remap_ragged_tensor_metadata(ragged_tensor_metadata: RaggedTensorMetadata,
+                                 slice_map: torch.Tensor) -> RaggedTensorMetadata:
     slice_sizes = torch.empty_like(ragged_tensor_metadata.slice_sizes)
     slice_offs = torch.empty_like(ragged_tensor_metadata.slice_offs)
     block_offs_data = torch.empty_like(ragged_tensor_metadata.block_offs_data)
     block_schedule_data = torch.empty_like(ragged_tensor_metadata.block_schedule_data)
 
-    _filter_ragged_tensor_metadata[(block_offs_data.shape[0], )](
-        slice_sizes,
-        ragged_tensor_metadata.slice_sizes,
-        slice_offs,
-        ragged_tensor_metadata.slice_offs,
+    _remap_ragged_tensor_metadata[(block_offs_data.shape[0], )](
+        slice_sizes,  #
+        ragged_tensor_metadata.slice_sizes,  #
+        slice_offs,  #
+        ragged_tensor_metadata.slice_offs,  #
         block_offs_data,
-        block_offs_data.stride(0),
+        block_offs_data.stride(0),  #
         ragged_tensor_metadata.block_offs_data,
-        ragged_tensor_metadata.block_offs_data.stride(0),
+        ragged_tensor_metadata.block_offs_data.stride(0),  #
         block_schedule_data,
-        block_schedule_data.stride(0),
+        block_schedule_data.stride(0),  #
         ragged_tensor_metadata.block_schedule_data,
-        ragged_tensor_metadata.block_schedule_data.stride(0),
-        slice_bitmask,
-        slice_map,
+        ragged_tensor_metadata.block_schedule_data.stride(0),  #
+        slice_map,  #
         len(slice_sizes),
         block_schedule_data.shape[-1],
         BLOCK=128,
@@ -340,7 +337,7 @@ def filter_ragged_tensor_metadata(ragged_tensor_metadata: RaggedTensorMetadata, 
     return RaggedTensorMetadata(slice_sizes, slice_offs, block_offs_data, block_schedule_data)
 
 
-def filter_ragged_tensor_metadata_torch(ragged_tensor_metadata, slice_bitmask, slice_map):
+def remap_ragged_tensor_metadata_torch(ragged_tensor_metadata, slice_map):
 
     def compact(vals, conds, sentinel):
         assert conds.shape == vals.shape
@@ -353,7 +350,7 @@ def filter_ragged_tensor_metadata_torch(ragged_tensor_metadata, slice_bitmask, s
         valid_id = slice_id != 65535
         valid_slice_id = slice_id[valid_id]
         mask = torch.zeros_like(slice_id)
-        mask[valid_id] = (slice_bitmask[valid_slice_id // 32] >> (valid_slice_id % 32)) & 1
+        mask[valid_id] = (slice_map[valid_slice_id] != -1).to(torch.int32)
         return mask
 
     def map_slice_id(block_pid_map):
@@ -365,7 +362,7 @@ def filter_ragged_tensor_metadata_torch(ragged_tensor_metadata, slice_bitmask, s
     n_slices = len(ragged_tensor_metadata.slice_sizes)
     n_block_sizes = ragged_tensor_metadata.block_offs_data.shape[0]
     slice_global = torch.arange(n_slices, device=ragged_tensor_metadata.slice_sizes.device)
-    slice_local = (slice_bitmask[slice_global // 32] >> (slice_global % 32)) & 1
+    slice_local = slice_map[slice_global] != -1
     slice_mask = torch.cat((slice_local, torch.zeros((1, ), dtype=torch.bool, device=slice_local.device)))
     slice_sizes = compact(ragged_tensor_metadata.slice_sizes, slice_mask[:-1], -1)
     slice_offs = compact(ragged_tensor_metadata.slice_offs, slice_mask, -1)

@@ -171,6 +171,9 @@ class Tensor:
         return self.shape[i]
 
 
+# ---------------------------------------------------------------------------- #
+# bitmatrix
+# ---------------------------------------------------------------------------- #
 @dataclass
 class Bitmatrix(Tensor):
 
@@ -183,6 +186,9 @@ make_bitmatrix_metadata = bitmatrix_details.make_bitmatrix_metadata
 make_bitmatrix_metadata_torch = bitmatrix_details.make_bitmatrix_metadata_torch
 
 
+# ---------------------------------------------------------------------------- #
+# ragged tensor
+# ---------------------------------------------------------------------------- #
 @dataclass
 class RaggedTensor:
     """
@@ -200,9 +206,17 @@ class RaggedTensor:
     metadata: RaggedTensorMetadata
 
 
-# construct ragged tensor metadata from
+# construct ragged tensor metadata from `slice_sizes` and `max_n_blocks`
 make_ragged_tensor_metadata = ragged_tensor_details.make_ragged_tensor_metadata
 make_ragged_tensor_metadata_torch = ragged_tensor_details.make_ragged_tensor_metadata_torch
+
+# remap ragged tensor metadata to a new slice assignment
+remap_ragged_tensor_metadata = ragged_tensor_details.remap_ragged_tensor_metadata
+remap_ragged_tensor_metadata_torch = ragged_tensor_details.remap_ragged_tensor_metadata_torch
+
+# ---------------------------------------------------------------------------- #
+# sparse matrix
+# ---------------------------------------------------------------------------- #
 
 
 @dataclass

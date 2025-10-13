@@ -8,11 +8,10 @@ import torch.distributed._symmetric_memory as symm_mem
 import torch.multiprocessing as mp
 import triton
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment
-from triton_kernels.tensor_details.ragged_tensor import filter_ragged_tensor_metadata
 from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, reduce_grouped, RoutingData, GatherIndx, ScatterIndx
 from triton_kernels.target_info import is_hip
-from triton_kernels.tensor import make_ragged_tensor_metadata
+from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata
 import pytest
 
 
@@ -125,7 +124,7 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
     rank = dist.get_rank()
     rdata_global, combine_indx, dispatch_indx, expt_indx = routing(l_dp_local, n_expts_act, all_gather=True)
     y_ep_local = convert_dp_to_ep(x_dp_local, expt_assignment, expt_indx, dispatch_indx.src_indx)
-    expt_data_local = filter_ragged_tensor_metadata(rdata_global.expt_data, expt_assignment, rank)
+    expt_data_local = remap_ragged_tensor_metadata(rdata_global.expt_data, expt_assignment.expt_map[rank, :])
     rdata_ep_local = RoutingData(
         gate_scal=rdata_global.gate_scal,
         expt_hist=expt_data_local.batch_sizes,
