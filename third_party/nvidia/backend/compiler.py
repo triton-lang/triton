@@ -170,6 +170,10 @@ class CUDABackend(BaseBackend):
         self.binary_ext = "cubin"
 
     def parse_options(self, opts) -> Any:
+        # Enable debug mode for ConSan, so device-side assertions are not optimized out
+        if "instrumentation_mode" in opts and opts["instrumentation_mode"] == "consan":
+            opts["debug"] = True
+
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
         capability = int(self._parse_arch(args["arch"]))
@@ -353,7 +357,7 @@ class CUDABackend(BaseBackend):
         passes.gluon.add_inliner(pm)
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
-        if knobs.compilation.enable_experimental_consan:
+        if knobs.compilation.instrumentation_mode == "consan":
             # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
             passes.ttgpuir.add_concurrency_sanitizer(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)

@@ -670,6 +670,18 @@ void init_gluon_ir(py::module &&m) {
                                             pred, two_ctas, mbarriers,
                                             mbarrier_preds);
            })
+      .def("create_tcgen05_mma_scaled",
+           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value aScale,
+              Value bScale, tt::ScaleDotElemType aType,
+              tt::ScaleDotElemType bType, Value useAcc, Value pred,
+              std::vector<Value> &mbarriers,
+              std::vector<Value> &mbarrier_preds) {
+             Value accDep;
+             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
+             self.create<ttng::TCGen5MMAScaledOp>(
+                 tokType, a, b, acc, accDep, aScale, bScale, aType, bType,
+                 useAcc, pred, mbarriers, mbarrier_preds);
+           })
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value &barrier) {
              self.create<ttng::TCGen5CommitOp>(barrier);
@@ -764,11 +776,35 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttag::BufferLoadToLocalOp>(
                  dest, ptr, offsets, mask, other, stride, cacheModifier);
            })
+      .def("create_make_tensor_descriptor",
+           [](TritonOpBuilder &self, Type resultTy, Value &base,
+              std::vector<Value> &shape, std::vector<Value> &strides,
+              tt::PaddingOption paddingOption) -> Value {
+             return self.create<tt::MakeTensorDescOp>(resultTy, base, shape,
+                                                      strides, paddingOption);
+           })
+      .def("create_async_tdm_copy_global_to_local",
+           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
+              Value result) {
+             Value pred = self.create<arith::ConstantIntOp>(1, 1);
+             self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(descPtr, indices,
+                                                            result, pred);
+           })
+      .def("create_async_tdm_copy_local_to_global",
+           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
+              Value src) {
+             self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(descPtr, indices,
+                                                            src);
+           })
+      .def("create_async_tdm_wait", [](GluonOpBuilder &self, int num) {
+        ValueRange tokens;
+        self.create<ttag::AsyncTDMWait>(tokens, num);
+           })
       .def("create_warp_pipeline_border",
            [](GluonOpBuilder &self) {
              auto border = self.create<ROCDL::SchedBarrier>(0);
              border->setAttr("pipeline_border", self.getBuilder().getUnitAttr());
-           });
+           });;
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",
                                              py::module_local())

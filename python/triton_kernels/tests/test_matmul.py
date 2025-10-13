@@ -6,15 +6,15 @@ import pytest
 import torch
 from typing import Union
 import triton
-# routing utilities
-from triton_kernels.routing import routing
 # matmul utilities
 import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
-from triton_kernels.matmul_ogs import FlexCtx, InnerRoutingData, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
+from triton_kernels.matmul_ogs import FlexCtx, RoutingData, InnerRoutingData, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
+from triton_kernels.matmul_ogs import GatherIndx, ScatterIndx
 from triton_kernels.matmul_ogs import matmul_ogs_set_idle_sms, matmul_ogs, matmul_ogs_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
-from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4
+from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
 from triton_kernels.tensor_details import layout
+from triton_kernels.topk import topk
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp, quantize_mxfp8_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE
@@ -39,18 +39,15 @@ def alloc_rand_like(x):
     return alloc_rand(x.shape, x.device, x.dtype, x.requires_grad)
 
 
-def mask_indx(idx, n_expts_act):
-    idx.src_indx[idx.dst_indx[-n_expts_act:]] = -1
-    idx.dst_indx[-n_expts_act:] = -1
-    return idx
-
-
 def init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter, device="cuda"):
     logits = torch.randn((m, n_expts_tot), dtype=torch.float16, device=device, requires_grad=True)
-    routing_data, gather_idx, scatter_idx = routing(logits, n_expts_act)
-    routing_data.gate_scal = None
-    gather_idx = gather_idx if do_gather else None
-    scatter_idx = scatter_idx if do_scatter else None
+    sparse_logits = topk(logits, n_expts_act)
+    dispatch_indx = sparse_logits.mask_metadata.col_sorted_indx
+    combine_indx = sparse_logits.mask_metadata.row_sorted_indx
+    ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
+    routing_data = RoutingData(None, ragged_batch_metadata.batch_sizes, n_expts_tot, n_expts_act, ragged_batch_metadata)
+    gather_idx = GatherIndx(combine_indx, dispatch_indx) if do_gather else None
+    scatter_idx =  ScatterIndx(dispatch_indx, combine_indx) if do_scatter else None
     return m, routing_data, gather_idx, scatter_idx
 
 
@@ -114,7 +111,7 @@ def init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, mo
 # ---------------
 
 
-def init_precision(out_dtype, act_use_flexpoint, weight_dtype, weight_mxfp, n_expts_tot=1, expt_is_inner=False, device="cuda"):
+def init_precision(out_dtype, act_use_flexpoint, weight_dtype, weight_mxfp, mode, n_expts_tot=1, expt_is_inner=False, device="cuda"):
     weight_use_flexpoint = weight_dtype.itemsize == 1 and not weight_mxfp
     # flexpoint
     make_tensor = lambda val0, val1: torch.tensor([val0, val1] * (n_expts_tot // 2) +
@@ -133,8 +130,8 @@ def init_precision(out_dtype, act_use_flexpoint, weight_dtype, weight_mxfp, n_ex
         ) if weight_use_flexpoint else InFlexData(),
         out_data=OutFlexData(
             dtype=out_dtype,
-            expected_scale=make(4.00, 5.00, expt_is_inner),
-            actual_scale=make(0, 0, expt_is_inner),
+            expected_scale=make(4.00, 5.00, mode == "batched" or expt_is_inner),
+            actual_scale=make(0, 0, mode == "batched" or expt_is_inner),
             checksum_scale=None,
         ) if act_use_flexpoint else OutFlexData(),
     )
@@ -197,6 +194,7 @@ class Case:
     x_transpose: bool = False
     w_transpose: bool = False
     y_transpose: bool = False
+    colmajor_mxfp_weight: bool = True
 
 
 @pytest.mark.parametrize(
@@ -233,6 +231,7 @@ class Case:
             Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2, split_k=9),
             Case(16, 16, 1000, "batched", "float16", "float16", 5, 1, split_k=None),
             Case(16, 16, 1000, "batched", "float8_e5m2", "float8_e5m2", 5, 1, split_k=None),
+            Case(16, 16, 2048, "batched", "float8_e5m2", "float8_e5m2", 6, 1, split_k=5),
             # mx types:
             Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1),
             Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True),
@@ -268,6 +267,7 @@ class Case:
             Case(1000, 704, 800, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 2, 1),
             Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2, split_k=9),
             Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2, split_k=9, hbm_swizzling=True),
+            Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2, split_k=9, colmajor_mxfp_weight=False),
             Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2),
             Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2, hbm_swizzling=True),
             Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 8, 4),
@@ -314,9 +314,9 @@ class Case:
 @pytest.mark.parametrize("has_y_gammas", [False, True])
 @pytest.mark.parametrize("is_persistent", [False, True])
 def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
-            n_expts_act, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, epilogue_subtile,
+            n_expts_act, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             x_transpose, w_transpose, y_transpose,
-            device, opt_flags_scope, fresh_knobs):
+            device, opt_flags_scope):
     # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
         if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 9:
@@ -412,7 +412,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
     weight_dtype = dtype_str_to_torch(weight_dtype_str)
     act_dtype = dtype_str_to_torch(act_dtype_str)
     precision_opt = init_precision(act_dtype, act_is_float8, weight_dtype, weight_mxfp,
-                                   n_expts_tot, expt_is_inner, device=device)
+                                   mode, n_expts_tot, expt_is_inner, device=device)
     # precision_opt.x_pad_trans_requires_flexpoint = False
     if mode == "ragged":
         m, rdata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter,
@@ -461,14 +461,72 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
             w_scale_layout, w_scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
                 mx_axis=mx_axis, num_warps=8)
         # downcast to mxfp
-        w_tri, w_scale_tri = downcast_to_mxfp(w_tri, weight_dtype, axis=mx_axis)
-        w_ref = upcast_from_mxfp(w_tri, w_scale_tri, torch.bfloat16, axis=mx_axis)
-        w_tri_dtype = FP4 if "float4" in weight_dtype_str else weight_dtype
-        w_tri = wrap_torch_tensor(w_tri, w_tri_dtype)
-        w_scale_tri = wrap_torch_tensor(w_scale_tri)
-        # convert layouts
-        w_tri = convert_layout(w_tri, w_layout, **w_layout_opts)
-        w_scale_tri = convert_layout(w_scale_tri, w_scale_layout, **w_scale_layout_opts)
+        w_tri_orig = w_tri
+        if colmajor_mxfp_weight:
+            w_tri, w_scale_tri = downcast_to_mxfp(w_tri, weight_dtype, axis=mx_axis)
+            w_ref = upcast_from_mxfp(w_tri, w_scale_tri, torch.bfloat16, axis=mx_axis)
+            w_tri_dtype = FP4 if "float4" in weight_dtype_str else weight_dtype
+            w_tri = wrap_torch_tensor(w_tri, w_tri_dtype)
+            w_scale_tri = wrap_torch_tensor(w_scale_tri)
+            # convert layouts
+            w_tri = convert_layout(w_tri, w_layout, **w_layout_opts)
+            w_scale_tri = convert_layout(w_scale_tri, w_scale_layout, **w_scale_layout_opts)
+        else:
+            if torch.cuda.get_device_capability()[0] < 10:
+                pytest.skip("transposed mxfp weight not supported with cuda capability < 10")
+            if block_m == 16:
+                pytest.skip("PassManager::run failed from Triton compiler")
+            # TODO: swizzling for rowmajor
+
+            # A typical use case is we already quantized col-major weight,
+            # and we want matmul with its transposed row-major weight w/o
+            # requantization.
+
+            # put abs_max of each 32x32 block to diagonal so scales of transposed agree
+            w_ndim = w_tri.ndim
+            if w_ndim == 2:
+                w_tri = w_tri.unsqueeze(0)
+            BLOCK_SIZE = int(MXFP_BLOCK_SIZE)
+            for e, i, j in itertools.product(range(w_tri.shape[0]), range(0, w_tri.shape[1], BLOCK_SIZE), range(0, w_tri.shape[2], BLOCK_SIZE)):
+                i_end = min(i+BLOCK_SIZE, w_tri.shape[1])
+                j_end = min(j+BLOCK_SIZE, w_tri.shape[2])
+                block = w_tri[e, i:i_end, j:j_end]
+                m_abs = block.abs().max()
+                i_len = i_end - i
+                j_len = j_end - j
+                min_len = min(i_len, j_len)
+                signs = torch.randint(0, 2, (max(i_len, j_len),), device=w_tri.device) * 2 - 1
+                block.diagonal(dim1=-2, dim2=-1)[:] = signs[:min_len] * m_abs
+                if j_len > i_len:
+                    block[i_len - 1, i_len:] = signs[min_len:] * m_abs
+                elif i_len > j_len:
+                    block[j_len:, j_len - 1] = signs[min_len:] * m_abs
+            if w_ndim == 2:
+                w_tri = w_tri.squeeze(0)
+
+            # matmul with rowmajor weight expects scale is separately
+            # constructed (not much additional memory needed).
+            _, w_scale_tri = downcast_to_mxfp(w_tri, weight_dtype, axis=mx_axis)
+            # reuse quantized value from colmajor
+            w_tri_rowmajor, w_scale_tri_rowmajor = downcast_to_mxfp(w_tri.mT.contiguous(), weight_dtype, axis=mx_axis)
+            w_ref = upcast_from_mxfp(w_tri_rowmajor, w_scale_tri_rowmajor, torch.bfloat16, axis=mx_axis).mT.contiguous()
+            w_tri = w_tri_rowmajor.data.mT
+
+            def _pad_and_block(x: torch.Tensor) -> torch.Tensor:
+                x = torch.nn.functional.pad(x, (0, x.shape[-1] % BLOCK_SIZE), mode="replicate")
+                return x.view(*x.shape[:-1], x.shape[-1] // BLOCK_SIZE, BLOCK_SIZE)
+
+            # check if generated scale is transpose-invariant as intended construction
+            # [cdiv(K, 32), N] -> dedup to [cdiv(K, 32), cdiv(N, 32)]
+            w_scale_tri_blocked = _pad_and_block(w_scale_tri)
+            w_scale_tri_sampled = w_scale_tri_blocked[..., 0:1]
+            # [cdiv(N, 32), K] -> dedup to [cdiv(N, 32), cdiv(K, 32)]
+            w_scale_tri_rowmajor_blocked = _pad_and_block(w_scale_tri_rowmajor)
+            w_scale_tri_rowmajor_sampled = w_scale_tri_rowmajor_blocked[..., 0:1]
+            assert torch.equal(w_scale_tri_sampled.expand_as(w_scale_tri_blocked), w_scale_tri_blocked)
+            assert torch.equal(w_scale_tri_rowmajor_sampled.expand_as(w_scale_tri_rowmajor_blocked), w_scale_tri_rowmajor_blocked)
+            assert torch.equal(w_scale_tri_sampled.squeeze(-1), w_scale_tri_rowmajor_sampled.squeeze(-1).mT)
+
         precision_opt.weight_scale = w_scale_tri
     epilogue = None
     if act_mxfp8:
@@ -477,7 +535,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
         is_input_batched = x_tri.ndim == 3
         y_shape = x_tri.shape if is_input_batched else (1,) + x_tri.shape
         n_rows = y_shape[1] if gindx is None or mode == "batched" else gindx.dst_indx.shape[0]
-        y_shape = (y_shape[0], n_rows, w_tri.shape[-1])
+        y_shape = (y_shape[0], n_rows, w_tri_orig.shape[-1])
         if sindx is None or mode == "batched":
             if not is_input_batched:
                 y_shape = (y_shape[1], y_shape[2])
@@ -667,7 +725,7 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
     else:
         rdata = gindx = sindx = None
 
-    precision_opt = init_precision(act_dtype, str(act_dtype).startswith("torch.float8"), weight_dtype, False, n_expts_tot, device=device)
+    precision_opt = init_precision(act_dtype, str(act_dtype).startswith("torch.float8"), weight_dtype, False, mode, n_expts_tot, device=device)
     x, w, bias, _, _ = init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, mode,
                                          act_dtype, weight_dtype, False, requires_grad=False, device=device)
 

@@ -194,6 +194,8 @@ tt.func public @attention_forward(
   %one = arith.constant dense<1.0> : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
 
   // CHECK-LABEL: ttg.warp_specialize
+  // CHECK-LABEL: default
+  // CHECK: ttng.fence_async_shared
   // PIPELINE: partition0
   // PIPELINE-COUNT-4: ttng.tc_gen5_mma
   // PIPELINE-NOT: ttng.tc_gen5_mma

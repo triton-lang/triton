@@ -3,6 +3,7 @@ add_triton_library(TritonAMDGPUToLLVM
     AtomicRMWOpsEmitter.cpp
     AllocateSharedMemory.cpp
     BufferOpsEmitter.cpp
+    TensorPtrOpsToLLVM.cpp
     ConvertLayoutOpToLLVM.cpp
     ConvertWarpPipeline.cpp
     MemoryOpToLLVM.cpp
@@ -27,6 +28,7 @@ add_triton_library(TritonAMDGPUToLLVM
     Fp4ToFpOpToLLVM.cpp
     MembarUtility.cpp
     ScalarizePackedFOps.cpp
+    TDMUtility.cpp
 
     DEPENDS
     TritonAMDGPUConversionPassIncGen

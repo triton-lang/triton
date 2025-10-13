@@ -1,5 +1,3 @@
-import torch
-
 import triton
 import triton.language as tl
 
@@ -55,10 +53,27 @@ def swizzle2d(pid, grid_m, grid_n, GROUP_M: tl.constexpr):
 
 
 @triton.jit
-def _load_tile_attrs(tile_id, num_tiles, unpadded_m, grid_n, M, K, ExptData, ExptHist, ExptOffs, ExptTileOffs,
-                     EXPT_IS_INNER: tl.constexpr, X_IS_PADDED: tl.constexpr, W_IS_PADDED: tl.constexpr,
-                     BLOCK_M: tl.constexpr, BLOCK_K: tl.constexpr, PACKED_BLOCK_K_W: tl.constexpr,
-                     SPLIT_K: tl.constexpr, GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr):
+def _load_tile_attrs(
+    tile_id,
+    num_tiles,
+    unpadded_m,
+    grid_n,
+    M,
+    K,
+    ExptData,
+    ExptHist,
+    ExptOffs,
+    ExptTileOffs,
+    EXPT_IS_INNER: tl.constexpr,
+    X_IS_PADDED: tl.constexpr,
+    W_IS_PADDED: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    PACKED_BLOCK_K_W: tl.constexpr,
+    SPLIT_K: tl.constexpr,
+    GROUP_M: tl.constexpr,
+    XCD_SWIZZLE: tl.constexpr,
+):
     # unpack and swizzle program ids
     pid_emnk = tile_id
     if XCD_SWIZZLE != 1:
@@ -205,7 +220,7 @@ def matmul_launch_metadata(grid, kernel, args):
         n_tokens = None
         n_w_bytes = W.numel() * W.element_size()
     if expt_is_inner:
-        K = int(n_tokens)
+        K = None if n_tokens is None else int(n_tokens)
     repr = lambda s, x: f"{s} = {x}" if x is not None else f"E_{len(hist)}({s}) = {n_rows}"
     nbits = X.dtype.itemsize * 8
     batch_repr = ""
@@ -222,7 +237,7 @@ def matmul_launch_metadata(grid, kernel, args):
     fM = M if M is not None else n_tokens
     ret[f"flops{nbits}"] = 2.0 * fM * N * K * (1 if expt_is_inner else batch_size)
 
-    gindx = args.get("GatherIndx", None)
+    dst = args.get("GatherDstIndx", None)
     # sindx = args.get("WriteBackIndx", None)
     n_x_bytes = X.numel() * X.element_size()
     n_y_bytes = Y.numel() * Y.element_size()
@@ -230,12 +245,7 @@ def matmul_launch_metadata(grid, kernel, args):
         assert n_tokens is not None
         n_expts_act = args["N_EXPTS_ACT"]
 
-        if (gindx is not None) and launch_metadata_allow_sync():
-            # recreate inverse GatherIndx.
-            dst = torch.full_like(gindx, -1)
-            idx = torch.arange(len(gindx), device=gindx.device, dtype=torch.int32)
-            mask = (gindx != -1)
-            dst[gindx[mask]] = idx[mask]
+        if (dst is not None) and launch_metadata_allow_sync():
             n_read_rows = (dst.view((-1, n_expts_act)) != -1).any(dim=1).sum()
         else:
             n_read_rows = n_tokens
@@ -252,3 +262,9 @@ def matmul_launch_metadata(grid, kernel, args):
     ret["bytes"] = int(n_x_bytes + n_y_bytes + n_w_bytes)
 
     return ret
+
+
+@triton.jit
+def threadfence_system():
+    tl.inline_asm_elementwise("mov.u32 $0, 0x0; fence.sc.sys;", args=(), dtype=(tl.int32, ), is_pure=False, pack=1,
+                              constraints="=r")

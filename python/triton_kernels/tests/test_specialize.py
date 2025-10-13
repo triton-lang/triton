@@ -1,13 +1,20 @@
-import torch
 import importlib
+
+import torch
 from triton_kernels.specialize import cacheable, specialize
 import triton
 import triton.language as tl
 
 
 @triton.jit
-def template_kernel(o):
+def identity(x):
+    return x
+
+
+@triton.jit
+def template_kernel(o, fn: tl.constexpr):
     cst = 1.0
+    cst = fn(cst)
     tl.store(o, cst)
 
 
@@ -25,7 +32,7 @@ def get_specialized_kernel():
     if _specialized_kernel is not None:
         return _specialized_kernel
     import types
-    spec_constants = {}
+    spec_constants = {"fn": identity}
     spec_tuples = {}
     module = types.ModuleType("specialized_kernel")
     module.specialized = specialize(template_kernel, module, spec_constants, spec_tuples)
@@ -38,8 +45,9 @@ def cacheable_kernel():
     return get_specialized_kernel()
 
 
-def test_cacheable(device, fresh_triton_cache):
+def test_cacheable(device, fresh_triton_cache, monkeypatch):
     specialized_kernel = get_specialized_kernel()
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "0")
 
     specialization_data = None
     fn_name = None
@@ -60,6 +68,17 @@ def test_cacheable(device, fresh_triton_cache):
     assert o.item() == 1.0
     assert module_name == "tests.test_specialize"
     assert fn_name == "cacheable_kernel"
+
+    # check line info in ttir
+    ttir = k.asm["ttir"]
+    loc = None
+    for line in ttir.split("\n"):
+        if loc and loc in line:
+            assert "test_specialize.py" in line
+            assert ":18" in line
+        if "store" in line:
+            loc = line.split("(", 1)[1].split(")", 1)[0]
+    assert loc is not None, f"Expected to find a store instruction with location info, got: {ttir}"
 
     compile_count = 0
 

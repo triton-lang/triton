@@ -13,6 +13,7 @@ import triton.language as tl
 from triton.backends.compiler import GPUTarget
 from triton._internal_testing import str_to_triton_dtype
 from triton._internal_testing import is_hip_gfx1250
+from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
 
@@ -309,45 +310,374 @@ def test_runtime_amd_wmma_scaled(BLOCK_M, BLOCK_N, BLOCK_K, mxfp_type, hasScale)
         out_ptr = out + tl.arange(0, BLOCK_M)[:, None] * BLOCK_N + tl.arange(0, BLOCK_N)[None, :]
         tl.store(out_ptr, c)
 
+    def torch_gemm_mxfp(a, b, a_scale, b_scale, scale_block, M, N, K):
+        a_scale_f32 = a_scale.to(torch.float32).repeat_interleave(scale_block, dim=1)[:M, :K]
+        b_scale_f32 = b_scale.to(torch.float32).repeat_interleave(scale_block, dim=1).T.contiguous()[:K, :N]
+
+        a_f32 = a.to(torch.float32)
+        b_f32 = b.to(torch.float32)
+
+        return torch.matmul(a_f32 * a_scale_f32, b_f32 * b_scale_f32).to(torch.float32)
+
     torch.manual_seed(0)
 
     type_a = mxfp_type
     type_b = mxfp_type
 
-    DIV_FACTOR_A = 2 if type_a == "e2m1" else 1
-    DIV_FACTOR_B = 2 if type_b == "e2m1" else 1
+    a_mxfp4 = MXFP4Tensor(size=(BLOCK_M, BLOCK_K)).random()
+    b_mxfp4 = MXFP4Tensor(size=(BLOCK_K, BLOCK_N)).random()
 
-    x = torch.randint(20, 40, (BLOCK_M, BLOCK_K // DIV_FACTOR_A), dtype=torch.uint8).cuda()
-    y = torch.randint(20, 40, (BLOCK_K // DIV_FACTOR_B, BLOCK_N), dtype=torch.uint8).cuda()
+    scale_a_size = (BLOCK_M, (BLOCK_K + 32 - 1) // 32)
+    scale_b_size = (BLOCK_N, (BLOCK_K + 32 - 1) // 32)
 
     if hasScale:
-        min_scale, max_scale = (0, 142)
-        scale_x = torch.randint(min_scale, max_scale + 1, (BLOCK_M, BLOCK_K // 32), dtype=torch.uint8).cuda()
-        scale_y = torch.randint(min_scale, max_scale + 1, (BLOCK_N, BLOCK_K // 32), dtype=torch.uint8).cuda()
+        scale_a_mxfp4 = MXScaleTensor(size=scale_a_size).random(high=32.0)
+        scale_b_mxfp4 = MXScaleTensor(size=scale_b_size).random(high=32.0)
     else:
-        scale_x = None
-        scale_y = None
+        scale_a_mxfp4 = torch.ones(scale_a_size, dtype=torch.float32)
+        scale_b_mxfp4 = torch.ones(scale_b_size, dtype=torch.float32)
 
-    def make_finite(x, dtype):
-        if dtype not in ("e5m2", "e4m3"):
-            return x
-        mask = 0x7C if dtype == "e5m2" else 0x7F
-        finite = torch.arange(x.numel(), dtype=torch.uint8).cuda().reshape_as(x) % mask
-        x_finite = torch.where(x & mask == mask, finite | (0x80 & x), x)
-        x.copy_(x_finite)
-        return x
+    c_torch = torch_gemm_mxfp(a_mxfp4, b_mxfp4, scale_a_mxfp4, scale_b_mxfp4, 32, BLOCK_M, BLOCK_N, BLOCK_K)
 
-    x = make_finite(x, type_a)
-    y = make_finite(y, type_b)
+    a = a_mxfp4.to_packed_tensor(dim=1).data.contiguous().cuda()
+    b = b_mxfp4.to_packed_tensor(dim=0).data.contiguous().cuda()
 
-    z = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float32).cuda()
-    pgm = dot_mxfp_gluon_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z, BLOCK_M, BLOCK_N, BLOCK_K,
+    if hasScale:
+        scale_a = scale_a_mxfp4.data.cuda()
+        scale_b = scale_b_mxfp4.data.cuda()
+    else:
+        scale_a = None
+        scale_b = None
+
+    c = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float32).cuda()
+    pgm = dot_mxfp_gluon_kernel[(1, )](a, *a.stride(), scale_a, b, *b.stride(), scale_b, c, BLOCK_M, BLOCK_N, BLOCK_K,
                                        type_a, type_b)
     assert "v_wmma_scale_f32_16x16x128_f8f6f4" in pgm.asm[
         "amdgcn"], "The AMDGCN assembly does not contain the expected scaled WMMA instruction."
 
-    z_ref = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float32).cuda()
-    dot_mxfp_triton_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z_ref, BLOCK_M, BLOCK_N, BLOCK_K,
+    c_ref = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float32).cuda()
+    dot_mxfp_triton_kernel[(1, )](a, *a.stride(), scale_a, b, *b.stride(), scale_b, c_ref, BLOCK_M, BLOCK_N, BLOCK_K,
                                   type_a, type_b)
 
-    torch.testing.assert_close(z.cpu(), z_ref.cpu(), rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(c.cpu(), c_ref.cpu(), rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(c.cpu(), c_torch, rtol=1e-5, atol=1e-5)
+
+
+@gluon.jit
+def tensor_copy_kernel(a_ptr, b_ptr, M, N,  #
+                       BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+
+    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, [NUM_BUFFERS] + a_desc.block_shape, a_desc.layout)
+
+    idx_m = pid_m * BLOCK_M
+    for i in ttgl.static_range(0, NUM_BUFFERS):
+        idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
+        ttgl.amd.gfx1250.tdm.async_load(a_desc, [idx_m, idx_n], a_buffer.index(i))
+
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    for i in ttgl.static_range(0, NUM_BUFFERS):
+        idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
+        a = a_buffer.index(i).load(layout=BLOCKED_LAYOUT)
+
+        offs_bm = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
+        offs_bn = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+        offs_b = (offs_bm[:, None] * N) + offs_bn[None, :]
+        mask_b = (offs_bm[:, None] < M) & (offs_bn[None, :] < N)
+
+        ttgl.store(b_ptr + offs_b, a, mask=mask_b)
+
+
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64)])
+@pytest.mark.parametrize("NUM_BUFFERS", [1, 2])
+def test_compile_tensor_copy(BLOCK_M, BLOCK_N, NUM_BUFFERS):
+    k = triton.compile(
+        gluon._runtime.GluonASTSource(
+            fn=tensor_copy_kernel, signature={
+                "a_ptr": "*fp16", "b_ptr": "*fp16", "M": "i32", "N": "i32",  #
+                "BLOCK_M": "constexpr", "BLOCK_N": "constexpr", "NUM_BUFFERS": "constexpr"
+            }, constexprs={"BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "NUM_BUFFERS": NUM_BUFFERS}),
+        target=GPUTarget("hip", 'gfx1250', 32))
+
+    amdgcn = k.asm["amdgcn"]
+    for pattern in ("tensor_load_to_lds", "s_wait_tensorcnt 0x0"):
+        assert re.search(pattern, amdgcn)
+
+
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64)])
+@pytest.mark.parametrize("NUM_BUFFERS", [1, 2])
+@pytest.mark.parametrize("M,N", [(1024, 1024), (1000, 1000)])
+def test_runtime_tensor_copy(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS):
+    torch.manual_seed(42)
+    a = torch.randint(0x0, 0xFFFF, (M, N), dtype=torch.uint16)
+    b = torch.zeros_like(a)
+
+    a_device = a.cuda()
+    b_device = b.cuda()
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N * NUM_BUFFERS), 1)
+    tensor_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, NUM_BUFFERS=NUM_BUFFERS)
+
+    b_triton = b_device.cpu()
+    assert torch.equal(b_triton, a)
+
+
+@gluon.jit
+def tensor_fill_kernel(a_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+
+    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                         block_shape=(BLOCK_M, BLOCK_N), layout=SHARED_LAYOUT)
+    a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, [NUM_BUFFERS] + a_desc.block_shape, a_desc.layout)
+
+    idx_m = pid_m * BLOCK_M
+    for i in ttgl.static_range(0, NUM_BUFFERS):
+        idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
+        vm = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))
+        vn = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+        v = (vm[:, None] * N) + vn[None, :]
+        v = v.to(a_desc.dtype)
+        a_buffer.index(i).store(v)
+
+    for i in ttgl.static_range(0, NUM_BUFFERS):
+        idx_n = pid_n * (BLOCK_N * NUM_BUFFERS) + i * BLOCK_N
+        ttgl.amd.gfx1250.tdm.async_store(a_desc, [idx_m, idx_n], a_buffer.index(i))
+
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64)])
+@pytest.mark.parametrize("NUM_BUFFERS", [1, 2])
+def test_compile_tensor_fill(BLOCK_M, BLOCK_N, NUM_BUFFERS):
+    k = triton.compile(
+        gluon._runtime.GluonASTSource(
+            fn=tensor_fill_kernel, signature={
+                "a_ptr": "*fp16", "M": "i32", "N": "i32",  #
+                "BLOCK_M": "constexpr", "BLOCK_N": "constexpr", "NUM_BUFFERS": "constexpr"
+            }, constexprs={"BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "NUM_BUFFERS": NUM_BUFFERS}),
+        target=GPUTarget("hip", 'gfx1250', 32))
+
+    amdgcn = k.asm["amdgcn"]
+
+    for pattern in ("tensor_store_from_lds", "s_wait_tensorcnt 0x0"):
+        assert re.search(pattern, amdgcn)
+
+
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64)])
+@pytest.mark.parametrize("NUM_BUFFERS", [1, 2])
+@pytest.mark.parametrize("M,N", [(1024, 1024), (1000, 1000)])
+def test_runtime_tensor_fill(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS):
+    a = torch.zeros((M, N), dtype=torch.uint16)
+
+    a_device = a.cuda()
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N * NUM_BUFFERS), 1)
+    tensor_fill_kernel[grid](a_device, M, N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, NUM_BUFFERS=NUM_BUFFERS)
+
+    a_triton = a_device.cpu()
+    a_ref = torch.arange(M, dtype=torch.int16).unsqueeze(1) * N + \
+            torch.arange(N, dtype=torch.int16).unsqueeze(0)
+    a_ref = a_ref.to(torch.uint16)
+    assert torch.equal(a_triton, a_ref)
+
+
+@gluon.jit
+def mxgemm_kernel(a_ptr, b_ptr, c_ptr, a_scale, b_scale, M, N, K, stride_am, stride_ak, stride_bk, stride_bn, stride_cm,
+                  stride_cn, stride_scale, DTYPE_A: ttgl.constexpr, DTYPE_B: ttgl.constexpr,
+                  SCALE_BLOCK: ttgl.constexpr, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                  BLOCK_K: ttgl.constexpr, GROUP_SIZE_M: ttgl.constexpr):
+    DIV_FACTOR_A: ttgl.constexpr = 2 if DTYPE_A == "e2m1" else 1
+    DIV_FACTOR_B: ttgl.constexpr = 2 if DTYPE_B == "e2m1" else 1
+    BLOCK_K_SCALE: ttgl.constexpr = BLOCK_K // SCALE_BLOCK
+    BLOCK_K_PACKED_A: ttgl.constexpr = BLOCK_K // DIV_FACTOR_A
+    BLOCK_K_PACKED_B: ttgl.constexpr = BLOCK_K // DIV_FACTOR_B
+
+    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [8, 4], [4, 1], [1, 0])
+    A_BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [8, 4], [4, 1], [1, 0])
+    B_BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 16], [16, 2], [4, 1], [1, 0])
+
+    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, transposed=True, warps_per_cta=[2, 2],
+                                                         instr_shape=[16, 16, 128])
+    WMMA_LAYOUT_PACKED: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, transposed=True, warps_per_cta=[2, 2],
+                                                                instr_shape=[16, 16, 64])
+    A_SCALE_LINEAR_LAYOUT: ttgl.constexpr = ttgl.DistributedLinearLayout(
+        reg_bases=[[0, 1], [0, 2]], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp_bases=[[0, 0], [16, 0]],
+        block_bases=[], shape=[32, 4])
+    B_SCALE_LINEAR_LAYOUT: ttgl.constexpr = ttgl.DistributedLinearLayout(
+        reg_bases=[[0, 1], [0, 2]], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp_bases=[[16, 0], [0, 0]],
+        block_bases=[], shape=[32, 4])
+
+    DOT_LAYOUT_A: ttgl.constexpr = ttgl.DotOperandLayout(
+        operand_index=0, parent=WMMA_LAYOUT_PACKED if DTYPE_A == "e2m1" else WMMA_LAYOUT, k_width=16)
+    DOT_LAYOUT_B: ttgl.constexpr = ttgl.DotOperandLayout(
+        operand_index=1, parent=WMMA_LAYOUT_PACKED if DTYPE_B == "e2m1" else WMMA_LAYOUT, k_width=16)
+
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    num_pid_n = ttgl.cdiv(N, BLOCK_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + (pid % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    offs_am = (pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, A_BLOCKED_LAYOUT))) % M
+    offs_ak = ttgl.arange(0, BLOCK_K_PACKED_A, layout=ttgl.SliceLayout(0, A_BLOCKED_LAYOUT))
+    offs_bk = ttgl.arange(0, BLOCK_K_PACKED_B, layout=ttgl.SliceLayout(1, B_BLOCKED_LAYOUT))
+    offs_bn = (pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, B_BLOCKED_LAYOUT))) % N
+
+    offs_scale_am = (pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))) % M
+    offs_scale_ak = ttgl.arange(0, BLOCK_K_SCALE, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+    offs_scale_bn = (pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(1, BLOCKED_LAYOUT))) % N
+    offs_scale_bk = ttgl.arange(0, BLOCK_K_SCALE, layout=ttgl.SliceLayout(0, BLOCKED_LAYOUT))
+
+    a_scale_ptr = a_scale + offs_scale_am[:, None] * stride_scale + offs_scale_ak[None, :]
+    b_scale_ptr = b_scale + offs_scale_bn[:, None] * stride_scale + offs_scale_bk[None, :]
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_ak[None, :] * stride_ak)
+    b_ptrs = b_ptr + (offs_bk[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+
+    accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=ttgl.float32, layout=WMMA_LAYOUT)
+    for k in range(0, ttgl.cdiv(K, BLOCK_K)):
+        k_remaining_a = K - k * BLOCK_K_PACKED_A
+        k_remaining_b = K - k * BLOCK_K_PACKED_B
+        valid_k_a = offs_ak < k_remaining_a
+        valid_k_b = offs_bk < k_remaining_b
+
+        scale_a = ttgl.load(a_scale_ptr)
+        scale_b = ttgl.load(b_scale_ptr)
+        scale_a = ttgl.convert_layout(scale_a, A_SCALE_LINEAR_LAYOUT)
+        scale_b = ttgl.convert_layout(scale_b, B_SCALE_LINEAR_LAYOUT)
+
+        a = ttgl.load(a_ptrs, mask=valid_k_a[None, :], other=0.0)
+        b = ttgl.load(b_ptrs, mask=valid_k_b[:, None], other=0.0)
+        a = ttgl.convert_layout(a, DOT_LAYOUT_A)
+        b = ttgl.convert_layout(b, DOT_LAYOUT_B)
+
+        accumulator = ttgl.amd.gfx1250.wmma_scaled(a, scale_a, DTYPE_A, b, scale_b, DTYPE_B, accumulator)
+
+        a_ptrs += BLOCK_K_PACKED_A * stride_ak
+        b_ptrs += BLOCK_K_PACKED_B * stride_bk
+
+        a_scale_ptr += BLOCK_K_SCALE
+        b_scale_ptr += BLOCK_K_SCALE
+
+    offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
+    offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
+    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    ttgl.store(c_ptrs, accumulator, mask=c_mask)
+
+
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(32, 32, 64), (32, 32, 128)])
+@pytest.mark.parametrize("DTYPE_A", ["float8_e5m2", "float8_e4m3", "float4"])
+@pytest.mark.parametrize("DTYPE_B", ["float8_e5m2", "float8_e4m3", "float4"])
+def test_compile_mxgemm(BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B):
+    scale_block = 32
+
+    if BLOCK_K < 128:
+        pytest.skip("NYI: don't support block shape smaller than instr shape")
+
+    triton_dtype_converter = {'float8_e5m2': "fp8e5", "float8_e4m3": "fp8e4nv", "float4": "u8"}
+    dot_scaled_dtype_converter = {'float8_e5m2': "e5m2", "float8_e4m3": "e4m3", "float4": "e2m1"}
+
+    k = triton.compile(
+        gluon._runtime.GluonASTSource(
+            fn=mxgemm_kernel, signature={
+                "a_ptr": f"*{triton_dtype_converter[DTYPE_A]}", "b_ptr": f"*{triton_dtype_converter[DTYPE_B]}", "c_ptr":
+                "*fp32", "a_scale": "*u8", "b_scale": "*u8", "M": "i32", "N": "i32", "K": "i32", "stride_am": "i32",
+                "stride_ak": "i32", "stride_bk": "i32", "stride_bn": "i32", "stride_cm": "i32", "stride_cn": "i32",
+                "stride_scale": "i32", "DTYPE_A": "constexpr", "DTYPE_B": "constexpr", "SCALE_BLOCK": "constexpr",
+                "BLOCK_M": "constexpr", "BLOCK_N": "constexpr", "BLOCK_K": "constexpr", "GROUP_SIZE_M": "constexpr"
+            }, constexprs={
+                "DTYPE_A": dot_scaled_dtype_converter[DTYPE_A], "DTYPE_B": dot_scaled_dtype_converter[DTYPE_B],
+                "SCALE_BLOCK": scale_block, "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "BLOCK_K": BLOCK_K, "GROUP_SIZE_M":
+                1
+            }), target=GPUTarget("hip", 'gfx1250', 32))
+
+    amdgcn = k.asm["amdgcn"]
+    pattern = "v_wmma_scale_f32_16x16x128_f8f6f4"
+    assert re.search(pattern, amdgcn), f"Can't find instruction {pattern} in AMDGCN assembly"
+
+
+@pytest.mark.parametrize("M, N, K", [(32, 32, 128), (128, 128, 512), (1, 8192, 512)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(32, 32, 128), (64, 64, 128)])
+@pytest.mark.parametrize("DTYPE_A", ["float8_e5m2", "float8_e4m3", "float4"])
+@pytest.mark.parametrize("DTYPE_B", ["float8_e5m2", "float8_e4m3", "float4"])
+def test_runtime_mxgemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B):
+    scale_block = 32
+
+    torch.manual_seed(0)
+
+    def torch_gemm_mxfp(a, b, a_scale, b_scale, scale_block, M, N, K):
+        a_scale_f32 = a_scale.to(torch.float32).repeat_interleave(scale_block, dim=1)[:M, :K]
+        b_scale_f32 = b_scale.to(torch.float32).repeat_interleave(scale_block, dim=1).T.contiguous()[:K, :N]
+
+        a_f32 = a.to(torch.float32)
+        b_f32 = b.to(torch.float32)
+
+        return torch.matmul(a_f32 * a_scale_f32, b_f32 * b_scale_f32).to(torch.float32)
+
+    def init_data(dtype, d0: int, d1: int):
+        if dtype == 'float4':
+            return MXFP4Tensor(size=(d0, d1)).random()
+        elif dtype == "float8_e5m2":
+            return torch.randint(20, 40, (d0, d1), dtype=torch.uint8).view(torch.float8_e5m2)
+        elif dtype == "float8_e4m3":
+            return torch.randint(20, 40, (d0, d1), dtype=torch.uint8).view(torch.float8_e4m3fn)
+        else:
+            raise NotImplementedError(f"NYI: unsupported dtype: {dtype}")
+
+    a = init_data(DTYPE_A, M, K)
+    b = init_data(DTYPE_B, K, N)
+    a_size = (M, (K + scale_block - 1) // scale_block)
+    b_size = (N, (K + scale_block - 1) // scale_block)
+    a_scale = MXScaleTensor(size=a_size).random(low=1.0, high=32.0)
+    b_scale = MXScaleTensor(size=b_size).random(low=1.0, high=32.0)
+
+    c_ref = torch_gemm_mxfp(a, b, a_scale, b_scale, scale_block, M, N, K)
+
+    a_scale = a_scale.data
+    b_scale = b_scale.data
+
+    # mxfp4 input needs packed along the k dim, i.e., two mxfp4 are packed in one uint8
+    if DTYPE_A in ['float4', 'float6_e2m3', 'float6_e3m2']:
+        a = a.to_packed_tensor(dim=1)
+    if DTYPE_B in ['float4', 'float6_e2m3', 'float6_e3m2']:
+        b = b.to_packed_tensor(dim=0)
+
+    c_d = torch.zeros(M, N, dtype=torch.float32).cuda()
+    a_d = a.data.contiguous().cuda()
+    b_d = b.data.contiguous().cuda()
+    a_scale_d = a_scale.cuda()
+    b_scale_d = b_scale.cuda()
+
+    stride_am, stride_ak = a_d.stride(0), a_d.stride(1)
+    stride_bk, stride_bn = b_d.stride(0), b_d.stride(1)
+    stride_cm, stride_cn = c_d.stride(0), c_d.stride(1)
+    stride_scale = a_scale_d.stride(0)
+
+    numBlocks = triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)
+    grid = [numBlocks, 1, 1]
+    group_size_m = 1
+
+    dtype_converter = {'float8_e5m2': "e5m2", "float8_e4m3": "e4m3", "float4": "e2m1"}
+
+    mxgemm_kernel[grid](a_d, b_d, c_d, a_scale_d, b_scale_d, M, N, K, stride_am, stride_ak, stride_bk, stride_bn,
+                        stride_cm, stride_cn, stride_scale, dtype_converter[DTYPE_A], dtype_converter[DTYPE_B],
+                        scale_block, BLOCK_M, BLOCK_N, BLOCK_K, group_size_m, num_warps=4, num_ctas=1)
+
+    torch.testing.assert_close(c_d.cpu(), c_ref.cpu(), rtol=1e-5, atol=1e-8)

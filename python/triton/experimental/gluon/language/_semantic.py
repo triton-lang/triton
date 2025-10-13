@@ -366,7 +366,9 @@ class GluonSemantic(TritonSemantic[TensorTy]):
             for i in range(len(inputs)))
 
     def reduction(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn) -> Tuple[TensorTy, ...]:
-        _check(axis is not None, lambda: "All-reduce is not yet implemented in gluon")
+        if axis is None:
+            inputs = tuple(self.reshape(t, [t.numel.value], can_reorder=False) for t in inputs)
+            axis = 0
         # get result shape
         shape = inputs[0].type.shape
         rank = len(shape)
@@ -420,6 +422,10 @@ class GluonSemantic(TritonSemantic[TensorTy]):
     def warp_specialize(self, default_args, default_partition, worker_args, worker_partitions,
                         worker_num_warps: Sequence[int], worker_num_regs: Sequence[int], generator):
         num_partitions = len(worker_partitions)
+        _check(isinstance(default_args, (tuple, ttgl.tuple)),
+               lambda: f"default_args must be a tuple of arguments, but got {type(default_args)}")
+        _check(isinstance(worker_args, (tuple, ttgl.tuple)),
+               lambda: f"worker_args must be a tuple of arguments, but got {type(worker_args)}")
         assert num_partitions == len(
             worker_num_warps
         ), f"warp specialize got {num_partitions} partitions but {len(worker_num_warps)} warp counts"

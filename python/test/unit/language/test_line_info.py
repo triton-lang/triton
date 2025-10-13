@@ -1,3 +1,4 @@
+import inspect
 import subprocess
 import tempfile
 
@@ -7,6 +8,7 @@ import torch
 import triton
 import triton.language as tl
 from triton._internal_testing import is_interpreter
+from triton._filecheck import run_filecheck
 
 
 @triton.jit
@@ -156,24 +158,24 @@ def test_line_info(func: str):
 
     file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     if func == "single":
-        assert (check_file_lines(file_lines, "test_line_info.py", 14))
-        assert (check_file_lines(file_lines, "test_line_info.py", 15))
+        assert (check_file_lines(file_lines, "test_line_info.py", 16))
+        assert (check_file_lines(file_lines, "test_line_info.py", 17))
     elif func == "call":
-        assert (check_file_lines(file_lines, "test_line_info.py", 25))
         assert (check_file_lines(file_lines, "test_line_info.py", 27))
+        assert (check_file_lines(file_lines, "test_line_info.py", 29))
     elif func == "call_noinline":
-        assert (check_file_lines(file_lines, "test_line_info.py", 39))
-        assert (check_file_lines(file_lines, "test_line_info.py", 32))
-        assert (check_file_lines(file_lines, "test_line_info.py", 32))
+        assert (check_file_lines(file_lines, "test_line_info.py", 41))
+        assert (check_file_lines(file_lines, "test_line_info.py", 34))
+        assert (check_file_lines(file_lines, "test_line_info.py", 34))
     elif func == "autotune":
-        assert (check_file_lines(file_lines, "test_line_info.py", 50))
-        assert (check_file_lines(file_lines, "test_line_info.py", 51))
         assert (check_file_lines(file_lines, "test_line_info.py", 52))
+        assert (check_file_lines(file_lines, "test_line_info.py", 53))
+        assert (check_file_lines(file_lines, "test_line_info.py", 54))
     elif func == "dot_combine":
-        assert (check_file_lines(file_lines, "test_line_info.py", 62))
-        assert (check_file_lines(file_lines, "test_line_info.py", 63, should_contain=False))
+        assert (check_file_lines(file_lines, "test_line_info.py", 64))
+        assert (check_file_lines(file_lines, "test_line_info.py", 65, should_contain=False))
     elif func == "cdiv":
-        assert (check_file_lines(file_lines, "test_line_info.py", 72))
+        assert (check_file_lines(file_lines, "test_line_info.py", 74))
 
 
 @pytest.mark.interpreter
@@ -186,22 +188,22 @@ def test_line_info_interpreter(func: str):
     expected_def_lineno = 0
     if func == "single":
         kernel = kernel_single
-        expected_def_lineno = 13
+        expected_def_lineno = 15
     elif func == "call":
         kernel = kernel_call
-        expected_def_lineno = 24
+        expected_def_lineno = 26
     elif func == "call_noinline":
         kernel = kernel_call_noinline
-        expected_def_lineno = 38
+        expected_def_lineno = 40
     elif func == "autotune":
         kernel = kernel_autotune.fn
-        expected_def_lineno = 49
+        expected_def_lineno = 51
     elif func == "dot_combine":
         kernel = kernel_dot_combine
-        expected_def_lineno = 59
+        expected_def_lineno = 61
     elif func == "cdiv":
         kernel = kernel_cdiv
-        expected_def_lineno = 69
+        expected_def_lineno = 71
     kernel.rewrite()
     assert kernel.rewriter.def_file_lineno == expected_def_lineno
 
@@ -254,8 +256,6 @@ def test_line_info_ir_source(monkeypatch, status, tmp_path):
 
 
 def test_use_name_loc_as_prefix(fresh_triton_cache):
-    import inspect
-    from triton._filecheck import run_filecheck
 
     @triton.jit
     def kernel_basic(src, N, BLOCK_SIZE: tl.constexpr):
@@ -424,3 +424,24 @@ def test_use_name_loc_as_prefix(fresh_triton_cache):
     h = triton.compile(triton.compiler.ASTSource(fn=kernel_basic_while, signature={"N": "i32"}, constexprs={}))
     check_template = inspect.getsource(kernel_basic_while.fn)
     run_filecheck("placeholder", h.asm["ttir"], check_template)
+
+
+def test_map_elementwise_has_lineinfo():
+
+    @triton.jit
+    def compare(x, y):
+        if x < y:
+            return x
+        return y
+
+    @triton.jit
+    def kernel(X, Y):
+        # CHECK-NOT: loc(unknown)
+        x = tl.load(X + tl.arange(0, 4))
+        y = tl.load(Y + tl.arange(0, 4))
+        z = tl.map_elementwise(compare, x, y)
+        tl.device_print("", z)
+
+    kernel_info = kernel.warmup(torch.float32, torch.float32, grid=(1, ))
+    check_template = inspect.getsource(kernel.fn)
+    run_filecheck("test", kernel_info.asm["ttir"], check_template)

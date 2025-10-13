@@ -118,7 +118,7 @@ proton.start(name="profile_name", context="shadow", backend="cupti", mode="pcsam
 #### Instrumentation
 
 The instrumentation backend allows for detailed, fine-grained profiling of intra-kernel behavior, generating trace or tree views similar to those produced by coarse-grained profiling.
-By default, if no `mode` is specified, Proton profiles kernel cycles, which may require shared memory. If there is insufficient shared memory, profiling will abort and a warning will be displayed. Future releases will introduce additional instrumentation modes.
+By default, if no `mode` is specified, Proton profiles kernel cycles, which may require shared memory. If there is insufficient shared memory, profiling will abort and a warning will be displayed. Future releases will introduce additional instrumentation modes. See the [tutorial](tutorials/intra_kernel) for more detailed information and examples.
 
 **Host-side usage:**
 
@@ -138,7 +138,7 @@ import triton.profiler.mode as pmode
 proton.start(
     name="profile_name",
     backend="instrumentation",
-    mode=pmode.Default(granularity="warp_2") # collect metrics from every 2 warps
+    mode=pmode.Default() # collect metrics from every warp
 )
 ```
 
@@ -167,7 +167,7 @@ def kernel(...):
             gl.load(...)
 ```
 
-Advanced users can instrument either the `ttir` or `ttgir` intermediate representations for even finer-grained measurement. The relevant IR instructions are `proton.record start` and `proton.record end`. This can be combined with the environment variable `TRITON_KERNEL_OVERRIDE=1` for custom kernel overrides. For detailed steps, refer to the Triton [documentation](https://github.com/triton-lang/triton?tab=readme-ov-file#tips-for-hacking) under the **Kernel Override Steps** section. We have also assembled a [tutorial](tutorials/ttgir_override) that demonstrates how to use the IR-based instrumentation.
+Advanced users can instrument either the `ttir` or `ttgir` intermediate representations for even finer-grained measurement. The relevant IR instructions are `proton.record start` and `proton.record end`. This can be combined with the environment variable `TRITON_KERNEL_OVERRIDE=1` for custom kernel overrides. For detailed steps, refer to the Triton [documentation](https://github.com/triton-lang/triton?tab=readme-ov-file#tips-for-hacking) under the **Kernel Override Steps** section. We have also assembled a [tutorial](tutorials/intra_kernel) that demonstrates how to use the IR-based instrumentation approach and the proton DSL approach.
 
 
 ### Hook
