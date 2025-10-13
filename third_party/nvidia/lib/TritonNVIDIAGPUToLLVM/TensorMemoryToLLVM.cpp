@@ -354,7 +354,7 @@ lowerTMemLdStFromInfo(Location loc, ConversionPatternRewriter &rewriter,
   }
   if (llvmElemTy.getIntOrFloatBitWidth() < 32) {
     unsigned bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    bool padding = info.padding;
+    bool padding = false;
     Type packedElemTy;
     if (info.vec > 1) {
       // There are contiguous elements along kCol, so we can pack them into a
@@ -362,9 +362,9 @@ lowerTMemLdStFromInfo(Location loc, ConversionPatternRewriter &rewriter,
       packedElemTy = int_ty(bitwidth * info.vec);
       info.vec = 1;
     } else {
-      assert(info.unpacked);
+      padding = info.padding;
+      assert(info.unpacked || info.padding);
       packedElemTy = i32_ty;
-      info.padding = false;
     }
     SmallVector<Value> inVals = to_vector(vals);
     if (isStore) {

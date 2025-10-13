@@ -393,9 +393,9 @@ getTmemCompatibleLayouts(Operation *op, RankedTensorType tensorType,
 bool isDistributedLayoutTMemCompatible(Operation *op,
                                        RankedTensorType tensorType,
                                        gpu::MemDescType memType) {
-  int numWarps = lookupNumWarps(op);
+  auto maxnreg = getContextualMaxNReg(op);
   return succeeded(
-      computeTMemLdStEncodingInfo(op->getLoc(), tensorType, memType, numWarps));
+      computeTMemLdStEncodingInfo(op->getLoc(), tensorType, memType, maxnreg));
 }
 
 LogicalResult
