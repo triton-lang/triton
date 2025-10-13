@@ -107,7 +107,7 @@ def routing(logits, n_expts_act, all_gather=False):
     combine_indx = sparse_logits.mask_metadata.row_sorted_indx
     ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
     gate_scal = sparse_logits.vals.flatten()[combine_indx]
-    routing_data = RoutingData(gate_scal, ragged_batch_metadata.batch_sizes, logits.shape[-1], n_expts_act,
+    routing_data = RoutingData(gate_scal, ragged_batch_metadata.slice_sizes, logits.shape[-1], n_expts_act,
                                ragged_batch_metadata)
     gather_idx = GatherIndx(combine_indx, dispatch_indx)
     scatter_idx = ScatterIndx(dispatch_indx, combine_indx)
@@ -127,7 +127,7 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
     expt_data_local = remap_ragged_tensor_metadata(rdata_global.expt_data, expt_assignment.expt_map[rank, :])
     rdata_ep_local = RoutingData(
         gate_scal=rdata_global.gate_scal,
-        expt_hist=expt_data_local.batch_sizes,
+        expt_hist=expt_data_local.slice_sizes,
         n_expts_tot=expt_assignment.n_expts_per_shard[rank],
         n_expts_act=rdata_global.n_expts_act,
         expt_data=expt_data_local,

@@ -16,12 +16,12 @@ from triton_kernels.testing import assert_equal
 def test_make_ragged_tensor_metadata(n_slices):
     torch.manual_seed(0)
     device = "cuda"
-    max_batch_size = 200
-    max_n_blocks = (1 + (max_batch_size // 16)) * n_slices
-    batch_sizes = torch.randint(0, max_batch_size, (n_slices, ), dtype=torch.int32, device=device)
-    batch_sizes[torch.randint(0, n_slices, (1, ))] = 0
-    meta = make_ragged_tensor_metadata(batch_sizes, max_n_blocks)
-    ref = make_ragged_tensor_metadata_torch(batch_sizes, max_n_blocks)
+    max_slice_size = 200
+    max_n_blocks = (1 + (max_slice_size // 16)) * n_slices
+    slice_sizes = torch.randint(0, max_slice_size, (n_slices, ), dtype=torch.int32, device=device)
+    slice_sizes[torch.randint(0, n_slices, (1, ))] = 0
+    meta = make_ragged_tensor_metadata(slice_sizes, max_n_blocks)
+    ref = make_ragged_tensor_metadata_torch(slice_sizes, max_n_blocks)
     assert_equal(meta.slice_sizes, ref.slice_sizes)
     assert_equal(meta.slice_offs, ref.slice_offs)
     assert_equal(meta.block_offs_data, ref.block_offs_data)
@@ -31,16 +31,16 @@ def test_make_ragged_tensor_metadata(n_slices):
 @pytest.mark.parametrize("n_slices", [9, 32, 911, 1024, 10000])
 def test_remap_ragged_tensor_metadata(n_slices):
     device = "cuda"
-    max_batch_size = 200
-    max_n_blocks = (1 + (max_batch_size // 16)) * n_slices
-    batch_sizes = torch.randint(0, max_batch_size, (n_slices, ), dtype=torch.int32, device=device)
-    batch_sizes[torch.randint(0, n_slices, (1, ))] = 0
+    max_slice_size = 200
+    max_n_blocks = (1 + (max_slice_size // 16)) * n_slices
+    slice_sizes = torch.randint(0, max_slice_size, (n_slices, ), dtype=torch.int32, device=device)
+    slice_sizes[torch.randint(0, n_slices, (1, ))] = 0
     # randomly permute slices
     slice_map = torch.randperm(n_slices, device=device, dtype=torch.int32)
     # discard random slices
     slice_map[torch.randint(0, len(slice_map), (5, ))] = -1
-    tri_metadata = make_ragged_tensor_metadata(batch_sizes, max_n_blocks)
-    ref_metadata = make_ragged_tensor_metadata_torch(batch_sizes, max_n_blocks)
+    tri_metadata = make_ragged_tensor_metadata(slice_sizes, max_n_blocks)
+    ref_metadata = make_ragged_tensor_metadata_torch(slice_sizes, max_n_blocks)
     tri_metadata = remap_ragged_tensor_metadata(tri_metadata, slice_map)
     ref_metadata = remap_ragged_tensor_metadata_torch(ref_metadata, slice_map)
     assert_equal(tri_metadata.slice_sizes, ref_metadata.slice_sizes)
