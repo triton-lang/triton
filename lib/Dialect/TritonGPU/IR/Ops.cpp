@@ -444,7 +444,7 @@ LogicalResult Fp4ToFpOp::verifyFp4ToFp(mlir::Operation *op,
   }
   if (bool(resTy.getEncoding()) != bool(srcTy.getEncoding()))
     return op->emitError()
-           << "source and result must have both encoding or neither";
+           << "source and result must both have an encoding, or neither";
   if (!resTy.getEncoding()) {
     return success();
   }
@@ -461,7 +461,7 @@ LogicalResult Fp4ToFpOp::verifyFp4ToFp(mlir::Operation *op,
           .getDialect()
           .getRegisteredInterface<triton::DialectInferLayoutInterface>();
   assert(dialect);
-  if (!succeeded(dialect->inferFp4ToFpOpEncoding(
+  if (failed(dialect->inferFp4ToFpOpEncoding(
           resTy.getShape(), axis, resTy.getEncoding(), inferSrc,
           /*fwdInference*/ false, std::nullopt))) {
     return failure();
