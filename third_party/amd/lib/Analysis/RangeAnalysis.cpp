@@ -32,7 +32,7 @@
 //    for this pass, because we don't expect many dead code at the moment when
 //    this analysis is invoked. Price for being "conditional" is less about
 //    compile time but complexity (in terms of debugging and understanding).
-//  1.5 Maybe just walking the code top-dowm is suffice for range-analysis:
+//  1.5 Maybe just walking the code top-dowm is sufficient for range-analysis:
 //    For loops, figuring out IVs' value-ranges before loops are entered, and
 //    progress to loop-body, without visiting back-edge for non-SCF loops.
 //
@@ -306,7 +306,7 @@ maybeGetAssumedRange(const SetVector<Operation *> &allAssumptions, Value anchor,
   if (result) {
     const auto &val = *result;
     if (val.smin().isNonNegative()) {
-      // Consider 0 < x && x < 1024.
+      // Consider 0 <= x && x <= 1024.
       // When processing x > 0, the value range of x is
       //  vr1={umin=0, umax=0xf...f, smin=0, smax=0x7...f}
       // When processing x < 1024, the value range of x is:
@@ -559,7 +559,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
   }
   assert(opndValueRanges.size() == operands.size() && "size disagree");
 
-  // step 3: call helper function inferring the value range. If assumed value-
+  // step 2: call helper function inferring the value range. If assumed value-
   // range is present, the transfer-function will intersect the assumed value-
   // value with the inferred value range.
   LogicalResult visitResult =
@@ -757,10 +757,10 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
   //    yield n
   //
   // This loop tries to update lattice(x) = join(lattice(m), lattice(n),
-  // proovided lattice(m) and lattice(n) are initialized.
+  // provided lattice(m) and lattice(n) are initialized.
   //
   // Note that the state of lattice(m) and lattice(n) was updated in the
-  // "previous" round. In this "round", the scf.if is vsitied right now, and
+  // "previous" round. In this "round", the scf.if is visitied right now, and
   // it takes this moment to update its LHS.
   //
   // Alternatively, when we visit, say op_m, we notice its result is used by
