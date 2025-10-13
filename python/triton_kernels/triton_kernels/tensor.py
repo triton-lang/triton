@@ -185,8 +185,17 @@ make_bitmatrix_metadata_torch = bitmatrix_details.make_bitmatrix_metadata_torch
 
 @dataclass
 class RaggedTensor:
-    batch_sizes: torch.Tensor
+    """
+    A ragged `tensor` is a collection of 2D tensors that share the same number of columns
+    """
+    # slice_sizes[i] is the number of rows in slice `i`
+    slice_sizes: torch.Tensor
+    # ragged tensors are stored in memory as (potentially padded) 2D tensors of shape
+    # [num_total_rows, num_cols]
+    # where `num_total_rows` >= sum(slice_sizes)
     data: torch.Tensor
+    # `metadata`` contains information about the ragged tensor
+    # see `tensor_details/ragged_tensor.py` for more details
     metadata: RaggedTensorMetadata
 
 

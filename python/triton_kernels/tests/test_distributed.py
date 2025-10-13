@@ -7,7 +7,8 @@ import torch.distributed as dist
 import torch.distributed._symmetric_memory as symm_mem
 import torch.multiprocessing as mp
 import triton
-from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment, filter_expt_data, filter_expt_data_torch
+from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment
+from triton_kernels.tensor import filter_ragged_tensor_metadata
 from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, reduce_grouped, RoutingData, GatherIndx, ScatterIndx
 from triton_kernels.target_info import is_hip
@@ -24,6 +25,7 @@ def _make_expt_dict_for_mode(n_shards, n_expts_tot, affinity_mode):
         return factories[affinity_mode](n_shards, n_expts_tot)
     except KeyError as exc:
         raise ValueError(f"Unknown affinity mode: {affinity_mode}") from exc
+
 
 # ------------------------------------------------------------
 # fixture
@@ -95,26 +97,6 @@ def test_make_expt_assignment(n_expts_shard, n_expts_tot, affinity_mode):
         assert torch.all(expt_map == expt_assignment.expt_map[shard, :])
 
 
-@pytest.mark.parametrize("n_expts_tot, n_expts_act", [(128, 4)])
-@pytest.mark.parametrize("n_shards", [4])
-@pytest.mark.parametrize("affinity_mode", ["uniform", "random"])
-@pytest.mark.parametrize("n_tokens", [1024, 16384])
-def test_filter_expt_data(n_expts_tot, n_expts_act, n_shards, affinity_mode, n_tokens):
-    device = "cuda"
-    dtype = torch.float32
-    logits = torch.randn((n_tokens, n_expts_tot), dtype=dtype, device=device, requires_grad=True)
-    routing_global, _, _, _ = routing(logits, n_expts_act)
-    expt_data = routing_global.expt_data
-    expt_dict = _make_expt_dict_for_mode(n_shards, n_expts_tot, affinity_mode)
-    expt_assignment = make_expt_assignment(n_shards, n_expts_tot, expt_dict, device)
-    routing_local_ref = filter_expt_data_torch(expt_data, expt_assignment, 1)
-    routing_local_tri = filter_expt_data(expt_data, expt_assignment, 1)
-    assert torch.all(routing_local_ref.hist == routing_local_tri.hist)
-    assert torch.all(routing_local_ref.token_offs_raw == routing_local_tri.token_offs_raw)
-    assert torch.all(routing_local_ref.token_offs_pad_data == routing_local_tri.token_offs_pad_data)
-    assert torch.all(routing_local_ref.block_pid_map_data == routing_local_tri.block_pid_map_data)
-
-
 # ------------------------------------------------------------
 # expert sharding
 # ------------------------------------------------------------
@@ -143,7 +125,7 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
     rank = dist.get_rank()
     rdata_global, combine_indx, dispatch_indx, expt_indx = routing(l_dp_local, n_expts_act, all_gather=True)
     y_ep_local = convert_dp_to_ep(x_dp_local, expt_assignment, expt_indx, dispatch_indx.src_indx)
-    expt_data_local = filter_expt_data(rdata_global.expt_data, expt_assignment, rank)
+    expt_data_local = filter_ragged_tensor_metadata(rdata_global.expt_data, expt_assignment, rank)
     rdata_ep_local = RoutingData(
         gate_scal=rdata_global.gate_scal,
         expt_hist=expt_data_local.batch_sizes,
@@ -297,7 +279,6 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     graph.replay()
     dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
     triton.testing.assert_close(y_global_ref, y_global_tri)
-    
 
 
 @pytest.mark.parametrize("distributed_launcher", [2, 4], indirect=True)
