@@ -88,9 +88,9 @@ def empty_aligned(shape, dtype, device, pad_size):
     return ret[ret_slices], ret.numel()
 
 
-# ---------------------------------------------------------------------------- #
+# ============================================================================ #
 # make_ragged_tensor_metadata
-# ---------------------------------------------------------------------------- #
+# ============================================================================ #
 
 # optimized implementation
 # ---------------------------------------------------------------------------- #
@@ -228,9 +228,9 @@ def make_ragged_tensor_metadata_torch(slice_sizes, max_n_blocks):
     return RaggedTensorMetadata(slice_sizes, slice_offs, block_offs, block_pid_map)
 
 
-# ---------------------------------------------------------------------------- #
+# ============================================================================ #
 # remap_ragged_tensor_metadata
-# ---------------------------------------------------------------------------- #
+# ============================================================================ #
 
 # optimized implementation
 # ---------------------------------------------------------------------------- #
@@ -318,26 +318,32 @@ def _remap_ragged_tensor_metadata(BatchSizesOut, BatchSizesInp,  #
     tl.store(BlockOffsOut + n_compacted_blocks, n_total_blocks)
 
 
-def remap_ragged_tensor_metadata(ragged_tensor_metadata: RaggedTensorMetadata,
+def remap_ragged_tensor_metadata(src_ragged_tensor_metadata: RaggedTensorMetadata,
                                  slice_map: torch.Tensor) -> RaggedTensorMetadata:
-    slice_sizes = torch.empty_like(ragged_tensor_metadata.slice_sizes)
-    slice_offs = torch.empty_like(ragged_tensor_metadata.slice_offs)
-    block_offs_data = torch.empty_like(ragged_tensor_metadata.block_offs_data)
-    block_schedule_data = torch.empty_like(ragged_tensor_metadata.block_schedule_data)
+    """
+    Let `src` be a ragged tensor, and `src_slices`/`src_ragged_tensor_metadata` be its slices/metadata.
+
+    This function returns the metadata of `dst`, i.e. the ragged tensor s.t.:
+    dst_slices = [`src_slices[slice_id]` if `slice_id != -1` for slice_id in `slice_map`]
+    """
+    slice_sizes = torch.empty_like(src_ragged_tensor_metadata.slice_sizes)
+    slice_offs = torch.empty_like(src_ragged_tensor_metadata.slice_offs)
+    block_offs_data = torch.empty_like(src_ragged_tensor_metadata.block_offs_data)
+    block_schedule_data = torch.empty_like(src_ragged_tensor_metadata.block_schedule_data)
 
     _remap_ragged_tensor_metadata[(block_offs_data.shape[0], )](
         slice_sizes,  #
-        ragged_tensor_metadata.slice_sizes,  #
+        src_ragged_tensor_metadata.slice_sizes,  #
         slice_offs,  #
-        ragged_tensor_metadata.slice_offs,  #
+        src_ragged_tensor_metadata.slice_offs,  #
         block_offs_data,
         block_offs_data.stride(0),  #
-        ragged_tensor_metadata.block_offs_data,
-        ragged_tensor_metadata.block_offs_data.stride(0),  #
+        src_ragged_tensor_metadata.block_offs_data,
+        src_ragged_tensor_metadata.block_offs_data.stride(0),  #
         block_schedule_data,
         block_schedule_data.stride(0),  #
-        ragged_tensor_metadata.block_schedule_data,
-        ragged_tensor_metadata.block_schedule_data.stride(0),  #
+        src_ragged_tensor_metadata.block_schedule_data,
+        src_ragged_tensor_metadata.block_schedule_data.stride(0),  #
         slice_map,  #
         len(slice_sizes),
         block_schedule_data.shape[-1],
@@ -351,6 +357,9 @@ def remap_ragged_tensor_metadata(ragged_tensor_metadata: RaggedTensorMetadata,
 
 
 def remap_ragged_tensor_metadata_torch(ragged_tensor_metadata, slice_map):
+    """
+    reference implementation of `remap_ragged_tensor_metadata`
+    """
 
     def compact(vals, conds, sentinel):
         assert conds.shape == vals.shape
