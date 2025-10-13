@@ -225,12 +225,9 @@ class Autotuner(KernelInterface):
             json.dumps({
                 "key":
                 tuning_key,
-                "configs_timings":
-                [
-                    (config.__dict__, timings)
-                    for config, timings in (state.configs_timings or {}).items()
-                    if not config.pre_hook
-                ],
+                "configs_timings": [(config.__dict__, timings)
+                                    for config, timings in (state.configs_timings or {}).items()
+                                    if not config.pre_hook],
             }), file_name, binary=False)
         return False
 
@@ -254,10 +251,7 @@ class Autotuner(KernelInterface):
 
                 def benchmark():
                     bench_start = time.time()
-                    timings = {
-                        config: self._bench(nargs, *args, config=config, **kwargs)
-                        for config in pruned_configs
-                    }
+                    timings = {config: self._bench(nargs, *args, config=config, **kwargs) for config in pruned_configs}
                     bench_end = time.time()
                     state.bench_time = bench_end - bench_start
                     best_config = builtins.min(timings, key=timings.get)
