@@ -6,6 +6,10 @@
 #layout2 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #layout3 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0]}>
 
+#layout4 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
+#layout5 = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [0, 1]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 32]], warp = [[16, 0], [32, 0]], block = []}>
+
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 
@@ -76,6 +80,16 @@ tt.func @remat_fast_load(%arg: !tt.ptr<i32> {tt.divisibility = 16 : i32}) {
   %5 = ttg.convert_layout %2 : tensor<16x!tt.ptr<i32>, #layout1> -> tensor<16x!tt.ptr<i32>, #layout0>
   tt.store %5, %4 : tensor<16x!tt.ptr<i32>, #layout0>
   tt.return
+}
+
+// CHECK-LABEL: fp4_keep_convert
+tt.func @fp4_keep_convert() -> tensor<64x64xf16, #linear> {
+  %0 = arith.constant dense<0> : tensor<64x32xi8, #layout4>
+  %fp4 = ttg.fp4_to_fp %0 {axis = 1 : i32} : tensor<64x32xi8, #layout4> -> tensor<64x64xf16, #layout5>
+  %converted = ttg.convert_layout %fp4 : tensor<64x64xf16, #layout5> -> tensor<64x64xf16, #linear>
+  // CHECK: ttg.fp4_to_fp
+  // CHECK-NOT: ttg.convert_layout
+  tt.return %converted : tensor<64x64xf16, #linear>
 }
 
 // Hoist the convert on top of ext to make it cheaper.
