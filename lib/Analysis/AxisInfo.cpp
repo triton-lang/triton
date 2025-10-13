@@ -1109,10 +1109,7 @@ void AxisInfoAnalysis::visitForOpInductionVar(
   AxisInfo::DimVectorT knownContiguity(1, 1);
   AxisInfo::DimVectorT knownDivisibility(1, 1);
   AxisInfo::DimVectorT knownConstancy(1, 1);
-  auto lbDivisibility = lb.getDivisibility();
-  auto stepDivisibility = step.getDivisibility();
-  if (!lbDivisibility.empty() && !stepDivisibility.empty())
-    knownDivisibility[0] = gcd(lbDivisibility[0], stepDivisibility[0]);
+  knownDivisibility[0] = gcd(lb.getDivisibility(0), step.getDivisibility(0));
   auto inductionVar =
       AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
   (void)argLattices[0]->join(inductionVar);

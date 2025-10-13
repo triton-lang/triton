@@ -21,6 +21,7 @@ if [ -z "$CMAKE_ARGS" ]; then
               -DCMAKE_C_COMPILER=clang
               -DCMAKE_CXX_COMPILER=clang++
               -DLLVM_ENABLE_LLD=ON
+              -DBUILD_SHARED_LIBS=ON
               -DLLVM_OPTIMIZED_TABLEGEN=ON
               -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
               -DLLVM_TARGETS_TO_BUILD="$LLVM_TARGETS"

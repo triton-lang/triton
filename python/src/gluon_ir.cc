@@ -669,6 +669,18 @@ void init_gluon_ir(py::module &&m) {
                                             pred, two_ctas, mbarriers,
                                             mbarrier_preds);
            })
+      .def("create_tcgen05_mma_scaled",
+           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value aScale,
+              Value bScale, tt::ScaleDotElemType aType,
+              tt::ScaleDotElemType bType, Value useAcc, Value pred,
+              std::vector<Value> &mbarriers,
+              std::vector<Value> &mbarrier_preds) {
+             Value accDep;
+             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
+             self.create<ttng::TCGen5MMAScaledOp>(
+                 tokType, a, b, acc, accDep, aScale, bScale, aType, bType,
+                 useAcc, pred, mbarriers, mbarrier_preds);
+           })
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value &barrier) {
              self.create<ttng::TCGen5CommitOp>(barrier);
@@ -776,6 +788,12 @@ void init_gluon_ir(py::module &&m) {
              Value pred = self.create<arith::ConstantIntOp>(1, 1);
              self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(descPtr, indices,
                                                             result, pred);
+           })
+      .def("create_async_tdm_copy_local_to_global",
+           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
+              Value src) {
+             self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(descPtr, indices,
+                                                            src);
            })
       .def("create_async_tdm_wait", [](GluonOpBuilder &self, int num) {
         ValueRange tokens;

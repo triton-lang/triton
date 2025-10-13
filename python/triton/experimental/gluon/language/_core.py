@@ -100,6 +100,7 @@ def builtin(fn: T) -> T:
 
 # Explicitly import forwarded Triton language symbols so mypy sees them.
 associative_scan = builtin(tl_core.associative_scan)
+assume = builtin(tl_core.assume)
 atomic_add = builtin(tl_core.atomic_add)
 atomic_and = builtin(tl_core.atomic_and)
 atomic_cas = builtin(tl_core.atomic_cas)
@@ -110,6 +111,7 @@ atomic_xchg = builtin(tl_core.atomic_xchg)
 atomic_xor = builtin(tl_core.atomic_xor)
 broadcast = builtin(tl_core.broadcast)
 device_assert = builtin(tl_core.device_assert)
+device_print = builtin(tl_core.device_print)
 expand_dims = builtin(tl_core.expand_dims)
 inline_asm_elementwise = builtin(tl_core.inline_asm_elementwise)
 join = builtin(tl_core.join)

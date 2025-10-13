@@ -881,18 +881,8 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
           .sublayout({kRow, kCol}, to_vector(cvt.getOutDimNames()));
 
   auto loader = DotOpMmaSmemLoader::build(loc, rewriter, cvtWarp, bitwidth,
-                                          smemBase, instrShape, 5);
+                                          smemBase, instrShape, 0, 5);
   assert(!loader.getDescriptor().transposed);
-
-  // The lbo/sbo are swapped for swizzling == 0 when passing a descriptor to
-  // tcgen05.cp vs passing it to wgmma/tcgen05.mma!!
-  auto &descData = loader.getDescriptor();
-  if (descData.swizzlingByteWidth == 0) {
-    auto lbo = descData.descriptor.leadDimensionBaseOffset;
-    auto sbo = descData.descriptor.strideDimensionBaseOffset;
-    descData.descriptor.leadDimensionBaseOffset = sbo;
-    descData.descriptor.strideDimensionBaseOffset = lbo;
-  }
   // Check correct lbo/sbo along the multicast
   auto strideRow = cvt.getBasis(kRow, llvm::Log2_32(8), kOffset);
   if ((atom.multicast & 1) == 0) {
