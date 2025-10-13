@@ -18,11 +18,7 @@ from triton._C.libtriton import get_cache_invalidating_env_vars
 
 
 class AutotunerThreadState:
-    """
-       Per thread (thread-local) auto-tuner cache/configs
-    """
-
-    __slots__ = ("cache", "configs_timings", "bench_time")
+    """Per-thread autotune cache and metadata."""
 
     def __init__(self):
         self.cache: Dict[Tuple, Config] = {}
