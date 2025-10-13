@@ -28,7 +28,6 @@ __all__ = [
     "async_copy",
     "fence_async_shared",
     "get_tmem_reg_layout",
-    "get_tmem_scales_reg_layout",
     "mbarrier",
     "mma_v2",
     "tensor_memory_descriptor",
