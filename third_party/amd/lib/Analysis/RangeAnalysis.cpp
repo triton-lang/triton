@@ -52,7 +52,6 @@
 //    intersecting inferred value-range with assumed-value-range still guarantee
 //    its monotonicity. However, the underlying lattice's meet() operation is
 //    a silent no-op.
-//
 
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-range-analysis"
