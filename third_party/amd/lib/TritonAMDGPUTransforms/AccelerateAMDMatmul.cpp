@@ -1752,6 +1752,113 @@ public:
   }
 };
 
+struct AssignKWidthOptions {
+  int kPack = 1;
+  std::string arch;
+  bool enableSecondDotF16BF16Special = true;
+  bool enableCDNA4KW8Experiment = false;
+};
+
+struct FixKWidthPattern : public OpRewritePattern<ttg::ConvertLayoutOp> {
+  AssignKWidthOptions opts;
+  FixKWidthPattern(MLIRContext *ctx, const AssignKWidthOptions &opts, PatternBenefit b = 1)
+      : OpRewritePattern(ctx, b), opts(opts) {}
+
+  LogicalResult matchAndRewrite(ttg::ConvertLayoutOp op, PatternRewriter &rewriter) const override {
+    // auto dstTy = op.getResult().getType().dyn_cast<RankedTensorType>();
+    // if (!dstTy) return failure();
+    // auto enc = dstTy.getEncoding().dyn_cast_or_null<ttg::DotOperandEncodingAttr>();
+    // if (!enc) return failure();
+
+    // auto parent = enc.getParent();
+    // if (isWMMAParent(parent))
+    //   return failure(); // leave WMMA untouched
+    // if (!isMFMAParent(parent))
+    //   return failure();
+
+    // auto parentMfma = parent.cast<ttg::AMDMfmaEncodingAttr>();
+
+    // // Identify the consuming dot and which operand this is.
+    // Operation *userDot = nullptr;
+    // unsigned operandIndex = 0;
+    // for (Operation *user : op->getResult(0).getUsers()) {
+    //   if (auto dot = dyn_cast<tt::DotOp>(user)) {
+    //     if (dot.getA() == op.getResult()) { userDot = dot; operandIndex = 0; break; }
+    //     if (dot.getB() == op.getResult()) { userDot = dot; operandIndex = 1; break; }
+    //   } else if (auto dotScaled = dyn_cast<tt::DotScaledOp>(user)) {
+    //     if (dotScaled.getA() == op.getResult()) { userDot = dotScaled; operandIndex = 0; break; }
+    //     if (dotScaled.getB() == op.getResult()) { userDot = dotScaled; operandIndex = 1; break; }
+    //   }
+    // }
+
+    // std::optional<unsigned> maybeKWidth =
+    //     computeKWidthForMfmaDotOperand(parentMfma, op.getOperand(), userDot, operandIndex, opts);
+    // if (!maybeKWidth.has_value())
+    //   return failure();
+
+    // unsigned desiredKWidth = maybeKWidth.value();
+    // if (desiredKWidth == enc.getKWidth())
+    //   return failure();
+
+    // auto newEnc = ttg::DotOperandEncodingAttr::get(
+    //     op.getContext(), enc.getOpIdx(), parentMfma, desiredKWidth);
+    // auto newTy = RankedTensorType::get(dstTy.getShape(), dstTy.getElementType(), newEnc);
+
+    // rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, newTy, op.getOperand());
+    op.emitRemark() << "pass invoked!";
+    return success();
+  }
+};
+
+// Optional: enforce mxfp4 packed asymmetry directly on DotScaled operands if needed.
+struct FixDotScaledPackedKWidthPattern : public OpRewritePattern<tt::DotScaledOp> {
+  AssignKWidthOptions opts;
+  FixDotScaledPackedKWidthPattern(MLIRContext *ctx, const AssignKWidthOptions &opts, PatternBenefit b = 1)
+      : OpRewritePattern(ctx, b), opts(opts) {}
+
+  LogicalResult matchAndRewrite(tt::DotScaledOp dot, PatternRewriter &rewriter) const override {
+    // auto dTy = dot.getType().dyn_cast<RankedTensorType>();
+    // if (!dTy) return failure();
+    // auto parent = dTy.getEncoding();
+    // if (!isMFMAParent(parent)) return failure();
+    // auto parentMfma = parent.cast<ttg::AMDMfmaEncodingAttr>();
+
+    // auto aElem = dot.getAElemType();
+    // auto bElem = dot.getBElemType();
+    // auto isE2M1 = [](tt::ScaleDotElemType t) { return t == tt::ScaleDotElemType::E2M1; };
+    // if (!(isE2M1(aElem) || isE2M1(bElem)))
+    //   return failure();
+
+    // auto fixOne = [&](Value v, unsigned opIdx, unsigned desiredKWidth) -> LogicalResult {
+    //   auto cvt = dyn_cast_or_null<ttg::ConvertLayoutOp>(v.getDefiningOp());
+    //   if (!cvt) return failure();
+    //   auto ty = cvt.getResult().getType().dyn_cast<RankedTensorType>();
+    //   if (!ty) return failure();
+    //   auto enc = ty.getEncoding().dyn_cast_or_null<ttg::DotOperandEncodingAttr>();
+    //   if (!enc) return failure();
+    //   if (enc.getKWidth() == desiredKWidth) return failure();
+
+    //   auto newEnc = ttg::DotOperandEncodingAttr::get(dot.getContext(), opIdx, parentMfma, desiredKWidth);
+    //   auto newTy = RankedTensorType::get(ty.getShape(), ty.getElementType(), newEnc);
+    //   auto newCvt = rewriter.create<ttg::ConvertLayoutOp>(cvt.getLoc(), newTy, cvt.getOperand());
+    //   if (opIdx == 0) dot.setOperand(0, newCvt.getResult());
+    //   else            dot.setOperand(1, newCvt.getResult());
+    //   return success();
+    // };
+
+    // if (isE2M1(aElem)) {
+    //   (void)fixOne(dot.getA(), 0, 4);
+    //   (void)fixOne(dot.getB(), 1, 8);
+    //   return success();
+    // } else {
+    //   (void)fixOne(dot.getA(), 0, 8);
+    //   (void)fixOne(dot.getB(), 1, 4);
+    //   return success();
+    // }
+    return success();
+  }
+};
+
 } // namespace
 
 #define GEN_PASS_DEF_TRITONAMDGPUACCELERATEMATMUL
@@ -1804,6 +1911,46 @@ struct TritonAMDGPUAccelerateMatmulPass
       signalPassFailure();
     decomposeMixedModeDotOp(m);
   }
+};
+
+class TritonAMDGPUAssignKWidthPass
+    : public PassWrapper<TritonAMDGPUAssignKWidthPass, OperationPass<ModuleOp>> {
+public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TritonAMDGPUAssignKWidthPass)
+
+  TritonAMDGPUAssignKWidthPass() = default;
+  TritonAMDGPUAssignKWidthPass(const TritonAMDGPUAssignKWidthPass &other) {}
+
+  StringRef getArgument() const final { return "tritonamdgpu-assign-kwidth"; }
+  StringRef getDescription() const final {
+    return "Assign/adjust kWidth for DotOperand encodings post-accelerate-matmul";
+  }
+
+ void runOnOperation() override {
+    ModuleOp m = getOperation();
+    MLIRContext *ctx = m.getContext();
+
+    AssignKWidthOptions opts;
+    opts.kPack = 1; // std::max(1, kPackOpt.getValue());
+    opts.arch = "gfx950"; // archOpt.getValue();
+    opts.enableSecondDotF16BF16Special = true; // enableSecondDotSpecialOpt.getValue();
+    opts.enableCDNA4KW8Experiment = true; // enableCDNA4KW8ExpOpt.getValue();
+
+    RewritePatternSet patterns(ctx);
+    patterns.add<FixKWidthPattern>(ctx, opts, /*benefit=*/2);
+    patterns.add<FixDotScaledPackedKWidthPattern>(ctx, opts, /*benefit=*/2);
+
+    m.emitError() << "made it";
+
+    if (failed(applyPatternsGreedily(m, std::move(patterns))))
+      signalPassFailure();
+  }
+
+private:
+  Option<std::string> archGenerationName{*this, "arch-generation-name", llvm::cl::desc("GFX generation name of target device."), llvm::cl::init(std::string{})};
+  Option<int32_t> matrixInstructionSize{*this, "matrix-instruction-size", llvm::cl::desc("enforce matrix instruction MN size"), llvm::cl::init(0)};
+  Option<int32_t> kPack{*this, "kPack", llvm::cl::desc("KWidth / kBase"), llvm::cl::init(1)};
+  Option<bool> enableCDNA4KW8ExpOpt{*this, "enable-cdna4-kw8-experiment", llvm::cl::desc("Enable kWidth=8 experiment for second dot on CDNA4"), llvm::cl::init(false)};
 };
 
 } // namespace mlir
