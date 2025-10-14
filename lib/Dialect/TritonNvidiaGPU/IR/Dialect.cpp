@@ -394,8 +394,7 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
                                        RankedTensorType tensorType,
                                        gpu::MemDescType memType) {
   auto maxnreg = getContextualMaxNReg(op);
-  return succeeded(
-      computeTMemLdStEncodingInfo(op->getLoc(), tensorType, memType, maxnreg));
+  return succeeded(computeTMemLdStEncodingInfo(tensorType, memType, maxnreg));
 }
 
 LogicalResult

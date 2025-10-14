@@ -117,22 +117,23 @@ int getContextualMaxNReg(Operation *op) {
 }
 
 FailureOr<TMemLdStEncodingInfo>
-lowerTMemLdSt(Location loc, const LinearLayout &cvt, int maxnreg, int bitwidth,
-              bool isScales, bool unpacked = false) {
+lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
+              std::function<InFlightDiagnostic()> emitError,
+              bool unpacked = false) {
   // We will fill in the returned value recursively (if it exists)
 
   // Remove broadcasting in the registers
   auto removeBroadcastSrc = actionRemoveBroadcastedRegs(cvt);
   if (!removeBroadcastSrc.isIdentity()) {
     auto prmtCvt = removeBroadcastSrc.apply(cvt);
-    auto info =
-        lowerTMemLdSt(loc, prmtCvt, maxnreg, bitwidth, isScales, unpacked);
+    auto info = lowerTMemLdSt(prmtCvt, maxnreg, bitwidth, isScales, emitError,
+                              unpacked);
     if (failed(info))
       return failure();
     info->broadcast = std::move(removeBroadcastSrc);
     return info;
   }
-  auto *ctx = loc.getContext();
+  auto *ctx = cvt.getInDimNames().begin()->getContext();
   auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
   auto kReg = S("register");
   auto kLane = S("lane");
@@ -175,16 +176,18 @@ lowerTMemLdSt(Location loc, const LinearLayout &cvt, int maxnreg, int bitwidth,
       padding = true;
       newBitwidth = 32;
     } else {
-      emitError(loc, "Failed to lower TMEM load/store: TMEM layout is not "
-                     "packed or unpacked");
+      if (emitError) {
+        emitError() << "Failed to lower TMEM load/store: TMEM layout is not "
+                       "packed or unpacked";
+      }
       return failure();
     }
     // When unpacked each register moves 32/bitwidth (= 2) columns
     if (unpacked) {
       quot = LinearLayout::zeros1D(1, kReg, kCol, 32 / bitwidth) * quot;
     }
-    auto info =
-        lowerTMemLdSt(loc, quot, maxnreg, newBitwidth, isScales, unpacked);
+    auto info = lowerTMemLdSt(quot, maxnreg, newBitwidth, isScales, emitError,
+                              unpacked);
     if (failed(info))
       return failure();
     if (bestContig > 1) {
@@ -249,8 +252,11 @@ lowerTMemLdSt(Location loc, const LinearLayout &cvt, int maxnreg, int bitwidth,
   }
 
   if (!msgInfo) {
-    emitError(loc, "Failed to lower TMEM load/store: unsupported dst layout\n" +
-                       cvt.toString());
+    if (emitError) {
+      emitError()
+          << "Failed to lower TMEM load/store: unsupported dst layout\n" +
+                 cvt.toString();
+    }
     return failure();
   }
   auto info = std::move(*msgInfo);
@@ -259,22 +265,24 @@ lowerTMemLdSt(Location loc, const LinearLayout &cvt, int maxnreg, int bitwidth,
 }
 
 FailureOr<TMemLdStEncodingInfo>
-computeTMemLdStEncodingInfo(Location loc, RankedTensorType regTy,
-                            MemDescType memTy, int maxnreg) {
-
+computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
+                            int maxnreg,
+                            std::function<InFlightDiagnostic()> emitError) {
   auto memLayout = toLinearLayout(memTy);
   auto regLayout = toLinearLayout(regTy);
   auto cvt = regLayout.invertAndCompose(memLayout);
-  auto *ctx = loc.getContext();
+  auto *ctx = regTy.getContext();
   auto S = [ctx](StringRef str) { return StringAttr::get(ctx, str); };
   auto kWarp = S("warp");
   auto kRow = S("row");
   // Warps 0-3 must map to row=32 and row=64 whether with broadcasting or not
   if (!(regLayout.getBasis(kWarp, 0) == memLayout.getBasis(kRow, 5) &&
         regLayout.getBasis(kWarp, 1) == memLayout.getBasis(kRow, 6))) {
-    emitError(loc) << "warps=1,2 must map to rows=32,64. Got:\n"
-                   << regLayout.toString() << "\n"
-                   << memLayout.toString();
+    if (emitError) {
+      emitError() << "warps=1,2 must map to rows=32,64. Got:\n"
+                  << regLayout.toString() << "\n"
+                  << memLayout.toString();
+    }
     return failure();
   }
   // Map warp bases to row=32 and row=64 in the cvt. This would be done
@@ -298,7 +306,7 @@ computeTMemLdStEncodingInfo(Location loc, RankedTensorType regTy,
 
   bool isScales = isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding());
   int bitwidth = memTy.getElementTypeBitWidth();
-  return lowerTMemLdSt(loc, quot, maxnreg, bitwidth, isScales);
+  return lowerTMemLdSt(quot, maxnreg, bitwidth, isScales, emitError);
 }
 
 } // namespace mlir::triton::nvidia_gpu

@@ -28,8 +28,9 @@ struct TMemLdStEncodingInfo {
 };
 
 FailureOr<TMemLdStEncodingInfo>
-computeTMemLdStEncodingInfo(Location loc, RankedTensorType regTy,
-                            gpu::MemDescType memTy, int maxnreg);
+computeTMemLdStEncodingInfo(RankedTensorType regTy, gpu::MemDescType memTy,
+                            int maxnreg,
+                            std::function<InFlightDiagnostic()> emitError = {});
 
 } // namespace mlir::triton::nvidia_gpu
 

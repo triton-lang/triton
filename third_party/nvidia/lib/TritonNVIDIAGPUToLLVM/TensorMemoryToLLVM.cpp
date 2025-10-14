@@ -396,7 +396,9 @@ lowerTMemLdStFromTypes(Location loc, ConversionPatternRewriter &rewriter,
                        RankedTensorType regTy, MemDescType memTy,
                        Value tmemBase, int maxnreg, Value pred, Type llvmElemTy,
                        ArrayRef<Value> vals) {
-  auto encodingInfoOr = computeTMemLdStEncodingInfo(loc, regTy, memTy, maxnreg);
+  auto diag = [loc]() { return emitError(loc); };
+  auto encodingInfoOr =
+      computeTMemLdStEncodingInfo(regTy, memTy, maxnreg, diag);
   assert(succeeded(encodingInfoOr) &&
          "TMEM layout verification should catch invalid layouts");
   return lowerTMemLdStFromInfo(loc, rewriter, *encodingInfoOr, pred, llvmElemTy,
