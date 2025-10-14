@@ -490,7 +490,7 @@ def test_autotuner_thread_safety(device: str):
         try:
             _kernel[grid](dst, src, N)
             results.append(None)
-        except Exception as exc:  # pragma: no cover - captured for assertions
+        except Exception as exc:
             results.append(exc)
 
     threads = [threading.Thread(target=worker) for _ in range(num_threads)]
