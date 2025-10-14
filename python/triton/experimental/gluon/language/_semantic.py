@@ -1,4 +1,3 @@
-from dataclasses import replace
 from typing import Sequence, List, TypeVar, Tuple, Callable
 import math
 from triton.language.semantic import TritonSemantic
@@ -297,24 +296,21 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         )
         _check(result is not None,
                lambda: f"TMEM layout '{instr_variant}' unsupported for shape {shape} and num_warps {num_warps}")
-        if splitn:
+        N = shape[1]
+        if splitn and result.reg_bases[-1] != [0, N // 2]:
             bitwidth = element_ty.primitive_bitwidth
             _check(
                 len(result.reg_bases) * bitwidth > 32,
                 lambda: "splitn requires register bases of more than 2 32 bit registers")
-            N = shape[1]
 
-            def split_layout(layout):
-                reg_bases = layout.reg_bases
-                for bases_str in ("lane_bases", "warp_bases"):
-                    bases = getattr(layout, bases_str)
-                    for i, basis in enumerate(bases):
-                        if basis == [0, N / 2]:
-                            reg_bases[-1], bases[i] = bases[i], reg_bases[-1]
-                            return replace(layout, reg_bases=reg_bases, **{bases_str: bases})
-                assert False, "splitn requires at least one basis of [0, N / 2]"
-
-            result = split_layout(result)
+            reg_bases = result.reg_bases
+            for bases_str in ("lane_bases", "warp_bases"):
+                bases = getattr(result, bases_str)
+                for i, basis in enumerate(bases):
+                    if basis == [0, N // 2]:
+                        reg_bases[-1], bases[i] = bases[i], reg_bases[-1]
+                        return ttgl.constexpr(result)
+            assert False, f"splitn requires at least one basis of [0, N / 2]. Got {layout}"
         return ttgl.constexpr(result)
 
     def shared_dealloc(self, mem_desc):
