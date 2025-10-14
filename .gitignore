@@ -44,7 +44,7 @@ pytest.ini
 python/triton/instrumentation
 
 # MLIR Plugin
-python/triton/mlir-plugin
+python/triton/plugins
 
 # Python caches
 __pycache__/
