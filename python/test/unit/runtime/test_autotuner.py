@@ -453,7 +453,7 @@ def test_exceed_threads(device):
         exception_out_of_resource)
 
 
-def test_autotuner_thread_safety(device: str):
+def test_nogil_safety(device: str):
     if getattr(sys, "_is_gil_enabled", lambda: True)():
         pytest.skip("Requires running with the GIL disabled (PYTHON_GIL=0)")
     if not is_cuda():
