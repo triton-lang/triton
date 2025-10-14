@@ -5,6 +5,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <Python.h>
+#include <unordered_map>
 
 
 namespace mlir {
@@ -42,4 +43,37 @@ extern "C" void registerTritonPluginPass() {
   ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
     return mlir::triton::plugin::createTritonGPUMLIRPlugin();
   });
+}
+
+static const char *ADD_PLUGIN_PASS_NAME = "add_plugin";
+static std::unordered_map<std::string, void (*)(mlir::PassManager *)> passMap = {
+  {ADD_PLUGIN_PASS_NAME, addTritonPluginPass}
+};
+static std::unordered_map<std::string, void (*)()> registryMap = {
+  {ADD_PLUGIN_PASS_NAME, registerTritonPluginPass}
+};
+static std::vector<const char *> passNamesTable = {
+  ADD_PLUGIN_PASS_NAME
+};
+
+// Key APIs:
+
+extern "C" void tritonAddPluginPass(mlir::PassManager* pm, const char *passName) {
+  std::string passNameStr(passName);
+  passMap[passNameStr](pm);
+}
+
+extern "C" void tritonRegisterPluginPass(const char *passName) {
+  std::string passNameStr(passName);
+  registryMap[passNameStr]();
+}
+
+extern "C" void tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
+  *passCount = passMap.size();
+  if (!passNames)
+    return;
+  unsigned i = 0;
+  for (auto passName : passNamesTable) {
+    passNames[i] = passName;
+  }
 }
