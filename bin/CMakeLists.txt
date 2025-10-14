@@ -19,6 +19,7 @@ target_link_libraries(triton-opt PRIVATE
   MLIRTransforms
 )
 
+add_dependencies(triton-opt TritonPluginsTestLib)
 mlir_check_all_link_libraries(triton-opt)
 
 add_llvm_executable(triton-reduce triton-reduce.cpp PARTIAL_SOURCES_INTENDED)
