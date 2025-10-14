@@ -1485,20 +1485,16 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   }
   LinearLayout laneLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]});
 
-  L = L * laneLayout;
-  L = L * LinearLayout::identity1D(scaleShape[1], kRegister, outDims[kIdx]);
+  L *= laneLayout;
+  L *= LinearLayout::identity1D(scaleShape[1], kRegister, outDims[kIdx]);
   if (dotOperandIdx == 0) {
-    // A-scale: invariant to warpsPerCTA[1], advances along warpsPerCTA[0]
-    L = L * LinearLayout::zeros1D(warpsPerCTA[1], kWarp, outDims[mnIdx]);
-    L = L * LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDims[mnIdx]);
-    L = L *
-        LinearLayout::identity1D(tilesPerWarp[0], kRegister, outDims[mnIdx]);
+    L *= LinearLayout::zeros1D(warpsPerCTA[1], kWarp, outDims[kIdx]);
+    L *= LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDims[mnIdx]);
+    L *= LinearLayout::identity1D(tilesPerWarp[0], kRegister, outDims[mnIdx]);
   } else {
-    // B-scale: advances along warpsPerCTA[1], invariant to warpsPerCTA[0]
-    L = L * LinearLayout::identity1D(warpsPerCTA[1], kWarp, outDims[mnIdx]);
-    L = L * LinearLayout::zeros1D(warpsPerCTA[0], kWarp, outDims[mnIdx]);
-    L = L *
-        LinearLayout::identity1D(tilesPerWarp[1], kRegister, outDims[mnIdx]);
+    L *= LinearLayout::identity1D(warpsPerCTA[1], kWarp, outDims[mnIdx]);
+    L *= LinearLayout::zeros1D(warpsPerCTA[0], kWarp, outDims[kIdx]);
+    L *= LinearLayout::identity1D(tilesPerWarp[1], kRegister, outDims[mnIdx]);
   }
   return combineCtaCgaWithShape(L, ctaLayoutAttr, scaleShape);
 }

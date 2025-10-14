@@ -61,14 +61,16 @@ Value loadC(Value tensor, Value llTensor,
   return llTensor;
 }
 
-// NumRegisters is the number of registers for axis used per-warp by a
-// single MMA op. NumRegisters records how many such chunks each thread
-// holds per dimension:
-//   - M, N, K: Number of registers per lane in M, N, K dimension
 struct NumRegisters {
   int M;
   int N;
   int K;
+};
+
+struct BaseOffset {
+  int m;
+  int n;
+  int k;
 };
 
 ValueTableV2 getValuesFromDotOperandLayoutStruct(
@@ -486,107 +488,99 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxScaled = {
      "1X.f32.e4m3.e4m3.f32.ue8m0"},
 };
 
-static void callMmaTuringInt8(PTXBuilder &builder, int b, int m, int n, int k,
+static void callMmaTuringInt8(PTXBuilder &builder, int b,
+                              const BaseOffset &base,
                               mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                               unsigned colsPerThread, int numCPackedElem,
                               ValueTableV2 &ha, ValueTableV2 &hb,
-                              const SmallVector<Value> &fc,
-                              const NumRegisters &numRegisters) {
-  int mBase = numRegisters.M * m;
-  int nBase = numRegisters.N * n;
-  int kBase = k * numRegisters.K;
+                              const SmallVector<Value> &fc) {
 
   auto retArgs1 = builder.newListOperand(numMmaRets / 2, "=r");
   auto retArgs2 = builder.newListOperand(numMmaRets / 2, "=r");
   auto cArgs1 = builder.newListOperand();
   for (int i = 0; i < numMmaRets / 2; ++i) {
     cArgs1->listAppend(builder.newOperand(
-        fc[(mBase * colsPerThread + 4 * nBase) / numCPackedElem + i],
+        fc[(base.m * colsPerThread + 4 * base.n) / numCPackedElem + i],
         std::to_string(i)));
     // reuse the output registers
   }
   auto cArgs2 = builder.newListOperand();
   for (int i = numMmaRets / 2; i < numMmaRets; ++i) {
     cArgs2->listAppend(builder.newOperand(
-        fc[(mBase * colsPerThread + 4 * nBase) / numCPackedElem + i],
+        fc[(base.m * colsPerThread + 4 * base.n) / numCPackedElem + i],
         std::to_string(i)));
     // reuse the output registers
   }
   auto aArgs1 = builder.newListOperand({
-      {ha[{b, mBase, kBase}], "r"},
+      {ha[{b, base.m, base.k}], "r"},
   });
   auto bArgs1 = builder.newListOperand({
-      {hb[{b, nBase, kBase}], "r"},
+      {hb[{b, base.n, base.k}], "r"},
   });
   auto aArgs2 = builder.newListOperand({
-      {ha[{b, mBase, kBase + 1}], "r"},
+      {ha[{b, base.m, base.k + 1}], "r"},
   });
-  auto bArgs2 = builder.newListOperand({{hb[{b, nBase, kBase + 1}], "r"}});
+  auto bArgs2 = builder.newListOperand({{hb[{b, base.n, base.k + 1}], "r"}});
   auto aArgs3 = builder.newListOperand({
-      {ha[{b, mBase + 1, kBase}], "r"},
+      {ha[{b, base.m + 1, base.k}], "r"},
   });
   auto bArgs3 = builder.newListOperand({
-      {hb[{b, nBase, kBase}], "r"},
+      {hb[{b, base.n, base.k}], "r"},
   });
   auto aArgs4 = builder.newListOperand({
-      {ha[{b, mBase + 1, kBase + 1}], "r"},
+      {ha[{b, base.m + 1, base.k + 1}], "r"},
   });
-  auto bArgs4 = builder.newListOperand({{hb[{b, nBase, kBase + 1}], "r"}});
+  auto bArgs4 = builder.newListOperand({{hb[{b, base.n, base.k + 1}], "r"}});
   mma(retArgs1, aArgs1, bArgs1, cArgs1);
   mma(retArgs1, aArgs2, bArgs2, cArgs1);
   mma(retArgs2, aArgs3, bArgs3, cArgs2);
   mma(retArgs2, aArgs4, bArgs4, cArgs2);
 }
 
-static void callMmaTuringFp16(PTXBuilder &builder, int b, int m, int n, int k,
+static void callMmaTuringFp16(PTXBuilder &builder, int b,
+                              const BaseOffset &base,
                               mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                               unsigned colsPerThread, int numCPackedElem,
                               ValueTableV2 &ha, ValueTableV2 &hb,
-                              const SmallVector<Value> &fc, bool isAccF16,
-                              const NumRegisters &numRegisters) {
-  int mBase = numRegisters.M * m;
-  int nBase = numRegisters.N * n;
-  int kBase = k * numRegisters.K;
+                              const SmallVector<Value> &fc, bool isAccF16) {
 
   auto retArgs = builder.newListOperand(numMmaRets, isAccF16 ? "=r" : "=f");
   auto cArgs = builder.newListOperand();
   for (int i = 0; i < numMmaRets; ++i) {
     cArgs->listAppend(builder.newOperand(
-        fc[(mBase * colsPerThread + 4 * nBase) / numCPackedElem + i],
+        fc[(base.m * colsPerThread + 4 * base.n) / numCPackedElem + i],
         std::to_string(i)));
     // reuse the output registers
   }
   auto aArgs1 = builder.newListOperand({
-      {ha[{b, mBase, kBase}], "r"},
-      {ha[{b, mBase + 1, kBase}], "r"},
+      {ha[{b, base.m, base.k}], "r"},
+      {ha[{b, base.m + 1, base.k}], "r"},
   });
-  auto bArgs1 = builder.newListOperand({{hb[{b, nBase, kBase}], "r"}});
+  auto bArgs1 = builder.newListOperand({{hb[{b, base.n, base.k}], "r"}});
   auto aArgs2 = builder.newListOperand({
-      {ha[{b, mBase, kBase + 1}], "r"},
-      {ha[{b, mBase + 1, kBase + 1}], "r"},
+      {ha[{b, base.m, base.k + 1}], "r"},
+      {ha[{b, base.m + 1, base.k + 1}], "r"},
   });
-  auto bArgs2 = builder.newListOperand({{hb[{b, nBase, kBase + 1}], "r"}});
+  auto bArgs2 = builder.newListOperand({{hb[{b, base.n, base.k + 1}], "r"}});
   mma(retArgs, aArgs1, bArgs1, cArgs);
   mma(retArgs, aArgs2, bArgs2, cArgs);
 }
 
 // Repeat m8n8k4 (2, 1, 4) times, as m16n8k16 on hopper.
-static void callMmaAmpereFp64(PTXBuilder &builder, int b, int m, int n, int k,
+static void callMmaAmpereFp64(PTXBuilder &builder, int b,
+                              const BaseOffset &base,
                               mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                               unsigned colsPerThread, int numCPackedElem,
                               unsigned batchOffset, ValueTableV2 &ha,
                               ValueTableV2 &hb, const SmallVector<Value> &fc,
-                              const NumRegisters &numRegisters) {
-  int mBase = numRegisters.M * m;
-  int nBase = numRegisters.N * n;
-  int kBase = k * numRegisters.K;
+                              int kRegs) {
 
   auto retArgs1 = builder.newListOperand(numMmaRets / 2, "=d");
   auto retArgs2 = builder.newListOperand(numMmaRets / 2, "=d");
   auto cArgs1 = builder.newListOperand();
   for (int i = 0; i < numMmaRets / 2; ++i) {
     cArgs1->listAppend(builder.newOperand(
-        fc[(mBase * colsPerThread + 4 * nBase) / numCPackedElem + i +
+        fc[(base.m * colsPerThread + 4 * base.n) / numCPackedElem + i +
            batchOffset * b],
         std::to_string(i)));
     // reuse the output registers
@@ -594,19 +588,19 @@ static void callMmaAmpereFp64(PTXBuilder &builder, int b, int m, int n, int k,
   auto cArgs2 = builder.newListOperand();
   for (int i = numMmaRets / 2; i < numMmaRets; ++i) {
     cArgs2->listAppend(builder.newOperand(
-        fc[(mBase * colsPerThread + 4 * nBase) / numCPackedElem + i +
+        fc[(base.m * colsPerThread + 4 * base.n) / numCPackedElem + i +
            batchOffset * b],
         std::to_string(i)));
     // reuse the output registers
   }
 
-  for (int vk = 0; vk < numRegisters.K; ++vk) {
+  for (int vk = 0; vk < kRegs; ++vk) {
     auto aArgs1 = builder.newListOperand({
-        {ha[{b, mBase, kBase + vk}], "d"},
+        {ha[{b, base.m, base.k + vk}], "d"},
     });
-    auto bArgs = builder.newListOperand({{hb[{b, nBase, kBase + vk}], "d"}});
+    auto bArgs = builder.newListOperand({{hb[{b, base.n, base.k + vk}], "d"}});
     auto aArgs2 = builder.newListOperand({
-        {ha[{b, mBase + 1, kBase + vk}], "d"},
+        {ha[{b, base.m + 1, base.k + vk}], "d"},
     });
     mma(retArgs1, aArgs1, bArgs, cArgs1);
     mma(retArgs2, aArgs2, bArgs, cArgs2);
@@ -614,73 +608,68 @@ static void callMmaAmpereFp64(PTXBuilder &builder, int b, int m, int n, int k,
 }
 
 // Unified MMAV2 function for Ampere and HopperF64 architectures
-static void callMmaV2(PTXBuilder &builder, int b, int m, int n, int k,
+static void callMmaV2(PTXBuilder &builder, int b, const BaseOffset &base,
                       mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                       unsigned colsPerThread, int numCPackedElem,
                       unsigned batchOffset, ValueTableV2 &ha, ValueTableV2 &hb,
                       const SmallVector<Value> &fc,
                       const std::string &constraintRet,
-                      const std::string &constraintAB,
-                      const NumRegisters &numRegisters) {
-  int mBase = numRegisters.M * m;
-  int nBase = numRegisters.N * n;
-  int kBase = k * numRegisters.K;
+                      const std::string &constraintAB, int kRegs) {
 
   auto retArgs = builder.newListOperand(numMmaRets, constraintRet);
   auto cArgs = builder.newListOperand();
   for (int i = 0; i < numMmaRets; ++i) {
     cArgs->listAppend(builder.newOperand(
-        fc[(mBase * colsPerThread + 4 * nBase) / numCPackedElem + i +
+        fc[(base.m * colsPerThread + 4 * base.n) / numCPackedElem + i +
            batchOffset * b],
         std::to_string(i)));
     // reuse the output registers
   }
 
   auto aArgs = builder.newListOperand();
-  for (int vk = 0; vk < numRegisters.K; ++vk) {
+  for (int vk = 0; vk < kRegs; ++vk) {
     aArgs->listAppend(
-        builder.newOperand(ha[{b, mBase, kBase + vk}], constraintAB));
+        builder.newOperand(ha[{b, base.m, base.k + vk}], constraintAB));
     aArgs->listAppend(
-        builder.newOperand(ha[{b, mBase + 1, kBase + vk}], constraintAB));
+        builder.newOperand(ha[{b, base.m + 1, base.k + vk}], constraintAB));
   }
 
   auto bArgs = builder.newListOperand();
-  for (int vk = 0; vk < numRegisters.K; ++vk) {
+  for (int vk = 0; vk < kRegs; ++vk) {
     bArgs->listAppend(
-        builder.newOperand(hb[{b, nBase, kBase + vk}], constraintAB));
+        builder.newOperand(hb[{b, base.n, base.k + vk}], constraintAB));
   }
 
   mma(retArgs, aArgs, bArgs, cArgs);
 }
 
-static void callMmaScaled(PTXBuilder &builder, int b, int m, int n, int k,
+static void callMmaScaled(PTXBuilder &builder, int b, const BaseOffset &base,
                           mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                           unsigned colsPerThread, ValueTableV2 &aTable,
                           ValueTableV2 &bTable,
                           const SmallVector<Value> &cValues, Value aScaleValue,
-                          Value bScaleValue, const NumRegisters &numRegisters) {
-  int mBase = numRegisters.M * m;
-  int nBase = numRegisters.N * n;
-  int kBase = k * numRegisters.K;
+                          Value bScaleValue, int kRegs) {
 
   int numCPackedElem = 4 / static_cast<int>(numMmaRets);
   auto retArgs = builder.newListOperand(numMmaRets, "=f");
   auto cArgs = builder.newListOperand();
   for (int i = 0; i < numMmaRets; ++i)
     cArgs->listAppend(builder.newOperand(
-        cValues[(mBase * colsPerThread + 4 * nBase) / numCPackedElem + i],
+        cValues[(base.m * colsPerThread + 4 * base.n) / numCPackedElem + i],
         std::to_string(i)));
 
   auto aArgs = builder.newListOperand();
-  for (int vk = 0; vk < numRegisters.K; ++vk) {
-    aArgs->listAppend(builder.newOperand(aTable[{b, mBase, kBase + vk}], "r"));
+  for (int vk = 0; vk < kRegs; ++vk) {
     aArgs->listAppend(
-        builder.newOperand(aTable[{b, mBase + 1, kBase + vk}], "r"));
+        builder.newOperand(aTable[{b, base.m, base.k + vk}], "r"));
+    aArgs->listAppend(
+        builder.newOperand(aTable[{b, base.m + 1, base.k + vk}], "r"));
   }
 
   auto bArgs = builder.newListOperand();
-  for (int vk = 0; vk < numRegisters.K; ++vk)
-    bArgs->listAppend(builder.newOperand(bTable[{b, nBase, kBase + vk}], "r"));
+  for (int vk = 0; vk < kRegs; ++vk)
+    bArgs->listAppend(
+        builder.newOperand(bTable[{b, base.n, base.k + vk}], "r"));
 
   SmallVector<PTXBuilder::Operand *> ops{retArgs, aArgs, bArgs, cArgs};
 
@@ -784,18 +773,19 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
     auto &mma = *builder.create(mmaInstructions.at(mmaType));
     // using =r for float32 works but leads to less readable ptx.
     unsigned colsPerThread = repN * 2;
-    emitMma(builder, b, m, n, k, mma, numMmaRets, colsPerThread, batchOffset,
+    emitMma(builder, b, static_cast<int>(m), static_cast<int>(n),
+            static_cast<int>(k), mma, numMmaRets, colsPerThread, batchOffset,
             ha, hb, fc, dTensorTy, repK);
 
     Value mmaOut =
         builder.launch(rewriter, loc, getMmaRetType(mmaType, op->getContext()));
 
-    int mBase = numRegisters.M * m;
-    int nBase = numRegisters.N * n;
     Type elemTy = cast<LLVM::LLVMStructType>(mmaOut.getType()).getBody()[0];
     for (int i = 0; i < numMmaRets; ++i) {
-      fc[(mBase * colsPerThread + 4 * nBase) / numCPackedElem + i +
-         batchOffset * b] = tb.extract_val(elemTy, mmaOut, i);
+      fc[(numRegisters.M * static_cast<int>(m) * colsPerThread +
+          4 * numRegisters.N * static_cast<int>(n)) /
+             numCPackedElem +
+         i + batchOffset * b] = tb.extract_val(elemTy, mmaOut, i);
     }
   };
 
@@ -837,7 +827,6 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
 
-  // Define per-thread MMA register counts
   NumRegisters numRegisters;
   if (isTuring) {
     numRegisters = {2, 1, 2};
@@ -859,30 +848,30 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
     bool isIntMMA = dTy.getElementType().isInteger(32);
     bool isAccF16 = dTy.getElementType().isF16();
     bool isFp64MMA = dTy.getElementType().isF64();
-
+    BaseOffset base{numRegisters.M * m, numRegisters.N * n, numRegisters.K * k};
     if (isTuring) {
       assert(b == 0 && "Turing only supports batch size 1");
       if (isIntMMA)
-        callMmaTuringInt8(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
-                          numCPackedElem, ha, hb, fc, numRegisters);
+        callMmaTuringInt8(builder, b, base, mma, numMmaRets, colsPerThread,
+                          numCPackedElem, ha, hb, fc);
       else
-        callMmaTuringFp16(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
-                          numCPackedElem, ha, hb, fc, isAccF16, numRegisters);
+        callMmaTuringFp16(builder, b, base, mma, numMmaRets, colsPerThread,
+                          numCPackedElem, ha, hb, fc, isAccF16);
     } else {
       if (isFp64MMA) {
         if (!isHopperF64) {
-          callMmaAmpereFp64(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
+          callMmaAmpereFp64(builder, b, base, mma, numMmaRets, colsPerThread,
                             numCPackedElem, batchOffset, ha, hb, fc,
-                            numRegisters);
+                            numRegisters.K);
         } else {
-          callMmaV2(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
+          callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
                     numCPackedElem, batchOffset, ha, hb, fc, "=d", "d",
-                    numRegisters);
+                    numRegisters.K);
         }
       } else {
-        callMmaV2(builder, b, m, n, k, mma, numMmaRets, colsPerThread,
+        callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
                   numCPackedElem, batchOffset, ha, hb, fc,
-                  isIntMMA || isAccF16 ? "=r" : "=f", "r", numRegisters);
+                  isIntMMA || isAccF16 ? "=r" : "=f", "r", numRegisters.K);
       }
     }
   };
@@ -925,8 +914,9 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
     Value aScaleValue = tb.zext(i32, unpackedAScale[m * repK + k]);
     Value bScaleValue = tb.zext(i32, unpackedBScale[n * repK + k]);
 
-    callMmaScaled(builder, b, m, n, k, mma, numMmaRets, colsPerThread, aTable,
-                  bTable, cValues, aScaleValue, bScaleValue, numRegisters);
+    BaseOffset base{numRegisters.M * m, numRegisters.N * n, numRegisters.K * k};
+    callMmaScaled(builder, b, base, mma, numMmaRets, colsPerThread, aTable,
+                  bTable, cValues, aScaleValue, bScaleValue, numRegisters.K);
   };
 
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
