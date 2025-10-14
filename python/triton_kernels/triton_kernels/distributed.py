@@ -101,22 +101,7 @@ def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int
 # ------------------------------------------------------------
 
 
-def _convert_dp_to_ep_launch_metadata(grid, kernel, args):
-    src = args["src_ptr"]
-    dst_row_indx = args["dst_row_indx_ptr"]
-    element_bytes = src.element_size()
-    src_bytes = src.numel() * element_bytes
-    n_dispatch = (dst_row_indx >= 0).sum().item()
-    row_bytes = src.shape[1] * element_bytes
-    nvlink_bytes = n_dispatch * row_bytes
-    return {
-        "name": f"{kernel.name} [tokens={src.shape[0]}, d_model={src.shape[1]}]",
-        "bytes": src_bytes,
-        "nvlink_bytes": nvlink_bytes,
-    }
-
-
-@triton.jit(launch_metadata=_convert_dp_to_ep_launch_metadata)
+@triton.jit
 def _convert_dp_to_ep(
     peer_dst_ptrs, dst_stride_m, # dst tensors
     src_ptr, src_stride_m, src_shape_n,  # src tensor
@@ -136,32 +121,22 @@ def _convert_dp_to_ep(
     offs_n = tl.arange(0, BLOCK)
     dst_row_indx = tl.load(dst_row_indx_ptr + off_m_global * dst_row_indx_stride_m + offs_e)
     expt_indx = tl.load(expt_indx_ptr + off_m_global * expt_indx_stride_m + offs_e)
-    div = expt_indx // 32
-    rem = expt_indx % 32
-    expt_filter_rows = expt_filter_ptr + offs_r[:, None] * expt_filter_stride_m + div[None, :]
-    expt_filter_words = tl.load(expt_filter_rows)
-    expt_filter = (expt_filter_words >> rem[None, :]) & 1
-    expt_filter = expt_filter.to(tl.int32)
-    active_mask = (dst_row_indx >= 0) & (tl.sum(expt_filter, axis=0) > 0)
-    dst_row_indx = tl.where(active_mask, dst_row_indx, 0)
+    expt_filter_ptr_rows = expt_filter_ptr + offs_r[:, None] * expt_filter_stride_m
+    expt_filter = (tl.load(expt_filter_ptr_rows + (expt_indx // 32)[None, :]) >> (expt_indx % 32)) & 1
     expt_ranks = tl.sum(offs_r[:, None] * expt_filter, axis=0)
-    expt_ranks = tl.where(active_mask, expt_ranks, 0)
-    dst_row_ptrs_int = tl.zeros((N_EXPT_ACT,), dtype=tl.int64)
+    dst_row_ptrs = tl.zeros((N_EXPT_ACT,), dtype=tl.int64)
     for dst_rank in tl.static_range(N_RANKS):
-        peer_ptr = tl.load(peer_dst_ptrs + dst_rank).to(tl.int64, bitcast=True)
-        peer_ptr_vec = peer_ptr + tl.zeros((N_EXPT_ACT,), dtype=tl.int64)
-        dst_row_ptrs_int = tl.where(dst_rank == expt_ranks, peer_ptr_vec, dst_row_ptrs_int)
-    dst_row_ptrs = dst_row_ptrs_int.to(src_ptr.dtype, bitcast=True)
+        peer_dst_ptr = peer_dst_ptrs[dst_rank].to(tl.int64, bitcast=True)
+        dst_row_ptrs = tl.where(dst_rank == expt_ranks, peer_dst_ptr, dst_row_ptrs)
+    dst_row_ptrs = dst_row_ptrs.to(src_ptr.dtype, bitcast=True)
     dst_row_ptrs = tl.multiple_of(dst_row_ptrs, 16)
     dst_row_ptrs = dst_row_ptrs + dst_row_indx * dst_stride_m
     dst_ptrs = dst_row_ptrs[:, None] + offs_n[None, :]
     src_ptrs = src_ptr + off_m_local * src_stride_m + offs_n
-    active_store_mask = active_mask[:, None]
     for start_n in range(0, src_shape_n, BLOCK):
         mask_n = start_n + offs_n < src_shape_n
         src = tl.load(src_ptrs, mask=mask_n, other=0.0)
-        store_mask = mask_n[None, :] & active_store_mask
-        tl.store(dst_ptrs, src[None, :], mask=store_mask)
+        tl.store(dst_ptrs, src[None, :], mask=mask_n[None, :])
         src_ptrs += BLOCK
         dst_ptrs += BLOCK
 
