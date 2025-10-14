@@ -141,6 +141,12 @@ struct ConvertLayoutOpConversion
           inVals, [&](Value v) { return b.zext(i8ElemTy, v).getResult(); }));
       auto outVals = transferWithinBlockSwizzlingImpl(
           loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase);
+      if (llvmElemTy.getIntOrFloatBitWidth() == 1) {
+        auto zero = b.int_val(8, 0);
+        for (auto &v : outVals)
+          v = b.icmp_ne(v, zero);
+        return outVals;
+      }
       for (auto &v : outVals) {
         v = b.trunc(llvmElemTy, v);
       }
