@@ -101,7 +101,7 @@ def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int
 # ------------------------------------------------------------
 
 
-def _convert_dp_to_ep_launch_metadata(grid, metadata, args):
+def _convert_dp_to_ep_launch_metadata(grid, kernel, args):
     src = args["src_ptr"]
     dst_row_indx = args["dst_row_indx_ptr"]
     element_bytes = src.element_size()
@@ -110,7 +110,7 @@ def _convert_dp_to_ep_launch_metadata(grid, metadata, args):
     row_bytes = src.shape[1] * element_bytes
     nvlink_bytes = n_dispatch * row_bytes
     return {
-        "name": f"{metadata.name} [tokens={src.shape[0]}, d_model={src.shape[1]}]",
+        "name": f"{kernel.name} [tokens={src.shape[0]}, d_model={src.shape[1]}]",
         "bytes": src_bytes,
         "nvlink_bytes": nvlink_bytes,
     }
