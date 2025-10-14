@@ -35,11 +35,11 @@ struct MLIRPluginPass :
 } // namespace triton
 } // namespace mlir
 
-extern "C" void addTritonPluginPass(mlir::PassManager* pm) {
+static void addTritonPluginPass(mlir::PassManager* pm) {
   pm->addPass(mlir::triton::plugin::createTritonGPUMLIRPlugin());
 }
 
-extern "C" void registerTritonPluginPass() {
+static void registerTritonPluginPass() {
   ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
     return mlir::triton::plugin::createTritonGPUMLIRPlugin();
   });
@@ -58,17 +58,17 @@ static std::vector<const char *> passNamesTable = {
 
 // Key APIs:
 
-extern "C" void tritonAddPluginPass(mlir::PassManager* pm, const char *passName) {
+extern "C" __attribute__((visibility("default"))) void tritonAddPluginPass(mlir::PassManager* pm, const char *passName) {
   std::string passNameStr(passName);
   passMap[passNameStr](pm);
 }
 
-extern "C" void tritonRegisterPluginPass(const char *passName) {
+extern "C" __attribute__((visibility("default"))) void tritonRegisterPluginPass(const char *passName) {
   std::string passNameStr(passName);
   registryMap[passNameStr]();
 }
 
-extern "C" void tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
+extern "C" __attribute__((visibility("default"))) void tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
   *passCount = passMap.size();
   if (!passNames)
     return;

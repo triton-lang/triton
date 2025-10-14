@@ -58,5 +58,5 @@ foreach( plugin ${TRITON_PLUGIN_PASSES} )
       "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/../plugins")
 
 
-        target_compile_options(${plugin} PRIVATE -fvisibility=default)
+    target_compile_options(${plugin} PRIVATE -fvisibility=hidden)
 endforeach()
