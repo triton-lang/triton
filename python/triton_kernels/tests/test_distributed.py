@@ -8,8 +8,9 @@ import torch.distributed._symmetric_memory as symm_mem
 import torch.multiprocessing as mp
 import triton
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment
+from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
-from triton_kernels.matmul_ogs import matmul_ogs, reduce_grouped, RoutingData, GatherIndx, ScatterIndx
+from triton_kernels.matmul_ogs import matmul_ogs, RoutingData, GatherIndx, ScatterIndx
 from triton_kernels.target_info import is_hip
 from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata
 import pytest
@@ -134,7 +135,7 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
     )
     y_ep_local = matmul_ogs(y_ep_local, w_ep_local, b_ep_local, rdata_ep_local)
     y_dp_local = convert_ep_to_dp(y_ep_local, expt_assignment, expt_indx, combine_indx.src_indx)
-    z_dp_local = reduce_grouped(y_dp_local, contig_group_size=n_expts_act)[0]
+    z_dp_local, _ = reduce(y_dp_local.view(-1, n_expts_act, y_dp_local.shape[-1]), dim=1)
     return z_dp_local
 
 
