@@ -100,7 +100,27 @@ def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int
 
 # ------------------------------------------------------------
 
-@triton.jit
+
+def convert_dp_to_ep_launch_metadata(grid, kernel, args):
+    src = args["src_ptr"]
+    dst_row_indx = args["dst_row_indx_ptr"]
+    element_bytes = src.element_size()
+    src_bytes = src.numel() * element_bytes
+    active = (dst_row_indx >= 0) if dst_row_indx is not None else None
+    if active is not None:
+        n_dispatch = int(active.sum().item())
+    else:
+        n_dispatch = 0
+    row_bytes = src.shape[1] * element_bytes
+    nvlink_bytes = n_dispatch * row_bytes
+    return {
+        "name": f"{kernel.name} [tokens={src.shape[0]}, d_model={src.shape[1]}]",
+        "bytes": src_bytes + nvlink_bytes,
+        "nvlink_bytes": nvlink_bytes,
+    }
+
+
+@triton.jit(launch_metadata=convert_dp_to_ep_launch_metadata)
 def _convert_dp_to_ep(
     peer_dst_ptrs, dst_stride_m, # dst tensors
     src_ptr, src_stride_m, src_shape_n,  # src tensor
@@ -112,32 +132,40 @@ def _convert_dp_to_ep(
     N_RANKS: tl.constexpr,
     BLOCK: tl.constexpr
 ):
-    # token offset
     pid_m = tl.program_id(0)
     off_m_global = pid_m + src_row_start
     off_m_local = pid_m
-    # offset ptrs
-    # load expt and dst indx
-    offs_e = tl.arange(0, N_EXPT_ACT)
-    expt_indx = tl.load(expt_indx_ptr + off_m_global*expt_indx_stride_m + offs_e)
-    # load expt filter
     offs_r = tl.arange(0, N_RANKS)
-    expt_filter_ptr_rows = expt_filter_ptr + offs_r[:, None] * expt_filter_stride_m
-    expt_filter = (tl.load(expt_filter_ptr_rows + (expt_indx // 32)[None, :]) >> (expt_indx % 32)) & 1
-    expt_rank = tl.sum(offs_r[:, None] * expt_filter, axis=0)
-    # load dst indxs
-    dst_row_indx = tl.load(dst_row_indx_ptr + off_m_global*dst_row_indx_stride_m + offs_e)
-    # set src and d
+    offs_e = tl.arange(0, N_EXPT_ACT)
     offs_n = tl.arange(0, BLOCK)
-    dst_row_ptrs = tl.load(peer_dst_ptrs + expt_rank).to(src_ptr.dtype, bitcast=True)
+    dst_row_indx = tl.load(dst_row_indx_ptr + off_m_global * dst_row_indx_stride_m + offs_e)
+    expt_indx = tl.load(expt_indx_ptr + off_m_global * expt_indx_stride_m + offs_e)
+    div = expt_indx // 32
+    rem = expt_indx % 32
+    expt_filter_rows = expt_filter_ptr + offs_r[:, None] * expt_filter_stride_m + div[None, :]
+    expt_filter_words = tl.load(expt_filter_rows)
+    expt_filter = (expt_filter_words >> rem[None, :]) & 1
+    expt_filter = expt_filter.to(tl.int32)
+    active_mask = (dst_row_indx >= 0) & (tl.sum(expt_filter, axis=0) > 0)
+    dst_row_indx = tl.where(active_mask, dst_row_indx, 0)
+    expt_ranks = tl.sum(offs_r[:, None] * expt_filter, axis=0)
+    expt_ranks = tl.where(active_mask, expt_ranks, 0)
+    dst_row_ptrs_int = tl.zeros((N_EXPT_ACT,), dtype=tl.int64)
+    for dst_rank in tl.static_range(N_RANKS):
+        peer_ptr = tl.load(peer_dst_ptrs + dst_rank).to(tl.int64, bitcast=True)
+        peer_ptr_vec = peer_ptr + tl.zeros((N_EXPT_ACT,), dtype=tl.int64)
+        dst_row_ptrs_int = tl.where(dst_rank == expt_ranks, peer_ptr_vec, dst_row_ptrs_int)
+    dst_row_ptrs = dst_row_ptrs_int.to(src_ptr.dtype, bitcast=True)
     dst_row_ptrs = tl.multiple_of(dst_row_ptrs, 16)
     dst_row_ptrs = dst_row_ptrs + dst_row_indx * dst_stride_m
     dst_ptrs = dst_row_ptrs[:, None] + offs_n[None, :]
     src_ptrs = src_ptr + off_m_local * src_stride_m + offs_n
+    active_store_mask = active_mask[:, None]
     for start_n in range(0, src_shape_n, BLOCK):
         mask_n = start_n + offs_n < src_shape_n
         src = tl.load(src_ptrs, mask=mask_n, other=0.0)
-        tl.store(dst_ptrs, src[None, :], mask=mask_n[None, :])
+        store_mask = mask_n[None, :] & active_store_mask
+        tl.store(dst_ptrs, src[None, :], mask=store_mask)
         src_ptrs += BLOCK
         dst_ptrs += BLOCK
 
@@ -174,12 +202,11 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
     # create tensor of peer pointers
     hdl = symm_mem.rendezvous(dst_local, dist.group.WORLD)
     peer_bufs = [hdl.get_buffer(r, dst_local.shape, dst_local.dtype) for r in range(n_ranks)]
-    peer_dst_ptrs = create_tensor_from_tuples((n_ranks, ), tuple([int(buf.data_ptr()) for buf in peer_bufs]), dtype=torch.int64, device=device)
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_local,)
     _convert_dp_to_ep[grid](
-        peer_dst_ptrs, dst_local.stride(0),
+        tuple(peer_bufs), dst_local.stride(0),
         src, src.stride(0), src.shape[1],
         expt_bitmask, expt_bitmask.stride(0),
         expt_indx, expt_indx.stride(0),
@@ -246,7 +273,6 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_global,)
-    hdl.barrier(channel=0)
     _convert_ep_to_dp[grid](
         peer_dst_ptrs, dst_local.stride(0),
         src, src.stride(0), src.shape[1],
