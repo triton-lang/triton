@@ -301,6 +301,8 @@ def _remap_ragged_tensor_metadata(BatchSizesOut, BatchSizesInp,  #
                                   BLOCK: tl.constexpr  #
                                   ):
     pid_m = tl.program_id(0)
+    # number of valid slices
+
     # offset pointers
     BlockOffsOut += pid_m * block_offs_out_stride_m
     BlockOffsInp += pid_m * block_offs_in_stride_m
@@ -334,6 +336,8 @@ def remap_ragged_tensor_metadata(src_ragged_tensor_metadata: RaggedTensorMetadat
     This function returns the metadata of `dst`, i.e. the ragged tensor s.t.:
     dst_slices = [`src_slices[slice_id]` if `slice_id != -1` for slice_id in `slice_map`]
     """
+    assert slice_map.ndim == 1
+    assert slice_map.shape[0] == src_ragged_tensor_metadata.slice_sizes.shape[0]
     slice_sizes = torch.empty_like(src_ragged_tensor_metadata.slice_sizes)
     slice_offs = torch.empty_like(src_ragged_tensor_metadata.slice_offs)
     block_offs_data = torch.empty_like(src_ragged_tensor_metadata.block_offs_data)

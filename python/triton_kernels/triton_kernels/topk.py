@@ -64,7 +64,7 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
         y_vals_hdl.barrier(channel=0)
         y_indx_hdl.barrier(channel=0)
         bitmatrix_hdl.barrier(channel=0)
-    bitmatrix_shape = [n_rows * dist.get_world_size() if all_gather else n_rows, n_cols_words * 32]
+    bitmatrix_shape = [n_rows * dist.get_world_size() if all_gather else n_rows, n_cols]
     bitmatrix_shape_max = [n_rows_out_max, None]
     bitmatrix = Bitmatrix(bitmatrix_data, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
     return y_vals, y_indx, bitmatrix
