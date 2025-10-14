@@ -76,7 +76,7 @@ def distributed_launcher(request):
 
 
 # ------------------------------------------------------------
-# filtering
+# expt assignment
 # ------------------------------------------------------------
 
 
@@ -123,19 +123,28 @@ def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_ac
 
 def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, expt_assignment, n_expts_act):
     rank = dist.get_rank()
-    rdata_global, combine_indx, dispatch_indx, expt_indx = routing(l_dp_local, n_expts_act, all_gather=True)
-    y_ep_local = convert_dp_to_ep(x_dp_local, expt_assignment, expt_indx, dispatch_indx.src_indx)
-    expt_data_local = remap_ragged_tensor_metadata(rdata_global.expt_data, expt_assignment.expt_map[rank, :])
-    rdata_ep_local = RoutingData(
-        gate_scal=rdata_global.gate_scal,
-        expt_hist=expt_data_local.slice_sizes,
-        n_expts_tot=expt_assignment.n_expts_per_shard[rank],
-        n_expts_act=rdata_global.n_expts_act,
-        expt_data=expt_data_local,
-    )
+    expt_map = expt_assignment.expt_map[rank, :]
+    # active global logits (sparse)
+    l_global_active = topk(l_dp_local, n_expts_act, apply_softmax=True, all_gather=True)
+    # expert histogram, dispatch/combine indx
+    active_indx = l_global_active.indx
+    expt_sizes = l_global_active.mask_metadata.col_sum
+    dispatch_indx = l_global_active.mask_metadata.col_sorted_indx
+    combine_indx = l_global_active.mask_metadata.row_sorted_indx
+    # ragged tensor metadata
+    x_global_metadata = make_ragged_tensor_metadata(expt_sizes, dispatch_indx.shape[0])
+    # convert x from dp-local to expert-sorted, ep-local
+    y_ep_local = convert_dp_to_ep(x_dp_local, expt_assignment, active_indx, dispatch_indx)
+    y_ep_local_metadata = remap_ragged_tensor_metadata(x_global_metadata, expt_map)
+    # matrix multiply
+    # TODO: clean-up API. `RoutingData` should not exist; we should be passing `y_ep_local_metadata`.
+    rdata_ep_local = RoutingData(None, expt_sizes, w_ep_local.shape[0], n_expts_act, y_ep_local_metadata)
     y_ep_local = matmul_ogs(y_ep_local, w_ep_local, b_ep_local, rdata_ep_local)
-    y_dp_local = convert_ep_to_dp(y_ep_local, expt_assignment, expt_indx, combine_indx.src_indx)
-    z_dp_local, _ = reduce(y_dp_local.view(-1, n_expts_act, y_dp_local.shape[-1]), dim=1)
+    # convert x from expert-sorted, ep-local to token-sorted, dp-local
+    y_dp_local = convert_ep_to_dp(y_ep_local, expt_assignment, active_indx, combine_indx)
+    # weighted average of the output token from experts
+    y_dp_local = y_dp_local.view(-1, n_expts_act, y_dp_local.shape[-1])
+    z_dp_local, _ = reduce(y_dp_local, dim=1)
     return z_dp_local
 
 
