@@ -1,4 +1,4 @@
-// RUN: TRITON_PASS_PLUGIN_PATH=%shlibdir/../plugins/libGPUExtensionTestLib.so triton-opt %s -tritongpu-plugin
+// RUN: TRITON_PASS_PLUGIN_PATH=%shlibdir/../plugins/libTritonPluginsTestLib.so triton-opt %s -tritongpu-plugin
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80"} {
 
