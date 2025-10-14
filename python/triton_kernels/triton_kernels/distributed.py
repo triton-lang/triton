@@ -103,15 +103,23 @@ def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int
 
 def _convert_dp_to_ep_launch_metadata(grid, kernel, args):
     src = args["src_ptr"]
-    dst_row_indx = args["dst_row_indx_ptr"]
+    src_rank = args["SRC_RANK"]
+    src_row_start = args["src_row_start"]
+    expt_filter = args["expt_filter_ptr"]
+    expt_indx = args["expt_indx_ptr"]
     elem_bytes = src.element_size()
     src_bytes = src.numel() * elem_bytes
-    n_dispatch = int((dst_row_indx >= 0).sum().item())
-    row_bytes = src.shape[1] * elem_bytes
-    nvlink_bytes = n_dispatch * row_bytes
+    # Find out number of tokens being dispatched out from this GPU
+    local_expt_indx = expt_indx[src_row_start:src_row_start+src.shape[0]]
+    dst_local_tokens = torch.sum(expt_filter[src_rank][(local_expt_indx // 32)] >> (local_expt_indx % 32) == 1).item()
+    dst_output_tokens = torch.sum(expt_filter[src_rank][(local_expt_indx // 32)] >> (local_expt_indx % 32) == 0).item()
+    dst_input_tokens = torch.sum(expt_filter[src_rank][(expt_indx // 32)] >> (expt_indx % 32) == 1).item() - dst_local_tokens
+    # Calculate the number of bytes transferred out from this GPU
+    dram_bytes = src_bytes + dst_local_tokens * src.shape[1] * elem_bytes
+    nvlink_bytes = (dst_output_tokens + dst_input_tokens) * src.shape[1] * elem_bytes
     return {
         "name": f"{kernel.name} [tokens={src.shape[0]}, d_model={src.shape[1]}]",
-        "bytes": src_bytes + nvlink_bytes,
+        "bytes": dram_bytes,
         "nvlink_bytes": nvlink_bytes,
     }
 
@@ -124,6 +132,7 @@ def _convert_dp_to_ep(
     expt_indx_ptr, expt_indx_stride_m, # expt indx
     dst_row_indx_ptr, dst_row_indx_stride_m, # gate indx
     src_row_start,
+    SRC_RANK: tl.constexpr,
     N_EXPT_ACT: tl.constexpr,
     N_RANKS: tl.constexpr,
     BLOCK: tl.constexpr
@@ -198,6 +207,7 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
         expt_indx, expt_indx.stride(0),
         gate_indx, n_expt_act,
         rank * n_tokens_local,
+        SRC_RANK=rank,
         N_EXPT_ACT=n_expt_act,
         N_RANKS=n_ranks,
         BLOCK=BLOCK,
