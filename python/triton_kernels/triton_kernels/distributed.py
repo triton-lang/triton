@@ -106,16 +106,12 @@ def convert_dp_to_ep_launch_metadata(grid, kernel, args):
     dst_row_indx = args["dst_row_indx_ptr"]
     element_bytes = src.element_size()
     src_bytes = src.numel() * element_bytes
-    active = (dst_row_indx >= 0) if dst_row_indx is not None else None
-    if active is not None:
-        n_dispatch = int(active.sum().item())
-    else:
-        n_dispatch = 0
+    n_dispatch = (dst_row_indx >= 0).sum().item()
     row_bytes = src.shape[1] * element_bytes
     nvlink_bytes = n_dispatch * row_bytes
     return {
         "name": f"{kernel.name} [tokens={src.shape[0]}, d_model={src.shape[1]}]",
-        "bytes": src_bytes + nvlink_bytes,
+        "bytes": src_bytes,
         "nvlink_bytes": nvlink_bytes,
     }
 
