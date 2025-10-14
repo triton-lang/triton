@@ -35,13 +35,6 @@ def get_mma_instr_shape(shape, element_ty):
     return (m, n, k)
 
 
-@gluon.constexpr_function
-def get_mma_reg_layout(shape, num_warps, dtype=gl.float32):
-    instr_shape = get_mma_instr_shape(shape, dtype)
-    tmem_layout = TensorMemoryLayout((instr_shape[0], instr_shape[1]), col_stride=1)
-    return get_tmem_reg_layout(dtype, shape, tmem_layout, num_warps)
-
-
 # ===-----------------------------------------------------------------------===#
 # Data Abstractions
 # ===-----------------------------------------------------------------------===#

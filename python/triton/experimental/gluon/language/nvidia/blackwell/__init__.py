@@ -4,7 +4,7 @@ from typing import Optional, Tuple, List, TYPE_CHECKING
 from dataclasses import dataclass
 from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
-from triton.experimental.gluon.language._core import builtin, base_type, base_value
+from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
 from triton.experimental.gluon.language._semantic import _check
 
 from . import tma
@@ -15,13 +15,6 @@ from triton._C.libtriton import ir
 if TYPE_CHECKING:
     from triton._C.libtriton.gluon_ir import GluonOpBuilder
     from ..._semantic import GluonSemantic
-
-
-def _load_dialects(ctx):
-    ir.load_dialects(ctx)
-
-
-_load_dialects.__triton_builtin__ = True
 
 __all__ = [
     "allocate_tensor_memory",
@@ -120,14 +113,14 @@ def get_tmem_reg_layout(
         cta_split_num (tuple[int, int]): CTA split factors along each dimension.
         cta_order (tuple[int, int]): CTA order.
     """
-    element_ty = ttgl._unwrap_if_constexpr(element_ty)
-    num_warps = ttgl._unwrap_if_constexpr(num_warps)
-    layout = ttgl._unwrap_if_constexpr(layout)
-    instr_variant = ttgl._unwrap_if_constexpr(instr_variant)
-    shape = [ttgl._unwrap_if_constexpr(s) for s in shape]
-    ctas_per_cga = [ttgl._unwrap_if_constexpr(x) for x in ctas_per_cga]
-    cta_split_num = [ttgl._unwrap_if_constexpr(x) for x in cta_split_num]
-    cta_order = [ttgl._unwrap_if_constexpr(x) for x in cta_order]
+    element_ty = _unwrap_if_constexpr(element_ty)
+    num_warps = _unwrap_if_constexpr(num_warps)
+    layout = _unwrap_if_constexpr(layout)
+    instr_variant = _unwrap_if_constexpr(instr_variant)
+    shape = [_unwrap_if_constexpr(s) for s in shape]
+    ctas_per_cga = [_unwrap_if_constexpr(x) for x in ctas_per_cga]
+    cta_split_num = [_unwrap_if_constexpr(x) for x in cta_split_num]
+    cta_order = [_unwrap_if_constexpr(x) for x in cta_order]
 
     return _semantic.get_tmem_reg_layout(
         element_ty,
@@ -222,7 +215,7 @@ class tensor_memory_descriptor(base_value):
         Returns:
             tensor: A distributed tensor containing the loaded data.
         """
-        layout = ttgl._unwrap_if_constexpr(layout)
+        layout = _unwrap_if_constexpr(layout)
         ret_ty = ttgl.distributed_type(self.dtype, self.shape, layout)
         builder = _semantic.builder
         handle = builder.create_tmem_load(ret_ty.to_ir(builder), self.handle)
@@ -237,7 +230,7 @@ class tensor_memory_descriptor(base_value):
             value (tensor): The tensor to store.
             pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
         """
-        pred = ttgl._unwrap_if_constexpr(pred)
+        pred = _unwrap_if_constexpr(pred)
         pred = _semantic.to_tensor(pred)
         assert value.shape == self.shape, f"source shape {value.shape} does not match destination shape {self.shape}"
         assert value.dtype == self.dtype, f"source dtype {value.dtype} does not match destination dtype {self.dtype}"
@@ -255,8 +248,8 @@ class tensor_memory_descriptor(base_value):
         Returns:
             tensor_memory_descriptor: Descriptor for the subslice.
         """
-        start = ttgl._unwrap_if_constexpr(start)
-        length = ttgl._unwrap_if_constexpr(length)
+        start = _unwrap_if_constexpr(start)
+        length = _unwrap_if_constexpr(length)
         _check(isinstance(start, int), lambda: "start must be a constant int")
         _check(isinstance(length, int), lambda: "length must be a constant int")
         shape = self.shape[:-1] + [length]
@@ -303,9 +296,9 @@ class tensor_memory_descriptor(base_value):
         Returns:
             tensor_memory_descriptor: Descriptor with updated type and layout.
         """
-        dtype = ttgl._unwrap_if_constexpr(dtype)
-        shape = [ttgl._unwrap_if_constexpr(s) for s in shape]
-        layout = ttgl._unwrap_if_constexpr(layout)
+        dtype = _unwrap_if_constexpr(dtype)
+        shape = [_unwrap_if_constexpr(s) for s in shape]
+        layout = _unwrap_if_constexpr(layout)
 
         ty = tensor_memory_descriptor_type(dtype, shape, layout, shape)
         handle = _semantic.builder.create_memdesc_reinterpret(ty.to_ir(_semantic.builder), self.handle)
@@ -326,9 +319,9 @@ def allocate_tensor_memory(element_ty, shape, layout, value=None, _semantic=None
     Returns:
         tensor_memory_descriptor: Descriptor for the allocated memory.
     """
-    element_ty = ttgl._unwrap_if_constexpr(element_ty)
-    shape = ttgl._unwrap_if_constexpr(shape)
-    layout = ttgl._unwrap_if_constexpr(layout)
+    element_ty = _unwrap_if_constexpr(element_ty)
+    shape = _unwrap_if_constexpr(shape)
+    layout = _unwrap_if_constexpr(layout)
     value = value.handle if value is not None else None
 
     ty = tensor_memory_descriptor_type(element_ty, shape, layout, shape)

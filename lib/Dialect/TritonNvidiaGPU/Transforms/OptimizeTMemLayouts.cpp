@@ -187,7 +187,6 @@ public:
     auto ctaLayout = ttg::getCTALayout(joinOp.getLhs().getType().getEncoding());
     auto *ctx = joinOp.getContext();
 
-    // First slice.
     auto createSlice = [&](TypedValue<RankedTensorType> input, int offset) {
       auto subSlice = b.create<TMEMSubSliceOp>(loc, tmem, offset, splitNSize);
       auto distLayout = nvidia_gpu::getDefaultLayoutForTmemLdSt(

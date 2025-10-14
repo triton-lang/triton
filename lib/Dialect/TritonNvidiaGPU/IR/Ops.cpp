@@ -588,7 +588,6 @@ void TCGen5MMAScaledOp::build(OpBuilder &builder, OperationState &state,
 bool TCGen5MMAScaledOp::isAsync() { return getIsAsync(); }
 
 // -- TMEMStoreOp --
-
 static LogicalResult verifyTMEMOperand(Operation *op, RankedTensorType type,
                                        MemDescType memdesc, StringRef regName) {
   if (type.getRank() != 2)

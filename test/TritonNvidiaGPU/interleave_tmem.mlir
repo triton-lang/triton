@@ -126,13 +126,12 @@ tt.func @sink_alloc_op(%arg0: tensor<128x128xf32, #linear128>) {
   %alloc1 = ttng.tmem_alloc : () -> !ttg.memdesc<1x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   // CHECK: [[SUBVIEW1:%.+]] = ttg.memdesc_index [[ALLOC1]]
   %subview1 = ttg.memdesc_index %alloc1[%c0] : !ttg.memdesc<1x128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
-  %arg0_linear = ttg.convert_layout %arg0 : tensor<128x128xf32, #linear128> -> tensor<128x128xf32, #linear128>
-  // CHECK-NEXT: tmem_store %{{.*}}, [[SUBVIEW1]]
-  ttng.tmem_store %arg0_linear, %subview1, %true : tensor<128x128xf32, #linear128> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+  // CHECK-NEXT: tmem_store %arg0, [[SUBVIEW1]]
+  ttng.tmem_store %arg0, %subview1, %true : tensor<128x128xf32, #linear128> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   // CHECK-NEXT: [[ALLOC0:%.+]] = ttng.tmem_alloc
   // CHECK: [[SUBVIEW0:%.+]] = ttg.memdesc_index [[ALLOC0]]
-  // CHECK-NEXT: tmem_store %{{.*}}, [[SUBVIEW0]]
-  ttng.tmem_store %arg0_linear, %subview0, %true : tensor<128x128xf32, #linear128> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+  // CHECK-NEXT: tmem_store %arg0, [[SUBVIEW0]]
+  ttng.tmem_store %arg0, %subview0, %true : tensor<128x128xf32, #linear128> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
   tt.return
 }
 

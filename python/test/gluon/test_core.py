@@ -884,8 +884,8 @@ def test_block_m_64_mma():
         al = ttgl.join(a0, a1).permute(0, 2, 1).reshape((BLOCK_M, N))
         ar = ttgl.join(a1, a0).permute(0, 2, 1).reshape((BLOCK_M, N))
 
-        al_tmem.store(ttgl.convert_layout(al, a_layout))
-        ar_tmem.store(ttgl.convert_layout(ar, a_layout))
+        al_tmem.store(ttgl.convert_layout(al, a_layout, assert_trivial=True))
+        ar_tmem.store(ttgl.convert_layout(ar, a_layout, assert_trivial=True))
 
         b_shared_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=32, element_bitwidth=16, rank=2)
         b_shared = ttgl.allocate_shared_memory(ttgl.float16, [N, N], layout=b_shared_layout)
