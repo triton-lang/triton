@@ -101,7 +101,22 @@ def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int
 # ------------------------------------------------------------
 
 
-@triton.jit
+def _convert_dp_to_ep_launch_metadata(grid, kernel, args):
+    src = args["src_ptr"]
+    dst_row_indx = args["dst_row_indx_ptr"]
+    elem_bytes = src.element_size()
+    src_bytes = src.numel() * elem_bytes
+    n_dispatch = int((dst_row_indx >= 0).sum().item())
+    row_bytes = src.shape[1] * elem_bytes
+    nvlink_bytes = n_dispatch * row_bytes
+    return {
+        "name": f"{kernel.name} [tokens={src.shape[0]}, d_model={src.shape[1]}]",
+        "bytes": src_bytes + nvlink_bytes,
+        "nvlink_bytes": nvlink_bytes,
+    }
+
+
+@triton.jit(launch_metadata=_convert_dp_to_ep_launch_metadata)
 def _convert_dp_to_ep(
     peer_dst_ptrs, dst_stride_m, # dst tensors
     src_ptr, src_stride_m, src_shape_n,  # src tensor
