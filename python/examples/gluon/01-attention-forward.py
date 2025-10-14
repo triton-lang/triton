@@ -261,18 +261,16 @@ class AttentionConfig:
         self.o_tmem_layout = gl.constexpr(TensorMemoryLayout((o_instr_shape[0], o_instr_shape[1]), col_stride=1))
         self.p_tmem_layout = gl.constexpr(TensorMemoryLayout((qk_instr_shape[0], qk_instr_shape[1]), col_stride=1))
 
-        self.qk_layout = gl.constexpr(
-            get_tmem_reg_layout(gl.float32, self.qk_shape, self.qk_tmem_layout, self.num_warps))
-        self.o_layout = gl.constexpr(get_tmem_reg_layout(gl.float32, self.o_shape, self.o_tmem_layout, self.num_warps))
+        self.qk_layout = get_tmem_reg_layout(gl.float32, self.qk_shape, self.qk_tmem_layout, self.num_warps)
+        self.o_layout = get_tmem_reg_layout(gl.float32, self.o_shape, self.o_tmem_layout, self.num_warps)
         self.o_splitn_tmem_layout = gl.constexpr(
             TensorMemoryLayout((o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR), col_stride=1))
-        self.o_splitn_layout = gl.constexpr(
-            get_tmem_reg_layout(
-                gl.float32,
-                (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR),
-                self.o_splitn_tmem_layout,
-                self.num_warps,
-            ))
+        self.o_splitn_layout = get_tmem_reg_layout(
+            gl.float32,
+            (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR),
+            self.o_splitn_tmem_layout,
+            self.num_warps,
+        )
         self.alpha_2d_layout = gl.constexpr(gl.BlockedLayout([1, 1], [32, 1], [self.num_warps, 1], [0, 1]))
 
         is_fp16 = self.dtype.value in [gl.float16, gl.bfloat16]

@@ -315,7 +315,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
                 assert False, "splitn requires at least one basis of [0, N / 2]"
 
             result = split_layout(result)
-        return result
+        return ttgl.constexpr(result)
 
     def shared_dealloc(self, mem_desc):
         self.builder.create_local_dealloc(mem_desc.handle)
