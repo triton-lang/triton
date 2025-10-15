@@ -203,6 +203,9 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
       // Software padding
       assert(maybeQuot);
       return getDistributedLayoutForTmemLdSt(*maybeQuot, atom, numWarps, 32);
+    } else if (ll.getInDimSize(rowColDims[1]) == 1) {
+      // Software padding with just one column
+      return getDistributedLayoutForTmemLdSt(ll, atom, numWarps, 32);
     } else {
       assert(false && "Should not happen");
     }

@@ -4,12 +4,10 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
-#include "llvm/ADT/SmallVector.h"
 
 #include <cstdint>
 #include <functional>
 #include <optional>
-#include <string>
 
 namespace mlir::triton::nvidia_gpu {
 
