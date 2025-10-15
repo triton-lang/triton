@@ -1916,7 +1916,6 @@ struct FDivOpConversion
 
 struct FMulOpConversion
     : ElementwiseOpConversionBase<arith::MulFOp, FMulOpConversion> {
-  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
 
   explicit FMulOpConversion(LLVMTypeConverter &typeConverter,
                             ModuleAxisInfoAnalysis &axisAnalysisPass,
