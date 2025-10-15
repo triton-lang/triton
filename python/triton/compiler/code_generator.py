@@ -1477,6 +1477,12 @@ class CodeGenerator(ast.NodeVisitor):
 
     def visit_Attribute(self, node):
         lhs = self.visit(node.value)
+        if isinstance(lhs, ModuleType):
+            # follow module_map until reaching fixed-point:
+            while (name := lhs.__name__) in self.builder.module_map:
+                lhs = self.builder.module_map[name]
+                if lhs.__name__ == name:
+                    break
         return self.get_Attribute(lhs, node.attr)
 
     def visit_Expr(self, node):

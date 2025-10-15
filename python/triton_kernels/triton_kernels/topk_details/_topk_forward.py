@@ -91,16 +91,12 @@ def _topk_forward(X, stride_xm,  # inputs
                   Yv, Yi, stride_ym,  # topk values/indices
                   USE_PROVIDED_INDX: tl.constexpr, Bits, stride_rm: tl.constexpr, stride_rn: tl.constexpr,  # bitmatrix
                   n_rows, n_expts_tot,  # shape
-                  S, BLOCK_S: tl.constexpr, s_blocks,  # thing to memset
                   APPLY_SOFTMAX: tl.constexpr,  # constant
                   BLOCK_M: tl.constexpr, N_EXPTS_PAD: tl.constexpr, N_EXPTS_ACT: tl.constexpr, BLOCK_N: tl.constexpr):
 
     pid = tl.program_id(0)
     if isinstance(n_rows, tl.tensor) and n_rows.dtype.is_ptr():
         n_rows = tl.load(n_rows)
-
-    if pid < s_blocks:
-        tl.store(S + BLOCK_S * pid + tl.arange(0, BLOCK_S), tl.zeros([BLOCK_S], tl.int32))
 
     if pid * BLOCK_M >= n_rows:
         # early exit:

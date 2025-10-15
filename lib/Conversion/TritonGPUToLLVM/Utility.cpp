@@ -35,46 +35,6 @@ static int __builtin_ctz(unsigned x) {
 
 #endif
 
-// This reverts #5645, because it introduced increased register pressure in AMD
-// backend.
-// TODO: remove when new implementation performance reaches target level
-namespace {
-
-LinearLayout getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
-                                  LinearLayout regLayout,
-                                  triton::gpu::SharedEncodingTrait dstEnc,
-                                  int elemBitWidth,
-                                  ArrayRef<int64_t> allocShape) {
-  StringAttr kBlock = StringAttr::get(ctx, ("block"));
-  int rank = shape.size();
-
-  LinearLayout sharedLayout =
-      triton::gpu::toLinearLayout(allocShape.take_back(rank), dstEnc);
-  auto sharedOrder = triton::gpu::getOrder(dstEnc, shape);
-
-  // sharedLayout's in-dims are currently (offset, block).  Reshape to
-  // (offsetX1, offsetX2, ..., block) so that we can apply the N-dimensional
-  // shmem strides.  (The offsetX's appear in minor-to-major order.)
-  auto sharedLegacy = cast<triton::gpu::SwizzledSharedEncodingAttr>(dstEnc);
-  SmallVector<std::pair<StringAttr, int32_t>> multiDimSharedSize;
-  for (int i = 0; i < rank; i++) {
-    int dim = sharedOrder[i];
-    int64_t size = std::max(
-        int64_t{1},
-        shape[dim] / sharedLegacy.getCTALayout().getCTASplitNum()[dim]);
-    multiDimSharedSize.push_back(
-        {StringAttr::get(ctx, ("offset" + std::to_string(dim))), size});
-  }
-  multiDimSharedSize.push_back({kBlock, sharedLayout.getInDimSize(kBlock)});
-  sharedLayout = sharedLayout.reshapeIns(multiDimSharedSize);
-
-  // regToSharedLayout maps from (register, lane, warp, block) to (offsetX1,
-  // ..., offsetXN, block), where the offsetX's are in minor-to-major order.
-  return regLayout.invertAndCompose(sharedLayout);
-}
-
-} // namespace
-
 namespace mlir {
 
 namespace triton::gpu {

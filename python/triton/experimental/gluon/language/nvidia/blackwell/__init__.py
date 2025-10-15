@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
-from triton.experimental.gluon.language._layouts import BlockedLayout, _get_shape_per_cta
 from triton.experimental.gluon.language._semantic import _check
 
 from . import tma
@@ -21,7 +20,7 @@ __all__ = [
     "allocate_tensor_memory",
     "async_copy",
     "fence_async_shared",
-    "get_tmem_32x32b_reg_layout",
+    "get_tmem_reg_layout",
     "mbarrier",
     "mma_v2",
     "tensor_memory_descriptor",
@@ -89,49 +88,49 @@ class TensorMemoryScalesLayout:
         return f"TLS{cta_split_str}TLS"
 
 
-@constexpr_function
-def _cdiv(x, div):
-    return (x + div - 1) // div
-
-
-@constexpr_function
-def get_tmem_32x32b_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_split_num=None, cta_order=None):
-    """Returns a BlockedLayout compatible with load/store on tensor memory with the 32x32b instruction variant.
+@builtin
+def get_tmem_reg_layout(
+        element_ty,
+        shape,
+        layout,
+        num_warps,
+        instr_variant="32x32b",
+        ctas_per_cga=(1, 1),
+        cta_split_num=(1, 1),
+        cta_order=(1, 0),
+        _semantic=None,
+):
     """
-    assert len(shape) == 2, "expected a 2D tensor"
-    assert num_warps in [4, 8], "expected 4 or 8 warps"
+    Returns a DistributedLinearLayout compatible with TMEM load/store instructions.
 
-    shape_per_cta = _get_shape_per_cta(shape, cta_split_num)
-    blocks_per_tile = [shape_per_cta[0] // M, shape_per_cta[1] // N]
-    num_blocks = blocks_per_tile[0] * blocks_per_tile[1]
+    Args:
+        element_ty (dtype): Element type stored in tensor memory.
+        shape (Sequence[int]): Global tensor shape addressed by the TMEM descriptor.
+        layout (TensorMemoryLayout): Tensor memory layout descriptor.
+        num_warps (int): Number of warps participating in the operation.
+        instr_variant (str): TMEM instruction variant (e.g. ``\"32x32b\"``).
+        ctas_per_cga (tuple[int, int]): CTA grouping along each dimension.
+        cta_split_num (tuple[int, int]): CTA split factors along each dimension.
+        cta_order (tuple[int, int]): CTA order.
+    """
+    element_ty = _unwrap_if_constexpr(element_ty)
+    num_warps = _unwrap_if_constexpr(num_warps)
+    layout = _unwrap_if_constexpr(layout)
+    instr_variant = _unwrap_if_constexpr(instr_variant)
+    shape = [_unwrap_if_constexpr(s) for s in shape]
+    ctas_per_cga = [_unwrap_if_constexpr(x) for x in ctas_per_cga]
+    cta_split_num = [_unwrap_if_constexpr(x) for x in cta_split_num]
+    cta_order = [_unwrap_if_constexpr(x) for x in cta_order]
 
-    num_warp_groups = num_warps // 4
-    if M == 64:
-        threads_per_warp = [16, 2]
-        if num_blocks == 1:
-            size_per_thread = [1, _cdiv(N, num_warp_groups * 2)]
-            warps_per_cta = [4, num_warp_groups]
-        else:
-            size_per_thread = [1, _cdiv(N, 2)]
-            warps_per_cta = [4 * min(blocks_per_tile[0], num_warp_groups)]
-            warps_per_cta.append(_cdiv(num_warp_groups, warps_per_cta[0] // 4))
-    else:
-        if shape[0] > 128:
-            size_per_thread = [1, N]
-            threads_per_warp = [32, 1]
-            warps_per_cta = [4 * num_warp_groups, 1]
-        else:
-            size_per_thread = [1, _cdiv(N, num_warp_groups)]
-            threads_per_warp = [32, 1]
-            warps_per_cta = [4, num_warp_groups]
-    return BlockedLayout(
-        size_per_thread=size_per_thread,
-        threads_per_warp=threads_per_warp,
-        warps_per_cta=warps_per_cta,
-        order=[0, 1],
-        ctas_per_cga=ctas_per_cga,
-        cta_split_num=cta_split_num,
-        cta_order=cta_order,
+    return _semantic.get_tmem_reg_layout(
+        element_ty,
+        shape,
+        layout,
+        num_warps,
+        instr_variant,
+        ctas_per_cga,
+        cta_split_num,
+        cta_order,
     )
 
 
@@ -380,6 +379,50 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
 
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
                                          mbarrier_preds)
+
+
+@builtin
+def tcgen05_mma_scaled(a, b, acc, a_scale, b_scale, a_type, b_type, *, use_acc=True, pred=True, mbarriers=None,
+                       mbarrier_preds=None, _semantic=None):
+    """
+    Emit a 5th generation TensorCore MMA scaled instruction.
+    acc = (a * a_scale) * (b * b_scale) + (acc if use_acc else 0)
+
+    Args:
+        a (shared_memory_descriptor): Left hand side operand in shared memory.
+        b (shared_memory_descriptor or tensor_memory_descriptor): Right hand side operand in shared or tensor memory.
+        acc (tensor_memory_descriptor): Accumulator value in tensor memory (mutated).
+        a_scale (tensor): Scale factor for operand A.
+        b_scale (tensor): Scale factor for operand B.
+        a_type (str): Type of operand A. One of {"e2m1", "e4m3", "e5m2"}.
+        b_type (str): Type of operand B. One of {"e2m1", "e4m3", "e5m2"}.
+        use_acc (bool): Whether to use the initial value of the accumulator. Defaults to True.
+        pred (bool): Scalar predicate. Operation is skipped if predicate is False. Defaults to True.
+        mbarriers (Sequence[mbarrier], optional): Barriers to signal when the operation is complete. If None, mma is synchronous. Defaults to None.
+        mbarrier_preds (Sequence[bool], optional): Predicates for barriers. Defaults to None.
+    """
+    use_acc = _semantic.to_tensor(use_acc)
+    pred = _semantic.to_tensor(pred)
+
+    if mbarriers is None:
+        assert mbarrier_preds is None
+        mbarriers = []
+        mbarrier_preds = []
+    else:
+        mbarriers = [bar.handle for bar in mbarriers]
+        if mbarrier_preds is None:
+            true = _semantic.to_tensor(True)
+            mbarrier_preds = [true.handle] * len(mbarriers)
+        else:
+            mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
+
+    allowed_formats = {"e2m1", "e4m3", "e5m2"}
+    assert a_type.value in allowed_formats, f"Unsupported lhs_format: {a_type.value}"
+    assert b_type.value in allowed_formats, f"Unsupported rhs_format: {b_type.value}"
+    a_type = _semantic._str_to_fp_type(a_type.value)
+    b_type = _semantic._str_to_fp_type(b_type.value)
+    _semantic.builder.create_tcgen05_mma_scaled(a.handle, b.handle, acc.handle, a_scale.handle, b_scale.handle, a_type,
+                                                b_type, use_acc.handle, pred.handle, mbarriers, mbarrier_preds)
 
 
 @builtin

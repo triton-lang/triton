@@ -10,23 +10,37 @@ from typing import Tuple
 import triton
 import triton.language as tl
 import triton_kernels
-import triton_kernels.routing
 import triton_kernels.swiglu
-from triton_kernels.routing import (
-    RoutingData,
-    GatherIndx,
-    ScatterIndx,
-    compute_expt_data_torch,
-    topk_torch,
-    routing_from_bitmatrix,
-)
+from triton_kernels.matmul_ogs import RoutingData, GatherIndx, ScatterIndx
+from triton_kernels.topk import topk_torch
 from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
 from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
 from triton_kernels.tensor_details import layout
-from triton_kernels.tensor import Bitmatrix
+from triton_kernels.tensor import BIT, SparseMatrix, Bitmatrix, make_ragged_tensor_metadata
 
 from bench_utils import quantize_weight
+
+
+def legacy_routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx, n_expts_tot, n_expts_act):
+    sparse_logits = SparseMatrix(indx=expt_indx, vals=expt_scal, mask=bitmatrix)
+    dispatch_indx = sparse_logits.mask_metadata.col_sorted_indx
+    combine_indx = sparse_logits.mask_metadata.row_sorted_indx
+    ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
+    gate_scal = sparse_logits.vals.flatten()[combine_indx]
+    routing_data = RoutingData(gate_scal, ragged_batch_metadata.batch_sizes, n_expts_tot, n_expts_act,
+                               ragged_batch_metadata)
+    gather_idx = GatherIndx(combine_indx, dispatch_indx)
+    scatter_idx = ScatterIndx(dispatch_indx, combine_indx)
+    return routing_data, gather_idx, scatter_idx
+
+
+def legacy_routing(logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None):
+    if sm_first:
+        logits = torch.softmax(logits, dim=-1)
+    sparse_logits = topk(logits, n_expts_act, apply_softmax=not sm_first, y_indx=expt_indx, n_rows=n_rows)
+    return legacy_routing_from_bitmatrix(sparse_logits.mask, sparse_logits.vals, sparse_logits.indx, logits.shape[-1],
+                                         n_expts_act)
 
 
 @dataclass
@@ -247,7 +261,7 @@ def routing_torch(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows
     gather_indx = GatherIndx(src_indx=topk_indx.int(), dst_indx=gate_indx.int())
     scatter_indx = ScatterIndx(src_indx=gate_indx.int(), dst_indx=topk_indx.int())
     n_gates = mask.sum().item()
-    expt_data = compute_expt_data_torch(hist, chunk_size, n_gates)
+    expt_data = make_ragged_tensor_metadata(hist, n_gates)
 
     return (
         x,
@@ -335,7 +349,9 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     if sm_first:
         logits = torch.softmax(logits, dim=-1)
 
-    expt_scal, expt_indx, _ = topk(logits, n_expts_act, apply_softmax=not sm_first, y_indx=expt_indx, n_rows=n_rows)
+    sparse_logits = topk(logits, n_expts_act, apply_softmax=not sm_first, y_indx=expt_indx, n_rows=n_rows)
+    expt_scal = sparse_logits.vals
+    expt_indx = sparse_logits.indx
     expt_indx = expt_indx.int()
 
     chunk_size = n_expts_tot // EP
@@ -367,10 +383,10 @@ def routing_triton(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_row
     )
     bitmatrix_shape = [n_rows, triton.cdiv(chunk_size, BLOCK_SIZE_K) * 32]
     bitmatrix_shape_max = [n_rows, None]
-    bitmatrix = Bitmatrix(bitmatrix, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max, scratchpad=None)
+    bitmatrix = Bitmatrix(bitmatrix, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
     expt_scal, expt_indx, bitmatrix = prune_routing(expt_scal, expt_indx, bitmatrix, n_expts_tot, EP)
-    routing_data, gather_indx, scatter_indx = routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx, n_expts_tot // EP,
-                                                                     n_expts_act)
+    routing_data, gather_indx, scatter_indx = legacy_routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx,
+                                                                            n_expts_tot // EP, n_expts_act)
 
     return (
         x,
@@ -392,7 +408,7 @@ def routing(x, logits, n_expts_act, sm_first=False, expt_indx=None, n_rows=None,
         else:
             raise ValueError(f"Unknown backend: {backend}")
     else:
-        return x, *triton_kernels.routing.routing(logits, n_expts_act, sm_first, expt_indx, n_rows), None
+        return x, *legacy_routing(logits, n_expts_act, sm_first, expt_indx, n_rows), None
 
 
 # The following dummy methods simulate the behavior of distributed operations
@@ -669,7 +685,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
         xg = x.to(wg.dtype if n_expts_tot > 1 else x.dtype)
         if n_expts_tot > 1:
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            rdata, gi, si = triton_kernels.routing.routing(logits, n_expts_act)
+            rdata, gi, si = legacy_routing(logits, n_expts_act)
         else:
             rdata = gi = si = None
         x = matmul_ogs(x, w1_full, b1_full, rdata, gather_indx=gi, precision_config=pc1_full, fused_activation=act)

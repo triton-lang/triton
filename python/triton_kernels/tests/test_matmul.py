@@ -6,15 +6,15 @@ import pytest
 import torch
 from typing import Union
 import triton
-# routing utilities
-from triton_kernels.routing import routing
 # matmul utilities
 import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
-from triton_kernels.matmul_ogs import FlexCtx, InnerRoutingData, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
+from triton_kernels.matmul_ogs import FlexCtx, RoutingData, InnerRoutingData, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
+from triton_kernels.matmul_ogs import GatherIndx, ScatterIndx
 from triton_kernels.matmul_ogs import matmul_ogs_set_idle_sms, matmul_ogs, matmul_ogs_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
-from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4
+from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
 from triton_kernels.tensor_details import layout
+from triton_kernels.topk import topk
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp, quantize_mxfp8_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE
@@ -39,18 +39,15 @@ def alloc_rand_like(x):
     return alloc_rand(x.shape, x.device, x.dtype, x.requires_grad)
 
 
-def mask_indx(idx, n_expts_act):
-    idx.src_indx[idx.dst_indx[-n_expts_act:]] = -1
-    idx.dst_indx[-n_expts_act:] = -1
-    return idx
-
-
 def init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter, device="cuda"):
     logits = torch.randn((m, n_expts_tot), dtype=torch.float16, device=device, requires_grad=True)
-    routing_data, gather_idx, scatter_idx = routing(logits, n_expts_act)
-    routing_data.gate_scal = None
-    gather_idx = gather_idx if do_gather else None
-    scatter_idx = scatter_idx if do_scatter else None
+    sparse_logits = topk(logits, n_expts_act)
+    dispatch_indx = sparse_logits.mask_metadata.col_sorted_indx
+    combine_indx = sparse_logits.mask_metadata.row_sorted_indx
+    ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
+    routing_data = RoutingData(None, ragged_batch_metadata.batch_sizes, n_expts_tot, n_expts_act, ragged_batch_metadata)
+    gather_idx = GatherIndx(combine_indx, dispatch_indx) if do_gather else None
+    scatter_idx =  ScatterIndx(dispatch_indx, combine_indx) if do_scatter else None
     return m, routing_data, gather_idx, scatter_idx
 
 
