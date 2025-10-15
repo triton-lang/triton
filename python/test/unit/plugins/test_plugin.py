@@ -8,17 +8,21 @@ import triton.language as tl
 from triton._C.libtriton import ir, passes
 from triton import knobs
 
+
 @pytest.mark.parametrize(None, [None])
 @triton.jit
 def kernel1(BLOCK_SIZE: tl.constexpr):
     return
+
 
 @pytest.mark.parametrize(None, [None])
 @triton.jit
 def kernel2(BLOCK_SIZE: tl.constexpr):
     return
 
+
 def inspect_stages_hook(self, stages, options, language, capability):
+
     def make_ttir_wrapper(mod, metadata, opt, capability):
         mod = self.make_ttir(mod, metadata, opt, capability)
         pm = ir.pass_manager(mod.context)
@@ -26,7 +30,9 @@ def inspect_stages_hook(self, stages, options, language, capability):
         passes.plugin.add_plugin(pm)
         pm.run(mod, 'make_ttir_plugin')
         return mod
+
     stages["ttir"] = lambda src, metadata: make_ttir_wrapper(src, metadata, options, capability)
+
 
 def test_op(capfd, device: str):
     if os.environ.get('LLVM_BUILD_SHARED_LIBS', '0') == '0':
