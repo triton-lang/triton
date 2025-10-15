@@ -43,7 +43,9 @@ test-unit: all
 	$(PYTEST) --tb=short -vs python/examples/gluon/01-attention-forward.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
-	$(PYTEST) --tb=short -s -n $(NUM_PROCS) python/test/gluon
+	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 TRITON_PASS_PLUGIN_PATH=python/triton/plugins/libTritonPluginsTestLib.so \
+		$(PYTEST) -vvv python/test/unit/plugins/test_plugin.py
+	$(PYTEST) -s -n $(NUM_PROCS) python/test/gluon
 
 .PHONY: test-distributed
 test-distributed: all
