@@ -104,7 +104,7 @@ def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int
 def _convert_launch_metadata(grid, kernel, args):
     src = args["src_ptr"]
     src_rank = args["SRC_RANK"]
-    src_row_start = args["src_row_start"]
+    src_row_start = args["n_tokens_local"] * src_rank
     expt_filter = args["expt_filter_ptr"]
     expt_indx = args["expt_indx_ptr"].int()
     elem_bytes = src.element_size()
@@ -131,14 +131,14 @@ def _convert_dp_to_ep(
     expt_filter_ptr, expt_filter_stride_m, # expt map
     expt_indx_ptr, expt_indx_stride_m, # expt indx
     dst_row_indx_ptr, dst_row_indx_stride_m, # gate indx
-    src_row_start,
+    n_tokens_local,
     SRC_RANK: tl.constexpr,
     N_EXPT_ACT: tl.constexpr,
     N_RANKS: tl.constexpr,
     BLOCK: tl.constexpr
 ):
     pid_m = tl.program_id(0)
-    off_m_global = pid_m + src_row_start
+    off_m_global = pid_m + n_tokens_local * SRC_RANK
     off_m_local = pid_m
     offs_r = tl.arange(0, N_RANKS)
     offs_e = tl.arange(0, N_EXPT_ACT)
@@ -194,7 +194,7 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
         expt_bitmask, expt_bitmask.stride(0),
         expt_indx, expt_indx.stride(0),
         gate_indx, n_expt_act,
-        rank * n_tokens_local,
+        n_tokens_local,
         SRC_RANK=rank,
         N_EXPT_ACT=n_expt_act,
         N_RANKS=n_ranks,
