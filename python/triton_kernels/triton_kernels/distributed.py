@@ -101,7 +101,7 @@ def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int
 # ------------------------------------------------------------
 
 
-def _convert_dp_to_ep_launch_metadata(grid, kernel, args):
+def _convert_launch_metadata(grid, kernel, args):
     src = args["src_ptr"]
     src_rank = args["SRC_RANK"]
     src_row_start = args["src_row_start"]
@@ -124,7 +124,7 @@ def _convert_dp_to_ep_launch_metadata(grid, kernel, args):
     }
 
 
-@triton.jit(launch_metadata=_convert_dp_to_ep_launch_metadata)
+@triton.jit(launch_metadata=_convert_launch_metadata)
 def _convert_dp_to_ep(
     peer_dst_ptrs, dst_stride_m, # dst tensors
     src_ptr, src_stride_m, src_shape_n,  # src tensor
@@ -206,15 +206,16 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
 
 # ------------------------------------------------------------
 
-@triton.jit
+@triton.jit(launch_metadata=_convert_launch_metadata)
 def _convert_ep_to_dp(
     peer_dst_ptrs, dst_stride_m, # dst tensors
     src_ptr, src_stride_m, src_shape_n, # src tensor
-    expt_filter_ptr, expt_filter_stride_m, # expt map
-    expt_indx_ptr, expt_indx_stride_m, # expt indx
+    expt_filter_ptr, # expt map
+    expt_indx_ptr,  # expt indx
     dst_row_indx_ptr, # topk indx
     n_tokens_local,
     BLOCK: tl.constexpr,
+    SRC_RANK: tl.constexpr,
     N_RANKS: tl.constexpr
 ):
     # token offset
@@ -262,11 +263,11 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
     _convert_ep_to_dp[grid](
         tuple(peer_bufs), dst_local.stride(0),
         src, src.stride(0), src.shape[1],
-        expt_bitmask[rank, :], expt_bitmask.stride(0),
-        expt_indx, expt_indx.stride(0),
+        expt_bitmask[rank, :], expt_indx,
         topk_indx,
         n_tokens_local,
         BLOCK=BLOCK,
+        SRC_RANK=rank,
         N_RANKS=n_ranks,
     )
     hdl.barrier(channel=0)
@@ -322,6 +323,7 @@ def _compact_block_id_map(block_pid_map, expt_map_ptr, expt_filter_ptr, n_blocks
     ], 0xFFFF0000, dtype=tl.uint32)
     new_block_id = ((block_id & pid_mask) | new_expt_id).to(tl.int32, bitcast=True)
     return new_block_id, conds
+
 
 @triton.jit
 def _filter_expt_data(expt_hist_out, expt_hist_inp, token_offs_raw_out, token_offs_raw_inp, token_offs_pad_out,
