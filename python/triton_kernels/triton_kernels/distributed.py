@@ -116,6 +116,12 @@ def _convert_launch_metadata(grid, kernel, args):
     dst_input_tokens = torch.sum(expt_filter[src_rank][(expt_indx // 32)] >> (expt_indx % 32) == 1).item() - dst_local_tokens
     # Calculate the number of bytes transferred out from this GPU
     dram_bytes = src_bytes + dst_local_tokens * src.shape[1] * elem_bytes
+    if "dp_to_ep" in kernel.name:
+        dram_bytes += dst_input_tokens * src.shape[1] * elem_bytes
+    elif "ep_to_dp" in kernel.name:
+        dram_bytes += dst_output_tokens * src.shape[1] * elem_bytes
+    else:
+        raise ValueError(f"unknown kernel name {kernel.name}")
     nvlink_bytes = (dst_output_tokens + dst_input_tokens) * src.shape[1] * elem_bytes
     return {
         "name": f"{kernel.name} [tokens={src.shape[0]}, d_model={src.shape[1]}]",
