@@ -104,27 +104,29 @@ def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int
 def _convert_launch_metadata(grid, kernel, args):
     src = args["src_ptr"]
     src_rank = args["SRC_RANK"]
-    src_row_start = args["n_tokens_local"] * src_rank
+    n_tokens_local = args["n_tokens_local"]
+    src_row_start = n_tokens_local * src_rank
     expt_filter = args["expt_filter_ptr"]
     expt_indx = args["expt_indx_ptr"].int()
+    d_model = src.shape[1]
     elem_bytes = src.element_size()
     src_bytes = src.numel() * elem_bytes
     # Find out number of tokens being dispatched out from this GPU
-    local_expt_indx = expt_indx[src_row_start:src_row_start+src.shape[0]]
+    local_expt_indx = expt_indx[src_row_start:src_row_start+n_tokens_local]
     dst_local_tokens = torch.sum((expt_filter[src_rank][(local_expt_indx // 32)] >> (local_expt_indx % 32)) & 1 == 1).item()
     dst_output_tokens = torch.sum((expt_filter[src_rank][(local_expt_indx // 32)] >> (local_expt_indx % 32)) & 1 == 0).item()
     dst_input_tokens = torch.sum((expt_filter[src_rank][(expt_indx // 32)] >> (expt_indx % 32)) & 1 == 1).item() - dst_local_tokens
     # Calculate the number of bytes transferred out from this GPU
-    dram_bytes = src_bytes + dst_local_tokens * src.shape[1] * elem_bytes
+    dram_bytes = src_bytes + dst_local_tokens * d_model * elem_bytes
     if "dp_to_ep" in kernel.name:
-        dram_bytes += dst_input_tokens * src.shape[1] * elem_bytes
+        dram_bytes += dst_input_tokens * d_model * elem_bytes
     elif "ep_to_dp" in kernel.name:
-        dram_bytes += dst_output_tokens * src.shape[1] * elem_bytes
+        dram_bytes += dst_output_tokens * d_model * elem_bytes
     else:
         raise ValueError(f"unknown kernel name {kernel.name}")
-    nvlink_bytes = (dst_output_tokens + dst_input_tokens) * src.shape[1] * elem_bytes
+    nvlink_bytes = (dst_output_tokens + dst_input_tokens) * d_model * elem_bytes
     return {
-        "name": f"{kernel.name} [tokens={src.shape[0]}, d_model={src.shape[1]}]",
+        "name": f"{kernel.name} [tokens={n_tokens_local}, d_model={d_model}]",
         "bytes": dram_bytes,
         "nvlink_bytes": nvlink_bytes,
     }
