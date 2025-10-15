@@ -210,7 +210,7 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
 def _convert_ep_to_dp(
     peer_dst_ptrs, dst_stride_m, # dst tensors
     src_ptr, src_stride_m, src_shape_n, # src tensor
-    expt_filter_ptr, # expt map
+    expt_filter_ptr, expt_filter_stride_m, # expt map
     expt_indx_ptr,  # expt indx
     dst_row_indx_ptr, # topk indx
     n_tokens_local,
@@ -230,6 +230,7 @@ def _convert_ep_to_dp(
     dst_ptr = tl.multiple_of(dst_ptr.to(src_ptr.dtype), 16)
     # input / output pointers
     dst_expt_indx = tl.load(expt_indx_ptr + dst_indx_global)
+    expt_filter_ptr = expt_filter_ptr + SRC_RANK * expt_filter_stride_m
     has_dst_expt = (tl.load(expt_filter_ptr + dst_expt_indx // 32) >> (dst_expt_indx % 32)) & 1
     if not has_dst_expt.to(tl.int1):
         return
@@ -263,7 +264,8 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
     _convert_ep_to_dp[grid](
         tuple(peer_bufs), dst_local.stride(0),
         src, src.stride(0), src.shape[1],
-        expt_bitmask[rank, :], expt_indx,
+        expt_bitmask, expt_bitmask.stride(0),
+        expt_indx,
         topk_indx,
         n_tokens_local,
         BLOCK=BLOCK,
