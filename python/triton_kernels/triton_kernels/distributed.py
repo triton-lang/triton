@@ -106,7 +106,7 @@ def _convert_launch_metadata(grid, kernel, args):
     src_rank = args["SRC_RANK"]
     src_row_start = args["src_row_start"]
     expt_filter = args["expt_filter_ptr"]
-    expt_indx = args["expt_indx_ptr"]
+    expt_indx = args["expt_indx_ptr"].int()
     elem_bytes = src.element_size()
     src_bytes = src.numel() * elem_bytes
     # Find out number of tokens being dispatched out from this GPU
