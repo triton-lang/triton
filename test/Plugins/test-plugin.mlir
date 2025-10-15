@@ -1,4 +1,3 @@
-// RUN: env TRITON_PASS_PLUGIN_PATH=%shlibdir/../plugins/libTritonPluginsTestLib.so
 // RUN: TRITON_PASS_PLUGIN_PATH=%shlibdir/../plugins/libTritonPluginsTestLib.so triton-opt -tritongpu-plugin %s
 
 // REQUIRES: shared-libs
