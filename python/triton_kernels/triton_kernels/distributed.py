@@ -224,9 +224,9 @@ def _convert_ep_to_dp(
     dst_rank = dst_indx_global // n_tokens_local
     dst_ptr = tl.zeros((1,), dtype=tl.int64).item()
     for i in tl.static_range(N_RANKS):
-        if dst_rank.to(tl.int64) == i:
-            dst_ptr = peer_dst_ptrs[i]
-    dst_ptr = tl.multiple_of(dst_ptr, 16)
+        if dst_rank == i:
+            dst_ptr = peer_dst_ptrs[i].to(tl.int64, bitcast=True)
+    dst_ptr = tl.multiple_of(dst_ptr.to(src_ptr.dtype), 16)
     # input / output pointers
     dst_expt_indx = tl.load(expt_indx_ptr + dst_indx_global)
     has_dst_expt = (tl.load(expt_filter_ptr + dst_expt_indx // 32) >> (dst_expt_indx % 32)) & 1
