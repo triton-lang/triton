@@ -394,9 +394,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStart() {
     // Continuous PC sampling is not compatible with concurrent kernel profiling
     cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_KERNEL);
   } else {
-    //cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
-    // Hack
-    cupti::activityEnableHWTrace<true>(/*enable=*/1);
+    cupti::activityEnable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
   }
   cupti::activityRegisterCallbacks<true>(allocBuffer, completeBuffer);
   setGraphCallbacks(subscriber, /*enable=*/true);
@@ -444,9 +442,7 @@ void CuptiProfiler::CuptiProfilerPimpl::doStop() {
     setResourceCallbacks(subscriber, /*enable=*/false);
     cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_KERNEL);
   } else {
-    //cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
-    // Hack
-    cupti::activityEnableHWTrace<true>(/*enable=*/0);
+    cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL);
   }
   setGraphCallbacks(subscriber, /*enable=*/false);
   setRuntimeCallbacks(subscriber, /*enable=*/false);
