@@ -7,7 +7,7 @@ from ..cdna3 import *  # NOQA: F403
 from ..cdna3 import __all__ as __cdna3_all
 from . import async_copy
 
-__all__ = [*__cdna3_all, "async_copy", "mfma_scaled"]
+__all__ = [*__cdna3_all, "async_copy", "mfma_scaled", "split_warp_pipeline"]
 
 
 @builtin
@@ -107,5 +107,5 @@ def buffer_atomic_xchg(ptr, offsets, value, mask=None, sem=None, scope=None, _se
                                    _semantic=_semantic)
 
 @builtin
-def split_warp_pipeline(_semantic: GluonSemantic = None):
+def split_warp_pipeline(_semantic=None):
     return _semantic.builder.create_warp_pipeline_border()

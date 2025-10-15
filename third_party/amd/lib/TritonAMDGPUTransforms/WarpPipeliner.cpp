@@ -949,17 +949,21 @@ LogicalResult Pipeliner::createPipeline(OpBuilder &builder, Location loc) {
 }
 
 void Pipeliner::getDotPingponged() {
-
+/*
   if (numStages <= 1) {
     LDBG("Pingpong pass expect a loop transformed by pipeliner that prefetches "
          "memory and reduces dependencies among the operations in the same "
          "iteration.");
     return;
   }
-
+*/
   OpBuilder builder(forOp);
   MLIRContext *ctx = forOp.getContext();
   Location loc = forOp.getLoc();
+
+  if(createPipeline(builder, loc).failed())
+    LDBG("Failed warp-pipelining");
+  return;
 
   forOp->walk([&](Operation *op) {
     llvm::TypeSwitch<Operation *>(op)
