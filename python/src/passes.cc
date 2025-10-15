@@ -166,7 +166,6 @@ void init_plugin_passes(py::module &&m) {
       createPluginPass(&pm, passName);
     });
   }
-
 }
 
 void init_triton_passes_convert(py::module &&m) {
