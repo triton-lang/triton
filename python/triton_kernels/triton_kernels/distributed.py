@@ -214,14 +214,18 @@ def _convert_ep_to_dp(
     expt_indx_ptr, expt_indx_stride_m, # expt indx
     dst_row_indx_ptr, # topk indx
     n_tokens_local,
-    BLOCK: tl.constexpr
+    BLOCK: tl.constexpr,
+    N_RANKS: tl.constexpr
 ):
     # token offset
     pid_m = tl.program_id(0)
     # destination base pointer
     dst_indx_global = tl.load(dst_row_indx_ptr + pid_m)
     dst_rank = dst_indx_global // n_tokens_local
-    dst_ptr = peer_dst_ptrs[dst_rank]
+    dst_ptr = 0
+    for i in tl.static_range(N_RANKS):
+        if dst_rank == i:
+            dst_ptr = peer_dst_ptrs[i]
     dst_ptr = tl.multiple_of(dst_ptr, 16)
     # input / output pointers
     dst_expt_indx = tl.load(expt_indx_ptr + dst_indx_global)
@@ -263,6 +267,7 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
         topk_indx,
         n_tokens_local,
         BLOCK=BLOCK,
+        N_RANKS=n_ranks,
     )
     hdl.barrier(channel=0)
     return dst_local
