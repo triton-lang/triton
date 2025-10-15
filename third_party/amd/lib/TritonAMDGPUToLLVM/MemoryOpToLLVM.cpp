@@ -37,41 +37,21 @@ public:
     auto typeConverter = this->getTypeConverter();
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     unsigned bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    // lanes are divided in 4 groups that participate together in the shuffle
-    unsigned numLanesInShuffleGroup = targetInfo.getWarpSize() / 4;
-    unsigned instBitWidth = 64;
-    unsigned needContigReg = instBitWidth / bitwidth;
-
-    if (!canUseTransLoad(op, srcTy, dstTy, bitwidth)) {
-      return failure();
-    }
-
-    return lowerSharedToDotOperandTransLL(op, needContigReg, instBitWidth,
-                                          numLanesInShuffleGroup, adaptor,
-                                          typeConverter, rewriter);
-  }
-
-private:
-  bool canUseTransLoad(Operation *localLoad, MemDescType srcTy,
-                       RankedTensorType dstTy, unsigned bitwidth) const {
-    if (!targetInfo.canUseLDSTransLoad(bitwidth)) {
-      return false;
-    }
 
     // FP4 is represented as i8 and, when packed along K, can be
     // transposed using ds_read_tr8 which doesn't change packing.
     if (bitwidth != 16 && bitwidth != 8) {
-      return false;
+      return failure();
     }
 
-    return true;
+    return lowerSharedToDotOperandTransLL(op, adaptor, typeConverter, rewriter);
   }
 
-  LogicalResult lowerSharedToDotOperandTransLL(
-      LocalLoadOpType op, unsigned needContigReg, unsigned instBitWidth,
-      unsigned numLanesInShuffleGroup, OpAdaptor adaptor,
-      const LLVMTypeConverter *typeConverter,
-      ConversionPatternRewriter &rewriter) const {
+private:
+  LogicalResult
+  lowerSharedToDotOperandTransLL(LocalLoadOpType op, OpAdaptor adaptor,
+                                 const LLVMTypeConverter *typeConverter,
+                                 ConversionPatternRewriter &rewriter) const {
     auto ctx = rewriter.getContext();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -103,11 +83,15 @@ private:
     };
 
     auto shape = srcTy.getShape();
+    auto ldsTransLoadParams = targetInfo.queryLDSTransLoadParams(bitwidth);
+    if (!ldsTransLoadParams)
+      return failure();
     // FP4 are packed into i8 so the real bitwidth is different
     auto llBitwidth = isPackedLoad ? 4 : llvmElemTy.getIntOrFloatBitWidth();
     auto ldsTransLayout = triton::gpu::chooseDsReadTrLayout(
-        dstTy.getEncoding(), shape, llBitwidth, instBitWidth,
-        numLanesInShuffleGroup);
+        dstTy.getEncoding(), shape, llBitwidth,
+        ldsTransLoadParams->instBitWidth,
+        ldsTransLoadParams->numLanesInShuffleGroup);
 
     // Check that we have computed a layout
     if (!ldsTransLayout) {
@@ -127,13 +111,13 @@ private:
     }
     // Check that we will be able to vectorize the load.
     // Need to have exactly needContigReg, otherwise we can't use ds_read_tr
-    auto [elemsPerVec, permutation] =
-        largestVectorisation(ctx, cvt, bitwidth, needContigReg);
+    auto [elemsPerVec, permutation] = largestVectorisation(
+        ctx, cvt, bitwidth, ldsTransLoadParams->needContigReg);
 
     if (paddedEnc)
       elemsPerVec = std::min<int>(elemsPerVec, paddedEnc.getMinInterval());
 
-    if (elemsPerVec != needContigReg)
+    if (elemsPerVec != ldsTransLoadParams->needContigReg)
       return failure();
 
     cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
@@ -170,7 +154,7 @@ private:
         loc, rewriter.getContext(), cvt, {}, // Input for store, output for load
         llvmElemTy, smemObj.getBase(), calcPaddedOffset, affineOffset,
         maskSpanAffineOffset, laneId, warpId, rewriter, targetInfo,
-        needContigReg, lowerInst);
+        ldsTransLoadParams->needContigReg, lowerInst);
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, retTy);
     rewriter.replaceOp(op, result);
     return success();

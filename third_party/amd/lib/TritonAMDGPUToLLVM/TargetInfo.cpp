@@ -109,9 +109,17 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
-bool TargetInfo::canUseLDSTransLoad(int bitwidth) const {
-  return getISAFamily() == ISAFamily::CDNA4 &&
-         llvm::is_contained({16, 8, 4, 6}, bitwidth);
+std::optional<TargetInfo::LDSTransLoadParams>
+TargetInfo::queryLDSTransLoadParams(int bitwidth) const {
+  bool canUseTransLoad = getISAFamily() == ISAFamily::CDNA4 &&
+                         llvm::is_contained({16, 8, 4, 6}, bitwidth);
+  if (!canUseTransLoad)
+    return std::nullopt;
+  unsigned numLanesInShuffleGroup = getWarpSize() / 4;
+  unsigned instBitWidth = 64;
+  unsigned needContigReg = instBitWidth / bitwidth;
+  return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth,
+                            needContigReg};
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,

@@ -37,6 +37,18 @@ public:
                     Operation *localLoadOp = nullptr) const override;
   bool canUseLDSTransLoad(int bitwidth) const;
 
+  // Describes the the parameters of ds_read_tr for a particular data type
+  struct LDSTransLoadParams {
+    // Number of lanes that cooperate in the instruction
+    unsigned numLanesInShuffleGroup;
+    // Number of bits that each lane reads
+    unsigned instBitWidth;
+    // Number of elements that the instruction needs to be contiguous in LDS
+    unsigned needContigReg;
+  };
+
+  std::optional<LDSTransLoadParams> queryLDSTransLoadParams(int bitwidth) const;
+
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
   Value shuffleUp(RewriterBase &rewriter, Location loc, Value val,
