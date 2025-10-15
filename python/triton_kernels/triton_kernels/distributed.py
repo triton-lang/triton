@@ -222,7 +222,7 @@ def _convert_ep_to_dp(
     # destination base pointer
     dst_indx_global = tl.load(dst_row_indx_ptr + pid_m)
     dst_rank = dst_indx_global // n_tokens_local
-    dst_ptr = tl.zeros((1,), dtype=tl.int64)
+    dst_ptr = tl.zeros((1,), dtype=tl.int64).item()
     for i in tl.static_range(N_RANKS):
         if dst_rank.to(tl.int64) == i:
             dst_ptr = peer_dst_ptrs[i]
