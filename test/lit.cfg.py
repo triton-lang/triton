@@ -50,7 +50,8 @@ config.filecheck_dir = os.path.join(config.triton_obj_root, 'bin', 'FileCheck')
 # it can be explicitly opted-in by prefixing the variable name with $
 config.environment["FILECHECK_OPTS"] = "--enable-var-scope"
 
-config.environment['TRITON_PASS_PLUGIN_PATH'] = '/home/runner/_work/triton/triton/python/triton/plugins/libTritonPluginsTestLib.so'
+config.environment[
+    'TRITON_PASS_PLUGIN_PATH'] = '/home/runner/_work/triton/triton/python/triton/plugins/libTritonPluginsTestLib.so'
 
 tool_dirs = [config.triton_tools_dir, config.llvm_tools_dir, config.filecheck_dir]
 
