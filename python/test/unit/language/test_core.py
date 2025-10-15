@@ -3209,6 +3209,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if is_interpreter():
         if in_dtype == 'bfloat16':
             pytest.skip("bfloat16 is not supported in the interpreter")
+        if input_precision == "bf16x3" or input_precision == "bf16x6":
+            pytest.skip(f"{input_precision} not currently supported on CUDA")
     else:
         if not is_hip() and K < 16:
             pytest.skip("small dots are supported only on HIP at the moment")
@@ -3428,6 +3430,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if in_dtype == 'float32' and input_precision != "ieee":
         if is_tcgen5:
             assert re.search(r'tcgen05.mma.cta_group::1.kind::tf32', ptx)
+        elif input_precision in ("bf16x3", "bf16x6"):
+            assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.bf16.bf16', ptx)
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k8(?:.row.col)?.f32.tf32.tf32', ptx)
     elif in_dtype == 'float16' and out_dtype == tl.float32:
