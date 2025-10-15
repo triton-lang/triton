@@ -111,7 +111,6 @@ jobs:
         -DLLVM_ENABLE_PROJECTS="mlir;lld"
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
-        -DBUILD_SHARED_LIBS=ON
         -DLLVM_ENABLE_TERMINFO=OFF
         -DLLVM_ENABLE_ZSTD=OFF
         llvm-project/llvm
@@ -188,7 +187,6 @@ jobs:
         -DLLVM_INSTALL_UTILS=ON \
         -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}" \
         -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU" \
-        -DBUILD_SHARED_LIBS=ON \
         -DCMAKE_CROSSCOMPILING=True \
         -DLLVM_TARGET_ARCH=AArch64 \
         -DLLVM_DEFAULT_TARGET_TRIPLE=aarch64-linux-gnu \
