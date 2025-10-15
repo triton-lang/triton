@@ -24,13 +24,12 @@
 #ifndef TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
 #define TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
 
-#include <cstring>
-
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
+#include "llvm/Support/ErrorHandling.h"
 
 // TritonNvidiaGPU depends on Triton
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -64,38 +63,37 @@ struct TMemAllocation {
 };
 
 // Used to describe the layout of the TMEM load/store instructions
-struct TMemAccessAtom {
-  int elementsPerThread;
-  const char *opShape;
+enum class TMemAccessAtom { I32x32b, I16x64b, I16x128b, I16x256b, I16x32bx2 };
 
-  bool operator==(const TMemAccessAtom &o) const noexcept {
-    if (elementsPerThread != o.elementsPerThread)
-      return false;
-    if (opShape == o.opShape)
-      return true;
-    if (!opShape || !o.opShape)
-      return false;
-    return std::strcmp(opShape, o.opShape) == 0;
+inline int getElementsPerThread(TMemAccessAtom atom) {
+  switch (atom) {
+  case TMemAccessAtom::I32x32b:
+  case TMemAccessAtom::I16x64b:
+  case TMemAccessAtom::I16x32bx2:
+    return 1;
+  case TMemAccessAtom::I16x128b:
+    return 2;
+  case TMemAccessAtom::I16x256b:
+    return 4;
   }
-  bool operator!=(const TMemAccessAtom &o) const noexcept {
-    return !(*this == o);
+  llvm_unreachable("Unknown TMemAccessAtom");
+}
+
+inline const char *getOpShape(TMemAccessAtom atom) {
+  switch (atom) {
+  case TMemAccessAtom::I32x32b:
+    return "32x32b";
+  case TMemAccessAtom::I16x64b:
+    return "16x64b";
+  case TMemAccessAtom::I16x128b:
+    return "16x128b";
+  case TMemAccessAtom::I16x256b:
+    return "16x256b";
+  case TMemAccessAtom::I16x32bx2:
+    return "16x32bx2";
   }
-};
-
-constexpr TMemAccessAtom TMemAccess32x32b{1 /*elementsPerThread*/,
-                                          "32x32b" /*opShape*/};
-
-constexpr TMemAccessAtom TMemAccess16x64b{1 /*elementsPerThread*/,
-                                          "16x64b" /*opShape*/};
-
-constexpr TMemAccessAtom TMemAccess16x128b{2 /*elementsPerThread*/,
-                                           "16x128b" /*opShape*/};
-
-constexpr TMemAccessAtom TMemAccess16x256b{4 /*elementsPerThread*/,
-                                           "16x256b" /*opShape*/};
-
-constexpr TMemAccessAtom TMemAccess16x32bx2{1 /*elementsPerThread*/,
-                                            "16x32bx2" /*opShape*/};
+  llvm_unreachable("Unknown TMemAccessAtom");
+}
 
 LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
                            bool unpacked);
@@ -123,8 +121,8 @@ getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps,
                             gpu::CTALayoutAttr ctaLayout);
 
 std::optional<LinearLayout>
-getDistributedLayoutForTmemLdSt(gpu::MemDescType memType,
-                                const TMemAccessAtom &atom, unsigned numWarps,
+getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
+                                unsigned numWarps,
                                 gpu::CTALayoutAttr ctaLayout);
 
 } // namespace mlir::triton::nvidia_gpu

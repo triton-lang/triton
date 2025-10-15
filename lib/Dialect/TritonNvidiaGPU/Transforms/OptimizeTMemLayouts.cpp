@@ -280,7 +280,7 @@ public:
         ttg::getCTALayout(tmemStoreOp.getSrc().getType().getEncoding());
     std::optional<LinearLayout> ll =
         nvidia_gpu::getDistributedLayoutForTmemLdSt(
-            tmemStoreOp.getDst().getType(), TMemAccess16x256b, numWarps,
+            tmemStoreOp.getDst().getType(), TMemAccessAtom::I16x256b, numWarps,
             ctaLayout);
     if (!ll)
       return failure();
@@ -350,7 +350,7 @@ public:
     auto memType = cast<gpu::MemDescType>(tmemLoadOp.getSrc().getType());
     // Compute the alternative layout.
     auto ll = nvidia_gpu::getDistributedLayoutForTmemLdSt(
-        memType, TMemAccess16x256b, numWarps, ctaLayout);
+        memType, TMemAccessAtom::I16x256b, numWarps, ctaLayout);
     if (!ll)
       return failure();
     Attribute newEncoding =

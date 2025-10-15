@@ -159,14 +159,14 @@ SmallVector<Value> unpack(ArrayRef<Value> packedValues, Type outType,
 void createTensorMemoryStore(Location loc, Value address, int colOffset,
                              SmallVector<Value> &srcs,
                              std::optional<int> secondHalfOffset, Value pred,
-                             bool unpacked, const TMemAccessAtom &atom,
+                             bool unpacked, TMemAccessAtom atom,
                              ConversionPatternRewriter &rewriter) {
   PTXBuilder ptxBuilder;
   std::string packedStr = unpacked ? ".unpack::16b" : "";
-  unsigned numRepeats = srcs.size() / atom.elementsPerThread;
-  std::string opcode = "@$0 tcgen05.st.sync.aligned." +
-                       std::string(atom.opShape) + ".x" +
-                       std::to_string(numRepeats) + packedStr;
+  unsigned numRepeats = srcs.size() / getElementsPerThread(atom);
+  std::string opcode = "@$0 tcgen05.st.sync.aligned.";
+  opcode += getOpShape(atom);
+  opcode += ".x" + std::to_string(numRepeats) + packedStr;
   opcode += ".b32 [$1 + " + std::to_string(colOffset) + "], ";
   if (secondHalfOffset)
     opcode += std::to_string(*secondHalfOffset) + ", {";
@@ -194,14 +194,15 @@ void createTensorMemoryStore(Location loc, Value address, int colOffset,
 Value createTensorMemoryLoad(Location loc, MLIRContext *ctx, Value address,
                              int colOffset, std::optional<int> secondHalfOffset,
                              bool unpacked, int numRegPerMessage,
-                             const TMemAccessAtom &atom,
+                             TMemAccessAtom atom,
                              ConversionPatternRewriter &rewriter) {
   PTXBuilder ptxBuilder;
   // If the memory is unpacked we need to pack on the fly when loading.
   std::string packedStr = unpacked ? ".pack::16b" : "";
-  unsigned numRepeats = numRegPerMessage / atom.elementsPerThread;
-  std::string opcode = "tcgen05.ld.sync.aligned." + std::string(atom.opShape) +
-                       ".x" + std::to_string(numRepeats) + packedStr + ".b32 {";
+  unsigned numRepeats = numRegPerMessage / getElementsPerThread(atom);
+  std::string opcode = "tcgen05.ld.sync.aligned.";
+  opcode += getOpShape(atom);
+  opcode += ".x" + std::to_string(numRepeats) + packedStr + ".b32 {";
 
   SmallVector<PTXInstr::Operand *> operands;
   for (int i = 0; i < numRegPerMessage; i++) {

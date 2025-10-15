@@ -103,20 +103,20 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
   if (unpacked) {
     tile *= LinearLayout::zeros1D(1, kReg, kCol, 2);
   }
-  if (atom.opShape == std::string("32x32b")) {
+  if (atom == TMemAccessAtom::I32x32b) {
     tile *= LinearLayout::identity1D(32, kLane, kRow);
-  } else if (atom.opShape == std::string("16x32bx2")) {
+  } else if (atom == TMemAccessAtom::I16x32bx2) {
     tile *= LinearLayout::identity1D(16, kLane, kRow);
-  } else if (atom.opShape == std::string("16x64b")) {
+  } else if (atom == TMemAccessAtom::I16x64b) {
     LinearLayout::BasesT bases;
     bases[kLane] = std::vector<std::vector<int32_t>>{
         {8, 0}, {0, 1}, {1, 0}, {2, 0}, {4, 0}};
     tile *= LinearLayout(bases, {kRow, kCol});
-  } else if (atom.opShape == std::string("16x128b")) {
+  } else if (atom == TMemAccessAtom::I16x128b) {
     tile *= LinearLayout::identity1D(4, kLane, kCol) *
             LinearLayout::identity1D(8, kLane, kRow) *
             LinearLayout::identity1D(2, kReg, kRow);
-  } else if (atom.opShape == std::string("16x256b")) {
+  } else if (atom == TMemAccessAtom::I16x256b) {
     tile *= LinearLayout::identity1D(2, kReg, kCol) *
             LinearLayout::identity1D(4, kLane, kCol) *
             LinearLayout::identity1D(8, kLane, kRow) *
@@ -231,7 +231,7 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
   auto kWarp = StringAttr::get(ctx, "warp");
-  bool instr32Rows = atom == TMemAccess32x32b;
+  bool instr32Rows = atom == TMemAccessAtom::I32x32b;
   bool layout16Rows =
       ll.getBasis(rowColDims[0], llvm::Log2_32(16)) == ArrayRef{0, 0};
   // If we need to fit something (the instruciton does not cover it
@@ -290,14 +290,14 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
 }
 
 std::optional<LinearLayout>
-getDistributedLayoutForTmemLdSt(gpu::MemDescType memType,
-                                const TMemAccessAtom &atom, unsigned numWarps,
+getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
+                                unsigned numWarps,
                                 gpu::CTALayoutAttr ctaLayout) {
   assert(memType.getMemorySpace() ==
          TensorMemorySpaceAttr::get(memType.getContext()));
   assert(numWarps >= 4 && llvm::isPowerOf2_32(numWarps) &&
          "numWarps must be a power of 2 and >= 4");
-  assert(atom != TMemAccess16x32bx2 &&
+  assert(atom != TMemAccessAtom::I16x32bx2 &&
          "This layout is inferred sometimes for the 32x32b atom");
   auto ll = toLinearLayout(memType.getShape(), memType.getEncoding());
   auto bitwidth = memType.getElementTypeBitWidth();
@@ -312,14 +312,14 @@ getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps,
   bool prefer16x256 =
       triton::tools::getBoolEnv("TRITON_PREFER_TMEM_16x256_LAYOUT");
   if (prefer16x256) {
-    auto layout = getDistributedLayoutForTmemLdSt(memType, TMemAccess16x256b,
-                                                  numWarps, ctaLayout);
+    auto layout = getDistributedLayoutForTmemLdSt(
+        memType, TMemAccessAtom::I16x256b, numWarps, ctaLayout);
     if (layout) {
       return LinearEncodingAttr::get(ctx, *layout);
     }
   }
-  auto layout = getDistributedLayoutForTmemLdSt(memType, TMemAccess32x32b,
-                                                numWarps, ctaLayout);
+  auto layout = getDistributedLayoutForTmemLdSt(
+      memType, TMemAccessAtom::I32x32b, numWarps, ctaLayout);
   assert(layout);
   return LinearEncodingAttr::get(ctx, *layout);
 }
@@ -332,7 +332,7 @@ getTmemLoadLayoutSplitLongM(RankedTensorType tensorType, MemDescType memType,
 
   auto ctaLayout = getCTALayout(tensorType.getEncoding());
   std::optional<LinearLayout> layout = getDistributedLayoutForTmemLdSt(
-      memType, TMemAccess32x32b, numWarps, ctaLayout);
+      memType, TMemAccessAtom::I32x32b, numWarps, ctaLayout);
   if (!layout)
     return std::nullopt;
   auto ret = *layout;
@@ -375,8 +375,8 @@ getTmemCompatibleLayouts(Operation *op, RankedTensorType tensorType,
   assert(numWarps % 4 == 0);
   auto ctaLayout = getCTALayout(tensorType.getEncoding());
   SmallVector<DistributedEncodingTrait> layouts;
-  for (auto atom : {TMemAccess32x32b, TMemAccess16x256b, TMemAccess16x128b,
-                    TMemAccess16x64b}) {
+  for (auto atom : {TMemAccessAtom::I32x32b, TMemAccessAtom::I16x256b,
+                    TMemAccessAtom::I16x128b, TMemAccessAtom::I16x64b}) {
     auto ll =
         getDistributedLayoutForTmemLdSt(memType, atom, numWarps, ctaLayout);
     if (ll) {

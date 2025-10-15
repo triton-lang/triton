@@ -212,8 +212,8 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
   // We store the instruction, the resulting reps layout, the permutation and
   // the number of registers per message
   std::optional<TMemLdStEncodingInfo> msgInfo;
-  for (auto atom : {TMemAccess32x32b, TMemAccess16x256b, TMemAccess16x64b,
-                    TMemAccess16x128b}) {
+  for (auto atom : {TMemAccessAtom::I32x32b, TMemAccessAtom::I16x256b,
+                    TMemAccessAtom::I16x64b, TMemAccessAtom::I16x128b}) {
     auto tile = getTileLayout(ctx, atom, unpacked);
     auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
@@ -227,7 +227,7 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
   if (!msgInfo) {
     // Quotient by the smaller tile and then, if possible, we set the
     // secondHalfOffset to the last kLane basis
-    auto tile = getTileLayout(ctx, TMemAccess16x32bx2, unpacked);
+    auto tile = getTileLayout(ctx, TMemAccessAtom::I16x32bx2, unpacked);
     auto maybeReps = getVec(cvt, tile, maxnreg);
     if (maybeReps) {
       auto [reps, perm, numRegsPerMessage] = std::move(*maybeReps);
@@ -247,7 +247,7 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
       auto basis = reps.getBases();
       basis[kLane][4] = {0, 0};
       reps = LinearLayout(basis, reps.getOutDims(), /*isSurjective=*/false);
-      msgInfo = {TMemAccess16x32bx2, reps, perm, numRegsPerMessage};
+      msgInfo = {TMemAccessAtom::I16x32bx2, reps, perm, numRegsPerMessage};
     }
   }
 

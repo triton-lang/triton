@@ -2,6 +2,7 @@
 #include "pybind11/pybind11.h"
 #include <pybind11/stl.h>
 
+#include <optional>
 #include <stdexcept>
 
 #include "mlir/IR/BuiltinTypes.h"
@@ -491,18 +492,20 @@ void init_gluon_ir(py::module &&m) {
                throw std::invalid_argument(
                    "expected a CTALayoutAttr for CTA layout");
 
-             const ttng::TMemAccessAtom *atom =
-                 llvm::StringSwitch<const ttng::TMemAccessAtom *>(atomName)
-                     .Case("32x32b", &ttng::TMemAccess32x32b)
-                     .Case("16x64b", &ttng::TMemAccess16x64b)
-                     .Case("16x128b", &ttng::TMemAccess16x128b)
-                     .Case("16x256b", &ttng::TMemAccess16x256b)
-                     .Case("16x32bx2", &ttng::TMemAccess16x32bx2)
-                     .Default(nullptr);
-             if (!atom)
+             auto maybeAtom =
+                 llvm::StringSwitch<std::optional<ttng::TMemAccessAtom>>(
+                     atomName)
+                     .Case("32x32b", ttng::TMemAccessAtom::I32x32b)
+                     .Case("16x64b", ttng::TMemAccessAtom::I16x64b)
+                     .Case("16x128b", ttng::TMemAccessAtom::I16x128b)
+                     .Case("16x256b", ttng::TMemAccessAtom::I16x256b)
+                     .Case("16x32bx2", ttng::TMemAccessAtom::I16x32bx2)
+                     .Default(std::nullopt);
+             if (!maybeAtom)
                throw std::invalid_argument("unknown TMEM access atom: " +
                                            atomName);
-             if (*atom == ttng::TMemAccess16x32bx2)
+             auto atom = *maybeAtom;
+             if (atom == ttng::TMemAccessAtom::I16x32bx2)
                throw std::invalid_argument(
                    "Atom 16x32bx2 is inferred implicitly and cannot be "
                    "requested explicitly");
@@ -511,7 +514,7 @@ void init_gluon_ir(py::module &&m) {
                    "numWarps must be a power of two and >= 4");
 
              auto layout = ttng::getDistributedLayoutForTmemLdSt(
-                 memType, *atom, numWarps, ctaLayout);
+                 memType, atom, numWarps, ctaLayout);
              if (!layout)
                return py::none();
              auto attr =
