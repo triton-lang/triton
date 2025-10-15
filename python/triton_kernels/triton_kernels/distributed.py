@@ -111,9 +111,9 @@ def _convert_launch_metadata(grid, kernel, args):
     src_bytes = src.numel() * elem_bytes
     # Find out number of tokens being dispatched out from this GPU
     local_expt_indx = expt_indx[src_row_start:src_row_start+src.shape[0]]
-    dst_local_tokens = torch.sum(expt_filter[src_rank][(local_expt_indx // 32)] >> (local_expt_indx % 32) == 1).item()
-    dst_output_tokens = torch.sum(expt_filter[src_rank][(local_expt_indx // 32)] >> (local_expt_indx % 32) == 0).item()
-    dst_input_tokens = torch.sum(expt_filter[src_rank][(expt_indx // 32)] >> (expt_indx % 32) == 1).item() - dst_local_tokens
+    dst_local_tokens = torch.sum((expt_filter[src_rank][(local_expt_indx // 32)] >> (local_expt_indx % 32)) & 1 == 1).item()
+    dst_output_tokens = torch.sum((expt_filter[src_rank][(local_expt_indx // 32)] >> (local_expt_indx % 32)) & 1 == 0).item()
+    dst_input_tokens = torch.sum((expt_filter[src_rank][(expt_indx // 32)] >> (expt_indx % 32)) & 1 == 1).item() - dst_local_tokens
     # Calculate the number of bytes transferred out from this GPU
     dram_bytes = src_bytes + dst_local_tokens * src.shape[1] * elem_bytes
     if "dp_to_ep" in kernel.name:
