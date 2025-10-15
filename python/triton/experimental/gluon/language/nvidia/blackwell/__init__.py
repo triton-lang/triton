@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
-from triton.experimental.gluon.language._layouts import BlockedLayout, _get_shape_per_cta, DistributedLinearLayout
 from triton.experimental.gluon.language._semantic import _check
 
 from . import tma
@@ -21,8 +20,7 @@ __all__ = [
     "allocate_tensor_memory",
     "async_copy",
     "fence_async_shared",
-    "get_tmem_32x32b_reg_layout",
-    "get_tmem_scales_reg_layout",
+    "get_tmem_reg_layout",
     "mbarrier",
     "mma_v2",
     "tensor_memory_descriptor",
@@ -90,102 +88,49 @@ class TensorMemoryScalesLayout:
         return f"TLS{cta_split_str}TLS"
 
 
-@constexpr_function
-def _cdiv(x, div):
-    return (x + div - 1) // div
-
-
-@constexpr_function
-def get_tmem_32x32b_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_split_num=None, cta_order=None):
-    """Returns a BlockedLayout compatible with load/store on tensor memory with the 32x32b instruction variant.
+@builtin
+def get_tmem_reg_layout(
+        element_ty,
+        shape,
+        layout,
+        num_warps,
+        instr_variant="32x32b",
+        ctas_per_cga=(1, 1),
+        cta_split_num=(1, 1),
+        cta_order=(1, 0),
+        _semantic=None,
+):
     """
-    assert len(shape) == 2, "expected a 2D tensor"
-    assert num_warps in [4, 8], "expected 4 or 8 warps"
+    Returns a DistributedLinearLayout compatible with TMEM load/store instructions.
 
-    shape_per_cta = _get_shape_per_cta(shape, cta_split_num)
-    blocks_per_tile = [shape_per_cta[0] // M, shape_per_cta[1] // N]
-    num_blocks = blocks_per_tile[0] * blocks_per_tile[1]
-
-    num_warp_groups = num_warps // 4
-    if M == 64:
-        threads_per_warp = [16, 2]
-        if num_blocks == 1:
-            size_per_thread = [1, _cdiv(N, num_warp_groups * 2)]
-            warps_per_cta = [4, num_warp_groups]
-        else:
-            size_per_thread = [1, _cdiv(N, 2)]
-            warps_per_cta = [4 * min(blocks_per_tile[0], num_warp_groups)]
-            warps_per_cta.append(_cdiv(num_warp_groups, warps_per_cta[0] // 4))
-    else:
-        if shape[0] > 128:
-            size_per_thread = [1, N]
-            threads_per_warp = [32, 1]
-            warps_per_cta = [4 * num_warp_groups, 1]
-        else:
-            size_per_thread = [1, _cdiv(N, num_warp_groups)]
-            threads_per_warp = [32, 1]
-            warps_per_cta = [4, num_warp_groups]
-    return BlockedLayout(
-        size_per_thread=size_per_thread,
-        threads_per_warp=threads_per_warp,
-        warps_per_cta=warps_per_cta,
-        order=[0, 1],
-        ctas_per_cga=ctas_per_cga,
-        cta_split_num=cta_split_num,
-        cta_order=cta_order,
-    )
-
-
-@constexpr_function
-def get_tmem_scales_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_split_num=None, cta_order=None):
-    """Return a linear layout that is compatible with tmem scaled layout.
+    Args:
+        element_ty (dtype): Element type stored in tensor memory.
+        shape (Sequence[int]): Global tensor shape addressed by the TMEM descriptor.
+        layout (TensorMemoryLayout): Tensor memory layout descriptor.
+        num_warps (int): Number of warps participating in the operation.
+        instr_variant (str): TMEM instruction variant (e.g. ``\"32x32b\"``).
+        ctas_per_cga (tuple[int, int]): CTA grouping along each dimension.
+        cta_split_num (tuple[int, int]): CTA split factors along each dimension.
+        cta_order (tuple[int, int]): CTA order.
     """
-    assert len(shape) == 2, "expected a 2D tensor"
-    assert num_warps in [4, 8], "expected 4 or 8 warps"
+    element_ty = _unwrap_if_constexpr(element_ty)
+    num_warps = _unwrap_if_constexpr(num_warps)
+    layout = _unwrap_if_constexpr(layout)
+    instr_variant = _unwrap_if_constexpr(instr_variant)
+    shape = [_unwrap_if_constexpr(s) for s in shape]
+    ctas_per_cga = [_unwrap_if_constexpr(x) for x in ctas_per_cga]
+    cta_split_num = [_unwrap_if_constexpr(x) for x in cta_split_num]
+    cta_order = [_unwrap_if_constexpr(x) for x in cta_order]
 
-    # Use per-CTA shape to build the linear layout bases
-    shape_per_cta = _get_shape_per_cta(shape, cta_split_num)
-    M_cta, N_cta = shape_per_cta[0], shape_per_cta[1]
-
-    # Register bases: pack 4 scales together along N; if fewer than 4, replicate.
-    reg_bases = []
-    i = 1
-    while i < 4:
-        if i >= N_cta:
-            reg_bases.append([0, 0])
-        else:
-            reg_bases.append([0, i])
-        i <<= 1
-
-    # Lane bases: distribute 32 rows of M along a warp.
-    lane_bases = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]]
-
-    # Warp bases: replicate across warps within a warpgroup by default.
-    warp_bases = [[0, 0], [0, 0]]
-
-    # Extend register bases for larger M and N beyond the initial pack.
-    i = 32
-    while i < M_cta:
-        reg_bases.append([i, 0])
-        i <<= 1
-
-    i = 4
-    while i < N_cta:
-        reg_bases.append([0, i])
-        i <<= 1
-
-    # For 8 warps, distribute the last dimension on the second warpgoup.
-    if num_warps == 8:
-        warp_bases.append(reg_bases[-1])
-        reg_bases.pop()
-
-    # No explicit CTA mapping here; the register layout is per-CTA.
-    return DistributedLinearLayout(
-        reg_bases=reg_bases,
-        lane_bases=lane_bases,
-        warp_bases=warp_bases,
-        block_bases=[],
-        shape=shape_per_cta,
+    return _semantic.get_tmem_reg_layout(
+        element_ty,
+        shape,
+        layout,
+        num_warps,
+        instr_variant,
+        ctas_per_cga,
+        cta_split_num,
+        cta_order,
     )
 
 
