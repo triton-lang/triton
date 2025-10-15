@@ -476,9 +476,10 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(tileLayout, getCTALayout(), shape);
 }
 
-LinearLayout chooseLLDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
-                                    int32_t elemBitWidth, unsigned instBitWidth,
-                                    unsigned numLanesInShuffleGroup) {
+std::optional<LinearLayout>
+chooseLLDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
+                       int32_t elemBitWidth, unsigned instBitWidth,
+                       unsigned numLanesInShuffleGroup) {
   using BaseTy = std::vector<std::vector<int32_t>>;
   // This function will derive the layout for the ds_read_tr instruction
   // based on the input layout (LL/DotLayout/...)
@@ -548,8 +549,7 @@ LinearLayout chooseLLDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
   // a valid ds_read_tr layout
   if (ldsTransLayout.getInDimSizeLog2(kRegister) < numRegBases ||
       ldsTransLayout.getInDimSizeLog2(kLane) < numLaneBases) {
-    return LinearLayout({{kRegister, {}}, {kLane, {}}},
-                        ldsTransLayout.getOutDims(), false);
+    return std::nullopt;
   }
 
   rotatePrefixes(bases[kRegister], numRegBases, bases[kLane], numLaneBases);
@@ -557,12 +557,13 @@ LinearLayout chooseLLDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
   return LinearLayout(bases, ldsTransLayout.getOutDims(), false);
 }
 
-LinearLayout chooseDotDsReadTrLayout(DotOperandEncodingAttr dotMfmaLayout,
-                                     ArrayRef<int64_t> shape,
-                                     int32_t elemBitWidth,
-                                     unsigned instBitWidth,
-                                     unsigned numLanesInShuffleGroup) {
-  assert(instBitWidth == 64 && numLanesInShuffleGroup == 16);
+std::optional<LinearLayout>
+chooseDotDsReadTrLayout(DotOperandEncodingAttr dotMfmaLayout,
+                        ArrayRef<int64_t> shape, int32_t elemBitWidth,
+                        unsigned instBitWidth,
+                        unsigned numLanesInShuffleGroup) {
+  if (instBitWidth != 64 || numLanesInShuffleGroup != 16)
+    return std::nullopt;
   auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
   auto mDim = mfmaLayout.getInstrShape()[0];
   assert(mDim == 16 || mDim == 32);
@@ -1413,9 +1414,10 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
       {{kOffset, totalOffsets}, {kIteration, totalIters}, {kBlock, 1}});
 }
 
-LinearLayout chooseDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
-                                  int32_t elemBitWidth, unsigned instBitWidth,
-                                  unsigned numLanesInShuffleGroup) {
+std::optional<LinearLayout>
+chooseDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
+                     int32_t elemBitWidth, unsigned instBitWidth,
+                     unsigned numLanesInShuffleGroup) {
   if (elemBitWidth == 4) {
     auto dot = cast<DotOperandEncodingAttr>(enc);
     return chooseDotDsReadTrLayout(dot, shape, elemBitWidth, instBitWidth,

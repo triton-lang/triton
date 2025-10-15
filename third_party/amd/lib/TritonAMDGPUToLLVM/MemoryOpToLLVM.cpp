@@ -52,28 +52,15 @@ public:
   }
 
 private:
-  bool checkCurrentLimitation(unsigned bitwidth) const {
-    // FP4 is represented as i8 and, when packed along K, can be
-    // transposed using ds_read_tr8 which doesn't change packing.
-    if (bitwidth != 16 && bitwidth != 8) {
-      return false;
-    }
-
-    return true;
-  }
-
   bool canUseTransLoad(Operation *localLoad, MemDescType srcTy,
                        RankedTensorType dstTy, unsigned bitwidth) const {
-    // Packed loads need to always map to ds_read_tr
-    if constexpr (isPackedLoad) {
-      return true;
-    }
-
     if (!targetInfo.canUseLDSTransLoad(bitwidth)) {
       return false;
     }
 
-    if (!checkCurrentLimitation(bitwidth)) {
+    // FP4 is represented as i8 and, when packed along K, can be
+    // transposed using ds_read_tr8 which doesn't change packing.
+    if (bitwidth != 16 && bitwidth != 8) {
       return false;
     }
 
@@ -122,10 +109,8 @@ private:
         dstTy.getEncoding(), shape, llBitwidth, instBitWidth,
         numLanesInShuffleGroup);
 
-    // Check that we have at least enough elements in each dimension in the
-    // computed layout
-    if (ldsTransLayout.getInDimSize(kReg) < needContigReg ||
-        ldsTransLayout.getInDimSize(kLane) < numLanesInShuffleGroup) {
+    // Check that we have computed a layout
+    if (!ldsTransLayout) {
       return failure();
     }
 
@@ -135,10 +120,10 @@ private:
     LinearLayout cvt = LinearLayout::empty();
     if (paddedEnc) {
       const auto &sharedLL = paddedEnc.getLinearComponent();
-      cvt = ldsTransLayout.invertAndCompose(sharedLL);
+      cvt = ldsTransLayout->invertAndCompose(sharedLL);
     } else {
       auto sharedLL = triton::gpu::toLinearLayout(srcTy);
-      cvt = ldsTransLayout.invertAndCompose(sharedLL);
+      cvt = ldsTransLayout->invertAndCompose(sharedLL);
     }
     // Check that we will be able to vectorize the load.
     // Need to have exactly needContigReg, otherwise we can't use ds_read_tr
