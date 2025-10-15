@@ -1,9 +1,6 @@
 get_property(triton_libs GLOBAL PROPERTY TRITON_LIBS)
 
-add_llvm_executable(triton-opt
-triton-opt.cpp
-PARTIAL_SOURCES_INTENDED
-)
+add_llvm_executable(triton-opt triton-opt.cpp PARTIAL_SOURCES_INTENDED)
 
 # TODO: what's this?
 llvm_update_compile_flags(triton-opt)

@@ -153,7 +153,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
       llvm::report_fatal_error(msg);
     }
 
-#if 1
     std::vector<const char *> passNames;
 
     intptr_t getDetailsFn =
@@ -189,18 +188,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
       registerTritonPluginPass(passName);
     }
 
-#else
-    intptr_t getDetailsFn =
-        (intptr_t)library.getAddressOfSymbol("registerTritonPluginPass");
-
-    if (!getDetailsFn) {
-      auto msg = llvm::Twine("Failed to get symbol: " + error + "\n");
-      llvm::report_fatal_error(msg);
-    }
-    std::function<void()> registerTritonPluginPass =
-        reinterpret_cast<void (*)()>(getDetailsFn);
-    registerTritonPluginPass();
-#endif
   }
 
   registry.insert<
