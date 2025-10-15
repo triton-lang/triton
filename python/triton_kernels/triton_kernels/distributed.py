@@ -165,18 +165,6 @@ def _convert_dp_to_ep(
         dst_ptrs += BLOCK
 
 
-@triton.jit
-def _create_tensor_from_tuples(Dst, Srcs: tl.tuple):
-    for i in tl.static_range(len(Srcs)):
-        tl.store(Dst + i, Srcs[i].to(tl.int64, bitcast=True))
-
-
-def create_tensor_from_tuples(dst_shape, src_tuples, dtype, device):
-    dst = torch.empty(dst_shape, dtype=dtype, device=device)
-    _create_tensor_from_tuples[(1, )](dst, src_tuples)
-    return dst
-
-
 def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
     expt_bitmask = expt_assignment.expt_bitmask
     # extract problem dimensions
@@ -233,8 +221,7 @@ def _convert_ep_to_dp(
     # destination base pointer
     dst_indx_global = tl.load(dst_row_indx_ptr + pid_m)
     dst_rank = dst_indx_global // n_tokens_local
-    dst_ptr = tl.load(peer_dst_ptrs + dst_rank)
-    dst_ptr = dst_ptr.to(src_ptr.dtype, bitcast=True)
+    dst_ptr = peer_dst_ptrs[dst_rank]
     dst_ptr = tl.multiple_of(dst_ptr, 16)
     # input / output pointers
     dst_expt_indx = tl.load(expt_indx_ptr + dst_indx_global)
@@ -265,12 +252,11 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
     dst_local = symm_mem.empty((n_tokens_local, d_model), dtype=src.dtype, device=device)
     hdl = symm_mem.rendezvous(dst_local, dist.group.WORLD)
     peer_bufs = [hdl.get_buffer(r, dst_local.shape, dst_local.dtype) for r in range(n_ranks)]
-    peer_dst_ptrs = create_tensor_from_tuples((n_ranks, ), tuple([int(buf.data_ptr()) for buf in peer_bufs]), dtype=torch.int64, device=device)
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_global,)
     _convert_ep_to_dp[grid](
-        peer_dst_ptrs, dst_local.stride(0),
+        tuple(peer_bufs), dst_local.stride(0),
         src, src.stride(0), src.shape[1],
         expt_bitmask[rank, :], expt_bitmask.stride(0),
         expt_indx, expt_indx.stride(0),
