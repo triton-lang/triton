@@ -26,6 +26,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
@@ -477,11 +478,14 @@ getMMAv5DTypeKindAndAcc(Type t) {
     return {{MMADTypeKind::f16, {Float32Type::get(ctx)}}};
   }
   // TODO: float6 and explicit float4 types are not supported yet.
-  // TODO: tcgen05.mma supports ui8/si8 -> s32 MMA, but Triton does not.
   // FIXME: i8 is used to represent float4 types.
-  if (isa<Float8E4M3FNType, Float8E5M2Type>(t) || t.isInteger(8)) {
+  if (isa<FloatType>(t) && llvm::is_contained(std::array<unsigned, 3>{4, 6, 8},
+                                              t.getIntOrFloatBitWidth())) {
     return {
         {MMADTypeKind::f8f6f4, {Float16Type::get(ctx), Float32Type::get(ctx)}}};
+  }
+  if (t.isInteger(8)) {
+    return {{MMADTypeKind::i8, {IntegerType::get(ctx, 32)}}};
   }
   return std::nullopt;
 }
@@ -688,14 +692,15 @@ void TCGen5MMAOp::build(OpBuilder &builder, OperationState &state, Type token,
                         Value a, Value b, Value d, Value accDep, Value useD,
                         Value pred, bool twoCtas, bool multicast,
                         ValueRange barriers, ValueRange barrierPreds,
-                        bool isAsync) {
+                        bool isAsync, bool isUnsigned) {
   if (!barriers.empty()) {
     isAsync = true;
   }
   build(builder, state, token, a, b, d, accDep, useD, pred, barriers,
         barrierPreds, isAsync ? builder.getUnitAttr() : UnitAttr(),
         twoCtas ? builder.getUnitAttr() : UnitAttr(),
-        multicast ? builder.getUnitAttr() : UnitAttr());
+        multicast ? builder.getUnitAttr() : UnitAttr(),
+        isUnsigned ? builder.getUnitAttr() : UnitAttr());
 }
 
 bool TCGen5MMAOp::isAsync() { return getIsAsync(); }
@@ -709,9 +714,36 @@ LogicalResult TCGen5CommitOp::verify() {
 }
 
 // -- TCGen5MMAScaledOp --
+
+static Type getScaledMMAOperandType(Type elementType,
+                                    ScaleDotElemType scaleType) {
+  MLIRContext *ctx = elementType.getContext();
+  if (isa<FloatType>(elementType))
+    return elementType;
+  switch (scaleType) {
+  case ScaleDotElemType::E4M3:
+    return Float8E4M3FNType::get(ctx);
+  case ScaleDotElemType::E5M2:
+    return Float8E5M2Type::get(ctx);
+  case ScaleDotElemType::E2M3:
+    return Float6E2M3FNType::get(ctx);
+  case ScaleDotElemType::E3M2:
+    return Float6E3M2FNType::get(ctx);
+  case ScaleDotElemType::E2M1:
+    return Float4E2M1FNType::get(ctx);
+  case ScaleDotElemType::BF16:
+    return BFloat16Type::get(ctx);
+  case ScaleDotElemType::FP16:
+    return Float16Type::get(ctx);
+  }
+  llvm_unreachable("Unsupported type.");
+};
+
 LogicalResult TCGen5MMAScaledOp::verify() {
-  Type atype = getA().getType().getElementType();
-  Type btype = getB().getType().getElementType();
+  Type atype =
+      getScaledMMAOperandType(getA().getType().getElementType(), getAType());
+  Type btype =
+      getScaledMMAOperandType(getB().getType().getElementType(), getBType());
   Type dtype = getD().getType().getElementType();
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
