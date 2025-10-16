@@ -99,36 +99,70 @@ def make_expt_assignment(n_expt_shard, n_expt_tot, expt_dict: dict[int, list[int
 
 # ------------------------------------------------------------
 
-@triton.jit
+
+def _convert_launch_metadata(grid, kernel, args):
+    src = args["src_ptr"]
+    src_rank = args["SRC_RANK"]
+    n_tokens_local = args["n_tokens_local"]
+    src_row_start = n_tokens_local * src_rank
+    expt_filter = args["expt_filter_ptr"]
+    expt_indx = args["expt_indx_ptr"].int()
+    d_model = src.shape[1]
+    elem_bytes = src.element_size()
+    src_bytes = src.numel() * elem_bytes
+    # Find out number of tokens being dispatched out from this GPU
+    local_expt_indx = expt_indx[src_row_start:src_row_start + n_tokens_local]
+    src_rank_filter = expt_filter[src_rank]
+    local_filter = ((src_rank_filter[local_expt_indx // 32] >> (local_expt_indx % 32)) & 1).to(torch.int32)
+    dst_local_tokens = torch.sum(local_filter).item()
+    dst_output_tokens = local_filter.numel() - dst_local_tokens
+    global_filter = ((src_rank_filter[expt_indx // 32] >> (expt_indx % 32)) & 1).to(torch.int32)
+    dst_input_tokens = torch.sum(global_filter).item() - dst_local_tokens
+    # Calculate the number of bytes transferred out from this GPU
+    dram_bytes = src_bytes + dst_local_tokens * d_model * elem_bytes
+    if "dp_to_ep" in kernel.name:
+        dram_bytes += dst_input_tokens * d_model * elem_bytes
+    elif "ep_to_dp" in kernel.name:
+        dram_bytes += dst_output_tokens * d_model * elem_bytes
+    else:
+        raise ValueError(f"unknown kernel name {kernel.name}")
+    nvlink_bytes = (dst_output_tokens + dst_input_tokens) * d_model * elem_bytes
+    return {
+        "name": f"{kernel.name} [tokens={n_tokens_local}, d_model={d_model}]",
+        "bytes": dram_bytes,
+        "nvlink_bytes": nvlink_bytes,
+    }
+
+
+@triton.jit(launch_metadata=_convert_launch_metadata)
 def _convert_dp_to_ep(
     peer_dst_ptrs, dst_stride_m, # dst tensors
     src_ptr, src_stride_m, src_shape_n,  # src tensor
     expt_filter_ptr, expt_filter_stride_m, # expt map
     expt_indx_ptr, expt_indx_stride_m, # expt indx
     dst_row_indx_ptr, dst_row_indx_stride_m, # gate indx
-    src_row_start,
+    n_tokens_local,
+    SRC_RANK: tl.constexpr,
     N_EXPT_ACT: tl.constexpr,
     N_RANKS: tl.constexpr,
     BLOCK: tl.constexpr
 ):
-    # token offset
     pid_m = tl.program_id(0)
-    off_m_global = pid_m + src_row_start
+    off_m_global = pid_m + n_tokens_local * SRC_RANK
     off_m_local = pid_m
-    # offset ptrs
-    # load expt and dst indx
-    offs_e = tl.arange(0, N_EXPT_ACT)
-    expt_indx = tl.load(expt_indx_ptr + off_m_global*expt_indx_stride_m + offs_e)
-    # load expt filter
     offs_r = tl.arange(0, N_RANKS)
+    offs_e = tl.arange(0, N_EXPT_ACT)
+    offs_n = tl.arange(0, BLOCK)
+    dst_row_indx = tl.load(dst_row_indx_ptr + off_m_global * dst_row_indx_stride_m + offs_e)
+    expt_indx = tl.load(expt_indx_ptr + off_m_global * expt_indx_stride_m + offs_e)
     expt_filter_ptr_rows = expt_filter_ptr + offs_r[:, None] * expt_filter_stride_m
     expt_filter = (tl.load(expt_filter_ptr_rows + (expt_indx // 32)[None, :]) >> (expt_indx % 32)) & 1
-    expt_rank = tl.sum(offs_r[:, None] * expt_filter, axis=0)
-    # load dst indxs
-    dst_row_indx = tl.load(dst_row_indx_ptr + off_m_global*dst_row_indx_stride_m + offs_e)
-    # set src and d
-    offs_n = tl.arange(0, BLOCK)
-    dst_row_ptrs = tl.load(peer_dst_ptrs + expt_rank).to(src_ptr.dtype, bitcast=True)
+    expt_ranks = tl.sum(offs_r[:, None] * expt_filter, axis=0)
+    dst_row_ptrs = tl.zeros((N_EXPT_ACT,), dtype=tl.int64)
+    for dst_rank in tl.static_range(N_RANKS):
+        peer_dst_ptr = peer_dst_ptrs[dst_rank].to(tl.int64, bitcast=True)
+        dst_row_ptrs = tl.where(dst_rank == expt_ranks, peer_dst_ptr, dst_row_ptrs)
+    dst_row_ptrs = dst_row_ptrs.to(src_ptr.dtype, bitcast=True)
     dst_row_ptrs = tl.multiple_of(dst_row_ptrs, 16)
     dst_row_ptrs = dst_row_ptrs + dst_row_indx * dst_stride_m
     dst_ptrs = dst_row_ptrs[:, None] + offs_n[None, :]
@@ -139,18 +173,6 @@ def _convert_dp_to_ep(
         tl.store(dst_ptrs, src[None, :], mask=mask_n[None, :])
         src_ptrs += BLOCK
         dst_ptrs += BLOCK
-
-
-@triton.jit
-def _create_tensor_from_tuples(Dst, Srcs: tl.tuple):
-    for i in tl.static_range(len(Srcs)):
-        tl.store(Dst + i, Srcs[i].to(tl.int64, bitcast=True))
-
-
-def create_tensor_from_tuples(dst_shape, src_tuples, dtype, device):
-    dst = torch.empty(dst_shape, dtype=dtype, device=device)
-    _create_tensor_from_tuples[(1, )](dst, src_tuples)
-    return dst
 
 
 def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
@@ -173,17 +195,17 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
     # create tensor of peer pointers
     hdl = symm_mem.rendezvous(dst_local, dist.group.WORLD)
     peer_bufs = [hdl.get_buffer(r, dst_local.shape, dst_local.dtype) for r in range(n_ranks)]
-    peer_dst_ptrs = create_tensor_from_tuples((n_ranks, ), tuple([int(buf.data_ptr()) for buf in peer_bufs]), dtype=torch.int64, device=device)
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_local,)
     _convert_dp_to_ep[grid](
-        peer_dst_ptrs, dst_local.stride(0),
+        tuple(peer_bufs), dst_local.stride(0),
         src, src.stride(0), src.shape[1],
         expt_bitmask, expt_bitmask.stride(0),
         expt_indx, expt_indx.stride(0),
         gate_indx, n_expt_act,
-        rank * n_tokens_local,
+        n_tokens_local,
+        SRC_RANK=rank,
         N_EXPT_ACT=n_expt_act,
         N_RANKS=n_ranks,
         BLOCK=BLOCK,
@@ -194,26 +216,31 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
 
 # ------------------------------------------------------------
 
-@triton.jit
+@triton.jit(launch_metadata=_convert_launch_metadata)
 def _convert_ep_to_dp(
     peer_dst_ptrs, dst_stride_m, # dst tensors
     src_ptr, src_stride_m, src_shape_n, # src tensor
     expt_filter_ptr, expt_filter_stride_m, # expt map
-    expt_indx_ptr, expt_indx_stride_m, # expt indx
+    expt_indx_ptr,  # expt indx
     dst_row_indx_ptr, # topk indx
     n_tokens_local,
-    BLOCK: tl.constexpr
+    BLOCK: tl.constexpr,
+    SRC_RANK: tl.constexpr,
+    N_RANKS: tl.constexpr
 ):
     # token offset
     pid_m = tl.program_id(0)
     # destination base pointer
     dst_indx_global = tl.load(dst_row_indx_ptr + pid_m)
     dst_rank = dst_indx_global // n_tokens_local
-    dst_ptr = tl.load(peer_dst_ptrs + dst_rank)
-    dst_ptr = dst_ptr.to(src_ptr.dtype, bitcast=True)
-    dst_ptr = tl.multiple_of(dst_ptr, 16)
+    dst_ptr = tl.zeros((1,), dtype=tl.int64).item()
+    for i in tl.static_range(N_RANKS):
+        if dst_rank == i:
+            dst_ptr = peer_dst_ptrs[i].to(tl.int64, bitcast=True)
+    dst_ptr = tl.multiple_of(dst_ptr.to(src_ptr.dtype), 16)
     # input / output pointers
     dst_expt_indx = tl.load(expt_indx_ptr + dst_indx_global)
+    expt_filter_ptr = expt_filter_ptr + SRC_RANK * expt_filter_stride_m
     has_dst_expt = (tl.load(expt_filter_ptr + dst_expt_indx // 32) >> (dst_expt_indx % 32)) & 1
     if not has_dst_expt.to(tl.int1):
         return
@@ -241,19 +268,19 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
     dst_local = symm_mem.empty((n_tokens_local, d_model), dtype=src.dtype, device=device)
     hdl = symm_mem.rendezvous(dst_local, dist.group.WORLD)
     peer_bufs = [hdl.get_buffer(r, dst_local.shape, dst_local.dtype) for r in range(n_ranks)]
-    peer_dst_ptrs = create_tensor_from_tuples((n_ranks, ), tuple([int(buf.data_ptr()) for buf in peer_bufs]), dtype=torch.int64, device=device)
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_global,)
-    hdl.barrier(channel=0)
     _convert_ep_to_dp[grid](
-        peer_dst_ptrs, dst_local.stride(0),
+        tuple(peer_bufs), dst_local.stride(0),
         src, src.stride(0), src.shape[1],
-        expt_bitmask[rank, :], expt_bitmask.stride(0),
-        expt_indx, expt_indx.stride(0),
+        expt_bitmask, expt_bitmask.stride(0),
+        expt_indx,
         topk_indx,
         n_tokens_local,
         BLOCK=BLOCK,
+        SRC_RANK=rank,
+        N_RANKS=n_ranks,
     )
     hdl.barrier(channel=0)
     return dst_local
