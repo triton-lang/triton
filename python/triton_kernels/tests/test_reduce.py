@@ -25,7 +25,9 @@ def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
     if dtype_str == "float4_e2m1":
         return torch.uint8
     if dtype_str == "float8":
-        return torch.float8_e5m2
+        if triton.runtime.driver.active.get_current_target().backend == "hip":
+            return torch.float8_e4m3fnuz
+        return torch.float8_e4m3fn
     return getattr(torch, dtype_str)
 
 
@@ -57,6 +59,8 @@ def plus_a(x, a):
 ])
 @pytest.mark.parametrize("dim", [0, 1, 2])
 def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
+    if torch.cuda.get_device_capability() < (9, 0) and "float8" in dtype_str:
+        pytest.skip("float8 not supported on CUDA < 9.0")
     torch.manual_seed(0)
     device = "cuda"
     x = torch.randn((B, M, N), device=device, dtype=torch.float32)
