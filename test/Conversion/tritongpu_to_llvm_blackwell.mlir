@@ -35,6 +35,82 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 // -----
 
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 32]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
+#shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: @tc_gen5_int8_unsigned_mma
+  // CHECK: %[[WID:.+]] = nvgpu.warp_id
+  // CHECK: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK: %[[P0:.+]] = llvm.icmp "eq" %[[WID]], %[[C0]] : i32
+  // CHECK: %[[P1:.+]] = llvm.and %{{.*}}, %[[P0]]  : i1
+  // CHECK: llvm.cond_br %[[P1]]
+  // CHECK: %[[E:.+]] = nvvm.elect.sync -> i1
+
+  // Verify descriptor is expected value for i8 unsigned.
+  // CHECK:llvm.mlir.constant(136314912 : i32) : i32
+
+  // CHECK-COUNT-4: @$5 tcgen05.mma.cta_group::1.kind::i8 [ $0 + 0 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}, %[[E]]
+  // CHECK: %[[PRED:.+]] = llvm.and %arg6, %[[E]]
+  // CHECK: @$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [$1];", "b,l" %[[PRED]]
+  tt.func @tc_gen5_int8_unsigned_mma(%a: !ttg.memdesc<128x128xi8, #shared, #ttg.shared_memory>,
+                       %b: !ttg.memdesc<128x128xi8, #shared1, #ttg.shared_memory>,
+                       %c: !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable>,
+                       %useAcc: i1,
+                       %pred: i1,
+                       %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>,
+                       %barrierPred: i1) {
+    ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred, %barrier[%barrierPred] {is_async, is_unsigned} :
+       !ttg.memdesc<128x128xi8, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xi8, #shared1, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 256, 32]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
+#shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: @tc_gen5_int8_signed_mma
+  // CHECK: %[[WID:.+]] = nvgpu.warp_id
+  // CHECK: %[[C0:.+]] = llvm.mlir.constant(0 : i32) : i32
+  // CHECK: %[[P0:.+]] = llvm.icmp "eq" %[[WID]], %[[C0]] : i32
+  // CHECK: %[[P1:.+]] = llvm.and %{{.*}}, %[[P0]]  : i1
+  // CHECK: llvm.cond_br %[[P1]]
+  // CHECK: %[[E:.+]] = nvvm.elect.sync -> i1
+
+  // Verify descriptor is expected value for i8 signed.
+  // CHECK:llvm.mlir.constant(136316064 : i32) : i32
+
+  // CHECK-COUNT-4: @$5 tcgen05.mma.cta_group::1.kind::i8 [ $0 + 0 ], $1, $2, $3, $4;", "r,l,l,r,b,b" %{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}, %{{.+}}, %[[E]]
+  // CHECK: %[[PRED:.+]] = llvm.and %arg6, %[[E]]
+  // CHECK: @$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [$1];", "b,l" %[[PRED]]
+  tt.func @tc_gen5_int8_signed_mma(%a: !ttg.memdesc<128x128xi8, #shared, #ttg.shared_memory>,
+                       %b: !ttg.memdesc<128x128xi8, #shared1, #ttg.shared_memory>,
+                       %c: !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable>,
+                       %useAcc: i1,
+                       %pred: i1,
+                       %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>,
+                       %barrierPred: i1) {
+    ttng.tc_gen5_mma %a, %b, %c, %useAcc, %pred, %barrier[%barrierPred] {is_async} :
+       !ttg.memdesc<128x128xi8, #shared, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xi8, #shared1, #ttg.shared_memory>,
+       !ttg.memdesc<128x128xi32, #tmem, #ttng.tensor_memory, mutable>,
+       !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory>
+    tt.return
+  }
+}
+
+// -----
+
+#mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 32]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
