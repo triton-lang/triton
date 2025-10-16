@@ -2,7 +2,7 @@ from typing import Sequence, List, TypeVar, Tuple, Callable
 import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
-from ._layouts import AutoLayout, DistributedLayout, SliceLayout, SharedLayout
+from ._layouts import AutoLayout, DistributedLayout, SliceLayout, SharedLayout, NVMMASharedLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
@@ -207,6 +207,14 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(value.dtype == mem_desc.dtype,
                lambda: f"source dtype {value.dtype} and destination dtype {mem_desc.dtype} must match")
         self.builder.create_local_store(mem_desc.handle, value.handle)
+
+    def tma_async_global_to_shared(self, tensor_desc, coord, barrier, result, pred):
+        _check(isinstance(result, ttgl.shared_memory_descriptor),
+               lambda: f"expected 'result' to be a shared_memory_descriptor but got {type(result)}")
+        _check(isinstance(result.layout, NVMMASharedLayout),
+               lambda: f"expected 'result' to have 'layout' of type NVMMASharedLayout but got {result.layout}")
+        self.builder.create_async_tma_copy_global_to_local(tensor_desc.handle, coord, barrier.handle, result.handle,
+                                                           pred.handle)
 
     def bank_conflicts(self, distr_ty, shared_ty):
         if not isinstance(distr_ty, ttgl.distributed_type):
