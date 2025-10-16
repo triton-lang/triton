@@ -25,7 +25,7 @@ def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
     if dtype_str == "float4_e2m1":
         return torch.uint8
     if dtype_str == "float8":
-        return torch.float8_e4m3fn
+        return torch.float8_e5m2
     return getattr(torch, dtype_str)
 
 
