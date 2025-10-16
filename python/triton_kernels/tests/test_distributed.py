@@ -302,7 +302,6 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     )
 
     def run_mixture():
-        y_indx_local = None if y_indx_global is None else y_indx_global[first_token_indx:last_token_indx, :].contiguous()
         return mixture_of_expt_epsharded(
             x_dp_local,
             l_dp_local,
@@ -310,7 +309,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
             b_ep_local,
             expt_assignment,
             n_expts_act,
-            y_indx=y_indx_local,
+            y_indx=y_indx_global,
         )
 
     # test cuda graph capture + replay with symmetric memory
