@@ -44,6 +44,34 @@ def test_mxfp4_rounding_cases(dst_dtype, device):
     dequant_torch = upcast_from_mxfp_torch(quant_torch, scale_torch, dst_dtype, axis=1)
     assert_equal(dequant_torch, dequant)
 
+    # ROUND_DOWN should use the max power-of-two when computing scale.
+    # Choose a block whose max is 33 so the chosen scale is
+    # 2**floor(log2(33/(e2m1 max power of 2 = 4)) = 2**3 = 8 (exponent 127+3),
+    # and the other values are multiples of representable FP4 values times 8
+    # that allow exact reconstruction.
+    x = torch.tensor([33.0, 24.0, 16.0, 8.0, 4.0, 0.0, -32.0, 0.0], device=device).bfloat16().view(1, -1, 1)
+    quant, scale = downcast_to_mxfp(
+        x,
+        torch.uint8,
+        axis=1,
+        DEQUANT_SCALE_ROUNDING_MODE=DequantScaleRoundingMode.ROUND_DOWN,
+    )
+    dequant = upcast_from_mxfp(quant, scale, dst_dtype, axis=1)
+    assert_equal(dequant[0, 1:, :], x[0, 1:, :])
+
+    # Golden: scale exponent is 127 + 3 for 2**3 = 8
+    assert scale.item() == 127 + 3
+
+    # Torch reference path should match
+    quant_torch, scale_torch = downcast_to_mxfp_torch(
+        x,
+        torch.uint8,
+        axis=1,
+        DEQUANT_SCALE_ROUNDING_MODE=DequantScaleRoundingMode.ROUND_DOWN,
+    )
+    assert_equal(quant_torch, quant)
+    assert_equal(scale_torch, scale)
+
 
 @pytest.mark.parametrize("src_dtype", ["float4_e2m1", "float8_e5m2", "float8_e4m3fn"])
 @pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
