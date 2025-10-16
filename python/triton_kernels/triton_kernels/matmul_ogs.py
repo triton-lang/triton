@@ -203,7 +203,7 @@ class InnerRoutingData:
         elif isinstance(data, InnerRoutingData):
             expt_data, block = data.base.expt_data, data.block_k
             args = (
-                True, data.x_is_padded, data.w_is_padded, expt_data.batch_sizes.max()
+                True, data.x_is_padded, data.w_is_padded, expt_data.slice_sizes.max()
             )
         elif data is None:
             expt_data = None
@@ -214,8 +214,8 @@ class InnerRoutingData:
             return (None, None, None, None, False, False, False, None)
 
         return (
-            expt_data.batch_sizes,
-            expt_data.batch_offs,
+            expt_data.slice_sizes,
+            expt_data.slice_offs,
             expt_data.block_offs(block),
             expt_data.block_schedule(block),
         ) + args
