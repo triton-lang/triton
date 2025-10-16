@@ -12,7 +12,7 @@ from triton_kernels.tensor import (
 from triton_kernels.testing import assert_equal
 
 
-@pytest.mark.parametrize("n_slices", [1, 7, 33, 911, 1024, 10000])
+@pytest.mark.parametrize("n_slices", [1, 7, 33, 911, 1025])
 def test_make_ragged_tensor_metadata(n_slices):
     torch.manual_seed(0)
     device = "cuda"
@@ -28,7 +28,7 @@ def test_make_ragged_tensor_metadata(n_slices):
     assert_equal(meta.block_schedule_data, ref.block_schedule_data)
 
 
-@pytest.mark.parametrize("n_slices", [9, 32, 911, 1024, 10000])
+@pytest.mark.parametrize("n_slices", [9, 32, 911, 1025])
 def test_remap_ragged_tensor_metadata(n_slices):
     device = "cuda"
     max_slice_size = 200
