@@ -266,6 +266,10 @@ def set_opt_flags(opt_flags: OptFlags):
     assert not _opt_flags_constraints, "setting constraints is incompatible with manual flags override"
     assert not _opt_flags, "opt_flags already set; please reset to None first"
     _opt_flags = opt_flags
+    
+def reset_opt_flags():
+    global _opt_flags
+    _opt_flags = None
 
 class InapplicableConstraint(Exception):
     pass
