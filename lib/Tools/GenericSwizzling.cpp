@@ -443,6 +443,149 @@ optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
 
   return basis1D.reshapeOuts(outDims);
 }
+
+SmallVector<int32_t> getVbasis(const LinearLayout &src, const LinearLayout &dst,
+                               int32_t bitwidth) {
+  auto *ctx = src.getInDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  auto regSrc = flatten(src, kReg);
+  auto regDst = flatten(dst, kReg);
+  auto dim = src.getTotalOutDimSizeLog2();
+  // Observation: We always get optimal throughput regardless of the basis
+  // we put in the first bank (first log2(32/bitwidth) bases in vbasis.
+  // Proof:
+  //   1. The elements of vbasis are not swizzled so the access pattern
+  //      will be homogeneous for all the emitted instructions
+  //   2. If we put a basis that is in registers for src and
+  //      in lanes for dst, it will vectorize when writing and
+  //      broadcast when reading
+  //   3. If one basis is in the lane for src and in the register for dst,
+  //      we still get full throughput as all the writes are done in parallel
+  //      https://forums.developer.nvidia.com/t/bytes-in-shared-memory/49416/2?utm_source=chatgpt.com
+  //   4. If one basis is in the register and other is in the warp, different
+  //      warps will be executed independently so nothing to do here
+  // Because of this, we can:
+  // 1. Put whatever we want on the first log2(32/bitwidth) bases in vbasis
+  // 2. Put vectorise into b32.x2 or b32.4 as long as the intersection between
+  //    if the intersection between the registers of the part we are
+  //    vectorising and the lanes of the other is not empty.
+
+  SmallVector<int32_t> vbasis = intersectionBasis(regSrc, regDst, dim);
+  // Restrict the vectorisation to the maximum we can use
+  auto maxVecBases = llvm::Log2_32(128 / bitwidth);
+  if (vbasis.size() > maxVecBases) {
+    vbasis.resize(maxVecBases);
+  }
+  int log2VecSrc = vbasis.size();
+  int log2VecDst = vbasis.size();
+  int basesPerBank = bitwidth > 32 ? 0 : llvm::Log2_32(32 / bitwidth);
+
+  // Count the number of bases that can be vectorised after filling up bank0
+  // without creating bank conflicts
+
+  auto kLane = StringAttr::get(ctx, "lane");
+  llvm::SmallDenseSet<int32_t> laneSrcSet(llvm::from_range_t{},
+                                          flatten(src, kLane));
+  llvm::SmallDenseSet<int32_t> laneDstSet(llvm::from_range_t{},
+                                          flatten(dst, kLane));
+
+  // Find other bases that are in the register that are in the lane of the other
+  // layout This would account for more vectorisation on the register side and
+  // will not affect bank conflicts on the other side
+  auto intersectAfterBank0 =
+      [basesPerBank, bitwidth](ArrayRef<int32_t> regs, ArrayRef<int32_t> vbasis,
+                               const llvm::SmallDenseSet<int32_t> &otherLane) {
+        SmallVector<int32_t> vec;
+        // Handle bitwidth > 32
+        auto maxVecLog2 = llvm::Log2_32(128 / std::max(bitwidth, 32));
+        for (auto r : regs) {
+          if (llvm::is_contained(vbasis, r)) {
+            continue;
+          }
+          if (otherLane.contains(r)) {
+            vec.push_back(r);
+          }
+          if (vec.size() == maxVecLog2) {
+            break;
+          }
+        }
+        return vec;
+      };
+
+  // Whether we will vectorise src or dst
+  bool vecSrc = true;
+  if ((1 << vbasis.size()) * bitwidth < 32) {
+    // Extend vbasis following the register orderings to avoid implicit
+    // reorderings and pick the layout that offers the best extra
+    // vectorisation opportunities.
+    auto isPrefix = [](ArrayRef<int32_t> prefix,
+                       ArrayRef<int32_t> regs) -> bool {
+      assert(prefix.size() <= regs.size());
+      for (size_t i = 0; i < prefix.size(); ++i) {
+        if (prefix[i] != regs[i]) {
+          return false;
+        }
+      }
+      return true;
+    };
+    bool srcPrefix = isPrefix(vbasis, regSrc);
+    bool dstPrefix = isPrefix(vbasis, regDst);
+
+    auto movePrefixToFront = [&vbasis](ArrayRef<int32_t> regs) {
+      SmallVector<int32_t> reordered;
+      reordered.append(vbasis.begin(), vbasis.end());
+      for (int32_t r : regs) {
+        if (!llvm::is_contained(vbasis, r)) {
+          reordered.push_back(r);
+        }
+      }
+      return reordered;
+    };
+
+    // If neither is a prefix we will have to emit PRMTs
+    // We move the basis to the front and continue
+    if (!vbasis.empty() && !srcPrefix && !dstPrefix) {
+      regSrc = movePrefixToFront(regSrc);
+      regDst = movePrefixToFront(regDst);
+      srcPrefix = isPrefix(vbasis, regSrc);
+      dstPrefix = isPrefix(vbasis, regDst);
+      assert(srcPrefix && dstPrefix && "src and dst must be prefixes");
+    }
+    auto fillVbasis = [basesPerBank](ArrayRef<int32_t> regs,
+                                     ArrayRef<int32_t> vbasis) {
+      SmallVector<int32_t> ret;
+      ret.append(vbasis.begin(), vbasis.end());
+      for (int i = vbasis.size(); i < basesPerBank && i < regs.size(); ++i) {
+        ret.push_back(regs[i]);
+      }
+      return ret;
+    };
+
+    // Choose the one that intersects more with the lane of the other after
+    // filling up bank0. This avoids creating bank conflicts with the
+    // non-vectorised part.
+    if (srcPrefix && dstPrefix) {
+      auto vecSrc =
+          intersectAfterBank0(regSrc, fillVbasis(regSrc, vbasis), laneDstSet);
+      auto vecDst =
+          intersectAfterBank0(regDst, fillVbasis(regDst, vbasis), laneSrcSet);
+      // Choose to go on with the one with the most vectorisation
+      srcPrefix = vecSrc >= vecDst;
+      dstPrefix = vecDst > vecSrc;
+    }
+    assert(srcPrefix != dstPrefix &&
+           "src and dst must have different prefixes");
+    // Fill up vbasis up to basesPerBank
+    vecSrc = srcPrefix;
+    vbasis = fillVbasis(vecSrc ? regSrc : regDst, vbasis);
+  }
+
+  // Append the extra vectorisation bases
+  vbasis.append(vecSrc ? intersectAfterBank0(regSrc, vbasis, laneDstSet)
+                       : intersectAfterBank0(regDst, vbasis, laneSrcSet));
+  return vbasis;
+}
+
 LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
                                   const LinearLayout &dst, int32_t bitwidth) {
   auto *ctx = src.getInDimNames().begin()->getContext();
@@ -454,135 +597,51 @@ LinearLayout optimalSwizzlingLdSt(const LinearLayout &src,
   auto regDst = flatten(dstFlat, kReg);
   auto laneSrc = flatten(srcFlat, kLane);
   auto laneDst = flatten(dstFlat, kLane);
-  auto dim = src.getTotalOutDimSizeLog2();
-  SmallVector<int32_t> vbasis = intersectionBasis(regSrc, regDst, dim);
-  // Restrict the vectorisation to the maximum we can use
-  auto maxVecBases = llvm::Log2_32(128 / bitwidth);
-  if (vbasis.size() > maxVecBases) {
-    vbasis.resize(maxVecBases);
-  }
-  // We fill-up vbasis until it has 32 bits as best we can
-  std::optional<bool> srcFillsBank = std::nullopt;
-  if ((1 << vbasis.size()) * bitwidth < 32) {
-    auto basesPerBank = llvm::Log2_32(32 / bitwidth);
-    auto kWarp = StringAttr::get(ctx, "warp");
-    auto warpSrc = removeZeros(flatten(srcFlat, kWarp));
-    auto warpDst = removeZeros(flatten(dstFlat, kWarp));
-    auto removeVec = [&vbasis](ArrayRef<int32_t> vec) {
-      SmallVector<int32_t> result;
-      for (int32_t r : vec) {
-        if (!llvm::is_contained(vbasis, r)) {
-          result.push_back(r);
-        }
-      }
-      return result;
-    };
-    auto regSrcWarp = intersectionBasis(removeVec(regSrc), warpDst, dim);
-    auto regDstWarp = intersectionBasis(removeVec(regDst), warpSrc, dim);
-    // Maximise vectorisation in the load or the store without creating
-    // conflicts
-    SmallVector<int32_t> largest;
-    if (regSrcWarp.size() == regDstWarp.size() && regSrcWarp.size() > 0) {
-      // We choose the one with the lowest basis in the hope that it will
-      // avoid PRMTs. The comparison of the mins will be strict as the sets
-      // removeVec(regSrc) and removeVec(regDst) don't intersect
-      if (*llvm::min_element(regSrcWarp) < *llvm::min_element(regDstWarp)) {
-        largest = regSrcWarp;
-        srcFillsBank = true;
+
+  // Compute the vectorisation basis
+  auto vbasis = getVbasis(srcFlat, dstFlat, bitwidth);
+
+  // Create the tile for ld.shared and st.shared
+  auto tileSrc = laneSrc;
+  auto tileDst = laneDst;
+
+  // Remove the last 1 or 2 bases if we do load/store of 64 or 128 bits
+  auto getVectorSize = [](ArrayRef<int32_t> regs, ArrayRef<int32_t> vbasis) {
+    for (auto [i, v] : llvm::enumerate(vbasis)) {
+      if (i < regs.size() && regs[i] == v) {
+        i++;
       } else {
-        largest = regDstWarp;
-        srcFillsBank = false;
+        return i;
       }
-    } else {
-      srcFillsBank = regSrcWarp.size() > regDstWarp.size();
-      largest = srcFillsBank.value() ? regSrcWarp : regDstWarp;
     }
-    vbasis.append(largest.begin(), largest.end());
-
-    if (vbasis.size() < basesPerBank) {
-      // Pad the vectorisation to 32 bits with warp bases
-      auto warpSrcWarp = intersectionBasis(warpSrc, warpDst, dim);
-      vbasis.append(warpSrcWarp.begin(), warpSrcWarp.end());
-    }
-
-    int i = 0;
-    while (vbasis.size() < basesPerBank &&
-           (i < warpSrc.size() || i < warpDst.size())) {
-      // If we have not filled up a whole bank, we add more warp bases
-      // until we have 32 bits. They will at least avoid bank conflicts in one
-      // direction
-      if (i < warpSrc.size() && !llvm::is_contained(vbasis, warpSrc[i])) {
-        vbasis.push_back(warpSrc[i]);
-      }
-      if (vbasis.size() < basesPerBank && i < warpDst.size() &&
-          !llvm::is_contained(vbasis, warpDst[i])) {
-        vbasis.push_back(warpDst[i]);
-      }
-      ++i;
-    }
-
-    // Trim to basesPerBank if we have added more
-    // The idea here is that implementing asymmetric vectorisation without bank
-    // conflicts is a bit tricky. Basically, in this case, you need to use the
-    // vectorisation base in the swizzling pattern. As such, you would not be
-    // able to vectorise all the `ld.shared` instructions that you emit, but
-    // just about half of them (the ones that are not swizzled). We don't
-    // implement this yet
-    if (vbasis.size() > basesPerBank) {
-      vbasis.resize(basesPerBank);
-    }
+    return vbasis.size();
+  };
+  auto vectorSizeSrc = getVectorSize(regSrc, vbasis);
+  if ((1 << vectorSizeSrc) * bitwidth > 32) {
+    auto vn = llvm::Log2_32((1 << vectorSizeSrc) * bitwidth / 32);
+    tileSrc = to_vector(ArrayRef(tileSrc).drop_back(vn));
   }
-  auto log2Vec = llvm::Log2_32(
-      std::max<int32_t>(1, ((1 << vbasis.size()) * bitwidth) / 32));
-  auto tileSrc = to_vector(ArrayRef(laneSrc).drop_back(log2Vec));
-  auto tileDst = to_vector(ArrayRef(laneDst).drop_back(log2Vec));
-  auto smem = optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrc,
-                               tileDst, src.getOutDims());
-
-  // We might be able to vectorise a bit more the load or the store
-  // This may happen when there is broadcasting
-  // e.g for fp32
-  // src = {reg = [], lane = [1, 2, 4, 8, 16], warp = [32]}
-  // dst = {reg = [8, 32], lane = [0, 0, 1, 2, 4], warp = [16]}
-  if (log2Vec < 2) {
-    auto smemFlat = smem.flattenOuts();
-    // For every bank line, find if it is in regSrc or regDst
-    // and if so, store the index in the vector
-    SmallVector<size_t> idxBanksInRegSrc;
-    SmallVector<size_t> idxBanksInRegDst;
-    auto kBank = StringAttr::get(ctx, "bank");
-    const auto &banks = flatten(smemFlat, kBank);
-    for (auto [i, r] : llvm::enumerate(banks)) {
-      if (llvm::is_contained(regSrc, r)) {
-        idxBanksInRegSrc.push_back(i);
-      }
-      if (llvm::is_contained(regDst, r)) {
-        idxBanksInRegDst.push_back(i);
-      }
-    }
-
-    // Choose src/dst if we used them to fill the bank
-    // Otherwise choose the max vectorisation
-    SmallVector<size_t> bBasisOrder;
-    if (srcFillsBank.has_value() && srcFillsBank.value()) {
-      bBasisOrder = std::move(idxBanksInRegSrc);
-    } else if (srcFillsBank.has_value() && !srcFillsBank.value()) {
-      bBasisOrder = std::move(idxBanksInRegDst);
-    } else {
-      bBasisOrder = idxBanksInRegSrc.size() > idxBanksInRegDst.size()
-                        ? std::move(idxBanksInRegSrc)
-                        : std::move(idxBanksInRegDst);
-    }
-    for (int i = 0; i < banks.size(); ++i) {
-      if (!llvm::is_contained(bBasisOrder, i)) {
-        bBasisOrder.push_back(i);
-      }
-    }
-    smem = ColumnAction(bBasisOrder, kBank, smem.getInDimSizeLog2(kBank))
-               .apply(smem);
+  auto vectorSizeDst = getVectorSize(regDst, vbasis);
+  if ((1 << vectorSizeDst) * bitwidth > 32) {
+    auto vn = llvm::Log2_32((1 << vectorSizeDst) * bitwidth / 32);
+    tileDst = to_vector(ArrayRef(tileDst).drop_back(vn));
   }
 
-  return smem;
+  // Remove the bases that we already used in the vectorisation
+  auto removeVbasis = [](ArrayRef<int32_t> lane, ArrayRef<int32_t> vbasis) {
+    SmallVector<int32_t> ret;
+    for (auto b : lane) {
+      if (!llvm::is_contained(vbasis, b)) {
+        ret.push_back(b);
+      }
+    }
+    return ret;
+  };
+  tileSrc = removeVbasis(tileSrc, vbasis);
+  tileDst = removeVbasis(tileDst, vbasis);
+
+  return optimalSwizzling(srcFlat, dstFlat, bitwidth, vbasis, tileSrc, tileDst,
+                          src.getOutDims());
 }
 
 std::pair<LinearLayout, std::pair<int32_t, int32_t>>
