@@ -2954,6 +2954,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 }
 """)
 
+
 def test_async_tma_layout():
     input = torch.randn((1024, 1024), device="cuda", dtype=torch.float32)
     XBLOCK = 128
