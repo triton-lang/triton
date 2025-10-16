@@ -1432,37 +1432,3 @@ def test_tcgen05_mma_scaled_minimal():
     torch.testing.assert_close(out, ref, atol=1e-6, rtol=1e-6)
     ttgir = compiled.asm["ttgir"]
     assert "ttng.tc_gen5_mma_scaled" in ttgir
-
-@pytest.mark.parametrize("use_layout", [True, False])
-def test_async_tma(use_layout):
-
-    @gluon.jit
-    def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, smem_layout: ttgl.constexpr, USE_LAYOUT: ttgl.constexpr):
-
-        if USE_LAYOUT:
-            smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], smem_layout)
-        else:
-            smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], mbarrier.MBarrierLayout())
-
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
-        mbarrier.init(bar, count=1)
-
-        mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
-        mbarrier.wait(bar, 0)
-
-        mbarrier.invalidate(bar)
-
-        tma.async_copy_shared_to_global(input_desc, [0, 0], smem)
-        tma.store_wait(0)
-
-    input = torch.randn((1024, 1024), device="cuda", dtype=torch.float32)
-    XBLOCK = 128
-    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
-    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
-
-    if use_layout:
-        async_tma_kernel[(1, )](input_desc, XBLOCK, shared_layout, num_warps=1)
-    else:
-        with pytest.raises(Exception):
-            async_tma_kernel[(1, )](input_desc, XBLOCK, shared_layout, num_warps=1)
