@@ -35,11 +35,11 @@ def plus_a(x, a):
 
 
 @pytest.mark.parametrize("B, M, N, postprocess_fn", [
-    (907, 1024, 1024, None),
-    (1024, 907, 1024, None),
-    (1024, 1024, 907, None),
-    (1024, 1024, 1024, None),
-    (1024, 1024, 1024, "plus_ten"),
+    (311, 384, 384, None),
+    (384, 311, 384, None),
+    (384, 384, 311, None),
+    (512, 512, 512, None),
+    (512, 512, 512, "plus_ten"),
     (4, 4, 4, None),
 ])
 @pytest.mark.parametrize("dtype_str", [
