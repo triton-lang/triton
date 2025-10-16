@@ -38,6 +38,7 @@ repos:
     rev: v19.1.6
     hooks:
       - id: clang-format
+        files: '(^lib|^include|^third_party/^unittest)/.*'
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: "v1.15.0"
