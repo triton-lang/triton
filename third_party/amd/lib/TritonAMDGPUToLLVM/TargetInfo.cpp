@@ -65,7 +65,20 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(arch);
 }
 
-int TargetInfo::getWarpSize() const { return isCDNA(getISAFamily()) ? 64 : 32; }
+int TargetInfo::getWarpSize() const {
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA1:
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+    return 64;
+  case ISAFamily::GFX1250:
+    return 32;
+  default:
+    break;
+  }
+  return 32;
+}
 
 int TargetInfo::getSharedMemorySize() const {
   int kbytes = getISAFamily() == ISAFamily::CDNA4 ? 160 : 64;
@@ -111,12 +124,15 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
 std::optional<TargetInfo::LDSTransLoadParams>
 TargetInfo::queryLDSTransLoadParams(int bitwidth) const {
-  bool canUseTransLoad = getISAFamily() == ISAFamily::CDNA4 &&
-                         llvm::is_contained({16, 8, 4, 6}, bitwidth);
+  auto isaFamily = getISAFamily();
+  bool isGFX1250 = isaFamily == AMD::ISAFamily::GFX1250;
+  bool isCDNA4 = isaFamily == AMD::ISAFamily::CDNA4;
+  bool canUseTransLoad =
+      (isCDNA4 || isGFX1250) && llvm::is_contained({16, 8, 4, 6}, bitwidth);
   if (!canUseTransLoad)
     return std::nullopt;
   unsigned numLanesInShuffleGroup = getWarpSize() / 4;
-  unsigned instBitWidth = 64;
+  unsigned instBitWidth = isGFX1250 && bitwidth == 16 ? 128 : 64;
   unsigned needContigReg = instBitWidth / bitwidth;
   return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth,
                             needContigReg};

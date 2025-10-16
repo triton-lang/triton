@@ -1,6 +1,7 @@
 #include "AsyncUtility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -41,6 +42,10 @@ public:
     // FP4 is represented as i8 and, when packed along K, can be
     // transposed using ds_read_tr8 which doesn't change packing.
     if (bitwidth != 16 && bitwidth != 8) {
+      return failure();
+    }
+    // FP4 packed along M/N are not supported yet on GFX1250
+    if (targetInfo.getISAFamily() == AMD::ISAFamily::GFX1250 && isPackedLoad) {
       return failure();
     }
 
@@ -123,23 +128,50 @@ private:
     cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
     auto lowerInst = [&](RewriterBase &rewriter, Location loc,
                          ArrayRef<Value> inVals, Value vecAddr, int idx,
-                         VectorType vTy) {
+                         VectorType vTy) -> SmallVector<Value> {
+      assert(bitwidth == 16 || bitwidth == 8);
       Value dsReadTr;
-      if (bitwidth == 16) {
-        dsReadTr = rewriter.create<ROCDL::ds_read_tr16_b64>(loc, vTy, vecAddr);
-      } else {
-        assert(bitwidth == 8);
-        auto numElems = vTy.getNumElements();
-        auto numElemsI32 = (numElems * bitwidth / 32);
-        auto ty = VectorType::get(numElemsI32, i32_ty);
-        if (isPackedLoad) {
-          dsReadTr = rewriter.create<ROCDL::ds_read_tr4_b64>(loc, ty, vecAddr);
-        } else {
-          dsReadTr = rewriter.create<ROCDL::ds_read_tr8_b64>(loc, ty, vecAddr);
-        }
+      // tr16 instructions return vectors of bf16/f16 while "tr8" instructions
+      // return vectors of i32. Generate the corresponding i32 vector
+      auto numElemsI32 = (vTy.getNumElements() * bitwidth / 32);
+      auto vTyI32 = VectorType::get(numElemsI32, i32_ty);
+      switch (targetInfo.getISAFamily()) {
+      case AMD::ISAFamily::GFX1250: {
+        if (bitwidth == 16) {
+          dsReadTr = LLVM::createLLVMIntrinsicCallOp(
+                         rewriter, loc, "llvm.amdgcn.ds.load.tr16.b128", {vTy},
+                         {vecAddr})
+                         .getResult(0);
+        } else
+          dsReadTr = LLVM::createLLVMIntrinsicCallOp(
+                         rewriter, loc, "llvm.amdgcn.ds.load.tr8.b64", {vTyI32},
+                         {vecAddr})
+                         .getResult(0);
+        break;
       }
-      AMD::addLocalLoadNoAliasScope(
-          op, cast<LLVM::AliasAnalysisOpInterface>(dsReadTr.getDefiningOp()));
+      case AMD::ISAFamily::CDNA4: {
+        if (bitwidth == 16) {
+          dsReadTr =
+              rewriter.create<ROCDL::ds_read_tr16_b64>(loc, vTy, vecAddr);
+        } else {
+          if (isPackedLoad) {
+            dsReadTr =
+                rewriter.create<ROCDL::ds_read_tr4_b64>(loc, vTyI32, vecAddr);
+          } else {
+            dsReadTr =
+                rewriter.create<ROCDL::ds_read_tr8_b64>(loc, vTyI32, vecAddr);
+          }
+        }
+        break;
+      }
+      default:
+        return {};
+      }
+      // GFX1250 is currently using LLVM intrinsics so it cannot cast it to
+      // AliasAnalysisOpInterface
+      if (targetInfo.getISAFamily() != AMD::ISAFamily::GFX1250)
+        AMD::addLocalLoadNoAliasScope(
+            op, cast<LLVM::AliasAnalysisOpInterface>(dsReadTr.getDefiningOp()));
       Value vecVal = b.bitcast(dsReadTr, vTy);
       SmallVector<Value> loadedVals;
       for (int v = 0; v < vTy.getNumElements(); v++) {
