@@ -28,7 +28,7 @@ def legacy_routing_from_bitmatrix(bitmatrix, expt_scal, expt_indx, n_expts_tot, 
     combine_indx = sparse_logits.mask_metadata.row_sorted_indx
     ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
     gate_scal = sparse_logits.vals.flatten()[combine_indx]
-    routing_data = RoutingData(gate_scal, ragged_batch_metadata.batch_sizes, n_expts_tot, n_expts_act,
+    routing_data = RoutingData(gate_scal, ragged_batch_metadata.slice_sizes, n_expts_tot, n_expts_act,
                                ragged_batch_metadata)
     gather_idx = GatherIndx(combine_indx, dispatch_indx)
     scatter_idx = ScatterIndx(dispatch_indx, combine_indx)

@@ -293,6 +293,13 @@ struct OptimizePartitionWarps
 } // namespace
 
 void OptimizePartitionWarps::runOnOperation() {
+  SmallVector<WarpSpecializeOp> wsOps;
+  getOperation().walk([&](WarpSpecializeOp wsOp) { wsOps.push_back(wsOp); });
+
+  if (wsOps.empty()) {
+    return;
+  }
+
   ModuleAxisInfoAnalysis axisInfo(getOperation());
   auto runPipelineFn = [&](OpPassManager &pm, ModuleOp container) {
     // The module must be directly nested under the current op for `runPipeline`
@@ -301,11 +308,10 @@ void OptimizePartitionWarps::runOnOperation() {
     auto remove = llvm::make_scope_exit([&] { container->remove(); });
     return runPipeline(pm, container);
   };
-  WalkResult result = getOperation().walk([&](WarpSpecializeOp wsOp) {
-    if (failed(optimizePartitionNumWarps(axisInfo, wsOp, runPipelineFn)))
-      return WalkResult::interrupt();
-    return WalkResult::skip();
-  });
-  if (result.wasInterrupted())
-    return signalPassFailure();
+
+  for (auto wsOp : wsOps) {
+    if (failed(optimizePartitionNumWarps(axisInfo, wsOp, runPipelineFn))) {
+      return signalPassFailure();
+    }
+  }
 }
