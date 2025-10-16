@@ -3429,7 +3429,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
     if in_dtype == 'float32' and input_precision != "ieee":
         if is_tcgen5:
-            assert re.search(r'tcgen05.mma.cta_group::1.kind::tf32', ptx)
+            if input_precision in ("bf16x3", "bf16x6"):
+                assert re.search(r'tcgen05.mma.cta_group::1.kind::bf16', ptx)
+            else:
+                assert re.search(r'tcgen05.mma.cta_group::1.kind::tf32', ptx)
         elif input_precision in ("bf16x3", "bf16x6"):
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.bf16.bf16', ptx)
         else:
