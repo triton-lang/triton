@@ -328,10 +328,13 @@ void init_triton_llvm(py::module &&m) {
           });
         }
 
-        PassInstrumentationCallbacks *instrCbPtr = nullptr;
-        PassInstrumentationCallbacks passInstrCb;
-        StandardInstrumentations standardInstr(mod->getContext(),
-                                               /*DebugLogging*/ true);
+        bool registerCallBacks = false;
+        bool debugLogging = false;
+        if (mlir::triton::tools::getBoolEnv("LLVM_ENABLE_TIMING")) {
+          llvm::TimePassesIsEnabled = true;
+          llvm::TimePassesPerRun = true;
+          registerCallBacks = true;
+        }
         if (mlir::triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
           auto optMap = llvm::cl::getRegisteredOptions();
           auto optIt = optMap.find("print-after-all");
@@ -339,6 +342,14 @@ void init_triton_llvm(py::module &&m) {
             auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
             *optPtr = true;
           }
+          debugLogging = true;
+          registerCallBacks = true;
+        }
+
+        PassInstrumentationCallbacks *instrCbPtr = nullptr;
+        PassInstrumentationCallbacks passInstrCb;
+        StandardInstrumentations standardInstr(mod->getContext(), debugLogging);
+        if (registerCallBacks) {
           standardInstr.registerCallbacks(passInstrCb, &mam);
           instrCbPtr = &passInstrCb;
         }
