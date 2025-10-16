@@ -25,6 +25,22 @@ def _make_expt_dict_for_mode(n_shards, n_expts_tot, affinity_mode):
     except KeyError as exc:
         raise ValueError(f"Unknown affinity mode: {affinity_mode}") from exc
 
+def _make_y_indx_for_mode(n_tokens_global, n_expts_tot, n_expts_act, n_shards, affinity_mode, dev):
+    y_indx_global = None
+    if affinity_mode == "uniform":
+        if n_expts_tot % n_shards != 0:
+            raise ValueError("uniform affinity requires experts evenly divisible by shards")
+        expts_per_rank = n_expts_tot // n_shards
+        rounds = (n_expts_act + n_shards - 1) // n_shards
+        if rounds > expts_per_rank:
+            raise ValueError("round-robin selection exceeds experts available per shard")
+        order = torch.arange(n_expts_act, device=dev, dtype=torch.int32)
+        shard_order = order % n_shards
+        intra_shard = order // n_shards
+        round_robin_indx = (shard_order * expts_per_rank + intra_shard).to(torch.int16)
+        y_indx_global = round_robin_indx.unsqueeze(0).expand(n_tokens_global, -1).contiguous()
+    return y_indx_global
+
 # ------------------------------------------------------------
 # fixture
 # ------------------------------------------------------------
@@ -275,19 +291,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     l_dp_local = l_global[first_token_indx:last_token_indx, :]
     # routing
     # test correctness
-    y_indx_global = None
-    if affinity_mode == "uniform":
-        if n_expts_tot % n_shards != 0:
-            raise ValueError("uniform affinity requires experts evenly divisible by shards")
-        expts_per_rank = n_expts_tot // n_shards
-        rounds = (n_expts_act + n_shards - 1) // n_shards
-        if rounds > expts_per_rank:
-            raise ValueError("round-robin selection exceeds experts available per shard")
-        order = torch.arange(n_expts_act, device=dev, dtype=torch.int32)
-        shard_order = order % n_shards
-        intra_shard = order // n_shards
-        round_robin_indx = (shard_order * expts_per_rank + intra_shard).to(torch.int16)
-        y_indx_global = round_robin_indx.unsqueeze(0).expand(n_tokens_global, -1).contiguous()
+    y_indx_global = _make_y_indx_for_mode(n_tokens_global, n_expts_tot, n_expts_act, n_shards, affinity_mode, dev)
     y_global_ref = mixture_of_expt_nosharded(
         x_global,
         l_global,
