@@ -29,7 +29,6 @@ int deduceMinCountBetweeOps(Operation *beginOp, Operation *endOp,
           deduceMinCountInBlock(ifOp.getElseRegion().front(), countFunc);
       count += std::min(minThen, minElse);
     } else if (auto forOp = llvm::dyn_cast<scf::ForOp>(op)) {
-<<<<<<< HEAD
       if (std::optional<APInt> tripCount = forOp.getStaticTripCount()) {
         uint64_t tcVal = 0;
         if (forOp.getUnsignedCmp() && tripCount->ugt(0))
@@ -38,13 +37,6 @@ int deduceMinCountBetweeOps(Operation *beginOp, Operation *endOp,
           tcVal = tripCount->getSExtValue();
         if (tcVal > 0)
           count += tcVal * deduceMinCountInBlock(*forOp.getBody(), countFunc);
-=======
-      int64_t tripCount = forOp.getStaticTripCount()
-                              .value_or(llvm::APInt(64, 0))
-                              .getZExtValue();
-      if (tripCount > 0) {
-        count += tripCount * deduceMinCountInBlock(*forOp.getBody(), countFunc);
->>>>>>> 0bf92bfbf ([BACKEND] Update LLVM version to https://github.com/llvm/llvm-project/commit/b8649098a7fcf598406d8d8b7d68891d1444e9c8 (#8263))
       }
     } else {
       count += countFunc(op);
