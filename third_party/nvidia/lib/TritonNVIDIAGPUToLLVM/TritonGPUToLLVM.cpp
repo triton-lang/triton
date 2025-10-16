@@ -86,7 +86,8 @@ struct ConvertTritonGPUToLLVM
     ModuleAllocation allocation(
         mod, mlir::triton::nvidia_gpu::getNvidiaAllocationAnalysisScratchSizeFn(
                  targetInfo));
-    ModuleMembarAnalysis membarPass(&allocation);
+    ModuleMembarAnalysis membarPass(&allocation,
+                                    mlir::triton::NVIDIA::canSkipBarSync);
     membarPass.run();
 
     mlir::LowerToLLVMOptions option(context);
