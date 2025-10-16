@@ -1,4 +1,3 @@
-import torch
 import expecttest
 import pytest
 import re
@@ -2956,7 +2955,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 def test_async_tma_layout():
-    input = torch.randn((1024, 1024), device="cuda", dtype=torch.float32)
+    input = MockTensor(ttgl.float32, (1024, 1024))
     XBLOCK = 128
     shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
     input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
