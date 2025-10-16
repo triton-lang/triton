@@ -120,8 +120,8 @@ def test_filter_expt_data(n_expts_tot, n_expts_act, n_shards, affinity_mode, n_t
 # ------------------------------------------------------------
 
 
-def routing(logits, n_expts_act, all_gather=False):
-    sparse_logits = topk(logits, n_expts_act, all_gather=all_gather)
+def routing(logits, n_expts_act, all_gather=False, y_indx=None):
+    sparse_logits = topk(logits, n_expts_act, all_gather=all_gather, y_indx=y_indx)
     dispatch_indx = sparse_logits.mask_metadata.col_sorted_indx
     combine_indx = sparse_logits.mask_metadata.row_sorted_indx
     ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
@@ -133,15 +133,17 @@ def routing(logits, n_expts_act, all_gather=False):
     return routing_data, gather_idx, scatter_idx, sparse_logits.indx
 
 
-def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act):
-    rdata, combine_indx, dispatch_indx, _ = routing(l_global, n_expts_act)
+def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act, y_indx=None):
+    rdata, combine_indx, dispatch_indx, _ = routing(l_global, n_expts_act, y_indx=y_indx)
     y_global = matmul_ogs(x_global, w_global, b_global, rdata, gather_indx=combine_indx, scatter_indx=dispatch_indx)
     return y_global
 
 
-def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, expt_assignment, n_expts_act):
+def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, expt_assignment, n_expts_act,
+                              y_indx=None):
     rank = dist.get_rank()
-    rdata_global, combine_indx, dispatch_indx, expt_indx = routing(l_dp_local, n_expts_act, all_gather=True)
+    rdata_global, combine_indx, dispatch_indx, expt_indx = routing(l_dp_local, n_expts_act, all_gather=True,
+                                                                  y_indx=y_indx)
     y_ep_local = convert_dp_to_ep(x_dp_local, expt_assignment, expt_indx, dispatch_indx.src_indx)
     expt_data_local = filter_expt_data(rdata_global.expt_data, expt_assignment, rank)
     rdata_ep_local = RoutingData(
@@ -273,9 +275,30 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     l_dp_local = l_global[first_token_indx:last_token_indx, :]
     # routing
     # test correctness
-    y_global_ref = mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act)
+    y_indx_global = None
+    if affinity_mode == "uniform":
+        if n_expts_tot % n_shards != 0:
+            raise ValueError("uniform affinity requires experts evenly divisible by shards")
+        expts_per_rank = n_expts_tot // n_shards
+        rounds = (n_expts_act + n_shards - 1) // n_shards
+        if rounds > expts_per_rank:
+            raise ValueError("round-robin selection exceeds experts available per shard")
+        order = torch.arange(n_expts_act, device=dev, dtype=torch.int32)
+        shard_order = order % n_shards
+        intra_shard = order // n_shards
+        round_robin_indx = (shard_order * expts_per_rank + intra_shard).to(torch.int16)
+        y_indx_global = round_robin_indx.unsqueeze(0).expand(n_tokens_global, -1).contiguous()
+    y_global_ref = mixture_of_expt_nosharded(
+        x_global,
+        l_global,
+        w_global,
+        b_global,
+        n_expts_act,
+        y_indx=y_indx_global,
+    )
 
     def run_mixture():
+        y_indx_local = None if y_indx_global is None else y_indx_global[first_token_indx:last_token_indx, :].contiguous()
         return mixture_of_expt_epsharded(
             x_dp_local,
             l_dp_local,
@@ -283,6 +306,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
             b_ep_local,
             expt_assignment,
             n_expts_act,
+            y_indx=y_indx_local,
         )
 
     # test cuda graph capture + replay with symmetric memory
