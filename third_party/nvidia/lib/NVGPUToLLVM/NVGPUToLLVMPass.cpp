@@ -232,16 +232,12 @@ class ClusterCTAIdOpPattern : public OpRewritePattern<ttn::ClusterCTAIdOp> {
 
   LogicalResult matchAndRewrite(ttn::ClusterCTAIdOp op,
                                 PatternRewriter &rewriter) const override {
+    // We always use nx1x1 in compiler.py
+    // num_ctas == 16 is non-portable. Does work for H100 and B200 tho
+    auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(
+        op->getParentOfType<ModuleOp>());
     auto loc = op.getLoc();
-    auto a0 = NVVM::BlockInClusterIdXOp::create(rewriter, loc, i32_ty);
-    auto a1 = NVVM::BlockInClusterIdYOp::create(rewriter, loc, i32_ty);
-    auto a2 = NVVM::BlockInClusterIdZOp::create(rewriter, loc, i32_ty);
-    auto a3 = NVVM::ClusterDimBlocksXOp::create(rewriter, loc, i32_ty);
-    auto a4 = NVVM::ClusterDimBlocksYOp::create(rewriter, loc, i32_ty);
-    auto p1 = LLVM::MulOp::create(rewriter, loc, a2, a4);
-    auto s1 = LLVM::AddOp::create(rewriter, loc, a1, p1);
-    auto p2 = LLVM::MulOp::create(rewriter, loc, s1, a3);
-    auto res = LLVM::AddOp::create(rewriter, loc, a0, p2);
+    auto res = NVVM::BlockInClusterIdXOp::create(rewriter, loc, i32_ty);
     rewriter.replaceOp(op, res);
     return success();
   }
