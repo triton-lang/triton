@@ -67,6 +67,18 @@ def test_copy_kernel(layout, XBLOCK):
     torch.testing.assert_close(out, inp)
 
 
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_copy_kernel_multi_cta():
+    XBLOCK = 2048
+    layout = ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[8], order=[0],
+                                ctas_per_cga=[2], cta_split_num=[2])
+
+    inp = torch.randn(XBLOCK * 4 - 7, device="cuda")
+    out = torch.empty_like(inp)
+    copy_kernel[(4, )](out, inp, inp.numel(), XBLOCK, layout, num_warps=layout.warps_per_cta[0], num_ctas=2)
+    torch.testing.assert_close(out, inp)
+
+
 @gluon.jit
 def tma_kernel(desc):
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
