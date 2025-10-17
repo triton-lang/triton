@@ -1,4 +1,4 @@
-#include "Dialect/NVGPU/IR/Dialect.h"
+#include "Dialect/NVG/IR/Dialect.h"
 #include "DotOpToLLVM/MMAHelpers.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
@@ -294,7 +294,7 @@ SmallVector<Value> lowerTMemLdSt(Location loc,
     return std::make_pair(std::get<1>(rowCol[0]), std::get<1>(rowCol[1]));
   };
 
-  Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
+  Value warpId = rewriter.create<nvg::WarpIdOp>(loc);
   // Map warpId to rows 32 and 64
   auto warpIdInGroup = b.and_(warpId, b.i32_val(3));
   tmemBase = b.add(tmemBase, b.shl(warpIdInGroup, b.i32_val(5 + 16)));
@@ -481,7 +481,7 @@ struct TensorMemoryAllocOpConversion
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto ctx = op.getContext();
-    Value base = rewriter.create<nvgpu::TensorMemoryBaseAddress>(loc);
+    Value base = rewriter.create<nvg::TensorMemoryBaseAddress>(loc);
     Value baseInt = b.ptrtoint(i32_ty, base);
     int colOffset = cast<IntegerAttr>(op->getAttr("tensor_memory_col_offset"))
                         .getValue()

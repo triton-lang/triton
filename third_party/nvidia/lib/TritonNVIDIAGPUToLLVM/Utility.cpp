@@ -1,5 +1,5 @@
 #include "Utility.h"
-#include "Dialect/NVGPU/IR/Dialect.h"
+#include "Dialect/NVG/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/LayoutUtils.h"

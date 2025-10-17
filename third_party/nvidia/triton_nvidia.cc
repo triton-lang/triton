@@ -1,6 +1,6 @@
-#include "Dialect/NVGPU/IR/Dialect.h"
+#include "Dialect/NVG/IR/Dialect.h"
 #include "Dialect/NVWS/IR/Dialect.h"
-#include "NVGPUToLLVM/Passes.h"
+#include "NVGToLLVM/Passes.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "cublas_instance.h"
 #include "mlir/Pass/PassManager.h"
@@ -48,7 +48,7 @@ createTritonGPUProxyFenceInsertionWrapper(int32_t capability) {
   return ttng::createTritonGPUProxyFenceInsertion(options);
 }
 
-void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
+void init_triton_nvidia_passes_ttnvgir(py::module &&m) {
   ADD_PASS_WRAPPER_1("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass,
                      mlir::triton::nvidia_gpu::ClusterInfo *);
   ADD_PASS_WRAPPER_1("add_fence_insertion",
@@ -61,8 +61,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      ttng::createTritonNvidiaGPUPromoteLHSToTMemPass);
   ADD_PASS_WRAPPER_0("add_remove_tmem_tokens",
                      ttng::createTritonNvidiaGPURemoveTMEMTokensPass);
-  ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
-                     mlir::triton::createConvertNVGPUToLLVM);
+  ADD_PASS_WRAPPER_0("add_nvg_to_llvm",
+                     mlir::triton::createConvertNVGToLLVM);
   ADD_PASS_WRAPPER_0("add_warp_specialize_to_llvm",
                      mlir::triton::createConvertWarpSpecializeToLLVM);
   ADD_PASS_WRAPPER_0("add_allocate_tensor_memory",
@@ -90,7 +90,7 @@ void init_triton_nvidia_passes_nvws(py::module &&m) {
 void init_triton_hopper_passes(py::module &&m) {
   // Meta's autoWS
   ADD_PASS_OPTION_WRAPPER_2("add_hopper_warpspec",
-                            mlir::createNVGPUWarpSpecialization, int, bool);
+                            mlir::createNVGWarpSpecialization, int, bool);
 }
 
 static void checkMatmulConstraints(const std::string &A_dtype,
@@ -145,7 +145,7 @@ void init_triton_nvidia(py::module &&m) {
   auto passes = m.def_submodule("passes");
   init_triton_nvidia_passes_nvws(passes.def_submodule("nvws"));
   init_triton_nvidia_passes_ttgpuir(passes.def_submodule("ttgpuir"));
-  init_triton_nvidia_passes_ttnvgpuir(passes.def_submodule("ttnvgpuir"));
+  init_triton_nvidia_passes_ttnvgir(passes.def_submodule("ttnvgir"));
   init_triton_hopper_passes(passes.def_submodule("hopper"));
 
   // cluster info
@@ -168,7 +168,7 @@ void init_triton_nvidia(py::module &&m) {
   m.def("load_dialects", [](mlir::MLIRContext &context) {
     mlir::DialectRegistry registry;
     registry.insert<mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
-                    mlir::triton::nvgpu::NVGPUDialect,
+                    mlir::triton::nvg::NVGDialect,
                     mlir::triton::nvws::NVWSDialect>();
     mlir::registerNVVMDialectTranslation(registry);
     context.appendDialectRegistry(registry);

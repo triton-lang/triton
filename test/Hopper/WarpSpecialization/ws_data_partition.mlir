@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --nvgpu-test-ws-data-partition=num-warp-groups=3 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --nvg-test-ws-data-partition=num-warp-groups=3 | FileCheck %s
 
 // CHECK-LABEL: @matmul_persistent_ws_cooperative_kernel
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>

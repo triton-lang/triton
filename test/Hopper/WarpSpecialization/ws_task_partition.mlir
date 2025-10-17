@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --nvgpu-test-ws-task-partition=num-warp-groups=3 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --nvg-test-ws-task-partition=num-warp-groups=3 | FileCheck %s
 
 // CHECK-LABEL: @matmul_persistent_tma_ws_cooperative_kernel
 // CHECK: %[[#GA:]] = tt.descriptor_load {{.*}} {async_task_id = array<i32: 0>}

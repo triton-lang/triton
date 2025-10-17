@@ -21,26 +21,26 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef TRITON_DIALECT_NVGPU_IR_DIALECT_H_
-#define TRITON_DIALECT_NVGPU_IR_DIALECT_H_
+#ifndef TRITON_DIALECT_NVG_IR_DIALECT_H_
+#define TRITON_DIALECT_NVG_IR_DIALECT_H_
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
-#include "nvidia/include/Dialect/NVGPU/IR/Dialect.h.inc"
-#include "nvidia/include/Dialect/NVGPU/IR/OpsEnums.h.inc"
+#include "nvidia/include/Dialect/NVG/IR/Dialect.h.inc"
+#include "nvidia/include/Dialect/NVG/IR/OpsEnums.h.inc"
 
 #define GET_ATTRDEF_CLASSES
-#include "nvidia/include/Dialect/NVGPU/IR/NVGPUAttrDefs.h.inc"
+#include "nvidia/include/Dialect/NVG/IR/NVGAttrDefs.h.inc"
 
 #define GET_OP_CLASSES
-#include "nvidia/include/Dialect/NVGPU/IR/Ops.h.inc"
+#include "nvidia/include/Dialect/NVG/IR/Ops.h.inc"
 
 namespace mlir {
 namespace triton {
-namespace nvgpu {} // namespace nvgpu
+namespace nvg {} // namespace nvg
 } // namespace triton
 } // namespace mlir
 

@@ -1,4 +1,4 @@
-#include "Dialect/NVGPU/IR/Dialect.h"
+#include "Dialect/NVG/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "Utility.h"

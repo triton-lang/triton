@@ -25,25 +25,25 @@
 #include "mlir/IR/OpImplementation.h"
 
 // clang-format off
-#include "Dialect/NVGPU/IR/Dialect.h"
-#include "Dialect/NVGPU/IR/Dialect.cpp.inc"
+#include "Dialect/NVG/IR/Dialect.h"
+#include "Dialect/NVG/IR/Dialect.cpp.inc"
 // clang-format on
 
 using namespace mlir;
-using namespace mlir::triton::nvgpu;
+using namespace mlir::triton::nvg;
 
-void mlir::triton::nvgpu::NVGPUDialect::initialize() {
+void mlir::triton::nvg::NVGDialect::initialize() {
   addAttributes<
 #define GET_ATTRDEF_LIST
-#include "Dialect/NVGPU/IR/NVGPUAttrDefs.cpp.inc"
+#include "Dialect/NVG/IR/NVGAttrDefs.cpp.inc"
       >();
 
   addOperations<
 #define GET_OP_LIST
-#include "Dialect/NVGPU/IR/Ops.cpp.inc"
+#include "Dialect/NVG/IR/Ops.cpp.inc"
       >();
 }
 
 #define GET_OP_CLASSES
-#include "Dialect/NVGPU/IR/Ops.cpp.inc"
-#include "Dialect/NVGPU/IR/OpsEnums.cpp.inc"
+#include "Dialect/NVG/IR/Ops.cpp.inc"
+#include "Dialect/NVG/IR/OpsEnums.cpp.inc"

@@ -1,5 +1,5 @@
 #include "TargetInfo.h"
-#include "Dialect/NVGPU/IR/Dialect.h"
+#include "Dialect/NVG/IR/Dialect.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -130,7 +130,7 @@ bool TargetInfo::supportMaximumMinimum() const {
 }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
-  return rewriter.create<triton::nvgpu::ClusterCTAIdOp>(loc,
+  return rewriter.create<triton::nvg::ClusterCTAIdOp>(loc,
                                                         rewriter.getI32Type());
 }
 

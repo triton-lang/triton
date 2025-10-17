@@ -1,4 +1,4 @@
-#include "Dialect/NVGPU/IR/Dialect.h"
+#include "Dialect/NVG/IR/Dialect.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "TritonNVIDIAGPUToLLVM/Utility.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -53,7 +53,7 @@ public:
     addLegalDialect<LLVM::LLVMDialect>();
     addLegalDialect<NVVM::NVVMDialect>();
     addLegalDialect<cf::ControlFlowDialect>();
-    addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
+    addLegalDialect<mlir::triton::nvg::NVGDialect>();
     addIllegalDialect<triton::TritonDialect>();
     addIllegalDialect<triton::gpu::TritonGPUDialect>();
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
@@ -191,7 +191,7 @@ struct ConvertTritonGPUToLLVM
     // Fold CTAId when there is only 1 CTA.
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     if (numCTAs == 1) {
-      mod.walk([](triton::nvgpu::ClusterCTAIdOp id) {
+      mod.walk([](triton::nvg::ClusterCTAIdOp id) {
         OpBuilder b(id);
         Value zero = LLVM::createConstantI32(id->getLoc(), b, 0);
         id.replaceAllUsesWith(zero);

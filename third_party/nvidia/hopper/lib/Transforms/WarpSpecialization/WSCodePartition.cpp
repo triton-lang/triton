@@ -28,7 +28,7 @@ namespace ttng = ::mlir::triton::nvidia_gpu;
 namespace ttnvws = ::mlir::triton::nvws;
 namespace mlir {
 
-#define DEBUG_TYPE "nvgpu-ws-code-partition"
+#define DEBUG_TYPE "nvg-ws-code-partition"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -1315,14 +1315,14 @@ void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers) {
   });
 }
 
-#define GEN_PASS_DEF_NVGPUTESTWSCODEPARTITION
+#define GEN_PASS_DEF_NVGTESTWSCODEPARTITION
 #include "nvidia/hopper/include/Transforms/Passes.h.inc"
 
-class NVGPUTestWSCodePartitionPass
-    : public impl::NVGPUTestWSCodePartitionBase<NVGPUTestWSCodePartitionPass> {
+class NVGTestWSCodePartitionPass
+    : public impl::NVGTestWSCodePartitionBase<NVGTestWSCodePartitionPass> {
 public:
-  using impl::NVGPUTestWSCodePartitionBase<
-      NVGPUTestWSCodePartitionPass>::NVGPUTestWSCodePartitionBase;
+  using impl::NVGTestWSCodePartitionBase<
+      NVGTestWSCodePartitionPass>::NVGTestWSCodePartitionBase;
 
   void runOnFuncOp(triton::FuncOp funcOp) {
     // Disable code partitioning when numBuffers is 0.

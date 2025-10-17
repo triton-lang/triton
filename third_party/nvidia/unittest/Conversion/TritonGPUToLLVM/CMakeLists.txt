@@ -4,5 +4,5 @@ add_triton_ut(
   LIBS
     TritonGPUToLLVM
     TritonNVIDIAGPUToLLVM
-    NVGPUIR MLIRUBToLLVM
+    NVGIR MLIRUBToLLVM
 )

@@ -135,7 +135,7 @@ struct WarpGroupDotWaitOpConversion
     Location loc = op.getLoc();
     ValueRange inputs = adaptor.getInputs();
     if (inputs.size() == 1) {
-      rewriter.replaceOpWithNewOp<triton::nvgpu::WGMMAWaitGroupOp>(
+      rewriter.replaceOpWithNewOp<triton::nvg::WGMMAWaitGroupOp>(
           op, inputs.front(), pendings);
       return success();
     }
@@ -160,7 +160,7 @@ struct WarpGroupDotWaitOpConversion
       }
     }
     Value packedOutput =
-        rewriter.create<triton::nvgpu::WGMMAWaitGroupOp>(loc, packed, pendings);
+        rewriter.create<triton::nvg::WGMMAWaitGroupOp>(loc, packed, pendings);
     // Unpack the output into the original struct types.
     SmallVector<Value> outputs;
     outputStructIndex = 0;
