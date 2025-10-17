@@ -123,17 +123,17 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
 }
 
 std::optional<TargetInfo::LDSTransLoadParams>
-TargetInfo::queryLDSTransLoadParams(int bitwidth) const {
+TargetInfo::queryLDSTransLoadParams(int bitWidth) const {
   auto isaFamily = getISAFamily();
   bool isGFX1250 = isaFamily == AMD::ISAFamily::GFX1250;
   bool isCDNA4 = isaFamily == AMD::ISAFamily::CDNA4;
   bool canUseTransLoad =
-      (isCDNA4 || isGFX1250) && llvm::is_contained({16, 8, 4, 6}, bitwidth);
+      (isCDNA4 || isGFX1250) && llvm::is_contained({16, 8, 4, 6}, bitWidth);
   if (!canUseTransLoad)
     return std::nullopt;
   unsigned numLanesInShuffleGroup = getWarpSize() / 4;
-  unsigned instBitWidth = isGFX1250 && bitwidth == 16 ? 128 : 64;
-  unsigned needContigReg = instBitWidth / bitwidth;
+  unsigned instBitWidth = isGFX1250 && bitWidth == 16 ? 128 : 64;
+  unsigned needContigReg = instBitWidth / bitWidth;
   return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth,
                             needContigReg};
 }
