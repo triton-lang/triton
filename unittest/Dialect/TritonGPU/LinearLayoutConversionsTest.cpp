@@ -1928,8 +1928,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_trans) {
            /*isTransposed=*/false);
   // double rated mfma with large enough shape
   auto mfmaDotOp0_kwidth_8 = mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/8);
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {128, 128},
-                                    /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_8, {128, 128},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"),
                   {{1, 0}, {2, 0}, {0, 4}, {0, 32}, {0, 64}, {32, 0}, {64, 0}}},
@@ -1937,8 +1938,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_trans) {
                  {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {32, 64},
-                                    /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_8, {32, 64},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}, {0, 4}, {0, 32}}},
                  {S("lane"), {{4, 0}, {8, 0}, {0, 1}, {0, 2}, {0, 8}, {0, 16}}},
@@ -1949,8 +1951,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_trans) {
   auto mfmaDotOp0_kwidth_16 =
       mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/16);
   EXPECT_EQ(
-      chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_16, {128, 128},
-                              /*elemBitWidth=*/8),
+      chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {128, 128},
+                           /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                           /*numLanesInShuffleGroup*/ 16),
       LinearLayout(
           {{S("register"),
             {{1, 0}, {2, 0}, {4, 0}, {0, 8}, {0, 64}, {32, 0}, {64, 0}}},
@@ -1961,8 +1964,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_trans) {
 
   // Single rated mfma with small shape
   auto mfmaDotOp0_kwidth_4 = mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/4);
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_4, {16, 16},
-                                    /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_4, {16, 16},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}}},
                  {S("lane"), {{4, 0}, {8, 0}, {0, 1}, {0, 2}, {0, 4}, {0, 8}}},
@@ -1970,8 +1974,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_trans) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
 
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {16, 32},
-                                    /*elemBitWidth=*/8),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_8, {16, 32},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}, {4, 0}}},
                  {S("lane"), {{8, 0}, {0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}}},
@@ -1981,8 +1986,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_trans) {
 
   // Single rated mfma with large shape. In this case, single rated mfma
   // will be used due to kWidth = 4 (16-bit) or 8 (8-bit)
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_4, {16, 32},
-                                    /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_4, {16, 32},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}, {0, 16}}},
                  {S("lane"), {{4, 0}, {8, 0}, {0, 1}, {0, 2}, {0, 4}, {0, 8}}},
@@ -1990,8 +1996,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_trans) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
 
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {16, 64},
-                                    /*elemBitWidth=*/8),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_8, {16, 64},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}, {4, 0}, {0, 32}}},
                  {S("lane"), {{8, 0}, {0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}}},
@@ -2011,26 +2018,36 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_trans) {
   auto tmfmaDotOp0_kwidth_4 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/0, /*kWidth=*/4);
 
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_8, {128, 128},
-                                    /*elemBitWidth=*/16),
-            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {128, 128},
-                                    /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_16, {128, 128},
-                                    /*elemBitWidth=*/8),
-            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_16, {128, 128},
-                                    /*elemBitWidth=*/8));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_8, {64, 32},
-                                    /*elemBitWidth=*/16),
-            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {64, 32},
-                                    /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_4, {16, 16},
-                                    /*elemBitWidth=*/16),
-            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_4, {16, 16},
-                                    /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_8, {16, 32},
-                                    /*elemBitWidth=*/8),
-            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {16, 32},
-                                    /*elemBitWidth=*/8));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_8, {128, 128},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp0_kwidth_8, {128, 128},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_16, {128, 128},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {128, 128},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_8, {64, 32},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp0_kwidth_8, {64, 32},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_4, {16, 16},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp0_kwidth_4, {16, 16},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_8, {16, 32},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp0_kwidth_8, {16, 32},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_trans) {
@@ -2043,8 +2060,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_trans) {
   auto mfmaDotOp1_kwidth_16 =
       mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/16);
   EXPECT_EQ(
-      chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_16, {128, 128},
-                              /*elemBitWidth=*/8),
+      chooseDsReadTrLayout(mfmaDotOp1_kwidth_16, {128, 128},
+                           /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                           /*numLanesInShuffleGroup*/ 16),
       LinearLayout(
           {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {8, 0}, {64, 0}, {0, 64}}},
            {S("lane"), {{0, 8}, {1, 0}, {2, 0}, {4, 0}, {16, 0}, {32, 0}}},
@@ -2052,8 +2070,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_trans) {
            {S("block"), {}}},
           {S("dim0"), S("dim1")}));
   EXPECT_EQ(
-      chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {128, 128},
-                              /*elemBitWidth=*/16),
+      chooseDsReadTrLayout(mfmaDotOp1_kwidth_8, {128, 128},
+                           /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                           /*numLanesInShuffleGroup*/ 16),
       LinearLayout(
           {{S("register"), {{0, 1}, {0, 2}, {4, 0}, {32, 0}, {64, 0}, {0, 64}}},
            {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {8, 0}, {16, 0}}},
@@ -2061,8 +2080,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_trans) {
            {S("block"), {}}},
           {S("dim0"), S("dim1")}));
 
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {32, 64},
-                                    /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp1_kwidth_8, {32, 64},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}, {4, 0}}},
                  {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {8, 0}, {16, 0}}},
@@ -2072,8 +2092,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_trans) {
 
   // Single rated mfma with small shape
   auto mfmaDotOp1_kwidth_4 = mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/4);
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_4, {16, 16},
-                                    /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp1_kwidth_4, {16, 16},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}}},
                  {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {4, 0}, {8, 0}}},
@@ -2081,8 +2102,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_trans) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
 
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {32, 16},
-                                    /*elemBitWidth=*/8),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp1_kwidth_8, {32, 16},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}, {0, 4}}},
                  {S("lane"), {{0, 8}, {1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
@@ -2092,8 +2114,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_trans) {
 
   // Single rated mfma with large shape. In this case, single rated mfma
   // will be used due to kWidth = 4 (16-bit) or 8 (8-bit)
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_4, {32, 16},
-                                    /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp1_kwidth_4, {32, 16},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}, {16, 0}}},
                  {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {4, 0}, {8, 0}}},
@@ -2101,8 +2124,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_trans) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
 
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {64, 16},
-                                    /*elemBitWidth=*/8),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp1_kwidth_8, {64, 16},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {32, 0}}},
                  {S("lane"), {{0, 8}, {1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
@@ -2123,26 +2147,36 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_trans) {
   auto tmfmaDotOp1_kwidth_4 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/4);
 
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_8, {128, 128},
-                                    /*elemBitWidth=*/16),
-            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {128, 128},
-                                    /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_16, {128, 128},
-                                    /*elemBitWidth=*/8),
-            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {128, 128},
-                                    /*elemBitWidth=*/8));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_8, {64, 32},
-                                    /*elemBitWidth=*/16),
-            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {64, 32},
-                                    /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_4, {16, 16},
-                                    /*elemBitWidth=*/16),
-            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_4, {16, 16},
-                                    /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_8, {32, 16},
-                                    /*elemBitWidth=*/8),
-            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {32, 16},
-                                    /*elemBitWidth=*/8));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_8, {128, 128},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp1_kwidth_8, {128, 128},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_16, {128, 128},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp1_kwidth_8, {128, 128},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_8, {64, 32},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp1_kwidth_8, {64, 32},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_4, {16, 16},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp1_kwidth_4, {16, 16},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_8, {32, 16},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp1_kwidth_8, {32, 16},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_lhs_trans) {
@@ -2152,8 +2186,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_lhs_trans) {
   auto mfmaDotOp0_kwidth_8 = mfmaDotOp(parentMfma32, /*opIdx=*/0, /*kWidth=*/8);
   auto mfmaDotOp0_kwidth_16 =
       mfmaDotOp(parentMfma32, /*opIdx=*/0, /*kWidth=*/16);
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {128, 128},
-                                    /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_8, {128, 128},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"),
                   {{1, 0}, {2, 0}, {0, 4}, {0, 16}, {0, 32}, {0, 64}, {64, 0}}},
@@ -2162,8 +2197,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_lhs_trans) {
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
   EXPECT_EQ(
-      chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_16, {128, 128},
-                              /*elemBitWidth=*/8),
+      chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {128, 128},
+                           /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                           /*numLanesInShuffleGroup*/ 16),
       LinearLayout(
           {{S("register"),
             {{1, 0}, {2, 0}, {4, 0}, {0, 8}, {0, 32}, {0, 64}, {64, 0}}},
@@ -2171,8 +2207,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_lhs_trans) {
            {S("warp"), {{0, 0}, {0, 0}, {32, 0}}},
            {S("block"), {}}},
           {S("dim0"), S("dim1")}));
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {32, 64},
-                                    /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_8, {32, 64},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}, {0, 4}, {0, 16}, {0, 32}}},
                  {S("lane"), {{4, 0}, {8, 0}, {0, 1}, {0, 2}, {16, 0}, {0, 8}}},
@@ -2182,16 +2219,18 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_lhs_trans) {
 
   auto mfmaDotOp0_kwidth_4 = mfmaDotOp(parentMfma32, /*opIdx=*/0,
                                        /*kWidth=*/4);
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_4, {32, 8},
-                                    /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_4, {32, 8},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}}},
                  {S("lane"), {{4, 0}, {8, 0}, {0, 1}, {0, 2}, {16, 0}, {0, 4}}},
                  {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {32, 16},
-                                    /*elemBitWidth=*/8),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_8, {32, 16},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}, {4, 0}}},
                  {S("lane"), {{8, 0}, {0, 1}, {0, 2}, {0, 4}, {16, 0}, {0, 8}}},
@@ -2211,26 +2250,36 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_lhs_trans) {
   auto tmfmaDotOp0_kwidth_4 =
       mfmaDotOp(parentTMfma32, /*opIdx=*/0, /*kWidth=*/4);
 
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_8, {128, 128},
-                                    /*elemBitWidth=*/16),
-            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {128, 128},
-                                    /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_16, {128, 128},
-                                    /*elemBitWidth=*/8),
-            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_16, {128, 128},
-                                    /*elemBitWidth=*/8));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_8, {64, 32},
-                                    /*elemBitWidth=*/16),
-            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {64, 32},
-                                    /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_4, {32, 8},
-                                    /*elemBitWidth=*/16),
-            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_4, {32, 8},
-                                    /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_8, {32, 16},
-                                    /*elemBitWidth=*/8),
-            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {32, 16},
-                                    /*elemBitWidth=*/8));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_8, {128, 128},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp0_kwidth_8, {128, 128},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_16, {128, 128},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {128, 128},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_8, {64, 32},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp0_kwidth_8, {64, 32},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_4, {32, 8},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp0_kwidth_4, {32, 8},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_8, {32, 16},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp0_kwidth_8, {32, 16},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_rhs_trans) {
@@ -2242,8 +2291,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_rhs_trans) {
       mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/16);
 
   EXPECT_EQ(
-      chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {128, 128},
-                              /*elemBitWidth=*/16),
+      chooseDsReadTrLayout(mfmaDotOp1_kwidth_8, {128, 128},
+                           /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                           /*numLanesInShuffleGroup*/ 16),
       LinearLayout(
           {{S("register"), {{0, 1}, {0, 2}, {4, 0}, {16, 0}, {32, 0}, {64, 0}}},
            {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {0, 16}, {8, 0}}},
@@ -2251,8 +2301,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_rhs_trans) {
            {S("block"), {}}},
           {S("dim0"), S("dim1")}));
   EXPECT_EQ(
-      chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_16, {128, 128},
-                              /*elemBitWidth=*/8),
+      chooseDsReadTrLayout(mfmaDotOp1_kwidth_16, {128, 128},
+                           /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                           /*numLanesInShuffleGroup*/ 16),
       LinearLayout(
           {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {8, 0}, {32, 0}, {64, 0}}},
            {S("lane"), {{0, 8}, {1, 0}, {2, 0}, {4, 0}, {0, 16}, {16, 0}}},
@@ -2260,8 +2311,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_rhs_trans) {
            {S("block"), {}}},
           {S("dim0"), S("dim1")}));
 
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {32, 64},
-                                    /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp1_kwidth_8, {32, 64},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}, {4, 0}, {16, 0}}},
                  {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {0, 16}, {8, 0}}},
@@ -2270,16 +2322,18 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_rhs_trans) {
                 {S("dim0"), S("dim1")}));
 
   auto mfmaDotOp1_kwidth_4 = mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/4);
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_4, {8, 32},
-                                    /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp1_kwidth_4, {8, 32},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}}},
                  {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {0, 16}, {4, 0}}},
                  {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {16, 32},
-                                    /*elemBitWidth=*/8),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp1_kwidth_8, {16, 32},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}, {0, 4}}},
                  {S("lane"), {{0, 8}, {1, 0}, {2, 0}, {4, 0}, {0, 16}, {8, 0}}},
@@ -2299,26 +2353,36 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_rhs_trans) {
   auto tmfmaDotOp1_kwidth_4 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/4);
 
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_8, {128, 128},
-                                    /*elemBitWidth=*/16),
-            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {128, 128},
-                                    /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_16, {128, 128},
-                                    /*elemBitWidth=*/8),
-            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_16, {128, 128},
-                                    /*elemBitWidth=*/8));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_8, {64, 32},
-                                    /*elemBitWidth=*/16),
-            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {64, 32},
-                                    /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_4, {8, 32},
-                                    /*elemBitWidth=*/16),
-            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_4, {8, 32},
-                                    /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_8, {16, 32},
-                                    /*elemBitWidth=*/8),
-            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {16, 32},
-                                    /*elemBitWidth=*/8));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_8, {128, 128},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp1_kwidth_8, {128, 128},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_16, {128, 128},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp1_kwidth_16, {128, 128},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_8, {64, 32},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp1_kwidth_8, {64, 32},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_4, {8, 32},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp1_kwidth_4, {8, 32},
+                                 /*elemBitWidth=*/16, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_8, {16, 32},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp1_kwidth_8, {16, 32},
+                                 /*elemBitWidth=*/8, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_trans_fp4_mn_packed) {
@@ -2327,8 +2391,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_trans_fp4_mn_packed) {
            /*isTransposed=*/false);
   auto mfmaDotOp0_kwidth_16 =
       mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/16);
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_16, {256, 256},
-                                    /*elemBitWidth=*/4),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {256, 256},
+                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout({{S("register"),
                            {{1, 0},
                             {2, 0},
@@ -2352,10 +2417,12 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_lhs_trans_fp4_mn_packed) {
   auto tmfmaDotOp0_kwidth_16 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/0, /*kWidth=*/16);
 
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_16, {256, 256},
-                                    /*elemBitWidth=*/4),
-            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_16, {256, 256},
-                                    /*elemBitWidth=*/4));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_16, {256, 256},
+                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {256, 256},
+                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_trans_fp4_mn_packed) {
@@ -2366,8 +2433,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_trans_fp4_mn_packed) {
   // double rated mfma with large enough shape
   auto mfmaDotOp1_kwidth_16 =
       mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/16);
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_16, {256, 256},
-                                    /*elemBitWidth=*/4),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp1_kwidth_16, {256, 256},
+                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout({{S("register"),
                            {{0, 1},
                             {0, 2},
@@ -2394,10 +2462,12 @@ TEST_F(LinearLayoutConversionsTest, MFMA16_dot_op_rhs_trans_fp4_mn_packed) {
   auto tmfmaDotOp1_kwidth_16 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/16);
 
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_16, {256, 256},
-                                    /*elemBitWidth=*/4),
-            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_16, {256, 256},
-                                    /*elemBitWidth=*/4));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_16, {256, 256},
+                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp1_kwidth_16, {256, 256},
+                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_lhs_trans_fp4_mn_packed) {
@@ -2406,8 +2476,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_lhs_trans_fp4_mn_packed) {
            /*isTransposed=*/false);
   auto mfmaDotOp0_kwidth_16 =
       mfmaDotOp(parentMfma32, /*opIdx=*/0, /*kWidth=*/16);
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_16, {256, 256},
-                                    /*elemBitWidth=*/4),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {256, 256},
+                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"),
                   {{1, 0},
@@ -2431,10 +2502,12 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_lhs_trans_fp4_mn_packed) {
   auto tmfmaDotOp0_kwidth_16 =
       mfmaDotOp(parentTMfma32, /*opIdx=*/0, /*kWidth=*/16);
 
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_16, {256, 256},
-                                    /*elemBitWidth=*/4),
-            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_16, {256, 256},
-                                    /*elemBitWidth=*/4));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp0_kwidth_16, {256, 256},
+                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp0_kwidth_16, {256, 256},
+                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_rhs_tran_fp4_mn_packeds) {
@@ -2444,8 +2517,9 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_rhs_tran_fp4_mn_packeds) {
   auto mfmaDotOp1_kwidth_16 =
       mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/16);
 
-  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_16, {256, 256},
-                                    /*elemBitWidth=*/4),
+  EXPECT_EQ(chooseDsReadTrLayout(mfmaDotOp1_kwidth_16, {256, 256},
+                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
             LinearLayout(
                 {{S("register"),
                   {{0, 1},
@@ -2471,10 +2545,12 @@ TEST_F(LinearLayoutConversionsTest, MFMA32_dot_op_rhs_tran_fp4_mn_packeds) {
   auto tmfmaDotOp1_kwidth_16 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/16);
 
-  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_16, {256, 256},
-                                    /*elemBitWidth=*/4),
-            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_16, {256, 256},
-                                    /*elemBitWidth=*/4));
+  EXPECT_EQ(chooseDsReadTrLayout(tmfmaDotOp1_kwidth_16, {256, 256},
+                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16),
+            chooseDsReadTrLayout(mfmaDotOp1_kwidth_16, {256, 256},
+                                 /*elemBitWidth=*/4, /*instBitWidth*/ 64,
+                                 /*numLanesInShuffleGroup*/ 16));
 }
 
 TEST_F(LinearLayoutConversionsTest, WMMA_v1_2x4Warps) {

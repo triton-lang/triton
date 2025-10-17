@@ -19,6 +19,15 @@ def _get_max_quant_val(dtype: tl.constexpr):
         tl.static_assert(False, f"Invalid {dtype=}")
 
 @triton.jit
+def _get_max_power_of_2_quant_val(dtype: tl.constexpr):
+    if dtype == tl.uint8:
+        return 4.0
+    elif dtype == tl.float8e5:
+        return 32768.0
+    elif dtype == tl.float8e4nv:
+        return 256.0
+
+@triton.jit
 def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.constexpr,
                              DEQUANT_SCALE_ROUNDING_MODE: tl.constexpr = 0):
     is_fp8: tl.constexpr = mx_tensor_dtype == tl.float8e4nv or mx_tensor_dtype == tl.float8e5
@@ -32,18 +41,19 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
     abs_tensor = tl.where(valid_src_mask, abs_tensor, -1.0)  # Don't consider padding tensors in scale computation
     abs_tensor = tl.reshape(abs_tensor, [BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_MX_SCALE, MXFP_BLOCK_SIZE])
     max_val = tl.max(abs_tensor, axis=2, keep_dims=True)
-    dequant_scale = max_val / _get_max_quant_val(mx_tensor_dtype)
     if DEQUANT_SCALE_ROUNDING_MODE == 0:
         # DequantScaleRoundingMode.ROUND_UP
         # compute 2 ** ceil(log2(dequant_scale))
         # Adding 0x007FFFFF adds exponent by 1 unless mantissa is all zeros
         # A corner case: exponent is 0xFF that will overflow but that's already
         # NaN so assume we don't care.
+        dequant_scale = max_val / _get_max_quant_val(mx_tensor_dtype)
         dequant_scale_exponent = (dequant_scale.to(tl.uint32, bitcast=True) + 0x007FFFFF) & 0x7F800000
     else:
         # DequantScaleRoundingMode.ROUND_DOWN
         # compute 2 ** floor(log2(dequant_scale))
         assert DEQUANT_SCALE_ROUNDING_MODE == 1
+        dequant_scale = max_val / _get_max_power_of_2_quant_val(mx_tensor_dtype)
         dequant_scale_exponent = dequant_scale.to(tl.uint32, bitcast=True) & 0x7F800000
     dequant_scale_rounded = dequant_scale_exponent.to(tl.float32, bitcast=True)
     quant_scale = tl.where(dequant_scale_rounded == 0, 0, 1.0 / dequant_scale_rounded)

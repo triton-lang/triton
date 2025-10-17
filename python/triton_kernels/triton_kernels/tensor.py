@@ -171,6 +171,9 @@ class Tensor:
         return self.shape[i]
 
 
+# ---------------------------------------------------------------------------- #
+# bitmatrix
+# ---------------------------------------------------------------------------- #
 @dataclass
 class Bitmatrix(Tensor):
 
@@ -183,15 +186,37 @@ make_bitmatrix_metadata = bitmatrix_details.make_bitmatrix_metadata
 make_bitmatrix_metadata_torch = bitmatrix_details.make_bitmatrix_metadata_torch
 
 
+# ---------------------------------------------------------------------------- #
+# ragged tensor
+# ---------------------------------------------------------------------------- #
 @dataclass
 class RaggedTensor:
-    batch_sizes: torch.Tensor
+    """
+    A ragged `tensor` is a collection of 2D tensors that share the same number of columns.
+    Each tensor in this collection is called a `slice`.
+    """
+    # slice_sizes[i] is the number of rows in slice `i`
+    slice_sizes: torch.Tensor
+    # ragged tensors are stored in memory as (potentially padded) 2D tensors of shape
+    # [num_total_rows, num_cols]
+    # where `num_total_rows` >= sum(slice_sizes)
     data: torch.Tensor
+    # `metadata`` contains information about the ragged tensor
+    # see `tensor_details/ragged_tensor.py` for more details
     metadata: RaggedTensorMetadata
 
 
+# construct ragged tensor metadata from `slice_sizes` and `max_n_blocks`
 make_ragged_tensor_metadata = ragged_tensor_details.make_ragged_tensor_metadata
 make_ragged_tensor_metadata_torch = ragged_tensor_details.make_ragged_tensor_metadata_torch
+
+# remap ragged tensor metadata to a new slice assignment
+remap_ragged_tensor_metadata = ragged_tensor_details.remap_ragged_tensor_metadata
+remap_ragged_tensor_metadata_torch = ragged_tensor_details.remap_ragged_tensor_metadata_torch
+
+# ---------------------------------------------------------------------------- #
+# sparse matrix
+# ---------------------------------------------------------------------------- #
 
 
 @dataclass

@@ -16,15 +16,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %6 = tt.addptr %5, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
     %7 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked0>
     %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
-    // COMMON: buffer_load %arg0[%[[offset]]]
+    // Note: large-tensor with elemIdx=pid*256 + arange(0, 256), elemIdx ∈ [0, smax]
+    // COMMON-NOT: buffer_load
     %9 = tt.load %6 : tensor<256x!tt.ptr<f32>, #blocked0>
-    // COMMON: buffer_load %arg1[%[[offset]]]
+    // COMMON-NOT: buffer_load
     %10 = tt.load %8 : tensor<256x!tt.ptr<f32>, #blocked0>
     // COMMON: %[[data:.*]] = arith.addf
     %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>
     %12 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<256x!tt.ptr<f32>, #blocked0>
     %13 = tt.addptr %12, %4 : tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xi32, #blocked0>
-    // COMMON: buffer_store %[[data]], %arg2[%[[offset]]]
+    // Note: large-tensor with elemIdx ∈ [0, smax]
+    // COMMON-NOT: buffer_store
     tt.store %13, %11 : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
   }
@@ -43,6 +45,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #blocked>
     %cmp = arith.cmpi sgt, %arg6, %c0_i32 : i32
     llvm.intr.assume %cmp : i1
+    %arg6_upper = arith.constant 4194304 : i32
+    %cmp2 = arith.cmpi slt, %arg6, %arg6_upper : i32
+    llvm.intr.assume %cmp2 : i1
     %2 = tt.splat %arg6 : i32 -> tensor<256x1xi32, #blocked>
     %3 = arith.muli %1, %2 : tensor<256x1xi32, #blocked>
     %4 = tt.addptr %arg0, %c32_i32 : !tt.ptr<f16>, i32
@@ -78,6 +83,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %23 = arith.addi %21, %20 : tensor<256x64xi32, #blocked>
     %24 = tt.splat %22 : !tt.ptr<f16> -> tensor<256x64x!tt.ptr<f16>, #blocked>
     %25 = tt.addptr %24, %23 : tensor<256x64x!tt.ptr<f16>, #blocked>, tensor<256x64xi32, #blocked>
+    %ofst_upper = arith.constant 1073741823 : i32
+    %cmp3 = arith.cmpi slt, %ofst_upper, %ofst_upper : i32
+    llvm.intr.assume %cmp3 : i1
 
     // COMMON: %[[splatb:.*]] = tt.splat %arg[[#strideb:]]
     // COMMON: %[[mulb:.*]] = arith.muli %[[splatb]], %[[#]]
@@ -85,12 +93,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     // COMMON: %[[bcast0b:.*]] = tt.broadcast %[[#]]
     // COMMON: %[[ptrb:.*]] = tt.addptr
     // COMMON: %[[offsetb:.*]] = arith.addi %[[bcast0b]], %[[bcast1b]]
-    // COMMON: buffer_store %[[buffer]], %[[ptrb]][%[[offsetb]]] stride = %arg[[#strideb]]
+    // COMMON-NOT: buffer_store
 
     tt.store %25, %12 : tensor<256x64x!tt.ptr<f16>, #blocked>
     tt.return
   }
 }
+
+
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -113,7 +123,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %5 = tt.addptr %arg0, %1 : !tt.ptr<f32>, i32
     %8 = tt.splat %5 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
     %9 = tt.addptr %8, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-    // COMMON: buffer_load %[[scalar_ptr]][%[[offset]]]
+    // COMMON-NOT: buffer_load %[[scalar_ptr]][%[[offset]]]
     %10 = tt.load %9 : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return %10 : tensor<1024xf32, #blocked>
   }
@@ -165,7 +175,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32}  {
     // COMMON: %[[offset_32_bit:.*]] = arith.trunci
     %narrow4 = arith.trunci %4 : tensor<1024xi64, #blocked> to tensor <1024xi32, #blocked>
     %9 = tt.addptr %8, %narrow4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-    // COMMON: buffer_load %[[scalar_ptr]][%[[offset_32_bit]]]
+    // Note: base is arg0 which is large-tensor, the offset=int(long(pid*1024) * long(arange(0, 1024))
+    // offset is in [0, i32-max].
+    // COMMON-NOT: buffer_load
     %10 = tt.load %9 : tensor<1024x!tt.ptr<f32>, #blocked>
     tt.return %10 : tensor<1024xf32, #blocked>
   }
@@ -265,9 +277,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %14 = tt.addptr %13, %11 : tensor<16x!tt.ptr<bf16>, #blocked>, tensor<16xi32, #blocked>
     %15 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<16x!tt.ptr<bf16>, #blocked>
     %16 = tt.addptr %15, %offsets : tensor<16x!tt.ptr<bf16>, #blocked>, tensor<16xi32, #blocked>
-    // COMMON: %[[loaded:.*]] = amdgpu.buffer_load %arg1[%[[offsets]]]
+    // COMMON-NOT: amdgpu.buffer_load
     %17 = tt.load %16 : tensor<16x!tt.ptr<bf16>, #blocked>
-    // COMMON: amdgpu.buffer_store %[[loaded]], %arg0[%[[range]]]
+    // COMMON: amdgpu.buffer_store
     tt.store %14, %17 : tensor<16x!tt.ptr<bf16>, #blocked>
     tt.return
   }
@@ -364,11 +376,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %1 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32, #blocked>
     %2 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
     %3 = tt.addptr %2, %0 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
-    // COMMON: %[[loaded:.*]] = amdgpu.buffer_load %arg0[%{{.*}}]
+    // Note: index is tt.histogram ∈ [0, smax)
+    // COMMON-NOT: amdgpu.buffer_load
     %4 = tt.load %3 : tensor<8x!tt.ptr<bf16>, #blocked>
     %5 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
     %6 = tt.addptr %5, %1 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
-    // COMMON: amdgpu.buffer_store %[[loaded]], %arg1[%{{.*}}]
+    // Note: index is tt.histogram ∈ [0, smax)
+    // COMMON: amdgpu.buffer_store
     tt.store %6, %4 : tensor<8x!tt.ptr<bf16>, #blocked>
     tt.return
   }
@@ -391,11 +405,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %8 = arith.addi %6, %7 : tensor<8xi32, #blocked>
     %9 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
     %10 = tt.addptr %9, %8 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
-    // COMMON: %[[loaded:.*]] = amdgpu.buffer_load %arg0[%{{.*}}]
+    // COMMON-NOT: amdgpu.buffer_load
     %11 = tt.load %10 : tensor<8x!tt.ptr<bf16>, #blocked>
     %12 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
     %13 = tt.addptr %12, %7 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
-    // COMMON: amdgpu.buffer_store %[[loaded]], %arg1[%{{.*}}]
+    // COMMON: amdgpu.buffer_store
     tt.store %13, %11 : tensor<8x!tt.ptr<bf16>, #blocked>
     tt.return
   }
@@ -426,11 +440,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %17 = arith.addi %15, %16 : tensor<8xi32, #blocked>
     %18 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
     %19 = tt.addptr %18, %17 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
-    // COMMON: %[[loaded:.*]] = amdgpu.buffer_load %arg0[%{{.*}}]
+    // Note: above operations can only prove elmtIdx >= 0 not don't reveal its upper bound.
+    // COMMON-NOT: amdgpu.buffer_load
     %20 = tt.load %19 : tensor<8x!tt.ptr<bf16>, #blocked>
     %21 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
     %22 = tt.addptr %21, %16 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
-    // COMMON: amdgpu.buffer_store %[[loaded]], %arg1[%{{.*}}]
+    // COMMON: amdgpu.buffer_store
     tt.store %22, %20 : tensor<8x!tt.ptr<bf16>, #blocked>
     tt.return
   }
@@ -450,11 +465,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %5 = arith.trunci %4 : tensor<8xi64, #blocked> to tensor<8xi32, #blocked>
     %6 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
     %7 = tt.addptr %6, %5 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
-    // COMMON: %[[loaded:.*]] = amdgpu.buffer_load %arg0[%{{.*}}]
+    // Note: elemIdx is (int32)(arange(0, 8) + (uint64)(uint32)arg2)
+    // elemIdx is not necessarilly >=0
+    // COMMON-NOT: amdgpu.buffer_load
     %8 = tt.load %7: tensor<8x!tt.ptr<bf16>, #blocked>
     %9 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
     %10 = tt.addptr %9, %2 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
-    // COMMON: amdgpu.buffer_store %[[loaded]], %arg1[%{{.*}}]
+    // COMMON: amdgpu.buffer_store
     tt.store %10, %8 : tensor<8x!tt.ptr<bf16>, #blocked>
     tt.return
   }
@@ -490,12 +507,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %4 = arith.trunci %3 : tensor<8xi64, #blocked> to tensor<8xi32, #blocked>
     %5 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
     %6 = tt.addptr %5, %4 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
-    // COMMON: %[[loaded:.*]] = amdgpu.buffer_load %arg0[%{{.*}}]
+    // Note: It's not able to prove that the value range of elmtIdx in [0,1G].
+    // testing case traverse_if_2nd, traverse_if_2nd_v2 and traverse_if_2nd_v3
+    // works better than this case for this purpose.
+    // COMMON-NOT:amdgpu.buffer_load
     %7 = tt.load %6: tensor<8x!tt.ptr<bf16>, #blocked>
     %8 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32, #blocked>
     %9 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
     %10 = tt.addptr %9, %8 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
-    // COMMON: amdgpu.buffer_store %[[loaded]], %arg1[%{{.*}}]
+    // COMMON: amdgpu.buffer_store
     tt.store %10, %7 : tensor<8x!tt.ptr<bf16>, #blocked>
     tt.return
   }
@@ -505,8 +525,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
-  // COMMON-LABEL: traverse_if
-  tt.func @traverse_if(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2 : i32, %arg3 : i32) {
+  // COMMON-LABEL: traverse_if_2nd
+  tt.func @traverse_if_2nd(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2 : i32, %arg3 : i32) {
     %c0_i32 = arith.constant 0 : i32
     %c2_i32 = arith.constant 2 : i32
     %c5_i32 = arith.constant 7 : i32
@@ -534,12 +554,134 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %6 = arith.addi %4, %5 : tensor<8xi32, #blocked>
     %7 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
     %8 = tt.addptr %7, %6 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
+    // COMMON-NOT: amdgpu.buffer_load
+    %9 = tt.load %8: tensor<8x!tt.ptr<bf16>, #blocked>
+    %10 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32, #blocked>
+    %11 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
+    %12 = tt.addptr %11, %10 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
+    // COMMON: amdgpu.buffer_store
+    tt.store %12, %9 : tensor<8x!tt.ptr<bf16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // COMMON-LABEL: traverse_if_2nd_v2
+  tt.func @traverse_if_2nd_v2(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2 : i32, %arg3 : i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c2_i32 = arith.constant 2 : i32
+    %c5_i32 = arith.constant 7 : i32
+    %c7_i32 = arith.constant 5 : i32
+    %zeros = arith.constant dense<0> : tensor<8xi32, #blocked>
+    %0 = arith.extui %arg2 : i32 to i64
+    %1 = arith.remui %arg2, %c2_i32 : i32
+    %2 = arith.cmpi eq, %1, %c0_i32 : i32
+    %3, %4 = scf.if %2 -> (tensor<8xi64, #blocked>, tensor<8xi32, #blocked>) {
+      %20 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32, #blocked>
+      %21 = arith.extui %20 : tensor<8xi32, #blocked> to tensor<8xi64, #blocked>
+      %22 = tt.splat %arg3 : i32 -> tensor<8xi32, #blocked>
+      %23 = arith.extui %22 : tensor<8xi32, #blocked> to tensor<8xi64, #blocked>
+      %24 = arith.addi %21, %23 : tensor<8xi64, #blocked>
+      %25 = tt.make_range {end = 9 : i32, start = 1 : i32} : tensor<8xi32, #blocked>
+      scf.yield %24, %25 : tensor<8xi64, #blocked>, tensor<8xi32, #blocked>
+    } else {
+      %30 = tt.make_range {end = 16 : i32, start = 8 : i32} : tensor<8xi32, #blocked>
+      %31 = arith.extui %30 : tensor<8xi32, #blocked> to tensor<8xi64, #blocked>
+      %32 = tt.splat %0 : i64 -> tensor<8xi64, #blocked>
+      %33 = arith.addi %31, %32 : tensor<8xi64, #blocked>
+      scf.yield %33, %zeros : tensor<8xi64, #blocked>, tensor<8xi32, #blocked>
+    }
+    %5 = arith.trunci %3 : tensor<8xi64, #blocked> to tensor<8xi32, #blocked>
+    %6 = arith.addi %4, %5 : tensor<8xi32, #blocked>
+    %7 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
+    %8 = tt.addptr %7, %6 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
+
+    // Note:
+    // elmtIdx = %6 = %4 + %5, value-range(%4) = [0,7], value-range(%5) = [0, umax]
+    // %5 = max([0,8] + arg3, [8,16) + arg2), to make %6 * sizeof(bf16) <= 2G - 2byte
+    // arg3 ∈ [0, 1G-1-8-7 = 1073741808), arg2 ∈  [-8, 1G-1-15-8=1073741800]
+    %cmp1 = arith.cmpi sge, %arg2, %c0_i32 : i32
+    llvm.intr.assume %cmp1 : i1
+    %cmp2 = arith.cmpi sge, %arg3, %c0_i32 : i32
+    llvm.intr.assume %cmp2 : i1
+    %arg_up2 = arith.constant 1073741800 : i32
+    %arg_up3 = arith.constant 1073741808 : i32
+    %cmp3 = arith.cmpi slt, %arg2, %arg_up2 : i32
+    %cmp4 = arith.cmpi slt, %arg3, %arg_up3 : i32
+    llvm.intr.assume %cmp3 : i1
+    llvm.intr.assume %cmp4 : i1
+
     // COMMON: %[[loaded:.*]] = amdgpu.buffer_load %arg0[%{{.*}}]
     %9 = tt.load %8: tensor<8x!tt.ptr<bf16>, #blocked>
     %10 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32, #blocked>
     %11 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
     %12 = tt.addptr %11, %10 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
     // COMMON: amdgpu.buffer_store %[[loaded]], %arg1[%{{.*}}]
+    tt.store %12, %9 : tensor<8x!tt.ptr<bf16>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // COMMON-LABEL: traverse_if_2nd_v3
+  tt.func @traverse_if_2nd_v3(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2 : i32, %arg3 : i32) {
+    %c0_i32 = arith.constant 0 : i32
+    %c2_i32 = arith.constant 2 : i32
+    %c5_i32 = arith.constant 7 : i32
+    %c7_i32 = arith.constant 5 : i32
+    %zeros = arith.constant dense<0> : tensor<8xi32, #blocked>
+    %0 = arith.extui %arg2 : i32 to i64
+    %1 = arith.remui %arg2, %c2_i32 : i32
+    %2 = arith.cmpi eq, %1, %c0_i32 : i32
+    %3, %4 = scf.if %2 -> (tensor<8xi64, #blocked>, tensor<8xi32, #blocked>) {
+      %20 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32, #blocked>
+      %21 = arith.extui %20 : tensor<8xi32, #blocked> to tensor<8xi64, #blocked>
+      %22 = tt.splat %arg3 : i32 -> tensor<8xi32, #blocked>
+      %23 = arith.extui %22 : tensor<8xi32, #blocked> to tensor<8xi64, #blocked>
+      %24 = arith.addi %21, %23 : tensor<8xi64, #blocked>
+      %25 = tt.make_range {end = 9 : i32, start = 1 : i32} : tensor<8xi32, #blocked>
+      scf.yield %24, %25 : tensor<8xi64, #blocked>, tensor<8xi32, #blocked>
+    } else {
+      %30 = tt.make_range {end = 16 : i32, start = 8 : i32} : tensor<8xi32, #blocked>
+      %31 = arith.extui %30 : tensor<8xi32, #blocked> to tensor<8xi64, #blocked>
+      %32 = tt.splat %0 : i64 -> tensor<8xi64, #blocked>
+      %33 = arith.addi %31, %32 : tensor<8xi64, #blocked>
+      scf.yield %33, %zeros : tensor<8xi64, #blocked>, tensor<8xi32, #blocked>
+    }
+    %5 = arith.trunci %3 : tensor<8xi64, #blocked> to tensor<8xi32, #blocked>
+    %6 = arith.addi %4, %5 : tensor<8xi32, #blocked>
+    %7 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
+    %8 = tt.addptr %7, %6 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
+
+    // Note:
+    // elmtIdx = %6 = %4 + %5, value-range(%4) = [0,7], value-range(%5) = [0, umax]
+    // %5 = max([0,8] + arg3, [8,16) + arg2), to make %6 * sizeof(bf16) <= 2G - 2byte
+    // arg3 ∈ [0, 1G-1-8-7 = 1073741808), arg2 ∈  [-8, 1G-1-15-8=1073741800]
+    %cmp1 = arith.cmpi sge, %arg2, %c0_i32 : i32
+    llvm.intr.assume %cmp1 : i1
+    %cmp2 = arith.cmpi sge, %arg3, %c0_i32 : i32
+    llvm.intr.assume %cmp2 : i1
+    // the only difference between traverse_if_2nd_v3 and traverse_if_2nd_v2
+    // is arg_up2. In v3 the upper bound is bumped by 1.
+    %arg_up2 = arith.constant 1073741801 : i32
+    %arg_up3 = arith.constant 1073741808 : i32
+    %cmp3 = arith.cmpi slt, %arg2, %arg_up2 : i32
+    %cmp4 = arith.cmpi slt, %arg3, %arg_up3 : i32
+    llvm.intr.assume %cmp3 : i1
+    llvm.intr.assume %cmp4 : i1
+
+    // COMMON-NOT: amdgpu.buffer_load
+    %9 = tt.load %8: tensor<8x!tt.ptr<bf16>, #blocked>
+    %10 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32, #blocked>
+    %11 = tt.splat %arg1 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked>
+    %12 = tt.addptr %11, %10 : tensor<8x!tt.ptr<bf16>, #blocked>, tensor<8xi32, #blocked>
+    // COMMON: amdgpu.buffer_store
     tt.store %12, %9 : tensor<8x!tt.ptr<bf16>, #blocked>
     tt.return
   }
@@ -589,7 +731,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %5 = tt.addptr %arg0, %1 : !tt.ptr<f32>, i32
     %6 = tt.splat %5 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
     %7 = tt.addptr %6, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-    // COMMON: %[[loaded:.*]] = amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu, %arg1, %[[scalar_ptr]][%[[offset]]]
+    // Note: the large tensor is accessed, offset is in the range of [0, smax].
+    // without tl.assume the range would be [-128, smax]
+    // COMMON-NOT: amdgpu.buffer_atomic_rmw
     %8 = tt.atomic_rmw fadd, acq_rel, gpu, %7, %arg1 : (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>) -> tensor<1024xf32, #blocked>
     tt.return %8 : tensor<1024xf32, #blocked>
   }
@@ -629,6 +773,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     // COMMON: %[[bcast0:.*]] = tt.broadcast %[[#]]
     // COMMON: %[[offset:.*]] = arith.addi %[[bcast0]], %[[bcast1]]
 
+    // Note: offset(i.e. elmtIdx) = bcast0 + bcast1
+    //   = arange(0, 64) + arg6 * arange(0, 256)
+    // to make elmtIdx * sizeof(f16) ∈  [0, 2G], arg6 must be in [0, 4210752]
+    %arg6_up = arith.constant 4210752: i32
+    %cmp2 = arith.cmpi slt, %arg6, %arg6_up : i32
+    llvm.intr.assume %cmp2 : i1
+
     // COMMON: %[[buffer:.*]] = amdgpu.buffer_load_to_local %[[ptr]][%[[offset]]] stride = %arg[[#stride]] into %arg10
     %12 = ttg.async_copy_global_to_local %11, %arg10 : tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
 
@@ -644,10 +795,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     // COMMON: %[[buffer:.*]] = amdgpu.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cacheModifier = ca into %arg10
     %16 = ttg.async_copy_global_to_local %11, %arg10 mask %arg11 other %arg12 cacheModifier = ca: tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
 
-    // COMMON: %[[buffer:.*]] = amdgpu.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cacheModifier = cg into %arg10
+    // COMMONx: %[[buffer:.*]] = amdgpu.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cacheModifier = cg into %arg10
     %17 = ttg.async_copy_global_to_local %11, %arg10 mask %arg11 other %arg12 cacheModifier = cg: tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
 
-    // COMMON: %[[buffer:.*]] = amdgpu.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cacheModifier = cv into %arg10
+    // COMMONx: %[[buffer:.*]] = amdgpu.buffer_load_to_local %[[ptr]][%[[offset]]] mask = %arg11 other = %arg12 stride = %arg[[#stride]] cacheModifier = cv into %arg10
     %18 = ttg.async_copy_global_to_local %11, %arg10 mask %arg11 other %arg12 cacheModifier = cv: tensor<256x64x!tt.ptr<f16>, #blocked> -> <256x64xf16, #shared, #smem, mutable>
     tt.return
   }

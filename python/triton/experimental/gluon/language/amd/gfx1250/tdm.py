@@ -3,7 +3,7 @@ from typing import List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 
 import triton.experimental.gluon.language._core as ttgl
-from triton.experimental.gluon.language._layouts import PaddedSharedLayout
+from triton.experimental.gluon.language._layouts import PaddedSharedLayout, SwizzledSharedLayout
 from triton.experimental.gluon.language._core import builtin, _unwrap_if_constexpr
 
 if TYPE_CHECKING:
@@ -20,7 +20,7 @@ class tensor_descriptor_type(ttgl.base_type):
     block_type: ttgl.block_type
     shape_type: ttgl.tuple_type
     strides_type: ttgl.tuple_type
-    layout: PaddedSharedLayout
+    layout: PaddedSharedLayout | SwizzledSharedLayout
 
     def __str__(self) -> str:
         return f"tensor_descriptor<{self.block_type}, {self.layout}>"
@@ -84,7 +84,7 @@ class tensor_descriptor(ttgl.base_value):
 @builtin
 def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.tensor],
                            strides: List[ttgl.constexpr | ttgl.tensor], block_shape: List[ttgl.constexpr],
-                           layout: PaddedSharedLayout, _semantic=None) -> tensor_descriptor:
+                           layout: PaddedSharedLayout | SwizzledSharedLayout, _semantic=None) -> tensor_descriptor:
     """Make a tensor descriptor object.
 
     Args:
@@ -92,7 +92,7 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
         shape (List[int]): shape of the tensor.
         strides (List[int]): strides of the tensor.
         block_shape (List[int]): block shape of the tensor.
-        layout (PaddedSharedLayout): the layout of the tensor in shared memory.
+        layout (PaddedSharedLayout | SwizzledSharedLayout): the layout of the tensor in shared memory.
 
     Returns:
         tensor_descriptor: the created tensor descriptor object
@@ -105,7 +105,10 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
     assert isinstance(base.dtype, ttgl.pointer_type), "Expected base to be a pointer"
 
     layout = _unwrap_if_constexpr(layout)
-    assert isinstance(layout, PaddedSharedLayout), "Expected layout to be a PaddedSharedLayout"
+    assert isinstance(layout, (PaddedSharedLayout, SwizzledSharedLayout)), \
+        "Expected layout to be a PaddedSharedLayout or SwizzledSharedLayout"
+    if isinstance(layout, SwizzledSharedLayout):
+        assert layout.max_phase == 1, "Expected max_phase to be 1 for SwizzledSharedLayout"
 
     base_handle = base.handle
     shape_handles = _semantic._convert_to_ir_values(shape, require_i64=False)  # i32 shape
@@ -135,6 +138,20 @@ def async_load(src: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tenso
     """
     offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
     _semantic.builder.create_async_tdm_copy_global_to_local(src.handle, offset_handles, dest.handle)
+
+
+@builtin
+def async_store(dest: tensor_descriptor, offsets: List[ttgl.constexpr | ttgl.tensor], src: shared_memory_descriptor,
+                _semantic=None) -> None:
+    """Store a block of tensor specified in tensor descriptor from shared memory to global memory asynchronously.
+
+    Args:
+        dest (tensor_descriptor): the destination tensor descriptor.
+        offsets (List[int]): the offsets from the base pointer in the tensor descriptor.
+        src (shared_memory_descriptor): the shared memory source to load the data.
+    """
+    offset_handles = _semantic._convert_to_ir_values(offsets, require_i64=False)
+    _semantic.builder.create_async_tdm_copy_local_to_global(dest.handle, offset_handles, src.handle)
 
 
 @builtin

@@ -27,6 +27,8 @@ class TensorDescriptor:
         elem_bytes = get_primitive_bitwidth(dtype_str) // 8
         for stride in self.strides[:-1]:
             assert (stride * elem_bytes) % 16 == 0, "strides must be 16-byte aligned"
+        for shape_dim in self.shape:
+            assert shape_dim > 0, "shape must be positive"
         assert self.strides[-1] == 1, "Last dimension must be contiguous"
         assert isinstance(self.layout, NVMMASharedLayout), "Layout must be NVMMASharedLayout"
         assert self.padding == "zero" or self.padding == "nan", "Illegal value for padding"

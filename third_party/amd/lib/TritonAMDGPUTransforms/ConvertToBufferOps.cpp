@@ -53,182 +53,58 @@ bool isSplatOneConstTensor(const Value v) {
   return false;
 }
 
-bool verifyNonSmallerByAssumption(
-    Value expr, const DenseMap<Value, SetVector<Operation *>> &assumptions,
-    const std::function<bool(Value)> &matchesOther) {
-  if (!assumptions.contains(expr))
+bool isByteOffsetSmallerThan2GB(triton::AddPtrOp addPtrOp,
+                                std::shared_ptr<DataFlowSolver> solver) {
+  Value elemIdx = addPtrOp.getOffset();
+  LDBG("Determing value-range of element-index: " << elemIdx);
+
+  // step 1: Get the value range of the element index
+  const auto *lattice =
+      solver->lookupState<dataflow::IntegerValueRangeLattice>(elemIdx);
+  if (!lattice) {
+    // Note that it is not always able to get lattice, e.g. the element-index
+    // is defined by a tt.load.
+    LDBG("Cannot get lattice");
     return false;
-  for (Operation *assume : assumptions.at(expr)) {
-    auto cmpOp = llvm::dyn_cast<arith::CmpIOp>(assume);
-    if (!cmpOp)
-      continue;
-    switch (cmpOp.getPredicate()) {
-    case arith::CmpIPredicate::eq:
-    case arith::CmpIPredicate::sge:
-    case arith::CmpIPredicate::sgt: {
-      if (cmpOp.getLhs() == expr && matchesOther(cmpOp.getRhs())) {
-        LDBG("  " << expr << " non-neg by assumption " << cmpOp);
-        return true;
-      }
-      break;
-    }
-    case arith::CmpIPredicate::sle:
-    case arith::CmpIPredicate::slt: {
-      if (cmpOp.getRhs() == expr && matchesOther(cmpOp.getLhs())) {
-        LDBG("  " << expr << " non-neg by assumption " << cmpOp);
-        return true;
-      }
-      break;
-    }
-    default:
-      break;
-    }
   }
-  return false;
-}
 
-bool verifyNonSmallerByAssumption(
-    Value expr, const DenseMap<Value, SetVector<Operation *>> &assumptions,
-    Value other) {
-  return verifyNonSmallerByAssumption(
-      expr, assumptions, [&](auto otherAssum) { return otherAssum == other; });
-}
-
-bool verifyNonNegativeExpr(
-    Value expr, const DenseMap<Value, SetVector<Operation *>> &assumptions,
-    std::shared_ptr<DataFlowSolver> solver) {
-  LDBG("Determing if non-negative: " << expr);
-
-  auto nonNegativePred = [&solver](Value v) -> bool {
-    if (const auto *r =
-            solver->lookupState<dataflow::IntegerValueRangeLattice>(v)) {
-      if (r->getValue().isUninitialized())
-        return false;
-      if (AMD::isEmptyInitializedRange(r->getValue().getValue()))
-        return false;
-    }
-    return succeeded(dataflow::staticallyNonNegative(*solver, v));
+  const mlir::IntegerValueRange &vr = lattice->getValue();
+  if (vr.isUninitialized() || AMD::isEmptyInitializedRange(vr.getValue())) {
+    LDBG("Cannot get value range of the offset");
+    return false;
   };
 
-  if (nonNegativePred(expr))
-    return true;
+  const auto &smin = vr.getValue().smin();
+  const auto &smax = vr.getValue().smax();
 
-  // Recurse if the operation is defined
-  Operation *op = expr.getDefiningOp();
-  if (!op) {
-    LDBG("  No defining op, assuming possibly negative");
+  LDBG("Element-index value-range: " << smin << " : " << smax);
+  if (smin.isNegative() || smax.isNegative())
+    return false;
+
+  // step 2: Get element type and size.
+  // e.g. addPtrOp.getType is tensor<64x64x!tt.ptr<f16>, then elemTy is
+  // !tt.ptr<f16>, and dereferencing elemTy gets f16.
+  // TODO: Not sure if we need to keep dereferencing in a loop.
+  Type elemTy = getElementTypeOrSelf(addPtrOp.getType());
+  while (auto ptrTy = dyn_cast<triton::PointerType>(elemTy))
+    elemTy = ptrTy.getPointeeType();
+
+  if (!elemTy || !elemTy.isIntOrFloat()) {
+    LDBG("unknown element type: " << elemTy);
     return false;
   }
 
-  bool nonNegative =
-      llvm::TypeSwitch<Operation *, bool>(expr.getDefiningOp())
-          // Various unary triton ops that don't change the sign of the operand
-          .Case<triton::TransOp, triton::SplitOp, triton::BroadcastOp,
-                triton::ExpandDimsOp, triton::SplatOp, triton::ReshapeOp,
-                triton::gpu::ConvertLayoutOp>([&](auto unaryOp) {
-            return verifyNonNegativeExpr(unaryOp.getOperand(), assumptions,
-                                         solver);
-          })
-          .Case<triton::GatherOp>([&](auto gatherOp) {
-            return verifyNonNegativeExpr(gatherOp.getSrc(), assumptions,
-                                         solver);
-          })
-          // Joining two non-negative tensors is still non-negative
-          .Case<triton::JoinOp, triton::CatOp>([&](auto joinOp) {
-            return verifyNonNegativeExpr(joinOp.getLhs(), assumptions,
-                                         solver) &&
-                   verifyNonNegativeExpr(joinOp.getRhs(), assumptions, solver);
-          })
-          // Returns a tensor representing histogram: histograms only contain
-          // buckets of non-negative values.
-          .Case<triton::HistogramOp>([&](auto) { return true; })
-          .Case<triton::MakeRangeOp>([&](auto makeRangeOp) {
-            // See the warning in TritonOps.td: getStart/getEnd return unsigned,
-            // so we need to look through get*Attr.
-            return makeRangeOp.getStartAttr().getInt() >= 0 &&
-                   makeRangeOp.getEndAttr().getInt() >= 0;
-          })
-          .Case<arith::ConstantIntOp>(
-              [&](auto constIntOp) { return constIntOp.value() >= 0; })
-          .Case<arith::ConstantOp>([&](arith::ConstantOp constOp) {
-            Value val = constOp.getResult();
-            DenseIntElementsAttr constVal;
-            if (matchPattern(val, m_Constant(&constVal)) && constVal.isSplat())
-              return constVal.getSplatValue<APInt>().isNonNegative();
-            return false;
-          })
-          .Case<triton::GetNumProgramsOp, triton::GetProgramIdOp>([&](auto) {
-            // These are defined as signless, but are actually unsigned
-            return true;
-          })
-          .Case<arith::MaxSIOp>([&](auto maxOp) {
-            // max(a,b) >= 0 iff a>=0 || b>=0
-            return verifyNonNegativeExpr(maxOp.getLhs(), assumptions, solver) ||
-                   verifyNonNegativeExpr(maxOp.getRhs(), assumptions, solver);
-          })
-          .Case<arith::RemSIOp>([&](auto remsiOp) {
-            // a % b >= 0 iff a>=0
-            return verifyNonNegativeExpr(remsiOp.getLhs(), assumptions, solver);
-          })
-          .Case<arith::TruncIOp, arith::ExtSIOp>([&](Operation *unaryOp) {
-            // a = OP b >= 0 iff b >= 0
-            return verifyNonNegativeExpr(unaryOp->getOperand(0), assumptions,
-                                         solver);
-          })
-          // Casting from arbitrary data does *not* guarantee the offset is in
-          // range (even if pointer, or the data is non-negative when
-          // interpreted as the src's type).
-          .Case<triton::PtrToIntOp, triton::BitcastOp>(
-              [&](auto) { return false; })
-          .Case<arith::CeilDivUIOp, arith::DivUIOp, arith::ExtUIOp,
-                arith::FPToUIOp, arith::MaxUIOp, arith::MinUIOp, arith::RemUIOp,
-                arith::ShRUIOp>(
-              // These OPs also return unsigned values.
-              // TODO: We can also sniff whether a Value is unsigned by looking
-              //       for whether or not it's used as an argument to one of
-              //       these OPs.
-              [&](auto uOp) { return true; })
-          .Case<arith::AddIOp, arith::MinSIOp, arith::MulIOp, arith::DivSIOp>(
-              // Generally speaking, a OP b >= 0  iff  a >= 0 && b >= 0 when
-              // OP != sub
-              [&](Operation *binOp) {
-                return verifyNonNegativeExpr(binOp->getOperand(0), assumptions,
-                                             solver) &&
-                       verifyNonNegativeExpr(binOp->getOperand(1), assumptions,
-                                             solver);
-              })
-          // TODO: more scf
-          .Case<scf::IfOp>([&](auto ifOp) {
-            auto results = ifOp.getResults();
-            auto it = std::find(results.begin(), results.end(), expr);
-            assert(it != results.end() && "expr should be the result of ifOp");
-            auto resultIdx = it - results.begin();
+  // step 3: check of byte-offset is within 2G
+  int64_t elemBitSz = elemTy.getIntOrFloatBitWidth();
+  int64_t elemMaxIdx = smax.getSExtValue();
+  int64_t byteOfst = (elemBitSz * elemMaxIdx + elemBitSz + 7) / 8;
+  int64_t szLimit2GB = (1L << 31) - 1;
 
-            // If we're here then we must have both then/else regions
-            // (each with 1 block) and each region must terminate with an
-            // `scf.yield` expression.
-            auto thenYield = cast<scf::YieldOp>(ifOp.thenYield());
-            auto elseYield = cast<scf::YieldOp>(ifOp.elseYield());
-            return verifyNonNegativeExpr(thenYield->getOperand(resultIdx),
-                                         assumptions, solver) &&
-                   verifyNonNegativeExpr(elseYield->getOperand(resultIdx),
-                                         assumptions, solver);
-          })
-          .Case<arith::SubIOp>([&](auto op) {
-            // If a user annotates tl.assume(a >= b) then we know a - b >= 0
-            return verifyNonSmallerByAssumption(op.getLhs(), assumptions,
-                                                op.getRhs());
-          })
-          .Case<triton::amdgpu::ExtractSliceOp>([&](auto op) {
-            return verifyNonNegativeExpr(op->getOperand(0), assumptions,
-                                         solver);
-          })
-          .Default([&](Operation *) {
-            // Conservatively assume that the expression is negative
-            LDBG("  Unhandled op, cannot assume non-negative");
-            return false;
-          });
-  return nonNegative;
+  LDBG("element bit sz:" << elemBitSz << ", max byte offset:" << byteOfst
+                         << ((szLimit2GB > byteOfst) ? ", out of range"
+                                                     : ", in range"));
+
+  return byteOfst <= szLimit2GB;
 }
 
 bool isFuncArgWith32bitPtrRange(mlir::Value value) {
@@ -294,7 +170,8 @@ bool canUseBufferOps(Value ptr,
     LDBG("base-ptr as tt.pointer_range=32 attribute");
     return true;
   }
-  return verifyNonNegativeExpr(offset, assumptions, std::move(solver));
+
+  return isByteOffsetSmallerThan2GB(addPtrOp, std::move(solver));
 }
 
 // Extract stride of the blocked offset of LD/ST ops.
@@ -718,8 +595,10 @@ struct TritonAMDGPUConvertToBufferOpsPass
     DenseMap<Value, SetVector<Operation *>> assumptions =
         AMD::TritonIntegerRangeAnalysis::collectAssumptions(getOperation());
     std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
+
     AMD::TritonIntegerRangeAnalysis *rangeAnalysis =
-        solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions);
+        solver->load<AMD::TritonIntegerRangeAnalysis>(
+            assumptions, &getAnalysis<DominanceInfo>());
     AMD::initializeFuncOps(mod, rangeAnalysis);
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();

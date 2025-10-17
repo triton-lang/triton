@@ -7,11 +7,12 @@ import torch.distributed as dist
 import torch.distributed._symmetric_memory as symm_mem
 import torch.multiprocessing as mp
 import triton
-from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment, filter_expt_data, filter_expt_data_torch
+from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment
+from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
-from triton_kernels.matmul_ogs import matmul_ogs, reduce_grouped, RoutingData, GatherIndx, ScatterIndx
+from triton_kernels.matmul_ogs import matmul_ogs, RoutingData, GatherIndx, ScatterIndx
 from triton_kernels.target_info import is_hip
-from triton_kernels.tensor import make_ragged_tensor_metadata
+from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata
 import pytest
 
 
@@ -90,7 +91,7 @@ def distributed_launcher(request):
 
 
 # ------------------------------------------------------------
-# filtering
+# expt assignment
 # ------------------------------------------------------------
 
 
@@ -111,26 +112,6 @@ def test_make_expt_assignment(n_expts_shard, n_expts_tot, affinity_mode):
         assert torch.all(expt_map == expt_assignment.expt_map[shard, :])
 
 
-@pytest.mark.parametrize("n_expts_tot, n_expts_act", [(128, 4)])
-@pytest.mark.parametrize("n_shards", [4])
-@pytest.mark.parametrize("affinity_mode", ["uniform", "random"])
-@pytest.mark.parametrize("n_tokens", [1024, 16384])
-def test_filter_expt_data(n_expts_tot, n_expts_act, n_shards, affinity_mode, n_tokens):
-    device = "cuda"
-    dtype = torch.float32
-    logits = torch.randn((n_tokens, n_expts_tot), dtype=dtype, device=device, requires_grad=True)
-    routing_global, _, _, _ = routing(logits, n_expts_act)
-    expt_data = routing_global.expt_data
-    expt_dict = _make_expt_dict_for_mode(n_shards, n_expts_tot, affinity_mode)
-    expt_assignment = make_expt_assignment(n_shards, n_expts_tot, expt_dict, device)
-    routing_local_ref = filter_expt_data_torch(expt_data, expt_assignment, 1)
-    routing_local_tri = filter_expt_data(expt_data, expt_assignment, 1)
-    assert torch.all(routing_local_ref.hist == routing_local_tri.hist)
-    assert torch.all(routing_local_ref.token_offs_raw == routing_local_tri.token_offs_raw)
-    assert torch.all(routing_local_ref.token_offs_pad_data == routing_local_tri.token_offs_pad_data)
-    assert torch.all(routing_local_ref.block_pid_map_data == routing_local_tri.block_pid_map_data)
-
-
 # ------------------------------------------------------------
 # expert sharding
 # ------------------------------------------------------------
@@ -142,7 +123,7 @@ def routing(logits, n_expts_act, all_gather=False, y_indx=None):
     combine_indx = sparse_logits.mask_metadata.row_sorted_indx
     ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
     gate_scal = sparse_logits.vals.flatten()[combine_indx]
-    routing_data = RoutingData(gate_scal, ragged_batch_metadata.batch_sizes, logits.shape[-1], n_expts_act,
+    routing_data = RoutingData(gate_scal, ragged_batch_metadata.slice_sizes, logits.shape[-1], n_expts_act,
                                ragged_batch_metadata)
     gather_idx = GatherIndx(combine_indx, dispatch_indx)
     scatter_idx = ScatterIndx(dispatch_indx, combine_indx)
@@ -155,23 +136,30 @@ def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_ac
     return y_global
 
 
-def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, expt_assignment, n_expts_act,
-                              y_indx=None):
+def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, expt_assignment, n_expts_act):
     rank = dist.get_rank()
-    rdata_global, combine_indx, dispatch_indx, expt_indx = routing(l_dp_local, n_expts_act, all_gather=True,
-                                                                  y_indx=y_indx)
-    y_ep_local = convert_dp_to_ep(x_dp_local, expt_assignment, expt_indx, dispatch_indx.src_indx)
-    expt_data_local = filter_expt_data(rdata_global.expt_data, expt_assignment, rank)
-    rdata_ep_local = RoutingData(
-        gate_scal=rdata_global.gate_scal,
-        expt_hist=expt_data_local.batch_sizes,
-        n_expts_tot=expt_assignment.n_expts_per_shard[rank],
-        n_expts_act=rdata_global.n_expts_act,
-        expt_data=expt_data_local,
-    )
+    expt_map = expt_assignment.expt_map[rank, :]
+    # active global logits (sparse)
+    l_global_active = topk(l_dp_local, n_expts_act, apply_softmax=True, all_gather=True)
+    # expert histogram, dispatch/combine indx
+    active_indx = l_global_active.indx
+    expt_sizes = l_global_active.mask_metadata.col_sum
+    dispatch_indx = l_global_active.mask_metadata.col_sorted_indx
+    combine_indx = l_global_active.mask_metadata.row_sorted_indx
+    # ragged tensor metadata
+    x_global_metadata = make_ragged_tensor_metadata(expt_sizes, dispatch_indx.shape[0])
+    # convert x from dp-local to expert-sorted, ep-local
+    y_ep_local = convert_dp_to_ep(x_dp_local, expt_assignment, active_indx, dispatch_indx)
+    y_ep_local_metadata = remap_ragged_tensor_metadata(x_global_metadata, expt_map)
+    # matrix multiply
+    # TODO: clean-up API. `RoutingData` should not exist; we should be passing `y_ep_local_metadata`.
+    rdata_ep_local = RoutingData(None, expt_sizes, w_ep_local.shape[0], n_expts_act, y_ep_local_metadata)
     y_ep_local = matmul_ogs(y_ep_local, w_ep_local, b_ep_local, rdata_ep_local)
-    y_dp_local = convert_ep_to_dp(y_ep_local, expt_assignment, expt_indx, combine_indx.src_indx)
-    z_dp_local = reduce_grouped(y_dp_local, contig_group_size=n_expts_act)[0]
+    # convert x from expert-sorted, ep-local to token-sorted, dp-local
+    y_dp_local = convert_ep_to_dp(y_ep_local, expt_assignment, active_indx, combine_indx)
+    # weighted average of the output token from experts
+    y_dp_local = y_dp_local.view(-1, n_expts_act, y_dp_local.shape[-1])
+    z_dp_local, _ = reduce(y_dp_local, dim=1)
     return z_dp_local
 
 
@@ -324,7 +312,6 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     graph.replay()
     dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
     triton.testing.assert_close(y_global_ref, y_global_tri)
-    
 
 
 @pytest.mark.parametrize("distributed_launcher", [2, 4], indirect=True)

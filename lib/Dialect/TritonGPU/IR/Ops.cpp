@@ -442,6 +442,37 @@ LogicalResult Fp4ToFpOp::verifyFp4ToFp(mlir::Operation *op,
                << ", dst=" << resShape[i] << ", axis=" << axis << ")";
     }
   }
+  if (bool(resTy.getEncoding()) != bool(srcTy.getEncoding()))
+    return op->emitError()
+           << "source and result must both have an encoding, or neither";
+  if (!resTy.getEncoding()) {
+    return success();
+  }
+  auto srcLl = toLinearLayout(srcTy);
+  auto resLl = toLinearLayout(resTy);
+  auto *ctx = srcTy.getContext();
+  auto regDim = StringAttr::get(ctx, "register");
+  auto outDims = standardOutDimNames(ctx, rank);
+
+  // We use backward inference here as it is striclty more general
+  Attribute inferSrc;
+  auto dialect =
+      resTy.getEncoding()
+          .getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>();
+  assert(dialect);
+  if (failed(dialect->inferFp4ToFpOpEncoding(
+          resTy.getShape(), axis, resTy.getEncoding(), inferSrc,
+          /*fwdInference*/ false, std::nullopt))) {
+    return op->emitError() << "failed to infer encoding";
+  }
+  if (!areLayoutsEquivalent(srcTy.getShape(),
+                            cast<LayoutEncodingTrait>(inferSrc),
+                            cast<LayoutEncodingTrait>(srcTy.getEncoding())))
+    return op->emitError()
+           << "Src and Dst encodings are not compatible:\n"
+           << toLinearLayout(srcTy.getShape(), inferSrc).toString() << "\n"
+           << srcLl.toString();
   return success();
 }
 

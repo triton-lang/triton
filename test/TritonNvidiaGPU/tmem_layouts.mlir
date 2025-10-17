@@ -1,10 +1,10 @@
 // RUN: triton-opt %s -split-input-file --triton-nvidia-optimize-tmem-layouts --allow-unregistered-dialect | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
-#blocked2 = #ttg.blocked<{sizePerThread = [1, 1, 64], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 2, 1], order = [0, 2, 1]}>
-#blocked3 = #ttg.blocked<{sizePerThread = [1, 64, 1], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 2], order = [0, 1, 2]}>
-#blocked4 = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [4, 2, 1], order = [2, 1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [4, 2, 1], order = [2, 1, 0]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 64]], warp = [[32, 0], [64, 0], [16, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 0, 16], [0, 0, 32]], lane = [[1, 0, 0], [2, 0, 0], [4, 0, 0], [8, 0, 0], [0, 1, 0]], warp = [[32, 0, 0], [64, 0, 0], [16, 0, 0]], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0], [0, 32, 0]], lane = [[1, 0, 0], [2, 0, 0], [4, 0, 0], [8, 0, 0], [0, 0, 1]], warp = [[32, 0, 0], [64, 0, 0], [16, 0, 0]], block = []}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100"} {
@@ -17,31 +17,29 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     // CHECK: %[[L1:.+]] = ttng.tmem_load %[[S1]] : !ttg.memdesc<128x64xf32
     // CHECK: %[[C1:.+]] = ttg.convert_layout %[[L1]]
     // CHECK: tt.return %[[C0]], %[[C1]]
-    %0 = ttng.tmem_load %arg0 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
-    %1 = tt.reshape %0 : tensor<128x128xf32, #blocked1> -> tensor<128x2x64xf32, #blocked2>
-    %2 = tt.trans %1 {order = array<i32: 0, 2, 1>} : tensor<128x2x64xf32, #blocked2> -> tensor<128x64x2xf32, #blocked3>
-    %3 = ttg.convert_layout %2 : tensor<128x64x2xf32, #blocked3> -> tensor<128x64x2xf32, #blocked4>
-    %outLHS, %outRHS = tt.split %3 : tensor<128x64x2xf32, #blocked4> -> tensor<128x64xf32, #blocked>
+    %0 = ttng.tmem_load %arg0 : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #linear>
+    %1 = tt.reshape %0 : tensor<128x128xf32, #linear> -> tensor<128x2x64xf32, #linear1>
+    %2 = tt.trans %1 {order = array<i32: 0, 2, 1>} : tensor<128x2x64xf32, #linear1> -> tensor<128x64x2xf32, #linear2>
+    %3 = ttg.convert_layout %2 : tensor<128x64x2xf32, #linear2> -> tensor<128x64x2xf32, #blocked1>
+    %outLHS, %outRHS = tt.split %3 : tensor<128x64x2xf32, #blocked1> -> tensor<128x64xf32, #blocked>
     tt.return %outLHS, %outRHS : tensor<128x64xf32, #blocked>, tensor<128x64xf32, #blocked>
   }
 }
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
-#blocked2 = #ttg.blocked<{sizePerThread = [1, 2, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [4, 1, 2], order = [1, 2, 0]}>
-#blocked3 = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [4, 2, 1], order = [2, 1, 0]}>
-#blocked4 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
-#blocked7 = #ttg.blocked<{sizePerThread = [1, 1, 128], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 2, 1], order = [0, 2, 1]}>
-#blocked8 = #ttg.blocked<{sizePerThread = [1, 128, 1], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 2], order = [0, 1, 2]}>
-#linear = #ttg.linear<{register = [[0, 0, 1], [0, 64, 0], [4, 0, 0], [8, 0, 0], [16, 0, 0], [32, 0, 0], [64, 0, 0]], lane = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0]], warp = [
-[0, 32, 0], [1, 0, 0], [2, 0, 0]], block = []}>
-#linear1 = #ttg.linear<{register = [[0, 64], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], warp = [[0, 32], [1, 0], [2, 0]], block = []}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 2, 1], threadsPerWarp = [1, 1, 32], warpsPerCTA = [4, 1, 2], order = [1, 2, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [4, 2, 1], order = [2, 1, 0]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 128]], warp = [[32, 0], [64, 0], [16, 0]], block = []}>
+#linear1 = #ttg.linear<{register = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 0, 16], [0, 0, 32], [0, 0, 64]], lane = [[1, 0, 0], [2, 0, 0], [4, 0, 0], [8, 0, 0], [0, 1, 0]], warp = [[32, 0, 0], [64, 0, 0], [16, 0, 0]], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0], [0, 32, 0], [0, 64, 0]], lane = [[1, 0, 0], [2, 0, 0], [4, 0, 0], [8, 0, 0], [0, 0, 1]], warp = [[32, 0, 0], [64, 0, 0], [16, 0, 0]], block = []}>
+#linear3 = #ttg.linear<{register = [[0, 0, 1], [0, 64, 0], [4, 0, 0], [8, 0, 0], [16, 0, 0], [32, 0, 0], [64, 0, 0]], lane = [[0, 1, 0], [0, 2, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0]], warp = [[0, 32, 0], [1, 0, 0], [2, 0, 0]], block = []}>
+#linear4 = #ttg.linear<{register = [[0, 64], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], warp = [[0, 32], [1, 0], [2, 0]], block = []}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
-
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100"} {
   // CHECK-LABEL: @subtile4_tmem_load
-  tt.func public @subtile4_tmem_load(%arg0: !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>) -> (tensor<128x64xf32, #blocked4>, tensor<128x64xf32, #blocked4>, tensor<128x64xf32, #blocked4>, tensor<128x64xf32, #blocked4>) {
+  tt.func public @subtile4_tmem_load(%arg0: !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable>) -> (tensor<128x64xf32, #blocked>, tensor<128x64xf32, #blocked>, tensor<128x64xf32, #blocked>, tensor<128x64xf32, #blocked>) {
     // CHECK: %[[S0:.+]] = ttng.tmem_subslice %{{.+}} {N = 0 : i32}
     // CHECK: %[[S1:.+]] = ttng.tmem_subslice %[[S0]] {N = 0 : i32}
     // CHECK: %[[L1:.+]] = ttng.tmem_load %[[S1]] : !ttg.memdesc<128x64xf32
@@ -57,18 +55,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     // CHECK: %[[L5:.+]] = ttng.tmem_load %[[S5]] : !ttg.memdesc<128x64xf32
     // CHECK: %[[C5:.+]] = ttg.convert_layout %[[L5]]
     // CHECK: tt.return %[[C1]], %[[C2]], %[[C4]], %[[C5]]
-    %0 = ttng.tmem_load %arg0 : !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x256xf32, #blocked>
-    %1 = tt.reshape %0 : tensor<128x256xf32, #blocked> -> tensor<128x2x128xf32, #blocked7>
-    %2 = tt.trans %1 {order = array<i32: 0, 2, 1>} : tensor<128x2x128xf32, #blocked7> -> tensor<128x128x2xf32, #blocked8>
-    %3 = ttg.convert_layout %2 : tensor<128x128x2xf32, #blocked8> -> tensor<128x128x2xf32, #linear>
-    %outLHS, %outRHS = tt.split %3 : tensor<128x128x2xf32, #linear> -> tensor<128x128xf32, #linear1>
-    %4 = tt.reshape %outLHS : tensor<128x128xf32, #linear1> -> tensor<128x2x64xf32, #blocked2>
-    %5 = tt.trans %4 {order = array<i32: 0, 2, 1>} : tensor<128x2x64xf32, #blocked2> -> tensor<128x64x2xf32, #blocked3>
-    %outLHS_1, %outRHS_1 = tt.split %5 : tensor<128x64x2xf32, #blocked3> -> tensor<128x64xf32, #blocked4>
-    %6 = tt.reshape %outRHS : tensor<128x128xf32, #linear1> -> tensor<128x2x64xf32, #blocked2>
-    %7 = tt.trans %6 {order = array<i32: 0, 2, 1>} : tensor<128x2x64xf32, #blocked2> -> tensor<128x64x2xf32, #blocked3>
-    %outLHS_2, %outRHS_2 = tt.split %7 : tensor<128x64x2xf32, #blocked3> -> tensor<128x64xf32, #blocked4>
-    tt.return %outLHS_1, %outRHS_1, %outLHS_2, %outRHS_2 : tensor<128x64xf32, #blocked4>, tensor<128x64xf32, #blocked4>, tensor<128x64xf32, #blocked4>, tensor<128x64xf32, #blocked4>
+    %result = ttng.tmem_load %arg0 : !ttg.memdesc<128x256xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x256xf32, #linear>
+    %0 = tt.reshape %result : tensor<128x256xf32, #linear> -> tensor<128x2x128xf32, #linear1>
+    %1 = tt.trans %0 {order = array<i32: 0, 2, 1>} : tensor<128x2x128xf32, #linear1> -> tensor<128x128x2xf32, #linear2>
+    %2 = ttg.convert_layout %1 : tensor<128x128x2xf32, #linear2> -> tensor<128x128x2xf32, #linear3>
+    %outLHS, %outRHS = tt.split %2 : tensor<128x128x2xf32, #linear3> -> tensor<128x128xf32, #linear4>
+    %3 = tt.reshape %outLHS : tensor<128x128xf32, #linear4> -> tensor<128x2x64xf32, #blocked1>
+    %4 = tt.trans %3 {order = array<i32: 0, 2, 1>} : tensor<128x2x64xf32, #blocked1> -> tensor<128x64x2xf32, #blocked2>
+    %outLHS_0, %outRHS_1 = tt.split %4 : tensor<128x64x2xf32, #blocked2> -> tensor<128x64xf32, #blocked>
+    %5 = tt.reshape %outRHS : tensor<128x128xf32, #linear4> -> tensor<128x2x64xf32, #blocked1>
+    %6 = tt.trans %5 {order = array<i32: 0, 2, 1>} : tensor<128x2x64xf32, #blocked1> -> tensor<128x64x2xf32, #blocked2>
+    %outLHS_2, %outRHS_3 = tt.split %6 : tensor<128x64x2xf32, #blocked2> -> tensor<128x64xf32, #blocked>
+    tt.return %outLHS_0, %outRHS_1, %outLHS_2, %outRHS_3 : tensor<128x64xf32, #blocked>, tensor<128x64xf32, #blocked>, tensor<128x64xf32, #blocked>, tensor<128x64xf32, #blocked>
   }
 }
 
@@ -109,7 +107,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0], [128, 0]], block = []}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 2, 64], threadsPerWarp = [32, 1, 1], warpsPerCTA = [8, 1, 1], order = [0, 2, 1]}>
 #blocked3 = #ttg.blocked<{sizePerThread = [1, 64, 2], threadsPerWarp = [32, 1, 1], warpsPerCTA = [8, 1, 1], order = [0, 1, 2]}>
 #blocked4 = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [1, 32, 1], warpsPerCTA = [4, 2, 1], order = [2, 1, 0]}>
@@ -120,8 +118,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
   // CHECK-NOT: ttng.tmem_subslice
   // CHECK: tt.return
   tt.func public @subtile_tmem_load_256(%arg0: !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable>) -> (tensor<256x64xf32, #blocked>, tensor<256x64xf32, #blocked>) {
-    %0 = ttng.tmem_load %arg0 : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x128xf32, #blocked1>
-    %1 = tt.reshape %0 : tensor<256x128xf32, #blocked1> -> tensor<256x2x64xf32, #blocked2>
+    %0 = ttng.tmem_load %arg0 : !ttg.memdesc<256x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<256x128xf32, #linear>
+    %1 = tt.reshape %0 : tensor<256x128xf32, #linear> -> tensor<256x2x64xf32, #blocked2>
     %2 = tt.trans %1 {order = array<i32: 0, 2, 1>} : tensor<256x2x64xf32, #blocked2> -> tensor<256x64x2xf32, #blocked3>
     %3 = ttg.convert_layout %2 : tensor<256x64x2xf32, #blocked3> -> tensor<256x64x2xf32, #blocked4>
     %outLHS, %outRHS = tt.split %3 : tensor<256x64x2xf32, #blocked4> -> tensor<256x64xf32, #blocked>
@@ -131,26 +129,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [32, 1], warpsPerCTA = [4, 2], order = [0, 1]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0], [0, 32]], block = []}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 64, colStride = 1>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
 
-// CHECK{LITERAL}: #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 32]], warp = [[32, 0], [64, 0], [16, 0]], block = []}>
+// CHECK{LITERAL}: #linear1 = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 32]], warp = [[32, 0], [64, 0], [16, 0]], block = []}>
 // CHECK-LABEL: tmem_load_reduce
-tt.func public @tmem_load_reduce(%arg0: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>> {
-  %0 = ttng.tmem_load %arg0 : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory> -> tensor<128x64xf32, #blocked>
-  // CHECK: ttng.tmem_load %{{.*}} : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory> -> tensor<128x64xf32, #linear>
+tt.func public @tmem_load_reduce(%arg0: !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #linear}>> {
+  %0 = ttng.tmem_load %arg0 : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory> -> tensor<128x64xf32, #linear>
+  // CHECK: ttng.tmem_load %{{.*}} : !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory> -> tensor<128x64xf32, #linear1>
   %1 = "tt.reduce"(%0) <{axis = 1 : i32}> ({
   ^bb0(%arg2: f32, %arg3: f32):
     %2 = arith.addf %arg2, %arg3 : f32
     tt.reduce.return %2 : f32
-  }) : (tensor<128x64xf32, #blocked>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
-  tt.return %1 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+  }) : (tensor<128x64xf32, #linear>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #linear}>>
+  tt.return %1 : tensor<128xf32, #ttg.slice<{dim = 1, parent = #linear}>>
 }
 
 }
-
 
 // -----
 
@@ -203,14 +200,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked1 = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
 #smem = #ttg.shared_memory
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [128, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0]], block = []}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1>
-// CHECK{LITERAL}: #linear = #ttg.linear<{register = [[0, 1], [8, 0], [0, 8], [16, 0], [128, 0]], lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], warp = [[32, 0], [64, 0]], block = []}>
+// CHECK{LITERAL}: #linear = #ttg.linear<{register = [[0, 1], [8, 0], [0, 8], [128, 0], [16, 0]], lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]], warp = [[32, 0], [64, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func @reshape_memedesc_negative(%arg0: !ttg.memdesc<256x16xf32, #tmem, #ttng.tensor_memory>, %arg1: !ttg.memdesc<16x256xf8E4M3FN, #shared, #smem, mutable>) {
     // CHECK: %[[L:.+]] = ttng.tmem_load %{{.+}} : !ttg.memdesc<256x16xf32, #tmem, #ttng.tensor_memory> -> tensor<256x16xf32, #linear>
     // CHECK: ttg.convert_layout %[[L:.+]]
-    %result = ttng.tmem_load %arg0 : !ttg.memdesc<256x16xf32, #tmem, #ttng.tensor_memory> -> tensor<256x16xf32, #blocked>
-    %0 = tt.trans %result {order = array<i32: 1, 0>} : tensor<256x16xf32, #blocked> -> tensor<16x256xf32, #blocked1>
+    %result = ttng.tmem_load %arg0 : !ttg.memdesc<256x16xf32, #tmem, #ttng.tensor_memory> -> tensor<256x16xf32, #linear>
+    %0 = tt.trans %result {order = array<i32: 1, 0>} : tensor<256x16xf32, #linear> -> tensor<16x256xf32, #blocked1>
     %1 = tt.fp_to_fp %0, rounding = rtne : tensor<16x256xf32, #blocked1> -> tensor<16x256xf8E4M3FN, #blocked1>
     ttg.local_store %1, %arg1 : tensor<16x256xf8E4M3FN, #blocked1> -> !ttg.memdesc<16x256xf8E4M3FN, #shared, #smem, mutable>
     tt.return

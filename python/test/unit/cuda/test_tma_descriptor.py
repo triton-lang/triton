@@ -23,7 +23,7 @@ def test_1d_tma_descriptor_exception(M, BLOCK_M, expect_error):
         _ = TensorDescriptor.from_tensor(x, [BLOCK_M])
 
 
-@pytest.mark.parametrize("M, BLOCK_M, expect_error_m", [(128, 32, False), (125, 33, True)])
+@pytest.mark.parametrize("M, BLOCK_M, expect_error_m", [(128, 32, False), (125, 33, True), (0, 32, False)])
 @pytest.mark.parametrize("N, BLOCK_N, expect_error_n", [(128, 32, False), (128, 30, True), (127, 32, False)])
 def test_2d_tma_descriptor_exception(M, N, BLOCK_M, BLOCK_N, expect_error_n, expect_error_m):
     if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] >= 9:
@@ -39,10 +39,14 @@ def test_2d_tma_descriptor_exception(M, N, BLOCK_M, BLOCK_N, expect_error_n, exp
 
     shape_error = expect_error_n or expect_error_m
     error_alignment = (N % 16) != 0
-    expect_error = shape_error or error_alignment
+    zero_shape_error = M <= 0 or N <= 0
+    expect_error = shape_error or error_alignment or zero_shape_error
 
     exc_type = ValueError if shape_error else AssertionError
     match = "Shape element . must be a power of 2" if shape_error else "strides must be 16-byte aligned"
+    if zero_shape_error and not shape_error and not error_alignment:
+        match = "shape must be positive"
+        exc_type = AssertionError
     ctx = pytest.raises(exc_type, match=match) if expect_error else nullcontext()
     with ctx:
         _ = TensorDescriptor.from_tensor(A, [BLOCK_M, BLOCK_N])

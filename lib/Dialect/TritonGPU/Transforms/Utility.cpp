@@ -431,7 +431,7 @@ static Attribute inferDstEncoding(triton::gpu::Fp4ToFpOp op, Attribute srcEnc) {
 
 static Attribute inferSrcEncoding(triton::gpu::Fp4ToFpOp op, Attribute dstEnc) {
   Attribute srcEnc;
-  auto shape = op.getSrc().getType().getShape();
+  auto shape = op.getType().getShape();
   if (succeeded(
           dstEnc.getDialect()
               .getRegisteredInterface<triton::DialectInferLayoutInterface>()

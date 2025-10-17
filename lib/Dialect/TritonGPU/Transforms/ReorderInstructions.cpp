@@ -40,6 +40,36 @@ static bool willIncreaseRegisterPressure(Operation *op) {
   return false;
 }
 
+// Return true if it has side effects that are either unknown or writes.
+static bool hasWriteSideEffect(Operation *op) {
+  auto effects = getEffectsRecursively(op);
+  if (!effects)
+    return false;
+  return llvm::any_of(*effects, [](MemoryEffects::EffectInstance effect) {
+    return !isa<MemoryEffects::Read, MemoryEffects::Allocate,
+                MemoryEffects::Free>(effect.getEffect());
+  });
+}
+
+// Return true if there is a write side effect on any path between start and end
+// ops. This assumes start dominates end.
+static bool crossWriteSideEffectingOp(Operation *start, Operation *end) {
+  auto ancestor = start->getBlock()->findAncestorOpInBlock(*end);
+  // Couldn't find an ancestor in the same block, conservatively assume true.
+  if (!ancestor)
+    return true;
+  Operation *nextOp = start->getNextNode();
+  while (nextOp) {
+    if ((hasWriteSideEffect(nextOp)))
+      return true;
+    if (nextOp == ancestor)
+      return false;
+    nextOp = nextOp->getNextNode();
+  }
+  assert(false && "op doesn't dominate other");
+  return true;
+}
+
 class TritonGPUReorderInstructionsPass
     : public impl::TritonGPUReorderInstructionsBase<
           TritonGPUReorderInstructionsPass> {
@@ -134,6 +164,8 @@ public:
       // Check that the conversion to OpIdx=1 happens before and can be moved
       // after the conversion to OpIdx=0.
       if (!dom.dominates(op.getOperation(), AOp.getOperation()))
+        return;
+      if (crossWriteSideEffectingOp(op, AOp))
         return;
       moveAfter(op, AOp);
     });

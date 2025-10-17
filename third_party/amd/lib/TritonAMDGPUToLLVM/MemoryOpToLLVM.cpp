@@ -37,70 +37,27 @@ public:
     auto typeConverter = this->getTypeConverter();
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     unsigned bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    // 64 is the number of bytes ds_read_tr
-    unsigned needContigReg = 64 / bitwidth;
-    // 16 is the number of lanes that participate in the data shuffle
-    unsigned needContigLane = 16;
+    // lanes are divided in 4 groups that participate together in the shuffle
+    unsigned numLanesInShuffleGroup = targetInfo.getWarpSize() / 4;
+    unsigned instBitWidth = 64;
+    unsigned needContigReg = instBitWidth / bitwidth;
 
-    if (!canUseTransLoad(op, srcTy, dstTy, bitwidth, needContigReg,
-                         needContigLane)) {
+    if (!canUseTransLoad(op, srcTy, dstTy, bitwidth)) {
       return failure();
     }
 
-    return lowerSharedToDotOperandTransLL(op, needContigReg, adaptor,
+    return lowerSharedToDotOperandTransLL(op, needContigReg, instBitWidth,
+                                          numLanesInShuffleGroup, adaptor,
                                           typeConverter, rewriter);
   }
 
 private:
-  bool checkLayoutProperties(MemDescType srcTy, RankedTensorType dstTy,
-                             unsigned needContigReg,
-                             unsigned needContigLane) const {
-    auto srcOrder = triton::gpu::getOrder(srcTy);
-    auto dstOrder = triton::gpu::getOrder(dstTy);
-
-    // Check that the contiguity of srcTy and dstTy don't match
-    // this is because ds_read_tr will reshuffle the data to
-    // the opposite contiguity
-    if (dstOrder[0] == srcOrder[0])
+  bool canUseTransLoad(Operation *localLoad, MemDescType srcTy,
+                       RankedTensorType dstTy, unsigned bitwidth) const {
+    if (!targetInfo.canUseLDSTransLoad(bitwidth)) {
       return false;
+    }
 
-    auto dstLL = triton::gpu::toLinearLayout(dstTy);
-    SmallVector<StringAttr> outDimNames(dstLL.getOutDimNames());
-    std::swap(outDimNames[0], outDimNames[1]);
-    auto dstTrLL = dstLL.transposeOuts(outDimNames);
-
-    // Check the main requirements for the ds_read_tr instruction: contiguity
-    // of reg/lane. This is because ds_read_tr works on a block of 16 lanes
-    // with each holding 64 bits of data. Each lane will load 64 bits of
-    // contiguous data and then share it among the lane dimension.
-    // This means that there needs to be a check that each lane owns
-    // 64 bit of contig data and that the communicating lanes are contiguous.
-    // In order to do this, we use ll.getNumConsecutiveInOut() which
-    // can get the contiguity of the first component of the first
-    // dimension.
-    // Since the data might be dim0 or dim1 contiguous we need both the
-    // dstLL and the dstTrLL: one to check the register dimension
-    // contiguity and the other to check the lane dimension one.
-    bool dim1Contig = dstOrder[0] == 1;
-    auto dstLLDim0Contig = dim1Contig ? dstTrLL : dstLL;
-    auto dstLLDim1Contig = dim1Contig ? dstLL : dstTrLL;
-    int contigRegisters = dstLLDim0Contig.getNumConsecutiveInOut();
-
-    assert(dstLLDim0Contig.getBases().begin()->first == "register");
-    SmallVector<StringAttr> subLayoutInDims(
-        llvm::drop_begin(dstLLDim0Contig.getInDimNames()));
-    SmallVector<StringAttr> subLayoutOutDims(dstLLDim0Contig.getOutDimNames());
-    auto dstLLOnlyLaneWarp =
-        dstLLDim1Contig.sublayout(subLayoutInDims, subLayoutOutDims);
-    int contigLanes = dstLLOnlyLaneWarp.getNumConsecutiveInOut();
-
-    // Check that the tile size used by ds_read_tr (KxM/N = 4x16 for 16-bit
-    // elements) is contiguous both in terms of registers dimension and in
-    // terms of lane dimension. If that is the case then we can use ds_read_tr
-    return contigRegisters >= needContigReg && contigLanes >= needContigLane;
-  }
-
-  bool checkCurrentLimitation(unsigned bitwidth) const {
     // FP4 is represented as i8 and, when packed along K, can be
     // transposed using ds_read_tr8 which doesn't change packing.
     if (bitwidth != 16 && bitwidth != 8) {
@@ -110,37 +67,18 @@ private:
     return true;
   }
 
-  bool canUseTransLoad(Operation *localLoad, MemDescType srcTy,
-                       RankedTensorType dstTy, unsigned bitwidth,
-                       unsigned needContigReg, unsigned needContigLane) const {
-    // Packed loads need to always map to ds_read_tr
-    if constexpr (isPackedLoad) {
-      return true;
-    }
-
-    if (!targetInfo.canUseLDSTransLoad(bitwidth)) {
-      return false;
-    }
-
-    if (!checkCurrentLimitation(bitwidth)) {
-      return false;
-    }
-
-    if (!checkLayoutProperties(srcTy, dstTy, needContigReg, needContigLane)) {
-      return false;
-    }
-
-    return true;
-  }
-
-  LogicalResult
-  lowerSharedToDotOperandTransLL(LocalLoadOpType op, unsigned needContigReg,
-                                 OpAdaptor adaptor,
-                                 const LLVMTypeConverter *typeConverter,
-                                 ConversionPatternRewriter &rewriter) const {
+  LogicalResult lowerSharedToDotOperandTransLL(
+      LocalLoadOpType op, unsigned needContigReg, unsigned instBitWidth,
+      unsigned numLanesInShuffleGroup, OpAdaptor adaptor,
+      const LLVMTypeConverter *typeConverter,
+      ConversionPatternRewriter &rewriter) const {
     auto ctx = rewriter.getContext();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto kReg = str_attr("register");
+    auto kLane = str_attr("lane");
+    auto kWarp = str_attr("warp");
+    auto kOffset = str_attr("offset");
     auto dstTy = cast<RankedTensorType>(op.getType());
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
@@ -167,17 +105,25 @@ private:
     auto shape = srcTy.getShape();
     // FP4 are packed into i8 so the real bitwidth is different
     auto llBitwidth = isPackedLoad ? 4 : llvmElemTy.getIntOrFloatBitWidth();
-    auto ldsTransLayout = triton::gpu::chooseDsReadB64TrLayout(
-        dstTy.getEncoding(), shape, llBitwidth);
+    auto ldsTransLayout = triton::gpu::chooseDsReadTrLayout(
+        dstTy.getEncoding(), shape, llBitwidth, instBitWidth,
+        numLanesInShuffleGroup);
+
+    // Check that we have computed a layout
+    if (!ldsTransLayout) {
+      return failure();
+    }
+
+    auto smemPtrTy = ptr_ty(ctx, 3);
     auto paddedEnc =
         dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(srcTy.getEncoding());
     LinearLayout cvt = LinearLayout::empty();
     if (paddedEnc) {
       const auto &sharedLL = paddedEnc.getLinearComponent();
-      cvt = ldsTransLayout.invertAndCompose(sharedLL);
+      cvt = ldsTransLayout->invertAndCompose(sharedLL);
     } else {
       auto sharedLL = triton::gpu::toLinearLayout(srcTy);
-      cvt = ldsTransLayout.invertAndCompose(sharedLL);
+      cvt = ldsTransLayout->invertAndCompose(sharedLL);
     }
     // Check that we will be able to vectorize the load.
     // Need to have exactly needContigReg, otherwise we can't use ds_read_tr
@@ -190,9 +136,7 @@ private:
     if (elemsPerVec != needContigReg)
       return failure();
 
-    cvt = cvt.sublayout(
-        {str_attr("register"), str_attr("lane"), str_attr("warp")},
-        {str_attr("offset")});
+    cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
     auto lowerInst = [&](RewriterBase &rewriter, Location loc,
                          ArrayRef<Value> inVals, Value vecAddr, int idx,
                          VectorType vTy) {

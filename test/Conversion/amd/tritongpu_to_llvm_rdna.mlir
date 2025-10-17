@@ -61,3 +61,13 @@ tt.func private @reduce_linear_layout(%arg0: tensor<32x2xi32, #linear>) -> tenso
   tt.return %0 : tensor<32xi32, #ttg.slice<{dim = 1, parent = #linear}>>
 }
 }
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: @bf16_mulf
+tt.func private @bf16_mulf(%arg0: tensor<64xbf16, #blocked>, %arg1: tensor<64xbf16, #blocked>) -> tensor<64xbf16, #blocked> {
+  // CHECK-COUNT-2: llvm.call_intrinsic "llvm.amdgcn.fdot2.bf16.bf16"
+  %0 = arith.mulf %arg0, %arg1 : tensor<64xbf16, #blocked>
+  tt.return %0 : tensor<64xbf16, #blocked>
+}
+}

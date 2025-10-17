@@ -63,7 +63,7 @@ def _p_matmul_ogs(
              M, N, K, K_W, # shapes
              # expt data
              Betas, Gammas,
-             GatherIndx,
+             GatherIndx, GatherDstIndx,  # GatherDstIndx is only used for launch metadata.
              ScatterSrcIndx, num_idxs,
              WriteBackIndx, writeback_size,
              ExptHist, ExptOffs, ExptTileOffs, ExptData,

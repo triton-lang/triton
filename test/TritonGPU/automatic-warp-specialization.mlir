@@ -1,5 +1,6 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-automatic-warp-specialization | FileCheck %s --check-prefix=CHECK --check-prefix=BASE
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-automatic-warp-specialization -tritongpu-pipeline | FileCheck %s --check-prefix=CHECK --check-prefix=PIPELINE
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc -tritongpu-assign-latencies -tritongpu-schedule-loops -tritongpu-automatic-warp-specialization -tritongpu-pipeline -tritongpu-optimize-partition-warps | FileCheck %s --check-prefix=OPT
 
 #indices_layout = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #acc_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
@@ -29,13 +30,15 @@ tt.func @matmul_change_desc_in_prologue(
   // BASE-NOT: tt.make_tensor_descriptor
   // PIPELINE-NOT: ttng.tensormap_create
   // CHECK-LABEL: partition0
-  // CHECK-SAME: num_warps(1)
+  // OPT-LABEL: partition0
+  // OPT-SAME: num_warps(1)
   // BASE-NOT: tt.make_tensor_descriptor
   // PIPELINE-NOT: ttng.tensormap_create
   // PIPELINE-COUNT-1: tc_gen5_mma
   // PIPELINE-NOT: tc_gen5_mma
   // CHECK-LABEL: partition1
-  // CHECK-SAME: num_warps(2)
+  // OPT-LABEL: partition1
+  // OPT-SAME: num_warps(2)
   // BASE-COUNT-2: tt.make_tensor_descriptor
   // PIPELINE-COUNT-2: ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 512 : i32}
   // PIPELINE-COUNT-2: ttng.tensormap_create
@@ -88,9 +91,11 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
   // CHECK-LABEL: ttg.warp_specialize
   // CHECK-LABEL: default
   // CHECK-LABEL: partition0
-  // CHECK-SAME: num_warps(1)
+  // OPT-LABEL: partition0
+  // OPT-SAME: num_warps(1)
   // CHECK-LABEL: partition1
-  // CHECK-SAME: num_warps(2)
+  // OPT-LABEL: partition1
+  // OPT-SAME: num_warps(2)
   // CHECK: [[INDICES:%.*]] = tt.splat %{{.*}} : i32 -> tensor<128xi32,
   // CHECK: ttng.async_tma_gather %{{.*}}[[[INDICES]],
   // CHECK-NOT: partition2
@@ -128,11 +133,13 @@ tt.func @matmul_tma_and_regular_load(
   // CHECK-LABEL: ttg.warp_specialize
   // CHECK-LABEL: default
   // CHECK-LABEL: partition0
-  // CHECK-SAME: num_warps(4)
+  // OPT-LABEL: partition0
+  // OPT-SAME: num_warps(4)
   // PIPELINE-COUNT-3: async_copy_global_to_local
   // PIPELINE-NOT: async_copy_global_to_local
   // CHECK-LABEL: partition1
-  // CHECK-SAME: num_warps(4)
+  // OPT-LABEL: partition1
+  // OPT-SAME: num_warps(4)
   // CHECK: [[INDICES:%.*]] = tt.splat %{{.*}} : i32 -> tensor<128xi32,
   // CHECK: ttng.async_tma_gather %{{.*}}[[[INDICES]],
   // CHECK-NOT: partition2

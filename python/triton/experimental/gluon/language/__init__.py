@@ -46,6 +46,7 @@ from ._core import (
     bank_conflicts,
     convert_layout,
     device_assert,
+    device_print,
     dot_fma,
     expand_dims,
     full,

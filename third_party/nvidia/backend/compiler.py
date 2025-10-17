@@ -294,6 +294,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_schedule_loops(pm)
             passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
+            passes.ttgpuir.add_optimize_partition_warps(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             # hoist again and allow hoisting out of if statements
             passes.ttgpuir.add_hoist_tmem_alloc(pm, True)
@@ -322,8 +323,7 @@ class CUDABackend(BaseBackend):
 
         pm.run(mod, 'make_ttgir')
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
-        tensordesc_meta = mod.get_tensordesc_metadata()
-        metadata["tensordesc_meta"] = tensordesc_meta
+        metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
     def gluon_to_ttgir(self, src, metadata, options, capability):
@@ -340,6 +340,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
+        metadata["cluster_dims"] = (options.num_ctas, 1, 1)
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
