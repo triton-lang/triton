@@ -7,7 +7,6 @@ import torch.distributed as dist
 import torch.distributed._symmetric_memory as symm_mem
 import torch.multiprocessing as mp
 import triton
-from python.triton.profiler import proton
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment
 from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
