@@ -6,6 +6,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -525,12 +526,14 @@ class BlockedToMFMA : public OpRewritePattern<tt::DotOp> {
   int mfmaVersion;
   int nonKDim;
   int kPack;
+  AMD::ModuleAxisInfoAnalysis &axisAnalysisPass;
 
 public:
   BlockedToMFMA(MLIRContext *context, int mfmaVersion, int nonKDim, int kPack,
+                AMD::ModuleAxisInfoAnalysis &axisAnalysisPass,
                 PatternBenefit benefit = 1)
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
-        nonKDim(nonKDim), kPack(kPack) {}
+        nonKDim(nonKDim), kPack(kPack), axisAnalysisPass(axisAnalysisPass) {}
 
   LogicalResult matchAndRewrite(tt::DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
@@ -604,9 +607,10 @@ public:
     // 1. We can not support transposed mfma 4x64 as it requires to broadcast
     // the operand A.
     // 2. We always transpose 64x4 mfma in order to use the mfma broadcast.
-    bool isTransposed = !(mDim == 4 && nDim == 64) &&
-                            !(mlir::LLVM::AMD::isStoredAlongDim0(dotOp)) ||
-                        (mDim == 64 && nDim == 4);
+    bool isTransposed =
+        !(mDim == 4 && nDim == 64) &&
+            !(mlir::LLVM::AMD::isStoredAlongDim0(dotOp, axisAnalysisPass)) ||
+        (mDim == 64 && nDim == 4);
     auto aElemTy = mfmaInstr->aElementType;
     auto is16BitElemTy = (aElemTy.isF16() || aElemTy.isBF16());
 
@@ -752,12 +756,14 @@ class ScaledBlockedToMFMA final : public OpRewritePattern<triton::DotScaledOp> {
   int mfmaVersion;
   int nonKDim;
   int kPack;
+  AMD::ModuleAxisInfoAnalysis &axisAnalysisPass;
 
 public:
   ScaledBlockedToMFMA(MLIRContext *context, int mfmaVersion, int nonKDim,
-                      int kPack, PatternBenefit benefit = 1)
+                      int kPack, AMD::ModuleAxisInfoAnalysis &axisAnalysisPass,
+                      PatternBenefit benefit = 1)
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
-        nonKDim(nonKDim), kPack(kPack) {}
+        nonKDim(nonKDim), kPack(kPack), axisAnalysisPass(axisAnalysisPass) {}
 
   LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
                                 PatternRewriter &rewriter) const override {
@@ -1771,6 +1777,8 @@ struct TritonAMDGPUAccelerateMatmulPass
     ModuleOp m = getOperation();
 
     RewritePatternSet mfmaPatterns(context);
+    AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(m);
+
     switch (auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName)) {
     case ISAFamily::GFX1250:
       mfmaPatterns.add<ScaledBlockedToScaledWMMAF8F6F4>(
@@ -1787,6 +1795,7 @@ struct TritonAMDGPUAccelerateMatmulPass
     case ISAFamily::CDNA1:
       mfmaPatterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
+          axisInfoAnalysis,
           /*benefit=*/2);
       break;
     case ISAFamily::RDNA3:

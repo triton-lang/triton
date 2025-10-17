@@ -568,7 +568,8 @@ bool doesSwizzleInsideWarp(RewriterBase &rewriter,
   return true;
 }
 
-bool isStoredAlongDim0(Operation *op) {
+bool isStoredAlongDim0(Operation *op,
+                       ModuleAxisInfoAnalysis &axisAnalysisPass) {
   const ForwardSliceOptions fwdOpt;
   SetVector<mlir::Operation *> forwardSliceSet;
   getForwardSlice(op, &forwardSliceSet, fwdOpt);
@@ -585,11 +586,8 @@ bool isStoredAlongDim0(Operation *op) {
     if (!ptr)
       continue;
 
-    if (auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType())) {
-      auto order = triton::gpu::getOrder(tensorTy);
-      return (order.size() == 2 && order[0] == 0 ||
-              order.size() == 3 && order[0] == 1);
-    }
+    AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
+    return axisInfo->getContiguity(0) > 1;
   }
   return false;
 }

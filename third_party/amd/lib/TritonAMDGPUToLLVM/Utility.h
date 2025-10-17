@@ -107,8 +107,8 @@ bool doesSwizzleInsideWarp(RewriterBase &rewriter,
 // Return true if op is used by DotScaledOp or UpcastMXFPOp ops.
 bool isUsedByDotScaledOp(Operation *op);
 
-// Return true if op is stored along dimension 0.
-bool isStoredAlongDim0(Operation *op);
+// Return true if op is stored continuously along the dimension 0.
+bool isStoredAlongDim0(Operation *op, ModuleAxisInfoAnalysis &axisAnalysisPass);
 
 // Check if the result of this tl.dot is used as opA or opB of another tl.dot
 // in the same region
