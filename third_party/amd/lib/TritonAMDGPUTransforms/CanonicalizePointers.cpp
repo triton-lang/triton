@@ -477,19 +477,24 @@ struct FatPointers {
 
   using KeyT = std::pair<Value, Value>;
   using ValueT = FatPtrAttrs;
-  using DenseMapT = DenseMap<KeyT, ValueT>;
+  using ValuePtrT = std::unique_ptr<FatPtrAttrs>;
+  using DenseMapT = DenseMap<KeyT, ValuePtrT>;
 
   void collectFatPointerAttributes(const KeyT &k);
   ValueT &operator[](const KeyT &k) {
-    if (!pointerAttrs.contains(k))
+    if (!pointerAttrs.contains(k)) {
+      pointerAttrs[k] = std::make_unique<ValueT>();
       collectFatPointerAttributes(k);
-    return pointerAttrs[k];
+    }
+    return *pointerAttrs[k];
   }
 
   ValueT &operator[](KeyT &&k) {
-    if (!pointerAttrs.contains(k))
+    if (!pointerAttrs.contains(k)) {
+      pointerAttrs[k] = std::make_unique<ValueT>();
       collectFatPointerAttributes(k);
-    return pointerAttrs[k];
+    }
+    return *pointerAttrs[k];
   }
 
   template <typename T>
@@ -499,7 +504,7 @@ struct FatPointers {
     // have our own message
     assert(pointerAttrs.contains(k) &&
            "expected fatPtrs to contain remapped fat pointer");
-    return pointerAttrs.at(k);
+    return *pointerAttrs.at(k);
   }
 
   bool contains(const KeyT &k) { return pointerAttrs.contains(k); }
@@ -529,7 +534,7 @@ void FatPointers::collectFatPointerAttributes(const KeyT &k) {
         continue;
 
       auto newAttrName = attrName.strref().drop_back(argSuffix.size());
-      pointerAttrs[k].attributes[newAttrName] = namedAttr.getValue();
+      pointerAttrs[k]->attributes[newAttrName] = namedAttr.getValue();
       // Propagate the argument to the offset if it is also a block
       // argument
       if (auto offsetArg = dyn_cast<BlockArgument>(offset))
@@ -543,7 +548,7 @@ void FatPointers::collectFatPointerAttributes(const KeyT &k) {
 
   // Otherwise add the attributes of the base to the fat pointer
   for (auto baseAttr : base.getDefiningOp()->getAttrs())
-    pointerAttrs[k].attributes[baseAttr.getName()] = baseAttr.getValue();
+    pointerAttrs[k]->attributes[baseAttr.getName()] = baseAttr.getValue();
 }
 
 Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
