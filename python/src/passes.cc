@@ -5,6 +5,7 @@
 #include "mlir/Tools/Plugins/PassPlugin.h"
 #include "passes.h"
 #include "triton/Analysis/Allocation.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
@@ -122,8 +123,10 @@ void init_plugin_passes(py::module &&m) {
   }
   ///////////////////////////////////////////////////////////////
 
-  std::function<void(uint32_t *, const char **)> tritonEnumeratePluginPasses =
-      reinterpret_cast<void (*)(uint32_t *, const char **)>(getDetailsFn);
+  std::function<TritonPluginResult(uint32_t *, const char **)>
+      tritonEnumeratePluginPasses =
+          reinterpret_cast<TritonPluginResult (*)(uint32_t *, const char **)>(
+              getDetailsFn);
 
   uint32_t passCount = 0;
   tritonEnumeratePluginPasses(&passCount, nullptr);
@@ -160,10 +163,14 @@ void init_plugin_passes(py::module &&m) {
         throw std::runtime_error("Failed to get symbol");
       }
 
-      std::function<void(mlir::PassManager *, const char *)> createPluginPass =
-          reinterpret_cast<void (*)(mlir::PassManager *, const char *)>(
-              getDetailsFn);
+      std::function<TritonPluginResult(mlir::PassManager *, const char *)>
+          createPluginPass = reinterpret_cast<TritonPluginResult (*)(
+              mlir::PassManager *, const char *)>(getDetailsFn);
       createPluginPass(&pm, passName);
+      if (TritonPluginResult::TP_SUCCESS != registerTritonPluginPass(passName)) {
+        llvm::errs() << "Failed to add plugin pass to pass manager: " << passName << "\n";
+        throw std::runtime_error("Failed to add plugin pass to pass manager");
+      }
     });
   }
 }

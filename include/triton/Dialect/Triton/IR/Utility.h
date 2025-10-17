@@ -5,6 +5,15 @@
 #include <algorithm>
 #include <numeric>
 
+
+extern "C" {
+  enum TritonPluginResult {
+    TP_SUCESS = 0,
+    TP_GENERIC_FAILURE = 1,
+  };
+};
+#define TRITON_PLUGIN_API extern "C" __attribute__((visibility("default"))) TritonPluginResult
+
 namespace mlir {
 
 // Bitwidth of pointers
