@@ -5,11 +5,11 @@
 #include "mlir/Tools/Plugins/PassPlugin.h"
 #include "passes.h"
 #include "triton/Analysis/Allocation.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Conversion/TritonToTritonGPU/Passes.h"
 #include "triton/Dialect/Gluon/Transforms/Passes.h"
-#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
@@ -169,10 +169,8 @@ void init_plugin_passes(py::module &&m) {
           createPluginPass = reinterpret_cast<TritonPluginResult (*)(
               mlir::PassManager *, const char *)>(getDetailsFn);
       createPluginPass(&pm, passName);
-      if (TritonPluginResult::TP_SUCCESS !=
-          registerTritonPluginPass(passName)) {
-        llvm::errs() << "Failed to add plugin pass to pass manager: "
-                     << passName << "\n";
+      if (TritonPluginResult::TP_SUCCESS != registerTritonPluginPass(passName)) {
+        llvm::errs() << "Failed to add plugin pass to pass manager: " << passName << "\n";
         throw std::runtime_error("Failed to add plugin pass to pass manager");
       }
     });
