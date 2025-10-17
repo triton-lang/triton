@@ -33,7 +33,6 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
     assert len(x.shape) == 2
     assert x.shape_max[-1] < 32768
     assert dim == 1
-    assert not all_gather or not use_provided_indx
     n_rows, n_cols = x.shape
     n_rows_max, _ = x.shape_max
     dev = x.device
