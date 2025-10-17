@@ -7,6 +7,7 @@ import torch.distributed as dist
 import torch.distributed._symmetric_memory as symm_mem
 import torch.multiprocessing as mp
 import triton
+from python.triton.profiler import proton
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment
 from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
@@ -312,6 +313,19 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     graph.replay()
     dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
     triton.testing.assert_close(y_global_ref, y_global_tri)
+
+    import triton.profiler as proton
+
+    rank = dist.get_rank()
+    dist.barrier()
+    proton.start(f"static_{rank}", hook="triton")
+    with proton.scope("warmup"):
+        graph.replay()
+    dist.barrier()
+    with proton.scope("exec"):
+        for _ in range(10):
+            graph.replay()
+    proton.finalize()
 
 
 @pytest.mark.parametrize("distributed_launcher", [2, 4], indirect=True)
