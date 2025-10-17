@@ -203,7 +203,7 @@ class InnerRoutingData:
         elif isinstance(data, InnerRoutingData):
             expt_data, block = data.base.expt_data, data.block_k
             args = (
-                True, data.x_is_padded, data.w_is_padded, expt_data.batch_sizes.max()
+                True, data.x_is_padded, data.w_is_padded, expt_data.slice_sizes.max()
             )
         elif data is None:
             expt_data = None
@@ -214,8 +214,8 @@ class InnerRoutingData:
             return (None, None, None, None, False, False, False, None)
 
         return (
-            expt_data.batch_sizes,
-            expt_data.batch_offs,
+            expt_data.slice_sizes,
+            expt_data.slice_offs,
             expt_data.block_offs(block),
             expt_data.block_schedule(block),
         ) + args
@@ -467,7 +467,10 @@ def matmul_ogs(x, w, bias,
         assert routing_data is None
         assert gather_indx is None
         assert scatter_indx is None
-        routing_data = RoutingData(None, None, inner_routing_data.base.n_expts_tot, 1)
+        routing_data = RoutingData(
+            None, None, inner_routing_data.base.n_expts_tot, 1,
+            expected_tokens_per_expt=inner_routing_data.base.expected_tokens_per_expt,
+        )
     # canonicalize inputs
     if precision_config is None:
         precision_config = PrecisionConfig()
@@ -684,6 +687,7 @@ def matmul_ogs(x, w, bias,
                    N, K, K_W,
                    betas, gammas,
                    None if gather_indx is None else gather_indx.src_indx,
+                   None if gather_indx is None else gather_indx.dst_indx,  # Only for launch_metadata
                    None if scatter_indx is None else scatter_indx.src_indx,
                    num_indx,
                    None if not opt_flags.fused_scatter else scatter_indx.dst_indx,
