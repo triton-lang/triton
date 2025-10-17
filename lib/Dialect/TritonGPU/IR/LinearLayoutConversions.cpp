@@ -538,14 +538,20 @@ chooseLLDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
   auto kRegister = S("register");
   auto kLane = S("lane");
 
-  // Make sure that we have enough bases to rotate, otherwise we can't return
-  // a valid ds_read_tr layout
-  if (ldsTransLayout.getInDimSizeLog2(kRegister) < numRegBases ||
-      ldsTransLayout.getInDimSizeLog2(kLane) < numLaneBases) {
+  // Make sure that we have enough register bases to rotate, otherwise we
+  // can't return a valid ds_read_tr layout
+  if (ldsTransLayout.getInDimSizeLog2(kRegister) < numRegBases) {
     return std::nullopt;
   }
-
+  // We should always have enough lanes
+  assert(ldsTransLayout.getInDimSizeLog2(kLane) >= numLaneBases);
   rotatePrefixes(bases[kRegister], numRegBases, bases[kLane], numLaneBases);
+  // Scale types double the elements for a total of 16 vgpr (still only 16
+  // elements contiguous). Need to adjust the lane basis to reflect that
+  if (elemBitWidth == 8 && numLanesInShuffleGroup == 8) {
+    assert(ldsTransLayout.getInDimSizeLog2(kLane) >= (numLaneBases + 1));
+    std::swap(bases[kLane][numLaneBases - 1], bases[kLane][numLaneBases]);
+  }
 
   return LinearLayout(bases, ldsTransLayout.getOutDims(), false);
 }
@@ -1127,7 +1133,7 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   // addressable blocks If the zero is in any other row/col (i.e. within a given
   // warp-addressable tmem space) it means it is not defined
 
-  // We model packed layouts as having the rows/cols dimensions of bitwidth=16
+  // We model packed layouts as having the rows/cols dimensions of bitWidth=16
   // This means that a layout with unpacked=True is the same as one with
   // unpacked=False
   assert(shape.size() == 2);
