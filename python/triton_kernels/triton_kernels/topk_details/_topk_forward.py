@@ -115,7 +115,7 @@ def _topk_forward(X, stride_xm,  # inputs
     mask_m = offs_m[:, None] < n_rows
     if USE_PROVIDED_INDX:
         tl.static_assert(len(PeerYis) == 1)
-        Yi_ptrs = PeerYis[0] + offs_m[:, None] * stride_ym + offs_y_n[None, :]
+        Yi_ptrs = PeerYis[0] + (dst_offs_m + offs_m[:, None]) * stride_ym + offs_y_n[None, :]
         y_indices = tl.load(Yi_ptrs, mask=mask_m)
         Xv_ptrs = X + offs_m[:, None] * stride_xm + y_indices
         y_values = tl.load(Xv_ptrs, mask=mask_m)
