@@ -69,9 +69,6 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_OPTION_WRAPPER_3("add_accelerate_matmul",
                             mlir::createTritonAMDGPUAccelerateMatmul,
                             const std::string, int, int);
-  ADD_PASS_OPTION_WRAPPER_4("add_assign_kwidth",
-                            mlir::createTritonAMDGPUAssignKWidth,
-                            const std::string, int, int, bool);
   ADD_PASS_WRAPPER_0("add_optimize_epilogue",
                      mlir::createTritonAMDGPUOptimizeEpilogue);
   ADD_PASS_OPTION_WRAPPER_1(

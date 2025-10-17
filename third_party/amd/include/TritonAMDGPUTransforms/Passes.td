@@ -61,30 +61,6 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
   ];
 }
 
-def TritonAMDGPUAssignKWidth : Pass<"tritonamdgpu-assign-kwidth", "mlir::ModuleOp"> {
-  let summary = "assign performant kWidth values for accelerated matmul";
-
-  let description= [{
-  }];
-
-  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
-
-  let options = [
-    Option<"archGenerationName", "arch-generation-name",
-           "std::string", /*default=*/"std::string{}",
-           "GFX generation name of target device.">,
-    Option<"matrixInstructionSize", "matrix-instruction-size",
-           "int32_t", /*default*/"0",
-           "enforce matrix instruction MN size">,
-    Option<"kPack", "kPack",
-           "int32_t", /*default*/"1",
-           "KWidth / kBase">,
-    Option<"enableCDNA4KW8ExpOpt", "enable-cdna4-kw8-experiment",
-           "bool", /*default*/"false",
-           "Enable kWidth=8 experiment for second dot on CDNA4">
-  ];
-}
-
 def TritonAMDGPUOptimizeEpilogue : Pass<"tritonamdgpu-optimize-epilogue", "mlir::ModuleOp"> {
   let summary = "Optimize epilogue: (1) Store accumulators directly without going thorough SMEM in epilogue.";
 
