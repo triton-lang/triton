@@ -1133,7 +1133,7 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
   // addressable blocks If the zero is in any other row/col (i.e. within a given
   // warp-addressable tmem space) it means it is not defined
 
-  // We model packed layouts as having the rows/cols dimensions of bitwidth=16
+  // We model packed layouts as having the rows/cols dimensions of bitWidth=16
   // This means that a layout with unpacked=True is the same as one with
   // unpacked=False
   assert(shape.size() == 2);

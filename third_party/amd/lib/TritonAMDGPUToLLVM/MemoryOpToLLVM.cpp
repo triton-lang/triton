@@ -37,11 +37,11 @@ public:
     RankedTensorType dstTy = op.getType();
     auto typeConverter = this->getTypeConverter();
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
-    unsigned bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    unsigned bitWidth = llvmElemTy.getIntOrFloatBitWidth();
 
     // FP4 is represented as i8 and, when packed along K, can be
     // transposed using ds_read_tr8 which doesn't change packing.
-    if (bitwidth != 16 && bitwidth != 8) {
+    if (bitWidth != 16 && bitWidth != 8) {
       return failure();
     }
     // FP4 packed along M/N are not supported yet on GFX1250
@@ -67,7 +67,7 @@ private:
     auto dstTy = cast<RankedTensorType>(op.getType());
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
-    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    auto bitWidth = llvmElemTy.getIntOrFloatBitWidth();
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
     mlir::Type retTy = dstTy;
@@ -76,11 +76,11 @@ private:
     auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(srcTy);
     auto calcPaddedOffset = [&](Value smemOffset) {
       TritonLLVMOpBuilder b(loc, rewriter);
-      auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+      auto bitWidth = llvmElemTy.getIntOrFloatBitWidth();
       if (auto paddedLayout = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
               srcTy.getEncoding())) {
         // Apply the offset needed for padding.
-        Value padOffset = emitPadding(loc, rewriter, paddedLayout, bitwidth,
+        Value padOffset = emitPadding(loc, rewriter, paddedLayout, bitWidth,
                                       smemOffset, /*offsetInBytes=*/true);
         smemOffset = b.add(smemOffset, padOffset);
       }
@@ -88,13 +88,13 @@ private:
     };
 
     auto shape = srcTy.getShape();
-    auto ldsTransLoadParams = targetInfo.queryLDSTransLoadParams(bitwidth);
+    auto ldsTransLoadParams = targetInfo.queryLDSTransLoadParams(bitWidth);
     if (!ldsTransLoadParams)
       return failure();
-    // FP4 are packed into i8 so the real bitwidth is different
-    auto llBitwidth = isPackedLoad ? 4 : llvmElemTy.getIntOrFloatBitWidth();
+    // FP4 are packed into i8 so the real bitWidth is different
+    auto llBitWidth = isPackedLoad ? 4 : llvmElemTy.getIntOrFloatBitWidth();
     auto ldsTransLayout = triton::gpu::chooseDsReadTrLayout(
-        dstTy.getEncoding(), shape, llBitwidth,
+        dstTy.getEncoding(), shape, llBitWidth,
         ldsTransLoadParams->instBitWidth,
         ldsTransLoadParams->numLanesInShuffleGroup);
 
@@ -117,7 +117,7 @@ private:
     // Check that we will be able to vectorize the load.
     // Need to have exactly needContigReg, otherwise we can't use ds_read_tr
     auto [elemsPerVec, permutation] = largestVectorisation(
-        ctx, cvt, bitwidth, ldsTransLoadParams->needContigReg);
+        ctx, cvt, bitWidth, ldsTransLoadParams->needContigReg);
 
     if (paddedEnc)
       elemsPerVec = std::min<int>(elemsPerVec, paddedEnc.getMinInterval());
@@ -129,15 +129,15 @@ private:
     auto lowerInst = [&](RewriterBase &rewriter, Location loc,
                          ArrayRef<Value> inVals, Value vecAddr, int idx,
                          VectorType vTy) -> SmallVector<Value> {
-      assert(bitwidth == 16 || bitwidth == 8);
+      assert(bitWidth == 16 || bitWidth == 8);
       Value dsReadTr;
       // tr16 instructions return vectors of bf16/f16 while "tr8" instructions
       // return vectors of i32. Generate the corresponding i32 vector
-      auto numElemsI32 = (vTy.getNumElements() * bitwidth / 32);
+      auto numElemsI32 = (vTy.getNumElements() * bitWidth / 32);
       auto vTyI32 = VectorType::get(numElemsI32, i32_ty);
       switch (targetInfo.getISAFamily()) {
       case AMD::ISAFamily::GFX1250: {
-        if (bitwidth == 16) {
+        if (bitWidth == 16) {
           dsReadTr = LLVM::createLLVMIntrinsicCallOp(
                          rewriter, loc, "llvm.amdgcn.ds.load.tr16.b128", {vTy},
                          {vecAddr})
@@ -150,7 +150,7 @@ private:
         break;
       }
       case AMD::ISAFamily::CDNA4: {
-        if (bitwidth == 16) {
+        if (bitWidth == 16) {
           dsReadTr =
               rewriter.create<ROCDL::ds_read_tr16_b64>(loc, vTy, vecAddr);
         } else {
