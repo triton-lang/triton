@@ -3,7 +3,7 @@
 
 include "mlir/Pass/PassBase.td"
 
-def NVGPUWarpSpecialization : Pass<"nvgpu-warp-specialization", "mlir::ModuleOp"> {
+def NVGWarpSpecialization : Pass<"nvg-warp-specialization", "mlir::ModuleOp"> {
   let summary = "Automatic Warp specialization for NVIDIA GPU";
 
   let description = [{
@@ -23,7 +23,7 @@ def NVGPUWarpSpecialization : Pass<"nvgpu-warp-specialization", "mlir::ModuleOp"
   ];
 }
 
-def NVGPUTestWSTaskPartition : Pass<"nvgpu-test-ws-task-partition", "mlir::ModuleOp"> {
+def NVGTestWSTaskPartition : Pass<"nvg-test-ws-task-partition", "mlir::ModuleOp"> {
   let summary = "test warp specialization task partition";
 
   let description = "This pass computes a warp schedule partition by annoating anchor operations with async task ids";
@@ -36,7 +36,7 @@ def NVGPUTestWSTaskPartition : Pass<"nvgpu-test-ws-task-partition", "mlir::Modul
   ];
 }
 
-def NVGPUTestWSTaskIdPropagate : Pass<"nvgpu-test-taskid-propagate", "mlir::ModuleOp"> {
+def NVGTestWSTaskIdPropagate : Pass<"nvg-test-taskid-propagate", "mlir::ModuleOp"> {
   let summary = "test warp specialization task id propagation";
 
   let description = [{
@@ -54,7 +54,7 @@ def NVGPUTestWSTaskIdPropagate : Pass<"nvgpu-test-taskid-propagate", "mlir::Modu
   ];
 }
 
-def NVGPUTestWSDataPartition : Pass<"nvgpu-test-ws-data-partition", "mlir::ModuleOp"> {
+def NVGTestWSDataPartition : Pass<"nvg-test-ws-data-partition", "mlir::ModuleOp"> {
   let summary = "test warp specialization data partition";
 
   let description = "This pass partitions operations into multiple suboperations which operate on smaller data shapes";
@@ -67,7 +67,7 @@ def NVGPUTestWSDataPartition : Pass<"nvgpu-test-ws-data-partition", "mlir::Modul
   ];
 }
 
-def NVGPUTestWSCodePartition: Pass<"nvgpu-test-ws-code-partition", "mlir::ModuleOp"> {
+def NVGTestWSCodePartition: Pass<"nvg-test-ws-code-partition", "mlir::ModuleOp"> {
   let summary = "test warp specialization code partition";
 
   let description = "This pass generates warp specialized code baed on task id attributes.";

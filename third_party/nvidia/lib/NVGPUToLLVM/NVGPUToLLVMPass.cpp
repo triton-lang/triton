@@ -1,7 +1,7 @@
-#include "NVGPUToLLVM/NVGPUToLLVMPass.h"
-#include "NVGPUToLLVM/Passes.h"
+#include "NVGToLLVM/NVGToLLVMPass.h"
+#include "NVGToLLVM/Passes.h"
 
-#include "Dialect/NVGPU/IR/Dialect.h"
+#include "Dialect/NVG/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/PatternMatch.h"
@@ -11,15 +11,15 @@
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
 
-namespace ttn = mlir::triton::nvgpu;
+namespace ttn = mlir::triton::nvg;
 using ttn::Constraints;
 using ttn::OperandsAndConstraints;
 
 namespace mlir {
 namespace triton {
 
-#define GEN_PASS_DEF_CONVERTNVGPUTOLLVM
-#include "NVGPUToLLVM/Passes.h.inc"
+#define GEN_PASS_DEF_CONVERTNVGTOLLVM
+#include "NVGToLLVM/Passes.h.inc"
 
 namespace {
 
@@ -72,7 +72,7 @@ Value convertToType(Value val, std::string constraint, Location loc,
 }
 
 SmallVector<PTXBuilder::Operand *>
-getPtxOutputs(const nvgpu::Constraints &outputConstraints,
+getPtxOutputs(const nvg::Constraints &outputConstraints,
               PTXBuilder &ptxBuilder) {
   SmallVector<PTXBuilder::Operand *> ptxOutputs;
   for (unsigned i = 0; i < outputConstraints.size(); i++) {
@@ -169,9 +169,9 @@ std::string patchPtxAsm(Operation *op, std::string ptxAsm) {
 }
 
 template <typename SourceOp>
-class NVGPUOpGenericPattern : public OpRewritePattern<SourceOp> {
+class NVGOpGenericPattern : public OpRewritePattern<SourceOp> {
 public:
-  explicit NVGPUOpGenericPattern(MLIRContext *context, std::string ptxAsm,
+  explicit NVGOpGenericPattern(MLIRContext *context, std::string ptxAsm,
                                  Constraints outputConstraints,
                                  Constraints inputConstraints)
       : OpRewritePattern<SourceOp>(context), ptxAsm(std::move(ptxAsm)),
@@ -270,11 +270,11 @@ public:
     auto &ld =
         ptxBuilder.create<>("ld")
             ->global()
-            .o("cta", op.getScope() == triton::nvgpu::MemSyncScope::CTA)
-            .o("gpu", op.getScope() == triton::nvgpu::MemSyncScope::GPU)
-            .o("sys", op.getScope() == triton::nvgpu::MemSyncScope::SYSTEM)
-            .o("acquire", op.getSem() == triton::nvgpu::MemSemantic::ACQUIRE)
-            .o("relaxed", op.getSem() == triton::nvgpu::MemSemantic::RELAXED)
+            .o("cta", op.getScope() == triton::nvg::MemSyncScope::CTA)
+            .o("gpu", op.getScope() == triton::nvg::MemSyncScope::GPU)
+            .o("sys", op.getScope() == triton::nvg::MemSyncScope::SYSTEM)
+            .o("acquire", op.getSem() == triton::nvg::MemSemantic::ACQUIRE)
+            .o("relaxed", op.getSem() == triton::nvg::MemSemantic::RELAXED)
             .b(width);
     ld(dstOpr, addrOpr).maybePredicate(op.getMask(), "b");
 
@@ -619,11 +619,11 @@ static void lowerTensorMemoryAlloc(ModuleOp mod) {
 
 } // anonymous namespace
 
-class ConvertNVGPUToLLVM
-    : public impl::ConvertNVGPUToLLVMBase<ConvertNVGPUToLLVM> {
+class ConvertNVGToLLVM
+    : public impl::ConvertNVGToLLVMBase<ConvertNVGToLLVM> {
 public:
-  using impl::ConvertNVGPUToLLVMBase<
-      ConvertNVGPUToLLVM>::ConvertNVGPUToLLVMBase;
+  using impl::ConvertNVGToLLVMBase<
+      ConvertNVGToLLVM>::ConvertNVGToLLVMBase;
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -642,7 +642,7 @@ public:
 };
 
 LogicalResult
-nvgpu::rewriteAsPtxAsm(Operation *op, PatternRewriter &rewriter,
+nvg::rewriteAsPtxAsm(Operation *op, PatternRewriter &rewriter,
                        std::string ptxAsm,
                        const OperandsAndConstraints &operandsAndConstraints,
                        const Constraints &outputConstraints) {

@@ -19,17 +19,17 @@
 // TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 // SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-#ifndef NVGPU_DIALECT
-#define NVGPU_DIALECT
+#ifndef NVG_DIALECT
+#define NVG_DIALECT
 
 include "mlir/IR/OpBase.td"
 
-def NVGPU_Dialect : Dialect {
-  let name = "nvgpu";
-  let cppNamespace = "::mlir::triton::nvgpu";
+def NVG_Dialect : Dialect {
+  let name = "nvg";
+  let cppNamespace = "::mlir::triton::nvg";
 
   let description = [{
-    NVGPU Dialect.
+    NVG Dialect.
   }];
 
   let dependentDialects = [

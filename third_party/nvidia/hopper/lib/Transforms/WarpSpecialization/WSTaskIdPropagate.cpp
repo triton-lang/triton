@@ -12,7 +12,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
-#define DEBUG_TYPE "nvgpu-ws-task-id-propagate"
+#define DEBUG_TYPE "nvg-ws-task-id-propagate"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -63,15 +63,15 @@ int doTaskIdPropagate(triton::FuncOp &funcOp) {
   return 0;
 }
 
-#define GEN_PASS_DEF_NVGPUTESTWSTASKIDPROPAGATE
+#define GEN_PASS_DEF_NVGTESTWSTASKIDPROPAGATE
 #include "nvidia/hopper/include/Transforms/Passes.h.inc"
 
-class NVGPUTestWSTaskIdPropagatePass
-    : public impl::NVGPUTestWSTaskIdPropagateBase<
-          NVGPUTestWSTaskIdPropagatePass> {
+class NVGTestWSTaskIdPropagatePass
+    : public impl::NVGTestWSTaskIdPropagateBase<
+          NVGTestWSTaskIdPropagatePass> {
 public:
-  using impl::NVGPUTestWSTaskIdPropagateBase<
-      NVGPUTestWSTaskIdPropagatePass>::NVGPUTestWSTaskIdPropagateBase;
+  using impl::NVGTestWSTaskIdPropagateBase<
+      NVGTestWSTaskIdPropagatePass>::NVGTestWSTaskIdPropagateBase;
 
   void runOnFuncOp(triton::FuncOp funcOp) {
     llvm::DenseSet<Operation *> anchorOps;

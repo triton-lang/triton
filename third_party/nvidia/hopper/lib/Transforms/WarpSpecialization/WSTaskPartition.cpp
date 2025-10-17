@@ -8,7 +8,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
-#define DEBUG_TYPE "nvgpu-ws-task-partition"
+#define DEBUG_TYPE "nvg-ws-task-partition"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -136,14 +136,14 @@ void doTaskPartition(triton::FuncOp &funcOp, unsigned numWarpGroups) {
   });
 }
 
-#define GEN_PASS_DEF_NVGPUTESTWSTASKPARTITION
+#define GEN_PASS_DEF_NVGTESTWSTASKPARTITION
 #include "nvidia/hopper/include/Transforms/Passes.h.inc"
 
-class NVGPUTestWSTaskPartitionPass
-    : public impl::NVGPUTestWSTaskPartitionBase<NVGPUTestWSTaskPartitionPass> {
+class NVGTestWSTaskPartitionPass
+    : public impl::NVGTestWSTaskPartitionBase<NVGTestWSTaskPartitionPass> {
 public:
-  using impl::NVGPUTestWSTaskPartitionBase<
-      NVGPUTestWSTaskPartitionPass>::NVGPUTestWSTaskPartitionBase;
+  using impl::NVGTestWSTaskPartitionBase<
+      NVGTestWSTaskPartitionPass>::NVGTestWSTaskPartitionBase;
 
   void runOnFuncOp(triton::FuncOp funcOp) {
     if (numWarpGroups > 1)

@@ -5,7 +5,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 
-#define DEBUG_TYPE "nvgpu-warp-specialization"
+#define DEBUG_TYPE "nvg-warp-specialization"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -17,14 +17,14 @@ bool doDataPartition(triton::FuncOp &funcOp, unsigned numConsumerGroups);
 void doCodePartition(triton::FuncOp &funcOp, unsigned numBuffers);
 void doTokenLowering(triton::FuncOp &funcOp, unsigned numConsumerGroups);
 
-#define GEN_PASS_DEF_NVGPUWARPSPECIALIZATION
+#define GEN_PASS_DEF_NVGWARPSPECIALIZATION
 #include "nvidia/hopper/include/Transforms/Passes.h.inc"
 
-class NVGPUWarpSpecializationPass
-    : public impl::NVGPUWarpSpecializationBase<NVGPUWarpSpecializationPass> {
+class NVGWarpSpecializationPass
+    : public impl::NVGWarpSpecializationBase<NVGWarpSpecializationPass> {
 public:
-  using impl::NVGPUWarpSpecializationBase<
-      NVGPUWarpSpecializationPass>::NVGPUWarpSpecializationBase;
+  using impl::NVGWarpSpecializationBase<
+      NVGWarpSpecializationPass>::NVGWarpSpecializationBase;
 
   void runOnFuncOp(triton::FuncOp funcOp) {
     SmallVector<scf::ForOp> loops;

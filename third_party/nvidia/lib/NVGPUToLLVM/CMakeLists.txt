@@ -1,9 +1,9 @@
-add_triton_library(NVGPUToLLVM
-    NVGPUToLLVMPass.cpp
+add_triton_library(NVGToLLVM
+    NVGToLLVMPass.cpp
 
     DEPENDS
-    NVGPUConversionPassIncGen
+    NVGConversionPassIncGen
 
     LINK_LIBS PUBLIC
-    NVGPUIR
+    NVGIR
 )

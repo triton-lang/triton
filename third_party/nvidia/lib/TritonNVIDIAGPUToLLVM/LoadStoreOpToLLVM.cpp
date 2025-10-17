@@ -1,4 +1,4 @@
-#include "Dialect/NVGPU/IR/Dialect.h"
+#include "Dialect/NVG/IR/Dialect.h"
 #include "TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
@@ -819,12 +819,12 @@ public:
     SmallVector<Value> resultVals(elemsPerThread);
 
     // Lower AtomicRMWOp to a ld.acquire if possible
-    std::unordered_map<triton::MemSyncScope, triton::nvgpu::MemSyncScope>
+    std::unordered_map<triton::MemSyncScope, triton::nvg::MemSyncScope>
         ScopeMap = {
-            {triton::MemSyncScope::CTA, triton::nvgpu::MemSyncScope::CTA},
-            {triton::MemSyncScope::GPU, triton::nvgpu::MemSyncScope::GPU},
+            {triton::MemSyncScope::CTA, triton::nvg::MemSyncScope::CTA},
+            {triton::MemSyncScope::GPU, triton::nvg::MemSyncScope::GPU},
             {triton::MemSyncScope::SYSTEM,
-             triton::nvgpu::MemSyncScope::SYSTEM}};
+             triton::nvg::MemSyncScope::SYSTEM}};
     const bool doPTXLDPromotion = isPromotableToNVPTXLD(op) && vec == 1 &&
                                   packed == 1 && ScopeMap.count(op.getScope());
 
@@ -845,11 +845,11 @@ public:
       if (doPTXLDPromotion) {
         Type convertedValueTy =
             getTypeConverter()->convertType(getElementTypeOrSelf(op.getType()));
-        auto loadAcquireOp = rewriter.create<triton::nvgpu::LoadAcquireOp>(
+        auto loadAcquireOp = rewriter.create<triton::nvg::LoadAcquireOp>(
             op.getLoc(), convertedValueTy, rmwPtr, pred,
             op.getSem() == triton::MemSemantic::ACQUIRE
-                ? triton::nvgpu::MemSemantic::ACQUIRE
-                : triton::nvgpu::MemSemantic::RELAXED,
+                ? triton::nvg::MemSemantic::ACQUIRE
+                : triton::nvg::MemSemantic::RELAXED,
             ScopeMap[op.getScope()]);
 
         auto ASMReturnTy = void_ty(ctx);
@@ -1338,7 +1338,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = ttg::lookupNumWarps(op);
     int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-    Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
+    Value warpID = rewriter.create<nvg::WarpIdOp>(loc);
     Value pred = adaptor.getPred();
     // Select just one thread for the TMA copy. This also helps the compiler to
     // figure out that the op is uniform.
@@ -1364,7 +1364,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto kBlock = str_attr("block");
     const auto numCopies = msgToOffset.getInDimSize(kMsg);
     auto zero = b.i32_val(0);
-    auto ctaId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
+    auto ctaId = rewriter.create<nvg::ClusterCTAIdOp>(loc);
 
     // The bounding box inner dimension must be less than or equal to the
     // swizzle size.
@@ -1440,7 +1440,7 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
   auto mod = op->getParentOfType<ModuleOp>();
   int numWarps = ttg::lookupNumWarps(op);
   int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
-  Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
+  Value warpID = rewriter.create<nvg::WarpIdOp>(loc);
   auto shapePerCTA = ttg::getShapePerCTA(srcTy);
   int elementsPerCTA = product(shapePerCTA);
 
@@ -1457,7 +1457,7 @@ LogicalResult convertTMAStoreLikeOp(Operation *op,
   auto kBlock = str_attr("block");
   auto numCopies = msgToOffset.getInDimSize(kMsg);
   auto zero = b.i32_val(0);
-  auto ctaId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
+  auto ctaId = rewriter.create<nvg::ClusterCTAIdOp>(loc);
 
   for (int copyIdx = 0; copyIdx < numCopies; copyIdx += numWarps) {
     int numWarpsToCopy = std::min(numCopies - copyIdx, numWarps);
@@ -1650,8 +1650,8 @@ static LogicalResult iterateGatherScatterIndices(
   if (freeVars[kLane] != (threadsPerWarp - 1))
     return op->emitError("x offsets must be broadcasted across each warp");
 
-  Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
-  Value blockId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
+  Value warpId = rewriter.create<nvg::WarpIdOp>(loc);
+  Value blockId = rewriter.create<nvg::ClusterCTAIdOp>(loc);
 
   // Mask out warps with redundant x offsets.
   pred = b.and_(pred,

@@ -36,33 +36,33 @@ using ::mlir::triton::gpu::MemDescType;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingTrait;
 
-triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
+triton::nvg::WGMMAEltType getMmaRetType(Value d) {
   auto dTy = cast<RankedTensorType>(d.getType()).getElementType();
   if (dTy.isF32()) {
-    return triton::nvgpu::WGMMAEltType::f32;
+    return triton::nvg::WGMMAEltType::f32;
   } else if (dTy.isF16()) {
-    return triton::nvgpu::WGMMAEltType::f16;
+    return triton::nvg::WGMMAEltType::f16;
   } else if (dTy.isInteger(32)) {
-    return triton::nvgpu::WGMMAEltType::s32;
+    return triton::nvg::WGMMAEltType::s32;
   } else {
     llvm::report_fatal_error("Unsupported mma result type found");
   }
 }
 
-triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
+triton::nvg::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
   auto aTy = cast<triton::gpu::TensorOrMemDesc>(a.getType()).getElementType();
   if (aTy.isF16()) {
-    return triton::nvgpu::WGMMAEltType::f16;
+    return triton::nvg::WGMMAEltType::f16;
   } else if (aTy.isBF16()) {
-    return triton::nvgpu::WGMMAEltType::bf16;
+    return triton::nvg::WGMMAEltType::bf16;
   } else if (aTy.isF32() && allowTF32) {
-    return triton::nvgpu::WGMMAEltType::tf32;
+    return triton::nvg::WGMMAEltType::tf32;
   } else if (aTy.isInteger(8)) {
-    return triton::nvgpu::WGMMAEltType::s8;
+    return triton::nvg::WGMMAEltType::s8;
   } else if (llvm::isa<Float8E5M2Type>(aTy)) {
-    return triton::nvgpu::WGMMAEltType::e5m2;
+    return triton::nvg::WGMMAEltType::e5m2;
   } else if (llvm::isa<Float8E4M3FNType>(aTy)) {
-    return triton::nvgpu::WGMMAEltType::e4m3;
+    return triton::nvg::WGMMAEltType::e4m3;
   } else {
     llvm::report_fatal_error("Unsupported mma operand type found");
   }
@@ -173,7 +173,7 @@ static SmallVector<Value> emitWait(ConversionPatternRewriter &rewriter,
   for (Value v : acc) {
     llvmStruct = b.insert_val(structTy, llvmStruct, v, i++);
   }
-  Value res = rewriter.create<triton::nvgpu::WGMMAWaitGroupOp>(loc, llvmStruct,
+  Value res = rewriter.create<triton::nvg::WGMMAWaitGroupOp>(loc, llvmStruct,
                                                                pendings);
   SmallVector<Value> results;
   for (int i = 0; i < acc.size(); ++i) {
@@ -235,14 +235,14 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
-  triton::nvgpu::WGMMAEltType eltTypeC = getMmaRetType(d);
-  triton::nvgpu::WGMMAEltType eltTypeA = getMmaOperandType(a, allowTF32);
-  triton::nvgpu::WGMMAEltType eltTypeB = getMmaOperandType(b, allowTF32);
+  triton::nvg::WGMMAEltType eltTypeC = getMmaRetType(d);
+  triton::nvg::WGMMAEltType eltTypeA = getMmaOperandType(a, allowTF32);
+  triton::nvg::WGMMAEltType eltTypeB = getMmaOperandType(b, allowTF32);
 
-  triton::nvgpu::WGMMALayout layoutA = transA ? triton::nvgpu::WGMMALayout::col
-                                              : triton::nvgpu::WGMMALayout::row;
-  triton::nvgpu::WGMMALayout layoutB = transB ? triton::nvgpu::WGMMALayout::row
-                                              : triton::nvgpu::WGMMALayout::col;
+  triton::nvg::WGMMALayout layoutA = transA ? triton::nvg::WGMMALayout::col
+                                              : triton::nvg::WGMMALayout::row;
+  triton::nvg::WGMMALayout layoutB = transB ? triton::nvg::WGMMALayout::row
+                                              : triton::nvg::WGMMALayout::col;
 
   auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
   Operation *startSequence = rewriter.create<NVVM::WgmmaFenceAlignedOp>(loc);
@@ -294,7 +294,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
             needsPartialAccumulator &&
             (numLowPrecisionAcc >= maxNumImpreciseAcc || k == numRepK - 1);
         Value mmaAcc = needsPartialAccumulator ? partialAcc : d;
-        mmaAcc = rewriter.create<triton::nvgpu::WGMMAOp>(
+        mmaAcc = rewriter.create<triton::nvg::WGMMAOp>(
             loc, accTy, a, b, useC, mmaAcc, M, N, K, eltTypeC, eltTypeA,
             eltTypeB, layoutA, layoutB);
         useC = tb.i1_val(1);

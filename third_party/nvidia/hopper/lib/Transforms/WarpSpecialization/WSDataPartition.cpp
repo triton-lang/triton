@@ -13,7 +13,7 @@ namespace ttng = mlir::triton::nvidia_gpu;
 
 namespace mlir {
 
-#define DEBUG_TYPE "nvgpu-ws-data-partition"
+#define DEBUG_TYPE "nvg-ws-data-partition"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -1365,14 +1365,14 @@ bool doDataPartition(triton::FuncOp &funcOp, unsigned numConsumerGroups) {
   return true;
 }
 
-#define GEN_PASS_DEF_NVGPUTESTWSDATAPARTITION
+#define GEN_PASS_DEF_NVGTESTWSDATAPARTITION
 #include "nvidia/hopper/include/Transforms/Passes.h.inc"
 
-class NVGPUTestWSDataPartitionPass
-    : public impl::NVGPUTestWSDataPartitionBase<NVGPUTestWSDataPartitionPass> {
+class NVGTestWSDataPartitionPass
+    : public impl::NVGTestWSDataPartitionBase<NVGTestWSDataPartitionPass> {
 public:
-  using impl::NVGPUTestWSDataPartitionBase<
-      NVGPUTestWSDataPartitionPass>::NVGPUTestWSDataPartitionBase;
+  using impl::NVGTestWSDataPartitionBase<
+      NVGTestWSDataPartitionPass>::NVGTestWSDataPartitionBase;
 
   void runOnFuncOp(triton::FuncOp funcOp) {
     if (numWarpGroups > 2)

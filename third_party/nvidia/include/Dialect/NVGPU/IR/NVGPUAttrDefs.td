@@ -19,15 +19,15 @@
 // TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 // SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-#ifndef NVGPU_ATTRDEFS
-#define NVGPU_ATTRDEFS
+#ifndef NVG_ATTRDEFS
+#define NVG_ATTRDEFS
 
 include "mlir/IR/AttrTypeBase.td"
-include "NVGPUDialect.td"
+include "NVGDialect.td"
 
-class NVGPU_Attr<string name, list<Trait> traits = [],
+class NVG_Attr<string name, list<Trait> traits = [],
                      string baseCppClass = "::mlir::Attribute">
-  : AttrDef<NVGPU_Dialect, name, traits, baseCppClass> {
+  : AttrDef<NVG_Dialect, name, traits, baseCppClass> {
 }
 
 #endif

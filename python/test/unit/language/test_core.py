@@ -121,9 +121,9 @@ def check_type_supported(dtype, device):
     if device in ['cuda']:
         cc = torch.cuda.get_device_capability()
         if cc[0] < 8 and (dtype is tl.bfloat16 or dtype == "bfloat16" or dtype is torch.bfloat16):
-            pytest.skip("bfloat16 is only supported on NVGPU with cc >= 80")
+            pytest.skip("bfloat16 is only supported on NVG with cc >= 80")
         if cc[0] < 9 and dtype in {tl.float8e4nv, "float8e4nv", "float8_e4m3fn"}:
-            pytest.skip("float8e4nv is only supported on NVGPU with cc >= 90")
+            pytest.skip("float8e4nv is only supported on NVG with cc >= 90")
     if is_interpreter():
         if dtype in [tl.bfloat16, "bfloat16", torch.bfloat16]:
             pytest.skip("bfloat16 is not supported in the interpreter")

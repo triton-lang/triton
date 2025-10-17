@@ -31,7 +31,7 @@ namespace ttg = mlir::triton::gpu;
 namespace ttng = ::mlir::triton::nvidia_gpu;
 namespace mlir {
 
-#define DEBUG_TYPE "nvgpu-ws-specialize"
+#define DEBUG_TYPE "nvg-ws-specialize"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 

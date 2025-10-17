@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_NVGPU_TO_LLVM_PASS_H
-#define TRITON_CONVERSION_NVGPU_TO_LLVM_PASS_H
+#ifndef TRITON_CONVERSION_NVG_TO_LLVM_PASS_H
+#define TRITON_CONVERSION_NVG_TO_LLVM_PASS_H
 
 #include <string>
 #include <utility>
@@ -17,7 +17,7 @@ template <typename T> class OperationPass;
 
 namespace triton {
 
-namespace nvgpu {
+namespace nvg {
 
 using Constraints = std::vector<std::string>;
 using OperandsAndConstraints = std::vector<std::pair<Value, std::string>>;
@@ -28,7 +28,7 @@ rewriteAsPtxAsm(mlir::Operation *op, mlir::PatternRewriter &rewriter,
                 const OperandsAndConstraints &operandsAndConstraints = {},
                 const Constraints &outputConstraints = {});
 
-} // namespace nvgpu
+} // namespace nvg
 
 } // namespace triton
 

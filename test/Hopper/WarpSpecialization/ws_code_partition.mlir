@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --nvgpu-test-ws-code-partition=num-buffers=1 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --nvg-test-ws-code-partition=num-buffers=1 | FileCheck %s
 
 // CHECK-LABEL: @matmul_kernel_one_consumer
 // CHECK: ttg.warp_specialize{{.*}}requestedRegisters = array<i32: 232>

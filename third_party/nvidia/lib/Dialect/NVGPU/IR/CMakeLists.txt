@@ -1,9 +1,9 @@
-add_triton_library(NVGPUIR
+add_triton_library(NVGIR
   Dialect.cpp
 
   DEPENDS
-  NVGPUTableGen
-  NVGPUAttrDefsIncGen
+  NVGTableGen
+  NVGAttrDefsIncGen
 
   LINK_LIBS PUBLIC
   MLIRLLVMDialect

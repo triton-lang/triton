@@ -1,6 +1,6 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
-#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
+#include "third_party/nvidia/include/Dialect/NVG/IR/Dialect.h"
 #include "third_party/nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -313,7 +313,7 @@ struct BufferPointersOpConversion
       assert(op.getMemType() == tti::MemType::TENSOR_MEM &&
              "Unsupported memory type");
       TritonLLVMOpBuilder b(loc, rewriter);
-      base = rewriter.create<nvgpu::TensorMemoryBaseAddress>(loc);
+      base = rewriter.create<nvg::TensorMemoryBaseAddress>(loc);
       base = b.ptrtoint(i32_ty, base);
     }
     bufPointers = rewriter.create<arith::AddIOp>(
