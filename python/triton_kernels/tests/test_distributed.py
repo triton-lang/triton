@@ -26,6 +26,7 @@ def _make_expt_dict_for_mode(n_shards, n_expts_tot, affinity_mode):
     except KeyError as exc:
         raise ValueError(f"Unknown affinity mode: {affinity_mode}") from exc
 
+
 def _make_y_indx_for_mode(n_tokens_global, n_expts_tot, n_expts_act, n_shards, affinity_mode, dev):
     y_indx_global = None
     if affinity_mode == "uniform":
@@ -41,6 +42,7 @@ def _make_y_indx_for_mode(n_tokens_global, n_expts_tot, n_expts_act, n_shards, a
         round_robin_indx = (shard_order * expts_per_rank + intra_shard).to(torch.int16)
         y_indx_global = round_robin_indx.unsqueeze(0).expand(n_tokens_global, -1).contiguous()
     return y_indx_global
+
 
 # ------------------------------------------------------------
 # fixture
@@ -136,7 +138,8 @@ def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_ac
     return y_global
 
 
-def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, expt_assignment, n_expts_act, y_indx=None):
+def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, expt_assignment, n_expts_act,
+                              y_indx=None):
     rank = dist.get_rank()
     expt_map = expt_assignment.expt_map[rank, :]
     # active global logits (sparse)
