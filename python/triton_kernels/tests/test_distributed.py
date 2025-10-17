@@ -318,7 +318,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
 
     rank = dist.get_rank()
     dist.barrier()
-    proton.start(f"expert_sharding_{rank}", hook="triton")
+    proton.start(f"expert_sharding_{rank}")
     with proton.scope("warmup"):
         graph.replay()
     dist.barrier()
