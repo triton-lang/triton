@@ -21,10 +21,16 @@ namespace ttng = triton::nvidia_gpu;
 RankedTensorType getTMEMTensorLayout(const TypeConverter *tc,
                                      RankedTensorType type, MemDescType memdesc,
                                      unsigned numWarps) {
+  Attribute encoding;
   type = cast<RankedTensorType>(tc->convertType(type));
-  auto ctaLayout = getCTALayout(type.getEncoding());
-  auto encoding =
-      ttng::getDefaultLayoutForTmemLdSt(memdesc, numWarps, ctaLayout);
+  if (isa<ttng::TensorMemoryScalesEncodingAttr>(memdesc.getEncoding())) {
+    encoding = LinearEncodingAttr::get(
+        type.getContext(), getScaleTMEMStoreLinearLayout(type, numWarps));
+  } else {
+    auto tmemEnc = cast<ttng::TensorMemoryEncodingAttr>(memdesc.getEncoding());
+    encoding = ttng::getTmemCompatibleLayout(
+        tmemEnc.getBlockM(), tmemEnc.getBlockN(), type, numWarps);
+  }
   return type.cloneWithEncoding(encoding);
 }
 
