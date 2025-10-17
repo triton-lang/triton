@@ -1,6 +1,11 @@
 #define ADD_PASS_WRAPPER_0(name, builder)                                      \
   m.def(name, [](mlir::PassManager &pm) { pm.addPass(builder()); })
 
+#define ADD_FUNC_PASS_WRAPPER_0(name, builder)                                 \
+  m.def(name, [](mlir::PassManager &pm) {                                      \
+    pm.addNestedPass<mlir::triton::FuncOp>(builder());                         \
+  });
+
 #define ADD_PASS_WRAPPER_1(name, builder, ty0)                                 \
   m.def(name,                                                                  \
         [](mlir::PassManager &pm, ty0 val0) { pm.addPass(builder(val0)); })

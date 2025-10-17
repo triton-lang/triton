@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx950"| FileCheck %s --check-prefixes=COMMON
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops="arch-generation-name=gfx950" --tritonamdgpu-optimize-buffer-op-ptr| FileCheck %s --check-prefixes=COMMON
 
 // COMMON-LABEL: add_after_load
 // COMMON-DAG: [[X_OFFSET_CST:%.*]] = arith.constant dense<123>
