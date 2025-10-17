@@ -12,6 +12,7 @@
 #include "proton/Dialect/include/Dialect/ProtonGPU/Transforms/Passes.h"
 #include "triton/Dialect/Gluon/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -162,8 +163,8 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
       llvm::report_fatal_error(msg);
     }
 
-    std::function<void(uint32_t *, const char **)> tritonEnumeratePluginPasses =
-        reinterpret_cast<void (*)(uint32_t *, const char **)>(getDetailsFn);
+    std::function<TritonPluginResult(uint32_t *, const char **)> tritonEnumeratePluginPasses =
+        reinterpret_cast<TritonPluginResult (*)(uint32_t *, const char **)>(getDetailsFn);
 
     uint32_t passCount = 0;
     tritonEnumeratePluginPasses(&passCount, nullptr);
@@ -183,9 +184,12 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
         llvm::report_fatal_error(msg);
       }
 
-      std::function<void(const char *)> registerTritonPluginPass =
-          reinterpret_cast<void (*)(const char *)>(getDetailsFn);
-      registerTritonPluginPass(passName);
+      std::function<TritonPluginResult(const char *)> registerTritonPluginPass =
+          reinterpret_cast<TritonPluginResult (*)(const char *)>(getDetailsFn);
+      if (TritonPluginResult::TP_SUCCESS != registerTritonPluginPass(passName)) {
+        auto msg = llvm::Twine("Failed to register plugin pass: " + passName + "\n");
+        llvm::report_fatal_error(msg);
+      }
     }
   }
 
