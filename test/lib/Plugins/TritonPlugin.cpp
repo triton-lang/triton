@@ -48,34 +48,25 @@ static std::vector<const char *> passNamesTable = {ADD_PLUGIN_PASS_NAME};
 
 // Key APIs:
 
-TRITON_PLUGIN_API
+extern "C" __attribute__((visibility("default"))) void
 tritonAddPluginPass(mlir::PassManager *pm, const char *passName) {
   std::string passNameStr(passName);
-  if (passMap.find(passNameStr) == passMap.end())
-    return TP_GENERIC_FAILURE;
   passMap[passNameStr](pm);
-  return TP_SUCESS;
 }
 
-TRITON_PLUGIN_API
+extern "C" __attribute__((visibility("default"))) void
 tritonRegisterPluginPass(const char *passName) {
   std::string passNameStr(passName);
-  if (passMap.find(passNameStr) == passMap.end())
-    return TP_GENERIC_FAILURE;
   registryMap[passNameStr]();
-  return TP_SUCESS;
 }
 
-TRITON_PLUGIN_API
+extern "C" __attribute__((visibility("default"))) void
 tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
-  if (!passCount)
-    return TP_GENERIC_FAILURE;
   *passCount = passMap.size();
   if (!passNames)
-    return TP_SUCESS;
+    return;
   unsigned i = 0;
   for (auto passName : passNamesTable) {
     passNames[i] = passName;
   }
-  return TP_SUCESS;
 }
