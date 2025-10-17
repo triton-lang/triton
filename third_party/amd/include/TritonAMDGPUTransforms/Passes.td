@@ -277,4 +277,12 @@ def TritonAMDGPUOptimizeDotOperands : Pass<"tritonamdgpu-optimize-dot-operands",
   ];
 }
 
+def TritonAMDGPUOptimizeWarpLayout : Pass<"tritonamdgpu-optimize-warp-layout", "mlir::ModuleOp"> {
+  let summary = "Optimize warp layout";
+
+  let description = [{
+    Perform transformations to promote computing efficiency.
+  }];
+}
+
 #endif

@@ -94,6 +94,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   ADD_PASS_OPTION_WRAPPER_1("add_update_async_wait_count",
                             mlir::createTritonAMDGPUUpdateAsyncWaitCount,
                             std::string);
+  ADD_PASS_WRAPPER_0("add_optimize_warp_layout",
+                     mlir::createTritonAMDGPUOptimizeWarpLayout);
   m.def("add_in_thread_transpose", [](mlir::PassManager &pm) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUInThreadTranspose());
