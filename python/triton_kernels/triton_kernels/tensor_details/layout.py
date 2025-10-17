@@ -20,9 +20,8 @@ __all__ = [
 
 def make_default_matmul_mxfp4_w_layout(mx_axis: int):
     if cuda_capability_geq(10):
-        # return StridedLayout, dict()
         return BlackwellMXValueLayout, dict()
-    elif cuda_capability_geq(9):
+    elif cuda_capability_geq(8):
         return HopperMXValueLayout, {"mx_axis": mx_axis}
     else:
         return StridedLayout, dict()
@@ -34,7 +33,7 @@ def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int = 8):
     else:
         if cuda_capability_geq(10):
             return BlackwellMXScaleLayout, dict()
-        elif cuda_capability_geq(9):
+        elif cuda_capability_geq(8):
             return HopperMXScaleLayout, {"mx_axis": mx_axis, "num_warps": num_warps}
 
     return StridedLayout, dict()
