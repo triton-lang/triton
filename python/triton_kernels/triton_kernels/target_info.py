@@ -3,12 +3,15 @@ import triton
 import triton.language as tl
 
 from triton.language.target_info import (
-    cuda_capability_geq,
     is_cuda,
     is_hip,
     is_hip_cdna3,
     is_hip_cdna4,
+    current_target,
 )
+
+from triton.language.target_info import cuda_capability_geq as _cuda_capability_geq
+
 
 __all__ = [
     "cuda_capability_geq",
@@ -21,6 +24,15 @@ __all__ = [
     "is_hip_cdna4",
     "num_sms",
 ]
+
+
+@triton.constexpr_function
+def cuda_capability_geq(major, minor=0):
+    target = current_target()
+    if target.arch // 10 == 12 and major > 8:
+        # Pretend sm120 as sm80 for now
+        return False
+    return _cuda_capability_geq(major, minor)
 
 
 @triton.constexpr_function

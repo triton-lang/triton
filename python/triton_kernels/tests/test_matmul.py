@@ -75,7 +75,7 @@ def init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, mo
     if mode == 'batched' or (not has_y_gammas) or (has_y_gammas and (gindx is not None) and act_dtype.itemsize >= 2):
         gs0 = None
         gs1 = None
-    if "float8" in str(weight_dtype) and torch.cuda.get_device_capability()[0] < 10:
+    if "float8" in str(weight_dtype) and torch.cuda.get_device_capability()[0] != 10:
         w = w.transpose(-1, -2).contiguous().transpose(-1, -2)
 
     def _apply_padding_and_fill_unused_part_with_nan(t, is_padded):
@@ -325,7 +325,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
         if weight_dtype_str.startswith("mx"):
             if "float8" in act_dtype_str and torch.cuda.get_device_capability()[0] < 10:
-                pytest.skip("float8 x mx not supported with cuda capability < 10")
+                pytest.skip("float8 x mx not supported with cuda capability != 10")
         if n == 2880 and k == 2880 and torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("Not enough memory on A100")
 
@@ -372,7 +372,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
     torch.manual_seed(0)
 
     block_k = None
-    if is_persistent and weight_dtype_str.startswith("mx") and torch.cuda.get_device_capability()[0] < 10:
+    if is_persistent and weight_dtype_str.startswith("mx") and torch.cuda.get_device_capability()[0] != 10:
         # Override block_k for testing correctness. The default is temporarily 128 for
         # performance reasons which doesn't work with persistent matmul.
         # TODO: revisit when Triton is better for H100 + MXFP4
@@ -472,7 +472,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
             w_tri = convert_layout(w_tri, w_layout, **w_layout_opts)
             w_scale_tri = convert_layout(w_scale_tri, w_scale_layout, **w_scale_layout_opts)
         else:
-            if torch.cuda.get_device_capability()[0] < 10:
+            if torch.cuda.get_device_capability()[0] != 10:
                 pytest.skip("transposed mxfp weight not supported with cuda capability < 10")
             if block_m == 16:
                 pytest.skip("PassManager::run failed from Triton compiler")
@@ -645,7 +645,7 @@ def test_small_batch_matmul(m, n, k):
         (torch.float16, torch.bfloat16, torch.float8_e5m2),
     ):
         if (
-            torch.cuda.get_device_capability()[0] < 10
+            torch.cuda.get_device_capability()[0] != 10
             and dtype is torch.float8_e5m2
             and (not w_transpose)
         ):

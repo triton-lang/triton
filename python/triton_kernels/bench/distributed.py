@@ -716,7 +716,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     dist.destroy_process_group()
 
 
-has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_version() == 4
+has_native_mx4 = torch.cuda.get_device_capability(0)[0] == 10 or get_cdna_version() == 4
 
 
 @pytest.mark.parametrize(

@@ -489,8 +489,8 @@ def matmul_ogs(x, w, bias,
         # TODO: remove this code path; using uint8 for mxfp4 weight will bite us when we want to support uint8 for real
         dtype = FP4 if w.dtype == torch.uint8 else w.dtype
         w = wrap_torch_tensor(w, dtype=dtype)
-    if w_has_mx and (torch.cuda.get_device_capability()[0] < 10 or w.storage.layout is not None and not isinstance(w.storage.layout, StridedLayout)):
-        assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp and (swizzled or not on >=Blackwell)"
+    if w_has_mx and (torch.cuda.get_device_capability()[0] != 10 or w.storage.layout is not None and not isinstance(w.storage.layout, StridedLayout)):
+        assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp and (swizzled or not sm100)"
     if w_scale is not None and not isinstance(w_scale, Tensor):
         w_scale = Tensor(w_scale)
     if w_scale is not None:
@@ -536,8 +536,8 @@ def matmul_ogs(x, w, bias,
         (inner_routing_data is None or w.stride(-1) == 1 or inner_routing_data.w_is_padded)
     )
     has_gather_tma = has_gather and target_info.has_tma_gather()
-    # hopper w/ mxfp4 doesn't support TMA
-    can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
+    # hopper or sm120 w/ mxfp4 doesn't support TMA
+    can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] == 10 or bitwidth(w.dtype) != 4)
     can_use_fused_scatter = has_scatter and (fused_activation.specs.fn is None) and (epilogue.specs.fn is None) and (routing_data.n_expts_act == 1)
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
         batch_size, M, N, w.shape[-2], routing_data,
