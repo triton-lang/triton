@@ -1467,7 +1467,6 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                           CTALayoutAttr ctaLayoutAttr) {
   unsigned rank = scaleShape.size();
   auto outDims = standardOutDimNames(ctx, rank);
-
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
   StringAttr kWarp = StringAttr::get(ctx, "warp");
@@ -1483,17 +1482,16 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
          LinearLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]}) *
          LinearLayout::zeros1D(warpsPerCTA[1], kWarp, outDims[kIdx]) *
          LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDims[mnIdx]) *
-         LinearLayout::identity1D(tilesPerWarp[0], kRegister, outDims[mnIdx]) *
-         LinearLayout::zeros1D(tilesPerWarp[1], kRegister, outDims[kIdx]);
+         LinearLayout::identity1D(tilesPerWarp[0], kRegister, outDims[mnIdx]);
   } else {
     laneBase = {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
     LL = LinearLayout::identity1D(scaleShape[1], kRegister, outDims[kIdx]) *
          LinearLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]}) *
          LinearLayout::identity1D(warpsPerCTA[1], kWarp, outDims[mnIdx]) *
          LinearLayout::zeros1D(warpsPerCTA[0], kWarp, outDims[kIdx]) *
-         LinearLayout::identity1D(tilesPerWarp[1], kRegister, outDims[mnIdx]) *
-         LinearLayout::zeros1D(tilesPerWarp[0], kRegister, outDims[kIdx]);
+         LinearLayout::identity1D(tilesPerWarp[1], kRegister, outDims[mnIdx]);
   }
+
   return combineCtaCgaWithShape(LL, ctaLayoutAttr, scaleShape);
 }
 
