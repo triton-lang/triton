@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import inspect
 import re
 import textwrap
@@ -60,6 +61,19 @@ def define_kernel(src, module, attrs=None, **extra_globals):
     f = triton.JITFunction(f, **attrs)
     f._unsafe_update_src(src)
     return f
+
+
+@dataclass(frozen=True)
+class FnSpecs:
+    name: str
+    fn: "triton.runtime.jit.JITFunction"
+    fn_arg_names: tuple[str]
+    fn_arg_do_not_specialize: tuple[str] = tuple()
+    reduction_n: int = 1
+
+    @staticmethod
+    def default():
+        return FnSpecs("dflt", None, tuple())
 
 
 def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple()):

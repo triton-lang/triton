@@ -18,8 +18,10 @@ from .matmul_ogs_details._reduce_grouped import _reduce_grouped
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
-from .specialize import specialize
+from .specialize import specialize, FnSpecs
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTensorMetadata
+from .reduce import reduce
+from .reduce import PostprocessFn as ReducePostprocessFn
 
 
 @dataclass
@@ -61,19 +63,6 @@ class RoutingData:
             return n_rows
         else:
             return triton.cdiv(max(n_rows - self.n_expts_tot + 1, 0), block_m) + self.n_expts_tot - 1
-
-@dataclass(frozen=True)
-class FnSpecs:
-    name: str
-    fn: "triton.runtime.jit.JITFunction"
-    fn_arg_names: tuple[str]
-    fn_arg_do_not_specialize: tuple[str] = tuple()
-    reduction_n: int = 1
-
-    @staticmethod
-    def default():
-        return FnSpecs("dflt", None, tuple())
-
 
 @dataclass(frozen=True)
 class FusedActivation:
@@ -727,10 +716,12 @@ def matmul_ogs(x, w, bias,
                    **opt_flags.target_kernel_kwargs)
     # Build grouped reduction inputs in a uniform way
     group_indx = None if scatter_indx is None else torch.arange(out_matmul.shape[-2], device=out_matmul.device).view(-1, routing_data.n_expts_act)
-    # if opt_flags.split_k > 1:
-    #     pass
-    # out_matmul = reduce(out_matmul.view(opt_flags.split_k, -1, out_matmul.shape[-1]), dim=0,)
-    #                     postproce
+    if opt_flags.split_k > 1:
+        postprocess_fn = ReducePostprocessFn(specs=reduce_fused_activation.specs, fn_args=reduce_fused_activation.fn_args)
+        out_split_k_shape = out_matmul.shape[1:-1] + (out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n,)
+        out_matmul = reduce(out_matmul.view(opt_flags.split_k, 1, -1), dim=0, postprocess_fn=postprocess_fn)[0]
+        out_matmul = out_matmul.view(*out_split_k_shape).unsqueeze(0)
+        reduce_fused_activation = FusedActivation()
     out_final, out_final_mx_scale = reduce_grouped(
         out_matmul,
         group_indx,

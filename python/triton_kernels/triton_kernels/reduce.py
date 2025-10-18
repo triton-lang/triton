@@ -8,22 +8,9 @@ from triton_kernels.numerics import InFlexData, OutFlexData, MAX_FINITE_FLOAT8E4
 from typing import Optional
 import types
 import sys
-from .specialize import specialize
+from .specialize import specialize, FnSpecs
 
 _kernels = dict()
-
-
-@dataclass(frozen=True)
-class FnSpecs:
-    name: str
-    fn: "triton.runtime.jit.JITFunction"
-    fn_arg_names: tuple[str]
-    fn_arg_do_not_specialize: tuple[str] = tuple()
-    reduction_n: int = 1
-
-    @staticmethod
-    def default():
-        return FnSpecs("dflt", None, tuple())
 
 
 @dataclass(frozen=True)
