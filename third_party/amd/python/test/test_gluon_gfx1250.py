@@ -365,9 +365,9 @@ def test_runtime_amd_wmma_scaled(BLOCK_M, BLOCK_N, BLOCK_K, mxfp_type, hasScale)
 
 @gluon.jit
 def tensor_copy_kernel(a_ptr, b_ptr, M, N,  #
-                       BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
+                       BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr,
+                       BLOCKED_LAYOUT: ttgl.constexpr):
     SHARED_LAYOUT: ttgl.constexpr = ttgl.PaddedSharedLayout.with_identity_for([[32, 4]], [BLOCK_M, BLOCK_N], [1, 0])
-    BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
 
     pid = ttgl.program_id(axis=0)
     num_pid_m = ttgl.cdiv(M, BLOCK_M)
@@ -400,23 +400,29 @@ def tensor_copy_kernel(a_ptr, b_ptr, M, N,  #
 @pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64)])
 @pytest.mark.parametrize("NUM_BUFFERS", [1, 2])
 def test_compile_tensor_copy(BLOCK_M, BLOCK_N, NUM_BUFFERS):
+    BLOCKED_LAYOUT = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
     k = triton.compile(
         gluon._runtime.GluonASTSource(
             fn=tensor_copy_kernel, signature={
                 "a_ptr": "*fp16", "b_ptr": "*fp16", "M": "i32", "N": "i32",  #
-                "BLOCK_M": "constexpr", "BLOCK_N": "constexpr", "NUM_BUFFERS": "constexpr"
-            }, constexprs={"BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "NUM_BUFFERS": NUM_BUFFERS}),
-        target=GPUTarget("hip", 'gfx1250', 32))
+                "BLOCK_M": "constexpr", "BLOCK_N": "constexpr", "NUM_BUFFERS": "constexpr",  #
+                "BLOCKED_LAYOUT": "constexpr"
+            }, constexprs={
+                "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "NUM_BUFFERS": NUM_BUFFERS, "BLOCKED_LAYOUT": BLOCKED_LAYOUT
+            }), target=GPUTarget("hip", 'gfx1250', 32))
 
     amdgcn = k.asm["amdgcn"]
     for pattern in ("tensor_load_to_lds", "s_wait_tensorcnt 0x0"):
         assert re.search(pattern, amdgcn)
 
 
-@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64)])
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32), (32, 64), (64, 64), (1, 512), (256, 2)])
 @pytest.mark.parametrize("NUM_BUFFERS", [1, 2])
+@pytest.mark.parametrize("NUM_WARPS", [4, 8])
 @pytest.mark.parametrize("M,N", [(1024, 1024), (1000, 1000)])
-def test_runtime_tensor_copy(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS):
+def test_runtime_tensor_copy(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS, NUM_WARPS):
+    blocked_layout = ttgl.BlockedLayout([1, 8], [4, 8], [NUM_WARPS, 1], [1, 0])
+
     torch.manual_seed(42)
     a = torch.randint(0x0, 0xFFFF, (M, N), dtype=torch.uint16)
     b = torch.zeros_like(a)
@@ -424,7 +430,8 @@ def test_runtime_tensor_copy(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS):
     a_device = a.cuda()
     b_device = b.cuda()
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N * NUM_BUFFERS), 1)
-    tensor_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, NUM_BUFFERS=NUM_BUFFERS)
+    tensor_copy_kernel[grid](a_device, b_device, M, N, BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, NUM_BUFFERS=NUM_BUFFERS,
+                             BLOCKED_LAYOUT=blocked_layout, num_warps=NUM_WARPS)
 
     b_triton = b_device.cpu()
     assert torch.equal(b_triton, a)
