@@ -45,6 +45,9 @@
 #include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 
+#include "mlir/Tools/Plugins/PassPlugin.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
+
 namespace mlir {
 namespace test {
 void registerTestAliasPass();
@@ -135,6 +138,56 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::proton::gpu::registerAllocateProtonGlobalScratchBufferPass();
   mlir::triton::proton::gpu::registerScheduleBufferStorePass();
   mlir::triton::proton::gpu::registerAddSchedBarriersPass();
+
+  // Plugin passes
+  if (std::string filename =
+          mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
+      !filename.empty()) {
+
+    std::string error;
+    auto library = llvm::sys::DynamicLibrary::getPermanentLibrary(
+        filename.c_str(), &error);
+
+    if (!library.isValid()) {
+      auto msg = llvm::Twine("Failed to load plugin library: " + error + "\n");
+      llvm::report_fatal_error(msg);
+    }
+
+    std::vector<const char *> passNames;
+
+    intptr_t getDetailsFn =
+        (intptr_t)library.getAddressOfSymbol("tritonEnumeratePluginPasses");
+    if (!getDetailsFn) {
+      auto msg = llvm::Twine("Failed to get symbol: " + error + "\n");
+      llvm::report_fatal_error(msg);
+    }
+
+    std::function<void(uint32_t *, const char **)> tritonEnumeratePluginPasses =
+        reinterpret_cast<void (*)(uint32_t *, const char **)>(getDetailsFn);
+
+    uint32_t passCount = 0;
+    tritonEnumeratePluginPasses(&passCount, nullptr);
+
+    if (passCount == 0)
+      return;
+
+    passNames.clear();
+    passNames.resize(passCount);
+    tritonEnumeratePluginPasses(&passCount, passNames.data());
+
+    for (const char *passName : passNames) {
+      intptr_t getDetailsFn =
+          (intptr_t)library.getAddressOfSymbol("tritonRegisterPluginPass");
+      if (!getDetailsFn) {
+        auto msg = llvm::Twine("Failed to get symbol: " + error + "\n");
+        llvm::report_fatal_error(msg);
+      }
+
+      std::function<void(const char *)> registerTritonPluginPass =
+          reinterpret_cast<void (*)(const char *)>(getDetailsFn);
+      registerTritonPluginPass(passName);
+    }
+  }
 
   registry.insert<
       mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
