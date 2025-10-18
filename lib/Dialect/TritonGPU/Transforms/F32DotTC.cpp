@@ -44,7 +44,8 @@ Value zeroLike(Value c, PatternRewriter &rewriter) {
 };
 
 Value dot(Value lhs, Value rhs, Value acc, PatternRewriter &rewriter,
-          InputPrecision precision = InputPrecision::IEEE, uint32_t maxNumImpreciseAcc = 0) {
+          InputPrecision precision = InputPrecision::IEEE,
+          uint32_t maxNumImpreciseAcc = 0) {
   return rewriter.create<DotOp>(lhs.getLoc(), lhs, rhs, acc, precision,
                                 maxNumImpreciseAcc);
 };
@@ -97,13 +98,13 @@ struct BF16xN : public OpRewritePattern<DotOp> {
       assert(false && "BF16DotTCPass expects BF16x6 or BF16x3");
       return failure();
 
-    // clang-format off
+      // clang-format off
     // NOTE: 9 dots possible; handled like so if not for lack of speedup:
     // case InputPrecision::BF16x9:
     //   result = dot(lhs_parts[lo], rhs_parts[lo], result, rewriter);
     //   result = dot(lhs_parts[mid], rhs_parts[lo], result, rewriter);
     //   result = dot(lhs_parts[lo], rhs_parts[mid], result, rewriter);
-    // clang-format on
+      // clang-format on
 
     case InputPrecision::BF16x6:
       result = dot(lhs_parts[mid], rhs_parts[mid], result, rewriter);
@@ -176,9 +177,9 @@ public:
     auto zero = zeroLike(dotOp.getC(), rewriter);
 
     auto dot1 = dot(aSmall, bBig, zero, rewriter, InputPrecision::TF32,
-                                          dotOp.getMaxNumImpreciseAcc());
+                    dotOp.getMaxNumImpreciseAcc());
     auto dot2 = dot(aBig, bSmall, dot1, rewriter, InputPrecision::TF32,
-                                          dotOp.getMaxNumImpreciseAcc());
+                    dotOp.getMaxNumImpreciseAcc());
 
     // If lhs is 1.0, we will have lhs_high = 1.0 and lhs_low = 0.0.
     // If rhs is +infinity, we will have:
@@ -188,9 +189,8 @@ public:
     // we must override any accumulated result if the last partial product is
     // non-finite.
     auto dot2withZeroedNans = replaceNansWithZeros(dot2, rewriter);
-    auto dot3 =
-        dot(aBig, bBig, dot2withZeroedNans, rewriter, InputPrecision::TF32,
-                                  dotOp.getMaxNumImpreciseAcc());
+    auto dot3 = dot(aBig, bBig, dot2withZeroedNans, rewriter,
+                    InputPrecision::TF32, dotOp.getMaxNumImpreciseAcc());
 
     auto sum = add(dot3, dotOp.getC());
 
