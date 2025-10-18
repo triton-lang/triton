@@ -21,6 +21,7 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
@@ -274,11 +275,11 @@ void init_triton_llvm(py::module &&m) {
       },
       py::keep_alive<0, 2>(), py::call_guard<py::gil_scoped_release>());
 
-  m.def("attach_datalayout", [](llvm::Module *mod, const std::string triple,
+  m.def("attach_datalayout", [](llvm::Module *mod, const std::string tripleName,
                                 const std::string proc,
                                 const std::string features) {
     std::string error;
-    llvm::Triple targetTriple(triple);
+    llvm::Triple targetTriple(tripleName);
     auto target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
     if (!target) {
       throw std::runtime_error("target lookup error: " + error);
