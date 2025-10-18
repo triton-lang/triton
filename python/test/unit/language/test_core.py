@@ -3210,7 +3210,7 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if in_dtype == 'bfloat16':
             pytest.skip("bfloat16 is not supported in the interpreter")
         if input_precision == "bf16x3" or input_precision == "bf16x6":
-            pytest.skip(f"{input_precision} not currently supported on CUDA")
+            pytest.skip(f"input_precision {input_precision} is not supported in the interpreter")
     else:
         if not is_hip() and K < 16:
             pytest.skip("small dots are supported only on HIP at the moment")
