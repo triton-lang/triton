@@ -61,17 +61,15 @@ Value loadC(Value tensor, Value llTensor,
   return llTensor;
 }
 
-// Per-thread counts measured in 32-bit registers for one MMA.
-// For example, for m16n8k32, a thread writes a 2x1 fragment and advances K
-// by 2. Counts are in 32-bit regs, m16n8k16 for fp16 accumulator and m16n8k32
-// for fp8 accumulator, both use {2,1,2}.
+// The number of i32 registers owned by each thread along m, n, k dimensions.
+// For example, for m16n8k32 with i8 inputs, a thread owns 2, 1, and 2 registers
+// along m, n, k respectively.
 struct NumRegisters {
-  int m;
-  int n;
-  int k;
-};
-
-static constexpr NumRegisters kNumRegisters{2, 1, 2};
+int m;
+int n;
+int k;
+}
+;
 
 // Base indices into the per-thread A/B tiles for one MMA.
 // BaseOffset::m = NumRegisters.m * m where 0 <= m < repM.
@@ -85,7 +83,7 @@ struct BaseOffset {
 ValueTableV2 getValuesFromDotOperandLayoutStruct(
     const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
-    int repK, RankedTensorType type) {
+    int repK, RankedTensorType type, const NumRegisters &numRegisters) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto elems = unpackLLElements(loc, value, rewriter);
   auto eltTy = typeConverter->convertType(type.getElementType());
@@ -255,16 +253,16 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     for (auto b = 0; b < batch; ++b)
       for (auto m = 0; m < repOuter; ++m)
         for (auto k = 0; k < repK; ++k)
-          for (auto vk = 0; vk < kNumRegisters.k; ++vk)
-            for (auto vm = 0; vm < kNumRegisters.m; ++vm)
-              packVec({b, m * kNumRegisters.m + vm, k * kNumRegisters.k + vk});
+          for (auto vk = 0; vk < numRegisters.k; ++vk)
+            for (auto vm = 0; vm < numRegisters.m; ++vm)
+              packVec({b, m * numRegisters.m + vm, k * numRegisters.k + vk});
   } else {
     for (auto b = 0; b < batch; ++b)
       for (auto n = 0; n < repOuter; ++n)
         for (auto k = 0; k < repK; ++k)
-          for (auto vk = 0; vk < kNumRegisters.k; ++vk)
-            for (auto vn = 0; vn < kNumRegisters.n; ++vn)
-              packVec({b, n * kNumRegisters.n + vn, k * kNumRegisters.k + vk});
+          for (auto vk = 0; vk < numRegisters.k; ++vk)
+            for (auto vn = 0; vn < numRegisters.n; ++vn)
+              packVec({b, n * numRegisters.n + vn, k * numRegisters.k + vk});
   }
   return vals;
 }
@@ -746,14 +744,16 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
   assert(dotOpA.getRepOrder() == getOrderForDotOperand(dotOpA.getOpIdx(),
                                                        aShapePerCTA.size(),
                                                        /*kContig=*/true));
-  auto ha = getValuesFromDotOperandLayoutStruct(
-      typeConverter, loc, rewriter, llvmA, repBatch, repM, repK, aTensorTy);
+  auto ha = getValuesFromDotOperandLayoutStruct(typeConverter, loc, rewriter,
+                                                llvmA, repBatch, repM, repK,
+                                                aTensorTy, numRegisters);
 
   assert(dotOpB.getRepOrder() == getOrderForDotOperand(dotOpB.getOpIdx(),
                                                        bShapePerCTA.size(),
                                                        /*kContig=*/true));
-  auto hb = getValuesFromDotOperandLayoutStruct(
-      typeConverter, loc, rewriter, llvmB, repBatch, repN, repK, bTensorTy);
+  auto hb = getValuesFromDotOperandLayoutStruct(typeConverter, loc, rewriter,
+                                                llvmB, repBatch, repN, repK,
+                                                bTensorTy, numRegisters);
 
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
@@ -782,8 +782,8 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
 
     Type elemTy = cast<LLVM::LLVMStructType>(mmaOut.getType()).getBody()[0];
     for (int i = 0; i < numMmaRets; ++i) {
-      fc[(kNumRegisters.m * static_cast<int>(m) * colsPerThread +
-          4 * kNumRegisters.n * static_cast<int>(n)) /
+      fc[(numRegisters.m * static_cast<int>(m) * colsPerThread +
+          4 * numRegisters.n * static_cast<int>(n)) /
              numCPackedElem +
          i + batchOffset * b] = tb.extract_val(elemTy, mmaOut, i);
     }
@@ -827,6 +827,8 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
 
+  NumRegisters numRegisters = {2, 1, 2};
+
   const auto &instrMap =
       isTuring ? mmaInstrPtxTuring
                : (isHopperF64 ? mmaInstrPtxHopper : mmaInstrPtxAmpere);
@@ -840,8 +842,7 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
     bool isIntMMA = dTy.getElementType().isInteger(32);
     bool isAccF16 = dTy.getElementType().isF16();
     bool isFp64MMA = dTy.getElementType().isF64();
-    BaseOffset base{kNumRegisters.m * m, kNumRegisters.n * n,
-                    kNumRegisters.k * k};
+    BaseOffset base{numRegisters.m * m, numRegisters.n * n, numRegisters.k * k};
     if (isTuring) {
       assert(b == 0 && "Turing only supports batch size 1");
       if (isIntMMA)
@@ -858,18 +859,18 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
         } else {
           callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
                     numCPackedElem, batchOffset, ha, hb, fc, "=d", "d",
-                    kNumRegisters.k);
+                    /*kRegs*/ 4);
         }
       } else {
         callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
                   numCPackedElem, batchOffset, ha, hb, fc,
-                  isIntMMA || isAccF16 ? "=r" : "=f", "r", kNumRegisters.k);
+                  isIntMMA || isAccF16 ? "=r" : "=f", "r", numRegisters.k);
       }
     }
   };
 
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
-                        typeConverter, rewriter, mmaType, kNumRegisters,
+                        typeConverter, rewriter, mmaType, numRegisters,
                         instrMap, emit);
 }
 
@@ -883,6 +884,8 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
 
   TensorCoreType mmaType =
       getMmaTypeDotScaled(op, aTensorTy, bTensorTy, dTensorTy);
+
+  NumRegisters numRegisters = {2, 1, 2};
 
   SmallVector<Value> unpackedAScale =
       unpackLLElements(op.getLoc(), adaptor.getAScale(), rewriter);
@@ -901,13 +904,12 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
     Value aScaleValue = tb.zext(i32, unpackedAScale[m * repK + k]);
     Value bScaleValue = tb.zext(i32, unpackedBScale[n * repK + k]);
 
-    BaseOffset base{kNumRegisters.m * m, kNumRegisters.n * n,
-                    kNumRegisters.k * k};
+    BaseOffset base{numRegisters.m * m, numRegisters.n * n, numRegisters.k * k};
     callMmaScaled(builder, b, base, mma, numMmaRets, colsPerThread, aTable,
-                  bTable, cValues, aScaleValue, bScaleValue, kNumRegisters.k);
+                  bTable, cValues, aScaleValue, bScaleValue, numRegisters.k);
   };
 
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
-                        typeConverter, rewriter, mmaType, kNumRegisters,
+                        typeConverter, rewriter, mmaType, numRegisters,
                         mmaInstrPtxScaled, emit);
 }
