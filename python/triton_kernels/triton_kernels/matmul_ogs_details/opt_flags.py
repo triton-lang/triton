@@ -321,6 +321,10 @@ def reset_opt_flags_constraints():
     global _opt_flags_constraints
     _opt_flags_constraints = dict()
 
+def reset_opt_flags():
+    global _opt_flags
+    _opt_flags = None
+
 def set_opt_flags(opt_flags: OptFlags):
     global _opt_flags
     assert not _opt_flags_constraints, "setting constraints is incompatible with manual flags override"
