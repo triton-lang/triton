@@ -85,7 +85,7 @@ struct BaseOffset {
 ValueTableV2 getValuesFromDotOperandLayoutStruct(
     const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
-    int repK, RankedTensorType type, const NumRegisters &numRegisters) {
+    int repK, RankedTensorType type) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto elems = unpackLLElements(loc, value, rewriter);
   auto eltTy = typeConverter->convertType(type.getElementType());
@@ -255,16 +255,16 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     for (auto b = 0; b < batch; ++b)
       for (auto m = 0; m < repOuter; ++m)
         for (auto k = 0; k < repK; ++k)
-          for (auto vk = 0; vk < numRegisters.k; ++vk)
-            for (auto vm = 0; vm < numRegisters.m; ++vm)
-              packVec({b, m * numRegisters.m + vm, k * numRegisters.k + vk});
+          for (auto vk = 0; vk < kNumRegisters.k; ++vk)
+            for (auto vm = 0; vm < kNumRegisters.m; ++vm)
+              packVec({b, m * kNumRegisters.m + vm, k * kNumRegisters.k + vk});
   } else {
     for (auto b = 0; b < batch; ++b)
       for (auto n = 0; n < repOuter; ++n)
         for (auto k = 0; k < repK; ++k)
-          for (auto vk = 0; vk < numRegisters.k; ++vk)
-            for (auto vn = 0; vn < numRegisters.n; ++vn)
-              packVec({b, n * numRegisters.n + vn, k * numRegisters.k + vk});
+          for (auto vk = 0; vk < kNumRegisters.k; ++vk)
+            for (auto vn = 0; vn < kNumRegisters.n; ++vn)
+              packVec({b, n * kNumRegisters.n + vn, k * kNumRegisters.k + vk});
   }
   return vals;
 }
@@ -748,16 +748,14 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
   assert(dotOpA.getRepOrder() == getOrderForDotOperand(dotOpA.getOpIdx(),
                                                        aShapePerCTA.size(),
                                                        /*kContig=*/true));
-  auto ha = getValuesFromDotOperandLayoutStruct(typeConverter, loc, rewriter,
-                                                llvmA, repBatch, repM, repK,
-                                                aTensorTy, numRegisters);
+  auto ha = getValuesFromDotOperandLayoutStruct(
+      typeConverter, loc, rewriter, llvmA, repBatch, repM, repK, aTensorTy);
 
   assert(dotOpB.getRepOrder() == getOrderForDotOperand(dotOpB.getOpIdx(),
                                                        bShapePerCTA.size(),
                                                        /*kContig=*/true));
-  auto hb = getValuesFromDotOperandLayoutStruct(typeConverter, loc, rewriter,
-                                                llvmB, repBatch, repN, repK,
-                                                bTensorTy, numRegisters);
+  auto hb = getValuesFromDotOperandLayoutStruct(
+      typeConverter, loc, rewriter, llvmB, repBatch, repN, repK, bTensorTy);
 
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
@@ -786,8 +784,8 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
 
     Type elemTy = cast<LLVM::LLVMStructType>(mmaOut.getType()).getBody()[0];
     for (int i = 0; i < numMmaRets; ++i) {
-      fc[(numRegisters.m * static_cast<int>(m) * colsPerThread +
-          4 * numRegisters.n * static_cast<int>(n)) /
+      fc[(kNumRegisters.m * static_cast<int>(m) * colsPerThread +
+          4 * kNumRegisters.n * static_cast<int>(n)) /
              numCPackedElem +
          i + batchOffset * b] = tb.extract_val(elemTy, mmaOut, i);
     }
