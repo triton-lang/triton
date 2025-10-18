@@ -61,8 +61,8 @@ Value loadC(Value tensor, Value llTensor,
   return llTensor;
 }
 
-// Per-thread register counts contributed by a single MMA tile.
-// Example: MMA tile (16, 8, 32) => NumRegisters{m = 2, n = 1, k = 2}.
+// Per-thread i32 register counts per MMA tile.
+// Example: m16n8k32 => {m=2, n=1, k=2};
 struct NumRegisters {
   int m;
   int n;
