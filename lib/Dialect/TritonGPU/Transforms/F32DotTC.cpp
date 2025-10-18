@@ -33,31 +33,30 @@ auto splitF32(Value input, unsigned N, PatternRewriter &rewriter)
   return splitInputs;
 }
 
-auto isF32(Value operand) {
+bool isF32(Value operand) {
   return cast<RankedTensorType>(operand.getType()).getElementType().isF32();
 };
 
-auto zeroLike(Value c, PatternRewriter &rewriter) -> Value {
+Value zeroLike(Value c, PatternRewriter &rewriter) {
   return rewriter.create<SplatOp>(c.getLoc(), c.getType(),
                                   rewriter.create<arith::ConstantOp>(
                                       c.getLoc(), rewriter.getF32FloatAttr(0)));
 };
 
-template <InputPrecision precision>
-Value Dot(Value lhs, Value rhs, Value acc, PatternRewriter &rewriter,
-          uint32_t maxNumImpreciseAcc = 0) {
+Value dot(Value lhs, Value rhs, Value acc, PatternRewriter &rewriter,
+          InputPrecision precision = InputPrecision::IEEE, uint32_t maxNumImpreciseAcc = 0) {
   return rewriter.create<DotOp>(lhs.getLoc(), lhs, rhs, acc, precision,
                                 maxNumImpreciseAcc);
 };
 
-auto replaceNansWithZeros(Value value, PatternRewriter &rewriter) -> Value {
+Value replaceNansWithZeros(Value value, PatternRewriter &rewriter) {
   auto nans = rewriter.create<arith::CmpFOp>(
       value.getLoc(), arith::CmpFPredicate::UNO, value, value);
   auto zero = zeroLike(value, rewriter);
   return rewriter.create<arith::SelectOp>(value.getLoc(), nans, zero, value);
 };
 
-auto getBF16Count(triton::InputPrecision precision) -> unsigned {
+unsigned getBF16Count(triton::InputPrecision precision) {
   switch (precision) {
   default:
     return 0;
@@ -98,36 +97,30 @@ struct BF16xN : public OpRewritePattern<DotOp> {
       assert(false && "BF16DotTCPass expects BF16x6 or BF16x3");
       return failure();
 
-      // NOTE: 9 dots possible; handled like so if not for lack of speedup:
-      // case InputPrecision::BF16x9:
-      //   result = Dot<InputPrecision::IEEE>(lhs_parts[lo], rhs_parts[lo],
-      //   result, rewriter); result = Dot<InputPrecision::IEEE>(lhs_parts[mid],
-      //   rhs_parts[lo], result, rewriter); result =
-      //   Dot<InputPrecision::IEEE>(lhs_parts[lo], rhs_parts[mid], result,
-      //   rewriter);
+    // clang-format off
+    // NOTE: 9 dots possible; handled like so if not for lack of speedup:
+    // case InputPrecision::BF16x9:
+    //   result = dot(lhs_parts[lo], rhs_parts[lo], result, rewriter);
+    //   result = dot(lhs_parts[mid], rhs_parts[lo], result, rewriter);
+    //   result = dot(lhs_parts[lo], rhs_parts[mid], result, rewriter);
+    // clang-format on
 
     case InputPrecision::BF16x6:
-      result = Dot<InputPrecision::IEEE>(lhs_parts[mid], rhs_parts[mid], result,
-                                         rewriter);
+      result = dot(lhs_parts[mid], rhs_parts[mid], result, rewriter);
 
-      result = Dot<InputPrecision::IEEE>(lhs_parts[lo], rhs_parts[hi], result,
-                                         rewriter);
-      result = Dot<InputPrecision::IEEE>(lhs_parts[hi], rhs_parts[lo], result,
-                                         rewriter);
+      result = dot(lhs_parts[lo], rhs_parts[hi], result, rewriter);
+      result = dot(lhs_parts[hi], rhs_parts[lo], result, rewriter);
 
     case InputPrecision::BF16x3:
-      result = Dot<InputPrecision::IEEE>(lhs_parts[mid], rhs_parts[hi], result,
-                                         rewriter);
-      result = Dot<InputPrecision::IEEE>(lhs_parts[hi], rhs_parts[mid], result,
-                                         rewriter);
+      result = dot(lhs_parts[mid], rhs_parts[hi], result, rewriter);
+      result = dot(lhs_parts[hi], rhs_parts[mid], result, rewriter);
       result = replaceNansWithZeros(result, rewriter);
 
       // NOTE: For BF16x1 bail without replaceNansWithZeros
       // case InputPrecision::BF16x1: break;
     }
 
-    result = Dot<InputPrecision::IEEE>(lhs_parts[hi], rhs_parts[hi], result,
-                                       rewriter);
+    result = dot(lhs_parts[hi], rhs_parts[hi], result, rewriter);
     result =
         rewriter.create<arith::AddFOp>(dotOp.getLoc(), result, dotOp.getC());
 
@@ -182,9 +175,9 @@ public:
 
     auto zero = zeroLike(dotOp.getC(), rewriter);
 
-    auto dot1 = Dot<InputPrecision::TF32>(aSmall, bBig, zero, rewriter,
+    auto dot1 = dot(aSmall, bBig, zero, rewriter, InputPrecision::TF32,
                                           dotOp.getMaxNumImpreciseAcc());
-    auto dot2 = Dot<InputPrecision::TF32>(aBig, bSmall, dot1, rewriter,
+    auto dot2 = dot(aBig, bSmall, dot1, rewriter, InputPrecision::TF32,
                                           dotOp.getMaxNumImpreciseAcc());
 
     // If lhs is 1.0, we will have lhs_high = 1.0 and lhs_low = 0.0.
@@ -196,7 +189,7 @@ public:
     // non-finite.
     auto dot2withZeroedNans = replaceNansWithZeros(dot2, rewriter);
     auto dot3 =
-        Dot<InputPrecision::TF32>(aBig, bBig, dot2withZeroedNans, rewriter,
+        dot(aBig, bBig, dot2withZeroedNans, rewriter, InputPrecision::TF32,
                                   dotOp.getMaxNumImpreciseAcc());
 
     auto sum = add(dot3, dotOp.getC());
