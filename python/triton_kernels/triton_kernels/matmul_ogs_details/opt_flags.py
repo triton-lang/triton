@@ -28,9 +28,9 @@ class OptFlags:
     arch: str
     target_kernel_kwargs: dict
 
-    def __post_init__(self):
-        if self.fused_scatter and self.split_k != 1:
-            raise ValueError("Not supported")
+    # def __post_init__(self):
+    # if self.fused_scatter and self.split_k != 1:
+    #     raise ValueError("Not supported")
 
 
 def max_allowable_mn(

@@ -17,7 +17,7 @@ from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_
 from .matmul_ogs_details._reduce_grouped import _reduce_grouped
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
-from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints, InapplicableConstraint
+from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import specialize
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTensorMetadata
 
@@ -291,7 +291,7 @@ def init_allocation(x, w, precision_config, fused_activation,
     output = (out_shape, out_dtype)
     # ---- scratchpad -----#
     scratchpad = dict()
-    if opt_flags.split_k > 1 or (scatter_indx is not None and not opt_flags.fused_scatter):
+    if opt_flags.split_k > 1 or scatter_indx is not None:
         scratch_out_dtype = torch.float32 if opt_flags.split_k > 1 else out_dtype
         scratchpad["matmul"] = ((opt_flags.split_k, batch_dim, M, N), scratch_out_dtype)
     if "matmul" in scratchpad and precision_config.out_scale is not None:
@@ -538,15 +538,12 @@ def matmul_ogs(x, w, bias,
     has_gather_tma = has_gather and target_info.has_tma_gather()
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
-    can_use_fused_scatter = has_scatter and (fused_activation.specs.fn is None) and (epilogue.specs.fn is None) and (routing_data.n_expts_act == 1)
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
         batch_size, M, N, w.shape[-2], routing_data,
-        can_use_tma, can_use_fused_scatter, epilogue.effective_itemsize,
+        can_use_tma, True, epilogue.effective_itemsize,
         x_transpose, y_acc_in is not None,
         inner_routing_data.block_k if inner_routing_data is not None else None,
     )
-    if not can_use_fused_scatter and opt_flags.fused_scatter:
-        raise InapplicableConstraint("Fused scatter is not supported")
     if inner_routing_data is not None:
         assert opt_flags.block_k == inner_routing_data.block_k
         assert opt_flags.split_k == 1
@@ -572,7 +569,7 @@ def matmul_ogs(x, w, bias,
     # fused activation
     matmul_fused_activation = fused_activation
     reduce_fused_activation = FusedActivation()
-    if opt_flags.split_k > 1  or (scatter_indx is not None and not opt_flags.fused_scatter):
+    if opt_flags.split_k > 1  or scatter_indx is not None:
         matmul_fused_activation, reduce_fused_activation = reduce_fused_activation, matmul_fused_activation
     # allocate output/scratchpad memory
     allocation = init_allocation(x, w, precision_config, fused_activation,
@@ -614,8 +611,8 @@ def matmul_ogs(x, w, bias,
     max_grid = batch_size * grid_m * grid_n * opt_flags.split_k
     grid = min(target_info.num_sms() - opt_flags.idle_sms, max_grid) if opt_flags.is_persistent else max_grid
     # canonicalize storage
-    has_scatter_tma = opt_flags.fused_scatter and target_info.has_tma_gather()
-    y = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if opt_flags.fused_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
+    has_scatter_tma = scatter_indx is not None and target_info.has_tma_gather()
+    y = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
     x_storage = _canonicalize_storage(x.storage, 2 if has_gather_tma else 3, flex.lhs_data)
     w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
     y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 3, flex.out_data)
@@ -635,8 +632,8 @@ def matmul_ogs(x, w, bias,
     x_tensor_or_tma = x_storage.make_tma(x_tma_block_size, x_tma_mode) if x_has_tma else x_storage.data
     # create tma descriptor for y
     y_has_tma = (
-        opt_flags.is_persistent and (has_scatter_tma or not opt_flags.fused_scatter)
-        and (y_acc_in is None or y_acc_is_y) and fused_comm is None
+        opt_flags.is_persistent and (scatter_indx is None or has_scatter_tma)
+        and (y_acc_in is None or y_acc_is_y)
     )
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.reduction_n
     y_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
@@ -664,6 +661,8 @@ def matmul_ogs(x, w, bias,
     # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
     # w_transpose = w_storage.data.stride()[-1] != 1
     w_transpose = w_storage.data.stride()[-2] == 1
+    if gather_indx is not None:
+        gather_src_indx = gather_indx.src_indx // routing_data.n_expts_act
     fused_comm_kwargs = {
         "pYPtrs": fused_comm.out_handles,
         "ScatterShardIndx": fused_comm.scatter_shard_indx,
@@ -686,18 +685,18 @@ def matmul_ogs(x, w, bias,
                    x.shape[-2] if routing_data.expt_hist is None else None,
                    N, K, K_W,
                    betas, gammas,
-                   None if gather_indx is None else gather_indx.src_indx,
+                   None if gather_indx is None else gather_src_indx,
                    None if gather_indx is None else gather_indx.dst_indx,  # Only for launch_metadata
                    None if scatter_indx is None else scatter_indx.src_indx,
                    num_indx,
-                   None if not opt_flags.fused_scatter else scatter_indx.dst_indx,
-                   None if not opt_flags.fused_scatter else scatter_indx.dst_indx.shape[0],
+                   None if scatter_indx is None else scatter_indx.dst_indx,
+                   None if scatter_indx is None else scatter_indx.dst_indx.shape[0],
                    *expt_data_args,
                    batch_size, grid_m, grid_n,
                    out_alpha,
                    *matmul_fused_activation.fn_args, matmul_fused_activation.reduction_n,
                    *epilogue.fn_arg_values_matmul,
-                   routing_data.n_expts_tot, routing_data.n_expts_act,
+                   routing_data.n_expts_tot,
                    precision_config.max_num_imprecise_acc,
                    precision_config.allow_tf32,
                    precision_config.flexpoint_saturate_inf,
@@ -719,7 +718,6 @@ def matmul_ogs(x, w, bias,
                    num_warps=opt_flags.num_warps,
                    num_stages=opt_flags.num_stages,
                    arch=opt_flags.arch,
-                   UPCAST_INDICES=should_upcast_indices(x, w, out_matmul),
                    X_TMA_MODE=x_tma_mode,
                    Y_TMA_MODE=y_tma_mode,
                    SWAP_XW=get_swap_xw(precision_config, opt_flags),
@@ -728,7 +726,7 @@ def matmul_ogs(x, w, bias,
                    **fused_comm_kwargs,
                    **opt_flags.target_kernel_kwargs)
     # Build grouped reduction inputs in a uniform way
-    group_indx = None if scatter_indx is None or opt_flags.fused_scatter else scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
+    group_indx = None if scatter_indx is None else torch.arange(out_matmul.shape[-2], device=out_matmul.device).view(-1, routing_data.n_expts_act)
     out_final, out_final_mx_scale = reduce_grouped(
         out_matmul,
         group_indx,
