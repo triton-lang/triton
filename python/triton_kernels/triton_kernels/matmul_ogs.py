@@ -715,7 +715,6 @@ def matmul_ogs(x, w, bias,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **fused_comm_kwargs,
                    **opt_flags.target_kernel_kwargs)
-    # Build grouped reduction inputs in a uniform way
     if opt_flags.split_k > 1:
         postprocess_fn = ReducePostprocessFn(specs=reduce_fused_activation.specs, fn_args=reduce_fused_activation.fn_args)
         out_split_k_dtype = out_matmul.dtype if scatter_indx is not None else memory["output"].dtype
@@ -725,9 +724,7 @@ def matmul_ogs(x, w, bias,
         out_matmul = out_matmul.view(*out_split_k_shape).unsqueeze(0)
         reduce_fused_activation = FusedActivation()
     if scatter_indx is not None:
-        out_matmul = out_matmul.squeeze(0)
-        out_matmul = out_matmul.squeeze(0)
-        out_matmul = out_matmul.view(out_matmul.shape[0]//routing_data.n_expts_act, routing_data.n_expts_act, -1)
+        out_matmul = out_matmul.view(out_matmul.shape[-2]//routing_data.n_expts_act, routing_data.n_expts_act, -1)
         postprocess_fn = ReducePostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
         x_flex = InFlexData(dtype=out_matmul_flex.dtype, scale=out_matmul_flex.expected_scale)
         out_final, out_final_mx_scale = reduce(out_matmul, dim=1, postprocess_fn=postprocess_fn, x_flex=x_flex, #

@@ -233,7 +233,7 @@ def _p_matmul_ogs(
                 offs_x_m += start_z * (stride_x_z // stride_x_m)
                 offs_x_m = tl.where(mask_m, offs_x_m, -1)
             else:
-                offs_x_m = tl.load(GatherIndx + start_m.to(index_type), offs_m, mask=mask_m, other=-1)
+                offs_x_m = tl.load(GatherIndx + start_m.to(index_type) + offs_m, mask=mask_m, other=-1)
         elif X_TMA_MODE is None or is_x_microscaled:
             offs_m = off_m + tl.arange(0, BLOCK_M)
             offs_m = tl.max_contiguous(tl.multiple_of(offs_m % eM, BLOCK_M), BLOCK_M)
