@@ -86,8 +86,8 @@ def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
             reduce(x, dim=dim, mask=mask, x_mxscale=x_mscale)
         return
     if postprocess_fn == "plus_ten":
-        postprocess_fn_tri = PostprocessFn(specs=FnSpecs("plus_a", plus_a_reduce, ("a", )), fn_args=(10, ),
-                                           reduction_n=2)
+        postprocess_fn_tri = PostprocessFn(specs=FnSpecs("plus_a", plus_a_reduce, ("a", ), reduction_n=2),
+                                           fn_args=(10, ))
         postprocess_fn_ref = lambda x: (x + 10).reshape([x.shape[0], x.shape[1] // 2, 2]).sum(dim=2)
     else:
         postprocess_fn_tri = postprocess_fn_ref = None

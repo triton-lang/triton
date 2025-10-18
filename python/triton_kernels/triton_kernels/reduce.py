@@ -19,6 +19,7 @@ class FnSpecs:
     fn: "triton.runtime.jit.JITFunction"
     fn_arg_names: tuple[str]
     fn_arg_do_not_specialize: tuple[str] = tuple()
+    reduction_n: int = 1
 
     @staticmethod
     def default():
@@ -29,7 +30,6 @@ class FnSpecs:
 class PostprocessFn:
     specs: FnSpecs = FnSpecs.default()
     fn_args: tuple[object] = tuple()
-    reduction_n: int = 1
 
 
 def get_kernels(fn_specs: FnSpecs = FnSpecs.default()):
@@ -178,7 +178,7 @@ def reduce(
     dims = (0, 1, 2)
     nonred = tuple(d for d in dims if d != dim)
     S0, X_S1 = x.shape[nonred[0]], x.shape[nonred[1]]
-    Y_S1 = X_S1 // postprocess_fn.reduction_n
+    Y_S1 = X_S1 // postprocess_fn.specs.reduction_n
     y = torch.empty((S0, Y_S1), device=x.device, dtype=x.dtype)
     y_mxscale = None
     if x_mxscale is not None:
@@ -214,7 +214,7 @@ def reduce(
     # Always use the 2D tiled kernel with constexpr metaprogramming for mask broadcasting
     BLOCK_S0 = 64
     BLOCK_X_S1 = 128
-    BLOCK_Y_S1 = 128 // postprocess_fn.reduction_n
+    BLOCK_Y_S1 = 128 // postprocess_fn.specs.reduction_n
     grid = (triton.cdiv(S0, BLOCK_S0), triton.cdiv(Y_S1, BLOCK_Y_S1))
     mask_arg = mask if mask is not None else x
     scale_arg = scale if scale is not None else x

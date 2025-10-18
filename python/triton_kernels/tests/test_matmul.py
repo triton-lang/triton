@@ -737,8 +737,8 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
                    precision_config=SwiGLUPrecisionConfig(swiglu_limit))
         b = matmul_ogs(
             x, w, bias, rdata, gindx, sindx, precision_opt,
-            fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit")),
-                                             (swiglu_alpha, swiglu_limit), 2))
+            fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
+                                             (swiglu_alpha, swiglu_limit)))
     except opt_flags.InapplicableConstraint:
         pytest.skip("inapplicable constraint")
 

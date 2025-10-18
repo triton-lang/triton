@@ -68,6 +68,7 @@ class FnSpecs:
     fn: "triton.runtime.jit.JITFunction"
     fn_arg_names: tuple[str]
     fn_arg_do_not_specialize: tuple[str] = tuple()
+    reduction_n: int = 1
 
     @staticmethod
     def default():
@@ -78,7 +79,6 @@ class FnSpecs:
 class FusedActivation:
     specs: FnSpecs = FnSpecs.default()
     fn_args: tuple[object] = tuple()
-    reduction_n: int = 1
 
 
 @dataclass(frozen=True)
@@ -286,7 +286,7 @@ def init_allocation(x, w, precision_config, fused_activation,
         batch_dim = inner_routing_data.base.n_expts_tot
     else:
         batch_dim = x.shape[0] if x.ndim == 3 else 1
-    out_shape = (batch_dim, y_rows, N // fused_activation.reduction_n)
+    out_shape = (batch_dim, y_rows, N // fused_activation.specs.reduction_n)
     out_dtype = precision_config.out_dtype or x.dtype
     output = (out_shape, out_dtype)
     # ---- scratchpad -----#
@@ -388,7 +388,7 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor, out_m
         out_flex = OutFlexData()
     K = 1 if indx is None else indx.shape[1]
     out_dtype = x.dtype if out_dtype is None else out_dtype
-    assert x.shape[-1] % fused_activation.reduction_n == 0
+    assert x.shape[-1] % fused_activation.specs.reduction_n == 0
     BLOCK_N = 512
     # Resolve scalar flex scales (may be None)
     x_expected_scale = None if x_flex is None else x_flex.scale
@@ -410,7 +410,7 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor, out_m
         x.shape[0], M, x.shape[-1],  #
         x_mx_scale, stride_mxb, stride_mxs,  #
         out_mx_scale, stride_omxs,  #
-        *fused_activation.fn_args, fused_activation.reduction_n,
+        *fused_activation.fn_args, fused_activation.specs.reduction_n,
         *epilogue.fn_arg_values_finalize,
         HAS_IN_MX_SCALE=x_mx_scale is not None, HAS_OUT_MX_SCALE=out_mx_scale is not None,
         FLEXPOINT_SATURATE_INF=flexpoint_saturate_inf,  #
@@ -475,7 +475,7 @@ def matmul_ogs(x, w, bias,
     if precision_config is None:
         precision_config = PrecisionConfig()
     if fused_activation is None:
-        fused_activation = FusedActivation(FnSpecs.default(), tuple(), 1)
+        fused_activation = FusedActivation(FnSpecs.default(), tuple())
     if epilogue is None:
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
     if routing_data is None:
@@ -635,7 +635,7 @@ def matmul_ogs(x, w, bias,
         opt_flags.is_persistent and (scatter_indx is None or has_scatter_tma)
         and (y_acc_in is None or y_acc_is_y)
     )
-    block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.reduction_n
+    block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
     y_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
     y_tma_mode = None if not y_has_tma else "ragged" if is_ragged and not has_scatter_tma else "dense"
     y_tensor_or_tma = y_storage.make_tma(y_tma_block_size, y_tma_mode) if y_has_tma else y_storage.data
@@ -694,7 +694,7 @@ def matmul_ogs(x, w, bias,
                    *expt_data_args,
                    batch_size, grid_m, grid_n,
                    out_alpha,
-                   *matmul_fused_activation.fn_args, matmul_fused_activation.reduction_n,
+                   *matmul_fused_activation.fn_args, matmul_fused_activation.specs.reduction_n,
                    *epilogue.fn_arg_values_matmul,
                    routing_data.n_expts_tot,
                    precision_config.max_num_imprecise_acc,
@@ -727,10 +727,10 @@ def matmul_ogs(x, w, bias,
                    **opt_flags.target_kernel_kwargs)
     # Build grouped reduction inputs in a uniform way
     group_indx = None if scatter_indx is None else torch.arange(out_matmul.shape[-2], device=out_matmul.device).view(-1, routing_data.n_expts_act)
-    if opt_flags.split_k > 1:
-        pass
-        # out_matmul = reduce(out_matmul.view(opt_flags.split_k, -1, out_matmul.shape[-1]), dim=0,)
-        #                     postproce
+    # if opt_flags.split_k > 1:
+    #     pass
+    # out_matmul = reduce(out_matmul.view(opt_flags.split_k, -1, out_matmul.shape[-1]), dim=0,)
+    #                     postproce
     out_final, out_final_mx_scale = reduce_grouped(
         out_matmul,
         group_indx,
