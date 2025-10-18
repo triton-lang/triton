@@ -61,8 +61,10 @@ Value loadC(Value tensor, Value llTensor,
   return llTensor;
 }
 
-// Per-thread i32 register counts per MMA tile.
-// Example: m16n8k32 => {m=2, n=1, k=2};
+// Per-thread counts measured in 32-bit registers for one MMA.
+// For example, for m16n8k32, a thread writes a 2x1 fragment and advances K
+// by 2. Counts are in 32-bit regs, m16n8k16 for fp16 accumulator and m16n8k32
+// for fp8 accumulator, both use {2,1,2}.
 struct NumRegisters {
   int m;
   int n;
