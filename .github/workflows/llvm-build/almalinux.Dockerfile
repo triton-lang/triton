@@ -6,7 +6,7 @@ ADD "${llvm_dir}" /source/llvm-project
 ENV SCCACHE_DIR="/sccache"
 ENV SCCACHE_CACHE_SIZE="2G"
 
-RUN dnf install --assumeyes llvm-toolset
+RUN dnf install --assumeyes gcc-c++
 RUN dnf install --assumeyes python38-pip python38-devel git
 
 RUN python3 -m pip install --upgrade pip
@@ -18,9 +18,6 @@ RUN python3 -m pip install -r /source/llvm-project/mlir/python/requirements.txt
 # Configure, Build, Test, and Install LLVM
 RUN cmake -GNinja -Bbuild \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_C_COMPILER=clang \
-  -DCMAKE_CXX_COMPILER=clang++ \
-  -DCMAKE_ASM_COMPILER=clang \
   -DCMAKE_C_COMPILER_LAUNCHER=sccache \
   -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
   -DCMAKE_CXX_FLAGS="-Wno-everything" \
