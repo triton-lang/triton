@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -tritongpu-BF16DotTC -canonicalize | FileCheck %s --check-prefixes=CHECK
+// RUN: triton-opt %s -tritongpu-F32DotTC="emu-tf32=0"  -canonicalize | FileCheck %s --check-prefixes=CHECK
 
 module {
   tt.func @dot_test_BF16x3(%arg0: tensor<16x16xf32>, %arg1: tensor<16x16xf32>, %arg2: tensor<16x16xf32>) -> tensor<16x16xf32> {
