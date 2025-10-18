@@ -220,8 +220,7 @@ public:
 } // anonymous namespace
 
 struct F32DotTCPass : public impl::TritonGPUF32DotTCBase<F32DotTCPass> {
-  using impl::TritonGPUF32DotTCBase<
-      F32DotTCPass>::TritonGPUF32DotTCBase;
+  using impl::TritonGPUF32DotTCBase<F32DotTCPass>::TritonGPUF32DotTCBase;
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
