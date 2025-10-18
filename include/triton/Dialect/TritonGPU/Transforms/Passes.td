@@ -187,8 +187,7 @@ def TritonGPUF32DotTC : Pass<"tritongpu-F32DotTC", "mlir::ModuleOp"> {
       See https://arxiv.org/abs/1904.06376
   }];
 
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
   let options = [
     Option<"emuTF32", "emu-tf32",
            "bool", /*default*/"false",
