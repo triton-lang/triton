@@ -65,11 +65,10 @@ Value loadC(Value tensor, Value llTensor,
 // For example, for m16n8k32 with i8 inputs, a thread owns 2, 1, and 2 registers
 // along m, n, k respectively.
 struct NumRegisters {
-int m;
-int n;
-int k;
-}
-;
+  int m;
+  int n;
+  int k;
+};
 
 // Base indices into the per-thread A/B tiles for one MMA.
 // BaseOffset::m = NumRegisters.m * m where 0 <= m < repM.
