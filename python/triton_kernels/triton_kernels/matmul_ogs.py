@@ -727,6 +727,10 @@ def matmul_ogs(x, w, bias,
                    **opt_flags.target_kernel_kwargs)
     # Build grouped reduction inputs in a uniform way
     group_indx = None if scatter_indx is None else torch.arange(out_matmul.shape[-2], device=out_matmul.device).view(-1, routing_data.n_expts_act)
+    if opt_flags.split_k > 1:
+        pass
+        # out_matmul = reduce(out_matmul.view(opt_flags.split_k, -1, out_matmul.shape[-1]), dim=0,)
+        #                     postproce
     out_final, out_final_mx_scale = reduce_grouped(
         out_matmul,
         group_indx,

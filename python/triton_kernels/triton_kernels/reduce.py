@@ -29,6 +29,7 @@ class FnSpecs:
 class PostprocessFn:
     specs: FnSpecs = FnSpecs.default()
     fn_args: tuple[object] = tuple()
+    reduction_n: int = 1
 
 
 def get_kernels(fn_specs: FnSpecs = FnSpecs.default()):
@@ -53,7 +54,7 @@ def _reduce(X, stride_xr, stride_x0, stride_x1,  # x tensor (input)
             YMx, stride_ymx0, stride_ymx1,  # y mx scale
             Mask, stride_mr, stride_m0, stride_m1,  # mask tensor
             Scale, stride_sr, stride_s0, stride_s1,  # scale tensor
-            K, S0, S1,  # shape (K = reduction dim; S0, S1 = output dims)
+            K, S0, X_S1, Y_S1,  # shape (K = reduction dim; S0, IN_S1 = input dims, OUT_S1 = output dims)
             POSTPROCESS_FN: tl.constexpr, postprocess_fn_args, XFlex,  # x flex (global) scale
             YFlexExpected, YFlexActual, YFlexChecksum, Y_FLEX_SATURATE_INF: tl.constexpr,  # y flex (global) scale
             IS_MASK_NONE: tl.constexpr,  #
@@ -65,54 +66,60 @@ def _reduce(X, stride_xr, stride_x0, stride_x1,  # x tensor (input)
             SCALE_BROADCAST_S0: tl.constexpr,  #
             SCALE_BROADCAST_S1: tl.constexpr,  #
             BLOCK_S0: tl.constexpr,  #
-            BLOCK_S1: tl.constexpr,  #
+            BLOCK_X_S1: tl.constexpr,  #
+            BLOCK_Y_S1: tl.constexpr,  #
             ):
     pid_s0 = tl.program_id(0)
     pid_s1 = tl.program_id(1)
-    tl.static_assert(BLOCK_S1 % 32 == 0)
-    BLOCK_SMX1: tl.constexpr = BLOCK_S1 // 32
+    tl.static_assert(BLOCK_X_S1 % 32 == 0)
+    BLOCK_X_SMX1: tl.constexpr = BLOCK_X_S1 // 32
+    BLOCK_Y_SMX1: tl.constexpr = BLOCK_Y_S1 // 32
     offs_s0 = pid_s0 * BLOCK_S0 + tl.arange(0, BLOCK_S0)
-    offs_s1 = pid_s1 * BLOCK_S1 + tl.arange(0, BLOCK_S1)
-    offs_smx1 = pid_s1 * BLOCK_SMX1 + tl.arange(0, BLOCK_SMX1)
+    offs_x_s1 = pid_s1 * BLOCK_X_S1 + tl.arange(0, BLOCK_X_S1)
+    offs_x_smx1 = pid_s1 * BLOCK_X_SMX1 + tl.arange(0, BLOCK_X_SMX1)
     valid_s0 = offs_s0 < S0
-    valid_s1 = offs_s1 < S1
-    valid_smx1 = offs_smx1 < tl.cdiv(S1, 32)
-    y = tl.zeros((BLOCK_S0, BLOCK_S1), dtype=tl.float32)
+    valid_x_s1 = offs_x_s1 < X_S1
+    valid_in_smx1 = offs_x_smx1 < tl.cdiv(X_S1, 32)
+    y = tl.zeros((BLOCK_S0, BLOCK_X_S1), dtype=tl.float32)
     x_flex_scale = load_scale(XFlex)
     for k in tl.range(0, K, num_stages=2):
-        x_ptrs = X + k * stride_xr + offs_s0[:, None] * stride_x0 + offs_s1[None, :] * stride_x1
-        x = tl.load(x_ptrs, mask=valid_s0[:, None] & valid_s1[None, :], other=0.0)
+        x_ptrs = X + k * stride_xr + offs_s0[:, None] * stride_x0 + offs_x_s1[None, :] * stride_x1
+        x = tl.load(x_ptrs, mask=valid_s0[:, None] & valid_x_s1[None, :], other=0.0)
         x = x.to(tl.float32)
         if XMx is not None:
-            xmx_ptrs = XMx + k * stride_xmxr + offs_s0[:, None] * stride_xmx0 + offs_smx1[None, :] * stride_xmx1
-            xmx = tl.load(xmx_ptrs, mask=valid_s0[:, None] & valid_smx1[None, :], other=0.0)
+            xmx_ptrs = XMx + k * stride_xmxr + offs_s0[:, None] * stride_xmx0 + offs_x_smx1[None, :] * stride_xmx1
+            xmx = tl.load(xmx_ptrs, mask=valid_s0[:, None] & valid_in_smx1[None, :], other=0.0)
             xmx = (xmx.to(tl.uint32) << 23).to(tl.float32, bitcast=True)
-            x = (xmx[:, :, None] * x.reshape([BLOCK_S0, BLOCK_S1 // 32, 32])).reshape([BLOCK_S0, BLOCK_S1])
+            x = (xmx[:, :, None] * x.reshape([BLOCK_S0, BLOCK_X_S1 // 32, 32])).reshape([BLOCK_S0, BLOCK_X_S1])
         x = x * x_flex_scale
         if not IS_SCALE_NONE:
             k_term_s = 0 if SCALE_BROADCAST_R else (k * stride_sr)
             s0_term_s = 0 if SCALE_BROADCAST_S0 else (offs_s0[:, None] * stride_s0)
-            s1_term_s = 0 if SCALE_BROADCAST_S1 else (offs_s1[None, :] * stride_s1)
+            s1_term_s = 0 if SCALE_BROADCAST_S1 else (offs_x_s1[None, :] * stride_s1)
             s_ptrs = Scale + k_term_s + s0_term_s + s1_term_s
-            s = tl.load(s_ptrs, mask=valid_s0[:, None] & valid_s1[None, :], other=1)
+            s = tl.load(s_ptrs, mask=valid_s0[:, None] & valid_x_s1[None, :], other=1)
             x = x * s
         if not IS_MASK_NONE:
             k_term = 0 if BROADCAST_R else (k * stride_mr)
             s0_term = 0 if BROADCAST_S0 else (offs_s0[:, None] * stride_m0)
-            s1_term = 0 if BROADCAST_S1 else (offs_s1[None, :] * stride_m1)
+            s1_term = 0 if BROADCAST_S1 else (offs_x_s1[None, :] * stride_m1)
             m_ptrs = Mask + k_term + s0_term + s1_term
-            m = tl.load(m_ptrs, mask=valid_s0[:, None] & valid_s1[None, :], other=1)
+            m = tl.load(m_ptrs, mask=valid_s0[:, None] & valid_x_s1[None, :], other=1)
             x = tl.where(m != 0, x, 0.0)
         y += x
     if POSTPROCESS_FN is not None:
         y = POSTPROCESS_FN(y, *postprocess_fn_args)
+    offs_y_s1 = pid_s1 * BLOCK_Y_S1 + tl.arange(0, BLOCK_Y_S1)
+    offs_y_smx1 = pid_s1 * BLOCK_Y_SMX1 + tl.arange(0, BLOCK_Y_SMX1)
+    valid_y_s1 = offs_y_s1 < Y_S1
+    valid_y_smx1 = offs_y_smx1 < tl.cdiv(Y_S1, 32)
     y = float_to_flex(y, YFlexExpected, YFlexActual, YFlexChecksum, None, Y, Y_FLEX_SATURATE_INF)
-    y_ptrs = Y + offs_s0[:, None] * stride_y0 + offs_s1[None, :] * stride_y1
+    y_ptrs = Y + offs_s0[:, None] * stride_y0 + offs_y_s1[None, :] * stride_y1
     if YMx is not None:
-        y, y_scale = quantize_mxfp8_fn(y, valid_s1[None, :])
-        y_mx_ptrs = YMx + offs_s0[:, None] * stride_ymx0 + offs_smx1[None, :] * stride_ymx1
-        tl.store(y_mx_ptrs, y_scale, mask=valid_s0[:, None] & valid_smx1[None, :])
-    tl.store(y_ptrs, y, mask=valid_s0[:, None] & valid_s1[None, :])
+        y, y_scale = quantize_mxfp8_fn(y, valid_y_s1[None, :])
+        y_mx_ptrs = YMx + offs_s0[:, None] * stride_ymx0 + offs_y_smx1[None, :] * stride_ymx1
+        tl.store(y_mx_ptrs, y_scale, mask=valid_s0[:, None] & valid_y_smx1[None, :])
+    tl.store(y_ptrs, y, mask=valid_s0[:, None] & valid_y_s1[None, :])
 
 
 def reduce(
@@ -170,11 +177,12 @@ def reduce(
     # input shapes
     dims = (0, 1, 2)
     nonred = tuple(d for d in dims if d != dim)
-    S0, S1 = x.shape[nonred[0]], x.shape[nonred[1]]
-    y = torch.empty((S0, S1), device=x.device, dtype=x.dtype)
+    S0, X_S1 = x.shape[nonred[0]], x.shape[nonred[1]]
+    Y_S1 = X_S1 // postprocess_fn.reduction_n
+    y = torch.empty((S0, Y_S1), device=x.device, dtype=x.dtype)
     y_mxscale = None
     if x_mxscale is not None:
-        y_mxscale = torch.empty((S0, triton.cdiv(S1, 32)), device=x.device, dtype=x_mxscale.dtype)
+        y_mxscale = torch.empty((S0, triton.cdiv(Y_S1, 32)), device=x.device, dtype=x_mxscale.dtype)
     # Strides for X along reduced and non-reduced dims
     stride_xr = x.stride(dim)
     stride_x0 = x.stride(nonred[0])
@@ -205,8 +213,9 @@ def reduce(
     K = x.shape[dim]
     # Always use the 2D tiled kernel with constexpr metaprogramming for mask broadcasting
     BLOCK_S0 = 64
-    BLOCK_S1 = 128
-    grid = (triton.cdiv(S0, BLOCK_S0), triton.cdiv(S1, BLOCK_S1))
+    BLOCK_X_S1 = 128
+    BLOCK_Y_S1 = 128 // postprocess_fn.reduction_n
+    grid = (triton.cdiv(S0, BLOCK_S0), triton.cdiv(Y_S1, BLOCK_Y_S1))
     mask_arg = mask if mask is not None else x
     scale_arg = scale if scale is not None else x
     reduce_kernel = get_kernels(postprocess_fn.specs)._reduce
@@ -217,7 +226,7 @@ def reduce(
         y_mxscale, stride_ymx0, stride_ymx1,  #
         mask_arg, stride_mr, stride_m0, stride_m1,  #
         scale_arg, stride_sr, stride_s0, stride_s1,  #
-        K, S0, S1,  #
+        K, S0, X_S1, Y_S1,  #
         *postprocess_fn.fn_args, x_flex.scale, y_flex.expected_scale, y_flex.actual_scale, y_flex.checksum_scale,
         y_flex_saturate_inf,  #
         IS_MASK_NONE=(mask is None),  #
@@ -229,7 +238,8 @@ def reduce(
         SCALE_BROADCAST_S0=(stride_s0 == 0),  #
         SCALE_BROADCAST_S1=(stride_s1 == 0),  #
         BLOCK_S0=BLOCK_S0,  #
-        BLOCK_S1=BLOCK_S1,  #
+        BLOCK_X_S1=BLOCK_X_S1,  #
+        BLOCK_Y_S1=BLOCK_Y_S1,  #
         num_warps=4  #
     )
     return y, y_mxscale

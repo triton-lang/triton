@@ -5,6 +5,7 @@ from triton_kernels.reduce import reduce, reduce_torch, PostprocessFn, FnSpecs
 from triton_kernels.numerics_details.mxfp import upcast_from_mxfp_torch, downcast_to_mxfp_torch
 from triton_kernels.numerics import InFlexData, OutFlexData
 import triton
+import triton.language as tl
 
 
 def init_mask(mask_mode, B, M, N, device):
@@ -30,8 +31,9 @@ def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
 
 
 @triton.jit
-def plus_a(x, a):
-    return x + a
+def plus_a_reduce(x, a):
+    y = x + a
+    return tl.sum(y.reshape([x.shape[0], x.shape[1] // 2, 2]), axis=2)
 
 
 @pytest.mark.parametrize("B, M, N, postprocess_fn", [
@@ -84,8 +86,9 @@ def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
             reduce(x, dim=dim, mask=mask, x_mxscale=x_mscale)
         return
     if postprocess_fn == "plus_ten":
-        postprocess_fn_tri = PostprocessFn(specs=FnSpecs("plus_a", plus_a, ("a", )), fn_args=(10, ))
-        postprocess_fn_ref = lambda x: x + 10
+        postprocess_fn_tri = PostprocessFn(specs=FnSpecs("plus_a", plus_a_reduce, ("a", )), fn_args=(10, ),
+                                           reduction_n=2)
+        postprocess_fn_ref = lambda x: (x + 10).reshape([x.shape[0], x.shape[1] // 2, 2]).sum(dim=2)
     else:
         postprocess_fn_tri = postprocess_fn_ref = None
     y_tri, y_tri_mxscale = reduce(x, dim=dim, mask=mask, x_mxscale=x_mscale, x_flex=x_flex, y_flex=y_flex_tri,
