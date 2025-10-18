@@ -478,7 +478,6 @@ inline static const std::map<TensorCoreType, std::string> mmaInstrPtxHopper = {
 };
 
 inline static const std::map<TensorCoreType, std::string> mmaInstrPtxScaled = {
-    // 1X variants (default kind::mxf8f6f4). We may switch to mxfp4 dynamically.
     {TensorCoreType::FP32_FP8E5M2_FP8E5M2_FP32_SCALE_VEC_1X,
      "mma.sync.aligned.m16n8k32.row.col."
      "kind::mxf8f6f4.block_scale.scale_vec::"
@@ -598,7 +597,6 @@ static void callMmaAmpereFp64(PTXBuilder &builder, int b,
         std::to_string(i)));
     // reuse the output registers
   }
-
   const int kRegs = 4;
   for (int vk = 0; vk < kRegs; ++vk) {
     auto aArgs1 = builder.newListOperand({
@@ -829,9 +827,6 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
 
-  // Instruction tile shape is (16, 8, 32) for this path,
-  // so per-thread register counts are (m, n, k) = (2, 1, 2).
-
   const auto &instrMap =
       isTuring ? mmaInstrPtxTuring
                : (isHopperF64 ? mmaInstrPtxHopper : mmaInstrPtxAmpere);
@@ -889,8 +884,6 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
   TensorCoreType mmaType =
       getMmaTypeDotScaled(op, aTensorTy, bTensorTy, dTensorTy);
 
-  // Instruction tile shape is (16, 8, 32) for scaled MMA;
-  // per-thread registers (m, n, k) = (2, 1, 2).
   SmallVector<Value> unpackedAScale =
       unpackLLElements(op.getLoc(), adaptor.getAScale(), rewriter);
   SmallVector<Value> unpackedBScale =
