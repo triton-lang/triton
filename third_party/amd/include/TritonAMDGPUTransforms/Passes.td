@@ -291,4 +291,14 @@ def TritonAMDGPUOptimizeDotOperands : Pass<"tritonamdgpu-optimize-dot-operands",
   ];
 }
 
+def TritonAMDGPUImplicitConvertLayout: Pass<"tritonamdgpu-implicit-convert-layout", "mlir::ModuleOp"> {
+  let summary = "Convert #blocked/#linear layouts to #dot_op layouts implicitly before #tt.dot operation";
+
+  let description = "For layout conversion and shared memory load/store operations before #tt.dot, "
+                    "this pass replaces them without extra conversion cost.";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 #endif

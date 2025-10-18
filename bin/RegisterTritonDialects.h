@@ -103,6 +103,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::arith::registerConvertArithToLLVMInterface(registry);
 
   // TritonAMDGPUTransforms passes
+  mlir::registerTritonAMDGPUImplicitConvertLayout();
   mlir::registerTritonAMDGPUAccelerateMatmul();
   mlir::registerTritonAMDGPUOptimizeEpilogue();
   mlir::registerTritonAMDGPUHoistLayoutConversions();
