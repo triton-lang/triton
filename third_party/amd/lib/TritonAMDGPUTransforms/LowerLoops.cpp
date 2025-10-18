@@ -165,9 +165,9 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
             user->hasTrait<OpTrait::LocalLoadTrait>()))
         return std::nullopt;
 
-      auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
+      auto srcTy = cast<triton::TensorOrMemDesc>(loadedValue.getType());
       auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
-      auto order = getOrderForMemory(srcTy);
+      auto order = ttg::getOrderForMemory(srcTy);
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       SmallVector<unsigned> sharedOrder;
       int rank = order.size();
@@ -184,7 +184,8 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         sharedOrder = order;
       }
 
-      auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
+      auto userResEnc =
+          cast<triton::TensorOrMemDesc>(userResType).getEncoding();
       if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
         // Determine if we can use padded layouts and fallback to swizzled
         // layouts if not
