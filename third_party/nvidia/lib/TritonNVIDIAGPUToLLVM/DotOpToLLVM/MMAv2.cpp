@@ -69,6 +69,8 @@ struct NumRegisters {
   int k;
 };
 
+static constexpr NumRegisters kNumRegisters{2, 1, 2};
+
 // Base indices into the per-thread A/B tiles for one MMA.
 // BaseOffset::m = NumRegisters.m * m where 0 <= m < repM.
 // (Similarly for n and k.)
@@ -829,7 +831,6 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   // Instruction tile shape is (16, 8, 32) for this path,
   // so per-thread register counts are (m, n, k) = (2, 1, 2).
-  NumRegisters numRegisters = {2, 1, 2};
 
   const auto &instrMap =
       isTuring ? mmaInstrPtxTuring
@@ -844,7 +845,8 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
     bool isIntMMA = dTy.getElementType().isInteger(32);
     bool isAccF16 = dTy.getElementType().isF16();
     bool isFp64MMA = dTy.getElementType().isF64();
-    BaseOffset base{numRegisters.m * m, numRegisters.n * n, numRegisters.k * k};
+    BaseOffset base{kNumRegisters.m * m, kNumRegisters.n * n,
+                    kNumRegisters.k * k};
     if (isTuring) {
       assert(b == 0 && "Turing only supports batch size 1");
       if (isIntMMA)
@@ -861,18 +863,18 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
         } else {
           callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
                     numCPackedElem, batchOffset, ha, hb, fc, "=d", "d",
-                    numRegisters.k);
+                    kNumRegisters.k);
         }
       } else {
         callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
                   numCPackedElem, batchOffset, ha, hb, fc,
-                  isIntMMA || isAccF16 ? "=r" : "=f", "r", numRegisters.k);
+                  isIntMMA || isAccF16 ? "=r" : "=f", "r", kNumRegisters.k);
       }
     }
   };
 
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
-                        typeConverter, rewriter, mmaType, numRegisters,
+                        typeConverter, rewriter, mmaType, kNumRegisters,
                         instrMap, emit);
 }
 
@@ -889,7 +891,6 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
 
   // Instruction tile shape is (16, 8, 32) for scaled MMA;
   // per-thread registers (m, n, k) = (2, 1, 2).
-  NumRegisters numRegisters = {2, 1, 2};
   SmallVector<Value> unpackedAScale =
       unpackLLElements(op.getLoc(), adaptor.getAScale(), rewriter);
   SmallVector<Value> unpackedBScale =
@@ -907,12 +908,13 @@ LogicalResult convertMMADotScaled(triton::DotScaledOp op,
     Value aScaleValue = tb.zext(i32, unpackedAScale[m * repK + k]);
     Value bScaleValue = tb.zext(i32, unpackedBScale[n * repK + k]);
 
-    BaseOffset base{numRegisters.m * m, numRegisters.n * n, numRegisters.k * k};
+    BaseOffset base{kNumRegisters.m * m, kNumRegisters.n * n,
+                    kNumRegisters.k * k};
     callMmaScaled(builder, b, base, mma, numMmaRets, colsPerThread, aTable,
-                  bTable, cValues, aScaleValue, bScaleValue, numRegisters.k);
+                  bTable, cValues, aScaleValue, bScaleValue, kNumRegisters.k);
   };
 
   return convertMMAImpl(op, adaptor.getA(), adaptor.getB(), adaptor.getC(),
-                        typeConverter, rewriter, mmaType, numRegisters,
+                        typeConverter, rewriter, mmaType, kNumRegisters,
                         mmaInstrPtxScaled, emit);
 }
