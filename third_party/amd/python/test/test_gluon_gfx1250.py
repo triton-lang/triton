@@ -405,8 +405,8 @@ def test_compile_tensor_copy(BLOCK_M, BLOCK_N, NUM_BUFFERS):
         gluon._runtime.GluonASTSource(
             fn=tensor_copy_kernel, signature={
                 "a_ptr": "*fp16", "b_ptr": "*fp16", "M": "i32", "N": "i32",  #
-                "BLOCK_M": "constexpr", "BLOCK_N": "constexpr", "NUM_BUFFERS": "constexpr", "BLOCKED_LAYOUT":
-                "constexpr"
+                "BLOCK_M": "constexpr", "BLOCK_N": "constexpr", "NUM_BUFFERS": "constexpr",  #
+                "BLOCKED_LAYOUT": "constexpr"
             }, constexprs={
                 "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "NUM_BUFFERS": NUM_BUFFERS, "BLOCKED_LAYOUT": BLOCKED_LAYOUT
             }), target=GPUTarget("hip", 'gfx1250', 32))
