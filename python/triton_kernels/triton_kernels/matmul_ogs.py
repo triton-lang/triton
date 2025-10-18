@@ -718,8 +718,10 @@ def matmul_ogs(x, w, bias,
     group_indx = None if scatter_indx is None else torch.arange(out_matmul.shape[-2], device=out_matmul.device).view(-1, routing_data.n_expts_act)
     if opt_flags.split_k > 1:
         postprocess_fn = ReducePostprocessFn(specs=reduce_fused_activation.specs, fn_args=reduce_fused_activation.fn_args)
+        out_split_k_dtype = out_matmul.dtype if scatter_indx is not None else memory["output"].dtype
+        out_split_k_flex = OutFlexData() if out_split_k_dtype == torch.float32 else precision_config.flex_ctx.out_data
         out_split_k_shape = out_matmul.shape[1:-1] + (out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n,)
-        out_matmul = reduce(out_matmul.view(opt_flags.split_k, 1, -1), dim=0, postprocess_fn=postprocess_fn)[0]
+        out_matmul = reduce(out_matmul.view(opt_flags.split_k, 1, -1), dim=0, postprocess_fn=postprocess_fn, y_dtype=out_split_k_dtype, y_flex=out_split_k_flex)[0]
         out_matmul = out_matmul.view(*out_split_k_shape).unsqueeze(0)
         reduce_fused_activation = FusedActivation()
     out_final, out_final_mx_scale = reduce_grouped(

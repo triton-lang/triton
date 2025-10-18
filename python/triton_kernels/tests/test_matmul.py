@@ -130,8 +130,8 @@ def init_precision(out_dtype, act_use_flexpoint, weight_dtype, weight_mxfp, mode
         ) if weight_use_flexpoint else InFlexData(),
         out_data=OutFlexData(
             dtype=out_dtype,
-            expected_scale=make(4.00, 5.00, mode == "batched" or expt_is_inner),
-            actual_scale=make(0, 0, mode == "batched" or expt_is_inner),
+            expected_scale=make_scalar(4.00),
+            actual_scale=make_scalar(0),
             checksum_scale=None,
         ) if act_use_flexpoint else OutFlexData(),
     )

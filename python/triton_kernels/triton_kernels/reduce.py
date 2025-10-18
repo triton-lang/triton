@@ -116,6 +116,7 @@ def reduce(
     scale: Optional[torch.Tensor] = None,
     x_mxscale: Optional[torch.Tensor] = None,
     x_flex: Optional[InFlexData] = InFlexData(),
+    y_dtype: Optional[torch.dtype] = None,
     y_flex: Optional[OutFlexData] = OutFlexData(),
     y_flex_saturate_inf: bool = False,
     postprocess_fn: Optional[PostprocessFn] = None,
@@ -157,6 +158,8 @@ def reduce(
     # assert not y_flex.is_per_batch
     if postprocess_fn is None:
         postprocess_fn = PostprocessFn()
+    if y_dtype is None:
+        y_dtype = x.dtype
     if y_flex is None:
         y_flex = OutFlexData()
     if x_flex is None:
@@ -166,7 +169,7 @@ def reduce(
     nonred = tuple(d for d in dims if d != dim)
     S0, X_S1 = x.shape[nonred[0]], x.shape[nonred[1]]
     Y_S1 = X_S1 // postprocess_fn.specs.reduction_n
-    y = torch.empty((S0, Y_S1), device=x.device, dtype=x.dtype)
+    y = torch.empty((S0, Y_S1), device=x.device, dtype=y_dtype)
     y_mxscale = None
     if x_mxscale is not None:
         y_mxscale = torch.empty((S0, triton.cdiv(Y_S1, 32)), device=x.device, dtype=x_mxscale.dtype)
