@@ -42,7 +42,7 @@ class GluonASTSource(ASTSource):
         return module
 
 
-class GluonJITFunction(JITFunction[T]):
+class GluonJITFunction(JITFunction):
 
     def create_binder(self):
         result = super().create_binder()
@@ -63,7 +63,7 @@ def jit(
     do_not_specialize_on_alignment: Optional[Iterable[int | str]] = None,
     debug: Optional[bool] = None,
     noinline: Optional[bool] = None,
-) -> Union[GluonJITFunction[T], Callable[[T], JITFunction[T]]]:
+) -> Union[GluonJITFunction, Callable[[T], GluonJITFunction]]:
     """
     Decorator for JIT-compiling a function using the Triton compiler.
 
@@ -82,7 +82,7 @@ def jit(
     :type fn: Callable
     """
 
-    def decorator(fn: T) -> JITFunction[T]:
+    def decorator(fn: T) -> GluonJITFunction:
         assert callable(fn)
         return GluonJITFunction(
             fn,

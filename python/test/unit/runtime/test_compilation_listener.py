@@ -4,9 +4,11 @@ import triton.language as tl
 from triton.backends.compiler import GPUTarget
 from triton.knobs import CompileTimes
 from triton.compiler.compiler import ASTSource, IRSource
+from triton.runtime.jit import JITFunction
 
-from typing import Any, Union
+from typing import Any, Union, cast
 
+import pytest
 import torch
 
 
@@ -47,7 +49,11 @@ def test_compile_stats(device: str, fresh_knobs_except_libraries: Any, fresh_tri
     assert captured[3].total > 0
 
     # Now lets create a new instance of the same kernel to pick up cache_hit=True
-    cumsum_kernel.device_caches.clear()
+    if not isinstance(cumsum_kernel, JITFunction):
+        pytest.skip("device caches are only available for JIT-compiled kernels")
+
+    jit_kernel = cast(JITFunction, cumsum_kernel)
+    jit_kernel.device_caches.clear()
     captured = None
     cumsum_kernel[(1, )](x)
 
