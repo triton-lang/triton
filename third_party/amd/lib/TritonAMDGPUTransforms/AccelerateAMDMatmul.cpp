@@ -1070,6 +1070,12 @@ public:
     int vecA = deduceTilesPerWarp(aScale, 0, mDim, warpsPerTile, &tilesA);
     int vecB = deduceTilesPerWarp(bScale, 1, mDim, warpsPerTile, &tilesB);
     tilesPerWarp = vecA > vecB ? tilesA : tilesB;
+    // the chosen tilesPerWarp should not cross block boundary
+    unsigned m = aScale.getType().getShape()[0];
+    unsigned n = bScale.getType().getShape()[0];
+    tilesPerWarp[0] = std::min(tilesPerWarp[0], m / mDim);
+    tilesPerWarp[1] = std::min(tilesPerWarp[1], n / nDim);
+
     LLVM_DEBUG(llvm::dbgs() << "chosen tilesPerWarp: [" << tilesPerWarp[0]
                             << ", " << tilesPerWarp[1] << "]\n");
 
