@@ -547,7 +547,6 @@ static void callMmaTuringFp16(PTXBuilder &builder, int b,
                               unsigned colsPerThread, int numCPackedElem,
                               ValueTableV2 &ha, ValueTableV2 &hb,
                               const SmallVector<Value> &fc, bool isAccF16) {
-
   auto retArgs = builder.newListOperand(numMmaRets, isAccF16 ? "=r" : "=f");
   auto cArgs = builder.newListOperand();
   for (int i = 0; i < numMmaRets; ++i) {
