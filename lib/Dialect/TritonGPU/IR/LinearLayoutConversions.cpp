@@ -1475,28 +1475,26 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   const unsigned kIdx = 1;
   const unsigned mnIdx = 0;
 
-  LinearLayout L = identityStandardND(kRegister, SmallVector<unsigned>(rank, 1),
-                                      SmallVector<unsigned>{mnIdx, kIdx});
+  LinearLayout LL;
   std::vector<std::vector<int32_t>> laneBase;
   if (dotOperandIdx == 0) {
     laneBase = {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
+    LL = LinearLayout::identity1D(scaleShape[1], kRegister, outDims[kIdx]) *
+         LinearLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]}) *
+         LinearLayout::zeros1D(warpsPerCTA[1], kWarp, outDims[kIdx]) *
+         LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDims[mnIdx]) *
+         LinearLayout::identity1D(tilesPerWarp[0], kRegister, outDims[mnIdx]) *
+         LinearLayout::zeros1D(tilesPerWarp[1], kRegister, outDims[kIdx]);
   } else {
     laneBase = {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
+    LL = LinearLayout::identity1D(scaleShape[1], kRegister, outDims[kIdx]) *
+         LinearLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]}) *
+         LinearLayout::identity1D(warpsPerCTA[1], kWarp, outDims[mnIdx]) *
+         LinearLayout::zeros1D(warpsPerCTA[0], kWarp, outDims[kIdx]) *
+         LinearLayout::identity1D(tilesPerWarp[1], kRegister, outDims[mnIdx]) *
+         LinearLayout::zeros1D(tilesPerWarp[0], kRegister, outDims[kIdx]);
   }
-  LinearLayout laneLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]});
-
-  L *= laneLayout;
-  L *= LinearLayout::identity1D(scaleShape[1], kRegister, outDims[kIdx]);
-  if (dotOperandIdx == 0) {
-    L *= LinearLayout::zeros1D(warpsPerCTA[1], kWarp, outDims[kIdx]);
-    L *= LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDims[mnIdx]);
-    L *= LinearLayout::identity1D(tilesPerWarp[0], kRegister, outDims[mnIdx]);
-  } else {
-    L *= LinearLayout::identity1D(warpsPerCTA[1], kWarp, outDims[mnIdx]);
-    L *= LinearLayout::zeros1D(warpsPerCTA[0], kWarp, outDims[kIdx]);
-    L *= LinearLayout::identity1D(tilesPerWarp[1], kRegister, outDims[mnIdx]);
-  }
-  return combineCtaCgaWithShape(L, ctaLayoutAttr, scaleShape);
+  return combineCtaCgaWithShape(LL, ctaLayoutAttr, scaleShape);
 }
 
 LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
