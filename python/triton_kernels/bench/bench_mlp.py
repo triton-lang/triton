@@ -69,6 +69,7 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
         x_dtype = torch.float8_e4m3fnuz
 
     input_x = torch.randn((batch // DP, dim1), device=dev)
+    expt_assignment = triton_dist.make_opt_expt_assignment(EP, n_expts_tot, torch.device(dev))
     # run layer
     fpath = Path(tempfile.mktemp())
     proton.start(str(fpath), hook="triton")
@@ -78,7 +79,7 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
         if n_expts_tot > 1:  # sparse
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
             x, rdata, gather_indx, scatter_indx, metadata = triton_dist.routing(input_x, logits, n_expts_act, EP=EP,
-                                                                                TP=TP)
+                                                                                TP=TP, expt_assignment=expt_assignment)
         else:  # dense
             x = triton_dist.all_gather(input_x, dim=0)
             rdata, gather_indx, scatter_indx, metadata = None, None, None, None
@@ -136,6 +137,8 @@ if __name__ == "__main__":
         parser.add_argument("--name", type=str, choices=["dense", "gpt-oss-x2"])
         parser.add_argument("--quantized", action="store_true", default=False)
         args = parser.parse_args()
+        if args.tp >= 1:
+            raise NotImplementedError("TP>=1 is not supported yet in distributed mode.")
         dtypes = quantized_dtypes if args.quantized else dense_dtypes
         if args.name == "dense":
             assert args.ep == 1, "EP must be 1 for dense"
