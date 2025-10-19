@@ -12,6 +12,7 @@ using namespace mlir::triton::NVIDIA;
 namespace ttng = mlir::triton::nvidia_gpu;
 
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
+using ::mlir::triton::gpu::SharedLinearEncodingAttr;
 
 //===----------------------------------------------------------------------===//
 // DotOpMmaV5TmemLoader
@@ -65,6 +66,24 @@ MemDescOperand mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::tmemLoad(
 namespace {
 
 enum class mxfpKind { mxf8f6f4 = 0, mxf4 = 1, mxf4nvf4 = 2 };
+
+static bool isTransposed(Value operand) {
+  auto tensorTy = cast<MemDescType>(operand.getType());
+  auto enc = tensorTy.getEncoding();
+  if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(enc))
+    return shared.getTransposed();
+  if (auto tensor = dyn_cast<ttng::TensorMemoryEncodingAttr>(enc))
+    return false;
+  if (auto sharedLinear = dyn_cast<SharedLinearEncodingAttr>(enc)) {
+    // Hack. We should refactor the lowering to be able to use the
+    // result from the memory descriptor
+    auto *ctx = sharedLinear.getContext();
+    auto kOffset = StringAttr::get(ctx, "offset");
+    auto dim0 = StringAttr::get(ctx, "dim0");
+    return sharedLinear.getLinearLayout().getBasis(kOffset, 0, dim0) != 0;
+  }
+  return false;
+}
 
 inline mxfpKind getMXFPKind(ScaleDotElemType typeA, ScaleDotElemType typeB,
                             Type scaleAType, Type scaleBType, bool transpose) {
@@ -360,13 +379,6 @@ struct DotConversion {
   CreateMMAInstFn createMMAInst;
 };
 
-static bool isTransposed(Value operand) {
-  auto tensorTy = cast<MemDescType>(operand.getType());
-  if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(tensorTy.getEncoding()))
-    return shared.getTransposed();
-  return false;
-}
-
 void convertDotImpl(const LLVMTypeConverter &typeConverter,
                     ConversionPatternRewriter &rewriter, Location loc, Value a,
                     Value b, Value loadedA, Value loadedB,
@@ -406,8 +418,6 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
   auto aTensorTy = cast<MemDescType>(a.getType());
   auto bTensorTy = cast<MemDescType>(b.getType());
   bool aInTmem = isa<ttng::TensorMemoryEncodingAttr>(aTensorTy.getEncoding());
-  bool transA = isTransposed(a);
-  bool transB = !isTransposed(b);
 
   Value baseA = loadedA;
   if (!aInTmem) {
@@ -428,41 +438,38 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
   int numRepK = ceil<unsigned>(K, mmaSizeK);
   bool interleaved = (mmaSizeM == 64 && (numRepM > 1 || numRepN > 1));
 
-  assert((!aTensorTy.getElementType().isF32() || !(transA || transB)) &&
-         "Currently don't support transpose for F32.");
-
-  Value zero = tb.i32_val(0);
   SmallVector<int64_t> shapeA = op.shapeA;
   SmallVector<int64_t> shapeB = op.shapeB;
   SmallVector<unsigned> aOperandShape = {mmaSizeM, mmaSizeK};
 
-  auto getAllocShape = [&](MemDescType tensorTy, int kDim) {
-    // allocationShape uses the shape, not the `allocShape`?
-    auto fullAllocShape = triton::gpu::getAllocationShapePerCTA(
-        tensorTy.getEncoding(), tensorTy.getAllocShape());
-    auto ret = to_vector(ArrayRef<int64_t>(fullAllocShape).take_back(2));
-
-    if (opKindIsMXFP4) {
-      ret[kDim] *= 2;
-    }
-    return ret;
-  };
-
   std::unique_ptr<DotOpMmaMemLoader> aLoader;
+  bool transA = false;
   if (aInTmem) {
     aLoader = std::make_unique<DotOpMmaV5TmemLoader>(a, baseA, aOperandShape,
                                                      interleaved, transA);
   } else {
-    auto allocShapeA = getAllocShape(aTensorTy, 1);
-    aLoader = std::make_unique<DotOpMmaV5SmemLoader>(
-        a, baseA, shapeA, allocShapeA, zero, 1, transA, aOperandShape,
-        op.numBitsPerElementA, rewriter, loc);
+    auto isFp4a = op.numBitsPerElementA == 4;
+    aLoader = std::make_unique<DotOpMmaSmemLoader>(DotOpMmaSmemLoader::build(
+        loc, rewriter, aTensorTy, baseA, aOperandShape, 0, 5, isFp4a));
+    transA = ((DotOpMmaSmemLoader *)aLoader.get())->getDescriptor().transposed;
   }
 
-  auto allocShapeB = getAllocShape(bTensorTy, 0);
-  DotOpMmaV5SmemLoader bLoader = DotOpMmaV5SmemLoader(
-      b, baseB, shapeB, allocShapeB, zero, 1, transB, {mmaSizeN, mmaSizeK},
-      op.numBitsPerElementB, rewriter, loc);
+  auto isFp4b = op.numBitsPerElementB == 4;
+  // [Instr shape twoCTAs]
+  // This division by 2 in 2CTA mode a bit subtle:
+  // The issue here is that in 2CTA you multiply in one instruction a tensor
+  // of shape MNK = 256, K, N, and you put it into TMEM of shape 128, K, N*2.
+  // So to compute the shapePerCTA, on the lhs we can look at the TMEM shape,
+  // but to compute the shapePerCTA on the rhs, we need to divide by 2.
+  // Something similar happens when we multiply by 2 the mmaSizeM when creating
+  // It's a massive code smell tho
+  DotOpMmaSmemLoader bLoader = DotOpMmaSmemLoader::build(
+      loc, rewriter, bTensorTy, baseB, {mmaSizeK, mmaSizeN / (twoCTAs ? 2 : 1)},
+      1, 5, isFp4b);
+  bool transB = !bLoader.getDescriptor().transposed;
+
+  assert((!aTensorTy.getElementType().isF32() || !(transA || transB)) &&
+         "Currently don't support transpose for F32.");
 
   DotConversion::InstDesc desc{mmaSizeM, mmaSizeN, {numRepM, numRepN, numRepK},
                                transA,   transB,   interleaved,
@@ -473,7 +480,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
       MemDescOperand accAddress = op.getAccAddress(rewriter, loc, m, n, desc);
       for (int k = 0; k < numRepK; k++) {
         MemDescOperand a = aLoader->memLoad(m, k, rewriter, loc);
-        Value b = bLoader.smemLoad(n, k, rewriter, loc);
+        Value b = bLoader.smemLoad(k, n, rewriter, loc);
         op.createMMAInst(rewriter, loc, accAddress, a, b, elect, useInitAcc,
                          desc, m, n, k);
         useInitAcc = tb.i1_val(1);
@@ -524,6 +531,8 @@ void convertDot(const LLVMTypeConverter &typeConverter,
                           Value pred, Value useInitAcc,
                           const DotConversion::InstDesc &desc, int m, int n,
                           int k) {
+    // To understand this multiplication by 2, see the comment
+    // [Instr shape twoCTAs]
     Value instDescriptor = createInstDescriptor(
         rewriter, op, twoCTAs ? desc.mmaSizeM * 2 : desc.mmaSizeM,
         desc.mmaSizeN, desc.transA, desc.transB);
@@ -596,10 +605,8 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
     dot.shapeB[0] *= 2;
   }
 
-  dot.numBitsPerElementA = opKindIsMXFP4 ? getFormatBitSize(op.getAType())
-                                         : aTensorTy.getElementTypeBitWidth();
-  dot.numBitsPerElementB = opKindIsMXFP4 ? getFormatBitSize(op.getBType())
-                                         : bTensorTy.getElementTypeBitWidth();
+  dot.numBitsPerElementA = getFormatBitSize(op.getAType());
+  dot.numBitsPerElementB = getFormatBitSize(op.getBType());
 
   TritonLLVMOpBuilder tb(loc, rewriter);
   Value baseD = tb.ptrtoint(i32_ty, adaptor.getD());
@@ -667,10 +674,10 @@ struct TCGen5MMAOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto AEnc = op.getA().getType().getEncoding();
     auto BEnc = op.getB().getType().getEncoding();
-    assert(
-        (isa<NVMMASharedEncodingAttr, ttng::TensorMemoryEncodingAttr>(AEnc)) &&
-        "Operand A should use Shared or Tensor memory layout.");
-    assert(isa<NVMMASharedEncodingAttr>(BEnc) &&
+    assert((isa<NVMMASharedEncodingAttr, ttng::TensorMemoryEncodingAttr,
+                SharedLinearEncodingAttr>(AEnc)) &&
+           "Operand A should use Shared or Tensor memory layout.");
+    assert((isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr>(BEnc)) &&
            "Operand B should use Shared layout.");
     convertDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor);
     rewriter.eraseOp(op);

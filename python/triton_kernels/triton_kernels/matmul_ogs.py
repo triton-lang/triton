@@ -1,6 +1,6 @@
 # isort: off
 # fmt: off
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import itertools
 import sys
 import torch
@@ -10,17 +10,57 @@ import math
 # utilities
 from triton_kernels import target_info
 from triton_kernels.numerics import InFlexData, OutFlexData
-from triton_kernels.routing import GatherIndx, RoutingData, ScatterIndx
 from triton_kernels.target_info import is_cuda
 # details
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
 from .matmul_ogs_details._reduce_grouped import _reduce_grouped
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
+from .tensor_details.layout_details.strided import StridedLayout
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints, InapplicableConstraint
 from .specialize import specialize
-from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor
+from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTensorMetadata
 
+
+@dataclass
+class GatherIndx:
+    """
+    Indices for an operation that performs:
+    Y = X[src_idx, :]
+    """
+    # array such that `dst_idx[src_idx] = arange(0, N)`
+    src_indx: torch.Tensor
+    dst_indx: torch.Tensor
+
+
+@dataclass
+class ScatterIndx:
+    """
+    Indices for an operation that performs:
+    Y[dst_idx, :] = X
+    """
+    # array such that `dst_idx[src_idx] = arange(0, N)`
+    src_indx: torch.Tensor
+    dst_indx: torch.Tensor
+
+@dataclass
+class RoutingData:
+    gate_scal: torch.Tensor = field()
+    expt_hist: torch.Tensor = field()
+    n_expts_tot: int = field()
+    n_expts_act: int = field()
+    expt_data: RaggedTensorMetadata = None
+
+    # Used to make perf annotation cleaner: when we use expert sharding, we can
+    # use this to tell the "expected" number of local tokens per expert, because
+    # the actual number can vary per each input.
+    expected_tokens_per_expt: int = field(default=None)
+
+    def n_blocks(self, n_rows, block_m):
+        if n_rows <= self.n_expts_tot:
+            return n_rows
+        else:
+            return triton.cdiv(max(n_rows - self.n_expts_tot + 1, 0), block_m) + self.n_expts_tot - 1
 
 @dataclass(frozen=True)
 class FnSpecs:
@@ -51,6 +91,13 @@ class Epilogue:
 class FnName(Enum):
     QUANTIZE_MXFP8 = auto()
 
+
+@dataclass(frozen=True)
+class FusedComm:
+    out_handles: torch.Tensor
+    scatter_shard_indx: torch.Tensor | None = None
+    reduce_rank: int = 0
+    n_reduce_shards: int = 1
 
 EpilogueSpecs = FnSpecs  # TODO: remove this alias when callers are updated
 
@@ -156,7 +203,7 @@ class InnerRoutingData:
         elif isinstance(data, InnerRoutingData):
             expt_data, block = data.base.expt_data, data.block_k
             args = (
-                True, data.x_is_padded, data.w_is_padded, expt_data.hist.max()
+                True, data.x_is_padded, data.w_is_padded, expt_data.slice_sizes.max()
             )
         elif data is None:
             expt_data = None
@@ -167,10 +214,10 @@ class InnerRoutingData:
             return (None, None, None, None, False, False, False, None)
 
         return (
-            expt_data.hist,
-            expt_data.token_offs_raw,
-            expt_data.token_offs_pad[block],
-            expt_data.block_pid_map[block],
+            expt_data.slice_sizes,
+            expt_data.slice_offs,
+            expt_data.block_offs(block),
+            expt_data.block_schedule(block),
         ) + args
 
 
@@ -219,7 +266,8 @@ class MatmulAllocation:
     scratchpads: dict[str, tuple]
 
 def init_allocation(x, w, precision_config, fused_activation,
-                    routing_data, gather_indx, scatter_indx, inner_routing_data, opt_flags):
+                    routing_data, gather_indx, scatter_indx, inner_routing_data,
+                    n_reduce_shards, opt_flags):
     # ---- output ------
     N = w.shape[-1]
     # by default - M is number of rows in the activations
@@ -233,6 +281,7 @@ def init_allocation(x, w, precision_config, fused_activation,
     else:
         Mc = scatter_indx.src_indx.shape[0] // routing_data.n_expts_act # compressed number of rows
         y_rows = Mc
+    y_rows *= n_reduce_shards
     if inner_routing_data is not None:
         batch_dim = inner_routing_data.base.n_expts_tot
     else:
@@ -244,8 +293,9 @@ def init_allocation(x, w, precision_config, fused_activation,
     scratchpad = dict()
     if opt_flags.split_k > 1 or (scatter_indx is not None and not opt_flags.fused_scatter):
         scratch_out_dtype = torch.float32 if opt_flags.split_k > 1 else out_dtype
-        scratchpad["matmul"] = ((opt_flags.split_k, 1, M, N), scratch_out_dtype)
+        scratchpad["matmul"] = ((opt_flags.split_k, batch_dim, M, N), scratch_out_dtype)
     if "matmul" in scratchpad and precision_config.out_scale is not None:
+        assert batch_dim == 1, "batch_dim > 1 not supported yet"
         scratchpad["mx_out_scale"] = ((opt_flags.split_k, 1, M, triton.cdiv(N, MXFP_BLOCK_SIZE)), torch.uint8)
     return MatmulAllocation(x.device, output, scratchpad)
 
@@ -323,11 +373,14 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor, out_m
     Returns
     - The input tensor `x` (modified in place).
     """
+    M = x.shape[2]  # Only used for per-batch flex scale.
     if indx is None and x.shape[0] == 1:
         return x.squeeze(0), None
     if indx is not None:
         num_groups = indx.shape[0]
     else:
+        # Handle batched matmul (K, B, M, N) by pretending it to be (K, 1, B*M, N).
+        x = x.view(x.shape[0], 1, x.shape[1] * x.shape[2], x.shape[3])
         num_groups = x.shape[-2]
     if x_flex is None:
         x_flex = InFlexData()
@@ -351,8 +404,10 @@ def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor, out_m
         x_flex.reinterpret(x), x.stride(0), x.stride(2), x.stride(3),  #
         x_expected_scale,  # scalar input scale
         out_flex.reinterpret(out), out.stride(1), out.stride(2),  #
-        out_expected_scale, out_actual_scale, out_checksum_scale, indx,  #
-        x.shape[0], x.shape[-1],  #
+        out_expected_scale, out_actual_scale, out_checksum_scale,
+        out_flex is not None and out_flex.is_per_batch,
+        indx,
+        x.shape[0], M, x.shape[-1],  #
         x_mx_scale, stride_mxb, stride_mxs,  #
         out_mx_scale, stride_omxs,  #
         *fused_activation.fn_args, fused_activation.reduction_n,
@@ -383,6 +438,7 @@ def matmul_ogs(x, w, bias,
                gammas: torch.Tensor | None = None,
                out_alpha: float | None = None,
                y: torch.Tensor | None = None,
+               fused_comm: FusedComm | None = None,
                fused_activation: FusedActivation | None = None,
                epilogue: Epilogue | None = None,
                y_acc_in: torch.Tensor | None = None,
@@ -392,6 +448,12 @@ def matmul_ogs(x, w, bias,
     Y[:, :] = 0.
     for e in num_experts:
         Y[idxs_y_m(e), :] += matmul(X[idxs_x_m(e), :], W[e, :, :])
+
+    matmul can be optionally fused with all gather or scatter at the end for the output. When fused_comm is specified, the m-th row of the output will be stored to (m * n_reduce_shards + reduce_rank) -th row
+    of each rank id in range [scatter_shard_indx[m] * n_reduce_shards, (scatter_shard_indx[m] + 1) * n_reduce_shards) if scatter_shard_indx is not None, otherwise the output will be all gathered across all reduce ranks.
+    When scatter_shard_indx is specified, the caller should ensure that the indices of different shards do not conflict.
+
+    The output buffer for fused comm should be pre-allocated and passed in via fused_comm.out_handles, which contains ipc handles to the output tensors, each with shape (n_rows * n_reduce_shards, n_cols).
     """
     is_input_batched = x.ndim == 3
     if is_input_batched:
@@ -399,12 +461,16 @@ def matmul_ogs(x, w, bias,
         assert scatter_indx is None, "scatter not supported in batched mode"
         assert routing_data is None, "routing not supported in batched mode"
         assert inner_routing_data is None, "routing not supported in batched mode"
+        assert fused_comm is None, "fused comm is not supported in batched mode"
         assert w.ndim == 3 and w.shape[0] == x.shape[0]
     if inner_routing_data is not None:
         assert routing_data is None
         assert gather_indx is None
         assert scatter_indx is None
-        routing_data = RoutingData(None, None, inner_routing_data.base.n_expts_tot, 1)
+        routing_data = RoutingData(
+            None, None, inner_routing_data.base.n_expts_tot, 1,
+            expected_tokens_per_expt=inner_routing_data.base.expected_tokens_per_expt,
+        )
     # canonicalize inputs
     if precision_config is None:
         precision_config = PrecisionConfig()
@@ -418,12 +484,13 @@ def matmul_ogs(x, w, bias,
     w_scale = precision_config.weight_scale
     w_has_mx = w_scale is not None
     is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and bitwidth(w.dtype) == 8
-    if w_has_mx: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp"
     if is_hopper_fp8: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
     if not isinstance(w, Tensor):
         # TODO: remove this code path; using uint8 for mxfp4 weight will bite us when we want to support uint8 for real
         dtype = FP4 if w.dtype == torch.uint8 else w.dtype
         w = wrap_torch_tensor(w, dtype=dtype)
+    if w_has_mx and (torch.cuda.get_device_capability()[0] < 10 or w.storage.layout is not None and not isinstance(w.storage.layout, StridedLayout)):
+        assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp and (swizzled or not on >=Blackwell)"
     if w_scale is not None and not isinstance(w_scale, Tensor):
         w_scale = Tensor(w_scale)
     if w_scale is not None:
@@ -509,7 +576,7 @@ def matmul_ogs(x, w, bias,
         matmul_fused_activation, reduce_fused_activation = reduce_fused_activation, matmul_fused_activation
     # allocate output/scratchpad memory
     allocation = init_allocation(x, w, precision_config, fused_activation,
-        routing_data, gather_indx, scatter_indx, inner_routing_data, opt_flags)
+        routing_data, gather_indx, scatter_indx, inner_routing_data, fused_comm.n_reduce_shards if fused_comm is not None else 1, opt_flags)
     memory = apply_allocation(allocation, y)
     # early exit
     if batch_size * M * N == 0:
@@ -569,7 +636,7 @@ def matmul_ogs(x, w, bias,
     # create tma descriptor for y
     y_has_tma = (
         opt_flags.is_persistent and (has_scatter_tma or not opt_flags.fused_scatter)
-        and (y_acc_in is None or y_acc_is_y)
+        and (y_acc_in is None or y_acc_is_y) and fused_comm is None
     )
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.reduction_n
     y_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
@@ -597,7 +664,12 @@ def matmul_ogs(x, w, bias,
     # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
     # w_transpose = w_storage.data.stride()[-1] != 1
     w_transpose = w_storage.data.stride()[-2] == 1
-
+    fused_comm_kwargs = {
+        "pYPtrs": fused_comm.out_handles,
+        "ScatterShardIndx": fused_comm.scatter_shard_indx,
+        "reduce_rank": fused_comm.reduce_rank,
+        "n_reduce_shards": fused_comm.n_reduce_shards,
+    } if fused_comm is not None else {}
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
@@ -615,6 +687,7 @@ def matmul_ogs(x, w, bias,
                    N, K, K_W,
                    betas, gammas,
                    None if gather_indx is None else gather_indx.src_indx,
+                   None if gather_indx is None else gather_indx.dst_indx,  # Only for launch_metadata
                    None if scatter_indx is None else scatter_indx.src_indx,
                    num_indx,
                    None if not opt_flags.fused_scatter else scatter_indx.dst_indx,
@@ -629,7 +702,7 @@ def matmul_ogs(x, w, bias,
                    precision_config.allow_tf32,
                    precision_config.flexpoint_saturate_inf,
                    flex.rhs_data.is_per_batch,
-                   flex.out_data.is_per_batch,
+                   out_matmul_flex.is_per_batch,
                    flex.acc_data.is_per_batch,
                    opt_flags.block_m,
                    opt_flags.block_n,
@@ -652,6 +725,7 @@ def matmul_ogs(x, w, bias,
                    SWAP_XW=get_swap_xw(precision_config, opt_flags),
                    IS_EPILOGUE_QUANT_MXFP8=epilogue.specs.name == FnName.QUANTIZE_MXFP8.name,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
+                   **fused_comm_kwargs,
                    **opt_flags.target_kernel_kwargs)
     # Build grouped reduction inputs in a uniform way
     group_indx = None if scatter_indx is None or opt_flags.fused_scatter else scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
@@ -764,3 +838,53 @@ def matmul_ogs_torch(x, w, bias,
         msk = dst_idx != -1
         out[dst_idx[msk], :] += y[lo:hi, :][msk, :].float()
     return out
+
+
+def post_matmul_comm_torch(y: torch.Tensor, rank: int, n_reduce_shards: int,
+                           world_size: int,
+                           scatter_shard_indx: torch.Tensor | None = None,
+):
+    """
+    Reference implementation of post matmul communication.
+
+    y: the local matmul output
+    rank: the global rank
+    n_reduce_shards: the number of reduce shards
+    world_size: the world size
+    scatter_shard_indx: the shard indices for the scatter. None if all gather.
+
+    Output shape:
+    (batch_size, n_rows, n_cols) -> (batch_size, n_rows * n_reduce_shards, n_cols) if batched, otherwise
+    (n_rows, n_cols) -> (n_rows * n_reduce_shards, n_cols)
+    """
+    from torch import distributed as dist
+    # if n_reduce_shards == 1:
+    #     return y
+
+    ys = [torch.empty_like(y) for _ in range(world_size)]
+    dist.all_gather(ys, y)
+    out_shape = (*y.shape[:-2], y.shape[-2] * n_reduce_shards, y.shape[-1])
+
+    if scatter_shard_indx is None:
+        # all gather
+        assert n_reduce_shards == world_size
+        return torch.cat(ys, dim=-1).reshape(out_shape)
+    else:
+        # Note: when multiple ranks scatter to the same destination, the result is undefined.
+        scatter_shard_indx_global = torch.empty((world_size, *scatter_shard_indx.shape), device=scatter_shard_indx.device, dtype=scatter_shard_indx.dtype)
+        dist.all_gather([scatter_shard_indx_global[i] for i in range(world_size)], scatter_shard_indx)
+
+        assert len(out_shape) == 2, "batched mode not supported"
+        result = torch.zeros(out_shape, device=y.device, dtype=y.dtype)
+        reduce_shard_id = rank // n_reduce_shards
+
+        for i in range(world_size // n_reduce_shards):
+            scatter_mask = scatter_shard_indx_global[i * n_reduce_shards, :] == reduce_shard_id
+            for j in range(n_reduce_shards):
+                out_slice = result.as_strided(
+                    (result.shape[0] // n_reduce_shards, result.shape[1]),
+                    (result.stride(0) * n_reduce_shards, result.stride(1)),
+                    storage_offset=j * result.stride(0),
+                )
+                out_slice[scatter_mask, :] = ys[i * n_reduce_shards + j][scatter_mask, :]
+        return result

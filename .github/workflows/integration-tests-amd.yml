@@ -11,6 +11,7 @@ jobs:
   integration-tests-amd:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    continue-on-error: ${{ matrix.runner[1] == 'gfx90a' }}
     strategy:
       matrix:
         runner: ${{ fromJson(inputs.matrix) }}
@@ -49,7 +50,7 @@ jobs:
       options: ${{ matrix.options }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: 'true'
       - name: Compute cache keys
@@ -178,12 +179,7 @@ jobs:
       - name: Run Proton tests
         run: |
           unset HIP_VISIBLE_DEVICES
-          unset ROCR_VISIBLE_DEVICES
-          if [ "${{ matrix.runner[0] }}" = "amd-gfx950" ]; then
-            python3 -m pytest -s -n 8 third_party/proton/test -k "not test_instrument_exec"
-          else
-            make test-proton
-          fi
+          make test-proton
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton

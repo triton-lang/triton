@@ -459,14 +459,15 @@ private:
       info->pred = copyOp.getPred();
       info->barriers.push_back({copyOp.getBarrier(), nullptr, 1});
       info->operandEffects.push_back(
-          {.rw = MemEffectsOpInfo::Effects::RW::Write,
-           .buf = copyOp.getResult()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+           /*.buf =*/copyOp.getResult()});
     }
     if (auto storeOp = dyn_cast<ttng::AsyncTMACopyLocalToGlobalOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::None;
       info->operandEffects.push_back(
-          {.rw = MemEffectsOpInfo::Effects::RW::Read, .buf = storeOp.getSrc()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+           /*.buf =*/storeOp.getSrc()});
     }
     if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
       info.emplace();
@@ -474,64 +475,67 @@ private:
       info->pred = gatherOp.getPred();
       info->barriers.push_back({gatherOp.getBarrier(), nullptr, 1});
       info->operandEffects.push_back(
-          {.rw = MemEffectsOpInfo::Effects::RW::Write,
-           .buf = gatherOp.getResult()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+           /*.buf =*/gatherOp.getResult()});
     }
     if (auto scatterOp = dyn_cast<ttng::AsyncTMAScatterOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::None;
-      info->operandEffects.push_back({.rw = MemEffectsOpInfo::Effects::RW::Read,
-                                      .buf = scatterOp.getSrc()});
+      info->operandEffects.push_back(
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+           /*.buf =*/scatterOp.getSrc()});
     }
     if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::asyncCpCommit;
       info->operandEffects.push_back(
-          {.rw = MemEffectsOpInfo::Effects::RW::Write,
-           .buf = copyOp.getResult()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+           /*.buf =*/copyOp.getResult()});
     }
     if (auto loadOp = dyn_cast<ttg::LocalLoadOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->operandEffects.push_back(
-          {.rw = MemEffectsOpInfo::Effects::RW::Read, .buf = loadOp.getSrc()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+           /*.buf =*/loadOp.getSrc()});
     }
     if (auto storeOp = dyn_cast<ttg::LocalStoreOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->operandEffects.push_back(
-          {.rw = MemEffectsOpInfo::Effects::RW::Write,
-           .buf = storeOp.getDst()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+           /*.buf =*/storeOp.getDst()});
     }
     if (auto allocOp = dyn_cast<ttg::LocalAllocOp>(op)) {
       if (allocOp.getSrc()) {
         info.emplace();
         info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
         info->operandEffects.push_back(
-            {.rw = MemEffectsOpInfo::Effects::RW::Write,
-             .buf = allocOp.getResult()});
+            {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+             /*.buf =*/allocOp.getResult()});
       }
     }
     if (auto loadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->operandEffects.push_back(
-          {.rw = MemEffectsOpInfo::Effects::RW::Read, .buf = loadOp.getSrc()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+           /*.buf =*/loadOp.getSrc()});
     }
     if (auto storeOp = dyn_cast<ttng::TMEMStoreOp>(op)) {
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
       info->operandEffects.push_back(
-          {.rw = MemEffectsOpInfo::Effects::RW::Write,
-           .buf = storeOp.getDst()});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+           /*.buf =*/storeOp.getDst()});
     }
     if (auto allocOp = dyn_cast<ttng::TMEMAllocOp>(op)) {
       if (allocOp.getSrc()) {
         info.emplace();
         info->trackingKind = MemEffectsOpInfo::TrackingKind::Barrier;
         info->operandEffects.push_back(
-            {.rw = MemEffectsOpInfo::Effects::RW::Write,
-             .buf = allocOp.getResult()});
+            {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+             /*.buf =*/allocOp.getResult()});
       }
     }
     if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
@@ -542,16 +546,15 @@ private:
            llvm::zip(mmav5Op.getBarriers(), mmav5Op.getBarrierPreds())) {
         info->barriers.push_back({barrier, barrierPred, 1});
       }
-      info->operandEffects.push_back({.rw = MemEffectsOpInfo::Effects::RW::Read,
-                                      .buf = mmav5Op.getA(),
-                                      .operandName = "A"});
-      info->operandEffects.push_back({.rw = MemEffectsOpInfo::Effects::RW::Read,
-                                      .buf = mmav5Op.getB(),
-                                      .operandName = "B"});
       info->operandEffects.push_back(
-          {.rw = MemEffectsOpInfo::Effects::RW::Write,
-           .buf = mmav5Op.getAccumulator(),
-           .operandName = "Acc"});
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+           /*.buf =*/mmav5Op.getA(), /*.operandName =*/"A"});
+      info->operandEffects.push_back(
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+           /*.buf =*/mmav5Op.getB(), /*.operandName =*/"B"});
+      info->operandEffects.push_back(
+          {/*.rw =*/MemEffectsOpInfo::Effects::RW::Write,
+           /*.buf =*/mmav5Op.getAccumulator(), /*.operandName =*/"Acc"});
     }
     if (auto commitOp = dyn_cast<ttng::TCGen5CommitOp>(op)) {
       info.emplace();
@@ -568,20 +571,22 @@ private:
     }
     if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
       if (wgmmaOp.getIsAsync() == true) {
-        info = {.trackingKind = MemEffectsOpInfo::TrackingKind::wgmmaCommit};
+        info.emplace();
+        info->trackingKind = MemEffectsOpInfo::TrackingKind::wgmmaCommit;
+        info->barriers = {};
         if (isa<ttg::SharedEncodingTrait>(
                 wgmmaOp.getA().getType().getEncoding())) {
           info->operandEffects.emplace_back(MemEffectsOpInfo::Effects{
-              .rw = MemEffectsOpInfo::Effects::RW::Read,
-              .buf = wgmmaOp.getA(),
-              .operandName = "A"});
+              /*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+              /*.buf =*/wgmmaOp.getA(),
+              /*.operandName =*/"A"});
         }
         if (isa<ttg::SharedEncodingTrait>(
                 wgmmaOp.getB().getType().getEncoding())) {
           info->operandEffects.emplace_back(MemEffectsOpInfo::Effects{
-              .rw = MemEffectsOpInfo::Effects::RW::Read,
-              .buf = wgmmaOp.getB(),
-              .operandName = "B"});
+              /*.rw =*/MemEffectsOpInfo::Effects::RW::Read,
+              /*.buf =*/wgmmaOp.getB(),
+              /*.operandName =*/"B"});
         }
       }
     }

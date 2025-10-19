@@ -363,8 +363,11 @@ public:
     SmallVector<std::pair<Value, Attribute>> uses;
     uses.push_back({tmemLoadOp.getResult(), newEncoding});
     bool foundImprovedStore = false;
+    llvm::DenseSet<std::pair<Value, Attribute>> visited;
     while (!uses.empty()) {
       auto [v, encoding] = uses.pop_back_val();
+      if (!visited.insert({v, encoding}).second)
+        continue;
       for (auto user : v.getUsers()) {
         if (auto localStore = dyn_cast<gpu::LocalStoreOp>(user)) {
           // Check if the store benefits from the new layout.

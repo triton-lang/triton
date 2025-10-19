@@ -4,12 +4,15 @@ from typing import Type
 import torch
 from triton.tools.tensor_descriptor import TensorDescriptor
 from triton.tools.ragged_tma import create_ragged_descriptor
-
-from .reduction_details.reduce_bitmatrix import clear_sums, sum_bitmatrix_rows
 from .target_info import cuda_capability_geq
 from .tensor_details.layout import Layout, StridedLayout
+from .tensor_details import ragged_tensor as ragged_tensor_details
+from .tensor_details import bitmatrix as bitmatrix_details
+from .tensor_details.ragged_tensor import RaggedTensorMetadata
 
 
+# storage
+# ---------------------------------------------------------------------------- #
 @dataclass
 class Storage:
     data: torch.Tensor
@@ -68,6 +71,8 @@ class Storage:
         return create_ragged_descriptor(self.data, block_shape, ragged_dim=ragged_dim)
 
 
+# data types
+# ---------------------------------------------------------------------------- #
 @dataclass
 class IntegerType:
     bitwidth: int
@@ -91,6 +96,10 @@ def bitwidth(type: IntegerType | FloatType | torch.dtype):
     if isinstance(type, torch.dtype):
         return type.itemsize * 8
     return type.bitwidth
+
+
+# main tensor class
+# ---------------------------------------------------------------------------- #
 
 
 @dataclass
@@ -162,31 +171,66 @@ class Tensor:
         return self.shape[i]
 
 
+# ---------------------------------------------------------------------------- #
+# bitmatrix
+# ---------------------------------------------------------------------------- #
 @dataclass
 class Bitmatrix(Tensor):
+
+    def __post_init__(self):
+        assert self.dtype == BIT
+        super().__post_init__()
+
+
+make_bitmatrix_metadata = bitmatrix_details.make_bitmatrix_metadata
+make_bitmatrix_metadata_torch = bitmatrix_details.make_bitmatrix_metadata_torch
+
+
+# ---------------------------------------------------------------------------- #
+# ragged tensor
+# ---------------------------------------------------------------------------- #
+@dataclass
+class RaggedTensor:
     """
-    Represents a boolean matrix in a packed format where each element occupies
-    a single bit of memory.
-
-    _scratchpad is either None or an all-zero array of size >= shape[-1]; we pass it along
-    with the actual bitmatrix to avoid having to launch a separate memset
-    kernel when we call Bitmatrix::sum().
+    A ragged `tensor` is a collection of 2D tensors that share the same number of columns.
+    Each tensor in this collection is called a `slice`.
     """
+    # slice_sizes[i] is the number of rows in slice `i`
+    slice_sizes: torch.Tensor
+    # ragged tensors are stored in memory as (potentially padded) 2D tensors of shape
+    # [num_total_rows, num_cols]
+    # where `num_total_rows` >= sum(slice_sizes)
+    data: torch.Tensor
+    # `metadata`` contains information about the ragged tensor
+    # see `tensor_details/ragged_tensor.py` for more details
+    metadata: RaggedTensorMetadata
 
-    scratchpad: torch.Tensor = None
 
-    def __init__(self, storage, shape, shape_max=None, scratchpad=None):
-        super().__init__(storage, dtype=BIT, shape=shape, shape_max=shape_max)
-        self.scratchpad = scratchpad
+# construct ragged tensor metadata from `slice_sizes` and `max_n_blocks`
+make_ragged_tensor_metadata = ragged_tensor_details.make_ragged_tensor_metadata
+make_ragged_tensor_metadata_torch = ragged_tensor_details.make_ragged_tensor_metadata_torch
 
-    def sum(self, partials_block_size):
-        _, n_cols = self.shape
-        dev = self.device
-        if self.scratchpad is None:
-            self.scratchpad = clear_sums(n_cols, dev)
-        out_ret = self.scratchpad[:n_cols]
-        self.scratchpad = None  # throw error if we try to sum again
-        return sum_bitmatrix_rows(self, out_ret, partials_block_size)
+# remap ragged tensor metadata to a new slice assignment
+remap_ragged_tensor_metadata = ragged_tensor_details.remap_ragged_tensor_metadata
+remap_ragged_tensor_metadata_torch = ragged_tensor_details.remap_ragged_tensor_metadata_torch
+
+# ---------------------------------------------------------------------------- #
+# sparse matrix
+# ---------------------------------------------------------------------------- #
+
+
+@dataclass
+class SparseMatrix:
+    indx: torch.Tensor
+    vals: torch.Tensor
+    mask: Bitmatrix
+
+    def __post_init__(self):
+        self.mask_metadata = make_bitmatrix_metadata(self.indx, self.mask)
+
+
+# layout utilities
+# ---------------------------------------------------------------------------- #
 
 
 def get_layout(tensor: torch.Tensor | Tensor | None):

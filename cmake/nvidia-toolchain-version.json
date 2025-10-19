@@ -1,4 +1,5 @@
 {
+  "ptxas-blackwell": "12.9.86",
   "ptxas": "12.8.93",
   "cuobjdump": "12.8.55",
   "nvdisasm": "12.8.55",

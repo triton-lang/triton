@@ -477,19 +477,24 @@ struct FatPointers {
 
   using KeyT = std::pair<Value, Value>;
   using ValueT = FatPtrAttrs;
-  using DenseMapT = DenseMap<KeyT, ValueT>;
+  using ValuePtrT = std::unique_ptr<FatPtrAttrs>;
+  using DenseMapT = DenseMap<KeyT, ValuePtrT>;
 
   void collectFatPointerAttributes(const KeyT &k);
   ValueT &operator[](const KeyT &k) {
-    if (!pointerAttrs.contains(k))
+    if (!pointerAttrs.contains(k)) {
+      pointerAttrs[k] = std::make_unique<ValueT>();
       collectFatPointerAttributes(k);
-    return pointerAttrs[k];
+    }
+    return *pointerAttrs[k];
   }
 
   ValueT &operator[](KeyT &&k) {
-    if (!pointerAttrs.contains(k))
+    if (!pointerAttrs.contains(k)) {
+      pointerAttrs[k] = std::make_unique<ValueT>();
       collectFatPointerAttributes(k);
-    return pointerAttrs[k];
+    }
+    return *pointerAttrs[k];
   }
 
   template <typename T>
@@ -499,7 +504,7 @@ struct FatPointers {
     // have our own message
     assert(pointerAttrs.contains(k) &&
            "expected fatPtrs to contain remapped fat pointer");
-    return pointerAttrs.at(k);
+    return *pointerAttrs.at(k);
   }
 
   bool contains(const KeyT &k) { return pointerAttrs.contains(k); }
@@ -529,7 +534,7 @@ void FatPointers::collectFatPointerAttributes(const KeyT &k) {
         continue;
 
       auto newAttrName = attrName.strref().drop_back(argSuffix.size());
-      pointerAttrs[k].attributes[newAttrName] = namedAttr.getValue();
+      pointerAttrs[k]->attributes[newAttrName] = namedAttr.getValue();
       // Propagate the argument to the offset if it is also a block
       // argument
       if (auto offsetArg = dyn_cast<BlockArgument>(offset))
@@ -543,7 +548,7 @@ void FatPointers::collectFatPointerAttributes(const KeyT &k) {
 
   // Otherwise add the attributes of the base to the fat pointer
   for (auto baseAttr : base.getDefiningOp()->getAttrs())
-    pointerAttrs[k].attributes[baseAttr.getName()] = baseAttr.getValue();
+    pointerAttrs[k]->attributes[baseAttr.getName()] = baseAttr.getValue();
 }
 
 Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
@@ -1302,15 +1307,16 @@ public:
     SmallVector<Value> trueOperands = flattenValues(remappedTrueOperands);
     SmallVector<Value> falseOperands = flattenValues(remappedFalseOperands);
 
-    rewriter.replaceOpWithNewOp<cf::CondBranchOp>(
-        branchOp, branchOp.getCondition(), branchOp.getTrueDest(), trueOperands,
-        branchOp.getFalseDest(), falseOperands);
+    auto newOp = rewriter.create<cf::CondBranchOp>(
+        branchOp.getLoc(), branchOp.getCondition(), branchOp.getTrueDest(),
+        trueOperands, branchOp.getFalseDest(), falseOperands);
 
     convertSimpleBlockSignature(branchOp.getTrueDest(), remappedTrueOperands,
                                 rewriter, fatPtrs);
     convertSimpleBlockSignature(branchOp.getFalseDest(), remappedFalseOperands,
                                 rewriter, fatPtrs);
 
+    rewriter.replaceOp(branchOp, newOp);
     return success();
   }
 };
@@ -1481,10 +1487,11 @@ public:
     ArrayRef<ValueRange> remappedDestOperands = adaptor.getDestOperands();
     SmallVector<Value> trueOperands = flattenValues(remappedDestOperands);
 
-    rewriter.replaceOpWithNewOp<cf::BranchOp>(branchOp, branchOp.getDest(),
-                                              trueOperands);
+    auto newOp = rewriter.create<cf::BranchOp>(
+        branchOp.getLoc(), branchOp.getDest(), trueOperands);
     convertSimpleBlockSignature(branchOp.getDest(), remappedDestOperands,
                                 rewriter, fatPtrs);
+    rewriter.replaceOp(branchOp, newOp);
     return success();
   }
 };
@@ -1652,8 +1659,10 @@ static const std::string kInitFuncArgsRewritten =
 /// (ConvertUnimplementedOpUnrealizedCasts) if it wasn't DCEd (via a user
 /// extracting the tt.ptr and c0 operands).
 struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
-  InitFuncPtrArgs(MLIRContext *context, FatPointers &fatPtrs)
-      : OpRewritePattern(context, 0), fatPtrs(fatPtrs) {}
+  InitFuncPtrArgs(MLIRContext *context, FatPointers &fatPtrs,
+                  bool enableLargeTensorPtrCanon_)
+      : OpRewritePattern(context, 0), fatPtrs(fatPtrs),
+        enableLargeTensorPtrCanon(enableLargeTensorPtrCanon_) {}
 
   LogicalResult matchAndRewrite(tt::FuncOp newOp,
                                 PatternRewriter &rewriter) const override {
@@ -1671,7 +1680,11 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
               newOp.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range"))
         bitness = pointerRangeAttr.getInt();
 
-      LDBG(idx << "-th argument: " << arg << ", bitness: " << bitness << "\n");
+      LDBG(idx << "-th argument: " << arg << ", bitness: " << bitness);
+      if (!enableLargeTensorPtrCanon && (bitness == 64)) {
+        LDBG("Do not init argument of large-tensor pointer: " << arg);
+        continue;
+      }
 
       Value zeroOffset =
           rewriter.create<arith::ConstantIntOp>(newOp.getLoc(), 0, bitness);
@@ -1688,6 +1701,7 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
   }
 
   FatPointers &fatPtrs;
+  bool enableLargeTensorPtrCanon;
 };
 
 /// No-op to make conversion framework happy.
@@ -1814,6 +1828,8 @@ public:
 class TritonAMDGPUCanonicalizePointersPass
     : public impl::TritonAMDGPUCanonicalizePointersBase<
           TritonAMDGPUCanonicalizePointersPass> {
+  using Base::Base;
+
 public:
   void runOnOperation() override;
 };
@@ -1903,22 +1919,34 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   FatPointers fatPrs;
   PatternRewriter rewriter(&getContext());
   // Convert tt.func; %1 = unrealize_cast(%arg0: tt.ptr, c0: i32) -> tt.ptr
-  InitFuncPtrArgs pat(&getContext(), fatPrs);
+  InitFuncPtrArgs pat(&getContext(), fatPrs, enableLargeTensorPtrCanon);
   if (failed(pat.matchAndRewrite(func, rewriter)))
     return signalPassFailure();
 
   llvm::SetVector<Operation *> opsToRewrite;
-  for (auto arg : func.getArguments()) {
-    if (llvm::isa<tt::PointerType>(arg.getType())) {
-      // NB: reusing the same SetVector invalidates the topo order implied by
-      // getForwardSlice
-      for (auto &use : arg.getUses())
-        getForwardSliceImpl(&use, use.getOwner(), &opsToRewrite);
+  for (auto [idx, arg] : llvm::enumerate(func.getArguments())) {
+    if (!llvm::isa<tt::PointerType>(arg.getType()))
+      continue;
+
+    int64_t bitness = 64;
+    if (auto pointerRangeAttr =
+            func.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range"))
+      bitness = pointerRangeAttr.getInt();
+
+    if (!enableLargeTensorPtrCanon && (bitness == 64)) {
+      LDBG("ignore " << idx << "-th argument of large-tensor ptr: " << arg);
+      continue;
     }
+
+    // NB: reusing the same SetVector invalidates the topo order implied by
+    // getForwardSlice
+    for (auto &use : arg.getUses())
+      getForwardSliceImpl(&use, use.getOwner(), &opsToRewrite);
   }
 
   ConversionConfig config;
   config.buildMaterializations = false;
+  config.allowPatternRollback = false;
   ConversionTarget target(getContext());
   auto isLegal = [&opsToRewrite](Operation *op) {
     if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op)) {

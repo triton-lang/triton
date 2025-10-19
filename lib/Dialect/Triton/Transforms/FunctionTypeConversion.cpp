@@ -73,14 +73,91 @@ struct ReturnOpConversion : public OpConversionPattern<ReturnOp> {
   }
 };
 
+//===----------------------------------------------------------------------===//
+// FunctionOpInterfaceSignatureConversion
+//===----------------------------------------------------------------------===//
+// NOTE: Forked from mlir to support remapping argument attributes correctly in
+// a one-to-many type conversion.
+
+SmallVector<Attribute>
+convertFuncOpAttrs(FunctionOpInterface funcOp,
+                   TypeConverter::SignatureConversion &sigConv,
+                   FunctionType newType) {
+  if (newType.getNumInputs() == funcOp.getNumArguments()) {
+    return {};
+  }
+  ArrayAttr allArgAttrs = funcOp.getAllArgAttrs();
+  if (!allArgAttrs)
+    return {};
+
+  SmallVector<Attribute> newAttrs(newType.getNumInputs());
+  for (auto i : llvm::seq(allArgAttrs.size())) {
+    auto mapping = sigConv.getInputMapping(i);
+    assert(mapping.has_value());
+    auto outIdx = mapping->inputNo;
+    newAttrs[outIdx] = allArgAttrs[i];
+  }
+  return newAttrs;
+}
+
+LogicalResult convertFuncOpTypes(FunctionOpInterface funcOp,
+                                 const TypeConverter &typeConverter,
+                                 ConversionPatternRewriter &rewriter) {
+  FunctionType type = dyn_cast<FunctionType>(funcOp.getFunctionType());
+  if (!type)
+    return failure();
+
+  // Convert the original function types.
+  TypeConverter::SignatureConversion result(type.getNumInputs());
+  SmallVector<Type, 1> newResults;
+  if (failed(typeConverter.convertSignatureArgs(type.getInputs(), result)) ||
+      failed(typeConverter.convertTypes(type.getResults(), newResults)) ||
+      failed(rewriter.convertRegionTypes(&funcOp.getFunctionBody(),
+                                         typeConverter, &result)))
+    return failure();
+
+  // Update the function signature in-place.
+  auto newType = FunctionType::get(rewriter.getContext(),
+                                   result.getConvertedTypes(), newResults);
+
+  auto newArgAttrs = convertFuncOpAttrs(funcOp, result, newType);
+
+  rewriter.modifyOpInPlace(funcOp, [&] {
+    funcOp.setType(newType);
+    if (!newArgAttrs.empty()) {
+      funcOp.setAllArgAttrs(newArgAttrs);
+    }
+  });
+
+  return success();
+}
+
+/// Create a default conversion pattern that rewrites the type signature of a
+/// FunctionOpInterface op. This only supports ops which use FunctionType to
+/// represent their type.
+struct FunctionOpInterfaceSignatureConversion : public ConversionPattern {
+  FunctionOpInterfaceSignatureConversion(StringRef functionLikeOpName,
+                                         MLIRContext *ctx,
+                                         const TypeConverter &converter,
+                                         PatternBenefit benefit = 1)
+      : ConversionPattern(converter, functionLikeOpName, benefit, ctx) {}
+
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> /*operands*/,
+                  ConversionPatternRewriter &rewriter) const override {
+    FunctionOpInterface funcOp = cast<FunctionOpInterface>(op);
+    return convertFuncOpTypes(funcOp, *typeConverter, rewriter);
+  }
+};
+
 } // namespace
 
 void populateFunctionTypeConversions(const TypeConverter &converter,
                                      RewritePatternSet &patterns) {
-  mlir::populateFunctionOpInterfaceTypeConversionPattern<mlir::triton::FuncOp>(
-      patterns, converter);
-  patterns.add<CallOpConversion, ReturnOpConversion>(converter,
-                                                     patterns.getContext());
+  auto context = patterns.getContext();
+  patterns.add<FunctionOpInterfaceSignatureConversion>(
+      triton::FuncOp::getOperationName(), context, converter);
+  patterns.add<CallOpConversion, ReturnOpConversion>(converter, context);
 }
 
 } // namespace mlir::triton
