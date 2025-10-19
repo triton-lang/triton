@@ -92,9 +92,9 @@ def test_op(B, M, N, dtype_str, dim, mask_mode, postprocess_fn):
     else:
         postprocess_fn_tri = postprocess_fn_ref = None
     y_tri, y_tri_mxscale = reduce(x, dim=dim, mask=mask, x_mxscale=x_mscale, x_flex=x_flex, y_flex=y_flex_tri,
-                                  postprocess_fn=postprocess_fn_tri)
+                                  postprocess_fn1=postprocess_fn_tri)
     y_ref, y_ref_mxscale = reduce_torch(x, dim=dim, mask=mask, x_mxscale=x_mscale, x_flex=x_flex, y_flex=y_flex_ref,
-                                        postprocess_fn=postprocess_fn_ref)
+                                        postprocess_fn1=postprocess_fn_ref)
     if is_mx:
         y_ref = upcast_from_mxfp_torch(y_ref, y_ref_mxscale, torch.float16, axis=-1)
         y_tri = upcast_from_mxfp_torch(y_tri, y_tri_mxscale, torch.float16, axis=-1)

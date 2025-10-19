@@ -2,7 +2,6 @@
 # fmt: off
 from dataclasses import dataclass, field
 import itertools
-import sys
 import torch
 import triton
 from enum import Enum, auto
@@ -14,11 +13,10 @@ from triton_kernels.target_info import is_cuda
 # details
 from .matmul_ogs_details._matmul_ogs import _matmul_ogs
 from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
-from .matmul_ogs_details._reduce_grouped import _reduce_grouped
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
-from .specialize import specialize, FnSpecs
+from .specialize import FnSpecs, SpecializationModule, ClosureArg
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTensorMetadata
 from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
@@ -88,37 +86,14 @@ class FusedComm:
     reduce_rank: int = 0
     n_reduce_shards: int = 1
 
-EpilogueSpecs = FnSpecs  # TODO: remove this alias when callers are updated
 
-_kernels = dict()
-
-
-def get_kernels(epilogue: FnSpecs = FnSpecs.default(), fused_activation: FnSpecs = FnSpecs.default()):
-    global _kernels
-    key = (fused_activation.name, epilogue.name)
-    if key in _kernels:
-        return _kernels[key]
-    spec_constants = {
-        "ACTIVATION_FN": fused_activation.fn,
-        "EPILOGUE_FN": epilogue.fn,
-    }
-    spec_tuples = {
-        "activation_fn_args": fused_activation.fn_arg_names,
-        "epilogue_fn_args": epilogue.fn_arg_names,
-    }
-    do_not_specialize = fused_activation.fn_arg_do_not_specialize + epilogue.fn_arg_do_not_specialize
-    import types
-
-    module = types.ModuleType(f"matmul_ogs_{'_'.join(key)}")
-    sys.modules[module.__name__] = module
-    module._matmul_ogs = specialize(_matmul_ogs, module, spec_constants, spec_tuples,
-                                    do_not_specialize=do_not_specialize)
-    module._p_matmul_ogs = specialize(_p_matmul_ogs, module, spec_constants, spec_tuples,
-                                      do_not_specialize=do_not_specialize)
-    module._reduce_grouped = specialize(_reduce_grouped, module, spec_constants, spec_tuples,
-                                        do_not_specialize=do_not_specialize)
-    _kernels[key] = module
-    return module
+specialization_module = SpecializationModule("matmul_ogs",
+    kernels=[("_matmul_ogs", _matmul_ogs), ("_p_matmul_ogs", _p_matmul_ogs)],
+    closure_args=[
+        ClosureArg("ACTIVATION_FN", "activation_fn_args"), #
+        ClosureArg("EPILOGUE_FN", "epilogue_fn_args"),
+    ],
+)
 
 
 # -----------------------------------------------------------------------------
@@ -564,7 +539,7 @@ def matmul_ogs(x, w, bias,
     out_matmul_scale_strides = out_matmul_scale.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = (0, ) * (4 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
     # launch kernel
-    kernels = get_kernels(epilogue.specs, matmul_fused_activation.specs)
+    kernels = specialization_module.get([epilogue.specs, matmul_fused_activation.specs])
     # When stride(-2) == stride(-1) == 1, it's ambiguous whether W is transposed
     # (i.e. col-wise). Since this matters when w_has_mx is True and w_transpose
     # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.

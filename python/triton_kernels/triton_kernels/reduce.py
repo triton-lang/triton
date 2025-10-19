@@ -6,32 +6,13 @@ from triton_kernels.numerics_details.mxfp import quantize_mxfp8_fn
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics import InFlexData, OutFlexData, MAX_FINITE_FLOAT8E4B8, MAX_FINITE_FLOAT8E4NV, MAX_FINITE_FLOAT8E5
 from typing import Optional
-import types
-import sys
-from .specialize import specialize, FnSpecs
-
-_kernels = dict()
+from .specialize import SpecializationModule, ClosureArg, FnSpecs
 
 
 @dataclass(frozen=True)
 class PostprocessFn:
     specs: FnSpecs = FnSpecs.default()
     fn_args: tuple[object] = tuple()
-
-
-def get_kernels(fn1_specs: FnSpecs = FnSpecs.default(), fn2_specs: FnSpecs = FnSpecs.default()):
-    global _kernels
-    key = (fn1_specs.name, fn2_specs.name)
-    if key in _kernels:
-        return _kernels[key]
-    spec_constants = {"POSTPROCESS_FN1": fn1_specs.fn, "POSTPROCESS_FN2": fn2_specs.fn}
-    spec_tuples = {"postprocess_fn1_args": fn1_specs.fn_arg_names, "postprocess_fn2_args": fn2_specs.fn_arg_names}
-    do_not_specialize = fn1_specs.fn_arg_do_not_specialize + fn2_specs.fn_arg_do_not_specialize
-    module = types.ModuleType(f"reduce{'_'.join(key)}")
-    sys.modules[module.__name__] = module
-    module._reduce = specialize(_reduce, module, spec_constants, spec_tuples, do_not_specialize=do_not_specialize)
-    _kernels[key] = module
-    return module
 
 
 @triton.jit
@@ -112,6 +93,16 @@ def _reduce(X, stride_xr, stride_x0, stride_x1,  # x tensor (input)
         y_mx_ptrs = YMx + offs_s0[:, None] * stride_ymx0 + offs_y_smx1[None, :] * stride_ymx1
         tl.store(y_mx_ptrs, y_scale, mask=valid_s0[:, None] & valid_y_smx1[None, :])
     tl.store(y_ptrs, y, mask=valid_s0[:, None] & valid_y_s1[None, :])
+
+
+specialization_module = SpecializationModule(
+    "reduce",
+    kernels=[("_reduce", _reduce)],
+    closure_args=[
+        ClosureArg("POSTPROCESS_FN1", "postprocess_fn1_args"),
+        ClosureArg("POSTPROCESS_FN2", "postprocess_fn2_args"),
+    ],
+)
 
 
 def reduce(
@@ -223,7 +214,7 @@ def reduce(
     grid = (triton.cdiv(S0, BLOCK_S0), triton.cdiv(Y_S1, BLOCK_Y_S1))
     mask_arg = mask if mask is not None else x
     scale_arg = scale if scale is not None else x
-    reduce_kernel = get_kernels(postprocess_fn1.specs, postprocess_fn2.specs)._reduce
+    reduce_kernel = specialization_module.get([postprocess_fn1.specs, postprocess_fn2.specs])._reduce
     reduce_kernel[grid](
         x, stride_xr, stride_x0, stride_x1,  #
         x_mxscale, stride_xmxr, stride_xmx0, stride_xmx1,  #
@@ -265,7 +256,7 @@ def reduce_torch(x: torch.Tensor, dim: int, mask: Optional[torch.Tensor] = None,
                  scale: Optional[torch.Tensor] = None,  #
                  x_mxscale: Optional[torch.Tensor] = None,  #
                  x_flex: Optional[InFlexData] = InFlexData(), y_flex: Optional[OutFlexData] = OutFlexData(),
-                 y_flex_saturate_inf: bool = False, postprocess_fn: Optional[callable] = None):
+                 y_flex_saturate_inf: bool = False, postprocess_fn1: Optional[callable] = None):
     from triton_kernels.numerics_details.mxfp import downcast_to_mxfp_torch, upcast_from_mxfp_torch
     x_dtype = x.dtype
     # upcast input
@@ -283,8 +274,8 @@ def reduce_torch(x: torch.Tensor, dim: int, mask: Optional[torch.Tensor] = None,
         mask = torch.ones(1, dtype=torch.bool, device=x.device)
     mask = mask.to(torch.bool)
     ret = torch.where(mask, x * scale, 0).sum(dim=dim)
-    if postprocess_fn is not None:
-        ret = postprocess_fn(ret)
+    if postprocess_fn1 is not None:
+        ret = postprocess_fn1(ret)
     if y_flex is not None:
         y_flex.actual_scale.copy_(compute_actual_scale(ret, x_dtype, y_flex.is_per_batch))
         ret = (ret / y_flex.expected_scale).to(x_dtype)

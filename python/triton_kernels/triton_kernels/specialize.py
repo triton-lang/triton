@@ -163,3 +163,37 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
         co_firstlineno=max(1, orig_code.co_firstlineno - line_delta),
     )
     return ret
+
+
+@dataclass(frozen=True)
+class ClosureArg:
+    fn_name: str
+    fn_params_name: str
+
+
+class SpecializationModule:
+
+    def __init__(self, module_name: str, kernels: list[tuple[str, object]], closure_args: list[ClosureArg]):
+        self.module_name = module_name
+        self.kernels = kernels
+        self.closure_args = closure_args
+        self._modules = dict()
+
+    def get(self, specs: list[FnSpecs]):
+        import types
+        import sys
+        key = tuple(spec.name for spec in specs)
+        if key in self._modules:
+            return self._modules[key]
+        spec_constants = {arg.fn_name: spec.fn for arg, spec in zip(self.closure_args, specs)}
+        spec_tuples = {arg.fn_params_name: spec.fn_arg_names for arg, spec in zip(self.closure_args, specs)}
+        do_not_specialize = []
+        for spec in specs:
+            do_not_specialize.extend(spec.fn_arg_do_not_specialize)
+        module = types.ModuleType(self.module_name + '_'.join(key))
+        sys.modules[module.__name__] = module
+        for kernel_name, kernel_fn in self.kernels:
+            setattr(module, kernel_name,
+                    specialize(kernel_fn, module, spec_constants, spec_tuples, do_not_specialize=do_not_specialize))
+        self._modules[key] = module
+        return module
