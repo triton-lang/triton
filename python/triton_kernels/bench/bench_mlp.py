@@ -78,7 +78,8 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
     for i in range(100):
         if n_expts_tot > 1:  # sparse
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            x, rdata, gather_indx, scatter_indx, metadata = triton_dist.routing(input_x, logits, n_expts_act, EP=EP, TP=TP, expt_assignment=expt_assignment)
+            x, rdata, gather_indx, scatter_indx, metadata = triton_dist.routing(input_x, logits, n_expts_act, EP=EP,
+                                                                                TP=TP, expt_assignment=expt_assignment)
         else:  # dense
             x = triton_dist.all_gather(input_x, dim=0)
             rdata, gather_indx, scatter_indx, metadata = None, None, None, None
