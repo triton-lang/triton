@@ -101,6 +101,7 @@ def _p_matmul_ogs(
              X_TMA_MODE: tl.constexpr,
              Y_TMA_MODE: tl.constexpr,
              TOKENS_PER_EXPT_FOR_ANNOTATION=None,
+             UPCAST_INDICES: tl.constexpr=False,
              SWAP_XW: tl.constexpr = False,
              IS_EPILOGUE_QUANT_MXFP8: tl.constexpr = False,
              pYPtrs=None,
