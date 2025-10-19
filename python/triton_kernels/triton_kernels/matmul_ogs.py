@@ -86,16 +86,13 @@ class FusedComm:
     reduce_rank: int = 0
     n_reduce_shards: int = 1
 
-
 specialization_module = SpecializationModule("matmul_ogs",
     kernels=[("_matmul_ogs", _matmul_ogs), ("_p_matmul_ogs", _p_matmul_ogs)],
     closure_args=[
-        ClosureArg("ACTIVATION_FN", "activation_fn_args"), #
         ClosureArg("EPILOGUE_FN", "epilogue_fn_args"),
+        ClosureArg("ACTIVATION_FN", "activation_fn_args"), #
     ],
 )
-
-
 # -----------------------------------------------------------------------------
 #                    Matrix Multiplication + Outer Gather/Scatter
 # -----------------------------------------------------------------------------
