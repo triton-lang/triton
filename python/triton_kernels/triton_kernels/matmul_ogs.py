@@ -723,7 +723,7 @@ def matmul_ogs(x, w, bias,
         out_split_k_shape = out_matmul.shape[1:-1] + (out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n,)
         out_matmul, out_final_mx_scale = reduce(out_matmul.view(opt_flags.split_k, 1, -1), dim=0, postprocess_fn1=postprocess_fn,
                                              y_dtype=out_split_k_dtype,
-                                             y_has_mx=precision_config.out_scale is not None,
+                                             y_has_mx=scatter_indx is None and precision_config.out_scale is not None,
                                              y_flex=out_split_k_flex)
         out_matmul = out_matmul.view(*out_split_k_shape).unsqueeze(0)
         if out_final_mx_scale is not None:
