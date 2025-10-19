@@ -111,8 +111,10 @@ def reduce_scatter(
 
 # TODO: support TP > 1
 # TODO: clean up duplicate code with triton_kernels.test_distributed.py
-def routing(x, logits, n_expts_act, sm_first: bool = False, y_indx: Optional[torch.Tensor] = None, EP: int = 1,
-            TP: int = 1, expt_assignment: Optional[ExptAssignment] = None, mode: str = "ep_sharding") -> Tuple[torch.Tensor, RoutingData, GatherIndx, ScatterIndx, Optional[ReduceScatterMetadata]]:
+def routing(
+    x, logits, n_expts_act, sm_first: bool = False, y_indx: Optional[torch.Tensor] = None, EP: int = 1, TP: int = 1,
+    expt_assignment: Optional[ExptAssignment] = None, mode: str = "ep_sharding"
+) -> Tuple[torch.Tensor, RoutingData, GatherIndx, ScatterIndx, Optional[ReduceScatterMetadata]]:
     if _is_distributed_launch():
         rank, _ = setup()
         if mode == "ep_sharding":
