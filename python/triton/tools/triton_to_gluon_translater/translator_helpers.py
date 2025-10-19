@@ -5,7 +5,8 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
-    get_tmem_reg_layout,
+    get_tmem_32x32b_reg_layout,
+    get_tmem_scales_reg_layout,
     tcgen05_mma,
     tcgen05_mma_scaled,
     tcgen05_commit,
@@ -38,8 +39,7 @@ def tl_dot(a, b, acc=None, input_precision=None, allow_tf32=None, max_num_imprec
     a_smem = ttgl.allocate_shared_memory(a.dtype, [M, K], nvmma_layout_a, a)
     b_smem = ttgl.allocate_shared_memory(b.dtype, [K, N], nvmma_layout_b, b)
     acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, N], col_stride=1)
-    acc_dtype: ttgl.constexpr = acc.dtype if acc is not None else out_dtype
-    tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(acc_dtype, (M, N), acc_tmem_layout, ttgl.num_warps())
+    tmem_reg_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(M, N, [M, N], ttgl.num_warps())
     if acc is not None:
         acc_temp = ttgl.convert_layout(acc, tmem_reg_layout)
     else:
@@ -79,8 +79,7 @@ def tl_dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=No
     a_smem = ttgl.allocate_shared_memory(lhs.dtype, lhs.shape, nvmma_layout_a, lhs)
     b_smem = ttgl.allocate_shared_memory(rhs.dtype, rhs.shape, nvmma_layout_b, rhs)
     acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, N], col_stride=1)
-    acc_dtype: ttgl.constexpr = acc.dtype if acc is not None else out_dtype
-    tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(acc_dtype, (M, N), acc_tmem_layout, ttgl.num_warps())
+    tmem_reg_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(M, N, [M, N], ttgl.num_warps())
     if acc is not None:
         acc_temp = ttgl.convert_layout(acc, tmem_reg_layout)
     else:
@@ -89,10 +88,10 @@ def tl_dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=No
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
     scale_layout: ttgl.constexpr = TensorMemoryScalesLayout()
-    scale_layout_reg_lhs: ttgl.constexpr = get_tmem_reg_layout(lhs_scale.type.element_ty, lhs_scale.type.shape,
-                                                               scale_layout, ttgl.num_warps())
-    scale_layout_reg_rhs: ttgl.constexpr = get_tmem_reg_layout(rhs_scale.type.element_ty, rhs_scale.type.shape,
-                                                               scale_layout, ttgl.num_warps())
+    scale_layout_reg_lhs: ttgl.constexpr = get_tmem_scales_reg_layout(lhs_scale.type.shape[0], lhs_scale.type.shape[1],
+                                                                      lhs_scale.type.shape, ttgl.num_warps())
+    scale_layout_reg_rhs: ttgl.constexpr = get_tmem_scales_reg_layout(rhs_scale.type.shape[1], rhs_scale.type.shape[0],
+                                                                      rhs_scale.type.shape, ttgl.num_warps())
     lhs_scale = ttgl.convert_layout(lhs_scale, scale_layout_reg_lhs)
     rhs_scale = ttgl.convert_layout(rhs_scale, scale_layout_reg_rhs)
     a_scale_tmem = allocate_tensor_memory(lhs_scale.dtype, lhs_scale.shape, scale_layout, lhs_scale)

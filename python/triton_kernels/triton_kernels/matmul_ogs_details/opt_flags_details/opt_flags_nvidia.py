@@ -2,7 +2,7 @@ import torch
 import triton
 from triton_kernels import target_info
 from triton_kernels.tensor import get_layout, bitwidth, FP4
-from triton_kernels.tensor_details.layout import HopperMXScaleLayout
+from triton_kernels.tensor_details.layout import HopperAmpereMXScaleLayout
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 
 
@@ -18,7 +18,7 @@ def compute_grid_size(routing_data, batch_size, m, n, block_m, block_n):
 def compute_block_n(n: int, arch, precision_config):
     # block_n:
     layout = get_layout(precision_config.weight_scale)
-    if isinstance(layout, HopperMXScaleLayout) and layout.num_warps == 4:
+    if isinstance(layout, HopperAmpereMXScaleLayout) and layout.num_warps == 4:
         return 128, 128
     elif precision_config.max_num_imprecise_acc is None and n > 128:
         return 256, 256
@@ -60,7 +60,7 @@ def compute_split_k(block_k: int, k: int | None, grid_size: int) -> int:
 
 def compute_num_warps(block_m, block_n, is_persistent: bool, precision_config):
     layout = get_layout(precision_config.weight_scale)
-    if isinstance(layout, HopperMXScaleLayout):
+    if isinstance(layout, HopperAmpereMXScaleLayout):
         return layout.num_warps
     return max(block_m * block_n // 4096, 4 if is_persistent else 1)
 
