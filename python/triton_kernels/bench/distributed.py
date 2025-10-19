@@ -7,9 +7,9 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Tuple, Optional
 
-from python.triton_kernels.reduce import reduce
 import triton_kernels
 import triton_kernels.swiglu
+from triton_kernels.reduce import reduce
 from triton_kernels.matmul_ogs import RoutingData, GatherIndx, ScatterIndx
 from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
@@ -113,7 +113,7 @@ def reduce_scatter(
 def routing(logits, n_expts_act, sm_first: bool = False, y_indx: Optional[torch.Tensor] = None, EP: int = 1,
             TP: int = 1, expt_assignment: Optional[ExptAssignment] = None, mode: str = "ep_sharding"):
     if _is_distributed_launch():
-        rank, world_size = setup()
+        rank, _ = setup()
         if mode == "ep_sharding":
             if TP > 1:
                 raise NotImplementedError("TP > 1 is not supported in distributed MoE benchmark yet.")
