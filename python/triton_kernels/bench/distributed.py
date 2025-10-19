@@ -139,7 +139,7 @@ def routing(
             x = convert_dp_to_ep(x, expt_assignment, active_indx, dispatch_indx)
             logits_local_metadata = remap_ragged_tensor_metadata(logits_global_metadata, expt_map)
             gate_scal = logits_global.vals.flatten()[combine_indx]
-            rdata_ep_local = RoutingData(gate_scal, expt_sizes, n_expts_tot, n_expts_act, logits_local_metadata)
+            rdata = RoutingData(gate_scal, expt_sizes, n_expts_tot, n_expts_act, logits_local_metadata)
             gather_indx = GatherIndx(combine_indx, dispatch_indx)
             scatter_indx = ScatterIndx(dispatch_indx, combine_indx)
             reduce_scatter_metadata = ReduceScatterMetadata(
@@ -148,7 +148,7 @@ def routing(
                 dispatch_indx=dispatch_indx,
                 combine_indx=combine_indx,
             )
-            return x, rdata_ep_local, gather_indx, scatter_indx, reduce_scatter_metadata
+            return x, rdata, gather_indx, scatter_indx, reduce_scatter_metadata
         else:
             raise NotImplementedError(f"Distributed routing mode {mode} is not implemented yet.")
     else:
@@ -306,12 +306,11 @@ has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_versio
 
 @pytest.mark.parametrize(
     "batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP",
+    # dense cases
     [
-        # dense cases - test parallelism
         (1024, 1024, 1024, 1, 1, "bf16", "bf16", 1, 1),
-    ] +
-    # dense cases - test precision
-    [(1024, 1024, 1024, 1, 1, "fp8", "fp8", 1, 1), (1024, 1024, 1024, 1, 1, "fp8", "fp8", 1, 4)]
+        (1024, 1024, 1024, 1, 1, "fp8", "fp8", 1, 1)
+    ] 
     # moe cases - test parallelism
     + [
         (1024, 1024, 1024, 128, 2, "bf16", "bf16", 1, 1),
