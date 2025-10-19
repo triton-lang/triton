@@ -2019,3 +2019,84 @@ def test_shared_gather(N, M):
     )
 
     torch.testing.assert_close(output, expected)
+
+
+@gluon.jit
+def shared_scatter_kernel(
+    indices_d0_ptr,
+    indices_d1_ptr,
+    values_ptr,
+    output_ptr,
+    N: ttgl.constexpr,
+    M: ttgl.constexpr,
+    layout_2d: ttgl.constexpr,
+    layout_1d: ttgl.constexpr,
+    shared_layout: ttgl.constexpr,
+):
+    """Test shared memory scatter using smem.scatter()."""
+    # Allocate shared memory initialized to zero
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [N, M], layout=shared_layout)
+
+    # Initialize shared memory to zero
+    indices_x = ttgl.arange(0, N, layout=ttgl.SliceLayout(dim=1, parent=layout_2d))
+    indices_y = ttgl.arange(0, M, layout=ttgl.SliceLayout(dim=0, parent=layout_2d))
+    offsets_2d = indices_x[:, None] * M + indices_y[None, :]
+    zeros = ttgl.zeros([N, M], ttgl.float32, layout=layout_2d)
+    smem.store(zeros)
+    ttgl.thread_barrier()
+
+    # Load the scatter indices and values
+    offsets_1d = ttgl.arange(0, N, layout=layout_1d)
+    indices_d0 = ttgl.load(indices_d0_ptr + offsets_1d)
+    indices_d1 = ttgl.load(indices_d1_ptr + offsets_1d)
+    values = ttgl.load(values_ptr + offsets_1d)
+
+    # Scatter values into shared memory
+    smem.scatter(indices_d0, indices_d1, values)
+    ttgl.thread_barrier()
+
+    # Read back the full matrix from shared memory
+    matrix_data = smem.load(layout=layout_2d)
+
+    # Store result to global memory
+    ttgl.store(output_ptr + offsets_2d, matrix_data)
+
+
+@pytest.mark.parametrize("N,M", [(32, 32), (64, 64), (128, 128)])
+def test_shared_scatter(N, M):
+    """Test scattering to 2D shared memory using two 1D index tensors."""
+    device = torch.device("cuda")
+
+    # Create scatter indices - scatter to specific positions
+    indices_d0 = torch.arange(N, dtype=torch.int32, device=device)
+    indices_d1 = torch.arange(N, dtype=torch.int32, device=device)
+
+    # Create values to scatter
+    values = torch.arange(N, dtype=torch.float32, device=device) + 100.0
+
+    output = torch.zeros((N, M), dtype=torch.float32, device=device)
+
+    # Compute expected result: matrix starts at zero, then matrix[indices_d0[i], indices_d1[i]] = values[i]
+    expected = torch.zeros((N, M), dtype=torch.float32, device=device)
+    expected[indices_d0, indices_d1] = values
+
+    # Create layouts
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[8, 4], warps_per_cta=[1, 1], order=[1, 0])
+    layout_1d = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[1], order=[0])
+    shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    # Launch kernel
+    shared_scatter_kernel[(1, )](
+        indices_d0,
+        indices_d1,
+        values,
+        output,
+        N=N,
+        M=M,
+        layout_2d=layout_2d,
+        layout_1d=layout_1d,
+        shared_layout=shared_layout,
+        num_warps=1,
+    )
+
+    torch.testing.assert_close(output, expected)

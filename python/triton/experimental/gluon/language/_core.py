@@ -299,6 +299,24 @@ class shared_memory_descriptor(base_value):
         return _semantic.shared_gather(self, indices_d0, indices_d1)
 
     @builtin
+    def scatter(self, indices_d0, indices_d1, values, _semantic: GluonSemantic = None):
+        """
+        Scatter elements to a 2D shared memory descriptor using two 1D index tensors.
+
+        For each element i, stores smem[indices_d0[i], indices_d1[i]] = values[i]. The
+        two index tensors and the values tensor must have the same shape and distributed
+        layout.
+
+        Args:
+            indices_d0 (tensor): 1D tensor with indices for dimension 0.
+            indices_d1 (tensor): 1D tensor with indices for dimension 1.
+            values (tensor): 1D tensor with values to scatter.
+        """
+        indices_d0 = _unwrap_if_constexpr(indices_d0)
+        indices_d1 = _unwrap_if_constexpr(indices_d1)
+        values = _unwrap_if_constexpr(values)
+        return _semantic.shared_scatter(self, indices_d0, indices_d1, values)
+
     def slice(self, start, length, dim=0, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """
         Create a subview of shared memory by slicing along a given dimension.
