@@ -12,7 +12,6 @@ from triton.language.target_info import (
 
 from triton.language.target_info import cuda_capability_geq as _cuda_capability_geq
 
-
 __all__ = [
     "cuda_capability_geq",
     "get_cdna_version",
