@@ -97,8 +97,7 @@ def reduce_scatter(
         if metadata.mode == "ep_sharding":
             if dim != 0 or op != dist.ReduceOp.SUM:
                 raise NotImplementedError("Only dim=0 and op=SUM are supported for MoE reduce_scatter.")
-            output = convert_ep_to_dp(input_tensor, expt_assignment, metadata.active_indx, metadata.dispatch_indx,
-                                      metadata.combine_indx)
+            output = convert_ep_to_dp(input_tensor, expt_assignment, metadata.active_indx, metadata.combine_indx)
             # weighted average of the output token from experts
             output = output.view(-1, n_expts_act, output.shape[-1])
             output, _ = reduce(output, dim=1)
