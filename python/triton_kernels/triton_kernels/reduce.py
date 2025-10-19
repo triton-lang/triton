@@ -95,13 +95,13 @@ def _reduce(X, stride_xr, stride_x0, stride_x1,  # x tensor (input)
     tl.store(y_ptrs, y, mask=valid_s0[:, None] & valid_y_s1[None, :])
 
 
-specialization_module = SpecializationModule(
+specializations = SpecializationModule(
     "reduce",
     kernels=[("_reduce", _reduce)],
-    closure_args=[
-        ClosureArg("POSTPROCESS_FN1", "postprocess_fn1_args"),
-        ClosureArg("POSTPROCESS_FN2", "postprocess_fn2_args"),
-    ],
+    closure_args={
+        "postprocess_fn1": ClosureArg("POSTPROCESS_FN1", "postprocess_fn1_args"),
+        "postprocess_fn2": ClosureArg("POSTPROCESS_FN2", "postprocess_fn2_args"),
+    },
 )
 
 
@@ -214,7 +214,8 @@ def reduce(
     grid = (triton.cdiv(S0, BLOCK_S0), triton.cdiv(Y_S1, BLOCK_Y_S1))
     mask_arg = mask if mask is not None else x
     scale_arg = scale if scale is not None else x
-    reduce_kernel = specialization_module.get([postprocess_fn1.specs, postprocess_fn2.specs])._reduce
+    reduce_kernel = specializations.get(postprocess_fn1=postprocess_fn1.specs,
+                                        postprocess_fn2=postprocess_fn2.specs)._reduce
     reduce_kernel[grid](
         x, stride_xr, stride_x0, stride_x1,  #
         x_mxscale, stride_xmxr, stride_xmx0, stride_xmx1,  #

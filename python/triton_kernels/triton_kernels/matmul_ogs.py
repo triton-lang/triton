@@ -86,12 +86,12 @@ class FusedComm:
     reduce_rank: int = 0
     n_reduce_shards: int = 1
 
-specialization_module = SpecializationModule("matmul_ogs",
+specializations = SpecializationModule("matmul_ogs",
     kernels=[("_matmul_ogs", _matmul_ogs), ("_p_matmul_ogs", _p_matmul_ogs)],
-    closure_args=[
-        ClosureArg("EPILOGUE_FN", "epilogue_fn_args"),
-        ClosureArg("ACTIVATION_FN", "activation_fn_args"), #
-    ],
+    closure_args={
+        "epilogue": ClosureArg("EPILOGUE_FN", "epilogue_fn_args"), #
+        "activation": ClosureArg("ACTIVATION_FN", "activation_fn_args"), #
+    },
 )
 # -----------------------------------------------------------------------------
 #                    Matrix Multiplication + Outer Gather/Scatter
@@ -536,7 +536,7 @@ def matmul_ogs(x, w, bias,
     out_matmul_scale_strides = out_matmul_scale.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = (0, ) * (4 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
     # launch kernel
-    kernels = specialization_module.get([epilogue.specs, matmul_fused_activation.specs])
+    kernels = specializations.get(epilogue=epilogue.specs, activation=matmul_fused_activation.specs)
     # When stride(-2) == stride(-1) == 1, it's ambiguous whether W is transposed
     # (i.e. col-wise). Since this matters when w_has_mx is True and w_transpose
     # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.

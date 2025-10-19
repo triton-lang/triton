@@ -173,20 +173,23 @@ class ClosureArg:
 
 class SpecializationModule:
 
-    def __init__(self, module_name: str, kernels: list[tuple[str, object]], closure_args: list[ClosureArg]):
+    def __init__(self, module_name: str, kernels: list[tuple[str, object]], closure_args: dict[str, ClosureArg]):
         self.module_name = module_name
         self.kernels = kernels
         self.closure_args = closure_args
         self._modules = dict()
 
-    def get(self, specs: list[FnSpecs]):
+    def get(self, **kwargs):
         import types
         import sys
+        specs = [FnSpecs.default()] * len(self.closure_args)
+        for key, value in kwargs.items():
+            specs[list(self.closure_args.keys()).index(key)] = value
         key = tuple(spec.name for spec in specs)
         if key in self._modules:
             return self._modules[key]
-        spec_constants = {arg.fn_name: spec.fn for arg, spec in zip(self.closure_args, specs)}
-        spec_tuples = {arg.fn_params_name: spec.fn_arg_names for arg, spec in zip(self.closure_args, specs)}
+        spec_constants = {arg.fn_name: spec.fn for arg, spec in zip(self.closure_args.values(), specs)}
+        spec_tuples = {arg.fn_params_name: spec.fn_arg_names for arg, spec in zip(self.closure_args.values(), specs)}
         do_not_specialize = []
         for spec in specs:
             do_not_specialize.extend(spec.fn_arg_do_not_specialize)
