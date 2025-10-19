@@ -423,6 +423,36 @@ def TTG_LocalGatherOp : TTG_Op<"local_gather", [LocalLoadTrait]> {
   let hasVerifier = 1;
 }
 
+def TTG_LocalScatterOp : TTG_Op<"local_scatter"> {
+  let summary = "Scatter elements to 2D shared memory using two 1D index tensors";
+
+  let description = [{
+    Scatter elements to a 2D shared memory descriptor using two 1D index tensors
+    that specify the coordinates. For each element i, stores dst[indices_d0[i], indices_d1[i]] = values[i].
+
+    The two index tensors and the values tensor must have the same shape and distributed layout.
+
+    This is the inverse of local_gather - it writes to shared memory at runtime-computed indices.
+  }];
+  let arguments = (ins
+    Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst,
+    TT_Tensor:$values,
+    TT_IntTensor:$indices_d0,
+    TT_IntTensor:$indices_d1,
+    Optional<TTG_AsyncToken>:$token
+  );
+
+  let builders = [
+      OpBuilder<(ins "Value":$dst, "Value":$values, "Value":$indicesD0, "Value":$indicesD1),
+      [{
+      build($_builder, $_state, dst, values, indicesD0, indicesD1, /*token=*/static_cast<mlir::Value>(nullptr));
+      }]>];
+
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
+  let assemblyFormat = [{$dst `[` $indices_d0 `,` $indices_d1 `]` `,` $values (`token` $token^)? attr-dict `:` qualified(type($dst)) `,` type($indices_d0) `,` type($indices_d1) `,` type($values)}];
+  let hasVerifier = 1;
+}
+
 def TTG_PredicateStageOp: TTG_Op<"predicate_stage",
                                 [Pure, AllTypesMatch<["iv", "ub", "step"]>]> {
   let summary = "pipeliner stage predicate";

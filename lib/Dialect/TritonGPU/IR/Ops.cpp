@@ -840,6 +840,75 @@ LogicalResult LocalGatherOp::verify() {
   return success();
 }
 
+// LocalScatterOp
+LogicalResult LocalScatterOp::verify() {
+  auto dstTy = getDst().getType();
+  auto valuesTy = cast<RankedTensorType>(getValues().getType());
+  auto indicesD0Ty = cast<RankedTensorType>(getIndicesD0().getType());
+  auto indicesD1Ty = cast<RankedTensorType>(getIndicesD1().getType());
+
+  // Verify destination is 2D
+  if (dstTy.getRank() != 2) {
+    return emitError("destination memdesc must be 2D (rank 2), got rank ")
+           << dstTy.getRank();
+  }
+
+  // Verify destination has shared memory encoding
+  auto dstEnc = dstTy.getEncoding();
+  if (!isa<SharedEncodingTrait>(dstEnc)) {
+    return emitError("destination must have shared memory encoding");
+  }
+
+  // Verify values tensor is 1D
+  if (valuesTy.getRank() != 1) {
+    return emitError("values must be 1D (rank 1), got rank ")
+           << valuesTy.getRank();
+  }
+
+  // Verify both index tensors are 1D
+  if (indicesD0Ty.getRank() != 1) {
+    return emitError("indices_d0 must be 1D (rank 1), got rank ")
+           << indicesD0Ty.getRank();
+  }
+  if (indicesD1Ty.getRank() != 1) {
+    return emitError("indices_d1 must be 1D (rank 1), got rank ")
+           << indicesD1Ty.getRank();
+  }
+
+  // Verify both index tensors have integer element type
+  if (!indicesD0Ty.getElementType().isInteger()) {
+    return emitError("indices_d0 must have integer element type");
+  }
+  if (!indicesD1Ty.getElementType().isInteger()) {
+    return emitError("indices_d1 must have integer element type");
+  }
+
+  // Verify all tensors have the same shape
+  if (indicesD0Ty.getShape()[0] != indicesD1Ty.getShape()[0]) {
+    return emitError("indices_d0 and indices_d1 must have the same shape: got ")
+           << indicesD0Ty.getShape()[0] << " and " << indicesD1Ty.getShape()[0];
+  }
+  if (valuesTy.getShape()[0] != indicesD0Ty.getShape()[0]) {
+    return emitError("values size must match indices size: expected ")
+           << indicesD0Ty.getShape()[0] << ", got " << valuesTy.getShape()[0];
+  }
+
+  // Verify index tensors and values have the same layout
+  if (indicesD0Ty.getEncoding() != indicesD1Ty.getEncoding()) {
+    return emitError("indices_d0 and indices_d1 must have the same layout");
+  }
+  if (valuesTy.getEncoding() != indicesD0Ty.getEncoding()) {
+    return emitError("values must have the same layout as indices");
+  }
+
+  // Verify element types match
+  if (dstTy.getElementType() != valuesTy.getElementType()) {
+    return emitError("values element type must match destination element type");
+  }
+
+  return success();
+}
+
 // AsyncCopyGlobalToLocalOp
 LogicalResult AsyncCopyGlobalToLocalOp::verify() {
   if (!getResult().getType().getMutableMemory())

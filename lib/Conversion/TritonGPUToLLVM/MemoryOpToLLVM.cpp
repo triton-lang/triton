@@ -321,6 +321,96 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+struct LocalScatterOpConversion
+    : public ConvertOpToLLVMPattern<LocalScatterOp> {
+public:
+  LocalScatterOpConversion(LLVMTypeConverter &typeConverter,
+                           const TargetInfoBase &targetInfo,
+                           PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
+
+  LogicalResult
+  matchAndRewrite(LocalScatterOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = op.getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto memDescVal = op.getDst();
+    auto memDescTy = cast<MemDescType>(memDescVal.getType());
+    auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
+    auto typeConverter = getTypeConverter();
+
+    auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
+                                                         llvmElemTy, rewriter);
+
+    // Get the shared memory layout and invert it: (dim0, dim1) → offset
+    auto sharedEnc =
+        cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
+    LinearLayout sharedLayout;
+    auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
+    if (paddedEnc) {
+      sharedLayout = paddedEnc.getLinearComponent();
+    } else {
+      sharedLayout = toLinearLayout(memDescTy);
+    }
+
+    // Invert: (dim0, dim1) → offset
+    LinearLayout invSharedLayout = sharedLayout.invert();
+
+    // Unpack the runtime values and index values
+    SmallVector<Value> values =
+        unpackLLElements(loc, adaptor.getValues(), rewriter);
+    SmallVector<Value> indicesD0 =
+        unpackLLElements(loc, adaptor.getIndicesD0(), rewriter);
+    SmallVector<Value> indicesD1 =
+        unpackLLElements(loc, adaptor.getIndicesD1(), rewriter);
+
+    assert(indicesD0.size() == indicesD1.size() &&
+           indicesD0.size() == values.size() &&
+           "index tensors and values must have same size");
+
+    auto kDim0 = str_attr("dim0");
+    auto kDim1 = str_attr("dim1");
+    auto kOffset = str_attr("offset");
+    auto kBlock = str_attr("block");
+
+    // For each element, compute offset and store value
+    for (size_t i = 0; i < indicesD0.size(); ++i) {
+      // Apply inverted shared layout to runtime values: (d0, d1) → (offset,
+      // block)
+      SmallVector<std::pair<StringAttr, Value>> inputs;
+      inputs.push_back({kDim0, indicesD0[i]});
+      inputs.push_back({kDim1, indicesD1[i]});
+
+      auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
+
+      // Extract the offset value (ignore block dimension, assuming single
+      // block)
+      Value offset = nullptr;
+      for (auto [name, value] : outputs) {
+        if (name == kOffset) {
+          offset = value;
+          break;
+        }
+      }
+      assert(offset && "expected offset output from inverted shared layout");
+
+      // Store to shared memory at the computed offset
+      Value ptr = b.gep(smemObj.getBase().getType(), llvmElemTy,
+                        smemObj.getBase(), offset);
+      b.store(values[i], ptr);
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
+
 class LocalBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalBarrierOp> {
 public:
@@ -351,6 +441,7 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<LocalScatterOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalBarrierOpConversion>(typeConverter, benefit);
 }
