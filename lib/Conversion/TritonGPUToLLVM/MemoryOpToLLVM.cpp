@@ -232,6 +232,95 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+struct LocalGatherOpConversion : public ConvertOpToLLVMPattern<LocalGatherOp> {
+public:
+  LocalGatherOpConversion(LLVMTypeConverter &typeConverter,
+                          const TargetInfoBase &targetInfo,
+                          PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
+
+  LogicalResult
+  matchAndRewrite(LocalGatherOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = op.getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto memDescVal = op.getSrc();
+    auto memDescTy = cast<MemDescType>(memDescVal.getType());
+    auto regTy = cast<RankedTensorType>(op.getType());
+    auto typeConverter = getTypeConverter();
+
+    auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                         llvmElemTy, rewriter);
+
+    // Get the shared memory layout and invert it: (dim0, dim1) → offset
+    auto sharedEnc =
+        cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
+    LinearLayout sharedLayout;
+    auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
+    if (paddedEnc) {
+      sharedLayout = paddedEnc.getLinearComponent();
+    } else {
+      sharedLayout = toLinearLayout(memDescTy);
+    }
+
+    // Invert: (dim0, dim1) → offset
+    LinearLayout invSharedLayout = sharedLayout.invert();
+
+    // Unpack the runtime index values from the two index tensors
+    SmallVector<Value> indicesD0 =
+        unpackLLElements(loc, adaptor.getIndicesD0(), rewriter);
+    SmallVector<Value> indicesD1 =
+        unpackLLElements(loc, adaptor.getIndicesD1(), rewriter);
+
+    assert(indicesD0.size() == indicesD1.size() &&
+           "index tensors must have same size");
+
+    auto kDim0 = str_attr("dim0");
+    auto kDim1 = str_attr("dim1");
+    auto kOffset = str_attr("offset");
+    auto kBlock = str_attr("block");
+
+    // For each output element, apply the inverted layout to runtime indices
+    SmallVector<Value> results(indicesD0.size());
+    for (size_t i = 0; i < indicesD0.size(); ++i) {
+      // Apply inverted shared layout to runtime values: (d0, d1) → (offset,
+      // block)
+      SmallVector<std::pair<StringAttr, Value>> inputs;
+      inputs.push_back({kDim0, indicesD0[i]});
+      inputs.push_back({kDim1, indicesD1[i]});
+
+      auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
+
+      // Extract the offset value (ignore block dimension, assuming single
+      // block)
+      Value offset = nullptr;
+      for (auto [name, value] : outputs) {
+        if (name == kOffset) {
+          offset = value;
+          break;
+        }
+      }
+      assert(offset && "expected offset output from inverted shared layout");
+
+      // Load from shared memory at the computed offset
+      Value ptr = b.gep(smemObj.getBase().getType(), llvmElemTy,
+                        smemObj.getBase(), offset);
+      results[i] = b.load(llvmElemTy, ptr);
+    }
+
+    Value result = packLLElements(loc, typeConverter, results, rewriter, regTy);
+    rewriter.replaceOp(op, result);
+
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
+
 class LocalBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalBarrierOp> {
 public:
@@ -261,6 +350,7 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalBarrierOpConversion>(typeConverter, benefit);
 }
