@@ -217,9 +217,9 @@ def reduce(
     reduce_kernel = specializations.get(postprocess_fn1=postprocess_fn1.specs,
                                         postprocess_fn2=postprocess_fn2.specs)._reduce
     reduce_kernel[grid](
-        x, stride_xr, stride_x0, stride_x1,  #
+        x_flex.reinterpret(x), stride_xr, stride_x0, stride_x1,  #
         x_mxscale, stride_xmxr, stride_xmx0, stride_xmx1,  #
-        y, y.stride(0), y.stride(1),  #
+        y_flex.reinterpret(y), y.stride(0), y.stride(1),  #
         y_mxscale, stride_ymx0, stride_ymx1,  #
         mask_arg, stride_mr, stride_m0, stride_m1,  #
         scale_arg, stride_sr, stride_s0, stride_s1,  #

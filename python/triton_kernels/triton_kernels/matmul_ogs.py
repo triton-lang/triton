@@ -236,12 +236,12 @@ def init_allocation(x, w, precision_config, fused_activation,
     # if the activations are gathered, then M is number of gather indices
     if gather_indx is not None:
         M = gather_indx.src_indx.shape[0]
-    # final output
-    if routing_data.n_expts_act == 1 or scatter_indx is None:
+    if scatter_indx is not None:
+        M = scatter_indx.src_indx.shape[0]
+    if scatter_indx is None:
         y_rows = M
     else:
-        Mc = scatter_indx.src_indx.shape[0] // routing_data.n_expts_act # compressed number of rows
-        y_rows = Mc
+        y_rows = M // routing_data.n_expts_act
     y_rows *= n_reduce_shards
     if inner_routing_data is not None:
         batch_dim = inner_routing_data.base.n_expts_tot
