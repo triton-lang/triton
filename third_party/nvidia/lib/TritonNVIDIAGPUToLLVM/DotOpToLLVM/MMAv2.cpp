@@ -575,7 +575,8 @@ static void callMmaAmpereFp64(PTXBuilder &builder, int b,
                               mlir::triton::PTXInstr &mma, unsigned numMmaRets,
                               unsigned colsPerThread, int numCPackedElem,
                               unsigned batchOffset, ValueTableV2 &ha,
-                              ValueTableV2 &hb, const SmallVector<Value> &fc) {
+                              ValueTableV2 &hb, const SmallVector<Value> &fc,
+                              int kRegs) {
   auto retArgs1 = builder.newListOperand(numMmaRets / 2, "=d");
   auto retArgs2 = builder.newListOperand(numMmaRets / 2, "=d");
   auto cArgs1 = builder.newListOperand();
@@ -594,7 +595,6 @@ static void callMmaAmpereFp64(PTXBuilder &builder, int b,
         std::to_string(i)));
     // reuse the output registers
   }
-  const int kRegs = 4;
   for (int vk = 0; vk < kRegs; ++vk) {
     auto aArgs1 = builder.newListOperand({
         {ha[{b, base.m, base.k + vk}], "d"},
@@ -826,7 +826,8 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   TensorCoreType mmaType = getMmaTypeDot(op, aTensorTy, bTensorTy, dTensorTy);
 
-  NumRegisters numRegisters = {2, 1, 2};
+  bool isFp64Path = (mmaType == TensorCoreType::FP64_FP64_FP64_FP64);
+  NumRegisters numRegisters = {2, 1, isFp64Path ? 4 : 2};
 
   const auto &instrMap =
       isTuring ? mmaInstrPtxTuring
@@ -854,7 +855,8 @@ LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
       if (isFp64MMA) {
         if (!isHopperF64) {
           callMmaAmpereFp64(builder, b, base, mma, numMmaRets, colsPerThread,
-                            numCPackedElem, batchOffset, ha, hb, fc);
+                            numCPackedElem, batchOffset, ha, hb, fc,
+                            /*kRegs*/ 4);
         } else {
           callMmaV2(builder, b, base, mma, numMmaRets, colsPerThread,
                     numCPackedElem, batchOffset, ha, hb, fc, "=d", "d",
