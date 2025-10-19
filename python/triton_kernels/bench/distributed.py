@@ -96,7 +96,8 @@ def reduce_scatter(
         if expt_assignment is not None:
             if dim != 0 or op != dist.ReduceOp.SUM:
                 raise NotImplementedError("Only dim=0 and op=SUM are supported for MoE reduce_scatter.")
-            output = convert_ep_to_dp(input_tensor, expt_assignment, expt_assignment.active_indx, expt_assignment.combine_indx)
+            output = convert_ep_to_dp(input_tensor, expt_assignment, expt_assignment.active_indx,
+                                      expt_assignment.combine_indx)
             # weighted average of the output token from experts
             output = output.view(-1, n_expts_act, output.shape[-1])
             output, _ = reduce(output, dim=1)
@@ -109,16 +110,8 @@ def reduce_scatter(
 
 # TODO: support TP > 1
 # TODO: clean up duplicate code with triton_kernels.test_distributed.py
-def routing(
-    logits,
-    n_expts_act,
-    sm_first: bool = False,
-    y_indx: Optional[torch.Tensor] = None,
-    EP: int = 1,
-    TP: int = 1,
-    expt_assignment: Optional[ExptAssignment] = None,
-    mode: str = "ep_sharding"
-):
+def routing(logits, n_expts_act, sm_first: bool = False, y_indx: Optional[torch.Tensor] = None, EP: int = 1,
+            TP: int = 1, expt_assignment: Optional[ExptAssignment] = None, mode: str = "ep_sharding"):
     if _is_distributed_launch():
         rank, world_size = setup()
         if mode == "ep_sharding":
@@ -141,7 +134,7 @@ def routing(
             logits_global_metadata = make_ragged_tensor_metadata(expt_sizes, dispatch_indx.shape[0])
             logits_local = convert_dp_to_ep(logits_global, expt_assignment, active_indx, dispatch_indx)
             logits_local_metadata = remap_ragged_tensor_metadata(logits_global_metadata, expt_map)
-            n_expts_tot=expt_assignment.expt_map.size(1)
+            n_expts_tot = expt_assignment.expt_map.size(1)
             gate_scal = logits.vals.flatten()[combine_indx]
             rdata_ep_local = RoutingData(gate_scal, expt_sizes, n_expts_tot, n_expts_act, logits_local_metadata)
             gather_idx = GatherIndx(combine_indx, dispatch_indx)
@@ -156,7 +149,7 @@ def routing(
         ragged_batch_metadata = make_ragged_tensor_metadata(logits.mask_metadata.col_sum, dispatch_indx.shape[0])
         gate_scal = logits.vals.flatten()[combine_indx]
         routing_data = RoutingData(gate_scal, ragged_batch_metadata.slice_sizes, logits.shape[-1], n_expts_act,
-                                ragged_batch_metadata)
+                                   ragged_batch_metadata)
         gather_idx = GatherIndx(combine_indx, dispatch_indx)
         scatter_idx = ScatterIndx(dispatch_indx, combine_indx)
         return logits, routing_data, gather_idx, scatter_idx, logits.indx
