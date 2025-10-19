@@ -110,46 +110,42 @@ def reduce_scatter(
 
 # TODO: support TP > 1
 # TODO: clean up duplicate code with triton_kernels.test_distributed.py
+# TODO: Support nonuniform expert assignment
 def routing(
     x, logits, n_expts_act, sm_first: bool = False, y_indx: Optional[torch.Tensor] = None, EP: int = 1, TP: int = 1,
     expt_assignment: Optional[ExptAssignment] = None, mode: str = "ep_sharding"
 ) -> Tuple[torch.Tensor, RoutingData, GatherIndx, ScatterIndx, Optional[ReduceScatterMetadata]]:
     n_expts_tot = logits.shape[-1]
-    if expt_assignment:
+    if mode == "ep_sharding":
+        if TP > 1:
+            raise NotImplementedError("TP > 1 is not supported in distributed MoE benchmark yet.")
         rank = dist.get_rank()
-        if mode == "ep_sharding":
-            if TP > 1:
-                raise NotImplementedError("TP > 1 is not supported in distributed MoE benchmark yet.")
-            expt_map = expt_assignment.expt_map[rank, :]
-            logits_global = topk(
-                logits,
-                n_expts_act,
-                apply_softmax=not sm_first,
-                y_indx=y_indx,
-                all_gather=True,
-            )
-            active_indx = logits_global.indx
-            expt_sizes = logits_global.mask_metadata.col_sum
-            dispatch_indx = logits_global.mask_metadata.col_sorted_indx
-            combine_indx = logits_global.mask_metadata.row_sorted_indx
-            logits_global_metadata = make_ragged_tensor_metadata(expt_sizes, dispatch_indx.shape[0])
-            x = convert_dp_to_ep(x, expt_assignment, active_indx, dispatch_indx)
-            logits_local_metadata = remap_ragged_tensor_metadata(logits_global_metadata, expt_map)
-            gate_scal = logits_global.vals.flatten()[combine_indx]
-            rdata = RoutingData(gate_scal, expt_sizes, n_expts_tot, n_expts_act, logits_local_metadata)
-            gather_indx = GatherIndx(combine_indx, dispatch_indx)
-            scatter_indx = ScatterIndx(dispatch_indx, combine_indx)
-            reduce_scatter_metadata = ReduceScatterMetadata(
-                mode=mode,
-                active_indx=active_indx,
-                dispatch_indx=dispatch_indx,
-                combine_indx=combine_indx,
-            )
-            return x, rdata, None, None, reduce_scatter_metadata
-        else:
-            raise NotImplementedError(f"Distributed routing mode {mode} is not implemented yet.")
+        expt_map = expt_assignment.expt_map[rank, :]
+        logits_global = topk(
+            logits,
+            n_expts_act,
+            apply_softmax=not sm_first,
+            y_indx=y_indx,
+            all_gather=True,
+        )
+        active_indx = logits_global.indx
+        expt_sizes = logits_global.mask_metadata.col_sum
+        dispatch_indx = logits_global.mask_metadata.col_sorted_indx
+        combine_indx = logits_global.mask_metadata.row_sorted_indx
+        logits_global_metadata = make_ragged_tensor_metadata(expt_sizes, dispatch_indx.shape[0])
+        x = convert_dp_to_ep(x, expt_assignment, active_indx, dispatch_indx)
+        logits_local_metadata = remap_ragged_tensor_metadata(logits_global_metadata, expt_map)
+        gate_scal = logits_global.vals.flatten()[combine_indx]
+        rdata = RoutingData(gate_scal, expt_sizes, n_expts_tot // EP, n_expts_act, logits_local_metadata)
+        reduce_scatter_metadata = ReduceScatterMetadata(
+            mode=mode,
+            active_indx=active_indx,
+            dispatch_indx=dispatch_indx,
+            combine_indx=combine_indx,
+        )
+        return x, rdata, None, None, reduce_scatter_metadata
     else:
-        logits = topk(logits, n_expts_act, y_indx=y_indx)
+        logits = topk(logits, n_expts_act, y_indx=y_indx, apply_softmax=not sm_first)
         dispatch_indx = logits.mask_metadata.col_sorted_indx
         combine_indx = logits.mask_metadata.row_sorted_indx
         ragged_batch_metadata = make_ragged_tensor_metadata(logits.mask_metadata.col_sum, dispatch_indx.shape[0])
