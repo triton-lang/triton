@@ -720,15 +720,17 @@ def matmul_ogs(x, w, bias,
         out_split_k_dtype = out_matmul.dtype if scatter_indx is not None else memory["output"].dtype
         out_split_k_flex = OutFlexData() if out_split_k_dtype == torch.float32 else precision_config.flex_ctx.out_data
         out_split_k_shape = out_matmul.shape[1:-1] + (out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n,)
-        out_matmul = reduce(out_matmul.view(opt_flags.split_k, 1, -1), dim=0, postprocess_fn=postprocess_fn, y_dtype=out_split_k_dtype, y_flex=out_split_k_flex)[0]
+        out_matmul = reduce(out_matmul.view(opt_flags.split_k, 1, -1), dim=0, postprocess_fn1=postprocess_fn, y_dtype=out_split_k_dtype, y_flex=out_split_k_flex)[0]
         out_matmul = out_matmul.view(*out_split_k_shape).unsqueeze(0)
         reduce_fused_activation = FusedActivation()
     if scatter_indx is not None:
         out_matmul = out_matmul.view(out_matmul.shape[-2]//routing_data.n_expts_act, routing_data.n_expts_act, -1)
         postprocess_fn = ReducePostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
         x_flex = InFlexData(dtype=out_matmul_flex.dtype, scale=out_matmul_flex.expected_scale)
-        out_final, out_final_mx_scale = reduce(out_matmul, dim=1, postprocess_fn=postprocess_fn, x_flex=x_flex, #
+        out_final, out_final_mx_scale = reduce(out_matmul, dim=1, postprocess_fn2=postprocess_fn, x_flex=x_flex, #
                                                y=memory["output"].squeeze(0).squeeze(0),
+                                               x_mxscale=out_matmul_scale.squeeze(1) if out_matmul_has_mx else None,
+                                               y_mxscale=precision_config.out_scale,
                                                y_flex=precision_config.flex_ctx.out_data)
         out_final = out_final.unsqueeze(0)
     else:
