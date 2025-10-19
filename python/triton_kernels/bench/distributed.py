@@ -23,10 +23,10 @@ from bench_utils import quantize_weight
 
 @dataclass
 class ReduceScatterMetadata:
-    input_split_sizes: list[int]
-    ep_indx: torch.Tensor
-    EP: int = 1
-    TP: int = 1
+    mode: str = "ep_sharding"
+    active_indx: torch.Tensor
+    dispatch_indx: torch.Tensor
+    combine_indx: torch.Tensor
 
 
 def _is_distributed_launch() -> bool:
@@ -88,22 +88,23 @@ def all_gather(x: torch.Tensor, dim=0) -> torch.Tensor:
 def reduce_scatter(
     input_tensor: torch.Tensor,
     n_expts_act: int,
+    metadata: ReduceScatterMetadata,
     expt_assignment: Optional[ExptAssignment] = None,
     dim: int = 0,
     op: dist.ReduceOp.RedOpType = dist.ReduceOp.SUM,
 ) -> torch.Tensor:
     if _is_distributed_launch():
-        if expt_assignment is not None:
+        if metadata.mode == "ep_sharding":
             if dim != 0 or op != dist.ReduceOp.SUM:
                 raise NotImplementedError("Only dim=0 and op=SUM are supported for MoE reduce_scatter.")
-            output = convert_ep_to_dp(input_tensor, expt_assignment, expt_assignment.active_indx,
-                                      expt_assignment.combine_indx)
+            output = convert_ep_to_dp(input_tensor, expt_assignment, metadata.active_indx, metadata.dispatch_indx,
+                                      metadata.combine_indx)
             # weighted average of the output token from experts
             output = output.view(-1, n_expts_act, output.shape[-1])
             output, _ = reduce(output, dim=1)
             return output
         else:
-            raise NotImplementedError("General reduce_scatter is not implemented yet.")
+            raise NotImplementedError(f"Distributed reduce_scatter mode {metadata.mode} is not implemented yet.")
     else:
         return input_tensor
 
@@ -139,7 +140,13 @@ def routing(logits, n_expts_act, sm_first: bool = False, y_indx: Optional[torch.
             rdata_ep_local = RoutingData(gate_scal, expt_sizes, n_expts_tot, n_expts_act, logits_local_metadata)
             gather_idx = GatherIndx(combine_indx, dispatch_indx)
             scatter_idx = ScatterIndx(dispatch_indx, combine_indx)
-            return logits_local, rdata_ep_local, gather_idx, scatter_idx, active_indx
+            reduce_scatter_metadata = ReduceScatterMetadata(
+                mode=mode,
+                active_indx=active_indx,
+                dispatch_indx=dispatch_indx,
+                combine_indx=combine_indx,
+            )
+            return logits_local, rdata_ep_local, gather_idx, scatter_idx, reduce_scatter_metadata
         else:
             raise NotImplementedError(f"Distributed routing mode {mode} is not implemented yet.")
     else:
@@ -152,7 +159,7 @@ def routing(logits, n_expts_act, sm_first: bool = False, y_indx: Optional[torch.
                                    ragged_batch_metadata)
         gather_idx = GatherIndx(combine_indx, dispatch_indx)
         scatter_idx = ScatterIndx(dispatch_indx, combine_indx)
-        return logits, routing_data, gather_idx, scatter_idx, logits.indx
+        return logits, routing_data, gather_idx, scatter_idx, None
 
 
 def gather_ep(rank, world_size, param, TP, EP):
@@ -278,7 +285,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
             rdata = gi = si = metadata = None
         x = matmul_ogs(x, w1, b1, rdata, gather_indx=gi, precision_config=pc1, fused_activation=act)
         x = matmul_ogs(x, w2, b2 if rank % TP == 0 else None, rdata, scatter_indx=si, precision_config=pc2)
-        x = reduce_scatter(x, metadata=metadata, dim=0)
+        x = reduce_scatter(x, n_expts_act, metadata=metadata, expt_assignment=expt_assignment)
         # gather the result from all GPUs, just for verification
         return all_gather(x, dim=0)
 
