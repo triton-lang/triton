@@ -116,7 +116,7 @@ def routing(
     expt_assignment: Optional[ExptAssignment] = None, mode: str = "ep_sharding"
 ) -> Tuple[torch.Tensor, RoutingData, GatherIndx, ScatterIndx, Optional[ReduceScatterMetadata]]:
     n_expts_tot = logits.shape[-1]
-    if mode == "ep_sharding":
+    if mode == "ep_sharding" and expt_assignment:
         if TP > 1:
             raise NotImplementedError("TP > 1 is not supported in distributed MoE benchmark yet.")
         rank = dist.get_rank()
