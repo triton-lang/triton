@@ -327,87 +327,6 @@ def _canonicalize_storage(storage, out_ndim, flex_data):
         new_storage_data = flex_data.reinterpret(new_storage_data)
     return Storage(new_storage_data, storage.layout)
 
-#
-
-def reduce_grouped(x: torch.Tensor, indx: torch.Tensor, out: torch.Tensor, out_mx_scale: torch.Tensor,
-                   fused_activation, epilogue,
-                   x_flex: InFlexData | None = None,
-                   out_flex: OutFlexData | None = None, x_mx_scale: torch.Tensor | None = None,
-                   out_dtype: bool = None, flexpoint_saturate_inf: bool = False):
-    """
-    In-place grouped row reduction.
-
-    Arguments
-    - x: Tensor[AnyFloat] of shape [(num_groups * K), N]
-    - indx: Tensor[Int] of shape [num_groups, K]
-
-    Description
-    For each group g in [0, num_groups), this routine sums the K rows of `x`
-    specified by `indx[g, :]` and overwrites the row corresponding to the first
-    valid (non-negative) index with the per-group sum. Accumulation is performed
-    in float32 for numerical stability, and the result is written back in the
-    dtype of `x`.
-
-    Behavior and edge cases
-    - Invalid (-1) entries are skipped during accumulation and do not generate
-      memory traffic. If a group has no valid entries, nothing is written for
-      that group.
-    - Reduction is performed tile-by-tile along the N dimension within a single
-      kernel launch (persistent along N) to minimize launch overhead.
-
-    Performance notes
-    - Memory traffic per group is approximately (valid_rows_read + 1) * N * sizeof(x),
-      plus index reads. With no invalid entries, this becomes (K + 1) reads/writes
-      of length N per group.
-
-    Returns
-    - The input tensor `x` (modified in place).
-    """
-    M = x.shape[2]  # Only used for per-batch flex scale.
-    if indx is None and x.shape[0] == 1:
-        return x.squeeze(0), None
-    if indx is not None:
-        num_groups = indx.shape[0]
-    else:
-        # Handle batched matmul (K, B, M, N) by pretending it to be (K, 1, B*M, N).
-        x = x.view(x.shape[0], 1, x.shape[1] * x.shape[2], x.shape[3])
-        num_groups = x.shape[-2]
-    if x_flex is None:
-        x_flex = InFlexData()
-    if out_flex is None:
-        out_flex = OutFlexData()
-    K = 1 if indx is None else indx.shape[1]
-    out_dtype = x.dtype if out_dtype is None else out_dtype
-    assert x.shape[-1] % fused_activation.specs.reduction_n == 0
-    BLOCK_N = 512
-    # Resolve scalar flex scales (may be None)
-    x_expected_scale = None if x_flex is None else x_flex.scale
-    out_expected_scale = None if out_flex is None else out_flex.expected_scale
-    out_actual_scale = None if out_flex is None else out_flex.actual_scale
-    out_checksum_scale = None if out_flex is None else out_flex.checksum_scale
-    # Resolve MXFP output scale row stride
-    stride_mxb = 0 if x_mx_scale is None else x_mx_scale.stride(0)
-    stride_mxs = 0 if x_mx_scale is None else x_mx_scale.stride(1)
-    stride_omxs = 0 if out_mx_scale is None else out_mx_scale.stride(0)
-    kernels = get_kernels(epilogue.specs, fused_activation.specs)
-    kernels._reduce_grouped[(num_groups, )](
-        x_flex.reinterpret(x), x.stride(0), x.stride(2), x.stride(3),  #
-        x_expected_scale,  # scalar input scale
-        out_flex.reinterpret(out), out.stride(1), out.stride(2),  #
-        out_expected_scale, out_actual_scale, out_checksum_scale,
-        out_flex is not None and out_flex.is_per_batch,
-        indx,
-        x.shape[0], M, x.shape[-1],  #
-        x_mx_scale, stride_mxb, stride_mxs,  #
-        out_mx_scale, stride_omxs,  #
-        *fused_activation.fn_args, fused_activation.specs.reduction_n,
-        *epilogue.fn_arg_values_finalize,
-        HAS_IN_MX_SCALE=x_mx_scale is not None, HAS_OUT_MX_SCALE=out_mx_scale is not None,
-        FLEXPOINT_SATURATE_INF=flexpoint_saturate_inf,  #
-        BLOCK_N=BLOCK_N, K=K,  #
-        num_warps=1,  #
-    )
-    return out, out_mx_scale
 
 # -----------------------------------------------------------------------------
 # Triton Implementation
@@ -742,21 +661,6 @@ def matmul_ogs(x, w, bias,
         out_final = out_final.unsqueeze(0)
     else:
         out_final = out_matmul.squeeze(0)
-        # memory["output"] = out_final
-    # group_indx = None if scatter_indx is None else torch.arange(out_matmul.shape[-2], device=out_matmul.device).view(-1, routing_data.n_expts_act)
-    # out_final, out_final_mx_scale = reduce_grouped(
-    #     out_matmul,
-    #     group_indx,
-    #     memory["output"].squeeze(0),
-    #     precision_config.out_scale,
-    #     reduce_fused_activation,
-    #     epilogue,
-    #     x_flex=InFlexData(dtype=out_matmul_flex.dtype, scale=out_matmul_flex.expected_scale),
-    #     out_flex=precision_config.flex_ctx.out_data,
-    #     x_mx_scale=out_matmul_scale.squeeze(1) if out_matmul_has_mx else None,
-    #     out_dtype=memory["output"].dtype,
-    #     flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf,
-    # )
     if not (is_input_batched or inner_routing_data is not None):
         out_final = out_final.squeeze(0)
     if out_final_mx_scale is not None:
