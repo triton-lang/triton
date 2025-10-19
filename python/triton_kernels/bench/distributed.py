@@ -24,9 +24,9 @@ from bench_utils import quantize_weight
 @dataclass
 class ReduceScatterMetadata:
     mode: str = "ep_sharding"
-    active_indx: torch.Tensor
-    dispatch_indx: torch.Tensor
-    combine_indx: torch.Tensor
+    active_indx: torch.Tensor = None
+    dispatch_indx: torch.Tensor = None
+    combine_indx: torch.Tensor = None
 
 
 def _is_distributed_launch() -> bool:
