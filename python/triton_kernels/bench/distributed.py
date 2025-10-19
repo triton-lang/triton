@@ -115,13 +115,11 @@ def routing(
     expt_assignment: Optional[ExptAssignment] = None, mode: str = "ep_sharding"
 ) -> Tuple[torch.Tensor, RoutingData, GatherIndx, ScatterIndx, Optional[ReduceScatterMetadata]]:
     n_expts_tot = logits.shape[-1]
-    if _is_distributed_launch():
+    if expt_assignment:
         rank = dist.get_rank()
         if mode == "ep_sharding":
             if TP > 1:
                 raise NotImplementedError("TP > 1 is not supported in distributed MoE benchmark yet.")
-            if expt_assignment is None:
-                raise ValueError("expt_assignment must be provided for distributed MoE routing.")
             expt_map = expt_assignment.expt_map[rank, :]
             logits_global = topk(
                 logits,
@@ -147,7 +145,7 @@ def routing(
                 dispatch_indx=dispatch_indx,
                 combine_indx=combine_indx,
             )
-            return x, rdata, gather_indx, scatter_indx, reduce_scatter_metadata
+            return x, rdata, None, None, reduce_scatter_metadata
         else:
             raise NotImplementedError(f"Distributed routing mode {mode} is not implemented yet.")
     else:
