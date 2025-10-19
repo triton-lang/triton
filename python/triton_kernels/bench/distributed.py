@@ -115,6 +115,7 @@ def routing(
     x, logits, n_expts_act, sm_first: bool = False, y_indx: Optional[torch.Tensor] = None, EP: int = 1, TP: int = 1,
     expt_assignment: Optional[ExptAssignment] = None, mode: str = "ep_sharding"
 ) -> Tuple[torch.Tensor, RoutingData, GatherIndx, ScatterIndx, Optional[ReduceScatterMetadata]]:
+    n_expts_tot = logits.shape[-1]
     if _is_distributed_launch():
         rank, _ = setup()
         if mode == "ep_sharding":
@@ -137,7 +138,6 @@ def routing(
             logits_global_metadata = make_ragged_tensor_metadata(expt_sizes, dispatch_indx.shape[0])
             x = convert_dp_to_ep(x, expt_assignment, active_indx, dispatch_indx)
             logits_local_metadata = remap_ragged_tensor_metadata(logits_global_metadata, expt_map)
-            n_expts_tot = expt_assignment.expt_map.size(1)
             gate_scal = logits_global.vals.flatten()[combine_indx]
             rdata_ep_local = RoutingData(gate_scal, expt_sizes, n_expts_tot, n_expts_act, logits_local_metadata)
             gather_indx = GatherIndx(combine_indx, dispatch_indx)
@@ -157,7 +157,7 @@ def routing(
         combine_indx = logits.mask_metadata.row_sorted_indx
         ragged_batch_metadata = make_ragged_tensor_metadata(logits.mask_metadata.col_sum, dispatch_indx.shape[0])
         gate_scal = logits.vals.flatten()[combine_indx]
-        routing_data = RoutingData(gate_scal, ragged_batch_metadata.slice_sizes, logits.shape[-1], n_expts_act,
+        routing_data = RoutingData(gate_scal, ragged_batch_metadata.slice_sizes, n_expts_tot, n_expts_act,
                                    ragged_batch_metadata)
         gather_indx = GatherIndx(combine_indx, dispatch_indx)
         scatter_indx = ScatterIndx(dispatch_indx, combine_indx)
