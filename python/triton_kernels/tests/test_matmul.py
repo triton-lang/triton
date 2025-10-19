@@ -324,7 +324,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
         if "float16" in act_dtype_str and "mx" in weight_dtype_str and torch.cuda.get_device_capability()[0] >= 10:
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
         if weight_dtype_str.startswith("mx"):
-            if "float8" in act_dtype_str and torch.cuda.get_device_capability()[0] < 10:
+            if "float8" in act_dtype_str and torch.cuda.get_device_capability()[0] != 10:
                 pytest.skip("float8 x mx not supported with cuda capability != 10")
         if n == 2880 and k == 2880 and torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("Not enough memory on A100")
