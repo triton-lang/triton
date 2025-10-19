@@ -543,7 +543,8 @@ def matmul_ogs(x, w, bias,
     # w_transpose = w_storage.data.stride()[-1] != 1
     w_transpose = w_storage.data.stride()[-2] == 1
     if gather_indx is not None:
-        gather_src_indx = gather_indx.src_indx // routing_data.n_expts_act
+        gather_src_indx = torch.where(gather_indx.src_indx == -1, -routing_data.n_expts_act, gather_indx.src_indx)
+        gather_src_indx = gather_src_indx // routing_data.n_expts_act
     fused_comm_kwargs = {
         "pYPtrs": fused_comm.out_handles,
         "ScatterShardIndx": fused_comm.scatter_shard_indx,
