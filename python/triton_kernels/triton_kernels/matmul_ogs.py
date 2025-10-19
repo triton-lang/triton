@@ -608,13 +608,15 @@ def matmul_ogs(x, w, bias,
                    **opt_flags.target_kernel_kwargs)
     out_final_mx_scale = None
     if opt_flags.split_k > 1:
+        has_scatter = scatter_indx is not None
         postprocess_fn = ReducePostprocessFn(specs=reduce_fused_activation.specs, fn_args=reduce_fused_activation.fn_args)
         out_split_k_dtype = out_matmul.dtype if scatter_indx is not None else memory["output"].dtype
-        out_split_k_flex = OutFlexData() if out_split_k_dtype == torch.float32 else precision_config.flex_ctx.out_data
+        out_split_k_flex = OutFlexData() if has_scatter else precision_config.flex_ctx.out_data
         out_split_k_shape = out_matmul.shape[1:-1] + (out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n,)
+        y_dtype = out_split_k_dtype if has_scatter else memory["output"].dtype
         out_matmul, out_final_mx_scale = reduce(out_matmul.view(opt_flags.split_k, 1, -1), dim=0, postprocess_fn1=postprocess_fn,
-                                             y_dtype=out_split_k_dtype,
                                              y_has_mx=scatter_indx is None and precision_config.out_scale is not None,
+                                             y_dtype=y_dtype,
                                              y_flex=out_split_k_flex)
         out_matmul = out_matmul.view(*out_split_k_shape).unsqueeze(0)
         if out_final_mx_scale is not None:

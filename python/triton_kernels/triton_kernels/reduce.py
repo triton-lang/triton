@@ -212,8 +212,8 @@ def reduce(
     BLOCK_X_S1 = 128
     BLOCK_Y_S1 = 128 // postprocess_fn1.specs.reduction_n
     grid = (triton.cdiv(S0, BLOCK_S0), triton.cdiv(Y_S1, BLOCK_Y_S1))
-    mask_arg = mask if mask is not None else x
-    scale_arg = scale if scale is not None else x
+    mask_arg = mask if mask is not None else None
+    scale_arg = scale if scale is not None else None
     reduce_kernel = specializations.get(postprocess_fn1=postprocess_fn1.specs,
                                         postprocess_fn2=postprocess_fn2.specs)._reduce
     reduce_kernel[grid](
