@@ -269,7 +269,6 @@ class shared_memory_descriptor(base_value):
         layout = _unwrap_if_constexpr(layout)
         return _semantic.shared_load(self, layout)
 
-    @builtin
     def store(self, value, _semantic: GluonSemantic = None) -> None:
         """
         Store a tensor into shared memory.
@@ -278,6 +277,26 @@ class shared_memory_descriptor(base_value):
             value (tensor): The tensor whose contents to store.
         """
         return _semantic.shared_store(self, value)
+
+    @builtin
+    def gather(self, indices_d0, indices_d1, _semantic: GluonSemantic = None) -> tensor:
+        """
+        Gather elements from a 2D shared memory descriptor using two 1D index tensors.
+
+        For each element i, loads smem[indices_d0[i], indices_d1[i]]. The two index
+        tensors must have the same shape and distributed layout. The result has the
+        same shape and layout as the index tensors.
+
+        Args:
+            indices_d0 (tensor): 1D tensor with indices for dimension 0.
+            indices_d1 (tensor): 1D tensor with indices for dimension 1.
+
+        Returns:
+            tensor: A 1D Gluon tensor containing the gathered elements.
+        """
+        indices_d0 = _unwrap_if_constexpr(indices_d0)
+        indices_d1 = _unwrap_if_constexpr(indices_d1)
+        return _semantic.shared_gather(self, indices_d0, indices_d1)
 
     @builtin
     def slice(self, start, length, dim=0, _semantic: GluonSemantic = None) -> shared_memory_descriptor:

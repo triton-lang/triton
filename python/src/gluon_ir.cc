@@ -641,6 +641,12 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
              return self.create<ttg::LocalLoadOp>(resultTy, memDesc);
            })
+      .def("create_local_gather",
+           [](GluonOpBuilder &self, Type resultTy, Value memDesc,
+              Value indicesD0, Value indicesD1) -> Value {
+             return self.create<ttg::LocalGatherOp>(resultTy, memDesc,
+                                                    indicesD0, indicesD1);
+           })
       .def("get_shared_bank_conflicts",
            [](GluonOpBuilder &self, Attribute regLayoutAttr,
               Attribute sharedLayoutAttr, std::vector<int64_t> &shape,

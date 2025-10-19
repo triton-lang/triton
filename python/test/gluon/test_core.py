@@ -1943,3 +1943,79 @@ def test_descriptor_shape():
         desc = TensorDescriptor.from_tensor(t, [128, 64], layout)
         descriptor_shape_kernel[(1, )](desc, t.shape, num_warps=1, debug=True)
         torch.cuda.synchronize()
+
+
+@gluon.jit
+def shared_gather_kernel(
+    matrix_ptr,
+    indices_d0_ptr,
+    indices_d1_ptr,
+    output_ptr,
+    N: ttgl.constexpr,
+    M: ttgl.constexpr,
+    layout_2d: ttgl.constexpr,
+    layout_1d: ttgl.constexpr,
+    shared_layout: ttgl.constexpr,
+):
+    """Test shared memory gather using smem.gather()."""
+    # Load the matrix from global memory into registers
+    indices_x = ttgl.arange(0, N, layout=ttgl.SliceLayout(dim=1, parent=layout_2d))
+    indices_y = ttgl.arange(0, M, layout=ttgl.SliceLayout(dim=0, parent=layout_2d))
+    offsets_2d = indices_x[:, None] * M + indices_y[None, :]
+    matrix_data = ttgl.load(matrix_ptr + offsets_2d)
+
+    # Allocate shared memory and store the matrix
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [N, M], layout=shared_layout)
+    smem.store(matrix_data)
+    ttgl.thread_barrier()
+
+    # Load the gather indices
+    offsets_1d = ttgl.arange(0, N, layout=layout_1d)
+    indices_d0 = ttgl.load(indices_d0_ptr + offsets_1d)
+    indices_d1 = ttgl.load(indices_d1_ptr + offsets_1d)
+
+    # Gather using the new operation
+    gathered = smem.gather(indices_d0, indices_d1)
+
+    # Store result to global memory
+    ttgl.store(output_ptr + offsets_1d, gathered)
+
+
+@pytest.mark.parametrize("N,M", [(32, 32), (64, 64), (128, 128)])
+def test_shared_gather(N, M):
+    """Test gathering from 2D shared memory using two 1D index tensors."""
+    device = torch.device("cuda")
+
+    # Create a test matrix with known values
+    matrix = torch.arange(N * M, dtype=torch.float32, device=device).reshape(N, M)
+
+    # Create gather indices - gather specific elements
+    # For simplicity, gather diagonal, then some off-diagonal elements
+    indices_d0 = torch.arange(N, dtype=torch.int32, device=device)
+    indices_d1 = torch.arange(N, dtype=torch.int32, device=device)
+
+    output = torch.zeros(N, dtype=torch.float32, device=device)
+
+    # Compute expected result: output[i] = matrix[indices_d0[i], indices_d1[i]]
+    expected = matrix[indices_d0, indices_d1]
+
+    # Create layouts
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[8, 4], warps_per_cta=[1, 1], order=[1, 0])
+    layout_1d = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[1], order=[0])
+    shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    # Launch kernel
+    shared_gather_kernel[(1, )](
+        matrix,
+        indices_d0,
+        indices_d1,
+        output,
+        N=N,
+        M=M,
+        layout_2d=layout_2d,
+        layout_1d=layout_1d,
+        shared_layout=shared_layout,
+        num_warps=1,
+    )
+
+    torch.testing.assert_close(output, expected)

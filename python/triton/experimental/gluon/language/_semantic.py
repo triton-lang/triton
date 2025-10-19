@@ -274,6 +274,27 @@ class GluonSemantic(TritonSemantic[TensorTy]):
                lambda: f"source dtype {value.dtype} and destination dtype {mem_desc.dtype} must match")
         self.builder.create_local_store(mem_desc.handle, value.handle)
 
+    def shared_gather(self, mem_desc, indices_d0, indices_d1):
+        _check(isinstance(indices_d0, ttgl.tensor),
+               lambda: f"expected 'indices_d0' to be a tensor, but got a {type(indices_d0)}")
+        _check(isinstance(indices_d1, ttgl.tensor),
+               lambda: f"expected 'indices_d1' to be a tensor, but got a {type(indices_d1)}")
+        _check(mem_desc.rank == 2, lambda: f"gather requires a 2D memdesc, got rank {mem_desc.rank}")
+        _check(len(indices_d0.shape) == 1, lambda: f"indices_d0 must be 1D, got rank {len(indices_d0.shape)}")
+        _check(len(indices_d1.shape) == 1, lambda: f"indices_d1 must be 1D, got rank {len(indices_d1.shape)}")
+        _check(
+            indices_d0.shape == indices_d1.shape, lambda:
+            f"indices_d0 and indices_d1 must have the same shape: got {indices_d0.shape} and {indices_d1.shape}")
+        _check(indices_d0.type.layout == indices_d1.type.layout,
+               lambda: "indices_d0 and indices_d1 must have the same layout")
+        _check(indices_d0.dtype.is_int(), lambda: f"indices_d0 must have integer dtype, got {indices_d0.dtype}")
+        _check(indices_d1.dtype.is_int(), lambda: f"indices_d1 must have integer dtype, got {indices_d1.dtype}")
+
+        ret_ty = ttgl.distributed_type(mem_desc.dtype, indices_d0.shape, indices_d0.type.layout)
+        handle = self.builder.create_local_gather(ret_ty.to_ir(self.builder), mem_desc.handle, indices_d0.handle,
+                                                  indices_d1.handle)
+        return ttgl.tensor(handle, ret_ty)
+
     def bank_conflicts(self, distr_ty, shared_ty):
         if not isinstance(distr_ty, ttgl.distributed_type):
             raise TypeError(
