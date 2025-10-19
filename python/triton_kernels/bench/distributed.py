@@ -111,8 +111,8 @@ def reduce_scatter(
 
 # TODO: support TP > 1
 # TODO: clean up duplicate code with triton_kernels.test_distributed.py
-def routing(logits, n_expts_act, sm_first: bool = False, y_indx: Optional[torch.Tensor] = None, EP: int = 1,
-            TP: int = 1, expt_assignment: Optional[ExptAssignment] = None, mode: str = "ep_sharding"):
+def routing(x, logits, n_expts_act, sm_first: bool = False, y_indx: Optional[torch.Tensor] = None, EP: int = 1,
+            TP: int = 1, expt_assignment: Optional[ExptAssignment] = None, mode: str = "ep_sharding") -> Tuple[torch.Tensor, RoutingData, GatherIndx, ScatterIndx, Optional[ReduceScatterMetadata]]:
     if _is_distributed_launch():
         rank, _ = setup()
         if mode == "ep_sharding":
@@ -133,20 +133,20 @@ def routing(logits, n_expts_act, sm_first: bool = False, y_indx: Optional[torch.
             dispatch_indx = logits_global.mask_metadata.col_sorted_indx
             combine_indx = logits_global.mask_metadata.row_sorted_indx
             logits_global_metadata = make_ragged_tensor_metadata(expt_sizes, dispatch_indx.shape[0])
-            logits_local = convert_dp_to_ep(logits_global, expt_assignment, active_indx, dispatch_indx)
+            x = convert_dp_to_ep(x, expt_assignment, active_indx, dispatch_indx)
             logits_local_metadata = remap_ragged_tensor_metadata(logits_global_metadata, expt_map)
             n_expts_tot = expt_assignment.expt_map.size(1)
-            gate_scal = logits.vals.flatten()[combine_indx]
+            gate_scal = logits_global.vals.flatten()[combine_indx]
             rdata_ep_local = RoutingData(gate_scal, expt_sizes, n_expts_tot, n_expts_act, logits_local_metadata)
-            gather_idx = GatherIndx(combine_indx, dispatch_indx)
-            scatter_idx = ScatterIndx(dispatch_indx, combine_indx)
+            gather_indx = GatherIndx(combine_indx, dispatch_indx)
+            scatter_indx = ScatterIndx(dispatch_indx, combine_indx)
             reduce_scatter_metadata = ReduceScatterMetadata(
                 mode=mode,
                 active_indx=active_indx,
                 dispatch_indx=dispatch_indx,
                 combine_indx=combine_indx,
             )
-            return logits_local, rdata_ep_local, gather_idx, scatter_idx, reduce_scatter_metadata
+            return x, rdata_ep_local, gather_indx, scatter_indx, reduce_scatter_metadata
         else:
             raise NotImplementedError(f"Distributed routing mode {mode} is not implemented yet.")
     else:
@@ -157,9 +157,9 @@ def routing(logits, n_expts_act, sm_first: bool = False, y_indx: Optional[torch.
         gate_scal = logits.vals.flatten()[combine_indx]
         routing_data = RoutingData(gate_scal, ragged_batch_metadata.slice_sizes, logits.shape[-1], n_expts_act,
                                    ragged_batch_metadata)
-        gather_idx = GatherIndx(combine_indx, dispatch_indx)
-        scatter_idx = ScatterIndx(dispatch_indx, combine_indx)
-        return logits, routing_data, gather_idx, scatter_idx, None
+        gather_indx = GatherIndx(combine_indx, dispatch_indx)
+        scatter_indx = ScatterIndx(dispatch_indx, combine_indx)
+        return x, routing_data, gather_indx, scatter_indx, None
 
 
 def gather_ep(rank, world_size, param, TP, EP):
@@ -309,7 +309,7 @@ has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_versio
         (1024, 1024, 1024, 1, 1, "bf16", "bf16", 1, 1),
     ] +
     # dense cases - test precision
-    [(1024, 1024, 1024, 1, 1, "fp8", "fp8", 1, 1), (1024, 1024, 1024, 1, 1, "fp8", "fp8", 4, 1)]
+    [(1024, 1024, 1024, 1, 1, "fp8", "fp8", 1, 1), (1024, 1024, 1024, 1, 1, "fp8", "fp8", 1, 4)]
     # moe cases - test parallelism
     + [
         (1024, 1024, 1024, 128, 2, "bf16", "bf16", 1, 1),
