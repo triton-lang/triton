@@ -332,6 +332,8 @@ class CUDABackend(BaseBackend):
         pm.enable_debug()
 
         passes.gluon.add_inliner(pm)
+        nvidia.passes.ttnvgpuir.add_optimize_descriptor_encoding(pm)
+        nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
         passes.gluon.add_canonicalizer(pm)
         passes.common.add_sccp(pm)
