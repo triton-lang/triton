@@ -124,7 +124,7 @@ def reduce(
     y_dtype: Optional[torch.dtype] = None,
     y_flex: Optional[OutFlexData] = OutFlexData(),
     y_flex_saturate_inf: bool = False,
-    y_mxscale: Optional[torch.Tensor] = None,
+    y_has_mx: Optional[bool] = None,
     y: Optional[torch.Tensor] = None,
     postprocess_fn1: Optional[PostprocessFn] = None,
     # TODO: keeping for backward compatibility, but will remove !
@@ -175,6 +175,8 @@ def reduce(
         y_flex = OutFlexData()
     if x_flex is None:
         x_flex = InFlexData()
+    if y_has_mx is None:
+        y_has_mx = x_mxscale is not None
     # input shapes
     dims = (0, 1, 2)
     nonred = tuple(d for d in dims if d != dim)
@@ -183,10 +185,9 @@ def reduce(
     if y is None:
         y = torch.empty((S0, Y_S1), device=x.device, dtype=y_dtype)
     assert y.shape == (S0, Y_S1), f"y.shape: {y.shape} != ({S0}, {Y_S1})"
-    if y_mxscale is None:
+    y_mxscale = None
+    if y_has_mx:
         y_mxscale = torch.empty((S0, triton.cdiv(Y_S1, 32)), device=x.device, dtype=torch.uint8)
-    assert y_mxscale.shape == (S0, triton.cdiv(
-        Y_S1, 32)), f"y_mxscale.shape: {y_mxscale.shape} != ({S0}, {triton.cdiv(Y_S1, 32)})"
     # Strides for X along reduced and non-reduced dims
     stride_xr = x.stride(dim)
     stride_x0 = x.stride(nonred[0])
