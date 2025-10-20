@@ -13,6 +13,8 @@ using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getOrderForDotOperand;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 
+namespace {
+
 using ValueTableV2 = std::map<std::array<int, 3>, Value>;
 
 Value loadC(Value tensor, Value llTensor,
@@ -815,6 +817,8 @@ convertMMAImpl(DotOpInterface op, Value llvmA, Value llvmB, Value llvmC,
 
   return success();
 }
+
+} // namespace
 
 LogicalResult convertMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                          const LLVMTypeConverter *typeConverter,
