@@ -35,6 +35,19 @@ decodeTDMDescriptor(RewriterBase &rewriter, Location loc,
 
   return {srcPtr, tensorShape, tensorStride};
 }
+
+SmallVector<int> getWarpDistribution(ArrayRef<int64_t> blockShape,
+                                     int numWarps) {
+  int numWarpsDim0 = numWarps;
+  for (; numWarpsDim0 > blockShape[0]; numWarpsDim0 /= 2)
+    ;
+  int numWarpsDim1 = numWarps / numWarpsDim0;
+
+  assert(numWarpsDim0 > 0 && blockShape[1] % numWarpsDim1 == 0 &&
+         "Can't distribute warps in TDM");
+
+  return {numWarpsDim0, numWarpsDim1};
+}
 } // namespace
 
 std::pair<SmallVector<Value>, SmallVector<Value>>
@@ -56,8 +69,10 @@ createTDMDescriptor(RewriterBase &rewriter, Location loc,
   tensorStride[0] = b.trunc(i32_ty, tensorStride[0]);
   tensorStride[1] = b.trunc(i32_ty, tensorStride[1]);
 
-  // For block shape [M, N], each warp will handle shape [M/numWarps, N].
-  blockShape[0] = ceil(blockShape[0], int64_t(numWarps));
+  // Distribute block among warps
+  auto warps = getWarpDistribution(blockShape, numWarps);
+  blockShape[0] = ceil(blockShape[0], int64_t(warps[0]));
+  blockShape[1] = ceil(blockShape[1], int64_t(warps[1]));
 
   // group0 (128 bits / 4 dwords) effective bit encoding:
   // [1:0]:     pred (to be filled later)
@@ -122,19 +137,27 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
       decodeTDMDescriptor(rewriter, loc, group0, group1);
 
   auto warpId = getLaneAndWarpId(rewriter, loc).second;
-  int outerBlockShapePerWarp = ceil(blockShape[0], int64_t(numWarps));
-  int outerBlockStride = blockShape[1];
+  auto warps = getWarpDistribution(blockShape, numWarps);
 
   // Shift global pointer by offset
-  Value outerOffset = b.mul(b.i32_val(outerBlockShapePerWarp), warpId);
-  offset[0] = b.add(offset[0], outerOffset);
+  Value warpDim0 = b.i32_val(warps[0]);
+  SmallVector<Value, 2> warpCoord = {b.urem(warpId, warpDim0),
+                                     b.udiv(warpId, warpDim0)};
+
+  SmallVector<Value, 2> globalOffset;
+  for (int i = 0; i < 2; i++) {
+    int64_t blockShapePerWarp = ceil(blockShape[i], int64_t(warps[i]));
+    globalOffset.push_back(b.mul(b.i32_val(blockShapePerWarp), warpCoord[i]));
+    offset[i] = b.add(offset[i], globalOffset[i]);
+  }
 
   Value baseOffset = b.add(b.mul(tensorStride[0], offset[0]),
                            b.mul(tensorStride[1], offset[1]));
   srcPtr = b.gep(globalPtrTy, elementType, srcPtr, baseOffset);
 
   // Shift shared pointer by offset
-  Value dstOffset = b.mul(b.i32_val(outerBlockStride), outerOffset);
+  Value dstOffset =
+      b.add(b.mul(b.i32_val(blockShape[1]), globalOffset[0]), globalOffset[1]);
   if (padInterval > 0 && padAmount > 0) {
     Value iVal = b.i32_val(log2(padInterval));
     Value pVal = b.i32_val(log2(padAmount));
