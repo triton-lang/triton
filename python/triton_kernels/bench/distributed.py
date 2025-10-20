@@ -33,7 +33,7 @@ def _is_distributed_launch() -> bool:
     return int(os.environ.get("WORLD_SIZE", "1")) > 1
 
 
-def make_opt_expt_assignment(EP: int, n_expts_tot: int, device: torch.device) -> Optional[ExptAssignment]:
+def create_experiment_assignment(EP: int, n_expts_tot: int, device: torch.device) -> Optional[ExptAssignment]:
     if not _is_distributed_launch():
         return None
     expt_dict = make_expt_dict_uniform(EP, n_expts_tot)
@@ -256,7 +256,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     }
     xd = torch.randn((batch // world_size, dim1), device=dev).to(dtype_map[x_dtype])
     x0 = all_gather(xd, dim=0)
-    expt_assignment = make_opt_expt_assignment(EP, n_expts_tot, torch.device(dev))
+    expt_assignment = create_experiment_assignment(EP, n_expts_tot, torch.device(dev))
 
     # single-GPU pass
     def single(x):

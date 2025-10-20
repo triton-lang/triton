@@ -69,7 +69,7 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
         x_dtype = torch.float8_e4m3fnuz
 
     input_x = torch.randn((batch // DP, dim1), device=dev)
-    expt_assignment = triton_dist.make_opt_expt_assignment(EP, n_expts_tot, torch.device(dev))
+    expt_assignment = triton_dist.create_experiment_assignment(EP, n_expts_tot, torch.device(dev))
     # run layer
     fpath = Path(tempfile.mktemp())
     proton.start(str(fpath), hook="triton")
