@@ -249,7 +249,7 @@ class HIPBackend(BaseBackend):
                 pm,
                 options.arch,
                 knobs.amd.use_buffer_atomics,
-                knobs.amd.use_buffer_small_tensor,
+                knobs.amd.buffer_ops_analyze_small_tensor_range,
             )
 
         amd.passes.ttgpuir.add_fold_true_cmpi(pm)
