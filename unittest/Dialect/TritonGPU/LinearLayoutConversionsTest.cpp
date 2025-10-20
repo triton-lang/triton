@@ -3908,7 +3908,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/0, /*scaleShape=*/{128, 2},
-      /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{1, 1},
+      /*warpsPerCTA=*/{1, 1},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout({{S("register"), {{0, 1}, {16, 0}, {32, 0}, {64, 0}}},
                      {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
@@ -3920,7 +3920,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/1, /*scaleShape=*/{128, 2},
-      /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{1, 1},
+      /*warpsPerCTA=*/{1, 1},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {8, 0}, {16, 0}, {32, 0}, {64, 0}}},
@@ -3933,7 +3933,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/0, /*scaleShape=*/{128, 4},
-      /*tilesPerWarp=*/{2, 1}, /*warpsPerCTA=*/{2, 2},
+      /*warpsPerCTA=*/{2, 2},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout({{S("register"), {{0, 1}, {0, 2}, {32, 0}, {64, 0}}},
                      {S("lane"), {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
@@ -3945,7 +3945,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/1, /*scaleShape=*/{256, 4},
-      /*tilesPerWarp=*/{1, 2}, /*warpsPerCTA=*/{1, 2},
+      /*warpsPerCTA=*/{1, 2},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {0, 2}, {16, 0}, {32, 0}, {64, 0}, {128, 0}}},
@@ -3958,7 +3958,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/0, /*scaleShape=*/{128, 8},
-      /*tilesPerWarp=*/{2, 1}, /*warpsPerCTA=*/{2, 2},
+      /*warpsPerCTA=*/{2, 2},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll =
       LinearLayout({{S("register"), {{0, 1}, {0, 2}, {0, 4}, {32, 0}, {64, 0}}},
@@ -3971,7 +3971,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/1, /*scaleShape=*/{128, 8},
-      /*tilesPerWarp=*/{1, 2}, /*warpsPerCTA=*/{2, 2},
+      /*warpsPerCTA=*/{2, 2},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {16, 0}, {32, 0}, {64, 0}}},
@@ -3984,7 +3984,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/0, /*scaleShape=*/{256, 2},
-      /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{1, 1},
+      /*warpsPerCTA=*/{1, 1},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {16, 0}, {32, 0}, {64, 0}, {128, 0}}},
@@ -3997,7 +3997,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/1, /*scaleShape=*/{256, 2},
-      /*tilesPerWarp=*/{1, 1}, /*warpsPerCTA=*/{1, 1},
+      /*warpsPerCTA=*/{1, 1},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {8, 0}, {16, 0}, {32, 0}, {64, 0}, {128, 0}}},
@@ -4010,7 +4010,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/0, /*scaleShape=*/{256, 4},
-      /*tilesPerWarp=*/{2, 1}, /*warpsPerCTA=*/{2, 2},
+      /*warpsPerCTA=*/{2, 2},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {0, 2}, {32, 0}, {64, 0}, {128, 0}}},
@@ -4023,7 +4023,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/1, /*scaleShape=*/{256, 4},
-      /*tilesPerWarp=*/{1, 2}, /*warpsPerCTA=*/{1, 2},
+      /*warpsPerCTA=*/{1, 2},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {0, 2}, {16, 0}, {32, 0}, {64, 0}, {128, 0}}},
@@ -4036,7 +4036,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/0, /*scaleShape=*/{256, 8},
-      /*tilesPerWarp=*/{2, 1}, /*warpsPerCTA=*/{2, 2},
+      /*warpsPerCTA=*/{2, 2},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {32, 0}, {64, 0}, {128, 0}}},
@@ -4049,7 +4049,7 @@ TEST_F(LinearLayoutConversionsTest, SM120DotScaledScaleLayout) {
 
   layout = getSM120DotScaledScaleLayout(
       &ctx, /*dotOperandIdx=*/1, /*scaleShape=*/{256, 8},
-      /*tilesPerWarp=*/{1, 2}, /*warpsPerCTA=*/{2, 2},
+      /*warpsPerCTA=*/{2, 2},
       /*ctaLayout=*/CTALayoutAttr::get(&ctx, {1, 1}, {1, 1}, {1, 0}));
   ll = LinearLayout(
       {{S("register"),

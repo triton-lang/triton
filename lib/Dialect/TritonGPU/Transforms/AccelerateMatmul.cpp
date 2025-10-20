@@ -757,8 +757,7 @@ public:
         return rep.size() >= 3 ? rep[2] : 1;
       }
     };
-    SmallVector<unsigned, 2> tilesPerWarp{computeTilePerWarp(newA, 0),
-                                          computeTilePerWarp(newB, 1)};
+
     const auto mmaWarps = mmaResult.mmaEnc.getWarpsPerCTA(); // [wM, wN]
 
     // Convert scales to Linear layout
@@ -769,7 +768,7 @@ public:
       auto blocked = cast<triton::gpu::BlockedEncodingAttr>(ty.getEncoding());
 
       auto ll = triton::gpu::getSM120DotScaledScaleLayout(
-          ctx, opIdx, shape, tilesPerWarp,
+          ctx, opIdx, shape,
           /*warpsPerCTA=*/mmaWarps, blocked.getCTALayout());
       auto newEnc = triton::gpu::LinearEncodingAttr::get(ctx, ll);
       auto newTy = RankedTensorType::get(shape, ty.getElementType(), newEnc);

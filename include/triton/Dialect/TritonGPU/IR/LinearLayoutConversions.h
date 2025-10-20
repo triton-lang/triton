@@ -144,7 +144,6 @@ LinearLayout chooseScaledWmmaScaleLayout(
 
 LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                           ArrayRef<int64_t> scaleShape,
-                                          ArrayRef<unsigned> tilesPerWarp,
                                           ArrayRef<unsigned> warpsPerCTA,
                                           CTALayoutAttr ctaLayoutAttr);
 

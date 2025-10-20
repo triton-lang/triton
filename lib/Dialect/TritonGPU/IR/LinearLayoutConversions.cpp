@@ -1512,7 +1512,6 @@ LinearLayout chooseScaledWmmaScaleLayout(
 //   - Each lane in a quad has the same scale factor.
 LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                           ArrayRef<int64_t> scaleShape,
-                                          ArrayRef<unsigned> tilesPerWarp,
                                           ArrayRef<unsigned> warpsPerCTA,
                                           CTALayoutAttr ctaLayoutAttr) {
   unsigned rank = scaleShape.size();
@@ -1520,7 +1519,10 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
   StringAttr kWarp = StringAttr::get(ctx, "warp");
-
+  // - A: [M, K]
+  // - B: [K, N]
+  // - aScale: [M, K / K_GROUP_SIZE]
+  // - bScale: [N, K / K_GROUP_SIZE]
   const unsigned kIdx = 1;
   const unsigned mnIdx = 0;
 
@@ -1528,20 +1530,18 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   std::vector<std::vector<int32_t>> laneBase;
   if (dotOperandIdx == 0) {
     laneBase = {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
-    LL = LinearLayout::identity1D(scaleShape[1], kRegister, outDims[kIdx]) *
-         LinearLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]}) *
-         LinearLayout::zeros1D(warpsPerCTA[1], kWarp, outDims[kIdx]) *
-         LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDims[mnIdx]) *
-         LinearLayout::identity1D(tilesPerWarp[0], kRegister, outDims[mnIdx]);
   } else {
     laneBase = {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
-    LL = LinearLayout::identity1D(scaleShape[1], kRegister, outDims[kIdx]) *
-         LinearLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]}) *
-         LinearLayout::identity1D(warpsPerCTA[1], kWarp, outDims[mnIdx]) *
-         LinearLayout::zeros1D(warpsPerCTA[0], kWarp, outDims[kIdx]) *
-         LinearLayout::identity1D(tilesPerWarp[1], kRegister, outDims[mnIdx]);
   }
-
+  LL = LinearLayout::identity1D(scaleShape[1], kRegister, outDims[kIdx]) *
+       LinearLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]});
+  if (dotOperandIdx == 0) {
+    LL = LL * LinearLayout::zeros1D(warpsPerCTA[1], kWarp, outDims[kIdx]) *
+         LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDims[mnIdx]);
+  } else {
+    LL = LL * LinearLayout::identity1D(warpsPerCTA[1], kWarp, outDims[mnIdx]) *
+         LinearLayout::zeros1D(warpsPerCTA[0], kWarp, outDims[kIdx]);
+  }
   return combineCtaCgaWithShape(LL, ctaLayoutAttr, scaleShape);
 }
 
