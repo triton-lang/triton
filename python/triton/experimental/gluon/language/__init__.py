@@ -80,7 +80,6 @@ from ._core import (
     to_tensor,
     warp_specialize,
     where,
-    make_tensor_descriptor,
 )
 from ._layouts import (
     AutoLayout,

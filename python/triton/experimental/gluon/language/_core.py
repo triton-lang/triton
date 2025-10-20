@@ -43,7 +43,6 @@ from triton.language.core import (
     tensor,
     tuple,
     tuple_type,
-    tensor_descriptor,
 )
 
 # We define __all__ only to appease the python linter, these are not used in
@@ -584,15 +583,3 @@ def dot_fma(a, b, acc, _semantic=None):
 
     handle = _semantic.dot(a, b, acc, input_precision=None, max_num_imprecise_acc=None, out_dtype=acc.dtype).handle
     return tensor(handle, acc.type)
-
-@builtin
-def make_tensor_descriptor(
-    base: tensor,
-    shape: List[tensor],
-    strides: List[tensor],
-    block_shape: List[constexpr],
-    padding_option="zero",
-    _semantic=None,
-) -> tensor_descriptor:
-    padding_option = _unwrap_if_constexpr(padding_option)
-    return _semantic.make_tensor_descriptor(base, shape, strides, block_shape, padding_option)

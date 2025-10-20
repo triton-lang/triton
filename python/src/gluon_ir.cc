@@ -779,9 +779,9 @@ void init_gluon_ir(py::module &&m) {
            [](TritonOpBuilder &self, Value &base, std::vector<Value> &shape,
               std::vector<Value> &strides, std::vector<int32_t> &tensorShape,
               bool isSignedInteger, tt::PaddingOption paddingOption) -> Value {
-             return self.create<tt::MakeTensorDescOp>(base, shape, strides,
-                                                  tensorShape, isSignedInteger,
-                                                  paddingOption);
+             return self.create<tt::MakeTensorDescOp>(
+                 base, shape, strides, tensorShape, isSignedInteger,
+                 paddingOption);
            })
       .def("create_async_tdm_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
