@@ -1315,9 +1315,6 @@ public:
     auto convertScaleLayout = [&](TensorValue scale,
                                   llvm::ArrayRef<int64_t> valShape,
                                   LinearLayout dotLL, int idx) -> Value {
-      LinearLayout::BasesT scaleBases = dotLL.getBases();
-      auto &warpBases = scaleBases[kWarp];
-
       SmallVector<int64_t> shape;
       if (!scale) {
         int64_t nonKDim = idx == 0 ? valShape[0] : valShape[1];
@@ -1330,7 +1327,7 @@ public:
       }
 
       LinearLayout newLL =
-          ttg::chooseScaledWmmaScaleLayout(ctx, idx, warpBases, shape);
+          ttg::chooseScaledWmmaScaleLayout(ctx, idx, warpsPerTile, shape);
       Attribute newScaleEncoding = ttg::LinearEncodingAttr::get(ctx, newLL);
       // Scale's data type is always i8
       auto newScaleType = RankedTensorType::get(shape, i8_ty, newScaleEncoding);
