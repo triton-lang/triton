@@ -1182,9 +1182,11 @@ The shape and types of <code class="docutils literal notranslate"><span class="p
 </pre></div>
 </div>
 <p>$d = matrix_multiply($a, $b) + $c. $inputPrecision describes how to exercise the TC
-when the inputs are f32. It can be one of: tf32, tf32x3, ieee.
+when the inputs are f32. It can be one of: tf32, tf32x3, ieee, bf16x3, bf16x6.
 tf32: use TC with tf32 ops.
 tf32x3: implement the 3xTF32 trick. For more info see the pass in F32DotTC.cpp
+bf16x3: implement the 3xBF16 trick. For more info see the pass in F32DotTC.cpp
+bf16x6: implement the 6xBF16 trick. For more info see the pass in F32DotTC.cpp
 ieee: don’t use TC, implement dot in software.
 If the GPU does not have Tensor cores or the inputs are not f32, this flag is ignored.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
@@ -1194,7 +1196,7 @@ If the GPU does not have Tensor cores or the inputs are not f32, this flag is ig
 <h3>Attributes:<a class="headerlink" href="#id33" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>inputPrecision</code></td><td>::mlir::triton::InputPrecisionAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2</td></tr>
+<tr><td><code>inputPrecision</code></td><td>::mlir::triton::InputPrecisionAttr</td><td>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4</td></tr>
 <tr><td><code>maxNumImpreciseAcc</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
 </table>
 </section>
