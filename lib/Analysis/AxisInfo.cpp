@@ -254,7 +254,7 @@ public:
   getAxisInfo(ub::PoisonOp op,
               ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
     unsigned rank = 1;
-    if (auto shape = dyn_cast<mlir::ShapedType>(op.getType()))
+    if (auto shape = dyn_cast<RankedTensorType>(op.getType()))
       rank = shape.getRank();
 
     // Poison values are never accessed, thus assume optimistic values.
@@ -1214,6 +1214,7 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
     return rhs;
   if (rhs.getRank() == 0)
     return lhs;
+  assert(lhs.getRank() == rhs.getRank() && "Mismatched ranks");
   DimVectorT contiguity;
   DimVectorT divisibility;
   DimVectorT constancy;
