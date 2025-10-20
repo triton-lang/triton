@@ -692,6 +692,25 @@ public:
         mlir::isa<LinearEncodingAttr>(bScaleType.getEncoding())) {
       return failure();
     }
+    auto aElemType = dotOp.getAElemType();
+    auto bElemType = dotOp.getBElemType();
+    auto isFP8 = [&](ScaleDotElemType elemType) -> bool {
+      return elemType == ScaleDotElemType::E4M3 ||
+             elemType == ScaleDotElemType::E5M2;
+    };
+    auto isFP4 = [&](ScaleDotElemType elemType) -> bool {
+      return elemType == ScaleDotElemType::E2M1;
+    };
+    // mixed precision is not supported
+    if (isFP8(aElemType) && isFP4(bElemType) ||
+        isFP4(aElemType) && isFP8(bElemType)) {
+      return failure();
+    }
+
+    auto scaleElemType = dotOp.getAScale().getType().getElementType();
+    if (scaleElemType != dotOp.getBScale().getType().getElementType()) {
+      return failure();
+    }
 
     // Common MMA encoding creation
     auto mmaResult =
@@ -738,23 +757,18 @@ public:
         return rep.size() >= 3 ? rep[2] : 1;
       }
     };
-    SmallVector<unsigned, 2> tilesPerWarp{computeTilePerWarp(newA, 0),
-                                          computeTilePerWarp(newB, 1)};
+
+    const auto mmaWarps = mmaResult.mmaEnc.getWarpsPerCTA(); // [wM, wN]
+
     // Convert scales to Linear layout
     auto convertScale = [&](Value scale, int opIdx) -> Value {
-      if (!scale)
-        return Value();
       auto ty = cast<RankedTensorType>(scale.getType());
       SmallVector<int64_t> shape = llvm::to_vector(ty.getShape());
       MLIRContext *ctx = ty.getContext();
-      const auto mmaWarps = mmaResult.mmaEnc.getWarpsPerCTA(); // [wM, wN]
-      const auto instr = mmaResult.mmaEnc.getInstrShape(); // [instrM, instrN]
-      const unsigned instrM = instr[0], instrN = instr[1];
-
       auto blocked = cast<triton::gpu::BlockedEncodingAttr>(ty.getEncoding());
+
       auto ll = triton::gpu::getSM120DotScaledScaleLayout(
-          ctx, opIdx, shape, tilesPerWarp,
-          /*warpsPerCTA=*/mmaWarps, instrM, instrN, blocked.getCTALayout());
+          ctx, shape, opIdx, mmaWarps, blocked.getCTALayout());
       auto newEnc = triton::gpu::LinearEncodingAttr::get(ctx, ll);
       auto newTy = RankedTensorType::get(shape, ty.getElementType(), newEnc);
       return rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy, scale);
