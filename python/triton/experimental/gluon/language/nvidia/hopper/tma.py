@@ -141,10 +141,14 @@ def make_tensor_descriptor(
 
     padding = _semantic._str_to_padding_option(padding_option)
 
+    # TODO
+    ty = tensor_descriptor_type(block_type, shape_type, strides_type, layout)
+
+
     # TODO add the check later
     # if base.type.element_ty.is_int() and padding == ttgl.ir.PADDING_OPTION.PAD_NAN:
     #     raise ValueError("Padding option `nan` is not supported for integer blocks")
     handle = _semantic.builder.create_make_tensor_descriptor(base_handle, [s.handle for s in shape],
                                                         [s.handle for s in strides], block_shape, is_signed_int,
                                                         padding)
-    return tensor_descriptor(handle, shape, strides, type)
+    return tensor_descriptor(handle, shape, strides, type, layout)
