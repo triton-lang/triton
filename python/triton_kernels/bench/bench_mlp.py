@@ -8,7 +8,7 @@ import triton_kernels
 import triton_kernels.roofline as roofline
 import triton_kernels.swiglu
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
-from triton_kernels.target_info import get_cdna_version
+from triton_kernels.target_info import get_cdna_version, has_native_mxfp
 import distributed as triton_dist
 from triton_kernels.tensor_details import layout
 from bench_utils import quantize_weight
@@ -111,12 +111,11 @@ def roofline_mlp(batch_sizes, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
 
 
 if __name__ == "__main__":
-    has_native_mx4 = torch.cuda.get_device_capability(0)[0] == 10 or get_cdna_version() == 4
     batch_sizes_dense = [*range(128, 8192, 128)]
     batch_ranges_moe = [(2**(2 + k), 2**(3 + k), min(2**k, 32)) for k in range(8)]
     batch_sizes_moe = list(chain(*[range(*r) for r in batch_ranges_moe]))
     dense_dtypes = ["fp8", "fp8"]
-    quantized_dtypes = ["fp8", "mx4"] if has_native_mx4 else ["bf16", "mx4"]
+    quantized_dtypes = ["fp8", "mx4"] if has_native_mxfp() else ["bf16", "mx4"]
     rank, world_size = triton_dist.setup()
     if world_size > 1:
         # Running all workloads at once may cause OOM on some GPUs such as H100 80GB.

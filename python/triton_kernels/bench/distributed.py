@@ -15,7 +15,7 @@ from triton_kernels.matmul_ogs import RoutingData, GatherIndx, ScatterIndx
 from triton_kernels.topk import topk_torch
 from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSpecs, FusedActivation
-from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
+from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq, has_native_mxfp
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor import BIT, SparseMatrix, Bitmatrix, make_ragged_tensor_metadata
 
@@ -716,9 +716,6 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     dist.destroy_process_group()
 
 
-has_native_mx4 = torch.cuda.get_device_capability(0)[0] == 10 or get_cdna_version() == 4
-
-
 @pytest.mark.parametrize(
     "batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP",
     [
@@ -741,7 +738,7 @@ has_native_mx4 = torch.cuda.get_device_capability(0)[0] == 10 or get_cdna_versio
         (1024, 1024, 1024, 128, 2, "fp8", "mx4", 4, 1),
         (1024, 1024, 1024, 128, 2, "fp8", "mx4", 1, 4),
         (1024, 1024, 1024, 128, 2, "fp8", "mx4", 2, 2),
-    ] if has_native_mx4 else [
+    ] if has_native_mxfp()else [
         (1024, 1024, 1024, 128, 2, "bf16", "mx4", 1, 1),
         (1024, 1024, 1024, 128, 2, "bf16", "mx4", 4, 1),
         (1024, 1024, 1024, 128, 2, "bf16", "mx4", 1, 4),
