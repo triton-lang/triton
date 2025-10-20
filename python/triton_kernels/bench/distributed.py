@@ -738,7 +738,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
         (1024, 1024, 1024, 128, 2, "fp8", "mx4", 4, 1),
         (1024, 1024, 1024, 128, 2, "fp8", "mx4", 1, 4),
         (1024, 1024, 1024, 128, 2, "fp8", "mx4", 2, 2),
-    ] if has_native_mxfp()else [
+    ] if has_native_mxfp() else [
         (1024, 1024, 1024, 128, 2, "bf16", "mx4", 1, 1),
         (1024, 1024, 1024, 128, 2, "bf16", "mx4", 4, 1),
         (1024, 1024, 1024, 128, 2, "bf16", "mx4", 1, 4),
