@@ -443,6 +443,13 @@ public:
   }
 };
 
+// Pick the layout to match MXFP scales layout in register so that it can be
+// copied directly using tmem st.
+static Attribute getTmemScales(RankedTensorType type, unsigned numWarps) {
+  return triton::gpu::LinearEncodingAttr::get(
+      type.getContext(), getScaleTMEMStoreLinearLayout(type, numWarps));
+}
+
 static bool canUseTwoCTAs(triton::DotOp dotOp) {
   RankedTensorType retType = dotOp.getType();
   auto retShapePerCTA = getShapePerCTA(retType);
@@ -567,12 +574,12 @@ public:
         CTASplitNum[1]);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
-    MemDescType accMemDescType =
-        MemDescType::get(oldRetType.getShape(), oldRetType.getElementType(),
-                         accEncoding, tensorMemorySpace,
-                         /*mutableMemory=*/true);
-    auto newDistributedEncoding = nvidia_gpu::getDefaultLayoutForTmemLdSt(
-        accMemDescType, numWarps, CTALayout);
+    Type accMemDescType = triton::gpu::MemDescType::get(
+        oldRetType.getShape(), oldRetType.getElementType(), accEncoding,
+        tensorMemorySpace,
+        /*mutableMemory=*/true);
+    Attribute newDistributedEncoding = nvidia_gpu::getTmemCompatibleLayout(
+        instrShape[0], instrShape[1], oldRetType, numWarps);
     auto newAccType = oldRetType.cloneWithEncoding(newDistributedEncoding);
     Value cvtAcc =
         rewriter.create<ConvertLayoutOp>(loc, newAccType, dotOp.getOperand(2));
@@ -665,15 +672,6 @@ public:
     if (numCTAs != 1) {
       return failure();
     }
-
-    // TODO: support mxfp4 variants.
-    if (!((dotOp.getAElemType() == ScaleDotElemType::E5M2 ||
-           dotOp.getAElemType() == ScaleDotElemType::E4M3) &&
-          (dotOp.getBElemType() == ScaleDotElemType::E5M2 ||
-           dotOp.getBElemType() == ScaleDotElemType::E4M3))) {
-      return rewriter.notifyMatchFailure(dotOp, "only E5M2/E4M3 is supported");
-    }
-
     // Skip if any scale is missing. This pattern requires both scales.
     if (!dotOp.getAScale() || !dotOp.getBScale())
       return failure();
@@ -683,6 +681,25 @@ public:
 
     if (mlir::isa<LinearEncodingAttr>(aScaleType.getEncoding()) ||
         mlir::isa<LinearEncodingAttr>(bScaleType.getEncoding())) {
+      return failure();
+    }
+    auto aElemType = dotOp.getAElemType();
+    auto bElemType = dotOp.getBElemType();
+    auto isFP8 = [&](ScaleDotElemType elemType) -> bool {
+      return elemType == ScaleDotElemType::E4M3 ||
+             elemType == ScaleDotElemType::E5M2;
+    };
+    auto isFP4 = [&](ScaleDotElemType elemType) -> bool {
+      return elemType == ScaleDotElemType::E2M1;
+    };
+    // mixed precision is not supported
+    if (isFP8(aElemType) && isFP4(bElemType) ||
+        isFP4(aElemType) && isFP8(bElemType)) {
+      return failure();
+    }
+
+    auto scaleElemType = dotOp.getAScale().getType().getElementType();
+    if (scaleElemType != dotOp.getBScale().getType().getElementType()) {
       return failure();
     }
 
@@ -731,23 +748,17 @@ public:
         return rep.size() >= 3 ? rep[2] : 1;
       }
     };
-    SmallVector<unsigned, 2> tilesPerWarp{computeTilePerWarp(newA, 0),
-                                          computeTilePerWarp(newB, 1)};
+
+    const auto mmaWarps = mmaResult.mmaEnc.getWarpsPerCTA(); // [wM, wN]
     // Convert scales to Linear layout
     auto convertScale = [&](Value scale, int opIdx) -> Value {
-      if (!scale)
-        return Value();
       auto ty = cast<RankedTensorType>(scale.getType());
       SmallVector<int64_t> shape = llvm::to_vector(ty.getShape());
       MLIRContext *ctx = ty.getContext();
-      const auto mmaWarps = mmaResult.mmaEnc.getWarpsPerCTA(); // [wM, wN]
-      const auto instr = mmaResult.mmaEnc.getInstrShape(); // [instrM, instrN]
-      const unsigned instrM = instr[0], instrN = instr[1];
-
       auto blocked = cast<triton::gpu::BlockedEncodingAttr>(ty.getEncoding());
+
       auto ll = triton::gpu::getSM120DotScaledScaleLayout(
-          ctx, opIdx, shape, tilesPerWarp,
-          /*warpsPerCTA=*/mmaWarps, instrM, instrN, blocked.getCTALayout());
+          ctx, shape, opIdx, mmaWarps, blocked.getCTALayout());
       auto newEnc = triton::gpu::LinearEncodingAttr::get(ctx, ll);
       auto newTy = RankedTensorType::get(shape, ty.getElementType(), newEnc);
       return rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy, scale);
@@ -843,12 +854,12 @@ public:
         context, m, n, colStride, CTASplitNum[0], CTASplitNum[1]);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
-    MemDescType accMemDescType =
-        MemDescType::get(oldRetType.getShape(), oldRetType.getElementType(),
-                         accEncoding, tensorMemorySpace,
-                         /*mutableMemory=*/true);
-    auto newDistributedEncoding = nvidia_gpu::getDefaultLayoutForTmemLdSt(
-        accMemDescType, numWarps, CTALayout);
+    Type accMemDescType = triton::gpu::MemDescType::get(
+        oldRetType.getShape(), oldRetType.getElementType(), accEncoding,
+        tensorMemorySpace,
+        /*mutableMemory=*/true);
+    Attribute newDistributedEncoding =
+        nvidia_gpu::getTmemCompatibleLayout(m, n, oldRetType, numWarps);
     auto newAccType = oldRetType.cloneWithEncoding(newDistributedEncoding);
     Value cvtAcc =
         rewriter.create<ConvertLayoutOp>(loc, newAccType, dotOp.getOperand(2));
@@ -862,18 +873,16 @@ public:
     Attribute scaleEncoding =
         triton::nvidia_gpu::TensorMemoryScalesEncodingAttr::get(
             context, CTASplitNum[0], CTASplitNum[1]);
-    MemDescType scaleAType = triton::gpu::MemDescType::get(
+    Type scaleAType = triton::gpu::MemDescType::get(
         oldScaleAType.getShape(), oldScaleAType.getElementType(), scaleEncoding,
         tensorMemorySpace,
         /*mutableMemory=*/false);
-    MemDescType scaleBType = triton::gpu::MemDescType::get(
+    Type scaleBType = triton::gpu::MemDescType::get(
         oldScaleBType.getShape(), oldScaleBType.getElementType(), scaleEncoding,
         tensorMemorySpace,
         /*mutableMemory=*/false);
-    Attribute scaleALayout = nvidia_gpu::getDefaultLayoutForTmemLdSt(
-        scaleAType, numWarps, getCTALayout(oldScaleAType.getEncoding()));
-    Attribute scaleBLayout = nvidia_gpu::getDefaultLayoutForTmemLdSt(
-        scaleBType, numWarps, getCTALayout(oldScaleBType.getEncoding()));
+    Attribute scaleALayout = getTmemScales(oldScaleAType, numWarps);
+    Attribute scaleBLayout = getTmemScales(oldScaleBType, numWarps);
     RankedTensorType newScaleAType =
         oldScaleAType.cloneWithEncoding(scaleALayout);
     RankedTensorType newScaleBType =
