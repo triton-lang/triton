@@ -1528,20 +1528,20 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
 
   std::vector<std::vector<int32_t>> laneBase;
   SmallVector<unsigned> order;
-  SmallVector<unsigned> warpsForOperand;
+  SmallVector<unsigned> mmaWarpsPerCTA;
   if (opIdx == 0) {
     laneBase = {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
     order = SmallVector<unsigned>{1u, 0u};
-    warpsForOperand = SmallVector<unsigned>{warpsPerCTA[0], warpsPerCTA[1]};
+    mmaWarpsPerCTA = SmallVector<unsigned>{warpsPerCTA[0], warpsPerCTA[1]};
   } else {
     laneBase = {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
     order = SmallVector<unsigned>{0u, 1u};
-    warpsForOperand = SmallVector<unsigned>{warpsPerCTA[1], warpsPerCTA[0]};
+    mmaWarpsPerCTA = SmallVector<unsigned>{warpsPerCTA[1], warpsPerCTA[0]};
   }
   LinearLayout LL =
       LinearLayout::identity1D(shape[1], kRegister, outDims[kIdx]) *
       LinearLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]}) *
-      broadcastedDotOperandLayout(ctx, warpsForOperand, order, 1u, kWarp);
+      broadcastedDotOperandLayout(ctx, mmaWarpsPerCTA, order, 1u, kWarp);
   return combineCtaCgaWithShape(LL, ctaLayout, shape);
 }
 
