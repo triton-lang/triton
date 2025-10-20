@@ -548,7 +548,8 @@ def test_amd_mfma(M, N, K, in_dtype, num_warps, cdna_version):
 @pytest.mark.parametrize("a_type, b_type", [(a_type, b_type)
                                             for a_type in ["e2m1", "e4m3", "e5m2"]
                                             for b_type in ["e2m1", "e4m3", "e5m2"]])
-def test_amd_mfma_scaled(M, N, K, a_type, b_type, device='cuda'):
+@pytest.mark.parametrize("has_scale", [True, False])
+def test_amd_mfma_scaled(M, N, K, a_type, b_type, has_scale, device='cuda'):
 
     @gluon.jit
     def kernel(out_ptr, a_ptr, b_ptr, a_scale_ptr, b_scale_ptr,  #
@@ -630,12 +631,21 @@ def test_amd_mfma_scaled(M, N, K, a_type, b_type, device='cuda'):
     torch.manual_seed(0)
     a, a_ref = _create_mxfp_operand(0, M, K, a_type)
     b, b_ref = _create_mxfp_operand(1, K, N, b_type)
-    a_scale, a_scale_ref = _create_mxfp_scale(0, M, K)
-    b_scale, b_scale_ref = _create_mxfp_scale(1, N, K)
-    out = torch.empty((M, N), dtype=torch.float32, device=device)
-    kernel[(1, )](out, a, b, a_scale, b_scale, M, N, K, a_type, b_type, num_warps=4)
-    out_ref = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)
-    torch.testing.assert_close(out, out_ref)
+
+    if has_scale:
+        a_scale, a_scale_ref = _create_mxfp_scale(0, M, K)
+        b_scale, b_scale_ref = _create_mxfp_scale(1, N, K)
+        out = torch.empty((M, N), dtype=torch.float32, device=device)
+        compiled = kernel[(1, )](out, a, b, a_scale, b_scale, M, N, K, a_type, b_type, num_warps=4)
+        out_ref = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)
+        torch.testing.assert_close(out, out_ref)
+    else:
+        out = torch.empty((M, N), dtype=torch.float32, device=device)
+        compiled = kernel[(1, )](out, a, b, None, None, M, N, K, a_type, b_type, num_warps=4)
+        out_ref = torch.matmul(a_ref, b_ref)
+        torch.testing.assert_close(out, out_ref)
+
+    assert 'v_mfma_scale_f32_16x16x128_f8f6f4' in compiled.asm['amdgcn']
 
 
 def test_math_fast_expf():
