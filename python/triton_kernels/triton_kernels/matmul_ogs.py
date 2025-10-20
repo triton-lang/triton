@@ -644,8 +644,7 @@ def matmul_ogs(x, w, bias,
     y_tensor_or_tma = y_storage.make_tma(y_tma_block_size, y_tma_mode) if y_has_tma else y_storage.data
     # create tma descriptor for w
     w_has_tma = opt_flags.is_persistent
-    w_tma_block_size = [1, opt_flags.block_k, opt_flags.block_n]
-    w_tensor_or_tma = w_storage.make_tma(w_tma_block_size, "dense") if w_has_tma else w_storage.data
+    w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n], "dense") if w_has_tma else w_storage.data
     # create tma descriptor for w_scale
     w_scale_has_tma = opt_flags.is_persistent and w_scale is not None
     w_transpose = w_storage.data.stride()[-2] == 1

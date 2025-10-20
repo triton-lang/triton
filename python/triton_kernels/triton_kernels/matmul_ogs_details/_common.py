@@ -105,7 +105,7 @@ def _load_tile_attrs(
         # K_W is only used for non-TMA kernel (W bound is handled by TMA on TMA kernel).
         if W_IS_PADDED:
             off_k_w = padded_start_off_raw * PACKED_BLOCK_K_W
-            K_W = tl.load(ExptTileOffs + pid_e + 1) * BLOCK_K
+            K_W = tl.load(ExptTileOffs + pid_e + 1) * PACKED_BLOCK_K_W
         else:
             off_k_w = unpadded_start_off
             K_W = tl.load(ExptOffs + pid_e + 1)

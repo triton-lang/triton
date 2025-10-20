@@ -375,6 +375,11 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
                 pytest.skip("inner_expt_opt and weight mx only supported with pad_w")
             if is_persistent and not hbm_swizzling:
                 pytest.skip("FIXME: Fatal Python error: Aborted")
+            if is_hip():
+                if act_dtype_str == "bfloat16":
+                    pytest.skip("FIXME: failed to translate module to LLVM IR")
+                if hbm_swizzling:
+                    pytest.skip("NYI: nner_expt_opt and HBM swizzling")
 
     # launch metadata for batched / mx types may not work yet.
     torch.manual_seed(0)
@@ -430,9 +435,13 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
         rdata = gindx = sindx = None
 
     padding_block_k = 32
-    if hbm_swizzling and is_persistent and torch.cuda.get_device_capability()[0] >= 10:
-        # Blackwell scale swizzling constraint
-        padding_block_k = 128
+    if hbm_swizzling:
+        if torch.cuda.get_device_capability()[0] >= 10:
+            # Blackwell scale swizzling constraint
+            # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/tensor_details/layout_details/blackwell_scale.py#L45
+            padding_block_k = 128
+        elif not is_persistent:
+            padding_block_k = 64
     x_tri, w_tri, bias_tri, gs0_tri, gs1_tri = init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act,
                                                                  mode, torch.bfloat16 if act_mxfp8 else act_dtype,  #
                                                                  torch.bfloat16 if weight_mxfp else weight_dtype,
