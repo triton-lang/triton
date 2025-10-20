@@ -137,8 +137,8 @@ if __name__ == "__main__":
         parser.add_argument("--name", type=str, choices=["dense", "gpt-oss-x2"])
         parser.add_argument("--quantized", action="store_true", default=False)
         args = parser.parse_args()
-        if args.tp >= 1:
-            raise NotImplementedError("TP>=1 is not supported yet in distributed mode.")
+        if args.tp > 1:
+            raise NotImplementedError("TP>1 is not supported yet in distributed mode.")
         dtypes = quantized_dtypes if args.quantized else dense_dtypes
         if args.name == "dense":
             assert args.ep == 1, "EP must be 1 for dense"
