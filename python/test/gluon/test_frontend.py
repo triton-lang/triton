@@ -2952,29 +2952,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
-
-
-def test_async_tma_layout():
-    input = MockTensor(ttgl.float32, (1024, 1024))
-    XBLOCK = 128
-    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=32, rank=2)
-    input_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(input, [XBLOCK, XBLOCK], shared_layout)
-
-    @gluon.jit
-    def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr, smem_layout: ttgl.constexpr):
-        smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], mbarrier.MBarrierLayout())
-        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
-        mbarrier.init(bar, count=1)
-
-        mbarrier.expect(bar, XBLOCK * XBLOCK * ttgl.float32.primitive_bitwidth // 8)
-        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
-        mbarrier.wait(bar, 0)
-
-        mbarrier.invalidate(bar)
-
-        tma.async_copy_shared_to_global(input_desc, [0, 0], smem)
-        tma.store_wait(0)
-
-    with pytest.raises(CompilationError,
-                       match=r"expected 'result' to have 'layout' of type NVMMASharedLayout but got.*"):
-        async_tma_kernel[(1, )](input_desc, XBLOCK, shared_layout, num_warps=1)

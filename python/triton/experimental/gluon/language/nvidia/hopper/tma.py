@@ -81,7 +81,8 @@ class tensor_descriptor(base_value):
 def async_copy_global_to_shared(tensor_desc, coord, barrier, result, pred=True, _semantic=None):
     coord = _semantic._convert_to_ir_values(coord, require_i64=False)
     pred = _semantic.to_tensor(pred)
-    _semantic.tma_async_global_to_shared(tensor_desc, coord, barrier, result, pred)
+    _semantic.builder.create_async_tma_copy_global_to_local(tensor_desc.handle, coord, barrier.handle, result.handle,
+                                                        pred.handle)
 
 
 @builtin
