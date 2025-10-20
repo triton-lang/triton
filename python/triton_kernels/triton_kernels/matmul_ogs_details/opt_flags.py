@@ -229,14 +229,13 @@ def make_default_opt_flags_nvidia(
             is_persistent = False
     block_n = block_n_tma if is_persistent else block_n
     # block k
-    if constraints.get("block_k", None) is not None:
-        block_k = constraints["block_k"]
-    else:
-        block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
+    block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
     if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and tokens_per_expt > 1:
         # Swap block_n and block_k for mxfp4 weights so that block_k is a full cacheline, so long as K is sufficiently large.
         # TODO: swizzle the HBM layout of the weights instead
         block_n, block_k = block_k, block_n
+    if constraints.get("block_k", None) is not None:
+        block_k = constraints["block_k"]
     # split_k
     if constraints.get("max_allowable_mn", 0) > 0 and constraints.get("split_k") is not None:
         split_k = max_allowable_mn(constraints["max_allowable_mn"], m, n, constraints.get("split_k"))

@@ -1,9 +1,9 @@
 import torch
 import triton
 from triton_kernels import target_info
-from triton_kernels.tensor import get_layout, bitwidth, FP4
-from triton_kernels.tensor_details.layout import HopperAmpereMXScaleLayout
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
+from triton_kernels.tensor import FP4, bitwidth, get_layout
+from triton_kernels.tensor_details.layout import HopperAmpereMXScaleLayout
 
 
 def compute_grid_size(routing_data, batch_size, m, n, block_m, block_n):

@@ -98,12 +98,13 @@ def _load_tile_attrs(
         tl.static_assert(M is not None)
         expt_id, pid_z, pid_z_out, start_m, block_id, eM = 0, 0, pid_e, 0, pid_m, M
         k_tiles = tl.cdiv(tl.load(ExptHist + pid_e), BLOCK_K)
-        padded_start_off = tl.load(ExptTileOffs + pid_e) * BLOCK_K
+        padded_start_off_raw = tl.load(ExptTileOffs + pid_e)
+        padded_start_off = padded_start_off_raw * BLOCK_K
         unpadded_start_off = tl.load(ExptOffs + pid_e)
         off_k_x = padded_start_off if X_IS_PADDED else unpadded_start_off
         # K_W is only used for non-TMA kernel (W bound is handled by TMA on TMA kernel).
         if W_IS_PADDED:
-            off_k_w = padded_start_off
+            off_k_w = padded_start_off_raw * PACKED_BLOCK_K_W
             K_W = tl.load(ExptTileOffs + pid_e + 1) * BLOCK_K
         else:
             off_k_w = unpadded_start_off
@@ -147,7 +148,6 @@ def _load_tile_attrs(
 
 
 def make_matmul_repr(base_name, order):
-
     def matmul_repr(specialization):
         signature = specialization.signature
         constants = specialization.constants
@@ -266,5 +266,6 @@ def matmul_launch_metadata(grid, kernel, args):
 
 @triton.jit
 def threadfence_system():
-    tl.inline_asm_elementwise("mov.u32 $0, 0x0; fence.sc.sys;", args=(), dtype=(tl.int32, ), is_pure=False, pack=1,
-                              constraints="=r")
+    tl.inline_asm_elementwise(
+        "mov.u32 $0, 0x0; fence.sc.sys;", args=(), dtype=(tl.int32,), is_pure=False, pack=1, constraints="=r"
+    )
