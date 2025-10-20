@@ -3,7 +3,6 @@
 // CHECK-LABEL: dedup_by_constancy_mfma
 // CHECK-COUNT-2: llvm.icmp "slt"
 // CHECK-NOT: llvm.icmp "slt"
-// Here is why we expect exactly 4 icmp:
 // For a 32x32 tensor A with mfma layout, each thread holds 16 elements, which are divided
 // into 4 groups. E.g. thread 0 holds elements A[0:3,0], A[8:11,0], A[16:19,0], and A[24:27,0].
 // In this example, constancy of the tensor is 16 for dim 0, meaning A[0:15,0] have same values
