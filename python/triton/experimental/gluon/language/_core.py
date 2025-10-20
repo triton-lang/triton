@@ -279,43 +279,43 @@ class shared_memory_descriptor(base_value):
         return _semantic.shared_store(self, value)
 
     @builtin
-    def gather(self, indices_d0, indices_d1, _semantic: GluonSemantic = None) -> tensor:
+    def gather(self, indices, axis, _semantic: GluonSemantic = None) -> tensor:
         """
-        Gather elements from a 2D shared memory descriptor using two 1D index tensors.
+        Gather elements from shared memory along a specified axis using an indices tensor.
 
-        For each element i, loads smem[indices_d0[i], indices_d1[i]]. The two index
-        tensors must have the same shape and distributed layout. The result has the
-        same shape and layout as the index tensors.
+        For each output position I, the operation reads from src where the coordinate at
+        the gather axis is replaced by indices[I]:
+          result[I] = src[I[0], ..., indices[I], ..., I[n]]
 
         Args:
-            indices_d0 (tensor): 1D tensor with indices for dimension 0.
-            indices_d1 (tensor): 1D tensor with indices for dimension 1.
+            indices (tensor): Tensor specifying which indices to gather along the axis.
+            axis (int): The axis along which to gather values.
 
         Returns:
-            tensor: A 1D Gluon tensor containing the gathered elements.
+            tensor: Gluon tensor with the gathered elements (same shape as indices).
         """
-        indices_d0 = _unwrap_if_constexpr(indices_d0)
-        indices_d1 = _unwrap_if_constexpr(indices_d1)
-        return _semantic.shared_gather(self, indices_d0, indices_d1)
+        indices = _unwrap_if_constexpr(indices)
+        axis = _unwrap_if_constexpr(axis)
+        return _semantic.shared_gather(self, indices, axis)
 
     @builtin
-    def scatter(self, indices_d0, indices_d1, values, _semantic: GluonSemantic = None):
+    def scatter(self, indices, axis, values, _semantic: GluonSemantic = None):
         """
-        Scatter elements to a 2D shared memory descriptor using two 1D index tensors.
+        Scatter elements to shared memory along a specified axis using an indices tensor.
 
-        For each element i, stores smem[indices_d0[i], indices_d1[i]] = values[i]. The
-        two index tensors and the values tensor must have the same shape and distributed
-        layout.
+        For each input position I, the operation writes to dst where the coordinate at
+        the scatter axis is replaced by indices[I]:
+          dst[I[0], ..., indices[I], ..., I[n]] = values[I]
 
         Args:
-            indices_d0 (tensor): 1D tensor with indices for dimension 0.
-            indices_d1 (tensor): 1D tensor with indices for dimension 1.
-            values (tensor): 1D tensor with values to scatter.
+            indices (tensor): Tensor specifying which indices to scatter to along the axis.
+            axis (int): The axis along which to scatter values.
+            values (tensor): Tensor with values to scatter (same shape as indices).
         """
-        indices_d0 = _unwrap_if_constexpr(indices_d0)
-        indices_d1 = _unwrap_if_constexpr(indices_d1)
+        indices = _unwrap_if_constexpr(indices)
+        axis = _unwrap_if_constexpr(axis)
         values = _unwrap_if_constexpr(values)
-        return _semantic.shared_scatter(self, indices_d0, indices_d1, values)
+        return _semantic.shared_scatter(self, indices, axis, values)
 
     def slice(self, start, length, dim=0, _semantic: GluonSemantic = None) -> shared_memory_descriptor:
         """

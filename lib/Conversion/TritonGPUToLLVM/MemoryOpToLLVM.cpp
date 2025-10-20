@@ -250,12 +250,13 @@ public:
     auto memDescTy = cast<MemDescType>(memDescVal.getType());
     auto regTy = cast<RankedTensorType>(op.getType());
     auto typeConverter = getTypeConverter();
+    unsigned axis = op.getAxis();
 
     auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
 
-    // Get the shared memory layout and invert it: (dim0, dim1) → offset
+    // Get the shared memory layout and invert it
     auto sharedEnc =
         cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
     LinearLayout sharedLayout;
@@ -266,36 +267,48 @@ public:
       sharedLayout = toLinearLayout(memDescTy);
     }
 
-    // Invert: (dim0, dim1) → offset
     LinearLayout invSharedLayout = sharedLayout.invert();
 
-    // Unpack the runtime index values from the two index tensors
-    SmallVector<Value> indicesD0 =
-        unpackLLElements(loc, adaptor.getIndicesD0(), rewriter);
-    SmallVector<Value> indicesD1 =
-        unpackLLElements(loc, adaptor.getIndicesD1(), rewriter);
+    // Get layout dimension names for all dims
+    SmallVector<StringAttr> allDims;
+    for (unsigned dim = 0, rank = memDescTy.getRank(); dim < rank; ++dim) {
+      allDims.push_back(str_attr("dim" + Twine(dim)));
+    }
 
-    assert(indicesD0.size() == indicesD1.size() &&
-           "index tensors must have same size");
-
-    auto kDim0 = str_attr("dim0");
-    auto kDim1 = str_attr("dim1");
     auto kOffset = str_attr("offset");
-    auto kBlock = str_attr("block");
 
-    // For each output element, apply the inverted layout to runtime indices
-    SmallVector<Value> results(indicesD0.size());
-    for (size_t i = 0; i < indicesD0.size(); ++i) {
-      // Apply inverted shared layout to runtime values: (d0, d1) → (offset,
-      // block)
+    // Unpack the runtime index values
+    SmallVector<Value> idxValues =
+        unpackLLElements(loc, adaptor.getIndices(), rewriter);
+
+    // Emit the indices of the result tensor owned by this thread
+    SmallVector<SmallVector<Value>> dstIndices =
+        emitIndices(loc, rewriter, targetInfo, regTy.getEncoding(), regTy,
+                    /*withCTAOffset=*/true);
+
+    // For each output element, replace the axis coordinate with the index value
+    SmallVector<Value> results(dstIndices.size());
+    for (auto [i, idx, indices] : llvm::enumerate(idxValues, dstIndices)) {
+      // Convert index to i32 if needed
+      unsigned idxWidth = idx.getType().getIntOrFloatBitWidth();
+      if (idxWidth > 32) {
+        idx = b.trunc(i32_ty, idx);
+      } else if (idxWidth < 32) {
+        idx = b.zext(i32_ty, idx);
+      }
+
+      // Replace the coordinate at the gather axis with the index value
+      indices[axis] = idx;
+
+      // Apply inverted shared layout to compute offset
       SmallVector<std::pair<StringAttr, Value>> inputs;
-      inputs.push_back({kDim0, indicesD0[i]});
-      inputs.push_back({kDim1, indicesD1[i]});
+      for (unsigned dim = 0; dim < indices.size(); ++dim) {
+        inputs.push_back({allDims[dim], indices[dim]});
+      }
 
       auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
 
-      // Extract the offset value (ignore block dimension, assuming single
-      // block)
+      // Extract the offset value
       Value offset = nullptr;
       for (auto [name, value] : outputs) {
         if (name == kOffset) {
@@ -340,12 +353,13 @@ public:
     auto memDescTy = cast<MemDescType>(memDescVal.getType());
     auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
     auto typeConverter = getTypeConverter();
+    unsigned axis = op.getAxis();
 
     auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
                                                          llvmElemTy, rewriter);
 
-    // Get the shared memory layout and invert it: (dim0, dim1) → offset
+    // Get the shared memory layout and invert it
     auto sharedEnc =
         cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
     LinearLayout sharedLayout;
@@ -356,38 +370,49 @@ public:
       sharedLayout = toLinearLayout(memDescTy);
     }
 
-    // Invert: (dim0, dim1) → offset
     LinearLayout invSharedLayout = sharedLayout.invert();
+
+    // Get layout dimension names for all dims
+    SmallVector<StringAttr> allDims;
+    for (unsigned dim = 0, rank = memDescTy.getRank(); dim < rank; ++dim) {
+      allDims.push_back(str_attr("dim" + Twine(dim)));
+    }
+
+    auto kOffset = str_attr("offset");
 
     // Unpack the runtime values and index values
     SmallVector<Value> values =
         unpackLLElements(loc, adaptor.getValues(), rewriter);
-    SmallVector<Value> indicesD0 =
-        unpackLLElements(loc, adaptor.getIndicesD0(), rewriter);
-    SmallVector<Value> indicesD1 =
-        unpackLLElements(loc, adaptor.getIndicesD1(), rewriter);
+    SmallVector<Value> idxValues =
+        unpackLLElements(loc, adaptor.getIndices(), rewriter);
 
-    assert(indicesD0.size() == indicesD1.size() &&
-           indicesD0.size() == values.size() &&
-           "index tensors and values must have same size");
+    // Emit the indices of the values tensor owned by this thread
+    SmallVector<SmallVector<Value>> srcIndices =
+        emitIndices(loc, rewriter, targetInfo, valuesTy.getEncoding(), valuesTy,
+                    /*withCTAOffset=*/true);
 
-    auto kDim0 = str_attr("dim0");
-    auto kDim1 = str_attr("dim1");
-    auto kOffset = str_attr("offset");
-    auto kBlock = str_attr("block");
+    // For each value element, replace the axis coordinate with the index value
+    for (auto [i, idx, indices] : llvm::enumerate(idxValues, srcIndices)) {
+      // Convert index to i32 if needed
+      unsigned idxWidth = idx.getType().getIntOrFloatBitWidth();
+      if (idxWidth > 32) {
+        idx = b.trunc(i32_ty, idx);
+      } else if (idxWidth < 32) {
+        idx = b.zext(i32_ty, idx);
+      }
 
-    // For each element, compute offset and store value
-    for (size_t i = 0; i < indicesD0.size(); ++i) {
-      // Apply inverted shared layout to runtime values: (d0, d1) → (offset,
-      // block)
+      // Replace the coordinate at the scatter axis with the index value
+      indices[axis] = idx;
+
+      // Apply inverted shared layout to compute offset
       SmallVector<std::pair<StringAttr, Value>> inputs;
-      inputs.push_back({kDim0, indicesD0[i]});
-      inputs.push_back({kDim1, indicesD1[i]});
+      for (unsigned dim = 0; dim < indices.size(); ++dim) {
+        inputs.push_back({allDims[dim], indices[dim]});
+      }
 
       auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
 
-      // Extract the offset value (ignore block dimension, assuming single
-      // block)
+      // Extract the offset value
       Value offset = nullptr;
       for (auto [name, value] : outputs) {
         if (name == kOffset) {

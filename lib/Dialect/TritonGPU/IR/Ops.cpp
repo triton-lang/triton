@@ -775,15 +775,9 @@ LogicalResult LocalLoadOp::verify() {
 // LocalGatherOp
 LogicalResult LocalGatherOp::verify() {
   auto srcTy = getSrc().getType();
-  auto indicesD0Ty = cast<RankedTensorType>(getIndicesD0().getType());
-  auto indicesD1Ty = cast<RankedTensorType>(getIndicesD1().getType());
+  auto indicesTy = cast<RankedTensorType>(getIndices().getType());
   auto dstTy = cast<RankedTensorType>(getType());
-
-  // Verify source is 2D
-  if (srcTy.getRank() != 2) {
-    return emitError("source memdesc must be 2D (rank 2), got rank ")
-           << srcTy.getRank();
-  }
+  unsigned axis = getAxis();
 
   // Verify source has shared memory encoding
   auto srcEnc = srcTy.getEncoding();
@@ -791,45 +785,25 @@ LogicalResult LocalGatherOp::verify() {
     return emitError("source must have shared memory encoding");
   }
 
-  // Verify both index tensors are 1D
-  if (indicesD0Ty.getRank() != 1) {
-    return emitError("indices_d0 must be 1D (rank 1), got rank ")
-           << indicesD0Ty.getRank();
-  }
-  if (indicesD1Ty.getRank() != 1) {
-    return emitError("indices_d1 must be 1D (rank 1), got rank ")
-           << indicesD1Ty.getRank();
+  // Verify indices tensor has integer element type
+  if (!indicesTy.getElementType().isInteger()) {
+    return emitError("indices must have integer element type");
   }
 
-  // Verify both index tensors have integer element type
-  if (!indicesD0Ty.getElementType().isInteger()) {
-    return emitError("indices_d0 must have integer element type");
-  }
-  if (!indicesD1Ty.getElementType().isInteger()) {
-    return emitError("indices_d1 must have integer element type");
+  // Verify result has the same shape as indices
+  if (dstTy.getShape() != indicesTy.getShape()) {
+    return emitError("result shape must match indices shape");
   }
 
-  // Verify both index tensors have the same shape
-  if (indicesD0Ty.getShape()[0] != indicesD1Ty.getShape()[0]) {
-    return emitError("indices_d0 and indices_d1 must have the same shape: got ")
-           << indicesD0Ty.getShape()[0] << " and " << indicesD1Ty.getShape()[0];
+  // Verify src and indices have the same rank
+  if (srcTy.getRank() != indicesTy.getRank()) {
+    return emitError("source and indices must have the same rank");
   }
 
-  // Verify both index tensors have the same layout
-  if (indicesD0Ty.getEncoding() != indicesD1Ty.getEncoding()) {
-    return emitError("indices_d0 and indices_d1 must have the same layout");
-  }
-
-  // Verify result is 1D
-  if (dstTy.getRank() != 1) {
-    return emitError("result must be 1D (rank 1), got rank ")
-           << dstTy.getRank();
-  }
-
-  // Verify result size matches index tensor size
-  if (dstTy.getShape()[0] != indicesD0Ty.getShape()[0]) {
-    return emitError("result size must match indices size: expected ")
-           << indicesD0Ty.getShape()[0] << ", got " << dstTy.getShape()[0];
+  // Verify axis is valid
+  if (axis >= srcTy.getRank()) {
+    return emitError("axis ")
+           << axis << " is out of bounds for source rank " << srcTy.getRank();
   }
 
   // Verify element types match
@@ -844,14 +818,8 @@ LogicalResult LocalGatherOp::verify() {
 LogicalResult LocalScatterOp::verify() {
   auto dstTy = getDst().getType();
   auto valuesTy = cast<RankedTensorType>(getValues().getType());
-  auto indicesD0Ty = cast<RankedTensorType>(getIndicesD0().getType());
-  auto indicesD1Ty = cast<RankedTensorType>(getIndicesD1().getType());
-
-  // Verify destination is 2D
-  if (dstTy.getRank() != 2) {
-    return emitError("destination memdesc must be 2D (rank 2), got rank ")
-           << dstTy.getRank();
-  }
+  auto indicesTy = cast<RankedTensorType>(getIndices().getType());
+  unsigned axis = getAxis();
 
   // Verify destination has shared memory encoding
   auto dstEnc = dstTy.getEncoding();
@@ -859,45 +827,30 @@ LogicalResult LocalScatterOp::verify() {
     return emitError("destination must have shared memory encoding");
   }
 
-  // Verify values tensor is 1D
-  if (valuesTy.getRank() != 1) {
-    return emitError("values must be 1D (rank 1), got rank ")
-           << valuesTy.getRank();
+  // Verify indices tensor has integer element type
+  if (!indicesTy.getElementType().isInteger()) {
+    return emitError("indices must have integer element type");
   }
 
-  // Verify both index tensors are 1D
-  if (indicesD0Ty.getRank() != 1) {
-    return emitError("indices_d0 must be 1D (rank 1), got rank ")
-           << indicesD0Ty.getRank();
-  }
-  if (indicesD1Ty.getRank() != 1) {
-    return emitError("indices_d1 must be 1D (rank 1), got rank ")
-           << indicesD1Ty.getRank();
+  // Verify values and indices have the same shape
+  if (valuesTy.getShape() != indicesTy.getShape()) {
+    return emitError("values shape must match indices shape");
   }
 
-  // Verify both index tensors have integer element type
-  if (!indicesD0Ty.getElementType().isInteger()) {
-    return emitError("indices_d0 must have integer element type");
-  }
-  if (!indicesD1Ty.getElementType().isInteger()) {
-    return emitError("indices_d1 must have integer element type");
+  // Verify dst and indices have the same rank
+  if (dstTy.getRank() != indicesTy.getRank()) {
+    return emitError("destination and indices must have the same rank");
   }
 
-  // Verify all tensors have the same shape
-  if (indicesD0Ty.getShape()[0] != indicesD1Ty.getShape()[0]) {
-    return emitError("indices_d0 and indices_d1 must have the same shape: got ")
-           << indicesD0Ty.getShape()[0] << " and " << indicesD1Ty.getShape()[0];
-  }
-  if (valuesTy.getShape()[0] != indicesD0Ty.getShape()[0]) {
-    return emitError("values size must match indices size: expected ")
-           << indicesD0Ty.getShape()[0] << ", got " << valuesTy.getShape()[0];
+  // Verify axis is valid
+  if (axis >= dstTy.getRank()) {
+    return emitError("axis ")
+           << axis << " is out of bounds for destination rank "
+           << dstTy.getRank();
   }
 
-  // Verify index tensors and values have the same layout
-  if (indicesD0Ty.getEncoding() != indicesD1Ty.getEncoding()) {
-    return emitError("indices_d0 and indices_d1 must have the same layout");
-  }
-  if (valuesTy.getEncoding() != indicesD0Ty.getEncoding()) {
+  // Verify values and indices have the same layout
+  if (valuesTy.getEncoding() != indicesTy.getEncoding()) {
     return emitError("values must have the same layout as indices");
   }
 

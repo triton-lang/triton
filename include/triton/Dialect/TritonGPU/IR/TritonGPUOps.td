@@ -392,64 +392,68 @@ def TTG_LocalStoreOp : TTG_Op<"local_store"> {
 }
 
 def TTG_LocalGatherOp : TTG_Op<"local_gather", [LocalLoadTrait]> {
-  let summary = "Gather elements from 2D shared memory using two 1D index tensors";
+  let summary = "Gather elements from shared memory along a specified axis";
 
   let description = [{
-    Gather elements from a 2D shared memory descriptor using two 1D index tensors
-    that specify the coordinates. For each element i, loads smem[indices_d0[i], indices_d1[i]].
+    Gather elements from a shared memory descriptor using an indices tensor along a
+    single specified axis. The output tensor has the same shape as the indices tensor.
 
-    The two index tensors must have the same shape and distributed layout. The result
-    has the same shape and layout as the index tensors.
+    For each output position I, the operation reads from src where the coordinate at
+    the gather axis is replaced by indices[I]:
+      result[I] = src[I[0], ..., indices[I], ..., I[n]]
+    where the axis dimension is replaced by the index value.
 
-    This is similar to local_load_diagonal but uses runtime-computed indices instead
-    of the static diagonal pattern.
+    This matches the behavior of tt.gather but operates on shared memory descriptors.
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
-    TT_IntTensor:$indices_d0,
-    TT_IntTensor:$indices_d1,
+    TT_IntTensor:$indices,
+    I32Attr:$axis,
     Optional<TTG_AsyncToken>:$token
   );
   let results = (outs TT_Tensor:$result);
 
   let builders = [
-      OpBuilder<(ins "Type":$retType, "Value":$src, "Value":$indicesD0, "Value":$indicesD1),
+      OpBuilder<(ins "Type":$retType, "Value":$src, "Value":$indices, "IntegerAttr":$axis),
       [{
-      build($_builder, $_state, retType, src, indicesD0, indicesD1, /*token=*/static_cast<mlir::Value>(nullptr));
+      build($_builder, $_state, retType, src, indices, axis, /*token=*/static_cast<mlir::Value>(nullptr));
       }]>];
 
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
-  let assemblyFormat = [{$src `[` $indices_d0 `,` $indices_d1 `]` (`token` $token^)? attr-dict `:` qualified(type($src)) `,` type($indices_d0) `,` type($indices_d1) `->` type($result)}];
+  let assemblyFormat = [{$src `[` $indices `]` (`token` $token^)? attr-dict `:` qualified(type($src)) `,` type($indices) `->` type($result)}];
   let hasVerifier = 1;
 }
 
 def TTG_LocalScatterOp : TTG_Op<"local_scatter"> {
-  let summary = "Scatter elements to 2D shared memory using two 1D index tensors";
+  let summary = "Scatter elements to shared memory along a specified axis";
 
   let description = [{
-    Scatter elements to a 2D shared memory descriptor using two 1D index tensors
-    that specify the coordinates. For each element i, stores dst[indices_d0[i], indices_d1[i]] = values[i].
+    Scatter elements to a shared memory descriptor using an indices tensor along a
+    single specified axis. The values tensor has the same shape as the indices tensor.
 
-    The two index tensors and the values tensor must have the same shape and distributed layout.
+    For each input position I, the operation writes to dst where the coordinate at
+    the scatter axis is replaced by indices[I]:
+      dst[I[0], ..., indices[I], ..., I[n]] = values[I]
+    where the axis dimension is replaced by the index value.
 
-    This is the inverse of local_gather - it writes to shared memory at runtime-computed indices.
+    This is the inverse of local_gather and writes to shared memory at runtime-computed indices.
   }];
   let arguments = (ins
     Arg<TTG_MemDescType, "", [MemWrite<SharedMemory>]>:$dst,
     TT_Tensor:$values,
-    TT_IntTensor:$indices_d0,
-    TT_IntTensor:$indices_d1,
+    TT_IntTensor:$indices,
+    I32Attr:$axis,
     Optional<TTG_AsyncToken>:$token
   );
 
   let builders = [
-      OpBuilder<(ins "Value":$dst, "Value":$values, "Value":$indicesD0, "Value":$indicesD1),
+      OpBuilder<(ins "Value":$dst, "Value":$values, "Value":$indices, "IntegerAttr":$axis),
       [{
-      build($_builder, $_state, dst, values, indicesD0, indicesD1, /*token=*/static_cast<mlir::Value>(nullptr));
+      build($_builder, $_state, dst, values, indices, axis, /*token=*/static_cast<mlir::Value>(nullptr));
       }]>];
 
   // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
-  let assemblyFormat = [{$dst `[` $indices_d0 `,` $indices_d1 `]` `,` $values (`token` $token^)? attr-dict `:` qualified(type($dst)) `,` type($indices_d0) `,` type($indices_d1) `,` type($values)}];
+  let assemblyFormat = [{$dst `[` $indices `]` `,` $values (`token` $token^)? attr-dict `:` qualified(type($dst)) `,` type($indices) `,` type($values)}];
   let hasVerifier = 1;
 }
 

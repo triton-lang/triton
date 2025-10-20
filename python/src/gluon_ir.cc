@@ -642,16 +642,22 @@ void init_gluon_ir(py::module &&m) {
              return self.create<ttg::LocalLoadOp>(resultTy, memDesc);
            })
       .def("create_local_gather",
-           [](GluonOpBuilder &self, Type resultTy, Value memDesc,
-              Value indicesD0, Value indicesD1) -> Value {
-             return self.create<ttg::LocalGatherOp>(resultTy, memDesc,
-                                                    indicesD0, indicesD1);
+           [](GluonOpBuilder &self, Type resultTy, Value memDesc, Value indices,
+              int32_t axis) -> Value {
+             auto ctx = self.getContext();
+             auto i32Ty = IntegerType::get(ctx, 32);
+             auto axisAttr = IntegerAttr::get(i32Ty, axis);
+             return self.create<ttg::LocalGatherOp>(resultTy, memDesc, indices,
+                                                    axisAttr);
            })
       .def("create_local_scatter",
-           [](GluonOpBuilder &self, Value memDesc, Value values,
-              Value indicesD0, Value indicesD1) {
-             self.create<ttg::LocalScatterOp>(memDesc, values, indicesD0,
-                                              indicesD1);
+           [](GluonOpBuilder &self, Value memDesc, Value values, Value indices,
+              int32_t axis) {
+             auto ctx = self.getContext();
+             auto i32Ty = IntegerType::get(ctx, 32);
+             auto axisAttr = IntegerAttr::get(i32Ty, axis);
+             self.create<ttg::LocalScatterOp>(memDesc, values, indices,
+                                              axisAttr);
            })
       .def("get_shared_bank_conflicts",
            [](GluonOpBuilder &self, Attribute regLayoutAttr,
