@@ -94,7 +94,7 @@ def reduce_scatter(
     op: dist.ReduceOp.RedOpType = dist.ReduceOp.SUM,
 ) -> torch.Tensor:
     if _is_distributed_launch():
-        if metadata.mode == "ep_sharding":
+        if metadata.mode and metadata.mode == "ep_sharding":
             if dim != 0 or op != dist.ReduceOp.SUM:
                 raise NotImplementedError("Only dim=0 and op=SUM are supported for MoE reduce_scatter.")
             output = convert_ep_to_dp(input_tensor, expt_assignment, metadata.active_indx, metadata.combine_indx)
@@ -116,34 +116,39 @@ def routing(
     expt_assignment: Optional[ExptAssignment] = None, mode: str = "ep_sharding"
 ) -> Tuple[torch.Tensor, RoutingData, GatherIndx, ScatterIndx, Optional[ReduceScatterMetadata]]:
     n_expts_tot = logits.shape[-1]
-    if mode == "ep_sharding" and expt_assignment:
-        if TP > 1:
-            raise NotImplementedError("TP > 1 is not supported in distributed MoE benchmark yet.")
-        rank = dist.get_rank()
-        expt_map = expt_assignment.expt_map[rank, :]
-        logits_global = topk(
-            logits,
-            n_expts_act,
-            apply_softmax=not sm_first,
-            y_indx=y_indx,
-            all_gather=True,
-        )
-        active_indx = logits_global.indx
-        expt_sizes = logits_global.mask_metadata.col_sum
-        dispatch_indx = logits_global.mask_metadata.col_sorted_indx
-        combine_indx = logits_global.mask_metadata.row_sorted_indx
-        logits_global_metadata = make_ragged_tensor_metadata(expt_sizes, dispatch_indx.shape[0])
-        x = convert_dp_to_ep(x, expt_assignment, active_indx, dispatch_indx)
-        logits_local_metadata = remap_ragged_tensor_metadata(logits_global_metadata, expt_map)
-        gate_scal = logits_global.vals.flatten()[combine_indx]
-        rdata = RoutingData(gate_scal, expt_sizes, n_expts_tot // EP, n_expts_act, logits_local_metadata)
-        reduce_scatter_metadata = ReduceScatterMetadata(
-            mode=mode,
-            active_indx=active_indx,
-            dispatch_indx=dispatch_indx,
-            combine_indx=combine_indx,
-        )
-        return x, rdata, None, None, reduce_scatter_metadata
+    if _is_distributed_launch():
+        if mode == "ep_sharding":
+            if not expt_assignment:
+                raise ValueError("expt_assignment must be provided for distributed routing.")
+            if TP > 1:
+                raise NotImplementedError("TP > 1 is not supported in distributed MoE benchmark yet.")
+            rank = dist.get_rank()
+            expt_map = expt_assignment.expt_map[rank, :]
+            logits_global = topk(
+                logits,
+                n_expts_act,
+                apply_softmax=not sm_first,
+                y_indx=y_indx,
+                all_gather=True,
+            )
+            active_indx = logits_global.indx
+            expt_sizes = logits_global.mask_metadata.col_sum
+            dispatch_indx = logits_global.mask_metadata.col_sorted_indx
+            combine_indx = logits_global.mask_metadata.row_sorted_indx
+            logits_global_metadata = make_ragged_tensor_metadata(expt_sizes, dispatch_indx.shape[0])
+            x = convert_dp_to_ep(x, expt_assignment, active_indx, dispatch_indx)
+            logits_local_metadata = remap_ragged_tensor_metadata(logits_global_metadata, expt_map)
+            gate_scal = logits_global.vals.flatten()[combine_indx]
+            rdata = RoutingData(gate_scal, expt_sizes, n_expts_tot // EP, n_expts_act, logits_local_metadata)
+            reduce_scatter_metadata = ReduceScatterMetadata(
+                mode=mode,
+                active_indx=active_indx,
+                dispatch_indx=dispatch_indx,
+                combine_indx=combine_indx,
+            )
+            return x, rdata, None, None, reduce_scatter_metadata
+        else:
+            raise NotImplementedError(f"Distributed routing mode {mode} is not implemented yet.")
     else:
         logits = topk(logits, n_expts_act, y_indx=y_indx, apply_softmax=not sm_first)
         dispatch_indx = logits.mask_metadata.col_sorted_indx
