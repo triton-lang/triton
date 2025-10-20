@@ -1510,11 +1510,11 @@ LinearLayout chooseScaledWmmaScaleLayout(
 //   - We choose a fixed byte selector for A (byte-id-a = 0) and B (byte-id-b =
 //   0)
 //   - Each lane in a quad has the same scale factor.
-LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
-                                          ArrayRef<int64_t> scaleShape,
+LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
+                                          ArrayRef<int64_t> shape, int opIdx,
                                           ArrayRef<unsigned> warpsPerCTA,
-                                          CTALayoutAttr ctaLayoutAttr) {
-  unsigned rank = scaleShape.size();
+                                          CTALayoutAttr ctaLayout) {
+  unsigned rank = shape.size();
   auto outDims = standardOutDimNames(ctx, rank);
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
@@ -1526,23 +1526,23 @@ LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   const unsigned kIdx = 1;
   const unsigned mnIdx = 0;
 
-  LinearLayout LL;
   std::vector<std::vector<int32_t>> laneBase;
-  if (dotOperandIdx == 0) {
+  SmallVector<unsigned> order;
+  SmallVector<unsigned> warpsForOperand;
+  if (opIdx == 0) {
     laneBase = {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
+    order = SmallVector<unsigned>{1u, 0u};
+    warpsForOperand = SmallVector<unsigned>{warpsPerCTA[0], warpsPerCTA[1]};
   } else {
     laneBase = {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
+    order = SmallVector<unsigned>{0u, 1u};
+    warpsForOperand = SmallVector<unsigned>{warpsPerCTA[1], warpsPerCTA[0]};
   }
-  LL = LinearLayout::identity1D(scaleShape[1], kRegister, outDims[kIdx]) *
-       LinearLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]});
-  if (dotOperandIdx == 0) {
-    LL = LL * LinearLayout::zeros1D(warpsPerCTA[1], kWarp, outDims[kIdx]) *
-         LinearLayout::identity1D(warpsPerCTA[0], kWarp, outDims[mnIdx]);
-  } else {
-    LL = LL * LinearLayout::identity1D(warpsPerCTA[1], kWarp, outDims[mnIdx]) *
-         LinearLayout::zeros1D(warpsPerCTA[0], kWarp, outDims[kIdx]);
-  }
-  return combineCtaCgaWithShape(LL, ctaLayoutAttr, scaleShape);
+  LinearLayout LL =
+      LinearLayout::identity1D(shape[1], kRegister, outDims[kIdx]) *
+      LinearLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]}) *
+      broadcastedDotOperandLayout(ctx, warpsForOperand, order, 1u, kWarp);
+  return combineCtaCgaWithShape(LL, ctaLayout, shape);
 }
 
 LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,

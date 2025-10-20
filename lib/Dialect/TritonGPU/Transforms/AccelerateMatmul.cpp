@@ -768,8 +768,7 @@ public:
       auto blocked = cast<triton::gpu::BlockedEncodingAttr>(ty.getEncoding());
 
       auto ll = triton::gpu::getSM120DotScaledScaleLayout(
-          ctx, opIdx, shape,
-          /*warpsPerCTA=*/mmaWarps, blocked.getCTALayout());
+          ctx, shape, opIdx, mmaWarps, blocked.getCTALayout());
       auto newEnc = triton::gpu::LinearEncodingAttr::get(ctx, ll);
       auto newTy = RankedTensorType::get(shape, ty.getElementType(), newEnc);
       return rewriter.create<ConvertLayoutOp>(scale.getLoc(), newTy, scale);
