@@ -82,24 +82,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 
-#shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+
 #blocked0 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @tma_load(%arg0: !tt.tensordesc<tensor<128x64xf16, #shared0>>, %arg1: i32) -> tensor<128x64xf16, #blocked0> {
+  tt.func public @tma_load(%arg0: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg1: i32) -> tensor<128x64xf16, #blocked0> {
 		// CHECK-LABEL: tma_load
 		// CHECK: local_dealloc
 		// CHECK-NEXT: local_alloc
 		// CHECK-NEXT: local_alloc
-		// CHECK-NEXT: ttg.local_barrier
+    // CHECK-NEXT: local_barrier
 		// CHECK-NEXT: init_barrier
   	%cst = arith.constant dense<0> : tensor<128x64xi64, #blocked0>
-  	%alloc = ttg.local_alloc %cst : (tensor<128x64xi64, #blocked0>) -> !ttg.memdesc<128x64xi64, #shared0, #smem, mutable>
-  	ttg.local_dealloc %alloc : !ttg.memdesc<128x64xi64, #shared0, #smem, mutable>
-    %l = tt.descriptor_load %arg0[%arg1, %arg1] : !tt.tensordesc<tensor<128x64xf16, #shared0>> -> tensor<128x64xf16, #blocked0>
+  	%alloc = ttg.local_alloc %cst : (tensor<128x64xi64, #blocked0>) -> !ttg.memdesc<128x64xi64, #shared1, #smem, mutable>
+  	ttg.local_dealloc %alloc : !ttg.memdesc<128x64xi64, #shared1, #smem, mutable>
+    %l = tt.descriptor_load %arg0[%arg1, %arg1] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked0>
     tt.return %l : tensor<128x64xf16, #blocked0>
   }
 }
+
 
 // -----
 
