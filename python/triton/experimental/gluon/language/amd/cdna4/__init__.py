@@ -42,8 +42,8 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
         a_scale (Optional[tensor]): Scale factor for operand A.
         a_format (str): Format of the operand A. Available formats: `e2m1`, `e4m3`, `e5m2`.
         b (tensor): The operand B to be multiplied.
-        b_scale (Optional[tensor]): Scale factor for operand B. Available formats: `e2m1`, `e4m3`, `e5m2`.
-        b_format (str): Format of the operand B.
+        b_scale (Optional[tensor]): Scale factor for operand B.
+        b_format (str): Format of the operand B. Available formats: `e2m1`, `e4m3`, `e5m2`.
         acc (tensor): Accumulator tensor.
     """
     layout = acc.type.layout
