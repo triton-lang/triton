@@ -426,7 +426,7 @@ def matmul_ogs(x, w, bias,
         inner_routing_data.block_k if inner_routing_data is not None else None,
     )
     # TODO: track down why this is needed
-    if (fused_activation.specs.fn is not None) or (epilogue.specs.fn is not None):
+    if (epilogue.specs.fn is not None):
         opt_flags.split_k = 1
     if inner_routing_data is not None:
         assert opt_flags.block_k == inner_routing_data.block_k
