@@ -179,6 +179,7 @@ class Tensor:
 # ---------------------------------------------------------------------------- #
 @dataclass
 class Bitmatrix(Tensor):
+
     def __post_init__(self):
         assert self.dtype == BIT
         super().__post_init__()

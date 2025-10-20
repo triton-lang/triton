@@ -31,21 +31,19 @@ class BlackwellMXScaleLayout(Layout):
     def swizzle_data(self, data):
         data = torch.nn.functional.pad(data, (0, self.N_pad - self.N, 0, self.K_pad - self.K))
         data = data.transpose(-1, -2).contiguous()
-        data = data.reshape(
-            self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32, self.K_pad // self.SWIZZLE_K, self.SWIZZLE_K
-        )
+        data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32, self.K_pad // self.SWIZZLE_K,
+                            self.SWIZZLE_K)
         data = data.transpose(2, 4).contiguous()
         data = data.view(1, self.B * self.N_pad // 128, self.K_pad // 4, 2, 256)
         return data
 
     def unswizzle_data(self, data):
-        data = data.reshape(
-            self.B, self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 32, self.ALIGN_N // 32, self.SWIZZLE_K
-        )
+        data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.K_pad // self.SWIZZLE_K, 32, self.ALIGN_N // 32,
+                            self.SWIZZLE_K)
         data = data.transpose(2, 4)
         data = data.reshape(*self.leading_shape, self.N_pad, self.K_pad)
         data = data.transpose(-1, -2)
-        return data[..., : self.K, : self.N]
+        return data[..., :self.K, :self.N]
 
     def swizzle_block_shape(self, block_shape):
         MX_PACK_DIVISOR = 32

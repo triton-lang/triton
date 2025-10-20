@@ -148,6 +148,7 @@ def _load_tile_attrs(
 
 
 def make_matmul_repr(base_name, order):
+
     def matmul_repr(specialization):
         signature = specialization.signature
         constants = specialization.constants
@@ -266,6 +267,5 @@ def matmul_launch_metadata(grid, kernel, args):
 
 @triton.jit
 def threadfence_system():
-    tl.inline_asm_elementwise(
-        "mov.u32 $0, 0x0; fence.sc.sys;", args=(), dtype=(tl.int32,), is_pure=False, pack=1, constraints="=r"
-    )
+    tl.inline_asm_elementwise("mov.u32 $0, 0x0; fence.sc.sys;", args=(), dtype=(tl.int32, ), is_pure=False, pack=1,
+                              constraints="=r")
