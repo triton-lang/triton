@@ -317,6 +317,24 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
             n_expts_act, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             x_transpose, w_transpose, y_transpose,
             device, opt_flags_scope):
+    # We catch and re-invoke pytest.skip(), because otherwise pytest may hold a reference to
+    # the frame that called pytest.skip, including all the tensors, leading to OOM.
+    skip_message = None
+    try:
+        _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
+                 n_expts_act, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
+                 x_transpose, w_transpose, y_transpose,
+                 device, opt_flags_scope)
+    except pytest.skip.Exception as e:
+        skip_message = str(e)
+
+    if skip_message is not None:
+        pytest.skip(skip_message)
+
+def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
+            n_expts_act, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
+            x_transpose, w_transpose, y_transpose,
+            device, opt_flags_scope):
     # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
         if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 9:
