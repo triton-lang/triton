@@ -1496,17 +1496,9 @@ LinearLayout chooseScaledWmmaScaleLayout(
 
 // PTX ISA - Warp-level MMA Block Scaling
 //   https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-block-scaling
-//
 // This function generates layouts for scale tensors used in scaled dot
 // operations.
-//
-// Supported .kind x scale_vec_size:
-//   mxf8f6f4 with UE8M0 scales -> .scale_vec::1X
-//   mxf4nvf4 with UE8M0 scales -> .scale_vec::2X
-//   mxf4nvf4 with UE4M3 scales -> .scale_vec::4X
-//
 // Implementation notes:
-//   - We support only scale_vec::1X for now.
 //   - We choose a fixed provider for A (thread-id-a = 0) and B (thread-id-b =
 //   0)
 //   - We choose a fixed byte selector for A (byte-id-a = 0) and B (byte-id-b =
