@@ -94,7 +94,7 @@ def get_mfma_scale_layout(dot_operand_layout, shape, _semantic=None):
         dot_operand_layout (DotOperandLayout): The dot operand layout.
         shape (List[int]): The shape of the scale tensor.
 
-    Returns:
+    Return:
         layout (DistributedLinearLayout): The scale layout.
     """
     return _get_mfma_scale_layout(dot_operand_layout, shape, _semantic)
