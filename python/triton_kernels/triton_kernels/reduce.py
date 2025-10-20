@@ -16,9 +16,9 @@ class PostprocessFn:
 
 
 @triton.jit
-def _reduce(X, stride_xr, stride_x0, stride_x1,  # x tensor (input)
+def _reduce(X, stride_xr: tl.int64, stride_x0: tl.int64, stride_x1,  # x tensor (input)
             XMx, stride_xmxr, stride_xmx0, stride_xmx1,  # x mx scale
-            Y, stride_y0, stride_y1,  # y tensor (output)
+            Y, stride_y0: tl.int64, stride_y1,  # y tensor (output)
             YMx, stride_ymx0, stride_ymx1,  # y mx scale
             Mask, stride_mr, stride_m0, stride_m1,  # mask tensor
             Scale, stride_sr, stride_s0, stride_s1,  # scale tensor
