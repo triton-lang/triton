@@ -35,7 +35,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     tensor_memory_descriptor,
     allocate_tensor_memory,
-    get_tmem_reg_layout,
+    get_tmem_32x32b_reg_layout,
     tcgen05_mma,
     tcgen05_commit,
 )
@@ -533,13 +533,7 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
     acc_empty_bars = p.acc_empty_bars
     acc_ready_bars = p.acc_ready_bars
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
-    acc_tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
-    acc_layout: gl.constexpr = get_tmem_reg_layout(
-        dtype,
-        (BLOCK_M, BLOCK_N),
-        acc_tmem_layout,
-        p.num_warps,
-    )
+    acc_layout: gl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, [BLOCK_M, BLOCK_N], p.num_warps)
     SPLIT_N: gl.constexpr = BLOCK_N // p.SUBTILE_FACTOR
     acc_smem = gl.allocate_shared_memory(dtype, [BLOCK_M, SPLIT_N], p.c_desc.layout)
 

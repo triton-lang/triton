@@ -194,7 +194,7 @@ public:
           // overlap. WS does not have this problem because the MMA is placed in
           // a different partition than the MMA, so we can correctly set the
           // latency.
-          if (forOp->hasAttr(kWarpSpecializeAttrName)) {
+          if (isWarpSpecialized(forOp)) {
             if (ttng::hasAccReadModifyWrite(mma, forOp))
               opLatency.erase(&op); // can't pipeline the MMA
             else
@@ -217,6 +217,17 @@ private:
     }
     return false;
   }
+
+  bool isWarpSpecialized(scf::ForOp forOp) {
+    scf::ForOp current = forOp;
+    do {
+      if (current->hasAttr(kWarpSpecializeAttrName)) {
+        return true;
+      }
+      current = current->getParentOfType<scf::ForOp>();
+    } while (current);
+    return false;
+  };
 };
 
 // Discover operations that should become async and assign latencies to them
