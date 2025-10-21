@@ -22,6 +22,14 @@ class tensor_descriptor_type(base_type):
     def __str__(self) -> str:
         return f"tensor_descriptor<{self.block_type}, {self.layout}>"
 
+    def _to_ir(self, builder: ir.builder) -> ir.type:
+        is_signed = self.block_type.element_ty.is_int_signed()
+        return builder.get_tensor_descriptor_layout_type(
+            self.block_type.to_ir(builder),
+            is_signed,
+            self.layout._to_ir(builder),
+        )
+
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[tensor_descriptor, int]:
         handle = handles[cursor]
         cursor += 1
@@ -141,14 +149,13 @@ def make_tensor_descriptor(
 
     padding = _semantic._str_to_padding_option(padding_option)
 
-    # TODO
-    ty = tensor_descriptor_type(block_type, shape_type, strides_type, layout)
+    shape_type = ttgl.tuple(shape).type
+    strides_type = ttgl.tuple(strides).type
+    ty = tensor_descriptor_type(type, shape_type, strides_type, layout)
 
-
-    # TODO add the check later
-    # if base.type.element_ty.is_int() and padding == ttgl.ir.PADDING_OPTION.PAD_NAN:
-    #     raise ValueError("Padding option `nan` is not supported for integer blocks")
-    handle = _semantic.builder.create_make_tensor_descriptor(base_handle, [s.handle for s in shape],
-                                                        [s.handle for s in strides], block_shape, is_signed_int,
-                                                        padding)
+    if base.type.element_ty.is_int() and padding == ttgl.ir.PADDING_OPTION.PAD_NAN:
+        raise ValueError("Padding option `nan` is not supported for integer blocks")
+    handle = _semantic.builder.create_make_tensor_descriptor(ty._to_ir(_semantic.builder), base_handle,
+                                                             [s.handle for s in shape], [s.handle for s in strides],
+                                                             block_shape, is_signed_int, padding)
     return tensor_descriptor(handle, shape, strides, type, layout)
