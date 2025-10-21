@@ -138,8 +138,10 @@ def test_async_copy_mbarrier():
     torch.testing.assert_close(out[:20], inp)
     torch.testing.assert_close(out[20:], torch.zeros((12, 32), **tensor_opts))
 
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
 def test_device_tma_load():
+
     @gluon.jit
     def tma_device_load_kernel(input_ptr, output_ptr, XBLOCK: ttgl.constexpr, smem_layout: ttgl.constexpr):
         input_desc = tma.make_tensor_descriptor(
@@ -163,7 +165,7 @@ def test_device_tma_load():
         xindex = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(1, block_layout))[:, None]
         yindex = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(0, block_layout))[None, :]
         val = smem.load(block_layout)
-        ttgl.store(output_ptr + yindex  + xindex * XBLOCK, val)
+        ttgl.store(output_ptr + yindex + xindex * XBLOCK, val)
 
     XBLOCK = 16
     input = torch.zeros((XBLOCK, XBLOCK), device="cuda", dtype=torch.float16)
@@ -178,6 +180,7 @@ def test_device_tma_load():
 
     def alloc_fn(size: int, alignment: int, stream: int):
         return torch.empty(size, device="cuda", dtype=torch.int8)
+
     triton.set_allocator(alloc_fn)
 
     tma_device_load_kernel[(1, )](input, output, XBLOCK, smem_layout)
@@ -215,10 +218,12 @@ def test_device_tma_store():
 
     def alloc_fn(size: int, alignment: int, stream: int):
         return torch.empty(size, device="cuda", dtype=torch.int8)
+
     triton.set_allocator(alloc_fn)
 
     tma_device_store_kernel[(1, )](out, XBLOCK, smem_layout)
     torch.testing.assert_close(out, torch.zeros_like(out))
+
 
 @gluon.jit
 def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, block_layout: ttgl.constexpr,
