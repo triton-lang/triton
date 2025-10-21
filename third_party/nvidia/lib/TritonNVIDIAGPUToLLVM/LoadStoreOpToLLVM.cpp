@@ -1725,8 +1725,8 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
   auto callback = [&](Value pred, Value shMemPtr, Value yOffset,
                       ArrayRef<Value> xOffsets) {
     std::string tmaInst = "@$0 cp.async.bulk.tensor.2d.tile::gather4.shared"
-    "::cta.global.mbarrier::complete_tx::bytes "
-    "[$1], [$2, {$3, $4, $5, $6, $7}], [$8];";
+                          "::cta.global.mbarrier::complete_tx::bytes "
+                          "[$1], [$2, {$3, $4, $5, $6, $7}], [$8];";
 
     if (computeCapability == 100) {
       tmaInst = "@$0 cp.async.bulk.tensor.2d.tile::gather4.shared"
