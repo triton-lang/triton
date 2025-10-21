@@ -114,9 +114,6 @@ class ConvertWarpPipeline
     auto condBarrierLow =
         builder.create<mlir::triton::amdgpu::CondBarrierOp>(loc, warpLow);
 
-    // in case a loop begins with a barrier
-    bool barrierAtTop = false;
-
     SmallVector<Block *> clusterBlocks;
     SmallVector<Operation *> clusterOps;
     SmallVector<bool> bars;
@@ -158,37 +155,37 @@ class ConvertWarpPipeline
       existingBarrierMap.erase(bottomBar);
     }
 
-    for (int j = 0; j < numClusters; j++) {
-      for (int i = 0; i < numClusters; i++) {
-        int next = (i + 2 + j) % numClusters;
-        int barLoc = (i + 1 + j) % numClusters;
-        int curr = (i + 1) % numClusters;
-        bool synced = false;
-        while (curr != i && curr != barLoc) {
-          if (bars[curr]) {
-            synced = true;
-            break;
-          }
-          curr = (curr + 1) % numClusters;
-        }
-        // also if next can already have a fence
-        if (bars[barLoc])
-          synced = true;
+    // FIXME:MUST: not only dependency over the pipeline but also need to check dependency
+    // between the clusters within the same warp and emit barrier earlier in the cluster 
+    // boundary. This is important, otherwise, membar will insert local barrier within
+    // a cluster where there's a dependency, that will break warp-pipelining.
+    
+    // dependency from node 'src' to 'next' 
+    for (int offset = 0; offset < numClusters; offset++) {
+      for (int src = 0; src < numClusters; src++) {
+        const int next = (src + 2 + offset) % numClusters;
+        const int barrierLoc = (src + 1 + offset) % numClusters;
 
-        // synced between i and j, no need to check.
-        if (synced)
+        // Check if any existing barrier sits between src and barrierIdx
+        auto isSynced = [&]() -> bool {
+          for (int idx = (src + 1) % numClusters; idx != src; idx = (idx + 1) % numClusters) {
+            if (bars[idx]) return true;
+            if (idx == barrierLoc) break;
+          }
+          return false;
+        };
+        // Skip if dependency is already resolved.
+        if (isSynced())
           continue;
 
-        bool needFence =
-            clusterInfo[i].isIntersected(clusterInfo[next], nullptr);
+        const bool needFence =
+            clusterInfo[src].isIntersected(clusterInfo[next], nullptr);
         if (needFence) {
           // insert fence/barrier before this cluster
-          bars[barLoc] = true;
-          LDBG("cluster " << i << " need fence to " << next
-                          << " placing barrier at " << barLoc);
+          bars[barrierLoc] = true;
+          LDBG("cluster " << src << " need fence to " << next
+                          << " placing barrier at " << barrierLoc);
         }
-        for (int i = 0; i < numClusters; i++)
-          LDBG("bars [" << i << "] = " << bars[i]);
       }
     }
 
@@ -204,7 +201,9 @@ class ConvertWarpPipeline
         } // else do nothing.
       } else {
         builder.setInsertionPoint(clusterOps[i]);
+        // The first one wraps back to the last of the loop
         if (i == 0 && topBar == existingBarrierMap.end())
+          // inserts just before yield.
           builder.setInsertionPoint(terminatorOp);
         emitClusterBarrier(builder, loc, bars[i]);
       }
@@ -215,9 +214,6 @@ public:
   ConvertWarpPipeline() : ConvertWarpPipelineBase<ConvertWarpPipeline>() {}
 
   void runOnOperation() override {
-
-    LDBG("cluster dependency analysis open");
-
     ModuleOp m = getOperation();
     OpBuilder builder(m);
     ModuleAllocation moduleAllocation(m);
@@ -231,7 +227,6 @@ public:
         }
       });
     }
-    LDBG("cluster dependency analysis close");
   }
 };
 
