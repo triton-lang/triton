@@ -151,23 +151,40 @@ LogicalResult DependencyRewriter::run() {
     // specific Partition
     auto &useInfo = partitionUseInfo.emplace_back();
     SmallVector<std::tuple<Value, OpOperand *, unsigned>> uses;
+    llvm::DenseMap<Value, llvm::DenseSet<int>> consumerPartitions;
 
-    std::function<void(OpOperand &)> collectUses;
-    collectUses = [&](OpOperand &use) {
+    std::function<void(OpOperand &, llvm::DenseSet<int>)> collectUses;
+    collectUses = [&](OpOperand &use, llvm::DenseSet<int> partitionsToSearch) {
       Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
       auto partitionIds = getPartitionIds(owner);
       if (isa<scf::YieldOp>(owner)) {
+        // Filter out partitions that have already consumed this value.
+        // This is a performance optimization to avoid duplicate loads for loop-carried values.
+        if (consumerPartitions.contains(use.get())) {
+          for (auto id : consumerPartitions[use.get()]) {
+            partitionsToSearch.erase(id);
+          }
+          if (partitionsToSearch.empty()) {
+            return;
+          }
+        }
+
         // This value is used in a subsequent iteration.
         // collect the uses of the appropriate loop arg
         for (auto &newUse : loop.getBody()
                                 ->getArgument(use.getOperandNumber() + 1)
                                 .getUses()) {
-          collectUses(newUse);
+          collectUses(newUse, partitionsToSearch);
         }
-      } else if (partitionIds &&
-                 !llvm::is_contained(*partitionIds, partition.getIndex())) {
-        // This value is used in a different partition in the same iteration.
-        uses.emplace_back(use.get(), &use, 0);
+      } else if (partitionIds) {
+        // Record the partitions that consume this value.
+        consumerPartitions[use.get()].insert(partitionIds->begin(), partitionIds->end());
+        for (auto id : *partitionIds) {
+          if (id != partition.getIndex() && partitionsToSearch.contains(id)) {
+            // This value is used in a different partition in the same iteration.
+            uses.emplace_back(use.get(), &use, 0);
+          }
+        }
       }
     };
     for (Operation *op : partition.getOps()) {
@@ -175,9 +192,25 @@ LogicalResult DependencyRewriter::run() {
         // skip ops in the root partition
         continue;
       }
-      for (OpOperand &use : op->getUses()) {
-        collectUses(use);
+
+      // Only collect cross partition uses.
+      llvm::DenseSet<int> partitionsToSearch;
+      for (const Partition &p : partitions.getPartitions()) {
+        if (p.getIndex() != partition.getIndex()) {
+          partitionsToSearch.insert(p.getIndex());
+        }
       }
+
+      // Collect non-yield uses first in order to detect redundancy.
+      SmallVector<OpOperand *> yieldUses;
+      for (OpOperand &use : op->getUses()) {
+        if (isa<scf::YieldOp>(use.getOwner()))
+          yieldUses.push_back(&use);
+        else
+          collectUses(use, partitionsToSearch);
+      }
+      for (OpOperand *use : yieldUses)
+        collectUses(*use, partitionsToSearch);
     }
 
     auto callback = [&](Value output, OpOperand &use, unsigned distance) {
@@ -262,7 +295,7 @@ LogicalResult DependencyRewriter::run() {
         b.setInsertionPoint(
             loop.getBody()->findAncestorOpInBlock(*earliestUser));
 
-        auto [usePartition, distance] = key;
+        Partition *usePartition = key.first;
 
         // Wait for the value to be available.
         StageCluster sinkSrcCluster = getStageCluster(earliestUser);
@@ -277,6 +310,39 @@ LogicalResult DependencyRewriter::run() {
         }
         for (OpOperand *use : uses)
           use->set(value);
+
+        // Check for any loop carried usages to replace.
+        for (OpOperand &use : output.getUses()) {
+          Operation *user = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+          if (isa<scf::YieldOp>(user)) {
+            int yieldArgIndex = use.getOperandNumber();
+            SmallVector<OpOperand *> crossPartitionUsages;
+            for (OpOperand &carriedUse : loop.getBody()->getArgument(yieldArgIndex + 1).getUses()) {
+              Operation *carriedUser = loop.getBody()->findAncestorOpInBlock(*carriedUse.getOwner());
+              auto partitionIds = getPartitionIds(carriedUser);
+              // Ensure consumed by current partition.
+              if (partitionIds && llvm::is_contained(*partitionIds, usePartition->getIndex())) {
+                crossPartitionUsages.push_back(&carriedUse);
+              }
+            }
+
+            // Add new loop arguments for cross-partition loop carried values.
+            if (!crossPartitionUsages.empty()) {
+              // Use the same init value for the new loop argument.
+              OpBuilder rewriter(loop.getContext());
+              loop = addIterArgsToLoop(rewriter, loop, ValueRange{loop.getInitArgs()[yieldArgIndex]});
+
+              // Use the same output value in the new position of the yield op.
+              appendToForOpYield(loop, {value});
+
+              // Replace all uses of the old loop argument in this partition with the new loop argument.
+              for (OpOperand *use : crossPartitionUsages) {
+                use->set(loop.getBody()->getArguments().back());
+              }
+            }
+          }
+        }
+
         exitOp(b);
       }
 
