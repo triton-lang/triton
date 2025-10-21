@@ -2953,8 +2953,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 }
 """)
 
+
 @pytest.mark.parametrize("target", [BLACKWELL_TARGET, HOPPER_TARGET])
 def test_nv_tma_descriptor_load_kernel(target):
+
     @gluon.jit
     def nv_tma_descriptor_load_kernel(input_ptr):
         XBLOCK: ttgl.constexpr = 128
@@ -3000,8 +3002,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 }
 """)
 
+
 @pytest.mark.parametrize("target", [BLACKWELL_TARGET, HOPPER_TARGET])
 def test_nv_tma_descriptor_store_kernel(target):
+
     @gluon.jit
     def nv_tma_descriptor_store_kernel(input_ptr):
         XBLOCK: ttgl.constexpr = 128

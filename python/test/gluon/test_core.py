@@ -138,6 +138,87 @@ def test_async_copy_mbarrier():
     torch.testing.assert_close(out[:20], inp)
     torch.testing.assert_close(out[20:], torch.zeros((12, 32), **tensor_opts))
 
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_device_tma_load():
+    @gluon.jit
+    def tma_device_load_kernel(input_ptr, output_ptr, XBLOCK: ttgl.constexpr, smem_layout: ttgl.constexpr):
+        input_desc = tma.make_tensor_descriptor(
+            input_ptr,
+            shape=[XBLOCK, XBLOCK],
+            strides=[XBLOCK, 1],
+            block_shape=[XBLOCK, XBLOCK],
+            layout=smem_layout,
+        )
+
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], smem_layout)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
+        mbarrier.init(bar, count=1)
+
+        mbarrier.expect(bar, input_desc.block_type.nbytes)
+        tma.async_copy_global_to_shared(input_desc, [0, 0], bar, smem)
+        mbarrier.wait(bar, 0)
+        mbarrier.invalidate(bar)
+
+        block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+        xindex = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(1, block_layout))[:, None]
+        yindex = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(0, block_layout))[None, :]
+        val = smem.load(block_layout)
+        ttgl.store(output_ptr + yindex  + xindex * XBLOCK, val)
+
+    XBLOCK = 16
+    input = torch.zeros((XBLOCK, XBLOCK), device="cuda", dtype=torch.float16)
+    output = torch.ones_like(input)
+    smem_layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=32,
+        element_bitwidth=16,
+        rank=2,
+        transposed=False,
+        fp4_padded=False,
+    )
+
+    def alloc_fn(size: int, alignment: int, stream: int):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+    triton.set_allocator(alloc_fn)
+
+    tma_device_load_kernel[(1, )](input, output, XBLOCK, smem_layout)
+    torch.testing.assert_close(input, output)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+def test_device_tma_store():
+
+    @gluon.jit
+    def tma_device_store_kernel(out_ptr, XBLOCK: ttgl.constexpr, smem_layout: ttgl.constexpr):
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+        value = ttgl.full([XBLOCK, XBLOCK], 0, ttgl.float16, layout)
+        alloc = ttgl.allocate_shared_memory(ttgl.float16, [XBLOCK, XBLOCK], smem_layout, value)
+        out_desc = tma.make_tensor_descriptor(
+            out_ptr,
+            shape=[XBLOCK, XBLOCK],
+            strides=[XBLOCK, 1],
+            block_shape=[XBLOCK, XBLOCK],
+            layout=smem_layout,
+        )
+        tma.async_copy_shared_to_global(out_desc, [0, 0], alloc)
+        tma.store_wait(0)
+        alloc._keep_alive()
+
+    XBLOCK = 16
+    out = torch.ones((XBLOCK, XBLOCK), dtype=torch.float16, device="cuda")
+    smem_layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=32,
+        element_bitwidth=16,
+        rank=2,
+        transposed=False,
+        fp4_padded=False,
+    )
+
+    def alloc_fn(size: int, alignment: int, stream: int):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+    triton.set_allocator(alloc_fn)
+
+    tma_device_store_kernel[(1, )](out, XBLOCK, smem_layout)
+    torch.testing.assert_close(out, torch.zeros_like(out))
 
 @gluon.jit
 def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, block_layout: ttgl.constexpr,
