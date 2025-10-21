@@ -143,19 +143,26 @@ def make_tensor_descriptor(
     block_shape = ttgl._unwrap_shape(block_shape)
 
     assert isinstance(base.type, ttgl.pointer_type)
-    type = ttgl.block_type(base.type.element_ty, block_shape)
+    block_type = ttgl.block_type(base.type.element_ty, block_shape)
     base_handle = base.handle
-    is_signed_int = base.type.element_ty.is_int_signed()
 
     padding = _semantic._str_to_padding_option(padding_option)
 
+    layout = _unwrap_if_constexpr(layout)
+    assert isinstance(layout, NVMMASharedLayout), \
+        "Expected layout to be a NVMMASharedLayout"
+
     shape_type = ttgl.tuple(shape).type
     strides_type = ttgl.tuple(strides).type
-    ty = tensor_descriptor_type(type, shape_type, strides_type, layout)
+    ty = tensor_descriptor_type(block_type, shape_type, strides_type, layout)
 
     if base.type.element_ty.is_int() and padding == ttgl.ir.PADDING_OPTION.PAD_NAN:
         raise ValueError("Padding option `nan` is not supported for integer blocks")
-    handle = _semantic.builder.create_make_tensor_descriptor(ty._to_ir(_semantic.builder), base_handle,
-                                                             [s.handle for s in shape], [s.handle for s in strides],
-                                                             block_shape, is_signed_int, padding)
-    return tensor_descriptor(handle, shape, strides, type, layout)
+    handle = _semantic.builder.create_make_tensor_descriptor(
+        ty._to_ir(_semantic.builder),
+        base_handle,
+        [s.handle for s in shape],
+        [s.handle for s in strides],
+        padding,
+    )
+    return tensor_descriptor(handle, shape, strides, block_type, layout)
