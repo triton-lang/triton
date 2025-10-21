@@ -227,3 +227,13 @@ Debug Ops
     static_assert
     device_print
     device_assert
+
+
+Valid tl.dtype Data Types
+-----------------
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    

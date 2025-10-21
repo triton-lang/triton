@@ -437,9 +437,15 @@ class dtype(base_type):
         return 'fp8' in self.name
 
     def is_fp8e4nv(self):
+        """
+        8-bit floating point, as in E4M3 from https://arxiv.org/pdf/2209.05433
+        """
         return self.name == 'fp8e4nv'
 
     def is_fp8e4b8(self):
+        """
+        8-bit floating point, from https://arxiv.org/pdf/2206.02915
+        """
         return self.name == 'fp8e4b8'
 
     def is_fp8e4b15(self):
