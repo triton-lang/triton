@@ -1696,6 +1696,14 @@ struct AsyncTMAGatherOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMAGatherOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
+  AsyncTMAGatherOpConversion(LLVMTypeConverter &converter,
+                             PatternBenefit benefit, int computeCapability)
+      : ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMAGatherOp>(converter,
+                                                                     benefit),
+        computeCapability(computeCapability) {}
+
+  int computeCapability;
+
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::AsyncTMAGatherOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override;
@@ -1716,9 +1724,18 @@ LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
   // Callback to generate the gather4 instruction.
   auto callback = [&](Value pred, Value shMemPtr, Value yOffset,
                       ArrayRef<Value> xOffsets) {
-    std::string tmaInst = "@$0 cp.async.bulk.tensor.2d.tile::gather4.shared"
-                          "::cluster.global.mbarrier::complete_tx::bytes "
-                          "[$1], [$2, {$3, $4, $5, $6, $7}], [$8];";
+    std::string tmaInst;
+    if (computeCapability == 100) {
+      tmaInst = "@$0 cp.async.bulk.tensor.2d.tile::gather4.shared"
+                "::cluster.global.mbarrier::complete_tx::bytes "
+                "[$1], [$2, {$3, $4, $5, $6, $7}], [$8];";
+    } else if (computeCapability >= 120) {
+      tmaInst = "@$0 cp.async.bulk.tensor.2d.tile::gather4.shared"
+                "::cta.global.mbarrier::complete_tx::bytes "
+                "[$1], [$2, {$3, $4, $5, $6, $7}], [$8];";
+    } else {
+      llvm_unreachable("unsupported compute capability for TMA Gather");
+    }
 
     PTXBuilder ptxBuilder;
     SmallVector<PTXBuilder::Operand *, 9> operands{
@@ -1890,9 +1907,11 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
       typeConverter, targetInfo, computeCapability, axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion, AsyncWaitOpConversion,
                AsyncCopyMbarrierArriveOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
-               AsyncTMACopyLocalToGlobalOpConversion,
-               AsyncTMAReduceOpConversion, AsyncTMAGatherOpConversion,
-               AsyncTMAScatterOpConversion, TMAStoreWaitOpConversion>(
-      typeConverter, benefit);
+  patterns
+      .add<AsyncTMACopyGlobalToLocalOpConversion,
+           AsyncTMACopyLocalToGlobalOpConversion, AsyncTMAReduceOpConversion,
+           AsyncTMAScatterOpConversion, TMAStoreWaitOpConversion>(typeConverter,
+                                                                  benefit);
+  patterns.add<AsyncTMAGatherOpConversion>(typeConverter, benefit,
+                                           computeCapability);
 }
