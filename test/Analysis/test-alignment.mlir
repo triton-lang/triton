@@ -956,6 +956,22 @@ tt.func @if_into_for_step(%i1 : i1) {
 
 // -----
 
+tt.func @mask_alignment_if_constancy(%x: tensor<64xi32>, %cond: i1) {
+  %c5 = arith.constant dense<5> : tensor<64xi32>
+  %c10 = arith.constant dense<10> : tensor<64xi32>
+  %m1 = arith.cmpi slt, %x, %c10 : tensor<64xi32>
+  %m2 = arith.cmpi sgt, %x, %c5 : tensor<64xi32>
+  // expected-remark @below {{constancy = [1]}}
+  %mask = scf.if %cond -> tensor<64xi1> {
+    scf.yield %m1 : tensor<64xi1>
+  } else {
+    scf.yield %m2 : tensor<64xi1>
+  }
+  tt.return
+}
+
+// -----
+
 tt.func @op_annotation(%i32 : i32) {
   %c0 = arith.constant 0 : i32
   // expected-remark @below {{contiguity = [1], divisibility = [4096], constancy = [1], constant_value = <none>}}

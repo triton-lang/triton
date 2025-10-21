@@ -17,6 +17,12 @@ namespace mlir::triton {
 namespace {
 
 constexpr int64_t kMaxDivisor = highestPowOf2Divisor<int64_t>(0);
+constexpr int64_t kUnknownContiguity = 0;
+constexpr int64_t kUnknownConstancy = 0;
+
+static bool isUnknownContiguity(int64_t value) {
+  return value == kUnknownContiguity;
+}
 
 template <typename... Args> int64_t gcd(int64_t a, int64_t b, Args... args) {
   if (a == 0)
@@ -48,8 +54,8 @@ int64_t getDivisibilityFromContiguity(const AxisInfo &lhs, const AxisInfo &rhs,
   // The resulting contiguity will be 2, while the divisibility will be 2
   // because 18 is not divisible by 4.
   if (lhs.getContiguity(d) == rhs.getContiguity(d) ||
-      lhs.getContiguity(d) == kMaxDivisor ||
-      rhs.getContiguity(d) == kMaxDivisor) {
+      isUnknownContiguity(lhs.getContiguity(d)) ||
+      isUnknownContiguity(rhs.getContiguity(d))) {
     // Contiguity not changed or one of them is unresolved.
     // If unresolved, we can first perform a loose bound gcd since the unknown
     // contiguity will be resolved in the end.
@@ -257,10 +263,11 @@ public:
     if (auto shape = dyn_cast<mlir::ShapedType>(op.getType()))
       rank = shape.getRank();
 
-    // Poison values are never accessed, thus assume optimistic values.
-    return AxisInfo(AxisInfo::DimVectorT(rank, kMaxDivisor),
+    // Poison values are never accessed; keep divisibility optimistic but avoid
+    // polluting joins for contiguity/constancy.
+    return AxisInfo(AxisInfo::DimVectorT(rank, kUnknownContiguity),
                     AxisInfo::DimVectorT(rank, kMaxDivisor),
-                    AxisInfo::DimVectorT(rank, kMaxDivisor));
+                    AxisInfo::DimVectorT(rank, kUnknownConstancy));
   }
 };
 
@@ -1181,19 +1188,19 @@ void AxisInfo::initDimVectorFromHint(Attribute attr, DimVectorT *vec) {
                    op)) {
       // scf::ForOp, scf::IfOp, scf::WhileOp, gpu::WarpSpecializePartitionsOp
       // Control flow operations are initialized with "unknown" state:
-      // the maximum possible divisibility, contiguity, and constancy.
+      // the maximum possible divisibility, and an unknown contiguity/constancy.
       knownDivisibility = DimVectorT(rank, kMaxDivisor);
-      knownConstancy = DimVectorT(rank, kMaxDivisor);
-      knownContiguity = DimVectorT(rank, kMaxDivisor);
+      knownConstancy = DimVectorT(rank, kUnknownConstancy);
+      knownContiguity = DimVectorT(rank, kUnknownContiguity);
     }
   } else if (Operation *op = value.getDefiningOp()) {
     if (isa<RegionBranchOpInterface>(op)) {
       // scf::ForOp, scf::IfOp, scf::WhileOp
       // Control flow operations are initialized with "unknown" state:
-      // the maximum possible divisibility, contiguity, and constancy.
+      // the maximum possible divisibility, and an unknown contiguity/constancy.
       knownDivisibility = DimVectorT(rank, kMaxDivisor);
-      knownConstancy = DimVectorT(rank, kMaxDivisor);
-      knownContiguity = DimVectorT(rank, kMaxDivisor);
+      knownConstancy = DimVectorT(rank, kUnknownConstancy);
+      knownContiguity = DimVectorT(rank, kUnknownContiguity);
     }
     // Other operations are conservatively initialized with the lowest possible
     // divisibility, contiguity, and constancy unless they have specified.
@@ -1374,7 +1381,8 @@ void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
     auto index = entry.index();
     auto value = entry.value();
     auto setAttrFn = [&](StringRef attrName, int64_t prevValue) {
-      auto curValue = kMaxDivisor;
+      int64_t curValue =
+          attrName == "tt.divisibility" ? kMaxDivisor : kUnknownContiguity;
       if (callee.getArgAttrOfType<IntegerAttr>(index, attrName)) {
         curValue =
             callee.getArgAttrOfType<IntegerAttr>(index, attrName).getInt();
