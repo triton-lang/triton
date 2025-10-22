@@ -109,67 +109,7 @@ private:
     return contigRegisters >= needContigReg && contigLanes >= needContigLane;
   }
 
-<<<<<<< HEAD
-  bool checkKWidth(MemDescType srcTy, RankedTensorType dstTy) const {
-    // Single rate MFMA insts:
-    // fp16, bf16: mfma32x32x8, mfma16x16x16
-    // fp8, bf8: mfma32x32x16, mfma16x16x32
-    // int8: mfma32x32x16, mfma16x16x32
-    //
-    // Double rate MFMA insts:
-    // fp16, bf16: mfma32x32x16, mfma16x16x32
-    // fp8, bf8: mfma32x32x64, mfma16x16x128
-    // int8: mfma32x32x32, mfma16x16x64
-    //
-    // Check that kWidth of the dst dotOp layout is large enough to
-    // work with the transposed lds load instructions.
-    auto dotEnc = llvm::cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-    auto mfmaEnc = llvm::cast<AMDMfmaEncodingAttr>(dotEnc.getParent());
-
-    int rank = dstTy.getRank();
-    auto bitwidth = this->typeConverter->convertType(dstTy.getElementType())
-                        .getIntOrFloatBitWidth();
-    int32_t kWidth = dotEnc.getKWidth();
-    const int32_t mDim = mfmaEnc.getMDim();
-    if (mDim != 32 && mDim != 16)
-      return false;
-
-    const int kFactor = 16 / bitwidth;
-    const int kSizeDoubleRateMfma32 = 16 * kFactor;
-    const int kSizeDoubleRateMfma16 = 32 * kFactor;
-    int largeTileThreshold =
-        (mDim == 32) ? kSizeDoubleRateMfma32 : kSizeDoubleRateMfma16;
-
-    // For FP8, wider MFMA instructions (scaled MFMA) have a k-dimension
-    // that is four times of regular MFMA instructions.
-    if (dstTy.getElementType().isFloat() && bitwidth == 8) {
-      largeTileThreshold *= 2;
-    }
-
-    const auto shape = dstTy.getShape();
-    const int kDim = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
-    const bool isLargeTile = shape[kDim] >= largeTileThreshold;
-
-    const int kWidthLargeTile = 8 * kFactor;
-    const int kWidthSmallTile = 4 * kFactor;
-    // For largeTile, i.e. double rated mfma is an option, it's accepted to
-    // have kWidth set for both double and single rated mfma
-    // For smallTile, it's only accepted to have kWidth set to single rate
-    // mfma. Smaller kWidth is not allowed to use transposed lds load.
-    return (isLargeTile &&
-            llvm::is_contained({kWidthLargeTile, kWidthSmallTile}, kWidth)) ||
-           (kWidth == kWidthSmallTile);
-  }
-
-  bool checkCurrentLimitation(Operation *localLoad,
-                              RankedTensorType dstTy) const {
-
-    auto bitwidth = this->typeConverter->convertType(dstTy.getElementType())
-                        .getIntOrFloatBitWidth();
-
-=======
   bool checkCurrentLimitation(unsigned bitwidth) const {
->>>>>>> 2d4f16d965 ([AMD] Use linear layout to infer and emit ds_read_tr  (#8235))
     // FP4 is represented as i8 and, when packed along K, can be
     // transposed using ds_read_tr8 which doesn't change packing.
     if (bitwidth != 16 && bitwidth != 8) {
