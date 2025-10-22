@@ -1856,37 +1856,45 @@ struct AsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
   LogicalResult
   matchAndRewrite(AsyncWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
     switch (targetInfo.getISAFamily()) {
     case ISAFamily::CDNA1:
     case ISAFamily::CDNA2:
     case ISAFamily::CDNA3:
-    case ISAFamily::CDNA4:
+    case ISAFamily::CDNA4: {
+      // global.load.lds uses vmcnt to synchronize
+      // The rocdl op stores all available counters in a single int32 value (v).
+      // The vmcnt (6 bits) is split into a lower 3:0 and higher 5:4 parts.
+      // The lower part is stored in bits 3:0 of v and the higher part in bits
+      // 15:14. We have to set all other bits in v to 1 to signal we are not
+      // interested in those.
+
+      // Clamp vmcnt to 6bits; a lower vmcnt will produce a conservative wait
+      unsigned vmCnt = std::min(63u, op.getNum());
+
+      // Extract low and high bits and combine while setting all other bits to 1
+      unsigned lowBits = vmCnt & 0xF;
+      unsigned highBits = vmCnt >> 4 << 14;
+      unsigned otherCnts = ~0xC00F; // C00F has bits 15:14 and 3:0 set
+      unsigned waitValue = lowBits | highBits | otherCnts;
+
+      rewriter.create<ROCDL::SWaitcntOp>(loc, waitValue);
       break;
+    }
+    case ISAFamily::GFX1250: {
+      // Clamp asyncCnt to 6bits(hw imit); lower means conservative
+      unsigned asyncCnt = std::min(63u, op.getNum());
+      LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                      "llvm.amdgcn.s.wait.asynccnt", {},
+                                      {b.i16_val(asyncCnt)});
+      break;
+    }
     default:
       return rewriter.notifyMatchFailure(
           op, "Only supported on CDNA target architecture");
     }
-
-    auto loc = op->getLoc();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-    // global.load.lds uses vmcnt to synchronize
-    // The rocdl op stores all available counters in a single int32 value (v).
-    // The vmcnt (6 bits) is split into a lower 3:0 and higher 5:4 parts.
-    // The lower part is stored in bits 3:0 of v and the higher part in bits
-    // 15:14. We have to set all other bits in v to 1 to signal we are not
-    // interested in those.
-
-    // Clamp vmcnt to 6bits; a lower vmcnt will produce a conservative wait
-    unsigned vmCnt = std::min(63u, op.getNum());
-
-    // Extract low and high bits and combine while setting all other bits to 1
-    unsigned lowBits = vmCnt & 0xF;
-    unsigned highBits = vmCnt >> 4 << 14;
-    unsigned otherCnts = ~0xC00F; // C00F has bits 15:14 and 3:0 set
-    unsigned waitValue = lowBits | highBits | otherCnts;
-
-    rewriter.create<ROCDL::SWaitcntOp>(loc, waitValue);
 
     // Drop the result AsyncToken
     rewriter.replaceOp(op, b.i32_val(0));
