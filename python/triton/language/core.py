@@ -159,7 +159,7 @@ class base_type:
         raise NotImplementedError("Types must implement __eq__")
 
     def __ne__(self, other) -> bool:
-        return not (self == other)
+        return constexpr(not (self == other))
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
         """Build a frontend value with the current dtype, wrapping a list of existing handles.
@@ -557,8 +557,8 @@ class dtype(base_type):
     def __eq__(self, other) -> bool:
         other = _unwrap_if_constexpr(other)
         if not isinstance(other, dtype):
-            return False
-        return self.name == other.name
+            return constexpr(False)
+        return constexpr(self.name == other.name)
 
     def __hash__(self):
         return hash((self.name, ))
@@ -682,8 +682,9 @@ class pointer_type(dtype):
     def __eq__(self, other) -> bool:
         other = _unwrap_if_constexpr(other)
         if not isinstance(other, pointer_type):
-            return False
-        return self.element_ty == other.element_ty and self.address_space == other.address_space and self.const == other.const
+            return constexpr(False)
+        return constexpr(self.element_ty == other.element_ty and self.address_space == other.address_space
+                         and self.const == other.const)
 
     @property
     def scalar(self):
@@ -730,8 +731,8 @@ class block_type(dtype):
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, block_type):
-            return False
-        return self.element_ty == other.element_ty and self.shape == other.shape
+            return constexpr(False)
+        return constexpr(self.element_ty == other.element_ty and self.shape == other.shape)
 
     @property
     def scalar(self):
@@ -773,7 +774,7 @@ class tuple_type(base_type):
         return self.types[index]
 
     def __eq__(self, other):
-        return type(self) is type(other) and self.types == other.types and self.fields == other.fields
+        return constexpr(type(self) is type(other) and self.types == other.types and self.fields == other.fields)
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[tuple, int]:
         values = []
@@ -1355,11 +1356,11 @@ class tensor_descriptor_base_type(base_type):
 
     def __eq__(self, other) -> bool:
         if type(other) is not type(self):
-            return False
-        return self.block_type == other.block_type
+            return constexpr(False)
+        return constexpr(self.block_type == other.block_type)
 
     def __neq__(self, other) -> bool:
-        return not (self == other)
+        return constexpr(not (self == other))
 
     def mangle(self) -> str:
         return f"TD{self.block_type.mangle()}"
@@ -1479,8 +1480,8 @@ class tensor_descriptor_type(tensor_descriptor_base_type):
         self.strides_type._flatten_ir_types(builder, out)
 
     def __eq__(self, other):
-        return super().__eq__(other) and (self.shape_type == other.shape_type) and (self.strides_type
-                                                                                    == other.strides_type)
+        return constexpr(super().__eq__(other) and (self.shape_type == other.shape_type)
+                         and (self.strides_type == other.strides_type))
 
 
 class tensor_descriptor(tensor_descriptor_base):
