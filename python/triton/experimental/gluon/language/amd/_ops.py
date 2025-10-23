@@ -59,5 +59,5 @@ def _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, scale_fn, seman
     a_scale = _process_scale(0, a_scale, a_format)
     b_scale = _process_scale(1, b_scale, b_format)
     output = semantic.dot_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, fast_math=False, lhs_k_pack=True,
-                                  rhs_k_pack=True, out_dtype=ttgl.float32)
+                                 rhs_k_pack=True, out_dtype=ttgl.float32)
     return ttgl.tensor(output.handle, acc.type)
