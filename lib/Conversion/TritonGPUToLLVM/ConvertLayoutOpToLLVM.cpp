@@ -26,8 +26,6 @@ struct ConvertLayoutOpConversion
     : public ConvertOpToLLVMPattern<ConvertLayoutOp> {
   const TargetInfoBase &targetInfo;
 
-  // Set benefit to 2 so that this pattern applies before other convert-layout
-  // conversions.  TODO(jlebar): Eventually we want this to be the only pattern.
   explicit ConvertLayoutOpConversion(LLVMTypeConverter &typeConverter,
                                      const TargetInfoBase &targetInfo,
                                      PatternBenefit benefit = 1)
