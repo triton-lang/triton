@@ -839,7 +839,7 @@ struct BufferLoadToLocalOpConversion
       Value cond =
           hasOther ? b.and_(threadPred, maybeSwizzledMaskElem) : threadPred;
 
-      auto [loadBlock, afterLoadBlock] = emitBranch(rewriter, loc, threadPred);
+      auto [loadBlock, afterLoadBlock] = emitBranch(rewriter, loc, cond);
 
       auto bufferLoadToLds = bufferEmitter.emitLoadToLds(
           vecTy, vecBytesVal, rsrcDesc, offsetElem, shmemAddr,

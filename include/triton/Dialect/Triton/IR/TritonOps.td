@@ -664,9 +664,11 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 
     let description = [{
         $d = matrix_multiply($a, $b) + $c. $inputPrecision describes how to exercise the TC
-        when the inputs are f32. It can be one of: tf32, tf32x3, ieee.
+        when the inputs are f32. It can be one of: tf32, tf32x3, ieee, bf16x3, bf16x6.
         tf32: use TC with tf32 ops.
         tf32x3: implement the 3xTF32 trick. For more info see the pass in F32DotTC.cpp
+        bf16x3: implement the 3xBF16 trick. For more info see the pass in F32DotTC.cpp
+        bf16x6: implement the 6xBF16 trick. For more info see the pass in F32DotTC.cpp
         ieee: don't use TC, implement dot in software.
         If the GPU does not have Tensor cores or the inputs are not f32, this flag is ignored.
     }];

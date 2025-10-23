@@ -192,6 +192,26 @@ public:
   }
 };
 
+class UnrealizedConversionCastOpAxisInfoVisitor final
+    : public AxisInfoVisitorImpl<mlir::UnrealizedConversionCastOp> {
+public:
+  using AxisInfoVisitorImpl<
+      mlir::UnrealizedConversionCastOp>::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(mlir::UnrealizedConversionCastOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    auto tensorType = dyn_cast<RankedTensorType>(op.getResultTypes()[0]);
+    if (tensorType &&
+        tensorType.getRank() != operands[0]->getValue().getRank()) {
+      // Do not propagate AxisInfo with incorrect rank. This can cause a crash
+      // in future visitor applications.
+      return AxisInfo::getPessimisticValueState(op->getResult(0));
+    }
+    return operands[0]->getValue();
+  }
+};
+
 class MakeRangeOpAxisInfoVisitor final
     : public AxisInfoVisitorImpl<triton::MakeRangeOp> {
 public:
@@ -1029,11 +1049,11 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver,
   // This is needed by TritonGPUToLLVM, to get AxisInfo when the graph is
   // in the process of a PartialConversion, where UnrealizedConversionCast
   // may exist
+  visitors.append<UnrealizedConversionCastOpAxisInfoVisitor>();
   visitors.append<CastOpAxisInfoVisitor<arith::ExtSIOp>,
                   CastOpAxisInfoVisitor<arith::ExtUIOp>,
                   CastOpAxisInfoVisitor<arith::TruncIOp>,
                   CastOpAxisInfoVisitor<triton::gpu::ConvertLayoutOp>,
-                  CastOpAxisInfoVisitor<mlir::UnrealizedConversionCastOp>,
                   CastOpAxisInfoVisitor<triton::BitcastOp>>();
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<PoisonOpAxisInfoVisitor>();
@@ -1384,7 +1404,10 @@ void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
       callee.setArgAttr(index, attrName, attr);
     };
     auto axisInfo = axisInfoMap->lookup(value);
-    assert(axisInfo.getRank() == 1 && "only scalar arguments are supported");
+    // Only scalar arguments are supported. Do not forward multi-dimensional
+    // AxisInfo to the callee.
+    if (axisInfo.getRank() != 1)
+      continue;
     setAttrFn("tt.contiguity", axisInfo.getContiguity(0));
     setAttrFn("tt.divisibility", axisInfo.getDivisibility(0));
     setAttrFn("tt.constancy", axisInfo.getConstancy(0));
