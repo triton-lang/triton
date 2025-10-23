@@ -1,7 +1,6 @@
-from ..._core import builtin
+from ..._core import builtin, _unwrap_if_constexpr
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
-from .._utils import _get_mfma_scale_layout
 from .._ops import _mma_scaled
 from ..cdna3 import _buffer_atomic_rmw_impl
 from ..cdna3 import *  # NOQA: F403
@@ -9,6 +8,19 @@ from ..cdna3 import __all__ as __cdna3_all
 from . import async_copy
 
 __all__ = [*__cdna3_all, "async_copy", "mfma_scaled", "get_mfma_scale_layout"]
+
+
+def _get_mfma_scale_layout(dot_operand_layout, shape, semantic):
+    dot_operand_layout = _unwrap_if_constexpr(dot_operand_layout)
+    shape = _unwrap_if_constexpr(shape)
+
+    op_idx = dot_operand_layout.operand_index
+    parent = dot_operand_layout.parent
+    assert isinstance(parent, AMDMFMALayout), "Expected parent to be an instance of AMDMFMALayout"
+    mdim = parent.instr_shape[0]
+    tiles_per_warp = parent.tiles_per_warp
+    warps_per_cta = parent.warps_per_cta
+    return semantic.builder.get_amd_mfma_scale_layout(op_idx, shape, mdim, tiles_per_warp, warps_per_cta)
 
 
 @builtin

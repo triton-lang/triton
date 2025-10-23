@@ -5,7 +5,6 @@ from triton.experimental.gluon.language._semantic import _check
 from .._core import _unwrap_if_constexpr
 from .._layouts import DotOperandLayout
 from ._layouts import AMDWMMALayout
-from ._utils import _get_scale_shape
 
 
 def _verify_wmma(version, a, b, acc):
@@ -40,6 +39,19 @@ def _wmma(version, a, b, acc, semantic):
 
 def _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, scale_fn, semantic):
     """ Shared implementation for AMD WMMA scaled and MFMA scaled operation. """
+
+    def _get_scale_shape(op_idx, operand, format):
+        operand_shape = [s for s in operand.type.shape]
+        scale_shape = operand_shape
+        unpack_factor = 2 if format.value == "e2m1" else 1
+        if op_idx == 0:
+            k = scale_shape[-1] * unpack_factor
+            scale_shape[-1] = k // 32
+        else:
+            k = scale_shape[-2] * unpack_factor
+            scale_shape[-2] = k // 32
+            scale_shape[-2], scale_shape[-1] = scale_shape[-1], scale_shape[-2]
+        return scale_shape
 
     def _process_scale(op_idx, scale, format):
         operand = a if op_idx == 0 else b

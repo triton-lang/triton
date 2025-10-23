@@ -1,11 +1,21 @@
-from ..._core import builtin
+from ..._core import builtin, _unwrap_if_constexpr
 from .._ops import _wmma, _verify_wmma
 from .._layouts import AMDWMMALayout
-from .._utils import _get_wmma_scale_layout
 from .._ops import _mma_scaled
 from . import tdm
 
 __all__ = ["tdm", "wmma", "wmma_scaled", "get_wmma_scale_layout"]
+
+
+def _get_wmma_scale_layout(dot_operand_layout, shape, semantic):
+    dot_operand_layout = _unwrap_if_constexpr(dot_operand_layout)
+    shape = _unwrap_if_constexpr(shape)
+
+    op_idx = dot_operand_layout.operand_index
+    parent = dot_operand_layout.parent
+    assert isinstance(parent, AMDWMMALayout), "Expected parent to be an instance of AMDMFMALayout"
+    warps_per_cta = parent.warps_per_cta
+    return semantic.builder.get_amd_wmma_scale_layout(op_idx, warps_per_cta, shape)
 
 
 @builtin
