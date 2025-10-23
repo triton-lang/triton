@@ -1,7 +1,10 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
+
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 from triton.runtime.jit import constexpr_function
+from triton._C.libtriton.linear_layout import LinearLayout
+
 import math
 
 
@@ -674,3 +677,35 @@ def warps_per_cta(layout, shape):
         return warps_per_cta(layout.parent, shape)
     else:
         return layout.warps_per_cta
+
+
+def cast_from_linear_layout(linear_layout: LinearLayout):
+    """
+    Convert a Triton ``LinearLayout`` object into a Gluon layout instance.
+
+    Returns:
+        DistributedLinearLayout | SharedLinearLayout | None: The matching Gluon layout, or ``None``
+        if the linear layout does not correspond to a known Gluon layout.
+    """
+    bases = {name: [list(vec) for vec in vectors] for name, vectors in bases}
+    out_dims = [size for _, size in linear_layout.out_dims]
+    if not out_dims:
+        return None
+
+    offset_bases = bases.get("offset")
+    block_bases = bases.get("block", [])
+    if offset_bases:
+        return SharedLinearLayout(offset_bases=offset_bases, block_bases=block_bases)
+
+    reg_bases = bases.get("register", [])
+    lane_bases = bases.get("lane", [])
+    warp_bases = bases.get("warp", [])
+    if reg_bases or lane_bases or warp_bases or block_bases:
+        return DistributedLinearLayout(
+            reg_bases=reg_bases,
+            lane_bases=lane_bases,
+            warp_bases=warp_bases,
+            block_bases=block_bases,
+            shape=out_dims,
+        )
+    return None

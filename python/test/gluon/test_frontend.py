@@ -1483,11 +1483,11 @@ def test_bank_conflicts(reg_layout, shared_layout, shape, bitwidth, ref_conflict
         ),
     ],
 )
-def test_to_linear_layout(layout, expected):
+def test_to_linear_encoding(layout, expected):
 
     @gluon.jit
     def kernel(layout: ttgl.constexpr, expected: ttgl.constexpr, shape: ttgl.constexpr):
-        computed: ttgl.constexpr = ttgl.to_linear_layout(layout, shape)
+        computed: ttgl.constexpr = ttgl.to_linear_encoding(layout, shape)
         ttgl.static_assert(computed == expected)
 
     run_parser(kernel, args=(layout, expected, tuple(expected.shape)), target=AMPERE_TARGET)
