@@ -76,7 +76,7 @@ from ._core import (
     static_range,
     store,
     thread_barrier,
-    to_linear_layout,
+    to_linear,
     to_tensor,
     warp_specialize,
     where,
@@ -92,6 +92,7 @@ from ._layouts import (
     SwizzledSharedLayout,
     PaddedSharedLayout,
     SharedLinearLayout,
+    cast_from_linear_layout,
 )
 from ._math import (
     umulhi,

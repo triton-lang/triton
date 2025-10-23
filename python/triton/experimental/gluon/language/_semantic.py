@@ -4,6 +4,7 @@ from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
 from ._layouts import AutoLayout, DistributedLayout, SliceLayout, SharedLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder
+from triton._C.libtriton.linear_layout import LinearLayout
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
 TensorTy = TypeVar("TensorTy")
@@ -234,13 +235,22 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         return self.builder.get_shared_bank_conflicts(reg_attr, shared_attr, list(distr_ty.shape),
                                                       distr_ty.element_ty.primitive_bitwidth)
 
-    def to_linear_layout(self, layout, shape):
+    def to_linear(self, layout, shape):
         _check(isinstance(layout, (DistributedLayout, SharedLayout)),
                lambda: f"Expected a DistributedLayout or SharedLayout, got {type(layout)}")
 
         if not isinstance(shape, list):
             shape = list(shape)
 
+        return self.builder.to_linear(layout._to_ir(self.builder), shape)
+
+    def to_linear_layout(self, layout, shape):
+        _check(isinstance(layout, (DistributedLayout, SharedLayout)),
+               lambda: f"Expected a DistributedLayout or SharedLayout, got {type(layout)}")
+
+        if not isinstance(shape, list):
+            shape = list(shape)
+            
         return self.builder.to_linear_layout(layout._to_ir(self.builder), shape)
 
     def shared_dealloc(self, mem_desc):
