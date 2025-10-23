@@ -75,3 +75,36 @@ def test_invert_and_compose():
     inverted = base.invert_and_compose(other)
     for value in range(8):
         assert apply_layout(inverted, inp=value)["out"] == value
+
+
+def test_get_matrix_view_identity():
+    layout = LinearLayout.identity_1d(4, "idx", "idx")
+    assert layout.get_matrix_view() == [
+        [1, 0],
+        [0, 1],
+    ]
+
+
+def test_get_matrix_view_strided():
+    layout = LinearLayout.strided_1d(4, 2, "idx", "out")
+    assert layout.get_matrix_view() == [
+        [0, 0],
+        [1, 0],
+        [0, 1],
+    ]
+
+
+def test_get_matrix_view_from_bases():
+    layout = LinearLayout.from_bases(
+        [
+            ("in0", [[1, 0], [2, 0]]),
+            ("in1", [[0, 1], [0, 2]]),
+        ],
+        ["out0", "out1"],
+    )
+    assert layout.get_matrix_view() == [
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1],
+    ]

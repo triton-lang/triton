@@ -9,6 +9,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include <optional>
 #include <stdexcept>
+#include <iostream>
 
 namespace py = pybind11;
 using LinearLayout = mlir::triton::LinearLayout;
