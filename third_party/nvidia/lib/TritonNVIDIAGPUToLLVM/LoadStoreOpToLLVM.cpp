@@ -1696,14 +1696,6 @@ struct AsyncTMAGatherOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMAGatherOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
-  AsyncTMAGatherOpConversion(LLVMTypeConverter &converter,
-                             PatternBenefit benefit, int computeCapability)
-      : ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMAGatherOp>(converter,
-                                                                     benefit),
-        computeCapability(computeCapability) {}
-
-  int computeCapability;
-
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::AsyncTMAGatherOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override;
@@ -1898,11 +1890,9 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
       typeConverter, targetInfo, computeCapability, axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion, AsyncWaitOpConversion,
                AsyncCopyMbarrierArriveOpConversion>(typeConverter, benefit);
-  patterns
-      .add<AsyncTMACopyGlobalToLocalOpConversion,
-           AsyncTMACopyLocalToGlobalOpConversion, AsyncTMAReduceOpConversion,
-           AsyncTMAScatterOpConversion, TMAStoreWaitOpConversion>(typeConverter,
-                                                                  benefit);
-  patterns.add<AsyncTMAGatherOpConversion>(typeConverter, benefit,
-                                           computeCapability);
+  patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
+               AsyncTMACopyLocalToGlobalOpConversion,
+               AsyncTMAReduceOpConversion, AsyncTMAGatherOpConversion,
+               AsyncTMAScatterOpConversion, TMAStoreWaitOpConversion>(
+      typeConverter, benefit);
 }
