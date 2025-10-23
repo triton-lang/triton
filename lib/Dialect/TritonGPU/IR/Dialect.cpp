@@ -3471,8 +3471,7 @@ std::string mlir::triton::gpu::getDistributedLayoutStr(LinearLayout &ll,
           for (int i = 0; i < outputs.size(); i++) {
             if (i > 0)
               threadInfo += ",";
-            threadInfo +=
-                paddedString(outputs[i].second, shape[i]);
+            threadInfo += paddedString(outputs[i].second, shape[i]);
           }
           threadInfo += ")";
           threadMapping.push_back(threadInfo);
@@ -3573,8 +3572,7 @@ mlir::triton::gpu::expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o) {
 std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
                                             bool useHWPointOfView) {
   auto layout = tensorType.getEncoding();
-  LinearLayout ll =
-      triton::gpu::toLinearLayout(tensorType.getShape(), layout);
+  LinearLayout ll = triton::gpu::toLinearLayout(tensorType.getShape(), layout);
 
   // tensorType is needed later on (e.g., getDimSize(j)), so we still have to
   // pass it as a param

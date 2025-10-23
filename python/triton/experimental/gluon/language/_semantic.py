@@ -4,7 +4,6 @@ from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
 from ._layouts import AutoLayout, DistributedLayout, SliceLayout, SharedLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder
-from triton._C.libtriton.linear_layout import LinearLayout
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
 TensorTy = TypeVar("TensorTy")
@@ -250,7 +249,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         if not isinstance(shape, list):
             shape = list(shape)
-            
+
         return self.builder.to_linear_layout(layout._to_ir(self.builder), shape)
 
     def shared_dealloc(self, mem_desc):

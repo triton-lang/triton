@@ -687,7 +687,7 @@ def cast_from_linear_layout(linear_layout: LinearLayout):
         DistributedLinearLayout | SharedLinearLayout | None: The matching Gluon layout, or ``None``
         if the linear layout does not correspond to a known Gluon layout.
     """
-    bases = {name: [list(vec) for vec in vectors] for name, vectors in bases}
+    bases = {name: [list(vec) for vec in vectors] for name, vectors in linear_layout.bases}
     out_dims = [size for _, size in linear_layout.out_dims]
     if not out_dims:
         return None

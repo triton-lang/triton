@@ -1370,5 +1370,4 @@ std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout) {
   return m;
 }
 
-
 } // namespace mlir::triton

@@ -1,15 +1,14 @@
+#include "pybind11/numpy.h"
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
-#include "pybind11/numpy.h"
 
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/MLIRContext.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 #include "llvm/ADT/STLExtras.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <optional>
 #include <stdexcept>
-
 
 namespace py = pybind11;
 using LinearLayout = mlir::triton::LinearLayout;
@@ -33,9 +32,9 @@ void init_linear_layout(py::module &&m) {
           "identity_1d",
           [](int32_t size, std::string inDim, std::string outDim) {
             auto *ctx = getLinearLayoutContext();
-            return LinearLayout::identity1D(
-                size, mlir::StringAttr::get(ctx, inDim),
-                mlir::StringAttr::get(ctx, outDim));
+            return LinearLayout::identity1D(size,
+                                            mlir::StringAttr::get(ctx, inDim),
+                                            mlir::StringAttr::get(ctx, outDim));
           },
           py::arg("size"), py::arg("inDim"), py::arg("outDim"))
       .def_static(
@@ -57,13 +56,13 @@ void init_linear_layout(py::module &&m) {
             return LinearLayout::zeros1D(
                 size, mlir::StringAttr::get(ctx, inDim),
                 mlir::StringAttr::get(ctx, outDim), outDimSize);
-            },
-            py::arg("size"), py::arg("inDim"), py::arg("outDim"),
-            py::arg("outDimSize") = 1)
+          },
+          py::arg("size"), py::arg("inDim"), py::arg("outDim"),
+          py::arg("outDimSize") = 1)
       .def_static(
-            "from_bases",
-            [](const std::vector<std::pair<
-               std::string, std::vector<std::vector<int32_t>>>> &bases,
+          "from_bases",
+          [](const std::vector<std::pair<
+                 std::string, std::vector<std::vector<int32_t>>>> &bases,
              const std::vector<std::string> &outDimNames,
              std::optional<std::vector<int32_t>> outDimSizes,
              bool requireSurjective) {
@@ -92,8 +91,7 @@ void init_linear_layout(py::module &&m) {
               for (auto it : llvm::enumerate(outDimNames))
                 outDims.emplace_back(mlir::StringAttr::get(ctx, it.value()),
                                      (*outDimSizes)[it.index()]);
-              return LinearLayout(convertedBases, outDims,
-                                      requireSurjective);
+              return LinearLayout(convertedBases, outDims, requireSurjective);
             }
 
             if (!requireSurjective)
@@ -201,17 +199,16 @@ void init_linear_layout(py::module &&m) {
             return result;
           },
           py::arg("inputs"))
-      .def("get_matrix_view",
-           [](const LinearLayout &self) {
-             std::unique_ptr<uint64_t[]> matrix = mlir::triton::getMatrix(self);
-             auto nRows = self.getNumOutDims();
-             auto nCols = self.getNumInDims();
-             std::vector<std::vector<int>> result(nRows, std::vector<int>(nCols));
-             for (size_t i = 0; i < nRows; ++i) {
-                for (size_t j = 0; j < nCols; ++j) {
-                   result[i][j] = (matrix[i] >> j) & 1;
-                }
-             }
-             return result;
-           });
+      .def("get_matrix_view", [](const LinearLayout &self) {
+        std::unique_ptr<uint64_t[]> matrix = mlir::triton::getMatrix(self);
+        auto nRows = self.getNumOutDims();
+        auto nCols = self.getNumInDims();
+        std::vector<std::vector<int>> result(nRows, std::vector<int>(nCols));
+        for (size_t i = 0; i < nRows; ++i) {
+          for (size_t j = 0; j < nCols; ++j) {
+            result[i][j] = (matrix[i] >> j) & 1;
+          }
+        }
+        return result;
+      });
 }

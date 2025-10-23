@@ -39,17 +39,13 @@ def test_identity_2d():
 
 
 def test_operator_mul_identity():
-    layout = LinearLayout.identity_1d(4, "idx", "out") * LinearLayout.identity_1d(
-        8, "idx", "out"
-    )
+    layout = LinearLayout.identity_1d(4, "idx", "out") * LinearLayout.identity_1d(8, "idx", "out")
     for value in range(8):
         assert apply_layout(layout, idx=value)["out"] == value
 
 
 def test_operator_mul_disjoint_dims():
-    layout = LinearLayout.identity_1d(8, "i0", "o0") * LinearLayout.identity_1d(
-        4, "i1", "o1"
-    )
+    layout = LinearLayout.identity_1d(8, "i0", "o0") * LinearLayout.identity_1d(4, "i1", "o1")
     for i0 in range(8):
         for i1 in range(4):
             result = apply_layout(layout, i0=i0, i1=i1)
