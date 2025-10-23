@@ -540,7 +540,7 @@ SmallVector<Value> lowerLdSt(
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
   auto kOffset = str_attr("offset");
-  auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+  auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
 
   auto [elemsPerVec, permutation] =
       largestVectorisation(ctx, cvt, bitwidth, maybeMaxVecElems);
@@ -625,7 +625,7 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   assert(*cvt.getOutDimNames().begin() == str_attr("offset"));
   auto calcPaddedOffset = [&](Value smemOffset) {
     TritonLLVMOpBuilder b(loc, rewriter);
-    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
     if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
             srcTy.getEncoding())) {
       // Apply the offset needed for padding.

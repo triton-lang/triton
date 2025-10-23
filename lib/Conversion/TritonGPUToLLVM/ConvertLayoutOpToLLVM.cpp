@@ -271,8 +271,7 @@ struct ConvertLayoutOpConversion
     StringAttr kReg = str_attr("register");
     StringAttr kLane = str_attr("lane");
     auto elemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    int bitwidth =
-        elemTy.isIntOrFloat() ? elemTy.getIntOrFloatBitWidth() : kPtrBitWidth;
+    int bitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
 
     auto factors = getWarpLayoutConvertDecomposition(srcTy, dstTy, bitwidth);
     auto &[pReg, pLane, mixedTranspositions, nPack] = factors;
