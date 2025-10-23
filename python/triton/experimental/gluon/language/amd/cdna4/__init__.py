@@ -1,26 +1,14 @@
-from triton.experimental.gluon.language import _core as ttgl
-from ..._core import builtin, float32, _unwrap_if_constexpr
+from ..._core import builtin
 from ..._layouts import DotOperandLayout
 from .._layouts import AMDMFMALayout
+from .._utils import _get_mfma_scale_layout
+from .._ops import _mma_scaled
 from ..cdna3 import _buffer_atomic_rmw_impl
 from ..cdna3 import *  # NOQA: F403
 from ..cdna3 import __all__ as __cdna3_all
 from . import async_copy
 
 __all__ = [*__cdna3_all, "async_copy", "mfma_scaled", "get_mfma_scale_layout"]
-
-
-def _get_mfma_scale_layout(dot_operand_layout, shape, semantic):
-    dot_operand_layout = _unwrap_if_constexpr(dot_operand_layout)
-    shape = _unwrap_if_constexpr(shape)
-
-    op_idx = dot_operand_layout.operand_index
-    parent = dot_operand_layout.parent
-    assert isinstance(parent, AMDMFMALayout), "Expected parent to be an instance of AMDMFMALayout"
-    mdim = parent.instr_shape[0]
-    tiles_per_warp = parent.tiles_per_warp
-    warps_per_cta = parent.warps_per_cta
-    return semantic.builder.get_amd_mfma_scale_layout(op_idx, shape, mdim, tiles_per_warp, warps_per_cta)
 
 
 @builtin
@@ -56,34 +44,7 @@ def mfma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     assert a_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format.value}"
     assert b_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format.value}"
 
-    def _process_scale(op_idx, scale, format):
-        operand = a if op_idx == 0 else b
-
-        operand_shape = [s for s in operand.type.shape]
-        scale_shape = operand_shape
-        unpack_factor = 2 if format.value == "e2m1" else 1
-        if op_idx == 0:
-            k = scale_shape[-1] * unpack_factor
-            scale_shape[-1] = k // 32
-        else:
-            k = scale_shape[-2] * unpack_factor
-            scale_shape[-2] = k // 32
-            scale_shape[-2], scale_shape[-1] = scale_shape[-1], scale_shape[-2]
-        scale_layout = _get_mfma_scale_layout(operand.type.layout, scale_shape, _semantic)
-
-        if isinstance(scale, ttgl.tensor) and scale.numel.value != 1:
-            assert scale.type.shape == scale_shape, \
-                f"Expect scale tensor to have shape {scale_shape}, but got {scale.type.shape}"
-            return scale
-
-        scale_value = _unwrap_if_constexpr(scale)
-        scale_value = 0x7F if scale_value is None else scale_value
-        return _semantic.full(scale_shape, scale_value, ttgl.uint8, scale_layout)
-
-    a_scale = _process_scale(0, a_scale, a_format)
-    b_scale = _process_scale(1, b_scale, b_format)
-    output = _semantic.dot_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, False, True, True, float32)
-    return ttgl.tensor(output.handle, acc.type)
+    return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _get_mfma_scale_layout, _semantic)
 
 
 @builtin

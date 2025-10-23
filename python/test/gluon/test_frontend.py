@@ -2525,19 +2525,15 @@ def test_amd_wmma_scaled(target):
                                                              instr_shape=[16, 16, 128])
         wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(version=3, transposed=True, warps_per_cta=[2, 2],
                                                                     instr_shape=[16, 16, 64])
-        a_scale_linear_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[[0, 1], [0, 2]], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]],
-            warp_bases=[[0, 0], [16, 0]], block_bases=[], shape=[32, 4])
-        b_scale_linear_layout: ttgl.constexpr = ttgl.DistributedLinearLayout(
-            reg_bases=[[0, 1], [0, 2]], lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]],
-            warp_bases=[[16, 0], [0, 0]], block_bases=[], shape=[32, 4])
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=0, parent=wmma_layout_packed, k_width=16)
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(operand_index=1, parent=wmma_layout_packed, k_width=16)
+        a_scale_layout: ttgl.constexpr = ttgl.amd.gfx1250.get_wmma_scale_layout(a_layout, [32, 4])
+        b_scale_layout: ttgl.constexpr = ttgl.amd.gfx1250.get_wmma_scale_layout(b_layout, [32, 4])
 
-        a = ttgl.full([32, 64], 0x11, ttgl.uint8,
-                      ttgl.DotOperandLayout(operand_index=0, parent=wmma_layout_packed, k_width=16))
-        b = ttgl.full([64, 32], 0x22, ttgl.uint8,
-                      ttgl.DotOperandLayout(operand_index=1, parent=wmma_layout_packed, k_width=16))
-        a_scale = ttgl.full([32, 4], 0x02, ttgl.uint8, a_scale_linear_layout)
-        b_scale = ttgl.full([32, 4], 0x01, ttgl.uint8, b_scale_linear_layout)
+        a = ttgl.full([32, 64], 0x11, ttgl.uint8, a_layout)
+        b = ttgl.full([64, 32], 0x22, ttgl.uint8, b_layout)
+        a_scale = ttgl.full([32, 4], 0x02, ttgl.uint8, a_scale_layout)
+        b_scale = ttgl.full([32, 4], 0x01, ttgl.uint8, b_scale_layout)
         acc = ttgl.full([32, 32], 0, ttgl.float32, wmma_layout)
         ttgl.amd.gfx1250.wmma_scaled(a, a_scale, 'e2m1', b, b_scale, 'e2m1', acc)
 
@@ -2575,23 +2571,81 @@ def test_amd_wmma_scaled_none(target):
     def kernel():
         wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [1, 1], [16, 16, 128])
         wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [1, 1], [16, 16, 64])
-        scale_layout: ttgl.constexpr = ttgl.DistributedLinearLayout([[0, 1], [0, 2]],
-                                                                    [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], [], [],
-                                                                    [16, 4])
         a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, wmma_layout_packed, 16)
         b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, wmma_layout_packed, 16)
 
         a = ttgl.full([16, 64], 0x11, ttgl.uint8, a_layout)
         b = ttgl.full([64, 16], 0x22, ttgl.uint8, b_layout)
-        b_scale = ttgl.full([16, 4], 0x01, ttgl.uint8, scale_layout)
         acc = ttgl.full([16, 16], 0, ttgl.float32, wmma_layout)
 
-        ttgl.amd.gfx1250.wmma_scaled(a, None, 'e2m1', b, b_scale, 'e2m1', acc)
+        ttgl.amd.gfx1250.wmma_scaled(a, None, 'e2m1', b, None, 'e2m1', acc)
 
-    with pytest.raises(CompilationError) as e:
-        run_parser(kernel, target=target)
+    module = run_parser(kernel, *make_args(num_warps=1), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [], block = []}>
+#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, warpsPerCTA = [1, 1], instrShape = [16, 16, 64]}>
+#mma1 = #ttg.amd_wmma<{version = 3, isTranspose = true, warpsPerCTA = [1, 1], instrShape = [16, 16, 128]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %c17_i8 = arith.constant 17 : i8
+    %cst = arith.constant dense<17> : tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
+    %c34_i8 = arith.constant 34 : i8
+    %cst_0 = arith.constant dense<34> : tensor<64x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>
+    %cst_1 = arith.constant 0.000000e+00 : f32
+    %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma1>
+    %c127_i8 = arith.constant 127 : i8
+    %cst_3 = arith.constant dense<127> : tensor<16x4xi8, #linear>
+    %c127_i8_4 = arith.constant 127 : i8
+    %cst_5 = arith.constant dense<127> : tensor<16x4xi8, #linear>
+    %cst_6 = arith.constant 0.000000e+00 : f32
+    %0 = tt.dot_scaled %cst scale %cst_3, %cst_0 scale %cst_5, %cst_2 lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<16x4xi8, #linear> * tensor<64x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<16x4xi8, #linear> -> tensor<16x16xf32, #mma1>
+    tt.return
+  }
+}
+""")
 
-    assert "Scales must not be None" in str(e.value)
+
+@pytest.mark.parametrize("target", [HIP_TARGET_GFX1250])
+def test_amd_wmma_scaled_scalar(target):
+
+    @gluon.jit
+    def kernel():
+        wmma_layout: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [1, 1], [16, 16, 128])
+        wmma_layout_packed: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [1, 1], [16, 16, 64])
+        a_layout: ttgl.constexpr = ttgl.DotOperandLayout(0, wmma_layout_packed, 16)
+        b_layout: ttgl.constexpr = ttgl.DotOperandLayout(1, wmma_layout_packed, 16)
+
+        a = ttgl.full([16, 64], 0x11, ttgl.uint8, a_layout)
+        b = ttgl.full([64, 16], 0x22, ttgl.uint8, b_layout)
+        acc = ttgl.full([16, 16], 0, ttgl.float32, wmma_layout)
+
+        ttgl.amd.gfx1250.wmma_scaled(a, 0x02, 'e2m1', b, 0x01, 'e2m1', acc)
+
+    module = run_parser(kernel, *make_args(num_warps=1), target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(module.str_nodebug()), """\
+#linear = #ttg.linear<{register = [[0, 1], [0, 2]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 0]], warp = [], block = []}>
+#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, warpsPerCTA = [1, 1], instrShape = [16, 16, 64]}>
+#mma1 = #ttg.amd_wmma<{version = 3, isTranspose = true, warpsPerCTA = [1, 1], instrShape = [16, 16, 128]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    %c17_i8 = arith.constant 17 : i8
+    %cst = arith.constant dense<17> : tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
+    %c34_i8 = arith.constant 34 : i8
+    %cst_0 = arith.constant dense<34> : tensor<64x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>
+    %cst_1 = arith.constant 0.000000e+00 : f32
+    %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma1>
+    %c2_i8 = arith.constant 2 : i8
+    %cst_3 = arith.constant dense<2> : tensor<16x4xi8, #linear>
+    %c1_i8 = arith.constant 1 : i8
+    %cst_4 = arith.constant dense<1> : tensor<16x4xi8, #linear>
+    %cst_5 = arith.constant 0.000000e+00 : f32
+    %0 = tt.dot_scaled %cst scale %cst_3, %cst_0 scale %cst_4, %cst_2 lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<16x64xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<16x4xi8, #linear> * tensor<64x16xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<16x4xi8, #linear> -> tensor<16x16xf32, #mma1>
+    tt.return
+  }
+}
+""")
 
 
 @gluon.jit

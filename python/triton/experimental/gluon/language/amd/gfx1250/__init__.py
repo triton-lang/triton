@@ -1,10 +1,11 @@
-from ..._core import builtin, _unwrap_if_constexpr
+from ..._core import builtin
 from .._ops import _wmma, _verify_wmma
-from triton.experimental.gluon.language import _core as ttgl
 from .._layouts import AMDWMMALayout
+from .._utils import _get_wmma_scale_layout
+from .._ops import _mma_scaled
 from . import tdm
 
-__all__ = ["tdm", "wmma", "wmma_scaled"]
+__all__ = ["tdm", "wmma", "wmma_scaled", "get_wmma_scale_layout"]
 
 
 @builtin
@@ -35,10 +36,10 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
 
     Args:
         a (tensor): The operand A to be multiplied.
-        a_scale (tensor): Scale factor for operand A.
+        a_scale (Optional[tensor]): Scale factor for operand A.
         a_format (str): Format of the operand A. Available formats: `e2m1`, `e4m3`, `e5m2`.
         b (tensor): The operand B to be multiplied.
-        b_scale (tensor): Scale factor for operand B.
+        b_scale (Optional[tensor]): Scale factor for operand B.
         b_format (str): Format of the operand B. Available formats: `e2m1`, `e4m3`, `e5m2`.
         acc (tensor): Accumulator tensor.
     """
@@ -59,10 +60,18 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     assert a_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format.value}"
     assert b_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format.value}"
 
-    a_scale = _unwrap_if_constexpr(a_scale)
-    b_scale = _unwrap_if_constexpr(b_scale)
-    assert a_scale is not None and b_scale is not None, "Scales must not be None"
+    return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _get_wmma_scale_layout, _semantic)
 
-    handle = _semantic.dot_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, fast_math=False, lhs_k_pack=True,
-                                  rhs_k_pack=True, out_dtype=acc.dtype).handle
-    return ttgl.tensor(handle, acc.type)
+
+@builtin
+def get_wmma_scale_layout(dot_operand_layout, shape, _semantic=None):
+    """ Get the scale layout for WMMA scaled operands.
+
+    Args:
+        dot_operand_layout (DotOperandLayout): The dot operand layout.
+        shape (List[int]): The shape of the scale tensor.
+
+    Return:
+        layout (DistributedLinearLayout): The scale layout.
+    """
+    return _get_wmma_scale_layout(dot_operand_layout, shape, _semantic)

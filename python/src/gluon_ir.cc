@@ -395,6 +395,16 @@ void init_gluon_ir(py::module &&m) {
              return ttg::AMDWmmaEncodingAttr::get(
                  ctx, version, transposed, warpsPerCta, ctaLayout, instrShape);
            })
+      .def("get_amd_wmma_scale_layout",
+           [](GluonOpBuilder &self, unsigned opIdx,
+              std::vector<unsigned> &warpsPerCTA,
+              std::vector<int64_t> &shape) -> py::object {
+             auto ctx = self.getContext();
+             auto ll = ttg::chooseScaledWmmaScaleLayout(ctx, opIdx, warpsPerCTA,
+                                                        shape);
+             auto attr = ttg::LinearEncodingAttr::get(ctx, ll);
+             return layoutToGluon(attr);
+           })
       .def("get_padded_shared_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &intervals,
               std::vector<unsigned> &paddings,
