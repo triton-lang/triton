@@ -534,6 +534,12 @@ SmallVector<unsigned, 2> deduceTilesPerWarpForScale(
     }
   }
   assert(largest <= 8 && "at most pack 4 scales for scale a & b respectively");
+  // fixup: align with dimension that has scale
+  if (!scaleA)
+    chosen[0] = std::min(m / nonKDim, chosen[1]);
+  if (!scaleB)
+    chosen[1] = std::min(n / nonKDim, chosen[0]);
+
   return chosen;
 }
 
