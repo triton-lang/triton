@@ -256,7 +256,8 @@ public:
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type valueTy = op.getType();
-    const unsigned valueNBits = std::max(8u, valueTy.getIntOrFloatBitWidth());
+    const unsigned valueNBits =
+        std::max(8u, (unsigned)getIntOrFloatOrPtrBitWidth(valueTy));
     const size_t maxWordWidth = std::max<size_t>(32, valueNBits);
     const size_t width = std::min((size_t)valueNBits, maxWordWidth);
 
