@@ -195,7 +195,7 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   auto vecTy = cast<VectorType>(val.getType());
   Type elemTy = vecTy.getElementType();
   unsigned vec = vecTy.getNumElements();
-  unsigned elemBitwidth = elemTy.getIntOrFloatBitWidth();
+  unsigned elemBitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
   assert(llvm::isPowerOf2_32(vec));
 
   if (elemBitwidth < 8) {
@@ -213,7 +213,11 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   if (!elemTy.isInteger()) {
     SmallVector<Value> vals = unpackLLVector(loc, val, rewriter);
     for (Value &v : vals) {
-      v = b.bitcast(v, int_ty(elemBitwidth));
+      if (isa<LLVM::LLVMPointerType>(v.getType())) {
+        v = b.ptrtoint(int_ty(elemBitwidth), v);
+      } else {
+        v = b.bitcast(v, int_ty(elemBitwidth));
+      }
     }
     storeDShared(rewriter, loc, ptr, ctaId, packLLVector(loc, vals, rewriter),
                  pred);
@@ -316,7 +320,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   auto vecTy = cast<VectorType>(loadTy);
   Type elemTy = vecTy.getElementType();
   unsigned vec = vecTy.getNumElements();
-  unsigned elemBitwidth = elemTy.getIntOrFloatBitWidth();
+  unsigned elemBitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
   assert(llvm::isPowerOf2_32(vec));
 
   if (elemBitwidth < 8) {

@@ -81,8 +81,15 @@ int TargetInfo::getWarpSize() const {
 }
 
 int TargetInfo::getSharedMemorySize() const {
-  int kbytes = getISAFamily() == ISAFamily::CDNA4 ? 160 : 64;
-  return kbytes * 1024;
+  // Should return the maximum capacity in kbyte
+  switch (getISAFamily()) {
+  case ISAFamily::GFX1250:
+    return 320 * 1024;
+  case ISAFamily::CDNA4:
+    return 160 * 1024;
+  default:
+    return 64 * 1024;
+  }
 }
 
 bool TargetInfo::supportMaximumMinimum() const {
