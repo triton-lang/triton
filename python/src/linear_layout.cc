@@ -17,11 +17,14 @@ using LinearLayout = mlir::triton::LinearLayout;
 namespace {
 
 mlir::MLIRContext *getLinearLayoutContext() {
-  static py::object ctxObject = []() {
+  static PyObject *ctxObject = []() {
     py::module irMod = py::module::import("triton._C.libtriton.ir");
-    return irMod.attr("context")();
+    // Keep the Python object alive for the life of the process without running
+    // its destructor during interpreter shutdown (avoids segfaults).
+    py::object ctx = irMod.attr("context")();
+    return ctx.release().ptr();
   }();
-  return ctxObject.cast<mlir::MLIRContext *>();
+  return py::cast<mlir::MLIRContext *>(py::handle(ctxObject));
 }
 
 } // namespace
