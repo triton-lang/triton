@@ -41,13 +41,15 @@ class SymmetricMemoryPool:
         self.hdl = symm_mem.rendezvous(self.buf, dist.group.WORLD)
         self.bufs = tuple([self.hdl.get_buffer(r, self.buf.shape, self.buf.dtype) for r in range(n_ranks)])
 
-    def make_empty(self, offset, shape, dtype) -> Tuple[torch.Tensor]:
-        bufs = []
+    def make_empty(self, offset, shape, dtype) -> Tuple[torch.Tensor, ...]:
+        rets = []
         # make 128 bytes aligned
         offset = (offset + 127) // 128 * 128
         for i in range(len(self.bufs)):
-            bufs.append(self.bufs[i][offset:offset + torch.tensor(shape).numel() * dtype.itemsize].view(shape))
-        return bufs
+            storage = self.bufs[i].untyped_storage()
+            buf = storage[offset:offset + torch.tensor(shape).numel() * dtype.itemsize]
+            rets.append(torch.tensor(buf, dtype=dtype).reshape(shape))
+        return tuple(rets)
 
 
 symm_mem_pool = SymmetricMemoryPool()
