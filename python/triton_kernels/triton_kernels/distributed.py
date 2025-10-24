@@ -47,7 +47,6 @@ class SymmetricMemoryPool:
         elem_size = torch.empty((), dtype=dtype).element_size()
         numel = prod(shape)
         nbytes = numel * elem_size
-        offset = ((offset + 127) // 128) * 128
 
         if offset % elem_size != 0:
             raise ValueError(f"Offset {offset} not aligned to element size {elem_size}")
