@@ -5,17 +5,18 @@ from triton_kernels.topk_details._topk_backward import _topk_backward
 from triton_kernels.tensor import SparseMatrix, Tensor
 from triton_kernels.tensor import Bitmatrix, BIT
 from typing import Optional, Union
+from triton_kernels.distributed import symm_mem_pool
 import torch.distributed._symmetric_memory as symm_mem
 import torch.distributed as dist
 
 
-def make_empty(shape, dtype, device, all_gather):
+def make_empty(offset, shape, dtype, device, all_gather):
     if all_gather:
         n_ranks = dist.get_world_size()
-        ret = symm_mem.empty(shape, dtype=dtype, device=device)
-
-        ret_hdl = symm_mem.rendezvous(ret, dist.group.WORLD)
-        ret_bufs = tuple([ret_hdl.get_buffer(r, ret.shape, ret.dtype) for r in range(n_ranks)])
+        rank_id = dist.get_rank()
+        ret_bufs = symm_mem_pool.make_empty(offset=offset, shape=shape, dtype=dtype)
+        ret = ret_bufs[rank_id] 
+        ret_hdl = symm_mem_pool.hdl
         return ret_bufs, ret, ret_hdl
     ret = torch.empty(shape, dtype=dtype, device=device)
     return (ret, ), ret, None
@@ -61,9 +62,9 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
     )
     if all_gather:
         y_vals_hdl.barrier(channel=0)
-        if y_indx_hdl is not None:
-            y_indx_hdl.barrier(channel=0)
-        bitmatrix_hdl.barrier(channel=0)
+        #if y_indx_hdl is not None:
+        #    y_indx_hdl.barrier(channel=0)
+        #bitmatrix_hdl.barrier(channel=0)
     bitmatrix_shape = [n_rows * dist.get_world_size() if all_gather else n_rows, n_cols]
     bitmatrix_shape_max = [n_rows_out_max, None]
     bitmatrix = Bitmatrix(bitmatrix_data, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)

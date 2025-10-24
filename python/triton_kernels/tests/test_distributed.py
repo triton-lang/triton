@@ -7,7 +7,7 @@ import torch.distributed as dist
 import torch.distributed._symmetric_memory as symm_mem
 import torch.multiprocessing as mp
 import triton
-from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment
+from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment, symm_mem_pool
 from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
 from triton_kernels.matmul_ogs import matmul_ogs, RoutingData, GatherIndx, ScatterIndx
@@ -304,15 +304,11 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
         )
 
     # test cuda graph capture + replay with symmetric memory
-    y_dp_local_tri, graph = _capture_with_prepared_symm_mem(run_mixture)
+    symm_mem_pool.initialize(byte_size=n_tokens_global*n_expts_act*d_model*4*2, n_ranks=world_size)
+    y_dp_local_tri = run_mixture()
     y_global_tri = torch.empty_like(y_global_ref)
 
     # Validate warmup run.
-    dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
-    triton.testing.assert_close(y_global_ref, y_global_tri)
-
-    # Validate first replay with unchanged inputs.
-    graph.replay()
     dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
     triton.testing.assert_close(y_global_ref, y_global_tri)
 

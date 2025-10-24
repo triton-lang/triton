@@ -7,6 +7,7 @@ import triton
 import triton.language as tl
 import random
 from dataclasses import dataclass
+from typing import Tuple
 
 @dataclass
 class ExptAssignment:
@@ -22,6 +23,34 @@ class ExptAssignment:
     expt_map: torch.Tensor
     # number of experts per shard
     n_expts_per_shard: list[int]
+
+
+class SymmetricMemoryPool:
+    def __init__(self):
+        self._is_initialized = False
+        self.size = 0
+        self.buf = None
+        self.bufs = None
+
+    def initialize(self, byte_size, n_ranks):
+        if self._is_initialized:
+            return
+        self._is_initialized = True
+        self.size = byte_size
+        self.buf = symm_mem.empty(byte_size, dtype=torch.uint8, device="cuda")
+        self.hdl = symm_mem.rendezvous(self.buf, dist.group.WORLD)
+        self.bufs = tuple([self.hdl.get_buffer(r, self.buf.shape, self.buf.dtype) for r in range(n_ranks)])
+
+    def make_empty(self, offset, shape, dtype) -> Tuple[torch.Tensor]:
+        bufs = []
+        # make 128 bytes aligned
+        offset = (offset + 127) // 128 * 128
+        for i in range(len(self.bufs)):
+            bufs.append(self.bufs[i][offset:offset + torch.tensor(shape).numel() * torch.tensor(dtype).itemsize].view(shape))
+        return bufs
+
+
+symm_mem_pool = SymmetricMemoryPool()
 
 
 def make_expt_dict_uniform(n_expt_shard, n_expt_tot):
@@ -191,10 +220,10 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
     assert n_tokens_local * n_ranks <= n_tokens_global
     assert gate_indx.shape == (n_tokens_global*n_expt_act, ), f"{tuple(gate_indx.shape)} != {(n_tokens_global*n_expt_act,)}"
     # allocate symmetric memory
-    dst_local = symm_mem.empty((n_tokens_global*n_expt_act, d_model), dtype=src.dtype, device=device)
     # create tensor of peer pointers
-    hdl = symm_mem.rendezvous(dst_local, dist.group.WORLD)
-    peer_bufs = [hdl.get_buffer(r, dst_local.shape, dst_local.dtype) for r in range(n_ranks)]
+    peer_bufs = symm_mem_pool.make_empty(0, (n_tokens_global*n_expt_act, d_model), src.dtype)
+    dst_local = peer_bufs[rank]
+    hdl = symm_mem_pool.hdl
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_local,)
@@ -265,9 +294,9 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
     n_tokens_global, d_model = src.shape
     n_tokens_local = n_tokens_global // n_ranks
     # allocate symmetric memory
-    dst_local = symm_mem.empty((n_tokens_local, d_model), dtype=src.dtype, device=device)
-    hdl = symm_mem.rendezvous(dst_local, dist.group.WORLD)
-    peer_bufs = [hdl.get_buffer(r, dst_local.shape, dst_local.dtype) for r in range(n_ranks)]
+    peer_bufs = symm_mem_pool.make_empty(0, (n_tokens_local, d_model), src.dtype)
+    dst_local = peer_bufs[rank]
+    hdl = symm_mem_pool.hdl
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_global,)
