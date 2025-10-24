@@ -1147,3 +1147,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// Test that ub.poison producing a memdesc does not get treated like a tensor
+// value in AxisInfo analysis.
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func public @minimal_crash(%lb: i32, %ub: i32) -> !ttg.memdesc<2x2xf16, #shared, #smem, mutable> {
+    %c1 = arith.constant 1 : i32
+    %poison = ub.poison : !ttg.memdesc<2x2xf16, #shared, #smem, mutable>
+    %normal = ttg.local_alloc : () -> !ttg.memdesc<2x2xf16, #shared, #smem, mutable>
+    %result = scf.for %i = %lb to %ub step %c1 iter_args(%current = %poison) -> !ttg.memdesc<2x2xf16, #shared, #smem, mutable> : i32 {
+      scf.yield %normal : !ttg.memdesc<2x2xf16, #shared, #smem, mutable>
+    }
+    tt.return %result : !ttg.memdesc<2x2xf16, #shared, #smem, mutable>
+  }
+}
