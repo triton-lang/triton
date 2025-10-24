@@ -2198,7 +2198,7 @@ def buffer_load_store_kernel(x, y):
     ttgl.amd.cdna4.buffer_store(stored_value=a, ptr=y, offsets=offsets, mask=mask, cache='.cs')
 
 
-@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_GFX1250])
 def test_buffer_load_store(target):
     x = MockTensor(ttgl.float32)
     y = MockTensor(ttgl.float32)
@@ -2247,7 +2247,7 @@ def buffer_load_store_with_broadcast_kernel(x, y):
     ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=y, offsets=offsets, mask=mask, cache='.cs')
 
 
-@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4])
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA3, HIP_TARGET_CDNA4, HIP_TARGET_GFX1250])
 def test_buffer_load_store_with_broadcast(target):
     x = MockTensor(ttgl.float16)
     y = MockTensor(ttgl.float16)
