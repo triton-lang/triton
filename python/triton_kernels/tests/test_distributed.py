@@ -304,7 +304,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
         )
 
     # test cuda graph capture + replay with symmetric memory
-    symm_mem_pool.initialize(byte_size=n_tokens_global*n_expts_act*d_model*4*2, n_ranks=world_size)
+    symm_mem_pool.initialize(byte_size=n_tokens_global*n_expts_act*d_model*4*2, n_ranks=world_size, group=dist.group.WORLD, device=dev)
     y_dp_local_tri = run_mixture()
     y_global_tri = torch.empty_like(y_global_ref)
 

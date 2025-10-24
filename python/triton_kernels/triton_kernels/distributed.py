@@ -33,7 +33,7 @@ class SymmetricMemoryPool:
         self.buf = None
         self.bufs = None
 
-    def initialize(self, byte_size, n_ranks, device="cuda", group=dist.group.WORLD()):
+    def initialize(self, byte_size, n_ranks, group, device="cuda"):
         if self._is_initialized:
             return
         self._is_initialized = True
