@@ -33,12 +33,12 @@ class SymmetricMemoryPool:
         self.buf = None
         self.bufs = None
 
-    def initialize(self, byte_size, n_ranks, group=dist.group.WORLD):
+    def initialize(self, byte_size, n_ranks, device="cuda", group=dist.group.WORLD):
         if self._is_initialized:
             return
         self._is_initialized = True
         self.size = byte_size
-        self.buf = symm_mem.empty(byte_size, dtype=torch.uint8, device="cuda")
+        self.buf = symm_mem.empty(byte_size, dtype=torch.uint8, device=device)
         self.hdl = symm_mem.rendezvous(self.buf, group)
         self.bufs = tuple([self.hdl.get_buffer(r, self.buf.shape, self.buf.dtype) for r in range(n_ranks)])
 
