@@ -847,12 +847,13 @@ def attention_kernel(  #
 
     chnls = (q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile)
     descs = (desc_q, desc_k, desc_v, desc_o)
-    gl.warp_specialize((config, chnls, descs, M, STAGE), _attn_fwd_correction, (config, chnls, descs, M, STAGE), [
-        _attn_fwd_softmax0,
-        _attn_fwd_softmax1,
-        _attn_fwd_mma,
-        _attn_fwd_load,
-        _attn_fwd_epilogue,
+    gl.warp_specialize([
+        (_attn_fwd_correction, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_softmax0, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_softmax1, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_mma, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_load, (config, chnls, descs, M, STAGE)),
+        (_attn_fwd_epilogue, (config, chnls, descs, M, STAGE)),
     ], [4, 4, 1, 1, 1], [192, 192, 24, 24, 24])
 
     q_chnl.release()
