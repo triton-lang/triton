@@ -46,7 +46,7 @@ class SymmetricMemoryPool:
         # make 128 bytes aligned
         offset = (offset + 127) // 128 * 128
         for i in range(len(self.bufs)):
-            bufs.append(self.bufs[i][offset:offset + torch.tensor(shape).numel() * torch.tensor(dtype).itemsize].view(shape))
+            bufs.append(self.bufs[i][offset:offset + torch.tensor(shape).numel() * dtype.itemsize].view(shape))
         return bufs
 
 
