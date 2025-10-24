@@ -7,7 +7,7 @@ import triton
 import triton.language as tl
 import random
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Tuple, cast
 from math import prod
 
 @dataclass
@@ -42,15 +42,29 @@ class SymmetricMemoryPool:
         self.hdl = symm_mem.rendezvous(self.buf, dist.group.WORLD)
         self.bufs = tuple([self.hdl.get_buffer(r, self.buf.shape, self.buf.dtype) for r in range(n_ranks)])
 
-    def make_empty(self, offset, shape, dtype) -> Tuple[torch.Tensor, ...]:
-        rets = []
-        # make 128 bytes aligned
-        offset = (offset + 127) // 128 * 128
+    def make_empty(self, offset: int, shape: Tuple[int, ...], dtype: torch.dtype) -> Tuple[torch.Tensor, ...]:
+        rets: list[torch.Tensor] = []
+        elem_size = torch.empty((), dtype=dtype).element_size()
         numel = prod(shape)
-        for i in range(len(self.bufs)):
-            storage = self.bufs[i].untyped_storage()
-            buf = storage[offset:offset + numel * dtype.itemsize]
-            rets.append(torch.tensor(buf, dtype=dtype).reshape(shape))
+        nbytes = numel * elem_size
+        offset = ((offset + 127) // 128) * 128
+
+        if offset % elem_size != 0:
+            raise ValueError(f"Offset {offset} not aligned to element size {elem_size}")
+
+        for buf in self.bufs:
+            st = buf.untyped_storage()
+            total = st.nbytes()
+            if offset + nbytes > total:
+                raise ValueError(f"Slice [{offset}:{offset+nbytes}) exceeds storage size {total} bytes.")
+
+            subst = st[offset : offset + nbytes]
+            subst = cast(torch.UntypedStorage, subst)  # helps mypy
+
+            t = torch.empty(0, dtype=dtype, device=buf.device)
+            t.set_(subst, 0, torch.Size(shape))
+            rets.append(t)
+
         return tuple(rets)
 
 
