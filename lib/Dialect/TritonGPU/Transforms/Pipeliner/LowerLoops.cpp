@@ -453,26 +453,17 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
         continue;
       }
       SharedEncodingTrait sharedEncoding;
-      bool canUseAsyncCp = false;
-      if (!isa<RankedTensorType>(op.getResultTypes()[0])) {
-        canUseAsyncCp = op.getResultTypes()[0].getIntOrFloatBitWidth() >= 32;
-        sharedEncoding = ttg::SwizzledSharedEncodingAttr::get(
-            forOp.getContext(), 1, 1, 1, {0},
-            ttg::CTALayoutAttr::get(forOp.getContext(), {1}, {1}, {0}));
-        if (canUseAsyncCp) {
+      bool canUseAsyncCp =
+          triton::isPipeliningBeneficial(&op, axisInfoAnalysis);
+      if (canUseAsyncCp) {
+        if (!isa<RankedTensorType>(op.getResultTypes()[0])) {
+          sharedEncoding = ttg::SwizzledSharedEncodingAttr::get(
+              forOp.getContext(), 1, 1, 1, {0},
+              ttg::CTALayoutAttr::get(forOp.getContext(), {1}, {1}, {0}));
           scalarLoads.push_back(&op);
+        } else {
+          sharedEncoding = getSharedEncoding(&op);
         }
-      } else {
-        sharedEncoding = getSharedEncoding(&op);
-        // Do not create async loads for small loads (cp.async requires at least
-        // 4 bytes)
-        canUseAsyncCp =
-            isa<tt::LoadOp>(op) &&
-            canBeConvertedToAsyncLoad(cast<tt::LoadOp>(op), axisInfoAnalysis);
-        int copyVecBytes = getCopyVecBytes(
-            cast<RankedTensorType>(op.getResultTypes()[0]), sharedEncoding);
-
-        canUseAsyncCp &= copyVecBytes >= 4;
       }
       if (canUseAsyncCp || isTMALoad(&op)) {
         if (loadRequiresAdditionalBuffer(&op)) {
