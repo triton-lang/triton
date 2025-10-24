@@ -45,11 +45,12 @@ class SymmetricMemoryPool:
 
     def make_empty(self, offset: int, shape: Tuple[int, ...], dtype: torch.dtype) -> Tuple[torch.Tensor, ...]:
         rets = []
+        elem_size = torch.empty((), dtype=dtype).element_size()
         numel = prod(shape)
-        nbytes = numel * dtype.itemsize
+        nbytes = numel * elem_size
 
-        if offset % dtype.itemsize != 0:
-            raise ValueError(f"Offset {offset} not aligned to element size {dtype.itemsize}")
+        if offset % elem_size != 0:
+            raise ValueError(f"Offset {offset} not aligned to element size {elem_size}")
 
         for buf in self.bufs:
             st = cast(torch.UntypedStorage, buf.untyped_storage())
@@ -58,8 +59,13 @@ class SymmetricMemoryPool:
                 raise ValueError(f"Slice [{offset}:{offset+nbytes}) exceeds storage size {total} bytes.")
 
             t = torch.empty(0, dtype=dtype, device=buf.device)
-            storage_offset = offset // dtype.itemsize
+            storage_offset = offset // elem_size
             t.set_(cast(Any, st), storage_offset, torch.Size(shape))
+            if __debug__ and t.data_ptr() - buf.data_ptr() != offset:
+                raise RuntimeError(
+                    f"Failed to create view with the requested byte offset. "
+                    f"Expected data pointer at {buf.data_ptr() + offset}, got {t.data_ptr()}."
+                )
             rets.append(t)
 
         return tuple(rets)
