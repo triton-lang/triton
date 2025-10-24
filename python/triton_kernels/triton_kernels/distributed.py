@@ -41,6 +41,7 @@ class SymmetricMemoryPool:
         self.buf = symm_mem.empty(byte_size, dtype=torch.uint8, device=device)
         self.hdl = symm_mem.rendezvous(self.buf, group)
         self.bufs = tuple([self.hdl.get_buffer(r, self.buf.shape, self.buf.dtype) for r in range(n_ranks)])
+        symm_mem.barrier(group, channel=0)
 
     def make_empty(self, offset: int, shape: Tuple[int, ...], dtype: torch.dtype) -> Tuple[torch.Tensor, ...]:
         rets = []
