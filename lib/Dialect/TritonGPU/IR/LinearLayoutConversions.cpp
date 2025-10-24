@@ -779,6 +779,7 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
   StringAttr kRegister = S("register");
   StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
 
   // https://github.com/ROCm/amd_matrix_instruction_calculator can print the
   // register and lane layout for mfma instructions.
@@ -821,6 +822,42 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
                  {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 8}}}},
                 {outDimNames[threadOrder[0]], outDimNames[threadOrder[1]]});
 
+  auto tilesPerWarp = getTilesPerWarp();
+  auto warpsPerCTA = getWarpsPerCTA();
+
+  const unsigned tilesPerWarpM = tilesPerWarp[mIndex];
+  const unsigned tilesPerWarpN = tilesPerWarp[nIndex];
+  const unsigned warpsPerCTAM = warpsPerCTA[mIndex];
+  const unsigned warpsPerCTAN = warpsPerCTA[nIndex];
+
+  auto warpOrder = getDefaultMmaOrder(*this);
+  auto dimM = outDimNames[warpOrder[1]];
+  auto dimN = outDimNames[warpOrder[0]];
+  tileLayout = tileLayout.transposeOuts({dimN, dimM});
+
+  // First, extend the layout along the N dimension:
+  // - registers are distributed across tilesPerWarpN
+  // - then across warpsPerCTAN in the N dimension.
+  tileLayout *= LinearLayout::identity1D(tilesPerWarpN, kRegister, dimN);
+  tileLayout *= LinearLayout::identity1D(warpsPerCTAN, kWarp, dimN);
+
+  // At this point, the layout is defined across the N dimension within a CTA
+  // tile. Instead of switching to the M dimension now, we continue extending
+  // the layout along the remaining N dimension, and only then proceed along M,
+  // following the tilesPerWarp configuration.
+  // If the N dimension is not large enough to span multiple CTA tiles (i.e.,
+  // the first argument is 0), an empty layout is created, so this identity
+  // layout will not introduce any new registers.
+  tileLayout *= LinearLayout::identity1D(
+      shape[nIndex] / (nDim * warpsPerCTAN * tilesPerWarpN), kRegister, dimN);
+  tileLayout *= LinearLayout::identity1D(tilesPerWarpM, kRegister, dimM);
+
+  // Finally, extend the layout across warps in the M dimension.
+  // After this step, the layout covers a sub-tensor of size ctaTileM × N,
+  // i.e., the full N dimension and a CTA tile's extent in M.
+  // The rest of the layout will be defined by combineCtaCgaWithShape.
+  tileLayout *= LinearLayout::identity1D(warpsPerCTAM, kWarp, dimM);
+
   if (hasBatchDim) {
     int batchIndex = 0;
     // Extend the base vector with one value to accommodate for the batch
@@ -828,23 +865,11 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
     tileLayout *=
         LinearLayout::identity1D(1, kRegister, outDimNames[batchIndex]);
     tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[batchIndex]);
+    tileLayout *= LinearLayout::identity1D(warpsPerCTA[0], kWarp,
+                                           outDimNames[batchIndex]);
   }
 
-  // And each warp takes the same register and lane sub-layout. So multiply with
-  // an identity layout for the warp.
-  auto warpOrder = getDefaultMmaOrder(*this);
-  LinearLayout warpLayout =
-      identityStandardND(S("warp"), getWarpsPerCTA(), warpOrder);
-  // reorder dim names in rep order, so combineCtaCgaWithShape generate proper
-  // extension of layout
-  auto repOrder = getRepOrder();
-  SmallVector<StringAttr> repDimNames;
-  for (auto dim : repOrder)
-    repDimNames.push_back(outDimNames[dim]);
-  LinearLayout ctaLayout = tileLayout.transposeOuts(repDimNames) *
-                           warpLayout.transposeOuts(repDimNames);
-
-  return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
+  return combineCtaCgaWithShape(tileLayout, getCTALayout(), shape);
 }
 
 LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
@@ -873,6 +898,13 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
 
   auto mnkDim = wmmaLayout.getInstrShape();
   auto kDim = mnkDim[2];
+  auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
+  auto tilesPerWarp = wmmaLayout.getTilesPerWarp();
+  auto nonKDimIndex = dotWmmaLayout.getOpIdx() == 0 ? rank - 2 : rank - 1;
+  auto tilePerWarpNonK = tilesPerWarp[nonKDimIndex];
+  auto kDimIndex = dotWmmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  unsigned kSize = shape[kDimIndex];
+
   auto nonKDim = dotWmmaLayout.getOpIdx() == 0 ? mnkDim[0] : mnkDim[1];
   auto kWidth = dotWmmaLayout.getKWidth();
   constexpr int warpSize = 32;
@@ -890,8 +922,17 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
                LinearLayout::identity1D(nonKDim, kLane, dimNonK);
   tileLayout *= version == 1 ? LinearLayout::zeros1D(depth, kLane, dimK)
                              : LinearLayout::identity1D(depth, kLane, dimK);
-  tileLayout *=
-      LinearLayout::identity1D(kDim / (depth * kWidth), kRegister, dimK);
+
+  // When tilePerWarpNonK > 1, we can't rely on the traditional way to fill the
+  // block along K. Instead, we need to manually fill the whole kSize, then
+  // apply tilePerWarpNonK along nonK direction.
+  int kTileSize = depth * kWidth;
+  if (tilePerWarpNonK > 1) {
+    tileLayout *= LinearLayout::identity1D(kSize / kTileSize, kRegister, dimK);
+    tileLayout *= LinearLayout::identity1D(tilePerWarpNonK, kRegister, dimNonK);
+  } else {
+    tileLayout *= LinearLayout::identity1D(kDim / kTileSize, kRegister, dimK);
+  }
 
   if (hasBatchDim) {
     assert(order[2] == 0);
@@ -902,11 +943,9 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
   }
 
   // Generate warp layout
-  auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
   auto warpOrder = getDefaultMmaOrder(wmmaLayout);
-  auto kDimIdx = dotWmmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
   LinearLayout warpLayout = broadcastedDotOperandLayout(
-      ctx, warpsPerCTA, warpOrder, kDimIdx, S("warp"));
+      ctx, warpsPerCTA, warpOrder, kDimIndex, S("warp"));
 
   // reorder dim names in rep order, so combineCtaCgaWithShape generate proper
   // extension of layout
@@ -1435,8 +1474,10 @@ chooseDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
 }
 
 LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
-                                         ArrayRef<unsigned> warpsPerCTA,
-                                         ArrayRef<int64_t> dotOperandShape) {
+                                         ArrayRef<int64_t> dotOperandShape,
+                                         unsigned wmmaMDim,
+                                         ArrayRef<unsigned> tilesPerWarp,
+                                         ArrayRef<unsigned> warpsPerCTA) {
   using basisT = std::vector<std::vector<int32_t>>;
   unsigned rank = dotOperandShape.size();
   auto order = mlir::triton::gpu::getMatrixOrder(rank, /*rowMajor=*/true);
@@ -1468,6 +1509,16 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
       LinearLayout::identity1D(16, kLane, dimNonK) *
       LinearLayout::zeros1D(2, kLane, dimK) *
       LinearLayout::identity1D(kSize / scaleKWidth, kRegister, dimK);
+
+  unsigned mnDim = dotOperandIdx == 0 ? rank - 2 : rank - 1;
+  unsigned tilePerWarpMN = tilesPerWarp[mnDim];
+  if (tilePerWarpMN > 1) {
+    std::vector<std::vector<int32_t>> registerBase;
+    for (int32_t elem = wmmaMDim; elem < tilePerWarpMN * wmmaMDim; elem *= 2)
+      registerBase.emplace_back(std::vector<int32_t>{elem, 0});
+
+    tileLayout *= LinearLayout({{kRegister, registerBase}}, {dimK, dimNonK});
+  }
 
   auto warpsPerCTANew = (dotOperandIdx == 1)
                             ? SmallVector{warpsPerCTA[1], warpsPerCTA[0]}

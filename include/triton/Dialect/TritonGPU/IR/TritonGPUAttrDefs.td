@@ -1299,12 +1299,24 @@ Row |
     "unsigned": $version,
     "bool":$isTransposed,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
+    ArrayRefParameter<"unsigned">:$tilesPerWarp,
     "CTALayoutAttr":$CTALayout,
     ArrayRefParameter<"unsigned">:$instrShape
   );
 
   let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
+
+  let builders = [
+    AttrBuilder<(ins "unsigned":$version,
+                     "bool":$isTransposed,
+                     "ArrayRef<unsigned>":$warpsPerCTA,
+                     "CTALayoutAttr":$CTALayout,
+                     "ArrayRef<unsigned>":$instrShape), [{
+      SmallVector<unsigned> tilesPerWarp(warpsPerCTA.size(), 1);
+      return $_get(context, version, isTransposed, warpsPerCTA, tilesPerWarp, CTALayout, instrShape);
+    }]>
+  ];
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kDim, int opIdx) const;
@@ -1313,6 +1325,9 @@ Row |
     static SmallVector<unsigned, 3> getDefaultInstrShape() {
       return {16, 16, 16};
     }
+
+    // Check if tilesPerWarp is 1 in every dimension.
+    bool hasUnitTilesPerWarp() const;
 
     // Returns a swizzled shared layout matching this WMMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.

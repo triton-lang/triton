@@ -1271,6 +1271,9 @@ LogicalResult AMDMfmaEncodingAttr::verify(
 //===----------------------------------------------------------------------===//
 // WMMA encoding
 //===----------------------------------------------------------------------===//
+bool AMDWmmaEncodingAttr::hasUnitTilesPerWarp() const {
+  return llvm::all_of(getTilesPerWarp(), [](int x) { return x == 1; });
+}
 
 Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
@@ -1287,6 +1290,7 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
+  SmallVector<unsigned> tilesPerWarp = {};
   SmallVector<unsigned> instrShape = getDefaultInstrShape();
 
   for (const NamedAttribute &attr : dict) {
@@ -1300,6 +1304,11 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
     }
     if (attr.getName() == "warpsPerCTA") {
       if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
+        return {};
+    }
+    if (attr.getName() == "tilesPerWarp") {
+      if (parseIntArrayAttr(parser, attr, tilesPerWarp, "tilesPerWarp")
+              .failed())
         return {};
     }
     if (attr.getName() == "CTAsPerCGA") {
@@ -1330,9 +1339,12 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
-  return parser.getChecked<AMDWmmaEncodingAttr>(parser.getContext(), version,
-                                                isTransposed, warpsPerCTA,
-                                                *CTALayout, instrShape);
+  if (tilesPerWarp.empty())
+    tilesPerWarp = SmallVector<unsigned>(instrShape.size(), 1);
+
+  return parser.getChecked<AMDWmmaEncodingAttr>(
+      parser.getContext(), version, isTransposed, warpsPerCTA, tilesPerWarp,
+      *CTALayout, instrShape);
 }
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
@@ -1344,6 +1356,10 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
 
+  auto tilesPerWarp = getTilesPerWarp();
+  if (!hasUnitTilesPerWarp())
+    printer << ", tilesPerWarp = [" << getTilesPerWarp() << "]";
+
   if (getInstrShape() != ArrayRef(getDefaultInstrShape())) {
     printer << ", instrShape = [" << getInstrShape() << "]";
   }
@@ -1353,7 +1369,8 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
 LogicalResult AMDWmmaEncodingAttr::verify(
     function_ref<mlir::InFlightDiagnostic()> emitError, unsigned version,
     bool isTransposed, llvm::ArrayRef<unsigned int> warpsPerCTA,
-    CTALayoutAttr ctaLayout, llvm::ArrayRef<unsigned> instrShape) {
+    llvm::ArrayRef<unsigned int> tilesPerWarp, CTALayoutAttr ctaLayout,
+    llvm::ArrayRef<unsigned> instrShape) {
   if (!(version >= 1 && version <= 3))
     return emitError() << "WMMA version must be in the [1, 3] range";
 
@@ -2160,7 +2177,7 @@ void AMDRotatingSharedEncodingAttr::print(AsmPrinter &printer) const {
 // TODO: there is a lot of common code with MmaEncoding here
 
 bool AMDMfmaEncodingAttr::hasUnitTilesPerWarp() const {
-  return !llvm::any_of(getTilesPerWarp(), [](int x) { return x != 1; });
+  return llvm::all_of(getTilesPerWarp(), [](int x) { return x == 1; });
 }
 
 SmallVector<int64_t>
@@ -2293,6 +2310,8 @@ AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape, int kDim,
 
   assert(operandTileShape.size() == 2);
   auto warpsPerCTA = getWarpsPerCTA();
+  auto tilesPerWarp = getTilesPerWarp();
+
   auto rank = operandShape.size();
   assert(rank == 2 || rank == 3);
   int numRepBatch =
@@ -2301,15 +2320,19 @@ AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape, int kDim,
     return {
         numRepBatch,
         std::max<int64_t>(1, operandShape[rank - 2] /
-                                 (operandTileShape[0] * warpsPerCTA[rank - 2])),
+                                 (operandTileShape[0] * tilesPerWarp[rank - 2] *
+                                  warpsPerCTA[rank - 2])) *
+            tilesPerWarp[rank - 2],
         std::max<int64_t>(1, operandShape[rank - 1] / operandTileShape[1])};
   else {
     assert(opIdx == 1);
     return {
         numRepBatch,
         std::max<int64_t>(1, operandShape[rank - 2] / operandTileShape[0]),
-        std::max<int64_t>(1, operandShape[rank - 1] / (operandTileShape[1] *
-                                                       warpsPerCTA[rank - 1]))};
+        std::max<int64_t>(1, operandShape[rank - 1] /
+                                 (operandTileShape[1] * tilesPerWarp[rank - 1] *
+                                  warpsPerCTA[rank - 1])) *
+            tilesPerWarp[rank - 1]};
   }
 }
 
