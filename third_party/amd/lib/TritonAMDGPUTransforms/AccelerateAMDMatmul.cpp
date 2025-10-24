@@ -453,43 +453,36 @@ Value findScaleAsDecompositionSource(Value v) {
   return {};
 }
 
-// Figure out a best tilesPerWarp parameter that gives largest vector size for
-// global load for the given |scale| tensor feeding into dot_scaled op. Returns
-// the largest vector size and writes the choice to |result|.
-int deduceTilesPerWarp(TypedValue<RankedTensorType> scale, unsigned opIdx,
-                       unsigned nonKDim, ArrayRef<unsigned> warpsPerCTA,
-                       SmallVectorImpl<unsigned> *result) {
-  std::array<unsigned, 2> chosen{1, 1};
-  int vecSize = 1;
-  if (!scale) {
-    result->assign(chosen.begin(), chosen.end());
-    return vecSize;
-  }
-
+// Figure out the best tilesPerWarp that gives largest vector size for |scale|
+// tensors feeding into dot_scaled op.
+SmallVector<unsigned, 2> deduceTilesPerWarpForScale(
+    TypedValue<RankedTensorType> scaleA, TypedValue<RankedTensorType> scaleB,
+    unsigned nonKDim, unsigned m, unsigned n, ArrayRef<unsigned> warpsPerCTA) {
   // Source code have flexibility to preshuffle scale tensor to achieve better
   // global load vectorization. That preshuffle scheme is conveyed via some
   // tl.reshape and tl.trans op combinations. Instead of hardcoding one case or
   // pattern match the op chain here, we try certain scale tensor layouts and
   // see which one gives us better vectorization when pushed upwards to the
   // global load.
-  //
-  // For 16x16x128 scaled MFMA intrinsic, each thread only reads one i8 value.
-  // For better vectorization, we prefer to stick 2x2 such intrinsic together so
-  // each thread can read 4xi8 values.
-  SmallVector<std::array<unsigned, 2>, 2> choices{{2, 2}, {1, 1}};
-  for (const auto &choice : choices) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "choice: [" << choice[0] << ", " << choice[1] << "]\n");
+  auto inferScaleSrcVecSize =
+      [&](unsigned opIdx, TypedValue<RankedTensorType> scale,
+          SmallVector<unsigned, 2> tilesPerWarp) -> unsigned {
+    if (!scale)
+      return 1;
+
     LinearLayout layout = ttg::chooseScaledMfmaScaleLayout(
-        scale.getContext(), opIdx, scale.getType().getShape(), nonKDim, choice,
-        warpsPerCTA);
+        scale.getContext(), opIdx, scale.getType().getShape(), nonKDim,
+        tilesPerWarp, warpsPerCTA);
     LLVM_DEBUG(llvm::dbgs() << "trying scale layout: " << layout << "\n");
 
+    auto scaleDef = scale.getDefiningOp();
+    // assume vec=4 for constant scale
+    if (isa_and_nonnull<arith::ConstantOp, triton::SplatOp>(scaleDef))
+      return 4;
     // Infer source layout used for global load using the current scale layout.
-    auto loadLayoutPair =
-        ttg::inferSourceLoadLayout(layout, scale.getDefiningOp());
+    auto loadLayoutPair = ttg::inferSourceLoadLayout(layout, scaleDef);
     if (!loadLayoutPair)
-      continue;
+      return 1;
     tt::LoadOp loadOp = loadLayoutPair->first;
     const LinearLayout &inferredLayout = loadLayoutPair->second;
     LLVM_DEBUG(llvm::dbgs()
@@ -507,18 +500,46 @@ int deduceTilesPerWarp(TypedValue<RankedTensorType> scale, unsigned opIdx,
     auto sharedLL =
         triton::gpu::toLinearLayout(loadType.getShape(), passThruShared);
     auto composedLL = inferredLayout.invertAndCompose(sharedLL).flattenOuts();
+    LLVM_DEBUG(llvm::dbgs()
+               << "inferred composed layout: " << composedLL << "\n");
     auto [v, _] =
         largestVectorisation(context, composedLL, /*bitwidth=*/8, std::nullopt);
+    return v;
+  };
 
-    if (v > vecSize) {
-      LLVM_DEBUG(llvm::dbgs() << "found vector size: " << v << "\n");
-      chosen = choice;
-      vecSize = v;
-      break;
+  unsigned largest = 2;
+  SmallVector<unsigned, 2> chosen{1, 1};
+  // For scaled MFMA intrinsic, each thread only reads one i8 value.
+  // For better vectorization, we prefer to stick tilesPerWarp 2x2 for 16x16x128
+  // and 1x1 for 32x32x64 so that each thread can read 4xi8 values.
+  // limit tilesPerWarp to block boundary
+  for (unsigned mDimTiles = 1; mDimTiles <= std::min(2u, m / nonKDim);
+       mDimTiles++) {
+    for (unsigned nDimTiles = 1; nDimTiles <= std::min(2u, n / nonKDim);
+         nDimTiles++) {
+      SmallVector<unsigned, 2> tilesPerWarp{mDimTiles, nDimTiles};
+      unsigned vecSizeA = inferScaleSrcVecSize(0, scaleA, tilesPerWarp);
+      unsigned vecSizeB = inferScaleSrcVecSize(1, scaleB, tilesPerWarp);
+      LLVM_DEBUG(llvm::dbgs() << "when tilesPerWarp: " << tilesPerWarp[0]
+                              << ", " << tilesPerWarp[1] << "\n");
+      LLVM_DEBUG(llvm::dbgs()
+                 << "inferred scaleA vecSize: " << vecSizeA << "\n");
+      LLVM_DEBUG(llvm::dbgs()
+                 << "inferred scaleB vecSize: " << vecSizeB << "\n");
+      unsigned score = vecSizeA + vecSizeB;
+      if (score > largest) {
+        largest = score;
+        chosen = tilesPerWarp;
+      }
     }
   }
-  result->assign(chosen.begin(), chosen.end());
-  return vecSize;
+  assert(largest <= 8 && "at most pack 4 scales for scale a & b respectively");
+  // fixup: align with dimension that has scale
+  if (!scaleA && scaleB)
+    chosen[0] = std::min(ceil<unsigned>(m, nonKDim), chosen[1]);
+  if (!scaleB && scaleA)
+    chosen[1] = std::min(ceil<unsigned>(n, nonKDim), chosen[0]);
+  return chosen;
 }
 
 class BlockedToMFMA : public OpRewritePattern<tt::DotOp> {
@@ -611,11 +632,10 @@ public:
       SmallVector<unsigned, 2> tilesA{1, 1}, tilesB{1, 1};
       Value scaleA = findScaleAsDecompositionSource(a);
       Value scaleB = findScaleAsDecompositionSource(b);
-      int vecA = deduceTilesPerWarp(dyn_cast_if_present<TensorValue>(scaleA), 0,
-                                    mDim, warpsPerTile, &tilesA);
-      int vecB = deduceTilesPerWarp(dyn_cast_if_present<TensorValue>(scaleB), 1,
-                                    mDim, warpsPerTile, &tilesB);
-      tilesPerWarp = vecA > vecB ? tilesA : tilesB;
+      tilesPerWarp = deduceTilesPerWarpForScale(
+          dyn_cast_if_present<TensorValue>(scaleA),
+          dyn_cast_if_present<TensorValue>(scaleB), mDim, retShape[0],
+          retShape[1], warpsPerTile);
       LLVM_DEBUG(llvm::dbgs() << "chosen tilesPerWarp: [" << tilesPerWarp[0]
                               << ", " << tilesPerWarp[1] << "]\n");
     }
@@ -1066,10 +1086,8 @@ public:
     auto warpsPerTile =
         warpsPerTileMFMA(dotOp, oldShape, numWarps, {mDim, nDim});
 
-    SmallVector<unsigned, 2> tilesA{1, 1}, tilesB{1, 1}, tilesPerWarp;
-    int vecA = deduceTilesPerWarp(aScale, 0, mDim, warpsPerTile, &tilesA);
-    int vecB = deduceTilesPerWarp(bScale, 1, mDim, warpsPerTile, &tilesB);
-    tilesPerWarp = vecA > vecB ? tilesA : tilesB;
+    SmallVector<unsigned, 2> tilesPerWarp = deduceTilesPerWarpForScale(
+        aScale, bScale, mDim, oldShape[0], oldShape[1], warpsPerTile);
     LLVM_DEBUG(llvm::dbgs() << "chosen tilesPerWarp: [" << tilesPerWarp[0]
                             << ", " << tilesPerWarp[1] << "]\n");
 
