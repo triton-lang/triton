@@ -107,9 +107,11 @@ bool doesSwizzleInsideWarp(RewriterBase &rewriter,
 // Return true if op is used by DotScaledOp or UpcastMXFPOp ops.
 bool isUsedByDotScaledOp(Operation *op);
 
-// Return true if op is stored continuously along the dimension 0.
-bool isStoredAlongDim0(Operation *op, ModuleAxisInfoAnalysis &axisAnalysisPass);
-
+// Return true if the result of op is stored contiguously along the dimension
+// of mfmaLayout's order[0].
+bool isStoredContinuously(
+    Operation *op, ModuleAxisInfoAnalysis &axisAnalysisPass,
+    const mlir::triton::gpu::AMDMfmaEncodingAttr &mfmaLayout);
 // Check if the result of this tl.dot is used as opA or opB of another tl.dot
 // in the same region
 bool isChainDotHead(mlir::triton::DotOpInterface dotOp, unsigned opIdx = 0);

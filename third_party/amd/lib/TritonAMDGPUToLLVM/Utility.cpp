@@ -568,14 +568,16 @@ bool doesSwizzleInsideWarp(RewriterBase &rewriter,
   return true;
 }
 
-bool isStoredAlongDim0(Operation *op,
-                       ModuleAxisInfoAnalysis &axisAnalysisPass) {
+bool isStoredContinuously(
+    Operation *op, ModuleAxisInfoAnalysis &axisAnalysisPass,
+    const mlir::triton::gpu::AMDMfmaEncodingAttr &mfmaLayout) {
+  assert(isa<DotOp>(op) && "expected DotOp");
   const ForwardSliceOptions fwdOpt;
   SetVector<mlir::Operation *> forwardSliceSet;
   getForwardSlice(op, &forwardSliceSet, fwdOpt);
 
-  for (Operation *op : forwardSliceSet) {
-    Value ptr = llvm::TypeSwitch<Operation *, Value>(op)
+  for (Operation *fop : forwardSliceSet) {
+    Value ptr = llvm::TypeSwitch<Operation *, Value>(fop)
                     .Case<triton::StoreOp, triton::amdgpu::MaskedStoreOp,
                           triton::amdgpu::BufferStoreOp,
                           triton::amdgpu::BufferAtomicRMWOp,
@@ -587,9 +589,16 @@ bool isStoredAlongDim0(Operation *op,
       continue;
 
     AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
-    return axisInfo->getContiguity(0) > 1;
+    auto dotOp = cast<DotOp>(op);
+    auto shape = dotOp.getType().getShape();
+    auto order = getOrder(mfmaLayout, shape);
+
+    // return true if the result of op is stored continuously along order[0], or
+    // if contiguity cannot be proven for either order[0] or order[1].
+    return axisInfo->getContiguity(order[0]) != 1 ||
+           axisInfo->getContiguity(order[1]) == 1;
   }
-  return false;
+  return mfmaLayout.getIsTransposed();
 }
 
 bool isUsedByDotScaledOp(Operation *op) {

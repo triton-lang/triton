@@ -602,15 +602,10 @@ public:
       mfmaAccType = rewriter.getF32Type();
 
     // Use transposed mfma layout to enable larger vectorization for global
-    // store instructions along dimension 1. Use an untransposed mfma layout to
-    // enable vectorization along dimension 0. There are two special cases:
-    // 1. We can not support transposed mfma 4x64 as it requires to broadcast
-    // the operand A.
-    // 2. We always transpose 64x4 mfma in order to use the mfma broadcast.
-    bool isTransposed =
-        !(mDim == 4 && nDim == 64) &&
-            !(mlir::LLVM::AMD::isStoredAlongDim0(dotOp, axisAnalysisPass)) ||
-        (mDim == 64 && nDim == 4);
+    // store instructions. We can not support transposed mfma 4x64 as it
+    // requires to broadcast the operand A.
+    // We will adjust isTransposed for sepcial cases.
+    bool isTransposed = !(mDim == 4 && nDim == 64);
     auto aElemTy = mfmaInstr->aElementType;
     auto is16BitElemTy = (aElemTy.isF16() || aElemTy.isBF16());
 
@@ -658,6 +653,21 @@ public:
         isTransposed, CTALayout, tilesPerWarp,
         mfmaAccType.getIntOrFloatBitWidth());
 
+    // Adjust isTransposed based on how the result of dotOp is stored.
+    // If the store’s contiguity aligns with the layout order, keep the isTran
+    // flag set to true. Otherwise, set it to false. This allows us to vectorize
+    // the store along the dimension where elements are accessed contiguously.
+    // Note that we always transpose 64x4 mfma in order to use the mfma
+    // broadcast.
+    if (isTransposed && !(mDim == 64 && nDim == 4) && !isChainDotHead(dotOp) &&
+        !(mlir::LLVM::AMD::isStoredContinuously(dotOp, axisAnalysisPass,
+                                                mfmaEnc))) {
+      mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+          oldRetType.getContext(), mfmaVersion, warpsPerTile,
+          {mDim, nDim, kDim},
+          /*isTransposed=*/false, CTALayout, tilesPerWarp,
+          mfmaAccType.getIntOrFloatBitWidth());
+    }
     // convert accumulator
     auto oldAcc = dotOp.getC();
     auto newAcc = convertAndCastTensor(rewriter, oldAcc, mfmaEnc, mfmaAccType);
