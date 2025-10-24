@@ -477,7 +477,7 @@ SmallVector<unsigned, 2> deduceTilesPerWarpForScale(
 
     auto scaleDef = scale.getDefiningOp();
     // assume vec=4 for constant scale
-    if (scaleDef && isa<arith::ConstantOp, triton::SplatOp>(scaleDef))
+    if (isa_and_nonnull<arith::ConstantOp, triton::SplatOp>(scaleDef))
       return 4;
     // Infer source layout used for global load using the current scale layout.
     auto loadLayoutPair = ttg::inferSourceLoadLayout(layout, scaleDef);
@@ -535,11 +535,10 @@ SmallVector<unsigned, 2> deduceTilesPerWarpForScale(
   }
   assert(largest <= 8 && "at most pack 4 scales for scale a & b respectively");
   // fixup: align with dimension that has scale
-  if (!scaleA)
-    chosen[0] = std::min(m / nonKDim, chosen[1]);
-  if (!scaleB)
-    chosen[1] = std::min(n / nonKDim, chosen[0]);
-
+  if (!scaleA && scaleB)
+    chosen[0] = std::min(ceil<unsigned>(m, nonKDim), chosen[1]);
+  if (!scaleB && scaleA)
+    chosen[1] = std::min(ceil<unsigned>(n, nonKDim), chosen[0]);
   return chosen;
 }
 
