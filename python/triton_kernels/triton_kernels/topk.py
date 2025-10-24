@@ -12,7 +12,6 @@ import torch.distributed as dist
 
 def make_empty(offset, shape, dtype, device, all_gather):
     if all_gather:
-        n_ranks = dist.get_world_size()
         rank_id = dist.get_rank()
         ret_bufs = symm_mem_pool.make_empty(offset=offset, shape=shape, dtype=dtype)
         ret = ret_bufs[rank_id] 

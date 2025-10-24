@@ -58,11 +58,10 @@ class SymmetricMemoryPool:
             if offset + nbytes > total:
                 raise ValueError(f"Slice [{offset}:{offset+nbytes}) exceeds storage size {total} bytes.")
 
-            subst = st[offset : offset + nbytes]
             subst = cast(torch.UntypedStorage, subst)  # helps mypy
 
             t = torch.empty(0, dtype=dtype, device=buf.device)
-            t.set_(subst, 0, torch.Size(shape))
+            t.set_(subst, offset, torch.Size(shape))
             rets.append(t)
 
         return tuple(rets)
