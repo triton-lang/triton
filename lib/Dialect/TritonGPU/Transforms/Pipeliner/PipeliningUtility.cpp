@@ -603,6 +603,10 @@ ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(RankedTensorType ty) {
 }
 
 ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(Operation *op) {
+  if (!isa<RankedTensorType>(op->getResultTypes()[0])) {
+    return nullptr;
+  }
+
   // Try to use local alloc encoding if possible.
   ttg::SharedEncodingTrait localAllocEnc;
   if (llvm::any_of(op->getUsers(), [&](Operation *user) {
@@ -957,28 +961,7 @@ bool triton::isPipeliningBeneficial(
     return false;
   }
 
-  ttg::SharedEncodingTrait localAllocEnc;
-  if (llvm::any_of(op->getUsers(), [&](Operation *user) {
-        return isa<ttg::LocalAllocOp>(user);
-      })) {
-    for (auto user : op->getUsers()) {
-      auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
-      if (!localAlloc)
-        continue;
-      auto enc = mlir::cast<ttg::SharedEncodingTrait>(
-          localAlloc.getType().getEncoding());
-      if (!localAllocEnc) {
-        localAllocEnc = enc;
-      }
-      if (enc != localAllocEnc) {
-        // If the load is used by a LocalAllocOp, all the users need to have
-        // the same encoding.
-        return false;
-      }
-    }
-  }
-
-  if (localAllocEnc) {
+  if (auto localAllocEnc = getSharedEncoding(op)) {
     auto registerTy = cast<RankedTensorType>(op->getResultTypes()[0]);
     auto vecBytes = mlir::triton::getCopyVecBytes(registerTy, localAllocEnc);
     if (filterSmall && vecBytes < 4) {
