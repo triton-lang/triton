@@ -213,6 +213,7 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
   // getTileLayout returns the layout for a bitwidth of 32
   assert(bitwidth == 32);
   auto tile = getTileLayout(ctx, atom, false);
+  // Plan:
   // tile: register, lane, warp -> row, cols
   // ll: row, cols -> dim0, dim1
   // We extend the tile to have the right vectorisation and the result is given
@@ -226,6 +227,14 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
     return std::nullopt;
   }
 
+  // We are choosing the distributed layout (ll o tile). In the lowering
+  // we will do ll^{-1} o (ll o tile) and we expect to get tile back.
+  // For this to be possible, ll should be invertible in the image of tile.
+  // The tile is already invertible, so we can just check their composition.
+  if (!tile.compose(ll).isInvertible()) {
+    return std::nullopt;
+  }
+
   // Fit the warp bases either tiling on the RHS or in row=16
   StringAttr row16;
   auto kReg = StringAttr::get(ctx, "register");
@@ -234,7 +243,7 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
   bool instr32Rows = atom == TMemAccessAtom::I32x32b;
   bool layout16Rows =
       ll.getBasis(rowColDims[0], llvm::Log2_32(16)) == ArrayRef{0, 0};
-  // If we need to fit something (the instruciton does not cover it
+  // If we need to fit something (the instruction does not cover it
   // and the layout has 32 rows) we first try to fit a warp, and if we
   // can't we fit a register
   if (!instr32Rows && !layout16Rows) {
