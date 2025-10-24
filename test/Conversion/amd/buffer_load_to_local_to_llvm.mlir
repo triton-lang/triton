@@ -150,6 +150,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // COMMON: llvm.cond_br
     // COMMON: llvm.store
 
+    // Make sure branch condition is set properly when there is other value.
+    // COMMON: [[AND:%.*]] = llvm.and
+    // COMMON: llvm.cond_br [[AND]]
+
     // COMMON: rocdl.raw.ptr.buffer.load.lds
     // COMMON: llvm.cond_br
     // COMMON: llvm.store
