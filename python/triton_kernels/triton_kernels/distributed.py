@@ -7,7 +7,7 @@ import triton
 import triton.language as tl
 import random
 from dataclasses import dataclass
-from typing import Tuple, cast
+from typing import Tuple, cast, Any
 from math import prod
 
 @dataclass
@@ -53,13 +53,13 @@ class SymmetricMemoryPool:
             raise ValueError(f"Offset {offset} not aligned to element size {elem_size}")
 
         for buf in self.bufs:
-            st = buf.untyped_storage()
+            st = cast(torch.UntypedStorage, buf.untyped_storage())
             total = st.nbytes()
             if offset + nbytes > total:
                 raise ValueError(f"Slice [{offset}:{offset+nbytes}) exceeds storage size {total} bytes.")
 
             t = torch.empty(0, dtype=dtype, device=buf.device)
-            t.set_(st, offset, torch.Size(shape))
+            t.set_(cast(Any, st), offset, torch.Size(shape))
             rets.append(t)
 
         return tuple(rets)
