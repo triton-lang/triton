@@ -45,12 +45,11 @@ class SymmetricMemoryPool:
 
     def make_empty(self, offset: int, shape: Tuple[int, ...], dtype: torch.dtype) -> Tuple[torch.Tensor, ...]:
         rets = []
-        elem_size = torch.empty((), dtype=dtype).element_size()
         numel = prod(shape)
-        nbytes = numel * elem_size
+        nbytes = numel * dtype.itemsize
 
-        if offset % elem_size != 0:
-            raise ValueError(f"Offset {offset} not aligned to element size {elem_size}")
+        if offset % dtype.itemsize != 0:
+            raise ValueError(f"Offset {offset} not aligned to element size {dtype.itemsize}")
 
         for buf in self.bufs:
             st = cast(torch.UntypedStorage, buf.untyped_storage())
