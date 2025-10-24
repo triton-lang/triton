@@ -43,7 +43,7 @@ class SymmetricMemoryPool:
         self.bufs = tuple([self.hdl.get_buffer(r, self.buf.shape, self.buf.dtype) for r in range(n_ranks)])
 
     def make_empty(self, offset: int, shape: Tuple[int, ...], dtype: torch.dtype) -> Tuple[torch.Tensor, ...]:
-        rets: list[torch.Tensor] = []
+        rets = []
         elem_size = torch.empty((), dtype=dtype).element_size()
         numel = prod(shape)
         nbytes = numel * elem_size
@@ -57,8 +57,6 @@ class SymmetricMemoryPool:
             total = st.nbytes()
             if offset + nbytes > total:
                 raise ValueError(f"Slice [{offset}:{offset+nbytes}) exceeds storage size {total} bytes.")
-
-            subst = cast(torch.UntypedStorage, subst)  # helps mypy
 
             t = torch.empty(0, dtype=dtype, device=buf.device)
             t.set_(subst, offset, torch.Size(shape))
