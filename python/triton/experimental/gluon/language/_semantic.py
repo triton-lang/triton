@@ -419,13 +419,17 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         gather = self.builder.create_gather(src.handle, index.handle, axis)
         return self.wrap_tensor(gather, src.type.scalar, index.type.shape, index.type.layout)
 
-    def warp_specialize(self, default_args, default_partition, worker_args, worker_partitions,
-                        worker_num_warps: Sequence[int], worker_num_regs: Sequence[int], generator):
-        num_partitions = len(worker_partitions)
-        _check(isinstance(default_args, (tuple, ttgl.tuple)),
-               lambda: f"default_args must be a tuple of arguments, but got {type(default_args)}")
-        _check(isinstance(worker_args, (tuple, ttgl.tuple)),
-               lambda: f"worker_args must be a tuple of arguments, but got {type(worker_args)}")
+    def warp_specialize(self, functions_and_args, worker_num_warps: Sequence[int], worker_num_regs: Sequence[int],
+                        generator):
+        for _, args in functions_and_args:
+            _check(isinstance(args, (tuple, ttgl.tuple)),
+                   lambda: f"function arguments must be a tuple of arguments, but got {type(args)}")
+
+        assert len(functions_and_args) >= 1, "expected at least one function for the default partition"
+        default_partition, default_args = functions_and_args[0]
+        num_partitions = len(functions_and_args) - 1
+        workers = functions_and_args[1:]
+
         assert num_partitions == len(
             worker_num_warps
         ), f"warp specialize got {num_partitions} partitions but {len(worker_num_warps)} warp counts"
@@ -447,8 +451,9 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         result_types = [r.get_type() for r in mlir_results]
 
         # Create the warp specialize op.
+        worker_args = [flatten_values_to_ir(args) for _, args in workers]
+        mlir_args = sum(worker_args, [])
         builder.restore_insertion_point(insert_pt)
-        mlir_args = flatten_values_to_ir(worker_args)
         ws_op = builder.create_warp_specialize(result_types, mlir_args, worker_num_warps)
         ws_op.get_default_region().push_back(default_block)
         ws_op.set_requested_registers(worker_num_regs)
@@ -457,13 +462,16 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         builder.create_block_with_parent(ws_op.get_partition_op_holder(), [])
         partitions_op = builder.create_warp_specialize_partitions(num_partitions)
         arg_types = [arg.get_type() for arg in mlir_args]
-        for i in range(num_partitions):
+        arg_it = 0
+        for i, (func, args) in enumerate(workers):
             caller_context = GluonCallerContext(num_warps=worker_num_warps[i])
             block = builder.create_block_with_parent(partitions_op.get_region(i), arg_types)
-            block_args = [block.get_argument(j) for j in range(len(mlir_args))]
-            block_args = unflatten_ir_values(block_args, [arg.type for arg in worker_args])
-            generator.call_JitFunction(worker_partitions[i], block_args, kwargs={}, caller_context=caller_context)
+            mlir_args = worker_args[i]
+            block_args = [block.get_argument(arg_it + j) for j in range(len(mlir_args))]
+            block_args = unflatten_ir_values(block_args, [arg.type for arg in args])
+            generator.call_JitFunction(func, block_args, kwargs={}, caller_context=caller_context)
             builder.create_warp_return()
+            arg_it += len(mlir_args)
 
         builder.set_insertion_point_after(ws_op.get_operation())
         mlir_results = [ws_op.get_result(i) for i in range(len(result_types))]

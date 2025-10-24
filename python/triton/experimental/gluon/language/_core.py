@@ -493,16 +493,12 @@ def set_auto_layout(value, layout, _semantic=None):
 
 
 @builtin
-def warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps, worker_num_regs,
-                    _semantic=None, _generator=None):
+def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _semantic=None, _generator=None):
     """
     Create a warp-specialized execution region, partitioning work across warps.
 
     Args:
-        default_args (List[Any]): Arguments for the default region.
-        default_partition (callable): Function to build the default execution region.
-        worker_args (List[Any]): Arguments for each warp partition.
-        worker_partitions (List[callable]): Functions for each warp partition.
+        functions_and_args (List[Tuple[Callable, Any]]): List of functions and arguments for each partition.
         worker_num_warps (List[int]): Number of warps per partition.
         worker_num_regs (List[int]): Number of registers per partition.
 
@@ -511,8 +507,7 @@ def warp_specialize(default_args, default_partition, worker_args, worker_partiti
     """
     worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
     worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
-    return _semantic.warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps,
-                                     worker_num_regs, _generator)
+    return _semantic.warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _generator)
 
 
 @builtin
