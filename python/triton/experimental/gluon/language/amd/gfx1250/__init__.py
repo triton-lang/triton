@@ -15,7 +15,7 @@ def _get_wmma_scale_layout(dot_operand_layout, shape, semantic):
     parent = dot_operand_layout.parent
     assert isinstance(parent, AMDWMMALayout), "Expected parent to be an instance of AMDMFMALayout"
     warps_per_cta = parent.warps_per_cta
-    return semantic.builder.get_amd_wmma_scale_layout(op_idx, warps_per_cta, shape)
+    return semantic.builder.get_amd_wmma_scale_layout(op_idx, shape, warps_per_cta)
 
 
 @builtin

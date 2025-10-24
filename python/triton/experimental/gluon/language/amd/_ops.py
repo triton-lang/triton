@@ -53,7 +53,7 @@ def _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, scale_fn, seman
             scale_shape[-2], scale_shape[-1] = scale_shape[-1], scale_shape[-2]
         return scale_shape
 
-    def _process_scale(op_idx, scale, format):
+    def _create_and_broadcast_default_scale(op_idx, scale, format):
         operand = a if op_idx == 0 else b
 
         scale_shape = _get_scale_shape(op_idx, operand, format)
@@ -68,8 +68,8 @@ def _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, scale_fn, seman
         scale_value = 0x7F if scale_value is None else scale_value
         return semantic.full(scale_shape, scale_value, ttgl.uint8, scale_layout)
 
-    a_scale = _process_scale(0, a_scale, a_format)
-    b_scale = _process_scale(1, b_scale, b_format)
+    a_scale = _create_and_broadcast_default_scale(0, a_scale, a_format)
+    b_scale = _create_and_broadcast_default_scale(1, b_scale, b_format)
     output = semantic.dot_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, fast_math=False, lhs_k_pack=True,
                                  rhs_k_pack=True, out_dtype=ttgl.float32)
     return ttgl.tensor(output.handle, acc.type)
