@@ -8,6 +8,7 @@ import triton.language as tl
 import random
 from dataclasses import dataclass
 from typing import Tuple
+from math import prod
 
 @dataclass
 class ExptAssignment:
@@ -45,9 +46,10 @@ class SymmetricMemoryPool:
         rets = []
         # make 128 bytes aligned
         offset = (offset + 127) // 128 * 128
+        numel = prod(shape)
         for i in range(len(self.bufs)):
             storage = self.bufs[i].untyped_storage()
-            buf = storage[offset:offset + torch.tensor(shape).numel() * dtype.itemsize]
+            buf = storage[offset:offset + numel * dtype.itemsize]
             rets.append(torch.tensor(buf, dtype=dtype).reshape(shape))
         return tuple(rets)
 
