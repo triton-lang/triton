@@ -226,23 +226,32 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
   if (nColsMissing == 0) {
     return std::nullopt;
   }
-
-  // We are choosing the distributed layout (ll o tile). In the lowering
-  // we will do ll^{-1} o (ll o tile) and we expect to get tile back.
-  // For this to be possible, ll should be invertible in the image of tile.
-  // The tile is already invertible, so we can just check their composition.
-  if (!tile.compose(ll).isInvertible()) {
-    return std::nullopt;
-  }
-
-  // Fit the warp bases either tiling on the RHS or in row=16
-  StringAttr row16;
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
   auto kWarp = StringAttr::get(ctx, "warp");
   bool instr32Rows = atom == TMemAccessAtom::I32x32b;
   bool layout16Rows =
       ll.getBasis(rowColDims[0], llvm::Log2_32(16)) == ArrayRef{0, 0};
+
+  // We are choosing the distributed layout (ll o tile). In the lowering
+  // we will do ll^{-1} o (ll o tile) and we expect to get tile back.
+  // For this to be possible, ll should accept a left-inverse, that is, it
+  // should be injective
+  // In less fancy words, we look for the `comp` layout not to have any zero
+  // basis as that would disallow the resulting layout to be left-divisible by
+  // the tile
+  auto comp =
+      tile.compose(ll).sublayout({kReg, kLane}, to_vector(ll.getOutDimNames()));
+  if (instr32Rows) {
+    // We will use 16x32bx2 instruction for lane=16 so we remove the last lane
+    // basis
+    comp = comp.resizeInDim(kLane, comp.getInDimSize(kLane) / 2);
+  }
+  if (!comp.isInjective())
+    return std::nullopt;
+
+  // Fit the warp bases either tiling on the RHS or in row=16
+  StringAttr row16;
   // If we need to fit something (the instruction does not cover it
   // and the layout has 32 rows) we first try to fit a warp, and if we
   // can't we fit a register
