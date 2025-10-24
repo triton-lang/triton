@@ -41,10 +41,12 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
     # NOTE: these are not returned
     offset = 0
     y_vals_bufs, y_vals, y_vals_hdl = make_empty(offset, (n_rows_out_max, k), x.dtype, dev, all_gather=all_gather)
-    offset += y_vals.numel() * y_vals.dtype.itemsize
+    offset += (y_vals.numel() * y_vals.dtype.itemsize)
+    offset = ((offset + 127) // 128) * 128
     if y_indx is None:
         y_indx_bufs, y_indx, y_indx_hdl = make_empty(offset, (n_rows_out_max, k), torch.int16, dev, all_gather=all_gather)
         offset += y_indx.numel() * y_indx.dtype.itemsize
+        offset = ((offset + 127) // 128) * 128
     else:
         y_indx_bufs, y_indx_hdl = (y_indx, ), None
     # create bitmatrix in transposed memory layout:
