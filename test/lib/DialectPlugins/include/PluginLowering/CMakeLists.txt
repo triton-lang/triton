@@ -1,4 +1,8 @@
 set(MLIR_BINARY_DIR ${CMAKE_BINARY_DIR})
+include_directories(${PROJECT_SOURCE_DIR}/test/lib/DialectPlugins/include)
+include_directories(${PROJECT_BINARY_DIR}/test/lib/DialectPlugins/include)
+
+add_mlir_dialect(PluginLoweringOps pluginlowering)
 
 set(LLVM_TARGET_DEFINITIONS PluginLoweringOps.td)
 mlir_tablegen(Ops.h.inc -gen-op-decls)
@@ -19,4 +23,4 @@ mlir_tablegen(Types.cpp.inc -gen-typedef-defs)
 set(LLVM_TARGET_DEFINITIONS PluginLoweringPasses.td)
 mlir_tablegen(PluginLoweringPasses.h.inc --gen-pass-decls)
 
-add_public_tablegen_target(PluginLoweringGen)
+add_public_tablegen_target(MLIRPluginLoweringPassesIncGen)
