@@ -546,3 +546,59 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
+
+
+// -----
+
+// Test chains that not lead by tt.load operations directly
+
+#blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#smem = #ttg.shared_memory
+#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+
+// CHECK-DAG: [[$OLD_LAYOUT1:#.*]] = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [0, 1]}>
+// CHECK-DAG: [[$OLD_LAYOUT2:#.*]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
+// CHECK-DAG: [[$TRANSPOSABLE_LAYOUT1:#.*]] = #ttg.blocked<{sizePerThread = [8, 4], threadsPerWarp = [32, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
+// CHECK-DAG: [[$TRANSPOSABLE_LAYOUT2:#.*]] = #ttg.blocked<{sizePerThread = [4, 8], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+// CHECK-DAG: [[$LINEAR1:#.*]] = #ttg.linear<{register = {{\[\[}}0, 1], [0, 2], [1, 0], [2, 0], [4, 0{{]]}}, lane = {{\[\[}}8, 0], [16, 0], [32, 0], [64, 0], [128, 0], [0, 4{{]]}}, warp = {{\[\[}}0, 8], [0, 16], [0, 0{{]]}}, block = []}>
+// CHECK-DAG: [[$LINEAR2:#.*]] = #ttg.linear<{register = {{\[\[}}1, 0], [2, 0], [0, 1], [0, 2], [0, 4{{]]}}, lane = {{\[\[}}0, 8], [0, 16], [0, 32], [0, 64], [4, 0], [8, 0{{]]}}, warp = {{\[\[}}16, 0], [0, 0], [0, 0{{]]}}, block = []}>
+// CHECK-DAG: [[$SHARED1:#.*]] = #ttg.amd_rotating_shared<{vec = 4, perPhase = 2, maxPhase = 8, order = [1, 0]}>
+// CHECK-DAG: [[$SHARED2:#.*]] = #ttg.amd_rotating_shared<{vec = 4, perPhase = 2, maxPhase = 8, order = [0, 1]}>
+
+// CHECK-LABEL: inThreadTranspose_no_direct_loads
+
+// CHECK-DAG: [[LOADED_ARG1:%.*]]: tensor<256x32xf16, [[$OLD_LAYOUT1]]>
+// CHECK-DAG: [[TRANSPOSABLE_VAL1:%.*]] = ttg.convert_layout [[LOADED_ARG1]] : tensor<256x32xf16, [[$OLD_LAYOUT1]]> -> tensor<256x32xf16, [[$TRANSPOSABLE_LAYOUT1]]>
+// CHECK-DAG: [[TRANSPOSED_VAL1:%.*]] = amdgpu.in_thread_transpose [[TRANSPOSABLE_VAL1]] : tensor<256x32xf16, [[$TRANSPOSABLE_LAYOUT1]]> -> tensor<256x32xf16, [[$LINEAR1]]>
+// CHECK-DAG: [[ALLOC1:%.*]] = ttg.local_alloc [[TRANSPOSED_VAL1]] : (tensor<256x32xf16, [[$LINEAR1]]>) -> !ttg.memdesc<256x32xf16, [[$SHARED1]], #smem>
+// CHECK-DAG: [[OPERAND1:%.*]] = ttg.local_load [[ALLOC1]] : !ttg.memdesc<256x32xf16, [[$SHARED1]], #smem> -> tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+
+// CHECK-DAG: [[LOAD_VAL2:%.*]] = tt.load {{.*}} : tensor<32x128x!tt.ptr<f8E4M3FNUZ>, [[$OLD_LAYOUT2]]>
+// CHECK-DAG: [[MODIFIED_VAL2:%.*]] = tt.fp_to_fp [[LOAD_VAL2]] : tensor<32x128xf8E4M3FNUZ, [[$OLD_LAYOUT2]]> -> tensor<32x128xf16, [[$OLD_LAYOUT2]]>
+// CHECK-DAG: [[TRANSPOSABLE_VAL2:%.*]] = ttg.convert_layout [[MODIFIED_VAL2]] : tensor<32x128xf16, [[$OLD_LAYOUT2]]> -> tensor<32x128xf16, [[$TRANSPOSABLE_LAYOUT2]]>
+// CHECK-DAG: [[TRANSPOSED_VAL2:%.*]] = amdgpu.in_thread_transpose [[TRANSPOSABLE_VAL2]] : tensor<32x128xf16, [[$TRANSPOSABLE_LAYOUT2]]> -> tensor<32x128xf16, [[$LINEAR2]]>
+// CHECK-DAG: [[ALLOC2:%.*]] = ttg.local_alloc [[TRANSPOSED_VAL2]] : (tensor<32x128xf16, [[$LINEAR2]]>) -> !ttg.memdesc<32x128xf16, [[$SHARED2]], #smem>
+// CHECK-DAG: [[OPERAND2:%.*]] = ttg.local_load [[ALLOC2]] : !ttg.memdesc<32x128xf16, [[$SHARED2]], #smem> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+
+// CHECK-DAG: tt.dot [[OPERAND1]], [[OPERAND2]]
+
+  tt.func public @inThreadTranspose_no_direct_loads(%arg0: tensor<256x32xf16, #blocked>, %arg1: !tt.ptr<f8E4M3FNUZ> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<256x128xf32, #mma>
+
+    %0 = tt.splat %arg1 : !tt.ptr<f8E4M3FNUZ> -> tensor<32x128x!tt.ptr<f8E4M3FNUZ>, #blocked1>
+    %1 = tt.load %0 : tensor<32x128x!tt.ptr<f8E4M3FNUZ>, #blocked1>
+    %2 = tt.fp_to_fp %1 : tensor<32x128xf8E4M3FNUZ, #blocked1> -> tensor<32x128xf16, #blocked1>
+
+    %3 = ttg.local_alloc %arg0 : (tensor<256x32xf16, #blocked>) -> !ttg.memdesc<256x32xf16, #shared, #smem>
+    %4 = ttg.local_load %3 : !ttg.memdesc<256x32xf16, #shared, #smem> -> tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+
+    %5 = ttg.local_alloc %2 : (tensor<32x128xf16, #blocked1>) -> !ttg.memdesc<32x128xf16, #shared, #smem>
+    %6 = ttg.local_load %5 : !ttg.memdesc<32x128xf16, #shared, #smem> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+
+    %7 = tt.dot %4, %6, %cst_0 : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x128xf32, #mma>
+    tt.return
+  }
+}
