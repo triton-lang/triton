@@ -43,7 +43,14 @@ class SymmetricMemoryPool:
         self.bufs = tuple([self.hdl.get_buffer(r, self.buf.shape, self.buf.dtype) for r in range(n_ranks)])
         self.hdl.barrier(channel=0)
 
-    def make_empty(self, offset: int, shape: Tuple[int, ...], dtype: torch.dtype) -> Tuple[torch.Tensor, ...]:
+    def make_empty(
+        self,
+        offset: int,
+        shape: Tuple[int, ...],
+        dtype: torch.dtype,
+        *,
+        clear: bool = True,
+    ) -> Tuple[torch.Tensor, ...]:
         rets = []
         elem_size = torch.empty((), dtype=dtype).element_size()
         numel = prod(shape)
@@ -61,6 +68,8 @@ class SymmetricMemoryPool:
             t = torch.empty(0, dtype=dtype, device=buf.device)
             storage_offset = offset // elem_size
             t.set_(cast(Any, st), storage_offset, torch.Size(shape))
+            if clear:
+                t.zero_()
             rets.append(t)
 
         return tuple(rets)
