@@ -421,10 +421,14 @@ def matmul_ogs(x, w, bias,
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
         batch_size, M, N, w.shape[-2], routing_data,
-        can_use_tma, True, epilogue.effective_itemsize,
+        can_use_tma, scatter_indx is not None, epilogue.effective_itemsize,
         x_transpose, y_acc_in is not None,
         inner_routing_data.block_k if inner_routing_data is not None else None,
     )
+    # if fused_activation.specs is not None:
+    #     opt_flags.split_k = 1
+    # if opt_flags.split_k > 1:
+    #     print(opt_flags, fused_activation.specs is not None, epilogue.specs is not None, gather_indx is not None, scatter_indx is not None)
     if inner_routing_data is not None:
         assert opt_flags.block_k == inner_routing_data.block_k
         assert opt_flags.split_k == 1
@@ -543,7 +547,11 @@ def matmul_ogs(x, w, bias,
     # w_transpose = w_storage.data.stride()[-1] != 1
     w_transpose = w_storage.data.stride()[-2] == 1
     if gather_indx is not None:
-        gather_src_indx = torch.div(gather_indx.src_indx, routing_data.n_expts_act, rounding_mode='trunc')
+        if x_has_tma:
+            gather_src_indx = torch.where(gather_indx.src_indx == -1, -routing_data.n_expts_act, gather_indx.src_indx)
+            gather_src_indx = torch.div(gather_src_indx, routing_data.n_expts_act, rounding_mode='trunc')
+        else:
+            gather_src_indx = torch.div(gather_indx.src_indx, routing_data.n_expts_act, rounding_mode='trunc')
     fused_comm_kwargs = {
         "pYPtrs": fused_comm.out_handles,
         "ScatterShardIndx": fused_comm.scatter_shard_indx,
@@ -622,7 +630,6 @@ def matmul_ogs(x, w, bias,
         out_matmul = out_matmul.view(*out_split_k_shape).unsqueeze(0)
         if out_final_mx_scale is not None:
             out_final_mx_scale = out_final_mx_scale.view(out_matmul.shape[-2], triton.cdiv(out_matmul.shape[-1], 32))
-        reduce_fused_activation = FusedActivation()
     if scatter_indx is not None:
         out_matmul = out_matmul.view(out_matmul.shape[-2]//routing_data.n_expts_act, routing_data.n_expts_act, -1)
         out_matmul_scale_shape = out_matmul.shape[:-1] + (triton.cdiv(out_matmul.shape[-1], 32),)
