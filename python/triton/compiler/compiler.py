@@ -60,7 +60,8 @@ class ASTSource:
         self.constants = dict()
         if constexprs is not None:
             for k, v in constexprs.items():
-                k = (fn.arg_names.index(k), ) if isinstance(k, str) else k
+                names = [p.name for p in fn.params]
+                k = (names.index(k), ) if isinstance(k, str) else k
                 assert isinstance(k, tuple)
                 self.constants[k] = v
         self.attrs = attrs or dict()
@@ -480,7 +481,8 @@ class CompiledKernel:
         ret = LazyDict({"name": self.name, "function": self.function, "stream": stream})
         if not isinstance(self.src, ASTSource) or self.src.fn.launch_metadata is None:
             return ret
-        arg_dict = {name: arg for name, arg in zip(self.src.fn.arg_names, args)}
+        arg_names = [p.name for p in self.src.fn.params]
+        arg_dict = {name: arg for name, arg in zip(arg_names, args)}
         ret.add(self.src.fn.launch_metadata, (grid, self.metadata, arg_dict))
         return ret
 

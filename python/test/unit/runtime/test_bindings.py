@@ -61,11 +61,12 @@ def test_module_walk(device):
     ]
     target = triton.runtime.driver.active.get_current_target()
     backend = triton.compiler.compiler.make_backend(target)
+    kernel_arg_names = [p.name for p in kernel.params]
     src = triton.compiler.compiler.ASTSource(
         fn=kernel,
-        signature={kernel.arg_names[i]: triton.runtime.jit.mangle_type(arg)
+        signature={kernel_arg_names[i]: triton.runtime.jit.mangle_type(arg)
                    for i, arg in enumerate(args)},
-        constexprs={kernel.arg_names[i]: arg
+        constexprs={kernel_arg_names[i]: arg
                     for i, arg in enumerate(args)
                     if not isinstance(arg, torch.Tensor)},
     )

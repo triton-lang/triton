@@ -117,12 +117,13 @@ def compile_kernel(args: CompileArgs):
 
     hints = {(i, ): constexpr(s.split(":")[1]) for i, s in enumerate(signature) if ":" in s}
     hints = {k: v for k, v in hints.items() if v is not None}
-    constants = {kernel.arg_names[i]: constexpr(s) for i, s in enumerate(signature)}
+    kernel_arg_names = [p.name for p in kernel.params]
+    constants = {kernel_arg_names[i]: constexpr(s) for i, s in enumerate(signature)}
     constants = {k: v for k, v in constants.items() if v is not None}
     for key, value in hints.items():
         if value == 1:
-            constants[kernel.arg_names[key[0]]] = value
-    signature = {kernel.arg_names[i]: s.split(":")[0] for i, s in enumerate(signature)}
+            constants[kernel_arg_names[key[0]]] = value
+    signature = {kernel_arg_names[i]: s.split(":")[0] for i, s in enumerate(signature)}
     for key in constants:
         signature[key] = 'constexpr'
     const_sig = 'x'.join([str(v) for v in constants.values()])
@@ -150,7 +151,7 @@ def compile_kernel(args: CompileArgs):
     arg_types = []
     arg_names_not_1 = []
     arg_types_not_1 = []
-    for i, arg_name in enumerate(kernel.arg_names):
+    for i, arg_name in enumerate(kernel_arg_names):
         if arg_name not in constants:
             arg_names.append(arg_name)
             arg_types.append(signature[arg_name])
