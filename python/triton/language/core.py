@@ -1544,13 +1544,15 @@ def _aggregate(cls):
         def __new__(this_cls, *args, _semantic=None, _generator=None, **kwargs):
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
-            if isinstance(cls.__init__, JITCallable):
-                raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
             extra_kwargs = {}
-            if "_semantic" in inspect.signature(cls.__init__).parameters:
-                extra_kwargs["_semantic"] = _semantic
-            if "_generator" in inspect.signature(cls.__init__).parameters:
-                extra_kwargs["_generator"] = _generator
+            if isinstance(cls.__init__, JITCallable):
+                # raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
+                pass
+            else:
+                if "_semantic" in inspect.signature(cls.__init__).parameters:
+                    extra_kwargs["_semantic"] = _semantic
+                if "_generator" in inspect.signature(cls.__init__).parameters:
+                    extra_kwargs["_generator"] = _generator
             cls.__init__(instance, *args, **extra_kwargs, **kwargs)
 
             # Require that the user-defined constructor initialized all fields.
@@ -1577,11 +1579,15 @@ def _aggregate(cls):
             return _aggregate_type(aggregate_value,
                                    [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
 
+    hash_attrs = [cls.__init__]
+
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITCallable):
             if name != "__init__":
                 setattr(aggregate_value, name, member)
+                hash_attrs.append(member)
 
+    aggregate_value.hash_attrs = hash_attrs
     aggregate_value.__name__ = cls.__name__
     aggregate_value.__module__ = cls.__module__
     aggregate_value.__qualname__ = cls.__qualname__

@@ -131,7 +131,7 @@ def _matmul_ogs(
         tl.static_assert(w_type == tl.uint8 or (w_type == tl.float8e4nv or w_type == tl.float8e5),
                          "mx_weight_ptr must be uint8 or fp8")
         tl.static_assert(WMxScale.dtype.element_ty == tl.uint8, "mx_scale_ptr must be uint8")
-        tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
+        tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, f"{BLOCK_K=} must be a multiple of {MX_PACK_DIVISOR=}")
         tl.static_assert(SWIZZLE_MX_VALUE == "HOPPER_VALUE" or SWIZZLE_MX_VALUE is None, "Only Hopper swizzling is supported for values")
 
         # TODO: refactor if/else when triton front end improves
@@ -247,7 +247,6 @@ def _matmul_ogs(
 
     # TODO: refactor if/else when triton front end improves
     if is_w_microscaled:
-        tl.static_assert(not EXPT_IS_INNER, "Not supported yet")
         WMxScale += expt_id * stride_w_mx_e
 
         if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
@@ -281,7 +280,8 @@ def _matmul_ogs(
         offs_n_scale = (pid_n * SCALE_BLOCK_N + tl.arange(0, SCALE_BLOCK_N)) % N
         offs_n_scale = tl.max_contiguous(tl.multiple_of(offs_n_scale, SCALE_BLOCK_N), SCALE_BLOCK_N)
         # K dimension must be the last dimension for the scales
-        offs_k_scale = PACKED_MX_BLOCK * pid_k + tl.arange(0, PACKED_MX_BLOCK)
+        tl.static_assert(not EXPT_IS_INNER or W_IS_PADDED)
+        offs_k_scale = off_k_w // PACKED_BLOCK_K_W * PACKED_MX_BLOCK + tl.arange(0, PACKED_MX_BLOCK)
         WMxScalePtrs = WMxScale + offs_k_scale.to(index_type)[None, :] * stride_scale_k + offs_n_scale.to(index_type)[:, None] * stride_w_mx_n
     else:
         WMxScalePtrs = None
@@ -295,7 +295,7 @@ def _matmul_ogs(
         XMxScale += start_z.to(index_type) * stride_x_mx_z
         if GatherIndx is None:
             XMxScale += start_m * stride_x_mx_m
-        offs_x_k_scale = MX_SCALE_BLOCK_K * pid_k + tl.arange(0, MX_SCALE_BLOCK_K)
+        offs_x_k_scale = off_k_x // MXFP_BLOCK_SIZE + tl.arange(0, MX_SCALE_BLOCK_K)
         XMxScalePtrs = XMxScale + offs_x_m.to(index_type)[:, None] * stride_x_mx_m + offs_x_k_scale.to(index_type)[None, :] * stride_x_mx_k
     else:
         XMxScalePtrs = None
