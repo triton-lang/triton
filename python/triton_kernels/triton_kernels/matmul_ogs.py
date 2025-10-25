@@ -425,9 +425,6 @@ def matmul_ogs(x, w, bias,
         x_transpose, y_acc_in is not None,
         inner_routing_data.block_k if inner_routing_data is not None else None,
     )
-    # TODO: track down why this is needed
-    if (epilogue.specs.fn is not None):
-        opt_flags.split_k = 1
     if inner_routing_data is not None:
         assert opt_flags.block_k == inner_routing_data.block_k
         assert opt_flags.split_k == 1
@@ -546,8 +543,7 @@ def matmul_ogs(x, w, bias,
     # w_transpose = w_storage.data.stride()[-1] != 1
     w_transpose = w_storage.data.stride()[-2] == 1
     if gather_indx is not None:
-        gather_src_indx = torch.where(gather_indx.src_indx == -1, -routing_data.n_expts_act, gather_indx.src_indx)
-        gather_src_indx = gather_src_indx // routing_data.n_expts_act
+        gather_src_indx = torch.div(gather_indx.src_indx, routing_data.n_expts_act, rounding_mode='trunc')
     fused_comm_kwargs = {
         "pYPtrs": fused_comm.out_handles,
         "ScatterShardIndx": fused_comm.scatter_shard_indx,
