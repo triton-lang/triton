@@ -7,7 +7,7 @@ import triton
 import triton.language as tl
 import random
 from dataclasses import dataclass
-from typing import Tuple, cast, Any
+from typing import Tuple, cast, Any, Optional
 from math import prod
 
 @dataclass
@@ -32,6 +32,8 @@ class SymmetricMemoryPool:
         self.size = 0
         self.buf = None
         self.bufs = None
+        self._regions: dict[str, dict[str, int]] = {}
+        self._cursor = 0
 
     def initialize(self, byte_size, n_ranks, group, device="cuda"):
         if self._is_initialized:
@@ -42,6 +44,52 @@ class SymmetricMemoryPool:
         self.hdl = symm_mem.rendezvous(self.buf, group)
         self.bufs = tuple([self.hdl.get_buffer(r, self.buf.shape, self.buf.dtype) for r in range(n_ranks)])
         self.hdl.barrier(channel=0)
+        self._regions = {}
+        self._cursor = 0
+
+    @staticmethod
+    def _align_up(value: int, alignment: int) -> int:
+        if alignment <= 1:
+            return value
+        return ((value + alignment - 1) // alignment) * alignment
+
+    def _reserve_region(self, name: str, required: int, alignment: int) -> int:
+        alignment = max(alignment, 1)
+        required = self._align_up(required, alignment)
+        region = self._regions.get(name)
+
+        if region is None:
+            base = self._align_up(self._cursor, alignment)
+            end = base + required
+            if end > self.size:
+                raise ValueError(
+                    f"Symmetric memory pool exhausted while reserving region '{name}': "
+                    f"requested {required} bytes but only {self.size - base} bytes available."
+                )
+            self._regions[name] = {"base": base, "size": required, "alignment": alignment}
+            self._cursor = end
+            return base
+
+        base = region["base"]
+        if alignment > region["alignment"]:
+            if base % alignment != 0:
+                raise ValueError(
+                    f"Region '{name}' base offset {base} cannot satisfy stricter alignment {alignment}."
+                )
+            region["alignment"] = alignment
+
+        if required > region["size"]:
+            end = base + required
+            if end > self.size:
+                raise ValueError(
+                    f"Symmetric memory pool exhausted while growing region '{name}': "
+                    f"requested {required} bytes but only {self.size - base} bytes available."
+                )
+            region["size"] = required
+            if end > self._cursor:
+                self._cursor = end
+        self._regions[name] = region
+        return base
 
     def make_empty(
         self,
@@ -49,24 +97,33 @@ class SymmetricMemoryPool:
         shape: Tuple[int, ...],
         dtype: torch.dtype,
         *,
-        clear: bool = True,
+        region: Optional[str] = None,
+        region_alignment: int = 128,
+        clear: bool = False,
     ) -> Tuple[torch.Tensor, ...]:
         rets = []
         elem_size = torch.empty((), dtype=dtype).element_size()
         numel = prod(shape)
         nbytes = numel * elem_size
+        base_offset = 0
+        if region is not None:
+            base_offset = self._reserve_region(region, offset + nbytes, max(region_alignment, elem_size))
 
-        if offset % elem_size != 0:
-            raise ValueError(f"Offset {offset} not aligned to element size {elem_size}")
+        absolute_offset = base_offset + offset
+
+        if absolute_offset % elem_size != 0:
+            raise ValueError(f"Offset {absolute_offset} not aligned to element size {elem_size}")
 
         for buf in self.bufs:
             st = cast(torch.UntypedStorage, buf.untyped_storage())
             total = st.nbytes()
-            if offset + nbytes > total:
-                raise ValueError(f"Slice [{offset}:{offset+nbytes}) exceeds storage size {total} bytes.")
+            if absolute_offset + nbytes > total:
+                raise ValueError(
+                    f"Slice [{absolute_offset}:{absolute_offset+nbytes}) exceeds storage size {total} bytes."
+                )
 
             t = torch.empty(0, dtype=dtype, device=buf.device)
-            storage_offset = offset // elem_size
+            storage_offset = absolute_offset // elem_size
             t.set_(cast(Any, st), storage_offset, torch.Size(shape))
             if clear:
                 t.zero_()
@@ -246,7 +303,13 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
     assert gate_indx.shape == (n_tokens_global*n_expt_act, ), f"{tuple(gate_indx.shape)} != {(n_tokens_global*n_expt_act,)}"
     # allocate symmetric memory
     # create tensor of peer pointers
-    peer_bufs = symm_mem_pool.make_empty(0, (n_tokens_global*n_expt_act, d_model), src.dtype)
+    peer_bufs = symm_mem_pool.make_empty(
+        0,
+        (n_tokens_global * n_expt_act, d_model),
+        src.dtype,
+        region="convert_dp_to_ep",
+        region_alignment=128,
+    )
     dst_local = peer_bufs[rank]
     hdl = symm_mem_pool.hdl
     # launch kernel
@@ -319,7 +382,13 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
     n_tokens_global, d_model = src.shape
     n_tokens_local = n_tokens_global // n_ranks
     # allocate symmetric memory
-    peer_bufs = symm_mem_pool.make_empty(0, (n_tokens_local, d_model), src.dtype)
+    peer_bufs = symm_mem_pool.make_empty(
+        0,
+        (n_tokens_local, d_model),
+        src.dtype,
+        region="convert_ep_to_dp",
+        region_alignment=128,
+    )
     dst_local = peer_bufs[rank]
     hdl = symm_mem_pool.hdl
     # launch kernel
