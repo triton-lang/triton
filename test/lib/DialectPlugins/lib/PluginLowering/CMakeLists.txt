@@ -12,7 +12,7 @@ add_mlir_dialect_library(MLIRPluginLowering
         DEPENDS
         TritonTableGen
         TritonCanonicalizeIncGen
-        PluginLoweringGen
+        MLIRPluginLoweringPassesIncGen
 
         LINK_LIBS PUBLIC
         MLIRIR
