@@ -10,10 +10,7 @@
 #define PLUGINLOWERING_TYPES
 
 include "mlir/IR/AttrTypeBase.td"
-include "PluginLoweringDialect.td"
-
-// FIXME
-// include "PluginLowering/PluginLoweringDialect.td"
+include "PluginLowering/PluginLoweringDialect.td"
 
 //===----------------------------------------------------------------------===//
 // PluginLowering type definitions

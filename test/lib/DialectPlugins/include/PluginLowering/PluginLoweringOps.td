@@ -9,10 +9,7 @@
 #ifndef PLUGINLOWERING_OPS
 #define PLUGINLOWERING_OPS
 
-// FIXME
-// include "PluginLowering/PluginLoweringTypes.td"
-
-include "PluginLoweringTypes.td"
+include "PluginLowering/PluginLoweringTypes.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
