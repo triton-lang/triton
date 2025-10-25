@@ -137,17 +137,14 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<unsigned> tilesPerWarp,
                                          ArrayRef<unsigned> warpsPerCTA);
 
-LinearLayout chooseScaledWmmaScaleLayout(
-    MLIRContext *ctx, int dotOperandIdx,
-    const std::vector<std::vector<int32_t>> &dotOperandWarpBasis,
-    ArrayRef<int64_t> dotOperandShape);
+LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
+                                         ArrayRef<unsigned> warpsPerCTA,
+                                         ArrayRef<int64_t> dotOperandShape);
 
-LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx, int dotOperandIdx,
-                                          ArrayRef<int64_t> dotOperandShape,
-                                          ArrayRef<unsigned> tilesPerWarp,
+LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
+                                          ArrayRef<int64_t> shape, int opIdx,
                                           ArrayRef<unsigned> warpsPerCTA,
-                                          unsigned instrM, unsigned instrN,
-                                          CTALayoutAttr ctaLayoutAttr);
+                                          CTALayoutAttr ctaLayout);
 
 // Create LinearLayout for nvidia mma tile.
 LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,

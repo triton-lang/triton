@@ -590,6 +590,8 @@ struct TritonAMDGPUConvertToBufferOpsPass
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     ModuleOp mod = getOperation();
+    auto arch = getAMDArch(mod);
+    triton::AMD::TargetInfo targetInfo(arch ? arch->str() : "");
 
     // Collect assumptions in the function
     DenseMap<Value, SetVector<Operation *>> assumptions =
@@ -605,9 +607,15 @@ struct TritonAMDGPUConvertToBufferOpsPass
 
     AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     patterns.add<ConvertTritonLoadToBufferLoad<tt::LoadOp>,
-                 ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>,
                  ConvertTritonStoreToBufferStore>(context, assumptions, solver,
                                                   this->analyzeSmallTensorOfst);
+    // BufferLoadToLds is only supported on CDNA3 and CDNA4
+    if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                           targetInfo.getISAFamily())) {
+      patterns
+          .add<ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>>(
+              context, assumptions, solver, this->analyzeSmallTensorOfst);
+    }
 
     // Gate buffer atomics behind CDNA3 for now
     // GFX942-specific assumptions regarding cache coherence are made when

@@ -1434,141 +1434,99 @@ chooseDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
   }
 }
 
-LinearLayout chooseScaledWmmaScaleLayout(
-    MLIRContext *ctx, int dotOperandIdx,
-    const std::vector<std::vector<int32_t>> &dotOperandWarpBasis,
-    ArrayRef<int64_t> dotOperandShape) {
+LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
+                                         ArrayRef<unsigned> warpsPerCTA,
+                                         ArrayRef<int64_t> dotOperandShape) {
   using basisT = std::vector<std::vector<int32_t>>;
   unsigned rank = dotOperandShape.size();
   auto order = mlir::triton::gpu::getMatrixOrder(rank, /*rowMajor=*/true);
-  auto standardOutDims = standardOutDimNames(ctx, rank);
+  auto outDimNames = standardOutDimNames(ctx, rank);
+
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
   StringAttr kWarp = StringAttr::get(ctx, "warp");
   StringAttr kBlock = StringAttr::get(ctx, "block");
-  unsigned int scaleKWidth = dotOperandShape[1];
-  // Init register layout. Will be adjusted later
-  auto regs =
-      mlir::triton::identityStandardND(kRegister, {1, scaleKWidth}, order);
-  LinearLayout lanes = LinearLayout::empty();
+
   // In scaled dot, the shapes of operands(without batch dimension) are,
   // respectively:
   // - A: [M, K]
   // - B: [K, N]
   // - aScale: [M, K / 32 or 16]
   // - bScale: [N, K / 32 or 16]
-  //
-  // To correctly feed A/B and its scale into instruction, we need to
-  // distribute aScale/bScale among warps in the same way as A/B. But bScale
-  // is not transposed like B. So we need to transpose the warp layout of
-  // bScale.
-  //
-  // The tricky part is, our desired outputs are [dim0, dim1], but
-  // at this position, the layouts are transposed to [dim1, dim0]. So
-  // instead of reverse bScale's layout, we need to reverse aScale's. There
-  // will be a transpose in the end to correct everything.
-  basisT warps = dotOperandWarpBasis;
-  if (dotOperandIdx == 0) {
-    for (auto &basis : warps) {
-      std::reverse(basis.begin(), basis.end());
-    }
-  }
+  auto dimK = outDimNames[order[0]];
+  auto dimNonK = outDimNames[order[1]];
 
-  lanes = LinearLayout({{kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 0}}},
-                        {kWarp, warps},
-                        {kBlock, {}}},
-                       {standardOutDims[order[0]], standardOutDims[order[1]]});
-  LinearLayout newLL = regs * lanes;
+  // Each lane holds kWidth=4 consecutive values along the k dim.
+  // The first 16 lanes are distributed along the non-k dim. We are not using
+  // the remaining 16 lanes, so just let them duplicate values of the first 16
+  // lanes. If the shape along the k dim is larger than kWidth, repeat this
+  // pattern to fill the k dim.
+  unsigned scaleKWidth = 4;
+  auto kSize = dotOperandShape[1];
+  LinearLayout tileLayout =
+      LinearLayout::identity1D(scaleKWidth, kRegister, dimK) *
+      LinearLayout::identity1D(16, kLane, dimNonK) *
+      LinearLayout::zeros1D(2, kLane, dimK) *
+      LinearLayout::identity1D(kSize / scaleKWidth, kRegister, dimK);
 
-  // Adjust register-level layout to fill the shape, at this level, both
-  // aScale and bScale should align with A operand.
-  SmallVector<int, 2> repOrder = {1, 0};
-  for (auto d : repOrder) {
-    auto outDim = standardOutDims[d];
-    auto dimSize = newLL.getOutDimSize(outDim);
-    newLL *= LinearLayout::identity1D(dotOperandShape[d] / dimSize, kRegister,
-                                      outDim);
-  }
-  newLL = newLL.transposeOuts(standardOutDims);
+  auto warpsPerCTANew = (dotOperandIdx == 1)
+                            ? SmallVector{warpsPerCTA[1], warpsPerCTA[0]}
+                            : SmallVector{warpsPerCTA[0], warpsPerCTA[1]};
 
-  return newLL;
+  auto warpOrder = (dotOperandIdx == 1) ? SmallVector<unsigned>{0, 1}
+                                        : SmallVector<unsigned>{1, 0};
+  LinearLayout warpLayout =
+      identityStandardND(kWarp, warpsPerCTANew, warpOrder);
+  LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
+                           warpLayout.transposeOuts(outDimNames);
+
+  return combineCtaCgaWithShape(
+      ctaLayout, CTALayoutAttr::getDefault(ctx, /*rank=*/2), dotOperandShape);
 }
 
-// Warp-level block scaling (sm_120, m16n8k32)
-// Reference: NVIDIA PTX ISA "Warp-level block scaling"
-// https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-block-scaling
-//
-// Semantics:
-//   D = (A * SF_A) * (B * SF_B) + C
-//   scale_vec::1X  -> SF_A shape Mx1 (per-row),   SF_B shape 1xN (per-col)
-//
-// Providers (within each warp quad of 4 lanes):
-//   - A scales are provided by a lane-pair selected by thread-id-a ∈ {0,1}
-//       (0 => lanes {0,1}, 1 => lanes {2,3} in the quad).
-//   - B scales are provided by a single lane selected by thread-id-b ∈
-//   {0,1,2,3}.
-//
-// Byte selectors (which subfield of the 32-bit metadata is used):
-//   - 1X: 1 byte  => byte-id ∈ {0,1,2,3}
-//
+// PTX ISA - Warp-level MMA Block Scaling
+//   https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-block-scaling
+// This function generates layouts for scale tensors used in scaled dot
+// operations.
 // Implementation notes:
-//   - We support only scale_vec::1X for now.
 //   - We choose a fixed provider for A (thread-id-a = 0) and B (thread-id-b =
 //   0)
-//   - In this implementation, each lane in a quad has the same scale factor.
-LinearLayout getSM120DotScaledScaleLayout(
-    MLIRContext *ctx, int dotOperandIdx, ArrayRef<int64_t> dotOperandShape,
-    ArrayRef<unsigned> tilesPerWarp, ArrayRef<unsigned> warpsPerCTA,
-    unsigned mmaInstrM, unsigned mmaInstrN, CTALayoutAttr ctaLayoutAttr) {
-  unsigned rank = dotOperandShape.size();
+//   - We choose a fixed byte selector for A (byte-id-a = 0) and B (byte-id-b =
+//   0)
+//   - Each lane in a quad has the same scale factor.
+LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
+                                          ArrayRef<int64_t> shape, int opIdx,
+                                          ArrayRef<unsigned> warpsPerCTA,
+                                          CTALayoutAttr ctaLayout) {
+  unsigned rank = shape.size();
   auto outDims = standardOutDimNames(ctx, rank);
-
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
   StringAttr kWarp = StringAttr::get(ctx, "warp");
+  // - A: [M, K]
+  // - B: [K, N]
+  // - aScale: [M, K / K_GROUP_SIZE]
+  // - bScale: [N, K / K_GROUP_SIZE]
+  const unsigned kIdx = 1;
+  const unsigned mnIdx = 0;
 
-  const unsigned mIndex = 0;
-  const unsigned nIndex = 1;
-  const int instrM = mmaInstrM;
-  const int instrN = mmaInstrN;
-  const int kSize = dotOperandShape[1];
-  const int mWarps = warpsPerCTA[mIndex];
-  const int nWarps = warpsPerCTA[nIndex];
-  const int totalWarps = mWarps * nWarps;
-  const unsigned mRep_warp = tilesPerWarp[mIndex];
-  const unsigned nRep_warp = tilesPerWarp[nIndex];
-  const unsigned kRep = std::min<unsigned>(kSize, 2);
-
-  std::vector<std::vector<int32_t>> registerBase;
   std::vector<std::vector<int32_t>> laneBase;
-  std::vector<std::vector<int32_t>> warpBase;
-  if (dotOperandIdx == 0) { // per-row A-scale
-    laneBase = {{0, 8}, {0, 0}, {0, 1}, {0, 2}, {0, 4}};
-    for (int offset = instrM * mWarps; offset < instrM * mWarps * mRep_warp;
-         offset <<= 1)
-      registerBase.push_back({0, offset});
-    for (int w = mWarps; w < totalWarps; w <<= 1)
-      warpBase.push_back({0, 0});
-    for (int offset = instrM; offset < instrM * mWarps; offset <<= 1)
-      warpBase.push_back({0, offset});
-  } else { // per-col B-scale
-    laneBase = {{0, 0}, {0, 0}, {0, 1}, {0, 2}, {0, 4}};
-    if (nRep_warp > 1)
-      registerBase.push_back({0, nWarps * instrN});
-    for (int k = 1; k < kRep; k += 1)
-      registerBase.push_back({1 << (k - 1), 0});
-    for (int offset = instrN; offset < instrN * nWarps; offset <<= 1)
-      warpBase.push_back({0, offset});
-    for (int w = nWarps; w < totalWarps; w <<= 1)
-      warpBase.push_back({0, 0});
+  SmallVector<unsigned> order;
+  SmallVector<unsigned> mmaWarpsPerCTA;
+  if (opIdx == 0) {
+    laneBase = {{8, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
+    order = SmallVector<unsigned>{1u, 0u};
+    mmaWarpsPerCTA = SmallVector<unsigned>{warpsPerCTA[0], warpsPerCTA[1]};
+  } else {
+    laneBase = {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}};
+    order = SmallVector<unsigned>{0u, 1u};
+    mmaWarpsPerCTA = SmallVector<unsigned>{warpsPerCTA[1], warpsPerCTA[0]};
   }
-
-  const unsigned kIdx = (dotOperandShape[0] == 1) ? 0 : 1;
-  const unsigned mnIdx = 1 - kIdx;
-  LinearLayout ctaLayout(
-      {{kRegister, registerBase}, {kLane, laneBase}, {kWarp, warpBase}},
-      {outDims[kIdx], outDims[mnIdx]});
-  return combineCtaCgaWithShape(ctaLayout, ctaLayoutAttr, dotOperandShape);
+  LinearLayout LL =
+      LinearLayout::identity1D(shape[1], kRegister, outDims[kIdx]) *
+      LinearLayout({{kLane, laneBase}}, {outDims[mnIdx], outDims[kIdx]}) *
+      broadcastedDotOperandLayout(ctx, mmaWarpsPerCTA, order, 1u, kWarp);
+  return combineCtaCgaWithShape(LL, ctaLayout, shape);
 }
 
 LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,

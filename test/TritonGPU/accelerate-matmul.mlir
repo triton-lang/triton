@@ -699,21 +699,18 @@ module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 // -----
 
-// Verify that for SM_120 with FP4 inputs, tt.dot_scaled is decomposed into:
-// 1. ttg.fp4_to_fp for unpacking FP4 values
-// 2. Scale application with arith.mulf
-// 3. Regular tt.dot operation with MMA encoding
+// Verify that for SM_120 with FP4 inputs, tt.dot_scaled is preserved and
+// scales are converted to linear layout for hardware acceleration.
 
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked2_k = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
 
 module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @sm120_dot_scaled_fp4_fallback
-  // CHECK-NOT: tt.dot_scaled
-  // CHECK: ttg.fp4_to_fp
-  // CHECK: tt.dot
-  // CHECK: #mma
-  tt.func public @sm120_dot_scaled_fp4_fallback(
+  // CHECK-LABEL: @sm120_dot_scaled_fp4_native
+  // CHECK-DAG: tt.dot_scaled
+  // CHECK-DAG: #linear
+  // CHECK-DAG: #linear1
+  tt.func public @sm120_dot_scaled_fp4_native(
     %a: tensor<128x32xi8, #blocked2_k>,
     %scale_a: tensor<128x2xi8, #blocked2>,
     %b: tensor<32x128xi8, #blocked2>,
