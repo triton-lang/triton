@@ -61,11 +61,6 @@ class SymmetricMemoryPool:
             t = torch.empty(0, dtype=dtype, device=buf.device)
             storage_offset = offset // elem_size
             t.set_(cast(Any, st), storage_offset, torch.Size(shape))
-            if __debug__ and t.data_ptr() - buf.data_ptr() != offset:
-                raise RuntimeError(
-                    f"Failed to create view with the requested byte offset. "
-                    f"Expected data pointer at {buf.data_ptr() + offset}, got {t.data_ptr()}."
-                )
             rets.append(t)
 
         return tuple(rets)
