@@ -298,6 +298,10 @@ bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
     std::tie(splitM, splitN) = getCTATiling(M, N, K, ttg::getNumCTAs(dLayout));
     // FIXME: Should consider IR with more than one DotOps
     setTiling({splitM, splitN, 1});
+    // setTiling might choose to treat splitM and splitN differently than just
+    // accepting them so passing the value back to splitM and splitN
+    splitM = clusterInfo->clusterDimX;
+    splitN = clusterInfo->clusterDimY;
 
     OpBuilder builder(dot);
     auto numThreads = ttg::lookupThreadsPerWarp(builder);
