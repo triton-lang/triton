@@ -212,6 +212,8 @@ def make_default_opt_flags_nvidia(
                 block_m = max(16, min(triton.next_power_of_2(8 * tokens_per_expt), 128))
             else:
                 block_m = max(16, min(triton.next_power_of_2(2 * tokens_per_expt), 64))
+        else:
+            block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
     # block n
     arch = None
     block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
