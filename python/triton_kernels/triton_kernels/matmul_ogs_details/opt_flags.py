@@ -208,7 +208,10 @@ def make_default_opt_flags_nvidia(
     else:
         if tokens_per_expt <= 64 and routing_data is not None and routing_data.expt_hist is not None:
             # Ragged and likely memory bound; set the block size higher to minimize loading weights more than once.
-            block_m = max(16, min(triton.next_power_of_2(2 * tokens_per_expt), 64))
+            if lhs_dtype == torch.bfloat16 and rhs_dtype == FP4 and tokens_per_expt >= 16 and torch.cuda.get_device_capability()[0] >= 10:
+                block_m = max(16, min(triton.next_power_of_2(8 * tokens_per_expt), 128))
+            else:
+                block_m = max(16, min(triton.next_power_of_2(2 * tokens_per_expt), 64))
         else:
             block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
     # block n
@@ -230,7 +233,7 @@ def make_default_opt_flags_nvidia(
     block_n = block_n_tma if is_persistent else block_n
     # block k
     block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
-    if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and tokens_per_expt > 1:
+    if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and tokens_per_expt > 1 and lhs_dtype != torch.bfloat16:
         # Swap block_n and block_k for mxfp4 weights so that block_k is a full cacheline, so long as K is sufficiently large.
         # TODO: swizzle the HBM layout of the weights instead
         block_n, block_k = block_k, block_n
