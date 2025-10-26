@@ -6625,6 +6625,9 @@ def test_tensor_member(device):
 @pytest.mark.parametrize("trans_b", [False, True])
 def test_dot_multidim(rank, trans_a, trans_b, device):
 
+    if is_interpreter():
+        pytest.skip("bfloat16 is not supported in the interpreter")
+
     @triton.jit
     def kernel(X, Y, Z, RANK: tl.constexpr, TRANS_A: tl.constexpr, TRANS_B: tl.constexpr):
         x = tl.load(X + tl.arange(0, 256 << RANK)).reshape([2] * (RANK - 2) + [32, 32])
