@@ -1731,8 +1731,9 @@ def trans(input: tensor, *dims, _semantic=None):
     """
     Permutes the dimensions of a tensor.
 
-    If the parameter :code:`dims` is not specified, the function defaults to a (1,0) permutation,
-    effectively transposing a 2D tensor.
+    If the parameter :code:`dims` is not specified, the function defaults to
+    swapping the last two axes, thereby performing an (optionally batched)
+    2D transpose.
 
     :param input: The input tensor.
     :param dims: The desired ordering of dimensions.  For example,
@@ -1749,7 +1750,10 @@ def trans(input: tensor, *dims, _semantic=None):
     """
     dims = _unwrap_iterable(dims)
     if not dims:
-        dims = (1, 0)
+        n = len(input.shape)
+        if n < 2:
+            raise ValueError("tl.trans invoked with a 0- or 1-dimensional tensor")
+        dims = tuple(range(n-2)) + (n-1, n-2)
     return _semantic.permute(input, dims)
 
 
@@ -1771,7 +1775,7 @@ def permute(input, *dims, _semantic=None):
         permute(x, 2, 1, 0)
 
     :py:func:`trans` is equivalent to this function, except when
-    :code:`dims` is empty, it tries to do a (1,0) permutation.
+    :code:`dims` is empty, it tries to swap the last two axes.
     """
     dims = _unwrap_iterable(dims)
     return _semantic.permute(input, dims)
