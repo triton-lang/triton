@@ -17,13 +17,10 @@
 #include "llvm/Support/Compiler.h"
 
 using namespace mlir;
-
 /// Dialect plugin registration mechanism.
 /// Observe that it also allows to register passes.
 /// Necessary symbol to register the dialect plugin.
-extern "C" LLVM_ATTRIBUTE_WEAK
-__attribute__((visibility("default")))
-DialectPluginLibraryInfo
+extern "C" LLVM_ATTRIBUTE_WEAK DialectPluginLibraryInfo
 mlirGetDialectPluginInfo() {
   return {MLIR_PLUGIN_API_VERSION, "PluginLowering", LLVM_VERSION_STRING,
           [](DialectRegistry *registry) {
@@ -34,9 +31,7 @@ mlirGetDialectPluginInfo() {
 
 /// Pass plugin registration mechanism.
 /// Necessary symbol to register the pass plugin.
-extern "C" LLVM_ATTRIBUTE_WEAK
-__attribute__((visibility("default")))
-PassPluginLibraryInfo mlirGetPassPluginInfo() {
+extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo mlirGetPassPluginInfo() {
   return {MLIR_PLUGIN_API_VERSION, "PluginLoweringPasses", LLVM_VERSION_STRING,
           []() { mlir::pluginlowering::registerPasses(); }};
 }
