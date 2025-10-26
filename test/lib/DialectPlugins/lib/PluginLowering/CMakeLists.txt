@@ -35,8 +35,7 @@ add_mlir_dialect_library(MLIRPluginLowering
 
 include_directories(${PROJECT_SOURCE_DIR}/test/lib/DialectPlugins/include)
 include_directories(${PROJECT_BINARY_DIR}/test/lib/DialectPlugins/include)
-target_compile_options(MLIRPluginLowering PRIVATE -fvisibility=hidden)
-# set_target_properties(MLIRPluginLowering PROPERTIES
-#                       LIBRARY_OUTPUT_DIRECTORY
-#                       "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/../dialect-plugins")
-# target_compile_options(MLIRPluginLowering PRIVATE -fvisibility=default)
+set_target_properties(MLIRPluginLowering PROPERTIES
+                      LIBRARY_OUTPUT_DIRECTORY
+                      "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/../dialect-plugins")
+target_compile_options(MLIRPluginLowering PRIVATE -fvisibility=default)

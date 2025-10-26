@@ -21,4 +21,4 @@ target_include_directories(
 set_target_properties(PluginLoweringPlugin PROPERTIES
                       LIBRARY_OUTPUT_DIRECTORY
                       "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/../dialect-plugins")
-target_compile_options(PluginLoweringPlugin PRIVATE -fvisibility=hidden)
+target_compile_options(PluginLoweringPlugin PRIVATE -fvisibility=default)
