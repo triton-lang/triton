@@ -19,6 +19,8 @@ from .tensor_details.layout_details.strided import StridedLayout
 from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTensorMetadata
+from .reduce import reduce
+from .reduce import PostprocessFn as ReducePostprocessFn
 
 
 @dataclass
@@ -624,17 +626,15 @@ def matmul_ogs(x, w, bias,
     # w_transpose = w_storage.data.stride()[-1] != 1
     w_transpose = w_storage.data.stride()[-2] == 1
     if gather_indx is not None:
-        if x_has_tma:
-            gather_src_indx = torch.where(gather_indx.src_indx == -1, -routing_data.n_expts_act, gather_indx.src_indx)
-            gather_src_indx = torch.div(gather_src_indx, routing_data.n_expts_act, rounding_mode='trunc')
-        else:
-            gather_src_indx = torch.div(gather_indx.src_indx, routing_data.n_expts_act, rounding_mode='trunc')
+        gather_src_indx = torch.div(gather_indx.src_indx, routing_data.n_expts_act, rounding_mode='trunc')
     fused_comm_kwargs = {
         "pYPtrs": fused_comm.out_handles,
         "ScatterShardIndx": fused_comm.scatter_shard_indx,
         "reduce_rank": fused_comm.reduce_rank,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}
+    if routing_data.n_expts_act > 1:
+        y_storage.data.view(torch.uint8).zero_()
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
@@ -693,56 +693,59 @@ def matmul_ogs(x, w, bias,
                    **fused_comm_kwargs,
                    **opt_flags.target_kernel_kwargs)
     # return out_final
-    group_indx = None if scatter_indx is None else torch.arange(out_matmul.shape[-2], device=out_matmul.device).view(-1, routing_data.n_expts_act)
-    out_final, out_final_mx_scale = reduce_grouped(
-        out_matmul,
-        group_indx,
-        memory["output"].squeeze(0),
-        precision_config.out_scale,
-        reduce_fused_activation,
-        epilogue,
-        x_flex=InFlexData(dtype=out_matmul_flex.dtype, scale=out_matmul_flex.expected_scale),
-        out_flex=precision_config.flex_ctx.out_data,
-        x_mx_scale=out_matmul_scale.squeeze(1) if out_matmul_has_mx else None,
-        out_dtype=memory["output"].dtype,
-        flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf,
-    )
+    # group_indx = None if scatter_indx is None else torch.arange(out_matmul.shape[-2], device=out_matmul.device).view(-1, routing_data.n_expts_act)
+    # out_final, out_final_mx_scale = reduce_grouped(
+    #     out_matmul,
+    #     group_indx,
+    #     memory["output"].squeeze(0),
+    #     precision_config.out_scale,
+    #     reduce_fused_activation,
+    #     epilogue,
+    #     x_flex=InFlexData(dtype=out_matmul_flex.dtype, scale=out_matmul_flex.expected_scale),
+    #     out_flex=precision_config.flex_ctx.out_data,
+    #     x_mx_scale=out_matmul_scale.squeeze(1) if out_matmul_has_mx else None,
+    #     out_dtype=memory["output"].dtype,
+    #     flexpoint_saturate_inf=precision_config.flexpoint_saturate_inf,
+    # )
 
-    # out_final_mx_scale = None
-    # if opt_flags.split_k > 1:
-    #     has_scatter = scatter_indx is not None
-    #     # fused functions
-    #     postprocess_fn1 = ReducePostprocessFn(specs=reduce_fused_activation.specs, fn_args=reduce_fused_activation.fn_args)
-    #     postprocess_fn2 = None if has_scatter else ReducePostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
-    #     #
-    #     y_dtype = out_matmul.dtype if has_scatter else memory["output"].dtype
-    #     y_flex = OutFlexData() if has_scatter else precision_config.flex_ctx.out_data
-    #     y_shape = out_matmul.shape[1:-1] + (out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n,)
-    #     y = None if has_scatter else memory["output"].view(1, math.prod(y_shape))
-    #     out_matmul, out_final_mx_scale = reduce(out_matmul.view(opt_flags.split_k, 1, -1), dim=0,
-    #                                             postprocess_fn1=postprocess_fn1,
-    #                                             postprocess_fn2=postprocess_fn2,
-    #                                             y=y,
-    #                                             y_has_mx=scatter_indx is None and precision_config.out_scale is not None,
-    #                                             y_dtype=y_dtype,
-    #                                             y_flex=y_flex)
-    #     out_matmul = out_matmul.view(*y_shape).unsqueeze(0)
-    #     if out_final_mx_scale is not None:
-    #         out_final_mx_scale = out_final_mx_scale.view(out_matmul.shape[-2], triton.cdiv(out_matmul.shape[-1], 32))
-    # # TODO: change `matmul_ogs` semantics and move this to another op!
-    # if scatter_indx is not None:
-    #     out_matmul = out_matmul.view(out_matmul.shape[-2]//routing_data.n_expts_act, routing_data.n_expts_act, -1)
-    #     out_matmul_scale_shape = out_matmul.shape[:-1] + (triton.cdiv(out_matmul.shape[-1], 32),)
-    #     postprocess_fn = ReducePostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
-    #     x_flex = InFlexData(dtype=out_matmul_flex.dtype, scale=out_matmul_flex.expected_scale)
-    #     out_final, out_final_mx_scale = reduce(out_matmul, dim=1, postprocess_fn2=postprocess_fn, x_flex=x_flex, #
-    #                                            y=memory["output"].squeeze(0).squeeze(0),
-    #                                            x_mxscale=out_matmul_scale.view(*out_matmul_scale_shape) if out_matmul_has_mx else None,
-    #                                            y_has_mx=precision_config.out_scale is not None,
-    #                                            y_flex=precision_config.flex_ctx.out_data)
-    #     out_final = out_final.unsqueeze(0)
-    # else:
-    #     out_final = out_matmul.squeeze(0)
+    out_final_mx_scale = None
+    if opt_flags.split_k > 1:
+        has_scatter = scatter_indx is not None
+        # fused functions
+        postprocess_fn1 = ReducePostprocessFn(specs=reduce_fused_activation.specs, fn_args=reduce_fused_activation.fn_args)
+        postprocess_fn2 = None if has_scatter else ReducePostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
+        #
+        y_dtype = out_matmul.dtype if has_scatter else memory["output"].dtype
+        y_flex = OutFlexData() if has_scatter else precision_config.flex_ctx.out_data
+        y_shape = out_matmul.shape[1:-1] + (out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n,)
+        y = None if has_scatter else memory["output"].view(1, math.prod(y_shape))
+        out_matmul, out_final_mx_scale = reduce(out_matmul.view(opt_flags.split_k, 1, -1), dim=0,
+                                                postprocess_fn1=postprocess_fn1,
+                                                postprocess_fn2=postprocess_fn2,
+                                                y=y,
+                                                y_has_mx=scatter_indx is None and precision_config.out_scale is not None,
+                                                y_dtype=y_dtype,
+                                                y_flex=y_flex)
+        out_matmul = out_matmul.view(*y_shape).unsqueeze(0)
+        if out_final_mx_scale is not None:
+            out_final_mx_scale = out_final_mx_scale.view(out_matmul.shape[-2], triton.cdiv(out_matmul.shape[-1], 32))
+    # TODO: change `matmul_ogs` semantics and move this to another op!
+    if scatter_indx is not None:
+        mask = (scatter_indx.src_indx != -1).view(out_matmul.shape[-2]//routing_data.n_expts_act, routing_data.n_expts_act, 1)
+        out_matmul = out_matmul.view(out_matmul.shape[-2]//routing_data.n_expts_act, routing_data.n_expts_act, -1)
+        mask = mask.expand_as(out_matmul)
+        out_matmul_scale_shape = out_matmul.shape[:-1] + (triton.cdiv(out_matmul.shape[-1], 32),)
+        postprocess_fn = ReducePostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
+        x_flex = InFlexData(dtype=out_matmul_flex.dtype, scale=out_matmul_flex.expected_scale)
+        out_final, out_final_mx_scale = reduce(out_matmul, dim=1, postprocess_fn2=postprocess_fn, x_flex=x_flex, #
+                                               mask=mask,
+                                               y=memory["output"].squeeze(0).squeeze(0),
+                                               x_mxscale=out_matmul_scale.view(*out_matmul_scale_shape) if out_matmul_has_mx else None,
+                                               y_has_mx=precision_config.out_scale is not None,
+                                               y_flex=precision_config.flex_ctx.out_data)
+        out_final = out_final.unsqueeze(0)
+    else:
+        out_final = out_matmul.squeeze(0)
     if not (is_input_batched or inner_routing_data is not None):
         out_final = out_final.squeeze(0)
     if out_final_mx_scale is not None:
