@@ -425,10 +425,6 @@ def matmul_ogs(x, w, bias,
         x_transpose, y_acc_in is not None,
         inner_routing_data.block_k if inner_routing_data is not None else None,
     )
-    # if fused_activation.specs is not None:
-    #     opt_flags.split_k = 1
-    # if opt_flags.split_k > 1:
-    #     print(opt_flags, fused_activation.specs is not None, epilogue.specs is not None, gather_indx is not None, scatter_indx is not None)
     if inner_routing_data is not None:
         assert opt_flags.block_k == inner_routing_data.block_k
         assert opt_flags.split_k == 1
@@ -615,21 +611,29 @@ def matmul_ogs(x, w, bias,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
                    **fused_comm_kwargs,
                    **opt_flags.target_kernel_kwargs)
+    # return out_final
     out_final_mx_scale = None
     if opt_flags.split_k > 1:
         has_scatter = scatter_indx is not None
-        postprocess_fn = ReducePostprocessFn(specs=reduce_fused_activation.specs, fn_args=reduce_fused_activation.fn_args)
-        out_split_k_dtype = out_matmul.dtype if scatter_indx is not None else memory["output"].dtype
-        out_split_k_flex = OutFlexData() if has_scatter else precision_config.flex_ctx.out_data
-        out_split_k_shape = out_matmul.shape[1:-1] + (out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n,)
-        y_dtype = out_split_k_dtype if has_scatter else memory["output"].dtype
-        out_matmul, out_final_mx_scale = reduce(out_matmul.view(opt_flags.split_k, 1, -1), dim=0, postprocess_fn1=postprocess_fn,
-                                             y_has_mx=scatter_indx is None and precision_config.out_scale is not None,
-                                             y_dtype=y_dtype,
-                                             y_flex=out_split_k_flex)
-        out_matmul = out_matmul.view(*out_split_k_shape).unsqueeze(0)
+        # fused functions
+        postprocess_fn1 = ReducePostprocessFn(specs=reduce_fused_activation.specs, fn_args=reduce_fused_activation.fn_args)
+        postprocess_fn2 = None if has_scatter else ReducePostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
+        #
+        y_dtype = out_matmul.dtype if has_scatter else memory["output"].dtype
+        y_flex = OutFlexData() if has_scatter else precision_config.flex_ctx.out_data
+        y_shape = out_matmul.shape[1:-1] + (out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n,)
+        y = None if has_scatter else memory["output"].view(1, out_matmul.numel() // out_matmul.shape[0])
+        out_matmul, out_final_mx_scale = reduce(out_matmul.view(opt_flags.split_k, 1, -1), dim=0,
+                                                postprocess_fn1=postprocess_fn1,
+                                                postprocess_fn2=postprocess_fn2,
+                                                y=y,
+                                                y_has_mx=scatter_indx is None and precision_config.out_scale is not None,
+                                                y_dtype=y_dtype,
+                                                y_flex=y_flex)
+        out_matmul = out_matmul.view(*y_shape).unsqueeze(0)
         if out_final_mx_scale is not None:
             out_final_mx_scale = out_final_mx_scale.view(out_matmul.shape[-2], triton.cdiv(out_matmul.shape[-1], 32))
+    # TODO: change `matmul_ogs` semantics and move this to another op!
     if scatter_indx is not None:
         out_matmul = out_matmul.view(out_matmul.shape[-2]//routing_data.n_expts_act, routing_data.n_expts_act, -1)
         out_matmul_scale_shape = out_matmul.shape[:-1] + (triton.cdiv(out_matmul.shape[-1], 32),)
