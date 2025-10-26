@@ -6617,3 +6617,37 @@ def test_tensor_member(device):
         tl.device_assert(tl.sum(x) == x.sum())
 
     kernel[(1, )]()
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("rank", [2, 3, 4, 5, 6])
+@pytest.mark.parametrize("trans_a", [False, True])
+@pytest.mark.parametrize("trans_b", [False, True])
+def test_dot_multidim(rank, trans_a, trans_b, device):
+
+    @triton.jit
+    def kernel(X, Y, Z, RANK: tl.constexpr, TRANS_A: tl.constexpr, TRANS_B: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 256 << RANK)).reshape([2] * (RANK - 2) + [32, 32])
+        y = tl.load(Y + tl.arange(0, 256 << RANK)).reshape([2] * (RANK - 2) + [32, 32])
+        if TRANS_A:
+            x = tl.trans(x)
+        if TRANS_B:
+            y = tl.trans(y)
+        z = tl.dot(x, y)
+        tl.store(Z + tl.arange(0, 256 << RANK), z.reshape([256 << RANK]))
+
+    shape = (2, ) * (rank - 2) + (32, 32)
+
+    a = torch.randint(-4, 5, shape, dtype=torch.bfloat16, device=device)
+    b = torch.randint(-4, 5, shape, dtype=torch.bfloat16, device=device)
+    c = torch.empty(shape, dtype=torch.float32, device=device)
+    kernel[(1, )](a, b, c, rank, trans_a, trans_b)
+
+    if trans_a:
+        a = torch.transpose(a, -1, -2)
+    if trans_b:
+        b = torch.transpose(b, -1, -2)
+
+    d = a.to(torch.float32) @ b.to(torch.float32)
+
+    assert torch.equal(c, d)
