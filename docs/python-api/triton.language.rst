@@ -255,6 +255,3 @@ Valid tl.dtype Data Types
     is_uint32
     is_uint64
     is_void
-
-
-    
