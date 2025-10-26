@@ -740,7 +740,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # TODO(jlebar): Remove uses of these fields outside this file, then
         # remove the fields here.
         self.arg_names = [p.name for p in self.params]
-        self.constexprs = [p.num for p in self.params if p.is_constexpr]
 
         # Hooks that will be called prior to executing "run"
         self.pre_run_hooks = []
