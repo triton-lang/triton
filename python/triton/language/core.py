@@ -1753,7 +1753,7 @@ def trans(input: tensor, *dims, _semantic=None):
         n = len(input.shape)
         if n < 2:
             raise ValueError("tl.trans invoked with a 0- or 1-dimensional tensor")
-        dims = tuple(range(n-2)) + (n-1, n-2)
+        dims = list(builtins.range(n - 2)) + [n - 1, n - 2]
     return _semantic.permute(input, dims)
 
 
@@ -2044,7 +2044,7 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
 
     if rank >= 4:
         batch_size = 1
-        for i in range(rank - 2):
+        for i in builtins.range(rank - 2):
             batch_size *= c_shape[i]
         input = _semantic.reshape(input, [batch_size] + a_shape[-2:], can_reorder=False)
         other = _semantic.reshape(other, [batch_size] + b_shape[-2:], can_reorder=False)
