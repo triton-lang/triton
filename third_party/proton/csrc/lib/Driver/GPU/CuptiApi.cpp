@@ -55,6 +55,9 @@ DEFINE_DISPATCH(ExternLibCupti, activityPopExternalCorrelationId,
 DEFINE_DISPATCH(ExternLibCupti, activitySetAttribute, cuptiActivitySetAttribute,
                 CUpti_ActivityAttribute, size_t *, void *)
 
+DEFINE_DISPATCH(ExternLibCupti, activityEnableHWTrace,
+                cuptiActivityEnableHWTrace, uint8_t)
+
 DEFINE_DISPATCH(ExternLibCupti, unsubscribe, cuptiUnsubscribe,
                 CUpti_SubscriberHandle)
 

@@ -45,7 +45,7 @@ class HIPOptions:
     supported_fp8_dtypes: Tuple[str] = ("fp8e4nv", "fp8e5", "fp8e5b16", "fp8e4b8")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
-    allowed_dot_input_precisions: Tuple[str] = ("ieee", )
+    allowed_dot_input_precisions: Tuple[str] = ("ieee", 'bf16x3', 'bf16x6')
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
     matrix_instr_nonkdim: int = 0
@@ -207,7 +207,9 @@ class HIPBackend(BaseBackend):
         pm.run(mod, 'make_ttgir_early')
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        emuTF32 = False
         passes.ttgpuir.add_coalesce(pm)
+        passes.ttgpuir.add_f32_dot_tc(pm, emuTF32)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         amd.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack)
@@ -243,7 +245,12 @@ class HIPBackend(BaseBackend):
         if knobs.amd.use_buffer_ops:
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
             passes.common.add_canonicalizer(pm)
-            amd.passes.ttgpuir.add_convert_to_buffer_ops(pm, options.arch, knobs.amd.use_buffer_atomics)
+            amd.passes.ttgpuir.add_convert_to_buffer_ops(
+                pm,
+                options.arch,
+                knobs.amd.use_buffer_atomics,
+                knobs.amd.buffer_ops_analyze_small_tensor_range,
+            )
 
         amd.passes.ttgpuir.add_fold_true_cmpi(pm)
         passes.common.add_canonicalizer(pm)

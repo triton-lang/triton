@@ -775,8 +775,11 @@ def test_preshuffle_scale_mxfp_cdna4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A
     triton_out = triton_out.to(torch.float32)
     torch.testing.assert_close(torch_out, triton_out, atol=2e-5, rtol=1e-4)
     if is_hip() and preshuffle:
-        assert "tilesPerWarp = [2, 2]" in k.asm["ttgir"]
         assert "ds_read_u8" not in k.asm["amdgcn"]
+        if mfma_nonkdim == 16:
+            assert "tilesPerWarp = [2, 2]" in k.asm["ttgir"]
+        elif mfma_nonkdim == 32:  # default tilesPerWarp = [1, 1]
+            assert "tilesPerWarp" not in k.asm["ttgir"]
 
 
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 512), (998, 111, 512), (63, 128, 512)])
@@ -1031,8 +1034,10 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_sc
     if is_cuda():
         if scale_type == "float8_e4m3fn" and not pack_along_k:
             pytest.skip("Packing along K is required for float8_e4m3fn")
-        if torch.cuda.get_device_capability()[0] != 10:
-            pytest.skip("Requires compute capability == 10")
+        if torch.cuda.get_device_capability()[0] != 10 and torch.cuda.get_device_capability()[0] != 12:
+            pytest.skip("Requires compute capability == 10 or 12")
+        if torch.cuda.get_device_capability()[0] == 12 and pack_along_k is False:
+            pytest.skip("Packing along M, N is not supported on SM120")
         if not (with_a_scale and with_b_scale):
             pytest.skip("None aScale/bScale is only tested on AMD backend for now")
     elif is_hip():
