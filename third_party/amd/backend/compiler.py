@@ -256,6 +256,8 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+        amd.passes.ttgpuir.add_implicit_convert_layout(pm)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
         if use_async_copy:
             amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
         pm.run(mod, 'make_ttgir')
