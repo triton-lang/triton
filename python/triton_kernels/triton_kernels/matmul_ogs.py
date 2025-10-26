@@ -311,20 +311,20 @@ def matmul_ogs_set_idle_sms(num_idle_sms):
     update_opt_flags_constraints({"idle_sms": num_idle_sms})
 
 def matmul_ogs(x, w, bias,
-               routing_data: RoutingData | None = None,
-               gather_indx: GatherIndx | None = None,
-               scatter_indx: ScatterIndx | None = None,
-               precision_config: PrecisionConfig | None = None,
-               betas: torch.Tensor | None = None,
-               gammas: torch.Tensor | None = None,
-               out_alpha: float | None = None,
-               y: torch.Tensor | None = None,
-               fused_comm: FusedComm | None = None,
-               fused_activation: FusedActivation | None = None,
-               epilogue: Epilogue | None = None,
-               y_acc_in: torch.Tensor | None = None,
-               inner_routing_data: InnerRoutingData | None = None,
-               ):
+    routing_data: RoutingData | None = None,
+    gather_indx: GatherIndx | None = None,
+    scatter_indx: ScatterIndx | None = None,
+    precision_config: PrecisionConfig | None = None,
+    betas: torch.Tensor | None = None,
+    gammas: torch.Tensor | None = None,
+    out_alpha: float | None = None,
+    y: torch.Tensor | None = None,
+    fused_comm: FusedComm | None = None,
+    fused_activation: FusedActivation | None = None,
+    epilogue: Epilogue | None = None,
+    y_acc_in: torch.Tensor | None = None,
+    inner_routing_data: InnerRoutingData | None = None,
+):
     """
     Y[:, :] = 0.
     for e in num_experts:
@@ -622,7 +622,7 @@ def matmul_ogs(x, w, bias,
         y_dtype = out_matmul.dtype if has_scatter else memory["output"].dtype
         y_flex = OutFlexData() if has_scatter else precision_config.flex_ctx.out_data
         y_shape = out_matmul.shape[1:-1] + (out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n,)
-        y = None if has_scatter else memory["output"].view(1, out_matmul.numel() // out_matmul.shape[0])
+        y = None if has_scatter else memory["output"].view(1, math.prod(y_shape))
         out_matmul, out_final_mx_scale = reduce(out_matmul.view(opt_flags.split_k, 1, -1), dim=0,
                                                 postprocess_fn1=postprocess_fn1,
                                                 postprocess_fn2=postprocess_fn2,
