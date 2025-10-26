@@ -81,6 +81,7 @@ def _matmul_ogs(
              # optimization config
              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
              GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr,
+             INIT_OUTPUT_TO_ZERO: tl.constexpr,
              # One of ["HOPPER", "BLACKWELL", None]
              SWIZZLE_MX_VALUE: tl.constexpr,
              # One of ["HOPPER", "BLACKWELL", None]
@@ -198,7 +199,7 @@ def _matmul_ogs(
     # We are tiling Y here, so the tiling is independent of matmul (where we
     # tile X & W and scatter to different rows of Y).
     # TODO: refactor (same code in _p_matmul_ogs)
-    if HAS_FUSED_SCATTER:
+    if HAS_FUSED_SCATTER and INIT_OUTPUT_TO_ZERO:
         tl.device_assert(batch_size == 1)
         pid_mnk = pid
         if XCD_SWIZZLE != 1:

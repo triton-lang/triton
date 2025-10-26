@@ -90,6 +90,7 @@ def _p_matmul_ogs(
              # optimization config
              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
              GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr,
+             INIT_OUTPUT_TO_ZERO: tl.constexpr,
              # NYI: Must be None
              SWIZZLE_MX_VALUE: tl.constexpr,
              # One of ["BLACKWELL", None]
@@ -173,7 +174,7 @@ def _p_matmul_ogs(
     yN = N // ACTIVATION_REDUCTION_N
 
     # set masked out rows to 0
-    if HAS_SCATTER:
+    if HAS_SCATTER and INIT_OUTPUT_TO_ZERO:
         # Iterate with reversed pids so that later pids will get more tiles if the number of
         # tiles isn't evenly divisible by the number of SMs.
         # The main loop after this iterates in the forward direction such that earlier
