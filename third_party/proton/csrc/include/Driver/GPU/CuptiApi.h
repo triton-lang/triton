@@ -72,6 +72,8 @@ template <bool CheckSuccess>
 CUptiResult activitySetAttribute(CUpti_ActivityAttribute attr,
                                  size_t *valueSize, void *value);
 
+template <bool CheckSuccess> CUptiResult activityEnableHWTrace(uint8_t enable);
+
 template <bool CheckSuccess>
 CUptiResult unsubscribe(CUpti_SubscriberHandle subscriber);
 

@@ -71,7 +71,7 @@ void init_triton_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_accelerate_matmul", createTritonGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      createTritonGPUReorderInstructions);
-  ADD_PASS_WRAPPER_0("add_f32_dot_tc", createTritonGPUF32DotTC);
+  ADD_PASS_OPTION_WRAPPER_1("add_f32_dot_tc", createTritonGPUF32DotTC, bool);
   ADD_PASS_OPTION_WRAPPER_1("add_optimize_dot_operands",
                             createTritonGPUOptimizeDotOperands, bool);
   ADD_PASS_WRAPPER_0("add_remove_layout_conversions",
@@ -92,6 +92,8 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUCoalesceAsyncCopy);
   ADD_PASS_WRAPPER_0("add_concurrency_sanitizer",
                      createTritonInstrumentConcurrencySanitizer);
+  ADD_PASS_WRAPPER_0("add_optimize_partition_warps",
+                     createTritonGPUOptimizePartitionWarps);
 }
 
 void init_triton_passes_convert(py::module &&m) {

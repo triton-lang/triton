@@ -11,6 +11,16 @@ using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 namespace {
+
+Value bitOrPtrCast(Value val, Type type, TritonLLVMOpBuilder &b) {
+  if (isa<LLVM::LLVMPointerType>(val.getType()) &&
+      !isa<LLVM::LLVMPointerType>(type)) {
+    return b.ptrtoint(type, val);
+  } else {
+    return b.bitcast(val, type);
+  }
+}
+
 struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
   using ConvertOpToLLVMPattern<triton::SplatOp>::ConvertOpToLLVMPattern;
   // Convert SplatOp or arith::ConstantOp with SplatElementsAttr to a
@@ -39,13 +49,13 @@ struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
       unsigned ratio = srcBitWidth / cstBitWidth;
       Type intTy = IntegerType::get(elemType.getContext(), cstBitWidth);
       VectorType vecType = VectorType::get(ratio, intTy);
-      Value intCst = b.bitcast(constVal, intTy);
+      Value intCst = bitOrPtrCast(constVal, intTy, b);
       Value vec = b.undef(vecType);
       for (unsigned i = 0; i < ratio; ++i)
         vec = b.insert_element(vecType, vec, intCst, b.int_val(32, i));
       constVal = vec;
     }
-    auto llSrc = b.bitcast(constVal, srcType);
+    Value llSrc = bitOrPtrCast(constVal, srcType, b);
     size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
     llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
     return packLLElements(loc, typeConverter, elems, rewriter, resType);

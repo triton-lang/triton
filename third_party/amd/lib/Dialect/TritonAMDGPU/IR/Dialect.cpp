@@ -432,7 +432,33 @@ LogicalResult ScaledUpcastFp4Op::verify() {
     return emitError() << "scale and output should have the same shape";
 
   // Reuse Fp4ToFpOp's verifier to check types of input and output
-  return triton::gpu::Fp4ToFpOp::verifyFp4ToFp(*this, inputTy, outputTy, axis);
+  auto rank = inputTy.getRank();
+
+  if (rank != outputTy.getRank())
+    return emitError() << "source rank " << rank << " != result rank "
+                       << outputTy.getRank();
+
+  auto srcShape = inputTy.getShape();
+  auto resShape = outputTy.getShape();
+
+  if (!(0 <= axis && axis < rank))
+    return emitError() << "axis " << axis << " out of range for rank " << rank;
+
+  for (int i = 0; i < rank; ++i) {
+    if (i == axis) {
+      if (resShape[i] != srcShape[i] * 2)
+        return emitError() << "axis " << axis
+                           << " dimension must be 2x source dimension (src="
+                           << srcShape[i] << ", dst=" << resShape[i] << ")";
+    } else {
+      if (resShape[i] != srcShape[i])
+        return emitError() << "dimension " << i
+                           << " mismatch (src=" << srcShape[i]
+                           << ", dst=" << resShape[i] << ", axis=" << axis
+                           << ")";
+    }
+  }
+  return success();
 }
 
 Attribute ScaledUpcastFp4Op::inferDstEncoding(unsigned opIdx,

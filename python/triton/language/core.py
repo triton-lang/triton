@@ -1544,13 +1544,15 @@ def _aggregate(cls):
         def __new__(this_cls, *args, _semantic=None, _generator=None, **kwargs):
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
-            if isinstance(cls.__init__, JITCallable):
-                raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
             extra_kwargs = {}
-            if "_semantic" in inspect.signature(cls.__init__).parameters:
-                extra_kwargs["_semantic"] = _semantic
-            if "_generator" in inspect.signature(cls.__init__).parameters:
-                extra_kwargs["_generator"] = _generator
+            if isinstance(cls.__init__, JITCallable):
+                # raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
+                pass
+            else:
+                if "_semantic" in inspect.signature(cls.__init__).parameters:
+                    extra_kwargs["_semantic"] = _semantic
+                if "_generator" in inspect.signature(cls.__init__).parameters:
+                    extra_kwargs["_generator"] = _generator
             cls.__init__(instance, *args, **extra_kwargs, **kwargs)
 
             # Require that the user-defined constructor initialized all fields.
@@ -1577,11 +1579,15 @@ def _aggregate(cls):
             return _aggregate_type(aggregate_value,
                                    [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
 
+    hash_attrs = [cls.__init__]
+
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITCallable):
             if name != "__init__":
                 setattr(aggregate_value, name, member)
+                hash_attrs.append(member)
 
+    aggregate_value.hash_attrs = hash_attrs
     aggregate_value.__name__ = cls.__name__
     aggregate_value.__module__ = cls.__module__
     aggregate_value.__qualname__ = cls.__qualname__
@@ -2039,14 +2045,15 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
 
     :param lhs: The first tensor to be multiplied.
     :type lhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
-    :param lhs_scale: Scale factor for lhs tensor.
-    :type lhs_scale: e8m0 type represented as an uint8 tensor.
+    :param lhs_scale: Scale factor for lhs tensor. Shape should be [M, K//group_size] when lhs is [M, K], where group_size is 32 if scales type are `e8m0`.
+    :type lhs_scale: e8m0 type represented as an uint8 tensor, or None.
     :param lhs_format: format of the lhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
     :type lhs_format: str
     :param rhs: The second tensor to be multiplied.
     :type rhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
-    :param rhs_scale: Scale factor for rhs tensor.
-    :type rhs_scale: e8m0 type represented as an uint8 tensor.
+    :param rhs_scale: Scale factor for rhs tensor. Shape should be [N, K//group_size] where rhs is [K, N].
+                      Important: Do NOT transpose rhs_scale
+    :type rhs_scale: e8m0 type represented as an uint8 tensor, or None.
     :param rhs_format: format of the rhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
     :type rhs_format: str
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.

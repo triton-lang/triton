@@ -5,6 +5,7 @@ from triton.experimental.gluon.language.nvidia.hopper.tma import (
     store_wait,
     tensor_descriptor,
     tensor_descriptor_type,
+    make_tensor_descriptor,
 )
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "store_wait",
     "tensor_descriptor",
     "tensor_descriptor_type",
+    "make_tensor_descriptor",
 ]
 
 
