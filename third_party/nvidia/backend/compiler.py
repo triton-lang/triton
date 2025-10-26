@@ -97,8 +97,10 @@ def file_hash(path):
 
 
 def sm_arch_from_capability(capability: int):
-    # TODO: Handle non-"a" sms
-    suffix = "a" if capability >= 90 else ""
+    # The 'a' suffix is specific to Hopper (SM 90).
+    # Newer architectures like Blackwell (SM 121) do not use this suffix
+    # for the ptxas --gpu-name flag.
+    suffix = "a" if capability == 90 else ""
     return f"sm_{capability}{suffix}"
 
 
