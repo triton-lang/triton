@@ -2028,7 +2028,36 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     out_dtype = _unwrap_if_constexpr(out_dtype)
     max_num_imprecise_acc = _unwrap_if_constexpr(max_num_imprecise_acc)
     acc = _unwrap_if_constexpr(acc)
-    return _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+
+    # check shapes make sense:
+    a_shape = list(input.shape)
+    b_shape = list(other.shape)
+    assert len(a_shape) == len(b_shape) >= 2, "input and other must have equal ranks >= 2"
+    assert a_shape[:-2] == b_shape[:-2], "input and other must have equal batch shapes"
+    assert a_shape[-1] == b_shape[-2], "input and other must have equal reduction dimensions"
+
+    # compute shape of accumulator:
+    c_shape = a_shape[:-1] + [b_shape[-1]]
+    if acc is not None:
+        assert list(acc.shape) == c_shape, "accumulator shape is incompatible"
+    rank = len(c_shape)
+
+    if rank >= 4:
+        batch_size = 1
+        for i in range(rank - 2):
+            batch_size *= c_shape[i]
+        input = _semantic.reshape(input, [batch_size] + a_shape[-2:], can_reorder=False)
+        other = _semantic.reshape(other, [batch_size] + b_shape[-2:], can_reorder=False)
+        if acc is not None:
+            acc = _semantic.reshape(acc, [batch_size] + c_shape[-2:], can_reorder=False)
+
+    res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+
+    if rank >= 4:
+        res = _semantic.reshape(res, c_shape, can_reorder=False)
+
+    assert list(res.shape) == c_shape, "output shape is unexpected"
+    return res
 
 
 @builtin
