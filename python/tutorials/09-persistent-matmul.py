@@ -239,9 +239,9 @@ def matmul_tma(a, b, warp_specialize: bool):
 
     # A dummy block value that will be overwritten when we have the real block size
     dummy_block = [1, 1]
-    a_desc = TensorDescriptor(a, a.shape, a.stride(), dummy_block)
-    b_desc = TensorDescriptor(b, b.shape, b.stride(), dummy_block)
-    c_desc = TensorDescriptor(c, c.shape, c.stride(), dummy_block)
+    a_desc = TensorDescriptor.from_tensor(a, dummy_block)
+    b_desc = TensorDescriptor.from_tensor(b, dummy_block)
+    c_desc = TensorDescriptor.from_tensor(c, dummy_block)
 
     def grid(META):
         BLOCK_M = META["BLOCK_SIZE_M"]
@@ -447,9 +447,9 @@ def matmul_tma_persistent(a, b, warp_specialize: bool):
 
     # A dummy block value that will be overwritten when we have the real block size
     dummy_block = [1, 1]
-    a_desc = TensorDescriptor(a, a.shape, a.stride(), dummy_block)
-    b_desc = TensorDescriptor(b, b.shape, b.stride(), dummy_block)
-    c_desc = TensorDescriptor(c, c.shape, c.stride(), dummy_block)
+    a_desc = TensorDescriptor.from_tensor(a, dummy_block)
+    b_desc = TensorDescriptor.from_tensor(b, dummy_block)
+    c_desc = TensorDescriptor.from_tensor(c, dummy_block)
 
     def grid(META):
         nonlocal a_desc, b_desc, c_desc
