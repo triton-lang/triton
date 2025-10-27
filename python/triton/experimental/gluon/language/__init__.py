@@ -76,7 +76,7 @@ from ._core import (
     static_range,
     store,
     thread_barrier,
-    to_linear,
+    to_linear_layout,
     to_tensor,
     warp_specialize,
     where,
