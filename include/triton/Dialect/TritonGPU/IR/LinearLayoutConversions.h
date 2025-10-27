@@ -15,10 +15,9 @@ enum class ScaleDotElemType : uint32_t;
 namespace mlir::triton::gpu {
 class SwizzledSharedEncodingAttr;
 class NVMMASharedEncodingAttr;
-class AMDRotatingSharedEncodingAttr;
-class AMDMfmaEncodingAttr;
 class TensorOrMemDesc;
 class MemDescType;
+class CTALayoutAttr;
 
 // - BlockedEncodingAttrs have the following input dimensions.
 //
@@ -72,6 +71,16 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
 // `LinearLayout::sublayout(inDimNames, outDimNames)` when "block" is not in
 // `inDimNames`. The latter does not modify the output sizes.
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout);
+
+// Combines the layout of a CTA (input dims [register, lane, warp]) with the
+// layout of a CGA (i.e. a block), and ensures that the resulting layout has the
+// given shape.
+//
+// See the nomenclature note at the top of LinearLayoutConversions.cpp for why
+// the variable with type CTALayoutAttr is called cgaLayoutAttr.
+LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
+                                    CTALayoutAttr cgaLayoutAttr,
+                                    ArrayRef<int64_t> shape);
 
 // In this function, we construct a linear layout representing the
 // <shared memory offset, iteration, block> -> <tensor element index> mapping
