@@ -1544,13 +1544,15 @@ def _aggregate(cls):
         def __new__(this_cls, *args, _semantic=None, _generator=None, **kwargs):
             # Call into the user-defined constructor.
             instance = this_cls._get_instance()
-            if isinstance(cls.__init__, JITCallable):
-                raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
             extra_kwargs = {}
-            if "_semantic" in inspect.signature(cls.__init__).parameters:
-                extra_kwargs["_semantic"] = _semantic
-            if "_generator" in inspect.signature(cls.__init__).parameters:
-                extra_kwargs["_generator"] = _generator
+            if isinstance(cls.__init__, JITCallable):
+                # raise ValueError(f"{cls.__name__}.__init__ cannot be a @triton.jit function")
+                pass
+            else:
+                if "_semantic" in inspect.signature(cls.__init__).parameters:
+                    extra_kwargs["_semantic"] = _semantic
+                if "_generator" in inspect.signature(cls.__init__).parameters:
+                    extra_kwargs["_generator"] = _generator
             cls.__init__(instance, *args, **extra_kwargs, **kwargs)
 
             # Require that the user-defined constructor initialized all fields.
@@ -1577,11 +1579,15 @@ def _aggregate(cls):
             return _aggregate_type(aggregate_value,
                                    [(name, getattr(self, name).type) for name in cls.__annotations__.keys()])
 
+    hash_attrs = [cls.__init__]
+
     for (name, member) in inspect.getmembers(cls):
         if inspect.isfunction(member) or inspect.ismethod(member) or isinstance(member, JITCallable):
             if name != "__init__":
                 setattr(aggregate_value, name, member)
+                hash_attrs.append(member)
 
+    aggregate_value.hash_attrs = hash_attrs
     aggregate_value.__name__ = cls.__name__
     aggregate_value.__module__ = cls.__module__
     aggregate_value.__qualname__ = cls.__qualname__
@@ -1725,8 +1731,9 @@ def trans(input: tensor, *dims, _semantic=None):
     """
     Permutes the dimensions of a tensor.
 
-    If the parameter :code:`dims` is not specified, the function defaults to a (1,0) permutation,
-    effectively transposing a 2D tensor.
+    If the parameter :code:`dims` is not specified, the function defaults to
+    swapping the last two axes, thereby performing an (optionally batched)
+    2D transpose.
 
     :param input: The input tensor.
     :param dims: The desired ordering of dimensions.  For example,
@@ -1743,7 +1750,10 @@ def trans(input: tensor, *dims, _semantic=None):
     """
     dims = _unwrap_iterable(dims)
     if not dims:
-        dims = (1, 0)
+        n = len(input.shape)
+        if n < 2:
+            raise ValueError("tl.trans invoked with a 0- or 1-dimensional tensor")
+        dims = list(builtins.range(n - 2)) + [n - 1, n - 2]
     return _semantic.permute(input, dims)
 
 
@@ -1765,7 +1775,7 @@ def permute(input, *dims, _semantic=None):
         permute(x, 2, 1, 0)
 
     :py:func:`trans` is equivalent to this function, except when
-    :code:`dims` is empty, it tries to do a (1,0) permutation.
+    :code:`dims` is empty, it tries to swap the last two axes.
     """
     dims = _unwrap_iterable(dims)
     return _semantic.permute(input, dims)
@@ -2018,7 +2028,36 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
     out_dtype = _unwrap_if_constexpr(out_dtype)
     max_num_imprecise_acc = _unwrap_if_constexpr(max_num_imprecise_acc)
     acc = _unwrap_if_constexpr(acc)
-    return _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+
+    # check shapes make sense:
+    a_shape = list(input.shape)
+    b_shape = list(other.shape)
+    assert len(a_shape) == len(b_shape) >= 2, "input and other must have equal ranks >= 2"
+    assert a_shape[:-2] == b_shape[:-2], "input and other must have equal batch shapes"
+    assert a_shape[-1] == b_shape[-2], "input and other must have equal reduction dimensions"
+
+    # compute shape of accumulator:
+    c_shape = a_shape[:-1] + [b_shape[-1]]
+    if acc is not None:
+        assert list(acc.shape) == c_shape, "accumulator shape is incompatible"
+    rank = len(c_shape)
+
+    if rank >= 4:
+        batch_size = 1
+        for i in builtins.range(rank - 2):
+            batch_size *= c_shape[i]
+        input = _semantic.reshape(input, [batch_size] + a_shape[-2:], can_reorder=False)
+        other = _semantic.reshape(other, [batch_size] + b_shape[-2:], can_reorder=False)
+        if acc is not None:
+            acc = _semantic.reshape(acc, [batch_size] + c_shape[-2:], can_reorder=False)
+
+    res = _semantic.dot(input, other, acc, input_precision, max_num_imprecise_acc, out_dtype)
+
+    if rank >= 4:
+        res = _semantic.reshape(res, c_shape, can_reorder=False)
+
+    assert list(res.shape) == c_shape, "output shape is unexpected"
+    return res
 
 
 @builtin
