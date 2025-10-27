@@ -13,6 +13,7 @@
 using namespace mlir;
 
 using mlir::triton::gpu::appendOrGetExternFuncOp;
+using mlir::triton::gpu::ElementwiseOpConversion;
 using mlir::triton::gpu::ElementwiseOpConversionBase;
 using mlir::triton::gpu::getElementType;
 using mlir::triton::gpu::getFunctionType;
@@ -1636,25 +1637,6 @@ static ConverterT Fp16_to_Fp8E4M3FNUZ(AMD::ISAFamily isaFamily) {
 //===----------------------------------------------------------------------===//
 // Data type conversion patterns
 //===----------------------------------------------------------------------===//
-
-template <typename SourceOp, typename DestOp>
-struct ElementwiseOpConversion
-    : public ElementwiseOpConversionBase<
-          SourceOp, ElementwiseOpConversion<SourceOp, DestOp>> {
-  using Base = ElementwiseOpConversionBase<SourceOp, ElementwiseOpConversion>;
-  using OpAdaptor = typename Base::OpAdaptor;
-
-  using Base::Base;
-
-  // An interface to support variant DestOp builder.
-  SmallVector<DestOp> createDestOps(SourceOp op, OpAdaptor adaptor,
-                                    ConversionPatternRewriter &rewriter,
-                                    Type elemTy, MultipleOperandsRange operands,
-                                    Location loc) const {
-    return {rewriter.create<DestOp>(loc, elemTy, operands[0],
-                                    adaptor.getAttributes().getValue())};
-  }
-};
 
 // Attempts to use vectorized conversions via inline PTX when possible.
 struct FpToFpOpConversion
