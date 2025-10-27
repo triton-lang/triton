@@ -332,8 +332,8 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Attribute layout,
               std::vector<int64_t> &shape) -> py::object {
              auto ctx = self.getContext();
-             auto ll = ttg::toLinearLayout(shape, layout);
-             auto attr = ttg::LinearEncodingAttr::get(ctx, ll);
+             auto linearLayout = ttg::toLinearLayout(shape, layout);
+             auto attr = ttg::LinearEncodingAttr::get(ctx, linearLayout);
              return layoutToGluon(attr);
            })
       .def("get_dot_operand_layout",
