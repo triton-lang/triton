@@ -2,9 +2,6 @@
 #include "pybind11/pybind11.h"
 #include <pybind11/stl.h>
 
-#include <optional>
-#include <stdexcept>
-
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
@@ -18,8 +15,6 @@
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
-#include "llvm/ADT/StringSwitch.h"
-#include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
 namespace py = pybind11;
@@ -292,14 +287,6 @@ void init_gluon_ir(py::module &&m) {
                  /*mutableMemory=*/true,
                  /*allocShape=*/allocShape);
            })
-      .def("get_cta_layout",
-           [](GluonOpBuilder &self, std::vector<unsigned> &ctasPerCga,
-              std::vector<unsigned> &ctaSplitNum,
-              std::vector<unsigned> &ctaOrder) -> Attribute {
-             auto ctx = self.getContext();
-             return self.getChecked<ttg::CTALayoutAttr>(ctx, ctasPerCga,
-                                                        ctaSplitNum, ctaOrder);
-           })
       .def("get_blocked_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &sizePerThread,
               std::vector<unsigned> &threadsPerWarp,
@@ -385,6 +372,16 @@ void init_gluon_ir(py::module &&m) {
                  ctx, version, warpsPerCta, instrShape, transposed, ctaLayout,
                  tilesPerWarp, elementBitWidth);
            })
+      .def("get_amd_mfma_scale_layout",
+           [](GluonOpBuilder &self, unsigned opIdx, std::vector<int64_t> &shape,
+              unsigned mfmaMDim, std::vector<unsigned> &tilesPerWarp,
+              std::vector<unsigned> &warpsPerCTA) -> py::object {
+             auto ctx = self.getContext();
+             auto ll = ttg::chooseScaledMfmaScaleLayout(
+                 ctx, opIdx, shape, mfmaMDim, tilesPerWarp, warpsPerCTA);
+             auto attr = ttg::LinearEncodingAttr::get(ctx, ll);
+             return layoutToGluon(attr);
+           })
       .def("get_amd_wmma_layout",
            [](GluonOpBuilder &self, unsigned version, bool transposed,
               std::vector<unsigned> &warpsPerCta,
@@ -397,6 +394,15 @@ void init_gluon_ir(py::module &&m) {
                  ctx, ctasPerCga, ctaSplitNum, ctaOrder);
              return ttg::AMDWmmaEncodingAttr::get(
                  ctx, version, transposed, warpsPerCta, ctaLayout, instrShape);
+           })
+      .def("get_amd_wmma_scale_layout",
+           [](GluonOpBuilder &self, unsigned opIdx, std::vector<int64_t> &shape,
+              std::vector<unsigned> &warpsPerCTA) -> py::object {
+             auto ctx = self.getContext();
+             auto ll = ttg::chooseScaledWmmaScaleLayout(ctx, opIdx, warpsPerCTA,
+                                                        shape);
+             auto attr = ttg::LinearEncodingAttr::get(ctx, ll);
+             return layoutToGluon(attr);
            })
       .def("get_padded_shared_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &intervals,
@@ -473,53 +479,6 @@ void init_gluon_ir(py::module &&m) {
              assert(ctaSplitNum.size() == 2);
              return self.getChecked<ttng::TensorMemoryScalesEncodingAttr>(
                  ctx, ctaSplitNum[0], ctaSplitNum[1]);
-           })
-      .def("get_distributed_layout_for_tmem_ldst",
-           [](GluonOpBuilder &self, Type memDescType,
-              const std::string &atomName, unsigned numWarps,
-              Attribute ctaLayoutAttr) -> py::object {
-             auto memType = dyn_cast<ttg::MemDescType>(memDescType);
-             if (!memType)
-               throw std::invalid_argument(
-                   "expected a MemDescType for tensor memory");
-             auto memorySpace = dyn_cast<ttng::TensorMemorySpaceAttr>(
-                 memType.getMemorySpace());
-             if (!memorySpace)
-               throw std::invalid_argument(
-                   "memdesc must belong to tensor memory space");
-             auto ctaLayout = dyn_cast<ttg::CTALayoutAttr>(ctaLayoutAttr);
-             if (!ctaLayout)
-               throw std::invalid_argument(
-                   "expected a CTALayoutAttr for CTA layout");
-
-             auto maybeAtom =
-                 llvm::StringSwitch<std::optional<ttng::TMemAccessAtom>>(
-                     atomName)
-                     .Case("32x32b", ttng::TMemAccessAtom::I32x32b)
-                     .Case("16x64b", ttng::TMemAccessAtom::I16x64b)
-                     .Case("16x128b", ttng::TMemAccessAtom::I16x128b)
-                     .Case("16x256b", ttng::TMemAccessAtom::I16x256b)
-                     .Case("16x32bx2", ttng::TMemAccessAtom::I16x32bx2)
-                     .Default(std::nullopt);
-             if (!maybeAtom)
-               throw std::invalid_argument("unknown TMEM access atom: " +
-                                           atomName);
-             auto atom = *maybeAtom;
-             if (atom == ttng::TMemAccessAtom::I16x32bx2)
-               throw std::invalid_argument(
-                   "Atom 16x32bx2 is inferred implicitly and cannot be "
-                   "requested explicitly");
-             if (numWarps < 4 || !llvm::isPowerOf2_32(numWarps))
-               throw std::invalid_argument(
-                   "numWarps must be a power of two and >= 4");
-
-             auto layout = ttng::getDistributedLayoutForTmemLdSt(
-                 memType, atom, numWarps, ctaLayout);
-             if (!layout)
-               return py::none();
-             auto attr =
-                 ttg::LinearEncodingAttr::get(self.getContext(), *layout);
-             return layoutToGluon(attr);
            })
       .def("get_gluon_layout_from_tensor",
            [](GluonOpBuilder &self, Value tensor) -> py::object {

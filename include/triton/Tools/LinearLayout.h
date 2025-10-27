@@ -558,18 +558,6 @@ public:
     return reshapeOuts({{*getOutDimNames().begin(), getTotalOutDimSize()}});
   }
 
-  [[nodiscard]] LinearLayout renameInDim(StringAttr oldDim,
-                                         StringAttr newDim) const {
-    auto bases = getBases();
-    auto it = bases.find(oldDim);
-    assert(it != bases.end());
-    auto value = std::move(it->second);
-    bases.erase(it);
-    bases.insert({newDim, std::move(value)});
-    return LinearLayout(bases, getOutDims(),
-                        /*requireSurjective=*/isSurjective());
-  }
-
   // Concatenates two layouts by their in (resp. out) dimensions. The layouts
   // must have the same output (resp. input) dimensions and sizes and different
   // input (resp. output) dimensions. The input dimensions of this layout are

@@ -163,7 +163,7 @@ LogicalResult lowerLdStMatrix(
   auto kOffset = S("offset");
   auto kAddr = S("addr");
   auto smemPtrTy = ptr_ty(ctx, 3);
-  auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+  auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
   // In the contiguous case we can pack elements <= 32 bits
   // In the transpose case we just have the b8 and b16 cases
   if ((!transpose && bitwidth > 32) ||

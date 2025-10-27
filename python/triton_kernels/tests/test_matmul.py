@@ -235,6 +235,7 @@ class Case:
             # mx types:
             Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1),
             Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True),
+            Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True, epilogue_subtile=4),
             Case(16, 256, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 1, 1),
             Case(16, 256, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True),
             Case(1000, 700, 700, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2),
@@ -245,7 +246,8 @@ class Case:
             Case(300, 400, 400, "ragged", "bfloat16", "mxfloat8_e4m3fn", 8, 4, hbm_swizzling=True),
             Case(300, 400, 400, "batched", "bfloat16", "mxfloat8_e5m2", 32, 4),
             Case(1000, 700, 2, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2),
-            Case(1, 2880, 2880, "ragged", "bfloat16", "mxfloat4_e2m1", 128, 4),
+            # Cover (N or K) % 128 == 64 (https://github.com/triton-lang/triton/pull/7203)
+            Case(1, 1472, 1472, "ragged", "bfloat16", "mxfloat4_e2m1", 128, 4),
             Case(16, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4, hbm_swizzling=True),
             Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3, 1, hbm_swizzling=True),
             Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3, 1, hbm_swizzling=True),
@@ -317,17 +319,33 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
             n_expts_act, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             x_transpose, w_transpose, y_transpose,
             device, opt_flags_scope):
+    # We catch and re-invoke pytest.skip(), because otherwise pytest may hold a reference to
+    # the frame that called pytest.skip, including all the tensors, leading to OOM.
+    skip_message = None
+    try:
+        _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
+                 n_expts_act, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
+                 x_transpose, w_transpose, y_transpose,
+                 device, opt_flags_scope)
+    except pytest.skip.Exception as e:
+        skip_message = str(e)
+
+    if skip_message is not None:
+        pytest.skip(skip_message)
+
+def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
+            n_expts_act, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
+            x_transpose, w_transpose, y_transpose,
+            device, opt_flags_scope):
     # TODO: remove when Triton FP8 supports proper RTNE
     if is_cuda():
         if "float8" in weight_dtype_str and torch.cuda.get_device_capability()[0] < 9:
             pytest.skip("Float8 not tested on A100")
-        if "float16" in act_dtype_str and "mx" in weight_dtype_str and torch.cuda.get_device_capability()[0] >= 10:
+        if act_dtype_str == "float16" and "mx" in weight_dtype_str and torch.cuda.get_device_capability()[0] >= 10:
             pytest.skip("float16 x mx not supported with cuda capability >= 10")
         if weight_dtype_str.startswith("mx"):
             if "float8" in act_dtype_str and torch.cuda.get_device_capability()[0] < 10:
                 pytest.skip("float8 x mx not supported with cuda capability < 10")
-        if n == 2880 and k == 2880 and torch.cuda.get_device_capability()[0] < 9:
-            pytest.skip("Not enough memory on A100")
 
     elif is_hip():
         if "float8" in act_dtype_str and "mx" in weight_dtype_str and not is_hip_cdna4():
@@ -365,8 +383,21 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
                 pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
 
     expt_is_inner = (inner_expt_opt is not None)
-    if expt_is_inner and (mode != "ragged" or "mx" in act_dtype_str or "mx" in weight_dtype_str):
-        pytest.skip("Not supported yet")
+    if expt_is_inner:
+        if mode != "ragged":
+            pytest.skip("inner_expt_opt only meaningful with ragged")
+        if "mx" in act_dtype_str and inner_expt_opt != "pad_x":
+            pytest.skip("inner_expt_opt and act mx only supported with pad_x")
+        if "mx" in weight_dtype_str:
+            if inner_expt_opt != "pad_w":
+                pytest.skip("inner_expt_opt and weight mx only supported with pad_w")
+            if is_persistent and not hbm_swizzling:
+                pytest.skip("FIXME: Fatal Python error: Aborted")
+            if is_hip():
+                if act_dtype_str == "bfloat16":
+                    pytest.skip("FIXME: failed to translate module to LLVM IR")
+                if hbm_swizzling:
+                    pytest.skip("NYI: nner_expt_opt and HBM swizzling")
 
     # launch metadata for batched / mx types may not work yet.
     torch.manual_seed(0)
@@ -398,6 +429,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
     opt_flags.update_opt_flags_constraints(constraints)
 
     weight_mxfp = weight_dtype_str.startswith("mx")
+    weight_mxfp4 = weight_mxfp and "float4" in weight_dtype_str
     if weight_mxfp:
         weight_dtype_str = weight_dtype_str[2:]
     act_mxfp8 = act_dtype_str.startswith("mx")
@@ -421,6 +453,13 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
         rdata = gindx = sindx = None
 
     padding_block_k = 32
+    if hbm_swizzling:
+        if torch.cuda.get_device_capability()[0] >= 10:
+            # Blackwell scale swizzling constraint
+            # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/tensor_details/layout_details/blackwell_scale.py#L45
+            padding_block_k = 128
+        elif not is_persistent:
+            padding_block_k = 64
     x_tri, w_tri, bias_tri, gs0_tri, gs1_tri = init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act,
                                                                  mode, torch.bfloat16 if act_mxfp8 else act_dtype,  #
                                                                  torch.bfloat16 if weight_mxfp else weight_dtype,
@@ -456,7 +495,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
         # compute layouts
         w_layout, w_layout_opts = layout.StridedLayout, dict()
         w_scale_layout, w_scale_layout_opts = layout.StridedLayout, dict()
-        if hbm_swizzling and "float4" in weight_dtype_str:
+        if hbm_swizzling and weight_mxfp4:
             w_layout, w_layout_opts = layout.make_default_matmul_mxfp4_w_layout(mx_axis=mx_axis)
             w_scale_layout, w_scale_layout_opts = layout.make_default_matmul_mxfp4_w_scale_layout(
                 mx_axis=mx_axis, num_warps=8)
@@ -465,7 +504,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
         if colmajor_mxfp_weight:
             w_tri, w_scale_tri = downcast_to_mxfp(w_tri, weight_dtype, axis=mx_axis)
             w_ref = upcast_from_mxfp(w_tri, w_scale_tri, torch.bfloat16, axis=mx_axis)
-            w_tri_dtype = FP4 if "float4" in weight_dtype_str else weight_dtype
+            w_tri_dtype = FP4 if weight_mxfp4 else weight_dtype
             w_tri = wrap_torch_tensor(w_tri, w_tri_dtype)
             w_scale_tri = wrap_torch_tensor(w_scale_tri)
             # convert layouts
@@ -567,8 +606,8 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
         tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt,
                            gammas=gs1_ref, epilogue=epilogue, y=y_tri_in,
                            inner_routing_data=inner_routing_data)
-    except (opt_flags.InapplicableConstraint, NotImplementedError):
-        pytest.skip("inapplicable opt_flags constraint")
+    except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
+        pytest.skip(f"inapplicable opt_flags constraint {e}")
     if y_tri_in is not None:
         assert tri_y.data_ptr() == y_tri_in.data_ptr()
         assert tri_y.shape == y_tri_in.shape
@@ -601,7 +640,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
         ref_y = upcast_from_mxfp_torch(ref_y_quant, ref_y_scale, target_dtype=ref_y.dtype, axis=-1)
         maxtol = 4e-1
         rmstol = 4e-2
-    elif weight_mxfp and "float4_e2m1" in weight_dtype_str:
+    elif weight_mxfp4:
         if act_is_float8:
             maxtol = 8e-2
         else:

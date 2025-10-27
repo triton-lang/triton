@@ -29,7 +29,6 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
-#include "llvm/Support/ErrorHandling.h"
 
 // TritonNvidiaGPU depends on Triton
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -62,52 +61,14 @@ struct TMemAllocation {
   int numCols;
 };
 
-// Used to describe the layout of the TMEM load/store instructions
-enum class TMemAccessAtom { I32x32b, I16x64b, I16x128b, I16x256b, I16x32bx2 };
-
-inline int getElementsPerThread(TMemAccessAtom atom) {
-  switch (atom) {
-  case TMemAccessAtom::I32x32b:
-  case TMemAccessAtom::I16x64b:
-  case TMemAccessAtom::I16x32bx2:
-    return 1;
-  case TMemAccessAtom::I16x128b:
-    return 2;
-  case TMemAccessAtom::I16x256b:
-    return 4;
-  }
-  llvm_unreachable("Unknown TMemAccessAtom");
-}
-
-inline const char *getOpShape(TMemAccessAtom atom) {
-  switch (atom) {
-  case TMemAccessAtom::I32x32b:
-    return "32x32b";
-  case TMemAccessAtom::I16x64b:
-    return "16x64b";
-  case TMemAccessAtom::I16x128b:
-    return "16x128b";
-  case TMemAccessAtom::I16x256b:
-    return "16x256b";
-  case TMemAccessAtom::I16x32bx2:
-    return "16x32bx2";
-  }
-  llvm_unreachable("Unknown TMemAccessAtom");
-}
-
-LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
-                           bool unpacked);
-
 TMemAllocation getTmemAllocSizes(gpu::MemDescType memDescType);
 
-SmallVector<gpu::DistributedEncodingTrait>
-getTmemCompatibleLayouts(gpu::MemDescType memType, unsigned numWarps,
-                         ArrayRef<int64_t> ctaSplit = {1, 1});
-
-std::optional<gpu::DistributedEncodingTrait>
+gpu::DistributedEncodingTrait getTmemCompatibleLayout(unsigned M, unsigned N,
+                                                      RankedTensorType oltType,
+                                                      unsigned numWarps);
+gpu::DistributedEncodingTrait
 getTmemLoadLayoutSplitLongM(RankedTensorType tensorType,
                             gpu::MemDescType memType, int numWarps);
-
 SmallVector<gpu::DistributedEncodingTrait>
 getTmemCompatibleLayouts(Operation *op, RankedTensorType tensorType,
                          gpu::MemDescType memType);
@@ -115,15 +76,9 @@ getTmemCompatibleLayouts(Operation *op, RankedTensorType tensorType,
 bool isDistributedLayoutTMemCompatible(Operation *op,
                                        RankedTensorType tensorType,
                                        gpu::MemDescType memType);
-
-gpu::DistributedEncodingTrait
-getDefaultLayoutForTmemLdSt(gpu::MemDescType memType, unsigned numWarps,
-                            gpu::CTALayoutAttr ctaLayout);
-
-std::optional<LinearLayout>
-getDistributedLayoutForTmemLdSt(gpu::MemDescType memType, TMemAccessAtom atom,
-                                unsigned numWarps,
-                                gpu::CTALayoutAttr ctaLayout);
+bool isDistributedLayoutSplitMTmemLoadStore(RankedTensorType tensorType,
+                                            gpu::MemDescType memType,
+                                            int numWarps);
 
 } // namespace mlir::triton::nvidia_gpu
 

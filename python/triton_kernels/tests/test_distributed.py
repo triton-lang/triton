@@ -27,6 +27,23 @@ def _make_expt_dict_for_mode(n_shards, n_expts_tot, affinity_mode):
         raise ValueError(f"Unknown affinity mode: {affinity_mode}") from exc
 
 
+def _make_y_indx_for_mode(n_tokens_global, n_expts_tot, n_expts_act, n_shards, affinity_mode, dev):
+    y_indx_global = None
+    if affinity_mode == "uniform":
+        if n_expts_tot % n_shards != 0:
+            raise ValueError("uniform affinity requires experts evenly divisible by shards")
+        expts_per_rank = n_expts_tot // n_shards
+        rounds = (n_expts_act + n_shards - 1) // n_shards
+        if rounds > expts_per_rank:
+            raise ValueError("round-robin selection exceeds experts available per shard")
+        order = torch.arange(n_expts_act, device=dev, dtype=torch.int32)
+        shard_order = order % n_shards
+        intra_shard = order // n_shards
+        round_robin_indx = (shard_order * expts_per_rank + intra_shard).to(torch.int16)
+        y_indx_global = round_robin_indx.unsqueeze(0).expand(n_tokens_global, -1).contiguous()
+    return y_indx_global
+
+
 # ------------------------------------------------------------
 # fixture
 # ------------------------------------------------------------
@@ -102,8 +119,8 @@ def test_make_expt_assignment(n_expts_shard, n_expts_tot, affinity_mode):
 # ------------------------------------------------------------
 
 
-def routing(logits, n_expts_act, all_gather=False):
-    sparse_logits = topk(logits, n_expts_act, all_gather=all_gather)
+def routing(logits, n_expts_act, all_gather=False, y_indx=None):
+    sparse_logits = topk(logits, n_expts_act, all_gather=all_gather, y_indx=y_indx)
     dispatch_indx = sparse_logits.mask_metadata.col_sorted_indx
     combine_indx = sparse_logits.mask_metadata.row_sorted_indx
     ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
@@ -115,17 +132,18 @@ def routing(logits, n_expts_act, all_gather=False):
     return routing_data, gather_idx, scatter_idx, sparse_logits.indx
 
 
-def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act):
-    rdata, combine_indx, dispatch_indx, _ = routing(l_global, n_expts_act)
+def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act, y_indx=None):
+    rdata, combine_indx, dispatch_indx, _ = routing(l_global, n_expts_act, y_indx=y_indx)
     y_global = matmul_ogs(x_global, w_global, b_global, rdata, gather_indx=combine_indx, scatter_indx=dispatch_indx)
     return y_global
 
 
-def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, expt_assignment, n_expts_act):
+def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, expt_assignment, n_expts_act,
+                              y_indx=None):
     rank = dist.get_rank()
     expt_map = expt_assignment.expt_map[rank, :]
     # active global logits (sparse)
-    l_global_active = topk(l_dp_local, n_expts_act, apply_softmax=True, all_gather=True)
+    l_global_active = topk(l_dp_local, n_expts_act, apply_softmax=True, all_gather=True, y_indx=y_indx)
     # expert histogram, dispatch/combine indx
     active_indx = l_global_active.indx
     expt_sizes = l_global_active.mask_metadata.col_sum
@@ -264,7 +282,15 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     l_dp_local = l_global[first_token_indx:last_token_indx, :]
     # routing
     # test correctness
-    y_global_ref = mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act)
+    y_indx_global = _make_y_indx_for_mode(n_tokens_global, n_expts_tot, n_expts_act, n_shards, affinity_mode, dev)
+    y_global_ref = mixture_of_expt_nosharded(
+        x_global,
+        l_global,
+        w_global,
+        b_global,
+        n_expts_act,
+        y_indx=y_indx_global,
+    )
 
     def run_mixture():
         return mixture_of_expt_epsharded(
@@ -274,6 +300,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
             b_ep_local,
             expt_assignment,
             n_expts_act,
+            y_indx=y_indx_global,
         )
 
     # test cuda graph capture + replay with symmetric memory

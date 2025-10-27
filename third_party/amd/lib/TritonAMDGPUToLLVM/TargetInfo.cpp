@@ -65,11 +65,31 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(arch);
 }
 
-int TargetInfo::getWarpSize() const { return isCDNA(getISAFamily()) ? 64 : 32; }
+int TargetInfo::getWarpSize() const {
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA1:
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+    return 64;
+  case ISAFamily::GFX1250:
+    return 32;
+  default:
+    break;
+  }
+  return 32;
+}
 
 int TargetInfo::getSharedMemorySize() const {
-  int kbytes = getISAFamily() == ISAFamily::CDNA4 ? 160 : 64;
-  return kbytes * 1024;
+  // Should return the maximum capacity in kbyte
+  switch (getISAFamily()) {
+  case ISAFamily::GFX1250:
+    return 320 * 1024;
+  case ISAFamily::CDNA4:
+    return 160 * 1024;
+  default:
+    return 64 * 1024;
+  }
 }
 
 bool TargetInfo::supportMaximumMinimum() const {
@@ -109,9 +129,20 @@ void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
   mlir::LLVM::AMD::llStore(rewriter, loc, ptr, val, pred);
 }
 
-bool TargetInfo::canUseLDSTransLoad(int bitwidth) const {
-  return getISAFamily() == ISAFamily::CDNA4 &&
-         llvm::is_contained({16, 8, 4, 6}, bitwidth);
+std::optional<TargetInfo::LDSTransLoadParams>
+TargetInfo::queryLDSTransLoadParams(int bitWidth) const {
+  auto isaFamily = getISAFamily();
+  bool isGFX1250 = isaFamily == AMD::ISAFamily::GFX1250;
+  bool isCDNA4 = isaFamily == AMD::ISAFamily::CDNA4;
+  bool canUseTransLoad =
+      (isCDNA4 || isGFX1250) && llvm::is_contained({16, 8, 4, 6}, bitWidth);
+  if (!canUseTransLoad)
+    return std::nullopt;
+  unsigned numLanesInShuffleGroup = getWarpSize() / 4;
+  unsigned instBitWidth = isGFX1250 && bitWidth == 16 ? 128 : 64;
+  unsigned needContigReg = instBitWidth / bitWidth;
+  return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth,
+                            needContigReg};
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -577,6 +608,30 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
+bool TargetInfo::supportsDirectToLDSScattering() const {
+  switch (getISAFamily()) {
+  case ISAFamily::GFX1250:
+    return true;
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+    return false;
+  default:
+    llvm::report_fatal_error(
+        "Unsupported architecture for direct to lds loads");
+    return false;
+  }
+}
+
+bool TargetInfo::requiresAliasInfoForAsyncOps() const {
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+    return true;
+  default:
+    return false;
+  }
+}
+
 bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
   switch (getISAFamily()) {
   case ISAFamily::CDNA3:
@@ -585,6 +640,10 @@ bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
   case ISAFamily::CDNA4:
     // Disable 8, 16, 96 bits because they get extended to 32/128 bit.
     return llvm::is_contained({128, /*96, */ 32, /*16, 8*/}, bitWidth);
+  case ISAFamily::GFX1250:
+    // Disable 8, 16 bits because they get extended to 32 bit and therefore
+    // overwrite. 96 is not a pow2 and generally not useful in Triton
+    return llvm::is_contained({128, 64, /*96, */ 32, /*16, 8*/}, bitWidth);
   default:
     break;
   }
@@ -594,7 +653,8 @@ bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
 
 void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                        Operation *llLoadOp) const {
-  AMD::addLocalLoadNoAliasScope(localLoadOp, cast<LLVM::LoadOp>(llLoadOp));
+  if (requiresAliasInfoForAsyncOps())
+    AMD::addLocalLoadNoAliasScope(localLoadOp, cast<LLVM::LoadOp>(llLoadOp));
 }
 
 } // namespace mlir::triton::AMD

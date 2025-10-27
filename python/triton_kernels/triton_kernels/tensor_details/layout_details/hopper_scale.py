@@ -4,7 +4,7 @@ import triton.language as tl
 from .base import Layout
 
 
-class HopperMXScaleLayout(Layout):
+class HopperAmpereMXScaleLayout(Layout):
     name: str = "HOPPER_SCALE"
 
     def __init__(self, shape, mx_axis, num_warps=8) -> None:

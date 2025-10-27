@@ -3084,7 +3084,7 @@ def get_test_dot_base_cases():
     return [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype, 1, None)
             for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
             for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
-            for input_precision in ['tf32', 'tf32x3', 'ieee']
+            for input_precision in ['tf32', 'tf32x3', 'ieee', 'bf16x3', 'bf16x6']
             for in_dtype, out_dtype in [('float16', 'float16'), ('float16',
                                                                  'float32'), ('float32',
                                                                               'float32'), ('float64', 'float64')]
@@ -3209,6 +3209,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if is_interpreter():
         if in_dtype == 'bfloat16':
             pytest.skip("bfloat16 is not supported in the interpreter")
+        if input_precision == "bf16x3" or input_precision == "bf16x6":
+            pytest.skip(f"input_precision {input_precision} is not supported in the interpreter")
     else:
         if not is_hip() and K < 16:
             pytest.skip("small dots are supported only on HIP at the moment")
@@ -3238,7 +3240,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip(f"{in_dtype} only supported on CDNA4 and gfx12")
             if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
                 pytest.skip(f"{in_dtype} only supported on CDNA3")
-            if not ((input_precision == "ieee") or (input_precision == "tf32" and is_hip_cdna3())):
+            if not ((input_precision in ("bf16x3", "bf16x6")) or (input_precision == "ieee") or
+                    (input_precision == "tf32" and is_hip_cdna3())):
                 pytest.skip(f"{input_precision} not supported on HIP")
             if kpack == 2 and in_dtype == 'int8' and K < 64:
                 pytest.skip("kpack too large for K")
@@ -3426,7 +3429,12 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
     if in_dtype == 'float32' and input_precision != "ieee":
         if is_tcgen5:
-            assert re.search(r'tcgen05.mma.cta_group::1.kind::tf32', ptx)
+            if input_precision in ("bf16x3", "bf16x6"):
+                assert re.search(r'tcgen05.mma.cta_group::1.kind::f16', ptx)
+            else:
+                assert re.search(r'tcgen05.mma.cta_group::1.kind::tf32', ptx)
+        elif input_precision in ("bf16x3", "bf16x6"):
+            assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.bf16.bf16', ptx)
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k8(?:.row.col)?.f32.tf32.tf32', ptx)
     elif in_dtype == 'float16' and out_dtype == tl.float32:
@@ -6609,3 +6617,40 @@ def test_tensor_member(device):
         tl.device_assert(tl.sum(x) == x.sum())
 
     kernel[(1, )]()
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("rank", [2, 3, 4, 5, 6])
+@pytest.mark.parametrize("trans_a", [False, True])
+@pytest.mark.parametrize("trans_b", [False, True])
+def test_dot_multidim(rank, trans_a, trans_b, device):
+
+    if is_interpreter():
+        pytest.skip("bfloat16 is not supported in the interpreter")
+
+    @triton.jit
+    def kernel(X, Y, Z, RANK: tl.constexpr, TRANS_A: tl.constexpr, TRANS_B: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 256 << RANK)).reshape([2] * (RANK - 2) + [32, 32])
+        y = tl.load(Y + tl.arange(0, 256 << RANK)).reshape([2] * (RANK - 2) + [32, 32])
+        if TRANS_A:
+            x = tl.trans(x)
+        if TRANS_B:
+            y = tl.trans(y)
+        z = tl.dot(x, y)
+        tl.store(Z + tl.arange(0, 256 << RANK), z.reshape([256 << RANK]))
+
+    shape = (2, ) * (rank - 2) + (32, 32)
+
+    a = torch.randint(-4, 5, shape, dtype=torch.bfloat16, device=device)
+    b = torch.randint(-4, 5, shape, dtype=torch.bfloat16, device=device)
+    c = torch.empty(shape, dtype=torch.float32, device=device)
+    kernel[(1, )](a, b, c, rank, trans_a, trans_b)
+
+    if trans_a:
+        a = torch.transpose(a, -1, -2)
+    if trans_b:
+        b = torch.transpose(b, -1, -2)
+
+    d = a.to(torch.float32) @ b.to(torch.float32)
+
+    assert torch.equal(c, d)

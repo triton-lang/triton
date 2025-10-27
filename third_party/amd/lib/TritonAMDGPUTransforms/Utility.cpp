@@ -1,6 +1,7 @@
 #include "Utility.h"
 
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 
 #include <limits>
@@ -159,7 +160,7 @@ ttg::PaddedSharedEncodingAttr composePaddedLayoutForAsyncCopyCDNA4(
     return {};
   }
 
-  unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
+  unsigned bitWidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
   unsigned elemByteWidth = std::max(bitWidth / 8u, 1u);
   auto loadBytes = shape[0] * shape[1] * elemByteWidth;
   if (loadBytes < 16384) {

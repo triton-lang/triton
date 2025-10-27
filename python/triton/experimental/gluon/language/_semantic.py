@@ -2,7 +2,7 @@ from typing import Sequence, List, TypeVar, Tuple, Callable
 import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
-from ._layouts import AutoLayout, DistributedLayout, DistributedLinearLayout, SliceLayout, SharedLayout
+from ._layouts import AutoLayout, DistributedLayout, SliceLayout, SharedLayout
 from triton._C.libtriton.gluon_ir import GluonOpBuilder
 from triton.compiler.code_generator import flatten_values_to_ir, unflatten_ir_values
 
@@ -177,9 +177,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         ret_ty = ttgl.distributed_type(ty.element_ty, ty.shape, layout)
         ret_ty_ir = ret_ty.to_ir(self.builder)
         if assert_trivial and not self.builder.is_convert_layout_trivial(ret_ty_ir, value.handle):
-            raise TypeError(f"layout conversion from {ty.layout} to {layout} is not trivial.\n"
-                            f"The linear layouts are:\n{self.to_linear_layout(ty.layout, ty.shape)}\n"
-                            f"{self.to_linear_layout(layout, ty.shape)}")
+            raise TypeError(f"layout conversion from {ty.layout} to {layout} is not trivial")
         handle = self.builder.create_convert_layout(ret_ty_ir, value.handle)
         return ttgl.tensor(handle, ret_ty)
 
@@ -243,75 +241,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         if not isinstance(shape, list):
             shape = list(shape)
 
-        layout = ttgl._unwrap_if_constexpr(layout)
-
-        if isinstance(layout, (AutoLayout, DistributedLinearLayout)):
-            return ttgl.constexpr(layout)
-
-        return ttgl.constexpr(self.builder.to_linear_layout(layout._to_ir(self.builder), shape))
-
-    def get_tmem_reg_layout(self, element_ty, shape, layout, num_warps, instr_variant, ctas_per_cga, cta_split_num,
-                            cta_order):
-        _check(isinstance(instr_variant, str), lambda: "instr_variant must be a string")
-        _check(instr_variant in ("32x32b", "16x64b", "16x128b", "16x256b", "16x32bx2", "32x32b_splitn"),
-               lambda: f"unknown instr_variant: {instr_variant}")
-        _check(isinstance(num_warps, int), lambda: f"num_warps must be an int but got {type(num_warps)!r}")
-        _check(num_warps >= 4 and (num_warps & (num_warps - 1)) == 0,
-               lambda: "num_warps must be a power of two and >= 4")
-
-        shape = list(shape)
-        _check(all(isinstance(dim, int) for dim in shape), lambda: f"shape entries must be ints but got {shape}")
-        rank = len(shape)
-        _check(rank == 2, lambda: "expected a 2D tensor")
-
-        ctas_per_cga = list(ctas_per_cga)
-        cta_split_num = list(cta_split_num)
-        cta_order = list(cta_order)
-        splitn = instr_variant == "32x32b_splitn"
-        if splitn:
-            instr_variant = "32x32b"
-
-        _check(len(ctas_per_cga) == rank, lambda: "ctas_per_cga rank mismatch")
-        _check(len(cta_split_num) == rank, lambda: "cta_split_num rank mismatch")
-        _check(len(cta_order) == rank, lambda: "cta_order rank mismatch")
-
-        element_ty_ir = element_ty.to_ir(self.builder)
-        layout_attr = layout._to_ir(self.builder)
-        mem_desc_ty = self.builder.get_tensor_mem_desc_ty(
-            element_ty_ir,
-            shape,
-            layout_attr,
-            shape,
-        )
-        cta_layout_attr = self.builder.get_cta_layout(
-            ctas_per_cga,
-            cta_split_num,
-            cta_order,
-        )
-        result = self.builder.get_distributed_layout_for_tmem_ldst(
-            mem_desc_ty,
-            instr_variant,
-            num_warps,
-            cta_layout_attr,
-        )
-        _check(result is not None,
-               lambda: f"TMEM layout '{instr_variant}' unsupported for shape {shape} and num_warps {num_warps}")
-        N = shape[1]
-        if splitn and result.reg_bases[-1] != [0, N // 2]:
-            bitwidth = element_ty.primitive_bitwidth
-            _check(
-                len(result.reg_bases) * bitwidth > 32,
-                lambda: "splitn requires register bases of more than 2 32 bit registers")
-
-            reg_bases = result.reg_bases
-            for bases_str in ("lane_bases", "warp_bases"):
-                bases = getattr(result, bases_str)
-                for i, basis in enumerate(bases):
-                    if basis == [0, N // 2]:
-                        reg_bases[-1], bases[i] = bases[i], reg_bases[-1]
-                        return ttgl.constexpr(result)
-            assert False, f"splitn requires at least one basis of [0, N / 2]. Got {layout}"
-        return ttgl.constexpr(result)
+        return self.builder.to_linear_layout(layout._to_ir(self.builder), shape)
 
     def shared_dealloc(self, mem_desc):
         self.builder.create_local_dealloc(mem_desc.handle)
@@ -489,13 +419,17 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         gather = self.builder.create_gather(src.handle, index.handle, axis)
         return self.wrap_tensor(gather, src.type.scalar, index.type.shape, index.type.layout)
 
-    def warp_specialize(self, default_args, default_partition, worker_args, worker_partitions,
-                        worker_num_warps: Sequence[int], worker_num_regs: Sequence[int], generator):
-        num_partitions = len(worker_partitions)
-        _check(isinstance(default_args, (tuple, ttgl.tuple)),
-               lambda: f"default_args must be a tuple of arguments, but got {type(default_args)}")
-        _check(isinstance(worker_args, (tuple, ttgl.tuple)),
-               lambda: f"worker_args must be a tuple of arguments, but got {type(worker_args)}")
+    def warp_specialize(self, functions_and_args, worker_num_warps: Sequence[int], worker_num_regs: Sequence[int],
+                        generator):
+        for _, args in functions_and_args:
+            _check(isinstance(args, (tuple, ttgl.tuple)),
+                   lambda: f"function arguments must be a tuple of arguments, but got {type(args)}")
+
+        assert len(functions_and_args) >= 1, "expected at least one function for the default partition"
+        default_partition, default_args = functions_and_args[0]
+        num_partitions = len(functions_and_args) - 1
+        workers = functions_and_args[1:]
+
         assert num_partitions == len(
             worker_num_warps
         ), f"warp specialize got {num_partitions} partitions but {len(worker_num_warps)} warp counts"
@@ -517,8 +451,9 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         result_types = [r.get_type() for r in mlir_results]
 
         # Create the warp specialize op.
+        worker_args = [flatten_values_to_ir(args) for _, args in workers]
+        mlir_args = sum(worker_args, [])
         builder.restore_insertion_point(insert_pt)
-        mlir_args = flatten_values_to_ir(worker_args)
         ws_op = builder.create_warp_specialize(result_types, mlir_args, worker_num_warps)
         ws_op.get_default_region().push_back(default_block)
         ws_op.set_requested_registers(worker_num_regs)
@@ -527,13 +462,16 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         builder.create_block_with_parent(ws_op.get_partition_op_holder(), [])
         partitions_op = builder.create_warp_specialize_partitions(num_partitions)
         arg_types = [arg.get_type() for arg in mlir_args]
-        for i in range(num_partitions):
+        arg_it = 0
+        for i, (func, args) in enumerate(workers):
             caller_context = GluonCallerContext(num_warps=worker_num_warps[i])
             block = builder.create_block_with_parent(partitions_op.get_region(i), arg_types)
-            block_args = [block.get_argument(j) for j in range(len(mlir_args))]
-            block_args = unflatten_ir_values(block_args, [arg.type for arg in worker_args])
-            generator.call_JitFunction(worker_partitions[i], block_args, kwargs={}, caller_context=caller_context)
+            mlir_args = worker_args[i]
+            block_args = [block.get_argument(arg_it + j) for j in range(len(mlir_args))]
+            block_args = unflatten_ir_values(block_args, [arg.type for arg in args])
+            generator.call_JitFunction(func, block_args, kwargs={}, caller_context=caller_context)
             builder.create_warp_return()
+            arg_it += len(mlir_args)
 
         builder.set_insertion_point_after(ws_op.get_operation())
         mlir_results = [ws_op.get_result(i) for i in range(len(result_types))]
