@@ -19,8 +19,8 @@ LLVM::LLVMFuncOp getOrInsertFunction(T &moduleOp, const Location loc,
   if (!(ret = moduleOp.template lookupSymbol<LLVM::LLVMFuncOp>(name))) {
     RewriterBase::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
-    ret = rewriter.create<LLVM::LLVMFuncOp>(loc, name, type,
-                                            LLVM::Linkage::External);
+    ret = LLVM::LLVMFuncOp::create(rewriter, loc, name, type,
+                                   LLVM::Linkage::External);
   }
   return ret;
 }
@@ -100,12 +100,12 @@ Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
   // On AMD hardware we don't have CTA clusters like NVIDIA. So this will always
   // be zero. Whoever calling into this should make sure the whole program does
   // not try to utilize CTA clusters.
-  return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+  return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
 }
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
                          Value cmp) const {
-  return rewriter.create<ROCDL::BallotOp>(loc, type, cmp);
+  return ROCDL::BallotOp::create(rewriter, loc, type, cmp);
 }
 
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
@@ -152,8 +152,8 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
     llvm::report_fatal_error(
         "AMDGPU does not support cross-CTA shared memory transfers");
   }
-  Value falseVal = rewriter.create<LLVM::ConstantOp>(
-      loc, elemTy, rewriter.getZeroAttr(elemTy));
+  Value falseVal = LLVM::ConstantOp::create(rewriter, loc, elemTy,
+                                            rewriter.getZeroAttr(elemTy));
   bool addAliasGroup = localLoadOp && isSyncedViaAsyncWait(localLoadOp);
   return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal,
                                  triton::CacheModifier::NONE, addAliasGroup);
@@ -349,12 +349,11 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     }
 
     Value dppResult =
-        rewriter
-            .create<ROCDL::DPPUpdateOp>(loc, actualType, src, src,
-                                        rewriter.getI32IntegerAttr(dppCtrl),
-                                        rewriter.getI32IntegerAttr(rowMask),
-                                        rewriter.getI32IntegerAttr(bankMask),
-                                        rewriter.getBoolAttr(true))
+        ROCDL::DPPUpdateOp::create(rewriter, loc, actualType, src, src,
+                                   rewriter.getI32IntegerAttr(dppCtrl),
+                                   rewriter.getI32IntegerAttr(rowMask),
+                                   rewriter.getI32IntegerAttr(bankMask),
+                                   rewriter.getBoolAttr(true))
             .getRes();
 
     if (!valType.isF32()) {
@@ -445,10 +444,9 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
       Type actualType = castToAndSExtInt(rewriter, loc, buf, valType, 32);
 
       // Lanes 0-15 read from lane 31 and lanes 16-31 read from lane 15.
-      Value permlaneResult = rewriter
-                                 .create<ROCDL::PermlaneX16Op>(
-                                     loc, actualType, buf, buf, b.i32_val(-1),
-                                     b.i32_val(-1), true, false)
+      Value permlaneResult = ROCDL::PermlaneX16Op::create(
+                                 rewriter, loc, actualType, buf, buf,
+                                 b.i32_val(-1), b.i32_val(-1), true, false)
                                  .getRes();
       buf = truncAndCastFromInt(rewriter, loc, buf, valType, 32);
       permlaneResult =
@@ -465,7 +463,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     // Get reduction result from the last lane of the warp
     Value lastLaneId = b.i32_val(gpu::lookupThreadsPerWarp(rewriter) - 1);
     Value result =
-        rewriter.create<ROCDL::ReadlaneOp>(loc, actualType, buf, lastLaneId);
+        ROCDL::ReadlaneOp::create(rewriter, loc, actualType, buf, lastLaneId);
 
     result = truncAndCastFromInt(rewriter, loc, result, valType, 16);
 
@@ -505,7 +503,7 @@ void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
   }
 
   // Emit the intrinsic function call to begin the printf.
-  Value zeroI64 = rewriter.create<LLVM::ConstantOp>(loc, i64_ty, 0);
+  Value zeroI64 = LLVM::ConstantOp::create(rewriter, loc, i64_ty, 0);
   Value message =
       b.call(printBeginFn, useStdErr ? ValueRange() : zeroI64).getResult();
 
@@ -513,7 +511,7 @@ void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
   Value oneI32 = b.i32_val(1);
   Value zeroI32 = b.i32_val(0);
   Value formatStrLen =
-      rewriter.create<LLVM::ConstantOp>(loc, i64_ty, formatStrByteCount);
+      LLVM::ConstantOp::create(rewriter, loc, i64_ty, formatStrByteCount);
   SmallVector<Value, 4> arguments = {message, formatStrStart, formatStrLen,
                                      args.empty() ? oneI32 : zeroI32};
   message = b.call(printStrFn, arguments).getResult();
@@ -587,7 +585,7 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   // the threads in a block to check/print the assert failure.
   b.barrier();
   // Perform the trap to abort the kernel.
-  rewriter.create<LLVM::Trap>(loc);
+  LLVM::Trap::create(rewriter, loc);
 }
 
 int TargetInfo::getSharedAddressSpace() const { return 3; }

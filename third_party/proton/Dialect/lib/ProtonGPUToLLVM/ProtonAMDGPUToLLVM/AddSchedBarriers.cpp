@@ -39,7 +39,7 @@ struct AddSchedBarriers
       auto loc = op.getLoc();
       if (!isa_and_nonnull<ROCDL::SchedBarrier>(op->getPrevNode())) {
         builder.setInsertionPoint(op);
-        builder.create<ROCDL::SchedBarrier>(loc, zeroAttrValue);
+        ROCDL::SchedBarrier::create(builder, loc, zeroAttrValue);
       }
     });
 
@@ -47,7 +47,7 @@ struct AddSchedBarriers
       auto loc = op.getLoc();
       if (!isa_and_nonnull<ROCDL::SchedBarrier>(op->getNextNode())) {
         builder.setInsertionPointAfter(op);
-        builder.create<ROCDL::SchedBarrier>(loc, zeroAttrValue);
+        ROCDL::SchedBarrier::create(builder, loc, zeroAttrValue);
       }
     });
   }

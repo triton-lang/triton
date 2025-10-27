@@ -1148,8 +1148,8 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     for (auto thenResult : thenYieldOp.getResults()) {
       newResultTypes.push_back(thenResult.getType());
     }
-    auto newIfOp = builder.create<scf::IfOp>(ifOp.getLoc(), newResultTypes,
-                                             ifOp.getCondition());
+    auto newIfOp = scf::IfOp::create(builder, ifOp.getLoc(), newResultTypes,
+                                     ifOp.getCondition());
     // Move the original regions to the cloned operation.
     newIfOp.getThenRegion().takeBody(ifOp.getThenRegion());
     newIfOp.getElseRegion().takeBody(ifOp.getElseRegion());

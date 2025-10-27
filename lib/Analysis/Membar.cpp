@@ -159,7 +159,7 @@ void MembarOrFenceAnalysis::visitTerminator(
 
 void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
-  auto barrierOp = builder->create<triton::gpu::LocalBarrierOp>(op->getLoc());
+  auto barrierOp = triton::gpu::LocalBarrierOp::create(*builder, op->getLoc());
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,

@@ -179,7 +179,7 @@ struct CanonicalizeConvertFromHistogram
     if (mask) {
       auto sharedType = getI1SameShape(src.getType());
       rewriter.setInsertionPoint(op);
-      mask = rewriter.create<ConvertLayoutOp>(op.getLoc(), sharedType, mask);
+      mask = ConvertLayoutOp::create(rewriter, op.getLoc(), sharedType, mask);
     }
 
     rewriter.replaceOpWithNewOp<triton::HistogramOp>(
@@ -1069,8 +1069,8 @@ void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
         partitionNumWarps, {}, {}, {});
   OpBuilder::InsertionGuard guard(builder);
   Block *container = builder.createBlock(state.regions.back().get());
-  builder.create<WarpSpecializePartitionsOp>(state.location,
-                                             partitionNumRegions);
+  WarpSpecializePartitionsOp::create(builder, state.location,
+                                     partitionNumRegions);
 }
 
 void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,

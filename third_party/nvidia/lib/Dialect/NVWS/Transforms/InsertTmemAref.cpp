@@ -334,7 +334,7 @@ struct TmemAccessDag {
 };
 
 Value intCst(OpBuilder &b, Location loc, int value, unsigned width) {
-  return b.create<arith::ConstantIntOp>(loc, value, width);
+  return arith::ConstantIntOp::create(b, loc, value, width);
 }
 
 Value boolCst(OpBuilder &b, Location loc, bool value) {
@@ -597,7 +597,7 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
 
   TMEMAref state(
       arefOp, allocOp.getResult(),
-      b.create<ub::PoisonOp>(allocOp.getLoc(), b.getType<AsyncTokenType>()));
+      ub::PoisonOp::create(b, allocOp.getLoc(), b.getType<AsyncTokenType>()));
 
   b.setInsertionPoint(allocOp);
   state.acquire(b, allocOp.getLoc(), {partitionId, stageCluster});
@@ -684,15 +684,15 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
     // move putExitOp
     b.setInsertionPoint(ifOp);
     auto exitIf =
-        b.create<scf::IfOp>(SmallVector<Type>{}, ifOp.getCondition(), false);
+        scf::IfOp::create(b, SmallVector<Type>{}, ifOp.getCondition(), false);
     auto putExitOp = cast<ArefPutExitOp>(*ifOp.thenBlock()->begin());
     putExitOp->moveBefore(exitIf.thenBlock(), exitIf.thenBlock()->begin());
 
     // move putEnterOp
     b.setInsertionPointAfter(ifOp);
     auto enterIf =
-        b.create<scf::IfOp>(SmallVector<Type>{b.getType<AsyncTokenType>()},
-                            ifOp.getCondition(), true);
+        scf::IfOp::create(b, SmallVector<Type>{b.getType<AsyncTokenType>()},
+                          ifOp.getCondition(), true);
     auto putEnterOp =
         cast<ArefPutEnterOp>(ifOp.thenBlock()->getTerminator()->getPrevNode());
     putEnterOp->moveBefore(enterIf.thenBlock(), enterIf.thenBlock()->begin());
@@ -704,13 +704,13 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
 
     // insert yield-ops inside enterIf
     b.setInsertionPointToEnd(enterIf.thenBlock());
-    b.create<scf::YieldOp>(tok);
+    scf::YieldOp::create(b, tok);
     b.setInsertionPointToEnd(enterIf.elseBlock());
-    b.create<scf::YieldOp>(ifOp.elseYield().getOperand(pos));
+    scf::YieldOp::create(b, ifOp.elseYield().getOperand(pos));
 
     // invalid tokens in main ifOp
     b.setInsertionPoint(ifOp);
-    auto poisonToken = b.create<ub::PoisonOp>(b.getType<AsyncTokenType>());
+    auto poisonToken = ub::PoisonOp::create(b, b.getType<AsyncTokenType>());
     ifOp.thenYield().setOperand(pos, poisonToken);
     ifOp.elseYield().setOperand(pos, poisonToken);
 

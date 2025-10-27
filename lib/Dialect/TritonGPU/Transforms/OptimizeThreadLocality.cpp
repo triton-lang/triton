@@ -83,8 +83,8 @@ struct OptimizeReshapeLayoutPattern : public OpRewritePattern<ReshapeOp> {
       viewOp.getResult().setType(newType);
       viewOp.setEfficientLayout(true);
     });
-    auto cvt = rewriter.create<ConvertLayoutOp>(viewOp.getLoc(), tensorType,
-                                                viewOp.getResult());
+    auto cvt = ConvertLayoutOp::create(rewriter, viewOp.getLoc(), tensorType,
+                                       viewOp.getResult());
     rewriter.replaceAllUsesExcept(viewOp.getResult(), cvt.getResult(), cvt);
     return success();
   }
@@ -198,14 +198,14 @@ static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
                                             warpsPerCTA, order, ctaLayout);
 
   // Update the layout on the gather op and insert conversions.
-  auto cvtSrc = b.create<ConvertLayoutOp>(
-      op.getLoc(), srcType.cloneWithEncoding(newLayout), op.getSrc());
-  auto cvtIdx = b.create<ConvertLayoutOp>(
-      op.getLoc(), idxType.cloneWithEncoding(newLayout), op.getIndices());
+  auto cvtSrc = ConvertLayoutOp::create(
+      b, op.getLoc(), srcType.cloneWithEncoding(newLayout), op.getSrc());
+  auto cvtIdx = ConvertLayoutOp::create(
+      b, op.getLoc(), idxType.cloneWithEncoding(newLayout), op.getIndices());
 
   b.setInsertionPointAfter(op);
   auto cvtOut =
-      b.create<ConvertLayoutOp>(op.getLoc(), op.getType(), op.getResult());
+      ConvertLayoutOp::create(b, op.getLoc(), op.getType(), op.getResult());
   b.replaceAllUsesExcept(op.getResult(), cvtOut, cvtOut);
 
   b.modifyOpInPlace(op, [&] {
@@ -409,8 +409,8 @@ private:
   Operation *createConvertLayout(OpBuilder &builder, Type destType,
                                  Operation *newReduce) const {
     builder.setInsertionPointAfter(newReduce);
-    auto newCvt = builder.create<triton::gpu::ConvertLayoutOp>(
-        newReduce->getLoc(), destType, newReduce->getResult(0));
+    auto newCvt = triton::gpu::ConvertLayoutOp::create(
+        builder, newReduce->getLoc(), destType, newReduce->getResult(0));
     return newCvt;
   }
 
@@ -435,7 +435,7 @@ private:
         loop.getBody()->getArgument(oldAccumBlockArgNum);
     yieldValues.push_back(newUpdate);
     auto newYield =
-        builder.create<scf::YieldOp>(oldYield.getLoc(), yieldValues);
+        scf::YieldOp::create(builder, oldYield.getLoc(), yieldValues);
     return newYield;
   }
 
@@ -458,8 +458,8 @@ private:
     builder.setInsertionPointAfter(reduce);
     IRMapping mapping;
     for (auto operand : reduce.getOperands()) {
-      auto viewOp = builder.create<triton::ReshapeOp>(
-          reduce.getLoc(), viewOpTensorType, operand,
+      auto viewOp = triton::ReshapeOp::create(
+          builder, reduce.getLoc(), viewOpTensorType, operand,
           /*allowReorder=*/true, /*efficientLayout=*/true);
       mapping.map(operand, viewOp);
     }
@@ -520,8 +520,8 @@ private:
     auto neutralVal = getNeutralElement(reductionOp.value());
     assert(neutralVal && "Could not find neutral value for reduction op!");
     auto denseAttr = DenseElementsAttr::get(accumType, neutralVal.value());
-    auto newAccum = builder.create<arith::ConstantOp>(oldAccum.getLoc(),
-                                                      accumType, denseAttr);
+    auto newAccum = arith::ConstantOp::create(builder, oldAccum.getLoc(),
+                                              accumType, denseAttr);
     return newAccum;
   }
 
