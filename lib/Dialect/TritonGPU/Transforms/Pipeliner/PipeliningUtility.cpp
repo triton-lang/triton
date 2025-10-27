@@ -687,8 +687,7 @@ triton::createSingleBufferView(OpBuilder &builder, Value alloc, Value idx) {
                allocDescType.getShape().end());
   auto viewDescType = ttg::MemDescType::get(
       shape, allocDescType.getElementType(), allocDescType.getEncoding(),
-      allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
-      /*allocShape=*/allocDescType.getAllocShape());
+      allocDescType.getMemorySpace(), allocDescType.getMutableMemory());
   return builder.create<ttg::MemDescIndexOp>(alloc.getLoc(), viewDescType,
                                              alloc, idx);
 }
