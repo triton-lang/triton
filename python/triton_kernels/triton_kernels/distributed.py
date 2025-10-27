@@ -7,7 +7,7 @@ import triton
 import triton.language as tl
 import random
 from dataclasses import dataclass
-from typing import Tuple, cast, Any, Optional
+from typing import Tuple, cast
 from math import prod
 
 @dataclass
@@ -138,7 +138,7 @@ class MatmulOGSMemoryPool(SymmetricMemoryPool):
         return super().make_empty(region.base, shape, dtype, clear=clear)
 
 
-symm_mem_pool = SymmetricMemoryPool()
+matmul_ogs_memory_pool = MatmulOGSMemoryPool()
 
 
 def make_expt_dict_uniform(n_expt_shard, n_expt_tot):
@@ -384,7 +384,6 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
     # extract problem dimensions
     rank = dist.get_rank()
     n_ranks = dist.get_world_size()
-    device = src.device
     n_tokens_global, d_model = src.shape
     n_tokens_local = n_tokens_global // n_ranks
     # allocate symmetric memory
