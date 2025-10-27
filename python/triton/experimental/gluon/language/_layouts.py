@@ -3,7 +3,6 @@ from typing import List, Optional
 
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 from triton.runtime.jit import constexpr_function
-from triton._C.libtriton.linear_layout import LinearLayout
 
 import math
 
