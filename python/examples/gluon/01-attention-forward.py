@@ -230,7 +230,7 @@ class AttentionConfig:
     use_exp2_turnstile: gl.constexpr
 
     def __init__(self, qk_scale, Z, H, N_CTX, BLOCK_M, BLOCK_N, HEAD_DIM, GROUP_SIZE_N, NUM_SMS, STAGE, dtype,
-                 num_warps, _semantic=None):
+                 num_warps):
         self.qk_scale = qk_scale
         self.Z = Z
         self.H = H
@@ -265,13 +265,12 @@ class AttentionConfig:
             (o_instr_shape[0], o_instr_shape[1] // self.SPLIT_D_FACTOR), col_stride=1)
 
         self.qk_layout = get_tmem_reg_layout(gl.float32, self.qk_shape, self.qk_tmem_layout, self.num_warps,
-                                             instr_variant="32x32b_splitn", _semantic=_semantic)
+                                             instr_variant="32x32b_splitn")
         self.o_splitn_layout = get_tmem_reg_layout(
             gl.float32,
             (self.o_shape[0], self.o_shape[1] // self.SPLIT_D_FACTOR),
             o_splitn_tmem_layout,
             self.num_warps,
-            _semantic=_semantic,
         )
         self.alpha_2d_layout = gl.constexpr(gl.BlockedLayout([1, 1], [32, 1], [self.num_warps, 1], [0, 1]))
 
