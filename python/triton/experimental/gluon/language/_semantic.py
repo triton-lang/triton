@@ -243,15 +243,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         return self.builder.to_linear_encoding(layout._to_ir(self.builder), shape)
 
-    def to_linear_layout(self, layout, shape):
-        _check(isinstance(layout, (DistributedLayout, SharedLayout)),
-               lambda: f"Expected a DistributedLayout or SharedLayout, got {type(layout)}")
-
-        if not isinstance(shape, list):
-            shape = list(shape)
-
-        return self.builder.to_linear_layout(layout._to_ir(self.builder), shape)
-
     def shared_dealloc(self, mem_desc):
         self.builder.create_local_dealloc(mem_desc.handle)
 
