@@ -633,8 +633,8 @@ def matmul_ogs(x, w, bias,
         "reduce_rank": fused_comm.reduce_rank,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}
-    if routing_data.n_expts_act > 1:
-        y_storage.data.view(torch.uint8).zero_()
+    # if routing_data.n_expts_act > 1:
+    #     y_storage.data.view(torch.uint8).zero_()
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
@@ -718,6 +718,7 @@ def matmul_ogs(x, w, bias,
         #
         y_dtype = out_matmul.dtype if has_scatter else memory["output"].dtype
         y_flex = OutFlexData() if has_scatter else precision_config.flex_ctx.out_data
+        y_flex_saturate_inf = None if has_scatter else precision_config.flexpoint_saturate_inf
         y_shape = out_matmul.shape[1:-1] + (out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n,)
         y = None if has_scatter else memory["output"].view(1, math.prod(y_shape))
         out_matmul, out_final_mx_scale = reduce(out_matmul.view(opt_flags.split_k, 1, -1), dim=0,
@@ -726,7 +727,9 @@ def matmul_ogs(x, w, bias,
                                                 y=y,
                                                 y_has_mx=scatter_indx is None and precision_config.out_scale is not None,
                                                 y_dtype=y_dtype,
-                                                y_flex=y_flex)
+                                                y_flex=y_flex,
+                                                y_flex_saturate_inf=y_flex_saturate_inf,
+                                            )
         out_matmul = out_matmul.view(*y_shape).unsqueeze(0)
         if out_final_mx_scale is not None:
             out_final_mx_scale = out_final_mx_scale.view(out_matmul.shape[-2], triton.cdiv(out_matmul.shape[-1], 32))
@@ -743,7 +746,9 @@ def matmul_ogs(x, w, bias,
                                                y=memory["output"].squeeze(0).squeeze(0),
                                                x_mxscale=out_matmul_scale.view(*out_matmul_scale_shape) if out_matmul_has_mx else None,
                                                y_has_mx=precision_config.out_scale is not None,
-                                               y_flex=precision_config.flex_ctx.out_data)
+                                               y_flex=precision_config.flex_ctx.out_data,
+                                               y_flex_saturate_inf=precision_config.flexpoint_saturate_inf,
+                                            )
         out_final = out_final.unsqueeze(0)
     else:
         out_final = out_matmul.squeeze(0)
