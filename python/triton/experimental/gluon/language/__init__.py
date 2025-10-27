@@ -81,9 +81,18 @@ from ._core import (
     warp_specialize,
     where,
 )
-from ._layouts import (AutoLayout, BlockedLayout, SliceLayout, DistributedLinearLayout, DotOperandLayout,
-                       NVMMADistributedLayout, NVMMASharedLayout, SwizzledSharedLayout, PaddedSharedLayout,
-                       SharedLinearLayout)
+from ._layouts import (
+    AutoLayout,
+    BlockedLayout,
+    SliceLayout,
+    DistributedLinearLayout,
+    DotOperandLayout,
+    NVMMADistributedLayout,
+    NVMMASharedLayout,
+    SwizzledSharedLayout,
+    PaddedSharedLayout,
+    SharedLinearLayout,
+)
 from ._math import (
     umulhi,
     exp,

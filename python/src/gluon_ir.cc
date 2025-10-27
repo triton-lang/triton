@@ -328,7 +328,7 @@ void init_gluon_ir(py::module &&m) {
                                         /*requiresSurjective=*/true);
              return ttg::LinearEncodingAttr::get(ctx, ll);
            })
-      .def("to_linear_encoding",
+      .def("to_linear_layout",
            [](GluonOpBuilder &self, Attribute layout,
               std::vector<int64_t> &shape) -> py::object {
              auto ctx = self.getContext();

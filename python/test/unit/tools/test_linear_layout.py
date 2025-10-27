@@ -1,4 +1,4 @@
-from triton import LinearLayout
+from triton.tools import LinearLayout
 
 
 def test_identity_1d():

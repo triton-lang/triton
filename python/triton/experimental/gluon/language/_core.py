@@ -555,10 +555,10 @@ def bank_conflicts(distr_ty, shared_ty, _semantic=None) -> int:
 
 
 @builtin
-def to_linear_encoding(layout, shape, _semantic=None):
+def to_linear_layout(layout, shape, _semantic=None):
     layout = _unwrap_if_constexpr(layout)
     shape = _unwrap_shape(shape)
-    return _semantic.to_linear_encoding(layout, shape)
+    return _semantic.to_linear_layout(layout, shape)
 
 
 @builtin

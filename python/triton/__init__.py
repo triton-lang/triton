@@ -26,7 +26,6 @@ from .runtime._allocation import set_allocator
 from . import language
 from . import testing
 from . import tools
-from triton._C.libtriton.linear_layout import LinearLayout
 
 must_use_result = language.core.must_use_result
 
@@ -46,6 +45,7 @@ __all__ = [
     "KernelInterface",
     "language",
     "MockTensor",
+    "must_use_result",
     "LinearLayout",
     "next_power_of_2",
     "OutOfResources",
