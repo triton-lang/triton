@@ -7,7 +7,7 @@ from ..cdna3 import *  # NOQA: F403
 from ..cdna3 import __all__ as __cdna3_all
 from . import async_copy
 
-__all__ = [*__cdna3_all, "async_copy", "mfma_scaled", "get_mfma_scale_layout"]
+__all__ = [*__cdna3_all, "async_copy", "mfma_scaled", "get_mfma_scale_layout", "split_warp_pipeline"]
 
 
 def _get_mfma_scale_layout(dot_operand_layout, shape, semantic):
@@ -125,3 +125,7 @@ def buffer_atomic_xchg(ptr, offsets, value, mask=None, sem=None, scope=None, _se
 
     return _buffer_atomic_rmw_impl('xchg', ptr, offsets, value, "cdna4", mask=mask, sem=sem, scope=scope,
                                    _semantic=_semantic)
+
+@builtin
+def split_warp_pipeline(_semantic=None):
+    return _semantic.builder.create_warp_pipeline_border()

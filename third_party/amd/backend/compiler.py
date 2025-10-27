@@ -239,8 +239,6 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.add_in_thread_transpose(pm)
             passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_reorder_instructions(pm)
-        if use_block_pingpong and options.num_stages > 1:
-            amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
 
         if knobs.amd.use_buffer_ops:
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
@@ -251,6 +249,9 @@ class HIPBackend(BaseBackend):
                 knobs.amd.use_buffer_atomics,
                 knobs.amd.buffer_ops_analyze_small_tensor_range,
             )
+
+        if use_block_pingpong and options.num_stages > 1:
+            amd.passes.ttgpuir.add_warp_pipeline(pm, options.num_stages)
 
         amd.passes.ttgpuir.add_fold_true_cmpi(pm)
         passes.common.add_canonicalizer(pm)
@@ -273,6 +274,7 @@ class HIPBackend(BaseBackend):
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+        amd.passes.ttgpuir.add_warp_pipeline(pm, options.num_stages)
 
         pm.run(mod, 'gluon_to_ttgir')
         return mod
@@ -283,6 +285,8 @@ class HIPBackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        #if use_block_pingpong:
+        #amd.passes.ttgpuir.add_warp_pipeline(pm, options.num_stages)
         # custom_lds_size is an experimental parameter that defines amount of LDS available
         # for one thread block. Measured in bytes.
         #
@@ -290,6 +294,8 @@ class HIPBackend(BaseBackend):
         # LDS size is determined by provided arch name.
         custom_lds_size = 0
         amd.passes.ttgpuir.add_optimize_lds_usage(pm, options.arch, custom_lds_size)
+        amd.passes.ttgpuir.add_warp_pipeline_conversion(pm)
+        passes.common.add_canonicalizer(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.gluon.add_inliner(pm)
         passes.convert.add_index_to_llvmir(pm)
