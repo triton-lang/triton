@@ -157,8 +157,7 @@ static Value createBufferView(OpBuilderWithAsyncTaskIds &builder, Value alloc,
                allocDescType.getShape().end());
   auto viewDescType = triton::gpu::MemDescType::get(
       shape, allocDescType.getElementType(), allocDescType.getEncoding(),
-      allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
-      /*allocShape=*/allocDescType.getAllocShape());
+      allocDescType.getMemorySpace(), allocDescType.getMutableMemory());
   return builder.create<triton::gpu::MemDescIndexOp>(alloc.getLoc(),
                                                      viewDescType, alloc, idx);
 }

@@ -2,12 +2,13 @@ from dataclasses import dataclass, fields
 from typing import Type
 
 import torch
-from triton.tools.tensor_descriptor import TensorDescriptor
 from triton.tools.ragged_tma import create_ragged_descriptor
+from triton.tools.tensor_descriptor import TensorDescriptor
+
 from .target_info import cuda_capability_geq
-from .tensor_details.layout import Layout, StridedLayout
-from .tensor_details import ragged_tensor as ragged_tensor_details
 from .tensor_details import bitmatrix as bitmatrix_details
+from .tensor_details import ragged_tensor as ragged_tensor_details
+from .tensor_details.layout import BlackwellMXValueLayout, Layout, StridedLayout
 from .tensor_details.ragged_tensor import RaggedTensorMetadata
 
 
@@ -46,26 +47,28 @@ class Storage:
         compliant = [strides[i] * bitwidth % 128 == 0 for i in range(ndim) if i != major_dim]
         return all(compliant)
 
-    def make_dense_tma(self, block_shape, transpose=False):
+    def make_dense_tma(self, block_shape):
         strides = list(self.data.stride())
         shape = list(self.data.shape)
-        transpose = self.data.stride()[-1] != 1
+        transpose = strides[-1] != 1
         if transpose:
             block_shape = block_shape[:-2] + [block_shape[-1], block_shape[-2]]
             shape = shape[:-2] + [shape[-1], shape[-2]]
             strides = strides[:-2] + [strides[-1], strides[-2]]
-        if self.data.dtype == torch.uint8 and self.layout.name == "BLACKWELL_VALUE":
+        if self.data.dtype == torch.uint8 and (self.layout.name is None or "_SCALE" not in self.layout.name):
             indx = strides.index(1)
             block_shape[indx] = block_shape[indx] // 2
-            if shape[-1] % 128 != 0:
-                raise ValueError("inner shape need to be multiple of 128 for "
-                                 "mxfp4 (CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B) TMAs.")
+            if isinstance(self.layout, BlackwellMXValueLayout):
+                if shape[-1] % 128 != 0:
+                    raise ValueError(
+                        "inner shape need to be multiple of 128 for mxfp4 (CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B) TMAs."
+                    )
         block_shape = self.layout.swizzle_block_shape(block_shape)
         return TensorDescriptor(self.data, shape, strides, block_shape)
 
-    def make_tma(self, block_shape, mode, transpose=False):
+    def make_tma(self, block_shape, mode):
         if mode in ["dense", "gather", "scatter"]:
-            return self.make_dense_tma(block_shape, transpose)
+            return self.make_dense_tma(block_shape)
         assert mode == "ragged"
         ragged_dim = len(self.data.shape) - 2
         return create_ragged_descriptor(self.data, block_shape, ragged_dim=ragged_dim)
@@ -195,6 +198,7 @@ class RaggedTensor:
     A ragged `tensor` is a collection of 2D tensors that share the same number of columns.
     Each tensor in this collection is called a `slice`.
     """
+
     # slice_sizes[i] is the number of rows in slice `i`
     slice_sizes: torch.Tensor
     # ragged tensors are stored in memory as (potentially padded) 2D tensors of shape

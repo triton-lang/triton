@@ -603,6 +603,10 @@ ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(RankedTensorType ty) {
 }
 
 ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(Operation *op) {
+  if (!isa<RankedTensorType>(op->getResultTypes()[0])) {
+    return nullptr;
+  }
+
   // Try to use local alloc encoding if possible.
   ttg::SharedEncodingTrait localAllocEnc;
   if (llvm::any_of(op->getUsers(), [&](Operation *user) {
@@ -683,8 +687,7 @@ triton::createSingleBufferView(OpBuilder &builder, Value alloc, Value idx) {
                allocDescType.getShape().end());
   auto viewDescType = ttg::MemDescType::get(
       shape, allocDescType.getElementType(), allocDescType.getEncoding(),
-      allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
-      /*allocShape=*/allocDescType.getAllocShape());
+      allocDescType.getMemorySpace(), allocDescType.getMutableMemory());
   return builder.create<ttg::MemDescIndexOp>(alloc.getLoc(), viewDescType,
                                              alloc, idx);
 }
@@ -932,4 +935,39 @@ void triton::removePipeliningAttributes(ModuleOp moduleOp) {
     op->removeAttr(mlir::triton::kLoopClusterAttrName);
     op->removeAttr(mlir::triton::kScheduledMaxStageAttrName);
   });
+}
+
+static bool canHaveSharedEncoding(tt::LoadOp op) {
+  // If used by an user with DotOp encoding, all the uses must be compatible.
+  bool incompatible = false;
+  getSharedEncIfAllUsersAreDotEnc(op.getResult(), incompatible);
+  return !incompatible;
+}
+
+bool triton::isPipeliningBeneficial(
+    Operation *op, tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    bool filterSmall) {
+  if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+    if (filterSmall && !canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis)) {
+      LDBG("Load " << *loadOp << " is too small for pipelining");
+      return false;
+    }
+  }
+  if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
+    return true;
+  if (!canHaveSharedEncoding(cast<tt::LoadOp>(op))) {
+    LDBG("Load " << *op << " cannot have shared encoding");
+    return false;
+  }
+
+  if (auto localAllocEnc = getSharedEncoding(op)) {
+    auto registerTy = cast<RankedTensorType>(op->getResultTypes()[0]);
+    auto vecBytes = mlir::triton::getCopyVecBytes(registerTy, localAllocEnc);
+    if (filterSmall && vecBytes < 4) {
+      // At least 4 bytes need to be consecutive for cp.async
+      return false;
+    }
+  }
+
+  return true;
 }
