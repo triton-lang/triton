@@ -520,6 +520,35 @@ void optimizePartitions(scf::ForOp loop, PartitionSet &partitions) {
   }
 }
 
+void getUseOps(Value value, SetVector<Operation *> &useOps,
+               DenseSet<Value> &visited) {
+  if (!visited.insert(value).second)
+    return;
+  for (auto &use : value.getUses()) {
+    auto useOp = use.getOwner();
+    if (auto forOp = dyn_cast<scf::ForOp>(useOp)) {
+      if (use.getOperandNumber() < forOp.getNumControlOperands()) {
+        useOps.insert(forOp);
+      } else {
+        auto pos = use.getOperandNumber() - forOp.getNumControlOperands();
+        auto arg = forOp.getRegionIterArg(pos);
+        getUseOps(arg, useOps, visited);
+      }
+    } else if (isa<scf::YieldOp>(useOp)) {
+      auto parentOp = useOp->getParentOp();
+      Value arg;
+      if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+        arg = forOp.getRegionIterArg(use.getOperandNumber());
+      } else {
+        auto ifOp = cast<scf::IfOp>(parentOp);
+        arg = ifOp.getResults()[use.getOperandNumber()];
+      }
+      getUseOps(arg, useOps, visited);
+    } else {
+      useOps.insert(useOp);
+    }
+  }
+}
 // TODO: Implement a mutually-recursive traversal that can handle
 //       nested control flow structures (if/reduce/for operations).
 //       While we don't currently have use cases requiring this,
@@ -587,37 +616,6 @@ LogicalResult assignMissingPartitions(scf::ForOp loop,
 
   llvm::MapVector<Operation *, SetVector<Operation *>> opsMap;
   DenseMap<Operation *, DenseSet<int>> partitionMap;
-  std::function<void(Value, SetVector<Operation *> &,
-                     DenseSet<Value> & visited)>
-      getUseOps = [&](Value value, SetVector<Operation *> &useOps,
-                      DenseSet<Value> &visited) {
-        if (!visited.insert(value).second)
-          return;
-        for (auto &use : value.getUses()) {
-          auto useOp = use.getOwner();
-          if (auto forOp = dyn_cast<scf::ForOp>(useOp)) {
-            if (use.getOperandNumber() < forOp.getNumControlOperands()) {
-              useOps.insert(forOp);
-            } else {
-              auto pos = use.getOperandNumber() - forOp.getNumControlOperands();
-              auto arg = forOp.getRegionIterArg(pos);
-              getUseOps(arg, useOps, visited);
-            }
-          } else if (isa<scf::YieldOp>(useOp)) {
-            auto parentOp = useOp->getParentOp();
-            Value arg;
-            if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
-              arg = forOp.getRegionIterArg(use.getOperandNumber());
-            } else {
-              auto ifOp = cast<scf::IfOp>(parentOp);
-              arg = ifOp.getResults()[use.getOperandNumber()];
-            }
-            getUseOps(arg, useOps, visited);
-          } else {
-            useOps.insert(useOp);
-          }
-        }
-      };
 
   loop.walk([&](Operation *op) {
     if (op->getNumRegions() > 0)
