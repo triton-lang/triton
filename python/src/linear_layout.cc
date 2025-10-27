@@ -186,8 +186,13 @@ void init_linear_layout(py::module &&m) {
            })
       .def(
           "apply",
-          [](const LinearLayout &self,
-             const std::vector<std::pair<std::string, int32_t>> &inputs) {
+          [](const LinearLayout &self, py::dict inputsDict) {
+            std::vector<std::pair<std::string, int32_t>> inputs;
+            inputs.reserve(inputsDict.size());
+            for (auto item : inputsDict) {
+              inputs.emplace_back(py::cast<std::string>(item.first),
+                                  py::cast<int32_t>(item.second));
+            }
             auto *ctx = getLinearLayoutContext();
             std::vector<std::pair<mlir::StringAttr, int32_t>> converted;
             converted.reserve(inputs.size());
@@ -196,9 +201,9 @@ void init_linear_layout(py::module &&m) {
                                      it.second);
             }
             auto outputs = self.apply(converted);
-            py::list result;
+            py::dict result;
             for (const auto &out : outputs) {
-              result.append(py::make_tuple(out.first.str(), out.second));
+              result[py::str(out.first.str())] = out.second;
             }
             return result;
           },

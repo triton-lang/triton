@@ -91,8 +91,7 @@ from ._layouts import (
     NVMMASharedLayout,
     SwizzledSharedLayout,
     PaddedSharedLayout,
-    SharedLinearLayout,
-    cast_from_linear_layout,
+    SharedLinearLayout
 )
 from ._math import (
     umulhi,

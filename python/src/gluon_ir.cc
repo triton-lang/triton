@@ -328,20 +328,20 @@ void init_gluon_ir(py::module &&m) {
                                         /*requiresSurjective=*/true);
              return ttg::LinearEncodingAttr::get(ctx, ll);
            })
-      .def("to_linear",
-           [](GluonOpBuilder &self, Attribute layout,
-              std::vector<int64_t> &shape) -> py::object {
-             auto ctx = self.getContext();
-             auto linearLayout = ttg::toLinearLayout(shape, layout);
-             auto attr = ttg::LinearEncodingAttr::get(ctx, linearLayout);
-             return layoutToGluon(attr);
-           })
       .def("to_linear_layout",
            [](GluonOpBuilder &self, Attribute layout,
               std::vector<int64_t> &shape) -> py::object {
              auto ctx = self.getContext();
              auto linearLayout = ttg::toLinearLayout(shape, layout);
              return py::cast(linearLayout);
+           })
+      .def("to_linear_encoding",
+           [](GluonOpBuilder &self, Attribute layout,
+              std::vector<int64_t> &shape) -> py::object {
+             auto ctx = self.getContext();
+             auto ll = ttg::toLinearLayout(shape, layout);
+             auto attr = ttg::LinearEncodingAttr::get(ctx, ll);
+             return layoutToGluon(attr);
            })
       .def("get_dot_operand_layout",
            [](GluonOpBuilder &self, unsigned opIdx, Attribute parent,
