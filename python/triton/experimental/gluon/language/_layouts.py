@@ -44,6 +44,7 @@ class AutoLayout(DistributedLayout):
     def rank(self):
         raise ValueError("AutoLayout has no rank")
 
+
 @dataclass(frozen=True)
 class EfficientLayout(DistributedLayout):
 
