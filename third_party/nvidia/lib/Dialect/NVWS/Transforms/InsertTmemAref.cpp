@@ -666,19 +666,20 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
   // Transformed pattern:
   //   scf.if %condition {
   //     aref.put.exit                    // Separate exit operation
-  //   } { .. loop.stage = 1 .. }
+  //   } { .. loop.stage = 1, ttg.partition = {1}, ttg.partition.outputs = [] }
   //   %results, %poison_tok, %more = scf.if %condition {
   //     <computation_code>               // Main computation without token ops
   //     scf.yield %values, %poison_tok, %other_values
   //   } else {
   //     scf.yield %alt_values, %poison_tok, %alt_other_values
-  //   }
+  //   } {.. ttg.partition = {0}, ttg.partition.outputs = [{0}, {0}, {0}, ..]}
   //   %token = scf.if %condition {
   //     %new_token = aref.put.enter      // Separate enter operation
   //     scf.yield %new_token
   //   } else {
   //     scf.yield %old_token
-  //   } { .. loop.stage = 1 }
+  //   } { .. loop.stage = 1, ttg.partition = {1}, ttg.partition.outputs =
+  //   [{1}]}
   //   ... use %token
 
   for (auto ifOp : ifs) {

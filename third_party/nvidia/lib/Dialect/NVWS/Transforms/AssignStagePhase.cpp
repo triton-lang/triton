@@ -418,7 +418,7 @@ template <class T> struct AssignStagePhase {
   }
 };
 
-void updateOutputWithRootPartition(Operation *op, int pos) {
+void updateOutputWithDefaultPartition(Operation *op, int pos) {
   auto opIds = *getPartitionIds(op);
   opIds.insert(0);
   setPartition(op, opIds);
@@ -446,7 +446,7 @@ void visitBackwardSlice(scf::ForOp wsLoop, Value value,
              isa<scf::IfOp, scf::ForOp>(defOp)) {
     auto pos = findValuePosInRange(defOp->getResults(), value);
     assert(pos);
-    updateOutputWithRootPartition(defOp, *pos);
+    updateOutputWithDefaultPartition(defOp, *pos);
     if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
       visitBackwardSlice(wsLoop, ifOp.thenYield()->getOperand(*pos), callback,
                          visited);
@@ -497,7 +497,7 @@ LogicalResult assignStagePhase(triton::FuncOp funcOp) {
             !result.use_empty()) {
           auto arg = forOp.getBody()->getTerminator()->getOperand(
               result.getResultNumber());
-          updateOutputWithRootPartition(forOp, result.getResultNumber());
+          updateOutputWithDefaultPartition(forOp, result.getResultNumber());
           visitBackwardSlice(forOp, arg, callback, visited);
         }
       }
