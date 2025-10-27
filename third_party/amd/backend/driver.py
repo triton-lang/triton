@@ -647,9 +647,10 @@ class HIPLauncher(object):
 
     def __init__(self, src, metadata):
         constants = src.constants if hasattr(src, "constants") else dict()
-        names = [p.name for p in src.fn.params]
-        arg_idx = lambda x: (names.index(x), ) if isinstance(x, str) else x
-        constants = {arg_idx(idx): value for idx, value in constants.items()}
+        if constants and hasattr(src, "fn"):
+            names = [p.name for p in src.fn.params]
+            arg_idx = lambda x: (names.index(x), ) if isinstance(x, str) else x
+            constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
         src = make_launcher(constants, signature, metadata.warp_size)
         mod = compile_module_from_src(src=src, name="__triton_launcher", include_dirs=include_dirs)
