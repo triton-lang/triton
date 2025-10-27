@@ -6,7 +6,6 @@ from triton_kernels.tensor import SparseMatrix, Tensor
 from triton_kernels.tensor import Bitmatrix, BIT
 from typing import Optional, Union
 from triton_kernels.distributed import symm_mem_pool
-import torch.distributed._symmetric_memory as symm_mem
 import torch.distributed as dist
 
 
@@ -14,7 +13,7 @@ def make_empty(offset, shape, dtype, device, all_gather):
     if all_gather:
         rank_id = dist.get_rank()
         ret_bufs = symm_mem_pool.make_empty(offset=offset, shape=shape, dtype=dtype, region="topk")
-        ret = ret_bufs[rank_id] 
+        ret = ret_bufs[rank_id]
         ret_hdl = symm_mem_pool.hdl
         return ret_bufs, ret, ret_hdl
     ret = torch.empty(shape, dtype=dtype, device=device)

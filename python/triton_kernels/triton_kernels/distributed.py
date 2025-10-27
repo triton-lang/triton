@@ -107,7 +107,7 @@ class MatmulOGSMemoryPool(SymmetricMemoryPool):
         self._regions[name] = region
         return base
 
-    def initialize(self, n_tokens_global: int, hidden_dim_size: int, n_expts_act: int, dtype: torch.dtype, n_ranks: int, group: dist.ProcessGroup, device="cuda", *, ):
+    def initialize(self, n_tokens_global: int, hidden_dim_size: int, n_expts_act: int, dtype: torch.dtype, n_ranks: int, group: dist.ProcessGroup, device="cuda"):
         if self._is_initialized:
             return
         elem_size = torch.empty((), dtype=dtype).element_size()
