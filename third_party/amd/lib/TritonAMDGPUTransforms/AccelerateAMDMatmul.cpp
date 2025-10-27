@@ -1759,53 +1759,103 @@ struct AssignKWidthOptions {
   bool enableCDNA4KW8Experiment = false;
 };
 
+static inline bool isMfmaEncoding(Attribute attr) {
+  return attr && isa<ttg::AMDMfmaEncodingAttr>(attr);
+}
+
+static inline bool isWmmaEncoding(Attribute attr) {
+  return attr && isa<ttg::AMDWmmaEncodingAttr>(attr);
+}
+
+static std::optional<unsigned> deriveMfmaIntrinsicKBase(unsigned mDim, unsigned kDim) {
+  std::optional<unsigned> kBase = std::nullopt;
+  switch (mDim) {
+    case 32: kBase = kDim / 2; break;
+    case 16: kBase = kDim / 4; break;
+    case 4:  kBase = kDim / 16; break;
+  }
+  return kBase;
+}
+
+static FailureOr<unsigned> computeKWidthForMfmaDotOperand(ttg::AMDMfmaEncodingAttr parentMfma, Value operandVal, Operation *consumerDotOp, unsigned operandIndex, const AssignKWidthOptions &opts) {
+  auto shape = parentMfma.getInstrShape(); // [mDim, nDim, kDim]
+  unsigned mDim = shape[0];
+  unsigned nDim = shape[1];
+  unsigned kDim = shape[2];
+  std::optional<unsigned> kBase = deriveMfmaIntrinsicKBase(mDim, kDim);
+  if (!kBase.has_value()) {
+    // mlir::emitWarning(parentMfma) 
+    //   << "Unable to compute kBase due to invalid MFMA intrinsic: "
+    //   << "mDim: " << mDim << ", kDim: " << kDim;
+    return failure();
+  }
+  
+  // TODO: How to tell if we are in chained dot and we can't do this?
+  unsigned candidate = *kBase * opts.kPack;
+
+  return candidate;
+}
+
 struct FixKWidthPattern : public OpRewritePattern<ttg::ConvertLayoutOp> {
   AssignKWidthOptions opts;
   FixKWidthPattern(MLIRContext *ctx, const AssignKWidthOptions &opts, PatternBenefit b = 1)
       : OpRewritePattern(ctx, b), opts(opts) {}
 
   LogicalResult matchAndRewrite(ttg::ConvertLayoutOp op, PatternRewriter &rewriter) const override {
-    // auto dstTy = op.getResult().getType().dyn_cast<RankedTensorType>();
-    // if (!dstTy) return failure();
-    // auto enc = dstTy.getEncoding().dyn_cast_or_null<ttg::DotOperandEncodingAttr>();
-    // if (!enc) return failure();
+    auto dotOpOperandType = dyn_cast<RankedTensorType>(op.getResult().getType());
+    if (!dotOpOperandType)
+      return failure();
+    auto dotOpOperandEncoding = dyn_cast<ttg::DotOperandEncodingAttr>(dotOpOperandType.getEncoding());
+    if (!dotOpOperandEncoding)
+      return failure();
 
-    // auto parent = enc.getParent();
-    // if (isWMMAParent(parent))
-    //   return failure(); // leave WMMA untouched
-    // if (!isMFMAParent(parent))
-    //   return failure();
+    auto dotOpResultEncoding = dotOpOperandEncoding.getParent();
+    if (isWmmaEncoding(dotOpResultEncoding))
+      return failure(); // skip wmma
+    if (!isMfmaEncoding(dotOpResultEncoding))
+      return failure(); // skip non-mfma
 
-    // auto parentMfma = parent.cast<ttg::AMDMfmaEncodingAttr>();
+    auto dotOpResultMfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(dotOpResultEncoding);
 
-    // // Identify the consuming dot and which operand this is.
-    // Operation *userDot = nullptr;
-    // unsigned operandIndex = 0;
-    // for (Operation *user : op->getResult(0).getUsers()) {
-    //   if (auto dot = dyn_cast<tt::DotOp>(user)) {
-    //     if (dot.getA() == op.getResult()) { userDot = dot; operandIndex = 0; break; }
-    //     if (dot.getB() == op.getResult()) { userDot = dot; operandIndex = 1; break; }
-    //   } else if (auto dotScaled = dyn_cast<tt::DotScaledOp>(user)) {
-    //     if (dotScaled.getA() == op.getResult()) { userDot = dotScaled; operandIndex = 0; break; }
-    //     if (dotScaled.getB() == op.getResult()) { userDot = dotScaled; operandIndex = 1; break; }
-    //   }
-    // }
+    Operation *consumerDotOp = nullptr;
+    unsigned operandIndex = 0;
+    for (Operation *consumer : op->getResult(0).getUsers()) {
+      if (auto dot = dyn_cast<tt::DotOp>(consumer)) {
+        if (dot.getA() == op.getResult()) {
+          consumerDotOp = dot;
+          operandIndex = 0;
+          break; 
+        }
+        if (dot.getB() == op.getResult()) {
+          consumerDotOp = dot;
+          operandIndex = 1;
+          break; 
+        }
+      } else if (auto dotScaled = dyn_cast<tt::DotScaledOp>(consumer)) {
+        if (dotScaled.getA() == op.getResult()) {
+          consumerDotOp = dotScaled;
+          operandIndex = 0;
+          break; 
+        }
+        if (dotScaled.getB() == op.getResult()) {
+          consumerDotOp = dotScaled;
+          operandIndex = 1;
+          break; 
+        }
+      }
+    }
 
-    // std::optional<unsigned> maybeKWidth =
-    //     computeKWidthForMfmaDotOperand(parentMfma, op.getOperand(), userDot, operandIndex, opts);
-    // if (!maybeKWidth.has_value())
-    //   return failure();
+    std::optional<unsigned> maybeKWidth = computeKWidthForMfmaDotOperand(dotOpResultMfmaEncoding, op.getOperand(), consumerDotOp, operandIndex, opts);
+    if (!maybeKWidth.has_value())
+      return failure();
 
-    // unsigned desiredKWidth = maybeKWidth.value();
-    // if (desiredKWidth == enc.getKWidth())
-    //   return failure();
+    unsigned candidateKWidth = maybeKWidth.value();
+    if (candidateKWidth ==  dotOpOperandEncoding.getKWidth())
+      return failure();
 
-    // auto newEnc = ttg::DotOperandEncodingAttr::get(
-    //     op.getContext(), enc.getOpIdx(), parentMfma, desiredKWidth);
-    // auto newTy = RankedTensorType::get(dstTy.getShape(), dstTy.getElementType(), newEnc);
-
-    // rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, newTy, op.getOperand());
-    op.emitRemark() << "pass invoked!";
+    auto newEncoding = ttg::DotOperandEncodingAttr::get(op.getContext(),  dotOpOperandEncoding.getOpIdx(), dotOpResultMfmaEncoding, candidateKWidth);
+    auto newType = RankedTensorType::get(dotOpOperandType.getShape(), dotOpOperandType.getElementType(), newEncoding);
+    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, newType, op.getOperand());
     return success();
   }
 };
@@ -1817,45 +1867,51 @@ struct FixDotScaledPackedKWidthPattern : public OpRewritePattern<tt::DotScaledOp
       : OpRewritePattern(ctx, b), opts(opts) {}
 
   LogicalResult matchAndRewrite(tt::DotScaledOp dot, PatternRewriter &rewriter) const override {
-    // auto dTy = dot.getType().dyn_cast<RankedTensorType>();
-    // if (!dTy) return failure();
-    // auto parent = dTy.getEncoding();
-    // if (!isMFMAParent(parent)) return failure();
-    // auto parentMfma = parent.cast<ttg::AMDMfmaEncodingAttr>();
+    auto opResultType = dyn_cast<RankedTensorType>(dot.getType());
+    if (!opResultType)
+      return failure();
 
-    // auto aElem = dot.getAElemType();
-    // auto bElem = dot.getBElemType();
-    // auto isE2M1 = [](tt::ScaleDotElemType t) { return t == tt::ScaleDotElemType::E2M1; };
-    // if (!(isE2M1(aElem) || isE2M1(bElem)))
-    //   return failure();
+    auto opResultEncoding = opResultType.getEncoding();
+    if (!isMfmaEncoding(opResultEncoding))
+      return failure();
+    auto opResultMfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(opResultEncoding);
 
-    // auto fixOne = [&](Value v, unsigned opIdx, unsigned desiredKWidth) -> LogicalResult {
-    //   auto cvt = dyn_cast_or_null<ttg::ConvertLayoutOp>(v.getDefiningOp());
-    //   if (!cvt) return failure();
-    //   auto ty = cvt.getResult().getType().dyn_cast<RankedTensorType>();
-    //   if (!ty) return failure();
-    //   auto enc = ty.getEncoding().dyn_cast_or_null<ttg::DotOperandEncodingAttr>();
-    //   if (!enc) return failure();
-    //   if (enc.getKWidth() == desiredKWidth) return failure();
+    auto aElementType = dot.getAElemType();
+    auto bElementType = dot.getBElemType();
+    auto isE2M1 = [](tt::ScaleDotElemType t) { return t == tt::ScaleDotElemType::E2M1; };
+    if (!(isE2M1(aElementType) || isE2M1(bElementType)))
+      return failure();
 
-    //   auto newEnc = ttg::DotOperandEncodingAttr::get(dot.getContext(), opIdx, parentMfma, desiredKWidth);
-    //   auto newTy = RankedTensorType::get(ty.getShape(), ty.getElementType(), newEnc);
-    //   auto newCvt = rewriter.create<ttg::ConvertLayoutOp>(cvt.getLoc(), newTy, cvt.getOperand());
-    //   if (opIdx == 0) dot.setOperand(0, newCvt.getResult());
-    //   else            dot.setOperand(1, newCvt.getResult());
-    //   return success();
-    // };
+    auto fixOne = [&](Value v, unsigned opIdx, unsigned desiredKWidth) -> LogicalResult {
+      auto convertLayoutOp = dyn_cast_or_null<ttg::ConvertLayoutOp>(v.getDefiningOp());
+      if (!convertLayoutOp)
+        return failure();
+      auto ty = dyn_cast<RankedTensorType>(convertLayoutOp.getResult().getType());
+      if (!ty)
+        return failure();
+      auto enc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(ty.getEncoding());
+      if (!enc)
+        return failure();
+      if (enc.getKWidth() == desiredKWidth)
+        return failure();
 
-    // if (isE2M1(aElem)) {
-    //   (void)fixOne(dot.getA(), 0, 4);
-    //   (void)fixOne(dot.getB(), 1, 8);
-    //   return success();
-    // } else {
-    //   (void)fixOne(dot.getA(), 0, 8);
-    //   (void)fixOne(dot.getB(), 1, 4);
-    //   return success();
-    // }
-    return success();
+      auto newEnc = ttg::DotOperandEncodingAttr::get(dot.getContext(), opIdx, opResultMfmaEncoding, desiredKWidth);
+      auto newTy = RankedTensorType::get(ty.getShape(), ty.getElementType(), newEnc);
+      auto newCvt = rewriter.create<ttg::ConvertLayoutOp>(convertLayoutOp.getLoc(), newTy, convertLayoutOp.getOperand());
+      if (opIdx == 0) dot.setOperand(0, newCvt.getResult());
+      else            dot.setOperand(1, newCvt.getResult());
+      return success();
+    };
+
+    if (isE2M1(aElementType)) {
+      (void)fixOne(dot.getA(), 0, 4);
+      (void)fixOne(dot.getB(), 1, 8);
+      return success();
+    } else {
+      (void)fixOne(dot.getA(), 0, 8);
+      (void)fixOne(dot.getB(), 1, 4);
+      return success();
+    }
   }
 };
 
@@ -1910,47 +1966,18 @@ struct TritonAMDGPUAccelerateMatmulPass
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
     decomposeMixedModeDotOp(m);
-  }
-};
-
-class TritonAMDGPUAssignKWidthPass
-    : public PassWrapper<TritonAMDGPUAssignKWidthPass, OperationPass<ModuleOp>> {
-public:
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(TritonAMDGPUAssignKWidthPass)
-
-  TritonAMDGPUAssignKWidthPass() = default;
-  TritonAMDGPUAssignKWidthPass(const TritonAMDGPUAssignKWidthPass &other) {}
-
-  StringRef getArgument() const final { return "tritonamdgpu-assign-kwidth"; }
-  StringRef getDescription() const final {
-    return "Assign/adjust kWidth for DotOperand encodings post-accelerate-matmul";
-  }
-
- void runOnOperation() override {
-    ModuleOp m = getOperation();
-    MLIRContext *ctx = m.getContext();
 
     AssignKWidthOptions opts;
-    opts.kPack = 1; // std::max(1, kPackOpt.getValue());
-    opts.arch = "gfx950"; // archOpt.getValue();
-    opts.enableSecondDotF16BF16Special = true; // enableSecondDotSpecialOpt.getValue();
-    opts.enableCDNA4KW8Experiment = true; // enableCDNA4KW8ExpOpt.getValue();
+    opts.arch = archGenerationName;
+    opts.enableSecondDotF16BF16Special = true;
+    opts.enableCDNA4KW8Experiment = true;
 
-    RewritePatternSet patterns(ctx);
-    patterns.add<FixKWidthPattern>(ctx, opts, /*benefit=*/2);
-    patterns.add<FixDotScaledPackedKWidthPattern>(ctx, opts, /*benefit=*/2);
-
-    m.emitError() << "made it";
-
-    if (failed(applyPatternsGreedily(m, std::move(patterns))))
+    RewritePatternSet kwidth_patterns(context);
+    kwidth_patterns.add<FixKWidthPattern>(context, opts, /*benefit=*/2);
+    kwidth_patterns.add<FixDotScaledPackedKWidthPattern>(context, opts, /*benefit=*/2);
+    if (failed(applyPatternsGreedily(m, std::move(kwidth_patterns))))
       signalPassFailure();
   }
-
-private:
-  Option<std::string> archGenerationName{*this, "arch-generation-name", llvm::cl::desc("GFX generation name of target device."), llvm::cl::init(std::string{})};
-  Option<int32_t> matrixInstructionSize{*this, "matrix-instruction-size", llvm::cl::desc("enforce matrix instruction MN size"), llvm::cl::init(0)};
-  Option<int32_t> kPack{*this, "kPack", llvm::cl::desc("KWidth / kBase"), llvm::cl::init(1)};
-  Option<bool> enableCDNA4KW8ExpOpt{*this, "enable-cdna4-kw8-experiment", llvm::cl::desc("Enable kWidth=8 experiment for second dot on CDNA4"), llvm::cl::init(false)};
 };
 
 } // namespace mlir
