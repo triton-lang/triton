@@ -3,7 +3,7 @@ import triton
 from triton_kernels import target_info
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from triton_kernels.tensor import FP4, bitwidth, get_layout
-from triton_kernels.tensor_details.layout import HopperAmpereMXScaleLayout
+from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 
 
 def compute_grid_size(routing_data, batch_size, m, n, block_m, block_n):
@@ -18,7 +18,7 @@ def compute_grid_size(routing_data, batch_size, m, n, block_m, block_n):
 def compute_block_n(n: int, arch, precision_config):
     # block_n:
     layout = get_layout(precision_config.weight_scale)
-    if isinstance(layout, HopperAmpereMXScaleLayout):
+    if isinstance(layout, HopperMXScaleLayout):
         if layout.num_warps in [4, 8]:
             # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/matmul_ogs_details/_matmul_ogs.py#L265
             block_n = 2 * layout.num_warps * 2 * 8
@@ -63,7 +63,7 @@ def compute_split_k(block_k: int, k: int | None, grid_size: int) -> int:
 
 def compute_num_warps(block_m, block_n, is_persistent: bool, precision_config):
     layout = get_layout(precision_config.weight_scale)
-    if isinstance(layout, HopperAmpereMXScaleLayout):
+    if isinstance(layout, HopperMXScaleLayout):
         return layout.num_warps
     return max(block_m * block_n // 4096, 4 if is_persistent else 1)
 
