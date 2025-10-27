@@ -797,10 +797,10 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
     const TargetInfo &targetInfo, PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
 
-  patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
-      typeConverter, axisInfoAnalysis, "__nv_fsqrt_rn", benefit);
-  patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
-      typeConverter, axisInfoAnalysis, "__nv_fdiv_rn", benefit);
+  patterns.add<ElementwiseToIntrinsicOpConversion<triton::PreciseSqrtOp>>(
+      typeConverter, axisInfoAnalysis, "llvm.nvvm.sqrt.rn.f", benefit);
+  patterns.add<ElementwiseToIntrinsicOpConversion<triton::PreciseDivFOp>>(
+      typeConverter, axisInfoAnalysis, "llvm.nvvm.div.rn.f", benefit);
 
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
