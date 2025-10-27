@@ -25,15 +25,12 @@ class ExptAssignment:
     # number of experts per shard
     n_expts_per_shard: list[int]
 
-
 class SymmetricMemoryPool:
     def __init__(self):
         self._is_initialized = False
         self.size = 0
         self.buf = None
         self.bufs = None
-        self._regions: dict[str, dict[str, int]] = {}
-        self._cursor = 0
 
     def initialize(self, byte_size, n_ranks, group, device="cuda"):
         if self._is_initialized:
@@ -53,83 +50,92 @@ class SymmetricMemoryPool:
             return value
         return ((value + alignment - 1) // alignment) * alignment
 
-    def _reserve_region(self, name: str, required: int, alignment: int) -> int:
-        alignment = max(alignment, 1)
-        required = self._align_up(required, alignment)
-        region = self._regions.get(name)
-
-        if region is None:
-            base = self._align_up(self._cursor, alignment)
-            end = base + required
-            if end > self.size:
-                raise ValueError(
-                    f"Symmetric memory pool exhausted while reserving region '{name}': "
-                    f"requested {required} bytes but only {self.size - base} bytes available."
-                )
-            self._regions[name] = {"base": base, "size": required, "alignment": alignment}
-            self._cursor = end
-            return base
-
-        base = region["base"]
-        if alignment > region["alignment"]:
-            if base % alignment != 0:
-                raise ValueError(
-                    f"Region '{name}' base offset {base} cannot satisfy stricter alignment {alignment}."
-                )
-            region["alignment"] = alignment
-
-        if required > region["size"]:
-            end = base + required
-            if end > self.size:
-                raise ValueError(
-                    f"Symmetric memory pool exhausted while growing region '{name}': "
-                    f"requested {required} bytes but only {self.size - base} bytes available."
-                )
-            region["size"] = required
-            if end > self._cursor:
-                self._cursor = end
-        self._regions[name] = region
-        return base
-
     def make_empty(
         self,
         offset: int,
         shape: Tuple[int, ...],
         dtype: torch.dtype,
         *,
-        region: Optional[str] = None,
-        region_alignment: int = 128,
         clear: bool = False,
     ) -> Tuple[torch.Tensor, ...]:
         rets = []
         elem_size = torch.empty((), dtype=dtype).element_size()
         numel = prod(shape)
         nbytes = numel * elem_size
-        base_offset = 0
-        if region is not None:
-            base_offset = self._reserve_region(region, offset + nbytes, max(region_alignment, elem_size))
 
-        absolute_offset = base_offset + offset
-
-        if absolute_offset % elem_size != 0:
-            raise ValueError(f"Offset {absolute_offset} not aligned to element size {elem_size}")
+        if offset % elem_size != 0:
+            raise ValueError(f"Offset {offset} not aligned to element size {elem_size}")
 
         for buf in self.bufs:
             st = cast(torch.UntypedStorage, buf.untyped_storage())
             total = st.nbytes()
-            if absolute_offset + nbytes > total:
+            if offset + nbytes > total:
                 raise ValueError(
-                    f"Slice [{absolute_offset}:{absolute_offset+nbytes}) exceeds storage size {total} bytes."
+                    f"Slice [{offset}:{offset+nbytes}) exceeds storage size {total} bytes."
                 )
 
             t = torch.empty(0, dtype=dtype, device=buf.device)
-            storage_offset = absolute_offset // elem_size
-            t.set_(cast(Any, st), storage_offset, torch.Size(shape))
+            storage_offset = offset // elem_size
+            t.set_(st, storage_offset, torch.Size(shape))
             if clear:
                 t.zero_()
             rets.append(t)
 
         return tuple(rets)
+
+@dataclass
+class _MemoryRegion:
+    name: str
+    base: int
+    size: int
+    alignment: int
+
+class MatmulOGSMemoryPool(SymmetricMemoryPool):
+
+    def __init__(self):
+        super().__init__()
+        self._regions = {}
+        self._cursor = 0
+
+    def _reserve_region(self, name: str, required: int, alignment: int) -> int:
+        alignment = max(alignment, 1)
+        required = self._align_up(required, alignment)
+        base = self._align_up(self._cursor, alignment)
+        end = base + required
+        region = _MemoryRegion(name, base, required, alignment)
+        self._cursor = end
+        self._regions[name] = region
+        return base
+
+    def initialize(self, n_tokens_global: int, hidden_dim_size: int, n_expts_act: int, dtype: torch.dtype, n_ranks: int, group: dist.ProcessGroup, device="cuda", *, ):
+        if self._is_initialized:
+            return
+        elem_size = torch.empty((), dtype=dtype).element_size()
+        n_bytes_topk = n_tokens_global * n_expts_act * elem_size * 3  # vals, indx, bitmask
+        n_bytes_ep_to_dp = n_tokens_global * n_expts_act * hidden_dim_size * elem_size
+        n_bytes_dp_to_ep = (n_tokens_global // n_ranks) * n_expts_act * hidden_dim_size * elem_size
+        self._reserve_region("topk", n_bytes_topk, 128)
+        self._reserve_region("ep_to_dp", n_bytes_ep_to_dp, 128)
+        self._reserve_region("dp_to_ep", n_bytes_dp_to_ep, 128)
+        super().initialize(self._cursor, n_ranks, group, device)
+
+    def make_empty(
+        self,
+        region_name: str,
+        shape: Tuple[int, ...],
+        dtype: torch.dtype,
+        *,
+        clear: bool = False,
+    ) -> Tuple[torch.Tensor, ...]:
+        region = self._regions.get(region_name, None)
+        if region is None:
+            raise ValueError(f"Region {region_name} not found")
+        elem_size = torch.empty((), dtype=dtype).element_size()
+        numel = prod(shape)
+        nbytes = numel * elem_size
+        if nbytes > region.required:
+            raise ValueError(f"Requested size {nbytes} exceeds region {region_name} size {region.required}")
+        return super().make_empty(region.base, shape, dtype, clear=clear)
 
 
 symm_mem_pool = SymmetricMemoryPool()

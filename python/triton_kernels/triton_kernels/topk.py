@@ -40,15 +40,13 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
     # scratchpad tensors
     # NOTE: these are not returned
     offset = 0
-    y_vals_bufs, y_vals, y_vals_hdl = make_empty(offset, (n_rows_out_max, k), x.dtype, dev, all_gather=all_gather)
+    y_vals_bufs, y_vals, _ = make_empty(offset, (n_rows_out_max, k), x.dtype, dev, all_gather=all_gather)
     offset += (y_vals.numel() * y_vals.dtype.itemsize)
-    offset = ((offset + 127) // 128) * 128  # align to 128 bytes
     if y_indx is None:
-        y_indx_bufs, y_indx, y_indx_hdl = make_empty(offset, (n_rows_out_max, k), torch.int16, dev, all_gather=all_gather)
+        y_indx_bufs, y_indx, _ = make_empty(offset, (n_rows_out_max, k), torch.int16, dev, all_gather=all_gather)
         offset += y_indx.numel() * y_indx.dtype.itemsize
-        offset = ((offset + 127) // 128) * 128  # align to 128 bytes
     else:
-        y_indx_bufs, y_indx_hdl = (y_indx, ), None
+        y_indx_bufs = y_indx
     # create bitmatrix in transposed memory layout:
     n_cols_pad = cdiv(n_cols, BLOCK_N) * BLOCK_N
     n_cols_words = n_cols_pad // 32
@@ -65,10 +63,7 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
         APPLY_SOFTMAX=apply_softmax, N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
     )
     if all_gather:
-        y_vals_hdl.barrier(channel=0)
-        #if y_indx_hdl is not None:
-        #    y_indx_hdl.barrier(channel=0)
-        #bitmatrix_hdl.barrier(channel=0)
+        bitmatrix_hdl.barrier(channel=0)
     bitmatrix_shape = [n_rows * dist.get_world_size() if all_gather else n_rows, n_cols]
     bitmatrix_shape_max = [n_rows_out_max, None]
     bitmatrix = Bitmatrix(bitmatrix_data, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)
