@@ -928,7 +928,8 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
   // apply tilePerWarpNonK along nonK direction.
   int kTileSize = depth * kWidth;
   if (tilePerWarpNonK > 1) {
-    tileLayout *= LinearLayout::identity1D(kSize / kTileSize, kRegister, dimK);
+    tileLayout *= LinearLayout::identity1D(std::max(kSize, kDim) / kTileSize,
+                                           kRegister, dimK);
     tileLayout *= LinearLayout::identity1D(tilePerWarpNonK, kRegister, dimNonK);
   } else {
     tileLayout *= LinearLayout::identity1D(kDim / kTileSize, kRegister, dimK);
@@ -1498,27 +1499,29 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   auto dimNonK = outDimNames[order[1]];
 
   // Each lane holds kWidth=4 consecutive values along the k dim.
-  // The first 16 lanes are distributed along the non-k dim. We are not using
-  // the remaining 16 lanes, so just let them duplicate values of the first 16
-  // lanes. If the shape along the k dim is larger than kWidth, repeat this
-  // pattern to fill the k dim.
+  // The first 16 lanes are distributed along the non-k dim.
   unsigned scaleKWidth = 4;
   auto kSize = dotOperandShape[1];
   LinearLayout tileLayout =
       LinearLayout::identity1D(scaleKWidth, kRegister, dimK) *
-      LinearLayout::identity1D(16, kLane, dimNonK) *
-      LinearLayout::zeros1D(2, kLane, dimK) *
-      LinearLayout::identity1D(kSize / scaleKWidth, kRegister, dimK);
+      LinearLayout::identity1D(16, kLane, dimNonK);
 
+  // If there's 1 tile per warp, we are not using the remaining 16 lanes, so
+  // just let them duplicate values of the first 16 lanes.
+  // Otherwise, we put consecutive values along the non-k dim in the remaining
+  // 16 lanes.
   unsigned mnDim = dotOperandIdx == 0 ? rank - 2 : rank - 1;
   unsigned tilePerWarpMN = tilesPerWarp[mnDim];
   if (tilePerWarpMN > 1) {
-    std::vector<std::vector<int32_t>> registerBase;
-    for (int32_t elem = wmmaMDim; elem < tilePerWarpMN * wmmaMDim; elem *= 2)
-      registerBase.emplace_back(std::vector<int32_t>{elem, 0});
-
-    tileLayout *= LinearLayout({{kRegister, registerBase}}, {dimK, dimNonK});
+    assert(tilePerWarpMN == 2 && "TilesPerWarp > 2 is not supported.");
+    tileLayout *= LinearLayout::identity1D(tilePerWarpMN, kLane, dimNonK);
+  } else {
+    tileLayout *= LinearLayout::zeros1D(2, kLane, dimNonK);
   }
+
+  // If the shape along the k dim is larger than kWidth, repeat this
+  // pattern to fill the k dim.
+  tileLayout *= LinearLayout::identity1D(kSize / scaleKWidth, kRegister, dimK);
 
   auto warpsPerCTANew = (dotOperandIdx == 1)
                             ? SmallVector{warpsPerCTA[1], warpsPerCTA[0]}
