@@ -115,10 +115,15 @@ void updateWaitCount(WaitType waitOp,
   }
 
   if (std::is_same_v<WaitType, ttg::AsyncWaitOp>) {
+    // Replace ttg.async_wait which counts outstanding commits groups with
+    // amdgpu.async_wait which counts the number of oustanding
+    // intrinsics
     auto tokens = waitOp.getAsyncToken();
     rewriter.setInsertionPointAfter(waitOp);
     rewriter.replaceOpWithNewOp<amdgpu::AsyncWaitOp>(waitOp, tokens, waitCnt);
   } else {
+    // For TDM each TTGIR op will create exactly one intrinsics so we do not use
+    // a separate op
     rewriter.modifyOpInPlace(waitOp, [&]() { waitOp.setNum(waitCnt); });
   }
 }
