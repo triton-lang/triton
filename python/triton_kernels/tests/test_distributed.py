@@ -209,14 +209,6 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
             y_indx=y_indx_global,
         )
 
-    y_dp_local_tri = run_mixture()
-    y_global_tri = torch.empty_like(y_global_ref)
-
-    # Validate warmup run.
-    dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
-    triton.testing.assert_close(y_global_ref, y_global_tri)
-
-    # Validate cuda graph capture + replay.
     symm_mem_pool.initialize_matmul_ogs(
         n_tokens_global=n_tokens_global,
         d_input=d_model,
@@ -228,6 +220,14 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
         group=dist.group.WORLD,
         device=dev,
     )
+    y_dp_local_tri = run_mixture()
+    y_global_tri = torch.empty_like(y_global_ref)
+
+    # Validate warmup run.
+    dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
+    triton.testing.assert_close(y_global_ref, y_global_tri)
+
+    # Validate cuda graph capture + replay.
     g = torch.cuda.CUDAGraph()
     stream = torch.cuda.Stream()
     with torch.cuda.stream(stream):
