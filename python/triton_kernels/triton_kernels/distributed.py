@@ -126,7 +126,7 @@ class SymmetricMemoryPool:
             return
 
         self.size = int(sum(region.size for region in self.regions.values()))
-        self.buf = symm_mem.empty(self.size, dtype=torch.uint8, device=device)
+        self.buf = symm_mem.empty((self.size,), dtype=torch.uint8, device=device)
         self.hdl = symm_mem.rendezvous(self.buf, group=group)
         self.bufs = tuple(
             self.hdl.get_buffer(r, self.buf.shape, self.buf.dtype) for r in range(n_ranks)
