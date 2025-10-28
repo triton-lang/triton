@@ -184,13 +184,6 @@ getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
 
 // Clean up attributes passing over schedules across stages in pipelining
 void removePipeliningAttributes(ModuleOp moduleOp);
-
-// For LoadOp, DescriptorLoad, and DescriptorGather ops, determine if
-// they should be pipelined.
-bool isPipeliningBeneficial(Operation *op,
-                            triton::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                            bool filterSmall = true);
-
 } // namespace triton
 } // namespace mlir
 

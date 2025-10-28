@@ -88,6 +88,64 @@ private:
   scf::ForOp forOp;
   int numStages;
   DenseMap<Operation *, int> &opLatency;
+
+public:
+  static bool canHaveSharedEncoding(tt::LoadOp op) {
+    // If used by an user with DotOp encoding, all the uses must be compatible.
+    bool incompatible = false;
+    getSharedEncIfAllUsersAreDotEnc(op.getResult(), incompatible);
+    return !incompatible;
+  }
+
+  static bool
+  isPipeliningBeneficial(Operation *op, Operation *finalUser,
+                         tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                         bool filterSmall) {
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+      if (filterSmall && !canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis)) {
+        LDBG("Load " << *loadOp << " is too small for pipelining");
+        return false;
+      }
+    }
+    if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
+      return true;
+    if (!canHaveSharedEncoding(cast<tt::LoadOp>(op))) {
+      LDBG("Load " << *op << " cannot have shared encoding");
+      return false;
+    }
+
+    ttg::SharedEncodingTrait localAllocEnc;
+    if (llvm::any_of(op->getUsers(), [&](Operation *user) {
+          return isa<ttg::LocalAllocOp>(user);
+        })) {
+      for (auto user : op->getUsers()) {
+        auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
+        if (!localAlloc)
+          continue;
+        auto enc = mlir::cast<ttg::SharedEncodingTrait>(
+            localAlloc.getType().getEncoding());
+        if (!localAllocEnc) {
+          localAllocEnc = enc;
+        }
+        if (enc != localAllocEnc) {
+          // If the load is used by a LocalAllocOp, all the users need to have
+          // the same encoding.
+          return false;
+        }
+      }
+    }
+
+    if (localAllocEnc) {
+      auto registerTy = cast<RankedTensorType>(op->getResultTypes()[0]);
+      auto vecBytes = getCopyVecBytes(registerTy, localAllocEnc);
+      if (filterSmall && vecBytes < 4) {
+        // At least 4 bytes need to be consecutive for cp.async
+        return false;
+      }
+    }
+
+    return true;
+  }
 };
 
 class AssignMMALatencies {
@@ -222,7 +280,8 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
         if (!seen.insert(op).second || excluded.count(op))
           return;
         if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
-          if (!isPipeliningBeneficial(op, axisInfoAnalysis, filterSmall))
+          if (!AssignLoadLatencies::isPipeliningBeneficial(
+                  op, finalUser, axisInfoAnalysis, filterSmall))
             return;
           if (loadOpToIndLevel.count(op)) {
             int level = loadOpToIndLevel[op].first;
