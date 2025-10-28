@@ -400,10 +400,12 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("get_amd_wmma_scale_layout",
            [](GluonOpBuilder &self, unsigned opIdx, std::vector<int64_t> &shape,
+              unsigned mfmaMDim, std::vector<unsigned> &tilesPerWarp,
               std::vector<unsigned> &warpsPerCTA) -> py::object {
              auto ctx = self.getContext();
-             auto ll = ttg::chooseScaledWmmaScaleLayout(ctx, opIdx, warpsPerCTA,
-                                                        shape);
+             auto ll = ttg::chooseScaledWmmaScaleLayout(
+                 ctx, opIdx, shape, mfmaMDim, tilesPerWarp, warpsPerCTA);
+             llvm::outs() << "scale ll: " << ll << "\n";
              auto attr = ttg::LinearEncodingAttr::get(ctx, ll);
              return layoutToGluon(attr);
            })
