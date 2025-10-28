@@ -138,10 +138,10 @@ def reduce_scatter(
 # TODO: Support nonuniform expert assignment
 def routing(
     x, logits, n_expts_act, sm_first: bool = False, y_indx: Optional[torch.Tensor] = None, EP: int = 1, TP: int = 1,
-    expt_assignment: Optional[ExptAssignment] = None, mode: str = "ep_sharding"
+    expt_assignment: Optional[ExptAssignment] = None, mode: Optional[str] = None,
 ) -> Tuple[torch.Tensor, RoutingData, GatherIndx, ScatterIndx, Optional[ReduceScatterMetadata]]:
     n_expts_tot = logits.shape[-1]
-    if _is_distributed_launch():
+    if _is_distributed_launch() and mode:
         if mode == "ep_sharding":
             if not expt_assignment:
                 raise ValueError("expt_assignment must be provided for distributed routing.")
@@ -175,6 +175,7 @@ def routing(
         else:
             raise NotImplementedError(f"Distributed routing mode {mode} is not implemented yet.")
     else:
+        # If mode is not specified or we have a single process, we do single-GPU routing.
         logits = topk(logits, n_expts_act, y_indx=y_indx, apply_softmax=not sm_first)
         dispatch_indx = logits.mask_metadata.col_sorted_indx
         combine_indx = logits.mask_metadata.row_sorted_indx
@@ -315,7 +316,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
         xg = x.to(wg.dtype if n_expts_tot > 1 else x.dtype)
         if n_expts_tot > 1:  # sparse
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            x, rdata, gi, si, metadata = routing(x, logits, n_expts_act, EP=EP, TP=TP, expt_assignment=expt_assignment)
+            x, rdata, gi, si, metadata = routing(x, logits, n_expts_act, EP=EP, TP=TP, expt_assignment=expt_assignment, mode="ep_sharding")
         else:  # dense
             x = all_gather(x, dim=0)
             rdata = gi = si = metadata = None
