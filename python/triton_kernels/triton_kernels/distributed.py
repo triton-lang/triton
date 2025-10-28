@@ -39,54 +39,48 @@ class SymmetricMemoryPool:
         self.buf = None
         self.bufs = None
         self.hdl = None
-        self._regions: Dict[str, _MemoryRegion] = {}
-        self._cursor = 0
+        self.regions = {}
 
     @staticmethod
-    def _align_up(value: int, alignment: int) -> int:
+    def align_up(value: int, alignment: int) -> int:
         if alignment <= 1:
             return value
         return ((value + alignment - 1) // alignment) * alignment
 
-    def _reserve_region(self, name: str, size: int, alignment: int) -> int:
-        if name in self._regions:
-            raise ValueError(f"Region {name} already reserved")
-        alignment = max(alignment, 1)
-        size_aligned = self._align_up(size, alignment)
-        base = self._align_up(self._cursor, alignment)
-        end = base + size_aligned
-        self._regions[name] = _MemoryRegion(base=base, size=size_aligned, alignment=alignment)
-        self._cursor = end
-        return end
-
-    def reserve_region(self, name: str, size: int, alignment: int) -> int:
+    def _reserve_region(self, name: str, size: int, alignment: int, offset: int) -> int:
         if self._is_initialized:
             raise RuntimeError("Cannot reserve regions after initialization")
-        return self._reserve_region(name, size, alignment)
+        if name in self.regions:
+            raise ValueError(f"Region {name} already reserved")
+        alignment = max(alignment, 1)
+        size_aligned = self.align_up(size, alignment)
+        base = self.align_up(offset, alignment)
+        end = base + size_aligned
+        self.regions[name] = _MemoryRegion(base=base, size=size_aligned, alignment=alignment)
+        return end
 
     def make_empty(
         self,
-        *,
         region: str,
         shape: Tuple[int, ...],
         dtype: torch.dtype,
-        offset: int = 0,
+        region_offset: int = 0,
         clear: bool = False,
     ) -> Tuple[torch.Tensor, ...]:
         if not self._is_initialized:
             raise RuntimeError("SymmetricMemoryPool is not initialized")
 
-        region_info = self._regions.get(region)
+        region_info = self.regions.get(region)
         if region_info is None:
             raise ValueError(f"Region {region} not found")
 
         elem_size = torch.empty((), dtype=dtype).element_size()
-        if offset % elem_size != 0:
-            raise ValueError(f"Offset {offset} not aligned to element size {elem_size}")
+        if region_offset % elem_size != 0:
+            raise ValueError(f"Region offset {region_offset} not aligned to element size {elem_size}")
 
         numel = prod(shape)
         nbytes = numel * elem_size
-        region_start = region_info.base + offset
+        region_start = region_info.base + region_offset
         region_end = region_info.base + region_info.size
 
         if region_start + nbytes > region_end:
@@ -110,77 +104,51 @@ class SymmetricMemoryPool:
 
         return tuple(tensors)
 
-    def initialize(
+    def _initialize(
         self,
-        size: Optional[int] = None,
-        n_ranks: Optional[int] = None,
-        group: Optional[dist.ProcessGroup] = None,
-        device: str = "cuda",
+        n_ranks: int,
+        group: dist.ProcessGroup,
+        device: str = "cuda"
     ) -> None:
         if self._is_initialized:
             return
-        if group is None:
-            group = dist.group.WORLD
-        if n_ranks is None:
-            n_ranks = dist.get_world_size(group)
-        if size is None:
-            if not self._regions:
-                raise ValueError("Must reserve regions or provide size before initialization.")
-            size = self._cursor
-        else:
-            if self._regions and size != self._cursor:
-                raise ValueError(
-                    f"Explicit size {size} does not match reserved total {self._cursor}"
-                )
-            if not self._regions:
-                self._cursor = size
 
-        self.buf = symm_mem.empty(size, dtype=torch.uint8, device=device)
+        self.size = sum(region.size for region in self.regions.values())
+        self.buf = symm_mem.empty(self.size, dtype=torch.uint8, device=device)
         self.hdl = symm_mem.rendezvous(self.buf, group=group)
         self.bufs = tuple(
             self.hdl.get_buffer(r, self.buf.shape, self.buf.dtype) for r in range(n_ranks)
         )
         self.hdl.barrier(channel=0)
 
-        self.size = size
         self._is_initialized = True
 
-class MatmulOGSMemoryPool(SymmetricMemoryPool):
-
-    def initialize(
+    def initialize_matmul_ogs(
         self,
-        *,
         n_tokens_global: int,
         d_input: int,
         d_model: int,
         n_expts_act: int,
         dtype: torch.dtype,
-        n_ranks: Optional[int] = None,
-        group: Optional[dist.ProcessGroup] = None,
+        n_ranks: int,
+        group: dist.ProcessGroup,
         device: str = "cuda",
     ) -> None:
         if self._is_initialized:
             return
-        if group is None:
-            group = dist.group.WORLD
-        if n_ranks is None:
-            n_ranks = dist.get_world_size(group)
 
-        elem_size = torch.empty((), dtype=dtype).element_size()
-        n_bytes_topk = n_tokens_global * n_expts_act * elem_size * 3  # vals, indx, bitmask
-        n_bytes_dp_to_ep = n_tokens_global * n_expts_act * d_input * elem_size
-        n_bytes_ep_to_dp = (n_tokens_global // n_ranks) * n_expts_act * d_model * elem_size
+        elem_size = torch.empty((), dtype=cast(torch.dtype, dtype)).element_size()
+        n_bytes_topk = int(n_tokens_global) * int(n_expts_act) * elem_size * 3  # vals, indx, bitmask
+        n_bytes_dp_to_ep = int(n_tokens_global) * int(n_expts_act) * int(d_input) * elem_size
+        n_bytes_ep_to_dp = (int(n_tokens_global) // n_ranks) * int(n_expts_act) * int(d_model) * elem_size
 
-        self.reserve_region("topk", n_bytes_topk, 128)
-        self.reserve_region("ep_to_dp", n_bytes_dp_to_ep, 128)
-        self.reserve_region("dp_to_ep", n_bytes_ep_to_dp, 128)
-
-        super().initialize(n_ranks=n_ranks, group=group, device=device)
+        offset = self._reserve_region("topk", n_bytes_topk, 128, 0)
+        offset = self._reserve_region("ep_to_dp", n_bytes_dp_to_ep, 128, offset)
+        offset = self._reserve_region("dp_to_ep", n_bytes_ep_to_dp, 128, offset)
+        self._initialize(n_ranks=n_ranks, group=group, device=device)
 
 
-
-matmul_ogs_memory_pool = MatmulOGSMemoryPool()
-symm_mem_pool = matmul_ogs_memory_pool
+symm_mem_pool = SymmetricMemoryPool()
 
 
 def make_expt_dict_uniform(n_expt_shard, n_expt_tot):
@@ -348,13 +316,13 @@ def convert_dp_to_ep(src, expt_assignment, expt_indx, gate_indx):
     assert expt_bitmask.dtype == torch.int32, "expt_bitmask must be int32 bitmask words"
     assert expt_bitmask.stride(-1) == 1 and expt_indx.stride(-1) == 1 and gate_indx.stride(-1) == 1
     assert n_tokens_local * n_ranks <= n_tokens_global
-    peer_bufs = matmul_ogs_memory_pool.make_empty(
+    peer_bufs = symm_mem_pool.make_empty(
         region="dp_to_ep",
         shape=(n_tokens_global * n_expt_act, d_model),
         dtype=src.dtype,
     )
     dst_local = peer_bufs[rank]
-    hdl = matmul_ogs_memory_pool.hdl
+    hdl = symm_mem_pool.hdl
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_local,)
@@ -423,13 +391,13 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
     n_ranks = dist.get_world_size()
     n_tokens_global, d_model = src.shape
     n_tokens_local = n_tokens_global // n_ranks
-    peer_bufs = matmul_ogs_memory_pool.make_empty(
+    peer_bufs = symm_mem_pool.make_empty(
         region="ep_to_dp",
         shape=(n_tokens_local, d_model),
         dtype=src.dtype,
     )
     dst_local = peer_bufs[rank]
-    hdl = matmul_ogs_memory_pool.hdl
+    hdl = symm_mem_pool.hdl
     dst_local = peer_bufs[rank]
     # launch kernel
     BLOCK = 512

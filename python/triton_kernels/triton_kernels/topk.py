@@ -14,10 +14,12 @@ def make_empty(offset, shape, dtype, device, all_gather):
         rank_id = dist.get_rank()
         ret_bufs = symm_mem_pool.make_empty(offset=offset, shape=shape, dtype=dtype, region="topk")
         ret = ret_bufs[rank_id]
-        ret_hdl = symm_mem_pool.hdl
-        return ret_bufs, ret, ret_hdl
+        offset = symm_mem_pool.align_up(
+            offset + ret.numel() * ret.element_size(), symm_mem_pool.regions["topk"].alignment
+        )
+        return ret_bufs, ret, offset
     ret = torch.empty(shape, dtype=dtype, device=device)
-    return (ret, ), ret, None
+    return (ret, ), ret, 0
 
 
 def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_gather=False):
@@ -38,18 +40,15 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
     n_rows_out_max = n_rows_max * dist.get_world_size() if all_gather else n_rows_max
     # scratchpad tensors
     # NOTE: these are not returned
-    offset = 0
-    y_vals_bufs, y_vals, _ = make_empty(offset, (n_rows_out_max, k), x.dtype, dev, all_gather=all_gather)
-    offset += (y_vals.numel() * y_vals.dtype.itemsize)
+    y_vals_bufs, y_vals, offset = make_empty(0, (n_rows_out_max, k), x.dtype, dev, all_gather=all_gather)
     if y_indx is None:
-        y_indx_bufs, y_indx, _ = make_empty(offset, (n_rows_out_max, k), torch.int16, dev, all_gather=all_gather)
-        offset += y_indx.numel() * y_indx.dtype.itemsize
+        y_indx_bufs, y_indx, offset = make_empty(offset, (n_rows_out_max, k), torch.int16, dev, all_gather=all_gather)
     else:
         y_indx_bufs = y_indx
     # create bitmatrix in transposed memory layout:
     n_cols_pad = cdiv(n_cols, BLOCK_N) * BLOCK_N
     n_cols_words = n_cols_pad // 32
-    bitmatrix_bufs, bitmatrix_data, bitmatrix_hdl = make_empty(offset, (n_cols_words, cdiv(n_rows_out_max, 32) * 32),
+    bitmatrix_bufs, bitmatrix_data, offset = make_empty(offset, (n_cols_words, cdiv(n_rows_out_max, 32) * 32),
                                                                torch.uint32, dev, all_gather=all_gather)
     bitmatrix_data = torch.transpose(bitmatrix_data, 0, 1)[:n_rows_max]
     pids = cdiv(n_rows_max, BLOCK_M)
@@ -62,7 +61,7 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
         APPLY_SOFTMAX=apply_softmax, N_EXPTS_PAD=n_cols_pad, N_EXPTS_ACT=k,  # constants
     )
     if all_gather:
-        bitmatrix_hdl.barrier(channel=0)
+        symm_mem_pool.hdl.barrier(channel=0)
     bitmatrix_shape = [n_rows * dist.get_world_size() if all_gather else n_rows, n_cols]
     bitmatrix_shape_max = [n_rows_out_max, None]
     bitmatrix = Bitmatrix(bitmatrix_data, dtype=BIT, shape=bitmatrix_shape, shape_max=bitmatrix_shape_max)

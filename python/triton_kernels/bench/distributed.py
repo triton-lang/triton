@@ -16,7 +16,7 @@ from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSp
 from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata
-from triton_kernels.distributed import make_expt_dict_uniform, make_expt_assignment, convert_dp_to_ep, convert_ep_to_dp, ExptAssignment
+from triton_kernels.distributed import make_expt_dict_uniform, make_expt_assignment, convert_dp_to_ep, convert_ep_to_dp, ExptAssignment, symm_mem_pool
 
 from bench_utils import quantize_weight
 
@@ -262,6 +262,14 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     xd = torch.randn((batch // world_size, dim1), device=dev).to(dtype_map[x_dtype])
     x0 = all_gather(xd, dim=0)
     expt_assignment = create_expt_assignment(EP, n_expts_tot, torch.device(dev))
+    symm_mem_pool.initialize_matmul_ogs(
+        n_tokens_global=batch,
+        d_input=dim1,
+        d_model=dim2,
+        n_expts_act=n_expts_act,
+        dtype=x0.dtype,
+        group=dist.group.WORLD,
+    )
 
     # single-GPU pass
     def single(x):
