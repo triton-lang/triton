@@ -138,14 +138,14 @@ class SymmetricMemoryPool:
         if self._is_initialized:
             return
 
+        n_bytes_topk = n_tokens_global * n_expts_act * 4 * 3  # vals, indx, bitmask * int32
         elem_size = torch.empty((), dtype=cast(torch.dtype, dtype)).element_size()
-        n_bytes_topk = int(n_tokens_global) * int(n_expts_act) * elem_size * 3  # vals, indx, bitmask
-        n_bytes_dp_to_ep = int(n_tokens_global) * int(n_expts_act) * int(d_input) * elem_size
-        n_bytes_ep_to_dp = (int(n_tokens_global) // n_ranks) * int(n_expts_act) * int(d_model) * elem_size
+        n_bytes_dp_to_ep = n_tokens_global * n_expts_act * d_input * elem_size
+        n_bytes_ep_to_dp = (n_tokens_global // n_ranks) * n_expts_act * d_model * elem_size
 
         offset = self._reserve_region("topk", n_bytes_topk, 128, 0)
-        offset = self._reserve_region("ep_to_dp", n_bytes_dp_to_ep, 128, offset)
-        offset = self._reserve_region("dp_to_ep", n_bytes_ep_to_dp, 128, offset)
+        offset = self._reserve_region("ep_to_dp", n_bytes_ep_to_dp, 128, offset)
+        offset = self._reserve_region("dp_to_ep", n_bytes_dp_to_ep, 128, offset)
         self._initialize(n_ranks=n_ranks, group=group, device=device)
 
 
