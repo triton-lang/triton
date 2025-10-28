@@ -162,13 +162,13 @@ Benchmarking naive: ...
 Benchmarking naive: done
 Benchmarking persistent: ...
 Benchmarking persistent: done
-169.674 16200.377 ROOT
-├─ 176.127 3901.702 cublas [M=8192, N=8192, K=512]
-│  └─ nan 3901.702 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-├─ 166.414 4129.430 matmul_kernel [M=8192, N=8192, K=512]
-├─ 161.229 4262.232 matmul_kernel_persistent [M=8192, N=8192, K=512]
-└─ 175.888 3907.013 torch [M=8192, N=8192, K=512]
-   └─ nan 3907.013 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+170.288 16141.904 ROOT
+├─ 176.634 3890.500 cublas [M=8192, N=8192, K=512]
+│  └─ nan 3890.500 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+├─ 166.834 4119.039 matmul_kernel [M=8192, N=8192, K=512]
+├─ 162.218 4236.233 matmul_kernel_persistent [M=8192, N=8192, K=512]
+└─ 176.379 3896.130 torch [M=8192, N=8192, K=512]
+   └─ nan 3896.130 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 </pre></div>
 </div>
 <div class="line-block">
@@ -394,9 +394,9 @@ Benchmarking persistent: done
 
     <span class="c1"># A dummy block value that will be overwritten when we have the real block size</span>
     <span class="n">dummy_block</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>
-    <span class="n">a_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">a</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="n">dummy_block</span><span class="p">)</span>
-    <span class="n">b_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="n">dummy_block</span><span class="p">)</span>
-    <span class="n">c_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">c</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">c</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="n">dummy_block</span><span class="p">)</span>
+    <span class="n">a_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">dummy_block</span><span class="p">)</span>
+    <span class="n">b_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">dummy_block</span><span class="p">)</span>
+    <span class="n">c_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">dummy_block</span><span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">grid</span><span class="p">(</span><span class="n">META</span><span class="p">):</span>
         <span class="n">BLOCK_M</span> <span class="o">=</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">]</span>
@@ -602,9 +602,9 @@ Benchmarking persistent: done
 
     <span class="c1"># A dummy block value that will be overwritten when we have the real block size</span>
     <span class="n">dummy_block</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>
-    <span class="n">a_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">a</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="n">dummy_block</span><span class="p">)</span>
-    <span class="n">b_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="n">dummy_block</span><span class="p">)</span>
-    <span class="n">c_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">c</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">c</span><span class="o">.</span><span class="n">stride</span><span class="p">(),</span> <span class="n">dummy_block</span><span class="p">)</span>
+    <span class="n">a_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">dummy_block</span><span class="p">)</span>
+    <span class="n">b_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">b</span><span class="p">,</span> <span class="n">dummy_block</span><span class="p">)</span>
+    <span class="n">c_desc</span> <span class="o">=</span> <span class="n">TensorDescriptor</span><span class="o">.</span><span class="n">from_tensor</span><span class="p">(</span><span class="n">c</span><span class="p">,</span> <span class="n">dummy_block</span><span class="p">)</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">grid</span><span class="p">(</span><span class="n">META</span><span class="p">):</span>
         <span class="k">nonlocal</span> <span class="n">a_desc</span><span class="p">,</span> <span class="n">b_desc</span><span class="p">,</span> <span class="n">c_desc</span>
@@ -898,7 +898,7 @@ Benchmarking persistent: done
         <span class="n">show_profile</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">prec</span><span class="p">,</span> <span class="s2">&quot;matmul&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 22.049 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 25.393 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-09-persistent-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b5537c431cd73b8ee3c32cdf90c58104/09-persistent-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">09-persistent-matmul.ipynb</span></code></a></p>

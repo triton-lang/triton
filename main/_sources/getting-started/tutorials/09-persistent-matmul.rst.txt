@@ -66,13 +66,13 @@ Note that currently this tutorial will fail on devices with a small shared memor
     Benchmarking torch: ...    Benchmarking torch: done
     Benchmarking naive: ...    Benchmarking naive: done
     Benchmarking persistent: ...    Benchmarking persistent: done
-    169.674 16200.377 ROOT
-    ├─ 176.127 3901.702 cublas [M=8192, N=8192, K=512]
-    │  └─ nan 3901.702 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-    ├─ 166.414 4129.430 matmul_kernel [M=8192, N=8192, K=512]
-    ├─ 161.229 4262.232 matmul_kernel_persistent [M=8192, N=8192, K=512]
-    └─ 175.888 3907.013 torch [M=8192, N=8192, K=512]
-       └─ nan 3907.013 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    170.288 16141.904 ROOT
+    ├─ 176.634 3890.500 cublas [M=8192, N=8192, K=512]
+    │  └─ nan 3890.500 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 166.834 4119.039 matmul_kernel [M=8192, N=8192, K=512]
+    ├─ 162.218 4236.233 matmul_kernel_persistent [M=8192, N=8192, K=512]
+    └─ 176.379 3896.130 torch [M=8192, N=8192, K=512]
+       └─ nan 3896.130 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 
 
 
@@ -305,9 +305,9 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
         # A dummy block value that will be overwritten when we have the real block size
         dummy_block = [1, 1]
-        a_desc = TensorDescriptor(a, a.shape, a.stride(), dummy_block)
-        b_desc = TensorDescriptor(b, b.shape, b.stride(), dummy_block)
-        c_desc = TensorDescriptor(c, c.shape, c.stride(), dummy_block)
+        a_desc = TensorDescriptor.from_tensor(a, dummy_block)
+        b_desc = TensorDescriptor.from_tensor(b, dummy_block)
+        c_desc = TensorDescriptor.from_tensor(c, dummy_block)
 
         def grid(META):
             BLOCK_M = META["BLOCK_SIZE_M"]
@@ -513,9 +513,9 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
         # A dummy block value that will be overwritten when we have the real block size
         dummy_block = [1, 1]
-        a_desc = TensorDescriptor(a, a.shape, a.stride(), dummy_block)
-        b_desc = TensorDescriptor(b, b.shape, b.stride(), dummy_block)
-        c_desc = TensorDescriptor(c, c.shape, c.stride(), dummy_block)
+        a_desc = TensorDescriptor.from_tensor(a, dummy_block)
+        b_desc = TensorDescriptor.from_tensor(b, dummy_block)
+        c_desc = TensorDescriptor.from_tensor(c, dummy_block)
 
         def grid(META):
             nonlocal a_desc, b_desc, c_desc
@@ -811,7 +811,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (1 minutes 22.049 seconds)
+   **Total running time of the script:** (1 minutes 25.393 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:
