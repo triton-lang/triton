@@ -40,16 +40,17 @@ def create_expt_assignment(EP: int, n_expts_tot: int, device: torch.device) -> O
     return make_expt_assignment(EP, n_expts_tot, expt_dict, device)
 
 
-def initialize_memory_pool(
+def initialize_matmul_ogs(
     batch: int,
     dim1: int,
     dim2: int,
     n_expts_act: int,
     dtype: torch.dtype,
-    world_size: int,
 ) -> None:
     if not _is_distributed_launch():
         return
+    world_size = dist.get_world_size()
+    device = torch.cuda.current_device()
     symm_mem_pool.initialize_matmul_ogs(
         n_tokens_global=batch,
         d_input=dim1,
@@ -58,6 +59,7 @@ def initialize_memory_pool(
         n_ranks=world_size,
         dtype=dtype,
         group=dist.group.WORLD,
+        device=device,
     )
 
 
@@ -291,6 +293,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
         n_ranks=world_size,
         dtype=x0.dtype,
         group=dist.group.WORLD,
+        device=torch.cuda.current_device(),
     )
 
     # single-GPU pass
