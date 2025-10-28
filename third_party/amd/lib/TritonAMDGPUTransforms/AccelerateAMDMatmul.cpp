@@ -1796,7 +1796,7 @@ static FailureOr<unsigned> computeKWidthForMfmaDotOperand(Value operand, unsigne
   // TODO: Remove check for is chain dot tail and detect in more elegant way
   if (isChainDotTail(dyn_cast<tt::DotOpInterface>(*consumerDotOp))) {
     if (consumerDotOpResultMfmaEncoding.getElementBitWidth() == 16)
-      candidate = 4;
+      candidate = 8;
     else
       candidate = *kBase;
   }
