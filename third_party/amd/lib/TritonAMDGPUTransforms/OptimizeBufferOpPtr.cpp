@@ -25,6 +25,7 @@ using mlir::triton::AMD::ISAFamily;
 
 namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
+namespace amdttg = mlir::triton::amdgpu;
 
 namespace mlir {
 
@@ -106,19 +107,47 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
   // optimization offsetInitialized is a value of offset on first loop iteration
   // incrementOp is an operation that advances offset tensor
   struct LoadData {
-    triton::amdgpu::BufferLoadOp load;
+    Operation *load;
     Value offsetIncrement;
     Value baseIncrement;
     Value offsetInitializer;
     Operation *incrementOp;
   };
 
+  static Value getOffset(Operation *load) {
+    if (auto specific = dyn_cast<amdttg::BufferLoadOp>(load))
+      return specific.getOffsets();
+    if (auto specific = dyn_cast<amdttg::BufferLoadToLocalOp>(load))
+      return specific.getOffsets();
+    assert(false && "unsupported operation type");
+  }
+
+  static Value getBasePtr(Operation *load) {
+    if (auto specific = dyn_cast<amdttg::BufferLoadOp>(load))
+      return specific.getPtr();
+    if (auto specific = dyn_cast<amdttg::BufferLoadToLocalOp>(load))
+      return specific.getPtr();
+    assert(false && "unsupported operation type");
+  }
+
+  static void setOffset(Operation *load, Value newOffset) {
+    assert((isa<amdttg::BufferLoadOp, amdttg::BufferLoadToLocalOp>(load)));
+    const int offsetIdx = isa<amdttg::BufferLoadOp>(load) ? 1 : 2;
+    load->setOperand(offsetIdx, newOffset);
+  }
+
+  static void setBasePtr(Operation *load, Value newBasePtr) {
+    assert((isa<amdttg::BufferLoadOp, amdttg::BufferLoadToLocalOp>(load)));
+    const int ptrIdx = isa<amdttg::BufferLoadOp>(load) ? 0 : 1;
+    load->setOperand(ptrIdx, newBasePtr);
+  }
+
   // Perform series of checks to decide if given operation could be optimized.
   // If optimization is possible, return filled LoadData
-  static std::optional<LoadData>
-  analyzeLoad(triton::amdgpu::BufferLoadOp loadOp, scf::ForOp targetFor) {
-    LDBG("Analyzing: " << loadOp);
-    Value maybeOffsetsBlockArg = loadOp.getOffsets();
+  static std::optional<LoadData> analyzeLoad(Operation *loadOp,
+                                             scf::ForOp targetFor) {
+    LDBG("Analyzing: " << *loadOp);
+    Value maybeOffsetsBlockArg = getOffset(loadOp);
     auto maybeOffsetDefOp = maybeOffsetsBlockArg.getDefiningOp();
     if (maybeOffsetDefOp && isa<arith::AddIOp>(maybeOffsetDefOp)) {
       for (auto &use : maybeOffsetDefOp->getUses()) {
@@ -145,7 +174,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
       LDBG("Rejected: expect load offset to be a target loop argument");
       return {};
     }
-    auto basePtr = loadOp.getPtr();
+    auto basePtr = getBasePtr(loadOp);
     auto defOpBlock = basePtr.getParentBlock();
     if (!defOpBlock->getParentOp()->isProperAncestor(targetFor)) {
       LDBG("Rejected: expect load base Ptr to be invariant to the loop");
@@ -195,7 +224,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
   }
 
   static bool isAddFirst(LoadData &ld) {
-    return ld.load.getOffsets().getDefiningOp() == ld.incrementOp;
+    return getOffset(ld.load).getDefiningOp() == ld.incrementOp;
   }
 
   static scf::ForOp
@@ -204,7 +233,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     // Create new loop with additional arguments
     llvm::SmallVector<Value> newLoopArgs(forOp.getInitArgs());
     for (auto loadData : loads) {
-      newLoopArgs.push_back(loadData.load.getPtr());
+      newLoopArgs.push_back(getBasePtr(loadData.load));
     }
     rewriter.setInsertionPoint(forOp);
     auto newForOp = rewriter.create<scf::ForOp>(
@@ -255,19 +284,26 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     // Replace base ptr with incrementing value
     for (auto [loadData, basePtr, nextBasePtr] :
          llvm::zip(loads, basePtrs, nextIterBasePtrs)) {
-      auto newLoad = cast<triton::amdgpu::BufferLoadOp>(
-          mapping.lookup<Operation *>(loadData.load));
-      constexpr int ptrIdx = 0;
-      constexpr int offsetIdx = 1;
-      newLoad.setOperand(offsetIdx, loadData.offsetInitializer);
+      auto newLoad = mapping.lookup<Operation *>(loadData.load);
+      setOffset(newLoad, loadData.offsetInitializer);
       // two cases:
       // 1. first advance pointer, then load
       // 2. load uses pointers from loop arguments, advanced pointer used on
       // next iteration
       Value advancingBasePtr = isAddFirst(loadData) ? nextBasePtr : basePtr;
-      newLoad.setOperand(ptrIdx, advancingBasePtr);
+      setBasePtr(newLoad, advancingBasePtr);
     }
     return newForOp;
+  }
+
+  template <typename OpType>
+  static void collectLoads(SmallVector<LoadData> &loads, scf::ForOp forOp) {
+    forOp.walk([&loads, forOp](OpType loadOp) {
+      auto loadData = analyzeLoad(loadOp, forOp);
+      if (loadData.has_value()) {
+        loads.push_back(loadData.value());
+      }
+    });
   }
 
   LogicalResult matchAndRewrite(scf::ForOp forOp,
@@ -275,12 +311,8 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     LDBG("Analyzing ForOp for for offset pointer optimization: " << forOp);
     // Gather buffer loads which could be optimized
     SmallVector<LoadData> loads;
-    forOp.walk([&loads, forOp](triton::amdgpu::BufferLoadOp loadOp) {
-      auto loadData = analyzeLoad(loadOp, forOp);
-      if (loadData.has_value()) {
-        loads.push_back(loadData.value());
-      }
-    });
+    collectLoads<triton::amdgpu::BufferLoadOp>(loads, forOp);
+    collectLoads<triton::amdgpu::BufferLoadToLocalOp>(loads, forOp);
 
     if (loads.empty())
       return rewriter.notifyMatchFailure(forOp, "no suitable buffer loads");
