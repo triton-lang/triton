@@ -324,13 +324,13 @@ template <class T> struct AssignStagePhase {
     b.setInsertionPointAfter(arefOp);
     auto depth =
         getArefDepth(cast<MemDescType>(arefOp.getOperand(0).getType()));
-    index.stage = b.create<arith::ConstantIntOp>(depth - 1, 32);
+    index.stage = arith::ConstantIntOp::create(b, depth - 1, 32);
 
     static_assert(std::is_same_v<T, ArefPutEnterOp> ||
                       std::is_same_v<T, ArefGetEnterOp>,
                   "ArefPutEnterOp or ArefGetEnterOp expected");
     auto initPhase = std::is_same_v<T, ArefPutEnterOp> ? 0 : 1;
-    index.phase = b.create<arith::ConstantIntOp>(initPhase, 32);
+    index.phase = arith::ConstantIntOp::create(b, initPhase, 32);
 
     for (auto partitionId : partitionIds) {
       // assign stage/phase to enter/exit Ops in each partition aref is used

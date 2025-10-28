@@ -66,7 +66,7 @@ public:
 
   template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
     auto loc = getLastLoc();
-    return builder->create<OpTy>(loc, std::forward<Args>(args)...);
+    return OpTy::create(*builder, loc, std::forward<Args>(args)...);
   }
 
   // Overload to create or fold a single result operation.

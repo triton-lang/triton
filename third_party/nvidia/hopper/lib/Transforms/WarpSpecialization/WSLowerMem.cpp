@@ -158,8 +158,8 @@ static Value createBufferView(OpBuilderWithAsyncTaskIds &builder, Value alloc,
   auto viewDescType = triton::gpu::MemDescType::get(
       shape, allocDescType.getElementType(), allocDescType.getEncoding(),
       allocDescType.getMemorySpace(), allocDescType.getMutableMemory());
-  return builder.create<triton::gpu::MemDescIndexOp>(alloc.getLoc(),
-                                                     viewDescType, alloc, idx);
+  return triton::gpu::MemDescIndexOp::create(builder, alloc.getLoc(),
+                                             viewDescType, alloc, idx);
 }
 
 static int getTMALoadSize(tt::DescriptorLoadOp &tmaLoad) {

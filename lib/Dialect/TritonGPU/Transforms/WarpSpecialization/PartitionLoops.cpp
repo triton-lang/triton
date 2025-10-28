@@ -185,7 +185,7 @@ void cloneForOp(scf::ForOp forOp, SmallVector<WarpGroupBuilder> &builders,
       initArgs.push_back(forOp.getInitArgs()[idx]);
     }
     auto newForOp =
-        b.create<scf::ForOp>(forOp.getLoc(), lb, ub, step, initArgs);
+        scf::ForOp::create(b, forOp.getLoc(), lb, ub, step, initArgs);
     newForOp->setAttrs(forOp->getAttrs());
     newForOps.push_back(newForOp);
 
@@ -227,8 +227,8 @@ void cloneIfOp(scf::IfOp ifOp, SmallVector<WarpGroupBuilder> &builders,
         newIfResultIndices.push_back(pos);
       }
     }
-    auto newIfOp = b.create<scf::IfOp>(ifOp.getLoc(), newIfResultTypes, cond,
-                                       ifOp.elseBlock() ? true : false);
+    auto newIfOp = scf::IfOp::create(b, ifOp.getLoc(), newIfResultTypes, cond,
+                                     ifOp.elseBlock() ? true : false);
     newIfOp->setAttrs(ifOp->getAttrs());
     newIfOps.push_back(newIfOp);
 
@@ -270,7 +270,7 @@ void cloneReduceOp(triton::ReduceOp reduceOp,
     }
     auto axis = reduceOp.getAxis();
     auto newReduceOp =
-        b.create<triton::ReduceOp>(reduceOp.getLoc(), srcs, axis);
+        triton::ReduceOp::create(b, reduceOp.getLoc(), srcs, axis);
     newReduceOp->setAttrs(reduceOp->getAttrs());
     newReduceOps.push_back(newReduceOp);
 
@@ -350,7 +350,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
         }
 
         if (!newYieldOperands.empty()) {
-          builder.create<scf::YieldOp>(op->getLoc(), newYieldOperands);
+          scf::YieldOp::create(builder, op->getLoc(), newYieldOperands);
         }
       }
     } else {
@@ -424,7 +424,7 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
       auto memdesc = MemDescType::get(
           ty.getShape(), ty.getElementType(), getSharedEncoding(ty),
           SharedMemorySpaceAttr::get(ty.getContext()), /*mutable=*/true);
-      tensorResultAllocs[i] = topBuilder.create<LocalAllocOp>(memdesc);
+      tensorResultAllocs[i] = LocalAllocOp::create(topBuilder, memdesc);
     }
   }
 
@@ -434,8 +434,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   }
 
   SmallVector<int32_t> numWarps(numPartitions, lookupNumWarps(loop));
-  auto wgOp = topBuilder.create<nvws::WarpGroupOp>(resultTypes, numWarps,
-                                                   numPartitions);
+  auto wgOp = nvws::WarpGroupOp::create(topBuilder, resultTypes, numWarps,
+                                        numPartitions);
 
   SmallVector<WarpGroupBuilder> builders;
   for (Region &region : wgOp.getPartitionRegions()) {
@@ -467,7 +467,7 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
     auto outputs = newForOp.getResults();
 
     if (b.partitionId == 0) {
-      b.create<nvws::WarpGroupYieldOp>(wgOp.getLoc(), outputs);
+      nvws::WarpGroupYieldOp::create(b, wgOp.getLoc(), outputs);
     } else {
       // Tensor results computed by non-default partitions are communicated back
       // via SMEM.
@@ -485,10 +485,10 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
             isTensorResultComputedBy(loop, i, &partition, partitions)) {
           assert(reverseIndices[i] && "A valid index is expected.");
           auto result = newForOp.getResult(*reverseIndices[i]);
-          b.create<LocalStoreOp>(wgOp.getLoc(), result, tensorResultAllocs[i]);
+          LocalStoreOp::create(b, wgOp.getLoc(), result, tensorResultAllocs[i]);
         }
       }
-      b.create<nvws::WarpGroupReturnOp>(wgOp.getLoc());
+      nvws::WarpGroupReturnOp::create(b, wgOp.getLoc());
     }
   }
 
@@ -501,8 +501,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
     if (loopVarCategories[i] ==
         LoopVarCategory::TensorResultFromOtherPartition) {
       auto ty = cast<RankedTensorType>(loop.getResult(i).getType());
-      auto output = topBuilder.create<LocalLoadOp>(ty, tensorResultAllocs[i]);
-      topBuilder.create<LocalDeallocOp>(tensorResultAllocs[i]);
+      auto output = LocalLoadOp::create(topBuilder, ty, tensorResultAllocs[i]);
+      LocalDeallocOp::create(topBuilder, tensorResultAllocs[i]);
       res.replaceAllUsesWith(output);
     } else {
       assert(newResultIndices[i] && "A valid index is expected.");
