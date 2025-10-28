@@ -2761,7 +2761,7 @@ def test_histogram_silent_data_corruption(device):
     x = torch.ones(1, device=device, dtype=torch.int32)
     z = torch.ones(2, device=device, dtype=torch.int32)
 
-    histogram_kernel[(1,)](x, z)
+    histogram_kernel[(1, )](x, z)
     assert z[1] == 1, f"Second element shouldn't be affected, expected_buffer=[1, 1], actual_buffer={z}"
 
 
