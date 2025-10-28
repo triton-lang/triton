@@ -46,7 +46,6 @@ __all__ = [
     "language",
     "MockTensor",
     "must_use_result",
-    "LinearLayout",
     "next_power_of_2",
     "OutOfResources",
     "reinterpret",
