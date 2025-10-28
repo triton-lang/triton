@@ -13,7 +13,7 @@ from triton._internal_testing import (
 
 
 def convert_kernel(kernel, kernel_name, tmp_path):
-    converted = convert_triton_to_gluon(kernel)
+    converted = convert_triton_to_gluon([kernel])
 
     # Write converted kernel to a file so @gluon.jit can retrieve source
     mod_path = tmp_path / "converted_kernel.py"
