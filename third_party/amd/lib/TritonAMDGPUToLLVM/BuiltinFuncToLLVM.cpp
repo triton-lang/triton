@@ -114,7 +114,7 @@ private:
 
       // Get absolute value of x
       auto absX = rewriter.create<LLVM::FAbsOp>(loc, rewriter.getF32Type(),
-                                                 operands[0]);
+                                                operands[0]);
 
       // Calculate 2*|x|
       auto twoAbsX = rewriter.create<LLVM::FMulOp>(
@@ -144,7 +144,8 @@ private:
       // Apply the sign of the original input using copysign
       // tanh(x) = sign(x) * (1 - 2/(e^(2*|x|) + 1))
       const char *intrinsic = "llvm.copysign.f32";
-      auto args = llvm::SmallVector<Value>{posResult->getResult(0), operands[0]};
+      auto args =
+          llvm::SmallVector<Value>{posResult->getResult(0), operands[0]};
       replacementOp = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic,
                                                       returnType, args);
     }
