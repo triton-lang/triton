@@ -61,12 +61,24 @@ class SymmetricMemoryPool:
 
     def make_empty(
         self,
-        region: str,
         shape: Tuple[int, ...],
         dtype: torch.dtype,
+        region: str,
         region_offset: int = 0,
         clear: bool = False,
     ) -> Tuple[torch.Tensor, ...]:
+        """
+        Allocate symmetric tensors from a reserved region.
+
+        Args:
+            shape: Shape of the tensor to allocate.
+            dtype: Data type of the tensor to allocate.
+            region: Name of the reserved region to allocate from.
+            region_offset: Offset (in bytes) within the region to allocate from.
+            clear: If True, zero out the allocated tensors.
+        Returns:
+            A tuple of tensors, one per rank in the process group.
+        """
         if not self._is_initialized:
             raise RuntimeError("SymmetricMemoryPool is not initialized")
 
@@ -114,7 +126,6 @@ class SymmetricMemoryPool:
             return
 
         self.size = int(sum(region.size for region in self.regions.values()))
-        # Ensure types match symm_mem.empty overloads: size=int, device=torch.device
         self.buf = symm_mem.empty(self.size, dtype=torch.uint8, device=device)
         self.hdl = symm_mem.rendezvous(self.buf, group=group)
         self.bufs = tuple(
