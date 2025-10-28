@@ -385,7 +385,7 @@ def _attn_bwd(
     BLOCK_N2: tl.constexpr,  #
     BLK_SLICE_FACTOR: tl.constexpr,  #
     HEAD_DIM: tl.constexpr,
-    CASUAL: tl.constexpr,
+    CAUSAL: tl.constexpr,
 ):
     LN2: tl.constexpr = 0.6931471824645996  # = ln(2)
 
@@ -421,7 +421,7 @@ def _attn_bwd(
     k = tl.load(K + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d)
     v = tl.load(V + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d)
 
-    if CASUAL:
+    if CAUSAL:
         start_m = start_n
         num_steps = BLOCK_N1 // MASK_BLOCK_M1
         dk, dv = _attn_bwd_dkdv(dk, dv,  #
@@ -474,7 +474,7 @@ def _attn_bwd(
     m = tl.load(M + offs_m)
     m = m[:, None]
 
-    if CASUAL:
+    if CAUSAL:
         # Compute dQ for masked (diagonal) blocks.
         # NOTE: This code scans each row of QK^T backward (from right to left,
         # but inside each call to _attn_bwd_dq, from left to right), but that's
@@ -619,7 +619,7 @@ class _attention(torch.autograd.Function):
             HEAD_DIM=ctx.HEAD_DIM,  #
             num_warps=NUM_WARPS,  #
             num_stages=NUM_STAGES,  #
-            CASUAL=ctx.causal,  #
+            CAUSAL=ctx.causal,  #
         )
 
         return dq, dk, dv, None, None, None, None
@@ -634,7 +634,7 @@ TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 @pytest.mark.parametrize("H", [2, 48])
 @pytest.mark.parametrize("N_CTX", [128, 1024, (2 if is_hip() else 4) * 1024])
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
-@pytest.mark.parametrize("causal", [True])  # FIXME: Non-causal tests do not pass at the moment.
+@pytest.mark.parametrize("causal", [False, True])
 @pytest.mark.parametrize("warp_specialize", [False, True] if is_blackwell() else [False])
 @pytest.mark.parametrize("mode", ["fwd", "bwd"])
 @pytest.mark.parametrize("provider", ["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []))
