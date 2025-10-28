@@ -735,9 +735,9 @@ def matmul_ogs(x, w, bias,
             postprocess_fn1 = postprocess_fn1,
             postprocess_fn2 = postprocess_fn2,
         )
-        out_matmul = y.view(*out_matmul.shape[1:]).unsqueeze(0)
+        out_matmul = y.view(*memory["output"].shape).unsqueeze(0)
         if y_mx_scale is not None:
-            out_final_mx_scale = y_mx_scale.view(out_matmul.shape[-2], triton.cdiv(out_matmul.shape[-1], 32))
+            out_final_mx_scale = y_mx_scale.view(memory["output"].shape[-2], triton.cdiv(memory["output"].shape[-1], 32))
     # TODO: change `matmul_ogs` semantics and move this to another op!
     if scatter_indx is not None:
         mask = (scatter_indx.src_indx != -1).view(out_matmul.shape[-2]//routing_data.n_expts_act, routing_data.n_expts_act, 1)
