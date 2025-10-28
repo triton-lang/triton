@@ -653,8 +653,6 @@ public:
     auto oldAcc = dotOp.getC();
     auto newAcc = convertAndCastTensor(rewriter, oldAcc, mfmaEnc, mfmaAccType);
 
-    auto kWidth = kBase;
-
     Value newDot;
     if (withScale) {
       // If a scaled mfma instruction is chosen, we will rewrite the DotOp to a
@@ -664,11 +662,10 @@ public:
       if (failed(aScaledElemTy) || failed(bScaledElemTy))
         return failure();
 
-      assert(kWidth == 32);
       auto newAEncoding =
-          DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth / 2);
+          DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, 16);
       auto newBEncoding =
-          DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth / 2);
+          DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, 16);
 
       a = convertAndCastTensor(rewriter, a, newAEncoding,
                                mfmaInstr->aElementType);
@@ -679,9 +676,9 @@ public:
           aScaledElemTy.value(), bScaledElemTy.value(), /*fastMath=*/false);
     } else {
       auto newAEncoding =
-          ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth);
+          ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kBase);
       auto newBEncoding =
-          ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth);
+          ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kBase);
       a = convertAndCastTensor(rewriter, a, newAEncoding,
                                mfmaInstr->aElementType);
       b = convertAndCastTensor(rewriter, b, newBEncoding,
@@ -1735,7 +1732,7 @@ static std::optional<unsigned> deriveMfmaIntrinsicKBase(unsigned mDim, unsigned 
   return kBase;
 }
 
-static FailureOr<unsigned> computeKWidthForMfmaDotOperand(Value operand, unsigned operandIndex, Operation *consumerDotOp, ttg::AMDMfmaEncodingAttr consumerDotOpResultMfmaEncoding, const AssignKWidthOptions &opts) {
+static FailureOr<unsigned> computeKWidthForMfmaDotOperand(Value operand, unsigned operandIndex, tt::DotOpInterface consumerDotOp, ttg::AMDMfmaEncodingAttr consumerDotOpResultMfmaEncoding, const AssignKWidthOptions &opts) {
   auto shape = consumerDotOpResultMfmaEncoding.getInstrShape(); // [mDim, nDim, kDim]
   unsigned mDim = shape[0];
   unsigned nDim = shape[1];
@@ -1750,11 +1747,11 @@ static FailureOr<unsigned> computeKWidthForMfmaDotOperand(Value operand, unsigne
   
   unsigned candidate = *kBase * opts.kPack;
 
-  // TODO: Once refactored, remove cast and instead have consumerDotOp be a tt:DotOpInterface
   // TODO: Remove check for is chain dot tail and detect in more elegant way
-  if (isChainDotTail(dyn_cast<tt::DotOpInterface>(*consumerDotOp))) {
-    if (consumerDotOpResultMfmaEncoding.getElementBitWidth() == 16)
-      candidate = 8;
+  if (isChainDotTail(consumerDotOp)) {
+    auto operandType = cast<RankedTensorType>(operand.getType());
+    if (operandType.getElementType().isF16() || operandType.getElementType().isBF16())
+      candidate = 4;
     else
       candidate = *kBase;
   }
@@ -1809,34 +1806,24 @@ struct FixKWidthPattern : public OpRewritePattern<ttg::ConvertLayoutOp> {
 
     auto consumerDotOpResultMfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(consumerDotOpResultEncoding);
 
-    // TODO: refactor so that consumerDotOp is a tt:DotOpInterface
-    Operation *consumerDotOp = nullptr;
+    tt::DotOpInterface consumerDotOp = nullptr;
     unsigned operandIndex = 0;
     for (Operation *consumer : op->getResult(0).getUsers()) {
-      if (auto dot = dyn_cast<tt::DotOp>(consumer)) {
-        if (dot.getA() == op.getResult()) {
-          consumerDotOp = dot;
+      if (auto dotOp = dyn_cast<tt::DotOpInterface>(consumer)) {
+        if (dotOp.getA() == op.getResult()) {
+          consumerDotOp = dotOp;
           operandIndex = 0;
           break; 
         }
-        if (dot.getB() == op.getResult()) {
-          consumerDotOp = dot;
-          operandIndex = 1;
-          break; 
-        }
-      } else if (auto dotScaled = dyn_cast<tt::DotScaledOp>(consumer)) {
-        if (dotScaled.getA() == op.getResult()) {
-          consumerDotOp = dotScaled;
-          operandIndex = 0;
-          break; 
-        }
-        if (dotScaled.getB() == op.getResult()) {
-          consumerDotOp = dotScaled;
+        if (dotOp.getB() == op.getResult()) {
+          consumerDotOp = dotOp;
           operandIndex = 1;
           break; 
         }
       }
     }
+    if (!consumerDotOp)
+      return failure();
 
     std::optional<unsigned> maybeKWidth = computeKWidthForMfmaDotOperand(op.getOperand(), operandIndex, consumerDotOp, consumerDotOpResultMfmaEncoding, opts);
     if (!maybeKWidth.has_value())
@@ -1854,59 +1841,59 @@ struct FixKWidthPattern : public OpRewritePattern<ttg::ConvertLayoutOp> {
 };
 
 // Optional: enforce mxfp4 packed asymmetry directly on DotScaled operands if needed.
-struct FixDotScaledPackedKWidthPattern : public OpRewritePattern<tt::DotScaledOp> {
-  AssignKWidthOptions opts;
-  FixDotScaledPackedKWidthPattern(MLIRContext *ctx, const AssignKWidthOptions &opts, PatternBenefit b = 1)
-      : OpRewritePattern(ctx, b), opts(opts) {}
+// struct FixDotScaledPackedKWidthPattern : public OpRewritePattern<tt::DotScaledOp> {
+//   AssignKWidthOptions opts;
+//   FixDotScaledPackedKWidthPattern(MLIRContext *ctx, const AssignKWidthOptions &opts, PatternBenefit b = 1)
+//       : OpRewritePattern(ctx, b), opts(opts) {}
 
-  LogicalResult matchAndRewrite(tt::DotScaledOp dot, PatternRewriter &rewriter) const override {
-    auto opResultType = dyn_cast<RankedTensorType>(dot.getType());
-    if (!opResultType)
-      return failure();
+//   LogicalResult matchAndRewrite(tt::DotScaledOp dot, PatternRewriter &rewriter) const override {
+//     auto opResultType = dyn_cast<RankedTensorType>(dot.getType());
+//     if (!opResultType)
+//       return failure();
 
-    auto opResultEncoding = opResultType.getEncoding();
-    if (!isMfmaEncoding(opResultEncoding))
-      return failure();
-    auto opResultMfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(opResultEncoding);
+//     auto opResultEncoding = opResultType.getEncoding();
+//     if (!isMfmaEncoding(opResultEncoding))
+//       return failure();
+//     auto opResultMfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(opResultEncoding);
 
-    auto aElementType = dot.getAElemType();
-    auto bElementType = dot.getBElemType();
-    auto isE2M1 = [](tt::ScaleDotElemType t) { return t == tt::ScaleDotElemType::E2M1; };
-    if (!(isE2M1(aElementType) || isE2M1(bElementType)))
-      return failure();
+//     auto aElementType = dot.getAElemType();
+//     auto bElementType = dot.getBElemType();
+//     auto isE2M1 = [](tt::ScaleDotElemType t) { return t == tt::ScaleDotElemType::E2M1; };
+//     if (!(isE2M1(aElementType) || isE2M1(bElementType)))
+//       return failure();
 
-    auto fixOne = [&](Value v, unsigned opIdx, unsigned desiredKWidth) -> LogicalResult {
-      auto convertLayoutOp = dyn_cast_or_null<ttg::ConvertLayoutOp>(v.getDefiningOp());
-      if (!convertLayoutOp)
-        return failure();
-      auto ty = dyn_cast<RankedTensorType>(convertLayoutOp.getResult().getType());
-      if (!ty)
-        return failure();
-      auto enc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(ty.getEncoding());
-      if (!enc)
-        return failure();
-      if (enc.getKWidth() == desiredKWidth)
-        return failure();
+//     auto fixOne = [&](Value v, unsigned opIdx, unsigned desiredKWidth) -> LogicalResult {
+//       auto convertLayoutOp = dyn_cast_or_null<ttg::ConvertLayoutOp>(v.getDefiningOp());
+//       if (!convertLayoutOp)
+//         return failure();
+//       auto ty = dyn_cast<RankedTensorType>(convertLayoutOp.getResult().getType());
+//       if (!ty)
+//         return failure();
+//       auto enc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(ty.getEncoding());
+//       if (!enc)
+//         return failure();
+//       if (enc.getKWidth() == desiredKWidth)
+//         return failure();
 
-      auto newEnc = ttg::DotOperandEncodingAttr::get(dot.getContext(), opIdx, opResultMfmaEncoding, desiredKWidth);
-      auto newTy = RankedTensorType::get(ty.getShape(), ty.getElementType(), newEnc);
-      auto newCvt = rewriter.create<ttg::ConvertLayoutOp>(convertLayoutOp.getLoc(), newTy, convertLayoutOp.getOperand());
-      if (opIdx == 0) dot.setOperand(0, newCvt.getResult());
-      else            dot.setOperand(1, newCvt.getResult());
-      return success();
-    };
+//       auto newEnc = ttg::DotOperandEncodingAttr::get(dot.getContext(), opIdx, opResultMfmaEncoding, desiredKWidth);
+//       auto newTy = RankedTensorType::get(ty.getShape(), ty.getElementType(), newEnc);
+//       auto newCvt = rewriter.create<ttg::ConvertLayoutOp>(convertLayoutOp.getLoc(), newTy, convertLayoutOp.getOperand());
+//       if (opIdx == 0) dot.setOperand(0, newCvt.getResult());
+//       else            dot.setOperand(1, newCvt.getResult());
+//       return success();
+//     };
 
-    if (isE2M1(aElementType)) {
-      (void)fixOne(dot.getA(), 0, 4);
-      (void)fixOne(dot.getB(), 1, 8);
-      return success();
-    } else {
-      (void)fixOne(dot.getA(), 0, 8);
-      (void)fixOne(dot.getB(), 1, 4);
-      return success();
-    }
-  }
-};
+//     if (isE2M1(aElementType)) {
+//       (void)fixOne(dot.getA(), 0, 4);
+//       (void)fixOne(dot.getB(), 1, 8);
+//       return success();
+//     } else {
+//       (void)fixOne(dot.getA(), 0, 8);
+//       (void)fixOne(dot.getB(), 1, 4);
+//       return success();
+//     }
+//   }
+// };
 
 } // namespace
 
