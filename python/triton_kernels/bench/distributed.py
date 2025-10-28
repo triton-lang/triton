@@ -292,6 +292,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
         d_input=dim1,
         d_model=dim2,
         n_expts_act=n_expts_act,
+        n_expts_tot=n_expts_tot,
         n_ranks=world_size,
         dtype=x0.dtype,
         group=dist.group.WORLD,
