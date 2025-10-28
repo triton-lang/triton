@@ -34,3 +34,23 @@ void triton::gpu::setStageCluster(OpBuilder &b, Operation *op,
                 b.getI32IntegerAttr(stageCluster->second));
   }
 }
+
+void triton::gpu::propagatePartitions(Operation *op, Partition &partition) {
+  SetVector<int> partitionIds;
+  partitionIds.insert(partition.getIndex());
+  propagatePartitions(op, partitionIds);
+}
+
+void triton::gpu::propagatePartitions(Operation *op,
+                                      const SetVector<int> &partitionSet) {
+  auto parent = op->getParentOp();
+  assert(parent);
+
+  auto partitionIds = *getPartitionIds(parent);
+  partitionIds.insert(partitionSet.begin(), partitionSet.end());
+  setPartition(parent, partitionIds);
+
+  if (parent->hasAttr("tt.warp_specialize"))
+    return;
+  propagatePartitions(parent, partitionSet);
+}
