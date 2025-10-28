@@ -4,7 +4,7 @@ import numpy as np
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hopper, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
+from triton._internal_testing import is_hopper, is_sm12x, is_interpreter, numpy_random, to_triton, unwrap_tensor, tma_dtypes, to_numpy
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
 from triton._internal_testing import is_cuda, is_hip, is_hip_cdna3
@@ -1474,6 +1474,7 @@ def tma_scatter_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
 @pytest.mark.skipif(is_hopper(), reason="TMA Scatter is not supported on hopper")
+@pytest.mark.skipif(is_sm12x(), reason="TMA Scatter is not supported on sm120")
 def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
         pytest.skip()

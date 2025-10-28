@@ -86,6 +86,16 @@ public:
 
   bool supportVectorizedAtomics() const override;
 
+  // Returns true if the target supports per lane addresses into LDS for
+  // direct-to-lds loads. Some architectures (e.g. GFX9) do not support
+  // scattering and instead have to write warp coalesced into LDS
+  bool supportsDirectToLDSScattering() const;
+
+  // Some architectures (GFX9) require alias information on direct-to-lds loads
+  // and loads from LDS so LLVM does not add conservative waits between those
+  // ops. For such case we ensure syncronization between data hazards via
+  // ttg.async_wait
+  bool requiresAliasInfoForAsyncOps() const;
   bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
 
   void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,

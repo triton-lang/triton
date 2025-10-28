@@ -417,20 +417,25 @@ void createTMABarrierAndWait(
 
 // Check if load requires additional buffer for a mma pipelining
 bool loadRequiresAdditionalBuffer(Operation *loadOp) {
-  auto skipViewOps = [](Operation *op) -> Operation * {
-    while (op->hasOneUse() && op->hasTrait<OpTrait::MemDescViewTrait>()) {
-      op = *op->getUsers().begin();
-    }
-    return op;
-  };
+  std::function<void(Operation *, SmallVector<Operation *> & out)>
+      collectNonViewUsers = [&](Operation *op, SmallVector<Operation *> &out) {
+        for (Operation *user : op->getUsers()) {
+          if (user->hasTrait<OpTrait::MemDescViewTrait>())
+            collectNonViewUsers(user, out);
+          else
+            out.push_back(user);
+        }
+      };
   // Pattern match the op sequence used for loading mmav3 operands
   if (!mustLoadToRegisters(loadOp)) {
     assert(loadOp->hasOneUse());
     ttg::LocalAllocOp alloc =
         dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin());
     if (alloc) {
-      return llvm::any_of(alloc->getUsers(), [&](Operation *op) {
-        return isa<ttng::WarpGroupDotOp>(skipViewOps(op));
+      SmallVector<Operation *> nonViewUsers;
+      collectNonViewUsers(alloc, nonViewUsers);
+      return llvm::any_of(nonViewUsers, [&](Operation *op) {
+        return isa<ttng::WarpGroupDotOp>(op);
       });
     }
   }

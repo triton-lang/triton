@@ -608,6 +608,30 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
+bool TargetInfo::supportsDirectToLDSScattering() const {
+  switch (getISAFamily()) {
+  case ISAFamily::GFX1250:
+    return true;
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+    return false;
+  default:
+    llvm::report_fatal_error(
+        "Unsupported architecture for direct to lds loads");
+    return false;
+  }
+}
+
+bool TargetInfo::requiresAliasInfoForAsyncOps() const {
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+    return true;
+  default:
+    return false;
+  }
+}
+
 bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
   switch (getISAFamily()) {
   case ISAFamily::CDNA3:
@@ -616,6 +640,10 @@ bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
   case ISAFamily::CDNA4:
     // Disable 8, 16, 96 bits because they get extended to 32/128 bit.
     return llvm::is_contained({128, /*96, */ 32, /*16, 8*/}, bitWidth);
+  case ISAFamily::GFX1250:
+    // Disable 8, 16 bits because they get extended to 32 bit and therefore
+    // overwrite. 96 is not a pow2 and generally not useful in Triton
+    return llvm::is_contained({128, 64, /*96, */ 32, /*16, 8*/}, bitWidth);
   default:
     break;
   }
@@ -625,7 +653,8 @@ bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
 
 void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                        Operation *llLoadOp) const {
-  AMD::addLocalLoadNoAliasScope(localLoadOp, cast<LLVM::LoadOp>(llLoadOp));
+  if (requiresAliasInfoForAsyncOps())
+    AMD::addLocalLoadNoAliasScope(localLoadOp, cast<LLVM::LoadOp>(llLoadOp));
 }
 
 } // namespace mlir::triton::AMD

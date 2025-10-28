@@ -807,6 +807,11 @@ LogicalResult MemDescIndexOp::verify() {
     return emitError("src and dst must have the same type of encoding");
   }
 
+  if (dstTy.getAllocShape() != dstTy.getShape() ||
+      srcTy.getAllocShape() != srcTy.getShape()) {
+    return emitError("alloc shape must match shape for both result and src");
+  }
+
   if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
     // We support only 3D -> 2D subviews with only first offset being non-zero.
     if (srcTy.getRank() != 3 || dstTy.getRank() != 2) {
