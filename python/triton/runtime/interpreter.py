@@ -1183,12 +1183,13 @@ def _rewrap_tensor(t, original_tensor):
 
 class GridExecutor:
 
-    def __init__(self, fn, arg_names, grid):
+    def __init__(self, fn, arg_names, grid, pre_run_hooks=[]):
         from .jit import _normalize_ty  # TODO: modularize
 
         self.fn = fn
         self.arg_names = arg_names
         self.grid = grid
+        self.pre_run_hooks = pre_run_hooks
         __annotations__ = {name: _normalize_ty(ty) for name, ty in fn.__annotations__.items()}
         self.constexprs = [name for name in arg_names if __annotations__.get(name) == "constexpr"]
 
@@ -1263,6 +1264,9 @@ class GridExecutor:
         kwargs = {k: v for k, v in kwargs.items() if k in argspec.args}
         # copy arguments to the host
         args_hst, kwargs_hst = self._init_args_hst(args_dev, kwargs)
+        # run pre-run hooks
+        for hook in self.pre_run_hooks:
+            hook(*args_hst, **kwargs_hst)
         # remaps core language functions to interpreted ones
         _patch_lang(self.fn)
         # we need to copy arguments to the host for the interpreter
@@ -1381,15 +1385,19 @@ class InterpretedFunction:
         self.fn = fn
         self.rewriter = FunctionRewriter(fn, **kwargs)
         self.kwargs = kwargs
+        self.pre_run_hooks = []
 
         def run(*args, **kwargs):
-            grid = kwargs["grid"]
             fn = self.rewrite()
-            return GridExecutor(fn, self.arg_names, grid)(*args, **kwargs)
+            return GridExecutor(fn, self.arg_names, kwargs["grid"], self.pre_run_hooks)(*args, **kwargs)
 
         self.run = run
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
+
+    def add_pre_run_hook(self, hook):
+        assert callable(hook)
+        self.pre_run_hooks.append(hook)
 
     def rewrite(self):
         if self.fn not in self.rewritten_fn:
@@ -1401,8 +1409,7 @@ class InterpretedFunction:
         return self.fn.__name__
 
     def __getitem__(self, grid):
-        fn = self.rewrite()
-        return GridExecutor(fn, self.arg_names, grid)
+        return lambda *args, **kwargs: self.run(*args, grid=grid, **kwargs)
 
     def __call__(self, *args, **kwargs):
         # This is a device function call
