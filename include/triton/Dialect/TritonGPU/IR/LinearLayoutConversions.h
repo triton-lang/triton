@@ -6,16 +6,18 @@
 
 #include <optional>
 
+#include "mlir/IR/Types.h"
+#include "triton/Dialect/Triton/IR/Interfaces.h"
 #include "triton/Tools/LinearLayout.h"
 
 namespace mlir::triton {
 enum class ScaleDotElemType : uint32_t;
+class TensorOrMemDesc; // IR interface forward-declare
 } // namespace mlir::triton
 
 namespace mlir::triton::gpu {
 class SwizzledSharedEncodingAttr;
 class NVMMASharedEncodingAttr;
-class TensorOrMemDesc;
 class MemDescType;
 class CTALayoutAttr;
 
@@ -48,7 +50,7 @@ class CTALayoutAttr;
 // shared layouts with nvmma_shared layout) but is otherwise unused.
 LinearLayout toLinearLayout(RankedTensorType type);
 LinearLayout toLinearLayout(MemDescType type);
-LinearLayout toLinearLayout(TensorOrMemDesc type);
+LinearLayout toLinearLayout(::mlir::Type type);
 // UNSAFE OVERLOAD!
 // If you call this with a SharedMemoryEncodingAttr, you should call it
 // with the allocShape as the shape, otherwise the layout will be incorrect!
