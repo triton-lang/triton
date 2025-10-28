@@ -815,30 +815,18 @@ SetVector<int> assignIfOpPartitions(scf::IfOp ifOp) {
   for (int i = 0; i < thenYieldPartitions.size(); ++i) {
     auto &thenIds = thenYieldPartitions[i];
     auto &elseIds = elseYieldPartitions[i];
-    if (thenIds == elseIds || elseIds.empty()) {
-      outputPartitions.push_back(thenIds);
-    } else if (thenIds.empty()) {
-      outputPartitions.push_back(elseIds);
-    } else {
-      // we expect all yields that produce value have same partition ids
-      // we allow for possibility that then/else yield may return tokens
-      // produced by different partitions, and if so we pick the partition
-      // of the token producer outside the if-stmt
-      // that accomodates matmul case that we have at the moment
-      assert(thenIds.size() == 1);
-      assert(elseIds.size() == 1);
-      auto thenId = thenIds.front();
-      auto elseId = elseIds.front();
-      auto thenYieldOpnd = ifOp.thenYield()->getOperand(i);
-      auto elseYieldOpnd = ifOp.elseYield()->getOperand(i);
-      assert(isa<AsyncTokenType>(thenYieldOpnd.getType()));
-      assert(isa<AsyncTokenType>(elseYieldOpnd.getType()));
-      if (ifOp.thenBlock()->findAncestorOpInBlock(
-              *thenYieldOpnd.getDefiningOp())) {
+
+    if (auto yieldOpnd = ifOp.thenYield()->getOperand(i);
+        isa<AsyncTokenType>(yieldOpnd.getType())) {
+      // Heuristic: when if-op yields an async-token, the output partition of
+      //            the token is that of its producer
+      if (ifOp.thenBlock()->findAncestorOpInBlock(*yieldOpnd.getDefiningOp())) {
         outputPartitions.push_back(elseIds);
       } else {
         outputPartitions.push_back(thenIds);
       }
+    } else {
+      outputPartitions.push_back(!thenIds.empty() ? thenIds : elseIds);
     }
   }
   return setOutputPartitions(ifOp, ifOpPartitions, outputPartitions);
