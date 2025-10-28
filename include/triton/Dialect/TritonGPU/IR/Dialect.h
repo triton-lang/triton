@@ -266,6 +266,12 @@ void dumpHWLayout(RankedTensorType tensorType);
 // Return a string representation of the layout of the tensor.
 std::string getLayoutStr(RankedTensorType tensorType, bool useHWPointOfView);
 
+// Return a string representation of the shared layout of the tensor.
+std::string getSharedLayoutStr(LinearLayout &ll, bool useHWPointOfView);
+
+// Return a string representation of the distributed layout of the tensor.
+std::string getDistributedLayoutStr(LinearLayout &ll, bool useHWPointOfView);
+
 template <typename T>
 llvm::SmallVector<T> expandMatrixShapeWithBatch(llvm::ArrayRef<T> s);
 

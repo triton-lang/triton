@@ -3307,20 +3307,17 @@ static std::string paddedString(int value, int max) {
   return str;
 }
 
-std::string getSharedLayoutStr(RankedTensorType type, bool useHWPointOfView) {
-  if (!type)
-    return "";
-
+std::string mlir::triton::gpu::getSharedLayoutStr(LinearLayout &ll,
+                                                  bool useHWPointOfView) {
   // This RankedTensorType is a MemDescType (?!)
-  auto shape = type.getShape();
-  auto layout = type.getEncoding();
-  LinearLayout ll = triton::gpu::toLinearLayout(shape, layout);
+  auto outDimNames = llvm::to_vector(ll.getOutDimNames());
+  auto shape = convertType<int64_t>(llvm::to_vector(ll.getOutDimSizes()));
+  auto *ctx = outDimNames[0].getContext();
 
-  StringAttr kOffset = StringAttr::get(type.getContext(), "offset");
-  StringAttr kBlock = StringAttr::get(type.getContext(), "block");
-  int64_t tensorSize = product(type.getShape());
-  auto enc = type.getEncoding();
-  unsigned numBlocks = getNumCTAs(enc);
+  StringAttr kOffset = StringAttr::get(ctx, "offset");
+  StringAttr kBlock = StringAttr::get(ctx, "block");
+  int64_t tensorSize = product(shape);
+  unsigned numBlocks = ll.getInDimSize(kBlock);
   int32_t blockSize = tensorSize / numBlocks;
 
   // elementMapping is for the non-hw layout, offsetMapping for hw-layout
@@ -3374,7 +3371,7 @@ std::string getSharedLayoutStr(RankedTensorType type, bool useHWPointOfView) {
   std::string layoutStr;
 
   if (!useHWPointOfView) {
-    int rank = type.getRank();
+    int rank = shape.size();
     bool newLine = true;
     for (int i = 0; i < tensorSize; i++) {
       auto indices = delinearizeIndex(i, shape);
@@ -3422,21 +3419,19 @@ std::string getSharedLayoutStr(RankedTensorType type, bool useHWPointOfView) {
   return layoutStr;
 }
 
-std::string getDistributedLayoutStr(RankedTensorType tensorType,
-                                    bool useHWPointOfView) {
-  auto layout = tensorType.getEncoding();
-  if (!layout)
-    return "";
+std::string mlir::triton::gpu::getDistributedLayoutStr(LinearLayout &ll,
+                                                       bool useHWPointOfView) {
+  auto inDimNames = llvm::to_vector(ll.getInDimNames());
+  auto *ctx = inDimNames[0].getContext();
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+  StringAttr kBlock = StringAttr::get(ctx, "block");
 
-  StringAttr kRegister = StringAttr::get(tensorType.getContext(), "register");
-  StringAttr kLane = StringAttr::get(tensorType.getContext(), "lane");
-  StringAttr kWarp = StringAttr::get(tensorType.getContext(), "warp");
-  StringAttr kBlock = StringAttr::get(tensorType.getContext(), "block");
-
-  LinearLayout ll = toLinearLayout(tensorType);
-  int64_t tensorSize = product(tensorType.getShape());
+  int64_t tensorSize = ll.getTotalOutDimSize();
   std::vector<std::string> elementMapping(tensorSize);
   std::vector<std::string> threadMapping;
+  auto shape = convertType<int64_t>(llvm::to_vector(ll.getOutDimSizes()));
   unsigned threadsPerWarp = ll.getInDimSize(kLane);
   unsigned numWarpsPerCTA = ll.getInDimSize(kWarp);
   unsigned numBlocks = ll.getInDimSize(kBlock);
@@ -3456,7 +3451,7 @@ std::string getDistributedLayoutStr(RankedTensorType tensorType,
           int stride = 1;
           for (int i = outputs.size() - 1; i >= 0; i--) {
             linearizedIdx += outputs[i].second * stride;
-            stride *= tensorType.getDimSize(i);
+            stride *= shape[i];
           }
           std::string &value = elementMapping[linearizedIdx];
           if (!value.empty())
@@ -3476,8 +3471,7 @@ std::string getDistributedLayoutStr(RankedTensorType tensorType,
           for (int i = 0; i < outputs.size(); i++) {
             if (i > 0)
               threadInfo += ",";
-            threadInfo +=
-                paddedString(outputs[i].second, tensorType.getDimSize(i));
+            threadInfo += paddedString(outputs[i].second, shape[i]);
           }
           threadInfo += ")";
           threadMapping.push_back(threadInfo);
@@ -3488,13 +3482,13 @@ std::string getDistributedLayoutStr(RankedTensorType tensorType,
   std::string layoutStr;
   if (!useHWPointOfView) {
     // Printing the threads containing each elements of the tensor.
-    int rank = tensorType.getRank();
+    int rank = ll.getNumOutDims();
     bool newLine = true;
     for (int i = 0; i < tensorSize; i++) {
-      auto indices = delinearizeIndex(i, tensorType.getShape());
+      auto indices = delinearizeIndex(i, shape);
       int numOpenBracket = 0;
       for (int j = rank - 1; j >= 0; j--) {
-        if (indices[j] % tensorType.getDimSize(j) != 0)
+        if (indices[j] % shape[j] != 0)
           break;
         layoutStr += "[";
         numOpenBracket++;
@@ -3506,13 +3500,13 @@ std::string getDistributedLayoutStr(RankedTensorType tensorType,
       }
 
       layoutStr += elementMapping[i];
-      auto nextIndices = delinearizeIndex(i + 1, tensorType.getShape());
+      auto nextIndices = delinearizeIndex(i + 1, shape);
       for (int j = rank - 1; j >= 0; j--) {
-        if (nextIndices[j] % tensorType.getDimSize(j) != 0)
+        if (nextIndices[j] % shape[j] != 0)
           break;
         layoutStr += "]";
       }
-      if (nextIndices.back() % tensorType.getShape().back() == 0) {
+      if (nextIndices.back() % shape.back() == 0) {
         layoutStr += "\n";
         newLine = true;
       } else {
@@ -3578,15 +3572,16 @@ mlir::triton::gpu::expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o) {
 std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
                                             bool useHWPointOfView) {
   auto layout = tensorType.getEncoding();
+  LinearLayout ll = triton::gpu::toLinearLayout(tensorType.getShape(), layout);
 
   // tensorType is needed later on (e.g., getDimSize(j)), so we still have to
   // pass it as a param
   // TODO: Pass TensorOrMemDesc instead of RankedTensorType in
   // triton-tensor-layout.cpp
   if (mlir::isa<SharedEncodingTrait>(layout)) {
-    return getSharedLayoutStr(tensorType, useHWPointOfView);
+    return getSharedLayoutStr(ll, useHWPointOfView);
   } else if (mlir::isa<DistributedEncodingTrait>(layout)) {
-    return getDistributedLayoutStr(tensorType, useHWPointOfView);
+    return getDistributedLayoutStr(ll, useHWPointOfView);
   }
 
   // else unimplemented, return error
