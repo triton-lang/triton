@@ -400,7 +400,6 @@ class PartitionArgs:
     SUBTILE_FACTOR: gl.constexpr
     num_warps: gl.constexpr
 
-    @gluon.constexpr_function
     def __init__(self, a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_bufs,
                  acc_empty_bars, acc_ready_bars, SUBTILE_FACTOR, num_warps):
         self.a_desc = a_desc
@@ -413,8 +412,8 @@ class PartitionArgs:
         self.acc_bufs = acc_bufs
         self.acc_empty_bars = acc_empty_bars
         self.acc_ready_bars = acc_ready_bars
-        self.SUBTILE_FACTOR = gl.constexpr(SUBTILE_FACTOR)
-        self.num_warps = gl.constexpr(num_warps)
+        self.SUBTILE_FACTOR = SUBTILE_FACTOR
+        self.num_warps = num_warps
 
 
 # Counter abstraction for tracking barrier index and phase.
@@ -424,11 +423,10 @@ class Counter:
     phase: gl.tensor
     num_barriers: gl.constexpr
 
-    @gluon.constexpr_function
     def __init__(self, index, phase, num_barriers):
         self.index = index
         self.phase = phase
-        self.num_barriers = gl.constexpr(num_barriers)
+        self.num_barriers = num_barriers
 
     @gluon.jit
     def create(phase, num_barriers: gl.constexpr):
