@@ -137,8 +137,15 @@ def reduce_scatter(
 # TODO: clean up duplicate code with triton_kernels.test_distributed.py
 # TODO: Support nonuniform expert assignment
 def routing(
-    x, logits, n_expts_act, sm_first: bool = False, y_indx: Optional[torch.Tensor] = None, EP: int = 1, TP: int = 1,
-    expt_assignment: Optional[ExptAssignment] = None, mode: Optional[str] = None,
+    x,
+    logits,
+    n_expts_act,
+    sm_first: bool = False,
+    y_indx: Optional[torch.Tensor] = None,
+    EP: int = 1,
+    TP: int = 1,
+    expt_assignment: Optional[ExptAssignment] = None,
+    mode: Optional[str] = None,
 ) -> Tuple[torch.Tensor, RoutingData, GatherIndx, ScatterIndx, Optional[ReduceScatterMetadata]]:
     n_expts_tot = logits.shape[-1]
     if _is_distributed_launch() and mode:
@@ -316,7 +323,8 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
         xg = x.to(wg.dtype if n_expts_tot > 1 else x.dtype)
         if n_expts_tot > 1:  # sparse
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            x, rdata, gi, si, metadata = routing(x, logits, n_expts_act, EP=EP, TP=TP, expt_assignment=expt_assignment, mode="ep_sharding")
+            x, rdata, gi, si, metadata = routing(x, logits, n_expts_act, EP=EP, TP=TP, expt_assignment=expt_assignment,
+                                                 mode="ep_sharding")
         else:  # dense
             x = all_gather(x, dim=0)
             rdata = gi = si = metadata = None
