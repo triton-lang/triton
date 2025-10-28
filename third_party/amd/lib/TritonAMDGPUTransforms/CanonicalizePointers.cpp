@@ -398,7 +398,7 @@ createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
   // boundaries (TODO: giuseros).
   if (llvm::isa<BlockArgument>(expr)) {
     Value scalarZero = arith::ConstantIntOp::create(
-        rewriter, loc, static_cast<int64_t>(0), bitness);
+        rewriter, loc, static_cast<int64_t>(0), static_cast<unsigned>(bitness));
     return {scalarZero, expr};
   }
 
@@ -431,7 +431,8 @@ createDecomposeOffsetFromExpr(RewriterBase &rewriter, Location loc, Value expr,
             // Base case 3: it is not a supported operation. We assume no
             // uniform part
             Value scalarZero = arith::ConstantIntOp::create(
-                rewriter, loc, static_cast<int64_t>(0), bitness);
+                rewriter, loc, static_cast<int64_t>(0),
+                static_cast<unsigned>(bitness));
             return std::make_pair(scalarZero, expr);
           });
 
@@ -1677,7 +1678,7 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
       if (!isa<tt::PointerType>(arg.getType()))
         continue;
 
-      int64_t bitness = 64;
+      unsigned bitness = 64;
       if (auto pointerRangeAttr =
               newOp.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range"))
         bitness = pointerRangeAttr.getInt();
