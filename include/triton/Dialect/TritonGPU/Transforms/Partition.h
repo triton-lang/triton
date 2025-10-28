@@ -126,6 +126,7 @@ void setPartition(Operation *op, const SetVector<int> &partitionIds);
 void setPartitionOutputs(Operation *op,
                          ArrayRef<SetVector<int>> partitionOutputsIds);
 SmallVector<SetVector<int>, 4> getPartitionOutputs(Operation *op);
+SetVector<int> getPartitionIds(OpOperand *use);
 
 } // namespace mlir::triton::gpu
 

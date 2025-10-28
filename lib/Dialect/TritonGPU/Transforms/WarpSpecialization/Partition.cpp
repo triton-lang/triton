@@ -249,6 +249,18 @@ SmallVector<SetVector<int>, 4> getPartitionOutputs(Operation *op) {
   return partitionOutputsIds;
 }
 
+SetVector<int> getPartitionIds(OpOperand *use) {
+  auto owner = use->getOwner();
+  if (isa<scf::YieldOp>(owner)) {
+    return getPartitionOutputs(owner->getParentOp())[use->getOperandNumber()];
+  } else if (scf::ForOp forOp = dyn_cast<scf::ForOp>(owner)) {
+    int idx = use->getOperandNumber() - forOp.getNumControlOperands();
+    return idx >= 0 ? getPartitionOutputs(owner)[idx] : *getPartitionIds(forOp);
+  } else {
+    return *getPartitionIds(owner);
+  }
+}
+
 bool hasPartition(Operation *op) { return getPartitionIds(op) != std::nullopt; }
 
 } // namespace mlir::triton::gpu
