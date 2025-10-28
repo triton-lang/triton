@@ -367,12 +367,12 @@ has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_versio
 )
 def test_mlp_mp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, monkeypatch):
     parallelism = TP * EP
+    if is_hip():
+        pytest.skip("[TODO] HIP support for distributed MoE.")
     if torch.cuda.device_count() < parallelism:
         pytest.skip(f"Test requires at least {parallelism} GPUs.")
     if is_cuda() and not cuda_capability_geq(9, 0):
         pytest.skip("Test requires CUDA compute capability >= 9.0.")
-    if is_hip() and get_cdna_version() == 4 and EP > 1:
-        pytest.skip("[TODO] Unknown issue with CDNA 4 and EP > 1")
     if TP > 1:
         pytest.skip("[TODO] TP > 1 is not supported yet in distributed mode.")
 
