@@ -405,7 +405,6 @@ void init_gluon_ir(py::module &&m) {
              auto ctx = self.getContext();
              auto ll = ttg::chooseScaledWmmaScaleLayout(
                  ctx, opIdx, shape, mfmaMDim, tilesPerWarp, warpsPerCTA);
-             llvm::outs() << "scale ll: " << ll << "\n";
              auto attr = ttg::LinearEncodingAttr::get(ctx, ll);
              return layoutToGluon(attr);
            })
