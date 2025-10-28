@@ -372,6 +372,116 @@ tt.func @invalid_attribute(%lb: i32, %ub: i32, %step: i32) {
 
 module attributes {"ttg.num-warps" = 4 : i32} {
 
+// CHECK-LABEL: @loop_carried_dep
+tt.func @loop_carried_dep(%lb: i32, %ub: i32, %step: i32) {
+  %init = arith.constant dense<0> : !ty
+  // CHECK: [[ABUF:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi32, {{.*}}>
+  // CHECK-NEXT: [[AREF:%.*]] = nvws.aref.create [[ABUF]]
+
+  // CHECK: scf.for [[IV:%.*]] = [[LB:%.*]] to [[UB:%.*]] step [[STEP:%.*]] iter_args([[PREV:%.*]] = {{.*}}, [[LAST:%.*]] = {{.*}})
+  scf.for %i = %lb to %ub step %step iter_args(%iv = %init) -> (!ty) : i32 {
+    // CHECK-NEXT: [[NEXT:%.*]] = "op_next"([[PREV]]) {ttg.partition = array<i32: 0>}
+    // CHECK-NEXT: [[PUT_BUF:%.*]], [[PUT_TOK:%.*]] = nvws.aref.put.enter [[AREF]] {ttg.partition = array<i32: 0>}
+    // CHECK-NEXT: ttg.local_store [[NEXT]], [[PUT_BUF]] {ttg.partition = array<i32: 0>}
+    // CHECK-NEXT: nvws.aref.put.exit [[AREF]], [[PUT_TOK]] [#nvws.async_op<none>] {ttg.partition = array<i32: 0>}
+    %next = "op_next"(%iv) {ttg.partition = array<i32: 0>} : (!ty) -> !ty
+
+    // CHECK-NEXT: [[GET_BUF:%.*]], [[GET_TOK:%.*]] = nvws.aref.get.enter [[AREF]] {ttg.partition = array<i32: 1>}
+    // CHECK-NEXT: [[LOADED:%.*]] = ttg.local_load [[GET_BUF]] {ttg.partition = array<i32: 1>}
+    // CHECK-NEXT: nvws.aref.get.exit [[AREF]], [[GET_TOK]] [#nvws.async_op<none>] {ttg.partition = array<i32: 1>}
+    // CHECK-NEXT: "op_use"([[LAST]], [[LOADED]]) {ttg.partition = array<i32: 1>}
+    "op_use"(%iv, %next) {ttg.partition = array<i32: 1>} : (!ty, !ty) -> ()
+
+    // CHECK-NEXT: scf.yield [[NEXT]], [[LOADED]]
+    scf.yield %next : !ty
+  } {ttg.partition.stages = [0, 0], ttg.warp_specialize.tag = 0 : i32}
+  // CHECK: ttg.local_dealloc [[ABUF]]
+  tt.return
+}
+
+// CHECK-LABEL: @loop_carried_dep_multi_consumer
+tt.func @loop_carried_dep_multi_consumer(%lb: i32, %ub: i32, %step: i32) {
+  %init = arith.constant dense<0> : !ty
+  // CHECK: [[ABUF:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi32, {{.*}}>
+  // CHECK-NEXT: [[AREF:%.*]] = nvws.aref.create [[ABUF]]
+  // CHECK: scf.for [[IV:%.*]] = [[LB:%.*]] to [[UB:%.*]] step [[STEP:%.*]] iter_args([[ARG4:%.*]] = {{.*}}, [[ARG5:%.*]] = {{.*}}, [[ARG6:%.*]] = {{.*}})
+  scf.for %i = %lb to %ub step %step iter_args(%iv = %init) -> (!ty) : i32 {
+    // CHECK-NEXT: [[NEXT:%.*]] = "op_next"([[ARG4]]) {ttg.partition = array<i32: 0>}
+    %next = "op_next"(%iv) {ttg.partition = array<i32: 0>} : (!ty) -> !ty
+    // CHECK-NEXT: [[PUT_BUF:%.*]], [[PUT_TOK:%.*]] = nvws.aref.put.enter [[AREF]] {ttg.partition = array<i32: 0>}
+    // CHECK-NEXT: ttg.local_store [[NEXT]], [[PUT_BUF]] {ttg.partition = array<i32: 0>}
+    // CHECK-NEXT: nvws.aref.put.exit [[AREF]], [[PUT_TOK]] [#nvws.async_op<none>] {ttg.partition = array<i32: 0>}
+
+    // CHECK-NEXT: [[GET_BUF1:%.*]], [[GET_TOK1:%.*]] = nvws.aref.get.enter [[AREF]] {ttg.partition = array<i32: 1>}
+    // CHECK-NEXT: [[LOAD1:%.*]] = ttg.local_load [[GET_BUF1]] {ttg.partition = array<i32: 1>}
+    // CHECK-NEXT: nvws.aref.get.exit [[AREF]], [[GET_TOK1]] [#nvws.async_op<none>] {ttg.partition = array<i32: 1>}
+    // CHECK-NEXT: "op_use"([[ARG5]], [[LOAD1]]) {ttg.partition = array<i32: 1>}
+    "op_use"(%iv, %next) {ttg.partition = array<i32: 1>} : (!ty, !ty) -> ()
+
+    // CHECK-NEXT: [[GET_BUF2:%.*]], [[GET_TOK2:%.*]] = nvws.aref.get.enter [[AREF]] {ttg.partition = array<i32: 2>}
+    // CHECK-NEXT: [[LOAD2:%.*]] = ttg.local_load [[GET_BUF2]] {ttg.partition = array<i32: 2>}
+    // CHECK-NEXT: nvws.aref.get.exit [[AREF]], [[GET_TOK2]] [#nvws.async_op<none>] {ttg.partition = array<i32: 2>}
+    // CHECK-NEXT: "op_use"([[ARG6]], [[LOAD2]]) {ttg.partition = array<i32: 2>}
+    "op_use"(%iv, %next) {ttg.partition = array<i32: 2>} : (!ty, !ty) -> ()
+    // CHECK-NEXT: scf.yield [[NEXT]], [[LOAD1]], [[LOAD2]]
+    scf.yield %next : !ty
+  } {ttg.partition.stages = [0, 0, 0], ttg.warp_specialize.tag = 0 : i32}
+  // CHECK: ttg.local_dealloc [[ABUF]]
+  tt.return
+}
+
+// CHECK-LABEL: @loop_carried_dep_multi_depth
+tt.func @loop_carried_dep_multi_depth(%lb: i32, %ub: i32, %step: i32) {
+  %init = arith.constant dense<0> : !ty
+  // CHECK: [[ABUF1:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi32, {{.*}}>
+  // CHECK-NEXT: [[AREF1:%.*]] = nvws.aref.create [[ABUF1]]
+  // CHECK-NEXT: [[ABUF2:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1x1xi32, {{.*}}>
+  // CHECK-NEXT: [[AREF2:%.*]] = nvws.aref.create [[ABUF2]]
+
+  // CHECK: scf.for [[IV:%.*]] = [[LB:%.*]] to [[UB:%.*]] step [[STEP:%.*]] iter_args([[ARG4:%.*]] = {{.*}}, [[ARG5:%.*]] = {{.*}}, [[ARG6:%.*]] = {{.*}}, [[ARG7:%.*]] = {{.*}})
+  scf.for %i = %lb to %ub step %step iter_args(%iv0 = %init, %iv1 = %init, %iv2 = %init) -> (!ty, !ty, !ty) : i32 {
+    // CHECK-NEXT: [[PUT_BUF1:%.*]], [[PUT_TOK1:%.*]] = nvws.aref.put.enter [[AREF1]] {ttg.partition = array<i32: 0>}
+    // CHECK-NEXT: ttg.local_store [[ARG5]], [[PUT_BUF1]] {ttg.partition = array<i32: 0>}
+    // CHECK-NEXT: nvws.aref.put.exit [[AREF1]], [[PUT_TOK1]] [#nvws.async_op<none>] {ttg.partition = array<i32: 0>}
+
+    // CHECK-NEXT: [[NEXT:%.*]] = "op_next"([[ARG4]]) {ttg.partition = array<i32: 0>}
+    %next0 = "op_next"(%iv0) {ttg.partition = array<i32: 0>} : (!ty) -> !ty
+
+    // CHECK-NEXT: [[PUT_BUF2:%.*]], [[PUT_TOK2:%.*]] = nvws.aref.put.enter [[AREF2]] {ttg.partition = array<i32: 0>}
+    // CHECK-NEXT: ttg.local_store [[NEXT]], [[PUT_BUF2]] {ttg.partition = array<i32: 0>}
+    // CHECK-NEXT: nvws.aref.put.exit [[AREF2]], [[PUT_TOK2]] [#nvws.async_op<none>] {ttg.partition = array<i32: 0>}
+
+    // CHECK-NEXT: [[NEXT2:%.*]] = "op_next_next"([[NEXT]]) {ttg.partition = array<i32: 0>}
+    %next1 = "op_next_next"(%next0) {ttg.partition = array<i32: 0>} : (!ty) -> !ty
+
+    // CHECK-NEXT: [[GET_BUF1:%.*]], [[GET_TOK1:%.*]] = nvws.aref.get.enter [[AREF1]] {ttg.partition = array<i32: 1>}
+    // CHECK-NEXT: [[LOAD1:%.*]] = ttg.local_load [[GET_BUF1]] {ttg.partition = array<i32: 1>}
+    // CHECK-NEXT: nvws.aref.get.exit [[AREF1]], [[GET_TOK1]] [#nvws.async_op<none>] {ttg.partition = array<i32: 1>}
+    // CHECK-NEXT: [[GET_BUF2:%.*]], [[GET_TOK2:%.*]] = nvws.aref.get.enter [[AREF2]] {ttg.partition = array<i32: 1>}
+    // CHECK-NEXT: [[LOAD2:%.*]] = ttg.local_load [[GET_BUF2]] {ttg.partition = array<i32: 1>}
+    // CHECK-NEXT: nvws.aref.get.exit [[AREF2]], [[GET_TOK2]] [#nvws.async_op<none>] {ttg.partition = array<i32: 1>}
+
+    // CHECK-NEXT: [[OUT:%.*]] = "op_use"([[LOAD2]], [[ARG7]], [[LOAD1]], [[ARG6]]) {ttg.partition = array<i32: 1>}
+    %next2 = "op_use"(%next0, %iv0, %iv1, %iv2) {ttg.partition = array<i32: 1>} : (!ty, !ty, !ty, !ty) -> !ty
+
+    // CHECK-NEXT: scf.yield [[NEXT]], [[NEXT2]], [[OUT]], [[LOAD2]]
+    scf.yield %next0, %next1, %next2 : !ty, !ty, !ty
+  } {ttg.partition.stages = [0, 0], ttg.warp_specialize.tag = 0 : i32}
+
+  // CHECK: ttg.local_dealloc [[ABUF2]]
+  // CHECK-NEXT: ttg.local_dealloc [[ABUF1]]
+  tt.return
+}
+
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+!ty = tensor<1xi32, #blocked>
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+
 tt.func @invalid_attribute(%lb: i32, %ub: i32, %step: i32) {
   scf.for %k = %lb to %ub step %step : i32 {
     // expected-error @below {{invalid partition index -1}}
