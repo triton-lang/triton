@@ -69,7 +69,7 @@ class TensorMemoryLayout:
 
 
 @dataclass(frozen=True, eq=True)
-class TensorMemoryScalesLayout:
+class TensorMemoryScalesLayout(ttgl.DistributedLayout):
     """
     Describes the layout for tensor memory scales in Blackwell architecture.
 
@@ -88,6 +88,13 @@ class TensorMemoryScalesLayout:
     def mangle(self) -> str:
         cta_split_str = f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else ""
         return f"TLS{cta_split_str}TLS"
+
+    def __hash__(self):
+        return hash(self.cta_split_num)
+
+    @property
+    def rank(self):
+        return 2
 
 
 @constexpr_function

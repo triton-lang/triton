@@ -11,8 +11,30 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     tcgen05_mma_scaled,
     tcgen05_commit,
 )
-from triton.experimental.gluon.language.nvidia.hopper import tma
+from triton.experimental.gluon.language.nvidia.ampere import mma_v2
+from triton.experimental.gluon.language.nvidia.hopper import tma, fence_async_shared
 from triton.experimental.gluon.language.nvidia.blackwell import tma as tma_blackwell
+
+
+@gluon.jit
+def tl_dot_mma_sync(a, b, acc_init=None, input_precision=None):
+    mma_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(
+        version=[2, 0],
+        warps_per_cta=[ttgl.num_warps(), 1],
+        instr_shape=[16, 8],
+    )
+    a_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=mma_layout, operand_index=0, k_width=2)
+    b_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=mma_layout, operand_index=1, k_width=2)
+    a = ttgl.convert_layout(a, a_layout)
+    b = ttgl.convert_layout(b, b_layout)
+    if acc_init is not None:
+        acc = ttgl.convert_layout(acc_init, mma_layout)
+    else:
+        acc = ttgl.full([a.shape[0], a.shape[1], b.shape[2]], 0.0, ttgl.float32, layout=mma_layout)
+    result = mma_v2(a, b, acc, input_precision)
+    if acc is not None:
+        result = ttgl.convert_layout(result, acc_init.type.layout)
+    return result
 
 
 @gluon.constexpr_function
@@ -23,8 +45,8 @@ def get_swizzle_byte_width(bitwidth):
 
 
 @gluon.jit
-def tl_dot(a, b, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=ttgl.float32):
-    # TODO: check if MMAv5 cannot be used and fallback to mmav2
+def tl_dot_blackwell(a, b, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None,
+                     out_dtype=ttgl.float32):
     M: ttgl.constexpr = a.type.shape[0]
     N: ttgl.constexpr = b.type.shape[1]
     K: ttgl.constexpr = a.type.shape[1]
@@ -60,12 +82,27 @@ def tl_dot(a, b, acc=None, input_precision=None, allow_tf32=None, max_num_imprec
 
 
 @gluon.jit
+def tl_dot(a, b, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=ttgl.float32):
+    if ttgl.num_warps() < 4:
+        return tl_dot_mma_sync(a, b, acc, input_precision)
+    else:
+        return tl_dot_blackwell(a, b, acc, input_precision, allow_tf32, max_num_imprecise_acc, out_dtype)
+
+
+@gluon.constexpr_function
+def _constexpr_min(a, b):
+    return min(a, b)
+
+
+@gluon.jit
 def tl_dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, fast_math=False, lhs_k_pack=True,
                   rhs_k_pack=True, out_dtype=ttgl.float32):
     # TODO: check if MMAv5_scaled cannot be used and fallback to mmav5/mmav3 or mmav2
     M: ttgl.constexpr = lhs_scale.shape[0]
     N: ttgl.constexpr = rhs_scale.shape[0]
     K: ttgl.constexpr = lhs_scale.shape[1] * 32
+    BLOCK_M: ttgl.constexpr = _constexpr_min(M, 128)
+    BLOCK_N: ttgl.constexpr = _constexpr_min(N, 256)
     ttgl.static_assert(M >= 128 and N >= 16 and K >= 16, "TODO: support smaller shapes using mmav2")
     fp4_padded_a: ttgl.constexpr = lhs_format == "e2m1" and rhs_format != "e2m1"
     fp4_padded_b: ttgl.constexpr = lhs_format != "e2m1" and rhs_format == "e2m1"
@@ -78,8 +115,8 @@ def tl_dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=No
 
     a_smem = ttgl.allocate_shared_memory(lhs.dtype, lhs.shape, nvmma_layout_a, lhs)
     b_smem = ttgl.allocate_shared_memory(rhs.dtype, rhs.shape, nvmma_layout_b, rhs)
-    acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, N], col_stride=1)
-    tmem_reg_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(M, N, [M, N], ttgl.num_warps())
+    acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
+    tmem_reg_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, [M, N], ttgl.num_warps())
     if acc is not None:
         acc_temp = ttgl.convert_layout(acc, tmem_reg_layout)
     else:
@@ -113,9 +150,9 @@ def get_num_threads_per_warp() -> ttgl.constexpr:
     return ttgl.constexpr(32)
 
 
-@gluon.constexpr_function
-def get_num_threads_per_program():
-    return ttgl.num_warps() * get_num_threads_per_warp()
+@ttgl._core.builtin
+def get_num_threads_per_program(_semantic=None, _generator=None):
+    return ttgl.num_warps(_semantic=_semantic, _generator=_generator) * get_num_threads_per_warp(_semantic=_semantic)
 
 
 @gluon.constexpr_function
@@ -180,8 +217,33 @@ def tl_obj_gather(obj, x_offsets, y_offset):
 
 
 @gluon.jit
+def tl_obj_scatter(obj, value, x_offsets, y_offset):
+    if isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor):
+        desc = obj
+        desc_shape: ttgl.constexpr = [x_offsets.shape[0], desc.block_shape[1]]
+        alloc = ttgl.allocate_shared_memory(desc.dtype, desc_shape, desc.layout)
+        alloc.store(value)
+        fence_async_shared()
+        x_offsets_layout: ttgl.constexpr = ttgl.SliceLayout(
+            0, ttgl.BlockedLayout([1, 4], [get_num_threads_per_warp(), 1], [1, ttgl.num_warps()], [1, 0]))
+        x_offsets = ttgl.convert_layout(x_offsets, x_offsets_layout)
+        tma_blackwell.async_scatter(desc, x_offsets, y_offset, alloc)
+        tma.store_wait(0)
+    else:
+        obj.scatter(value, x_offsets, y_offset)
+
+
+@ttgl._core.builtin
+def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option="zero", _semantic=None):
+    layout = ttgl.NVMMASharedLayout.get_default_for(block_shape, base.dtype.element_ty)
+    return tma.make_tensor_descriptor(base, shape, strides, block_shape, layout, padding_option, _semantic=_semantic)
+
+
+@gluon.jit
 def tl_store_tensor_descriptor(desc, offsets, value):
-    alloc = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, value)
+    alloc = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+    alloc.store(value)
+    fence_async_shared()
     tma.async_copy_shared_to_global(desc, offsets, alloc)
     tma.store_wait(0)
     alloc._keep_alive()
