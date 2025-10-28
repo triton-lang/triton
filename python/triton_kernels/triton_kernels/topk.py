@@ -43,7 +43,7 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
     if y_indx is None:
         y_indx_bufs, y_indx, offset = make_empty(offset, (n_rows_out_max, k), torch.int16, dev, all_gather=all_gather)
     else:
-        y_indx_bufs = y_indx
+        y_indx_bufs = (y_indx, )
     # create bitmatrix in transposed memory layout:
     n_cols_pad = cdiv(n_cols, BLOCK_N) * BLOCK_N
     n_cols_words = n_cols_pad // 32
