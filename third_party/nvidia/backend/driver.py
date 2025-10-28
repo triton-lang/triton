@@ -674,8 +674,10 @@ class CudaLauncher(object):
 
     def __init__(self, src, metadata):
         constants = src.constants if hasattr(src, "constants") else dict()
-        arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
-        constants = {arg_idx(idx): value for idx, value in constants.items()}
+        if constants and hasattr(src, "fn"):
+            names = [p.name for p in src.fn.params]
+            arg_idx = lambda x: (names.index(x), ) if isinstance(x, str) else x
+            constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
         tensordesc_meta = getattr(metadata, "tensordesc_meta", None)
         src = make_launcher(constants, signature, tensordesc_meta)

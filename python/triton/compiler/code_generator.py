@@ -67,9 +67,10 @@ def _check_fn_args(node, fn, args):
     if fn.noinline:
         for idx, arg in enumerate(args):
             if not _is_constexpr(arg) and _is_non_scalar_tensor(arg):
+                names = [p.name for p in fn.params]
                 raise UnsupportedLanguageConstruct(
                     fn.src, node,
-                    f'Function {fn.__name__} is marked noinline, but was called with non-scalar argument {fn.arg_names[idx]}:{arg}'
+                    f'Function {fn.__name__} is marked noinline, but was called with non-scalar argument {names[idx]}:{arg}'
                 )
 
 
@@ -1286,7 +1287,8 @@ class CodeGenerator(ast.NodeVisitor):
 
     def call_JitFunction(self, fn: JITFunction, args, kwargs, caller_context=None):
         args = inspect.getcallargs(fn.fn, *args, **kwargs)
-        args = [args[name] for name in fn.arg_names]
+        names = [p.name for p in fn.params]
+        args = [args[name] for name in names]
         for i, arg in enumerate(args):
             if isinstance(arg, (language.dtype, float, int, bool, JITFunction)):
                 args[i] = language.core.constexpr(arg)
@@ -1594,10 +1596,11 @@ class CodeGenerator(ast.NodeVisitor):
 
 
 def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None):
-    arg_types = [None] * len(fn.arg_names)
+    arg_types = [None] * len(fn.params)
 
     for k, v in src.signature.items():
-        idx = fn.arg_names.index(k)
+        names = [p.name for p in fn.params]
+        idx = names.index(k)
         arg_types[idx] = str_to_ty(v, None)
 
     def apply_constexpr_types(argument, indices, value):
@@ -1618,7 +1621,8 @@ def ast_to_ttir(fn, src, context, options, codegen_fns, module_map, module=None)
     # query function representation
     from collections import namedtuple
     leaves = filter(lambda v: len(v) == 1, src.constants)
-    constants = {fn.arg_names[i[0]]: src.constants[i] for i in leaves}
+    names = [p.name for p in fn.params]
+    constants = {names[i[0]]: src.constants[i] for i in leaves}
     signature = src.signature
     proxy = namedtuple("SpecializationProxy", ["constants", "signature"])(constants, signature)
     generator = CodeGenerator(context, prototype, gscope=fn.get_capture_scope(), function_name=fn.repr(proxy),

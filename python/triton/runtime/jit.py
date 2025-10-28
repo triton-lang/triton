@@ -737,10 +737,6 @@ class JITFunction(JITCallable, KernelInterface[T]):
         self.debug = debug
         self.noinline = noinline
 
-        # TODO(jlebar): Remove uses of these fields outside this file, then
-        # remove the fields here.
-        self.arg_names = [p.name for p in self.params]
-
         # Hooks that will be called prior to executing "run"
         self.pre_run_hooks = []
 
