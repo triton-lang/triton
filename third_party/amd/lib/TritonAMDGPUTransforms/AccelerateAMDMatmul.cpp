@@ -1777,21 +1777,29 @@ static std::optional<unsigned> deriveMfmaIntrinsicKBase(unsigned mDim, unsigned 
   return kBase;
 }
 
-static FailureOr<unsigned> computeKWidthForMfmaDotOperand(ttg::AMDMfmaEncodingAttr parentMfma, Value operandVal, Operation *consumerDotOp, unsigned operandIndex, const AssignKWidthOptions &opts) {
-  auto shape = parentMfma.getInstrShape(); // [mDim, nDim, kDim]
+static FailureOr<unsigned> computeKWidthForMfmaDotOperand(Value operand, unsigned operandIndex, Operation *consumerDotOp, ttg::AMDMfmaEncodingAttr consumerDotOpResultMfmaEncoding, const AssignKWidthOptions &opts) {
+  auto shape = consumerDotOpResultMfmaEncoding.getInstrShape(); // [mDim, nDim, kDim]
   unsigned mDim = shape[0];
   unsigned nDim = shape[1];
   unsigned kDim = shape[2];
   std::optional<unsigned> kBase = deriveMfmaIntrinsicKBase(mDim, kDim);
   if (!kBase.has_value()) {
-    // mlir::emitWarning(parentMfma) 
-    //   << "Unable to compute kBase due to invalid MFMA intrinsic: "
-    //   << "mDim: " << mDim << ", kDim: " << kDim;
+    mlir::emitWarning(operand.getLoc()) 
+      << "Unable to compute kBase due to invalid MFMA intrinsic: "
+      << "mDim: " << mDim << ", kDim: " << kDim;
     return failure();
   }
   
-  // TODO: How to tell if we are in chained dot and we can't do this?
   unsigned candidate = *kBase * opts.kPack;
+
+  // TODO: Once refactored, remove cast and instead have consumerDotOp be a tt:DotOpInterface
+  // TODO: Remove check for is chain dot tail and detect in more elegant way
+  if (isChainDotTail(dyn_cast<tt::DotOpInterface>(*consumerDotOp))) {
+    if (consumerDotOpResultMfmaEncoding.getElementBitWidth() == 16)
+      candidate = 4;
+    else
+      candidate = *kBase;
+  }
 
   return candidate;
 }
@@ -1802,21 +1810,22 @@ struct FixKWidthPattern : public OpRewritePattern<ttg::ConvertLayoutOp> {
       : OpRewritePattern(ctx, b), opts(opts) {}
 
   LogicalResult matchAndRewrite(ttg::ConvertLayoutOp op, PatternRewriter &rewriter) const override {
-    auto dotOpOperandType = dyn_cast<RankedTensorType>(op.getResult().getType());
-    if (!dotOpOperandType)
+    auto consumerDotOpOperandType = dyn_cast<RankedTensorType>(op.getResult().getType());
+    if (!consumerDotOpOperandType)
       return failure();
-    auto dotOpOperandEncoding = dyn_cast<ttg::DotOperandEncodingAttr>(dotOpOperandType.getEncoding());
-    if (!dotOpOperandEncoding)
+    auto consumerDotOpOperandEncoding = dyn_cast<ttg::DotOperandEncodingAttr>(consumerDotOpOperandType.getEncoding());
+    if (!consumerDotOpOperandEncoding)
       return failure();
 
-    auto dotOpResultEncoding = dotOpOperandEncoding.getParent();
-    if (isWmmaEncoding(dotOpResultEncoding))
+    auto consumerDotOpResultEncoding = consumerDotOpOperandEncoding.getParent();
+    if (isWmmaEncoding(consumerDotOpResultEncoding))
       return failure(); // skip wmma
-    if (!isMfmaEncoding(dotOpResultEncoding))
+    if (!isMfmaEncoding(consumerDotOpResultEncoding))
       return failure(); // skip non-mfma
 
-    auto dotOpResultMfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(dotOpResultEncoding);
+    auto consumerDotOpResultMfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(consumerDotOpResultEncoding);
 
+    // TODO: refactor so that consumerDotOp is a tt:DotOpInterface
     Operation *consumerDotOp = nullptr;
     unsigned operandIndex = 0;
     for (Operation *consumer : op->getResult(0).getUsers()) {
@@ -1845,16 +1854,16 @@ struct FixKWidthPattern : public OpRewritePattern<ttg::ConvertLayoutOp> {
       }
     }
 
-    std::optional<unsigned> maybeKWidth = computeKWidthForMfmaDotOperand(dotOpResultMfmaEncoding, op.getOperand(), consumerDotOp, operandIndex, opts);
+    std::optional<unsigned> maybeKWidth = computeKWidthForMfmaDotOperand(op.getOperand(), operandIndex, consumerDotOp, consumerDotOpResultMfmaEncoding, opts);
     if (!maybeKWidth.has_value())
       return failure();
 
     unsigned candidateKWidth = maybeKWidth.value();
-    if (candidateKWidth ==  dotOpOperandEncoding.getKWidth())
+    if (candidateKWidth == consumerDotOpOperandEncoding.getKWidth())
       return failure();
 
-    auto newEncoding = ttg::DotOperandEncodingAttr::get(op.getContext(),  dotOpOperandEncoding.getOpIdx(), dotOpResultMfmaEncoding, candidateKWidth);
-    auto newType = RankedTensorType::get(dotOpOperandType.getShape(), dotOpOperandType.getElementType(), newEncoding);
+    auto newEncoding = ttg::DotOperandEncodingAttr::get(op.getContext(),  consumerDotOpOperandEncoding.getOpIdx(), consumerDotOpResultMfmaEncoding, candidateKWidth);
+    auto newType = RankedTensorType::get(consumerDotOpOperandType.getShape(), consumerDotOpOperandType.getElementType(), newEncoding);
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, newType, op.getOperand());
     return success();
   }
@@ -1974,7 +1983,7 @@ struct TritonAMDGPUAccelerateMatmulPass
 
     RewritePatternSet kwidth_patterns(context);
     kwidth_patterns.add<FixKWidthPattern>(context, opts, /*benefit=*/2);
-    kwidth_patterns.add<FixDotScaledPackedKWidthPattern>(context, opts, /*benefit=*/2);
+    // kwidth_patterns.add<FixDotScaledPackedKWidthPattern>(context, opts, /*benefit=*/2);
     if (failed(applyPatternsGreedily(m, std::move(kwidth_patterns))))
       signalPassFailure();
   }
