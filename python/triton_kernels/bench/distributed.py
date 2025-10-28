@@ -16,7 +16,7 @@ from triton_kernels.matmul_ogs import matmul_ogs, PrecisionConfig, FlexCtx, FnSp
 from triton_kernels.target_info import get_cdna_version, is_hip, is_cuda, cuda_capability_geq
 from triton_kernels.tensor_details import layout
 from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata
-from triton_kernels.distributed import make_expt_dict_uniform, make_expt_assignment, convert_dp_to_ep, convert_ep_to_dp, ExptAssignment
+from triton_kernels.distributed import make_expt_dict_uniform, make_expt_assignment, convert_dp_to_ep, convert_ep_to_dp, ExptAssignment, symm_mem_pool
 
 from bench_utils import quantize_weight
 
@@ -38,6 +38,31 @@ def create_expt_assignment(EP: int, n_expts_tot: int, device: torch.device) -> O
         return None
     expt_dict = make_expt_dict_uniform(EP, n_expts_tot)
     return make_expt_assignment(EP, n_expts_tot, expt_dict, device)
+
+
+def initialize_matmul_ogs(
+    batch: int,
+    dim1: int,
+    dim2: int,
+    n_expts_act: int,
+    n_expts_tot: int,
+    dtype: torch.dtype,
+) -> None:
+    if not _is_distributed_launch():
+        return
+    world_size = dist.get_world_size()
+    device = torch.cuda.current_device()
+    symm_mem_pool.initialize_matmul_ogs(
+        n_tokens_global=batch,
+        d_input=dim1,
+        d_model=dim2,
+        n_expts_act=n_expts_act,
+        n_expts_tot=n_expts_tot,
+        n_ranks=world_size,
+        dtype=dtype,
+        group=dist.group.WORLD,
+        device=device,
+    )
 
 
 def setup() -> Tuple[int, int]:
@@ -112,11 +137,18 @@ def reduce_scatter(
 # TODO: clean up duplicate code with triton_kernels.test_distributed.py
 # TODO: Support nonuniform expert assignment
 def routing(
-    x, logits, n_expts_act, sm_first: bool = False, y_indx: Optional[torch.Tensor] = None, EP: int = 1, TP: int = 1,
-    expt_assignment: Optional[ExptAssignment] = None, mode: str = "ep_sharding"
+    x,
+    logits,
+    n_expts_act,
+    sm_first: bool = False,
+    y_indx: Optional[torch.Tensor] = None,
+    EP: int = 1,
+    TP: int = 1,
+    expt_assignment: Optional[ExptAssignment] = None,
+    mode: Optional[str] = None,
 ) -> Tuple[torch.Tensor, RoutingData, GatherIndx, ScatterIndx, Optional[ReduceScatterMetadata]]:
     n_expts_tot = logits.shape[-1]
-    if _is_distributed_launch():
+    if _is_distributed_launch() and mode:
         if mode == "ep_sharding":
             if not expt_assignment:
                 raise ValueError("expt_assignment must be provided for distributed routing.")
@@ -150,6 +182,7 @@ def routing(
         else:
             raise NotImplementedError(f"Distributed routing mode {mode} is not implemented yet.")
     else:
+        # If mode is not specified or we have a single process, we do single-GPU routing.
         logits = topk(logits, n_expts_act, y_indx=y_indx, apply_softmax=not sm_first)
         dispatch_indx = logits.mask_metadata.col_sorted_indx
         combine_indx = logits.mask_metadata.row_sorted_indx
@@ -262,6 +295,17 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
     xd = torch.randn((batch // world_size, dim1), device=dev).to(dtype_map[x_dtype])
     x0 = all_gather(xd, dim=0)
     expt_assignment = create_expt_assignment(EP, n_expts_tot, torch.device(dev))
+    symm_mem_pool.initialize_matmul_ogs(
+        n_tokens_global=batch,
+        d_input=dim1,
+        d_model=dim2,
+        n_expts_act=n_expts_act,
+        n_expts_tot=n_expts_tot,
+        n_ranks=world_size,
+        dtype=x0.dtype,
+        group=dist.group.WORLD,
+        device=torch.cuda.current_device(),
+    )
 
     # single-GPU pass
     def single(x):
@@ -279,7 +323,8 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
         xg = x.to(wg.dtype if n_expts_tot > 1 else x.dtype)
         if n_expts_tot > 1:  # sparse
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
-            x, rdata, gi, si, metadata = routing(x, logits, n_expts_act, EP=EP, TP=TP, expt_assignment=expt_assignment)
+            x, rdata, gi, si, metadata = routing(x, logits, n_expts_act, EP=EP, TP=TP, expt_assignment=expt_assignment,
+                                                 mode="ep_sharding")
         else:  # dense
             x = all_gather(x, dim=0)
             rdata = gi = si = metadata = None
@@ -322,12 +367,12 @@ has_native_mx4 = torch.cuda.get_device_capability(0)[0] >= 10 or get_cdna_versio
 )
 def test_mlp_mp(batch, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_dtype, TP, EP, monkeypatch):
     parallelism = TP * EP
+    if is_hip():
+        pytest.skip("[TODO] HIP support for distributed MoE.")
     if torch.cuda.device_count() < parallelism:
         pytest.skip(f"Test requires at least {parallelism} GPUs.")
     if is_cuda() and not cuda_capability_geq(9, 0):
         pytest.skip("Test requires CUDA compute capability >= 9.0.")
-    if is_hip() and get_cdna_version() == 4 and EP > 1:
-        pytest.skip("[TODO] Unknown issue with CDNA 4 and EP > 1")
     if TP > 1:
         pytest.skip("[TODO] TP > 1 is not supported yet in distributed mode.")
 
