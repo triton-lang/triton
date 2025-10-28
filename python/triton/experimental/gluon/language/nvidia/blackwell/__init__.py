@@ -165,7 +165,9 @@ def get_tmem_scales_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_sp
         i <<= 1
 
     # Lane bases: distribute 32 rows of M along a warp.
-    lane_bases = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]]
+    lane_bases = []
+    for i in [1, 2, 4, 8, 16]:
+        lane_bases.append([i, 0] if i < M_cta else [0, 0])
 
     # Warp bases: replicate across warps within a warpgroup by default.
     warp_bases = [[0, 0], [0, 0]]

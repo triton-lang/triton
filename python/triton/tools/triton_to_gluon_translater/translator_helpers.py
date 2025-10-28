@@ -125,10 +125,8 @@ def tl_dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=No
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
     mbarrier.init(bar, count=1)
     scale_layout: ttgl.constexpr = TensorMemoryScalesLayout()
-    scale_layout_reg_lhs: ttgl.constexpr = get_tmem_scales_reg_layout(lhs_scale.type.shape[0], lhs_scale.type.shape[1],
-                                                                      lhs_scale.type.shape, ttgl.num_warps())
-    scale_layout_reg_rhs: ttgl.constexpr = get_tmem_scales_reg_layout(rhs_scale.type.shape[1], rhs_scale.type.shape[0],
-                                                                      rhs_scale.type.shape, ttgl.num_warps())
+    scale_layout_reg_lhs: ttgl.constexpr = get_tmem_scales_reg_layout(M, N, lhs_scale.type.shape, ttgl.num_warps())
+    scale_layout_reg_rhs: ttgl.constexpr = get_tmem_scales_reg_layout(M, N, rhs_scale.type.shape, ttgl.num_warps())
     lhs_scale = ttgl.convert_layout(lhs_scale, scale_layout_reg_lhs)
     rhs_scale = ttgl.convert_layout(rhs_scale, scale_layout_reg_rhs)
     a_scale_tmem = allocate_tensor_memory(lhs_scale.dtype, lhs_scale.shape, scale_layout, lhs_scale)
