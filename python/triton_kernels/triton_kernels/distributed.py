@@ -7,7 +7,7 @@ import triton
 import triton.language as tl
 import random
 from dataclasses import dataclass
-from typing import Tuple, cast
+from typing import Tuple
 from math import prod
 
 @dataclass
@@ -102,7 +102,7 @@ class SymmetricMemoryPool:
 
         tensors = []
         for buf in self.bufs:
-            storage = cast(torch.UntypedStorage, buf.untyped_storage())
+            storage = buf.untyped_storage()
             total = storage.nbytes()
             if region_start + nbytes > total:
                 raise ValueError(
@@ -151,7 +151,7 @@ class SymmetricMemoryPool:
 
         BLOCK_N = 32
         BLOCK_M = 32
-        elem_size = torch.empty((), dtype=cast(torch.dtype, dtype)).element_size()
+        elem_size = torch.empty((), dtype=dtype).element_size()
         n_bytes_topk = n_tokens_global * n_expts_act * elem_size # vals
         n_bytes_topk += n_tokens_global * n_expts_act * 2 # indx (int16)
         num_blocks_m = triton.cdiv(n_tokens_global, BLOCK_M)
@@ -416,7 +416,6 @@ def convert_ep_to_dp(src, expt_assignment, expt_indx, topk_indx):
     )
     dst_local = peer_bufs[rank]
     hdl = symm_mem_pool.hdl
-    dst_local = peer_bufs[rank]
     # launch kernel
     BLOCK = 512
     grid = (n_tokens_global,)
