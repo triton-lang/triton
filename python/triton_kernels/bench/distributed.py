@@ -45,6 +45,7 @@ def initialize_matmul_ogs(
     dim1: int,
     dim2: int,
     n_expts_act: int,
+    n_expts_tot: int,
     dtype: torch.dtype,
 ) -> None:
     if not _is_distributed_launch():
@@ -56,6 +57,7 @@ def initialize_matmul_ogs(
         d_input=dim1,
         d_model=dim2,
         n_expts_act=n_expts_act,
+        n_expts_tot=n_expts_tot,
         n_ranks=world_size,
         dtype=dtype,
         group=dist.group.WORLD,

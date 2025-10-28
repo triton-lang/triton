@@ -141,6 +141,7 @@ class SymmetricMemoryPool:
         d_input: int,
         d_model: int,
         n_expts_act: int,
+        n_expts_tot: int,
         dtype: torch.dtype,
         n_ranks: int,
         group: dist.ProcessGroup,
@@ -151,12 +152,12 @@ class SymmetricMemoryPool:
 
         BLOCK_N = 32
         BLOCK_M = 32
-        elem_size = torch.empty((), dtype=dtype).element_size()
-        n_bytes_topk = n_tokens_global * n_expts_act * elem_size # vals
-        n_bytes_topk += n_tokens_global * n_expts_act * 2 # indx (int16)
+        n_bytes_topk = n_tokens_global * n_expts_act * 4 # topk logits (float32): pessimistic estimate
+        n_bytes_topk += n_tokens_global * n_expts_act * 2 # topk indx (int16)
         num_blocks_m = triton.cdiv(n_tokens_global, BLOCK_M)
-        num_blocks_n = triton.cdiv(d_input, BLOCK_N)
-        n_bytes_topk += num_blocks_m * BLOCK_M * num_blocks_n // 32 * 4 # bitmatrix (int32)
+        num_blocks_n = triton.cdiv(n_expts_tot, BLOCK_N)
+        n_bytes_topk += num_blocks_m * BLOCK_M * num_blocks_n // 32 * 4 # expt bitmatrix (int32)
+        elem_size = torch.empty((), dtype=dtype).element_size()
         n_bytes_dp_to_ep = n_tokens_global * n_expts_act * d_input * elem_size
         n_bytes_ep_to_dp = (n_tokens_global // n_ranks) * n_expts_act * d_model * elem_size
 

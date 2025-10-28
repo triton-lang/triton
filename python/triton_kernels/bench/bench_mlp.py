@@ -70,7 +70,7 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
 
     input_x = torch.randn((batch // DP, dim1), device=dev)
     expt_assignment = triton_dist.create_expt_assignment(EP, n_expts_tot, torch.device(dev))
-    triton_dist.initialize_matmul_ogs(batch, dim1, dim2, n_expts_act, input_x.dtype)
+    triton_dist.initialize_matmul_ogs(batch, dim1, dim2, n_expts_act, n_expts_tot, input_x.dtype)
 
     # run layer
     fpath = Path(tempfile.mktemp())
