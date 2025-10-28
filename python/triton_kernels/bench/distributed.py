@@ -40,6 +40,27 @@ def create_expt_assignment(EP: int, n_expts_tot: int, device: torch.device) -> O
     return make_expt_assignment(EP, n_expts_tot, expt_dict, device)
 
 
+def initialize_memory_pool(
+    batch: int,
+    dim1: int,
+    dim2: int,
+    n_expts_act: int,
+    dtype: torch.dtype,
+    world_size: int,
+) -> None:
+    if not _is_distributed_launch():
+        return
+    symm_mem_pool.initialize_matmul_ogs(
+        n_tokens_global=batch,
+        d_input=dim1,
+        d_model=dim2,
+        n_expts_act=n_expts_act,
+        n_ranks=world_size,
+        dtype=dtype,
+        group=dist.group.WORLD,
+    )
+
+
 def setup() -> Tuple[int, int]:
     if _is_distributed_launch():
         world_size = int(os.environ["WORLD_SIZE"])
@@ -267,6 +288,7 @@ def distributed_run(rank, world_size, batch, dim1, dim2, n_expts_tot, n_expts_ac
         d_input=dim1,
         d_model=dim2,
         n_expts_act=n_expts_act,
+        n_ranks=world_size,
         dtype=x0.dtype,
         group=dist.group.WORLD,
     )

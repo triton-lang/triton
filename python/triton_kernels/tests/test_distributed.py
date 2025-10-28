@@ -216,6 +216,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
         d_model=d_model,
         n_expts_act=n_expts_act,
         dtype=torch.bfloat16,
+        n_ranks=world_size,
         group=dist.group.WORLD,
     )
     y_dp_local_tri = run_mixture()
