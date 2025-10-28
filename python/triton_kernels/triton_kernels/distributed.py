@@ -7,7 +7,7 @@ import triton
 import triton.language as tl
 import random
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple, cast
+from typing import Tuple, cast
 from math import prod
 
 @dataclass

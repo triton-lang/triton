@@ -230,11 +230,12 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
     stream = torch.cuda.Stream()
     with torch.cuda.stream(stream):
         with torch.cuda.graph(g):
-           y_dp_local_tri = run_mixture()
+            y_dp_local_tri = run_mixture()
 
     g.replay()
     dist.all_gather_into_tensor(y_global_tri, y_dp_local_tri)
-    triton.testing.assert_close(y_global_ref, y_global_tri) 
+    triton.testing.assert_close(y_global_ref, y_global_tri)
+
 
 @pytest.mark.parametrize("distributed_launcher", [2, 4], indirect=True)
 @pytest.mark.parametrize("n_tokens", [16, 128, 4096])

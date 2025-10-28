@@ -14,9 +14,8 @@ def make_empty(offset, shape, dtype, device, all_gather):
         rank_id = dist.get_rank()
         ret_bufs = symm_mem_pool.make_empty(offset=offset, shape=shape, dtype=dtype, region="topk")
         ret = ret_bufs[rank_id]
-        offset = symm_mem_pool.align_up(
-            offset + ret.numel() * ret.element_size(), symm_mem_pool.regions["topk"].alignment
-        )
+        offset = symm_mem_pool.align_up(offset + ret.numel() * ret.element_size(),
+                                        symm_mem_pool.regions["topk"].alignment)
         return ret_bufs, ret, offset
     ret = torch.empty(shape, dtype=dtype, device=device)
     return (ret, ), ret, 0
@@ -49,7 +48,7 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
     n_cols_pad = cdiv(n_cols, BLOCK_N) * BLOCK_N
     n_cols_words = n_cols_pad // 32
     bitmatrix_bufs, bitmatrix_data, offset = make_empty(offset, (n_cols_words, cdiv(n_rows_out_max, 32) * 32),
-                                                               torch.uint32, dev, all_gather=all_gather)
+                                                        torch.uint32, dev, all_gather=all_gather)
     bitmatrix_data = torch.transpose(bitmatrix_data, 0, 1)[:n_rows_max]
     pids = cdiv(n_rows_max, BLOCK_M)
     _topk_forward[(pids, )](
