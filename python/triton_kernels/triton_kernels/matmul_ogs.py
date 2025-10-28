@@ -718,28 +718,26 @@ def matmul_ogs(x, w, bias,
 
     out_final_mx_scale = None
     if opt_flags.split_k > 1:
+        assert not out_matmul_has_mx
         has_scatter = scatter_indx is not None
-        # fused functions
         postprocess_fn1 = ReducePostprocessFn(specs=reduce_fused_activation.specs, fn_args=reduce_fused_activation.fn_args)
         postprocess_fn2 = None if has_scatter else ReducePostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
-        #
-        y_dtype = out_matmul.dtype if has_scatter else memory["output"].dtype
-        y_flex = OutFlexData() if has_scatter else precision_config.flex_ctx.out_data
-        y_flex_saturate_inf = None if has_scatter else precision_config.flexpoint_saturate_inf
-        y_shape = out_matmul.shape[1:-1] + (out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n,)
-        y = None if has_scatter else memory["output"].view(1, math.prod(y_shape))
-        out_matmul, out_final_mx_scale = reduce(out_matmul.view(opt_flags.split_k, 1, -1), dim=0,
-                                                postprocess_fn1=postprocess_fn1,
-                                                postprocess_fn2=postprocess_fn2,
-                                                y=y,
-                                                y_has_mx=scatter_indx is None and precision_config.out_scale is not None,
-                                                y_dtype=y_dtype,
-                                                y_flex=y_flex,
-                                                y_flex_saturate_inf=y_flex_saturate_inf,
-                                            )
-        out_matmul = out_matmul.view(*y_shape).unsqueeze(0)
-        if out_final_mx_scale is not None:
-            out_final_mx_scale = out_final_mx_scale.view(out_matmul.shape[-2], triton.cdiv(out_matmul.shape[-1], 32))
+        y, y_mx_scale = reduce(
+            x = out_matmul.view(out_matmul.shape[0], -1, out_matmul.shape[-1]),
+            dim = 0,
+            # output data/metadata
+            y = None if has_scatter else memory["output"].view(-1, memory["output"].shape[-1]),
+            y_dtype = out_matmul.dtype if has_scatter else memory["output"].dtype,
+            y_flex = OutFlexData() if has_scatter else precision_config.flex_ctx.out_data,
+            y_flex_saturate_inf = None if has_scatter else precision_config.flexpoint_saturate_inf,
+            y_has_mx = scatter_indx is None and precision_config.out_scale is not None,
+            # fused functions
+            postprocess_fn1 = postprocess_fn1,
+            postprocess_fn2 = postprocess_fn2,
+        )
+        out_matmul = y.view(*out_matmul.shape[1:]).unsqueeze(0)
+        if y_mx_scale is not None:
+            out_final_mx_scale = y_mx_scale.view(out_matmul.shape[-2], triton.cdiv(out_matmul.shape[-1], 32))
     # TODO: change `matmul_ogs` semantics and move this to another op!
     if scatter_indx is not None:
         mask = (scatter_indx.src_indx != -1).view(out_matmul.shape[-2]//routing_data.n_expts_act, routing_data.n_expts_act, 1)
@@ -749,16 +747,17 @@ def matmul_ogs(x, w, bias,
         postprocess_fn = ReducePostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
         x_flex = InFlexData(dtype=out_matmul_flex.dtype, scale=out_matmul_flex.expected_scale)
         out_final, out_final_mx_scale = reduce(out_matmul, dim=1, postprocess_fn2=postprocess_fn, x_flex=x_flex, #
-                                               mask=mask,
-                                               y=memory["output"].squeeze(0).squeeze(0),
-                                               x_mxscale=out_matmul_scale.view(*out_matmul_scale_shape) if out_matmul_has_mx else None,
-                                               y_has_mx=precision_config.out_scale is not None,
-                                               y_flex=precision_config.flex_ctx.out_data,
-                                               y_flex_saturate_inf=precision_config.flexpoint_saturate_inf,
+                                            mask=mask,
+                                            y=memory["output"].squeeze(0).squeeze(0),
+                                            x_mxscale=out_matmul_scale.view(*out_matmul_scale_shape) if out_matmul_has_mx else None,
+                                            y_has_mx=precision_config.out_scale is not None,
+                                            y_flex=precision_config.flex_ctx.out_data,
+                                            y_flex_saturate_inf=precision_config.flexpoint_saturate_inf,
                                             )
         out_final = out_final.unsqueeze(0)
     else:
         out_final = out_matmul.squeeze(0)
+
     if not (is_input_batched or inner_routing_data is not None):
         out_final = out_final.squeeze(0)
     if out_final_mx_scale is not None:
