@@ -256,8 +256,6 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if use_async_copy:
-            amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
         pm.run(mod, 'make_ttgir')
         return mod
 
@@ -288,6 +286,7 @@ class HIPBackend(BaseBackend):
         #
         # If custom_lds_size = 0, pass will consider all LDS is available for one threads block,
         # LDS size is determined by provided arch name.
+        amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
         custom_lds_size = 0
         amd.passes.ttgpuir.add_optimize_lds_usage(pm, options.arch, custom_lds_size)
         passes.convert.add_scf_to_cf(pm)

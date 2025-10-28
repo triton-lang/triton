@@ -109,10 +109,18 @@ void updateWaitCount(WaitType waitOp,
     waitCnt = std::min(waitCnt, tokenWaitCnt);
   }
 
-  if (waitCnt == std::numeric_limits<int>::max() || waitOp.getNum() == waitCnt)
-    return;
+  if (waitCnt == std::numeric_limits<int>::max()) {
+    // TODO(alex): set to conservative waitcnt=0 after gluon refactoring
+    waitCnt = waitOp.getNum();
+  }
 
-  rewriter.modifyOpInPlace(waitOp, [&]() { waitOp.setNum(waitCnt); });
+  if (std::is_same_v<WaitType, ttg::AsyncWaitOp>) {
+    auto tokens = waitOp.getAsyncToken();
+    rewriter.setInsertionPointAfter(waitOp);
+    rewriter.replaceOpWithNewOp<amdgpu::AsyncWaitOp>(waitOp, tokens, waitCnt);
+  } else {
+    rewriter.modifyOpInPlace(waitOp, [&]() { waitOp.setNum(waitCnt); });
+  }
 }
 
 } // anonymous namespace

@@ -1887,14 +1887,15 @@ struct AtomicRMWOpConversion
   }
 };
 
-struct AsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
+struct AsyncWaitOpConversion
+    : public ConvertOpToLLVMPattern<amdgpu::AsyncWaitOp> {
   AsyncWaitOpConversion(LLVMTypeConverter &converter,
                         const AMD::TargetInfo &targetInfo,
                         PatternBenefit benefit)
       : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
 
   LogicalResult
-  matchAndRewrite(AsyncWaitOp op, OpAdaptor adaptor,
+  matchAndRewrite(amdgpu::AsyncWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -1912,7 +1913,7 @@ struct AsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
       // interested in those.
 
       // Clamp vmcnt to 6bits; a lower vmcnt will produce a conservative wait
-      unsigned vmCnt = std::min(63u, op.getNum());
+      unsigned vmCnt = std::min(63u, op.getNumInst());
 
       // Extract low and high bits and combine while setting all other bits to 1
       unsigned lowBits = vmCnt & 0xF;
@@ -1925,7 +1926,7 @@ struct AsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
     }
     case ISAFamily::GFX1250: {
       // Clamp asyncCnt to 6bits(hw imit); lower means conservative
-      unsigned asyncCnt = std::min(63u, op.getNum());
+      unsigned asyncCnt = std::min(63u, op.getNumInst());
       LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
                                       "llvm.amdgcn.s.wait.asynccnt", {},
                                       {b.i16_val(asyncCnt)});
