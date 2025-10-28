@@ -66,6 +66,7 @@ LogicalResult lowerLdStMatrix(
         loc, cvt, transpose, vals, smemBase, affineOffset, maskSpanAffineOffset,
         llvmElemTy, rewriter, targetInfo);
     if (succeeded(result)) {
+      llvm::dbgs() << "dstTy" << regLayout << "\n";
       return result;
     }
   }
