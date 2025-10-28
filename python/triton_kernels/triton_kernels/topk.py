@@ -12,7 +12,7 @@ import torch.distributed as dist
 def make_empty(offset, shape, dtype, device, all_gather):
     if all_gather:
         rank_id = dist.get_rank()
-        ret_bufs = symm_mem_pool.make_empty(offset=offset, shape=shape, dtype=dtype, region="topk")
+        ret_bufs = symm_mem_pool.make_empty(shape=shape, dtype=dtype, region="topk", region_offset=offset)
         ret = ret_bufs[rank_id]
         offset = symm_mem_pool.align_up(offset + ret.numel() * ret.element_size(),
                                         symm_mem_pool.regions["topk"].alignment)
