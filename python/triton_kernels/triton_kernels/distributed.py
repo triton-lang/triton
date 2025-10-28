@@ -154,8 +154,8 @@ class SymmetricMemoryPool:
         elem_size = torch.empty((), dtype=cast(torch.dtype, dtype)).element_size()
         n_bytes_topk = n_tokens_global * n_expts_act * elem_size # vals
         n_bytes_topk += n_tokens_global * n_expts_act * 2 # indx (int16)
-        num_blocks_n = triton.cdiv(d_input, BLOCK_N)
         num_blocks_m = triton.cdiv(n_tokens_global, BLOCK_M)
+        num_blocks_n = triton.cdiv(d_input, BLOCK_N)
         n_bytes_topk += num_blocks_m * BLOCK_M * num_blocks_n // 32 * 4 # bitmatrix (int32)
         n_bytes_dp_to_ep = n_tokens_global * n_expts_act * d_input * elem_size
         n_bytes_ep_to_dp = (n_tokens_global // n_ranks) * n_expts_act * d_model * elem_size
