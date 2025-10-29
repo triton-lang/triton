@@ -36,7 +36,7 @@ namespace {
 // /*-----------------Base pointer increment optimization-------------------*/
 
 // Optimization tries to transfer increments from offsets to base pointer in
-// buffer loads:
+// buffer operations:
 //
 // for ... (offsets = offsets_init):
 //   val = buffer_load basePtr [ offsets ]
@@ -101,53 +101,26 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     return Value();
   }
 
-  // load is a target buffer load
-  // offsetIncrement is a tensor added to offsets on each iteration
-  // baseIncrement is a scalar which will be added to base pointer after
-  // optimization offsetInitialized is a value of offset on first loop iteration
-  // incrementOp is an operation that advances offset tensor
-  struct LoadData {
-    Operation *load;
+  // Description of struct fields:
+  // - op is a target BufferOp, for example BufferLoadOp or BufferLoadToLocalOp
+  // - offsetIncrement is a tensor added to offsets on each iteration
+  // - baseIncrement is a scalar which will be added to base pointer
+  // - offsetInitializer is a value of offset on first loop iteration
+  // - incrementOp is an operation that advances offset tensor
+  struct BufferOpInfo {
+    amdttg::BufferOpAddressinInterface op;
     Value offsetIncrement;
     Value baseIncrement;
     Value offsetInitializer;
     Operation *incrementOp;
   };
 
-  static Value getOffset(Operation *load) {
-    if (auto specific = dyn_cast<amdttg::BufferLoadOp>(load))
-      return specific.getOffsets();
-    if (auto specific = dyn_cast<amdttg::BufferLoadToLocalOp>(load))
-      return specific.getOffsets();
-    assert(false && "unsupported operation type");
-  }
-
-  static Value getBasePtr(Operation *load) {
-    if (auto specific = dyn_cast<amdttg::BufferLoadOp>(load))
-      return specific.getPtr();
-    if (auto specific = dyn_cast<amdttg::BufferLoadToLocalOp>(load))
-      return specific.getPtr();
-    assert(false && "unsupported operation type");
-  }
-
-  static void setOffset(Operation *load, Value newOffset) {
-    assert((isa<amdttg::BufferLoadOp, amdttg::BufferLoadToLocalOp>(load)));
-    const int offsetIdx = isa<amdttg::BufferLoadOp>(load) ? 1 : 2;
-    load->setOperand(offsetIdx, newOffset);
-  }
-
-  static void setBasePtr(Operation *load, Value newBasePtr) {
-    assert((isa<amdttg::BufferLoadOp, amdttg::BufferLoadToLocalOp>(load)));
-    const int ptrIdx = isa<amdttg::BufferLoadOp>(load) ? 0 : 1;
-    load->setOperand(ptrIdx, newBasePtr);
-  }
-
   // Perform series of checks to decide if given operation could be optimized.
-  // If optimization is possible, return filled LoadData
-  static std::optional<LoadData> analyzeLoad(Operation *loadOp,
-                                             scf::ForOp targetFor) {
-    LDBG("Analyzing: " << *loadOp);
-    Value maybeOffsetsBlockArg = getOffset(loadOp);
+  // If optimization is possible, return filled BufferOpInfo
+  static std::optional<BufferOpInfo>
+  analyzeBufferOp(amdttg::BufferOpAddressinInterface op, scf::ForOp targetFor) {
+    LDBG("Analyzing: " << *op);
+    Value maybeOffsetsBlockArg = op.getOffsets();
     auto maybeOffsetDefOp = maybeOffsetsBlockArg.getDefiningOp();
     if (maybeOffsetDefOp && isa<arith::AddIOp>(maybeOffsetDefOp)) {
       for (auto &use : maybeOffsetDefOp->getUses()) {
@@ -164,20 +137,20 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
       }
     }
     if (!isa<BlockArgument>(maybeOffsetsBlockArg)) {
-      LDBG("Rejected: expect load offset to be a loop argument");
+      LDBG("Rejected: expect buffer op offset to be a loop argument");
       return {};
     }
     auto blockArg = dyn_cast<BlockArgument>(maybeOffsetsBlockArg);
     auto loopBlock = blockArg.getOwner();
     auto forOp = dyn_cast<scf::ForOp>(loopBlock->getParentOp());
     if (!forOp || forOp != targetFor) {
-      LDBG("Rejected: expect load offset to be a target loop argument");
+      LDBG("Rejected: expect buffer op offset to be a target loop argument");
       return {};
     }
-    auto basePtr = getBasePtr(loadOp);
+    auto basePtr = op.getPtr();
     auto defOpBlock = basePtr.getParentBlock();
     if (!defOpBlock->getParentOp()->isProperAncestor(targetFor)) {
-      LDBG("Rejected: expect load base Ptr to be invariant to the loop");
+      LDBG("Rejected: expect buffer op base Ptr to be invariant to the loop");
       return {};
     }
     auto yield = dyn_cast<scf::YieldOp>(loopBlock->getTerminator());
@@ -199,7 +172,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     }
     if (!advanceStep) {
       LDBG("Rejected: expect arith::addi to advance same block argument as "
-           "used in load");
+           "used in buffer op");
       return {};
     }
     if (!isScalarizableValue(advanceStep)) {
@@ -207,33 +180,33 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
       return {};
     }
     Value offsetInitializer = forOp.getInitArgs()[offsetOperandNo];
-    LoadData data = {loadOp, advanceStep, Value(), offsetInitializer,
-                     incrementOp};
-    LDBG("Load is suitable for offset pointer optimization");
+    BufferOpInfo data = {op, advanceStep, Value(), offsetInitializer,
+                         incrementOp};
+    LDBG("Buffer op is suitable for offset pointer optimization");
     return data;
   }
 
-  // Create scalar values which will increment load base ptr
-  // Fills appropriate fields in given LoadData structures
+  // Create scalar values which will increment buffer op base ptr
+  // Fills appropriate fields in given BufferOpInfo structures
   static void createScalarIncrements(PatternRewriter &rewriter,
-                                     SmallVector<LoadData> &loads) {
-    for (auto &loadData : loads) {
-      auto scalarStep = scalarizeValue(rewriter, loadData.offsetIncrement);
-      loadData.baseIncrement = scalarStep;
+                                     SmallVector<BufferOpInfo> &infoList) {
+    for (auto &BufferOpInfo : infoList) {
+      auto scalarStep = scalarizeValue(rewriter, BufferOpInfo.offsetIncrement);
+      BufferOpInfo.baseIncrement = scalarStep;
     }
   }
 
-  static bool isAddFirst(LoadData &ld) {
-    return getOffset(ld.load).getDefiningOp() == ld.incrementOp;
+  static bool isAddFirst(BufferOpInfo &info) {
+    return info.op.getOffsets().getDefiningOp() == info.incrementOp;
   }
 
   static scf::ForOp
   cloneLoopWithBasePtrIncrements(PatternRewriter &rewriter, scf::ForOp forOp,
-                                 SmallVector<LoadData> &loads) {
+                                 SmallVector<BufferOpInfo> &infoList) {
     // Create new loop with additional arguments
     llvm::SmallVector<Value> newLoopArgs(forOp.getInitArgs());
-    for (auto loadData : loads) {
-      newLoopArgs.push_back(getBasePtr(loadData.load));
+    for (auto info : infoList) {
+      newLoopArgs.push_back(info.op.getPtr());
     }
     rewriter.setInsertionPoint(forOp);
     auto newForOp = rewriter.create<scf::ForOp>(
@@ -251,19 +224,19 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
       rewriter.clone(op, mapping);
     }
     // Create base pointer increment operations
-    auto basePtrs = newBlock->getArguments().take_back(loads.size());
+    auto basePtrs = newBlock->getArguments().take_back(infoList.size());
     llvm::SmallVector<Value> nextIterBasePtrs;
-    for (auto [loadData, basePtr] : llvm::zip(loads, basePtrs)) {
-      if (isAddFirst(loadData)) {
+    for (auto [info, basePtr] : llvm::zip(infoList, basePtrs)) {
+      if (isAddFirst(info)) {
         rewriter.setInsertionPoint(newBlock, newBlock->begin());
       } else {
         rewriter.setInsertionPoint(newBlock, newBlock->end());
       }
-      Value step = loadData.baseIncrement;
-      if (mapping.contains(loadData.baseIncrement)) {
-        step = mapping.lookup(loadData.baseIncrement);
+      Value step = info.baseIncrement;
+      if (mapping.contains(info.baseIncrement)) {
+        step = mapping.lookup(info.baseIncrement);
       }
-      auto loc = loadData.incrementOp->getLoc();
+      auto loc = info.incrementOp->getLoc();
       auto ptrType = basePtr.getType();
       auto nextIterBasePtr =
           rewriter.create<triton::AddPtrOp>(loc, ptrType, basePtr, step);
@@ -280,48 +253,49 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     rewriter.setInsertionPoint(newBlock, newBlock->end());
     rewriter.create<scf::YieldOp>(oldBlock->getTerminator()->getLoc(),
                                   newYieldOperands);
-    // Replace dynamic load offsets with invariant value
+    // Replace dynamic buffer op offsets with invariant value
     // Replace base ptr with incrementing value
-    for (auto [loadData, basePtr, nextBasePtr] :
-         llvm::zip(loads, basePtrs, nextIterBasePtrs)) {
-      auto newLoad = mapping.lookup<Operation *>(loadData.load);
-      setOffset(newLoad, loadData.offsetInitializer);
+    for (auto [info, basePtr, nextBasePtr] :
+         llvm::zip(infoList, basePtrs, nextIterBasePtrs)) {
+      auto newBufferOp = cast<amdttg::BufferOpAddressinInterface>(
+          mapping.lookup<Operation *>(info.op.getOperation()));
+      newBufferOp.getOffsetsMutable().assign(info.offsetInitializer);
       // two cases:
-      // 1. first advance pointer, then load
-      // 2. load uses pointers from loop arguments, advanced pointer used on
-      // next iteration
-      Value advancingBasePtr = isAddFirst(loadData) ? nextBasePtr : basePtr;
-      setBasePtr(newLoad, advancingBasePtr);
+      // 1. buffer op uses pointer after increment
+      // 2. buffer op uses pointers from loop arguments,
+      //    incremented pointer is used on next iteration
+      Value advancingBasePtr = isAddFirst(info) ? nextBasePtr : basePtr;
+      newBufferOp.getPtrMutable().assign(advancingBasePtr);
     }
     return newForOp;
   }
 
-  template <typename OpType>
-  static void collectLoads(SmallVector<LoadData> &loads, scf::ForOp forOp) {
-    forOp.walk([&loads, forOp](OpType loadOp) {
-      auto loadData = analyzeLoad(loadOp, forOp);
-      if (loadData.has_value()) {
-        loads.push_back(loadData.value());
+  static SmallVector<BufferOpInfo> collectBufferOps(scf::ForOp forOp) {
+    SmallVector<BufferOpInfo> list;
+    forOp.walk([&list, forOp](amdttg::BufferOpAddressinInterface op) {
+      auto info = analyzeBufferOp(op, forOp);
+      if (info.has_value()) {
+        list.push_back(info.value());
       }
     });
+    return list;
   }
 
   LogicalResult matchAndRewrite(scf::ForOp forOp,
                                 PatternRewriter &rewriter) const override {
-    LDBG("Analyzing ForOp for for offset pointer optimization: " << forOp);
-    // Gather buffer loads which could be optimized
-    SmallVector<LoadData> loads;
-    collectLoads<triton::amdgpu::BufferLoadOp>(loads, forOp);
-    collectLoads<triton::amdgpu::BufferLoadToLocalOp>(loads, forOp);
+    LDBG("Analyzing ForOp for offset pointer optimization: " << forOp);
+    // Gather buffer buffer operations which could be optimized
+    SmallVector<BufferOpInfo> infoList = collectBufferOps(forOp);
 
-    if (loads.empty())
-      return rewriter.notifyMatchFailure(forOp, "no suitable buffer loads");
+    if (infoList.empty())
+      return rewriter.notifyMatchFailure(forOp,
+                                         "no suitable buffer operations");
 
     // Perform IR transformation
-    createScalarIncrements(rewriter, loads);
-    auto newForOp = cloneLoopWithBasePtrIncrements(rewriter, forOp, loads);
-    rewriter.replaceAllUsesWith(forOp.getResults(),
-                                newForOp.getResults().drop_back(loads.size()));
+    createScalarIncrements(rewriter, infoList);
+    auto newForOp = cloneLoopWithBasePtrIncrements(rewriter, forOp, infoList);
+    rewriter.replaceAllUsesWith(
+        forOp.getResults(), newForOp.getResults().drop_back(infoList.size()));
     rewriter.eraseOp(forOp);
     return success();
   }
