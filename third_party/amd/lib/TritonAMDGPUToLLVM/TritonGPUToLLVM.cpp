@@ -115,6 +115,7 @@ struct ConvertTritonAMDGPUToLLVM
 
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
 
