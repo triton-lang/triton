@@ -238,18 +238,12 @@ def matmul_launch_metadata(grid, kernel, args):
     fM = M if M is not None else n_tokens
     ret[f"flops{nbits}"] = 2.0 * fM * N * K * (1 if expt_is_inner else batch_size)
 
-    dst = args.get("GatherDstIndx", None)
     # sindx = args.get("WriteBackIndx", None)
     n_x_bytes = X.numel() * X.element_size()
     n_y_bytes = Y.numel() * Y.element_size()
     if hist is not None:
         assert n_tokens is not None
-        n_expts_act = args["N_EXPTS_ACT"]
-
-        if (dst is not None) and launch_metadata_allow_sync():
-            n_read_rows = (dst.view((-1, n_expts_act)) != -1).any(dim=1).sum()
-        else:
-            n_read_rows = n_tokens
+        n_read_rows = n_tokens
 
         if expt_is_inner:
             n_x_bytes = n_read_rows * X.shape[-2] * X.element_size()

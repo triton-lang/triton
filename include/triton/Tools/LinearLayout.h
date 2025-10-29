@@ -869,6 +869,8 @@ inline std::ostream &operator<<(std::ostream &os, const ColumnAction &action) {
   return os;
 }
 
+std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout);
+
 } // namespace mlir::triton
 
 #endif // TRITON_TOOLS_LINEARLAYOUT_H

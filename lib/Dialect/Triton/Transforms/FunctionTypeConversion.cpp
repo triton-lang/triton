@@ -39,9 +39,9 @@ struct CallOpConversion : public OpConversionPattern<CallOp> {
                                           oldNumFlattenedResults);
     }
 
-    auto newCallOp = rewriter.create<CallOp>(
-        callOp->getLoc(), callOp.getCallee(), convertedResults,
-        flattenValues(adaptor.getOperands()));
+    auto newCallOp =
+        CallOp::create(rewriter, callOp->getLoc(), callOp.getCallee(),
+                       convertedResults, flattenValues(adaptor.getOperands()));
     // Preserve any additional attributes that may have been set on the op
     newCallOp->setAttrs(callOp->getAttrs());
 
@@ -63,8 +63,8 @@ struct ReturnOpConversion : public OpConversionPattern<ReturnOp> {
   LogicalResult
   matchAndRewrite(ReturnOp returnOp, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto newReturnOp = rewriter.create<ReturnOp>(
-        returnOp->getLoc(), flattenValues(adaptor.getOperands()));
+    auto newReturnOp = ReturnOp::create(rewriter, returnOp->getLoc(),
+                                        flattenValues(adaptor.getOperands()));
     // Preserve any additional attributes that may have been set on the op
     newReturnOp->setAttrs(returnOp->getAttrs());
 
