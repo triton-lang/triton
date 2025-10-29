@@ -20,7 +20,6 @@ __all__ = [
 
 def make_default_matmul_mxfp4_w_layout(mx_axis: int):
     if cuda_capability_geq(10):
-        # return StridedLayout, dict()
         return BlackwellMXValueLayout, dict()
     elif cuda_capability_geq(9):
         return HopperMXValueLayout, {"mx_axis": mx_axis}

@@ -1,4 +1,3 @@
-import torch
 import triton
 import triton.language as tl
 
@@ -99,13 +98,14 @@ def _load_tile_attrs(
         tl.static_assert(M is not None)
         expt_id, pid_z, pid_z_out, start_m, block_id, eM = 0, 0, pid_e, 0, pid_m, M
         k_tiles = tl.cdiv(tl.load(ExptHist + pid_e), BLOCK_K)
-        padded_start_off = tl.load(ExptTileOffs + pid_e) * BLOCK_K
+        padded_start_off_raw = tl.load(ExptTileOffs + pid_e)
+        padded_start_off = padded_start_off_raw * BLOCK_K
         unpadded_start_off = tl.load(ExptOffs + pid_e)
         off_k_x = padded_start_off if X_IS_PADDED else unpadded_start_off
         # K_W is only used for non-TMA kernel (W bound is handled by TMA on TMA kernel).
         if W_IS_PADDED:
-            off_k_w = padded_start_off
-            K_W = tl.load(ExptTileOffs + pid_e + 1) * BLOCK_K
+            off_k_w = padded_start_off_raw * PACKED_BLOCK_K_W
+            K_W = tl.load(ExptTileOffs + pid_e + 1) * PACKED_BLOCK_K_W
         else:
             off_k_w = unpadded_start_off
             K_W = tl.load(ExptOffs + pid_e + 1)
@@ -221,7 +221,7 @@ def matmul_launch_metadata(grid, kernel, args):
         n_tokens = None
         n_w_bytes = W.numel() * W.element_size()
     if expt_is_inner:
-        K = int(n_tokens)
+        K = None if n_tokens is None else int(n_tokens)
     repr = lambda s, x: f"{s} = {x}" if x is not None else f"E_{len(hist)}({s}) = {n_rows}"
     nbits = X.dtype.itemsize * 8
     batch_repr = ""
@@ -238,23 +238,12 @@ def matmul_launch_metadata(grid, kernel, args):
     fM = M if M is not None else n_tokens
     ret[f"flops{nbits}"] = 2.0 * fM * N * K * (1 if expt_is_inner else batch_size)
 
-    gindx = args.get("GatherIndx", None)
     # sindx = args.get("WriteBackIndx", None)
     n_x_bytes = X.numel() * X.element_size()
     n_y_bytes = Y.numel() * Y.element_size()
     if hist is not None:
         assert n_tokens is not None
-        n_expts_act = args["N_EXPTS_ACT"]
-
-        if (gindx is not None) and launch_metadata_allow_sync():
-            # recreate inverse GatherIndx.
-            dst = torch.full_like(gindx, -1)
-            idx = torch.arange(len(gindx), device=gindx.device, dtype=torch.int32)
-            mask = gindx != -1
-            dst[gindx[mask]] = idx[mask]
-            n_read_rows = (dst.view((-1, n_expts_act)) != -1).any(dim=1).sum()
-        else:
-            n_read_rows = n_tokens
+        n_read_rows = n_tokens
 
         if expt_is_inner:
             n_x_bytes = n_read_rows * X.shape[-2] * X.element_size()

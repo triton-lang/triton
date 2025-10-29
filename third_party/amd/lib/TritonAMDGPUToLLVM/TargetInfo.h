@@ -35,7 +35,19 @@ public:
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Type elemTy, Value pred,
                     Operation *localLoadOp = nullptr) const override;
-  bool canUseLDSTransLoad(int bitwidth) const;
+
+  // Describes the parameters of ds_read_tr for a particular data type
+  struct LDSTransLoadParams {
+    // Number of lanes that cooperate in the instruction
+    unsigned numLanesInShuffleGroup;
+    // Number of bits that each lane reads per issued instruction
+    unsigned instBitWidth;
+    // Number of elements that the instruction needs to be contiguous in LDS
+    unsigned needContigReg;
+  };
+  // Get the ds_read_tr parameters for the instruction that operates on the
+  // element granularty specified by bitWidth
+  std::optional<LDSTransLoadParams> queryLDSTransLoadParams(int bitWidth) const;
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
@@ -74,6 +86,16 @@ public:
 
   bool supportVectorizedAtomics() const override;
 
+  // Returns true if the target supports per lane addresses into LDS for
+  // direct-to-lds loads. Some architectures (e.g. GFX9) do not support
+  // scattering and instead have to write warp coalesced into LDS
+  bool supportsDirectToLDSScattering() const;
+
+  // Some architectures (GFX9) require alias information on direct-to-lds loads
+  // and loads from LDS so LLVM does not add conservative waits between those
+  // ops. For such case we ensure syncronization between data hazards via
+  // ttg.async_wait
+  bool requiresAliasInfoForAsyncOps() const;
   bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
 
   void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,

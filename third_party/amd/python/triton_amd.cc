@@ -83,9 +83,9 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     pm.addNestedPass<mlir::triton::FuncOp>(
         mlir::createTritonAMDGPUCanonicalizePointers());
   });
-  ADD_PASS_OPTION_WRAPPER_2("add_convert_to_buffer_ops",
+  ADD_PASS_OPTION_WRAPPER_3("add_convert_to_buffer_ops",
                             mlir::createTritonAMDGPUConvertToBufferOps,
-                            const std::string &, bool);
+                            const std::string &, bool, bool);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      mlir::createTritonAMDGPUReorderInstructions);
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi", mlir::createTritonAMDFoldTrueCmpI);
@@ -408,7 +408,7 @@ void init_triton_amd(py::module &&m) {
 
         llvm::Triple triple(amdTargetTriple);
         const llvm::Target *target =
-            llvm::TargetRegistry::lookupTarget(triple.normalize(), error);
+            llvm::TargetRegistry::lookupTarget(triple, error);
         if (!target)
           throw std::runtime_error("target lookup error: " + error);
 
@@ -467,7 +467,7 @@ void init_triton_amd(py::module &&m) {
     std::string error;
     llvm::Triple triple(amdTargetTriple);
     const llvm::Target *target =
-        llvm::TargetRegistry::lookupTarget(triple.normalize(), error);
+        llvm::TargetRegistry::lookupTarget(triple, error);
     if (!target)
       throw std::runtime_error("target lookup error: " + error);
     std::unique_ptr<llvm::MCSubtargetInfo> sti(

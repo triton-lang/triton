@@ -864,8 +864,8 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     // The source op is already sliced at this point, so srcTy, type, tmem is
     // sliced. We use getTmemCompatibleLayout to get a block layout that is for
     // the sliced tmem here.
-    Attribute newDistributedEncoding = nvidia_gpu::getTmemCompatibleLayout(
-        tmem.getBlockM(), tmem.getBlockN(), oldRetType, numWarps);
+    auto newDistributedEncoding =
+        nvidia_gpu::getDefaultLayoutForTmemLdSt(type, numWarps, CTALayout);
 
     // oldRetType is the desired output, we slice it and convert from the
     // compatible layout to the sliced desired output.
@@ -919,8 +919,8 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
                                       accEncoding, retType.getMemorySpace(),
                                       retType.getMutableMemory());
 
-      Attribute newDistributedEncoding = nvidia_gpu::getTmemCompatibleLayout(
-          accEncoding.getBlockM(), accEncoding.getBlockN(), srcTy, numWarps);
+      auto newDistributedEncoding =
+          nvidia_gpu::getDefaultLayoutForTmemLdSt(retType, numWarps, CTALayout);
       auto newAccType = RankedTensorType::get(
           srcTy.getShape(), srcTy.getElementType(), newDistributedEncoding);
       auto cvtOp = builder.createWithAsyncTaskIds<ConvertLayoutOp>(
@@ -1148,8 +1148,8 @@ static Operation *sliceOp(Operation *op, int offset, IRMapping &mappings,
     for (auto thenResult : thenYieldOp.getResults()) {
       newResultTypes.push_back(thenResult.getType());
     }
-    auto newIfOp = builder.create<scf::IfOp>(ifOp.getLoc(), newResultTypes,
-                                             ifOp.getCondition());
+    auto newIfOp = scf::IfOp::create(builder, ifOp.getLoc(), newResultTypes,
+                                     ifOp.getCondition());
     // Move the original regions to the cloned operation.
     newIfOp.getThenRegion().takeBody(ifOp.getThenRegion());
     newIfOp.getElseRegion().takeBody(ifOp.getElseRegion());

@@ -130,7 +130,7 @@ public:
       bases[kWarp][1] = {0, 0};
       auto warpGroupToOffsetb128 = LinearLayout(
           bases, warpToOffset.getOutDims(), /*requireSurjective=*/false);
-      Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
+      Value warpId = nvgpu::WarpIdOp::create(rewriter, loc);
       Value warpStrideb128 =
           applyLinearLayout(loc, rewriter, warpGroupToOffsetb128,
                             {{kWarp, warpId}})[0]
@@ -320,11 +320,11 @@ private:
             default:
               llvm_unreachable("Unsupported swizzling size.");
             }
-            return {.descriptor = desc,
-                    .swizzlingByteWidth = swizzling,
-                    .bitwidth = bitwidth,
-                    .transposed = transposed,
-                    .fp4Padded = fp4Padded};
+            return {/* .descriptor = */ desc,
+                    /* .swizzlingByteWidth = */ swizzling,
+                    /* .bitwidth = */ bitwidth,
+                    /* .transposed = */ transposed,
+                    /* .fp4Padded = */ fp4Padded};
           }
         }
       }

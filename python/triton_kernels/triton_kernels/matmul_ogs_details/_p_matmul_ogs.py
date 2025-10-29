@@ -63,7 +63,7 @@ def _p_matmul_ogs(
              M, N, K, K_W, # shapes
              # expt data
              Betas, Gammas,
-             GatherIndx,
+             GatherIndx, GatherDstIndx,  # GatherDstIndx is only used for launch metadata.
              ScatterSrcIndx, num_idxs,
              WriteBackIndx, writeback_size,
              ExptHist, ExptOffs, ExptTileOffs, ExptData,
@@ -80,7 +80,7 @@ def _p_matmul_ogs(
              # epilogue transform
              EPILOGUE_FN: tl.constexpr, epilogue_fn_args,
              # MoE config
-             N_EXPTS_TOT: tl.constexpr, N_EXPTS_ACT: tl.constexpr,
+             N_EXPTS_TOT: tl.constexpr,
              # precision config
              MAX_NUM_IMPRECISE_ACC: tl.constexpr, ALLOW_TF32: tl.constexpr,
              FLEXPOINT_SATURATE_INF: tl.constexpr,
@@ -90,6 +90,7 @@ def _p_matmul_ogs(
              # optimization config
              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
              GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr,
+             INIT_OUTPUT_TO_ZERO: tl.constexpr,
              # NYI: Must be None
              SWIZZLE_MX_VALUE: tl.constexpr,
              # One of ["BLACKWELL", None]
@@ -125,7 +126,6 @@ def _p_matmul_ogs(
         tl.static_assert(get_dtype(WMxScale) == tl.uint8, "mx_scale_ptr must be uint8")
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
         tl.static_assert(SWIZZLE_MX_SCALE == "BLACKWELL_SCALE" or SWIZZLE_MX_SCALE is None, "Only Blackwell swizzling is supported for scales")
-        tl.static_assert(not EXPT_IS_INNER, "Not supported yet")
 
         # We have pack 2 fp4 values in a byte
         W_PACK_DIVISOR: tl.constexpr = 2 if w_type == tl.uint8 else 1
@@ -173,7 +173,7 @@ def _p_matmul_ogs(
     yN = N // ACTIVATION_REDUCTION_N
 
     # set masked out rows to 0
-    if HAS_SCATTER and N_EXPTS_ACT == 1:
+    if HAS_SCATTER and INIT_OUTPUT_TO_ZERO:
         # Iterate with reversed pids so that later pids will get more tiles if the number of
         # tiles isn't evenly divisible by the number of SMs.
         # The main loop after this iterates in the forward direction such that earlier
@@ -234,22 +234,21 @@ def _p_matmul_ogs(
                 offs_x_m += start_z * (stride_x_z // stride_x_m)
                 offs_x_m = tl.where(mask_m, offs_x_m, -1)
             else:
-                offs_x_m = tl.load(GatherIndx + start_m.to(index_type) + offs_m,
-                                    mask=mask_m, other=-N_EXPTS_ACT) // N_EXPTS_ACT
+                offs_x_m = tl.load(GatherIndx + start_m.to(index_type) + offs_m, mask=mask_m, other=-1)
         elif X_TMA_MODE is None or is_x_microscaled:
             offs_m = off_m + tl.arange(0, BLOCK_M)
             offs_m = tl.max_contiguous(tl.multiple_of(offs_m % eM, BLOCK_M), BLOCK_M)
             # no needs to bounds-check here because `offs_m` wraps around M dim
             if GatherIndx is not None:
                 tl.static_assert(HAS_GATHER)
-                offs_m = tl.load(GatherIndx + start_m.to(index_type) + offs_m) // N_EXPTS_ACT
+                offs_m = tl.load(GatherIndx + start_m.to(index_type) + offs_m)
             offs_x_m = offs_m.to(index_type)[:, None] * stride_x_m
 
         if is_x_microscaled:
             XMxScalePtrs = XMxScale + start_z.to(index_type) * stride_x_mx_z
             if GatherIndx is None:
                 XMxScalePtrs += start_m * stride_x_mx_m
-            offs_k_scale = MX_SCALE_BLOCK_K * pid_k + tl.arange(0, MX_SCALE_BLOCK_K)
+            offs_k_scale = off_k_x0 // MXFP_BLOCK_SIZE + tl.arange(0, MX_SCALE_BLOCK_K)
             XMxScalePtrs += (offs_x_m if USE_GATHER_TMA else offs_m).to(index_type)[:, None] * stride_x_mx_m
             XMxScalePtrs += offs_k_scale.to(index_type)[None, :] * stride_x_mx_k
         else:
@@ -403,14 +402,24 @@ def _p_matmul_ogs(
         biases = (bias,)
 
         if SUBTILE_FACTOR >= 2:
-            acc0, acc1 = acc.reshape(BLOCK_M, 2, BLOCK_N // 2).permute(0, 2, 1).split()
+            if SWAP_XW:
+                acc = acc.reshape(2, BLOCK_N // 2, BLOCK_M).permute(1, 2, 0)
+            else:
+                acc = acc.reshape(BLOCK_M, 2, BLOCK_N // 2).permute(0, 2, 1)
+            acc0, acc1 = acc.split()
             accs = (acc0, acc1)
             bias0, bias1 = bias.reshape(2, BLOCK_N // 2).permute(1, 0).split()
             biases = (bias0, bias1)
 
         if SUBTILE_FACTOR >= 4:
-            acc00, acc01 = acc0.reshape(BLOCK_M, 2, BLOCK_N // 4).permute(0, 2, 1).split()
-            acc10, acc11 = acc1.reshape(BLOCK_M, 2, BLOCK_N // 4).permute(0, 2, 1).split()
+            if SWAP_XW:
+                acc0 = acc0.reshape(2, BLOCK_N // 4, BLOCK_M).permute(1, 2, 0)
+                acc1 = acc1.reshape(2, BLOCK_N // 4, BLOCK_M).permute(1, 2, 0)
+            else:
+                acc0 = acc0.reshape(BLOCK_M, 2, BLOCK_N // 4).permute(0, 2, 1)
+                acc1 = acc1.reshape(BLOCK_M, 2, BLOCK_N // 4).permute(0, 2, 1)
+            acc00, acc01 = acc0.split()
+            acc10, acc11 = acc1.split()
             accs = (acc00, acc01, acc10, acc11)
             bias00, bias01 = bias0.reshape(2, BLOCK_N // 4).permute(1, 0).split()
             bias10, bias11 = bias1.reshape(2, BLOCK_N // 4).permute(1, 0).split()

@@ -57,6 +57,7 @@ public:
   // computation is eliminated.
   SmallVector<Value> maybeDeduplicate(SourceOp op,
                                       SmallVector<Value> resultVals) const {
+    auto ctx = op.getContext();
     if (!isMemoryEffectFree(op))
       // the op has side effects: can't dedup
       return resultVals;
@@ -65,104 +66,45 @@ public:
       // there must be exactly 1 result
       return resultVals;
     Value result = results[0];
-    Type type = result.getType();
-    if (!type)
-      return resultVals;
-    RankedTensorType rtType = dyn_cast<RankedTensorType>(type);
+    RankedTensorType rtType = dyn_cast<RankedTensorType>(result.getType());
     if (!rtType)
       // the result must be a tensor
       return resultVals;
-    Attribute encoding = rtType.getEncoding();
-    if (!encoding)
-      // encoding not available
-      return resultVals;
-    Attribute baseEncoding = encoding;
-    if (isa<AMDMfmaEncodingAttr>(baseEncoding) ||
-        isa<AMDWmmaEncodingAttr>(baseEncoding))
-      // TODO: this logic seems incorrect for mfma and wmma layout. Skip for
-      // now. We saw mismatches for some flash-attention and dot tests on AMD
-      // backend. Note that this logic works for sliced layout whose parent is
-      // mfma layout. Therefore, this is not combined with the following check.
-      return resultVals;
-    while (auto sliced = dyn_cast<SliceEncodingAttr>(baseEncoding))
-      baseEncoding = sliced.getParent();
-    if (isa<LinearEncodingAttr, DotOperandEncodingAttr>(baseEncoding)) {
-      // TODO: this logic seems incorrect for mma layout. Skip for now.
-      // The following test crashes and some other miscompile:
-      // test_core::test_fp8_dot_acc
-      return resultVals;
-    }
 
-    SmallVector<unsigned> elemsPerThread = getElemsPerThread(rtType);
-    int rank = elemsPerThread.size();
-    if (product<unsigned>(elemsPerThread) != resultVals.size())
-      return resultVals;
+    // Bail out if we don't have the constancy analysis
     AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(result);
     if (!axisInfo)
-      // axis info (e.g., constancy) not available
       return resultVals;
-    SmallVector<unsigned> contigPerThread = getContigPerThread(rtType);
-    if (rank != contigPerThread.size())
-      return resultVals;
-
     SmallVector<int64_t> constancy = axisInfo->getConstancy();
-    if (rank != constancy.size())
-      return resultVals;
-    bool hasConstancy = false;
-    for (int i = 0; i < rank; ++i) {
-      if (constancy[i] > contigPerThread[i]) {
-        if (constancy[i] % contigPerThread[i] != 0)
-          // constancy is not evenly covered by contigPerThread
-          return resultVals;
-        // can't move the values across different
-        // "contigPerThread"-sized blocks
-        constancy[i] = contigPerThread[i];
-      }
-      if (elemsPerThread[i] < 1 || constancy[i] < 1)
-        return resultVals;
-      if (!(elemsPerThread[i] % constancy[i] == 0 ||
-            constancy[i] % elemsPerThread[i] == 0))
-        // either the constancy along each dimension must fit
-        // into the elemsPerThread or the other way around
-        return resultVals;
-      if (constancy[i] > 1)
-        hasConstancy = true;
-    }
-    if (!hasConstancy)
-      // nothing to deduplicate
+
+    if (llvm::all_of(constancy, [](int64_t c) { return c == 1; }))
       return resultVals;
 
-    if (rank > 1) {
-      // reorder the shape and constancy vectors by the axis order:
-      // from the fastest-changing to the smallest-changing axis
-      SmallVector<unsigned> order = getOrder(rtType);
-      if (rank != order.size())
-        return resultVals;
-      elemsPerThread = applyPermutation(elemsPerThread, order);
-      constancy = applyPermutation(constancy, order);
-    }
-
-    SmallVector<unsigned> strides(rank, 1);
-    for (int i = 1; i < rank; ++i) {
-      strides[i] = strides[i - 1] * elemsPerThread[i - 1];
-    }
-    SmallVector<Value> dedupResultVals;
-    dedupResultVals.reserve(resultVals.size());
-    for (int i = 0; i < resultVals.size(); ++i) {
-      // each coordinate of the orig_idx is "coarsened" using the
-      // constancy along this dimension: the resulting dedup_idx
-      // points to the reused value in the original resultsVal
-      int orig_idx = i;
-      int dedup_idx = 0;
-      for (int j = 0; j < rank; ++j) {
-        int coord_j = orig_idx % elemsPerThread[j];
-        dedup_idx += (coord_j / constancy[j] * constancy[j]) * strides[j];
-        orig_idx /= elemsPerThread[j];
+    // We zero out the bases that are constant
+    auto kReg = StringAttr::get(ctx, "register");
+    auto ll = toLinearLayout(rtType);
+    auto dims = to_vector(ll.getOutDimNames());
+    auto llReg = ll.sublayout({kReg}, dims);
+    auto inv = ll.pseudoinvert();
+    auto invReg = inv.sublayout(dims, {kReg});
+    auto bases_inv = invReg.getBases();
+    for (auto [c, d] : llvm::zip(constancy, dims)) {
+      assert(llvm::isPowerOf2_32(c));
+      for (int i = 0; i < llvm::Log2_32(c); i++) {
+        bases_inv[d][i] = {0};
       }
-      dedupResultVals.push_back(resultVals[dedup_idx]);
     }
+    auto invBroadcast =
+        LinearLayout(bases_inv, invReg.getOutDims(), /*isSurjective=*/false);
+    auto cvt = llReg.compose(invBroadcast);
 
-    return dedupResultVals;
+    // Deduplicate the result values
+    SmallVector<Value> outVals(resultVals.size());
+    for (int i = 0; i < outVals.size(); i++) {
+      auto srcIdx = cvt.apply({{kReg, i}}).begin()->second;
+      outVals[i] = resultVals[srcIdx];
+    }
+    return outVals;
   }
   LogicalResult
   matchAndRewrite(SourceOp op, OpAdaptor adaptor,
@@ -224,9 +166,38 @@ struct ElementwiseOpConversion
                                     ConversionPatternRewriter &rewriter,
                                     Type elemTy, MultipleOperandsRange operands,
                                     Location loc) const {
-    return {rewriter.create<DestOp>(loc, elemTy, operands[0],
-                                    adaptor.getAttributes().getValue())};
+    return {DestOp::create(rewriter, loc, elemTy, operands[0],
+                           adaptor.getAttributes().getValue())};
   }
+};
+
+template <typename SourceOp>
+struct ElementwiseToIntrinsicOpConversion
+    : public ElementwiseOpConversionBase<
+          SourceOp, ElementwiseToIntrinsicOpConversion<SourceOp>> {
+  using Base =
+      ElementwiseOpConversionBase<SourceOp, ElementwiseToIntrinsicOpConversion>;
+  using OpAdaptor = typename Base::OpAdaptor;
+
+  using Base::Base;
+
+  explicit ElementwiseToIntrinsicOpConversion(
+      LLVMTypeConverter &typeConverter,
+      ModuleAxisInfoAnalysis &axisAnalysisPass, StringRef intrinsic,
+      PatternBenefit benefit = patternBenefitDefault)
+      : Base(typeConverter, axisAnalysisPass, benefit), intrinsic(intrinsic) {}
+
+  SmallVector<Value> createDestOps(SourceOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    return {LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, elemTy,
+                                            operands[0])
+                .getResult(0)};
+  }
+
+private:
+  StringRef intrinsic;
 };
 
 } // namespace gpu

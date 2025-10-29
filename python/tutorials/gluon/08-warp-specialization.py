@@ -35,7 +35,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     tensor_memory_descriptor,
     allocate_tensor_memory,
-    get_tmem_32x32b_reg_layout,
+    get_tmem_reg_layout,
     tcgen05_mma,
     tcgen05_commit,
 )
@@ -276,15 +276,11 @@ def elementwise_add_warp_specialized_kernel(  #
     # warps to reduce the amount of registers allocated. The default partition
     # receives whatever registers are left over, based on `maxnreg` passed to
     # the kernel.
-    gl.warp_specialize(
-        default_args=(barriers, buffers, ynumel, YBLOCK, layout),
-        default_partition=compute_partition,
-        worker_args=(descs, barriers, buffers, xoff, numel, YBLOCK),
-        worker_partitions=[load_partition, store_partition],
-        worker_num_warps=[1, 1],
-        # Registers must be allocated in multiples of 8, between [24, 256].
-        worker_num_regs=[24, 24],
-    )
+    gl.warp_specialize([
+        (compute_partition, (barriers, buffers, ynumel, YBLOCK, layout)),
+        (load_partition, (descs, barriers, buffers, xoff, numel, YBLOCK)),
+        (store_partition, (descs, barriers, buffers, xoff, numel, YBLOCK)),
+    ], [1, 1], [24, 24])
 
 
 def elementwise_add_warp_specialized(a, b, c, XBLOCK=32, YBLOCK=64,  #
@@ -533,7 +529,13 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
     acc_empty_bars = p.acc_empty_bars
     acc_ready_bars = p.acc_ready_bars
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
-    acc_layout: gl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, [BLOCK_M, BLOCK_N], p.num_warps)
+    acc_tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
+    acc_layout: gl.constexpr = get_tmem_reg_layout(
+        dtype,
+        (BLOCK_M, BLOCK_N),
+        acc_tmem_layout,
+        p.num_warps,
+    )
     SPLIT_N: gl.constexpr = BLOCK_N // p.SUBTILE_FACTOR
     acc_smem = gl.allocate_shared_memory(dtype, [BLOCK_M, SPLIT_N], p.c_desc.layout)
 
@@ -588,14 +590,11 @@ def matmul_warp_specialized_kernel(a_desc, b_desc, c_desc, SchedulerImpl: gl.con
 
     p = PartitionArgs(a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_bufs,
                       acc_empty_bars, acc_ready_bars, SUBTILE_FACTOR, num_warps)
-    gl.warp_specialize(
-        default_args=(p, SchedulerImpl),
-        default_partition=matmul_epilogue_partition,
-        worker_args=(p, SchedulerImpl),
-        worker_partitions=[matmul_load_partition, matmul_mma_partition],
-        worker_num_warps=[1, 1],
-        worker_num_regs=[24, 24],
-    )
+    gl.warp_specialize([
+        (matmul_epilogue_partition, (p, SchedulerImpl)),
+        (matmul_load_partition, (p, SchedulerImpl)),
+        (matmul_mma_partition, (p, SchedulerImpl)),
+    ], [1, 1], [24, 24])
 
 
 def matmul_warp_specialized(A, B, C, BLOCK_M, BLOCK_N, BLOCK_K, num_buffers, SUBTILE_FACTOR, num_warps, SchedulerImpl):

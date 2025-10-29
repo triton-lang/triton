@@ -57,7 +57,8 @@ int getNumberOfLoadInstructions(RankedTensorType srcTy,
 // [token] -> ttg.async_commit_group -> [token] -> ttg.async_wait. So here we
 // scan the operands of ttg.async_commit_group to count the number of issued
 // async load intrinsics.
-int getNumberOfLoadInstructions(Operation *op) {
+int getNumOfAsyncLoadInstructionsForOp(Operation *op,
+                                       bool emitRemarkOnNonAsyncOp) {
   if (isa<ttg::AsyncCommitGroupOp>(op)) {
     int count = 0;
     for (auto token : op->getOperands()) {
@@ -76,7 +77,8 @@ int getNumberOfLoadInstructions(Operation *op) {
     }
     return count;
   }
-  if (isa<tt::LoadOp, tt::StoreOp, amdgpu::BufferLoadToLocalOp,
+  if (emitRemarkOnNonAsyncOp &&
+      isa<tt::LoadOp, tt::StoreOp, amdgpu::BufferLoadToLocalOp,
           amdgpu::BufferStoreOp, tt::AtomicRMWOp, tt::AtomicCASOp,
           amdgpu::BufferAtomicRMWOp>(op)) {
     op->emitRemark("Global memory operation between async wait and "
@@ -91,7 +93,10 @@ int getNumberOfLoadInstructions(Operation *op) {
 // waitcnt to represent the number of hardware instructions we are
 // interleaving with. This allows us to manually emit the waitcnt during
 // lowering.
-void updateWaitCount(ttg::AsyncWaitOp waitOp, RewriterBase &rewriter) {
+template <typename WaitType>
+void updateWaitCount(WaitType waitOp,
+                     llvm::function_ref<int(Operation *)> computeCountForOp,
+                     RewriterBase &rewriter) {
   int waitCnt = std::numeric_limits<int>::max();
 
   // AsyncWait can await multiple tokens so we get the minimum from all
@@ -100,16 +105,27 @@ void updateWaitCount(ttg::AsyncWaitOp waitOp, RewriterBase &rewriter) {
     // Traverse def chain from waitOp to the producer of the token and count
     // the minumum number of vmcnt instructions
     auto tokenWaitCnt =
-        deduceMinCountOnDefChain(token, waitOp, [](Operation *op) {
-          return getNumberOfLoadInstructions(op);
-        });
+        deduceMinCountOnDefChain(token, waitOp, computeCountForOp);
     waitCnt = std::min(waitCnt, tokenWaitCnt);
   }
 
-  if (waitCnt == std::numeric_limits<int>::max() || waitOp.getNum() == waitCnt)
-    return;
+  if (waitCnt == std::numeric_limits<int>::max()) {
+    // TODO(alex): set to conservative waitcnt=0 after gluon refactoring
+    waitCnt = waitOp.getNum();
+  }
 
-  rewriter.modifyOpInPlace(waitOp, [&]() { waitOp.setNum(waitCnt); });
+  if (std::is_same_v<WaitType, ttg::AsyncWaitOp>) {
+    // Replace ttg.async_wait which counts outstanding commits groups with
+    // amdgpu.async_wait which counts the number of oustanding
+    // intrinsics
+    auto tokens = waitOp.getAsyncToken();
+    rewriter.setInsertionPointAfter(waitOp);
+    rewriter.replaceOpWithNewOp<amdgpu::AsyncWaitOp>(waitOp, tokens, waitCnt);
+  } else {
+    // For TDM each TTGIR op will create exactly one intrinsics so we do not use
+    // a separate op
+    rewriter.modifyOpInPlace(waitOp, [&]() { waitOp.setNum(waitCnt); });
+  }
 }
 
 } // anonymous namespace
@@ -125,15 +141,36 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
       return;
     }
 
+    // For HW which does not support async loads (GFX9) but only direct-to-lds,
+    // we still use the waitcnt to support interleaving of direct-to-lds loads
+    // when pipelining. The flag is used to emit warnings in case we find
+    // tt.loads/store which make the computed count conservative and hinder
+    // performance.
+    bool supportsAsyncLoads = true;
+    switch (targetInfo.getISAFamily()) {
+    case triton::AMD::ISAFamily::CDNA3:
+    case triton::AMD::ISAFamily::CDNA4:
+      supportsAsyncLoads = false;
+      break;
+    default:
+      break;
+    }
+
     ModuleOp m = getOperation();
 
     SmallVector<ttg::AsyncWaitOp> waitOps;
     getOperation()->walk(
         [&](ttg::AsyncWaitOp waitOp) { waitOps.push_back(waitOp); });
 
+    // Note: AsyncWaits should ignore TDM ops; different HW counter
     for (auto waitOp : waitOps) {
       IRRewriter builder(waitOp->getContext());
-      updateWaitCount(waitOp, builder);
+      updateWaitCount(
+          waitOp,
+          [&](Operation *op) {
+            return getNumOfAsyncLoadInstructionsForOp(op, !supportsAsyncLoads);
+          },
+          builder);
     }
   }
 };

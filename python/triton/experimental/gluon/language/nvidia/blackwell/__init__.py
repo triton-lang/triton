@@ -5,8 +5,7 @@ from dataclasses import dataclass
 from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
-from triton.experimental.gluon.language._layouts import BlockedLayout, _get_shape_per_cta
-from triton.experimental.gluon.language._semantic import _check
+from triton.experimental.gluon.language._semantic import _check, _compute_tmem_reg_layout
 
 from . import tma
 from ..hopper import fence_async_shared, mbarrier
@@ -21,7 +20,7 @@ __all__ = [
     "allocate_tensor_memory",
     "async_copy",
     "fence_async_shared",
-    "get_tmem_32x32b_reg_layout",
+    "get_tmem_reg_layout",
     "mbarrier",
     "mma_v2",
     "tensor_memory_descriptor",
@@ -47,6 +46,9 @@ class TensorMemoryLayout:
     cta_split_num: Optional[Tuple[int, int]] = None
 
     def __post_init__(self):
+        super().__setattr__("block", _unwrap_if_constexpr(self.block))
+        super().__setattr__("col_stride", _unwrap_if_constexpr(self.col_stride))
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         assert len(self.block) == 2
         assert self.cta_split_num is None or len(self.cta_split_num) == 2
         assert self.col_stride >= 1 and (self.col_stride &
@@ -78,6 +80,7 @@ class TensorMemoryScalesLayout:
     cta_split_num: Optional[Tuple[int, int]] = None
 
     def __post_init__(self):
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         assert self.cta_split_num is None or len(self.cta_split_num) == 2
 
     def _to_ir(self, builder):
@@ -90,48 +93,48 @@ class TensorMemoryScalesLayout:
 
 
 @constexpr_function
-def _cdiv(x, div):
-    return (x + div - 1) // div
-
-
-@constexpr_function
-def get_tmem_32x32b_reg_layout(M, N, shape, num_warps, ctas_per_cga=None, cta_split_num=None, cta_order=None):
-    """Returns a BlockedLayout compatible with load/store on tensor memory with the 32x32b instruction variant.
+def get_tmem_reg_layout(
+        element_ty,
+        shape,
+        layout,
+        num_warps,
+        instr_variant="32x32b",
+        ctas_per_cga=(1, 1),
+        cta_split_num=(1, 1),
+        cta_order=(1, 0),
+):
     """
-    assert len(shape) == 2, "expected a 2D tensor"
-    assert num_warps in [4, 8], "expected 4 or 8 warps"
+    Returns a DistributedLinearLayout compatible with TMEM load/store instructions.
 
-    shape_per_cta = _get_shape_per_cta(shape, cta_split_num)
-    blocks_per_tile = [shape_per_cta[0] // M, shape_per_cta[1] // N]
-    num_blocks = blocks_per_tile[0] * blocks_per_tile[1]
+    Args:
+        element_ty (dtype): Element type stored in tensor memory.
+        shape (Sequence[int]): Global tensor shape addressed by the TMEM descriptor.
+        layout (TensorMemoryLayout): Tensor memory layout descriptor.
+        num_warps (int): Number of warps participating in the operation.
+        instr_variant (str): TMEM instruction variant (e.g. ``\"32x32b\"``).
+        ctas_per_cga (tuple[int, int]): CTA grouping along each dimension.
+        cta_split_num (tuple[int, int]): CTA split factors along each dimension.
+        cta_order (tuple[int, int]): CTA order.
+    """
 
-    num_warp_groups = num_warps // 4
-    if M == 64:
-        threads_per_warp = [16, 2]
-        if num_blocks == 1:
-            size_per_thread = [1, _cdiv(N, num_warp_groups * 2)]
-            warps_per_cta = [4, num_warp_groups]
-        else:
-            size_per_thread = [1, _cdiv(N, 2)]
-            warps_per_cta = [4 * min(blocks_per_tile[0], num_warp_groups)]
-            warps_per_cta.append(_cdiv(num_warp_groups, warps_per_cta[0] // 4))
-    else:
-        if shape[0] > 128:
-            size_per_thread = [1, N]
-            threads_per_warp = [32, 1]
-            warps_per_cta = [4 * num_warp_groups, 1]
-        else:
-            size_per_thread = [1, _cdiv(N, num_warp_groups)]
-            threads_per_warp = [32, 1]
-            warps_per_cta = [4, num_warp_groups]
-    return BlockedLayout(
-        size_per_thread=size_per_thread,
-        threads_per_warp=threads_per_warp,
-        warps_per_cta=warps_per_cta,
-        order=[0, 1],
-        ctas_per_cga=ctas_per_cga,
-        cta_split_num=cta_split_num,
-        cta_order=cta_order,
+    def _unwrap(x):
+        if isinstance(x, ttgl.constexpr):
+            return _unwrap(x.value)
+        if isinstance(x, list):
+            return [_unwrap(i) for i in x]
+        if isinstance(x, tuple):
+            return tuple(_unwrap(i) for i in x)
+        return x
+
+    return _compute_tmem_reg_layout(
+        _unwrap(element_ty),
+        _unwrap(shape),
+        _unwrap(layout),
+        _unwrap(num_warps),
+        _unwrap(instr_variant),
+        _unwrap(ctas_per_cga),
+        _unwrap(cta_split_num),
+        _unwrap(cta_order),
     )
 
 
@@ -280,7 +283,7 @@ class tensor_memory_descriptor(base_value):
         builder = _semantic.builder
         shape = self.shape[1:]
         layout = self.layout
-        ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
+        ret = tensor_memory_descriptor(None, self.dtype, shape, layout, shape)
         ret.handle = builder.create_memdesc_index(ret.type.to_ir(builder), self.handle, index.handle)
         return ret
 

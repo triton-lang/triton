@@ -28,9 +28,21 @@ class OptFlags:
     arch: str
     target_kernel_kwargs: dict
 
-    def __post_init__(self):
-        if self.fused_scatter and self.split_k != 1:
-            raise ValueError("Not supported")
+
+def max_allowable_mn(
+    max_mn: int,
+    m: int,
+    n: int,
+    split_k: int,
+    ) -> int:
+    return 1 if m * n >= max_mn else split_k
+
+
+def all_constraints_satisfied(opt_flags: OptFlags, constraints: dict) -> bool:
+    _split_k_constraints = ['split_k', 'max_allowable_mn']
+    assert all(getattr(opt_flags, ck) == cv for ck, cv in constraints.items() if cv is not None and ck not in _split_k_constraints)
+    if constraints.get('split_k') and not constraints.get('max_allowable_mn'):
+        assert opt_flags.split_k == constraints['split_k']
 
 
 def make_default_opt_flags_amd(
@@ -51,7 +63,7 @@ def make_default_opt_flags_amd(
     has_y_acc_in,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_n", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile"]
+    constraints_supported = ["block_m", "block_n", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile", "max_allowable_mn"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None:
@@ -90,7 +102,9 @@ def make_default_opt_flags_amd(
     )
     is_persistent = constraints.get("is_persistent", False)
     # split_k:
-    if constraints.get("split_k", None) is not None:
+    if constraints.get("max_allowable_mn", 0) > 0 and constraints.get("split_k") is not None:
+        split_k = max_allowable_mn(constraints["max_allowable_mn"], m, n, constraints.get("split_k"))
+    elif constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
     elif is_persistent or enforce_bitwise_invariance:
         split_k = 1
@@ -149,7 +163,7 @@ def make_default_opt_flags_amd(
         target_kernel_kwargs=target_kernel_kwargs,
     )
     # check constraints
-    assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
+    all_constraints_satisfied(ret, constraints)
     return ret
 
 def make_default_opt_flags_nvidia(
@@ -170,7 +184,7 @@ def make_default_opt_flags_nvidia(
     has_y_acc_in,
     constraints,
 ):
-    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "fused_scatter", "epilogue_subtile", "num_stages", "idle_sms"]
+    constraints_supported = ["block_m", "block_k", "split_k", "is_persistent", "fused_scatter", "epilogue_subtile", "num_stages", "idle_sms", "max_allowable_mn"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None or batch_size > 1:
@@ -190,7 +204,10 @@ def make_default_opt_flags_nvidia(
     else:
         if tokens_per_expt <= 64 and routing_data is not None and routing_data.expt_hist is not None:
             # Ragged and likely memory bound; set the block size higher to minimize loading weights more than once.
-            block_m = max(16, min(triton.next_power_of_2(2 * tokens_per_expt), 64))
+            if lhs_dtype == torch.bfloat16 and rhs_dtype == FP4 and tokens_per_expt >= 16 and torch.cuda.get_device_capability()[0] >= 10:
+                block_m = max(16, min(triton.next_power_of_2(8 * tokens_per_expt), 128))
+            else:
+                block_m = max(16, min(triton.next_power_of_2(2 * tokens_per_expt), 64))
         else:
             block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
     # block n
@@ -211,16 +228,17 @@ def make_default_opt_flags_nvidia(
             is_persistent = False
     block_n = block_n_tma if is_persistent else block_n
     # block k
-    if constraints.get("block_k", None) is not None:
-        block_k = constraints["block_k"]
-    else:
-        block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
-    if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and tokens_per_expt > 1:
+    block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
+    if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and tokens_per_expt > 1 and lhs_dtype != torch.bfloat16:
         # Swap block_n and block_k for mxfp4 weights so that block_k is a full cacheline, so long as K is sufficiently large.
         # TODO: swizzle the HBM layout of the weights instead
         block_n, block_k = block_k, block_n
+    if constraints.get("block_k", None) is not None:
+        block_k = constraints["block_k"]
     # split_k
-    if constraints.get("split_k", None) is not None:
+    if constraints.get("max_allowable_mn", 0) > 0 and constraints.get("split_k") is not None:
+        split_k = max_allowable_mn(constraints["max_allowable_mn"], m, n, constraints.get("split_k"))
+    elif constraints.get("split_k", None) is not None:
         split_k = constraints["split_k"]
     elif is_persistent or enforce_bitwise_invariance or precision_config.act_scale is not None or precision_config.out_scale is not None:
         split_k = 1
@@ -283,7 +301,7 @@ def make_default_opt_flags_nvidia(
         idle_sms=constraints.get("idle_sms", 0),
     )
     # check constraints
-    assert all(getattr(ret, ck) == cv for ck, cv in constraints.items() if cv is not None), f"{ret} != {constraints}"
+    all_constraints_satisfied(ret, constraints)
     return ret
 
 # --------------
@@ -300,6 +318,10 @@ def update_opt_flags_constraints(constraints: dict[str, int]):
 def reset_opt_flags_constraints():
     global _opt_flags_constraints
     _opt_flags_constraints = dict()
+
+def reset_opt_flags():
+    global _opt_flags
+    _opt_flags = None
 
 def set_opt_flags(opt_flags: OptFlags):
     global _opt_flags
@@ -331,6 +353,9 @@ def make_opt_flags(
         raise InapplicableConstraint("cannot enforce `is_persistent=True` constraint")
     if _opt_flags_constraints.get("fused_scatter", False) and not can_use_fused_scatter:
         raise InapplicableConstraint("cannot enforce `fused_scatter=True` constraint")
+    if _opt_flags_constraints.get("max_allowable_mn"):
+        if not _opt_flags_constraints.get("split_k"):
+            raise InapplicableConstraint("split_k also needs to be provided with max_allowable_mn")
     enforce_bitwise_invariance = precision_config.enforce_bitwise_invariance
     if _opt_flags is not None:
         assert not _opt_flags_constraints

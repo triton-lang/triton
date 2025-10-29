@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -tritongpu-F32DotTC -canonicalize  | FileCheck %s --check-prefixes=CHECK
+// RUN: triton-opt %s -tritongpu-F32DotTC="emu-tf32=1" -canonicalize  | FileCheck %s --check-prefixes=CHECK
 
 // CHECK:     %[[DOT1:.*]] = tt.dot %[[LHS_LOW:.*]], %[[RHS_HIGH:.*]], %cst, inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>
 // CHECK:     %[[DOT2:.*]] = tt.dot %[[LHS_HIGH:.*]], %[[RHS_LOW:.*]], %[[DOT1]], inputPrecision = tf32 : tensor<16x16xf32> * tensor<16x16xf32> -> tensor<16x16xf32>

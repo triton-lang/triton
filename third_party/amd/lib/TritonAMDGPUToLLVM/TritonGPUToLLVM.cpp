@@ -77,18 +77,8 @@ public:
 
   Type convertTensorDescType(triton::TensorDescType type) {
     auto ctx = type.getContext();
-
-    RankedTensorType rankedTensorType = type.getBlockType();
-    auto eleType = rankedTensorType.getElementType();
-    auto shape = rankedTensorType.getShape();
-    SmallVector<Type, 5> types;
-    // base ptr
-    types.push_back(LLVM::LLVMPointerType::get(ctx, 1));
-    // 32 bit shapes
-    types.append(shape.size(), IntegerType::get(ctx, 32));
-    // 64 bit strides
-    types.append(shape.size(), IntegerType::get(ctx, 64));
-
+    // 4 for group0, 8 for group1
+    auto types = SmallVector<Type>(4 + 8, IntegerType::get(ctx, 32));
     return LLVM::LLVMStructType::getLiteral(ctx, types);
   }
 };
@@ -129,7 +119,10 @@ struct ConvertTritonAMDGPUToLLVM
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
 
-    AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
+    if (targetInfo.requiresAliasInfoForAsyncOps())
+      AMD::annotateLocalLoadsSyncedViaAsyncWait(mod);
+
+    AMD::addLocalBarrierAfterAmdGpuAsyncWait(mod);
     ModuleMembarAnalysis membarPass(&allocation,
                                     mlir::triton::AMD::membarFilter);
     membarPass.run();
@@ -283,8 +276,8 @@ private:
     // Ask for 16B alignment on global_smem because that's the largest we should
     // ever need (4xi32).
     auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
-    auto global = b.create<LLVM::GlobalOp>(
-        loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
+    auto global = LLVM::GlobalOp::create(
+        b, loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
         "global_smem", /*value=*/Attribute(), /*alignment=*/16,
         // Add ROCm support.
         static_cast<unsigned>(NVVM::NVVMMemorySpace::Shared));
