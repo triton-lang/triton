@@ -109,7 +109,7 @@ bool isUsedByDotScaledOp(Operation *op);
 
 // Return true if the result of op is stored contiguously along the dimension
 // of mfmaLayout's order[0].
-bool isStoredContinuously(
+bool isStoredContigWithMfmaLayout(
     Operation *op, ModuleAxisInfoAnalysis &axisAnalysisPass,
     const mlir::triton::gpu::AMDMfmaEncodingAttr &mfmaLayout);
 // Check if the result of this tl.dot is used as opA or opB of another tl.dot
