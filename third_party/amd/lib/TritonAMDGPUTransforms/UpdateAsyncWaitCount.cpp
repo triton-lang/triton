@@ -109,10 +109,23 @@ void updateWaitCount(WaitType waitOp,
     waitCnt = std::min(waitCnt, tokenWaitCnt);
   }
 
-  if (waitCnt == std::numeric_limits<int>::max() || waitOp.getNum() == waitCnt)
-    return;
+  if (waitCnt == std::numeric_limits<int>::max()) {
+    // TODO(alex): set to conservative waitcnt=0 after gluon refactoring
+    waitCnt = waitOp.getNum();
+  }
 
-  rewriter.modifyOpInPlace(waitOp, [&]() { waitOp.setNum(waitCnt); });
+  if (std::is_same_v<WaitType, ttg::AsyncWaitOp>) {
+    // Replace ttg.async_wait which counts outstanding commits groups with
+    // amdgpu.async_wait which counts the number of oustanding
+    // intrinsics
+    auto tokens = waitOp.getAsyncToken();
+    rewriter.setInsertionPointAfter(waitOp);
+    rewriter.replaceOpWithNewOp<amdgpu::AsyncWaitOp>(waitOp, tokens, waitCnt);
+  } else {
+    // For TDM each TTGIR op will create exactly one intrinsics so we do not use
+    // a separate op
+    rewriter.modifyOpInPlace(waitOp, [&]() { waitOp.setNum(waitCnt); });
+  }
 }
 
 } // anonymous namespace

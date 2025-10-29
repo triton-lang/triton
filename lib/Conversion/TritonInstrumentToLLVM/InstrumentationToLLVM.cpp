@@ -63,7 +63,7 @@ Value createFullLike(OpBuilder &builder, Location loc, Value scalar,
   auto elemTy = tensorTy.getElementType();
   assert(scalarTy == elemTy &&
          "Expected scalar to be of the same type as the tensor elements");
-  return builder.create<triton::SplatOp>(loc, tensorTy, scalar);
+  return triton::SplatOp::create(builder, loc, tensorTy, scalar);
 }
 
 Value createCmpIntTensorScalar(
@@ -71,7 +71,7 @@ Value createCmpIntTensorScalar(
     arith::CmpIPredicate predicate = arith::CmpIPredicate::eq) {
   auto tensorTy = cast<RankedTensorType>(tensor.getType());
   auto splat = createFullLike(builder, loc, scalar, tensorTy);
-  auto cmp = builder.create<arith::CmpIOp>(loc, predicate, tensor, splat);
+  auto cmp = arith::CmpIOp::create(builder, loc, predicate, tensor, splat);
   return cmp;
 }
 
@@ -113,10 +113,10 @@ Value convertAndBroadcast(OpBuilder &b, Location loc, Value tensor, int dim,
       RankedTensorType::get(shape, tensorType.getElementType(), encoding);
   auto slicedLayout =
       ttg::SliceEncodingAttr::get(b.getContext(), dim, encoding);
-  tensor = b.create<ttg::ConvertLayoutOp>(
-      loc, tensorType.cloneWithEncoding(slicedLayout), tensor);
+  tensor = ttg::ConvertLayoutOp::create(
+      b, loc, tensorType.cloneWithEncoding(slicedLayout), tensor);
   tensor = tti::expandOuterSlicedDim(b, loc, tensor);
-  tensor = b.create<tt::BroadcastOp>(loc, resultType, tensor);
+  tensor = tt::BroadcastOp::create(b, loc, resultType, tensor);
   return tensor;
 }
 
@@ -124,7 +124,7 @@ Value createConvertLayout(OpBuilder &b, Location loc, Value tensor,
                           Attribute encoding) {
   RankedTensorType dstType =
       cast<RankedTensorType>(tensor.getType()).cloneWithEncoding(encoding);
-  return b.create<ttg::ConvertLayoutOp>(loc, dstType, tensor);
+  return ttg::ConvertLayoutOp::create(b, loc, dstType, tensor);
 }
 
 std::tuple<Block *, Block *, Block *>
@@ -140,9 +140,9 @@ createIfBlock(ConversionPatternRewriter &b, Location loc, Value cnd) {
   // Split a block after the call.
   Block *thenBlock = b.splitBlock(ifBlock, ifBlock->begin());
   b.setInsertionPointToEnd(ifBlock);
-  b.create<LLVM::BrOp>(loc, thenBlock);
+  LLVM::BrOp::create(b, loc, thenBlock);
   b.setInsertionPointToEnd(prevBlock);
-  b.create<LLVM::CondBrOp>(loc, cnd, ifBlock, thenBlock);
+  LLVM::CondBrOp::create(b, loc, cnd, ifBlock, thenBlock);
   b.setInsertionPointToStart(thenBlock);
 
   return {prevBlock, ifBlock, thenBlock};
@@ -154,9 +154,10 @@ Value createOneHot(OpBuilder &b, Location loc, int size, int index,
   int end = size;
   RankedTensorType type =
       RankedTensorType::get({size}, b.getI32Type(), encoding);
-  Value arange = b.create<tt::MakeRangeOp>(loc, type, start, end);
+  Value arange = tt::MakeRangeOp::create(b, loc, type, start, end);
   Value indexT = tti::createConstIntTensor(b, loc, index, type);
-  return b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, arange, indexT);
+  return arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq, arange,
+                               indexT);
 }
 
 Value createColumnMask(OpBuilder &b, Location loc, int column,
@@ -175,8 +176,8 @@ Value createMultiColumnMask(OpBuilder &b, Location loc, uint64_t columnMask,
   Value columnMaskVal = tti::createConstIntTensor(b, loc, 0, i1TensorType);
   for (int i = 0; i < 64; i++) {
     if (columnMask & (1ULL << i)) {
-      columnMaskVal = b.create<arith::OrIOp>(
-          loc, columnMaskVal, createColumnMask(b, loc, i, tensorType));
+      columnMaskVal = arith::OrIOp::create(
+          b, loc, columnMaskVal, createColumnMask(b, loc, i, tensorType));
     }
   }
   return columnMaskVal;
@@ -185,7 +186,8 @@ Value createMultiColumnMask(OpBuilder &b, Location loc, uint64_t columnMask,
 Value createOrReduce(OpBuilder &b, Location loc, Value tensor, int axis) {
   OpBuilder::InsertionGuard guard(b);
   auto tensorType = cast<RankedTensorType>(tensor.getType());
-  auto reduceOp = b.create<tt::ReduceOp>(loc, std::vector<Value>{tensor}, axis);
+  auto reduceOp =
+      tt::ReduceOp::create(b, loc, std::vector<Value>{tensor}, axis);
   auto &region = reduceOp.getRegion();
   auto &block = region.emplaceBlock();
   block.addArguments({tensorType.getElementType(), tensorType.getElementType()},
@@ -193,8 +195,9 @@ Value createOrReduce(OpBuilder &b, Location loc, Value tensor, int axis) {
   auto arg0 = block.getArgument(0);
   auto arg1 = block.getArgument(1);
   b.setInsertionPointToStart(&block);
-  auto result = b.create<arith::OrIOp>(loc, arg0, arg1);
-  auto returnOp = b.create<tt::ReduceReturnOp>(loc, std::vector<Value>{result});
+  auto result = arith::OrIOp::create(b, loc, arg0, arg1);
+  auto returnOp =
+      tt::ReduceReturnOp::create(b, loc, std::vector<Value>{result});
   return reduceOp->getResult(0);
 }
 
@@ -229,8 +232,8 @@ struct AssertInThreadOpConversion
     assert(condTy.isSignedInteger() ||
            condTy.isSignlessInteger() &&
                "Unsupported type for assert_in_thread");
-    Value zero = rewriter.create<LLVM::ConstantOp>(
-        loc, condTy, rewriter.getZeroAttr(condTy));
+    Value zero = LLVM::ConstantOp::create(rewriter, loc, condTy,
+                                          rewriter.getZeroAttr(condTy));
     for (auto elem : condElems) {
       if (check_any) {
         condition = b.or_(condition, elem);
@@ -313,12 +316,12 @@ struct BufferPointersOpConversion
       assert(op.getMemType() == tti::MemType::TENSOR_MEM &&
              "Unsupported memory type");
       TritonLLVMOpBuilder b(loc, rewriter);
-      base = rewriter.create<nvgpu::TensorMemoryBaseAddress>(loc);
+      base = nvgpu::TensorMemoryBaseAddress::create(rewriter, loc);
       base = b.ptrtoint(i32_ty, base);
     }
-    bufPointers = rewriter.create<arith::AddIOp>(
-        loc, bufPointers,
-        rewriter.create<triton::SplatOp>(loc, bufPointers.getType(), base));
+    bufPointers = arith::AddIOp::create(
+        rewriter, loc, bufPointers,
+        triton::SplatOp::create(rewriter, loc, bufPointers.getType(), base));
     rewriter.replaceOp(op, bufPointers);
     return success();
   }
@@ -333,7 +336,7 @@ struct BufferPointersOpConversion
     SmallVector<APInt> apInts = llvm::to_vector(
         llvm::map_range(values, [](int32_t v) { return APInt(64, v); }));
     auto denseAttr = DenseElementsAttr::get(tensorType, apInts);
-    return builder.create<arith::ConstantOp>(loc, tensorType, denseAttr);
+    return arith::ConstantOp::create(builder, loc, tensorType, denseAttr);
   }
 
   Value getSharedMemoryBase(ConversionPatternRewriter &rewriter,
@@ -369,16 +372,17 @@ struct LockAcquireOpConversion
     b.setInsertionPointToEnd(prevBlock2);
     Value elect = mlir::LLVM::NVIDIA::createElectPredicateWarp0(loc, b);
     if (op.getPred()) {
-      elect = b.create<arith::AndIOp>(loc, elect, op.getPred());
+      elect = arith::AndIOp::create(b, loc, elect, op.getPred());
     }
-    b.create<LLVM::CondBrOp>(loc, elect, whileBlock, endBlock);
+    LLVM::CondBrOp::create(b, loc, elect, whileBlock, endBlock);
 
     b.setInsertionPointToEnd(whileBlock);
 
     auto i32 = b.getI32Type();
     Value zero =
-        b.create<arith::ConstantOp>(loc, i32, b.getIntegerAttr(i32, 0));
-    Value one = b.create<arith::ConstantOp>(loc, i32, b.getIntegerAttr(i32, 1));
+        arith::ConstantOp::create(b, loc, i32, b.getIntegerAttr(i32, 0));
+    Value one =
+        arith::ConstantOp::create(b, loc, i32, b.getIntegerAttr(i32, 1));
 
     // Inline PTX CAS: old = atom.global.acquire.gpu.cas.b32 [lock], 0, 1
     // Use converted lock pointer from adaptor for addressing
@@ -387,18 +391,18 @@ struct LockAcquireOpConversion
     auto *ptrOpr = ptx.newAddrOperand(adaptor.getLock(), "l");
     auto *cmpOpr = ptx.newOperand(zero, "r");
     auto *valOpr = ptx.newOperand(one, "r");
-    auto &atom = *ptx.create<PTXInstr>("atom");
+    auto &atom = *ptx.create("atom");
     atom.global().o("acquire").o("gpu").o("cas").o("b32");
     atom(dstOpr, ptrOpr, cmpOpr, valOpr);
     Value old = ptx.launch(b, loc, i32);
 
     // while (old != 0) loop
     Value cond =
-        b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne, old, zero);
-    b.create<LLVM::CondBrOp>(loc, cond, whileBlock, endBlock);
+        arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne, old, zero);
+    LLVM::CondBrOp::create(b, loc, cond, whileBlock, endBlock);
 
     b.setInsertionPointToStart(endBlock);
-    b.create<mlir::gpu::BarrierOp>(loc);
+    mlir::gpu::BarrierOp::create(b, loc);
     b.eraseOp(op);
     return success();
   }
@@ -422,12 +426,12 @@ struct LockReleaseOpConversion
     Type elType = cast<PointerType>(lock.getType()).getPointeeType();
     assert(elType == b.getI32Type() && "Expected i32 lock element type");
 
-    b.create<mlir::gpu::BarrierOp>(loc);
+    mlir::gpu::BarrierOp::create(b, loc);
     Value zero =
-        b.create<arith::ConstantOp>(loc, elType, b.getIntegerAttr(elType, 0));
-    b.create<triton::AtomicRMWOp>(loc, elType, RMWOp::XCHG, lock, zero, nullptr,
-                                  MemSemantic::ACQUIRE_RELEASE,
-                                  MemSyncScope::GPU);
+        arith::ConstantOp::create(b, loc, elType, b.getIntegerAttr(elType, 0));
+    triton::AtomicRMWOp::create(b, loc, elType, RMWOp::XCHG, lock, zero,
+                                nullptr, MemSemantic::ACQUIRE_RELEASE,
+                                MemSyncScope::GPU);
     b.eraseOp(op);
     return success();
   }
@@ -459,8 +463,8 @@ struct SetWriteVisibilityOpConversion
     Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
     Value threadBit = tti::createConstIntTensor(b, loc, op.getThreadMask(),
                                                 writeVisibilityType);
-    writeVisibility = b.create<arith::SelectOp>(loc, buffersEqBuf, threadBit,
-                                                writeVisibility);
+    writeVisibility = arith::SelectOp::create(b, loc, buffersEqBuf, threadBit,
+                                              writeVisibility);
 
     tti::createStoreScratchMemory(b, loc, op.getWriteVisibility(),
                                   writeVisibility, writeVisibilityType);
@@ -500,11 +504,11 @@ struct SetReadVisibilityOpConversion
     Value threadBit = tti::createConstIntTensor(b, loc, op.getThreadMask(),
                                                 readVisibilityType);
     Value readVisibilityOrThreadBit =
-        b.create<arith::OrIOp>(loc, readVisibility, threadBit);
+        arith::OrIOp::create(b, loc, readVisibility, threadBit);
     Value bufAndThread =
-        b.create<arith::AndIOp>(loc, buffersEqBuf, threadColumnMask);
-    readVisibility = b.create<arith::SelectOp>(
-        loc, bufAndThread, readVisibilityOrThreadBit, readVisibility);
+        arith::AndIOp::create(b, loc, buffersEqBuf, threadColumnMask);
+    readVisibility = arith::SelectOp::create(
+        b, loc, bufAndThread, readVisibilityOrThreadBit, readVisibility);
     tti::createStoreScratchMemory(b, loc, op.getReadVisibility(),
                                   readVisibility, readVisibilityType);
     b.eraseOp(op);
@@ -546,7 +550,7 @@ struct CopyWriteVisibilityOpConversion
     Value clearMaskTensor = tti::createConstIntTensor(
         b, loc, static_cast<int64_t>(clearMaskVal), writeVisibilityType);
     Value cleared =
-        b.create<arith::AndIOp>(loc, writeVisibility, clearMaskTensor);
+        arith::AndIOp::create(b, loc, writeVisibility, clearMaskTensor);
 
     uint64_t sourceMaskVal = 1ull << op.getSourceThread();
     Value sourceMaskTensor = tti::createConstIntTensor(
@@ -554,13 +558,13 @@ struct CopyWriteVisibilityOpConversion
     Value zeroTensor =
         tti::createConstIntTensor(b, loc, 0, writeVisibilityType);
     Value sourceBits =
-        b.create<arith::AndIOp>(loc, writeVisibility, sourceMaskTensor);
-    Value sourceIsSet = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
-                                                sourceBits, zeroTensor);
-    Value replicated =
-        b.create<arith::SelectOp>(loc, sourceIsSet, destMaskTensor, zeroTensor);
+        arith::AndIOp::create(b, loc, writeVisibility, sourceMaskTensor);
+    Value sourceIsSet = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::ne,
+                                              sourceBits, zeroTensor);
+    Value replicated = arith::SelectOp::create(b, loc, sourceIsSet,
+                                               destMaskTensor, zeroTensor);
 
-    Value updated = b.create<arith::OrIOp>(loc, cleared, replicated);
+    Value updated = arith::OrIOp::create(b, loc, cleared, replicated);
     tti::createStoreScratchMemory(b, loc, op.getWriteVisibility(), updated,
                                   writeVisibilityType);
     b.eraseOp(op);
@@ -594,20 +598,20 @@ struct CopyReadVisibilityOpConversion
     Value destMaskTensor =
         createMultiColumnMask(b, loc, op.getDestMask(), readVisibilityType);
 
-    Value cleared = b.create<arith::SelectOp>(loc, destMaskTensor, zeroTensor,
-                                              readVisibility);
+    Value cleared = arith::SelectOp::create(b, loc, destMaskTensor, zeroTensor,
+                                            readVisibility);
 
     Value sourceColumnMask =
         createColumnMask(b, loc, op.getSourceThread(), readVisibilityType);
-    Value sourceColumn = b.create<arith::SelectOp>(loc, sourceColumnMask,
-                                                   readVisibility, zeroTensor);
+    Value sourceColumn = arith::SelectOp::create(b, loc, sourceColumnMask,
+                                                 readVisibility, zeroTensor);
     Value sourceVector = createOrReduce(b, loc, sourceColumn, /*axis=*/1);
     Value broadcastRow =
         convertAndBroadcast(b, loc, sourceVector, 1, readVisibilityType);
-    Value replicated = b.create<arith::SelectOp>(loc, destMaskTensor,
-                                                 broadcastRow, zeroTensor);
+    Value replicated = arith::SelectOp::create(b, loc, destMaskTensor,
+                                               broadcastRow, zeroTensor);
 
-    Value updated = b.create<arith::OrIOp>(loc, cleared, replicated);
+    Value updated = arith::OrIOp::create(b, loc, cleared, replicated);
     tti::createStoreScratchMemory(b, loc, op.getReadVisibility(), updated,
                                   readVisibilityType);
     b.eraseOp(op);
@@ -643,7 +647,7 @@ struct ClearWriteTrackingOpConversion
         convertAndBroadcast(b, loc, buffersEqBuf, 1, writeTrackingType);
     Value zero = tti::createConstIntTensor(b, loc, 0, writeTrackingType);
     writeTracking =
-        b.create<arith::SelectOp>(loc, buffersEqBuf, zero, writeTracking);
+        arith::SelectOp::create(b, loc, buffersEqBuf, zero, writeTracking);
     tti::createStoreScratchMemory(b, loc, op.getWriteTracking(), writeTracking,
                                   writeTrackingType);
     b.eraseOp(op);
@@ -679,7 +683,7 @@ struct ClearReadVisibilityOpConversion
         convertAndBroadcast(b, loc, buffersEqBuf, 1, readVisibilityType);
     Value zero = tti::createConstIntTensor(b, loc, 0, readVisibilityType);
     readVisibility =
-        b.create<arith::SelectOp>(loc, buffersEqBuf, zero, readVisibility);
+        arith::SelectOp::create(b, loc, buffersEqBuf, zero, readVisibility);
     tti::createStoreScratchMemory(b, loc, op.getReadVisibility(),
                                   readVisibility, readVisibilityType);
     b.eraseOp(op);
@@ -714,7 +718,7 @@ struct ClearReadTrackingOpConversion
         convertAndBroadcast(b, loc, buffersEqBuf, 1, readTrackingType);
     Value zero = tti::createConstIntTensor(b, loc, 0, readTrackingType);
     readTracking =
-        b.create<arith::SelectOp>(loc, buffersEqBuf, zero, readTracking);
+        arith::SelectOp::create(b, loc, buffersEqBuf, zero, readTracking);
     tti::createStoreScratchMemory(b, loc, op.getReadTracking(), readTracking,
                                   readTrackingType);
     b.eraseOp(op);
@@ -757,17 +761,17 @@ struct TrackVisibleWritesOpConversion
     Value threadBit =
         tti::createConstIntTensor(b, loc, 1ULL << thread, writeVisibilityType);
     Value visibleWrites =
-        b.create<arith::AndIOp>(loc, writeVisibility, threadBit);
-    visibleWrites = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                            visibleWrites, threadBit);
+        arith::AndIOp::create(b, loc, writeVisibility, threadBit);
+    visibleWrites = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq,
+                                          visibleWrites, threadBit);
     visibleWrites =
         convertAndBroadcast(b, loc, visibleWrites, 1, writeTrackingType);
     Value barAndVisible =
-        b.create<arith::AndIOp>(loc, barriersEqBar, visibleWrites);
+        arith::AndIOp::create(b, loc, barriersEqBar, visibleWrites);
     Value writeTrackingOne =
         tti::createConstIntTensor(b, loc, 1, writeTrackingType);
-    writeTracking = b.create<arith::SelectOp>(loc, barAndVisible,
-                                              writeTrackingOne, writeTracking);
+    writeTracking = arith::SelectOp::create(b, loc, barAndVisible,
+                                            writeTrackingOne, writeTracking);
     tti::createStoreScratchMemory(b, loc, op.getWriteTracking(), writeTracking,
                                   writeTrackingType);
     b.eraseOp(op);
@@ -811,15 +815,15 @@ struct TrackVisibleReadsOpConversion
         createColumnMask(b, loc, op.getThread(), readVisibilityType);
     Value readVisibilityZero =
         tti::createConstIntTensor(b, loc, 0, readVisibilityType);
-    Value visibleReads = b.create<arith::SelectOp>(
-        loc, threadColumnMask, readVisibility, readVisibilityZero);
+    Value visibleReads = arith::SelectOp::create(
+        b, loc, threadColumnMask, readVisibility, readVisibilityZero);
     visibleReads = createOrReduce(b, loc, visibleReads, 1);
     visibleReads =
         convertAndBroadcast(b, loc, visibleReads, 1, readTrackingType);
     Value readTrackingOrVisible =
-        b.create<arith::OrIOp>(loc, readTracking, visibleReads);
-    readTracking = b.create<arith::SelectOp>(
-        loc, barriersEqBar, readTrackingOrVisible, readTracking);
+        arith::OrIOp::create(b, loc, readTracking, visibleReads);
+    readTracking = arith::SelectOp::create(b, loc, barriersEqBar,
+                                           readTrackingOrVisible, readTracking);
 
     tti::createStoreScratchMemory(b, loc, op.getReadTracking(), readTracking,
                                   readTrackingType);
@@ -861,8 +865,8 @@ struct TransferVisibleWritesOpConversion
         convertAndBroadcast(b, loc, barriersEqBar, 0, writeTrackingType);
     Value writeTrackingZero =
         tti::createConstIntTensor(b, loc, 0, writeTrackingType);
-    Value trackingBuffers = b.create<arith::SelectOp>(
-        loc, barriersEqBar, writeTracking, writeTrackingZero);
+    Value trackingBuffers = arith::SelectOp::create(
+        b, loc, barriersEqBar, writeTracking, writeTrackingZero);
     trackingBuffers = createOrReduce(b, loc, trackingBuffers, 1);
     trackingBuffers = createConvertLayout(b, loc, trackingBuffers,
                                           writeVisibilityType.getEncoding());
@@ -870,16 +874,16 @@ struct TransferVisibleWritesOpConversion
         cast<RankedTensorType>(trackingBuffers.getType());
     Value trackingBuffersOne =
         tti::createConstIntTensor(b, loc, 1, trackingBuffersType);
-    trackingBuffers = b.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::eq, trackingBuffers, trackingBuffersOne);
+    trackingBuffers = arith::CmpIOp::create(
+        b, loc, arith::CmpIPredicate::eq, trackingBuffers, trackingBuffersOne);
     Value threadMask = tti::createConstIntTensor(b, loc, op.getThreadMask(),
                                                  writeVisibilityType);
     Value writeVisibilityZero =
         tti::createConstIntTensor(b, loc, 0, writeVisibilityType);
-    Value trackingThreadBit = b.create<arith::SelectOp>(
-        loc, trackingBuffers, threadMask, writeVisibilityZero);
+    Value trackingThreadBit = arith::SelectOp::create(
+        b, loc, trackingBuffers, threadMask, writeVisibilityZero);
     writeVisibility =
-        b.create<arith::OrIOp>(loc, writeVisibility, trackingThreadBit);
+        arith::OrIOp::create(b, loc, writeVisibility, trackingThreadBit);
     tti::createStoreScratchMemory(b, loc, op.getWriteVisibility(),
                                   writeVisibility, writeVisibilityType);
     b.eraseOp(op);
@@ -920,17 +924,17 @@ struct TransferVisibleReadsOpConversion
         convertAndBroadcast(b, loc, barriersEqBar, 0, readTrackingType);
     Value readTrackingZero =
         tti::createConstIntTensor(b, loc, 0, readTrackingType);
-    Value trackingBar = b.create<arith::SelectOp>(
-        loc, barriersEqBar, readTracking, readTrackingZero);
+    Value trackingBar = arith::SelectOp::create(b, loc, barriersEqBar,
+                                                readTracking, readTrackingZero);
     trackingBar = createOrReduce(b, loc, trackingBar, 1);
     trackingBar =
         convertAndBroadcast(b, loc, trackingBar, 1, readVisibilityType);
     Value readVisibilityOrTracking =
-        b.create<arith::OrIOp>(loc, readVisibility, trackingBar);
+        arith::OrIOp::create(b, loc, readVisibility, trackingBar);
     Value threadColumnMask =
         createMultiColumnMask(b, loc, op.getThreadMask(), readVisibilityType);
-    readVisibility = b.create<arith::SelectOp>(
-        loc, threadColumnMask, readVisibilityOrTracking, readVisibility);
+    readVisibility = arith::SelectOp::create(
+        b, loc, threadColumnMask, readVisibilityOrTracking, readVisibility);
     tti::createStoreScratchMemory(b, loc, op.getReadVisibility(),
                                   readVisibility, readVisibilityType);
     b.eraseOp(op);
@@ -965,29 +969,29 @@ struct VerifyWriteVisibilityOpConversion
     Value buffersEqBuf = createCmpIntTensorScalar(b, loc, buffers, buf);
     Value writeVisibilityZero =
         tti::createConstIntTensor(b, loc, 0, writeVisibilityType);
-    Value bufVisibility = b.create<arith::SelectOp>(
-        loc, buffersEqBuf, writeVisibility, writeVisibilityZero);
-    Value noOneIsWriting = b.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::eq, bufVisibility, writeVisibilityZero);
+    Value bufVisibility = arith::SelectOp::create(
+        b, loc, buffersEqBuf, writeVisibility, writeVisibilityZero);
+    Value noOneIsWriting = arith::CmpIOp::create(
+        b, loc, arith::CmpIPredicate::eq, bufVisibility, writeVisibilityZero);
     Value thread =
         tti::createConstIntTensor(b, loc, op.getThread(), writeVisibilityType);
     buffersEqBuf =
-        b.create<arith::ExtUIOp>(loc, writeVisibilityType, buffersEqBuf);
-    Value bufferThreadBit = b.create<arith::ShLIOp>(loc, buffersEqBuf, thread);
+        arith::ExtUIOp::create(b, loc, writeVisibilityType, buffersEqBuf);
+    Value bufferThreadBit = arith::ShLIOp::create(b, loc, buffersEqBuf, thread);
     Value bufferHasVisibility =
-        b.create<arith::AndIOp>(loc, bufVisibility, bufferThreadBit);
-    bufferHasVisibility = b.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::eq, bufferHasVisibility, bufferThreadBit);
+        arith::AndIOp::create(b, loc, bufVisibility, bufferThreadBit);
+    bufferHasVisibility = arith::CmpIOp::create(
+        b, loc, arith::CmpIPredicate::eq, bufferHasVisibility, bufferThreadBit);
     Value writeVisible =
-        b.create<arith::OrIOp>(loc, noOneIsWriting, bufferHasVisibility);
+        arith::OrIOp::create(b, loc, noOneIsWriting, bufferHasVisibility);
 
     std::string message = "Buffer being accessed has outstanding writes.";
     if (!op.getOperandName().str().empty()) {
       message += " Operand: " + op.getOperandName().str();
     }
-    b.create<tti::ExperimentalAssertInThreadOp>(loc, writeVisible,
-                                                b.getStringAttr(message),
-                                                /*check_any=*/false);
+    tti::ExperimentalAssertInThreadOp::create(b, loc, writeVisible,
+                                              b.getStringAttr(message),
+                                              /*check_any=*/false);
     b.eraseOp(op);
     return success();
   }
@@ -1022,27 +1026,27 @@ struct VerifyReadVisibilityOpConversion
         convertAndBroadcast(b, loc, buffersEqBuf, 1, readVisibilityType);
     Value readVisibilityZero =
         tti::createConstIntTensor(b, loc, 0, readVisibilityType);
-    Value bufVisibility = b.create<arith::SelectOp>(
-        loc, buffersEqBuf, readVisibility, readVisibilityZero);
+    Value bufVisibility = arith::SelectOp::create(
+        b, loc, buffersEqBuf, readVisibility, readVisibilityZero);
     Value totalVisibility = createOrReduce(b, loc, bufVisibility, 1);
     Value threadColumnMask =
         createColumnMask(b, loc, op.getThread(), readVisibilityType);
     Value threadBit = tti::createConstIntTensor(b, loc, 1ULL << op.getThread(),
                                                 readVisibilityType);
     Value readVisibilityOrThreadBit =
-        b.create<arith::OrIOp>(loc, readVisibility, threadBit);
-    Value bufThreadVisibility = b.create<arith::SelectOp>(
-        loc, threadColumnMask, bufVisibility, readVisibilityZero);
+        arith::OrIOp::create(b, loc, readVisibility, threadBit);
+    Value bufThreadVisibility = arith::SelectOp::create(
+        b, loc, threadColumnMask, bufVisibility, readVisibilityZero);
     bufThreadVisibility = createOrReduce(b, loc, bufThreadVisibility, 1);
     // Thread must have visivility that is a superset of read visibility of all
     // other threads
     Value threadAndTotalVisibility =
-        b.create<arith::AndIOp>(loc, bufThreadVisibility, totalVisibility);
+        arith::AndIOp::create(b, loc, bufThreadVisibility, totalVisibility);
     Value hasVisibility =
-        b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                threadAndTotalVisibility, totalVisibility);
-    b.create<tti::ExperimentalAssertInThreadOp>(
-        loc, hasVisibility, "Buffer being accessed has outstanding reads",
+        arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq,
+                              threadAndTotalVisibility, totalVisibility);
+    tti::ExperimentalAssertInThreadOp::create(
+        b, loc, hasVisibility, "Buffer being accessed has outstanding reads",
         /*check_any=*/false);
     b.eraseOp(op);
     return success();
@@ -1083,11 +1087,11 @@ struct StageAccessForCommitOpConversion
     Value threadColumnMask =
         createColumnMask(b, loc, op.getThread(), writeCommitsType);
     Value bufAndThread =
-        b.create<arith::AndIOp>(loc, buffersEqBuf, threadColumnMask);
+        arith::AndIOp::create(b, loc, buffersEqBuf, threadColumnMask);
     auto writeCommitsMinusOne =
         tti::createConstIntTensor(b, loc, -1, writeCommitsType, true);
-    writeCommits = b.create<arith::SelectOp>(
-        loc, bufAndThread, writeCommitsMinusOne, writeCommits);
+    writeCommits = arith::SelectOp::create(b, loc, bufAndThread,
+                                           writeCommitsMinusOne, writeCommits);
     tti::createStoreScratchMemory(b, loc, op.getOutstandingCommits(),
                                   writeCommits, writeCommitsType);
     b.eraseOp(op);
@@ -1124,10 +1128,10 @@ struct CommitAccessesOpConversion
     // clang-format on
 
     Type elementType = writeCommitsType.getElementType();
-    Value minusOne = b.create<arith::ConstantOp>(
-        loc, elementType, b.getIntegerAttr(elementType, -1));
-    Value zero = b.create<arith::ConstantOp>(loc, elementType,
-                                             b.getIntegerAttr(elementType, 0));
+    Value minusOne = arith::ConstantOp::create(
+        b, loc, elementType, b.getIntegerAttr(elementType, -1));
+    Value zero = arith::ConstantOp::create(b, loc, elementType,
+                                           b.getIntegerAttr(elementType, 0));
     Value writeCommitsOne =
         tti::createConstIntTensor(b, loc, 1, writeCommitsType);
 
@@ -1136,18 +1140,18 @@ struct CommitAccessesOpConversion
     auto writeCommitsGtZero = createCmpIntTensorScalar(
         b, loc, writeCommits, zero, arith::CmpIPredicate::sgt);
     writeCommitsGtZero =
-        b.create<arith::AndIOp>(loc, writeCommitsGtZero, threadColumnMask);
+        arith::AndIOp::create(b, loc, writeCommitsGtZero, threadColumnMask);
     auto writeCommitsPlusOne =
-        b.create<arith::AddIOp>(loc, writeCommits, writeCommitsOne);
-    writeCommits = b.create<arith::SelectOp>(loc, writeCommitsGtZero,
-                                             writeCommitsPlusOne, writeCommits);
+        arith::AddIOp::create(b, loc, writeCommits, writeCommitsOne);
+    writeCommits = arith::SelectOp::create(b, loc, writeCommitsGtZero,
+                                           writeCommitsPlusOne, writeCommits);
 
     auto writeCommitsEqMinusOne =
         createCmpIntTensorScalar(b, loc, writeCommits, minusOne);
     writeCommitsEqMinusOne =
-        b.create<arith::AndIOp>(loc, writeCommitsEqMinusOne, threadColumnMask);
-    writeCommits = b.create<arith::SelectOp>(loc, writeCommitsEqMinusOne,
-                                             writeCommitsOne, writeCommits);
+        arith::AndIOp::create(b, loc, writeCommitsEqMinusOne, threadColumnMask);
+    writeCommits = arith::SelectOp::create(b, loc, writeCommitsEqMinusOne,
+                                           writeCommitsOne, writeCommits);
     tti::createStoreScratchMemory(b, loc, op.getOutstandingCommits(),
                                   writeCommits, writeCommitsType);
     b.eraseOp(op);
@@ -1186,8 +1190,8 @@ struct ClearOutstandingCommitsTransferWritesOpConversion
             ->getResult(0);
 
     Type elementType = outstandingCommitsType.getElementType();
-    Value outstandingNum = b.create<arith::ConstantOp>(
-        loc, elementType,
+    Value outstandingNum = arith::ConstantOp::create(
+        b, loc, elementType,
         b.getIntegerAttr(elementType, op.getOutstandingNum()));
     Value outstandingCommitsZero =
         tti::createConstIntTensor(b, loc, 0, outstandingCommitsType);
@@ -1196,8 +1200,8 @@ struct ClearOutstandingCommitsTransferWritesOpConversion
 
     auto outstandingCommitsGtOutstandingNum = createCmpIntTensorScalar(
         b, loc, outstandingCommits, outstandingNum, arith::CmpIPredicate::sgt);
-    outstandingCommitsGtOutstandingNum = b.create<arith::AndIOp>(
-        loc, outstandingCommitsGtOutstandingNum, threadColumnMask);
+    outstandingCommitsGtOutstandingNum = arith::AndIOp::create(
+        b, loc, outstandingCommitsGtOutstandingNum, threadColumnMask);
 
     // Update write visibility rows: reduce per-thread mask to row mask,
     // and set the current thread bit only for rows where mask is true.
@@ -1208,12 +1212,12 @@ struct ClearOutstandingCommitsTransferWritesOpConversion
     Value transferThreadsBitsValue = tti::createConstIntTensor(
         b, loc, op.getTransferThreadMask(), writeVisibilityType);
     Value writeVisibilityOrThreadBit =
-        b.create<arith::OrIOp>(loc, writeVisibility, transferThreadsBitsValue);
-    writeVisibility = b.create<arith::SelectOp>(
-        loc, rowMask, writeVisibilityOrThreadBit, writeVisibility);
+        arith::OrIOp::create(b, loc, writeVisibility, transferThreadsBitsValue);
+    writeVisibility = arith::SelectOp::create(
+        b, loc, rowMask, writeVisibilityOrThreadBit, writeVisibility);
 
     // Print
-    // b.create<tt::PrintOp>(loc, "wv: ", false, writeVisibility,
+    // tt::PrintOp::create(b, loc, "wv: ", false, writeVisibility,
     //                       std::vector<int32_t>{0});
 
     tti::createStoreScratchMemory(b, loc, op.getWriteVisibility(),
@@ -1221,8 +1225,8 @@ struct ClearOutstandingCommitsTransferWritesOpConversion
 
     // Clear outstanding commits entries
     outstandingCommits =
-        b.create<arith::SelectOp>(loc, outstandingCommitsGtOutstandingNum,
-                                  outstandingCommitsZero, outstandingCommits);
+        arith::SelectOp::create(b, loc, outstandingCommitsGtOutstandingNum,
+                                outstandingCommitsZero, outstandingCommits);
     tti::createStoreScratchMemory(b, loc, op.getOutstandingCommits(),
                                   outstandingCommits, outstandingCommitsType);
     b.eraseOp(op);
@@ -1261,8 +1265,8 @@ struct ClearOutstandingCommitsTransferReadsOpConversion
             ->getResult(0);
 
     Type elementType = outstandingCommitsType.getElementType();
-    Value outstandingNum = b.create<arith::ConstantOp>(
-        loc, elementType,
+    Value outstandingNum = arith::ConstantOp::create(
+        b, loc, elementType,
         b.getIntegerAttr(elementType, op.getOutstandingNum()));
     Value outstandingCommitsZero =
         tti::createConstIntTensor(b, loc, 0, outstandingCommitsType);
@@ -1270,8 +1274,8 @@ struct ClearOutstandingCommitsTransferReadsOpConversion
         createColumnMask(b, loc, op.getThread(), outstandingCommitsType);
     auto outstandingCommitsGtOutstandingNum = createCmpIntTensorScalar(
         b, loc, outstandingCommits, outstandingNum, arith::CmpIPredicate::sgt);
-    outstandingCommitsGtOutstandingNum = b.create<arith::AndIOp>(
-        loc, outstandingCommitsGtOutstandingNum, threadColumnMask);
+    outstandingCommitsGtOutstandingNum = arith::AndIOp::create(
+        b, loc, outstandingCommitsGtOutstandingNum, threadColumnMask);
 
     // Update read visibility: set current thread bit for rows with mask
     Value rowMask =
@@ -1280,16 +1284,16 @@ struct ClearOutstandingCommitsTransferReadsOpConversion
     Value transferThreadsBitsValue = tti::createConstIntTensor(
         b, loc, op.getTransferThreadMask(), readVisibilityType);
     Value readVisibilityOrThreadBit =
-        b.create<arith::OrIOp>(loc, readVisibility, transferThreadsBitsValue);
-    readVisibility = b.create<arith::SelectOp>(
-        loc, rowMask, readVisibilityOrThreadBit, readVisibility);
+        arith::OrIOp::create(b, loc, readVisibility, transferThreadsBitsValue);
+    readVisibility = arith::SelectOp::create(
+        b, loc, rowMask, readVisibilityOrThreadBit, readVisibility);
     tti::createStoreScratchMemory(b, loc, op.getReadVisibility(),
                                   readVisibility, readVisibilityType);
 
     // Clear outstanding commits entries
     outstandingCommits =
-        b.create<arith::SelectOp>(loc, outstandingCommitsGtOutstandingNum,
-                                  outstandingCommitsZero, outstandingCommits);
+        arith::SelectOp::create(b, loc, outstandingCommitsGtOutstandingNum,
+                                outstandingCommitsZero, outstandingCommits);
     tti::createStoreScratchMemory(b, loc, op.getOutstandingCommits(),
                                   outstandingCommits, outstandingCommitsType);
     b.eraseOp(op);
@@ -1332,15 +1336,15 @@ struct CheckOutstandingCommitsOpConversion
         convertAndBroadcast(b, loc, buffersEqBuf, 1, outstandingCommitsType);
     auto zeroTensor =
         tti::createConstIntTensor(b, loc, 0, outstandingCommitsType);
-    auto selectedRows = b.create<arith::SelectOp>(
-        loc, buffersEqBuf, outstandingCommits, zeroTensor);
-    auto selectedEqZero = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                                  selectedRows, zeroTensor);
+    auto selectedRows = arith::SelectOp::create(b, loc, buffersEqBuf,
+                                                outstandingCommits, zeroTensor);
+    auto selectedEqZero = arith::CmpIOp::create(
+        b, loc, arith::CmpIPredicate::eq, selectedRows, zeroTensor);
     std::string message =
         "Accessing buffer with pending access. Pending access type: " +
         pendingAccessType.str();
-    b.create<tti::ExperimentalAssertInThreadOp>(
-        loc, selectedEqZero, b.getStringAttr(message), false);
+    tti::ExperimentalAssertInThreadOp::create(b, loc, selectedEqZero,
+                                              b.getStringAttr(message), false);
     b.eraseOp(op);
     return success();
   }
@@ -1370,7 +1374,7 @@ struct InitBarrierStateOpConversion
     uint64_t init = (count << BarrierBits::initCountLsb) |
                     (count << BarrierBits::currentCountLsb);
     Value newState = tti::createConstIntTensor(b, loc, init, statesType);
-    Value updated = b.create<arith::SelectOp>(loc, mask, newState, states);
+    Value updated = arith::SelectOp::create(b, loc, mask, newState, states);
     tti::createStoreScratchMemory(b, loc, op.getStates(), updated, statesType);
     b.eraseOp(op);
     return success();
@@ -1408,18 +1412,18 @@ struct VerifyBarrierArriveOpConversion
     Value shiftNine = tti::createConstIntTensor(
         b, loc, BarrierBits::currentCountLsb, statesType);
 
-    Value currentCount = b.create<arith::ShRUIOp>(loc, states, shiftNine);
-    currentCount = b.create<arith::AndIOp>(loc, currentCount, maskFF);
+    Value currentCount = arith::ShRUIOp::create(b, loc, states, shiftNine);
+    currentCount = arith::AndIOp::create(b, loc, currentCount, maskFF);
 
     Value arriveCount = tti::createConstIntTensor(
         b, loc, op.getCount() & BarrierBits::countMask, statesType);
-    Value newCurrent = b.create<arith::SubIOp>(loc, currentCount, arriveCount);
+    Value newCurrent = arith::SubIOp::create(b, loc, currentCount, arriveCount);
     Value newCurrentMasked =
-        b.create<arith::SelectOp>(loc, mask, newCurrent, zero32);
-    Value nonNegative = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge,
-                                                newCurrentMasked, zero32);
-    b.create<tti::ExperimentalAssertInThreadOp>(
-        loc, nonNegative,
+        arith::SelectOp::create(b, loc, mask, newCurrent, zero32);
+    Value nonNegative = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::sge,
+                                              newCurrentMasked, zero32);
+    tti::ExperimentalAssertInThreadOp::create(
+        b, loc, nonNegative,
         b.getStringAttr(
             "Barrier arrive underflow: current count would become negative"),
         false);
@@ -1453,7 +1457,7 @@ struct UpdateBarrierStateOpConversion
     Value bar = createMemDescToI64(b, loc, getTypeConverter(),
                                    op.getMbar().getType(), adaptor.getMbar());
     Value mask = createCmpIntTensorScalar(b, loc, barriers, bar);
-    Value maskI32 = b.create<arith::ExtUIOp>(loc, statesType, mask);
+    Value maskI32 = arith::ExtUIOp::create(b, loc, statesType, mask);
 
     Value zero32 = tti::createConstIntTensor(b, loc, 0, statesType);
     Value one32 = tti::createConstIntTensor(b, loc, 1, statesType);
@@ -1464,32 +1468,32 @@ struct UpdateBarrierStateOpConversion
     Value shiftNine = tti::createConstIntTensor(
         b, loc, BarrierBits::currentCountLsb, statesType);
 
-    Value phase = b.create<arith::AndIOp>(loc, states, one32);
-    Value initCount = b.create<arith::ShRUIOp>(loc, states, shiftOne);
-    initCount = b.create<arith::AndIOp>(loc, initCount, maskFF);
-    Value currentCount = b.create<arith::ShRUIOp>(loc, states, shiftNine);
-    currentCount = b.create<arith::AndIOp>(loc, currentCount, maskFF);
+    Value phase = arith::AndIOp::create(b, loc, states, one32);
+    Value initCount = arith::ShRUIOp::create(b, loc, states, shiftOne);
+    initCount = arith::AndIOp::create(b, loc, initCount, maskFF);
+    Value currentCount = arith::ShRUIOp::create(b, loc, states, shiftNine);
+    currentCount = arith::AndIOp::create(b, loc, currentCount, maskFF);
 
     Value arriveCount = tti::createConstIntTensor(
         b, loc, op.getCount() & BarrierBits::countMask, statesType);
-    Value newCurrent = b.create<arith::SubIOp>(loc, currentCount, arriveCount);
+    Value newCurrent = arith::SubIOp::create(b, loc, currentCount, arriveCount);
     Value newCurrentMasked =
-        b.create<arith::SelectOp>(loc, mask, newCurrent, currentCount);
+        arith::SelectOp::create(b, loc, mask, newCurrent, currentCount);
 
-    Value zeroCond = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                             newCurrentMasked, zero32);
-    zeroCond = b.create<arith::AndIOp>(loc, zeroCond, mask);
-    Value zeroCondI32 = b.create<arith::ExtUIOp>(loc, statesType, zeroCond);
-    Value newPhase = b.create<arith::XOrIOp>(loc, phase, zeroCondI32);
+    Value zeroCond = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq,
+                                           newCurrentMasked, zero32);
+    zeroCond = arith::AndIOp::create(b, loc, zeroCond, mask);
+    Value zeroCondI32 = arith::ExtUIOp::create(b, loc, statesType, zeroCond);
+    Value newPhase = arith::XOrIOp::create(b, loc, phase, zeroCondI32);
     Value newCurrentValue =
-        b.create<arith::SelectOp>(loc, zeroCond, initCount, newCurrentMasked);
+        arith::SelectOp::create(b, loc, zeroCond, initCount, newCurrentMasked);
 
-    Value initField = b.create<arith::ShLIOp>(loc, initCount, shiftOne);
+    Value initField = arith::ShLIOp::create(b, loc, initCount, shiftOne);
     Value currentField =
-        b.create<arith::ShLIOp>(loc, newCurrentValue, shiftNine);
-    Value newState = b.create<arith::OrIOp>(loc, newPhase, initField);
-    newState = b.create<arith::OrIOp>(loc, newState, currentField);
-    Value updated = b.create<arith::SelectOp>(loc, mask, newState, states);
+        arith::ShLIOp::create(b, loc, newCurrentValue, shiftNine);
+    Value newState = arith::OrIOp::create(b, loc, newPhase, initField);
+    newState = arith::OrIOp::create(b, loc, newState, currentField);
+    Value updated = arith::SelectOp::create(b, loc, mask, newState, states);
     tti::createStoreScratchMemory(b, loc, op.getStates(), updated, statesType);
     b.eraseOp(op);
     return success();
@@ -1531,24 +1535,24 @@ struct SetWaitingOpConversion
     Value clearMaskTensor =
         tti::createConstIntTensor(b, loc, clearMask, waitingType);
     Value clearedWaiting =
-        b.create<arith::AndIOp>(loc, waiting, clearMaskTensor);
+        arith::AndIOp::create(b, loc, waiting, clearMaskTensor);
 
     Value flagMaskTensor =
         tti::createConstIntTensor(b, loc, flagMask, waitingType);
     Value withFlag =
-        b.create<arith::OrIOp>(loc, clearedWaiting, flagMaskTensor);
+        arith::OrIOp::create(b, loc, clearedWaiting, flagMaskTensor);
 
-    Value phaseScalar = b.create<arith::AndIOp>(
-        loc, op.getPhase(), b.create<arith::ConstantIntOp>(loc, 1, 32));
+    Value phaseScalar = arith::AndIOp::create(
+        b, loc, op.getPhase(), arith::ConstantIntOp::create(b, loc, 1, 32));
     Value phaseTensor =
-        b.create<triton::SplatOp>(loc, waitingType, phaseScalar);
+        triton::SplatOp::create(b, loc, waitingType, phaseScalar);
     Value shiftTensor =
         tti::createConstIntTensor(b, loc, phaseShift, waitingType);
-    Value phaseBits = b.create<arith::ShLIOp>(loc, phaseTensor, shiftTensor);
-    Value pendingWaiting = b.create<arith::OrIOp>(loc, withFlag, phaseBits);
+    Value phaseBits = arith::ShLIOp::create(b, loc, phaseTensor, shiftTensor);
+    Value pendingWaiting = arith::OrIOp::create(b, loc, withFlag, phaseBits);
 
     Value newWaiting =
-        b.create<arith::SelectOp>(loc, barriersEqBar, pendingWaiting, waiting);
+        arith::SelectOp::create(b, loc, barriersEqBar, pendingWaiting, waiting);
     tti::createStoreScratchMemory(b, loc, op.getWaiting(), newWaiting,
                                   waitingType);
     b.eraseOp(op);
@@ -1584,36 +1588,39 @@ struct CheckAllActiveWaitingOpConversion
     Value phaseMaskTensor =
         tti::createConstIntTensor(b, loc, WaitingBits::phaseMask, waitingType);
 
-    Value flags = b.create<arith::AndIOp>(loc, waiting, flagMaskTensor);
-    Value phases = b.create<arith::AndIOp>(loc, waiting, phaseMaskTensor);
+    Value flags = arith::AndIOp::create(b, loc, waiting, flagMaskTensor);
+    Value phases = arith::AndIOp::create(b, loc, waiting, phaseMaskTensor);
     Value shiftOneTensor = tti::createConstIntTensor(b, loc, 1, waitingType);
-    Value phasesAligned = b.create<arith::ShRUIOp>(loc, phases, shiftOneTensor);
+    Value phasesAligned =
+        arith::ShRUIOp::create(b, loc, phases, shiftOneTensor);
 
     Value phasesComplement =
-        b.create<arith::XOrIOp>(loc, phasesAligned, flagMaskTensor);
-    Value waitingPhase0 = b.create<arith::AndIOp>(loc, flags, phasesComplement);
-    Value waitingPhase1 = b.create<arith::AndIOp>(loc, flags, phasesAligned);
+        arith::XOrIOp::create(b, loc, phasesAligned, flagMaskTensor);
+    Value waitingPhase0 =
+        arith::AndIOp::create(b, loc, flags, phasesComplement);
+    Value waitingPhase1 = arith::AndIOp::create(b, loc, flags, phasesAligned);
 
     Value oneState = tti::createConstIntTensor(b, loc, 1, barrierStatesType);
-    Value barrierPhase = b.create<arith::AndIOp>(loc, barrierStates, oneState);
-    Value phaseIsOne = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                               barrierPhase, oneState);
+    Value barrierPhase = arith::AndIOp::create(b, loc, barrierStates, oneState);
+    Value phaseIsOne = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq,
+                                             barrierPhase, oneState);
 
-    Value effectiveWaiting = b.create<arith::SelectOp>(
-        loc, phaseIsOne, waitingPhase1, waitingPhase0);
+    Value effectiveWaiting = arith::SelectOp::create(
+        b, loc, phaseIsOne, waitingPhase1, waitingPhase0);
     Value waitingOr = createOrReduce(b, loc, effectiveWaiting, /*axis=*/0);
 
     uint64_t expandedMaskValue = expandActiveMask(op.getActiveMask());
-    Value expandedMask = b.create<arith::ConstantIntOp>(
-        loc, expandedMaskValue, waitingOr.getType().getIntOrFloatBitWidth());
-    Value waitingMasked = b.create<arith::AndIOp>(loc, waitingOr, expandedMask);
-    Value eq = b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                       waitingMasked, expandedMask);
-    Value vTrue = b.create<arith::ConstantOp>(
-        loc, eq.getType(), b.getIntegerAttr(eq.getType(), 1));
-    Value ok = b.create<arith::XOrIOp>(loc, eq, vTrue);
-    b.create<tti::ExperimentalAssertInThreadOp>(
-        loc, ok,
+    Value expandedMask = arith::ConstantIntOp::create(
+        b, loc, expandedMaskValue, waitingOr.getType().getIntOrFloatBitWidth());
+    Value waitingMasked =
+        arith::AndIOp::create(b, loc, waitingOr, expandedMask);
+    Value eq = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq,
+                                     waitingMasked, expandedMask);
+    Value vTrue = arith::ConstantOp::create(b, loc, eq.getType(),
+                                            b.getIntegerAttr(eq.getType(), 1));
+    Value ok = arith::XOrIOp::create(b, loc, eq, vTrue);
+    tti::ExperimentalAssertInThreadOp::create(
+        b, loc, ok,
         b.getStringAttr(
             "Deadlock detected: all active threads are waiting on mbarriers"),
         false);
@@ -1654,9 +1661,9 @@ struct ClearWaitingOpConversion
 
     Value clearMaskTensor =
         tti::createConstIntTensor(b, loc, clearMask, waitingType);
-    Value cleared = b.create<arith::AndIOp>(loc, waiting, clearMaskTensor);
+    Value cleared = arith::AndIOp::create(b, loc, waiting, clearMaskTensor);
     Value newWaiting =
-        b.create<arith::SelectOp>(loc, barriersEqBar, cleared, waiting);
+        arith::SelectOp::create(b, loc, barriersEqBar, cleared, waiting);
     tti::createStoreScratchMemory(b, loc, op.getWaiting(), newWaiting,
                                   waitingType);
     b.eraseOp(op);

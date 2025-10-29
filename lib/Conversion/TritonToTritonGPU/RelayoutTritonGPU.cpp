@@ -21,16 +21,10 @@ namespace ttng = triton::nvidia_gpu;
 RankedTensorType getTMEMTensorLayout(const TypeConverter *tc,
                                      RankedTensorType type, MemDescType memdesc,
                                      unsigned numWarps) {
-  Attribute encoding;
   type = cast<RankedTensorType>(tc->convertType(type));
-  if (isa<ttng::TensorMemoryScalesEncodingAttr>(memdesc.getEncoding())) {
-    encoding = LinearEncodingAttr::get(
-        type.getContext(), getScaleTMEMStoreLinearLayout(type, numWarps));
-  } else {
-    auto tmemEnc = cast<ttng::TensorMemoryEncodingAttr>(memdesc.getEncoding());
-    encoding = ttng::getTmemCompatibleLayout(
-        tmemEnc.getBlockM(), tmemEnc.getBlockN(), type, numWarps);
-  }
+  auto ctaLayout = getCTALayout(type.getEncoding());
+  auto encoding =
+      ttng::getDefaultLayoutForTmemLdSt(memdesc, numWarps, ctaLayout);
   return type.cloneWithEncoding(encoding);
 }
 
@@ -45,8 +39,8 @@ struct TMEMLoadOpPattern : public OpConversionPattern<ttng::TMEMLoadOp> {
     rewriter.modifyOpInPlace(op, [&] { op.getResult().setType(type); });
     Type resultType = getTypeConverter()->convertType(op.getType());
     rewriter.setInsertionPointAfter(op);
-    auto cvt = rewriter.create<ConvertLayoutOp>(op.getLoc(), resultType,
-                                                op.getResult());
+    auto cvt = ConvertLayoutOp::create(rewriter, op.getLoc(), resultType,
+                                       op.getResult());
     rewriter.replaceAllUsesExcept(op.getResult(), cvt, cvt);
     return success();
   }
@@ -62,7 +56,7 @@ struct TMEMStoreOpPattern : public OpConversionPattern<ttng::TMEMStoreOp> {
         getTMEMTensorLayout(typeConverter, op.getSrc().getType(),
                             op.getDst().getType(), lookupNumWarps(op));
     Value src =
-        rewriter.create<ConvertLayoutOp>(op.getLoc(), type, adaptor.getSrc());
+        ConvertLayoutOp::create(rewriter, op.getLoc(), type, adaptor.getSrc());
     rewriter.modifyOpInPlace(op, [&] { op.getSrcMutable().assign(src); });
     return success();
   }
@@ -79,7 +73,7 @@ struct TMEMAllocOpPattern : public OpConversionPattern<ttng::TMEMAllocOp> {
     RankedTensorType type = getTMEMTensorLayout(
         typeConverter, op.getSrc().getType(), op.getType(), lookupNumWarps(op));
     Value src =
-        rewriter.create<ConvertLayoutOp>(op.getLoc(), type, adaptor.getSrc());
+        ConvertLayoutOp::create(rewriter, op.getLoc(), type, adaptor.getSrc());
     rewriter.modifyOpInPlace(op, [&] { op.getSrcMutable().assign(src); });
     return success();
   }
