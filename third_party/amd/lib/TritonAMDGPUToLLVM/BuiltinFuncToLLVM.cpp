@@ -113,12 +113,12 @@ private:
       // This avoids overflow when e^(2x) becomes infinity for large x
 
       // Get absolute value of x
-      auto absX = rewriter.create<LLVM::FAbsOp>(loc, rewriter.getF32Type(),
-                                                operands[0]);
+      auto absX = LLVM::FAbsOp::create(rewriter, loc, rewriter.getF32Type(),
+                                       operands[0]);
 
       // Calculate 2*|x|
-      auto twoAbsX = rewriter.create<LLVM::FMulOp>(
-          loc, rewriter.getF32Type(), absX,
+      auto twoAbsX = LLVM::FMulOp::create(
+          rewriter, loc, rewriter.getF32Type(), absX,
           LLVM::createConstantF32(loc, rewriter, 2.0), defaultFlags);
 
       // Calculate e^(2*|x|)
@@ -126,20 +126,21 @@ private:
                                      rewriter.getF32Type(), ftz);
 
       // Calculate e^(2*|x|) + 1
-      auto exp2AbsXPlus1 = rewriter.create<LLVM::FAddOp>(
-          loc, rewriter.getF32Type(), exp2AbsX->getResult(0),
+      auto exp2AbsXPlus1 = LLVM::FAddOp::create(
+          rewriter, loc, rewriter.getF32Type(), exp2AbsX->getResult(0),
           LLVM::createConstantF32(loc, rewriter, 1.0), defaultFlags);
 
       // Calculate 2 / (e^(2*|x|) + 1)
       auto two = LLVM::createConstantF32(loc, rewriter, 2.0);
-      auto ratio = rewriter.create<LLVM::FDivOp>(
-          loc, rewriter.getF32Type(), two, exp2AbsXPlus1->getResult(0),
-          defaultFlags);
+      auto ratio =
+          LLVM::FDivOp::create(rewriter, loc, rewriter.getF32Type(), two,
+                               exp2AbsXPlus1->getResult(0), defaultFlags);
 
       // Calculate 1 - 2/(e^(2*|x|) + 1)
       auto one = LLVM::createConstantF32(loc, rewriter, 1.0);
-      auto posResult = rewriter.create<LLVM::FSubOp>(
-          loc, rewriter.getF32Type(), one, ratio->getResult(0), defaultFlags);
+      auto posResult =
+          LLVM::FSubOp::create(rewriter, loc, rewriter.getF32Type(), one,
+                               ratio->getResult(0), defaultFlags);
 
       // Apply the sign of the original input using copysign
       // tanh(x) = sign(x) * (1 - 2/(e^(2*|x|) + 1))
