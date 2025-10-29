@@ -240,7 +240,10 @@ lowerTMemLdSt(const LinearLayout &cvt, int maxnreg, int bitwidth, bool isScales,
         // only 16 elements. We use secondHalfOffset = 1 instead and we pad the
         // allocation.
         if (!isScales) {
-          emitError() << "Only supported for scales as we pad the allocation.";
+          if (emitError) {
+            emitError()
+                << "Only supported for scales as we pad the allocation.";
+          }
           return failure();
         }
         secondHalfOffset = 1;
