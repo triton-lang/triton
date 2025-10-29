@@ -780,8 +780,7 @@ def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_wait"> {
 //===----------------------------------------------------------------------===//
 
 def AsyncWaitOp : TT_AMDGPU_Op<"async_wait"> {
-  let summary = "Wait until there are less than or quals to the given number of outstanding async intrinsics";
-  let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num_inst);
+  let summary = "Wait until there are less than or equal to the given number of outstanding async intrinsics";
   let description = [{
     Similar to ttg.async_wait but instead of waiting on oustanding ttg.async_commit_groups
     this op waits on the number of outstanding async instructions/intrinsics as required for the
@@ -789,16 +788,8 @@ def AsyncWaitOp : TT_AMDGPU_Op<"async_wait"> {
   }];
 
   let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num_inst);
-
   let results = (outs TTG_AsyncToken:$retToken);
-
   let assemblyFormat = "($asyncToken^)? attr-dict";
-
-  let extraClassDeclaration = [{
-    static bool isSupported(int computeCapability) {
-      return computeCapability >= 80;
-    }
-  }];
 }
 
 #endif
