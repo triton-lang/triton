@@ -303,9 +303,29 @@ public:
   Constraints getOutputConstraints(ttn::WGMMAWaitGroupOp op) const {
     auto outputStructType = cast<LLVM::LLVMStructType>(op.getType());
     uint32_t numOutputRegs = outputStructType.getBody().size();
-    std::string output =
-        outputStructType.getBody().front().isF32() ? "=f" : "=r";
-    return Constraints(numOutputRegs, output);
+    Constraints constraints;
+    constraints.reserve(numOutputRegs);
+    mlir::DataLayout dl(op->getParentOfType<mlir::ModuleOp>());
+    for (auto ty : outputStructType.getBody()) {
+      auto bitwidth = dl.getTypeSizeInBits(ty);
+      std::string c;
+      switch (bitwidth) {
+      case 64:
+        c = "=l";
+        break;
+      case 32:
+        c = ty.isF32() ? "=f" : "=r";
+        break;
+      case 16:
+        c = "=h";
+        break;
+      default:
+        llvm::report_fatal_error("Unexpected bitwidth in WGMMAWaitGroupOp: " +
+                                 Twine(bitwidth));
+      }
+      constraints.push_back(c);
+    }
+    return constraints;
   }
 
   OperandsAndConstraints
