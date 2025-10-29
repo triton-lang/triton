@@ -93,6 +93,7 @@ def ConvertWarpPipeline : Pass<"convert-warp-pipeline", "mlir::ModuleOp"> {
     let constructor = "mlir::triton::AMD::createConvertWarpPipelinePass()";
 
     let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                             "mlir::gpu::GPUDialect",
                              "mlir::ROCDL::ROCDLDialect",
                              "mlir::triton::amdgpu::TritonAMDGPUDialect"];
 

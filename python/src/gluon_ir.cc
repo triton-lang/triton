@@ -1,9 +1,8 @@
 #include "ir.h"
-#include "pybind11/pybind11.h"
-#include <pybind11/stl.h>
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Types.h"
+#include "pybind11/pybind11.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
@@ -15,6 +14,7 @@
 #include "triton/Tools/GenericSwizzling.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
+#include <pybind11/stl.h>
 
 using namespace mlir;
 namespace py = pybind11;
@@ -814,15 +814,17 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(descPtr, indices,
                                                             src);
            })
-      .def("create_async_tdm_wait", [](GluonOpBuilder &self, int num) {
-        ValueRange tokens;
-        self.create<ttag::AsyncTDMWait>(tokens, num);
+      .def("create_async_tdm_wait",
+           [](GluonOpBuilder &self, int num) {
+             ValueRange tokens;
+             self.create<ttag::AsyncTDMWait>(tokens, num);
            })
-      .def("create_warp_pipeline_border",
-           [](GluonOpBuilder &self) {
-             auto border = self.create<ROCDL::SchedBarrier>(0);
-             border->setAttr("pipeline_border", self.getBuilder().getUnitAttr());
-           });;
+      .def("create_warp_pipeline_border", [](GluonOpBuilder &self) {
+        auto border = self.create<ROCDL::SchedBarrier>(0);
+        border->setAttr("triton.warp_pipeline.border",
+                        self.getBuilder().getUnitAttr());
+      });
+  ;
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",
                                              py::module_local())

@@ -43,7 +43,8 @@ namespace mlir::triton {
 } // namespace mlir::triton
 
 namespace {
-
+// construct a virtual block from each pipeline cluster
+// block contains its buffer R/W information.
 static BlockInfo buildBlockInfoFromBlock(Block *block, Allocation *allocation) {
   BlockInfo info; // running fact for this block
   for (Operation &opRef : *block) {
@@ -84,10 +85,10 @@ class ConvertWarpPipeline
   void emitPipelinedFor(OpBuilder &builder, Location loc, scf::ForOp forOp,
                         Allocation *allocation) {
 
-    // insert cond branch first,
+    // 1. Insert conditional branch first,
     builder.setInsertionPointAfter(forOp);
-    // Set barrier before starting the loop. This resolves any remaining
-    // required synchronization before beginning the specialized asymmetric
+    // Set barrier before starting the loop. This resolves any outstanding
+    // synchronization before beginning the specialized asymmetric
     // synchronization.
     auto preBarrier = builder.create<gpu::BarrierOp>(loc);
     preBarrier->moveBefore(forOp);
@@ -105,7 +106,6 @@ class ConvertWarpPipeline
     auto warpHigh = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
                                                   warpIDX, constZero);
 
-    // FIXME: duplicate condBarrier for lead_stages
     auto condBarrierHigh =
         builder.create<mlir::triton::amdgpu::CondBarrierOp>(loc, warpHigh);
 
@@ -120,47 +120,48 @@ class ConvertWarpPipeline
     std::map<int, Operation *> existingBarrierMap;
     Operation *terminatorOp;
 
+    // 2. Collect existing barrier information.
     for (auto &op : *forOp.getBody()) {
       if (auto exeOp = dyn_cast<scf::ExecuteRegionOp>(op)) {
+        // fail conversion with executeRegion from unkown source.
+        if (exeOp->getAttr("triton.warp_pipeline.stage") == nullptr)
+          return;
         exeOp.setNoInline(false);
         clusterOps.push_back(&op);
         clusterBlocks.push_back(&exeOp->getRegion(0).front());
         bars.push_back(false);
       } else if (isa<ROCDL::BarrierOp, ROCDL::SBarrierOp,
-                     triton::gpu::AsyncWaitOp>(op)) {
+                     triton::gpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait>(
+                     op)) {
         int currCluster = clusterBlocks.size();
         if (existingBarrierMap.find(currCluster) != existingBarrierMap.end())
-          return; // FIXME: this is invalid. fail and cancel whole pass.
+          return; // Unreachable
 
         existingBarrierMap[currCluster] = &op;
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
         terminatorOp = &op;
-      }
+      } else // fail conversion if any other op found out out of the cluster.
+        return;
     }
 
     SmallVector<BlockInfo> clusterInfo;
     for (auto cb : clusterBlocks)
       clusterInfo.push_back(buildBlockInfoFromBlock(cb, allocation));
-
-    LDBG("cluster dependency analysis");
     int numClusters = clusterInfo.size();
     LDBG("total clusters : " << numClusters);
 
+    // Normally, we don't expect a pipelined loop begins with a barrier
+    // but sometimes required by memory prefetching pattern.
     auto topBar = existingBarrierMap.find(0);
     auto bottomBar = existingBarrierMap.find(numClusters);
     if (bottomBar != existingBarrierMap.end()) {
       if (topBar != existingBarrierMap.end())
-        return; // FIXME: unreachable
+        return; // Unreachable
       existingBarrierMap[0] = bottomBar->second;
       existingBarrierMap.erase(bottomBar);
     }
 
-    // FIXME:MUST: not only dependency over the pipeline but also need to check dependency
-    // between the clusters within the same warp and emit barrier earlier in the cluster 
-    // boundary. This is important, otherwise, membar will insert local barrier within
-    // a cluster where there's a dependency, that will break warp-pipelining.
-    
-    // dependency from node 'src' to 'next' 
+    // 3. Dependency check from node 'src' to 'next'
     for (int offset = 0; offset < numClusters; offset++) {
       for (int src = 0; src < numClusters; src++) {
         const int next = (src + 2 + offset) % numClusters;
@@ -168,9 +169,12 @@ class ConvertWarpPipeline
 
         // Check if any existing barrier sits between src and barrierIdx
         auto isSynced = [&]() -> bool {
-          for (int idx = (src + 1) % numClusters; idx != src; idx = (idx + 1) % numClusters) {
-            if (bars[idx]) return true;
-            if (idx == barrierLoc) break;
+          for (int idx = (src + 1) % numClusters; idx != src;
+               idx = (idx + 1) % numClusters) {
+            if (bars[idx])
+              return true;
+            if (idx == barrierLoc)
+              break;
           }
           return false;
         };
@@ -189,6 +193,7 @@ class ConvertWarpPipeline
       }
     }
 
+    // 4. Finally insert cluster barriers.
     for (int i = 0; i < numClusters; i++) {
       if (auto exBar = existingBarrierMap.find(i);
           exBar != existingBarrierMap.end()) {
@@ -196,7 +201,8 @@ class ConvertWarpPipeline
           auto exBarOp = exBar->second;
           builder.setInsertionPointAfter(exBarOp);
           emitClusterBarrier(builder, loc, true);
-          if (!isa<triton::gpu::AsyncWaitOp>(exBarOp))
+          if (!isa<triton::gpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait>(
+                  exBarOp))
             exBarOp->erase();
         } // else do nothing.
       } else {
@@ -221,7 +227,8 @@ public:
     for (auto funcOp : m.getOps<mlir::triton::FuncOp>()) {
       Allocation *allocation = moduleAllocation.getFuncData(funcOp);
       funcOp.walk([&](scf::ForOp forOp) {
-        if (auto totalStages = forOp->getAttr("total_stages")) {
+        if (auto totalStages =
+                forOp->getAttr("triton.warp_pipeline.total_stages")) {
           Location loc = forOp.getLoc();
           emitPipelinedFor(builder, loc, forOp, allocation);
         }
