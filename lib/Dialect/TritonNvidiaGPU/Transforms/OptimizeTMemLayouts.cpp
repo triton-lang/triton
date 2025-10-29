@@ -193,7 +193,8 @@ public:
           subSlice.getType(), numWarps, ctaLayout);
       auto newType = input.getType().cloneWithEncoding(distLayout);
       auto cvt = ttg::ConvertLayoutOp::create(b, loc, newType, input);
-      auto store = TMEMStoreOp::create(b, loc, subSlice, cvt.getResult(), truePred);
+      auto store =
+          TMEMStoreOp::create(b, loc, subSlice, cvt.getResult(), truePred);
       return store;
     };
 
