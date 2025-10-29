@@ -52,7 +52,6 @@
 
 #include <map>
 #include <memory>
-#include <stdatomic.h>
 
 #define GEN_PASS_CLASSES
 #include "nvidia/include/Dialect/NVWS/Transforms/Passes.h.inc"
