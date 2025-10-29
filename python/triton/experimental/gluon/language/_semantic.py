@@ -56,7 +56,12 @@ def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant
 
     if splitn:
         N = shape[1]
-        if layout_obj.reg_bases[-1] != [0, N // 2]:
+        if not layout_obj.reg_bases:
+            _check(layout_obj.lane_bases[-1] == [0, N // 2],
+                   lambda: f"splitn with 1 register requires the last lane basis to be [0, N / 2]. Got {layout_obj}")
+            layout_obj.reg_bases.append([0, N // 2])
+            layout_obj.lane_bases[-1] = [0, 0]
+        elif layout_obj.reg_bases[-1] != [0, N // 2]:
             bitwidth = element_ty.primitive_bitwidth
             _check(
                 len(layout_obj.reg_bases) * bitwidth > 32,
