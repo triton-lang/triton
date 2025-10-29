@@ -1710,8 +1710,6 @@ public:
 struct AssignKWidthOptions {
   int kPack = 1;
   std::string arch;
-  bool enableSecondDotF16BF16Special = true;
-  bool enableCDNA4KW8Experiment = false;
 };
 
 static inline bool isMfmaEncoding(Attribute attr) {
@@ -1896,8 +1894,6 @@ struct TritonAMDGPUAccelerateMatmulPass
 
     AssignKWidthOptions opts;
     opts.arch = archGenerationName;
-    opts.enableSecondDotF16BF16Special = true;
-    opts.enableCDNA4KW8Experiment = true;
 
     RewritePatternSet kwidth_patterns(context);
     kwidth_patterns.add<FixKWidthPattern>(context, opts, /*benefit=*/2);
