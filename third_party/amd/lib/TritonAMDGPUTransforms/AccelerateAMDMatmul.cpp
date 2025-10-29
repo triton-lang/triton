@@ -1751,7 +1751,7 @@ static FailureOr<unsigned> computeKWidthForMfmaDotOperand(Value operand, unsigne
   if (isChainDotTail(consumerDotOp)) {
     auto operandType = cast<RankedTensorType>(operand.getType());
     if (operandType.getElementType().isF16() || operandType.getElementType().isBF16())
-      candidate = 4;
+      candidate = 8;
     else
       candidate = *kBase;
   }
@@ -1822,7 +1822,7 @@ struct FixKWidthPattern : public OpRewritePattern<ttg::ConvertLayoutOp> {
         }
       }
     }
-    if (!consumerDotOp)
+    if (!consumerDotOp || isa<tt::DotScaledOp>(consumerDotOp)) // skip scaled dot op
       return failure();
 
     std::optional<unsigned> maybeKWidth = computeKWidthForMfmaDotOperand(op.getOperand(), operandIndex, consumerDotOp, consumerDotOpResultMfmaEncoding, opts);
@@ -1840,59 +1840,6 @@ struct FixKWidthPattern : public OpRewritePattern<ttg::ConvertLayoutOp> {
   }
 };
 
-// Optional: enforce mxfp4 packed asymmetry directly on DotScaled operands if needed.
-// struct FixDotScaledPackedKWidthPattern : public OpRewritePattern<tt::DotScaledOp> {
-//   AssignKWidthOptions opts;
-//   FixDotScaledPackedKWidthPattern(MLIRContext *ctx, const AssignKWidthOptions &opts, PatternBenefit b = 1)
-//       : OpRewritePattern(ctx, b), opts(opts) {}
-
-//   LogicalResult matchAndRewrite(tt::DotScaledOp dot, PatternRewriter &rewriter) const override {
-//     auto opResultType = dyn_cast<RankedTensorType>(dot.getType());
-//     if (!opResultType)
-//       return failure();
-
-//     auto opResultEncoding = opResultType.getEncoding();
-//     if (!isMfmaEncoding(opResultEncoding))
-//       return failure();
-//     auto opResultMfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(opResultEncoding);
-
-//     auto aElementType = dot.getAElemType();
-//     auto bElementType = dot.getBElemType();
-//     auto isE2M1 = [](tt::ScaleDotElemType t) { return t == tt::ScaleDotElemType::E2M1; };
-//     if (!(isE2M1(aElementType) || isE2M1(bElementType)))
-//       return failure();
-
-//     auto fixOne = [&](Value v, unsigned opIdx, unsigned desiredKWidth) -> LogicalResult {
-//       auto convertLayoutOp = dyn_cast_or_null<ttg::ConvertLayoutOp>(v.getDefiningOp());
-//       if (!convertLayoutOp)
-//         return failure();
-//       auto ty = dyn_cast<RankedTensorType>(convertLayoutOp.getResult().getType());
-//       if (!ty)
-//         return failure();
-//       auto enc = dyn_cast_or_null<ttg::DotOperandEncodingAttr>(ty.getEncoding());
-//       if (!enc)
-//         return failure();
-//       if (enc.getKWidth() == desiredKWidth)
-//         return failure();
-
-//       auto newEnc = ttg::DotOperandEncodingAttr::get(dot.getContext(), opIdx, opResultMfmaEncoding, desiredKWidth);
-//       auto newTy = RankedTensorType::get(ty.getShape(), ty.getElementType(), newEnc);
-//       auto newCvt = rewriter.create<ttg::ConvertLayoutOp>(convertLayoutOp.getLoc(), newTy, convertLayoutOp.getOperand());
-//       if (opIdx == 0) dot.setOperand(0, newCvt.getResult());
-//       else            dot.setOperand(1, newCvt.getResult());
-//       return success();
-//     };
-
-//     if (isE2M1(aElementType)) {
-//       (void)fixOne(dot.getA(), 0, 4);
-//       (void)fixOne(dot.getB(), 1, 8);
-//       return success();
-//     } else {
-//       (void)fixOne(dot.getA(), 0, 8);
-//       (void)fixOne(dot.getB(), 1, 4);
-//       return success();
-//     }
-//   }
 // };
 
 } // namespace
@@ -1954,7 +1901,6 @@ struct TritonAMDGPUAccelerateMatmulPass
 
     RewritePatternSet kwidth_patterns(context);
     kwidth_patterns.add<FixKWidthPattern>(context, opts, /*benefit=*/2);
-    // kwidth_patterns.add<FixDotScaledPackedKWidthPattern>(context, opts, /*benefit=*/2);
     if (failed(applyPatternsGreedily(m, std::move(kwidth_patterns))))
       signalPassFailure();
   }
