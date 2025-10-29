@@ -57,6 +57,8 @@ def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant
     if splitn:
         N = shape[1]
         if not layout_obj.reg_bases:
+            # We cannot use this layout in a load or a store ATM due to a PTX bug!
+            # You can work around this by loading to 32x32b and follow by a convert_layout to this layout.
             _check(layout_obj.lane_bases[-1] == [0, N // 2],
                    lambda: f"splitn with 1 register requires the last lane basis to be [0, N / 2]. Got {layout_obj}")
             layout_obj.reg_bases.append([0, N // 2])
