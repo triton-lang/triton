@@ -1,4 +1,5 @@
-#pragma once
+#ifndef TRITONINSTRUMENT_FUNCTIONBUILDER_H
+#define TRITONINSTRUMENT_FUNCTIONBUILDER_H
 
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
 
@@ -219,3 +220,5 @@ private:
 
 } // namespace instrument
 } // namespace mlir::triton
+
+#endif

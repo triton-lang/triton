@@ -308,6 +308,7 @@ void FunctionBuilder::createSetWaitingCall(ImplicitLocOpBuilder &b, Value mbar,
         Value waitingPtr = entryBlock->getArgument(5);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
+        fb.setInsertionPointToStart(ifBlock);
 
         Value waiting = tti::createLoadScratchMemory(fb, fb.getLoc(),
                                                      waitingPtr, waitingType);
@@ -395,6 +396,7 @@ void FunctionBuilder::createClearWaitingCall(ImplicitLocOpBuilder &b,
         Value waitingPtr = entryBlock->getArgument(4);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
+        fb.setInsertionPointToStart(ifBlock);
 
         Value waiting = tti::createLoadScratchMemory(fb, fb.getLoc(),
                                                      waitingPtr, waitingType);
@@ -664,6 +666,7 @@ void FunctionBuilder::createUpdateBarrierStateCall(ImplicitLocOpBuilder &b,
         Value statesPtr = entryBlock->getArgument(4);
 
         auto [prevBlock, ifBlock, thenBlock] = createIfBlock(fb, pred);
+        fb.setInsertionPointToStart(ifBlock);
 
         Value states = tti::createLoadScratchMemory(fb, fb.getLoc(), statesPtr,
                                                     barrierStatesType);
