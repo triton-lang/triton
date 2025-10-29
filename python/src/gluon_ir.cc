@@ -5,6 +5,7 @@
 #include <optional>
 #include <stdexcept>
 
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Types.h"
@@ -830,10 +831,17 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(descPtr, indices,
                                                             src);
            })
-      .def("create_async_tdm_wait", [](GluonOpBuilder &self, int num) {
-        ValueRange tokens;
-        self.create<ttag::AsyncTDMWait>(tokens, num);
+      .def("create_async_tdm_wait",
+           [](GluonOpBuilder &self, int num) {
+             ValueRange tokens;
+             self.create<ttag::AsyncTDMWait>(tokens, num);
+           })
+      .def("create_warp_pipeline_border", [](GluonOpBuilder &self) {
+        auto border = self.create<ROCDL::SchedBarrier>(0);
+        border->setAttr("triton.warp_pipeline.border",
+                        self.getBuilder().getUnitAttr());
       });
+  ;
 
   m.def(
       "compute_tmem_reg_layout",
