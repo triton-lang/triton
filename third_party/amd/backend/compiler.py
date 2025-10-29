@@ -66,10 +66,14 @@ class HIPOptions:
     # attention: enables a bunch of optimizations for attention kernels, including:
     #            - iglp 2 and sched.barrier around it
     #            - sink-insts-to-avoid-spills flag to avoid register spills
-    # iterative-ilp-scheduler: enables custom instruction scheduler in backend
+    # memory-bound-attention: enables custom scheduling strategy in llvm backend,
+    #            This option targets special FA variant, which is memory bound and
+    #            has a lot of elementwise operations from fused operand dequantizations.
+    #            Note that this option is highly experimental,
+    #            and will be removed as soon as default sceduler algorithm is fixed.
     #
     # Option allows to set multiple variants divided by commas:
-    # schedule_hint="attention,iterative-ilp-scheduler"
+    # schedule_hint="attention,memory-bound-attention"
     schedule_hint: str = 'none'
 
     def __post_init__(self):
@@ -452,7 +456,7 @@ class HIPBackend(BaseBackend):
         for hint in options.schedule_hint.split(","):
             if hint == 'attention':
                 flags.append(('sink-insts-to-avoid-spills', True))
-            if hint == 'iterative-ilp-scheduler':
+            if hint == 'memory-bound-attention':
                 flags.append(('amdgpu-sched-strategy', 'iterative-ilp'))
         features = '-real-true16' if 'gfx11' in options.arch else ''
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,

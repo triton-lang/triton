@@ -6682,7 +6682,7 @@ def test_schedule_hint(device):
 
     pgm_default = kernel.warmup(torch.float32, torch.float32, torch.float32, M, N, K, grid=(1, ))
     pgm_ilp = kernel.warmup(torch.float32, torch.float32, torch.float32, M, N, K,
-                            schedule_hint="iterative-ilp-scheduler", grid=(1, ))
+                            schedule_hint="memory-bound-attention", grid=(1, ))
 
     # check that option affects only llvm backend
     assert pgm_default.asm["llir"] == pgm_ilp.asm["llir"]
