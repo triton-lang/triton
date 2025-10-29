@@ -628,3 +628,20 @@ tt.func @map_elementwise_store(%ptr: tensor<256x!tt.ptr<i32>>) {
   }) : (tensor<256x!tt.ptr<i32>>, tensor<256xi32>) -> (tensor<256xi32>)
   tt.return
 }
+
+// -----
+
+// Test that DotOp with f32 inputs but without TF32 precision is rejected for MMAv2
+// MMAv2 requires TF32 input precision for f32 operands
+#mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
+#dot_operand_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 1}>
+#dot_operand_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 1}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:80"} {
+  tt.func @dot_f32_without_tf32_mma_v2(%a: tensor<16x16xf32, #dot_operand_a>, %b: tensor<16x16xf32, #dot_operand_b>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma>
+    // expected-error @below {{unsupported MMA version}}
+    %result = tt.dot %a, %b, %cst, inputPrecision = ieee : tensor<16x16xf32, #dot_operand_a> * tensor<16x16xf32, #dot_operand_b> -> tensor<16x16xf32, #mma>
+    tt.return
+  }
+}
