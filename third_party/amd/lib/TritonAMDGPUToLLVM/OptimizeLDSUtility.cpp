@@ -83,10 +83,10 @@ createNewConvertOps(OpBuilder &builder, triton::gpu::ConvertLayoutOp &cvtOp,
   RankedTensorType newSrcType = RankedTensorType::get(
       srcType.getShape(), srcType.getElementType(), tmpLayout);
 
-  auto tmpCvt = builder.create<triton::gpu::ConvertLayoutOp>(
-      cvtOp.getLoc(), newSrcType, cvtOp.getSrc());
-  auto newEpilogueCvt = builder.create<triton::gpu::ConvertLayoutOp>(
-      cvtOp.getLoc(), newDstType, tmpCvt);
+  auto tmpCvt = triton::gpu::ConvertLayoutOp::create(
+      builder, cvtOp.getLoc(), newSrcType, cvtOp.getSrc());
+  auto newEpilogueCvt = triton::gpu::ConvertLayoutOp::create(
+      builder, cvtOp.getLoc(), newDstType, tmpCvt);
   tmpCvt->setAttrs(cvtOp->getAttrs());
   newEpilogueCvt->setAttrs(cvtOp->getAttrs());
 

@@ -88,9 +88,9 @@ public:
     if (newLayout != srcLayout) {
       auto ty = cast<RankedTensorType>(src.getType());
       auto newTy = ty.cloneWithEncoding(newLayout);
-      src = rewriter.create<ttg::ConvertLayoutOp>(loc, newTy, src);
+      src = ttg::ConvertLayoutOp::create(rewriter, loc, newTy, src);
     }
-    Value tMemAlloc = rewriter.create<TMEMAllocOp>(loc, lhsMemDescType, src);
+    Value tMemAlloc = TMEMAllocOp::create(rewriter, loc, lhsMemDescType, src);
     tcGen5MMAOp.getAMutable().assign(tMemAlloc);
     return success();
   }

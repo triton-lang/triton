@@ -21,8 +21,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %9 = ttg.memdesc_subslice %1 [128, 96]  : !ttg.memdesc<256x128xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable, 256x128>
 
     %padded = ttg.local_alloc : () -> !ttg.memdesc<1x256x128xf16, #padded, #smem, mutable>
-    %padded_indexed_explicit_alloc_shape = ttg.memdesc_index %padded[%c0_i32] : !ttg.memdesc<1x256x128xf16, #padded, #smem, mutable> -> !ttg.memdesc<256x128xf16, #padded, #smem, mutable, 1x256x128>
-    %10 = ttg.memdesc_subslice %padded_indexed_explicit_alloc_shape [128, 96]  : !ttg.memdesc<256x128xf16, #padded, #smem, mutable, 1x256x128> -> !ttg.memdesc<128x32xf16, #padded, #smem, mutable, 1x256x128>
+    %padded_indexed_explicit_alloc_shape = ttg.memdesc_index %padded[%c0_i32] : !ttg.memdesc<1x256x128xf16, #padded, #smem, mutable> -> !ttg.memdesc<256x128xf16, #padded, #smem, mutable>
+    %10 = ttg.memdesc_subslice %padded_indexed_explicit_alloc_shape [128, 96]  : !ttg.memdesc<256x128xf16, #padded, #smem, mutable> -> !ttg.memdesc<128x32xf16, #padded, #smem, mutable, 256x128>
     %padded_indexed_implicit_alloc_shape = ttg.memdesc_index %padded[%c0_i32] : !ttg.memdesc<1x256x128xf16, #padded, #smem, mutable> -> !ttg.memdesc<256x128xf16, #padded, #smem, mutable>
     %11 = ttg.memdesc_subslice %padded_indexed_implicit_alloc_shape [128, 96]  : !ttg.memdesc<256x128xf16, #padded, #smem, mutable> -> !ttg.memdesc<128x32xf16, #padded, #smem, mutable, 256x128>
     tt.return

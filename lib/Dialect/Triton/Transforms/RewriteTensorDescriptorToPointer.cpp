@@ -85,7 +85,7 @@ Value expandOffsets(OpBuilder &builder, Location loc,
       continue;
     }
     expandedResult =
-        builder.create<triton::ExpandDimsOp>(loc, expandedResult, j);
+        triton::ExpandDimsOp::create(builder, loc, expandedResult, j);
   }
 
   return expandedResult;
@@ -100,12 +100,12 @@ Value getExpandedOffsetWithRange(OpBuilder &builder, const Location &loc,
   auto indexRowType =
       RankedTensorType::get({blockShape[dim]}, builder.getI64Type());
   Value splatOffset =
-      builder.create<triton::SplatOp>(loc, indexRowType, offset);
-  Value range = builder.create<triton::MakeRangeOp>(loc, indexI32RowType, 0,
-                                                    blockShape[dim]);
-  Value i64Range = builder.create<arith::ExtSIOp>(loc, indexRowType, range);
+      triton::SplatOp::create(builder, loc, indexRowType, offset);
+  Value range = triton::MakeRangeOp::create(builder, loc, indexI32RowType, 0,
+                                            blockShape[dim]);
+  Value i64Range = arith::ExtSIOp::create(builder, loc, indexRowType, range);
 
-  Value offsets = builder.create<arith::AddIOp>(loc, splatOffset, i64Range);
+  Value offsets = arith::AddIOp::create(builder, loc, splatOffset, i64Range);
   return expandOffsets(builder, loc, blockShape, offsets, dim);
 }
 
@@ -120,20 +120,20 @@ Value generatePtrFromOffsetRanges(OpBuilder &builder, Location loc,
   auto ptrTensorType = RankedTensorType::get(blockShape, ptrType);
 
   // Generate offsets per dimension
-  Value ptr = builder.create<triton::SplatOp>(loc, ptrTensorType, desc.base);
+  Value ptr = triton::SplatOp::create(builder, loc, ptrTensorType, desc.base);
   for (unsigned i = 0; i < blockShape.size(); ++i) {
     // We must splat strides into the expanded shape not a row for retaining
     // the divisibility information given by strides
-    Value splatStride = builder.create<triton::SplatOp>(
-        loc, offsets[i].getType(), desc.strides[i]);
+    Value splatStride = triton::SplatOp::create(
+        builder, loc, offsets[i].getType(), desc.strides[i]);
     Value offsetWithStride =
-        builder.create<arith::MulIOp>(loc, offsets[i], splatStride);
-    Value broadcasted = builder.create<triton::BroadcastOp>(
-        loc, indexTensorType, offsetWithStride);
+        arith::MulIOp::create(builder, loc, offsets[i], splatStride);
+    Value broadcasted = triton::BroadcastOp::create(
+        builder, loc, indexTensorType, offsetWithStride);
 
     // Add to the pointer
     ptr =
-        builder.create<triton::AddPtrOp>(loc, ptrTensorType, ptr, broadcasted);
+        triton::AddPtrOp::create(builder, loc, ptrTensorType, ptr, broadcasted);
   }
 
   return ptr;
@@ -168,29 +168,31 @@ Value generateMaskFromOffsetRanges(OpBuilder &builder, const Location &loc,
     auto offsetWithRange = offsetRanges[i];
 
     // Compare with lower bound
-    Value lowerBound = builder.create<mlir::arith::ConstantIntOp>(
-        loc, builder.getI64Type(), 0);
-    Value splatLowerBound = builder.create<triton::SplatOp>(
-        loc, offsetWithRange.getType(), lowerBound);
-    Value cmpLower = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::sge, offsetWithRange, splatLowerBound);
+    Value lowerBound = mlir::arith::ConstantIntOp::create(
+        builder, loc, builder.getI64Type(), 0);
+    Value splatLowerBound = triton::SplatOp::create(
+        builder, loc, offsetWithRange.getType(), lowerBound);
+    Value cmpLower =
+        arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::sge,
+                              offsetWithRange, splatLowerBound);
 
     // Compare with upper bound
-    Value splatUpperBound = builder.create<triton::SplatOp>(
-        loc, offsetWithRange.getType(), desc.shape[i]);
-    Value cmpUpper = builder.create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::slt, offsetWithRange, splatUpperBound);
+    Value splatUpperBound = triton::SplatOp::create(
+        builder, loc, offsetWithRange.getType(), desc.shape[i]);
+    Value cmpUpper =
+        arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::slt,
+                              offsetWithRange, splatUpperBound);
 
     // And and broadcast
-    Value andResult = builder.create<arith::AndIOp>(loc, cmpLower, cmpUpper);
+    Value andResult = arith::AndIOp::create(builder, loc, cmpLower, cmpUpper);
     Value broadcasted =
-        builder.create<triton::BroadcastOp>(loc, maskTensorType, andResult);
+        triton::BroadcastOp::create(builder, loc, maskTensorType, andResult);
 
     // And up all results
     if (!mask) {
       mask = broadcasted;
     } else {
-      mask = builder.create<arith::AndIOp>(loc, mask, broadcasted);
+      mask = arith::AndIOp::create(builder, loc, mask, broadcasted);
     }
   }
 
@@ -220,16 +222,17 @@ Value generateOther(OpBuilder &builder, Location loc, Type scalarTy,
   if (paddingOption && mlir::isa<FloatType>(scalarTy)) {
     auto floatTy = mlir::cast<FloatType>(scalarTy);
     auto nan = llvm::APFloat::getNaN(floatTy.getFloatSemantics());
-    auto nanValue = builder.create<arith::ConstantOp>(
-        loc,
+    auto nanValue = arith::ConstantOp::create(
+        builder, loc,
         SplatElementsAttr::get(blockTy, builder.getFloatAttr(floatTy, nan)));
-    auto zeroValue = builder.create<arith::ConstantOp>(
-        loc, SplatElementsAttr::get(blockTy, builder.getZeroAttr(floatTy)));
-    return builder.create<mlir::arith::SelectOp>(loc, paddingOption, nanValue,
-                                                 zeroValue);
+    auto zeroValue = arith::ConstantOp::create(
+        builder, loc,
+        SplatElementsAttr::get(blockTy, builder.getZeroAttr(floatTy)));
+    return mlir::arith::SelectOp::create(builder, loc, paddingOption, nanValue,
+                                         zeroValue);
   } else {
     auto attr = builder.getZeroAttr(blockTy);
-    return builder.create<arith::ConstantOp>(loc, attr);
+    return arith::ConstantOp::create(builder, loc, attr);
   }
 }
 
@@ -259,8 +262,8 @@ struct RewriteMakeTensorDesc : OpConversionPattern<triton::MakeTensorDescOp> {
     llvm::append_range(ptrShapeStridesPaddingOption,
                        castToI64(rewriter, adaptor.getShape()));
     llvm::append_range(ptrShapeStridesPaddingOption, adaptor.getStrides());
-    auto paddingOption = rewriter.create<mlir::arith::ConstantOp>(
-        op.getLoc(), rewriter.getI1Type(),
+    auto paddingOption = mlir::arith::ConstantOp::create(
+        rewriter, op.getLoc(), rewriter.getI1Type(),
         rewriter.getBoolAttr(adaptor.getPadding() ==
                              triton::PaddingOption::PAD_NAN));
     llvm::append_values(ptrShapeStridesPaddingOption, paddingOption);
@@ -324,7 +327,7 @@ generateGatherScatterPtrMask(OpBuilder &builder, Location loc,
       cast<RankedTensorType>(xOffsetRange.getType()).getShape(),
       yOffset.getType());
   xOffsetRange =
-      builder.create<arith::ExtSIOp>(loc, xOffsetI64Ty, xOffsetRange);
+      arith::ExtSIOp::create(builder, loc, xOffsetI64Ty, xOffsetRange);
   auto yOffsetRange =
       getExpandedOffsetWithRange(builder, loc, blockShape, yOffset, /*dim=*/1);
   auto ptr = generatePtrFromOffsetRanges(builder, loc, blockShape, desc,
@@ -432,8 +435,8 @@ struct RewriteReducePattern : OpConversionPattern<triton::DescriptorReduceOp> {
       return op->emitError(msgstring);
     }
 
-    rewriter.create<triton::AtomicRMWOp>(
-        loc, descTy.getSignlessBlockType(), *rmwOp,
+    triton::AtomicRMWOp::create(
+        rewriter, loc, descTy.getSignlessBlockType(), *rmwOp,
         generatePtr(rewriter, loc, blockShape, desc, offsets), op.getSrc(),
         generateMask(rewriter, loc, blockShape, desc, offsets),
         MemSemantic::RELEASE, MemSyncScope::GPU);

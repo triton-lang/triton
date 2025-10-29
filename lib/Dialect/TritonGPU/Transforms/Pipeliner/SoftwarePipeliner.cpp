@@ -66,12 +66,12 @@ static void expandLoops(ModuleOp moduleOp) {
     if (auto predOp = dyn_cast<triton::gpu::PredicateStageOp>(op)) {
       if (isEpilogue) {
         // Return false for the predicate of the peeled iteration
-        return rewriter.create<mlir::arith::ConstantIntOp>(
-            predOp.getLoc(), predOp.getResult().getType(), 0);
+        return mlir::arith::ConstantIntOp::create(
+            rewriter, predOp.getLoc(), predOp.getResult().getType(), 0);
       } else {
         if (predOp.getStage() == predOp.getMaxStage() - 1) {
-          return rewriter.create<mlir::arith::ConstantIntOp>(
-              predOp.getLoc(), predOp.getResult().getType(), 1);
+          return mlir::arith::ConstantIntOp::create(
+              rewriter, predOp.getLoc(), predOp.getResult().getType(), 1);
         } else {
           OpBuilder::InsertionGuard guard(rewriter);
           rewriter.setInsertionPoint(op);
@@ -126,9 +126,9 @@ static void expandLoops(ModuleOp moduleOp) {
       options.emitPredicateStageFn =
           [](RewriterBase &rewriter, Value inductionVar, Value upperBound,
              Value step, uint64_t maxStage, uint64_t stage) {
-            return rewriter.create<triton::gpu::PredicateStageOp>(
-                inductionVar.getLoc(), inductionVar, upperBound, step, maxStage,
-                stage);
+            return triton::gpu::PredicateStageOp::create(
+                rewriter, inductionVar.getLoc(), inductionVar, upperBound, step,
+                maxStage, stage);
           };
     }
     IRRewriter rewriter(forOp);

@@ -5,8 +5,8 @@ namespace mlir {
 
 Value getRawThreadId(OpBuilder &rewriter, Location loc) {
   Value tid =
-      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
-  Value threadId = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+      ::mlir::gpu::ThreadIdOp::create(rewriter, loc, ::mlir::gpu::Dimension::x);
+  Value threadId = arith::IndexCastOp::create(rewriter, loc, i32_ty, tid);
   return threadId;
 }
 
@@ -42,7 +42,7 @@ Value SegmentObject::getStruct(Location loc,
       mlir::cast<LLVM::LLVMPointerType>(indexPtr.getType()).getAddressSpace();
   auto structTy =
       getStructType(loc.getContext(), memorySpace, indexPtrAddrSpace);
-  Value segmentStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
+  Value segmentStruct = LLVM::UndefOp::create(rewriter, loc, structTy);
   segmentStruct = b.insert_val(structTy, segmentStruct, base, 0);
   segmentStruct = b.insert_val(structTy, segmentStruct, segmentBase, 1);
   segmentStruct = b.insert_val(structTy, segmentStruct, indexPtr, 2);

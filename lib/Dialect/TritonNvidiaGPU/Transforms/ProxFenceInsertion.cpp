@@ -90,7 +90,7 @@ private:
 
 void ProxyFenceAnalysis::insertFence(Operation *op, OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
-  builder->create<triton::nvidia_gpu::FenceAsyncSharedOp>(op->getLoc(), false);
+  triton::nvidia_gpu::FenceAsyncSharedOp::create(*builder, op->getLoc(), false);
 }
 
 void ProxyFenceAnalysis::update(Operation *op, BlockInfo *blockInfo,

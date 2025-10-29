@@ -736,10 +736,10 @@ LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
 
     auto newExpandTy = RankedTensorType::get(
         newExpandShape, srcTy.getElementType(), newExpandEnc);
-    auto newExpand = rewriter.create<ExpandDimsOp>(op.getLoc(), newExpandTy,
-                                                   src, op.getAxis());
-    auto newBroadcast = rewriter.create<BroadcastOp>(
-        broadcast.getLoc(), op.getType(), newExpand.getResult());
+    auto newExpand = ExpandDimsOp::create(rewriter, op.getLoc(), newExpandTy,
+                                          src, op.getAxis());
+    auto newBroadcast = BroadcastOp::create(
+        rewriter, broadcast.getLoc(), op.getType(), newExpand.getResult());
     rewriter.replaceOp(op, {newBroadcast.getResult()});
     return success();
   }

@@ -152,7 +152,8 @@ private:
       auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
       numElems = product<int64_t>(shapePerCTA);
     }
-    int64_t bytes = numElems * allocType.getElementTypeBitWidth() / 8;
+    int64_t bytes =
+        numElems * getIntOrFloatOrPtrBitWidth(allocType.getElementType()) / 8;
 
     auto alignment = alloc.getAlignmentOrDefault();
     allocation->addBuffer<BufferT::BufferKind::Explicit>(alloc, bytes,

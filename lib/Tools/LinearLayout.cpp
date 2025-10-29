@@ -65,56 +65,6 @@ void dumpMatrix(uint64_t *m, int numRows, int numCols) {
   }
 }
 
-// Build a matrix of size sum(outDimSizeLog2) x sum(inDimSizeLog2) representing
-// the bases of the given layout.  This can then be used by f2reduce.
-//
-// This function is called from the constructor of LinearLayout, so be careful
-// not to use any functions that create LLs in here.
-std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout) {
-  int numRows = layout.getTotalOutDimSizeLog2();
-  int numCols = layout.getTotalInDimSizeLog2();
-
-  // Don't handle giant LLs.  This makes some things easier; for example, each
-  // row can be a single uint64_t.
-  assert(numCols <= 64 && "LinearLayout too large");
-  assert(numRows <= 64 && "LinearLayout too large");
-
-  // Suppose we have a layout specified by the following values.
-  //
-  //   L(0,1) = (0b01, 0b1)
-  //   L(0,2) = (0b10, 0b0)
-  //   L(1,0) = (0b10, 0b0)
-  //   L(2,0) = (0b11, 0b0)
-  //
-  // We will create one column per entry above.  The max bit width of the
-  // codomain is (2,1), so our matrix will have 2+1=3 rows.  The final matrix
-  // will be
-  //
-  //  | L(0,1)[0] L(0,2)[0] L(1,0)[0] L(2,0)[0] |   | 0b1001 |
-  //  |    ↓         ↓         ↓         ↓      |   | 0b0111 |
-  //  | L(0,1)[1] L(0,2)[1] L(1,0)[1] L(2,0)[1] | = | 0b1000 |
-  //  |    ↓         ↓         ↓         ↓      |
-  //
-  // Note `new uint64_t[n]()` is zero-initialized, but `new uint64_t[n]` is not.
-  std::unique_ptr<uint64_t[]> m(new uint64_t[numRows]());
-  int r = 0;
-  for (StringAttr outDim : layout.getOutDimNames()) {
-    int c = 0;
-    for (StringAttr inDim : layout.getInDimNames()) {
-      for (int i = 0; i < layout.getInDimSizeLog2(inDim); i++) {
-        uint64_t basis = layout.getBasis(inDim, i, outDim);
-        for (int j = 0; j < layout.getOutDimSizeLog2(outDim); j++) {
-          m[r + j] |= ((basis >> j) & 1) << c;
-        }
-        c++;
-      }
-    }
-    r += layout.getOutDimSizeLog2(outDim);
-  }
-
-  return m;
-}
-
 // Compute the rank of the matrix formed by taking the bases for the given
 // outDim as columns.  In other words, finds the number of linearly-independent
 // bases for this output dimension.
@@ -340,7 +290,7 @@ int32_t LinearLayout::getOutDimIndex(StringAttr outDim) const {
 
 int32_t LinearLayout::getInDimSizeLog2(StringAttr inDim) const {
   auto it = bases.find(inDim);
-  assert(it != bases.end());
+  assert(it != bases.end() && "inDim not found in layout");
   return it->second.size();
 }
 
@@ -353,7 +303,7 @@ int32_t LinearLayout::getTotalInDimSizeLog2() const {
 
 int32_t LinearLayout::getOutDimSizeLog2(StringAttr outDim) const {
   auto it = outDims.find(outDim);
-  assert(it != outDims.end());
+  assert(it != outDims.end() && "outDim not found in layout");
   return llvm::Log2_32(it->second);
 }
 
@@ -1368,6 +1318,56 @@ std::string ColumnAction::toString() const {
   ret += join(action, ", ");
   ret += "], " + inDim.str() + ", " + std::to_string(inSizeLog2) + ")";
   return ret;
+}
+
+// Build a matrix of size sum(outDimSizeLog2) x sum(inDimSizeLog2) representing
+// the bases of the given layout.  This can then be used by f2reduce.
+//
+// This function is called from the constructor of LinearLayout, so be careful
+// not to use any functions that create LLs in here.
+std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout) {
+  int numRows = layout.getTotalOutDimSizeLog2();
+  int numCols = layout.getTotalInDimSizeLog2();
+
+  // Don't handle giant LLs.  This makes some things easier; for example, each
+  // row can be a single uint64_t.
+  assert(numCols <= 64 && "LinearLayout too large");
+  assert(numRows <= 64 && "LinearLayout too large");
+
+  // Suppose we have a layout specified by the following values.
+  //
+  //   L(0,1) = (0b01, 0b1)
+  //   L(0,2) = (0b10, 0b0)
+  //   L(1,0) = (0b10, 0b0)
+  //   L(2,0) = (0b11, 0b0)
+  //
+  // We will create one column per entry above.  The max bit width of the
+  // codomain is (2,1), so our matrix will have 2+1=3 rows.  The final matrix
+  // will be
+  //
+  //  | L(0,1)[0] L(0,2)[0] L(1,0)[0] L(2,0)[0] |   | 0b1001 |
+  //  |    ↓         ↓         ↓         ↓      |   | 0b0111 |
+  //  | L(0,1)[1] L(0,2)[1] L(1,0)[1] L(2,0)[1] | = | 0b1000 |
+  //  |    ↓         ↓         ↓         ↓      |
+  //
+  // Note `new uint64_t[n]()` is zero-initialized, but `new uint64_t[n]` is not.
+  std::unique_ptr<uint64_t[]> m(new uint64_t[numRows]());
+  int r = 0;
+  for (StringAttr outDim : layout.getOutDimNames()) {
+    int c = 0;
+    for (StringAttr inDim : layout.getInDimNames()) {
+      for (int i = 0; i < layout.getInDimSizeLog2(inDim); i++) {
+        uint64_t basis = layout.getBasis(inDim, i, outDim);
+        for (int j = 0; j < layout.getOutDimSizeLog2(outDim); j++) {
+          m[r + j] |= ((basis >> j) & 1) << c;
+        }
+        c++;
+      }
+    }
+    r += layout.getOutDimSizeLog2(outDim);
+  }
+
+  return m;
 }
 
 } // namespace mlir::triton

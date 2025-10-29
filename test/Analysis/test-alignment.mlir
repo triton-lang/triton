@@ -458,7 +458,7 @@ tt.func @max_min() {
   %4 = arith.constant dense<8> : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [4], constancy = [128], constant_value = 4}}
   %5 = arith.constant dense<4> : tensor<128xi32>
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = 8}}
+  // expected-remark @below {{contiguity = [1], divisibility = [8], constancy = [128], constant_value = 8}}
   %6 = arith.maxsi %4, %5 : tensor<128xi32>
   tt.return
 }
@@ -1009,5 +1009,51 @@ tt.func @caller() {
   // expected-remark @below {{contiguity = [128, 1], divisibility = [1073741824, 1], constancy = [1, 1], constant_value = <none>}}
   %1 = tt.expand_dims %0 {axis = 1: i32} : tensor<128xi32> -> tensor<128x1xi32>
   tt.call @callee(%1) : (tensor<128x1xi32>) -> ()
+  tt.return
+}
+
+// -----
+
+tt.func @mul_zero_constancy() {
+  %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  %zeros = arith.constant dense<0> : tensor<128xi32>
+  // expected-remark @below {{constancy = [128]}}
+  %product = arith.muli %zeros, %range : tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @max_constancy() {
+  %c5 = arith.constant dense<5> : tensor<4xi32>
+  %c7 = arith.constant dense<7> : tensor<4xi32>
+  // expected-remark @below {{constancy = [4], constant_value = 7}}
+  %max = arith.maxsi %c5, %c7 : tensor<4xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @select_same_value_constancy() {
+  %range = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32>
+  %two = arith.constant dense<2> : tensor<4xi32>
+  %mod = arith.remsi %range, %two : tensor<4xi32>
+  %zero = arith.constant dense<0> : tensor<4xi32>
+  %cond = arith.cmpi ne, %mod, %zero : tensor<4xi32>
+  %lhs = arith.constant dense<42> : tensor<4xi32>
+  %rhs = arith.constant dense<42> : tensor<4xi32>
+  // expected-remark @below {{constancy = [4], constant_value = 42}}
+  %sel = arith.select %cond, %lhs, %rhs : tensor<4xi1>, tensor<4xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @cmp_after_max_constancy() {
+  %c5 = arith.constant dense<5> : tensor<4xi32>
+  %c7 = arith.constant dense<7> : tensor<4xi32>
+  %max = arith.maxsi %c5, %c7 : tensor<4xi32>
+  // expected-remark @below {{constancy = [4], constant_value = 1}}
+  %cmp = arith.cmpi sgt, %max, %c5 : tensor<4xi32>
   tt.return
 }

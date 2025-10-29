@@ -16,11 +16,6 @@ class ForOp;
 } // namespace scf
 } // namespace mlir
 
-static constexpr char kPartitionAttrName[] = "ttg.partition";
-static constexpr char kPartitionOutputsAttrName[] = "ttg.partition.outputs";
-static constexpr char kPartitionStagesAttrName[] = "ttg.partition.stages";
-static constexpr char kWarpSpecializeTagAttrName[] = "ttg.warp_specialize.tag";
-
 //===----------------------------------------------------------------------===//
 // PartitionSet
 //===----------------------------------------------------------------------===//
@@ -40,6 +35,7 @@ public:
   ArrayRef<Operation *> getOps() const { return ops; }
   void addOp(Operation *op) { ops.push_back(op); }
   bool hasOp(Operation *op) const;
+  bool empty() const { return ops.empty(); }
 
   // Iterate the inputs of the partition. Input values are those that originate
   // from a different partition or a previous iteration of the current
@@ -127,8 +123,9 @@ void setPartition(Operation *op, const SetVector<Partition *> &partitions);
 // which does not work with Partition instances and iterate* functions, since
 // it does not keep the op attributes and the op list of a partition in sync.
 void setPartition(Operation *op, const SetVector<int> &partitionIds);
-
-std::optional<SetVector<int>> getPartitionIds(Operation *op);
+void setPartitionOutputs(Operation *op,
+                         ArrayRef<SetVector<int>> partitionOutputsIds);
+SmallVector<SetVector<int>, 4> getPartitionOutputs(Operation *op);
 
 } // namespace mlir::triton::gpu
 

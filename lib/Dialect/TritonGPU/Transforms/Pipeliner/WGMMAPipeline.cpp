@@ -210,8 +210,8 @@ static void threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
 
   // We can't use replaceWithNewOp because we're changing the number of return
   // values in the operation.
-  auto newWait = builder.create<ttng::WarpGroupDotWaitOp>(
-      wait.getLoc(), llvm::to_vector(newOperands), wait.getPendings());
+  auto newWait = ttng::WarpGroupDotWaitOp::create(
+      builder, wait.getLoc(), llvm::to_vector(newOperands), wait.getPendings());
 
   auto dominatedByNewWait = [&](OpOperand &operand) {
     auto opInThisBlock =
@@ -247,14 +247,14 @@ SmallVector<Value> splitLhs(OpBuilder &builder,
     shape.push_back(2);
   }
   shape.push_back(newK);
-  lhs = builder.create<tt::ReshapeOp>(loc, shape, lhs);
+  lhs = tt::ReshapeOp::create(builder, loc, shape, lhs);
   // We want to split first the slowest running dim, then the second slowest,
   // etc.
   auto transOrder = to_vector(llvm::seq<int>(rank - 1));
   transOrder.push_back(shape.size() - 1);
   llvm::append_range(transOrder, llvm::reverse(llvm::seq(
                                      rank - 1, (int64_t)shape.size() - 1)));
-  lhs = builder.create<tt::TransOp>(loc, lhs, transOrder);
+  lhs = tt::TransOp::create(builder, loc, lhs, transOrder);
   // We split recursively
   SmallVector<Value> curr;
   SmallVector<Value> ret = {lhs};
@@ -262,7 +262,7 @@ SmallVector<Value> splitLhs(OpBuilder &builder,
     curr = ret;
     ret.clear();
     for (auto v : curr) {
-      auto split = builder.create<tt::SplitOp>(loc, v);
+      auto split = tt::SplitOp::create(builder, loc, v);
       ret.push_back(split.getResult(0));
       ret.push_back(split.getResult(1));
     }
@@ -272,7 +272,7 @@ SmallVector<Value> splitLhs(OpBuilder &builder,
       type.clone(cast<RankedTensorType>(ret.front().getType()).getShape());
   // Convert the LHS to mmav3 layout
   for (auto &v : ret) {
-    v = builder.create<ttg::ConvertLayoutOp>(loc, mmav3Type, v);
+    v = ttg::ConvertLayoutOp::create(builder, loc, mmav3Type, v);
     // These convert_layout ops are noops by construction
     assert(isNoop(v.getDefiningOp()));
   }
@@ -299,7 +299,7 @@ SmallVector<Value> splitRhs(OpBuilder &builder,
   for (int i = 0; i < nSplits; i++) {
     offsets[kDim] = i * newK;
     Value newSmem =
-        builder.create<ttg::MemDescSubsliceOp>(loc, newType, rhs, offsets);
+        ttg::MemDescSubsliceOp::create(builder, loc, newType, rhs, offsets);
     ret.push_back(newSmem);
   }
   return ret;
@@ -343,12 +343,12 @@ std::vector<ttng::WarpGroupDotOp> splitRSDot(ttng::WarpGroupDotOp dotOp) {
     uint32_t numImpreciseAcc = (take == newK) ? (1u << 30) : take;
     numImpreciseAccLeft -= take;
 
-    auto dot = builder.create<ttng::WarpGroupDotOp>(
-        loc, dotOp.getType(), lhss[i], rhss[i], C, useC,
+    auto dot = ttng::WarpGroupDotOp::create(
+        builder, loc, dotOp.getType(), lhss[i], rhss[i], C, useC,
         dotOp.getInputPrecision(), numImpreciseAcc, dotOp.getIsAsync());
     dots.push_back(dot);
     C = dot.getResult();
-    useC = builder.create<mlir::arith::ConstantIntOp>(loc, 1, 1);
+    useC = mlir::arith::ConstantIntOp::create(builder, loc, 1, 1);
   }
   dotOp.replaceAllUsesWith(dots.back().getResult());
   dotOp.erase();
@@ -595,8 +595,9 @@ static void insertAsyncWarpGroupDotWaitInLoop(
     if (rsDotNeedsWait(asyncDot, forOp)) {
       OpBuilder builder(asyncDot);
       builder.setInsertionPointAfter(asyncDot);
-      auto newWait = builder.create<ttng::WarpGroupDotWaitOp>(
-          asyncDot->getLoc(), ArrayRef<Value>{}, properlyAsyncDots.size() - 1);
+      auto newWait = ttng::WarpGroupDotWaitOp::create(
+          builder, asyncDot->getLoc(), ArrayRef<Value>{},
+          properlyAsyncDots.size() - 1);
       SmallVector<Value> waitOperands = {asyncDot->getResult(0)};
       threadValuesThroughWait(newWait, waitOperands);
       continue;
@@ -618,8 +619,8 @@ static void insertAsyncWarpGroupDotWaitInLoop(
 
     for (auto [block, users] : blockToUsers) {
       OpBuilder builder(block, block->begin());
-      auto newWait = builder.create<ttng::WarpGroupDotWaitOp>(
-          asyncDot->getLoc(), ArrayRef<Value>{}, 0);
+      auto newWait = ttng::WarpGroupDotWaitOp::create(
+          builder, asyncDot->getLoc(), ArrayRef<Value>{}, 0);
 
       threadValuesThroughWait(newWait, users);
     }
@@ -641,9 +642,9 @@ static void insertAsyncWarpGroupDotWaitInLoop(
     return;
   }
   builder.setInsertionPointAfter(lastAsyncDot);
-  auto wait = builder.create<ttng::WarpGroupDotWaitOp>(
-      lastAsyncDot->getLoc(),
-      /*inputs=*/ArrayRef<Value>{}, properlyAsyncDots.size());
+  auto wait = ttng::WarpGroupDotWaitOp::create(builder, lastAsyncDot->getLoc(),
+                                               /*inputs=*/ArrayRef<Value>{},
+                                               properlyAsyncDots.size());
 
   // Thread the results of the async dots through the wait.
   SmallVector<Value> addlWaitOperands;
@@ -683,8 +684,8 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
       properlyAsyncDots[WarpGroupDotOp] = *iterArgIdx;
     } else {
       builder.setInsertionPointAfter(WarpGroupDotOp);
-      auto wait = builder.create<ttng::WarpGroupDotWaitOp>(
-          WarpGroupDotOp.getLoc(), ArrayRef<Value>{},
+      auto wait = ttng::WarpGroupDotWaitOp::create(
+          builder, WarpGroupDotOp.getLoc(), ArrayRef<Value>{},
           /*pendings=*/0);
       SmallVector<Value> waitOperands = {WarpGroupDotOp.getResult()};
       threadValuesThroughWait(wait, waitOperands);
@@ -720,7 +721,7 @@ void triton::asyncLaunchDots(scf::ForOp forOp) {
   }
   // Wait until there are 0 outstanding async dot ops.
   builder.setInsertionPointAfter(forOp);
-  auto WarpGroupDotWaitAfterLoop = builder.create<ttng::WarpGroupDotWaitOp>(
-      forOp.getLoc(), ArrayRef<Value>{}, 0);
+  auto WarpGroupDotWaitAfterLoop = ttng::WarpGroupDotWaitOp::create(
+      builder, forOp.getLoc(), ArrayRef<Value>{}, 0);
   threadValuesThroughWait(WarpGroupDotWaitAfterLoop, waitOperands);
 }

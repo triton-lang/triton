@@ -72,13 +72,13 @@ findBufferAccessMemdescSubview(Operation *subview) {
     shape = to_vector(indexOp.getType().getShape());
     offsets = {indexOp.getIndex()};
     for (auto i : llvm::seq(std::max<int>(0, shape.size() - 1)))
-      offsets.push_back(builder.create<arith::ConstantIntOp>(loc, 0, 32));
+      offsets.push_back(arith::ConstantIntOp::create(builder, loc, 0, 32));
   } else {
     auto subsliceOp = cast<ttg::MemDescSubsliceOp>(subview);
     src = subsliceOp.getSrc();
     shape = to_vector(subsliceOp.getType().getShape());
     for (auto offset : subsliceOp.getOffsets())
-      offsets.push_back(builder.create<arith::ConstantIntOp>(loc, offset, 32));
+      offsets.push_back(arith::ConstantIntOp::create(builder, loc, offset, 32));
   }
   auto [alloc, parentAccess] = findBufferAccess(src);
   if (!alloc)

@@ -147,6 +147,8 @@ def reduce(
     Returns:
         - output: torch.Tensor
           The reduced tensor with `dim` removed.
+        - output_mxscale: Optional[torch.Tensor]
+          The output mx scale if input is micro-scaled, else None.
     """
     if x.ndim != 3:
         raise NotImplementedError("reduce only supports 3D inputs in this implementation")

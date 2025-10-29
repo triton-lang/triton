@@ -646,9 +646,17 @@ def matmul_ogs(x, w, bias,
     w_has_tma = opt_flags.is_persistent
     w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n], "dense") if w_has_tma else w_storage.data
     # create tma descriptor for w_scale
-    w_scale_tensor_or_tma = w_scale
     w_scale_has_tma = opt_flags.is_persistent and w_scale is not None
-    w_scale_tensor_or_tma =  w_scale.storage.make_tma([opt_flags.block_n, opt_flags.block_k], "dense") if w_scale_has_tma else w_scale
+    w_transpose = w_storage.data.stride()[-2] == 1
+    if w_scale_has_tma:
+        w_scale_storage = w_scale.storage
+        w_scale_tma_block_size = [opt_flags.block_n, opt_flags.block_k] if w_transpose else [opt_flags.block_k, opt_flags.block_n]
+        if isinstance(w_scale.storage.layout, StridedLayout):
+            w_scale_storage = _canonicalize_storage(w_scale.storage, 3, None)
+            w_scale_tma_block_size = [1] + w_scale_tma_block_size
+        w_scale_tensor_or_tma = w_scale_storage.make_tma(w_scale_tma_block_size, "dense")
+    else:
+        w_scale_tensor_or_tma = w_scale
     # canonicalize strides
     x_strides = [0]*(3 - x_storage.data.ndim) + list(x_storage.data.stride())
     x_scale_strides = x_scale.stride() if x_has_mx else (None, None, None)
@@ -663,7 +671,6 @@ def matmul_ogs(x, w, bias,
     # (i.e. col-wise). Since this matters when w_has_mx is True and w_transpose
     # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
     # w_transpose = w_storage.data.stride()[-1] != 1
-    w_transpose = w_storage.data.stride()[-2] == 1
     fused_comm_kwargs = {
         "pYPtrs": fused_comm.out_handles,
         "ScatterShardIndx": fused_comm.scatter_shard_indx,

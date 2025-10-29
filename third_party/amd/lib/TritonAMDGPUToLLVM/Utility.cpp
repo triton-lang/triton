@@ -76,7 +76,8 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
     // https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/instinct-mi200-cdna2-instruction-set-architecture.pdf#page=180
     Value byteOffset = b.i32_val(2);
     Value permuteAddr = b.shl(lane, byteOffset);
-    return rewriter.create<ROCDL::DsBpermuteOp>(loc, valType, permuteAddr, val);
+    return ROCDL::DsBpermuteOp::create(rewriter, loc, valType, permuteAddr,
+                                       val);
   };
 
   switch (mode) {
@@ -91,11 +92,11 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
         // 16 lanes and vice versa.
         Value select_lo = b.i32_val(0x76543210);
         Value select_hi = b.i32_val(0xfedcba98);
-        return rewriter.create<ROCDL::PermlaneX16Op>(
-            loc, valType, val, val, select_lo, select_hi, true, false);
+        return ROCDL::PermlaneX16Op::create(rewriter, loc, valType, val, val,
+                                            select_lo, select_hi, true, false);
       } else {
         Value offset = b.i32_val(0x401F);
-        return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
+        return ROCDL::DsSwizzleOp::create(rewriter, loc, valType, val, offset);
       }
     } else {
       if (!llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3,
@@ -110,16 +111,17 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
         DenseMap<short, unsigned int> masks{
             {16, 0x401F}, {8, 0x201F}, {4, 0x101F}, {2, 0x081F}, {1, 0x041F}};
         Value offset = b.i32_val(masks[strideInt]);
-        return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
+        return ROCDL::DsSwizzleOp::create(rewriter, loc, valType, val, offset);
       }
 
       auto createDppOpWithoutBoundCtrl = [&](Value &old, Value &src,
                                              uint32_t dppCtrl, uint32_t rowMask,
                                              uint32_t bankMask) {
-        return rewriter.create<ROCDL::DPPUpdateOp>(
-            loc, valType, old, src, rewriter.getI32IntegerAttr(dppCtrl),
-            rewriter.getI32IntegerAttr(rowMask),
-            rewriter.getI32IntegerAttr(bankMask), rewriter.getBoolAttr(false));
+        return ROCDL::DPPUpdateOp::create(rewriter, loc, valType, old, src,
+                                          rewriter.getI32IntegerAttr(dppCtrl),
+                                          rewriter.getI32IntegerAttr(rowMask),
+                                          rewriter.getI32IntegerAttr(bankMask),
+                                          rewriter.getBoolAttr(false));
       };
 
       const int allRows = 0xf;
@@ -302,24 +304,24 @@ getCacheModifierFlagsForLoadStore(const triton::CacheModifier &cm,
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
                ProgramIDDim axis) {
   Value blockId =
-      rewriter.create<::mlir::gpu::BlockIdOp>(loc, mlir::gpu::Dimension(axis));
-  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, blockId);
+      ::mlir::gpu::BlockIdOp::create(rewriter, loc, mlir::gpu::Dimension(axis));
+  return arith::IndexCastOp::create(rewriter, loc, i32_ty, blockId);
 }
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
              Value pred, Value falseVal, triton::CacheModifier cm,
              bool forceNoAliasAsyncLoads) {
-  return rewriter
-      .create<triton::amdgpu::MaskedLoadOp>(loc, elemTy, ptr, pred, falseVal,
-                                            cm, forceNoAliasAsyncLoads)
+  return triton::amdgpu::MaskedLoadOp::create(rewriter, loc, elemTy, ptr, pred,
+                                              falseVal, cm,
+                                              forceNoAliasAsyncLoads)
       .getResult();
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              Value pred, triton::CacheModifier cm,
              bool forceNoAliasAsyncLoads) {
-  rewriter.create<triton::amdgpu::MaskedStoreOp>(loc, ptr, val, pred, cm,
-                                                 forceNoAliasAsyncLoads);
+  triton::amdgpu::MaskedStoreOp::create(rewriter, loc, ptr, val, pred, cm,
+                                        forceNoAliasAsyncLoads);
 }
 
 // Create the auxiliary/cachepolicy value of ROCDL::RawPtrBufferLoad/StoreOp
@@ -418,7 +420,7 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
 Value cvtFp32ToFp16RTNE_oneValue(Location loc, RewriterBase &rewriter,
                                  const Value &v) {
   LLVM::RoundingMode rm = LLVM::RoundingMode::NearestTiesToEven;
-  return rewriter.create<LLVM::FPTruncOp>(loc, f16_ty, v);
+  return LLVM::FPTruncOp::create(rewriter, loc, f16_ty, v);
 }
 
 Type getPointerTypeWithShape(Value basePtr, Value offset) {
@@ -663,14 +665,14 @@ SmallVector<Value> upcast8xMxfp4_SW(RewriterBase &rewriter, Operation *op,
     res_7531 = b.and_(res_7531, s_7531);
 
     // Step 5: convert fp8 to fp32
-    Value res_20 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
-        loc, i64_ty, res_6420, rewriter.getIntegerAttr(i1_ty, 0));
-    Value res_64 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
-        loc, i64_ty, res_6420, rewriter.getIntegerAttr(i1_ty, 1));
-    Value res_31 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
-        loc, i64_ty, res_7531, rewriter.getIntegerAttr(i1_ty, 0));
-    Value res_75 = rewriter.create<ROCDL::CvtPkF32Fp8Op>(
-        loc, i64_ty, res_7531, rewriter.getIntegerAttr(i1_ty, 1));
+    Value res_20 = ROCDL::CvtPkF32Fp8Op::create(
+        rewriter, loc, i64_ty, res_6420, rewriter.getIntegerAttr(i1_ty, 0));
+    Value res_64 = ROCDL::CvtPkF32Fp8Op::create(
+        rewriter, loc, i64_ty, res_6420, rewriter.getIntegerAttr(i1_ty, 1));
+    Value res_31 = ROCDL::CvtPkF32Fp8Op::create(
+        rewriter, loc, i64_ty, res_7531, rewriter.getIntegerAttr(i1_ty, 0));
+    Value res_75 = ROCDL::CvtPkF32Fp8Op::create(
+        rewriter, loc, i64_ty, res_7531, rewriter.getIntegerAttr(i1_ty, 1));
     SmallVector<Value> pkVals{res_20, res_64, res_31, res_75};
     if (scale) {
       // pack 2 values together to help llvm backend codegen

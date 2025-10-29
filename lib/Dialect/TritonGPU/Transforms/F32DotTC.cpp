@@ -14,7 +14,7 @@ auto convertValue(Value value, const FloatType &scalarToType,
                   PatternRewriter &rewriter) -> mlir::Value {
   auto fromType = cast<RankedTensorType>(value.getType());
   auto toType = fromType.cloneWith(std::nullopt, scalarToType);
-  return rewriter.create<T>(value.getLoc(), toType, value).getResult();
+  return T::create(rewriter, value.getLoc(), toType, value).getResult();
 }
 
 auto splitF32(Value input, unsigned N, PatternRewriter &rewriter)
@@ -26,7 +26,8 @@ auto splitF32(Value input, unsigned N, PatternRewriter &rewriter)
     if (i != N - 1) {
       Value inputAsF32 = convertValue<arith::ExtFOp>(
           inputAsBF16, rewriter.getF32Type(), rewriter);
-      input = rewriter.create<arith::SubFOp>(input.getLoc(), input, inputAsF32);
+      input =
+          arith::SubFOp::create(rewriter, input.getLoc(), input, inputAsF32);
     }
     splitInputs.push_back(inputAsBF16);
   }
@@ -38,23 +39,24 @@ bool isF32(Value operand) {
 };
 
 Value zeroLike(Value c, PatternRewriter &rewriter) {
-  return rewriter.create<SplatOp>(c.getLoc(), c.getType(),
-                                  rewriter.create<arith::ConstantOp>(
-                                      c.getLoc(), rewriter.getF32FloatAttr(0)));
+  return SplatOp::create(
+      rewriter, c.getLoc(), c.getType(),
+      arith::ConstantOp::create(rewriter, c.getLoc(),
+                                rewriter.getF32FloatAttr(0)));
 };
 
 Value dot(Value lhs, Value rhs, Value acc, PatternRewriter &rewriter,
           InputPrecision precision = InputPrecision::IEEE,
           uint32_t maxNumImpreciseAcc = 0) {
-  return rewriter.create<DotOp>(lhs.getLoc(), lhs, rhs, acc, precision,
-                                maxNumImpreciseAcc);
+  return DotOp::create(rewriter, lhs.getLoc(), lhs, rhs, acc, precision,
+                       maxNumImpreciseAcc);
 };
 
 Value replaceNansWithZeros(Value value, PatternRewriter &rewriter) {
-  auto nans = rewriter.create<arith::CmpFOp>(
-      value.getLoc(), arith::CmpFPredicate::UNO, value, value);
+  auto nans = arith::CmpFOp::create(rewriter, value.getLoc(),
+                                    arith::CmpFPredicate::UNO, value, value);
   auto zero = zeroLike(value, rewriter);
-  return rewriter.create<arith::SelectOp>(value.getLoc(), nans, zero, value);
+  return arith::SelectOp::create(rewriter, value.getLoc(), nans, zero, value);
 };
 
 unsigned getBF16Count(triton::InputPrecision precision) {
@@ -123,7 +125,7 @@ struct BF16xN : public OpRewritePattern<DotOp> {
 
     result = dot(lhs_parts[hi], rhs_parts[hi], result, rewriter);
     result =
-        rewriter.create<arith::AddFOp>(dotOp.getLoc(), result, dotOp.getC());
+        arith::AddFOp::create(rewriter, dotOp.getLoc(), result, dotOp.getC());
 
     rewriter.replaceOp(dotOp, result);
     return success();
@@ -154,18 +156,17 @@ public:
 
     // Aux functions
     auto f32ToTF32 = [&](Value value) -> Value {
-      return rewriter
-          .create<ElementwiseInlineAsmOp>(dotOp.getLoc(), value.getType(),
-                                          "cvt.rna.tf32.f32 $0, $1;", "=r,r",
-                                          /*isPure=*/true, /*pack=*/1,
-                                          ArrayRef<Value>{value})
+      return ElementwiseInlineAsmOp::create(
+                 rewriter, dotOp.getLoc(), value.getType(),
+                 "cvt.rna.tf32.f32 $0, $1;", "=r,r",
+                 /*isPure=*/true, /*pack=*/1, ArrayRef<Value>{value})
           .getResult()[0];
     };
     auto add = [&](Value a, Value b) -> Value {
-      return rewriter.create<arith::AddFOp>(dotOp.getLoc(), a, b);
+      return arith::AddFOp::create(rewriter, dotOp.getLoc(), a, b);
     };
     auto sub = [&](Value a, Value b) -> Value {
-      return rewriter.create<arith::SubFOp>(dotOp.getLoc(), a, b);
+      return arith::SubFOp::create(rewriter, dotOp.getLoc(), a, b);
     };
 
     auto aBig = f32ToTF32(dotOp.getA());

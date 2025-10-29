@@ -155,6 +155,18 @@ tt.func @preallocate(%A : !tt.ptr<f16>) {
   tt.return
 }
 
+// expected-remark @below {{memdesc_ptr}}
+// expected-remark @below {{size = 6144}}
+tt.func @memdesc_ptr() {
+  // expected-remark @below {{offset = 0, size = 4096}}
+  %a0 = ttg.local_alloc : () -> !ttg.memdesc<32x16x!tt.ptr<f16>, #A_SHARED, #ttg.shared_memory, mutable>
+  // expected-remark @below {{offset = 4096, size = 2048}}
+  %a1 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16x!tt.ptr<f16>, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %a0 : !ttg.memdesc<32x16x!tt.ptr<f16>, #A_SHARED, #ttg.shared_memory, mutable>
+  ttg.local_dealloc %a1 : !ttg.memdesc<1x16x16x!tt.ptr<f16>, #A_SHARED, #ttg.shared_memory, mutable>
+  tt.return
+}
+
 // Unused tensors are immediately released
 // expected-remark @below {{unused}}
 // expected-remark @below {{size = 1024}}
@@ -279,9 +291,9 @@ tt.func @multi_color_multi_rounds(%arg0: !tt.ptr<f16>) {
 }
 
 
-// expected-remark @below {{alloc}}
+// expected-remark @below {{alloc_ptr}}
 // expected-remark @below {{size = 512}}
-tt.func @alloc(%A : !tt.ptr<f16>) {
+tt.func @alloc_ptr(%A : !tt.ptr<f16>) {
   // expected-remark @below {{offset = 0, size = 512}}
   %cst0 = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %cst1 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>

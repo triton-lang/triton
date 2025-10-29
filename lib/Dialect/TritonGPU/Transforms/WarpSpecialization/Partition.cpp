@@ -56,6 +56,9 @@ void Partition::iterateOutputs(
   for (Operation *op : getOps()) {
     for (OpOperand &use : op->getUses()) {
       Operation *owner = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+      if (!owner) {
+        continue;
+      }
       auto partitionIds = getPartitionIds(owner);
       if (isa<scf::YieldOp>(owner)) {
         // This value is used in a subsequent iteration.
@@ -88,6 +91,9 @@ void Partition::iterateUses(
   while (!uses.empty()) {
     auto [output, use, distance] = uses.pop_back_val();
     Operation *owner = loop.getBody()->findAncestorOpInBlock(*use->getOwner());
+    if (!owner) {
+      continue;
+    }
     if (!isa<scf::YieldOp>(owner)) {
       callback(output, *use, distance);
       continue;
@@ -179,7 +185,31 @@ namespace mlir::triton::gpu {
 
 void setPartition(Operation *op, ArrayRef<int> partitionIds) {
   Builder b(op->getContext());
-  op->setAttr(kPartitionAttrName, b.getDenseI32ArrayAttr(partitionIds));
+  auto sorted = llvm::to_vector(partitionIds);
+  llvm::sort(sorted);
+  op->setAttr(kPartitionAttrName, b.getDenseI32ArrayAttr(sorted));
+  for (auto &region : op->getRegions()) {
+    for (auto &block : region.getBlocks()) {
+      auto terminator = block.getTerminator();
+      terminator->setAttr(kPartitionAttrName, b.getDenseI32ArrayAttr(sorted));
+    }
+  }
+}
+
+void setPartitionOutputs(Operation *op,
+                         ArrayRef<SetVector<int>> partitionOutputsIds) {
+  if (partitionOutputsIds.empty()) {
+    op->removeAttr(kPartitionOutputsAttrName);
+    return;
+  }
+  SmallVector<Attribute> attrs;
+  Builder b(op->getContext());
+  for (auto partitionIds : partitionOutputsIds) {
+    auto sorted = llvm::to_vector(partitionIds);
+    llvm::sort(sorted);
+    attrs.push_back(b.getDenseI32ArrayAttr(sorted));
+  }
+  op->setAttr(kPartitionOutputsAttrName, b.getArrayAttr(attrs));
 }
 
 void setPartition(Operation *op, const SetVector<int> &partitionIds) {
@@ -202,22 +232,21 @@ void setPartition(Operation *op, const SetVector<Partition *> &partitions) {
   setPartition(op, partitionIds);
 }
 
-std::optional<SetVector<int>> getPartitionIds(Operation *op) {
+SmallVector<SetVector<int>, 4> getPartitionOutputs(Operation *op) {
   if (!op) {
-    return std::nullopt;
+    return {};
   }
-  auto attrs = op->getAttr(kPartitionAttrName);
+
+  auto attrs = op->getAttr(kPartitionOutputsAttrName);
   if (!attrs) {
-    return std::nullopt;
+    return {};
   }
-
-  assert(isa<DenseI32ArrayAttr>(attrs));
-
-  SetVector<int> partitionIds;
-  for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
-    partitionIds.insert(id);
+  SmallVector<SetVector<int>, 4> partitionOutputsIds;
+  for (auto attr : cast<ArrayAttr>(attrs)) {
+    auto ids = cast<DenseI32ArrayAttr>(attr).asArrayRef();
+    partitionOutputsIds.push_back(SetVector<int>(ids.begin(), ids.end()));
   }
-  return partitionIds;
+  return partitionOutputsIds;
 }
 
 bool hasPartition(Operation *op) { return getPartitionIds(op) != std::nullopt; }

@@ -145,7 +145,7 @@ int getTxCount(Operation *descOp) {
   auto encoding = getEncodingFromDescriptor(descOp, tensorType, desc);
   auto shapePerCTA = getShapePerCTA(encoding, tensorType.getShape());
   return product(shapePerCTA) *
-         tensorType.getElementType().getIntOrFloatBitWidth() / 8;
+         getIntOrFloatOrPtrBitWidth(tensorType.getElementType()) / 8;
 }
 
 void createNVWSDescriptorLoadOp(OpBuilder &builder, Operation *ttDescLoadOp,
@@ -153,15 +153,15 @@ void createNVWSDescriptorLoadOp(OpBuilder &builder, Operation *ttDescLoadOp,
                                 PartitionSet &partitions, Location loc) {
   auto txCount = getTxCount(ttDescLoadOp);
   if (auto descLoad = dyn_cast<triton::DescriptorLoadOp>(ttDescLoadOp)) {
-    auto newDescLoad = builder.create<triton::nvws::DescriptorLoadOp>(
-        loc, descLoad.getDesc(), descLoad.getIndices(), txCount, dataBuf,
-        descLoad.getCache(), descLoad.getEvict());
+    auto newDescLoad = triton::nvws::DescriptorLoadOp::create(
+        builder, loc, descLoad.getDesc(), descLoad.getIndices(), txCount,
+        dataBuf, descLoad.getCache(), descLoad.getEvict());
     newDescLoad->setAttrs(descLoad->getAttrs());
     setPartition(newDescLoad, producerPartition);
   } else if (auto descGather =
                  dyn_cast<triton::DescriptorGatherOp>(ttDescLoadOp)) {
-    auto newDescGather = builder.create<triton::nvws::DescriptorGatherOp>(
-        loc, descGather.getDesc(), descGather.getXOffsets(),
+    auto newDescGather = triton::nvws::DescriptorGatherOp::create(
+        builder, loc, descGather.getDesc(), descGather.getXOffsets(),
         descGather.getYOffset(), txCount, dataBuf);
     newDescGather->setAttrs(descGather->getAttrs());
     setPartition(newDescGather, producerPartition);

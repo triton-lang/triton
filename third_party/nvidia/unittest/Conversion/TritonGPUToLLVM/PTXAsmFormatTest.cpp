@@ -24,10 +24,10 @@ protected:
     builder.setInsertionPointToStart(&block);
 
     // a b1 value for predicate.
-    v[0] = builder.create<arith::ConstantIntOp>(builder.getUnknownLoc(), 1, 1);
+    v[0] = arith::ConstantIntOp::create(builder, builder.getUnknownLoc(), 1, 1);
     for (int i = 0; i < numValues; i++) {
       v[i + 1] =
-          builder.create<arith::ConstantIntOp>(builder.getUnknownLoc(), i, 32);
+          arith::ConstantIntOp::create(builder, builder.getUnknownLoc(), i, 32);
     }
   }
 

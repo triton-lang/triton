@@ -35,8 +35,8 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter, Value val,
       val = b.zext(i32_ty, val);
   }
   Value mask = b.i32_val(0xFFFFFFFF);
-  Value result = rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, val, i, clamp,
-                                               mode, UnitAttr());
+  Value result = NVVM::ShflOp::create(rewriter, loc, i32_ty, mask, val, i,
+                                      clamp, mode, UnitAttr());
   if (type != i32_ty) {
     if (bits < 32)
       result = b.trunc(int_ty(bits), result);
@@ -94,20 +94,20 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
   if (numCTAs == 1) {
     switch (axis) {
     case ProgramIDDim::X:
-      return rewriter.create<NVVM::BlockIdXOp>(loc, i32_ty);
+      return NVVM::BlockIdXOp::create(rewriter, loc, i32_ty);
     case ProgramIDDim::Y:
-      return rewriter.create<NVVM::BlockIdYOp>(loc, i32_ty);
+      return NVVM::BlockIdYOp::create(rewriter, loc, i32_ty);
     case ProgramIDDim::Z:
-      return rewriter.create<NVVM::BlockIdZOp>(loc, i32_ty);
+      return NVVM::BlockIdZOp::create(rewriter, loc, i32_ty);
     }
   } else {
     switch (axis) {
     case ProgramIDDim::X:
-      return rewriter.create<NVVM::ClusterIdXOp>(loc, i32_ty);
+      return NVVM::ClusterIdXOp::create(rewriter, loc, i32_ty);
     case ProgramIDDim::Y:
-      return rewriter.create<NVVM::ClusterIdYOp>(loc, i32_ty);
+      return NVVM::ClusterIdYOp::create(rewriter, loc, i32_ty);
     case ProgramIDDim::Z:
-      return rewriter.create<NVVM::ClusterIdZOp>(loc, i32_ty);
+      return NVVM::ClusterIdZOp::create(rewriter, loc, i32_ty);
     }
   }
   llvm_unreachable("invalid axis");
@@ -123,12 +123,13 @@ Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
 
 /// Create a predicate with just single active thread.
 Value createElectPredicate(Location loc, RewriterBase &rewriter) {
-  return rewriter.create<NVVM::ElectSyncOp>(loc, i1_ty, /*membermask=*/Value());
+  return NVVM::ElectSyncOp::create(rewriter, loc, i1_ty,
+                                   /*membermask=*/Value());
 }
 
 void createSyncWarp(Location loc, OpBuilder &rewriter) {
   TritonLLVMOpBuilder b(loc, rewriter);
-  rewriter.create<NVVM::SyncWarpOp>(loc, b.i32_val(0xffffffff));
+  NVVM::SyncWarpOp::create(rewriter, loc, b.i32_val(0xffffffff));
 }
 
 Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter) {
@@ -163,7 +164,7 @@ LogicalResult lowerLdStMatrix(
   auto kOffset = S("offset");
   auto kAddr = S("addr");
   auto smemPtrTy = ptr_ty(ctx, 3);
-  auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+  auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
   // In the contiguous case we can pack elements <= 32 bits
   // In the transpose case we just have the b8 and b16 cases
   if ((!transpose && bitwidth > 32) ||
@@ -383,8 +384,8 @@ LogicalResult lowerLdStMatrix(
           }
           inputs.push_back(b.bitcast(input, i32_ty));
         }
-        rewriter.create<NVVM::StMatrixOp>(loc, vecAddr, inputs, layout, shape,
-                                          eltType);
+        NVVM::StMatrixOp::create(rewriter, loc, vecAddr, inputs, layout, shape,
+                                 eltType);
       } else {
         unsigned numLdMatrix = elemsPerInstr / elemsPerVec;
         assert(numLdMatrix > 0 &&
@@ -394,9 +395,8 @@ LogicalResult lowerLdStMatrix(
                 ? i32_ty
                 : static_cast<Type>(LLVM::LLVMStructType::getLiteral(
                       ctx, SmallVector<Type>(numLdMatrix, i32_ty)));
-        auto res = rewriter
-                       .create<NVVM::LdMatrixOp>(loc, ldResultTy, vecAddr, vec,
-                                                 layout, shape, eltType)
+        auto res = NVVM::LdMatrixOp::create(rewriter, loc, ldResultTy, vecAddr,
+                                            vec, layout, shape, eltType)
                        .getResult();
         // Extract result into srcVals
         for (int j = 0; j < elemsPerInstr / elemsPerVec; j++) {

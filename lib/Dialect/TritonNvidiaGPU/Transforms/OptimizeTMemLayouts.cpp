@@ -113,8 +113,8 @@ public:
     auto createSliceLoad =
         [&](int64_t nOffset) -> std::pair<TMEMLoadOp, ttg::ConvertLayoutOp> {
       // Generate the subslice op.
-      Value subSlice = rewriter.create<TMEMSubSliceOp>(tmemLoad.getLoc(), tmem,
-                                                       nOffset, splitNSize);
+      Value subSlice = TMEMSubSliceOp::create(rewriter, tmemLoad.getLoc(), tmem,
+                                              nOffset, splitNSize);
 
       // Choose a layout compatible with the slice size.
       Attribute distLayout = getTmemCompatibleLayout(
@@ -124,10 +124,10 @@ public:
           splitOp.getOutLHS().getType().cloneWithEncoding(distLayout);
 
       // Generate the load and convert_layout back to the original layout.
-      auto load =
-          rewriter.create<TMEMLoadOp>(tmemLoad.getLoc(), newLoadType, subSlice);
-      auto cvt = rewriter.create<ttg::ConvertLayoutOp>(
-          tmemLoad.getLoc(), splitOp.getOutLHS().getType(), load);
+      auto load = TMEMLoadOp::create(rewriter, tmemLoad.getLoc(), newLoadType,
+                                     subSlice);
+      auto cvt = ttg::ConvertLayoutOp::create(
+          rewriter, tmemLoad.getLoc(), splitOp.getOutLHS().getType(), load);
 
       return {load, cvt};
     };
@@ -178,25 +178,25 @@ public:
     Location loc = storeOp.getLoc();
     Value tmem = storeOp.getDst();
     int numWarps = ttg::lookupNumWarps(storeOp);
-    Value truePred = b.create<arith::ConstantOp>(loc, b.getBoolAttr(true));
+    Value truePred = arith::ConstantOp::create(b, loc, b.getBoolAttr(true));
 
     Attribute distLayout = getTmemCompatibleLayout(
         mDim, splitNSize, joinOp.getLhs().getType(), numWarps);
     auto newStoreType = joinOp.getLhs().getType().cloneWithEncoding(distLayout);
 
     // First slice.
-    auto subSlice0 = b.create<TMEMSubSliceOp>(loc, tmem, 0, splitNSize);
+    auto subSlice0 = TMEMSubSliceOp::create(b, loc, tmem, 0, splitNSize);
     auto cvt0 =
-        b.create<ttg::ConvertLayoutOp>(loc, newStoreType, joinOp.getLhs());
+        ttg::ConvertLayoutOp::create(b, loc, newStoreType, joinOp.getLhs());
     auto store0 =
-        b.create<TMEMStoreOp>(loc, subSlice0, cvt0.getResult(), truePred);
+        TMEMStoreOp::create(b, loc, subSlice0, cvt0.getResult(), truePred);
     // Second slice.
     auto subSlice1 =
-        b.create<TMEMSubSliceOp>(loc, tmem, splitNSize, splitNSize);
+        TMEMSubSliceOp::create(b, loc, tmem, splitNSize, splitNSize);
     auto cvt1 =
-        b.create<ttg::ConvertLayoutOp>(loc, newStoreType, joinOp.getRhs());
+        ttg::ConvertLayoutOp::create(b, loc, newStoreType, joinOp.getRhs());
     auto store1 =
-        b.create<TMEMStoreOp>(loc, subSlice1, cvt1.getResult(), truePred);
+        TMEMStoreOp::create(b, loc, subSlice1, cvt1.getResult(), truePred);
     b.eraseOp(storeOp);
     return success();
   }
@@ -256,8 +256,8 @@ public:
     tmemLoadOp.getResult().setType(newType);
     OpBuilder builder(tmemLoadOp);
     builder.setInsertionPointAfter(tmemLoadOp);
-    auto cvt = builder.create<ttg::ConvertLayoutOp>(
-        tmemLoadOp.getLoc(), oldType, tmemLoadOp.getResult());
+    auto cvt = ttg::ConvertLayoutOp::create(builder, tmemLoadOp.getLoc(),
+                                            oldType, tmemLoadOp.getResult());
     tmemLoadOp.getResult().replaceAllUsesExcept(cvt.getResult(), cvt);
     return success();
   }
@@ -321,8 +321,8 @@ public:
       return failure();
     // Use the new layout and rely on RemoveLayoutConversions pass to propagate
     // the convert_layout.
-    auto cvt = rewriter.create<ttg::ConvertLayoutOp>(
-        tmemStoreOp.getLoc(), newType, tmemStoreOp.getSrc());
+    auto cvt = ttg::ConvertLayoutOp::create(rewriter, tmemStoreOp.getLoc(),
+                                            newType, tmemStoreOp.getSrc());
     rewriter.modifyOpInPlace(tmemStoreOp, [&]() {
       tmemStoreOp.getSrcMutable().assign(cvt.getResult());
     });
@@ -413,8 +413,8 @@ public:
     rewriter.modifyOpInPlace(
         tmemLoadOp, [&]() { tmemLoadOp.getResult().setType(newType); });
     rewriter.setInsertionPointAfter(tmemLoadOp);
-    auto cvt = rewriter.create<ttg::ConvertLayoutOp>(
-        tmemLoadOp.getLoc(), oldType, tmemLoadOp.getResult());
+    auto cvt = ttg::ConvertLayoutOp::create(rewriter, tmemLoadOp.getLoc(),
+                                            oldType, tmemLoadOp.getResult());
     rewriter.replaceAllUsesExcept(tmemLoadOp.getResult(), cvt, cvt);
     return success();
   }

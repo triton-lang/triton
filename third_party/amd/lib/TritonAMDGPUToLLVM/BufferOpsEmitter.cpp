@@ -75,11 +75,11 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
       // stride. Especially better to avoid using the stride which is 2^N when
       // N>13, e.g. by add padding to the buffer.
       Value stride16b =
-          rewriter.create<LLVM::TruncOp>(loc, i16_ty, blockStride);
-      Value strideSat = rewriter.create<LLVM::AndOp>(loc, stride16b, mask14b);
+          LLVM::TruncOp::create(rewriter, loc, i16_ty, blockStride);
+      Value strideSat = LLVM::AndOp::create(rewriter, loc, stride16b, mask14b);
       // stride[13:0] = swizzling stride
       // stride[14] = swizzle enabling bit
-      stride = rewriter.create<LLVM::OrOp>(loc, enableSwizzle, strideSat);
+      stride = LLVM::OrOp::create(rewriter, loc, enableSwizzle, strideSat);
     }
 #endif
   }
@@ -100,8 +100,8 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
   SmallVector<Value, 6> args;
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true, args);
   Type bufferType = getBufferOpType(type, false);
-  Value data = rewriter.create<ROCDL::RawPtrBufferLoadOp>(
-      loc, bufferType, args, ArrayRef<NamedAttribute>());
+  Value data = ROCDL::RawPtrBufferLoadOp::create(
+      rewriter, loc, bufferType, args, ArrayRef<NamedAttribute>());
   data = b.bitcast(data, type);
   if (!isZero(falseVal))
     data = b.select(pred, data, falseVal);
@@ -117,8 +117,8 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
                  commonArgs);
   Type bufferType = getBufferOpType(type, false);
-  return rewriter.create<ROCDL::RawPtrBufferLoadLdsOp>(
-      loc, TypeRange{},
+  return ROCDL::RawPtrBufferLoadLdsOp::create(
+      rewriter, loc, TypeRange{},
       ValueRange{
           commonArgs[0], // Buffer descriptor
           dst,           // LDS base ptr
@@ -149,8 +149,8 @@ Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,
   SmallVector<Value, 6> args{casStoreVal, casCmpVal};
   fillCommonArgsAtomics(type, rsrcDesc, offset, pred, hasUsers, args);
 
-  Value data = rewriter.create<ROCDL::RawPtrBufferAtomicCmpSwap>(
-      loc, bufferType, args, ArrayRef<NamedAttribute>());
+  Value data = ROCDL::RawPtrBufferAtomicCmpSwap::create(
+      rewriter, loc, bufferType, args, ArrayRef<NamedAttribute>());
   data = b.bitcast(data, type);
   return data;
 }
@@ -190,8 +190,8 @@ void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
   SmallVector<Value, 6> args{data};
   fillCommonArgs(vecTy, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/false,
                  args);
-  rewriter.create<ROCDL::RawPtrBufferStoreOp>(loc, TypeRange{}, args,
-                                              ArrayRef<NamedAttribute>());
+  ROCDL::RawPtrBufferStoreOp::create(rewriter, loc, TypeRange{}, args,
+                                     ArrayRef<NamedAttribute>());
 }
 
 Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {

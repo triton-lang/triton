@@ -31,9 +31,8 @@ void tensormap_cp_fenceproxy(Location loc, MLIRContext *ctx,
   auto *sizeOpr = ptxBuilder.newConstantOperand(TMA_SIZE_BYTES);
 
   // Define the instruction opcode
-  auto &cp =
-      *ptxBuilder.create<>("tensormap.cp_fenceproxy.global.shared::cta."
-                           "tensormap::generic.release.gpu.sync.aligned");
+  auto &cp = *ptxBuilder.create("tensormap.cp_fenceproxy.global.shared::cta."
+                                "tensormap::generic.release.gpu.sync.aligned");
 
   // Execute collectively on first warp in block
   constexpr int kWarpSize = 32;
@@ -56,7 +55,7 @@ void tensormap_replace_generic(Location loc, MLIRContext *ctx,
   auto newValOpr = ptxBuilder.newConstantOperand(newVal);
 
   // Define the instruction opcode
-  auto &replace = ptxBuilder.create<>("tensormap.replace.tile")
+  auto &replace = ptxBuilder.create("tensormap.replace.tile")
                       ->o(fieldName)
                       .o("shared::cta")
                       .o("b1024")
@@ -95,7 +94,7 @@ void tensormap_replace_generic(Location loc, MLIRContext *ctx,
   newValOpr = ptxBuilder.newOperand(newVal, constraint);
 
   // Define the instruction opcode
-  auto &replace = ptxBuilder.create<>("tensormap.replace.tile")
+  auto &replace = ptxBuilder.create("tensormap.replace.tile")
                       ->o(fieldName)
                       .o("shared::cta")
                       .o("b1024")
@@ -203,14 +202,14 @@ struct TensormapFenceproxyAcquireOpConversion
     Value threadId = getThreadId(rewriter, loc);
     Value pred = b.icmp_slt(threadId, b.i32_val(kWarpSize));
     auto &fence =
-        *ptxBuilder.create<>("fence.proxy.tensormap::generic.acquire.gpu");
+        *ptxBuilder.create("fence.proxy.tensormap::generic.acquire.gpu");
     fence(descAddrOpr, sizeOpr).predicate(pred);
 
     // Workaround for a ptxas bug missing a fence after generic.acquire.gpu.
     // TODO: remove the workaround once ptxas is fixed.
-    auto &commit = *ptxBuilder.create<>("cp.async.bulk.commit_group");
+    auto &commit = *ptxBuilder.create("cp.async.bulk.commit_group");
     commit().predicate(pred);
-    auto &wait = *ptxBuilder.create<>("cp.async.bulk.wait_group.read 0");
+    auto &wait = *ptxBuilder.create("cp.async.bulk.wait_group.read 0");
     wait().predicate(pred);
 
     ptxBuilder.launch(rewriter, loc, getVoidType());

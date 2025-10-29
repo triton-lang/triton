@@ -82,7 +82,7 @@ def _unpack_bits(x, mx_axis: int):
 # -----------------------------------------------------------------------
 
 
-class HopperAmpereMXValueLayout(Layout):
+class HopperMXValueLayout(Layout):
     name: str = "HOPPER_VALUE"
 
     def __init__(self, shape, mx_axis, mma_version=3):

@@ -59,9 +59,9 @@ class LoopInvariantCodeMotionPass
               Location loc = loopLike->getLoc();
               Value cond;
               if (auto forOp = dyn_cast<scf::ForOp>(loopLike.getOperation())) {
-                cond = rewriter.create<arith::CmpIOp>(
-                    loc, arith::CmpIPredicate::slt, forOp.getLowerBound(),
-                    forOp.getUpperBound());
+                cond = arith::CmpIOp::create(
+                    rewriter, loc, arith::CmpIPredicate::slt,
+                    forOp.getLowerBound(), forOp.getUpperBound());
               } else if (auto whileOp =
                              dyn_cast<scf::WhileOp>(loopLike.getOperation())) {
                 // TODO: Support Load Op hoisting for while loop.

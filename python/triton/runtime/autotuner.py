@@ -36,7 +36,7 @@ class Autotuner(KernelInterface):
         self.keys = key
         self.cache: Dict[Tuple, Config] = {}
         self.arg_names = arg_names
-        self.cache_results = cache_results or (knobs.autotuning.cache and not knobs.runtime.interpret)
+        self.cache_results = (cache_results or knobs.autotuning.cache) and not knobs.runtime.interpret
 
         # Reset to zero or restore values
         self.reset_to_zero = []

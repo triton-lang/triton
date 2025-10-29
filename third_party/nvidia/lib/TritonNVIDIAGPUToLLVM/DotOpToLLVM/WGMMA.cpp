@@ -116,7 +116,7 @@ llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
   llvm::SmallVector<Value> mmaOut(num32BitValues);
   Type packTy = vec_ty(elementType, numElemsPer32Bits);
   for (int i = 0; i < num32BitValues; ++i) {
-    Value pack = rewriter.create<LLVM::UndefOp>(loc, packTy);
+    Value pack = LLVM::UndefOp::create(rewriter, loc, packTy);
     for (int j = 0; j < numElemsPer32Bits; ++j) {
       Value element = elements[startIndex + i * numElemsPer32Bits + j];
       pack = b.insert_element(packTy, pack, element, b.i32_val(j));
@@ -151,12 +151,12 @@ SmallVector<Value> unpackAccumulator(ConversionPatternRewriter &rewriter,
 static Value faddAccumulate(ConversionPatternRewriter &rewriter, Location loc,
                             Value a, Value b) {
   int numEl = cast<LLVM::LLVMStructType>(a.getType()).getBody().size();
-  Value newStruct = rewriter.create<LLVM::UndefOp>(loc, a.getType());
+  Value newStruct = LLVM::UndefOp::create(rewriter, loc, a.getType());
   for (int i = 0; i < numEl; ++i) {
-    Value lhs = rewriter.create<LLVM::ExtractValueOp>(loc, a, i);
-    Value rhs = rewriter.create<LLVM::ExtractValueOp>(loc, b, i);
-    Value add = rewriter.create<LLVM::FAddOp>(loc, lhs, rhs);
-    newStruct = rewriter.create<LLVM::InsertValueOp>(loc, newStruct, add, i);
+    Value lhs = LLVM::ExtractValueOp::create(rewriter, loc, a, i);
+    Value rhs = LLVM::ExtractValueOp::create(rewriter, loc, b, i);
+    Value add = LLVM::FAddOp::create(rewriter, loc, lhs, rhs);
+    newStruct = LLVM::InsertValueOp::create(rewriter, loc, newStruct, add, i);
   }
   return newStruct;
 }
@@ -168,13 +168,13 @@ static SmallVector<Value> emitWait(ConversionPatternRewriter &rewriter,
   SmallVector<Type> types(acc.size(), acc[0].getType());
   auto structTy =
       LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
-  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
+  Value llvmStruct = LLVM::UndefOp::create(rewriter, loc, structTy);
   int i = 0;
   for (Value v : acc) {
     llvmStruct = b.insert_val(structTy, llvmStruct, v, i++);
   }
-  Value res = rewriter.create<triton::nvgpu::WGMMAWaitGroupOp>(loc, llvmStruct,
-                                                               pendings);
+  Value res = triton::nvgpu::WGMMAWaitGroupOp::create(rewriter, loc, llvmStruct,
+                                                      pendings);
   SmallVector<Value> results;
   for (int i = 0; i < acc.size(); ++i) {
     results.push_back(b.extract_val(types[0], res, i));
@@ -245,7 +245,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                                               : triton::nvgpu::WGMMALayout::col;
 
   auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
-  Operation *startSequence = rewriter.create<NVVM::WgmmaFenceAlignedOp>(loc);
+  Operation *startSequence = NVVM::WgmmaFenceAlignedOp::create(rewriter, loc);
   SmallVector<Value> mmaResults;
   for (int m = 0; m < numRepM; ++m) {
     for (int n = 0; n < numRepN; ++n) {
@@ -294,9 +294,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
             needsPartialAccumulator &&
             (numLowPrecisionAcc >= maxNumImpreciseAcc || k == numRepK - 1);
         Value mmaAcc = needsPartialAccumulator ? partialAcc : d;
-        mmaAcc = rewriter.create<triton::nvgpu::WGMMAOp>(
-            loc, accTy, a, b, useC, mmaAcc, M, N, K, eltTypeC, eltTypeA,
-            eltTypeB, layoutA, layoutB);
+        mmaAcc = triton::nvgpu::WGMMAOp::create(
+            rewriter, loc, accTy, a, b, useC, mmaAcc, M, N, K, eltTypeC,
+            eltTypeA, eltTypeB, layoutA, layoutB);
         useC = tb.i1_val(1);
         if (needsPartialAccumulator)
           partialAcc = mmaAcc;
@@ -316,7 +316,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       }
     }
   }
-  rewriter.create<NVVM::WgmmaGroupSyncAlignedOp>(loc);
+  NVVM::WgmmaGroupSyncAlignedOp::create(rewriter, loc);
 
   if (sync)
     mmaResults = emitWait(rewriter, loc, mmaResults, 0);

@@ -82,8 +82,8 @@ struct LLVMDILocalVariablePass
       // a subclass of mlir::Value, which is the value defined by this operation
       OpResult opResult = op->getResult(0);
       // create and insert this call-dbg-value intrinsic after the op
-      Operation *dbgOp = builder.create<LLVM::DbgValueOp>(
-          childLoc, opResult, diLocalVarAttr, diExprAttr);
+      Operation *dbgOp = LLVM::DbgValueOp::create(builder, childLoc, opResult,
+                                                  diLocalVarAttr, diExprAttr);
     }
   }
 

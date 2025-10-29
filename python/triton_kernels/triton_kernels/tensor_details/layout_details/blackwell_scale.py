@@ -1,7 +1,9 @@
 import math
+
+import torch
 import triton
 import triton.language as tl
-import torch
+
 from .base import Layout
 
 SWIZZLE_ALIGN_INNER = tl.constexpr(8)
@@ -14,7 +16,11 @@ class BlackwellMXScaleLayout(Layout):
 
     def __init__(self, shape) -> None:
         super().__init__(shape)
-        *self.leading_shape, self.K, self.N, = shape
+        (
+            *self.leading_shape,
+            self.K,
+            self.N,
+        ) = shape
         self.B = math.prod(self.leading_shape)
         self.ALIGN_K = 8
         self.ALIGN_N = 128
@@ -42,13 +48,17 @@ class BlackwellMXScaleLayout(Layout):
     def swizzle_block_shape(self, block_shape):
         MX_PACK_DIVISOR = 32
         MX_SCALE_BLOCK_K = block_shape[1] // MX_PACK_DIVISOR
+        assert block_shape[0] >= 128, f"{block_shape[0]=} must be >= 128"
         return [1, block_shape[0] // 128, MX_SCALE_BLOCK_K // 4, 2, 256]
 
 
 @triton.jit
-def unswizzle_mx_scale_bw(x, SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,
-                          SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,
-                          ALIGN_INNER: tl.constexpr = SWIZZLE_ALIGN_INNER):
+def unswizzle_mx_scale_bw(
+    x,
+    SIZE_OUTER: tl.constexpr = SWIZZLE_SIZE_OUTER,
+    SIZE_INNER: tl.constexpr = SWIZZLE_SIZE_INNER,
+    ALIGN_INNER: tl.constexpr = SWIZZLE_ALIGN_INNER,
+):
     shape_0: tl.constexpr = x.shape[0]
     shape_1: tl.constexpr = x.shape[1]
     tl.static_assert(shape_1 % SIZE_OUTER == 0)

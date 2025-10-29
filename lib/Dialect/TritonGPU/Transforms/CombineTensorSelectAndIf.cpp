@@ -124,8 +124,8 @@ public:
       for (arith::SelectOp selectOp : selectOps) {
         newResultTypes.push_back(selectOp.getResult().getType());
       }
-      auto newIfOp = builder.create<scf::IfOp>(
-          loc, newResultTypes, ifOp.getCondition(), /*hasElse*/ true);
+      auto newIfOp = scf::IfOp::create(builder, loc, newResultTypes,
+                                       ifOp.getCondition(), /*hasElse*/ true);
       // Move the existing blocks to the new if.
       newIfOp.getThenRegion().takeBody(ifOp.getThenRegion());
 
@@ -133,7 +133,8 @@ public:
         newIfOp.getElseRegion().takeBody(ifOp.getElseRegion());
       } else {
         // Create an empty yield
-        auto yieldOp = newIfOp.getElseBodyBuilder().create<scf::YieldOp>(loc);
+        auto builder = newIfOp.getElseBodyBuilder();
+        auto yieldOp = scf::YieldOp::create(builder, loc);
       }
 
       SmallVector<Value> ifYieldOperands = newIfOp.thenYield().getOperands();
@@ -147,7 +148,7 @@ public:
       // Update yields
       auto updateYield = [&](scf::YieldOp yield, SmallVector<Value> &operands) {
         builder.setInsertionPoint(yield);
-        builder.create<scf::YieldOp>(loc, operands);
+        scf::YieldOp::create(builder, loc, operands);
         yield.erase();
       };
       updateYield(newIfOp.thenYield(), ifYieldOperands);

@@ -57,8 +57,8 @@ public:
     for (auto func : getOperation().getOps<FuncOp>()) {
       auto b = OpBuilder::atBlockBegin(&func.getBody().front());
       // Placeholder value that will get DCE'd by the canonicalizer.
-      Value dummy = b.create<ub::PoisonOp>(
-          func.getLoc(), b.getType<triton::gpu::AsyncTokenType>());
+      Value dummy = ub::PoisonOp::create(
+          b, func.getLoc(), b.getType<triton::gpu::AsyncTokenType>());
       func.walk([&](Operation *op) { removeTMEMToken(op, dummy); });
     }
   }

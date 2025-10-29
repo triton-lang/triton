@@ -62,7 +62,7 @@ void refineGlobalLoadLayout(PatternRewriter &rewriter, Attribute encoding,
     if (tensorType) {
       Type newType = replaceEncoding(tensorType, encoding);
       newArgs.push_back(
-          rewriter.create<ttg::ConvertLayoutOp>(loc, newType, operand));
+          ttg::ConvertLayoutOp::create(rewriter, loc, newType, operand));
     } else {
       newArgs.push_back(operand);
     }
@@ -70,7 +70,7 @@ void refineGlobalLoadLayout(PatternRewriter &rewriter, Attribute encoding,
 
   // Construct new load with the new encoding
   auto attrs = load->getAttrs();
-  auto newLoad = rewriter.create<tt::LoadOp>(loc, newArgs, attrs);
+  auto newLoad = tt::LoadOp::create(rewriter, loc, newArgs, attrs);
 
   // Cast the results back to the original layout
   auto loadType = load.getType();
@@ -96,11 +96,11 @@ void transposeInRegsitersBeforeStoreInLocalMemory(
   auto loc = memStoreOp->getLoc();
   auto newLoadType = replaceEncoding(data.getType(), newLoadEncoding);
   auto nonTransposed =
-      rewriter.create<ttg::ConvertLayoutOp>(loc, newLoadType, data);
+      ttg::ConvertLayoutOp::create(rewriter, loc, newLoadType, data);
 
   auto transposedType = replaceEncoding(data.getType(), transposedEncoding);
-  auto inThreadTransposed = rewriter.create<ttag::InThreadTransposeOp>(
-      loc, transposedType, nonTransposed);
+  auto inThreadTransposed = ttag::InThreadTransposeOp::create(
+      rewriter, loc, transposedType, nonTransposed);
   rewriter.startOpModification(memStoreOp);
   memStoreOp->setOperand(0, inThreadTransposed);
   rewriter.finalizeOpModification(memStoreOp);
