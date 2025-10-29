@@ -251,6 +251,7 @@ class PrecisionConfig:
 
 # TODO: merge in opt_flags
 def get_swap_xw(precision_config, opt_flags):
+    return False
     if target_info.cuda_capability_geq(10, 0):
         return precision_config.weight_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
     return False
@@ -331,7 +332,7 @@ def _canonicalize_storage(storage, out_ndim, flex_data):
     # Our check t_view is col-wise fails since t_view.stride(-2) != 1
     # This case is covered by (m, n, k) == (1000, 700, 2) in test_matmul.py
     new_storage_shape = [1] * (out_ndim - storage.data.ndim) + list(storage.data.shape)
-    new_storage_stride = [0] * (out_ndim - storage.data.ndim) + list(storage.data.stride())
+    new_storage_stride = [storage.data.stride(0) * storage.data.shape[0]] * (out_ndim - storage.data.ndim) + list(storage.data.stride())
     new_storage_data = storage.data.as_strided(new_storage_shape, new_storage_stride)
     if flex_data is not None:
         new_storage_data = flex_data.reinterpret(new_storage_data)
@@ -535,6 +536,16 @@ def matmul_ogs(x, w, bias,
         # unaligned access.
         (inner_routing_data is None or w.stride(-1) == 1 or inner_routing_data.w_is_padded)
     )
+    if not can_use_tma:
+        print(
+            f"{x.numel() > 0 and x.storage.is_tma_compliant()=}\n "
+            f"{w.numel() > 0 and w.storage.is_tma_compliant()=}\n "
+            f"{w_scale is None or w_scale.storage.is_tma_compliant()=}\n "
+            f"{not is_ragged or x.stride(-1) == 1=}\n "
+            f"{y is None or y.stride(-1) == 1=}\n "
+            f"{y_acc_in is None or y_acc_is_y=}\n "
+            f"{inner_routing_data is None or w.stride(-1) == 1 or inner_routing_data.w_is_padded=}"
+        )
     has_gather_tma = has_gather and target_info.has_tma_gather()
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
@@ -567,8 +578,8 @@ def matmul_ogs(x, w, bias,
         even_K = (K % opt_flags.block_k == 0)
     if w_scale is not None and opt_flags.is_persistent and not target_info.has_native_mxfp():
         raise NotImplementedError("Must use non-persistent kernel for simulated MXFP")
-    if w_scale is not None and w_scale.storage.layout.name is not None and not opt_flags.is_persistent and target_info.has_native_mxfp():
-        raise NotImplementedError("Must use persistent kernel and be TMA-compliant for native MXFP")
+    # if w_scale is not None and w_scale.storage.layout.name is not None and not opt_flags.is_persistent and target_info.has_native_mxfp():
+    #     raise NotImplementedError("Must use persistent kernel and be TMA-compliant for native MXFP")
     # fused activation
     matmul_fused_activation = fused_activation
     reduce_fused_activation = FusedActivation()
@@ -632,7 +643,7 @@ def matmul_ogs(x, w, bias,
 
     x_tma_block_size = [1, opt_flags.block_k] if has_gather_tma else [1, opt_flags.block_m, opt_flags.block_k]
     x_tma_mode = None if not x_has_tma else "ragged" if is_ragged and not has_gather_tma else "dense"
-    x_tensor_or_tma = x_storage.make_tma(x_tma_block_size, x_tma_mode) if x_has_tma else x_storage.data
+    x_tensor_or_tma = x_storage.make_tma(x_tma_block_size, x_tma_mode, is_scale=False) if x_has_tma else x_storage.data
     # create tma descriptor for y
     y_has_tma = (
         opt_flags.is_persistent and (has_scatter_tma or not opt_flags.fused_scatter)
@@ -641,20 +652,36 @@ def matmul_ogs(x, w, bias,
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.reduction_n
     y_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
     y_tma_mode = None if not y_has_tma else "ragged" if is_ragged and not has_scatter_tma else "dense"
-    y_tensor_or_tma = y_storage.make_tma(y_tma_block_size, y_tma_mode) if y_has_tma else y_storage.data
+    y_tensor_or_tma = y_storage.make_tma(y_tma_block_size, y_tma_mode, is_scale=False) if y_has_tma else y_storage.data
     # create tma descriptor for w
     w_has_tma = opt_flags.is_persistent
-    w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n], "dense") if w_has_tma else w_storage.data
+    # When stride(-2) == stride(-1) == 1, it's ambiguous whether W is transposed
+    # (i.e. col-wise). Since this matters when w_has_mx is True and w_transpose
+    # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
+    # w_transpose = w_storage.data.stride()[-1] != 1
+    w_transpose = w_storage.data.stride()[-2] == 1
+    if w_has_tma:
+        w_tma_block_size = [1, opt_flags.block_k, opt_flags.block_n]
+        w_tensor_or_tma = w_storage.make_tma(w_tma_block_size, "dense", is_scale=False, transpose=w_transpose)
+    else:
+        w_tensor_or_tma = w_storage.data
     # create tma descriptor for w_scale
     w_scale_has_tma = opt_flags.is_persistent and w_scale is not None
-    w_transpose = w_storage.data.stride()[-2] == 1
+    print(f"!!!!! {M=} {N=} {K=} {w_transpose=} {opt_flags.block_m=} {opt_flags.block_k=} {opt_flags.block_n=} {opt_flags.is_persistent=} {get_swap_xw(precision_config, opt_flags)=}")
+    w_scale_transpose = False
     if w_scale_has_tma:
         w_scale_storage = w_scale.storage
-        w_scale_tma_block_size = [opt_flags.block_n, opt_flags.block_k] if w_transpose else [opt_flags.block_k, opt_flags.block_n]
+        w_scale_transpose = w_scale.storage.data.stride()[-2] == 1
+        scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
+        # cancel out the transpose done inside make_tma since
+        # BlackwellMXScaleLayout.swizzle_block_shape expects block_shape[1] is
+        # the reduction dimension.
+        # Note w_transpose and w_scale_transpose are different
+        w_scale_tma_block_size = [opt_flags.block_n, scale_block_k] if w_transpose and w_scale.storage.layout.name == "BLACKWELL_SCALE" else [scale_block_k, opt_flags.block_n]
         if isinstance(w_scale.storage.layout, StridedLayout):
             w_scale_storage = _canonicalize_storage(w_scale.storage, 3, None)
             w_scale_tma_block_size = [1] + w_scale_tma_block_size
-        w_scale_tensor_or_tma = w_scale_storage.make_tma(w_scale_tma_block_size, "dense")
+        w_scale_tensor_or_tma = w_scale_storage.make_tma(w_scale_tma_block_size, "dense", transpose=w_scale_transpose, is_scale=True)
     else:
         w_scale_tensor_or_tma = w_scale
     # canonicalize strides
@@ -667,73 +694,83 @@ def matmul_ogs(x, w, bias,
     out_matmul_scale_strides = (0, ) * (4 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
     # launch kernel
     kernels = get_kernels(epilogue.specs, matmul_fused_activation.specs)
-    # When stride(-2) == stride(-1) == 1, it's ambiguous whether W is transposed
-    # (i.e. col-wise). Since this matters when w_has_mx is True and w_transpose
-    # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
-    # w_transpose = w_storage.data.stride()[-1] != 1
     fused_comm_kwargs = {
         "pYPtrs": fused_comm.out_handles,
         "ScatterShardIndx": fused_comm.scatter_shard_indx,
         "reduce_rank": fused_comm.reduce_rank,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}
-    (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
-                   y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
-                   *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
-                   *out_matmul_scale_strides[-4:],
-                   x_tensor_or_tma, x_storage.data, *x_strides, x_transpose,
-                   flex.lhs_data.scale,
-                   None if x_scale is None else x_scale.data.view(torch.uint8), *x_scale_strides,
-                   w_tensor_or_tma, w_storage.data, *w_storage.data.stride(), w_transpose,
-                   flex.rhs_data.scale,
-                   w_scale_tensor_or_tma, *w_scale_strides,
-                   flex.acc_data.reinterpret(y_acc_in), *y_acc_strides,
-                   flex.acc_data.scale, y_acc_is_y,
-                   bias, bias_stride,
-                   x.shape[-2] if routing_data.expt_hist is None else None,
-                   N, K, K_W,
-                   betas, gammas,
-                   None if gather_indx is None else gather_indx.src_indx,
-                   None if gather_indx is None else gather_indx.dst_indx,  # Only for launch_metadata
-                   None if scatter_indx is None else scatter_indx.src_indx,
-                   num_indx,
-                   None if not opt_flags.fused_scatter else scatter_indx.dst_indx,
-                   None if not opt_flags.fused_scatter else scatter_indx.dst_indx.shape[0],
-                   *expt_data_args,
-                   batch_size, grid_m, grid_n,
-                   out_alpha,
-                   *matmul_fused_activation.fn_args, matmul_fused_activation.reduction_n,
-                   *epilogue.fn_arg_values_matmul,
-                   routing_data.n_expts_tot, routing_data.n_expts_act,
-                   precision_config.max_num_imprecise_acc,
-                   precision_config.allow_tf32,
-                   precision_config.flexpoint_saturate_inf,
-                   flex.rhs_data.is_per_batch,
-                   out_matmul_flex.is_per_batch,
-                   flex.acc_data.is_per_batch,
-                   opt_flags.block_m,
-                   opt_flags.block_n,
-                   opt_flags.block_k,
-                   opt_flags.group_m,
-                   XCD_SWIZZLE=opt_flags.xcd_swizzle,
-                   SWIZZLE_MX_VALUE=w.storage.layout.name,
-                   SWIZZLE_MX_SCALE=None if w_scale is None else w_scale.storage.layout.name,
-                   EPILOGUE_SUBTILE=opt_flags.epilogue_subtile,
-                   SPLIT_K=opt_flags.split_k,
-                   EVEN_K=even_K,
-                   W_CACHE_MODIFIER=opt_flags.w_cache_modifier,
-                   TOKENS_PER_EXPT_FOR_ANNOTATION=routing_data.expected_tokens_per_expt,
-                   num_warps=opt_flags.num_warps,
-                   num_stages=opt_flags.num_stages,
-                   arch=opt_flags.arch,
-                   UPCAST_INDICES=should_upcast_indices(x, w, out_matmul),
-                   X_TMA_MODE=x_tma_mode,
-                   Y_TMA_MODE=y_tma_mode,
-                   SWAP_XW=get_swap_xw(precision_config, opt_flags),
-                   IS_EPILOGUE_QUANT_MXFP8=epilogue.specs.name == FnName.QUANTIZE_MXFP8.name,
-                   NUM_SMS = grid if opt_flags.is_persistent else 0,
-                   **fused_comm_kwargs,
-                   **opt_flags.target_kernel_kwargs)
+    assert len(out_matmul.stride()) == 4
+    assert len(out_matmul_scale_strides) >= 4
+    assert len(x_strides) == 3
+    assert len(x_scale_strides) == 3
+    assert len(w_storage.data.stride()) == 3
+    assert len(w_scale_strides) == 3
+    assert len(y_acc_strides) == 3
+    assert len(expt_data_args) == 8
+    # assert len(matmul_fused_activation.fn_args) == 2
+    # assert len(epilogue.fn_arg_values_matmul) == 2
+    try:
+        (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
+                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
+                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
+                    *out_matmul_scale_strides[-4:],
+                    x_tensor_or_tma, x_storage.data, *x_strides, x_transpose,
+                    flex.lhs_data.scale,
+                    None if x_scale is None else x_scale.data.view(torch.uint8), *x_scale_strides,
+                    w_tensor_or_tma, w_storage.data, *w_storage.data.stride(), w_transpose,
+                    flex.rhs_data.scale,
+                    w_scale_tensor_or_tma, *w_scale_strides, w_scale_transpose,
+                    flex.acc_data.reinterpret(y_acc_in), *y_acc_strides,
+                    flex.acc_data.scale, y_acc_is_y,
+                    bias, bias_stride,
+                    x.shape[-2] if routing_data.expt_hist is None else None,
+                    N, K, K_W,
+                    betas, gammas,
+                    None if gather_indx is None else gather_indx.src_indx,
+                    None if gather_indx is None else gather_indx.dst_indx,  # Only for launch_metadata
+                    None if scatter_indx is None else scatter_indx.src_indx,
+                    num_indx,
+                    None if not opt_flags.fused_scatter else scatter_indx.dst_indx,
+                    None if not opt_flags.fused_scatter else scatter_indx.dst_indx.shape[0],
+                    *expt_data_args,
+                    batch_size, grid_m, grid_n,
+                    out_alpha,
+                    *matmul_fused_activation.fn_args, matmul_fused_activation.reduction_n,
+                    *epilogue.fn_arg_values_matmul,
+                    routing_data.n_expts_tot, routing_data.n_expts_act,
+                    precision_config.max_num_imprecise_acc,
+                    precision_config.allow_tf32,
+                    precision_config.flexpoint_saturate_inf,
+                    flex.rhs_data.is_per_batch,
+                    out_matmul_flex.is_per_batch,
+                    flex.acc_data.is_per_batch,
+                    opt_flags.block_m,
+                    opt_flags.block_n,
+                    opt_flags.block_k,
+                    opt_flags.group_m,
+                    XCD_SWIZZLE=opt_flags.xcd_swizzle,
+                    SWIZZLE_MX_VALUE=w.storage.layout.name,
+                    SWIZZLE_MX_SCALE=None if w_scale is None else w_scale.storage.layout.name,
+                    EPILOGUE_SUBTILE=opt_flags.epilogue_subtile,
+                    SPLIT_K=opt_flags.split_k,
+                    EVEN_K=even_K,
+                    W_CACHE_MODIFIER=opt_flags.w_cache_modifier,
+                    TOKENS_PER_EXPT_FOR_ANNOTATION=routing_data.expected_tokens_per_expt,
+                    num_warps=opt_flags.num_warps,
+                    num_stages=opt_flags.num_stages,
+                    arch=opt_flags.arch,
+                    UPCAST_INDICES=should_upcast_indices(x, w, out_matmul),
+                    X_TMA_MODE=x_tma_mode,
+                    Y_TMA_MODE=y_tma_mode,
+                    SWAP_XW=get_swap_xw(precision_config, opt_flags),
+                    IS_EPILOGUE_QUANT_MXFP8=epilogue.specs.name == FnName.QUANTIZE_MXFP8.name,
+                    NUM_SMS = grid if opt_flags.is_persistent else 0,
+                    **fused_comm_kwargs,
+                    **opt_flags.target_kernel_kwargs)
+    except Exception as e:
+        breakpoint()
+        raise e
     # Build grouped reduction inputs in a uniform way
     group_indx = None if scatter_indx is None or opt_flags.fused_scatter else scatter_indx.src_indx.view(-1, routing_data.n_expts_act)
     out_final, out_final_mx_scale = reduce_grouped(

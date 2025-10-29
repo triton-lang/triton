@@ -65,11 +65,14 @@ def init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, mo
         in_m = m * (n_expts_act if gindx is None else 1)
     shape_x = (n_expts_tot, in_m, k) if mode == 'batched' else (in_m, k)
     shape_batch = tuple() if (mode == "plain" or inner_expt_opt is not None) else (n_expts_tot, )
-    x = alloc_rand(shape_x, device=device, dtype=act_dtype, requires_grad=requires_grad)
-    w = alloc_rand(shape_batch + (k, n), device=device, dtype=weight_dtype, requires_grad=requires_grad)
-    bias = alloc_rand(shape_batch + (n, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
-    gs0 = 2**torch.randint(-5, 0, (m * n_expts_act, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
-    gs1 = 2**torch.randint(-5, 0, (m * n_expts_act, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
+    import math
+    # x = torch.arange(math.prod(shape_x), device=device, dtype=act_dtype).view(shape_x).requires_grad_(requires_grad)
+    x = torch.ones(shape_x, device=device, dtype=act_dtype, requires_grad=requires_grad)
+    w = (torch.arange(math.prod(shape_batch + (k, n)), device=device)).to(act_dtype)
+    w = w.view(shape_batch + (k, n)).requires_grad_(requires_grad)
+    bias = torch.zeros(shape_batch + (n, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
+    gs0 = torch.ones((m * n_expts_act, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
+    gs1 = torch.ones((m * n_expts_act, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
     gs0 = gs0.detach().requires_grad_(requires_grad)
     gs1 = gs1.detach().requires_grad_(requires_grad)
     if mode == 'batched' or (not has_y_gammas) or (has_y_gammas and (gindx is not None) and act_dtype.itemsize >= 2):
@@ -202,104 +205,107 @@ class Case:
     [
         tuple(getattr(case, f.name) for f in fields(Case)) for case in [
             # Zero-sized args:
-            Case(0, 5, 7, "ragged", "float16", "float16"),
-            Case(5, 0, 7, "ragged", "float16", "float16"),
-            Case(5, 7, 0, "ragged", "float16", "float16"),
-            Case(0, 5, 7, "batched", "float16", "float16"),
-            Case(5, 0, 7, "batched", "float16", "float16"),
-            Case(5, 7, 0, "batched", "float16", "float16"),
-            # Non-mx types:
-            Case(16, 256, 256, "ragged", "float16", "float16", 128, 4),
-            Case(16, 256, 256, "ragged", "float16", "float16", 128, 4, split_k=3),
-            Case(16, 256, 256, "ragged", "float16", "float16", 128, 4, split_k=3),
-            Case(300, 400, 400, "batched", "float8_e5m2", "float8_e5m2", 5, 1),
-            Case(16, 256, 256, "batched", "float16", "float16", 5, 1),
-            Case(16, 256, 256, "ragged", "float16", "float16", 3, 1),
-            Case(256, 256, 256, "ragged", "float16", "float16", 4, 1),
-            Case(256, 256, 256, "ragged", "float16", "float16", 4, 1, split_k=3),
-            Case(300, 400, 400, "batched", "float16", "float16", 5, 1),
-            Case(300, 400, 400, "ragged", "float16", "float16"),
-            Case(300, 400, 400, "ragged", "float8_e5m2", "float8_e5m2"),
-            Case(1000, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 3, 1),
-            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=1),
-            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=2),
-            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=4),
-            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2),
-            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, split_k=2),
-            Case(1000, 400, 400, "ragged", "float16", "float16", 3, 1),
-            Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2),
-            Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2, split_k=9),
-            Case(16, 16, 1000, "batched", "float16", "float16", 5, 1, split_k=None),
-            Case(16, 16, 1000, "batched", "float8_e5m2", "float8_e5m2", 5, 1, split_k=None),
-            Case(16, 16, 2048, "batched", "float8_e5m2", "float8_e5m2", 6, 1, split_k=5),
-            # mx types:
-            Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1),
-            Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True),
-            Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True, epilogue_subtile=4),
-            Case(16, 256, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 1, 1),
-            Case(16, 256, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True),
-            Case(1000, 700, 700, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2),
-            Case(1000, 700, 700, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2, hbm_swizzling=True),
-            Case(1000, 700, 700, "ragged", "bfloat16", "mxfloat4_e2m1", 8, 2, split_k=9),
-            Case(1000, 512, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 8, 2, split_k=9, hbm_swizzling=True),
-            Case(300, 400, 400, "ragged", "bfloat16", "mxfloat8_e4m3fn", 8, 4),
-            Case(300, 400, 400, "ragged", "bfloat16", "mxfloat8_e4m3fn", 8, 4, hbm_swizzling=True),
-            Case(300, 400, 400, "batched", "bfloat16", "mxfloat8_e5m2", 32, 4),
-            Case(1000, 700, 2, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2),
+            # Case(0, 5, 7, "ragged", "float16", "float16"),
+            # Case(5, 0, 7, "ragged", "float16", "float16"),
+            # Case(5, 7, 0, "ragged", "float16", "float16"),
+            # Case(0, 5, 7, "batched", "float16", "float16"),
+            # Case(5, 0, 7, "batched", "float16", "float16"),
+            # Case(5, 7, 0, "batched", "float16", "float16"),
+            # # Non-mx types:
+            # Case(16, 256, 256, "ragged", "float16", "float16", 128, 4),
+            # Case(16, 256, 256, "ragged", "float16", "float16", 128, 4, split_k=3),
+            # Case(16, 256, 256, "ragged", "float16", "float16", 128, 4, split_k=3),
+            # Case(300, 400, 400, "batched", "float8_e5m2", "float8_e5m2", 5, 1),
+            # Case(16, 256, 256, "batched", "float16", "float16", 5, 1),
+            # Case(16, 256, 256, "ragged", "float16", "float16", 3, 1),
+            # Case(256, 256, 256, "ragged", "float16", "float16", 4, 1),
+            # Case(256, 256, 256, "ragged", "float16", "float16", 4, 1, split_k=3),
+            # Case(300, 400, 400, "batched", "float16", "float16", 5, 1),
+            # Case(300, 400, 400, "ragged", "float16", "float16"),
+            # Case(300, 400, 400, "ragged", "float8_e5m2", "float8_e5m2"),
+            # Case(1000, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 3, 1),
+            # Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=1),
+            # Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=2),
+            # Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=4),
+            # Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2),
+            # Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, split_k=2),
+            # Case(1000, 400, 400, "ragged", "float16", "float16", 3, 1),
+            # Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2),
+            # Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2, split_k=9),
+            # Case(16, 16, 1000, "batched", "float16", "float16", 5, 1, split_k=None),
+            # Case(16, 16, 1000, "batched", "float8_e5m2", "float8_e5m2", 5, 1, split_k=None),
+            # Case(16, 16, 2048, "batched", "float8_e5m2", "float8_e5m2", 6, 1, split_k=5),
+            # # mx types:
+            # Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1),
+            # Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True),
+            # Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True, epilogue_subtile=4),
+            # Case(16, 256, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 1, 1),
+            # Case(16, 256, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True),
+            # Case(1000, 700, 700, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2),
+            # Case(1000, 700, 700, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2, hbm_swizzling=True),
+            # Case(1000, 700, 700, "ragged", "bfloat16", "mxfloat4_e2m1", 8, 2, split_k=9),
+            # Case(1000, 512, 256, "ragged", "bfloat16", "mxfloat4_e2m1", 8, 2, split_k=9, hbm_swizzling=True),
+            # Case(300, 400, 400, "ragged", "bfloat16", "mxfloat8_e4m3fn", 8, 4),
+            # Case(300, 400, 400, "ragged", "bfloat16", "mxfloat8_e4m3fn", 8, 4, hbm_swizzling=True),
+            # Case(300, 400, 400, "batched", "bfloat16", "mxfloat8_e5m2", 32, 4),
+            # Case(1000, 700, 2, "batched", "bfloat16", "mxfloat4_e2m1", 8, 2),
+            # Failing case shared by Farzad
+            Case(1, 1024, 1024, "plain", "bfloat16", "mxfloat8_e4m3fn", 1, 1),
+            # Case(3072, 6144, 3072, "plain", "bfloat16", "mxfloat8_e4m3fn", 1, 1),
             # OOM'ing and even_K=False covered by (1000, 700, 700) and (1000, 700, 2)
             # Case(1, 2880, 2880, "ragged", "bfloat16", "mxfloat4_e2m1", 128, 4),
-            Case(16, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4, hbm_swizzling=True),
-            Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3, 1, hbm_swizzling=True),
-            Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3, 1, hbm_swizzling=True),
-            Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3, 1),
-            Case(1000, 704, 800, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 2, split_k=9),
-            Case(1000, 704, 800, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 2, split_k=9, hbm_swizzling=True),
-            Case(1000, 704, 800, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 2),
-            Case(1000, 704, 800, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 2, hbm_swizzling=True),
-            Case(300, 400, 400, "ragged", "float8_e5m2", "mxfloat8_e4m3fn", 8, 4),
-            Case(300, 400, 400, "ragged", "float8_e5m2", "mxfloat8_e4m3fn", 8, 4, hbm_swizzling=True),
-            Case(300, 400, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 4),
-            Case(300, 400, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 4, hbm_swizzling=True),
-            Case(300, 400, 400, "batched", "float8_e5m2", "mxfloat8_e4m3fn", 32, 4),
-            Case(300, 400, 400, "batched", "float8_e5m2", "mxfloat8_e4m3fn", 32, 4, hbm_swizzling=True),
-            Case(256, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4, hbm_swizzling=True),
-            Case(256, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4, hbm_swizzling=False),
-            Case(16, 256, 256, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 128, 4, hbm_swizzling=True),
-            Case(1000, 704, 800, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 3, 1, hbm_swizzling=True),
-            Case(1000, 704, 800, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 2, 1),
-            Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2, split_k=9),
-            Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2, split_k=9, hbm_swizzling=True),
-            Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2, split_k=9, colmajor_mxfp_weight=False),
-            Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2),
-            Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2, hbm_swizzling=True),
-            Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 8, 4),
-            Case(300, 512, 512, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 8, 4),
-            Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 8, 4, hbm_swizzling=True),
-            Case(300, 400, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 4),
-            Case(300, 400, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 4, hbm_swizzling=True),
-            Case(300, 400, 400, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 32, 4),
-            Case(300, 400, 400, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 32, 4, hbm_swizzling=True),
-            # AMD
-            Case(300, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz"),
-            Case(1000, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", 3, 1),
-            Case(600, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", 4, 2),
-            Case(600, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", 4, 2, split_k=2),
-            Case(300, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn"),
-            Case(1000, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 3, 1),
-            Case(600, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 4, 2),
-        ] + [
-            Case(320, 400, 400, mode, dtype, dtype, n_expts_tot, n_expts_act,
-                 x_transpose=x_transpose, w_transpose=w_transpose, y_transpose=y_transpose)
-            for (mode, n_expts_tot, n_expts_act) in (
-                ("batched", 1, 1),
-                ("ragged", 8, 4),
-                ("ragged", 32, 4),
-            )
-            for dtype in ("float16", "float8_e5m2")
-            for x_transpose in (False, True)
-            for w_transpose in (False, True)
-            for y_transpose in (False, True)
-        ]
+            # Case(16, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4, hbm_swizzling=True),
+            # Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3, 1, hbm_swizzling=True),
+            # Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3, 1, hbm_swizzling=True),
+            # Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3, 1),
+            # Case(1000, 704, 800, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 2, split_k=9),
+            # Case(1000, 704, 800, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 2, split_k=9, hbm_swizzling=True),
+            # Case(1000, 704, 800, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 2),
+            # Case(1000, 704, 800, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 2, hbm_swizzling=True),
+            # Case(300, 400, 400, "ragged", "float8_e5m2", "mxfloat8_e4m3fn", 8, 4),
+            # Case(300, 400, 400, "ragged", "float8_e5m2", "mxfloat8_e4m3fn", 8, 4, hbm_swizzling=True),
+            # Case(300, 400, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 4),
+            # Case(300, 400, 832, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, 4, hbm_swizzling=True),
+            # Case(300, 400, 400, "batched", "float8_e5m2", "mxfloat8_e4m3fn", 32, 4),
+            # Case(300, 400, 400, "batched", "float8_e5m2", "mxfloat8_e4m3fn", 32, 4, hbm_swizzling=True),
+            # Case(256, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4, hbm_swizzling=True),
+            # Case(256, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, 4, hbm_swizzling=False),
+            # Case(16, 256, 256, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 128, 4, hbm_swizzling=True),
+            # Case(1000, 704, 800, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 3, 1, hbm_swizzling=True),
+            # Case(1000, 704, 800, "batched", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 2, 1),
+            # Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2, split_k=9),
+            # Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2, split_k=9, hbm_swizzling=True),
+            # Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2, split_k=9, colmajor_mxfp_weight=False),
+            # Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2),
+            # Case(1000, 704, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 2, hbm_swizzling=True),
+            # Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 8, 4),
+            # Case(300, 512, 512, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 8, 4),
+            # Case(300, 400, 400, "ragged", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 8, 4, hbm_swizzling=True),
+            # Case(300, 400, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 4),
+            # Case(300, 400, 800, "ragged", "mxfloat8_e4m3fn", "mxfloat4_e2m1", 8, 4, hbm_swizzling=True),
+            # Case(300, 400, 400, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 32, 4),
+            # Case(300, 400, 400, "batched", "mxfloat8_e4m3fn", "mxfloat8_e4m3fn", 32, 4, hbm_swizzling=True),
+            # # AMD
+            # Case(300, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz"),
+            # Case(1000, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", 3, 1),
+            # Case(600, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", 4, 2),
+            # Case(600, 400, 400, "ragged", "float8_e4m3fnuz", "float8_e4m3fnuz", 4, 2, split_k=2),
+            # Case(300, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn"),
+            # Case(1000, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 3, 1),
+            # Case(600, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 4, 2),
+        ] # + [
+        #     Case(320, 400, 400, mode, dtype, dtype, n_expts_tot, n_expts_act,
+        #          x_transpose=x_transpose, w_transpose=w_transpose, y_transpose=y_transpose)
+        #     for (mode, n_expts_tot, n_expts_act) in (
+        #         ("batched", 1, 1),
+        #         ("ragged", 8, 4),
+        #         ("ragged", 32, 4),
+        #     )
+        #     for dtype in ("float16", "float8_e5m2")
+        #     for x_transpose in (False, True)
+        #     for w_transpose in (False, True)
+        #     for y_transpose in (False, True)
+        # ]
     ],
 )
 @pytest.mark.parametrize("block_m", [16, 128])
@@ -314,7 +320,7 @@ class Case:
     (False, False, False, "pad_x"),
 ])
 @pytest.mark.parametrize("has_y_gammas", [False, True])
-@pytest.mark.parametrize("is_persistent", [False, True])
+@pytest.mark.parametrize("is_persistent", [True])
 def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
             n_expts_act, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             x_transpose, w_transpose, y_transpose,

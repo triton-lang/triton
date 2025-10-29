@@ -47,7 +47,7 @@ def _matmul_ogs(
              XMxScale, stride_x_mx_z, stride_x_mx_m, stride_x_mx_k,
              W, WPtr, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
              WScale,
-             WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n,
+             WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n, W_SCALE_TRANSPOSE: tl.constexpr,
              OutAcc, stride_acc_z, stride_acc_m, stride_acc_n,
              OutAccScale, Y_ACC_IS_Y: tl.constexpr,
              B, stride_b_e, # Bias

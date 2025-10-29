@@ -56,7 +56,7 @@ def _p_matmul_ogs(
              XMxScale, stride_x_mx_z, stride_x_mx_m, stride_x_mx_k,
              W, WPtr, stride_w_e, stride_w_k, stride_w_n, W_TRANSPOSE: tl.constexpr,
              WScale,
-             WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n,
+             WMxScale, stride_w_mx_e, stride_w_mx_k, stride_w_mx_n, W_SCALE_TRANSPOSE: tl.constexpr,
              OutAcc, stride_acc_z, stride_acc_m, stride_acc_n,
              OutAccScale, Y_ACC_IS_Y: tl.constexpr,
              B, stride_b_e, # Bias
@@ -318,19 +318,33 @@ def _p_matmul_ogs(
                     x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
                 tl.static_assert(MX_PACK_DIVISOR % W_PACK_DIVISOR == 0)
                 if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
+                    # TODO: handle W_SCALE_TRANSPOSE?
                     flattened_expt_n_idx = expt_id * ((N + 127) // 128) + (off_n // 128)
                     w_scales = WMxScale.load([0, flattened_expt_n_idx, off_k_mx // 4, 0, 0])
                     w_scales = w_scales.reshape((w_scales.shape[1], w_scales.shape[2] * w_scales.shape[-2] * w_scales.shape[-1]))
                     w_scales = unswizzle_mx_scale_bw(w_scales)
                 else:
-                    w_scales = WMxScale.load([expt_id, off_k_mx, off_n])
-                    w_scales = tl.reshape(w_scales, *w_scales.shape[1:]).T
+                    if W_SCALE_TRANSPOSE:
+                        w_scales = WMxScale.load([expt_id, off_n, off_k_mx])
+                        w_scales = tl.reshape(w_scales, *w_scales.shape[1:])
+                    else:
+                        w_scales = WMxScale.load([expt_id, off_k_mx, off_n])
+                        w_scales = tl.reshape(w_scales, *w_scales.shape[1:]).T
 
             # --- update accumulator ---
             if is_w_microscaled:
+                tl.static_print("x.shape", x.shape)
+                # tl.static_print("x_scales.shape", x_scales.shape)
+                tl.static_print("w.shape", w.shape)
+                tl.static_print("w_scales.shape", w_scales.shape)
+                tl.static_print("SWIZZLE_MX_SCALE", SWIZZLE_MX_SCALE)
+                tl.static_print("SWAP_XW", SWAP_XW)
                 if SWAP_XW:
                     acc = tl.dot_scaled(w.T, w_scales, w_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
                 else:
+                    # if pid_m == 0 and pid_n == 0:
+                    #     print("w", w)
+                    #     print("w_scales", w_scales)
                     acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True)
                 if is_x_microscaled:
                     XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
