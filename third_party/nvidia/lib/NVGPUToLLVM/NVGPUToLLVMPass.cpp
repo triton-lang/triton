@@ -305,14 +305,21 @@ public:
     uint32_t numOutputRegs = outputStructType.getBody().size();
     Constraints constraints;
     constraints.reserve(numOutputRegs);
+    mlir::DataLayout dl(op->getParentOfType<mlir::ModuleOp>());
     for (auto ty : outputStructType.getBody()) {
-      auto bitwidth = ty.getIntOrFloatBitWidth();
+      auto bitwidth = dl.getTypeSizeInBits(ty);
       std::string c;
-      if (bitwidth == 32) {
+      switch (bitwidth) {
+      case 64:
+        c = "=l";
+        break;
+      case 32:
         c = ty.isF32() ? "=f" : "=r";
-      } else if (bitwidth == 16) {
+        break;
+      case 16:
         c = "=h";
-      } else {
+        break;
+      default:
         llvm::report_fatal_error("Unexpected bitwidth in WGMMAWaitGroupOp: " +
                                  Twine(bitwidth));
       }

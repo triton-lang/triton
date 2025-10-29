@@ -58,6 +58,19 @@ llvm.func @wgmma(%desc: i64, %in: !struct_64xf32) {
 
 // -----
 
+!struct = !llvm.struct<(f32, f32, i32, i32, f16, f16)>
+
+// CHECK-LABEL: @wgmma_wait
+llvm.func @wgmma_wait(%in: !struct) {
+  // CHECK: // wait for regs: $0,$1,$2,$3,$4,$5
+  // CHECK: wgmma.wait_group.sync.aligned 0;
+  // CHECK: "=f,=f,=r,=r,=h,=h,0,1,2,3,4,5"
+  %out = nvgpu.wgmma_wait_group %in {pendings = 0 : i32} : !struct
+  llvm.return
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @tensor_memory_base_lowering
   //      CHECK:    %[[TID:.+]] = nvvm.read.ptx.sreg.tid.x : i32
