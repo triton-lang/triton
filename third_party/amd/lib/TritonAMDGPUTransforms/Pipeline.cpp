@@ -22,12 +22,13 @@ Operation *streamPredication(RewriterBase &rewriter, Operation *op,
   // to optimize the select away as redundant.
   if (auto dotOp = dyn_cast<tt::DotOpInterface>(op)) {
     auto loc = dotOp->getLoc();
-    auto ifOp = rewriter.create<scf::IfOp>(loc, dotOp->getResult(0).getType(),
-                                           pred, /*withElseRegion=*/true);
+    auto ifOp = scf::IfOp::create(rewriter, loc, dotOp->getResult(0).getType(),
+                                  pred, /*withElseRegion=*/true);
     auto thenB = ifOp.getThenBodyBuilder();
-    auto yield = thenB.create<scf::YieldOp>(loc, dotOp->getResult(0));
+    auto yield = scf::YieldOp::create(thenB, loc, dotOp->getResult(0));
     dotOp->moveBefore(yield);
-    ifOp.getElseBodyBuilder().create<scf::YieldOp>(loc, dotOp->getOperand(2));
+    auto ifOpBuilder = ifOp.getElseBodyBuilder();
+    scf::YieldOp::create(ifOpBuilder, loc, dotOp->getOperand(2));
     return ifOp;
   }
   return tt::wrapInMaskOp(rewriter, op, pred);

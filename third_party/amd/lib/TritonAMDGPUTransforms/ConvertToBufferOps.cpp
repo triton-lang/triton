@@ -480,15 +480,15 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
 
       auto bufferLoadOp = [&]() {
         if constexpr (std::is_same_v<SourceOp, triton::LoadOp>) {
-          return rewriter.create<triton::amdgpu::BufferLoadOp>(
-              op->getLoc(), op.getType(), basePtr, tensorOffset, blockStride,
-              op.getCache(), maybeMask, maybeOther);
+          return triton::amdgpu::BufferLoadOp::create(
+              rewriter, op->getLoc(), op.getType(), basePtr, tensorOffset,
+              blockStride, op.getCache(), maybeMask, maybeOther);
         } else if constexpr (std::is_same_v<
                                  SourceOp,
                                  triton::gpu::AsyncCopyGlobalToLocalOp>) {
-          return rewriter.create<triton::amdgpu::BufferLoadToLocalOp>(
-              op->getLoc(), op.getType(), op.getResult(), basePtr, tensorOffset,
-              maybeMask, maybeOther, blockStride, op.getCache());
+          return triton::amdgpu::BufferLoadToLocalOp::create(
+              rewriter, op->getLoc(), op.getType(), op.getResult(), basePtr,
+              tensorOffset, maybeMask, maybeOther, blockStride, op.getCache());
         } else {
           static_assert(always_false<SourceOp>::value,
                         "Unsupported type in ConvertTritonLoadToBufferLoad");
@@ -590,6 +590,8 @@ struct TritonAMDGPUConvertToBufferOpsPass
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
     ModuleOp mod = getOperation();
+    auto arch = getAMDArch(mod);
+    triton::AMD::TargetInfo targetInfo(arch ? arch->str() : "");
 
     // Collect assumptions in the function
     DenseMap<Value, SetVector<Operation *>> assumptions =
@@ -605,9 +607,15 @@ struct TritonAMDGPUConvertToBufferOpsPass
 
     AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     patterns.add<ConvertTritonLoadToBufferLoad<tt::LoadOp>,
-                 ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>,
                  ConvertTritonStoreToBufferStore>(context, assumptions, solver,
                                                   this->analyzeSmallTensorOfst);
+    // BufferLoadToLds is only supported on CDNA3 and CDNA4
+    if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                           targetInfo.getISAFamily())) {
+      patterns
+          .add<ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>>(
+              context, assumptions, solver, this->analyzeSmallTensorOfst);
+    }
 
     // Gate buffer atomics behind CDNA3 for now
     // GFX942-specific assumptions regarding cache coherence are made when

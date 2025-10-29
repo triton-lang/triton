@@ -284,7 +284,7 @@ void createTensorMemoryStore(Location loc, Value address, int colOffset,
   }
   opcode += "};";
 
-  auto &st = *ptxBuilder.create<PTXInstr>(opcode);
+  auto &st = *ptxBuilder.create(opcode);
   st(operands, /*onlyAttachMLIRArgs=*/true);
   Type voidTy = void_ty(rewriter.getContext());
   ptxBuilder.launch(rewriter, loc, voidTy);
@@ -368,7 +368,7 @@ Value createTensorMemoryLoad(Location loc, MLIRContext *ctx, Value address,
     opcode += ", " + std::to_string(*secondHalfOffset);
   opcode += ";";
   operands.push_back(ptxBuilder.newOperand(address, "r"));
-  auto &ld = *ptxBuilder.create<PTXInstr>(opcode);
+  auto &ld = *ptxBuilder.create(opcode);
   ld(operands, /*onlyAttachMLIRArgs=*/true);
 
   // LLVM inline_asm with 1 result cannot return a struct.
@@ -442,7 +442,7 @@ lowerTMemLdSt(Location loc, MLIRContext *ctx,
     return std::make_pair(std::get<1>(rowCol[0]), std::get<1>(rowCol[1]));
   };
 
-  Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
+  Value warpId = nvgpu::WarpIdOp::create(rewriter, loc);
   // Map warpId to rows 32 and 64
   auto warpIdInGroup = b.and_(warpId, b.i32_val(3));
   tmemBase = b.add(tmemBase, b.shl(warpIdInGroup, b.i32_val(5 + 16)));
@@ -720,7 +720,7 @@ struct TensorMemoryLoadOpConversion
     Value resultStruct = packLLElements(loc, getTypeConverter(), *resultValsOr,
                                         rewriter, structTy);
     // Wait insertion could be moved to the TTGIR level if needed.
-    rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::LOAD);
+    NVVM::Tcgen05WaitOp::create(rewriter, loc, NVVM::Tcgen05WaitKind::LOAD);
     rewriter.replaceOp(op, {resultStruct});
     return success();
   }
@@ -752,7 +752,7 @@ struct TensorMemoryStoreOpConversion
                                maxnreg, pred, llvmElemTy, srcValues);
     if (failed(lowered))
       return failure();
-    rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::STORE);
+    NVVM::Tcgen05WaitOp::create(rewriter, loc, NVVM::Tcgen05WaitKind::STORE);
 
     // Emit a barrier to ensure all threads have finished writing to tensor
     // memory before any use of the tensor memory.
@@ -773,7 +773,7 @@ struct TensorMemoryAllocOpConversion
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto ctx = op.getContext();
-    Value base = rewriter.create<nvgpu::TensorMemoryBaseAddress>(loc);
+    Value base = nvgpu::TensorMemoryBaseAddress::create(rewriter, loc);
     Value baseInt = b.ptrtoint(i32_ty, base);
     int colOffset = cast<IntegerAttr>(op->getAttr("tensor_memory_col_offset"))
                         .getValue()
@@ -800,7 +800,7 @@ struct TensorMemoryAllocOpConversion
                                  b.i1_val(true), llvmElemTy, srcValues);
       if (failed(lowered))
         return failure();
-      rewriter.create<NVVM::Tcgen05WaitOp>(loc, NVVM::Tcgen05WaitKind::STORE);
+      NVVM::Tcgen05WaitOp::create(rewriter, loc, NVVM::Tcgen05WaitKind::STORE);
       // Emit a barrier to ensure all threads have finished writing to tensor
       // memory before any use of the tensor memory.
       b.barrier();
@@ -819,7 +819,7 @@ static void createCommit(ConversionPatternRewriter &rewriter, Location loc,
   PTXBuilder ptxBuilder;
   auto *barrierOperand = ptxBuilder.newAddrOperand(barrier, "r");
   std::string opcode = "tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64";
-  auto &barrierOp = *ptxBuilder.create<PTXInstr>(opcode);
+  auto &barrierOp = *ptxBuilder.create(opcode);
   barrierOp(barrierOperand).predicate(pred);
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
@@ -841,7 +841,7 @@ static void createTcgen05Cp(ConversionPatternRewriter &rewriter, Location loc,
   std::string opcode = "tcgen05.cp.cta_group::1" + warp + "." +
                        std::to_string(atom.nRow) + "x" +
                        std::to_string(atom.bCol) + "b";
-  auto &op = *ptxBuilder.create<PTXInstr>(opcode);
+  auto &op = *ptxBuilder.create(opcode);
   op({dst, src}).predicate(pred);
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
@@ -955,9 +955,9 @@ struct MemDescIndexOpConversion
         triton::nvidia_gpu::getTmemAllocSizes(cast<MemDescType>(dstTy));
     int numColOffset = tmemAlloc.numCols;
     Value newBase = b.ptrtoint(rewriter.getI32Type(), tmemBase);
-    newBase = rewriter.create<LLVM::AddOp>(
-        loc, newBase,
-        rewriter.create<LLVM::MulOp>(loc, idx, b.i32_val(numColOffset)));
+    newBase = LLVM::AddOp::create(
+        rewriter, loc, newBase,
+        LLVM::MulOp::create(rewriter, loc, idx, b.i32_val(numColOffset)));
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
     rewriter.replaceOp(op, b.inttoptr(elemPtrTy, newBase));
     return success();

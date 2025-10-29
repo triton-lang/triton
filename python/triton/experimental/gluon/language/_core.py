@@ -493,26 +493,28 @@ def set_auto_layout(value, layout, _semantic=None):
 
 
 @builtin
-def warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps, worker_num_regs,
-                    _semantic=None, _generator=None):
+def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _semantic=None, _generator=None):
     """
     Create a warp-specialized execution region, partitioning work across warps.
 
+    This forks the current execution into a "default partition" and an arbitrary number of
+    "worker partitons". The default partition is executed in the same :code:`num_warps` warps as
+    the parent region, and may accept tensor arguments and return tensors. Worker partitions are
+    executed in additional warps, which sit idle while executing the parent region.
+
+    Note that calling warp_specialize recursively is not supported.
+
     Args:
-        default_args (List[Any]): Arguments for the default region.
-        default_partition (callable): Function to build the default execution region.
-        worker_args (List[Any]): Arguments for each warp partition.
-        worker_partitions (List[callable]): Functions for each warp partition.
-        worker_num_warps (List[int]): Number of warps per partition.
-        worker_num_regs (List[int]): Number of registers per partition.
+        functions_and_args (List[Tuple[Callable, Any]]): List of functions and arguments for each partition. The first of which is the default partition.
+        worker_num_warps (List[int]): Number of warps used for each worker partition.
+        worker_num_regs (List[int]): Number of registers for each worker partition.
 
     Returns:
-        Tuple[Any, ...]: Results from the default region.
+        Tuple[Any, ...]: Results from the default partition.
     """
     worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
     worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
-    return _semantic.warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps,
-                                     worker_num_regs, _generator)
+    return _semantic.warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _generator)
 
 
 @builtin

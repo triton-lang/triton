@@ -10,8 +10,8 @@ SmallVector<Value> translateTMAIndices(OpBuilder &builder, Location loc,
                                        Attribute encoding,
                                        SmallVector<Value> indices) {
   if (isFp4Padded(encoding)) {
-    auto two = builder.create<arith::ConstantIntOp>(loc, 2, 32);
-    indices.back() = builder.create<arith::MulIOp>(loc, indices.back(), two);
+    auto two = arith::ConstantIntOp::create(builder, loc, 2, 32);
+    indices.back() = arith::MulIOp::create(builder, loc, indices.back(), two);
   }
   return indices;
 }
@@ -236,8 +236,8 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
   MLIRContext *ctx = op.getContext();
   auto loc = op.getLoc();
   auto mkI32Constant = [&](int32_t val) {
-    return builder.create<arith::ConstantOp>(loc, builder.getI32Type(),
-                                             builder.getI32IntegerAttr(val));
+    return arith::ConstantOp::create(builder, loc, builder.getI32Type(),
+                                     builder.getI32IntegerAttr(val));
   };
 
   auto elemType = op.getBase().getType().getPointeeType();
@@ -278,8 +278,8 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
     return failure();
   auto swizzleMode = *maybeSwizzleMode;
 
-  Value elemSizeVal = builder.create<arith::ConstantOp>(
-      loc, builder.getI64Type(), builder.getI64IntegerAttr(elemSize));
+  Value elemSizeVal = arith::ConstantOp::create(
+      builder, loc, builder.getI64Type(), builder.getI64IntegerAttr(elemSize));
 
   SmallVector<Value> globalDim(llvm::reverse(op.getShape()));
   SmallVector<Value> globalStride;
@@ -290,14 +290,14 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
   if (fp4Padded) {
     // Convert number of bytes to number of mxfp4 elements
     globalDim[0] =
-        builder.create<arith::MulIOp>(loc, globalDim[0], mkI32Constant(2));
+        arith::MulIOp::create(builder, loc, globalDim[0], mkI32Constant(2));
   }
 
   SmallVector<Value> elementStride(globalDim.size(), mkI32Constant(1));
 
   for (int i = 0; i < globalStride.size(); ++i)
     globalStride[i] =
-        builder.create<arith::MulIOp>(loc, globalStride[i], elemSizeVal);
+        arith::MulIOp::create(builder, loc, globalStride[i], elemSizeVal);
 
   auto elemTypeEnum = getTMAElementType(op, op.getType());
   if (!elemTypeEnum) {
@@ -306,8 +306,8 @@ LogicalResult createTMADesc(Value tmaPtr, MakeTensorDescOp op,
 
   auto fillMode = (op.getPadding() == triton::PaddingOption::PAD_NAN) ? 1 : 0;
 
-  builder.create<TensormapCreateOp>(
-      loc,
+  TensormapCreateOp::create(
+      builder, loc,
       /*desc_ptr=*/tmaPtr,
       /*global_address=*/op.getBase(),
       /*box_dim=*/boxDim,

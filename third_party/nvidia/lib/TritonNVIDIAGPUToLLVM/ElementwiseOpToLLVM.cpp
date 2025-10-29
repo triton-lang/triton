@@ -354,7 +354,7 @@ struct FpToFpOpConversion
   static Value convertFp16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
-    return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
+    return LLVM::FPExtOp::create(rewriter, loc, f32_ty, v);
   }
 
   static Value convertFp32ToBf16(Location loc,
@@ -559,7 +559,7 @@ struct FDivOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+    unsigned bitwidth = getIntOrFloatOrPtrBitWidth(elemTy);
     StringRef name;
     Type resultTy;
     if (32 == bitwidth) {
@@ -608,7 +608,7 @@ struct SIToFPOpConversion
       assert(outVals.size() == 4);
       return outVals;
     } else {
-      return {rewriter.create<LLVM::SIToFPOp>(loc, elemTy, operands[0][0])};
+      return {LLVM::SIToFPOp::create(rewriter, loc, elemTy, operands[0][0])};
     }
   }
 
@@ -627,7 +627,7 @@ struct FPToSIOpConversion
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
     auto inElemTy = getElementType(op.getIn());
-    return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, operands[0][0])};
+    return {LLVM::FPToSIOp::create(rewriter, loc, elemTy, operands[0][0])};
   }
 };
 
@@ -643,7 +643,7 @@ struct ExpOpConversionApprox
                                    Location loc) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     // For non-FP32 input, call __nv_expf for higher-precision calculation
-    if (elemTy.getIntOrFloatBitWidth() != 32)
+    if (getIntOrFloatOrPtrBitWidth(elemTy) != 32)
       return {};
 
     const double log2e = 1.4426950408889634;
@@ -797,10 +797,10 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
     const TargetInfo &targetInfo, PatternBenefit benefit) {
   using namespace mlir::triton::gpu;
 
-  patterns.add<OpToExternCallConversion<triton::PreciseSqrtOp>>(
-      typeConverter, axisInfoAnalysis, "__nv_fsqrt_rn", benefit);
-  patterns.add<OpToExternCallConversion<triton::PreciseDivFOp>>(
-      typeConverter, axisInfoAnalysis, "__nv_fdiv_rn", benefit);
+  patterns.add<ElementwiseToIntrinsicOpConversion<triton::PreciseSqrtOp>>(
+      typeConverter, axisInfoAnalysis, "llvm.nvvm.sqrt.rn.f", benefit);
+  patterns.add<ElementwiseToIntrinsicOpConversion<triton::PreciseDivFOp>>(
+      typeConverter, axisInfoAnalysis, "llvm.nvvm.div.rn.f", benefit);
 
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
