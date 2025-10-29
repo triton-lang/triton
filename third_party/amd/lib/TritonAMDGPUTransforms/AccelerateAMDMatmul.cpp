@@ -522,6 +522,54 @@ int deduceTilesPerWarp(TypedValue<RankedTensorType> scale, unsigned opIdx,
   return vecSize;
 }
 
+// Detect if transposed layout is needed to enable large vectorization of global
+// stores or intra warp conversion.
+bool needTransposedMfmaLayout(tt::DotOp dotOp, int mfmaVersion, int mDim,
+                              int nDim, bool is16BitElemTy,
+                              bool hasPreShuffledScale,
+                              ArrayRef<unsigned> warpsPerTile,
+                              ttg::AMDMfmaEncodingAttr &mfmaEnc,
+                              AMD::ModuleAxisInfoAnalysis &axisAnalysisPass) {
+  // We always transpose 64x4 mfma in order to use the mfma broadcast.
+  if (mDim == 64 && nDim == 4)
+    return true;
+
+  // We can not support transposed mfma 4x64 as it requires to broadcast the
+  // operand A.
+  if (mDim == 4 && nDim == 64)
+    return false;
+
+  RankedTensorType oldRetType = dotOp.getType();
+  auto retShape = oldRetType.getShape();
+  unsigned rank = oldRetType.getRank();
+  // Set isTransposed to enable intra warp conversion for
+  // the mfma16x16 layout of a dot op, depending on whether
+  // its result is used by operand 0 or operand 1 of another dot op.
+  if (mfmaVersion == 4 && is16BitElemTy && mDim == 16 && nDim == 16 &&
+      rank == 2 && !hasPreShuffledScale) {
+    if (isChainDotHead(dotOp, 0u) &&
+        retShape.front() >= 16 * 2 * warpsPerTile.front() &&
+        retShape.back() == 16 && warpsPerTile.back() == 1) {
+      return true;
+    } else if (isChainDotHead(dotOp, 1u) && retShape.front() == 16 &&
+               retShape.back() >= 16 * 2 * warpsPerTile.back() &&
+               warpsPerTile.front() == 1) {
+      return false;
+    }
+  }
+
+  if (isChainDotHead(dotOp))
+    return true;
+
+  // Set isTransposed based on how the result of dotOp is stored.
+  // If the store’s contiguity aligns with the MFMA layout order, keep the
+  // isTranposed flag set to true. Otherwise, set it to false. This allows us to
+  // vectorize the store along the dimension where elements are accessed
+  // contiguously.
+  return mlir::LLVM::AMD::isStoredContigWithMfmaLayout(dotOp, axisAnalysisPass,
+                                                       mfmaEnc);
+}
+
 class BlockedToMFMA : public OpRewritePattern<tt::DotOp> {
   int mfmaVersion;
   int nonKDim;
@@ -601,11 +649,6 @@ public:
     else
       mfmaAccType = rewriter.getF32Type();
 
-    // Use transposed mfma layout to enable larger vectorization for global
-    // store instructions. We can not support transposed mfma 4x64 as it
-    // requires to broadcast the operand A.
-    // We will adjust isTransposed for sepcial cases.
-    bool isTransposed = !(mDim == 4 && nDim == 64);
     auto aElemTy = mfmaInstr->aElementType;
     auto is16BitElemTy = (aElemTy.isF16() || aElemTy.isBF16());
 
@@ -626,7 +669,7 @@ public:
 
     bool hasPreShuffledScale = (tilesPerWarp[0] > 1 && tilesPerWarp[1] > 1);
 
-    // Set tilesPerWarp and isTransposed to enable intra warp conversion for
+    // Set tilesPerWarp to enable intra warp conversion for
     // the mfma16x16 layout of a dot op, depending on whether
     // its result is used by operand 0 or operand 1 of another dot op.
     if (mfmaVersion == 4 && is16BitElemTy && mDim == 16 && nDim == 16 &&
@@ -634,12 +677,10 @@ public:
       if (isChainDotHead(dotOp, 0u) &&
           retShape.front() >= 16 * 2 * warpsPerTile.front() &&
           retShape.back() == 16 && warpsPerTile.back() == 1) {
-        isTransposed = true;
         tilesPerWarp = {2, 1};
       } else if (isChainDotHead(dotOp, 1u) && retShape.front() == 16 &&
                  retShape.back() >= 16 * 2 * warpsPerTile.back() &&
                  warpsPerTile.front() == 1) {
-        isTransposed = false;
         tilesPerWarp = {1, 2};
       }
     }
@@ -650,18 +691,12 @@ public:
 
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(), mfmaVersion, warpsPerTile, {mDim, nDim, kDim},
-        isTransposed, CTALayout, tilesPerWarp,
+        /*isTransposed=*/true, CTALayout, tilesPerWarp,
         mfmaAccType.getIntOrFloatBitWidth());
 
-    // Adjust isTransposed based on how the result of dotOp is stored.
-    // If the store’s contiguity aligns with the layout order, keep the isTran
-    // flag set to true. Otherwise, set it to false. This allows us to vectorize
-    // the store along the dimension where elements are accessed contiguously.
-    // Note that we always transpose 64x4 mfma in order to use the mfma
-    // broadcast.
-    if (isTransposed && !(mDim == 64 && nDim == 4) && !isChainDotHead(dotOp) &&
-        !(mlir::LLVM::AMD::isStoredContinuously(dotOp, axisAnalysisPass,
-                                                mfmaEnc))) {
+    if (!needTransposedMfmaLayout(dotOp, mfmaVersion, mDim, nDim, is16BitElemTy,
+                                  hasPreShuffledScale, warpsPerTile, mfmaEnc,
+                                  axisAnalysisPass)) {
       mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
           oldRetType.getContext(), mfmaVersion, warpsPerTile,
           {mDim, nDim, kDim},
