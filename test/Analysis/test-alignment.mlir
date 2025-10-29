@@ -1074,14 +1074,13 @@ tt.func public @test_inductor_for() {
   // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   %0 = arith.cmpi slt, %c0_i32, %c1_i32 : i32
 
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
   // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = 64}}
   %1:2 = scf.if %0 -> (i32, i32) {
     scf.yield %c0_i32, %c64_i32 : i32, i32
   } else {
     scf.yield %c1_i32, %c64_i32 : i32, i32
   }
-  
+
   // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
   %2 = scf.for %arg0 = %1#0 to %1#1 step %c64_i32 iter_args(%arg1 = %c0_i64) -> (i64)  : i32 {
     // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
