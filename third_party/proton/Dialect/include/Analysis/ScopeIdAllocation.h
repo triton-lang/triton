@@ -14,6 +14,7 @@
 namespace mlir {
 namespace triton::proton {
 
+
 class ScopeIdAllocation {
 public:
   using ScopeId = size_t;
@@ -45,7 +46,10 @@ public:
   size_t getNumScopes() const { return idToNameMap.size(); }
 
 private:
+  using VirtualBlock = std::pair<Block *, Block::iterator>;
+
   void run();
+  void visitTerminator(Operation *op, SmallVector<VirtualBlock> &successors);
 
   Operation *funcOp;
   llvm::DenseMap<ScopeId, StringRef> idToNameMap;
