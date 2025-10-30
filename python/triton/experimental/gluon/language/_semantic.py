@@ -287,6 +287,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
         # Make `mask` and `val` into the same shape as `ptr`
         if ptr.type.is_block():
+            # TODO fix python/test/gluon/test_lowerings.py
             ptr, val = self.broadcast_impl_value(ptr, val)
             if mask is not None:
                 ptr, mask = self.broadcast_impl_value(ptr, mask)
