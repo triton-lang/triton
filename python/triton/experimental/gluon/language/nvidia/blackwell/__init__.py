@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
+from triton.experimental.gluon.language._layouts import SharedLinearLayout
 from triton.experimental.gluon.language._semantic import _check, _compute_tmem_reg_layout
 
 from . import tma
@@ -35,7 +36,7 @@ class TensorMemoryLayout:
     Describes the layout for tensor memory in Blackwell architecture.
 
     Args:
-        block (Tuple[int, int]): Tiling block dimensions (M/rows, N/cols).
+        block (Tuple[int, int]): Number of contiguous elements per row / column in a CTA.
         col_stride (int): Number of 32-bit columns to advance between logically
             adjacent columns. Packed layouts use a stride of 1. Unpacked
             layouts use ``32 / bitwidth``.
@@ -381,8 +382,21 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
         else:
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
+    # We'll generalise this later
+    def has_cta_split(t, cta_split_num):
+        layout = t.layout
+        if hasattr(t.layout, "cta_split_num"):
+            return t.layout.cta_split_num == cta_split_num
+        else:
+            assert isinstance(layout, SharedLinearLayout)
+            shape = t.shape
+            basis = [shape[0] // 2, 0] if cta_split_num == [2, 1] else [0, shape[1] // 2]
+            return len(layout.block_bases) == 1 and layout.block_bases[0] == basis
+
+    two_ctas = (has_cta_split(acc, [2, 1]) and has_cta_split(a, [2, 1]) and has_cta_split(b, [1, 2]))
+
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
-                                         mbarrier_preds)
+                                         mbarrier_preds, two_ctas)
 
 
 @builtin
