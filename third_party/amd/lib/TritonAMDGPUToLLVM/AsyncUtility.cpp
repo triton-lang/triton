@@ -63,7 +63,7 @@ void addLocalBarrierAfterAmdGpuAsyncWait(ModuleOp mod) {
       continue;
 
     builder.setInsertionPointAfter(waitOp);
-    builder.create<triton::gpu::LocalBarrierOp>(waitOp->getLoc());
+    triton::gpu::LocalBarrierOp::create(builder, waitOp->getLoc());
   }
 }
 
