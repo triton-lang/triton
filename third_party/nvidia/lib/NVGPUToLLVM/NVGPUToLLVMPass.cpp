@@ -232,12 +232,11 @@ class ClusterCTAIdOpPattern : public OpRewritePattern<ttn::ClusterCTAIdOp> {
 
   LogicalResult matchAndRewrite(ttn::ClusterCTAIdOp op,
                                 PatternRewriter &rewriter) const override {
-    // We always use nx1x1 in compiler.py
-    // num_ctas == 16 is non-portable. Does work for H100 and B200 tho
-    auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(
-        op->getParentOfType<ModuleOp>());
-    auto loc = op.getLoc();
-    auto res = NVVM::BlockInClusterIdXOp::create(rewriter, loc, i32_ty);
+    // TODO Should we pass in the range of the cluster ID?
+    // We should benchmark as when doing so for thread_id it regressed lol
+    // auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(
+    //     op->getParentOfType<ModuleOp>());
+    auto res = NVVM::ClusterId::create(rewriter, op.getLoc(), i32_ty);
     rewriter.replaceOp(op, res);
     return success();
   }
