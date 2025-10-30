@@ -42,23 +42,57 @@ struct BlockInfo {
 };
 
 void ScopeIdAllocation::run() {
+  // Stage the analysis to match downstream consumers of scope metadata:
+  //
+  // - reachability(): Track active scopes at CFG boundaries and flag malformed
+  //   lifetimes. Example MLIR:
+  //     scf.if %cond {
+  //       proton.record start @"foo"
+  //     }
+  //   Because `"foo"` never ends on the `then` branch, reachability() emits
+  //   `The scope name 'foo' is not closed properly`.
+  //
+  // - liveness(): Pair start/end records and assign a shared numeric ID. Example
+  //   MLIR:
+  //     proton.record start @"foo"
+  //     …
+  //     proton.record end @"foo"
+  //   Both ops are mapped to the same ScopeId in `opToIdMap`.
+  //
+  // - dominance(): Infer the parent/child hierarchy between scopes via
+  //   dominance. Example MLIR:
+  //     proton.record start @"outer"
+  //     scf.if %cond {
+  //       proton.record start @"inner"
+  //       …
+  //       proton.record end @"inner"
+  //     }
+  //     proton.record end @"outer"
+  //   Because the start of `"outer"` dominates `"inner"`, dominance() records
+  //   `(innerId -> outerId)` in `scopeParentIds`.
+  reachability();
+  liveness();
+  dominance();
+}
+
+void ScopeIdAllocation::reachability() {
   DenseMap<VirtualBlock, BlockInfo> inputBlockInfoMap;
   DenseMap<VirtualBlock, BlockInfo> outputBlockInfoMap;
 
-  std::deque<VirtualBlock> blockList;
+  std::deque<VirtualBlock> virtualBlockList;
   funcOp->walk<WalkOrder::PreOrder>([&](Block *block) {
     // Start the analysis from the entry blocks of any nested isolated from
     // above regions.
     if (block->isEntryBlock() &&
         !isa<RegionBranchOpInterface>(block->getParentOp()))
-      blockList.emplace_back(block);
+      virtualBlockList.emplace_back(block, Block::iterator());
   });
 
-  // Reachability analysis
-  while (!blockList.empty()) {
-    VirtualBlock &virtualBlock = blockList.front();
-    blockList.pop_front();
-    // Make a copy of the inputblockInfo but not update
+  while (!virtualBlockList.empty()) {
+    VirtualBlock &virtualBlock = virtualBlockList.front();
+    virtualBlockList.pop_front();
+    // Evaluate the transfer function for this block starting from the cached
+    // input state.
     auto inputBlockInfo = inputBlockInfoMap[virtualBlock];
     SmallVector<VirtualBlock> successors;
     Block::iterator startIt =
@@ -95,7 +129,7 @@ void ScopeIdAllocation::run() {
     // Update the successors
     for (VirtualBlock &successor : successors) {
       inputBlockInfoMap[successor].join(outputBlockInfoMap[virtualBlock]);
-      blockList.emplace_back(successor);
+      virtualBlockList.emplace_back(successor);
     }
   }
 
@@ -122,8 +156,11 @@ void ScopeIdAllocation::run() {
     }
   }
 
-  // Liveness analysis
-  // For each scope, find its nearest pair
+}
+
+void ScopeIdAllocation::liveness() {
+  // Stage 2: pair start/end records that refer to the same scope name and
+  // assign a numeric ID that downstream passes can reuse.
   llvm::DenseMap<StringRef, std::pair</*id=*/size_t, /*isStart=*/bool>> nameToIdMap;
   llvm::DenseMap<ScopeId, RecordOp> idToOpMap;
   std::stack<ScopeId> scopeIdStack;
@@ -157,7 +194,11 @@ void ScopeIdAllocation::run() {
     }
   });
 
-  // Sort all start scopes in the topological order and get the nearest parent
+}
+
+void ScopeIdAllocation::dominance() {
+  // Stage 3: determine parentage between scopes by checking dominance of start
+  // operations.
   llvm::SetVector<Operation *> startRecordOps;
   funcOp->walk<WalkOrder::PreOrder>([&](RecordOp recordOp) {
     if (recordOp.getIsStart()) {

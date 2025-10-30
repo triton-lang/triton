@@ -49,6 +49,9 @@ private:
   using VirtualBlock = std::pair<Block *, Block::iterator>;
 
   void run();
+  void reachability();
+  void liveness();
+  void dominance();
   void visitTerminator(Operation *op, SmallVector<VirtualBlock> &successors);
 
   Operation *funcOp;
