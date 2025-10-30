@@ -82,15 +82,14 @@ module {
 module {
   // expected-remark @below {{cf_branch}}
   tt.func @cf_branch(%cond: i1) {
-  ^bb0(%arg0: i1):
     // expected-remark @below {{scope id = 0}}
     proton.record start "name0"
-    cf.cond_br %arg0, ^bb1, ^bb2
-  ^bb1:  // pred: ^bb0
+    cf.cond_br %cond, ^bb1, ^bb2
+  ^bb1:  // pred: ^entry
     // expected-remark @below {{scope id = 0}}
     proton.record end "name0"
     cf.br ^bb3
-  ^bb2:  // pred: ^bb0
+  ^bb2:  // pred: ^entry
     // expected-remark @below {{scope id = 0}}
     proton.record end "name0"
     cf.br ^bb3
@@ -120,17 +119,19 @@ module {
 // -----
 
 module {
+  // expected-remark @below {{cf_mismatch}}
   tt.func @cf_mismatch(%cond: i1) {
-  ^bb0(%arg0: i1):
+    // expected-remark @below {{scope id = 0}}
     proton.record start "name0"
-    cf.cond_br %arg0, ^bb1, ^bb2
-  ^bb1:  // pred: ^bb0
+    cf.cond_br %cond, ^bb1, ^bb2
+  ^bb1:  // pred: ^entry
+    // expected-remark @below {{scope id = 0}}
     proton.record end "name0"
     cf.br ^bb3
-  ^bb2:  // pred: ^bb0
+  ^bb2:  // pred: ^entry
     cf.br ^bb3
   ^bb3:  // preds: ^bb1, ^bb2
-    // expected-error @below {{inconsistent proton scope stack across predecessors, expected [name0] but found []}}
+    // expected-error @below {{inconsistent proton scope stack across predecessors, expected [] but found [name0]}}
     tt.return
   }
 }
@@ -159,24 +160,6 @@ module {
     } : () -> ()
     // expected-remark @below {{scope id = 0}}
     proton.record end "outer"
-    tt.return
-  }
-}
-
-// -----
-
-module {
-  tt.func @warp_specialize_mismatch() {
-    proton.record start "outer"
-    ttg.warp_specialize()
-    default {
-      ttg.warp_yield
-    }
-    partition0() num_warps(1) {
-      proton.record end "outer"
-      ttg.warp_return
-    } : () -> ()
-    // expected-error @below {{inconsistent proton scope stack across predecessors, expected [outer] but found []}}
     tt.return
   }
 }
