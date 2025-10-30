@@ -98,6 +98,42 @@ Interfaces: `InferTypeOpInterface`
 | `retToken` | async token type |
 
 
+### `amdgpu.async_wait` (triton::amdgpu::AsyncWaitOp)
+
+_Wait until there are less than or equal to the given number of outstanding async intrinsics_
+
+Syntax:
+
+```
+operation ::= `amdgpu.async_wait` ($asyncToken^)? attr-dict
+```
+
+Similar to ttg.async_wait but instead of waiting on oustanding ttg.async_commit_groups
+this op waits on the number of outstanding async instructions/intrinsics as required for the
+lowering to LLVM on the AMD backend.
+
+Interfaces: `InferTypeOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>num_inst</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `asyncToken` | variadic of async token type |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `retToken` | async token type |
+
+
 ### `amdgpu.buffer_atomic_cas` (triton::amdgpu::BufferAtomicCASOp)
 
 _Atomic CAS op which does compare-exchange to a scalar base pointer and a tensor offset_
