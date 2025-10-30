@@ -298,11 +298,11 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
 Operation *mlir::triton::wrapInMaskOp(RewriterBase &rewriter, Operation *op,
                                       Value pred) {
   auto mask =
-      rewriter.create<ttg::MaskOp>(op->getLoc(), op->getResultTypes(), pred);
+      ttg::MaskOp::create(rewriter, op->getLoc(), op->getResultTypes(), pred);
   rewriter.createBlock(&mask->getRegion(0));
   rewriter.setInsertionPointToStart(&mask->getRegion(0).front());
   auto newOp = rewriter.clone(*op);
-  rewriter.create<ttg::MaskReturnOp>(op->getLoc(), newOp->getResults());
+  ttg::MaskReturnOp::create(rewriter, op->getLoc(), newOp->getResults());
   op->replaceAllUsesWith(mask->getResults());
   rewriter.eraseOp(op);
   return mask;
@@ -332,8 +332,8 @@ void mlir::triton::resolveMaskOp(ModuleOp moduleOp,
         if (op->getNumResults() > 0) {
           SmallVector<Value> results;
           for (auto result : op->getResults()) {
-            auto poisonOp = rewriter.create<mlir::ub::PoisonOp>(
-                op->getLoc(), result.getType());
+            auto poisonOp = mlir::ub::PoisonOp::create(rewriter, op->getLoc(),
+                                                       result.getType());
             results.push_back(poisonOp);
           }
           op->replaceAllUsesWith(results);
@@ -475,7 +475,7 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
   ttg::MemDescType memDescType = ttg::MemDescType::get(
       {numBuffers, 1}, type, barrierEncoding, sharedMemorySpace,
       /*mutableMemory=*/true);
-  return rewriter.create<ttg::LocalAllocOp>(memDescType, Value());
+  return ttg::LocalAllocOp::create(rewriter, memDescType, Value());
 }
 
 // Create an allocation and init the mbarriers.
@@ -487,15 +487,15 @@ Value mlir::triton::createBarrierAlloc(Operation *op, int numBarriers,
       createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
-    rewriter.create<ttng::InitBarrierOp>(barrierView, arriveCount);
+    ttng::InitBarrierOp::create(rewriter, barrierView, arriveCount);
   }
   // Invalidate and deallocate the barriers.
   rewriter.setInsertionPointAfter(op);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
-    rewriter.create<ttng::InvalBarrierOp>(barrierView);
+    ttng::InvalBarrierOp::create(rewriter, barrierView);
   }
-  rewriter.create<ttg::LocalDeallocOp>(barrierAlloc);
+  ttg::LocalDeallocOp::create(rewriter, barrierAlloc);
   return barrierAlloc;
 }
 
@@ -511,10 +511,10 @@ Value mlir::triton::createAlloc(Operation *insertBefore, RankedTensorType ty,
   Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
                                            sharedEnc, sharedMemorySpace,
                                            /*mutableMemory=*/true);
-  Value alloc = builder.create<ttg::LocalAllocOp>(loc, memdescType);
+  Value alloc = ttg::LocalAllocOp::create(builder, loc, memdescType);
 
   builder.setInsertionPointAfter(insertBefore);
-  builder.create<ttg::LocalDeallocOp>(insertBefore->getLoc(), alloc);
+  ttg::LocalDeallocOp::create(builder, insertBefore->getLoc(), alloc);
   return alloc;
 }
 
@@ -563,8 +563,8 @@ void mlir::triton::combineRedundantWaitOps(
     if (waitGroup.size() == 1)
       continue;
     OpBuilder builder(waitGroup.front());
-    auto newWaitOp = builder.create<ttg::AsyncWaitOp>(waitOp.getLoc(),
-                                                      depTokens, minWaitNumber);
+    auto newWaitOp = ttg::AsyncWaitOp::create(builder, waitOp.getLoc(),
+                                              depTokens, minWaitNumber);
     for (auto waitOp : waitGroup) {
       toDelete[waitOp] = newWaitOp;
     }
@@ -603,10 +603,6 @@ ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(RankedTensorType ty) {
 }
 
 ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(Operation *op) {
-  if (!isa<RankedTensorType>(op->getResultTypes()[0])) {
-    return nullptr;
-  }
-
   // Try to use local alloc encoding if possible.
   ttg::SharedEncodingTrait localAllocEnc;
   if (llvm::any_of(op->getUsers(), [&](Operation *user) {
@@ -687,27 +683,26 @@ triton::createSingleBufferView(OpBuilder &builder, Value alloc, Value idx) {
                allocDescType.getShape().end());
   auto viewDescType = ttg::MemDescType::get(
       shape, allocDescType.getElementType(), allocDescType.getEncoding(),
-      allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
-      /*allocShape=*/allocDescType.getAllocShape());
-  return builder.create<ttg::MemDescIndexOp>(alloc.getLoc(), viewDescType,
-                                             alloc, idx);
+      allocDescType.getMemorySpace(), allocDescType.getMutableMemory());
+  return ttg::MemDescIndexOp::create(builder, alloc.getLoc(), viewDescType,
+                                     alloc, idx);
 }
 
 TypedValue<ttg::MemDescType>
 triton::createSingleBufferView(OpBuilder &builder, Value alloc, int idx) {
-  Value idxVal = builder.create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32);
+  Value idxVal = arith::ConstantIntOp::create(builder, alloc.getLoc(), idx, 32);
   return createSingleBufferView(builder, alloc, idxVal);
 }
 
 Value triton::createIncrementModulo(OpBuilder &builder, Location loc,
                                     Value counter, Value modulus, Value zero,
                                     Value one, Value *outWrapCond) {
-  Value addOne = builder.create<arith::AddIOp>(loc, counter, one);
-  Value outOfRangeCond = builder.create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::sge, addOne, modulus);
+  Value addOne = arith::AddIOp::create(builder, loc, counter, one);
+  Value outOfRangeCond = arith::CmpIOp::create(
+      builder, loc, arith::CmpIPredicate::sge, addOne, modulus);
   if (outWrapCond)
     *outWrapCond = outOfRangeCond;
-  return builder.create<arith::SelectOp>(loc, outOfRangeCond, zero, addOne);
+  return arith::SelectOp::create(builder, loc, outOfRangeCond, zero, addOne);
 }
 
 /////////////////////////////
@@ -727,8 +722,8 @@ allocTMABuffers(scf::ForOp forOp,
     // loop-carried value. That would save us from allocating another buffer
     // just for the init value
     auto loc = op.getLoc();
-    Value alloc = rewriter.create<triton::gpu::GlobalScratchAllocOp>(
-        loc, triton::getPointerType(rewriter.getI8Type()),
+    Value alloc = triton::gpu::GlobalScratchAllocOp::create(
+        rewriter, loc, triton::getPointerType(rewriter.getI8Type()),
         maxStage * ttng::TMA_SIZE_BYTES, ttng::TMA_ALIGN);
     tmaBufferMapping[op.getOperation()] = alloc;
   });
@@ -737,9 +732,9 @@ allocTMABuffers(scf::ForOp forOp,
 static Value subviewTMADescriptor(OpBuilder &builder, Location loc, Value alloc,
                                   Value counter) {
   Value tmaSizeVal =
-      builder.create<arith::ConstantIntOp>(loc, ttng::TMA_SIZE_BYTES, 32);
-  Value offset = builder.create<arith::MulIOp>(loc, tmaSizeVal, counter);
-  return builder.create<triton::AddPtrOp>(loc, alloc.getType(), alloc, offset);
+      arith::ConstantIntOp::create(builder, loc, ttng::TMA_SIZE_BYTES, 32);
+  Value offset = arith::MulIOp::create(builder, loc, tmaSizeVal, counter);
+  return triton::AddPtrOp::create(builder, loc, alloc.getType(), alloc, offset);
 }
 
 static LogicalResult rewriteTMABufferUpdates(
@@ -749,8 +744,9 @@ static LogicalResult rewriteTMABufferUpdates(
     triton::CoarseSchedule &schedule) {
   assert(tmaBufferMapping.size() == tmaCounters.size());
 
-  Value numBuffersVal = mlir::OpBuilder(forOp).create<arith::ConstantIntOp>(
-      forOp.getLoc(), numBuffers, 32);
+  auto auxBuilder = mlir::OpBuilder(forOp);
+  Value numBuffersVal =
+      arith::ConstantIntOp::create(auxBuilder, forOp.getLoc(), numBuffers, 32);
 
   for (auto [iOp, pair] : llvm::enumerate(tmaBufferMapping)) {
     auto &[op, alloc] = pair;
@@ -767,9 +763,9 @@ static LogicalResult rewriteTMABufferUpdates(
     if (failed(ttng::createTMADesc(nextBuf, makeDescOp, builder))) {
       return failure();
     }
-    builder.create<ttng::TensormapFenceproxyAcquireOp>(nextBuf);
-    Value nextDesc = builder.create<ttng::ReinterpretTensorDescOp>(
-        makeDescOp.getType(), nextBuf);
+    ttng::TensormapFenceproxyAcquireOp::create(builder, nextBuf);
+    Value nextDesc = ttng::ReinterpretTensorDescOp::create(
+        builder, makeDescOp.getType(), nextBuf);
 
     makeDescOp.getResult().replaceAllUsesWith(nextDesc);
 
@@ -809,8 +805,8 @@ scf::ForOp triton::lowerTMADescriptors(scf::ForOp forOp,
 
   IRRewriter builder(forOp);
   Location loc = forOp.getLoc();
-  Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-  Value one = builder.create<arith::ConstantIntOp>(loc, 1, 32);
+  Value zero = arith::ConstantIntOp::create(builder, loc, 0, 32);
+  Value one = arith::ConstantIntOp::create(builder, loc, 1, 32);
   SmallVector<Value> newOperands;
   unsigned newOperandIndex = forOp.getBody()->getNumArguments();
   // Create one counter per TMA buffer. This allows the descriptors to be
@@ -936,39 +932,4 @@ void triton::removePipeliningAttributes(ModuleOp moduleOp) {
     op->removeAttr(mlir::triton::kLoopClusterAttrName);
     op->removeAttr(mlir::triton::kScheduledMaxStageAttrName);
   });
-}
-
-static bool canHaveSharedEncoding(tt::LoadOp op) {
-  // If used by an user with DotOp encoding, all the uses must be compatible.
-  bool incompatible = false;
-  getSharedEncIfAllUsersAreDotEnc(op.getResult(), incompatible);
-  return !incompatible;
-}
-
-bool triton::isPipeliningBeneficial(
-    Operation *op, tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
-    bool filterSmall) {
-  if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-    if (filterSmall && !canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis)) {
-      LDBG("Load " << *loadOp << " is too small for pipelining");
-      return false;
-    }
-  }
-  if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
-    return true;
-  if (!canHaveSharedEncoding(cast<tt::LoadOp>(op))) {
-    LDBG("Load " << *op << " cannot have shared encoding");
-    return false;
-  }
-
-  if (auto localAllocEnc = getSharedEncoding(op)) {
-    auto registerTy = cast<RankedTensorType>(op->getResultTypes()[0]);
-    auto vecBytes = mlir::triton::getCopyVecBytes(registerTy, localAllocEnc);
-    if (filterSmall && vecBytes < 4) {
-      // At least 4 bytes need to be consecutive for cp.async
-      return false;
-    }
-  }
-
-  return true;
 }

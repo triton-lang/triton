@@ -211,8 +211,8 @@ struct DotOpMFMAConversionHelper {
         } else {
           auto multiplierAttr =
               rewriter.getFloatAttr(dstElemTy, 1.0 / duplicationRate);
-          auto multiplierVal =
-              rewriter.create<LLVM::ConstantOp>(loc, dstElemTy, multiplierAttr);
+          auto multiplierVal = LLVM::ConstantOp::create(
+              rewriter, loc, dstElemTy, multiplierAttr);
           accElem = tb.fmul(accElem, multiplierVal);
         }
       }
@@ -734,9 +734,9 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
           for (int n = 0; n < numRepN; ++n) {
             // Insert pingpong cluster barrier when needed.
             if (is2Step && currIter++ == halfPoint) {
-              rewriter.create<ROCDL::SchedBarrier>(loc, 0);
-              rewriter.create<ROCDL::SBarrierOp>(loc);
-              rewriter.create<ROCDL::SchedBarrier>(loc, 0);
+              ROCDL::SchedBarrier::create(rewriter, loc, 0);
+              ROCDL::SBarrierOp::create(rewriter, loc);
+              ROCDL::SchedBarrier::create(rewriter, loc, 0);
             }
             Value acc = tb.undef(vecTy);
             for (unsigned v = 0; v < elemsPerVec; ++v) {

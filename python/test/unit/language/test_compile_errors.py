@@ -489,3 +489,23 @@ def test_err_constexpr_and_do_not_specialize():
 
     with pytest.raises(CompilationError, match="N marked as constexpr and listed in do_not_specialize"):
         kernel[(1, )](5)
+
+
+def test_dot_scaled_shape_verification(fresh_triton_cache):
+
+    @triton.jit
+    def kernel():
+        M: tl.constexpr = 32
+        K: tl.constexpr = 64
+        N: tl.constexpr = 32
+        a = tl.full((M, K), 0, tl.uint8)
+        b = tl.full((K, N), 0, tl.uint8)
+        lhs_scale_wrong = tl.full((M, 4), 0, tl.uint8)
+        rhs_scale = tl.full((N, 2), 0, tl.uint8)
+        acc = tl.full((M, N), 0.0, tl.float32)
+        tl.dot_scaled(a, lhs_scale_wrong, "e5m2", b, rhs_scale, "e5m2", acc, False, True, True, tl.float32)
+
+    with pytest.raises(CompilationError) as e:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
+
+    assert str(e.value.__cause__) == "lhs_scale must be a tensor of shape [32, 2]. Got ['32', '4']"

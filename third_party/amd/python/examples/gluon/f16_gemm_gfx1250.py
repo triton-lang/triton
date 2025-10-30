@@ -19,7 +19,6 @@ class PersistentTileScheduler:
     pid_end: ttgl.tensor
     num_pid_m: ttgl.tensor
 
-    @gluon.constexpr_function
     def __init__(self, pid_start, pid_end, num_pid_m):
         self.pid_start = pid_start
         self.pid_end = pid_end

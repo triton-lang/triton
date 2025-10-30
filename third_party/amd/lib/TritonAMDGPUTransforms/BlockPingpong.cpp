@@ -174,8 +174,8 @@ void Pingponger::appendSlicedLoadAB(int slice) {
 SmallVector<Operation *> Pingponger::genClusterBarrier(OpBuilder &builder,
                                                        Location loc) {
   //  MembarAnalysis can recognize gpu::BarrierOp and skip inserting additional
-  auto barrierOp = builder.create<gpu::BarrierOp>(loc);
-  auto schedBarrierOp = builder.create<ROCDL::SchedBarrier>(loc, 0);
+  auto barrierOp = gpu::BarrierOp::create(builder, loc);
+  auto schedBarrierOp = ROCDL::SchedBarrier::create(builder, loc, 0);
   return {barrierOp, schedBarrierOp};
 }
 void Pingponger::appendClusterBarrier(OpBuilder &builder, Location loc) {
@@ -188,9 +188,9 @@ void Pingponger::prependClusterBarrier(OpBuilder &builder, Location loc) {
 }
 void Pingponger::appendOpWithPrio(OpBuilder &builder, Operation *op,
                                   Location loc) {
-  appendOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority));
+  appendOp(ROCDL::SetPrioOp::create(builder, loc, highPriority));
   appendOp(op);
-  appendOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority));
+  appendOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority));
 }
 
 // Determine if the given loop matches the basic pattern of a persistent GEMM.
@@ -386,17 +386,17 @@ void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
   auto dotLoc = dotOps[0]->getPrevNode();
   // sched barrier to prevent memory ops from cross but leave other ops to be
   // scheduled across the barrier.
-  auto preDotBar = builder.create<ROCDL::SchedBarrier>(loc, 1);
+  auto preDotBar = ROCDL::SchedBarrier::create(builder, loc, 1);
   updateOpInsertion(dotLoc);
   appendOp(preDotBar);
 
   // Memory cluster #0
   updateOpInsertion(lLoadOps[0]);
-  appendOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority));
+  appendOp(ROCDL::SetPrioOp::create(builder, loc, highPriority));
   moveOpAndPredecessorsUpSameBlock(gLoadOps[0]);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   moveOpAndPredecessorsUpSameBlock(lLoadOps[1]);
-  appendOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority));
+  appendOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority));
   moveOpAndPredecessorsUpSameBlock(gLoadOps[1]);
 
   // Dot cluster #0
@@ -448,11 +448,11 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
     for (int64_t off : offsets) {
       logicalOffsets.push_back(constOffsets[off]);
     }
-    Value newSmem = builder.create<ttg::MemDescSubsliceOp>(
-        v.getLoc(), subviewDescType, memDesc, logicalOffsets);
-    Value prefetchSlice = builder.create<ttg::LocalLoadOp>(
-        v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
-        newSmem);
+    Value newSmem = ttg::MemDescSubsliceOp::create(
+        builder, v.getLoc(), subviewDescType, memDesc, logicalOffsets);
+    Value prefetchSlice = ttg::LocalLoadOp::create(
+        builder, v.getLoc(),
+        RankedTensorType::get(shape, elementType, dotOperandEnc), newSmem);
     subviews.push_back(newSmem.getDefiningOp());
     slices.push_back(prefetchSlice.getDefiningOp());
   }
@@ -597,18 +597,18 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   // cycles, sched.barrier prevents backend from canceling the interleaved order
   updateOpInsertion(gLoadOps[1]);
   appendSlicedLoadAB(/*slice=*/0);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   appendOp(gLoadOps[0]);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   appendSlicedLoadAB(/*slice=*/1);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   appendOp(gLoadOps[1]);
   // The first cluster just fits into the two cluster pingpong and cannot
   // include wait of the local_load inserted by the gpu.barrier, using s.barrier
   // instead. backend will schedule the local memory fences later in the dot0
   // cluster.
-  appendOp(builder.create<ROCDL::SBarrierOp>(loc));
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SBarrierOp::create(builder, loc));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
 
   // dot0 (1/2)
   appendOpWithPrio(builder, dotSliceOps[0], loc);
@@ -655,9 +655,9 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
   for (auto glop : gLoadOps)
     moveOpAndPredecessorsUpSameBlock(glop);
 
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-  appendOp(builder.create<ROCDL::SBarrierOp>(loc));
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SBarrierOp::create(builder, loc));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
 
   // all other ops are placed in the second cluster
   // set unit attr, so it can trigger the second step in the ttg to llvm
@@ -697,39 +697,39 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   builder.setInsertionPointToStart(forOp.getBody());
   // ComputeCluster 1
   updateOpInsertion(dotOps[0]);
-  prependOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority), false);
+  prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
 
   // MemoryCluster 1
   updateOpInsertion(memoryClusterStartOps[0]);
-  prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
+  prependOp(ROCDL::SetPrioOp::create(builder, loc, highPriority), false);
   if (llvm::isa<ttg::AsyncWaitOp>(memoryClusterStartOps[0])) {
     // Only append a sched barrier because membar adds a barrier after asyncwait
-    appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+    appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   } else {
-    prependOp(builder.create<gpu::BarrierOp>(loc), false);
-    prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
+    prependOp(gpu::BarrierOp::create(builder, loc), false);
+    prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
   }
 
   // ComputeCluster2
   updateOpInsertion(dotOps[1]);
-  prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
-  prependOp(builder.create<ROCDL::SBarrierOp>(loc), false);
-  prependOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
+  prependOp(ROCDL::SBarrierOp::create(builder, loc), false);
+  prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
 
   // MemoryCluster2
   updateOpInsertion(memoryClusterStartOps[1]);
-  prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
+  prependOp(ROCDL::SetPrioOp::create(builder, loc, highPriority), false);
   if (llvm::isa<ttg::AsyncWaitOp>(memoryClusterStartOps[1])) {
     // Only append a sched barrier because membar adds a barrier after asyncwait
-    appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+    appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   } else {
-    prependOp(builder.create<gpu::BarrierOp>(loc), false);
-    prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
+    prependOp(gpu::BarrierOp::create(builder, loc), false);
+    prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
   }
 
   updateOpInsertion(lastInsertedOp->getBlock()->getTerminator());
-  prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
-  prependOp(builder.create<ROCDL::SBarrierOp>(loc), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
+  prependOp(ROCDL::SBarrierOp::create(builder, loc), false);
 
   return success();
 }
@@ -757,7 +757,7 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
         tokens.push_back(token);
       }
     }
-    newAsyncWaitOp = builder.create<ttg::AsyncWaitOp>(loc, tokens, 0);
+    newAsyncWaitOp = ttg::AsyncWaitOp::create(builder, loc, tokens, 0);
     for (auto asyncWaitOp : asyncWaitOps) {
       asyncWaitOp.getResult().replaceAllUsesWith(newAsyncWaitOp.getResult());
       asyncWaitOp->erase();
@@ -767,7 +767,7 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
 
   moveOpAndPredecessorsUpSameBlock(lLoadOps[0]);
   moveOpAndPredecessorsUpSameBlock(lLoadOps[1]);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
 
   appendOp(asyncCopyOps[0]);
   appendOp(asyncCommitOps[0]);
@@ -775,25 +775,25 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
   // The last point we need to guarantee async_copy has been completed.
   // w0 : local_load 0 - Dot 0                 - local_load 1
   // w1 :              - local_load 0 (*wait 1)- Dot 0
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   appendOp(newAsyncWaitOp);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
 
   // Give hint to backend so it can interleave instructions better.
   // This tries to interleave 3 SALU instructions per each MFMA
-  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
-  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 4, 3, 0));
-  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
-  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 4, 3, 0));
-  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
+  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, 8, 1, 0));
+  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, 4, 3, 0));
+  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, 8, 1, 0));
+  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, 4, 3, 0));
+  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, 8, 1, 0));
 
   appendOp(asyncCopyOps[1]);
   appendOp(asyncCommitOps[1]);
   appendOp(dotOps[0]);
 
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-  appendOp(builder.create<ROCDL::SBarrierOp>(loc));
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SBarrierOp::create(builder, loc));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
 
   return success();
 }
@@ -807,26 +807,27 @@ void Pingponger::addAsymmetricSyncToLoop(OpBuilder &builder, Location loc) {
   // Set barrier before starting the loop. This resolves any remaining required
   // synchronization before beginning the specialized asymmetric
   // synchronization.
-  auto preBarrier = builder.create<gpu::BarrierOp>(loc);
+  auto preBarrier = gpu::BarrierOp::create(builder, loc);
   preBarrier->moveBefore(forOp);
   builder.setInsertionPointAfter(preBarrier);
 
   // Insert condbarrier::second_half before starting the loop
   auto i32ty = builder.getIntegerType(32);
-  auto workIDX = builder.create<ROCDL::ThreadIdXOp>(loc, i32ty);
-  auto constZero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-  auto constWarpSize = builder.create<arith::ConstantIntOp>(loc, 256, 32);
-  auto warpIDX = builder.create<arith::DivSIOp>(loc, workIDX, constWarpSize);
-  auto warpLow = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                               warpIDX, constZero);
-  auto warpHigh = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
-                                                warpIDX, constZero);
+  auto workIDX = ROCDL::ThreadIdXOp::create(builder, loc, i32ty);
+  auto constZero = arith::ConstantIntOp::create(builder, loc, 0, 32);
+  auto constWarpSize = arith::ConstantIntOp::create(builder, loc, 256, 32);
+  auto warpIDX = arith::DivSIOp::create(builder, loc, workIDX, constWarpSize);
+  auto warpLow = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
+                                       warpIDX, constZero);
+  auto warpHigh = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne,
+                                        warpIDX, constZero);
   auto condBarrierHigh =
-      builder.create<tt::amdgpu::CondBarrierOp>(loc, warpHigh);
+      tt::amdgpu::CondBarrierOp::create(builder, loc, warpHigh);
 
   // Insert condbarrier::first_half after the end of the loop
   builder.setInsertionPointAfter(forOp);
-  auto condBarrierLow = builder.create<tt::amdgpu::CondBarrierOp>(loc, warpLow);
+  auto condBarrierLow =
+      tt::amdgpu::CondBarrierOp::create(builder, loc, warpLow);
 }
 
 void Pingponger::getDotPingponged() {

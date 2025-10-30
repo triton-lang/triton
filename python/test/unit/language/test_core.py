@@ -2748,6 +2748,23 @@ def test_histogram(M, N, device):
     assert (z_torch == z).all()
 
 
+@pytest.mark.interpreter
+def test_histogram_silent_data_corruption(device):
+
+    @triton.jit
+    def histogram_kernel(x_ptr, z_ptr):
+        offset = tl.arange(0, 1)
+        x = tl.load(x_ptr + offset)
+        z = tl.histogram(x, 1)
+        tl.store(z_ptr + offset, z)
+
+    x = torch.ones(1, device=device, dtype=torch.int32)
+    z = torch.ones(2, device=device, dtype=torch.int32)
+
+    histogram_kernel[(1, )](x, z)
+    assert z[1] == 1, f"Second element shouldn't be affected, expected_buffer=[1, 1], actual_buffer={z}"
+
+
 # ------------------------
 # test histogram with mask
 # ------------------------
@@ -6617,3 +6634,40 @@ def test_tensor_member(device):
         tl.device_assert(tl.sum(x) == x.sum())
 
     kernel[(1, )]()
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("rank", [2, 3, 4, 5, 6])
+@pytest.mark.parametrize("trans_a", [False, True])
+@pytest.mark.parametrize("trans_b", [False, True])
+def test_dot_multidim(rank, trans_a, trans_b, device):
+
+    if is_interpreter():
+        pytest.skip("bfloat16 is not supported in the interpreter")
+
+    @triton.jit
+    def kernel(X, Y, Z, RANK: tl.constexpr, TRANS_A: tl.constexpr, TRANS_B: tl.constexpr):
+        x = tl.load(X + tl.arange(0, 256 << RANK)).reshape([2] * (RANK - 2) + [32, 32])
+        y = tl.load(Y + tl.arange(0, 256 << RANK)).reshape([2] * (RANK - 2) + [32, 32])
+        if TRANS_A:
+            x = tl.trans(x)
+        if TRANS_B:
+            y = tl.trans(y)
+        z = tl.dot(x, y)
+        tl.store(Z + tl.arange(0, 256 << RANK), z.reshape([256 << RANK]))
+
+    shape = (2, ) * (rank - 2) + (32, 32)
+
+    a = torch.randint(-4, 5, shape, dtype=torch.bfloat16, device=device)
+    b = torch.randint(-4, 5, shape, dtype=torch.bfloat16, device=device)
+    c = torch.empty(shape, dtype=torch.float32, device=device)
+    kernel[(1, )](a, b, c, rank, trans_a, trans_b)
+
+    if trans_a:
+        a = torch.transpose(a, -1, -2)
+    if trans_b:
+        b = torch.transpose(b, -1, -2)
+
+    d = a.to(torch.float32) @ b.to(torch.float32)
+
+    assert torch.equal(c, d)
