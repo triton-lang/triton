@@ -3171,23 +3171,23 @@ def tmem_constexpr():
 
 def test_auto_layout_convert_store_val():
 
-  @gluon.jit
-  def kernel(out_ptr,  #
-                      XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
-      blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [32, 1], [2,2], [1, 0])
-      indices_x =  ttgl.arange(0, XBLOCK)
-      indices_y = ttgl.arange(0, YBLOCK)
-      out_offsets = indices_x[:, None] + indices_y[None, :]
-      mask = (indices_x[:, None] < 100) & (indices_y[None, :] < 200)
-      out_ptrs = ttgl.set_auto_layout(out_ptr + out_offsets, blocked)
-      value = ttgl.full([XBLOCK, YBLOCK], 0, dtype=ttgl.float32, layout=ttgl.AutoLayout())
-      ttgl.store(out_ptrs, value, mask=mask)
-    
-  XBLOCK = 128
-  YBLOCK = 256
-  output = MockTensor(ttgl.float32)
-  module = run_parser(kernel, *make_args(output, XBLOCK, YBLOCK))
-  expecttest.assert_expected_inline(
+    @gluon.jit
+    def kernel(out_ptr,  #
+               XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [32, 1], [2, 2], [1, 0])
+        indices_x = ttgl.arange(0, XBLOCK)
+        indices_y = ttgl.arange(0, YBLOCK)
+        out_offsets = indices_x[:, None] + indices_y[None, :]
+        mask = (indices_x[:, None] < 100) & (indices_y[None, :] < 200)
+        out_ptrs = ttgl.set_auto_layout(out_ptr + out_offsets, blocked)
+        value = ttgl.full([XBLOCK, YBLOCK], 0, dtype=ttgl.float32, layout=ttgl.AutoLayout())
+        ttgl.store(out_ptrs, value, mask=mask)
+
+    XBLOCK = 128
+    YBLOCK = 256
+    output = MockTensor(ttgl.float32)
+    module = run_parser(kernel, *make_args(output, XBLOCK, YBLOCK))
+    expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
@@ -3223,24 +3223,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 }
 """)
 
+
 def test_auto_layout_convert_store_ptr():
 
-  @gluon.jit
-  def kernel(out_ptr,  #
-                      XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
-      blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [32, 1], [2,2], [1, 0])
-      indices_x =  ttgl.arange(0, XBLOCK)
-      indices_y = ttgl.arange(0, YBLOCK)
-      out_offsets = indices_x[:, None] + indices_y[None, :]
-      mask = (indices_x[:, None] < 100) & (indices_y[None, :] < 200)
-      value = ttgl.full([XBLOCK, YBLOCK], 0, dtype=ttgl.float32, layout=blocked)
-      ttgl.store(out_ptr + out_offsets, value, mask=mask)
+    @gluon.jit
+    def kernel(out_ptr,  #
+               XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [32, 1], [2, 2], [1, 0])
+        indices_x = ttgl.arange(0, XBLOCK)
+        indices_y = ttgl.arange(0, YBLOCK)
+        out_offsets = indices_x[:, None] + indices_y[None, :]
+        mask = (indices_x[:, None] < 100) & (indices_y[None, :] < 200)
+        value = ttgl.full([XBLOCK, YBLOCK], 0, dtype=ttgl.float32, layout=blocked)
+        ttgl.store(out_ptr + out_offsets, value, mask=mask)
 
-  XBLOCK = 128
-  YBLOCK = 256
-  output = MockTensor(ttgl.float32)
-  module = run_parser(kernel, *make_args(output, XBLOCK, YBLOCK))
-  expecttest.assert_expected_inline(
+    XBLOCK = 128
+    YBLOCK = 256
+    output = MockTensor(ttgl.float32)
+    module = run_parser(kernel, *make_args(output, XBLOCK, YBLOCK))
+    expecttest.assert_expected_inline(
         anonymize_ir(module.str_nodebug()), """\
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {

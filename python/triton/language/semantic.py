@@ -1256,9 +1256,6 @@ class TritonSemantic(Generic[TensorTy]):
 
         # Make `mask` and `val` into the same shape as `ptr`
         if ptr.type.is_block():
-            # if mask is not None:
-            #     ptr, mask = self.broadcast_impl_value(ptr, mask)
-            # val = self.broadcast_impl_shape(val, ptr.type.get_block_shapes())
             if val is not None:
                 ptr, val = self.broadcast_impl_value(ptr, val)
             if mask is not None:
