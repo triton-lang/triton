@@ -74,8 +74,9 @@ struct LayoutInfo {
   operator bool() { return bool(encoding); }
 };
 
- 
-LogicalResult inferEfficientLayouts(FuncOp func, llvm::MapVector<Operation *, Attribute> &layoutMap) {
+LogicalResult
+inferEfficientLayouts(FuncOp func,
+                      llvm::MapVector<Operation *, Attribute> &layoutMap) {
   // Disallow efficient encoding accross function call boundaries
   for (auto argTy : func.getArgumentTypes()) {
     if (isEfficientEncodingTensorType(argTy)) {
@@ -122,11 +123,12 @@ LogicalResult inferEfficientLayouts(FuncOp func, llvm::MapVector<Operation *, At
     if (layoutMap.find(op) == layoutMap.end())
       return WalkResult::advance();
     Attribute layout = layoutMap[op];
-    return updateEncoding(llvm::to_vector_of<Value>(op->getOperands()), LayoutInfo{layout, false});
+    return updateEncoding(llvm::to_vector_of<Value>(op->getOperands()),
+                          LayoutInfo{layout, false});
   });
   if (res.wasInterrupted())
     return failure();
-  
+
   // 2. Propagate encodings through the graph until fixed point, or conflict
   while (!worklist.empty()) {
     auto val = worklist.pop_back_val();
@@ -148,7 +150,7 @@ LogicalResult inferEfficientLayouts(FuncOp func, llvm::MapVector<Operation *, At
       } else if (isa<gluon::SetAutoLayoutOp>(op)) {
         // here users set efficient layout back to some layout,
         // should not happen
-        return failure(); 
+        return failure();
       } else {
         auto dstEnc = inferDstEncoding(op, info.encoding);
         if (dstEnc) {
@@ -214,7 +216,9 @@ LogicalResult inferEfficientLayouts(FuncOp func, llvm::MapVector<Operation *, At
   return success();
 }
 
-LogicalResult inferEfficientLayouts(ModuleOp &mod, llvm::MapVector<Operation *, Attribute> &layoutMap) {
+LogicalResult
+inferEfficientLayouts(ModuleOp &mod,
+                      llvm::MapVector<Operation *, Attribute> &layoutMap) {
   for (auto &op : *mod.getBody()) {
     auto func = dyn_cast<FuncOp>(&op);
     if (!func)
@@ -239,9 +243,9 @@ class GluonInferEfficientEncodingsPass
 
     LDBG("Considering op: " << *op);
     LLVM_DEBUG({
-        DBGS() << "axis info of pointer: ";
-        axisInfoAnalysis.getAxisInfo(ptr)->print(llvm::dbgs());
-        llvm::dbgs() << "\n";
+      DBGS() << "axis info of pointer: ";
+      axisInfoAnalysis.getAxisInfo(ptr)->print(llvm::dbgs());
+      llvm::dbgs() << "\n";
     });
 
     auto contiguity = axisInfoAnalysis.getAxisInfo(ptr)->getContiguity();
@@ -327,7 +331,8 @@ class GluonInferEfficientEncodingsPass
 
   //
   // triton coalesce results for reference:
-  // ./build/cmake.linux-x86_64-cpython-3.12/bin/triton-opt --tritongpu-coalesce custom_bench/tt_coalesc.mlir -debug-only tritongpu-coalesce > tmp.mlir
+  // ./build/cmake.linux-x86_64-cpython-3.12/bin/triton-opt --tritongpu-coalesce
+  // custom_bench/tt_coalesc.mlir -debug-only tritongpu-coalesce > tmp.mlir
   //
   void runOnOperation() override {
     // Run axis info analysis
