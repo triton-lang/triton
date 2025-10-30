@@ -130,8 +130,8 @@ def init_precision(out_dtype, act_use_flexpoint, weight_dtype, weight_mxfp, mode
         ) if weight_use_flexpoint else InFlexData(),
         out_data=OutFlexData(
             dtype=out_dtype,
-            expected_scale=make(4.00, 5.00, mode == "batched" or expt_is_inner),
-            actual_scale=make(0, 0, mode == "batched" or expt_is_inner),
+            expected_scale=make_scalar(4.00),
+            actual_scale=make_scalar(0),
             checksum_scale=None,
         ) if act_use_flexpoint else OutFlexData(),
     )
@@ -776,8 +776,8 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
                    precision_config=SwiGLUPrecisionConfig(swiglu_limit))
         b = matmul_ogs(
             x, w, bias, rdata, gindx, sindx, precision_opt,
-            fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit")),
-                                             (swiglu_alpha, swiglu_limit), 2))
+            fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
+                                             (swiglu_alpha, swiglu_limit)))
     except opt_flags.InapplicableConstraint:
         pytest.skip("inapplicable constraint")
 

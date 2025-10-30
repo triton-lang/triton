@@ -3157,3 +3157,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 """)
+
+
+@filecheck_test
+def tmem_constexpr():
+    tmem_shape: ttgl.constexpr = (64, 64)
+    bitwidth: ttgl.constexpr = 32
+    tmem_layout: ttgl.constexpr = TensorMemoryLayout(tmem_shape, col_stride=32 // bitwidth)
+
+    # CHECK-NOT: constexpr
+    anchor_noinline(tmem_layout)
