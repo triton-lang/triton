@@ -1,3 +1,4 @@
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -80,7 +81,7 @@ SmallVector<unsigned> warpsPerTileV2(DotOpInterface dotOp,
     return op->getParentRegion() == dotOp->getParentRegion() &&
            !isa<TransOp>(op);
   };
-  auto slices = multiRootGetSlice(dotOp, {filter}, {filter});
+  auto slices = mlir::getSlice(dotOp, {filter}, {filter});
   bool hasChainedDot = false;
   for (Operation *op : slices) {
     if (isa<DotOp, DotScaledOp>(op) && (op != dotOp)) {
