@@ -49,61 +49,13 @@ ttg::CTALayoutAttr getCTALayout(mlir::MLIRContext *ctx, unsigned rank) {
   return ttg::CTALayoutAttr::getDefault(ctx, rank);
 }
 
-RankedTensorType toInferred(RankedTensorType rt, Attribute inferredLayout) {
-  auto *ctx = rt.getContext();
-  return RankedTensorType::get(rt.getShape(), rt.getElementType(), inferredLayout);
-}
-
-Value convertOne(Value v, OpBuilder &b, Location loc, Attribute inferredLayout) {
-  if (auto rt = dyn_cast<RankedTensorType>(v.getType())) {
-    if (rt.getEncoding() && isa<gluon::AutoEncodingAttr>(rt.getEncoding())) {
-      auto resType = toInferred(rt, inferredLayout);
-      return b.create<gluon::SetAutoLayoutOp>(loc, resType, v);
-    }
-  }
-  return v;
-}
-
-void rewriteInferredEncodings(Operation* op, Attribute inferredLayout) {
-  // Insert all new ops immediately before the load.
-  OpBuilder builder(op);
-  Location loc = op->getLoc();
-
-  bool changed = false;
-  SmallVector<Value, 8> newOperands;
-  newOperands.reserve(op->getNumOperands());
-
-  // For *every* operand of the load, convert auto->inferred
-  for (Value operand : op->getOperands()) {
-    Value maybeNew = convertOne(operand, builder, loc, inferredLayout);
-    newOperands.push_back(maybeNew);
-    changed |= (maybeNew != operand);
-  }
-
-  if (!changed)
-    return;
-
-  // Wire the operands in-place 
-  for (auto it : llvm::enumerate(newOperands))
-    op->setOperand(it.index(), it.value());
-
-  // Finally, convert the result types 
-  for (auto result : op->getResults()) {
-    if (auto rt = dyn_cast<RankedTensorType>(result.getType())) {
-      if (rt.getEncoding()) {
-        assert(isa<gluon::AutoEncodingAttr>(rt.getEncoding()) &&
-               "Expected auto encoding");
-        auto newType = toInferred(rt, inferredLayout);
-        result.setType(newType);
-      }
-    }
-  }
-}
-
-
 ///
 /// Propagation
 ///
+bool encodingsMayVary(Operation *op) {
+  return isa<triton::JoinOp, triton::SplitOp, triton::ReshapeOp, triton::CatOp,
+             triton::TransOp>(op);
+}
 
 bool isEfficientEncodingTensorType(Type ty) {
   auto tensorTy = dyn_cast<RankedTensorType>(ty);
@@ -139,21 +91,27 @@ LogicalResult inferEfficientLayouts(FuncOp func, llvm::MapVector<Operation *, At
 
   llvm::MapVector<Value, LayoutInfo> valueToEncoding;
   llvm::PriorityWorklist<Value> worklist;
-  llvm::MapVector<Attribute, uint64_t> hashMemo;
+  // llvm::MapVector<Attribute, uint64_t> hashMemo;
 
   auto updateEncoding = [&](ArrayRef<Value> values,
                             LayoutInfo info) -> LogicalResult {
     for (auto value : values) {
       auto [it, inserted] = valueToEncoding.insert({value, info});
       if (!inserted) {
+        auto old = it->second;
+        LLVM_DEBUG({
+          DBGS() << "Combining encoding for value:\n\t" << value << "\n";
+          DBGS() << "  Existing encoding:\n\t" << old.encoding << "\n";
+          DBGS() << "  New encoding:\n\t" << info.encoding << "\n";
+        });
+        if (old.encoding == info.encoding)
+          continue;
         return failure(); // TODO: resolve conflict??
       }
-      // LLVM_DEBUG({
-      //   DBGS() << "Setting value:\n\t" << value << "\nto encoding:\n\t"
-      //          << it->second.encoding << "\n";
-      // });
-      llvm::outs() << "Setting value:\n\t" << value << "\nto encoding:\n\t"
-                   << it->second.encoding << "\n";
+      LLVM_DEBUG({
+        DBGS() << "Setting value:\n\t" << value << "\nto encoding:\n\t"
+               << it->second.encoding << "\n";
+      });
       worklist.insert(value);
     }
     return success();
@@ -164,27 +122,82 @@ LogicalResult inferEfficientLayouts(FuncOp func, llvm::MapVector<Operation *, At
     if (layoutMap.find(op) == layoutMap.end())
       return WalkResult::advance();
     Attribute layout = layoutMap[op];
-    if (failed(updateEncoding(llvm::to_vector_of<Value>(op->getOperands()), LayoutInfo{layout, false})))
-      return WalkResult::interrupt();
+    return updateEncoding(llvm::to_vector_of<Value>(op->getOperands()), LayoutInfo{layout, false});
   });
   if (res.wasInterrupted())
     return failure();
   
-  llvm::outs() << "Starting propagation...\n" << worklist.size() << " items in worklist.\n";
-
   // 2. Propagate encodings through the graph until fixed point, or conflict
   while (!worklist.empty()) {
     auto val = worklist.pop_back_val();
     auto info = valueToEncoding[val];
     assert(info);
+
+    // Propagate to users
+    for (OpOperand &use : val.getUses()) {
+      auto op = use.getOwner();
+      if (isa<scf::ForOp, scf::WhileOp>(op)) {
+        auto offset = 3 * isa<scf::ForOp>(op);
+        auto tiedArgs = getTiedArgs(op, use.getOperandNumber() - offset);
+        if (failed(updateEncoding(tiedArgs, info)))
+          return failure();
+      } else if (isa<scf::YieldOp>(op)) {
+        auto tiedArgs = getTiedArgs(op, use.getOperandNumber());
+        if (failed(updateEncoding(tiedArgs, info)))
+          return failure();
+      } else if (isa<gluon::SetAutoLayoutOp>(op)) {
+        // here users set efficient layout back to some layout,
+        // should not happen
+        return failure(); 
+      } else {
+        auto dstEnc = inferDstEncoding(op, info.encoding);
+        if (dstEnc) {
+          bool mayVary = info.mayVary || encodingsMayVary(op);
+          LayoutInfo dstInfo{dstEnc, mayVary};
+          if (failed(updateEncoding(llvm::to_vector_of<Value>(op->getResults()),
+                                    dstInfo)))
+            return failure();
+        }
+      }
+    }
+
+    // Propagate to defining ops
+    if (auto opResult = dyn_cast<OpResult>(val)) {
+      auto definingOp = opResult.getOwner();
+      if (isa<scf::ForOp, scf::WhileOp, scf::IfOp>(definingOp)) {
+        auto tiedArgs = getTiedArgs(definingOp, opResult.getResultNumber());
+        if (failed(updateEncoding(tiedArgs, info)))
+          return failure();
+      } else {
+        auto srcEncoding = inferSrcEncoding(definingOp, info.encoding);
+        if (srcEncoding) {
+          bool mayVary = info.mayVary || encodingsMayVary(definingOp);
+          LayoutInfo srcInfo{srcEncoding, mayVary};
+          llvm::SmallVector<Value> tensorOperands;
+          for (auto operand : definingOp->getOperands())
+            if (isa<RankedTensorType>(operand.getType()))
+              tensorOperands.push_back(operand);
+
+          if (failed(updateEncoding(tensorOperands, srcInfo)))
+            return failure();
+        }
+      }
+    } else if (auto blockArg = dyn_cast<BlockArgument>(val)) {
+      auto parentOp = blockArg.getOwner()->getParentOp();
+      if (isa<scf::ForOp, scf::WhileOp>(parentOp)) {
+        auto offset = isa<scf::ForOp>(parentOp);
+        auto tiedArgs = getTiedArgs(parentOp, blockArg.getArgNumber() - offset);
+        if (failed(updateEncoding(tiedArgs, info)))
+          return failure();
+      }
+    }
   }
 
   // 3. Transfer propagated encodings into the graph
   auto ctx = func.getContext();
   for (auto &[val, info] : valueToEncoding) {
     auto existingTy = cast<RankedTensorType>(val.getType());
-    assert(isa<gluon::AutoEncodingAttr>(existingTy.getEncoding()) ||
-           isa<gluon::EfficientEncodingAttr>(existingTy.getEncoding()));
+    assert(isa<gluon::EfficientEncodingAttr>(existingTy.getEncoding()));
     auto ty = existingTy.cloneWithEncoding(info.encoding);
     val.setType(ty);
 
@@ -197,19 +210,11 @@ LogicalResult inferEfficientLayouts(FuncOp func, llvm::MapVector<Operation *, At
       }
     }
   }
-
-  // 4. Cleanup set_auto_layout ops
-  func.walk([&](gluon::SetAutoLayoutOp op) {
-    assert(op.getSrc().getType() == op.getType());
-    op.getResult().replaceAllUsesWith(op.getSrc());
-    op->erase();
-  });
-
+  // rest of the auto encoding will be handled in ResolveAutoEncodings pass
   return success();
 }
 
 LogicalResult inferEfficientLayouts(ModuleOp &mod, llvm::MapVector<Operation *, Attribute> &layoutMap) {
-    
   for (auto &op : *mod.getBody()) {
     auto func = dyn_cast<FuncOp>(&op);
     if (!func)
@@ -232,22 +237,16 @@ class GluonInferEfficientEncodingsPass
     Value ptr = getMemAccessPtr(op);
     auto refTensorType = cast<RankedTensorType>(ptr.getType());
 
-    // LDBG("Considering op: " << *op);
-    // LLVM_DEBUG({
-    //     DBGS() << "axis info of pointer: ";
-    //     axisInfoAnalysis.getAxisInfo(ptr)->print(llvm::dbgs());
-    //     llvm::dbgs() << "\n";
-    // });
-    llvm::outs() << "\n";
-    llvm::outs() << "Considering op: " << *op << "\n";
-    llvm::outs() << "axis info of pointer: ";
-    axisInfoAnalysis.getAxisInfo(ptr)->print(llvm::outs());
-    llvm::outs() << "\n";
+    LDBG("Considering op: " << *op);
+    LLVM_DEBUG({
+        DBGS() << "axis info of pointer: ";
+        axisInfoAnalysis.getAxisInfo(ptr)->print(llvm::dbgs());
+        llvm::dbgs() << "\n";
+    });
 
     auto contiguity = axisInfoAnalysis.getAxisInfo(ptr)->getContiguity();
     SmallVector<unsigned> order = getOrderFromContiguity(contiguity);
-    // LDBG("order=[" << triton::join(order, ", ") << "]");
-    llvm::outs() << "order=[" << triton::join(order, ", ") << "]\n";
+    LDBG("order=[" << triton::join(order, ", ") << "]");
 
     auto matchesShape = [&refTensorType](const Value &val) {
       auto rttType = dyn_cast<RankedTensorType>(val.getType());
@@ -266,9 +265,7 @@ class GluonInferEfficientEncodingsPass
         auto currOrder = getOrderFromContiguity(
             axisInfoAnalysis.getAxisInfo(val)->getContiguity());
         if (order == currOrder) {
-          // LDBG("multi-root-slice: insert to memAccessesSameOrder " << *use);
-          llvm::outs() << "multi-root-slice: insert to memAccessesSameOrder "
-                       << *use << "\n";
+          LDBG("multi-root-slice: insert to memAccessesSameOrder " << *use);
           memAccessesSameOrder.insert(use);
         }
       }
@@ -284,30 +281,26 @@ class GluonInferEfficientEncodingsPass
         ttg::getShapePerCTA(ctaSplitNum, refTensorType.getShape());
     // auto shapePerCTA = ttg::getShapePerCTA(refTensorType);
 
-    // LDBG("shapePerCTA=[" << triton::join(shapePerCTA, ", ") << "]");
-    llvm::outs() << "shapePerCTA=[" << triton::join(shapePerCTA, ", ") << "]\n";
+    LDBG("shapePerCTA=[" << triton::join(shapePerCTA, ", ") << "]");
 
     int numElems = product<int64_t>(shapePerCTA);
     int numThreads = numWarps * threadsPerWarp;
 
     unsigned perThread =
         getNumElementsPerThread(op, order, axisInfoAnalysis, shapePerCTA);
-    // LDBG("perThread for op: " << perThread);
-    llvm::outs() << "perThread for op: " << perThread << "\n";
+    LDBG("perThread for op: " << perThread);
 
     for (Operation *opSameOrder : memAccessesSameOrder) {
       if (opSameOrder == op)
         continue;
       unsigned currPerThread = getNumElementsPerThread(
           opSameOrder, order, axisInfoAnalysis, shapePerCTA);
-      // LDBG("perThread for opSameOrder: " << currPerThread);
-      llvm::outs() << "perThread for opSameOrder: " << currPerThread << "\n";
+      LDBG("perThread for opSameOrder: " << currPerThread);
       perThread = std::max(perThread, currPerThread);
     }
 
     perThread = std::min<int>(perThread, std::max(numElems / numThreads, 1));
-    // LDBG("perThread: " << perThread);
-    llvm::outs() << "perThread: " << perThread << "\n";
+    LDBG("perThread: " << perThread);
 
     if (!dyn_cast<triton::LoadOp>(op)) {
       // For ops that can result in a global memory write, we should enforce
@@ -337,32 +330,15 @@ class GluonInferEfficientEncodingsPass
   // ./build/cmake.linux-x86_64-cpython-3.12/bin/triton-opt --tritongpu-coalesce custom_bench/tt_coalesc.mlir -debug-only tritongpu-coalesce > tmp.mlir
   //
   void runOnOperation() override {
-
     // Run axis info analysis
     ModuleOp moduleOp = getOperation();
     ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
-
-    // llvm::outs() << "\n";
-    // llvm::outs() << "\n";
-    // llvm::outs() << "\n";
-    // llvm::outs() << "[AXIS INFO ANALYSIS RESULT]:\n";
-    // for (auto &funcEntry : axisInfoAnalysis.funcMap) {
-    //   llvm::outs() << "Function: " << funcEntry.first << "\n";
-    //   for (auto &axisEntry : funcEntry.second) {
-    //     llvm::outs() << "  Value: " << axisEntry.first << "\n";
-    //     axisEntry.second.print(llvm::outs());
-    //     llvm::outs() << "\n";
-    //   }
-    // }
-    // llvm::outs() << "[END] Axis Info Analysis Result\n";
-    // llvm::outs() << "\n";
 
     // 0. for every load/store with efficient encoding,
     // infer efficient encoding for ptrs
     //
     // similar to Coalesce.cpp
     //
-
     llvm::MapVector<Operation *, Attribute> layoutMap;
     int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
     moduleOp.walk([&](Operation *curr) {
@@ -375,7 +351,6 @@ class GluonInferEfficientEncodingsPass
         isPtrTensor = isa<PointerType>(tensorType.getElementType());
       if (!isPtrTensor)
         return;
-
       // we only consider those with efficient encoding
       if (auto tensorType = dyn_cast<RankedTensorType>(ptr.getType())) {
         auto encoding = tensorType.getEncoding();
@@ -388,162 +363,39 @@ class GluonInferEfficientEncodingsPass
                            layoutMap);
     });
 
-    llvm::outs() << "\n";
-    llvm::outs() << "[INFERRED LAYOUTS]:\n";
-    for (auto &pair : layoutMap) {
-      Operation *op = pair.first;
-      Attribute layout = pair.second;
-      llvm::outs() << "inferred layout for op: " << *op << "\n";
-      layout.print(llvm::outs());
-      llvm::outs() << "\n";
-    }
-    llvm::outs() << "[END] Inferred layouts:\n";
-    llvm::outs() << "\n";
-    llvm::outs() << "\n";
-
     // TODO: descriptor load/store??
-
-
-
 
     // 2. propagate forward/backward
     //
     // Do layout inference
     // similar to ResolveAutoLayoutPass.cpp
     //
-    //if (failed(inferEfficientLayouts(moduleOp, layoutMap)))
-    //  return signalPassFailure();
+    if (failed(inferEfficientLayouts(moduleOp, layoutMap)))
+      return signalPassFailure();
 
-
-    // 1. for gluon.set_auto_layout ops, if it set to efficient encoding, erase it
-    //    and set the operand to the result
-    moduleOp.walk([&](gluon::SetAutoLayoutOp op) {
-      auto layout = op.getType().getEncoding();
-      if (!layout || !isa<gluon::EfficientEncodingAttr>(layout))
-        return;
-      llvm::outs() << "Erasing set_auto_layout op: " << *op << "\n";
-      op.getResult().replaceAllUsesWith(op.getSrc());
-      op->erase();
-    });
-    llvm::outs() << "\n";
-    llvm::outs() << "[ERASE set_auto_layout]:\n";
-    moduleOp.print(llvm::outs());
-    llvm::outs() << "\n";
-    llvm::outs() << "[END] REWRITE\n";
-
-    // 2. for operation with an efficient encoding, rewrite to auto encoding
-    // so that ResolveLayoutPass can propogate
-    //
-    moduleOp.walk([&](Operation *op) {
-      // we will handle the inferred ones in the next step
-      if (layoutMap.find(op) != layoutMap.end())
-        return;
-
-      for (auto result : op->getResults()) {
-        auto tensorType = dyn_cast<RankedTensorType>(result.getType());
-        if (!tensorType)
-          continue;
-        auto encoding = tensorType.getEncoding();
-        if (!encoding || !isa<gluon::EfficientEncodingAttr>(encoding))
-          continue;
-        // rewrite to auto encoding
-        auto newType = tensorType.cloneWithEncoding(
-            gluon::AutoEncodingAttr::get(&getContext()));
-        result.setType(newType);
-        llvm::outs() << "Rewrote result type to auto encoding for op: " << *op
-                     << "\n";
-      }
-      for (auto operand : op->getOperands()) {
-        auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
-        if (!tensorType)
-          continue;
-        auto encoding = tensorType.getEncoding();
-        if (!encoding || !isa<gluon::EfficientEncodingAttr>(encoding))
-          continue;
-        // rewrite to auto encoding
-        auto newType = tensorType.cloneWithEncoding(
-            gluon::AutoEncodingAttr::get(&getContext()));
-        operand.setType(newType);
-        llvm::outs() << "Rewrote operand type to auto encoding for op: " << *op
-                     << "\n";
-      }
-
-      // for arith.constant ops, need to rewrite its attribute
-      if (auto cst = dyn_cast<arith::ConstantOp>(op)) {
-        Attribute attr = cst.getValue();                        
-        auto elems = dyn_cast<ElementsAttr>(attr);
-        if (!elems) return;
-        auto splat = dyn_cast<SplatElementsAttr>(elems);
-        if (!splat) return; 
-        auto rttType = dyn_cast<RankedTensorType>(splat.getType());
-        if (!rttType) return;
-
-        auto enc = rttType.getEncoding();
-        if (!enc || !isa<gluon::EfficientEncodingAttr>(enc)) return;
-
-        auto newType = RankedTensorType::get(
-            rttType.getShape(), rttType.getElementType(),
-            gluon::AutoEncodingAttr::get(&getContext()));
-        auto newValue = SplatElementsAttr::get(newType,
-                                              splat.getSplatValue<Attribute>());
-        cst.setValueAttr(newValue);
-      }
-    });
-    llvm::outs() << "\n";
-    llvm::outs() << "[EFFICIENT to AUTOLAYOUT]:\n";
-    moduleOp.print(llvm::outs());
-    llvm::outs() << "\n";
-    llvm::outs() << "[END] REWRITE\n";
-
-    // at this point, all efficient encoding should be gone,
-    // check that 
-    moduleOp.walk([&](Operation *op) {
-      for (auto result : op->getResults()) {
-        auto tensorType = dyn_cast<RankedTensorType>(result.getType());
-        if (!tensorType)
-          continue;
-        auto encoding = tensorType.getEncoding();
-        if (!encoding)
-          continue;
-        if (isa<gluon::EfficientEncodingAttr>(encoding)) {
-          llvm::outs() << "Error: found remaining efficient encoding in result type for op: " << *op << "\n";
-          signalPassFailure();
+    // Double check we didn't miss anything
+    auto res = moduleOp.walk([](Operation *op) -> WalkResult {
+      for (auto resTy : op->getResultTypes()) {
+        if (isEfficientEncodingTensorType(resTy)) {
+          return op->emitOpError("Failed to infer return type");
         }
       }
-      for (auto operand : op->getOperands()) {
-        auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
-        if (!tensorType)
-          continue;
-        auto encoding = tensorType.getEncoding();
-        if (!encoding)
-          continue;
-        if (isa<gluon::EfficientEncodingAttr>(encoding)) {
-          llvm::outs() << "Error: found remaining efficient encoding in operand type for op: " << *op << "\n";
-          signalPassFailure();
+      return success();
+    });
+    if (res.wasInterrupted())
+      return signalPassFailure();
+
+    res = moduleOp.walk([](Block *block) -> WalkResult {
+      for (auto argTy : block->getArgumentTypes()) {
+        if (isEfficientEncodingTensorType(argTy)) {
+          return block->getParentOp()->emitError(
+              "Failed to infer block argument type");
         }
       }
+      return success();
     });
-
-    // 3. for operations in layoutMap,
-    // i. convert its efficient encoding to inferred one from the layoutMap
-    // ii. insert gluon.set_auto_layout op before it to set the inferred layout
-    // 
-    // conceptually, we help users select a coalesced layout right before load/store
-    // then let resolveAutoEncoding to propgate the layout
-    // 
-    for (auto &pair : layoutMap) {
-      Operation *op = pair.first;
-      Attribute layout = pair.second;
-      Value ptr = getMemAccessPtr(op);
-      assert(isa<gluon::AutoEncodingAttr>(cast<RankedTensorType>(ptr.getType()).getEncoding()));
-
-      rewriteInferredEncodings(op, layout);
-    }
-    llvm::outs() << "\n";
-    llvm::outs() << "[REWRITE ENCODINGS to INFERRED]:\n";
-    moduleOp.print(llvm::outs());
-    llvm::outs() << "\n";
-    llvm::outs() << "[END] REWRITE\n";
+    if (res.wasInterrupted())
+      return signalPassFailure();
   }
 };
 } // namespace mlir::triton::gluon
