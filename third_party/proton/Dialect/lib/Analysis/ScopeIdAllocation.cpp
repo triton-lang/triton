@@ -210,6 +210,15 @@ void ScopeIdAllocation::liveness() {
     }
   });
 
+  if (!nameToIdMap.empty()) {
+    for (auto &[name, idIsStartPair] : nameToIdMap) {
+      auto &[id, isStart] = idIsStartPair;
+      auto unclosedOp = idToOpMap.lookup(id);
+      mlir::emitError(unclosedOp.getLoc(), "Scope name '")
+          << name << "' is not properly closed (missing "
+          << (isStart ? "end" : "start") << " record)";
+    }
+  }
 }
 
 void ScopeIdAllocation::dominance() {
