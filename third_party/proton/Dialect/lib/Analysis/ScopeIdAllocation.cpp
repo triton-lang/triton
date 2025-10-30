@@ -39,6 +39,14 @@ struct BlockInfo {
   bool operator ==(const BlockInfo &other) const {
     return this->activeScopes == other.activeScopes;
   }
+
+  void dump() const {
+    auto &err = llvm::errs();
+    err << "Active Scopes:\n";
+    for (auto &scope : activeScopes) {
+      err << "  " << scope << "\n";
+    }
+  }
 };
 
 void ScopeIdAllocation::run() {
@@ -135,26 +143,35 @@ void ScopeIdAllocation::reachability() {
   // Go through all blocks, validate reachability analysis results
   for (auto iter : inputBlockInfoMap) {
     auto &virtualBlock = iter.first;
-    auto &inputBlockInfo = iter.second;
-    auto &outputBlockInfo = outputBlockInfoMap[virtualBlock];
+    auto inputBlockInfo = iter.second;
+    auto outputBlockInfo = outputBlockInfoMap[virtualBlock];
+    DenseSet<llvm::StringRef> unclosedScopes;
     Block::iterator startIt =
         virtualBlock.second.isValid() ? std::next(virtualBlock.second) : virtualBlock.first->begin();
     for (Operation &op : llvm::make_range(startIt, virtualBlock.first->end())) {
       if (auto recordOp = dyn_cast<RecordOp>(&op)) {
         auto name = recordOp.getName();
         if (recordOp.getIsStart()) {
-          if (!outputBlockInfo.contains(name)) {
-            mlir::emitError(recordOp.getLoc(), "The scope name '") << name << "' is not closed properly";
-          }
+          inputBlockInfo.insert(name);
+          unclosedScopes.insert(name);
         } else {
-          if (!inputBlockInfo.contains(name)) {
-            mlir::emitError(recordOp.getLoc(), "The scope name '") << name << "' is closed without being opened";
+          if (inputBlockInfo.contains(name)) {
+            inputBlockInfo.erase(name);
+            unclosedScopes.erase(name);
+          } else {
+            mlir::emitError(recordOp.getLoc(), "The scope name '") << name << "' is ended without being opened";
           }
         }
       }
     }
+    for (auto &scopeName : unclosedScopes) {
+      if (!outputBlockInfo.contains(scopeName)) {
+        mlir::emitError(virtualBlock.first->getParentOp()->getLoc(),
+                        "The scope name '")
+            << scopeName << "' is not closed properly";
+      }
+    }
   }
-
 }
 
 void ScopeIdAllocation::liveness() {
