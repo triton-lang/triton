@@ -560,6 +560,15 @@ bool needTransposedMfmaLayout(tt::DotOp dotOp, int mfmaVersion, int mDim,
   if (mDim == 4 && nDim == 64)
     return false;
 
+  // Set isTransposed based on how the result of dotOp is stored.
+  // If the store’s contiguity aligns with the MFMA layout order, keep the
+  // isTranposed flag set to true. Otherwise, set it to false. This allows us to
+  // vectorize the store along the dimension where elements are accessed
+  // contiguously.
+  if (!isChainDotHead(dotOp))
+    return mlir::LLVM::AMD::isStoredContigWithMfmaLayout(
+        dotOp, axisAnalysisPass, mfmaEnc);
+
   RankedTensorType oldRetType = dotOp.getType();
   auto retShape = oldRetType.getShape();
   unsigned rank = oldRetType.getRank();
@@ -579,16 +588,7 @@ bool needTransposedMfmaLayout(tt::DotOp dotOp, int mfmaVersion, int mDim,
     }
   }
 
-  if (isChainDotHead(dotOp))
-    return true;
-
-  // Set isTransposed based on how the result of dotOp is stored.
-  // If the store’s contiguity aligns with the MFMA layout order, keep the
-  // isTranposed flag set to true. Otherwise, set it to false. This allows us to
-  // vectorize the store along the dimension where elements are accessed
-  // contiguously.
-  return mlir::LLVM::AMD::isStoredContigWithMfmaLayout(dotOp, axisAnalysisPass,
-                                                       mfmaEnc);
+  return true;
 }
 
 class BlockedToMFMA : public OpRewritePattern<tt::DotOp> {
