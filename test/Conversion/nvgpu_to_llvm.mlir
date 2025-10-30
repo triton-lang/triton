@@ -2,7 +2,8 @@
 
 // CHECK-LABEL: @cluster_id
 llvm.func @cluster_id() -> i32 {
-  // CHECK: nvvm.read.ptx.sreg.cluster.ctaid.x
+  // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
+  // CHECK-NOT: nvvm.read.ptx.sreg.cluster.ctaid.x
   // CHECK-NOT: nvvm.read.ptx.sreg.cluster.ctaid.y
   // CHECK-NOT: nvvm.read.ptx.sreg.cluster.ctaid.z
   // CHECK-NOT: nvvm.read.ptx.sreg.cluster.nctaid.x
