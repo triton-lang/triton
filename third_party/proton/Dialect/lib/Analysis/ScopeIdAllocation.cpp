@@ -123,9 +123,8 @@ void ScopeIdAllocation::reachability() {
       // the outputBlockInfo, we skip the successors
       continue;
     }
-    // Update the current block. The block transfer function is not monotonic,
-    // so overwrite the output state entirely.
-    outputBlockInfoMap[virtualBlock] = inputBlockInfo;
+    // Update the current block
+    outputBlockInfoMap[virtualBlock].join(inputBlockInfo);
     // Update the successors
     for (VirtualBlock &successor : successors) {
       inputBlockInfoMap[successor].join(outputBlockInfoMap[virtualBlock]);
@@ -137,7 +136,7 @@ void ScopeIdAllocation::reachability() {
   for (auto iter : inputBlockInfoMap) {
     auto &virtualBlock = iter.first;
     auto &inputBlockInfo = iter.second;
-    auto &outputBlockInfo =  outputBlockInfoMap[virtualBlock];
+    auto &outputBlockInfo = outputBlockInfoMap[virtualBlock];
     Block::iterator startIt =
         virtualBlock.second.isValid() ? std::next(virtualBlock.second) : virtualBlock.first->begin();
     for (Operation &op : llvm::make_range(startIt, virtualBlock.first->end())) {
