@@ -87,7 +87,7 @@ module {
     proton.record end "name0"
     cf.br ^bb3
   ^bb2:  // pred: ^entry
-    // expected-error@+1 {{scope 'name0' was not properly closed (missing start record)}}
+    // expected-error@+1 {{Scope name 'name0' was not properly closed (missing start record)}}
     proton.record end "name0"
     cf.br ^bb3
   ^bb3:  // preds: ^bb1, ^bb2
