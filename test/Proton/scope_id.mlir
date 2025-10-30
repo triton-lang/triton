@@ -80,14 +80,17 @@ module {
 // -----
 
 module {
+  // expected-remark @below {{cf_branch}}
   tt.func @cf_branch(%cond: i1) {
+    // expected-remark @below {{scope id = 0}}
     proton.record start "name0"
     cf.cond_br %cond, ^bb1, ^bb2
   ^bb1:  // pred: ^entry
+    // expected-remark @below {{scope id = 0}}
     proton.record end "name0"
     cf.br ^bb3
   ^bb2:  // pred: ^entry
-    // expected-error@+1 {{Scope name 'name0' was not properly closed (missing start record)}}
+    // expected-error@+1 {{Scope name 'name0' is not properly closed (missing start record)}}
     proton.record end "name0"
     cf.br ^bb3
   ^bb3:  // preds: ^bb1, ^bb2
