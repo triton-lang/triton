@@ -246,20 +246,30 @@ struct FinalizeOpConversion
     Value preFinalTime = targetInfo.globalTime(rewriter, loc);
     b.store(preFinalTime, gmemPreFinalTimePtr);
 
-    // Add the 'else' block and the condition.
-    Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
+    // Add convergence block where ALL threads will participate in copy
+    Block *loopEntryBlock = rewriter.splitBlock(ifBlock, op->getIterator());
     rewriter.setInsertionPointToEnd(prevBlock);
-    cf::CondBranchOp::create(rewriter, loc, isFirstThread, ifBlock, thenBlock);
-
-    // Write back the data.
-    const int upper = bufferSizeInWords - wordsPerEntry;
+    cf::CondBranchOp::create(rewriter, loc, isFirstThread, ifBlock,
+                             loopEntryBlock);
     rewriter.setInsertionPointToEnd(ifBlock);
-    Value initIdx = b.i32_val(0);
+    cf::BranchOp::create(rewriter, loc, loopEntryBlock);
+
+    // Write back the data with ALL threads participating
+    // Each thread processes entries strided by numThreads
+    Block *thenBlock = rewriter.splitBlock(loopEntryBlock, op->getIterator());
+    rewriter.setInsertionPointToEnd(loopEntryBlock);
+
+    const int numThreads =
+        triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod) * numWarps;
+    const int upper = bufferSizeInWords - wordsPerEntry;
+    auto memSpace = op.getSegment().getType().getMemorySpace();
+
+    Value initIdx = b.mul(threadId, b.i32_val(wordsPerEntry));
     Value wbBaseOffset = b.i32_val(metadataWordSize);
 
     Block *writeBackBlock = rewriter.createBlock(
-        op->getParentRegion(), std::next(Region::iterator(ifBlock)), {i32_ty},
-        {loc});
+        op->getParentRegion(), std::next(Region::iterator(loopEntryBlock)),
+        {i32_ty}, {loc});
     rewriter.setInsertionPointToStart(writeBackBlock);
     BlockArgument idx = writeBackBlock->getArgument(0);
     Value gmemWbTagOffset = b.add(wbBaseOffset, idx);
@@ -267,16 +277,17 @@ struct FinalizeOpConversion
 
     Value bufTagOffset = idx;
     Value bufCounterOffset = b.add(bufTagOffset, b.i32_val(1));
-    auto memSpace = op.getSegment().getType().getMemorySpace();
     copyWord(bufTagOffset, gmemWbTagOffset, memSpace);
     copyWord(bufCounterOffset, gmemWbCounterOffset, memSpace);
-    Value pred = b.icmp_slt(idx, b.i32_val(upper));
-    Value updatedIdx = b.add(idx, b.i32_val(wordsPerEntry));
+    Value updatedIdx = b.add(idx, b.i32_val(numThreads * wordsPerEntry));
+    Value pred = b.icmp_sle(updatedIdx, b.i32_val(upper));
     cf::CondBranchOp::create(rewriter, loc, pred, writeBackBlock, updatedIdx,
                              thenBlock, ArrayRef<Value>());
 
-    rewriter.setInsertionPointToEnd(ifBlock);
-    cf::BranchOp::create(rewriter, loc, writeBackBlock, initIdx);
+    rewriter.setInsertionPointToEnd(loopEntryBlock);
+    Value hasWork = b.icmp_sle(initIdx, b.i32_val(upper));
+    cf::CondBranchOp::create(rewriter, loc, hasWork, writeBackBlock, initIdx,
+                             thenBlock, ArrayRef<Value>());
 
     writeBackPostFinalTime(b, rewriter, op, isFirstThread, scratchPtr);
 
