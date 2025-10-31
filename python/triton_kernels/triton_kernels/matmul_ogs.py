@@ -618,6 +618,7 @@ def matmul_ogs(x, w, bias,
         assert not out_matmul_has_mx
         postprocess_fn1 = ReducePostprocessFn(specs=reduce_fused_activation.specs, fn_args=reduce_fused_activation.fn_args)
         postprocess_fn2 = ReducePostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
+        print("split_k", precision_config.flex_ctx.out_data)
         y, y_mx_scale = reduce(
             x = out_matmul.view(out_matmul.shape[0], -1, out_matmul.shape[-1]),
             dim = 0,

@@ -626,11 +626,17 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
 
     # triton
     try:
-        tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt,
-                           gammas=gs1_ref, epilogue=epilogue, y=y_tri_in if sindx is None or n_expts_act == 1 else None,
+        has_aggregation = sindx is not None and n_expts_act > 1
+        if has_aggregation:
+            matmul_precision_opt = replace(precision_opt, flex_ctx=replace(precision_opt.flex_ctx, out_data=OutFlexData()))
+        else:
+            matmul_precision_opt = precision_opt
+        tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, matmul_precision_opt,
+                           gammas=gs1_ref, epilogue=epilogue, y=None if has_aggregation else y_tri_in,
                            inner_routing_data=inner_routing_data)
         tri_y = tri_y.squeeze(0)
-        tri_y = aggregate_experts(tri_y, sindx, n_expts_act, epilogue, precision_opt, y_tri_in)
+        if has_aggregation:
+            tri_y = aggregate_experts(tri_y, sindx, n_expts_act, epilogue, precision_opt, y_tri_in)
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     if y_tri_in is not None:
