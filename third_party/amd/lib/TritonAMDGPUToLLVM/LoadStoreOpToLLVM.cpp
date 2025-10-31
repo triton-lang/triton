@@ -482,7 +482,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
   void lowerDirectToLDSLoad(
       RewriterBase &rewriter, Location loc, RankedTensorType srcTy,
       MemDescType dstTy, SmallVector<Value> loadVals, Value llDst,
-      Type resElemTy, unsigned vec,
+      Type resElemTy, unsigned vec, triton::AMD::ISAFamily isaFamily,
       std::function<SmallVector<Value>(RewriterBase &, Location,
                                        ArrayRef<Value>, Value, int, VectorType)>
           lowerInst) const {
@@ -511,7 +511,28 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
         LLVM::getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
     auto affineOffset = smemObj.getShmemOffset(loc, rewriter, dstTy);
     auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+
+    Value laneId, warpId;
+    if (ISAFamily::CDNA3 == isaFamily || ISAFamily::CDNA4 == isaFamily) {
+      auto insertPt = rewriter.saveInsertionPoint();
+      Operation *parentOp = insertPt.getBlock()->getParentOp();
+      while (!isa<LLVM::LLVMFuncOp>(parentOp)) {
+        parentOp = parentOp->getParentOp();
+      }
+
+      assert(parentOp);
+      auto funcOp = dyn_cast<LLVM::LLVMFuncOp>(parentOp);
+      rewriter.setInsertionPointToStart(&funcOp.getBody().front());
+
+      std::tie(laneId, warpId) = getLaneAndWarpId(rewriter, loc);
+      auto call = LLVM::createLLVMIntrinsicCallOp(
+          rewriter, loc, "llvm.amdgcn.readfirstlane", {i32_ty}, {warpId});
+      warpId = call.getResult(0);
+      rewriter.restoreInsertionPoint(insertPt);
+    } else {
+      std::tie(laneId, warpId) = getLaneAndWarpId(rewriter, loc);
+    }
+
     auto calcPaddedOffset = [&](Value smemOffset) {
       TritonLLVMOpBuilder b(loc, rewriter);
       auto bitwidth = dstTy.getElementTypeBitWidth();
@@ -873,7 +894,8 @@ struct BufferLoadToLocalOpConversion
     };
 
     lowerDirectToLDSLoad(rewriter, loc, ptrType, flatDstTy, loadVals, llDst,
-                         resElemTy, vec, emitBufferLoadLds);
+                         resElemTy, vec, targetInfo.getISAFamily(),
+                         emitBufferLoadLds);
 
     // Drop the result token.
     Value zero = LLVM::ConstantOp::create(rewriter, op.getLoc(),
@@ -999,7 +1021,8 @@ struct AsyncCopyGlobalToLocalOpConversion
     };
 
     lowerDirectToLDSLoad(rewriter, loc, srcTy, flatDstTy, loadVals, llDst,
-                         resElemTy, vec, emitGlobalLoadLds);
+                         resElemTy, vec, targetInfo.getISAFamily(),
+                         emitGlobalLoadLds);
 
     // Drop the result token.
     Value zero = LLVM::ConstantOp::create(rewriter, op.getLoc(),
