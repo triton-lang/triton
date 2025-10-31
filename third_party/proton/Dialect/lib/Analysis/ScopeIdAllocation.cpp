@@ -152,6 +152,10 @@ void ScopeIdAllocation::reachability() {
       if (auto recordOp = dyn_cast<RecordOp>(&op)) {
         auto name = recordOp.getName();
         if (recordOp.getIsStart()) {
+          if (inputBlockInfo.contains(name)) {
+            mlir::emitError(recordOp.getLoc(), "The scope name '")
+                << name << "' is started without being ended";
+          }
           inputBlockInfo.insert(name);
           unclosedScopes.insert(name);
         } else {
