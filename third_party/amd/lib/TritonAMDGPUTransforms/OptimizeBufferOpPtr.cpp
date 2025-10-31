@@ -157,7 +157,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     int offsetOperandNo = blockArg.getArgNumber() - forOp.getNumInductionVars();
     auto offsetYieldOperand = yield.getOperand(offsetOperandNo);
     auto incrementOp = offsetYieldOperand.getDefiningOp();
-    if (!isa<arith::AddIOp>(incrementOp)) {
+    if (!incrementOp || !isa<arith::AddIOp>(incrementOp)) {
       LDBG("Rejected: expect arith::addi used for pointer advanceent");
       return {};
     }
