@@ -21,7 +21,6 @@ class DequantScaleRoundingMode(Enum):
     # chance of clipping the max value.
     ROUND_DOWN = 1
 
-
 def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis: int,
                      DEQUANT_SCALE_ROUNDING_MODE: DequantScaleRoundingMode = DequantScaleRoundingMode.ROUND_UP):
     """
@@ -56,15 +55,22 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
         kernel_quant_tensor = out_quant_tensor.view(-1, out_quant_tensor.shape[-1])
         kernel_scale = out_scale.view(-1, out_scale.shape[-1])
 
-        BLOCK_OUT_DIM = 128
-        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value
-        grid_out = triton.cdiv(kernel_src_tensor.shape[0], BLOCK_OUT_DIM)
-        grid_quant = triton.cdiv(kernel_src_tensor.shape[1], BLOCK_QUANT_DIM)
+        # performance hyper-parameters
+        BLOCK_OUT_DIM = 64
+        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value * 2
+        NUM_WARPS = 8
 
-        _downcast_to_mxfp[(grid_out, grid_quant)](kernel_quant_tensor, *kernel_quant_tensor.stride(), kernel_scale,
-                                                *kernel_scale.stride(), kernel_src_tensor, *kernel_src_tensor.stride(),
-                                                *kernel_src_tensor.shape, BLOCK_OUT_DIM, BLOCK_QUANT_DIM,
-                                                DEQUANT_SCALE_ROUNDING_MODE.value, num_warps=8)
+        blocks_out_dim = triton.cdiv(kernel_src_tensor.shape[0], BLOCK_OUT_DIM)
+        blocks_quant_dim = triton.cdiv(kernel_src_tensor.shape[1], BLOCK_QUANT_DIM)
+        _downcast_to_mxfp[(blocks_out_dim, blocks_quant_dim)](
+            kernel_quant_tensor, *kernel_quant_tensor.stride(),
+            kernel_scale, *kernel_scale.stride(),
+            kernel_src_tensor, *kernel_src_tensor.stride(), *kernel_src_tensor.shape,
+            BLOCK_OUT_DIM,
+            BLOCK_QUANT_DIM,
+            DEQUANT_SCALE_ROUNDING_MODE.value,
+            num_warps=NUM_WARPS,
+        )
 
     out_quant_tensor = out_quant_tensor.transpose(axis, src_tensor.ndim - 1)
     out_scale = out_scale.transpose(axis, src_tensor.ndim - 1)
