@@ -117,11 +117,6 @@ LayoutInfo combineInfo(LayoutInfo lhs, LayoutInfo rhs, Operation *op,
   return {};
 }
 
-bool encodingsMayVary(Operation *op) {
-  return isa<triton::JoinOp, triton::SplitOp, triton::ReshapeOp, triton::CatOp,
-             triton::TransOp>(op);
-}
-
 LogicalResult
 inferEfficientLayouts(FuncOp func,
                       llvm::MapVector<Operation *, Attribute> &layoutMap) {
@@ -281,7 +276,7 @@ class GluonInferEfficientEncodingsPass
           GluonInferEfficientEncodingsPass> {
   void
   setCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
-                       int numWarps, int threadsPerWarp,
+                       int numWarps, int threadsPerWarp, int numCTAs,
                        llvm::MapVector<Operation *, Attribute> &layoutMap) {
 
     Value ptr = getMemAccessPtr(op);
@@ -410,8 +405,9 @@ class GluonInferEfficientEncodingsPass
       }
 
       int numWarps = ttg::lookupNumWarps(curr);
-      setCoalescedEncoding(axisInfoAnalysis, curr, numWarps, threadsPerWarp,
-                           layoutMap);
+      int numCTAs = ttg::lookupNumCTAs(curr);
+      setCoalescedEncoding(axisInfoAnalysis, curr, numWarps, threadsPerWarp, 
+                           numCTAs, layoutMap);
     });
 
     // TODO: descriptor load/store??

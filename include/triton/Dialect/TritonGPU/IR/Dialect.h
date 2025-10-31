@@ -63,6 +63,8 @@ std::optional<int> maybeLookupNumWarps(Operation *op);
 // Utility to find the number of threads per warp
 int lookupThreadsPerWarp(OpBuilder &rewriter);
 int lookupNumCTAs(OpBuilder &rewriter);
+int lookupNumCTAs(Operation *op);
+std::optional<int> maybeLookupNumCTAs(Operation *op);
 
 template <typename Key, typename Value> class Cache {
 public:

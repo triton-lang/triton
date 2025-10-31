@@ -3917,6 +3917,28 @@ int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
   return triton::gpu::TritonGPUDialect::getThreadsPerWarp(cast<ModuleOp>(op));
 }
 
+std::optional<int> triton::gpu::maybeLookupNumCTAs(Operation *op) {
+  if (isa<ModuleOp, FuncOp>(op)) {
+    if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNumCTAsName))
+      return attr.getInt();
+  } 
+  if (Operation *parent = op->getParentOp())
+    return maybeLookupNumCTAs(parent);
+  return {};
+}
+
+int triton::gpu::lookupNumCTAs(Operation *op) {
+  std::optional<int> numCTAs = maybeLookupNumCTAs(op);
+  if (!numCTAs) {
+    op->emitOpError(
+        "is not contained within a context that specifies the number of CTAs");
+    llvm::report_fatal_error("failed to lookup the number of CTAs, the "
+                             "surrounding module should contain a " +
+                             Twine(AttrNumCTAsName) + " attribute");
+  }
+  return *numCTAs;
+}
+
 int triton::gpu::lookupNumCTAs(OpBuilder &rewriter) {
   assert(rewriter.getInsertionBlock() && "expected an insertion point");
   Operation *op =
