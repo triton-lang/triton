@@ -127,7 +127,7 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
 @builtin
 def commit_group(_semantic=None):
     """
-    Commit the current oustanding async operations.
+    Commit oustanding async operations.
 
     This finalizes a set of async copy operations which can be waited upon via `wait_group`.
     """
