@@ -170,8 +170,9 @@ struct ElementwiseOpConversion
                                 adaptor.getAttributes().getValue());
     if (auto fastMath =
             dyn_cast<arith::ArithFastMathInterface>(op.getOperation())) {
-      auto fastMathFlags = fastMath.getFastMathFlagsAttr();
-      newOp->setAttr(fastMath.getFastMathAttrName(), fastMathFlags);
+      if (auto fastMathFlags = fastMath.getFastMathFlagsAttr()) {
+        newOp->setAttr(fastMath.getFastMathAttrName(), fastMathFlags);
+      }
     }
     return {newOp};
   }
