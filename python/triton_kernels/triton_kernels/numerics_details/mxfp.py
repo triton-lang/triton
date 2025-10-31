@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 from .mxfp_details._upcast_from_mxfp import _upcast_from_mxfp
 from .mxfp_details._downcast_to_mxfp import _downcast_to_mxfp, MXFP_BLOCK_SIZE, _quantize_mxfp8_fn
+from triton.tools.tensor_descriptor import TensorDescriptor
 
 # -----------------------------------------------------------------------------
 #                      Dequantization / Quantization Utilities
@@ -89,23 +90,56 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: to
     assert scale.dtype == torch.uint8, f"Invalid scale dtype {scale.dtype=}"
     assert target_dtype in (torch.float16, torch.bfloat16, torch.float32), f"Invalid output dtype {target_dtype=}"
     # upcast
-    logical_quant_dim = tensor.shape[axis] * (2 if tensor.dtype == torch.uint8 else 1)
+    pack_multiple = 2 if tensor.dtype == torch.uint8 else 1
+    logical_quant_dim = tensor.shape[axis] * pack_multiple
     tensor = tensor.transpose(axis, tensor.ndim - 1).contiguous()
     scale = scale.transpose(axis, scale.ndim - 1).contiguous()
-    out = torch.empty((*tensor.shape[:-1], logical_quant_dim), dtype=target_dtype, device=tensor.device)
+    original_out_shape = tensor.shape[:-1] + (logical_quant_dim, )
 
     if tensor.numel() > 0:
-        reshaped_out = out.view(-1, out.shape[-1])
         reshaped_tensor = tensor.view(-1, tensor.shape[-1])
         reshaped_scale = scale.view(-1, scale.shape[-1])
-        BLOCK_OUT_DIM = 128
-        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value
+
+        # Pad the tensor and output if needed for tensor descriptor spec requirements. 
+        TENSOR_DESC_PAD_REQ = 16
+        needs_padding = reshaped_tensor.shape[-1] % TENSOR_DESC_PAD_REQ != 0
+        if needs_padding:
+            tensor_pad_amount = TENSOR_DESC_PAD_REQ - (reshaped_tensor.shape[-1] % TENSOR_DESC_PAD_REQ)
+            reshaped_tensor = F.pad(reshaped_tensor, (0, tensor_pad_amount), "constant", 0)
+            pad_elems_count = tensor_pad_amount * pack_multiple
+            out_shape = original_out_shape[:-1] + (original_out_shape[-1] + pad_elems_count, )
+        else:
+            out_shape = original_out_shape
+        out = torch.empty(out_shape, dtype=target_dtype, device=tensor.device)
+        reshaped_out = out.view(-1, out.shape[-1])
+
+        is_fp4 = reshaped_tensor.dtype == torch.uint8
+
+        # performance hyper-parameters
+        BLOCK_OUT_DIM = 64
+        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value * 4
+        NUM_WARPS = 8 if is_fp4 else 4
+
         blocks_out_dim = triton.cdiv(reshaped_out.shape[0], BLOCK_OUT_DIM)
         blocks_quant_dim = triton.cdiv(reshaped_out.shape[1], BLOCK_QUANT_DIM)
-        _upcast_from_mxfp[(blocks_out_dim, blocks_quant_dim)](reshaped_out, *reshaped_out.stride(), reshaped_scale,
-                                                              *reshaped_scale.stride(), reshaped_tensor,
-                                                              *reshaped_tensor.stride(), *reshaped_out.shape, BLOCK_OUT_DIM,
-                                                              BLOCK_QUANT_DIM, num_warps=8)
+        k_divisor = 2 if is_fp4 else 1
+        block_size_quant_mx_tensor = BLOCK_QUANT_DIM // k_divisor
+        out_desc = TensorDescriptor.from_tensor(reshaped_out, [BLOCK_OUT_DIM, BLOCK_QUANT_DIM])
+        tensor_desc = TensorDescriptor.from_tensor(reshaped_tensor, [BLOCK_OUT_DIM, block_size_quant_mx_tensor])
+        _upcast_from_mxfp[(blocks_out_dim, blocks_quant_dim)](
+            out_desc,
+            tensor_desc,
+            reshaped_scale,
+            *reshaped_scale.stride(),
+            *reshaped_out.shape,
+            BLOCK_OUT_DIM,
+            BLOCK_QUANT_DIM,
+            num_warps=NUM_WARPS,
+        )
+        if needs_padding:
+            out = out[..., :original_out_shape[-1]]
+    else:
+        out = torch.empty(original_out_shape, dtype=target_dtype, device=tensor.device)
     out = out.transpose(axis, scale.ndim - 1).contiguous()
     return out
 
