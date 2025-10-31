@@ -253,9 +253,12 @@ void ScopeIdAllocation::dominance() {
   auto sortedStartRecordOps = mlir::topologicalSort(startRecordOps);
   for (auto i = 0; i < sortedStartRecordOps.size(); ++i) {
     auto *op = sortedStartRecordOps[i];
-    for (auto j = 0; j < i; ++j) {
+    for (int j = i; j >= 0; --j) {
       auto *maybeParentOp = sortedStartRecordOps[j];
-      if (domInfo.dominates(maybeParentOp, op)) {
+      auto scopeId = opToIdMap.lookup(op);
+      auto endRecordOp = endRecordMap.lookup(scopeId);
+      if (domInfo.dominates(maybeParentOp, op) && 
+          domInfo.dominates(op, endRecordOp)) {
         auto parentId = opToIdMap.lookup(maybeParentOp);
         auto childId = opToIdMap.lookup(op);
         scopeParentIds.push_back({childId, parentId});
