@@ -271,7 +271,12 @@ jobs:
         path: |
           ${{ github.workspace }}/llvm-*-${{ matrix.config.target-os }}-${{ matrix.config.arch }}.tar.gz
 
-    - name: Azure Login
+    - name: Install Azure CLI
+      if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
+      run: |
+        curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+    - name: Azure login
       if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
       uses: azure/login@v2
       with:
