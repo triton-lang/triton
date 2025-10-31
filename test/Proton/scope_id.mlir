@@ -157,7 +157,7 @@ module {
     %c1 = arith.constant 1 : index
     %next = arith.addi %iv, %c1 : index
     %c2 = arith.constant 2 : index
-    %cond = arith.cmpi ult, %next, %c2
+    %cond = arith.cmpi ult, %next, %c2: index
     proton.record end "loop_body"
     cf.cond_br %cond, ^loop(%next : index), ^exit
   }
@@ -179,7 +179,7 @@ module {
     cf.br ^loop_body(%next : index)
   ^loop_body(%iv_next: index):
     %c2 = arith.constant 2 : index
-    %cond = arith.cmpi ult, %iv_next, %c2
+    %cond = arith.cmpi ult, %iv_next, %c2: index
     proton.record end "loop_body"
     cf.cond_br %cond, ^loop(%iv_next : index), ^exit
   }
@@ -275,7 +275,7 @@ module {
     %c1 = arith.constant 1 : index
     %next = arith.addi %iv, %c1 : index
     %c2 = arith.constant 2 : index
-    %cond = arith.cmpi ult, %next, %c2
+    %cond = arith.cmpi ult, %next, %c2: index
     cf.cond_br %cond, ^loop(%next : index), ^exit
   }
 }
@@ -294,7 +294,7 @@ module {
     %c1 = arith.constant 1 : index
     %next = arith.addi %iv, %c1 : index
     %c2 = arith.constant 2 : index
-    %cond = arith.cmpi ult, %next, %c2
+    %cond = arith.cmpi ult, %next, %c2: index
     proton.record start "loop"
     cf.cond_br %cond, ^loop(%next : index), ^exit
   }
