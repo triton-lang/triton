@@ -155,7 +155,7 @@ module {
   ^loop(%iv: index):
     proton.record start "loop_body"
     %c1 = arith.constant 1 : index
-    %next = arith.addi %iv, %c1
+    %next = arith.addi %iv, %c1 : index
     %c2 = arith.constant 2 : index
     %cond = arith.cmpi ult, %next, %c2
     proton.record end "loop_body"
@@ -175,7 +175,7 @@ module {
   ^loop(%iv: index):
     proton.record start "loop_body"
     %c1 = arith.constant 1 : index
-    %next = arith.addi %iv, %c1
+    %next = arith.addi %iv, %c1 : index
     cf.br ^loop_body(%next : index)
   ^loop_body(%iv_next: index):
     %c2 = arith.constant 2 : index
@@ -206,17 +206,18 @@ module {
 // -----
 
 module {
-  // expected-error @below {{The scope name 'unclosed' is started without being closed}}
   tt.func @cf_unclosed() {
+    // expected-error @below {{The scope name 'unclosed' is started without being closed}}
     proton.record start "unclosed"
+    tt.return
   }
 }
 
 // -----
 
 module {
-  // expected-error @below {{The scope name 'dangling' is closed without being opened}}
   tt.func @cf_dangling_end() {
+    // expected-error @below {{The scope name 'dangling' is closed without being opened}}
     proton.record end "dangling"
     tt.return
   }
@@ -225,14 +226,14 @@ module {
 // -----
 
 module {
-  // expected-error @below {{The scope name 'ghost' is started without being closed}}
-  // expected-error @below {{The scope name 'ghost' is closed without being opened}}
   tt.func @cf_branch_unclosed_dangling(%cond: i1) {
     cf.cond_br %cond, ^then, ^else
   ^then:  // pred: ^entry
+    // expected-error @below {{The scope name 'ghost' is started without being closed}}
     proton.record start "ghost"
     cf.br ^merge
   ^else:  // pred: ^entry
+    // expected-error @below {{The scope name 'ghost' is closed without being opened}}
     proton.record end "ghost"
     cf.br ^merge
   ^merge:  // preds: ^then, ^else
@@ -243,7 +244,6 @@ module {
 // -----
 
 module {
-  // expected-error @below {{The scope name 'ghost' is started without being closed}}
   tt.func @cf_merge_unclosed(%cond: i1) {
     cf.cond_br %cond, ^then, ^else
     proton.record start "ghost"
@@ -251,6 +251,7 @@ module {
     proton.record stop "ghost"
     cf.br ^merge
   ^else:  // pred: ^entry
+    // expected-error @below {{The scope name 'ghost' is started without being closed}}
     proton.record start "ghost"
     cf.br ^merge
   ^merge:  // preds: ^then, ^else
@@ -272,7 +273,7 @@ module {
   ^loop(%iv: index):
     proton.record start "loop"
     %c1 = arith.constant 1 : index
-    %next = arith.addi %iv, %c1
+    %next = arith.addi %iv, %c1 : index
     %c2 = arith.constant 2 : index
     %cond = arith.cmpi ult, %next, %c2
     cf.cond_br %cond, ^loop(%next : index), ^exit
@@ -292,7 +293,7 @@ module {
   ^loop(%iv: index):
     proton.record end "loop"
     %c1 = arith.constant 1 : index
-    %next = arith.addi %iv, %c1
+    %next = arith.addi %iv, %c1 : index
     %c2 = arith.constant 2 : index
     %cond = arith.cmpi ult, %next, %c2
     proton.record start "loop"
