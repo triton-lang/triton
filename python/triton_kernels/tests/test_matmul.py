@@ -176,17 +176,14 @@ def opt_flags_scope(request):
 def aggregate_experts(y, scatter_indx, n_expts_act, epilogue, precision_config, y_in):
     if scatter_indx is None or n_expts_act == 1:
         return y
-    from triton_kernels.reduce import reduce, PostprocessFn, InFlexData
+    from triton_kernels.reduce import reduce, PostprocessFn
     out_matmul = y
     mask = (scatter_indx.src_indx != -1).view(out_matmul.shape[-2]//n_expts_act, n_expts_act, 1)
     out_matmul = out_matmul.view(out_matmul.shape[-2]//n_expts_act, n_expts_act, -1)
     mask = mask.expand_as(out_matmul)
     # out_matmul_scale_shape = out_matmul.shape[:-1] + (triton.cdiv(out_matmul.shape[-1], 32),)
     postprocess_fn = PostprocessFn() if epilogue is None else PostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
-    out_flex = precision_config.flex_ctx.out_data
-    x_flex = InFlexData(dtype=out_flex.dtype, scale=out_flex.expected_scale)
-    # out_has_mx = precision_config.out_scale is not None
-    out_final, out_final_mx_scale = reduce(out_matmul, dim=1, postprocess_fn2=postprocess_fn, x_flex=x_flex, #
+    out_final, out_final_mx_scale = reduce(out_matmul, dim=1, postprocess_fn2=postprocess_fn, #
         mask=mask,
         y_has_mx=precision_config.out_scale is not None,
         y_flex=precision_config.flex_ctx.out_data,
