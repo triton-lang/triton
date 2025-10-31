@@ -155,10 +155,7 @@ static LogicalResult createPipeline(OpBuilder &b, Location loc,
 
   // Annotate the loop for the backend.
   b.setInsertionPoint(forOp);
-  forOp->setAttr("triton.warp_pipeline.total_stages",
-                 b.getI32IntegerAttr(totalStages));
-  forOp->setAttr("triton.warp_pipeline.lead_stages",
-                 b.getI32IntegerAttr(1)); // TODO: make configurable
+  forOp->setAttr("triton.warp_pipeline.pipelined_for", b.getUnitAttr());
 
   LDBG("[warp-pipeline] total_stages=" << totalStages << "\n");
   return success();
