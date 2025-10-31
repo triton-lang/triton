@@ -673,50 +673,6 @@ public:
     auto oldAcc = dotOp.getC();
     auto newAcc = convertAndCastTensor(rewriter, oldAcc, mfmaEnc, mfmaAccType);
 
-    // Here is a brief explanation of kWidth, kBase, and kDim
-    // 1. kWidth: the number of **consecutive** elements each thread loads from
-    //    shared memory in preparation for mfma instructions. In theory, each
-    //    thread can issue multiple ds_read to load elements from non-contiguous
-    //    addresses in shared memory for one mfma instruction, but that won't be
-    //    good for performance. So in practice for better vectorization, we
-    //    make sure the kWidth elements can be loaded from shared memory by a
-    //    single ds_read instruction by setting vecSize of the sharedLayout
-    //    to be kWidth.
-    // 2. kDim: the k dimension size of the mfma instruction. E.g. instruction
-    //    mfma_32x32x16 has kDim = 16, meaning this mfma instruction can compute
-    //    a matmul of operands with shape 32x16 and 16x32.
-    // 3. kBase: the number of elements each thread holds for a single mfma
-    //    instruction.
-    // 4. relation between kBase and kDim:
-    //    4.1 For mfma_32, kBase = kDim / 2
-    //    4.2 For mfma_16, kBase = kDim / 4
-    //    4.3 For mfma_4, kBase = kDim / 16
-    // 5. relation between kWidth and kBase: For now it supports two cases
-    //    5.1 kWidth = kBase, i.e. kPack = 1. In this case, each load from
-    //        shared memory results in one mfma instruction.
-    //    5.2 kWidth = 2 * kBase, i.e. kPack = 2. In this case, each load from
-    //        shared memory results in two mfma instructions, since one mfma
-    //        can only consume kBase elements from each thread.
-    //    Note that we cannot have larger kPack since kPack = 2 means
-    //    ds_read_b128, which is the largest vector size for shared memory load.
-    auto kWidth = kBase;
-
-    // We want to extend kWidth by kPack (kPack=1 means no extension)
-    // to increase ds_read vector size
-    // However, in FA, the second dot can only use kWidth = kBase since it's
-    // limited by the result of the first dot, which is of mfmaLayout.
-    auto isDotChainTail = isChainDotTail(dotOp);
-    if (!isDotChainTail)
-      kWidth *= kPack;
-
-    // For FA fwd kernel with f16 elementTy, we limit the 2nd dot to have
-    // kWidth = 4 so that the coversion from #mma (result of 1st dot)
-    // to #dotOp (operand 0 of 2nd dot) is a no-op.
-    // TODO (lixun): relax the condition for 8-bit elementTy.
-    if (is16BitElemTy && isDotChainTail) {
-      kWidth = 4;
-    }
-
     Value newDot;
     if (withScale) {
       // If a scaled mfma instruction is chosen, we will rewrite the DotOp to a
@@ -726,11 +682,10 @@ public:
       if (failed(aScaledElemTy) || failed(bScaledElemTy))
         return failure();
 
-      assert(kWidth == 32);
       auto newAEncoding =
-          DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth / 2);
+          DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, 16);
       auto newBEncoding =
-          DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth / 2);
+          DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, 16);
 
       a = convertAndCastTensor(rewriter, a, newAEncoding,
                                mfmaInstr->aElementType);
@@ -742,9 +697,9 @@ public:
           /*fastMath=*/false);
     } else {
       auto newAEncoding =
-          ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth);
+          ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kBase);
       auto newBEncoding =
-          ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth);
+          ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kBase);
       a = convertAndCastTensor(rewriter, a, newAEncoding,
                                mfmaInstr->aElementType);
       b = convertAndCastTensor(rewriter, b, newBEncoding,
@@ -1768,6 +1723,139 @@ public:
   }
 };
 
+struct AssignKWidthOptions {
+  int kPack = 1;
+  std::string arch;
+};
+
+static inline bool isMfmaEncoding(Attribute attr) {
+  return attr && isa<ttg::AMDMfmaEncodingAttr>(attr);
+}
+
+static inline bool isWmmaEncoding(Attribute attr) {
+  return attr && isa<ttg::AMDWmmaEncodingAttr>(attr);
+}
+
+static std::optional<unsigned> deriveMfmaIntrinsicKBase(unsigned mDim, unsigned kDim) {
+  std::optional<unsigned> kBase = std::nullopt;
+  switch (mDim) {
+    case 32: kBase = kDim / 2; break;
+    case 16: kBase = kDim / 4; break;
+    case 4:  kBase = kDim / 16; break;
+  }
+  return kBase;
+}
+
+static FailureOr<unsigned> computeKWidthForMfmaDotOperand(Value operand, unsigned operandIndex, tt::DotOpInterface consumerDotOp, ttg::AMDMfmaEncodingAttr consumerDotOpResultMfmaEncoding, const AssignKWidthOptions &opts) {
+  auto shape = consumerDotOpResultMfmaEncoding.getInstrShape(); // [mDim, nDim, kDim]
+  unsigned mDim = shape[0];
+  unsigned nDim = shape[1];
+  unsigned kDim = shape[2];
+  std::optional<unsigned> kBase = deriveMfmaIntrinsicKBase(mDim, kDim);
+  if (!kBase.has_value()) {
+    mlir::emitWarning(operand.getLoc()) 
+      << "Unable to compute kBase due to invalid MFMA intrinsic: "
+      << "mDim: " << mDim << ", kDim: " << kDim;
+    return failure();
+  }
+  
+  unsigned candidate = *kBase * opts.kPack;
+
+  // TODO: Remove check for is chain dot tail and detect in more elegant way
+  if (isChainDotTail(consumerDotOp)) {
+    auto operandType = cast<RankedTensorType>(operand.getType());
+    if (operandType.getElementType().isF16() || operandType.getElementType().isBF16())
+      candidate = 8;
+    else
+      candidate = *kBase;
+  }
+
+  return candidate;
+}
+
+// Here is a brief explanation of kWidth, kBase, and kDim
+// 1. kWidth: the number of **consecutive** elements each thread loads from
+//    shared memory in preparation for mfma instructions. In theory, each
+//    thread can issue multiple ds_read to load elements from non-contiguous
+//    addresses in shared memory for one mfma instruction, but that won't be
+//    good for performance. So in practice for better vectorization, we
+//    make sure the kWidth elements can be loaded from shared memory by a
+//    single ds_read instruction by setting vecSize of the sharedLayout
+//    to be kWidth.
+// 2. kDim: the k dimension size of the mfma instruction. E.g. instruction
+//    mfma_32x32x16 has kDim = 16, meaning this mfma instruction can compute
+//    a matmul of operands with shape 32x16 and 16x32.
+// 3. kBase: the number of elements each thread holds for a single mfma
+//    instruction.
+// 4. relation between kBase and kDim:
+//    4.1 For mfma_32, kBase = kDim / 2
+//    4.2 For mfma_16, kBase = kDim / 4
+//    4.3 For mfma_4, kBase = kDim / 16
+// 5. relation between kWidth and kBase: For now it supports two cases
+//    5.1 kWidth = kBase, i.e. kPack = 1. In this case, each load from
+//        shared memory results in one mfma instruction.
+//    5.2 kWidth = 2 * kBase, i.e. kPack = 2. In this case, each load from
+//        shared memory results in two mfma instructions, since one mfma
+//        can only consume kBase elements from each thread.
+//    Note that we cannot have larger kPack since kPack = 2 means
+//    ds_read_b128, which is the largest vector size for shared memory load.
+struct FixKWidthPattern : public OpRewritePattern<ttg::ConvertLayoutOp> {
+  AssignKWidthOptions opts;
+  FixKWidthPattern(MLIRContext *ctx, const AssignKWidthOptions &opts, PatternBenefit b = 1)
+      : OpRewritePattern(ctx, b), opts(opts) {}
+
+  LogicalResult matchAndRewrite(ttg::ConvertLayoutOp op, PatternRewriter &rewriter) const override {
+    auto consumerDotOpOperandType = dyn_cast<RankedTensorType>(op.getResult().getType());
+    if (!consumerDotOpOperandType)
+      return failure();
+    auto consumerDotOpOperandEncoding = dyn_cast<ttg::DotOperandEncodingAttr>(consumerDotOpOperandType.getEncoding());
+    if (!consumerDotOpOperandEncoding)
+      return failure();
+
+    auto consumerDotOpResultEncoding = consumerDotOpOperandEncoding.getParent();
+    if (isWmmaEncoding(consumerDotOpResultEncoding))
+      return failure(); // skip wmma
+    if (!isMfmaEncoding(consumerDotOpResultEncoding))
+      return failure(); // skip non-mfma
+
+    auto consumerDotOpResultMfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(consumerDotOpResultEncoding);
+
+    tt::DotOpInterface consumerDotOp = nullptr;
+    unsigned operandIndex = 0;
+    for (Operation *consumer : op->getResult(0).getUsers()) {
+      if (auto dotOp = dyn_cast<tt::DotOpInterface>(consumer)) {
+        if (dotOp.getA() == op.getResult()) {
+          consumerDotOp = dotOp;
+          operandIndex = 0;
+          break; 
+        }
+        if (dotOp.getB() == op.getResult()) {
+          consumerDotOp = dotOp;
+          operandIndex = 1;
+          break; 
+        }
+      }
+    }
+    if (!consumerDotOp || isa<tt::DotScaledOp>(consumerDotOp)) // skip scaled dot op
+      return failure();
+
+    std::optional<unsigned> maybeKWidth = computeKWidthForMfmaDotOperand(op.getOperand(), operandIndex, consumerDotOp, consumerDotOpResultMfmaEncoding, opts);
+    if (!maybeKWidth.has_value())
+      return failure();
+
+    unsigned candidateKWidth = maybeKWidth.value();
+    if (candidateKWidth == consumerDotOpOperandEncoding.getKWidth())
+      return failure();
+
+    auto newEncoding = ttg::DotOperandEncodingAttr::get(op.getContext(),  consumerDotOpOperandEncoding.getOpIdx(), consumerDotOpResultMfmaEncoding, candidateKWidth);
+    auto newType = RankedTensorType::get(consumerDotOpOperandType.getShape(), consumerDotOpOperandType.getElementType(), newEncoding);
+    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, newType, op.getOperand());
+    return success();
+  }
+};
+
+// };
+
 } // namespace
 
 #define GEN_PASS_DEF_TRITONAMDGPUACCELERATEMATMUL
@@ -1819,6 +1907,14 @@ struct TritonAMDGPUAccelerateMatmulPass
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
     decomposeMixedModeDotOp(m);
+
+    AssignKWidthOptions opts;
+    opts.arch = archGenerationName;
+
+    RewritePatternSet kwidth_patterns(context);
+    kwidth_patterns.add<FixKWidthPattern>(context, opts, /*benefit=*/2);
+    if (failed(applyPatternsGreedily(m, std::move(kwidth_patterns))))
+      signalPassFailure();
   }
 };
 
