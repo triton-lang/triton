@@ -9,6 +9,12 @@
 namespace mlir::triton::AMD {
 class TargetInfo;
 
+// Walks the module and adds a LocalBarrier after any amdgpu.async_wait if there
+// is not already a barrier following it. This mimicks what Member does for
+// common async wait operations and avoids AMD specific modifications to Membar.
+// This yields to the same behaviour compared to when membar adds the barrier.
+void addLocalBarrierAfterAmdGpuAsyncWait(ModuleOp mod);
+
 // Annotates LocalLoadOps with ttg.amdgpu.syncedByAsyncWait=true if they are
 // synced by an AsyncWait.
 void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod);

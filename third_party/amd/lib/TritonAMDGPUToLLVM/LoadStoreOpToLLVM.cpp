@@ -159,13 +159,13 @@ LogicalResult emitFence(Operation *op, ConversionPatternRewriter &rewriter,
   StringAttr scope = mlir::StringAttr::get(loc.getContext(), *scopeStr);
 
   if (emitReleaseFence && preAtomic) {
-    rewriter.create<LLVM::FenceOp>(loc, TypeRange{},
-                                   LLVM::AtomicOrdering::release, scope);
+    LLVM::FenceOp::create(rewriter, loc, TypeRange{},
+                          LLVM::AtomicOrdering::release, scope);
   }
 
   if (emitAcquireFence && !preAtomic) {
-    rewriter.create<LLVM::FenceOp>(loc, TypeRange{},
-                                   LLVM::AtomicOrdering::acquire, scope);
+    LLVM::FenceOp::create(rewriter, loc, TypeRange{},
+                          LLVM::AtomicOrdering::acquire, scope);
   }
   return success();
 }
@@ -208,9 +208,9 @@ std::pair<Block *, Block *> emitBranch(RewriterBase &rewriter, Location loc,
       rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
   Block *body = rewriter.createBlock(after);
   rewriter.setInsertionPointToEnd(currentBlock);
-  rewriter.create<LLVM::CondBrOp>(loc, cond, body, after);
+  LLVM::CondBrOp::create(rewriter, loc, cond, body, after);
   rewriter.setInsertionPointToStart(body);
-  rewriter.create<LLVM::BrOp>(loc, after);
+  LLVM::BrOp::create(rewriter, loc, after);
   rewriter.setInsertionPointToStart(body);
   return {body, after};
 }
@@ -227,7 +227,7 @@ struct LoadStoreConversionBase {
     mlir::Attribute zeroAttr = builder.getZeroAttr(vecTy.getElementType());
     auto denseValue =
         DenseElementsAttr::get(cast<mlir::ShapedType>(vecTy), zeroAttr);
-    Value zeroVal = builder.create<LLVM::ConstantOp>(loc, vecTy, denseValue);
+    Value zeroVal = LLVM::ConstantOp::create(builder, loc, vecTy, denseValue);
     return zeroVal;
   }
 
@@ -422,7 +422,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
     auto structTy = LLVM::LLVMStructType::getLiteral(
         rewriter.getContext(), ArrayRef<Type>{srcTy, i1_ty, otherTy, i32_ty});
     for (int i = 0; i < srcElems.size(); i++) {
-      Value packedArr = rewriter.create<LLVM::UndefOp>(loc, structTy);
+      Value packedArr = LLVM::UndefOp::create(rewriter, loc, structTy);
       // src
       packedArr = b.insert_val(packedArr, srcElems[i], 0);
       // mask
@@ -876,9 +876,9 @@ struct BufferLoadToLocalOpConversion
                          resElemTy, vec, emitBufferLoadLds);
 
     // Drop the result token.
-    Value zero = rewriter.create<LLVM::ConstantOp>(
-        op.getLoc(), IntegerType::get(op.getContext(), 32),
-        rewriter.getI32IntegerAttr(0));
+    Value zero = LLVM::ConstantOp::create(rewriter, op.getLoc(),
+                                          IntegerType::get(op.getContext(), 32),
+                                          rewriter.getI32IntegerAttr(0));
     rewriter.replaceOp(op, zero);
     return success();
   }
@@ -1002,9 +1002,9 @@ struct AsyncCopyGlobalToLocalOpConversion
                          resElemTy, vec, emitGlobalLoadLds);
 
     // Drop the result token.
-    Value zero = rewriter.create<LLVM::ConstantOp>(
-        op.getLoc(), IntegerType::get(op.getContext(), 32),
-        rewriter.getI32IntegerAttr(0));
+    Value zero = LLVM::ConstantOp::create(rewriter, op.getLoc(),
+                                          IntegerType::get(op.getContext(), 32),
+                                          rewriter.getI32IntegerAttr(0));
     rewriter.replaceOp(op, zero);
     return success();
   }
@@ -1019,8 +1019,8 @@ struct AsyncCopyGlobalToLocalOpConversion
 
     if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
                            targetInfo.getISAFamily())) {
-      auto globalLoadLdsOp = rewriter.create<ROCDL::GlobalLoadLDSOp>(
-          loc, srcPtr, shmemAddr, vecBits / 8,
+      auto globalLoadLdsOp = ROCDL::GlobalLoadLDSOp::create(
+          rewriter, loc, srcPtr, shmemAddr, vecBits / 8,
           /*offset=*/0, cacheModifiers, nullptr, nullptr, nullptr);
       if (targetInfo.requiresAliasInfoForAsyncOps())
         AMD::addAsyncCopyAliasScope(globalLoadLdsOp);
@@ -1619,9 +1619,9 @@ struct AtomicCASOpConversion
         // TODO: USE ATOMIC CAS OP on Tensor
         auto successOrdering = *atomicMemOrdering;
         auto failureOrdering = LLVM::AtomicOrdering::monotonic;
-        auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
-            loc, casPtr, casCmp, casVal, successOrdering, failureOrdering,
-            StringRef(scopeStr.value()));
+        auto cmpxchg = LLVM::AtomicCmpXchgOp::create(
+            rewriter, loc, casPtr, casCmp, casVal, successOrdering,
+            failureOrdering, StringRef(scopeStr.value()));
 
         // Extract the new_loaded value from the pair.
         Value ret = b.extract_val(valueElemTy, cmpxchg, i);
@@ -1637,16 +1637,16 @@ struct AtomicCASOpConversion
         rewriter.setInsertionPointToEnd(curBlock);
         auto tid = getThreadId(rewriter, loc);
         Value pred = b.icmp_eq(tid, b.i32_val(i));
-        rewriter.create<LLVM::CondBrOp>(loc, pred, atomicBlock, endBlock);
+        LLVM::CondBrOp::create(rewriter, loc, pred, atomicBlock, endBlock);
 
         // Build main block with atomic_cmpxchg.
         rewriter.setInsertionPointToEnd(atomicBlock);
 
         auto successOrdering = LLVM::AtomicOrdering::acq_rel;
         auto failureOrdering = LLVM::AtomicOrdering::monotonic;
-        auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
-            loc, casPtr, casCmp, casVal, successOrdering, failureOrdering,
-            StringRef("agent"));
+        auto cmpxchg = LLVM::AtomicCmpXchgOp::create(
+            rewriter, loc, casPtr, casCmp, casVal, successOrdering,
+            failureOrdering, StringRef("agent"));
 
         if (!op.getResult().use_empty()) {
           // Extract the new_loaded value from the pair.
@@ -1656,7 +1656,7 @@ struct AtomicCASOpConversion
           b.store(newLoaded, atomPtr);
         }
 
-        rewriter.create<LLVM::BrOp>(loc, ValueRange(), endBlock);
+        LLVM::BrOp::create(rewriter, loc, ValueRange(), endBlock);
 
         // Build the last block: synced load from shared memory, exit.
         rewriter.setInsertionPointToStart(endBlock);
@@ -1667,7 +1667,7 @@ struct AtomicCASOpConversion
         }
 
         GCNBuilder BuilderMemfenceLDS;
-        BuilderMemfenceLDS.create<>("s_waitcnt lgkmcnt(0)")->operator()();
+        BuilderMemfenceLDS.create("s_waitcnt lgkmcnt(0)")->operator()();
         BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
         b.barrier();
         Value atomPtr =
@@ -1887,14 +1887,15 @@ struct AtomicRMWOpConversion
   }
 };
 
-struct AsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
+struct AsyncWaitOpConversion
+    : public ConvertOpToLLVMPattern<amdgpu::AsyncWaitOp> {
   AsyncWaitOpConversion(LLVMTypeConverter &converter,
                         const AMD::TargetInfo &targetInfo,
                         PatternBenefit benefit)
       : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
 
   LogicalResult
-  matchAndRewrite(AsyncWaitOp op, OpAdaptor adaptor,
+  matchAndRewrite(amdgpu::AsyncWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -1912,7 +1913,7 @@ struct AsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
       // interested in those.
 
       // Clamp vmcnt to 6bits; a lower vmcnt will produce a conservative wait
-      unsigned vmCnt = std::min(63u, op.getNum());
+      unsigned vmCnt = std::min(63u, op.getNumInst());
 
       // Extract low and high bits and combine while setting all other bits to 1
       unsigned lowBits = vmCnt & 0xF;
@@ -1920,12 +1921,12 @@ struct AsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
       unsigned otherCnts = ~0xC00F; // C00F has bits 15:14 and 3:0 set
       unsigned waitValue = lowBits | highBits | otherCnts;
 
-      rewriter.create<ROCDL::SWaitcntOp>(loc, waitValue);
+      ROCDL::SWaitcntOp::create(rewriter, loc, waitValue);
       break;
     }
     case ISAFamily::GFX1250: {
       // Clamp asyncCnt to 6bits(hw imit); lower means conservative
-      unsigned asyncCnt = std::min(63u, op.getNum());
+      unsigned asyncCnt = std::min(63u, op.getNumInst());
       LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
                                       "llvm.amdgcn.s.wait.asynccnt", {},
                                       {b.i16_val(asyncCnt)});

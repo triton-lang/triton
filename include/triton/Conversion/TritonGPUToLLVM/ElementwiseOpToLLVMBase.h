@@ -166,8 +166,8 @@ struct ElementwiseOpConversion
                                     ConversionPatternRewriter &rewriter,
                                     Type elemTy, MultipleOperandsRange operands,
                                     Location loc) const {
-    return {rewriter.create<DestOp>(loc, elemTy, operands[0],
-                                    adaptor.getAttributes().getValue())};
+    return {DestOp::create(rewriter, loc, elemTy, operands[0],
+                           adaptor.getAttributes().getValue())};
   }
 };
 

@@ -322,8 +322,8 @@ private:
     }
 
     // Cluster barrier
-    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
-    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
+    triton::nvidia_gpu::ClusterArriveOp::create(rewriter, loc, false);
+    triton::nvidia_gpu::ClusterWaitOp::create(rewriter, loc);
 
     // Load from remote shared memory
     {
@@ -362,8 +362,8 @@ private:
     }
 
     // Cluster barrier
-    rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
-    rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
+    triton::nvidia_gpu::ClusterArriveOp::create(rewriter, loc, false);
+    triton::nvidia_gpu::ClusterWaitOp::create(rewriter, loc);
 
     return success();
   }

@@ -296,12 +296,12 @@ tt.func @conditional_consumer(%lb: i32, %ub: i32, %step: i32) {
     // CHECK-NEXT: scf.if
     %1 = scf.if %cond -> !ty {
       // CHECK-NEXT: "something"
-      "something"() : () -> ()
-      // CHECK-NEXT: yield [[VALUE]]
-      scf.yield %0 : !ty
+      "something"() {ttg.partition = array<i32: 1>} : () -> ()
+      // CHECK-NEXT: yield {{.*}} [[VALUE]]
+      scf.yield {ttg.partition = array<i32: 1>} %0 : !ty
     } else {
-      %2 = "something"() : () -> !ty
-      scf.yield %2 : !ty
+      %2 = "something"() {ttg.partition = array<i32: 1>} : () -> !ty
+      scf.yield {ttg.partition = array<i32: 1>} %2 : !ty
     } {ttg.partition = array<i32: 1>}
     "keep"(%1) {ttg.partition = array<i32: 1>} : (!ty) -> ()
   } {ttg.partition.stages = [0, 2], ttg.warp_specialize.tag = 0 : i32}

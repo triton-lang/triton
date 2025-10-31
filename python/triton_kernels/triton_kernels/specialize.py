@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import inspect
 import re
 import textwrap
@@ -60,6 +61,19 @@ def define_kernel(src, module, attrs=None, **extra_globals):
     f = triton.JITFunction(f, **attrs)
     f._unsafe_update_src(src)
     return f
+
+
+@dataclass(frozen=True)
+class FnSpecs:
+    name: str
+    fn: "triton.runtime.jit.JITFunction"
+    fn_arg_names: tuple[str]
+    fn_arg_do_not_specialize: tuple[str] = tuple()
+    reduction_n: int = 1
+
+    @staticmethod
+    def default():
+        return FnSpecs("dflt", None, tuple())
 
 
 def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple()):
@@ -149,3 +163,40 @@ def specialize(fn, module, constants, tuples, name=None, do_not_specialize=tuple
         co_firstlineno=max(1, orig_code.co_firstlineno - line_delta),
     )
     return ret
+
+
+@dataclass(frozen=True)
+class ClosureArg:
+    fn_name: str
+    fn_params_name: str
+
+
+class SpecializationModule:
+
+    def __init__(self, module_name: str, kernels: list[tuple[str, object]], closure_args: dict[str, ClosureArg]):
+        self.module_name = module_name
+        self.kernels = kernels
+        self.closure_args = closure_args
+        self._modules = dict()
+
+    def get(self, **kwargs):
+        import types
+        import sys
+        specs = [FnSpecs.default()] * len(self.closure_args)
+        for key, value in kwargs.items():
+            specs[list(self.closure_args.keys()).index(key)] = value
+        key = tuple(spec.name for spec in specs)
+        if key in self._modules:
+            return self._modules[key]
+        spec_constants = {arg.fn_name: spec.fn for arg, spec in zip(self.closure_args.values(), specs)}
+        spec_tuples = {arg.fn_params_name: spec.fn_arg_names for arg, spec in zip(self.closure_args.values(), specs)}
+        do_not_specialize = []
+        for spec in specs:
+            do_not_specialize.extend(spec.fn_arg_do_not_specialize)
+        module = types.ModuleType(self.module_name + '_'.join(key))
+        sys.modules[module.__name__] = module
+        for kernel_name, kernel_fn in self.kernels:
+            setattr(module, kernel_name,
+                    specialize(kernel_fn, module, spec_constants, spec_tuples, do_not_specialize=do_not_specialize))
+        self._modules[key] = module
+        return module

@@ -42,8 +42,8 @@ def alloc_rand_like(x):
 def init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter, device="cuda"):
     logits = torch.randn((m, n_expts_tot), dtype=torch.float16, device=device, requires_grad=True)
     sparse_logits = topk(logits, n_expts_act)
-    dispatch_indx = sparse_logits.mask_metadata.col_sorted_indx
-    combine_indx = sparse_logits.mask_metadata.row_sorted_indx
+    dispatch_indx = sparse_logits.mask_metadata.row_sorted_indx
+    combine_indx = sparse_logits.mask_metadata.col_sorted_indx
     ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
     routing_data = RoutingData(None, ragged_batch_metadata.slice_sizes, n_expts_tot, n_expts_act, ragged_batch_metadata)
     gather_idx = GatherIndx(combine_indx, dispatch_indx) if do_gather else None
@@ -130,8 +130,8 @@ def init_precision(out_dtype, act_use_flexpoint, weight_dtype, weight_mxfp, mode
         ) if weight_use_flexpoint else InFlexData(),
         out_data=OutFlexData(
             dtype=out_dtype,
-            expected_scale=make(4.00, 5.00, mode == "batched" or expt_is_inner),
-            actual_scale=make(0, 0, mode == "batched" or expt_is_inner),
+            expected_scale=make_scalar(4.00),
+            actual_scale=make_scalar(0),
             checksum_scale=None,
         ) if act_use_flexpoint else OutFlexData(),
     )
@@ -776,8 +776,8 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter,
                    precision_config=SwiGLUPrecisionConfig(swiglu_limit))
         b = matmul_ogs(
             x, w, bias, rdata, gindx, sindx, precision_opt,
-            fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit")),
-                                             (swiglu_alpha, swiglu_limit), 2))
+            fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
+                                             (swiglu_alpha, swiglu_limit)))
     except opt_flags.InapplicableConstraint:
         pytest.skip("inapplicable constraint")
 

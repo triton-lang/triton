@@ -113,7 +113,7 @@ struct ArithConstantSplatOpConversion
     // LLVM IR.
     if (type::isFloat8(elemType))
       elemType = rewriter.getIntegerType(8);
-    auto constOp = rewriter.create<LLVM::ConstantOp>(loc, elemType, val);
+    auto constOp = LLVM::ConstantOp::create(rewriter, loc, elemType, val);
     auto typeConverter = getTypeConverter();
     auto llStruct = SplatOpConversion::convertSplatLikeOp(
         elemType, op.getType(), constOp, typeConverter, rewriter, loc);
@@ -141,7 +141,7 @@ struct ArithConstantArrayOpConversion
     auto elemType = values.getElementType();
     SmallVector<Value> llVals;
     for (auto v : values.getValues<APInt>()) {
-      auto ll = rewriter.create<LLVM::ConstantOp>(loc, elemType, v);
+      auto ll = LLVM::ConstantOp::create(rewriter, loc, elemType, v);
       llVals.push_back(ll);
     }
     size_t elemsPerThread = getTotalElemsPerThread(tensorTy);

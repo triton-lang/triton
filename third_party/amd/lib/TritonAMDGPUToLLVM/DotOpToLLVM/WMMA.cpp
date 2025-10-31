@@ -58,8 +58,8 @@ ValueTable getValuesFromDotOperandLayoutStruct(
                 tb.insert_element(ty, rawElems, elems[idx], tb.i32_val(k));
           } else {
             // pad with zeros
-            Value zero = rewriter.create<LLVM::ConstantOp>(
-                loc, elemTy, rewriter.getZeroAttr(elemTy));
+            Value zero = LLVM::ConstantOp::create(rewriter, loc, elemTy,
+                                                  rewriter.getZeroAttr(elemTy));
             rawElems = tb.insert_element(ty, rawElems, zero, tb.i32_val(k));
           }
         }

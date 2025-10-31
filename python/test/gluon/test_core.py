@@ -17,6 +17,7 @@ from triton._internal_testing import (
     is_hopper_or_newer,
     is_hopper,
 )
+from triton.runtime.errors import OutOfResources
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 from triton.experimental.gluon import language as ttgl
@@ -29,8 +30,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     TensorMemoryScalesLayout,
     allocate_tensor_memory,
-    get_tmem_32x32b_reg_layout,
-    get_tmem_scales_reg_layout,
+    get_tmem_reg_layout,
     tcgen05_mma,
     tcgen05_mma_scaled,
     tcgen05_commit,
@@ -227,34 +227,40 @@ def test_device_tma_store():
 
 
 @gluon.jit
-def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, block_layout: ttgl.constexpr,
-               mma_layout: ttgl.constexpr, shared_layout_a: ttgl.constexpr, shared_layout_b: ttgl.constexpr,
-               acc_dtype: ttgl.constexpr, ASYNC: ttgl.constexpr, USE_TCGEN05: ttgl.constexpr):
-    a_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, block_layout))[:, None]
-    a_offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, block_layout))[None, :]
-    b_offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(1, block_layout))[:, None]
-    b_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, block_layout))[None, :]
-
-    out_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, mma_layout))[:, None]
-    out_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, mma_layout))[None, :]
+def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, block_layout_a: ttgl.constexpr,
+               block_layout_b: ttgl.constexpr, block_layout_c: ttgl.constexpr, mma_layout: ttgl.constexpr,
+               shared_layout_a: ttgl.constexpr, shared_layout_b: ttgl.constexpr, acc_dtype: ttgl.constexpr,
+               ASYNC: ttgl.constexpr, USE_TCGEN05: ttgl.constexpr):
+    a_offs_m = ttgl.arange(0, M)[:, None]
+    a_offs_k = ttgl.arange(0, K)[None, :]
+    b_offs_k = ttgl.arange(0, K)[:, None]
+    b_offs_n = ttgl.arange(0, N)[None, :]
 
     operand_dtype = a.dtype.element_ty
-    a_tile = ttgl.load(a + a_offs_m * K + a_offs_k)
-    b_tile = ttgl.load(b + b_offs_k * N + b_offs_n)
+    a_ptrs = a + a_offs_m * K + a_offs_k
+    b_ptrs = b + b_offs_k * N + b_offs_n
+    a_tile = ttgl.load(ttgl.set_auto_layout(a_ptrs, block_layout_a))
+    b_tile = ttgl.load(ttgl.set_auto_layout(b_ptrs, block_layout_b))
 
     smem_a = ttgl.allocate_shared_memory(operand_dtype, [M, K], shared_layout_a, a_tile)
     smem_b = ttgl.allocate_shared_memory(operand_dtype, [K, N], shared_layout_b, b_tile)
     fence_async_shared()
 
     if USE_TCGEN05:
-        tmem_layout: ttgl.constexpr = TensorMemoryLayout((M, N), col_stride=32 // acc_dtype.primitive_bitwidth)
+        tmem_shape: ttgl.constexpr = (M // mma_layout.cta_split_num[0], N // mma_layout.cta_split_num[1])
+        tmem_layout: ttgl.constexpr = TensorMemoryLayout(tmem_shape.value,
+                                                         col_stride=32 // acc_dtype.primitive_bitwidth,
+                                                         cta_split_num=mma_layout.cta_split_num)
 
         num_warps: ttgl.constexpr = ttgl.num_warps()
-        tmem_reg_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(
-            M=M,
-            N=N,
-            shape=[M, N],
+        tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(
+            acc_dtype,
+            (M, N),
+            tmem_layout,
             num_warps=num_warps,
+            ctas_per_cga=mma_layout.ctas_per_cga,
+            cta_split_num=mma_layout.cta_split_num,
+            cta_order=mma_layout.cta_order,
         )
 
         mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], mbarrier.MBarrierLayout())
@@ -268,15 +274,19 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
         mbarrier.wait(mma_barrier, phase=0)
         mbarrier.invalidate(mma_barrier)
         acc = acc_tmem.load(tmem_reg_layout)
-        acc = ttgl.convert_layout(acc, layout=mma_layout)
     else:
         acc = ttgl.zeros([M, N], dtype=acc_dtype, layout=mma_layout)
         acc = hopper.warpgroup_mma(smem_a, smem_b, acc, is_async=ASYNC)
 
         if ASYNC:
             acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=[acc])
+    acc = ttgl.convert_layout(acc, block_layout_c)
 
-    ttgl.store(out + out_offs_m * N + out_offs_n, acc)
+    out_offs_m = ttgl.arange(0, M)[:, None]
+    out_offs_n = ttgl.arange(0, N)[None, :]
+    out_ptrs = out + out_offs_m * N + out_offs_n
+    out_ptrs = ttgl.set_auto_layout(out_ptrs, block_layout_c)
+    ttgl.store(out_ptrs, acc)
 
 
 @pytest.mark.skipif(not is_hopper(), reason="Requires Hopper")
@@ -299,6 +309,8 @@ def test_warpgroup_mma(ASYNC):
         M,
         N,
         K,
+        block_layout,
+        block_layout,
         block_layout,
         mma_layout,
         shared_layout_a,
@@ -324,10 +336,12 @@ def test_warpgroup_mma(ASYNC):
 @pytest.mark.parametrize("warps", ([8, 1], [4, 2], [4, 1]))
 @pytest.mark.parametrize("swizzling_a, swizzling_b", product([0, 32, 64, 128], repeat=2))
 @pytest.mark.parametrize("shape_m, shape_n, shape_k", [(1, 1, 1), (2, 4, 1), (2, 2, 4)])
+@pytest.mark.parametrize("ctas_per_cga", [[1, 1], [1, 2], [2, 8]])
 def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b, shape_m,
-                           shape_n, shape_k, fresh_knobs):
+                           shape_n, shape_k, ctas_per_cga, fresh_knobs):
 
     # FIXME: Workaround for a bug in PTXAS when the shared layout is transposed and the swizzling is 0
+    # This is fixed in PTXAS 13.0.88. Remove once we upgrade
     if bitwidth == 16 and ((transpose_a and swizzling_a == 0 and shape_m > 1) or
                            (not transpose_b and swizzling_b == 0 and shape_n > 1)):
         fresh_knobs.nvidia.disable_ptxas_opt = True
@@ -363,32 +377,60 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     # Get the minimum shape for the given swizzling / transpose
     M, K = min_shape(swizzling_a, M, K, transpose_a)
     K, N = min_shape(swizzling_b, K, N, transpose_b)
-    M *= shape_m
-    N *= shape_n
+    M *= shape_m * ctas_per_cga[0]
+    N *= shape_n * ctas_per_cga[1]
     K *= shape_k
     instr_shape[1] *= shape_n
 
     if use_tcgen05:
         M = 128
 
-    def get_shared_swizzling_zero(M, K, transpose):
+    def log2_int(x):
+        return x.bit_length() - 1
+
+    def get_shared_swizzling_zero(M, K, transpose, ctas_per_cga, cta_split_num, cta_order):
         # K-contig
         if transpose:
-            K, M = M, K
+            ctas_per_cga = [ctas_per_cga[1], ctas_per_cga[0]]
+            cta_split_num = [cta_split_num[1], cta_split_num[0]]
+            cta_order = [cta_order[1], cta_order[0]]
+            shared = get_shared_swizzling_zero(K, M, False, ctas_per_cga, cta_split_num, cta_order)
+
+            def transpose_bases(bases):
+                for i in range(len(bases)):
+                    bases[i] = [bases[i][1], bases[i][0]]
+                return bases
+
+            bases = transpose_bases(shared.offset_bases)
+            blocks = transpose_bases(shared.block_bases)
+            return ttgl.SharedLinearLayout(bases, blocks)
+        if ctas_per_cga[0] > 1 or ctas_per_cga[1] > 1:
+            # Broadcast along the inner dimension
+            M = M // cta_split_num[0]
+            K = K // cta_split_num[1]
+            shared = get_shared_swizzling_zero(M, K, False, [1, 1], [1, 1], [0, 1])
+            shape = [M, K]
+            blocks = []
+            for order in cta_order:
+                split = cta_split_num[order]
+                for s in range(log2_int(ctas_per_cga[order])):
+                    block = [0, 0]
+                    if s < log2_int(split):
+                        block[order] = shape[order] << s
+                    blocks.append(block)
+            return ttgl.SharedLinearLayout(shared.offset_bases, blocks)
+
         bases = []
-        for i in range(int(math.log2(128 // bitwidth))):
+        for i in range(log2_int(128 // bitwidth)):
             bases.append([0, 1 << i])
-        for i in range(int(math.log2(M))):
+        for i in range(log2_int(M)):
             bases.append([1 << i, 0])
-        for i in range(int(math.log2(K // (128 // bitwidth)))):
+        for i in range(log2_int(K // (128 // bitwidth))):
             offset = int(math.log2(128 // bitwidth)) + i
             bases.append([0, 1 << offset])
-        if transpose:
-            for i in range(len(bases)):
-                bases[i] = [bases[i][1], bases[i][0]]
         return ttgl.SharedLinearLayout(bases)
 
-    shared_mem_accum = (M + N) * K * bitwidth // 8
+    shared_mem_accum = (M * ctas_per_cga[1] + N * ctas_per_cga[0]) * K * bitwidth // 8
     if triton.runtime.driver.active.utils.get_device_properties(
             triton.runtime.driver.active.get_current_device())["max_shared_mem"] < shared_mem_accum:
         pytest.skip("Skipped due to insufficient shared memory on this GPU.")
@@ -397,18 +439,32 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     gl_acc_dtype = acc_dtype_map[acc_dtype]
     out_dtype = torch.float32
 
-    block_layout = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0])
+    cta_split_a = [ctas_per_cga[0], 1]
+    cta_split_b = [1, ctas_per_cga[1]]
+    cta_order = [1, 0]
+    block_layout_a = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0],
+                                        ctas_per_cga=ctas_per_cga, cta_split_num=cta_split_a, cta_order=cta_order)
+    block_layout_b = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0],
+                                        ctas_per_cga=ctas_per_cga, cta_split_num=cta_split_b, cta_order=cta_order)
     if swizzling_a == 0:
-        shared_layout_a = get_shared_swizzling_zero(M, K, transpose_a)
+        shared_layout_a = get_shared_swizzling_zero(M, K, transpose_a, ctas_per_cga, cta_split_a, cta_order)
     else:
         shared_layout_a = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_a, element_bitwidth=bitwidth, rank=2,
-                                                 transposed=transpose_a)
+                                                 transposed=transpose_a, ctas_per_cga=ctas_per_cga,
+                                                 cta_split_num=cta_split_a, cta_order=cta_order)
     if swizzling_b == 0:
-        shared_layout_b = get_shared_swizzling_zero(K, N, transpose_b)
+        shared_layout_b = get_shared_swizzling_zero(K, N, transpose_b, ctas_per_cga, cta_split_b, cta_order)
     else:
         shared_layout_b = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_b, element_bitwidth=bitwidth, rank=2,
-                                                 transposed=transpose_b)
-    mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=instr_shape)
+                                                 transposed=transpose_b, ctas_per_cga=ctas_per_cga,
+                                                 cta_split_num=cta_split_b, cta_order=cta_order)
+    mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=instr_shape,
+                                             ctas_per_cga=ctas_per_cga, cta_split_num=ctas_per_cga, cta_order=cta_order)
+    threads_n = N // (8 * warps[1] * ctas_per_cga[1])
+    threads_m = THREADS_PER_WARP // threads_n
+    block_layout_c = ttgl.BlockedLayout([1, 8], [threads_m, threads_n], warps_per_cta=warps, order=[1, 0],
+                                        ctas_per_cga=mma_layout.ctas_per_cga, cta_split_num=mma_layout.cta_split_num,
+                                        cta_order=mma_layout.cta_order)
 
     torch.manual_seed(0)
 
@@ -426,22 +482,29 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     b = cast(torch.randn((K, N), device="cuda", dtype=torch.float32), torch_dtype)
     out = torch.zeros((M, N), device="cuda", dtype=out_dtype)
 
-    mma_kernel[(1, )](
-        a,
-        b,
-        out,
-        M,
-        N,
-        K,
-        block_layout,
-        mma_layout,
-        shared_layout_a,
-        shared_layout_b,
-        gl_acc_dtype,
-        False,
-        use_tcgen05,
-        num_warps=warps[0] * warps[1],
-    )
+    try:
+        mma_kernel[(1, )](
+            a,
+            b,
+            out,
+            M,
+            N,
+            K,
+            block_layout_a,
+            block_layout_b,
+            block_layout_c,
+            mma_layout,
+            shared_layout_a,
+            shared_layout_b,
+            gl_acc_dtype,
+            False,
+            use_tcgen05,
+            num_warps=warps[0] * warps[1],
+            num_ctas=ctas_per_cga[0] * ctas_per_cga[1],
+        )
+    except OutOfResources:
+        # FIXME: Compute a priori
+        pytest.skip("Not enough shared memory")
 
     try:
         allow_tf32 = torch.backends.cuda.matmul.allow_tf32
@@ -846,7 +909,7 @@ def test_tmem_subslice_block_m_64():
         s_tmem = allocate_tensor_memory(ttgl.float32, (BLOCK_M, N), layout=tmem_layout)
         o_tmem = allocate_tensor_memory(ttgl.float32, (BLOCK_M, N), layout=tmem_layout)
 
-        layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, (BLOCK_M, N), num_warps=4)
+        layout: ttgl.constexpr = get_tmem_reg_layout(ttgl.float32, (BLOCK_M, N), tmem_layout, num_warps=4)
 
         offsets = ttgl.arange(0, BLOCK_M)[:, None] * N + ttgl.arange(0, N)[None, :]
         offsets = ttgl.set_auto_layout(offsets, layout)
@@ -860,7 +923,7 @@ def test_tmem_subslice_block_m_64():
         p_tmem.store(ttgl.full((BLOCK_M, N), 0.0, dtype=ttgl.float16, layout=layout))
 
         d1_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, 2), col_stride=1)
-        d1_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, 2, (BLOCK_M, 2), num_warps=4)
+        d1_layout: ttgl.constexpr = get_tmem_reg_layout(ttgl.float32, (BLOCK_M, 2), d1_tmem_layout, num_warps=4)
 
         m_tmem = s_tmem.slice(N // 4, 2)._reinterpret(ttgl.float32, [BLOCK_M, 2], d1_tmem_layout)
         m_tmem.store(ttgl.full((BLOCK_M, 2), 2.0, dtype=ttgl.float32, layout=d1_layout))
@@ -925,7 +988,10 @@ def test_block_m_64_mma():
         a_offsets = ttgl.arange(0, BLOCK_M)[:, None] * N + ttgl.arange(0, N)[None, :]
         b_offsets = ttgl.arange(0, N)[:, None] * N + ttgl.arange(0, N)[None, :]
 
-        a_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, (BLOCK_M, N), num_warps=4)
+        a_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), col_stride=1)
+        acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), col_stride=1)
+        a_layout: ttgl.constexpr = get_tmem_reg_layout(ttgl.float16, (BLOCK_M, N), a_tmem_layout, num_warps=4,
+                                                       instr_variant="32x32b_splitn")
         b_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
         a_offsets = ttgl.set_auto_layout(a_offsets, a_layout)
         b_offsets = ttgl.set_auto_layout(b_offsets, b_layout)
@@ -934,8 +1000,6 @@ def test_block_m_64_mma():
         b = ttgl.load(b_ptr + b_offsets)
         c = ttgl.load(c_ptr + a_offsets)
 
-        a_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), col_stride=1)
-        acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout((BLOCK_M, BLOCK_N), col_stride=1)
         al_tmem = allocate_tensor_memory(ttgl.float16, (BLOCK_M, N), layout=a_tmem_layout)
         ar_tmem = allocate_tensor_memory(ttgl.float16, (BLOCK_M, N), layout=a_tmem_layout)
         acc_tmem = allocate_tensor_memory(ttgl.float32, (BLOCK_M, N), layout=acc_tmem_layout)
@@ -1078,10 +1142,14 @@ def test_tmem_copy_no_scales(M, N, BLOCK_N, num_warps, swizzle):
     @gluon.jit
     def tmem_copy_no_scales(in_ptr, out_ptr, M: ttgl.constexpr, N: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
                             swizzle: ttgl.constexpr, num_warps: ttgl.constexpr):
-        tmem_reg_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(
-            M=128,
-            N=BLOCK_N,
-            shape=[M, N],
+        tmem_layout: ttgl.constexpr = TensorMemoryLayout(
+            block=(128, BLOCK_N),
+            col_stride=32 // in_ptr.dtype.element_ty.primitive_bitwidth,
+        )
+        tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(
+            in_ptr.dtype.element_ty,
+            (M, N),
+            tmem_layout,
             num_warps=num_warps,
         )
         offs_m = ttgl.arange(0, M, ttgl.SliceLayout(1, tmem_reg_layout))
@@ -1089,10 +1157,6 @@ def test_tmem_copy_no_scales(M, N, BLOCK_N, num_warps, swizzle):
         offs = offs_m[:, None] * N + offs_n[None, :]
 
         input = ttgl.load(in_ptr + offs)
-        tmem_layout: ttgl.constexpr = TensorMemoryLayout(
-            block=(128, BLOCK_N),
-            col_stride=32 // in_ptr.dtype.element_ty.primitive_bitwidth,
-        )
 
         smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzle, element_bitwidth=32, rank=2)
         smem = ttgl.allocate_shared_memory(in_ptr.dtype.element_ty, [M, N], layout=smem_layout)
@@ -1433,16 +1497,19 @@ def test_tcgen05_mma_scaled_minimal():
 
         # Accumulator in TMEM initialized to ones
         acc_tmem_layout: ttgl.constexpr = TensorMemoryLayout([M, N], col_stride=1)
-        tmem_reg_layout: ttgl.constexpr = get_tmem_32x32b_reg_layout(M, N, [M, N], ttgl.num_warps())
+        tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(ttgl.float32, (M, N), acc_tmem_layout, ttgl.num_warps())
         acc_init = ttgl.zeros([M, N], ttgl.float32, layout=tmem_reg_layout)
         acc_tmem = allocate_tensor_memory(ttgl.float32, [M, N], acc_tmem_layout, acc_init)
 
         # Zero scales in TMEM
         scale_layout: ttgl.constexpr = TensorMemoryScalesLayout()
-        scale_reg_layout: ttgl.constexpr = get_tmem_scales_reg_layout(M, N, [M, N], ttgl.num_warps())
-        scale_offs_k = ttgl.arange(0, (K // 32), layout=ttgl.SliceLayout(0, scale_reg_layout))[None, :]
-        scale_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, scale_reg_layout))[:, None]
-        scale_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, scale_reg_layout))[:, None]
+        scale_reg_layout_m: ttgl.constexpr = get_tmem_reg_layout(ttgl.int8, (M, K // 32), scale_layout,
+                                                                 ttgl.num_warps())
+        scale_reg_layout_n: ttgl.constexpr = get_tmem_reg_layout(ttgl.int8, (N, K // 32), scale_layout,
+                                                                 ttgl.num_warps())
+        scale_offs_k = ttgl.arange(0, (K // 32), layout=ttgl.SliceLayout(0, scale_reg_layout_m))[None, :]
+        scale_offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, scale_reg_layout_m))[:, None]
+        scale_offs_n = ttgl.arange(0, N, layout=ttgl.SliceLayout(1, scale_reg_layout_n))[:, None]
         a_scale_init = ttgl.load(a_scale + scale_offs_m * (K // 32) + scale_offs_k)
         b_scale_init = ttgl.load(b_scale + scale_offs_n * (K // 32) + scale_offs_k)
         a_scale_tmem = allocate_tensor_memory(ttgl.int8, [M, K // 32], scale_layout, a_scale_init)
