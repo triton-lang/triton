@@ -188,7 +188,7 @@ module {
 // -----
 
 module {
-  // expected-remark @below {{cf_liveness_error}}
+  // expected-error @below {{The scope name 'name0' is not properly closed (missing start record)}}
   tt.func @cf_liveness_error(%cond: i1) {
     // expected-remark @below {{scope id = 0}}
     proton.record start "name0"
