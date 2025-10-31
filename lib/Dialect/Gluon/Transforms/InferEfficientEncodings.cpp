@@ -7,8 +7,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/PriorityWorklist.h"
-#include "llvm/Support/xxhash.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/xxhash.h"
 
 #define DEBUG_TYPE "gluon-infer-efficient-encodings"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -46,12 +46,15 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
   return currPerThread;
 }
 
-ttg::CTALayoutAttr getCTALayoutForEfficientEncodings(RankedTensorType refTensorType, unsigned numCTAs) {
+ttg::CTALayoutAttr
+getCTALayoutForEfficientEncodings(RankedTensorType refTensorType,
+                                  unsigned numCTAs) {
   // TODO support numCTAs > 1
   assert(numCTAs == 1 && "only numCTAs == 1 is supported for now");
   assert(isa<gluon::EfficientEncodingAttr>(refTensorType.getEncoding()) &&
          "expected CTALayoutAttr encoding");
-  return ttg::CTALayoutAttr::getDefault(refTensorType.getContext(), refTensorType.getShape().size());
+  return ttg::CTALayoutAttr::getDefault(refTensorType.getContext(),
+                                        refTensorType.getShape().size());
 }
 
 ///
@@ -285,8 +288,7 @@ class GluonInferEfficientEncodingsPass
 
     Value ptr = getMemAccessPtr(op);
     auto refTensorType = cast<RankedTensorType>(ptr.getType());
-    auto CTALayout =
-        getCTALayoutForEfficientEncodings(refTensorType, numCTAs);
+    auto CTALayout = getCTALayoutForEfficientEncodings(refTensorType, numCTAs);
 
     LDBG("Considering op: " << *op);
     LLVM_DEBUG({
@@ -322,8 +324,8 @@ class GluonInferEfficientEncodingsPass
       }
     }
 
-    auto shapePerCTA =
-        ttg::getShapePerCTA(CTALayout.getCTASplitNum(), refTensorType.getShape());
+    auto shapePerCTA = ttg::getShapePerCTA(CTALayout.getCTASplitNum(),
+                                           refTensorType.getShape());
 
     LDBG("shapePerCTA=[" << triton::join(shapePerCTA, ", ") << "]");
 
@@ -401,7 +403,7 @@ class GluonInferEfficientEncodingsPass
 
       int numWarps = ttg::lookupNumWarps(curr);
       int numCTAs = ttg::lookupNumCTAs(curr);
-      setCoalescedEncoding(axisInfoAnalysis, curr, numWarps, threadsPerWarp, 
+      setCoalescedEncoding(axisInfoAnalysis, curr, numWarps, threadsPerWarp,
                            numCTAs, layoutMap);
     });
 
@@ -409,7 +411,7 @@ class GluonInferEfficientEncodingsPass
 
     // 2. propagate forward/backward
     // similar to ResolveAutoLayoutPass.cpp
-    // 
+    //
     // for backward slice, it doesn't cross the set_auto_layout boundary
     // i.e. gl.set_auto_layout(val, gl.EfficientLayout())
     // -> gl.set_auto_layout(val, concrete coalesced layout)

@@ -3921,7 +3921,7 @@ std::optional<int> triton::gpu::maybeLookupNumCTAs(Operation *op) {
   if (isa<ModuleOp, FuncOp>(op)) {
     if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNumCTAsName))
       return attr.getInt();
-  } 
+  }
   if (Operation *parent = op->getParentOp())
     return maybeLookupNumCTAs(parent);
   return {};
