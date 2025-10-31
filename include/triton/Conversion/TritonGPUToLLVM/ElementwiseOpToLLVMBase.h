@@ -166,8 +166,14 @@ struct ElementwiseOpConversion
                                     ConversionPatternRewriter &rewriter,
                                     Type elemTy, MultipleOperandsRange operands,
                                     Location loc) const {
-    return {DestOp::create(rewriter, loc, elemTy, operands[0],
-                           adaptor.getAttributes().getValue())};
+    auto newOp = DestOp::create(rewriter, loc, elemTy, operands[0],
+                                adaptor.getAttributes().getValue());
+    if (auto fastMath =
+            dyn_cast<arith::ArithFastMathInterface>(op.getOperation())) {
+      auto fastMathFlags = fastMath.getFastMathFlagsAttr();
+      newOp->setAttr(fastMath.getFastMathAttrName(), fastMathFlags);
+    }
+    return {newOp};
   }
 };
 

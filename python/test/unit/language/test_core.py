@@ -178,9 +178,10 @@ def _test_unary(dtype_x, expr, numpy_expr=None, device='cuda', num_ctas=1):
     # triton result
     x_tri = to_triton(x, device=device, dst_type=dtype_x)
     z_tri = to_triton(np.empty_like(x), device=device, dst_type=dtype_x)
-    kernel[(1, )](Z=z_tri, X=x_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
+    k = kernel[(1, )](Z=z_tri, X=x_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
     # compare
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=0.01)
+    return k
 
 
 def _binary_op_dtype_override(a: str, b: str) -> Optional[np.dtype]:
@@ -923,7 +924,12 @@ def test_unary_op(dtype_x, expr, num_ctas, device):
                           for x in ['x', '3.0']])
 def test_math_op(dtype_x, expr, x, device):
     np_expr = f"1.0 / np.sqrt({x})" if expr == "rsqrt" else f"np.{expr}({x})"
-    _test_unary(dtype_x, f'tl.{expr}({x})', np_expr, device=device)
+    k = _test_unary(dtype_x, f'tl.{expr}({x})', np_expr, device=device)
+    if is_cuda():
+        if expr in ['log2']:
+            assert 'lg2.approx.ftz.f32' in k.asm['ptx']
+        if expr in ['exp', 'exp2']:
+            assert 'ex2.approx.ftz.f32' in k.asm['ptx']
 
 
 @pytest.mark.interpreter

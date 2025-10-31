@@ -631,32 +631,6 @@ struct FPToSIOpConversion
   }
 };
 
-struct ExpOpConversionApprox
-    : ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox> {
-  using Base = ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(math::ExpOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    // For non-FP32 input, call __nv_expf for higher-precision calculation
-    if (getIntOrFloatOrPtrBitWidth(elemTy) != 32)
-      return {};
-
-    const double log2e = 1.4426950408889634;
-    Value prod = b.fmul(f32_ty, operands[0][0], b.f32_val(log2e));
-
-    Type resultTy = operands[0][0].getType();
-    StringRef name = "llvm.nvvm.ex2.approx.f";
-    auto callOp =
-        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, resultTy, {prod});
-    return {callOp.getResult(0)};
-  }
-};
-
 struct ClampFOpConversion
     : ElementwiseOpConversionBase<ClampFOp, ClampFOpConversion> {
   using Base = ElementwiseOpConversionBase<ClampFOp, ClampFOpConversion>;
@@ -825,11 +799,6 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
 
-  // ExpOpConversionApprox will try using ex2.approx if the input type is
-  // FP32. For other input types, ExpOpConversionApprox will return failure and
-  // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
-  // __nv_expf for higher-precision calculation
-  patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
   bool hwNanPropagationSupported = computeCapability >= 80;
   mlir::triton::populateMinMaxFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis, hwNanPropagationSupported,
