@@ -197,8 +197,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK: llvm.store
   // CHECK: llvm.store
   // CHECK: %[[P2:.*]] = llvm.icmp "slt" %[[I]], %[[UPPER]] : i32
-  // CHECK: %[[STEP2:.*]] = llvm.mlir.constant(2 : i32) : i32
-  // CHECK: %[[I_NEW:.*]] = llvm.add %[[I]], %[[STEP2]] : i32
+  // CHECK: %[[I_NEW:.*]] = llvm.add %[[I]], %[[STEP]] : i32
   // CHECK: llvm.cond_br %[[P2]], ^bb2(%[[I_NEW]], %[[UPPER]] : i32, i32), ^bb3
   // CHECK-DAG: ^bb3:
   // CHECK-DAG: %[[POST_FINAL_TIME:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
