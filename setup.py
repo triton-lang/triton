@@ -307,7 +307,11 @@ def get_thirdparty_packages(packages: list):
                         file.extractall(path=package_root_dir)
                 else:
                     with tarfile.open(fileobj=response, mode="r|*") as file:
-                        file.extractall(path=package_root_dir, filter="data")
+                        # Use extractall without filter for Python version < 3.12 compatibility
+                        if hasattr(tarfile, 'data_filter'):
+                            file.extractall(path=package_root_dir, filter="data")
+                        else:
+                            file.extractall(path=package_root_dir)
             # write version url to package_dir
             with open(os.path.join(package_dir, "version.txt"), "w") as f:
                 f.write(p.url)
@@ -350,7 +354,11 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
     if download:
         print(f'downloading and extracting {url} ...')
         with open_url(url) as url_file, tarfile.open(fileobj=url_file, mode="r|*") as tar_file:
-            tar_file.extractall(path=tmp_path, filter="data")
+            # Use extractall without filter for Python version < 3.12 compatibility
+            if hasattr(tarfile, 'data_filter'):
+                tar_file.extractall(path=tmp_path, filter="data")
+            else:
+                tar_file.extractall(path=tmp_path)
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
     print(f'copy {src_path} to {dst_path} ...')
     if os.path.isdir(src_path):
