@@ -122,6 +122,11 @@ class DependenciesFinder(ast.NodeVisitor):
         if val is None or type(val) is ModuleType:
             return
 
+        if getattr(val, "__triton_aggregate__", False):
+            for attr in val.hash_attrs:
+                self.record_reference(attr)
+            return
+
         if getattr(val, "__triton_builtin__", False):
             return
 

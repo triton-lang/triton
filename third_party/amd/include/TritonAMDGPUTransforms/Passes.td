@@ -257,7 +257,7 @@ def TritonAMDGPUUpdateAsyncWaitCount: Pass<"tritonamdgpu-update-async-wait-count
       compute the number of interleaving global memory instructions to emit the correct waitcnt during lowering.
   }];
 
-  let dependentDialects = [];
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
     Option<"archGenerationName", "arch-generation-name",
