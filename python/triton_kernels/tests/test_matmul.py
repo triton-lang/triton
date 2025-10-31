@@ -173,6 +173,29 @@ def opt_flags_scope(request):
     opt_flags.reset_opt_flags_constraints()
 
 
+def aggregate_experts(y, scatter_indx, n_expts_act, epilogue, precision_config, y_in):
+    if scatter_indx is None or n_expts_act == 1:
+        return y
+    from triton_kernels.reduce import reduce, PostprocessFn, InFlexData
+    out_matmul = y
+    mask = (scatter_indx.src_indx != -1).view(out_matmul.shape[-2]//n_expts_act, n_expts_act, 1)
+    out_matmul = out_matmul.view(out_matmul.shape[-2]//n_expts_act, n_expts_act, -1)
+    mask = mask.expand_as(out_matmul)
+    # out_matmul_scale_shape = out_matmul.shape[:-1] + (triton.cdiv(out_matmul.shape[-1], 32),)
+    postprocess_fn = PostprocessFn() if epilogue is None else PostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
+    out_flex = precision_config.flex_ctx.out_data
+    x_flex = InFlexData(dtype=out_flex.dtype, scale=out_flex.expected_scale)
+    # out_has_mx = precision_config.out_scale is not None
+    out_final, out_final_mx_scale = reduce(out_matmul, dim=1, postprocess_fn2=postprocess_fn, x_flex=x_flex, #
+        mask=mask,
+        y_has_mx=precision_config.out_scale is not None,
+        y_flex=precision_config.flex_ctx.out_data,
+        y_flex_saturate_inf=precision_config.flexpoint_saturate_inf,
+        y=y_in,
+    )
+    precision_config.out_scale = out_final_mx_scale
+    return out_final
+
 # ---------------
 # unit tests
 # ---------------
@@ -474,10 +497,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
     if y_transpose:
         if mode == "batched":
             yT_shape = (n_expts_tot, n, x_tri.shape[-2])
-        elif expt_is_inner:
-            yT_shape = (n_expts_tot, n, k)
         elif sindx is not None:
             yT_shape = (n, m)
+        elif expt_is_inner:
+            yT_shape = (n_expts_tot, n, k)
         else:
             n_rows = x_tri.shape[-2] if gindx is None else gindx.dst_indx.shape[0]
             yT_shape = (n, n_rows)
@@ -604,8 +627,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
     # triton
     try:
         tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt,
-                           gammas=gs1_ref, epilogue=epilogue, y=y_tri_in,
+                           gammas=gs1_ref, epilogue=epilogue, y=y_tri_in if sindx is None or n_expts_act == 1 else None,
                            inner_routing_data=inner_routing_data)
+        tri_y = tri_y.squeeze(0)
+        tri_y = aggregate_experts(tri_y, sindx, n_expts_act, epilogue, precision_opt, y_tri_in)
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     if y_tri_in is not None:
