@@ -207,7 +207,7 @@ module {
 
 module {
   tt.func @cf_unclosed() {
-    // expected-error @below {{The scope name 'unclosed' is started without being closed}}
+    // expected-error @below {{The scope name 'unclosed' is not properly closed (missing end record)}}
     proton.record start "unclosed"
     tt.return
   }
