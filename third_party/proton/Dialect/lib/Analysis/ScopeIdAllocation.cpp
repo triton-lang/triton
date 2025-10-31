@@ -255,7 +255,7 @@ void ScopeIdAllocation::dominance() {
     auto *op = sortedStartRecordOps[i];
     for (int j = i - 1; j >= 0; --j) {
       auto *maybeParentOp = sortedStartRecordOps[j];
-      auto scopeId = opToIdMap.lookup(op);
+      auto scopeId = opToIdMap.lookup(maybeParentOp);
       auto endRecordOp = endRecordMap.lookup(scopeId);
       if (domInfo.dominates(maybeParentOp, op) && 
           domInfo.dominates(op, endRecordOp)) {
