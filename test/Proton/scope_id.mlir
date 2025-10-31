@@ -4,8 +4,10 @@ module {
   // expected-remark @below {{one_scope}}
   tt.func @one_scope() {
     // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record start "name0"
     // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record end "name0"
     tt.return
   }
@@ -13,12 +15,16 @@ module {
   // expected-remark @below {{two_scopes}}
   tt.func @two_scopes() {
     // expected-remark @below {{scope id = 1}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record start "name0"
     // expected-remark @below {{scope id = 1}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record end "name0"
     // expected-remark @below {{scope id = 2}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record start "name1"
     // expected-remark @below {{scope id = 2}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record end "name1"
     tt.return
   }
@@ -26,12 +32,16 @@ module {
   // expected-remark @below {{two_scopes_overlap}}
   tt.func @two_scopes_overlap() {
     // expected-remark @below {{scope id = 3}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record start "name0"
     // expected-remark @below {{scope id = 4}}
+    // expected-remark @below {{scope parent id = 3}}
     proton.record start "name1"
     // expected-remark @below {{scope id = 3}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record end "name0"
     // expected-remark @below {{scope id = 4}}
+    // expected-remark @below {{scope parent id = 3}}
     proton.record end "name1"
     tt.return
   }
@@ -43,8 +53,10 @@ module {
   // expected-remark @below {{inner}}
   tt.func @inner() {
     // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record start "name0"
     // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record end "name0"
     tt.return
   }
@@ -52,9 +64,11 @@ module {
   // expected-remark @below {{outer}}
   tt.func @outer() {
     // expected-remark @below {{scope id = 1}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record start "name0"
     tt.call @inner() : () -> ()
     // expected-remark @below {{scope id = 1}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record end "name0"
     tt.return
   }
@@ -66,12 +80,16 @@ module {
   // expected-remark @below {{duplicate}}
   tt.func @duplicate() {
     // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record start "name0"
     // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record end "name0"
     // expected-remark @below {{scope id = 1}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record start "name0"
     // expected-remark @below {{scope id = 1}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record end "name0"
     tt.return
   }
@@ -86,10 +104,12 @@ module {
     cf.br ^start
   ^exit:
     // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record end "name0"
     tt.return
   ^start:
     // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record start "name0"
     cf.br ^exit
   }
@@ -101,10 +121,12 @@ module {
   // expected-remark @below {{cf_single_branch}}
   tt.func @cf_single_branch(%cond: i1) {
     // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record start "name0"
     cf.cond_br %cond, ^then, ^else
   ^then:  // pred: ^entry
     // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record end "name0"
     cf.br ^merge
   ^else:  // pred: ^entry
@@ -121,23 +143,29 @@ module {
   // expected-remark @below {{warp_specialize_balanced}}
   tt.func @warp_specialize_balanced() {
     // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record start "outer"
     ttg.warp_specialize()
     default {
       // expected-remark @below {{scope id = 1}}
+      // expected-remark @below {{scope parent id = 0}}
       proton.record start "default"
       // expected-remark @below {{scope id = 1}}
+      // expected-remark @below {{scope parent id = 0}}
       proton.record end "default"
       ttg.warp_yield
     }
     partition0() num_warps(1) {
       // expected-remark @below {{scope id = 2}}
+      // expected-remark @below {{scope parent id = 0}}
       proton.record start "partition"
       // expected-remark @below {{scope id = 2}}
+      // expected-remark @below {{scope parent id = 0}}
       proton.record end "partition"
       ttg.warp_return
     } : () -> ()
     // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record end "outer"
     tt.return
   }
