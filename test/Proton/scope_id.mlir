@@ -264,13 +264,13 @@ module {
 // -----
 
 module {
-  // expected-error @below {{The scope name 'loop' is started without being closed}}
   tt.func @cf_loop_unclosed() {
     %c0 = arith.constant 0 : index
     cf.br ^loop(%c0 : index)
   ^exit:
     tt.return
   ^loop(%iv: index):
+    // expected-error @below {{The scope name 'loop' is started without being closed}}
     proton.record start "loop"
     %c1 = arith.constant 1 : index
     %next = arith.addi %iv, %c1 : index
@@ -283,13 +283,13 @@ module {
 // -----
 
 module {
-  // expected-error @below {{The scope name 'loop' has end record that dominates its start record}}
   tt.func @cf_loop_end_before_start() {
     %c0 = arith.constant 0 : index
     cf.br ^loop(%c0 : index)
   ^exit:
     tt.return
   ^loop(%iv: index):
+    // expected-error @below {{The scope name 'loop' has end record that dominates its start record}}
     proton.record end "loop"
     %c1 = arith.constant 1 : index
     %next = arith.addi %iv, %c1 : index
