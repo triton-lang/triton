@@ -1114,15 +1114,17 @@ LogicalResult AxisInfoAnalysis::visitOperation(
 void AxisInfoAnalysis::visitForOpInductionVar(
     scf::ForOp op, ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices) {
   ProgramPoint *programPoint = getProgramPointAfter(op);
-  const auto &lb =
-      getLatticeElementFor(programPoint, op.getLowerBound())->getValue();
-  const auto &step =
-      getLatticeElementFor(programPoint, op.getStep())->getValue();
+  auto *lbLattice = getLatticeElementFor(programPoint, op.getLowerBound());
+  auto *stepLattice = getLatticeElementFor(programPoint, op.getStep());
+  for (auto op_iter : {lbLattice, stepLattice})
+    if (op_iter->getValue().getRank() == 0)
+      setToEntryState((dataflow::Lattice<AxisInfo> *)op_iter);
 
   AxisInfo::DimVectorT knownContiguity(1, 1);
   AxisInfo::DimVectorT knownDivisibility(1, 1);
   AxisInfo::DimVectorT knownConstancy(1, 1);
-  knownDivisibility[0] = gcd(lb.getDivisibility(0), step.getDivisibility(0));
+  knownDivisibility[0] = gcd(lbLattice->getValue().getDivisibility(0),
+                             stepLattice->getValue().getDivisibility(0));
   auto inductionVar =
       AxisInfo(knownContiguity, knownDivisibility, knownConstancy);
   (void)argLattices[0]->join(inductionVar);

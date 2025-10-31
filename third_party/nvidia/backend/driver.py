@@ -371,6 +371,13 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
     }}
 
     config.numAttrs = num_attrs;
+    if (num_ctas == 16) {{
+      CUDA_CHECK(cuFuncSetAttribute(
+          function,
+          CU_FUNC_ATTRIBUTE_NON_PORTABLE_CLUSTER_SIZE_ALLOWED,
+          1
+      ));
+    }}
 
     CUDA_CHECK(cuLaunchKernelExHandle(&config, function, params, 0));
   }}

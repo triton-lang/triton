@@ -1,3 +1,4 @@
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/Passes.h"
@@ -100,7 +101,7 @@ public:
       SetVector<Operation *> conditionUsers(condition.getUsers().begin(),
                                             condition.getUsers().end());
       // sort the users in topological order.
-      conditionUsers = multiRootTopologicalSort(conditionUsers);
+      conditionUsers = mlir::topologicalSort(conditionUsers);
       // Get condition's users
       for (Operation *user : conditionUsers) {
         auto ifOp = dyn_cast<scf::IfOp>(user);

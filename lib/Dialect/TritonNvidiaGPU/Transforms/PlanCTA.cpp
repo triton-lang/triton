@@ -84,8 +84,7 @@ replaceCTALayout(ttg::DistributedEncodingTrait layout,
 
 class CTAPlanner {
 public:
-  CTAPlanner(ClusterInfo *clusterInfo_);
-  ~CTAPlanner();
+  CTAPlanner();
 
   void run(triton::FuncOp &funcOp);
 
@@ -95,7 +94,6 @@ private:
   bool isBackward(CastOp cast) const;
   bool isForward(CastOp cast) const;
 
-  void setTiling(llvm::ArrayRef<unsigned> CTAsPerCGA);
   bool processDot(triton::FuncOp &funcOp);
   bool processReduce(triton::FuncOp &funcOp);
   void processStoreLikeOps(triton::FuncOp &funcOp);
@@ -149,39 +147,17 @@ private:
   bool processMultiUsersBackward(Value input, CastOp cast);
   bool processMultiUsersForward(Value output, CastOp cast);
 
-  // This flag indicates whether clusterInfo needs to be deleted in the
-  // destructor of CTAPlanner. The flag `ownInfo` is set to false when a
-  // non-null pointer to clusterInfo is passed to the constructor of CTAPlanner.
-  // Otherwise, a self-managed ClusterInfo will be created and the ownInfo will
-  // be set to true.
-  bool ownInfo;
-  ClusterInfo *clusterInfo;
-  bool tiled;
+  void markTiled();
+
   unsigned step;
   unsigned stepUnchanged;
+  bool tiled;
   std::queue<CastOp> queue;
 };
 
-CTAPlanner::CTAPlanner(ClusterInfo *clusterInfo_)
-    : ownInfo(false), clusterInfo(clusterInfo_), tiled(false), step(0),
-      stepUnchanged(0) {
-  if (clusterInfo == nullptr) {
-    clusterInfo = new ClusterInfo();
-    ownInfo = true;
-  }
-}
-
-CTAPlanner::~CTAPlanner() {
-  if (ownInfo) {
-    delete clusterInfo;
-    // Actually not necessary but safer
-    ownInfo = false;
-    clusterInfo = nullptr;
-  }
-}
+CTAPlanner::CTAPlanner() : step(0), stepUnchanged(0), tiled(false) {}
 
 void CTAPlanner::run(triton::FuncOp &funcOp) {
-  assert(!tiled && "Please create a new CTAPlanner");
   static const unsigned maxSteps = 10000;
 
   auto nextStep = [&]() {
@@ -232,29 +208,9 @@ bool CTAPlanner::isForward(CastOp cast) const {
   return cast->getAttrOfType<StringAttr>("direction") == "forward";
 }
 
-void CTAPlanner::setTiling(llvm::ArrayRef<unsigned> CTAsPerCGA) {
-  assert(!tiled && "CTA tiling is already determinted");
-  assert(clusterInfo && "ClusterInfo pointer is null");
+void CTAPlanner::markTiled() {
+  assert(!tiled && "CTA tiling is already determined");
   tiled = true;
-  unsigned numCTAs = 1;
-  for (unsigned cta : CTAsPerCGA)
-    numCTAs *= cta;
-  if (numCTAs == 2) {
-    // For 2 CTAs always use 2x1x1.
-    // TODO: can we always serialize the CTAs on X dimension?
-    clusterInfo->clusterDimX = 2;
-    return;
-  }
-
-  if (CTAsPerCGA.size() > 0)
-    clusterInfo->clusterDimX = CTAsPerCGA[0];
-  if (CTAsPerCGA.size() > 1)
-    clusterInfo->clusterDimY = CTAsPerCGA[1];
-  if (CTAsPerCGA.size() > 2)
-    clusterInfo->clusterDimZ = CTAsPerCGA[2];
-  for (auto i = 3; i < CTAsPerCGA.size(); ++i)
-    if (CTAsPerCGA[i] != 1)
-      llvm::report_fatal_error("tiling > 3 dims is not implemented");
 }
 
 bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
@@ -297,7 +253,7 @@ bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
     unsigned splitM, splitN;
     std::tie(splitM, splitN) = getCTATiling(M, N, K, ttg::getNumCTAs(dLayout));
     // FIXME: Should consider IR with more than one DotOps
-    setTiling({splitM, splitN, 1});
+    markTiled();
 
     OpBuilder builder(dot);
     auto numThreads = ttg::lookupThreadsPerWarp(builder);
@@ -373,7 +329,7 @@ bool CTAPlanner::processReduce(triton::FuncOp &funcOp) {
     auto CTALayout =
         ttg::CTALayoutAttr::get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
     if (!tiled)
-      setTiling(CTALayout.getCTAsPerCGA());
+      markTiled();
     auto newSrcLayout =
         replaceCTALayout(cast<ttg::DistributedEncodingTrait>(srcLayout),
                          srcShape, numWarps, CTALayout);
@@ -389,7 +345,7 @@ bool CTAPlanner::processReduce(triton::FuncOp &funcOp) {
 }
 
 void CTAPlanner::processStoreLikeOps(triton::FuncOp &funcOp) {
-  assert(!tiled && "CTA tiling is already determinted");
+  assert(!tiled && "CTA tiling is already determined");
 
   llvm::SmallVector<Operation *> stores;
   funcOp.walk([&](Operation *op) {
@@ -412,7 +368,7 @@ void CTAPlanner::processStoreLikeOps(triton::FuncOp &funcOp) {
       if (!tiled) {
         // Use CTA tiling of the first store-like op as global CTA tiling
         CTALayout = ttg::getCTALayout(tensorTy.getEncoding());
-        setTiling(CTALayout.getCTAsPerCGA());
+        markTiled();
       }
       auto newLayout = replaceCTALayout(
           cast<ttg::DistributedEncodingTrait>(tensorTy.getEncoding()),
@@ -421,11 +377,8 @@ void CTAPlanner::processStoreLikeOps(triton::FuncOp &funcOp) {
     }
   }
 
-  // If all store-like ops are processing scalar values and no ReduceOp is
-  // found, we can conclude that this is an all-scalar computation, since
-  // ReduceOp is the only op that converts tensor values to scalar values.
   if (!tiled)
-    setTiling({1, 1, 1});
+    markTiled();
 }
 
 bool CTAPlanner::propagate(CastOp cast) {
@@ -1042,8 +995,6 @@ bool CTAPlanner::processMultiUsersForward(Value castResult, CastOp cast) {
 } // anonymous namespace
 
 struct PlanCTAPass : public impl::TritonGPUPlanCTAPassBase<PlanCTAPass> {
-  PlanCTAPass(ClusterInfo *clusterInfo_ = nullptr)
-      : clusterInfo(clusterInfo_) {}
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
@@ -1052,7 +1003,7 @@ struct PlanCTAPass : public impl::TritonGPUPlanCTAPassBase<PlanCTAPass> {
       return;
 
     mod.walk([&](triton::FuncOp funcOp) {
-      CTAPlanner planner(clusterInfo);
+      CTAPlanner planner;
       planner.run(funcOp);
 
       // FIXME: Clone funcOp so that the IR change can be identified after
@@ -1064,13 +1015,10 @@ struct PlanCTAPass : public impl::TritonGPUPlanCTAPassBase<PlanCTAPass> {
       funcOp.erase();
     });
   }
-
-  ClusterInfo *clusterInfo;
 };
 
-std::unique_ptr<Pass>
-createTritonNvidiaGPUPlanCTAPass(ClusterInfo *clusterInfo) {
-  return std::make_unique<PlanCTAPass>(clusterInfo);
+std::unique_ptr<Pass> createTritonNvidiaGPUPlanCTAPass() {
+  return std::make_unique<PlanCTAPass>();
 }
 
 } // namespace nvidia_gpu
