@@ -197,7 +197,7 @@ void ScopeIdAllocation::liveness() {
       auto &[existingId, isStart] = nameToIdMap[name];
       if (isStart == recordOp.getIsStart()) {
         // Error: duplicate start or end
-        mlir::emitError(recordOp.getLoc(), "Scope name '")
+        mlir::emitError(recordOp.getLoc(), "The scope name '")
             << name << "' has duplicate "
             << (recordOp.getIsStart() ? "start" : "end") << " record";
       } else {
@@ -214,7 +214,7 @@ void ScopeIdAllocation::liveness() {
     for (auto &[name, idIsStartPair] : nameToIdMap) {
       auto &[id, isStart] = idIsStartPair;
       auto unclosedOp = idToOpMap.lookup(id);
-      mlir::emitError(unclosedOp.getLoc(), "Scope name '")
+      mlir::emitError(unclosedOp.getLoc(), "The scope name '")
           << name << "' is not properly closed (missing "
           << (isStart ? "end" : "start") << " record)";
     }

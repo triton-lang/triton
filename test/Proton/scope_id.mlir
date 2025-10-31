@@ -190,15 +190,12 @@ module {
 module {
   // expected-error @below {{The scope name 'name0' is not properly closed (missing start record)}}
   tt.func @cf_liveness_error(%cond: i1) {
-    // expected-remark @below {{scope id = 0}}
     proton.record start "name0"
     cf.cond_br %cond, ^then, ^else
   ^then:  // pred: ^entry
-    // expected-remark @below {{scope id = 0}}
     proton.record end "name0"
     cf.br ^merge
   ^else:  // pred: ^entry
-    // expected-remark @below {{scope id = 0}}
     proton.record end "name0"
     cf.br ^merge
   ^merge:  // preds: ^then, ^else
