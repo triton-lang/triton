@@ -244,12 +244,14 @@ module {
 
 module {
   tt.func @cf_merge_unclosed(%cond: i1) {
-    cf.cond_br %cond, ^then, ^else
+    cf.br ^start(%cond : i1)
+  ^start(%cond_arg: i1):
     proton.record start "ghost"
-  ^then:  // pred: ^entry
-    proton.record stop "ghost"
+    cf.cond_br %cond_arg, ^then, ^else
+  ^then:  // pred: ^start
+    proton.record end "ghost"
     cf.br ^merge
-  ^else:  // pred: ^entry
+  ^else:  // pred: ^start
     // expected-error @below {{The scope name 'ghost' is started without being closed}}
     proton.record start "ghost"
     cf.br ^merge
@@ -264,7 +266,6 @@ module {
 module {
   // expected-error @below {{The scope name 'loop' is started without being closed}}
   tt.func @cf_loop_unclosed() {
-  ^entry:
     %c0 = arith.constant 0 : index
     cf.br ^loop(%c0 : index)
   ^exit:
@@ -284,7 +285,6 @@ module {
 module {
   // expected-error @below {{The scope name 'loop' has end record that dominates its start record}}
   tt.func @cf_loop_end_before_start() {
-  ^entry:
     %c0 = arith.constant 0 : index
     cf.br ^loop(%c0 : index)
   ^exit:
