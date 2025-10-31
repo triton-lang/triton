@@ -165,8 +165,8 @@ def routing(
             )
             active_indx = logits_global.indx
             expt_sizes = logits_global.mask_metadata.col_sum
-            dispatch_indx = logits_global.mask_metadata.col_sorted_indx
-            combine_indx = logits_global.mask_metadata.row_sorted_indx
+            dispatch_indx = logits_global.mask_metadata.row_sorted_indx
+            combine_indx = logits_global.mask_metadata.col_sorted_indx
             logits_global_metadata = make_ragged_tensor_metadata(expt_sizes, dispatch_indx.shape[0])
             x = convert_dp_to_ep(x, expt_assignment, active_indx, dispatch_indx)
             logits_local_metadata = remap_ragged_tensor_metadata(logits_global_metadata, expt_map)
@@ -184,8 +184,8 @@ def routing(
     else:
         # If mode is not specified or we have a single process, we do single-GPU routing.
         logits = topk(logits, n_expts_act, y_indx=y_indx, apply_softmax=not sm_first)
-        dispatch_indx = logits.mask_metadata.col_sorted_indx
-        combine_indx = logits.mask_metadata.row_sorted_indx
+        dispatch_indx = logits.mask_metadata.row_sorted_indx
+        combine_indx = logits.mask_metadata.col_sorted_indx
         ragged_batch_metadata = make_ragged_tensor_metadata(logits.mask_metadata.col_sum, dispatch_indx.shape[0])
         gate_scal = logits.vals.flatten()[combine_indx]
         routing_data = RoutingData(gate_scal, ragged_batch_metadata.slice_sizes, n_expts_tot, n_expts_act,
