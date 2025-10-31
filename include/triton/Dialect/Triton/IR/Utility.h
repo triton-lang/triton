@@ -203,4 +203,13 @@ unsigned getBitwidth(RankedTensorType ty);
 } // namespace triton
 } // namespace mlir
 
+extern "C" {
+enum TritonPluginResult {
+  TP_SUCCESS = 0,
+  TP_GENERIC_FAILURE = 1,
+};
+};
+#define TRITON_PLUGIN_API                                                      \
+  extern "C" __attribute__((visibility("default"))) TritonPluginResult
+
 #endif
