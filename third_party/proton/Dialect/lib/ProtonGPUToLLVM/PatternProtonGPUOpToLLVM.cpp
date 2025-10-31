@@ -241,8 +241,7 @@ struct FinalizeOpConversion
     Value gmemBufSizeOffset = b.i32_val(3);
     Value gmemBufSizePtr =
         b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemBufSizeOffset);
-    Value bufferSizeInBytes =
-        b.mul(effectiveBufferWords, b.i32_val(4));
+    Value bufferSizeInBytes = b.mul(effectiveBufferWords, b.i32_val(4));
     b.store(bufferSizeInBytes, gmemBufSizePtr);
 
     // Write back 'pre-final time'.
@@ -260,8 +259,7 @@ struct FinalizeOpConversion
     // Write back the data.
     rewriter.setInsertionPointToEnd(ifBlock);
     Value initIdx = b.i32_val(0);
-    Value upperBound =
-        b.sub(effectiveBufferWords, b.i32_val(wordsPerEntry));
+    Value upperBound = b.sub(effectiveBufferWords, b.i32_val(wordsPerEntry));
 
     Block *writeBackBlock = rewriter.createBlock(
         op->getParentRegion(), std::next(Region::iterator(ifBlock)),
@@ -280,11 +278,13 @@ struct FinalizeOpConversion
     copyWord(bufCounterOffset, gmemWbCounterOffset, memSpace);
     Value pred = b.icmp_slt(idx, upperArg);
     Value updatedIdx = b.add(idx, b.i32_val(wordsPerEntry));
-    cf::CondBranchOp::create(rewriter, loc, pred, writeBackBlock, ValueRange{updatedIdx, upperArg},
-                             thenBlock, ValueRange{});
+    cf::CondBranchOp::create(rewriter, loc, pred, writeBackBlock,
+                             ValueRange{updatedIdx, upperArg}, thenBlock,
+                             ValueRange{});
 
     rewriter.setInsertionPointToEnd(ifBlock);
-    cf::BranchOp::create(rewriter, loc, writeBackBlock, ValueRange{initIdx, upperBound});
+    cf::BranchOp::create(rewriter, loc, writeBackBlock,
+                         ValueRange{initIdx, upperBound});
 
     writeBackPostFinalTime(b, rewriter, op, isFirstThread, scratchPtr);
 
