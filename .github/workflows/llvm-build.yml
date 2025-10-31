@@ -93,176 +93,176 @@ jobs:
         key: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${{ env.short_llvm_commit_hash }}
         restore-keys: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-
 
-    - name: Configure, Build, Test, and Install LLVM (Ubuntu and macOS x64)
-      if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'ubuntu' || matrix.config.target-os == 'macos')
-      run: >
-        python3 -m pip install -r llvm-project/mlir/python/requirements.txt
+  #  - name: Configure, Build, Test, and Install LLVM (Ubuntu and macOS x64)
+  #    if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'ubuntu' || matrix.config.target-os == 'macos')
+  #    run: >
+  #      python3 -m pip install -r llvm-project/mlir/python/requirements.txt
+#
+  #      cmake -GNinja -Bllvm-project/build
+  #      -DCMAKE_BUILD_TYPE=Release
+  #      -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+  #      -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+  #      -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
+  #      -DCMAKE_LINKER=lld
+  #      -DLLVM_BUILD_UTILS=ON
+  #      -DLLVM_BUILD_TOOLS=ON
+  #      -DLLVM_ENABLE_ASSERTIONS=ON
+  #      -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
+  #      -DLLVM_ENABLE_PROJECTS="mlir;lld"
+  #      -DLLVM_INSTALL_UTILS=ON
+  #      -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
+  #      -DLLVM_ENABLE_TERMINFO=OFF
+  #      -DLLVM_ENABLE_ZSTD=OFF
+  #      llvm-project/llvm
+#
+  #      ninja -C llvm-project/build check-mlir install
+#
+  #      tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
 
-        cmake -GNinja -Bllvm-project/build
-        -DCMAKE_BUILD_TYPE=Release
-        -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-        -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-        -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
-        -DCMAKE_LINKER=lld
-        -DLLVM_BUILD_UTILS=ON
-        -DLLVM_BUILD_TOOLS=ON
-        -DLLVM_ENABLE_ASSERTIONS=ON
-        -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
-        -DLLVM_ENABLE_PROJECTS="mlir;lld"
-        -DLLVM_INSTALL_UTILS=ON
-        -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
-        -DLLVM_ENABLE_TERMINFO=OFF
-        -DLLVM_ENABLE_ZSTD=OFF
-        llvm-project/llvm
-
-        ninja -C llvm-project/build check-mlir install
-
-        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
-
-    - name: Configure, Build, Test, and Install LLVM (Windows)
-      if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'windows')
-      run: >
-        python3 -m pip install -r llvm-project/mlir/python/requirements.txt
-
-        cmake -GNinja -Bllvm-project/build
-        -DCMAKE_BUILD_TYPE=Release
-        -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
-        -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
-        -DLLVM_BUILD_UTILS=ON
-        -DLLVM_BUILD_TOOLS=ON
-        -DLLVM_ENABLE_ASSERTIONS=ON
-        -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
-        -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld"
-        -DLLVM_ENABLE_DIA_SDK=OFF
-        -DLLVM_INSTALL_UTILS=ON
-        -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
-        -DLLVM_ENABLE_TERMINFO=OFF
-        -DLLVM_ENABLE_ZSTD=OFF
-        llvm-project/llvm
-
-        ninja -C llvm-project/build check-mlir install
-
-        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
-
-
-    - name: Configure, Build, and Install LLVM (ubuntu arm64)
-      if: matrix.config.arch == 'arm64' && matrix.config.target-os == 'ubuntu'
-      run: |
-        python3 -m pip install -r llvm-project/mlir/python/requirements.txt
-        mkdir arm-sysroot
-        mkdir -p llvm-project/host-tools
-        cd llvm-project/host-tools
-        cmake -GNinja ../llvm -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS="mlir;llvm;clang;lld"
-        ninja mlir-tblgen
-        ninja llvm-tblgen
-        ninja clang-tblgen
-        cd ../..
-        mv ./llvm-project/host-tools/bin ./host-tools
-        HOST_TOOLS="$(pwd)/host-tools"
-        rm -rf llvm-project/host-tools
-        sudo apt-get update
-        sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-        cp -r /usr/aarch64-linux-gnu/lib ./arm-sysroot
-        cp -r /usr/aarch64-linux-gnu/include ./arm-sysroot
-        LINKER=$(pwd)/arm-sysroot/lib/ld-linux-aarch64.so.1
-        wget http://ftp.de.debian.org/debian/pool/main/g/gcc-defaults/gcc-aarch64-linux-gnu_14.2.0-1_amd64.deb
-        dpkg-deb -x gcc-aarch64-linux-gnu_14.2.0-1_amd64.deb ./arm-sysroot
-        export LD_LIBRARY_PATH=$(pwd)/arm-sysroot/lib:$LD_LIBRARY_PATH
-        sudo ln -s $LINKER /lib/ld-linux-aarch64.so.1
-        SYSROOT="$(pwd)/arm-sysroot"
-        echo $SYSROOT
-        echo $LINKER
-        cmake -GNinja -Bllvm-project/build \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld" \
-        -DLLVM_BUILD_UTILS=ON \
-        -DLLVM_TABLEGEN=$HOST_TOOLS/llvm-tblgen \
-        -DMLIR_TABLEGEN=$HOST_TOOLS/mlir-tblgen \
-        -DCLANG_TABLEGEN=$HOST_TOOLS/clang-tblgen \
-        -DLLVM_ENABLE_ASSERTIONS=ON \
-        -DCMAKE_LINKER=$LINKER \
-        -DMLIR_ENABLE_BINDINGS_PYTHON=OFF \
-        -DLLVM_ENABLE_ZSTD=OFF \
-        -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF \
-        -DLLVM_INSTALL_UTILS=ON \
-        -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}" \
-        -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU" \
-        -DCMAKE_CROSSCOMPILING=True \
-        -DLLVM_TARGET_ARCH=AArch64 \
-        -DLLVM_DEFAULT_TARGET_TRIPLE=aarch64-linux-gnu \
-        -DLLVM_USE_HOST_TOOLS=OFF \
-        -DCMAKE_C_COMPILER="/usr/bin/aarch64-linux-gnu-gcc" \
-        -DCMAKE_CXX_COMPILER="/usr/bin/aarch64-linux-gnu-g++" \
-        -DCMAKE_ASM_COMPILER="/usr/bin/aarch64-linux-gnu-as" \
-        -DCMAKE_AR="/usr/bin/aarch64-linux-gnu-ar" \
-        -DCMAKE_NM="/usr/bin/aarch64-linux-gnu-nm" \
-        -DCMAKE_OBJCOPY="/usr/bin/aarch64-linux-gnu-objcopy" \
-        -DCMAKE_OBJDUMP="/usr/bin/aarch64-linux-gnu-objdump" \
-        -DCMAKE_RANLIB="/usr/bin/aarch64-linux-gnu-ranlib" \
-        -DCMAKE_STRIP="/usr/bin/aarch64-linux-gnu-strip" \
-        -DCMAKE_SYSROOT=$SYSROOT \
-        -DLLVM_ENABLE_TERMINFO=OFF \
-        llvm-project/llvm
-        ninja -C llvm-project/build install
-        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
-
-    - name: Configure, Build, and Install LLVM (macOS arm64)
-      if: matrix.config.arch == 'arm64' && matrix.config.target-os == 'macos'
-      run: >
-        python3 -m pip install -r llvm-project/mlir/python/requirements.txt
-
-        cmake -GNinja -Bllvm-project/build
-        -DCMAKE_BUILD_TYPE=Release
-        -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-        -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-        -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
-        -DCMAKE_LINKER=lld
-        -DCMAKE_OSX_ARCHITECTURES=arm64
-        -DLLVM_BUILD_UTILS=ON
-        -DLLVM_BUILD_TOOLS=ON
-        -DLLVM_ENABLE_ASSERTIONS=ON
-        -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
-        -DLLVM_ENABLE_PROJECTS="mlir;lld"
-        -DLLVM_ENABLE_ZSTD=OFF
-        -DLLVM_INSTALL_UTILS=ON
-        -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU"
-        -DLLVM_USE_HOST_TOOLS=ON
-        -DLLVM_ENABLE_TERMINFO=OFF
-        -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF
-        llvm-project/llvm
-
-        ninja -C llvm-project/build install
-
-        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
-
-    - name: Configure, Build, Test, and Install LLVM (AlmaLinux)
-      if: matrix.config.target-os == 'almalinux'
-      run: |
-        # if this step crashes, it can leave behind a stale docker container
-        docker container prune -f
-
-        images=$(docker images -q)
-        if [ -n "$images" ]; then
-          docker rmi -f $images
-        fi
-
-        docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
-          -f llvm-build/.github/workflows/llvm-build/almalinux.Dockerfile .
-
-        # Create temporary container to copy cache and installed artifacts.
-        CONTAINER_ID=$(docker create llvm-build)
-
-        # We remove the existing directories, otherwise docker cp will
-        # create a subdirectory inside the existing directory.
-        rm -rf "${{ env.SCCACHE_DIR }}" "${{ env.llvm_install_dir }}"
-
-        docker cp "${CONTAINER_ID}:/install" "${{ env.llvm_install_dir }}"
-        tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
-
-        docker cp "${CONTAINER_ID}:/sccache" "${{ env.SCCACHE_DIR }}"
-        sudo chown -R "$(id -u -n):$(id -g -n)" "${{ env.SCCACHE_DIR }}"
-
-        docker rm "${CONTAINER_ID}"
+   # - name: Configure, Build, Test, and Install LLVM (Windows)
+   #   if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'windows')
+   #   run: >
+   #     python3 -m pip install -r llvm-project/mlir/python/requirements.txt
+#
+   #     cmake -GNinja -Bllvm-project/build
+   #     -DCMAKE_BUILD_TYPE=Release
+   #     -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
+   #     -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
+   #     -DLLVM_BUILD_UTILS=ON
+   #     -DLLVM_BUILD_TOOLS=ON
+   #     -DLLVM_ENABLE_ASSERTIONS=ON
+   #     -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
+   #     -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld"
+   #     -DLLVM_ENABLE_DIA_SDK=OFF
+   #     -DLLVM_INSTALL_UTILS=ON
+   #     -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
+   #     -DLLVM_ENABLE_TERMINFO=OFF
+   #     -DLLVM_ENABLE_ZSTD=OFF
+   #     llvm-project/llvm
+#
+   #     ninja -C llvm-project/build check-mlir install
+#
+   #     tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
+#
+#
+   # - name: Configure, Build, and Install LLVM (ubuntu arm64)
+   #   if: matrix.config.arch == 'arm64' && matrix.config.target-os == 'ubuntu'
+   #   run: |
+   #     python3 -m pip install -r llvm-project/mlir/python/requirements.txt
+   #     mkdir arm-sysroot
+   #     mkdir -p llvm-project/host-tools
+   #     cd llvm-project/host-tools
+   #     cmake -GNinja ../llvm -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS="mlir;llvm;clang;lld"
+   #     ninja mlir-tblgen
+   #     ninja llvm-tblgen
+   #     ninja clang-tblgen
+   #     cd ../..
+   #     mv ./llvm-project/host-tools/bin ./host-tools
+   #     HOST_TOOLS="$(pwd)/host-tools"
+   #     rm -rf llvm-project/host-tools
+   #     sudo apt-get update
+   #     sudo apt-get install gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+   #     cp -r /usr/aarch64-linux-gnu/lib ./arm-sysroot
+   #     cp -r /usr/aarch64-linux-gnu/include ./arm-sysroot
+   #     LINKER=$(pwd)/arm-sysroot/lib/ld-linux-aarch64.so.1
+   #     wget http://ftp.de.debian.org/debian/pool/main/g/gcc-defaults/gcc-aarch64-linux-gnu_14.2.0-1_amd64.deb
+   #     dpkg-deb -x gcc-aarch64-linux-gnu_14.2.0-1_amd64.deb ./arm-sysroot
+   #     export LD_LIBRARY_PATH=$(pwd)/arm-sysroot/lib:$LD_LIBRARY_PATH
+   #     sudo ln -s $LINKER /lib/ld-linux-aarch64.so.1
+   #     SYSROOT="$(pwd)/arm-sysroot"
+   #     echo $SYSROOT
+   #     echo $LINKER
+   #     cmake -GNinja -Bllvm-project/build \
+   #     -DCMAKE_BUILD_TYPE=Release \
+   #     -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld" \
+   #     -DLLVM_BUILD_UTILS=ON \
+   #     -DLLVM_TABLEGEN=$HOST_TOOLS/llvm-tblgen \
+   #     -DMLIR_TABLEGEN=$HOST_TOOLS/mlir-tblgen \
+   #     -DCLANG_TABLEGEN=$HOST_TOOLS/clang-tblgen \
+   #     -DLLVM_ENABLE_ASSERTIONS=ON \
+   #     -DCMAKE_LINKER=$LINKER \
+   #     -DMLIR_ENABLE_BINDINGS_PYTHON=OFF \
+   #     -DLLVM_ENABLE_ZSTD=OFF \
+   #     -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF \
+   #     -DLLVM_INSTALL_UTILS=ON \
+   #     -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}" \
+   #     -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU" \
+   #     -DCMAKE_CROSSCOMPILING=True \
+   #     -DLLVM_TARGET_ARCH=AArch64 \
+   #     -DLLVM_DEFAULT_TARGET_TRIPLE=aarch64-linux-gnu \
+   #     -DLLVM_USE_HOST_TOOLS=OFF \
+   #     -DCMAKE_C_COMPILER="/usr/bin/aarch64-linux-gnu-gcc" \
+   #     -DCMAKE_CXX_COMPILER="/usr/bin/aarch64-linux-gnu-g++" \
+   #     -DCMAKE_ASM_COMPILER="/usr/bin/aarch64-linux-gnu-as" \
+   #     -DCMAKE_AR="/usr/bin/aarch64-linux-gnu-ar" \
+   #     -DCMAKE_NM="/usr/bin/aarch64-linux-gnu-nm" \
+   #     -DCMAKE_OBJCOPY="/usr/bin/aarch64-linux-gnu-objcopy" \
+   #     -DCMAKE_OBJDUMP="/usr/bin/aarch64-linux-gnu-objdump" \
+   #     -DCMAKE_RANLIB="/usr/bin/aarch64-linux-gnu-ranlib" \
+   #     -DCMAKE_STRIP="/usr/bin/aarch64-linux-gnu-strip" \
+   #     -DCMAKE_SYSROOT=$SYSROOT \
+   #     -DLLVM_ENABLE_TERMINFO=OFF \
+   #     llvm-project/llvm
+   #     ninja -C llvm-project/build install
+   #     tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
+#
+   # - name: Configure, Build, and Install LLVM (macOS arm64)
+   #   if: matrix.config.arch == 'arm64' && matrix.config.target-os == 'macos'
+   #   run: >
+   #     python3 -m pip install -r llvm-project/mlir/python/requirements.txt
+#
+   #     cmake -GNinja -Bllvm-project/build
+   #     -DCMAKE_BUILD_TYPE=Release
+   #     -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+   #     -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+   #     -DCMAKE_INSTALL_PREFIX="${{ env.llvm_install_dir }}"
+   #     -DCMAKE_LINKER=lld
+   #     -DCMAKE_OSX_ARCHITECTURES=arm64
+   #     -DLLVM_BUILD_UTILS=ON
+   #     -DLLVM_BUILD_TOOLS=ON
+   #     -DLLVM_ENABLE_ASSERTIONS=ON
+   #     -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
+   #     -DLLVM_ENABLE_PROJECTS="mlir;lld"
+   #     -DLLVM_ENABLE_ZSTD=OFF
+   #     -DLLVM_INSTALL_UTILS=ON
+   #     -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU"
+   #     -DLLVM_USE_HOST_TOOLS=ON
+   #     -DLLVM_ENABLE_TERMINFO=OFF
+   #     -DLLVM_ABI_BREAKING_CHECKS=FORCE_OFF
+   #     llvm-project/llvm
+#
+   #     ninja -C llvm-project/build install
+#
+   #     tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
+#
+   # - name: Configure, Build, Test, and Install LLVM (AlmaLinux)
+   #   if: matrix.config.target-os == 'almalinux'
+   #   run: |
+   #     # if this step crashes, it can leave behind a stale docker container
+   #     docker container prune -f
+#
+   #     images=$(docker images -q)
+   #     if [ -n "$images" ]; then
+   #       docker rmi -f $images
+   #     fi
+#
+   #     docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
+   #       -f llvm-build/.github/workflows/llvm-build/almalinux.Dockerfile .
+#
+   #     # Create temporary container to copy cache and installed artifacts.
+   #     CONTAINER_ID=$(docker create llvm-build)
+#
+   #     # We remove the existing directories, otherwise docker cp will
+   #     # create a subdirectory inside the existing directory.
+   #     rm -rf "${{ env.SCCACHE_DIR }}" "${{ env.llvm_install_dir }}"
+#
+   #     docker cp "${CONTAINER_ID}:/install" "${{ env.llvm_install_dir }}"
+   #     tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
+#
+   #     docker cp "${CONTAINER_ID}:/sccache" "${{ env.SCCACHE_DIR }}"
+   #     sudo chown -R "$(id -u -n):$(id -g -n)" "${{ env.SCCACHE_DIR }}"
+#
+   #     docker rm "${CONTAINER_ID}"
 
     - name: Upload Build Artifacts
       uses: actions/upload-artifact@v4
