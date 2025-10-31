@@ -24,7 +24,7 @@ tt.func @two_stage_backend(%n: index) {
     } {triton.warp_pipeline.stage}
 
     scf.yield
-  } {triton.warp_pipeline.lead_stages = 1 : i32, triton.warp_pipeline.total_stages = 2 : i32}
+  } {triton.warp_pipeline.pipelined_for}
 
   tt.return
 }
@@ -42,11 +42,11 @@ tt.func @two_stage_backend(%n: index) {
 // CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
 
 // CHECK: scf.for
-// CHECK:   scf.execute_region
+// CHECK-NOT:   scf.execute_region
 // CHECK: rocdl.sched.barrier
 // CHECK: rocdl.s.barrier
 // CHECK: rocdl.sched.barrier
-// CHECK:   scf.execute_region
+// CHECK-NOT:   scf.execute_region
 
 // CHECK: amdgpu.cond_barrier %[[WARPLOW]]
 // CHECK: tt.return
@@ -77,7 +77,7 @@ tt.func @three_stage_backend(%n: index) {
     } {triton.warp_pipeline.stage}
 
     scf.yield
-  } {triton.warp_pipeline.lead_stages = 1 : i32, triton.warp_pipeline.total_stages = 3 : i32}
+  } {triton.warp_pipeline.pipelined_for}
 
   tt.return
 }
@@ -87,9 +87,7 @@ tt.func @three_stage_backend(%n: index) {
 // CHECK: gpu.barrier
 // CHECK: amdgpu.cond_barrier
 // CHECK: scf.for
-// CHECK:   scf.execute_region
-// CHECK:   scf.execute_region
-// CHECK:   scf.execute_region
+// CHECK-NOT:   scf.execute_region
 // CHECK: rocdl.sched.barrier
 // CHECK: rocdl.s.barrier
 // CHECK: rocdl.sched.barrier

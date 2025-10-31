@@ -106,29 +106,49 @@ private:
       assert(operands[0].getType().getIntOrFloatBitWidth() == 32);
       LLVM::FastmathFlagsAttr defaultFlags{};
 
-      // Calculate 2*x
-      auto twoX = LLVM::FMulOp::create(
-          rewriter, loc, rewriter.getF32Type(), operands[0],
+      // Numerically stable tanh implementation:
+      // For positive x: tanh(x) = 1 - 2/(e^(2x) + 1)
+      // For negative x: tanh(x) = -tanh(-x) = -(1 - 2/(e^(-2x) + 1))
+      //                         = 2/(e^(-2x) + 1) - 1
+      // This avoids overflow when e^(2x) becomes infinity for large x
+
+      // Get absolute value of x
+      auto absX = LLVM::FAbsOp::create(rewriter, loc, rewriter.getF32Type(),
+                                       operands[0]);
+
+      // Calculate 2*|x|
+      auto twoAbsX = LLVM::FMulOp::create(
+          rewriter, loc, rewriter.getF32Type(), absX,
           LLVM::createConstantF32(loc, rewriter, 2.0), defaultFlags);
 
-      // Calculate fast_expf(2*x) using the utility function
-      auto exp2X = createFastExpf(rewriter, loc, twoX->getResult(0),
-                                  rewriter.getF32Type(), ftz);
+      // Calculate e^(2*|x|)
+      auto exp2AbsX = createFastExpf(rewriter, loc, twoAbsX->getResult(0),
+                                     rewriter.getF32Type(), ftz);
 
-      // Calculate exp2X - 1
-      auto exp2XMinus1 = LLVM::FSubOp::create(
-          rewriter, loc, rewriter.getF32Type(), exp2X->getResult(0),
+      // Calculate e^(2*|x|) + 1
+      auto exp2AbsXPlus1 = LLVM::FAddOp::create(
+          rewriter, loc, rewriter.getF32Type(), exp2AbsX->getResult(0),
           LLVM::createConstantF32(loc, rewriter, 1.0), defaultFlags);
 
-      // Calculate exp2X + 1
-      auto exp2XPlus1 = LLVM::FAddOp::create(
-          rewriter, loc, rewriter.getF32Type(), exp2X->getResult(0),
-          LLVM::createConstantF32(loc, rewriter, 1.0), defaultFlags);
+      // Calculate 2 / (e^(2*|x|) + 1)
+      auto two = LLVM::createConstantF32(loc, rewriter, 2.0);
+      auto ratio =
+          LLVM::FDivOp::create(rewriter, loc, rewriter.getF32Type(), two,
+                               exp2AbsXPlus1->getResult(0), defaultFlags);
 
-      // Calculate tanh(X) = (exp2X - 1) / (exp2X + 1)
-      replacementOp = LLVM::FDivOp::create(
-          rewriter, loc, returnType, exp2XMinus1->getResult(0),
-          exp2XPlus1->getResult(0), defaultFlags);
+      // Calculate 1 - 2/(e^(2*|x|) + 1)
+      auto one = LLVM::createConstantF32(loc, rewriter, 1.0);
+      auto posResult =
+          LLVM::FSubOp::create(rewriter, loc, rewriter.getF32Type(), one,
+                               ratio->getResult(0), defaultFlags);
+
+      // Apply the sign of the original input using copysign
+      // tanh(x) = sign(x) * (1 - 2/(e^(2*|x|) + 1))
+      const char *intrinsic = "llvm.copysign.f32";
+      auto args =
+          llvm::SmallVector<Value>{posResult->getResult(0), operands[0]};
+      replacementOp = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic,
+                                                      returnType, args);
     }
 
     if (replacementOp) {

@@ -46,6 +46,9 @@ class TensorMemoryLayout:
     cta_split_num: Optional[Tuple[int, int]] = None
 
     def __post_init__(self):
+        super().__setattr__("block", _unwrap_if_constexpr(self.block))
+        super().__setattr__("col_stride", _unwrap_if_constexpr(self.col_stride))
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         assert len(self.block) == 2
         assert self.cta_split_num is None or len(self.cta_split_num) == 2
         assert self.col_stride >= 1 and (self.col_stride &
@@ -77,6 +80,7 @@ class TensorMemoryScalesLayout:
     cta_split_num: Optional[Tuple[int, int]] = None
 
     def __post_init__(self):
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         assert self.cta_split_num is None or len(self.cta_split_num) == 2
 
     def _to_ir(self, builder):

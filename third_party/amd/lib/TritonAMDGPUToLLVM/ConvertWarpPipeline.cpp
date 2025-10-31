@@ -22,10 +22,16 @@
  */
 #include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/Passes.h"
+
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Analysis/Membar.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -43,6 +49,7 @@ namespace mlir::triton {
 } // namespace mlir::triton
 
 namespace {
+
 // construct a virtual block from each pipeline cluster
 // block contains its buffer R/W information.
 static BlockInfo buildBlockInfoFromBlock(Block *block, Allocation *allocation) {
@@ -70,21 +77,45 @@ static BlockInfo buildBlockInfoFromBlock(Block *block, Allocation *allocation) {
   return info;
 }
 
-class ConvertWarpPipeline
-    : public mlir::triton::impl::ConvertWarpPipelineBase<ConvertWarpPipeline> {
+static void emitClusterBarrier(PatternRewriter &rewriter, Location loc,
+                               bool needLocal) {
+  rewriter.create<ROCDL::SchedBarrier>(loc, 0);
+  if (needLocal)
+    rewriter.create<mlir::triton::gpu::LocalBarrierOp>(loc);
+  else
+    rewriter.create<ROCDL::SBarrierOp>(loc);
+  rewriter.create<ROCDL::SchedBarrier>(loc, 0);
+}
 
-  void emitClusterBarrier(OpBuilder &b, Location loc, bool needLocal) {
-    b.create<ROCDL::SchedBarrier>(loc, 0);
-    if (needLocal)
-      b.create<mlir::triton::gpu::LocalBarrierOp>(loc);
-    else
-      b.create<ROCDL::SBarrierOp>(loc);
-    b.create<ROCDL::SchedBarrier>(loc, 0);
+class ConvertPipelinedForPattern : public OpRewritePattern<scf::ForOp> {
+public:
+  ConvertPipelinedForPattern(MLIRContext *ctx, ModuleAllocation &moduleAlloc)
+      : OpRewritePattern<scf::ForOp>(ctx, /*benefit=*/2),
+        moduleAllocation(moduleAlloc) {}
+
+  LogicalResult matchAndRewrite(scf::ForOp forOp,
+                                PatternRewriter &rewriter) const override {
+    // Only handle loops that the frontend marked with pipelined_for.
+    if (!forOp->getAttr("triton.warp_pipeline.pipelined_for"))
+      return rewriter.notifyMatchFailure(forOp, "no pipelined_for");
+    forOp->removeAttr("triton.warp_pipeline.pipelined_for");
+
+    // Look up allocation info as in original pass.
+    auto func = forOp->getParentOfType<mlir::triton::FuncOp>();
+    Allocation *allocation = moduleAllocation.getFuncData(func);
+    if (!allocation)
+      return rewriter.notifyMatchFailure(forOp, "no Allocation for function");
+
+    if (failed(emitPipelinedFor(rewriter, forOp.getLoc(), forOp, allocation)))
+      return failure();
+
+    return success();
   }
 
-  void emitPipelinedFor(OpBuilder &builder, Location loc, scf::ForOp forOp,
-                        Allocation *allocation) {
-
+private:
+  LogicalResult emitPipelinedFor(PatternRewriter &builder, Location loc,
+                                 scf::ForOp forOp,
+                                 Allocation *allocation) const {
     // 1. Insert conditional branch first,
     builder.setInsertionPointAfter(forOp);
     // Set barrier before starting the loop. This resolves any outstanding
@@ -95,7 +126,7 @@ class ConvertWarpPipeline
     builder.setInsertionPointAfter(preBarrier);
 
     // Insert condbarrier::second_half before starting the loop
-    // FIXME : correctly calculate numbers by the given num_warps.
+    // FIXME : correctly calculate numbers per the arch
     auto i32ty = builder.getIntegerType(32);
     auto workIDX = builder.create<ROCDL::ThreadIdXOp>(loc, i32ty);
     auto constZero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
@@ -106,26 +137,24 @@ class ConvertWarpPipeline
     auto warpHigh = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
                                                   warpIDX, constZero);
 
-    auto condBarrierHigh =
-        builder.create<mlir::triton::amdgpu::CondBarrierOp>(loc, warpHigh);
+    builder.create<mlir::triton::amdgpu::CondBarrierOp>(loc, warpHigh);
 
     // Insert condbarrier::first_half after the end of the loop
     builder.setInsertionPointAfter(forOp);
-    auto condBarrierLow =
-        builder.create<mlir::triton::amdgpu::CondBarrierOp>(loc, warpLow);
+    builder.create<mlir::triton::amdgpu::CondBarrierOp>(loc, warpLow);
 
+    // 2. Collect existing barrier information.
     SmallVector<Block *> clusterBlocks;
     SmallVector<Operation *> clusterOps;
     SmallVector<bool> bars;
     std::map<int, Operation *> existingBarrierMap;
-    Operation *terminatorOp;
+    Operation *terminatorOp = nullptr;
 
-    // 2. Collect existing barrier information.
     for (auto &op : *forOp.getBody()) {
       if (auto exeOp = dyn_cast<scf::ExecuteRegionOp>(op)) {
         // fail conversion with executeRegion from unkown source.
         if (exeOp->getAttr("triton.warp_pipeline.stage") == nullptr)
-          return;
+          return failure();
         exeOp.setNoInline(false);
         clusterOps.push_back(&op);
         clusterBlocks.push_back(&exeOp->getRegion(0).front());
@@ -135,13 +164,13 @@ class ConvertWarpPipeline
                      op)) {
         int currCluster = clusterBlocks.size();
         if (existingBarrierMap.find(currCluster) != existingBarrierMap.end())
-          return; // Unreachable
-
+          return failure(); // Unreachable
         existingBarrierMap[currCluster] = &op;
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
         terminatorOp = &op;
-      } else // fail conversion if any other op found out out of the cluster.
-        return;
+      } else { // fail conversion if any other op found out out of the cluster.
+        return failure();
+      }
     }
 
     SmallVector<BlockInfo> clusterInfo;
@@ -156,7 +185,7 @@ class ConvertWarpPipeline
     auto bottomBar = existingBarrierMap.find(numClusters);
     if (bottomBar != existingBarrierMap.end()) {
       if (topBar != existingBarrierMap.end())
-        return; // Unreachable
+        return failure(); // Unreachable
       existingBarrierMap[0] = bottomBar->second;
       existingBarrierMap.erase(bottomBar);
     }
@@ -184,8 +213,8 @@ class ConvertWarpPipeline
 
         const bool needFence =
             clusterInfo[src].isIntersected(clusterInfo[next], nullptr);
+        // insert fence/barrier in front of this cluster
         if (needFence) {
-          // insert fence/barrier before this cluster
           bars[barrierLoc] = true;
           LDBG("cluster " << src << " need fence to " << next
                           << " placing barrier at " << barrierLoc);
@@ -200,49 +229,81 @@ class ConvertWarpPipeline
         if (bars[i]) {
           auto exBarOp = exBar->second;
           builder.setInsertionPointAfter(exBarOp);
-          emitClusterBarrier(builder, loc, true);
+          emitClusterBarrier(builder, loc, /*needLocal=*/true);
           if (!isa<triton::gpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait>(
                   exBarOp))
-            exBarOp->erase();
-        } // else do nothing.
+            builder.eraseOp(exBarOp);
+        } // else do nothing
       } else {
         builder.setInsertionPoint(clusterOps[i]);
         // The first one wraps back to the last of the loop
         if (i == 0 && topBar == existingBarrierMap.end())
-          // inserts just before yield.
+          // inserts just before yield (=End of the loop).
           builder.setInsertionPoint(terminatorOp);
-        emitClusterBarrier(builder, loc, bars[i]);
+        emitClusterBarrier(builder, loc, /*needLocal=*/bars[i]);
       }
     }
+    return success();
   }
 
+  ModuleAllocation &moduleAllocation;
+};
+
+class InlineWarpPipelineExecuteRegionPattern
+    : public OpRewritePattern<scf::ExecuteRegionOp> {
 public:
-  ConvertWarpPipeline() : ConvertWarpPipelineBase<ConvertWarpPipeline>() {}
+  InlineWarpPipelineExecuteRegionPattern(MLIRContext *ctx)
+      : OpRewritePattern<scf::ExecuteRegionOp>(ctx, /*benefit=*/1) {}
+
+  LogicalResult matchAndRewrite(scf::ExecuteRegionOp exec,
+                                PatternRewriter &rewriter) const override {
+    // Only inline the stages created by the warp-pipeline frontend.
+    if (!exec->getAttr("triton.warp_pipeline.stage"))
+      return rewriter.notifyMatchFailure(exec, "not a warp-pipeline stage");
+
+    // Make sure this pattern is applied after transforming pipelined forOp
+    if (auto forOp = dyn_cast<scf::ForOp>(exec->getParentOp()))
+      if (forOp->getAttr("triton.warp_pipeline.pipelined_for"))
+        return rewriter.notifyMatchFailure(exec,
+                                           "parent forOp not converted yet");
+
+    // Expect a single-block region.
+    Region &reg = exec.getRegion();
+    if (!llvm::hasSingleElement(reg))
+      return rewriter.notifyMatchFailure(exec, "expected single-block region");
+
+    // Inline region.
+    Block *block = &reg.front();
+    Operation *terminator = block->getTerminator();
+    ValueRange results = terminator->getOperands();
+    rewriter.inlineBlockBefore(block, exec, {});
+    rewriter.replaceOp(exec, results);
+    rewriter.eraseOp(terminator);
+
+    return success();
+  }
+};
+
+struct ConvertWarpPipeline
+    : public mlir::triton::impl::ConvertWarpPipelineBase<ConvertWarpPipeline> {
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
-    OpBuilder builder(m);
     ModuleAllocation moduleAllocation(m);
 
-    for (auto funcOp : m.getOps<mlir::triton::FuncOp>()) {
-      Allocation *allocation = moduleAllocation.getFuncData(funcOp);
-      funcOp.walk([&](scf::ForOp forOp) {
-        if (auto totalStages =
-                forOp->getAttr("triton.warp_pipeline.total_stages")) {
-          Location loc = forOp.getLoc();
-          emitPipelinedFor(builder, loc, forOp, allocation);
-        }
-      });
-    }
+    RewritePatternSet patterns(&getContext());
+    patterns.add<ConvertPipelinedForPattern>(&getContext(), moduleAllocation);
+    patterns.add<InlineWarpPipelineExecuteRegionPattern>(&getContext());
+
+    if (failed(applyPatternsGreedily(m, std::move(patterns))))
+      signalPassFailure();
   }
 };
 
 } // namespace
 
 namespace mlir::triton::AMD {
-
 std::unique_ptr<OperationPass<ModuleOp>> createConvertWarpPipelinePass() {
   return std::make_unique<ConvertWarpPipeline>();
 }
-
 } // namespace mlir::triton::AMD

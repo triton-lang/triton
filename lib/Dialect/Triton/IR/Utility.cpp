@@ -98,7 +98,8 @@ Value tt::getLastInductionValue(OpBuilder &b, scf::ForOp loop) {
   Value diff =
       arith::SubIOp::create(b, loc, loop.getUpperBound(), loop.getLowerBound());
   diff = arith::SubIOp::create(
-      b, loc, diff, arith::ConstantOp::create(b, loc, b.getI32IntegerAttr(1)));
+      b, loc, diff,
+      arith::ConstantOp::create(b, loc, b.getIntegerAttr(diff.getType(), 1)));
   Value ceilStep = arith::MulIOp::create(
       b, loc, arith::DivSIOp::create(b, loc, diff, loop.getStep()),
       loop.getStep());
