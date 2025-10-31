@@ -2905,6 +2905,12 @@ def print_num_warps():
     print("num_warps", num_warps)
 
 
+@gluon.jit
+def print_num_ctas():
+    num_ctas: ttgl.constexpr = ttgl.num_ctas()
+    print("num_ctas", num_ctas)
+
+
 @filecheck_test
 @gluon.jit
 def test_get_num_warps():
@@ -2927,6 +2933,15 @@ def test_get_num_warps():
         (print_num_warps, ()),
         (print_num_warps, ()),
     ], [1, 2, 8], [24, 24, 24])
+
+
+@filecheck_test
+@gluon.jit
+def test_num_ctas():
+    # CHECK-LABEL: test_num_ctas
+    # CHECK: tt.func private @{{.*}}print_num_ctas
+    # CHECK-NEXT: arith.constant 1 : i32
+    print_num_ctas()
 
 
 def test_mismatch_shape_and_layout_rank():

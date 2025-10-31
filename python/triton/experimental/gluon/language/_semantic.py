@@ -85,14 +85,16 @@ _compute_tmem_reg_layout.__triton_builtin__ = True
 
 class GluonCallerContext:
 
-    def __init__(self, num_warps: int):
+    def __init__(self, num_warps: int, num_ctas: int):
         self.num_warps = num_warps
+        self.num_ctas = num_ctas
 
     def mangle(self):
         return f"_NW{self.num_warps}"
 
     def initialize_callee(self, fn, builder):
         fn.set_attr("ttg.num-warps", builder.get_int32_attr(self.num_warps))
+        fn.set_attr("ttg.num-ctas", builder.get_int32_attr(self.num_ctas))
 
 
 class GluonSemantic(TritonSemantic[TensorTy]):
@@ -536,7 +538,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         arg_types = [arg.get_type() for arg in mlir_args]
         arg_it = 0
         for i, (func, args) in enumerate(workers):
-            caller_context = GluonCallerContext(num_warps=worker_num_warps[i])
+            caller_context = GluonCallerContext(num_warps=worker_num_warps[i], num_ctas=self.builder.options.num_ctas)
             block = builder.create_block_with_parent(partitions_op.get_region(i), arg_types)
             mlir_args = worker_args[i]
             block_args = [block.get_argument(arg_it + j) for j in range(len(mlir_args))]
@@ -550,6 +552,9 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         if default_results is None:
             return
         return tuple(unflatten_ir_values(mlir_results, [r.type for r in default_results]))
+
+    def num_ctas(self):
+        return ttgl.constexpr(self.builder.options.num_ctas)
 
     def num_warps(self, generator):
         if generator.caller_context is not None:
