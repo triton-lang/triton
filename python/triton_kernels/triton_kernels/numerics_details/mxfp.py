@@ -56,9 +56,9 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
         kernel_scale = out_scale.view(-1, out_scale.shape[-1])
 
         # performance hyper-parameters
-        BLOCK_OUT_DIM = 64
-        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value * 2
-        NUM_WARPS = 8
+        BLOCK_OUT_DIM = 32
+        BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value * 4
+        NUM_WARPS = 4 if src_tensor.dtype == torch.float32 else 8
 
         blocks_out_dim = triton.cdiv(kernel_src_tensor.shape[0], BLOCK_OUT_DIM)
         blocks_quant_dim = triton.cdiv(kernel_src_tensor.shape[1], BLOCK_QUANT_DIM)
@@ -124,7 +124,7 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: to
         # performance hyper-parameters
         BLOCK_OUT_DIM = 64
         BLOCK_QUANT_DIM = MXFP_BLOCK_SIZE.value * 4
-        NUM_WARPS = 8 if is_fp4 else 4
+        NUM_WARPS = 4
 
         blocks_out_dim = triton.cdiv(reshaped_out.shape[0], BLOCK_OUT_DIM)
         blocks_quant_dim = triton.cdiv(reshaped_out.shape[1], BLOCK_QUANT_DIM)
