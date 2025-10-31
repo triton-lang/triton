@@ -1,8 +1,6 @@
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "Analysis/ScopeIdAllocation.h"
 
-#include <stack>
-
 namespace mlir {
 namespace triton::proton {
 
@@ -154,7 +152,7 @@ void ScopeIdAllocation::reachability() {
         if (recordOp.getIsStart()) {
           if (inputBlockInfo.contains(name)) {
             mlir::emitError(recordOp.getLoc(), "The scope name '")
-                << name << "' is started without being ended";
+                << name << "' is started without being closed";
           }
           inputBlockInfo.insert(name);
           unclosedScopes.insert(name);
@@ -163,7 +161,7 @@ void ScopeIdAllocation::reachability() {
             inputBlockInfo.erase(name);
             unclosedScopes.erase(name);
           } else {
-            mlir::emitError(recordOp.getLoc(), "The scope name '") << name << "' is ended without being opened";
+            mlir::emitError(recordOp.getLoc(), "The scope name '") << name << "' is closed without being opened";
           }
         }
       }
@@ -183,7 +181,6 @@ void ScopeIdAllocation::liveness() {
   // assign a numeric ID that downstream passes can reuse.
   llvm::DenseMap<StringRef, std::pair</*id=*/size_t, /*isStart=*/bool>> nameToIdMap;
   llvm::DenseMap<ScopeId, RecordOp> idToOpMap;
-  std::stack<ScopeId> scopeIdStack;
   ScopeId scopeId = 0;
 
   funcOp->walk<WalkOrder::PreOrder>([&](RecordOp recordOp) {
@@ -209,7 +206,6 @@ void ScopeIdAllocation::liveness() {
         opToIdMap[recordOp] = existingId;
         idToOpMap[existingId] = recordOp;
         nameToIdMap.erase(name);
-        scopeIdStack.pop();
       }
     }
   });
@@ -228,15 +224,33 @@ void ScopeIdAllocation::liveness() {
 void ScopeIdAllocation::dominance() {
   // Stage 3: determine parentage between scopes by checking dominance of start
   // operations.
-  llvm::SetVector<Operation *> startRecordOps;
+  mlir::DominanceInfo domInfo(funcOp);
+  llvm::DenseMap<ScopeId, Operation *> startRecordMap;
+  llvm::DenseMap<ScopeId, Operation *> endRecordMap;
   funcOp->walk<WalkOrder::PreOrder>([&](RecordOp recordOp) {
-    if (recordOp.getIsStart()) {
-      startRecordOps.insert(recordOp);
-    }
+    auto scopeId = opToIdMap.lookup(recordOp);
+    if (recordOp.getIsStart())
+      startRecordMap[scopeId] = recordOp.getOperation();
+    else
+      endRecordMap[scopeId] = recordOp.getOperation();
   });
 
+  for (auto &[scopeId, startOp] : startRecordMap) {
+    auto *endOp = endRecordMap.lookup(scopeId);
+    if (!endOp)
+      continue;
+    if (domInfo.dominates(endOp, startOp)) {
+      auto name = idToNameMap.lookup(scopeId);
+      mlir::emitError(endOp->getLoc(), "The scope name '")
+          << name << "' has end record that dominates its start record";
+    }
+  }
+
+  llvm::SetVector<Operation *> startRecordOps;
+  for (auto &[scopeId, startOp] : startRecordMap) {
+    startRecordOps.insert(startOp);
+  }
   auto sortedStartRecordOps = mlir::topologicalSort(startRecordOps);
-  mlir::DominanceInfo domInfo(funcOp);
   for (auto i = 0; i < sortedStartRecordOps.size(); ++i) {
     auto *op = sortedStartRecordOps[i];
     for (auto j = 0; j < i; ++j) {
