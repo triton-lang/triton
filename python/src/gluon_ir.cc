@@ -467,6 +467,10 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self) -> Attribute {
              return self.getChecked<gluon::AutoEncodingAttr>(self.getContext());
            })
+      .def("get_efficient_layout",
+           [](GluonOpBuilder &self) -> Attribute {
+             return self.getChecked<gluon::EfficientEncodingAttr>(self.getContext());
+           })
       .def("get_swizzled_shared_layout",
            [](GluonOpBuilder &self, int vec, int perPhase, int maxPhase,
               std::vector<unsigned> &order, std::vector<unsigned> &ctasPerCga,
