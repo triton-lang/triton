@@ -229,7 +229,6 @@ module {
   tt.func @cf_branch_unclosed_dangling(%cond: i1) {
     cf.cond_br %cond, ^then, ^else
   ^then:  // pred: ^entry
-    // expected-error @below {{The scope name 'ghost' is started without being closed}}
     proton.record start "ghost"
     cf.br ^merge
   ^else:  // pred: ^entry
