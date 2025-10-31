@@ -1549,3 +1549,158 @@ def test_tcgen05_mma_scaled_minimal():
     torch.testing.assert_close(out, ref, atol=1e-6, rtol=1e-6)
     ttgir = compiled.asm["ttgir"]
     assert "ttng.tc_gen5_mma_scaled" in ttgir
+
+
+@gluon.jit
+def shared_gather_kernel(
+    matrix_ptr,
+    indices_ptr,
+    output_ptr,
+    N: ttgl.constexpr,
+    M: ttgl.constexpr,
+    layout_2d: ttgl.constexpr,
+    layout_1d: ttgl.constexpr,
+    shared_layout: ttgl.constexpr,
+):
+    """Test shared memory gather using smem.gather() with axis-based API."""
+    # Load the matrix from global memory into registers
+    indices_x = ttgl.arange(0, N, layout=ttgl.SliceLayout(dim=1, parent=layout_2d))
+    indices_y = ttgl.arange(0, M, layout=ttgl.SliceLayout(dim=0, parent=layout_2d))
+    offsets_2d = indices_x[:, None] * M + indices_y[None, :]
+    matrix_data = ttgl.load(matrix_ptr + offsets_2d)
+
+    # Allocate 2D shared memory and store the matrix
+    smem_2d = ttgl.allocate_shared_memory(ttgl.float32, [N, M], layout=shared_layout)
+    smem_2d.store(matrix_data)
+    ttgl.thread_barrier()
+
+    # Reshape to 1D to test gather along axis 0
+    smem_1d = smem_2d.reshape([N * M])
+
+    # Load the gather indices (diagonal elements: 0, M+1, 2*(M+1), ...)
+    offsets_1d = ttgl.arange(0, N, layout=layout_1d)
+    indices = ttgl.load(indices_ptr + offsets_1d)
+
+    # Gather using axis-based API: result[i] = smem_1d[indices[i]]
+    gathered = smem_1d.gather(indices, axis=0)
+
+    # Store result to global memory
+    ttgl.store(output_ptr + offsets_1d, gathered)
+
+
+@pytest.mark.parametrize("N,M", [(32, 32), (64, 64), (128, 128)])
+def test_shared_gather(N, M):
+    """Test gathering from 1D reshaped shared memory (diagonal of 2D matrix)."""
+    device = torch.device("cuda")
+
+    # Create a test matrix with known values
+    matrix = torch.arange(N * M, dtype=torch.float32, device=device).reshape(N, M)
+
+    # Create gather indices for diagonal elements: 0, M+1, 2*(M+1), ...
+    indices = torch.arange(N, dtype=torch.int32, device=device) * (M + 1)
+
+    output = torch.zeros(N, dtype=torch.float32, device=device)
+
+    # Compute expected result: diagonal elements
+    expected = matrix.flatten()[indices]
+
+    # Create layouts
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[8, 4], warps_per_cta=[1, 1], order=[1, 0])
+    layout_1d = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[1], order=[0])
+    shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    # Launch kernel
+    shared_gather_kernel[(1, )](
+        matrix,
+        indices,
+        output,
+        N=N,
+        M=M,
+        layout_2d=layout_2d,
+        layout_1d=layout_1d,
+        shared_layout=shared_layout,
+        num_warps=1,
+    )
+
+    torch.testing.assert_close(output, expected)
+
+
+@gluon.jit
+def shared_scatter_kernel(
+    indices_ptr,
+    values_ptr,
+    output_ptr,
+    N: ttgl.constexpr,
+    M: ttgl.constexpr,
+    layout_2d: ttgl.constexpr,
+    layout_1d: ttgl.constexpr,
+    shared_layout: ttgl.constexpr,
+):
+    """Test shared memory scatter using smem.scatter() with axis-based API."""
+    # Allocate 2D shared memory initialized to zero
+    smem = ttgl.allocate_shared_memory(ttgl.float32, [N, M], layout=shared_layout)
+
+    # Initialize shared memory to zero
+    indices_x = ttgl.arange(0, N, layout=ttgl.SliceLayout(dim=1, parent=layout_2d))
+    indices_y = ttgl.arange(0, M, layout=ttgl.SliceLayout(dim=0, parent=layout_2d))
+    offsets_2d = indices_x[:, None] * M + indices_y[None, :]
+    zeros = ttgl.zeros([N, M], ttgl.float32, layout=layout_2d)
+    smem.store(zeros)
+    ttgl.thread_barrier()
+
+    # Reshape to 1D to test scatter along axis 0
+    smem_1d = smem.reshape([N * M])
+
+    # Load the scatter indices and values (diagonal elements: 0, M+1, 2*(M+1), ...)
+    offsets_1d = ttgl.arange(0, N, layout=layout_1d)
+    indices = ttgl.load(indices_ptr + offsets_1d)
+    values = ttgl.load(values_ptr + offsets_1d)
+
+    # Scatter using axis-based API: smem_1d[indices[i]] = values[i]
+    smem_1d.scatter(indices, axis=0, values=values)
+    ttgl.thread_barrier()
+
+    # Read back the full matrix from shared memory
+    matrix_data = smem.load(layout=layout_2d)
+
+    # Store result to global memory
+    ttgl.store(output_ptr + offsets_2d, matrix_data)
+
+
+@pytest.mark.parametrize("N,M", [(32, 32), (64, 64), (128, 128)])
+def test_shared_scatter(N, M):
+    """Test scattering to 1D reshaped shared memory (diagonal of 2D matrix)."""
+    device = torch.device("cuda")
+
+    # Create scatter indices for diagonal elements: 0, M+1, 2*(M+1), ...
+    indices = torch.arange(N, dtype=torch.int32, device=device) * (M + 1)
+
+    # Create values to scatter
+    values = torch.arange(N, dtype=torch.float32, device=device) + 100.0
+
+    output = torch.zeros((N, M), dtype=torch.float32, device=device)
+
+    # Compute expected result: matrix starts at zero, then diagonal gets values
+    expected = torch.zeros((N, M), dtype=torch.float32, device=device)
+    for i in range(N):
+        expected[i, i] = values[i]
+
+    # Create layouts
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[8, 4], warps_per_cta=[1, 1], order=[1, 0])
+    layout_1d = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[1], order=[0])
+    shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    # Launch kernel
+    shared_scatter_kernel[(1, )](
+        indices,
+        values,
+        output,
+        N=N,
+        M=M,
+        layout_2d=layout_2d,
+        layout_1d=layout_1d,
+        shared_layout=shared_layout,
+        num_warps=1,
+    )
+
+    torch.testing.assert_close(output, expected)

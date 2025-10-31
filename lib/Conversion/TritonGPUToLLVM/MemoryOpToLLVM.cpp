@@ -233,6 +233,210 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+struct LocalGatherOpConversion : public ConvertOpToLLVMPattern<LocalGatherOp> {
+public:
+  LocalGatherOpConversion(LLVMTypeConverter &typeConverter,
+                          const TargetInfoBase &targetInfo,
+                          PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
+
+  LogicalResult
+  matchAndRewrite(LocalGatherOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = op.getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto memDescVal = op.getSrc();
+    auto memDescTy = cast<MemDescType>(memDescVal.getType());
+    auto regTy = cast<RankedTensorType>(op.getType());
+    auto typeConverter = getTypeConverter();
+    unsigned axis = op.getAxis();
+
+    auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                         llvmElemTy, rewriter);
+
+    // Get the shared memory layout and invert it
+    auto sharedEnc =
+        cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
+    LinearLayout sharedLayout;
+    auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
+    if (paddedEnc) {
+      sharedLayout = paddedEnc.getLinearComponent();
+    } else {
+      sharedLayout = toLinearLayout(memDescTy);
+    }
+
+    LinearLayout invSharedLayout = sharedLayout.invert();
+
+    // Get layout dimension names for all dims
+    SmallVector<StringAttr> allDims;
+    for (unsigned dim = 0, rank = memDescTy.getRank(); dim < rank; ++dim) {
+      allDims.push_back(str_attr("dim" + Twine(dim)));
+    }
+
+    auto kOffset = str_attr("offset");
+
+    // Unpack the runtime index values
+    SmallVector<Value> idxValues =
+        unpackLLElements(loc, adaptor.getIndices(), rewriter);
+
+    // Emit the indices of the result tensor owned by this thread
+    SmallVector<SmallVector<Value>> dstIndices =
+        emitIndices(loc, rewriter, targetInfo, regTy.getEncoding(), regTy,
+                    /*withCTAOffset=*/true);
+
+    // For each output element, replace the axis coordinate with the index value
+    SmallVector<Value> results(dstIndices.size());
+    for (auto [i, idx, indices] : llvm::enumerate(idxValues, dstIndices)) {
+      // Convert index to i32 if needed
+      unsigned idxWidth = idx.getType().getIntOrFloatBitWidth();
+      if (idxWidth > 32) {
+        idx = b.trunc(i32_ty, idx);
+      } else if (idxWidth < 32) {
+        idx = b.zext(i32_ty, idx);
+      }
+
+      // Replace the coordinate at the gather axis with the index value
+      indices[axis] = idx;
+
+      // Apply inverted shared layout to compute offset
+      SmallVector<std::pair<StringAttr, Value>> inputs;
+      for (unsigned dim = 0; dim < indices.size(); ++dim) {
+        inputs.push_back({allDims[dim], indices[dim]});
+      }
+
+      auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
+
+      // Extract the offset value
+      Value offset = nullptr;
+      for (auto [name, value] : outputs) {
+        if (name == kOffset) {
+          offset = value;
+          break;
+        }
+      }
+      assert(offset && "expected offset output from inverted shared layout");
+
+      // Load from shared memory at the computed offset
+      Value ptr = b.gep(smemObj.getBase().getType(), llvmElemTy,
+                        smemObj.getBase(), offset);
+      results[i] = b.load(llvmElemTy, ptr);
+    }
+
+    Value result = packLLElements(loc, typeConverter, results, rewriter, regTy);
+    rewriter.replaceOp(op, result);
+
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
+
+struct LocalScatterOpConversion
+    : public ConvertOpToLLVMPattern<LocalScatterOp> {
+public:
+  LocalScatterOpConversion(LLVMTypeConverter &typeConverter,
+                           const TargetInfoBase &targetInfo,
+                           PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
+  }
+
+  LogicalResult
+  matchAndRewrite(LocalScatterOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = op.getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto memDescVal = op.getDst();
+    auto memDescTy = cast<MemDescType>(memDescVal.getType());
+    auto valuesTy = cast<RankedTensorType>(op.getValues().getType());
+    auto typeConverter = getTypeConverter();
+    unsigned axis = op.getAxis();
+
+    auto llvmElemTy = typeConverter->convertType(memDescTy.getElementType());
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getDst(),
+                                                         llvmElemTy, rewriter);
+
+    // Get the shared memory layout and invert it
+    auto sharedEnc =
+        cast<triton::gpu::SharedEncodingTrait>(memDescTy.getEncoding());
+    LinearLayout sharedLayout;
+    auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedEnc);
+    if (paddedEnc) {
+      sharedLayout = paddedEnc.getLinearComponent();
+    } else {
+      sharedLayout = toLinearLayout(memDescTy);
+    }
+
+    LinearLayout invSharedLayout = sharedLayout.invert();
+
+    // Get layout dimension names for all dims
+    SmallVector<StringAttr> allDims;
+    for (unsigned dim = 0, rank = memDescTy.getRank(); dim < rank; ++dim) {
+      allDims.push_back(str_attr("dim" + Twine(dim)));
+    }
+
+    auto kOffset = str_attr("offset");
+
+    // Unpack the runtime values and index values
+    SmallVector<Value> values =
+        unpackLLElements(loc, adaptor.getValues(), rewriter);
+    SmallVector<Value> idxValues =
+        unpackLLElements(loc, adaptor.getIndices(), rewriter);
+
+    // Emit the indices of the values tensor owned by this thread
+    SmallVector<SmallVector<Value>> srcIndices =
+        emitIndices(loc, rewriter, targetInfo, valuesTy.getEncoding(), valuesTy,
+                    /*withCTAOffset=*/true);
+
+    // For each value element, replace the axis coordinate with the index value
+    for (auto [i, idx, indices] : llvm::enumerate(idxValues, srcIndices)) {
+      // Convert index to i32 if needed
+      unsigned idxWidth = idx.getType().getIntOrFloatBitWidth();
+      if (idxWidth > 32) {
+        idx = b.trunc(i32_ty, idx);
+      } else if (idxWidth < 32) {
+        idx = b.zext(i32_ty, idx);
+      }
+
+      // Replace the coordinate at the scatter axis with the index value
+      indices[axis] = idx;
+
+      // Apply inverted shared layout to compute offset
+      SmallVector<std::pair<StringAttr, Value>> inputs;
+      for (unsigned dim = 0; dim < indices.size(); ++dim) {
+        inputs.push_back({allDims[dim], indices[dim]});
+      }
+
+      auto outputs = applyLinearLayout(loc, rewriter, invSharedLayout, inputs);
+
+      // Extract the offset value
+      Value offset = nullptr;
+      for (auto [name, value] : outputs) {
+        if (name == kOffset) {
+          offset = value;
+          break;
+        }
+      }
+      assert(offset && "expected offset output from inverted shared layout");
+
+      // Store to shared memory at the computed offset
+      Value ptr = b.gep(smemObj.getBase().getType(), llvmElemTy,
+                        smemObj.getBase(), offset);
+      b.store(values[i], ptr);
+    }
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
+
 class LocalBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalBarrierOp> {
 public:
@@ -262,6 +466,8 @@ void mlir::triton::populateMemoryOpToLLVMPatterns(
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<LocalScatterOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalBarrierOpConversion>(typeConverter, benefit);
 }
