@@ -280,9 +280,9 @@ jobs:
       if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
       uses: azure/login@v2
       with:
-        client-id: ${{ secrets.AZURE_CLIENT_ID }}
-        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        client-id: ${{ secrets.AZURE_CLIENT_ID_LLVM }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID_LLVM }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_LLVM }}
 
     - name: Upload LLVM Artifacts to Azure
       if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'llvm-head' }}
