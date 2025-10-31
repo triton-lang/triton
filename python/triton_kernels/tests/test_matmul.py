@@ -183,7 +183,8 @@ def aggregate_experts(y, scatter_indx, n_expts_act, epilogue, precision_config, 
     mask = mask.expand_as(out_matmul)
     # out_matmul_scale_shape = out_matmul.shape[:-1] + (triton.cdiv(out_matmul.shape[-1], 32),)
     postprocess_fn = PostprocessFn() if epilogue is None else PostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
-    out_final, out_final_mx_scale = reduce(out_matmul, dim=1, postprocess_fn2=postprocess_fn, #
+    x_flex = InFlexData(dtype=precision_config.flex_ctx.out_data.dtype, scale=precision_config.flex_ctx.out_data.expected_scale)
+    out_final, out_final_mx_scale = reduce(out_matmul, dim=1, postprocess_fn2=postprocess_fn, x_flex=x_flex, #
         mask=mask,
         y_has_mx=precision_config.out_scale is not None,
         y_flex=precision_config.flex_ctx.out_data,
@@ -623,11 +624,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
     # triton
     try:
         has_aggregation = sindx is not None and n_expts_act > 1
-        if has_aggregation:
-            matmul_precision_opt = replace(precision_opt, flex_ctx=replace(precision_opt.flex_ctx, out_data=OutFlexData()))
-        else:
-            matmul_precision_opt = precision_opt
-        tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, matmul_precision_opt,
+        tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt,
                            gammas=gs1_ref, epilogue=epilogue, y=None if has_aggregation else y_tri_in,
                            inner_routing_data=inner_routing_data)
         if has_aggregation:
