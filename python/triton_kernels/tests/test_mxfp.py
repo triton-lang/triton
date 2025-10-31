@@ -240,16 +240,20 @@ if __name__ == "__main__":
 
     from tabulate import tabulate
 
-    print(
-        tabulate(
-            table,
-            headers=[
-                "M",
-                "N",
-                "quant_dtype",
-                "quant_bw_bfloat16",
-                "quant_bw_float16",
-                "dequant_bw_bfloat16",
-                "dequant_bw_float16",
-            ],
-        ))
+    headers = [
+        "M",
+        "N",
+        "quant_dtype",
+        "quant_bw_bfloat16",
+        "quant_bw_float16",
+        "dequant_bw_bfloat16",
+        "dequant_bw_float16",
+    ]
+    mxfp8_rows = [row for row in table if row[2] == torch.float8_e4m3fn]
+    mxfp4_rows = [row for row in table if row[2] == torch.uint8]
+
+    print("MXFP8 (e4m3fn):")
+    print(tabulate(mxfp8_rows, headers=headers))
+    print()
+    print("MXFP4 (e2m1):")
+    print(tabulate(mxfp4_rows, headers=headers))
