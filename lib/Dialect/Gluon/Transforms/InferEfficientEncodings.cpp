@@ -7,6 +7,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/PriorityWorklist.h"
+#include "llvm/Support/xxhash.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "gluon-infer-efficient-encodings"
@@ -74,6 +75,53 @@ struct LayoutInfo {
   operator bool() { return bool(encoding); }
 };
 
+uint64_t hashWithMemo(Attribute attr,
+                      llvm::MapVector<Attribute, uint64_t> &hashMemo) {
+  auto it = hashMemo.find(attr);
+  if (it != hashMemo.end()) {
+    return it->second;
+  }
+
+  // llvm::hash_value is not stable, so instead we hash the string repr of the
+  // attribute
+  std::string str;
+  llvm::raw_string_ostream os(str);
+  attr.print(os);
+  auto hash = llvm::xxh3_64bits(str);
+  hashMemo.try_emplace(attr, hash);
+  return hash;
+}
+
+bool compare(Attribute a, Attribute b,
+             llvm::MapVector<Attribute, uint64_t> &hashMemo) {
+  if (a == b)
+    return false;
+
+  return hashWithMemo(a, hashMemo) > hashWithMemo(b, hashMemo);
+}
+
+LayoutInfo combineInfo(LayoutInfo lhs, LayoutInfo rhs, Operation *op,
+                       llvm::MapVector<Attribute, uint64_t> &hashMemo) {
+  // Sort inputs so this operation is commutative
+  if (compare(lhs.encoding, rhs.encoding, hashMemo)) {
+    std::swap(lhs, rhs);
+  }
+  if (lhs.mayVary)
+    return rhs;
+  if (rhs.mayVary)
+    return lhs;
+  if (lhs.encoding == rhs.encoding)
+    return lhs;
+  op->emitOpError("found conflicting encodings for value:\n  ")
+      << lhs.encoding << "\nand\n  " << rhs.encoding;
+  return {};
+}
+
+bool encodingsMayVary(Operation *op) {
+  return isa<triton::JoinOp, triton::SplitOp, triton::ReshapeOp, triton::CatOp,
+             triton::TransOp>(op);
+}
+
 LogicalResult
 inferEfficientLayouts(FuncOp func,
                       llvm::MapVector<Operation *, Attribute> &layoutMap) {
@@ -92,22 +140,21 @@ inferEfficientLayouts(FuncOp func,
 
   llvm::MapVector<Value, LayoutInfo> valueToEncoding;
   llvm::PriorityWorklist<Value> worklist;
-  // llvm::MapVector<Attribute, uint64_t> hashMemo;
+  llvm::MapVector<Attribute, uint64_t> hashMemo;
 
   auto updateEncoding = [&](ArrayRef<Value> values,
                             LayoutInfo info) -> LogicalResult {
     for (auto value : values) {
       auto [it, inserted] = valueToEncoding.insert({value, info});
       if (!inserted) {
-        auto old = it->second;
-        LLVM_DEBUG({
-          DBGS() << "Combining encoding for value:\n\t" << value << "\n";
-          DBGS() << "  Existing encoding:\n\t" << old.encoding << "\n";
-          DBGS() << "  New encoding:\n\t" << info.encoding << "\n";
-        });
-        if (old.encoding == info.encoding)
+        auto defOp = value.getDefiningOp();
+        auto op = defOp ? defOp : func;
+        auto combine = combineInfo(it->second, info, op, hashMemo);
+        if (!combine)
+          return failure();
+        if (combine == it->second)
           continue;
-        return failure(); // TODO: resolve conflict??
+        it->second = combine;
       }
       LLVM_DEBUG({
         DBGS() << "Setting value:\n\t" << value << "\nto encoding:\n\t"
@@ -212,7 +259,6 @@ inferEfficientLayouts(FuncOp func,
       }
     }
   }
-  // rest of the auto encoding will be handled in ResolveAutoEncodings pass
   return success();
 }
 
@@ -339,7 +385,7 @@ class GluonInferEfficientEncodingsPass
     ModuleOp moduleOp = getOperation();
     ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
-    // 0. for every load/store with efficient encoding,
+    // 1. for every load/store with efficient encoding,
     // infer efficient encoding for ptrs
     //
     // similar to Coalesce.cpp
@@ -371,9 +417,12 @@ class GluonInferEfficientEncodingsPass
     // TODO: descriptor load/store??
 
     // 2. propagate forward/backward
-    //
-    // Do layout inference
     // similar to ResolveAutoLayoutPass.cpp
+    // 
+    // for backward slice, it doesn't cross the set_auto_layout boundary
+    // i.e. gl.set_auto_layout(val, gl.EfficientLayout())
+    // -> gl.set_auto_layout(val, concrete coalesced layout)
+    // then ResolveAutoLayoutPass will handle the rest
     //
     if (failed(inferEfficientLayouts(moduleOp, layoutMap)))
       return signalPassFailure();
