@@ -251,9 +251,9 @@ void ScopeIdAllocation::dominance() {
     startRecordOps.insert(startOp);
   }
   auto sortedStartRecordOps = mlir::topologicalSort(startRecordOps);
-  for (auto i = 0; i < sortedStartRecordOps.size(); ++i) {
+  for (int i = 0; i < sortedStartRecordOps.size(); ++i) {
     auto *op = sortedStartRecordOps[i];
-    for (int j = i; j >= 0; --j) {
+    for (int j = i - 1; j >= 0; --j) {
       auto *maybeParentOp = sortedStartRecordOps[j];
       auto scopeId = opToIdMap.lookup(op);
       auto endRecordOp = endRecordMap.lookup(scopeId);
