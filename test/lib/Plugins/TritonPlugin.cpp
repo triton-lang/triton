@@ -6,6 +6,9 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <unordered_map>
 
+#define TRITON_PLUGIN_API                                                      \
+  extern "C" __attribute__((visibility("default"))) TritonPluginResult
+
 namespace mlir {
 namespace triton {
 namespace plugin {
@@ -48,25 +51,34 @@ static std::vector<const char *> passNamesTable = {ADD_PLUGIN_PASS_NAME};
 
 // Key APIs:
 
-extern "C" __attribute__((visibility("default"))) void
+TRITON_PLUGIN_API
 tritonAddPluginPass(mlir::PassManager *pm, const char *passName) {
   std::string passNameStr(passName);
+  if (passMap.find(passNameStr) == passMap.end())
+    return TP_GENERIC_FAILURE;
   passMap[passNameStr](pm);
+  return TP_SUCCESS;
 }
 
-extern "C" __attribute__((visibility("default"))) void
+TRITON_PLUGIN_API
 tritonRegisterPluginPass(const char *passName) {
   std::string passNameStr(passName);
+  if (passMap.find(passNameStr) == passMap.end())
+    return TP_GENERIC_FAILURE;
   registryMap[passNameStr]();
+  return TP_SUCCESS;
 }
 
-extern "C" __attribute__((visibility("default"))) void
+TRITON_PLUGIN_API
 tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
+  if (!passCount)
+    return TP_GENERIC_FAILURE;
   *passCount = passMap.size();
   if (!passNames)
-    return;
+    return TP_SUCCESS;
   unsigned i = 0;
   for (auto passName : passNamesTable) {
     passNames[i] = passName;
   }
+  return TP_SUCCESS;
 }
