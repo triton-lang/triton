@@ -177,24 +177,27 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK-DAG: llvm.extractvalue %{{.*}}[0] : !llvm.struct<(ptr<3>, i32)>
   // CHECK-DAG: llvm.store
   // CHECK-DAG: llvm.cond_br %{{.*}}, ^bb1, ^bb3
-  // CHECK-DAG: %[[BUFFER_SIZE:.*]] = llvm.mlir.constant(2048 : i32) : i32
   // CHECK-DAG: %[[BUFFER_SIZE_OFFSET:.*]] = llvm.mlir.constant(3 : i32) : i32
   // CHECK-DAG: %[[BUFFER_SIZE_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[BUFFER_SIZE_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>
-  // CHECK-DAG: llvm.store %[[BUFFER_SIZE]], %[[BUFFER_SIZE_PTR]] : i32, !llvm.ptr<1>
+  // CHECK: %[[MAX_WORDS:.*]] = llvm.mlir.constant(512 : i32) : i32
+  // CHECK: %[[CMP_WORDS:.*]] = llvm.icmp "slt" %{{.*}}, %[[MAX_WORDS]] : i32
+  // CHECK: %[[EFFECTIVE_WORDS:.*]] = llvm.select %[[CMP_WORDS]], %{{.*}}, %[[MAX_WORDS]] : i1, i32
+  // CHECK: %[[BYTES_PER_WORD:.*]] = llvm.mlir.constant(4 : i32) : i32
+  // CHECK: %[[BUFFER_SIZE:.*]] = llvm.mul %[[EFFECTIVE_WORDS]], %[[BYTES_PER_WORD]] : i32
+  // CHECK: llvm.store %[[BUFFER_SIZE]], %[[BUFFER_SIZE_PTR]] : i32, !llvm.ptr<1>
   // CHECK-DAG: %[[PRE_FINAL_TIME:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
   // CHECK-DAG: %[[PRE_FINAL_TIME_OFFSET:.*]] = llvm.mlir.constant(6 : i32) : i32
   // CHECK-DAG: %[[PRE_FINAL_TIME_PTR:.*]] = llvm.getelementptr %{{.*}}[%[[PRE_FINAL_TIME_OFFSET]]] : (!llvm.ptr<1>, i32) -> !llvm.ptr<1
   // CHECK-DAG: llvm.store %[[PRE_FINAL_TIME]], %[[PRE_FINAL_TIME_PTR]] : i64, !llvm.ptr<1>
   // CHECK-DAG: ^bb1:
   // CHECK-DAG: llvm.br ^bb2
-  // CHECK-DAG: ^bb2(%[[I:.*]]: i32):
+  // CHECK-DAG: ^bb2(%[[I:.*]]: i32, %[[UPPER:.*]]: i32):
   // CHECK-DAG: llvm.store
   // CHECK-DAG: llvm.store
-  // CHECK-DAG: %[[UPPER:.*]] = llvm.mlir.constant(510 : i32) : i32
   // CHECK-DAG: %[[P2:.*]] = llvm.icmp "slt" %[[I]], %[[UPPER]] : i32
   // CHECK-DAG: %[[STEP:.*]] = llvm.mlir.constant(2 : i32) : i32
   // CHECK-DAG: %[[I_NEW:.*]] = llvm.add %[[I]], %[[STEP]] : i32
-  // CHECK-DAG: llvm.cond_br %[[P2]], ^bb2(%[[I_NEW]] : i32), ^bb3
+  // CHECK-DAG: llvm.cond_br %[[P2]], ^bb2(%[[I_NEW]], %[[UPPER]] : i32, i32), ^bb3
   // CHECK-DAG: ^bb3:
   // CHECK-DAG: %[[POST_FINAL_TIME:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
   // CHECK-DAG: %[[POST_FINAL_TIME_OFFSET:.*]] = llvm.mlir.constant(8 : i32) : i32
