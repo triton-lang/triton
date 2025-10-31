@@ -2,6 +2,7 @@ import triton
 import triton.language as tl
 
 from ._downcast_to_mxfp import MXFP_BLOCK_SIZE
+from triton_kernels.target_info import cuda_capability_geq
 
 
 # fmt: off
@@ -92,6 +93,53 @@ def _upcast_from_mxfp(out_ptr, stride_o_outer, stride_o_quant: tl.constexpr, mx_
                 (dst_tensor.to(tl.uint16, bitcast=True) | non_finite_mask_dst).to(intermediate_dtype, bitcast=True),
                 dst_tensor,
             )
+
+    elif cuda_capability_geq(10, 0):
+        assert is_fp4
+        out0_u32, out1_u32 = tl.inline_asm_elementwise(
+            # Type reinterpretation and conversion at the beginning and the end
+            # are Triton requirements for passing and retrieving variables to and from inline PTX.
+            asm="""
+            {
+            .reg .b32 in_32;
+            .reg .b8  in_8;
+            .reg .f16x2 out_f16x2;
+            .reg .b16 out0_u16, out1_u16;
+
+            mov.b32 in_32, $2;
+            cvt.u8.u32 in_8, in_32;
+
+            // two FP4 -> packed f16x2.
+            cvt.rn.f16x2.e2m1x2 out_f16x2, in_8;
+
+            // split f16x2 lanes into two 16-bit scalars
+            mov.b32 {out0_u16, out1_u16}, out_f16x2;
+
+            // write 32b outputs
+            cvt.u32.u16 $0, out0_u16;
+            cvt.u32.u16 $1, out1_u16;
+            }
+            """,
+            constraints="=r,=r,r",  # two 32-bit outputs, one 32-bit input
+            args=[tensor],  # tl.uint8 (two FP4 packed in one byte)
+            dtype=(tl.uint32, tl.uint32),  # return as u32, we will narrow outside
+            is_pure=True,
+            pack=1,
+        )
+
+        # Narrow & reinterpret to float16.
+        lo_u16 = out0_u32.to(tl.uint16)
+        hi_u16 = out1_u32.to(tl.uint16)
+        lo_f16 = lo_u16.to(tl.float16, bitcast=True)
+        hi_f16 = hi_u16.to(tl.float16, bitcast=True)
+
+        if intermediate_dtype == tl.float16:
+            x0, x1 = lo_f16, hi_f16
+        else:
+            x0 = lo_f16.to(intermediate_dtype)
+            x1 = hi_f16.to(intermediate_dtype)
+
+        dst_tensor = tl.interleave(x0, x1)
     else:
         assert is_fp4
         dst_bias: tl.constexpr = 127 if intermediate_dtype == tl.bfloat16 else 15
