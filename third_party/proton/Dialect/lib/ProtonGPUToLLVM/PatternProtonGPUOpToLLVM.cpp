@@ -216,6 +216,10 @@ struct FinalizeOpConversion
     rewriter.setInsertionPointToStart(ifBlock);
 
     auto bufferBaseType = segmentObj.base.getType();
+    Value maxBufferWords = b.i32_val(bufferSizeInWords);
+    Value effectiveBufferWords =
+        b.select(b.icmp_slt(index, maxBufferWords), index, maxBufferWords);
+
     auto copyWord = [&](Value bufOffset, Value gmemOffset, Attribute memSpace) {
       // Load the value from buffer
       Value ptr = b.gep(bufferBaseType, i32_ty, segmentObj.base, bufOffset);
@@ -237,7 +241,9 @@ struct FinalizeOpConversion
     Value gmemBufSizeOffset = b.i32_val(3);
     Value gmemBufSizePtr =
         b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemBufSizeOffset);
-    b.store(b.i32_val(bufferSizeInWords * 4), gmemBufSizePtr);
+    Value bufferSizeInBytes =
+        b.mul(effectiveBufferWords, b.i32_val(4));
+    b.store(bufferSizeInBytes, gmemBufSizePtr);
 
     // Write back 'pre-final time'.
     Value gmemPreFinalTimeOffset = b.i32_val(6);
@@ -252,16 +258,18 @@ struct FinalizeOpConversion
     rewriter.create<cf::CondBranchOp>(loc, isFirstThread, ifBlock, thenBlock);
 
     // Write back the data.
-    const int upper = bufferSizeInWords - wordsPerEntry;
     rewriter.setInsertionPointToEnd(ifBlock);
     Value initIdx = b.i32_val(0);
-    Value wbBaseOffset = b.i32_val(metadataWordSize);
+    Value upperBound =
+        b.sub(effectiveBufferWords, b.i32_val(wordsPerEntry));
 
     Block *writeBackBlock = rewriter.createBlock(
-        op->getParentRegion(), std::next(Region::iterator(ifBlock)), {i32_ty},
-        {loc});
+        op->getParentRegion(), std::next(Region::iterator(ifBlock)),
+        {i32_ty, i32_ty}, {loc, loc});
     rewriter.setInsertionPointToStart(writeBackBlock);
     BlockArgument idx = writeBackBlock->getArgument(0);
+    BlockArgument upperArg = writeBackBlock->getArgument(1);
+    Value wbBaseOffset = b.i32_val(metadataWordSize);
     Value gmemWbTagOffset = b.add(wbBaseOffset, idx);
     Value gmemWbCounterOffset = b.add(gmemWbTagOffset, b.i32_val(1));
 
@@ -270,13 +278,15 @@ struct FinalizeOpConversion
     auto memSpace = op.getSegment().getType().getMemorySpace();
     copyWord(bufTagOffset, gmemWbTagOffset, memSpace);
     copyWord(bufCounterOffset, gmemWbCounterOffset, memSpace);
-    Value pred = b.icmp_slt(idx, b.i32_val(upper));
+    Value pred = b.icmp_slt(idx, upperArg);
     Value updatedIdx = b.add(idx, b.i32_val(wordsPerEntry));
-    rewriter.create<cf::CondBranchOp>(loc, pred, writeBackBlock, updatedIdx,
-                                      thenBlock, ArrayRef<Value>());
+    rewriter.create<cf::CondBranchOp>(
+        loc, pred, writeBackBlock, ValueRange{updatedIdx, upperArg}, thenBlock,
+        ValueRange{});
 
     rewriter.setInsertionPointToEnd(ifBlock);
-    rewriter.create<cf::BranchOp>(loc, writeBackBlock, initIdx);
+    rewriter.create<cf::BranchOp>(loc, writeBackBlock,
+                                  ValueRange{initIdx, upperBound});
 
     writeBackPostFinalTime(b, rewriter, op, isFirstThread, scratchPtr);
 
