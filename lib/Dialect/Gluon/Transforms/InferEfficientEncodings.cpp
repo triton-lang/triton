@@ -46,8 +46,12 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
   return currPerThread;
 }
 
-ttg::CTALayoutAttr getCTALayout(mlir::MLIRContext *ctx, unsigned rank) {
-  return ttg::CTALayoutAttr::getDefault(ctx, rank);
+ttg::CTALayoutAttr getCTALayoutForEfficientEncodings(RankedTensorType refTensorType, unsigned numCTAs) {
+  // TODO support numCTAs > 1
+  assert(numCTAs == 1 && "only numCTAs == 1 is supported for now");
+  assert(isa<gluon::EfficientEncodingAttr>(refTensorType.getEncoding()) &&
+         "expected CTALayoutAttr encoding");
+  return ttg::CTALayoutAttr::getDefault(refTensorType.getContext(), refTensorType.getShape().size());
 }
 
 ///
@@ -281,6 +285,8 @@ class GluonInferEfficientEncodingsPass
 
     Value ptr = getMemAccessPtr(op);
     auto refTensorType = cast<RankedTensorType>(ptr.getType());
+    auto CTALayout =
+        getCTALayoutForEfficientEncodings(refTensorType, numCTAs);
 
     LDBG("Considering op: " << *op);
     LLVM_DEBUG({
@@ -316,15 +322,8 @@ class GluonInferEfficientEncodingsPass
       }
     }
 
-    // TODO: hardcode ctaSplitNum for now. read ctaSplitNum from frontend
-    // TODO: options?
-    // TODO: Or we implement LayoutEncodingTrait for efficient encoding ??
-    // TODO: then we can just reuse the utility
-    unsigned rank = refTensorType.getShape().size();
-    SmallVector<unsigned> ctaSplitNum(rank, 1);
     auto shapePerCTA =
-        ttg::getShapePerCTA(ctaSplitNum, refTensorType.getShape());
-    // auto shapePerCTA = ttg::getShapePerCTA(refTensorType);
+        ttg::getShapePerCTA(CTALayout.getCTASplitNum(), refTensorType.getShape());
 
     LDBG("shapePerCTA=[" << triton::join(shapePerCTA, ", ") << "]");
 
@@ -361,10 +360,6 @@ class GluonInferEfficientEncodingsPass
     SmallVector<unsigned> sizePerThread(refTensorType.getRank(), 1);
     sizePerThread[order[0]] = perThread;
 
-    // TODO: hardcode for now. read ctaSplitNum from frontend options?
-    // auto CTALayout = triton::gpu::getCTALayout(refTensorType.getEncoding());
-    auto CTALayout =
-        getCTALayout(&getContext(), refTensorType.getShape().size());
     layoutMap[op] = triton::gpu::BlockedEncodingAttr::get(
         &getContext(), refTensorType.getShape(), sizePerThread, order, numWarps,
         threadsPerWarp, CTALayout);
