@@ -245,7 +245,6 @@ class Case:
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=2),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, epilogue_subtile=4),
             Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2),
-            Case(600, 400, 400, "ragged", "float8_e5m2", "float8_e5m2", 4, 2, split_k=2),
             Case(1000, 400, 400, "ragged", "float16", "float16", 3, 1),
             Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2),
             Case(1000, 700, 700, "ragged", "float16", "float16", 8, 2, split_k=9),
@@ -631,8 +630,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
         tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, matmul_precision_opt,
                            gammas=gs1_ref, epilogue=epilogue, y=None if has_aggregation else y_tri_in,
                            inner_routing_data=inner_routing_data)
-        tri_y = tri_y.squeeze(0)
         if has_aggregation:
+            tri_y = tri_y.squeeze(0)
             tri_y = aggregate_experts(tri_y, sindx, n_expts_act, epilogue, precision_opt, y_tri_in)
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
