@@ -361,19 +361,32 @@ def _attn_bwd_dq(dq, q, K, V,  #
 
 
 @triton.jit
-def _attn_bwd(Q, K, V, sm_scale,  #
-              DO,  #
-              DQ, DK, DV,  #
-              M, D,
-              # shared by Q/K/V/DO.
-              stride_z, stride_h, stride_tok, stride_d,  #
-              H, N_CTX,  #
-              BLOCK_M1: tl.constexpr,  #
-              BLOCK_N1: tl.constexpr,  #
-              BLOCK_M2: tl.constexpr,  #
-              BLOCK_N2: tl.constexpr,  #
-              BLK_SLICE_FACTOR: tl.constexpr,  #
-              HEAD_DIM: tl.constexpr):
+def _attn_bwd(
+    Q,
+    K,
+    V,
+    sm_scale,  #
+    DO,  #
+    DQ,
+    DK,
+    DV,  #
+    M,
+    D,
+    # shared by Q/K/V/DO.
+    stride_z,
+    stride_h,
+    stride_tok,
+    stride_d,  #
+    H,
+    N_CTX,  #
+    BLOCK_M1: tl.constexpr,  #
+    BLOCK_N1: tl.constexpr,  #
+    BLOCK_M2: tl.constexpr,  #
+    BLOCK_N2: tl.constexpr,  #
+    BLK_SLICE_FACTOR: tl.constexpr,  #
+    HEAD_DIM: tl.constexpr,
+    CAUSAL: tl.constexpr,
+):
     LN2: tl.constexpr = 0.6931471824645996  # = ln(2)
 
     bhid = tl.program_id(2)
@@ -396,7 +409,7 @@ def _attn_bwd(Q, K, V, sm_scale,  #
     offs_k = tl.arange(0, HEAD_DIM)
 
     start_n = pid * BLOCK_N1
-    start_m = start_n
+    start_m = 0
 
     MASK_BLOCK_M1: tl.constexpr = BLOCK_M1 // BLK_SLICE_FACTOR
     offs_n = start_n + tl.arange(0, BLOCK_N1)
@@ -408,23 +421,24 @@ def _attn_bwd(Q, K, V, sm_scale,  #
     k = tl.load(K + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d)
     v = tl.load(V + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d)
 
-    num_steps = BLOCK_N1 // MASK_BLOCK_M1
+    if CAUSAL:
+        start_m = start_n
+        num_steps = BLOCK_N1 // MASK_BLOCK_M1
+        dk, dv = _attn_bwd_dkdv(dk, dv,  #
+                                Q, k, v, sm_scale,  #
+                                DO,  #
+                                M, D,  #
+                                stride_tok, stride_d,  #
+                                H, N_CTX,  #
+                                MASK_BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
+                                start_n, start_m, num_steps,  #
+                                MASK=True,  #
+                                )
 
-    dk, dv = _attn_bwd_dkdv(dk, dv,  #
-                            Q, k, v, sm_scale,  #
-                            DO,  #
-                            M, D,  #
-                            stride_tok, stride_d,  #
-                            H, N_CTX,  #
-                            MASK_BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
-                            start_n, start_m, num_steps,  #
-                            MASK=True  #
-                            )
-
-    start_m += num_steps * MASK_BLOCK_M1
-    num_steps = (N_CTX - start_m) // BLOCK_M1
+        start_m += num_steps * MASK_BLOCK_M1
 
     # Compute dK and dV for non-masked blocks.
+    num_steps = (N_CTX - start_m) // BLOCK_M1
     dk, dv = _attn_bwd_dkdv(  #
         dk, dv,  #
         Q, k, v, sm_scale,  #
@@ -434,7 +448,7 @@ def _attn_bwd(Q, K, V, sm_scale,  #
         H, N_CTX,  #
         BLOCK_M1, BLOCK_N1, HEAD_DIM,  #
         start_n, start_m, num_steps,  #
-        MASK=False  #
+        MASK=False,  #
     )
 
     dv_ptrs = DV + offs_n[:, None] * stride_tok + offs_k[None, :] * stride_d
@@ -447,7 +461,8 @@ def _attn_bwd(Q, K, V, sm_scale,  #
 
     # THIS BLOCK DOES DQ:
     start_m = pid * BLOCK_M2
-    end_n = start_m + BLOCK_M2
+    start_n = 0
+    num_steps = N_CTX // BLOCK_N2
 
     MASK_BLOCK_N2: tl.constexpr = BLOCK_N2 // BLK_SLICE_FACTOR
     offs_m = start_m + tl.arange(0, BLOCK_M2)
@@ -459,30 +474,34 @@ def _attn_bwd(Q, K, V, sm_scale,  #
     m = tl.load(M + offs_m)
     m = m[:, None]
 
-    # Compute dQ for masked (diagonal) blocks.
-    # NOTE: This code scans each row of QK^T backward (from right to left,
-    # but inside each call to _attn_bwd_dq, from left to right), but that's
-    # not due to anything important.  I just wanted to reuse the loop
-    # structure for dK & dV above as much as possible.
-    num_steps = BLOCK_M2 // MASK_BLOCK_N2
-    dq = _attn_bwd_dq(dq, q, K, V,  #
-                      do, m, D,  #
-                      stride_tok, stride_d,  #
-                      H, N_CTX,  #
-                      BLOCK_M2, MASK_BLOCK_N2, HEAD_DIM,  #
-                      start_m, end_n - num_steps * MASK_BLOCK_N2, num_steps,  #
-                      MASK=True  #
-                      )
-    end_n -= num_steps * MASK_BLOCK_N2
-    # stage 2
-    num_steps = end_n // BLOCK_N2
+    if CAUSAL:
+        # Compute dQ for masked (diagonal) blocks.
+        # NOTE: This code scans each row of QK^T backward (from right to left,
+        # but inside each call to _attn_bwd_dq, from left to right), but that's
+        # not due to anything important.  I just wanted to reuse the loop
+        # structure for dK & dV above as much as possible.
+        end_n = start_m + BLOCK_M2
+        num_steps = BLOCK_M2 // MASK_BLOCK_N2
+        dq = _attn_bwd_dq(dq, q, K, V,  #
+                          do, m, D,  #
+                          stride_tok, stride_d,  #
+                          H, N_CTX,  #
+                          BLOCK_M2, MASK_BLOCK_N2, HEAD_DIM,  #
+                          start_m, end_n - num_steps * MASK_BLOCK_N2, num_steps,  #
+                          MASK=True,  #
+                          )
+        end_n -= num_steps * MASK_BLOCK_N2
+        # stage 2
+        num_steps = end_n // BLOCK_N2
+        start_n = end_n - num_steps * BLOCK_N2
+
     dq = _attn_bwd_dq(dq, q, K, V,  #
                       do, m, D,  #
                       stride_tok, stride_d,  #
                       H, N_CTX,  #
                       BLOCK_M2, BLOCK_N2, HEAD_DIM,  #
-                      start_m, end_n - num_steps * BLOCK_N2, num_steps,  #
-                      MASK=False  #
+                      start_m, start_n, num_steps,  #
+                      MASK=False,  #
                       )
     # Write back dQ.
     dq_ptrs = DQ + offs_m[:, None] * stride_tok + offs_k[None, :] * stride_d
@@ -599,7 +618,8 @@ class _attention(torch.autograd.Function):
             BLK_SLICE_FACTOR=BLK_SLICE_FACTOR,  #
             HEAD_DIM=ctx.HEAD_DIM,  #
             num_warps=NUM_WARPS,  #
-            num_stages=NUM_STAGES  #
+            num_stages=NUM_STAGES,  #
+            CAUSAL=ctx.causal,  #
         )
 
         return dq, dk, dv, None, None, None, None
@@ -614,7 +634,7 @@ TORCH_HAS_FP8 = hasattr(torch, 'float8_e5m2')
 @pytest.mark.parametrize("H", [2, 48])
 @pytest.mark.parametrize("N_CTX", [128, 1024, (2 if is_hip() else 4) * 1024])
 @pytest.mark.parametrize("HEAD_DIM", [64, 128])
-@pytest.mark.parametrize("causal", [True])  # FIXME: Non-causal tests do not pass at the moment.
+@pytest.mark.parametrize("causal", [False, True])
 @pytest.mark.parametrize("warp_specialize", [False, True] if is_blackwell() else [False])
 @pytest.mark.parametrize("mode", ["fwd", "bwd"])
 @pytest.mark.parametrize("provider", ["triton-fp16"] + (["triton-fp8"] if TORCH_HAS_FP8 else []))
