@@ -1584,3 +1584,46 @@ def test_tcgen05_mma_scaled_minimal():
     torch.testing.assert_close(out, ref, atol=1e-6, rtol=1e-6)
     ttgir = compiled.asm["ttgir"]
     assert "ttng.tc_gen5_mma_scaled" in ttgir
+
+
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
+def test_efficient_layout():
+    @gluon.jit
+    def kernel(in_ptr, out_ptr,  #
+            xnumel, ynumel, xstride_in, ystride_in, xstride_out, ystride_out,  #
+            XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
+        pid_x = ttgl.program_id(0)
+        pid_y = ttgl.program_id(1)
+        indices_x = pid_x * XBLOCK + ttgl.arange(0, XBLOCK) # auto layout
+        indices_y = pid_y * YBLOCK + ttgl.arange(0, YBLOCK) # auto layout
+
+        in_offsets = xstride_in * indices_x[:, None] + ystride_in * indices_y[None, :]
+        out_offsets = xstride_out * indices_x[:, None] + ystride_out * indices_y[None, :]
+
+        # MASK
+        mask = (indices_x[:, None] < xnumel) & (indices_y[None, :] < ynumel) # auto layout
+
+        # IN PTR
+        in_ptrs = ttgl.set_auto_layout(in_ptr + in_offsets, ttgl.EfficientLayout())
+        value = ttgl.load(in_ptrs, mask=mask)
+
+        # OUT PTR
+        out_ptrs = ttgl.set_auto_layout(out_ptr + out_offsets, ttgl.EfficientLayout())
+        out_mask_layouted = ttgl.set_auto_layout(mask, ttgl.EfficientLayout())
+        ttgl.store(out_ptrs, value, mask=out_mask_layouted)
+
+    XBLOCK = 128
+    YBLOCK = 256
+    xnumel = 1000
+    ynumel = 2000
+    input = torch.ones((xnumel, ynumel), device="cuda")
+    output = torch.zeros_like(input)
+    ref = torch.ones_like(input)
+
+    grid = (triton.cdiv(xnumel, XBLOCK), triton.cdiv(ynumel, YBLOCK))
+    kernel[grid](  #
+        input, output, xnumel, ynumel,  #
+        *input.stride(), *output.stride(),  #
+        XBLOCK, YBLOCK, num_warps=4)
+
+    torch.testing.assert_close(output, ref)
