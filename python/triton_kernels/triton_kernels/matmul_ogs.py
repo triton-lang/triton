@@ -697,7 +697,7 @@ def matmul_ogs_torch(x, w, bias,
     else:
         offs = [[0, x.shape[1]] for _ in range(w.shape[0])]
     # compute
-    n_rows = x.shape[1] if gather_indx is None else gather_indx.dst_indx.shape[0]
+    n_rows = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
     y = torch.zeros((x.shape[0], n_rows, w.shape[-1]), device=x.device, dtype=x.dtype)
     for i, (lo, hi) in enumerate(offs):
         if gather_indx is None:
