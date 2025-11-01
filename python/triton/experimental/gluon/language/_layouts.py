@@ -43,6 +43,20 @@ class AutoLayout(DistributedLayout):
 
 
 @dataclass(frozen=True)
+class EfficientLayout(DistributedLayout):
+
+    def _to_ir(self, builder):
+        return builder.get_efficient_layout()
+
+    def mangle(self):
+        return "EL"
+
+    @property
+    def rank(self):
+        raise ValueError("EfficientLayout has no rank")
+
+
+@dataclass(frozen=True)
 class BlockedLayout(DistributedLayout):
     """
     Represents a blocked layout, partitioning a tensor across threads, warps, and CTAs.
