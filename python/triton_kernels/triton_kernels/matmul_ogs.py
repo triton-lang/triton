@@ -379,7 +379,7 @@ def matmul_ogs(x, w, bias,
     # determine shapes
     has_gather = gather_indx is not None
     has_scatter = scatter_indx is not None
-    is_ragged = x_ragged_metadata is not None
+    is_ragged = x_ragged_metadata is not None and inner_routing_data is None
     M = x.shape[-2] if gather_indx is None else gather_indx.src_indx.shape[0]
     if inner_routing_data is not None:
         batch_size = inner_routing_data.base.n_expts_tot
@@ -476,7 +476,6 @@ def matmul_ogs(x, w, bias,
     # moe metadata
     block_m = opt_flags.block_m
     expt_data_args = InnerRoutingData.make_kernel_args(inner_routing_data or x_ragged_metadata, block_m)
-    print(expt_data_args)
     # spmd grid
     grid_m = triton.cdiv(M, opt_flags.block_m)
     if x_ragged_metadata is not None:
