@@ -60,15 +60,9 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
     Value A = op.getA();
     Value D = op.getResult();
 
-    // Here we assume the DotOp's operands always comes from shared memory.
-    auto AShapePerCTA = getShapePerCTA(A.getType());
-    size_t reduceAxis = 1;
-    unsigned K = AShapePerCTA[reduceAxis];
-    bool isOuter = K == 1;
-
     NvidiaMmaEncodingAttr mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(
         cast<RankedTensorType>(D.getType()).getEncoding());
-    if (!isOuter && mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
+    if (mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
       if (mmaLayout.getVersionMajor() == 2) {
         bool isHopperF64 =
             computeCapability == 90 &&
@@ -106,14 +100,8 @@ struct WarpGroupDotOpConversion
     Value A = op.getA();
     TypedValue<RankedTensorType> D = op.getResult();
 
-    // Here we assume the DotOp's operands always comes from shared memory.
-    auto AShapePerCTA = getShapePerCTA(A.getType());
-    size_t reduceAxis = 1;
-    unsigned K = AShapePerCTA[reduceAxis];
-    bool isOuter = K == 1;
-
     auto mmaLayout = cast<NvidiaMmaEncodingAttr>(D.getType().getEncoding());
-    if (!isOuter && supportMMA(op.getOperand(0), mmaLayout.getVersionMajor())) {
+    if (supportMMA(op.getOperand(0), mmaLayout.getVersionMajor())) {
       return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
                           getThreadId(rewriter, loc));
     }
