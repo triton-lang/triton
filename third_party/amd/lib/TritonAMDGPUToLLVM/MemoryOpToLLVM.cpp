@@ -104,6 +104,11 @@ private:
     }
 
     auto smemPtrTy = ptr_ty(ctx, 3);
+    // Computation of cvt will be moved before chooseDsReadTrLayout once
+    // chooseDotDsReadTrLayout is refactored to work in a generic way (this is
+    // only used for FP4 with isPackedLoad).
+    // That way it will be cleaner to see what actually can be vectorized
+    // because we will work directly on offsets
     auto paddedEnc =
         dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(srcTy.getEncoding());
     LinearLayout cvt = LinearLayout::empty();
@@ -114,21 +119,23 @@ private:
       auto sharedLL = triton::gpu::toLinearLayout(srcTy);
       cvt = ldsTransLayout->invertAndCompose(sharedLL);
     }
-    // Check that we will be able to vectorize the load.
-    // Need to have exactly needContigReg, otherwise we can't use ds_read_tr
-    auto [elemsPerVec, permutation] = largestVectorisation(
-        ctx, cvt, bitWidth, ldsTransLoadParams->needContigReg);
 
-    if (paddedEnc)
-      elemsPerVec = std::min<int>(elemsPerVec, paddedEnc.getMinInterval());
-
-    if (elemsPerVec != ldsTransLoadParams->needContigReg)
+    // Check that we will be able to use ds_read_tr
+    if (paddedEnc &&
+        ldsTransLoadParams->needContigReg > paddedEnc.getMinInterval())
+      return failure();
+    cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
+    auto tile = LinearLayout::identity1D(ldsTransLoadParams->needContigReg,
+                                         kReg, kOffset);
+    // We don't want to find permutations of cvt that let us divideLeft
+    // since permutations of the register dimensions would require permutations
+    // in the lane dimension to undo them.
+    auto maybeQuot = divideLeft(cvt, tile);
+    if (!maybeQuot)
       return failure();
 
-    cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
-    auto lowerInst = [&](RewriterBase &rewriter, Location loc,
-                         ArrayRef<Value> inVals, Value vecAddr, int idx,
-                         VectorType vTy) -> SmallVector<Value> {
+    auto lowerInst = [&](RewriterBase &rewriter, Location loc, Value vecAddr,
+                         int idx, VectorType vTy) -> SmallVector<Value> {
       assert(bitWidth == 16 || bitWidth == 8);
       Value dsReadTr;
       // tr16 instructions return vectors of bf16/f16 while "tr8" instructions
@@ -182,11 +189,59 @@ private:
       return loadedVals;
     };
 
-    SmallVector<Value> outVals = lowerLdSt(
-        loc, rewriter.getContext(), cvt, {}, // Input for store, output for load
-        llvmElemTy, smemObj.getBase(), calcPaddedOffset, affineOffset,
-        maskSpanAffineOffset, laneId, warpId, rewriter, targetInfo,
-        ldsTransLoadParams->needContigReg, lowerInst);
+    // This lowering is the same as lowerLdSt but without the call
+    // to largestVectorization() since we already know what vector
+    // size is required to lower ds_read_tr and we generated maybeQuot
+    // based on that.
+    LinearLayout reps = zerosLike(tile) * *maybeQuot;
+
+    LinearLayout addrLayout =
+        LinearLayout({{kLane, reps.getBases().lookup(kLane)},
+                      {kWarp, reps.getBases().lookup(kWarp)}},
+                     reps.getOutDims(), false);
+    auto [nAdditive, permStrides] =
+        actionAdditiveStrides(reps, addrLayout, maskSpanAffineOffset);
+    reps = permStrides.apply(reps);
+
+    // Perform the address computations in i8
+    auto i8Tile =
+        zerosLike(LinearLayout::identity1D(bitWidth / 8, kReg, kOffset));
+    auto i8AddrLayout = i8Tile * addrLayout;
+
+    auto regBaseI8 =
+        applyLinearLayout(
+            loc, rewriter, i8AddrLayout,
+            {{kReg, b.i32_val(0)}, {kLane, laneId}, {kWarp, warpId}})[0]
+            .second;
+
+    // It's fine that we don't compute the offset in bytes as affineOffset
+    // will be folded into a constant
+    auto affineOffsetI8 = b.mul(affineOffset, b.i32_val(bitWidth / 8));
+    regBaseI8 = b.xor_(regBaseI8, affineOffsetI8);
+    SmallVector<Value> outVals;
+    auto vecTy = vec_ty(llvmElemTy, ldsTransLoadParams->needContigReg);
+    for (int i = 0; i < cvt.getInDimSize(kReg); i += nAdditive) {
+      auto regIdx = reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}})[0].second;
+      auto regIdxI8 = regIdx * (bitWidth / 8);
+      Value offset = b.xor_(regBaseI8, b.i32_val(regIdxI8));
+      for (int j = 0; j < nAdditive; j += ldsTransLoadParams->needContigReg) {
+        // all these constants will go as immediate values ds_read_tr
+        auto regIdxAdd =
+            reps.apply({{kReg, j}, {kLane, 0}, {kWarp, 0}})[0].second;
+        auto regIdxAddI8 = regIdxAdd * (bitWidth / 8);
+        Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
+        auto vecAddr = b.gep(smemPtrTy, i8_ty, smemObj.getBase(),
+                             calcPaddedOffset(innerOffset),
+                             LLVM::GEPNoWrapFlags::inbounds);
+        llvm::append_range(outVals,
+                           lowerInst(rewriter, loc, vecAddr, i + j, vecTy));
+      }
+    }
+
+    // Permute the values back
+    auto invPermStrides = permStrides.inverse();
+    outVals = invPermStrides.apply(outVals);
+
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, retTy);
     rewriter.replaceOp(op, result);
     return success();
