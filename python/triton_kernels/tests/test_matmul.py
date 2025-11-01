@@ -472,6 +472,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
                                                    device=device)
     else:
         rdata = gindx = sindx = None
+    expt_data = None if rdata is None else rdata.expt_data
 
     padding_block_k = 32
     if hbm_swizzling:
@@ -624,7 +625,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
 
     # triton
     try:
-        tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata.expt_data,
+        tri_y = matmul_ogs(x_tri, w_tri, bias_tri, expt_data,
                            gindx, sindx, precision_opt,
                            gammas=gs1_ref, epilogue=epilogue, y=y_tri_in,
                            inner_routing_data=inner_routing_data,
@@ -644,7 +645,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
         return x.to(act_dtype).to(torch.float32) if sep_gather else x
 
     ref_y = matmul_ogs_torch(x_ref, w_ref, bias_ref,  #
-                             rdata.expt_data, gindx, sindx, round_x=round_x, gammas=gs1_ref,
+                             expt_data, gindx, sindx, round_x=round_x, gammas=gs1_ref,
                              inner_routing_data=inner_routing_data)
 
     def scale(val, scal):

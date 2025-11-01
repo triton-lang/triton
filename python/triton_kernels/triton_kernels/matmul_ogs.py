@@ -158,8 +158,8 @@ class InnerRoutingData:
     #                        EXPT_IS_INNER, X_IS_PADDED, W_IS_PADDED, ExptHistMax
     @staticmethod
     def make_kernel_args(data, block_m):
-        if isinstance(data, RoutingData):
-            expt_data, block = data.expt_data, block_m
+        if isinstance(data, RaggedTensorMetadata):
+            expt_data, block = data, block_m
             args = (False, False, False, None)
         elif isinstance(data, InnerRoutingData):
             expt_data, block = data.base.expt_data, data.block_k
@@ -475,6 +475,7 @@ def matmul_ogs(x, w, bias,
     # moe metadata
     block_m = opt_flags.block_m
     expt_data_args = InnerRoutingData.make_kernel_args(inner_routing_data or x_ragged_metadata, block_m)
+    print(expt_data_args)
     # spmd grid
     grid_m = triton.cdiv(M, opt_flags.block_m)
     if x_ragged_metadata is not None:
@@ -688,7 +689,7 @@ def matmul_ogs_torch(x, w, bias,
     if x.ndim == 2:
         x = x.view(1, *x.shape)
     # memory offsets
-    if x_ragged_metadata.n_slices > 1 and not is_input_batched:
+    if x_ragged_metadata is not None and not is_input_batched:
         sizes = x_ragged_metadata.slice_sizes
         off = torch.zeros(sizes.shape[0] + 1, dtype=torch.int32)
         off[1:] = torch.cumsum(sizes, 0)
