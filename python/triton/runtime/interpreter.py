@@ -32,6 +32,21 @@ class TensorHandle:
     dtype: tl.dtype
     attr: Dict = dataclasses.field(default_factory=dict)
 
+    def __post_init__(self):
+        if isinstance(self.dtype, tl.pointer_type):
+            return
+
+        np_dtype_bitwidth = self.data.itemsize * 8
+        tl_dtype_bitwidth = self.dtype.primitive_bitwidth
+
+        # numpy lowest itemsize is at least 8 bits
+        if tl_dtype_bitwidth < 8:
+            tl_dtype_bitwidth = 8
+
+        if np_dtype_bitwidth > tl_dtype_bitwidth:
+            raise ValueError(f"numpy data itemsize ({np_dtype_bitwidth} bits) exceeds dtype primitive_bitwidth "
+                             f"({tl_dtype_bitwidth} bits) for triton type {self.dtype}")
+
     def __bool__(self):
         return bool(self.data.all())
 
