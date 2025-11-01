@@ -51,21 +51,46 @@ void ScopeIdAllocation::run() {
   // Stage the analysis to match downstream consumers of scope metadata:
   //
   // - reachability(): Track active scopes at CFG boundaries and flag malformed
-  //   lifetimes. Example MLIR:
+  //   lifetimes. We optimistically collect all the "potentially" unclosed and
+  //   closing scopes here, and validate them after the dataflow converges.
+  //
+  //   Starting example MLIR:
   //     scf.if %cond {
   //       proton.record start @"foo"
   //     }
   //   Because `"foo"` never ends on the `then` branch, reachability() emits
   //   `The scope name 'foo' is not closed properly`.
   //
-  // - liveness(): Pair start/end records and assign a shared numeric ID. Example
+  //  Valid example MLIR:
+  //    scf.if %cond {
+  //     proton.record start @"foo"
+  //    }
+  //    proton.record end @"foo"
+  //
+  //   We don't emit errors because we assume scf.if could be executed and it's
+  //   up to the user to ensure proper semantics.
+  //
+  // - liveness(): Pair start/end records and assign a shared numeric ID.
+  // For each start record, we look for the nearest closing scope with the same name for pairing.
+  //
+  // Example
   //   MLIR:
   //     proton.record start @"foo"
   //     …
   //     proton.record end @"foo"
   //   Both ops are mapped to the same ScopeId in `opToIdMap`.
   //
-  // - dominance(): Infer the parent/child hierarchy between scopes via
+  //
+  // - dominance(): 
+  // (1) Check the dominance of start/end records to ensure well-formedness.
+  //  Example MLIR:
+  //    proton.record end @"foo"
+  //    …
+  //   proton.record start @"foo"
+  //
+  // Because the end of `"foo"` dominates its start, dominance() emits an error.
+  //
+  // (2) Infer the parent/child hierarchy between scopes via
   //   dominance. Example MLIR:
   //     proton.record start @"outer"
   //     scf.if %cond {
@@ -166,13 +191,6 @@ void ScopeIdAllocation::reachability() {
         }
       }
     }
-    for (auto &scopeName : unclosedScopes) {
-      if (!outputBlockInfo.contains(scopeName)) {
-        mlir::emitError(virtualBlock.first->getParentOp()->getLoc(),
-                        "The scope name '")
-            << scopeName << "' is not closed properly";
-      }
-    }
   }
 }
 
@@ -253,13 +271,15 @@ void ScopeIdAllocation::dominance() {
   auto sortedStartRecordOps = mlir::topologicalSort(startRecordOps);
   for (int i = 0; i < sortedStartRecordOps.size(); ++i) {
     auto *op = sortedStartRecordOps[i];
+    auto scopeId = opToIdMap.lookup(op);
+    auto endOp = endRecordMap.lookup(scopeId);
     for (int j = i - 1; j >= 0; --j) {
-      auto *maybeParentOp = sortedStartRecordOps[j];
-      auto scopeId = opToIdMap.lookup(maybeParentOp);
-      auto endRecordOp = endRecordMap.lookup(scopeId);
-      if (domInfo.dominates(maybeParentOp, op) && 
-          domInfo.dominates(op, endRecordOp)) {
-        auto parentId = opToIdMap.lookup(maybeParentOp);
+      auto *parentStartOp = sortedStartRecordOps[j];
+      auto parentScopeId = opToIdMap.lookup(parentStartOp);
+      auto parentEndOp = endRecordMap.lookup(parentScopeId);
+      if (domInfo.dominates(parentStartOp, op) && 
+          domInfo.dominates(endOp, parentEndOp)) {
+        auto parentId = opToIdMap.lookup(parentStartOp);
         auto childId = opToIdMap.lookup(op);
         scopeParentIds.push_back({childId, parentId});
         break;

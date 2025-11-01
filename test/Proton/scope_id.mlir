@@ -35,14 +35,31 @@ module {
     // expected-remark @below {{scope parent id = -1}}
     proton.record start "name0"
     // expected-remark @below {{scope id = 4}}
-    // expected-remark @below {{scope parent id = 3}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record start "name1"
     // expected-remark @below {{scope id = 3}}
     // expected-remark @below {{scope parent id = -1}}
     proton.record end "name0"
     // expected-remark @below {{scope id = 4}}
-    // expected-remark @below {{scope parent id = 3}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record end "name1"
+    tt.return
+  }
+
+  // expected-remark @below {{nested_scopes}}
+  tt.func @nested_scopes() {
+    // expected-remark @below {{scope id = 5}}
+    // expected-remark @below {{scope parent id = -1}}
+    proton.record start "name0"
+    // expected-remark @below {{scope id = 6}}
+    // expected-remark @below {{scope parent id = 5}}
+    proton.record start "name1"
+    // expected-remark @below {{scope id = 6}}
+    // expected-remark @below {{scope parent id = 5}}
+    proton.record end "name1"
+    // expected-remark @below {{scope id = 5}}
+    // expected-remark @below {{scope parent id = -1}}
+    proton.record end "name0"
     tt.return
   }
 }
@@ -174,6 +191,7 @@ module {
 // -----
 
 module {
+  // expected-remark @below {{cf_loop_closed}}
   tt.func @cf_loop_closed() {
   ^entry:
     %c0 = arith.constant 0 : index
@@ -181,11 +199,15 @@ module {
   ^exit:
     tt.return
   ^loop(%iv: index):
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record start "loop_body"
     %c1 = arith.constant 1 : index
     %next = arith.addi %iv, %c1 : index
     %c2 = arith.constant 2 : index
     %cond = arith.cmpi ult, %next, %c2: index
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record end "loop_body"
     cf.cond_br %cond, ^loop(%next : index), ^exit
   }
@@ -194,6 +216,7 @@ module {
 // -----
 
 module {
+  // expected-remark @below {{cf_loop_closed_two_blocks}}
   tt.func @cf_loop_closed_two_blocks() {
   ^entry:
     %c0 = arith.constant 0 : index
@@ -201,6 +224,8 @@ module {
   ^exit:
     tt.return
   ^loop(%iv: index):
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record start "loop_body"
     %c1 = arith.constant 1 : index
     %next = arith.addi %iv, %c1 : index
@@ -208,26 +233,10 @@ module {
   ^loop_body(%iv_next: index):
     %c2 = arith.constant 2 : index
     %cond = arith.cmpi ult, %iv_next, %c2: index
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
     proton.record end "loop_body"
     cf.cond_br %cond, ^loop(%iv_next : index), ^exit
-  }
-}
-
-// -----
-
-module {
-  tt.func @cf_liveness_error(%cond: i1) {
-    proton.record start "name0"
-    cf.cond_br %cond, ^then, ^else
-  ^then:  // pred: ^entry
-    proton.record end "name0"
-    cf.br ^merge
-  ^else:  // pred: ^entry
-    // expected-error @below {{The scope name 'name0' is not properly closed (missing start record)}}
-    proton.record end "name0"
-    cf.br ^merge
-  ^merge:  // preds: ^then, ^else
-    tt.return
   }
 }
 
@@ -247,6 +256,24 @@ module {
   tt.func @cf_dangling_end() {
     // expected-error @below {{The scope name 'dangling' is closed without being opened}}
     proton.record end "dangling"
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  tt.func @cf_liveness_error(%cond: i1) {
+    proton.record start "name0"
+    cf.cond_br %cond, ^then, ^else
+  ^then:  // pred: ^entry
+    proton.record end "name0"
+    cf.br ^merge
+  ^else:  // pred: ^entry
+    // expected-error @below {{The scope name 'name0' is not properly closed (missing start record)}}
+    proton.record end "name0"
+    cf.br ^merge
+  ^merge:  // preds: ^then, ^else
     tt.return
   }
 }
