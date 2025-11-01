@@ -1,5 +1,6 @@
 import triton
 import triton.language as tl
+from triton_kernels.target_info import cuda_capability_geq
 
 # fmt: off
 
@@ -72,18 +73,42 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
     # Now we must convert the tensors to the mx format.
     if is_fp8:
         out_tensor = quant_tensor.to(mx_tensor_dtype)
+    elif cuda_capability_geq(10, 0):
+        # Convert scaled values to two f32 lanes and use PTX cvt to e2m1x2 with two f32 operands.
+        pairs = tl.reshape(quant_tensor, [BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_DIM // 2, 2])
+        lo_f, hi_f = tl.split(pairs)
+        lo_f32 = lo_f.to(tl.float32)
+        hi_f32 = hi_f.to(tl.float32)
+
+        # Inline PTX: cvt.rn.satfinite.e2m1x2.f32 takes two f32 sources and produces one .b8 packed e2m1x2.
+        out_tensor = tl.inline_asm_elementwise(
+            """
+            {
+                .reg .b8 r;
+                cvt.rn.satfinite.e2m1x2.f32 r, $1, $2;
+                mov.b32 $0, {r, r, r, r};
+            }
+            """,
+            constraints="=r,f,f",
+            args=[hi_f32, lo_f32],
+            dtype=tl.uint8,
+            is_pure=True,
+            pack=1,
+        )
     else:
         quant_tensor = quant_tensor.to(tl.uint32, bitcast=True)
         signs = quant_tensor & 0x80000000
         exponents = (quant_tensor >> 23) & 0xFF
-        mantissas = (quant_tensor & 0x7FFFFF)
+        mantissas_orig = (quant_tensor & 0x7FFFFF)
 
         # For RTNE: 0.25 < x < 0.75 maps to 0.5 (denormal); exactly 0.25 maps to 0.0
         E8_BIAS = 127
         E2_BIAS = 1
         # Move implicit bit 1 at the beginning to mantissa for denormals
+        is_subnormal = exponents < E8_BIAS
         adjusted_exponents = tl.core.sub(E8_BIAS, exponents + 1, sanitize_overflow=False)
-        mantissas = tl.where(exponents < E8_BIAS, (0x400000 | (mantissas >> 1)) >> adjusted_exponents, mantissas)
+        mantissas_pre = (0x400000 | (mantissas_orig >> 1))
+        mantissas = tl.where(is_subnormal, mantissas_pre >> adjusted_exponents, mantissas_orig)
 
         # For normal numbers, we change the bias from 127 to 1, and for subnormals, we keep exponent as 0.
         exponents = tl.maximum(exponents, E8_BIAS - E2_BIAS) - (E8_BIAS - E2_BIAS)
@@ -93,7 +118,15 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
         m2bits = mantissas >> 21
         lsb_keep = (m2bits >> 1) & 0x1
         guard = m2bits & 0x1
-        sticky = ((mantissas & 0x1FFFFF) != 0).to(tl.uint32)
+        IS_SRC_FP32: tl.constexpr = src_tensor.dtype == tl.float32
+        if IS_SRC_FP32:
+            bit0_dropped = (mantissas_orig & 0x1) != 0
+            mask = (1 << tl.minimum(adjusted_exponents, 31)) - 1
+            dropped_post = (mantissas_pre & mask) != 0
+            sticky = is_subnormal & (bit0_dropped | dropped_post)
+            sticky |= ((mantissas & 0x1FFFFF) != 0).to(tl.uint32)
+        else:
+            sticky = ((mantissas & 0x1FFFFF) != 0).to(tl.uint32)
         round_inc = guard & (sticky | lsb_keep)
         e2m1_tmp = tl.minimum((((exponents << 2) | m2bits) + round_inc) >> 1, 0x7)
         e2m1_value = ((signs >> 28) | e2m1_tmp).to(tl.uint8)
@@ -105,12 +138,14 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
     return out_tensor, dequant_scale_exponent
 
 @triton.jit
-def _downcast_to_mxfp(mx_tensor_ptr, stride_mxt_outer, stride_mxt_quant: tl.constexpr,
-                      mx_scale_ptr, stride_mx_scale_outer, stride_mx_scale_quant,
-                      src_ptr, stride_src_outer, stride_src_quant,
-                      outer_dim, quant_dim,
-                      BLOCK_SIZE_OUT_DIM: tl.constexpr, BLOCK_SIZE_QUANT_DIM: tl.constexpr,
-                      DEQUANT_SCALE_ROUNDING_MODE: tl.constexpr):
+def _downcast_to_mxfp(
+    mx_tensor_ptr, stride_mxt_outer, stride_mxt_quant: tl.constexpr,
+    mx_scale_ptr, stride_mx_scale_outer, stride_mx_scale_quant,
+    src_ptr, stride_src_outer, stride_src_quant, outer_dim, quant_dim,
+    BLOCK_SIZE_OUT_DIM:tl.constexpr,
+    BLOCK_SIZE_QUANT_DIM: tl.constexpr,
+    DEQUANT_SCALE_ROUNDING_MODE: tl.constexpr,
+):
 
     tl.static_assert(stride_mxt_quant == 1, f"Output stride, {stride_mxt_quant=} must be 1.")
     tl.static_assert(BLOCK_SIZE_QUANT_DIM % MXFP_BLOCK_SIZE == 0, f"{BLOCK_SIZE_QUANT_DIM=} must be a multiple of 32")
@@ -165,7 +200,43 @@ def _downcast_to_mxfp(mx_tensor_ptr, stride_mxt_outer, stride_mxt_quant: tl.cons
                                                         DEQUANT_SCALE_ROUNDING_MODE)
 
     tl.store(mx_scale_ptr + mx_scale_offsets, scale_tensor, mask=full_scale_mask)
-    tl.store(mx_tensor_ptr + mx_tensor_offsets, out_tensor, mask=full_mask_mxt)
+    if is_fp4:
+        # Enabled grouped stores for FP4 elements.
+        GROUP_BYTES: tl.constexpr = 4
+        GROUPS_PER_ROW: tl.constexpr = BLOCK_SIZE_QUANT_MX_TENSOR // GROUP_BYTES
+
+        # Compute group-aligned address offsets for 4-byte stores.
+        offs_mxt_quant_groups = (tl.arange(0, GROUPS_PER_ROW)[None, :].to(tl.int64) * GROUP_BYTES)
+        mx_tensor_group_offsets = offs_mxt_quant_groups * stride_mxt_quant + offs_outer * stride_mxt_outer
+
+        # Determine which groups are fully valid (ie, have 4 bytes in-bounds for this tile).
+        bound_elems = tl.cdiv(quant_dim, K_DIVISOR)
+        groups_last_idx = start_mx_quant + offs_mxt_quant_groups + (GROUP_BYTES - 1)
+        mask_groups = groups_last_idx < bound_elems
+        full_group_mask = mask_groups & mask_n
+
+        # Only 4-byte store on rows whose base address is 4-byte aligned.
+        row_base = start_mx_quant + offs_outer * stride_mxt_outer
+        aligned_rows = (row_base & (GROUP_BYTES - 1)) == 0
+        full_group_mask = full_group_mask & aligned_rows
+
+        # Pack 4 consecutive bytes into one u32.
+        vals_u32 = out_tensor.to(tl.uint32)
+        vals4 = tl.reshape(vals_u32, [BLOCK_SIZE_OUT_DIM, GROUPS_PER_ROW, GROUP_BYTES])
+        shift_amounts = (tl.arange(0, GROUP_BYTES)[None, None, :].to(tl.uint32) * 8)
+        packed_u32 = tl.sum(vals4 << shift_amounts, axis=2)
+
+        mx_tensor_u32_ptr = (mx_tensor_ptr + mx_tensor_group_offsets).to(tl.pointer_type(tl.uint32))
+        tl.store(mx_tensor_u32_ptr, packed_u32, mask=full_group_mask)
+
+        # Deal with tail bytes not covered by groups, or rows where groups were not written.
+        group_for_elem = (offs_mxt_quant // GROUP_BYTES) * GROUP_BYTES
+        elem_groups_last_idx = start_mx_quant + group_for_elem + (GROUP_BYTES - 1)
+        elem_in_full_group = (elem_groups_last_idx < bound_elems) & aligned_rows
+        tail_mask = full_mask_mxt & ~elem_in_full_group
+        tl.store(mx_tensor_ptr + mx_tensor_offsets, out_tensor, mask=tail_mask)
+    else:
+        tl.store(mx_tensor_ptr + mx_tensor_offsets, out_tensor, mask=full_mask_mxt)
 
 
 @triton.jit(repr=lambda _: "_dequantize_mxfp8")
