@@ -8,7 +8,7 @@ from triton_kernels.tensor_details.layout import HopperMXScaleLayout
 
 def compute_grid_size(routing_data, batch_size, m, n, block_m, block_n):
     if routing_data is not None and batch_size == 1:
-        grid_m = routing_data.n_blocks(m, block_m)
+        grid_m = routing_data.n_blocks(routing_data.n_slices, m, block_m)
     else:
         grid_m = triton.cdiv(m, block_m)
     grid_n = (n + block_n - 1) // block_n

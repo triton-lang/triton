@@ -227,7 +227,7 @@ class MatmulAllocation:
     scratchpads: dict[str, tuple]
 
 def init_allocation(x, w, precision_config, fused_activation,
-                    routing_data, gather_indx, scatter_indx, inner_routing_data,
+                    gather_indx, scatter_indx, inner_routing_data,
                     n_reduce_shards, opt_flags):
     # ---- output ------
     N = w.shape[-1]
@@ -308,7 +308,7 @@ def matmul_ogs_set_idle_sms(num_idle_sms):
     update_opt_flags_constraints({"idle_sms": num_idle_sms})
 
 def matmul_ogs(x, w, bias,
-    routing_data: RoutingData | None = None,
+    x_ragged_metadata: RaggedTensorMetadata | None = None,
     gather_indx: GatherIndx | None = None,
     scatter_indx: ScatterIndx | None = None,
     precision_config: PrecisionConfig | None = None,
@@ -338,18 +338,12 @@ def matmul_ogs(x, w, bias,
     if is_input_batched:
         assert gather_indx is None, "gather not supported in batched mode"
         assert scatter_indx is None, "scatter not supported in batched mode"
-        assert routing_data is None, "routing not supported in batched mode"
         assert inner_routing_data is None, "routing not supported in batched mode"
         assert fused_comm is None, "fused comm is not supported in batched mode"
         assert w.ndim == 3 and w.shape[0] == x.shape[0]
     if inner_routing_data is not None:
-        assert routing_data is None
         assert gather_indx is None
         assert scatter_indx is None
-        routing_data = RoutingData(
-            None, None, inner_routing_data.base.n_expts_tot, 1,
-            expected_tokens_per_expt=inner_routing_data.base.expected_tokens_per_expt,
-        )
     # canonicalize inputs
     if precision_config is None:
         precision_config = PrecisionConfig()
@@ -357,8 +351,7 @@ def matmul_ogs(x, w, bias,
         fused_activation = FusedActivation(FnSpecs.default(), tuple())
     if epilogue is None:
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
-    if routing_data is None:
-        routing_data = RoutingData(None, None, max(1, w.shape[0]), 1)
+    n_slices = max(1, w.shape[0]) if x_ragged_metadata is None else x_ragged_metadata.n_slices
     # unpack scales
     w_scale = precision_config.weight_scale
     w_has_mx = w_scale is not None
@@ -386,12 +379,12 @@ def matmul_ogs(x, w, bias,
     # determine shapes
     has_gather = gather_indx is not None
     has_scatter = scatter_indx is not None
-    is_ragged = routing_data.expt_hist is not None
+    is_ragged = x_ragged_metadata is not None
     M = x.shape[-2] if gather_indx is None else gather_indx.src_indx.shape[0]
     if inner_routing_data is not None:
         batch_size = inner_routing_data.base.n_expts_tot
     else:
-        batch_size = w.shape[0] if routing_data.expt_hist is None and w.ndim == 3 else 1
+        batch_size = w.shape[0] if x_ragged_metadata is None and w.ndim == 3 else 1
     if y_acc_in is not None:
         y_acc_is_y = y_acc_in.data_ptr() == y.data_ptr() and y_acc_in.stride() == y.stride()
     else:
@@ -418,7 +411,7 @@ def matmul_ogs(x, w, bias,
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
-        batch_size, M, N, w.shape[-2], routing_data,
+        batch_size, M, N, w.shape[-2], x_ragged_metadata,
         can_use_tma, scatter_indx is not None, epilogue.effective_itemsize,
         x_transpose, y_acc_in is not None,
         inner_routing_data.block_k if inner_routing_data is not None else None,
@@ -437,7 +430,7 @@ def matmul_ogs(x, w, bias,
         else:
             even_K = inner_routing_data.x_is_padded and inner_routing_data.w_is_padded
     else:
-        batch_size = w.shape[0] if routing_data.expt_hist is None and w.ndim == 3 else 1
+        batch_size = w.shape[0] if x_ragged_metadata is None and w.ndim == 3 else 1
         assert K == K_W
         x_has_tma = opt_flags.is_persistent and (has_gather_tma or not has_gather)
         even_K = (K % opt_flags.block_k == 0)
@@ -452,7 +445,7 @@ def matmul_ogs(x, w, bias,
         matmul_fused_activation, reduce_fused_activation = reduce_fused_activation, matmul_fused_activation
     # allocate output/scratchpad memory
     allocation = init_allocation(x, w, precision_config, fused_activation,
-        routing_data, gather_indx, scatter_indx, inner_routing_data, fused_comm.n_reduce_shards if fused_comm is not None else 1, opt_flags)
+                                 gather_indx, scatter_indx, inner_routing_data, fused_comm.n_reduce_shards if fused_comm is not None else 1, opt_flags)
     memory = apply_allocation(allocation, y)
     # early exit
     if batch_size * M * N == 0:
@@ -481,11 +474,11 @@ def matmul_ogs(x, w, bias,
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
     # moe metadata
     block_m = opt_flags.block_m
-    expt_data_args = InnerRoutingData.make_kernel_args(inner_routing_data or routing_data, block_m)
+    expt_data_args = InnerRoutingData.make_kernel_args(inner_routing_data or x_ragged_metadata, block_m)
     # spmd grid
     grid_m = triton.cdiv(M, opt_flags.block_m)
-    if routing_data.expt_data is not None:
-        grid_m = routing_data.n_blocks(M, opt_flags.block_m)
+    if x_ragged_metadata is not None:
+        grid_m = x_ragged_metadata.n_blocks(x_ragged_metadata.n_slices, M, opt_flags.block_m)
     grid_n = triton.cdiv(N, opt_flags.block_n)
     max_grid = batch_size * grid_m * grid_n * opt_flags.split_k
     grid = min(target_info.num_sms() - opt_flags.idle_sms, max_grid) if opt_flags.is_persistent else max_grid
@@ -566,7 +559,7 @@ def matmul_ogs(x, w, bias,
                    flex.acc_data.reinterpret(y_acc_in), *y_acc_strides,
                    flex.acc_data.scale, y_acc_is_y,
                    bias, bias_stride,
-                   x.shape[-2] if routing_data.expt_hist is None else None,
+                   x.shape[-2] if x_ragged_metadata is None else None,
                    N, K, K_W,
                    betas, gammas,
                    None if gather_indx is None else gather_indx.src_indx,
@@ -580,7 +573,7 @@ def matmul_ogs(x, w, bias,
                    out_alpha,
                    *matmul_fused_activation.fn_args, matmul_fused_activation.specs.reduction_n,
                    *epilogue.fn_arg_values_matmul,
-                   routing_data.n_expts_tot,
+                   n_slices,
                    precision_config.max_num_imprecise_acc,
                    precision_config.allow_tf32,
                    precision_config.flexpoint_saturate_inf,
@@ -599,7 +592,7 @@ def matmul_ogs(x, w, bias,
                    SPLIT_K=opt_flags.split_k,
                    EVEN_K=even_K,
                    W_CACHE_MODIFIER=opt_flags.w_cache_modifier,
-                   TOKENS_PER_EXPT_FOR_ANNOTATION=routing_data.expected_tokens_per_expt,
+                   TOKENS_PER_EXPT_FOR_ANNOTATION=None if x_ragged_metadata is None else x_ragged_metadata.expected_slice_size,
                    num_warps=opt_flags.num_warps,
                    num_stages=opt_flags.num_stages,
                    arch=opt_flags.arch,
@@ -649,7 +642,7 @@ def matmul_ogs(x, w, bias,
 # -----------------------------------------------------------------------------
 
 def matmul_ogs_torch(x, w, bias,
-                 routing_data: RoutingData = None,
+                 x_ragged_metadata: RaggedTensorMetadata | None = None,
                  gather_indx: GatherIndx = None,
                  scatter_indx: ScatterIndx = None,
                  precision_config: PrecisionConfig = None,
@@ -683,7 +676,6 @@ def matmul_ogs_torch(x, w, bias,
     if is_input_batched:
         assert gather_indx is None, "gather not supported in batched mode"
         assert scatter_indx is None, "scatter not supported in batched mode"
-        assert routing_data is None, "routing not supported in batched mode"
         assert w.ndim == 3 and w.shape[0] == x.shape[0]
     if round_x is None:
         round_x = lambda x, idx: x
@@ -695,12 +687,9 @@ def matmul_ogs_torch(x, w, bias,
         w = w.view(1, *w.shape)
     if x.ndim == 2:
         x = x.view(1, *x.shape)
-    if routing_data is None:
-        routing_data = RoutingData(None, None, w.shape[0], 1)
-    # n_expts_act = routing_data.n_expts_act
     # memory offsets
-    if routing_data.n_expts_tot > 1 and not is_input_batched:
-        sizes = routing_data.expt_hist
+    if x_ragged_metadata.n_slices > 1 and not is_input_batched:
+        sizes = x_ragged_metadata.slice_sizes
         off = torch.zeros(sizes.shape[0] + 1, dtype=torch.int32)
         off[1:] = torch.cumsum(sizes, 0)
         offs = list(itertools.pairwise(off))
@@ -730,14 +719,6 @@ def matmul_ogs_torch(x, w, bias,
     msk = scatter_indx.dst_indx != -1
     out[scatter_indx.dst_indx[msk], :] = y[msk, :]
     return out
-    # accumulate output from all experts
-    # n_rows = y.shape[0] // n_expts_act
-    # out = torch.zeros((n_rows, y.shape[-1]), dtype=torch.float32, device=x.device)
-    # for i, (lo, hi) in enumerate(offs):
-    #     dst_idx = scatter_indx.dst_indx[lo:hi] // n_expts_act
-    #     msk = dst_idx != -1
-    #     out[dst_idx[msk], :] += y[lo:hi, :][msk, :].float()
-    # return out
 
 
 def post_matmul_comm_torch(y: torch.Tensor, rank: int, n_reduce_shards: int,

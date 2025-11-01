@@ -219,8 +219,6 @@ def reduce_forward(
     scale_arg = scale if scale is not None else None
     reduce_kernel = specializations.get(postprocess_fn1=postprocess_fn1.specs,
                                         postprocess_fn2=postprocess_fn2.specs)._reduce_forward
-    print("x_flex", x_flex)
-    print("y_flex", y_flex)
     reduce_kernel[grid](
         x_flex.reinterpret(x), stride_xr, stride_x0, stride_x1,  #
         x_mxscale, stride_xmxr, stride_xmx0, stride_xmx1,  #

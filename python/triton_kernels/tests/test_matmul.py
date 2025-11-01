@@ -624,13 +624,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
 
     # triton
     try:
-        tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt,
+        tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata.expt_data,
+                           gindx, sindx, precision_opt,
                            gammas=gs1_ref, epilogue=epilogue, y=y_tri_in,
                            inner_routing_data=inner_routing_data,
                            init_output_to_zero=sindx is not None and n_expts_act == 1)
-        # if has_aggregation:
-        #     tri_y = tri_y.squeeze(0)
-        #     tri_y = aggregate_experts(tri_y, sindx, n_expts_act, epilogue, precision_opt, y_tri_in)
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     if y_tri_in is not None:
@@ -645,14 +643,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
     def round_x(x, idx):
         return x.to(act_dtype).to(torch.float32) if sep_gather else x
 
-    # round_y = lambda y: (y / y_scale).to(act_dtype).to(torch.float32) * y_scale if sep_scatter else y
     ref_y = matmul_ogs_torch(x_ref, w_ref, bias_ref,  #
-                             rdata, gindx, sindx, round_x=round_x, gammas=gs1_ref,
+                             rdata.expt_data, gindx, sindx, round_x=round_x, gammas=gs1_ref,
                              inner_routing_data=inner_routing_data)
-    # breakpoint()
-    # if has_aggregation:
-    #     ref_y = ref_y.squeeze(0)
-    #     ref_y = aggregate_experts(ref_y, sindx, n_expts_act, epilogue, precision_opt, None)
 
     def scale(val, scal):
         if scal is None:

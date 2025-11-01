@@ -54,7 +54,7 @@ def make_default_opt_flags_amd(
     m,
     n,
     k,
-    routing_data,
+    ragged_metadata,
     can_use_persistent_tma,
     can_use_fused_scatter,
     enforce_bitwise_invariance,
@@ -65,13 +65,13 @@ def make_default_opt_flags_amd(
 ):
     constraints_supported = ["block_m", "block_n", "block_k", "split_k", "fused_scatter", "is_persistent", "epilogue_subtile", "max_allowable_mn"]
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
-    # tokens per expert
-    if routing_data is None:
-        tokens_per_expt = m
-    elif routing_data.expected_tokens_per_expt is None:
-        tokens_per_expt = max(1, m // routing_data.n_expts_tot)
+    # tokens per slice
+    if ragged_metadata is None:
+        slice_size = m
+    elif ragged_metadata.expected_slice_size is None:
+        slice_size = max(1, m // ragged_metadata.n_slices)
     else:
-        tokens_per_expt = routing_data.expected_tokens_per_expt
+        slice_size = ragged_metadata.expected_slice_size
 
     is_cdna4 = get_cdna_version() == 4
     # block_m
@@ -79,15 +79,15 @@ def make_default_opt_flags_amd(
         block_m = constraints["block_m"]
     elif enforce_bitwise_invariance:
         block_m = 256 if is_cdna4 else 128
-    elif tokens_per_expt >= 512 and n >= 2048:
+    elif slice_size >= 512 and n >= 2048:
         block_m = 256 if is_cdna4 else 128
     elif is_cdna4 and m >= 512:
         block_m = 128
     else:
-        block_m = max(32, min(triton.next_power_of_2(tokens_per_expt), 64))
+        block_m = max(32, min(triton.next_power_of_2(slice_size), 64))
 
-    if routing_data is not None:
-        grid_m = routing_data.n_blocks(m, block_m)
+    if ragged_metadata is not None:
+        grid_m = ragged_metadata.n_blocks(ragged_metadata.n_slices, m, block_m)
     else:
         grid_m = triton.cdiv(m, block_m)
     # group_m:
@@ -188,11 +188,11 @@ def make_default_opt_flags_nvidia(
     assert not any([c not in constraints_supported for c in constraints]), constraints.keys()
     # tokens per expert
     if routing_data is None or batch_size > 1:
-        tokens_per_expt = m
-    elif routing_data.expected_tokens_per_expt is None:
-        tokens_per_expt = max(1, m // routing_data.n_expts_tot)
+        slice_size = m
+    elif routing_data.expected_slice_size is None:
+        slice_size = max(1, m // routing_data.n_slices)
     else:
-        tokens_per_expt = routing_data.expected_tokens_per_expt
+        slice_size = routing_data.expected_slice_size
     # pid swizzling
     group_m = 8
     xcd_swizzle = 1
@@ -202,14 +202,14 @@ def make_default_opt_flags_nvidia(
     elif enforce_bitwise_invariance:
         block_m = 128
     else:
-        if tokens_per_expt <= 64 and routing_data is not None and routing_data.expt_hist is not None:
+        if slice_size <= 64 and routing_data is not None and routing_data.slice_hist is not None:
             # Ragged and likely memory bound; set the block size higher to minimize loading weights more than once.
-            if lhs_dtype == torch.bfloat16 and rhs_dtype == FP4 and tokens_per_expt >= 16 and torch.cuda.get_device_capability()[0] >= 10:
-                block_m = max(16, min(triton.next_power_of_2(8 * tokens_per_expt), 128))
+            if lhs_dtype == torch.bfloat16 and rhs_dtype == FP4 and slice_size >= 16 and torch.cuda.get_device_capability()[0] >= 10:
+                block_m = max(16, min(triton.next_power_of_2(8 * slice_size), 128))
             else:
-                block_m = max(16, min(triton.next_power_of_2(2 * tokens_per_expt), 64))
+                block_m = max(16, min(triton.next_power_of_2(2 * slice_size), 64))
         else:
-            block_m = max(16, min(triton.next_power_of_2(tokens_per_expt), 128))
+            block_m = max(16, min(triton.next_power_of_2(slice_size), 128))
     # block n
     arch = None
     block_n, block_n_tma = opt_flags_nvidia.compute_block_n(n, arch, precision_config)
@@ -229,7 +229,7 @@ def make_default_opt_flags_nvidia(
     block_n = block_n_tma if is_persistent else block_n
     # block k
     block_k = opt_flags_nvidia.compute_block_k(m, k, is_persistent, lhs_dtype, rhs_dtype, precision_config, has_y_acc_in)
-    if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and tokens_per_expt > 1 and lhs_dtype != torch.bfloat16:
+    if block_n == 256 and block_k == 128 and block_m <= 64 and is_persistent and rhs_dtype == FP4 and k >= 4096 and slice_size > 1 and lhs_dtype != torch.bfloat16:
         # Swap block_n and block_k for mxfp4 weights so that block_k is a full cacheline, so long as K is sufficiently large.
         # TODO: swizzle the HBM layout of the weights instead
         block_n, block_k = block_k, block_n
@@ -341,7 +341,7 @@ def make_opt_flags(
     m,
     n,
     k,
-    routing_data,
+    ragged_metadata,
     can_use_persistent_tma,
     can_use_fused_scatter,
     epilogue_effective_itemsize,
@@ -366,7 +366,7 @@ def make_opt_flags(
         opt_flags_constraints = opt_flags_constraints.copy()
         opt_flags_constraints.update(block_k=block_k, split_k=1)
     args = [out_dtype, lhs_dtype, rhs_dtype, precision_config, batch_size, m, n, k,
-            routing_data, can_use_persistent_tma, can_use_fused_scatter,
+            ragged_metadata, can_use_persistent_tma, can_use_fused_scatter,
             enforce_bitwise_invariance, epilogue_effective_itemsize, x_transpose, has_y_acc_in,
             opt_flags_constraints]
     backend = triton.runtime.driver.active.get_current_target().backend
