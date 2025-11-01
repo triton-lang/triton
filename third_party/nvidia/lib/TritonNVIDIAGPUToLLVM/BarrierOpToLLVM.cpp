@@ -233,24 +233,38 @@ struct ArriveBarrierOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // TODO: Add phase result as needed.
     std::stringstream ptxAsm;
-    ptxAsm << "@$0 mbarrier.arrive.shared::cta.b64 _, [$1]";
-    if (op.getCount() > 1) {
-      ptxAsm << ", " << op.getCount();
-    }
-    ptxAsm << ";";
+    ptxAsm << "@$0 mbarrier.arrive.shared::cta.b64 _, [$1], $2;";
 
     TritonLLVMOpBuilder b(op.getLoc(), rewriter);
-    Value id = getThreadId(rewriter, op.getLoc());
-    Value pred = b.icmp_eq(id, b.i32_val(0));
+    Value pred = LLVM::NVIDIA::createElectPredicate(op.getLoc(), rewriter);
     if (op.getPred())
       pred = b.and_(pred, adaptor.getPred());
+
+    // Distribute arrive-count equally among participating warps.
+    int count = op.getCount();
+    int numWarps = triton::gpu::lookupNumWarps(op);
+    int countPerWarp = count / numWarps;
+    int remainderCount = count % numWarps;
+    auto [_, warpId] = getLaneAndWarpId(rewriter, op.getLoc());
+    Value remPred = b.icmp_ult(warpId, b.i32_val(remainderCount));
+    if (countPerWarp < 1) {
+      pred = b.and_(pred, remPred);
+    }
+    Value countVal;
+    if (remainderCount) {
+      countVal = b.select(remPred, b.i32_val(countPerWarp + 1),
+                          b.i32_val(countPerWarp));
+    } else {
+      countVal = b.i32_val(countPerWarp);
+    }
 
     PTXBuilder ptxBuilder;
     SmallVector<PTXBuilder::Operand *, 2> operands = {
         ptxBuilder.newOperand(pred, "b"),
-        ptxBuilder.newOperand(adaptor.getAlloc(), "r")};
+        ptxBuilder.newOperand(adaptor.getAlloc(), "r"),
+        ptxBuilder.newOperand(countVal, "r"),
+    };
 
     auto arriveOp = *ptxBuilder.create(ptxAsm.str());
     arriveOp(operands, /*onlyAttachMLIRArgs=*/true);
