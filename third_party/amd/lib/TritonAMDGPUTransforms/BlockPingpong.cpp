@@ -670,8 +670,77 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
 // For ChainedDots with num_stage==4 the pipeliner already places ops in the
 // correct order to allow for efficient pingpong. The loop contains 2 pairs of
 // compute and memory clusters so we only have to place barriers/sched.barriers
-// at the bounaries and give higher priority to memory clusters
-// See ScheduleLoops.cpp:ChainedDotSchedule for details about the schedule
+// at the bounaries and give higher priority to memory clusters.
+// See ScheduleLoops.cpp:ChainedDotSchedule for details about the schedule.
+//
+// Notes
+//
+// 1. Memory Cluster Priority
+// --------------------------
+// We assign higher priority to the memory cluster than the compute cluster.
+//
+// Priority determines which warp issues its next instruction when two warps on
+// the same execution unit both have ready instructions of the same type. In
+// FAv3, we expect two warps to co-execute — one running the compute cluster,
+// and the other running the memory cluster. Both clusters contain `v_xxx`
+// (VALU) instructions.
+//
+// If the compute cluster has higher priority, then its warp will monopolize the
+// issue slots for all `v_xxx` instructions, forcing the memory-cluster warp to
+// wait. This eliminates the overlap between compute and memory phases — exactly
+// what ping-pong scheduling is meant to achieve.
+//
+// By assigning *higher priority* to the memory cluster, we ensure that the warp
+// executing memory instructions can always issue its `v_xxx` operations (for
+// address updates) even when another warp is busy in the compute cluster. This
+// allows true overlap of memory and compute activity.
+//
+// This choice does not significantly stall the compute-cluster warp, since the
+// memory cluster only contains a few `v_xxx` instructions and its memory ops
+// can still co-issue with VALU instructions in the compute cluster.
+//
+// Note: We currently need this priority scheme because the memory cluster
+// contains `v_xxx` instructions for address updates. Ongoing optimizations aim
+// to either remove these instructions or move them into the compute cluster,
+// which would make this priority adjustment unnecessary.
+//
+//
+// 2. Placement of `s_xxx` Instructions in the Memory Cluster
+// ----------------------------------------------------------
+// We place scalar (`s_xxx`) instructions in the memory cluster rather than the
+// compute cluster.
+//
+// The reason is that `s_xxx` and `v_xxx` instructions can only co-issue when
+// they come from *different warps*. Since compute clusters are dominated by
+// VALU instructions, placing `s_xxx` in the memory cluster maximizes co-issue
+// opportunities — the scalar instructions from one warp can execute
+// concurrently with the VALU instructions from another warp.
+//
+// Typical `s_xxx` instructions include:
+//   - Control flow: `s_cbranch`
+//   - Priority control: `s_setprio`
+//   - Synchronization and dependency: `s_waitcnt`
+//
+// These are usually inserted near `s_barrier` boundaries, and the current
+// implementation carefully places them to ensure they belong to the memory
+// cluster, improving overall overlap and utilization.
+//
+//
+// 3. Placement of `s_waitcnt lgkmcnt(0)`
+// --------------------------------------
+// We place `s_waitcnt lgkmcnt(0)` at the *end* of the memory cluster to ensure
+// that all shared-memory load (`ds_read`) instructions have completed before
+// entering the compute cluster.
+//
+// This placement prevents the LLVM backend from inserting additional
+// `s_waitcnt lgkmcnt()` instructions inside the compute cluster based on
+// inferred dependencies between `mfma` and `ds_read` operations.
+//
+// This approach is consistent with the previous design goal: to eliminate all
+// `s_xxx` instructions from the compute cluster so it can run uninterrupted
+// MFMA and VALU operations. Keeping `s_waitcnt lgkmcnt(0)` at the cluster
+// boundary enforces data dependency correctness while preserving the clean
+// separation between memory and compute phases.
 LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
                                                       Location loc) {
   assert(dotOps.size() == 2);
@@ -697,39 +766,72 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   builder.setInsertionPointToStart(forOp.getBody());
   // ComputeCluster 1
   updateOpInsertion(dotOps[0]);
-  prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
+  prependOp(ROCDL::SBarrierOp::create(builder, loc), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
 
   // MemoryCluster 1
   updateOpInsertion(memoryClusterStartOps[0]);
-  prependOp(ROCDL::SetPrioOp::create(builder, loc, highPriority), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
   if (llvm::isa<ttg::AsyncWaitOp>(memoryClusterStartOps[0])) {
     // Only append a sched barrier because membar adds a barrier after asyncwait
     appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   } else {
     prependOp(gpu::BarrierOp::create(builder, loc), false);
-    prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
   }
+  // Ideally we want the memory cluster to start with
+  //
+  // s_barrier
+  // s_waitcnt vmcnt(x) lgkmcnt(0)
+  // s_setprio 1
+  //
+  // However, the membar pass will put s_waitcnt before s_barrier.
+  // But we can at least put s_setprio in the memory cluster.
+  prependOp(ROCDL::SetPrioOp::create(builder, loc, highPriority), false);
 
-  // ComputeCluster2
+  // ComputeCluster 2
+  // We want the 2nd compute cluster to start with
+  //
+  // s_setprio 0
+  // s_waitcnt lgkmcnt(0)
+  // s_barrier
+  //
+  // Check note 2 and 3 for details.
+  constexpr int32_t ldsOnlyBits = ~(0x1f << 8);
   updateOpInsertion(dotOps[1]);
   prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
-  prependOp(ROCDL::SBarrierOp::create(builder, loc), false);
   prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
+  prependOp(ROCDL::SWaitcntOp::create(builder, loc, ldsOnlyBits), false);
+  prependOp(ROCDL::SBarrierOp::create(builder, loc), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
 
   // MemoryCluster2
   updateOpInsertion(memoryClusterStartOps[1]);
-  prependOp(ROCDL::SetPrioOp::create(builder, loc, highPriority), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
   if (llvm::isa<ttg::AsyncWaitOp>(memoryClusterStartOps[1])) {
     // Only append a sched barrier because membar adds a barrier after asyncwait
     appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   } else {
     prependOp(gpu::BarrierOp::create(builder, loc), false);
-    prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
   }
+  prependOp(ROCDL::SetPrioOp::create(builder, loc, highPriority), false);
 
+  // We want the loop to end with the following s.t. s_xxx instructions
+  // stays in the memory cluster.
+  //
+  // s_setprio 0
+  // s_waitcnt lgkmcnt(0)
+  // s_cbranch
+  // s_barrier
+  //
+  // Note that we don't insert s_barrier at the end of the loop, since
+  // the llvm backend may schedule the s_xxx instructions used for
+  // loop induction variables after the s_barrier and effectively put
+  // them into the compute cluster. Instead, we insert s_barrier
+  // at the beginning of the loop.
   updateOpInsertion(lastInsertedOp->getBlock()->getTerminator());
   prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
-  prependOp(ROCDL::SBarrierOp::create(builder, loc), false);
+  prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
+  prependOp(ROCDL::SWaitcntOp::create(builder, loc, ldsOnlyBits), false);
 
   return success();
 }
