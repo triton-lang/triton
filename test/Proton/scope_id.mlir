@@ -165,19 +165,19 @@ module {
     ttg.warp_specialize()
     default {
       // expected-remark @below {{scope id = 1}}
-      // expected-remark @below {{scope parent id = 0}}
+      // expected-remark @below {{scope parent id = -1}}
       proton.record start "default"
       // expected-remark @below {{scope id = 1}}
-      // expected-remark @below {{scope parent id = 0}}
+      // expected-remark @below {{scope parent id = -1}}
       proton.record end "default"
       ttg.warp_yield
     }
     partition0() num_warps(1) {
       // expected-remark @below {{scope id = 2}}
-      // expected-remark @below {{scope parent id = 0}}
+      // expected-remark @below {{scope parent id = -1}}
       proton.record start "partition"
       // expected-remark @below {{scope id = 2}}
-      // expected-remark @below {{scope parent id = 0}}
+      // expected-remark @below {{scope parent id = -1}}
       proton.record end "partition"
       ttg.warp_return
     } : () -> ()
@@ -307,7 +307,6 @@ module {
     proton.record end "ghost"
     cf.br ^merge
   ^else:  // pred: ^start
-    // expected-error @below {{The scope name 'ghost' is started without being closed}}
     proton.record start "ghost"
     cf.br ^merge
   ^merge:  // preds: ^then, ^else
@@ -352,5 +351,44 @@ module {
     %cond = arith.cmpi ult, %next, %c2: index
     proton.record start "loop"
     cf.cond_br %cond, ^loop(%next : index), ^exit
+  }
+}
+
+// -----
+
+module {
+  tt.func @cf_if_unclosed(%cond: i1) {
+    scf.if %cond {
+      // expected-error @below {{The scope name 'if_only' is not properly closed (missing end record)}}
+      proton.record start "if_only"
+    }
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  tt.func @cf_duplicate_start() {
+    // expected-error @below {{The scope name 'dup_scope' is not properly closed (missing end record)}}
+    proton.record start "dup_scope"
+    // expected-error @below {{The scope name 'dup_scope' is started without being closed}}
+    // expected-error @below {{The scope name 'dup_scope' has duplicate start record}}
+    proton.record start "dup_scope"
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  tt.func @cf_duplicate_end() {
+    // expected-error @below {{The scope name 'dup_scope' is closed without being opened}}
+    // expected-error @below {{The scope name 'dup_scope' is not properly closed (missing start record)}}
+    proton.record end "dup_scope"
+    // expected-error @below {{The scope name 'dup_scope' is closed without being opened}}
+    // expected-error @below {{The scope name 'dup_scope' has duplicate end record}}
+    proton.record end "dup_scope"
+    tt.return
   }
 }

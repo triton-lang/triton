@@ -11,7 +11,9 @@ namespace triton::proton {
 using VirtualBlock = std::pair<Block *, Block::iterator>;
 
 struct BlockInfo {
-  llvm::DenseSet<llvm::StringRef> activeScopes;
+  using ScopeId = ScopeIdAllocation::ScopeId;
+
+  llvm::DenseSet<ScopeId> activeScopes;
 
   BlockInfo() = default;
 
@@ -22,16 +24,16 @@ struct BlockInfo {
     }
   }
 
-  bool contains(StringRef scopeName) const {
-    return this->activeScopes.contains(scopeName);
+  bool contains(ScopeId scopeId) const {
+    return this->activeScopes.contains(scopeId);
   }
 
-  void erase(StringRef scopeName) {
-    this->activeScopes.erase(scopeName);
+  void erase(ScopeId scopeId) {
+    this->activeScopes.erase(scopeId);
   }
 
-  void insert(StringRef scopeName) {
-    this->activeScopes.insert(scopeName);
+  void insert(ScopeId scopeId) {
+    this->activeScopes.insert(scopeId);
   }
 
   bool operator ==(const BlockInfo &other) const {
@@ -49,6 +51,21 @@ struct BlockInfo {
 
 void ScopeIdAllocation::run() {
   // Stage the analysis to match downstream consumers of scope metadata:
+  //
+  // - liveness(): Pair start/end records and assign a shared numeric ID.
+  // There are multiple ways to pair start/end records:
+  // We choose a simple approach here:
+  // For each start record, we look for the nearest closing scope with the same name for pairing.
+  //
+  // Example
+  //   MLIR:
+  //     proton.record start @"foo" <- scopeId = 0
+  //     …
+  //     proton.record end @"foo" <- scopeId = 0
+  //     …
+  //     proton.record start @"foo" <- scopeId = 1
+  //     …
+  //     proton.record end @"foo" <- scopeId = 1
   //
   // - reachability(): Track active scopes at CFG boundaries and flag malformed
   //   lifetimes. We optimistically collect all the "potentially" unclosed and
@@ -70,17 +87,6 @@ void ScopeIdAllocation::run() {
   //   We don't emit errors because we assume scf.if could be executed and it's
   //   up to the user to ensure proper semantics.
   //
-  // - liveness(): Pair start/end records and assign a shared numeric ID.
-  // For each start record, we look for the nearest closing scope with the same name for pairing.
-  //
-  // Example
-  //   MLIR:
-  //     proton.record start @"foo"
-  //     …
-  //     proton.record end @"foo"
-  //   Both ops are mapped to the same ScopeId in `opToIdMap`.
-  //
-  //
   // - dominance(): 
   // (1) Check the dominance of start/end records to ensure well-formedness.
   //  Example MLIR:
@@ -101,102 +107,12 @@ void ScopeIdAllocation::run() {
   //     proton.record end @"outer"
   //   Because the start of `"outer"` dominates `"inner"`, dominance() records
   //   `(innerId -> outerId)` in `scopeParentIds`.
-  reachability();
   liveness();
+  reachability();
   dominance();
 }
 
-void ScopeIdAllocation::reachability() {
-  DenseMap<VirtualBlock, BlockInfo> inputBlockInfoMap;
-  DenseMap<VirtualBlock, BlockInfo> outputBlockInfoMap;
-
-  std::deque<VirtualBlock> virtualBlockList;
-  funcOp->walk<WalkOrder::PreOrder>([&](Block *block) {
-    // Start the analysis from the entry blocks of any nested isolated from
-    // above regions.
-    if (block->isEntryBlock() &&
-        !isa<RegionBranchOpInterface>(block->getParentOp()))
-      virtualBlockList.emplace_back(block, Block::iterator());
-  });
-
-  while (!virtualBlockList.empty()) {
-    VirtualBlock &virtualBlock = virtualBlockList.front();
-    virtualBlockList.pop_front();
-    // Evaluate the transfer function for this block starting from the cached
-    // input state.
-    auto inputBlockInfo = inputBlockInfoMap[virtualBlock];
-    SmallVector<VirtualBlock> successors;
-    Block::iterator startIt =
-        virtualBlock.second.isValid() ? std::next(virtualBlock.second) : virtualBlock.first->begin();
-    for (Operation &op : llvm::make_range(startIt, virtualBlock.first->end())) {
-      if (op.hasTrait<OpTrait::IsTerminator>() ||
-          isa<RegionBranchOpInterface>(op)) {
-        visitTerminator(&op, successors);
-        break;
-      }
-      if (auto recordOp = dyn_cast<RecordOp>(&op)) {
-        auto name = recordOp.getName();
-        if (inputBlockInfo.contains(name)) {
-          if (!recordOp.getIsStart()) {
-            inputBlockInfo.erase(name);
-          }
-        } else {
-          if (recordOp.getIsStart()) {
-            inputBlockInfo.insert(name);
-          } // else don't handle it right now as the scope might be monotonically closed later
-        }
-      }
-    }
-    // Get the reference because we want to update if it changed
-    if (outputBlockInfoMap.count(virtualBlock) &&
-        inputBlockInfo == outputBlockInfoMap[virtualBlock]) {
-      // If we have seen the block before and the inputBlockInfo is the same as
-      // the outputBlockInfo, we skip the successors
-      continue;
-    }
-    // Update the current block
-    outputBlockInfoMap[virtualBlock].join(inputBlockInfo);
-    // Update the successors
-    for (VirtualBlock &successor : successors) {
-      inputBlockInfoMap[successor].join(outputBlockInfoMap[virtualBlock]);
-      virtualBlockList.emplace_back(successor);
-    }
-  }
-
-  // Go through all blocks, validate reachability analysis results
-  for (auto iter : inputBlockInfoMap) {
-    auto &virtualBlock = iter.first;
-    auto inputBlockInfo = iter.second;
-    auto outputBlockInfo = outputBlockInfoMap[virtualBlock];
-    DenseSet<llvm::StringRef> unclosedScopes;
-    Block::iterator startIt =
-        virtualBlock.second.isValid() ? std::next(virtualBlock.second) : virtualBlock.first->begin();
-    for (Operation &op : llvm::make_range(startIt, virtualBlock.first->end())) {
-      if (auto recordOp = dyn_cast<RecordOp>(&op)) {
-        auto name = recordOp.getName();
-        if (recordOp.getIsStart()) {
-          if (inputBlockInfo.contains(name)) {
-            mlir::emitError(recordOp.getLoc(), "The scope name '")
-                << name << "' is started without being closed";
-          }
-          inputBlockInfo.insert(name);
-          unclosedScopes.insert(name);
-        } else {
-          if (inputBlockInfo.contains(name)) {
-            inputBlockInfo.erase(name);
-            unclosedScopes.erase(name);
-          } else {
-            mlir::emitError(recordOp.getLoc(), "The scope name '") << name << "' is closed without being opened";
-          }
-        }
-      }
-    }
-  }
-}
-
 void ScopeIdAllocation::liveness() {
-  // Stage 2: pair start/end records that refer to the same scope name and
-  // assign a numeric ID that downstream passes can reuse.
   llvm::DenseMap<StringRef, std::pair</*id=*/size_t, /*isStart=*/bool>> nameToIdMap;
   llvm::DenseMap<ScopeId, RecordOp> idToOpMap;
   ScopeId scopeId = 0;
@@ -238,6 +154,92 @@ void ScopeIdAllocation::liveness() {
     }
   }
 }
+
+void ScopeIdAllocation::reachability() {
+  DenseMap<VirtualBlock, BlockInfo> inputBlockInfoMap;
+  DenseMap<VirtualBlock, BlockInfo> outputBlockInfoMap;
+
+  std::deque<VirtualBlock> virtualBlockList;
+  funcOp->walk<WalkOrder::PreOrder>([&](Block *block) {
+    // Start the analysis from the entry blocks of any nested isolated from
+    // above regions.
+    if (block->isEntryBlock() &&
+        !isa<RegionBranchOpInterface>(block->getParentOp()))
+      virtualBlockList.emplace_back(block, Block::iterator());
+  });
+
+  DenseSet<VirtualBlock> exitVirtualBlocks;
+  while (!virtualBlockList.empty()) {
+    VirtualBlock &virtualBlock = virtualBlockList.front();
+    virtualBlockList.pop_front();
+    // Evaluate the transfer function for this block starting from the cached
+    // input state.
+    auto inputBlockInfo = inputBlockInfoMap[virtualBlock];
+    SmallVector<VirtualBlock> successors;
+    Block::iterator startIt =
+        virtualBlock.second.isValid() ? std::next(virtualBlock.second) : virtualBlock.first->begin();
+    for (Operation &op : llvm::make_range(startIt, virtualBlock.first->end())) {
+      if (op.hasTrait<OpTrait::IsTerminator>() ||
+          isa<RegionBranchOpInterface>(op)) {
+        visitTerminator(&op, successors);
+        break;
+      }
+      if (auto recordOp = dyn_cast<RecordOp>(&op)) {
+        auto scopeId = opToIdMap.lookup(recordOp);
+        if (recordOp.getIsStart()) {
+          inputBlockInfo.insert(scopeId);
+        } else {
+          inputBlockInfo.erase(scopeId);
+        } 
+      }
+    }
+    if (successors.empty()) {
+      exitVirtualBlocks.insert(virtualBlock);
+    }
+    // Get the reference because we want to update if it changed
+    if (outputBlockInfoMap.count(virtualBlock) &&
+        inputBlockInfo == outputBlockInfoMap[virtualBlock]) {
+      // If we have seen the block before and the inputBlockInfo is the same as
+      // the outputBlockInfo, we skip the successors
+      continue;
+    }
+    // Update the current block
+    outputBlockInfoMap[virtualBlock].join(inputBlockInfo);
+    // Update the successors
+    for (VirtualBlock &successor : successors) {
+      inputBlockInfoMap[successor].join(outputBlockInfoMap[virtualBlock]);
+      virtualBlockList.emplace_back(successor);
+    }
+  }
+
+  // Go through all blocks, validate reachability analysis results
+  for (auto iter : inputBlockInfoMap) {
+    auto &virtualBlock = iter.first;
+    auto inputBlockInfo = iter.second;
+    Block::iterator startIt =
+        virtualBlock.second.isValid() ? std::next(virtualBlock.second) : virtualBlock.first->begin();
+    for (Operation &op : llvm::make_range(startIt, virtualBlock.first->end())) {
+      if (auto recordOp = dyn_cast<RecordOp>(&op)) {
+        auto scopeId = opToIdMap.lookup(recordOp);
+        auto name = idToNameMap.lookup(scopeId);
+        if (recordOp.getIsStart()) {
+          if (inputBlockInfo.contains(scopeId)) {
+            mlir::emitError(recordOp.getLoc(), "The scope name '")
+                << name << "' is started without being closed";
+          }
+          inputBlockInfo.insert(scopeId);
+        } else {
+          if (inputBlockInfo.contains(scopeId)) {
+            inputBlockInfo.erase(scopeId);
+          } else {
+            mlir::emitError(recordOp.getLoc(), "The scope name '") << name << "' is closed without being opened";
+          }
+        }
+      }
+    }
+  }
+}
+
 
 void ScopeIdAllocation::dominance() {
   // Stage 3: determine parentage between scopes by checking dominance of start
