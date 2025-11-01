@@ -9,6 +9,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "llvm/ADT/TypeSwitch.h"
 namespace tt = mlir::triton;
 using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::AMD::DppCtrl;
@@ -567,6 +568,43 @@ bool doesSwizzleInsideWarp(RewriterBase &rewriter,
     }
   }
   return true;
+}
+
+bool isStoredContigWithMfmaLayout(
+    Operation *op, ModuleAxisInfoAnalysis &axisAnalysisPass,
+    const mlir::triton::gpu::AMDMfmaEncodingAttr &mfmaLayout) {
+  assert(isa<DotOp>(op) && "expected DotOp");
+  const ForwardSliceOptions fwdOpt;
+  SetVector<mlir::Operation *> forwardSliceSet;
+  getForwardSlice(op, &forwardSliceSet, fwdOpt);
+
+  // Look for the first use of op that is a store
+  // TODO: handle multiple store users of op
+  for (Operation *fop : forwardSliceSet) {
+    Value ptr = llvm::TypeSwitch<Operation *, Value>(fop)
+                    .Case<triton::StoreOp, triton::amdgpu::MaskedStoreOp,
+                          triton::amdgpu::BufferStoreOp,
+                          triton::amdgpu::BufferAtomicRMWOp,
+                          triton::amdgpu::BufferAtomicCASOp>(
+                        [&](auto storeOp) -> Value { return storeOp.getPtr(); })
+                    .Default([&](Operation *) -> Value { return Value(); });
+
+    if (!ptr)
+      continue;
+
+    AxisInfo *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
+    auto dotOp = cast<DotOp>(op);
+    auto shape = dotOp.getType().getShape();
+    auto order = getOrder(mfmaLayout, shape);
+
+    if (axisInfo->getRank() != order.size())
+      return mfmaLayout.getIsTransposed();
+    // Return true if the result of op is stored continuously along order[0], or
+    // if contiguity cannot be proven for either order[0] or order[1].
+    return axisInfo->getContiguity(order[0]) != 1 ||
+           axisInfo->getContiguity(order[1]) == 1;
+  }
+  return mfmaLayout.getIsTransposed();
 }
 
 bool isUsedByDotScaledOp(Operation *op) {
