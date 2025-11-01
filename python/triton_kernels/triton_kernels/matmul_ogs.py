@@ -429,6 +429,7 @@ def matmul_ogs(x, w, bias,
             even_K = x_has_tma or inner_routing_data.x_is_padded
         else:
             even_K = inner_routing_data.x_is_padded and inner_routing_data.w_is_padded
+        x_ragged_metadata = None
     else:
         batch_size = w.shape[0] if x_ragged_metadata is None and w.ndim == 3 else 1
         assert K == K_W
@@ -475,7 +476,6 @@ def matmul_ogs(x, w, bias,
     # moe metadata
     block_m = opt_flags.block_m
     expt_data_args = InnerRoutingData.make_kernel_args(inner_routing_data or x_ragged_metadata, block_m)
-    print(expt_data_args)
     # spmd grid
     grid_m = triton.cdiv(M, opt_flags.block_m)
     if x_ragged_metadata is not None:
