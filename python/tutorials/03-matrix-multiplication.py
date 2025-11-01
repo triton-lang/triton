@@ -417,7 +417,7 @@ for fp8_inputs in [False, True]:
             styles=[("green", "-"), ("blue", "-")],
             ylabel="TFLOPS",  # Label name for the y-axis
             plot_name="matmul-performance-" +
-            ("fp16" if not fp8_inputs else "fp8"),  # Name for the plot, used also as a file name for saving the plot.
+            ("fp16" if not fp8_inputs else "fp8") + f" (TFLOPS)",  # Name for the plot, used also as a file name for saving the plot.
             args={"fp8_inputs": fp8_inputs},
         ))
 
