@@ -75,17 +75,15 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
       "add_optimize_dot_operands",
       mlir::triton::amdgpu::createTritonAMDGPUOptimizeDotOperands,
       const std::string &);
-  m.def("add_hoist_layout_conversions", [](mlir::PassManager &pm) {
-    pm.addNestedPass<mlir::triton::FuncOp>(
-        mlir::createTritonAMDGPUHoistLayoutConversions());
-  });
-  m.def("add_canonicalize_pointers", [](mlir::PassManager &pm) {
-    pm.addNestedPass<mlir::triton::FuncOp>(
-        mlir::createTritonAMDGPUCanonicalizePointers());
-  });
+  ADD_FUNC_PASS_WRAPPER_0("add_hoist_layout_conversions",
+                          mlir::createTritonAMDGPUHoistLayoutConversions);
+  ADD_FUNC_PASS_WRAPPER_0("add_canonicalize_pointers",
+                          mlir::createTritonAMDGPUCanonicalizePointers);
   ADD_PASS_OPTION_WRAPPER_3("add_convert_to_buffer_ops",
                             mlir::createTritonAMDGPUConvertToBufferOps,
                             const std::string &, bool, bool);
+  ADD_FUNC_PASS_WRAPPER_0("add_optimize_buffer_op_ptr",
+                          mlir::createTritonAMDGPUOptimizeBufferOpPtr);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      mlir::createTritonAMDGPUReorderInstructions);
   ADD_PASS_WRAPPER_0("add_fold_true_cmpi", mlir::createTritonAMDFoldTrueCmpI);

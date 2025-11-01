@@ -62,6 +62,7 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
 
 #define GET_OP_CLASSES
 #include "Dialect/TritonAMDGPU/IR/Ops.cpp.inc"
+#include "Dialect/TritonAMDGPU/IR/TritonAMDGPUOpInterfaces.cpp.inc"
 
 namespace mlir::triton::amdgpu {
 
