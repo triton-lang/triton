@@ -639,16 +639,17 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
         assert tri_y.stride() == y_tri_in.stride()
     # If split_k > 1, then the intermediate tensor is fp32.
     sep_gather = mode == "ragged" and do_gather and n_expts_act > 1 and split_k == 1
-    sep_scatter = mode == "ragged" and do_scatter and n_expts_act > 1 and split_k == 1
+    # sep_scatter = mode == "ragged" and do_scatter and n_expts_act > 1 and split_k == 1
     y_scale = flex.out_data.expected_scale if act_is_float8 else 1
 
     def round_x(x, idx):
         return x.to(act_dtype).to(torch.float32) if sep_gather else x
 
-    round_y = lambda y: (y / y_scale).to(act_dtype).to(torch.float32) * y_scale if sep_scatter else y
+    # round_y = lambda y: (y / y_scale).to(act_dtype).to(torch.float32) * y_scale if sep_scatter else y
     ref_y = matmul_ogs_torch(x_ref, w_ref, bias_ref,  #
-                             rdata, gindx, sindx, round_x=round_x, round_y=round_y, gammas=gs1_ref,
+                             rdata, gindx, sindx, round_x=round_x, gammas=gs1_ref,
                              inner_routing_data=inner_routing_data)
+    # breakpoint()
     # if has_aggregation:
     #     ref_y = ref_y.squeeze(0)
     #     ref_y = aggregate_experts(ref_y, sindx, n_expts_act, epilogue, precision_opt, None)

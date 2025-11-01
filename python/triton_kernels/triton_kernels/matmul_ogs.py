@@ -726,8 +726,9 @@ def matmul_ogs_torch(x, w, bias,
         y = y.view(y.shape[1], y.shape[2])
     if scatter_indx is None:
         return y
-    out = torch.zeros((scatter_indx.dst_indx.shape[0], y.shape[-1]), dtype=torch.float32, device=x.device)
-    out[scatter_indx.dst_indx, :] = y
+    out = torch.zeros((scatter_indx.dst_indx.shape[0], y.shape[-1]), dtype=y.dtype, device=x.device)
+    msk = scatter_indx.dst_indx != -1
+    out[scatter_indx.dst_indx[msk], :] = y[msk, :]
     return out
     # accumulate output from all experts
     # n_rows = y.shape[0] // n_expts_act
