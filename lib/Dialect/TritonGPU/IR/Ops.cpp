@@ -577,9 +577,9 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
                                                    Attribute srcEnc,
                                                    ArrayRef<int64_t> dstShape,
                                                    Attribute &dstEnc) {
+  auto *ctx = srcEnc.getContext();
   // TODO Delete this once SharedLinearEncodingAttr is more widely supported.
   if (auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(srcEnc)) {
-    auto *ctx = srcEnc.getContext();
     if (getNumCTAs(mmaEncoding) == 1) {
       int innerDimDst =
           mmaEncoding.getTransposed() ? dstShape.front() : dstShape.back();
@@ -606,11 +606,21 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
         }
       }
     }
+  } else if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
+    LinearLayout ll = padded.getLinearComponent();
+    LinearLayout dst = reshapeLayout(ctx, ll, dstShape);
+    SmallVector<std::pair<unsigned, unsigned>> intervalPads;
+    auto intervals = padded.getIntervals();
+    auto paddings = padded.getPaddings();
+    for (auto [interval, padding] : llvm::zip(intervals, paddings)) {
+      intervalPads.emplace_back(interval, padding);
+    }
+    dstEnc = PaddedSharedEncodingAttr::get(ctx, intervalPads, dst);
+    return success();
   }
 
   // Generic LL case
   auto sharedEnc = cast<SharedEncodingTrait>(srcEnc);
-  auto *ctx = srcEnc.getContext();
   auto srcLL = toLinearLayout(srcShape, srcEnc);
   auto dstLL = reshapeLayout(ctx, srcLL, dstShape);
   dstEnc = SharedLinearEncodingAttr::get(ctx, dstLL, sharedEnc.getAlignment());
