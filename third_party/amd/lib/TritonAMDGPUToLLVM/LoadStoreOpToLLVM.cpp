@@ -533,8 +533,7 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
         parentOp = parentOp->getParentOp();
       }
 
-      assert(parentOp);
-      auto funcOp = dyn_cast<LLVM::LLVMFuncOp>(parentOp);
+      auto funcOp = cast<LLVM::LLVMFuncOp>(parentOp);
       rewriter.setInsertionPointToStart(&funcOp.getBody().front());
 
       std::tie(laneId, warpId) = getLaneAndWarpId(rewriter, loc);
