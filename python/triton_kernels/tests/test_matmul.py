@@ -46,7 +46,8 @@ def init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter, device
     combine_indx = sparse_logits.mask_metadata.row_sorted_indx
     ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
     routing_data = RoutingData(None, ragged_batch_metadata.slice_sizes, n_expts_tot, n_expts_act, ragged_batch_metadata)
-    gather_idx = GatherIndx(combine_indx, dispatch_indx) if do_gather else None
+    gather_src_indx = torch.div(combine_indx, n_expts_act, rounding_mode='trunc')
+    gather_idx = GatherIndx(gather_src_indx, dispatch_indx) if do_gather else None
     scatter_idx =  ScatterIndx(dispatch_indx, combine_indx) if do_scatter else None
     return m, routing_data, gather_idx, scatter_idx
 
@@ -495,7 +496,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
         if mode == "batched":
             yT_shape = (n_expts_tot, n, x_tri.shape[-2])
         elif sindx is not None:
-            yT_shape = (n, m)
+            yT_shape = (n, sindx.src_indx.shape[0])
         elif expt_is_inner:
             yT_shape = (n_expts_tot, n, k)
         else:
@@ -599,7 +600,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
             if not is_input_batched:
                 y_shape = (y_shape[1], y_shape[2])
         else:
-            y_shape = (n_rows // rdata.n_expts_act, y_shape[-1])
+            y_shape = (n_rows, y_shape[-1])
         y_scale_shape = y_shape[:-1] + (triton.cdiv(y_shape[-1], MXFP_BLOCK_SIZE),)
         y_scale = torch.empty(y_scale_shape, dtype=torch.uint8, device=x_tri.device)
         precision_opt = replace(precision_opt, act_scale=x_mx_scales_tri, out_scale=y_scale)
@@ -623,13 +624,13 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
 
     # triton
     try:
-        has_aggregation = sindx is not None and n_expts_act > 1
         tri_y = matmul_ogs(x_tri, w_tri, bias_tri, rdata, gindx, sindx, precision_opt,
-                           gammas=gs1_ref, epilogue=epilogue, y=None if has_aggregation else y_tri_in,
-                           inner_routing_data=inner_routing_data)
-        if has_aggregation:
-            tri_y = tri_y.squeeze(0)
-            tri_y = aggregate_experts(tri_y, sindx, n_expts_act, epilogue, precision_opt, y_tri_in)
+                           gammas=gs1_ref, epilogue=epilogue, y=y_tri_in,
+                           inner_routing_data=inner_routing_data,
+                           init_output_to_zero=sindx is not None and n_expts_act == 1)
+        # if has_aggregation:
+        #     tri_y = tri_y.squeeze(0)
+        #     tri_y = aggregate_experts(tri_y, sindx, n_expts_act, epilogue, precision_opt, y_tri_in)
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     if y_tri_in is not None:
@@ -648,6 +649,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
     ref_y = matmul_ogs_torch(x_ref, w_ref, bias_ref,  #
                              rdata, gindx, sindx, round_x=round_x, round_y=round_y, gammas=gs1_ref,
                              inner_routing_data=inner_routing_data)
+    # if has_aggregation:
+    #     ref_y = ref_y.squeeze(0)
+    #     ref_y = aggregate_experts(ref_y, sindx, n_expts_act, epilogue, precision_opt, None)
 
     def scale(val, scal):
         if scal is None:

@@ -321,6 +321,7 @@ def matmul_ogs(x, w, bias,
     epilogue: Epilogue | None = None,
     y_acc_in: torch.Tensor | None = None,
     inner_routing_data: InnerRoutingData | None = None,
+    init_output_to_zero: bool = False,
 ):
     """
     Y[:, :] = 0.
@@ -546,8 +547,6 @@ def matmul_ogs(x, w, bias,
     # (i.e. col-wise). Since this matters when w_has_mx is True and w_transpose
     # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
     # w_transpose = w_storage.data.stride()[-1] != 1
-    if gather_indx is not None:
-        gather_src_indx = torch.div(gather_indx.src_indx, routing_data.n_expts_act, rounding_mode='trunc')
     fused_comm_kwargs = {
         "pYPtrs": fused_comm.out_handles,
         "ScatterShardIndx": fused_comm.scatter_shard_indx,
@@ -570,7 +569,7 @@ def matmul_ogs(x, w, bias,
                    x.shape[-2] if routing_data.expt_hist is None else None,
                    N, K, K_W,
                    betas, gammas,
-                   None if gather_indx is None else gather_src_indx,
+                   None if gather_indx is None else gather_indx.src_indx,
                    None if gather_indx is None else gather_indx.dst_indx,  # Only for launch_metadata
                    None if scatter_indx is None else scatter_indx.src_indx,
                    num_indx,
@@ -592,7 +591,7 @@ def matmul_ogs(x, w, bias,
                    opt_flags.block_n,
                    opt_flags.block_k,
                    opt_flags.group_m,
-                   INIT_OUTPUT_TO_ZERO=routing_data.n_expts_act == 1,
+                   INIT_OUTPUT_TO_ZERO=init_output_to_zero,
                    XCD_SWIZZLE=opt_flags.xcd_swizzle,
                    SWIZZLE_MX_VALUE=w.storage.layout.name,
                    SWIZZLE_MX_SCALE=None if w_scale is None else w_scale.storage.layout.name,
@@ -638,25 +637,6 @@ def matmul_ogs(x, w, bias,
     else:
         out_final = out_matmul.squeeze(0)
         out_final_mx_scale = out_matmul_scale
-    # TODO: change `matmul_ogs` semantics and move this to another op!
-    # if scatter_indx is not None and routing_data.n_expts_act > 1:
-    #     mask = (scatter_indx.src_indx != -1).view(out_matmul.shape[-2]//routing_data.n_expts_act, routing_data.n_expts_act, 1)
-    #     out_matmul = out_matmul.view(out_matmul.shape[-2]//routing_data.n_expts_act, routing_data.n_expts_act, -1)
-    #     mask = mask.expand_as(out_matmul)
-    #     out_matmul_scale_shape = out_matmul.shape[:-1] + (triton.cdiv(out_matmul.shape[-1], 32),)
-    #     postprocess_fn = ReducePostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
-    #     x_flex = InFlexData(dtype=out_matmul_flex.dtype, scale=out_matmul_flex.expected_scale)
-    #     out_final, out_final_mx_scale = reduce(out_matmul, dim=1, postprocess_fn2=postprocess_fn, x_flex=x_flex, #
-    #                                         mask=mask,
-    #                                         y=memory["output"].squeeze(0).squeeze(0),
-    #                                         x_mxscale=out_matmul_scale.view(*out_matmul_scale_shape) if out_matmul_has_mx else None,
-    #                                         y_has_mx=precision_config.out_scale is not None,
-    #                                         y_flex=precision_config.flex_ctx.out_data,
-    #                                         y_flex_saturate_inf=precision_config.flexpoint_saturate_inf,
-    #                                         )
-    #     out_final = out_final.unsqueeze(0)
-    # else:
-    #     out_final = out_matmul.squeeze(0)
 
     if not (is_input_batched or inner_routing_data is not None):
         out_final = out_final.squeeze(0)
@@ -717,7 +697,7 @@ def matmul_ogs_torch(x, w, bias,
         x = x.view(1, *x.shape)
     if routing_data is None:
         routing_data = RoutingData(None, None, w.shape[0], 1)
-    n_expts_act = routing_data.n_expts_act
+    # n_expts_act = routing_data.n_expts_act
     # memory offsets
     if routing_data.n_expts_tot > 1 and not is_input_batched:
         sizes = routing_data.expt_hist
@@ -733,7 +713,7 @@ def matmul_ogs_torch(x, w, bias,
         if gather_indx is None:
             idx = torch.arange(lo, hi, device=x.device)
         else:
-            idx = gather_indx.src_indx[lo:hi] // n_expts_act
+            idx = gather_indx.src_indx[lo:hi]
         batch = i if is_input_batched else 0
         out = torch.matmul(round_x(x[batch, idx, :], torch.arange(lo, hi, device="cuda")).float(),
                            w[i].float())
@@ -746,14 +726,17 @@ def matmul_ogs_torch(x, w, bias,
         y = y.view(y.shape[1], y.shape[2])
     if scatter_indx is None:
         return y
-    # accumulate output from all experts
-    n_rows = y.shape[0] // n_expts_act
-    out = torch.zeros((n_rows, y.shape[-1]), dtype=torch.float32, device=x.device)
-    for i, (lo, hi) in enumerate(offs):
-        dst_idx = scatter_indx.dst_indx[lo:hi] // n_expts_act
-        msk = dst_idx != -1
-        out[dst_idx[msk], :] += y[lo:hi, :][msk, :].float()
+    out = torch.zeros((scatter_indx.dst_indx.shape[0], y.shape[-1]), dtype=torch.float32, device=x.device)
+    out[scatter_indx.dst_indx, :] = y
     return out
+    # accumulate output from all experts
+    # n_rows = y.shape[0] // n_expts_act
+    # out = torch.zeros((n_rows, y.shape[-1]), dtype=torch.float32, device=x.device)
+    # for i, (lo, hi) in enumerate(offs):
+    #     dst_idx = scatter_indx.dst_indx[lo:hi] // n_expts_act
+    #     msk = dst_idx != -1
+    #     out[dst_idx[msk], :] += y[lo:hi, :][msk, :].float()
+    # return out
 
 
 def post_matmul_comm_torch(y: torch.Tensor, rank: int, n_reduce_shards: int,
