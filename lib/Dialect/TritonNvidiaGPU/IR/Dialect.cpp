@@ -144,8 +144,8 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
     // Get CTALayout without broadcasting to divide the ll
     // as the TMEM layout does not reflect CTA broadcasting
     auto splitNum = ctaLayout->getCTASplitNum();
-    auto ctaBlockSplit =
-        CTALayoutAttr::get(ctx, splitNum, splitNum, ctaLayout->getCTAOrder());
+    // The cta order in TMEM is always [0, 1]
+    auto ctaBlockSplit = CTALayoutAttr::get(ctx, splitNum, splitNum, {0, 1});
     auto ctaBlockSplitLL = gpu::makeCgaLayout(ctaBlockSplit);
     assert(ctaBlockSplitLL.getNumOutDims() == ll.getNumOutDims());
     // rename block into col

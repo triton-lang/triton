@@ -72,6 +72,7 @@ def _fma_f32x2(a, b, c):
 class Float2Tensor:
     value: ttgl.tensor
 
+    @constexpr_function
     def __init__(self, value: ttgl.tensor):
         self.value = value
 

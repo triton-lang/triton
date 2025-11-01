@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -tritongpu-pipeline | FileCheck %s --check-prefixes=CHECK
+// RUN: triton-opt %s -split-input-file -tritongpu-pipeline | FileCheck %s --check-prefixes=CHECK
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -30,5 +30,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       scf.yield %5, %6, %7 : tensor<256x128xf32, #mma>, tensor<256x32x!tt.ptr<f32>, #blocked>, tensor<32x128x!tt.ptr<f32>, #blocked1>
     } {tt.num_stages = 4 : i32, tt.scheduled_max_stage = 1 : i32}
     tt.return %0#0, %0#1, %0#2 : tensor<256x128xf32, #mma>, tensor<256x32x!tt.ptr<f32>, #blocked>, tensor<32x128x!tt.ptr<f32>, #blocked1>
+  }
+}
+
+// -----
+
+#s = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @expand_loop_without_results
+  tt.func public @expand_loop_without_results() {
+    %c0 = arith.constant 0 : i32
+    %c16 = arith.constant 16 : i32
+    %true = arith.constant true
+    %a = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xbf16, #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>, #ttng.tensor_memory, mutable>
+    %b = ttg.local_alloc : () -> !ttg.memdesc<64x64xbf16, #s, #ttg.shared_memory, mutable>
+    %c = ttng.tmem_alloc : () -> !ttg.memdesc<64x64xf32, #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>, #ttng.tensor_memory, mutable>
+    %bar = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>, #ttg.shared_memory, mutable>
+    // CHECK: scf.for
+    // CHECK:   ttng.tc_gen5_mma
+    // CHECK:   ttng.wait_barrier
+    scf.for %j = %c0 to %c16 step %c16 : i32 {
+      ttng.tc_gen5_mma %a, %b, %c, %true, %true, %bar[%true] {is_async, loop.cluster = 2 : i32, loop.stage = 0 : i32} : !ttg.memdesc<64x64xbf16, #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>, #ttng.tensor_memory, mutable>, !ttg.memdesc<64x64xbf16, #s, #ttg.shared_memory, mutable>, !ttg.memdesc<64x64xf32, #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>, #ttng.tensor_memory, mutable>, !ttg.memdesc<1xi64, #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>, #ttg.shared_memory, mutable>
+      ttng.wait_barrier %bar, %c0 deps %a, %b {loop.cluster = 1 : i32, loop.stage = 1 : i32} : !ttg.memdesc<1xi64, #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>, #ttg.shared_memory, mutable>, !ttg.memdesc<64x64xbf16, #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>, #ttng.tensor_memory, mutable>, !ttg.memdesc<64x64xbf16, #s, #ttg.shared_memory, mutable>
+      scf.yield
+    } {tt.num_stages = 4 : i32, tt.scheduled_max_stage = 1 : i32}
+    tt.return
   }
 }

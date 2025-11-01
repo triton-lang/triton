@@ -42,8 +42,8 @@ def alloc_rand_like(x):
 def init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter, device="cuda"):
     logits = torch.randn((m, n_expts_tot), dtype=torch.float16, device=device, requires_grad=True)
     sparse_logits = topk(logits, n_expts_act)
-    dispatch_indx = sparse_logits.mask_metadata.col_sorted_indx
-    combine_indx = sparse_logits.mask_metadata.row_sorted_indx
+    dispatch_indx = sparse_logits.mask_metadata.row_sorted_indx
+    combine_indx = sparse_logits.mask_metadata.col_sorted_indx
     ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
     routing_data = RoutingData(None, ragged_batch_metadata.slice_sizes, n_expts_tot, n_expts_act, ragged_batch_metadata)
     gather_idx = GatherIndx(combine_indx, dispatch_indx) if do_gather else None

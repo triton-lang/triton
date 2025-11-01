@@ -232,16 +232,11 @@ class ClusterCTAIdOpPattern : public OpRewritePattern<ttn::ClusterCTAIdOp> {
 
   LogicalResult matchAndRewrite(ttn::ClusterCTAIdOp op,
                                 PatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto a0 = NVVM::BlockInClusterIdXOp::create(rewriter, loc, i32_ty);
-    auto a1 = NVVM::BlockInClusterIdYOp::create(rewriter, loc, i32_ty);
-    auto a2 = NVVM::BlockInClusterIdZOp::create(rewriter, loc, i32_ty);
-    auto a3 = NVVM::ClusterDimBlocksXOp::create(rewriter, loc, i32_ty);
-    auto a4 = NVVM::ClusterDimBlocksYOp::create(rewriter, loc, i32_ty);
-    auto p1 = LLVM::MulOp::create(rewriter, loc, a2, a4);
-    auto s1 = LLVM::AddOp::create(rewriter, loc, a1, p1);
-    auto p2 = LLVM::MulOp::create(rewriter, loc, s1, a3);
-    auto res = LLVM::AddOp::create(rewriter, loc, a0, p2);
+    // TODO Should we pass in the range of the cluster ID?
+    // We should benchmark as when doing so for thread_id it regressed lol
+    // auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(
+    //     op->getParentOfType<ModuleOp>());
+    auto res = NVVM::ClusterId::create(rewriter, op.getLoc(), i32_ty);
     rewriter.replaceOp(op, res);
     return success();
   }
