@@ -1950,17 +1950,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 
 @gluon.jit
-def amd_async_wait():
-    cdna4_async_copy.async_wait(0)
+def amd_commit_group():
+    cdna4_async_copy.commit_group()
+
+
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
+def test_amd_commit_group(target):
+    mod = run_parser(amd_wait_group, target=target)
+    expecttest.assert_expected_inline(
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @amd_wait_group() attributes {noinline = false} {
+    %0 = ttg.async_wait {num = 0 : i32}
+    tt.return
+  }
+}
+""")
+
+
+@gluon.jit
+def amd_wait_group():
+    cdna4_async_copy.wait_group(0)
 
 
 @pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
 def test_amd_async_wait(target):
-    mod = run_parser(amd_async_wait, target=target)
+    mod = run_parser(amd_wait_group, target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(mod.str_nodebug()), """\
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
-  tt.func public @amd_async_wait() attributes {noinline = false} {
+  tt.func public @amd_wait_group() attributes {noinline = false} {
     %0 = ttg.async_wait {num = 0 : i32}
     tt.return
   }
