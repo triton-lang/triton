@@ -106,7 +106,7 @@ def upcast_from_mxfp(tensor: torch.Tensor, scale: torch.Tensor, target_dtype: to
         reshaped_tensor = tensor.view(-1, tensor.shape[-1])
         reshaped_scale = scale.view(-1, scale.shape[-1])
 
-        # Pad the tensor and output if needed for tensor descriptor spec requirements. 
+        # Pad the tensor and output if needed for tensor descriptor spec requirements.
         TENSOR_DESC_PAD_REQ = 16
         needs_padding = reshaped_tensor.shape[-1] % TENSOR_DESC_PAD_REQ != 0
         if needs_padding:
