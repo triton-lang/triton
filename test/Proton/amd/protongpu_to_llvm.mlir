@@ -139,10 +139,13 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK-LABEL: convert_smem_finalize
   // CONVERT-BUILTIN: llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
   // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i64, !llvm.ptr<1>
-  // CONVERT-BUILTIN: llvm.br ^bb{{.*}}(%{{.*}} : i32)
+  // CONVERT-BUILTIN: llvm.cond_br %{{.*}}, ^bb{{.*}}(%{{.*}} : i32), ^bb{{.*}}
+  // CONVERT-BUILTIN: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
+  // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<1>
+  // CONVERT-BUILTIN: llvm.load %{{.*}} : !llvm.ptr<3> -> i32
+  // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<1>
   // CONVERT-BUILTIN: llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
   // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i64, !llvm.ptr<1>
-  // CONVERT-BUILTIN: llvm.br ^bb{{.*}}
   // CHECK: llvm.return
   llvm.func @convert_smem_finalize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
