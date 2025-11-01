@@ -337,7 +337,7 @@ void cloneOpsInBlock(Block *block, SmallVector<WarpGroupBuilder> &builders,
               builder.mapping.lookupOrDefault(yieldOp.getOperand(i)));
         }
 
-        builder.create<scf::YieldOp>(op->getLoc(), newYieldOperands);
+        scf::YieldOp::create(builder, op->getLoc(), newYieldOperands);
       }
     } else {
       assert(hasPartition(op));
@@ -452,7 +452,7 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   for (auto [b, region, partition] : llvm::zip(
            builders, wgOp.getPartitionRegions(), partitions.getPartitions())) {
     if (!llvm::is_contained(*getPartitionIds(loop), b.partitionId)) {
-      b.create<nvws::WarpGroupYieldOp>(wgOp.getLoc(), SmallVector<Value>{});
+      nvws::WarpGroupYieldOp::create(b, wgOp.getLoc(), SmallVector<Value>{});
       continue;
     }
     auto newForOp = *region.front().getOps<scf::ForOp>().begin();
