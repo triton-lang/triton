@@ -196,4 +196,4 @@ def test_diff_profile():
     gf, derived_metrics = parse(["time/s"], triton_example_file)
     gf2, _ = parse(["time/s"], cuda_example_file)
     gf = apply_diff_profile(gf, derived_metrics, cuda_example_file, ["time/s"], None, None, 0.0)
-    assert "time/s" in gf.dataframe.columns
+    assert "time/s (inc)" in gf.dataframe.columns
