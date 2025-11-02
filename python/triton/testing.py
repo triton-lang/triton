@@ -376,7 +376,7 @@ class Mark:
             df['Diff'] = df[col1] - df[col0]
 
         if print_data:
-            print(bench.plot_name + ':')
+            print(bench.plot_name + f' in {bench.ylabel}:')
             print(df.to_string())
         if save_path:
             df.to_csv(os.path.join(save_path, f"{bench.plot_name}.csv"), float_format=f"%.{save_precision}f",
