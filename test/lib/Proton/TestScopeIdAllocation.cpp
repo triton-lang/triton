@@ -1,8 +1,6 @@
 #include "mlir/Pass/Pass.h"
 #include "third_party/proton/Dialect/include/Analysis/ScopeIdAllocation.h"
 
-#include <cstdint>
-
 using namespace mlir;
 using namespace triton::proton;
 
@@ -41,10 +39,10 @@ struct TestScopeIdAllocationPass
       funcOp.walk([&](RecordOp recordOp) {
         auto scopeId = moduleScopeIdAllocation.getOpScopeId(recordOp);
         mlir::emitRemark(recordOp.getLoc()) << "scope id = " << scopeId;
-        int64_t parentId = -1;
+        ScopeIdAllocation::ScopeId parentId = -1;
         if (auto parentIt = parentScopeIdMap.find(scopeId);
             parentIt != parentScopeIdMap.end())
-          parentId = static_cast<int64_t>(parentIt->second);
+          parentId = parentIt->second;
         mlir::emitRemark(recordOp.getLoc())
             << "scope parent id = " << parentId;
       });

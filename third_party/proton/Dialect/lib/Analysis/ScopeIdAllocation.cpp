@@ -50,63 +50,66 @@ struct BlockInfo {
 };
 
 void ScopeIdAllocation::run() {
-  // Stage the analysis to match downstream consumers of scope metadata:
+  // We execute the following analysis stages in the order to verify if
+  // `proton.record` operations are well-formed and associate scope IDs for each
+  // pair of start/end records.
   //
-  // - liveness(): Pair start/end records and assign a shared numeric ID.
-  // There are multiple ways to pair start/end records:
-  // We choose a simple approach here:
-  // For each start record, we look for the nearest closing scope with the same name for pairing.
+  // 1. liveness()
   //
-  // Example
-  //   MLIR:
-  //     proton.record start @"foo" <- scopeId = 0
-  //     …
-  //     proton.record end @"foo" <- scopeId = 0
-  //     …
-  //     proton.record start @"foo" <- scopeId = 1
-  //     …
-  //     proton.record end @"foo" <- scopeId = 1
+  //    Pair start/end records that share a name and assign a numeric
+  //    identifier that later passes reuse. The current implementation pairs
+  //    each start with the nearest matching end.
   //
-  // - reachability(): Track active scopes at CFG boundaries and flag malformed
-  //   lifetimes. We optimistically collect all the "potentially" unclosed and
-  //   closing scopes here, and validate them after the dataflow converges.
+  //      proton.record start @"foo"  // scopeId = 0
+  //      …
+  //      proton.record end @"foo"    // scopeId = 0
+  //      …
+  //      proton.record start @"foo"  // scopeId = 1
+  //      …
+  //      proton.record end @"foo"    // scopeId = 1
   //
-  //   Starting example MLIR:
-  //     scf.if %cond {
-  //       proton.record start @"foo"
-  //     }
-  //   Because `"foo"` never ends on the `then` branch, reachability() emits
-  //   `The scope name 'foo' is not closed properly`.
+  // 2. reachability()
   //
-  //  Valid example MLIR:
-  //    scf.if %cond {
-  //     proton.record start @"foo"
-  //    }
-  //    proton.record end @"foo"
+  //    Track active scopes across CFG boundaries and surface
+  //    malformed lifetimes once the dataflow converges.
   //
-  //   We don't emit errors because we assume scf.if could be executed and it's
-  //   up to the user to ensure proper semantics.
+  //      scf.if %cond {
+  //        proton.record start @"foo"
+  //      }
   //
-  // - dominance(): 
-  // (1) Check the dominance of start/end records to ensure well-formedness.
-  //  Example MLIR:
-  //    proton.record end @"foo"
-  //    …
-  //   proton.record start @"foo"
+  //    Because `"foo"` never ends on the `then` branch, reachability() emits
+  //    "The scope name 'foo' is not closed properly".
   //
-  // Because the end of `"foo"` dominates its start, dominance() emits an error.
+  //      scf.if %cond {
+  //        proton.record start @"foo"
+  //      }
+  //      proton.record end @"foo"
   //
-  // (2) Infer the parent/child hierarchy between scopes via
-  //   dominance. Example MLIR:
-  //     proton.record start @"outer"
-  //     scf.if %cond {
-  //       proton.record start @"inner"
-  //       …
-  //       proton.record end @"inner"
-  //     }
-  //     proton.record end @"outer"
-  //   Because the start of `"outer"` dominates `"inner"`, dominance() records
-  //   `(innerId -> outerId)` in `scopeParentIds`.
+  //    No diagnostic is emitted: the pass assumes the branch may execute and
+  //    leaves semantic responsibility to the caller.
+  //
+  // 3. dominance():
+  //
+  //    (a) Ensure that each start dominates its matching end.
+  //
+  //          proton.record end @"foo"
+  //          …
+  //          proton.record start @"foo"
+  //
+  //        Because the end dominates the start, dominance() reports an error.
+  //
+  //    (b) Infer parent/child scope relationships using dominance facts.
+  //
+  //          proton.record start @"outer"
+  //          scf.if %cond {
+  //            proton.record start @"inner"
+  //            …
+  //            proton.record end @"inner"
+  //          }
+  //          proton.record end @"outer"
+  //
+  //        `"outer"` dominates `"inner"`, so dominance() records
+  //        `(innerId -> outerId)` in `scopeParentIds`.
   liveness();
   reachability();
   dominance();
@@ -161,8 +164,7 @@ void ScopeIdAllocation::reachability() {
 
   std::deque<VirtualBlock> virtualBlockList;
   funcOp->walk<WalkOrder::PreOrder>([&](Block *block) {
-    // Start the analysis from the entry blocks of any nested isolated from
-    // above regions.
+    // Seed the worklist with entry blocks of regions that are isolated-from-above.
     if (block->isEntryBlock() &&
         !isa<RegionBranchOpInterface>(block->getParentOp()))
       virtualBlockList.emplace_back(block, Block::iterator());
@@ -172,8 +174,7 @@ void ScopeIdAllocation::reachability() {
   while (!virtualBlockList.empty()) {
     VirtualBlock &virtualBlock = virtualBlockList.front();
     virtualBlockList.pop_front();
-    // Evaluate the transfer function for this block starting from the cached
-    // input state.
+    // Evaluate the transfer function for this block starting from the cached input state.
     auto inputBlockInfo = inputBlockInfoMap[virtualBlock];
     SmallVector<VirtualBlock> successors;
     Block::iterator startIt =
@@ -190,29 +191,27 @@ void ScopeIdAllocation::reachability() {
           inputBlockInfo.insert(scopeId);
         } else {
           inputBlockInfo.erase(scopeId);
-        } 
+        }
       }
     }
     if (successors.empty()) {
       exitVirtualBlocks.insert(virtualBlock);
     }
-    // Get the reference because we want to update if it changed
+    // Skip successor propagation if the output state is unchanged.
     if (outputBlockInfoMap.count(virtualBlock) &&
         inputBlockInfo == outputBlockInfoMap[virtualBlock]) {
-      // If we have seen the block before and the inputBlockInfo is the same as
-      // the outputBlockInfo, we skip the successors
       continue;
     }
-    // Update the current block
+    // Update the current block.
     outputBlockInfoMap[virtualBlock].join(inputBlockInfo);
-    // Update the successors
+    // Propagate the new facts to successors.
     for (VirtualBlock &successor : successors) {
       inputBlockInfoMap[successor].join(outputBlockInfoMap[virtualBlock]);
       virtualBlockList.emplace_back(successor);
     }
   }
 
-  // Go through all blocks, validate reachability analysis results
+  // Validate the reachability analysis results for each block.
   for (auto iter : inputBlockInfoMap) {
     auto &virtualBlock = iter.first;
     auto inputBlockInfo = iter.second;
@@ -242,8 +241,7 @@ void ScopeIdAllocation::reachability() {
 
 
 void ScopeIdAllocation::dominance() {
-  // Stage 3: determine parentage between scopes by checking dominance of start
-  // operations.
+  // Stage 3: derive scope parentage and verify dominance constraints.
   mlir::DominanceInfo domInfo(funcOp);
   llvm::DenseMap<ScopeId, Operation *> startRecordMap;
   llvm::DenseMap<ScopeId, Operation *> endRecordMap;
@@ -272,17 +270,17 @@ void ScopeIdAllocation::dominance() {
   }
   auto sortedStartRecordOps = mlir::topologicalSort(startRecordOps);
   for (int i = 0; i < sortedStartRecordOps.size(); ++i) {
-    auto *op = sortedStartRecordOps[i];
-    auto scopeId = opToIdMap.lookup(op);
+    auto *startOp = sortedStartRecordOps[i];
+    auto scopeId = opToIdMap.lookup(startOp);
     auto endOp = endRecordMap.lookup(scopeId);
     for (int j = i - 1; j >= 0; --j) {
       auto *parentStartOp = sortedStartRecordOps[j];
       auto parentScopeId = opToIdMap.lookup(parentStartOp);
       auto parentEndOp = endRecordMap.lookup(parentScopeId);
-      if (domInfo.dominates(parentStartOp, op) && 
+      if (domInfo.dominates(parentStartOp, startOp) && 
           domInfo.dominates(endOp, parentEndOp)) {
         auto parentId = opToIdMap.lookup(parentStartOp);
-        auto childId = opToIdMap.lookup(op);
+        auto childId = opToIdMap.lookup(startOp);
         scopeParentIds.push_back({childId, parentId});
         break;
       }
@@ -300,9 +298,8 @@ void ScopeIdAllocation::visitTerminator(
   }
 
   if (auto br = dyn_cast<RegionBranchOpInterface>(op)) {
-    // The successors of an operation with regions can be queried via an
-    // interface. The operation branches to the entry blocks of its region
-    // successors. It can also branch to after itself.
+    // Query successors of an op-with-regions. The op can branch to region entry
+    // blocks or to the continuation after itself.
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(RegionBranchPoint::parent(), regions);
     for (RegionSuccessor &region : regions) {
@@ -320,8 +317,8 @@ void ScopeIdAllocation::visitTerminator(
   // reason. Check that the parent is actually a `RegionBranchOpInterface`.
   auto br = dyn_cast<RegionBranchTerminatorOpInterface>(op);
   if (br && isa<RegionBranchOpInterface>(br->getParentOp())) {
-    // Check the successors of a region branch terminator. It can branch to
-    // another region of its parent operation or to after the parent op.
+    // Region branch terminators can jump to another region belonging to the
+    // parent operation or to the parent continuation.
     SmallVector<Attribute> operands(br->getNumOperands());
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(operands, regions);
@@ -337,7 +334,7 @@ void ScopeIdAllocation::visitTerminator(
     return;
   }
 
-  // Otherwise, it could be a return op
+  // Otherwise, it could be a return-like op.
   if (op->hasTrait<OpTrait::ReturnLike>())
     return;
   llvm_unreachable("Unknown terminator encountered in membar analysis");

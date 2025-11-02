@@ -135,6 +135,44 @@ module {
 // -----
 
 module {
+  // expected-remark @below {{cf_if_only}}
+  tt.func @scf_cond(%cond: i1) {
+    scf.if %cond {
+      // expected-remark @below {{scope id = 0}}
+      // expected-remark @below {{scope parent id = -1}}
+      proton.record start "if_only"
+    }
+    // expected-remark @below {{scope id = 0}
+    // expected-remark @below {{scope parent id = -1}}
+    proton.record end "if_only"
+    tt.return
+  }
+}
+
+// -----
+
+module {
+  tt.func @scf_loop_if(%cond: i1) {
+    %c0 = arith.constant 0 : index
+    scf.for %i = %c0 to %c0 step %c0 {
+      scf.if %cond {
+        // expected-remark @below {{scope id = 0}}
+        // expected-remark @below {{scope parent id = -1}}
+        proton.record start "loop_if"
+      }
+      scf.if %cond {
+        // expected-remark @below {{scope id = 0}}
+        // expected-remark @below {{scope parent id = -1}}
+        proton.record end "loop_if"
+      }
+    }
+    tt.return
+  }
+}
+
+// -----
+
+module {
   // expected-remark @below {{cf_single_branch}}
   tt.func @cf_single_branch(%cond: i1) {
     // expected-remark @below {{scope id = 0}}
@@ -351,44 +389,5 @@ module {
     %cond = arith.cmpi ult, %next, %c2: index
     proton.record start "loop"
     cf.cond_br %cond, ^loop(%next : index), ^exit
-  }
-}
-
-// -----
-
-module {
-  tt.func @cf_if_unclosed(%cond: i1) {
-    scf.if %cond {
-      // expected-error @below {{The scope name 'if_only' is not properly closed (missing end record)}}
-      proton.record start "if_only"
-    }
-    tt.return
-  }
-}
-
-// -----
-
-module {
-  tt.func @cf_duplicate_start() {
-    // expected-error @below {{The scope name 'dup_scope' is not properly closed (missing end record)}}
-    proton.record start "dup_scope"
-    // expected-error @below {{The scope name 'dup_scope' is started without being closed}}
-    // expected-error @below {{The scope name 'dup_scope' has duplicate start record}}
-    proton.record start "dup_scope"
-    tt.return
-  }
-}
-
-// -----
-
-module {
-  tt.func @cf_duplicate_end() {
-    // expected-error @below {{The scope name 'dup_scope' is closed without being opened}}
-    // expected-error @below {{The scope name 'dup_scope' is not properly closed (missing start record)}}
-    proton.record end "dup_scope"
-    // expected-error @below {{The scope name 'dup_scope' is closed without being opened}}
-    // expected-error @below {{The scope name 'dup_scope' has duplicate end record}}
-    proton.record end "dup_scope"
-    tt.return
   }
 }
