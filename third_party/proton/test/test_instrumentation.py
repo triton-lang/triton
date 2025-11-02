@@ -72,7 +72,9 @@ def test_jit(tmp_path):
 
 
 @pytest.mark.parametrize("method", ["operator", "context_manager"])
-def test_record(method, tmp_path: pathlib.Path):
+def test_record(method, fresh_knobs, tmp_path: pathlib.Path):
+    fresh_knobs.compilation.disable_line_info = False
+
     from contextlib import contextmanager
 
     @contextmanager
