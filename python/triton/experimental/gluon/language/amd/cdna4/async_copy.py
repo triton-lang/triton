@@ -6,7 +6,8 @@ from ..cdna3 import _verify_buffer_ops
 __all__ = [
     "global_load_to_shared",
     "buffer_load_to_shared",
-    "async_wait",
+    "commit_group",
+    "wait_group",
     "load_shared_relaxed",
 ]
 
@@ -17,7 +18,10 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", _
     AMD global load to shared operation. This operation loads data directly
     from global memory to shared memory without going through registers. It
     happens asynchronously and requires a subsequent `async_wait` to ensure the
-    data is available in shared memory.
+    data is available in shared memory. Note that this operation does still
+    complete in order with ttgl.loads/stores or buffer_loads/stores on CDNA4,
+    so interleaving with them will hurt performance.
+
     Compared to `buffer_load_to_shared`, it requires a tensor pointer which
     supports 64-bit indexing range for each thread in a block, which gives more
     flexibility, but at the cost of higher register pressure and no hardware
@@ -72,7 +76,10 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
     32-bit offsets instead of a tensor of pointers. This operation loads data
     directly from global memory to shared memory without going through
     registers. It happens asynchronously and requires a subsequent `async_wait`
-    to ensure the data is available in shared memory.
+    to ensure thedata is available in shared memory. Note that this operation
+    does still complete in order with ttgl.loads/stores or buffer_loads/stores
+    on CDNA4, so interleaving with them will hurt performance.
+
     Compared to `global_load_to_shared`, it has better performance and also
     supports hardware out-of-bound masking. But it strictly requires a
     32-bit offset instead of a 64-bit tensor pointer.
@@ -118,16 +125,24 @@ def buffer_load_to_shared(dest, ptr, offsets, mask=None, other=None, cache_modif
 
 
 @builtin
-def async_wait(num_outstanding=0, _semantic=None):
+def commit_group(_semantic=None):
     """
-    Wait for outstanding memory operations, this includes normal load like
-    `load` and `buffer_load`, as well as direct load to shared memory
-    like `global_load_to_shared` and `buffer_load_to_shared`.
-    It will block until the number of outstanding memory operations is less than
-    or equal to `num_outstanding`.
+    Commit oustanding async operations.
+
+    This finalizes a set of async copy operations which can be waited upon via `wait_group`.
+    """
+    _semantic.builder.create_async_commit_group()
+
+
+@builtin
+def wait_group(num_outstanding=0, _semantic=None):
+    """
+    Wait for outstanding commit groups. It will block until the number of
+    outstanding commit groups is less than or equal to `num_outstanding`. Note that uncommited
+    async operations will be waited upon even if `num_outstanding` is 0.
 
     Args:
-        num_outstanding (int): The number of outstanding operations to wait for. Defaults to 0.
+        num_outstanding (int): The number of outstanding commit groups to wait for. Defaults to 0.
     """
     num_outstanding = _unwrap_if_constexpr(num_outstanding)
     _semantic.builder.create_async_wait_group(num_outstanding)

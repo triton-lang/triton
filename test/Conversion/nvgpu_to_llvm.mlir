@@ -2,11 +2,12 @@
 
 // CHECK-LABEL: @cluster_id
 llvm.func @cluster_id() -> i32 {
-  // CHECK: nvvm.read.ptx.sreg.cluster.ctaid.x
-  // CHECK: nvvm.read.ptx.sreg.cluster.ctaid.y
-  // CHECK: nvvm.read.ptx.sreg.cluster.ctaid.z
-  // CHECK: nvvm.read.ptx.sreg.cluster.nctaid.x
-  // CHECK: nvvm.read.ptx.sreg.cluster.nctaid.y
+  // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
+  // CHECK-NOT: nvvm.read.ptx.sreg.cluster.ctaid.x
+  // CHECK-NOT: nvvm.read.ptx.sreg.cluster.ctaid.y
+  // CHECK-NOT: nvvm.read.ptx.sreg.cluster.ctaid.z
+  // CHECK-NOT: nvvm.read.ptx.sreg.cluster.nctaid.x
+  // CHECK-NOT: nvvm.read.ptx.sreg.cluster.nctaid.y
   %id = nvgpu.cluster_id
   llvm.return %id : i32
 }
@@ -53,6 +54,19 @@ llvm.func @wgmma(%desc: i64, %in: !struct_64xf32) {
   // CHECK: // wait for regs: $0,$1,$2,{{.*}},$127
   // CHECK: wgmma.wait_group.sync.aligned 0;
   %out = nvgpu.wgmma_wait_group %in {pendings = 0 : i32} : !struct_64xf32
+  llvm.return
+}
+
+// -----
+
+!struct = !llvm.struct<(f32, f32, i32, i32, f16, f16)>
+
+// CHECK-LABEL: @wgmma_wait
+llvm.func @wgmma_wait(%in: !struct) {
+  // CHECK: // wait for regs: $0,$1,$2,$3,$4,$5
+  // CHECK: wgmma.wait_group.sync.aligned 0;
+  // CHECK: "=f,=f,=r,=r,=h,=h,0,1,2,3,4,5"
+  %out = nvgpu.wgmma_wait_group %in {pendings = 0 : i32} : !struct
   llvm.return
 }
 

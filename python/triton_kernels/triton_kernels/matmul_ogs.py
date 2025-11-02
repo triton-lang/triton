@@ -410,9 +410,10 @@ def matmul_ogs(x, w, bias,
     has_gather_tma = has_gather and target_info.has_tma_gather()
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
+    can_use_split_k = scatter_indx is None and not x_has_mx and not w_has_mx
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
         batch_size, M, N, w.shape[-2], x_ragged_metadata,
-        can_use_tma, scatter_indx is not None, epilogue.effective_itemsize,
+        can_use_tma, can_use_split_k, epilogue.effective_itemsize,
         x_transpose, y_acc_in is not None,
         inner_routing_data.block_k if inner_routing_data is not None else None,
     )
@@ -606,6 +607,7 @@ def matmul_ogs(x, w, bias,
                    **fused_comm_kwargs,
                    **opt_flags.target_kernel_kwargs)
 
+    assert not (opt_flags.split_k > 1 and scatter_indx is not None)
     out_final_mx_scale = None
     if opt_flags.split_k > 1:
         assert not out_matmul_has_mx

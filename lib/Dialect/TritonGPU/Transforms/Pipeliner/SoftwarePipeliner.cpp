@@ -1,5 +1,6 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -63,24 +64,22 @@ static void expandLoops(ModuleOp moduleOp) {
   DenseSet<MaskOp> peeledMaskOps;
   auto processPeeledEpilogueOp = [&](RewriterBase &rewriter, Operation *op,
                                      bool isEpilogue) -> Operation * {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
     if (auto predOp = dyn_cast<triton::gpu::PredicateStageOp>(op)) {
       if (isEpilogue) {
         // Return false for the predicate of the peeled iteration
         return mlir::arith::ConstantIntOp::create(
             rewriter, predOp.getLoc(), predOp.getResult().getType(), 0);
-      } else {
-        if (predOp.getStage() == predOp.getMaxStage() - 1) {
-          return mlir::arith::ConstantIntOp::create(
-              rewriter, predOp.getLoc(), predOp.getResult().getType(), 1);
-        } else {
-          OpBuilder::InsertionGuard guard(rewriter);
-          rewriter.setInsertionPoint(op);
-          return triton::emitPredicateForStage(
-                     rewriter, predOp.getIv(), predOp.getUb(), predOp.getStep(),
-                     predOp.getMaxStage(), predOp.getStage())
-              .getDefiningOp();
-        }
       }
+      if (predOp.getStage() == predOp.getMaxStage() - 1) {
+        return mlir::arith::ConstantIntOp::create(
+            rewriter, predOp.getLoc(), predOp.getResult().getType(), 1);
+      }
+      return triton::emitPredicateForStage(
+                 rewriter, predOp.getIv(), predOp.getUb(), predOp.getStep(),
+                 predOp.getMaxStage(), predOp.getStage())
+          .getDefiningOp();
     }
     if (auto maskOp = dyn_cast<triton::gpu::MaskOp>(op)) {
       if (isEpilogue) {
@@ -145,6 +144,7 @@ static void expandLoops(ModuleOp moduleOp) {
   }
   assert(moduleOp.getOps<triton::gpu::PredicateStageOp>().empty() &&
          "PredicateStageOp should be resolved after the pipeline expansion");
+  assert(verify(moduleOp).succeeded());
   resolveMaskOp(moduleOp, peeledMaskOps);
 }
 

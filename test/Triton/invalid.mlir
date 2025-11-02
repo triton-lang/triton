@@ -541,6 +541,21 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}
 
 // -----
 
+module {
+  tt.func @dot_scaled_invalid_dims(
+    %a: tensor<128x128xf8E4M3FN>,
+    %b: tensor<128x128xf8E4M3FN>,
+    %a_scale: tensor<128x128xi8>,
+    %b_scale: tensor<128x4xi8>) -> tensor<128x128xf32> {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32>
+    // expected-error @below {{scales K dimension must match the operand K divided by the scale factor}}
+    %result = tt.dot_scaled %a scale %a_scale, %b scale %b_scale, %cst lhs = e4m3 rhs = e4m3 {fastMath = true} : tensor<128x128xf8E4M3FN>, tensor<128x128xi8>  * tensor<128x128xf8E4M3FN>, tensor<128x4xi8>-> tensor<128x128xf32>
+    tt.return %result : tensor<128x128xf32>
+  }
+}
+
+// -----
+
 tt.func @unsplat_invalid(%arg0: tensor<128xf32>) {
   // expected-error @below {{source tensor must have exactly one element}}
   %0 = tt.unsplat %arg0 : tensor<128xf32>

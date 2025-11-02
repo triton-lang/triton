@@ -185,7 +185,7 @@ def test_max_allowable_mn(monkeypatch):
             k,
             None,
             False,
-            False,
+            True,
             False,
             0,
             False,

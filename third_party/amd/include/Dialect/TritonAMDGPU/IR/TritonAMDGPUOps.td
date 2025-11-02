@@ -41,6 +41,7 @@ include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "TritonAMDGPUDialect.td"
 include "TritonAMDGPUAttrDefs.td"
+include "TritonAMDGPUOpInterfaces.td"
 
 
 class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
@@ -283,6 +284,7 @@ def CondBarrierOp : TT_AMDGPU_Op<"cond_barrier"> {
 def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
   SameLoadStoreOperandsAndResultEncoding,
   AttrSizedOperandSegments,
+  BufferOpInterface,
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
@@ -328,6 +330,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
 
 def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
   AttrSizedOperandSegments,
+  BufferOpInterface,
   TypesMatchWith<"dest element type matches pointee type of ptr", "dest", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"infer mask shape from offsets",
                  "offsets", "mask", "getI1SameShape($_self)",
@@ -364,6 +367,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
 def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
   AttrSizedOperandSegments,
   SameLoadStoreOperandsAndResultEncoding,
+  BufferOpInterface,
   TypesMatchWith<"result element type matches the value type", "result", "value", "$_self">,
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
@@ -410,6 +414,7 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
 //===----------------------------------------------------------------------===//
 def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
   SameLoadStoreOperandsAndResultEncoding,
+  BufferOpInterface,
   TypesMatchWith<"result element type matches the val type", "result", "val", "$_self">,
   TypesMatchWith<"result element type matches the cmp type", "result", "cmp", "$_self">,
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
@@ -452,6 +457,7 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
 def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
   AttrSizedOperandSegments,
   SameLoadStoreOperandsEncoding,
+  BufferOpInterface,
   TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
@@ -773,6 +779,23 @@ def AsyncTDMWait : TT_AMDGPU_Op<"async_tdm_wait"> {
   let results = (outs TTG_AsyncToken:$retToken);
 
   let assemblyFormat = "$asyncToken attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// AsyncWait
+//===----------------------------------------------------------------------===//
+
+def AsyncWaitOp : TT_AMDGPU_Op<"async_wait"> {
+  let summary = "Wait until there are less than or equal to the given number of outstanding async intrinsics";
+  let description = [{
+    Similar to ttg.async_wait but instead of waiting on oustanding ttg.async_commit_groups
+    this op waits on the number of outstanding async instructions/intrinsics as required for the
+    lowering to LLVM on the AMD backend.
+  }];
+
+  let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num_inst);
+  let results = (outs TTG_AsyncToken:$retToken);
+  let assemblyFormat = "($asyncToken^)? attr-dict";
 }
 
 #endif
