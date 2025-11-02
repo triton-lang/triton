@@ -135,7 +135,7 @@ module {
 // -----
 
 module {
-  // expected-remark @below {{cf_if_only}}
+  // expected-remark @below {{scf_cond}}
   tt.func @scf_cond(%cond: i1) {
     scf.if %cond {
       // expected-remark @below {{scope id = 0}}
