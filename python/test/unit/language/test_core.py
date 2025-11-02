@@ -2748,6 +2748,23 @@ def test_histogram(M, N, device):
     assert (z_torch == z).all()
 
 
+@pytest.mark.interpreter
+def test_histogram_silent_data_corruption(device):
+
+    @triton.jit
+    def histogram_kernel(x_ptr, z_ptr):
+        offset = tl.arange(0, 1)
+        x = tl.load(x_ptr + offset)
+        z = tl.histogram(x, 1)
+        tl.store(z_ptr + offset, z)
+
+    x = torch.ones(1, device=device, dtype=torch.int32)
+    z = torch.ones(2, device=device, dtype=torch.int32)
+
+    histogram_kernel[(1, )](x, z)
+    assert z[1] == 1, f"Second element shouldn't be affected, expected_buffer=[1, 1], actual_buffer={z}"
+
+
 # ------------------------
 # test histogram with mask
 # ------------------------

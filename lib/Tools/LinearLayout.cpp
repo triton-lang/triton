@@ -462,6 +462,40 @@ LinearLayout LinearLayout::reshapeOuts(
   return LinearLayout(std::move(newBases), newOutDims, isSurjective());
 }
 
+LinearLayout LinearLayout::resizeInDim(StringAttr inDim,
+                                       int32_t newSize) const {
+  assert(llvm::isPowerOf2_32(newSize));
+  assert(newSize <= getInDimSize(inDim));
+  auto newBases = bases;
+  newBases[inDim].resize(llvm::Log2_32(newSize));
+  return LinearLayout(std::move(newBases), getOutDims(),
+                      /*requiresSurjective=*/false);
+}
+
+LinearLayout LinearLayout::resizeOutDim(StringAttr outDim,
+                                        int32_t newSize) const {
+  assert(llvm::isPowerOf2_32(newSize));
+  assert(newSize <= getOutDimSize(outDim));
+  auto newBases = bases;
+  // Zero-out the basis vectors that are greater than or equal to the new size
+  for (auto &[inDim, inDimBases] : newBases) {
+    for (auto &basis : inDimBases) {
+      auto &b = basis[getOutDimIndex(outDim)];
+      if (b >= newSize) {
+        b = 0;
+      }
+    }
+  }
+  auto outDims = getOutDims();
+  for (auto &[outDim, outDimSize] : outDims) {
+    if (outDim == outDim) {
+      outDimSize = newSize;
+    }
+  }
+  return LinearLayout(std::move(newBases), outDims,
+                      /*requiresSurjective=*/false);
+}
+
 LinearLayout LinearLayout::concatIns(const LinearLayout &other) const {
   assert(llvm::to_vector(getOutDimNames()) ==
              llvm::to_vector(other.getOutDimNames()) &&

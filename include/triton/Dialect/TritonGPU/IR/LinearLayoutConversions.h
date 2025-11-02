@@ -117,19 +117,6 @@ chooseDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
                      int32_t elemBitWidth, unsigned instBitWidth,
                      unsigned numLanesInShuffleGroup);
 
-LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
-                                           int numWarps);
-
-std::optional<LinearLayout>
-getTmemLoadStoreLayout16x256(int M, int N, RankedTensorType oldType,
-                             int numWarps);
-
-// Return a layout valid for TMemLoad op for a tmem layout of block MxN that
-// distribute the data long M for the warp groups. This doesn't affect the TMem
-// layout it just returns a distributed layout compatible for tmem_load.
-LinearLayout getTmemLoadLayoutSplitLongM(int M, int N, RankedTensorType oldType,
-                                         int numWarps);
-
 // Create LinearLayout for scale in scaled mfma.
 LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                                          ArrayRef<int64_t> dotOperandShape,
@@ -160,6 +147,16 @@ std::optional<LinearLayout> chooseMfmaLikeStoreLayout(RankedTensorType valType);
 // Create the core layout (atom in the PTX manual) a given nvmma shared encoding
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
                                        bool disableSwizzle);
+
+// Make a LinearLayout that maps a block-id to an N-dimensional index.
+//
+// The tensor is split up into CTAsPerCGA pieces, which are distributed among
+// the CTAsPerCGA CTAs (i.e. blocks) in the CGA (i.e. groups).
+//
+// See the nomenclature note at the top of the LinearLayoutConversions.cpp file
+// for an explanation of why this is called makeCgaLayout when it accepts a
+// CTALayoutAttr.
+LinearLayout makeCgaLayout(CTALayoutAttr layout);
 
 } // namespace mlir::triton::gpu
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

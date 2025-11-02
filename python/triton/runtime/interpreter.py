@@ -603,9 +603,17 @@ class InterpreterBuilder:
     def create_histogram(self, data, bins, mask):
         if mask is None:
             mask = TensorHandle(np.ones_like(data.data, dtype=bool), tl.int1)
+
+        # By default np.histogram returns int64 dtype values
+        # Docs specify that returned dtype is taken based on optional weights.dtype
+        # This is fix for interpreter cases where for example int32 tensor is being passed
+        # But unexpectedly int64 values are being returned causing
+        # tl.store to write 8 bytes instead of 4 bytes which lead to silent data corruption
+        dummy_weights = np.ones_like(data.data, dtype=data.data.dtype)
+
         # force all masked elements to zero
         data = np.where(mask.data, data.data, np.zeros_like(data.data))
-        histogram = np.histogram(data, bins=bins, range=(0, bins))[0]
+        histogram = np.histogram(data, bins=bins, range=(0, bins), weights=dummy_weights)[0]
         # remove overcounted elements
         histogram[0] -= np.logical_not(mask.data).sum()
         return TensorHandle(histogram, tl.int32)

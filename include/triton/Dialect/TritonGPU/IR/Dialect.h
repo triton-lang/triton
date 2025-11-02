@@ -45,6 +45,11 @@ constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
 constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";
 constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
+// FIXME: rename to match above
+constexpr static char kPartitionAttrName[] = "ttg.partition";
+constexpr static char kPartitionOutputsAttrName[] = "ttg.partition.outputs";
+constexpr static char kPartitionStagesAttrName[] = "ttg.partition.stages";
+constexpr static char kWarpSpecializeTagAttrName[] = "ttg.warp_specialize.tag";
 
 // Find the contextual number of warps on which this operation is executed.
 int lookupNumWarps(Operation *op);
@@ -293,6 +298,10 @@ LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
                                   ShapedType dstTy);
 // Verify a memory allocation operation.
 LogicalResult verifyAllocOp(Operation *op, Value src, MemDescType dstTy);
+
+std::optional<SetVector<int>> getPartitionIds(Operation *op);
+std::optional<int> getNumOutputPartitionIds(Operation *op);
+std::optional<SetVector<int>> getOutputPartitionIds(Operation *op, int idx);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_
