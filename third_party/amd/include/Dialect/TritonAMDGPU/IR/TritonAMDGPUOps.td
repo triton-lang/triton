@@ -284,7 +284,7 @@ def CondBarrierOp : TT_AMDGPU_Op<"cond_barrier"> {
 def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
   SameLoadStoreOperandsAndResultEncoding,
   AttrSizedOperandSegments,
-  BufferOpAddressinInterface,
+  BufferOpInterface,
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
@@ -330,7 +330,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
 
 def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
   AttrSizedOperandSegments,
-  BufferOpAddressinInterface,
+  BufferOpInterface,
   TypesMatchWith<"dest element type matches pointee type of ptr", "dest", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"infer mask shape from offsets",
                  "offsets", "mask", "getI1SameShape($_self)",
@@ -367,7 +367,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
 def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
   AttrSizedOperandSegments,
   SameLoadStoreOperandsAndResultEncoding,
-  BufferOpAddressinInterface,
+  BufferOpInterface,
   TypesMatchWith<"result element type matches the value type", "result", "value", "$_self">,
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
@@ -414,7 +414,7 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
 //===----------------------------------------------------------------------===//
 def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
   SameLoadStoreOperandsAndResultEncoding,
-  BufferOpAddressinInterface,
+  BufferOpInterface,
   TypesMatchWith<"result element type matches the val type", "result", "val", "$_self">,
   TypesMatchWith<"result element type matches the cmp type", "result", "cmp", "$_self">,
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
@@ -457,7 +457,7 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
 def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
   AttrSizedOperandSegments,
   SameLoadStoreOperandsEncoding,
-  BufferOpAddressinInterface,
+  BufferOpInterface,
   TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",

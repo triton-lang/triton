@@ -1,9 +1,9 @@
-#ifndef AMDGPU_OP_INTERFACES
-#define AMDGPU_OP_INTERFACES
+#ifndef TRITON_AMDGPU_OP_INTERFACES
+#define TRITON_AMDGPU_OP_INTERFACES
 
 include "mlir/IR/OpBase.td"
 
-def BufferOpAddressinInterface : OpInterface<"BufferOpAddressinInterface"> {
+def BufferOpInterface : OpInterface<"BufferOpInterface"> {
   let description = [{
     This interface is implemented by buffer load/store operations.
     It provides methods to access common properties such base pointer, offset, mask and others.
@@ -39,4 +39,4 @@ def BufferOpAddressinInterface : OpInterface<"BufferOpAddressinInterface"> {
   ];
 }
 
-#endif // AMDGPU_OP_INTERFACES
+#endif // TRITON_AMDGPU_OP_INTERFACES
