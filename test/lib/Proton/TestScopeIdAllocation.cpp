@@ -30,9 +30,20 @@ struct TestScopeIdAllocationPass
     moduleOp.walk([&](triton::FuncOp funcOp) {
       auto opName = SymbolTable::getSymbolName(funcOp).getValue().str();
       mlir::emitRemark(funcOp.getLoc(), opName);
+      llvm::DenseMap<ScopeIdAllocation::ScopeId, ScopeIdAllocation::ScopeId>
+          parentScopeIdMap;
+      for (auto [childId, parentId] :
+           moduleScopeIdAllocation.getScopeIdParents(funcOp)) {
+        parentScopeIdMap.insert({childId, parentId});
+      }
       funcOp.walk([&](RecordOp recordOp) {
         auto scopeId = moduleScopeIdAllocation.getOpScopeId(recordOp);
         mlir::emitRemark(recordOp.getLoc()) << "scope id = " << scopeId;
+        int64_t parentId = -1;
+        if (auto parentIt = parentScopeIdMap.find(scopeId);
+            parentIt != parentScopeIdMap.end())
+          parentId = parentIt->second;
+        mlir::emitRemark(recordOp.getLoc()) << "scope parent id = " << parentId;
       });
     });
   }
