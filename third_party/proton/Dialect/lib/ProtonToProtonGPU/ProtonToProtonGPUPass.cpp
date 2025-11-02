@@ -108,10 +108,11 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
           record.erase();
         });
 
-        // Save warp-level context after profiling.
+        // Finalize and save warp-level context before each warp returns.
         partition.walk([&](triton::gpu::WarpReturnOp ret) {
           builder.setInsertionPoint(ret);
           gpu::SaveCtxOp::create(builder, loc, newSegment, profileMemArg);
+          gpu::FinalizeOp::create(builder, loc, newSegment, profileMemArg);
         });
       }
     }
@@ -320,6 +321,7 @@ public:
     func.walk([&](triton::ReturnOp ret) {
       builder.setInsertionPoint(ret);
       mlir::gpu::BarrierOp::create(builder, loc);
+      gpu::SaveCtxOp::create(builder, loc, segment, profileMem);
       gpu::FinalizeOp::create(builder, loc, segment, profileMem);
     });
 
