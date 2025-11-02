@@ -175,6 +175,7 @@ def test_record(method, tmp_path: pathlib.Path):
     assert loc_line is not None
     assert "line: " in loc_line and "line: 0" not in loc_line
 
+
 @pytest.mark.parametrize("hook", ["triton", None])
 def test_tree(tmp_path: pathlib.Path, hook):
 
