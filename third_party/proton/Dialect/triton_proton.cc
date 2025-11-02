@@ -79,7 +79,7 @@ void init_triton_proton(py::module &&m) {
           auto nameAttr = mlir::StringAttr::get(opBuilder.getContext(),
                                                 llvm::StringRef(name));
           auto loc = opBuilder.getLastLoc();
-          proton::RecordOp::create(opBuilder, loc, isStart, nameAttr);
+          opBuilder.create<proton::RecordOp>(loc, isStart, nameAttr);
         });
 
   m.def("add_convert_proton_to_protongpu",
