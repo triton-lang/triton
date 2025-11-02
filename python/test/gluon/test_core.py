@@ -541,8 +541,9 @@ def test_amd_direct_load_to_shared(use_buffer_load):
             cdna4_async_copy.buffer_load_to_shared(smem, a_ptr, offsets)
         else:
             cdna4_async_copy.global_load_to_shared(smem, a_ptr + offsets)
+        cdna4_async_copy.commit_group()
 
-        cdna4_async_copy.async_wait(0)
+        cdna4_async_copy.wait_group(0)
         a = cdna4_async_copy.load_shared_relaxed(smem, blocked)
 
         ttgl.store(b_ptr + offsets, a)
