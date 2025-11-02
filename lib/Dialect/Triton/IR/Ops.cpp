@@ -356,6 +356,44 @@ bool DotScaledOp::verifyOutputDims() {
   return true;
 }
 
+LogicalResult DotScaledOp::verify() {
+  auto aShape = this->getA().getType().getShape();
+  int64_t rank = aShape.size();
+
+  auto k = aShape[rank - 1];
+  if (this->getAElemType() == ScaleDotElemType::E2M1) {
+    if (this->getLhsKPack())
+      k *= 2;
+  }
+  auto cShape = this->getC().getType().getShape();
+  int64_t mDim = cShape[cShape.size() - 2];
+  int64_t nDim = cShape[cShape.size() - 1];
+
+  if (getAScale()) {
+    auto aScaleShape = getAScale().getType().getShape();
+    if (aScaleShape[rank - 2] != mDim)
+      return this->emitError(
+          "scales M dimension must match the operand M dimension");
+    int scale_factor =
+        isa<Float8E4M3FNType>(getAScale().getType().getElementType()) ? 16 : 32;
+    if (aScaleShape[rank - 1] != k / scale_factor)
+      return this->emitError("scales K dimension must match the operand K "
+                             "divided by the scale factor");
+  }
+  if (getBScale()) {
+    auto bScaleShape = getBScale().getType().getShape();
+    if (bScaleShape[rank - 2] != nDim)
+      return this->emitError(
+          "scales N dimension must match the operand N dimension");
+    int scale_factor =
+        isa<Float8E4M3FNType>(getBScale().getType().getElementType()) ? 16 : 32;
+    if (bScaleShape[rank - 1] != k / scale_factor)
+      return this->emitError("scales K dimension must match the operand K "
+                             "divided by the scale factor");
+  }
+  return success();
+}
+
 //-- MakeRangeOp --
 OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
   // make_range(start, start + 1) -> constant(start)

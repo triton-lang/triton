@@ -680,9 +680,9 @@ module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num
   // CHECK-LABEL: @sm120_dot_scaled_basic
   tt.func public @sm120_dot_scaled_basic(
     %a: tensor<128x32xi8, #blocked_k>,
-    %scale_a: tensor<128x2xi8, #blocked>,
+    %scale_a: tensor<128x1xi8, #blocked>,
     %b: tensor<32x128xi8, #blocked>,
-    %scale_b: tensor<128x2xi8, #blocked>
+    %scale_b: tensor<128x1xi8, #blocked>
   ) -> tensor<128x128xf32, #blocked> {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
     // CHECK-DAG: tt.dot_scaled
@@ -690,8 +690,8 @@ module attributes {"ttg.target" = "cuda:120", "ttg.num-ctas" = 1 : i32, "ttg.num
     // CHECK-DAG: #linear1
     // CHECK-NOT: ttng.tc_gen5_mma_scaled
     %d = tt.dot_scaled %a scale %scale_a, %b scale %scale_b, %cst lhs = e4m3 rhs = e4m3 {fastMath = false}
-      : tensor<128x32xi8, #blocked_k>, tensor<128x2xi8, #blocked>
-        * tensor<32x128xi8, #blocked>, tensor<128x2xi8, #blocked>
+      : tensor<128x32xi8, #blocked_k>, tensor<128x1xi8, #blocked>
+        * tensor<32x128xi8, #blocked>, tensor<128x1xi8, #blocked>
         -> tensor<128x128xf32, #blocked>
     tt.return %d : tensor<128x128xf32, #blocked>
   }

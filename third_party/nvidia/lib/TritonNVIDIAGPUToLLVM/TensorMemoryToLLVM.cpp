@@ -278,6 +278,7 @@ SmallVector<Value> lowerTMemLdSt(Location loc,
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
+  auto kBlock = str_attr("block");
 
   auto kCol = str_attr("col");
   auto kRow = str_attr("row");
@@ -298,11 +299,14 @@ SmallVector<Value> lowerTMemLdSt(Location loc,
   // Map warpId to rows 32 and 64
   auto warpIdInGroup = b.and_(warpId, b.i32_val(3));
   tmemBase = b.add(tmemBase, b.shl(warpIdInGroup, b.i32_val(5 + 16)));
+  // The block offset is already added to the tmemBase
   // Add warp groups to tmemBase
   if (reps.getInDimSize(kWarp) > 4) {
-    auto rowCol = applyLinearLayout(
-        loc, rewriter, reps,
-        {{kReg, b.i32_val(0)}, {kLane, b.i32_val(0)}, {kWarp, warpId}});
+    auto rowCol = applyLinearLayout(loc, rewriter, reps,
+                                    {{kReg, b.i32_val(0)},
+                                     {kLane, b.i32_val(0)},
+                                     {kWarp, warpId},
+                                     {kBlock, b.i32_val(0)}});
     auto [row, col] = getRowCol(rowCol);
     tmemBase = b.add(tmemBase,
                      b.or_(b.shl(row, b.i32_val(16)), col, /*disjoint*/ true));
@@ -311,7 +315,7 @@ SmallVector<Value> lowerTMemLdSt(Location loc,
   SmallVector<Value> resultVals;
   for (int i = 0; i < reps.getInDimSize(kReg); i += valsPerMessage) {
     auto [row, col] =
-        getRowCol(reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}}));
+        getRowCol(reps.apply({{kReg, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}}));
     // Encode row into the base address and pass col as an immediate colOffset.
     int staticOffset = col | (row << 16);
     if (isStore) {

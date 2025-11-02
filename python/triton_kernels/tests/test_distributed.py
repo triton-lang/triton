@@ -120,8 +120,8 @@ def test_make_expt_assignment(n_expts_shard, n_expts_tot, affinity_mode):
 
 def routing(logits, n_expts_act, all_gather=False, y_indx=None):
     sparse_logits = topk(logits, n_expts_act, all_gather=all_gather, y_indx=y_indx)
-    dispatch_indx = sparse_logits.mask_metadata.col_sorted_indx
-    combine_indx = sparse_logits.mask_metadata.row_sorted_indx
+    dispatch_indx = sparse_logits.mask_metadata.row_sorted_indx
+    combine_indx = sparse_logits.mask_metadata.col_sorted_indx
     ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
     gate_scal = sparse_logits.vals.flatten()[combine_indx]
     routing_data = RoutingData(gate_scal, ragged_batch_metadata.slice_sizes, logits.shape[-1], n_expts_act,
@@ -146,8 +146,8 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
     # expert histogram, dispatch/combine indx
     active_indx = l_global_active.indx
     expt_sizes = l_global_active.mask_metadata.col_sum
-    dispatch_indx = l_global_active.mask_metadata.col_sorted_indx
-    combine_indx = l_global_active.mask_metadata.row_sorted_indx
+    dispatch_indx = l_global_active.mask_metadata.row_sorted_indx
+    combine_indx = l_global_active.mask_metadata.col_sorted_indx
     # ragged tensor metadata
     x_global_metadata = make_ragged_tensor_metadata(expt_sizes, dispatch_indx.shape[0])
     # convert x from dp-local to expert-sorted, ep-local

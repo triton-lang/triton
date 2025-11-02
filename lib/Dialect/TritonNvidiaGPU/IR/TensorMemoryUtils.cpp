@@ -299,19 +299,9 @@ computeTMemLdStEncodingInfo(RankedTensorType regTy, MemDescType memTy,
   cvt = LinearLayout(bases, cvt.getOutDims(),
                      /*isSurjective=*/cvt.isSurjective());
 
-  // tmemBase already encodes CTA/block offsets so we just remove them from the
-  // cvt
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto kCol = StringAttr::get(ctx, "col");
-  auto nCTAs = cvt.getInDimSize(kBlock);
-  auto maybeQuot =
-      divideRight(cvt, LinearLayout::identity1D(nCTAs, kBlock, kCol));
-  assert(maybeQuot.has_value());
-  auto quot = maybeQuot->unsqueezeIn(kBlock);
-
   bool isScales = isa<TensorMemoryScalesEncodingAttr>(memTy.getEncoding());
   int bitwidth = memTy.getElementTypeBitWidth();
-  return lowerTMemLdSt(quot, maxnreg, bitwidth, isScales, emitError);
+  return lowerTMemLdSt(cvt, maxnreg, bitwidth, isScales, emitError);
 }
 
 } // namespace mlir::triton::nvidia_gpu
