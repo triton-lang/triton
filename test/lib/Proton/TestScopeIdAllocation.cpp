@@ -43,8 +43,7 @@ struct TestScopeIdAllocationPass
         if (auto parentIt = parentScopeIdMap.find(scopeId);
             parentIt != parentScopeIdMap.end())
           parentId = parentIt->second;
-        mlir::emitRemark(recordOp.getLoc())
-            << "scope parent id = " << parentId;
+        mlir::emitRemark(recordOp.getLoc()) << "scope parent id = " << parentId;
       });
     });
   }

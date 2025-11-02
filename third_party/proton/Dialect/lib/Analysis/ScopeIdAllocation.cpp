@@ -1,5 +1,5 @@
-#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "Analysis/ScopeIdAllocation.h"
+#include "mlir/Analysis/TopologicalSortUtils.h"
 
 namespace mlir {
 namespace triton::proton {
@@ -28,15 +28,11 @@ struct BlockInfo {
     return this->activeScopes.contains(scopeId);
   }
 
-  void erase(ScopeId scopeId) {
-    this->activeScopes.erase(scopeId);
-  }
+  void erase(ScopeId scopeId) { this->activeScopes.erase(scopeId); }
 
-  void insert(ScopeId scopeId) {
-    this->activeScopes.insert(scopeId);
-  }
+  void insert(ScopeId scopeId) { this->activeScopes.insert(scopeId); }
 
-  bool operator ==(const BlockInfo &other) const {
+  bool operator==(const BlockInfo &other) const {
     return this->activeScopes == other.activeScopes;
   }
 
@@ -116,7 +112,8 @@ void ScopeIdAllocation::run() {
 }
 
 void ScopeIdAllocation::liveness() {
-  llvm::DenseMap<StringRef, std::pair</*id=*/size_t, /*isStart=*/bool>> nameToIdMap;
+  llvm::DenseMap<StringRef, std::pair</*id=*/size_t, /*isStart=*/bool>>
+      nameToIdMap;
   llvm::DenseMap<ScopeId, RecordOp> idToOpMap;
   ScopeId scopeId = 0;
 
@@ -126,7 +123,8 @@ void ScopeIdAllocation::liveness() {
     if (!nameToIdMap.contains(name)) {
       nameToIdMap[name] = {scopeId, /*isStart=*/recordOp.getIsStart()};
       idToNameMap[scopeId] = name;
-      LDBG("Assigning new scope scopeId " << scopeId << " to op '" << recordOp << "'");
+      LDBG("Assigning new scope scopeId " << scopeId << " to op '" << recordOp
+                                          << "'");
       opToIdMap[recordOp] = scopeId;
       idToOpMap[scopeId] = recordOp;
       scopeId++;
@@ -139,7 +137,8 @@ void ScopeIdAllocation::liveness() {
             << (recordOp.getIsStart() ? "start" : "end") << " record";
       } else {
         // Matching pair found
-        LDBG("Found matching pair for scope name '" << name << "' with scopeId " << existingId);
+        LDBG("Found matching pair for scope name '" << name << "' with scopeId "
+                                                    << existingId);
         opToIdMap[recordOp] = existingId;
         idToOpMap[existingId] = recordOp;
         nameToIdMap.erase(name);
@@ -164,7 +163,8 @@ void ScopeIdAllocation::reachability() {
 
   std::deque<VirtualBlock> virtualBlockList;
   funcOp->walk<WalkOrder::PreOrder>([&](Block *block) {
-    // Seed the worklist with entry blocks of regions that are isolated-from-above.
+    // Seed the worklist with entry blocks of regions that are
+    // isolated-from-above.
     if (block->isEntryBlock() &&
         !isa<RegionBranchOpInterface>(block->getParentOp()))
       virtualBlockList.emplace_back(block, Block::iterator());
@@ -174,11 +174,13 @@ void ScopeIdAllocation::reachability() {
   while (!virtualBlockList.empty()) {
     VirtualBlock &virtualBlock = virtualBlockList.front();
     virtualBlockList.pop_front();
-    // Evaluate the transfer function for this block starting from the cached input state.
+    // Evaluate the transfer function for this block starting from the cached
+    // input state.
     auto inputBlockInfo = inputBlockInfoMap[virtualBlock];
     SmallVector<VirtualBlock> successors;
-    Block::iterator startIt =
-        virtualBlock.second.isValid() ? std::next(virtualBlock.second) : virtualBlock.first->begin();
+    Block::iterator startIt = virtualBlock.second.isValid()
+                                  ? std::next(virtualBlock.second)
+                                  : virtualBlock.first->begin();
     for (Operation &op : llvm::make_range(startIt, virtualBlock.first->end())) {
       if (op.hasTrait<OpTrait::IsTerminator>() ||
           isa<RegionBranchOpInterface>(op)) {
@@ -215,8 +217,9 @@ void ScopeIdAllocation::reachability() {
   for (auto iter : inputBlockInfoMap) {
     auto &virtualBlock = iter.first;
     auto inputBlockInfo = iter.second;
-    Block::iterator startIt =
-        virtualBlock.second.isValid() ? std::next(virtualBlock.second) : virtualBlock.first->begin();
+    Block::iterator startIt = virtualBlock.second.isValid()
+                                  ? std::next(virtualBlock.second)
+                                  : virtualBlock.first->begin();
     for (Operation &op : llvm::make_range(startIt, virtualBlock.first->end())) {
       if (auto recordOp = dyn_cast<RecordOp>(&op)) {
         auto scopeId = opToIdMap.lookup(recordOp);
@@ -231,14 +234,14 @@ void ScopeIdAllocation::reachability() {
           if (inputBlockInfo.contains(scopeId)) {
             inputBlockInfo.erase(scopeId);
           } else {
-            mlir::emitError(recordOp.getLoc(), "The scope name '") << name << "' is closed without being opened";
+            mlir::emitError(recordOp.getLoc(), "The scope name '")
+                << name << "' is closed without being opened";
           }
         }
       }
     }
   }
 }
-
 
 void ScopeIdAllocation::dominance() {
   // Stage 3: derive scope parentage and verify dominance constraints.
@@ -277,7 +280,7 @@ void ScopeIdAllocation::dominance() {
       auto *parentStartOp = sortedStartRecordOps[j];
       auto parentScopeId = opToIdMap.lookup(parentStartOp);
       auto parentEndOp = endRecordMap.lookup(parentScopeId);
-      if (domInfo.dominates(parentStartOp, startOp) && 
+      if (domInfo.dominates(parentStartOp, startOp) &&
           domInfo.dominates(endOp, parentEndOp)) {
         auto parentId = opToIdMap.lookup(parentStartOp);
         auto childId = opToIdMap.lookup(startOp);
@@ -288,8 +291,8 @@ void ScopeIdAllocation::dominance() {
   }
 }
 
-void ScopeIdAllocation::visitTerminator(
-    Operation *op, SmallVector<VirtualBlock> &successors) {
+void ScopeIdAllocation::visitTerminator(Operation *op,
+                                        SmallVector<VirtualBlock> &successors) {
   if (isa<BranchOpInterface>(op)) {
     // Collect the block successors of the branch.
     for (Block *successor : op->getSuccessors())

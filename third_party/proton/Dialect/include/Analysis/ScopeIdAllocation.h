@@ -14,7 +14,6 @@
 namespace mlir {
 namespace triton::proton {
 
-
 class ScopeIdAllocation {
 public:
   using ScopeId = size_t;
