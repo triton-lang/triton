@@ -160,7 +160,6 @@ def test_record(method, tmp_path: pathlib.Path):
     assert start_loc is not None and end_loc is not None
 
 
-
 @pytest.mark.parametrize("hook", ["triton", None])
 def test_tree(tmp_path: pathlib.Path, hook):
 

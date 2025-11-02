@@ -6,10 +6,10 @@
 #include "Dialect/Proton/IR/Dialect.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
 #include "Dialect/ProtonGPU/Transforms/Passes.h"
+#include "ir.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
-#include "ir.h"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
