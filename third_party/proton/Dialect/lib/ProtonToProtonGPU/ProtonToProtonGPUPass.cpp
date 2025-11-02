@@ -80,8 +80,8 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
 
   // Replace all proton::RecordOp in the worker warps.
   func->walk([&](triton::gpu::WarpSpecializePartitionsOp partitions) {
-    auto loc = partitions.getLoc();
     for (auto &partition : partitions.getPartitionRegions()) {
+      auto loc = partitions.getLoc();
       if (hasOperator<Region, proton::RecordOp>(&partition)) {
         Block &block = partition.front();
         builder.setInsertionPointToStart(&block);
@@ -100,11 +100,11 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
         partition.walk([&](proton::RecordOp record) {
           builder.setInsertionPoint(record);
 
-          Value counter =
-              gpu::ReadCounterOp::create(builder, loc, clkType, metricType);
+          Value counter = gpu::ReadCounterOp::create(builder, record.getLoc(),
+                                                     clkType, metricType);
           int scopeId = scopeInfo.getOpScopeId(record);
-          gpu::CircularStoreOp::create(builder, loc, newSegment, counter,
-                                       record.getIsStart(), scopeId);
+          gpu::CircularStoreOp::create(builder, record.getLoc(), newSegment,
+                                       counter, record.getIsStart(), scopeId);
           record.erase();
         });
 
@@ -120,13 +120,12 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
   // Replace all proton::RecordOp in the master warps. For the master warps, we
   // don't need to restore warp-level context and we save the context in the end
   // of kernel (right before FinalizeOp).
-  auto loc = func.getLoc();
   func->walk([&](proton::RecordOp record) {
     builder.setInsertionPoint(record);
-    Value counter =
-        gpu::ReadCounterOp::create(builder, loc, clkType, metricType);
+    Value counter = gpu::ReadCounterOp::create(builder, record.getLoc(),
+                                               clkType, metricType);
     int scopeId = scopeInfo.getOpScopeId(record);
-    gpu::CircularStoreOp::create(builder, loc, segment, counter,
+    gpu::CircularStoreOp::create(builder, record.getLoc(), segment, counter,
                                  record.getIsStart(), scopeId);
     record.erase();
   });

@@ -12,7 +12,7 @@ import triton.language.semantic
 import triton.profiler as proton
 import triton.profiler.language as pl
 from triton.tools.tensor_descriptor import TensorDescriptor
-from triton._internal_testing import is_hip_cdna2, supports_tma, supports_ws
+from triton._internal_testing import is_hip_cdna2, supports_tma, supports_ws, is_cuda
 
 pl.enable_semantic("triton")
 
@@ -145,6 +145,7 @@ def test_record(method, tmp_path: pathlib.Path):
     assert "proton.record start" in ttir
     assert "proton.record end" in ttir
 
+    # check ttir line info
     start_loc = None
     end_loc = None
     for line in ttir.split("\n"):
@@ -159,6 +160,20 @@ def test_record(method, tmp_path: pathlib.Path):
 
     assert start_loc is not None and end_loc is not None
 
+    # check llir line info
+    llir_lines = pgm.asm["llir"].splitlines()
+    clock_instr = "clock" if is_cuda() else "memtime"
+    clock_loc = None
+    for line in llir_lines:
+        if clock_instr not in line or "!dbg" not in line:
+            continue
+        suffix = line.split("!dbg ")[1]
+        clock_loc = suffix.split(",")[0].split()[0]
+        break
+    assert clock_loc is not None
+    loc_line = next((line for line in llir_lines if clock_loc in line and "DILocation" in line), None)
+    assert loc_line is not None
+    assert "line: " in loc_line and "line: 0" not in loc_line
 
 @pytest.mark.parametrize("hook", ["triton", None])
 def test_tree(tmp_path: pathlib.Path, hook):
