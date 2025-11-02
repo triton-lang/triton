@@ -9,6 +9,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
+#include "ir.h"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
@@ -73,11 +74,11 @@ void init_triton_proton(py::module &&m) {
 
   // Proton operations
   m.def("create_proton_record",
-        [](mlir::OpBuilder &opBuilder, bool isStart,
+        [](TritonOpBuilder &opBuilder, bool isStart,
            const std::string &name) -> void {
           auto nameAttr = mlir::StringAttr::get(opBuilder.getContext(),
                                                 llvm::StringRef(name));
-          auto loc = opBuilder.getUnknownLoc();
+          auto loc = opBuilder.getLastLoc();
           proton::RecordOp::create(opBuilder, loc, isStart, nameAttr);
         });
 
