@@ -39,7 +39,7 @@ struct TestScopeIdAllocationPass
       funcOp.walk([&](RecordOp recordOp) {
         auto scopeId = moduleScopeIdAllocation.getOpScopeId(recordOp);
         mlir::emitRemark(recordOp.getLoc()) << "scope id = " << scopeId;
-        ScopeIdAllocation::ScopeId parentId = -1;
+        int64_t parentId = -1;
         if (auto parentIt = parentScopeIdMap.find(scopeId);
             parentIt != parentScopeIdMap.end())
           parentId = parentIt->second;
