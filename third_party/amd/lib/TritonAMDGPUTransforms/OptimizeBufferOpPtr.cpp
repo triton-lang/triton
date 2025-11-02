@@ -108,7 +108,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
   // - offsetInitializer is a value of offset on first loop iteration
   // - incrementOp is an operation that advances offset tensor
   struct BufferOpInfo {
-    amdttg::BufferOpAddressinInterface op;
+    amdttg::BufferOpInterface op;
     Value offsetIncrement;
     Value baseIncrement;
     Value offsetInitializer;
@@ -118,7 +118,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
   // Perform series of checks to decide if given operation could be optimized.
   // If optimization is possible, return filled BufferOpInfo
   static std::optional<BufferOpInfo>
-  analyzeBufferOp(amdttg::BufferOpAddressinInterface op, scf::ForOp targetFor) {
+  analyzeBufferOp(amdttg::BufferOpInterface op, scf::ForOp targetFor) {
     LDBG("Analyzing: " << *op);
     Value maybeOffsetsBlockArg = op.getOffsets();
     auto maybeOffsetDefOp = maybeOffsetsBlockArg.getDefiningOp();
@@ -257,7 +257,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
     // Replace base ptr with incrementing value
     for (auto [info, basePtr, nextBasePtr] :
          llvm::zip(infoList, basePtrs, nextIterBasePtrs)) {
-      auto newBufferOp = cast<amdttg::BufferOpAddressinInterface>(
+      auto newBufferOp = cast<amdttg::BufferOpInterface>(
           mapping.lookup<Operation *>(info.op.getOperation()));
       newBufferOp.getOffsetsMutable().assign(info.offsetInitializer);
       // two cases:
@@ -272,7 +272,7 @@ struct AdvanceBasePointer : public OpRewritePattern<scf::ForOp> {
 
   static SmallVector<BufferOpInfo> collectBufferOps(scf::ForOp forOp) {
     SmallVector<BufferOpInfo> list;
-    forOp.walk([&list, forOp](amdttg::BufferOpAddressinInterface op) {
+    forOp.walk([&list, forOp](amdttg::BufferOpInterface op) {
       auto info = analyzeBufferOp(op, forOp);
       if (info.has_value()) {
         list.push_back(info.value());
