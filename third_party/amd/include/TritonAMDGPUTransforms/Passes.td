@@ -299,12 +299,6 @@ def TritonAMDGPUWarpPipeline: Pass<"tritonamdgpu-warp-pipeline", "mlir::ModuleOp
   }];
 
   let dependentDialects = ["mlir::ROCDL::ROCDLDialect, mlir::triton::amdgpu::TritonAMDGPUDialect"];
-
-  let options = [
-    Option<"numStages", "num-stages",
-        "int32_t", /*default*/"2",
-        "Number of Pipeline stages">,
-    ];
 }
 
 #endif
