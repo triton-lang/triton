@@ -1725,3 +1725,25 @@ tt.func @peeled_prologue_statically_dead(
 }
 
 }
+
+// -----
+
+#A = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// Verify we correctly predicate tt.assert in the prologue.
+// COMMON-LABEL: @pipeline_assert
+// COMMON: %[[PROLOGUE_GUARD:.*]] = arith.cmpi slt, %arg0, %arg1
+// COMMON: %[[PROLOGUE_GUARD_AND_PRED:.*]] = arith.andi %[[PROLOGUE_GUARD]], %arg3
+// COMMON: tt.assert %[[PROLOGUE_GUARD_AND_PRED]]
+// COMMON: scf.for
+// COMMON:   tt.assert
+tt.func @pipeline_assert(%lb : index, %ub : index, %step : index, %pred : i1) -> () {
+  scf.for %iv = %lb to %ub step %step : index {
+    tt.assert %pred, "some assert" {loop.cluster = 1 : i32, loop.stage = 0 : i32} : i1
+    // Add dummy op to span 2 stages
+    %add = arith.addi %lb, %step {loop.cluster = 1 : i32, loop.stage = 1 : i32} : index
+  } {tt.scheduled_max_stage = 2 : i32}
+  tt.return
+}
+}
