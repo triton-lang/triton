@@ -285,6 +285,13 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     atomicRMWOp.getMaskMutable().assign(mask);
     return op;
   }
+  if (auto assertOp = dyn_cast<tt::AssertOp>(op)) {
+    rewriter.setInsertionPoint(assertOp);
+    Value mask = getPredMask(rewriter, assertOp.getCondition().getType(),
+                             assertOp.getCondition(), pred);
+    assertOp.getConditionMutable().assign(mask);
+    return op;
+  }
   if (!op->isRegistered()) {
     // Skip ops from unregistered dialects to make writing lit tests easier.
     return op;
