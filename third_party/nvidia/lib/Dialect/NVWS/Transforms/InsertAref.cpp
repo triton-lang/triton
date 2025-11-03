@@ -119,9 +119,6 @@ ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
   MemDescType memDescType;
   if (result.getDefiningOp<LocalAllocOp>()) {
     memDescType = dyn_cast<MemDescType>(result.getType());
-  } else if (auto opt = isDescLoadAndAlloc<TMEMAllocOp>(result)) {
-    auto descLoadResult = opt->first.getSrc();
-    memDescType = getSmemDescType(descLoadResult.getType(), descLoadResult);
   } else if (auto tensorType = dyn_cast<RankedTensorType>(result.getType())) {
     memDescType = getSmemDescType(tensorType, result);
   } else if (isa<FloatType, IntegerType>(result.getType())) {
@@ -184,11 +181,7 @@ void createNVWSDescriptorLoadOp(OpBuilder &builder, Operation *ttDescLoadOp,
 StageCluster getStageClusterForProducer(Value producedValue) {
   if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(producedValue)) {
     return getStageCluster(opt->second);
-  } else if (auto opt = isDescLoadAndAlloc<TMEMAllocOp>(producedValue)) {
-    return getStageCluster(opt->second);
   } else if (auto opt = isGlobalLoadAndAlloc<LocalAllocOp>(producedValue)) {
-    return getStageCluster(opt->second);
-  } else if (auto opt = isGlobalLoadAndAlloc<TMEMAllocOp>(producedValue)) {
     return getStageCluster(opt->second);
   } else if (auto op = producedValue.getDefiningOp()) {
     return getStageCluster(op);
@@ -224,14 +217,7 @@ SmallVector<Operation *> createArefPut(OpBuilder &builder, ArefCreateOp aref,
     producerKind = AsyncOp::TMALoad;
     staleOps.push_back(alloc);
     staleOps.push_back(descOp);
-  } else if (auto opt = isDescLoadAndAlloc<TMEMAllocOp>(result)) {
-    auto descOp = opt->second;
-    createNVWSDescriptorLoadOp(builder, descOp, dataBuf, producerPartitions,
-                               loc);
-    producerKind = AsyncOp::TMALoad;
-    staleOps.push_back(descOp);
-  } else if (isGlobalLoadAndAlloc<LocalAllocOp>(result) ||
-             isGlobalLoadAndAlloc<TMEMAllocOp>(result)) {
+  } else if (isGlobalLoadAndAlloc<LocalAllocOp>(result)) {
     llvm_unreachable("cpasync not supported yet");
   } else if (auto alloc = result.getDefiningOp<LocalAllocOp>()) {
     triton::gpu::createInto<LocalStoreOp>(builder, loc, producerPartitions,
@@ -508,9 +494,6 @@ bool insertArefs(OpBuilder &builder, scf::ForOp loop, Block *block,
 
   if (auto opt = isDescLoadAndAlloc<LocalAllocOp>(producedValue.result)) {
     // Process the register use as well
-    auto alloc = opt->first;
-    processResultUses(alloc.getSrc());
-  } else if (auto opt = isDescLoadAndAlloc<TMEMAllocOp>(producedValue.result)) {
     auto alloc = opt->first;
     processResultUses(alloc.getSrc());
   }
