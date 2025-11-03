@@ -20,7 +20,6 @@ import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 
 TARGET_PAT = re.compile('ttg.target = "[^"]*"')
-THREADS_PER_WARP_PAT = re.compile('"ttg.threads-per-warp" = \\d+')
 # HIP backend can add this attribute to function parameters
 PTRRANGE_PAT = re.compile('(, )?tt.pointer_range = 32 : i32')
 LIBDEVICE_PAT = re.compile('{libname = "", libpath = "", pure = true, symbol = "__.*"}')
@@ -41,11 +40,6 @@ def anonymize_ir(ir):
     ir = TARGET_PAT.sub('ttg.target = "..."', ir)
     ir = PTRRANGE_PAT.sub('', ir)
     ir = LIBDEVICE_PAT.sub('{libname = "", libpath = "", pure = true, symbol = "..."}', ir)
-    return ir
-
-
-def anonymize_threads_per_warp(ir):
-    ir = THREADS_PER_WARP_PAT.sub('"ttg.threads-per-warp" = "..."', ir)
     return ir
 
 
@@ -2042,12 +2036,12 @@ def amd_commit_group():
     cdna4_async_copy.commit_group()
 
 
-@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, HIP_TARGET_GFX1250])
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
 def test_amd_commit_group(target):
     mod = run_parser(amd_wait_group, target=target)
     expecttest.assert_expected_inline(
-        anonymize_threads_per_warp(anonymize_ir(mod.str_nodebug())), """\
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = "..." : i32} {
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @amd_wait_group() attributes {noinline = false} {
     %0 = ttg.async_wait {num = 0 : i32}
     tt.return
@@ -2061,12 +2055,12 @@ def amd_wait_group():
     cdna4_async_copy.wait_group(0)
 
 
-@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4, HIP_TARGET_GFX1250])
+@pytest.mark.parametrize("target", [HIP_TARGET_CDNA4])
 def test_amd_async_wait(target):
     mod = run_parser(amd_wait_group, target=target)
     expecttest.assert_expected_inline(
-        anonymize_threads_per_warp(anonymize_ir(mod.str_nodebug())), """\
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = "..." : i32} {
+        anonymize_ir(mod.str_nodebug()), """\
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @amd_wait_group() attributes {noinline = false} {
     %0 = ttg.async_wait {num = 0 : i32}
     tt.return

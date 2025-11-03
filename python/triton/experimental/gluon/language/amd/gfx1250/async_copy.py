@@ -13,7 +13,7 @@ __all__ = [
 @builtin
 def global_to_shared(smem, pointer, mask=None, other=None, cache_modifier="", _semantic=None):
     """
-    Asynchronously copy elements from global memory to shared memory. Requires manual syncronization via async_wait before accessing the loaded data.
+    Asynchronously copy elements from global memory to shared memory. Requires manual syncronization via `wait_group` before accessing the loaded data.
 
     Args:
         smem (shared_memory_descriptor): Destination shared memory descriptor.
