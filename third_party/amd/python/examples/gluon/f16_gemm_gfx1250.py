@@ -1,8 +1,8 @@
 # ruff: noqa: E402
 import hip
 
-hip.hip.hipInit(0)
 # Needed for internal dev flow for now; will remove later
+hip.hip.hipInit(0)
 
 import pytest
 import torch
@@ -51,6 +51,35 @@ class PersistentTileScheduler:
 
 
 @gluon.jit
+def create_tensor_descriptors(a_ptr, b_ptr, off_am, off_bn, stride_am, stride_ak, stride_bn, stride_bk,
+                              shared_layout_a: ttgl.constexpr, shared_layout_b: ttgl.constexpr, M: ttgl.constexpr,
+                              N: ttgl.constexpr, K: ttgl.constexpr, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                              BLOCK_K: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr):
+    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(  #
+        base=a_ptr + off_am,  #
+        shape=(M, K),  #
+        strides=(stride_am, stride_ak),  #
+        block_shape=(BLOCK_M, BLOCK_K),  #
+        layout=shared_layout_a)
+    if not TRANSPOSE_B:
+        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(  #
+            base=b_ptr + off_bn,  #
+            shape=(K, N),  #
+            strides=(stride_bk, stride_bn),  #
+            block_shape=(BLOCK_K, BLOCK_N),  #
+            layout=shared_layout_b)
+    else:
+        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(  #
+            base=b_ptr + off_bn,  #
+            shape=(N, K),  #
+            strides=(stride_bn, stride_bk),  #
+            block_shape=(BLOCK_N, BLOCK_K),  #
+            layout=shared_layout_b)
+
+    return a_desc, b_desc
+
+
+@gluon.jit
 def issue_loads(producer, a_desc, b_desc, off_am, off_bn, a_buffer, b_buffer, BLOCK_K: ttgl.constexpr,
                 NUM_BUFFERS: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr):
     ttgl.amd.gfx1250.tdm.async_load(a_desc, [off_am, producer * BLOCK_K],  #
@@ -79,6 +108,20 @@ def issue_wmma(consumer, a_buffer, a_layout: ttgl.constexpr, b_buffer, b_layout:
     accumulator = ttgl.amd.gfx1250.wmma(a, b, accumulator)
     consumer += 1
     return consumer, accumulator
+
+
+@gluon.jit
+def lds_subtile_load(consumer, start, a_buffer, a_layout: ttgl.constexpr, b_buffer, b_layout: ttgl.constexpr,
+                     NUM_BUFFERS: ttgl.constexpr, TRANSPOSE_B: ttgl.constexpr, SUBTILE_LEN: ttgl.constexpr):
+    # Create subtile by slicing along K dimension
+    index = consumer % NUM_BUFFERS
+    a = a_buffer.index(index).slice(start, SUBTILE_LEN, 1).load(layout=a_layout)
+    if not TRANSPOSE_B:
+        b = b_buffer.index(index).slice(start, SUBTILE_LEN, 0).load(layout=b_layout)
+    else:
+        b = b_buffer.index(index).slice(start, SUBTILE_LEN, 1).permute([1, 0]).load(layout=b_layout)
+
+    return a, b
 
 
 @gluon.constexpr_function
@@ -119,28 +162,9 @@ def persistent_gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     OPERAND_LAYOUT_A: ttgl.constexpr = ttgl.DotOperandLayout(0, WMMA_LAYOUT, 8)
     OPERAND_LAYOUT_B: ttgl.constexpr = ttgl.DotOperandLayout(1, WMMA_LAYOUT, 8)
 
-    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(  #
-        base=a_ptr,  #
-        shape=(M, K),  #
-        strides=(stride_am, stride_ak),  #
-        block_shape=(BLOCK_M, BLOCK_K),  #
-        layout=SHARED_LAYOUT_A)
-
-    if not TRANSPOSE_B:
-        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(  #
-            base=b_ptr,  #
-            shape=(K, N),  #
-            strides=(stride_bk, stride_bn),  #
-            block_shape=(BLOCK_K, BLOCK_N),  #
-            layout=SHARED_LAYOUT_B)
-    else:
-        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(  #
-            base=b_ptr,  #
-            shape=(N, K),  #
-            strides=(stride_bn, stride_bk),  #
-            block_shape=(BLOCK_N, BLOCK_K),  #
-            layout=SHARED_LAYOUT_B)
-
+    a_desc, b_desc = create_tensor_descriptors(a_ptr, b_ptr, 0, 0, stride_am, stride_ak, stride_bn, stride_bk,
+                                               SHARED_LAYOUT_A, SHARED_LAYOUT_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
+                                               TRANSPOSE_B)
     a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape, layout=a_desc.layout)
     b_buffer = ttgl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape, layout=b_desc.layout)
 
@@ -177,16 +201,16 @@ def persistent_gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
 
 
 @gluon.jit
-def persistent_gemm_tdm_pipelined_with_prefetch_kernel(a_ptr, b_ptr, c_ptr,  #
-                                                       M, N, K,  #
-                                                       stride_am, stride_ak,  #
-                                                       stride_bk, stride_bn,  #
-                                                       stride_cm, stride_cn,  #
-                                                       BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
-                                                       BLOCK_K: ttgl.constexpr,  #
-                                                       NUM_BUFFERS: ttgl.constexpr,  #
-                                                       TRANSPOSE_B: ttgl.constexpr,  #
-                                                       NUM_WARPS: ttgl.constexpr):
+def persistent_gemm_tdm_pipelined_lds_prefetch_kernel(a_ptr, b_ptr, c_ptr,  #
+                                                      M, N, K,  #
+                                                      stride_am, stride_ak,  #
+                                                      stride_bk, stride_bn,  #
+                                                      stride_cm, stride_cn,  #
+                                                      BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                                      BLOCK_K: ttgl.constexpr,  #
+                                                      NUM_BUFFERS: ttgl.constexpr,  #
+                                                      TRANSPOSE_B: ttgl.constexpr,  #
+                                                      NUM_WARPS: ttgl.constexpr):
     a_dtype: ttgl.constexpr = a_ptr.type.element_ty
     b_dtype: ttgl.constexpr = b_ptr.type.element_ty
     ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
@@ -200,28 +224,9 @@ def persistent_gemm_tdm_pipelined_with_prefetch_kernel(a_ptr, b_ptr, c_ptr,  #
     OPERAND_LAYOUT_A: ttgl.constexpr = ttgl.DotOperandLayout(0, WMMA_LAYOUT, 8)
     OPERAND_LAYOUT_B: ttgl.constexpr = ttgl.DotOperandLayout(1, WMMA_LAYOUT, 8)
 
-    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(  #
-        base=a_ptr,  #
-        shape=(M, K),  #
-        strides=(stride_am, stride_ak),  #
-        block_shape=(BLOCK_M, BLOCK_K),  #
-        layout=SHARED_LAYOUT_A)
-
-    if not TRANSPOSE_B:
-        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(  #
-            base=b_ptr,  #
-            shape=(K, N),  #
-            strides=(stride_bk, stride_bn),  #
-            block_shape=(BLOCK_K, BLOCK_N),  #
-            layout=SHARED_LAYOUT_B)
-    else:
-        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(  #
-            base=b_ptr,  #
-            shape=(N, K),  #
-            strides=(stride_bn, stride_bk),  #
-            block_shape=(BLOCK_N, BLOCK_K),  #
-            layout=SHARED_LAYOUT_B)
-
+    a_desc, b_desc = create_tensor_descriptors(a_ptr, b_ptr, 0, 0, stride_am, stride_ak, stride_bn, stride_bk,
+                                               SHARED_LAYOUT_A, SHARED_LAYOUT_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K,
+                                               TRANSPOSE_B)
     a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape, layout=a_desc.layout)
     b_buffer = ttgl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape, layout=b_desc.layout)
 
@@ -296,27 +301,9 @@ def gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     pid_m = pid % num_pid_m
     pid_n = pid // num_pid_m
 
-    a_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(  #
-        base=a_ptr + pid_m * BLOCK_M * stride_am,  #
-        shape=(M, K),  #
-        strides=(stride_am, stride_ak),  #
-        block_shape=(BLOCK_M, BLOCK_K),  #
-        layout=SHARED_LAYOUT_A)
-    if not TRANSPOSE_B:
-        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(  #
-            base=b_ptr + pid_n * BLOCK_N * stride_bn,  #
-            shape=(K, N),  #
-            strides=(stride_bk, stride_bn),  #
-            block_shape=(BLOCK_K, BLOCK_N),  #
-            layout=SHARED_LAYOUT_B)
-    else:
-        b_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(  #
-            base=b_ptr + pid_n * BLOCK_N * stride_bn,  #
-            shape=(N, K),  #
-            strides=(stride_bn, stride_bk),  #
-            block_shape=(BLOCK_N, BLOCK_K),  #
-            layout=SHARED_LAYOUT_B)
-
+    a_desc, b_desc = create_tensor_descriptors(a_ptr, b_ptr, pid_m * BLOCK_M * stride_am, pid_n * BLOCK_N * stride_bn,
+                                               stride_am, stride_ak, stride_bn, stride_bk, SHARED_LAYOUT_A,
+                                               SHARED_LAYOUT_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B)
     a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape, layout=a_desc.layout)
     b_buffer = ttgl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape, layout=b_desc.layout)
 
@@ -335,6 +322,100 @@ def gemm_tdm_pipelined_kernel(a_ptr, b_ptr, c_ptr,  #
     for i in ttgl.static_range(NUM_BUFFERS - 1):
         consumer, accumulator = issue_wmma(consumer, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
                                            accumulator, (NUM_BUFFERS - 2 - i) * 2, NUM_BUFFERS, TRANSPOSE_B)
+
+    offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
+    offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
+    offs_c = stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    mask_c = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    ttgl.store(c_ptr + offs_c, accumulator, mask=mask_c)
+
+
+@gluon.jit
+def gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel(a_ptr, b_ptr, c_ptr,  #
+                                                            M, N, K,  #
+                                                            stride_am, stride_ak,  #
+                                                            stride_bk, stride_bn,  #
+                                                            stride_cm, stride_cn,  #
+                                                            BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                                            BLOCK_K: ttgl.constexpr,  #
+                                                            NUM_BUFFERS: ttgl.constexpr,  #
+                                                            TRANSPOSE_B: ttgl.constexpr,  #
+                                                            NUM_WARPS: ttgl.constexpr):
+    a_dtype: ttgl.constexpr = a_ptr.type.element_ty
+    b_dtype: ttgl.constexpr = b_ptr.type.element_ty
+    ttgl.static_assert(a_dtype.is_fp16() or a_dtype.is_bf16(), "Only fp16/bf16 supported for A")
+    ttgl.static_assert(b_dtype.is_fp16() or b_dtype.is_bf16(), "Only fp16/bf16 supported for B")
+    ttgl.static_assert(NUM_BUFFERS >= 2, "NUM_BUFFERS must be at least 2")
+    NUM_SUBTILES: ttgl.constexpr = 4
+    SUBTILE_LEN: ttgl.constexpr = BLOCK_K // NUM_SUBTILES
+    ttgl.static_assert(SUBTILE_LEN == 32, "Subtile length must match the kdim of the wmma instruction")
+
+    WMMA_LAYOUT: ttgl.constexpr = ttgl.amd.AMDWMMALayout(3, True, [NUM_WARPS // 2, 2], [16, 16, 32])
+    shared_layouts: ttgl.constexpr = create_shared_layouts(BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B)
+    SHARED_LAYOUT_A: ttgl.constexpr = shared_layouts[0]
+    SHARED_LAYOUT_B: ttgl.constexpr = shared_layouts[1]
+    OPERAND_LAYOUT_A: ttgl.constexpr = ttgl.DotOperandLayout(0, WMMA_LAYOUT, 8)
+    OPERAND_LAYOUT_B: ttgl.constexpr = ttgl.DotOperandLayout(1, WMMA_LAYOUT, 8)
+
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+
+    a_desc, b_desc = create_tensor_descriptors(a_ptr, b_ptr, pid_m * BLOCK_M * stride_am, pid_n * BLOCK_N * stride_bn,
+                                               stride_am, stride_ak, stride_bn, stride_bk, SHARED_LAYOUT_A,
+                                               SHARED_LAYOUT_B, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, TRANSPOSE_B)
+    a_buffer = ttgl.allocate_shared_memory(a_desc.dtype, shape=[NUM_BUFFERS] + a_desc.block_shape, layout=a_desc.layout)
+    b_buffer = ttgl.allocate_shared_memory(b_desc.dtype, shape=[NUM_BUFFERS] + b_desc.block_shape, layout=b_desc.layout)
+
+    producer = 0
+    consumer = 0
+    accumulator = ttgl.zeros((BLOCK_M, BLOCK_N), dtype=c_ptr.type.element_ty, layout=WMMA_LAYOUT)
+
+    for _ in ttgl.static_range(NUM_BUFFERS - 1):
+        producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B)
+
+    ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 2) * 2)
+    # LDS load SubIteration0
+    a0, b0 = lds_subtile_load(consumer, 0, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
+                              TRANSPOSE_B, SUBTILE_LEN)
+
+    loop_ub = ttgl.cdiv(K, BLOCK_K)
+    epilogue_lb = loop_ub - (NUM_BUFFERS - 1)
+    for i in range(0, loop_ub):
+        # SubIteration0
+        # LDS load SubIteration1
+        a1, b1 = lds_subtile_load(consumer, SUBTILE_LEN, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
+                                  NUM_BUFFERS, TRANSPOSE_B, SUBTILE_LEN)
+        # WMMA Subtile0
+        accumulator = ttgl.amd.gfx1250.wmma(a0, b0, accumulator)
+
+        # SubIteration1
+        # TDM load for next tile
+        # If we are in epilogue, we have already issued our tile loads
+        if i < epilogue_lb:
+            producer = issue_loads(producer, a_desc, b_desc, 0, 0, a_buffer, b_buffer, BLOCK_K, NUM_BUFFERS,
+                                   TRANSPOSE_B)
+        # LDS load SubIteration2
+        a2, b2 = lds_subtile_load(consumer, 2 * SUBTILE_LEN, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
+                                  NUM_BUFFERS, TRANSPOSE_B, SUBTILE_LEN)
+        # WMMA Subtile1
+        accumulator = ttgl.amd.gfx1250.wmma(a1, b1, accumulator)
+
+        # SubIteration2
+        # LDS load SubIteration3
+        a3, b3 = lds_subtile_load(consumer, 3 * SUBTILE_LEN, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B,
+                                  NUM_BUFFERS, TRANSPOSE_B, SUBTILE_LEN)
+        # WMMA Subtile2
+        accumulator = ttgl.amd.gfx1250.wmma(a2, b2, accumulator)
+
+        # SubIteration3
+        consumer += 1
+        ttgl.amd.gfx1250.tdm.async_wait((NUM_BUFFERS - 2) * 2)
+        # LDS load SubIteration0 for next tile
+        a0, b0 = lds_subtile_load(consumer, 0, a_buffer, OPERAND_LAYOUT_A, b_buffer, OPERAND_LAYOUT_B, NUM_BUFFERS,
+                                  TRANSPOSE_B, SUBTILE_LEN)
+        accumulator = ttgl.amd.gfx1250.wmma(a3, b3, accumulator)
 
     offs_cm = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, WMMA_LAYOUT))
     offs_cn = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, WMMA_LAYOUT))
@@ -387,7 +468,7 @@ def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
         num_sms = 8
         grid = (min(num_sms, triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)), 1)
         if PREFETCH:
-            persistent_gemm_tdm_pipelined_with_prefetch_kernel[grid](
+            persistent_gemm_tdm_pipelined_lds_prefetch_kernel[grid](
                 a_device, b_device, c_device,  #
                 M, N, K,  #
                 stride_am, stride_ak,  #
@@ -412,22 +493,80 @@ def test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRAN
     torch.testing.assert_close(c_triton, c_torch, rtol=1e-4, atol=1e-4)
 
 
+@pytest.mark.parametrize("BLOCK_M,BLOCK_N", [(32, 32)])
+@pytest.mark.parametrize("NUM_BUFFERS", [2, 4])
+@pytest.mark.parametrize("TRANSPOSE_B", [False, True])
+@pytest.mark.parametrize("M,N,K", [(256, 256, 512), (250, 250, 510)])
+def test_runtime_gemm_tdm_pipelined_single_warp_per_simd_schedule(BLOCK_M, BLOCK_N, NUM_BUFFERS, TRANSPOSE_B, M, N, K):
+    num_warps = 4
+    BLOCK_K = 128  # 4 subtiles * 32 (wmma kdim)
+
+    if triton.cdiv(K, BLOCK_K) < NUM_BUFFERS:
+        pytest.skip("Skip tests where K/BLOCK_K < NUM_BUFFERS")
+
+    a = torch.randn((M, K), dtype=torch.float16)
+    b = torch.randn((K, N), dtype=torch.float16)
+    if TRANSPOSE_B:
+        b = b.T.contiguous()
+    c = torch.zeros((M, N), dtype=torch.float32)
+    stride_am, stride_ak = a.stride(0), a.stride(1)
+    stride_bk, stride_bn = (b.stride(0), b.stride(1)) if not TRANSPOSE_B else (b.stride(1), b.stride(0))
+    stride_cm, stride_cn = c.stride(0), c.stride(1)
+
+    a_device = a.cuda()
+    b_device = b.cuda()
+    c_device = c.cuda()
+
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    gemm_tdm_pipelined_single_warp_per_simd_schedule_kernel[grid](
+        a_device, b_device, c_device,  #
+        M, N, K,  #
+        stride_am, stride_ak,  #
+        stride_bk, stride_bn,  #
+        stride_cm, stride_cn,  #
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,  #
+        NUM_BUFFERS=NUM_BUFFERS, TRANSPOSE_B=TRANSPOSE_B, NUM_WARPS=num_warps,  #
+        num_warps=num_warps, waves_per_eu=num_warps // 4)
+
+    c_triton = c_device.cpu()
+    c_torch = a.to(torch.float32) @ (b.to(torch.float32) if not TRANSPOSE_B else b.T.to(torch.float32))
+    torch.testing.assert_close(c_triton, c_torch, rtol=1e-4, atol=1e-4)
+
+
 if __name__ == "__main__":
-    M, N, K = 256, 256, 1024
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-M", type=int, default=256, help='problem M size')
+    parser.add_argument("-N", type=int, default=256, help='problem N size')
+    parser.add_argument("-K", type=int, default=1024, help='problem K size')
+    parser.add_argument("--num-warps", type=int, choices=[4, 8], default=4, help='num warps')
+    parser.add_argument("--num-buffers", type=int, choices=[1, 2, 4], default=2, help='num shared memory buffers')
+    parser.add_argument("--persistent", action="store_true", help="Use persistent variant")
+    parser.add_argument("--prefetch-lds", action="store_true", help="Enable prefetch LDS")
+    parser.add_argument("--single-warp-schedule", action="store_true", help="Use single warp per SIMD schedule variant")
+    args = parser.parse_args()
+
+    assert not (args.persistent and args.single_warp_schedule)
+    if args.single_warp_schedule:
+        assert args.num_warps == 4
+        assert args.prefetch_lds
+
+    M, N, K = args.M, args.N, args.K
     BLOCK_M, BLOCK_N, BLOCK_K = 256, 256, 128
-    NUM_BUFFERS = 2
-    NUM_WARPS = 4
+    NUM_BUFFERS = args.num_buffers
+    NUM_WARPS = args.num_warps
     TRANSPOSE_B = True
-    PERSISTENT = True
-    PREFETCH = False
+    PERSISTENT = args.persistent
+    PREFETCH = args.prefetch_lds
     print(
-        f"({M=}, {N=}, {K=}), ({BLOCK_M=}, {BLOCK_N=}, {BLOCK_K=}), {NUM_BUFFERS=}, {TRANSPOSE_B=}, {PERSISTENT=}, {PREFETCH=}, {NUM_WARPS=}"
+        f"({M=}, {N=}, {K=}), ({BLOCK_M=}, {BLOCK_N=}, {BLOCK_K=}), {TRANSPOSE_B=}, {NUM_WARPS=}, {NUM_BUFFERS=}, {PERSISTENT=}, {PREFETCH=}"
     )
-    test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, PREFETCH, M, N, K,
-                                    NUM_WARPS)
-    NUM_WARPS = 8
-    print(
-        f"({M=}, {N=}, {K=}), ({BLOCK_M=}, {BLOCK_N=}, {BLOCK_K=}), {NUM_BUFFERS=}, {TRANSPOSE_B=}, {PERSISTENT=}, {PREFETCH=}, {NUM_WARPS=}"
-    )
-    test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K, NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, PREFETCH, M, N, K,
-                                    NUM_WARPS)
+    if args.single_warp_schedule:
+        test_runtime_gemm_tdm_pipelined_single_warp_per_simd_schedule(BLOCK_M, BLOCK_N,  #
+                                                                      NUM_BUFFERS, TRANSPOSE_B,  #
+                                                                      M, N, K)
+    else:
+        test_runtime_gemm_tdm_pipelined(BLOCK_M, BLOCK_N, BLOCK_K,  #
+                                        NUM_BUFFERS, TRANSPOSE_B, PERSISTENT, PREFETCH,  #
+                                        M, N, K, NUM_WARPS)
