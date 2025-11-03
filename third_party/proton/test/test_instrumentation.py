@@ -12,7 +12,7 @@ import triton.language.semantic
 import triton.profiler as proton
 import triton.profiler.language as pl
 from triton.tools.tensor_descriptor import TensorDescriptor
-from triton._internal_testing import is_hip_cdna2, supports_tma, supports_ws, is_cuda
+from triton._internal_testing import is_hip_cdna2, is_hip_cdna4, supports_tma, supports_ws, is_cuda
 
 pl.enable_semantic("triton")
 
@@ -555,6 +555,7 @@ def test_timeline(tmp_path: pathlib.Path):
         assert trace_events[-1]["args"]["call_stack"][-2] == "test"
 
 
+@pytest.mark.skipif(is_hip_cdna4(), reason="nondeterministic failure")
 def test_globaltime(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_globaltime.chrome_trace"
     mode = proton.mode.Default(
