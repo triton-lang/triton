@@ -101,15 +101,9 @@ ArefCreateOp createAref(OpBuilder &builder, ProducedValueInfo &producedValue) {
   auto getSmemDescType = [](RankedTensorType tensorType, Value tensorResult) {
     Attribute SharedMemorySpace =
         SharedMemorySpaceAttr::get(tensorType.getContext());
-    Attribute encoding = getSharedEncoding(tensorType);
-    if (tensorResult &&
-        tensorResult.getDefiningOp<triton::DescriptorOpInterface>()) {
-      auto load = tensorResult.getDefiningOp<triton::DescriptorOpInterface>();
-      // A use of TMA which is not immediately consumed by LocalAlloc
-      // This case applies, for example, when TMA is followed by SIMT ops
-      // or MMAv2 is used.
-      encoding = getEncodingFromDescriptor(load, tensorType, load.getDesc());
-    }
+    Attribute encoding = tensorResult && tensorResult.getDefiningOp()
+                             ? getSharedEncoding(tensorResult.getDefiningOp())
+                             : getSharedEncoding(tensorType);
     auto memDescType =
         MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                          encoding, SharedMemorySpace);
