@@ -422,7 +422,7 @@ void createArefGet(OpBuilder &builder, scf::ForOp loop, ArefCreateOp aref,
       }
     }
     if (dataBuf.hasOneUse()) {
-      // If there is only one consumer for dataBuf, it is localLoadOp then
+      // If there is only one consumer for dataBuf, it is localLoadOp created
       // above, and we hit this code path, the empty barrier can be released
       // after local load.
       exitInsertPointAfter = localLoadOp;
@@ -580,7 +580,6 @@ public:
       // desc_load results.
       SmallVector<Operation *> memoryOps;
       loop.walk([&](Operation *op) {
-        // Only handles load ops for now.
         if (op->getNumResults() > 0 &&
             (isDescLoadAndAlloc<LocalAllocOp>(op->getResult(0)) ||
              isa<LocalAllocOp>(op))) {
