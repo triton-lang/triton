@@ -50,10 +50,9 @@ namespace mlir {
 
 namespace {
 
-// Returns the number of individual async load memory transactions when copy
-// data from the given |srcTy| in global memory to the given |dstTy| in shared
-// memory. This takes into account the passed contiguity, mask alignment and the
-// layout mapping from global to shared memory addresses
+// Returns the number of individual async load memory transactions required when
+// copying data from |srcTy| to |dstTy|, accounting for data contiguity, mask
+// alignment, and the layout mapping from global to shared memory addresses.
 int getNumberOfLoadInstructions(RankedTensorType srcTy, ttg::MemDescType dstTy,
                                 Value mask, int contig,
                                 ModuleAxisInfoAnalysis &axisInfo) {
@@ -66,10 +65,12 @@ int getNumberOfLoadInstructions(RankedTensorType srcTy, ttg::MemDescType dstTy,
     sharedLayout = triton::gpu::toLinearLayout(dstTy);
   }
   LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
+  contig = std::min(contig, srcToSharedLayout.getNumConsecutiveInOut());
 
   if (mask)
     contig = std::min<int>(contig, axisInfo.getMaskAlignment(mask));
 
+  // Divide number of registers by contig to get the number of async intrinsics
   int numberOfRegisters = srcToSharedLayout.getInDimSize(
       StringAttr::get(srcTy.getContext(), "register"));
   int loadInstructionCount = std::max(1, numberOfRegisters / contig);
