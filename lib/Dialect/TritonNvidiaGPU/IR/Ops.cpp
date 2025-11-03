@@ -350,6 +350,31 @@ LogicalResult TCGen5MMAOp::verify() {
   Type dtype = getD().getType().getElementType();
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
+
+  if (getTwoCtas()) {
+    auto aTy = getA().getType();
+    auto bTy = getB().getType();
+    auto retType = getD().getType();
+
+    // Once we have a `block` dimension in TMEM, we can look at this via the
+    // associated LL
+    auto checkSplitNum = [&](ArrayRef<unsigned> splitNum, std::string_view name,
+                             ArrayRef<unsigned> expected) -> LogicalResult {
+      if (splitNum != expected) {
+        return emitOpError("The op is two CTAs but the split num of ")
+               << name << " is not " << expected << ". Got " << splitNum;
+      }
+      return success();
+    };
+    if (failed(checkSplitNum(getCTASplitNum(aTy.getEncoding()), "LHS", {2, 1})))
+      return failure();
+    if (failed(checkSplitNum(getCTASplitNum(bTy.getEncoding()), "RHS", {1, 2})))
+      return failure();
+    if (failed(checkSplitNum(getCTASplitNum(retType.getEncoding()), "return",
+                             {2, 1})))
+      return failure();
+  }
+
   return success();
 }
 

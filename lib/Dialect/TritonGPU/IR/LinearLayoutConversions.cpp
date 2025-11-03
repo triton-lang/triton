@@ -1194,14 +1194,33 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
            split;
   }
   if (encoding.getCTASplitM() > 1) {
-    auto split =
-        LinearLayout::identity1D(encoding.getCTASplitM(), kCol, dims[0]);
+    auto splitM = encoding.getCTASplitM();
+    auto blockM = encoding.getBlockM();
+    bool isM64 = blockM == 64;
+    if (isM64) {
+      // blockM == 64 and CTASplitM >= 2 is laid out as 128xblockN
+      // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-data-path-layout-bny
+      blockM *= 2;
+      splitM /= 2;
+    }
+    assert(blockM == 128);
+    auto split = LinearLayout::identity1D(splitM, kCol, dims[0]);
     auto newEncoding = TensorMemoryEncodingAttr::get(
-        ctx, encoding.getBlockM(), encoding.getBlockN(),
-        encoding.getColStride(), 1, encoding.getCTASplitN());
-    return tensorMemoryToLinearLayout(
-               {shape[0] / encoding.getCTASplitM(), shape[1]}, newEncoding) *
-           split;
+        ctx, blockM, encoding.getBlockN(), encoding.getColStride(), 1,
+        encoding.getCTASplitN());
+    auto ret =
+        tensorMemoryToLinearLayout({shape[0] / splitM, shape[1]}, newEncoding) *
+        split;
+    // In this case, we swap the basis of the last row and last column as per
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-data-path-layout-bny
+    if (isM64) {
+      auto bases = ret.getBases();
+      auto &rowBases = bases[kRow];
+      auto &colBases = bases[kCol];
+      std::swap(rowBases[rowBases.size() - 1], colBases[colBases.size() - 1]);
+      ret = LinearLayout(bases, ret.getOutDims(), ret.isSurjective());
+    }
+    return ret;
   }
   assert(encoding.getCTASplitM() == 1 && encoding.getCTASplitN() == 1);
 
