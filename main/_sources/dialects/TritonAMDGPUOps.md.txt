@@ -156,6 +156,8 @@ when it converts to the buffer ops because it is important for optimizing the ca
 
 Traits: `SameLoadStoreOperandsAndResultEncoding`
 
+Interfaces: `BufferOpInterface`
+
 #### Attributes:
 
 <table>
@@ -204,6 +206,8 @@ the address difference between the first elements of each row in bytes. Compiler
 when it converts to the buffer ops because it is important for optimizing the cache memory access.
 
 Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`
+
+Interfaces: `BufferOpInterface`
 
 #### Attributes:
 
@@ -258,6 +262,8 @@ the cache memory access.
 
 Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`
 
+Interfaces: `BufferOpInterface`
+
 #### Attributes:
 
 <table>
@@ -298,7 +304,7 @@ AMD Buffer load operation. Similar to amdgpu.buffer_load op but directly wirtes 
 
 Traits: `AttrSizedOperandSegments`
 
-Interfaces: `InferTypeOpInterface`
+Interfaces: `BufferOpInterface`, `InferTypeOpInterface`
 
 #### Attributes:
 
@@ -351,6 +357,8 @@ when it converts to the buffer ops because it is important for optimizing
 the cache memory access.
 
 Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsEncoding`
+
+Interfaces: `BufferOpInterface`
 
 #### Attributes:
 
