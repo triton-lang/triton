@@ -476,11 +476,27 @@ class InterpreterBuilder:
     def check_promotion(self, output, org_types, tl_type):
         promoted_np_dtype = output.dtype not in org_types
         if promoted_np_dtype:
-            # TODO: promote tl_dtype
-            # int8 -> int16
-            # uint8 -> uint16
-            # etc.
-            return tl.int16
+            if tl_type == tl.int8:
+                return tl.int16
+            if tl_type == tl.uint8:
+                return tl.uint16
+            if tl_type == tl.int16:
+                return tl.int32
+            if tl_type == tl.uint16:
+                return tl.uint32
+            if tl_type == tl.int32:
+                return tl.int64
+            if tl_type == tl.uint32:
+                return tl.uint64
+            if tl_type in (tl.float8e5, tl.float8e5b16, tl.float8e4nv, tl.float8e4b8, tl.float8e4b15):
+                return tl.float16
+            if tl_type == tl.float16:
+                return tl.float32
+            if tl_type == tl.bfloat16:
+                return tl.float32
+            if tl_type == tl.float32:
+                return tl.float64
+
         return tl_type
 
     # binary operators
