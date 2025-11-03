@@ -1,4 +1,4 @@
-from typing import Sequence, List, TypeVar, Tuple, Callable
+from typing import Sequence, List, TypeVar, Tuple, Callable, Optional
 import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
@@ -167,6 +167,12 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         if layout is None:
             layout = AutoLayout()
         return self.splat(scalar, shape, layout)
+
+    def store(self, ptr: TensorTy, val: TensorTy, mask: Optional[TensorTy], boundary_check, cache_modifier: str,
+              eviction_policy: str) -> TensorTy:
+        if isinstance(val.type, ttgl.dtype):
+            val = self.splat(val, ptr.shape, ptr.type.layout)
+        return super().store(ptr, val, mask, boundary_check, cache_modifier, eviction_policy)
 
     def convert_layout(self, value, layout, assert_trivial=False):
         ty = value.type

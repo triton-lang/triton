@@ -219,8 +219,7 @@ def tl_obj_scatter(obj, value, x_offsets, y_offset):
     if isinstance(obj, ttgl.nvidia.hopper.tma.tensor_descriptor):
         desc = obj
         desc_shape: ttgl.constexpr = [x_offsets.shape[0], desc.block_shape[1]]
-        alloc = ttgl.allocate_shared_memory(desc.dtype, desc_shape, desc.layout)
-        alloc.store(value)
+        alloc = ttgl.allocate_shared_memory(desc.dtype, desc_shape, desc.layout, value)
         fence_async_shared()
         x_offsets_layout: ttgl.constexpr = ttgl.SliceLayout(
             0, ttgl.BlockedLayout([1, 4], [get_num_threads_per_warp(), 1], [1, ttgl.num_warps()], [1, 0]))
@@ -239,8 +238,7 @@ def tl_make_tensor_descriptor(base, shape, strides, block_shape, padding_option=
 
 @gluon.jit
 def tl_store_tensor_descriptor(desc, offsets, value):
-    alloc = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
-    alloc.store(value)
+    alloc = ttgl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout, value)
     fence_async_shared()
     tma.async_copy_shared_to_global(desc, offsets, alloc)
     tma.store_wait(0)
