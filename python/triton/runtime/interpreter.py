@@ -473,9 +473,21 @@ class InterpreterBuilder:
     def create_bitcast(self, src, dst_type):
         return TensorHandle(src.data.view(_get_np_dtype(dst_type)), dst_type.scalar)
 
+    def check_promotion(self, output, org_types, tl_type):
+        promoted_np_dtype = output.dtype not in org_types
+        if promoted_np_dtype:
+            # TODO: promote tl_dtype
+            # int8 -> int16
+            # uint8 -> uint16
+            # etc.
+            return tl.int16
+        return tl_type
+
     # binary operators
     def binary_op(self, lhs, rhs, op):
-        return TensorHandle(op(lhs.data, rhs.data), lhs.dtype.scalar)
+        output = op(lhs.data, rhs.data)
+        tl_dtype = self.check_promotion(output, (lhs.data.dtype, rhs.data.dtype), lhs.dtype.scalar)
+        return TensorHandle(output, tl_dtype)
 
     create_fadd = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
     create_fmul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
@@ -556,7 +568,9 @@ class InterpreterBuilder:
 
     # ternary functions
     def ternary_op(self, lhs, rhs, other, op):
-        return TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype.scalar)
+        output = op(lhs.data, rhs.data, other.data)
+        tl_dtype = self.check_promotion(output, (lhs.data.dtype, rhs.data.dtype, other.data.dtype), other.dtype.scalar)
+        return TensorHandle(output, tl_dtype)
 
     create_clampf = lambda self, arg, lo, hi, propagate_nans: self.ternary_op(arg, lo, hi, np.clip)
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
