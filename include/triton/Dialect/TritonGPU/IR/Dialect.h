@@ -299,9 +299,11 @@ LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
 // Verify a memory allocation operation.
 LogicalResult verifyAllocOp(Operation *op, Value src, MemDescType dstTy);
 
-std::optional<SetVector<int>> getPartitionIds(Operation *op);
-std::optional<int> getNumOutputPartitionIds(Operation *op);
-std::optional<SetVector<int>> getOutputPartitionIds(Operation *op, int idx);
+SetVector<int> getPartitionIds(Operation *op);
+SmallVector<SetVector<int>, 4> getPartitionOutputs(Operation *op);
+SetVector<int> getPartitionIds(OpOperand *use);
+bool hasPartition(Operation *op);
+
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_
