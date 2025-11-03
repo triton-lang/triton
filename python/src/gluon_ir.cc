@@ -97,7 +97,7 @@ struct GluonLayouts {
   py::handle DotOperandLayout;
   py::handle NVMMADistributedLayout;
   py::handle TensorMemoryScalesLayout;
-
+  py::handle TensorMemoryLayout;
   py::handle NVMMASharedLayout;
   py::handle SwizzledSharedLayout;
   py::handle SharedLinearLayout;
@@ -122,7 +122,8 @@ struct GluonLayouts {
         py::object(layouts.attr("NVMMADistributedLayout")).release();
     TensorMemoryScalesLayout =
         py::object(blackwellLayouts.attr("TensorMemoryScalesLayout")).release();
-
+    TensorMemoryLayout =
+        py::object(blackwellLayouts.attr("TensorMemoryLayout")).release();
     NVMMASharedLayout = py::object(layouts.attr("NVMMASharedLayout")).release();
     SwizzledSharedLayout =
         py::object(layouts.attr("SwizzledSharedLayout")).release();
@@ -258,6 +259,11 @@ py::object layoutToGluon(Attribute layout) {
                  dyn_cast<ttng::TensorMemoryScalesEncodingAttr>(layout)) {
     return layouts.TensorMemoryScalesLayout(std::vector<unsigned>{
         tmemScales.getCTASplitM(), tmemScales.getCTASplitN()});
+  } else if (auto tmem = dyn_cast<ttng::TensorMemoryEncodingAttr>(layout)) {
+    return layouts.TensorMemoryLayout(
+        std::vector<unsigned>{tmem.getBlockM(), tmem.getBlockN()},
+        tmem.getColStride(),
+        std::vector<unsigned>{tmem.getCTASplitM(), tmem.getCTASplitN()});
   }
 
   throw py::value_error("Unhandled encoding encountered");
