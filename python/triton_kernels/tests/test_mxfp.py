@@ -149,7 +149,7 @@ def test_mxfp_quant_dequant(src_dtype, dst_dtype, device):
     ],
 )
 # fmt: on
-@pytest.mark.parametrize("dequant_dtype", ["float32"])
+@pytest.mark.parametrize("dequant_dtype", ["float16", "bfloat16", "float32"])
 def test_mxfp_casting(
     shape: tuple[int, ...],
     axis: int,
