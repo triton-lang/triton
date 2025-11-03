@@ -336,7 +336,6 @@ struct DotConversion {
     } repShape;
     bool transA;
     bool transB;
-    bool interleaved;
     bool aInTmem;
   };
 
@@ -417,7 +416,6 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
   int numRepM = ceil<unsigned>(M, mmaSizeM);
   int numRepN = ceil<unsigned>(N, mmaSizeN);
   int numRepK = ceil<unsigned>(K, mmaSizeK);
-  bool interleaved = (mmaSizeM == 64 && (numRepM > 1 || numRepN > 1));
 
   SmallVector<int64_t> shapeA = op.shapeA;
   SmallVector<int64_t> shapeB = op.shapeB;
@@ -453,8 +451,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
          "Currently don't support transpose for F32.");
 
   DotConversion::InstDesc desc{mmaSizeM, mmaSizeN, {numRepM, numRepN, numRepK},
-                               transA,   transB,   interleaved,
-                               aInTmem};
+                               transA,   transB,   aInTmem};
   for (int m = 0; m < numRepM; m++) {
     for (int n = 0; n < numRepN; n++) {
       Value useInitAcc = useDFlag;

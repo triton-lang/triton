@@ -696,9 +696,8 @@ void init_gluon_ir(py::module &&m) {
       .def("create_tcgen05_mma",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
               Value pred, std::vector<Value> &mbarriers,
-              std::vector<Value> &mbarrier_preds) {
+              std::vector<Value> &mbarrier_preds, bool two_ctas) {
              Value accDep;
-             bool two_ctas = false;
              auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
              self.create<ttng::TCGen5MMAOp>(tokType, a, b, acc, accDep, useAcc,
                                             pred, two_ctas, mbarriers,

@@ -86,8 +86,8 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   return {nRow, nCol};
 }
 
-LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
-                           bool unpacked) {
+LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
+                           bool withWarp) {
   auto str_attr = [&](StringRef str) { return StringAttr::get(ctx, str); };
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
@@ -124,12 +124,14 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
   } else {
     llvm_unreachable("Unsupported TMEM access atom");
   }
-  auto nCol = tile.getOutDimSize(kCol);
-  auto bases = tile.getBases();
-  bases[kWarp].push_back({32, 0});
-  bases[kWarp].push_back({64, 0});
-  auto ret = LinearLayout(bases, {{kRow, 128}, {kCol, nCol}}, false);
-  return ret;
+  if (withWarp) {
+    auto nCol = tile.getOutDimSize(kCol);
+    auto bases = tile.getBases();
+    bases[kWarp].push_back({32, 0});
+    bases[kWarp].push_back({64, 0});
+    tile = LinearLayout(bases, {{kRow, 128}, {kCol, nCol}}, false);
+  }
+  return tile;
 }
 
 static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
@@ -212,13 +214,13 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
   }
   // getTileLayout returns the layout for a bitwidth of 32
   assert(bitwidth == 32);
-  auto tile = getTileLayout(ctx, atom, false);
+  auto tile = getTileLayout(ctx, atom, false, /*withWarp=*/false);
   // Plan:
-  // tile: register, lane, warp -> row, cols
+  // tile: register, lane -> row, cols
   // ll: row, cols -> dim0, dim1
-  // We extend the tile to have the right vectorisation and the result is given
-  // by ll o tile : register, lane warp -> dim0, dim1 If the tile is too
-  // large, we cannot use the tile
+  // We extend the tile to have the right vectorisation + warps and
+  // the result is given by
+  // ll o tile : register, lane, warp -> dim0, dim1
 
   auto nColsTile = tile.getOutDimSize(rowColDims[1]);
   auto nColsLL = ll.getInDimSize(rowColDims[1]);
@@ -268,41 +270,37 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
   // Cap warps to tile above by nColsMissing. The rest go to broadcasting
   int warpBroadcast = warpsToTile / std::min(nColsMissing, warpsToTile);
   warpsToTile /= warpBroadcast;
-  auto nColsOrig = nColsLL;
   nColsMissing /= warpsToTile;
-  nColsLL /= warpsToTile;
 
   if (nColsMissing > 1) {
     if (instr32Rows && layout16Rows) {
       // If the lane 16 would load repeated data, instead we make it load half
       // of the data via the 16x32bx2 instruction
-      tile *= LinearLayout::identity1D(nColsMissing / 2, kReg, rowColDims[1]);
-      auto bases = tile.getBases();
-      bases[kLane].back() = {0, nColsLL / 2};
-      tile = LinearLayout(
-          bases, {{rowColDims[0], 128}, {rowColDims[1], nColsLL}}, false);
+      tile *= LinearLayout::identity1D(nColsMissing / 2, kReg, rowColDims[1]) *
+              LinearLayout::identity1D(2, kLane, rowColDims[1]);
 
     } else {
       tile *= LinearLayout::identity1D(nColsMissing, kReg, rowColDims[1]);
     }
   }
+
+  // add the warp bases. The M=64 + 2CTA case has already been handled
   auto bases = tile.getBases();
   auto &warpBases = bases[kWarp];
+  warpBases.push_back({32, 0});
+  warpBases.push_back({64, 0});
+
   if (row16) {
     bases[row16].push_back({16, 0});
   }
-
-  // Add the bases we had reserved for the warps to tile
-  assert(nColsOrig / nColsLL == warpsToTile);
-  for (int i = nColsLL; i < nColsOrig; i *= 2) {
-    bases[kWarp].push_back({0, i});
-  }
-  // Broadcast in the rest of the warps if we need more bases
-  for (int i = 1; i < warpBroadcast; i *= 2) {
-    bases[kWarp].push_back({0, 0});
-  }
-  tile = LinearLayout(bases, {{rowColDims[0], 128}, {rowColDims[1], nColsOrig}},
+  tile = LinearLayout(bases,
+                      {{rowColDims[0], 128},
+                       {rowColDims[1], tile.getOutDimSize(rowColDims[1])}},
                       false);
+  tile *= LinearLayout::identity1D(warpsToTile, kWarp, rowColDims[1]);
+  tile *= LinearLayout::zeros1D(warpBroadcast, kWarp, rowColDims[1]);
+  assert(tile.getOutDimSize(rowColDims[1]) == ll.getInDimSize(rowColDims[1]));
+
   auto ret = tile.compose(ll);
   return ret;
 }
