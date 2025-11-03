@@ -49,8 +49,7 @@ createTritonGPUProxyFenceInsertionWrapper(int32_t capability) {
 }
 
 void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
-  ADD_PASS_WRAPPER_1("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass,
-                     mlir::triton::nvidia_gpu::ClusterInfo *);
+  ADD_PASS_WRAPPER_0("add_plan_cta", ttng::createTritonNvidiaGPUPlanCTAPass);
   ADD_PASS_WRAPPER_1("add_fence_insertion",
                      createTritonGPUFenceInsertionWrapper, int32_t);
   ADD_PASS_WRAPPER_1("add_proxy_fence_insertion",
@@ -147,22 +146,6 @@ void init_triton_nvidia(py::module &&m) {
   init_triton_nvidia_passes_ttgpuir(passes.def_submodule("ttgpuir"));
   init_triton_nvidia_passes_ttnvgpuir(passes.def_submodule("ttnvgpuir"));
   init_triton_hopper_passes(passes.def_submodule("hopper"));
-
-  // cluster info
-  py::class_<mlir::triton::nvidia_gpu::ClusterInfo>(m, "ClusterInfo")
-      .def(py::init<>())
-      .def_readwrite("clusterDimX",
-                     &mlir::triton::nvidia_gpu::ClusterInfo::clusterDimX)
-      .def_readwrite("clusterDimY",
-                     &mlir::triton::nvidia_gpu::ClusterInfo::clusterDimY)
-      .def_readwrite("clusterDimZ",
-                     &mlir::triton::nvidia_gpu::ClusterInfo::clusterDimZ)
-      .def("__repr__", [](mlir::triton::nvidia_gpu::ClusterInfo &self) {
-        std::ostringstream oss;
-        oss << "(" << self.clusterDimX << ", " << self.clusterDimY << ", "
-            << self.clusterDimZ << ")";
-        return oss.str();
-      });
 
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {

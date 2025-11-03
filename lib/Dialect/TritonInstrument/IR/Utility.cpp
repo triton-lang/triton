@@ -56,14 +56,16 @@ RankedTensorType getIntTensorType(Region *region, ArrayRef<int64_t> shape,
   return RankedTensorType::get(shape, elType, encoding);
 }
 
-Value createBufferPointersTensor(ImplicitLocOpBuilder &builder, MemType memType,
-                                 SmallVector<int32_t> values) {
+std::pair<Value, RankedTensorType>
+createBufferPointersTensor(ImplicitLocOpBuilder &builder, MemType memType,
+                           SmallVector<int32_t> values) {
   int64_t size = values.size();
   assert(llvm::isPowerOf2_64(size) && "Expected power of 2");
   auto tensorType =
       getIntTensorType(builder.getInsertionBlock()->getParent(), {size}, 64);
-  return builder.create<ExperimentalBufferPointersOp>(tensorType, values,
-                                                      memType);
+  return {ExperimentalBufferPointersOp::create(builder, tensorType, values,
+                                               memType),
+          tensorType};
 }
 
 Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
@@ -73,7 +75,7 @@ Value createInitializedScratchMemory(ImplicitLocOpBuilder &b,
   int numEls = product(tensor.getType().getShape());
   int64_t sizeInBytes = numEls * elSize;
   Type ptrType = triton::getPointerType(elType);
-  auto alloc = b.create<GlobalScratchAllocOp>(ptrType, sizeInBytes, elSize);
+  auto alloc = GlobalScratchAllocOp::create(b, ptrType, sizeInBytes, elSize);
   createStoreScratchMemory(b, b.getLoc(), alloc, tensor, tensor.getType());
   return alloc;
 }
@@ -208,12 +210,12 @@ unsigned getSubBufferSize(TMEMAllocOp op) {
 
 Value createLockVariable(ImplicitLocOpBuilder &b) {
   Type ptrType = triton::getPointerType(b.getI32Type());
-  auto alloc = b.create<GlobalScratchAllocOp>(ptrType, 4, 4);
-  Value zero = b.create<arith::ConstantOp>(b.getLoc(), b.getI32Type(),
-                                           b.getI32IntegerAttr(0));
-  b.create<triton::AtomicRMWOp>(b.getI32Type(), RMWOp::XCHG, alloc, zero,
-                                nullptr, MemSemantic::ACQUIRE_RELEASE,
-                                MemSyncScope::GPU);
+  auto alloc = GlobalScratchAllocOp::create(b, ptrType, 4, 4);
+  Value zero = arith::ConstantOp::create(b, b.getLoc(), b.getI32Type(),
+                                         b.getI32IntegerAttr(0));
+  triton::AtomicRMWOp::create(b, b.getI32Type(), RMWOp::XCHG, alloc, zero,
+                              nullptr, MemSemantic::ACQUIRE_RELEASE,
+                              MemSyncScope::GPU);
   return alloc;
 }
 
@@ -229,7 +231,7 @@ TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
   auto denseAttr =
       DenseElementsAttr::get(tensorType, APInt(bitWidth, val, isSigned));
   return cast<TypedValue<RankedTensorType>>(
-      builder.create<arith::ConstantOp>(loc, tensorType, denseAttr)
+      arith::ConstantOp::create(builder, loc, tensorType, denseAttr)
           .getResult());
 }
 
@@ -257,7 +259,7 @@ Value expandOuterSlicedDim(OpBuilder &b, Location loc, Value tensor) {
     newShape.insert(newShape.begin() + dim, 1);
     auto newType = RankedTensorType::get(newShape, type.getElementType(),
                                          sliceEncoding.getParent());
-    tensor = b.create<ExpandDimsOp>(loc, newType, tensor, dim);
+    tensor = ExpandDimsOp::create(b, loc, newType, tensor, dim);
   }
   return tensor;
 }
@@ -276,8 +278,8 @@ static Value expandAllSlicedDims(OpBuilder &b, Location loc, Value tensor) {
 static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
                                  RankedTensorType tensorType) {
   auto encoding = cast<BlockedEncodingAttr>(tensorType.getEncoding());
-  Value ptrTensor = b.create<SplatOp>(
-      loc,
+  Value ptrTensor = SplatOp::create(
+      b, loc,
       RankedTensorType::get(tensorType.getShape(), base.getType(), encoding),
       base);
   auto offsetsType =
@@ -292,17 +294,17 @@ static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
     auto arangeType = RankedTensorType::get({tensorType.getShape()[i]},
                                             b.getI32Type(), partialEncoding);
     auto arange =
-        b.create<MakeRangeOp>(loc, arangeType, 0, arangeType.getShape()[0]);
+        MakeRangeOp::create(b, loc, arangeType, 0, arangeType.getShape()[0]);
     auto cstStride = createConstIntTensor(b, loc, strides[i], arangeType);
     auto arangeTimesStride =
-        b.create<arith::MulIOp>(loc, arangeType, arange, cstStride);
+        arith::MulIOp::create(b, loc, arangeType, arange, cstStride);
     auto expandDims = expandAllSlicedDims(b, loc, arangeTimesStride);
     if (cast<RankedTensorType>(expandDims.getType()).getShape() !=
         tensorType.getShape()) {
-      expandDims = b.create<BroadcastOp>(loc, offsetsType, expandDims);
+      expandDims = BroadcastOp::create(b, loc, offsetsType, expandDims);
     }
     ptrTensor =
-        b.create<AddPtrOp>(loc, ptrTensor.getType(), ptrTensor, expandDims);
+        AddPtrOp::create(b, loc, ptrTensor.getType(), ptrTensor, expandDims);
   }
   return ptrTensor;
 }
@@ -310,15 +312,15 @@ static Value createPointerTensor(OpBuilder &b, Location loc, Value base,
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType) {
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
-  return b.create<StoreOp>(loc, ptrTensor, tensor, CacheModifier::NONE,
-                           EvictionPolicy::NORMAL);
+  return StoreOp::create(b, loc, ptrTensor, tensor, CacheModifier::NONE,
+                         EvictionPolicy::NORMAL);
 }
 
-Operation *createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
-                                   RankedTensorType tensorType) {
+Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
+                              RankedTensorType tensorType) {
   auto ptrTensor = createPointerTensor(b, loc, alloc, tensorType);
-  return b.create<LoadOp>(loc, ptrTensor, CacheModifier::NONE,
-                          EvictionPolicy::NORMAL, false);
+  return LoadOp::create(b, loc, ptrTensor, CacheModifier::NONE,
+                        EvictionPolicy::NORMAL, false);
 }
 
 FuncOp getEntryPoint(ModuleOp module) {
@@ -372,11 +374,14 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
     if (bufValues[iMemType].empty()) {
       continue;
     }
+
     buffers[iMemType][entryRegion] = {
         createBufferPointersTensor(b, memType, bufValues[iMemType])};
+    // Buffer pointers are rematerialized in the warp specialize region,
+    // not passed as an argument.
     createInWarpSpecialize(
         entryPoint, buffers[iMemType], [&](ImplicitLocOpBuilder &b) {
-          return AuxDataMap::RegionToValueMap::ValueType{
+          return ValueType{
               createBufferPointersTensor(b, memType, bufValues[iMemType])};
         });
     int numBufs = bufValues[iMemType].size();
@@ -397,8 +402,10 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
     // Barriers allocations are in shared memory
     barriers[entryRegion] = {
         createBufferPointersTensor(b, MemType::SHARED_MEM, barrierValues)};
+    // Barriers allocations are rematerialized in the warp specialize region,
+    // not passed as an argument.
     createInWarpSpecialize(entryPoint, barriers, [&](ImplicitLocOpBuilder &b) {
-      return AuxDataMap::RegionToValueMap::ValueType{
+      return ValueType{
           createBufferPointersTensor(b, MemType::SHARED_MEM, barrierValues)};
     });
 
@@ -436,7 +443,7 @@ void AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module) {
 
   // Create lock variable allocation
   Value lockVal = createLockVariable(b);
-  lock[entryRegion] = {lockVal};
+  lock[entryRegion] = {lockVal, lockVal.getType()};
   passToWarpSpecialize(entryPoint, lock[entryRegion], lock);
 
   // Create write commits tensor for cp-async
@@ -526,23 +533,23 @@ void AuxDataMap::getBuffersAndBarriers(
   }
 }
 
-void AuxDataMap::passToWarpSpecialize(
-    FuncOp func, AuxDataMap::RegionToValueMap::ValueType valueType,
-    RegionToValueMap &map) {
+void AuxDataMap::passToWarpSpecialize(FuncOp func, ValueType valueType,
+                                      RegionToValueMap &map) {
   func.walk([&](WarpSpecializeOp op) {
     op->insertOperands(op.getNumOperands(), {valueType.value});
     for (Region *region : op.getPartitionRegions()) {
-      // Pass the value as a pointer type (instead of the type of undelying
+      // Pass the value as a pointer type (instead of the type of underlying
       // memory)
       region->addArgument(valueType.value.getType(), op.getLoc());
       Type newType = valueType.type;
-      if (newType) {
-        auto tensorType = cast<RankedTensorType>(newType);
+      if (auto tensorType = dyn_cast<RankedTensorType>(newType)) {
+        // If this is a tensor, make sure the layout matches the region's warp
+        // count
         newType = getIntTensorType(
             region, tensorType.getShape(),
             tensorType.getElementType().getIntOrFloatBitWidth());
       }
-      map[region] = AuxDataMap::RegionToValueMap::ValueType{
+      map[region] = ValueType{
           region->getArgument(region->getNumArguments() - 1), newType};
     }
   });
@@ -550,8 +557,7 @@ void AuxDataMap::passToWarpSpecialize(
 
 void AuxDataMap::createInWarpSpecialize(
     FuncOp func, RegionToValueMap &map,
-    std::function<RegionToValueMap::ValueType(ImplicitLocOpBuilder &)>
-        createFn) {
+    std::function<ValueType(ImplicitLocOpBuilder &)> createFn) {
   func.walk([&](WarpSpecializeOp op) {
     for (Region *region : op.getPartitionRegions()) {
       ImplicitLocOpBuilder b(region->getLoc(), region);

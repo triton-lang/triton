@@ -165,14 +165,14 @@ public:
     rewriter.setInsertionPointAfter(loadOp);
     auto sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
     Location loc = loadOp.getLoc();
-    auto alloc = rewriter.create<ttg::LocalAllocOp>(
-        loc,
+    auto alloc = ttg::LocalAllocOp::create(
+        rewriter, loc,
         ttg::MemDescType::get(srcTy.getShape(), srcTy.getElementType(),
                               sharedEnc, sharedMemorySpace),
         loadOp.getResult());
     LDBG("Created local alloc op: " << *alloc);
     auto localLoad =
-        rewriter.create<ttg::LocalLoadOp>(loc, directOperandType, alloc);
+        ttg::LocalLoadOp::create(rewriter, loc, directOperandType, alloc);
     LDBG("Created local load op:" << *localLoad);
     rewriter.modifyOpInPlace(
         directDot, [&]() { directDot->setOperand(opIdx, localLoad); });
@@ -270,14 +270,14 @@ public:
     Location loc = loadOp.getLoc();
     auto sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
     rewriter.setInsertionPointAfter(loadOp);
-    auto alloc = rewriter.create<ttg::LocalAllocOp>(
-        loc,
+    auto alloc = ttg::LocalAllocOp::create(
+        rewriter, loc,
         ttg::MemDescType::get(srcTy.getShape(), srcTy.getElementType(), attr,
                               sharedMemorySpace),
         loadOp.getResult());
     LDBG("Create alloc: " << alloc);
 
-    auto localLoad = rewriter.create<ttg::LocalLoadOp>(loc, srcTy, alloc);
+    auto localLoad = ttg::LocalLoadOp::create(rewriter, loc, srcTy, alloc);
     LDBG("Create localload: " << localLoad);
 
     rewriter.replaceAllUsesExcept(loadOp.getResult(), localLoad, alloc);

@@ -84,7 +84,8 @@ struct ClipAsyncCopySizePerThread
     auto convertBlockLayout = [&](Value src, BlockedEncodingAttr enc) {
       auto ty = cast<RankedTensorType>(src.getType());
       auto newTy = ty.cloneWithEncoding(enc);
-      auto cvt = rewriter.create<ConvertLayoutOp>(copyOp->getLoc(), newTy, src);
+      auto cvt =
+          ConvertLayoutOp::create(rewriter, copyOp->getLoc(), newTy, src);
       return cvt.getResult();
     };
     src = convertBlockLayout(src, newBlockEnc);

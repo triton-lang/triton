@@ -152,14 +152,14 @@ private:
       case AMD::ISAFamily::CDNA4: {
         if (bitWidth == 16) {
           dsReadTr =
-              rewriter.create<ROCDL::ds_read_tr16_b64>(loc, vTy, vecAddr);
+              ROCDL::ds_read_tr16_b64::create(rewriter, loc, vTy, vecAddr);
         } else {
           if (isPackedLoad) {
             dsReadTr =
-                rewriter.create<ROCDL::ds_read_tr4_b64>(loc, vTyI32, vecAddr);
+                ROCDL::ds_read_tr4_b64::create(rewriter, loc, vTyI32, vecAddr);
           } else {
             dsReadTr =
-                rewriter.create<ROCDL::ds_read_tr8_b64>(loc, vTyI32, vecAddr);
+                ROCDL::ds_read_tr8_b64::create(rewriter, loc, vTyI32, vecAddr);
           }
         }
         break;
