@@ -584,8 +584,7 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
     auto vTrue = createInto<arith::ConstantIntOp>(
         b, allocOp.getLoc(), {partitionId, stageCluster}, true, 1);
     createInto<TMEMStoreOp>(b, allocOp.getLoc(), {partitionId, stageCluster},
-                            b.getType<AsyncTokenType>(), buffer, state.token,
-                            src, vTrue);
+                            Type(), buffer, Value(), src, vTrue);
   } else {
     // allocOp w/o src, assume the ownership of tmem belongs to first user
     // partitionId = accessDag.getRootNode()->user->partitionId;
