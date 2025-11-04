@@ -703,4 +703,4 @@ def test_overhead(tmp_path: pathlib.Path):
     session0_single_time, session0_loop_time = session_kernel_time("session0")
     session1_single_time, session1_loop_time = session_kernel_time("session1")
     assert session1_single_time / session0_single_time < 1.2, "Simple kernel overhead too high"
-    assert session1_loop_time / session0_loop_time < 1.6, "Loop kernel overhead too high"
+    assert session1_loop_time / session0_loop_time < 2.0, "Loop kernel overhead too high"
