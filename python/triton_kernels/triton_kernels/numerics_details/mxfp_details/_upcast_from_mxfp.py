@@ -87,40 +87,24 @@ def _upcast_from_mxfp(
 
     elif cuda_capability_geq(10, 0):
         assert is_fp4
-        out0_u32, out1_u32 = tl.inline_asm_elementwise(
-            # Type reinterpretation and conversion at the beginning and the end
-            # are Triton requirements for passing and retrieving variables to and from inline PTX.
+        packed_u32 = tl.inline_asm_elementwise(
             asm="""
             {
-            .reg .b32 in_32;
-            .reg .b8  in_8;
-            .reg .f16x2 out_f16x2;
-            .reg .b16 out0_u16, out1_u16;
-
-            mov.b32 in_32, $2;
-            cvt.u8.u32 in_8, in_32;
-
-            // two FP4 -> packed f16x2.
-            cvt.rn.f16x2.e2m1x2 out_f16x2, in_8;
-
-            // split f16x2 lanes into two 16-bit scalars
-            mov.b32 {out0_u16, out1_u16}, out_f16x2;
-
-            // write 32b outputs
-            cvt.u32.u16 $0, out0_u16;
-            cvt.u32.u16 $1, out1_u16;
+            .reg .b8 in_8;
+            .reg .f16x2 out;
+            cvt.u8.u32 in_8, $1;
+            cvt.rn.f16x2.e2m1x2 out, in_8;
+            mov.b32 $0, out;
             }
             """,
-            constraints="=r,=r,r",  # two 32-bit outputs, one 32-bit input
-            args=[tensor],  # tl.uint8 (two FP4 packed in one byte)
-            dtype=(tl.uint32, tl.uint32),  # return as u32, we will narrow outside
+            constraints="=r,r",
+            args=[tensor],  # tl.uint8 passed in as a 32-bit reg with value in low 8 bits
+            dtype=tl.uint32,
             is_pure=True,
             pack=1,
         )
-
-        # Narrow & reinterpret to float16.
-        lo_u16 = out0_u32.to(tl.uint16)
-        hi_u16 = out1_u32.to(tl.uint16)
+        lo_u16 = (packed_u32 & 0xFFFF).to(tl.uint16)
+        hi_u16 = (packed_u32 >> 16).to(tl.uint16)
         lo_f16 = lo_u16.to(tl.float16, bitcast=True)
         hi_f16 = hi_u16.to(tl.float16, bitcast=True)
 
