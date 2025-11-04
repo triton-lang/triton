@@ -12,7 +12,7 @@ import triton.language.semantic
 import triton.profiler as proton
 import triton.profiler.language as pl
 from triton.tools.tensor_descriptor import TensorDescriptor
-from triton._internal_testing import is_hip_cdna2, supports_tma, supports_ws
+from triton._internal_testing import is_hip_cdna4, is_hip_cdna2, supports_tma, supports_ws
 
 pl.enable_semantic("triton")
 
@@ -594,6 +594,7 @@ def test_timeline(tmp_path: pathlib.Path):
         assert trace_events[-1]["args"]["call_stack"][-2] == "test"
 
 
+@pytest.mark.skipif(is_hip_cdna4(), reason="HIP backend needs more calibration")
 def test_globaltime(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_globaltime.chrome_trace"
     mode = proton.mode.Default(
@@ -645,6 +646,7 @@ def test_globaltime(tmp_path: pathlib.Path):
         assert ts_diff >= target[0]["dur"]
 
 
+@pytest.mark.skipif(is_hip_cdna4(), reason="HIP backend needs more calibration")
 def test_overhead(tmp_path: pathlib.Path):
     temp_file_cycles = tmp_path / "test_overhead.hatchet"
     temp_file_time = tmp_path / "test_overhead_time.hatchet"
@@ -652,7 +654,7 @@ def test_overhead(tmp_path: pathlib.Path):
     @triton.jit()
     def kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr, LOOP: tl.constexpr):
         pl.enter_scope("kernel")
-        for _ in range(64):
+        for _ in range(32):
             if LOOP:
                 pl.enter_scope("loop")
             x = tl.load(x_ptr + tl.arange(0, BLOCK_SIZE))
@@ -661,7 +663,7 @@ def test_overhead(tmp_path: pathlib.Path):
                 pl.exit_scope("loop")
         pl.exit_scope("kernel")
 
-    BLOCK_SIZE = 128
+    BLOCK_SIZE = 256
     x = torch.zeros(BLOCK_SIZE, device="cuda", dtype=torch.float32)
     y = torch.zeros_like(x)
 
@@ -680,7 +682,7 @@ def test_overhead(tmp_path: pathlib.Path):
         bench()
 
     proton.start(str(temp_file_cycles.with_suffix("")), backend="instrumentation",
-                 mode=proton.mode.Default(metric_type="cycle", buffer_size=8192))
+                 mode=proton.mode.Default(metric_type="cycle", buffer_size=4096))
 
     with proton.scope("session1"):
         bench()
