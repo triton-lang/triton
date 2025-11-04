@@ -1,4 +1,5 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -141,11 +142,30 @@ static void expandLoops(ModuleOp moduleOp) {
     if (customEpiloguePeeling) {
       mlir::triton::peelLoopEpilogue(forOp, processPeeledEpilogueOp);
     }
+
+    // Prune all the statically dead mask ops in the epilogue. This is a
+    // hack, ideally we should do it for all the mask ops, but it is incorrect
+    // if we have speculatively executed async cp operations that will store to
+    // shmem even if the mask is false.
+    for (auto maskOp : peeledMaskOps) {
+      rewriter.setInsertionPoint(maskOp);
+      if (isConstantIntValue(maskOp.getPred(), 0)) {
+        SmallVector<Value> results;
+        for (auto result : maskOp->getResults()) {
+          auto poisonOp = mlir::ub::PoisonOp::create(rewriter, maskOp->getLoc(),
+                                                     result.getType());
+          results.push_back(poisonOp);
+        }
+        maskOp->replaceAllUsesWith(results);
+        maskOp->erase();
+      }
+    }
+    peeledMaskOps.clear();
   }
   assert(moduleOp.getOps<triton::gpu::PredicateStageOp>().empty() &&
          "PredicateStageOp should be resolved after the pipeline expansion");
   assert(verify(moduleOp).succeeded());
-  resolveMaskOp(moduleOp, peeledMaskOps);
+  resolveMaskOp(moduleOp);
 }
 
 struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
