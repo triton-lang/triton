@@ -654,7 +654,7 @@ def test_overhead(tmp_path: pathlib.Path):
     @triton.jit()
     def kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr, LOOP: tl.constexpr):
         pl.enter_scope("kernel")
-        for _ in range(32):
+        for _ in range(16):
             if LOOP:
                 pl.enter_scope("loop")
             x = tl.load(x_ptr + tl.arange(0, BLOCK_SIZE))

@@ -111,7 +111,6 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
         // Finalize and save warp-level context before each warp returns.
         partition.walk([&](triton::gpu::WarpReturnOp ret) {
           builder.setInsertionPoint(ret);
-          gpu::SaveCtxOp::create(builder, loc, newSegment, profileMemArg);
           gpu::FinalizeOp::create(builder, loc, newSegment, profileMemArg);
         });
       }
