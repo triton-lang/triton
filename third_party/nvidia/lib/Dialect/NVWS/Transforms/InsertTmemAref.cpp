@@ -41,7 +41,7 @@ using namespace triton::nvws;
 std::optional<int> getPartitionId(Operation *op, int pos = 0) {
   if (!hasPartition(op))
     return std::nullopt;
-  auto partitionIds = *getPartitionIds(op);
+  auto partitionIds = getPartitionIds(op);
   if (op->getNumRegions() > 0) {
     partitionIds = getPartitionOutputs(op)[pos];
   }
@@ -72,7 +72,6 @@ struct TmemAccessDag {
 
   TmemAccessDag(std::unique_ptr<Node> dag) : dag(std::move(dag)) {}
 
-  Node *getNode(Operation *op) { return op2dagMap.lookup(op); }
   Node *getRootNode() { return dag.get(); }
   TMEMAllocOp getAllocOp() { return cast<TMEMAllocOp>(dag->op); }
 
@@ -87,7 +86,6 @@ struct TmemAccessDag {
     auto ifOp = cast<scf::IfOp>(useThen->getOwner()->getParentOp());
     node->user.reset(new Node(ifOp, nullptr, {}, node));
     auto ifOpNode = node->user.get();
-    op2dagMap.insert({ifOp, ifOpNode});
 
     if (ifOp.thenBlock() != useThen->getOwner()->getBlock())
       std::swap(useThen, useElse);
@@ -195,7 +193,6 @@ struct TmemAccessDag {
       partitionId = getPartitionId(op);
     node->user.reset(new Node(op, &tokOperand, partitionId, node));
     auto newNode = node->user.get();
-    op2dagMap.insert({op, newNode});
     Value newTok;
 
     if (auto tmemLoad = dyn_cast<TMEMLoadOp>(op)) {
@@ -230,7 +227,6 @@ struct TmemAccessDag {
     }
     TmemAccessDag accessDag(
         std::make_unique<Node>(allocOp, nullptr, partitionId, nullptr));
-    accessDag.op2dagMap.insert({allocOp, accessDag.getRootNode()});
 
     if (allocOp.getSrc()) {
       // Handle tmem_alloc with src operand specially. When a src operand is
@@ -241,7 +237,6 @@ struct TmemAccessDag {
       auto user = *allocOp->getUsers().begin();
       accessDag.getRootNode()->user.reset(new Node{
           user, nullptr, getPartitionId(user), accessDag.getRootNode()});
-      accessDag.op2dagMap.insert({user, accessDag.getRootNode()->user.get()});
     } else {
       auto tok = allocOp.getToken();
       assert(tok && tok.hasOneUse());
@@ -318,7 +313,6 @@ struct TmemAccessDag {
   // --------------------------------------------------------------------------
 
   std::unique_ptr<Node> dag;
-  DenseMap<Operation *, Node *> op2dagMap;
   DenseMap<scf::ForOp, TMEMAllocOp> arefTmemAllocs;
 };
 
@@ -590,8 +584,7 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
     auto vTrue = createInto<arith::ConstantIntOp>(
         b, allocOp.getLoc(), {partitionId, stageCluster}, true, 1);
     createInto<TMEMStoreOp>(b, allocOp.getLoc(), {partitionId, stageCluster},
-                            b.getType<AsyncTokenType>(), buffer, state.token,
-                            src, vTrue);
+                            Type(), buffer, Value(), src, vTrue);
   } else {
     // allocOp w/o src, assume the ownership of tmem belongs to first user
     // partitionId = accessDag.getRootNode()->user->partitionId;
@@ -745,7 +738,9 @@ LogicalResult runOnFunction(triton::FuncOp funcOp) {
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
     // skip allocOps with source and > 1 partition
-    auto partitionIds = getPartitionIds(allocOp);
+    std::optional<SetVector<int>> partitionIds;
+    if (hasPartition(allocOp))
+      partitionIds = getPartitionIds(allocOp);
     if (!allocOp.getSrc() || (partitionIds && partitionIds->size() == 1))
       tmemDags.push_back(TmemAccessDag::build(allocOp));
   });
