@@ -276,7 +276,7 @@ private:
       case AMD::ISAFamily::CDNA4: {
         if (bitWidth == 16) {
           dsReadTr =
-              ROCDL::ds_read_tr16_b64::create(rewriter, loc, vTyI32, vecAddr);
+              ROCDL::ds_read_tr16_b64::create(rewriter, loc, vTy, vecAddr);
         } else {
           dsReadTr =
               ROCDL::ds_read_tr8_b64::create(rewriter, loc, vTyI32, vecAddr);
