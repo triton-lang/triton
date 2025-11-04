@@ -308,8 +308,7 @@ def _get_shape_per_cta(shape, cta_split_num):
     shape_per_cta = shape
     if cta_split_num is not None:
         assert len(cta_split_num) == len(shape)
-        for dim in range(len(shape_per_cta)):
-            shape_per_cta[dim] /= cta_split_num[dim]
+        shape_per_cta = [shape_per_cta[dim] // cta_split_num[dim] for dim in range(len(shape_per_cta))]
     return shape_per_cta
 
 

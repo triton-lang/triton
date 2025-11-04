@@ -30,16 +30,7 @@ namespace mlir {
 namespace triton {
 namespace nvidia_gpu {
 
-// Used by Triton runtime
-struct ClusterInfo {
-  ClusterInfo() : clusterDimX(1), clusterDimY(1), clusterDimZ(1) {}
-  int clusterDimX;
-  int clusterDimY;
-  int clusterDimZ;
-};
-
-std::unique_ptr<Pass> createTritonNvidiaGPUPlanCTAPass(
-    mlir::triton::nvidia_gpu::ClusterInfo *clusterInfo = nullptr);
+std::unique_ptr<Pass> createTritonNvidiaGPUPlanCTAPass();
 
 #define GEN_PASS_DECL
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"

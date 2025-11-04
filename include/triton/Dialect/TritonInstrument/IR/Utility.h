@@ -1,3 +1,6 @@
+#ifndef TRITONINSTRUMENT_UTILITY_H
+#define TRITONINSTRUMENT_UTILITY_H
+
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -14,8 +17,8 @@ constexpr int THREADS_BITMASK_SIZE = llvm::NextPowerOf2(TOTAL_NUM_THREADS);
 
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType);
-Operation *createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
-                                   RankedTensorType tensorType);
+Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
+                              RankedTensorType tensorType);
 Value expandOuterSlicedDim(OpBuilder &b, Location loc, Value tensor);
 TypedValue<RankedTensorType> createConstIntTensor(OpBuilder &builder,
                                                   Location loc, int64_t val,
@@ -25,14 +28,20 @@ FuncOp getEntryPoint(ModuleOp module);
 gpu::DistributedEncodingTrait
 getSingleDimSliceEncoding(gpu::BlockedEncodingAttr encoding, int dim);
 
+struct ValueType {
+  Value value;
+  Type type;
+
+  ValueType() = default;
+  ValueType(Value value, Type type) : value(value), type(type) {}
+  ValueType(std::pair<Value, Type> value)
+      : value(value.first), type(value.second) {}
+};
+
 // Map from IR region to ConSan auxiliary data. Auxiliary data is a value
 // and an optional type, for values that are stored in the scratch memory.
 struct AuxDataMap {
   struct RegionToValueMap {
-    struct ValueType {
-      Value value;
-      Type type = nullptr;
-    };
     DenseMap<Region *, ValueType> values;
     ValueType &operator[](Region *region) { return values[region]; }
     ValueType &operator[](Operation *op) {
@@ -65,13 +74,13 @@ private:
   void getBuffersAndBarriers(ModuleOp module,
                              SmallVector<SmallVector<int32_t>, 2> &bufValues,
                              SmallVector<int32_t> &barrierValues);
-  void passToWarpSpecialize(triton::FuncOp func,
-                            AuxDataMap::RegionToValueMap::ValueType value,
+  void passToWarpSpecialize(triton::FuncOp func, ValueType value,
                             RegionToValueMap &map);
   void createInWarpSpecialize(
       triton::FuncOp func, RegionToValueMap &map,
-      std::function<RegionToValueMap::ValueType(ImplicitLocOpBuilder &)>
-          createFn);
+      std::function<ValueType(ImplicitLocOpBuilder &)> createFn);
 };
 
 } // namespace mlir::triton::instrument
+
+#endif // TRITONINSTRUMENT_UTILITY_H

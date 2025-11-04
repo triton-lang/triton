@@ -53,35 +53,6 @@ SmallVector<StringAttr> permuteDimNames(const SmallVector<StringAttr> &names,
   return ret;
 }
 
-// Make a LinearLayout that maps a block-id to an N-dimensional index.
-//
-// The tensor is split up into CTAsPerCGA pieces, which are distributed among
-// the CTAsPerCGA CTAs (i.e. blocks) in the CGA (i.e. groups).
-//
-// See the nomenclature note at the top of the file for an explanation of why
-// this is called makeCgaLayout when it accepts a CTALayoutAttr.
-LinearLayout makeCgaLayout(CTALayoutAttr layout) {
-  MLIRContext *ctx = layout.getContext();
-  StringAttr kBlock = S("block");
-
-  int rank = layout.getCTAOrder().size();
-  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
-
-  LinearLayout ret = LinearLayout::empty();
-  for (int i = 0; i < rank; i++) {
-    // Start with the most minor dimension, which is order[0].
-    int dim = layout.getCTAOrder()[i];
-    int split = layout.getCTASplitNum()[dim];
-    int ctas = layout.getCTAsPerCGA()[dim];
-    assert(ctas % split == 0);
-    ret *= LinearLayout::identity1D(split, kBlock, outDimNames[dim]) *
-           LinearLayout::zeros1D(ctas / split, kBlock, outDimNames[dim]);
-  }
-
-  // Transpose to standard order (dim0, dim1, ...).
-  return ret.transposeOuts(outDimNames);
-}
-
 LinearLayout swizzledSharedToLinearLayout(ArrayRef<int64_t> shape,
                                           SwizzledSharedEncodingAttr shared) {
   MLIRContext *ctx = shared.getContext();
@@ -184,6 +155,28 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
 }
 
 } // namespace
+
+LinearLayout makeCgaLayout(CTALayoutAttr layout) {
+  MLIRContext *ctx = layout.getContext();
+  StringAttr kBlock = S("block");
+
+  int rank = layout.getCTAOrder().size();
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
+
+  LinearLayout ret = LinearLayout::empty();
+  for (int i = 0; i < rank; i++) {
+    // Start with the most minor dimension, which is order[0].
+    int dim = layout.getCTAOrder()[i];
+    int split = layout.getCTASplitNum()[dim];
+    int ctas = layout.getCTAsPerCGA()[dim];
+    assert(ctas % split == 0);
+    ret *= LinearLayout::identity1D(split, kBlock, outDimNames[dim]) *
+           LinearLayout::zeros1D(ctas / split, kBlock, outDimNames[dim]);
+  }
+
+  // Transpose to standard order (dim0, dim1, ...).
+  return ret.transposeOuts(outDimNames);
+}
 
 // Returns the layout of a single core matrix which tiles the nvmma layout
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
@@ -1664,182 +1657,6 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
   swapLL *= LinearLayout({{dimN, dimNBases}}, {dimN});
 
   return mfmaLL.compose(swapLL);
-}
-
-LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
-                                           int numWarps) {
-  assert(numWarps == 4 || numWarps == 8);
-  MLIRContext *ctx = scaleType.getContext();
-
-  using basisT = std::vector<std::vector<int32_t>>;
-  StringAttr kRegister = StringAttr::get(ctx, "register");
-  StringAttr kLane = StringAttr::get(ctx, "lane");
-  StringAttr kWarp = StringAttr::get(ctx, "warp");
-
-  int64_t M = scaleType.getDimSize(0);
-  int64_t N = scaleType.getDimSize(1);
-  auto CTALayout = getCTALayout(scaleType.getEncoding());
-  basisT regBase;
-
-  // Pick a layout that will be trivial to store into the following TMEM layout:
-  // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma-scale-factor-a-layout-1x
-  // Pack 4 scales together, if there are less than 4 we replicate the data.
-  for (int i = 1; i < 4; i = i << 1) {
-    if (i >= N)
-      regBase.push_back({0, 0});
-    else
-      regBase.push_back({0, i});
-  }
-  // Distribute 32 elements of M along a warp.
-  basisT laneBase = {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}};
-  // The data are replicated across all the warps of each warpgroups.
-  basisT warpBase = {{0, 0}, {0, 0}};
-  for (int i = 32; i < M; i = i << 1) {
-    regBase.push_back({i, 0});
-  }
-  for (int i = 4; i < N; i = i << 1) {
-    regBase.push_back({0, i});
-  }
-  // If we have 8 warps distribute the last dimension on the second warp group.
-  if (numWarps == 8) {
-    warpBase.push_back(regBase.back());
-    regBase.pop_back();
-  }
-
-  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, 2);
-  auto regLanes =
-      LinearLayout({{kRegister, regBase}, {kLane, laneBase}, {kWarp, warpBase}},
-                   {outDimNames[0], outDimNames[1]});
-
-  return combineCtaCgaWithShape(regLanes, CTALayout, scaleType.getShape());
-}
-
-std::optional<LinearLayout>
-getTmemLoadStoreLayout16x256(int M, int N, RankedTensorType oldType,
-                             int numWarps) {
-  // Too small to distribute on two warp groups while using 16x256 message.
-  if (numWarps == 8 && M == 64 && N <= 16 &&
-      oldType.getElementTypeBitWidth() < 32) {
-    return {};
-  }
-  assert(numWarps == 4 || numWarps == 8);
-  auto ctaLayout = getCTALayout(oldType.getEncoding());
-  SmallVector<int64_t> shape = getShapePerCTA(oldType);
-  MLIRContext *ctx = ctaLayout.getContext();
-
-  using basisT = std::vector<std::vector<int32_t>>;
-  StringAttr kRegister = StringAttr::get(ctx, "register");
-  StringAttr kLane = StringAttr::get(ctx, "lane");
-  StringAttr kWarp = StringAttr::get(ctx, "warp");
-  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, 2);
-
-  unsigned numElementsPerThread = 256 / oldType.getElementTypeBitWidth();
-  int kWidth = 64 / oldType.getElementTypeBitWidth();
-  // Follow the layout given by a tmem load using this layout for the inner
-  // shape:
-  // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-matrix-fragments-shape-16256b
-  LinearLayout innerTile =
-      nvidiaMmaTile(ctx, {8, numElementsPerThread}, kWidth, {1, 0}, {0, 1});
-  innerTile =
-      innerTile * LinearLayout::identity1D(2, kRegister, outDimNames[0]);
-  // Then distribute the rest along warpgroups and registers.
-  // Then the last warp distribute along M or N following the same order as
-  // in getTmemLoadStoreLayout32x32b. This allows us to use the same lowering to
-  // tmem for load and store. This part could be generalized by making the
-  // lowering of tmem load and store rely more on linear layout.
-  bool distributeMAlongWarps = false;
-  bool distributeNAlongWarps = false;
-  // Figure out how to distribute acorss warpgroups.
-  if (numWarps == 8) {
-    if (shape[0] > 128) {
-      distributeMAlongWarps = true;
-    } else {
-      distributeNAlongWarps = true;
-    }
-  }
-  int nBase = numElementsPerThread;
-  int maxRegN =
-      std::min(N, distributeNAlongWarps ? (int)shape[1] / 2 : (int)shape[1]);
-  if (maxRegN / nBase > 1) {
-    innerTile = innerTile * LinearLayout::identity1D(maxRegN / nBase, kRegister,
-                                                     outDimNames[1]);
-  }
-  if (M != 64) {
-    innerTile =
-        innerTile * LinearLayout::identity1D(2, kRegister, outDimNames[0]);
-  }
-  // Distribute M along 4 warps to satisfy TMEM requirements.
-  innerTile = innerTile * LinearLayout::identity1D(4, kWarp, outDimNames[0]);
-
-  // Fill out the rest of the shape with M first then N.
-  int numMRegDim = std::min(128, (int)shape[0]) / M;
-  if (numMRegDim > 1) {
-    innerTile = innerTile *
-                LinearLayout::identity1D(numMRegDim, kRegister, outDimNames[0]);
-  }
-  // Dim M=128 should be distributed on the second warp group.
-  int nextDim = 128;
-  if (distributeMAlongWarps) {
-    innerTile = innerTile * LinearLayout::identity1D(2, kWarp, outDimNames[0]);
-    nextDim <<= 1;
-  }
-  numMRegDim = shape[0] / nextDim;
-  if (numMRegDim > 1) {
-    innerTile = innerTile *
-                LinearLayout::identity1D(numMRegDim, kRegister, outDimNames[0]);
-  }
-  int maxN = distributeNAlongWarps ? shape[1] / 2 : shape[1];
-  int numNRegDim = maxN / maxRegN;
-  if (numNRegDim > 1) {
-    innerTile = innerTile *
-                LinearLayout::identity1D(numNRegDim, kRegister, outDimNames[1]);
-  }
-  if (distributeNAlongWarps) {
-    innerTile = innerTile * LinearLayout::identity1D(2, kWarp, outDimNames[1]);
-  }
-  return combineCtaCgaWithShape(innerTile, ctaLayout, oldType.getShape());
-}
-
-LinearLayout getTmemLoadLayoutSplitLongM(int M, int N, RankedTensorType oldType,
-                                         int numWarps) {
-  assert(numWarps == 8);
-  auto ctaLayout = getCTALayout(oldType.getEncoding());
-  SmallVector<int64_t> shape = getShapePerCTA(oldType);
-  MLIRContext *ctx = ctaLayout.getContext();
-
-  using basisT = std::vector<std::vector<int32_t>>;
-  StringAttr kRegister = StringAttr::get(ctx, "register");
-  StringAttr kLane = StringAttr::get(ctx, "lane");
-  StringAttr kWarp = StringAttr::get(ctx, "warp");
-
-  // Follow the layout given by a tmem load using this layout:
-  // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-matrix-fragments-shape-1632b2
-  basisT laneBase;
-  assert(M == 128);
-  for (int i = 1; i < 16; i = i << 1) {
-    laneBase.push_back({i, 0});
-  }
-  basisT regBase;
-  for (int i = 1; i < N / 2; i = i << 1) {
-    regBase.push_back({0, i});
-  }
-  laneBase.push_back({0, N / 2});
-  // then replicate the pattern.
-  for (int i = N; i < shape[1]; i = i << 1) {
-    regBase.push_back({0, i});
-  }
-  for (int i = M; i < shape[0]; i = i << 1) {
-    regBase.push_back({i, 0});
-  }
-  // warp 0 and 4 can only access M[0:32], therefore we need to interleave the
-  // data.
-  basisT warpBase = {{32, 0}, {64, 0}, {16, 0}};
-  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, 2);
-  auto regLanes =
-      LinearLayout({{kRegister, regBase}, {kLane, laneBase}, {kWarp, warpBase}},
-                   {outDimNames[0], outDimNames[1]});
-
-  return combineCtaCgaWithShape(regLanes, ctaLayout, oldType.getShape());
 }
 
 } // namespace mlir::triton::gpu

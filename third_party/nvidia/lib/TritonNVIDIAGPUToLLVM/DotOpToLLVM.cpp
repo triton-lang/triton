@@ -149,29 +149,29 @@ struct WarpGroupDotWaitOpConversion
     }
     auto packedType =
         LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
-    Value packed = rewriter.create<LLVM::UndefOp>(loc, packedType);
+    Value packed = LLVM::UndefOp::create(rewriter, loc, packedType);
     unsigned outputStructIndex = 0;
     for (Value input : inputs) {
       for (auto [i, type] : llvm::enumerate(
                cast<LLVM::LLVMStructType>(input.getType()).getBody())) {
-        Value value = rewriter.create<LLVM::ExtractValueOp>(loc, input, i);
-        packed = rewriter.create<LLVM::InsertValueOp>(
-            loc, packedType, packed, value, outputStructIndex++);
+        Value value = LLVM::ExtractValueOp::create(rewriter, loc, input, i);
+        packed = LLVM::InsertValueOp::create(rewriter, loc, packedType, packed,
+                                             value, outputStructIndex++);
       }
     }
-    Value packedOutput =
-        rewriter.create<triton::nvgpu::WGMMAWaitGroupOp>(loc, packed, pendings);
+    Value packedOutput = triton::nvgpu::WGMMAWaitGroupOp::create(
+        rewriter, loc, packed, pendings);
     // Unpack the output into the original struct types.
     SmallVector<Value> outputs;
     outputStructIndex = 0;
     for (Type type : inputs.getTypes()) {
       auto structType = cast<LLVM::LLVMStructType>(type);
-      Value unpacked = rewriter.create<LLVM::UndefOp>(loc, structType);
+      Value unpacked = LLVM::UndefOp::create(rewriter, loc, structType);
       for (auto [i, type] : llvm::enumerate(structType.getBody())) {
-        Value value = rewriter.create<LLVM::ExtractValueOp>(
-            loc, packedOutput, outputStructIndex++);
-        unpacked = rewriter.create<LLVM::InsertValueOp>(loc, structType,
-                                                        unpacked, value, i);
+        Value value = LLVM::ExtractValueOp::create(rewriter, loc, packedOutput,
+                                                   outputStructIndex++);
+        unpacked = LLVM::InsertValueOp::create(rewriter, loc, structType,
+                                               unpacked, value, i);
       }
       outputs.push_back(unpacked);
     }
