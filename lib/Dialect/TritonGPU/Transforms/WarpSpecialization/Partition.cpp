@@ -184,8 +184,6 @@ void setPartition(Operation *op, ArrayRef<int> partitionIds) {
   Builder b(op->getContext());
   auto sorted = llvm::to_vector(partitionIds);
   llvm::sort(sorted);
-  SetVector<int> sortedIds(sorted.begin(), sorted.end());
-  sorted.assign(sortedIds.begin(), sortedIds.end());
   op->setAttr(kPartitionAttrName, b.getDenseI32ArrayAttr(sorted));
   for (auto &region : op->getRegions()) {
     for (auto &block : region.getBlocks()) {
