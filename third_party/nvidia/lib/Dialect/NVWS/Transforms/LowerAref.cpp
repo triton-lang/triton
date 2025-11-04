@@ -108,6 +108,12 @@ struct ArefValue {
   SmallVector<Value> buffers;
 };
 
+std::optional<PartitionSet> maybeGetPartitionIds(Operation *op) {
+  if (hasPartition(op))
+    return triton::gpu::getPartitionIds(op);
+  return std::nullopt;
+}
+
 Value getEmptyBarrier(PatternRewriter &rewriter, Location loc, ArefValue aref,
                       Value stage, std::optional<PartitionSet> partitionIds,
                       StageCluster stageCluster) {
@@ -144,17 +150,17 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
   BarrierCount count;
 
   for (auto user : op->getUsers()) {
-    auto partitionIds = getPartitionIds(user);
-    if (!partitionIds)
+    if (!hasPartition(user))
       continue;
+    auto partitionIds = getPartitionIds(user);
 
-    assert(partitionIds->size() == 1);
+    assert(partitionIds.size() == 1);
 
     if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
-      if (producerGroups.count(partitionIds->front())) {
+      if (producerGroups.count(partitionIds.front())) {
         continue;
       }
-      producerGroups.insert(partitionIds->front());
+      producerGroups.insert(partitionIds.front());
       for (auto kind : castAsyncOpAttrs(putExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
@@ -167,10 +173,10 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         }
       }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-      if (consumerGroups.count(partitionIds->front())) {
+      if (consumerGroups.count(partitionIds.front())) {
         continue;
       }
-      consumerGroups.insert(partitionIds->front());
+      consumerGroups.insert(partitionIds.front());
       for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
         switch (kind) {
         case AsyncOp::TC5MMA:
@@ -332,7 +338,7 @@ void lowerTMALoad(ArefPutEnterOp op, Value fullBarrier,
 void insertWaitOp(PatternRewriter &rewriter, Operation *op, Value barrier,
                   Value phase, Value stage) {
   auto waitOp = WaitBarrierOp::create(rewriter, op->getLoc(), barrier, phase);
-  assignStageCluster(waitOp, getPartitionIds(op), getStageCluster(op),
+  assignStageCluster(waitOp, maybeGetPartitionIds(op), getStageCluster(op),
                      rewriter);
 }
 
@@ -345,11 +351,11 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
   // get empty barrier at a given stage
   Value emptyBarrier =
       getEmptyBarrier(rewriter, loc, arefVal, op.getStage(),
-                      getPartitionIds(op), getStageCluster(op));
+                      maybeGetPartitionIds(op), getStageCluster(op));
 
   insertWaitOp(rewriter, op, emptyBarrier, op.getPhase(), op.getStage());
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
-                           getPartitionIds(op), getStageCluster(op));
+                           maybeGetPartitionIds(op), getStageCluster(op));
   assert(views.size() == op.getBuffers().size());
 
   // Use the token to find the matching enter / exit pair
@@ -379,7 +385,7 @@ void rewritePutEnterOp(ArefPutEnterOp op, PatternRewriter &rewriter,
   if (llvm::any_of(asyncKinds, hasTMA)) {
     Value fullBarrier =
         getFullBarrier(rewriter, loc, arefVal, op.getStage(),
-                       getPartitionIds(op), getStageCluster(op));
+                       maybeGetPartitionIds(op), getStageCluster(op));
     lowerTMALoad(op, fullBarrier, rewriter, arefVal);
   }
 
@@ -415,11 +421,12 @@ void rewriteGetEnterOp(ArefGetEnterOp op, PatternRewriter &rewriter,
   auto loc = op.getLoc();
   rewriter.setInsertionPointAfter(op);
 
-  Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage(),
-                                     getPartitionIds(op), getStageCluster(op));
+  Value fullBarrier =
+      getFullBarrier(rewriter, loc, arefVal, op.getStage(),
+                     maybeGetPartitionIds(op), getStageCluster(op));
   insertWaitOp(rewriter, op, fullBarrier, op.getPhase(), op.getStage());
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
-                           getPartitionIds(op), getStageCluster(op));
+                           maybeGetPartitionIds(op), getStageCluster(op));
   assert(views.size() == op.getBuffers().size());
 
   for (auto [oldBuffer, view] : llvm::zip(op.getBuffers(), views)) {
@@ -435,7 +442,7 @@ void rewriteArefBufferOp(ArefBufferOp op, PatternRewriter &rewriter,
   auto loc = op->getLoc();
   rewriter.setInsertionPointAfter(op);
   auto views = getSubViews(arefVal, op.getStage(), loc, rewriter,
-                           getPartitionIds(op), getStageCluster(op));
+                           maybeGetPartitionIds(op), getStageCluster(op));
   assert(views.size() == op.getBuffers().size());
   for (int i = 0; i < op.getBuffers().size(); ++i)
     op.getBuffers()[i].replaceAllUsesWith(views[i]);
@@ -504,13 +511,15 @@ void rewritePutExitOp(ArefPutExitOp op, PatternRewriter &rewriter,
 
   if (needFence) {
     auto fence = FenceAsyncSharedOp::create(rewriter, loc, /*bCluster=*/false);
-    assignStageCluster(fence, getPartitionIds(op), stageCluster, rewriter);
+    assignStageCluster(fence, maybeGetPartitionIds(op), stageCluster, rewriter);
   }
 
-  Value fullBarrier = getFullBarrier(rewriter, loc, arefVal, op.getStage(),
-                                     getPartitionIds(op), getStageCluster(op));
+  Value fullBarrier =
+      getFullBarrier(rewriter, loc, arefVal, op.getStage(),
+                     maybeGetPartitionIds(op), getStageCluster(op));
   insertArriveBarrier(loc, castAsyncOpAttrs(op.getAsyncOps()), rewriter,
-                      fullBarrier, getPartitionIds(op), getStageCluster(op));
+                      fullBarrier, maybeGetPartitionIds(op),
+                      getStageCluster(op));
 }
 
 void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
@@ -541,22 +550,21 @@ void rewriteGetExitOp(ArefGetExitOp op, PatternRewriter &rewriter,
 
   if (needFence) {
     auto fence = FenceAsyncSharedOp::create(rewriter, loc, /*bCluster=*/false);
-    assignStageCluster(fence, getPartitionIds(op), stageCluster, rewriter);
+    assignStageCluster(fence, maybeGetPartitionIds(op), stageCluster, rewriter);
   }
 
   Value emptyBarrier =
       getEmptyBarrier(rewriter, loc, arefVal, op.getStage(),
-                      getPartitionIds(op), getStageCluster(op));
+                      maybeGetPartitionIds(op), getStageCluster(op));
   insertArriveBarrier(loc, asyncKinds, rewriter, emptyBarrier,
-                      getPartitionIds(op), stageCluster);
+                      maybeGetPartitionIds(op), stageCluster);
 }
 
 DenseSet<MMAv5OpInterface> getAsyncMMAv5Consumers(Value aref) {
   DenseSet<MMAv5OpInterface> mmav5Ops;
   for (auto arefUser : aref.getUsers()) {
     if (auto getEnter = dyn_cast<ArefGetEnterOp>(arefUser)) {
-      auto id = getPartitionIds(getEnter);
-      if (id && id->front() == 0) {
+      if (hasPartition(getEnter) && getPartitionIds(getEnter).front() == 0) {
         // Ignore mmav5 ops in the default partition. They are not warp
         // specialized.
         continue;
@@ -793,9 +801,10 @@ void combineArefs(scf::ForOp loop) {
   for (auto getEnterOp : getEnterOps) {
     if (auto liveBeforeOp =
             getDominantConsumer(getEnterOp, *loop.getBody(), domInfo)) {
+      assert(hasPartition(getEnterOp));
       auto partitionIds = getPartitionIds(getEnterOp);
-      assert(partitionIds && partitionIds->size() == 1);
-      liveBeforeGroups[{liveBeforeOp, partitionIds->front()}].push_back(
+      assert(partitionIds.size() == 1);
+      liveBeforeGroups[{liveBeforeOp, partitionIds.front()}].push_back(
           getEnterOp);
     }
   }
@@ -818,7 +827,7 @@ void combineArefs(scf::ForOp loop) {
       for (auto user : aref->getUsers()) {
         if (auto putEnterOp = dyn_cast<ArefPutEnterOp>(user)) {
           putEnterOps.push_back(putEnterOp);
-          producerGroupIds.push_back(getPartitionIds(putEnterOp)->front());
+          producerGroupIds.push_back(getPartitionIds(putEnterOp).front());
         } else if (auto putExitOp = dyn_cast<ArefPutExitOp>(user)) {
           putExitOps.push_back(putExitOp);
         } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {

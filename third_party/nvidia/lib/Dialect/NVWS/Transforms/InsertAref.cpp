@@ -40,16 +40,15 @@ struct ProducedValueInfo {
 SmallVector<ProducedValueInfo> getProducedValues(Operation *op,
                                                  Block *loopBody) {
   SmallVector<ProducedValueInfo> producedValues;
-  auto partitionIds = getPartitionIds(op);
 
-  if (!partitionIds)
+  if (!hasPartition(op))
     return {};
 
   // For ops without regions, all results share the same partition IDs
-  auto partitionOutputs =
-      op->getNumRegions() == 0
-          ? SmallVector<SetVector<int>, 4>(op->getNumResults(), *partitionIds)
-          : getPartitionOutputs(op);
+  auto partitionOutputs = op->getNumRegions() == 0
+                              ? SmallVector<SetVector<int>, 4>(
+                                    op->getNumResults(), getPartitionIds(op))
+                              : getPartitionOutputs(op);
 
   for (auto result : op->getResults()) {
     if (isa<AsyncTokenType>(result.getType()))
@@ -67,7 +66,7 @@ std::optional<std::pair<AllocOp, LoadOp>> isLoadAndAlloc(Value result) {
   if (!alloc)
     return std::nullopt;
   if (auto load = alloc.getSrc().template getDefiningOp<LoadOp>();
-      load && *getPartitionIds(alloc) == *getPartitionIds(load)) {
+      load && getPartitionIds(alloc) == getPartitionIds(load)) {
     // if alloc and load are in different partitions, they are treated as two
     // different producer operations.
     return std::make_pair(alloc, load);
@@ -365,8 +364,8 @@ void createArefGet(OpBuilder &builder, scf::ForOp loop, ArefCreateOp aref,
   auto loc = results[0].getLoc();
 
   auto filterUse = [&](Operation *user) {
-    if (auto partitionIds = getPartitionIds(user)) {
-      return llvm::is_contained(*partitionIds, consumerPartition);
+    if (hasPartition(user)) {
+      return llvm::is_contained(getPartitionIds(user), consumerPartition);
     } else {
       return false;
     }
@@ -412,7 +411,7 @@ void createArefGet(OpBuilder &builder, scf::ForOp loop, ArefCreateOp aref,
   for (auto result : results) {
     if (auto localAlloc = result.getDefiningOp<LocalAllocOp>()) {
       auto callback = [&](Operation *oldOp, Operation *newOp) {
-        assert(llvm::is_contained(*getPartitionIds(oldOp), consumerPartition));
+        assert(llvm::is_contained(getPartitionIds(oldOp), consumerPartition));
         setPartition(newOp, consumerPartitions);
       };
       replaceUsesAndPropagateType(builder, localAlloc, dataBuf, callback);
@@ -467,17 +466,17 @@ bool insertArefs(OpBuilder &builder, scf::ForOp loop, Block *block,
   auto processResultUses = [&](Value result) {
     for (auto &use : result.getUses()) {
       auto user = use.getOwner();
-      auto userPartitions = getPartitionIds(user);
       // if use is outside ttg.ws, it may not have partition ids, skip it
-      if (!userPartitions)
+      if (!hasPartition(user))
         continue;
+      auto userPartitions = getPartitionIds(user);
       if (isa<scf::YieldOp>(user)) {
         userPartitions = getPartitionIds(&use);
       }
       for (auto id : producedValue.partitions) {
-        userPartitions->remove(id);
+        userPartitions.remove(id);
       }
-      for (auto id : *userPartitions) {
+      for (auto id : userPartitions) {
         resultsPerPartition[id].insert(result);
         usesPerPartition[id].push_back(&use);
       }

@@ -5,16 +5,6 @@
 
 module attributes {"ttg.num-warps" = 4 : i32} {
 
-// CHECK-LABEL: @no_partitions
-tt.func @no_partitions(%lb: i32, %ub: i32, %step: i32) {
-  // CHECK-NEXT: scf.for
-  scf.for %i = %lb to %ub step %step : i32 {
-    // CHECK-NEXT: op_a
-    "op_a"() : () -> ()
-  } {ttg.partition.stages = [], ttg.warp_specialize.tag = 0 : i32}
-  tt.return
-}
-
 // CHECK-LABEL: @one_partition
 tt.func @one_partition(%lb: i32, %ub: i32, %step: i32) {
   // CHECK-NEXT: scf.for
