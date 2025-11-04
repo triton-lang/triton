@@ -22,6 +22,7 @@ class PrecisionConfig:
 swiglu_fn = _swiglu_fn
 standard_swiglu_fn = _standard_swiglu_fn
 
+
 class SwiGLU(torch.autograd.Function):
 
     @staticmethod

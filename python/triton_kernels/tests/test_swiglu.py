@@ -31,8 +31,8 @@ def test_op(M, N, limit, add_bias, device, alpha=0.5):
     tri_y = swiglu(x, alpha, precision_config, add_bias=add_bias)
     ref_y = swiglu_torch(x, alpha, precision_config, add_bias=add_bias)
     assert_close(tri_y, ref_y)
-    
-    
+
+
 @pytest.mark.parametrize("M, N", [(1311, 4352)])
 def test_op_standard_swiglu(M, N, device):
     torch.manual_seed(2)

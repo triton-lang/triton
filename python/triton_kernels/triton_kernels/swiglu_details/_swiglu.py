@@ -63,8 +63,8 @@ def _standard_swiglu_fn(input):
 
 @triton.jit(repr=swiglu_repr, launch_metadata=swiglu_launch_metadata)
 def _swiglu(Out, OutExpectedScale, OutActualScale, OutChecksumScale, A, AScale, alpha, M, N, stride_am, stride_an,
-            stride_outm, stride_outn, limit: tl.constexpr, add_bias: tl.constexpr, NTokens, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
-            EVEN_N: tl.constexpr, M_BLOCKS, N_BLOCKS, flexpoint_saturate_inf: tl.constexpr):
+            stride_outm, stride_outn, limit: tl.constexpr, add_bias: tl.constexpr, NTokens, BLOCK_M: tl.constexpr,
+            BLOCK_N: tl.constexpr, EVEN_N: tl.constexpr, M_BLOCKS, N_BLOCKS, flexpoint_saturate_inf: tl.constexpr):
     if NTokens is not None:
         M = tl.load(NTokens)
         M_BLOCKS = (M + BLOCK_M - 1) // BLOCK_M
