@@ -56,14 +56,14 @@ def swizzle2d(pid, grid_m, grid_n, GROUP_M: tl.constexpr):
 def _load_tile_attrs(
     tile_id,
     num_tiles,
-    unpadded_m,
+    grid_m,
     grid_n,
     M,
     K,
-    ExptData,
-    ExptHist,
-    ExptOffs,
-    ExptTileOffs,
+    BlockSchedule,
+    SliceSizes,
+    SliceOffs,
+    BlockOffs,
     EXPT_IS_INNER: tl.constexpr,
     X_IS_PADDED: tl.constexpr,
     W_IS_PADDED: tl.constexpr,
@@ -78,15 +78,15 @@ def _load_tile_attrs(
     pid_emnk = tile_id
     if XCD_SWIZZLE != 1:
         pid_emnk = xcd_swizzle(pid_emnk, num_tiles, XCD_SWIZZLE)
-    pid_e = pid_emnk // (unpadded_m * grid_n * SPLIT_K)
-    pid_mnk = pid_emnk % (unpadded_m * grid_n * SPLIT_K)
+    pid_e = pid_emnk // (grid_m * grid_n * SPLIT_K)
+    pid_mnk = pid_emnk % (grid_m * grid_n * SPLIT_K)
     if SPLIT_K > 1:
         pid_k = pid_mnk % SPLIT_K
         pid_mn = pid_mnk // SPLIT_K
     else:
         pid_k: tl.constexpr = 0
         pid_mn = pid_mnk
-    pid_m, pid_n = swizzle2d(pid_mn, unpadded_m, grid_n, GROUP_M)
+    pid_m, pid_n = swizzle2d(pid_mn, grid_m, grid_n, GROUP_M)
 
     # unpack expert data
     if EXPT_IS_INNER:
@@ -96,19 +96,18 @@ def _load_tile_attrs(
         tl.static_assert(X_IS_PADDED or W_IS_PADDED, "At least one input must be padded!")
         tl.static_assert(SPLIT_K == 1, "Not supported yet")
         tl.static_assert(M is not None)
-        expt_id, pid_z, pid_z_out, start_m, block_id, eM = 0, 0, pid_e, 0, pid_m, M
-        k_tiles = tl.cdiv(tl.load(ExptHist + pid_e), BLOCK_K)
-        padded_start_off_raw = tl.load(ExptTileOffs + pid_e)
-        padded_start_off = padded_start_off_raw * BLOCK_K
-        unpadded_start_off = tl.load(ExptOffs + pid_e)
-        off_k_x = padded_start_off if X_IS_PADDED else unpadded_start_off
+        slice_id, pid_z, pid_z_out, slice_off_m, block_id, slice_size = 0, 0, pid_e, 0, pid_m, M
+        k_tiles = tl.cdiv(tl.load(SliceSizes + pid_e), BLOCK_K)
+        block_off_k = tl.load(BlockOffs + pid_e)
+        slice_off_k = tl.load(SliceOffs + pid_e)
+        off_k_x = block_off_k * BLOCK_K if X_IS_PADDED else slice_off_k
         # K_W is only used for non-TMA kernel (W bound is handled by TMA on TMA kernel).
         if W_IS_PADDED:
-            off_k_w = padded_start_off_raw * PACKED_BLOCK_K_W
-            K_W = tl.load(ExptTileOffs + pid_e + 1) * PACKED_BLOCK_K_W
+            off_k_w = block_off_k * PACKED_BLOCK_K_W
+            K_W = tl.load(BlockOffs + pid_e + 1) * PACKED_BLOCK_K_W
         else:
-            off_k_w = unpadded_start_off
-            K_W = tl.load(ExptOffs + pid_e + 1)
+            off_k_w = slice_off_k
+            K_W = tl.load(SliceOffs + pid_e + 1)
     else:
         off_k_x = pid_k * BLOCK_K
         off_k_w = pid_k * PACKED_BLOCK_K_W
@@ -117,26 +116,26 @@ def _load_tile_attrs(
         else:
             K_W = K // (BLOCK_K // PACKED_BLOCK_K_W)
         k_tiles = tl.cdiv(K - off_k_x, BLOCK_K * SPLIT_K)
-        if ExptData is None:
+        if BlockSchedule is None:
             tl.static_assert(M is not None)
-            expt_id, pid_z, pid_z_out, start_m, block_id, eM = pid_e, pid_e, pid_e, 0, pid_m, M
+            slice_id, pid_z, pid_z_out, slice_off_m, block_id, slice_size = pid_e, pid_e, pid_e, 0, pid_m, M
         else:
             tl.static_assert(M is None)
-            expt_data = tl.load(ExptData + pid_m)
-            expt_id = expt_data & 0x0000FFFF
-            block_id = expt_data >> 16
-            eM = tl.load(ExptHist + expt_id)
-            start_m = tl.load(ExptOffs + expt_id)
+            block_schedule = tl.load(BlockSchedule + pid_m)
+            slice_id = block_schedule & 0x0000FFFF
+            block_id = block_schedule >> 16
+            slice_size = tl.load(SliceSizes + slice_id)
+            slice_off_m = tl.load(SliceOffs + slice_id)
             pid_z, pid_z_out = 0, 0
 
     off_m = BLOCK_M * block_id
 
     return (
-        expt_id,
+        slice_id,
         pid_z,
         pid_z_out,
-        start_m,
-        eM,
+        slice_off_m,
+        slice_size,
         off_m,
         pid_n,
         k_tiles,
