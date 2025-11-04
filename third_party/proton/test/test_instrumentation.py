@@ -423,7 +423,6 @@ def test_warp_spec(tmp_path: pathlib.Path):
                           WARP_SPECIALIZE: tl.constexpr,  #
                           ):
         dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
-        pl.enter_scope("kernel")
         pid = tl.program_id(axis=0)
         num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
         num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -454,7 +453,6 @@ def test_warp_spec(tmp_path: pathlib.Path):
         offs_cm = pid_m * BLOCK_SIZE_M
         offs_cn = pid_n * BLOCK_SIZE_N
         c_desc.store([offs_cm, offs_cn], c)
-        pl.exit_scope("kernel")
 
     def matmul_tma(a, b, warp_specialize: bool):
         # Check constraints.
@@ -507,11 +505,10 @@ def test_warp_spec(tmp_path: pathlib.Path):
 
     with open(temp_file, "rb") as f:
         data = json.load(f)
-        kernel_level = data[0]["children"][0]["children"][0]
-        assert kernel_level["children"][0]["frame"]["name"] == "loop"
-        assert kernel_level["children"][0]["metrics"]["cycles"] > 0
-        assert kernel_level["frame"]["name"] == "kernel"
-        assert kernel_level["metrics"]["cycles"] > 0
+        kernel = data[0]["children"][0]
+        assert kernel["children"][0]["frame"]["name"] == "loop"
+        assert kernel["children"][0]["metrics"]["cycles"] > 0
+        assert kernel["frame"]["name"] == "matmul_kernel_tma"
 
 
 def test_timeline(tmp_path: pathlib.Path):
