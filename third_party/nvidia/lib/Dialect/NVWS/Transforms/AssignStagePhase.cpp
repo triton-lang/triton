@@ -447,6 +447,11 @@ void visitBackwardSlice(scf::ForOp wsLoop, Value value,
       auto pos = findValuePosInRange(forOp.getRegionIterArgs(), value);
       assert(pos);
       visitBackwardSlice(wsLoop, forOp.getInitArgs()[*pos], callback, visited);
+      // visit control operands of for-op
+      for (int idx = 0; idx < forOp.getNumControlOperands(); ++idx) {
+        auto control = forOp.getOperand(idx);
+        visitBackwardSlice(wsLoop, control, callback, visited);
+      }
     }
   } else if (auto defOp = value.getDefiningOp();
              isa<scf::IfOp, scf::ForOp>(defOp)) {
