@@ -118,8 +118,8 @@ private:
     // Accumulate the permutations to apply the inverse for loads
     ColumnAction accPermReg =
         ColumnAction::identity(kReg, cvt.getInDimSizeLog2(kReg));
-    // ds_read_tr*_b64 performs a cooperative transposed load across a 16
-    // threads. The instruction processes a 16×N tile (N=4 for 16-bit, N=8 for
+    // ds_read_tr*_b64 performs a cooperative transposed load across 16
+    // threads. The instruction processes an Nx16 tile (N=4 for 16-bit, N=8 for
     // 8-bit). The loaded tile is re-packed/transposed where lane i will
     // receive the i-th column.
     //
@@ -144,8 +144,7 @@ private:
     // from, only that each lane needs to load 64 contiguous bits from shared
     // memory. We require N number of lanes to be contiguous since they read
     // consecutive 64 bits loaded from the same lanes.
-    tile = LinearLayout::identity1D(1, kReg, kOffset) *
-           LinearLayout::identity1D(ldsParams.needContigReg, kLane, kOffset);
+    tile = LinearLayout::identity1D(ldsParams.needContigReg, kLane, kOffset);
 
     const auto isaFamily = targetInfo.getISAFamily();
     // B8 types on gfx1250 require a different tile with double the contiguity
@@ -178,16 +177,6 @@ private:
       return failure();
     }
 
-    // Find if there is a register permutation that allows us to divideLeft
-    // Note: our tile doesn't currently need register permutations (reg size 1)
-    ColumnAction permDivide;
-    if (auto maybePermutation = regPermForDivide(cvt, tile, /*left=*/true)) {
-      permDivide = maybePermutation.value();
-    } else {
-      return failure();
-    }
-    cvt = permDivide.apply(cvt);
-    accPermReg = accPermReg.leftCompose(permDivide);
     auto maybeQuot = divideLeft(cvt, tile);
     if (!maybeQuot.has_value()) {
       return failure();
@@ -205,15 +194,9 @@ private:
       return failure();
     }
 
-    // Choose the vectorisation factor.
-    // We don't need to vectorize further so set vec to 1.
-    // Keep fullTileVec to match ldmatrix lowering.
-    auto vec = 1;
-    auto fullTileVec = fullTile * LinearLayout::identity1D(vec, kReg, kAddr);
-
     // just add warps as compose belowe requires the dimensions of both layouts
     // to agree
-    fullTileVec *= LinearLayout::identity1D(1, kWarp, kAddr);
+    auto fullTileVec = fullTile * LinearLayout::identity1D(1, kWarp, kAddr);
     // fullTile.invert() is a map from kOffset, kAddr into kReg, kLane, kWarp
     // addrToOffset gives us a map from kAddr into kOffset, which is the map of
     // the addresses each lane should hold
