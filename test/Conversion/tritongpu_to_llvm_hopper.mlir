@@ -1,5 +1,17 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv='compute-capability=90 ptx-version=81' --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=81' | FileCheck %s
 
+module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @test_cluster_attr
+  // CHECK: nvvm.cluster_dim = array<i32: 4>
+  // CHECK: nvvm.kernel = 1 : ui1
+  // CHECK: nvvm.reqntid = array<i32: 128>
+  tt.func @test_cluster_attr(%lb : index, %A : !tt.ptr<f16>) {
+    tt.return
+  }
+}
+
+// -----
+
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0], instrShape = [16, 256, 32]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
