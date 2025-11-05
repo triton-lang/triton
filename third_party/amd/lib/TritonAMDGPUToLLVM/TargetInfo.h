@@ -11,6 +11,8 @@ class TargetInfo : public mlir::triton::TargetInfoBase {
 public:
   explicit TargetInfo(std::string arch) : arch(std::move(arch)) {}
 
+  llvm::AMDGPU::IsaVersion getIsaVersion() const;
+
   ISAFamily getISAFamily() const { return deduceISAFamily(arch); }
 
   llvm::AMDGPU::GPUKind getGPUKind() const;

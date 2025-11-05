@@ -228,6 +228,129 @@ private:
   const AMD::TargetInfo &targetInfo;
 };
 
+/// Encodes the waitcnt value for AMDGPU architectures.
+///
+/// Note: This function duplicates the bitpacking logic from AMDGPU backend
+/// (llvm/lib/Target/AMDGPU/Utils/AMDGPUBaseInfo.h), as it's not accessible from
+/// llvm/include. The logic handles different encoding schemes across
+/// various GPU architecture versions (pre-gfx9 to gfx11).
+///
+/// The waitcnt encoding uses different bit positions for each counter
+/// based on the ISA version:
+/// - Vmcnt (vector memory counter): tracks pending vector memory operations
+/// - Expcnt (export counter): tracks pending export operations
+/// - Lgkmcnt (LDS/GDS/kernel memory counter): tracks pending LDS/GDS/kernel
+/// memory ops
+///
+/// Each architecture version has its own bit layout, Vmcnt, Expcnt and Lgkmcnt
+/// are decoded as follows:
+///     Vmcnt = Waitcnt[3:0]        (pre-gfx9)
+///     Vmcnt = Waitcnt[15:14,3:0]  (gfx9,10)
+///     Vmcnt = Waitcnt[15:10]      (gfx11)
+///     Expcnt = Waitcnt[6:4]       (pre-gfx11)
+///     Expcnt = Waitcnt[2:0]       (gfx11)
+///     Lgkmcnt = Waitcnt[11:8]     (pre-gfx10)
+///     Lgkmcnt = Waitcnt[13:8]     (gfx10)
+///     Lgkmcnt = Waitcnt[9:4]      (gfx11)
+static FailureOr<unsigned> encodeWaitcnt(llvm::AMDGPU::IsaVersion isaVersion,
+                                         unsigned vmcnt, unsigned expcnt,
+                                         unsigned lgkmcnt) {
+  if (isaVersion.Major < 9) {
+    vmcnt = std::min(15u, vmcnt);
+    expcnt = std::min(7u, expcnt);
+    lgkmcnt = std::min(15u, lgkmcnt);
+    return vmcnt | (expcnt << 4) | (lgkmcnt << 8);
+  }
+  if (isaVersion.Major == 9) {
+    vmcnt = std::min(63u, vmcnt);
+    expcnt = std::min(7u, expcnt);
+    lgkmcnt = std::min(15u, lgkmcnt);
+    unsigned lowBits = vmcnt & 0xF;
+    unsigned highBits = (vmcnt >> 4) << 14;
+    unsigned otherCnts = (expcnt << 4) | (lgkmcnt << 8);
+    return lowBits | highBits | otherCnts;
+  }
+  if (isaVersion.Major == 10) {
+    vmcnt = std::min(63u, vmcnt);
+    expcnt = std::min(7u, expcnt);
+    lgkmcnt = std::min(63u, lgkmcnt);
+    unsigned lowBits = vmcnt & 0xF;
+    unsigned highBits = (vmcnt >> 4) << 14;
+    unsigned otherCnts = (expcnt << 4) | (lgkmcnt << 8);
+    return lowBits | highBits | otherCnts;
+  }
+  if (isaVersion.Major == 11) {
+    vmcnt = std::min(63u, vmcnt);
+    expcnt = std::min(7u, expcnt);
+    lgkmcnt = std::min(63u, lgkmcnt);
+    return (vmcnt << 10) | expcnt | (lgkmcnt << 4);
+  }
+  return failure();
+}
+
+struct MemoryCounterWaitOpConversion
+    : public ConvertOpToLLVMPattern<amdgpu::MemoryCounterWaitOp> {
+  MemoryCounterWaitOpConversion(const LLVMTypeConverter &converter,
+                                const AMD::TargetInfo &targetInfo,
+                                PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(amdgpu::MemoryCounterWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto isaVersion = targetInfo.getIsaVersion();
+
+    if (isaVersion.Major >= 12) {
+      Location loc = op.getLoc();
+      if (std::optional<int> ds = adaptor.getDs())
+        ROCDL::WaitDscntOp::create(rewriter, loc, *ds);
+
+      if (std::optional<int> load = adaptor.getLoad())
+        ROCDL::WaitLoadcntOp::create(rewriter, loc, *load);
+
+      if (std::optional<int> store = adaptor.getStore())
+        ROCDL::WaitStorecntOp::create(rewriter, loc, *store);
+
+      if (std::optional<int> exp = adaptor.getExp())
+        ROCDL::WaitExpcntOp::create(rewriter, loc, *exp);
+
+      rewriter.eraseOp(op);
+      return success();
+    }
+
+    auto getVal = [](Attribute attr) -> unsigned {
+      if (attr)
+        return cast<IntegerAttr>(attr).getInt();
+
+      // This value will be clamped to the maximum value for the target version.
+      return 1024;
+    };
+    unsigned ds = getVal(adaptor.getDsAttr());
+    unsigned exp = getVal(adaptor.getExpAttr());
+
+    unsigned vmcnt = 1024;
+    Attribute load = adaptor.getLoadAttr();
+    Attribute store = adaptor.getStoreAttr();
+    if (load && store) {
+      vmcnt = getVal(load) + getVal(store);
+    } else if (load) {
+      vmcnt = getVal(load);
+    } else if (store) {
+      vmcnt = getVal(store);
+    }
+
+    FailureOr<unsigned> waitcnt = encodeWaitcnt(isaVersion, vmcnt, exp, ds);
+    if (failed(waitcnt))
+      return op.emitOpError("unsupported chipset");
+
+    rewriter.replaceOpWithNewOp<ROCDL::SWaitcntOp>(op, *waitcnt);
+    return success();
+  }
+
+private:
+  const AMD::TargetInfo &targetInfo;
+};
+
 } // namespace
 
 void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
@@ -241,6 +364,6 @@ void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
   patterns.add<
       TransLocalLoadOpConversion<triton::amdgpu::LocalLoadPackedTransposedOp>>(
       typeConverter, targetInfo, benefit);
-  patterns.add<LocalBarrierOpConversion>(typeConverter, targetInfo,
-                                         barrierBenefit);
+  patterns.add<LocalBarrierOpConversion, MemoryCounterWaitOpConversion>(
+      typeConverter, targetInfo, barrierBenefit);
 }
