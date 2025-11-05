@@ -95,10 +95,7 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
   auto kRow = str_attr("row");
   auto kCol = str_attr("col");
   // Set the output order to be kRow, kCol and the input order to be kReg first
-  LinearLayout tile = LinearLayout::identity1D(1, kReg, kRow) *
-                      LinearLayout::identity1D(1, kReg, kCol) *
-                      LinearLayout::identity1D(1, kLane, kRow) *
-                      LinearLayout::identity1D(1, kLane, kCol);
+  LinearLayout tile = LinearLayout({{kReg, {}}, {kLane, {}}}, {kRow, kCol});
   // Each register moves 32/bitwidth (= 2) columns when unpacked
   if (unpacked) {
     tile *= LinearLayout::zeros1D(1, kReg, kCol, 2);
@@ -276,6 +273,8 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
     if (instr32Rows && layout16Rows) {
       // If the lane 16 would load repeated data, instead we make it load half
       // of the data via the 16x32bx2 instruction
+      tile = divideLeft(tile, LinearLayout::identity1D(2, kLane, rowColDims[0]))
+                 .value();
       tile *= LinearLayout::identity1D(nColsMissing / 2, kReg, rowColDims[1]) *
               LinearLayout::identity1D(2, kLane, rowColDims[1]);
 
