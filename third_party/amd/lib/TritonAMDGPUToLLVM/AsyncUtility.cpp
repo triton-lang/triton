@@ -59,11 +59,15 @@ void addLocalBarrierAfterAmdGpuAsyncWait(ModuleOp mod) {
 
   IRRewriter builder(mod.getContext());
   for (auto waitOp : waits) {
-    if (isa<mlir::gpu::BarrierOp, gpu::LocalBarrierOp>(waitOp->getNextNode()))
+    if (isa<mlir::gpu::BarrierOp, amdgpu::MemoryCounterWaitOp>(
+            waitOp->getNextNode()))
       continue;
 
     builder.setInsertionPointAfter(waitOp);
-    builder.create<triton::gpu::LocalBarrierOp>(waitOp->getLoc());
+    auto dsAttr = builder.getI32IntegerAttr(0);
+    builder.create<amdgpu::MemoryCounterWaitOp>(
+        waitOp->getLoc(), /* load= */ nullptr, /* store= */ nullptr,
+        /* ds= */ dsAttr, /* exp= */ nullptr);
   }
 }
 
