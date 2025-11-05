@@ -220,12 +220,17 @@ def _matmul_ogs(
 
     (
         expt_id, start_z, start_z_out,
-        start_m, eM, off_m,
+        start_m, off_m,
         off_k_x, off_k_w, K_W,
-    ) = _load_tile_attrs(pid, pid_s, pid_m, pid_k,
-                         M, K, ExptData, ExptHist, ExptOffs, ExptTileOffs,
+    ) = _load_tile_attrs(pid_s, pid_m, pid_k,
+                         K, ExptData, ExptHist, ExptOffs, ExptTileOffs,
                          HAS_RAGGED_INNER, X_IS_PADDED, W_IS_PADDED,
                          BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K)
+
+    if ExptOffs is not None and not HAS_RAGGED_INNER:
+        eM = tl.load(ExptHist + expt_id)
+    else:
+        eM = M
 
     loop_k = tl.load(ExptHist + pid_s) if HAS_RAGGED_INNER else K - off_k_x
     k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)

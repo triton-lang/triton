@@ -212,24 +212,27 @@ def _p_matmul_ogs(
     for block_id in tl.range(tl.program_id(0), num_blocks, NUM_SMS, flatten=True, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER, warp_specialize=True):
 
         pid_s, pid_m, pid_n, pid_k = compute_pids(block_id, useful_grid_m, grid_n, num_blocks, XCD_SWIZZLE, GROUP_M, SPLIT_K)
-        if SliceSizes is not None and not HAS_RAGGED_INNER:
-            M = tl.load(SliceSizes + pid_s)
-
         # ------------------------------------------------------------
         # prologue
         # ------------------------------------------------------------
-        off_w_z, off_x_z, off_y_z, slice_off_m, _, off_m, off_k_x0, off_k_w0, _ = _load_tile_attrs(
-            block_id, pid_s, pid_m, pid_k,
-            M, K, BlockSchedule, SliceSizes, SliceOffs, BlockOffs,
+        off_w_z, off_x_z, off_y_z, slice_off_m, off_m, off_k_x0, off_k_w0, _ = _load_tile_attrs(
+            pid_s, pid_m, pid_k,
+            K, BlockSchedule, SliceSizes, SliceOffs, BlockOffs,
             HAS_RAGGED_INNER, X_IS_PADDED, W_IS_PADDED,
             BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K)
+
+        # TODO: if RAGGED_DIMENSION == "M"
+        if SliceSizes is not None and not HAS_RAGGED_INNER:
+            shape_m = tl.load(SliceSizes + off_w_z)
+        else:
+            shape_m = M
 
         off_n = BLOCK_N * pid_n
 
         # ---- offset x ------
         if USE_GATHER_TMA:
             offs_m = off_m + tl.arange(0, BLOCK_M)
-            mask_m = offs_m < M
+            mask_m = offs_m < shape_m
             if BlockSchedule is None:
                 offs_x_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m, mask=mask_m)
                 # Bump rows to account for the Z offset.
@@ -240,7 +243,7 @@ def _p_matmul_ogs(
         if X_TMA_MODE is None:
             XBase = X + off_x_z.to(index_type) * stride_x_z
             offs_m = off_m + tl.arange(0, BLOCK_M)
-            offs_m = tl.max_contiguous(tl.multiple_of(offs_m % M, BLOCK_M), BLOCK_M)
+            offs_m = tl.max_contiguous(tl.multiple_of(offs_m % shape_m, BLOCK_M), BLOCK_M)
             # no needs to bounds-check here because `offs_m` wraps around M dim
             if GatherIndx is not None:
                 tl.static_assert(HAS_GATHER)
@@ -286,7 +289,7 @@ def _p_matmul_ogs(
                     x = X.load([off_x_z, slice_off_m + off_m, off_k_x])
                     x = x.reshape(BLOCK_M, BLOCK_K)
             elif X_TMA_MODE == "ragged":
-                x = load_ragged(X, slice_off_m, M, [off_x_z, off_m, off_k_x], ragged_dim=1)
+                x = load_ragged(X, slice_off_m, shape_m, [off_x_z, off_m, off_k_x], ragged_dim=1)
                 x = x.reshape(BLOCK_M, BLOCK_K)
             else:
                 tl.static_assert(X_TMA_MODE is None)
@@ -309,7 +312,7 @@ def _p_matmul_ogs(
                     mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
                 else:
                     mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
-                mask_m = off_m + tl.arange(0, BLOCK_M) < M
+                mask_m = off_m + tl.arange(0, BLOCK_M) < shape_m
                 x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
             elif x_format == "fp16" or x_format == "bf16":
                 x_scales: tl.constexpr = None
@@ -357,14 +360,18 @@ def _p_matmul_ogs(
         if INDEPENDENT_EPILOGUE:
             tile_id1 += NUM_SMS
             pid_s1, pid_m1, pid_n1, pid_k1 = compute_pids(tile_id1, useful_grid_m, grid_n, num_blocks, XCD_SWIZZLE, GROUP_M, SPLIT_K)
-            expt_id1, _, start_z1, start_m1, eM1, off_m1, _, _, _ = _load_tile_attrs(
-                tile_id1, pid_s1, pid_m1, pid_k1,
-                M, K, BlockSchedule, SliceSizes, SliceOffs, BlockOffs,
+            expt_id1, _, start_z1, start_m1, off_m1, _, _, _ = _load_tile_attrs(
+                pid_s1, pid_m1, pid_k1,
+                K, BlockSchedule, SliceSizes, SliceOffs, BlockOffs,
                 HAS_RAGGED_INNER, X_IS_PADDED, W_IS_PADDED,
                 BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K)
             off_n1 = pid_n1 * BLOCK_N
+            if SliceSizes is not None and not HAS_RAGGED_INNER:
+                eM1 = tl.load(SliceSizes + expt_id1)
+            else:
+                eM1 = M
         else:
-            tile_id1, expt_id1, start_z1, start_m1, eM1 = block_id, off_w_z, off_y_z, slice_off_m, M
+            tile_id1, expt_id1, start_z1, start_m1, eM1 = block_id, off_w_z, off_y_z, slice_off_m, shape_m
             off_m1, off_n1, pid_k1 = off_m, off_n, pid_k
 
         offs_m = off_m1 + tl.arange(0, BLOCK_M)

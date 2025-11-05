@@ -72,11 +72,9 @@ def compute_pids(block_id, grid_m, grid_n, num_blocks, XCD_SWIZZLE: tl.constexpr
 
 @triton.jit
 def _load_tile_attrs(
-    block_id,
     pid_s,
     pid_m,
     pid_k,
-    M,
     K,
     BlockSchedule,
     SliceSizes,
@@ -97,7 +95,6 @@ def _load_tile_attrs(
         # pid_k is meaningless (always zero).
         tl.static_assert(X_IS_PADDED or W_IS_PADDED, "At least one input must be padded!")
         tl.static_assert(SPLIT_K == 1, "Not supported yet")
-        tl.static_assert(M is not None)
         block_off_k = tl.load(BlockOffs + pid_s)
         slice_off_k = tl.load(SliceOffs + pid_s)
         off_x_m = BLOCK_M * pid_m
@@ -105,7 +102,6 @@ def _load_tile_attrs(
         off_w_k = block_off_k * PACKED_BLOCK_K_W if W_IS_PADDED else slice_off_k
         off_w_z, off_x_z, off_x_slice = 0, 0, 0
         off_y_z = pid_s
-        slice_size = M
         # K_W is only used for non-TMA kernel (W bound is handled by TMA on TMA kernel).
         K_W = tl.load(BlockOffs + pid_s + 1) * PACKED_BLOCK_K_W if W_IS_PADDED else tl.load(SliceOffs + pid_s + 1)
     else:
@@ -113,16 +109,13 @@ def _load_tile_attrs(
         off_w_k = pid_k * PACKED_BLOCK_K_W
         # dense matmul mode
         if BlockSchedule is None:
-            tl.static_assert(M is not None)
-            off_w_z, off_x_z, off_y_z, off_x_slice, slice_size = pid_s, pid_s, pid_s, 0, M
+            off_w_z, off_x_z, off_y_z, off_x_slice = pid_s, pid_s, pid_s, 0
             off_x_m = BLOCK_M * pid_m
         # ragged matmul mode
         else:
-            tl.static_assert(M is None)
             block_schedule = tl.load(BlockSchedule + pid_m)
             off_w_z = block_schedule & 0x0000FFFF
             block_id = block_schedule >> 16
-            slice_size = tl.load(SliceSizes + off_w_z)
             off_x_slice = tl.load(SliceOffs + off_w_z)
             off_x_z, off_y_z = 0, 0
             off_x_m = BLOCK_M * block_id
@@ -134,7 +127,6 @@ def _load_tile_attrs(
         off_x_z,
         off_y_z,
         off_x_slice,
-        slice_size,
         off_x_m,
         off_x_k,
         off_w_k,
