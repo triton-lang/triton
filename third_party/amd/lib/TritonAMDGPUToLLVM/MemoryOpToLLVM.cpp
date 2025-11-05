@@ -239,7 +239,7 @@ private:
 /// based on the ISA version:
 /// - Vmcnt (vector memory counter): tracks pending vector memory operations
 /// - Expcnt (export counter): tracks pending export operations
-/// - Lgkmcnt (LDS/GDS/kernel memory counter): tracks pending LDS/GDS/kernel
+/// - Lgkmcnt (LDS/GDS/scalar memory counter): tracks pending LDS/GDS/scalar
 /// memory ops
 ///
 /// Each architecture version has its own bit layout, Vmcnt, Expcnt and Lgkmcnt
