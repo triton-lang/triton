@@ -567,7 +567,7 @@ class InterpreterBuilder:
     def ternary_op(self, lhs, rhs, other, op):
         output = op(lhs.data, rhs.data, other.data)
         tl_dtype = other.dtype.scalar
-        output = self.check_promotion(output, (lhs.data.dtype, rhs.data.dtype, tl_dtype))
+        output = self.check_promotion(output, (lhs.data.dtype, rhs.data.dtype, other.data.dtype), tl_dtype)
         return TensorHandle(output, tl_dtype)
 
     create_clampf = lambda self, arg, lo, hi, propagate_nans: self.ternary_op(arg, lo, hi, np.clip)
