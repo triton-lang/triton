@@ -54,7 +54,7 @@ python3 example_dsl.py
 python3 example_dsl.py --op-measure
 
 # Enable warp sampling with specific warp IDs
-python3 example_dsl.py --warp-sampling --warp-ids "0,1,2,3"
+python3 example_dsl.py --warp-sampling --warp-ids "0,1,2,3" --gmem_buffer
 
 # High accuracy profiling
 python3 example_dsl.py --increase-accuracy
@@ -91,8 +91,8 @@ python3 example_dsl.py --increase-accuracy
 
 | Parameter | Options | Description |
 |-----------|---------|-------------|
-| `buffer_type` | `shared_mem`| Storage location for profiling buffer |
-| `buffer_size` | `N` | Byte size of the profiling buffer (default: infer a small fraction of shared memory) |
+| `buffer_type` | `shared`, `global`| Storage location for profiling buffer |
+| `buffer_size` | `N` | Byte size of the profiling buffer (default: infer a small fraction of shared memory if `shared`. For `global`, 16384 bytes * num_sampled_warp) |
 
 ### Sampling Configuration
 
