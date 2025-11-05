@@ -3,12 +3,10 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
-#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 
@@ -115,9 +113,6 @@ private:
     LinearLayout fullTile;
     // Contiguous tile
     LinearLayout tile;
-    // Accumulate the permutations to apply the inverse for loads
-    ColumnAction accPermReg =
-        ColumnAction::identity(kReg, cvt.getInDimSizeLog2(kReg));
     // ds_read_tr*_b64 performs a cooperative transposed load across 16
     // threads. The instruction processes an Nx16 tile (N=4 for 16-bit, N=8 for
     // 8-bit). The loaded tile is re-packed/transposed where lane i will
@@ -172,6 +167,8 @@ private:
           LinearLayout::identity1D(ldsParams.needContigReg, kReg, kAddr) *
           LinearLayout::identity1D(missingLanes / otherLanes, kLane, kAddr);
     }
+    // Add warp dimension so we can invert and compose with reps later
+    fullTile *= LinearLayout::identity1D(1, kWarp, kAddr);
 
     if (cvt.getInDimSize(kReg) < fullTile.getInDimSize(kReg)) {
       return failure();
@@ -194,13 +191,10 @@ private:
       return failure();
     }
 
-    // just add warps as compose belowe requires the dimensions of both layouts
-    // to agree
-    auto fullTileVec = fullTile * LinearLayout::identity1D(1, kWarp, kAddr);
     // fullTile.invert() is a map from kOffset, kAddr into kReg, kLane, kWarp
     // addrToOffset gives us a map from kAddr into kOffset, which is the map of
     // the addresses each lane should hold
-    auto addrToOffset = fullTileVec.invert().compose(reps);
+    auto addrToOffset = fullTile.invert().compose(reps);
     // sanity check
     assert(addrToOffset.getInDimSizeLog2(kAddr) >= 3 &&
            addrToOffset.getInDimSizeLog2(kAddr) <= 6);
@@ -209,14 +203,14 @@ private:
         LinearLayout({{kLane, addrToOffset.getBases().lookup(kAddr)},
                       {kWarp, reps.getBases().lookup(kWarp)}},
                      {{kOffset, reps.getOutDimSize(kOffset)}}, false);
+
     // Compute the bits that are moved by one instruction
     // Compute elements for which we can swap the xor by an add
     auto [nAdditive, permStrides] =
         actionAdditiveStrides(reps, addrLayout, maskSpanAffineOffset);
     reps = permStrides.apply(reps);
-    accPermReg = accPermReg.leftCompose(permStrides);
 
-    // Perform computation in bytes for uniformity with other lowerings
+    // Perform computation in bytes, LLVM optimises this better
     assert(bitWidth >= 8);
     auto i8Tile =
         zerosLike(LinearLayout::identity1D(bitWidth / 8, kReg, kOffset));
@@ -285,7 +279,7 @@ private:
     };
 
     // Elements per op
-    auto elemsPerInstr = fullTileVec.getInDimSize(kReg);
+    auto elemsPerInstr = fullTile.getInDimSize(kReg);
     auto elemsPerVec = ldsParams.instBitWidth / bitWidth;
     auto vecTy = vec_ty(llvmElemTy, elemsPerVec);
     for (int i = 0; i < cvt.getInDimSize(kReg); i += nAdditive) {
@@ -306,7 +300,8 @@ private:
     }
     // apply all the inverse permutations in the reverse order
     assert(vals.size() == cvt.getInDimSize(kReg));
-    vals = accPermReg.inverse().apply(vals);
+    vals = permStrides.inverse().apply(vals);
+
     return success();
   }
 
