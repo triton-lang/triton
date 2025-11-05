@@ -421,8 +421,10 @@ TensorMemoryEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                                  unsigned blockM, unsigned blockN,
                                  unsigned colStride, unsigned CTASplitM,
                                  unsigned CTASplitN) {
-  if (CTASplitM < 1 || CTASplitN < 1) {
-    return emitError() << "CTASplitM and CTASplitN must be greater than 0";
+  if (!(CTASplitM >= 1 && CTASplitN >= 1 && llvm::isPowerOf2_32(CTASplitM) &&
+        llvm::isPowerOf2_32(CTASplitN))) {
+    return emitError()
+           << "CTASplitM and CTASplitN must be greater than 0 and a power of 2";
   }
   if (blockM != 64 && blockM != 128) {
     return emitError() << "blockM must be 64 or 128 but got " << blockM;
@@ -430,10 +432,13 @@ TensorMemoryEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   if (!llvm::isPowerOf2_32(blockN)) {
     return emitError() << "blockN must be a power of 2 but got " << blockN;
   }
-  if (!(colStride >= 1 && llvm::isPowerOf2_32(colStride))) {
-    return emitError()
-           << "colStride must be a power of two greater than or equal to 1 "
-           << "but got " << colStride;
+  if (blockN > 512) {
+    return emitError() << "blockN must be less than or equal to 512 but got "
+                       << blockN;
+  }
+  if (!(colStride == 1 || colStride == 2 || colStride == 4)) {
+    return emitError() << "colStride must be 1, 2, or 4 but got "
+                       << "but got " << colStride;
   }
   return success();
 }
