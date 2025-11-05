@@ -282,8 +282,7 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
         tmem_layout: ttgl.constexpr = TensorMemoryLayout(tmem_shape, col_stride=32 // acc_dtype.primitive_bitwidth,
                                                          cta_split_num=mma_layout.cta_split_num)
 
-        num_warps: ttgl.constexpr = ttgl.num_warps()
-
+        # The layout of this mbarrier seems to be irrelevant. We might want to change the API to just acacept num_ctas
         mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [1],
                                                   mbarrier.MBarrierLayout(ctas_per_cga=(2 if two_ctas else 1)))
         mbarrier.init(mma_barrier, count=1)
@@ -298,7 +297,7 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
             acc_dtype,
             (M, N),
             tmem_layout,
-            num_warps=num_warps,
+            num_warps=ttgl.num_warps(),
             ctas_per_cga=mma_layout.ctas_per_cga,
             cta_split_num=mma_layout.cta_split_num,
             cta_order=mma_layout.cta_order,
