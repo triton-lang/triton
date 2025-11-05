@@ -166,7 +166,7 @@ without needing any core compiler changes or rebuilding Triton.
 Here we now run two kernels one with the full standard Triton pipeline and one with fully customized pipeline entirely from within
 kernel code with modifying any core Triton compiler code or recompiling. We run the kernel with a hook to output the standard pipeline, modify
 the compiler.py file to insert our out of tree pass before add_loop_unroll pass (although their is not restriction of where it can be inserted),
-then run the second kernel with a different pipeline. This modification can, as before, be see in the kernel function name modification by the 
+then run the second kernel with a different pipeline. This modification can, as before, be see in the kernel function name modification by the
 inserted pass.
 
 ``` python
