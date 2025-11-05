@@ -218,7 +218,13 @@ def _downcast_to_mxfp(
         # Only 4-byte store on rows whose base address is 4-byte aligned.
         row_base = start_mx_quant + offs_outer * stride_mxt_outer
         aligned_rows = (row_base & (GROUP_BYTES - 1)) == 0
-        full_group_mask = full_group_mask & aligned_rows
+
+        # Guard against potentially misaligned base pointer.
+        # If base is not 4-byte aligned, disable grouped stores and let the byte-level tail path handle all elements.
+        base_addr_i64 = mx_tensor_ptr.to(tl.int64, bitcast=True)
+        aligned_base = (base_addr_i64 & (GROUP_BYTES - 1)) == 0
+
+        full_group_mask = full_group_mask & aligned_rows & aligned_base
 
         # Pack 4 consecutive bytes into one u32.
         vals_u32 = out_tensor.to(tl.uint32)
@@ -232,7 +238,7 @@ def _downcast_to_mxfp(
         # Deal with tail bytes not covered by groups, or rows where groups were not written.
         group_for_elem = (offs_mxt_quant // GROUP_BYTES) * GROUP_BYTES
         elem_groups_last_idx = start_mx_quant + group_for_elem + (GROUP_BYTES - 1)
-        elem_in_full_group = (elem_groups_last_idx < bound_elems) & aligned_rows
+        elem_in_full_group = (elem_groups_last_idx < bound_elems) & aligned_rows & aligned_base
         tail_mask = full_mask_mxt & ~elem_in_full_group
         tl.store(mx_tensor_ptr + mx_tensor_offsets, out_tensor, mask=tail_mask)
     else:
