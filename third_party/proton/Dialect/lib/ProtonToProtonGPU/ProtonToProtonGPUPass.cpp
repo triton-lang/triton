@@ -238,7 +238,7 @@ public:
       if (bufferSize > 0)
         allocBufferSize = bufferSize.getValue();
       else
-        allocBufferSize = 1024 * segmentNum;
+        allocBufferSize = 16384 * segmentNum;
     } else {
       mlir::emitError(loc, "buffer-type not supported");
       return failure();

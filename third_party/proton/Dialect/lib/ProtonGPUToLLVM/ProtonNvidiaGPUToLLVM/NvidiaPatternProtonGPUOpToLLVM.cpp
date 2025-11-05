@@ -62,9 +62,23 @@ struct CircularStoreOpConversion
         stInst(ptrOpr, valOpr).predicate(dataPack.isWriter, "b");
         builder.launch(rewriter, loc, void_ty(rewriter.getContext()));
       } else {
-        // TODO(fywkevin): add non-vectorized version for num_warps=1
-        llvm::report_fatal_error(
-            "num_warps=1 currently not supported due to misaligned address");
+        // Non-vectorized version for num_warps=1 to handle potential
+        // misalignment
+        auto stInst = builder.create<>("st")->o("global").o("cg").b(32);
+
+        auto unPackedVals = unpackLLVector(loc, dataPack.record, rewriter);
+
+        // First store: write first 32-bit value at base address
+        auto *ptrOpr0 = builder.newAddrOperand(dataPack.ptr, "l", 0);
+        auto *valOpr0 = builder.newOperand(unPackedVals[0], "r");
+        stInst(ptrOpr0, valOpr0).predicate(dataPack.isWriter, "b");
+
+        // Second store: write second 32-bit value at offset +4 bytes
+        auto *ptrOpr1 = builder.newAddrOperand(dataPack.ptr, "l", 4);
+        auto *valOpr1 = builder.newOperand(unPackedVals[1], "r");
+        stInst(ptrOpr1, valOpr1).predicate(dataPack.isWriter, "b");
+
+        builder.launch(rewriter, loc, void_ty(rewriter.getContext()));
       }
     } else if (addrSpace == 3) {
       targetInfo.getTritonTargetInfo().storeDShared(
