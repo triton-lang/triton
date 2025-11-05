@@ -476,33 +476,14 @@ class InterpreterBuilder:
     def check_promotion(self, output, org_types, tl_type):
         promoted_np_dtype = output.dtype not in org_types
         if promoted_np_dtype:
-            if tl_type == tl.int8:
-                return tl.int16
-            if tl_type == tl.uint8:
-                return tl.uint16
-            if tl_type == tl.int16:
-                return tl.int32
-            if tl_type == tl.uint16:
-                return tl.uint32
-            if tl_type == tl.int32:
-                return tl.int64
-            if tl_type == tl.uint32:
-                return tl.uint64
-            if tl_type in (tl.float8e5, tl.float8e5b16, tl.float8e4nv, tl.float8e4b8, tl.float8e4b15):
-                return tl.float16
-            if tl_type == tl.float16:
-                return tl.float32
-            if tl_type == tl.bfloat16:
-                return tl.float32
-            if tl_type == tl.float32:
-                return tl.float64
-
-        return tl_type
+            return output.astype(_get_np_dtype(tl_type))
+        return output
 
     # binary operators
     def binary_op(self, lhs, rhs, op):
         output = op(lhs.data, rhs.data)
-        tl_dtype = self.check_promotion(output, (lhs.data.dtype, rhs.data.dtype), lhs.dtype.scalar)
+        tl_dtype = lhs.dtype.scalar
+        output = self.check_promotion(output, (lhs.data.dtype, rhs.data.dtype), tl_dtype)
         return TensorHandle(output, tl_dtype)
 
     create_fadd = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
@@ -585,7 +566,8 @@ class InterpreterBuilder:
     # ternary functions
     def ternary_op(self, lhs, rhs, other, op):
         output = op(lhs.data, rhs.data, other.data)
-        tl_dtype = self.check_promotion(output, (lhs.data.dtype, rhs.data.dtype, other.data.dtype), other.dtype.scalar)
+        tl_dtype = other.dtype.scalar
+        output = self.check_promotion(output, (lhs.data.dtype, rhs.data.dtype, tl_dtype))
         return TensorHandle(output, tl_dtype)
 
     create_clampf = lambda self, arg, lo, hi, propagate_nans: self.ternary_op(arg, lo, hi, np.clip)
