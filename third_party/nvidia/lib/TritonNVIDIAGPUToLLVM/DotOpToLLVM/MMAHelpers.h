@@ -41,6 +41,8 @@ struct MemDescOperand {
 class DotOpMmaMemLoader {
 public:
   virtual ~DotOpMmaMemLoader() = default;
+  // Given the starting coordinates of the logical tensor (i.e. reps *
+  // ctaTileSize), return the associated memory descriptor for SMEM / TMEM.
   virtual MemDescOperand memLoad(int a, int b,
                                  ConversionPatternRewriter &rewriter,
                                  Location loc) const = 0;
@@ -50,10 +52,8 @@ class DotOpMmaSmemLoader : public DotOpMmaMemLoader {
 public:
   DotOpMmaSmemLoader() = default;
 
-  DotOpMmaSmemLoader(MMASMEMDescriptor desc, Value baseb128, LinearLayout llInv,
-                     ArrayRef<unsigned> instrShape)
-      : desc(desc), baseb128(baseb128), ll(std::move(llInv)),
-        instrShape(instrShape) {}
+  DotOpMmaSmemLoader(MMASMEMDescriptor desc, Value baseb128, LinearLayout llInv)
+      : desc(desc), baseb128(baseb128), ll(std::move(llInv)) {}
 
   static DotOpMmaSmemLoader
   build(Location loc, RewriterBase &rewriter, gpu::MemDescType memTy,
@@ -136,15 +136,6 @@ public:
                             {{kWarp, warpId}})[0]
               .second;
       baseSrcb128 = b.add(baseSrcb128, warpStrideb128);
-      // Increase the instruction shape to describe the size at a block level
-      // as the input just describes it at a warp level
-      int logwgAlongMN = 0;
-      for (int i = 0; i < warpGroupToOffsetb128.getInDimSizeLog2(kWarp); i++) {
-        if (warpGroupToOffsetb128.getBasis(kWarp, i, kOffset) != 0) {
-          logwgAlongMN++;
-        }
-      }
-      instrShape[MNdim] *= (1 << logwgAlongMN);
     }
 
     for (auto [dim, instrSize] : llvm::zip(ll.getInDimNames(), instrShape)) {
@@ -155,7 +146,7 @@ public:
     auto desc = getDescriptor(ll, instrShape, bitwidth, MNdim, mmaVersion);
 
     Value baseb128 = b.zext(i64_ty, b.and_(baseSrcb128, b.i32_val(0x3FFF)));
-    return {desc, baseb128, ll, instrShape};
+    return {desc, baseb128, ll};
   }
 
   Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
@@ -163,14 +154,10 @@ public:
     auto *ctx = loc.getContext();
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto dims = to_vector(ll.getInDimNames());
-    assert((a + 1) * instrShape[0] <= ll.getInDimSize(dims[0]));
-    assert((b + 1) * instrShape[1] <= ll.getInDimSize(dims[1]));
     assert(to_vector(ll.getOutDimNames()) ==
            llvm::to_vector(
                ArrayRef<StringAttr>{str_attr("offset"), str_attr("block")}));
-    int32_t totalOffElems = ll.apply({{dims[0], a * instrShape[0]},
-                                      {dims[1], b * instrShape[1]}})[0]
-                                .second;
+    int32_t totalOffElems = ll.apply({{dims[0], a}, {dims[1], b}})[0].second;
     int32_t smemByteOffsetb8 = totalOffElems * desc.bitwidth / 8;
     auto currDesc = desc.descriptor;
     // Take the next 0/1/2/3 bits after the 128b tile
@@ -194,7 +181,6 @@ private:
   MMASMEMDescriptor desc;
   Value baseb128;
   LinearLayout ll;
-  SmallVector<unsigned> instrShape;
 
   static MMASMEMDescriptor getDescriptor(const LinearLayout &ll,
                                          ArrayRef<unsigned> instrShape,
@@ -337,9 +323,9 @@ private:
 class DotOpMmaV5TmemLoader : public DotOpMmaMemLoader {
 public:
   DotOpMmaV5TmemLoader() {}
-  DotOpMmaV5TmemLoader(Value tensor, Value base,
-                       SmallVector<unsigned int> instrShape, bool interleaved,
-                       bool trans);
+  static DotOpMmaV5TmemLoader build(Location loc, RewriterBase &rewriter,
+                                    gpu::MemDescType memTy, Value tmemBase);
+
   MemDescOperand tmemLoad(int a, int b, ConversionPatternRewriter &rewriter,
                           Location loc) const;
 
@@ -349,14 +335,12 @@ public:
   }
 
 private:
-  Value base;
-  bool trans;
-  bool interleaved;
-  bool unpacked;
-  SmallVector<unsigned int> instrShape;
-  int numElementsPer32b;
-  int numRepM;
-  int numSlicePerBlockN;
+  DotOpMmaV5TmemLoader(LinearLayout ll, Value address, int bitwidth)
+      : ll(std::move(ll)), address(address), bitwidth(bitwidth) {}
+
+  LinearLayout ll;
+  Value address;
+  int bitwidth;
 };
 
 static Value getOffsetedBase(Value v, gpu::MemDescType memDescTy,
