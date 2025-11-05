@@ -423,6 +423,10 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     K *= shape_k
     instr_shape[1] *= shape_n
 
+    # TODO Fix this logic as I don't think it's super solid
+    # We have at most 512 cols per CTA
+    N = min(N, 512 // (max(M // 128, 1)))
+
     assert M >= 64, "M must be at least 64 for mmav3 and mmav5"
 
     def log2_int(x):
