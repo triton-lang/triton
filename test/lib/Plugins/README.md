@@ -160,3 +160,104 @@ The hook, as it's defined will insert the pass at the vert end of the make_ttir 
 This functionality can be toggled on and off by just commenting out this line in kernel code:
 knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
 without needing any core compiler changes or rebuilding Triton.
+
+## Example 3: Fully customizing the compiler pipeline with pass and op insertions at abitrary locations
+
+Here we now run two kernels one with the full standard Triton pipeline and one with fully customized pipeline entirely from within
+kernel code with modifying any core Triton compiler code or recompiling. We run the kernel with a hook to output the standard pipeline, modify
+the compiler.py file to insert our out of tree pass before add_loop_unroll pass (although their is not restriction of where it can be inserted),
+then run the second kernel with a different pipeline. This modification can, as before, be see in the kernel function name modification by the 
+inserted pass.
+
+``` python
+import torch
+import os
+import sys
+
+import triton
+import triton.language as tl
+from triton._C.libtriton import ir, passes
+from triton import knobs
+import inspect
+from importlib.util import module_from_spec, spec_from_file_location
+
+from triton.backends.compiler import Language
+
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
+
+
+@triton.jit
+def kernel1(BLOCK_SIZE: tl.constexpr):
+    return
+@triton.jit
+def kernel2(BLOCK_SIZE: tl.constexpr):
+    return
+
+
+def dump_stages_hook(self, stages, options, language, capability):
+    source_code = "# This is generated from Triton compiler.py"
+    source_code = (
+        source_code
+        + "\n"
+        + "from triton._C.libtriton import ir, passes, llvm, amd, nvidia"
+    )
+    source_code = source_code + "\n" + "class GPUOverrideBackend:"
+    source_code = source_code + "\n" + inspect.getsource(self.make_ttir)
+    source_code = source_code + "\n" + inspect.getsource(self.make_ttgir)
+
+    with open("compiler_override.py", "w") as file:
+        file.write(source_code)
+
+def override_stages(self, stages, options, language, capability):
+    if language != Language.TRITON:
+        return
+    full_name = "compiler_override.py"
+
+    print(f"\nOverriding compile pass stages with file {full_name}")
+    module_name = "triton_override_compiler_stages"
+    spec = (
+        spec_from_file_location(module_name, full_name)
+        if os.path.isfile(full_name)
+        else None
+    )
+    if not spec:
+        return
+
+    module = module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    if not hasattr(module, "GPUOverrideBackend"):
+        return
+    module = getattr(module, "GPUOverrideBackend")
+
+    has_func = lambda mod, name: hasattr(mod, name) and callable(getattr(mod, name))
+    make_lambda = lambda f: lambda src, metadata: f(src, metadata, options, capability)
+    if has_func(module, "make_ttir"):
+        stages["ttir"] = make_lambda(module.make_ttir)
+    if has_func(module, "make_ttgir"):
+        stages["ttgir"] = make_lambda(module.make_ttgir)
+
+if __name__ == '__main__':
+
+    size = 98432
+    x = torch.rand(size, device=DEVICE)
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+
+    knobs.runtime.add_stages_inspection_hook = dump_stages_hook
+    h = kernel1[grid](BLOCK_SIZE=1024)
+    filename = "compiler_override.py"
+
+    with open(filename, "r") as infile:
+        file_str = infile.readlines()
+
+    with open(filename, "w") as outfile:
+        for line in file_str:
+            if "add_loop_unroll" in line:
+                outfile.write("\n        passes.plugin.add_plugin(pm)\n")
+            outfile.write(line)
+    knobs.runtime.add_stages_inspection_hook = override_stages
+    h = kernel2[grid](BLOCK_SIZE=1024)
+    print(h.asm["ttgir"])
+```
