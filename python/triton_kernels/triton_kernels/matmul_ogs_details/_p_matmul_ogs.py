@@ -20,6 +20,7 @@ from ._common import (
     matmul_launch_metadata,
     swizzle2d,
     threadfence_system,
+    compute_pids,
 )
 
 
@@ -67,7 +68,7 @@ def _p_matmul_ogs(
              ScatterSrcIndx, num_idxs,
              WriteBackIndx, writeback_size,
              SliceSizes, SliceOffs, BlockOffs, BlockSchedule,
-             EXPT_IS_INNER: tl.constexpr,
+             HAS_RAGGED_INNER: tl.constexpr,
              X_IS_PADDED: tl.constexpr,
              W_IS_PADDED: tl.constexpr,
              SliceSizeMax,
@@ -142,7 +143,7 @@ def _p_matmul_ogs(
         tl.static_assert(BLOCK_K % MX_PACK_DIVISOR == 0, "BLOCK_K must be a multiple of MX_PACK_DIVISOR")
     is_out_microscaled: tl.constexpr = stride_y_mx_z is not None
 
-    if BlockOffs is not None and (not EXPT_IS_INNER):
+    if BlockOffs is not None and (not HAS_RAGGED_INNER):
         # Determine how much padding there is on the expert data. This allows us to
         # know the true grid size and avoid processing padding tiles.
         useful_grid_m = tl.load(BlockOffs + N_SLICES)
@@ -157,9 +158,9 @@ def _p_matmul_ogs(
     USE_GATHER_TMA: tl.constexpr = HAS_GATHER and X_TMA_MODE == "dense"
     USE_SCATTER_TMA: tl.constexpr = HAS_SCATTER and Y_TMA_MODE == "dense"
 
-    if EXPT_IS_INNER:
+    if HAS_RAGGED_INNER:
         tl.static_assert((OutAcc is None) or Y_ACC_IS_Y, "Using differernt y_acc is not supported with TMA kernel.")
-        tl.static_assert(not (HAS_SCATTER or USE_GATHER_TMA or USE_SCATTER_TMA), "Cannot be used with EXPT_IS_INNER")
+        tl.static_assert(not (HAS_SCATTER or USE_GATHER_TMA or USE_SCATTER_TMA), "Cannot be used with HAS_RAGGED_INNER")
 
     if EPILOGUE_SUBTILE is None:
         SUBTILE_FACTOR: tl.constexpr = 1
@@ -209,54 +210,64 @@ def _p_matmul_ogs(
     DISALLOW_ACC_MULTI_BUFFER: tl.constexpr = is_w_microscaled and BLOCK_M * BLOCK_N >= 128 * 256
 
     for block_id in tl.range(tl.program_id(0), num_blocks, NUM_SMS, flatten=True, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER, warp_specialize=True):
-        off_w_z, off_x_z, off_y_z, slice_off_m, shape_m, off_m, pid_n, k_tiles, pid_k, off_k_x0, off_k_w0, _ = _load_tile_attrs(
-            block_id, num_blocks, useful_grid_m, grid_n,
+
+        pid_s, pid_m, pid_n, pid_k = compute_pids(block_id, useful_grid_m, grid_n, num_blocks, XCD_SWIZZLE, GROUP_M, SPLIT_K)
+        if SliceSizes is not None and not HAS_RAGGED_INNER:
+            M = tl.load(SliceSizes + pid_s)
+
+        # ------------------------------------------------------------
+        # prologue
+        # ------------------------------------------------------------
+        off_w_z, off_x_z, off_y_z, slice_off_m, _, off_m, off_k_x0, off_k_w0, _ = _load_tile_attrs(
+            block_id, pid_s, pid_m, pid_k,
             M, K, BlockSchedule, SliceSizes, SliceOffs, BlockOffs,
-            EXPT_IS_INNER, X_IS_PADDED, W_IS_PADDED,
-            BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K,
-            GROUP_M, XCD_SWIZZLE)
+            HAS_RAGGED_INNER, X_IS_PADDED, W_IS_PADDED,
+            BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K)
+
         off_n = BLOCK_N * pid_n
 
-        # Base pointers and offsets.
-        if X_TMA_MODE is None:
-            XBase = X + off_x_z.to(index_type) * stride_x_z
-            offs_x_k = (off_k_x0.to(index_type) + tl.arange(0, BLOCK_K))[None, :] * stride_x_k
-
+        # ---- offset x ------
         if USE_GATHER_TMA:
             offs_m = off_m + tl.arange(0, BLOCK_M)
-            mask_m = offs_m < shape_m
+            mask_m = offs_m < M
             if BlockSchedule is None:
-                offs_x_m = tl.load(GatherIndx + slice_off_m.to(index_type)+ offs_m, mask=mask_m)
+                offs_x_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m, mask=mask_m)
                 # Bump rows to account for the Z offset.
                 offs_x_m += off_x_z * (stride_x_z // stride_x_m)
                 offs_x_m = tl.where(mask_m, offs_x_m, -1)
             else:
                 offs_x_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m, mask=mask_m, other=-1)
-        elif X_TMA_MODE is None or is_x_microscaled:
+        if X_TMA_MODE is None:
+            XBase = X + off_x_z.to(index_type) * stride_x_z
             offs_m = off_m + tl.arange(0, BLOCK_M)
-            offs_m = tl.max_contiguous(tl.multiple_of(offs_m % shape_m, BLOCK_M), BLOCK_M)
+            offs_m = tl.max_contiguous(tl.multiple_of(offs_m % M, BLOCK_M), BLOCK_M)
             # no needs to bounds-check here because `offs_m` wraps around M dim
             if GatherIndx is not None:
                 tl.static_assert(HAS_GATHER)
                 offs_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m)
             offs_x_m = offs_m.to(index_type)[:, None] * stride_x_m
+            offs_x_k = (off_k_x0.to(index_type) + tl.arange(0, BLOCK_K))[None, :] * stride_x_k
 
         if is_x_microscaled:
+            offs_m = off_m + tl.arange(0, BLOCK_M)
             XMxScalePtrs = XMxScale + off_x_z.to(index_type) * stride_x_mx_z
             if GatherIndx is None:
                 XMxScalePtrs += slice_off_m * stride_x_mx_m
             offs_k_scale = off_k_x0 // MXFP_BLOCK_SIZE + tl.arange(0, MX_SCALE_BLOCK_K)
             XMxScalePtrs += (offs_x_m if USE_GATHER_TMA else offs_m).to(index_type)[:, None] * stride_x_mx_m
             XMxScalePtrs += offs_k_scale.to(index_type)[None, :] * stride_x_mx_k
-        else:
-            XMxScalePtrs = None
 
         acc = tl.zeros((BLOCK_N, BLOCK_M) if SWAP_XW else (BLOCK_M, BLOCK_N), dtype=tl.float32)
 
+        # ------------------------------------------------------------
+        # inner loop
+        # ------------------------------------------------------------
+        loop_k = tl.load(SliceSizes + pid_s) if HAS_RAGGED_INNER else K - off_k_x0
+        k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)
         loop_bound = tl.maximum(k_tiles, 1)
         tl.assume(loop_bound > 0)  # Currently necessary for the compiler to flatten the loop properly.
         for ki in tl.range(loop_bound, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER):
-            if EXPT_IS_INNER and ki >= k_tiles:
+            if HAS_RAGGED_INNER and ki >= k_tiles:
                 # Tile #ki does not exist: use out-of-bound indices to mask all loads.
                 off_k_x = K
                 off_k_w = K_W
@@ -275,7 +286,7 @@ def _p_matmul_ogs(
                     x = X.load([off_x_z, slice_off_m + off_m, off_k_x])
                     x = x.reshape(BLOCK_M, BLOCK_K)
             elif X_TMA_MODE == "ragged":
-                x = load_ragged(X, slice_off_m, shape_m, [off_x_z, off_m, off_k_x], ragged_dim=1)
+                x = load_ragged(X, slice_off_m, M, [off_x_z, off_m, off_k_x], ragged_dim=1)
                 x = x.reshape(BLOCK_M, BLOCK_K)
             else:
                 tl.static_assert(X_TMA_MODE is None)
@@ -290,6 +301,21 @@ def _p_matmul_ogs(
                 else:
                     x = tl.load(XPtrs, mask=mask_k[None, :], other=0.0)
 
+            # --- load x_scale ---
+            x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
+            if is_x_microscaled:
+                off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_PACK_DIVISOR)
+                if EVEN_K:
+                    mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
+                else:
+                    mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
+                mask_m = off_m + tl.arange(0, BLOCK_M) < M
+                x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
+            elif x_format == "fp16" or x_format == "bf16":
+                x_scales: tl.constexpr = None
+            else:
+                x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
+
             # --- load w ---
             if W_TRANSPOSE:
                 w = tl.reshape(W.load([off_w_z, off_n, off_k_w]), W.block_shape[1:]).T
@@ -297,22 +323,9 @@ def _p_matmul_ogs(
                 w = tl.reshape(W.load([off_w_z, off_k_w, off_n]), W.block_shape[1:])
 
             # --- load w_scale ---
+            w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
             if is_w_microscaled:
-                x_format: tl.constexpr = get_scaled_dot_format_string(x.dtype)
-                w_format: tl.constexpr = get_scaled_dot_format_string(w.dtype)
                 off_k_mx = off_k_w // (MX_PACK_DIVISOR // W_PACK_DIVISOR)
-
-                if is_x_microscaled:
-                    if EVEN_K:
-                        mask_k_scale = tl.full([MX_SCALE_BLOCK_K], True, dtype=tl.int1)
-                    else:
-                        mask_k_scale = off_k_mx + tl.arange(0, MX_SCALE_BLOCK_K) < tl.cdiv(K, MX_PACK_DIVISOR)
-                    mask_m = off_m + tl.arange(0, BLOCK_M) < shape_m
-                    x_scales = tl.load(XMxScalePtrs, mask=mask_k_scale[None, :] & mask_m[:, None], other=0.0)
-                elif x_format == "fp16" or x_format == "bf16":
-                    x_scales: tl.constexpr = None
-                else:
-                    x_scales = tl.full((BLOCK_M, BLOCK_K // MX_PACK_DIVISOR), 127, dtype=tl.uint8)
                 tl.static_assert(MX_PACK_DIVISOR % W_PACK_DIVISOR == 0)
                 if SWIZZLE_MX_SCALE == "BLACKWELL_SCALE":
                     flattened_expt_n_idx = off_w_z * ((N + 127) // 128) + (off_n // 128)
@@ -329,25 +342,29 @@ def _p_matmul_ogs(
                     acc = tl.dot_scaled(w.T, w_scales, w_format, x.T, x_scales, x_format, acc=acc, fast_math=True)
                 else:
                     acc = tl.dot_scaled(x, x_scales, x_format, w, w_scales, w_format, acc=acc, fast_math=True)
-                if is_x_microscaled:
-                    XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
             else:
                 if SWAP_XW:
                     acc = tl.dot(w.T, x.T, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
                 else:
                     acc = tl.dot(x, w, acc, max_num_imprecise_acc=MAX_NUM_IMPRECISE_ACC, allow_tf32=ALLOW_TF32)
 
+            if is_x_microscaled:
+                XMxScalePtrs += (MX_SCALE_BLOCK_K * SPLIT_K) * stride_x_mx_k
+
+        # ------------------------------------------------------------
+        # epilogue
+        # ------------------------------------------------------------
         if INDEPENDENT_EPILOGUE:
             tile_id1 += NUM_SMS
-            expt_id1, _, start_z1, start_m1, eM1, off_m1, pid_n1, _, pid_k1, _, _, _ = _load_tile_attrs(
-                tile_id1, num_blocks, useful_grid_m, grid_n,
+            pid_s1, pid_m1, pid_n1, pid_k1 = compute_pids(tile_id1, useful_grid_m, grid_n, num_blocks, XCD_SWIZZLE, GROUP_M, SPLIT_K)
+            expt_id1, _, start_z1, start_m1, eM1, off_m1, _, _, _ = _load_tile_attrs(
+                tile_id1, pid_s1, pid_m1, pid_k1,
                 M, K, BlockSchedule, SliceSizes, SliceOffs, BlockOffs,
-                EXPT_IS_INNER, X_IS_PADDED, W_IS_PADDED,
-                BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K,
-                GROUP_M, XCD_SWIZZLE)
+                HAS_RAGGED_INNER, X_IS_PADDED, W_IS_PADDED,
+                BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K)
             off_n1 = pid_n1 * BLOCK_N
         else:
-            tile_id1, expt_id1, start_z1, start_m1, eM1 = block_id, off_w_z, off_y_z, slice_off_m, shape_m
+            tile_id1, expt_id1, start_z1, start_m1, eM1 = block_id, off_w_z, off_y_z, slice_off_m, M
             off_m1, off_n1, pid_k1 = off_m, off_n, pid_k
 
         offs_m = off_m1 + tl.arange(0, BLOCK_M)

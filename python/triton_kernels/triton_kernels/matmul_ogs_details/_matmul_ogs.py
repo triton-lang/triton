@@ -16,6 +16,7 @@ from ._common import (
     swizzle2d,
     xcd_swizzle,
     threadfence_system,
+    compute_pids,
 )
 
 
@@ -58,7 +59,7 @@ def _matmul_ogs(
              ScatterSrcIndx, num_idxs,
              WriteBackIndx, writeback_size,
              ExptHist, ExptOffs, ExptTileOffs, ExptData,
-             EXPT_IS_INNER: tl.constexpr,
+             HAS_RAGGED_INNER: tl.constexpr,
              X_IS_PADDED: tl.constexpr,
              W_IS_PADDED: tl.constexpr,
              ExptHistMax,
@@ -181,7 +182,7 @@ def _matmul_ogs(
     yN = N // ACTIVATION_REDUCTION_N
 
     pid = tl.program_id(0)
-    if ExptTileOffs is not None and (not EXPT_IS_INNER):
+    if ExptTileOffs is not None and (not HAS_RAGGED_INNER):
         # Determine how much padding there is on the expert data. This allows us to
         # know the true grid size and avoid processing padding tiles.
         padding_m = grid_m - tl.load(ExptTileOffs + N_EXPTS_TOT)
@@ -214,15 +215,20 @@ def _matmul_ogs(
     if padding_m > 0 and pid >= total_actual_tiles:
         return
 
+    pid_s, pid_m, pid_n, pid_k = compute_pids(pid, unpadded_m, grid_n, total_actual_tiles, XCD_SWIZZLE, GROUP_M, SPLIT_K)
+    loop_k = tl.load(ExptHist + pid_s) if HAS_RAGGED_INNER else K
+
     (
         expt_id, start_z, start_z_out,
-        start_m, eM, off_m, pid_n,
-        k_tiles, pid_k, off_k_x, off_k_w, K_W,
-    ) = _load_tile_attrs(pid, total_actual_tiles, unpadded_m, grid_n,
+        start_m, eM, off_m,
+        off_k_x, off_k_w, K_W,
+    ) = _load_tile_attrs(pid, pid_s, pid_m, pid_k,
                          M, K, ExptData, ExptHist, ExptOffs, ExptTileOffs,
-                         EXPT_IS_INNER, X_IS_PADDED, W_IS_PADDED,
-                         BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K,
-                         GROUP_M, XCD_SWIZZLE)
+                         HAS_RAGGED_INNER, X_IS_PADDED, W_IS_PADDED,
+                         BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K)
+
+    loop_k = tl.load(ExptHist + pid_s) if HAS_RAGGED_INNER else K - off_k_x
+    k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)
 
     # For split-k, advance to the output k slice
     if SPLIT_K > 1:
@@ -281,7 +287,7 @@ def _matmul_ogs(
         offs_n_scale = (pid_n * SCALE_BLOCK_N + tl.arange(0, SCALE_BLOCK_N)) % N
         offs_n_scale = tl.max_contiguous(tl.multiple_of(offs_n_scale, SCALE_BLOCK_N), SCALE_BLOCK_N)
         # K dimension must be the last dimension for the scales
-        tl.static_assert(not EXPT_IS_INNER or W_IS_PADDED)
+        tl.static_assert(not HAS_RAGGED_INNER or W_IS_PADDED)
         offs_k_scale = off_k_w // PACKED_BLOCK_K_W * PACKED_MX_BLOCK + tl.arange(0, PACKED_MX_BLOCK)
         WMxScalePtrs = WMxScale + offs_k_scale.to(index_type)[None, :] * stride_scale_k + offs_n_scale.to(index_type)[:, None] * stride_w_mx_n
     else:

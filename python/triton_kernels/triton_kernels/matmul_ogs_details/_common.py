@@ -53,33 +53,13 @@ def swizzle2d(pid, grid_m, grid_n, GROUP_M: tl.constexpr):
 
 
 @triton.jit
-def _load_tile_attrs(
-    tile_id,
-    num_tiles,
-    grid_m,
-    grid_n,
-    M,
-    K,
-    BlockSchedule,
-    SliceSizes,
-    SliceOffs,
-    BlockOffs,
-    EXPT_IS_INNER: tl.constexpr,
-    X_IS_PADDED: tl.constexpr,
-    W_IS_PADDED: tl.constexpr,
-    BLOCK_M: tl.constexpr,
-    BLOCK_K: tl.constexpr,
-    PACKED_BLOCK_K_W: tl.constexpr,
-    SPLIT_K: tl.constexpr,
-    GROUP_M: tl.constexpr,
-    XCD_SWIZZLE: tl.constexpr,
-):
-    # unpack and swizzle program ids
-    pid_emnk = tile_id
+def compute_pids(block_id, grid_m, grid_n, num_blocks, XCD_SWIZZLE: tl.constexpr, GROUP_M: tl.constexpr,
+                 SPLIT_K: tl.constexpr):
+    pid_smnk = block_id
     if XCD_SWIZZLE != 1:
-        pid_emnk = xcd_swizzle(pid_emnk, num_tiles, XCD_SWIZZLE)
-    pid_e = pid_emnk // (grid_m * grid_n * SPLIT_K)
-    pid_mnk = pid_emnk % (grid_m * grid_n * SPLIT_K)
+        pid_smnk = xcd_swizzle(pid_smnk, num_blocks, XCD_SWIZZLE)
+    pid_s = pid_smnk // (grid_m * grid_n * SPLIT_K)
+    pid_mnk = pid_smnk % (grid_m * grid_n * SPLIT_K)
     if SPLIT_K > 1:
         pid_k = pid_mnk % SPLIT_K
         pid_mn = pid_mnk // SPLIT_K
@@ -87,61 +67,77 @@ def _load_tile_attrs(
         pid_k: tl.constexpr = 0
         pid_mn = pid_mnk
     pid_m, pid_n = swizzle2d(pid_mn, grid_m, grid_n, GROUP_M)
+    return pid_s, pid_m, pid_n, pid_k
 
+
+@triton.jit
+def _load_tile_attrs(
+    block_id,
+    pid_s,
+    pid_m,
+    pid_k,
+    M,
+    K,
+    BlockSchedule,
+    SliceSizes,
+    SliceOffs,
+    BlockOffs,
+    HAS_RAGGED_INNER: tl.constexpr,
+    X_IS_PADDED: tl.constexpr,
+    W_IS_PADDED: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    PACKED_BLOCK_K_W: tl.constexpr,
+    SPLIT_K: tl.constexpr,
+):
     # unpack expert data
-    if EXPT_IS_INNER:
-        # pid_e indicates expert ID: experts are laid sequentially along the K dimension
+    if HAS_RAGGED_INNER:
+        # pid_s indicates slice ID: experts are laid sequentially along the K dimension
         # (i.e., we have columns for expert 0, and then expert 1, and then so on).
         # pid_k is meaningless (always zero).
         tl.static_assert(X_IS_PADDED or W_IS_PADDED, "At least one input must be padded!")
         tl.static_assert(SPLIT_K == 1, "Not supported yet")
         tl.static_assert(M is not None)
-        slice_id, pid_z, pid_z_out, slice_off_m, block_id, slice_size = 0, 0, pid_e, 0, pid_m, M
-        k_tiles = tl.cdiv(tl.load(SliceSizes + pid_e), BLOCK_K)
-        block_off_k = tl.load(BlockOffs + pid_e)
-        slice_off_k = tl.load(SliceOffs + pid_e)
-        off_k_x = block_off_k * BLOCK_K if X_IS_PADDED else slice_off_k
+        block_off_k = tl.load(BlockOffs + pid_s)
+        slice_off_k = tl.load(SliceOffs + pid_s)
+        off_x_m = BLOCK_M * pid_m
+        off_x_k = block_off_k * BLOCK_K if X_IS_PADDED else slice_off_k
+        off_w_k = block_off_k * PACKED_BLOCK_K_W if W_IS_PADDED else slice_off_k
+        off_w_z, off_x_z, off_x_slice = 0, 0, 0
+        off_y_z = pid_s
+        slice_size = M
         # K_W is only used for non-TMA kernel (W bound is handled by TMA on TMA kernel).
-        if W_IS_PADDED:
-            off_k_w = block_off_k * PACKED_BLOCK_K_W
-            K_W = tl.load(BlockOffs + pid_e + 1) * PACKED_BLOCK_K_W
-        else:
-            off_k_w = slice_off_k
-            K_W = tl.load(SliceOffs + pid_e + 1)
+        K_W = tl.load(BlockOffs + pid_s + 1) * PACKED_BLOCK_K_W if W_IS_PADDED else tl.load(SliceOffs + pid_s + 1)
     else:
-        off_k_x = pid_k * BLOCK_K
-        off_k_w = pid_k * PACKED_BLOCK_K_W
-        if PACKED_BLOCK_K_W >= BLOCK_K:
-            K_W = K * (PACKED_BLOCK_K_W // BLOCK_K)
-        else:
-            K_W = K // (BLOCK_K // PACKED_BLOCK_K_W)
-        k_tiles = tl.cdiv(K - off_k_x, BLOCK_K * SPLIT_K)
+        off_x_k = pid_k * BLOCK_K
+        off_w_k = pid_k * PACKED_BLOCK_K_W
+        # dense matmul mode
         if BlockSchedule is None:
             tl.static_assert(M is not None)
-            slice_id, pid_z, pid_z_out, slice_off_m, block_id, slice_size = pid_e, pid_e, pid_e, 0, pid_m, M
+            off_w_z, off_x_z, off_y_z, off_x_slice, slice_size = pid_s, pid_s, pid_s, 0, M
+            off_x_m = BLOCK_M * pid_m
+        # ragged matmul mode
         else:
             tl.static_assert(M is None)
             block_schedule = tl.load(BlockSchedule + pid_m)
-            slice_id = block_schedule & 0x0000FFFF
+            off_w_z = block_schedule & 0x0000FFFF
             block_id = block_schedule >> 16
-            slice_size = tl.load(SliceSizes + slice_id)
-            slice_off_m = tl.load(SliceOffs + slice_id)
-            pid_z, pid_z_out = 0, 0
-
-    off_m = BLOCK_M * block_id
+            slice_size = tl.load(SliceSizes + off_w_z)
+            off_x_slice = tl.load(SliceOffs + off_w_z)
+            off_x_z, off_y_z = 0, 0
+            off_x_m = BLOCK_M * block_id
+        # K_W is only used for non-TMA kernel (W bound is handled by TMA on TMA kernel).
+        K_W = K * (PACKED_BLOCK_K_W // BLOCK_K) if PACKED_BLOCK_K_W >= BLOCK_K else K // (BLOCK_K // PACKED_BLOCK_K_W)
 
     return (
-        slice_id,
-        pid_z,
-        pid_z_out,
-        slice_off_m,
+        off_w_z,
+        off_x_z,
+        off_y_z,
+        off_x_slice,
         slice_size,
-        off_m,
-        pid_n,
-        k_tiles,
-        pid_k,
-        off_k_x,
-        off_k_w,
+        off_x_m,
+        off_x_k,
+        off_w_k,
         K_W,
     )
 
