@@ -92,8 +92,8 @@ def NVWSInsertAref: Pass<"nvws-insert-aref", "mlir::ModuleOp"> {
 
   let description = [{
     To automate barrier synchronizations between producer and consumer
-    partitions, arefs are introduced in the IR. Currently, this pass handles
-    only SMEM producers and consumers.
+    partitions, arefs are introduced in the IR. This pass handles tensor,
+    scalar, and SMEM producers and consumers.
 
     Specifically, for producer partitions, a producing operation is
     wrapped in an ArefPutEnterOp and ArefPutExitOp pair. A descriptor load

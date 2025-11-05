@@ -41,7 +41,7 @@ using namespace triton::nvws;
 std::optional<int> getPartitionId(Operation *op, int pos = 0) {
   if (!hasPartition(op))
     return std::nullopt;
-  auto partitionIds = *getPartitionIds(op);
+  auto partitionIds = getPartitionIds(op);
   if (op->getNumRegions() > 0) {
     partitionIds = getPartitionOutputs(op)[pos];
   }
@@ -72,7 +72,6 @@ struct TmemAccessDag {
 
   TmemAccessDag(std::unique_ptr<Node> dag) : dag(std::move(dag)) {}
 
-  Node *getNode(Operation *op) { return op2dagMap.lookup(op); }
   Node *getRootNode() { return dag.get(); }
   TMEMAllocOp getAllocOp() { return cast<TMEMAllocOp>(dag->op); }
 
@@ -87,7 +86,6 @@ struct TmemAccessDag {
     auto ifOp = cast<scf::IfOp>(useThen->getOwner()->getParentOp());
     node->user.reset(new Node(ifOp, nullptr, {}, node));
     auto ifOpNode = node->user.get();
-    op2dagMap.insert({ifOp, ifOpNode});
 
     if (ifOp.thenBlock() != useThen->getOwner()->getBlock())
       std::swap(useThen, useElse);
@@ -195,7 +193,6 @@ struct TmemAccessDag {
       partitionId = getPartitionId(op);
     node->user.reset(new Node(op, &tokOperand, partitionId, node));
     auto newNode = node->user.get();
-    op2dagMap.insert({op, newNode});
     Value newTok;
 
     if (auto tmemLoad = dyn_cast<TMEMLoadOp>(op)) {
@@ -230,7 +227,6 @@ struct TmemAccessDag {
     }
     TmemAccessDag accessDag(
         std::make_unique<Node>(allocOp, nullptr, partitionId, nullptr));
-    accessDag.op2dagMap.insert({allocOp, accessDag.getRootNode()});
 
     if (allocOp.getSrc()) {
       // Handle tmem_alloc with src operand specially. When a src operand is
@@ -241,7 +237,6 @@ struct TmemAccessDag {
       auto user = *allocOp->getUsers().begin();
       accessDag.getRootNode()->user.reset(new Node{
           user, nullptr, getPartitionId(user), accessDag.getRootNode()});
-      accessDag.op2dagMap.insert({user, accessDag.getRootNode()->user.get()});
     } else {
       auto tok = allocOp.getToken();
       assert(tok && tok.hasOneUse());
@@ -251,8 +246,9 @@ struct TmemAccessDag {
     return accessDag;
   }
 
-  std::set<PartitionId> collectPartitions(Node *node) {
+  std::pair<bool, std::set<PartitionId>> collectPartitions(Node *node) {
     std::set<PartitionId> partitions;
+    bool hasRootPartition = false;
     if (node->partitionId)
       partitions.insert(*node->partitionId);
 
@@ -260,14 +256,17 @@ struct TmemAccessDag {
       node = node->user.get();
       if (node->partitionId)
         partitions.insert(*node->partitionId);
+      else
+        hasRootPartition = true;
       for (auto &subDag : node->subDags) {
         if (subDag) {
-          auto ps = collectPartitions(subDag.get());
+          auto [rootPartition, ps] = collectPartitions(subDag.get());
+          hasRootPartition = hasRootPartition || rootPartition;
           partitions.insert(ps.begin(), ps.end());
         }
       }
     }
-    return partitions;
+    return {hasRootPartition, partitions};
   };
 
   void printNode(Node *node, int indent, llvm::raw_ostream &os) {
@@ -278,20 +277,23 @@ struct TmemAccessDag {
     }
     std::set<PartitionId> partitions;
     os << "|- [" << node->op << "]";
+    bool hasRootPartition = false;
     if (node->partitionId)
       partitions.insert(*node->partitionId);
+    else
+      hasRootPartition = true;
     if (node->op) {
       os << node->op->getName().getStringRef() << " ";
       if (auto tmemAlloc = dyn_cast<TMEMAllocOp>(node->op)) {
         if (tmemAlloc.getSrc()) {
           os << " %src ";
         } else {
-          partitions = collectPartitions(node);
+          std::tie(hasRootPartition, partitions) = collectPartitions(node);
         }
       }
       os << "  ";
     }
-    os << "[";
+    os << "[" << (hasRootPartition ? "root" : "") << "]";
     for (auto partition : partitions) {
       os << " @" << partition << " ";
     }
@@ -318,7 +320,6 @@ struct TmemAccessDag {
   // --------------------------------------------------------------------------
 
   std::unique_ptr<Node> dag;
-  DenseMap<Operation *, Node *> op2dagMap;
   DenseMap<scf::ForOp, TMEMAllocOp> arefTmemAllocs;
 };
 
@@ -532,10 +533,6 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
   auto rootNode = accessDag.getRootNode();
   auto allocOp = cast<TMEMAllocOp>(rootNode->op);
 
-  // do nothing for alloc with src, whose user is in the same partition
-  if (allocOp.getSrc() && rootNode->user->partitionId == rootNode->partitionId)
-    return success();
-
   std::optional<bool> isMultiStaged;
   for (auto user : allocOp.getResult().getUsers()) {
     if (auto mmaOp = dyn_cast<MMAv5OpInterface>(user)) {
@@ -590,8 +587,7 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
     auto vTrue = createInto<arith::ConstantIntOp>(
         b, allocOp.getLoc(), {partitionId, stageCluster}, true, 1);
     createInto<TMEMStoreOp>(b, allocOp.getLoc(), {partitionId, stageCluster},
-                            b.getType<AsyncTokenType>(), buffer, state.token,
-                            src, vTrue);
+                            Type(), buffer, Value(), src, vTrue);
   } else {
     // allocOp w/o src, assume the ownership of tmem belongs to first user
     // partitionId = accessDag.getRootNode()->user->partitionId;
@@ -620,7 +616,8 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
     // the corresponding partition to prevent deadlocks. This is necessary
     // because if we're inside an outer loop, re-entering the loop without
     // posting a matching GET operation for the PUT would cause the dead-lock.
-    auto partitions = accessDag.collectPartitions(accessDag.getRootNode());
+    auto [hasRootPartition, partitions] =
+        accessDag.collectPartitions(accessDag.getRootNode());
     std::optional<int> otherPartitionId;
     // since we only have two partition, we just pick the other partition for
     // get
@@ -745,16 +742,20 @@ LogicalResult runOnFunction(triton::FuncOp funcOp) {
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
     // skip allocOps with source and > 1 partition
-    auto partitionIds = getPartitionIds(allocOp);
+    std::optional<SetVector<int>> partitionIds;
+    if (hasPartition(allocOp))
+      partitionIds = getPartitionIds(allocOp);
     if (!allocOp.getSrc() || (partitionIds && partitionIds->size() == 1))
       tmemDags.push_back(TmemAccessDag::build(allocOp));
   });
 
   for (auto &accessDag : tmemDags) {
     LLVM_DEBUG({ accessDag.printDag(llvm::dbgs()); });
-    auto partitions = accessDag.collectPartitions(accessDag.getRootNode());
+    auto [hasRootPartition, partitions] =
+        accessDag.collectPartitions(accessDag.getRootNode());
     assert(partitions.size() <= 2 && "expecting at most 2 partitions");
-    if (!partitions.empty())
+    auto totalOwners = hasRootPartition + partitions.size();
+    if (totalOwners > 1)
       if (failed(insertTmemAref(accessDag)))
         return failure();
   }

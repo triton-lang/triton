@@ -604,9 +604,7 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
   }
 
   for (int col = 0; col < cvt.getInDimSize(kCol); col += instrShape[1]) {
-    // smemLoad takes the colRep. It'd be nice to change this but we would need
-    // to change the wgmma and mmav5 lowering
-    auto desc = loader.smemLoad(0, col / instrShape[1], rewriter, loc);
+    auto desc = loader.smemLoad(0, col, rewriter, loc);
     auto tmemAddr =
         b.or_(b.ptrtoint(i32_ty, baseDst), b.i32_val(col * bitwidth / 32),
               /*disjoint=*/true);

@@ -3761,12 +3761,12 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
             return childOp.emitOpError("does not have expected attribute ")
                    << kPartitionAttrName
                    << " which is expected for ops whose parent has partitions";
-          auto ids = *getPartitionIds(&childOp);
+          auto ids = getPartitionIds(&childOp);
           expectedIds.insert(ids.begin(), ids.end());
         }
       }
     }
-    auto partitionIds = *getPartitionIds(op);
+    auto partitionIds = getPartitionIds(op);
     for (auto id : expectedIds) {
       if (!partitionIds.contains(id)) {
         return op->emitOpError("partition ids in attr ")
@@ -3801,13 +3801,12 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
       return op->emitOpError("does not have expected attribute ")
              << kPartitionAttrName << " which is expected for ops with attr "
              << kPartitionOutputsAttrName;
-    auto partitionIds = *getPartitionIds(op);
+    auto partitionIds = getPartitionIds(op);
 
     SetVector<int> outputPartitionIdsUnion;
-    for (auto idx = 0; idx < *getNumOutputPartitionIds(op); idx++) {
-      auto outputPartitionIds = getOutputPartitionIds(op, idx);
-      for (auto partitionId : *outputPartitionIds)
-        outputPartitionIdsUnion.insert(partitionId);
+    for (auto outputPartitionIds : getPartitionOutputs(op)) {
+      outputPartitionIdsUnion.insert(outputPartitionIds.begin(),
+                                     outputPartitionIds.end());
     }
     if (!std::all_of(outputPartitionIdsUnion.begin(),
                      outputPartitionIdsUnion.end(),
@@ -3919,15 +3918,8 @@ LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
   return dst;
 }
 
-std::optional<SetVector<int>> triton::gpu::getPartitionIds(Operation *op) {
-  if (!op) {
-    return std::nullopt;
-  }
+SetVector<int> triton::gpu::getPartitionIds(Operation *op) {
   auto attrs = op->getAttr(kPartitionAttrName);
-  if (!attrs) {
-    return std::nullopt;
-  }
-
   SmallVector<int> partitionIds;
   for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
     partitionIds.push_back(id);
@@ -3936,33 +3928,31 @@ std::optional<SetVector<int>> triton::gpu::getPartitionIds(Operation *op) {
   return SetVector<int>(partitionIds.begin(), partitionIds.end());
 }
 
-std::optional<int> triton::gpu::getNumOutputPartitionIds(Operation *op) {
-  if (!op) {
-    return std::nullopt;
+SmallVector<SetVector<int>, 4> triton::gpu::getPartitionOutputs(Operation *op) {
+  SmallVector<SetVector<int>, 4> partitionOutputsIds;
+  if (op->getNumResults() == 0) {
+    return partitionOutputsIds;
   }
-  auto attr = op->getAttr(kPartitionOutputsAttrName);
-  if (!attr) {
-    return std::nullopt;
+  auto arrayAttr = cast<ArrayAttr>(op->getAttr(kPartitionOutputsAttrName));
+  for (auto attr : arrayAttr) {
+    auto ids = cast<DenseI32ArrayAttr>(attr).asArrayRef();
+    partitionOutputsIds.push_back(SetVector<int>(ids.begin(), ids.end()));
   }
-  return cast<ArrayAttr>(attr).size();
+  return partitionOutputsIds;
 }
 
-std::optional<SetVector<int>> triton::gpu::getOutputPartitionIds(Operation *op,
-                                                                 int idx) {
-  if (!op) {
-    return std::nullopt;
+SetVector<int> triton::gpu::getPartitionIds(OpOperand *use) {
+  auto owner = use->getOwner();
+  if (isa<scf::YieldOp>(owner)) {
+    return getPartitionOutputs(owner->getParentOp())[use->getOperandNumber()];
+  } else if (scf::ForOp forOp = dyn_cast<scf::ForOp>(owner)) {
+    int idx = use->getOperandNumber() - forOp.getNumControlOperands();
+    return idx >= 0 ? getPartitionOutputs(owner)[idx] : getPartitionIds(forOp);
+  } else {
+    return getPartitionIds(owner);
   }
-  auto attr = op->getAttr(kPartitionOutputsAttrName);
-  if (!attr) {
-    return std::nullopt;
-  }
-  assert(idx < cast<ArrayAttr>(attr).size());
-  auto attrs = cast<ArrayAttr>(attr)[idx];
+}
 
-  SmallVector<int> partitionIds;
-  for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
-    partitionIds.push_back(id);
-  }
-  std::sort(partitionIds.begin(), partitionIds.end());
-  return SetVector<int>(partitionIds.begin(), partitionIds.end());
+bool triton::gpu::hasPartition(Operation *op) {
+  return op && op->hasAttr(kPartitionAttrName);
 }
