@@ -224,9 +224,9 @@ static PyObject *occupancyMaxActiveClusters(PyObject *self, PyObject *args) {
   launchAttr[0].value.clusterDim.y = 1;
   launchAttr[0].value.clusterDim.z = 1;
   CUlaunchConfig config;
-  config.gridDimX = clusterDimX;
-  config.gridDimY = maxActiveBlocks * clusterDimY;
-  config.gridDimZ = clusterDimZ;
+  config.gridDimX = clusterDim * maxActiveBlocks;
+  config.gridDimY = 1;
+  config.gridDimZ = 1;
   config.blockDimX = 128;
   config.blockDimY = 1;
   config.blockDimZ = 1;
