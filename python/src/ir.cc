@@ -1660,7 +1660,7 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_exp",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return approxMath(self.create<math::ExpOp>(val));
+             return self.create<math::ExpOp>(val);
            })
       .def("create_exp2",
            [](TritonOpBuilder &self, Value &val) -> Value {
@@ -1668,15 +1668,15 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_cos",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return approxMath(self.create<math::CosOp>(val));
+             return self.create<math::CosOp>(val);
            })
       .def("create_sin",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return approxMath(self.create<math::SinOp>(val));
+             return self.create<math::SinOp>(val);
            })
       .def("create_log",
            [](TritonOpBuilder &self, Value &val) -> Value {
-             return approxMath(self.create<math::LogOp>(val));
+             return self.create<math::LogOp>(val);
            })
       .def("create_log2",
            [](TritonOpBuilder &self, Value &val) -> Value {
