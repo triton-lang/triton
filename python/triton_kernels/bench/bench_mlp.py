@@ -70,6 +70,8 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
 
     input_x = torch.randn((batch // DP, dim1), device=dev)
     expt_assignment = triton_dist.create_expt_assignment(EP, n_expts_tot, torch.device(dev))
+    triton_dist.initialize_matmul_ogs(batch, dim1, dim2, n_expts_act, n_expts_tot, input_x.dtype)
+
     # run layer
     fpath = Path(tempfile.mktemp())
     proton.start(str(fpath), hook="triton")
@@ -79,7 +81,8 @@ def bench_mlp(batch_per_expt, dim1, dim2, n_expts_tot, n_expts_act, x_dtype, w_d
         if n_expts_tot > 1:  # sparse
             logits = matmul_ogs(xg, wg, bg, precision_config=pcg)
             x, rdata, gather_indx, scatter_indx, metadata = triton_dist.routing(input_x, logits, n_expts_act, EP=EP,
-                                                                                TP=TP, expt_assignment=expt_assignment)
+                                                                                TP=TP, expt_assignment=expt_assignment,
+                                                                                mode="ep_sharding")
         else:  # dense
             x = triton_dist.all_gather(input_x, dim=0)
             rdata, gather_indx, scatter_indx, metadata = None, None, None, None

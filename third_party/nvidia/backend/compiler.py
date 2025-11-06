@@ -111,7 +111,6 @@ class CUDAOptions:
     # maxnreg corresponds to the ptx parameter .maxnreg, which controls the
     # maximum number of 32-bit registers used by one thread.
     maxnreg: Optional[int] = None
-    cluster_dims: tuple = (1, 1, 1)
     ptx_version: int = None
     ptx_options: Optional[str] = knobs.nvidia.ptxas_options
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
@@ -205,9 +204,6 @@ class CUDABackend(BaseBackend):
             metadata.num_warps,
             metadata.num_ctas,
             metadata.shared,
-            metadata.cluster_dims[0],
-            metadata.cluster_dims[1],
-            metadata.cluster_dims[2],
         )
 
     def get_codegen_implementation(self, options):
@@ -252,11 +248,6 @@ class CUDABackend(BaseBackend):
         if opt.maxnreg is not None:
             mod.set_attr("ttg.maxnreg", ir.builder(mod.context).get_int32_attr(opt.maxnreg))
 
-        cluster_info = nvidia.ClusterInfo()
-        if opt.cluster_dims is not None:
-            cluster_info.clusterDimX = opt.cluster_dims[0]
-            cluster_info.clusterDimY = opt.cluster_dims[1]
-            cluster_info.clusterDimZ = opt.cluster_dims[2]
         pm = ir.pass_manager(mod.context)
         dump_enabled = pm.enable_debug()
         emuTF32 = (capability // 10 >= 8)
@@ -265,7 +256,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_coalesce(pm)
         passes.ttgpuir.add_f32_dot_tc(pm, emuTF32)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
-        nvidia.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
+        nvidia.passes.ttnvgpuir.add_plan_cta(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_accelerate_matmul(pm)
@@ -322,7 +313,6 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
 
         pm.run(mod, 'make_ttgir')
-        metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
@@ -341,7 +331,6 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
         pm.run(mod, 'gluon_to_ttgir')
-        metadata["cluster_dims"] = (options.num_ctas, 1, 1)
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 

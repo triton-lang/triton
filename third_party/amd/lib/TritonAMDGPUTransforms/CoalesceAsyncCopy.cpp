@@ -199,7 +199,7 @@ struct CoalesceAsyncCopyWrites
     auto convertLayout = [&rewriter](auto loc, Value old, auto newEnc) {
       auto oldTy = cast<RankedTensorType>(old.getType());
       RankedTensorType newSrcTy = oldTy.cloneWithEncoding(newEnc);
-      return rewriter.create<ttg::ConvertLayoutOp>(loc, newSrcTy, old);
+      return ttg::ConvertLayoutOp::create(rewriter, loc, newSrcTy, old);
     };
 
     auto loc = copyOp->getLoc();

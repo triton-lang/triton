@@ -154,7 +154,7 @@ def PTG_SegmentAllocOp : PTG_Op<"segment_alloc", [Pure]> {
   }];
 
   let arguments = (ins
-    TTG_MemDescType:$buffer
+    AnyTypeOf<[TTG_MemDescType, TT_Ptr]>:$buffer
   );
 
   let results = (outs PTG_SegmentType:$segment);
@@ -163,7 +163,6 @@ def PTG_SegmentAllocOp : PTG_Op<"segment_alloc", [Pure]> {
 
   let assemblyFormat = "$buffer attr-dict `:` qualified(type($buffer)) `->` type($segment)";
 }
-
 
 def PTG_InitCtxOp : PTG_Op<"init_ctx", [
     MemoryEffects<[MemWrite<GlobalMemory>]>

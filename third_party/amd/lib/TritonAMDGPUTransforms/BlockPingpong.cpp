@@ -174,8 +174,8 @@ void Pingponger::appendSlicedLoadAB(int slice) {
 SmallVector<Operation *> Pingponger::genClusterBarrier(OpBuilder &builder,
                                                        Location loc) {
   //  MembarAnalysis can recognize gpu::BarrierOp and skip inserting additional
-  auto barrierOp = builder.create<gpu::BarrierOp>(loc);
-  auto schedBarrierOp = builder.create<ROCDL::SchedBarrier>(loc, 0);
+  auto barrierOp = gpu::BarrierOp::create(builder, loc);
+  auto schedBarrierOp = ROCDL::SchedBarrier::create(builder, loc, 0);
   return {barrierOp, schedBarrierOp};
 }
 void Pingponger::appendClusterBarrier(OpBuilder &builder, Location loc) {
@@ -188,9 +188,9 @@ void Pingponger::prependClusterBarrier(OpBuilder &builder, Location loc) {
 }
 void Pingponger::appendOpWithPrio(OpBuilder &builder, Operation *op,
                                   Location loc) {
-  appendOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority));
+  appendOp(ROCDL::SetPrioOp::create(builder, loc, highPriority));
   appendOp(op);
-  appendOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority));
+  appendOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority));
 }
 
 // Determine if the given loop matches the basic pattern of a persistent GEMM.
@@ -386,17 +386,17 @@ void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
   auto dotLoc = dotOps[0]->getPrevNode();
   // sched barrier to prevent memory ops from cross but leave other ops to be
   // scheduled across the barrier.
-  auto preDotBar = builder.create<ROCDL::SchedBarrier>(loc, 1);
+  auto preDotBar = ROCDL::SchedBarrier::create(builder, loc, 1);
   updateOpInsertion(dotLoc);
   appendOp(preDotBar);
 
   // Memory cluster #0
   updateOpInsertion(lLoadOps[0]);
-  appendOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority));
+  appendOp(ROCDL::SetPrioOp::create(builder, loc, highPriority));
   moveOpAndPredecessorsUpSameBlock(gLoadOps[0]);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   moveOpAndPredecessorsUpSameBlock(lLoadOps[1]);
-  appendOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority));
+  appendOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority));
   moveOpAndPredecessorsUpSameBlock(gLoadOps[1]);
 
   // Dot cluster #0
@@ -448,11 +448,11 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
     for (int64_t off : offsets) {
       logicalOffsets.push_back(constOffsets[off]);
     }
-    Value newSmem = builder.create<ttg::MemDescSubsliceOp>(
-        v.getLoc(), subviewDescType, memDesc, logicalOffsets);
-    Value prefetchSlice = builder.create<ttg::LocalLoadOp>(
-        v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
-        newSmem);
+    Value newSmem = ttg::MemDescSubsliceOp::create(
+        builder, v.getLoc(), subviewDescType, memDesc, logicalOffsets);
+    Value prefetchSlice = ttg::LocalLoadOp::create(
+        builder, v.getLoc(),
+        RankedTensorType::get(shape, elementType, dotOperandEnc), newSmem);
     subviews.push_back(newSmem.getDefiningOp());
     slices.push_back(prefetchSlice.getDefiningOp());
   }
@@ -597,18 +597,18 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   // cycles, sched.barrier prevents backend from canceling the interleaved order
   updateOpInsertion(gLoadOps[1]);
   appendSlicedLoadAB(/*slice=*/0);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   appendOp(gLoadOps[0]);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   appendSlicedLoadAB(/*slice=*/1);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   appendOp(gLoadOps[1]);
   // The first cluster just fits into the two cluster pingpong and cannot
   // include wait of the local_load inserted by the gpu.barrier, using s.barrier
   // instead. backend will schedule the local memory fences later in the dot0
   // cluster.
-  appendOp(builder.create<ROCDL::SBarrierOp>(loc));
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SBarrierOp::create(builder, loc));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
 
   // dot0 (1/2)
   appendOpWithPrio(builder, dotSliceOps[0], loc);
@@ -655,9 +655,9 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
   for (auto glop : gLoadOps)
     moveOpAndPredecessorsUpSameBlock(glop);
 
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-  appendOp(builder.create<ROCDL::SBarrierOp>(loc));
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SBarrierOp::create(builder, loc));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
 
   // all other ops are placed in the second cluster
   // set unit attr, so it can trigger the second step in the ttg to llvm
@@ -670,8 +670,77 @@ LogicalResult Pingponger::transformTwoClusterWithAsyncAndAll(OpBuilder &builder,
 // For ChainedDots with num_stage==4 the pipeliner already places ops in the
 // correct order to allow for efficient pingpong. The loop contains 2 pairs of
 // compute and memory clusters so we only have to place barriers/sched.barriers
-// at the bounaries and give higher priority to memory clusters
-// See ScheduleLoops.cpp:ChainedDotSchedule for details about the schedule
+// at the bounaries and give higher priority to memory clusters.
+// See ScheduleLoops.cpp:ChainedDotSchedule for details about the schedule.
+//
+// Notes
+//
+// 1. Memory Cluster Priority
+// --------------------------
+// We assign higher priority to the memory cluster than the compute cluster.
+//
+// Priority determines which warp issues its next instruction when two warps on
+// the same execution unit both have ready instructions of the same type. In
+// FAv3, we expect two warps to co-execute — one running the compute cluster,
+// and the other running the memory cluster. Both clusters contain `v_xxx`
+// (VALU) instructions.
+//
+// If the compute cluster has higher priority, then its warp will monopolize the
+// issue slots for all `v_xxx` instructions, forcing the memory-cluster warp to
+// wait. This eliminates the overlap between compute and memory phases — exactly
+// what ping-pong scheduling is meant to achieve.
+//
+// By assigning *higher priority* to the memory cluster, we ensure that the warp
+// executing memory instructions can always issue its `v_xxx` operations (for
+// address updates) even when another warp is busy in the compute cluster. This
+// allows true overlap of memory and compute activity.
+//
+// This choice does not significantly stall the compute-cluster warp, since the
+// memory cluster only contains a few `v_xxx` instructions and its memory ops
+// can still co-issue with VALU instructions in the compute cluster.
+//
+// Note: We currently need this priority scheme because the memory cluster
+// contains `v_xxx` instructions for address updates. Ongoing optimizations aim
+// to either remove these instructions or move them into the compute cluster,
+// which would make this priority adjustment unnecessary.
+//
+//
+// 2. Placement of `s_xxx` Instructions in the Memory Cluster
+// ----------------------------------------------------------
+// We place scalar (`s_xxx`) instructions in the memory cluster rather than the
+// compute cluster.
+//
+// The reason is that `s_xxx` and `v_xxx` instructions can only co-issue when
+// they come from *different warps*. Since compute clusters are dominated by
+// VALU instructions, placing `s_xxx` in the memory cluster maximizes co-issue
+// opportunities — the scalar instructions from one warp can execute
+// concurrently with the VALU instructions from another warp.
+//
+// Typical `s_xxx` instructions include:
+//   - Control flow: `s_cbranch`
+//   - Priority control: `s_setprio`
+//   - Synchronization and dependency: `s_waitcnt`
+//
+// These are usually inserted near `s_barrier` boundaries, and the current
+// implementation carefully places them to ensure they belong to the memory
+// cluster, improving overall overlap and utilization.
+//
+//
+// 3. Placement of `s_waitcnt lgkmcnt(0)`
+// --------------------------------------
+// We place `s_waitcnt lgkmcnt(0)` at the *end* of the memory cluster to ensure
+// that all shared-memory load (`ds_read`) instructions have completed before
+// entering the compute cluster.
+//
+// This placement prevents the LLVM backend from inserting additional
+// `s_waitcnt lgkmcnt()` instructions inside the compute cluster based on
+// inferred dependencies between `mfma` and `ds_read` operations.
+//
+// This approach is consistent with the previous design goal: to eliminate all
+// `s_xxx` instructions from the compute cluster so it can run uninterrupted
+// MFMA and VALU operations. Keeping `s_waitcnt lgkmcnt(0)` at the cluster
+// boundary enforces data dependency correctness while preserving the clean
+// separation between memory and compute phases.
 LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
                                                       Location loc) {
   assert(dotOps.size() == 2);
@@ -697,39 +766,72 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   builder.setInsertionPointToStart(forOp.getBody());
   // ComputeCluster 1
   updateOpInsertion(dotOps[0]);
-  prependOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority), false);
+  prependOp(ROCDL::SBarrierOp::create(builder, loc), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
 
   // MemoryCluster 1
   updateOpInsertion(memoryClusterStartOps[0]);
-  prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
   if (llvm::isa<ttg::AsyncWaitOp>(memoryClusterStartOps[0])) {
     // Only append a sched barrier because membar adds a barrier after asyncwait
-    appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+    appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   } else {
-    prependOp(builder.create<gpu::BarrierOp>(loc), false);
-    prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
+    prependOp(gpu::BarrierOp::create(builder, loc), false);
   }
+  // Ideally we want the memory cluster to start with
+  //
+  // s_barrier
+  // s_waitcnt vmcnt(x) lgkmcnt(0)
+  // s_setprio 1
+  //
+  // However, the membar pass will put s_waitcnt before s_barrier.
+  // But we can at least put s_setprio in the memory cluster.
+  prependOp(ROCDL::SetPrioOp::create(builder, loc, highPriority), false);
 
-  // ComputeCluster2
+  // ComputeCluster 2
+  // We want the 2nd compute cluster to start with
+  //
+  // s_setprio 0
+  // s_waitcnt lgkmcnt(0)
+  // s_barrier
+  //
+  // Check note 2 and 3 for details.
+  constexpr int32_t ldsOnlyBits = ~(0x1f << 8);
   updateOpInsertion(dotOps[1]);
-  prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
-  prependOp(builder.create<ROCDL::SBarrierOp>(loc), false);
-  prependOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
+  prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
+  prependOp(ROCDL::SWaitcntOp::create(builder, loc, ldsOnlyBits), false);
+  prependOp(ROCDL::SBarrierOp::create(builder, loc), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
 
   // MemoryCluster2
   updateOpInsertion(memoryClusterStartOps[1]);
-  prependOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
   if (llvm::isa<ttg::AsyncWaitOp>(memoryClusterStartOps[1])) {
     // Only append a sched barrier because membar adds a barrier after asyncwait
-    appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+    appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   } else {
-    prependOp(builder.create<gpu::BarrierOp>(loc), false);
-    prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
+    prependOp(gpu::BarrierOp::create(builder, loc), false);
   }
+  prependOp(ROCDL::SetPrioOp::create(builder, loc, highPriority), false);
 
+  // We want the loop to end with the following s.t. s_xxx instructions
+  // stays in the memory cluster.
+  //
+  // s_setprio 0
+  // s_waitcnt lgkmcnt(0)
+  // s_cbranch
+  // s_barrier
+  //
+  // Note that we don't insert s_barrier at the end of the loop, since
+  // the llvm backend may schedule the s_xxx instructions used for
+  // loop induction variables after the s_barrier and effectively put
+  // them into the compute cluster. Instead, we insert s_barrier
+  // at the beginning of the loop.
   updateOpInsertion(lastInsertedOp->getBlock()->getTerminator());
-  prependOp(builder.create<ROCDL::SchedBarrier>(loc, 0), false);
-  prependOp(builder.create<ROCDL::SBarrierOp>(loc), false);
+  prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
+  prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
+  prependOp(ROCDL::SWaitcntOp::create(builder, loc, ldsOnlyBits), false);
 
   return success();
 }
@@ -757,7 +859,7 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
         tokens.push_back(token);
       }
     }
-    newAsyncWaitOp = builder.create<ttg::AsyncWaitOp>(loc, tokens, 0);
+    newAsyncWaitOp = ttg::AsyncWaitOp::create(builder, loc, tokens, 0);
     for (auto asyncWaitOp : asyncWaitOps) {
       asyncWaitOp.getResult().replaceAllUsesWith(newAsyncWaitOp.getResult());
       asyncWaitOp->erase();
@@ -767,7 +869,7 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
 
   moveOpAndPredecessorsUpSameBlock(lLoadOps[0]);
   moveOpAndPredecessorsUpSameBlock(lLoadOps[1]);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
 
   appendOp(asyncCopyOps[0]);
   appendOp(asyncCommitOps[0]);
@@ -775,25 +877,25 @@ Pingponger::transformTwoClusterWithLocalLoadAndAll(OpBuilder &builder,
   // The last point we need to guarantee async_copy has been completed.
   // w0 : local_load 0 - Dot 0                 - local_load 1
   // w1 :              - local_load 0 (*wait 1)- Dot 0
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
   appendOp(newAsyncWaitOp);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
 
   // Give hint to backend so it can interleave instructions better.
   // This tries to interleave 3 SALU instructions per each MFMA
-  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
-  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 4, 3, 0));
-  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
-  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 4, 3, 0));
-  appendOp(builder.create<ROCDL::SchedGroupBarrier>(loc, 8, 1, 0));
+  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, 8, 1, 0));
+  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, 4, 3, 0));
+  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, 8, 1, 0));
+  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, 4, 3, 0));
+  appendOp(ROCDL::SchedGroupBarrier::create(builder, loc, 8, 1, 0));
 
   appendOp(asyncCopyOps[1]);
   appendOp(asyncCommitOps[1]);
   appendOp(dotOps[0]);
 
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-  appendOp(builder.create<ROCDL::SBarrierOp>(loc));
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
+  appendOp(ROCDL::SBarrierOp::create(builder, loc));
+  appendOp(ROCDL::SchedBarrier::create(builder, loc, 0));
 
   return success();
 }
@@ -807,26 +909,27 @@ void Pingponger::addAsymmetricSyncToLoop(OpBuilder &builder, Location loc) {
   // Set barrier before starting the loop. This resolves any remaining required
   // synchronization before beginning the specialized asymmetric
   // synchronization.
-  auto preBarrier = builder.create<gpu::BarrierOp>(loc);
+  auto preBarrier = gpu::BarrierOp::create(builder, loc);
   preBarrier->moveBefore(forOp);
   builder.setInsertionPointAfter(preBarrier);
 
   // Insert condbarrier::second_half before starting the loop
   auto i32ty = builder.getIntegerType(32);
-  auto workIDX = builder.create<ROCDL::ThreadIdXOp>(loc, i32ty);
-  auto constZero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-  auto constWarpSize = builder.create<arith::ConstantIntOp>(loc, 256, 32);
-  auto warpIDX = builder.create<arith::DivSIOp>(loc, workIDX, constWarpSize);
-  auto warpLow = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
-                                               warpIDX, constZero);
-  auto warpHigh = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
-                                                warpIDX, constZero);
+  auto workIDX = ROCDL::ThreadIdXOp::create(builder, loc, i32ty);
+  auto constZero = arith::ConstantIntOp::create(builder, loc, 0, 32);
+  auto constWarpSize = arith::ConstantIntOp::create(builder, loc, 256, 32);
+  auto warpIDX = arith::DivSIOp::create(builder, loc, workIDX, constWarpSize);
+  auto warpLow = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::eq,
+                                       warpIDX, constZero);
+  auto warpHigh = arith::CmpIOp::create(builder, loc, arith::CmpIPredicate::ne,
+                                        warpIDX, constZero);
   auto condBarrierHigh =
-      builder.create<tt::amdgpu::CondBarrierOp>(loc, warpHigh);
+      tt::amdgpu::CondBarrierOp::create(builder, loc, warpHigh);
 
   // Insert condbarrier::first_half after the end of the loop
   builder.setInsertionPointAfter(forOp);
-  auto condBarrierLow = builder.create<tt::amdgpu::CondBarrierOp>(loc, warpLow);
+  auto condBarrierLow =
+      tt::amdgpu::CondBarrierOp::create(builder, loc, warpLow);
 }
 
 void Pingponger::getDotPingponged() {
