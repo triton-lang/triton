@@ -196,12 +196,14 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK: llvm.store
   // CHECK: llvm.store
   // CHECK: ^[[EXIT]]:
+  // CHECK: llvm.cond_br %{{.*}}, ^[[POST:bb[0-9]+]], ^[[RET:bb[0-9]+]]
+  // CHECK: ^[[POST]]:
   // CHECK: %{{.*}} = llvm.mlir.constant(8 : i32) : i32
   // CHECK: %[[POST_FINAL_TIME_PTR:.*]] = llvm.getelementptr %{{.*}}{{\[}}%{{.*}}{{\]}} : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, i32
   // CHECK: %[[POST_FINAL_TIME:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
   // CHECK: llvm.store %[[POST_FINAL_TIME]], %[[POST_FINAL_TIME_PTR]] : i64, !llvm.ptr<1>
-  // CHECK: llvm.br ^bb9
-  // CHECK: ^bb9: // 2 preds: ^bb7, ^bb8
+  // CHECK: llvm.br ^[[RET]]
+  // CHECK: ^[[RET]]:
   // CHECK: llvm.return
   llvm.func @convert_smem_finalize(%arg: !llvm.ptr<1>) attributes {noinline = false, nvvm.kernel = 1 : ui1} {
     %0 = ttg.local_alloc : () -> !ttg.memdesc<512xi32, #shared, #smem, mutable>
