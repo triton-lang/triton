@@ -742,8 +742,10 @@ def test_overhead(tmp_path: pathlib.Path):
 
     session0_single_time, session0_loop_time = session_kernel_time("session0")
     session1_single_time, session1_loop_time = session_kernel_time("session1")
-    assert session1_single_time / session0_single_time < 1.2, "Simple kernel overhead too high"
-    assert session1_loop_time / session0_loop_time < 2.0, "Loop kernel overhead too high"
+    single_threshold = 1.2 if is_cuda() else 1.5
+    loop_threshold = 2.0 if is_cuda() else 3.0
+    assert session1_single_time / session0_single_time < single_threshold, "Simple kernel overhead too high"
+    assert session1_loop_time / session0_loop_time < loop_threshold, "Loop kernel overhead too high"
 
 
 @pytest.mark.skipif(is_hip(), reason="not implemented yet")

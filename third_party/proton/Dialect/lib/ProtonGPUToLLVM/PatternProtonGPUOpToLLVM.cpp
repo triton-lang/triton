@@ -206,7 +206,8 @@ struct FinalizeOpConversion
     int activeWarpCount = hasSelectIds ? selectIds.size() : numWarps;
     const int segmentWordSize = bufferSizeInWords / activeWarpCount;
     auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
-    auto segmentBaseTy = mlir::cast<LLVM::LLVMPointerType>(segmentObj.base.getType());
+    auto segmentBaseTy =
+        mlir::cast<LLVM::LLVMPointerType>(segmentObj.base.getType());
 
     // Control-flow outline:
     //   prevBlock
@@ -224,17 +225,15 @@ struct FinalizeOpConversion
     Block *continuation =
         emitBlockLeaderPrologue(op, isBlockFirstThread, scratchPtr,
                                 scratchPtrTy, bufferSizeInWords, rewriter);
-    continuation =
-        emitWarpIndexWriteback(op, continuation, isWarpFirstThread, warpId,
-                               scratchPtr, scratchPtrTy, segmentObj,
-                               circularHeaderWordSize, rewriter);
+    continuation = emitWarpIndexWriteback(
+        op, continuation, isWarpFirstThread, warpId, scratchPtr, scratchPtrTy,
+        segmentObj, circularHeaderWordSize, rewriter);
     if (segmentBaseTy.getAddressSpace() == 3) {
       // shared memory
       continuation = emitWarpCopySection(
-          op, continuation, laneId, threadsPerWarp,
-          scratchPtr, scratchPtrTy, segmentObj, metadataWordSize, wordsPerEntry,
-          segmentWordSize, circularHeaderWordSize, segmentType.getMemorySpace(),
-          rewriter);
+          op, continuation, laneId, threadsPerWarp, scratchPtr, scratchPtrTy,
+          segmentObj, metadataWordSize, wordsPerEntry, segmentWordSize,
+          circularHeaderWordSize, segmentType.getMemorySpace(), rewriter);
     }
     emitBlockLeaderEpilogue(op, continuation, isBlockFirstThread, scratchPtr,
                             scratchPtrTy, rewriter);
@@ -283,12 +282,13 @@ private:
     return continuation;
   }
 
-  Block *emitWarpIndexWriteback(
-      mlir::triton::proton::gpu::FinalizeOp op, Block *continuation,
-      Value isWarpFirstThread, Value warpId, Value scratchPtr,
-      LLVM::LLVMPointerType scratchPtrTy,
-      const LLVM::SegmentObject &segmentObj, int circularHeaderWordSize,
-      ConversionPatternRewriter &rewriter) const {
+  Block *emitWarpIndexWriteback(mlir::triton::proton::gpu::FinalizeOp op,
+                                Block *continuation, Value isWarpFirstThread,
+                                Value warpId, Value scratchPtr,
+                                LLVM::LLVMPointerType scratchPtrTy,
+                                const LLVM::SegmentObject &segmentObj,
+                                int circularHeaderWordSize,
+                                ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     Block *afterStore = rewriter.splitBlock(continuation, op->getIterator());
@@ -311,13 +311,15 @@ private:
     return afterStore;
   }
 
-  Block *emitWarpCopySection(
-      mlir::triton::proton::gpu::FinalizeOp op, Block *continuation,
-      Value laneId, Value threadsPerWarp, Value scratchPtr,
-      LLVM::LLVMPointerType scratchPtrTy,
-      const LLVM::SegmentObject &segmentObj, int metadataWordSize,
-      int wordsPerEntry, int segmentWordSize, int circularHeaderWordSize,
-      Attribute memSpace, ConversionPatternRewriter &rewriter) const {
+  Block *emitWarpCopySection(mlir::triton::proton::gpu::FinalizeOp op,
+                             Block *continuation, Value laneId,
+                             Value threadsPerWarp, Value scratchPtr,
+                             LLVM::LLVMPointerType scratchPtrTy,
+                             const LLVM::SegmentObject &segmentObj,
+                             int metadataWordSize, int wordsPerEntry,
+                             int segmentWordSize, int circularHeaderWordSize,
+                             Attribute memSpace,
+                             ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     // Control-flow outline:
