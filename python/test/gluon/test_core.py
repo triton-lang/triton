@@ -1585,22 +1585,24 @@ def test_tcgen05_mma_scaled_minimal():
     ttgir = compiled.asm["ttgir"]
     assert "ttng.tc_gen5_mma_scaled" in ttgir
 
+
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
 def test_efficient_layout():
+
     @gluon.jit
     def kernel(in_ptr, out_ptr,  #
                xnumel, ynumel, xstride_in, ystride_in, xstride_out, ystride_out,  #
                XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
         pid_x = ttgl.program_id(0)
         pid_y = ttgl.program_id(1)
-        indices_x = pid_x * XBLOCK + ttgl.arange(0, XBLOCK, ttgl.EfficientLayout())  
-        indices_y = pid_y * YBLOCK + ttgl.arange(0, YBLOCK, ttgl.EfficientLayout()) 
+        indices_x = pid_x * XBLOCK + ttgl.arange(0, XBLOCK, ttgl.EfficientLayout())
+        indices_y = pid_y * YBLOCK + ttgl.arange(0, YBLOCK, ttgl.EfficientLayout())
 
         in_offsets = xstride_in * indices_x[:, None] + ystride_in * indices_y[None, :]
         out_offsets = xstride_out * indices_x[:, None] + ystride_out * indices_y[None, :]
 
         # MASK
-        mask = (indices_x[:, None] < xnumel) & (indices_y[None, :] < ynumel)  
+        mask = (indices_x[:, None] < xnumel) & (indices_y[None, :] < ynumel)
 
         # IN PTR
         in_ptrs = in_ptr + in_offsets
@@ -1638,7 +1640,7 @@ def test_convert_auto_layout_to_efficient_layout():
                XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
         pid_x = ttgl.program_id(0)
         pid_y = ttgl.program_id(1)
-        indices_x = pid_x * XBLOCK + ttgl.arange(0, XBLOCK, ttgl.AutoLayout())  
+        indices_x = pid_x * XBLOCK + ttgl.arange(0, XBLOCK, ttgl.AutoLayout())
         indices_y = pid_y * YBLOCK + ttgl.arange(0, YBLOCK, ttgl.AutoLayout())
 
         in_offsets = xstride_in * indices_x[:, None] + ystride_in * indices_y[None, :]
