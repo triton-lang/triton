@@ -3,8 +3,13 @@
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Pass/PassManager.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/Support/DynamicLibrary.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/ErrorOr.h"
 #include <algorithm>
+#include <cstdint>
 #include <numeric>
 
 namespace mlir {
@@ -211,5 +216,104 @@ enum TritonPluginResult {
 };
 #define TRITON_PLUGIN_API                                                      \
   extern "C" __attribute__((visibility("default"))) TritonPluginResult
+
+struct TritonPlugin {
+  TritonPlugin() = delete;
+  TritonPlugin(std::string filename) : filename(filename) {}
+
+private:
+  const std::string ENUMERATE_PASSES = "tritonEnumeratePluginPasses";
+  using enumeratePassesType =
+      std::function<TritonPluginResult(uint32_t *, const char **)>;
+  using enumeratePassesCType = TritonPluginResult (*)(uint32_t *,
+                                                      const char **);
+
+  const std::string ADD_PASS = "tritonAddPluginPass";
+  using addPassType =
+      std::function<TritonPluginResult(mlir::PassManager *, const char *)>;
+  using addPassCType = TritonPluginResult (*)(mlir::PassManager *,
+                                              const char *);
+
+  const std::string REGISTER_PASS = "tritonRegisterPluginPass";
+  using registerPassType = std::function<TritonPluginResult(const char *)>;
+  using registerPassCType = TritonPluginResult (*)(const char *);
+
+  llvm::Error checkLibraryValid(const std::string &error) const {
+    if (!library.isValid()) {
+      auto msg = llvm::Twine("Failed to load plugin library: " + error + "\n");
+      return llvm::createStringError(msg);
+    }
+    return llvm::Error::success();
+  }
+
+  llvm::Expected<intptr_t> getAddressOfSymbol(const std::string &symbol) const {
+    if (auto isValid = checkLibraryValid("not loaded"))
+      return isValid;
+    intptr_t getDetailsFn =
+        (intptr_t)library.getAddressOfSymbol(symbol.c_str());
+    if (!getDetailsFn) {
+      auto msg = llvm::Twine("Failed to get symbol: " + symbol + "\n");
+      return llvm::createStringError(msg);
+    }
+    return getDetailsFn;
+  }
+
+  template <typename T, typename U>
+  llvm::Expected<T> getAPI(const std::string &symbol) const {
+    llvm::Expected<intptr_t> getDetailsFn = getAddressOfSymbol(symbol);
+    if (auto Err = getDetailsFn.takeError()) {
+      return Err;
+    }
+    auto func = reinterpret_cast<U>(*getDetailsFn);
+    return func;
+  }
+
+public:
+  llvm::Error loadPlugin() const {
+    std::string error;
+    library = llvm::sys::DynamicLibrary::getPermanentLibrary(filename.c_str(),
+                                                             &error);
+    return checkLibraryValid(error);
+  }
+
+  llvm::Expected<std::vector<const char *>> getPassHandles() const {
+    auto apiOrErr =
+        getAPI<enumeratePassesType, enumeratePassesCType>(ENUMERATE_PASSES);
+    if (auto Err = apiOrErr.takeError())
+      return Err;
+    auto enumeratePluginPasses = *apiOrErr;
+
+    std::vector<const char *> passNames;
+    uint32_t passCount = 0;
+    enumeratePluginPasses(&passCount, nullptr);
+    if (passCount == 0)
+      return passNames;
+
+    passNames.resize(passCount);
+    enumeratePluginPasses(&passCount, passNames.data());
+    return passNames;
+  }
+
+  TritonPluginResult addPass(mlir::PassManager *pm,
+                             const char *passHandle) const {
+    auto apiOrErr = getAPI<addPassType, addPassCType>(ADD_PASS);
+    if (auto Err = apiOrErr.takeError())
+      return TP_GENERIC_FAILURE;
+    auto addPass = *apiOrErr;
+    return addPass(pm, passHandle);
+  }
+
+  TritonPluginResult registerPass(const char *passHandle) const {
+    auto apiOrErr = getAPI<registerPassType, registerPassCType>(REGISTER_PASS);
+    if (auto Err = apiOrErr.takeError())
+      return TP_GENERIC_FAILURE;
+    auto registerPass = *apiOrErr;
+    return registerPass(passHandle);
+  }
+
+private:
+  std::string filename = "";
+  mutable llvm::sys::DynamicLibrary library;
+};
 
 #endif
