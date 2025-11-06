@@ -44,14 +44,18 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
     L = src_tensor.shape[-1]
     if is_fp4:
         assert L % 2 == 0, f"axis dim must be divisible by 2 for e2m1. Got {L}"
-    out_shape = src_tensor.shape[:-1] + (L // divisor, )
+    # Ensure last dimension is a multiple of MXFP_BLOCK_SIZE. This is expected by the kernel.
+    padded_L = triton.cdiv(L, MXFP_BLOCK_SIZE.value) * MXFP_BLOCK_SIZE.value
+    needs_padding = padded_L != L
+    out_shape_padded = src_tensor.shape[:-1] + (padded_L // divisor, )
     out_scale_shape = src_tensor.shape[:-1] + (triton.cdiv(L, MXFP_BLOCK_SIZE), )
 
-    out_quant_tensor = src_tensor.new_empty(out_shape, dtype=out_quant_type)
+    out_quant_tensor = src_tensor.new_empty(out_shape_padded, dtype=out_quant_type)
     out_scale = src_tensor.new_empty(out_scale_shape, dtype=torch.uint8)
 
     if src_tensor.numel() > 0:
-        kernel_src_tensor = src_tensor.reshape(-1, src_tensor.shape[-1])
+        src_tensor_padded = F.pad(src_tensor, (0, padded_L - L)) if needs_padding else src_tensor
+        kernel_src_tensor = src_tensor_padded.reshape(-1, src_tensor_padded.shape[-1])
         kernel_quant_tensor = out_quant_tensor.view(-1, out_quant_tensor.shape[-1])
         kernel_scale = out_scale.view(-1, out_scale.shape[-1])
 
@@ -71,6 +75,9 @@ def downcast_to_mxfp(src_tensor: torch.Tensor, out_quant_type: torch.dtype, axis
             DEQUANT_SCALE_ROUNDING_MODE.value,
             num_warps=NUM_WARPS,
         )
+
+        if needs_padding:
+            out_quant_tensor = out_quant_tensor[..., : (L // divisor)]
 
     out_quant_tensor = out_quant_tensor.transpose(axis, src_tensor.ndim - 1)
     out_scale = out_scale.transpose(axis, src_tensor.ndim - 1)

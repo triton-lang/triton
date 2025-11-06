@@ -185,10 +185,10 @@ def _downcast_to_mxfp(
     mask_n = start_out + offs_outer < outer_dim
     full_mask_src = mask_src_quant & mask_n
 
-    mask_mxt_quant = start_mx_quant + offs_mxt_quant < tl.cdiv(quant_dim, K_DIVISOR)
+    mask_mxt_quant = start_mx_quant + offs_mxt_quant < quant_dim // K_DIVISOR  # requires quant_dim % K_DIVISOR == 0
     full_mask_mxt = mask_mxt_quant & mask_n
 
-    scale_mask_k = start_mx_scale_quant + offs_scale_quant < tl.cdiv(quant_dim, MXFP_BLOCK_SIZE)
+    scale_mask_k = start_mx_scale_quant + offs_scale_quant < quant_dim // MXFP_BLOCK_SIZE  # requires quant_dim % MXFP_BLOCK_SIZE == 0
     full_scale_mask = scale_mask_k & mask_n
 
     src_tensor_offsets = offs_src_quant * stride_src_quant + offs_outer * stride_src_outer
@@ -200,49 +200,7 @@ def _downcast_to_mxfp(
                                                         DEQUANT_SCALE_ROUNDING_MODE)
 
     tl.store(mx_scale_ptr + mx_scale_offsets, scale_tensor, mask=full_scale_mask)
-    if is_fp4:
-        # Enabled grouped stores for FP4 elements.
-        GROUP_BYTES: tl.constexpr = 4
-        GROUPS_PER_ROW: tl.constexpr = BLOCK_SIZE_QUANT_MX_TENSOR // GROUP_BYTES
-
-        # Compute group-aligned address offsets for 4-byte stores.
-        offs_mxt_quant_groups = (tl.arange(0, GROUPS_PER_ROW)[None, :].to(tl.int64) * GROUP_BYTES)
-        mx_tensor_group_offsets = offs_mxt_quant_groups * stride_mxt_quant + offs_outer * stride_mxt_outer
-
-        # Determine which groups are fully valid (ie, have 4 bytes in-bounds for this tile).
-        bound_elems = tl.cdiv(quant_dim, K_DIVISOR)
-        groups_last_idx = start_mx_quant + offs_mxt_quant_groups + (GROUP_BYTES - 1)
-        mask_groups = groups_last_idx < bound_elems
-        full_group_mask = mask_groups & mask_n
-
-        # Only 4-byte store on rows whose base address is 4-byte aligned.
-        row_base = start_mx_quant + offs_outer * stride_mxt_outer
-        aligned_rows = (row_base & (GROUP_BYTES - 1)) == 0
-
-        # Guard against potentially misaligned base pointer.
-        # If base is not 4-byte aligned, disable grouped stores and let the byte-level tail path handle all elements.
-        base_addr_i64 = mx_tensor_ptr.to(tl.int64, bitcast=True)
-        aligned_base = (base_addr_i64 & (GROUP_BYTES - 1)) == 0
-
-        full_group_mask = full_group_mask & aligned_rows & aligned_base
-
-        # Pack 4 consecutive bytes into one u32.
-        vals_u32 = out_tensor.to(tl.uint32)
-        vals4 = tl.reshape(vals_u32, [BLOCK_SIZE_OUT_DIM, GROUPS_PER_ROW, GROUP_BYTES])
-        shift_amounts = (tl.arange(0, GROUP_BYTES)[None, None, :].to(tl.uint32) * 8)
-        packed_u32 = tl.sum(vals4 << shift_amounts, axis=2)
-
-        mx_tensor_u32_ptr = (mx_tensor_ptr + mx_tensor_group_offsets).to(tl.pointer_type(tl.uint32))
-        tl.store(mx_tensor_u32_ptr, packed_u32, mask=full_group_mask)
-
-        # Deal with tail bytes not covered by groups, or rows where groups were not written.
-        group_for_elem = (offs_mxt_quant // GROUP_BYTES) * GROUP_BYTES
-        elem_groups_last_idx = start_mx_quant + group_for_elem + (GROUP_BYTES - 1)
-        elem_in_full_group = (elem_groups_last_idx < bound_elems) & aligned_rows & aligned_base
-        tail_mask = full_mask_mxt & ~elem_in_full_group
-        tl.store(mx_tensor_ptr + mx_tensor_offsets, out_tensor, mask=tail_mask)
-    else:
-        tl.store(mx_tensor_ptr + mx_tensor_offsets, out_tensor, mask=full_mask_mxt)
+    tl.store(mx_tensor_ptr + mx_tensor_offsets, out_tensor, mask=full_mask_mxt)
 
 
 @triton.jit(repr=lambda _: "_dequantize_mxfp8")
