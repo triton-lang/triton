@@ -252,28 +252,35 @@ struct TmemAccessDag {
     return accessDag;
   }
 
-  std::pair<bool, std::set<PartitionId>> collectPartitions(Node *node) {
-    std::set<PartitionId> partitions;
-    bool hasRootPartition = false;
-    if (node->partitionId)
+  void collectPartitions(Node *node, bool &hasRootPartition,
+                         std::set<PartitionId> &partitions) {
+    if (node->partitionId) {
       partitions.insert(*node->partitionId);
-
-    while (node->user) {
-      node = node->user.get();
-      if (node->partitionId)
-        partitions.insert(*node->partitionId);
-      else
-        hasRootPartition = true;
-      for (auto &subDag : node->subDags) {
-        if (subDag) {
-          auto [rootPartition, ps] = collectPartitions(subDag.get());
-          hasRootPartition = hasRootPartition || rootPartition;
-          partitions.insert(ps.begin(), ps.end());
-        }
+    } else {
+      // root partition is considered a real owner only if there are already
+      // other partitions owning tmem
+      hasRootPartition = !partitions.empty();
+    }
+    for (auto &subDag : node->subDags) {
+      if (subDag) {
+        collectPartitions(subDag.get(), hasRootPartition, partitions);
       }
     }
-    return {hasRootPartition, partitions};
+    if (node->user) {
+      collectPartitions(node->user.get(), hasRootPartition, partitions);
+    }
   };
+
+  std::pair<bool, std::set<PartitionId>> collectPartitions() {
+    std::set<PartitionId> partitions;
+    bool hasRootPartition = false;
+    auto node = getRootNode();
+    auto allocOp = getAllocOp();
+    if (allocOp.getSrc() && node->partitionId)
+      partitions.insert(*node->partitionId);
+    collectPartitions(getRootNode()->user.get(), hasRootPartition, partitions);
+    return {hasRootPartition, partitions};
+  }
 
   void printNode(Node *node, int indent, llvm::raw_ostream &os) {
     if (!node)
@@ -294,12 +301,12 @@ struct TmemAccessDag {
         if (tmemAlloc.getSrc()) {
           os << " %src ";
         } else {
-          std::tie(hasRootPartition, partitions) = collectPartitions(node);
+          std::tie(hasRootPartition, partitions) = collectPartitions();
         }
       }
       os << "  ";
     }
-    os << "[" << (hasRootPartition ? "root" : "") << "]";
+    os << "[" << (hasRootPartition ? "root" : "");
     for (auto partition : partitions) {
       auto [id, tag] = partition;
       os << " @" << tag << "." << id << " ";
@@ -642,8 +649,7 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
     // the corresponding partition to prevent deadlocks. This is necessary
     // because if we're inside an outer loop, re-entering the loop without
     // posting a matching GET operation for the PUT would cause the dead-lock.
-    auto [hasRootPartition, partitions] =
-        accessDag.collectPartitions(accessDag.getRootNode());
+    auto [hasRootPartition, partitions] = accessDag.collectPartitions();
     std::optional<PartitionId> otherPartitionId;
     // since we only have two partition, we just pick the other partition for
     // get
@@ -767,18 +773,12 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
 LogicalResult runOnFunction(triton::FuncOp funcOp) {
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
-    // skip allocOps with source and > 1 partition
-    std::optional<SetVector<int>> partitionIds;
-    if (hasPartition(allocOp))
-      partitionIds = getPartitionIds(allocOp);
-    if (!allocOp.getSrc() || (partitionIds && partitionIds->size() == 1))
-      tmemDags.push_back(TmemAccessDag::build(allocOp));
+    tmemDags.push_back(TmemAccessDag::build(allocOp));
   });
 
   for (auto &accessDag : tmemDags) {
     LLVM_DEBUG({ accessDag.printDag(llvm::dbgs()); });
-    auto [hasRootPartition, partitions] =
-        accessDag.collectPartitions(accessDag.getRootNode());
+    auto [hasRootPartition, partitions] = accessDag.collectPartitions();
     assert(partitions.size() <= 2 && "expecting at most 2 partitions");
     auto totalOwners = hasRootPartition + partitions.size();
     if (totalOwners > 1)
