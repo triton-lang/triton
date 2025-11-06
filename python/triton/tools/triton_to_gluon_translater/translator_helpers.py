@@ -101,8 +101,6 @@ def tl_dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=No
     M: ttgl.constexpr = lhs_scale.shape[0]
     N: ttgl.constexpr = rhs_scale.shape[0]
     K: ttgl.constexpr = lhs_scale.shape[1] * 32
-    BLOCK_M: ttgl.constexpr = _constexpr_min(M, 128)
-    BLOCK_N: ttgl.constexpr = _constexpr_min(N, 256)
     ttgl.static_assert(M >= 128 and N >= 16 and K >= 16, "TODO: support smaller shapes using mmav2")
     fp4_padded_a: ttgl.constexpr = lhs_format == "e2m1" and rhs_format != "e2m1"
     fp4_padded_b: ttgl.constexpr = lhs_format != "e2m1" and rhs_format == "e2m1"
