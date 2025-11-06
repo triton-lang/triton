@@ -94,9 +94,7 @@ void expandLoops(ModuleOp moduleOp) {
       continue;
   }
 
-  // NOTE: Leave empty for now, until we utilize customEpiloguePeeling
-  DenseSet<ttg::MaskOp> peeledMaskOps;
-  tt::resolveMaskOp(moduleOp, peeledMaskOps);
+  tt::resolveMaskOp(moduleOp);
 }
 } // namespace
 
