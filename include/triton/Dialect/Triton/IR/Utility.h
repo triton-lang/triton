@@ -212,6 +212,7 @@ extern "C" {
 enum TritonPluginResult {
   TP_SUCCESS = 0,
   TP_GENERIC_FAILURE = 1,
+  TP_NOT_LOADED = 2,
 };
 };
 #define TRITON_PLUGIN_API                                                      \
@@ -269,51 +270,62 @@ private:
   }
 
 public:
-  llvm::Error loadPlugin() const {
+  llvm::Error loadPlugin() {
     std::string error;
     library = llvm::sys::DynamicLibrary::getPermanentLibrary(filename.c_str(),
                                                              &error);
-    return checkLibraryValid(error);
+    if (auto isValid = checkLibraryValid(error))
+      return isValid;
+
+    auto enumeratePassesAPIOrErr =
+        getAPI<enumeratePassesType, enumeratePassesCType>(ENUMERATE_PASSES);
+    auto addPassAPIOrErr = getAPI<addPassType, addPassCType>(ADD_PASS);
+    auto registerPassAPIOrErr =
+        getAPI<registerPassType, registerPassCType>(REGISTER_PASS);
+
+    if (auto Err = enumeratePassesAPIOrErr.takeError())
+      return Err;
+    if (auto Err = addPassAPIOrErr.takeError())
+      return Err;
+    if (auto Err = registerPassAPIOrErr.takeError())
+      return Err;
+
+    enumeratePassesAPI = *enumeratePassesAPIOrErr;
+    addPassAPI = *addPassAPIOrErr;
+    registerPassAPI = *registerPassAPIOrErr;
+    isLoaded = true;
+    return llvm::Error::success();
   }
 
-  llvm::Expected<std::vector<const char *>> getPassHandles() const {
-    auto apiOrErr =
-        getAPI<enumeratePassesType, enumeratePassesCType>(ENUMERATE_PASSES);
-    if (auto Err = apiOrErr.takeError())
-      return Err;
-    auto enumeratePluginPasses = *apiOrErr;
-
-    std::vector<const char *> passNames;
+  TritonPluginResult
+  getPassHandles(std::vector<const char *> &passNames) const {
     uint32_t passCount = 0;
-    enumeratePluginPasses(&passCount, nullptr);
-    if (passCount == 0)
-      return passNames;
+    passNames.clear();
+    if (auto result =
+            isLoaded ? enumeratePassesAPI(&passCount, nullptr) : TP_NOT_LOADED;
+        result != TP_SUCCESS || passCount == 0)
+      return result;
 
     passNames.resize(passCount);
-    enumeratePluginPasses(&passCount, passNames.data());
-    return passNames;
+    return enumeratePassesAPI(&passCount, passNames.data());
   }
 
   TritonPluginResult addPass(mlir::PassManager *pm,
                              const char *passHandle) const {
-    auto apiOrErr = getAPI<addPassType, addPassCType>(ADD_PASS);
-    if (auto Err = apiOrErr.takeError())
-      return TP_GENERIC_FAILURE;
-    auto addPass = *apiOrErr;
-    return addPass(pm, passHandle);
+    return isLoaded ? addPassAPI(pm, passHandle) : TP_NOT_LOADED;
   }
 
   TritonPluginResult registerPass(const char *passHandle) const {
-    auto apiOrErr = getAPI<registerPassType, registerPassCType>(REGISTER_PASS);
-    if (auto Err = apiOrErr.takeError())
-      return TP_GENERIC_FAILURE;
-    auto registerPass = *apiOrErr;
-    return registerPass(passHandle);
+    return isLoaded ? registerPassAPI(passHandle) : TP_NOT_LOADED;
   }
 
 private:
   std::string filename = "";
   mutable llvm::sys::DynamicLibrary library;
+  enumeratePassesType enumeratePassesAPI;
+  addPassType addPassAPI;
+  registerPassType registerPassAPI;
+  bool isLoaded = false;
 };
 
 #endif
