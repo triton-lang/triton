@@ -237,8 +237,12 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   const auto kDimOperandSize = aTensorTy.getShape().back();
 
   std::string intrinsicName;
-  FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic = WmmaIntrinsic::get(
-      wmmaVer, mnkDim[0], mnkDim[1], mnkDim[2], aElemTy, bElemTy, dElemTy);
+  FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic =
+      wmmaLayout.getIsTransposed()
+          ? WmmaIntrinsic::get(wmmaVer, mnkDim[1], mnkDim[0], mnkDim[2],
+                               bElemTy, aElemTy, dElemTy)
+          : WmmaIntrinsic::get(wmmaVer, mnkDim[0], mnkDim[1], mnkDim[2],
+                               aElemTy, bElemTy, dElemTy);
   if (failed(maybeWmmaIntrinsic)) {
     return op.emitError(
         "no matching matrix core intrinsic due to unsupported element type");
