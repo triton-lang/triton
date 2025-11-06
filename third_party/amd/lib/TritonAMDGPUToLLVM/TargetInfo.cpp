@@ -140,9 +140,8 @@ TargetInfo::queryLDSTransLoadParams(int bitWidth) const {
     return std::nullopt;
   unsigned numLanesInShuffleGroup = getWarpSize() / 4;
   unsigned instBitWidth = isGFX1250 && bitWidth == 16 ? 128 : 64;
-  unsigned needContigReg = instBitWidth / bitWidth;
-  return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth,
-                            needContigReg};
+  unsigned tileSize = instBitWidth / bitWidth;
+  return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth, tileSize};
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,

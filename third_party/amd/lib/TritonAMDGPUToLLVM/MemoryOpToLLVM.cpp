@@ -47,7 +47,7 @@ public:
     if (paddedEnc) {
       const auto &sharedLL = paddedEnc.getLinearComponent();
       cvtDstLL = triton::gpu::toLinearLayout(dstTy).invertAndCompose(sharedLL);
-      if (paddedEnc.getMinInterval() < ldsParams->needContigReg)
+      if (paddedEnc.getMinInterval() < ldsParams->tileSize)
         return failure();
     } else {
       auto sharedLL = triton::gpu::toLinearLayout(srcTy);
@@ -106,9 +106,6 @@ private:
     auto smemPtrTy = ptr_ty(ctx, 3);
     auto bitWidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
 
-    if (cvt.hasInDim(kBlock))
-      return failure();
-
     // Map onto offsets (contiguous part) and addr (non-contiguous part)
     LinearLayout fullTile;
     // Contiguous tile
@@ -139,7 +136,7 @@ private:
     // from, only that each lane needs to load 64 contiguous bits from shared
     // memory. We require N number of lanes to be contiguous since they read
     // consecutive 64 bits loaded from the same lanes.
-    tile = LinearLayout::identity1D(ldsParams.needContigReg, kLane, kOffset);
+    tile = LinearLayout::identity1D(ldsParams.tileSize, kLane, kOffset);
 
     const auto isaFamily = targetInfo.getISAFamily();
     // B8 types on gfx1250 require a different tile with double the contiguity
@@ -156,15 +153,14 @@ private:
 
     if (doubleB8Contiguity) {
       fullTile =
-          tile *
-          LinearLayout::identity1D(ldsParams.needContigReg / 2, kReg, kAddr) *
+          tile * LinearLayout::identity1D(ldsParams.tileSize / 2, kReg, kAddr) *
           LinearLayout::identity1D(otherLanes, kLane, kAddr) *
           LinearLayout::identity1D(2, kReg, kAddr) *
           LinearLayout::identity1D(missingLanes / otherLanes, kLane, kAddr);
     } else {
       fullTile =
           tile * LinearLayout::identity1D(otherLanes, kLane, kAddr) *
-          LinearLayout::identity1D(ldsParams.needContigReg, kReg, kAddr) *
+          LinearLayout::identity1D(ldsParams.tileSize, kReg, kAddr) *
           LinearLayout::identity1D(missingLanes / otherLanes, kLane, kAddr);
     }
     // Add warp dimension so we can invert and compose with reps later
@@ -408,14 +404,15 @@ private:
       cvt = ldsTransLayout->invertAndCompose(sharedLL);
     }
     // Check that we will be able to vectorize the load.
-    // Need to have exactly needContigReg, otherwise we can't use ds_read_tr
-    auto [elemsPerVec, permutation] = largestVectorisation(
-        ctx, cvt, bitWidth, ldsTransLoadParams->needContigReg);
+    // Need to have exactly ldsTransLoadParams->tileSize,
+    // otherwise we can't use ds_read_tr
+    auto [elemsPerVec, permutation] =
+        largestVectorisation(ctx, cvt, bitWidth, ldsTransLoadParams->tileSize);
 
     if (paddedEnc)
       elemsPerVec = std::min<int>(elemsPerVec, paddedEnc.getMinInterval());
 
-    if (elemsPerVec != ldsTransLoadParams->needContigReg)
+    if (elemsPerVec != ldsTransLoadParams->tileSize)
       return failure();
 
     cvt = cvt.sublayout({kReg, kLane, kWarp}, {kOffset});
@@ -440,7 +437,7 @@ private:
         loc, rewriter.getContext(), cvt, {}, // Input for store, output for load
         llvmElemTy, smemObj.getBase(), calcPaddedOffset, affineOffset,
         maskSpanAffineOffset, laneId, warpId, rewriter, targetInfo,
-        ldsTransLoadParams->needContigReg, lowerInst);
+        ldsTransLoadParams->tileSize, lowerInst);
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, retTy);
     rewriter.replaceOp(op, result);
     return success();
