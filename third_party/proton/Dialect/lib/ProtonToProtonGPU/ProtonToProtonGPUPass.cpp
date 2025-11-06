@@ -80,8 +80,8 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
 
   // Replace all proton::RecordOp in the worker warps.
   func->walk([&](triton::gpu::WarpSpecializePartitionsOp partitions) {
-    auto loc = partitions.getLoc();
     for (auto &partition : partitions.getPartitionRegions()) {
+      auto loc = partitions.getLoc();
       if (hasOperator<Region, proton::RecordOp>(&partition)) {
         Block &block = partition.front();
         builder.setInsertionPointToStart(&block);
@@ -100,11 +100,11 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
         partition.walk([&](proton::RecordOp record) {
           builder.setInsertionPoint(record);
 
-          Value counter =
-              gpu::ReadCounterOp::create(builder, loc, clkType, metricType);
+          Value counter = gpu::ReadCounterOp::create(builder, record.getLoc(),
+                                                     clkType, metricType);
           int scopeId = scopeInfo.getOpScopeId(record);
-          gpu::CircularStoreOp::create(builder, loc, newSegment, counter,
-                                       record.getIsStart(), scopeId);
+          gpu::CircularStoreOp::create(builder, record.getLoc(), newSegment,
+                                       counter, record.getIsStart(), scopeId);
           record.erase();
         });
 
@@ -120,13 +120,12 @@ LogicalResult replaceProtonRecordOp(OpBuilder &builder, FuncOp func,
   // Replace all proton::RecordOp in the master warps. For the master warps, we
   // don't need to restore warp-level context and we save the context in the end
   // of kernel (right before FinalizeOp).
-  auto loc = func.getLoc();
   func->walk([&](proton::RecordOp record) {
     builder.setInsertionPoint(record);
-    Value counter =
-        gpu::ReadCounterOp::create(builder, loc, clkType, metricType);
+    Value counter = gpu::ReadCounterOp::create(builder, record.getLoc(),
+                                               clkType, metricType);
     int scopeId = scopeInfo.getOpScopeId(record);
-    gpu::CircularStoreOp::create(builder, loc, segment, counter,
+    gpu::CircularStoreOp::create(builder, record.getLoc(), segment, counter,
                                  record.getIsStart(), scopeId);
     record.erase();
   });
@@ -236,7 +235,10 @@ public:
       else
         allocBufferSize = allocSharedMemSize;
     } else if (bufferType == gpu::BufferType::GLOBAL) {
-      allocBufferSize = bufferSize;
+      if (bufferSize > 0)
+        allocBufferSize = bufferSize.getValue();
+      else
+        allocBufferSize = 16384 * segmentNum;
     } else {
       mlir::emitError(loc, "buffer-type not supported");
       return failure();
@@ -267,14 +269,19 @@ public:
            llvm::Twine(allocProfileScratchSize) + " bytes.");
     }
 
-    Value buffer;
-    auto ctaLayout =
-        triton::gpu::CTALayoutAttr::get(context, /*CTAsPerCGA=*/{1},
-                                        /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
-    auto encoding = triton::gpu::SwizzledSharedEncodingAttr::get(
-        context, 1, 1, 1, {0}, ctaLayout);
+    Value profileMem = gpu::GlobalScratchAllocOp::create(
+        builder, loc, triton::getPointerType(builder.getI32Type()),
+        allocProfileScratchSize, profileScratchAlignment);
+    gpu::InitializeOp::create(builder, loc, profileMem);
 
+    Value segment;
+    Value buffer;
     if (bufferType == gpu::BufferType::SHARED) {
+      auto ctaLayout = triton::gpu::CTALayoutAttr::get(
+          context, /*CTAsPerCGA=*/{1},
+          /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
+      auto encoding = triton::gpu::SwizzledSharedEncodingAttr::get(
+          context, 1, 1, 1, {0}, ctaLayout);
       Attribute sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(context);
       auto sharedBufferType = triton::gpu::MemDescType::get(
@@ -282,30 +289,30 @@ public:
           sharedMemorySpace, /*mutable_memory=*/true);
       buffer =
           triton::gpu::LocalAllocOp::create(builder, loc, sharedBufferType);
+      Attribute memorySpace =
+          mlir::cast<triton::gpu::MemDescType>(buffer.getType())
+              .getMemorySpace();
+
+      auto segmentType = gpu::SegmentType::get(
+          context, allocBufferSize, memorySpace, granularity, selectIdVec);
+      segment = gpu::SegmentAllocOp::create(builder, loc, segmentType, buffer);
     } else if (bufferType == gpu::BufferType::GLOBAL) {
-      mlir::emitError(loc, "not implemented yet");
-      return failure();
+      Attribute memorySpace = gpu::GlobalMemorySpaceAttr::get(context);
+      auto segmentType = gpu::SegmentType::get(
+          context, allocBufferSize, memorySpace, granularity, selectIdVec);
+      int offset = (circularHeaderSize + numWarps * 4) / 4;
+      Type offsetType = builder.getI32Type();
+      Value offsetVal = arith::ConstantOp::create(
+          builder, loc, offsetType, builder.getIntegerAttr(offsetType, offset));
+      buffer = triton::AddPtrOp::create(builder, loc, profileMem.getType(),
+                                        profileMem, offsetVal);
+      segment = gpu::SegmentAllocOp::create(builder, loc, segmentType, buffer);
     } else {
       mlir::emitError(loc, "buffer-type not supported");
       return failure();
     }
 
-    auto memorySpace =
-        mlir::cast<triton::gpu::MemDescType>(buffer.getType()).getMemorySpace();
-    auto segmentType = gpu::SegmentType::get(
-        context, allocBufferSize, memorySpace, granularity, selectIdVec);
-    Value segment =
-        gpu::SegmentAllocOp::create(builder, loc, segmentType, buffer);
-
     ModuleScopeIdAllocation &scopeInfo = getAnalysis<ModuleScopeIdAllocation>();
-
-    // Set insertion point to the start of the function
-    builder.setInsertionPointToStart(&func.getBody().front());
-
-    Value profileMem = gpu::GlobalScratchAllocOp::create(
-        builder, loc, triton::getPointerType(builder.getI32Type()),
-        allocProfileScratchSize, profileScratchAlignment);
-    gpu::InitializeOp::create(builder, loc, profileMem);
 
     if (hasOperator<Operation, triton::gpu::WarpSpecializeOp>(
             func.getOperation()))

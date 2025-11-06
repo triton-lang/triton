@@ -303,19 +303,19 @@ class Case:
     ],
 )
 @pytest.mark.parametrize("block_m", [16, 128])
-@pytest.mark.parametrize("do_gather, do_scatter, fused_scatter, inner_expt_opt", [
-    (False, False, False, None),
-    (True, False, False, None),
-    (False, True, False, None),
-    (False, True, True, None),
-    (True, True, False, None),
-    (True, True, True, None),
-    (False, False, False, "pad_w"),
-    (False, False, False, "pad_x"),
+@pytest.mark.parametrize("do_gather, do_scatter, inner_expt_opt", [
+    (False, False, None),
+    (True, False, None),
+    (False, True, None),
+    (False, True, None),
+    (True, True, None),
+    (True, True, None),
+    (False, False, "pad_w"),
+    (False, False, "pad_x"),
 ])
 @pytest.mark.parametrize("has_y_gammas", [False, True])
 @pytest.mark.parametrize("is_persistent", [False, True])
-def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
+def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
             n_expts_act, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             x_transpose, w_transpose, y_transpose,
             device, opt_flags_scope):
@@ -323,7 +323,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
     # the frame that called pytest.skip, including all the tensors, leading to OOM.
     skip_message = None
     try:
-        _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
+        _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
                  n_expts_act, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
                  x_transpose, w_transpose, y_transpose,
                  device, opt_flags_scope)
@@ -333,7 +333,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_o
     if skip_message is not None:
         pytest.skip(skip_message)
 
-def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
+def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
             n_expts_act, mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             x_transpose, w_transpose, y_transpose,
             device, opt_flags_scope):
@@ -361,9 +361,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
 
     if "float8_e4m3fnuz" in (weight_dtype_str, act_dtype_str) and not is_hip_cdna3():
         pytest.skip("float8_e4m3fnuz only tested on AMD CDNA3 Platform")
-
-    if fused_scatter and split_k is not None and split_k > 1:
-        pytest.skip("fused scatter scratchpad not supported with split_k")
 
     if hbm_swizzling:
         if is_hip():
@@ -413,7 +410,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, fused_scatter, inner_expt_
         "block_m": block_m,
         "block_k": block_k,
         "split_k": split_k,
-        "fused_scatter": fused_scatter,
         "is_persistent": is_persistent,
         "epilogue_subtile": epilogue_subtile,
     }
@@ -726,12 +722,11 @@ def test_set_idle_sms():
     (800, 800, 400, "batched"),
 ])
 @pytest.mark.parametrize("split_k", [1, 2])
-@pytest.mark.parametrize("do_gather, do_scatter, fused_scatter", [
-    (False, False, False),
-    (True, False, False),
-    (False, True, False),
-    (True, True, False),
-    (True, True, True),
+@pytest.mark.parametrize("do_gather, do_scatter", [
+    (False, False),
+    (True, False),
+    (False, True),
+    (True, True),
 ])
 @pytest.mark.parametrize("is_persistent, epilogue_subtile", [
     (False, None),
@@ -743,16 +738,13 @@ def test_set_idle_sms():
     (1.0, 1.2),
     (0.7, 1.0),
 ])
-def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, fused_scatter, is_persistent, epilogue_subtile,
+def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, is_persistent, epilogue_subtile,
                    swiglu_alpha, swiglu_limit, device, opt_flags_scope):
-    if fused_scatter and split_k > 1:
-        pytest.skip("fused scatter scratchpad not supported with split_k")
     torch.manual_seed(0)
     constraints = {
         "is_persistent": is_persistent,
         "epilogue_subtile": epilogue_subtile,
         "split_k": split_k,
-        "fused_scatter": fused_scatter,
     }
     n_expts_tot, n_expts_act = 1, 1
     opt_flags.update_opt_flags_constraints(constraints)

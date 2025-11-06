@@ -50,14 +50,13 @@ namespace mlir {
 
 namespace {
 
-// Returns the number of individual async load memory transactions when copy
-// data from the given |srcTy| in global memory to the given |dstTy| in shared
-// memory. This takes into account the mask and ptrs alignment and contiguoutiy
-// as well as the layouts mapping from global to shared memory addresses
-int getNumberOfLoadInstructions(TypedValue<RankedTensorType> ptrs,
-                                ttg::MemDescType dstTy, Value mask,
+// Returns the number of individual async load memory transactions required when
+// copying data from |srcTy| to |dstTy|, accounting for data contiguity, mask
+// alignment, and the layout mapping from global to shared memory addresses.
+int getNumberOfLoadInstructions(RankedTensorType srcTy, ttg::MemDescType dstTy,
+                                Value mask, int contig,
                                 ModuleAxisInfoAnalysis &axisInfo) {
-  LinearLayout srcLayout = tt::gpu::toLinearLayout(ptrs.getType());
+  LinearLayout srcLayout = tt::gpu::toLinearLayout(srcTy);
   LinearLayout sharedLayout;
   if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
           dstTy.getEncoding())) {
@@ -66,21 +65,14 @@ int getNumberOfLoadInstructions(TypedValue<RankedTensorType> ptrs,
     sharedLayout = triton::gpu::toLinearLayout(dstTy);
   }
   LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
+  contig = std::min(contig, srcToSharedLayout.getNumConsecutiveInOut());
 
-  // On GFX9 we cannot split direct to lds loads into multiple ones because we
-  // need coalesced writes. So we can divide the number of registers by the
-  // contiguity to get the number of load instructions.
-  int contig = srcToSharedLayout.getNumConsecutiveInOut();
-
-  // Further restrict by contiguity information for ptr and mask
-  auto order = tt::gpu::getOrder(ptrs.getType());
-  auto *ptrInfo = axisInfo.getAxisInfo(ptrs);
-  contig = std::min<int>(contig, LLVM::AMD::getVectorSize(ptrs, axisInfo));
   if (mask)
     contig = std::min<int>(contig, axisInfo.getMaskAlignment(mask));
 
+  // Divide number of registers by contig to get the number of async intrinsics
   int numberOfRegisters = srcToSharedLayout.getInDimSize(
-      StringAttr::get(ptrs.getContext(), "register"));
+      StringAttr::get(srcTy.getContext(), "register"));
   int loadInstructionCount = std::max(1, numberOfRegisters / contig);
   return loadInstructionCount;
 }
@@ -93,9 +85,17 @@ int getOpNumberOfAsyncLoadInstructions(Operation *op,
                                        ModuleAxisInfoAnalysis &axisInfo,
                                        bool emitRemarkOnNonAsyncOp) {
   if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
-    return getNumberOfLoadInstructions(copyOp.getSrc(),
+    int contig = LLVM::AMD::getVectorSize(copyOp.getSrc(), axisInfo);
+    return getNumberOfLoadInstructions(copyOp.getSrc().getType(),
                                        copyOp.getResult().getType(),
-                                       copyOp.getMask(), axisInfo);
+                                       copyOp.getMask(), contig, axisInfo);
+  } else if (auto bufferOp = dyn_cast<amdgpu::BufferLoadToLocalOp>(op)) {
+    auto ptrType = cast<RankedTensorType>(LLVM::AMD::getPointerTypeWithShape(
+        bufferOp.getPtr(), bufferOp.getOffsets()));
+    int contig = LLVM::AMD::getVectorSize(bufferOp.getPtr(),
+                                          bufferOp.getOffsets(), axisInfo);
+    return getNumberOfLoadInstructions(ptrType, bufferOp.getDest().getType(),
+                                       bufferOp.getMask(), contig, axisInfo);
   } else if (emitRemarkOnNonAsyncOp) {
     SmallVector<mlir::MemoryEffects::EffectInstance> effects;
     if (auto memEffectIface = dyn_cast<MemoryEffectOpInterface>(op))

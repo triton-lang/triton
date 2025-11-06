@@ -29,6 +29,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+// Simple case with amdgpu.buffer_load_to_local
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 8, perPhase = 8, maxPhase = 2, order = [1, 0]}>
+#shared1 = #ttg.padded_shared<[4:+4] {order = [1, 0], shape = [16, 256]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: simple_buffer_load_to_local_waitcnt
+  tt.func public @simple_buffer_load_to_local_waitcnt(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: tensor<128x16xi32, #blocked> {tt.contiguity = dense<16> : tensor<2xi32>, tt.divisibility = dense<16> : tensor<2xi32>}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg3: tensor<16x256xi32, #blocked1> {tt.contiguity = dense<16> : tensor<2xi32>, tt.divisibility = dense<16> : tensor<2xi32>}, %arg4: !ttg.memdesc<128x16xf16, #shared, #smem, mutable>, %arg5: !ttg.memdesc<16x256xf16, #shared1, #smem, mutable>) {
+    // Emits 1 direct to lds instruction
+    %0 = amdgpu.buffer_load_to_local %arg0[%arg1] into %arg4 : <f16>[tensor<128x16xi32, #blocked>]  -> <128x16xf16, #shared, #smem, mutable>
+    %1 = ttg.async_commit_group tokens %0
+    // Emits 2 direct to lds instructions
+    %2 = amdgpu.buffer_load_to_local %arg2[%arg3] into %arg5 : <f16>[tensor<16x256xi32, #blocked1>]  -> <16x256xf16, #shared1, #smem, mutable>
+    // Do not wait on the second buffer_load_to_local => waitcnt 2
+    // CHECK: amdgpu.async_wait {{.*}} {num_inst = 2
+    %3 = ttg.async_commit_group tokens %2
+    %4 = ttg.async_wait %1 {num = 0 : i32}
+    // No buffer_load_to_local in between => waitcnt 0
+    // CHECK: amdgpu.async_wait {{.*}} {num_inst = 0
+    %5 = ttg.async_wait %3 {num = 0 : i32}
+    tt.return
+  }
+}
+
+// -----
+
 // Same as simple_waitcnt but swapped async_waits
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 2], warpsPerCTA = [4, 1], order = [1, 0]}>

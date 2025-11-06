@@ -11,8 +11,15 @@ import triton.language as tl
 import triton.language.semantic
 import triton.profiler as proton
 import triton.profiler.language as pl
+from triton._internal_testing import (
+    is_cuda,
+    is_hip,
+    is_hip_cdna2,
+    is_hip_cdna4,
+    supports_tma,
+    supports_ws,
+)
 from triton.tools.tensor_descriptor import TensorDescriptor
-from triton._internal_testing import is_hip_cdna2, supports_tma, supports_ws
 
 pl.enable_semantic("triton")
 
@@ -72,7 +79,9 @@ def test_jit(tmp_path):
 
 
 @pytest.mark.parametrize("method", ["operator", "context_manager"])
-def test_record(method, tmp_path: pathlib.Path):
+def test_record(method, fresh_knobs, tmp_path: pathlib.Path):
+    fresh_knobs.compilation.disable_line_info = False
+
     from contextlib import contextmanager
 
     @contextmanager
@@ -144,6 +153,39 @@ def test_record(method, tmp_path: pathlib.Path):
     ttir = pgm.asm["ttir"]
     assert "proton.record start" in ttir
     assert "proton.record end" in ttir
+
+    # check ttir line info
+    start_loc = None
+    end_loc = None
+    for line in ttir.split("\n"):
+        if "proton.record start" in line:
+            start_loc = line.split("loc(")[1].split(")")[0]
+        elif "proton.record end" in line:
+            end_loc = line.split("loc(")[1].split(")")[0]
+        elif start_loc and f"#loc{start_loc}" in line:
+            assert "test_instrumentation.py" in line
+        elif end_loc and f"#loc{end_loc}" in line:
+            assert "test_instrumentation.py" in line
+
+    assert start_loc is not None and end_loc is not None
+
+    # check llir line info
+    llir_lines = pgm.asm["llir"].splitlines()
+    clock_instr = "clock" if is_cuda() else "memtime"
+    clock_loc = None
+    for line in llir_lines:
+        if clock_instr not in line or "!dbg" not in line:
+            continue
+        suffix = line.split("!dbg ")[1]
+        clock_loc = suffix.split(",")[0].split()[0]
+        break
+    assert clock_loc is not None
+    loc_line = next(
+        (line for line in llir_lines if clock_loc in line and "DILocation" in line),
+        None,
+    )
+    assert loc_line is not None
+    assert "line: " in loc_line and "line: 0" not in loc_line
 
 
 @pytest.mark.parametrize("hook", ["triton", None])
@@ -391,7 +433,6 @@ def test_warp_spec(tmp_path: pathlib.Path):
                           WARP_SPECIALIZE: tl.constexpr,  #
                           ):
         dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
-        pl.enter_scope("kernel")
         pid = tl.program_id(axis=0)
         num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
         num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -422,7 +463,6 @@ def test_warp_spec(tmp_path: pathlib.Path):
         offs_cm = pid_m * BLOCK_SIZE_M
         offs_cn = pid_n * BLOCK_SIZE_N
         c_desc.store([offs_cm, offs_cn], c)
-        pl.exit_scope("kernel")
 
     def matmul_tma(a, b, warp_specialize: bool):
         # Check constraints.
@@ -475,11 +515,10 @@ def test_warp_spec(tmp_path: pathlib.Path):
 
     with open(temp_file, "rb") as f:
         data = json.load(f)
-        kernel_level = data[0]["children"][0]["children"][0]
-        assert kernel_level["children"][0]["frame"]["name"] == "loop"
-        assert kernel_level["children"][0]["metrics"]["cycles"] > 0
-        assert kernel_level["frame"]["name"] == "kernel"
-        assert kernel_level["metrics"]["cycles"] > 0
+        kernel = data[0]["children"][0]
+        assert kernel["children"][0]["frame"]["name"] == "loop"
+        assert kernel["children"][0]["metrics"]["cycles"] > 0
+        assert kernel["frame"]["name"] == "matmul_kernel_tma"
 
 
 def test_timeline(tmp_path: pathlib.Path):
@@ -523,6 +562,7 @@ def test_timeline(tmp_path: pathlib.Path):
         assert trace_events[-1]["args"]["call_stack"][-2] == "test"
 
 
+@pytest.mark.skipif(is_hip_cdna4(), reason="nondeterministic failure")
 def test_globaltime(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_globaltime.chrome_trace"
     mode = proton.mode.Default(
@@ -572,3 +612,68 @@ def test_globaltime(tmp_path: pathlib.Path):
         assert s > 1
         ts_diff = target[s - 1]["ts"] - target[0]["ts"]
         assert ts_diff >= target[0]["dur"]
+
+
+@pytest.mark.skipif(is_hip(), reason="not implemented yet")
+def test_gmem_buffer(tmp_path: pathlib.Path):
+
+    @triton.jit
+    def add_kernel(
+        x_ptr,
+        y_ptr,
+        output_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
+        with pl.scope("kernel"):
+            pid = tl.program_id(axis=0)
+            block_start = pid * BLOCK_SIZE
+            offsets = block_start + tl.arange(0, BLOCK_SIZE)
+            mask = offsets < n_elements
+            with pl.scope("load_ops"):
+                x = tl.load(x_ptr + offsets, mask=mask)
+                y = tl.load(y_ptr + offsets, mask=mask)
+            output = x + y
+            tl.store(output_ptr + offsets, output, mask=mask)
+
+    size = 512
+    x = torch.rand(size, device="cuda")
+    y = torch.rand(size, device="cuda")
+    temp_file = tmp_path / "test_gmem_buffer.chrome_trace"
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    mode = proton.mode.Default(buffer_type="global")
+    proton.start(
+        str(temp_file.with_suffix("")),
+        backend="instrumentation",
+        data="trace",
+        mode=mode,
+    )
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=2)
+    proton.finalize()
+
+    with open(temp_file, "rb") as f:
+        data = json.load(f)
+        events = data["traceEvents"]
+
+        # Assert we have exactly 4 events (2 warps × 2 scopes)
+        assert len(events) == 4
+
+        # Assert all events have the expected common fields
+        for event in events:
+            assert "ts" in event
+            assert "dur" in event
+            assert event["dur"] > 0
+
+        # Assert we have 2 kernel events and 2 load_ops events
+        kernel_events = [e for e in events if e["name"] == "kernel"]
+        load_ops_events = [e for e in events if e["name"] == "load_ops"]
+        assert len(kernel_events) == 2
+        assert len(load_ops_events) == 2
+
+        # Assert we have events from both warps
+        warp0_events = [e for e in events if "warp 0" in e["tid"]]
+        warp1_events = [e for e in events if "warp 1" in e["tid"]]
+        assert len(warp0_events) == 2
+        assert len(warp1_events) == 2

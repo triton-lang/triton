@@ -419,9 +419,10 @@ def matmul_ogs(x, w, bias,
     has_gather_tma = has_gather and target_info.has_tma_gather()
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
+    can_use_split_k = scatter_indx is None and not x_has_mx and not w_has_mx
     opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
         batch_size, M, N, w.shape[-2], routing_data,
-        can_use_tma, scatter_indx is not None, epilogue.effective_itemsize,
+        can_use_tma, can_use_split_k, epilogue.effective_itemsize,
         x_transpose, y_acc_in is not None,
         inner_routing_data.block_k if inner_routing_data is not None else None,
     )
@@ -618,21 +619,21 @@ def matmul_ogs(x, w, bias,
                    **fused_comm_kwargs,
                    **opt_flags.target_kernel_kwargs)
 
+    assert not (opt_flags.split_k > 1 and scatter_indx is not None)
     out_final_mx_scale = None
     if opt_flags.split_k > 1:
         assert not out_matmul_has_mx
-        has_scatter = scatter_indx is not None
         postprocess_fn1 = ReducePostprocessFn(specs=reduce_fused_activation.specs, fn_args=reduce_fused_activation.fn_args)
         postprocess_fn2 = None if has_scatter else ReducePostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
         y, y_mx_scale = reduce(
             x = out_matmul.view(out_matmul.shape[0], -1, out_matmul.shape[-1]),
             dim = 0,
             # output data/metadata
-            y = None if has_scatter else memory["output"].view(-1, memory["output"].shape[-1]),
-            y_dtype = out_matmul.dtype if has_scatter else memory["output"].dtype,
-            y_flex = OutFlexData() if has_scatter else precision_config.flex_ctx.out_data,
-            y_flex_saturate_inf = None if has_scatter else precision_config.flexpoint_saturate_inf,
-            y_has_mx = scatter_indx is None and precision_config.out_scale is not None,
+            y = memory["output"].view(-1, memory["output"].shape[-1]),
+            y_dtype = memory["output"].dtype,
+            y_flex = precision_config.flex_ctx.out_data,
+            y_flex_saturate_inf = precision_config.flexpoint_saturate_inf,
+            y_has_mx = precision_config.out_scale is not None,
             # fused functions
             postprocess_fn1 = postprocess_fn1,
             postprocess_fn2 = postprocess_fn2,
