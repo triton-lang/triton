@@ -248,7 +248,7 @@ Effects: `MemoryEffects::Effect{}`
 
 | Operand | Description |
 | :-----: | ----------- |
-| `buffer` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
+| `buffer` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system or ptr |
 
 #### Results:
 
