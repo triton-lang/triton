@@ -524,10 +524,12 @@ struct TensorMemoryAllocOpConversion
 };
 
 static void createCommit(ConversionPatternRewriter &rewriter, Location loc,
-                         Value barrier, Value pred) {
+                         Value barrier, Value pred, bool twoCTAs) {
   PTXBuilder ptxBuilder;
   auto *barrierOperand = ptxBuilder.newAddrOperand(barrier, "r");
-  std::string opcode = "tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64";
+  std::string opcode =
+      "tcgen05.commit.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
+      ".mbarrier::arrive::one.b64";
   auto &barrierOp = *ptxBuilder.create(opcode);
   barrierOp(barrierOperand).predicate(pred);
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
@@ -535,7 +537,7 @@ static void createCommit(ConversionPatternRewriter &rewriter, Location loc,
 
 static void createTcgen05Cp(ConversionPatternRewriter &rewriter, Location loc,
                             Value tmem_address, Value src_desc, Value pred,
-                            TMemCopyAtom atom) {
+                            TMemCopyAtom atom, bool twoCTAs) {
   PTXBuilder ptxBuilder;
   auto dst = ptxBuilder.newAddrOperand(tmem_address, "r");
   auto src = ptxBuilder.newOperand(src_desc, "l");
@@ -547,9 +549,9 @@ static void createTcgen05Cp(ConversionPatternRewriter &rewriter, Location loc,
   } else if (atom.multicast == 3) {
     warp = ".warpx4";
   }
-  std::string opcode = "tcgen05.cp.cta_group::1" + warp + "." +
-                       std::to_string(atom.nRow) + "x" +
-                       std::to_string(atom.bCol) + "b";
+  std::string opcode =
+      "tcgen05.cp.cta_group::" + std::to_string(twoCTAs ? 2 : 1) + warp + "." +
+      std::to_string(atom.nRow) + "x" + std::to_string(atom.bCol) + "b";
   auto &op = *ptxBuilder.create(opcode);
   op({dst, src}).predicate(pred);
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
@@ -592,6 +594,7 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
   auto loader = DotOpMmaSmemLoader::build(loc, rewriter, cvtWarp, bitwidth,
                                           smemBase, instrShape, 0, 5);
   assert(!loader.getDescriptor().transposed);
+  bool twoCTAs = getModuleTwoCTAs(op);
   // Check correct lbo/sbo along the multicast
   auto strideRow = cvt.getBasis(kRow, llvm::Log2_32(8), kOffset);
   if ((atom.multicast & 1) == 0) {
@@ -608,7 +611,7 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
     auto tmemAddr =
         b.or_(b.ptrtoint(i32_ty, baseDst), b.i32_val(col * bitwidth / 32),
               /*disjoint=*/true);
-    createTcgen05Cp(rewriter, loc, tmemAddr, desc, pred, atom);
+    createTcgen05Cp(rewriter, loc, tmemAddr, desc, pred, atom, twoCTAs);
   }
 }
 
@@ -622,13 +625,14 @@ struct TensorMemoryCopyOpConversion
     assert(lookupNumCTAs(rewriter) == 1 && "NYI");
     Location loc = op->getLoc();
     Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+    bool twoCTAs = getModuleTwoCTAs(op);
     copySharedToTmem(rewriter, loc, typeConverter, op, adaptor.getSrc(),
                      adaptor.getDst(), pred);
 
     if (op.getBarrier()) {
       auto barrier = LLVM::getSharedMemoryObjectFromStruct(
           op.getLoc(), adaptor.getBarrier(), i64_ty, rewriter);
-      createCommit(rewriter, loc, barrier.getBase(), pred);
+      createCommit(rewriter, loc, barrier.getBase(), pred, twoCTAs);
     }
 
     rewriter.eraseOp(op);
