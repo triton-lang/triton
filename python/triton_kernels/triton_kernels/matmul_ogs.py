@@ -416,6 +416,12 @@ def matmul_ogs(x, w, bias,
         # unaligned access.
         (inner_routing_data is None or w.stride(-1) == 1 or inner_routing_data.w_is_padded)
     )
+    if w_scale is not None and isinstance(w_scale.storage.layout, StridedLayout) and w_scale.storage.data.stride()[-1] != 1:
+        # In this case, we need to transpose w_scale. Then the reduction dim
+        # becomes the last dim that will be divided by 32. This to be a multiple
+        # of 16 to be TMA-compliant requires block_k to be a multiple of 512,
+        # which is too big.
+        can_use_tma = False
     has_gather_tma = has_gather and target_info.has_tma_gather()
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
@@ -526,14 +532,23 @@ def matmul_ogs(x, w, bias,
     w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n], "dense") if w_has_tma else w_storage.data
     # create tma descriptor for w_scale
     w_scale_has_tma = opt_flags.is_persistent and w_scale is not None
-    w_transpose = w_storage.data.stride()[-2] == 1
+    # When stride(-2) == stride(-1) == 1, it's ambiguous whether W is transposed
+    # (i.e. col-wise). Since this matters when w_has_mx is True and w_transpose
+    # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
+    # w_transpose = w_storage.data.stride()[-1] != 1
+    w_transpose = w_storage.data.mT.is_contiguous()
     if w_scale_has_tma:
         w_scale_storage = w_scale.storage
-        w_scale_tma_block_size = [opt_flags.block_n, opt_flags.block_k] if w_transpose else [opt_flags.block_k, opt_flags.block_n]
+        scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
+        # cancel out the transpose done inside make_tma since
+        # BlackwellMXScaleLayout.swizzle_block_shape expects block_shape[1] is
+        # the reduction dimension.
+        w_scale_tma_block_size = [opt_flags.block_n, scale_block_k] if w_transpose and w_scale.storage.layout.name == "BLACKWELL_SCALE" else [scale_block_k, opt_flags.block_n]
         if isinstance(w_scale.storage.layout, StridedLayout):
+            assert w_scale_storage.data.is_contiguous(), "w_scale should be contiguous with StridedLayout"
             w_scale_storage = _canonicalize_storage(w_scale.storage, 3, None)
             w_scale_tma_block_size = [1] + w_scale_tma_block_size
-        w_scale_tensor_or_tma = w_scale_storage.make_tma(w_scale_tma_block_size, "dense")
+        w_scale_tensor_or_tma = w_scale_storage.make_tma(w_scale_tma_block_size, "dense", is_scale=True)
     else:
         w_scale_tensor_or_tma = w_scale
     # canonicalize strides
@@ -546,10 +561,6 @@ def matmul_ogs(x, w, bias,
     out_matmul_scale_strides = (0, ) * (4 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
     # launch kernel
     kernels = specializations.get(epilogue=epilogue.specs, activation=matmul_fused_activation.specs)
-    # When stride(-2) == stride(-1) == 1, it's ambiguous whether W is transposed
-    # (i.e. col-wise). Since this matters when w_has_mx is True and w_transpose
-    # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
-    # w_transpose = w_storage.data.stride()[-1] != 1
     if gather_indx is not None:
         gather_src_indx = torch.div(gather_indx.src_indx, routing_data.n_expts_act, rounding_mode='trunc')
     fused_comm_kwargs = {
