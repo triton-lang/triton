@@ -10,6 +10,8 @@
 #include "Utility/Map.h"
 #include "Utility/String.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -132,24 +134,32 @@ void setRuntimeCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
 #undef CALLBACK_ENABLE
 }
 
-void setDriverCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
-#define CALLBACK_ENABLE(id)                                                    \
-  cupti::enableCallback<true>(static_cast<uint32_t>(enable), subscriber,       \
-                              CUPTI_CB_DOMAIN_DRIVER_API, id)
+constexpr std::array<CUpti_CallbackId, 18> kDriverApiLaunchCallbacks = {
+    CUPTI_DRIVER_TRACE_CBID_cuLaunch,
+    CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid,
+    CUPTI_DRIVER_TRACE_CBID_cuLaunchGridAsync,
+    CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel,
+    CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel_ptsz,
+    CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx,
+    CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx_ptsz,
+    CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel,
+    CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel_ptsz,
+    CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernelMultiDevice,
+    CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch,
+    CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz,
+    CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture,
+    CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_ptsz,
+    CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture,
+    CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture_ptsz,
+    CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2,
+    CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2_ptsz,
+};
 
-  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunch);
-  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid);
-  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchGridAsync);
-  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel);
-  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel_ptsz);
-  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx);
-  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx_ptsz);
-  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel);
-  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel_ptsz);
-  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernelMultiDevice);
-  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch);
-  CALLBACK_ENABLE(CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz);
-#undef CALLBACK_ENABLE
+void setDriverCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
+  for (auto cbId : kDriverApiLaunchCallbacks) {
+    cupti::enableCallback<true>(static_cast<uint32_t>(enable), subscriber,
+                                CUPTI_CB_DOMAIN_DRIVER_API, cbId);
+  }
 }
 
 void setGraphCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
@@ -189,18 +199,9 @@ void setNvtxCallbacks(CUpti_SubscriberHandle subscriber, bool enable) {
 }
 
 bool isDriverAPILaunch(CUpti_CallbackId cbId) {
-  return cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunch ||
-         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchGrid ||
-         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchGridAsync ||
-         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel ||
-         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchKernel_ptsz ||
-         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx ||
-         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchKernelEx_ptsz ||
-         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel ||
-         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernel_ptsz ||
-         cbId == CUPTI_DRIVER_TRACE_CBID_cuLaunchCooperativeKernelMultiDevice ||
-         cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
-         cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz;
+  return std::find(kDriverApiLaunchCallbacks.begin(),
+                   kDriverApiLaunchCallbacks.end(),
+                   cbId) != kDriverApiLaunchCallbacks.end();
 }
 
 } // namespace
@@ -233,6 +234,7 @@ struct CuptiProfiler::CuptiProfilerPimpl
       graphIdToNumInstances;
   ThreadSafeMap<uint32_t, uint32_t, std::unordered_map<uint32_t, uint32_t>>
       graphExecIdToGraphId;
+  ThreadSafeSet<uint32_t> graphExecIdChecked;
 };
 
 void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
@@ -362,12 +364,24 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             findGraph = true;
           }
         }
-        if (!findGraph)
+        if (!findGraph && 
+            !pImpl->graphExecIdChecked.contain(graphExecId)) {
+          pImpl->graphExecIdChecked.insert(graphExecId);
           std::cerr << "[PROTON] Cannot find graph for graphExecId: "
                     << graphExecId
                     << ", and t may cause memory leak. To avoid this problem, "
                        "please start profiling before the graph is created."
                     << std::endl;
+        }
+      } else if (cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture ||
+                 cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_ptsz ||
+                 cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2 ||
+                 cbId ==
+                     CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2_ptsz) {
+        std::cout << "debug begin" << std::endl;
+      } else if (cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture ||
+                 cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture_ptsz) {
+        std::cout << "debug end" << std::endl;
       }
       profiler.correlation.correlate(callbackData->correlationId, numInstances);
       if (profiler.pcSamplingEnabled && isDriverAPILaunch(cbId)) {
