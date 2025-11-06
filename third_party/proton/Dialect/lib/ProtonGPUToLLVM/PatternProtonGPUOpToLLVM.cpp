@@ -217,11 +217,17 @@ struct FinalizeOpConversion
     Block *continuation =
         emitBlockLeaderPrologue(op, isBlockFirstThread, scratchPtr,
                                 scratchPtrTy, bufferSizeInWords, rewriter);
-    Block *thenBlock = emitWarpCopySection(
-        op, continuation, isWarpFirstThread, warpId, laneId, threadsPerWarp,
-        scratchPtr, scratchPtrTy, segmentObj, metadataWordSize, wordsPerEntry,
-        segmentWordSize, circularHeaderWordSize, segmentType.getMemorySpace(),
-        rewriter);
+    auto objBaseTy =
+        mlir::cast<LLVM::LLVMPointerType>(segmentObj.base.getType());
+    Block *thenBlock = continuation;
+    if (objBaseTy.getAddressSpace() == 3) {
+      // shared memory
+      thenBlock = emitWarpCopySection(
+          op, continuation, isWarpFirstThread, warpId, laneId, threadsPerWarp,
+          scratchPtr, scratchPtrTy, segmentObj, metadataWordSize, wordsPerEntry,
+          segmentWordSize, circularHeaderWordSize, segmentType.getMemorySpace(),
+          rewriter);
+    }
     emitBlockLeaderEpilogue(op, thenBlock, isBlockFirstThread, scratchPtr,
                             scratchPtrTy, rewriter);
     rewriter.eraseOp(op);
@@ -462,9 +468,14 @@ struct SegmentAllocOpConversion
     }
 
     Value buffer = adaptor.getBuffer();
-    auto bufferBaseTy =
-        mlir::cast<LLVM::LLVMStructType>(buffer.getType()).getBody()[0];
-    Value bufferBase = b.extract_val(bufferBaseTy, buffer, 0);
+    Value bufferBase;
+    if (isa<LLVM::LLVMPointerType>(buffer.getType())) {
+      bufferBase = buffer;
+    } else {
+      Type bufferBaseTy =
+          mlir::cast<LLVM::LLVMStructType>(buffer.getType()).getBody()[0];
+      bufferBase = b.extract_val(bufferBaseTy, buffer, 0);
+    }
     auto indexPtrTy =
         ptr_ty(rewriter.getContext(), targetInfo.getIndexPtrAddrSpace());
     auto indexPtr = LLVM::AllocaOp::create(rewriter, loc, indexPtrTy, i32_ty,
