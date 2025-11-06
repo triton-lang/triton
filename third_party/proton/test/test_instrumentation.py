@@ -20,7 +20,6 @@ from triton._internal_testing import (
     supports_ws,
 )
 from triton.tools.tensor_descriptor import TensorDescriptor
-from triton._internal_testing import is_hip_cdna4, is_hip_cdna2, supports_tma, supports_ws, is_cuda
 
 pl.enable_semantic("triton")
 
