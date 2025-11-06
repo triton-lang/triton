@@ -407,8 +407,6 @@ class GluonInferEfficientEncodingsPass
                            numCTAs, layoutMap);
     });
 
-    // TODO: descriptor load/store??
-
     // 2. propagate forward/backward
     // similar to ResolveAutoLayoutPass.cpp
     //

@@ -64,7 +64,6 @@ std::optional<int> maybeLookupNumWarps(Operation *op);
 int lookupThreadsPerWarp(OpBuilder &rewriter);
 int lookupNumCTAs(OpBuilder &rewriter);
 int lookupNumCTAs(Operation *op);
-std::optional<int> maybeLookupNumCTAs(Operation *op);
 
 template <typename Key, typename Value> class Cache {
 public:
