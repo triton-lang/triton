@@ -2,7 +2,6 @@
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
-#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -308,8 +307,7 @@ Operation *mlir::triton::wrapInMaskOp(RewriterBase &rewriter, Operation *op,
   return mask;
 }
 
-void mlir::triton::resolveMaskOp(ModuleOp moduleOp,
-                                 DenseSet<ttg::MaskOp> &peeledMaskOps) {
+void mlir::triton::resolveMaskOp(ModuleOp moduleOp) {
   IRRewriter rewriter(moduleOp);
 
   // Canonicalize the IR to simplify the arithmetic ops defining the mask
@@ -319,29 +317,6 @@ void mlir::triton::resolveMaskOp(ModuleOp moduleOp,
   arithDialect->getCanonicalizationPatterns(patterns);
   if (mlir::applyPatternsGreedily(moduleOp, std::move(patterns)).failed())
     return llvm::report_fatal_error("Failed to canonicalize the IR");
-
-  // Prune all the statically dead mask ops in the epilogue. This is a
-  // hack, ideally we should do it for all the mask ops, but it is incorrect if
-  // we have speculatively executed async cp operations that will store to shmem
-  // even if the mask is false.
-  for (auto maskOp : peeledMaskOps) {
-    rewriter.setInsertionPoint(maskOp);
-    while (&maskOp.getBody()->front() != maskOp.getBody()->getTerminator()) {
-      Operation *op = &maskOp.getBody()->front();
-      if (isConstantIntValue(maskOp.getPred(), 0)) {
-        if (op->getNumResults() > 0) {
-          SmallVector<Value> results;
-          for (auto result : op->getResults()) {
-            auto poisonOp = mlir::ub::PoisonOp::create(rewriter, op->getLoc(),
-                                                       result.getType());
-            results.push_back(poisonOp);
-          }
-          op->replaceAllUsesWith(results);
-        }
-        op->erase();
-      }
-    }
-  }
 
   SmallVector<ttg::MaskOp> maskOps;
   moduleOp->walk([&](ttg::MaskOp maskOp) { maskOps.push_back(maskOp); });
