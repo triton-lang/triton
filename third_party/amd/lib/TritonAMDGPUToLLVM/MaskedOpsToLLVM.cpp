@@ -36,8 +36,9 @@ public:
             loadOp.getCache(), mlir::LLVM::AMD::MemoryOp::Load);
 
     auto createLoadWithAttrs = [&](Location loadLoc) -> LLVM::LoadOp {
-      auto load = rewriter.create<LLVM::LoadOp>(
-          loadLoc, elemTy, ptr, /*alignment*/ 0, volatileFlag, nonTmpFlag);
+      auto load =
+          LLVM::LoadOp::create(rewriter, loadLoc, elemTy, ptr, /*alignment*/ 0,
+                               volatileFlag, nonTmpFlag);
       if (loadOp.getForceNoAlias()) {
         AMD::addLocalLoadNoAliasScope(load);
       }
@@ -60,16 +61,16 @@ public:
     Block *trueBlock = rewriter.createBlock(afterLoad);
 
     rewriter.setInsertionPointToEnd(currentBlock);
-    rewriter.create<LLVM::CondBrOp>(loc, mask, trueBlock, ValueRange{},
-                                    afterLoad, ValueRange{falseVal});
+    LLVM::CondBrOp::create(rewriter, loc, mask, trueBlock, ValueRange{},
+                           afterLoad, ValueRange{falseVal});
     rewriter.setInsertionPointToStart(trueBlock);
     //              | vialatile | non-tmp | gcn instr gfx94
     // LLVM::LoadOp | 0         | 0       | (ca) global load
     //              | 0/1       | 1       | (cg) global load nt
     //              | 1         | 0       | (cv) flat load sc0 sc1
     auto llvmLoadOp = createLoadWithAttrs(loc);
-    rewriter.create<LLVM::BrOp>(loc, ValueRange{llvmLoadOp->getResult(0)},
-                                afterLoad);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{llvmLoadOp->getResult(0)},
+                       afterLoad);
 
     rewriter.replaceOp(loadOp, afterLoad->getArgument(0));
 
@@ -104,8 +105,8 @@ public:
     }
 
     auto createStoreWithAttrs = [&](Location storeLoc) -> LLVM::StoreOp {
-      auto store = rewriter.create<LLVM::StoreOp>(storeLoc, val, ptr, alignment,
-                                                  volatileFlag, nonTmpFlag);
+      auto store = LLVM::StoreOp::create(rewriter, storeLoc, val, ptr,
+                                         alignment, volatileFlag, nonTmpFlag);
       if (storeOp.getForceNoAlias()) {
         AMD::addLocalLoadNoAliasScope(store);
       }
@@ -125,14 +126,14 @@ public:
         rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
     Block *trueBlock = rewriter.createBlock(afterStore);
     rewriter.setInsertionPointToEnd(currentBlock);
-    rewriter.create<LLVM::CondBrOp>(loc, mask, trueBlock, afterStore);
+    LLVM::CondBrOp::create(rewriter, loc, mask, trueBlock, afterStore);
     rewriter.setInsertionPointToStart(trueBlock);
     //               | vialatile | non-tmp | gcn instr gfx94
     // LLVM::StoreOp | 0         | 0       | (cg) global store
     //               | 0         | 1       | (cs) global store nt
     //               | 1         | 0/1     | (wt) global store sc0 sc1
     auto llvmStoreOp = createStoreWithAttrs(loc);
-    rewriter.create<LLVM::BrOp>(loc, afterStore);
+    LLVM::BrOp::create(rewriter, loc, afterStore);
     rewriter.setInsertionPointToStart(afterStore);
     rewriter.eraseOp(storeOp);
     return success();

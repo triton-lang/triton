@@ -1165,3 +1165,39 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     tt.return %result : !ttg.memdesc<2x2xf16, #shared, #smem, mutable>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: @tc_gen5_mma_alloc_block_arg
+tt.func @tc_gen5_mma_alloc_block_arg(%lb : index, %ub : index, %step : index,
+                  %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
+                  %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
+                  %acc_init : tensor<128x128xf32, #blocked1>) -> () {
+  %true = arith.constant true
+  %acc_tm = ttng.tmem_alloc %acc_init : (tensor<128x128xf32, #blocked1>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+  %zero = arith.constant dense<0.0> : tensor<128x128xf16, #blocked1>
+  // CHECK: ttng.tmem_alloc
+  // CHECK: scf.for
+  scf.for %iv = %lb to %ub step %step iter_args(%A = %zero, %B = %zero) -> (tensor<128x128xf16, #blocked1>, tensor<128x128xf16, #blocked1>) : index {
+    // Ensure this doesn't crash.
+    %A_sh = ttg.local_alloc %A : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
+    %B_sh = ttg.local_alloc %B : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
+    ttng.tmem_store %acc_init, %acc_tm, %true : tensor<128x128xf32, #blocked1> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    // CHECK: ttng.tc_gen5_mma
+    ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm, %true, %true : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    // CHECK: ttng.tmem_load
+    %acc_res = ttng.tmem_load %acc_tm : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
+    "use"(%acc_res) : (tensor<128x128xf32, #blocked1>) -> ()
+    %A_next = tt.load %A_ptr : tensor<128x128x!tt.ptr<f16>, #blocked1>
+    %B_next = tt.load %B_ptr : tensor<128x128x!tt.ptr<f16>, #blocked1>
+    scf.yield %A_next, %B_next : tensor<128x128xf16, #blocked1>, tensor<128x128xf16, #blocked1>
+  }
+  tt.return
+}
+}

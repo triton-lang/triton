@@ -43,7 +43,7 @@ static void padToMaxWarpGroups(WarpSpecializeOp op, int numExtraWarpGroups) {
       body.addArgument(capture.getType(), capture.getLoc());
     OpBuilder b(op.getContext());
     b.setInsertionPointToStart(&body);
-    b.create<WarpReturnOp>(op.getLoc());
+    WarpReturnOp::create(b, op.getLoc());
   }
   op.setPartitionNumWarps(partitionNumWarps);
 

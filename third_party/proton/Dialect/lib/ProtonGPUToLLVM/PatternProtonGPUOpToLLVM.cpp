@@ -21,22 +21,22 @@ Value getLinearId(Location loc, ConversionPatternRewriter &rewriter) {
   // to support various backend intrinsics (e.g. amd).
   // 2. We avoid using the targetInfo's programId() because of its coupling
   // with cluster id in Nvidia TritonGPU's llvm lowering.
-  Value pidX = rewriter.create<arith::IndexCastOp>(
-      loc, i64_ty,
-      rewriter.create<mlir::gpu::BlockIdOp>(loc, mlir::gpu::Dimension::x));
-  Value pidY = rewriter.create<arith::IndexCastOp>(
-      loc, i64_ty,
-      rewriter.create<mlir::gpu::BlockIdOp>(loc, mlir::gpu::Dimension::y));
-  Value pidZ = rewriter.create<arith::IndexCastOp>(
-      loc, i64_ty,
-      rewriter.create<mlir::gpu::BlockIdOp>(loc, mlir::gpu::Dimension::z));
+  Value pidX = arith::IndexCastOp::create(
+      rewriter, loc, i64_ty,
+      mlir::gpu::BlockIdOp::create(rewriter, loc, mlir::gpu::Dimension::x));
+  Value pidY = arith::IndexCastOp::create(
+      rewriter, loc, i64_ty,
+      mlir::gpu::BlockIdOp::create(rewriter, loc, mlir::gpu::Dimension::y));
+  Value pidZ = arith::IndexCastOp::create(
+      rewriter, loc, i64_ty,
+      mlir::gpu::BlockIdOp::create(rewriter, loc, mlir::gpu::Dimension::z));
 
-  Value gridDimX = rewriter.create<arith::IndexCastOp>(
-      loc, i64_ty,
-      rewriter.create<::mlir::gpu::GridDimOp>(loc, mlir::gpu::Dimension::x));
-  Value gridDimY = rewriter.create<arith::IndexCastOp>(
-      loc, i64_ty,
-      rewriter.create<::mlir::gpu::GridDimOp>(loc, mlir::gpu::Dimension::y));
+  Value gridDimX = arith::IndexCastOp::create(
+      rewriter, loc, i64_ty,
+      ::mlir::gpu::GridDimOp::create(rewriter, loc, mlir::gpu::Dimension::x));
+  Value gridDimY = arith::IndexCastOp::create(
+      rewriter, loc, i64_ty,
+      ::mlir::gpu::GridDimOp::create(rewriter, loc, mlir::gpu::Dimension::y));
   Value linearId =
       b.trunc(i32_ty, b.add(b.add(pidX, b.mul(pidY, gridDimX)),
                             b.mul(pidZ, b.mul(gridDimX, gridDimY))));
@@ -144,9 +144,9 @@ struct InitializeOpConversion
     // Add the 'else' block and the condition.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
     rewriter.setInsertionPointToEnd(prevBlock);
-    rewriter.create<cf::CondBranchOp>(loc, isFirstThread, ifBlock, thenBlock);
+    cf::CondBranchOp::create(rewriter, loc, isFirstThread, ifBlock, thenBlock);
     rewriter.setInsertionPointToEnd(ifBlock);
-    rewriter.create<cf::BranchOp>(loc, thenBlock);
+    cf::BranchOp::create(rewriter, loc, thenBlock);
 
     rewriter.eraseOp(op);
     return success();
@@ -210,6 +210,28 @@ struct FinalizeOpConversion
     Value index = b.load(i32_ty, segmentObj.indexPtr);
     b.store(index, gmemWarpIndexPtr);
 
+    // Write back 'buffer size in byte'.
+    Value gmemBufSizeOffset = b.i32_val(3);
+    Value gmemBufSizePtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemBufSizeOffset);
+    b.store(b.i32_val(bufferSizeInWords * 4), gmemBufSizePtr);
+
+    // Write back 'pre-final time'.
+    Value gmemPreFinalTimeOffset = b.i32_val(6);
+    Value gmemPreFinalTimePtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPreFinalTimeOffset);
+    Value preFinalTime = targetInfo.globalTime(rewriter, loc);
+    b.store(preFinalTime, gmemPreFinalTimePtr);
+
+    // Early return if we are using the global memory as the profiler buffer.
+    auto objBaseTy =
+        mlir::cast<LLVM::LLVMPointerType>(segmentObj.base.getType());
+    if (objBaseTy.getAddressSpace() == 1) {
+      writeBackPostFinalTime(b, rewriter, op, isFirstThread, scratchPtr);
+      rewriter.eraseOp(op);
+      return success();
+    }
+
     Block *prevBlock = op->getBlock();
     // Add the 'if' block.
     Block *ifBlock = rewriter.splitBlock(prevBlock, op->getIterator());
@@ -233,23 +255,10 @@ struct FinalizeOpConversion
       b.store(load, gmemPtr);
     };
 
-    // Write back 'buffer size in byte'.
-    Value gmemBufSizeOffset = b.i32_val(3);
-    Value gmemBufSizePtr =
-        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemBufSizeOffset);
-    b.store(b.i32_val(bufferSizeInWords * 4), gmemBufSizePtr);
-
-    // Write back 'pre-final time'.
-    Value gmemPreFinalTimeOffset = b.i32_val(6);
-    Value gmemPreFinalTimePtr =
-        b.gep(scratchPtrTy, i32_ty, scratchPtr, gmemPreFinalTimeOffset);
-    Value preFinalTime = targetInfo.globalTime(rewriter, loc);
-    b.store(preFinalTime, gmemPreFinalTimePtr);
-
     // Add the 'else' block and the condition.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
     rewriter.setInsertionPointToEnd(prevBlock);
-    rewriter.create<cf::CondBranchOp>(loc, isFirstThread, ifBlock, thenBlock);
+    cf::CondBranchOp::create(rewriter, loc, isFirstThread, ifBlock, thenBlock);
 
     // Write back the data.
     const int upper = bufferSizeInWords - wordsPerEntry;
@@ -272,11 +281,11 @@ struct FinalizeOpConversion
     copyWord(bufCounterOffset, gmemWbCounterOffset, memSpace);
     Value pred = b.icmp_slt(idx, b.i32_val(upper));
     Value updatedIdx = b.add(idx, b.i32_val(wordsPerEntry));
-    rewriter.create<cf::CondBranchOp>(loc, pred, writeBackBlock, updatedIdx,
-                                      thenBlock, ArrayRef<Value>());
+    cf::CondBranchOp::create(rewriter, loc, pred, writeBackBlock, updatedIdx,
+                             thenBlock, ArrayRef<Value>());
 
     rewriter.setInsertionPointToEnd(ifBlock);
-    rewriter.create<cf::BranchOp>(loc, writeBackBlock, initIdx);
+    cf::BranchOp::create(rewriter, loc, writeBackBlock, initIdx);
 
     writeBackPostFinalTime(b, rewriter, op, isFirstThread, scratchPtr);
 
@@ -306,9 +315,9 @@ private:
     // Add the 'else' block and the condition.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
     rewriter.setInsertionPointToEnd(prevBlock);
-    rewriter.create<cf::CondBranchOp>(loc, isFirstThread, ifBlock, thenBlock);
+    cf::CondBranchOp::create(rewriter, loc, isFirstThread, ifBlock, thenBlock);
     rewriter.setInsertionPointToEnd(ifBlock);
-    rewriter.create<cf::BranchOp>(loc, thenBlock);
+    cf::BranchOp::create(rewriter, loc, thenBlock);
   }
 
 protected:
@@ -368,13 +377,18 @@ struct SegmentAllocOpConversion
     }
 
     Value buffer = adaptor.getBuffer();
-    auto bufferBaseTy =
-        mlir::cast<LLVM::LLVMStructType>(buffer.getType()).getBody()[0];
-    Value bufferBase = b.extract_val(bufferBaseTy, buffer, 0);
+    Value bufferBase;
+    if (isa<LLVM::LLVMPointerType>(buffer.getType())) {
+      bufferBase = buffer;
+    } else {
+      Type bufferBaseTy =
+          mlir::cast<LLVM::LLVMStructType>(buffer.getType()).getBody()[0];
+      bufferBase = b.extract_val(bufferBaseTy, buffer, 0);
+    }
     auto indexPtrTy =
         ptr_ty(rewriter.getContext(), targetInfo.getIndexPtrAddrSpace());
-    auto indexPtr = rewriter.create<LLVM::AllocaOp>(
-        loc, indexPtrTy, i32_ty, b.i32_val(1), /*alignment=*/0);
+    auto indexPtr = LLVM::AllocaOp::create(rewriter, loc, indexPtrTy, i32_ty,
+                                           b.i32_val(1), /*alignment=*/0);
     b.store(b.i32_val(0), indexPtr);
 
     auto segmentObj = LLVM::SegmentObject(bufferBase, segmentBase, indexPtr);
@@ -516,9 +530,9 @@ struct InitCtxOpConversion
     // Add the 'else' block and the condition.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
     rewriter.setInsertionPointToEnd(prevBlock);
-    rewriter.create<cf::CondBranchOp>(loc, isFirstThread, ifBlock, thenBlock);
+    cf::CondBranchOp::create(rewriter, loc, isFirstThread, ifBlock, thenBlock);
     rewriter.setInsertionPointToEnd(ifBlock);
-    rewriter.create<cf::BranchOp>(loc, thenBlock);
+    cf::BranchOp::create(rewriter, loc, thenBlock);
 
     rewriter.eraseOp(op);
     return success();
@@ -624,9 +638,9 @@ struct SaveCtxOpConversion
     // Add the 'else' block and the condition.
     Block *thenBlock = rewriter.splitBlock(ifBlock, op->getIterator());
     rewriter.setInsertionPointToEnd(prevBlock);
-    rewriter.create<cf::CondBranchOp>(loc, isWarpMaster, ifBlock, thenBlock);
+    cf::CondBranchOp::create(rewriter, loc, isWarpMaster, ifBlock, thenBlock);
     rewriter.setInsertionPointToEnd(ifBlock);
-    rewriter.create<cf::BranchOp>(loc, thenBlock);
+    cf::BranchOp::create(rewriter, loc, thenBlock);
 
     rewriter.eraseOp(op);
     return success();

@@ -58,8 +58,8 @@ ValueTable getValuesFromDotOperandLayoutStruct(
                 tb.insert_element(ty, rawElems, elems[idx], tb.i32_val(k));
           } else {
             // pad with zeros
-            Value zero = rewriter.create<LLVM::ConstantOp>(
-                loc, elemTy, rewriter.getZeroAttr(elemTy));
+            Value zero = LLVM::ConstantOp::create(rewriter, loc, elemTy,
+                                                  rewriter.getZeroAttr(elemTy));
             rawElems = tb.insert_element(ty, rawElems, zero, tb.i32_val(k));
           }
         }
@@ -237,8 +237,12 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   const auto kDimOperandSize = aTensorTy.getShape().back();
 
   std::string intrinsicName;
-  FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic = WmmaIntrinsic::get(
-      wmmaVer, mnkDim[0], mnkDim[1], mnkDim[2], aElemTy, bElemTy, dElemTy);
+  FailureOr<WmmaIntrinsic> maybeWmmaIntrinsic =
+      wmmaLayout.getIsTransposed()
+          ? WmmaIntrinsic::get(wmmaVer, mnkDim[1], mnkDim[0], mnkDim[2],
+                               bElemTy, aElemTy, dElemTy)
+          : WmmaIntrinsic::get(wmmaVer, mnkDim[0], mnkDim[1], mnkDim[2],
+                               aElemTy, bElemTy, dElemTy);
   if (failed(maybeWmmaIntrinsic)) {
     return op.emitError(
         "no matching matrix core intrinsic due to unsupported element type");

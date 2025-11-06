@@ -52,7 +52,7 @@ Value TargetInfo::globalTime(ConversionPatternRewriter &rewriter,
 
 Value TargetInfo::processorId(ConversionPatternRewriter &rewriter,
                               Location loc) const {
-  return rewriter.create<NVVM::SmIdOp>(loc, i32_ty);
+  return NVVM::SmIdOp::create(rewriter, loc, i32_ty);
 }
 
 int TargetInfo::getAddressSpace(Attribute addressSpace) const {

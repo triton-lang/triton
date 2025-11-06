@@ -14,15 +14,15 @@ class BitmatrixMetadata:
                    1 1 1 0 0 0 1
                    0 0 1 0 1 0 0]
     `col_sum` = [1 2 3 0 2 2 1]
-    `row_sorted_indx` = cat([3 6 8], [1 9], [0 2 4 10], [5 7])
     `col_sorted_indx` = cat([5], [3 6], [0 7], [], [9 1 10], [2 4], [8])
+    `row_sorted_indx` = cat([3 6 8], [1 9], [0 2 4 10], [5 7])
     """
     # the number of entries equal to 1 in each column
     col_sum: torch.Tensor
-    # indices of nonzero values numbered col-major, grouped by rows, concatenated
-    row_sorted_indx: torch.Tensor
     # indices of nonzero values numbered row-major, grouped by cols, concatenated
     col_sorted_indx: torch.Tensor
+    # indices of nonzero values numbered col-major, grouped by rows, concatenated
+    row_sorted_indx: torch.Tensor
 
 
 # `make_bitmatrix_metadata`: entry point for optimized implementation
@@ -143,7 +143,11 @@ def make_bitmatrix_metadata(nonzero_indx, bitmatrix):
         col_offs,  #
         TOKS_PER_ROW=toks_per_row, BLOCK_PER_TOK=PARTIAL_BLOCK_M,  #
     )
-    return BitmatrixMetadata(col_sum, col_sorted_indx, row_sorted_indx)
+    return BitmatrixMetadata(
+        col_sum=col_sum,
+        col_sorted_indx=col_sorted_indx,
+        row_sorted_indx=row_sorted_indx,
+    )
 
 
 # `make_bitmatrix_metadata_torch`: entry point for reference implementation
@@ -157,4 +161,8 @@ def make_bitmatrix_metadata_torch(nonzero_indx, bitmatrix):
     col_sorted_indx = pad(torch.argsort(nonzero_indx[nonzero_indx != -1], stable=True), nonzero_indx.numel())
     row_sorted_indx = pad(torch.argsort(col_sorted_indx[col_sorted_indx != -1], stable=True), nonzero_indx.numel())
     col_sum = torch.histc(nonzero_indx, bins=n_batches, max=n_batches - 1).int()
-    return BitmatrixMetadata(col_sum, col_sorted_indx, row_sorted_indx)
+    return BitmatrixMetadata(
+        col_sum=col_sum,
+        col_sorted_indx=col_sorted_indx,
+        row_sorted_indx=row_sorted_indx,
+    )
