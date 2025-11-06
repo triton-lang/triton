@@ -95,7 +95,7 @@ python3 example_dsl.py --increase-accuracy
 | Buffer Type | Options | Default | Description |
 |-------------|---------|---------|-------------|
 | `buffer_type` | `shared`, `global` | `shared` | Determines whether profiling data is stored in shared or global memory |
-| `buffer_size` | Integer value | For `shared`: Max size without impacting occupancy. For `global`: 256KB | Specifies the per-block profiling buffer size in bytes |
+| `buffer_size` | `N` | For `shared`: Max size without impacting occupancy. For `global`: 256KB | Specifies the per-block profiling buffer size in bytes |
 
 ### Sampling Configuration
 
