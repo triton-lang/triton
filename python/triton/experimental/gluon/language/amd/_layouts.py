@@ -128,6 +128,7 @@ class AMDWMMALayout(DistributedLayout):
     transposed: bool
     warps_per_cta: List[int]
     instr_shape: Optional[List[int]] = None
+    tiles_per_warp: Optional[List[int]] = None
     ctas_per_cga: Optional[List[int]] = None
     cta_split_num: Optional[List[int]] = None
     cta_order: Optional[List[int]] = None
@@ -140,13 +141,20 @@ class AMDWMMALayout(DistributedLayout):
         super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
 
+        if self.tiles_per_warp is None:
+            tiles_per_warp = [1] * len(self.warps_per_cta)
+        else:
+            tiles_per_warp = _unwrap_if_constexpr(self.tiles_per_warp)
+
+        super().__setattr__("tiles_per_warp", tiles_per_warp)
+
         instr_shape = _unwrap_if_constexpr(self.instr_shape) if self.instr_shape is not None else [16, 16, 16]
         super().__setattr__("instr_shape", _unwrap_if_constexpr(instr_shape))
         self.verify()
 
     def _to_ir(self, builder):
-        return builder.get_amd_wmma_layout(self.version, self.transposed, self.warps_per_cta, self.ctas_per_cga,
-                                           self.cta_split_num, self.cta_order, self.instr_shape)
+        return builder.get_amd_wmma_layout(self.version, self.transposed, self.warps_per_cta, self.tiles_per_warp,
+                                           self.ctas_per_cga, self.cta_split_num, self.cta_order, self.instr_shape)
 
     def mangle(self) -> str:
 
@@ -155,7 +163,7 @@ class AMDWMMALayout(DistributedLayout):
                 return ""
             return "_".join(map(str, x))
 
-        return f"WMMA_{self.version}_{self.transposed}_{stringify(self.warps_per_cta)}_{stringify(self.instr_shape)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_WMMA"
+        return f"WMMA_{self.version}_{self.transposed}_{stringify(self.warps_per_cta)}_{stringify(self.tiles_per_warp)}_{stringify(self.instr_shape)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_WMMA"
 
     def verify(self):
         assert self.version >= 1 and self.version <= 3, "version must be in the [1, 3] range"
@@ -171,6 +179,7 @@ class AMDWMMALayout(DistributedLayout):
             self.version,
             self.transposed,
             tuple(self.warps_per_cta),
+            tuple(self.tiles_per_warp) if self.tiles_per_warp else None,
             tuple(self.instr_shape) if self.instr_shape else None,
             tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
             tuple(self.cta_split_num) if self.cta_split_num else None,
