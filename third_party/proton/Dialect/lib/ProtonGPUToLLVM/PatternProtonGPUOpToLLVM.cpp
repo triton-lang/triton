@@ -206,6 +206,7 @@ struct FinalizeOpConversion
     int activeWarpCount = hasSelectIds ? selectIds.size() : numWarps;
     const int segmentWordSize = bufferSizeInWords / activeWarpCount;
     auto scratchPtrTy = mlir::cast<LLVM::LLVMPointerType>(scratchPtr.getType());
+    auto segmentBaseTy = mlir::cast<LLVM::LLVMPointerType>(segmentObj.base.getType());
 
     // Control-flow outline:
     //   prevBlock
@@ -214,21 +215,28 @@ struct FinalizeOpConversion
     //     └─ ...body...
     //     └─ br continuation
     //   continuation
+    //     └─ condbr (warp leader?) -> storeBlock / afterStore
+    //   storeBlock
+    //     └─ ...store warp index...
+    //     └─ br afterStore
+    //   afterStore
+    //     └─ (optional shared mem copy)
     Block *continuation =
         emitBlockLeaderPrologue(op, isBlockFirstThread, scratchPtr,
                                 scratchPtrTy, bufferSizeInWords, rewriter);
-    auto objBaseTy =
-        mlir::cast<LLVM::LLVMPointerType>(segmentObj.base.getType());
-    Block *thenBlock = continuation;
-    if (objBaseTy.getAddressSpace() == 3) {
+    continuation =
+        emitWarpIndexWriteback(op, continuation, isWarpFirstThread, warpId,
+                               scratchPtr, scratchPtrTy, segmentObj,
+                               circularHeaderWordSize, rewriter);
+    if (segmentBaseTy.getAddressSpace() == 3) {
       // shared memory
-      thenBlock = emitWarpCopySection(
-          op, continuation, isWarpFirstThread, warpId, laneId, threadsPerWarp,
+      continuation = emitWarpCopySection(
+          op, continuation, laneId, threadsPerWarp,
           scratchPtr, scratchPtrTy, segmentObj, metadataWordSize, wordsPerEntry,
           segmentWordSize, circularHeaderWordSize, segmentType.getMemorySpace(),
           rewriter);
     }
-    emitBlockLeaderEpilogue(op, thenBlock, isBlockFirstThread, scratchPtr,
+    emitBlockLeaderEpilogue(op, continuation, isBlockFirstThread, scratchPtr,
                             scratchPtrTy, rewriter);
     rewriter.eraseOp(op);
     return success();
@@ -275,10 +283,38 @@ private:
     return continuation;
   }
 
+  Block *emitWarpIndexWriteback(
+      mlir::triton::proton::gpu::FinalizeOp op, Block *continuation,
+      Value isWarpFirstThread, Value warpId, Value scratchPtr,
+      LLVM::LLVMPointerType scratchPtrTy,
+      const LLVM::SegmentObject &segmentObj, int circularHeaderWordSize,
+      ConversionPatternRewriter &rewriter) const {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Block *afterStore = rewriter.splitBlock(continuation, op->getIterator());
+    Block *storeBlock = rewriter.createBlock(op->getParentRegion(),
+                                             Region::iterator(afterStore));
+
+    rewriter.setInsertionPointToEnd(continuation);
+    cf::CondBranchOp::create(rewriter, loc, isWarpFirstThread, storeBlock,
+                             afterStore);
+
+    rewriter.setInsertionPointToStart(storeBlock);
+    Value warpIndexOffset = b.add(warpId, b.i32_val(circularHeaderWordSize));
+    Value gmemWarpIndexPtr =
+        b.gep(scratchPtrTy, i32_ty, scratchPtr, warpIndexOffset);
+    Value indexForStore = b.load(i32_ty, segmentObj.indexPtr);
+    b.store(indexForStore, gmemWarpIndexPtr);
+    cf::BranchOp::create(rewriter, loc, afterStore);
+
+    rewriter.setInsertionPointToStart(afterStore);
+    return afterStore;
+  }
+
   Block *emitWarpCopySection(
       mlir::triton::proton::gpu::FinalizeOp op, Block *continuation,
-      Value isWarpFirstThread, Value warpId, Value laneId, Value threadsPerWarp,
-      Value scratchPtr, LLVM::LLVMPointerType scratchPtrTy,
+      Value laneId, Value threadsPerWarp, Value scratchPtr,
+      LLVM::LLVMPointerType scratchPtrTy,
       const LLVM::SegmentObject &segmentObj, int metadataWordSize,
       int wordsPerEntry, int segmentWordSize, int circularHeaderWordSize,
       Attribute memSpace, ConversionPatternRewriter &rewriter) const {
@@ -286,9 +322,6 @@ private:
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     // Control-flow outline:
     //   continuation
-    //     └─ condbr (warp leader?) -> storeBlock / copyBlock
-    //   storeBlock
-    //     └─ ...store warp index...
     //     └─ br copyBlock
     //   copyBlock
     //     └─ condbr (thread can copy?) -> loopHeader / exitBlock
@@ -303,23 +336,11 @@ private:
         op->getParentRegion(), Region::iterator(exitBlock), {i32_ty}, {loc});
     Block *loopBody = rewriter.createBlock(
         op->getParentRegion(), Region::iterator(exitBlock), {i32_ty}, {loc});
-    Block *storeBlock = rewriter.createBlock(op->getParentRegion(),
-                                             Region::iterator(copyBlock));
 
     rewriter.setInsertionPointToEnd(continuation);
-    cf::CondBranchOp::create(rewriter, loc, isWarpFirstThread, storeBlock,
-                             copyBlock);
-
-    rewriter.setInsertionPointToStart(storeBlock);
-    Value warpIndexOffset = b.add(warpId, b.i32_val(circularHeaderWordSize));
-    Value gmemWarpIndexPtr =
-        b.gep(scratchPtrTy, i32_ty, scratchPtr, warpIndexOffset);
-    Value indexForStore = b.load(i32_ty, segmentObj.indexPtr);
-    b.store(indexForStore, gmemWarpIndexPtr);
     cf::BranchOp::create(rewriter, loc, copyBlock);
 
     rewriter.setInsertionPointToStart(copyBlock);
-
     Value segmentBase = segmentObj.segmentBase;
     Value index = b.load(i32_ty, segmentObj.indexPtr);
     auto bufferBaseType = segmentObj.base.getType();
