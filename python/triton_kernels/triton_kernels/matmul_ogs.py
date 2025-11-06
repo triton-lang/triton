@@ -160,11 +160,11 @@ class InnerRoutingData:
     def make_kernel_args(data, block_m):
         if isinstance(data, RaggedTensorMetadata):
             expt_data, block = data, block_m
-            args = (False, False, False, None)
+            args = ("M", False, False, None)
         elif isinstance(data, InnerRoutingData):
             expt_data, block = data.base.expt_data, data.block_k
             args = (
-                True, data.x_is_padded, data.w_is_padded, expt_data.slice_sizes.max()
+                "K", data.x_is_padded, data.w_is_padded, expt_data.slice_sizes.max(),
             )
         elif data is None:
             expt_data = None
@@ -172,7 +172,7 @@ class InnerRoutingData:
             assert None
 
         if expt_data is None:
-            return (None, None, None, None, False, False, False, None)
+            return (None, None, None, None, None, False, False, None)
 
         return (
             expt_data.slice_sizes,

@@ -55,11 +55,11 @@ def swizzle2d(pid, grid_m, grid_n, GROUP_M: tl.constexpr):
 @triton.jit
 def compute_pids(block_id, grid_m, grid_n, num_blocks, XCD_SWIZZLE: tl.constexpr, GROUP_M: tl.constexpr,
                  SPLIT_K: tl.constexpr):
-    pid_smnk = block_id
+    pid_zmnk = block_id
     if XCD_SWIZZLE != 1:
-        pid_smnk = xcd_swizzle(pid_smnk, num_blocks, XCD_SWIZZLE)
-    pid_s = pid_smnk // (grid_m * grid_n * SPLIT_K)
-    pid_mnk = pid_smnk % (grid_m * grid_n * SPLIT_K)
+        pid_zmnk = xcd_swizzle(pid_zmnk, num_blocks, XCD_SWIZZLE)
+    pid_z = pid_zmnk // (grid_m * grid_n * SPLIT_K)
+    pid_mnk = pid_zmnk % (grid_m * grid_n * SPLIT_K)
     if SPLIT_K > 1:
         pid_k = pid_mnk % SPLIT_K
         pid_mn = pid_mnk // SPLIT_K
@@ -67,61 +67,53 @@ def compute_pids(block_id, grid_m, grid_n, num_blocks, XCD_SWIZZLE: tl.constexpr
         pid_k: tl.constexpr = 0
         pid_mn = pid_mnk
     pid_m, pid_n = swizzle2d(pid_mn, grid_m, grid_n, GROUP_M)
-    return pid_s, pid_m, pid_n, pid_k
+    return pid_z, pid_m, pid_n, pid_k
 
 
 @triton.jit
-def _load_tile_attrs(
-    pid_s,
+def compute_offsets(
+    pid_z,
     pid_m,
     pid_k,
-    K,
     BlockSchedule,
-    SliceSizes,
     SliceOffs,
     BlockOffs,
-    HAS_RAGGED_INNER: tl.constexpr,
+    RAGGED_DIMENSION: tl.constexpr,
     X_IS_PADDED: tl.constexpr,
     W_IS_PADDED: tl.constexpr,
     BLOCK_M: tl.constexpr,
-    BLOCK_K: tl.constexpr,
+    BLOCK_K_X: tl.constexpr,
     PACKED_BLOCK_K_W: tl.constexpr,
     SPLIT_K: tl.constexpr,
 ):
-    # unpack expert data
-    if HAS_RAGGED_INNER:
-        # pid_s indicates slice ID: experts are laid sequentially along the K dimension
+    if RAGGED_DIMENSION == "K":
+        # pid_z indicates slice ID: experts are laid sequentially along the K dimension
         # (i.e., we have columns for expert 0, and then expert 1, and then so on).
         # pid_k is meaningless (always zero).
         tl.static_assert(X_IS_PADDED or W_IS_PADDED, "At least one input must be padded!")
         tl.static_assert(SPLIT_K == 1, "Not supported yet")
-        block_off_k = tl.load(BlockOffs + pid_s)
-        slice_off_k = tl.load(SliceOffs + pid_s)
+        block_off_k = tl.load(BlockOffs + pid_z)
+        slice_off_k = tl.load(SliceOffs + pid_z)
         off_x_m = BLOCK_M * pid_m
-        off_x_k = block_off_k * BLOCK_K if X_IS_PADDED else slice_off_k
+        off_x_k = block_off_k * BLOCK_K_X if X_IS_PADDED else slice_off_k
         off_w_k = block_off_k * PACKED_BLOCK_K_W if W_IS_PADDED else slice_off_k
         off_w_z, off_x_z, off_x_slice = 0, 0, 0
-        off_y_z = pid_s
-        # K_W is only used for non-TMA kernel (W bound is handled by TMA on TMA kernel).
-        K_W = tl.load(BlockOffs + pid_s + 1) * PACKED_BLOCK_K_W if W_IS_PADDED else tl.load(SliceOffs + pid_s + 1)
-    else:
-        off_x_k = pid_k * BLOCK_K
+        off_y_z = pid_z
+    elif RAGGED_DIMENSION == "M":
+        off_x_k = pid_k * BLOCK_K_X
         off_w_k = pid_k * PACKED_BLOCK_K_W
-        # dense matmul mode
-        if BlockSchedule is None:
-            off_w_z, off_x_z, off_y_z, off_x_slice = pid_s, pid_s, pid_s, 0
-            off_x_m = BLOCK_M * pid_m
-        # ragged matmul mode
-        else:
-            block_schedule = tl.load(BlockSchedule + pid_m)
-            off_w_z = block_schedule & 0x0000FFFF
-            block_id = block_schedule >> 16
-            off_x_slice = tl.load(SliceOffs + off_w_z)
-            off_x_z, off_y_z = 0, 0
-            off_x_m = BLOCK_M * block_id
-        # K_W is only used for non-TMA kernel (W bound is handled by TMA on TMA kernel).
-        K_W = K * (PACKED_BLOCK_K_W // BLOCK_K) if PACKED_BLOCK_K_W >= BLOCK_K else K // (BLOCK_K // PACKED_BLOCK_K_W)
-
+        block_schedule = tl.load(BlockSchedule + pid_m)
+        off_w_z = block_schedule & 0x0000FFFF
+        block_id = block_schedule >> 16
+        off_x_slice = tl.load(SliceOffs + off_w_z)
+        off_x_z, off_y_z = 0, 0
+        off_x_m = BLOCK_M * block_id
+    else:
+        tl.static_assert(RAGGED_DIMENSION is None)
+        off_x_k = pid_k * BLOCK_K_X
+        off_w_k = pid_k * PACKED_BLOCK_K_W
+        off_w_z, off_x_z, off_y_z, off_x_slice = pid_z, pid_z, pid_z, 0
+        off_x_m = BLOCK_M * pid_m
     return (
         off_w_z,
         off_x_z,
@@ -130,7 +122,6 @@ def _load_tile_attrs(
         off_x_m,
         off_x_k,
         off_w_k,
-        K_W,
     )
 
 

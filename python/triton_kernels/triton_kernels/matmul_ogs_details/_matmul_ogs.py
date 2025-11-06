@@ -9,7 +9,7 @@ from triton_kernels.tensor_details.layout_details.cdna4_scale import unswizzle_m
 from triton_kernels.numerics_details.flexpoint import float_to_flex, load_scale
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import (
-    _load_tile_attrs,
+    compute_offsets,
     get_scaled_dot_format_string,
     make_matmul_repr,
     matmul_launch_metadata,
@@ -59,7 +59,7 @@ def _matmul_ogs(
              ScatterSrcIndx, num_idxs,
              WriteBackIndx, writeback_size,
              ExptHist, ExptOffs, ExptTileOffs, ExptData,
-             HAS_RAGGED_INNER: tl.constexpr,
+             RAGGED_DIMENSION: tl.constexpr,
              X_IS_PADDED: tl.constexpr,
              W_IS_PADDED: tl.constexpr,
              ExptHistMax,
@@ -182,9 +182,7 @@ def _matmul_ogs(
     yN = N // ACTIVATION_REDUCTION_N
 
     pid = tl.program_id(0)
-    if ExptTileOffs is not None and (not HAS_RAGGED_INNER):
-        # Determine how much padding there is on the expert data. This allows us to
-        # know the true grid size and avoid processing padding tiles.
+    if RAGGED_DIMENSION == "M":
         padding_m = grid_m - tl.load(ExptTileOffs + N_EXPTS_TOT)
     else:
         padding_m: tl.constexpr = 0
@@ -216,23 +214,29 @@ def _matmul_ogs(
         return
 
     pid_s, pid_m, pid_n, pid_k = compute_pids(pid, unpadded_m, grid_n, total_actual_tiles, XCD_SWIZZLE, GROUP_M, SPLIT_K)
-    loop_k = tl.load(ExptHist + pid_s) if HAS_RAGGED_INNER else K
+    loop_k = tl.load(ExptHist + pid_s) if RAGGED_DIMENSION == "K" else K
 
     (
         expt_id, start_z, start_z_out,
         start_m, off_m,
-        off_k_x, off_k_w, K_W,
-    ) = _load_tile_attrs(pid_s, pid_m, pid_k,
-                         K, ExptData, ExptHist, ExptOffs, ExptTileOffs,
-                         HAS_RAGGED_INNER, X_IS_PADDED, W_IS_PADDED,
+        off_k_x, off_k_w
+    ) = compute_offsets(pid_s, pid_m, pid_k,
+                         ExptData, ExptOffs, ExptTileOffs,
+                         RAGGED_DIMENSION, X_IS_PADDED, W_IS_PADDED,
                          BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K)
 
-    if ExptOffs is not None and not HAS_RAGGED_INNER:
+    if RAGGED_DIMENSION == "M":
         eM = tl.load(ExptHist + expt_id)
     else:
         eM = M
 
-    loop_k = tl.load(ExptHist + pid_s) if HAS_RAGGED_INNER else K - off_k_x
+    if RAGGED_DIMENSION == "K":
+        K_W = tl.load(ExptTileOffs + pid_s + 1) * PACKED_BLOCK_K_W if W_IS_PADDED else tl.load(ExptOffs + pid_s + 1)
+    else:
+        K_W = K * (PACKED_BLOCK_K_W // BLOCK_K) if PACKED_BLOCK_K_W >= BLOCK_K else K // (BLOCK_K // PACKED_BLOCK_K_W)
+
+
+    loop_k = tl.load(ExptHist + pid_s) if RAGGED_DIMENSION == "K" else K - off_k_x
     k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)
 
     # For split-k, advance to the output k slice
@@ -292,7 +296,7 @@ def _matmul_ogs(
         offs_n_scale = (pid_n * SCALE_BLOCK_N + tl.arange(0, SCALE_BLOCK_N)) % N
         offs_n_scale = tl.max_contiguous(tl.multiple_of(offs_n_scale, SCALE_BLOCK_N), SCALE_BLOCK_N)
         # K dimension must be the last dimension for the scales
-        tl.static_assert(not HAS_RAGGED_INNER or W_IS_PADDED)
+        tl.static_assert(RAGGED_DIMENSION != "K" or W_IS_PADDED)
         offs_k_scale = off_k_w // PACKED_BLOCK_K_W * PACKED_MX_BLOCK + tl.arange(0, PACKED_MX_BLOCK)
         WMxScalePtrs = WMxScale + offs_k_scale.to(index_type)[None, :] * stride_scale_k + offs_n_scale.to(index_type)[:, None] * stride_w_mx_n
     else:
