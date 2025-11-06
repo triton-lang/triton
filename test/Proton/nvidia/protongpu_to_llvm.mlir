@@ -188,14 +188,14 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK: llvm.store %{{.*}}, %{{.*}} : i32, !llvm.ptr<1>
   // CHECK: llvm.br ^bb4
   // CHECK: ^bb4: // 2 preds: ^bb2, ^bb3
-  // CHECK: llvm.cond_br %{{.*}}, ^bb5(%{{.*}} : i32), ^bb7
-  // CHECK: ^bb5(%{{.*}}: i32): // 2 preds: ^bb4, ^bb6
-  // CHECK: llvm.cond_br %{{.*}}, ^bb6(%{{.*}} : i32), ^bb7
-  // CHECK: ^bb6(%{{.*}}: i32): // pred: ^bb5
+  // CHECK: llvm.cond_br %{{.*}}, ^[[LOOP_HEAD:bb[0-9]+]](%{{.*}} : i32), ^[[EXIT:bb[0-9]+]]
+  // CHECK: ^[[LOOP_HEAD]](%{{.*}}: i32):
+  // CHECK: llvm.cond_br %{{.*}}, ^[[LOOP_BODY:bb[0-9]+]](%{{.*}} : i32), ^[[EXIT]]
+  // CHECK: ^[[LOOP_BODY]](%{{.*}}: i32):
   // CHECK: llvm.getelementptr
   // CHECK: llvm.store
   // CHECK: llvm.store
-  // CHECK: ^bb8: // pred: ^bb7
+  // CHECK: ^[[EXIT]]:
   // CHECK: %{{.*}} = llvm.mlir.constant(8 : i32) : i32
   // CHECK: %[[POST_FINAL_TIME_PTR:.*]] = llvm.getelementptr %{{.*}}{{\[}}%{{.*}}{{\]}} : (!llvm.ptr<1>, i32) -> !llvm.ptr<1>, i32
   // CHECK: %[[POST_FINAL_TIME:.*]] = llvm.call_intrinsic "llvm.nvvm.read.ptx.sreg.globaltimer"() : () -> i64
