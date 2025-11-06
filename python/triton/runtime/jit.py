@@ -366,12 +366,7 @@ class KernelInterface(Generic[T]):
 
 
 def serialize_specialization_data(name, signature, constants, attrs, options, key):
-    constants = {
-        key: str(value) if value.__class__.__name__ == "dtype" else
-        {"constexpr": value.value} if value.__class__.__name__ == "constexpr" else value
-        for key, value in constants.items()
-    }
-
+    constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
     import json
     obj = {
         'name': name, 'signature': signature, 'constant_keys': [list(x) for x in constants.keys()], 'constant_vals':
@@ -663,6 +658,12 @@ class JITFunction(JITCallable, KernelInterface[T]):
         # constexprs
         constexprs = find_paths_if(sigvals, lambda _, val: val == "constexpr")
         constexprs = {path: get_iterable_path(list(bound_args.values()), path) for path in constexprs}
+        for key, value in constexprs.items():
+            if value.__class__.__name__ == "constexpr":
+                # Unwrap the constexpr to get its value; this helps to support serialization of the
+                # specialization data to JSON
+                constexprs[key] = value.value
+
         # attributes
         attrvals = [x[1] for x in specialization]
         attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
@@ -776,9 +777,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
         constant_keys = map(tuple, deserialized_obj['constant_keys'])
         constant_vals = deserialized_obj['constant_vals']
         constexprs = {
-            key:
-            tl.dtype(value) if tl.dtype.is_dtype(value) else
-            tl.constexpr(value['constexpr']) if isinstance(value, dict) and 'constexpr' in value else value
+            key: tl.dtype(value) if tl.dtype.is_dtype(value) else value
             for key, value in zip(constant_keys, constant_vals)
         }
         attrs_keys = map(tuple, deserialized_obj['attrs_keys'])
