@@ -267,51 +267,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         handle = self.builder.create_local_load(ret_ty.to_ir(self.builder), mem_desc.handle)
         return ttgl.tensor(handle, ret_ty)
 
-    def _store_legacy(self, ptr, val, mask, boundary_check, cache, eviction):
-        # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
-        if not ptr.type.scalar.is_ptr():
-            raise ValueError(f"Unsupported ptr type {ptr.type.__repr__()} in `tl.store`")
-
-        # Check `boundary_check` argument
-        if boundary_check:
-            raise ValueError("`boundary_check` argument is not supported for storing a tensor of pointers or storing a "
-                             "scalar. Because the compiler does not know the boundary; please use block pointers "
-                             "(defined by `make_block_ptr`) instead")
-
-        # For a pointer of scalar, check the type of `val` and `mask`
-        if not ptr.type.is_block():
-            if val.type.is_block():
-                raise ValueError("Value argument cannot be block type if pointer argument is not a block")
-            if mask and mask.type.is_block():
-                raise ValueError("Mask argument cannot be block type if pointer argument is not a block")
-
-        # Make `mask` and `val` into the same shape as `ptr`
-        if ptr.type.is_block():
-            # TODO fix python/test/gluon/test_lowerings.py
-            ptr, val = self.broadcast_impl_value(ptr, val)
-            if mask is not None:
-                ptr, mask = self.broadcast_impl_value(ptr, mask)
-
-        ptr_ty = ptr.type.scalar
-        elt_ty = ptr_ty.element_ty
-
-        # Treat `pointer_type<ttgl.int1>` as `pointer_type<ttgl.int8>`
-        if elt_ty == ttgl.int1:
-            elt_ty = ttgl.int8
-            ptr_ty = ttgl.pointer_type(elt_ty, ptr_ty.address_space)
-            ptr = self.cast(ptr, ptr_ty)
-
-        # Cast to target data type
-        val = self.cast(val, elt_ty)
-
-        # Build IR
-        if mask is None:
-            return self.tensor(self.builder.create_store(ptr.handle, val.handle, cache, eviction), ttgl.void)
-        if not mask.type.scalar.is_bool():
-            raise ValueError("Mask must have boolean scalar type")
-        return self.tensor(self.builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction),
-                           ttgl.void)
-
     def shared_store(self, mem_desc, value):
         _check(isinstance(value, ttgl.tensor), lambda: f"expected 'value' to be a tensor, but got a {type(value)}")
         _check(value.shape == mem_desc.shape,
