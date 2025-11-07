@@ -536,7 +536,7 @@ def matmul_ogs(x, w, bias,
     # (i.e. col-wise). Since this matters when w_has_mx is True and w_transpose
     # is True the fast code path, stride(-2) == 1 takes precedence, e.g., vs.
     # w_transpose = w_storage.data.stride()[-1] != 1
-    w_transpose = w_storage.data.mT.is_contiguous()
+    w_transpose = w_storage.data.stride()[-2] == 1
     if w_scale_has_tma:
         w_scale_storage = w_scale.storage
         scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
@@ -545,7 +545,7 @@ def matmul_ogs(x, w, bias,
         # the reduction dimension.
         w_scale_tma_block_size = [opt_flags.block_n, scale_block_k] if w_transpose and w_scale.storage.layout.name == "BLACKWELL_SCALE" else [scale_block_k, opt_flags.block_n]
         if isinstance(w_scale.storage.layout, StridedLayout):
-            assert w_scale_storage.data.is_contiguous(), "w_scale should be contiguous with StridedLayout"
+            assert w_scale_storage.data.stride()[-1] == 1, "w_scale should be contiguous with StridedLayout"
             w_scale_storage = _canonicalize_storage(w_scale.storage, 3, None)
             w_scale_tma_block_size = [1] + w_scale_tma_block_size
         w_scale_tensor_or_tma = w_scale_storage.make_tma(w_scale_tma_block_size, "dense", is_scale=True)
