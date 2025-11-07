@@ -47,6 +47,8 @@ struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
 
 using namespace llvm;
 
+enum class CodeGenOutput { Assembly, Object, MIR };
+
 std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
                     bool enable_fp_fusion, const std::string &features) {
@@ -295,13 +297,30 @@ std::string translateLLVMIRToASM(llvm::Module &module,
                                  const std::vector<std::string> &flags,
                                  bool enable_fp_fusion, bool isObject) {
   using namespace mlir;
-  // options
+
+  // Get and configure options
   auto options = llvm::cl::getRegisteredOptions();
-  for (std::string flag : flags) {
+
+  // Save and set stop-before if needed (for MIR output or custom stop point)
+  std::string originalStopBefore;
+  if (output_type == CodeGenOutput::MIR) {
+    auto stopBeforeOpt = options.find("stop-before");
+    if (stopBeforeOpt != options.end()) {
+      auto *optPtr =
+          static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
+      originalStopBefore = optPtr->getValue();
+      optPtr->setValue("machine-scheduler");
+    }
+  }
+
+  // Apply flags
+  for (const std::string &flag : flags) {
     auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag]);
     assert(shortPtr);
     shortPtr->setValue(true);
   }
+
+  // Handle LLVM optimization flags
   if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
     auto optIt = options.find("print-after-all");
     if (optIt != options.end()) {
@@ -309,6 +328,7 @@ std::string translateLLVMIRToASM(llvm::Module &module,
       *optPtr = true;
     }
   }
+
   bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (!disableLLVMOpt) {
     // Check to see if we are passing a list of flags to disable optimizations.
@@ -326,11 +346,12 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     }
   }
 
-  // inline everything
+  // Inline everything
   for (llvm::Function &f : module.functions())
     if (!f.hasFnAttribute(llvm::Attribute::NoInline))
       f.addFnAttr(llvm::Attribute::AlwaysInline);
-  // verify and store llvm
+
+  // Run inlining and verification
   llvm::legacy::PassManager pm;
   pm.add(llvm::createAlwaysInlinerLegacyPass());
   pm.add(llvm::createVerifierPass());
@@ -352,20 +373,26 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     timePassesStr.clear();
   }
 
-  // create machine
+  // Setup target machine
   module.setTargetTriple(Triple(triple));
   auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
-  // set data layout
   module.setDataLayout(machine->createDataLayout());
-  // emit machine code
+
+  // Emit code
   std::string result;
   {
     llvm::raw_string_ostream stream(result);
     llvm::buffer_ostream pstream(stream);
     llvm::legacy::PassManager pass;
-    // emit
-    auto fileType = isObject ? llvm::CodeGenFileType::ObjectFile
-                             : llvm::CodeGenFileType::AssemblyFile;
+
+    // Determine file type
+    llvm::CodeGenFileType fileType;
+    if (output_type == CodeGenOutput::Object) {
+      fileType = llvm::CodeGenFileType::ObjectFile;
+    } else {
+      fileType = llvm::CodeGenFileType::AssemblyFile;
+    }
+
     machine->addPassesToEmitFile(pass, pstream, nullptr, fileType);
     pass.run(module);
 
@@ -375,6 +402,17 @@ std::string translateLLVMIRToASM(llvm::Module &module,
       timePassesStr.clear();
     }
   }
+
+  // Restore stop-before option
+  if (output_type == CodeGenOutput::MIR) {
+    auto stopBeforeOpt = options.find("stop-before");
+    if (stopBeforeOpt != options.end()) {
+      auto *optPtr =
+          static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
+      optPtr->setValue(originalStopBefore);
+    }
+  }
+
   return result;
 }
 
