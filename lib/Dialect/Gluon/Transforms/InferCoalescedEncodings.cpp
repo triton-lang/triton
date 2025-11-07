@@ -23,6 +23,14 @@ namespace mlir::triton::gluon {
 #include "triton/Dialect/Gluon/Transforms/Passes.h.inc"
 
 namespace {
+
+ttg::CTALayoutAttr getDefaultCTALayout(RankedTensorType refTensorType,
+                                       int numCTAs) {
+  // TODO support numCTAs > 1
+  assert(numCTAs == 1 && "only numCTAs == 1 is supported for now");
+  return ttg::CTALayoutAttr::getDefault(refTensorType.getContext(),
+                                        refTensorType.getShape().size());
+}
 ///
 /// Propagation
 ///
@@ -283,22 +291,14 @@ class GluonInferCoalescedEncodingsPass
 
       int numWarps = ttg::lookupNumWarps(curr);
       int numCTAs = ttg::lookupNumCTAs(curr);
-      auto gpuCTALayoutProvider = [&](RankedTensorType refTensorType) {
-        // TODO support numCTAs > 1
-        assert(numCTAs == 1 && "only numCTAs == 1 is supported for now");
-        assert(isa<gluon::CoalescedEncodingAttr>(refTensorType.getEncoding()) &&
-               "expected CTALayoutAttr encoding");
-        return ttg::CTALayoutAttr::getDefault(refTensorType.getContext(),
-                                              refTensorType.getShape().size());
-      };
-      auto shapeProvider = [&](RankedTensorType refTensorType,
-                               ttg::CTALayoutAttr ctaLayout) {
-        return ttg::getShapePerCTA(ctaLayout.getCTASplitNum(),
-                                   refTensorType.getShape());
-      };
+
+      auto tensorType = cast<RankedTensorType>(ptr.getType());
+      auto ctaLayout = getDefaultCTALayout(tensorType, numCTAs);
+      auto shapePerCTA = ttg::getShapePerCTA(ctaLayout.getCTASplitNum(),
+                                             tensorType.getShape());
       ttg::setCoalescedEncoding(&getContext(), axisInfoAnalysis, curr, numWarps,
-                                threadsPerWarp, gpuCTALayoutProvider,
-                                shapeProvider, layoutMap);
+                                threadsPerWarp, ctaLayout, shapePerCTA,
+                                layoutMap);
     });
 
     // 2. propagate forward/backward

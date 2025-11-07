@@ -50,15 +50,6 @@ static Attribute pickDescriptorLoadStoreLayout(int numWarps, int threadsPerWarp,
   return layout;
 }
 
-static triton::gpu::CTALayoutAttr gpuCTALayoutProvider(RankedTensorType ref) {
-  return triton::gpu::getCTALayout(ref.getEncoding());
-}
-
-static SmallVector<int64_t>
-gpuShapeProvider(RankedTensorType ref, triton::gpu::CTALayoutAttr ctaLayout) {
-  return triton::gpu::getShapePerCTA(ref);
-}
-
 static void pickDescriptorLoadStoreLayout(
     ModuleOp moduleOp, llvm::MapVector<Operation *, Attribute> &layoutMap) {
   int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(moduleOp);
@@ -103,9 +94,12 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       if (!isPtrTensor)
         return;
       int numWarps = lookupNumWarps(curr);
+
+      auto tensorType = cast<RankedTensorType>(ptr.getType());
+      CTALayoutAttr ctaLayout = getCTALayout(tensorType.getEncoding());
+      SmallVector<int64_t> shapePerCTA = getShapePerCTA(tensorType);
       setCoalescedEncoding(&getContext(), axisInfoAnalysis, curr, numWarps,
-                           threadsPerWarp, gpuCTALayoutProvider,
-                           gpuShapeProvider, layoutMap);
+                           threadsPerWarp, ctaLayout, shapePerCTA, layoutMap);
     });
 
     // Also pick a layout for descriptor load/store ops.

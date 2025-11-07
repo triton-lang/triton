@@ -16,8 +16,8 @@ namespace mlir::triton::gpu {
 void setCoalescedEncoding(MLIRContext *context,
                           ModuleAxisInfoAnalysis &axisInfoAnalysis,
                           Operation *op, int numWarps, int threadsPerWarp,
-                          CTALayoutProvider CTALayoutProvider,
-                          ShapeProvider shapeProvider,
+                          triton::gpu::CTALayoutAttr CTALayout,
+                          SmallVector<int64_t> shapePerCTA,
                           llvm::MapVector<Operation *, Attribute> &layoutMap) {
   Value ptr = getMemAccessPtr(op);
   auto refTensorType = cast<RankedTensorType>(ptr.getType());
@@ -56,8 +56,6 @@ void setCoalescedEncoding(MLIRContext *context,
     }
   }
 
-  auto CTALayout = CTALayoutProvider(refTensorType);
-  auto shapePerCTA = shapeProvider(refTensorType, CTALayout);
   LDBG("shapePerCTA=[" << triton::join(shapePerCTA, ", ") << "]");
 
   int numElems = product<int64_t>(shapePerCTA);
