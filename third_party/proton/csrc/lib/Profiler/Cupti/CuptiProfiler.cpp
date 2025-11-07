@@ -337,6 +337,9 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         cupti::getGraphExecId<true>(graphData->graphExec, &graphExecId);
       if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED ||
           cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED) {
+        // To clone a graph using cuGraphClone, CUPTI triggers both 
+        // CREATED and CLONED callbacks for each node.
+        // So we only increase the numInstances in CREATED callback.
         uint32_t nodeId = 0;
         cupti::getGraphNodeId<true>(graphData->node, &nodeId);
         auto dataSet = profiler.getDataSet();
@@ -363,6 +366,9 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
         pImpl->graphIdToNumInstances[graphId]--;
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_CREATED) {
+        // Once a graphExec is created, the graph that it is created from
+        // can be destroyed. So we need to cache the numInstances for
+        // graphExec here.
         pImpl->graphExecIdToNumInstances[graphExecId] = pImpl
             ->graphIdToNumInstances[graphId];
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
