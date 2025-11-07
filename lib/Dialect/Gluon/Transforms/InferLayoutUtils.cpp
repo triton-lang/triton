@@ -1,18 +1,16 @@
-#include <cassert>
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/BuiltinTypes.h"
+#include "triton/Dialect/Gluon/Transforms/InferLayoutUtils.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Visitors.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/Gluon/Transforms/InferLayoutUtils.h"
 #include "llvm/ADT/PriorityWorklist.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/xxhash.h"
+#include <cassert>
 
 #define DEBUG_TYPE "gluon-layout-propagation-utils"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -80,7 +78,8 @@ bool encodingsMayVary(Operation *op) {
              triton::TransOp>(op);
 }
 
-LogicalResult inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck) {
+LogicalResult inferLayout(FuncOp func,
+                          llvm::function_ref<bool(Type)> typeCheck) {
   // Disallow auto encoding accross function call boundaries
   for (auto argTy : func.getArgumentTypes()) {
     if (typeCheck(argTy)) {
@@ -221,8 +220,8 @@ LogicalResult inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck)
 }
 } // namespace
 
-
-LogicalResult inferLayout(ModuleOp &mod, llvm::function_ref<bool(Type)> typeCheck) {
+LogicalResult inferLayout(ModuleOp &mod,
+                          llvm::function_ref<bool(Type)> typeCheck) {
   for (auto &op : *mod.getBody()) {
     auto func = dyn_cast<FuncOp>(&op);
     if (!func)
