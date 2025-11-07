@@ -685,6 +685,7 @@ def test_globaltime(tmp_path: pathlib.Path):
         assert ts_diff >= target[0]["dur"]
 
 
+@pytest.mark.skipif(is_hip(), reason="not stable overhead numbers on AMD GPUs")
 def test_overhead(tmp_path: pathlib.Path):
     temp_file_cycles = tmp_path / "test_overhead.hatchet"
     temp_file_time = tmp_path / "test_overhead_time.hatchet"
