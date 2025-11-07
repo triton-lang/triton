@@ -11,10 +11,10 @@ def Gluon_AutoEncodingAttr : AttrDef<Gluon_Dialect, "AutoEncoding"> {
     An encoding that is inferred from neighboring ops in the graph.
   }];
 }
-
-def Gluon_EfficientEncodingAttr : AttrDef<Gluon_Dialect, "EfficientEncoding"> {
-  let mnemonic = "efficient_encoding";
-  let attrName = "gluon.efficient_encoding";
+  
+def Gluon_CoalescedEncodingAttr : AttrDef<Gluon_Dialect, "CoalescedEncoding"> {
+  let mnemonic = "coalesced_encoding";
+  let attrName = "gluon.coalesced_encoding";
   let description = [{
     An encoding that is optimized for load/store performance.
   }];

@@ -1587,7 +1587,7 @@ def test_tcgen05_mma_scaled_minimal():
 
 
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
-def test_efficient_layout():
+def test_coalesced_layout():
 
     @gluon.jit
     def kernel(in_ptr, out_ptr,  #
@@ -1595,8 +1595,8 @@ def test_efficient_layout():
                XBLOCK: ttgl.constexpr, YBLOCK: ttgl.constexpr):
         pid_x = ttgl.program_id(0)
         pid_y = ttgl.program_id(1)
-        indices_x = pid_x * XBLOCK + ttgl.arange(0, XBLOCK, ttgl.EfficientLayout())
-        indices_y = pid_y * YBLOCK + ttgl.arange(0, YBLOCK, ttgl.EfficientLayout())
+        indices_x = pid_x * XBLOCK + ttgl.arange(0, XBLOCK, ttgl.CoalescedLayout())
+        indices_y = pid_y * YBLOCK + ttgl.arange(0, YBLOCK, ttgl.CoalescedLayout())
 
         in_offsets = xstride_in * indices_x[:, None] + ystride_in * indices_y[None, :]
         out_offsets = xstride_out * indices_x[:, None] + ystride_out * indices_y[None, :]
@@ -1632,7 +1632,7 @@ def test_efficient_layout():
 
 
 @pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere or newer")
-def test_convert_auto_layout_to_efficient_layout():
+def test_convert_auto_layout_to_coalesced_layout():
 
     @gluon.jit
     def kernel(in_ptr, out_ptr,  #
@@ -1650,12 +1650,12 @@ def test_convert_auto_layout_to_efficient_layout():
         mask = (indices_x[:, None] < xnumel) & (indices_y[None, :] < ynumel)  # auto layout
 
         # IN PTR
-        in_ptrs = ttgl.set_auto_layout(in_ptr + in_offsets, ttgl.EfficientLayout())
+        in_ptrs = ttgl.set_auto_layout(in_ptr + in_offsets, ttgl.CoalescedLayout())
         value = ttgl.load(in_ptrs, mask=mask)
 
         # OUT PTR
-        out_ptrs = ttgl.set_auto_layout(out_ptr + out_offsets, ttgl.EfficientLayout())
-        out_mask_layouted = ttgl.set_auto_layout(mask, ttgl.EfficientLayout())
+        out_ptrs = ttgl.set_auto_layout(out_ptr + out_offsets, ttgl.CoalescedLayout())
+        out_mask_layouted = ttgl.set_auto_layout(mask, ttgl.CoalescedLayout())
         ttgl.store(out_ptrs, value, mask=out_mask_layouted)
 
     XBLOCK = 128

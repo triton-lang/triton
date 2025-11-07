@@ -10,7 +10,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/xxhash.h"
 
-#define DEBUG_TYPE "gluon-infer-efficient-encodings"
+#define DEBUG_TYPE "gluon-infer-coalesced-encodings"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -18,7 +18,7 @@ namespace ttg = mlir::triton::gpu;
 
 namespace mlir::triton::gluon {
 
-#define GEN_PASS_DEF_GLUONINFEREFFICIENTENCODINGSPASS
+#define GEN_PASS_DEF_GLUONINFERCOALESCEDENCODINGSPASS
 #include "triton/Dialect/Gluon/Transforms/Passes.h.inc"
 
 namespace {
@@ -47,11 +47,11 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
 }
 
 ttg::CTALayoutAttr
-getCTALayoutForEfficientEncodings(RankedTensorType refTensorType,
+getCTALayoutForCoalescedEncodings(RankedTensorType refTensorType,
                                   unsigned numCTAs) {
   // TODO support numCTAs > 1
   assert(numCTAs == 1 && "only numCTAs == 1 is supported for now");
-  assert(isa<gluon::EfficientEncodingAttr>(refTensorType.getEncoding()) &&
+  assert(isa<gluon::CoalescedEncodingAttr>(refTensorType.getEncoding()) &&
          "expected CTALayoutAttr encoding");
   return ttg::CTALayoutAttr::getDefault(refTensorType.getContext(),
                                         refTensorType.getShape().size());
@@ -65,9 +65,9 @@ bool encodingsMayVary(Operation *op) {
              triton::TransOp>(op);
 }
 
-bool isEfficientEncodingTensorType(Type ty) {
+bool isCoalescedEncodingTensorType(Type ty) {
   auto tensorTy = dyn_cast<RankedTensorType>(ty);
-  return tensorTy && isa<gluon::EfficientEncodingAttr>(tensorTy.getEncoding());
+  return tensorTy && isa<gluon::CoalescedEncodingAttr>(tensorTy.getEncoding());
 }
 
 struct LayoutInfo {
@@ -125,19 +125,19 @@ LayoutInfo combineInfo(LayoutInfo lhs, LayoutInfo rhs, Operation *op,
 }
 
 LogicalResult
-inferEfficientLayouts(FuncOp func,
+inferCoalescedLayouts(FuncOp func,
                       llvm::MapVector<Operation *, Attribute> &layoutMap) {
-  // Disallow efficient encoding accross function call boundaries
+  // Disallow coalesced encoding accross function call boundaries
   for (auto argTy : func.getArgumentTypes()) {
-    if (isEfficientEncodingTensorType(argTy)) {
+    if (isCoalescedEncodingTensorType(argTy)) {
       return func->emitError(
-          "Functions taking auto encoding must be fully inlined");
+          "Functions taking coalesced encoding must be fully inlined");
     }
   }
   for (auto resultTy : func.getResultTypes()) {
-    if (isEfficientEncodingTensorType(resultTy))
+    if (isCoalescedEncodingTensorType(resultTy))
       return func->emitError(
-          "Functions returning auto encoding must be fully inlined");
+          "Functions returning coalesced encoding must be fully inlined");
   }
 
   llvm::MapVector<Value, LayoutInfo> valueToEncoding;
@@ -197,7 +197,7 @@ inferEfficientLayouts(FuncOp func,
         if (failed(updateEncoding(tiedArgs, info)))
           return failure();
       } else if (isa<gluon::SetAutoLayoutOp>(op)) {
-        // here users set efficient layout back to some layout,
+        // here users set Coalesced layout back to some layout,
         // should not happen
         return failure();
       } else {
@@ -248,7 +248,7 @@ inferEfficientLayouts(FuncOp func,
   auto ctx = func.getContext();
   for (auto &[val, info] : valueToEncoding) {
     auto existingTy = cast<RankedTensorType>(val.getType());
-    assert(isa<gluon::EfficientEncodingAttr>(existingTy.getEncoding()));
+    assert(isa<gluon::CoalescedEncodingAttr>(existingTy.getEncoding()));
     auto ty = existingTy.cloneWithEncoding(info.encoding);
     val.setType(ty);
 
@@ -265,22 +265,22 @@ inferEfficientLayouts(FuncOp func,
 }
 
 LogicalResult
-inferEfficientLayouts(ModuleOp &mod,
+inferCoalescedLayouts(ModuleOp &mod,
                       llvm::MapVector<Operation *, Attribute> &layoutMap) {
   for (auto &op : *mod.getBody()) {
     auto func = dyn_cast<FuncOp>(&op);
     if (!func)
       continue;
-    if (failed(inferEfficientLayouts(func, layoutMap)))
+    if (failed(inferCoalescedLayouts(func, layoutMap)))
       return failure();
   }
   return success();
 }
 } // anonymous namespace
 
-class GluonInferEfficientEncodingsPass
-    : public impl::GluonInferEfficientEncodingsPassBase<
-          GluonInferEfficientEncodingsPass> {
+class GluonInferCoalescedEncodingsPass
+    : public impl::GluonInferCoalescedEncodingsPassBase<
+          GluonInferCoalescedEncodingsPass> {
   void
   setCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
                        int numWarps, int threadsPerWarp, int numCTAs,
@@ -288,7 +288,7 @@ class GluonInferEfficientEncodingsPass
 
     Value ptr = getMemAccessPtr(op);
     auto refTensorType = cast<RankedTensorType>(ptr.getType());
-    auto CTALayout = getCTALayoutForEfficientEncodings(refTensorType, numCTAs);
+    auto CTALayout = getCTALayoutForCoalescedEncodings(refTensorType, numCTAs);
 
     LDBG("Considering op: " << *op);
     LLVM_DEBUG({
@@ -377,8 +377,8 @@ class GluonInferEfficientEncodingsPass
     ModuleOp moduleOp = getOperation();
     ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
-    // 1. for every load/store with efficient encoding,
-    // infer efficient encoding for ptrs
+    // 1. for every load/store with coalesced encoding,
+    // infer coalesced encoding for ptrs
     //
     // similar to Coalesce.cpp
     //
@@ -394,10 +394,10 @@ class GluonInferEfficientEncodingsPass
         isPtrTensor = isa<PointerType>(tensorType.getElementType());
       if (!isPtrTensor)
         return;
-      // we only consider those with efficient encoding
+      // we only consider those with coalesced encoding
       if (auto tensorType = dyn_cast<RankedTensorType>(ptr.getType())) {
         auto encoding = tensorType.getEncoding();
-        if (!encoding || !isa<gluon::EfficientEncodingAttr>(encoding))
+        if (!encoding || !isa<gluon::CoalescedEncodingAttr>(encoding))
           return;
       }
 
@@ -411,17 +411,17 @@ class GluonInferEfficientEncodingsPass
     // similar to ResolveAutoLayoutPass.cpp
     //
     // for backward slice, it doesn't cross the set_auto_layout boundary
-    // i.e. gl.set_auto_layout(val, gl.EfficientLayout())
+    // i.e. gl.set_auto_layout(val, gl.CoalescedLayout())
     // -> gl.set_auto_layout(val, concrete coalesced layout)
     // then ResolveAutoLayoutPass will handle the rest
     //
-    if (failed(inferEfficientLayouts(moduleOp, layoutMap)))
+    if (failed(inferCoalescedLayouts(moduleOp, layoutMap)))
       return signalPassFailure();
 
     // Double check we didn't miss anything
     auto res = moduleOp.walk([](Operation *op) -> WalkResult {
       for (auto resTy : op->getResultTypes()) {
-        if (isEfficientEncodingTensorType(resTy)) {
+        if (isCoalescedEncodingTensorType(resTy)) {
           return op->emitOpError("Failed to infer return type");
         }
       }
@@ -432,7 +432,7 @@ class GluonInferEfficientEncodingsPass
 
     res = moduleOp.walk([](Block *block) -> WalkResult {
       for (auto argTy : block->getArgumentTypes()) {
-        if (isEfficientEncodingTensorType(argTy)) {
+        if (isCoalescedEncodingTensorType(argTy)) {
           return block->getParentOp()->emitError(
               "Failed to infer block argument type");
         }

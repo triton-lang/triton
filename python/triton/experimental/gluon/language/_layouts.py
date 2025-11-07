@@ -46,17 +46,17 @@ class AutoLayout(DistributedLayout):
 
 
 @dataclass(frozen=True)
-class EfficientLayout(DistributedLayout):
+class CoalescedLayout(DistributedLayout):
 
     def _to_ir(self, builder):
-        return builder.get_efficient_layout()
+        return builder.get_coalesced_layout()
 
     def mangle(self):
-        return "EL"
+        return "CL"
 
     @property
     def rank(self):
-        raise ValueError("EfficientLayout has no rank")
+        raise ValueError("CoalescedLayout has no rank")
 
 
 @dataclass(frozen=True)

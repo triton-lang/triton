@@ -99,7 +99,7 @@ struct GluonOpBuilder : public TritonOpBuilder {
 
 struct GluonLayouts {
   py::handle AutoLayout;
-  py::handle EfficientLayout;
+  py::handle CoalescedLayout;
   py::handle BlockedLayout;
   py::handle SliceLayout;
   py::handle DistributedLinearLayout;
@@ -122,7 +122,7 @@ struct GluonLayouts {
     auto blackwellLayouts = py::module::import(
         "triton.experimental.gluon.language.nvidia.blackwell");
     AutoLayout = py::object(layouts.attr("AutoLayout")).release();
-    EfficientLayout = py::object(layouts.attr("EfficientLayout")).release();
+    CoalescedLayout = py::object(layouts.attr("CoalescedLayout")).release();
     BlockedLayout = py::object(layouts.attr("BlockedLayout")).release();
     SliceLayout = py::object(layouts.attr("SliceLayout")).release();
     DistributedLinearLayout =
@@ -232,8 +232,8 @@ py::object layoutToGluon(Attribute layout) {
         toStdVector(ll.getBases().lookup(kBlock)), sharedLl.getAlignment());
   } else if (auto autoEnc = dyn_cast<gluon::AutoEncodingAttr>(layout)) {
     return layouts.AutoLayout();
-  } else if (auto autoEnc = dyn_cast<gluon::EfficientEncodingAttr>(layout)) {
-    return layouts.EfficientLayout();
+  } else if (auto autoEnc = dyn_cast<gluon::CoalescedEncodingAttr>(layout)) {
+    return layouts.CoalescedLayout();
   } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
     auto ctaLayout = amdMfma.getCTALayout();
     return layouts.AMDMFMALayout(
@@ -471,9 +471,9 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self) -> Attribute {
              return self.getChecked<gluon::AutoEncodingAttr>(self.getContext());
            })
-      .def("get_efficient_layout",
+      .def("get_coalesced_layout",
            [](GluonOpBuilder &self) -> Attribute {
-             return self.getChecked<gluon::EfficientEncodingAttr>(
+             return self.getChecked<gluon::CoalescedEncodingAttr>(
                  self.getContext());
            })
       .def("get_swizzled_shared_layout",

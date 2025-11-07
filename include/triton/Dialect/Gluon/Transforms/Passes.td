@@ -10,8 +10,8 @@ def GluonResolveAutoEncodingsPass : Pass<"gluon-resolve-auto-encodings", "mlir::
   ];
 }
 
-def GluonInferEfficientEncodingsPass : Pass<"gluon-infer-efficient-encodings", "mlir::ModuleOp"> {
-  let summary = "Infer efficient encodings based on axis analysis";
+def GluonInferCoalescedEncodingsPass : Pass<"gluon-infer-coalesced-encodings", "mlir::ModuleOp"> {
+  let summary = "Infer coalesced encodings based on axis analysis";
   let dependentDialects = [
     "mlir::triton::gpu::TritonGPUDialect",
   ];
