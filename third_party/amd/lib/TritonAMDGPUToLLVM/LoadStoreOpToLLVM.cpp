@@ -1166,12 +1166,15 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
 
     SmallVector<Value> desc =
         unpackLLElements(loc, adaptor.getDesc(), rewriter);
-    assert(desc.size() == 12);
-    auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
-    auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
 
     SmallVector<int64_t> blockShape =
         llvm::to_vector(tensorDescTy.getBlockType().getShape());
+
+    // 2D tensors: 12 dwords (group0: 4, group1: 8)
+    // 3D-5D tensors: 20 dwords (group0: 4, group1: 8, group2: 4, group3: 4)
+    assert((blockShape.size() <= 2 && desc.size() == 12) ||
+           (blockShape.size() > 2 && desc.size() == 20));
+
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getResult(), elementType, rewriter);
     Value dstPtr = dstMemObj.getBase();
@@ -1188,16 +1191,10 @@ struct AsyncTDMCopyGlobalToLocalOpConversion
       barrierPtr = smemObj.getBase();
     }
 
-    LLVM::AMD::fillTDMDescriptor(rewriter, loc, getTypeConverter(), elementType,
-                                 blockShape, numWarps, padInterval, padAmount,
-                                 group0Vec, group1Vec, offset, dstPtr,
-                                 op.getPred(), barrierPtr);
-
-    auto group0 = packLLVector(loc, group0Vec, rewriter);
-    auto group1 = packLLVector(loc, group1Vec, rewriter);
-    LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-                                    "llvm.amdgcn.tensor.load.to.lds.d2", {},
-                                    {group0, group1, b.i32_val(0)});
+    mlir::LLVM::AMD::emitTDMOperation(rewriter, loc, getTypeConverter(), desc,
+                                      blockShape, numWarps, padInterval,
+                                      padAmount, offset, dstPtr, op.getPred(),
+                                      elementType, barrierPtr, /*isLoad=*/true);
 
     rewriter.eraseOp(op);
     return success();
@@ -1228,28 +1225,26 @@ struct AsyncTDMCopyLocalToGlobalOpConversion
 
     SmallVector<Value> desc =
         unpackLLElements(loc, adaptor.getDesc(), rewriter);
-    assert(desc.size() == 12);
-    auto group0Vec = SmallVector<Value>(desc.begin(), desc.begin() + 4);
-    auto group1Vec = SmallVector<Value>(desc.begin() + 4, desc.end());
 
     SmallVector<int64_t> blockShape =
         llvm::to_vector(tensorDescTy.getBlockType().getShape());
+
+    // 2D tensors: 12 dwords (group0: 4, group1: 8)
+    // 3D-5D tensors: 20 dwords (group0: 4, group1: 8, group2: 4, group3: 4)
+    assert((blockShape.size() <= 2 && desc.size() == 12) ||
+           (blockShape.size() > 2 && desc.size() == 20));
+
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(), elementType, rewriter);
     Value dstPtr = dstMemObj.getBase();
     SmallVector<Value> offset = adaptor.getIndices();
     int numWarps = triton::gpu::lookupNumWarps(op);
 
-    LLVM::AMD::fillTDMDescriptor(rewriter, loc, getTypeConverter(), elementType,
-                                 blockShape, numWarps, /*padInterval=*/0,
-                                 /*padAmount=*/0, group0Vec, group1Vec, offset,
-                                 dstPtr, b.true_val(), nullptr);
-
-    auto group0 = packLLVector(loc, group0Vec, rewriter);
-    auto group1 = packLLVector(loc, group1Vec, rewriter);
-    LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-                                    "llvm.amdgcn.tensor.store.from.lds.d2", {},
-                                    {group0, group1, b.i32_val(0)});
+    mlir::LLVM::AMD::emitTDMOperation(
+        rewriter, loc, getTypeConverter(), desc, blockShape, numWarps,
+        /*padInterval=*/0, /*padAmount=*/0, offset, dstPtr, b.true_val(),
+        elementType, /*barrierPtr=*/nullptr,
+        /*isLoad=*/false);
 
     rewriter.eraseOp(op);
     return success();

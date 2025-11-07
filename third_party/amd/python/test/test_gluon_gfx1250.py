@@ -12,7 +12,7 @@ import triton
 import triton.language as tl
 from triton.language.core import _aggregate as aggregate
 from triton.backends.compiler import GPUTarget
-from triton._internal_testing import is_hip_gfx1250, str_to_triton_dtype
+from triton._internal_testing import is_hip_gfx1250, str_to_triton_dtype, numpy_random, to_triton, unwrap_tensor, dtypes_with_bfloat16, uint_dtypes
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
@@ -1143,6 +1143,70 @@ def test_runtime_tensor_fill(M, N, BLOCK_M, BLOCK_N, NUM_BUFFERS):
             torch.arange(N, dtype=torch.int16).unsqueeze(0)
     a_ref = a_ref.to(torch.uint16)
     assert torch.equal(a_triton, a_ref)
+
+
+@gluon.jit
+def tensor_descriptor_load_store_nd_kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE, out_shape, out_strides,
+                                           SHARED_LAYOUT: ttgl.constexpr):
+    ndim: ttgl.constexpr = len(BLOCK_SHAPE)
+    desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=a_ptr, shape=shape, strides=strides,
+                                                       block_shape=BLOCK_SHAPE, layout=SHARED_LAYOUT)
+
+    offs = (0, ) * ndim
+    block_shared = ttgl.allocate_shared_memory(desc.dtype, shape=desc.block_shape, layout=desc.layout)
+    ttgl.amd.gfx1250.tdm.async_load(desc, offs, block_shared)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+    out_desc = ttgl.amd.gfx1250.tdm.make_tensor_descriptor(base=out_ptr, shape=out_shape, strides=out_strides,
+                                                           block_shape=BLOCK_SHAPE, layout=SHARED_LAYOUT)
+
+    ttgl.amd.gfx1250.tdm.async_store(out_desc, offs, block_shared)
+    ttgl.amd.gfx1250.tdm.async_wait(0)
+
+
+@pytest.mark.parametrize("ndim", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("INNER_BLOCK", [4, 8, 16, 32, 64, 128])
+@pytest.mark.parametrize("dtype_str", sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"}))
+def test_tensor_descriptor_load_store_nd(dtype_str, ndim, INNER_BLOCK):
+    SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1,
+                                                              order=[ndim - 1 - i for i in range(ndim)])
+
+    alloc_shape = [1, 1, 3, 7, INNER_BLOCK][-ndim:]
+
+    BLOCK_SHAPE = (2, 2, 4, 8, INNER_BLOCK)[-ndim:]
+    inp = to_triton(numpy_random(alloc_shape, dtype_str), device="cpu", dst_type=dtype_str)
+    inp.data = inp.data[..., :INNER_BLOCK - 3]
+    out = inp.new_empty(BLOCK_SHAPE)
+    # uint_dtypes require special handling because PyTorch only has full native support
+    # for uint8. While PyTorch 2.1+ added limited support for uint16, uint32, and uint64,
+    # they still lack complete functionality across all PyTorch ops. They are stored as
+    # signed tensors with the same bit width and wrapped in TensorWrapper for reinterpretation
+    # to unsigned. The .base attribute accesses the underlying signed tensor for CUDA transfer.
+    if dtype_str in uint_dtypes:
+        inp.base = inp.base.cuda()
+        out.base = out.base.cuda()
+    else:
+        inp = inp.cuda()
+        out = out.cuda()
+
+    constexpr_block_shape = tuple(ttgl.constexpr(v) for v in BLOCK_SHAPE)
+    k = tensor_descriptor_load_store_nd_kernel[(1, )](out, inp, inp.shape, inp.stride(), constexpr_block_shape,
+                                                      out.shape, out.stride(), SHARED_LAYOUT)
+
+    amdgcn = k.asm["amdgcn"]
+    for pattern in ("tensor_load_to_lds", "tensor_store_from_lds", "s_wait_tensorcnt 0x0"):
+        assert re.search(pattern, amdgcn)
+
+    # Check in-bounds
+    actual = unwrap_tensor(out.cpu())
+    expect = unwrap_tensor(inp.cpu())
+    idx = tuple(slice(None, s) for s in inp.shape)
+    assert torch.equal(expect, actual[idx])
+
+    # Check out-of-bounds
+    actual[idx].zero_()
+    expect = expect.new_zeros(BLOCK_SHAPE)
+    assert torch.equal(expect, actual)
 
 
 @gluon.jit

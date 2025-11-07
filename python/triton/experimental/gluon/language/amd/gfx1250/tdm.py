@@ -98,8 +98,7 @@ def make_tensor_descriptor(base: ttgl.tensor, shape: List[ttgl.constexpr | ttgl.
         tensor_descriptor: the created tensor descriptor object
     """
     ndim = len(shape)
-    # TODO: support 1D-5D tensor descriptors
-    assert ndim == 2, f"Expected 2 dimensions but got {ndim} dimensions"
+    assert 1 <= ndim <= 5, f"Expected 1 <= ndim <= 5 but got {ndim} dimensions"
     assert len(strides) == ndim, f"Expected {ndim} strides but got {len(strides)}"
     assert len(block_shape) == ndim, f"Expected block_shape to have {ndim} dimensions but got {len(strides)}"
     assert isinstance(base.dtype, ttgl.pointer_type), "Expected base to be a pointer"
