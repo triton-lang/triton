@@ -1,4 +1,4 @@
-from typing import Sequence, List, TypeVar, Tuple, Callable, Optional
+from typing import Sequence, List, TypeVar, Tuple, Callable
 import math
 from triton.language.semantic import TritonSemantic
 from . import _core as ttgl
