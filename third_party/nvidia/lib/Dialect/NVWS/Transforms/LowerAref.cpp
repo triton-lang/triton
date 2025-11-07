@@ -75,8 +75,8 @@ std::optional<PartitionWsTagIds> getPartitionWsTagIds(Operation *op) {
   if (hasPartition(op)) {
     partitionWsTagIds =
         PartitionWsTagIds{std::nullopt, triton::gpu::getPartitionIds(op)};
-    if (hasWarpSpecializeTag(op)) {
-      partitionWsTagIds->wsTag = getWarpSpecializeTag(op);
+    if (auto wsTag = getWarpSpecializeTag(op)) {
+      partitionWsTagIds->wsTag = *wsTag;
     }
   }
   return partitionWsTagIds;

@@ -42,7 +42,8 @@ int getWsTag(Operation *op) {
   while (op && !hasWarpSpecializeTag(op)) {
     op = op->getParentOfType<scf::ForOp>();
   }
-  return getWarpSpecializeTag(op);
+  assert(op);
+  return *getWarpSpecializeTag(op);
 }
 
 using PartitionId = std::pair<int /* PartitionId*/, int /* WsTag*/>;

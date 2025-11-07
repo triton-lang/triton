@@ -3961,6 +3961,9 @@ bool triton::gpu::hasWarpSpecializeTag(Operation *op) {
   return op && op->hasAttr(kWarpSpecializeTagAttrName);
 }
 
-int triton::gpu::getWarpSpecializeTag(Operation *op) {
-  return cast<IntegerAttr>(op->getAttr(kWarpSpecializeTagAttrName)).getInt();
+std::optional<int> triton::gpu::getWarpSpecializeTag(Operation *op) {
+  if (hasWarpSpecializeTag(op)) {
+    return cast<IntegerAttr>(op->getAttr(kWarpSpecializeTagAttrName)).getInt();
+  }
+  return std::nullopt;
 }

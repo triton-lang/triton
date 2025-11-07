@@ -283,11 +283,9 @@ template <class T> struct AssignStagePhase {
       if (auto opT = getTypedOp(&op)) {
         ImplicitLocOpBuilder builder(opT.getLoc(), opT);
         std::optional<SetVector<int>> partitionIds;
-        std::optional<int> wsTag;
         if (hasPartition(&op))
           partitionIds = getPartitionIds(&op);
-        if (hasWarpSpecializeTag(&op))
-          wsTag = getWarpSpecializeTag(&op);
+        auto wsTag = getWarpSpecializeTag(&op);
         auto stageCluster = getStageCluster(&op);
 
         auto createInto = [&](auto opTy, auto... args) {
@@ -514,7 +512,7 @@ LogicalResult assignStagePhase(triton::FuncOp funcOp) {
             !result.use_empty()) {
           auto arg = forOp.getBody()->getTerminator()->getOperand(
               result.getResultNumber());
-          // Check if any users of this scalar result lack ttg.partition, of if
+          // Check if any users of this scalar result lack ttg.partition, or if
           // it is used in another warp-specialized loop. If so, the scalar is
           // consumed by the root partition outside the warp-specialized loop,
           // requiring us to assign the default partition to all operations that
