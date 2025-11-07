@@ -100,6 +100,7 @@ def builtin(fn: T) -> T:
 
 
 # Explicitly import forwarded Triton language symbols so mypy sees them.
+add = builtin(tl_core.add)
 associative_scan = builtin(tl_core.associative_scan)
 assume = builtin(tl_core.assume)
 atomic_add = builtin(tl_core.atomic_add)
@@ -122,9 +123,9 @@ max_constancy = builtin(tl_core.max_constancy)
 max_contiguous = builtin(tl_core.max_contiguous)
 maximum = builtin(tl_core.maximum)
 minimum = builtin(tl_core.minimum)
+mul = builtin(tl_core.mul)
 multiple_of = builtin(tl_core.multiple_of)
 num_programs = builtin(tl_core.num_programs)
-trans = builtin(tl_core.trans)
 permute = builtin(tl_core.permute)
 program_id = builtin(tl_core.program_id)
 reduce = builtin(tl_core.reduce)
@@ -133,7 +134,9 @@ split = builtin(tl_core.split)
 static_assert = builtin(tl_core.static_assert)
 static_print = builtin(tl_core.static_print)
 store = builtin(tl_core.store)
+sub = builtin(tl_core.sub)
 to_tensor = builtin(tl_core.to_tensor)
+trans = builtin(tl_core.trans)
 where = builtin(tl_core.where)
 
 

@@ -7,6 +7,7 @@ import ast
 from typing import Optional
 import triton
 import triton.language.core as tlc
+import triton.experimental.gluon.language as ttgl
 import sys
 import importlib
 import importlib.util
@@ -81,38 +82,6 @@ class TritonToGluonTransformer(ast.NodeTransformer):
                 builtin_name = function_name.split(".")[-1]
                 builtin_mapping: dict[str, ast.expr] = {
                     "arange": ast.Name(id="tl_arange", ctx=ast.Load()),
-                    "program_id": self.ttgl_attr("program_id"),
-                    "load": self.ttgl_attr("load"),
-                    "store": self.ttgl_attr("store"),
-                    "cdiv": self.ttgl_attr("cdiv"),
-                    "static_print": self.ttgl_attr("static_print"),
-                    "static_assert": self.ttgl_attr("static_assert"),
-                    "device_assert": self.ttgl_attr("device_assert"),
-                    "device_print": self.ttgl_attr("device_print"),
-                    "max_contiguous": self.ttgl_attr("max_contiguous"),
-                    "multiple_of": self.ttgl_attr("multiple_of"),
-                    "assume": self.ttgl_attr("assume"),
-                    "minimum": self.ttgl_attr("minimum"),
-                    "maximum": self.ttgl_attr("maximum"),
-                    "fma": self.ttgl_attr("fma"),
-                    "where": self.ttgl_attr("where"),
-                    "cast": self.ttgl_attr("cast"),
-                    "reshape": self.ttgl_attr("reshape"),
-                    "trans": self.ttgl_attr("trans"),
-                    "permute": self.ttgl_attr("permute"),
-                    "split": self.ttgl_attr("split"),
-                    "inline_asm_elementwise": self.ttgl_attr("inline_asm_elementwise"),
-                    "join": self.ttgl_attr("join"),
-                    "atomic_max": self.ttgl_attr("atomic_max"),
-                    "atomic_min": self.ttgl_attr("atomic_min"),
-                    "atomic_or": self.ttgl_attr("atomic_or"),
-                    "atomic_xchg": self.ttgl_attr("atomic_xchg"),
-                    "atomic_xor": self.ttgl_attr("atomic_xor"),
-                    "atomic_add": self.ttgl_attr("atomic_add"),
-                    "atomic_and": self.ttgl_attr("atomic_and"),
-                    "atomic_cas": self.ttgl_attr("atomic_cas"),
-                    "num_warps": self.ttgl_attr("num_warps"),
-                    "reduce": self.ttgl_attr("reduce"),
                     "full": ast.Name(id="tl_full", ctx=ast.Load()),
                     "dot": ast.Name(id="tl_dot", ctx=ast.Load()),
                     "dot_scaled": ast.Name(id="tl_dot_scaled", ctx=ast.Load()),
@@ -122,6 +91,9 @@ class TritonToGluonTransformer(ast.NodeTransformer):
                     "num_threads": ast.Name(id="get_num_threads_per_program", ctx=ast.Load()),
                 }
                 mapped_target = builtin_mapping.get(builtin_name)
+                if mapped_target is None and hasattr(ttgl, builtin_name):
+                    mapped_target = self.ttgl_attr(builtin_name)
+
                 filter_keywords = []
                 # for reshape drop the can_reorder keyword, it is just an optimization and doesn't help much in Gluon.
                 if builtin_name == "reshape":
