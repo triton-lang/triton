@@ -56,8 +56,6 @@ void setCoalescedEncoding(MLIRContext *context,
     }
   }
 
-  // auto CTALayout = triton::gpu::getCTALayout(refTensorType.getEncoding());
-  // auto shapePerCTA = triton::gpu::getShapePerCTA(refTensorType);
   auto CTALayout = CTALayoutProvider(refTensorType);
   auto shapePerCTA = shapeProvider(refTensorType, CTALayout);
   LDBG("shapePerCTA=[" << triton::join(shapePerCTA, ", ") << "]");
