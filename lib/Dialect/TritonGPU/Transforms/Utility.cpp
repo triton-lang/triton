@@ -124,7 +124,7 @@ unsigned getElementBitWidth(RankedTensorType type) {
 
 unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                SmallVector<int64_t> &shapePerCTA) {
+                                 SmallVector<int64_t> &shapePerCTA) {
   Value val = getMemAccessPtr(op);
   auto ty = cast<RankedTensorType>(val.getType());
   AxisInfo &valInfo = *axisInfoAnalysis.getAxisInfo(val);

@@ -4,8 +4,8 @@
 #include "triton/Dialect/Gluon/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/CoalesceUtils.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/PriorityWorklist.h"
 #include "llvm/Support/Debug.h"
@@ -287,18 +287,18 @@ class GluonInferCoalescedEncodingsPass
         // TODO support numCTAs > 1
         assert(numCTAs == 1 && "only numCTAs == 1 is supported for now");
         assert(isa<gluon::CoalescedEncodingAttr>(refTensorType.getEncoding()) &&
-              "expected CTALayoutAttr encoding");
+               "expected CTALayoutAttr encoding");
         return ttg::CTALayoutAttr::getDefault(refTensorType.getContext(),
                                               refTensorType.getShape().size());
       };
       auto shapeProvider = [&](RankedTensorType refTensorType,
                                ttg::CTALayoutAttr ctaLayout) {
-        return ttg::getShapePerCTA(ctaLayout.getCTASplitNum(), 
+        return ttg::getShapePerCTA(ctaLayout.getCTASplitNum(),
                                    refTensorType.getShape());
       };
-      ttg::setCoalescedEncoding(&getContext(), axisInfoAnalysis,
-        curr, numWarps, threadsPerWarp,
-        gpuCTALayoutProvider, shapeProvider, layoutMap);
+      ttg::setCoalescedEncoding(&getContext(), axisInfoAnalysis, curr, numWarps,
+                                threadsPerWarp, gpuCTALayoutProvider,
+                                shapeProvider, layoutMap);
     });
 
     // 2. propagate forward/backward

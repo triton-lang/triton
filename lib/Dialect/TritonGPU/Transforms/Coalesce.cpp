@@ -6,9 +6,9 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/CoalesceUtils.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonGPU/Transforms/CoalesceUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Debug.h"
 
@@ -50,8 +50,7 @@ static Attribute pickDescriptorLoadStoreLayout(int numWarps, int threadsPerWarp,
   return layout;
 }
 
-static triton::gpu::CTALayoutAttr
-gpuCTALayoutProvider(RankedTensorType ref) {
+static triton::gpu::CTALayoutAttr gpuCTALayoutProvider(RankedTensorType ref) {
   return triton::gpu::getCTALayout(ref.getEncoding());
 }
 
@@ -104,14 +103,9 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       if (!isPtrTensor)
         return;
       int numWarps = lookupNumWarps(curr);
-      setCoalescedEncoding(&getContext(),
-                          axisInfoAnalysis, 
-                          curr, 
-                          numWarps, 
-                          threadsPerWarp,
-                          gpuCTALayoutProvider,
-                          gpuShapeProvider,
-                          layoutMap);
+      setCoalescedEncoding(&getContext(), axisInfoAnalysis, curr, numWarps,
+                           threadsPerWarp, gpuCTALayoutProvider,
+                           gpuShapeProvider, layoutMap);
     });
 
     // Also pick a layout for descriptor load/store ops.
