@@ -434,8 +434,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
     auto op = &op_;
     if (!hasPartition(op))
       continue;
-    if (auto wsTag = getWarpSpecializeTag(op);
-        wsTag && *wsTag != partitions.getTag())
+    assert(hasWarpSpecializeTag(op));
+    if (*getWarpSpecializeTag(op) != partitions.getTag())
       continue;
     if (op == loop) {
       cloneForOp(loop, builders, partitions);
