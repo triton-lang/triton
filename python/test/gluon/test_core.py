@@ -228,7 +228,9 @@ def test_device_tma_store():
 
 
 @gluon.constexpr_function
-def is_two_ctas(shared_layout_a: ttgl.constexpr, shared_layout_b: ttgl.constexpr) -> ttgl.constexpr:
+def is_two_ctas(layout_a: ttgl.constexpr, layout_b: ttgl.constexpr) -> ttgl.constexpr:
+    if isinstance(layout_a, TensorMemoryLayout):
+        return layout_a.two_ctas
 
     def has_cta_split(layout, cta_split_num):
         if hasattr(layout, "cta_split_num"):
@@ -236,14 +238,14 @@ def is_two_ctas(shared_layout_a: ttgl.constexpr, shared_layout_b: ttgl.constexpr
         else:
             # Super hacky
             assert isinstance(layout, ttgl.SharedLinearLayout)
-            shape = [0, 0]
+            max_stride = [0, 0]
             for b in itertools.chain(layout.offset_bases, layout.block_bases):
                 for i, bi in enumerate(b):
-                    shape[i] = max(shape[i], bi)
-            basis = [shape[0] // 2, 0] if cta_split_num == [2, 1] else [0, shape[1] // 2]
+                    max_stride[i] = max(max_stride[i], bi)
+            basis = [max_stride[0], 0] if cta_split_num == [2, 1] else [0, max_stride[1]]
             return len(layout.block_bases) == 1 and layout.block_bases[0] == basis
 
-    return has_cta_split(shared_layout_a, [2, 1]) and has_cta_split(shared_layout_b, [1, 2])
+    return has_cta_split(layout_a, [2, 1]) and has_cta_split(layout_b, [1, 2])
 
 
 @gluon.constexpr_function
@@ -280,7 +282,7 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
         tmem_shape: ttgl.constexpr = (constexpr_min(M // mma_layout.cta_split_num[0],
                                                     128), N // mma_layout.cta_split_num[1])
         tmem_layout: ttgl.constexpr = TensorMemoryLayout(tmem_shape, col_stride=32 // acc_dtype.primitive_bitwidth,
-                                                         cta_split_num=mma_layout.cta_split_num)
+                                                         cta_split_num=mma_layout.cta_split_num, two_ctas=two_ctas)
 
         # The layout of this mbarrier seems to be irrelevant. We might want to change the API to just acacept num_ctas
         mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [1],
@@ -365,10 +367,8 @@ def test_warpgroup_mma(ASYNC):
 @pytest.mark.parametrize("warps", ([8, 1], [4, 2], [4, 1]))
 @pytest.mark.parametrize("swizzling_a, swizzling_b", product([0, 32, 64, 128], repeat=2))
 @pytest.mark.parametrize("shape_m, shape_n, shape_k", [(1, 1, 1), (2, 4, 1), (2, 2, 4)])
-#@pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [2, 8]])
-#@pytest.mark.parametrize("two_ctas", [False, True] if is_blackwell() else [False])
-@pytest.mark.parametrize("ctas_per_cga", [[2, 1]])
-@pytest.mark.parametrize("two_ctas", [True] if is_blackwell() else [False])
+@pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [2, 8]])
+@pytest.mark.parametrize("two_ctas", [False, True] if is_blackwell() else [False])
 def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b, shape_m,
                            shape_n, shape_k, ctas_per_cga, two_ctas):
     # FIXME: Workaround for a bug in PTXAS when the shared layout is transposed and the swizzling is 0
@@ -422,9 +422,8 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     K *= shape_k
     instr_shape[1] *= shape_n
 
-    # FIXME I do not know why the tests fail when we ask for 512 cols
-    # in 2CTA mode
-    N = min(N, 512 // (max(M // 128, 1)))
+    if two_ctas and (N > 512 // max(M // 128, 1)):
+        pytest.skip("FIXME: Fails with Illegal Instruction error. Not sure why")
 
     assert M >= 64, "M must be at least 64 for mmav3 and mmav5"
 

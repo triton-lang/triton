@@ -419,7 +419,7 @@ LogicalResult
 TensorMemoryEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                                  unsigned blockM, unsigned blockN,
                                  unsigned colStride, unsigned CTASplitM,
-                                 unsigned CTASplitN) {
+                                 unsigned CTASplitN, bool) {
   if (!(CTASplitM >= 1 && CTASplitN >= 1 && llvm::isPowerOf2_32(CTASplitM) &&
         llvm::isPowerOf2_32(CTASplitN))) {
     return emitError()

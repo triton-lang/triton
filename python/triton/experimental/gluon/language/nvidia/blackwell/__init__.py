@@ -41,33 +41,38 @@ class TensorMemoryLayout:
             adjacent columns. Packed layouts use a stride of 1. Unpacked
             layouts use ``32 / bitwidth``.
         cta_split_num (Optional[Tuple[int, int]]): CTA split factors. Defaults to None.
+        two_ctas (bool): Whether the layout is for two-CTA mode. Defaults to False.
     """
     block: Tuple[int, int]
     col_stride: int
     cta_split_num: Optional[Tuple[int, int]] = None
+    two_ctas: bool = False
 
     def __post_init__(self):
         super().__setattr__("block", _unwrap_if_constexpr(self.block))
         super().__setattr__("col_stride", _unwrap_if_constexpr(self.col_stride))
         super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
+        super().__setattr__("two_ctas", _unwrap_if_constexpr(self.two_ctas))
         assert len(self.block) == 2
         assert self.cta_split_num is None or len(self.cta_split_num) == 2
         assert self.col_stride >= 1 and (self.col_stride &
                                          (self.col_stride - 1)) == 0, "tensor memory col_stride must be a power of two"
 
     def _to_ir(self, builder):
-        cta_split_num = self.cta_split_num or [1, 1]
+        cta_split_num = list(self.cta_split_num) if self.cta_split_num else [1, 1]
         return builder.get_tensor_memory_layout(
             self.block,
             self.col_stride,
             cta_split_num,
+            self.two_ctas,
         )
 
     def mangle(self) -> str:
         block_str = f"{self.block[0]}x{self.block[1]}"
         stride_str = f"C{self.col_stride}"
         cta_split_str = (f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else "")
-        return f"TL{block_str}{stride_str}{cta_split_str}TL"
+        two_ctas_str = "2CT" if self.two_ctas else ""
+        return f"TL{block_str}{stride_str}{cta_split_str}{two_ctas_str}TL"
 
 
 @dataclass(frozen=True, eq=True)
@@ -263,6 +268,7 @@ class tensor_memory_descriptor(base_value):
             (layout.block[0], min(layout.block[1], length)),
             layout.col_stride,
             layout.cta_split_num,
+            two_ctas=layout.two_ctas,
         )
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
         builder = _semantic.builder
@@ -382,21 +388,8 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
         else:
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
-    # We'll generalise this later
-    def has_cta_split(t, cta_split_num):
-        layout = t.layout
-        if hasattr(t.layout, "cta_split_num"):
-            return t.layout.cta_split_num == cta_split_num
-        else:
-            assert isinstance(layout, SharedLinearLayout)
-            shape = t.shape
-            basis = [shape[0] // 2, 0] if cta_split_num == [2, 1] else [0, shape[1] // 2]
-            return len(layout.block_bases) == 1 and layout.block_bases[0] == basis
-
-    two_ctas = (has_cta_split(acc, [2, 1]) and has_cta_split(a, [2, 1]) and has_cta_split(b, [1, 2]))
-
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
-                                         mbarrier_preds, two_ctas)
+                                         mbarrier_preds, acc.layout.two_ctas)
 
 
 @builtin

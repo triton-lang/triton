@@ -243,7 +243,7 @@ tt.func @alloc_warp_specialize_explicit_capture() {
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#tmem_f16 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 2>
+#tmem_f16 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 #tmem_f32 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 
@@ -362,7 +362,7 @@ tt.func @alloc_warp_specialize_explicit_capture() {
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#tmem_f16 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 2>
+#tmem_f16 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 #tmem_f32 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 
