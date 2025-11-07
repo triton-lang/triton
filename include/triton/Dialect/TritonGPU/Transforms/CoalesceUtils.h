@@ -2,6 +2,9 @@
 #ifndef TRITON_DIALECT_TRITONGPU_TRANSFORMS_COALESCINGUTILS_H_
 #define TRITON_DIALECT_TRITONGPU_TRANSFORMS_COALESCINGUTILS_H_
 
+#include "mlir/Support/LLVM.h"
+#include "triton/Analysis/AxisInfo.h"
+
 namespace mlir::triton::gpu {
 using CTALayoutProvider =
     llvm::function_ref<triton::gpu::CTALayoutAttr(RankedTensorType refType)>;
