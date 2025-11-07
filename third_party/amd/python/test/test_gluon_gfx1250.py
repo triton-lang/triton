@@ -687,6 +687,91 @@ def test_runtime_mxgemm(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, DTYPE_A, DTYPE_B):
 
 
 @gluon.jit
+def async_load_and_write_back_kernel(a_ptr, out_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
+                                     blocked_layout: ttgl.constexpr, shared_layout: ttgl.constexpr):
+    pid = ttgl.program_id(axis=0)
+    num_pid_m = ttgl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+
+    offs_m = pid_m * BLOCK_M + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, blocked_layout))
+    offs_n = pid_n * BLOCK_N + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, blocked_layout))
+
+    a_ptrs = a_ptr + offs_m[:, None] * N + offs_n[None, :]
+    mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+
+    buffer = ttgl.allocate_shared_memory(a_ptr.type.element_ty, [BLOCK_M, BLOCK_N], shared_layout)
+    ttgl.amd.gfx1250.async_copy.global_to_shared(buffer, a_ptrs)
+    ttgl.amd.gfx1250.async_copy.commit_group()
+    ttgl.amd.gfx1250.async_copy.wait_group(0)
+
+    res = buffer.load(blocked_layout)
+
+    out_ptrs = out_ptr + offs_m[:, None] * N + offs_n[None, :]
+    ttgl.store(out_ptrs, res, mask)
+
+
+ASYNC_COPY_TEST_PARAM_SIZE = pytest.mark.parametrize("M,N", [(128, 128), (1024, 1024), (1008, 1008)])
+# We require the vec size to determine if we can use async_copy (>=4bytes), if it's a coalesced layout just assume 16
+ASYNC_COPY_TEST_PARAM_SHARED_LAYOUT = pytest.mark.parametrize("vec_size, shared_layout", [
+    (16, ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])),
+    (4, ttgl.SwizzledSharedLayout(4, 2, 4, [1, 0])),
+    (8, ttgl.SwizzledSharedLayout(8, 2, 4, [1, 0])),
+    (16, ttgl.SwizzledSharedLayout(16, 2, 4, [1, 0])),
+    (4, ttgl.PaddedSharedLayout.with_identity_for([[4, 4], [8, 4]], [128, 128], [1, 0])),
+    (4,
+     ttgl.PaddedSharedLayout([[4, 1]], [[0, 1], [0, 2], [0, 8], [0, 4], [16, 0], [32, 0], [0, 16], [0, 32], [0, 64],
+                                        [1, 0], [2, 0], [4, 0], [8, 0], [64, 0]], [], [128, 128])),
+    (1, ttgl.SwizzledSharedLayout(1, 1, 1, [0, 1])),
+    (1, ttgl.SwizzledSharedLayout(4, 2, 4, [0, 1])),
+    (1, ttgl.SwizzledSharedLayout(8, 2, 4, [0, 1])),
+    (1, ttgl.SwizzledSharedLayout(16, 2, 4, [0, 1])),
+    (1, ttgl.PaddedSharedLayout.with_identity_for([[4, 4]], [128, 128], [0, 1])),
+    (1, ttgl.PaddedSharedLayout.with_identity_for([[4, 1]], [128, 128], [0, 1])),
+])
+ASYNC_COPY_TEST_PARAM_DTYPE = pytest.mark.parametrize("dtype", [
+    # Test from 1 byte -> 8 bytes dtypes
+    torch.float64, torch.float32, torch.float16, torch.float8_e4m3fn
+])
+
+
+def _test_runtime_async_copy_layouts(M, N, vec_size, shared_layout, dtype):
+    BLOCK_M = 128
+    BLOCK_N = 128
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+
+    if dtype == torch.float8_e4m3fn:
+        # range from min normal (0 00001 00) to max normal (0 11110 11)
+        a = torch.randint(0x04, 0x7B, (M, N), dtype=torch.uint8).view(dtype)
+    else:
+        a = torch.rand((M, N), dtype=dtype)
+    out = torch.empty_like(a)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    out_handle = out.cuda()
+
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+    run_kernel = lambda: async_load_and_write_back_kernel[grid](a.cuda(), out_handle, M, N, BLOCK_M, BLOCK_N,
+                                                                blocked_layout, shared_layout)
+
+    if (vec_size * dtype.itemsize) < 4:
+        # If we have less than 4 contiguous bytes we expect to abort compilation
+        with pytest.raises(RuntimeError):
+            run_kernel()
+    else:
+        run_kernel()
+        out_tri = out_handle.cpu()
+        out_ref = a.cpu()
+        assert torch.equal(out_tri, out_ref)
+
+
+@ASYNC_COPY_TEST_PARAM_SIZE
+@ASYNC_COPY_TEST_PARAM_SHARED_LAYOUT
+@ASYNC_COPY_TEST_PARAM_DTYPE
+def test_runtime_async_copy(M, N, vec_size, shared_layout, dtype):
+    _test_runtime_async_copy_layouts(M, N, vec_size, shared_layout, dtype, False)
+
+
+@gluon.jit
 def scaled_wmma_scale_preshuffle(a_base, stride_am, stride_ak, a_scale, b_base, stride_bk, stride_bn, b_scale, out,
                                  stride_scale, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,
                                  BLOCK_K: ttgl.constexpr, type_a: ttgl.constexpr, type_b: ttgl.constexpr,
