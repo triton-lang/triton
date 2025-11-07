@@ -104,6 +104,8 @@ struct GluonLayouts {
   py::handle DistributedLinearLayout;
   py::handle DotOperandLayout;
   py::handle NVMMADistributedLayout;
+  py::handle TensorMemoryScalesLayout;
+  py::handle TensorMemoryLayout;
   py::handle NVMMASharedLayout;
   py::handle SwizzledSharedLayout;
   py::handle SharedLinearLayout;
@@ -116,6 +118,8 @@ struct GluonLayouts {
         py::module::import("triton.experimental.gluon.language._layouts");
     auto amdLayouts =
         py::module::import("triton.experimental.gluon.language.amd._layouts");
+    auto blackwellLayouts = py::module::import(
+        "triton.experimental.gluon.language.nvidia.blackwell");
     AutoLayout = py::object(layouts.attr("AutoLayout")).release();
     BlockedLayout = py::object(layouts.attr("BlockedLayout")).release();
     SliceLayout = py::object(layouts.attr("SliceLayout")).release();
@@ -124,6 +128,10 @@ struct GluonLayouts {
     DotOperandLayout = py::object(layouts.attr("DotOperandLayout")).release();
     NVMMADistributedLayout =
         py::object(layouts.attr("NVMMADistributedLayout")).release();
+    TensorMemoryScalesLayout =
+        py::object(blackwellLayouts.attr("TensorMemoryScalesLayout")).release();
+    TensorMemoryLayout =
+        py::object(blackwellLayouts.attr("TensorMemoryLayout")).release();
     NVMMASharedLayout = py::object(layouts.attr("NVMMASharedLayout")).release();
     SwizzledSharedLayout =
         py::object(layouts.attr("SwizzledSharedLayout")).release();
@@ -256,6 +264,15 @@ py::object layoutToGluon(Attribute layout) {
     return layouts.PaddedSharedLayout(intervalPaddingPairs,
                                       ll.getBases().lookup(kOffset),
                                       ll.getBases().lookup(kBlock), shape);
+  } else if (auto tmemScales =
+                 dyn_cast<ttng::TensorMemoryScalesEncodingAttr>(layout)) {
+    return layouts.TensorMemoryScalesLayout(std::vector<unsigned>{
+        tmemScales.getCTASplitM(), tmemScales.getCTASplitN()});
+  } else if (auto tmem = dyn_cast<ttng::TensorMemoryEncodingAttr>(layout)) {
+    return layouts.TensorMemoryLayout(
+        std::vector<unsigned>{tmem.getBlockM(), tmem.getBlockN()},
+        tmem.getColStride(),
+        std::vector<unsigned>{tmem.getCTASplitM(), tmem.getCTASplitN()});
   }
 
   throw py::value_error("Unhandled encoding encountered");

@@ -159,7 +159,7 @@ class TritonToGluonTransformer(ast.NodeTransformer):
             if resolved_callable is triton.language.core.static_range:
                 return self.forward_call(node, self.ttgl_attr("static_range"))
         else:
-            if isinstance(node.func, ast.Attribute) and node.func.attr in ["store", "load", "gather"]:
+            if isinstance(node.func, ast.Attribute) and node.func.attr in ["store", "load", "gather", "scatter"]:
                 helper_name = "tl_obj_" + node.func.attr
                 return ast.Call(
                     func=ast.Name(id=helper_name, ctx=ast.Load()),
@@ -378,10 +378,10 @@ def unparse_original_assignments(constexpr_globals: dict) -> list[str]:
     return results
 
 
-def convert_triton_to_gluon(src: triton.runtime.jit.JITCallable) -> str:
+def convert_triton_to_gluon(src: list[triton.runtime.jit.JITCallable]) -> str:
     """Convert a Triton JIT entry point into a Gluon source string."""
     shared_jit_set: set = set()
-    function_queue: list = [src]
+    function_queue: list = list(src)
     constexpr_globals: dict = {}
     out = ""
     # Process discovered callee JITFunctions, converting and appending them

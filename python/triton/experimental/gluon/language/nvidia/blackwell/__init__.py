@@ -68,6 +68,9 @@ class TensorMemoryLayout:
         cta_split_str = (f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else "")
         return f"TL{block_str}{stride_str}{cta_split_str}TL"
 
+    def __hash__(self):
+        return hash((self.block, self.col_stride, self.cta_split_num))
+
 
 @dataclass(frozen=True, eq=True)
 class TensorMemoryScalesLayout:
@@ -90,6 +93,9 @@ class TensorMemoryScalesLayout:
     def mangle(self) -> str:
         cta_split_str = f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else ""
         return f"TLS{cta_split_str}TLS"
+
+    def __hash__(self):
+        return hash(self.cta_split_num)
 
 
 @constexpr_function
