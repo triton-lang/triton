@@ -77,10 +77,10 @@ uint32_t processActivityKernel(
     // A single graph launch can trigger multiple kernels.
     // Our solution is to construct the following maps:
     // --- Application threads ---
-    // 1. graphId -> numKernels
-    // 2. graphExecId -> graphId
+    // - graphExecId -> graphId
     // --- CUPTI thread ---
-    // 3. corrId -> numKernels
+    // - corrId -> numKernels
+    // - graphId, nodeId -> contexts
     auto nodeId = kernel->graphNodeId;
     auto contexts = graphIdNodeIdToContexts[kernel->graphId][nodeId];
     for (auto *data : dataSet) {
@@ -249,8 +249,8 @@ struct CuptiProfiler::CuptiProfilerPimpl
 
   ThreadSafeMap<uint32_t, size_t, std::unordered_map<uint32_t, size_t>>
       graphIdToNumInstances;
-  ThreadSafeMap<uint32_t, uint32_t, std::unordered_map<uint32_t, uint32_t>>
-      graphExecIdToGraphId;
+  ThreadSafeMap<uint32_t, size_t, std::unordered_map<uint32_t, size_t>>
+      graphExecIdToNumInstances;
   ThreadSafeSet<uint32_t> graphExecIdChecked;
 };
 
@@ -347,6 +347,10 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             profiler.correlation.graphIdNodeIdToContexts[graphId][nodeId] =
                 contexts;
           }
+          if (!pImpl->graphIdToNumInstances.contain(graphId))
+            pImpl->graphIdToNumInstances[graphId] = 1;
+          else
+            pImpl->graphIdToNumInstances[graphId]++;
         } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED
           uint32_t originalGraphId = 0;
           uint32_t originalNodeId = 0;
@@ -356,16 +360,13 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               profiler.correlation
                   .graphIdNodeIdToContexts[originalGraphId][originalNodeId];
         }
-        if (!pImpl->graphIdToNumInstances.contain(graphId))
-          pImpl->graphIdToNumInstances[graphId] = 1;
-        else
-          pImpl->graphIdToNumInstances[graphId]++;
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
         pImpl->graphIdToNumInstances[graphId]--;
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_CREATED) {
-        pImpl->graphExecIdToGraphId[graphExecId] = graphId;
+        pImpl->graphExecIdToNumInstances[graphExecId] = pImpl
+            ->graphIdToNumInstances[graphId];
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
-        pImpl->graphExecIdToGraphId.erase(graphExecId);
+        pImpl->graphExecIdToNumInstances.erase(graphExecId);
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
         pImpl->graphIdToNumInstances.erase(graphId);
       }
@@ -394,12 +395,10 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         cupti::getGraphExecId<true>(graphExec, &graphExecId);
         numInstances = std::numeric_limits<size_t>::max();
         auto findGraph = false;
-        if (pImpl->graphExecIdToGraphId.contain(graphExecId)) {
-          auto graphId = pImpl->graphExecIdToGraphId[graphExecId];
-          if (pImpl->graphIdToNumInstances.contain(graphId)) {
-            numInstances = pImpl->graphIdToNumInstances[graphId];
-            findGraph = true;
-          }
+        if (pImpl->graphExecIdToNumInstances.contain(graphExecId)) {
+          numInstances =
+              pImpl->graphExecIdToNumInstances[graphExecId];
+          findGraph = true;
         }
         if (!findGraph && 
             !pImpl->graphExecIdChecked.contain(graphExecId)) {
