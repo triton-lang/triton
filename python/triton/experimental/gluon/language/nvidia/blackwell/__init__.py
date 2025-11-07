@@ -49,9 +49,10 @@ class TensorMemoryLayout:
     two_ctas: bool = False
 
     def __post_init__(self):
-        super().__setattr__("block", _unwrap_if_constexpr(self.block))
+        super().__setattr__("block", tuple(_unwrap_if_constexpr(self.block)))
         super().__setattr__("col_stride", _unwrap_if_constexpr(self.col_stride))
-        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
+        cta_split = tuple(_unwrap_if_constexpr(self.cta_split_num)) if self.cta_split_num is not None else None
+        super().__setattr__("cta_split_num", cta_split)
         super().__setattr__("two_ctas", _unwrap_if_constexpr(self.two_ctas))
         assert len(self.block) == 2
         assert self.cta_split_num is None or len(self.cta_split_num) == 2

@@ -300,21 +300,30 @@ static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   SmallVector<PTXBuilder::Operand *> ptxOperands;
   auto *predOperand = ptxBuilder.newOperand(pred, "b");
   ptxOperands.push_back(predOperand);
-  auto *barrierOperand = ptxBuilder.newOperand(barrier, "l");
+  barrier = b.ptrtoint(i32_ty, barrier);
+  auto *barrierOperand = ptxBuilder.newOperand(barrier, "r");
   ptxOperands.push_back(barrierOperand);
   std::string opcode;
   if (twoCTAs) {
-    // .multicast::cluster and mask 0x3 means the completion of UTCMMA.2CTA will
-    // be broadcasted into CTAid 0 and 1
-    auto *ctaMask = ptxBuilder.newOperand(b.int_val(16, 0x3), "h");
+    Value mask;
+    // TODO Is this needed?
+    auto numCTAs = lookupNumCTAs(rewriter);
+    if (numCTAs == 2) {
+      mask = b.i16_val(0x3);
+    } else {
+      auto ctaId =
+          b.trunc(i16_ty, nvgpu::ClusterCTAIdOp::create(rewriter, loc));
+      auto totalCTAs = lookupNumCTAs(rewriter);
+      auto ctaIdLead = b.and_(ctaId, b.i16_val(totalCTAs - 2));
+      mask = b.shl(b.i16_val(3), ctaIdLead);
+    }
+    auto *ctaMask = ptxBuilder.newOperand(mask, "h");
     ptxOperands.push_back(ctaMask);
     opcode = "@$0 "
              "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::"
              "cluster.multicast::cluster.b64 [$1], $2;";
   } else {
-    opcode =
-        "@$0 tcgen05.commit.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
-        ".mbarrier::arrive::one.b64 [$1];";
+    opcode = "@$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [$1];";
   }
   auto &barrierOp = *ptxBuilder.create(opcode);
   barrierOp(ptxOperands, /*onlyAttachMLIRArgs=*/true);
@@ -379,8 +388,14 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
     ttng::ClusterArriveOp::create(rewriter, loc, false);
     ttng::ClusterWaitOp::create(rewriter, loc);
 
-    Value clusterId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
-    Value cluster0 = tb.icmp_eq(clusterId, tb.i32_val(0));
+    Value leftClusterId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
+    auto numCTAs = lookupNumCTAs(rewriter);
+    // TODO Is this necessary or we can do it unconditionally? Check LLVM
+    // codegen
+    if (numCTAs > 2) {
+      leftClusterId = tb.and_(leftClusterId, tb.i32_val(1));
+    }
+    Value cluster0 = tb.icmp_eq(leftClusterId, tb.i32_val(0));
     pred = tb.and_(pred, cluster0);
   }
   pred = tb.and_(pred, isWarp0);
