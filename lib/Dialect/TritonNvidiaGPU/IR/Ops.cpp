@@ -25,6 +25,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
@@ -91,13 +92,12 @@ LogicalResult WarpGroupDotOp::verify() {
   if (retShapePerCTA[1] % 8 != 0)
     return emitOpError("WGMMA result N dimension must be divisible by 8");
 
-  auto aElemTy = getA().getType().getElementType();
-  if (!(llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy) ||
-        aElemTy.isInteger(8) || aElemTy.isF16() || aElemTy.isBF16() ||
-        aElemTy.isF32()))
-    return emitOpError("WGMMA result element type must be F16, BF16, F32, "
-                       "F8E5M2, F8E4M3FN, or integer type");
+  // Verify MMA version is supported for operands.
+  int mmaVersion = nvmmaEnc.getVersionMajor();
+  if (!supportMMA(getA(), mmaVersion) || !supportMMA(getB(), mmaVersion))
+    return emitOpError("unsupported MMA version for the given operands");
 
+  auto aElemTy = getA().getType().getElementType();
   if (getMaxNumImpreciseAcc() < 32 &&
       (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(aElemTy)) &&
       resTy.getElementType().isF32()) {

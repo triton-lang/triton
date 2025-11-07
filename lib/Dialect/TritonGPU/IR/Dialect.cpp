@@ -2761,15 +2761,34 @@ struct TritonGPUInferLayoutInterface
         mlir::dyn_cast<triton::gpu::DotOperandEncodingAttr>(operandEncodingB);
     if (!aEncoding && !bEncoding)
       return mlir::success();
-    auto mmaAEncoding =
-        mlir::dyn_cast_or_null<NvidiaMmaEncodingAttr>(aEncoding.getParent());
-    if (mmaAEncoding && mmaAEncoding.isHopper())
-      return success();
-    // Verify that the encodings are valid.
     if (!aEncoding || !bEncoding)
       return op->emitError("mismatching encoding between A and B operands");
+    // Verify that the encodings are valid.
     if (aEncoding.getKWidth() != bEncoding.getKWidth())
       return op->emitError("mismatching kWidth between A and B operands");
+
+    // Check if we have already selected an MMA version for Nvidia. If so,
+    // validate that the encodings are correct and compatible.
+    auto mmaAEncoding =
+        dyn_cast_or_null<NvidiaMmaEncodingAttr>(aEncoding.getParent());
+    auto mmaBEncoding =
+        dyn_cast_or_null<NvidiaMmaEncodingAttr>(bEncoding.getParent());
+    auto dotOp = cast<DotOp>(op);
+    auto resEnc = dotOp.getResult().getType().getEncoding();
+    auto mmaResEncoding = dyn_cast<NvidiaMmaEncodingAttr>(resEnc);
+    if (mmaAEncoding || mmaBEncoding || mmaResEncoding) {
+      // Check that they are all set and have the same version.
+      if (!mmaAEncoding || !mmaBEncoding || !mmaResEncoding)
+        return op->emitError("mismatching MMA encoding");
+      auto mmaBEncoding = cast<NvidiaMmaEncodingAttr>(bEncoding.getParent());
+      if (mmaAEncoding.getVersionMajor() != mmaBEncoding.getVersionMajor() ||
+          mmaAEncoding.getVersionMajor() != mmaResEncoding.getVersionMajor()) {
+        return op->emitError("mismatched MMA version.");
+      }
+      // Verify that the operands are supported on the selected MMA version.
+      if (!supportMMA(dotOp, mmaResEncoding.getVersionMajor()))
+        return op->emitError("unsupported MMA version");
+    }
     return success();
   }
 
