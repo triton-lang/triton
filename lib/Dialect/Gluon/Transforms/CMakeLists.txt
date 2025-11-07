@@ -4,6 +4,7 @@ add_triton_library(GluonTransforms
   ResolveAutoEncodings.cpp
   SimplifyControlFlow.cpp
   InferCoalescedEncodings.cpp
+  InferLayoutUtils.cpp
 
   DEPENDS
   GluonTransformsIncGen
