@@ -64,6 +64,7 @@ from ._core import (
     minimum,
     multiple_of,
     num_programs,
+    trans,
     permute,
     program_id,
     reduce,

@@ -99,6 +99,7 @@ class TritonToGluonTransformer(ast.NodeTransformer):
                     "cast": self.ttgl_attr("cast"),
                     "reshape": self.ttgl_attr("reshape"),
                     "trans": self.ttgl_attr("trans"),
+                    "permute": self.ttgl_attr("permute"),
                     "split": self.ttgl_attr("split"),
                     "inline_asm_elementwise": self.ttgl_attr("inline_asm_elementwise"),
                     "join": self.ttgl_attr("join"),
@@ -134,10 +135,9 @@ class TritonToGluonTransformer(ast.NodeTransformer):
                                                args=[source_arg], keywords=[])
                         node.args[0] = ast.copy_location(wrapped_src, source_arg)
                     # For shape/layout changing ops, wrap to reset layout
-                    if builtin_name in {"reshape", "trans", "join", "reduce", "split"}:
-                        forwarded_call = self.forward_call(node, mapped_target, filter_keywords)
+                    if builtin_name in {"reshape", "trans", "permute", "join", "reduce", "split"}:
                         reset_layout_wrapped = ast.Call(func=ast.Name(id="reset_to_default_layout", ctx=ast.Load()),
-                                                        args=[forwarded_call], keywords=[])
+                                                        args=[node], keywords=[])
                         node = ast.copy_location(reset_layout_wrapped, node)
                     return node
             # Track JITFunction callees
