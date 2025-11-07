@@ -212,7 +212,6 @@ extern "C" {
 enum TritonPluginResult {
   TP_SUCCESS = 0,
   TP_GENERIC_FAILURE = 1,
-  TP_NOT_LOADED = 2,
 };
 };
 #define TRITON_PLUGIN_API                                                      \
@@ -269,8 +268,30 @@ private:
     return func;
   }
 
+  llvm::Expected<TritonPluginResult> checkAPIResult(TritonPluginResult result,
+                                                    const char *handle) const {
+    if (result == TP_SUCCESS)
+      return TP_SUCCESS;
+    std::string msg;
+    llvm::raw_string_ostream os(msg);
+    os << "Failed to add/register plugin pass (" << handle
+       << ") to pass manager, error code: " << result;
+    return llvm::createStringError(msg);
+  }
+
 public:
+  // TODO: Move elsewhere
+  auto err2exp(llvm::Error Err) {
+    std::string msg;
+    llvm::raw_string_ostream os(msg);
+    os << Err;
+    return std::runtime_error(msg);
+  };
+
   llvm::Error loadPlugin() {
+    if (isLoaded)
+      return llvm::Error::success();
+
     std::string error;
     library = llvm::sys::DynamicLibrary::getPermanentLibrary(filename.c_str(),
                                                              &error);
@@ -297,26 +318,41 @@ public:
     return llvm::Error::success();
   }
 
-  TritonPluginResult
-  getPassHandles(std::vector<const char *> &passNames) const {
+  llvm::Expected<TritonPluginResult>
+  getPassHandles(std::vector<const char *> &passNames) {
+    if (auto Err = loadPlugin())
+      return Err;
+
     uint32_t passCount = 0;
     passNames.clear();
-    if (auto result =
-            isLoaded ? enumeratePassesAPI(&passCount, nullptr) : TP_NOT_LOADED;
-        result != TP_SUCCESS || passCount == 0)
-      return result;
+    auto result = enumeratePassesAPI(&passCount, nullptr);
+    if (result == TP_SUCCESS) {
+      if (passCount == 0)
+        return TP_SUCCESS;
 
-    passNames.resize(passCount);
-    return enumeratePassesAPI(&passCount, passNames.data());
+      passNames.resize(passCount);
+      result = enumeratePassesAPI(&passCount, passNames.data());
+    }
+
+    if (result == TP_SUCCESS)
+      return TP_SUCCESS;
+    std::string msg;
+    llvm::raw_string_ostream os(msg);
+    os << "Failed to retrive plugin pass handles, error code: " << result;
+    return llvm::createStringError(msg);
   }
 
-  TritonPluginResult addPass(mlir::PassManager *pm,
-                             const char *passHandle) const {
-    return isLoaded ? addPassAPI(pm, passHandle) : TP_NOT_LOADED;
+  llvm::Expected<TritonPluginResult> addPass(mlir::PassManager *pm,
+                                             const char *passHandle) {
+    if (auto Err = loadPlugin())
+      return Err;
+    return checkAPIResult(addPassAPI(pm, passHandle), passHandle);
   }
 
-  TritonPluginResult registerPass(const char *passHandle) const {
-    return isLoaded ? registerPassAPI(passHandle) : TP_NOT_LOADED;
+  llvm::Expected<TritonPluginResult> registerPass(const char *passHandle) {
+    if (auto Err = loadPlugin())
+      return Err;
+    return checkAPIResult(registerPassAPI(passHandle), passHandle);
   }
 
 private:
