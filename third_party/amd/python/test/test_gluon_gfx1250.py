@@ -735,7 +735,7 @@ ASYNC_COPY_TEST_PARAM_DTYPE = pytest.mark.parametrize("dtype", [
 ])
 
 
-def _test_runtime_async_copy_layouts(M, N, vec_size, shared_layout, dtype, use_mbarrier):
+def _test_runtime_async_copy_layouts(M, N, vec_size, shared_layout, dtype):
     BLOCK_M = 128
     BLOCK_N = 128
     blocked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
@@ -749,13 +749,9 @@ def _test_runtime_async_copy_layouts(M, N, vec_size, shared_layout, dtype, use_m
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
     out_handle = out.cuda()
 
-    if not use_mbarrier:
-        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
-        run_kernel = lambda: async_load_and_write_back_kernel[grid](a.cuda(), out_handle, M, N, BLOCK_M, BLOCK_N,
-                                                                    blocked_layout, shared_layout)
-    else:
-        run_kernel = lambda: async_copy_mbarrier_kernel[grid](a.cuda(), out_handle, M, N, BLOCK_M, BLOCK_N,
-                                                              shared_layout)
+    blocked_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+    run_kernel = lambda: async_load_and_write_back_kernel[grid](a.cuda(), out_handle, M, N, BLOCK_M, BLOCK_N,
+                                                                blocked_layout, shared_layout)
 
     if (vec_size * dtype.itemsize) < 4:
         # If we have less than 4 contiguous bytes we expect to abort compilation
