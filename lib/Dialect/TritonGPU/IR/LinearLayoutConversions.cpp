@@ -470,93 +470,6 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 }
 
 std::optional<LinearLayout>
-chooseLLDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
-                       int32_t elemBitWidth, unsigned instBitWidth,
-                       unsigned numLanesInShuffleGroup) {
-  using BaseTy = std::vector<std::vector<int32_t>>;
-  // This function will derive the layout for the ds_read_tr instruction
-  // based on the input layout (LL/DotLayout/...)
-  // The ds_read_tr instruction works on instBitWidth per lane and in groups of
-  // numLanesInShuffleGroup lanes.
-
-  // In this example we look at ds_read_b64_tr (instBitWidth = 64) and
-  // numLanesInShuffleGroup = 16 with 64 lanes per warp. Using M-continuous
-  // 16-bit input tensor A as an example. Each lane will load 4 consecutive
-  // elements (64-bit in total) along M. There are 4 consecutive lanes in total
-  // along M. Then the loaded elements are exchanged within the MxK=16x4 "base
-  // unit".
-  //        K0  K1  K2  K3
-  //      +---+---+---+---+
-  //  M0  |   |   |   |   |       M0, K[0-3]:  T0
-  //  M1  | T | T | T | T |       M1, K[0-3]:  T1
-  //  M2  | 0 | 4 | 8 |12 |       M2, K[0-3]:  T2
-  //  M3  |   |   |   |   |       M3, K[0-3]:  T3
-  //      +---+---+---+---+
-  //  M4  |   |   |   |   |       M4, K[0-3]:  T4
-  //  M5  | T | T | T | T |       M5, K[0-3]:  T5
-  //  M6  | 1 | 5 | 9 |13 |       M6, K[0-3]:  T6
-  //  M7  |   |   |   |   |       M7, K[0-3]:  T7
-  //      +---+---+---+---+  ==>
-  //  M8  |   |   |   |   |       M8, K[0-3]:  T8
-  //  M9  | T | T | T | T |       M9, K[0-3]:  T9
-  // M10  | 2 | 6 |10 |14 |      M10, K[0-3]: T10
-  // M11  |   |   |   |   |      M11, K[0-3]: T11
-  //      +---+---+---+---+
-  // M12  |   |   |   |   |      M12, K[0-3]: T12
-  // M13  | T | T | T | T |      M13, K[0-3]: T13
-  // M14  | 3 | 7 |11 |15 |      M14, K[0-3]: T14
-  // M15  |   |   |   |   |      M15, K[0-3]: T15
-  //      +---+---+---+---+
-
-  // Given the layout represented by `enc` and shape, we can derive the layout
-  // that ds_read_b64_tr need to have in order to perform a vectorized load of
-  // the elements. This can be done by rearranging the inner 4x16 element base
-  // unit in the LL by rearranging the first numReg register bases and the
-  // first numLane lane bases.
-  auto rotatePrefixes = [](BaseTy &regBase, std::size_t numReg,
-                           BaseTy &laneBase, std::size_t numLane) {
-    // Concatenate prefixes of the two vectors. Lane first and then regs.
-    // C D E F | A B
-    // Then copy over numReg to the regBase and numLane to laneBase
-    // C D | E F A B
-    BaseTy baseUnit(laneBase.begin(), laneBase.begin() + numLane);
-    llvm::append_range(
-        baseUnit, llvm::make_range(regBase.begin(), regBase.begin() + numReg));
-
-    std::copy(baseUnit.begin(), baseUnit.begin() + numReg, regBase.begin());
-    std::copy(baseUnit.begin() + numReg, baseUnit.end(), laneBase.begin());
-  };
-
-  auto ctx = enc.getContext();
-  assert(elemBitWidth == 8 || elemBitWidth == 16);
-  // Get how many reg bases and tile bases the ds_read_tr tile spans
-  unsigned numRegBases = llvm::Log2_32(instBitWidth / elemBitWidth);
-  unsigned numLaneBases = llvm::Log2_32(numLanesInShuffleGroup);
-
-  auto ldsTransLayout = triton::gpu::toLinearLayout(shape, enc);
-  auto bases = ldsTransLayout.getBases();
-  auto kRegister = S("register");
-  auto kLane = S("lane");
-
-  // Make sure that we have enough register bases to rotate, otherwise we
-  // can't return a valid ds_read_tr layout
-  if (ldsTransLayout.getInDimSizeLog2(kRegister) < numRegBases) {
-    return std::nullopt;
-  }
-  // We should always have enough lanes
-  assert(ldsTransLayout.getInDimSizeLog2(kLane) >= numLaneBases);
-  rotatePrefixes(bases[kRegister], numRegBases, bases[kLane], numLaneBases);
-  // Scale types double the elements for a total of 16 vgpr (still only 16
-  // elements contiguous). Need to adjust the lane basis to reflect that
-  if (elemBitWidth == 8 && numLanesInShuffleGroup == 8) {
-    assert(ldsTransLayout.getInDimSizeLog2(kLane) >= (numLaneBases + 1));
-    std::swap(bases[kLane][numLaneBases - 1], bases[kLane][numLaneBases]);
-  }
-
-  return LinearLayout(bases, ldsTransLayout.getOutDims(), false);
-}
-
-std::optional<LinearLayout>
 chooseDotDsReadTrLayout(DotOperandEncodingAttr dotMfmaLayout,
                         ArrayRef<int64_t> shape, int32_t elemBitWidth,
                         unsigned instBitWidth,
@@ -1457,14 +1370,10 @@ std::optional<LinearLayout>
 chooseDsReadTrLayout(Attribute enc, ArrayRef<int64_t> shape,
                      int32_t elemBitWidth, unsigned instBitWidth,
                      unsigned numLanesInShuffleGroup) {
-  if (elemBitWidth == 4) {
-    auto dot = cast<DotOperandEncodingAttr>(enc);
-    return chooseDotDsReadTrLayout(dot, shape, elemBitWidth, instBitWidth,
-                                   numLanesInShuffleGroup);
-  } else {
-    return chooseLLDsReadTrLayout(enc, shape, elemBitWidth, instBitWidth,
-                                  numLanesInShuffleGroup);
-  }
+  assert(elemBitWidth == 4);
+  auto dot = cast<DotOperandEncodingAttr>(enc);
+  return chooseDotDsReadTrLayout(dot, shape, elemBitWidth, instBitWidth,
+                                 numLanesInShuffleGroup);
 }
 
 LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
