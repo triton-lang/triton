@@ -11,7 +11,7 @@ def Gluon_AutoEncodingAttr : AttrDef<Gluon_Dialect, "AutoEncoding"> {
     An encoding that is inferred from neighboring ops in the graph.
   }];
 }
-  
+
 def Gluon_CoalescedEncodingAttr : AttrDef<Gluon_Dialect, "CoalescedEncoding"> {
   let mnemonic = "coalesced_encoding";
   let attrName = "gluon.coalesced_encoding";
