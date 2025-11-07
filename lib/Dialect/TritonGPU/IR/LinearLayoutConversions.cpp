@@ -1101,20 +1101,39 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
         LinearLayout::identity1D(encoding.getCTASplitN(), kCol, dims[1]);
     auto newEncoding = TensorMemoryEncodingAttr::get(
         ctx, encoding.getBlockM(), encoding.getBlockN(),
-        encoding.getColStride(), encoding.getCTASplitM(), 1);
+        encoding.getColStride(), encoding.getCTASplitM(), 1,
+        encoding.getTwoCTAs());
     return tensorMemoryToLinearLayout(
                {shape[0], shape[1] / encoding.getCTASplitN()}, newEncoding) *
            split;
   }
   if (encoding.getCTASplitM() > 1) {
-    auto split =
-        LinearLayout::identity1D(encoding.getCTASplitM(), kCol, dims[0]);
+    auto splitM = encoding.getCTASplitM();
+    auto blockM = encoding.getBlockM();
+    bool isM64TwoCTA = blockM == 64 && encoding.getTwoCTAs();
+    if (isM64TwoCTA) {
+      // blockM == 64 and twoCTAs is laid out as the transpose of 128xblockN
+      // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-data-path-layout-b
+      blockM *= 2;
+      splitM /= 2;
+    }
+    auto split = LinearLayout::identity1D(splitM, kCol, dims[0]);
     auto newEncoding = TensorMemoryEncodingAttr::get(
-        ctx, encoding.getBlockM(), encoding.getBlockN(),
-        encoding.getColStride(), 1, encoding.getCTASplitN());
-    return tensorMemoryToLinearLayout(
-               {shape[0] / encoding.getCTASplitM(), shape[1]}, newEncoding) *
-           split;
+        ctx, blockM, encoding.getBlockN(), encoding.getColStride(), 1,
+        encoding.getCTASplitN(), encoding.getTwoCTAs());
+    auto ret =
+        tensorMemoryToLinearLayout({shape[0] / splitM, shape[1]}, newEncoding) *
+        split;
+    // In this case, we swap the basis of the last row and last column as per
+    // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-data-path-layout-bny
+    if (isM64TwoCTA) {
+      auto bases = ret.getBases();
+      auto &rowBases = bases[kRow];
+      auto &colBases = bases[kCol];
+      std::swap(rowBases[rowBases.size() - 1], colBases[colBases.size() - 1]);
+      ret = LinearLayout(bases, ret.getOutDims(), ret.isSurjective());
+    }
+    return ret;
   }
   assert(encoding.getCTASplitM() == 1 && encoding.getCTASplitN() == 1);
 

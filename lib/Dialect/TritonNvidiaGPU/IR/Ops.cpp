@@ -350,6 +350,60 @@ LogicalResult TCGen5MMAOp::verify() {
   Type dtype = getD().getType().getElementType();
   if (failed(verifyMMADType(*this, atype, btype, dtype)))
     return failure();
+
+  auto aEnc = getA().getType().getEncoding();
+  if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr,
+           TensorMemoryEncodingAttr>(aEnc))
+    return emitOpError(
+        "LHS operand must have a NVMMAShared or TensorMemory encoding");
+  auto bEnc = getB().getType().getEncoding();
+  if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr>(bEnc))
+    return emitOpError("RHS operand must have a NVMMAShared encoding");
+  auto retType = getD().getType();
+  auto retEnc = dyn_cast<TensorMemoryEncodingAttr>(retType.getEncoding());
+  if (!retEnc)
+    return emitOpError("Return operand must have a TensorMemory encoding");
+
+  // Check colStride of TMEM operands
+  if (auto tmem = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
+    if (tmem.getColStride() != 1)
+      return emitOpError("The col stride of the LHS operand must be 1");
+  }
+  if (retEnc.getColStride() != 32 / retType.getElementTypeBitWidth())
+    return emitOpError("The col stride of the return operand must be 32 / ")
+           << retType.getElementTypeBitWidth() << " but got "
+           << retEnc.getColStride();
+
+  if (getTwoCtas()) {
+    // Once we have a `block` dimension in TMEM, we can look at this via the
+    // associated LL
+    auto checkSplitNum = [&](ArrayRef<unsigned> splitNum, std::string_view name,
+                             ArrayRef<unsigned> expected) -> LogicalResult {
+      if (splitNum != expected) {
+        return emitOpError("The op is two CTAs but the split num of the ")
+               << name << " is not " << expected << ". Got " << splitNum;
+      }
+      return success();
+    };
+    if (failed(checkSplitNum(getCTASplitNum(aEnc), "LHS", {2, 1})))
+      return failure();
+    if (failed(checkSplitNum(getCTASplitNum(bEnc), "RHS", {1, 2})))
+      return failure();
+    if (failed(checkSplitNum(getCTASplitNum(retEnc), "returned value", {2, 1})))
+      return failure();
+
+    if (!retEnc.getTwoCTAs())
+      return emitOpError(
+          "The returned value's encoding must have twoCTA=true to be used "
+          "in a twoCTA matmul");
+    if (auto tmemEnc = dyn_cast<TensorMemoryEncodingAttr>(aEnc)) {
+      if (!tmemEnc.getTwoCTAs())
+        return emitOpError(
+            "The LHS operand's encoding must have twoCTA=true to be used "
+            "in a twoCTA matmul");
+    }
+  }
+
   return success();
 }
 
@@ -773,8 +827,8 @@ void TMEMSubSliceOp::build(OpBuilder &builder, OperationState &state,
   unsigned newBlockN = std::min<unsigned>(encoding.getBlockN(), size);
   auto newEncoding = triton::nvidia_gpu::TensorMemoryEncodingAttr::get(
       builder.getContext(), encoding.getBlockM(), newBlockN,
-      encoding.getColStride(), encoding.getCTASplitM(),
-      encoding.getCTASplitN());
+      encoding.getColStride(), encoding.getCTASplitM(), encoding.getCTASplitN(),
+      encoding.getTwoCTAs());
   auto subsliceType = gpu::MemDescType::get(
       shape, allocTy.getElementType(), newEncoding, allocTy.getMemorySpace(),
       allocTy.getMutableMemory(), allocTy.getAllocShape());

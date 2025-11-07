@@ -500,14 +500,14 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("get_tensor_memory_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &block,
-              unsigned colStride,
-              std::vector<unsigned> &ctaSplitNum) -> Attribute {
+              unsigned colStride, std::vector<unsigned> &ctaSplitNum,
+              bool twoCTAs) -> Attribute {
              auto ctx = self.getContext();
              assert(block.size() == 2);
              assert(ctaSplitNum.size() == 2);
              return self.getChecked<ttng::TensorMemoryEncodingAttr>(
                  ctx, block[0], block[1], colStride, ctaSplitNum[0],
-                 ctaSplitNum[1]);
+                 ctaSplitNum[1], twoCTAs);
            })
       .def("get_tensor_memory_scales_layout",
            [](GluonOpBuilder &self,
@@ -717,9 +717,8 @@ void init_gluon_ir(py::module &&m) {
       .def("create_tcgen05_mma",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
               Value pred, std::vector<Value> &mbarriers,
-              std::vector<Value> &mbarrier_preds) {
+              std::vector<Value> &mbarrier_preds, bool two_ctas) {
              Value accDep;
-             bool two_ctas = false;
              auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
              self.create<ttng::TCGen5MMAOp>(tokType, a, b, acc, accDep, useAcc,
                                             pred, two_ctas, mbarriers,
