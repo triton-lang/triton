@@ -13,9 +13,13 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir::triton::gpu {
-    void setCoalescedEncoding(MLIRContext *context, ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
-                        int numWarps, int threadsPerWarp,
-                        llvm::MapVector<Operation *, Attribute> &layoutMap) {
+    void setCoalescedEncoding(MLIRContext *context, 
+        ModuleAxisInfoAnalysis &axisInfoAnalysis, 
+        Operation *op,
+        int numWarps, int threadsPerWarp,
+        CTALayoutProvider CTALayoutProvider,
+        ShapeProvider shapeProvider,
+        llvm::MapVector<Operation *, Attribute> &layoutMap) {
     Value ptr = getMemAccessPtr(op);
     auto refTensorType = cast<RankedTensorType>(ptr.getType());
 
@@ -53,7 +57,10 @@ namespace mlir::triton::gpu {
         }
     }
 
-    auto shapePerCTA = triton::gpu::getShapePerCTA(refTensorType);
+    // auto CTALayout = triton::gpu::getCTALayout(refTensorType.getEncoding());
+    // auto shapePerCTA = triton::gpu::getShapePerCTA(refTensorType);
+    auto CTALayout = CTALayoutProvider(refTensorType);
+    auto shapePerCTA = shapeProvider(refTensorType);
     LDBG("shapePerCTA=[" << triton::join(shapePerCTA, ", ") << "]");
 
     int numElems = product<int64_t>(shapePerCTA);
@@ -86,8 +93,6 @@ namespace mlir::triton::gpu {
     }
     SmallVector<unsigned> sizePerThread(refTensorType.getRank(), 1);
     sizePerThread[order[0]] = perThread;
-
-    auto CTALayout = triton::gpu::getCTALayout(refTensorType.getEncoding());
     layoutMap[op] = triton::gpu::BlockedEncodingAttr::get(
         context, refTensorType.getShape(), sizePerThread, order, numWarps,
         threadsPerWarp, CTALayout);
