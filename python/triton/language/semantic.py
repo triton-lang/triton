@@ -1294,7 +1294,6 @@ class TritonSemantic(Generic[TensorTy]):
             return self._store_block_pointer(ptr, val, mask, boundary_check, cache, eviction)
         else:
             # Store by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
-            ptr, val = self.broadcast_impl_value(ptr, val)
             return self._store_legacy(ptr, val, mask, boundary_check, cache, eviction)
 
 #########
