@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file --gluon-infer-efficient-encodings -verify-diagnostics
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-tt.func public @divisibility_conflict2(
+tt.func public @divisibility_conflict(
     %in_ptr : !tt.ptr<f32> {tt.divisibility = 64 : i32},
     %out_ptr : !tt.ptr<f32> {tt.divisibility = 8 : i32}) {
     %mask = arith.constant dense<1> : tensor<128x256xi1, #gluon.auto_encoding>
