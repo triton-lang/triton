@@ -115,14 +115,14 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     int numElems = product<int64_t>(shapePerCTA);
     int numThreads = numWarps * threadsPerWarp;
 
-    unsigned perThread = getNumElementsPerThread(op, order, axisInfoAnalysis);
+    unsigned perThread = getNumElementsPerThread(op, order, axisInfoAnalysis, shapePerCTA);
     LDBG("perThread for op: " << perThread);
 
     for (Operation *opSameOrder : memAccessesSameOrder) {
       if (opSameOrder == op)
         continue;
       unsigned currPerThread =
-          getNumElementsPerThread(opSameOrder, order, axisInfoAnalysis);
+          getNumElementsPerThread(opSameOrder, order, axisInfoAnalysis, shapePerCTA);
       LDBG("perThread for opSameOrder: " << currPerThread);
       perThread = std::max(perThread, currPerThread);
     }
@@ -138,7 +138,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       // For loads, we can expect that the gaps won't matter due to the L1
       // cache.
       perThread = std::min<int>(
-          perThread, getNumElementsPerThread(op, order, axisInfoAnalysis));
+          perThread, getNumElementsPerThread(op, order, axisInfoAnalysis, shapePerCTA));
     }
     SmallVector<unsigned> sizePerThread(refTensorType.getRank(), 1);
     sizePerThread[order[0]] = perThread;
