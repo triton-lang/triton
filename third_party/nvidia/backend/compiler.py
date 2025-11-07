@@ -31,16 +31,16 @@ def min_dot_size(target: GPUTarget):
     return check_dot_compatibility
 
 
-def get_ptxas() -> knobs.NvidiaTool:
-    return knobs.nvidia.ptxas
+def get_ptxas(arch: int) -> knobs.NvidiaTool:
+    return knobs.nvidia.ptxas_blackwell if arch >= 100 else knobs.nvidia.ptxas
 
 
 @functools.lru_cache()
-def get_ptxas_version():
+def get_ptxas_version(arch: int = 80):
     mock_ver = knobs.nvidia.mock_ptx_version
     if mock_ver is not None:
         return mock_ver  # This is not really a version of ptxas, but it is good enough for testing
-    version = subprocess.check_output([get_ptxas().path, "--version"]).decode("utf-8")
+    version = subprocess.check_output([get_ptxas(arch).path, "--version"]).decode("utf-8")
     return version
 
 
@@ -71,7 +71,7 @@ def ptx_get_version(cuda_version) -> int:
 def get_ptx_version_from_options(options, arch: int):
     ptx_version = options.ptx_version
     if ptx_version is None:
-        cuda_version = get_ptxas().version
+        cuda_version = get_ptxas(arch).version
         ptx_version = ptx_get_version(cuda_version)
     return ptx_version
 
@@ -111,7 +111,6 @@ class CUDAOptions:
     # maxnreg corresponds to the ptx parameter .maxnreg, which controls the
     # maximum number of 32-bit registers used by one thread.
     maxnreg: Optional[int] = None
-    cluster_dims: tuple = (1, 1, 1)
     ptx_version: int = None
     ptx_options: Optional[str] = knobs.nvidia.ptxas_options
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
@@ -121,7 +120,7 @@ class CUDAOptions:
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")
     deprecated_fp8_dot_operand_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"
-    allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
+    allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee", 'bf16x3', 'bf16x6')
     max_num_imprecise_acc_default: bool = None
     extern_libs: dict = None
     debug: bool = False
@@ -170,6 +169,10 @@ class CUDABackend(BaseBackend):
         self.binary_ext = "cubin"
 
     def parse_options(self, opts) -> Any:
+        # Enable debug mode for ConSan, so device-side assertions are not optimized out
+        if "instrumentation_mode" in opts and opts["instrumentation_mode"] == "consan":
+            opts["debug"] = True
+
         args = {'arch': knobs.runtime.override_arch or f"sm{self.target.arch}"}
         args.update({k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts if opts[k] is not None})
         capability = int(self._parse_arch(args["arch"]))
@@ -201,9 +204,6 @@ class CUDABackend(BaseBackend):
             metadata.num_warps,
             metadata.num_ctas,
             metadata.shared,
-            metadata.cluster_dims[0],
-            metadata.cluster_dims[1],
-            metadata.cluster_dims[2],
         )
 
     def get_codegen_implementation(self, options):
@@ -248,20 +248,15 @@ class CUDABackend(BaseBackend):
         if opt.maxnreg is not None:
             mod.set_attr("ttg.maxnreg", ir.builder(mod.context).get_int32_attr(opt.maxnreg))
 
-        cluster_info = nvidia.ClusterInfo()
-        if opt.cluster_dims is not None:
-            cluster_info.clusterDimX = opt.cluster_dims[0]
-            cluster_info.clusterDimY = opt.cluster_dims[1]
-            cluster_info.clusterDimZ = opt.cluster_dims[2]
         pm = ir.pass_manager(mod.context)
         dump_enabled = pm.enable_debug()
+        emuTF32 = (capability // 10 >= 8)
         passes.ttir.add_convert_to_ttgpuir(pm, f"cuda:{capability}", opt.num_warps, 32, opt.num_ctas)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
-        if capability // 10 >= 8:
-            passes.ttgpuir.add_f32_dot_tc(pm)
+        passes.ttgpuir.add_f32_dot_tc(pm, emuTF32)
         # TODO(Qingyi): Move PlanCTAPass to the front of CoalescePass
-        nvidia.passes.ttnvgpuir.add_plan_cta(pm, cluster_info)
+        nvidia.passes.ttnvgpuir.add_plan_cta(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
         passes.ttgpuir.add_accelerate_matmul(pm)
@@ -290,6 +285,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_schedule_loops(pm)
             passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
+            passes.ttgpuir.add_optimize_partition_warps(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             # hoist again and allow hoisting out of if statements
             passes.ttgpuir.add_hoist_tmem_alloc(pm, True)
@@ -317,9 +313,7 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
 
         pm.run(mod, 'make_ttgir')
-        metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
-        tensordesc_meta = mod.get_tensordesc_metadata()
-        metadata["tensordesc_meta"] = tensordesc_meta
+        metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
 
     def gluon_to_ttgir(self, src, metadata, options, capability):
@@ -329,6 +323,8 @@ class CUDABackend(BaseBackend):
 
         passes.gluon.add_inliner(pm)
         passes.gluon.add_resolve_auto_encodings(pm)
+        nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
+        passes.gluon.add_canonicalizer(pm)
         passes.common.add_sccp(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.gluon.add_canonicalizer(pm)
@@ -352,7 +348,8 @@ class CUDABackend(BaseBackend):
         passes.gluon.add_inliner(pm)
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
-        if knobs.compilation.enable_experimental_consan:
+        nvidia.passes.ttnvgpuir.add_check_matmul_two_cta(pm)
+        if knobs.compilation.instrumentation_mode == "consan":
             # Call ConcurrencySanitizerPass here, before allocating global scratch memory but after allocating tensor and shared
             passes.ttgpuir.add_concurrency_sanitizer(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
@@ -369,12 +366,33 @@ class CUDABackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         passes.convert.add_nvvm_to_llvm(pm)
-        if not knobs.compilation.disable_line_info:
+
+        if not knobs.compilation.disable_line_info and not knobs.compilation.dump_ir_extract_di_local_variables:
             passes.llvmir.add_di_scope(pm)
+
         if CUDABackend.instrumentation:
             CUDABackend.instrumentation.patch("llvmir_to_llvm", pm, mod.context)
 
         pm.run(mod, 'make_llir')
+
+        if knobs.compilation.dump_ir_extract_di_local_variables:
+            # comments below on why separate it
+            if not knobs.compilation.disable_line_info:
+                pm = ir.pass_manager(mod.context)
+                pm.enable_debug()
+                passes.llvmir.add_di_scope(pm)
+                pm.run(mod, 'make_llir.disable_line_info')
+
+            # insert dbg intrinsic with several DI Attribute including source
+            # var name and type info note: unknown reason for now, but this
+            # pass and add_di_scope has to be run separately, otherwise if we
+            # put them into previous pipline, it trigger a segmentfault without
+            # any error message; could be due to a bug in mlir or pybind11
+            pm = ir.pass_manager(mod.context)
+            pm.enable_debug()
+            passes.llvmir.add_di_local_variable(pm)
+            pm.run(mod, 'make_llir.dump_ir_extract_di_local_variables')
+
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
@@ -417,7 +435,8 @@ class CUDABackend(BaseBackend):
         triple = 'nvptx64-nvidia-cuda'
         proc = sm_arch_from_capability(capability)
         features = get_features(opt, self.target.arch)
-        ret = llvm.translate_to_asm(src, triple, proc, features, [], opt.enable_fp_fusion, False)
+        flags = ["nvptx-mad-wide-opt"]
+        ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False)
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
         assert len(names) == 1
@@ -426,15 +445,18 @@ class CUDABackend(BaseBackend):
         ptx_version = f'{ptx_version//10}.{ptx_version%10}'
         ret = re.sub(r'\.version \d+\.\d+', f'.version {ptx_version}', ret, flags=re.MULTILINE)
         ret = re.sub(r'\.target sm_\d+', f'.target sm_{capability}', ret, flags=re.MULTILINE)
-        # Remove the debug flag that prevents ptxas from optimizing the code
-        ret = re.sub(r",\s*debug|debug,\s*", "", ret)
+        if not knobs.compilation.dump_ir_extract_di_local_variables:
+            # Remove the debug flag that prevents ptxas from optimizing the code
+            # Note: if this flag is removed, the source var name and type info will be lost when ptx was compiled into cubin
+            #           and we may not be able to see them in cuda-gdb
+            ret = re.sub(r",\s*debug|debug,\s*", "", ret)
         if knobs.nvidia.dump_nvptx:
             print("// -----// NVPTX Dump //----- //")
             print(ret)
         return ret
 
     def make_cubin(self, src, metadata, opt, capability):
-        ptxas = get_ptxas().path
+        ptxas = get_ptxas(self.target.arch).path
         with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.ptx') as fsrc, \
             tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
             fsrc.write(src)
@@ -524,5 +546,5 @@ please share the reproducer above with Triton project.
 
     @functools.lru_cache()
     def hash(self):
-        version = get_ptxas_version()
+        version = get_ptxas_version(self.target.arch)
         return f'{version}-{self.target.arch}'

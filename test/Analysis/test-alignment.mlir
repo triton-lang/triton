@@ -458,7 +458,7 @@ tt.func @max_min() {
   %4 = arith.constant dense<8> : tensor<128xi32>
   // expected-remark @below {{contiguity = [1], divisibility = [4], constancy = [128], constant_value = 4}}
   %5 = arith.constant dense<4> : tensor<128xi32>
-  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = 8}}
+  // expected-remark @below {{contiguity = [1], divisibility = [8], constancy = [128], constant_value = 8}}
   %6 = arith.maxsi %4, %5 : tensor<128xi32>
   tt.return
 }
@@ -858,7 +858,7 @@ tt.func @tensor_ptr(%arg0: !tt.ptr<tensor<64x16xi32>, 1>) {
 
 // -----
 
-tt.func public @chained_for(%8: tensor<128x64x!tt.ptr<bf16>> {tt.divisibility = 16 : i32}) {
+tt.func public @chained_for(%8: tensor<128x64x!tt.ptr<bf16>> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>}) {
   // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>}}
   %cst = arith.constant dense<0.000000e+00> : tensor<128x64xbf16>
   // expected-remark @below {{contiguity = [1], divisibility = [16], constancy = [1], constant_value = 16}}
@@ -929,8 +929,7 @@ tt.func @if_into_for_init(%i1 : i1) {
     scf.yield %cst128 : i32
   }
   scf.for %i = %ret to %cst128 step %cst_64 : i32 {
-    // TODO: Wrong divisibility here. Fix it once llvm/llvm-project#158359 lands
-    // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+    // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
     %t = arith.addi %i, %c0 : i32
   }
   tt.return
@@ -949,8 +948,7 @@ tt.func @if_into_for_step(%i1 : i1) {
     scf.yield %cst128 : i32
   }
   scf.for %i = %c0 to %cst128 step %ret : i32 {
-    // TODO: Wrong divisibility here. Fix it once llvm/llvm-project#158359 lands
-    // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+    // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
     %t = arith.addi %i, %c0 : i32
   }
   tt.return
@@ -958,10 +956,136 @@ tt.func @if_into_for_step(%i1 : i1) {
 
 // -----
 
-tt.func public @load_4d_tensor_kernel(%arg0: tensor<32x32x32x32xi32> {tt.contiguity = dense<[32, 1, 1, 1]> : tensor<4xi32>, tt.divisibility = dense<[16, 1, 1, 1]> : tensor<4xi32>}) attributes {noinline = false} {
+tt.func @op_annotation(%i32 : i32) {
+  %c0 = arith.constant 0 : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [4096], constancy = [1], constant_value = <none>}}
+  %ret0 = arith.addi %c0, %i32 { tt.divisibility = 4096 : i32 } : i32
+  // expected-remark @below {{contiguity = [1, 1], divisibility = [1024, 1024], constancy = [128, 64], constant_value = <none>}}
+  %ret1 = tt.splat %ret0 { tt.divisibility = dense<[1024, 1024]> : tensor<2xi32> } : i32 -> tensor<128x64xi32>
+  tt.return
+}
+
+// -----
+
+tt.func public @trans_4d_tensor_kernel(%arg0: tensor<32x32x32x32xi32> {tt.contiguity = dense<[32, 1, 1, 1]> : tensor<4xi32>, tt.divisibility = dense<[16, 1, 1, 1]> : tensor<4xi32>}) attributes {noinline = false} {
   // expected-remark @below {{contiguity = [1, 1, 1, 32], divisibility = [1, 1, 1, 16], constancy = [1, 1, 1, 1], constant_value = <none>}}
   %101 = tt.trans %arg0 {order = array<i32: 3, 2, 1, 0>} : tensor<32x32x32x32xi32> -> tensor<32x32x32x32xi32>
   // expected-remark @below {{contiguity = [1, 32, 1, 1], divisibility = [1, 16, 1, 1], constancy = [1, 1, 1, 1], constant_value = <none>}}
   %102 = tt.trans %arg0 {order = array<i32: 1, 0, 2, 3>} : tensor<32x32x32x32xi32> -> tensor<32x32x32x32xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @unrealized_conversion_cast(%arg0: tensor<128x128xi32> {tt.contiguity = dense<[16, 32]> : tensor<2xi32>}) {
+  // Case 1: AxisInfo is propagated through a sequence of
+  // unrealized_conversion_cast ops.
+  // expected-remark @below {{contiguity = [16, 32], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>}}
+  %0 = builtin.unrealized_conversion_cast %arg0 : tensor<128x128xi32> to !llvm.struct<(i32, i32, i32, i32)>
+  // expected-remark @below {{contiguity = [16, 32], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>}}
+  %1 = builtin.unrealized_conversion_cast %0 : !llvm.struct<(i32, i32, i32, i32)> to tensor<128x128xi32>
+
+  // Case 2: AxisInfo is falling back to the pessimistic state if the
+  // propagated AxisInfo would be invalid.
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %2 = llvm.mlir.undef : !llvm.struct<(i32, i32, i32, i32)>
+  // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>}}
+  %3 = builtin.unrealized_conversion_cast %2 : !llvm.struct<(i32, i32, i32, i32)> to tensor<128x128xi32>
+  // expected-remark @below {{contiguity = [1, 1], divisibility = [1, 1], constancy = [1, 1], constant_value = <none>}}
+  %4 = tt.trans %3 {order = array<i32: 1, 0>} : tensor<128x128xi32> -> tensor<128x128xi32>
+  tt.return
+}
+
+// -----
+
+// Axis analysis does not support multi-dimensional function arguments. Make
+// sure that we don't crash.
+tt.func @callee(%arg0: tensor<128x1xi32>) {
+  tt.return
+}
+
+tt.func @caller() {
+  %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  // expected-remark @below {{contiguity = [128, 1], divisibility = [1073741824, 1], constancy = [1, 1], constant_value = <none>}}
+  %1 = tt.expand_dims %0 {axis = 1: i32} : tensor<128xi32> -> tensor<128x1xi32>
+  tt.call @callee(%1) : (tensor<128x1xi32>) -> ()
+  tt.return
+}
+
+// -----
+
+tt.func @mul_zero_constancy() {
+  %range = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+  %zeros = arith.constant dense<0> : tensor<128xi32>
+  // expected-remark @below {{constancy = [128]}}
+  %product = arith.muli %zeros, %range : tensor<128xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @max_constancy() {
+  %c5 = arith.constant dense<5> : tensor<4xi32>
+  %c7 = arith.constant dense<7> : tensor<4xi32>
+  // expected-remark @below {{constancy = [4], constant_value = 7}}
+  %max = arith.maxsi %c5, %c7 : tensor<4xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @select_same_value_constancy() {
+  %range = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32>
+  %two = arith.constant dense<2> : tensor<4xi32>
+  %mod = arith.remsi %range, %two : tensor<4xi32>
+  %zero = arith.constant dense<0> : tensor<4xi32>
+  %cond = arith.cmpi ne, %mod, %zero : tensor<4xi32>
+  %lhs = arith.constant dense<42> : tensor<4xi32>
+  %rhs = arith.constant dense<42> : tensor<4xi32>
+  // expected-remark @below {{constancy = [4], constant_value = 42}}
+  %sel = arith.select %cond, %lhs, %rhs : tensor<4xi1>, tensor<4xi32>
+  tt.return
+}
+
+// -----
+
+tt.func @cmp_after_max_constancy() {
+  %c5 = arith.constant dense<5> : tensor<4xi32>
+  %c7 = arith.constant dense<7> : tensor<4xi32>
+  %max = arith.maxsi %c5, %c7 : tensor<4xi32>
+  // expected-remark @below {{constancy = [4], constant_value = 1}}
+  %cmp = arith.cmpi sgt, %max, %c5 : tensor<4xi32>
+  tt.return
+}
+
+// -----
+
+tt.func public @test_inductor_for() {
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = 64}}
+  %c64_i32 = arith.constant 64 : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [4611686018427387904], constancy = [1], constant_value = 0}}
+  %c0_i64 = arith.constant 0 : i64
+  // expected-remark @below {{contiguity = [1], divisibility = [4611686018427387904], constancy = [1], constant_value = 0}}
+  %c0_i32 = arith.constant 0 : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = 1}}
+  %c1_i32 = arith.constant 1 : i32
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = 64}}
+  %c64_i64 = arith.constant 64 : i64
+  // expected-remark @below {{contiguity = [1], divisibility = [1], constancy = [1], constant_value = <none>}}
+  %0 = arith.cmpi slt, %c0_i32, %c1_i32 : i32
+
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = 64}}
+  %1:2 = scf.if %0 -> (i32, i32) {
+    scf.yield %c0_i32, %c64_i32 : i32, i32
+  } else {
+    scf.yield %c1_i32, %c64_i32 : i32, i32
+  }
+
+  // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
+  %2 = scf.for %arg0 = %1#0 to %1#1 step %c64_i32 iter_args(%arg1 = %c0_i64) -> (i64)  : i32 {
+    // expected-remark @below {{contiguity = [1], divisibility = [64], constancy = [1], constant_value = <none>}}
+    %3 = arith.addi %arg1, %c64_i64 : i64
+    scf.yield %3 : i64
+  }
   tt.return
 }

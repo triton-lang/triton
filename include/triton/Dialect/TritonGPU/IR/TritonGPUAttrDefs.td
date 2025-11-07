@@ -1036,15 +1036,17 @@ An encoding for tensors that have been produced by MFMA matrix core instructions
 available on AMD Instinct GPUs of CDNA architectures.
 
 It is characterized by the following parameters:
-- `version` indicates the GPU architecture:
+- `version`: The GPU architecture:
   - 1: gfx908: CDNA1
   - 2: gfx90a: CDNA2
   - 3: gfx942: CDNA3
   - 4: gfx950: CDNA4
-- `warpsPerCTA` indicates the warp layout in the block.
-- `MDim` and `NDim` indicate the dimension of the output of the mfma instruction.
-- `isTransposed` indicates the result tensor is transposed so that it can be converted to dotOperand layout
+- `warpsPerCTA`: The warp layout in the block.
+- `instrShape`: The shape in the form of (M, N, K) of the matrix.
+- `isTransposed`: Indicates the result tensor is transposed so that it can be converted to dotOperand layout
 without going to shared memory. This is used in the case of chained dot (E.g. Flash-Attention kernel).
+- `tilesPerWarp`: The tile layout within a warp. Defaults to unit tile layout, i.e., single tile on all dimensions.
+- `elementBitWidth`: Bit width of the output element type. Supported values are 32 and 64. Defaults to 32.
 
 Example 1:
 Suppose we have a tensor with a shape of [32, 64], warpsPerCTA set to [1, 2] and MDim=NDim=32.
@@ -1131,7 +1133,7 @@ Example 4:
 This example demonstrates semantics of tilesPerWarp parameter. The MFMA layout (with tilesPerWarp=[1,1])
 assumes that each warp within a CTA tile computes a single MFMA tile. When the tensor is larger than
 a single CTA tile, these tiles are repeated across the tensor. In this setup, the output tiles computed
-by each wave were strided by the number of warps per CTA tile in both row and column dimensions.
+by each warp were strided by the number of warps per CTA tile in both row and column dimensions.
 
 For instance, with 16 MFMA tiles and warpsPerCTA = [2, 2], the distribution of warps across the MFMA
 tiles looked like:
@@ -1154,25 +1156,27 @@ w2 w2 w3 w3
     ins
     "unsigned": $version,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
-    ArrayRefParameter<"unsigned">:$tilesPerWarp,
-    "unsigned":$MDim,
-    "unsigned":$NDim,
+    ArrayRefParameter<"unsigned">:$instrShape,
     "bool":$isTransposed,
     "CTALayoutAttr":$CTALayout,
-    DefaultValuedParameter<"std::optional<Type>", "FloatType::get($_ctxt, 32)">:$elementType
+    ArrayRefParameter<"unsigned">:$tilesPerWarp,
+    "unsigned":$elementBitWidth
   );
 
   let builders = [
     AttrBuilder<(ins "unsigned":$version,
                      "ArrayRef<unsigned>":$warpsPerCTA,
-                     "unsigned":$MDim,
-                     "unsigned":$NDim,
+                     "ArrayRef<unsigned>":$instrShape,
                      "bool":$isTransposed,
                      "CTALayoutAttr":$CTALayout,
-                     "std::optional<Type>":$elementType), [{
-      SmallVector<unsigned> tilesPerWarp(warpsPerCTA.size(), 1);
-
-      return $_get(context, version, warpsPerCTA, tilesPerWarp, MDim, NDim, isTransposed, CTALayout, elementType);
+                     CArg<"ArrayRef<unsigned>", "{}">:$tpw,
+                     CArg<"unsigned", "0">:$elementBitWidth), [{
+      SmallVector<unsigned> tilesPerWarp(tpw);
+      if (tilesPerWarp.empty())
+        tilesPerWarp = SmallVector<unsigned>(warpsPerCTA.size(), 1);
+      if (elementBitWidth == 0)
+        elementBitWidth = 32;
+      return $_get($_ctxt, version, warpsPerCTA, instrShape, isTransposed, CTALayout, tilesPerWarp, elementBitWidth);
     }]>
   ];
 
@@ -1194,6 +1198,7 @@ w2 w2 w3 w3
 
   let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
+  let skipDefaultBuilders = 1;
 }
 
 def AMDWmmaEncodingAttr : DistributedEncoding<"AMDWmmaEncoding", "amd_wmma_encoding", [MmaEncodingTrait]> {
@@ -1209,11 +1214,12 @@ It is characterized by the following parameters:
   - 2: RDNA4; e.g., gfx1200, gfx1201
   - 3: gfx1250
 - `warpsPerCTA` indicates the warp layout in the block.
+- `tilesPerWarp`  The tile layout within a warp. Defaults to unit tile layout, i.e., single tile on all dimensions.
 - `instrShape` indicates the shape in the form of (M, N, K) of the matrix
    operation performed by a single WMMA instruction. Defaults to (16, 16, 16).
 - `isTransposed` indicates the layout of the result tensor is transposed.
 
-Example:
+Example 1:
 Suppose we have a tensor with shape [32, 64], `warpsPerCTA` set to [2, 2].
 Matrix elements represent which lane owns the element. Currently only wave32 mode
 is supported.
@@ -1287,6 +1293,33 @@ Row |
 ..  | ...                  ...
 30  |[14 14 14 14 14 14 14 14 30 ... 30] [14 14 14 ... 30]
 31  |[15 15 15 15 15 15 15 15 31 ... 31] [15 15 15 ... 31]
+
+Example 2:
+This example demonstrates the tilesPerWarp parameter, which shares the same sematics with
+AMDMfmaEncodingAttr.
+
+By default, WMMA layout assumes that each warp within a CTA tile computes a single WMMA tile.
+When the tensor is larger than a single CTA tile, these tiles are repeated across the tensor.
+In this setup, the output tiles computed by each warp are strided by the number of warps per CTA
+tile in both row and column dimensions.
+
+For instance, with 16 WMMA tiles and warpsPerCTA = [2, 2], the default(tilesPerWarp = [1, 1])
+distribution of warps across the WMMA tiles looked like:
+
+w0 w1 w0 w1
+w2 w3 w2 w3
+w0 w1 w0 w1
+w2 w3 w2 w3
+
+* Each unit reprsents a WMMA tile. w* shows which warp occupies that WMMA tile.
+
+tilesPerWarp parameter allows each warp to compute contiguous WMMA tiles in the row and/or column dimensions.
+Using the same example with tilesPerWarp = [2, 2], the layout becomes:
+
+w0 w0 w1 w1
+w0 w0 w1 w1
+w2 w2 w3 w3
+w2 w2 w3 w3
   }];
 
   let parameters = (
@@ -1294,6 +1327,7 @@ Row |
     "unsigned": $version,
     "bool":$isTransposed,
     ArrayRefParameter<"unsigned">:$warpsPerCTA,
+    ArrayRefParameter<"unsigned">:$tilesPerWarp,
     "CTALayoutAttr":$CTALayout,
     ArrayRefParameter<"unsigned">:$instrShape
   );
@@ -1301,14 +1335,27 @@ Row |
   let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
 
+  let builders = [
+    AttrBuilder<(ins "unsigned":$version,
+                     "bool":$isTransposed,
+                     "ArrayRef<unsigned>":$warpsPerCTA,
+                     "CTALayoutAttr":$CTALayout,
+                     "ArrayRef<unsigned>":$instrShape), [{
+      SmallVector<unsigned> tilesPerWarp(warpsPerCTA.size(), 1);
+      return $_get(context, version, isTransposed, warpsPerCTA, tilesPerWarp, CTALayout, instrShape);
+    }]>
+  ];
+
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
-                                          Type elemType, int opIdx) const;
+    SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kDim, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
 
     static SmallVector<unsigned, 3> getDefaultInstrShape() {
       return {16, 16, 16};
     }
+
+    // Check if tilesPerWarp is 1 in every dimension.
+    bool hasUnitTilesPerWarp() const;
 
     // Returns a swizzled shared layout matching this WMMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.

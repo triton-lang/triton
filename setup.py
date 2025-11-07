@@ -217,14 +217,10 @@ def get_llvm_package_info():
                 # Ubuntu 22 LTS (v2.35)
                 # Ubuntu 20 LTS (v2.31)
                 system_suffix = "ubuntu-x64"
-            elif vglibc > 217:
+            else:
                 # Manylinux_2.28 (v2.28)
                 # AlmaLinux 8 (v2.28)
                 system_suffix = "almalinux-x64"
-            else:
-                # Manylinux_2014 (v2.17)
-                # CentOS 7 (v2.17)
-                system_suffix = "centos-x64"
         else:
             print(
                 f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
@@ -311,7 +307,11 @@ def get_thirdparty_packages(packages: list):
                         file.extractall(path=package_root_dir)
                 else:
                     with tarfile.open(fileobj=response, mode="r|*") as file:
-                        file.extractall(path=package_root_dir)
+                        # Use extractall without filter for Python version < 3.12 compatibility
+                        if hasattr(tarfile, 'data_filter'):
+                            file.extractall(path=package_root_dir, filter="data")
+                        else:
+                            file.extractall(path=package_root_dir)
             # write version url to package_dir
             with open(os.path.join(package_dir, "version.txt"), "w") as f:
                 f.write(p.url)
@@ -353,8 +353,12 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
         download = download or curr_version.group(1) != version
     if download:
         print(f'downloading and extracting {url} ...')
-        file = tarfile.open(fileobj=open_url(url), mode="r|*")
-        file.extractall(path=tmp_path)
+        with open_url(url) as url_file, tarfile.open(fileobj=url_file, mode="r|*") as tar_file:
+            # Use extractall without filter for Python version < 3.12 compatibility
+            if hasattr(tarfile, 'data_filter'):
+                tar_file.extractall(path=tmp_path, filter="data")
+            else:
+                tar_file.extractall(path=tmp_path)
     os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
     print(f'copy {src_path} to {dst_path} ...')
     if os.path.isdir(src_path):
@@ -545,6 +549,17 @@ def download_and_copy_dependencies():
         url_func=lambda system, arch, version:
         f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
     )
+
+    # We download a separate ptxas for blackwell, since there are some bugs when using it for hopper
+    download_and_copy(
+        name="nvcc",
+        src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/bin/ptxas{exe_extension}",
+        dst_path="bin/ptxas-blackwell",
+        variable="TRITON_PTXAS_BLACKWELL_PATH",
+        version=NVIDIA_TOOLCHAIN_VERSION["ptxas-blackwell"],
+        url_func=lambda system, arch, version:
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
+    )
     download_and_copy(
         name="cuobjdump",
         src_func=lambda system, arch, version:
@@ -565,14 +580,15 @@ def download_and_copy_dependencies():
         url_func=lambda system, arch, version:
         f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvdisasm/{system}-{arch}/cuda_nvdisasm-{system}-{arch}-{version}-archive.tar.xz",
     )
+    crt = "crt" if int(NVIDIA_TOOLCHAIN_VERSION["cudacrt"].split(".")[0]) >= 13 else "nvcc"
     download_and_copy(
         name="nvcc",
-        src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/include",
+        src_func=lambda system, arch, version: f"cuda_{crt}-{system}-{arch}-{version}-archive/include",
         dst_path="include",
         variable="TRITON_CUDACRT_PATH",
         version=NVIDIA_TOOLCHAIN_VERSION["cudacrt"],
         url_func=lambda system, arch, version:
-        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
+        f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_{crt}/{system}-{arch}/cuda_{crt}-{system}-{arch}-{version}-archive.tar.xz",
     )
     download_and_copy(
         name="cudart",

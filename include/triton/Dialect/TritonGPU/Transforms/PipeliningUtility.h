@@ -77,8 +77,7 @@ Operation *wrapInMaskOp(RewriterBase &rewriter, Operation *op, Value pred);
 
 // Utilize high level predication abstraction to perform optimizations before
 // lowering to predicated operations
-void resolveMaskOp(ModuleOp moduleOp,
-                   DenseSet<triton::gpu::MaskOp> &peeledMaskOps);
+void resolveMaskOp(ModuleOp moduleOp);
 
 // Return true if the given ForOp has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
@@ -182,6 +181,8 @@ getLastUseOfPipelinedOp(ArrayRef<Operation *> ops, scf::ForOp forOp,
                         CoarseSchedule &schedule,
                         std::function<bool(Operation *)> filterUse = nullptr);
 
+// Clean up attributes passing over schedules across stages in pipelining
+void removePipeliningAttributes(ModuleOp moduleOp);
 } // namespace triton
 } // namespace mlir
 

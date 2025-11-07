@@ -45,9 +45,15 @@ constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
 constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
 constexpr static char AttrTargetName[] = "ttg.target";
 constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
+// FIXME: rename to match above
+constexpr static char kPartitionAttrName[] = "ttg.partition";
+constexpr static char kPartitionOutputsAttrName[] = "ttg.partition.outputs";
+constexpr static char kPartitionStagesAttrName[] = "ttg.partition.stages";
+constexpr static char kWarpSpecializeTagAttrName[] = "ttg.warp_specialize.tag";
 
 // Find the contextual number of warps on which this operation is executed.
 int lookupNumWarps(Operation *op);
+int lookupNumWarps(Region *region);
 // Try to find the contextual number of warps on which this operation is
 // executed. Returns nullopt if a warp size cannot be find. This is used for
 // verifiers.
@@ -265,6 +271,12 @@ void dumpHWLayout(RankedTensorType tensorType);
 // Return a string representation of the layout of the tensor.
 std::string getLayoutStr(RankedTensorType tensorType, bool useHWPointOfView);
 
+// Return a string representation of the shared layout of the tensor.
+std::string getSharedLayoutStr(LinearLayout &ll, bool useHWPointOfView);
+
+// Return a string representation of the distributed layout of the tensor.
+std::string getDistributedLayoutStr(LinearLayout &ll, bool useHWPointOfView);
+
 template <typename T>
 llvm::SmallVector<T> expandMatrixShapeWithBatch(llvm::ArrayRef<T> s);
 
@@ -286,6 +298,12 @@ LogicalResult verifyMemoryOpTypes(Operation *op, ShapedType srcTy,
                                   ShapedType dstTy);
 // Verify a memory allocation operation.
 LogicalResult verifyAllocOp(Operation *op, Value src, MemDescType dstTy);
+
+SetVector<int> getPartitionIds(Operation *op);
+SmallVector<SetVector<int>, 4> getPartitionOutputs(Operation *op);
+SetVector<int> getPartitionIds(OpOperand *use);
+bool hasPartition(Operation *op);
+
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_

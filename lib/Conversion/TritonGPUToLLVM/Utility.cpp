@@ -35,46 +35,6 @@ static int __builtin_ctz(unsigned x) {
 
 #endif
 
-// This reverts #5645, because it introduced increased register pressure in AMD
-// backend.
-// TODO: remove when new implementation performance reaches target level
-namespace {
-
-LinearLayout getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
-                                  LinearLayout regLayout,
-                                  triton::gpu::SharedEncodingTrait dstEnc,
-                                  int elemBitWidth,
-                                  ArrayRef<int64_t> allocShape) {
-  StringAttr kBlock = StringAttr::get(ctx, ("block"));
-  int rank = shape.size();
-
-  LinearLayout sharedLayout =
-      triton::gpu::toLinearLayout(allocShape.take_back(rank), dstEnc);
-  auto sharedOrder = triton::gpu::getOrder(dstEnc, shape);
-
-  // sharedLayout's in-dims are currently (offset, block).  Reshape to
-  // (offsetX1, offsetX2, ..., block) so that we can apply the N-dimensional
-  // shmem strides.  (The offsetX's appear in minor-to-major order.)
-  auto sharedLegacy = cast<triton::gpu::SwizzledSharedEncodingAttr>(dstEnc);
-  SmallVector<std::pair<StringAttr, int32_t>> multiDimSharedSize;
-  for (int i = 0; i < rank; i++) {
-    int dim = sharedOrder[i];
-    int64_t size = std::max(
-        int64_t{1},
-        shape[dim] / sharedLegacy.getCTALayout().getCTASplitNum()[dim]);
-    multiDimSharedSize.push_back(
-        {StringAttr::get(ctx, ("offset" + std::to_string(dim))), size});
-  }
-  multiDimSharedSize.push_back({kBlock, sharedLayout.getInDimSize(kBlock)});
-  sharedLayout = sharedLayout.reshapeIns(multiDimSharedSize);
-
-  // regToSharedLayout maps from (register, lane, warp, block) to (offsetX1,
-  // ..., offsetXN, block), where the offsetX's are in minor-to-major order.
-  return regLayout.invertAndCompose(sharedLayout);
-}
-
-} // namespace
-
 namespace mlir {
 
 namespace triton::gpu {
@@ -136,7 +96,7 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
   if (!isa<LLVM::LLVMFuncOp>(op))
     parent = op->getParentOfType<LLVM::LLVMFuncOp>();
   OpBuilder b(parent);
-  auto ret = b.create<LLVMFuncOp>(op->getLoc(), funcName, funcType);
+  auto ret = LLVMFuncOp::create(b, op->getLoc(), funcName, funcType);
   ret.getOperation()->setAttr("libname",
                               StringAttr::get(op->getContext(), libname));
   ret.getOperation()->setAttr("libpath",
@@ -365,8 +325,8 @@ std::optional<int> getWarpGroupStartThreadId(Block *block) {
 
 Value getThreadId(OpBuilder &rewriter, Location loc) {
   Value tid =
-      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
-  tid = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+      ::mlir::gpu::ThreadIdOp::create(rewriter, loc, ::mlir::gpu::Dimension::x);
+  tid = arith::IndexCastOp::create(rewriter, loc, i32_ty, tid);
 
   Operation *lookupPt = &rewriter.getInsertionBlock()->front();
   int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
@@ -379,7 +339,7 @@ Value getThreadId(OpBuilder &rewriter, Location loc) {
   // thread ID within the warp group.
   if (std::optional<int> startId =
           getWarpGroupStartThreadId(rewriter.getInsertionBlock())) {
-    tid = rewriter.create<arith::SubIOp>(loc, tid, b.i32_val(*startId));
+    tid = arith::SubIOp::create(rewriter, loc, tid, b.i32_val(*startId));
   }
 
   assert(llvm::isPowerOf2_32(upperBound));
@@ -580,7 +540,7 @@ SmallVector<Value> lowerLdSt(
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
   auto kOffset = str_attr("offset");
-  auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+  auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
 
   auto [elemsPerVec, permutation] =
       largestVectorisation(ctx, cvt, bitwidth, maybeMaxVecElems);
@@ -665,7 +625,7 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   assert(*cvt.getOutDimNames().begin() == str_attr("offset"));
   auto calcPaddedOffset = [&](Value smemOffset) {
     TritonLLVMOpBuilder b(loc, rewriter);
-    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    auto bitwidth = getIntOrFloatOrPtrBitWidth(llvmElemTy);
     if (auto paddedEnc = dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(
             srcTy.getEncoding())) {
       // Apply the offset needed for padding.
@@ -706,110 +666,6 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                          maybeMaxVecElems, localLoadOp);
 }
 
-bool emitTransferBetweenRegistersAndShared(
-    LinearLayout &regLayout, triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
-    std::optional<int32_t> maxVecElems, const SharedMemoryObject &smemObj,
-    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
-    Value laneId, Value warpId,
-    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
-  MLIRContext *ctx = rewriter.getContext();
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-
-  StringAttr kBlock = str_attr("block");
-  StringAttr kRegister = str_attr("register");
-  StringAttr kLane = str_attr("lane");
-  StringAttr kWarp = str_attr("warp");
-  StringAttr kOffset = str_attr("offset");
-
-  auto shape = sharedTy.getShape();
-  auto paddedEnc =
-      dyn_cast<triton::gpu::PaddedSharedEncodingAttr>(sharedTy.getEncoding());
-  LinearLayout regToSharedLayout = LinearLayout::empty();
-  if (paddedEnc) {
-    const auto &sharedLL = paddedEnc.getLinearComponent();
-    regToSharedLayout = regLayout.invertAndCompose(sharedLL);
-  } else {
-    auto sharedLL = triton::gpu::toLinearLayout(sharedTy);
-    regToSharedLayout = regLayout.invertAndCompose(sharedLL);
-  }
-
-  // TODO(jlebar): We don't currently support loading from shared memory in a
-  // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
-  if (regToSharedLayout.hasInDim(kBlock) &&
-      regToSharedLayout.hasOutDim(kBlock) &&
-      !regToSharedLayout.isTrivialOver({kBlock})) {
-    return false;
-  }
-
-  // Determine how many consecutive registers map to consecutive shmem elements
-  // in out-dimension offsetN.  This is our load instruction's vector width.
-  //
-  // It's OK if the vector width we choose here is wider than the hardware
-  // supports; LLVM will legalize it.
-  int vecElems =
-      std::min({regToSharedLayout.getNumConsecutiveInOut(),
-                maxVecElems.value_or(std::numeric_limits<int>::max())});
-  if (paddedEnc) {
-    vecElems = std::min(vecElems, int(paddedEnc.getMinInterval()));
-  }
-
-  auto withCTAOffset = triton::gpu::getNumCTAs(sharedTy.getEncoding()) > 1;
-  Value blockId =
-      withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
-
-  int numElems = regToSharedLayout.getInDimSize(kRegister);
-  auto vecTy = vec_ty(elemLlvmTy, vecElems);
-  SmallVector<uint32_t> regIds;
-  for (int i = 0; i < numElems / vecElems; i++) {
-    regIds.push_back(i * vecElems);
-  }
-
-  auto smemBase = smemObj.getBase();
-
-  auto indicesVec = applyLinearLayoutVec(loc, rewriter, regToSharedLayout,
-                                         {{kRegister, b.i32_val(0)},
-                                          {kLane, laneId},
-                                          {kWarp, warpId},
-                                          {kBlock, blockId}},
-                                         regIds);
-
-  // Compute affine offset given by memdesc_subslice
-  auto offset = smemObj.getShmemOffset(loc, rewriter, sharedTy);
-  SmallVector<Value> vecAddrVec;
-  for (auto &indices : indicesVec) {
-    Value smemOffset = indices[0].second;
-    smemOffset = b.xor_(smemOffset, offset);
-    if (paddedEnc) {
-      // Apply the offset needed for padding.
-      auto bitwidth = elemLlvmTy.getIntOrFloatBitWidth();
-      Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitwidth,
-                                    smemOffset, /*offsetInBytes=*/false);
-      smemOffset = b.add(smemOffset, padOffset);
-    }
-    auto vecAddr = b.gep(smemBase.getType(), elemLlvmTy, smemBase, smemOffset,
-                         LLVM::GEPNoWrapFlags::inbounds);
-    vecAddrVec.push_back(vecAddr);
-  }
-
-  for (Value &vecAddr : vecAddrVec) {
-    perVectorCallback(vecTy, vecAddr);
-  }
-  return true;
-}
-
-bool emitTransferBetweenRegistersAndShared(
-    RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
-    Type elemLlvmTy, std::optional<int32_t> maxVecElems,
-    const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
-    const TargetInfoBase &target,
-    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
-  auto regLayout = triton::gpu::toLinearLayout(registerTy);
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-  return emitTransferBetweenRegistersAndShared(
-      regLayout, sharedTy, elemLlvmTy, maxVecElems, smemObj, loc, rewriter,
-      target, laneId, warpId, perVectorCallback);
-}
-
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter) {
   assert(bool(llvmStruct) && "can not unpack null values");
@@ -845,7 +701,7 @@ Value packLLElements(Location loc, const LLVMTypeConverter *typeConverter,
     llvm::report_fatal_error(
         "size mismatch when packing elements for LLVM struct");
   }
-  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
+  Value llvmStruct = LLVM::UndefOp::create(rewriter, loc, structType);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   for (auto [i, value] : llvm::enumerate(resultVals)) {
     assert(value && "unexpected null value");
@@ -989,26 +845,26 @@ using mlir::triton::gpu::getOrder;
 
 Value createConstantI1(Location loc, OpBuilder &rewriter, bool v) {
   auto i1ty = rewriter.getIntegerType(1);
-  return rewriter.create<LLVM::ConstantOp>(loc, i1ty,
-                                           IntegerAttr::get(i1ty, v));
+  return LLVM::ConstantOp::create(rewriter, loc, i1ty,
+                                  IntegerAttr::get(i1ty, v));
 }
 
 Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v) {
   auto i32ty = rewriter.getIntegerType(32);
-  return rewriter.create<LLVM::ConstantOp>(loc, i32ty,
-                                           IntegerAttr::get(i32ty, v));
+  return LLVM::ConstantOp::create(rewriter, loc, i32ty,
+                                  IntegerAttr::get(i32ty, v));
 }
 
 Value createConstantI64(Location loc, OpBuilder &rewriter, int64_t v) {
   auto i64ty = rewriter.getIntegerType(64);
-  return rewriter.create<LLVM::ConstantOp>(loc, i64ty,
-                                           IntegerAttr::get(i64ty, v));
+  return LLVM::ConstantOp::create(rewriter, loc, i64ty,
+                                  IntegerAttr::get(i64ty, v));
 }
 
 Value createConstantF16(Location loc, OpBuilder &rewriter, float v) {
   auto type = type::f16Ty(rewriter.getContext());
-  return rewriter.create<LLVM::ConstantOp>(loc, type,
-                                           rewriter.getF16FloatAttr(v));
+  return LLVM::ConstantOp::create(rewriter, loc, type,
+                                  rewriter.getF16FloatAttr(v));
 }
 
 Value createConstantBF16(Location loc, OpBuilder &rewriter, float v) {
@@ -1017,48 +873,49 @@ Value createConstantBF16(Location loc, OpBuilder &rewriter, float v) {
   apf.convert(APFloat::BFloat(), APFloat::rmNearestTiesToEven, &ignored);
   auto type = type::bf16Ty(rewriter.getContext());
   auto attr = FloatAttr::get(type, apf);
-  return rewriter.create<LLVM::ConstantOp>(loc, type, attr);
+  return LLVM::ConstantOp::create(rewriter, loc, type, attr);
 }
 
 Value createConstantF32(Location loc, OpBuilder &rewriter, float v) {
   auto type = type::f32Ty(rewriter.getContext());
-  return rewriter.create<LLVM::ConstantOp>(loc, type,
-                                           rewriter.getF32FloatAttr(v));
+  return LLVM::ConstantOp::create(rewriter, loc, type,
+                                  rewriter.getF32FloatAttr(v));
 }
 
 Value createConstantF64(Location loc, OpBuilder &rewriter, double v) {
   auto type = type::f64Ty(rewriter.getContext());
-  return rewriter.create<LLVM::ConstantOp>(loc, type,
-                                           rewriter.getF64FloatAttr(v));
+  return LLVM::ConstantOp::create(rewriter, loc, type,
+                                  rewriter.getF64FloatAttr(v));
 }
 
 Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type) {
   if (!isa<FloatType>(type)) {
     llvm::report_fatal_error("Creating NaN constant for non-float type!");
   }
-  return rewriter.create<LLVM::ConstantOp>(
-      loc, type, APFloat::getNaN(cast<FloatType>(type).getFloatSemantics()));
+  return LLVM::ConstantOp::create(
+      rewriter, loc, type,
+      APFloat::getNaN(cast<FloatType>(type).getFloatSemantics()));
 }
 
 // Create an index type constant.
 Value createIndexConstant(OpBuilder &builder, Location loc,
                           const TypeConverter *converter, int64_t value) {
   Type ty = converter->convertType(builder.getIndexType());
-  return builder.create<LLVM::ConstantOp>(loc, ty,
-                                          builder.getIntegerAttr(ty, value));
+  return LLVM::ConstantOp::create(builder, loc, ty,
+                                  builder.getIntegerAttr(ty, value));
 }
 
 // Create an integer constant of \param width bits.
 Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
                                 int64_t value) {
   Type ty = builder.getIntegerType(width);
-  return builder.create<LLVM::ConstantOp>(loc, ty,
-                                          builder.getIntegerAttr(ty, value));
+  return LLVM::ConstantOp::create(builder, loc, ty,
+                                  builder.getIntegerAttr(ty, value));
 }
 
 LLVM::CallOp createLLVMCallOp(OpBuilder &builder, Location loc,
                               LLVMFuncOp funcOp, ValueRange args) {
-  auto op = builder.create<LLVM::CallOp>(loc, funcOp, args);
+  auto op = LLVM::CallOp::create(builder, loc, funcOp, args);
   op.getProperties().setOpBundleSizes(builder.getDenseI32ArrayAttr({}));
   op.getProperties().setOperandSegmentSizes({static_cast<int>(args.size()), 0});
   return op;
@@ -1067,7 +924,7 @@ LLVM::CallOp createLLVMCallOp(OpBuilder &builder, Location loc,
 LLVM::CallIntrinsicOp
 createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
                           TypeRange types, ValueRange args) {
-  auto op = builder.create<LLVM::CallIntrinsicOp>(loc, types, args);
+  auto op = LLVM::CallIntrinsicOp::create(builder, loc, types, args);
   op.getProperties().setIntrin(builder.getStringAttr(intrinsic));
   op.getProperties().setOpBundleSizes(builder.getDenseI32ArrayAttr({}));
   op.getProperties().setOperandSegmentSizes({static_cast<int>(args.size()), 0});
@@ -1207,7 +1064,7 @@ Value getStructFromSharedMemoryObject(Location loc,
   auto structTy =
       LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
   // pack into struct
-  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
+  Value llvmStruct = LLVM::UndefOp::create(rewriter, loc, structTy);
   for (const auto &v : llvm::enumerate(elems)) {
     assert(v.value() && "can not insert null values");
     llvmStruct = b.insert_val(structTy, llvmStruct, v.value(), v.index());
@@ -1241,7 +1098,7 @@ Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp) {
   auto mod = funcOp->getParentOfType<ModuleOp>();
   auto globalBase = dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
   assert(globalBase);
-  return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
+  return LLVM::AddressOfOp::create(rewriter, funcOp.getLoc(), globalBase);
 }
 
 Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
@@ -1275,10 +1132,10 @@ Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
   Value gridIdx[3];
   Value gridDim[2];
   for (int k = 0; k < 3; ++k) {
-    gridIdx[k] = rewriter.create<GetProgramIdOp>(loc, k);
+    gridIdx[k] = GetProgramIdOp::create(rewriter, loc, k);
   }
   for (int k = 0; k < 2; ++k) {
-    gridDim[k] = rewriter.create<GetNumProgramsOp>(loc, k);
+    gridDim[k] = GetNumProgramsOp::create(rewriter, loc, k);
   }
 
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -1505,16 +1362,16 @@ Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
   {
     RewriterBase::InsertionGuard guard(rewriter);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
-    global = rewriter.create<LLVM::GlobalOp>(
-        UnknownLoc::get(ctx), globalType,
-        /*isConstant=*/true, LLVM::Linkage::Internal, stringConstName,
-        rewriter.getStringAttr(contentStr));
+    global = LLVM::GlobalOp::create(rewriter, UnknownLoc::get(ctx), globalType,
+                                    /*isConstant=*/true,
+                                    LLVM::Linkage::Internal, stringConstName,
+                                    rewriter.getStringAttr(contentStr));
   }
 
   Value zero = b.i32_val(0);
   Type globalPtrType = LLVM::LLVMPointerType::get(ctx, global.getAddrSpace());
-  Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
-      UnknownLoc::get(ctx), globalPtrType, global.getSymName());
+  Value globalPtr = LLVM::AddressOfOp::create(
+      rewriter, UnknownLoc::get(ctx), globalPtrType, global.getSymName());
   Value stringStart =
       b.gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));
   return stringStart;
@@ -1607,7 +1464,7 @@ SmallVector<Value> inlineRegionImpl(RewriterBase &rewriter, Region &region,
   Region &parent = *curBlock->getParent();
   rewriter.cloneRegionBefore(region, parent, parent.end(), regionMap);
   rewriter.setInsertionPointToEnd(curBlock);
-  rewriter.create<LLVM::BrOp>(loc, args, regionMap.lookup(&region.front()));
+  LLVM::BrOp::create(rewriter, loc, args, regionMap.lookup(&region.front()));
 
   ValueRange terminatorOperands;
   for (Block &origBlock : region) {

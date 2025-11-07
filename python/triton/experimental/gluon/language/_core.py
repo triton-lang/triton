@@ -74,6 +74,7 @@ __all__ = [
     "static_range",
     "tuple",
     "tuple_type",
+    "num_ctas",
 ]
 
 T = TypeVar("T")
@@ -100,6 +101,7 @@ def builtin(fn: T) -> T:
 
 # Explicitly import forwarded Triton language symbols so mypy sees them.
 associative_scan = builtin(tl_core.associative_scan)
+assume = builtin(tl_core.assume)
 atomic_add = builtin(tl_core.atomic_add)
 atomic_and = builtin(tl_core.atomic_and)
 atomic_cas = builtin(tl_core.atomic_cas)
@@ -110,6 +112,7 @@ atomic_xchg = builtin(tl_core.atomic_xchg)
 atomic_xor = builtin(tl_core.atomic_xor)
 broadcast = builtin(tl_core.broadcast)
 device_assert = builtin(tl_core.device_assert)
+device_print = builtin(tl_core.device_print)
 expand_dims = builtin(tl_core.expand_dims)
 inline_asm_elementwise = builtin(tl_core.inline_asm_elementwise)
 join = builtin(tl_core.join)
@@ -491,26 +494,28 @@ def set_auto_layout(value, layout, _semantic=None):
 
 
 @builtin
-def warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps, worker_num_regs,
-                    _semantic=None, _generator=None):
+def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _semantic=None, _generator=None):
     """
     Create a warp-specialized execution region, partitioning work across warps.
 
+    This forks the current execution into a "default partition" and an arbitrary number of
+    "worker partitons". The default partition is executed in the same :code:`num_warps` warps as
+    the parent region, and may accept tensor arguments and return tensors. Worker partitions are
+    executed in additional warps, which sit idle while executing the parent region.
+
+    Note that calling warp_specialize recursively is not supported.
+
     Args:
-        default_args (List[Any]): Arguments for the default region.
-        default_partition (callable): Function to build the default execution region.
-        worker_args (List[Any]): Arguments for each warp partition.
-        worker_partitions (List[callable]): Functions for each warp partition.
-        worker_num_warps (List[int]): Number of warps per partition.
-        worker_num_regs (List[int]): Number of registers per partition.
+        functions_and_args (List[Tuple[Callable, Any]]): List of functions and arguments for each partition. The first of which is the default partition.
+        worker_num_warps (List[int]): Number of warps used for each worker partition.
+        worker_num_regs (List[int]): Number of registers for each worker partition.
 
     Returns:
-        Tuple[Any, ...]: Results from the default region.
+        Tuple[Any, ...]: Results from the default partition.
     """
     worker_num_warps = [_unwrap_if_constexpr(w) for w in worker_num_warps]
     worker_num_regs = [_unwrap_if_constexpr(r) for r in worker_num_regs]
-    return _semantic.warp_specialize(default_args, default_partition, worker_args, worker_partitions, worker_num_warps,
-                                     worker_num_regs, _generator)
+    return _semantic.warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _generator)
 
 
 @builtin
@@ -519,6 +524,14 @@ def num_warps(_semantic=None, _generator=None):
     Returns the number of warps that execute the current context, including in warp-specialized regions.
     """
     return _semantic.num_warps(_generator)
+
+
+@builtin
+def num_ctas(_semantic=None):
+    """
+    Returns the number of CTAs in the current kernel
+    """
+    return _semantic.num_ctas()
 
 
 @builtin

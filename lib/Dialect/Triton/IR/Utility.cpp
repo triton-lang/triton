@@ -12,10 +12,10 @@ Value tt::getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
   Location loc = pred.getLoc();
   Value mask = pred;
   if (isa<RankedTensorType>(maskType)) {
-    mask = rewriter.create<tt::SplatOp>(loc, maskType, pred);
+    mask = tt::SplatOp::create(rewriter, loc, maskType, pred);
   }
   if (currentMask) {
-    mask = rewriter.create<arith::AndIOp>(loc, mask, currentMask);
+    mask = arith::AndIOp::create(rewriter, loc, mask, currentMask);
   }
   return mask;
 }
@@ -96,12 +96,14 @@ Value tt::getLastInductionValue(OpBuilder &b, scf::ForOp loop) {
   Location loc = loop.getLoc();
   // (ub - lb -1) // step * step + lb
   Value diff =
-      b.create<arith::SubIOp>(loc, loop.getUpperBound(), loop.getLowerBound());
-  diff = b.create<arith::SubIOp>(
-      loc, diff, b.create<arith::ConstantOp>(loc, b.getI32IntegerAttr(1)));
-  Value ceilStep = b.create<arith::MulIOp>(
-      loc, b.create<arith::DivSIOp>(loc, diff, loop.getStep()), loop.getStep());
-  return b.create<arith::AddIOp>(loc, ceilStep, loop.getLowerBound());
+      arith::SubIOp::create(b, loc, loop.getUpperBound(), loop.getLowerBound());
+  diff = arith::SubIOp::create(
+      b, loc, diff,
+      arith::ConstantOp::create(b, loc, b.getIntegerAttr(diff.getType(), 1)));
+  Value ceilStep = arith::MulIOp::create(
+      b, loc, arith::DivSIOp::create(b, loc, diff, loop.getStep()),
+      loop.getStep());
+  return arith::AddIOp::create(b, loc, ceilStep, loop.getLowerBound());
 }
 
 bool tt::isKernel(FunctionOpInterface funcOp) {

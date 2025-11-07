@@ -12,5 +12,4 @@ add_mlir_library(TritonAMDGPUTestAnalysis
 
   LINK_LIBS PUBLIC
   MLIRPass
-  ${triton_libs}
 )

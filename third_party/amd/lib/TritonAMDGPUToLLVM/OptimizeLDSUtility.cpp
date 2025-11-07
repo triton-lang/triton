@@ -38,12 +38,13 @@ createTmpLayout(triton::gpu::DistributedEncodingTrait layout,
   auto ctx = layout.getContext();
   if (auto src = dyn_cast<triton::gpu::AMDMfmaEncodingAttr>(layout))
     return triton::gpu::AMDMfmaEncodingAttr::get(
-        ctx, src.getVersion(), warpsPerCTA, src.getMDim(), src.getNDim(),
-        src.getIsTransposed(), src.getCTALayout(), src.getElementType());
+        ctx, src.getVersion(), warpsPerCTA, src.getInstrShape(),
+        src.getIsTransposed(), src.getCTALayout(), src.getTilesPerWarp(),
+        src.getElementBitWidth());
   if (auto src = dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(layout))
     return triton::gpu::AMDWmmaEncodingAttr::get(
         ctx, src.getVersion(), src.getIsTransposed(), warpsPerCTA,
-        src.getCTALayout(), src.getInstrShape());
+        src.getTilesPerWarp(), src.getCTALayout(), src.getInstrShape());
   if (auto src = dyn_cast<triton::gpu::BlockedEncodingAttr>(layout))
     return triton::gpu::BlockedEncodingAttr::get(
         ctx, src.getSizePerThread(), src.getThreadsPerWarp(), warpsPerCTA,
@@ -82,10 +83,10 @@ createNewConvertOps(OpBuilder &builder, triton::gpu::ConvertLayoutOp &cvtOp,
   RankedTensorType newSrcType = RankedTensorType::get(
       srcType.getShape(), srcType.getElementType(), tmpLayout);
 
-  auto tmpCvt = builder.create<triton::gpu::ConvertLayoutOp>(
-      cvtOp.getLoc(), newSrcType, cvtOp.getSrc());
-  auto newEpilogueCvt = builder.create<triton::gpu::ConvertLayoutOp>(
-      cvtOp.getLoc(), newDstType, tmpCvt);
+  auto tmpCvt = triton::gpu::ConvertLayoutOp::create(
+      builder, cvtOp.getLoc(), newSrcType, cvtOp.getSrc());
+  auto newEpilogueCvt = triton::gpu::ConvertLayoutOp::create(
+      builder, cvtOp.getLoc(), newDstType, tmpCvt);
   tmpCvt->setAttrs(cvtOp->getAttrs());
   newEpilogueCvt->setAttrs(cvtOp->getAttrs());
 

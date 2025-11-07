@@ -122,6 +122,11 @@ class DependenciesFinder(ast.NodeVisitor):
         if val is None or type(val) is ModuleType:
             return
 
+        if getattr(val, "__triton_aggregate__", False):
+            for attr in val.hash_attrs:
+                self.record_reference(attr)
+            return
+
         if getattr(val, "__triton_builtin__", False):
             return
 
@@ -650,6 +655,7 @@ class JITFunction(JITCallable, KernelInterface[T]):
 
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or knobs.runtime.debug
+        kwargs["instrumentation_mode"] = knobs.compilation.instrumentation_mode
 
         # parse options
         device = driver.active.get_current_device()

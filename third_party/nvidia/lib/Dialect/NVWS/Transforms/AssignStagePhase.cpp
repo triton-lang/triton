@@ -71,34 +71,44 @@ template <class T> struct AssignStagePhase {
   };
   Value aref;
   int partitionId;
-  DenseMap<Value, int> tokToStagePosMap;
+  DenseMap<std::pair<Operation *, Value>, int> tokToStagePosMap;
 
   AssignStagePhase(Value aref, int partitionId)
       : aref(aref), partitionId(partitionId) {}
 
-  T isValidOp(Operation *op) {
+  T getTypedOp(Operation *op) {
     if (auto opT = dyn_cast<T>(op)) {
       if (opT.getAref() == aref) {
-        auto opPartitionIds = getPartitionIds(op);
-        if (!opPartitionIds || llvm::is_contained(*opPartitionIds, partitionId))
+        if (!hasPartition(op) ||
+            llvm::is_contained(getPartitionIds(op), partitionId))
           return opT;
       }
     }
     return {};
   }
+  bool isBufferUsed(ArefBufferOp bufOp, Value token) {
+    if (!bufOp)
+      return false;
+    if (bufOp.getAref() != this->aref)
+      return false;
+    return token == bufOp.getToken();
+  }
 
-  bool analyzeArefUseInBlock(Block *block) {
+  bool analyzeArefUseInBlock(Block *block, Value token) {
     for (auto &op : *block) {
-      if (isValidOp(&op) ||
-          (isa<ArefBufferOp>(op) && op.getOperand(0) == aref)) {
+      if (getTypedOp(&op) || isBufferUsed(dyn_cast<ArefBufferOp>(op), token)) {
         return true;
       } else if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-        if (analyzeArefUseInBlock(forOp.getBody()))
+        Value newTok;
+        if (auto pos = findValuePosInRange(forOp.getInitArgs(), token)) {
+          newTok = forOp.getRegionIterArgs()[*pos];
+        }
+        if (analyzeArefUseInBlock(forOp.getBody(), newTok))
           return true;
       } else if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-        if (analyzeArefUseInBlock(ifOp.thenBlock()))
+        if (analyzeArefUseInBlock(ifOp.thenBlock(), token))
           return true;
-        if (ifOp.elseBlock() && analyzeArefUseInBlock(ifOp.elseBlock()))
+        if (ifOp.elseBlock() && analyzeArefUseInBlock(ifOp.elseBlock(), token))
           return true;
       }
     }
@@ -107,8 +117,12 @@ template <class T> struct AssignStagePhase {
 
   void assignArefIndexInForOp(scf::ForOp forOp, StagePhase &index) {
 
+    Value newTok;
+    if (auto pos = findValuePosInRange(forOp.getInitArgs(), index.token)) {
+      newTok = forOp.getRegionIterArgs()[*pos];
+    }
     // find uses of arefs in forOp body
-    if (!analyzeArefUseInBlock(forOp.getBody()))
+    if (!analyzeArefUseInBlock(forOp.getBody(), newTok))
       return;
 
     // add extra iterArgs to the forOp
@@ -126,6 +140,10 @@ template <class T> struct AssignStagePhase {
     // create new forOp with extra iterArgs
     OpBuilder builder(forOp);
     size_t nArgs = forOp.getRegionIterArgs().size();
+
+    assert(hasPartition(forOp));
+    auto forOpIds = getPartitionIds(forOp);
+    auto forOpOutputsIds = getPartitionOutputs(forOp);
     forOp = addIterArgsToLoop(builder, forOp, extraIterArgs);
 
     // update arefIndex with iterArgs in the forOp body
@@ -139,14 +157,47 @@ template <class T> struct AssignStagePhase {
     SmallVector<Value> extraYieldArgs;
     auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
 
-    // associate token with stage positional argument in the yieldOp
+    // associate token with stage positional argument in the iterArgs & yieldOp
     // we will need this in propagateStage function that will assign stage
     // to arefBuffer and arefExit ops
-    tokToStagePosMap[indexInBlock.token] = nArgs + extraYieldArgs.size();
+
+    int nargs = extraYieldArgs.size();
     extraYieldArgs.push_back(indexInBlock.stage);
     if (index.phase)
       extraYieldArgs.push_back(indexInBlock.phase);
     appendToForOpYield(forOp, extraYieldArgs);
+    tokToStagePosMap[{forOp, index.token}] = nArgs + nargs;
+    tokToStagePosMap[{forOp.getBody()->getTerminator(), indexInBlock.token}] =
+        nArgs + nargs;
+
+    // update partitions of the forOp
+    for (auto arg : extraYieldArgs) {
+      SetVector<int> argIds;
+      if (auto defOp = arg.getDefiningOp()) {
+        if (defOp->getNumRegions() == 0) {
+          // if there is defOp, use partitions of defOp
+          assert(hasPartition(defOp));
+          argIds = getPartitionIds(defOp);
+        } else {
+          // if op has region, it returns result, get partition from result
+          auto pos = findValuePosInRange(defOp->getResults(), arg);
+          argIds = getPartitionOutputs(defOp)[*pos];
+        }
+      } else {
+        // otherwise it is a block-arg, use partitions of users
+        for (auto user : arg.getUsers()) {
+          if (isa<scf::YieldOp>(user))
+            continue;
+          assert(hasPartition(user));
+          auto ids = getPartitionIds(user);
+          argIds.insert(ids.begin(), ids.end());
+        }
+      }
+      forOpIds.insert(argIds.begin(), argIds.end());
+      forOpOutputsIds.push_back(argIds);
+    }
+    setPartition(forOp, forOpIds);
+    setPartitionOutputs(forOp, forOpOutputsIds);
 
     // update arefIndex with results from newForOp
     for (size_t idx = nArgs; idx < forOp.getRegionIterArgs().size(); ++idx)
@@ -157,9 +208,10 @@ template <class T> struct AssignStagePhase {
 
   void assignArefIndexInIfOp(scf::IfOp ifOp, StagePhase &index) {
 
-    auto useInThenBlock = analyzeArefUseInBlock(ifOp.thenBlock());
+    auto useInThenBlock = analyzeArefUseInBlock(ifOp.thenBlock(), index.token);
     auto useInElseBlock =
-        ifOp.elseBlock() ? analyzeArefUseInBlock(ifOp.elseBlock()) : false;
+        ifOp.elseBlock() ? analyzeArefUseInBlock(ifOp.elseBlock(), index.token)
+                         : false;
     if (!useInThenBlock && !useInElseBlock)
       return;
 
@@ -197,17 +249,27 @@ template <class T> struct AssignStagePhase {
       arefTokenRefs[*pos] = &index.token;
     }
 
-    tokToStagePosMap[thenIndex.token] = thenYieldOp.getNumOperands();
-    tokToStagePosMap[elseIndex.token] = elseYieldOp.getNumOperands();
+    tokToStagePosMap[{newIfOp.thenYield(), thenIndex.token}] =
+        thenYieldOp.getNumOperands();
+    tokToStagePosMap[{newIfOp.elseYield(), elseIndex.token}] =
+        elseYieldOp.getNumOperands();
     thenYieldOp->insertOperands(thenYieldOp.getNumOperands(), thenIndex.stage);
     elseYieldOp->insertOperands(elseYieldOp.getNumOperands(), elseIndex.stage);
-    if (thenIndex.phase) {
-      thenYieldOp->insertOperands(thenYieldOp.getNumOperands(),
-                                  thenIndex.phase);
-      elseYieldOp->insertOperands(elseYieldOp.getNumOperands(),
-                                  elseIndex.phase);
-    }
+    thenYieldOp->insertOperands(thenYieldOp.getNumOperands(), thenIndex.phase);
+    elseYieldOp->insertOperands(elseYieldOp.getNumOperands(), elseIndex.phase);
+
+    assert(hasPartition(ifOp));
+    auto ifOpIds = getPartitionIds(ifOp);
+    auto ifOpOutputsIds = getPartitionOutputs(ifOp);
     ifOp.erase();
+
+    for (auto arg : {thenIndex.stage, thenIndex.phase}) {
+      auto argIds = getPartitionIds(arg.getDefiningOp());
+      ifOpIds.insert(argIds.begin(), argIds.end());
+      ifOpOutputsIds.push_back(argIds);
+    }
+    setPartition(newIfOp, ifOpIds);
+    setPartitionOutputs(newIfOp, ifOpOutputsIds);
 
     // update arefIndex with results from newIfOp
     for (size_t idx = nArgs; idx < newIfOp.getResults().size(); ++idx)
@@ -218,19 +280,17 @@ template <class T> struct AssignStagePhase {
 
   StagePhase assignArefIndexInBlock(Block *block, StagePhase index) {
     for (auto &op : llvm::make_early_inc_range(*block)) {
-      if (auto opT = isValidOp(&op)) {
+      if (auto opT = getTypedOp(&op)) {
         ImplicitLocOpBuilder builder(opT.getLoc(), opT);
-        auto partitionIds = getPartitionIds(&op);
+        std::optional<SetVector<int>> partitionIds;
+        if (hasPartition(&op))
+          partitionIds = getPartitionIds(&op);
         auto stageCluster = getStageCluster(&op);
 
         auto createInto = [&](auto opTy, auto... args) {
           using ty = decltype(opTy);
-          auto ids = partitionIds;
-          if (ids) {
-            ids->insert(0);
-          }
           return triton::gpu::createInto<ty>(
-              builder, builder.getLoc(), ids, stageCluster,
+              builder, builder.getLoc(), partitionIds, stageCluster,
               std::forward<decltype(args)>(args)...);
         };
 
@@ -273,16 +333,35 @@ template <class T> struct AssignStagePhase {
         continue;
       visited.insert(owner);
       if (auto stageOp = dyn_cast<ArefStageInterface>(owner)) {
+        if (auto blk = dyn_cast<BlockArgument>(stage)) {
+          assert(hasPartition(stageOp));
+          auto stageOpIds = getPartitionIds(stageOp);
+          auto forOp = cast<scf::ForOp>(blk.getOwner()->getParentOp());
+          auto pos = findValuePosInRange(forOp.getRegionIterArgs(), stage);
+          assert(pos);
+
+          // update op partitions
+          assert(hasPartition(forOp));
+          auto forOpIds = getPartitionIds(forOp);
+          forOpIds.insert(stageOpIds.begin(), stageOpIds.end());
+          setPartition(forOp, forOpIds);
+
+          auto forOpOutputsIds = getPartitionOutputs(forOp);
+          forOpOutputsIds[*pos + 0].insert(stageOpIds.begin(),
+                                           stageOpIds.end());
+          forOpOutputsIds[*pos + 1].insert(stageOpIds.begin(),
+                                           stageOpIds.end());
+          setPartitionOutputs(forOp, forOpOutputsIds);
+        }
         stageOp.setStage(stage);
       } else if (auto forOp = dyn_cast<scf::ForOp>(owner)) {
-        auto tokPos = tokUse.getOperandNumber() - 3;
-        auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-        auto stagePos = tokToStagePosMap.at(yieldOp.getOperand(tokPos));
-        propagateStage(forOp.getRegionIterArgs()[tokPos],
-                       forOp.getRegionIterArgs()[stagePos], visited);
+        auto tokPos = tokUse.getOperandNumber() - forOp.getNumControlOperands();
+        auto iterTok = forOp.getRegionIterArg(tokPos);
+        auto stagePos = tokToStagePosMap.at({forOp, iterTok});
+        propagateStage(iterTok, forOp.getRegionIterArgs()[stagePos], visited);
       } else if (auto yieldOp = dyn_cast<scf::YieldOp>(owner)) {
         auto tokPos = tokUse.getOperandNumber();
-        auto stagePos = tokToStagePosMap.at(token);
+        auto stagePos = tokToStagePosMap.at({yieldOp, token});
         auto parentOp = yieldOp->getParentOp();
         propagateStage(parentOp->getResult(tokPos),
                        parentOp->getResult(stagePos), visited);
@@ -296,8 +375,10 @@ template <class T> struct AssignStagePhase {
       // Each partition requires its own stage/phase tracking for proper
       // multi-user handling; collect partition IDs in which this aref is used
       if (isa<T>(user)) {
-        if (auto ids = getPartitionIds(user))
-          partitionIds.insert(ids->begin(), ids->end());
+        if (hasPartition(user)) {
+          auto ids = getPartitionIds(user);
+          partitionIds.insert(ids.begin(), ids.end());
+        }
       }
     }
     if (partitionIds.empty()) {
@@ -313,13 +394,13 @@ template <class T> struct AssignStagePhase {
     b.setInsertionPointAfter(arefOp);
     auto depth =
         getArefDepth(cast<MemDescType>(arefOp.getOperand(0).getType()));
-    index.stage = b.create<arith::ConstantIntOp>(depth - 1, 32);
+    index.stage = arith::ConstantIntOp::create(b, depth - 1, 32);
 
     static_assert(std::is_same_v<T, ArefPutEnterOp> ||
                       std::is_same_v<T, ArefGetEnterOp>,
                   "ArefPutEnterOp or ArefGetEnterOp expected");
     auto initPhase = std::is_same_v<T, ArefPutEnterOp> ? 0 : 1;
-    index.phase = b.create<arith::ConstantIntOp>(initPhase, 32);
+    index.phase = arith::ConstantIntOp::create(b, initPhase, 32);
 
     for (auto partitionId : partitionIds) {
       // assign stage/phase to enter/exit Ops in each partition aref is used
@@ -330,7 +411,9 @@ template <class T> struct AssignStagePhase {
 
       // propagate stage to exitOps following enterOp token
       for (auto user : arefOp->getUsers())
-        if (auto enterOp = dyn_cast<T>(user)) {
+        if (auto enterOp = dyn_cast<T>(user);
+            enterOp && (!hasPartition(enterOp) ||
+                        getPartitionIds(enterOp).front() == partitionId)) {
           DenseSet<Operation *> visited;
           arefIndex.propagateStage(enterOp.getToken(), enterOp.getStage(),
                                    visited);
@@ -341,7 +424,62 @@ template <class T> struct AssignStagePhase {
   }
 };
 
-static LogicalResult assignStagePhase(triton::FuncOp funcOp) {
+void updateOutputWithDefaultPartition(Operation *op, int pos) {
+  auto opIds = getPartitionIds(op);
+  opIds.insert(0);
+  setPartition(op, opIds);
+
+  auto opOutputsIds = getPartitionOutputs(op);
+  opOutputsIds[pos].insert(0);
+  setPartitionOutputs(op, opOutputsIds);
+}
+
+void visitBackwardSlice(scf::ForOp wsLoop, Value value,
+                        std::function<void(Operation *)> callback,
+                        DenseSet<Value> &visited) {
+  if (!visited.insert(value).second)
+    return;
+
+  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+    if (auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp())) {
+      if (forOp->hasAttr(kWarpSpecializeAttrName))
+        return;
+      auto pos = findValuePosInRange(forOp.getRegionIterArgs(), value);
+      assert(pos);
+      visitBackwardSlice(wsLoop, forOp.getInitArgs()[*pos], callback, visited);
+    }
+  } else if (auto defOp = value.getDefiningOp();
+             isa<scf::IfOp, scf::ForOp>(defOp)) {
+    auto pos = findValuePosInRange(defOp->getResults(), value);
+    assert(pos);
+    updateOutputWithDefaultPartition(defOp, *pos);
+    if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
+      visitBackwardSlice(wsLoop, ifOp.thenYield()->getOperand(*pos), callback,
+                         visited);
+      if (ifOp.elseBlock())
+        visitBackwardSlice(wsLoop, ifOp.elseYield()->getOperand(*pos), callback,
+                           visited);
+      visitBackwardSlice(wsLoop, ifOp.getCondition(), callback, visited);
+    } else {
+      auto forOp = cast<scf::ForOp>(defOp);
+      visitBackwardSlice(wsLoop,
+                         forOp.getBody()->getTerminator()->getOperand(*pos),
+                         callback, visited);
+      // visit control operands of for-op
+      for (int idx = 0; idx < forOp.getNumControlOperands(); ++idx) {
+        auto control = forOp.getOperand(idx);
+        visitBackwardSlice(wsLoop, control, callback, visited);
+      }
+    }
+  } else if (wsLoop.getBody()->findAncestorOpInBlock(*defOp)) {
+    callback(defOp);
+    for (auto operand : defOp->getOperands()) {
+      visitBackwardSlice(wsLoop, operand, callback, visited);
+    }
+  }
+}
+
+LogicalResult assignStagePhase(triton::FuncOp funcOp) {
   SmallVector<ArefCreateOp> arefOps;
   funcOp.walk([&](ArefCreateOp arefOp) { arefOps.push_back(arefOp); });
   for (auto arefOp : arefOps) {
@@ -350,6 +488,32 @@ static LogicalResult assignStagePhase(triton::FuncOp funcOp) {
     if (failed(AssignStagePhase<ArefGetEnterOp>::run(arefOp)))
       return failure();
   }
+
+  auto callback = [&](Operation *op) {
+    if (!isa<scf::YieldOp, scf::IfOp, scf::ForOp, triton::ReduceOp>(op)) {
+      assert(hasPartition(op));
+      auto partitionIds = getPartitionIds(op);
+      partitionIds.insert(0);
+      setPartition(op, partitionIds);
+    }
+  };
+
+  funcOp.walk([&](scf::ForOp forOp) {
+    DenseSet<Value> visited;
+    if (forOp->hasAttr(kWarpSpecializeAttrName)) {
+      for (auto result : forOp.getResults()) {
+        // if result is of scalar type and is used outside of for-op, visit
+        // all dependencies and assign default partition to them
+        if (isa<IntegerType, FloatType>(result.getType()) &&
+            !result.use_empty()) {
+          auto arg = forOp.getBody()->getTerminator()->getOperand(
+              result.getResultNumber());
+          updateOutputWithDefaultPartition(forOp, result.getResultNumber());
+          visitBackwardSlice(forOp, arg, callback, visited);
+        }
+      }
+    }
+  });
   return success();
 }
 

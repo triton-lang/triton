@@ -32,6 +32,11 @@ class TensorHandle:
     dtype: tl.dtype
     attr: Dict = dataclasses.field(default_factory=dict)
 
+    def __post_init__(self):
+        if not _validate_np_data_size(self.data, self.dtype):
+            raise ValueError(f"numpy data itemsize ({self.data.itemsize * 8} bits) exceeds dtype primitive_bitwidth "
+                             f"({self.dtype.primitive_bitwidth} bits) for triton type {self.dtype}")
+
     def __bool__(self):
         return bool(self.data.all())
 
@@ -126,6 +131,22 @@ class InterpreterOptions:
     allowed_dot_input_precisions: Tuple[str] = ("tf32", "tf32x3", "ieee")
     max_num_imprecise_acc_default: int = 0
     backend_name: str = "interpreter"
+
+
+def _validate_np_data_size(np_array, tl_dtype):
+    if isinstance(tl_dtype, tl.pointer_type):
+        return True
+
+    np_dtype_bitwidth = np_array.itemsize * 8
+    tl_dtype_bitwidth = tl_dtype.primitive_bitwidth
+
+    # numpy lowest itemsize is at least 8 bits
+    if tl_dtype_bitwidth < 8:
+        tl_dtype_bitwidth = 8
+
+    if np_dtype_bitwidth > tl_dtype_bitwidth:
+        return False
+    return True
 
 
 def _get_signed_np_dtype(dtype):
@@ -460,7 +481,13 @@ class InterpreterBuilder:
 
     # binary operators
     def binary_op(self, lhs, rhs, op):
-        return TensorHandle(op(lhs.data, rhs.data), lhs.dtype.scalar)
+        output = op(lhs.data, rhs.data)
+        tl_dtype = lhs.dtype.scalar
+
+        if not _validate_np_data_size(output, tl_dtype):
+            output = output.astype(_get_np_dtype(tl_dtype))
+
+        return TensorHandle(output, tl_dtype)
 
     create_fadd = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.add)
     create_fmul = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.multiply)
@@ -541,7 +568,13 @@ class InterpreterBuilder:
 
     # ternary functions
     def ternary_op(self, lhs, rhs, other, op):
-        return TensorHandle(op(lhs.data, rhs.data, other.data), other.dtype.scalar)
+        output = op(lhs.data, rhs.data, other.data)
+        tl_dtype = other.dtype.scalar
+
+        if not _validate_np_data_size(output, tl_dtype):
+            output = output.astype(_get_np_dtype(tl_dtype))
+
+        return TensorHandle(output, tl_dtype)
 
     create_clampf = lambda self, arg, lo, hi, propagate_nans: self.ternary_op(arg, lo, hi, np.clip)
     create_select = lambda self, cond, lhs, rhs: self.ternary_op(cond, lhs, rhs, np.where)
@@ -603,9 +636,17 @@ class InterpreterBuilder:
     def create_histogram(self, data, bins, mask):
         if mask is None:
             mask = TensorHandle(np.ones_like(data.data, dtype=bool), tl.int1)
+
+        # By default np.histogram returns int64 dtype values
+        # Docs specify that returned dtype is taken based on optional weights.dtype
+        # This is fix for interpreter cases where for example int32 tensor is being passed
+        # But unexpectedly int64 values are being returned causing
+        # tl.store to write 8 bytes instead of 4 bytes which lead to silent data corruption
+        dummy_weights = np.ones_like(data.data, dtype=data.data.dtype)
+
         # force all masked elements to zero
         data = np.where(mask.data, data.data, np.zeros_like(data.data))
-        histogram = np.histogram(data, bins=bins, range=(0, bins))[0]
+        histogram = np.histogram(data, bins=bins, range=(0, bins), weights=dummy_weights)[0]
         # remove overcounted elements
         histogram[0] -= np.logical_not(mask.data).sum()
         return TensorHandle(histogram, tl.int32)
@@ -1183,12 +1224,13 @@ def _rewrap_tensor(t, original_tensor):
 
 class GridExecutor:
 
-    def __init__(self, fn, arg_names, grid):
+    def __init__(self, fn, arg_names, grid, pre_run_hooks=[]):
         from .jit import _normalize_ty  # TODO: modularize
 
         self.fn = fn
         self.arg_names = arg_names
         self.grid = grid
+        self.pre_run_hooks = pre_run_hooks
         __annotations__ = {name: _normalize_ty(ty) for name, ty in fn.__annotations__.items()}
         self.constexprs = [name for name in arg_names if __annotations__.get(name) == "constexpr"]
 
@@ -1263,6 +1305,9 @@ class GridExecutor:
         kwargs = {k: v for k, v in kwargs.items() if k in argspec.args}
         # copy arguments to the host
         args_hst, kwargs_hst = self._init_args_hst(args_dev, kwargs)
+        # run pre-run hooks
+        for hook in self.pre_run_hooks:
+            hook(*args_hst, **kwargs_hst)
         # remaps core language functions to interpreted ones
         _patch_lang(self.fn)
         # we need to copy arguments to the host for the interpreter
@@ -1381,15 +1426,19 @@ class InterpretedFunction:
         self.fn = fn
         self.rewriter = FunctionRewriter(fn, **kwargs)
         self.kwargs = kwargs
+        self.pre_run_hooks = []
 
         def run(*args, **kwargs):
-            grid = kwargs["grid"]
             fn = self.rewrite()
-            return GridExecutor(fn, self.arg_names, grid)(*args, **kwargs)
+            return GridExecutor(fn, self.arg_names, kwargs["grid"], self.pre_run_hooks)(*args, **kwargs)
 
         self.run = run
         signature = inspect.signature(fn)
         self.arg_names = [v.name for v in signature.parameters.values()]
+
+    def add_pre_run_hook(self, hook):
+        assert callable(hook)
+        self.pre_run_hooks.append(hook)
 
     def rewrite(self):
         if self.fn not in self.rewritten_fn:
@@ -1401,8 +1450,7 @@ class InterpretedFunction:
         return self.fn.__name__
 
     def __getitem__(self, grid):
-        fn = self.rewrite()
-        return GridExecutor(fn, self.arg_names, grid)
+        return lambda *args, **kwargs: self.run(*args, grid=grid, **kwargs)
 
     def __call__(self, *args, **kwargs):
         # This is a device function call

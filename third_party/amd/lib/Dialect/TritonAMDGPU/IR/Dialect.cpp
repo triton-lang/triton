@@ -62,6 +62,7 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
 
 #define GET_OP_CLASSES
 #include "Dialect/TritonAMDGPU/IR/Ops.cpp.inc"
+#include "Dialect/TritonAMDGPU/IR/TritonAMDGPUOpInterfaces.cpp.inc"
 
 namespace mlir::triton::amdgpu {
 
@@ -432,7 +433,33 @@ LogicalResult ScaledUpcastFp4Op::verify() {
     return emitError() << "scale and output should have the same shape";
 
   // Reuse Fp4ToFpOp's verifier to check types of input and output
-  return triton::gpu::Fp4ToFpOp::verifyFp4ToFp(*this, inputTy, outputTy, axis);
+  auto rank = inputTy.getRank();
+
+  if (rank != outputTy.getRank())
+    return emitError() << "source rank " << rank << " != result rank "
+                       << outputTy.getRank();
+
+  auto srcShape = inputTy.getShape();
+  auto resShape = outputTy.getShape();
+
+  if (!(0 <= axis && axis < rank))
+    return emitError() << "axis " << axis << " out of range for rank " << rank;
+
+  for (int i = 0; i < rank; ++i) {
+    if (i == axis) {
+      if (resShape[i] != srcShape[i] * 2)
+        return emitError() << "axis " << axis
+                           << " dimension must be 2x source dimension (src="
+                           << srcShape[i] << ", dst=" << resShape[i] << ")";
+    } else {
+      if (resShape[i] != srcShape[i])
+        return emitError() << "dimension " << i
+                           << " mismatch (src=" << srcShape[i]
+                           << ", dst=" << resShape[i] << ", axis=" << axis
+                           << ")";
+    }
+  }
+  return success();
 }
 
 Attribute ScaledUpcastFp4Op::inferDstEncoding(unsigned opIdx,
@@ -605,6 +632,59 @@ mlir::LogicalResult foldConcatOpFromSingleSource(amdgpu::ConcatOp op,
 void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
                                            mlir::MLIRContext *context) {
   patterns.add(foldConcatOpFromSingleSource);
+}
+
+LogicalResult AsyncTDMCopyGlobalToLocalOp::verify() {
+  auto tensorDescTy = getDesc().getType();
+  auto smemTy = getResult().getType();
+
+  auto swizzledEnc =
+      llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(smemTy.getEncoding());
+  if (swizzledEnc && swizzledEnc.getMaxPhase() != 1)
+    return emitOpError("TDM does not support swizzling");
+
+  auto paddedEnc =
+      llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
+  if (!paddedEnc && !swizzledEnc)
+    return emitOpError("Invalid shared memory layout for TDM");
+
+  Type elementType = smemTy.getElementType();
+  auto elementBitWidth = elementType.getIntOrFloatBitWidth();
+  if (paddedEnc) {
+    unsigned dwordSize = 32;
+    for (auto [interval, padding] :
+         llvm::zip(paddedEnc.getIntervals(), paddedEnc.getPaddings())) {
+      auto intervalInDwords = interval * elementBitWidth / dwordSize;
+      if (intervalInDwords < 2)
+        return emitOpError("TDM padding interval must be at least 2 dwords");
+
+      auto paddingInDwords = padding * elementBitWidth / dwordSize;
+      if (paddingInDwords < 1)
+        return emitOpError("TDM padding amount must be at least 1 dword");
+    }
+  }
+
+  return success();
+}
+
+LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
+  auto tensorDescTy = getDesc().getType();
+  auto smemTy = getSrc().getType();
+
+  auto swizzledEnc =
+      llvm::dyn_cast<gpu::SwizzledSharedEncodingAttr>(smemTy.getEncoding());
+  if (swizzledEnc && swizzledEnc.getMaxPhase() != 1)
+    return emitOpError("TDM does not support swizzling");
+
+  auto paddedEnc =
+      llvm::dyn_cast<gpu::PaddedSharedEncodingAttr>(smemTy.getEncoding());
+  if (paddedEnc)
+    return emitOpError("TDM store does not support padding");
+
+  if (!paddedEnc && !swizzledEnc)
+    return emitOpError("Invalid shared memory layout for TDM");
+
+  return success();
 }
 
 } // namespace mlir::triton::amdgpu

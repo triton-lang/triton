@@ -38,16 +38,17 @@ public:
         ttg::MemDescType::get({1}, rewriter.getI64Type(), barrierEncoding,
                               sharedMemorySpace, /*mutableMemory=*/true);
     Value barrierAlloc =
-        rewriter.create<ttg::LocalAllocOp>(loc, barrierMemDescType, Value());
-    rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
+        ttg::LocalAllocOp::create(rewriter, loc, barrierMemDescType, Value());
+    InitBarrierOp::create(rewriter, loc, barrierAlloc, 1);
     op.addCompletionBarrier(barrierAlloc,
-                            rewriter.create<arith::ConstantIntOp>(loc, 1, 1));
+                            arith::ConstantIntOp::create(rewriter, loc, 1, 1));
     op.setIsAsync(true);
 
     rewriter.setInsertionPointAfter(op);
-    Value phase = rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-    rewriter.create<WaitBarrierOp>(loc, barrierAlloc, phase, op.getPredicate());
-    rewriter.create<InvalBarrierOp>(loc, barrierAlloc);
+    Value phase = arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+    WaitBarrierOp::create(rewriter, loc, barrierAlloc, phase,
+                          op.getPredicate());
+    InvalBarrierOp::create(rewriter, loc, barrierAlloc);
     return success();
   }
 };
@@ -75,9 +76,9 @@ struct TCGen5MMAScaleSharedToTmemConversion
     Type scaleAType =
         ttg::MemDescType::get(shape, elType, scaleEncoding, tensorMemorySpace,
                               /*mutableMemory=*/true);
-    auto tmemAlloc = rewriter.create<TMEMAllocOp>(loc, scaleAType, Value());
-    rewriter.create<TMEMCopyOp>(loc, operand.get(), tmemAlloc,
-                                /*barrier*/ Value());
+    auto tmemAlloc = TMEMAllocOp::create(rewriter, loc, scaleAType, Value());
+    TMEMCopyOp::create(rewriter, loc, operand.get(), tmemAlloc,
+                       /*barrier*/ Value());
     operand.set(tmemAlloc);
     return true;
   }
@@ -183,7 +184,7 @@ public:
     }
     for (auto [commit, pred] : llvm::zip(commitOps, predicates)) {
       if (!pred) {
-        pred = rewriter.create<arith::ConstantIntOp>(op.getLoc(), true, 1);
+        pred = arith::ConstantIntOp::create(rewriter, op.getLoc(), true, 1);
       }
       if (!moveDefiningOpsBefore(commit.getBarrier(), op) ||
           !moveDefiningOpsBefore(pred, op)) {

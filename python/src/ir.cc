@@ -34,6 +34,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/FileSystem.h"
@@ -308,6 +309,8 @@ void init_triton_ir(py::module &&m) {
       .value("TF32", InputPrecision::TF32)
       .value("TF32x3", InputPrecision::TF32x3)
       .value("IEEE", InputPrecision::IEEE)
+      .value("BF16x3", InputPrecision::BF16x3)
+      .value("BF16x6", InputPrecision::BF16x6)
       .export_values();
 
   py::enum_<ScaleDotElemType>(m, "ScaleDotElemTypeTY", py::module_local())
@@ -321,15 +324,14 @@ void init_triton_ir(py::module &&m) {
       .export_values();
 
   py::class_<MLIRContext>(m, "context", py::module_local())
-      .def(py::init<>())
+      .def(py::init<>([]() {
+        return std::make_unique<MLIRContext>(MLIRContext::Threading::DISABLED);
+      }))
       .def("printOpOnDiagnostic",
            [](MLIRContext &self, bool v) { self.printOpOnDiagnostic(v); })
-      .def("printStackTraceOnDiagnostic",
-           [](MLIRContext &self, bool v) {
-             self.printStackTraceOnDiagnostic(v);
-           })
-      .def("disable_multithreading",
-           [](MLIRContext &self) { self.disableMultithreading(); });
+      .def("printStackTraceOnDiagnostic", [](MLIRContext &self, bool v) {
+        self.printStackTraceOnDiagnostic(v);
+      });
 
   py::class_<SourceMgrDiagnosticHandler>(m, "source_mgr_diag",
                                          py::module_local())
@@ -339,6 +341,7 @@ void init_triton_ir(py::module &&m) {
     DialectRegistry registry;
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
                     ::mlir::triton::instrument::TritonInstrumentDialect,
+                    ::mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
                     LLVM::LLVMDialect, mlir::ub::UBDialect,
@@ -379,11 +382,18 @@ void init_triton_ir(py::module &&m) {
       });
 
   py::class_<Location>(m, "location", py::module_local())
-      .def("__str__", [](Location &self) {
-        std::string str;
-        llvm::raw_string_ostream os(str);
-        self.print(os);
-        return os.str();
+      .def("__str__",
+           [](Location &self) {
+             std::string str;
+             llvm::raw_string_ostream os(str);
+             self.print(os);
+             return os.str();
+           })
+      .def("set_name", [](Location &self, std::string &name) {
+        mlir::StringAttr nameAttr =
+            mlir::StringAttr::get(self.getContext(), name);
+        mlir::NameLoc nameLoc = mlir::NameLoc::get(nameAttr, self);
+        self = dyn_cast<Location>(nameLoc);
       });
 
   py::class_<Value>(m, "value", py::module_local())
@@ -404,6 +414,8 @@ void init_triton_ir(py::module &&m) {
              }
            })
       .def("get_context", &Value::getContext)
+      .def("get_loc", &Value::getLoc)
+      .def("set_loc", &Value::setLoc)
       .def("replace_all_uses_with",
            [](Value &self, Value &newValue) {
              self.replaceAllUsesWith(newValue);
@@ -421,7 +433,9 @@ void init_triton_ir(py::module &&m) {
 
   py::class_<OpResult, Value>(m, "op_result", py::module_local());
 
-  py::class_<BlockArgument, Value>(m, "block_argument", py::module_local());
+  py::class_<BlockArgument, Value>(m, "block_argument", py::module_local())
+      .def("get_loc", &BlockArgument::getLoc)
+      .def("set_loc", &BlockArgument::setLoc);
 
   py::class_<Region>(m, "region", py::module_local())
       .def("get_parent_region", &Region::getParentRegion, ret::reference)
@@ -445,6 +459,8 @@ void init_triton_ir(py::module &&m) {
              auto loc = UnknownLoc::get(ty.getContext());
              self.addArgument(ty, loc);
            })
+      .def("add_argument_at", [](Block &self, Type ty,
+                                 Location loc) { self.addArgument(ty, loc); })
       .def("get_num_arguments", &Block::getNumArguments)
       .def("get_argument", &Block::getArgument)
       .def("dump", &Block::dump)

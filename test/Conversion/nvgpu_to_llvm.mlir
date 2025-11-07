@@ -2,30 +2,14 @@
 
 // CHECK-LABEL: @cluster_id
 llvm.func @cluster_id() -> i32 {
-  // CHECK: nvvm.read.ptx.sreg.cluster.ctaid.x
-  // CHECK: nvvm.read.ptx.sreg.cluster.ctaid.y
-  // CHECK: nvvm.read.ptx.sreg.cluster.ctaid.z
-  // CHECK: nvvm.read.ptx.sreg.cluster.nctaid.x
-  // CHECK: nvvm.read.ptx.sreg.cluster.nctaid.y
+  // CHECK: nvvm.read.ptx.sreg.cluster.ctarank
+  // CHECK-NOT: nvvm.read.ptx.sreg.cluster.ctaid.x
+  // CHECK-NOT: nvvm.read.ptx.sreg.cluster.ctaid.y
+  // CHECK-NOT: nvvm.read.ptx.sreg.cluster.ctaid.z
+  // CHECK-NOT: nvvm.read.ptx.sreg.cluster.nctaid.x
+  // CHECK-NOT: nvvm.read.ptx.sreg.cluster.nctaid.y
   %id = nvgpu.cluster_id
   llvm.return %id : i32
-}
-
-// -----
-
-// CHECK-LABEL: @ldmatrix
-llvm.func @ldmatrix(%ptr: !llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)> {
-  // CHECK: ldmatrix.sync.aligned.m8n8.x4.shared.b16 {$0, $1, $2, $3}, [$4];
-  %0 = nvgpu.ldmatrix %ptr, m8n8, 16 : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {$0, $1, $2, $3}, [$4];
-  %1 = nvgpu.ldmatrix %ptr, m8n8, 16 {trans} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
-  // CHECK: ldmatrix.sync.aligned.m16n16.x4.trans.shared.b8 {$0, $1, $2, $3}, [$4];
-  %l = nvgpu.ldmatrix %ptr, m16n16, 8 {trans} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
-  %2 = llvm.extractvalue %1[0] : !llvm.struct<(i32, i32, i32, i32)>
-  %3 = llvm.insertvalue %2, %0[0] : !llvm.struct<(i32, i32, i32, i32)>
-  %4 = llvm.extractvalue %l[0] : !llvm.struct<(i32, i32, i32, i32)>
-  %5 = llvm.insertvalue %4, %3[1] : !llvm.struct<(i32, i32, i32, i32)>
-  llvm.return %5 : !llvm.struct<(i32, i32, i32, i32)>
 }
 
 // -----
@@ -70,6 +54,19 @@ llvm.func @wgmma(%desc: i64, %in: !struct_64xf32) {
   // CHECK: // wait for regs: $0,$1,$2,{{.*}},$127
   // CHECK: wgmma.wait_group.sync.aligned 0;
   %out = nvgpu.wgmma_wait_group %in {pendings = 0 : i32} : !struct_64xf32
+  llvm.return
+}
+
+// -----
+
+!struct = !llvm.struct<(f32, f32, i32, i32, f16, f16)>
+
+// CHECK-LABEL: @wgmma_wait
+llvm.func @wgmma_wait(%in: !struct) {
+  // CHECK: // wait for regs: $0,$1,$2,$3,$4,$5
+  // CHECK: wgmma.wait_group.sync.aligned 0;
+  // CHECK: "=f,=f,=r,=r,=h,=h,0,1,2,3,4,5"
+  %out = nvgpu.wgmma_wait_group %in {pendings = 0 : i32} : !struct
   llvm.return
 }
 
