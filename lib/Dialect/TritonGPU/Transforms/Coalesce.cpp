@@ -56,7 +56,7 @@ gpuCTALayoutProvider(RankedTensorType ref) {
 }
 
 static SmallVector<int64_t>
-gpuShapeProvider(RankedTensorType ref) {
+gpuShapeProvider(RankedTensorType ref, triton::gpu::CTALayoutAttr ctaLayout) {
   return triton::gpu::getShapePerCTA(ref);
 }
 

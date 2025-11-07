@@ -7,7 +7,7 @@ using CTALayoutProvider =
       llvm::function_ref<triton::gpu::CTALayoutAttr(RankedTensorType refType)>;
 
 using ShapeProvider =
-      llvm::function_ref<SmallVector<int64_t>(RankedTensorType refType)>;
+      llvm::function_ref<SmallVector<int64_t>(RankedTensorType refType, triton::gpu::CTALayoutAttr ctaLayout)>;
 
 void setCoalescedEncoding(MLIRContext *context, 
     ModuleAxisInfoAnalysis &axisInfoAnalysis, 
