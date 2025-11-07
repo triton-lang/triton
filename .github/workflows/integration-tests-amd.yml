@@ -92,6 +92,10 @@ jobs:
         run: |
           export CC=/usr/bin/clang
           export CXX=/usr/bin/clang++
+          if [ "${{ matrix.runner[0] }}" == "amd-gfx950" ]; then
+              sudo apt-get update
+              suod apt-get install clang -y
+          fi
       - name: Install Triton
         id: amd-install-triton
         run: |
