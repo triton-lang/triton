@@ -1,9 +1,9 @@
 #ifndef TRITON_DIALECT_GLUON_TRANSFORMS_INFERLAYOUTUTILS_H_
 #define TRITON_DIALECT_GLUON_TRANSFORMS_INFERLAYOUTUTILS_H_
 
-#include "mlir/Support/LLVM.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Support/LLVM.h"
 
 namespace mlir::triton::gluon {
 
