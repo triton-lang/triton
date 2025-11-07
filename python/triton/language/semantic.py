@@ -1289,6 +1289,7 @@ class TritonSemantic(Generic[TensorTy]):
         if ptr.type.is_const() or ptr.type.scalar.is_const():
             raise ValueError("Cannot store to a constant pointer")
 
+        ptr, val = self.broadcast_impl_value(ptr, val)
         if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
             # Store by a block pointer: `pointer_type<block_type<>>`
             return self._store_block_pointer(ptr, val, mask, boundary_check, cache, eviction)
