@@ -17,6 +17,8 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <string>
+#include <unordered_map>
 
 namespace py = pybind11;
 
@@ -100,77 +102,25 @@ void init_triton_passes_ttgpuir(py::module &&m) {
 }
 
 void init_plugin_passes(py::module &&m) {
-  static std::vector<const char *> passNames;
-
   std::string filename =
       mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
   if (filename.empty())
     return;
 
-  std::string error;
-  auto library =
-      llvm::sys::DynamicLibrary::getPermanentLibrary(filename.c_str(), &error);
+  TritonPlugin TP(filename);
+  std::vector<const char *> passNames;
+  if (auto Err = TP.getPassHandles(passNames))
+    throw TP.err2exp(Err.takeError());
 
-  if (!library.isValid()) {
-    llvm::errs() << "Failed to load plugin library: " << error << "\n";
-    throw std::runtime_error("Failed to load plugin library");
-  }
-
-  intptr_t getDetailsFn =
-      (intptr_t)library.getAddressOfSymbol("tritonEnumeratePluginPasses");
-  if (!getDetailsFn) {
-    llvm::errs() << "Failed to get symbol: " << error << "\n";
-    throw std::runtime_error("Failed to get symbol");
-  }
-
-  std::function<TritonPluginResult(uint32_t *, const char **)>
-      tritonEnumeratePluginPasses =
-          reinterpret_cast<TritonPluginResult (*)(uint32_t *, const char **)>(
-              getDetailsFn);
-
-  uint32_t passCount = 0;
-  tritonEnumeratePluginPasses(&passCount, nullptr);
-
-  if (passCount == 0)
-    return;
-
-  passNames.clear();
-  passNames.resize(passCount);
-  tritonEnumeratePluginPasses(&passCount, passNames.data());
-
-  for (unsigned i = 0; i < passCount; ++i) {
+  for (unsigned i = 0; i < passNames.size(); ++i) {
     const char *passName = passNames.data()[i];
 
     m.def(passName, [passName](mlir ::PassManager &pm) {
       std::string filename =
           mlir::triton::tools::getStrEnv("TRITON_PASS_PLUGIN_PATH");
-      if (filename.empty())
-        return;
-
-      std::string error;
-      auto library = llvm::sys::DynamicLibrary::getPermanentLibrary(
-          filename.c_str(), &error);
-
-      if (!library.isValid()) {
-        llvm::errs() << "Failed to load plugin library: " << error << "\n";
-        throw std::runtime_error("Failed to load plugin library");
-      }
-
-      intptr_t getDetailsFn =
-          (intptr_t)library.getAddressOfSymbol("tritonAddPluginPass");
-      if (!getDetailsFn) {
-        llvm::errs() << "Failed to get symbol: " << error << "\n";
-        throw std::runtime_error("Failed to get symbol");
-      }
-
-      std::function<TritonPluginResult(mlir::PassManager *, const char *)>
-          createPluginPass = reinterpret_cast<TritonPluginResult (*)(
-              mlir::PassManager *, const char *)>(getDetailsFn);
-      if (TritonPluginResult::TP_SUCCESS != createPluginPass(&pm, passName)) {
-        llvm::errs() << "Failed to add plugin pass to pass manager: "
-                     << passName << "\n";
-        throw std::runtime_error("Failed to add plugin pass to pass manager");
-      }
+      TritonPlugin TP(filename);
+      if (auto Err = TP.addPass(&pm, passName))
+        throw TP.err2exp(Err.takeError());
     });
   }
 }
