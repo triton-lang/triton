@@ -215,10 +215,12 @@ public:
     // - s_waitcnt specifies how many operations to VMEM/LDS can be outstanding
     //   when the instruction completes.
     //   In this case we require 0 outstanding LDS operations
+    //   amdgpu::MemoryCounterWaitOp will lower s_waitcnt
     // - s_barrier syncronizes the execution for the CTA
-    constexpr int32_t ldsOnlyBits = ~(0x1f << 8);
-    Location loc = op->getLoc();
-    ROCDL::SWaitcntOp::create(rewriter, loc, ldsOnlyBits);
+    auto dsAttr = rewriter.getI32IntegerAttr(0);
+    rewriter.create<amdgpu::MemoryCounterWaitOp>(
+        op->getLoc(), /* load= */ nullptr, /* store= */ nullptr,
+        /* ds= */ dsAttr, /* exp= */ nullptr);
     rewriter.replaceOpWithNewOp<ROCDL::SBarrierOp>(op);
 
     return success();
@@ -300,6 +302,11 @@ struct MemoryCounterWaitOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto isaVersion = targetInfo.getIsaVersion();
 
+    /// If major version >= fgx12, lower  to
+    ///   * ROCDL::WaitDscntOp if ds is present
+    ///   * ROCDL::WaitLoadcntOp if load is present
+    ///   * ROCDL::WaitStorecntOp if store is present
+    ///   * ROCDL::WaitExpcntOp if exp is present
     if (isaVersion.Major >= 12) {
       Location loc = op.getLoc();
       if (std::optional<int> ds = adaptor.getDs())
@@ -318,6 +325,7 @@ struct MemoryCounterWaitOpConversion
       return success();
     }
 
+    /// Otherwise, lower to ROCDL::SWaitcntOp
     auto getVal = [](Attribute attr) -> unsigned {
       if (attr)
         return cast<IntegerAttr>(attr).getInt();
