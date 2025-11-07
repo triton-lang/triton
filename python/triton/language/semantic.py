@@ -1256,10 +1256,13 @@ class TritonSemantic(Generic[TensorTy]):
 
         # Make `mask` and `val` into the same shape as `ptr`
         if ptr.type.is_block():
+            ptr_shape = ptr.shape
             if mask is None:
-                val, ptr = self.broadcast_tensors(val, ptr)
+                ptr, val = self.broadcast_tensors(ptr, val)
             else:
-                val, ptr, mask = self.broadcast_tensors(val, ptr, mask)
+                ptr, val, mask = self.broadcast_tensors(ptr, val, mask)
+            if ptr_shape != ptr.shape:
+                raise ValueError(f"Expected pointer argument to have shape {ptr.shape} but got {ptr_shape}")
 
         ptr_ty = ptr.type.scalar
         elt_ty = ptr_ty.element_ty
