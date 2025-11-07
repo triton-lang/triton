@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <numeric>
 
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/OperationSupport.h"
@@ -572,6 +573,17 @@ static LogicalResult parseBool(AsmParser &parser, const NamedAttribute &attr,
                                bool &value, StringRef desc) {
   return parseBoolAttrValue(parser, attr.getValue(), value, desc);
 };
+
+static LogicalResult parseType(AsmParser &parser, const NamedAttribute &attr,
+                               Type &value, StringRef desc) {
+  auto typeAttr = mlir::dyn_cast<TypeAttr>(attr.getValue());
+  if (!typeAttr) {
+    parser.emitError(parser.getNameLoc(), "expected a Type in ") << desc;
+    return failure();
+  }
+  value = typeAttr.getValue();
+  return success();
+}
 
 std::optional<LinearLayout>
 parseLinearLayout(const DictionaryAttr &dict, AsmParser &parser,
@@ -1271,6 +1283,9 @@ LogicalResult AMDMfmaEncodingAttr::verify(
 //===----------------------------------------------------------------------===//
 // WMMA encoding
 //===----------------------------------------------------------------------===//
+bool AMDWmmaEncodingAttr::hasUnitTilesPerWarp() const {
+  return llvm::all_of(getTilesPerWarp(), [](int x) { return x == 1; });
+}
 
 Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
@@ -1287,6 +1302,7 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
+  SmallVector<unsigned> tilesPerWarp = {};
   SmallVector<unsigned> instrShape = getDefaultInstrShape();
 
   for (const NamedAttribute &attr : dict) {
@@ -1300,6 +1316,11 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
     }
     if (attr.getName() == "warpsPerCTA") {
       if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
+        return {};
+    }
+    if (attr.getName() == "tilesPerWarp") {
+      if (parseIntArrayAttr(parser, attr, tilesPerWarp, "tilesPerWarp")
+              .failed())
         return {};
     }
     if (attr.getName() == "CTAsPerCGA") {
@@ -1330,9 +1351,12 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
-  return parser.getChecked<AMDWmmaEncodingAttr>(parser.getContext(), version,
-                                                isTransposed, warpsPerCTA,
-                                                *CTALayout, instrShape);
+  if (tilesPerWarp.empty())
+    tilesPerWarp = SmallVector<unsigned>(instrShape.size(), 1);
+
+  return parser.getChecked<AMDWmmaEncodingAttr>(
+      parser.getContext(), version, isTransposed, warpsPerCTA, tilesPerWarp,
+      *CTALayout, instrShape);
 }
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
@@ -1344,6 +1368,10 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
 
+  auto tilesPerWarp = getTilesPerWarp();
+  if (!hasUnitTilesPerWarp())
+    printer << ", tilesPerWarp = [" << getTilesPerWarp() << "]";
+
   if (getInstrShape() != ArrayRef(getDefaultInstrShape())) {
     printer << ", instrShape = [" << getInstrShape() << "]";
   }
@@ -1353,7 +1381,8 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
 LogicalResult AMDWmmaEncodingAttr::verify(
     function_ref<mlir::InFlightDiagnostic()> emitError, unsigned version,
     bool isTransposed, llvm::ArrayRef<unsigned int> warpsPerCTA,
-    CTALayoutAttr ctaLayout, llvm::ArrayRef<unsigned> instrShape) {
+    llvm::ArrayRef<unsigned int> tilesPerWarp, CTALayoutAttr ctaLayout,
+    llvm::ArrayRef<unsigned> instrShape) {
   if (!(version >= 1 && version <= 3))
     return emitError() << "WMMA version must be in the [1, 3] range";
 
@@ -2160,7 +2189,7 @@ void AMDRotatingSharedEncodingAttr::print(AsmPrinter &printer) const {
 // TODO: there is a lot of common code with MmaEncoding here
 
 bool AMDMfmaEncodingAttr::hasUnitTilesPerWarp() const {
-  return !llvm::any_of(getTilesPerWarp(), [](int x) { return x != 1; });
+  return llvm::all_of(getTilesPerWarp(), [](int x) { return x == 1; });
 }
 
 SmallVector<int64_t>
@@ -2293,6 +2322,8 @@ AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape, int kDim,
 
   assert(operandTileShape.size() == 2);
   auto warpsPerCTA = getWarpsPerCTA();
+  auto tilesPerWarp = getTilesPerWarp();
+
   auto rank = operandShape.size();
   assert(rank == 2 || rank == 3);
   int numRepBatch =
@@ -2301,15 +2332,19 @@ AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape, int kDim,
     return {
         numRepBatch,
         std::max<int64_t>(1, operandShape[rank - 2] /
-                                 (operandTileShape[0] * warpsPerCTA[rank - 2])),
+                                 (operandTileShape[0] * tilesPerWarp[rank - 2] *
+                                  warpsPerCTA[rank - 2])) *
+            tilesPerWarp[rank - 2],
         std::max<int64_t>(1, operandShape[rank - 1] / operandTileShape[1])};
   else {
     assert(opIdx == 1);
     return {
         numRepBatch,
         std::max<int64_t>(1, operandShape[rank - 2] / operandTileShape[0]),
-        std::max<int64_t>(1, operandShape[rank - 1] / (operandTileShape[1] *
-                                                       warpsPerCTA[rank - 1]))};
+        std::max<int64_t>(1, operandShape[rank - 1] /
+                                 (operandTileShape[1] * tilesPerWarp[rank - 1] *
+                                  warpsPerCTA[rank - 1])) *
+            tilesPerWarp[rank - 1]};
   }
 }
 
@@ -2726,15 +2761,34 @@ struct TritonGPUInferLayoutInterface
         mlir::dyn_cast<triton::gpu::DotOperandEncodingAttr>(operandEncodingB);
     if (!aEncoding && !bEncoding)
       return mlir::success();
-    auto mmaAEncoding =
-        mlir::dyn_cast_or_null<NvidiaMmaEncodingAttr>(aEncoding.getParent());
-    if (mmaAEncoding && mmaAEncoding.isHopper())
-      return success();
-    // Verify that the encodings are valid.
     if (!aEncoding || !bEncoding)
       return op->emitError("mismatching encoding between A and B operands");
+    // Verify that the encodings are valid.
     if (aEncoding.getKWidth() != bEncoding.getKWidth())
       return op->emitError("mismatching kWidth between A and B operands");
+
+    // Check if we have already selected an MMA version for Nvidia. If so,
+    // validate that the encodings are correct and compatible.
+    auto mmaAEncoding =
+        dyn_cast_or_null<NvidiaMmaEncodingAttr>(aEncoding.getParent());
+    auto mmaBEncoding =
+        dyn_cast_or_null<NvidiaMmaEncodingAttr>(bEncoding.getParent());
+    auto dotOp = cast<DotOp>(op);
+    auto resEnc = dotOp.getResult().getType().getEncoding();
+    auto mmaResEncoding = dyn_cast<NvidiaMmaEncodingAttr>(resEnc);
+    if (mmaAEncoding || mmaBEncoding || mmaResEncoding) {
+      // Check that they are all set and have the same version.
+      if (!mmaAEncoding || !mmaBEncoding || !mmaResEncoding)
+        return op->emitError("mismatching MMA encoding");
+      auto mmaBEncoding = cast<NvidiaMmaEncodingAttr>(bEncoding.getParent());
+      if (mmaAEncoding.getVersionMajor() != mmaBEncoding.getVersionMajor() ||
+          mmaAEncoding.getVersionMajor() != mmaResEncoding.getVersionMajor()) {
+        return op->emitError("mismatched MMA version.");
+      }
+      // Verify that the operands are supported on the selected MMA version.
+      if (!supportMMA(dotOp, mmaResEncoding.getVersionMajor()))
+        return op->emitError("unsupported MMA version");
+    }
     return success();
   }
 
@@ -3676,6 +3730,135 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
            << " which is expected only on `module` or `tt.func` ops";
   }
 
+  // Verify that all ops in a tt.warp_specialize op have partition ids
+  if (attr.getName() == "tt.warp_specialize") {
+    if (!isa<scf::ForOp>(op)) {
+      return op->emitOpError("has unexpected attribute ")
+             << attr.getName() << " which is expected only on `scf.for` ops";
+    }
+    Operation *failedOp = nullptr;
+    op->walk([&](Operation *childOp) {
+      if (!childOp->hasAttr(kPartitionAttrName)) {
+        failedOp = childOp;
+        WalkResult::interrupt();
+      }
+    });
+    if (failedOp) {
+      return failedOp->emitOpError("does not have expected attribute ")
+             << kPartitionAttrName
+             << " which is expected on all child ops of an op with "
+                "attribute `tt.warp_specialize`";
+    }
+  }
+
+  // Verify that partition id lists are non-empty, sorted and have no duplicates
+  auto verifyPartitionIds =
+      [&](const ArrayRef<int> &partitionIds) -> LogicalResult {
+    SetVector<int> idSet;
+    for (auto id : partitionIds) {
+      if (idSet.contains(id))
+        return op->emitOpError("has duplicated partition ids in attribute ")
+               << attr.getName();
+      idSet.insert(id);
+    }
+    if (idSet.empty())
+      return op->emitOpError("has no partition ids in attribute ")
+             << attr.getName();
+    auto ids = idSet.takeVector();
+    SmallVector<int> sortedIds(ids.begin(), ids.end());
+    std::sort(sortedIds.begin(), sortedIds.end());
+    if (ids != sortedIds)
+      return op->emitOpError("partition ids not in sorted order in attribute ")
+             << attr.getName();
+    return success();
+  };
+
+  if (attr.getName() == kPartitionAttrName) {
+    auto result = verifyPartitionIds(
+        cast<DenseI32ArrayAttr>(attr.getValue()).asArrayRef());
+    if (failed(result))
+      return result;
+  }
+  if (attr.getName() == kPartitionOutputsAttrName) {
+    auto arrayAttr = cast<ArrayAttr>(attr.getValue());
+    for (auto idx = 0; idx < arrayAttr.size(); idx++) {
+      auto result = verifyPartitionIds(
+          cast<DenseI32ArrayAttr>(arrayAttr[idx]).asArrayRef());
+      if (failed(result))
+        return result;
+    }
+  }
+
+  // Verify that op partitions include partitions of all child ops
+  if (attr.getName() == kPartitionAttrName && op->getNumRegions() != 0) {
+    SetVector<int> expectedIds;
+    for (auto &region : op->getRegions()) {
+      for (auto &block : region.getBlocks()) {
+        for (auto &childOp : block.getOperations()) {
+          if (isa<scf::YieldOp, ub::PoisonOp>(childOp)) {
+            // yield ops and ub.poison do not need partition ids
+            continue;
+          }
+          if (!childOp.hasAttr(kPartitionAttrName))
+            return childOp.emitOpError("does not have expected attribute ")
+                   << kPartitionAttrName
+                   << " which is expected for ops whose parent has partitions";
+          auto ids = getPartitionIds(&childOp);
+          expectedIds.insert(ids.begin(), ids.end());
+        }
+      }
+    }
+    auto partitionIds = getPartitionIds(op);
+    for (auto id : expectedIds) {
+      if (!partitionIds.contains(id)) {
+        return op->emitOpError("partition ids in attr ")
+               << attr.getName()
+               << " does not contain partition ids of all child ops";
+      }
+    }
+  }
+
+  if (attr.getName() == kPartitionOutputsAttrName) {
+    if (!isa<scf::ForOp, scf::IfOp, triton::ReduceOp>(op))
+      return op->emitOpError("has unexpected attribute ") << attr.getName();
+
+    // Verify that number of output partitions matches number of For/If results
+    size_t numResults = 0;
+    if (isa<scf::ForOp>(op)) {
+      numResults = cast<scf::ForOp>(op).getResults().size();
+    } else if (isa<scf::IfOp>(op)) {
+      numResults = cast<scf::IfOp>(op).getResults().size();
+    } else {
+      numResults = cast<triton::ReduceOp>(op).getResults().size();
+    }
+
+    if (cast<ArrayAttr>(attr.getValue()).size() != numResults) {
+      return op->emitOpError("does not have expected number of output "
+                             "partition sets in attr ")
+             << attr.getName() << "; should match number of results";
+    }
+
+    // Verify that union of op output partitions is a subset of op partitions
+    if (!op->hasAttr(kPartitionAttrName))
+      return op->emitOpError("does not have expected attribute ")
+             << kPartitionAttrName << " which is expected for ops with attr "
+             << kPartitionOutputsAttrName;
+    auto partitionIds = getPartitionIds(op);
+
+    SetVector<int> outputPartitionIdsUnion;
+    for (auto outputPartitionIds : getPartitionOutputs(op)) {
+      outputPartitionIdsUnion.insert(outputPartitionIds.begin(),
+                                     outputPartitionIds.end());
+    }
+    if (!std::all_of(outputPartitionIdsUnion.begin(),
+                     outputPartitionIdsUnion.end(),
+                     [&](int id) { return partitionIds.contains(id); })) {
+      return op->emitOpError("partition ids in attr ")
+             << kPartitionAttrName
+             << " must be the union of all partition ids in " << attr.getName();
+    }
+  }
+
   return success();
 }
 
@@ -3775,4 +3958,43 @@ LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
   assert(product(srcTy.getShape()) == product(dstShape));
   auto dst = reshapeLayout(ctx, src, dstShape);
   return dst;
+}
+
+SetVector<int> triton::gpu::getPartitionIds(Operation *op) {
+  auto attrs = op->getAttr(kPartitionAttrName);
+  SmallVector<int> partitionIds;
+  for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
+    partitionIds.push_back(id);
+  }
+  std::sort(partitionIds.begin(), partitionIds.end());
+  return SetVector<int>(partitionIds.begin(), partitionIds.end());
+}
+
+SmallVector<SetVector<int>, 4> triton::gpu::getPartitionOutputs(Operation *op) {
+  SmallVector<SetVector<int>, 4> partitionOutputsIds;
+  if (op->getNumResults() == 0) {
+    return partitionOutputsIds;
+  }
+  auto arrayAttr = cast<ArrayAttr>(op->getAttr(kPartitionOutputsAttrName));
+  for (auto attr : arrayAttr) {
+    auto ids = cast<DenseI32ArrayAttr>(attr).asArrayRef();
+    partitionOutputsIds.push_back(SetVector<int>(ids.begin(), ids.end()));
+  }
+  return partitionOutputsIds;
+}
+
+SetVector<int> triton::gpu::getPartitionIds(OpOperand *use) {
+  auto owner = use->getOwner();
+  if (isa<scf::YieldOp>(owner)) {
+    return getPartitionOutputs(owner->getParentOp())[use->getOperandNumber()];
+  } else if (scf::ForOp forOp = dyn_cast<scf::ForOp>(owner)) {
+    int idx = use->getOperandNumber() - forOp.getNumControlOperands();
+    return idx >= 0 ? getPartitionOutputs(owner)[idx] : getPartitionIds(forOp);
+  } else {
+    return getPartitionIds(owner);
+  }
+}
+
+bool triton::gpu::hasPartition(Operation *op) {
+  return op && op->hasAttr(kPartitionAttrName);
 }

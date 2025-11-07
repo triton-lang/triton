@@ -69,8 +69,8 @@ bool ttng::isOperandPipelineableBase(
     return true;
   }
   auto localAllocSrc = localAlloc.getSrc().getDefiningOp();
-  if (!isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
-          localAllocSrc)) {
+  if (!isa_and_nonnull<tt::LoadOp, tt::DescriptorLoadOp,
+                       tt::DescriptorGatherOp>(localAllocSrc)) {
     return false;
   }
   foundDef = localAllocSrc;

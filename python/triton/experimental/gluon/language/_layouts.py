@@ -9,6 +9,9 @@ def _realize_cta_layout(layout, rank):
     ctas_per_cga = layout.ctas_per_cga or [1] * rank
     cta_split_num = layout.cta_split_num or [1] * rank
     cta_order = layout.cta_order or list(reversed(range(rank)))
+    # Canonicalize CTA order to [n,n-1,...,0] if CTAsPerCGA is [1...1]. This matches logic in C++.
+    if all(num_cta == 1 for num_cta in ctas_per_cga):
+        cta_order = list(range(rank - 1, -1, -1))
     object.__setattr__(layout, "ctas_per_cga", ctas_per_cga)
     object.__setattr__(layout, "cta_split_num", cta_split_num)
     object.__setattr__(layout, "cta_order", cta_order)
@@ -308,8 +311,7 @@ def _get_shape_per_cta(shape, cta_split_num):
     shape_per_cta = shape
     if cta_split_num is not None:
         assert len(cta_split_num) == len(shape)
-        for dim in range(len(shape_per_cta)):
-            shape_per_cta[dim] /= cta_split_num[dim]
+        shape_per_cta = [shape_per_cta[dim] // cta_split_num[dim] for dim in range(len(shape_per_cta))]
     return shape_per_cta
 
 

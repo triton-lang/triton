@@ -459,7 +459,7 @@ def find_configs(occupancy, dtype, num_buffers=1):
         if acc_regs > regs:
             continue
 
-        instr_shape_n = get_instr_shape_n(BLOCK_M, BLOCK_N, num_warps).value
+        instr_shape_n = get_instr_shape_n(BLOCK_M, BLOCK_N, num_warps)
         configs.append((BLOCK_M, BLOCK_N, BLOCK_K, num_warps, instr_shape_n, occupancy))
 
     def filter_configs(configs, instr_shape_n):

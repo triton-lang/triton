@@ -35,7 +35,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
     TensorMemoryLayout,
     tensor_memory_descriptor,
     allocate_tensor_memory,
-    get_tmem_32x32b_reg_layout,
+    get_tmem_reg_layout,
     tcgen05_mma,
     tcgen05_commit,
 )
@@ -400,6 +400,7 @@ class PartitionArgs:
     SUBTILE_FACTOR: gl.constexpr
     num_warps: gl.constexpr
 
+    @gluon.constexpr_function
     def __init__(self, a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bars, load_ready_bars, acc_bufs,
                  acc_empty_bars, acc_ready_bars, SUBTILE_FACTOR, num_warps):
         self.a_desc = a_desc
@@ -412,8 +413,8 @@ class PartitionArgs:
         self.acc_bufs = acc_bufs
         self.acc_empty_bars = acc_empty_bars
         self.acc_ready_bars = acc_ready_bars
-        self.SUBTILE_FACTOR = SUBTILE_FACTOR
-        self.num_warps = num_warps
+        self.SUBTILE_FACTOR = gl.constexpr(SUBTILE_FACTOR)
+        self.num_warps = gl.constexpr(num_warps)
 
 
 # Counter abstraction for tracking barrier index and phase.
@@ -423,10 +424,11 @@ class Counter:
     phase: gl.tensor
     num_barriers: gl.constexpr
 
+    @gluon.constexpr_function
     def __init__(self, index, phase, num_barriers):
         self.index = index
         self.phase = phase
-        self.num_barriers = num_barriers
+        self.num_barriers = gl.constexpr(num_barriers)
 
     @gluon.jit
     def create(phase, num_barriers: gl.constexpr):
@@ -529,7 +531,13 @@ def matmul_epilogue_partition(p, SchedulerImpl: gl.constexpr):
     acc_empty_bars = p.acc_empty_bars
     acc_ready_bars = p.acc_ready_bars
     acc_state = Counter.create(0, p.acc_empty_bars.shape[0])
-    acc_layout: gl.constexpr = get_tmem_32x32b_reg_layout(BLOCK_M, BLOCK_N, [BLOCK_M, BLOCK_N], p.num_warps)
+    acc_tmem_layout: gl.constexpr = TensorMemoryLayout([BLOCK_M, BLOCK_N], col_stride=1)
+    acc_layout: gl.constexpr = get_tmem_reg_layout(
+        dtype,
+        (BLOCK_M, BLOCK_N),
+        acc_tmem_layout,
+        p.num_warps,
+    )
     SPLIT_N: gl.constexpr = BLOCK_N // p.SUBTILE_FACTOR
     acc_smem = gl.allocate_shared_memory(dtype, [BLOCK_M, SPLIT_N], p.c_desc.layout)
 

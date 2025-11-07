@@ -1,5 +1,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -63,24 +65,22 @@ static void expandLoops(ModuleOp moduleOp) {
   DenseSet<MaskOp> peeledMaskOps;
   auto processPeeledEpilogueOp = [&](RewriterBase &rewriter, Operation *op,
                                      bool isEpilogue) -> Operation * {
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
     if (auto predOp = dyn_cast<triton::gpu::PredicateStageOp>(op)) {
       if (isEpilogue) {
         // Return false for the predicate of the peeled iteration
         return mlir::arith::ConstantIntOp::create(
             rewriter, predOp.getLoc(), predOp.getResult().getType(), 0);
-      } else {
-        if (predOp.getStage() == predOp.getMaxStage() - 1) {
-          return mlir::arith::ConstantIntOp::create(
-              rewriter, predOp.getLoc(), predOp.getResult().getType(), 1);
-        } else {
-          OpBuilder::InsertionGuard guard(rewriter);
-          rewriter.setInsertionPoint(op);
-          return triton::emitPredicateForStage(
-                     rewriter, predOp.getIv(), predOp.getUb(), predOp.getStep(),
-                     predOp.getMaxStage(), predOp.getStage())
-              .getDefiningOp();
-        }
       }
+      if (predOp.getStage() == predOp.getMaxStage() - 1) {
+        return mlir::arith::ConstantIntOp::create(
+            rewriter, predOp.getLoc(), predOp.getResult().getType(), 1);
+      }
+      return triton::emitPredicateForStage(
+                 rewriter, predOp.getIv(), predOp.getUb(), predOp.getStep(),
+                 predOp.getMaxStage(), predOp.getStage())
+          .getDefiningOp();
     }
     if (auto maskOp = dyn_cast<triton::gpu::MaskOp>(op)) {
       if (isEpilogue) {
@@ -142,10 +142,30 @@ static void expandLoops(ModuleOp moduleOp) {
     if (customEpiloguePeeling) {
       mlir::triton::peelLoopEpilogue(forOp, processPeeledEpilogueOp);
     }
+
+    // Prune all the statically dead mask ops in the epilogue. This is a
+    // hack, ideally we should do it for all the mask ops, but it is incorrect
+    // if we have speculatively executed async cp operations that will store to
+    // shmem even if the mask is false.
+    for (auto maskOp : peeledMaskOps) {
+      rewriter.setInsertionPoint(maskOp);
+      if (isConstantIntValue(maskOp.getPred(), 0)) {
+        SmallVector<Value> results;
+        for (auto result : maskOp->getResults()) {
+          auto poisonOp = mlir::ub::PoisonOp::create(rewriter, maskOp->getLoc(),
+                                                     result.getType());
+          results.push_back(poisonOp);
+        }
+        maskOp->replaceAllUsesWith(results);
+        maskOp->erase();
+      }
+    }
+    peeledMaskOps.clear();
   }
   assert(moduleOp.getOps<triton::gpu::PredicateStageOp>().empty() &&
          "PredicateStageOp should be resolved after the pipeline expansion");
-  resolveMaskOp(moduleOp, peeledMaskOps);
+  assert(verify(moduleOp).succeeded());
+  resolveMaskOp(moduleOp);
 }
 
 struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {

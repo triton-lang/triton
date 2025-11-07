@@ -33,11 +33,10 @@ void peelLoopEpilogue(
   IRMapping map;
   map.map(forOp.getRegionIterArgs(), forOp.getResults());
   map.map(forOp.getInductionVar(), lastIV);
-  auto ifOp = scf::IfOp::create(rewriter, loc, forOp.getResultTypes(), cond,
-                                /*hasElse=*/true);
-  ifOp.getThenRegion().front().erase();
+  auto ifOp = scf::IfOp::create(rewriter, loc, forOp.getResultTypes(), cond);
   forOp.getBodyRegion().cloneInto(&ifOp.getThenRegion(), map);
-  rewriter.setInsertionPointToStart(&ifOp.getElseRegion().front());
+  auto newElseBlock = rewriter.createBlock(&ifOp.getElseRegion());
+  rewriter.setInsertionPointToStart(newElseBlock);
   scf::YieldOp::create(rewriter, loc, forOp.getResults());
 
   forOp->replaceUsesWithIf(ifOp, [&](OpOperand &operand) {

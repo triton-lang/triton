@@ -1,3 +1,4 @@
+import itertools
 from functools import partial
 
 import pytest
@@ -23,7 +24,14 @@ def dtype_str_to_torch(dtype_str: str) -> torch.dtype:
 @pytest.mark.parametrize("dst_dtype", ["float16", "bfloat16", "float32"])
 def test_mxfp4_rounding_cases(dst_dtype, device):
     dst_dtype = dtype_str_to_torch(dst_dtype)
-    x = torch.tensor([6, 0, 0.24, 0.25, 0.75, 0.99, 1.2, 1.3, 1.25, -1.25]).to(device).bfloat16().view(1, -1, 1)
+    two_point_five_plus_ulp = {
+        torch.bfloat16: 0.251953125,
+        torch.float16: 0.250244140625,
+        torch.float32: 0.2500000298023223877,
+    }[dst_dtype]
+    # Construct an example where scale is 1 (when max value is 6.0, the maximum value of e2m1)
+    x = torch.tensor([6, 0, 0.24, 0.25, 0.75, 0.99, 1.2, 1.3, -1.25, two_point_five_plus_ulp], dtype=dst_dtype,
+                     device=device).view(1, -1, 1)
     quant, scale = downcast_to_mxfp(x, torch.uint8, axis=1)
     dequant = upcast_from_mxfp(quant, scale, dst_dtype, axis=1)
     # Tie-breaking cases (RTNE):
@@ -31,11 +39,10 @@ def test_mxfp4_rounding_cases(dst_dtype, device):
     #   (binary LSB of target is 0). Rounding away from zero would pick 0.5; towards zero also picks 0.0.
     # - 0.75 is halfway between 0.5 and 1.0. RTNE selects the even value 1.0 (LSB 0). Away-from-zero would pick 1.0;
     #   towards-zero would pick 0.5.
-    # - 1.25 is halfway between 1.0 and 1.5. RTNE selects the even value 1.0. Away-from-zero would pick 1.5;
-    #   towards-zero would pick 1.0.
     # - -1.25 is halfway between -1.0 and -1.5. RTNE selects -1.0 (even). Away-from-zero would pick -1.5;
     #   towards-zero would pick -1.0.
-    assert dequant.flatten().tolist() == [6, 0, 0, 0.0, 1.0, 1.0, 1.0, 1.5, 1.0, -1.0], f"{dequant=}"
+    # - two_point_five_plus_ulp is slightly bigger than 0.25, so it rounds to 0.5.
+    assert dequant.flatten().tolist() == [6, 0, 0, 0.0, 1.0, 1.0, 1.0, 1.5, -1.0, 0.5], f"{dequant=}"
 
     quant_torch, scale_torch = downcast_to_mxfp_torch(x, torch.uint8, axis=1)
     assert_equal(quant_torch, quant)
@@ -153,6 +160,7 @@ def test_mxfp_casting(
 ):
     if "float8" in quant_dtype and (is_cuda() and torch.cuda.get_device_capability()[0] < 9):
         pytest.skip("Float8 not tested on A100")
+    torch.manual_seed(0)
     quant_torch_type = dtype_str_to_torch(quant_dtype)
     dequant_torch_type = dtype_str_to_torch(dequant_dtype)
     # Generate random input tensor that is contiguous once axis is the last dimension
@@ -220,15 +228,32 @@ if __name__ == "__main__":
     ]
 
     table = []
-    for shape, dtype in tests:
-        mxfp8_q_bw = _benchmark_mxfp_quantization(shape, dtype, torch.float8_e4m3fn)
-        mxfp8_dq_bw = _benchmark_mxfp_dequantization(shape, torch.float8_e4m3fn, dtype)
-        mxfp4_q_bw = _benchmark_mxfp_quantization(shape, dtype, torch.uint8)
-        mxfp4_dq_bw = _benchmark_mxfp_dequantization(shape, torch.uint8, dtype)
-        table.append(shape + (dtype, mxfp8_q_bw, mxfp8_dq_bw, mxfp4_q_bw, mxfp4_dq_bw))
+    shapes = [(1024, 8192), (4096, 8192)]
+    source_dtypes = [torch.bfloat16, torch.float16]
+    for shape, quant_dtype in itertools.product(shapes, [torch.float8_e4m3fn, torch.uint8]):
+        results = [*shape, quant_dtype]
+        for src_dtype in source_dtypes:
+            results.append(_benchmark_mxfp_quantization(shape, src_dtype, quant_dtype))
+        for src_dtype in source_dtypes:
+            results.append(_benchmark_mxfp_dequantization(shape, quant_dtype, src_dtype))
+        table.append(results)
 
     from tabulate import tabulate
-    print(
-        tabulate(
-            table,
-            headers=["M", "N", "dtype", "mxfp8_quant_bw", "mxfp8_dequant_bw", "mxfp4_quant_bw", "mxfp4_dequant_bw"]))
+
+    headers = [
+        "M",
+        "N",
+        "quant_dtype",
+        "quant_bw_bfloat16",
+        "quant_bw_float16",
+        "dequant_bw_bfloat16",
+        "dequant_bw_float16",
+    ]
+    mxfp8_rows = [row for row in table if row[2] == torch.float8_e4m3fn]
+    mxfp4_rows = [row for row in table if row[2] == torch.uint8]
+
+    print("MXFP8 (e4m3fn):")
+    print(tabulate(mxfp8_rows, headers=headers))
+    print()
+    print("MXFP4 (e2m1):")
+    print(tabulate(mxfp4_rows, headers=headers))
