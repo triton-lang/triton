@@ -75,9 +75,8 @@ def test_triton(tmp_path: pathlib.Path):
     assert data[0]["children"][1]["frame"]["name"] == "test2"
 
 
+@pytest.mark.skipif(is_hip(), reason="Currently broken after updating to ROCm 7")
 def test_cudagraph(tmp_path: pathlib.Path):
-    if is_hip():
-        pytest.skip("To debug later")
     stream = torch.cuda.Stream()
     torch.cuda.set_stream(stream)
 
