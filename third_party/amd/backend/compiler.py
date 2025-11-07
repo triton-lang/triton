@@ -450,6 +450,27 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_amdgcn(src, metadata, options):
+
+        def _dump_mir_if_requested():
+            """
+            Dump MIR if `TRITON_DUMP_MIR` environment variable (which contains path to dump MIR file) is set.
+            """
+            import os
+            dump_mir_path = os.environ.get('TRITON_DUMP_MIR')
+
+            if not dump_mir_path:
+                return
+
+            # Generate MIR
+            mir = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion)
+
+            # Ensure directory exists
+            Path(dump_mir_path).parent.mkdir(parents=True, exist_ok=True)
+
+            # Write MIR to file
+            with open(dump_mir_path, 'w') as f:
+                f.write(mir)
+
         # Find kernel names (there should only be one)
         # We get the name at the last possible step to accommodate `triton.compile`
         # on user-provided LLVM
