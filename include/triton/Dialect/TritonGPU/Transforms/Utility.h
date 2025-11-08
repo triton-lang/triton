@@ -281,6 +281,8 @@ bool comesFromLoadOrBlockArg(Value v);
 // `resultIdx`th result.
 SmallVector<Value> getTiedArgs(Operation *op, int resultIdx);
 
+// Get a boolean if the Value is an arith::ConstantOp
+std::optional<bool> getBoolFromConstant(Value cst);
 } // namespace mlir::triton
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

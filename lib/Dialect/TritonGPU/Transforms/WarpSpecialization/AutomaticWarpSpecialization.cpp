@@ -5,6 +5,8 @@
 #include "mlir/Transforms/Passes.h"
 #include "third_party/nvidia/include/Dialect/NVWS/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
@@ -48,4 +50,26 @@ void AutomaticWarpSpecialization::runOnOperation() {
   pm.addPass(createTritonGPUScheduleLoops());
   if (failed(runPipeline(pm, getOperation())))
     return signalPassFailure();
+
+  {
+    // Multi-buffer TMA descriptors. We cannot rely on SWP to do it, to support
+    // desc updates in nested loops.
+    SetVector<scf::ForOp> descUpdateLoops;
+    getOperation().walk([&](scf::ForOp loop) {
+      if (loop->hasAttr(kWarpSpecializeAttrName)) {
+        loop.walk([&](triton::MakeTensorDescOp op) {
+          if (auto forOp = op->getParentOfType<scf::ForOp>()) {
+            descUpdateLoops.insert(forOp);
+          }
+        });
+      }
+    });
+
+    const int numDescs = numStages + 1;
+    triton::CoarseSchedule schedule(numDescs);
+
+    for (auto loop : descUpdateLoops) {
+      triton::lowerTMADescriptors(loop, schedule);
+    }
+  }
 }

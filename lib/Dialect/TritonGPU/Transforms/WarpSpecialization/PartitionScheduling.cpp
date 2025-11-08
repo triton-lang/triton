@@ -1,7 +1,17 @@
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Dominance.h"
+#include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/InferIntRangeInterface.h"
+#include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
 #include "mlir/Support/WalkResult.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
@@ -10,6 +20,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <optional>
+#include <utility>
 
 using namespace mlir;
 using namespace triton;
@@ -157,92 +168,85 @@ static void scheduleUsers(scf::ForOp loop, PartitionSet &partitions,
   }
 }
 
-// Given a partitioning scheme, determine an initial schedule by performing a
-// first-order partition assignment to the operations in the scheme and its
-// users and/or dependencies. This sets up the initial partitioning of the ops.
-static std::optional<PartitionSet> getInitialPartitions(scf::ForOp loop) {
-  // Check for an existing partition set.
-  if (FailureOr<PartitionSet> partitionsOr = PartitionSet::fromLoop(loop);
-      succeeded(partitionsOr))
-    return {std::move(*partitionsOr)};
-  // Start by creating the default partition, a partition for for all loads, and
-  // a partition for all MMAs.
-  PartitionSet partitions;
-  Partition *defaultPartition = partitions.addPartition(0);
-  Partition *mmaPartition = partitions.addPartition(1);
-  Partition *loadPartition = partitions.addPartition(0);
-
-  // Find loads to pipeline.
+SetVector<Partition *> getInitialPartitions(scf::ForOp loop,
+                                            PartitionSet &partitions,
+                                            Partition *defaultPartition,
+                                            Partition *mmaPartition,
+                                            Partition *loadPartition) {
   SmallVector<Operation *> loadsAndAllocs;
-  for (Operation &op : loop.getOps()) {
-    // Only TMA loads are supported at the moment.
-    if (!isa<DescriptorLoadOp, DescriptorGatherOp>(op))
-      continue;
-    setPartition(&op, loadPartition);
-    loadsAndAllocs.push_back(&op);
-
-    // Local alloc users of the load with matching encoding will cause the
-    // underlying buffer to be pass through. Keep track of them.
-    SharedEncodingTrait sharedEnc = getSharedEncoding(&op);
-    for (Operation *user : op.getUsers()) {
-      if (auto alloc = dyn_cast<LocalAllocOp>(user)) {
-        if (sharedEnc == alloc.getType().getEncoding()) {
-          setPartition(alloc, loadPartition);
-          loadsAndAllocs.push_back(alloc);
-        }
-      } else if (isa<ttng::TMEMAllocOp>(user)) {
-        setPartition(user, loadPartition);
-        loadsAndAllocs.push_back(user);
-      }
-    }
-  }
-
-  // Find MMAs to pipeline.
   SmallVector<ttng::MMAv5OpInterface> mmas;
-  for (auto mmaOp : loop.getOps<ttng::MMAv5OpInterface>()) {
-    setPartition(mmaOp, mmaPartition);
-    mmas.push_back(mmaOp);
+  SetVector<Partition *> userPartitions;
+  userPartitions.insert(defaultPartition);
 
-    // If the store is unrelated to the use of the MMA, then it gets placed in
-    // the MMA partition.
-    auto storeOp = dyn_cast_or_null<ttng::TMEMStoreOp>(
-        findDefOpInLoop(loop, mmaOp.getAccDep()));
-    if (!ttng::hasAccReadModifyWrite(mmaOp, loop) && storeOp &&
-        loop.isDefinedOutsideOfLoop(storeOp.getSrc()))
-      setPartition(storeOp, mmaPartition);
-
-    // Look for views into the operands.
-    SmallVector<Operation *> operandViews;
-    for (Value operand : mmaOp->getOperands()) {
-      if (Operation *defOp = operand.getDefiningOp())
-        operandViews.push_back(defOp);
-    }
-    while (!operandViews.empty()) {
-      Operation *op = operandViews.pop_back_val();
-      if (!op->hasTrait<OpTrait::MemDescViewTrait>())
-        continue;
-
-      // Duplicate the op if necessary to ensure that the MMA partition is the
-      // only user.
-      if (!llvm::all_of(op->getUsers(), [&](Operation *user) {
-            return mmaPartition->hasOp(user);
-          })) {
-        Operation *newOp = OpBuilder(op).clone(*op);
-        op->replaceUsesWithIf(newOp->getResults(), [&](OpOperand &use) {
-          return mmaPartition->hasOp(use.getOwner());
-        });
-        op = newOp;
+  for (Operation &op : loop.getOps()) {
+    if (auto innerFor = dyn_cast<scf::ForOp>(op)) {
+      for (auto userPartition :
+           getInitialPartitions(innerFor, partitions, defaultPartition,
+                                mmaPartition, loadPartition)) {
+        userPartitions.insert(userPartition);
       }
+    } else if (isa<DescriptorLoadOp, DescriptorGatherOp>(op)) {
+      setPartition(&op, loadPartition);
+      loadsAndAllocs.push_back(&op);
+      // Local alloc users of the load with matching encoding will cause the
+      // underlying buffer to be pass through. Keep track of them.
+      SharedEncodingTrait sharedEnc = getSharedEncoding(&op);
+      for (Operation *user : op.getUsers()) {
+        if (auto alloc = dyn_cast<LocalAllocOp>(user)) {
+          if (sharedEnc == alloc.getType().getEncoding()) {
+            setPartition(alloc, loadPartition);
+            loadsAndAllocs.push_back(alloc);
+          }
+        } else if (isa<ttng::TMEMAllocOp>(user)) {
+          setPartition(user, loadPartition);
+          loadsAndAllocs.push_back(user);
+        }
+      }
+    } else if (auto mmaOp = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+      setPartition(mmaOp, mmaPartition);
+      mmas.push_back(mmaOp);
 
-      setPartition(op, mmaPartition);
-      if (Operation *defOp = op->getOperand(0).getDefiningOp())
-        operandViews.push_back(defOp);
+      // If the store is unrelated to the use of the MMA, then it gets placed in
+      // the MMA partition.
+      auto storeOp = dyn_cast_or_null<ttng::TMEMStoreOp>(
+          findDefOpInLoop(loop, mmaOp.getAccDep()));
+      if (!ttng::hasAccReadModifyWrite(mmaOp, loop) && storeOp &&
+          loop.isDefinedOutsideOfLoop(storeOp.getSrc()))
+        setPartition(storeOp, mmaPartition);
+
+      // Look for views into the operands.
+      SmallVector<Operation *> operandViews;
+      for (Value operand : mmaOp->getOperands()) {
+        if (Operation *defOp = operand.getDefiningOp())
+          operandViews.push_back(defOp);
+      }
+      while (!operandViews.empty()) {
+        Operation *op = operandViews.pop_back_val();
+        if (!op->hasTrait<OpTrait::MemDescViewTrait>())
+          continue;
+
+        // Duplicate the op if necessary to ensure that the MMA partition is the
+        // only user.
+        if (!llvm::all_of(op->getUsers(), [&](Operation *user) {
+              return mmaPartition->hasOp(user);
+            })) {
+          Operation *newOp = OpBuilder(op).clone(*op);
+          op->replaceUsesWithIf(newOp->getResults(), [&](OpOperand &use) {
+            return mmaPartition->hasOp(use.getOwner());
+          });
+          op = newOp;
+        }
+
+        setPartition(op, mmaPartition);
+        if (Operation *defOp = op->getOperand(0).getDefiningOp())
+          operandViews.push_back(defOp);
+      }
     }
   }
 
-  // If there are no loads or MMAs, don't warp specialize.
-  if (loadsAndAllocs.empty() && mmas.empty())
-    return std::nullopt;
+  if (loadPartition->empty() && mmaPartition->empty()) {
+    return {};
+  }
 
   // Propagate defs of exp.
   for (Operation &op : loop.getOps()) {
@@ -263,13 +267,79 @@ static std::optional<PartitionSet> getInitialPartitions(scf::ForOp loop) {
   for (Operation *loadOrAlloc : loadsAndAllocs)
     scheduleUsers(loop, partitions, defaultPartition, loadOrAlloc);
 
-  SmallVector<Partition *> userPartitions{defaultPartition};
   while (userPartitions.size() < mmas.size()) {
-    userPartitions.push_back(partitions.addPartition(userPartitions.size()));
+    userPartitions.insert(partitions.addPartition(userPartitions.size()));
   }
   for (auto [mmaOp, userPartition] :
        llvm::reverse(llvm::zip(mmas, userPartitions))) {
     scheduleUsers(loop, partitions, userPartition, mmaOp);
+  }
+
+  // Annotate remaining unannotated tmem loads, for example those outside of the
+  // inner loop
+  for (ttng::TMEMLoadOp tmemLoad : loop.getOps<ttng::TMEMLoadOp>()) {
+    if (hasPartition(tmemLoad)) {
+      continue;
+    }
+
+    if (userPartitions.size() == 1) {
+      setPartition(tmemLoad, defaultPartition);
+    } else {
+      auto tmem = tmemLoad.getSrc();
+      SetVector<Partition *> tmemUserPartitions;
+      for (auto user : tmem.getUsers()) {
+        if (!hasPartition(user)) {
+          continue;
+        }
+        if (auto partition = partitions.getPartition(user);
+            partition != mmaPartition) {
+          tmemUserPartitions.insert(partition);
+        }
+      }
+      // TMEM should only used by MMA and one user partition
+      assert(tmemUserPartitions.size() == 1);
+      setPartition(tmemLoad, tmemUserPartitions.front());
+    }
+  }
+
+  // Annotate the inner loop with its body partitions
+  if (!loop->hasAttr(kWarpSpecializeAttrName)) {
+    SetVector<Partition *> bodyPartitons;
+    for (Operation &op : loop.getOps()) {
+      if (hasPartition(&op)) {
+        for (auto id : getPartitionIds(&op)) {
+          bodyPartitons.insert(partitions.getPartition(id));
+        }
+      }
+    }
+
+    setPartition(loop, bodyPartitons);
+  }
+
+  return userPartitions;
+}
+
+// Given a partitioning scheme, determine an initial schedule by performing a
+// first-order partition assignment to the operations in the scheme and its
+// users and/or dependencies. This sets up the initial partitioning of the ops.
+static std::optional<PartitionSet> getInitialPartitions(scf::ForOp loop) {
+  // Check for an existing partition set.
+  if (FailureOr<PartitionSet> partitionsOr = PartitionSet::fromLoop(loop);
+      succeeded(partitionsOr))
+    return {std::move(*partitionsOr)};
+  // Start by creating the default partition, a partition for for all loads, and
+  // a partition for all MMAs.
+  PartitionSet partitions;
+  Partition *defaultPartition = partitions.addPartition(0);
+  Partition *mmaPartition = partitions.addPartition(1);
+  Partition *loadPartition = partitions.addPartition(0);
+
+  getInitialPartitions(loop, partitions, defaultPartition, mmaPartition,
+                       loadPartition);
+
+  // If there are no loads or MMAs, don't warp specialize.
+  if (loadPartition->empty() && mmaPartition->empty()) {
+    return std::nullopt;
   }
 
   return partitions;
@@ -334,6 +404,12 @@ struct OpClusters : public llvm::MapVector<Operation *, OpCluster *> {
 // forming contiguous clusters from the unassigned operations and then deciding
 // what to do with the operations in that cluster.
 void propagatePartitions(scf::ForOp loop, PartitionSet &partitions) {
+  for (Operation &op : loop.getOps()) {
+    if (auto innerFor = dyn_cast<scf::ForOp>(op)) {
+      propagatePartitions(innerFor, partitions);
+    }
+  }
+
   OpClusters opClusters;
 
   for (Partition &partition : partitions.getPartitions()) {
@@ -513,6 +589,12 @@ void rematerializeBroadcasts(PartitionSet &partitions, OpOperand *use) {
 }
 
 void optimizePartitions(scf::ForOp loop, PartitionSet &partitions) {
+  for (Operation &op : loop.getOps()) {
+    if (auto innerFor = dyn_cast<scf::ForOp>(op)) {
+      optimizePartitions(innerFor, partitions);
+    }
+  }
+
   for (Partition &partition : partitions.getPartitions()) {
     SmallVector<OpOperand *> uses;
     partition.iterateOutputs(loop, [&](Operation *defOp, OpOperand &use) {
@@ -758,6 +840,7 @@ SmallVector<SetVector<int>> getYieldPartitions(Block *block) {
   SmallVector<SetVector<int>> yieldPartitions(terminator->getNumOperands());
   for (auto &opnd : terminator->getOpOperands()) {
     auto op = opnd.get().getDefiningOp();
+    std::optional<int> pos;
     if (auto forOp = dyn_cast<scf::ForOp>(block->getParentOp());
         forOp && isa<AsyncTokenType>(opnd.get().getType())) {
       // Heuristic: when for-op yields an async-token, the output partition of
@@ -765,8 +848,16 @@ SmallVector<SetVector<int>> getYieldPartitions(Block *block) {
       // At the moment token must have only one use
       auto arg = forOp.getRegionIterArg(opnd.getOperandNumber());
       assert(arg.hasOneUse());
-      op = arg.getUses().begin()->getOwner();
-      assert(op);
+      auto tokenUse = arg.getUses().begin();
+      op = tokenUse->getOwner();
+      if (auto innerFor = dyn_cast<scf::ForOp>(op)) {
+        pos = tokenUse->getOperandNumber() - innerFor.getNumControlOperands();
+      }
+    } else if (op && op->getNumRegions() > 0) {
+      // if producer is a regioned op, get positional result index
+      auto it = llvm::find(op->getResults(), opnd.get());
+      assert(it != op->getResults().end());
+      pos = it - op->getResults().begin();
     }
     if (!op)
       continue;
@@ -791,6 +882,7 @@ SmallVector<SetVector<int>> getYieldPartitions(Block *block) {
         }
       }
     }
+    assert(yieldPartitions.size() > opnd.getOperandNumber());
     yieldPartitions[opnd.getOperandNumber()] = *partitionIds;
   }
   return yieldPartitions;
@@ -920,6 +1012,103 @@ void assignRegionOpPartitions(scf::ForOp loop) {
   });
 }
 
+bool underWSLoop(Operation *op) {
+  scf::ForOp topLevelFor = op->getParentOfType<scf::ForOp>();
+  if (!topLevelFor) {
+    return false;
+  }
+
+  if (topLevelFor->hasAttr(kWarpSpecializeAttrName)) {
+    return true;
+  } else {
+    while (auto outer = topLevelFor->getParentOfType<scf::ForOp>()) {
+      topLevelFor = outer;
+      if (outer->hasAttr(kWarpSpecializeAttrName)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+class FoldTmemStoreIntoAlloc : public OpRewritePattern<ttng::TMEMAllocOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttng::TMEMAllocOp alloc,
+                                PatternRewriter &rewriter) const override {
+    if (alloc.getSrc() || !underWSLoop(alloc)) {
+      return failure();
+    }
+
+    for (auto user : alloc->getUsers()) {
+      if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
+        auto storeSrc = store.getSrc();
+        if (auto storeSrcDef = storeSrc.getDefiningOp()) {
+          DominanceInfo dom(storeSrcDef);
+          if (dom.dominates(storeSrcDef, alloc)) {
+            auto newAlloc = rewriter.create<ttng::TMEMAllocOp>(
+                alloc.getLoc(), alloc.getResultTypes()[0],
+                rewriter.getType<AsyncTokenType>(), storeSrc);
+
+            if (auto allocTok = alloc.getToken()) {
+              allocTok.replaceAllUsesWith(newAlloc.getToken());
+            }
+            if (auto storeTok = store.getToken()) {
+              storeTok.replaceAllUsesWith(newAlloc.getToken());
+            }
+            if (hasPartition(store)) {
+              setPartition(newAlloc, getPartitionIds(store));
+            }
+            rewriter.eraseOp(store);
+            rewriter.replaceOp(alloc, newAlloc);
+            return success();
+          }
+        }
+      }
+    }
+
+    return failure();
+  }
+};
+
+std::optional<std::pair<scf::ForOp, ttng::MMAv5OpInterface>>
+getUniqueUserLoopAndMMA(ttng::TMEMAllocOp tmemAlloc) {
+  auto tok = tmemAlloc.getToken();
+  if (!tok || !tok.hasOneUse())
+    return std::nullopt;
+  auto loop = dyn_cast<scf::ForOp>(*tok.getUsers().begin());
+  if (!loop)
+    return std::nullopt;
+  auto loopTok = loop.getBody()->getArgument(
+      tok.getUses().begin()->getOperandNumber() - 2);
+  if (!loopTok.hasOneUse())
+    return std::nullopt;
+  auto mma = dyn_cast<ttng::MMAv5OpInterface>(*loopTok.getUsers().begin());
+  if (mma)
+    return std::make_pair(loop, mma);
+  return std::nullopt;
+}
+
+bool canRemoveTmemStore(ttng::TMEMAllocOp tmemAlloc) {
+  auto opt = getUniqueUserLoopAndMMA(tmemAlloc);
+  if (!opt)
+    return false;
+  auto [loop, mma] = *opt;
+  auto useD = dyn_cast<BlockArgument>(mma.useAccumulator());
+  if (!useD)
+    return false;
+  auto parent = useD.getParentBlock()->getParentOp();
+  if (parent != loop)
+    return false;
+  auto loopInit = loop.getInitArgs()[useD.getArgNumber() - 1];
+  auto val = getBoolFromConstant(loopInit);
+  if (!val)
+    return false;
+  return val.value() == false;
+}
+
 //===----------------------------------------------------------------------===//
 // Pass Definition
 //===----------------------------------------------------------------------===//
@@ -939,12 +1128,232 @@ struct PartitionScheduling
 };
 } // namespace
 
+bool canProveExecuteOnce(scf::ForOp forOp) {
+  auto getBoundFromCmpOp =
+      [](arith::CmpIOp cmpOp, APInt min, APInt max, unsigned bitWidth,
+         bool anchorIsLhs) -> std::optional<ConstantIntRanges> {
+    // The following was taken from third_party/amd/lib/Analysis/
+    auto fold =
+        getAsOpFoldResult(anchorIsLhs ? cmpOp.getRhs() : cmpOp.getLhs());
+    if (auto constValue = getConstantIntValue(fold)) {
+      bool isSigned = true;
+      APInt apVal = {bitWidth, static_cast<uint64_t>(*constValue), isSigned};
+      switch (cmpOp.getPredicate()) {
+      case arith::CmpIPredicate::eq:
+        return mlir::ConstantIntRanges::constant(apVal);
+      case arith::CmpIPredicate::sge: {
+        // K >= apVal implies K ∈ [apVal, max]
+        if (anchorIsLhs)
+          return mlir::ConstantIntRanges::range(apVal, max, isSigned);
+        // apVal >= K implies K ∈ [min, apVal]
+        return mlir::ConstantIntRanges::range(min, apVal, isSigned);
+      }
+      case arith::CmpIPredicate::sgt: {
+        // K > apVal implies K >= apVal + 1 implies K ∈ [apVal + 1, max]
+        if (anchorIsLhs) {
+          return mlir::ConstantIntRanges::range(apVal + 1, max, isSigned);
+        }
+        // apVal > K implies apVal - 1 >= K implies K ∈ [min, apVal - 1]
+        return mlir::ConstantIntRanges::range(min, apVal - 1, isSigned);
+      }
+      case arith::CmpIPredicate::sle: {
+        // K <= apVal implies K ∈ [min, apVal]
+        if (anchorIsLhs)
+          return mlir::ConstantIntRanges::range(min, apVal, isSigned);
+        // apVal <= K implies K ∈ [apVal, max]
+        return mlir::ConstantIntRanges::range(apVal, max, isSigned);
+      }
+      case arith::CmpIPredicate::slt: {
+        // K < apVal implies K <= apVal -1 implies K ∈ [min, apVal - 1]
+        if (anchorIsLhs)
+          return mlir::ConstantIntRanges::range(min, apVal - 1, isSigned);
+        // apVal < K implies apVal + 1 <= K implies K ∈ [apVal + 1, max]
+        return mlir::ConstantIntRanges::range(apVal + 1, max, isSigned);
+      }
+      default:
+        break;
+      }
+    }
+    return std::nullopt;
+  };
+
+  auto getAssumedBound =
+      [&](Value v, APInt min, APInt max,
+          unsigned bitWidth) -> std::optional<ConstantIntRanges> {
+    mlir::ForwardSliceOptions opt;
+    SetVector<Operation *> slice;
+    (void)getForwardSlice(v, &slice, opt);
+
+    // For simplicity, we only handle an assume op directly operating on v. It's
+    // possible to support more general cases, but they require a range analysis.
+    for (auto op : slice) {
+      if (auto assumeOp = dyn_cast<LLVM::AssumeOp>(op)) {
+        auto cond = assumeOp.getCond();
+        if (auto cmpOp = cond.getDefiningOp<arith::CmpIOp>();
+            cmpOp && (cmpOp.getLhs() == v || cmpOp.getRhs() == v)) {
+          bool anchorIsLhs = cmpOp.getLhs() == v;
+          if (auto bound =
+                  getBoundFromCmpOp(cmpOp, min, max, bitWidth, anchorIsLhs)) {
+            return *bound;
+          }
+        }
+      }
+    }
+    return std::nullopt;
+  };
+
+  auto getConstIntBound = [&](Value v) {
+    unsigned bitWidth = ConstantIntRanges::getStorageBitwidth(v.getType());
+    APInt min = APInt::getSignedMinValue(bitWidth);
+    APInt max = APInt::getSignedMaxValue(bitWidth);
+    if (auto cst = getConstantIntValue(getAsOpFoldResult(v))) {
+      APInt apVal = {bitWidth, static_cast<uint64_t>(*cst), /*signed*/ true};
+      return mlir::ConstantIntRanges::constant(apVal);
+    } else if (auto assumedBound = getAssumedBound(v, min, max, bitWidth)) {
+      return *assumedBound;
+    } else {
+      return mlir::ConstantIntRanges::range(min, max, true);
+    }
+  };
+
+  auto lbBound = getConstIntBound(forOp.getLowerBound());
+  auto ubBound = getConstIntBound(forOp.getUpperBound());
+  return mlir::intrange::evaluatePred(mlir::intrange::CmpPredicate::slt,
+                                      lbBound, ubBound)
+      .value_or(false);
+}
+
+void hoistTmemAlloc(ttng::TMEMAllocOp allocToHoist) {
+  // extra loop nest
+  SmallVector<scf::ForOp> loopNest;
+  auto currentForOp = allocToHoist->getParentOfType<scf::ForOp>();
+  while (currentForOp && !currentForOp->hasAttr(kWarpSpecializeAttrName)) {
+    loopNest.push_back(currentForOp);
+    currentForOp = currentForOp->getParentOfType<scf::ForOp>();
+  }
+
+  if (!currentForOp) {
+    return;
+  }
+  loopNest.push_back(currentForOp);
+
+  {
+    // Check if hoisting across all loop nests is valid. Hoisting is invalid
+    // when the inner loop that does MMA executes variable number of times
+    // depending on the outer loop variables, and some instances of the inner
+    // loops never execute while others do. So we hoist across loop nests only
+    // in the following cases:
+    // 1. The loop iteration counts for all loops do not depend on their outer
+    // loop variables.
+    // 2. If there is a loop whose iteration count depends on outer loop
+    // varaibles, there is an llvm.intr.assume op from which we can prove that
+    // the number of iteration is greater than zero.
+    auto opt = getUniqueUserLoopAndMMA(allocToHoist);
+    if (!opt) {
+      return;
+    }
+    auto mmaLoop = opt->first;
+    SmallVector<scf::ForOp> innerLoopNest{mmaLoop};
+    innerLoopNest.insert(innerLoopNest.begin(), loopNest.begin(),
+                         loopNest.end() - 1);
+
+    // Does the expression x depend on y?
+    auto dependOn = [](Value x, Value y) {
+      mlir::BackwardSliceOptions opt;
+      opt.omitBlockArguments = true;
+      SetVector<Operation *> slice;
+      (void)getBackwardSlice(x, &slice, opt);
+      for (auto user : y.getUsers()) {
+        if (slice.count(user)) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    for (auto [i, innerFor] : llvm::enumerate(innerLoopNest)) {
+      for (int j = i; j < loopNest.size(); ++j) {
+        auto outerForIter = loopNest[j].getInductionVar();
+        if ((dependOn(innerFor.getLowerBound(), outerForIter) ||
+             dependOn(innerFor.getUpperBound(), outerForIter)) &&
+            !canProveExecuteOnce(innerFor)) {
+          // Cannot hoist this tmem alloc across the outer loop loopNest[j]
+          return;
+        }
+      }
+    }
+  }
+
+  // hoist to outside tt.warp_specialized loop
+  allocToHoist->moveBefore(currentForOp);
+  allocToHoist->removeAttr(kPartitionAttrName);
+
+  Value token = allocToHoist.getToken();
+  assert(token.hasOneUse());
+  auto &tokenUse = *token.getUses().begin();
+  auto tokenPos =
+      tokenUse.getOperandNumber() - currentForOp.getNumControlOperands();
+  auto tokenPartition = getPartitionOutputs(tokenUse.getOwner())[tokenPos];
+
+  // thread token to for-op init/iter args from outer-to inner
+  std::reverse(loopNest.begin(), loopNest.end());
+  for (auto &forOp : loopNest) {
+    OpBuilder b(forOp);
+    int nArgs = forOp.getRegionIterArgs().size();
+    forOp = addIterArgsToLoop(b, forOp, {token});
+
+    // update partitions for the forOp
+    if (forOp->hasAttr(kPartitionOutputsAttrName)) {
+      auto partitionOuputs = getPartitionOutputs(forOp);
+      partitionOuputs.push_back(tokenPartition);
+      setPartitionOutputs(forOp, partitionOuputs);
+    } else {
+      setPartitionOutputs(forOp, {tokenPartition});
+    }
+    auto partitions = getPartitionIds(forOp);
+    partitions.insert(tokenPartition.begin(), tokenPartition.end());
+    setPartition(forOp, partitions);
+
+    token = forOp.getRegionIterArg(nArgs);
+  }
+
+  // set inner loop init_args with updated token
+  tokenUse.set(token);
+
+  // get last produced token, the one w/o use
+  token = tokenUse.getOwner()->getResult(tokenPos);
+  while (!token.use_empty()) {
+    assert(token.hasOneUse());
+    auto tokenUser = *token.getUsers().begin();
+    if (auto load = dyn_cast<ttng::TMEMLoadOp>(tokenUser)) {
+      token = load.getToken();
+    } else if (auto store = dyn_cast<ttng::TMEMStoreOp>(tokenUser)) {
+      token = store.getToken();
+    } else {
+      auto mma = cast<ttng::MMAv5OpInterface>(tokenUser);
+      token = mma.getToken();
+    }
+  }
+
+  // append token to yield, from inner to outer loop
+  std::reverse(loopNest.begin(), loopNest.end());
+  for (auto forOp : loopNest) {
+    appendToForOpYield(forOp, {token});
+    setPartition(forOp.getBody()->getTerminator(), getPartitionIds(forOp));
+    token = forOp->getResults().back();
+  }
+}
+
 void PartitionScheduling::runOnOperation() {
+  ModuleOp m = getOperation();
   SmallVector<scf::ForOp> loops;
-  getOperation().walk([&](scf::ForOp loop) {
-    if (loop->hasAttr(kWarpSpecializeAttrName))
+
+  m.walk([&](scf::ForOp loop) {
+    if (loop->hasAttr(kWarpSpecializeAttrName)) {
       loops.push_back(loop);
+    }
   });
+
   for (auto [idx, loop] : llvm::enumerate(loops)) {
     if (std::optional<PartitionSet> partitions = getInitialPartitions(loop)) {
       propagatePartitions(loop, *partitions);
@@ -952,6 +1361,7 @@ void PartitionScheduling::runOnOperation() {
       assignRegionBodyPartition(loop, *partitions);
       if (failed(assignMissingPartitions(loop, *partitions)))
         return signalPassFailure();
+
       assignRegionOpPartitions(loop);
       verifyPartitions(loop, *partitions);
 
@@ -966,4 +1376,27 @@ void PartitionScheduling::runOnOperation() {
       loop->setAttr(kPartitionStagesAttrName, b.getArrayAttr(stages));
     }
   }
+
+  MLIRContext *context = &getContext();
+  OpPassManager pm;
+  mlir::RewritePatternSet patterns(context);
+  patterns.add<FoldTmemStoreIntoAlloc>(context);
+  ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
+  if (failed(applyPatternsGreedily(m, std::move(patterns))))
+    signalPassFailure();
+
+  m.walk([&](scf::ForOp loop) {
+    if (loop->hasAttr(kWarpSpecializeAttrName)) {
+      SmallVector<ttng::TMEMAllocOp> tmemAllocToHoist;
+      loop.walk([&](ttng::TMEMAllocOp tmemAlloc) {
+        if (tmemAlloc.getSrc() && canRemoveTmemStore(tmemAlloc)) {
+          tmemAllocToHoist.push_back(tmemAlloc);
+        }
+      });
+
+      for (auto alloc : tmemAllocToHoist) {
+        hoistTmemAlloc(alloc);
+      }
+    }
+  });
 }
