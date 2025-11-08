@@ -30,13 +30,12 @@ public:
       ThreadSafeMap<uint64_t,
                     std::pair<size_t, size_t>, /*<extern_id, num_kernels>*/
                     std::unordered_map<uint64_t, std::pair<size_t, size_t>>>;
-  using GraphIdNodeIdContextMap = ThreadSafeMap<
-      uint32_t, std::unordered_map<uint32_t, std::vector<Context>>,
+  using GraphIdNodeIdToScopeIdMap = ThreadSafeMap<
+      uint32_t, std::unordered_map<uint32_t, size_t>,
       std::unordered_map<
-          uint32_t,
-          std::unordered_map<uint32_t, std::vector<Context>>>>; /*<graph_id,
-                                                                   node_id,
-                                                                   contexts>*/
+          uint32_t, std::unordered_map<uint32_t, size_t>>>; /*<graph_id,
+                                                               node_id,
+                                                               scope_id>*/
   using ApiExternIdSet = ThreadSafeSet<size_t, std::unordered_set<size_t>>;
 
 protected:
@@ -97,7 +96,7 @@ protected:
     // Mapping from a native profiler correlation id to an external id.
     CorrIdToExternIdMap corrIdToExternId;
     // Mapping from a graph id and a node id to contexts.
-    GraphIdNodeIdContextMap graphIdNodeIdToContexts;
+    GraphIdNodeIdToScopeIdMap graphIdNodeIdToScopeId;
     // A set of kernels triggered by GPU runtime APIs (e.g., torch
     // kernels) other than Triton.
     // It stores a subset of external ids in corrIdToExternId.

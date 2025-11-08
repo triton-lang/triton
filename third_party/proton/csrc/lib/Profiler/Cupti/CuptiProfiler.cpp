@@ -52,7 +52,7 @@ std::shared_ptr<Metric> convertActivityToMetric(CUpti_Activity *activity) {
 }
 
 uint32_t processActivityKernel(
-    CuptiProfiler::GraphIdNodeIdContextMap &graphIdNodeIdToContexts,
+    CuptiProfiler::GraphIdNodeIdToScopeIdMap &graphIdNodeIdToScopeIdMap,
     CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     CuptiProfiler::ApiExternIdSet &apiExternIds, std::set<Data *> &dataSet,
     CUpti_Activity *activity) {
@@ -77,15 +77,21 @@ uint32_t processActivityKernel(
     // A single graph launch can trigger multiple kernels.
     // Our solution is to construct the following maps:
     // --- Application threads ---
-    // - graphExecId -> graphId
+    // If graph creation has been captured:
+    // - graphId, nodeId -> launch context + capture context
+    // Otherwise:
+    // - parentId -> launch context
     // --- CUPTI thread ---
     // - corrId -> numKernels
-    // - graphId, nodeId -> contexts
     auto nodeId = kernel->graphNodeId;
-    auto contexts = graphIdNodeIdToContexts[kernel->graphId][nodeId];
+    auto captureId = parentId;
+    if (graphIdNodeIdToScopeIdMap.contain(kernel->graphId) &&
+        graphIdNodeIdToScopeIdMap[kernel->graphId].find(nodeId) !=
+            graphIdNodeIdToScopeIdMap[kernel->graphId].end()) {
+      captureId = graphIdNodeIdToScopeIdMap[kernel->graphId][nodeId];
+    }
     for (auto *data : dataSet) {
-      auto externId = data->addOp(parentId, kernel->name);
-      externId = data->addOp(externId, contexts);
+      auto externId = data->addOp(captureId, kernel->name);
       data->addMetric(externId, convertActivityToMetric(activity));
     }
   }
@@ -100,7 +106,7 @@ uint32_t processActivityKernel(
 }
 
 uint32_t
-processActivity(CuptiProfiler::GraphIdNodeIdContextMap &graphIdNodeIdToContexts,
+processActivity(CuptiProfiler::GraphIdNodeIdToScopeIdMap &graphIdNodeIdToScopeId,
                 CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
                 CuptiProfiler::ApiExternIdSet &apiExternIds,
                 std::set<Data *> &dataSet, CUpti_Activity *activity) {
@@ -108,7 +114,7 @@ processActivity(CuptiProfiler::GraphIdNodeIdContextMap &graphIdNodeIdToContexts,
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
-    correlationId = processActivityKernel(graphIdNodeIdToContexts, corrIdToExternId,
+    correlationId = processActivityKernel(graphIdNodeIdToScopeId, corrIdToExternId,
                                           apiExternIds, dataSet, activity);
     break;
   }
@@ -251,6 +257,11 @@ struct CuptiProfiler::CuptiProfilerPimpl
       graphIdToNumInstances;
   ThreadSafeMap<uint32_t, size_t, std::unordered_map<uint32_t, size_t>>
       graphExecIdToNumInstances;
+  ThreadSafeMap<
+      uint32_t, std::unordered_map<uint32_t, std::vector<Context>>,
+      std::unordered_map<uint32_t,
+                         std::unordered_map<uint32_t, std::vector<Context>>>>
+      graphIdNodeIdToContexts;
   ThreadSafeSet<uint32_t> graphExecIdChecked;
 };
 
@@ -279,8 +290,8 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
     status = cupti::activityGetNextRecord<false>(buffer, validSize, &activity);
     if (status == CUPTI_SUCCESS) {
       auto correlationId =
-          processActivity(profiler.correlation.graphIdNodeIdToContexts,
-            profiler.correlation.corrIdToExternId,
+          processActivity(profiler.correlation.graphIdNodeIdToScopeId,
+                          profiler.correlation.corrIdToExternId,
                           profiler.correlation.apiExternIds, dataSet, activity);
       maxCorrelationId = std::max(maxCorrelationId, correlationId);
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
@@ -347,8 +358,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           for (auto *data : dataSet) {
             auto *source = data->getContextSource();
             auto contexts = source->getContexts();
-            profiler.correlation.graphIdNodeIdToContexts[graphId][nodeId] =
-                contexts;
+            pImpl->graphIdNodeIdToContexts[graphId][nodeId] = contexts;
           }
           if (!pImpl->graphIdToNumInstances.contain(graphId))
             pImpl->graphIdToNumInstances[graphId] = 1;
@@ -359,9 +369,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           uint32_t originalNodeId = 0;
           cupti::getGraphId<true>(graphData->originalGraph, &originalGraphId);
           cupti::getGraphNodeId<true>(graphData->originalNode, &originalNodeId);
-          profiler.correlation.graphIdNodeIdToContexts[graphId][nodeId] =
-              profiler.correlation
-                  .graphIdNodeIdToContexts[originalGraphId][originalNodeId];
+          pImpl->graphIdNodeIdToContexts[graphId][nodeId] =
+              pImpl->graphIdNodeIdToContexts[originalGraphId][originalNodeId];
         }
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
         pImpl->graphIdToNumInstances[graphId]--;
@@ -414,6 +423,19 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                     << ", and t may cause memory leak. To avoid this problem, "
                        "please start profiling before the graph is created."
                     << std::endl;
+        } else if (findGraph) {
+          uint32_t graphId = 0;
+          cupti::getGraphExecId<true>(graphExec, &graphId);
+          auto dataSet = profiler.getDataSet();
+          auto parentId = threadState.scopeStack.back().scopeId;
+          for (auto [nodeId, contexts] :
+                  pImpl->graphIdNodeIdToContexts[graphId]) {
+            for (auto *data : dataSet) {
+              auto scopeId = data->addOp(parentId, contexts);
+              profiler.correlation.graphIdNodeIdToScopeId[graphId][nodeId] =
+                  scopeId;
+            }
+          }
         }
       } else if (cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture ||
                  cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_ptsz ||
