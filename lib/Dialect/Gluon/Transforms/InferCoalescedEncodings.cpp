@@ -1,8 +1,8 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Visitors.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Dialect/Gluon/Transforms/Passes.h"
 #include "triton/Dialect/Gluon/Transforms/InferLayoutUtils.h"
+#include "triton/Dialect/Gluon/Transforms/Passes.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/CoalesceUtils.h"
@@ -107,8 +107,7 @@ class GluonInferCoalescedEncodingsPass
       FuncOp func = op->getParentOfType<FuncOp>();
       return updateEncoding(llvm::to_vector_of<Value>(op->getOperands()),
                             LayoutInfo{layout, false}, &func,
-                            funcValueEnc[func],
-                            funcWorklist[func],
+                            funcValueEnc[func], funcWorklist[func],
                             funcHashMemo[func]);
     });
 
@@ -116,8 +115,8 @@ class GluonInferCoalescedEncodingsPass
       return signalPassFailure();
 
     // Do layout inference
-    if (failed(inferLayout(moduleOp, isCoalescedEncodingTensorType, funcValueEnc,
-                           funcWorklist, funcHashMemo)))
+    if (failed(inferLayout(moduleOp, isCoalescedEncodingTensorType,
+                           funcValueEnc, funcWorklist, funcHashMemo)))
       return signalPassFailure();
 
     if (failed(doubleCheckEncodings(moduleOp, isCoalescedEncodingTensorType)))
