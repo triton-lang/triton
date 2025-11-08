@@ -882,7 +882,6 @@ SmallVector<SetVector<int>> getYieldPartitions(Block *block) {
         }
       }
     }
-    assert(yieldPartitions.size() > opnd.getOperandNumber());
     yieldPartitions[opnd.getOperandNumber()] = *partitionIds;
   }
   return yieldPartitions;
@@ -1104,9 +1103,7 @@ bool canRemoveTmemStore(ttng::TMEMAllocOp tmemAlloc) {
     return false;
   auto loopInit = loop.getInitArgs()[useD.getArgNumber() - 1];
   auto val = getBoolFromConstant(loopInit);
-  if (!val)
-    return false;
-  return val.value() == false;
+  return val && val.value() == false;
 }
 
 //===----------------------------------------------------------------------===//
