@@ -40,6 +40,15 @@ void InstrumentationProfiler::doStop() {
     runtime->freeHostBuffer(hostBuffer);
     hostBuffer = nullptr;
   }
+  // Clean up session related data
+  runtime.release();
+  deviceStreams.clear();
+  modeOptions.clear();
+  functionScopeIdNames.clear();
+  functionScopeIdContexts.clear();
+  functionNames.clear();
+  functionMetadata.clear();
+  dataScopeIdMap.clear();
 }
 
 void InstrumentationProfiler::doSetMode(

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from triton.runtime.jit import constexpr_function
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._core import builtin, base_type, base_value, _unwrap_if_constexpr
+from triton.experimental.gluon.language._layouts import SharedLinearLayout
 from triton.experimental.gluon.language._semantic import _check, _compute_tmem_reg_layout
 
 from . import tma
@@ -35,38 +36,46 @@ class TensorMemoryLayout:
     Describes the layout for tensor memory in Blackwell architecture.
 
     Args:
-        block (Tuple[int, int]): Tiling block dimensions (M/rows, N/cols).
+        block (Tuple[int, int]): Number of contiguous elements per row / column in a CTA.
         col_stride (int): Number of 32-bit columns to advance between logically
             adjacent columns. Packed layouts use a stride of 1. Unpacked
             layouts use ``32 / bitwidth``.
         cta_split_num (Optional[Tuple[int, int]]): CTA split factors. Defaults to None.
+        two_ctas (bool): Whether the layout is for two-CTA mode. Defaults to False.
     """
     block: Tuple[int, int]
     col_stride: int
     cta_split_num: Optional[Tuple[int, int]] = None
+    two_ctas: bool = False
 
     def __post_init__(self):
         super().__setattr__("block", _unwrap_if_constexpr(self.block))
         super().__setattr__("col_stride", _unwrap_if_constexpr(self.col_stride))
         super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
+        super().__setattr__("two_ctas", _unwrap_if_constexpr(self.two_ctas))
         assert len(self.block) == 2
         assert self.cta_split_num is None or len(self.cta_split_num) == 2
         assert self.col_stride >= 1 and (self.col_stride &
                                          (self.col_stride - 1)) == 0, "tensor memory col_stride must be a power of two"
 
     def _to_ir(self, builder):
-        cta_split_num = self.cta_split_num or [1, 1]
+        cta_split_num = list(self.cta_split_num) if self.cta_split_num else [1, 1]
         return builder.get_tensor_memory_layout(
             self.block,
             self.col_stride,
             cta_split_num,
+            self.two_ctas,
         )
 
     def mangle(self) -> str:
         block_str = f"{self.block[0]}x{self.block[1]}"
         stride_str = f"C{self.col_stride}"
         cta_split_str = (f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else "")
-        return f"TL{block_str}{stride_str}{cta_split_str}TL"
+        two_ctas_str = "2CT" if self.two_ctas else ""
+        return f"TL{block_str}{stride_str}{cta_split_str}{two_ctas_str}TL"
+
+    def __hash__(self):
+        return hash((self.block, self.col_stride, self.cta_split_num))
 
 
 @dataclass(frozen=True, eq=True)
@@ -90,6 +99,9 @@ class TensorMemoryScalesLayout:
     def mangle(self) -> str:
         cta_split_str = f"CS{self.cta_split_num[0]}x{self.cta_split_num[1]}" if self.cta_split_num else ""
         return f"TLS{cta_split_str}TLS"
+
+    def __hash__(self):
+        return hash(self.cta_split_num)
 
 
 @constexpr_function
@@ -262,6 +274,7 @@ class tensor_memory_descriptor(base_value):
             (layout.block[0], min(layout.block[1], length)),
             layout.col_stride,
             layout.cta_split_num,
+            two_ctas=layout.two_ctas,
         )
         ret = tensor_memory_descriptor(None, self.dtype, shape, layout, self.type.alloc_shape)
         builder = _semantic.builder
@@ -382,7 +395,7 @@ def tcgen05_mma(a, b, acc, *, use_acc=True, pred=True, mbarriers=None, mbarrier_
             mbarrier_preds = _semantic._convert_to_ir_values(mbarrier_preds, require_i64=False)
 
     _semantic.builder.create_tcgen05_mma(a.handle, b.handle, acc.handle, use_acc.handle, pred.handle, mbarriers,
-                                         mbarrier_preds)
+                                         mbarrier_preds, acc.layout.two_ctas)
 
 
 @builtin

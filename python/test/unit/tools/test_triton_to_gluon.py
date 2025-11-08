@@ -13,7 +13,7 @@ from triton._internal_testing import (
 
 
 def convert_kernel(kernel, kernel_name, tmp_path):
-    converted = convert_triton_to_gluon(kernel)
+    converted = convert_triton_to_gluon([kernel])
 
     # Write converted kernel to a file so @gluon.jit can retrieve source
     mod_path = tmp_path / "converted_kernel.py"
@@ -52,7 +52,7 @@ def test_simple_kernel(tmp_path):
     ref = torch.empty_like(x)
     add_kernel[grid](x, y, ref, n, BLOCK)
 
-    torch.testing.assert_close(out, ref)
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
 
 
 @triton.jit
@@ -85,7 +85,7 @@ def test_triton_to_gluon_dot_minimal(tmp_path):
 
     ref = torch.empty_like(c)
     matmul_tile_kernel[grid](a, b, ref, M, N, K, num_warps=8)
-    torch.testing.assert_close(c, ref)
+    torch.testing.assert_close(c, ref, atol=0, rtol=0)
 
 
 @triton.jit
@@ -153,7 +153,7 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     ref = torch.empty_like(output)
     matmul_kernel[grid](a, b, ref, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
                         output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K)
-    torch.testing.assert_close(output, ref)
+    torch.testing.assert_close(output, ref, atol=0, rtol=0)
 
 
 @triton.jit
@@ -177,7 +177,7 @@ def test_triton_to_gluon_descriptor_roundtrip(tmp_path):
     y_ref = torch.zeros((M, N), device="cuda", dtype=torch.float16)
     desc_ref = TensorDescriptor(y_ref, y_ref.shape, y_ref.stride(), block_shape)
     descriptor_store_kernel[grid](desc_ref, M, N, 1.0)
-    torch.testing.assert_close(y, y_ref)
+    torch.testing.assert_close(y, y_ref, atol=0, rtol=0)
 
 
 @triton.jit
@@ -204,7 +204,7 @@ def test_triton_to_gluon_descriptor_load_roundtrip(tmp_path):
     y_ref = torch.zeros((M, N), device="cuda", dtype=torch.float16)
     desc_ref = TensorDescriptor(y_ref, y_ref.shape, y_ref.stride(), block_shape)
     descriptor_copy_kernel[grid](in_desc, desc_ref, M, N)
-    torch.testing.assert_close(y, y_ref)
+    torch.testing.assert_close(y, y_ref, atol=0, rtol=0)
 
 
 @triton.jit
@@ -232,7 +232,7 @@ def test_triton_reshape_trans(tmp_path):
     kernel[grid](x, y, out, n, BLOCK)
     ref = torch.empty_like(x)
     reshape_trans_kernel[grid](x, y, ref, n, BLOCK)
-    torch.testing.assert_close(out, ref)
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
 
 
 BLOCK_SPLIT = tl.constexpr(256)
@@ -262,7 +262,7 @@ def test_split(tmp_path):
     kernel[grid](x, out)
     ref = torch.empty_like(x[:n])
     split_kernel[grid](x, ref)
-    torch.testing.assert_close(out, ref)
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
 
 
 @triton.jit
@@ -281,4 +281,23 @@ def test_reduce_to_scalar(tmp_path):
     kernel[grid](out)
     ref = torch.empty_like(out)
     reduce_to_scalar_kernel[grid](ref)
-    torch.testing.assert_close(out, ref)
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+
+
+@triton.jit
+def num_threads_kernel(out_ptr):
+    num_threads: tl.constexpr = tl.extra.cuda.num_threads()
+    offs = tl.arange(0, num_threads)
+    tl.store(out_ptr + offs, 1)
+
+
+@pytest.mark.skipif(not (is_blackwell()), reason="Requires Blackwell")
+def test_num_threads(tmp_path):
+    kernel = convert_kernel(num_threads_kernel, "num_threads_kernel", tmp_path)
+
+    num_threads = 256
+    out = torch.empty(num_threads, dtype=torch.int32, device="cuda")
+    kernel[(1, )](out, num_warps=num_threads // 32)
+    ref = torch.empty_like(out)
+    num_threads_kernel[(1, )](ref, num_warps=num_threads // 32)
+    torch.testing.assert_close(out, ref, atol=0, rtol=0)

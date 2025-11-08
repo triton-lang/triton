@@ -40,6 +40,8 @@ def TTG_TensorMemoryEncodingAttr : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemor
     that is, the stride between two elements in the same row.
     When colStride is 1 the tensor memory is packed. When colStride > 1, the
     tensor memory between elements is undefined.
+    `twoCTAs` indicates that the tensor memory is laid out for twoCTA mode,
+    i.e., `cta_group::2`.
   }];
   let parameters = (
     ins
@@ -47,7 +49,8 @@ def TTG_TensorMemoryEncodingAttr : AttrDef<TritonNvidiaGPU_Dialect, "TensorMemor
     "unsigned":$blockN,
     "unsigned":$colStride,
     DefaultValuedParameter<"unsigned", "1">:$CTASplitM,
-    DefaultValuedParameter<"unsigned", "1">:$CTASplitN
+    DefaultValuedParameter<"unsigned", "1">:$CTASplitN,
+    DefaultValuedParameter<"bool", "false">:$twoCTAs
   );
   let genVerifyDecl = 1;
   let assemblyFormat = "`<` struct(params) `>`";

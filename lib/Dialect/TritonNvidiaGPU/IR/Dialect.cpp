@@ -86,8 +86,8 @@ TMemAllocation getTmemAllocSizes(MemDescType memDescType) {
   return {nRow, nCol};
 }
 
-LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
-                           bool unpacked) {
+LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
+                           bool withWarp) {
   auto str_attr = [&](StringRef str) { return StringAttr::get(ctx, str); };
   auto kReg = str_attr("register");
   auto kLane = str_attr("lane");
@@ -95,10 +95,7 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
   auto kRow = str_attr("row");
   auto kCol = str_attr("col");
   // Set the output order to be kRow, kCol and the input order to be kReg first
-  LinearLayout tile = LinearLayout::identity1D(1, kReg, kRow) *
-                      LinearLayout::identity1D(1, kReg, kCol) *
-                      LinearLayout::identity1D(1, kLane, kRow) *
-                      LinearLayout::identity1D(1, kLane, kCol);
+  LinearLayout tile = LinearLayout({{kReg, {}}, {kLane, {}}}, {kRow, kCol});
   // Each register moves 32/bitwidth (= 2) columns when unpacked
   if (unpacked) {
     tile *= LinearLayout::zeros1D(1, kReg, kCol, 2);
@@ -124,12 +121,14 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
   } else {
     llvm_unreachable("Unsupported TMEM access atom");
   }
-  auto nCol = tile.getOutDimSize(kCol);
-  auto bases = tile.getBases();
-  bases[kWarp].push_back({32, 0});
-  bases[kWarp].push_back({64, 0});
-  auto ret = LinearLayout(bases, {{kRow, 128}, {kCol, nCol}}, false);
-  return ret;
+  if (withWarp) {
+    auto nCol = tile.getOutDimSize(kCol);
+    auto bases = tile.getBases();
+    bases[kWarp].push_back({32, 0});
+    bases[kWarp].push_back({64, 0});
+    tile = LinearLayout(bases, {{kRow, 128}, {kCol, nCol}}, false);
+  }
+  return tile;
 }
 
 static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
@@ -212,13 +211,13 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
   }
   // getTileLayout returns the layout for a bitwidth of 32
   assert(bitwidth == 32);
-  auto tile = getTileLayout(ctx, atom, false);
+  auto tile = getTileLayout(ctx, atom, false, /*withWarp=*/false);
   // Plan:
-  // tile: register, lane, warp -> row, cols
+  // tile: register, lane -> row, cols
   // ll: row, cols -> dim0, dim1
-  // We extend the tile to have the right vectorisation and the result is given
-  // by ll o tile : register, lane warp -> dim0, dim1 If the tile is too
-  // large, we cannot use the tile
+  // We extend the tile to have the right vectorisation + warps and
+  // the result is given by
+  // ll o tile : register, lane, warp -> dim0, dim1
 
   auto nColsTile = tile.getOutDimSize(rowColDims[1]);
   auto nColsLL = ll.getInDimSize(rowColDims[1]);
@@ -268,41 +267,39 @@ static std::optional<LinearLayout> getDistributedLayoutForTmemLdSt(
   // Cap warps to tile above by nColsMissing. The rest go to broadcasting
   int warpBroadcast = warpsToTile / std::min(nColsMissing, warpsToTile);
   warpsToTile /= warpBroadcast;
-  auto nColsOrig = nColsLL;
   nColsMissing /= warpsToTile;
-  nColsLL /= warpsToTile;
 
   if (nColsMissing > 1) {
     if (instr32Rows && layout16Rows) {
       // If the lane 16 would load repeated data, instead we make it load half
       // of the data via the 16x32bx2 instruction
-      tile *= LinearLayout::identity1D(nColsMissing / 2, kReg, rowColDims[1]);
-      auto bases = tile.getBases();
-      bases[kLane].back() = {0, nColsLL / 2};
-      tile = LinearLayout(
-          bases, {{rowColDims[0], 128}, {rowColDims[1], nColsLL}}, false);
+      tile = divideLeft(tile, LinearLayout::identity1D(2, kLane, rowColDims[0]))
+                 .value();
+      tile *= LinearLayout::identity1D(nColsMissing / 2, kReg, rowColDims[1]) *
+              LinearLayout::identity1D(2, kLane, rowColDims[1]);
 
     } else {
       tile *= LinearLayout::identity1D(nColsMissing, kReg, rowColDims[1]);
     }
   }
+
+  // add the warp bases. The M=64 + 2CTA case has already been handled
   auto bases = tile.getBases();
   auto &warpBases = bases[kWarp];
+  warpBases.push_back({32, 0});
+  warpBases.push_back({64, 0});
+
   if (row16) {
     bases[row16].push_back({16, 0});
   }
-
-  // Add the bases we had reserved for the warps to tile
-  assert(nColsOrig / nColsLL == warpsToTile);
-  for (int i = nColsLL; i < nColsOrig; i *= 2) {
-    bases[kWarp].push_back({0, i});
-  }
-  // Broadcast in the rest of the warps if we need more bases
-  for (int i = 1; i < warpBroadcast; i *= 2) {
-    bases[kWarp].push_back({0, 0});
-  }
-  tile = LinearLayout(bases, {{rowColDims[0], 128}, {rowColDims[1], nColsOrig}},
+  tile = LinearLayout(bases,
+                      {{rowColDims[0], 128},
+                       {rowColDims[1], tile.getOutDimSize(rowColDims[1])}},
                       false);
+  tile *= LinearLayout::identity1D(warpsToTile, kWarp, rowColDims[1]);
+  tile *= LinearLayout::zeros1D(warpBroadcast, kWarp, rowColDims[1]);
+  assert(tile.getOutDimSize(rowColDims[1]) == ll.getInDimSize(rowColDims[1]));
+
   auto ret = tile.compose(ll);
   return ret;
 }
@@ -422,9 +419,11 @@ LogicalResult
 TensorMemoryEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                                  unsigned blockM, unsigned blockN,
                                  unsigned colStride, unsigned CTASplitM,
-                                 unsigned CTASplitN) {
-  if (CTASplitM < 1 || CTASplitN < 1) {
-    return emitError() << "CTASplitM and CTASplitN must be greater than 0";
+                                 unsigned CTASplitN, bool) {
+  if (!(CTASplitM >= 1 && CTASplitN >= 1 && llvm::isPowerOf2_32(CTASplitM) &&
+        llvm::isPowerOf2_32(CTASplitN))) {
+    return emitError()
+           << "CTASplitM and CTASplitN must be greater than 0 and a power of 2";
   }
   if (blockM != 64 && blockM != 128) {
     return emitError() << "blockM must be 64 or 128 but got " << blockM;
@@ -432,10 +431,13 @@ TensorMemoryEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
   if (!llvm::isPowerOf2_32(blockN)) {
     return emitError() << "blockN must be a power of 2 but got " << blockN;
   }
-  if (!(colStride >= 1 && llvm::isPowerOf2_32(colStride))) {
-    return emitError()
-           << "colStride must be a power of two greater than or equal to 1 "
-           << "but got " << colStride;
+  if (blockN > 512) {
+    return emitError() << "blockN must be less than or equal to 512 but got "
+                       << blockN;
+  }
+  if (!(colStride == 1 || colStride == 2 || colStride == 4)) {
+    return emitError() << "colStride must be 1, 2, or 4 but got "
+                       << "but got " << colStride;
   }
   return success();
 }

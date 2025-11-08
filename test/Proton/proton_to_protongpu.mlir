@@ -136,7 +136,6 @@ module attributes {"ttg.num-warps" = 8 : i32} {
 // CHECK:       proton_gpu.circular_store start %[[SEGMENT2]], %[[COUNTER4]] {scopeId = 2 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
 // CHECK:       %[[COUNTER5:.*]] = proton_gpu.read_counter : i32
 // CHECK:       proton_gpu.circular_store end %[[SEGMENT2]], %[[COUNTER5]] {scopeId = 2 : i32} : !proton_gpu.segment<1024, #smem, warp>, i32
-// CHECK:       proton_gpu.save_ctx %[[SEGMENT2]], %[[ARG1]] : !proton_gpu.segment<1024, #smem, warp>, !tt.ptr<i32>
 // CHECK:       ttg.warp_return
 // CHECK:     } : (!ttg.memdesc<256xi32, #shared, #smem, mutable>, !tt.ptr<i32>) -> ()
 // CHECK:     %[[COUNTER6:.*]] = proton_gpu.read_counter : i32

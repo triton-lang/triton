@@ -38,7 +38,16 @@ using namespace triton::gpu;
 using namespace triton::nvidia_gpu;
 using namespace triton::nvws;
 
-std::optional<int> getPartitionId(Operation *op, int pos = 0) {
+int getWsTag(Operation *op) {
+  while (op && !hasWarpSpecializeTag(op)) {
+    op = op->getParentOfType<scf::ForOp>();
+  }
+  assert(op);
+  return *getWarpSpecializeTag(op);
+}
+
+using PartitionId = std::pair<int /* PartitionId*/, int /* WsTag*/>;
+std::optional<PartitionId> getPartitionId(Operation *op, int pos = 0) {
   if (!hasPartition(op))
     return std::nullopt;
   auto partitionIds = getPartitionIds(op);
@@ -46,9 +55,8 @@ std::optional<int> getPartitionId(Operation *op, int pos = 0) {
     partitionIds = getPartitionOutputs(op)[pos];
   }
   assert(partitionIds.size() == 1);
-  return *partitionIds.begin();
+  return std::make_pair(*partitionIds.begin(), getWsTag(op));
 }
-using PartitionId = int;
 
 struct TmemAccessDag {
   struct Node {
@@ -228,11 +236,10 @@ struct TmemAccessDag {
     TmemAccessDag accessDag(
         std::make_unique<Node>(allocOp, nullptr, partitionId, nullptr));
 
-    if (allocOp.getSrc()) {
+    if (allocOp.getSrc() && !allocOp.getToken()) {
       // Handle tmem_alloc with src operand specially. When a src operand is
       // present, no async tokens are generated, we can't traverse IR,
       // and we directly add the single user operation to the access DAG.
-      assert(!allocOp.getToken());
       assert(allocOp->hasOneUse());
       auto user = *allocOp->getUsers().begin();
       accessDag.getRootNode()->user.reset(new Node{
@@ -246,28 +253,35 @@ struct TmemAccessDag {
     return accessDag;
   }
 
-  std::pair<bool, std::set<PartitionId>> collectPartitions(Node *node) {
-    std::set<PartitionId> partitions;
-    bool hasRootPartition = false;
-    if (node->partitionId)
+  void collectPartitions(Node *node, bool &hasRootPartition,
+                         std::set<PartitionId> &partitions) {
+    if (node->partitionId) {
       partitions.insert(*node->partitionId);
-
-    while (node->user) {
-      node = node->user.get();
-      if (node->partitionId)
-        partitions.insert(*node->partitionId);
-      else
-        hasRootPartition = true;
-      for (auto &subDag : node->subDags) {
-        if (subDag) {
-          auto [rootPartition, ps] = collectPartitions(subDag.get());
-          hasRootPartition = hasRootPartition || rootPartition;
-          partitions.insert(ps.begin(), ps.end());
-        }
+    } else {
+      // root partition is considered a real owner only if there are already
+      // other partitions owning tmem
+      hasRootPartition = !partitions.empty();
+    }
+    for (auto &subDag : node->subDags) {
+      if (subDag) {
+        collectPartitions(subDag.get(), hasRootPartition, partitions);
       }
     }
-    return {hasRootPartition, partitions};
+    if (node->user) {
+      collectPartitions(node->user.get(), hasRootPartition, partitions);
+    }
   };
+
+  std::pair<bool, std::set<PartitionId>> collectPartitions() {
+    std::set<PartitionId> partitions;
+    bool hasRootPartition = false;
+    auto node = getRootNode();
+    auto allocOp = getAllocOp();
+    if (allocOp.getSrc() && node->partitionId)
+      partitions.insert(*node->partitionId);
+    collectPartitions(getRootNode()->user.get(), hasRootPartition, partitions);
+    return {hasRootPartition, partitions};
+  }
 
   void printNode(Node *node, int indent, llvm::raw_ostream &os) {
     if (!node)
@@ -288,14 +302,15 @@ struct TmemAccessDag {
         if (tmemAlloc.getSrc()) {
           os << " %src ";
         } else {
-          std::tie(hasRootPartition, partitions) = collectPartitions(node);
+          std::tie(hasRootPartition, partitions) = collectPartitions();
         }
       }
       os << "  ";
     }
-    os << "[" << (hasRootPartition ? "root" : "") << "]";
+    os << "[" << (hasRootPartition ? "root" : "");
     for (auto partition : partitions) {
-      os << " @" << partition << " ";
+      auto [id, tag] = partition;
+      os << " @" << tag << "." << id << " ";
     }
     os << "]";
     os << " prev[" << (node->parent ? node->parent->op : nullptr) << "]";
@@ -337,14 +352,28 @@ OpT createInto(
     std::pair<std::optional<PartitionId>, StageCluster> partitionIdStageCluster,
     Args &&...args) {
   std::optional<SetVector<int>> partitionIds = SetVector<int>();
+  std::optional<int> wsTag;
   if (partitionIdStageCluster.first) {
-    partitionIds->insert(*partitionIdStageCluster.first);
+    auto [id, tag] = *partitionIdStageCluster.first;
+    wsTag = tag;
+    partitionIds->insert(id);
   } else {
     partitionIds = std::nullopt;
   }
-  return triton::gpu::createInto<OpT>(b, loc, partitionIds,
-                                      partitionIdStageCluster.second,
-                                      std::forward<Args>(args)...);
+  auto op = triton::gpu::createInto<OpT>(b, loc, partitionIds,
+                                         partitionIdStageCluster.second,
+                                         std::forward<Args>(args)...);
+  if (wsTag) {
+    auto forOp = op->template getParentOfType<scf::ForOp>();
+    while (forOp && !hasWarpSpecializeTag(forOp)) {
+      forOp = forOp->template getParentOfType<scf::ForOp>();
+    }
+    // only set wsTag if op is outside tt.ws loop
+    if (!forOp) {
+      setWarpSpecializeTag(op, *wsTag);
+    }
+  }
+  return op;
 }
 
 struct TMEMAref {
@@ -372,21 +401,20 @@ struct TMEMAref {
                                      buffers, b.getType<AsyncTokenType>());
       token = op.getToken();
     }
+    partitionId = paritionIdStageCluster.first;
     buffer = {};
   }
-  void release(OpBuilder &b, Location loc,
-               std::pair<std::optional<PartitionId>, StageCluster>
-                   paritionIdStageCluster) {
+  void release(OpBuilder &b, Location loc, StageCluster stageCluster) {
     assert(asyncOp);
     if (kind == PUT) {
       createInto<ArefPutExitOp>(
-          b, loc, paritionIdStageCluster, aref, token,
+          b, loc, {partitionId, stageCluster}, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{
               AsyncOpAttr::get(b.getContext(), *asyncOp)}));
       kind = GET;
     } else {
       createInto<ArefGetExitOp>(
-          b, loc, paritionIdStageCluster, aref, token,
+          b, loc, {partitionId, stageCluster}, aref, token,
           b.getArrayAttr(SmallVector<Attribute>{
               AsyncOpAttr::get(b.getContext(), *asyncOp)}));
       kind = PUT;
@@ -417,6 +445,7 @@ struct TMEMAref {
   Value buffer;
   Value token;
   Kind kind;
+  std::optional<PartitionId> partitionId;
   std::optional<AsyncOp> asyncOp;
 };
 
@@ -429,13 +458,11 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
   if (curPartitionId && node->partitionId != curPartitionId) {
     OpBuilder b(node->op);
     Operation *prevOp = nullptr;
-    std::optional<PartitionId> prevPartitionId;
     StageCluster prevStageCluster;
     if (node->parent) {
       // release right after the last op which owns the tmem
       prevOp = node->parent->op;
       b.setInsertionPointAfter(prevOp);
-      prevPartitionId = node->parent->partitionId;
       prevStageCluster = getStageCluster(prevOp);
     } else {
       // if we are inside if-stmt or for-stmt subdag and need to change
@@ -443,15 +470,13 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
       // the parentDag op would be if-stmt or for-stmt
       prevOp = node->parentDag->op;
       b.setInsertionPointToStart(node->op->getBlock());
-      prevPartitionId = node->parentDag->partitionId;
     }
     if (!node->partitionId) {
       // if node->partitionId is not set, it means we are outside ws-region
       // reset prevPartitionId and prevStageCluster to defaults
-      prevPartitionId = {};
       prevStageCluster = {};
     }
-    state.release(b, prevOp->getLoc(), {prevPartitionId, prevStageCluster});
+    state.release(b, prevOp->getLoc(), prevStageCluster);
 
     // acquire right before op that acquires ownership of tmem
     auto curOp = node->op;
@@ -482,6 +507,8 @@ insertTmemArefImpl(TmemAccessDag::Node *node,
 
     // subDag may change asyncOp value, update it after inserting arefs
     state.asyncOp = subdagState.asyncOp;
+    // store subdag state partitoinId
+    state.partitionId = subdagState.partitionId;
   }
 
   if (isa<MMAv5OpInterface>(node->op)) {
@@ -577,9 +604,19 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
   TMEMAref state(
       arefOp, allocOp.getResult(),
       ub::PoisonOp::create(b, allocOp.getLoc(), b.getType<AsyncTokenType>()));
-
   b.setInsertionPoint(allocOp);
   state.acquire(b, allocOp.getLoc(), {partitionId, stageCluster});
+
+  // If initial acquire is in root partition (no partition annotation), the
+  // release must be in the partition of the first owner that has a partition
+  // annotation. Find that partition and update state.partitionId accordingly.
+  if (!state.partitionId) {
+    auto node = rootNode->user.get();
+    do {
+      state.partitionId = node->partitionId;
+      node = node->user.get();
+    } while (node && !state.partitionId);
+  }
 
   if (auto src = allocOp.getSrc()) {
     auto buffer = state.getBuffer(b, partitionId, allocOp);
@@ -598,37 +635,33 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
   if (outerWsLoop) {
     // aref is only used inside ws-loop, so we use the last op to insert
     // matching exit
-    partitionId = node->partitionId;
-    stageCluster = getStageCluster(node->op);
     b.setInsertionPointAfter(node->op);
   } else {
     // aref is used outside ws-loop, find the last point in the same block as
     // create op to have matching exit
-    partitionId = {};
-    stageCluster = {};
     auto op1 = arefOp->getBlock()->findAncestorOpInBlock(*node->op);
     b.setInsertionPointAfter(op1);
   }
-  state.release(b, node->op->getLoc(), {partitionId, stageCluster});
+  stageCluster = getStageCluster(node->op);
+  state.release(b, node->op->getLoc(), stageCluster);
 
   if (state.kind == TMEMAref::GET) {
     // When the state ends up in a GET operation, we need to acquire and release
     // the corresponding partition to prevent deadlocks. This is necessary
     // because if we're inside an outer loop, re-entering the loop without
     // posting a matching GET operation for the PUT would cause the dead-lock.
-    auto [hasRootPartition, partitions] =
-        accessDag.collectPartitions(accessDag.getRootNode());
-    std::optional<int> otherPartitionId;
+    auto [hasRootPartition, partitions] = accessDag.collectPartitions();
+    std::optional<PartitionId> otherPartitionId;
     // since we only have two partition, we just pick the other partition for
     // get
     for (auto partitionId : partitions) {
-      if (outerWsLoop && partitionId != node->partitionId) {
+      if (partitionId != state.partitionId) {
         otherPartitionId = partitionId;
         break;
       }
     }
     state.acquire(b, node->op->getLoc(), {otherPartitionId, {}});
-    state.release(b, node->op->getLoc(), {otherPartitionId, {}});
+    state.release(b, node->op->getLoc(), {});
   }
 
   return success();
@@ -741,18 +774,12 @@ void workaroundForLoopScheduler(triton::FuncOp funcOp) {
 LogicalResult runOnFunction(triton::FuncOp funcOp) {
   SmallVector<TmemAccessDag> tmemDags;
   funcOp.walk([&](TMEMAllocOp allocOp) {
-    // skip allocOps with source and > 1 partition
-    std::optional<SetVector<int>> partitionIds;
-    if (hasPartition(allocOp))
-      partitionIds = getPartitionIds(allocOp);
-    if (!allocOp.getSrc() || (partitionIds && partitionIds->size() == 1))
-      tmemDags.push_back(TmemAccessDag::build(allocOp));
+    tmemDags.push_back(TmemAccessDag::build(allocOp));
   });
 
   for (auto &accessDag : tmemDags) {
     LLVM_DEBUG({ accessDag.printDag(llvm::dbgs()); });
-    auto [hasRootPartition, partitions] =
-        accessDag.collectPartitions(accessDag.getRootNode());
+    auto [hasRootPartition, partitions] = accessDag.collectPartitions();
     assert(partitions.size() <= 2 && "expecting at most 2 partitions");
     auto totalOwners = hasRootPartition + partitions.size();
     if (totalOwners > 1)

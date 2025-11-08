@@ -229,4 +229,9 @@ void setPartition(Operation *op, const SetVector<Partition *> &partitions) {
   setPartition(op, partitionIds);
 }
 
+void setWarpSpecializeTag(Operation *op, int tag) {
+  Builder b(op->getContext());
+  op->setAttr(kWarpSpecializeTagAttrName, b.getI32IntegerAttr(tag));
+}
+
 } // namespace mlir::triton::gpu

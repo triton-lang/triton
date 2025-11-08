@@ -140,9 +140,8 @@ TargetInfo::queryLDSTransLoadParams(int bitWidth) const {
     return std::nullopt;
   unsigned numLanesInShuffleGroup = getWarpSize() / 4;
   unsigned instBitWidth = isGFX1250 && bitWidth == 16 ? 128 : 64;
-  unsigned needContigReg = instBitWidth / bitWidth;
-  return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth,
-                            needContigReg};
+  unsigned tileSize = instBitWidth / bitWidth;
+  return LDSTransLoadParams{numLanesInShuffleGroup, instBitWidth, tileSize};
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
@@ -154,7 +153,8 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   }
   Value falseVal = LLVM::ConstantOp::create(rewriter, loc, elemTy,
                                             rewriter.getZeroAttr(elemTy));
-  bool addAliasGroup = localLoadOp && isSyncedViaAsyncWait(localLoadOp);
+  bool addAliasGroup = localLoadOp && requiresAliasInfoForAsyncOps() &&
+                       isSyncedViaAsyncWait(localLoadOp);
   return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal,
                                  triton::CacheModifier::NONE, addAliasGroup);
 }

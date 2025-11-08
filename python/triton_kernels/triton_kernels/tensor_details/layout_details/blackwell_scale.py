@@ -34,7 +34,7 @@ class BlackwellMXScaleLayout(Layout):
         data = data.reshape(self.B, self.N_pad // self.ALIGN_N, self.ALIGN_N // 32, 32, self.K_pad // self.SWIZZLE_K,
                             self.SWIZZLE_K)
         data = data.transpose(2, 4).contiguous()
-        data = data.view(1, self.B * self.N_pad // 128, self.K_pad // 4, 2, 256)
+        data = data.view(1, self.B * self.N_pad // 128, self.K_pad // self.SWIZZLE_K, 2, 256)
         return data
 
     def unswizzle_data(self, data):
@@ -46,10 +46,8 @@ class BlackwellMXScaleLayout(Layout):
         return data[..., :self.K, :self.N]
 
     def swizzle_block_shape(self, block_shape):
-        MX_PACK_DIVISOR = 32
-        MX_SCALE_BLOCK_K = block_shape[1] // MX_PACK_DIVISOR
         assert block_shape[0] >= 128, f"{block_shape[0]=} must be >= 128"
-        return [1, block_shape[0] // 128, MX_SCALE_BLOCK_K // 4, 2, 256]
+        return [1, block_shape[0] // 128, block_shape[1] // 4, 2, 256]
 
 
 @triton.jit

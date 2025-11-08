@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sysconfig
 import tempfile
+import re
 
 from types import ModuleType
 
@@ -40,12 +41,19 @@ def _build(name: str, src: str, srcdir: str, library_dirs: list[str], include_di
     include_dirs = include_dirs + [srcdir, py_include_dir, *custom_backend_dirs]
     # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
     cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-o", so]
-    cc_cmd += [f'-l{lib}' for lib in libraries]
+    cc_cmd += [_library_flag(lib) for lib in libraries]
     cc_cmd += [f"-L{dir}" for dir in library_dirs]
     cc_cmd += [f"-I{dir}" for dir in include_dirs if dir is not None]
     cc_cmd.extend(ccflags)
     subprocess.check_call(cc_cmd, stdout=subprocess.DEVNULL)
     return so
+
+
+def _library_flag(lib: str) -> str:
+    # Match .so files with optional version numbers (e.g., .so, .so.1, .so.513.50.1)
+    if re.search(r'\.so(\.\d+)*$', lib) or lib.endswith(".a"):
+        return f"-l:{lib}"
+    return f"-l{lib}"
 
 
 @functools.lru_cache

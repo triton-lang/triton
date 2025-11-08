@@ -38,7 +38,7 @@ def cdiv(x, div):
     :param div: the divisor
     :type div: Block
     """
-    return (x + div - 1) // div
+    return (x + (div - 1)) // div
 
 
 @core._tensor_member_fn

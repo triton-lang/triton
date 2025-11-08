@@ -55,14 +55,13 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
     // D = A * B + C
     Value A = op.getA();
     Value D = op.getResult();
 
     NvidiaMmaEncodingAttr mmaLayout = dyn_cast<NvidiaMmaEncodingAttr>(
         cast<RankedTensorType>(D.getType()).getEncoding());
-    if (mmaLayout && supportMMA(op, mmaLayout.getVersionMajor())) {
+    if (mmaLayout) {
       if (mmaLayout.getVersionMajor() == 2) {
         bool isHopperF64 =
             computeCapability == 90 &&
@@ -96,18 +95,8 @@ struct WarpGroupDotOpConversion
   matchAndRewrite(triton::nvidia_gpu::WarpGroupDotOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    // D = A * B + C
-    Value A = op.getA();
-    TypedValue<RankedTensorType> D = op.getResult();
-
-    auto mmaLayout = cast<NvidiaMmaEncodingAttr>(D.getType().getEncoding());
-    if (supportMMA(op.getOperand(0), mmaLayout.getVersionMajor())) {
-      return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
-                          getThreadId(rewriter, loc));
-    }
-
-    return op.emitError(
-        "Unsupported WarpGroupDotOp found when converting TritonGPU to LLVM.");
+    return convertWGMMA(op, adaptor, getTypeConverter(), rewriter,
+                        getThreadId(rewriter, loc));
   }
 };
 

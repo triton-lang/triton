@@ -59,7 +59,8 @@ public:
     const unsigned colStride = 1;
     auto aTMemEncoding = TensorMemoryEncodingAttr::get(
         context, accTMemEncoding.getBlockM(), lhs.getType().getShape()[1],
-        colStride, CTASplitNum[0], CTASplitNum[1]);
+        colStride, CTASplitNum[0], CTASplitNum[1],
+        accTMemEncoding.getTwoCTAs());
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     ttg::MemDescType lhsMemDescType = ttg::MemDescType::get(

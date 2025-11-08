@@ -139,7 +139,7 @@ module attributes {"ttg.num-warps" = 8 : i32, ttg.profile_scratch_memory_alignme
   // CHECK-LABEL: convert_smem_finalize
   // CONVERT-BUILTIN: llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
   // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i64, !llvm.ptr<1>
-  // CONVERT-BUILTIN: llvm.br ^bb{{.*}}(%{{.*}} : i32)
+  // CONVERT-BUILTIN: llvm.cond_br %{{.*}}, ^bb{{.*}}, ^bb{{.*}}
   // CONVERT-BUILTIN: llvm.call_intrinsic "llvm.amdgcn.s.memrealtime"() : () -> i64
   // CONVERT-BUILTIN: llvm.store %{{.*}}, %{{.*}} : i64, !llvm.ptr<1>
   // CONVERT-BUILTIN: llvm.br ^bb{{.*}}

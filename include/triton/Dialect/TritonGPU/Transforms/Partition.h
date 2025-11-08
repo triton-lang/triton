@@ -120,6 +120,7 @@ void setPartition(Operation *op, const SetVector<Partition *> &partitions);
 void setPartition(Operation *op, const SetVector<int> &partitionIds);
 void setPartitionOutputs(Operation *op,
                          ArrayRef<SetVector<int>> partitionOutputsIds);
+void setWarpSpecializeTag(Operation *op, int tag);
 
 } // namespace mlir::triton::gpu
 

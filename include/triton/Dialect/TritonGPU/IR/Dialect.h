@@ -303,6 +303,8 @@ SetVector<int> getPartitionIds(Operation *op);
 SmallVector<SetVector<int>, 4> getPartitionOutputs(Operation *op);
 SetVector<int> getPartitionIds(OpOperand *use);
 bool hasPartition(Operation *op);
+bool hasWarpSpecializeTag(Operation *op);
+std::optional<int> getWarpSpecializeTag(Operation *op);
 
 } // namespace mlir::triton::gpu
 
