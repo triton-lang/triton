@@ -1,11 +1,4 @@
 #include "triton/Dialect/Gluon/Transforms/InferLayoutUtils.h"
-//#include "triton/Dialect/Gluon/IR/Dialect.h"
-//#include "triton/Dialect/Triton/IR/Dialect.h"
-//#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-//#include "llvm/ADT/PriorityWorklist.h"
-//#include "llvm/Support/Debug.h"
-//#include "llvm/Support/raw_ostream.h"
-//#include "llvm/Support/xxhash.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Visitors.h"
@@ -20,7 +13,6 @@
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/xxhash.h"
-
 
 #define DEBUG_TYPE "gluon-layout-propagation-utils"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -77,35 +69,33 @@ bool encodingsMayVary(Operation *op) {
 }
 } // namespace
 
-LogicalResult updateEncoding(ArrayRef<Value> values,
-                            LayoutInfo info,
-                            FuncOp *func,
-                            llvm::MapVector<Value, LayoutInfo> &valueToEncoding,
-                            llvm::PriorityWorklist<Value> &worklist,
-                            llvm::MapVector<Attribute, uint64_t> &hashMemo) {
-    for (auto value : values) {
-      auto [it, inserted] = valueToEncoding.insert({value, info});
-      if (!inserted) {
-        auto defOp = value.getDefiningOp();
-        auto op = defOp ? defOp : func->getOperation();
-        auto combine = combineInfo(it->second, info, op, hashMemo);
-        if (!combine)
-          return failure();
-        if (combine == it->second)
-          continue;
-        it->second = combine;
-      }
-      LLVM_DEBUG({
-        DBGS() << "Setting value:\n\t" << value << "\nto encoding:\n\t"
-               << it->second.encoding << "\n";
-      });
-      worklist.insert(value);
+LogicalResult
+updateEncoding(ArrayRef<Value> values, LayoutInfo info, FuncOp *func,
+               llvm::MapVector<Value, LayoutInfo> &valueToEncoding,
+               llvm::PriorityWorklist<Value> &worklist,
+               llvm::MapVector<Attribute, uint64_t> &hashMemo) {
+  for (auto value : values) {
+    auto [it, inserted] = valueToEncoding.insert({value, info});
+    if (!inserted) {
+      auto defOp = value.getDefiningOp();
+      auto op = defOp ? defOp : func->getOperation();
+      auto combine = combineInfo(it->second, info, op, hashMemo);
+      if (!combine)
+        return failure();
+      if (combine == it->second)
+        continue;
+      it->second = combine;
     }
-    return success();
+    LLVM_DEBUG({
+      DBGS() << "Setting value:\n\t" << value << "\nto encoding:\n\t"
+             << it->second.encoding << "\n";
+    });
+    worklist.insert(value);
+  }
+  return success();
 }
 
-LogicalResult inferLayout(FuncOp func,
-                          llvm::function_ref<bool(Type)> typeCheck,
+LogicalResult inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck,
                           llvm::MapVector<Value, LayoutInfo> &valueToEncoding,
                           llvm::PriorityWorklist<Value> &worklist,
                           llvm::MapVector<Attribute, uint64_t> &hashMemo) {
@@ -148,8 +138,8 @@ LogicalResult inferLayout(FuncOp func,
           bool mayVary = info.mayVary || encodingsMayVary(op);
           LayoutInfo dstInfo{dstEnc, mayVary};
           if (failed(updateEncoding(llvm::to_vector_of<Value>(op->getResults()),
-                                    dstInfo, &func, valueToEncoding,
-                                    worklist, hashMemo)))
+                                    dstInfo, &func, valueToEncoding, worklist,
+                                    hashMemo)))
             return failure();
         }
       }
@@ -218,17 +208,18 @@ LogicalResult inferLayout(FuncOp func,
   return success();
 }
 
-
-LogicalResult inferLayout(ModuleOp &mod,
-                          llvm::function_ref<bool(Type)> typeCheck,
-                          llvm::MapVector<FuncOp, llvm::MapVector<Value, LayoutInfo>> &funcValueEnc,
-                          llvm::MapVector<FuncOp, llvm::PriorityWorklist<Value>> &funcWorklist,
-                          llvm::MapVector<FuncOp, llvm::MapVector<Attribute, uint64_t>> &funcHashMemo) {
+LogicalResult inferLayout(
+    ModuleOp &mod, llvm::function_ref<bool(Type)> typeCheck,
+    llvm::MapVector<FuncOp, llvm::MapVector<Value, LayoutInfo>> &funcValueEnc,
+    llvm::MapVector<FuncOp, llvm::PriorityWorklist<Value>> &funcWorklist,
+    llvm::MapVector<FuncOp, llvm::MapVector<Attribute, uint64_t>>
+        &funcHashMemo) {
   for (auto &op : *mod.getBody()) {
     auto func = dyn_cast<FuncOp>(&op);
     if (!func)
       continue;
-    if (failed(inferLayout(func, typeCheck, funcValueEnc[func], funcWorklist[func], funcHashMemo[func])))
+    if (failed(inferLayout(func, typeCheck, funcValueEnc[func],
+                           funcWorklist[func], funcHashMemo[func])))
       return failure();
   }
   return success();
