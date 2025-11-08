@@ -14,7 +14,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/xxhash.h"
 
-#define DEBUG_TYPE "gluon-layout-propagation-utils"
+#define DEBUG_TYPE "gluon-infer-layout-utils"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
