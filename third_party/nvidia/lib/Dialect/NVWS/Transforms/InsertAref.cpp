@@ -485,7 +485,6 @@ bool insertArefs(OpBuilder &builder, scf::ForOp loop, Block *block,
       // if use is outside ttg.ws, it may not have partition ids, skip it
       if (!hasPartition(user))
         continue;
-
       auto userPartitions = getPartitionIds(&use);
       for (auto id : producedValue.partitions) {
         userPartitions.remove(id);
