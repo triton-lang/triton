@@ -374,7 +374,8 @@ def test_warp_specialize_tma_matmul_persistent(M, N, K, BLOCK_SIZE_M, BLOCK_SIZE
 
     kernel = matmul_tma_persistent_ws_kernel[grid](A, B, C, *A.stride(), *B.stride(), *C.stride(), M, N, K, num_stages,
                                                    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M, NUM_SMS,
-                                                   num_warps=num_warps, USE_FP8=use_fp8, FLATTEN=flatten and is_blackwell())
+                                                   num_warps=num_warps, USE_FP8=use_fp8, FLATTEN=flatten
+                                                   and is_blackwell())
     ttgir = kernel.asm["ttgir"]
     if is_blackwell():
         assert "ttng.tc_gen5_mma" in ttgir
@@ -488,8 +489,7 @@ def attention_persistent_inner_loop_kernel(  #
         BLOCK_M: tl.constexpr,  #
         HEAD_DIM: tl.constexpr,  #
         warp_specialize: tl.constexpr,  #
-        num_stages: tl.constexpr
-):
+        num_stages: tl.constexpr):
     prog_id = tl.program_id(0)
     num_sm = tl.num_programs(0)
     num_tiles = tl.cdiv(M, BLOCK_M)
@@ -541,10 +541,9 @@ def attention_persistent_inner_loop_kernel(  #
 @pytest.mark.parametrize("disable_acc_multibuf", [False, True])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("use_fp8", [False, True])
-@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-def test_warp_specialize_attention_persistent_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, disable_acc_multibuf, num_warps,
-                                                      use_fp8):
+def test_warp_specialize_attention_persistent_forward(M, N, BLOCK_M, HEAD_DIM, num_stages, disable_acc_multibuf,
+                                                      num_warps, use_fp8):
     if BLOCK_M == 128 and HEAD_DIM == 128 and not use_fp8:
         # These configurations currently use too much shared memory.
         if (num_warps, num_stages) in [(4, 4), (8, 4), (8, 3), (4, 3)]:
@@ -572,15 +571,12 @@ def test_warp_specialize_attention_persistent_forward(M, N, BLOCK_M, HEAD_DIM, n
                                     block_shape=[BLOCK_M, HEAD_DIM])
     desc_acc = TensorDescriptor(acc, shape=[M, HEAD_DIM], strides=[HEAD_DIM, 1], block_shape=[BLOCK_M, HEAD_DIM])
 
-    NUM_SM = 4 # torch.cuda.get_device_properties("cuda").multi_processor_count
-    out = attention_persistent_inner_loop_kernel[(NUM_SM,)](desc_q, desc_k, desc_v, desc_acc, l_i, m_i, M, N, 0.5,
-                                                       BLOCK_M, HEAD_DIM, True, num_stages=num_stages, num_warps=num_warps)
-    # print(out.asm["ttgir"])
-    # return
-    attention_inner_loop_kernel[(M // BLOCK_M, )](desc_q, desc_k, desc_v, desc_acc_ref, l_i_ref, m_i_ref, M, N, 0.5, BLOCK_M,
-                                                  HEAD_DIM, False, num_stages=num_stages, num_warps=num_warps)
+    NUM_SM = 4
+    attention_persistent_inner_loop_kernel[(NUM_SM, )](desc_q, desc_k, desc_v, desc_acc, l_i, m_i, M, N, 0.5, BLOCK_M,
+                                                       HEAD_DIM, True, num_stages=num_stages, num_warps=num_warps)
+    attention_inner_loop_kernel[(M // BLOCK_M, )](desc_q, desc_k, desc_v, desc_acc_ref, l_i_ref, m_i_ref, M, N, 0.5,
+                                                  BLOCK_M, HEAD_DIM, False, num_stages=num_stages, num_warps=num_warps)
 
-    print(acc.to(torch.float32).sum(), acc_ref.to(torch.float32).sum())
     torch.testing.assert_close(acc.to(torch.float32), acc_ref.to(torch.float32), atol=0, rtol=0)
     torch.testing.assert_close(l_i.to(torch.float32), l_i_ref.to(torch.float32), atol=0, rtol=0)
     torch.testing.assert_close(m_i.to(torch.float32), m_i_ref.to(torch.float32), atol=0, rtol=0)
@@ -591,7 +587,9 @@ def grouped_matmul_tma_kernel(
     group_a_ptrs,
     group_b_ptrs,
     group_c_ptrs,
-    gm, gn, gk,
+    gm,
+    gn,
+    gk,
     g_lds,
     group_size,
     NUM_SM: tl.constexpr,
@@ -686,14 +684,9 @@ def group_gemm_tma_fn(group_A, group_B):
     triton.set_allocator(alloc_fn)
 
     grid = lambda META: (META['NUM_SM'], )
-    out = grouped_matmul_tma_kernel[grid](d_a_ptrs, d_b_ptrs, d_c_ptrs, M, N, K, d_g_lds, group_size,
-                                          BLOCK_SIZE_M=128,
-                                          BLOCK_SIZE_N=128,
-                                          BLOCK_SIZE_K=64,
-                                          NUM_SM=4,
-                                          num_stages=3)
+    out = grouped_matmul_tma_kernel[grid](d_a_ptrs, d_b_ptrs, d_c_ptrs, M, N, K, d_g_lds, group_size, BLOCK_SIZE_M=128,
+                                          BLOCK_SIZE_N=128, BLOCK_SIZE_K=64, NUM_SM=4, num_stages=3)
     assert "ttg.warp_specialize" in out.asm["ttgir"]
-    # print(out.asm["ttgir"])
     return group_C
 
 
@@ -721,9 +714,3 @@ def test_grouped_gemm(M, N, K, group_size):
     tri_tma_out = group_gemm_tma_fn(group_A, group_B_T)
     for i in range(group_size):
         assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=1e-2)
-
-
-# test_warp_specialize_tma_matmul_persistent(1024, 1024, 1024, 128, 128, 128, 3, 4, True, False)
-# test_warp_specialize_attention_persistent_forward(8192, 8192, 64, 64, 2, True, 4, True)
-# test_warp_specialize_attention_forward(1024, 1024, 128, 128, 3, False, 4, True)
-test_grouped_gemm(128, 256, 128, 4)

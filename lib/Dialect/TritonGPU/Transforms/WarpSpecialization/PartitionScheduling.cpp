@@ -1173,7 +1173,8 @@ bool canProveExecuteOnce(scf::ForOp forOp) {
     (void)getForwardSlice(v, &slice, opt);
 
     // For simplicity, we only handle an assume op directly operating on v. It's
-    // possible to support more general cases, but they require a range analysis.
+    // possible to support more general cases, but they require a range
+    // analysis.
     for (auto op : slice) {
       if (auto assumeOp = dyn_cast<LLVM::AssumeOp>(op)) {
         auto cond = assumeOp.getCond();
