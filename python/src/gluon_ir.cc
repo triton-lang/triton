@@ -927,7 +927,6 @@ void init_gluon_ir(py::module &&m) {
           return layoutToGluon(attr);
         });
 
-
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",
                                              py::module_local())
       .def("get_default_region", &ttg::WarpSpecializeOp::getDefaultRegion,
