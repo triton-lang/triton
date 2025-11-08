@@ -258,14 +258,6 @@ private:
             nullptr, auxData.commits[CommitKind::AsyncCp][op],
             auxData.writeVisibility[(int)MemType::SHARED_MEM][op], op);
       }
-      if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
-        if (wgmmaOp.getIsAsync() == true) {
-          // Add commit (implicit in ttgir) after staging wgmma's operand for
-          // read
-          funcBuilder.createCommitAccessesCall(
-              b, thread, nullptr, auxData.commits[CommitKind::Wgmma][op], op);
-        }
-      }
       if (auto wgmmaWaitOp = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
 
         funcBuilder.createClearOutstandingCommitsTransferReadsCall(
@@ -273,12 +265,6 @@ private:
             wgmmaWaitOp.getPendings(), nullptr,
             auxData.commits[CommitKind::Wgmma][op],
             auxData.readVisibility[(int)MemType::SHARED_MEM][op], op);
-      }
-      // TODO: add an op info that would do it automatically maybe
-      if (auto tmaStoreOp = dyn_cast<ttng::AsyncTMACopyLocalToGlobalOp>(op)) {
-        funcBuilder.createCommitAccessesCall(
-            b, baseThread, nullptr, auxData.commits[CommitKind::TmaStore][op],
-            op);
       }
       if (auto tmaStoreWaitOp = dyn_cast<ttng::TMAStoreWaitOp>(op)) {
         funcBuilder.createClearOutstandingCommitsTransferReadsCall(
@@ -315,6 +301,7 @@ private:
     SmallVector<BarrierInfo> barriers;
     Value pred;
     SmallVector<Effects> operandEffects;
+    bool implicitCommit = false;
   };
 
   void instrumentMemEffects(ImplicitLocOpBuilder &b, Operation *op, int thread,
@@ -405,6 +392,12 @@ private:
                                                  combinedPred, op);
       }
     }
+    if (opInfo->implicitCommit) {
+      assert(opInfo->trackingKind ==
+             MemEffectsOpInfo::TrackingKind::CommitCount);
+      funcBuilder.createCommitAccessesCall(
+          b, baseThread, pred, auxData.commits[opInfo->commitKind][op], op);
+    }
   }
 
   void addWriteChecks(ImplicitLocOpBuilder &b,
@@ -462,6 +455,7 @@ private:
       info.emplace();
       info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
       info->commitKind = CommitKind::TmaStore;
+      info->implicitCommit = true;
       info->operandEffects.push_back({/*.rw =*/MemEffectsOpInfo::Effects::Read,
                                       /*.buf =*/storeOp.getSrc()});
     }
@@ -564,6 +558,7 @@ private:
         info.emplace();
         info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
         info->commitKind = CommitKind::Wgmma;
+        info->implicitCommit = true;
         info->barriers = {};
         if (isa<ttg::SharedEncodingTrait>(
                 wgmmaOp.getA().getType().getEncoding())) {
