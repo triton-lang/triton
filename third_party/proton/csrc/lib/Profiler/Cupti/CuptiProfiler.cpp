@@ -421,7 +421,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           uint32_t graphId = 0;
           cupti::getGraphExecId<true>(graphExec, &graphId);
           auto dataSet = profiler.getDataSet();
-          auto parentId = threadState.scopeStack.back().scopeId;
+          auto parentId = profiler.correlation.externIdQueue.back();
           for (auto [nodeId, contexts] :
                pImpl->graphIdNodeIdToContexts[graphId]) {
             for (auto *data : dataSet) {
