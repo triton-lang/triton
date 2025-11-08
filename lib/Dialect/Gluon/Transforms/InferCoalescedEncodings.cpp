@@ -43,11 +43,6 @@ bool isCoalescedEncodingTensorType(Type ty) {
 class GluonInferCoalescedEncodingsPass
     : public impl::GluonInferCoalescedEncodingsPassBase<
           GluonInferCoalescedEncodingsPass> {
-  //
-  // triton coalesce results for reference:
-  // ./build/cmake.linux-x86_64-cpython-3.12/bin/triton-opt --tritongpu-coalesce
-  // custom_bench/tt_coalesc.mlir -debug-only tritongpu-coalesce > tmp.mlir
-  //
   void runOnOperation() override {
     // Run axis info analysis
     ModuleOp moduleOp = getOperation();
@@ -55,8 +50,6 @@ class GluonInferCoalescedEncodingsPass
 
     // 1. for every load/store with coalesced encoding,
     // infer coalesced encoding for ptrs
-    //
-    // similar to Coalesce.cpp
     //
     llvm::MapVector<Operation *, Attribute> layoutMap;
     int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
@@ -89,26 +82,28 @@ class GluonInferCoalescedEncodingsPass
                                 layoutMap);
     });
 
-    // 2. propagate forward/backward
-    // similar to ResolveAutoLayoutPass.cpp
+    // 2. propagate Coalesced Layout forward/backward
     //
     // for backward slice, it doesn't cross the set_auto_layout boundary
     // i.e. gl.set_auto_layout(val, gl.CoalescedLayout())
-    // -> gl.set_auto_layout(val, concrete coalesced layout)
+    // -> gl.set_auto_layout(val, a concrete coalesced layout)
     // then ResolveAutoLayoutPass will handle the rest
     //
     llvm::MapVector<FuncOp, llvm::MapVector<Value, LayoutInfo>> funcValueEnc;
     llvm::MapVector<FuncOp, llvm::PriorityWorklist<Value>> funcWorklist;
     llvm::MapVector<FuncOp, llvm::MapVector<Attribute, uint64_t>> funcHashMemo;
+
     auto seeded = moduleOp.walk([&](Operation *op) -> WalkResult {
       if (layoutMap.find(op) == layoutMap.end())
         return WalkResult::advance();
       Attribute layout = layoutMap[op];
       FuncOp func = op->getParentOfType<FuncOp>();
-      return updateEncoding(llvm::to_vector_of<Value>(op->getOperands()),
-                            LayoutInfo{layout, false}, &func,
-                            funcValueEnc[func], funcWorklist[func],
-                            funcHashMemo[func]);
+      if (failed(updateEncoding(llvm::to_vector_of<Value>(op->getOperands()),
+                                LayoutInfo{layout, false}, &func,
+                                funcValueEnc[func], funcWorklist[func],
+                                funcHashMemo[func])))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
     });
 
     if (seeded.wasInterrupted())
