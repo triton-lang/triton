@@ -136,7 +136,6 @@ static_print = builtin(tl_core.static_print)
 store = builtin(tl_core.store)
 sub = builtin(tl_core.sub)
 to_tensor = builtin(tl_core.to_tensor)
-trans = builtin(tl_core.trans)
 where = builtin(tl_core.where)
 
 

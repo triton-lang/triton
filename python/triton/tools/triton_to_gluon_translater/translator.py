@@ -83,6 +83,7 @@ class TritonToGluonTransformer(ast.NodeTransformer):
                 builtin_mapping: dict[str, ast.expr] = {
                     "arange": ast.Name(id="tl_arange", ctx=ast.Load()),
                     "full": ast.Name(id="tl_full", ctx=ast.Load()),
+                    "trans": ast.Name(id="tl_trans", ctx=ast.Load()),
                     "dot": ast.Name(id="tl_dot", ctx=ast.Load()),
                     "dot_scaled": ast.Name(id="tl_dot_scaled", ctx=ast.Load()),
                     "make_tensor_descriptor": ast.Name(id="tl_make_tensor_descriptor", ctx=ast.Load()),

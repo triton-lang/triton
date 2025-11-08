@@ -82,7 +82,6 @@ from ._core import (
     thread_barrier,
     to_linear_layout,
     to_tensor,
-    trans,
     warp_specialize,
     where,
 )
