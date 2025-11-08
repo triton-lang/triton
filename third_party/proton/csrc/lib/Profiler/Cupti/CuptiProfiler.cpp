@@ -85,9 +85,7 @@ uint32_t processActivityKernel(
     // - corrId -> numKernels
     auto nodeId = kernel->graphNodeId;
     auto captureId = parentId;
-    if (graphIdNodeIdToScopeIdMap.contain(kernel->graphId) &&
-        graphIdNodeIdToScopeIdMap[kernel->graphId].find(nodeId) !=
-            graphIdNodeIdToScopeIdMap[kernel->graphId].end()) {
+    if (graphIdNodeIdToScopeIdMap.contain(kernel->graphId)) {
       captureId = graphIdNodeIdToScopeIdMap[kernel->graphId][nodeId];
     }
     for (auto *data : dataSet) {
@@ -105,17 +103,18 @@ uint32_t processActivityKernel(
   return correlationId;
 }
 
-uint32_t
-processActivity(CuptiProfiler::GraphIdNodeIdToScopeIdMap &graphIdNodeIdToScopeId,
-                CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
-                CuptiProfiler::ApiExternIdSet &apiExternIds,
-                std::set<Data *> &dataSet, CUpti_Activity *activity) {
+uint32_t processActivity(
+    CuptiProfiler::GraphIdNodeIdToScopeIdMap &graphIdNodeIdToScopeId,
+    CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
+    CuptiProfiler::ApiExternIdSet &apiExternIds, std::set<Data *> &dataSet,
+    CUpti_Activity *activity) {
   auto correlationId = 0;
   switch (activity->kind) {
   case CUPTI_ACTIVITY_KIND_KERNEL:
   case CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL: {
-    correlationId = processActivityKernel(graphIdNodeIdToScopeId, corrIdToExternId,
-                                          apiExternIds, dataSet, activity);
+    correlationId =
+        processActivityKernel(graphIdNodeIdToScopeId, corrIdToExternId,
+                              apiExternIds, dataSet, activity);
     break;
   }
   default:
@@ -145,8 +144,7 @@ constexpr std::array<CUpti_CallbackId, 22> kDriverApiLaunchCallbacks = {
     CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2_ptsz,
     CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCaptureToGraph,
     CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCaptureToGraph_ptsz,
-    CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture
-};
+    CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture};
 
 constexpr std::array<CUpti_CallbackId, 11> kRuntimeApiLaunchCallbacks = {
     CUPTI_RUNTIME_TRACE_CBID_cudaLaunch_v3020,
@@ -227,7 +225,6 @@ bool isDriverAPILaunch(CUpti_CallbackId cbId) {
 
 } // namespace
 
-
 struct CuptiProfiler::CuptiProfilerPimpl
     : public GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface {
   CuptiProfilerPimpl(CuptiProfiler &profiler)
@@ -237,7 +234,6 @@ struct CuptiProfiler::CuptiProfilerPimpl
   void doStart() override;
   void doFlush() override;
   void doStop() override;
-
 
   static void allocBuffer(uint8_t **buffer, size_t *bufferSize,
                           size_t *maxNumRecords);
@@ -348,7 +344,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         cupti::getGraphExecId<true>(graphData->graphExec, &graphExecId);
       if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED ||
           cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED) {
-        // To clone a graph using cuGraphClone, CUPTI triggers both 
+        // To clone a graph using cuGraphClone, CUPTI triggers both
         // CREATED and CLONED callbacks for each node.
         // So we only increase the numInstances in CREATED callback.
         uint32_t nodeId = 0;
@@ -378,8 +374,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         // Once a graphExec is created, the graph that it is created from
         // can be destroyed. So we need to cache the numInstances for
         // graphExec here.
-        pImpl->graphExecIdToNumInstances[graphExecId] = pImpl
-            ->graphIdToNumInstances[graphId];
+        pImpl->graphExecIdToNumInstances[graphExecId] =
+            pImpl->graphIdToNumInstances[graphId];
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
         pImpl->graphExecIdToNumInstances.erase(graphExecId);
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
@@ -411,12 +407,10 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         numInstances = std::numeric_limits<size_t>::max();
         auto findGraph = false;
         if (pImpl->graphExecIdToNumInstances.contain(graphExecId)) {
-          numInstances =
-              pImpl->graphExecIdToNumInstances[graphExecId];
+          numInstances = pImpl->graphExecIdToNumInstances[graphExecId];
           findGraph = true;
         }
-        if (!findGraph && 
-            !pImpl->graphExecIdChecked.contain(graphExecId)) {
+        if (!findGraph && !pImpl->graphExecIdChecked.contain(graphExecId)) {
           pImpl->graphExecIdChecked.insert(graphExecId);
           std::cerr << "[PROTON] Cannot find graph for graphExecId: "
                     << graphExecId
@@ -429,7 +423,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           auto dataSet = profiler.getDataSet();
           auto parentId = threadState.scopeStack.back().scopeId;
           for (auto [nodeId, contexts] :
-                  pImpl->graphIdNodeIdToContexts[graphId]) {
+               pImpl->graphIdNodeIdToContexts[graphId]) {
             for (auto *data : dataSet) {
               auto scopeId = data->addOp(parentId, contexts);
               profiler.correlation.graphIdNodeIdToScopeId[graphId][nodeId] =
@@ -440,8 +434,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
       } else if (cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture ||
                  cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_ptsz ||
                  cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2 ||
-                 cbId ==
-                     CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2_ptsz) {
+                 cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamBeginCapture_v2_ptsz) {
         threadState.isStreamCapturing = true;
       } else if (cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture ||
                  cbId == CUPTI_DRIVER_TRACE_CBID_cuStreamEndCapture_ptsz) {

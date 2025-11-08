@@ -32,10 +32,10 @@ public:
                     std::unordered_map<uint64_t, std::pair<size_t, size_t>>>;
   using GraphIdNodeIdToScopeIdMap = ThreadSafeMap<
       uint32_t, std::unordered_map<uint32_t, size_t>,
-      std::unordered_map<
-          uint32_t, std::unordered_map<uint32_t, size_t>>>; /*<graph_id,
-                                                               node_id,
-                                                               scope_id>*/
+      std::unordered_map<uint32_t,
+                         std::unordered_map<uint32_t, size_t>>>; /*<graph_id,
+                                                                    node_id,
+                                                                    scope_id>*/
   using ApiExternIdSet = ThreadSafeSet<size_t, std::unordered_set<size_t>>;
 
 protected:
