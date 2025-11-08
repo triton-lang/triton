@@ -840,7 +840,6 @@ SmallVector<SetVector<int>> getYieldPartitions(Block *block) {
   SmallVector<SetVector<int>> yieldPartitions(terminator->getNumOperands());
   for (auto &opnd : terminator->getOpOperands()) {
     auto op = opnd.get().getDefiningOp();
-    std::optional<int> pos;
     if (auto forOp = dyn_cast<scf::ForOp>(block->getParentOp());
         forOp && isa<AsyncTokenType>(opnd.get().getType())) {
       // Heuristic: when for-op yields an async-token, the output partition of
@@ -848,16 +847,8 @@ SmallVector<SetVector<int>> getYieldPartitions(Block *block) {
       // At the moment token must have only one use
       auto arg = forOp.getRegionIterArg(opnd.getOperandNumber());
       assert(arg.hasOneUse());
-      auto tokenUse = arg.getUses().begin();
-      op = tokenUse->getOwner();
-      if (auto innerFor = dyn_cast<scf::ForOp>(op)) {
-        pos = tokenUse->getOperandNumber() - innerFor.getNumControlOperands();
-      }
-    } else if (op && op->getNumRegions() > 0) {
-      // if producer is a regioned op, get positional result index
-      auto it = llvm::find(op->getResults(), opnd.get());
-      assert(it != op->getResults().end());
-      pos = it - op->getResults().begin();
+      op = arg.getUses().begin()->getOwner();
+      assert(op);
     }
     if (!op)
       continue;
@@ -1344,7 +1335,6 @@ void hoistTmemAlloc(ttng::TMEMAllocOp allocToHoist) {
 void PartitionScheduling::runOnOperation() {
   ModuleOp m = getOperation();
   SmallVector<scf::ForOp> loops;
-
   m.walk([&](scf::ForOp loop) {
     if (loop->hasAttr(kWarpSpecializeAttrName)) {
       loops.push_back(loop);
@@ -1361,7 +1351,6 @@ void PartitionScheduling::runOnOperation() {
 
       assignRegionOpPartitions(loop);
       verifyPartitions(loop, *partitions);
-
       loop->setAttr(
           kWarpSpecializeTagAttrName,
           IntegerAttr::get(IntegerType::get(loop.getContext(), 32), idx));
