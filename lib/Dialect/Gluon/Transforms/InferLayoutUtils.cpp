@@ -198,13 +198,6 @@ LogicalResult inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck,
     }
   }
 
-  // Cleanup set_auto_layout ops
-  func.walk([&](gluon::SetAutoLayoutOp op) {
-    assert(op.getSrc().getType() == op.getType());
-    op.getResult().replaceAllUsesWith(op.getSrc());
-    op->erase();
-  });
-
   return success();
 }
 

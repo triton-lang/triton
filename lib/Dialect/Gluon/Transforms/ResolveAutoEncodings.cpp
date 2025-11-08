@@ -59,6 +59,14 @@ public:
                            funcWorklist, funcHashMemo)))
       return signalPassFailure();
 
+
+    // Cleanup set_auto_layout ops
+    m.walk([&](gluon::SetAutoLayoutOp op) {
+      assert(op.getSrc().getType() == op.getType());
+      op.getResult().replaceAllUsesWith(op.getSrc());
+      op->erase();
+    });
+
     // Double check we didn't miss anything
     auto res = m.walk([](Operation *op) -> WalkResult {
       for (auto resTy : op->getResultTypes()) {
