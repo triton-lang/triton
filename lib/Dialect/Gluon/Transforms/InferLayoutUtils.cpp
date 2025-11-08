@@ -183,8 +183,8 @@ LogicalResult inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck,
   // Transfer propagated encodings into the graph
   auto ctx = func.getContext();
   for (auto &[val, info] : valueToEncoding) {
+    assert(typeCheck(val.getType()));
     auto existingTy = cast<RankedTensorType>(val.getType());
-    assert(isa<gluon::AutoEncodingAttr>(existingTy.getEncoding()));
     auto ty = existingTy.cloneWithEncoding(info.encoding);
     val.setType(ty);
 
@@ -215,6 +215,33 @@ LogicalResult inferLayout(
                            funcWorklist[func], funcHashMemo[func])))
       return failure();
   }
+  return success();
+}
+
+LogicalResult doubleCheckEncodings(ModuleOp &mod,
+                                   llvm::function_ref<bool(Type)> typeCheck) {
+  auto res = mod.walk([&](Operation *op) -> WalkResult {
+    for (auto resTy : op->getResultTypes()) {
+      if (typeCheck(resTy)) {
+        return op->emitOpError("Failed to infer return type");
+      }
+    }
+    return success();
+  });
+  if (res.wasInterrupted())
+    return failure();
+
+  res = mod.walk([&](Block *block) -> WalkResult {
+    for (auto argTy : block->getArgumentTypes()) {
+      if (typeCheck(argTy)) {
+        return block->getParentOp()->emitError(
+            "Failed to infer block argument type");
+      }
+    }
+    return success();
+  });
+  if (res.wasInterrupted())
+    return failure();
   return success();
 }
 

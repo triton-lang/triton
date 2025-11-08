@@ -59,7 +59,6 @@ public:
                            funcWorklist, funcHashMemo)))
       return signalPassFailure();
 
-
     // Cleanup set_auto_layout ops
     m.walk([&](gluon::SetAutoLayoutOp op) {
       assert(op.getSrc().getType() == op.getType());
@@ -67,30 +66,8 @@ public:
       op->erase();
     });
 
-    // Double check we didn't miss anything
-    auto res = m.walk([](Operation *op) -> WalkResult {
-      for (auto resTy : op->getResultTypes()) {
-        if (isAutoEncodingTensorType(resTy)) {
-          return op->emitOpError("Failed to infer return type");
-        }
-      }
-      return success();
-    });
-    if (res.wasInterrupted())
-      return signalPassFailure();
-
-    res = m.walk([](Block *block) -> WalkResult {
-      for (auto argTy : block->getArgumentTypes()) {
-        if (isAutoEncodingTensorType(argTy)) {
-          return block->getParentOp()->emitError(
-              "Failed to infer block argument type");
-        }
-      }
-      return success();
-    });
-    if (res.wasInterrupted())
+    if (failed(doubleCheckEncodings(m, isAutoEncodingTensorType)))
       return signalPassFailure();
   }
 };
-
 } // namespace mlir::triton::gluon

@@ -37,6 +37,9 @@ LogicalResult inferLayout(
     llvm::MapVector<FuncOp, llvm::MapVector<Attribute, uint64_t>>
         &funcHashMemo);
 
+LogicalResult doubleCheckEncodings(ModuleOp &mod,
+                                   llvm::function_ref<bool(Type)> typeCheck);
+
 } // namespace mlir::triton::gluon
 
 #endif // TRITON_DIALECT_GLUON_TRANSFORMS_INFERLAYOUTUTILS_H_
