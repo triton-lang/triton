@@ -36,6 +36,7 @@ def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK: tl.constexpr):
     tl.store(out_ptr + offsets, x + y)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_simple_kernel(tmp_path):
     kernel = convert_kernel(add_kernel, "add_kernel", tmp_path)
 
@@ -255,6 +256,7 @@ def split_kernel(x_ptr, out_ptr):
     tl.store(p, a)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_split(tmp_path):
     kernel = convert_kernel(split_kernel, "split_kernel", tmp_path)
 
@@ -276,6 +278,7 @@ def reduce_to_scalar_kernel(out_ptr):
     tl.store(out_ptr, x)
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_reduce_to_scalar(tmp_path):
     kernel = convert_kernel(reduce_to_scalar_kernel, "reduce_to_scalar_kernel", tmp_path)
     grid = (1, )
