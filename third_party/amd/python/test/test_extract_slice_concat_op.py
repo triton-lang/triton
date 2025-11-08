@@ -113,7 +113,7 @@ def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_t
         %10 = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>, tensor<{M}x{N}xi32, #blocked>
         %11 = tt.load %10 {{cache = 1 : i32, evict = 1 : i32, isVolatile = false}} : tensor<{M}x{N}x!tt.ptr<f16>, #blocked>
         %12 = ttg.convert_layout %11 : tensor<{M}x{N}xf16, #blocked> -> tensor<{M}x{N}xf16, #src_extract_layout>
-        %13 = amdgpu.extract_slice %12 [{M_tile_offset}, {N_tile_offset}] : tensor<{M}x{N}xf16, #src_extract_layout> to tensor<{M_tile_size}x{N_tile_size}xf16, #dst_extract_layout>
+        %13 = amdg.extract_slice %12 [{M_tile_offset}, {N_tile_offset}] : tensor<{M}x{N}xf16, #src_extract_layout> to tensor<{M_tile_size}x{N_tile_size}xf16, #dst_extract_layout>
         %14 = ttg.convert_layout %13 : tensor<{M_tile_size}x{N_tile_size}xf16, #dst_extract_layout> -> tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
         %15 = tt.addptr %34, %40 : tensor<{M_tile_size}x{N_tile_size}x!tt.ptr<f16>, #blocked>, tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
         tt.store %15, %14 : tensor<{M_tile_size}x{N_tile_size}x!tt.ptr<f16>, #blocked>
@@ -216,7 +216,7 @@ def test_concat_op(dtype, M, N, M_tile_size, N_tile_size, src_layout, dst_layout
         %401 = ttg.convert_layout %301 : tensor<{M}x{N}xf16, #blocked> -> tensor<{M}x{N}xf16, #src_layout>
         %402 = ttg.convert_layout %302 : tensor<{M}x{N}xf16, #blocked> -> tensor<{M}x{N}xf16, #src_layout>
 
-        %13 = amdgpu.concat %12, %400, %401, %402 : tensor<{M}x{N}xf16, #src_layout>, tensor<{M}x{N}xf16, #src_layout>, tensor<{M}x{N}xf16, #src_layout>, tensor<{M}x{N}xf16, #src_layout> -> tensor<{M_tile_size}x{N_tile_size}xf16, #dst_layout>
+        %13 = amdg.concat %12, %400, %401, %402 : tensor<{M}x{N}xf16, #src_layout>, tensor<{M}x{N}xf16, #src_layout>, tensor<{M}x{N}xf16, #src_layout>, tensor<{M}x{N}xf16, #src_layout> -> tensor<{M_tile_size}x{N_tile_size}xf16, #dst_layout>
         %14 = ttg.convert_layout %13 : tensor<{M_tile_size}x{N_tile_size}xf16, #dst_layout> -> tensor<{M_tile_size}x{N_tile_size}xf16, #blocked>
         %15 = tt.addptr %34, %40 : tensor<{M_tile_size}x{N_tile_size}x!tt.ptr<f16>, #blocked>, tensor<{M_tile_size}x{N_tile_size}xi32, #blocked>
         tt.store %15, %14 : tensor<{M_tile_size}x{N_tile_size}x!tt.ptr<f16>, #blocked>
