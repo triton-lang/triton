@@ -226,6 +226,7 @@ def reshape_trans_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK: tl.constexpr,
 
 
 @pytest.mark.parametrize("TRANS_KIND", ["trans_method", "tl_trans_separate", "tl_trans_tuple", "tl_trans"])
+@pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
 def test_triton_reshape_trans(tmp_path, TRANS_KIND):
     kernel = convert_kernel(reshape_trans_kernel, "reshape_trans_kernel", tmp_path)
 
