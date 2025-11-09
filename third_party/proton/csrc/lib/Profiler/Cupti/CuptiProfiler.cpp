@@ -245,6 +245,7 @@ struct CuptiProfiler::CuptiProfilerPimpl
   static constexpr size_t AlignSize = 8;
   static constexpr size_t BufferSize = 64 * 1024 * 1024;
   static constexpr size_t AttributeSize = sizeof(size_t);
+  static constexpr char *CaptureTag = "<captured_at>";
 
   CUpti_SubscriberHandle subscriber{};
   CuptiPCSampling pcSampling;
@@ -424,7 +425,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           auto parentId = profiler.correlation.externIdQueue.back();
           for (auto [nodeId, contexts] :
                pImpl->graphIdNodeIdToContexts[graphId]) {
-            contexts.push_back(Context("<captured_at>"));
+            contexts.emplace_back(CaptureTag);
             for (auto *data : dataSet) {
               auto scopeId = data->addOp(parentId, contexts);
               profiler.correlation.graphIdNodeIdToScopeId[graphId][nodeId] =
