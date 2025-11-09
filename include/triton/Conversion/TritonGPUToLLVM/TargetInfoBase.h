@@ -94,6 +94,9 @@ public:
 
   virtual int getAddressSpace(Attribute addressSpace) const = 0;
 
+  virtual std::pair<Value, Value> getLaneAndWarpId(RewriterBase &rewriter,
+                                                   Location loc) const = 0;
+
   virtual bool supportVectorizedAtomics() const = 0;
 
   virtual bool supportLdMatrix() const { return false; }

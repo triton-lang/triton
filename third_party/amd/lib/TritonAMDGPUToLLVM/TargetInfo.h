@@ -102,7 +102,7 @@ public:
                              Operation *llLoadOp) const override;
 
   std::pair<Value, Value> getLaneAndWarpId(RewriterBase &rewriter,
-                                           Location loc) const;
+                                           Location loc) const override;
 
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
