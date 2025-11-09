@@ -124,9 +124,13 @@ def test_cudagraph(tmp_path: pathlib.Path):
     # {torch.ones, add, foo}
     if is_hip():
         assert len(test_frame["children"]) >= 2
+        assert test_frame["children"][0]["metrics"]["time (ns)"] > 0
     else:
-        assert len(test_frame["children"]) >= 3
-    assert test_frame["children"][0]["metrics"]["time (ns)"] > 0
+        # cuda backend supports "capture_at" annotation
+        child = test_frame["children"][0]
+        assert child["frame"]["name"] == "<capture_at>"
+        assert len(child["children"]) >= 3
+        assert child["children"][0]["metrics"]["time (ns)"] > 0
 
 
 def test_metrics(tmp_path: pathlib.Path):
