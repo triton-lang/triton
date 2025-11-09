@@ -250,18 +250,16 @@ struct CuptiProfiler::CuptiProfilerPimpl
   CUpti_SubscriberHandle subscriber{};
   CuptiPCSampling pcSampling;
 
+  // GraphExecId and GraphId do not overlap in CUPTI (TODO: confirm with NVIDIA).
+  // So we use the same terminology `graphId` for both of them here.
   ThreadSafeMap<uint32_t, size_t, std::unordered_map<uint32_t, size_t>>
       graphIdToNumInstances;
-  ThreadSafeMap<uint32_t, uint32_t, std::unordered_map<uint32_t, uint32_t>>
-      graphExecIdToGraphId;
-  ThreadSafeMap<uint32_t, size_t, std::unordered_map<uint32_t, size_t>>
-      graphExecIdToNumInstances;
   ThreadSafeMap<
-      uint32_t, std::unordered_map<uint32_t, std::vector<Context>>,
+      uint32_t, std::unordered_map<uint64_t, std::vector<Context>>,
       std::unordered_map<uint32_t,
-                         std::unordered_map<uint32_t, std::vector<Context>>>>
+                         std::unordered_map<uint64_t, std::vector<Context>>>>
       graphIdNodeIdToContexts;
-  ThreadSafeSet<uint32_t> graphExecIdChecked;
+  ThreadSafeSet<uint32_t> graphIdChecked;
 };
 
 void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
@@ -347,13 +345,16 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         cupti::getGraphExecId<true>(graphData->graphExec, &graphExecId);
       if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED ||
           cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED) {
-        // To clone a graph using cuGraphClone, CUPTI triggers both
-        // CREATED and CLONED callbacks for each node.
-        // So we only increase the numInstances in CREATED callback.
-        uint32_t nodeId = 0;
+        // Proton only cares about kernel nodes.
+        if (graphData->nodeType != CU_GRAPH_NODE_TYPE_KERNEL)
+          return;
+        uint64_t nodeId = 0;
         cupti::getGraphNodeId<true>(graphData->node, &nodeId);
         auto dataSet = profiler.getDataSet();
         if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED) {
+          // When `cuGraphClone` or `cuGraphInstantiate` is called, CUPTI
+          // triggers both CREATED and CLONED callbacks for each node. So we
+          // only increase the numInstances in CREATED callback.
           for (auto *data : dataSet) {
             auto *source = data->getContextSource();
             auto contexts = source->getContexts();
@@ -365,23 +366,22 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             pImpl->graphIdToNumInstances[graphId]++;
         } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED
           uint32_t originalGraphId = 0;
-          uint32_t originalNodeId = 0;
+          uint64_t originalNodeId = 0;
           cupti::getGraphId<true>(graphData->originalGraph, &originalGraphId);
           cupti::getGraphNodeId<true>(graphData->originalNode, &originalNodeId);
           pImpl->graphIdNodeIdToContexts[graphId][nodeId] =
               pImpl->graphIdNodeIdToContexts[originalGraphId][originalNodeId];
         }
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
+        if (graphData->nodeType != CU_GRAPH_NODE_TYPE_KERNEL)
+          return;
+        if (pImpl->graphIdToNumInstances[graphId] == 0) {
+          throw std::runtime_error(
+              "[PROTON] graphIdNodeIdToContexts does not contain graphId");
+        }
         pImpl->graphIdToNumInstances[graphId]--;
-      } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_CREATED) {
-        pImpl->graphExecIdToGraphId[graphExecId] = graphId;
-        // Once a graphExec is created, the graph that it is created from
-        // can be destroyed. So we need to cache the numInstances for
-        // graphExec here.
-        pImpl->graphExecIdToNumInstances[graphExecId] =
-            pImpl->graphIdToNumInstances[graphId];
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
-        pImpl->graphExecIdToNumInstances.erase(graphExecId);
+        pImpl->graphIdToNumInstances.erase(graphExecId);
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
         pImpl->graphIdToNumInstances.erase(graphId);
       }
@@ -410,27 +410,26 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         cupti::getGraphExecId<true>(graphExec, &graphExecId);
         numInstances = std::numeric_limits<size_t>::max();
         auto findGraph = false;
-        if (pImpl->graphExecIdToNumInstances.contain(graphExecId)) {
-          numInstances = pImpl->graphExecIdToNumInstances[graphExecId];
+        if (pImpl->graphIdToNumInstances.contain(graphExecId)) {
+          numInstances = pImpl->graphIdToNumInstances[graphExecId];
           findGraph = true;
         }
-        if (!findGraph && !pImpl->graphExecIdChecked.contain(graphExecId)) {
-          pImpl->graphExecIdChecked.insert(graphExecId);
+        if (!findGraph && !pImpl->graphIdChecked.contain(graphExecId)) {
+          pImpl->graphIdChecked.insert(graphExecId);
           std::cerr << "[PROTON] Cannot find graph for graphExecId: "
                     << graphExecId
                     << ", and t may cause memory leak. To avoid this problem, "
                        "please start profiling before the graph is created."
                     << std::endl;
         } else if (findGraph) {
-          uint32_t graphId = pImpl->graphExecIdToGraphId[graphExecId];
           auto dataSet = profiler.getDataSet();
           auto parentId = profiler.correlation.externIdQueue.back();
           for (auto [nodeId, contexts] :
-               pImpl->graphIdNodeIdToContexts[graphId]) {
+               pImpl->graphIdNodeIdToContexts[graphExecId]) {
             contexts.insert(contexts.begin(), Context(CaptureTag));
             for (auto *data : dataSet) {
               auto scopeId = data->addOp(parentId, contexts);
-              profiler.correlation.graphIdNodeIdToScopeId[graphId][nodeId] =
+              profiler.correlation.graphIdNodeIdToScopeId[graphExecId][nodeId] =
                   scopeId;
             }
           }

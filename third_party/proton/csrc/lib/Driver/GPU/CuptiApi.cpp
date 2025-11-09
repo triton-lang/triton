@@ -70,7 +70,7 @@ DEFINE_DISPATCH(ExternLibCupti, getGraphId, cuptiGetGraphId, CUgraph,
                 uint32_t *);
 
 DEFINE_DISPATCH(ExternLibCupti, getGraphNodeId, cuptiGetGraphNodeId,
-                CUgraphNode, uint32_t *);
+                CUgraphNode, uint64_t *);
 
 DEFINE_DISPATCH(ExternLibCupti, getCubinCrc, cuptiGetCubinCrc,
                 CUpti_GetCubinCrcParams *);
