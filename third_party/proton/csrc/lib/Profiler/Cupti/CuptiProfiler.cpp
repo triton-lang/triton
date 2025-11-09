@@ -360,10 +360,13 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             auto contexts = source->getContexts();
             pImpl->graphIdNodeIdToContexts[graphId][nodeId] = contexts;
           }
-          if (!pImpl->graphIdToNumInstances.contain(graphId))
-            pImpl->graphIdToNumInstances[graphId] = 1;
+          // If graphExecId is valid, use it to track numInstances as it's
+          // triggered by `cuGraphInstantiate`.
+          auto graphInstanceId = graphExecId != 0 ? graphExecId : graphId;
+          if (!pImpl->graphIdToNumInstances.contain(graphInstanceId))
+            pImpl->graphIdToNumInstances[graphInstanceId] = 1;
           else
-            pImpl->graphIdToNumInstances[graphId]++;
+            pImpl->graphIdToNumInstances[graphInstanceId]++;
         } else { // CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED
           uint32_t originalGraphId = 0;
           uint64_t originalNodeId = 0;
