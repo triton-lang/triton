@@ -126,9 +126,9 @@ def test_cudagraph(tmp_path: pathlib.Path):
         assert len(test_frame["children"]) >= 2
         assert test_frame["children"][0]["metrics"]["time (ns)"] > 0
     else:
-        # cuda backend supports "capture_at" annotation
+        # cuda backend supports "<captured_at>" annotation
         child = test_frame["children"][0]
-        assert child["frame"]["name"] == "<capture_at>"
+        assert child["frame"]["name"] == "<captured_at>"
         assert len(child["children"]) >= 3
         assert child["children"][0]["metrics"]["time (ns)"] > 0
 
