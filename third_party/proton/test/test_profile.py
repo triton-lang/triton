@@ -99,8 +99,9 @@ def test_cudagraph(tmp_path: pathlib.Path):
     # no kernels
     g = torch.cuda.CUDAGraph()
     with torch.cuda.graph(g):
-        for _ in range(10):
-            fn()
+        for i in range(10):
+            with proton.scope(f"iter_{i}"):
+                fn()
 
     proton.enter_scope("test")
     g.replay()
@@ -129,8 +130,10 @@ def test_cudagraph(tmp_path: pathlib.Path):
         # cuda backend supports "<captured_at>" annotation
         child = test_frame["children"][0]
         assert child["frame"]["name"] == "<captured_at>"
-        assert len(child["children"]) >= 3
-        assert child["children"][0]["metrics"]["time (ns)"] > 0
+        # 0...9 iterations
+        assert len(child["children"]) == 10
+        # check one of the iterations
+        assert child["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
 
 
 def test_metrics(tmp_path: pathlib.Path):
