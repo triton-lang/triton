@@ -425,7 +425,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           auto parentId = profiler.correlation.externIdQueue.back();
           for (auto [nodeId, contexts] :
                pImpl->graphIdNodeIdToContexts[graphId]) {
-            contexts.emplace_back(CaptureTag);
+            contexts.insert(contexts.begin(), Context(CaptureTag));
             for (auto *data : dataSet) {
               auto scopeId = data->addOp(parentId, contexts);
               profiler.correlation.graphIdNodeIdToScopeId[graphId][nodeId] =
