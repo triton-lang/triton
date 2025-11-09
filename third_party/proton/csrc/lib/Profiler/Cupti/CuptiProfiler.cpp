@@ -252,6 +252,8 @@ struct CuptiProfiler::CuptiProfilerPimpl
 
   ThreadSafeMap<uint32_t, size_t, std::unordered_map<uint32_t, size_t>>
       graphIdToNumInstances;
+  ThreadSafeMap<uint32_t, uint32_t, std::unordered_map<uint32_t, uint32_t>>
+      graphExecIdToGraphId;
   ThreadSafeMap<uint32_t, size_t, std::unordered_map<uint32_t, size_t>>
       graphExecIdToNumInstances;
   ThreadSafeMap<
@@ -372,6 +374,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
         pImpl->graphIdToNumInstances[graphId]--;
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_CREATED) {
+        pImpl->graphExecIdToGraphId[graphExecId] = graphId;
         // Once a graphExec is created, the graph that it is created from
         // can be destroyed. So we need to cache the numInstances for
         // graphExec here.
@@ -419,8 +422,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
                        "please start profiling before the graph is created."
                     << std::endl;
         } else if (findGraph) {
-          uint32_t graphId = 0;
-          cupti::getGraphExecId<true>(graphExec, &graphId);
+          uint32_t graphId = pImpl->graphExecIdToGraphId[graphExecId];
           auto dataSet = profiler.getDataSet();
           auto parentId = profiler.correlation.externIdQueue.back();
           for (auto [nodeId, contexts] :
