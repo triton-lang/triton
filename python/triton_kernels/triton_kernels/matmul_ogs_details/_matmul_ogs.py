@@ -222,7 +222,7 @@ def _matmul_ogs(
                          M, K, ExptData, ExptHist, ExptOffs, ExptTileOffs,
                          EXPT_IS_INNER, X_IS_PADDED, W_IS_PADDED,
                          BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K,
-                         GROUP_M, XCD_SWIZZLE)
+                         GROUP_M, XCD_SWIZZLE, SWIZZLE_MX_VALUE)
 
     # For split-k, advance to the output k slice
     if SPLIT_K > 1:

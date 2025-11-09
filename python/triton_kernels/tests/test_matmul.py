@@ -375,9 +375,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         if torch.cuda.get_device_capability()[0] < 10:
             if "mxfloat4" not in weight_dtype_str:
                 pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
-            if k % 64 != 0 or n % 64 != 0:
-                # Automatic padding not implemented for Hopper swizzle
-                pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
 
     expt_is_inner = (inner_expt_opt is not None)
     if expt_is_inner:
