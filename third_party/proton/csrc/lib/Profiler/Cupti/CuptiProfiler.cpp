@@ -375,12 +375,17 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         // Proton only cares about kernel nodes
         if (graphData->nodeType != CU_GRAPH_NODE_TYPE_KERNEL)
           return;
-        if (pImpl->graphIdToNumInstances[graphId] == 0) {
+        if (!pImpl->graphIdToNumInstances.contain(graphId)) {
           throw std::runtime_error(
               "[PROTON] graphIdToNumInstances does not contain graphId");
         }
-        pImpl->graphIdToNumInstances[graphId]--;
-        if (pImpl->graphIdToNumInstances[graphId] == 0) {
+        auto &numInstances = pImpl->graphIdToNumInstances[graphId];
+        if (numInstances == 0) {
+          throw std::runtime_error(
+              "[PROTON] graphIdToNumInstances is already 0 for graphId");
+        }
+        numInstances--;
+        if (numInstances == 0) {
           pImpl->graphIdToNumInstances.erase(graphId);
           pImpl->graphIdNodeIdToContexts.erase(graphId);
         }
