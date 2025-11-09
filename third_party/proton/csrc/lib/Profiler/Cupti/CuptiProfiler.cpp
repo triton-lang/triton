@@ -250,8 +250,8 @@ struct CuptiProfiler::CuptiProfilerPimpl
   CUpti_SubscriberHandle subscriber{};
   CuptiPCSampling pcSampling;
 
-  // GraphExecId and GraphId do not overlap in CUPTI (TODO: confirm with NVIDIA).
-  // So we use the same terminology `graphId` for both of them here.
+  // GraphExecId and GraphId do not overlap in CUPTI (TODO: confirm with
+  // NVIDIA). So we use the same terminology `graphId` for both of them here.
   ThreadSafeMap<uint32_t, size_t, std::unordered_map<uint32_t, size_t>>
       graphIdToNumInstances;
   ThreadSafeMap<
