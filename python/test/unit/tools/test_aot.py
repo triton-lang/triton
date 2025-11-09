@@ -110,7 +110,7 @@ def kernel(
     )
     mfma_layout: gl.constexpr = gl.amd.AMDMFMALayout(
         version=3,
-        instr_shape=[16, 16],
+        instr_shape=[16, 16, 16],
         transposed=True,
         warps_per_cta=[NUM_WARPS // 2, 2],
     )
@@ -634,6 +634,7 @@ module attributes {{"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = {warp_si
             amdgcn = k.asm["amdgcn"]
             assert '.amdgcn_target "amdgcn-amd-amdhsa--gfx942"' in amdgcn
             assert '.wavefront_size: 64' in amdgcn
+
 
 def test_gluon_kernel():
     if not is_hip():
