@@ -217,7 +217,7 @@ def _p_matmul_ogs(
             M, K, ExptData, ExptHist, ExptOffs, ExptTileOffs,
             EXPT_IS_INNER, X_IS_PADDED, W_IS_PADDED,
             BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K,
-            GROUP_M, XCD_SWIZZLE)
+            GROUP_M, XCD_SWIZZLE, SWIZZLE_MX_VALUE)
         off_n = BLOCK_N * pid_n
 
         # Base pointers and offsets.
@@ -347,7 +347,7 @@ def _p_matmul_ogs(
                 M, K, ExptData, ExptHist, ExptOffs, ExptTileOffs,
                 EXPT_IS_INNER, X_IS_PADDED, W_IS_PADDED,
                 BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K,
-                GROUP_M, XCD_SWIZZLE)
+                GROUP_M, XCD_SWIZZLE, SWIZZLE_MX_VALUE)
             off_n1 = pid_n1 * BLOCK_N
         else:
             tile_id1, expt_id1, start_z1, start_m1, eM1 = tile_id, expt_id, start_z_out, start_m, eM
