@@ -166,7 +166,6 @@ constexpr std::array<CUpti_CallbackId, 6> kGraphResourceCallbacks = {
     CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING,
     CUPTI_CBID_RESOURCE_GRAPHEXEC_CREATED,
     CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING,
-    CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING,
 };
 
 constexpr std::array<CUpti_CallbackId, 4> kResourceCallbacks = {
@@ -345,7 +344,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         cupti::getGraphExecId<true>(graphData->graphExec, &graphExecId);
       if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED ||
           cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CLONED) {
-        // Proton only cares about kernel nodes.
+        // Proton only cares about kernel nodes
         if (graphData->nodeType != CU_GRAPH_NODE_TYPE_KERNEL)
           return;
         uint64_t nodeId = 0;
@@ -354,7 +353,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_CREATED) {
           // When `cuGraphClone` or `cuGraphInstantiate` is called, CUPTI
           // triggers both CREATED and CLONED callbacks for each node. So we
-          // only increase the numInstances in CREATED callback.
+          // only increase the numInstances in CREATED callback
           for (auto *data : dataSet) {
             auto *source = data->getContextSource();
             auto contexts = source->getContexts();
@@ -373,18 +372,21 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
               pImpl->graphIdNodeIdToContexts[originalGraphId][originalNodeId];
         }
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
+        // Proton only cares about kernel nodes
         if (graphData->nodeType != CU_GRAPH_NODE_TYPE_KERNEL)
           return;
         if (pImpl->graphIdToNumInstances[graphId] == 0) {
           throw std::runtime_error(
-              "[PROTON] graphIdNodeIdToContexts does not contain graphId");
+              "[PROTON] graphIdToNumInstances does not contain graphId");
         }
         pImpl->graphIdToNumInstances[graphId]--;
+        if (pImpl->graphIdToNumInstances[graphId] == 0) {
+          pImpl->graphIdToNumInstances.erase(graphId);
+          pImpl->graphIdNodeIdToContexts.erase(graphId);
+        }
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
         pImpl->graphIdToNumInstances.erase(graphExecId);
-      } else if (cbId == CUPTI_CBID_RESOURCE_GRAPH_DESTROY_STARTING) {
-        pImpl->graphIdToNumInstances.erase(graphId);
-      }
+      } 
     }
   } else if (domain == CUPTI_CB_DOMAIN_NVTX) {
     auto *nvtxData = static_cast<const CUpti_NvtxData *>(cbData);
