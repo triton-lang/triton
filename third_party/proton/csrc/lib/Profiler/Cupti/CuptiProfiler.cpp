@@ -380,10 +380,6 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         if (numInstances == 0)
           return;
         numInstances--;
-        if (numInstances == 0) {
-          pImpl->graphIdToNumInstances.erase(graphId);
-          pImpl->graphIdNodeIdToContexts.erase(graphId);
-        }
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
         pImpl->graphIdToNumInstances.erase(graphExecId);
       }
