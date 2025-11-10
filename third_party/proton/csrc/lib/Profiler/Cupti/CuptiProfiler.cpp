@@ -355,8 +355,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
           // triggers both CREATED and CLONED callbacks for each node. So we
           // only increase the numInstances in CREATED callback
           for (auto *data : dataSet) {
-            auto *source = data->getContextSource();
-            auto contexts = source->getContexts();
+            auto contexts = data->getContexts();
             pImpl->graphIdNodeIdToContexts[graphId][nodeId] = contexts;
           }
           if (!pImpl->graphIdToNumInstances.contain(graphId))
