@@ -1754,6 +1754,8 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
     ImplicitLocOpBuilder &b, Value buf, int thread, StringRef pendingAccessType,
     Value pred, ValueType buffers, ValueType outstandingCommits,
     Operation *insertPoint) {
+  assert(thread < NUM_THREADS &&
+         "Commit-count tracking must operate on base threads");
   if (!pred)
     pred = arith::ConstantIntOp::create(b, 1, 1);
   auto buffersType = cast<RankedTensorType>(buffers.type);
