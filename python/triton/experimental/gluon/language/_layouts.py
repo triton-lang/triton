@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
+import itertools
 from typing import List, Optional
 from triton.language.core import _unwrap_if_constexpr, _unwrap_shape, constexpr_type
 from triton.runtime.jit import constexpr_function
+from triton._C.libtriton.gluon_ir import materialize_linear_layout
 import math
 
 
@@ -638,6 +640,15 @@ class SharedLinearLayout(SharedLayout):
     def mangle(self) -> str:
         return f"SharedLinear_{self.offset_bases}_{self.block_bases}_{self.alignment}_SharedLinear"
 
+    @property
+    def shape(self):
+        rank = len(self.offset_bases[0])
+        max_stride = [1] * rank
+        for b in itertools.chain(self.offset_bases, self.block_bases):
+            for i, bi in enumerate(b):
+                max_stride[i] = max(max_stride[i], bi)
+        return [2 * s for s in max_stride]
+
     def __hash__(self):
         return hash((
             tuple(map(tuple, self.offset_bases)),
@@ -676,3 +687,21 @@ def warps_per_cta(layout, shape):
         return warps_per_cta(layout.parent, shape)
     else:
         return layout.warps_per_cta
+
+
+def _materialize_linear_layout_builtin(layout, shape):
+    if isinstance(layout, AutoLayout):
+        raise ValueError("print_layout requires a resolved layout, got AutoLayout")
+
+    if not (isinstance(shape, list) and all(isinstance(dim, int) for dim in shape)):
+        raise TypeError(f"print_layout shape entries must be ints, got {shape}")
+
+    if isinstance(layout, SharedLinearLayout):
+        if layout.shape != shape:
+            raise ValueError(
+                f"broadcasting not supported for SharedLinearLayout, got {shape} but expected {layout.shape}")
+
+    return materialize_linear_layout(layout, shape)
+
+
+_materialize_linear_layout_builtin.__triton_builtin__ = True

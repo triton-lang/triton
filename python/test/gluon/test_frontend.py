@@ -1504,6 +1504,30 @@ def test_to_linear_layout(layout, expected):
     run_parser(kernel, args=(layout, expected, tuple(expected.shape)), target=AMPERE_TARGET)
 
 
+def test_print_layout(capsys):
+    layout = ttgl.BlockedLayout([1], [32], [1], [0])
+    acc_dtype = ttgl.float16
+    shape = (64, 64)
+    tmem_layout = TensorMemoryLayout(shape, col_stride=2)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+
+    @gluon.jit
+    def kernel(layout: ttgl.constexpr, shared_layout: ttgl.constexpr, tmem_layout: ttgl.constexpr,
+               acc_dtype: ttgl.constexpr, shape: ttgl.constexpr):
+        ttgl.print_layout(layout, [32])
+
+        acc_tmem = blackwell.allocate_tensor_memory(acc_dtype, shape, tmem_layout)
+        ttgl.print_layout(acc_tmem.layout, acc_tmem.shape)
+
+        shared = ttgl.allocate_shared_memory(acc_dtype, shape, shared_layout)
+        ttgl.print_layout(shared.layout, shared.shape)
+
+    run_parser(kernel, args=(layout, shared_layout, tmem_layout, acc_dtype, shape), target=BLACKWELL_TARGET)
+    output = capsys.readouterr().out
+    assert "lane=" in output
+    assert "where out dims are" in output
+
+
 @filecheck_test
 @gluon.jit
 def test_zeros():
