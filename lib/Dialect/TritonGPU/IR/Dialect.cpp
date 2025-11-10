@@ -3998,3 +3998,14 @@ SetVector<int> triton::gpu::getPartitionIds(OpOperand *use) {
 bool triton::gpu::hasPartition(Operation *op) {
   return op && op->hasAttr(kPartitionAttrName);
 }
+
+bool triton::gpu::hasWarpSpecializeTag(Operation *op) {
+  return op && op->hasAttr(kWarpSpecializeTagAttrName);
+}
+
+std::optional<int> triton::gpu::getWarpSpecializeTag(Operation *op) {
+  if (hasWarpSpecializeTag(op)) {
+    return cast<IntegerAttr>(op->getAttr(kWarpSpecializeTagAttrName)).getInt();
+  }
+  return std::nullopt;
+}

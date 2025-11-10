@@ -285,13 +285,17 @@ template <class T> struct AssignStagePhase {
         std::optional<SetVector<int>> partitionIds;
         if (hasPartition(&op))
           partitionIds = getPartitionIds(&op);
+        auto wsTag = getWarpSpecializeTag(&op);
         auto stageCluster = getStageCluster(&op);
 
         auto createInto = [&](auto opTy, auto... args) {
           using ty = decltype(opTy);
-          return triton::gpu::createInto<ty>(
+          auto op = triton::gpu::createInto<ty>(
               builder, builder.getLoc(), partitionIds, stageCluster,
               std::forward<decltype(args)>(args)...);
+          if (wsTag)
+            setWarpSpecializeTag(op, *wsTag);
+          return op;
         };
 
         auto nextStage = createInto(arith::AddIOp{}, index.stage,
@@ -508,8 +512,20 @@ LogicalResult assignStagePhase(triton::FuncOp funcOp) {
             !result.use_empty()) {
           auto arg = forOp.getBody()->getTerminator()->getOperand(
               result.getResultNumber());
-          updateOutputWithDefaultPartition(forOp, result.getResultNumber());
-          visitBackwardSlice(forOp, arg, callback, visited);
+          // Check if any users of this scalar result lack ttg.partition, or if
+          // it is used in another warp-specialized loop. If so, the scalar is
+          // consumed by the root partition outside the warp-specialized loop,
+          // requiring us to assign the default partition to all operations that
+          // compute this result.
+          bool assignDefaultPartition =
+              llvm::any_of(result.getUsers(), [&](Operation *user) {
+                return !hasPartition(user) ||
+                       (isa<scf::ForOp>(user) && hasWarpSpecializeTag(user));
+              });
+          if (assignDefaultPartition) {
+            updateOutputWithDefaultPartition(forOp, result.getResultNumber());
+            visitBackwardSlice(forOp, arg, callback, visited);
+          }
         }
       }
     }

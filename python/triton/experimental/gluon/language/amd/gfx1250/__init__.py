@@ -1,4 +1,7 @@
-from ..._core import builtin, _unwrap_if_constexpr
+from triton.runtime.jit import constexpr_function
+from triton._C.libtriton.gluon_ir import get_amd_wmma_scale_layout as _get_wmma_scale_layout
+
+from ..._core import builtin
 from .._ops import _wmma, _verify_wmma, _mma_scaled
 from .._layouts import AMDWMMALayout
 from ..cdna3 import buffer_load, buffer_store
@@ -6,19 +9,6 @@ from . import tdm
 from . import async_copy
 
 __all__ = ["async_copy", "tdm", "wmma", "wmma_scaled", "buffer_load", "buffer_store", "get_wmma_scale_layout"]
-
-
-def _get_wmma_scale_layout(dot_operand_layout, shape, semantic):
-    dot_operand_layout = _unwrap_if_constexpr(dot_operand_layout)
-    shape = _unwrap_if_constexpr(shape)
-
-    op_idx = dot_operand_layout.operand_index
-    parent = dot_operand_layout.parent
-    assert isinstance(parent, AMDWMMALayout), "Expected parent to be an instance of AMDMFMALayout"
-    mdim = parent.instr_shape[0]
-    tiles_per_warp = parent.tiles_per_warp
-    warps_per_cta = parent.warps_per_cta
-    return semantic.builder.get_amd_wmma_scale_layout(op_idx, shape, mdim, tiles_per_warp, warps_per_cta)
 
 
 @builtin
@@ -73,11 +63,11 @@ def wmma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _semantic=None)
     assert a_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported lhs_format: {a_format.value}"
     assert b_format.value in {"e2m1", "e4m3", "e5m2"}, f"Unsupported rhs_format: {b_format.value}"
 
-    return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, _get_wmma_scale_layout, _semantic)
+    return _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, get_wmma_scale_layout, _semantic)
 
 
-@builtin
-def get_wmma_scale_layout(dot_operand_layout, shape, _semantic=None):
+@constexpr_function
+def get_wmma_scale_layout(dot_operand_layout, shape):
     """ Get the scale layout for WMMA scaled operands.
 
     Args:
@@ -87,4 +77,10 @@ def get_wmma_scale_layout(dot_operand_layout, shape, _semantic=None):
     Return:
         layout (DistributedLinearLayout): The scale layout.
     """
-    return _get_wmma_scale_layout(dot_operand_layout, shape, _semantic)
+    op_idx = dot_operand_layout.operand_index
+    parent = dot_operand_layout.parent
+    assert isinstance(parent, AMDWMMALayout), "Expected parent to be an instance of AMDMFMALayout"
+    mdim = parent.instr_shape[0]
+    tiles_per_warp = parent.tiles_per_warp
+    warps_per_cta = parent.warps_per_cta
+    return _get_wmma_scale_layout(op_idx, shape, mdim, tiles_per_warp, warps_per_cta)

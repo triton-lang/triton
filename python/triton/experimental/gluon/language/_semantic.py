@@ -416,11 +416,6 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         _check(all(l == l0 for l in layouts[1:]),
                lambda: f"Expected inputs to have matching layouts, but got: {layouts}")
 
-    def _store_legacy(self, ptr, val, mask, boundary_check, cache, eviction):
-        if ptr.type.is_block() and not val.type.is_block():
-            val = self.splat(val, ptr.type.get_block_shapes(), ptr.type.layout)
-        return super()._store_legacy(ptr, val, mask, boundary_check, cache, eviction)
-
     def associative_scan(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn,
                          reverse: bool) -> Tuple[TensorTy, ...]:
         shape = inputs[0].type.shape

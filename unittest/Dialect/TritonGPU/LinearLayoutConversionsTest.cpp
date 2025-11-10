@@ -133,7 +133,7 @@ public:
                                 unsigned colStride, unsigned ctaSplitM,
                                 unsigned ctaSplitN) {
     return TensorMemoryEncodingAttr::get(&ctx, blockM, blockN, colStride,
-                                         ctaSplitM, ctaSplitN);
+                                         ctaSplitM, ctaSplitN, false);
   }
 
   TensorMemoryEncodingAttr tmem(unsigned blockM, unsigned blockN,
@@ -3315,27 +3315,10 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_CTASplit) {
   auto d1 = S("dim1");
   auto kRow = S("row");
   auto kCol = S("col");
-  auto enc = tmem(64, 128, 2, 1);
-  auto enc1 = tmem(64, 128, 1, 1);
-  EXPECT_EQ(toLinearLayout({128, 128}, enc),
-            toLinearLayout({64, 128}, enc1) *
-                LinearLayout::identity1D(2, kCol, d0));
-  enc = tmem(128, 64, 1, 2);
-  enc1 = tmem(128, 64, 1, 1);
+  auto enc = tmem(128, 64, 1, 2);
+  auto enc1 = tmem(128, 64, 1, 1);
   EXPECT_EQ(toLinearLayout({128, 128}, enc),
             toLinearLayout({128, 64}, enc1) *
-                LinearLayout::identity1D(2, kCol, d1));
-  enc = tmem(64, 64, 2, 2);
-  enc1 = tmem(64, 64, 1, 1);
-  EXPECT_EQ(toLinearLayout({128, 128}, enc),
-            toLinearLayout({64, 64}, enc1) *
-                LinearLayout::identity1D(2, kCol, d0) *
-                LinearLayout::identity1D(2, kCol, d1));
-  // The non-contiguous tile stays non-contiguous even in the multiCTA setup
-  auto noncontigTile = toLinearLayout({64, 64}, tmem(64, 64, 1, 1));
-  auto noncontigEnc = tmem(64, 64, 2, 2);
-  EXPECT_EQ(toLinearLayout({128, 128}, enc),
-            noncontigTile * LinearLayout::identity1D(2, kCol, d0) *
                 LinearLayout::identity1D(2, kCol, d1));
 }
 

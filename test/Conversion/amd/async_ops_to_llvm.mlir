@@ -106,24 +106,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: rocdl.s.waitcnt -49168
     // CHECK: rocdl.s.waitcnt -7937
     // CHECK: rocdl.s.barrier
-    amdgpu.async_wait {num_inst = 0 : i32}
+    amdg.async_wait {num_inst = 0 : i32}
     // CHECK: rocdl.s.waitcnt -49167
     // CHECK: rocdl.s.waitcnt -7937
     // CHECK: rocdl.s.barrier
-    amdgpu.async_wait {num_inst = 1 : i32}
+    amdg.async_wait {num_inst = 1 : i32}
     // CHECK: rocdl.s.waitcnt -2
     // CHECK: rocdl.s.waitcnt -7937
     // CHECK: rocdl.s.barrier
-    amdgpu.async_wait {num_inst = 62 : i32}
+    amdg.async_wait {num_inst = 62 : i32}
     // CHECK: rocdl.s.waitcnt -1
     // CHECK: rocdl.s.waitcnt -7937
     // CHECK: rocdl.s.barrier
-    amdgpu.async_wait {num_inst = 63 : i32}
+    amdg.async_wait {num_inst = 63 : i32}
     // Check that we clamp values > 63
     // CHECK: rocdl.s.waitcnt -1
     // CHECK: rocdl.s.waitcnt -7937
     // CHECK: rocdl.s.barrier
-    amdgpu.async_wait {num_inst = 64 : i32}
+    amdg.async_wait {num_inst = 64 : i32}
     tt.return
   }
 }

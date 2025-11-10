@@ -1,8 +1,8 @@
 set(MLIR_BINARY_DIR ${CMAKE_BINARY_DIR})
 
 set(LLVM_TARGET_DEFINITIONS TritonAMDGPUOps.td)
-mlir_tablegen(Dialect.h.inc -gen-dialect-decls -dialect=amdgpu)
-mlir_tablegen(Dialect.cpp.inc -gen-dialect-defs -dialect=amdgpu)
+mlir_tablegen(Dialect.h.inc -gen-dialect-decls -dialect=amdg)
+mlir_tablegen(Dialect.cpp.inc -gen-dialect-defs -dialect=amdg)
 mlir_tablegen(OpsConversions.inc -gen-llvmir-conversions)
 mlir_tablegen(Ops.h.inc -gen-op-decls)
 mlir_tablegen(Ops.cpp.inc -gen-op-defs)

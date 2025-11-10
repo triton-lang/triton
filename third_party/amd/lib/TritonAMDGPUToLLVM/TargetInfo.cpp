@@ -153,7 +153,8 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
   }
   Value falseVal = LLVM::ConstantOp::create(rewriter, loc, elemTy,
                                             rewriter.getZeroAttr(elemTy));
-  bool addAliasGroup = localLoadOp && isSyncedViaAsyncWait(localLoadOp);
+  bool addAliasGroup = localLoadOp && requiresAliasInfoForAsyncOps() &&
+                       isSyncedViaAsyncWait(localLoadOp);
   return mlir::LLVM::AMD::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal,
                                  triton::CacheModifier::NONE, addAliasGroup);
 }
