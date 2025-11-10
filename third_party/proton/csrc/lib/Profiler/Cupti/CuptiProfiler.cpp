@@ -377,10 +377,8 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
             !pImpl->graphIdNodeIdToContexts.contain(graphId))
           return;
         auto &numInstances = pImpl->graphIdToNumInstances[graphId];
-        if (numInstances == 0) {
-          throw std::runtime_error(
-              "[PROTON] graphIdToNumInstances is already 0 for graphId");
-        }
+        if (numInstances == 0)
+          return;
         numInstances--;
         if (numInstances == 0) {
           pImpl->graphIdToNumInstances.erase(graphId);
