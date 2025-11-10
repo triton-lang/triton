@@ -3,7 +3,6 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TargetInfo.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/TypeSwitch.h"
 
