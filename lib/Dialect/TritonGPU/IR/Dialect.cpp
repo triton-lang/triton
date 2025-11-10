@@ -1283,6 +1283,9 @@ LogicalResult AMDMfmaEncodingAttr::verify(
 //===----------------------------------------------------------------------===//
 // WMMA encoding
 //===----------------------------------------------------------------------===//
+bool AMDWmmaEncodingAttr::hasUnitTilesPerWarp() const {
+  return llvm::all_of(getTilesPerWarp(), [](int x) { return x == 1; });
+}
 
 Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
@@ -1299,6 +1302,7 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
+  SmallVector<unsigned> tilesPerWarp = {};
   SmallVector<unsigned> instrShape = getDefaultInstrShape();
 
   for (const NamedAttribute &attr : dict) {
@@ -1312,6 +1316,11 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
     }
     if (attr.getName() == "warpsPerCTA") {
       if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
+        return {};
+    }
+    if (attr.getName() == "tilesPerWarp") {
+      if (parseIntArrayAttr(parser, attr, tilesPerWarp, "tilesPerWarp")
+              .failed())
         return {};
     }
     if (attr.getName() == "CTAsPerCGA") {
@@ -1342,9 +1351,12 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
-  return parser.getChecked<AMDWmmaEncodingAttr>(parser.getContext(), version,
-                                                isTransposed, warpsPerCTA,
-                                                *CTALayout, instrShape);
+  if (tilesPerWarp.empty())
+    tilesPerWarp = SmallVector<unsigned>(instrShape.size(), 1);
+
+  return parser.getChecked<AMDWmmaEncodingAttr>(
+      parser.getContext(), version, isTransposed, warpsPerCTA, tilesPerWarp,
+      *CTALayout, instrShape);
 }
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
@@ -1356,6 +1368,10 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
 
+  auto tilesPerWarp = getTilesPerWarp();
+  if (!hasUnitTilesPerWarp())
+    printer << ", tilesPerWarp = [" << getTilesPerWarp() << "]";
+
   if (getInstrShape() != ArrayRef(getDefaultInstrShape())) {
     printer << ", instrShape = [" << getInstrShape() << "]";
   }
@@ -1365,7 +1381,8 @@ void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
 LogicalResult AMDWmmaEncodingAttr::verify(
     function_ref<mlir::InFlightDiagnostic()> emitError, unsigned version,
     bool isTransposed, llvm::ArrayRef<unsigned int> warpsPerCTA,
-    CTALayoutAttr ctaLayout, llvm::ArrayRef<unsigned> instrShape) {
+    llvm::ArrayRef<unsigned int> tilesPerWarp, CTALayoutAttr ctaLayout,
+    llvm::ArrayRef<unsigned> instrShape) {
   if (!(version >= 1 && version <= 3))
     return emitError() << "WMMA version must be in the [1, 3] range";
 
@@ -2172,7 +2189,7 @@ void AMDRotatingSharedEncodingAttr::print(AsmPrinter &printer) const {
 // TODO: there is a lot of common code with MmaEncoding here
 
 bool AMDMfmaEncodingAttr::hasUnitTilesPerWarp() const {
-  return !llvm::any_of(getTilesPerWarp(), [](int x) { return x != 1; });
+  return llvm::all_of(getTilesPerWarp(), [](int x) { return x == 1; });
 }
 
 SmallVector<int64_t>
@@ -2305,6 +2322,8 @@ AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape, int kDim,
 
   assert(operandTileShape.size() == 2);
   auto warpsPerCTA = getWarpsPerCTA();
+  auto tilesPerWarp = getTilesPerWarp();
+
   auto rank = operandShape.size();
   assert(rank == 2 || rank == 3);
   int numRepBatch =
@@ -2313,15 +2332,19 @@ AMDWmmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape, int kDim,
     return {
         numRepBatch,
         std::max<int64_t>(1, operandShape[rank - 2] /
-                                 (operandTileShape[0] * warpsPerCTA[rank - 2])),
+                                 (operandTileShape[0] * tilesPerWarp[rank - 2] *
+                                  warpsPerCTA[rank - 2])) *
+            tilesPerWarp[rank - 2],
         std::max<int64_t>(1, operandShape[rank - 1] / operandTileShape[1])};
   else {
     assert(opIdx == 1);
     return {
         numRepBatch,
         std::max<int64_t>(1, operandShape[rank - 2] / operandTileShape[0]),
-        std::max<int64_t>(1, operandShape[rank - 1] / (operandTileShape[1] *
-                                                       warpsPerCTA[rank - 1]))};
+        std::max<int64_t>(1, operandShape[rank - 1] /
+                                 (operandTileShape[1] * tilesPerWarp[rank - 1] *
+                                  warpsPerCTA[rank - 1])) *
+            tilesPerWarp[rank - 1]};
   }
 }
 
@@ -2738,15 +2761,34 @@ struct TritonGPUInferLayoutInterface
         mlir::dyn_cast<triton::gpu::DotOperandEncodingAttr>(operandEncodingB);
     if (!aEncoding && !bEncoding)
       return mlir::success();
-    auto mmaAEncoding =
-        mlir::dyn_cast_or_null<NvidiaMmaEncodingAttr>(aEncoding.getParent());
-    if (mmaAEncoding && mmaAEncoding.isHopper())
-      return success();
-    // Verify that the encodings are valid.
     if (!aEncoding || !bEncoding)
       return op->emitError("mismatching encoding between A and B operands");
+    // Verify that the encodings are valid.
     if (aEncoding.getKWidth() != bEncoding.getKWidth())
       return op->emitError("mismatching kWidth between A and B operands");
+
+    // Check if we have already selected an MMA version for Nvidia. If so,
+    // validate that the encodings are correct and compatible.
+    auto mmaAEncoding =
+        dyn_cast_or_null<NvidiaMmaEncodingAttr>(aEncoding.getParent());
+    auto mmaBEncoding =
+        dyn_cast_or_null<NvidiaMmaEncodingAttr>(bEncoding.getParent());
+    auto dotOp = cast<DotOp>(op);
+    auto resEnc = dotOp.getResult().getType().getEncoding();
+    auto mmaResEncoding = dyn_cast<NvidiaMmaEncodingAttr>(resEnc);
+    if (mmaAEncoding || mmaBEncoding || mmaResEncoding) {
+      // Check that they are all set and have the same version.
+      if (!mmaAEncoding || !mmaBEncoding || !mmaResEncoding)
+        return op->emitError("mismatching MMA encoding");
+      auto mmaBEncoding = cast<NvidiaMmaEncodingAttr>(bEncoding.getParent());
+      if (mmaAEncoding.getVersionMajor() != mmaBEncoding.getVersionMajor() ||
+          mmaAEncoding.getVersionMajor() != mmaResEncoding.getVersionMajor()) {
+        return op->emitError("mismatched MMA version.");
+      }
+      // Verify that the operands are supported on the selected MMA version.
+      if (!supportMMA(dotOp, mmaResEncoding.getVersionMajor()))
+        return op->emitError("unsupported MMA version");
+    }
     return success();
   }
 
@@ -3761,12 +3803,12 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
             return childOp.emitOpError("does not have expected attribute ")
                    << kPartitionAttrName
                    << " which is expected for ops whose parent has partitions";
-          auto ids = *getPartitionIds(&childOp);
+          auto ids = getPartitionIds(&childOp);
           expectedIds.insert(ids.begin(), ids.end());
         }
       }
     }
-    auto partitionIds = *getPartitionIds(op);
+    auto partitionIds = getPartitionIds(op);
     for (auto id : expectedIds) {
       if (!partitionIds.contains(id)) {
         return op->emitOpError("partition ids in attr ")
@@ -3801,13 +3843,12 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
       return op->emitOpError("does not have expected attribute ")
              << kPartitionAttrName << " which is expected for ops with attr "
              << kPartitionOutputsAttrName;
-    auto partitionIds = *getPartitionIds(op);
+    auto partitionIds = getPartitionIds(op);
 
     SetVector<int> outputPartitionIdsUnion;
-    for (auto idx = 0; idx < *getNumOutputPartitionIds(op); idx++) {
-      auto outputPartitionIds = getOutputPartitionIds(op, idx);
-      for (auto partitionId : *outputPartitionIds)
-        outputPartitionIdsUnion.insert(partitionId);
+    for (auto outputPartitionIds : getPartitionOutputs(op)) {
+      outputPartitionIdsUnion.insert(outputPartitionIds.begin(),
+                                     outputPartitionIds.end());
     }
     if (!std::all_of(outputPartitionIdsUnion.begin(),
                      outputPartitionIdsUnion.end(),
@@ -3919,15 +3960,8 @@ LinearLayout triton::gpu::inferReshapeLinearLayout(TensorOrMemDesc srcTy,
   return dst;
 }
 
-std::optional<SetVector<int>> triton::gpu::getPartitionIds(Operation *op) {
-  if (!op) {
-    return std::nullopt;
-  }
+SetVector<int> triton::gpu::getPartitionIds(Operation *op) {
   auto attrs = op->getAttr(kPartitionAttrName);
-  if (!attrs) {
-    return std::nullopt;
-  }
-
   SmallVector<int> partitionIds;
   for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
     partitionIds.push_back(id);
@@ -3936,33 +3970,42 @@ std::optional<SetVector<int>> triton::gpu::getPartitionIds(Operation *op) {
   return SetVector<int>(partitionIds.begin(), partitionIds.end());
 }
 
-std::optional<int> triton::gpu::getNumOutputPartitionIds(Operation *op) {
-  if (!op) {
-    return std::nullopt;
+SmallVector<SetVector<int>, 4> triton::gpu::getPartitionOutputs(Operation *op) {
+  SmallVector<SetVector<int>, 4> partitionOutputsIds;
+  if (op->getNumResults() == 0) {
+    return partitionOutputsIds;
   }
-  auto attr = op->getAttr(kPartitionOutputsAttrName);
-  if (!attr) {
-    return std::nullopt;
+  auto arrayAttr = cast<ArrayAttr>(op->getAttr(kPartitionOutputsAttrName));
+  for (auto attr : arrayAttr) {
+    auto ids = cast<DenseI32ArrayAttr>(attr).asArrayRef();
+    partitionOutputsIds.push_back(SetVector<int>(ids.begin(), ids.end()));
   }
-  return cast<ArrayAttr>(attr).size();
+  return partitionOutputsIds;
 }
 
-std::optional<SetVector<int>> triton::gpu::getOutputPartitionIds(Operation *op,
-                                                                 int idx) {
-  if (!op) {
-    return std::nullopt;
+SetVector<int> triton::gpu::getPartitionIds(OpOperand *use) {
+  auto owner = use->getOwner();
+  if (isa<scf::YieldOp>(owner)) {
+    return getPartitionOutputs(owner->getParentOp())[use->getOperandNumber()];
+  } else if (scf::ForOp forOp = dyn_cast<scf::ForOp>(owner)) {
+    int idx = use->getOperandNumber() - forOp.getNumControlOperands();
+    return idx >= 0 ? getPartitionOutputs(owner)[idx] : getPartitionIds(forOp);
+  } else {
+    return getPartitionIds(owner);
   }
-  auto attr = op->getAttr(kPartitionOutputsAttrName);
-  if (!attr) {
-    return std::nullopt;
-  }
-  assert(idx < cast<ArrayAttr>(attr).size());
-  auto attrs = cast<ArrayAttr>(attr)[idx];
+}
 
-  SmallVector<int> partitionIds;
-  for (auto id : cast<DenseI32ArrayAttr>(attrs).asArrayRef()) {
-    partitionIds.push_back(id);
+bool triton::gpu::hasPartition(Operation *op) {
+  return op && op->hasAttr(kPartitionAttrName);
+}
+
+bool triton::gpu::hasWarpSpecializeTag(Operation *op) {
+  return op && op->hasAttr(kWarpSpecializeTagAttrName);
+}
+
+std::optional<int> triton::gpu::getWarpSpecializeTag(Operation *op) {
+  if (hasWarpSpecializeTag(op)) {
+    return cast<IntegerAttr>(op->getAttr(kWarpSpecializeTagAttrName)).getInt();
   }
-  std::sort(partitionIds.begin(), partitionIds.end());
-  return SetVector<int>(partitionIds.begin(), partitionIds.end());
+  return std::nullopt;
 }

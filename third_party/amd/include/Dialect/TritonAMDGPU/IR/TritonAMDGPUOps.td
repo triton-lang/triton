@@ -125,7 +125,7 @@ def ExtractSliceOp : TT_AMDGPU_Op<"extract_slice", [Pure]> {
     %1 = ttg.convert_layout %0 : tensor<128x128xf16, #blocked>
         -> tensor<128x128xf16, #blocked1>
     // create a slice of base tensor %1 with static offsets
-    %2 = amdgpu.extract_slice %0 [0, 0] :
+    %2 = amdg.extract_slice %0 [0, 0] :
       tensor<128x128xf16, #blocked1> to tensor<128x32xf16, #blocked1>
     ```
 
@@ -208,7 +208,7 @@ def ConcatOp : TT_AMDGPU_Op<"concat", [Pure]> {
     ```mlir
     #blocked = #ttg.blocked<{sizePerThread = [1, 8],
         threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-    %0 = amdgpu.concat %arg0, %arg1: tensor<32x64xf32, #blocked>,tensor<32x64xf32, #blocked>,
+    %0 = amdg.concat %arg0, %arg1: tensor<32x64xf32, #blocked>,tensor<32x64xf32, #blocked>,
       -> tensor<64x64xf32, #blocked>
     ```
 
@@ -216,7 +216,7 @@ def ConcatOp : TT_AMDGPU_Op<"concat", [Pure]> {
     ```mlir
     #src_layout = #ttg.linear<{register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [64, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]}>
     #dst_layout = #ttg.linear<{register=[[0, 1], [0, 2], [0, 8], [0, 16], [0, 64], [0, 128], [64, 0], [128, 0]], lane=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 4]], warp=[[0, 32], [32, 0]], block=[]}>
-    %0 = amdgpu.concat %arg0, %arg1, %arg2, %arg3 : tensor<128x128xf16, #src_layout>, tensor<128x128xf16, #src_layout>, tensor<128x128xf16, #src_layout>,
+    %0 = amdg.concat %arg0, %arg1, %arg2, %arg3 : tensor<128x128xf16, #src_layout>, tensor<128x128xf16, #src_layout>, tensor<128x128xf16, #src_layout>,
                                                     tensor<128x128xf16, #src_layout> -> tensor<256x256xf16, #dst_layout>
     ```
 
@@ -341,7 +341,7 @@ def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
 ]>{
     let summary = "Load from a scalar base pointer and a tensor offset to shared memory";
     let description = [{
-      AMD Buffer load operation. Similar to amdgpu.buffer_load op but directly wirtes to shared memory instead of into registers. }];
+      AMD Buffer load operation. Similar to amdg.buffer_load op but directly wirtes to shared memory instead of into registers. }];
     let arguments = (ins
       Arg<TTG_MemDescType, "Shared memory slice to write to", [MemWrite<SharedMemory>]>:$dest,
       Arg<TT_Ptr, "Global memory scalar base pointer to load from", [MemRead<GlobalMemory>]>:$ptr,
@@ -796,6 +796,32 @@ def AsyncWaitOp : TT_AMDGPU_Op<"async_wait"> {
   let arguments = (ins Variadic<TTG_AsyncToken>:$asyncToken, I32Attr:$num_inst);
   let results = (outs TTG_AsyncToken:$retToken);
   let assemblyFormat = "($asyncToken^)? attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// MemoryCounterWait
+//===----------------------------------------------------------------------===//
+
+def MemoryCounterWaitOp : TT_AMDGPU_Op<"memory_counter_wait"> {
+  let summary = "Wait for specified hardware counters";
+  let description = [{
+    Wait for the specified counters to be less-than or equal-to the provided
+    values before continuing.
+
+    Counters can lower to different instructions on different architectires,
+    including clamping to the some HW supported max value or combining multiple
+    counters into one.
+  }];
+
+  let arguments = (ins
+    OptionalAttr<I32Attr>:$load,
+    OptionalAttr<I32Attr>:$store,
+    OptionalAttr<I32Attr>:$ds
+  );
+
+  let assemblyFormat = [{
+    oilist( `load` `(` $load `)` | `store` `(` $store `)` | `ds` `(` $ds `)` ) attr-dict
+  }];
 }
 
 #endif

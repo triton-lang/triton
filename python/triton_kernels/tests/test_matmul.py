@@ -233,6 +233,7 @@ class Case:
             Case(16, 16, 1000, "batched", "float8_e5m2", "float8_e5m2", 5, 1, split_k=None),
             Case(16, 16, 2048, "batched", "float8_e5m2", "float8_e5m2", 6, 1, split_k=5),
             # mx types:
+            Case(1, 1024, 1024, "plain", "bfloat16", "mxfloat8_e4m3fn", 1, 1),
             Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1),
             Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True),
             Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1, 1, hbm_swizzling=True, epilogue_subtile=4),
@@ -375,9 +376,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         if torch.cuda.get_device_capability()[0] < 10:
             if "mxfloat4" not in weight_dtype_str:
                 pytest.skip("NYI. Hopper swizzling just implemented for mxfp4.")
-            if k % 64 != 0 or n % 64 != 0:
-                # Automatic padding not implemented for Hopper swizzle
-                pytest.skip("Hopper swizzling acts on a 64x64 tile (4x1 mma tiles).")
 
     expt_is_inner = (inner_expt_opt is not None)
     if expt_is_inner:

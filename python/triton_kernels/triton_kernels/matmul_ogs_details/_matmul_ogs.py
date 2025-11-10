@@ -222,7 +222,7 @@ def _matmul_ogs(
                          M, K, ExptData, ExptHist, ExptOffs, ExptTileOffs,
                          EXPT_IS_INNER, X_IS_PADDED, W_IS_PADDED,
                          BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K,
-                         GROUP_M, XCD_SWIZZLE)
+                         GROUP_M, XCD_SWIZZLE, SWIZZLE_MX_VALUE)
 
     # For split-k, advance to the output k slice
     if SPLIT_K > 1:
@@ -290,7 +290,10 @@ def _matmul_ogs(
 
     # B pointers
     offs_w_n = pid_n * PACKED_BLOCK_N_W + tl.arange(0, PACKED_BLOCK_N_W)
-    offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % (N // W_N_DIVISOR), PACKED_BLOCK_N_W), PACKED_BLOCK_N_W)
+    N_W = N
+    if SWIZZLE_MX_VALUE == "HOPPER_VALUE":
+        N_W = tl.cdiv(N_W, 64) * 64
+    offs_w_n = tl.max_contiguous(tl.multiple_of(offs_w_n % (N_W // W_N_DIVISOR), PACKED_BLOCK_N_W), PACKED_BLOCK_N_W)
 
     if is_x_microscaled:
         XMxScale += start_z.to(index_type) * stride_x_mx_z

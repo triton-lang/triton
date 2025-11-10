@@ -26,6 +26,7 @@
 
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
@@ -50,6 +51,17 @@ LogicalResult verifyMMAv5Op(Operation *op);
 #include "triton/Dialect/TritonNvidiaGPU/IR/Ops.h.inc"
 
 namespace mlir::triton::nvidia_gpu {
+
+constexpr static char AttrTwoCTAsName[] = "ttng.two-ctas";
+
+inline bool getModuleTwoCTAs(ModuleOp mod) {
+  auto attr = mod->getAttrOfType<BoolAttr>(AttrTwoCTAsName);
+  return attr ? attr.getValue() : false;
+}
+
+inline bool getModuleTwoCTAs(Operation *op) {
+  return getModuleTwoCTAs(op->getParentOfType<ModuleOp>());
+}
 
 struct TensorMemory : public SideEffects::Resource::Base<TensorMemory> {
   StringRef getName() final { return "<TensorMemory>"; }
@@ -95,8 +107,8 @@ inline const char *getOpShape(TMemAccessAtom atom) {
   llvm_unreachable("Unknown TMemAccessAtom");
 }
 
-LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
-                           bool unpacked);
+LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
+                           bool withWarp);
 
 TMemAllocation getTmemAllocSizes(gpu::MemDescType memDescType);
 
