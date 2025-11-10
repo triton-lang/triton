@@ -101,8 +101,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %pid_n_8 = arith.divsi %pid_n, %group_size_m_6 : i32
       %off_am = arith.muli %pid_m_7, %c128_i32 : i32
       %off_bn = arith.muli %pid_n_8, %c128_i32 : i32
-      // TODO: Update the partition to 1
-      // CHECK: tmem_alloc {{.*}} {ttg.partition = array<i32: 0>}
+      // CHECK: tmem_alloc {{.*}} {ttg.partition = array<i32: 1>}
       // CHECK-NOT: tmem_store
       %accumulator, %accumulator_9 = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
       %accumulator_10 = ttng.tmem_store %cst, %accumulator[%accumulator_9], %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
