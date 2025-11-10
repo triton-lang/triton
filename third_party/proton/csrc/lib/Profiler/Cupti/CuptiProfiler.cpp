@@ -373,12 +373,9 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         }
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
         // Proton only cares about kernel nodes
-        if (graphData->nodeType != CU_GRAPH_NODE_TYPE_KERNEL)
+        if (graphData->nodeType != CU_GRAPH_NODE_TYPE_KERNEL ||
+            !pImpl->graphIdNodeIdToContexts.contain(graphId))
           return;
-        if (!pImpl->graphIdToNumInstances.contain(graphId)) {
-          throw std::runtime_error(
-              "[PROTON] graphIdToNumInstances does not contain graphId");
-        }
         auto &numInstances = pImpl->graphIdToNumInstances[graphId];
         if (numInstances == 0) {
           throw std::runtime_error(
