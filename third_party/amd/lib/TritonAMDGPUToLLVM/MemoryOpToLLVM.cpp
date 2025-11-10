@@ -220,7 +220,7 @@ public:
     auto dsAttr = rewriter.getI32IntegerAttr(0);
     rewriter.create<amdgpu::MemoryCounterWaitOp>(
         op->getLoc(), /* load= */ nullptr, /* store= */ nullptr,
-        /* ds= */ dsAttr, /* exp= */ nullptr);
+        /* ds= */ dsAttr);
     rewriter.replaceOpWithNewOp<ROCDL::SBarrierOp>(op);
 
     return success();
@@ -255,17 +255,10 @@ private:
 ///     Lgkmcnt = Waitcnt[13:8]     (gfx10)
 ///     Lgkmcnt = Waitcnt[9:4]      (gfx11)
 static FailureOr<unsigned> encodeWaitcnt(llvm::AMDGPU::IsaVersion isaVersion,
-                                         unsigned vmcnt, unsigned expcnt,
-                                         unsigned lgkmcnt) {
-  if (isaVersion.Major < 9) {
-    vmcnt = std::min(15u, vmcnt);
-    expcnt = std::min(7u, expcnt);
-    lgkmcnt = std::min(15u, lgkmcnt);
-    return vmcnt | (expcnt << 4) | (lgkmcnt << 8);
-  }
+                                         unsigned vmcnt, unsigned lgkmcnt) {
   if (isaVersion.Major == 9) {
     vmcnt = std::min(63u, vmcnt);
-    expcnt = std::min(7u, expcnt);
+    unsigned expcnt = 0x7;
     lgkmcnt = std::min(15u, lgkmcnt);
     unsigned lowBits = vmcnt & 0xF;
     unsigned highBits = (vmcnt >> 4) << 14;
@@ -274,7 +267,7 @@ static FailureOr<unsigned> encodeWaitcnt(llvm::AMDGPU::IsaVersion isaVersion,
   }
   if (isaVersion.Major == 10) {
     vmcnt = std::min(63u, vmcnt);
-    expcnt = std::min(7u, expcnt);
+    unsigned expcnt = 0x7;
     lgkmcnt = std::min(63u, lgkmcnt);
     unsigned lowBits = vmcnt & 0xF;
     unsigned highBits = (vmcnt >> 4) << 14;
@@ -283,7 +276,7 @@ static FailureOr<unsigned> encodeWaitcnt(llvm::AMDGPU::IsaVersion isaVersion,
   }
   if (isaVersion.Major == 11) {
     vmcnt = std::min(63u, vmcnt);
-    expcnt = std::min(7u, expcnt);
+    unsigned expcnt = 0x7;
     lgkmcnt = std::min(63u, lgkmcnt);
     return (vmcnt << 10) | expcnt | (lgkmcnt << 4);
   }
@@ -306,7 +299,6 @@ struct MemoryCounterWaitOpConversion
     ///   * ROCDL::WaitDscntOp if ds is present
     ///   * ROCDL::WaitLoadcntOp if load is present
     ///   * ROCDL::WaitStorecntOp if store is present
-    ///   * ROCDL::WaitExpcntOp if exp is present
     if (isaVersion.Major >= 12) {
       Location loc = op.getLoc();
       if (std::optional<int> ds = adaptor.getDs())
@@ -317,9 +309,6 @@ struct MemoryCounterWaitOpConversion
 
       if (std::optional<int> store = adaptor.getStore())
         ROCDL::WaitStorecntOp::create(rewriter, loc, *store);
-
-      if (std::optional<int> exp = adaptor.getExp())
-        ROCDL::WaitExpcntOp::create(rewriter, loc, *exp);
 
       rewriter.eraseOp(op);
       return success();
@@ -334,7 +323,6 @@ struct MemoryCounterWaitOpConversion
       return 1024;
     };
     unsigned ds = getVal(adaptor.getDsAttr());
-    unsigned exp = getVal(adaptor.getExpAttr());
 
     unsigned vmcnt = 1024;
     Attribute load = adaptor.getLoadAttr();
@@ -347,7 +335,7 @@ struct MemoryCounterWaitOpConversion
       vmcnt = getVal(store);
     }
 
-    FailureOr<unsigned> waitcnt = encodeWaitcnt(isaVersion, vmcnt, exp, ds);
+    FailureOr<unsigned> waitcnt = encodeWaitcnt(isaVersion, vmcnt, ds);
     if (failed(waitcnt))
       return op.emitOpError("unsupported chipset");
 

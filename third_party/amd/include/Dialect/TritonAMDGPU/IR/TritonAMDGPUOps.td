@@ -816,12 +816,11 @@ def MemoryCounterWaitOp : TT_AMDGPU_Op<"memory_counter_wait"> {
   let arguments = (ins
     OptionalAttr<I32Attr>:$load,
     OptionalAttr<I32Attr>:$store,
-    OptionalAttr<I32Attr>:$ds,
-    OptionalAttr<I32Attr>:$exp
+    OptionalAttr<I32Attr>:$ds
   );
 
   let assemblyFormat = [{
-    oilist( `load` `(` $load `)` | `store` `(` $store `)` | `ds` `(` $ds `)` | `exp` `(` $exp `)` ) attr-dict
+    oilist( `load` `(` $load `)` | `store` `(` $store `)` | `ds` `(` $ds `)` ) attr-dict
   }];
 }
 

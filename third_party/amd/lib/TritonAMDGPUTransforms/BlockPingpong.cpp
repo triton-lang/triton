@@ -802,7 +802,7 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   auto dsAttr = builder.getI32IntegerAttr(0);
   prependOp(tt::amdgpu::MemoryCounterWaitOp::create(
                 builder, loc, /* load= */ nullptr, /* store= */ nullptr,
-                /* ds= */ dsAttr, /* exp= */ nullptr),
+                /* ds= */ dsAttr),
             false);
   prependOp(ROCDL::SBarrierOp::create(builder, loc), false);
   prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
@@ -836,7 +836,7 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
   prependOp(tt::amdgpu::MemoryCounterWaitOp::create(
                 builder, loc, /* load= */ nullptr, /* store= */ nullptr,
-                /* ds= */ dsAttr, /* exp= */ nullptr),
+                /* ds= */ dsAttr),
             false);
 
   return success();
