@@ -282,36 +282,40 @@ tt.func public @attention_forward(
 #smem = #ttg.shared_memory
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @grouped_matmul_tma_kernel(%group_a_ptrs: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %group_b_ptrs: !tt.ptr<i64> {tt.divisibility = 16 : i32} , %group_c_ptrs: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %gm: i32 {tt.divisibility = 16 : i32}, %gn: i32 {tt.divisibility = 16 : i32}, %gk: i32 {tt.divisibility = 16 : i32}, %g_lds: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %group_size: i32) attributes {noinline = false} {
+  tt.func public @grouped_matmul_tma_kernel(%group_a_ptrs: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %group_b_ptrs: !tt.ptr<i64> {tt.divisibility = 16 : i32} , %group_c_ptrs: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %gm: i32 {tt.divisibility = 16 : i32}, %gn: i32 {tt.divisibility = 16 : i32}, %gk: i32 {tt.divisibility = 16 : i32}, %group_size: i32) attributes {noinline = false} {
     %false = arith.constant false
     %true = arith.constant true
-    %c127_i32 = arith.constant 127 : i32
     %c1_i32 = arith.constant 1 : i32
     %c3_i32 = arith.constant 3 : i32
     %c2_i32 = arith.constant 2 : i32
     %c1_i64 = arith.constant 1 : i64
     %c128_i32 = arith.constant 128 : i32
     %c64_i32 = arith.constant 64 : i32
-    %c63_i32 = arith.constant 63 : i32
     %c4_i32 = arith.constant 4 : i32
     %c0_i32 = arith.constant 0 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
-    %num_m_tiles = arith.addi %gm, %c127_i32 : i32
-    %num_m_tiles_0 = arith.divsi %num_m_tiles, %c128_i32 : i32
-    %num_n_tiles = arith.addi %gn, %c127_i32 : i32
-    %num_n_tiles_1 = arith.divsi %num_n_tiles, %c128_i32 : i32
+    %num_m_tiles_0 = arith.divsi %gm, %c128_i32 : i32
+    %num_n_tiles_1 = arith.divsi %gn, %c128_i32 : i32
     %num_tiles = arith.muli %num_m_tiles_0, %num_n_tiles_1 : i32
     %start_pid = tt.get_program_id x : i32
-    %0 = arith.addi %gk, %c63_i32 : i32
-    %1 = arith.divsi %0, %c64_i32 : i32
+    %1 = arith.divsi %gk, %c64_i32 : i32
+    %stride = arith.constant 1024 : i64
+    // CHECK: ttng.tmem_alloc : () -> !ttg.memdesc<2x128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+    // CHECK: default
+    // CHECK: ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32}
+    // CHECK: scf.for
+    // CHECK: ttng.tensormap_create
+    // CHECK: scf.for
+    // CHECK: partition0
+    // CHECK: partition1
+    // CHECK: ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32}
+    // CHECK: ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32}
+    // CHECK: scf.for
+    // CHECK: ttng.tensormap_create
+    // CHECK: ttng.tensormap_create
+    // CHECK: scf.for
+    // CHECK: scf.for
     scf.for %g = %c0_i32 to %group_size step %c1_i32  : i32 {
-      %lda = arith.muli %g, %c3_i32 : i32
-      %lda_2 = tt.addptr %g_lds, %lda : !tt.ptr<i32>, i32
-      %lda_3 = tt.load %lda_2 : !tt.ptr<i32>
-      %ldb = tt.addptr %lda_2, %c1_i32 : !tt.ptr<i32>, i32
-      %ldb_4 = tt.load %ldb : !tt.ptr<i32>
-      %ldc = tt.addptr %lda_2, %c2_i32 : !tt.ptr<i32>, i32
-      %ldc_5 = tt.load %ldc : !tt.ptr<i32>
       %a_ptr = tt.addptr %group_a_ptrs, %g : !tt.ptr<i64>, i32
       %a_ptr_6 = tt.load %a_ptr : !tt.ptr<i64>
       %a_ptr_7 = tt.int_to_ptr %a_ptr_6 : i64 -> !tt.ptr<f16>
@@ -321,12 +325,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %c_ptr = tt.addptr %group_c_ptrs, %g : !tt.ptr<i64>, i32
       %c_ptr_10 = tt.load %c_ptr : !tt.ptr<i64>
       %c_ptr_11 = tt.int_to_ptr %c_ptr_10 : i64 -> !tt.ptr<f16>
-      %a_desc = arith.extsi %lda_3 : i32 to i64
-      %a_desc_12 = tt.make_tensor_descriptor %a_ptr_7, [%gm, %gk], [%a_desc, %c1_i64] : <f16>, <tensor<128x64xf16, #shared>>
-      %b_desc = arith.extsi %ldb_4 : i32 to i64
-      %b_desc_13 = tt.make_tensor_descriptor %b_ptr_9, [%gn, %gk], [%b_desc, %c1_i64] : <f16>, <tensor<128x64xf16, #shared>>
-      %c_desc = arith.extsi %ldc_5 : i32 to i64
-      %c_desc_14 = tt.make_tensor_descriptor %c_ptr_11, [%gm, %gn], [%c_desc, %c1_i64] : <f16>, <tensor<128x128xf16, #shared>>
+      %a_desc_12 = tt.make_tensor_descriptor %a_ptr_7, [%gm, %gk], [%stride, %c1_i64] : <f16>, <tensor<128x64xf16, #shared>>
+      %b_desc_13 = tt.make_tensor_descriptor %b_ptr_9, [%gn, %gk], [%stride, %c1_i64] : <f16>, <tensor<128x64xf16, #shared>>
+      %c_desc_14 = tt.make_tensor_descriptor %c_ptr_11, [%gm, %gn], [%stride, %c1_i64] : <f16>, <tensor<128x128xf16, #shared>>
       scf.for %tile_idx = %start_pid to %num_tiles step %c4_i32  : i32 {
         %tile_m_idx = arith.divsi %tile_idx, %num_n_tiles_1 : i32
         %tile_n_idx = arith.remsi %tile_idx, %num_n_tiles_1 : i32
@@ -335,13 +336,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
         %accumulator, %accumulator_15 = ttng.tmem_alloc : () -> (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
         %accumulator_16 = ttng.tmem_store %cst, %accumulator[%accumulator_15], %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
         %accumulator_17:2 = scf.for %accumulator_20 = %c0_i32 to %1 step %c1_i32 iter_args(%arg11 = %false, %accumulator_21 = %accumulator_16) -> (i1, !ttg.async.token)  : i32 {
-          %a = arith.muli %accumulator_20, %c64_i32 {loop.cluster = 2 : i32, loop.stage = 0 : i32} : i32
+          %a = arith.muli %accumulator_20, %c64_i32 : i32
           %a_22 = tt.descriptor_load %a_desc_12[%offs_am, %a] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked1>
-          %a_23 = ttg.local_alloc %a_22 {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x64xf16, #blocked1>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
-          %b = tt.descriptor_load %b_desc_13[%offs_bn, %a] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked1>
-          %accumulator_24 = ttg.local_alloc %b {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x64xf16, #blocked1>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
-          %accumulator_25 = ttg.memdesc_trans %accumulator_24 {loop.cluster = 0 : i32, loop.stage = 2 : i32, order = array<i32: 1, 0>} : !ttg.memdesc<128x64xf16, #shared, #smem> -> !ttg.memdesc<64x128xf16, #shared1, #smem>
-          %accumulator_26 = ttng.tc_gen5_mma %a_23, %accumulator_25, %accumulator[%accumulator_21], %arg11, %true {loop.cluster = 0 : i32, loop.stage = 2 : i32, tt.self_latency = 1 : i32} : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared1, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+          %a_23 = ttg.local_alloc %a_22 : (tensor<128x64xf16, #blocked1>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+          %b = tt.descriptor_load %b_desc_13[%offs_bn, %a] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked1>
+          %accumulator_24 = ttg.local_alloc %b : (tensor<128x64xf16, #blocked1>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+          %accumulator_25 = ttg.memdesc_trans %accumulator_24 {order = array<i32: 1, 0>} : !ttg.memdesc<128x64xf16, #shared, #smem> -> !ttg.memdesc<64x128xf16, #shared1, #smem>
+          %accumulator_26 = ttng.tc_gen5_mma %a_23, %accumulator_25, %accumulator[%accumulator_21], %arg11, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared1, #smem>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
           scf.yield %true, %accumulator_26 : i1, !ttg.async.token
         } {tt.scheduled_max_stage = 2 : i32}
         %accumulator_18, %accumulator_19 = ttng.tmem_load %accumulator[%accumulator_17#1] : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
