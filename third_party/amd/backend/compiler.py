@@ -450,7 +450,7 @@ class HIPBackend(BaseBackend):
             dump_mir_path = os.environ.get('TRITON_DUMP_MIR')
 
             if not dump_mir_path:
-                return
+                return None
 
             # Generate MIR
             mir = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion)
@@ -462,6 +462,8 @@ class HIPBackend(BaseBackend):
             with open(dump_mir_path, 'w') as f:
                 f.write(mir)
 
+            return mir
+
         # Find kernel names (there should only be one)
         # We get the name at the last possible step to accommodate `triton.compile`
         # on user-provided LLVM
@@ -471,9 +473,15 @@ class HIPBackend(BaseBackend):
         # llvm -> hsaco
         flags = []
         features = '-real-true16' if 'gfx11' in options.arch else ''
-        _dump_mir_if_requested()
+      # mir = _dump_mir_if_requested()
+      # if not mir:
+      #     amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
+      #                                    False)
+      # else:
+      #     amdgcn = llvm.translate_mir_to_asm(mir, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
+      #                                    False)
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
-                                       False)
+                                       False, names[0])
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
