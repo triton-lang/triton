@@ -17,8 +17,8 @@ pytestmark = pytest.mark.skipif(not is_hip(), reason="MIR tests require AMD/HIP 
 
 
 def test_mir_dump(tmp_path, monkeypatch):
-    mir_path = tmp_path / "add_kernel.mir"
-    monkeypatch.setenv("TRITON_DUMP_MIR", str(mir_path))
+    mir_path = tmp_path / "add_kernel.txt"
+    monkeypatch.setenv("TRITON_DUMP_MIR", str(tmp_path))
     monkeypatch.setenv("TRITON_ALWAYS_COMPILE", "1")
 
     @triton.jit
