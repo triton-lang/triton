@@ -391,7 +391,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         }
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
         pImpl->graphIdToNumInstances.erase(graphExecId);
-      } 
+      }
     }
   } else if (domain == CUPTI_CB_DOMAIN_NVTX) {
     auto *nvtxData = static_cast<const CUpti_NvtxData *>(cbData);
