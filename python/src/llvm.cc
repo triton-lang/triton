@@ -67,26 +67,19 @@ createTargetMachine(llvm::Module *module, std::string proc,
   return machine;
 }
 
-std::string translateLLVMIRToASM(
-    llvm::Module &module, const std::string &triple, const std::string &proc,
-    const std::string &features,
-    const std::vector<std::pair<std::string, std::variant<std::string, bool>>>
-        &flags,
-    bool enable_fp_fusion, bool isObject) {
+std::string translateLLVMIRToASM(llvm::Module &module,
+                                 const std::string &triple,
+                                 const std::string &proc,
+                                 const std::string &features,
+                                 const std::vector<std::string> &flags,
+                                 bool enable_fp_fusion, bool isObject) {
   using namespace mlir;
   // options
   auto options = llvm::cl::getRegisteredOptions();
-  for (auto flag : flags) {
-    if (std::string *strVal = std::get_if<std::string>(&flag.second)) {
-      auto *shortPtr =
-          static_cast<llvm::cl::opt<std::string> *>(options[flag.first]);
-      assert(shortPtr);
-      shortPtr->setValue(*strVal);
-    } else if (bool *boolVal = std::get_if<bool>(&flag.second)) {
-      auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag.first]);
-      assert(shortPtr);
-      shortPtr->setValue(*boolVal);
-    }
+  for (std::string flag : flags) {
+    auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag]);
+    assert(shortPtr);
+    shortPtr->setValue(true);
   }
   if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
     auto optIt = options.find("print-after-all");
@@ -431,9 +424,7 @@ void init_triton_llvm(py::module &&m) {
   m.def(
       "translate_to_asm",
       [](std::string llvmIR, std::string triple, std::string proc,
-         std::string features,
-         std::vector<std::pair<std::string, std::variant<std::string, bool>>>
-             flags,
+         std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion, bool isObject) -> py::object {
         std::string obj;
         {
