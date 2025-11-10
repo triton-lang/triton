@@ -2928,13 +2928,15 @@ def test_amd_warp_pipeline(target):
 
         # Simple loop with an explicit split point
         for i in range(c0, 10, one):
-            x = i + one
-            ttgl.amd.split_warp_pipeline()
-            y = x * one
-            x = y + one
+            with ttgl.amd.warp_pipeline_stage("stage0"):
+                x = i + one
+            with ttgl.amd.warp_pipeline_stage("stage1"):
+                y = x * one
+                x = y + one
 
     module = run_parser(kernel, *make_args(num_warps=4), target=target)
-    assert str(module).count("triton.warp_pipeline.border") == 1
+    print(module)
+    assert str(module).count("triton.warp_pipeline.border") == 2
 
 
 @gluon.jit
