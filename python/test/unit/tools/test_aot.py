@@ -500,7 +500,3 @@ def test_gluon_kernel():
         kernel_path = write_triton_kernels(tmp_dir, gluon_kernel_src, kernel_utils_src)
         compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK)
         check_hasco_binary_str(tmp_dir, dtype)
-
-
-if __name__ == "__main__":
-    test_gluon_kernel()
