@@ -808,6 +808,32 @@ def AsyncWaitOp : TT_AMDGPU_Op<"async_wait"> {
 }
 
 //===----------------------------------------------------------------------===//
+// MemoryCounterWait
+//===----------------------------------------------------------------------===//
+
+def MemoryCounterWaitOp : TT_AMDGPU_Op<"memory_counter_wait"> {
+  let summary = "Wait for specified hardware counters";
+  let description = [{
+    Wait for the specified counters to be less-than or equal-to the provided
+    values before continuing.
+
+    Counters can lower to different instructions on different architectires,
+    including clamping to the some HW supported max value or combining multiple
+    counters into one.
+  }];
+
+  let arguments = (ins
+    OptionalAttr<I32Attr>:$load,
+    OptionalAttr<I32Attr>:$store,
+    OptionalAttr<I32Attr>:$ds
+  );
+
+  let assemblyFormat = [{
+    oilist( `load` `(` $load `)` | `store` `(` $store `)` | `ds` `(` $ds `)` ) attr-dict
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // InitBarrierOp
 //===----------------------------------------------------------------------===//
 
