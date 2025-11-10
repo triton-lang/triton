@@ -35,6 +35,14 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <stdexcept>
+#ifdef _WIN32
+#include <io.h>
+#define dup _dup
+#define dup2 _dup2
+#define fileno _fileno
+#else
+#include <unistd.h>
+#endif
 
 namespace py = pybind11;
 
@@ -46,8 +54,6 @@ struct BreakStructPhiNodesPass : PassInfoMixin<BreakStructPhiNodesPass> {
 } // namespace llvm
 
 using namespace llvm;
-
-enum class CodeGenOutput { Assembly, Object, MIR };
 
 std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
@@ -298,29 +304,17 @@ std::string translateLLVMIRToASM(llvm::Module &module,
                                  bool enable_fp_fusion, bool isObject) {
   using namespace mlir;
 
-  // Get and configure options
+  // Check if we should dump MIR
+  std::string dumpMirBase = triton::tools::getStrEnv("TRITON_DUMP_MIR");
+  bool dumpMir = !dumpMirBase.empty();
+
+  // options
   auto options = llvm::cl::getRegisteredOptions();
-
-  // Save and set stop-before if needed (for MIR output or custom stop point)
-  std::string originalStopBefore;
-  if (output_type == CodeGenOutput::MIR) {
-    auto stopBeforeOpt = options.find("stop-before");
-    if (stopBeforeOpt != options.end()) {
-      auto *optPtr =
-          static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
-      originalStopBefore = optPtr->getValue();
-      optPtr->setValue("machine-scheduler");
-    }
-  }
-
-  // Apply flags
-  for (const std::string &flag : flags) {
+  for (std::string flag : flags) {
     auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag]);
     assert(shortPtr);
     shortPtr->setValue(true);
   }
-
-  // Handle LLVM optimization flags
   if (triton::tools::getBoolEnv("LLVM_IR_ENABLE_DUMP")) {
     auto optIt = options.find("print-after-all");
     if (optIt != options.end()) {
@@ -328,7 +322,6 @@ std::string translateLLVMIRToASM(llvm::Module &module,
       *optPtr = true;
     }
   }
-
   bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (!disableLLVMOpt) {
     // Check to see if we are passing a list of flags to disable optimizations.
@@ -346,12 +339,11 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     }
   }
 
-  // Inline everything
+  // inline everything
   for (llvm::Function &f : module.functions())
     if (!f.hasFnAttribute(llvm::Attribute::NoInline))
       f.addFnAttr(llvm::Attribute::AlwaysInline);
-
-  // Run inlining and verification
+  // verify and store llvm
   llvm::legacy::PassManager pm;
   pm.add(llvm::createAlwaysInlinerLegacyPass());
   pm.add(llvm::createVerifierPass());
@@ -373,44 +365,114 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     timePassesStr.clear();
   }
 
-  // Setup target machine
+  // create machine
   module.setTargetTriple(Triple(triple));
   auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
+  // set data layout
   module.setDataLayout(machine->createDataLayout());
 
-  // Emit code
+  // TRITON_DUMP_MIR: Enable MIR and DAG dumping
+  std::string dumpFilename;
+  int saved_stderr_fd = -1;
+  if (dumpMir) {
+    dumpFilename = dumpMirBase + "/" + kernel_name + ".txt";
+
+    auto stopBeforeOpt = options.find("stop-before");
+    std::string originalStopBefore;
+    if (stopBeforeOpt != options.end()) {
+      auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
+      originalStopBefore = optPtr->getValue();
+      optPtr->setValue("machine-scheduler");
+    }
+
+    std::string mir;
+    {
+      llvm::raw_string_ostream stream(mir);
+      llvm::buffer_ostream pstream(stream);
+      llvm::legacy::PassManager pass;
+      // emit MIR
+      machine->addPassesToEmitFile(pass, pstream, nullptr, llvm::CodeGenFileType::AssemblyFile);
+      pass.run(module);
+    }
+
+    // Write MIR to file
+    {
+      std::error_code EC;
+      llvm::raw_fd_ostream dumpFile(dumpFilename, EC);
+      if (!EC) {
+        dumpFile << mir;
+        dumpFile << "---\n========== SCHEDULING DAG ==========\n";
+        dumpFile.flush();
+        dumpFile.close();
+      } else {
+        llvm::errs() << "Warning: Failed to open dump file: " << EC.message() << "\n";
+      }
+    }
+
+    if (stopBeforeOpt != options.end()) {
+      auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
+      optPtr->setValue(originalStopBefore);
+    }
+
+    // Enable misched-print-dags for DAG
+    auto mischedPrintOpt = options.find("misched-print-dags");
+    if (mischedPrintOpt != options.end()) {
+      auto *optPtr = static_cast<llvm::cl::opt<bool> *>(mischedPrintOpt->second);
+      optPtr->setValue(true);
+    }
+
+    // Save original stderr file descriptor
+    saved_stderr_fd = dup(fileno(stderr));
+
+    // Redirect stderr to append to dump file
+    FILE* redirected = freopen(dumpFilename.c_str(), "a", stderr);
+    if (!redirected) {
+      llvm::errs() << "Warning: Failed to redirect stderr to " << dumpFilename << "\n";
+    }
+  }
+
+  // emit machine code
   std::string result;
   {
     llvm::raw_string_ostream stream(result);
     llvm::buffer_ostream pstream(stream);
     llvm::legacy::PassManager pass;
-
-    // Determine file type
-    llvm::CodeGenFileType fileType;
-    if (output_type == CodeGenOutput::Object) {
-      fileType = llvm::CodeGenFileType::ObjectFile;
-    } else {
-      fileType = llvm::CodeGenFileType::AssemblyFile;
-    }
-
+    // emit
+    auto fileType = isObject ? llvm::CodeGenFileType::ObjectFile
+                             : llvm::CodeGenFileType::AssemblyFile;
     machine->addPassesToEmitFile(pass, pstream, nullptr, fileType);
     pass.run(module);
 
     if (enabledTiming) {
       reportAndResetTimings(&reportStream);
-      llvm::dbgs() << reportStream.str();
-      timePassesStr.clear();
+      if (!dumpMir) {
+        llvm::dbgs() << reportStream.str();
+        timePassesStr.clear();
+      }
     }
   }
 
-  // Restore stop-before option
-  if (output_type == CodeGenOutput::MIR) {
-    auto stopBeforeOpt = options.find("stop-before");
-    if (stopBeforeOpt != options.end()) {
-      auto *optPtr =
-          static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
-      optPtr->setValue(originalStopBefore);
+  // Restore stderr and reset options if we were dumping
+  if (dumpMir) {
+    // Restore stderr
+    fflush(stderr);
+    if (saved_stderr_fd != -1) {
+      dup2(saved_stderr_fd, fileno(stderr));
+      close(saved_stderr_fd);
+      clearerr(stderr);
     }
+
+    llvm::dbgs() << reportStream.str();
+    timePassesStr.clear();
+
+    // Reset misched-print-dags
+    auto mischedPrintOpt = options.find("misched-print-dags");
+    if (mischedPrintOpt != options.end()) {
+      auto *optPtr = static_cast<llvm::cl::opt<bool> *>(mischedPrintOpt->second);
+      optPtr->setValue(false);
+    }
+
+    llvm::errs() << "MIR and DAG dumped to: " << dumpFilename << "\n";
   }
 
   return result;
@@ -683,7 +745,7 @@ void init_triton_llvm(py::module &&m) {
       "translate_to_asm",
       [](std::string llvmIR, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion, bool isObject) -> py::object {
+         bool enable_fp_fusion, bool isObject, std::string kernelName) -> py::object {
         std::string obj;
         {
           // when allow_threads goes out of scope, gil will be released
@@ -701,7 +763,7 @@ void init_triton_llvm(py::module &&m) {
                 "lineno: " + std::to_string(error.getLineNo()));
           }
           obj = translateLLVMIRToASM(*module, triple, proc, features, flags,
-                                     enable_fp_fusion, isObject);
+                                     enable_fp_fusion, isObject, kernelName);
         }
         if (isObject)
           return py::bytes(obj);
