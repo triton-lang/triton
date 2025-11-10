@@ -31,7 +31,7 @@ namespace {
 // by interleaving the execution of two warps on each SIMD. Especially it groups
 // instructions into Dot and Memory clusters so they can efficiently run in
 // parallel. Also this pass inserts `rocdl.s.setprio` operation and
-// `amdgpu.cond_barrier` to run two parallel warps in synchronization.
+// `amdg.cond_barrier` to run two parallel warps in synchronization.
 // This scheduling doesn't help improving the memory latency itself but it
 // relies on software-pipelining to hide the global latency. Likely to improve
 // the performance of compute-bound cases.

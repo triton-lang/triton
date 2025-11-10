@@ -7,7 +7,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     // CHECK-LABEL: llvm.func @extract_2d_blocked_tensor
     // CHECK-COUNT-64: %{{.*}} = llvm.extractvalue  %{{.*}} : !llvm.struct
     // CHECK-COUNT-8:  %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
-    %72 = amdgpu.extract_slice %arg0 [0,0] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
+    %72 = amdg.extract_slice %arg0 [0,0] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
     tt.return
   }
 }
@@ -22,7 +22,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     // CHECK-LABEL: llvm.func @extract_2d_linear_tensor
     // CHECK-COUNT-64: %{{.*}} = llvm.extractvalue  %arg0[{{[0-9]*}}] : !llvm.struct
     // CHECK-COUNT-8:  %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
-    %72 = amdgpu.extract_slice %arg0 [0,0] : tensor<256x128xi32, #ll1> to tensor<256x16xi32, #ll2>
+    %72 = amdg.extract_slice %arg0 [0,0] : tensor<256x128xi32, #ll1> to tensor<256x16xi32, #ll2>
     tt.return
   }
 }
@@ -37,7 +37,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     // CHECK-LABEL: llvm.func @extract_3d_linear_tensor
     // CHECK-COUNT-128: %{{.*}} = llvm.extractvalue %arg0[{{.*}}] : !llvm.struct
     // CHECK-COUNT-64: %{{[0-9]*}} = llvm.insertvalue %{{.*}} : !llvm.struct
-    %72 = amdgpu.extract_slice %arg0 [0,0,0] : tensor<2x256x128xi32, #ll1> to tensor<1x256x128xi32, #ll2>
+    %72 = amdg.extract_slice %arg0 [0,0,0] : tensor<2x256x128xi32, #ll1> to tensor<1x256x128xi32, #ll2>
     tt.return
   }
 }
@@ -51,7 +51,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     // CHECK-LABEL: llvm.func @extract_1d_linear_tensor
     // CHECK-COUNT-8: %{{.*}} = llvm.extractvalue %arg0[{{.*}}] : !llvm.struct
     // CHECK-COUNT-2: %{{[0-9]*}} = llvm.insertvalue %{{.*}} : !llvm.struct
-    %72 = amdgpu.extract_slice %arg0 [0] : tensor<1024xi32, #ll1> to tensor<256xi32, #ll2>
+    %72 = amdg.extract_slice %arg0 [0] : tensor<1024xi32, #ll1> to tensor<256xi32, #ll2>
     tt.return
   }
 }
@@ -68,7 +68,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     // CHECK-LABEL: llvm.func @extract_from_broadcasted_tensor
     // CHECK-COUNT-32: %{{.*}} = llvm.extractvalue  %{{.*}} : !llvm.struct
     // CHECK-COUNT-4:  %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
-    %0 = amdgpu.extract_slice %arg0 [0,0] : tensor<256x1xi32, #blocked1> to tensor<128x1xi32, #blocked2>
+    %0 = amdg.extract_slice %arg0 [0,0] : tensor<256x1xi32, #blocked1> to tensor<128x1xi32, #blocked2>
     tt.return
   }
 }
@@ -85,7 +85,7 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     // CHECK-LABEL: llvm.func @extract_to_broadcasted_tensor
     // CHECK-COUNT-8: %{{.*}} = llvm.extractvalue  %{{.*}} : !llvm.struct
     // CHECK-COUNT-16:  %{{.*}} = llvm.insertvalue %{{.*}} : !llvm.struct
-    %72 = amdgpu.extract_slice %arg0 [0,0] : tensor<256x1xi32, #blocked1> to tensor<128x1xi32, #blocked2>
+    %72 = amdg.extract_slice %arg0 [0,0] : tensor<256x1xi32, #blocked1> to tensor<128x1xi32, #blocked2>
     tt.return
   }
 }

@@ -107,8 +107,8 @@ inline const char *getOpShape(TMemAccessAtom atom) {
   llvm_unreachable("Unknown TMemAccessAtom");
 }
 
-LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom,
-                           bool unpacked);
+LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
+                           bool withWarp);
 
 TMemAllocation getTmemAllocSizes(gpu::MemDescType memDescType);
 

@@ -102,8 +102,10 @@ def patch_kernel(template, to_replace):
         return local_namespace[template.fn.__name__]
     else:
         kernel = triton.JITFunction(template.fn)
+        src = kernel.src
         for key, value in to_replace.items():
-            kernel._unsafe_update_src(kernel.src.replace(key, value))
+            src = src.replace(key, value)
+        kernel._unsafe_update_src(src)
         return kernel
 
 
@@ -1151,7 +1153,7 @@ def test_index1d(expr, dtype_str, num_ctas, device):
     rank_y = expr.count(',') + 1
     shape_x = [32 for _ in range(rank_x)]
     shape_z = [32 for _ in range(rank_y)]
-    shape_z_rank_mismatch = [32 for _ in range(rank_y + 1)]
+    shape_z_rank_mismatch = [32 for _ in range(rank_y - 1)]
     shape_z_dim_mismatch = [64 for _ in range(rank_y)]
 
     # Triton kernel

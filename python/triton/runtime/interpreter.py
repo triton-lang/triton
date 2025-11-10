@@ -96,8 +96,11 @@ class TensorDescHandle:
         assert len(self.block_shape) == self.ndim
         assert self.ndim >= 1, "descriptor cannot be 0 dimensional"
 
+        scalar_ty = self.base.dtype.element_ty
+        itemsize = scalar_ty.primitive_bitwidth // 8
         for stride in self.strides[:-1]:
-            assert stride.data.item() % 16 == 0, "stride must be 16-byte aligned"
+            byte_stride = stride.data.item() * itemsize
+            assert byte_stride % 16 == 0, "stride must be 16-byte aligned"
         assert self.strides[-1].data.item() == 1, "last dim must be contiguous"
 
     def materialize_pointers(self, offsets: List[TensorHandle]):
