@@ -821,16 +821,17 @@ Operation *getDominantConsumer(ArefGetEnterOp getEnterOp, Block &container,
 
 // This is an optimization to combine arefs for TMA load into one, so that
 // barrier arrive and wait are coalesced.
-void combineArefs(ArrayRef<ArefGetEnterOp> getEnterOps) {
+void combineArefs(scf::ForOp loop) {
+  auto getEnterOps = loop.getOps<ArefGetEnterOp>();
+
   // Arefs whose get-enter ops share the same dominant consumer can be combined
+  DominanceInfo domInfo(loop);
   llvm::DenseMap<std::pair<Operation *, int>, SmallVector<ArefGetEnterOp>>
       liveBeforeGroups;
   for (auto getEnterOp : getEnterOps) {
-    auto parentFor = getEnterOp->getParentOfType<scf::ForOp>();
-    assert(parentFor);
-    DominanceInfo domInfo(parentFor);
     if (auto liveBeforeOp =
-            getDominantConsumer(getEnterOp, *parentFor.getBody(), domInfo)) {
+            getDominantConsumer(getEnterOp, *loop.getBody(), domInfo)) {
+      assert(hasPartition(getEnterOp));
       auto partitionIds = getPartitionIds(getEnterOp);
       assert(partitionIds.size() == 1);
       liveBeforeGroups[{liveBeforeOp, partitionIds.front()}].push_back(
@@ -922,14 +923,9 @@ public:
     mlir::ModuleOp m = getOperation();
 
     SmallVector<scf::ForOp> loops;
-    m.walk([&](scf::ForOp loop) {
-      if (loop->hasAttr(triton::kWarpSpecializeAttrName))
-        loops.push_back(loop);
-    });
+    m.walk([&](scf::ForOp loop) { loops.push_back(loop); });
     for (scf::ForOp loop : loops) {
-      SmallVector<ArefGetEnterOp> getEnterOps;
-      loop.walk([&](ArefGetEnterOp op) { getEnterOps.push_back(op); });
-      combineArefs(getEnterOps);
+      combineArefs(loop);
     }
 
     SmallVector<ArefCreateOp> arefOps;
