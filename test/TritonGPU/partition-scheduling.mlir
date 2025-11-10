@@ -67,7 +67,7 @@ tt.func public @attention_forward(
       tt.reduce.return %68 : f32
       // CHECK-NEXT: ttg.partition = array<i32: 0>, ttg.partition.outputs = [array<i32: 0>]
     }) : (tensor<256x64xf32, #blocked>) -> tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    // CHECK-COUNT-8: ttg.partition = array<i32:
+    // CHECK-COUNT-6: ttg.partition = array<i32:
     %l_i_scaled = arith.mulf %l_i, %alpha : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %next_l_i = arith.addf %l_i_scaled, %l_ij : tensor<256xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
 
