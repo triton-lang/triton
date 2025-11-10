@@ -375,6 +375,8 @@ class HIPBackend(BaseBackend):
         # The public kernel should be kernel 0.
         fns[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
         fns[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}")
+        if "memory-bound-attention" in options.schedule_hint.split(','):
+            fns[0].add_fn_attr("amdgpu-sched-strategy", "iterative-ilp")
         # LLVM AMDGPU backend supports the attribute "amdgpu-waves-per-eu"="<min>[, <max>]".
         # This attribute may be attached to a kernel function definition and is an optimization hint.
         # <min> parameter specifies the requested minimum number of waves per EU, and optional <max> parameter
@@ -450,9 +452,7 @@ class HIPBackend(BaseBackend):
         # the regression is not significant. It would be better to have some heuristics.
         for hint in options.schedule_hint.split(","):
             if hint == 'attention':
-                flags.append(('sink-insts-to-avoid-spills', True))
-            if hint == 'memory-bound-attention':
-                flags.append(('amdgpu-sched-strategy', 'iterative-ilp'))
+                flags.append('sink-insts-to-avoid-spills')
         features = '-real-true16' if 'gfx11' in options.arch else ''
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
                                        False)
