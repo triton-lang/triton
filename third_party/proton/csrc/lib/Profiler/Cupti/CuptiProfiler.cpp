@@ -374,14 +374,17 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHNODE_DESTROY_STARTING) {
         // Proton only cares about kernel nodes
         if (graphData->nodeType != CU_GRAPH_NODE_TYPE_KERNEL ||
-            !pImpl->graphIdNodeIdToContexts.contain(graphId))
+            !pImpl->graphIdToNumInstances.contain(graphId))
           return;
         auto &numInstances = pImpl->graphIdToNumInstances[graphId];
-        if (numInstances == 0)
-          return;
         numInstances--;
+        if (numInstances == 0) {
+          pImpl->graphIdToNumInstances.erase(graphId);
+          pImpl->graphIdNodeIdToContexts.erase(graphId);
+        }
       } else if (cbId == CUPTI_CBID_RESOURCE_GRAPHEXEC_DESTROY_STARTING) {
         pImpl->graphIdToNumInstances.erase(graphExecId);
+        pImpl->graphIdNodeIdToContexts.erase(graphExecId);
       }
     }
   } else if (domain == CUPTI_CB_DOMAIN_NVTX) {
