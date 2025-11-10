@@ -48,26 +48,29 @@ class GluonInferCoalescedEncodingsPass
     ModuleOp moduleOp = getOperation();
     ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
 
+    llvm::MapVector<FuncOp, llvm::MapVector<Value, LayoutInfo>> funcValueEnc;
+    llvm::MapVector<FuncOp, llvm::PriorityWorklist<Value>> funcWorklist;
+    llvm::MapVector<FuncOp, llvm::MapVector<Attribute, uint64_t>> funcHashMemo;
+
     // 1. for every load/store with coalesced encoding,
     // infer coalesced encoding for ptrs
     //
-    llvm::MapVector<Operation *, Attribute> layoutMap;
     int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
-    moduleOp.walk([&](Operation *curr) {
+    auto res = moduleOp.walk([&](Operation *curr) {
       Value ptr = getMemAccessPtr(curr);
       if (!ptr)
-        return;
+        return WalkResult::advance();
       // We only convert `tensor<tt.ptr<>>` load/store
       bool isPtrTensor = false;
       if (auto tensorType = dyn_cast<RankedTensorType>(ptr.getType()))
         isPtrTensor = isa<PointerType>(tensorType.getElementType());
       if (!isPtrTensor)
-        return;
+        return WalkResult::advance();
       // we only consider those with coalesced encoding
       if (auto tensorType = dyn_cast<RankedTensorType>(ptr.getType())) {
         auto encoding = tensorType.getEncoding();
         if (!encoding || !isa<gluon::CoalescedEncodingAttr>(encoding))
-          return;
+          return WalkResult::advance();
       }
 
       int numWarps = ttg::lookupNumWarps(curr);
@@ -77,10 +80,22 @@ class GluonInferCoalescedEncodingsPass
       auto ctaLayout = getDefaultCTALayout(tensorType, numCTAs);
       auto shapePerCTA = ttg::getShapePerCTA(ctaLayout.getCTASplitNum(),
                                              tensorType.getShape());
-      ttg::setCoalescedEncoding(&getContext(), axisInfoAnalysis, curr, numWarps,
-                                threadsPerWarp, ctaLayout, shapePerCTA,
-                                layoutMap);
+      auto layout = ttg::buildCoalescedEncoding(&getContext(), axisInfoAnalysis,
+                                                curr, numWarps, threadsPerWarp,
+                                                ctaLayout, shapePerCTA);
+
+      // set seed value
+      FuncOp func = curr->getParentOfType<FuncOp>();
+      if (failed(updateEncoding(llvm::to_vector_of<Value>(curr->getOperands()),
+                                LayoutInfo{layout, false}, &func,
+                                funcValueEnc[func], funcWorklist[func],
+                                funcHashMemo[func])))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
     });
+
+    if (res.wasInterrupted())
+      return signalPassFailure();
 
     // 2. propagate Coalesced Layout forward/backward
     //
@@ -89,25 +104,6 @@ class GluonInferCoalescedEncodingsPass
     // -> gl.set_auto_layout(val, a concrete coalesced layout)
     // then ResolveAutoLayoutPass will handle the rest
     //
-    llvm::MapVector<FuncOp, llvm::MapVector<Value, LayoutInfo>> funcValueEnc;
-    llvm::MapVector<FuncOp, llvm::PriorityWorklist<Value>> funcWorklist;
-    llvm::MapVector<FuncOp, llvm::MapVector<Attribute, uint64_t>> funcHashMemo;
-
-    auto seeded = moduleOp.walk([&](Operation *op) -> WalkResult {
-      if (layoutMap.find(op) == layoutMap.end())
-        return WalkResult::advance();
-      Attribute layout = layoutMap[op];
-      FuncOp func = op->getParentOfType<FuncOp>();
-      if (failed(updateEncoding(llvm::to_vector_of<Value>(op->getOperands()),
-                                LayoutInfo{layout, false}, &func,
-                                funcValueEnc[func], funcWorklist[func],
-                                funcHashMemo[func])))
-        return WalkResult::interrupt();
-      return WalkResult::advance();
-    });
-
-    if (seeded.wasInterrupted())
-      return signalPassFailure();
 
     // Do layout inference
     if (failed(inferLayout(moduleOp, isCoalescedEncodingTensorType,
