@@ -4,6 +4,7 @@
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
 #shared2 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #tmem_f16 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 2>
+#tmem_int32 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 256, colStride = 1>
 #tmem_scales = #ttng.tensor_memory_scales_encoding<>
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
@@ -41,7 +42,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @tcgen5_int8(
                   %a: !ttg.memdesc<128x128xi8, #shared, #ttg.shared_memory>,
                   %b: !ttg.memdesc<128x256xi8, #shared1, #ttg.shared_memory>,
-                  %c: !ttg.memdesc<128x256xi32, #shared1, #ttg.shared_memory, mutable>,
+                  %c: !ttg.memdesc<128x256xi32, #tmem_int32, #ttng.tensor_memory, mutable>,
                   %accUse: i1,
                   %pred: i1,
                   %barrier: !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>,
@@ -49,13 +50,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred, %barrier[%barrierPred] {is_async, is_unsigned} :
        !ttg.memdesc<128x128xi8, #shared, #ttg.shared_memory>,
        !ttg.memdesc<128x256xi8, #shared1, #ttg.shared_memory>,
-       !ttg.memdesc<128x256xi32, #shared1, #ttg.shared_memory, mutable>,
+       !ttg.memdesc<128x256xi32, #tmem_int32, #ttng.tensor_memory, mutable>,
        !ttg.memdesc<1xi64, #shared2, #ttg.shared_memory, mutable>
 
     ttng.tc_gen5_mma %a, %b, %c, %accUse, %pred {is_unsigned}:
        !ttg.memdesc<128x128xi8, #shared, #ttg.shared_memory>,
        !ttg.memdesc<128x256xi8, #shared1, #ttg.shared_memory>,
-       !ttg.memdesc<128x256xi32, #shared1, #ttg.shared_memory, mutable>
+       !ttg.memdesc<128x256xi32, #tmem_int32, #ttng.tensor_memory, mutable>
     tt.return
   }
 
