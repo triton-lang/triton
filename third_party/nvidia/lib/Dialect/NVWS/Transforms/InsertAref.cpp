@@ -511,14 +511,8 @@ bool insertArefs(OpBuilder &builder, scf::ForOp loop, Block *block,
   ArefCreateOp aref;
   {
     OpBuilder::InsertionGuard g(builder);
-    scf::ForOp topLevelFor = loop;
-    while (auto outer = topLevelFor->getParentOfType<scf::ForOp>()) {
-      topLevelFor = outer;
-      if (outer->hasAttr(kWarpSpecializeAttrName)) {
-        break;
-      }
-    }
-    builder.setInsertionPoint(topLevelFor);
+    auto wsLoop = getOuterWSLoop(loop);
+    builder.setInsertionPoint(wsLoop);
     aref = createAref(builder, producedValue);
   }
 

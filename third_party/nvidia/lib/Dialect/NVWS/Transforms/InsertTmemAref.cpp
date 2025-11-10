@@ -564,6 +564,7 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
   for (auto user : allocOp.getResult().getUsers()) {
     if (auto mmaOp = dyn_cast<MMAv5OpInterface>(user)) {
       if (auto loop = dyn_cast<scf::ForOp>(user->getParentOp())) {
+        auto wsLoop = getOuterWSLoop(loop);
         // Determine if the MMA accumulator can be multibuffered.
         bool accIsMultiBuffered =
             // MMAs in subsequent iterations can be overlapped.
@@ -572,7 +573,7 @@ LogicalResult insertTmemAref(TmemAccessDag &accessDag) {
             // multibuffering.
             isAccMultibufferingPossible(mmaOp, loop) &&
             // The user didn't disable it with a flag.
-            !getDisallowAccMultiBuffer(loop);
+            !getDisallowAccMultiBuffer(wsLoop);
         isMultiStaged = isMultiStaged ? *isMultiStaged && accIsMultiBuffered
                                       : accIsMultiBuffered;
       }
