@@ -214,6 +214,7 @@ class PrecisionConfig:
 def get_swap_xw(precision_config, opt_flags):
     if target_info.cuda_capability_geq(10, 0):
         return precision_config.weight_scale is not None and opt_flags.block_m <= 64 and opt_flags.is_persistent
+
     return False
 
 # ---------------------
@@ -227,7 +228,7 @@ class MatmulAllocation:
     scratchpads: dict[str, tuple]
 
 def init_allocation(x, w, precision_config, fused_activation,
-                    gather_indx, scatter_indx, inner_routing_data,
+                    gather_indx, scatter_indx, batch_dim,
                     n_reduce_shards, opt_flags):
     # ---- output ------
     N = w.shape[-1]
@@ -240,10 +241,6 @@ def init_allocation(x, w, precision_config, fused_activation,
         M = scatter_indx.src_indx.shape[0]
     y_rows = M
     y_rows *= n_reduce_shards
-    if inner_routing_data is not None:
-        batch_dim = inner_routing_data.base.n_expts_tot
-    else:
-        batch_dim = x.shape[0] if x.ndim == 3 else 1
     out_shape = (batch_dim, y_rows, N // fused_activation.specs.reduction_n)
     out_dtype = precision_config.out_dtype or x.dtype
     output = (out_shape, out_dtype)
@@ -309,6 +306,7 @@ def matmul_ogs_set_idle_sms(num_idle_sms):
 
 def matmul_ogs(x, w, bias,
     x_ragged_metadata: RaggedTensorMetadata | None = None,
+    w_ragged_metadata: RaggedTensorMetadata | None = None,
     gather_indx: GatherIndx | None = None,
     scatter_indx: ScatterIndx | None = None,
     precision_config: PrecisionConfig | None = None,
@@ -381,10 +379,12 @@ def matmul_ogs(x, w, bias,
     has_scatter = scatter_indx is not None
     is_ragged = x_ragged_metadata is not None and inner_routing_data is None
     M = x.shape[-2] if gather_indx is None else gather_indx.src_indx.shape[0]
-    if inner_routing_data is not None:
-        batch_size = inner_routing_data.base.n_expts_tot
+    if w_ragged_metadata is not None:
+        batch_size = w_ragged_metadata.n_slices
+    elif x_ragged_metadata is None and w.ndim == 3:
+        batch_size = w.shape[0]
     else:
-        batch_size = w.shape[0] if x_ragged_metadata is None and w.ndim == 3 else 1
+        batch_size = 1
     if y_acc_in is not None:
         y_acc_is_y = y_acc_in.data_ptr() == y.data_ptr() and y_acc_in.stride() == y.stride()
     else:
@@ -403,8 +403,7 @@ def matmul_ogs(x, w, bias,
         # Currently we don't support tma if y is column major; may revisit later if this becomes an issue.
         (y is None or y.stride(-1) == 1) and
         (y_acc_in is None or y_acc_is_y) and
-        # If we use inner_routing_data, w must be either padded or row major, otherwise we get
-        # unaligned access.
+        # if ragged dimension is K, w must be either padded or row major to ensure alignment
         (inner_routing_data is None or w.stride(-1) == 1 or inner_routing_data.w_is_padded)
     )
     has_gather_tma = has_gather and target_info.has_tma_gather()
@@ -420,7 +419,6 @@ def matmul_ogs(x, w, bias,
     if inner_routing_data is not None:
         assert opt_flags.block_k == inner_routing_data.block_k
         assert opt_flags.split_k == 1
-        batch_size = inner_routing_data.base.n_expts_tot
         # For unpadded (row major) x, we cannot use tma because memory access isn't aligned.
         x_has_tma = opt_flags.is_persistent and (x.stride(-1) != 1 or inner_routing_data.x_is_padded)
         # If TMA is used, limit is handled automatically, so we can pretend K is "even".
@@ -447,7 +445,9 @@ def matmul_ogs(x, w, bias,
         matmul_fused_activation, reduce_fused_activation = reduce_fused_activation, matmul_fused_activation
     # allocate output/scratchpad memory
     allocation = init_allocation(x, w, precision_config, fused_activation,
-                                 gather_indx, scatter_indx, inner_routing_data, fused_comm.n_reduce_shards if fused_comm is not None else 1, opt_flags)
+                                 gather_indx, scatter_indx, batch_size,
+                                 fused_comm.n_reduce_shards if fused_comm is not None else 1,
+                                 opt_flags)
     memory = apply_allocation(allocation, y)
     # early exit
     if batch_size * M * N == 0:

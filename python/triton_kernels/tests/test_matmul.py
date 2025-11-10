@@ -32,6 +32,7 @@ def alloc_rand(shape, device, dtype, requires_grad=True):
     if dtype.itemsize == 1:
         tmp = 2**-(torch.randint(4, 8, shape, device=device, dtype=torch.float16))
         return tmp.to(dtype).requires_grad_(requires_grad)
+
     return torch.randn(shape, device=device, dtype=dtype, requires_grad=requires_grad)
 
 
@@ -468,7 +469,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
                                                    device=device)
     else:
         rdata = gindx = sindx = None
-    expt_data = None if rdata is None else rdata.expt_data
+    x_ragged_metadata = None if rdata is None else rdata.expt_data
+
 
     padding_block_k = 32
     if hbm_swizzling:
@@ -478,6 +480,16 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
             padding_block_k = 128
         elif not is_persistent:
             padding_block_k = 64
+
+
+    w_ragged_metadata = None
+    if expt_is_inner:
+        w_ragged_metadata = replace(x_ragged_metadata)
+        if "pad_w" in inner_expt_opt:
+            w_ragged_metadata.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k
+        # if "pad_x" in inner_expt_opt:
+        #     x_ragged_metadata.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k
+
     x_tri, w_tri, bias_tri, gs0_tri, gs1_tri = init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act,
                                                                  mode, torch.bfloat16 if act_mxfp8 else act_dtype,  #
                                                                  torch.bfloat16 if weight_mxfp else weight_dtype,
@@ -621,7 +633,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
 
     # triton
     try:
-        tri_y = matmul_ogs(x_tri, w_tri, bias_tri, expt_data,
+        tri_y = matmul_ogs(x_tri, w_tri, bias_tri,
+                           x_ragged_metadata, w_ragged_metadata,
                            gindx, sindx, precision_opt,
                            gammas=gs1_ref, epilogue=epilogue, y=y_tri_in,
                            inner_routing_data=inner_routing_data,
@@ -641,7 +654,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         return x.to(act_dtype).to(torch.float32) if sep_gather else x
 
     ref_y = matmul_ogs_torch(x_ref, w_ref, bias_ref,  #
-                             expt_data, gindx, sindx, round_x=round_x, gammas=gs1_ref,
+                             x_ragged_metadata,
+                             gindx, sindx, round_x=round_x, gammas=gs1_ref,
                              inner_routing_data=inner_routing_data)
 
     def scale(val, scal):
@@ -776,10 +790,10 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, is_persistent,
     if mode == "ragged":
         m, rdata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter,
                                                    device=device)
-        ragged_metadata = rdata.expt_data
+        x_ragged_metadata = rdata.expt_data
     else:
         rdata = gindx = sindx = None
-        ragged_metadata = None
+        x_ragged_metadata = None
 
     precision_opt = init_precision(act_dtype, str(act_dtype).startswith("torch.float8"), weight_dtype, False, mode, n_expts_tot, device=device)
     x, w, bias, _, _ = init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, mode,
@@ -789,10 +803,10 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, is_persistent,
         rdata, gindx, sindx = None, None, None
 
     try:
-        a = swiglu(matmul_ogs(x, w, bias, ragged_metadata, gindx, sindx, precision_opt), swiglu_alpha,
+        a = swiglu(matmul_ogs(x, w, bias, x_ragged_metadata, gindx, sindx, precision_opt), swiglu_alpha,
                    precision_config=SwiGLUPrecisionConfig(swiglu_limit))
         b = matmul_ogs(
-            x, w, bias, ragged_metadata, gindx, sindx, precision_opt,
+            x, w, bias, x_ragged_metadata, gindx, sindx, precision_opt,
             fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
                                              (swiglu_alpha, swiglu_limit)))
     except opt_flags.InapplicableConstraint:
