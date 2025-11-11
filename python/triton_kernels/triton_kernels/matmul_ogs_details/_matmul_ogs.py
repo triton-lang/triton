@@ -185,7 +185,7 @@ def _matmul_ogs(
 
     pid = tl.program_id(0)
     if RAGGED_DIMENSION == "M":
-        padding_m = grid_m - tl.load(ExptTileOffs + N_EXPTS_TOT)
+        padding_m = grid_m - tl.load(XBlockOffs + N_EXPTS_TOT)
     else:
         padding_m: tl.constexpr = 0
 
@@ -216,7 +216,7 @@ def _matmul_ogs(
         return
 
     pid_s, pid_m, pid_n, pid_k = compute_pids(pid, unpadded_m, grid_n, total_actual_tiles, XCD_SWIZZLE, GROUP_M, SPLIT_K)
-    loop_k = tl.load(ExptHist + pid_s) if RAGGED_DIMENSION == "K" else K
+    loop_k = tl.load(XSliceSizes + pid_s) if RAGGED_DIMENSION == "K" else K
 
     (
         expt_id, start_z, start_z_out,
@@ -231,17 +231,17 @@ def _matmul_ogs(
         )
 
     if RAGGED_DIMENSION == "M":
-        eM = tl.load(ExptHist + expt_id)
+        eM = tl.load(XSliceSizes + expt_id)
     else:
         eM = M
 
     if RAGGED_DIMENSION == "K":
-        K_W = tl.load(ExptTileOffs + pid_s + 1) * PACKED_BLOCK_K_W if W_IS_PADDED else tl.load(ExptOffs + pid_s + 1)
+        K_W = tl.load(XBlockOffs + pid_s + 1) * PACKED_BLOCK_K_W if W_IS_PADDED else tl.load(ExptOffs + pid_s + 1)
     else:
         K_W = K * (PACKED_BLOCK_K_W // BLOCK_K) if PACKED_BLOCK_K_W >= BLOCK_K else K // (BLOCK_K // PACKED_BLOCK_K_W)
 
 
-    loop_k = tl.load(ExptHist + pid_s) if RAGGED_DIMENSION == "K" else K - off_k_x
+    loop_k = tl.load(XSliceSizes + pid_s) if RAGGED_DIMENSION == "K" else K - off_k_x
     k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)
 
     # For split-k, advance to the output k slice
