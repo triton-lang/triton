@@ -28,6 +28,7 @@
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include <csignal>
 #include <cstdio>
 #include <memory>
@@ -149,17 +150,17 @@ std::string translateLLVMIRToASM(llvm::Module &module,
     timePassesStr.clear();
   }
 
-  // create machine
-  module.setTargetTriple(Triple(triple));
-  auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
-  // set data layout
-  module.setDataLayout(machine->createDataLayout());
-
   // TRITON_DUMP_MIR: Enable MIR and DAG dumping
   std::string dumpFilename;
   int saved_stderr_fd = -1;
   if (dumpMir) {
     dumpFilename = dumpMirBase + "/" + kernel_name + ".txt";
+
+    // Clone the module to avoid mutation issues
+    std::unique_ptr<llvm::Module> clonedModule = llvm::CloneModule(module);
+    clonedModule->setTargetTriple(Triple(triple));
+    auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
+    clonedModule->setDataLayout(machine->createDataLayout());
 
     auto stopBeforeOpt = options.find("stop-before");
     std::string originalStopBefore;
@@ -214,6 +215,12 @@ std::string translateLLVMIRToASM(llvm::Module &module,
       llvm::errs() << "Warning: Failed to redirect stderr to " << dumpFilename << "\n";
     }
   }
+
+  // create machine
+  module.setTargetTriple(Triple(triple));
+  auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
+  // set data layout
+  module.setDataLayout(machine->createDataLayout());
 
   // emit machine code
   std::string result;
