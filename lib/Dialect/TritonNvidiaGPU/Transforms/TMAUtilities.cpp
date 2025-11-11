@@ -1,3 +1,4 @@
+#include <optional>
 #include <triton/Dialect/TritonNvidiaGPU/IR/Dialect.h>
 #include <triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h>
 
@@ -23,12 +24,19 @@ ttg::CTALayoutAttr updateCTALayoutForShape(ttg::CTALayoutAttr ctaLayout,
     return ctaLayout;
 
   auto ctx = ctaLayout.getContext();
+  std::optional<unsigned> twoCTADim = ctaLayout.getTwoCTADim();
   if (ctaLayout.getRank() > rank) {
     unsigned rankDiff = ctaLayout.getRank() - rank;
+    if (twoCTADim) {
+      if (*twoCTADim < rankDiff)
+        twoCTADim = std::nullopt;
+      else
+        twoCTADim = *twoCTADim - rankDiff;
+    }
     return ttg::CTALayoutAttr::get(
         ctx, ctaLayout.getCTAsPerCGA().drop_front(rankDiff),
         ctaLayout.getCTASplitNum().drop_front(rankDiff),
-        ctaLayout.getCTAOrder().drop_front(rankDiff));
+        ctaLayout.getCTAOrder().drop_front(rankDiff), twoCTADim);
   }
   // For rank-reducing loads, we need to rank-increase the CTA Layout
   auto rankDiff = rank - ctaLayout.getRank();
@@ -45,7 +53,10 @@ ttg::CTALayoutAttr updateCTALayoutForShape(ttg::CTALayoutAttr ctaLayout,
     CTAOrder[i] = rank - i;
   }
   llvm::copy(ctaLayout.getCTAOrder(), CTAOrder.begin() + rankDiff);
-  return ttg::CTALayoutAttr::get(ctx, CTAsPerCGA, CTASplitNum, CTAOrder);
+  if (twoCTADim)
+    twoCTADim = *twoCTADim + rankDiff;
+  return ttg::CTALayoutAttr::get(ctx, CTAsPerCGA, CTASplitNum, CTAOrder,
+                                 twoCTADim);
 }
 
 ttg::SharedEncodingTrait

@@ -316,10 +316,11 @@ void init_gluon_ir(py::module &&m) {
       .def("get_cta_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &ctasPerCga,
               std::vector<unsigned> &ctaSplitNum,
-              std::vector<unsigned> &ctaOrder) -> Attribute {
+              std::vector<unsigned> &ctaOrder,
+              std::optional<unsigned> twoCTADim = std::nullopt) -> Attribute {
              auto ctx = self.getContext();
-             return self.getChecked<ttg::CTALayoutAttr>(ctx, ctasPerCga,
-                                                        ctaSplitNum, ctaOrder);
+             return self.getChecked<ttg::CTALayoutAttr>(
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder, twoCTADim);
            })
       .def("get_blocked_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &sizePerThread,
@@ -327,10 +328,11 @@ void init_gluon_ir(py::module &&m) {
               std::vector<unsigned> &warpsPerCta, std::vector<unsigned> &order,
               std::vector<unsigned> &ctasPerCga,
               std::vector<unsigned> &ctaSplitNum,
-              std::vector<unsigned> &ctaOrder) -> Attribute {
+              std::vector<unsigned> &ctaOrder,
+              std::optional<unsigned> twoCTADim = std::nullopt) -> Attribute {
              auto ctx = self.getContext();
              auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
-                 ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder, twoCTADim);
              return self.getChecked<ttg::BlockedEncodingAttr>(
                  ctx, sizePerThread, threadsPerWarp, warpsPerCta, order,
                  ctaLayout);
@@ -382,10 +384,11 @@ void init_gluon_ir(py::module &&m) {
               std::vector<unsigned> &ctasPerCga,
               std::vector<unsigned> &ctaSplitNum,
               std::vector<unsigned> &ctaOrder,
-              std::vector<unsigned> &instrShape) -> Attribute {
+              std::vector<unsigned> &instrShape,
+              std::optional<unsigned> twoCTADim = std::nullopt) -> Attribute {
              auto ctx = self.getContext();
              auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
-                 ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder, twoCTADim);
              return self.getChecked<ttg::NvidiaMmaEncodingAttr>(
                  ctx, version[0], version[1], warpsPerCta, ctaLayout,
                  instrShape);
@@ -397,11 +400,11 @@ void init_gluon_ir(py::module &&m) {
               std::vector<unsigned> &ctasPerCga,
               std::vector<unsigned> &ctaSplitNum,
               std::vector<unsigned> &ctaOrder,
-              std::vector<unsigned> &tilesPerWarp,
-              unsigned elementBitWidth) -> Attribute {
+              std::vector<unsigned> &tilesPerWarp, unsigned elementBitWidth,
+              std::optional<unsigned> twoCTADim = std::nullopt) -> Attribute {
              auto ctx = self.getContext();
              auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
-                 ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder, twoCTADim);
              return ttg::AMDMfmaEncodingAttr::get(
                  ctx, version, warpsPerCta, instrShape, transposed, ctaLayout,
                  tilesPerWarp, elementBitWidth);
@@ -413,10 +416,11 @@ void init_gluon_ir(py::module &&m) {
               std::vector<unsigned> &ctasPerCga,
               std::vector<unsigned> &ctaSplitNum,
               std::vector<unsigned> &ctaOrder,
-              std::vector<unsigned> &instrShape) -> Attribute {
+              std::vector<unsigned> &instrShape,
+              std::optional<unsigned> twoCTADim = std::nullopt) -> Attribute {
              auto ctx = self.getContext();
              auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
-                 ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder, twoCTADim);
              return ttg::AMDWmmaEncodingAttr::get(ctx, version, transposed,
                                                   warpsPerCta, tilesPerWarp,
                                                   ctaLayout, instrShape);
@@ -455,10 +459,11 @@ void init_gluon_ir(py::module &&m) {
               unsigned elementBitwidth, bool transposed, bool fp4Padded,
               std::vector<unsigned> &ctasPerCga,
               std::vector<unsigned> &ctaSplitNum,
-              std::vector<unsigned> &ctaOrder) -> Attribute {
+              std::vector<unsigned> &ctaOrder,
+              std::optional<unsigned> twoCTADim = std::nullopt) -> Attribute {
              auto ctx = self.getContext();
              auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
-                 ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder, twoCTADim);
              return self.getChecked<ttg::NVMMASharedEncodingAttr>(
                  ctx, swizzleByteWidth, transposed, elementBitwidth, fp4Padded,
                  ctaLayout);
@@ -471,10 +476,11 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, int vec, int perPhase, int maxPhase,
               std::vector<unsigned> &order, std::vector<unsigned> &ctasPerCga,
               std::vector<unsigned> &ctaSplitNum,
-              std::vector<unsigned> &ctaOrder) -> Attribute {
+              std::vector<unsigned> &ctaOrder,
+              std::optional<unsigned> twoCTADim = std::nullopt) -> Attribute {
              auto ctx = self.getContext();
              auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
-                 ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder, twoCTADim);
              return self.getChecked<ttg::SwizzledSharedEncodingAttr>(
                  ctx, vec, perPhase, maxPhase, order, ctaLayout);
            })
@@ -840,7 +846,8 @@ void init_gluon_ir(py::module &&m) {
       [](py::object elementTyObj, std::vector<int64_t> shape,
          py::object layoutObj, unsigned numWarps, const std::string &atomName,
          std::vector<unsigned> ctasPerCga, std::vector<unsigned> ctaSplitNum,
-         std::vector<unsigned> ctaOrder) -> py::object {
+         std::vector<unsigned> ctaOrder,
+         std::optional<unsigned> twoCTADim = std::nullopt) -> py::object {
         DialectRegistry registry;
         registry.insert<triton::TritonDialect, ttg::TritonGPUDialect,
                         ttng::TritonNvidiaGPUDialect, gluon::GluonDialect>();
@@ -863,7 +870,7 @@ void init_gluon_ir(py::module &&m) {
             ttng::TensorMemorySpaceAttr::get(ctx),
             /*mutableMemory=*/true, allocShape);
         auto ctaLayoutAttr = builder.getChecked<ttg::CTALayoutAttr>(
-            ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+            ctx, ctasPerCga, ctaSplitNum, ctaOrder, twoCTADim);
 
         auto maybeAtom =
             llvm::StringSwitch<std::optional<ttng::TMemAccessAtom>>(atomName)

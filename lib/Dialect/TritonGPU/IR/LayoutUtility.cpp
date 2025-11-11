@@ -14,10 +14,13 @@ CTALayoutAttr permuteCTALayout(MLIRContext *ctx, CTALayoutAttr layout,
   auto invOrder = inversePermutation(order);
   llvm::SmallVector<unsigned> invOrderUnsigned(invOrder.begin(),
                                                invOrder.end());
+  std::optional<unsigned> twoCTADim = layout.getTwoCTADim();
+  if (twoCTADim)
+    twoCTADim = invOrderUnsigned[*twoCTADim];
   return CTALayoutAttr::get(
       ctx, applyPermutation(layout.getCTAsPerCGA(), order),
       applyPermutation(layout.getCTASplitNum(), order),
-      applyPermutation(invOrderUnsigned, layout.getCTAOrder()));
+      applyPermutation(invOrderUnsigned, layout.getCTAOrder()), twoCTADim);
 }
 
 } // namespace mlir::triton::gpu

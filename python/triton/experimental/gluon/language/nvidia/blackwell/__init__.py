@@ -115,6 +115,7 @@ def get_tmem_reg_layout(
         ctas_per_cga=(1, 1),
         cta_split_num=(1, 1),
         cta_order=(1, 0),
+        two_cta_dim=None,
 ):
     """
     Returns a DistributedLinearLayout compatible with TMEM load/store instructions.
@@ -128,6 +129,7 @@ def get_tmem_reg_layout(
         ctas_per_cga (tuple[int, int]): CTA grouping along each dimension.
         cta_split_num (tuple[int, int]): CTA split factors along each dimension.
         cta_order (tuple[int, int]): CTA order.
+        two_cta_dim (Optional[int]): Main dimension for block=0,1 within a two-CTA execution semantics.
     """
 
     def _unwrap(x):
@@ -148,6 +150,7 @@ def get_tmem_reg_layout(
         _unwrap(ctas_per_cga),
         _unwrap(cta_split_num),
         _unwrap(cta_order),
+        _unwrap(two_cta_dim),
     )
 
 

@@ -164,11 +164,19 @@ LinearLayout makeCgaLayout(CTALayoutAttr layout) {
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 
   LinearLayout ret = LinearLayout::empty();
+  auto ctaSplitNum = to_vector(layout.getCTASplitNum());
+  auto ctaPerCGA = to_vector(layout.getCTAsPerCGA());
+  if (layout.getTwoCTADim().has_value()) {
+    auto dim = layout.getTwoCTADim().value();
+    ret *= LinearLayout::identity1D(2, kBlock, outDimNames[dim]);
+    ctaSplitNum[dim] /= 2;
+    ctaPerCGA[dim] /= 2;
+  }
   for (int i = 0; i < rank; i++) {
     // Start with the most minor dimension, which is order[0].
     int dim = layout.getCTAOrder()[i];
-    int split = layout.getCTASplitNum()[dim];
-    int ctas = layout.getCTAsPerCGA()[dim];
+    int split = ctaSplitNum[dim];
+    int ctas = ctaPerCGA[dim];
     assert(ctas % split == 0);
     ret *= LinearLayout::identity1D(split, kBlock, outDimNames[dim]) *
            LinearLayout::zeros1D(ctas / split, kBlock, outDimNames[dim]);

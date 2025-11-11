@@ -243,8 +243,8 @@ SmallVector<unsigned> getWarpOrder(DistributedEncodingTrait layout,
 CTALayoutAttr getCTALayout(Attribute layout) {
   if (auto ttgLayout = mlir::dyn_cast<LayoutEncodingTrait>(layout)) {
     return CTALayoutAttr::get(layout.getContext(), getCTAsPerCGA(ttgLayout),
-                              getCTASplitNum(ttgLayout),
-                              getCTAOrder(ttgLayout));
+                              getCTASplitNum(ttgLayout), getCTAOrder(ttgLayout),
+                              ttgLayout.getTwoCTADim());
   }
   llvm::report_fatal_error("Unimplemented usage of getCTALayout");
   return {};
@@ -384,7 +384,8 @@ verifyLayoutOrder(function_ref<InFlightDiagnostic()> emitError,
 
 LogicalResult CTALayoutAttr::verify(
     function_ref<InFlightDiagnostic()> emitError, ArrayRef<unsigned> CTAsPerCGA,
-    ArrayRef<unsigned> CTASplitNum, ArrayRef<unsigned> CTAOrder) {
+    ArrayRef<unsigned> CTASplitNum, ArrayRef<unsigned> CTAOrder,
+    std::optional<unsigned> twoCTADim) {
   if (!llvm::all_equal(
           {CTAsPerCGA.size(), CTASplitNum.size(), CTAOrder.size()})) {
     return emitError() << "CTAsPerCGA, CTASplitNum, and CTAOrder must all have "
@@ -394,13 +395,37 @@ LogicalResult CTALayoutAttr::verify(
   if (failed(verifyLayoutOrder(emitError, CTAOrder)))
     return failure();
 
-  if (llvm::any_of(CTAsPerCGA, [](unsigned x) { return x == 0; })) {
-    return emitError() << "Every element in CTAsPerCGA must be greater than 0.";
+  if (llvm::any_of(CTAsPerCGA, [](unsigned x) {
+        return x == 0 || !llvm::isPowerOf2_32(x);
+      })) {
+    return emitError()
+           << "Every element in CTAsPerCGA must a non-zero power of two.";
   }
 
-  if (llvm::any_of(CTASplitNum, [](unsigned x) { return x == 0; })) {
+  if (llvm::any_of(CTASplitNum, [](unsigned x) {
+        return x == 0 || !llvm::isPowerOf2_32(x);
+      })) {
     return emitError()
-           << "Every element in CTASplitNum must be greater than 0.";
+           << "Every element in CTASplitNum must a non-zero power of two.";
+  }
+  for (auto [splitNum, ctaPerCGA] : llvm::zip(CTASplitNum, CTAsPerCGA)) {
+    if (ctaPerCGA < splitNum) {
+      return emitError()
+             << "CTAsPerCGA must be greater than or equal to CTASplitNum. Got "
+             << ctaPerCGA << " and " << splitNum << ".";
+    }
+  }
+
+  if (twoCTADim && *twoCTADim >= CTAOrder.size()) {
+    return emitError() << "twoCTADim (" << *twoCTADim
+                       << ") must be less than the CTALayout rank ("
+                       << CTAOrder.size() << ").";
+  }
+
+  if (twoCTADim && CTASplitNum[*twoCTADim] < 2) {
+    return emitError() << "twoCTADim (" << *twoCTADim
+                       << ") requires CTASplitNum[" << *twoCTADim
+                       << "] to be at least 2.";
   }
 
   return success();
@@ -681,11 +706,19 @@ static void printLinearLayout(AsmPrinter &printer, const LinearLayout &ll) {
 static void maybePrintCTALayout(mlir::MLIRContext *context,
                                 mlir::AsmPrinter &printer, CTALayoutAttr layout,
                                 unsigned rank) {
-  if (layout != CTALayoutAttr::getDefault(context, rank)) {
+  bool hasTwoCTADim = layout.getTwoCTADim().has_value();
+  if (layout != CTALayoutAttr::getDefault(context, rank) || hasTwoCTADim) {
     printer << ", CTAsPerCGA = [" << ArrayRef(layout.getCTAsPerCGA()) << "]"
             << ", CTASplitNum = [" << ArrayRef(layout.getCTASplitNum()) << "]"
             << ", CTAOrder = [" << ArrayRef(layout.getCTAOrder()) << "]";
+    if (hasTwoCTADim)
+      printer << ", twoCTADim = " << *layout.getTwoCTADim();
   }
+}
+
+static bool isCTALayoutAttrName(StringAttr name) {
+  return name == "CTAsPerCGA" || name == "CTASplitNum" || name == "CTAOrder" ||
+         name == "twoCTADim";
 }
 
 //===----------------------------------------------------------------------===//
@@ -703,17 +736,55 @@ static void maybePrintCTALayout(mlir::MLIRContext *context,
 static std::optional<CTALayoutAttr> getCTALayoutOrError(
     AsmParser &parser, std::optional<SmallVector<unsigned>> CTAsPerCGA,
     std::optional<SmallVector<unsigned>> CTASplitNum,
-    std::optional<SmallVector<unsigned>> CTAOrder, unsigned rank) {
+    std::optional<SmallVector<unsigned>> CTAOrder, unsigned rank,
+    std::optional<unsigned> twoCTADim = std::nullopt) {
   if (CTAsPerCGA && CTASplitNum && CTAOrder) {
     return CTALayoutAttr::get(parser.getContext(), *CTAsPerCGA, *CTASplitNum,
-                              *CTAOrder);
+                              *CTAOrder, twoCTADim);
   }
-  if (!CTAsPerCGA && !CTASplitNum && !CTAOrder) {
+  if (!CTAsPerCGA && !CTASplitNum && !CTAOrder && !twoCTADim) {
     return CTALayoutAttr::getDefault(parser.getContext(), rank);
   }
-  parser.emitError(parser.getNameLoc(), "CTAsPerCGA, CTASplitNum, and CTAOrder "
-                                        "must all be present or all be absent");
+  parser.emitError(parser.getNameLoc(),
+                   "CTAsPerCGA, CTASplitNum, CTAOrder must all "
+                   "be present or all be absent");
   return std::nullopt;
+}
+
+std::optional<CTALayoutAttr>
+parseCTAAttrs(AsmParser &parser, NamedAttrList attrList, unsigned rank) {
+  std::optional<SmallVector<unsigned>> CTAsPerCGA;
+  std::optional<SmallVector<unsigned>> CTASplitNum;
+  std::optional<SmallVector<unsigned>> CTAOrder;
+  std::optional<unsigned> twoCTADim;
+
+  for (const NamedAttribute &attr : attrList) {
+    if (attr.getName() == "CTAsPerCGA") {
+      if (parseIntArrayAttr(parser, attr, CTAsPerCGA.emplace(), "CTAsPerCGA")
+              .failed())
+        return {};
+    } else if (attr.getName() == "CTASplitNum") {
+      if (parseIntArrayAttr(parser, attr, CTASplitNum.emplace(), "CTASplitNum")
+              .failed())
+        return {};
+    } else if (attr.getName() == "CTAOrder") {
+      if (parseIntArrayAttr(parser, attr, CTAOrder.emplace(), "CTAOrder")
+              .failed())
+        return {};
+    } else if (attr.getName() == "twoCTADim") {
+      unsigned value = 0;
+      if (parseUInt(parser, attr, value, "twoCTADim").failed())
+        return {};
+      twoCTADim = value;
+    } else {
+      parser.emitError(parser.getNameLoc(), "unexpected key: ")
+          << attr.getName().strref();
+      return {};
+    }
+  }
+
+  return getCTALayoutOrError(parser, CTAsPerCGA, CTASplitNum, CTAOrder, rank,
+                             twoCTADim);
 }
 
 Attribute BlockedEncodingAttr::parse(AsmParser &parser, Type type) {
@@ -730,9 +801,7 @@ Attribute BlockedEncodingAttr::parse(AsmParser &parser, Type type) {
   SmallVector<unsigned> threadsPerWarp;
   SmallVector<unsigned> warpsPerCTA;
   SmallVector<unsigned> order;
-  std::optional<SmallVector<unsigned>> CTAsPerCGA;
-  std::optional<SmallVector<unsigned>> CTASplitNum;
-  std::optional<SmallVector<unsigned>> CTAOrder;
+  NamedAttrList ctaAttrs;
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "sizePerThread") {
@@ -753,18 +822,8 @@ Attribute BlockedEncodingAttr::parse(AsmParser &parser, Type type) {
     } else if (attr.getName() == "order") {
       if (parseIntArrayAttr(parser, attr, order, "order").failed())
         return {};
-    } else if (attr.getName() == "CTAsPerCGA") {
-      if (parseIntArrayAttr(parser, attr, CTAsPerCGA.emplace(), "CTAsPerCGA")
-              .failed())
-        return {};
-    } else if (attr.getName() == "CTASplitNum") {
-      if (parseIntArrayAttr(parser, attr, CTASplitNum.emplace(), "CTASplitNum")
-              .failed())
-        return {};
-    } else if (attr.getName() == "CTAOrder") {
-      if (parseIntArrayAttr(parser, attr, CTAOrder.emplace(), "CTAOrder")
-              .failed())
-        return {};
+    } else if (isCTALayoutAttrName(attr.getName())) {
+      ctaAttrs.push_back(attr);
     } else {
       parser.emitError(parser.getNameLoc(), "unexpected key: ")
           << attr.getName().strref();
@@ -772,8 +831,8 @@ Attribute BlockedEncodingAttr::parse(AsmParser &parser, Type type) {
     }
   }
 
-  std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
-      parser, CTAsPerCGA, CTASplitNum, CTAOrder, /*rank=*/sizePerThread.size());
+  std::optional<CTALayoutAttr> CTALayout =
+      parseCTAAttrs(parser, ctaAttrs, /*rank=*/sizePerThread.size());
   if (!CTALayout.has_value())
     return {};
 
@@ -948,6 +1007,10 @@ SmallVector<unsigned> LinearEncodingAttr::getCTAOrder() const {
 SmallVector<unsigned> LinearEncodingAttr::getCTASplitNum() const {
   return basesPerDim(StringAttr::get(getContext(), "block"));
 }
+
+std::optional<unsigned> LinearEncodingAttr::getTwoCTADim() const {
+  return std::nullopt;
+}
 SmallVector<unsigned> LinearEncodingAttr::getWarpsPerCTA() const {
   return basesPerDim(StringAttr::get(getContext(), "warp"));
 }
@@ -1092,9 +1155,7 @@ Attribute NvidiaMmaEncodingAttr::parse(AsmParser &parser, Type type) {
   unsigned versionMajor = 0;
   unsigned versionMinor = 0;
   SmallVector<unsigned> warpsPerCTA;
-  std::optional<SmallVector<unsigned>> CTAsPerCGA;
-  std::optional<SmallVector<unsigned>> CTASplitNum;
-  std::optional<SmallVector<unsigned>> CTAOrder;
+  NamedAttrList ctaAttrs;
   SmallVector<unsigned> instrShape;
 
   for (const NamedAttribute &attr : dict) {
@@ -1110,20 +1171,9 @@ Attribute NvidiaMmaEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseIntArrayAttr(parser, attr, warpsPerCTA, "warpsPerCTA").failed())
         return {};
     }
-    if (attr.getName() == "CTAsPerCGA") {
-      if (parseIntArrayAttr(parser, attr, CTAsPerCGA.emplace(), "CTAsPerCGA")
-              .failed())
-        return {};
-    }
-    if (attr.getName() == "CTASplitNum") {
-      if (parseIntArrayAttr(parser, attr, CTASplitNum.emplace(), "CTASplitNum")
-              .failed())
-        return {};
-    }
-    if (attr.getName() == "CTAOrder") {
-      if (parseIntArrayAttr(parser, attr, CTAOrder.emplace(), "CTAOrder")
-              .failed())
-        return {};
+    if (isCTALayoutAttrName(attr.getName())) {
+      ctaAttrs.push_back(attr);
+      continue;
     }
     if (attr.getName() == "instrShape") {
       if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed()) {
@@ -1132,8 +1182,8 @@ Attribute NvidiaMmaEncodingAttr::parse(AsmParser &parser, Type type) {
     }
   }
 
-  std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
-      parser, CTAsPerCGA, CTASplitNum, CTAOrder, /*rank=*/warpsPerCTA.size());
+  std::optional<CTALayoutAttr> CTALayout =
+      parseCTAAttrs(parser, ctaAttrs, /*rank=*/warpsPerCTA.size());
   if (!CTALayout.has_value())
     return {};
 
@@ -1172,8 +1222,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   SmallVector<unsigned> instrShape;
   bool isTransposed;
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
-  std::optional<SmallVector<unsigned>> CTASplitNum;
-  std::optional<SmallVector<unsigned>> CTAOrder;
+  NamedAttrList ctaAttrs;
   SmallVector<unsigned> tilesPerWarp = {};
   unsigned elementBitWidth = 32;
 
@@ -1194,20 +1243,9 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
         return {};
     }
-    if (attr.getName() == "CTAsPerCGA") {
-      if (parseIntArrayAttr(parser, attr, CTAsPerCGA.emplace(), "CTAsPerCGA")
-              .failed())
-        return {};
-    }
-    if (attr.getName() == "CTASplitNum") {
-      if (parseIntArrayAttr(parser, attr, CTASplitNum.emplace(), "CTASplitNum")
-              .failed())
-        return {};
-    }
-    if (attr.getName() == "CTAOrder") {
-      if (parseIntArrayAttr(parser, attr, CTAOrder.emplace(), "CTAOrder")
-              .failed())
-        return {};
+    if (isCTALayoutAttrName(attr.getName())) {
+      ctaAttrs.push_back(attr);
+      continue;
     }
     if (attr.getName() == "tilesPerWarp") {
       if (parseIntArrayAttr(parser, attr, tilesPerWarp, "tilesPerWarp")
@@ -1220,8 +1258,8 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
     }
   }
 
-  std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
-      parser, CTAsPerCGA, CTASplitNum, CTAOrder, /*rank=*/warpsPerCTA.size());
+  std::optional<CTALayoutAttr> CTALayout =
+      parseCTAAttrs(parser, ctaAttrs, /*rank=*/warpsPerCTA.size());
   if (!CTALayout.has_value())
     return {};
 
@@ -1299,9 +1337,7 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   unsigned version = 0;
   bool isTransposed = false;
   SmallVector<unsigned> warpsPerCTA;
-  std::optional<SmallVector<unsigned>> CTAsPerCGA;
-  std::optional<SmallVector<unsigned>> CTASplitNum;
-  std::optional<SmallVector<unsigned>> CTAOrder;
+  NamedAttrList ctaAttrs;
   SmallVector<unsigned> tilesPerWarp = {};
   SmallVector<unsigned> instrShape = getDefaultInstrShape();
 
@@ -1323,20 +1359,9 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
               .failed())
         return {};
     }
-    if (attr.getName() == "CTAsPerCGA") {
-      if (parseIntArrayAttr(parser, attr, CTAsPerCGA.emplace(), "CTAsPerCGA")
-              .failed())
-        return {};
-    }
-    if (attr.getName() == "CTASplitNum") {
-      if (parseIntArrayAttr(parser, attr, CTASplitNum.emplace(), "CTASplitNum")
-              .failed())
-        return {};
-    }
-    if (attr.getName() == "CTAOrder") {
-      if (parseIntArrayAttr(parser, attr, CTAOrder.emplace(), "CTAOrder")
-              .failed())
-        return {};
+    if (isCTALayoutAttrName(attr.getName())) {
+      ctaAttrs.push_back(attr);
+      continue;
     }
     if (attr.getName() == "instrShape") {
       instrShape.clear();
@@ -1346,8 +1371,8 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
     }
   }
 
-  std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
-      parser, CTAsPerCGA, CTASplitNum, CTAOrder, /*rank=*/warpsPerCTA.size());
+  std::optional<CTALayoutAttr> CTALayout =
+      parseCTAAttrs(parser, ctaAttrs, /*rank=*/warpsPerCTA.size());
   if (!CTALayout.has_value())
     return {};
 
@@ -1485,6 +1510,18 @@ SmallVector<unsigned> SliceEncodingAttr::getCTAsPerCGA() const {
       "getCTAsPerCGA for SliceEncodingAttr is not well-defined");
 }
 
+std::optional<unsigned> SliceEncodingAttr::getTwoCTADim() const {
+  auto parentLayout = ::getCTALayout(getParent());
+  auto twoCTADim = parentLayout.getTwoCTADim();
+  if (!twoCTADim)
+    return std::nullopt;
+  if (*twoCTADim == getDim())
+    return std::nullopt;
+  if (*twoCTADim > getDim())
+    return *twoCTADim - 1;
+  return twoCTADim;
+}
+
 template <class T>
 SmallVector<T> SliceEncodingAttr::paddedShape(ArrayRef<T> shape) const {
   size_t rank = shape.size();
@@ -1508,35 +1545,6 @@ SliceEncodingAttr::paddedShape<int64_t>(ArrayRef<int64_t> shape) const;
 //===----------------------------------------------------------------------===//
 // Helper shared encoding functions
 //===----------------------------------------------------------------------===//
-
-std::optional<CTALayoutAttr>
-parseCTAAttrs(AsmParser &parser, NamedAttrList attrList, unsigned rank) {
-  std::optional<SmallVector<unsigned>> CTAsPerCGA;
-  std::optional<SmallVector<unsigned>> CTASplitNum;
-  std::optional<SmallVector<unsigned>> CTAOrder;
-
-  for (const NamedAttribute &attr : attrList) {
-    if (attr.getName() == "CTAsPerCGA") {
-      if (parseIntArrayAttr(parser, attr, CTAsPerCGA.emplace(), "CTAsPerCGA")
-              .failed())
-        return {};
-    } else if (attr.getName() == "CTASplitNum") {
-      if (parseIntArrayAttr(parser, attr, CTASplitNum.emplace(), "CTASplitNum")
-              .failed())
-        return {};
-    } else if (attr.getName() == "CTAOrder") {
-      if (parseIntArrayAttr(parser, attr, CTAOrder.emplace(), "CTAOrder")
-              .failed())
-        return {};
-    } else {
-      parser.emitError(parser.getNameLoc(), "unexpected key: ")
-          << attr.getName().strref();
-      return {};
-    }
-  }
-
-  return getCTALayoutOrError(parser, CTAsPerCGA, CTASplitNum, CTAOrder, rank);
-}
 
 template <typename SpecificEncoding>
 Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
@@ -1771,6 +1779,10 @@ SmallVector<unsigned> SharedLinearEncodingAttr::getCTAOrder() const {
 
 SmallVector<unsigned> SharedLinearEncodingAttr::getCTASplitNum() const {
   return basesPerDim(StringAttr::get(getContext(), "block"));
+}
+
+std::optional<unsigned> SharedLinearEncodingAttr::getTwoCTADim() const {
+  return std::nullopt;
 }
 
 LinearLayout
@@ -2064,6 +2076,10 @@ SmallVector<unsigned> PaddedSharedEncodingAttr::getCTASplitNum() const {
   return basesPerDim(StringAttr::get(getContext(), "block"));
 }
 
+std::optional<unsigned> PaddedSharedEncodingAttr::getTwoCTADim() const {
+  return std::nullopt;
+}
+
 //===----------------------------------------------------------------------===//
 // NVMMAShared encoding
 //===----------------------------------------------------------------------===//
@@ -2082,9 +2098,7 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
   bool transposed = false;
   bool fp4Padded = false;
   unsigned elementBitWidth;
-  std::optional<SmallVector<unsigned>> CTAsPerCGA;
-  std::optional<SmallVector<unsigned>> CTASplitNum;
-  std::optional<SmallVector<unsigned>> CTAOrder;
+  NamedAttrList ctaAttrs;
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "swizzlingByteWidth") {
       if (parseUInt(parser, attr, swizzlingByteWidth, "swizzlingByteWidth")
@@ -2099,18 +2113,8 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
     } else if (attr.getName() == "fp4Padded") {
       if (parseBool(parser, attr, fp4Padded, "fp4Padded").failed())
         return {};
-    } else if (attr.getName() == "CTAsPerCGA") {
-      if (parseIntArrayAttr(parser, attr, CTAsPerCGA.emplace(), "CTAsPerCGA")
-              .failed())
-        return {};
-    } else if (attr.getName() == "CTASplitNum") {
-      if (parseIntArrayAttr(parser, attr, CTASplitNum.emplace(), "CTASplitNum")
-              .failed())
-        return {};
-    } else if (attr.getName() == "CTAOrder") {
-      if (parseIntArrayAttr(parser, attr, CTAOrder.emplace(), "CTAOrder")
-              .failed())
-        return {};
+    } else if (isCTALayoutAttrName(attr.getName())) {
+      ctaAttrs.push_back(attr);
     } else {
       parser.emitError(parser.getNameLoc(), "unexpected key: ")
           << attr.getName().strref();
@@ -2118,8 +2122,8 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
     }
   }
 
-  std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
-      parser, CTAsPerCGA, CTASplitNum, CTAOrder, /*rank=*/2);
+  std::optional<CTALayoutAttr> CTALayout =
+      parseCTAAttrs(parser, ctaAttrs, /*rank=*/2);
   if (!CTALayout.has_value())
     return {};
 
@@ -2481,6 +2485,10 @@ SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
   auto kDim = getOpIdx() == 0 ? rank - 1 : rank - 2;
   res[kDim] = 1;
   return res;
+}
+
+std::optional<unsigned> DotOperandEncodingAttr::getTwoCTADim() const {
+  return ::getCTALayout(getParent()).getTwoCTADim();
 }
 
 LogicalResult DotOperandEncodingAttr::verify(
@@ -3064,10 +3072,14 @@ struct TritonGPUInferLayoutInterface
       return emitOptionalError(loc, "numel of dst shape does not match "
                                     "numel of src shape");
     }
-    auto result =
-        inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc);
-    if (succeeded(result)) {
-      return result;
+
+    // twoCTADim + reshape + memdesc NYI
+    if (!getCTALayout(srcEnc).getTwoCTADim().has_value()) {
+      auto result =
+          inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc);
+      if (succeeded(result)) {
+        return result;
+      }
     }
     if (!isa<DistributedEncodingTrait>(srcEnc)) {
       return emitOptionalError(loc,
@@ -3123,13 +3135,15 @@ struct TritonGPUInferLayoutInterface
         ret.insert(ret.begin(), ret.size());
         return ret;
       };
+      auto existingCTALayout = enc.getCTALayout();
       dstEnc = BlockedEncodingAttr::get(
           enc.getContext(), append(enc.getSizePerThread(), 2),
           append(enc.getThreadsPerWarp(), 1), append(enc.getWarpsPerCTA(), 1),
           appendMajorDim(enc.getOrder()),
           CTALayoutAttr::get(enc.getContext(), append(enc.getCTAsPerCGA(), 1),
                              append(enc.getCTASplitNum(), 1),
-                             appendMajorDim(enc.getCTAOrder())));
+                             appendMajorDim(existingCTALayout.getCTAOrder()),
+                             existingCTALayout.getTwoCTADim()));
       return success();
     }
 
@@ -3169,6 +3183,10 @@ struct TritonGPUInferLayoutInterface
       // Remove splitDim from order.
       newOrder.erase(std::remove(newOrder.begin(), newOrder.end(), splitDim),
                      newOrder.end());
+      auto existingCTALayout = enc.getCTALayout();
+      auto newTwoCTADim = existingCTALayout.getTwoCTADim();
+      if (newTwoCTADim && *newTwoCTADim == static_cast<unsigned>(splitDim))
+        newTwoCTADim = std::nullopt;
       dstEnc = BlockedEncodingAttr::get(
           enc.getContext(), //
           ArrayRef(enc.getSizePerThread()).drop_back(1),
@@ -3177,7 +3195,8 @@ struct TritonGPUInferLayoutInterface
           CTALayoutAttr::get(enc.getContext(), //
                              ArrayRef(enc.getCTAsPerCGA()).drop_back(1),
                              ArrayRef(enc.getCTASplitNum()).drop_back(1),
-                             ArrayRef(enc.getCTAOrder()).drop_front(1)));
+                             ArrayRef(enc.getCTAOrder()).drop_front(1),
+                             newTwoCTADim));
       return success();
     }
 

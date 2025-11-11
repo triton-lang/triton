@@ -268,6 +268,7 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
             ctas_per_cga=block_layout_c.ctas_per_cga,
             cta_split_num=block_layout_c.cta_split_num,
             cta_order=block_layout_c.cta_order,
+            two_cta_dim=block_layout_c.two_cta_dim,
         )
         acc = acc_tmem.load(tmem_reg_layout)
     else:
@@ -332,7 +333,7 @@ def test_warpgroup_mma(ASYNC):
 @pytest.mark.parametrize("warps", ([8, 1], [4, 2], [4, 1]))
 @pytest.mark.parametrize("swizzling_a, swizzling_b", product([0, 32, 64, 128], repeat=2))
 @pytest.mark.parametrize("shape_m, shape_n, shape_k", [(1, 1, 1), (2, 4, 1), (2, 2, 4)])
-@pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [2, 8]])
+@pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [4, 4]])
 @pytest.mark.parametrize("two_ctas", [False, True] if is_blackwell() else [False])
 def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b, shape_m,
                            shape_n, shape_k, ctas_per_cga, two_ctas):
@@ -368,6 +369,11 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
         ctas_per_cga_b = ctas_per_cga
     cta_split_a = [ctas_per_cga[0], 1]
     cta_split_b = [1, ctas_per_cga_b[1]]
+    two_cta_dim_a = None
+    two_cta_dim_b = None
+    if two_ctas:
+        two_cta_dim_a = 0
+        two_cta_dim_b = 1
 
     def min_shape(swizzling, dim0, dim1, trans):
         tile_cols = (8 * max(16, swizzling)) // bitwidth
@@ -388,7 +394,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     K *= shape_k
     instr_shape[1] *= shape_n
 
-    # FIXME: Super hacky...
+    # FIXME: Super hacky. Should check the linear layout
     # Cannot have more than 512 elements per CTA
     col_from_M = max(M // ctas_per_cga[0] // 128, 1)
     col_from_N = N // ctas_per_cga[1]
@@ -403,13 +409,15 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     def log2_int(x):
         return x.bit_length() - 1
 
-    def get_shared_swizzling_zero(M, K, transpose, ctas_per_cga, cta_split_num, cta_order):
+    def get_shared_swizzling_zero(M, K, transpose, ctas_per_cga, cta_split_num, cta_order, two_cta_dim):
         # K-contig
         if transpose:
             ctas_per_cga = [ctas_per_cga[1], ctas_per_cga[0]]
             cta_split_num = [cta_split_num[1], cta_split_num[0]]
             cta_order = [cta_order[1], cta_order[0]]
-            shared = get_shared_swizzling_zero(K, M, False, ctas_per_cga, cta_split_num, cta_order)
+            if two_cta_dim is not None:
+                two_cta_dim = 1 - two_cta_dim
+            shared = get_shared_swizzling_zero(K, M, False, ctas_per_cga, cta_split_num, cta_order, two_cta_dim)
 
             def transpose_bases(bases):
                 for i in range(len(bases)):
@@ -423,9 +431,20 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
             # Broadcast along the inner dimension
             M = M // cta_split_num[0]
             K = K // cta_split_num[1]
-            shared = get_shared_swizzling_zero(M, K, False, [1, 1], [1, 1], [0, 1])
+            shared = get_shared_swizzling_zero(M, K, False, [1, 1], [1, 1], [0, 1], None)
             shape = [M, K]
             blocks = []
+            if two_cta_dim is not None:
+                coord = [0, 0]
+                coord[two_cta_dim] = shape[two_cta_dim]
+                blocks.append(coord)
+                shape[two_cta_dim] *= 2
+                assert ctas_per_cga[two_cta_dim] % 2 == 0
+                assert cta_split_num[two_cta_dim] % 2 == 0
+                ctas_per_cga = list(ctas_per_cga)
+                ctas_per_cga[two_cta_dim] //= 2
+                cta_split_num = list(cta_split_num)
+                cta_split_num[two_cta_dim] //= 2
             for order in cta_order:
                 split = cta_split_num[order]
                 for s in range(log2_int(ctas_per_cga[order])):
@@ -448,25 +467,29 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     torch_dtype = torch_dtype_map[bitwidth]
     gl_acc_dtype = acc_dtype_map[acc_dtype]
     out_dtype = torch.float32
-    cta_order_a = [0, 1]
-    # WTF fix
-    cta_order_b = [0, 1] if not two_ctas else [1, 0]
+    cta_order = [0, 1]
     block_layout_a = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[0, 1],
-                                        ctas_per_cga=ctas_per_cga, cta_split_num=cta_split_a, cta_order=cta_order_a)
+                                        ctas_per_cga=ctas_per_cga, cta_split_num=cta_split_a, cta_order=cta_order,
+                                        two_cta_dim=two_cta_dim_a)
     block_layout_b = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0],
-                                        ctas_per_cga=ctas_per_cga_b, cta_split_num=cta_split_b, cta_order=cta_order_b)
+                                        ctas_per_cga=ctas_per_cga_b, cta_split_num=cta_split_b, cta_order=cta_order,
+                                        two_cta_dim=two_cta_dim_b)
     if swizzling_a == 0:
-        shared_layout_a = get_shared_swizzling_zero(M, K, transpose_a, ctas_per_cga, cta_split_a, cta_order_a)
+        shared_layout_a = get_shared_swizzling_zero(M, K, transpose_a, ctas_per_cga, cta_split_a, cta_order,
+                                                    two_cta_dim_a)
     else:
         shared_layout_a = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_a, element_bitwidth=bitwidth, rank=2,
                                                  transposed=transpose_a, ctas_per_cga=ctas_per_cga,
-                                                 cta_split_num=cta_split_a, cta_order=cta_order_a)
+                                                 cta_split_num=cta_split_a, cta_order=cta_order,
+                                                 two_cta_dim=two_cta_dim_a)
     if swizzling_b == 0:
-        shared_layout_b = get_shared_swizzling_zero(K, N, transpose_b, ctas_per_cga_b, cta_split_b, cta_order_b)
+        shared_layout_b = get_shared_swizzling_zero(K, N, transpose_b, ctas_per_cga_b, cta_split_b, cta_order,
+                                                    two_cta_dim_b)
     else:
         shared_layout_b = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_b, element_bitwidth=bitwidth, rank=2,
                                                  transposed=transpose_b, ctas_per_cga=ctas_per_cga_b,
-                                                 cta_split_num=cta_split_b, cta_order=cta_order_b)
+                                                 cta_split_num=cta_split_b, cta_order=cta_order,
+                                                 two_cta_dim=two_cta_dim_b)
     if use_tcgen05:
         tmem_shape = (min(M // ctas_per_cga[0], 128), N // ctas_per_cga[1])
         acc_layout = TensorMemoryLayout(tmem_shape, col_stride=32 // torch.finfo(acc_dtype).bits,
@@ -474,10 +497,11 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     else:
         acc_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=instr_shape,
                                                  ctas_per_cga=ctas_per_cga, cta_split_num=ctas_per_cga,
-                                                 cta_order=cta_order_a)
+                                                 cta_order=cta_order, two_cta_dim=two_cta_dim_a)
 
     block_layout_c = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0],
-                                        ctas_per_cga=ctas_per_cga, cta_split_num=ctas_per_cga, cta_order=cta_order_a)
+                                        ctas_per_cga=ctas_per_cga, cta_split_num=ctas_per_cga, cta_order=cta_order,
+                                        two_cta_dim=two_cta_dim_a)
     torch.manual_seed(0)
 
     def cast(x, dtype):

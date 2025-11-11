@@ -33,13 +33,20 @@ def LayoutEncodingTrait : AttrInterface<"LayoutEncodingTrait"> {
                     "getCTASplitNum", (ins), [{}], [{
       return llvm::to_vector($_attr.getCTALayout().getCTASplitNum());
     }]>,
+    InterfaceMethod<"Return the CTA dimension associated with twoCTA mode, if "
+                    "any.",
+                    "std::optional<unsigned>",
+                    "getTwoCTADim", (ins), [{}], [{
+      return $_attr.getCTALayout().getTwoCTADim();
+    }]>,
     InterfaceMethod<"Get the rank of the layout.", "unsigned", "getRank", (ins), [{}], [{
       return $_attr.getCTAOrder().size();
     }]>
   ];
 }
 def DeclareLayoutEncodingMethods : DeclareAttrInterfaceMethods<
-  LayoutEncodingTrait, ["getCTAsPerCGA", "getCTAOrder", "getCTASplitNum"]>;
+  LayoutEncodingTrait,
+  ["getCTAsPerCGA", "getCTAOrder", "getCTASplitNum", "getTwoCTADim"]>;
 
 def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
@@ -102,7 +109,8 @@ def CTALayoutAttr : TritonGPU_Attr<"CTALayout", "cta_layout"> {
     ins
     ArrayRefParameter<"unsigned">:$CTAsPerCGA,
     ArrayRefParameter<"unsigned">:$CTASplitNum,
-    ArrayRefParameter<"unsigned">:$CTAOrder
+    ArrayRefParameter<"unsigned">:$CTAOrder,
+    DefaultValuedParameter<"std::optional<unsigned>", "::std::nullopt">:$twoCTADim
   );
 
   let description = [{
@@ -146,14 +154,24 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
   let builders = [
     AttrBuilder<(ins "ArrayRef<unsigned>":$CTAsPerCGA,
                      "ArrayRef<unsigned>":$CTASplitNum,
-                     "ArrayRef<unsigned>":$CTAOrder), [{
+                     "ArrayRef<unsigned>":$CTAOrder,
+                     "std::optional<unsigned>":$twoCTADim), [{
+        auto sanitizedTwoCTADim =
+            sanitizeTwoCTADim(twoCTADim, CTAsPerCGA.size());
         if (llvm::all_of(CTAsPerCGA, [](unsigned x) { return x == 1; })) {
           SmallVector<unsigned> order;
           for (int i = CTAsPerCGA.size() - 1; i >= 0; --i)
             order.push_back(i);
-          return $_get(context, CTAsPerCGA, CTASplitNum, order);
+          return $_get(context, CTAsPerCGA, CTASplitNum, order,
+                       sanitizedTwoCTADim);
         }
-        return $_get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
+        return $_get(context, CTAsPerCGA, CTASplitNum, CTAOrder,
+                     sanitizedTwoCTADim);
+    }]>,
+    AttrBuilder<(ins "ArrayRef<unsigned>":$CTAsPerCGA,
+                     "ArrayRef<unsigned>":$CTASplitNum,
+                     "ArrayRef<unsigned>":$CTAOrder), [{
+        return get(context, CTAsPerCGA, CTASplitNum, CTAOrder, std::nullopt);
     }]>,
   ];
 
@@ -164,9 +182,24 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
       SmallVector<unsigned> CTAOrder;
       for (int i = rank - 1; i >= 0; --i)
         CTAOrder.push_back(i);
-      return get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
+      return get(context, CTAsPerCGA, CTASplitNum, CTAOrder, std::nullopt);
     }
     unsigned getRank() const { return getCTAOrder().size(); }
+    static std::optional<unsigned>
+    sanitizeTwoCTADim(std::optional<unsigned> twoCTADim, size_t rank) {
+      if (!twoCTADim || rank == 0)
+        return std::nullopt;
+      if (*twoCTADim >= rank)
+        return std::nullopt;
+      return twoCTADim;
+    }
+    CTALayoutAttr withTwoCTADim(std::optional<unsigned> newTwoCTADim) const {
+      auto sanitized = sanitizeTwoCTADim(newTwoCTADim, getRank());
+      if (sanitized == getTwoCTADim())
+        return *this;
+      return get(getContext(), getCTAsPerCGA(), getCTASplitNum(), getCTAOrder(),
+                 sanitized);
+    }
   }];
 
   let genVerifyDecl = 1;

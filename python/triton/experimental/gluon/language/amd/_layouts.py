@@ -44,6 +44,7 @@ class AMDMFMALayout(DistributedLayout):
     ctas_per_cga: Optional[List[int]] = None
     cta_split_num: Optional[List[int]] = None
     cta_order: Optional[List[int]] = None
+    two_cta_dim: Optional[int] = None
 
     def __post_init__(self):
         super().__setattr__("version", _unwrap_if_constexpr(self.version))
@@ -52,21 +53,20 @@ class AMDMFMALayout(DistributedLayout):
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
         super().__setattr__("element_bitwidth", _unwrap_if_constexpr(self.element_bitwidth))
         super().__setattr__("tiles_per_warp", _unwrap_if_constexpr(self.tiles_per_warp))
-        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
-        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
-        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+        rank = len(self.warps_per_cta)
+        _realize_cta_layout(self, rank)
 
         if self.element_bitwidth is None:
             object.__setattr__(self, "element_bitwidth", 32)
         if self.tiles_per_warp is None:
-            object.__setattr__(self, "tiles_per_warp", [1] * len(self.warps_per_cta))
+            object.__setattr__(self, "tiles_per_warp", [1] * rank)
 
         self.verify()
 
     def _to_ir(self, builder):
         return builder.get_amd_mfma_layout(self.version, self.warps_per_cta, self.instr_shape, self.transposed,
                                            self.ctas_per_cga, self.cta_split_num, self.cta_order, self.tiles_per_warp,
-                                           self.element_bitwidth)
+                                           self.element_bitwidth, self.two_cta_dim)
 
     def mangle(self) -> str:
 
@@ -75,7 +75,7 @@ class AMDMFMALayout(DistributedLayout):
                 return ""
             return "_".join(map(str, x))
 
-        return f"MFMA_{self.version}_{stringify(self.instr_shape)}_{self.transposed}_{stringify(self.warps_per_cta)}_{self.element_bitwidth}_{stringify(self.tiles_per_warp)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_MFMA"
+        return f"MFMA_{self.version}_{stringify(self.instr_shape)}_{self.transposed}_{stringify(self.warps_per_cta)}_{self.element_bitwidth}_{stringify(self.tiles_per_warp)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_{self.two_cta_dim}_MFMA"
 
     def verify(self):
         assert self.version >= 1 and self.version <= 4, "version must be in the [1, 4] range"
@@ -86,9 +86,6 @@ class AMDMFMALayout(DistributedLayout):
 
         rank = len(self.warps_per_cta)
         _realize_cta_layout(self, rank)
-        assert len(self.ctas_per_cga) == rank
-        assert len(self.cta_split_num) == rank
-        assert len(self.cta_order) == rank
 
     def __hash__(self):
         return hash((
@@ -101,6 +98,7 @@ class AMDMFMALayout(DistributedLayout):
             tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
             tuple(self.cta_split_num) if self.cta_split_num else None,
             tuple(self.cta_order) if self.cta_order else None,
+            self.two_cta_dim,
         ))
 
 
@@ -154,7 +152,8 @@ class AMDWMMALayout(DistributedLayout):
 
     def _to_ir(self, builder):
         return builder.get_amd_wmma_layout(self.version, self.transposed, self.warps_per_cta, self.tiles_per_warp,
-                                           self.ctas_per_cga, self.cta_split_num, self.cta_order, self.instr_shape)
+                                           self.ctas_per_cga, self.cta_split_num, self.cta_order, self.instr_shape,
+                                           self.two_cta_dim)
 
     def mangle(self) -> str:
 
@@ -163,16 +162,13 @@ class AMDWMMALayout(DistributedLayout):
                 return ""
             return "_".join(map(str, x))
 
-        return f"WMMA_{self.version}_{self.transposed}_{stringify(self.warps_per_cta)}_{stringify(self.tiles_per_warp)}_{stringify(self.instr_shape)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_WMMA"
+        return f"WMMA_{self.version}_{self.transposed}_{stringify(self.warps_per_cta)}_{stringify(self.tiles_per_warp)}_{stringify(self.instr_shape)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_{self.two_cta_dim}_WMMA"
 
     def verify(self):
         assert self.version >= 1 and self.version <= 3, "version must be in the [1, 3] range"
 
         rank = len(self.warps_per_cta)
         _realize_cta_layout(self, rank)
-        assert len(self.ctas_per_cga) == rank
-        assert len(self.cta_split_num) == rank
-        assert len(self.cta_order) == rank
 
     def __hash__(self):
         return hash((
@@ -184,4 +180,5 @@ class AMDWMMALayout(DistributedLayout):
             tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
             tuple(self.cta_split_num) if self.cta_split_num else None,
             tuple(self.cta_order) if self.cta_order else None,
+            self.two_cta_dim,
         ))
