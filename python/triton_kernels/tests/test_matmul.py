@@ -630,8 +630,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         tri_y = matmul(x_tri, w_tri, bias_tri,
                            x_ragged_metadata2, w_ragged_metadata,
                            gindx, sindx, precision_opt,
-                           gammas=gs1_ref, epilogue=epilogue, y=y_tri_in,
-                           init_output_to_zero=sindx is not None and n_expts_act == 1)
+                           gammas=gs1_ref, epilogue=epilogue, y=y_tri_in)
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     if y_tri_in is not None:

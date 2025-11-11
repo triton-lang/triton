@@ -247,7 +247,6 @@ def matmul(x, w, bias,
     fused_activation: FusedActivation | None = None,
     epilogue: Epilogue | None = None,
     y_acc_in: torch.Tensor | None = None,
-    init_output_to_zero: bool = False,
 ):
     """
     Y[:, :] = 0.
@@ -522,7 +521,6 @@ def matmul(x, w, bias,
                    opt_flags.block_n,
                    opt_flags.block_k,
                    opt_flags.group_m,
-                   INIT_OUTPUT_TO_ZERO=init_output_to_zero,
                    XCD_SWIZZLE=opt_flags.xcd_swizzle,
                    SWIZZLE_MX_VALUE=w.storage.layout.name,
                    SWIZZLE_MX_SCALE=None if w_scale is None else w_scale.storage.layout.name,
