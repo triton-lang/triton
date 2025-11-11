@@ -480,8 +480,6 @@ def matmul_ogs(x, w, bias,
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
     # moe metadata
-    block_m = opt_flags.block_m
-    expt_data_args = InnerRoutingData.make_kernel_args(inner_routing_data if w_ragged_metadata is not None else x_ragged_metadata, block_m)
     expt_data_w = tuple([None] * 6) if w_ragged_metadata is None else ragged_metadata_fields(w_ragged_metadata, opt_flags.block_k)
     expt_data_x = tuple([None] * 6) if x_ragged_metadata is None and w_ragged_metadata is None else ragged_metadata_fields(x_ragged_metadata if w_ragged_metadata is None else x_ragged_metadata, opt_flags.block_m if w_ragged_metadata is None else opt_flags.block_k)
     # spmd grid
@@ -555,7 +553,7 @@ def matmul_ogs(x, w, bias,
         "reduce_rank": fused_comm.reduce_rank,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}
-    # ragged_dimension = "K" if w_ragged_metadata is not None else ("M" if x_ragged_metadata is not None else None)
+    ragged_dimension = "K" if w_ragged_metadata is not None else ("M" if x_ragged_metadata is not None else None)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
@@ -578,7 +576,7 @@ def matmul_ogs(x, w, bias,
                    num_indx,
                    None if scatter_indx is None else scatter_indx.dst_indx,
                    None if scatter_indx is None else scatter_indx.dst_indx.shape[0],
-                   *expt_data_args,
+                   ragged_dimension,
                    *expt_data_x,
                    *expt_data_w,
                    batch_size, grid_m, grid_n,

@@ -48,7 +48,7 @@ class RaggedTensorMetadata:
     # expected slice size (for heuristics)
     expected_slice_size: int | None = None
     # divisibility hint for values in `slice_sizes`
-    slice_sizes_divisibility: int | None = None
+    slice_sizes_divisibility: int = None
 
     def __post_init__(self):
         assert self.block_offs_data.shape[0] == len(RaggedTensorMetadata.block_sizes())
@@ -91,7 +91,7 @@ class RaggedTensorMetadata:
 
 def ragged_metadata_fields(metadata, block_size):
     return (metadata.slice_sizes, metadata.slice_offs, metadata.block_offs(block_size),
-            metadata.block_schedule(block_size), metadata.expected_slice_size, metadata.slice_sizes_divisibility)
+            metadata.block_schedule(block_size), metadata.expected_slice_size, metadata.slice_sizes_divisibility or 1)
 
 
 # utilities

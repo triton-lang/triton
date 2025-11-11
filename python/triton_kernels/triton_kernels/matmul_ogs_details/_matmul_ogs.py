@@ -58,11 +58,7 @@ def _matmul_ogs(
              GatherIndx, GatherDstIndx,  # GatherDstIndx is only used for launch metadata.
              ScatterSrcIndx, num_idxs,
              WriteBackIndx, writeback_size,
-             ExptHist, ExptOffs, ExptTileOffs, ExptData,
              RAGGED_DIMENSION: tl.constexpr,
-             X_IS_PADDED: tl.constexpr,
-             W_IS_PADDED: tl.constexpr,
-             ExptHistMax,
              XSliceSizes, XSliceOffs, XBlockOffs, XBlockSchedule, X_EXPECTED_SLICE_SIZE: tl.constexpr, X_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
              WSliceSizes, WSliceOffs, WBlockOffs, WBlockSchedule, W_EXPECTED_SLICE_SIZE: tl.constexpr, W_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
              # true grid size
@@ -216,7 +212,7 @@ def _matmul_ogs(
         return
 
     pid_s, pid_m, pid_n, pid_k = compute_pids(pid, unpadded_m, grid_n, total_actual_tiles, XCD_SWIZZLE, GROUP_M, SPLIT_K)
-    loop_k = tl.load(XSliceSizes + pid_s) if RAGGED_DIMENSION == "K" else K
+    loop_k = tl.multiple_of(tl.load(XSliceSizes + pid_s), X_SLICE_SIZES_DIVISIBILITY) if RAGGED_DIMENSION == "K" else K
 
     (
         expt_id, start_z, start_z_out,
@@ -231,17 +227,17 @@ def _matmul_ogs(
         )
 
     if RAGGED_DIMENSION == "M":
-        eM = tl.load(XSliceSizes + expt_id)
+        eM = tl.multiple_of(tl.load(XSliceSizes + expt_id), X_SLICE_SIZES_DIVISIBILITY)
     else:
         eM = M
 
     if RAGGED_DIMENSION == "K":
-        K_W = tl.load(XBlockOffs + pid_s + 1) * PACKED_BLOCK_K_W if W_IS_PADDED else tl.load(ExptOffs + pid_s + 1)
+        K_W = tl.multiple_of(tl.load(XSliceOffs + pid_s + 1), X_SLICE_SIZES_DIVISIBILITY)
     else:
         K_W = K * (PACKED_BLOCK_K_W // BLOCK_K) if PACKED_BLOCK_K_W >= BLOCK_K else K // (BLOCK_K // PACKED_BLOCK_K_W)
 
 
-    loop_k = tl.load(XSliceSizes + pid_s) if RAGGED_DIMENSION == "K" else K - off_k_x
+    loop_k = tl.multiple_of(tl.load(XSliceSizes + pid_s), X_SLICE_SIZES_DIVISIBILITY) if RAGGED_DIMENSION == "K" else K - off_k_x
     k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)
 
     # For split-k, advance to the output k slice
@@ -301,7 +297,6 @@ def _matmul_ogs(
         offs_n_scale = (pid_n * SCALE_BLOCK_N + tl.arange(0, SCALE_BLOCK_N)) % N
         offs_n_scale = tl.max_contiguous(tl.multiple_of(offs_n_scale, SCALE_BLOCK_N), SCALE_BLOCK_N)
         # K dimension must be the last dimension for the scales
-        tl.static_assert(RAGGED_DIMENSION != "K" or W_IS_PADDED)
         offs_k_scale = off_k_w // PACKED_BLOCK_K_W * PACKED_MX_BLOCK + tl.arange(0, PACKED_MX_BLOCK)
         WMxScalePtrs = WMxScale + offs_k_scale.to(index_type)[None, :] * stride_scale_k + offs_n_scale.to(index_type)[:, None] * stride_w_mx_n
     else:

@@ -67,11 +67,7 @@ def _p_matmul_ogs(
              GatherIndx, GatherDstIndx,  # GatherDstIndx is only used for launch metadata.
              ScatterSrcIndx, num_idxs,
              WriteBackIndx, writeback_size,
-             SliceSizes, SliceOffs, BlockOffs, BlockSchedule,
              RAGGED_DIMENSION: tl.constexpr,
-             X_IS_PADDED: tl.constexpr,
-             W_IS_PADDED: tl.constexpr,
-             SliceSizeMax,
              XSliceSizes, XSliceOffs, XBlockOffs, XBlockSchedule, X_EXPECTED_SLICE_SIZE: tl.constexpr, X_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
              WSliceSizes, WSliceOffs, WBlockOffs, WBlockSchedule, W_EXPECTED_SLICE_SIZE: tl.constexpr, W_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
              # true grid size
