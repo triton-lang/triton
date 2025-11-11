@@ -134,8 +134,8 @@ if __name__ == '__main__':
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
-
-    knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
+    if "TRITON_PASS_PLUGIN_PATH" in os.environ:
+      knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
     h = kernel1[grid](BLOCK_SIZE=1024)
     print(h.asm["ttgir"])
 ```
@@ -257,7 +257,8 @@ if __name__ == '__main__':
             if "add_loop_unroll" in line:
                 outfile.write("\n        passes.plugin.add_plugin(pm)\n")
             outfile.write(line)
-    knobs.runtime.add_stages_inspection_hook = override_stages
+    if "TRITON_PASS_PLUGIN_PATH" in os.environ:
+      knobs.runtime.add_stages_inspection_hook = override_stages
     h = kernel2[grid](BLOCK_SIZE=1024)
     print(h.asm["ttgir"])
 ```
