@@ -297,7 +297,8 @@ class NVMMADistributedLayout(DistributedLayout):
                                       self.cta_order, self.instr_shape, self.two_cta_dim)
 
     def mangle(self) -> str:
-        return f"MMA_{self.version}_{self.warps_per_cta}_{self.instr_shape}_{self.ctas_per_cga}_{self.cta_split_num}_{self.cta_order}_{self.two_cta_dim}_MMA"
+        two_cta_dim = "" if self.two_cta_dim is None else str(self.two_cta_dim)
+        return f"MMA_{self.version}_{self.warps_per_cta}_{self.instr_shape}_{self.ctas_per_cga}_{self.cta_split_num}_{self.cta_order}_{two_cta_dim}_MMA"
 
     def __hash__(self):
         return hash((tuple(self.version), tuple(self.warps_per_cta),
@@ -422,7 +423,8 @@ class NVMMASharedLayout(SharedLayout):
         )
 
     def mangle(self) -> str:
-        return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_{self.two_cta_dim}_NVMMA"
+        two_cta_dim = "" if self.two_cta_dim is None else str(self.two_cta_dim)
+        return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_{two_cta_dim}_NVMMA"
 
     def __hash__(self):
         return hash((self.swizzle_byte_width, self.element_bitwidth, self.rank, self.transposed, self.fp4_padded,

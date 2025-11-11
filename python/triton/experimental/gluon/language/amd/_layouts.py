@@ -75,7 +75,8 @@ class AMDMFMALayout(DistributedLayout):
                 return ""
             return "_".join(map(str, x))
 
-        return f"MFMA_{self.version}_{stringify(self.instr_shape)}_{self.transposed}_{stringify(self.warps_per_cta)}_{self.element_bitwidth}_{stringify(self.tiles_per_warp)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_{self.two_cta_dim}_MFMA"
+        two_cta_dim = "" if self.two_cta_dim is None else str(self.two_cta_dim)
+        return f"MFMA_{self.version}_{stringify(self.instr_shape)}_{self.transposed}_{stringify(self.warps_per_cta)}_{self.element_bitwidth}_{stringify(self.tiles_per_warp)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_{two_cta_dim}_MFMA"
 
     def verify(self):
         assert self.version >= 1 and self.version <= 4, "version must be in the [1, 4] range"
@@ -162,7 +163,8 @@ class AMDWMMALayout(DistributedLayout):
                 return ""
             return "_".join(map(str, x))
 
-        return f"WMMA_{self.version}_{self.transposed}_{stringify(self.warps_per_cta)}_{stringify(self.tiles_per_warp)}_{stringify(self.instr_shape)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_{self.two_cta_dim}_WMMA"
+        two_cta_dim = "" if self.two_cta_dim is None else str(self.two_cta_dim)
+        return f"WMMA_{self.version}_{self.transposed}_{stringify(self.warps_per_cta)}_{stringify(self.tiles_per_warp)}_{stringify(self.instr_shape)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_{two_cta_dim}_WMMA"
 
     def verify(self):
         assert self.version >= 1 and self.version <= 3, "version must be in the [1, 3] range"
