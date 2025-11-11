@@ -493,7 +493,7 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     if use_tcgen05:
         tmem_shape = (min(M // ctas_per_cga[0], 128), N // ctas_per_cga[1])
         acc_layout = TensorMemoryLayout(tmem_shape, col_stride=32 // torch.finfo(acc_dtype).bits,
-                                        cta_split_num=ctas_per_cga, two_ctas=two_ctas)
+                                        cta_split_num=tuple(ctas_per_cga), two_ctas=two_ctas)
     else:
         acc_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=instr_shape,
                                                  ctas_per_cga=ctas_per_cga, cta_split_num=ctas_per_cga,
