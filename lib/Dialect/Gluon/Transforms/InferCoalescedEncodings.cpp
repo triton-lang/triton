@@ -73,9 +73,9 @@ class GluonInferCoalescedEncodingsPass
           return WalkResult::advance();
       }
 
+      // build a coalesced encoding
       int numWarps = ttg::lookupNumWarps(curr);
       int numCTAs = ttg::lookupNumCTAs(curr);
-
       auto tensorType = cast<RankedTensorType>(ptr.getType());
       auto ctaLayout = getDefaultCTALayout(tensorType, numCTAs);
       auto shapePerCTA = ttg::getShapePerCTA(ctaLayout.getCTASplitNum(),
@@ -83,7 +83,6 @@ class GluonInferCoalescedEncodingsPass
       auto layout = ttg::buildCoalescedEncoding(&getContext(), axisInfoAnalysis,
                                                 curr, numWarps, threadsPerWarp,
                                                 ctaLayout, shapePerCTA);
-
       // set seed value
       FuncOp func = curr->getParentOfType<FuncOp>();
       if (failed(updateEncoding(llvm::to_vector_of<Value>(curr->getOperands()),
