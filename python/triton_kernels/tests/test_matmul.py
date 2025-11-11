@@ -7,10 +7,10 @@ import torch
 from typing import Union
 import triton
 # matmul utilities
-import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
-from triton_kernels.matmul_ogs import FlexCtx, RoutingData, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
-from triton_kernels.matmul_ogs import GatherIndx, ScatterIndx
-from triton_kernels.matmul_ogs import matmul_ogs_set_idle_sms, matmul_ogs, matmul_ogs_torch
+import triton_kernels.matmul_details.opt_flags as opt_flags
+from triton_kernels.matmul import FlexCtx, RoutingData, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
+from triton_kernels.matmul import GatherIndx, ScatterIndx
+from triton_kernels.matmul import matmul_set_idle_sms, matmul, matmul_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
 from triton_kernels.tensor_details import layout
@@ -627,7 +627,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
 
     # triton
     try:
-        tri_y = matmul_ogs(x_tri, w_tri, bias_tri,
+        tri_y = matmul(x_tri, w_tri, bias_tri,
                            x_ragged_metadata2, w_ragged_metadata,
                            gindx, sindx, precision_opt,
                            gammas=gs1_ref, epilogue=epilogue, y=y_tri_in,
@@ -646,7 +646,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     def round_x(x, idx):
         return x.to(act_dtype).to(torch.float32) if sep_gather else x
 
-    ref_y = matmul_ogs_torch(x_ref, w_ref, bias_ref,  #
+    ref_y = matmul_torch(x_ref, w_ref, bias_ref,  #
                              x_ragged_metadata=x_ragged_metadata2,
                              w_ragged_metadata=w_ragged_metadata,
                              gather_indx=gindx, scatter_indx=sindx, round_x=round_x, gammas=gs1_ref)
@@ -719,11 +719,11 @@ def test_small_batch_matmul(m, n, k):
         x = _make_tensor((BATCH_SIZE, m, k), dtype, x_transpose)
         w = _make_tensor((BATCH_SIZE, k, n), dtype, w_transpose)
         bias = _make_tensor((BATCH_SIZE, n), torch.float32, False) if bias else None
-        tri_y = matmul_ogs(x, w, bias)
+        tri_y = matmul(x, w, bias)
 
-        # ref_y = matmul_ogs_torch(x.float(), w.float(), bias)
+        # ref_y = matmul_torch(x.float(), w.float(), bias)
 
-        # This is faster than matmul_ogs_torch.
+        # This is faster than matmul_torch.
         ref_y = torch.bmm(x.float(), w.float())
         if bias is not None:
             ref_y += bias[:, None, :]
@@ -739,9 +739,9 @@ def test_small_batch_matmul(m, n, k):
 def test_set_idle_sms():
     if not is_cuda():
         pytest.skip("Only supported on CUDA")
-    from triton_kernels.matmul_ogs_details.opt_flags import make_opt_flags
+    from triton_kernels.matmul_details.opt_flags import make_opt_flags
     num_idle_sms = 24
-    matmul_ogs_set_idle_sms(num_idle_sms)
+    matmul_set_idle_sms(num_idle_sms)
     flags = make_opt_flags(torch.float32, torch.float32, torch.float32, PrecisionConfig(), \
                            1, 1024, 1024, 1024, None, True, False, 1, False, False, None)
     assert flags.idle_sms == num_idle_sms
@@ -796,9 +796,9 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, is_persistent,
         rdata, gindx, sindx = None, None, None
 
     try:
-        a = swiglu(matmul_ogs(x, w, bias, x_ragged_metadata, gindx, sindx, precision_opt), swiglu_alpha,
+        a = swiglu(matmul(x, w, bias, x_ragged_metadata, gindx, sindx, precision_opt), swiglu_alpha,
                    precision_config=SwiGLUPrecisionConfig(swiglu_limit))
-        b = matmul_ogs(
+        b = matmul(
             x, w, bias, x_ragged_metadata, gindx, sindx, precision_opt,
             fused_activation=FusedActivation(FnSpecs("swiglu", swiglu_fn, ("alpha", "limit"), reduction_n=2),
                                              (swiglu_alpha, swiglu_limit)))
@@ -825,9 +825,9 @@ def test_zero_reduction_dim(m, n, k, view_x_as_zero_cols):
     bias = torch.randn(n, device="cuda", dtype=torch.float32)
 
     try:
-        tri_y = matmul_ogs(x, w, bias)
+        tri_y = matmul(x, w, bias)
     except opt_flags.InapplicableConstraint:
         pytest.skip("inapplicable constraint")
-    ref_y = matmul_ogs_torch(x, w, bias, round_x=lambda x, idx: x, round_y=lambda y: y)
+    ref_y = matmul_torch(x, w, bias, round_x=lambda x, idx: x, round_y=lambda y: y)
 
     assert_close(ref_y, tri_y)

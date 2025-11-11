@@ -45,10 +45,10 @@ def _load_writeback_idx_and_mask(WriteBackIndx, writeback_size, offs, mask):
     return (offs, mask)
 
 
-_matmul_ogs_repr = make_matmul_repr("_p_matmul_ogs", [0, 1, 2])
+_matmul_repr = make_matmul_repr("_p_matmul", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
-            repr=_matmul_ogs_repr, launch_metadata=matmul_launch_metadata)
-def _p_matmul_ogs(
+            repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
+def _p_matmul(
              Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
              YExpectedScale, YActualScale, YChecksumScale,
              stride_y_mx_k, stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,

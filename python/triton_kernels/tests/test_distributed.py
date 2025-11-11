@@ -9,7 +9,7 @@ import triton
 from triton_kernels.distributed import convert_dp_to_ep, convert_ep_to_dp, make_expt_dict_uniform, make_expt_dict_random, make_expt_assignment, symm_mem_pool
 from triton_kernels.reduce import reduce
 from triton_kernels.topk import topk
-from triton_kernels.matmul_ogs import matmul_ogs, RoutingData, GatherIndx, ScatterIndx
+from triton_kernels.matmul import matmul, RoutingData, GatherIndx, ScatterIndx
 from triton_kernels.target_info import is_hip
 from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata
 import pytest
@@ -133,7 +133,7 @@ def routing(logits, n_expts_act, all_gather=False, y_indx=None):
 
 def mixture_of_expt_nosharded(x_global, l_global, w_global, b_global, n_expts_act, y_indx=None):
     rdata, combine_indx, dispatch_indx, _ = routing(l_global, n_expts_act, y_indx=y_indx)
-    y_global = matmul_ogs(x_global, w_global, b_global, rdata, gather_indx=combine_indx, scatter_indx=dispatch_indx)
+    y_global = matmul(x_global, w_global, b_global, rdata, gather_indx=combine_indx, scatter_indx=dispatch_indx)
     return y_global
 
 
@@ -156,7 +156,7 @@ def mixture_of_expt_epsharded(x_dp_local, l_dp_local, w_ep_local, b_ep_local, ex
     # matrix multiply
     # TODO: clean-up API. `RoutingData` should not exist; we should be passing `y_ep_local_metadata`.
     rdata_ep_local = RoutingData(None, expt_sizes, w_ep_local.shape[0], n_expts_act, y_ep_local_metadata)
-    y_ep_local = matmul_ogs(y_ep_local, w_ep_local, b_ep_local, rdata_ep_local)
+    y_ep_local = matmul(y_ep_local, w_ep_local, b_ep_local, rdata_ep_local)
     # convert x from expert-sorted, ep-local to token-sorted, dp-local
     y_dp_local = convert_ep_to_dp(y_ep_local, expt_assignment, active_indx, combine_indx)
     # weighted average of the output token from experts
@@ -209,7 +209,7 @@ def _run_expert_sharding(rank, world_size, *, n_tokens, d_model, n_expts_tot, n_
             y_indx=y_indx_global,
         )
 
-    symm_mem_pool.initialize_matmul_ogs(
+    symm_mem_pool.initialize_matmul(
         n_tokens_global=n_tokens_global,
         d_input=d_model,
         d_model=d_model,

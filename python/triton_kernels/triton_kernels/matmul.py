@@ -11,11 +11,11 @@ from triton_kernels import target_info
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.target_info import is_cuda
 # details
-from .matmul_ogs_details._matmul_ogs import _matmul_ogs
-from .matmul_ogs_details._p_matmul_ogs import _p_matmul_ogs, get_per_device_per_stream_alloc_fn
+from .matmul_details._matmul import _matmul
+from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
 from .numerics_details.mxfp import MXFP_BLOCK_SIZE
 from .tensor_details.layout_details.strided import StridedLayout
-from .matmul_ogs_details.opt_flags import make_opt_flags, update_opt_flags_constraints
+from .matmul_details.opt_flags import make_opt_flags, update_opt_flags_constraints
 from .specialize import FnSpecs, SpecializationModule, ClosureArg
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTensorMetadata
 from .reduce import reduce
@@ -87,8 +87,8 @@ class FusedComm:
     reduce_rank: int = 0
     n_reduce_shards: int = 1
 
-specializations = SpecializationModule("matmul_ogs",
-    kernels=[("_matmul_ogs", _matmul_ogs), ("_p_matmul_ogs", _p_matmul_ogs)],
+specializations = SpecializationModule("matmul",
+    kernels=[("_matmul", _matmul), ("_p_matmul", _p_matmul)],
     closure_args={
         "epilogue": ClosureArg("EPILOGUE_FN", "epilogue_fn_args"), #
         "activation": ClosureArg("ACTIVATION_FN", "activation_fn_args"), #
@@ -202,7 +202,7 @@ def apply_allocation(allocation: MatmulAllocation, output):
 # -----------------------------------------------------------------------------
 # Canonicalize
 # -----------------------------------------------------------------------------
-# the `matmul_ogs` kernel can operate on 2D or 3D inputs depending on the mode being used
+# the `matmul` kernel can operate on 2D or 3D inputs depending on the mode being used
 # we can canonicalize storages to make the implementation more uniform
 
 def _canonicalize_storage(storage, out_ndim, flex_data):
@@ -227,13 +227,13 @@ def _canonicalize_storage(storage, out_ndim, flex_data):
 # Triton Implementation
 # -----------------------------------------------------------------------------
 
-def matmul_ogs_set_idle_sms(num_idle_sms):
+def matmul_set_idle_sms(num_idle_sms):
     """
     persistent kernels will leave `num_idle_sms` idle
     """
     update_opt_flags_constraints({"idle_sms": num_idle_sms})
 
-def matmul_ogs(x, w, bias,
+def matmul(x, w, bias,
     x_ragged_metadata: RaggedTensorMetadata | None = None,
     w_ragged_metadata: RaggedTensorMetadata | None = None,
     gather_indx: GatherIndx | None = None,
@@ -482,7 +482,7 @@ def matmul_ogs(x, w, bias,
         "reduce_rank": fused_comm.reduce_rank,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}
-    (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
+    (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
                    *out_matmul_scale_strides[-4:],
@@ -580,7 +580,7 @@ def matmul_ogs(x, w, bias,
 # Reference Implementation
 # -----------------------------------------------------------------------------
 
-def matmul_ogs_torch(x, w, bias,
+def matmul_torch(x, w, bias,
                  x_ragged_metadata: RaggedTensorMetadata | None = None,
                  w_ragged_metadata: RaggedTensorMetadata | None = None,
                  gather_indx: GatherIndx = None,
@@ -604,7 +604,7 @@ def matmul_ogs_torch(x, w, bias,
             w_start = int(w_slice_offs[expt].item())
             x_slice = x[:, x_start:x_start + k]
             w_slice = w[w_start:w_start + k, :]
-            out_expt = matmul_ogs_torch(
+            out_expt = matmul_torch(
                 x_slice, w_slice, None,
                 None, None, None, None, None,
                 betas, gammas,

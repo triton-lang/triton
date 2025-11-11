@@ -36,10 +36,10 @@ def _zero_masked_rows(
     tl.store(YPtrs, tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32), mask=mask)
 
 
-_matmul_ogs_repr = make_matmul_repr("_matmul_ogs", [0, 1, 2])
+_matmul_repr = make_matmul_repr("_matmul", [0, 1, 2])
 @triton.jit(do_not_specialize=["TOKENS_PER_EXPT_FOR_ANNOTATION"],
-            repr=_matmul_ogs_repr, launch_metadata=matmul_launch_metadata)
-def _matmul_ogs(
+            repr=_matmul_repr, launch_metadata=matmul_launch_metadata)
+def _matmul(
              Y, YPtr, stride_y_k, stride_y_z, stride_y_m, stride_y_n,
              YExpectedScale, YActualScale, YChecksumScale,
              stride_y_mx_k, stride_y_mx_z, stride_y_mx_m, stride_y_mx_n,
@@ -195,7 +195,7 @@ def _matmul_ogs(
     # set masked out rows to 0
     # We are tiling Y here, so the tiling is independent of matmul (where we
     # tile X & W and scatter to different rows of Y).
-    # TODO: refactor (same code in _p_matmul_ogs)
+    # TODO: refactor (same code in _p_matmul)
     if HAS_FUSED_SCATTER and INIT_OUTPUT_TO_ZERO:
         tl.device_assert(batch_size == 1)
         pid_mnk = pid

@@ -20,7 +20,7 @@ def compute_block_n(n: int, arch, precision_config):
     layout = get_layout(precision_config.weight_scale)
     if isinstance(layout, HopperMXScaleLayout):
         if layout.num_warps in [4, 8]:
-            # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/matmul_ogs_details/_matmul_ogs.py#L265
+            # https://github.com/triton-lang/triton/blob/814b862166c756d9f33238844f4ac047e0243388/python/triton_kernels/triton_kernels/matmul_details/_matmul.py#L265
             block_n = 2 * layout.num_warps * 2 * 8
             return block_n, block_n
     elif precision_config.max_num_imprecise_acc is None and n > 128:

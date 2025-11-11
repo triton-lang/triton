@@ -5,7 +5,7 @@ import types
 
 import torch
 
-import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
+import triton_kernels.matmul_details.opt_flags as opt_flags
 
 
 class _DummyPrecisionConfig:
