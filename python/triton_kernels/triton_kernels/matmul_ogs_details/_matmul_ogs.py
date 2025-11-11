@@ -13,26 +13,8 @@ from ._common import (
     get_scaled_dot_format_string,
     make_matmul_repr,
     matmul_launch_metadata,
-    swizzle2d,
-    xcd_swizzle,
     threadfence_system,
 )
-
-
-@triton.jit
-def _zero_masked_rows(
-        pid_m, pid_n,
-        Y, stride_y_m, stride_y_n,
-        N,
-        ScatterSrcIndx, num_idxs,
-        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
-    offs_m = BLOCK_M * pid_m.to(tl.int64) + tl.arange(0, BLOCK_M)
-    offs_n = BLOCK_N * pid_n + tl.arange(0, BLOCK_N)
-    src_idx = tl.load(ScatterSrcIndx + offs_m, mask=offs_m < num_idxs, other=0)
-    YPtrs = Y + offs_m[:, None] * stride_y_m + offs_n[None, :] * stride_y_n
-    mask_n = offs_n < N
-    mask = (src_idx == -1)[:, None] & mask_n[None, :]
-    tl.store(YPtrs, tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32), mask=mask)
 
 
 _matmul_ogs_repr = make_matmul_repr("_matmul_ogs", [0, 1, 2])
@@ -81,7 +63,6 @@ def _matmul_ogs(
              # optimization config
              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
              GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr,
-             INIT_OUTPUT_TO_ZERO: tl.constexpr,
              # One of ["HOPPER", "BLACKWELL", None]
              SWIZZLE_MX_VALUE: tl.constexpr,
              # One of ["HOPPER", "BLACKWELL", None]
@@ -188,28 +169,11 @@ def _matmul_ogs(
     else:
         padding_m: tl.constexpr = 0
 
-    HAS_FUSED_SCATTER: tl.constexpr = WriteBackIndx is not None
     index_type: tl.constexpr = tl.int64 if UPCAST_INDICES else tl.int32
 
     unpadded_m = grid_m - padding_m
     tl.assume(unpadded_m >= 0)
     total_actual_tiles = batch_size * unpadded_m * grid_n * SPLIT_K
-
-    # set masked out rows to 0
-    # We are tiling Y here, so the tiling is independent of matmul (where we
-    # tile X & W and scatter to different rows of Y).
-    # TODO: refactor (same code in _p_matmul_ogs)
-    if HAS_FUSED_SCATTER and INIT_OUTPUT_TO_ZERO:
-        tl.device_assert(batch_size == 1)
-        pid_mnk = pid
-        if XCD_SWIZZLE != 1:
-            pid_mnk = xcd_swizzle(pid_mnk, grid_m * grid_n * SPLIT_K, XCD_SWIZZLE)
-        pid_k = pid_mnk % SPLIT_K
-        pid_mn = pid_mnk // SPLIT_K
-        pid_m, pid_n = swizzle2d(pid_mn, grid_m, grid_n, GROUP_M)
-        _zero_masked_rows(pid_m, pid_n,
-                          Y + pid_k.to(index_type) * stride_y_k, stride_y_m, stride_y_n,
-                          yN, ScatterSrcIndx, num_idxs, BLOCK_M, OUT_BLOCK_N)
 
     if padding_m > 0 and pid >= total_actual_tiles:
         return

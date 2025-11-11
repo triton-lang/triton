@@ -18,7 +18,6 @@ from ._common import (
     get_scaled_dot_format_string,
     make_matmul_repr,
     matmul_launch_metadata,
-    swizzle2d,
     threadfence_system,
 )
 
@@ -90,7 +89,6 @@ def _p_matmul_ogs(
              # optimization config
              BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
              GROUP_M: tl.constexpr, XCD_SWIZZLE: tl.constexpr,
-             INIT_OUTPUT_TO_ZERO: tl.constexpr,
              # NYI: Must be None
              SWIZZLE_MX_VALUE: tl.constexpr,
              # One of ["BLACKWELL", None]
@@ -171,27 +169,6 @@ def _p_matmul_ogs(
     EPILOGUE_BLOCK_N: tl.constexpr = BLOCK_N // SUBTILE_FACTOR
     OUT_BLOCK_N: tl.constexpr = EPILOGUE_BLOCK_N // ACTIVATION_REDUCTION_N
     yN = N // ACTIVATION_REDUCTION_N
-
-    # set masked out rows to 0
-    if HAS_SCATTER and INIT_OUTPUT_TO_ZERO:
-        # Iterate with reversed pids so that later pids will get more tiles if the number of
-        # tiles isn't evenly divisible by the number of SMs.
-        # The main loop after this iterates in the forward direction such that earlier
-        # pids get more tiles if the number of tiles isn't evenly divisible.
-        # This helps balance the work across the SMs.
-        for pid_mnk in range(NUM_SMS - tl.program_id(0) - 1, batch_size * grid_m * grid_n * SPLIT_K, NUM_SMS):
-            pid_k = pid_mnk % SPLIT_K
-            pid_mn = pid_mnk // SPLIT_K
-            pid_m, pid_n = swizzle2d(pid_mn, grid_m, grid_n, GROUP_M)
-
-            z = tl.zeros([BLOCK_M, BLOCK_N // ACTIVATION_REDUCTION_N], dtype=tl.float32)
-            offs_m = z.shape[0] * pid_m + tl.arange(0, z.shape[0])
-            offs_n = z.shape[1] * pid_n + tl.arange(0, z.shape[1])
-            src_idx = tl.load(ScatterSrcIndx + offs_m, mask=offs_m < num_idxs, other=0)
-            YPtrs = YPtr + offs_m.to(index_type)[:, None] * stride_y_m + offs_n[None, :] * stride_y_n
-            mask_n = offs_n < yN
-            mask = (src_idx == -1)[:, None] & mask_n[None, :]
-            tl.store(YPtrs + pid_k * stride_y_k, z, mask=mask)
 
     num_tiles = batch_size * (grid_m - padding_m) * grid_n * SPLIT_K
 
