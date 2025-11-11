@@ -275,7 +275,7 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
         acc = hopper.warpgroup_mma(smem_a, smem_b, acc, is_async=ASYNC)
 
         if ASYNC:
-            acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=[smem_a, smem_b, acc])
+            acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=[acc])
     acc = ttgl.convert_layout(acc, block_layout_c)
 
     out_offs_m = ttgl.arange(0, M)[:, None]
