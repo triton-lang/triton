@@ -774,6 +774,33 @@ Store operation with masking support. If the mask is true, Store from the given 
 | `mask` | 1-bit signless integer |
 
 
+### `amdg.memory_counter_wait` (triton::amdgpu::MemoryCounterWaitOp)
+
+_Wait for specified hardware counters_
+
+Syntax:
+
+```
+operation ::= `amdg.memory_counter_wait` oilist( `load` `(` $load `)` | `store` `(` $store `)` | `ds` `(` $ds `)` ) attr-dict
+```
+
+Wait for the specified counters to be less-than or equal-to the provided
+values before continuing.
+
+Counters can lower to different instructions on different architectires,
+including clamping to the some HW supported max value or combining multiple
+counters into one.
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>load</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>store</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>ds</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+
 ### `amdg.scaled_upcast_fp4` (triton::amdgpu::ScaledUpcastFp4Op)
 
 _Upcast fp4 and then multiply scale_
