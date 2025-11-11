@@ -487,8 +487,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     if expt_is_inner:
         w_ragged_metadata = replace(x_ragged_metadata)
         if "pad_w" in inner_expt_opt:
-            div = 2 if "float4" in weight_dtype_str else 1
-            w_ragged_metadata.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k // div
+            w_ragged_metadata.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k
             w_ragged_metadata.slice_sizes_divisibility = padding_block_k
         x_ragged_metadata2 = replace(x_ragged_metadata)
         if "pad_x" in inner_expt_opt:
@@ -642,7 +641,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
                            x_ragged_metadata2, w_ragged_metadata,
                            gindx, sindx, precision_opt,
                            gammas=gs1_ref, epilogue=epilogue, y=y_tri_in,
-                           inner_routing_data=inner_routing_data,
                            init_output_to_zero=sindx is not None and n_expts_act == 1)
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
@@ -659,8 +657,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         return x.to(act_dtype).to(torch.float32) if sep_gather else x
 
     ref_y = matmul_ogs_torch(x_ref, w_ref, bias_ref,  #
-                             x_ragged_metadata,
-                             gindx, sindx, round_x=round_x, gammas=gs1_ref,
+                             x_ragged_metadata=x_ragged_metadata2,
+                             w_ragged_metadata=w_ragged_metadata,
+                             gather_indx=gindx, scatter_indx=sindx, round_x=round_x, gammas=gs1_ref,
                              inner_routing_data=inner_routing_data)
 
     def scale(val, scal):

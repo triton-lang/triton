@@ -319,7 +319,6 @@ def matmul_ogs(x, w, bias,
     fused_activation: FusedActivation | None = None,
     epilogue: Epilogue | None = None,
     y_acc_in: torch.Tensor | None = None,
-    inner_routing_data: InnerRoutingData | None = None,
     init_output_to_zero: bool = False,
 ):
     """
@@ -337,10 +336,11 @@ def matmul_ogs(x, w, bias,
     if is_input_batched:
         assert gather_indx is None, "gather not supported in batched mode"
         assert scatter_indx is None, "scatter not supported in batched mode"
-        assert inner_routing_data is None, "routing not supported in batched mode"
+        assert w_ragged_metadata is None, "w cannot be ragged in batched mode"
+        assert x_ragged_metadata is None, "x cannot be ragged in batched mode"
         assert fused_comm is None, "fused comm is not supported in batched mode"
         assert w.ndim == 3 and w.shape[0] == x.shape[0]
-    if inner_routing_data is not None:
+    if w_ragged_metadata is not None:
         assert gather_indx is None
         assert scatter_indx is None
     # canonicalize inputs
@@ -642,7 +642,7 @@ def matmul_ogs(x, w, bias,
         out_final = out_matmul.squeeze(0)
         out_final_mx_scale = out_matmul_scale
 
-    if not (is_input_batched or inner_routing_data is not None):
+    if not (is_input_batched or w_ragged_metadata is not None):
         out_final = out_final.squeeze(0)
     if out_final_mx_scale is not None:
         precision_config.out_scale = out_final_mx_scale
@@ -654,6 +654,7 @@ def matmul_ogs(x, w, bias,
 
 def matmul_ogs_torch(x, w, bias,
                  x_ragged_metadata: RaggedTensorMetadata | None = None,
+                 w_ragged_metadata: RaggedTensorMetadata | None = None,
                  gather_indx: GatherIndx = None,
                  scatter_indx: ScatterIndx = None,
                  precision_config: PrecisionConfig = None,
@@ -662,24 +663,48 @@ def matmul_ogs_torch(x, w, bias,
                  inner_routing_data: InnerRoutingData | None = None,
                  round_x = None, round_y = None,
                  ):
-    if inner_routing_data is not None:
-        assert bias is None, "Not supported yet"
+    if w_ragged_metadata is not None:
+        n_expts_tot = w_ragged_metadata.slice_sizes.shape[0]
         m, n = x.shape[-2], w.shape[-1]
-        block_k = inner_routing_data.block_k
-        n_expts_tot = inner_routing_data.base.n_expts_tot
         out = torch.zeros((n_expts_tot, m, n), dtype=torch.float32, device=x.device)
-        start_x = start_w = 0
+        x_slice_offs = x_ragged_metadata.slice_offs
+        w_slice_offs = w_ragged_metadata.slice_offs
         for expt in range(n_expts_tot):
-            k = inner_routing_data.base.expt_hist[expt].item()
-            if k > 0:
-                out[expt] = matmul_ogs_torch(
-                    x[:, start_x:start_x+k], w[start_w:start_w+k, :], None,
-                    None, None, None, None, betas, gammas, None, round_x, round_y
-                )
-            padded_k = triton.cdiv(k, block_k) * block_k
-            start_x += padded_k if inner_routing_data.x_is_padded else k
-            start_w += padded_k if inner_routing_data.w_is_padded else k
+            k = int(w_ragged_metadata.slice_sizes[expt].item())
+            if k == 0:
+                continue
+            x_start = int(x_slice_offs[expt].item())
+            w_start = int(w_slice_offs[expt].item())
+            x_slice = x[:, x_start:x_start + k]
+            w_slice = w[w_start:w_start + k, :]
+            out_expt = matmul_ogs_torch(
+                x_slice, w_slice, None,
+                None, None, None, None, None,
+                betas, gammas,
+                None, round_x, round_y,
+            )
+            out[expt] = out_expt.to(out.dtype)
         return out
+
+    # if inner_routing_data is not None:
+    #     assert bias is None, "Not supported yet"
+    #     m, n = x.shape[-2], w.shape[-1]
+    #     block_k = inner_routing_data.block_k
+    #     n_expts_tot = inner_routing_data.base.n_expts_tot
+    #     out = torch.zeros((n_expts_tot, m, n), dtype=torch.float32, device=x.device)
+    #     start_x = start_w = 0
+    #     for expt in range(n_expts_tot):
+    #         k = inner_routing_data.base.expt_hist[expt].item()
+    #         if k > 0:
+    #             print(start_x, start_w, k)
+    #             out[expt] = matmul_ogs_torch(
+    #                 x[:, start_x:start_x+k], w[start_w:start_w+k, :], None, None,
+    #                 None, None, None, None, betas, gammas, None, round_x, round_y
+    #             )
+    #         padded_k = triton.cdiv(k, block_k) * block_k
+    #         start_x += padded_k if inner_routing_data.x_is_padded else k
+    #         start_w += padded_k if inner_routing_data.w_is_padded else k
+    #     return out
 
     is_input_batched = x.ndim == 3
     assert x.dtype.itemsize > 1
