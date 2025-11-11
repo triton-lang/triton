@@ -82,10 +82,6 @@ class BlockedLayout(DistributedLayout):
         super().__setattr__("threads_per_warp", _unwrap_if_constexpr(self.threads_per_warp))
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
         super().__setattr__("order", _unwrap_if_constexpr(self.order))
-        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
-        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
-        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
-        super().__setattr__("two_cta_dim", _unwrap_if_constexpr(self.two_cta_dim))
 
         rank = len(self.size_per_thread)
         _realize_cta_layout(self, rank)
@@ -284,10 +280,6 @@ class NVMMADistributedLayout(DistributedLayout):
         super().__setattr__("version", _unwrap_if_constexpr(self.version))
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
         super().__setattr__("instr_shape", _unwrap_if_constexpr(self.instr_shape))
-        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
-        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
-        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
-        super().__setattr__("two_cta_dim", _unwrap_if_constexpr(self.two_cta_dim))
 
         rank = len(self.warps_per_cta)
         _realize_cta_layout(self, rank)
@@ -357,10 +349,6 @@ class NVMMASharedLayout(SharedLayout):
         super().__setattr__("rank", _unwrap_if_constexpr(self.rank))
         super().__setattr__("transposed", _unwrap_if_constexpr(self.transposed))
         super().__setattr__("fp4_padded", _unwrap_if_constexpr(self.fp4_padded))
-        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
-        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
-        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
-        super().__setattr__("two_cta_dim", _unwrap_if_constexpr(self.two_cta_dim))
 
         assert self.element_bitwidth in [8, 16, 32, 64]
         assert self.swizzle_byte_width in [0, 32, 64, 128]
@@ -454,15 +442,13 @@ class SwizzledSharedLayout(SharedLayout):
     ctas_per_cga: Optional[List[int]] = None
     cta_split_num: Optional[List[int]] = None
     cta_order: Optional[List[int]] = None
+    two_cta_dim: Optional[int] = None
 
     def __post_init__(self):
         super().__setattr__("vec", _unwrap_if_constexpr(self.vec))
         super().__setattr__("per_phase", _unwrap_if_constexpr(self.per_phase))
         super().__setattr__("max_phase", _unwrap_if_constexpr(self.max_phase))
         super().__setattr__("order", _unwrap_if_constexpr(self.order))
-        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
-        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
-        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
 
         rank = len(self.order)
         _realize_cta_layout(self, rank)
