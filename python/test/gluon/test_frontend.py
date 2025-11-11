@@ -3214,17 +3214,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 @gluon.jit
 def amd_async_copy_mbarrier_kernel(ptr):
-    blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [32, 1], [4, 1], [1, 0])
-    shared: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0])
-
-    y_offset = ttgl.arange(0, 128, layout=ttgl.SliceLayout(1, blocked))
-    x_offset = ttgl.arange(0, 16, layout=ttgl.SliceLayout(0, blocked))
-    offsets = y_offset[:, None] * 16 + x_offset[None, :]
-
     bar = ttgl.allocate_shared_memory(ttgl.int64, [1], gfx1250_mbarrier.MBarrierLayout())
-    smem = ttgl.allocate_shared_memory(ptr.dtype.element_ty, [128, 16], shared)
-    gfx1250_mbarrier.init(bar, count=1)
-    gfx1250_async_copy.global_to_shared(smem, ptr + offsets)
     gfx1250_async_copy.mbarrier_arrive(bar)
 
 
@@ -3234,30 +3224,12 @@ def test_amd_async_copy_mbarrier(target):
     mod = run_parser(amd_async_copy_mbarrier_kernel, *make_args(ptr), target=target)
     expecttest.assert_expected_inline(
         anonymize_ir(mod.str_nodebug()), """\
-#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "...", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @amd_async_copy_mbarrier_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
-    %0 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %1 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
-    %2 = tt.expand_dims %0 {axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<128x1xi32, #blocked>
-    %c16_i32 = arith.constant 16 : i32
-    %c16_i32_0 = arith.constant 16 : i32
-    %cst = arith.constant dense<16> : tensor<128x1xi32, #blocked>
-    %3 = arith.muli %2, %cst : tensor<128x1xi32, #blocked>
-    %4 = tt.expand_dims %1 {axis = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x16xi32, #blocked>
-    %5 = tt.broadcast %3 : tensor<128x1xi32, #blocked> -> tensor<128x16xi32, #blocked>
-    %6 = tt.broadcast %4 : tensor<1x16xi32, #blocked> -> tensor<128x16xi32, #blocked>
-    %7 = arith.addi %5, %6 : tensor<128x16xi32, #blocked>
-    %8 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
-    %9 = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #shared1, #smem, mutable>
-    amdg.init_barrier %8, 1 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
-    %10 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<128x16x!tt.ptr<f16>, #blocked>
-    %11 = tt.addptr %10, %7 : tensor<128x16x!tt.ptr<f16>, #blocked>, tensor<128x16xi32, #blocked>
-    %12 = ttg.async_copy_global_to_local %11, %9 : tensor<128x16x!tt.ptr<f16>, #blocked> -> <128x16xf16, #shared1, #smem, mutable>
-    amdg.async_copy_mbarrier_arrive %8 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    amdg.async_copy_mbarrier_arrive %0 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
     tt.return
   }
 }
