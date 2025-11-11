@@ -226,14 +226,19 @@ private:
     for (int i = 0; i < numClusters; i++) {
       if (auto exBar = existingBarrierMap.find(i);
           exBar != existingBarrierMap.end()) {
+        auto exBarOp = exBar->second;
         if (bars[i]) {
-          auto exBarOp = exBar->second;
           builder.setInsertionPointAfter(exBarOp);
           emitClusterBarrier(builder, loc, /*needLocal=*/true);
           if (!isa<triton::gpu::AsyncWaitOp, triton::amdgpu::AsyncTDMWait>(
                   exBarOp))
             builder.eraseOp(exBarOp);
-        } // else do nothing
+        } else { // wrap with sched barrier
+          builder.setInsertionPoint(exBarOp);
+          builder.create<ROCDL::SchedBarrier>(loc, 0);
+          builder.setInsertionPointAfter(exBarOp);
+          builder.create<ROCDL::SchedBarrier>(loc, 0);
+        }
       } else {
         builder.setInsertionPoint(clusterOps[i]);
         // The first one wraps back to the last of the loop
