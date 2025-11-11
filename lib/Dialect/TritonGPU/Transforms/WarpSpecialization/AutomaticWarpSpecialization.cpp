@@ -12,7 +12,6 @@
 using namespace mlir;
 using namespace triton;
 using namespace triton::gpu;
-namespace ttng = triton::nvidia_gpu;
 
 //===----------------------------------------------------------------------===//
 // Pass Definition
@@ -65,13 +64,13 @@ void AutomaticWarpSpecialization::runOnOperation() {
       }
     });
 
-    // CoarseSchedule's notion of numStages is the maximuim loop-pipelining
-    // stage + 1. See CoarseSchedule::deSerialize()
-    const int coarseScheduleNumStages = numStages + 1;
     // +1 to make sure that overlapping of the next desc update and the oldest
     // inflight TMA load is safe
-    const int numDescs = coarseScheduleNumStages + 1;
-    triton::CoarseSchedule schedule(numDescs);
+    const int numDescs = numStages + 1;
+    // CoarseSchedule's notion of numStages is the maximuim loop-pipelining
+    // stage + 1, see CoarseSchedule::deSerialize(). So if we want n buffers,
+    // we need to pass n + 1 as numStages.
+    triton::CoarseSchedule schedule(numDescs + 1);
 
     for (auto loop : descUpdateLoops) {
       triton::lowerTMADescriptors(loop, schedule);
