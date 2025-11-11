@@ -76,7 +76,6 @@ class BlockedLayout(DistributedLayout):
     cta_split_num: Optional[List[int]] = None
     cta_order: Optional[List[int]] = None
     two_cta_dim: Optional[int] = None
-    two_cta_dim: Optional[int] = None
 
     def __post_init__(self):
         super().__setattr__("size_per_thread", _unwrap_if_constexpr(self.size_per_thread))
@@ -86,7 +85,6 @@ class BlockedLayout(DistributedLayout):
         super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
         super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
-        super().__setattr__("two_cta_dim", _unwrap_if_constexpr(self.two_cta_dim))
         super().__setattr__("two_cta_dim", _unwrap_if_constexpr(self.two_cta_dim))
 
         rank = len(self.size_per_thread)

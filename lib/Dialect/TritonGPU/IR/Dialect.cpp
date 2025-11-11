@@ -3183,10 +3183,7 @@ struct TritonGPUInferLayoutInterface
       // Remove splitDim from order.
       newOrder.erase(std::remove(newOrder.begin(), newOrder.end(), splitDim),
                      newOrder.end());
-      auto existingCTALayout = enc.getCTALayout();
-      auto newTwoCTADim = existingCTALayout.getTwoCTADim();
-      if (newTwoCTADim && *newTwoCTADim == static_cast<unsigned>(splitDim))
-        newTwoCTADim = std::nullopt;
+      assert(!enc.getCTALayout().getTwoCTADim().has_value());
       dstEnc = BlockedEncodingAttr::get(
           enc.getContext(), //
           ArrayRef(enc.getSizePerThread()).drop_back(1),
@@ -3195,8 +3192,7 @@ struct TritonGPUInferLayoutInterface
           CTALayoutAttr::get(enc.getContext(), //
                              ArrayRef(enc.getCTAsPerCGA()).drop_back(1),
                              ArrayRef(enc.getCTASplitNum()).drop_back(1),
-                             ArrayRef(enc.getCTAOrder()).drop_front(1),
-                             newTwoCTADim));
+                             ArrayRef(enc.getCTAOrder()).drop_front(1)));
       return success();
     }
 

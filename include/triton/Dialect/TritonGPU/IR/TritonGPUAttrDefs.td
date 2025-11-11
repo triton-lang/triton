@@ -156,17 +156,15 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
                      "ArrayRef<unsigned>":$CTASplitNum,
                      "ArrayRef<unsigned>":$CTAOrder,
                      "std::optional<unsigned>":$twoCTADim), [{
-        auto sanitizedTwoCTADim =
-            sanitizeTwoCTADim(twoCTADim, CTAsPerCGA.size());
         if (llvm::all_of(CTAsPerCGA, [](unsigned x) { return x == 1; })) {
           SmallVector<unsigned> order;
           for (int i = CTAsPerCGA.size() - 1; i >= 0; --i)
             order.push_back(i);
           return $_get(context, CTAsPerCGA, CTASplitNum, order,
-                       sanitizedTwoCTADim);
+                       twoCTADim);
         }
         return $_get(context, CTAsPerCGA, CTASplitNum, CTAOrder,
-                     sanitizedTwoCTADim);
+                     twoCTADim);
     }]>,
     AttrBuilder<(ins "ArrayRef<unsigned>":$CTAsPerCGA,
                      "ArrayRef<unsigned>":$CTASplitNum,
@@ -182,23 +180,12 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
       SmallVector<unsigned> CTAOrder;
       for (int i = rank - 1; i >= 0; --i)
         CTAOrder.push_back(i);
-      return get(context, CTAsPerCGA, CTASplitNum, CTAOrder, std::nullopt);
+      return get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
     }
     unsigned getRank() const { return getCTAOrder().size(); }
-    static std::optional<unsigned>
-    sanitizeTwoCTADim(std::optional<unsigned> twoCTADim, size_t rank) {
-      if (!twoCTADim || rank == 0)
-        return std::nullopt;
-      if (*twoCTADim >= rank)
-        return std::nullopt;
-      return twoCTADim;
-    }
     CTALayoutAttr withTwoCTADim(std::optional<unsigned> newTwoCTADim) const {
-      auto sanitized = sanitizeTwoCTADim(newTwoCTADim, getRank());
-      if (sanitized == getTwoCTADim())
-        return *this;
       return get(getContext(), getCTAsPerCGA(), getCTASplitNum(), getCTAOrder(),
-                 sanitized);
+                 newTwoCTADim);
     }
   }];
 
