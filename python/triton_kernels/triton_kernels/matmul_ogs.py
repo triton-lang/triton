@@ -111,78 +111,6 @@ def should_upcast_indices(*args):
     return any(tensor is not None and can_overflow_int32(tensor) for tensor in args)
 
 
-# This supports computing dw for ragged matmul.  Note the correspondence:
-#   fwd pass:      y = matmul_ogs(x, w, ...)
-#   bwd pass (dw): dw = matmul_ogs(x.T, dy, ...)
-#
-# Thus, "our" x, w, and y (as seen by matmul_ogs) correspond to x.T, dy, dw, respectively.
-# To avoid confusion, now we'll stick to "x, w, y" terminology.
-#
-# Assume that y.shape == (N_EXPTS, M, N), x.shape == (M, K), w.shape = (K_W, N).
-#
-# To make things feasible, we require that x and w satisfy the following condition:
-#   (1) We don't support gather/scatter indices: in x, all columns for expt #0 are grouped at
-#       the leftmost part, followed by expt #1, and so on.  Ditto for w (top to bottom).
-#   (2) At least one of x and w are padded: each expert uses a multiple of block_k columns
-#       (or rows), and unused values are filled with zero.
-#   (3) No inf or nan are allowed in x or w (except for the final padding - see below).
-#       This is because we use "multiplying by padded zero region" in lieu of masking.
-#   (4) The number of actually used columns/rows equals self.base.expt_hist.sum() and may be
-#       less than K or K_W.  In this case, the final "unused" values can be left uninitialized.
-#       However, if x or w is unpadded, the first block_k columns/rows of the unused part must
-#       not contain nan or inf.
-#
-# For example, assume N_EXPTS == 5, block_k == 32, and expt_hist == [60, 33, 0, 32, 25].
-#
-#               if unpadded     if padded
-#               -----------     ---------
-#   x: expt #0: x[:, :60]       x[:, :60]
-#                               x[:, 60:64] - zero padded
-#      expt #1: x[:, 60:93]     x[:, 64:97]
-#                               x[:, 97:128] - zero padded
-#      expt #3: x[:, 93:125]    x[:, 128:160]
-#      expt #4: x[:, 125:150]   x[:, 160:185]
-#                               x[:, 185:192] - zero padded
-#               x[:, 150:min(182, K)] - must not contain inf/nan
-#
-#               x[:, 182:]      x[:, 192:] - unused (may contain garbage, including inf/nan)
-#
-#   w is the same, except that rows columns are flipped.
-@dataclass
-class InnerRoutingData:
-    base: RoutingData | None = None
-    block_k: int | None = None
-    x_is_padded: bool = False
-    w_is_padded: bool = False
-
-    # Return value contains: ExptHist, ExptOffs, ExptTileOffs, ExptData,
-    #                        EXPT_IS_INNER, X_IS_PADDED, W_IS_PADDED, ExptHistMax
-    @staticmethod
-    def make_kernel_args(data, block_m):
-        if isinstance(data, RaggedTensorMetadata):
-            expt_data, block = data, block_m
-            args = ("M", False, False, None)
-        elif isinstance(data, InnerRoutingData):
-            expt_data, block = data.base.expt_data, data.block_k
-            args = (
-                "K", data.x_is_padded, data.w_is_padded, expt_data.slice_sizes.max(),
-            )
-        elif data is None:
-            expt_data = None
-        else:
-            assert None
-
-        if expt_data is None:
-            return (None, None, None, None, None, False, False, None)
-
-        return (
-            expt_data.slice_sizes,
-            expt_data.slice_offs,
-            expt_data.block_offs(block),
-            expt_data.block_schedule(block),
-        ) + args
-
-
 # ---------------------
 # Numerics
 # ---------------------
@@ -660,7 +588,6 @@ def matmul_ogs_torch(x, w, bias,
                  precision_config: PrecisionConfig = None,
                  betas = None,
                  gammas = None,
-                 inner_routing_data: InnerRoutingData | None = None,
                  round_x = None, round_y = None,
                  ):
     if w_ragged_metadata is not None:
@@ -681,30 +608,10 @@ def matmul_ogs_torch(x, w, bias,
                 x_slice, w_slice, None,
                 None, None, None, None, None,
                 betas, gammas,
-                None, round_x, round_y,
+                round_x, round_y,
             )
             out[expt] = out_expt.to(out.dtype)
         return out
-
-    # if inner_routing_data is not None:
-    #     assert bias is None, "Not supported yet"
-    #     m, n = x.shape[-2], w.shape[-1]
-    #     block_k = inner_routing_data.block_k
-    #     n_expts_tot = inner_routing_data.base.n_expts_tot
-    #     out = torch.zeros((n_expts_tot, m, n), dtype=torch.float32, device=x.device)
-    #     start_x = start_w = 0
-    #     for expt in range(n_expts_tot):
-    #         k = inner_routing_data.base.expt_hist[expt].item()
-    #         if k > 0:
-    #             print(start_x, start_w, k)
-    #             out[expt] = matmul_ogs_torch(
-    #                 x[:, start_x:start_x+k], w[start_w:start_w+k, :], None, None,
-    #                 None, None, None, None, betas, gammas, None, round_x, round_y
-    #             )
-    #         padded_k = triton.cdiv(k, block_k) * block_k
-    #         start_x += padded_k if inner_routing_data.x_is_padded else k
-    #         start_w += padded_k if inner_routing_data.w_is_padded else k
-    #     return out
 
     is_input_batched = x.ndim == 3
     assert x.dtype.itemsize > 1

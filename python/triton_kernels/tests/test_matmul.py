@@ -8,7 +8,7 @@ from typing import Union
 import triton
 # matmul utilities
 import triton_kernels.matmul_ogs_details.opt_flags as opt_flags
-from triton_kernels.matmul_ogs import FlexCtx, RoutingData, InnerRoutingData, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
+from triton_kernels.matmul_ogs import FlexCtx, RoutingData, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
 from triton_kernels.matmul_ogs import GatherIndx, ScatterIndx
 from triton_kernels.matmul_ogs import matmul_ogs_set_idle_sms, matmul_ogs, matmul_ogs_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
@@ -625,16 +625,6 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         rdata, gindx, sindx = None, None, None
     flex = precision_opt.flex_ctx
 
-    if expt_is_inner:
-        inner_routing_data = InnerRoutingData(
-            base=rdata, block_k=padding_block_k,
-            x_is_padded="pad_x" in inner_expt_opt,
-            w_is_padded="pad_w" in inner_expt_opt,
-        )
-        rdata = None
-    else:
-        inner_routing_data = None
-
     # triton
     try:
         tri_y = matmul_ogs(x_tri, w_tri, bias_tri,
@@ -659,8 +649,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     ref_y = matmul_ogs_torch(x_ref, w_ref, bias_ref,  #
                              x_ragged_metadata=x_ragged_metadata2,
                              w_ragged_metadata=w_ragged_metadata,
-                             gather_indx=gindx, scatter_indx=sindx, round_x=round_x, gammas=gs1_ref,
-                             inner_routing_data=inner_routing_data)
+                             gather_indx=gindx, scatter_indx=sindx, round_x=round_x, gammas=gs1_ref)
 
     def scale(val, scal):
         if scal is None:
