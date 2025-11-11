@@ -404,7 +404,7 @@ void init_gluon_ir(py::module &&m) {
               unsigned elementBitWidth) -> Attribute {
              auto ctx = self.getContext();
              auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
-                 ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder, std::nullopt);
              return ttg::AMDMfmaEncodingAttr::get(
                  ctx, version, warpsPerCta, instrShape, transposed, ctaLayout,
                  tilesPerWarp, elementBitWidth);
@@ -419,7 +419,7 @@ void init_gluon_ir(py::module &&m) {
               std::vector<unsigned> &instrShape) -> Attribute {
              auto ctx = self.getContext();
              auto ctaLayout = self.getChecked<ttg::CTALayoutAttr>(
-                 ctx, ctasPerCga, ctaSplitNum, ctaOrder);
+                 ctx, ctasPerCga, ctaSplitNum, ctaOrder, std::nullopt);
              return ttg::AMDWmmaEncodingAttr::get(ctx, version, transposed,
                                                   warpsPerCta, tilesPerWarp,
                                                   ctaLayout, instrShape);
