@@ -26,6 +26,8 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::LocalLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto ctx = rewriter.getContext();
+    auto loc = op.getLoc();
     MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
     auto typeConverter = this->getTypeConverter();
@@ -53,31 +55,40 @@ public:
       auto sharedLL = triton::gpu::toLinearLayout(srcTy);
       cvtDstLL = triton::gpu::toLinearLayout(dstTy).invertAndCompose(sharedLL);
     }
-    auto kBlock = StringAttr::get(op.getContext(), "block");
+    auto kBlock = StringAttr::get(ctx, "block");
     auto maybeSublayout = cvtDstLL.quotient({kBlock});
     if (!maybeSublayout) {
       return failure();
     }
     cvtDstLL = maybeSublayout.value();
-
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-        op.getLoc(), adaptor.getSrc(), llvmElemTy, rewriter);
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                         llvmElemTy, rewriter);
     auto smemBase = smemObj.getBase();
-    auto affineOffset = smemObj.getShmemOffset(op.getLoc(), rewriter, srcTy);
+    auto affineOffset = smemObj.getShmemOffset(loc, rewriter, srcTy);
     auto maskSpanAffineOffset = smemObj.getMaskSpanOffsets(srcTy);
+    auto calcPaddedOffset = [&](Value smemOffset) {
+      TritonLLVMOpBuilder b(loc, rewriter);
+      if (paddedEnc) {
+        // Apply the offset needed for padding.
+        Value padOffset = emitPadding(loc, rewriter, paddedEnc, bitWidth,
+                                      smemOffset, /*offsetInBytes=*/true);
+        smemOffset = b.add(smemOffset, padOffset);
+      }
+      return smemOffset;
+    };
 
     llvm::SmallVector<Value> values;
-    auto result = lowerDsReadTr(
-        op, ldsParams.value(), op.getLoc(), cvtDstLL, values, smemBase,
-        affineOffset, maskSpanAffineOffset, llvmElemTy, rewriter, targetInfo);
+    auto result =
+        lowerDsReadTr(op, ldsParams.value(), loc, cvtDstLL, values, smemBase,
+                      affineOffset, maskSpanAffineOffset, calcPaddedOffset,
+                      llvmElemTy, rewriter, targetInfo);
     if (failed(result)) {
       return failure();
     }
 
     auto structTy = LLVM::LLVMStructType::getLiteral(
-        op.getLoc().getContext(), SmallVector<Type>(values.size(), llvmElemTy));
-    auto value =
-        packLLElements(op.getLoc(), typeConverter, values, rewriter, structTy);
+        ctx, SmallVector<Type>(values.size(), llvmElemTy));
+    auto value = packLLElements(loc, typeConverter, values, rewriter, structTy);
 
     rewriter.replaceOp(op, value);
     return success();
@@ -90,7 +101,8 @@ private:
       LinearLayout cvt,
       SmallVector<Value> &vals, // Input for stmatrix, output for ldmatrix
       Value smemBase, Value affineOffset, uint64_t maskSpanAffineOffset,
-      Type llvmElemTy, ConversionPatternRewriter &rewriter,
+      std::function<Value(Value)> calcPaddedOffset, Type llvmElemTy,
+      ConversionPatternRewriter &rewriter,
       const ::triton::AMD::TargetInfo &targetInfo) const {
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -100,7 +112,6 @@ private:
     auto kReg = S("register");
     auto kLane = S("lane");
     auto kWarp = S("warp");
-    auto kBlock = S("block");
     auto kOffset = S("offset");
     auto kAddr = S("addr");
     auto smemPtrTy = ptr_ty(ctx, 3);
@@ -288,8 +299,9 @@ private:
             reps.apply({{kReg, i2}, {kLane, 0}, {kWarp, 0}})[0].second;
         auto regIdxAddI8 = regIdxAdd * (bitWidth / 8);
         Value innerOffset = b.add(offset, b.i32_val(regIdxAddI8));
-        auto vecAddr = b.gep(smemPtrTy, i8_ty, smemBase, innerOffset,
-                             LLVM::GEPNoWrapFlags::inbounds);
+        auto vecAddr =
+            b.gep(smemPtrTy, i8_ty, smemBase, calcPaddedOffset(innerOffset),
+                  LLVM::GEPNoWrapFlags::inbounds);
         llvm::append_range(vals,
                            lowerInst(rewriter, loc, vecAddr, i + i2, vecTy));
       }
