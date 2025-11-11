@@ -49,10 +49,9 @@ class TensorMemoryLayout:
     two_ctas: bool = False
 
     def __post_init__(self):
-        super().__setattr__("block", tuple(_unwrap_if_constexpr(self.block)))
+        super().__setattr__("block", _unwrap_if_constexpr(self.block))
         super().__setattr__("col_stride", _unwrap_if_constexpr(self.col_stride))
-        cta_split = tuple(_unwrap_if_constexpr(self.cta_split_num)) if self.cta_split_num is not None else None
-        super().__setattr__("cta_split_num", cta_split)
+        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
         super().__setattr__("two_ctas", _unwrap_if_constexpr(self.two_ctas))
         assert len(self.block) == 2
         assert self.cta_split_num is None or len(self.cta_split_num) == 2
@@ -129,7 +128,7 @@ def get_tmem_reg_layout(
         ctas_per_cga (tuple[int, int]): CTA grouping along each dimension.
         cta_split_num (tuple[int, int]): CTA split factors along each dimension.
         cta_order (tuple[int, int]): CTA order.
-        two_cta_dim (Optional[int]): Main dimension for block=0,1 within a two-CTA execution semantics.
+        two_cta_dim (Optional[int]): The dimension to be distributed over paired CTAs within a two-CTA mode kernel.
     """
 
     def _unwrap(x):

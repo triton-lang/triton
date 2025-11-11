@@ -377,11 +377,11 @@ LogicalResult TCGen5MMAOp::verify() {
   auto aSplit = getCTASplitNum(aEnc);
   auto bSplit = getCTASplitNum(bEnc);
   if (aSplit[1] != 1) {
-    return emitOpError("LHS CTASplit along the K should be 1, but got ")
+    return emitOpError("LHS CTASplit along K should be 1, but got ")
            << aSplit[1];
   }
   if (bSplit[0] != 1) {
-    return emitOpError("RHS CTASplit along the K should be 1, but got ")
+    return emitOpError("RHS CTASplit along K should be 1, but got ")
            << bSplit[0];
   }
 
