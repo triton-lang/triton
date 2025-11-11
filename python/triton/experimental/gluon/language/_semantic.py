@@ -288,7 +288,7 @@ class GluonSemantic(TritonSemantic[TensorTy]):
         handle = self.builder.create_local_gather(ret_ty.to_ir(self.builder), mem_desc.handle, indices.handle, axis)
         return ttgl.tensor(handle, ret_ty)
 
-    def shared_scatter(self, mem_desc, indices, axis, values):
+    def shared_scatter(self, mem_desc, values, indices, axis):
         _check(isinstance(indices, ttgl.tensor),
                lambda: f"expected 'indices' to be a tensor, but got a {type(indices)}")
         _check(isinstance(axis, int), lambda: f"expected 'axis' to be an int, but got a {type(axis)}")
