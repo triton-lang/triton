@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Optional
 
+
 class warp_pipeline_stage:
     __slots__ = ("label", "_semantic")
 
