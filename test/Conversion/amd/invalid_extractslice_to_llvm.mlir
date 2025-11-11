@@ -3,7 +3,7 @@
 // Invalid size
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
 tt.func @invalid_size_input(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}) {
-  // expected-error @+1 {{result shape must be multiple of shapePerCTATile}}
+  // expected-error @+1 {{Lane and warp dim basis must match between source and destination layout.}}
   %1 = amdg.extract_slice %arg0 [0,0] : tensor<256x128xi32, #blocked1> to tensor<256x2xi32, #blocked1>
   tt.return
 }
@@ -13,7 +13,7 @@ tt.func @invalid_size_input(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibili
 // Invalid offset, not multiple of shapePerTile
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
 tt.func @invalid_offset_input(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}) {
-  // expected-error @+1 {{offset must be multiple of shapePerCTATile}}
+  // expected-error @+1 {{No source register holds the element for destination index [0, 5]}}
   %1 = amdg.extract_slice %arg0 [0,5] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked1>
   tt.return
 }
@@ -34,7 +34,7 @@ tt.func @invalid_offset_input(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibi
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
 tt.func @invalid_result_layout(%arg0: tensor<256x128xi32, #blocked1> {tt.divisibility = 16 : i32}) {
-  // expected-error @+1 {{CTA tile shapes must match between source and destination tensors.}}
+  // expected-error @+1 {{No source register holds the element for destination index [128, 0]}}
   %1 = amdg.extract_slice %arg0 [0,0] : tensor<256x128xi32, #blocked1> to tensor<256x16xi32, #blocked2>
   tt.return
 }
@@ -98,7 +98,7 @@ tt.func @invalid_lane_warp_basis(%arg0: tensor<256x256xi32, #src_layout> {tt.div
 #dst_layout = #ttg.linear<{register=[[1, 0]], lane=[[4, 0], [8, 0], [16, 0], [0, 1], [0, 2], [0, 4]], warp=[[2, 0], [0, 8]], block=[]}>
 module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @invalid_concat(%arg0: tensor<64x32xi32, #src_layout>) {
-    // expected-error @+1 {{Register basis must match on a CTA tile between source and destination.}}
+    // expected-error @+1 {{Lane and warp dim basis must match between source and destination layout}}
     %1 = amdg.extract_slice %arg0 [0, 0] : tensor<64x32xi32, #src_layout> to tensor<32x16xi32, #dst_layout>
     tt.return
   }
