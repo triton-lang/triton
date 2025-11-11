@@ -80,6 +80,85 @@ createTargetMachine(llvm::Module *module, std::string proc,
   return machine;
 }
 
+std::string translateLLVMIRToMIR(llvm::Module &module,
+                                 const std::string &triple,
+                                 const std::string &proc,
+                                 const std::string &features,
+                                 const std::vector<std::string> &flags,
+                                 bool enable_fp_fusion) {
+  using namespace mlir;
+
+  // options
+  auto options = llvm::cl::getRegisteredOptions();
+  for (std::string flag : flags) {
+    auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag]);
+    assert(shortPtr);
+    shortPtr->setValue(true);
+  }
+  bool disableLLVMOpt = triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
+  if (!disableLLVMOpt) {
+    // Check to see if we are passing a list of flags to disable optimizations.
+    auto flagList = triton::tools::getStrEnv("DISABLE_LLVM_OPT");
+    if (!flagList.empty()) {
+      llvm::SmallVector<StringRef, 3> split;
+      StringRef(flagList.c_str()).split(split, ',');
+      for (auto flag : split) {
+        auto optIt = options.find(flag);
+        if (optIt != options.end()) {
+          auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+          *optPtr = true;
+        }
+      }
+    }
+  }
+
+  // Save and set stop-before if needed (for MIR output or custom stop point)
+  std::string originalStopBefore;
+  auto stopBeforeOpt = options.find("stop-before");
+  if (stopBeforeOpt != options.end()) {
+    auto *optPtr =
+        static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
+    originalStopBefore = optPtr->getValue();
+    optPtr->setValue("machine-scheduler");
+  }
+
+  // inline everything
+  for (llvm::Function &f : module.functions())
+    if (!f.hasFnAttribute(llvm::Attribute::NoInline))
+      f.addFnAttr(llvm::Attribute::AlwaysInline);
+  // verify and store llvm
+  llvm::legacy::PassManager pm;
+  pm.add(llvm::createAlwaysInlinerLegacyPass());
+  pm.add(llvm::createVerifierPass());
+
+  pm.run(module);
+
+  // create machine
+  module.setTargetTriple(Triple(triple));
+  auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
+  // set data layout
+  module.setDataLayout(machine->createDataLayout());
+
+  // emit machine code
+  std::string result;
+  {
+    llvm::raw_string_ostream stream(result);
+    llvm::buffer_ostream pstream(stream);
+    llvm::legacy::PassManager pass;
+    // emit
+    machine->addPassesToEmitFile(pass, pstream, nullptr, llvm::CodeGenFileType::AssemblyFile);
+    pass.run(module);
+
+  }
+
+  if (stopBeforeOpt != options.end()) {
+    auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
+    optPtr->setValue(originalStopBefore);
+  }
+
+  return result;
+}
+
 std::string translateLLVMIRToASM(llvm::Module &module,
                                  const std::string &triple,
                                  const std::string &proc,
@@ -155,49 +234,6 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   int saved_stderr_fd = -1;
   if (dumpMir) {
     dumpFilename = dumpMirBase + "/" + kernel_name + ".txt";
-
-    // Clone the module to avoid mutation issues
-    std::unique_ptr<llvm::Module> clonedModule = llvm::CloneModule(module);
-    clonedModule->setTargetTriple(Triple(triple));
-    auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
-    clonedModule->setDataLayout(machine->createDataLayout());
-
-    auto stopBeforeOpt = options.find("stop-before");
-    std::string originalStopBefore;
-    if (stopBeforeOpt != options.end()) {
-      auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
-      originalStopBefore = optPtr->getValue();
-      optPtr->setValue("machine-scheduler");
-    }
-
-    std::string mir;
-    {
-      llvm::raw_string_ostream stream(mir);
-      llvm::buffer_ostream pstream(stream);
-      llvm::legacy::PassManager pass;
-      // emit MIR
-      machine->addPassesToEmitFile(pass, pstream, nullptr, llvm::CodeGenFileType::AssemblyFile);
-      pass.run(module);
-    }
-
-    // Write MIR to file
-    {
-      std::error_code EC;
-      llvm::raw_fd_ostream dumpFile(dumpFilename, EC);
-      if (!EC) {
-        dumpFile << mir;
-        dumpFile << "---\n========== SCHEDULING DAG ==========\n";
-        dumpFile.flush();
-        dumpFile.close();
-      } else {
-        llvm::errs() << "Warning: Failed to open dump file: " << EC.message() << "\n";
-      }
-    }
-
-    if (stopBeforeOpt != options.end()) {
-      auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
-      optPtr->setValue(originalStopBefore);
-    }
 
     // Enable misched-print-dags for DAG
     auto mischedPrintOpt = options.find("misched-print-dags");
@@ -726,6 +762,34 @@ void init_triton_llvm(py::module &&m) {
           return py::bytes(obj);
         else
           return py::str(obj);
+      },
+      ret::take_ownership);
+
+  m.def(
+      "translate_to_mir",
+      [](std::string llvmIR, std::string triple, std::string proc,
+         std::string features, std::vector<std::string> flags,
+         bool enable_fp_fusion) -> py::object {
+        std::string obj;
+        {
+          // when allow_threads goes out of scope, gil will be released
+          py::gil_scoped_release allow_threads;
+          // create LLVM module from C++
+          llvm::LLVMContext context;
+          std::unique_ptr<llvm::MemoryBuffer> buffer =
+              llvm::MemoryBuffer::getMemBuffer(llvmIR.c_str());
+          llvm::SMDiagnostic error;
+          std::unique_ptr<llvm::Module> module =
+              llvm::parseIR(buffer->getMemBufferRef(), error, context);
+          if (!module) {
+            llvm::report_fatal_error(
+                "failed to parse IR: " + error.getMessage() +
+                "lineno: " + std::to_string(error.getLineNo()));
+          }
+          obj = translateLLVMIRToMIR(*module, triple, proc, features, flags,
+                                     enable_fp_fusion);
+        }
+        return py::str(obj);
       },
       ret::take_ownership);
 
