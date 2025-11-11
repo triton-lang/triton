@@ -305,18 +305,10 @@ static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   ptxOperands.push_back(barrierOperand);
   std::string opcode;
   if (twoCTAs) {
-    Value mask;
-    // TODO Is this needed?
-    auto numCTAs = lookupNumCTAs(rewriter);
-    if (numCTAs == 2) {
-      mask = b.i16_val(0x3);
-    } else {
-      auto ctaId =
-          b.trunc(i16_ty, nvgpu::ClusterCTAIdOp::create(rewriter, loc));
-      auto totalCTAs = lookupNumCTAs(rewriter);
-      auto ctaIdLead = b.and_(ctaId, b.i16_val(totalCTAs - 2));
-      mask = b.shl(b.i16_val(3), ctaIdLead);
-    }
+    auto ctaId = b.trunc(i16_ty, nvgpu::ClusterCTAIdOp::create(rewriter, loc));
+    auto totalCTAs = lookupNumCTAs(rewriter);
+    auto ctaIdLead = b.and_(ctaId, b.i16_val(totalCTAs - 2));
+    Value mask = b.shl(b.i16_val(3), ctaIdLead);
     auto *ctaMask = ptxBuilder.newOperand(mask, "h");
     ptxOperands.push_back(ctaMask);
     opcode = "@$0 "
@@ -389,12 +381,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
     ttng::ClusterWaitOp::create(rewriter, loc);
 
     Value leftClusterId = nvgpu::ClusterCTAIdOp::create(rewriter, loc);
-    auto numCTAs = lookupNumCTAs(rewriter);
-    // TODO Is this necessary or we can do it unconditionally? Check LLVM
-    // codegen
-    if (numCTAs > 2) {
-      leftClusterId = tb.and_(leftClusterId, tb.i32_val(1));
-    }
+    leftClusterId = tb.and_(leftClusterId, tb.i32_val(1));
     Value cluster0 = tb.icmp_eq(leftClusterId, tb.i32_val(0));
     pred = tb.and_(pred, cluster0);
   }

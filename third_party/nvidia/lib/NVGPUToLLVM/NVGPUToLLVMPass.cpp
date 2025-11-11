@@ -232,11 +232,12 @@ class ClusterCTAIdOpPattern : public OpRewritePattern<ttn::ClusterCTAIdOp> {
 
   LogicalResult matchAndRewrite(ttn::ClusterCTAIdOp op,
                                 PatternRewriter &rewriter) const override {
-    // TODO Should we pass in the range of the cluster ID?
-    // We should benchmark as when doing so for thread_id it regressed lol
-    // auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(
-    //     op->getParentOfType<ModuleOp>());
-    auto res = NVVM::ClusterId::create(rewriter, op.getLoc(), i32_ty);
+    // We could use the value range from LLVM, but it seems to change the
+    // codegen quite a bit. Adding an `and` with `nCTAs - 1` generates similar
+    // code than not doing anything, so we don't do anything for now. At the end
+    // of the day, we are setting reqnctapercluster so both LLVM and PTXAS
+    // already know about the range of the cluster ID.
+    Value res = NVVM::ClusterId::create(rewriter, op.getLoc(), i32_ty);
     rewriter.replaceOp(op, res);
     return success();
   }
