@@ -372,49 +372,6 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   if (dumpMir) {
     dumpFilename = dumpMirBase + "/" + kernel_name + ".txt";
 
-    // Clone the module to avoid mutation issues
-    std::unique_ptr<llvm::Module> clonedModule = llvm::CloneModule(module);
-    clonedModule->setTargetTriple(Triple(triple));
-    auto machine = createTargetMachine(&module, proc, enable_fp_fusion, features);
-    clonedModule->setDataLayout(machine->createDataLayout());
-
-    auto stopBeforeOpt = options.find("stop-before");
-    std::string originalStopBefore;
-    if (stopBeforeOpt != options.end()) {
-      auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
-      originalStopBefore = optPtr->getValue();
-      optPtr->setValue("machine-scheduler");
-    }
-
-    std::string mir;
-    {
-      llvm::raw_string_ostream stream(mir);
-      llvm::buffer_ostream pstream(stream);
-      llvm::legacy::PassManager pass;
-      // emit MIR
-      machine->addPassesToEmitFile(pass, pstream, nullptr, llvm::CodeGenFileType::AssemblyFile);
-      pass.run(module);
-    }
-
-    // Write MIR to file
-    {
-      std::error_code EC;
-      llvm::raw_fd_ostream dumpFile(dumpFilename, EC);
-      if (!EC) {
-        dumpFile << mir;
-        dumpFile << "---\n========== SCHEDULING DAG ==========\n";
-        dumpFile.flush();
-        dumpFile.close();
-      } else {
-        llvm::errs() << "Warning: Failed to open dump file: " << EC.message() << "\n";
-      }
-    }
-
-    if (stopBeforeOpt != options.end()) {
-      auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(stopBeforeOpt->second);
-      optPtr->setValue(originalStopBefore);
-    }
-
     // Enable misched-print-dags for DAG
     auto mischedPrintOpt = options.find("misched-print-dags");
     if (mischedPrintOpt != options.end()) {
