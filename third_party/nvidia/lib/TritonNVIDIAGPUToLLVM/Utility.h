@@ -29,7 +29,6 @@ namespace mlir {
 namespace LLVM {
 
 namespace NVIDIA {
-class TargetInfo;
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i);
@@ -43,7 +42,8 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 
 /// Create a predicate with just single active thread.
 Value createElectPredicate(Location loc, RewriterBase &rewriter);
-Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter);
+Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter,
+                                const TargetInfoBase &targetInfo);
 
 // Create bar.warp.sync
 void createSyncWarp(Location loc, OpBuilder &builder);

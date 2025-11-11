@@ -617,14 +617,18 @@ static void copySharedToTmem(ConversionPatternRewriter &rewriter, Location loc,
 
 struct TensorMemoryCopyOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMCopyOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  TensorMemoryCopyOpConversion(LLVMTypeConverter &converter,
+                               const TargetInfoBase &targetInfo,
+                               PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMEMCopyOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     assert(lookupNumCTAs(rewriter) == 1 && "NYI");
     Location loc = op->getLoc();
-    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+    Value pred =
+        LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter, targetInfo);
     bool twoCTAs = getModuleTwoCTAs(op);
     copySharedToTmem(rewriter, loc, typeConverter, op, adaptor.getSrc(),
                      adaptor.getDst(), pred);
@@ -638,6 +642,8 @@ struct TensorMemoryCopyOpConversion
     rewriter.eraseOp(op);
     return success();
   }
+
+  const TargetInfoBase &targetInfo;
 };
 
 struct MemDescIndexOpConversion
@@ -754,11 +760,14 @@ struct TMEMSubSliceOpConversion
 } // namespace
 
 void mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<TensorMemoryCopyOpConversion, TMEMSubSliceOpConversion,
-               TensorMemoryLoadOpConversion, TensorMemoryStoreOpConversion,
-               TensorMemoryAllocOpConversion>(typeConverter, benefit);
+    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
+    RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<TMEMSubSliceOpConversion, TensorMemoryLoadOpConversion,
+               TensorMemoryStoreOpConversion, TensorMemoryAllocOpConversion>(
+      typeConverter, benefit);
+
+  patterns.add<TensorMemoryCopyOpConversion>(typeConverter, targetInfo,
+                                             benefit);
 }
 
 void mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(

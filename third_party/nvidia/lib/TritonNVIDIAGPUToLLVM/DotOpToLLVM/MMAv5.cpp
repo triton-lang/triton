@@ -678,7 +678,10 @@ struct TCGen5MMAScaledOpConversion
 
 struct TCGen5CommitOpConversion
     : public ConvertOpToLLVMPattern<ttng::TCGen5CommitOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  TCGen5CommitOpConversion(LLVMTypeConverter &converter,
+                           const NVIDIA::TargetInfo &targetInfo,
+                           PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(ttng::TCGen5CommitOp op, OpAdaptor adaptor,
@@ -688,7 +691,8 @@ struct TCGen5CommitOpConversion
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getBarrier(), rewriter.getI64Type(), rewriter);
-    Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
+    Value pred =
+        LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter, targetInfo);
 
     if (adaptor.getPred())
       pred = b.and_(adaptor.getPred(), pred);
@@ -698,6 +702,8 @@ struct TCGen5CommitOpConversion
     rewriter.eraseOp(op);
     return success();
   }
+
+  const TargetInfoBase &targetInfo;
 };
 
 } // namespace
@@ -707,10 +713,12 @@ namespace triton {
 namespace NVIDIA {
 
 void populateTCGen5MMAOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                      const NVIDIA::TargetInfo &targetInfo,
                                       RewritePatternSet &patterns,
                                       PatternBenefit benefit) {
-  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion,
-               TCGen5CommitOpConversion>(typeConverter, benefit);
+  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion>(
+      typeConverter, benefit);
+  patterns.add<TCGen5CommitOpConversion>(typeConverter, targetInfo, benefit);
 }
 
 } // namespace NVIDIA

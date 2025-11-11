@@ -72,9 +72,6 @@ public:
   int getPtxVersion() const { return ptxVersion; }
   int getComputeCapability() const { return computeCapability; }
 
-  std::pair<Value, Value> getLaneAndWarpId(RewriterBase &rewriter,
-                                           Location loc) const override;
-
   bool isCuda() const override { return true; }
 
 private:

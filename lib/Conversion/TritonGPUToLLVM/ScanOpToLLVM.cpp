@@ -469,7 +469,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   if (!helper.isSupported())
     return op.emitError("TODO: unsupported scan layout");
 
-  Value threadId = getThreadId(rewriter, loc);
+  Value threadId = targetInfo.getThreadId(rewriter, loc);
   auto mod = op->getParentOfType<ModuleOp>();
   unsigned iWarpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
   Value warpSize = b.i32_val(iWarpSize);

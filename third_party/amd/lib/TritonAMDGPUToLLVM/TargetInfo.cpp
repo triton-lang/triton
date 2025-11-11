@@ -159,24 +159,26 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                                  triton::CacheModifier::NONE, addAliasGroup);
 }
 
+// TODO: to refactor these shuffle methods from amd utitlity.cpp into
+// targetinfo.
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                              int i) const {
-  return LLVM::AMD::shuffleXor(loc, rewriter, val, i, getISAFamily());
+  return LLVM::AMD::shuffleXor(loc, rewriter, val, i, *this);
 }
 
 Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
                             int i) const {
-  return LLVM::AMD::shuffleUp(loc, rewriter, val, i, getISAFamily());
+  return LLVM::AMD::shuffleUp(loc, rewriter, val, i, *this);
 }
 
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                              int i) const {
-  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, getISAFamily());
+  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, *this);
 }
 
 Value TargetInfo::shuffleIdx(RewriterBase &rewriter, Location loc, Value val,
                              Value i) const {
-  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, getISAFamily());
+  return LLVM::AMD::shuffleIdx(loc, rewriter, val, i, *this);
 }
 
 Value TargetInfo::permute(RewriterBase &rewriter, Location loc, Value a,
@@ -683,13 +685,13 @@ std::pair<Value, Value> TargetInfo::getLaneAndWarpId(RewriterBase &rewriter,
     auto funcOp = cast<LLVM::LLVMFuncOp>(parentOp);
     rewriter.setInsertionPointToStart(&funcOp.getBody().front());
 
-    std::tie(laneId, warpId) = mlir::getLaneAndWarpId(rewriter, loc);
+    std::tie(laneId, warpId) = TargetInfoBase::getLaneAndWarpId(rewriter, loc);
     auto call = ROCDL::ReadfirstlaneOp::create(rewriter, loc, {i32_ty}, warpId);
     warpId = call.getRes();
 
     rewriter.restoreInsertionPoint(insertPt);
   } else {
-    std::tie(laneId, warpId) = mlir::getLaneAndWarpId(rewriter, loc);
+    std::tie(laneId, warpId) = TargetInfoBase::getLaneAndWarpId(rewriter, loc);
   }
 
   return {laneId, warpId};

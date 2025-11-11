@@ -165,7 +165,7 @@ public:
     // Pad out the bins so that we have at least one bin per thread within a
     // warp.
     numBins = std::max(numBins, numThreadsPerWarp);
-    Value threadId = getThreadId(rewriter, loc);
+    Value threadId = targetInfo.getThreadId(rewriter, loc);
     auto srcType = op.getSrc().getType();
     // First compute a warp local histogram based on values owned by each warps.
     SmallVector<Value> warpLevelHistogram = computeWarpLevelHistogram(

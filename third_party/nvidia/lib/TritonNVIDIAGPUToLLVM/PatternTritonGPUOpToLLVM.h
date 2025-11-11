@@ -34,6 +34,7 @@ void populateConvertLayoutOpToLLVMOptimizedPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                 const TargetInfo &targetInfo,
                                  RewritePatternSet &patterns,
                                  int computeCapability, PatternBenefit benefit);
 
@@ -73,10 +74,12 @@ void populateClampFOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    PatternBenefit benefit);
 
 void populateTCGen5MMAOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                      const TargetInfo &targetInfo,
                                       RewritePatternSet &patterns,
                                       PatternBenefit benefit);
 
 void populateTensorMemoryOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                         const TargetInfo &targetInfo,
                                          RewritePatternSet &patterns,
                                          PatternBenefit benefit);
 

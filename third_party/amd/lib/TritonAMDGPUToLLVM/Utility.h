@@ -17,17 +17,13 @@ namespace mlir::LLVM::AMD {
 enum class MemoryOp { Load, Store };
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
-                 mlir::triton::AMD::ISAFamily isaFamily =
-                     mlir::triton::AMD::ISAFamily::Unknown);
+                 const mlir::triton::AMD::TargetInfo &targetInfo);
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i,
-                mlir::triton::AMD::ISAFamily isaFamily =
-                    mlir::triton::AMD::ISAFamily::Unknown);
+                const mlir::triton::AMD::TargetInfo &targetInfo);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i,
-                 mlir::triton::AMD::ISAFamily isaFamily =
-                     mlir::triton::AMD::ISAFamily::Unknown);
+                 const mlir::triton::AMD::TargetInfo &targetInfo);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
-                 mlir::triton::AMD::ISAFamily isaFamily =
-                     mlir::triton::AMD::ISAFamily::Unknown);
+                 const mlir::triton::AMD::TargetInfo &targetInfo);
 
 Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
               Value selector);

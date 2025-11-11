@@ -1,6 +1,7 @@
 #ifndef PROTONGPU_TO_LLVM_UTILITY_H
 #define PROTONGPU_TO_LLVM_UTILITY_H
 
+#include "Conversion/ProtonGPUToLLVM/TargetInfoBase.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/IR/Value.h"
@@ -43,7 +44,8 @@ struct CircularStoreDataPack {
 
 CircularStoreDataPack
 lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
-                           ConversionPatternRewriter &rewriter);
+                           ConversionPatternRewriter &rewriter,
+                           const proton::gpu::TargetInfoBase &targetInfo);
 
 SmallVector<FunctionOpInterface> getTritonFunctions(ModuleOp mod);
 

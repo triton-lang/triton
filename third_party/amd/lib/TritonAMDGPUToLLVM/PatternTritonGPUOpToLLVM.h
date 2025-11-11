@@ -20,6 +20,7 @@ void populateMemoryOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                 const TargetInfo &targetInfo,
                                  PatternBenefit benefit);
 void populateElementwiseOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, bool ftz,

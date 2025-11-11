@@ -132,9 +132,10 @@ void createSyncWarp(Location loc, OpBuilder &rewriter) {
   NVVM::SyncWarpOp::create(rewriter, loc, b.i32_val(0xffffffff));
 }
 
-Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter) {
+Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter,
+                                const TargetInfoBase &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value warpId = getLaneAndWarpId(rewriter, loc).second;
+  Value warpId = targetInfo.getLaneAndWarpId(rewriter, loc).second;
   Value warp0 = b.icmp_eq(warpId, b.i32_val(0));
   return b.and_(warp0, createElectPredicate(loc, rewriter));
 }
@@ -333,7 +334,7 @@ LogicalResult lowerLdStMatrix(
       zerosLike(LinearLayout::identity1D(bitwidth / 8, kReg, kOffset));
   auto i8AddrLayout = i8Tile * addrLayout;
 
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  auto [laneId, warpId] = targetInfo.getLaneAndWarpId(rewriter, loc);
   auto regBase =
       applyLinearLayout(
           loc, rewriter, i8AddrLayout,

@@ -227,7 +227,7 @@ private:
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcLayout =
         mlir::cast<DistributedEncodingTrait>(helper.getSrcLayout());
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto [laneId, warpId] = targetInfo.getLaneAndWarpId(rewriter, loc);
     unsigned axis = op.getAxis();
     auto smemShape = helper.getScratchRepShape();
 
@@ -282,7 +282,7 @@ private:
     int numWarps = triton::gpu::lookupNumWarps(op);
     int numThreads = numLanes * numWarps;
 
-    Value threadId = getThreadId(rewriter, loc);
+    Value threadId = targetInfo.getThreadId(rewriter, loc);
     Value warpSize = b.i32_val(numLanes);
     Value laneId = b.urem(threadId, warpSize);
     Value zero = b.i32_val(0);

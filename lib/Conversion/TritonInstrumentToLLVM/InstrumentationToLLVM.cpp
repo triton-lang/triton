@@ -145,7 +145,7 @@ struct AssertInThreadOpConversion
     }
 
     // Print the message only for the first thread
-    Value threadId = getThreadId(*b.builder, loc);
+    Value threadId = targetInfo.getThreadId(rewriter, loc);
     Value zero = b.int_val(threadId.getType().getIntOrFloatBitWidth(), 0);
     Value threadIdIsZero = b.icmp_eq(threadId, zero);
     condition = b.and_(condition, threadIdIsZero);
@@ -223,7 +223,14 @@ struct BufferPointersOpConversion
 
 struct LockAcquireOpConversion
     : public ConvertOpToLLVMPattern<tti::ExperimentalLockAcquireOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LockAcquireOpConversion(LLVMTypeConverter &typeConverter,
+                          const TargetInfoBase &targetInfo,
+                          PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<tti::ExperimentalLockAcquireOp>(typeConverter,
+                                                               benefit),
+        targetInfo(targetInfo) {}
+
   LogicalResult matchAndRewrite(tti::ExperimentalLockAcquireOp op,
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &b) const override {
@@ -240,7 +247,8 @@ struct LockAcquireOpConversion
     Block *whileBlock = b.splitBlock(prevBlock2, b.getInsertionPoint());
     Block *endBlock = b.splitBlock(whileBlock, whileBlock->begin());
     b.setInsertionPointToEnd(prevBlock2);
-    Value elect = mlir::LLVM::NVIDIA::createElectPredicateWarp0(loc, b);
+    Value elect =
+        mlir::LLVM::NVIDIA::createElectPredicateWarp0(loc, b, targetInfo);
     if (op.getPred()) {
       elect = arith::AndIOp::create(b, loc, elect, op.getPred());
     }
@@ -276,6 +284,8 @@ struct LockAcquireOpConversion
     b.eraseOp(op);
     return success();
   }
+
+  const TargetInfoBase &targetInfo;
 };
 
 struct LockReleaseOpConversion
@@ -330,9 +340,9 @@ public:
 void mlir::triton::populateInstrumentationToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<AssertInThreadOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<AssertInThreadOpConversion, LockAcquireOpConversion>(
+      typeConverter, targetInfo, benefit);
   patterns.add<BufferPointersOpConversion>(typeConverter);
-  patterns.add<LockAcquireOpConversion>(typeConverter);
   patterns.add<LockReleaseOpConversion>(typeConverter);
   patterns.add<MemDescToI64OpConversion>(typeConverter);
 }
