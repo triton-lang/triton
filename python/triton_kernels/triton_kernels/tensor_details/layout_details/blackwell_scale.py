@@ -1,4 +1,5 @@
 import math
+from dataclasses import dataclass
 
 import torch
 import triton
@@ -11,7 +12,14 @@ SWIZZLE_SIZE_INNER = tl.constexpr(4)
 SWIZZLE_SIZE_OUTER = tl.constexpr(128)
 
 
+@dataclass
 class BlackwellMXScaleLayout(Layout):
+    B: int
+    ALIGN_K: int
+    ALIGN_N: int
+    SWIZZLE_K: int
+    K_pad: int
+    N_pad: int
     name: str = "BLACKWELL_SCALE"
 
     def __init__(self, shape) -> None:
