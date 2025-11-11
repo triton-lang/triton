@@ -633,3 +633,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @precise_math_sqrt(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>) {
+    %idx = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
+    %0 = amdg.buffer_load %arg0[%idx] : tensor<256xf32, #blocked>
+    // CHECK: llvm.intr.sqrt
+    %1 = tt.precise_sqrt %0 : tensor<256xf32, #blocked>
+    amdg.buffer_store %1, %arg1[%idx] : tensor<256xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @precise_math_divf(%arg0: !tt.ptr<f32>, %arg1: !tt.ptr<f32>, %arg2: !tt.ptr<f32>) {
+    %idx = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #blocked>
+    %0 = amdg.buffer_load %arg0[%idx] : tensor<256xf32, #blocked>
+    %1 = amdg.buffer_load %arg1[%idx] : tensor<256xf32, #blocked>
+    // CHECK: llvm.fdiv
+    %2 = tt.precise_divf %0, %1 : tensor<256xf32, #blocked>
+    amdg.buffer_store %2, %arg2[%idx] : tensor<256xf32, #blocked>
+    tt.return
+  }
+}
