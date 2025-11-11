@@ -39,7 +39,7 @@ tt.func @two_stage_backend(%n: index) {
 // CHECK: arith.divsi
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 
 // CHECK: scf.for
 // CHECK-NOT:   scf.execute_region
@@ -48,7 +48,7 @@ tt.func @two_stage_backend(%n: index) {
 // CHECK: rocdl.sched.barrier
 // CHECK-NOT:   scf.execute_region
 
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 // CHECK: tt.return
 
 
@@ -85,13 +85,13 @@ tt.func @three_stage_backend(%n: index) {
 // CHECK-LABEL: tt.func @three_stage_backend(
 // CHECK-NOT: no_inline
 // CHECK: gpu.barrier
-// CHECK: amdgpu.cond_barrier
+// CHECK: amdg.cond_barrier
 // CHECK: scf.for
 // CHECK-NOT:   scf.execute_region
 // CHECK: rocdl.sched.barrier
 // CHECK: rocdl.s.barrier
 // CHECK: rocdl.sched.barrier
-// CHECK: amdgpu.cond_barrier
+// CHECK: amdg.cond_barrier
 // CHECK: tt.return
 
 
@@ -112,7 +112,7 @@ tt.func @no_total_stages(%n: index) {
 
 // CHECK-LABEL: tt.func @no_total_stages(
 // CHECK-NOT: gpu.barrier
-// CHECK-NOT: amdgpu.cond_barrier
+// CHECK-NOT: amdg.cond_barrier
 // CHECK: scf.for
 // CHECK:   scf.execute_region
 // CHECK: tt.return

@@ -257,6 +257,9 @@ public:
 
   LogicalResult matchAndRewrite(scf::ExecuteRegionOp exec,
                                 PatternRewriter &rewriter) const override {
+    if (exec->getAttr("no_inline"))
+      return rewriter.notifyMatchFailure(exec, "explicit no_inline");
+
     // Only inline the stages created by the warp-pipeline frontend.
     if (!exec->getAttr("triton.warp_pipeline.stage"))
       return rewriter.notifyMatchFailure(exec, "not a warp-pipeline stage");
