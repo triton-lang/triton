@@ -71,7 +71,7 @@ def compute_pids(block_id, grid_m, grid_n, num_blocks, XCD_SWIZZLE: tl.constexpr
 
 
 @triton.jit
-def compute_offsets2(
+def compute_offsets(
     pid_z,
     pid_m,
     pid_k,
@@ -107,64 +107,6 @@ def compute_offsets2(
         off_w_z = block_schedule & 0x0000FFFF
         block_id = block_schedule >> 16
         off_x_slice = tl.load(XSliceOffs + off_w_z)
-        off_x_z, off_y_z = 0, 0
-        off_x_m = BLOCK_M * block_id
-    else:
-        tl.static_assert(RAGGED_DIMENSION is None)
-        off_x_k = pid_k * BLOCK_K_X
-        off_w_k = pid_k * PACKED_BLOCK_K_W
-        off_w_z, off_x_z, off_y_z, off_x_slice = pid_z, pid_z, pid_z, 0
-        off_x_m = BLOCK_M * pid_m
-    return (
-        off_w_z,
-        off_x_z,
-        off_y_z,
-        off_x_slice,
-        off_x_m,
-        off_x_k,
-        off_w_k,
-    )
-
-
-@triton.jit
-def compute_offsets(
-    pid_z,
-    pid_m,
-    pid_k,
-    BlockSchedule,
-    SliceOffs,
-    BlockOffs,
-    RAGGED_DIMENSION: tl.constexpr,
-    X_IS_PADDED: tl.constexpr,
-    W_IS_PADDED: tl.constexpr,
-    BLOCK_M: tl.constexpr,
-    BLOCK_K_X: tl.constexpr,
-    PACKED_BLOCK_K_W: tl.constexpr,
-    SPLIT_K: tl.constexpr,
-):
-    if RAGGED_DIMENSION == "K":
-        # pid_z indicates slice ID: experts are laid sequentially along the K dimension
-        # (i.e., we have columns for expert 0, and then expert 1, and then so on).
-        # pid_k is meaningless (always zero).
-        tl.static_assert(X_IS_PADDED or W_IS_PADDED, "At least one input must be padded!")
-        tl.static_assert(SPLIT_K == 1, "Not supported yet")
-        # tl.static_print("BLOCK_W", PACKED_BLOCK_K_W)
-        block_off_k = tl.load(BlockOffs + pid_z)
-        slice_off_k = tl.load(SliceOffs + pid_z)
-        off_x_m = BLOCK_M * pid_m
-        off_x_k = block_off_k * BLOCK_K_X if X_IS_PADDED else slice_off_k
-        off_w_k = block_off_k * PACKED_BLOCK_K_W if W_IS_PADDED else slice_off_k
-        # tl.device_print("off_x_k:", off_x_k)
-        # tl.device_print("off_w_k:", off_w_k)
-        off_w_z, off_x_z, off_x_slice = 0, 0, 0
-        off_y_z = pid_z
-    elif RAGGED_DIMENSION == "M":
-        off_x_k = pid_k * BLOCK_K_X
-        off_w_k = pid_k * PACKED_BLOCK_K_W
-        block_schedule = tl.load(BlockSchedule + pid_m)
-        off_w_z = block_schedule & 0x0000FFFF
-        block_id = block_schedule >> 16
-        off_x_slice = tl.load(SliceOffs + off_w_z)
         off_x_z, off_y_z = 0, 0
         off_x_m = BLOCK_M * block_id
     else:

@@ -15,7 +15,6 @@ from triton_kernels.numerics_details.flexpoint import (
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import (
     compute_offsets,
-    compute_offsets2,
     get_scaled_dot_format_string,
     make_matmul_repr,
     matmul_launch_metadata,
@@ -147,7 +146,7 @@ def _p_matmul_ogs(
     is_out_microscaled: tl.constexpr = stride_y_mx_z is not None
 
     if RAGGED_DIMENSION == "M":
-        useful_grid_m = tl.load(BlockOffs + N_SLICES)
+        useful_grid_m = tl.load(XBlockOffs + N_SLICES)
     else:
         useful_grid_m = grid_m
 
@@ -217,13 +216,7 @@ def _p_matmul_ogs(
         # ------------------------------------------------------------
         # prologue
         # ------------------------------------------------------------
-        # off_w_z, off_x_z, off_y_z, slice_off_m, off_m, off_k_x0, off_k_w0 = compute_offsets(
-        #     pid_z, pid_m, pid_k,
-        #     BlockSchedule, SliceOffs, BlockOffs,
-        #     RAGGED_DIMENSION, X_IS_PADDED, W_IS_PADDED,
-        #     BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K
-        # )
-        off_w_z, off_x_z, off_y_z, slice_off_m, off_m, off_k_x0, off_k_w0 = compute_offsets2(
+        off_w_z, off_x_z, off_y_z, slice_off_m, off_m, off_k_x0, off_k_w0 = compute_offsets(
             pid_z, pid_m, pid_k,
             XBlockSchedule, XSliceOffs, X_SLICE_SIZES_DIVISIBILITY,
             WBlockSchedule, WSliceOffs, W_SLICE_SIZES_DIVISIBILITY,
@@ -233,7 +226,7 @@ def _p_matmul_ogs(
 
         # TODO: if RAGGED_DIMENSION == "M"
         if RAGGED_DIMENSION == "M":
-            shape_m = tl.load(SliceSizes + off_w_z)
+            shape_m = tl.load(XSliceSizes + off_w_z)
         else:
             shape_m = M
 
@@ -243,7 +236,7 @@ def _p_matmul_ogs(
         if USE_GATHER_TMA:
             offs_m = off_m + tl.arange(0, BLOCK_M)
             mask_m = offs_m < shape_m
-            if BlockSchedule is None:
+            if XBlockSchedule is None:
                 offs_x_m = tl.load(GatherIndx + slice_off_m.to(index_type) + offs_m, mask=mask_m)
                 # Bump rows to account for the Z offset.
                 offs_x_m += off_x_z * (stride_x_z // stride_x_m)
@@ -275,7 +268,7 @@ def _p_matmul_ogs(
         # ------------------------------------------------------------
         # inner loop
         # ------------------------------------------------------------
-        loop_k = tl.load(SliceSizes + pid_z) if RAGGED_DIMENSION == "K" else K - off_k_x0
+        loop_k = tl.load(XSliceSizes + pid_z) if RAGGED_DIMENSION == "K" else K - off_k_x0
         k_tiles = tl.cdiv(loop_k, BLOCK_K * SPLIT_K)
         loop_bound = tl.maximum(k_tiles, 1)
         tl.assume(loop_bound > 0)  # Currently necessary for the compiler to flatten the loop properly.
@@ -371,20 +364,15 @@ def _p_matmul_ogs(
             tile_id1 += NUM_SMS
             pid_s1, pid_m1, pid_n1, pid_k1 = compute_pids(tile_id1, useful_grid_m, grid_n, num_blocks, XCD_SWIZZLE, GROUP_M, SPLIT_K)
             expt_id1, _, start_z1, start_m1, off_m1, _, _ = compute_offsets(
-                pid_s1, pid_m1, pid_k1,
-                BlockSchedule, SliceOffs, BlockOffs,
-                RAGGED_DIMENSION, X_IS_PADDED, W_IS_PADDED,
-                BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K)
-            # expt_id1, _, start_z1, start_m1, off_m1, _, _ = compute_offsets2(
-            #     pid_z, pid_m, pid_k,
-            #     XBlockSchedule, XSliceOffs, X_SLICE_SIZES_DIVISIBILITY,
-            #     WBlockSchedule, WSliceOffs, W_SLICE_SIZES_DIVISIBILITY,
-            #     RAGGED_DIMENSION,
-            #     BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K
-            # )
+                pid_z, pid_m, pid_k,
+                XBlockSchedule, XSliceOffs, X_SLICE_SIZES_DIVISIBILITY,
+                WBlockSchedule, WSliceOffs, W_SLICE_SIZES_DIVISIBILITY,
+                RAGGED_DIMENSION,
+                BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K
+            )
             off_n1 = pid_n1 * BLOCK_N
             if RAGGED_DIMENSION == "M":
-                eM1 = tl.load(SliceSizes + expt_id1)
+                eM1 = tl.load(XSliceSizes + expt_id1)
             else:
                 eM1 = M
         else:
