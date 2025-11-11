@@ -211,7 +211,7 @@ public:
       return rewriter.notifyMatchFailure(op, "NYI: non-mfma32/16 intrinsics");
 
     int numThreads = lookupThreadsPerWarp(rewriter);
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto [laneId, warpId] = targetInfo.getLaneAndWarpId(rewriter, loc);
 
     bool useFp16 = op.getType().getElementType().isF16();
     Type retElemType = useFp16 ? f16_ty : bf16_ty;

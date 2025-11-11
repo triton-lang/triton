@@ -145,7 +145,7 @@ struct AssertInThreadOpConversion
     }
 
     // Print the message only for the first thread
-    Value threadId = getThreadId(*b.builder, loc);
+    Value threadId = targetInfo.getThreadId(rewriter, loc);
     Value zero = b.int_val(threadId.getType().getIntOrFloatBitWidth(), 0);
     Value threadIdIsZero = b.icmp_eq(threadId, zero);
     condition = b.and_(condition, threadIdIsZero);

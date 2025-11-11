@@ -1,4 +1,5 @@
 #include "Conversion/ProtonGPUToLLVM/Utility.h"
+#include "Conversion/ProtonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir {
@@ -67,7 +68,8 @@ namespace proton::gpu {
 
 CircularStoreDataPack
 lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
-                           ConversionPatternRewriter &rewriter) {
+                           ConversionPatternRewriter &rewriter,
+                           const proton::gpu::TargetInfoBase &targetInfo) {
   auto loc = op.getLoc();
   auto mod = op.getOperation()->getParentOfType<ModuleOp>();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -131,7 +133,7 @@ lowerCircularStoreOpHelper(CircularStoreOp op, Value segmentStruct,
 
   // Compute the predicate for the writer.
   const int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-  Value curThreadId = getThreadId(rewriter, loc);
+  Value curThreadId = targetInfo.getThreadId(rewriter, loc);
   Value isWarpMaster =
       b.icmp_eq(b.urem(curThreadId, b.i32_val(warpSize)), b.i32_val(0));
   Value isWriter;

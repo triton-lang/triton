@@ -94,9 +94,6 @@ public:
 
   virtual int getAddressSpace(Attribute addressSpace) const = 0;
 
-  virtual std::pair<Value, Value> getLaneAndWarpId(RewriterBase &rewriter,
-                                                   Location loc) const = 0;
-
   virtual bool supportVectorizedAtomics() const = 0;
 
   virtual bool supportLdMatrix() const { return false; }
@@ -108,6 +105,24 @@ public:
   // lowering to LLVM. `llLoadOp` is the generated LLVM load op.
   virtual void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                                      Operation *llLoadOp) const {}
+
+  // -----------------------------------------------------------------------
+  // Hardware Indices
+  // -----------------------------------------------------------------------
+
+  // If an operation is contained within a warp specialize region, this returns
+  // the thread ID offset of that warpgroup.
+  virtual std::optional<int> getWarpGroupStartThreadId(Block *block) const;
+
+  // Returns CTA level thread ID.
+  virtual Value getThreadId(RewriterBase &rewriter, Location loc) const;
+
+  // Get the lane ID, which is index of the thread within its warp.
+  Value getLaneId(RewriterBase &rewriter, Location loc) const;
+
+  // Get the lane ID and warp ID
+  virtual std::pair<Value, Value> getLaneAndWarpId(RewriterBase &rewriter,
+                                                   Location loc) const;
 
   virtual ~TargetInfoBase() {}
 };

@@ -8,6 +8,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#include "nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h"
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -197,7 +198,8 @@ private:
 
 class WarpIdOpPattern : public OpRewritePattern<ttn::WarpIdOp> {
 public:
-  using OpRewritePattern<ttn::WarpIdOp>::OpRewritePattern;
+  WarpIdOpPattern(MLIRContext *context, NVIDIA::TargetInfo &targetInfo)
+      : OpRewritePattern(context), targetInfo(targetInfo) {}
 
   LogicalResult matchAndRewrite(ttn::WarpIdOp op,
                                 PatternRewriter &rewriter) const override {
@@ -214,7 +216,7 @@ public:
     // within the warp group.
     Value tid = NVVM::ThreadIdXOp::create(rewriter, loc, i32_ty);
     if (std::optional<int> startId =
-            getWarpGroupStartThreadId(rewriter.getInsertionBlock()))
+            targetInfo.getWarpGroupStartThreadId(rewriter.getInsertionBlock()))
       tid = LLVM::SubOp::create(rewriter, loc, tid, b.i32_val(*startId));
 
     Value warpId = b.udiv(tid, b.i32_val(32));
@@ -225,6 +227,8 @@ public:
     rewriter.replaceOp(op, warpId);
     return success();
   }
+
+  const NVIDIA::TargetInfo &targetInfo;
 };
 
 class ClusterCTAIdOpPattern : public OpRewritePattern<ttn::ClusterCTAIdOp> {
@@ -638,13 +642,19 @@ public:
   using impl::ConvertNVGPUToLLVMBase<
       ConvertNVGPUToLLVM>::ConvertNVGPUToLLVMBase;
 
+  ConvertNVGPUToLLVM(int32_t computeCapability, int32_t ptxVersion)
+      : ConvertNVGPUToLLVMBase({computeCapability, ptxVersion}) {}
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     RewritePatternSet patterns(context);
+    mlir::triton::NVIDIA::TargetInfo targetInfo(computeCapability, ptxVersion);
 
     patterns.add<ClusterCTAIdOpPattern, WGMMAOpPattern, LoadAcquireOpPattern,
-                 WGMMAWaitGroupOpPattern, WarpIdOpPattern>(context);
+                 WGMMAWaitGroupOpPattern>(context);
+
+    patterns.add<WarpIdOpPattern>(context, targetInfo);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
@@ -685,5 +695,19 @@ nvgpu::rewriteAsPtxAsm(Operation *op, PatternRewriter &rewriter,
   return success();
 }
 
+} // namespace triton
+} // namespace mlir
+
+namespace mlir {
+namespace triton {
+
+std::unique_ptr<OperationPass<ModuleOp>> createConvertNVGPUToLLVMPass() {
+  return std::make_unique<createConvertNVGPUToLLVMPass>();
+}
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertNVGPUToLLVMPass(int32_t computeCapability, int32_t ptxVersion) {
+  return std::make_unique<createConvertNVGPUToLLVMPass>(computeCapability,
+                                                        ptxVersion);
+}
 } // namespace triton
 } // namespace mlir

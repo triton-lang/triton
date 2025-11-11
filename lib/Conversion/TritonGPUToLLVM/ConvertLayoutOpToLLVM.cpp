@@ -61,16 +61,16 @@ struct ConvertLayoutOpConversion
     } else if (llvm::is_contained(dims, kWarp)) {
       // Case 2: Transfer between values in the same CTA, in which case we move
       //         values through shared memory.
-      transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter);
+      transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter, targetInfo);
       return success();
     } else if (llvm::is_contained(dims, kLane)) {
       // Case 3. Transfer between values in the same warp, in which case we try
       //         to move values using warp shuffles, though if the pattern is
       //         expensive enough we fall back to using shared memory
       if (cvtNeedsWarpShuffle(srcTy, dstTy))
-        return transferWithinWarp(op, adaptor, rewriter);
+        return transferWithinWarp(op, adaptor, rewriter, targetInfo);
 
-      transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter);
+      transferWithinBlockSwizzling(op, adaptor.getSrc(), rewriter, targetInfo);
       return success();
     } else if (llvm::is_contained(dims, kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
@@ -227,7 +227,8 @@ struct ConvertLayoutOpConversion
   }
 
   void transferWithinBlockSwizzling(ConvertLayoutOp op, Value src,
-                                    ConversionPatternRewriter &rewriter) const {
+                                    ConversionPatternRewriter &rewriter,
+                                    const TargetInfoBase &targetInfo) const {
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
     auto srcTy = op.getSrc().getType();
@@ -260,7 +261,8 @@ struct ConvertLayoutOpConversion
   // Use warp shuffles to implement a layout conversion where data only needs to
   // be moved within warps.
   LogicalResult transferWithinWarp(ConvertLayoutOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter) const {
+                                   ConversionPatternRewriter &rewriter,
+                                   const TargetInfoBase &targetInfo) const {
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -370,10 +372,11 @@ struct ConvertLayoutOpConversion
     SmallVector<Value> outVals;
     if (m == 1 && pLaneIsTrivial && isShippable(mixedTranspositions[0])) {
       outVals = transferWithinWarpShipImpl(loc, rewriter, inVals, nPack,
-                                           mixedTranspositions[0]);
+                                           mixedTranspositions[0], targetInfo);
     } else {
       outVals = transferWithinWarpSwapImpl(loc, rewriter, inVals, nPack, pLane,
-                                           pLaneIsTrivial, mixedTranspositions);
+                                           pLaneIsTrivial, mixedTranspositions,
+                                           targetInfo);
     }
 
     // Unpack registers if needed.
@@ -418,10 +421,12 @@ struct ConvertLayoutOpConversion
     return success();
   }
 
-  SmallVector<Value> transferWithinWarpSwapImpl(
-      Location loc, ConversionPatternRewriter &rewriter, ArrayRef<Value> inVals,
-      int nPack, const LinearLayout &pLane, bool pLaneIsTrivial,
-      ArrayRef<TranspositionInfo> mixedTranspositions) const {
+  SmallVector<Value>
+  transferWithinWarpSwapImpl(Location loc, ConversionPatternRewriter &rewriter,
+                             ArrayRef<Value> inVals, int nPack,
+                             const LinearLayout &pLane, bool pLaneIsTrivial,
+                             ArrayRef<TranspositionInfo> mixedTranspositions,
+                             const TargetInfoBase &targetInfo) const {
     auto *ctx = rewriter.getContext();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     StringAttr kReg = str_attr("register");
@@ -453,7 +458,7 @@ struct ConvertLayoutOpConversion
     // `(1 - (1/2)^m) * numRegs` shuffles in total. If `pLane` is nontrivial,
     // then we can conjugate its effects through the first two stages and fuse
     // it with the second stage, resulting in `numRegs` shuffles instead.
-    Value laneId = getLaneId(rewriter, loc);
+    Value laneId = targetInfo.getLaneId(rewriter, loc);
     auto pLaneInv = pLane.invert();
     const auto &pLInvBases = pLaneInv.getBases().lookup(kLane);
 
@@ -526,10 +531,9 @@ struct ConvertLayoutOpConversion
     return vals;
   }
 
-  SmallVector<Value>
-  transferWithinWarpShipImpl(Location loc, ConversionPatternRewriter &rewriter,
-                             ArrayRef<Value> inVals, int nPack,
-                             TranspositionInfo t) const {
+  SmallVector<Value> transferWithinWarpShipImpl(
+      Location loc, ConversionPatternRewriter &rewriter, ArrayRef<Value> inVals,
+      int nPack, TranspositionInfo t, const TargetInfoBase &targetInfo) const {
     // Implements the effects of a single mixed transposition as in
     // `transferWithinWarpSwapImpl`, but uses auxiliary registers to hold the
     // values to be shuffled, resulting in fewer emitted instructions.
@@ -540,7 +544,7 @@ struct ConvertLayoutOpConversion
     int numTiles = numRegs / tileSize;
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value laneId = getLaneId(rewriter, loc);
+    Value laneId = targetInfo.getLaneId(rewriter, loc);
     Value lBitVal = b.and_(laneId, b.i32_val(1 << lIdx));
     Value lBitOff = b.icmp_eq(lBitVal, b.i32_val(0));
     SmallVector<Value> outVals(numRegs);

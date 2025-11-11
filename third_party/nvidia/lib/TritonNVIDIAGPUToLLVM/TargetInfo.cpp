@@ -611,9 +611,4 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return computeCapability >= 90 && ptxVersion >= 81;
 }
 
-std::pair<Value, Value> TargetInfo::getLaneAndWarpId(RewriterBase &rewriter,
-                                                     Location loc) const {
-  return mlir::getLaneAndWarpId(rewriter, loc);
-}
-
 } // namespace mlir::triton::NVIDIA

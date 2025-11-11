@@ -314,7 +314,7 @@ public:
     StringAttr kOffset = str_attr("offset");
     StringAttr kIteration = str_attr("iteration");
 
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto [laneId, warpId] = targetInfo.getLaneAndWarpId(rewriter, loc);
 
     auto scratchConfig = triton::AMD::getScratchConfigForCvt(
         op.getSrc().getType(), op.getType());

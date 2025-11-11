@@ -180,7 +180,7 @@ Value AtomicRMWEmitter::emitAtomicRMW(RewriterBase &rewriter, Value rmwPtr,
     Value numActiveLanes =
         b.trunc(i32_ty, generatePopcount64(rewriter, maskFlag));
 
-    Value laneID = b.urem(getThreadId(rewriter, loc), waveSize);
+    Value laneID = b.urem(targetInfo.getThreadId(rewriter, loc), waveSize);
     rmwMask = b.icmp_ult(laneID, numActiveLanes);
   }
 
@@ -212,7 +212,7 @@ Value AtomicRMWEmitter::emitPairedAtomicForEvenTID(RewriterBase &rewriter,
   auto loc = rmwPtr.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value i64Ones = b.i64_val(~uint64_t(0));
-  Value isOddI32 = b.urem(getThreadId(rewriter, loc), b.i32_val(2));
+  Value isOddI32 = b.urem(targetInfo.getThreadId(rewriter, loc), b.i32_val(2));
   // First check if odd threads hold adjacent ptrs to even ones.
   Value castedAddr = b.ptrtoint(i64_ty, rmwPtr);
   // Set casted addr to all ones if the thread is disabled.
@@ -319,8 +319,9 @@ Value AtomicRMWEmitter::emitPairedAtomicForEvenTID(RewriterBase &rewriter,
       packF16Ty, atomRes,
       b.extract_element(valueElemTy, unpackedDppRes, b.i32_val(1)),
       b.i32_val(1));
-  return b.extract_element(valueElemTy, atomRes,
-                           b.urem(getThreadId(rewriter, loc), b.i32_val(2)));
+  return b.extract_element(
+      valueElemTy, atomRes,
+      b.urem(targetInfo.getThreadId(rewriter, loc), b.i32_val(2)));
 }
 
 Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,

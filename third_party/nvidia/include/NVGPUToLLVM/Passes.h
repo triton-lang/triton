@@ -11,6 +11,9 @@ namespace triton {
 #define GEN_PASS_DECL
 #include "nvidia/include/NVGPUToLLVM/Passes.h.inc"
 
+std::unique_ptr<OperationPass<ModuleOp>>
+createConvertNVGPUToLLVMPass(int32_t computeCapability, int32_t ptxVersion);
+
 #define GEN_PASS_REGISTRATION
 #include "nvidia/include/NVGPUToLLVM/Passes.h.inc"
 
