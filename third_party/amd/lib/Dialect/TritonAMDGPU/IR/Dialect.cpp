@@ -28,6 +28,7 @@
 #include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Interfaces.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 
@@ -684,6 +685,38 @@ LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
   if (!paddedEnc && !swizzledEnc)
     return emitOpError("Invalid shared memory layout for TDM");
 
+  return success();
+}
+
+// -- InitBarrierOp --
+LogicalResult InitBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  if (getCount() < 1)
+    return emitOpError("count must be greater than or equal to 1");
+  return success();
+}
+
+// -- WaitBarrierOp --
+LogicalResult WaitBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  return success();
+}
+
+// -- ArriveBarrierOp --
+LogicalResult ArriveBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  if (getCount() < 1)
+    return emitOpError("count must be greater than or equal to 1");
+  return success();
+}
+
+// -- AsyncCopyMbarrierArriveOp --
+LogicalResult AsyncCopyMbarrierArriveOp::verify() {
+  if (failed(verifyBarrierType(*this, getBarrier().getType())))
+    return failure();
   return success();
 }
 

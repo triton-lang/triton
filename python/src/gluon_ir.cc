@@ -819,10 +819,10 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_tdm_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
-              Value result) {
+              Value result, Value barrier) {
              Value pred = self.create<arith::ConstantIntOp>(1, 1);
-             self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(descPtr, indices,
-                                                            result, pred);
+             self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(
+                 descPtr, indices, result, pred, barrier);
            })
       .def("create_async_tdm_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
@@ -830,10 +830,27 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(descPtr, indices,
                                                             src);
            })
-      .def("create_async_tdm_wait", [](GluonOpBuilder &self, int num) {
-        ValueRange tokens;
-        self.create<ttag::AsyncTDMWait>(tokens, num);
-      });
+      .def("create_async_tdm_wait",
+           [](GluonOpBuilder &self, int num) {
+             ValueRange tokens;
+             self.create<ttag::AsyncTDMWait>(tokens, num);
+           })
+      .def("create_async_copy_lds_barrier_arrive",
+           [](GluonOpBuilder &self, Value mbarrier) {
+             self.create<ttag::AsyncCopyMbarrierArriveOp>(mbarrier);
+           })
+      .def("create_lds_barrier_init",
+           [](GluonOpBuilder &self, Value memDesc, int count) {
+             self.create<ttag::InitBarrierOp>(memDesc, count);
+           })
+      .def("create_lds_barrier_wait",
+           [](GluonOpBuilder &self, Value memDesc, Value phase) {
+             self.create<ttag::WaitBarrierOp>(memDesc, phase);
+           })
+      .def("create_lds_barrier_arrive",
+           [](GluonOpBuilder &self, Value memDesc, int count) -> Value {
+             return self.create<ttag::ArriveBarrierOp>(memDesc, count);
+           });
 
   m.def(
       "compute_tmem_reg_layout",
