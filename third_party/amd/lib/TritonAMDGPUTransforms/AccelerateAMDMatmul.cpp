@@ -6,6 +6,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "third_party/amd/include/Analysis/AxisInfoExt.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -542,16 +543,66 @@ SmallVector<unsigned, 2> deduceTilesPerWarpForScale(
   return chosen;
 }
 
+// Detect if transposed layout is needed to enable large vectorization of global
+// stores or intra warp conversion.
+bool needTransposedMfmaLayout(tt::DotOp dotOp, int mfmaVersion, int mDim,
+                              int nDim, bool is16BitElemTy,
+                              bool hasPreShuffledScale,
+                              ArrayRef<unsigned> warpsPerTile,
+                              ttg::AMDMfmaEncodingAttr &mfmaEnc,
+                              AMD::ModuleAxisInfoAnalysis &axisAnalysisPass) {
+  // We always transpose 64x4 mfma in order to use the mfma broadcast.
+  if (mDim == 64 && nDim == 4)
+    return true;
+
+  // We can not support transposed mfma 4x64 as it requires to broadcast the
+  // operand A.
+  if (mDim == 4 && nDim == 64)
+    return false;
+
+  // Set isTransposed based on how the result of dotOp is stored.
+  // If the store’s contiguity aligns with the MFMA layout order, keep the
+  // isTranposed flag set to true. Otherwise, set it to false. This allows us to
+  // vectorize the store along the dimension where elements are accessed
+  // contiguously.
+  if (!isChainDotHead(dotOp))
+    return mlir::LLVM::AMD::isStoredContigWithMfmaLayout(
+        dotOp, axisAnalysisPass, mfmaEnc);
+
+  RankedTensorType oldRetType = dotOp.getType();
+  auto retShape = oldRetType.getShape();
+  unsigned rank = oldRetType.getRank();
+  // Set isTransposed to enable intra warp conversion for
+  // the mfma16x16 layout of a dot op, depending on whether
+  // its result is used by operand 0 or operand 1 of another dot op.
+  if (mfmaVersion == 4 && is16BitElemTy && mDim == 16 && nDim == 16 &&
+      rank == 2 && !hasPreShuffledScale) {
+    if (isChainDotHead(dotOp, 0u) &&
+        retShape.front() >= 16 * 2 * warpsPerTile.front() &&
+        retShape.back() == 16 && warpsPerTile.back() == 1) {
+      return true;
+    } else if (isChainDotHead(dotOp, 1u) && retShape.front() == 16 &&
+               retShape.back() >= 16 * 2 * warpsPerTile.back() &&
+               warpsPerTile.front() == 1) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 class BlockedToMFMA : public OpRewritePattern<tt::DotOp> {
   int mfmaVersion;
   int nonKDim;
   int kPack;
+  AMD::ModuleAxisInfoAnalysis &axisAnalysisPass;
 
 public:
   BlockedToMFMA(MLIRContext *context, int mfmaVersion, int nonKDim, int kPack,
+                AMD::ModuleAxisInfoAnalysis &axisAnalysisPass,
                 PatternBenefit benefit = 1)
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
-        nonKDim(nonKDim), kPack(kPack) {}
+        nonKDim(nonKDim), kPack(kPack), axisAnalysisPass(axisAnalysisPass) {}
 
   LogicalResult matchAndRewrite(tt::DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
@@ -619,10 +670,6 @@ public:
     else
       mfmaAccType = rewriter.getF32Type();
 
-    // Use transposed mfma layout to enable larger vectorization for global
-    // store instructions. We can not support transposed mfma 4x64 as it
-    // requires to broadcast the operand A.
-    bool isTransposed = !(mDim == 4 && nDim == 64);
     auto aElemTy = mfmaInstr->aElementType;
     auto is16BitElemTy = (aElemTy.isF16() || aElemTy.isBF16());
 
@@ -642,7 +689,7 @@ public:
 
     bool hasPreShuffledScale = (tilesPerWarp[0] > 1 && tilesPerWarp[1] > 1);
 
-    // Set tilesPerWarp and isTransposed to enable intra warp conversion for
+    // Set tilesPerWarp to enable intra warp conversion for
     // the mfma16x16 layout of a dot op, depending on whether
     // its result is used by operand 0 or operand 1 of another dot op.
     if (mfmaVersion == 4 && is16BitElemTy && mDim == 16 && nDim == 16 &&
@@ -650,12 +697,10 @@ public:
       if (isChainDotHead(dotOp, 0u) &&
           retShape.front() >= 16 * 2 * warpsPerTile.front() &&
           retShape.back() == 16 && warpsPerTile.back() == 1) {
-        isTransposed = true;
         tilesPerWarp = {2, 1};
       } else if (isChainDotHead(dotOp, 1u) && retShape.front() == 16 &&
                  retShape.back() >= 16 * 2 * warpsPerTile.back() &&
                  warpsPerTile.front() == 1) {
-        isTransposed = false;
         tilesPerWarp = {1, 2};
       }
     }
@@ -666,9 +711,18 @@ public:
 
     ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(), mfmaVersion, warpsPerTile, {mDim, nDim, kDim},
-        isTransposed, CTALayout, tilesPerWarp,
+        /*isTransposed=*/true, CTALayout, tilesPerWarp,
         mfmaAccType.getIntOrFloatBitWidth());
 
+    if (!needTransposedMfmaLayout(dotOp, mfmaVersion, mDim, nDim, is16BitElemTy,
+                                  hasPreShuffledScale, warpsPerTile, mfmaEnc,
+                                  axisAnalysisPass)) {
+      mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+          oldRetType.getContext(), mfmaVersion, warpsPerTile,
+          {mDim, nDim, kDim},
+          /*isTransposed=*/false, CTALayout, tilesPerWarp,
+          mfmaAccType.getIntOrFloatBitWidth());
+    }
     // convert accumulator
     auto oldAcc = dotOp.getC();
     auto newAcc = convertAndCastTensor(rewriter, oldAcc, mfmaEnc, mfmaAccType);
@@ -768,12 +822,14 @@ class ScaledBlockedToMFMA final : public OpRewritePattern<triton::DotScaledOp> {
   int mfmaVersion;
   int nonKDim;
   int kPack;
+  AMD::ModuleAxisInfoAnalysis &axisAnalysisPass;
 
 public:
   ScaledBlockedToMFMA(MLIRContext *context, int mfmaVersion, int nonKDim,
-                      int kPack, PatternBenefit benefit = 1)
+                      int kPack, AMD::ModuleAxisInfoAnalysis &axisAnalysisPass,
+                      PatternBenefit benefit = 1)
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
-        nonKDim(nonKDim), kPack(kPack) {}
+        nonKDim(nonKDim), kPack(kPack), axisAnalysisPass(axisAnalysisPass) {}
 
   LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
                                 PatternRewriter &rewriter) const override {
@@ -1785,6 +1841,8 @@ struct TritonAMDGPUAccelerateMatmulPass
     ModuleOp m = getOperation();
 
     RewritePatternSet mfmaPatterns(context);
+    AMD::ModuleAxisInfoAnalysis axisInfoAnalysis(m);
+
     switch (auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName)) {
     case ISAFamily::GFX1250:
       mfmaPatterns.add<ScaledBlockedToScaledWMMAF8F6F4>(
@@ -1801,6 +1859,7 @@ struct TritonAMDGPUAccelerateMatmulPass
     case ISAFamily::CDNA1:
       mfmaPatterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
+          axisInfoAnalysis,
           /*benefit=*/2);
       break;
     case ISAFamily::RDNA3:
