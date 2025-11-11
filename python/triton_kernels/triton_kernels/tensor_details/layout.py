@@ -1,5 +1,6 @@
 from .layout_details.base import Layout
 from .layout_details.blackwell_scale import BlackwellMXScaleLayout
+from .layout_details.blackwell_scale import BlackwellActMXScaleLayout
 from .layout_details.blackwell_value import BlackwellMXValueLayout
 from .layout_details.hopper_scale import HopperMXScaleLayout
 from .layout_details.hopper_value import HopperMXValueLayout
@@ -15,6 +16,7 @@ __all__ = [
     "HopperMXValueLayout",
     "CDNA4MXScaleLayout",
     "StridedLayout",
+    "BlackwellActMXScaleLayout",
 ]
 
 
@@ -37,3 +39,9 @@ def make_default_matmul_mxfp4_w_scale_layout(mx_axis: int, num_warps: int = 8):
             return HopperMXScaleLayout, {"mx_axis": mx_axis, "num_warps": num_warps}
 
     return StridedLayout, dict()
+
+
+def make_default_matmul_mxfp8_act_scale_layout():
+    if cuda_capability_geq(10):
+        return BlackwellActMXScaleLayout
+    return StridedLayout
