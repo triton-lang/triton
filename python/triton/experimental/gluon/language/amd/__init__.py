@@ -6,8 +6,3 @@ from . import gfx1250
 from .warp_pipeline import warp_pipeline_stage
 
 __all__ = ["AMDMFMALayout", "AMDWMMALayout", "cdna3", "cdna4", "rdna3", "rdna4", "gfx1250", "warp_pipeline_stage"]
-
-
-@builtin
-def split_warp_pipeline(_semantic=None):
-    return _semantic.builder.create_warp_pipeline_border()
