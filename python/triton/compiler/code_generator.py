@@ -1161,9 +1161,9 @@ class CodeGenerator(ast.NodeVisitor):
             # visit iterator arguments
             # note: only `range` iterator is supported now
             # collect lower bound (lb), upper bound (ub), and step
-            lb = iter_args[0] if len(iter_args) > 1 else self.visit(ast.Num(0))
+            lb = iter_args[0] if len(iter_args) > 1 else self.visit(ast.Constant(0))
             ub = iter_args[1] if len(iter_args) > 1 else self.visit(node.iter.args[0])
-            step = iter_args[2] if len(iter_args) > 2 else self.visit(ast.Num(1))
+            step = iter_args[2] if len(iter_args) > 2 else self.visit(ast.Constant(1))
         else:
             raise RuntimeError('Only `range` and `static_range` iterators are currently supported')
         # handle negative constant step (not supported by scf.for in MLIR)
