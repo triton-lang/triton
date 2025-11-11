@@ -120,7 +120,7 @@ class BlockedLayout(DistributedLayout):
         cta_split_num = stringify(self.cta_split_num)
         cta_order = stringify(self.cta_order)
         two_cta_dim = "" if self.two_cta_dim is None else str(self.two_cta_dim)
-        return f"B{size_per_thread}B{threads_per_warp}B{warps_per_cta}B{order}B{ctas_per_cga}B{cta_split_num}B{cta_order}B{two_cta_dim}B"
+        return f"B{size_per_thread}_{threads_per_warp}_{warps_per_cta}_{order}_{ctas_per_cga}_{cta_split_num}_{cta_order}_{two_cta_dim}B"
 
     def __hash__(self):
         return hash((
