@@ -15,9 +15,9 @@ def _realize_cta_layout(layout, rank):
     assert len(ctas_per_cga) == rank
     assert len(cta_split_num) == rank
     assert len(cta_order) == rank
-    object.__setattr__(layout, "ctas_per_cga", ctas_per_cga)
-    object.__setattr__(layout, "cta_split_num", cta_split_num)
-    object.__setattr__(layout, "cta_order", cta_order)
+    object.__setattr__(layout, "ctas_per_cga", _unwrap_if_constexpr(ctas_per_cga))
+    object.__setattr__(layout, "cta_split_num", _unwrap_if_constexpr(cta_split_num))
+    object.__setattr__(layout, "cta_order", _unwrap_if_constexpr(cta_order))
 
     two_cta_dim = getattr(layout, "two_cta_dim", None)
     two_cta_dim = _unwrap_if_constexpr(two_cta_dim)
