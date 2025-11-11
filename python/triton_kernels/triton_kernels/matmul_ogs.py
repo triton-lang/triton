@@ -7,6 +7,7 @@ import triton
 from enum import Enum, auto
 import math
 # utilities
+from dataclasses import replace
 from triton_kernels import target_info
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.target_info import is_cuda
@@ -20,6 +21,7 @@ from .specialize import FnSpecs, SpecializationModule, ClosureArg
 from .tensor import Storage, Tensor, FP4, bitwidth, wrap_torch_tensor, RaggedTensorMetadata
 from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
+from .tensor_details.ragged_tensor import ragged_metadata_fields
 
 
 @dataclass
@@ -377,7 +379,13 @@ def matmul_ogs(x, w, bias,
     # determine shapes
     has_gather = gather_indx is not None
     has_scatter = scatter_indx is not None
-    is_ragged = x_ragged_metadata is not None and inner_routing_data is None
+    is_x_ragged = x_ragged_metadata is not None
+    is_w_ragged = w_ragged_metadata is not None
+    is_y_ragged = is_x_ragged and w_ragged_metadata is None
+    if inner_routing_data is not None:
+        x_ragged_metadata2 = replace(x_ragged_metadata)
+        if inner_routing_data.x_is_padded:
+            x_ragged_metadata2.slice_offs = x_ragged_metadata2.block_offs(inner_routing_data.block_k) * inner_routing_data.block_k
     M = x.shape[-2] if gather_indx is None else gather_indx.src_indx.shape[0]
     if w_ragged_metadata is not None:
         batch_size = w_ragged_metadata.n_slices
@@ -399,12 +407,12 @@ def matmul_ogs(x, w, bias,
         x.numel() > 0 and x.storage.is_tma_compliant() and
         w.numel() > 0 and w.storage.is_tma_compliant() and
         (w_scale is None or w_scale.storage.is_tma_compliant()) and
-        (not is_ragged or x.stride(-1) == 1) and
+        (not is_x_ragged or x.stride(-1) == 1) and
         # Currently we don't support tma if y is column major; may revisit later if this becomes an issue.
         (y is None or y.stride(-1) == 1) and
         (y_acc_in is None or y_acc_is_y) and
         # if ragged dimension is K, w must be either padded or row major to ensure alignment
-        (inner_routing_data is None or w.stride(-1) == 1 or inner_routing_data.w_is_padded)
+        (not is_w_ragged or w.stride(-1)==1 or w_ragged_metadata.slice_sizes_divisibility is not None)
     )
     has_gather_tma = has_gather and target_info.has_tma_gather()
     # hopper w/ mxfp4 doesn't support TMA
@@ -414,20 +422,24 @@ def matmul_ogs(x, w, bias,
         batch_size, M, N, w.shape[-2], x_ragged_metadata,
         can_use_tma, can_use_split_k, epilogue.effective_itemsize,
         x_transpose, y_acc_in is not None,
-        inner_routing_data.block_k if inner_routing_data is not None else None,
+        block_k = None if w_ragged_metadata is None else (x_ragged_metadata.slice_sizes_divisibility  or w_ragged_metadata.slice_sizes_divisibility),
     )
-    if inner_routing_data is not None:
-        assert opt_flags.block_k == inner_routing_data.block_k
+    expt_data_x2 = tuple([None] * 6) if x_ragged_metadata is None and inner_routing_data is None else ragged_metadata_fields(x_ragged_metadata if inner_routing_data is None else x_ragged_metadata2, opt_flags.block_m if inner_routing_data is None else inner_routing_data.block_k)
+    if w_ragged_metadata is not None:
+        if w_ragged_metadata.slice_sizes_divisibility is not None:
+            assert opt_flags.block_k % w_ragged_metadata.slice_sizes_divisibility == 0
+        if x_ragged_metadata.slice_sizes_divisibility is not None:
+            assert opt_flags.block_k % x_ragged_metadata.slice_sizes_divisibility == 0
         assert opt_flags.split_k == 1
         # For unpadded (row major) x, we cannot use tma because memory access isn't aligned.
-        x_has_tma = opt_flags.is_persistent and (x.stride(-1) != 1 or inner_routing_data.x_is_padded)
+        x_has_tma = opt_flags.is_persistent and (x.stride(-1) != 1 or (x_ragged_metadata.slice_sizes_divisibility is not None))
         # If TMA is used, limit is handled automatically, so we can pretend K is "even".
         # (For unpadded input, we assume that the first block_k unused rows are zero-filled,
         # when routing_data.expt_hist.sum() is less than K or K_W.)
         if opt_flags.is_persistent:
-            even_K = x_has_tma or inner_routing_data.x_is_padded
+            even_K = x_has_tma or (x_ragged_metadata.slice_sizes_divisibility is not None)
         else:
-            even_K = inner_routing_data.x_is_padded and inner_routing_data.w_is_padded
+            even_K = x_ragged_metadata.slice_sizes_divisibility is not None and w_ragged_metadata.slice_sizes_divisibility is not None
         x_ragged_metadata = None
     else:
         batch_size = w.shape[0] if x_ragged_metadata is None and w.ndim == 3 else 1
@@ -477,6 +489,7 @@ def matmul_ogs(x, w, bias,
     # moe metadata
     block_m = opt_flags.block_m
     expt_data_args = InnerRoutingData.make_kernel_args(inner_routing_data or x_ragged_metadata, block_m)
+    expt_data_w = tuple([None] * 6) if w_ragged_metadata is None else ragged_metadata_fields(w_ragged_metadata, opt_flags.block_k)
     # spmd grid
     grid_m = triton.cdiv(M, opt_flags.block_m)
     if x_ragged_metadata is not None:
@@ -502,7 +515,7 @@ def matmul_ogs(x, w, bias,
         y_acc_strides = (None, None, None)
 
     x_tma_block_size = [1, opt_flags.block_k] if has_gather_tma else [1, opt_flags.block_m, opt_flags.block_k]
-    x_tma_mode = None if not x_has_tma else "ragged" if is_ragged and not has_gather_tma else "dense"
+    x_tma_mode = None if not x_has_tma else "ragged" if is_x_ragged and not has_gather_tma else "dense"
     x_tensor_or_tma = x_storage.make_tma(x_tma_block_size, x_tma_mode) if x_has_tma else x_storage.data
     # create tma descriptor for y
     y_has_tma = (
@@ -511,7 +524,7 @@ def matmul_ogs(x, w, bias,
     )
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
     y_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
-    y_tma_mode = None if not y_has_tma else "ragged" if is_ragged and not has_scatter_tma else "dense"
+    y_tma_mode = None if not y_has_tma else "ragged" if is_y_ragged and not has_scatter_tma else "dense"
     y_tensor_or_tma = y_storage.make_tma(y_tma_block_size, y_tma_mode) if y_has_tma else y_storage.data
     # create tma descriptor for w
     w_has_tma = opt_flags.is_persistent
@@ -548,6 +561,10 @@ def matmul_ogs(x, w, bias,
         "reduce_rank": fused_comm.reduce_rank,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}
+    # print(expt_data_args)
+    # print(opt_flags.block_k)
+    # print(expt_data_x2)
+    # print(expt_data_w)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
@@ -571,6 +588,8 @@ def matmul_ogs(x, w, bias,
                    None if scatter_indx is None else scatter_indx.dst_indx,
                    None if scatter_indx is None else scatter_indx.dst_indx.shape[0],
                    *expt_data_args,
+                   *expt_data_x2,
+                   *expt_data_w,
                    batch_size, grid_m, grid_n,
                    out_alpha,
                    *matmul_fused_activation.fn_args, matmul_fused_activation.specs.reduction_n,

@@ -47,6 +47,8 @@ class RaggedTensorMetadata:
     block_schedule_data: torch.Tensor
     # expected slice size (for heuristics)
     expected_slice_size: int | None = None
+    # divisibility hint for values in `slice_sizes`
+    slice_sizes_divisibility: int | None = None
 
     def __post_init__(self):
         assert self.block_offs_data.shape[0] == len(RaggedTensorMetadata.block_sizes())
@@ -85,6 +87,11 @@ class RaggedTensorMetadata:
     @staticmethod
     def block_sizes():
         return [2**x for x in RaggedTensorMetadata.block_sizes_log2()]
+
+
+def ragged_metadata_fields(metadata, block_size):
+    return (metadata.slice_sizes, metadata.slice_offs, metadata.block_offs(block_size),
+            metadata.block_schedule(block_size), metadata.expected_slice_size, metadata.slice_sizes_divisibility)
 
 
 # utilities

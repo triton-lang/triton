@@ -15,6 +15,7 @@ from triton_kernels.numerics_details.flexpoint import (
 from triton_kernels.numerics_details.mxfp_details._downcast_to_mxfp import MXFP_BLOCK_SIZE
 from ._common import (
     compute_offsets,
+    compute_offsets2,
     get_scaled_dot_format_string,
     make_matmul_repr,
     matmul_launch_metadata,
@@ -72,6 +73,8 @@ def _p_matmul_ogs(
              X_IS_PADDED: tl.constexpr,
              W_IS_PADDED: tl.constexpr,
              SliceSizeMax,
+             XSliceSizes, XSliceOffs, XBlockOffs, XBlockSchedule, X_EXPECTED_SLICE_SIZE: tl.constexpr, X_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
+             WSliceSizes, WSliceOffs, WBlockOffs, WBlockSchedule, W_EXPECTED_SLICE_SIZE: tl.constexpr, W_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
              # true grid size
              batch_size, grid_m, grid_n,
              # Out scale
@@ -214,10 +217,17 @@ def _p_matmul_ogs(
         # ------------------------------------------------------------
         # prologue
         # ------------------------------------------------------------
-        off_w_z, off_x_z, off_y_z, slice_off_m, off_m, off_k_x0, off_k_w0 = compute_offsets(
+        # off_w_z, off_x_z, off_y_z, slice_off_m, off_m, off_k_x0, off_k_w0 = compute_offsets(
+        #     pid_z, pid_m, pid_k,
+        #     BlockSchedule, SliceOffs, BlockOffs,
+        #     RAGGED_DIMENSION, X_IS_PADDED, W_IS_PADDED,
+        #     BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K
+        # )
+        off_w_z, off_x_z, off_y_z, slice_off_m, off_m, off_k_x0, off_k_w0 = compute_offsets2(
             pid_z, pid_m, pid_k,
-            BlockSchedule, SliceOffs, BlockOffs,
-            RAGGED_DIMENSION, X_IS_PADDED, W_IS_PADDED,
+            XBlockSchedule, XSliceOffs, X_SLICE_SIZES_DIVISIBILITY,
+            WBlockSchedule, WSliceOffs, W_SLICE_SIZES_DIVISIBILITY,
+            RAGGED_DIMENSION,
             BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K
         )
 
@@ -365,6 +375,13 @@ def _p_matmul_ogs(
                 BlockSchedule, SliceOffs, BlockOffs,
                 RAGGED_DIMENSION, X_IS_PADDED, W_IS_PADDED,
                 BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K)
+            # expt_id1, _, start_z1, start_m1, off_m1, _, _ = compute_offsets2(
+            #     pid_z, pid_m, pid_k,
+            #     XBlockSchedule, XSliceOffs, X_SLICE_SIZES_DIVISIBILITY,
+            #     WBlockSchedule, WSliceOffs, W_SLICE_SIZES_DIVISIBILITY,
+            #     RAGGED_DIMENSION,
+            #     BLOCK_M, BLOCK_K, PACKED_BLOCK_K_W, SPLIT_K
+            # )
             off_n1 = pid_n1 * BLOCK_N
             if RAGGED_DIMENSION == "M":
                 eM1 = tl.load(SliceSizes + expt_id1)

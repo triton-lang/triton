@@ -486,9 +486,12 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     if expt_is_inner:
         w_ragged_metadata = replace(x_ragged_metadata)
         if "pad_w" in inner_expt_opt:
-            w_ragged_metadata.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k
-        # if "pad_x" in inner_expt_opt:
-        #     x_ragged_metadata.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k
+            div = 2 if "float4" in weight_dtype_str else 1
+            w_ragged_metadata.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k // div
+            w_ragged_metadata.slice_sizes_divisibility = padding_block_k
+        if "pad_x" in inner_expt_opt:
+            # x_ragged_metadata.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k
+            x_ragged_metadata.slice_sizes_divisibility = padding_block_k
 
     x_tri, w_tri, bias_tri, gs0_tri, gs1_tri = init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act,
                                                                  mode, torch.bfloat16 if act_mxfp8 else act_dtype,  #
