@@ -309,10 +309,11 @@ def matmul_ogs(x, w, bias,
     is_x_ragged = x_ragged_metadata is not None
     is_w_ragged = w_ragged_metadata is not None
     is_y_ragged = is_x_ragged and w_ragged_metadata is None
+    ragged_dimension = "K" if is_w_ragged else "M" if is_x_ragged else None
     M = x.shape[-2] if gather_indx is None else gather_indx.src_indx.shape[0]
-    if w_ragged_metadata is not None:
+    if ragged_dimension == "K":
         batch_size = w_ragged_metadata.n_slices
-    elif x_ragged_metadata is None and w.ndim == 3:
+    elif ragged_dimension is None and w.ndim == 3:
         batch_size = w.shape[0]
     else:
         batch_size = 1
@@ -347,7 +348,7 @@ def matmul_ogs(x, w, bias,
         x_transpose, y_acc_in is not None,
         block_k = None if w_ragged_metadata is None else (x_ragged_metadata.slice_sizes_divisibility  or w_ragged_metadata.slice_sizes_divisibility),
     )
-    if w_ragged_metadata is not None:
+    if ragged_dimension == "K":
         if w_ragged_metadata.slice_sizes_divisibility is not None:
             assert opt_flags.block_k % w_ragged_metadata.slice_sizes_divisibility == 0
         if x_ragged_metadata.slice_sizes_divisibility is not None:
@@ -408,11 +409,11 @@ def matmul_ogs(x, w, bias,
     bias_stride = None if bias is None else bias.stride(0)
     num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
     # moe metadata
-    expt_data_w = tuple([None] * 6) if w_ragged_metadata is None else ragged_metadata_fields(w_ragged_metadata, opt_flags.block_k)
-    expt_data_x = tuple([None] * 6) if x_ragged_metadata is None and w_ragged_metadata is None else ragged_metadata_fields(x_ragged_metadata if w_ragged_metadata is None else x_ragged_metadata, opt_flags.block_m if w_ragged_metadata is None else opt_flags.block_k)
+    expt_data_w = tuple([None] * 6) if ragged_dimension != "K" else ragged_metadata_fields(w_ragged_metadata, opt_flags.block_k)
+    expt_data_x = tuple([None] * 6) if ragged_dimension is None else ragged_metadata_fields(x_ragged_metadata, opt_flags.block_m if ragged_dimension == "M" else opt_flags.block_k)
     # spmd grid
     grid_m = triton.cdiv(M, opt_flags.block_m)
-    if x_ragged_metadata is not None and w_ragged_metadata is None:
+    if ragged_dimension == "M":
         grid_m = x_ragged_metadata.n_blocks(x_ragged_metadata.n_slices, M, opt_flags.block_m)
     grid_n = triton.cdiv(N, opt_flags.block_n)
     max_grid = batch_size * grid_m * grid_n * opt_flags.split_k
@@ -481,7 +482,6 @@ def matmul_ogs(x, w, bias,
         "reduce_rank": fused_comm.reduce_rank,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}
-    ragged_dimension = "K" if w_ragged_metadata is not None else ("M" if x_ragged_metadata is not None else None)
     (kernels._p_matmul_ogs if opt_flags.is_persistent else kernels._matmul_ogs)[(grid,)](
                    y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
@@ -495,7 +495,7 @@ def matmul_ogs(x, w, bias,
                    flex.acc_data.reinterpret(y_acc_in), *y_acc_strides,
                    flex.acc_data.scale, y_acc_is_y,
                    bias, bias_stride,
-                   x.shape[-2] if x_ragged_metadata is None or w_ragged_metadata is not None else None,
+                   None if ragged_dimension == "M" else x.shape[-2],
                    N, K, K_W,
                    betas, gammas,
                    None if gather_indx is None else gather_indx.src_indx,
