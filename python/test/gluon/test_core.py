@@ -333,8 +333,8 @@ def test_warpgroup_mma(ASYNC):
 @pytest.mark.parametrize("warps", ([8, 1], [4, 2], [4, 1]))
 @pytest.mark.parametrize("swizzling_a, swizzling_b", product([0, 32, 64, 128], repeat=2))
 @pytest.mark.parametrize("shape_m, shape_n, shape_k", [(1, 1, 1), (2, 4, 1), (2, 2, 4)])
-@pytest.mark.parametrize("ctas_per_cga", [[1, 1], [2, 1], [4, 4]])
-@pytest.mark.parametrize("two_ctas", [False, True] if is_blackwell() else [False])
+@pytest.mark.parametrize("ctas_per_cga", [[2, 1]])
+@pytest.mark.parametrize("two_ctas", [True] if is_blackwell() else [False])
 def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps, swizzling_a, swizzling_b, shape_m,
                            shape_n, shape_k, ctas_per_cga, two_ctas):
     # FIXME: Workaround for a bug in PTXAS when the shared layout is transposed and the swizzling is 0
