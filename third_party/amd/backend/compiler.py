@@ -447,11 +447,12 @@ class HIPBackend(BaseBackend):
             Dump MIR if `TRITON_DUMP_MIR` environment variable (which contains path to dump MIR file) is set.
             """
             import os
-            dump_mir_path = os.environ.get('TRITON_DUMP_MIR') + '/' + kernel_name + '.txt'
+            dump_mir_path = os.environ.get('TRITON_DUMP_MIR')
 
             if not dump_mir_path:
-                return None
+                return
 
+            dump_mir_path += '/' + kernel_name + '.txt'
             # Generate MIR
             mir = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion)
 
@@ -463,8 +464,6 @@ class HIPBackend(BaseBackend):
                 f.write(mir)
                 f.write("---")
                 f.write("\n========== SCHEDULING DAG ==========\n")
-
-            return mir
 
         # Find kernel names (there should only be one)
         # We get the name at the last possible step to accommodate `triton.compile`

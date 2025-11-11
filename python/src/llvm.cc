@@ -28,7 +28,6 @@
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
 #include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
-#include "llvm/Transforms/Utils/Cloning.h"
 #include <csignal>
 #include <cstdio>
 #include <memory>
