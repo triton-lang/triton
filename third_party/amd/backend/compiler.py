@@ -451,12 +451,12 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def make_amdgcn(src, metadata, options):
 
-        def _dump_mir_if_requested():
+        def _dump_mir_if_requested(kernel_name):
             """
             Dump MIR if `TRITON_DUMP_MIR` environment variable (which contains path to dump MIR file) is set.
             """
             import os
-            dump_mir_path = os.environ.get('TRITON_DUMP_MIR')
+            dump_mir_path = os.environ.get('TRITON_DUMP_MIR') + '/' + kernel_name + '.txt'
 
             if not dump_mir_path:
                 return None
@@ -470,6 +470,8 @@ class HIPBackend(BaseBackend):
             # Write MIR to file
             with open(dump_mir_path, 'w') as f:
                 f.write(mir)
+                f.write("---")
+                f.write("\n========== SCHEDULING DAG ==========\n")
 
             return mir
 
