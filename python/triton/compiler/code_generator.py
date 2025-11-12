@@ -703,6 +703,11 @@ class CodeGenerator(ast.NodeVisitor):
         lhs.ctx = ast.Load()
         rhs = ast.BinOp(lhs, node.op, node.value)
         assign = ast.Assign(targets=[node.target], value=rhs)
+        for x in ['lineno', 'col_offset', 'end_lineno', 'end_col_offset']:
+            if hasattr(node, x):
+                y = getattr(node, x)
+                setattr(rhs, x, y)
+                setattr(assign, x, y)
         self.visit(assign)
         return self.visit(lhs)
 

@@ -366,7 +366,12 @@ class KernelInterface(Generic[T]):
 
 
 def serialize_specialization_data(name, signature, constants, attrs, options, key):
-    constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
+    constants = {
+        key: str(value) if value.__class__.__name__ == "dtype" else
+        {"constexpr": value.value} if value.__class__.__name__ == "constexpr" else value
+        for key, value in constants.items()
+    }
+
     import json
     obj = {
         'name': name, 'signature': signature, 'constant_keys': [list(x) for x in constants.keys()], 'constant_vals':
@@ -555,6 +560,18 @@ def compute_cache_key(kernel_key_cache, specialization, options):
     cache_key = str(specialization) + str(options)
     kernel_key_cache[key] = cache_key
     return cache_key
+
+
+def convert_to_tuple_if_list(item):
+    # If the incoming item is a list, recursively iterate through it to convert all lists therein into tuples
+    if not isinstance(item, list):
+        return item
+
+    # The value must be a list at this point
+    for i, nested_value in enumerate(item):
+        item[i] = convert_to_tuple_if_list(nested_value)
+
+    return tuple(item)
 
 
 class JITFunction(JITCallable, KernelInterface[T]):
@@ -759,13 +776,17 @@ class JITFunction(JITCallable, KernelInterface[T]):
         constant_keys = map(tuple, deserialized_obj['constant_keys'])
         constant_vals = deserialized_obj['constant_vals']
         constexprs = {
-            key: tl.dtype(value) if tl.dtype.is_dtype(value) else value
+            key:
+            tl.dtype(value) if tl.dtype.is_dtype(value) else
+            tl.constexpr(value['constexpr']) if isinstance(value, dict) and 'constexpr' in value else value
             for key, value in zip(constant_keys, constant_vals)
         }
         attrs_keys = map(tuple, deserialized_obj['attrs_keys'])
         attrs_vals = deserialized_obj['attrs_vals']
         attrs = dict(zip(attrs_keys, attrs_vals))
-        signature = dict(deserialized_obj['signature'].items())
+        # JSON serializes tuples as lists, so they need to be converted back;
+        # This can be done unconditionally, since lists are not accepted in Triton kernel signatures.
+        signature = {key: convert_to_tuple_if_list(value) for key, value in deserialized_obj['signature'].items()}
         options = {
             key: tuple(value) if isinstance(value, list) else value
             for key, value in deserialized_obj['options'].items()

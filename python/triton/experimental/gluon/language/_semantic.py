@@ -65,9 +65,12 @@ def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant
             layout_obj.lane_bases[-1] = [0, 0]
         elif layout_obj.reg_bases[-1] != [0, N // 2]:
             bitwidth = element_ty.primitive_bitwidth
+            num_reg = 2**len(layout_obj.reg_bases)
             _check(
-                len(layout_obj.reg_bases) * bitwidth > 32,
-                lambda: "splitn requires register bases of more than 2 32 bit registers")
+                num_reg > 32 // bitwidth, lambda: "To be able to `tmem.load` into `tl.split` you need to have more "
+                f"than {32 // bitwidth} {bitwidth}-bit registers, as you need to use "
+                "the instruction 32x32b.x1 twice. You can always load into "
+                "instr_variant=\"32x32b\" and then convert_layout to this layout otherwise.")
 
             reg_bases = layout_obj.reg_bases
             for bases_str in ("lane_bases", "warp_bases"):
