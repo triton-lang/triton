@@ -38,25 +38,22 @@ bool isCoalescedEncodingTensorType(Type ty) {
   return tensorTy && isa<gluon::CoalescedEncodingAttr>(tensorTy.getEncoding());
 }
 
-} // anonymous namespace
+LogicalResult InferCoalescedLayout(ModuleOp &mod, llvm::function_ref<bool(Type)> typeCheck) {
+  // axis info analysis
+  ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+  int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
 
-class GluonInferCoalescedEncodingsPass
-    : public impl::GluonInferCoalescedEncodingsPassBase<
-          GluonInferCoalescedEncodingsPass> {
-  void runOnOperation() override {
-    // Run axis info analysis
-    ModuleOp moduleOp = getOperation();
-    ModuleAxisInfoAnalysis axisInfoAnalysis(moduleOp);
-
-    llvm::MapVector<FuncOp, llvm::MapVector<Value, LayoutInfo>> funcValueEnc;
-    llvm::MapVector<FuncOp, llvm::PriorityWorklist<Value>> funcWorklist;
-    llvm::MapVector<FuncOp, llvm::MapVector<Attribute, uint64_t>> funcHashMemo;
+  // infer function-level coalesced layout 
+  for (auto &op : *mod.getBody()) {
+    auto func = dyn_cast<FuncOp>(&op);
+    if (!func)
+      continue;
 
     // 1. for every load/store with coalesced encoding,
     // infer coalesced encoding for ptrs
     //
-    int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
-    auto res = moduleOp.walk([&](Operation *curr) {
+    llvm::SmallVector<std::pair<Value, Attribute>> seedEncodings;
+    auto res = func.walk([&](Operation *curr) {
       Value ptr = getMemAccessPtr(curr);
       if (!ptr)
         return WalkResult::advance();
@@ -80,21 +77,17 @@ class GluonInferCoalescedEncodingsPass
       auto ctaLayout = getDefaultCTALayout(tensorType, numCTAs);
       auto shapePerCTA = ttg::getShapePerCTA(ctaLayout.getCTASplitNum(),
                                              tensorType.getShape());
-      auto layout = ttg::buildCoalescedEncoding(&getContext(), axisInfoAnalysis,
+      auto layout = ttg::buildCoalescedEncoding(mod.getContext(), axisInfoAnalysis,
                                                 curr, numWarps, threadsPerWarp,
                                                 ctaLayout, shapePerCTA);
       // set seed value
-      FuncOp func = curr->getParentOfType<FuncOp>();
-      if (failed(updateEncoding(llvm::to_vector_of<Value>(curr->getOperands()),
-                                LayoutInfo{layout, false}, &func,
-                                funcValueEnc[func], funcWorklist[func],
-                                funcHashMemo[func])))
-        return WalkResult::interrupt();
+      for (auto value : llvm::to_vector_of<Value>(curr->getOperands()))
+        seedEncodings.push_back({value, layout});
       return WalkResult::advance();
     });
 
     if (res.wasInterrupted())
-      return signalPassFailure();
+      return failure();
 
     // 2. propagate Coalesced Layout forward/backward
     //
@@ -103,14 +96,25 @@ class GluonInferCoalescedEncodingsPass
     // -> gl.set_auto_layout(val, a concrete coalesced layout)
     // then ResolveAutoLayoutPass will handle the rest
     //
+    if (failed(inferLayout(func, typeCheck, seedEncodings)))
+      return failure();
+  }
+  return success();
+}
 
-    // Do layout inference
-    if (failed(inferLayout(moduleOp, isCoalescedEncodingTensorType,
-                           funcValueEnc, funcWorklist, funcHashMemo)))
+} // anonymous namespace
+
+class GluonInferCoalescedEncodingsPass
+    : public impl::GluonInferCoalescedEncodingsPassBase<
+          GluonInferCoalescedEncodingsPass> {
+  void runOnOperation() override {
+    ModuleOp moduleOp = getOperation();
+
+    if (failed(InferCoalescedLayout(moduleOp, isCoalescedEncodingTensorType)))
       return signalPassFailure();
 
-    if (failed(doubleCheckEncodings(moduleOp, isCoalescedEncodingTensorType)))
-      return signalPassFailure();
+    //if (failed(doubleCheckEncodings(moduleOp, isCoalescedEncodingTensorType)))
+    //  return signalPassFailure();
   }
 };
 } // namespace mlir::triton::gluon

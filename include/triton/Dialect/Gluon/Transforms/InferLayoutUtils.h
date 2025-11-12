@@ -25,17 +25,8 @@ updateEncoding(ArrayRef<Value> values, LayoutInfo info, FuncOp *func,
                llvm::PriorityWorklist<Value> &worklist,
                llvm::MapVector<Attribute, uint64_t> &hashMemo);
 
-LogicalResult inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck,
-                          llvm::MapVector<Value, LayoutInfo> &valueToEncoding,
-                          llvm::PriorityWorklist<Value> &worklist,
-                          llvm::MapVector<Attribute, uint64_t> &hashMemo);
-
-LogicalResult inferLayout(
-    ModuleOp &mod, llvm::function_ref<bool(Type)> typeCheck,
-    llvm::MapVector<FuncOp, llvm::MapVector<Value, LayoutInfo>> &funcValueEnc,
-    llvm::MapVector<FuncOp, llvm::PriorityWorklist<Value>> &funcWorklist,
-    llvm::MapVector<FuncOp, llvm::MapVector<Attribute, uint64_t>>
-        &funcHashMemo);
+LogicalResult inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck, 
+                          const SmallVector<std::pair<Value, Attribute>> &seedEncodings);
 
 LogicalResult doubleCheckEncodings(ModuleOp &mod,
                                    llvm::function_ref<bool(Type)> typeCheck);

@@ -96,9 +96,7 @@ updateEncoding(ArrayRef<Value> values, LayoutInfo info, FuncOp *func,
 }
 
 LogicalResult inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck,
-                          llvm::MapVector<Value, LayoutInfo> &valueToEncoding,
-                          llvm::PriorityWorklist<Value> &worklist,
-                          llvm::MapVector<Attribute, uint64_t> &hashMemo) {
+                          const llvm::SmallVector<std::pair<Value, Attribute>> &seedEncodings) {
   // Disallow auto encoding accross function call boundaries
   for (auto argTy : func.getArgumentTypes()) {
     if (typeCheck(argTy)) {
@@ -110,6 +108,16 @@ LogicalResult inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck,
     if (typeCheck(resultTy))
       return func->emitError(
           "Functions returning auto encoding must be fully inlined");
+  }
+
+  // set seed
+  llvm::MapVector<Value, LayoutInfo> valueToEncoding;
+  llvm::PriorityWorklist<Value> worklist;
+  llvm::MapVector<Attribute, uint64_t> hashMemo;
+  for (auto &[value, encoding] : seedEncodings) {
+    if (failed(updateEncoding({value}, LayoutInfo{encoding, false}, &func,
+                              valueToEncoding, worklist, hashMemo)))
+      return failure();
   }
 
   // Propagate encodings through the graph until fixed point, or conflict
@@ -196,24 +204,6 @@ LogicalResult inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck,
         constantOp.setValueAttr(newValue);
       }
     }
-  }
-
-  return success();
-}
-
-LogicalResult inferLayout(
-    ModuleOp &mod, llvm::function_ref<bool(Type)> typeCheck,
-    llvm::MapVector<FuncOp, llvm::MapVector<Value, LayoutInfo>> &funcValueEnc,
-    llvm::MapVector<FuncOp, llvm::PriorityWorklist<Value>> &funcWorklist,
-    llvm::MapVector<FuncOp, llvm::MapVector<Attribute, uint64_t>>
-        &funcHashMemo) {
-  for (auto &op : *mod.getBody()) {
-    auto func = dyn_cast<FuncOp>(&op);
-    if (!func)
-      continue;
-    if (failed(inferLayout(func, typeCheck, funcValueEnc[func],
-                           funcWorklist[func], funcHashMemo[func])))
-      return failure();
   }
   return success();
 }

@@ -22,6 +22,26 @@ bool isAutoEncodingTensorType(Type ty) {
   auto tensorTy = dyn_cast<RankedTensorType>(ty);
   return tensorTy && isa<gluon::AutoEncodingAttr>(tensorTy.getEncoding());
 }
+LogicalResult inferAutoLayout(ModuleOp &mod, llvm::function_ref<bool(Type)> typeCheck) {
+  for (auto &op : *mod.getBody()) {
+    auto func = dyn_cast<FuncOp>(&op);
+    if (!func)
+      continue;
+
+    // Set seed values from set_auto_layout ops
+    llvm::SmallVector<std::pair<Value, Attribute>> seedEncodings;
+    auto res = func.walk([&](gluon::SetAutoLayoutOp op) -> WalkResult {
+      seedEncodings.push_back({op.getSrc(), op.getType().getEncoding()});
+      return WalkResult::advance();
+    });
+    if (res.wasInterrupted())
+      return failure();
+
+    if (failed(inferLayout(func, typeCheck, seedEncodings)))
+      return failure();
+  }
+  return success();
+}
 } // anonymous namespace
 
 class GluonResolveAutoEncodingsPass
@@ -36,27 +56,8 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
-    // Set seed values from set_auto_layout ops
-    llvm::MapVector<FuncOp, llvm::MapVector<Value, LayoutInfo>> funcValueEnc;
-    llvm::MapVector<FuncOp, llvm::PriorityWorklist<Value>> funcWorklist;
-    llvm::MapVector<FuncOp, llvm::MapVector<Attribute, uint64_t>> funcHashMemo;
-
-    auto seeded = m.walk([&](gluon::SetAutoLayoutOp op) -> WalkResult {
-      FuncOp func = op->getParentOfType<FuncOp>();
-      auto layout = LayoutInfo{op.getType().getEncoding()};
-      if (failed(updateEncoding({op.getSrc()}, layout, &func,
-                                funcValueEnc[func], funcWorklist[func],
-                                funcHashMemo[func])))
-        return WalkResult::interrupt();
-      return WalkResult::advance();
-    });
-
-    if (seeded.wasInterrupted())
-      return signalPassFailure();
-
     // Do layout inference
-    if (failed(inferLayout(m, isAutoEncodingTensorType, funcValueEnc,
-                           funcWorklist, funcHashMemo)))
+    if (failed(inferAutoLayout(m, isAutoEncodingTensorType)))
       return signalPassFailure();
 
     // Cleanup set_auto_layout ops
