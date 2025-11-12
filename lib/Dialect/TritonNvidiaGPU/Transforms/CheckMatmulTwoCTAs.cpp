@@ -26,38 +26,31 @@ public:
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     Operation *firstTcGenOp = nullptr;
-    bool twoCTA = false;
+    bool global2CTA = false;
     unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
 
-    // Walk all operations and check consistency across all tcgen05 ops
     WalkResult result = mod.walk([&](Operation *op) {
-      std::optional<bool> currentTwoCTA;
-      
-      // Determine CTA mode for tcgen05 operations
-      if (auto mmaOp = dyn_cast<ttng::TCGen5MMAOp>(op)) {
-        currentTwoCTA = mmaOp.getTwoCtas();
-      } else if (isa<ttng::TMEMCopyOp>(op)) {
-        // For TMEMCopyOp, CTA mode is always determined by kernel launch numCTAs
-        currentTwoCTA = (numCTAs == 2);
-      } else {
-        // Not a tcgen05 op, skip
+      bool op2CTA = false;
+      if (auto mmaOp = dyn_cast<ttng::TCGen5MMAOp>(op))
+        op2CTA = mmaOp.getTwoCtas();
+      else if (isa<ttng::TMEMCopyOp>(op))
+        op2CTA = (numCTAs == 2);
+      else
         return WalkResult::advance();
-      }
-      
-      // Check consistency across all tcgen05 ops
+
       if (!firstTcGenOp) {
         firstTcGenOp = op;
-        twoCTA = *currentTwoCTA;
+        global2CTA = op2CTA;
         return WalkResult::advance();
       }
-      if (*currentTwoCTA != twoCTA) {
+      if (op2CTA != global2CTA) {
         auto diag = op->emitError()
-                    << "inconsistent two_ctas setting across tcgen05 operations; "
-                       "expected all tcgen05 ops to "
-                    << (twoCTA ? "enable" : "disable") << " two_ctas.";
+                    << "inconsistent CTA mode between tcgen05 operations; "
+                       "this op uses " << (op2CTA ? "2" : "1") << " CTA mode:\n"
+                    << *op;
         diag.attachNote(firstTcGenOp->getLoc())
-            << "first tcgen05 op here has two_ctas="
-            << (twoCTA ? "true" : "false") << ".";
+            << "but first tcgen05 op uses " << (global2CTA ? "2" : "1") << " CTA mode:\n"
+            << *firstTcGenOp;
         return WalkResult::interrupt();
       }
       return WalkResult::advance();
@@ -68,9 +61,7 @@ public:
       return;
     }
 
-    // Set module attribute
-    bool twoCTAValue = firstTcGenOp ? twoCTA : false;
-    mod->setAttr(AttrTwoCTAsName, BoolAttr::get(mod.getContext(), twoCTAValue));
+    mod->setAttr(AttrTwoCTAsName, BoolAttr::get(mod.getContext(), global2CTA));
   }
 };
 
