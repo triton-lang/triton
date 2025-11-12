@@ -1998,9 +1998,11 @@ def test_shared_gather(N, M):
     # Compute expected result: diagonal elements
     expected = matrix.flatten()[indices]
 
-    # Create layouts
-    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[8, 4], warps_per_cta=[1, 1], order=[1, 0])
-    layout_1d = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[1], order=[0])
+    # Create layouts dynamically based on THREADS_PER_WARP
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
+                                   warps_per_cta=[1, 1], order=[1, 0])
+    layout_1d = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[1],
+                                   order=[0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
     # Launch kernel
@@ -2079,9 +2081,11 @@ def test_shared_scatter(N, M):
     for i in range(N):
         expected[i, i] = values[i]
 
-    # Create layouts
-    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[8, 4], warps_per_cta=[1, 1], order=[1, 0])
-    layout_1d = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[1], order=[0])
+    # Create layouts dynamically based on THREADS_PER_WARP
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
+                                   warps_per_cta=[1, 1], order=[1, 0])
+    layout_1d = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[1],
+                                   order=[0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
     # Launch kernel
@@ -2111,9 +2115,10 @@ def test_scatter_gather_multiwarp(N, M, num_warps):
     device = torch.device("cuda")
 
     # Create layouts with multiple warps (shared across both tests)
-    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[8, 4], warps_per_cta=[num_warps, 1],
-                                   order=[1, 0])
-    layout_1d = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[num_warps], order=[0])
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
+                                   warps_per_cta=[num_warps, 1], order=[1, 0])
+    layout_1d = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[num_warps],
+                                   order=[0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
     # Test gather
@@ -2221,8 +2226,9 @@ def test_gather_2d_native(N, M, axis):
 
     output = torch.zeros((N, M), dtype=torch.float32, device=device)
 
-    # Create layouts
-    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[8, 4], warps_per_cta=[1, 1], order=[1, 0])
+    # Create layouts dynamically based on THREADS_PER_WARP
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
+                                   warps_per_cta=[1, 1], order=[1, 0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
     gather_2d_kernel[(1, )](
@@ -2297,8 +2303,9 @@ def test_scatter_2d_native(N, M, axis):
     expected = torch.zeros((N, M), dtype=torch.float32, device=device)
     expected.scatter_(axis, indices.long(), values)
 
-    # Create layouts
-    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[8, 4], warps_per_cta=[1, 1], order=[1, 0])
+    # Create layouts dynamically based on THREADS_PER_WARP
+    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[THREADS_PER_WARP // 4, 4],
+                                   warps_per_cta=[1, 1], order=[1, 0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
 
     scatter_2d_kernel[(1, )](
@@ -2414,9 +2421,9 @@ def test_gather_3d_native(N, M, P, axis):
 
     output = torch.zeros((N, M, P), dtype=torch.float32, device=device)
 
-    # Create layouts
-    layout_3d = ttgl.BlockedLayout(size_per_thread=[1, 1, 1], threads_per_warp=[4, 4, 2], warps_per_cta=[1, 1, 1],
-                                   order=[2, 1, 0])
+    # Create layouts dynamically based on THREADS_PER_WARP
+    layout_3d = ttgl.BlockedLayout(size_per_thread=[1, 1, 1], threads_per_warp=[4, 4, THREADS_PER_WARP // 16],
+                                   warps_per_cta=[1, 1, 1], order=[2, 1, 0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[2, 1, 0])
 
     gather_3d_kernel[(1, )](
@@ -2534,9 +2541,9 @@ def test_scatter_3d_native(N, M, P, axis):
     expected = torch.zeros((N, M, P), dtype=torch.float32, device=device)
     expected.scatter_(axis, indices.long(), values)
 
-    # Create layouts
-    layout_3d = ttgl.BlockedLayout(size_per_thread=[1, 1, 1], threads_per_warp=[4, 4, 2], warps_per_cta=[1, 1, 1],
-                                   order=[2, 1, 0])
+    # Create layouts dynamically based on THREADS_PER_WARP
+    layout_3d = ttgl.BlockedLayout(size_per_thread=[1, 1, 1], threads_per_warp=[4, 4, THREADS_PER_WARP // 16],
+                                   warps_per_cta=[1, 1, 1], order=[2, 1, 0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[2, 1, 0])
 
     scatter_3d_kernel[(1, )](
