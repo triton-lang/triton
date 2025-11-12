@@ -369,7 +369,7 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   std::string dumpFilename;
   int saved_stderr_fd = -1;
   if (dumpMir) {
-    dumpFilename = dumpMirBase + "/" + kernel_name + ".txt";
+    dumpFilename = dumpMirBase + "/" + dumpFileId + ".txt";
 
     // Enable misched-print-dags for DAG
     auto mischedPrintOpt = options.find("misched-print-dags");
@@ -708,7 +708,7 @@ void init_triton_llvm(py::module &&m) {
       "translate_to_asm",
       [](std::string llvmIR, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion, bool isObject, std::string kernelName) -> py::object {
+         bool enable_fp_fusion, bool isObject, std::string dumpFileId) -> py::object {
         std::string obj;
         {
           // when allow_threads goes out of scope, gil will be released
@@ -726,7 +726,7 @@ void init_triton_llvm(py::module &&m) {
                 "lineno: " + std::to_string(error.getLineNo()));
           }
           obj = translateLLVMIRToASM(*module, triple, proc, features, flags,
-                                     enable_fp_fusion, isObject, kernelName);
+                                     enable_fp_fusion, isObject, dumpFileId);
         }
         if (isObject)
           return py::bytes(obj);
