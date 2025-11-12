@@ -1,9 +1,8 @@
-#include "/triton/third_party/amd/lib/TritonAMDGPUDialectToLLVM/Utility.h"
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
-#include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
 #include "third_party/amd/include/Utils/Utility.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
@@ -40,42 +39,36 @@ struct ExtractSliceOpConversion
         triton::gpu::toLinearLayout(dstTy).transposeOuts(outDimNames);
 
     // Algorithm:
-    // 1. for every src element
-    // 2.   get src element coordinates
-    // 3.   save mapping from element coords to src register idx
-    // 4. for every dst register
-    // 5.   get dst element coordinates relative to tile start
-    // 6.   add coordinates of tile start relative to parent tensor
-    // 7.   find source register number which holds dst value
-    // 8.   copy from corresponding src register
+    // 1. for every dst register
+    // 2.   get dst element coordinates relative to tile start
+    // 3.   add coordinates of tile start relative to parent tensor
+    // 4.   find source register number which holds dst value
+    // 5.   copy from corresponding src register
     auto ctx = rewriter.getContext();
     int rank = srcTy.getRank();
     StringAttr kReg = StringAttr::get(ctx, "register");
     auto dstRegBases = linearLayoutDst.getBases().lookup(kReg);
-
-    // Mapping from tensors element location to src register id
-    // Steps 1), 2) and 3).
-    auto srcElemToReg =
-        mlir::LLVM::AMD::mapRegToCoordinates(linearLayoutSrc, ctx);
 
     // for every output register get element coords, copy corresponding src
     // register
     int dstRegNum = 1 << dstRegBases.size();
     SmallVector<Value> resultVals;
 
-    // 4. for every dst register
+    // 1. for every dst register
     for (int regId = 0; regId < dstRegNum; ++regId) {
-      // 5.   get dst element coordinates relative to tile start
-      auto elemCoords =
-          mlir::LLVM::AMD::getElemCoordsFromReg(linearLayoutDst, regId, ctx);
-      // 6.   add coordinates of tile start relative to parent tensor
+      // 2.   get dst element coordinates relative to tile start
+      auto elemCoords = mlir::triton::AMD::getElemCoordinatesFromRegisters(
+          linearLayoutDst, regId, ctx);
+      // 3.   add coordinates of tile start relative to parent tensor
       for (int i = 0; i < rank; ++i)
         elemCoords[i].second += offsets[i];
-      assert(srcElemToReg.contains(elemCoords));
-      // 7.   find source register number which holds dst value
-      auto srcRegId = srcElemToReg.lookup(elemCoords);
-      // 8.   copy from corresponding src register
-      resultVals.push_back(vals[srcRegId]);
+      // 4.   find source register number which holds dst value
+      std::optional<int> srcReg = mlir::triton::AMD::getRegFromCoordinates(
+          linearLayoutSrc, elemCoords, ctx);
+      assert(srcReg.has_value());
+
+      // 5.   copy from corresponding src register
+      resultVals.push_back(vals[srcReg.value()]);
     }
 
     Value ret = packLLElements(loc, this->getTypeConverter(), resultVals,

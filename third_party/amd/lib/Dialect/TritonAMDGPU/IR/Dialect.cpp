@@ -22,7 +22,6 @@
  */
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "/triton/third_party/amd/lib/TritonAMDGPUDialectToLLVM/Utility.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/OpImplementation.h"
@@ -68,18 +67,14 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
 
 namespace mlir::triton::amdgpu {
 
-std::string getStringFromCoords(mlir::LLVM::AMD::ElemLocationKey coords) {
-  std::string coordsStr = "[";
-  auto rank = coords.size();
-  for (int i = 0; i < rank; ++i) {
-    std::string suffix = ", ";
-    if (i == rank - 1) {
-      suffix = "";
-    }
-    coordsStr += std::to_string(coords[i].second) + suffix;
-  }
-  coordsStr += "]";
-  return coordsStr;
+std::string getStringFromCoords(mlir::triton::AMD::ElemLocationKey coords) {
+  std::string result;
+  llvm::raw_string_ostream os(result);
+  os << "[";
+  llvm::interleaveComma(coords, os,
+                        [&](const auto &coord) { os << coord.second; });
+  os << "]";
+  return os.str();
 }
 
 LogicalResult ExtractSliceOp::verify() {
@@ -125,23 +120,36 @@ LogicalResult ExtractSliceOp::verify() {
 
   StringAttr kReg = StringAttr::get(ctx, "register");
   auto dstRegBases = linearLayoutDst.getBases().lookup(kReg);
-  auto srcElemToReg =
-      mlir::LLVM::AMD::mapRegToCoordinates(linearLayoutSrc, ctx);
 
-  int dstRegNum = 1 << dstRegBases.size();
+  int dstRegCount = 1 << dstRegBases.size();
   SmallVector<Value> resultVals;
 
-  for (int regId = 0; regId < dstRegNum; ++regId) {
-    auto elemCoords =
-        mlir::LLVM::AMD::getElemCoordsFromReg(linearLayoutDst, regId, ctx);
+  // Algorithm:
+  // 1. for every dst register
+  // 2.   get dst element coordinates relative to tile start
+  // 3.   add coordinates of tile start relative to parent tensor
+  // 4.   check if exists source register which holds dst value
+
+  // 1. for every dst register
+  for (int regId = 0; regId < dstRegCount; ++regId) {
+    // 2.   get dst element coordinates relative to tile start
+    auto elemCoords = mlir::triton::AMD::getElemCoordinatesFromRegisters(
+        linearLayoutDst, regId, ctx);
+    // 3.   add coordinates of tile start relative to parent tensor
+
     for (int i = 0; i < rank; ++i)
       elemCoords[i].second += offsets[i];
-    if (!srcElemToReg.contains(elemCoords)) {
-      auto coordsStr = getStringFromCoords(elemCoords);
-      std::string msg =
-          "No source register holds the element for destination index " +
-          coordsStr;
-      return emitError(msg);
+
+    // 4.   check if exists source register which holds dst value
+    std::optional<int> srcReg = mlir::triton::AMD::getRegFromCoordinates(
+        linearLayoutSrc, elemCoords, ctx);
+
+    if (!srcReg.has_value()) {
+      std::string msg;
+      llvm::raw_string_ostream os(msg);
+      os << "No source register holds the element for destination index "
+         << getStringFromCoords(elemCoords);
+      return emitError(os.str());
     }
   }
 
@@ -530,39 +538,53 @@ LogicalResult ConcatOp::verify() {
   std::vector<unsigned> defaultOrder(rank);
   std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
 
-  auto srcElemToReg =
-      mlir::LLVM::AMD::mapRegToCoordinates(linearLayoutSrc, ctx);
   StringAttr kReg = StringAttr::get(ctx, "register");
   auto dstRegBases = linearLayoutDst.getBases().lookup(kReg);
-  int dstRegNum = 1 << dstRegBases.size();
+  int dstRegCount = 1 << dstRegBases.size();
 
-  for (int regId = 0; regId < dstRegNum; ++regId) {
-    auto elemCoords =
-        mlir::LLVM::AMD::getElemCoordsFromReg(linearLayoutDst, regId, ctx);
+  // Algorithm:
+  // 1. for all elements in dst tensor
+  // 2.   get dst value location in tensor
+  // 3.   find, which input tile holds the dst value
+  // 4.   subtract dst coordinates and start coordinates of the tile
+  // 5.   check if exist source register which holds dst value
+
+  // 1. for all elements in dst tensor
+  for (int regId = 0; regId < dstRegCount; ++regId) {
+    // 2.   get dst value location in tensor
+    auto elemCoords = mlir::triton::AMD::getElemCoordinatesFromRegisters(
+        linearLayoutDst, regId, ctx);
     auto elemCoordsArray = llvm::to_vector(llvm::make_second_range(elemCoords));
 
+    // 3.   find, which input tile holds the dst value
     auto multiDimOperandIdx = LLVM::AMD::multiDimElementwise<int32_t, int64_t>(
         elemCoordsArray, srcShape, std::divides<unsigned>());
     auto linearOperandIdx =
         mlir::LLVM::linearize(multiDimOperandIdx, srcToDstShape, defaultOrder);
 
+    // 4.   subtract dst coordinates and start coordinates of the tile
+
     for (int dim = 0; dim < rank; ++dim)
       elemCoords[dim].second -= multiDimOperandIdx[dim] * srcShape[dim];
 
-    if (!srcElemToReg.contains(elemCoords)) {
+    std::optional<int> srcReg = mlir::triton::AMD::getRegFromCoordinates(
+        linearLayoutSrc, elemCoords, ctx);
+    // 5.   check if exist source register which holds dst value
+
+    if (!srcReg.has_value()) {
       auto coordsStr = getStringFromCoords(elemCoords);
       std::string msg =
           "No source register holds the element for destination index " +
           coordsStr;
       return emitError(msg);
     }
+  }
 
-    auto [laneSrc, laneDst] = getBases("lane");
-    auto [warpSrc, warpDst] = getBases("warp");
-    if (laneSrc != laneDst || warpSrc != warpDst) {
-      return emitError("Lane and warp dim basis must match between source and "
-                       "destination layout.");
-    }
+  auto [laneSrc, laneDst] = getBases("lane");
+  auto [warpSrc, warpDst] = getBases("warp");
+  if (laneSrc != laneDst || warpSrc != warpDst) {
+    return emitError("Lane and warp dim basis must match between source and "
+                     "destination layout.");
   }
 
   return success();
