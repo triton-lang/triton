@@ -193,20 +193,20 @@ def matmul_set_idle_sms(num_idle_sms):
     """
     update_opt_flags_constraints({"idle_sms": num_idle_sms})
 
-def matmul(x, w, bias,
-    x_ragged_metadata: RaggedTensorMetadata | None = None,
-    w_ragged_metadata: RaggedTensorMetadata | None = None,
+def matmul(a, b, bias,
+    a_ragged_metadata: RaggedTensorMetadata | None = None,
+    b_ragged_metadata: RaggedTensorMetadata | None = None,
     gather_indx: torch.Tensor | None = None,
     scatter_indx: torch.Tensor | None = None,
     precision_config: PrecisionConfig | None = None,
     betas: torch.Tensor | None = None,
     gammas: torch.Tensor | None = None,
     out_alpha: float | None = None,
-    y: torch.Tensor | None = None,
+    c: torch.Tensor | None = None,
     fused_comm: FusedComm | None = None,
     fused_activation: FusedActivation | None = None,
     epilogue: Epilogue | None = None,
-    y_acc_in: torch.Tensor | None = None,
+    c_acc_in: torch.Tensor | None = None,
 ):
     """
     Y[:, :] = 0.
@@ -219,15 +219,15 @@ def matmul(x, w, bias,
 
     The output buffer for fused comm should be pre-allocated and passed in via fused_comm.out_handles, which contains ipc handles to the output tensors, each with shape (n_rows * n_reduce_shards, n_cols).
     """
-    is_input_batched = x.ndim == 3
+    is_input_batched = a.ndim == 3
     if is_input_batched:
         assert gather_indx is None, "gather not supported in batched mode"
         assert scatter_indx is None, "scatter not supported in batched mode"
-        assert w_ragged_metadata is None, "w cannot be ragged in batched mode"
-        assert x_ragged_metadata is None, "x cannot be ragged in batched mode"
+        assert b_ragged_metadata is None, "w cannot be ragged in batched mode"
+        assert a_ragged_metadata is None, "x cannot be ragged in batched mode"
         assert fused_comm is None, "fused comm is not supported in batched mode"
-        assert w.ndim == 3 and w.shape[0] == x.shape[0]
-    if w_ragged_metadata is not None:
+        assert b.ndim == 3 and b.shape[0] == a.shape[0]
+    if b_ragged_metadata is not None:
         assert gather_indx is None
         assert scatter_indx is None
     # canonicalize inputs
@@ -237,99 +237,99 @@ def matmul(x, w, bias,
         fused_activation = FusedActivation(FnSpecs.default(), tuple())
     if epilogue is None:
         epilogue = Epilogue(FnSpecs.default(), tuple(), tuple(), False)
-    n_slices = max(1, w.shape[0]) if x_ragged_metadata is None else x_ragged_metadata.n_slices
+    n_slices = max(1, b.shape[0]) if a_ragged_metadata is None else a_ragged_metadata.n_slices
     # unpack scales
-    w_scale = precision_config.weight_scale
-    w_has_mx = w_scale is not None
-    is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and bitwidth(w.dtype) == 8
-    if is_hopper_fp8: assert w.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
-    if not isinstance(w, Tensor):
+    b_scale = precision_config.weight_scale
+    b_has_mx = b_scale is not None
+    is_hopper_fp8 = is_cuda() and not target_info.cuda_capability_geq(10, 0) and bitwidth(b.dtype) == 8
+    if is_hopper_fp8: assert b.stride(-2) == 1, "`w` must be column-major when it has data-type FP8 on capability < 10"
+    if not isinstance(b, Tensor):
         # TODO: remove this code path; using uint8 for mxfp4 weight will bite us when we want to support uint8 for real
-        dtype = FP4 if w.dtype == torch.uint8 else w.dtype
-        w = wrap_torch_tensor(w, dtype=dtype)
-    if w_has_mx and (torch.cuda.get_device_capability()[0] < 10 or w.storage.layout is not None and not isinstance(w.storage.layout, StridedLayout)):
-        assert w.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp and (swizzled or not on >=Blackwell)"
-    if w_scale is not None and not isinstance(w_scale, Tensor):
-        w_scale = Tensor(w_scale)
-    if w_scale is not None:
-        w_scale.storage.data = w_scale.data.view(torch.uint8)
-        w_scale.dtype = torch.uint8
-    x_scale = precision_config.act_scale
-    x_has_mx = x_scale is not None
-    if x_has_mx: assert x.stride(-1) == 1, "'x' must be row-major when it has data-type mxfp"
-    if x_scale is not None and not isinstance(x_scale, Tensor):
-        x_scale = Tensor(x_scale)
-    if not isinstance(x, Tensor):
-        x = Tensor(x, dtype=x.dtype)
-    x_transpose = x.stride(-1) != 1
+        dtype = FP4 if b.dtype == torch.uint8 else b.dtype
+        b = wrap_torch_tensor(b, dtype=dtype)
+    if b_has_mx and (torch.cuda.get_device_capability()[0] < 10 or b.storage.layout is not None and not isinstance(b.storage.layout, StridedLayout)):
+        assert b.stride(-2) == 1, "`w` must be column-major when it has data-type mxfp and (swizzled or not on >=Blackwell)"
+    if b_scale is not None and not isinstance(b_scale, Tensor):
+        b_scale = Tensor(b_scale)
+    if b_scale is not None:
+        b_scale.storage.data = b_scale.data.view(torch.uint8)
+        b_scale.dtype = torch.uint8
+    a_scale = precision_config.act_scale
+    a_has_mx = a_scale is not None
+    if a_has_mx: assert a.stride(-1) == 1, "'x' must be row-major when it has data-type mxfp"
+    if a_scale is not None and not isinstance(a_scale, Tensor):
+        a_scale = Tensor(a_scale)
+    if not isinstance(a, Tensor):
+        a = Tensor(a, dtype=a.dtype)
+    a_transpose = a.stride(-1) != 1
     # determine shapes
     has_gather = gather_indx is not None
     has_scatter = scatter_indx is not None
-    is_x_ragged = x_ragged_metadata is not None
-    is_w_ragged = w_ragged_metadata is not None
-    is_y_ragged = is_x_ragged and w_ragged_metadata is None
-    ragged_dimension = "K" if is_w_ragged else "M" if is_x_ragged else None
-    M = x.shape[-2] if gather_indx is None else gather_indx.shape[0]
+    is_a_ragged = a_ragged_metadata is not None
+    is_b_ragged = b_ragged_metadata is not None
+    is_c_ragged = is_a_ragged and b_ragged_metadata is None
+    ragged_dimension = "K" if is_b_ragged else "M" if is_a_ragged else None
+    M = a.shape[-2] if gather_indx is None else gather_indx.shape[0]
     if ragged_dimension == "K":
-        batch_size = w_ragged_metadata.n_slices
-    elif ragged_dimension is None and w.ndim == 3:
-        batch_size = w.shape[0]
+        batch_size = b_ragged_metadata.n_slices
+    elif ragged_dimension is None and b.ndim == 3:
+        batch_size = b.shape[0]
     else:
         batch_size = 1
-    if y_acc_in is not None:
-        y_acc_is_y = y_acc_in.data_ptr() == y.data_ptr() and y_acc_in.stride() == y.stride()
+    if c_acc_in is not None:
+        c_acc_is_c = c_acc_in.data_ptr() == c.data_ptr() and c_acc_in.stride() == c.stride()
     else:
-        y_acc_is_y = None
-    K = x.shape[-1]
-    K_W, N = w.shape[-2:]
-    if x.ndim == 3 and w.ndim == 3:
-        assert x.shape[0] == w.shape[0]
+        c_acc_is_c = None
+    K = a.shape[-1]
+    K_W, N = b.shape[-2:]
+    if a.ndim == 3 and b.ndim == 3:
+        assert a.shape[0] == b.shape[0]
     # compute optimization flags
-    out_dtype = precision_config.out_dtype or x.dtype
+    out_dtype = precision_config.out_dtype or a.dtype
     can_use_tma = (
-        x.numel() > 0 and x.storage.is_tma_compliant() and
-        w.numel() > 0 and w.storage.is_tma_compliant() and
-        (w_scale is None or w_scale.storage.is_tma_compliant()) and
-        (not is_x_ragged or x.stride(-1) == 1) and
+        a.numel() > 0 and a.storage.is_tma_compliant() and
+        b.numel() > 0 and b.storage.is_tma_compliant() and
+        (b_scale is None or b_scale.storage.is_tma_compliant()) and
+        (not is_a_ragged or a.stride(-1) == 1) and
         # Currently we don't support tma if y is column major; may revisit later if this becomes an issue.
-        (y is None or y.stride(-1) == 1) and
-        (y_acc_in is None or y_acc_is_y) and
+        (c is None or c.stride(-1) == 1) and
+        (c_acc_in is None or c_acc_is_c) and
         # if ragged dimension is K, w must be either padded or row major to ensure alignment
-        (not is_w_ragged or w.stride(-1)==1 or w_ragged_metadata.slice_sizes_divisibility is not None)
+        (not is_b_ragged or b.stride(-1)==1 or b_ragged_metadata.slice_sizes_divisibility is not None)
     )
     has_gather_tma = has_gather and target_info.has_tma_gather()
     # hopper w/ mxfp4 doesn't support TMA
-    can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(w.dtype) != 4)
-    can_use_split_k = scatter_indx is None and not x_has_mx and not w_has_mx
-    opt_flags = make_opt_flags(out_dtype, x.dtype, w.dtype, precision_config,
-        batch_size, M, N, w.shape[-2], x_ragged_metadata,
+    can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(b.dtype) != 4)
+    can_use_split_k = scatter_indx is None and not a_has_mx and not b_has_mx
+    opt_flags = make_opt_flags(out_dtype, a.dtype, b.dtype, precision_config,
+        batch_size, M, N, b.shape[-2], a_ragged_metadata,
         can_use_tma, can_use_split_k, epilogue.effective_itemsize,
-        x_transpose, y_acc_in is not None,
-        block_k = None if w_ragged_metadata is None else (x_ragged_metadata.slice_sizes_divisibility  or w_ragged_metadata.slice_sizes_divisibility),
+        a_transpose, c_acc_in is not None,
+        block_k = None if b_ragged_metadata is None else (a_ragged_metadata.slice_sizes_divisibility  or b_ragged_metadata.slice_sizes_divisibility),
     )
     if ragged_dimension == "K":
-        if w_ragged_metadata.slice_sizes_divisibility is not None:
-            assert opt_flags.block_k % w_ragged_metadata.slice_sizes_divisibility == 0
-        if x_ragged_metadata.slice_sizes_divisibility is not None:
-            assert opt_flags.block_k % x_ragged_metadata.slice_sizes_divisibility == 0
+        if b_ragged_metadata.slice_sizes_divisibility is not None:
+            assert opt_flags.block_k % b_ragged_metadata.slice_sizes_divisibility == 0
+        if a_ragged_metadata.slice_sizes_divisibility is not None:
+            assert opt_flags.block_k % a_ragged_metadata.slice_sizes_divisibility == 0
         assert opt_flags.split_k == 1
         # For unpadded (row major) x, we cannot use tma because memory access isn't aligned.
-        x_has_tma = opt_flags.is_persistent and (x.stride(-1) != 1 or (x_ragged_metadata.slice_sizes_divisibility is not None))
+        a_has_tma = opt_flags.is_persistent and (a.stride(-1) != 1 or (a_ragged_metadata.slice_sizes_divisibility is not None))
         # If TMA is used, limit is handled automatically, so we can pretend K is "even".
         # (For unpadded input, we assume that the first block_k unused rows are zero-filled,
         # when routing_data.expt_hist.sum() is less than K or K_W.)
         if opt_flags.is_persistent:
-            even_K = x_has_tma or (x_ragged_metadata.slice_sizes_divisibility is not None)
+            even_K = a_has_tma or (a_ragged_metadata.slice_sizes_divisibility is not None)
         else:
-            even_K = x_ragged_metadata.slice_sizes_divisibility is not None and w_ragged_metadata.slice_sizes_divisibility is not None
+            even_K = a_ragged_metadata.slice_sizes_divisibility is not None and b_ragged_metadata.slice_sizes_divisibility is not None
     else:
-        batch_size = w.shape[0] if x_ragged_metadata is None and w.ndim == 3 else 1
+        batch_size = b.shape[0] if a_ragged_metadata is None and b.ndim == 3 else 1
         assert K == K_W
-        x_has_tma = opt_flags.is_persistent and (has_gather_tma or not has_gather)
+        a_has_tma = opt_flags.is_persistent and (has_gather_tma or not has_gather)
         even_K = (K % opt_flags.block_k == 0)
-    if w_scale is not None and opt_flags.is_persistent and not target_info.has_native_mxfp():
+    if b_scale is not None and opt_flags.is_persistent and not target_info.has_native_mxfp():
         raise NotImplementedError("Must use non-persistent kernel for simulated MXFP")
-    if w_scale is not None and w_scale.storage.layout.name is not None and not opt_flags.is_persistent and target_info.has_native_mxfp():
+    if b_scale is not None and b_scale.storage.layout.name is not None and not opt_flags.is_persistent and target_info.has_native_mxfp():
         raise NotImplementedError("Must use persistent kernel and be TMA-compliant for native MXFP")
     # fused activation
     matmul_fused_activation = fused_activation
@@ -337,11 +337,11 @@ def matmul(x, w, bias,
     if opt_flags.split_k > 1:
         matmul_fused_activation, reduce_fused_activation = reduce_fused_activation, matmul_fused_activation
     # allocate output/scratchpad memory
-    allocation = init_allocation(x, w, precision_config, fused_activation,
+    allocation = init_allocation(a, b, precision_config, fused_activation,
                                  gather_indx, scatter_indx, batch_size,
                                  fused_comm.n_reduce_shards if fused_comm is not None else 1,
                                  opt_flags)
-    memory = apply_allocation(allocation, y)
+    memory = apply_allocation(allocation, c)
     # early exit
     if batch_size * M * N == 0:
         ret = memory["output"].squeeze(0)
@@ -350,7 +350,7 @@ def matmul(x, w, bias,
         return ret
     # TMA descriptors require a global memory allocation
     if opt_flags.is_persistent:
-        triton.set_allocator(get_per_device_per_stream_alloc_fn(x.device))
+        triton.set_allocator(get_per_device_per_stream_alloc_fn(a.device))
     # Intermediate tensors and postprocess kernels for each situation
     has_scratchpad = "matmul" in memory["scratchpad"]
     # Canonical output tensor (matmul scratchpad if present, otherwise final output tensor)
@@ -367,65 +367,65 @@ def matmul(x, w, bias,
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
     # moe metadata
-    expt_data_w = tuple([None] * 6) if ragged_dimension != "K" else ragged_metadata_fields(w_ragged_metadata, opt_flags.block_k)
-    expt_data_x = tuple([None] * 6) if ragged_dimension is None else ragged_metadata_fields(x_ragged_metadata, opt_flags.block_m if ragged_dimension == "M" else opt_flags.block_k)
+    expt_data_w = tuple([None] * 6) if ragged_dimension != "K" else ragged_metadata_fields(b_ragged_metadata, opt_flags.block_k)
+    expt_data_x = tuple([None] * 6) if ragged_dimension is None else ragged_metadata_fields(a_ragged_metadata, opt_flags.block_m if ragged_dimension == "M" else opt_flags.block_k)
     # spmd grid
     grid_m = triton.cdiv(M, opt_flags.block_m)
     if ragged_dimension == "M":
-        grid_m = x_ragged_metadata.n_blocks(x_ragged_metadata.n_slices, M, opt_flags.block_m)
+        grid_m = a_ragged_metadata.n_blocks(a_ragged_metadata.n_slices, M, opt_flags.block_m)
     grid_n = triton.cdiv(N, opt_flags.block_n)
     max_grid = batch_size * grid_m * grid_n * opt_flags.split_k
     grid = min(target_info.num_sms() - opt_flags.idle_sms, max_grid) if opt_flags.is_persistent else max_grid
     # canonicalize storage
     has_scatter_tma = scatter_indx is not None and target_info.has_tma_gather()
-    y = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
-    x_storage = _canonicalize_storage(x.storage, 2 if has_gather_tma else 3, flex.lhs_data)
-    w_storage = _canonicalize_storage(w.storage, 3, flex.rhs_data)
-    y_storage = _canonicalize_storage(y.storage, 2 if has_scatter_tma else 3, flex.out_data)
+    c = wrap_torch_tensor(out_matmul.view(math.prod(out_matmul.shape[:-1]), out_matmul.shape[-1]) if has_scatter else out_matmul.view(math.prod(out_matmul.shape[:-2]), *out_matmul.shape[-2:]))
+    a_storage = _canonicalize_storage(a.storage, 2 if has_gather_tma else 3, flex.lhs_data)
+    b_storage = _canonicalize_storage(b.storage, 3, flex.rhs_data)
+    c_storage = _canonicalize_storage(c.storage, 2 if has_scatter_tma else 3, flex.out_data)
     # create tma descriptor for x
-    if y_acc_in is not None:
-        assert opt_flags.split_k == 1, "y_acc_in + split_k is not supported."
-        assert scatter_indx is None, "y_acc_in + scatter is not supported."
-        if y_acc_in.ndim == 2:
-            y_acc_in = y_acc_in.unsqueeze(0)
-        assert y_acc_in.shape == out_matmul.shape[-3:]
-        y_acc_strides = y_acc_in.stride()
+    if c_acc_in is not None:
+        assert opt_flags.split_k == 1, "c_acc_in + split_k is not supported."
+        assert scatter_indx is None, "c_acc_in + scatter is not supported."
+        if c_acc_in.ndim == 2:
+            c_acc_in = c_acc_in.unsqueeze(0)
+        assert c_acc_in.shape == out_matmul.shape[-3:]
+        c_acc_strides = c_acc_in.stride()
     else:
-        y_acc_strides = (None, None, None)
+        c_acc_strides = (None, None, None)
 
-    x_tma_block_size = [1, opt_flags.block_k] if has_gather_tma else [1, opt_flags.block_m, opt_flags.block_k]
-    x_tma_mode = None if not x_has_tma else "ragged" if is_x_ragged and not has_gather_tma else "dense"
-    x_tensor_or_tma = x_storage.make_tma(x_tma_block_size, x_tma_mode) if x_has_tma else x_storage.data
+    a_tma_block_size = [1, opt_flags.block_k] if has_gather_tma else [1, opt_flags.block_m, opt_flags.block_k]
+    a_tma_mode = None if not a_has_tma else "ragged" if is_a_ragged and not has_gather_tma else "dense"
+    a_tensor_or_tma = a_storage.make_tma(a_tma_block_size, a_tma_mode) if a_has_tma else a_storage.data
     # create tma descriptor for y
-    y_has_tma = (
+    c_has_tma = (
         opt_flags.is_persistent and (scatter_indx is None or has_scatter_tma)
-        and (y_acc_in is None or y_acc_is_y)
+        and (c_acc_in is None or c_acc_is_c)
     )
     block_n = opt_flags.block_n // opt_flags.epilogue_subtile // matmul_fused_activation.specs.reduction_n
-    y_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
-    y_tma_mode = None if not y_has_tma else "ragged" if is_y_ragged and not has_scatter_tma else "dense"
-    y_tensor_or_tma = y_storage.make_tma(y_tma_block_size, y_tma_mode) if y_has_tma else y_storage.data
+    c_tma_block_size = [1, block_n] if has_scatter_tma else [1, opt_flags.block_m, block_n]
+    c_tma_mode = None if not c_has_tma else "ragged" if is_c_ragged and not has_scatter_tma else "dense"
+    c_tensor_or_tma = c_storage.make_tma(c_tma_block_size, c_tma_mode) if c_has_tma else c_storage.data
     # create tma descriptor for w
-    w_has_tma = opt_flags.is_persistent
-    w_tensor_or_tma = w_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n], "dense") if w_has_tma else w_storage.data
+    b_has_tma = opt_flags.is_persistent
+    b_tensor_or_tma = b_storage.make_tma([1, opt_flags.block_k, opt_flags.block_n], "dense") if b_has_tma else b_storage.data
     # create tma descriptor for w_scale
-    w_scale_has_tma = opt_flags.is_persistent and w_scale is not None
-    w_transpose = w_storage.data.stride()[-2] == 1
-    if w_scale_has_tma:
-        w_scale_storage = w_scale.storage
-        w_scale_tma_block_size = [opt_flags.block_n, opt_flags.block_k] if w_transpose else [opt_flags.block_k, opt_flags.block_n]
-        if isinstance(w_scale.storage.layout, StridedLayout):
-            w_scale_storage = _canonicalize_storage(w_scale.storage, 3, None)
-            w_scale_tma_block_size = [1] + w_scale_tma_block_size
-        w_scale_tensor_or_tma = w_scale_storage.make_tma(w_scale_tma_block_size, "dense")
+    b_scale_has_tma = opt_flags.is_persistent and b_scale is not None
+    b_transpose = b_storage.data.stride()[-2] == 1
+    if b_scale_has_tma:
+        b_scale_storage = b_scale.storage
+        b_scale_tma_block_size = [opt_flags.block_n, opt_flags.block_k] if b_transpose else [opt_flags.block_k, opt_flags.block_n]
+        if isinstance(b_scale.storage.layout, StridedLayout):
+            b_scale_storage = _canonicalize_storage(b_scale.storage, 3, None)
+            b_scale_tma_block_size = [1] + b_scale_tma_block_size
+        b_scale_tensor_or_tma = b_scale_storage.make_tma(b_scale_tma_block_size, "dense")
     else:
-        w_scale_tensor_or_tma = w_scale
+        b_scale_tensor_or_tma = b_scale
     # canonicalize strides
-    x_strides = [0]*(3 - x_storage.data.ndim) + list(x_storage.data.stride())
-    x_scale_strides = x_scale.stride() if x_has_mx else (None, None, None)
-    x_scale_strides = (0, ) * (3 - len(x_scale_strides)) + x_scale_strides
-    w_scale_strides = w_scale.stride() if w_has_mx and not w_scale_has_tma else (None, None, None)
-    w_scale_strides = (0, ) * (3 - len(w_scale_strides)) + w_scale_strides
+    a_strides = [0]*(3 - a_storage.data.ndim) + list(a_storage.data.stride())
+    a_scale_strides = a_scale.stride() if a_has_mx else (None, None, None)
+    a_scale_strides = (0, ) * (3 - len(a_scale_strides)) + a_scale_strides
+    b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
+    b_scale_strides = (0, ) * (3 - len(b_scale_strides)) + b_scale_strides
     out_matmul_scale_strides = out_matmul_scale.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = (0, ) * (4 - len(out_matmul_scale_strides)) + out_matmul_scale_strides
     # launch kernel
@@ -441,19 +441,19 @@ def matmul(x, w, bias,
         "n_reduce_shards": fused_comm.n_reduce_shards,
     } if fused_comm is not None else {}
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
-                   y_tensor_or_tma, y_storage.data, *out_matmul.stride(),
+                   c_tensor_or_tma, c_storage.data, *out_matmul.stride(),
                    *((None, out_matmul_scale, None) if out_matmul_has_mx else out_matmul_flex),
                    *out_matmul_scale_strides[-4:],
-                   x_tensor_or_tma, x_storage.data, *x_strides, x_transpose,
+                   a_tensor_or_tma, a_storage.data, *a_strides, a_transpose,
                    flex.lhs_data.scale,
-                   None if x_scale is None else x_scale.data.view(torch.uint8), *x_scale_strides,
-                   w_tensor_or_tma, w_storage.data, *w_storage.data.stride(), w_transpose,
+                   None if a_scale is None else a_scale.data.view(torch.uint8), *a_scale_strides,
+                   b_tensor_or_tma, b_storage.data, *b_storage.data.stride(), b_transpose,
                    flex.rhs_data.scale,
-                   w_scale_tensor_or_tma, *w_scale_strides,
-                   flex.acc_data.reinterpret(y_acc_in), *y_acc_strides,
-                   flex.acc_data.scale, y_acc_is_y,
+                   b_scale_tensor_or_tma, *b_scale_strides,
+                   flex.acc_data.reinterpret(c_acc_in), *c_acc_strides,
+                   flex.acc_data.scale, c_acc_is_c,
                    bias, bias_stride,
-                   None if ragged_dimension == "M" else x.shape[-2],
+                   None if ragged_dimension == "M" else a.shape[-2],
                    N, K, K_W,
                    betas, gammas,
                    gather_indx,
@@ -478,19 +478,19 @@ def matmul(x, w, bias,
                    opt_flags.block_k,
                    opt_flags.group_m,
                    XCD_SWIZZLE=opt_flags.xcd_swizzle,
-                   SWIZZLE_MX_VALUE=w.storage.layout.name,
-                   SWIZZLE_MX_SCALE=None if w_scale is None else w_scale.storage.layout.name,
+                   SWIZZLE_MX_VALUE=b.storage.layout.name,
+                   SWIZZLE_MX_SCALE=None if b_scale is None else b_scale.storage.layout.name,
                    EPILOGUE_SUBTILE=opt_flags.epilogue_subtile,
                    SPLIT_K=opt_flags.split_k,
                    EVEN_K=even_K,
                    W_CACHE_MODIFIER=opt_flags.w_cache_modifier,
-                   TOKENS_PER_EXPT_FOR_ANNOTATION=None if x_ragged_metadata is None else x_ragged_metadata.expected_slice_size,
+                   TOKENS_PER_EXPT_FOR_ANNOTATION=None if a_ragged_metadata is None else a_ragged_metadata.expected_slice_size,
                    num_warps=opt_flags.num_warps,
                    num_stages=opt_flags.num_stages,
                    arch=opt_flags.arch,
-                   UPCAST_INDICES=should_upcast_indices(x, w, out_matmul),
-                   X_TMA_MODE=x_tma_mode,
-                   Y_TMA_MODE=y_tma_mode,
+                   UPCAST_INDICES=should_upcast_indices(a, b, out_matmul),
+                   X_TMA_MODE=a_tma_mode,
+                   Y_TMA_MODE=c_tma_mode,
                    SWAP_XW=get_swap_xw(precision_config, opt_flags),
                    IS_EPILOGUE_QUANT_MXFP8=epilogue.specs.name == FnName.QUANTIZE_MXFP8.name,
                    NUM_SMS = grid if opt_flags.is_persistent else 0,
@@ -503,28 +503,28 @@ def matmul(x, w, bias,
         assert not out_matmul_has_mx
         postprocess_fn1 = ReducePostprocessFn(specs=reduce_fused_activation.specs, fn_args=reduce_fused_activation.fn_args)
         postprocess_fn2 = ReducePostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
-        y, y_mx_scale = reduce(
+        c, y_mx_scale = reduce(
             x = out_matmul.view(out_matmul.shape[0], -1, out_matmul.shape[-1]),
             dim = 0,
             # output data/metadata
-            y = memory["output"].view(-1, memory["output"].shape[-1]),
-            y_dtype = memory["output"].dtype,
-            y_flex = precision_config.flex_ctx.out_data,
-            y_flex_saturate_inf = precision_config.flexpoint_saturate_inf,
-            y_has_mx = precision_config.out_scale is not None,
+            c = memory["output"].view(-1, memory["output"].shape[-1]),
+            c_dtype = memory["output"].dtype,
+            c_flex = precision_config.flex_ctx.out_data,
+            c_flex_saturate_inf = precision_config.flexpoint_saturate_inf,
+            c_has_mx = precision_config.out_scale is not None,
             # fused functions
             postprocess_fn1 = postprocess_fn1,
             postprocess_fn2 = postprocess_fn2,
         )
         y_shape = out_matmul.shape[1:-1] + (out_matmul.shape[-1] // reduce_fused_activation.specs.reduction_n,)
-        out_final = y.view(*y_shape)
+        out_final = c.view(*y_shape)
         if y_mx_scale is not None:
             out_final_mx_scale = y_mx_scale.view(out_matmul.shape[-2], triton.cdiv(out_matmul.shape[-1], 32))
     else:
         out_final = out_matmul.squeeze(0)
         out_final_mx_scale = out_matmul_scale
 
-    if not (is_input_batched or w_ragged_metadata is not None):
+    if not (is_input_batched or b_ragged_metadata is not None):
         out_final = out_final.squeeze(0)
     if out_final_mx_scale is not None:
         precision_config.out_scale = out_final_mx_scale
@@ -534,9 +534,9 @@ def matmul(x, w, bias,
 # Reference Implementation
 # -----------------------------------------------------------------------------
 
-def matmul_torch(x, w, bias,
-                 x_ragged_metadata: RaggedTensorMetadata | None = None,
-                 w_ragged_metadata: RaggedTensorMetadata | None = None,
+def matmul_torch(a, b, bias,
+                 a_ragged_metadata: RaggedTensorMetadata | None = None,
+                 b_ragged_metadata: RaggedTensorMetadata | None = None,
                  gather_indx: torch.Tensor = None,
                  scatter_indx: torch.Tensor = None,
                  precision_config: PrecisionConfig = None,
@@ -544,20 +544,20 @@ def matmul_torch(x, w, bias,
                  gammas = None,
                  round_x = None, round_y = None,
                  ):
-    if w_ragged_metadata is not None:
-        n_expts_tot = w_ragged_metadata.slice_sizes.shape[0]
-        m, n = x.shape[-2], w.shape[-1]
-        out = torch.zeros((n_expts_tot, m, n), dtype=torch.float32, device=x.device)
-        x_slice_offs = x_ragged_metadata.slice_offs
-        w_slice_offs = w_ragged_metadata.slice_offs
+    if b_ragged_metadata is not None:
+        n_expts_tot = b_ragged_metadata.slice_sizes.shape[0]
+        m, n = a.shape[-2], b.shape[-1]
+        out = torch.zeros((n_expts_tot, m, n), dtype=torch.float32, device=a.device)
+        x_slice_offs = a_ragged_metadata.slice_offs
+        w_slice_offs = b_ragged_metadata.slice_offs
         for expt in range(n_expts_tot):
-            k = int(w_ragged_metadata.slice_sizes[expt].item())
+            k = int(b_ragged_metadata.slice_sizes[expt].item())
             if k == 0:
                 continue
             x_start = int(x_slice_offs[expt].item())
             w_start = int(w_slice_offs[expt].item())
-            x_slice = x[:, x_start:x_start + k]
-            w_slice = w[w_start:w_start + k, :]
+            x_slice = a[:, x_start:x_start + k]
+            w_slice = b[w_start:w_start + k, :]
             out_expt = matmul_torch(
                 x_slice, w_slice, None,
                 None, None, None, None, None,
@@ -567,42 +567,42 @@ def matmul_torch(x, w, bias,
             out[expt] = out_expt.to(out.dtype)
         return out
 
-    is_input_batched = x.ndim == 3
-    assert x.dtype.itemsize > 1
-    assert w.dtype.itemsize > 1
+    is_input_batched = a.ndim == 3
+    assert a.dtype.itemsize > 1
+    assert b.dtype.itemsize > 1
     if is_input_batched:
         assert gather_indx is None, "gather not supported in batched mode"
         assert scatter_indx is None, "scatter not supported in batched mode"
-        assert w.ndim == 3 and w.shape[0] == x.shape[0]
+        assert b.ndim == 3 and b.shape[0] == a.shape[0]
     if round_x is None:
         round_x = lambda x, idx: x
     if round_y is None:
         round_y = lambda x: x
     if bias is not None and bias.ndim == 1:
         bias = bias.view(1, *bias.shape)
-    if w.ndim == 2:
-        w = w.view(1, *w.shape)
-    if x.ndim == 2:
-        x = x.view(1, *x.shape)
+    if b.ndim == 2:
+        b = b.view(1, *b.shape)
+    if a.ndim == 2:
+        a = a.view(1, *a.shape)
     # memory offsets
-    if x_ragged_metadata is not None and not is_input_batched:
-        sizes = x_ragged_metadata.slice_sizes
+    if a_ragged_metadata is not None and not is_input_batched:
+        sizes = a_ragged_metadata.slice_sizes
         off = torch.zeros(sizes.shape[0] + 1, dtype=torch.int32)
         off[1:] = torch.cumsum(sizes, 0)
         offs = list(itertools.pairwise(off))
     else:
-        offs = [[0, x.shape[1]] for _ in range(w.shape[0])]
+        offs = [[0, a.shape[1]] for _ in range(b.shape[0])]
     # compute
-    n_rows = x.shape[1] if gather_indx is None else gather_indx.shape[0]
-    y = torch.zeros((x.shape[0], n_rows, w.shape[-1]), device=x.device, dtype=x.dtype)
+    n_rows = a.shape[1] if gather_indx is None else gather_indx.shape[0]
+    y = torch.zeros((a.shape[0], n_rows, b.shape[-1]), device=a.device, dtype=a.dtype)
     for i, (lo, hi) in enumerate(offs):
         if gather_indx is None:
-            idx = torch.arange(lo, hi, device=x.device)
+            idx = torch.arange(lo, hi, device=a.device)
         else:
             idx = gather_indx[lo:hi]
         batch = i if is_input_batched else 0
-        out = torch.matmul(round_x(x[batch, idx, :], torch.arange(lo, hi, device="cuda")).float(),
-                           w[i].float())
+        out = torch.matmul(round_x(a[batch, idx, :], torch.arange(lo, hi, device="cuda")).float(),
+                           b[i].float())
         if bias is not None:
             out += bias[i, :] if betas is None else bias[i, :] * betas[lo:hi, None]
         if gammas is not None:
@@ -612,7 +612,7 @@ def matmul_torch(x, w, bias,
         y = y.view(y.shape[1], y.shape[2])
     if scatter_indx is None:
         return y
-    out = torch.zeros((scatter_indx.shape[0], y.shape[-1]), dtype=y.dtype, device=x.device)
+    out = torch.zeros((scatter_indx.shape[0], y.shape[-1]), dtype=y.dtype, device=a.device)
     msk = scatter_indx != -1
     out[scatter_indx[msk], :] = y[msk, :]
     return out

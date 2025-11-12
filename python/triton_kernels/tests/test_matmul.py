@@ -204,6 +204,20 @@ class Case:
     y_transpose: bool = False
     colmajor_mxfp_weight: bool = True
 
+test_op_dtypes = [
+    ("float16", "float16"),
+    ("float8_e5m2", "float8_e5m2"),
+    ("bfloat16", "mxfloat4_e2m1"),
+    ("float8_e5m2", "mxfloat4_e2m1"),
+    ("mxfloat8_e4m3fn", "mxfloat4_e2m1"),
+]
+
+# test_op_shapes = [
+#     (16, 256, 256, "batched"),
+#     (16, 256, 256, "ragged"),
+#     (300, 400, 400, "batched"),
+#     (300, 400, 400, "ragged"),
+# ]
 
 @pytest.mark.parametrize(
     ", ".join(f.name for f in fields(Case)),
@@ -607,7 +621,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         tri_y = matmul(x_tri, w_tri, bias_tri,
                            x_ragged_metadata, w_ragged_metadata,
                            gindx, sindx, precision_opt,
-                           gammas=gs1_ref, epilogue=epilogue, y=y_tri_in)
+                           gammas=gs1_ref, epilogue=epilogue, c=y_tri_in)
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
         pytest.skip(f"inapplicable opt_flags constraint {e}")
     if y_tri_in is not None:
@@ -620,8 +634,8 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         return x.to(act_dtype).to(torch.float32)
 
     ref_y = matmul_torch(x_ref, w_ref, bias_ref,  #
-                             x_ragged_metadata=x_ragged_metadata,
-                             w_ragged_metadata=w_ragged_metadata,
+                             a_ragged_metadata=x_ragged_metadata,
+                             b_ragged_metadata=w_ragged_metadata,
                              gather_indx=gindx,
                              scatter_indx=sindx,
                              round_x=round_x, gammas=gs1_ref)

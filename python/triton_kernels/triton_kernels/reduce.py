@@ -527,16 +527,16 @@ def reduce(
     scale: Optional[torch.Tensor] = None,
     x_mxscale: Optional[torch.Tensor] = None,
     x_flex: Optional[InFlexData] = InFlexData(),
-    y: Optional[torch.Tensor] = None,
-    y_dtype: Optional[torch.dtype] = None,
-    y_flex: Optional[OutFlexData] = OutFlexData(),
-    y_flex_saturate_inf: bool = False,
-    y_has_mx: Optional[bool] = None,
+    c: Optional[torch.Tensor] = None,
+    c_dtype: Optional[torch.dtype] = None,
+    c_flex: Optional[OutFlexData] = OutFlexData(),
+    c_flex_saturate_inf: bool = False,
+    c_has_mx: Optional[bool] = None,
     postprocess_fn1: Optional[PostprocessFn] = None,
     postprocess_fn2: Optional[PostprocessFn] = None,
 ):
-    return _ReduceAutograd.apply(x, dim, mask, scale, x_mxscale, x_flex, y_dtype, y_flex,  #
-                                 y_flex_saturate_inf, y_has_mx, y, postprocess_fn1, postprocess_fn2)
+    return _ReduceAutograd.apply(x, dim, mask, scale, x_mxscale, x_flex, c_dtype, c_flex,  #
+                                 c_flex_saturate_inf, c_has_mx, c, postprocess_fn1, postprocess_fn2)
 
 
 # ------------------------------------------------------------
