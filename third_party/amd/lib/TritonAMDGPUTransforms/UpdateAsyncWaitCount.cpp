@@ -36,7 +36,7 @@
 // - On GFX1250 the number of (multicast) async_load and async_stores. On
 //   GFX1250 those are out of order with register loads so we will not get
 //   conservative waits.
-// For amdgpu.tdm_async_wait we only count TDM ops. Each tdm_load/store will
+// For amdg.tdm_async_wait we only count TDM ops. Each tdm_load/store will
 // produce exactly one instruction so it directly correlates with OP at TGGIR
 // level.
 
@@ -292,7 +292,7 @@ void updateWaitCount(WaitType waitOp,
 
   if (std::is_same_v<WaitType, ttg::AsyncWaitOp>) {
     // Replace ttg.async_wait which counts outstanding commits groups with
-    // amdgpu.async_wait which counts the number of oustanding
+    // amdg.async_wait which counts the number of oustanding
     // intrinsics
     auto tokens = waitOp.getAsyncToken();
     rewriter.setInsertionPointAfter(waitOp);
@@ -313,7 +313,8 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
 
   void runOnOperation() override {
     tt::AMD::TargetInfo targetInfo(archGenerationName);
-    if (!isCDNA(targetInfo.getISAFamily())) {
+    if (!isCDNA(targetInfo.getISAFamily()) &&
+        targetInfo.getISAFamily() != tt::AMD::ISAFamily::GFX1250) {
       return;
     }
 

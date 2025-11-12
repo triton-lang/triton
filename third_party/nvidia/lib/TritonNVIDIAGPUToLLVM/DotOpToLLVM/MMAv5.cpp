@@ -264,17 +264,17 @@ static void createScaledGen5MMA(ConversionPatternRewriter &rewriter,
                                 MemDescOperand a, Value b, MemDescOperand d,
                                 Value scaleA, Value scaleB, Value pred,
                                 Value instDescriptor, Value useInitAcc,
-                                bool aInTmem, mxfpKind mxfpInstKind) {
+                                bool aInTmem, mxfpKind mxfpInstKind,
+                                bool twoCTAs) {
   PTXBuilder ptxBuilder;
-  std::string opcode;
+  std::string opcode =
+      "tcgen05.mma.cta_group::" + std::to_string(twoCTAs ? 2 : 1) + ".kind::";
   if (mxfpInstKind == mxfpKind::mxf8f6f4) {
-    opcode =
-        "tcgen05.mma.cta_group::1.kind::mxf8f6f4.block_scale.scale_vec::1X";
+    opcode += "mxf8f6f4.block_scale.scale_vec::1X";
   } else if (mxfpInstKind == mxfpKind::mxf4) {
-    opcode = "tcgen05.mma.cta_group::1.kind::mxf4.block_scale.scale_vec::2X";
+    opcode += "mxf4.block_scale.scale_vec::2X";
   } else if (mxfpInstKind == mxfpKind::mxf4nvf4) {
-    opcode =
-        "tcgen05.mma.cta_group::1.kind::mxf4nvf4.block_scale.scale_vec::4X";
+    opcode += "mxf4nvf4.block_scale.scale_vec::4X";
   } else {
     assert(0 && "Unsupported mxfp kind.");
   }
@@ -312,7 +312,9 @@ static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
              "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::"
              "cluster.multicast::cluster.b64 [$1], $2;";
   } else {
-    opcode = "@$0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [$1];";
+    opcode =
+        "@$0 tcgen05.commit.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
+        ".mbarrier::arrive::one.b64 [$1];";
   }
   auto &barrierOp = *ptxBuilder.create(opcode);
   barrierOp(ptxOperands, /*onlyAttachMLIRArgs=*/true);
@@ -336,7 +338,6 @@ struct DotConversion {
     } repShape;
     bool transA;
     bool transB;
-    bool interleaved;
     bool aInTmem;
   };
 
@@ -417,7 +418,6 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
   int numRepM = ceil<unsigned>(M, mmaSizeM);
   int numRepN = ceil<unsigned>(N, mmaSizeN);
   int numRepK = ceil<unsigned>(K, mmaSizeK);
-  bool interleaved = (mmaSizeM == 64 && (numRepM > 1 || numRepN > 1));
 
   SmallVector<int64_t> shapeA = op.shapeA;
   SmallVector<int64_t> shapeB = op.shapeB;
@@ -453,8 +453,7 @@ void convertDotImpl(const LLVMTypeConverter &typeConverter,
          "Currently don't support transpose for F32.");
 
   DotConversion::InstDesc desc{mmaSizeM, mmaSizeN, {numRepM, numRepN, numRepK},
-                               transA,   transB,   interleaved,
-                               aInTmem};
+                               transA,   transB,   aInTmem};
   for (int m = 0; m < numRepM; m++) {
     for (int n = 0; n < numRepN; n++) {
       Value useInitAcc = useDFlag;
@@ -486,7 +485,8 @@ void convertDot(const LLVMTypeConverter &typeConverter,
   MemDescType bTensorTy = op.getB().getType();
   MemDescType dTensorTy = op.getD().getType();
   auto dLayout = cast<ttng::TensorMemoryEncodingAttr>(dTensorTy.getEncoding());
-  bool twoCTAs = op.getTwoCtas();
+  bool twoCTAs = ttng::getModuleTwoCTAs(op);
+  assert(twoCTAs == op.getTwoCtas());
 
   DotConversion dot;
 
@@ -595,6 +595,7 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
   Value baseD = tb.ptrtoint(i32_ty, adaptor.getD());
   Value baseScaleA = tb.ptrtoint(i32_ty, adaptor.getAScale());
   Value baseScaleB = tb.ptrtoint(i32_ty, adaptor.getBScale());
+  bool twoCTAs = ttng::getModuleTwoCTAs(op);
 
   int numRows = 128;
   int colSizeInBits = 32;
@@ -634,14 +635,13 @@ void convertScaledDot(const LLVMTypeConverter &typeConverter,
         subWordIdx, subWordIdx, mxfpInstKind);
     createScaledGen5MMA(rewriter, loc, op, a, b, accAddress, scaleA, scaleB,
                         pred, instDescriptor, useInitAcc, desc.aInTmem,
-                        mxfpInstKind);
+                        mxfpInstKind, twoCTAs);
   };
 
   convertDotImpl(typeConverter, rewriter, loc, op.getA(), op.getB(),
                  adaptor.getA(), adaptor.getB(), dTensorTy, adaptor.getUseD(),
                  adaptor.getPred(), adaptor.getBarriers(),
-                 adaptor.getBarrierPreds(), /*twoCTAs=*/false, opKindIsMXFP4,
-                 dot);
+                 adaptor.getBarrierPreds(), twoCTAs, opKindIsMXFP4, dot);
 }
 
 //===----------------------------------------------------------------------===//
@@ -657,11 +657,6 @@ struct TCGen5MMAOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto AEnc = op.getA().getType().getEncoding();
     auto BEnc = op.getB().getType().getEncoding();
-    assert((isa<NVMMASharedEncodingAttr, ttng::TensorMemoryEncodingAttr,
-                SharedLinearEncodingAttr>(AEnc)) &&
-           "Operand A should use Shared or Tensor memory layout.");
-    assert((isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr>(BEnc)) &&
-           "Operand B should use Shared layout.");
     convertDot(*getTypeConverter(), rewriter, op.getLoc(), op, adaptor);
     rewriter.eraseOp(op);
     return success();
@@ -699,7 +694,7 @@ struct TCGen5CommitOpConversion
       pred = b.and_(adaptor.getPred(), pred);
 
     createMMACommit(rewriter, op.getLoc(), smemObj.getBase(), pred,
-                    op.getTwoCtas());
+                    ttng::getModuleTwoCTAs(op));
     rewriter.eraseOp(op);
     return success();
   }

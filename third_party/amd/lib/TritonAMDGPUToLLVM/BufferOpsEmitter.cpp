@@ -145,7 +145,7 @@ Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,
   // Note: rocdl.raw.ptr.buffer.atomic.cmpswap expects
   // val to be before cmp in the arg list. This is
   // the opposite of the order in tl.atomic_cmpxchg
-  // and amdgpu.buffer_atomic_cas
+  // and amdg.buffer_atomic_cas
   SmallVector<Value, 6> args{casStoreVal, casCmpVal};
   fillCommonArgsAtomics(type, rsrcDesc, offset, pred, hasUsers, args);
 

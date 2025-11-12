@@ -26,7 +26,8 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        SmallVector<int64_t> blockShape, int numWarps,
                        unsigned padInterval, unsigned padAmount,
                        SmallVector<Value> &group0, SmallVector<Value> &group1,
-                       SmallVector<Value> offset, Value dstPtr, Value pred);
+                       SmallVector<Value> offset, Value dstPtr, Value pred,
+                       Value barrierPtr);
 
 } // namespace mlir::LLVM::AMD
 

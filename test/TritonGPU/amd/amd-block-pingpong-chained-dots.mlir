@@ -23,7 +23,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttg.async_commit_group
   // CHECK: rocdl.sched.barrier 0
   // CHECK-NEXT: rocdl.s.setprio 0
-  // CHECK-NEXT: rocdl.s.waitcnt -7937
+  // CHECK-NEXT: amdg.memory_counter_wait ds(0)
   // CHECK-NEXT: rocdl.s.barrier
   // CHECK-NEXT: rocdl.sched.barrier 0
   // Compute Cluster2
@@ -38,7 +38,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttg.async_commit_group
   // CHECK: rocdl.sched.barrier 0
   // CHECK-NEXT: rocdl.s.setprio 0
-  // CHECK-NEXT: rocdl.s.waitcnt -7937
+  // CHECK-NEXT: amdg.memory_counter_wait ds(0)
   // CHECK-NEXT: scf.yield
 
   tt.func @chained_dots_async_loads(%arg0: tensor<64x16x!tt.ptr<f16>, #blocked>, %arg1: i32, %arg2: i32, %arg3: !ttg.async.token, %arg4: tensor<128x16xf32, #mma>, %arg5: tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, %arg6: i32, %arg7: tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, %arg8: tensor<128x16xf32, #mma>, %arg9: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg10: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, %arg11: i32, %arg12: i32, %arg13: tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>) -> tensor<128x16xf32, #mma> {
@@ -95,7 +95,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: tt.load
   // CHECK-NEXT: rocdl.sched.barrier 0
   // CHECK-NEXT: rocdl.s.setprio 0
-  // CHECK-NEXT: rocdl.s.waitcnt -7937
+  // CHECK-NEXT: amdg.memory_counter_wait ds(0)
   // CHECK-NEXT: rocdl.s.barrier
   // CHECK-NEXT: rocdl.sched.barrier 0
   // Compute Cluster2
@@ -109,7 +109,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: tt.load
   // CHECK-NEXT: rocdl.sched.barrier 0
   // CHECK-NEXT: rocdl.s.setprio 0
-  // CHECK-NEXT: rocdl.s.waitcnt -7937
+  // CHECK-NEXT: amdg.memory_counter_wait ds(0)
   // CHECK-NEXT: scf.yield
 
   tt.func @chained_dots_tt_loads(%arg0: tensor<64x16xf16, #blocked>, %arg1: tensor<64x16x!tt.ptr<f16>, #blocked>, %arg2: i32, %arg3: i32, %arg4: tensor<128x16xf32, #mma>, %arg5: tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>, %arg6: i32, %arg7: tensor<64x16xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>, %arg8: tensor<128x16xf32, #mma>, %arg9: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg10: tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>, %arg11: i32, %arg12: i32, %arg13: tensor<128xf32, #ttg.slice<{dim = 1, parent = #mma}>>) -> tensor<128x16xf32, #mma> {

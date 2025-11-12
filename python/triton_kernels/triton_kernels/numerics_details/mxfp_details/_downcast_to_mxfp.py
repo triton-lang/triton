@@ -1,5 +1,6 @@
 import triton
 import triton.language as tl
+from triton_kernels.target_info import cuda_capability_geq
 
 # fmt: off
 
@@ -72,18 +73,42 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
     # Now we must convert the tensors to the mx format.
     if is_fp8:
         out_tensor = quant_tensor.to(mx_tensor_dtype)
+    elif cuda_capability_geq(10, 0):
+        # Convert scaled values to two f32 lanes and use PTX cvt to e2m1x2 with two f32 operands.
+        pairs = tl.reshape(quant_tensor, [BLOCK_SIZE_OUT_DIM, BLOCK_SIZE_QUANT_DIM // 2, 2])
+        lo_f, hi_f = tl.split(pairs)
+        lo_f32 = lo_f.to(tl.float32)
+        hi_f32 = hi_f.to(tl.float32)
+
+        # Inline PTX: cvt.rn.satfinite.e2m1x2.f32 takes two f32 sources and produces one .b8 packed e2m1x2.
+        out_tensor = tl.inline_asm_elementwise(
+            """
+            {
+                .reg .b8 r;
+                cvt.rn.satfinite.e2m1x2.f32 r, $1, $2;
+                mov.b32 $0, {r, r, r, r};
+            }
+            """,
+            constraints="=r,f,f",
+            args=[hi_f32, lo_f32],
+            dtype=tl.uint8,
+            is_pure=True,
+            pack=1,
+        )
     else:
         quant_tensor = quant_tensor.to(tl.uint32, bitcast=True)
         signs = quant_tensor & 0x80000000
         exponents = (quant_tensor >> 23) & 0xFF
-        mantissas = (quant_tensor & 0x7FFFFF)
+        mantissas_orig = (quant_tensor & 0x7FFFFF)
 
         # For RTNE: 0.25 < x < 0.75 maps to 0.5 (denormal); exactly 0.25 maps to 0.0
         E8_BIAS = 127
         E2_BIAS = 1
         # Move implicit bit 1 at the beginning to mantissa for denormals
+        is_subnormal = exponents < E8_BIAS
         adjusted_exponents = tl.core.sub(E8_BIAS, exponents + 1, sanitize_overflow=False)
-        mantissas = tl.where(exponents < E8_BIAS, (0x400000 | (mantissas >> 1)) >> adjusted_exponents, mantissas)
+        mantissas_pre = (0x400000 | (mantissas_orig >> 1))
+        mantissas = tl.where(is_subnormal, mantissas_pre >> adjusted_exponents, mantissas_orig)
 
         # For normal numbers, we change the bias from 127 to 1, and for subnormals, we keep exponent as 0.
         exponents = tl.maximum(exponents, E8_BIAS - E2_BIAS) - (E8_BIAS - E2_BIAS)
@@ -93,7 +118,15 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
         m2bits = mantissas >> 21
         lsb_keep = (m2bits >> 1) & 0x1
         guard = m2bits & 0x1
-        sticky = ((mantissas & 0x1FFFFF) != 0).to(tl.uint32)
+        IS_SRC_FP32: tl.constexpr = src_tensor.dtype == tl.float32
+        if IS_SRC_FP32:
+            bit0_dropped = (mantissas_orig & 0x1) != 0
+            mask = (1 << tl.minimum(adjusted_exponents, 31)) - 1
+            dropped_post = (mantissas_pre & mask) != 0
+            sticky = is_subnormal & (bit0_dropped | dropped_post)
+            sticky |= ((mantissas & 0x1FFFFF) != 0).to(tl.uint32)
+        else:
+            sticky = ((mantissas & 0x1FFFFF) != 0).to(tl.uint32)
         round_inc = guard & (sticky | lsb_keep)
         e2m1_tmp = tl.minimum((((exponents << 2) | m2bits) + round_inc) >> 1, 0x7)
         e2m1_value = ((signs >> 28) | e2m1_tmp).to(tl.uint8)
@@ -105,12 +138,14 @@ def _compute_quant_and_scale(src_tensor, valid_src_mask, mx_tensor_dtype: tl.con
     return out_tensor, dequant_scale_exponent
 
 @triton.jit
-def _downcast_to_mxfp(mx_tensor_ptr, stride_mxt_outer, stride_mxt_quant: tl.constexpr,
-                      mx_scale_ptr, stride_mx_scale_outer, stride_mx_scale_quant,
-                      src_ptr, stride_src_outer, stride_src_quant,
-                      outer_dim, quant_dim,
-                      BLOCK_SIZE_OUT_DIM: tl.constexpr, BLOCK_SIZE_QUANT_DIM: tl.constexpr,
-                      DEQUANT_SCALE_ROUNDING_MODE: tl.constexpr):
+def _downcast_to_mxfp(
+    mx_tensor_ptr, stride_mxt_outer, stride_mxt_quant: tl.constexpr,
+    mx_scale_ptr, stride_mx_scale_outer, stride_mx_scale_quant,
+    src_ptr, stride_src_outer, stride_src_quant, outer_dim, quant_dim,
+    BLOCK_SIZE_OUT_DIM:tl.constexpr,
+    BLOCK_SIZE_QUANT_DIM: tl.constexpr,
+    DEQUANT_SCALE_ROUNDING_MODE: tl.constexpr,
+):
 
     tl.static_assert(stride_mxt_quant == 1, f"Output stride, {stride_mxt_quant=} must be 1.")
     tl.static_assert(BLOCK_SIZE_QUANT_DIM % MXFP_BLOCK_SIZE == 0, f"{BLOCK_SIZE_QUANT_DIM=} must be a multiple of 32")
@@ -150,10 +185,10 @@ def _downcast_to_mxfp(mx_tensor_ptr, stride_mxt_outer, stride_mxt_quant: tl.cons
     mask_n = start_out + offs_outer < outer_dim
     full_mask_src = mask_src_quant & mask_n
 
-    mask_mxt_quant = start_mx_quant + offs_mxt_quant < tl.cdiv(quant_dim, K_DIVISOR)
+    mask_mxt_quant = start_mx_quant + offs_mxt_quant < quant_dim // K_DIVISOR  # requires quant_dim % K_DIVISOR == 0
     full_mask_mxt = mask_mxt_quant & mask_n
 
-    scale_mask_k = start_mx_scale_quant + offs_scale_quant < tl.cdiv(quant_dim, MXFP_BLOCK_SIZE)
+    scale_mask_k = start_mx_scale_quant + offs_scale_quant < quant_dim // MXFP_BLOCK_SIZE  # requires quant_dim % MXFP_BLOCK_SIZE == 0
     full_scale_mask = scale_mask_k & mask_n
 
     src_tensor_offsets = offs_src_quant * stride_src_quant + offs_outer * stride_src_outer
