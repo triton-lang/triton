@@ -2082,6 +2082,7 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
   bool transposed = false;
   bool fp4Padded = false;
   unsigned elementBitWidth;
+  unsigned layoutRank = 2;
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
@@ -2111,6 +2112,9 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseIntArrayAttr(parser, attr, CTAOrder.emplace(), "CTAOrder")
               .failed())
         return {};
+    } else if (attr.getName() == "rank") {
+      if (parseUInt(parser, attr, layoutRank, "rank").failed())
+        return {};
     } else {
       parser.emitError(parser.getNameLoc(), "unexpected key: ")
           << attr.getName().strref();
@@ -2119,7 +2123,7 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
   }
 
   std::optional<CTALayoutAttr> CTALayout = getCTALayoutOrError(
-      parser, CTAsPerCGA, CTASplitNum, CTAOrder, /*rank=*/2);
+      parser, CTAsPerCGA, CTASplitNum, CTAOrder, layoutRank);
   if (!CTALayout.has_value())
     return {};
 
@@ -2137,8 +2141,14 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
     // Print only in this case to reduce the noise for the more common case.
     printer << ", fp4Padded = true";
   }
-  maybePrintCTALayout(getContext(), printer, getCTALayout(),
-                      /*rank=*/2);
+  unsigned rank = getCTALayout().getCTAOrder().size();
+  auto *ctx = getContext();
+  auto defaultLayout = CTALayoutAttr::getDefault(ctx, rank);
+  if (getCTALayout() == defaultLayout && rank != 2) {
+    printer << ", rank = " << rank;
+  } else {
+    maybePrintCTALayout(ctx, printer, getCTALayout(), rank);
+  }
   printer << "}>";
 }
 

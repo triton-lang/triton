@@ -171,7 +171,7 @@ tt.func public @fn(%v1: tensor<4x128xf32>, %v2: tensor<4x128xi64>) {
 
 // -----
 
-#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
     // expected-error @+1 {{op result encoding must be specified}}
