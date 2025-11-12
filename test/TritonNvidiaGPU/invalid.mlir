@@ -103,7 +103,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %c32_i32 = arith.constant 32 : i32
     %0 = ttg.local_alloc : () -> !ttg.memdesc<256x32xf32, #shared1, #smem, mutable>
     %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared2, #smem, mutable>
-    // expected-error @below {{TMA result must have NVMMA shared layout}}
+    // expected-error @below {{TMA result must have NVMMA or SharedLinear layout}}
     ttng.async_tma_copy_global_to_local %arg0[%c32_i32, %c32_i32, %c32_i32] %0, %1, %true : !tt.tensordesc<tensor<1x256x32xf32, #shared>>, !ttg.memdesc<1xi64, #shared2, #smem, mutable> -> !ttg.memdesc<256x32xf32, #shared1, #smem, mutable>
   }
 }
