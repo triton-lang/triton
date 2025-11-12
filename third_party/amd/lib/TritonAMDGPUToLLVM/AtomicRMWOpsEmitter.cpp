@@ -1,8 +1,12 @@
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "AtomicRMWOpsEmitter.h"
+
+#include <array>
+#include <cstdlib>
 
 using namespace triton::AMD;
 
@@ -45,6 +49,45 @@ Value generatePopcount64(RewriterBase &rewriter, Value val) {
   val = b.and_(b.add(val, b.lshr(val, b.i64_val(4))), m4);
   // left 8 bits of x + (x<<8) + (x<<16) + (x<<24) + ...
   return b.lshr(b.mul(val, h01), b.i64_val(56));
+}
+
+bool getRowShrDppParams(int shift, int &dppCtrl, int &rowMask, int &bankMask,
+                        bool &boundCtrl) {
+  rowMask = 0xF;
+  bankMask = 0xF;
+  boundCtrl = false;
+  switch (shift) {
+  case 1:
+    dppCtrl = 0x111; // row_shr:1
+    return true;
+  case 2:
+    dppCtrl = 0x112; // row_shr:2
+    return true;
+  case 4:
+    dppCtrl = 0x114; // row_shr:4
+    bankMask = 0xE;
+    boundCtrl = true;
+    return true;
+  case 8:
+    dppCtrl = 0x118; // row_shr:8
+    bankMask = 0xC;
+    boundCtrl = true;
+    return true;
+  case 16:
+    dppCtrl = 0x142; // row_bcast:15
+    rowMask = 0xA;
+    bankMask = 0xF;
+    boundCtrl = true;
+    return true;
+  case 32:
+    dppCtrl = 0x143; // row_bcast:31
+    rowMask = 0xC;
+    bankMask = 0xF;
+    boundCtrl = true;
+    return true;
+  default:
+    return false;
+  }
 }
 
 Value genReadFirstLane(RewriterBase &rewriter, Value v) {
@@ -361,34 +404,23 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
 
   rewriter.setInsertionPointToEnd(curBlock);
 
-  // check how many adjacent address are in the wave
-  Value rightNeighbourAddr = genI32TiledOp(rewriter, generateI32DppMove, rmwPtr,
-                                           0x130, 0xF, 0xF, false);
-  Value elemSize = b.i64_val(operandElemType.getIntOrFloatBitWidth() / 8);
-  Value isNeighbour = b.icmp_eq(rightNeighbourAddr, b.add(rmwPtr, elemSize));
-  Value neighbourFlag = targetInfo.ballot(rewriter, loc, i64_ty, isNeighbour);
-  Value numNeighbours =
-      b.trunc(i32_ty, generatePopcount64(rewriter, neighbourFlag));
-  // Heuristic that atomic_add is optimizated only if the number of
-  // neighbouring addresses in a wave is less than 32.
-  // TODO: Calculate actual number of difference addresses in a wave.
-  Value optAtomic = b.icmp_ult(numNeighbours, b.i32_val(32));
-
-  LLVM::CondBrOp::create(rewriter, loc, optAtomic, initLoop, atomicBlock,
-                         ValueRange({rmwPtr, operand}));
+  LLVM::BrOp::create(rewriter, loc, initLoop);
   rewriter.setInsertionPointToEnd(initLoop);
 
   auto *afterLoopBlock = initLoop->splitBlock(rewriter.getInsertionPoint());
   afterLoopBlock->addArgument(i32_ty, loc);    // idx
   afterLoopBlock->addArgument(i32_ty, loc);    // cnt
   afterLoopBlock->addArgument(int_ty(1), loc); // isLeader
+  afterLoopBlock->addArgument(i32_ty, loc);    // maxCnt
 
   auto *loopBody = rewriter.createBlock(initLoop->getParent(),
                                         std::next(Region::iterator(initLoop)));
   loopBody->addArgument(i32_ty, loc);
+  loopBody->addArgument(i32_ty, loc);
 
   rewriter.setInsertionPointToEnd(initLoop);
-  LLVM::BrOp::create(rewriter, loc, b.i32_val(0), loopBody);
+  rewriter.create<LLVM::BrOp>(loc, ValueRange({b.i32_val(0), b.i32_val(1)}),
+                              loopBody);
 
   // Greed search of same addr within wavefront. Also collect auxiliary
   // information about relative position:
@@ -405,6 +437,7 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   Value done = b.icmp_eq(chosen, rmwPtr);
   Value mask = targetInfo.ballot(rewriter, loc, i64_ty, done);
   Value start = loopBody->getArgument(0);
+  Value currentMax = loopBody->getArgument(1);
   Value cnt = b.trunc(i32_ty, generatePopcount64(rewriter, mask));
   Value maskLo = b.trunc(i32_ty, mask);
   Value mbcntLoRes =
@@ -415,44 +448,160 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
       ROCDL::MbcntHiOp::create(rewriter, loc, i32_ty, maskHi, mbcntLoRes,
                                /*arg_attrs=*/{}, /*res_attrs=*/{});
   Value base = b.add(start, cnt);
+  Value updatedMax =
+      b.select(b.icmp_ugt(cnt, currentMax), cnt, currentMax);
   Value leader = b.icmp_eq(idx, b.i32_val(0));
   cnt = b.sub(cnt, idx);
   idx = b.add(idx, start);
   LLVM::CondBrOp::create(rewriter, loc, done, afterLoopBlock,
-                         ValueRange({idx, cnt, leader}), loopBody,
-                         ValueRange({base}));
+                         ValueRange({idx, cnt, leader, updatedMax}), loopBody,
+                         ValueRange({base, updatedMax}));
 
   rewriter.setInsertionPointToEnd(afterLoopBlock);
 
   Value idxRes = afterLoopBlock->getArgument(0);
   Value cntRes = afterLoopBlock->getArgument(1);
   Value leaderRes = afterLoopBlock->getArgument(2);
-  Value idxScaledForPermute = b.mul(idxRes, b.i32_val(4));
+  Value maxCntRes = afterLoopBlock->getArgument(3);
 
-  // Make groups continuous
-  rmwPtr = genI32TiledOp(rewriter, genPermute, rmwPtr, idxScaledForPermute);
-  operand = genI32TiledOp(rewriter, genPermute, operand, idxScaledForPermute);
-  // Actualize auxiliary info as well
+  Value leaderMask =
+      targetInfo.ballot(rewriter, loc, i64_ty, leaderRes);
+  Value uniqueAddrCount =
+      b.trunc(i32_ty, generatePopcount64(rewriter, leaderMask));
+
+  int waveSizeInt = mlir::triton::gpu::lookupThreadsPerWarp(rewriter);
+  Type scalarTy = operandElemType;
+  if (auto vecTy = dyn_cast<VectorType>(operandElemType))
+    scalarTy = vecTy.getElementType();
+  bool isScalarFloat = mlir::isa<FloatType>(scalarTy);
+  bool isScalarInt =
+      mlir::isa<IntegerType>(scalarTy) || mlir::isa<IndexType>(scalarTy);
+  bool isAddLike = opKind == LLVM::AtomicBinOp::fadd ||
+                   (opKind == LLVM::AtomicBinOp::add &&
+                    (isScalarFloat || isScalarInt));
+
+  int coopThresholdInt = waveSizeInt >> (isAddLike ? 1 : 2);
+  coopThresholdInt = std::max(1, coopThresholdInt);
+  if (const char *env = std::getenv("TRITON_ATOMIC_COOP_THRESHOLD")) {
+    char *endPtr = nullptr;
+    long parsed = std::strtol(env, &endPtr, 10);
+    if (endPtr != env && parsed > 0)
+      coopThresholdInt = static_cast<int>(parsed);
+  }
+
+  Value enableCoop =
+      b.icmp_ult(uniqueAddrCount, b.i32_val(coopThresholdInt));
+
+  auto *coopBlock = rewriter.createBlock(
+      afterLoopBlock->getParent(),
+      std::next(Region::iterator(afterLoopBlock)));
+  coopBlock->addArgument(rmwPtr.getType(), loc);
+  coopBlock->addArgument(operandElemType, loc);
+  coopBlock->addArgument(i32_ty, loc);
+  coopBlock->addArgument(i32_ty, loc);
+  coopBlock->addArgument(int_ty(1), loc);
+  coopBlock->addArgument(i32_ty, loc);
+
+  rewriter.setInsertionPointToEnd(afterLoopBlock);
+  rewriter.create<LLVM::CondBrOp>(
+      loc, enableCoop, coopBlock,
+      ValueRange({rmwPtr, operand, idxRes, cntRes, leaderRes, maxCntRes}),
+      atomicBlock, ValueRange({rmwPtr, operand}));
+
+  rewriter.setInsertionPointToStart(coopBlock);
+  Value coopRmwPtr = coopBlock->getArgument(0);
+  Value coopOperand = coopBlock->getArgument(1);
+  Value coopIdxRes = coopBlock->getArgument(2);
+  Value coopCntRes = coopBlock->getArgument(3);
+  Value coopLeaderRes = coopBlock->getArgument(4);
+  Value coopMaxCnt = coopBlock->getArgument(5);
+  Value idxScaledBase = b.mul(coopIdxRes, b.i32_val(4));
+  Value needFullPermute = b.icmp_ugt(coopMaxCnt, b.i32_val(16));
+
+  auto *afterArrangeBlock = coopBlock->splitBlock(rewriter.getInsertionPoint());
+  auto addArrangeArgs = [&](Block *block) {
+    block->addArgument(rmwPtr.getType(), loc);
+    block->addArgument(operandElemType, loc);
+    block->addArgument(i32_ty, loc);
+    block->addArgument(i32_ty, loc);
+    block->addArgument(int_ty(1), loc);
+    block->addArgument(i32_ty, loc);
+  };
+  addArrangeArgs(afterArrangeBlock);
+
+  auto insertBefore = Region::iterator(afterArrangeBlock);
+  auto *fullPermuteBlock =
+      rewriter.createBlock(coopBlock->getParent(), insertBefore);
+  addArrangeArgs(fullPermuteBlock);
+  auto *simplePermuteBlock =
+      rewriter.createBlock(coopBlock->getParent(), insertBefore);
+  addArrangeArgs(simplePermuteBlock);
+
+  rewriter.setInsertionPointToEnd(coopBlock);
+  rewriter.create<LLVM::CondBrOp>(
+      loc, needFullPermute, fullPermuteBlock,
+      ValueRange({coopRmwPtr, coopOperand, idxScaledBase, coopCntRes,
+                  coopLeaderRes, coopMaxCnt}),
+      simplePermuteBlock,
+      ValueRange({coopRmwPtr, coopOperand, idxScaledBase, coopCntRes,
+                  coopLeaderRes, coopMaxCnt}));
+
+  rewriter.setInsertionPointToEnd(simplePermuteBlock);
+  rewriter.create<LLVM::BrOp>(
+      loc, ValueRange(simplePermuteBlock->getArguments()), afterArrangeBlock);
+
+  rewriter.setInsertionPointToEnd(fullPermuteBlock);
+  Value arrangedPtr = fullPermuteBlock->getArgument(0);
+  Value arrangedOperand = fullPermuteBlock->getArgument(1);
+  Value arrangedIdx = fullPermuteBlock->getArgument(2);
+  Value arrangedCnt = fullPermuteBlock->getArgument(3);
+  Value arrangedLeader = fullPermuteBlock->getArgument(4);
+  Value arrangedMax = fullPermuteBlock->getArgument(5);
+
+  arrangedPtr =
+      genI32TiledOp(rewriter, genPermute, arrangedPtr, arrangedIdx);
+  arrangedOperand =
+      genI32TiledOp(rewriter, genPermute, arrangedOperand, arrangedIdx);
   Value packedRoleInfo = genI32TiledOp(
       rewriter, genPermute,
-      b.or_(b.zext(i32_ty, leaderRes),
-            b.or_(idxScaledForPermute, b.shl(cntRes, b.i32_val(8)))),
-      idxScaledForPermute);
-  idxScaledForPermute = packedRoleInfo;
-  cntRes = b.and_(b.lshr(packedRoleInfo, b.i32_val(8)), b.i32_val(0xff));
-  leaderRes = b.icmp_ne(b.and_(packedRoleInfo, b.i32_val(1)), b.i32_val(0));
+      b.or_(b.zext(i32_ty, arrangedLeader),
+            b.or_(arrangedIdx, b.shl(arrangedCnt, b.i32_val(8)))),
+      arrangedIdx);
+  Value permutedCnt =
+      b.and_(b.lshr(packedRoleInfo, b.i32_val(8)), b.i32_val(0xff));
+  Value permutedLeader =
+      b.icmp_ne(b.and_(packedRoleInfo, b.i32_val(1)), b.i32_val(0));
+  rewriter.create<LLVM::BrOp>(
+      loc,
+      ValueRange({arrangedPtr, arrangedOperand, packedRoleInfo, permutedCnt,
+                  permutedLeader, arrangedMax}),
+      afterArrangeBlock);
+
+  rewriter.setInsertionPointToStart(afterArrangeBlock);
+  Value coopRmwPtrArranged = afterArrangeBlock->getArgument(0);
+  Value coopOperandArranged = afterArrangeBlock->getArgument(1);
+  Value idxScaledForPermute = afterArrangeBlock->getArgument(2);
+  Value coopCntResArranged = afterArrangeBlock->getArgument(3);
+  Value coopLeaderResArranged = afterArrangeBlock->getArgument(4);
+  Value coopMaxCntArranged = afterArrangeBlock->getArgument(5);
+
+  coopRmwPtr = coopRmwPtrArranged;
+  coopOperand = coopOperandArranged;
+  coopCntRes = coopCntResArranged;
+  coopLeaderRes = coopLeaderResArranged;
+  coopMaxCnt = coopMaxCntArranged;
 
   auto *afterRedBlock =
-      afterLoopBlock->splitBlock(rewriter.getInsertionPoint());
+      rewriter.splitBlock(afterArrangeBlock, afterArrangeBlock->begin());
   afterRedBlock->addArgument(operandElemType, loc);
   auto *partialReductionBlock = rewriter.createBlock(
-      afterLoopBlock->getParent(), std::next(Region::iterator(afterLoopBlock)));
-  rewriter.setInsertionPointToEnd(afterLoopBlock);
-  Value reductionCond = b.icmp_ne(
-      targetInfo.ballot(rewriter, loc, i64_ty, b.icmp_ne(cntRes, b.i32_val(1))),
-      b.i64_val(0));
-  LLVM::CondBrOp::create(rewriter, loc, reductionCond, partialReductionBlock,
-                         afterRedBlock, operand);
+      afterArrangeBlock->getParent(),
+      std::next(Region::iterator(afterArrangeBlock)));
+  rewriter.setInsertionPointToEnd(afterArrangeBlock);
+  Value reductionCond = b.icmp_sgt(coopMaxCnt, b.i32_val(1));
+  rewriter.create<LLVM::CondBrOp>(loc, reductionCond, partialReductionBlock,
+                                  ValueRange(), afterRedBlock,
+                                  ValueRange({coopOperand}));
   rewriter.setInsertionPointToEnd(partialReductionBlock);
 
   auto performOp = [&](Value res, Value v) -> Value {
@@ -479,25 +628,99 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
       llvm_unreachable("Unsupported atomic binary operation.");
     }
   };
-  Value acc = operand;
-  // Reduce to leader thread
-  for (int i = 32; i != 0; i /= 2) {
-    Value tmp = genI32TiledOp(rewriter, genBPermute, acc,
-                              b.add(idxScaledForPermute, b.i32_val(i * 4)));
-    acc = b.select(b.icmp_ult(b.i32_val(i), cntRes), performOp(acc, tmp), acc);
+  std::array<Value, 6> permuteOffsets{};
+  auto strideToIndex = [](int stride) -> unsigned {
+    switch (stride) {
+    case 32:
+      return 0;
+    case 16:
+      return 1;
+    case 8:
+      return 2;
+    case 4:
+      return 3;
+    case 2:
+      return 4;
+    case 1:
+      return 5;
+    default:
+      llvm_unreachable("Unexpected stride value");
+    }
+  };
+
+  auto getPermuteOffset = [&](int stride) -> Value {
+    unsigned index = strideToIndex(stride);
+    Value cached = permuteOffsets[index];
+    if (cached)
+      return cached;
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(partialReductionBlock);
+    Value offsetVal = b.add(idxScaledForPermute, b.i32_val(stride * 4));
+    permuteOffsets[index] = offsetVal;
+    return offsetVal;
+  };
+
+  auto computeTmp = [&](Value currentAcc, int stride) -> Value {
+    int dppCtrl = 0;
+    int rowMask = 0;
+    int bankMask = 0;
+    bool boundCtrl = false;
+    if (getRowShrDppParams(stride, dppCtrl, rowMask, bankMask, boundCtrl))
+      return genI32TiledOp(rewriter, generateI32DppMove, currentAcc, dppCtrl,
+                           rowMask, bankMask, boundCtrl);
+    Value offset = getPermuteOffset(stride);
+    return genI32TiledOp(rewriter, genBPermute, currentAcc, offset);
+  };
+
+  Value acc = coopOperand;
+  rewriter.setInsertionPointToEnd(partialReductionBlock);
+  constexpr int reductionStrides[] = {32, 16, 8, 4, 2, 1};
+
+  if (isScalarFloat && opKind == LLVM::AtomicBinOp::fadd) {
+    for (int stride : reductionStrides) {
+      Value strideVal = b.i32_val(stride);
+      Value reductionGuard = b.and_(
+          b.icmp_ugt(coopMaxCnt, strideVal),
+          b.icmp_ult(strideVal, coopCntRes));
+      Value tmp = computeTmp(acc, stride);
+      Value combined = b.fadd(acc, tmp);
+      acc = b.select(reductionGuard, combined, acc);
+    }
+  } else if (isScalarInt && opKind == LLVM::AtomicBinOp::add) {
+    for (int stride : reductionStrides) {
+      Value strideVal = b.i32_val(stride);
+      Value reductionGuard = b.and_(
+          b.icmp_ugt(coopMaxCnt, strideVal),
+          b.icmp_ult(strideVal, coopCntRes));
+      Value tmp = computeTmp(acc, stride);
+      Value combined = b.add(acc, tmp);
+      acc = b.select(reductionGuard, combined, acc);
+    }
+  } else {
+    for (int stride : reductionStrides) {
+      Value strideVal = b.i32_val(stride);
+      Value reductionGuard = b.and_(
+          b.icmp_ugt(coopMaxCnt, strideVal),
+          b.icmp_ult(strideVal, coopCntRes));
+      Value tmp = computeTmp(acc, stride);
+      Value combined = performOp(acc, tmp);
+      acc = b.select(reductionGuard, combined, acc);
+    }
   }
 
-  LLVM::BrOp::create(rewriter, loc, acc, afterRedBlock);
+  rewriter.create<LLVM::BrOp>(loc, ValueRange({acc}), afterRedBlock);
   rewriter.setInsertionPointToEnd(afterRedBlock);
 
   auto *endBlock = afterRedBlock->splitBlock(rewriter.getInsertionPoint());
   endBlock->addArgument(operandElemType, loc);
   rewriter.setInsertionPointToEnd(afterRedBlock);
-  Value leaderCond = leaderRes;
+  Value leaderCond = coopLeaderRes;
   Value defaultRes = b.undef(operandElemType);
-  LLVM::CondBrOp::create(rewriter, loc, leaderCond, atomicBlock,
-                         ValueRange({rmwPtr, afterRedBlock->getArgument(0)}),
-                         endBlock, ValueRange({defaultRes}));
+  SmallVector<Value, 2> leaderTrueArgs = {coopRmwPtr,
+                                          afterRedBlock->getArgument(0)};
+  SmallVector<Value, 1> leaderFalseArgs = {defaultRes};
+  rewriter.create<LLVM::CondBrOp>(loc, leaderCond, atomicBlock, leaderTrueArgs,
+                                  endBlock, leaderFalseArgs);
   rewriter.setInsertionPointToEnd(atomicBlock);
   // Utilize global atomic only by leader threads
   Value addr = atomicBlock->getArgument(0);
