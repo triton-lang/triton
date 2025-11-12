@@ -53,7 +53,7 @@ def make_slice_sizes(n_slices, total_size, device="cuda"):
     return counts
 
 def init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter, device="cuda"):
-    n_rows = m * n_expts_act
+    n_rows = m
     slice_sizes = make_slice_sizes(n_expts_tot, n_rows, device=device)
     gather_indx = torch.randint(0, m, (n_rows, ), device=device).to(torch.int32) if do_gather and m > 0 else None
     scatter_indx = torch.randperm(n_rows, device=device).to(torch.int32) if do_scatter else None
@@ -68,17 +68,17 @@ def init_compute_data(m, n, k, ragged_metadata, gindx, sindx, n_expts_tot, n_exp
     if inner_expt_opt is not None:
         assert gindx is None and sindx is None
         # Rotate tensor shapes (dw = x.T @ dy)
-        m, k = k, m * n_expts_act + padding_block_k * n_expts_tot
+        m, k = k, triton.cdiv(m + padding_block_k * n_expts_tot, padding_block_k) * padding_block_k
         in_m = m
     else:
-        in_m = m * (n_expts_act if gindx is None else 1)
+        in_m = m
     shape_x = (n_expts_tot, in_m, k) if mode == 'batched' else (in_m, k)
     shape_batch = tuple() if (mode == "plain" or inner_expt_opt is not None) else (n_expts_tot, )
     x = alloc_rand(shape_x, device=device, dtype=act_dtype, requires_grad=requires_grad)
     w = alloc_rand(shape_batch + (k, n), device=device, dtype=weight_dtype, requires_grad=requires_grad)
     bias = alloc_rand(shape_batch + (n, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
-    gs0 = 2**torch.randint(-5, 0, (m * n_expts_act, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
-    gs1 = 2**torch.randint(-5, 0, (m * n_expts_act, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
+    gs0 = 2**torch.randint(-5, 0, (m, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
+    gs1 = 2**torch.randint(-5, 0, (m, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
     gs0 = gs0.detach().requires_grad_(requires_grad)
     gs1 = gs1.detach().requires_grad_(requires_grad)
     if mode == 'batched' or (not has_y_gammas) or (has_y_gammas and (gindx is not None) and act_dtype.itemsize >= 2):
