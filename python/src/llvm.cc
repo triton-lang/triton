@@ -84,8 +84,16 @@ std::string translateLLVMIRToMIR(llvm::Module &module,
                                  const std::string &proc,
                                  const std::string &features,
                                  const std::vector<std::string> &flags,
-                                 bool enable_fp_fusion) {
+                                 bool enable_fp_fusion,
+                                 const std::string &dumpFileId) {
   using namespace mlir;
+
+  // Check if we should dump MIR
+  std::string dumpMirBase = triton::tools::getStrEnv("TRITON_DUMP_MIR");
+  bool dumpMir = !dumpMirBase.empty();
+  if (!dumpMir) {
+    return "";
+  }
 
   // options
   auto options = llvm::cl::getRegisteredOptions();
@@ -155,6 +163,19 @@ std::string translateLLVMIRToMIR(llvm::Module &module,
     optPtr->setValue(originalStopBefore);
   }
 
+  std::string dumpFilename = dumpMirBase + "/" + dumpFileId + ".txt";
+  {
+    std::error_code EC;
+    llvm::raw_fd_ostream outFile(dumpFilename, EC, llvm::sys::fs::OF_None);
+    if (EC) {
+      llvm::errs() << "Error opening file " << dumpFilename << ": " << EC.message() << "\n";
+    } else {
+      outFile << result;
+      outFile << "---";
+      outFile << "\n========== SCHEDULING DAG ==========\n";
+    }
+  }
+
   return result;
 }
 
@@ -164,7 +185,7 @@ std::string translateLLVMIRToASM(llvm::Module &module,
                                  const std::string &features,
                                  const std::vector<std::string> &flags,
                                  bool enable_fp_fusion, bool isObject,
-                                 const std::string &kernel_name) {
+                                 const std::string &dumpFileId) {
   using namespace mlir;
 
   // Check if we should dump MIR
@@ -232,7 +253,7 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   std::string dumpFilename;
   int saved_stderr_fd = -1;
   if (dumpMir) {
-    dumpFilename = dumpMirBase + "/" + kernel_name + ".txt";
+    dumpFilename = dumpMirBase + "/" + dumpFileId + ".txt";
 
     // Enable misched-print-dags for DAG
     auto mischedPrintOpt = options.find("misched-print-dags");
@@ -737,7 +758,7 @@ void init_triton_llvm(py::module &&m) {
       "translate_to_asm",
       [](std::string llvmIR, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion, bool isObject, std::string kernelName) -> py::object {
+         bool enable_fp_fusion, bool isObject, std::string dumpFileId) -> py::object {
         std::string obj;
         {
           // when allow_threads goes out of scope, gil will be released
@@ -755,7 +776,7 @@ void init_triton_llvm(py::module &&m) {
                 "lineno: " + std::to_string(error.getLineNo()));
           }
           obj = translateLLVMIRToASM(*module, triple, proc, features, flags,
-                                     enable_fp_fusion, isObject, kernelName);
+                                     enable_fp_fusion, isObject, dumpFileId);
         }
         if (isObject)
           return py::bytes(obj);
@@ -768,7 +789,7 @@ void init_triton_llvm(py::module &&m) {
       "translate_to_mir",
       [](std::string llvmIR, std::string triple, std::string proc,
          std::string features, std::vector<std::string> flags,
-         bool enable_fp_fusion) -> py::object {
+         bool enable_fp_fusion, std::string dumpFileId) -> py::object {
         std::string obj;
         {
           // when allow_threads goes out of scope, gil will be released
@@ -786,7 +807,7 @@ void init_triton_llvm(py::module &&m) {
                 "lineno: " + std::to_string(error.getLineNo()));
           }
           obj = translateLLVMIRToMIR(*module, triple, proc, features, flags,
-                                     enable_fp_fusion);
+                                     enable_fp_fusion, dumpFileId);
         }
         return py::str(obj);
       },
