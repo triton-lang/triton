@@ -624,7 +624,7 @@ struct TensorMemoryCopyOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     unsigned numCTAs = lookupNumCTAs(rewriter);
     bool twoCTAs = getModuleTwoCTAs(op);
-    assert((numCTAs == 1 || (numCTAs == 2 && twoCTAs)) && 
+    assert((numCTAs == 1 || (numCTAs == 2 && twoCTAs)) &&
            "Only 1 or 2 CTAs supported for TMEMCopyOp.");
     Location loc = op->getLoc();
     Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
