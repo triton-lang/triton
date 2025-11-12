@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2023 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2024 - present Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -20,17 +20,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
-#ifndef HIP_INCLUDE_HIP_HIP_BF16_H
-#define HIP_INCLUDE_HIP_HIP_BF16_H
+#ifndef HIP_INCLUDE_HIP_HIP_EXT_OCP_H
+#define HIP_INCLUDE_HIP_HIP_EXT_OCP_H
 
-#include <hip/hip_common.h>
+#include <hip/amd_detail/amd_hip_ocp_types.h>
 
-#if defined(__HIP_PLATFORM_AMD__) && !defined(__HIP_PLATFORM_NVIDIA__)
-#include <hip/amd_detail/amd_hip_bf16.h>
-#elif !defined(__HIP_PLATFORM_AMD__) && defined(__HIP_PLATFORM_NVIDIA__)
-#include <hip/nvidia_detail/nvidia_hip_bf16.h>
-#else
-#error ("Must define exactly one of __HIP_PLATFORM_AMD__ or __HIP_PLATFORM_NVIDIA__");
-#endif
+#include <hip/amd_detail/amd_hip_ocp_fp.hpp>
+#include <hip/amd_detail/amd_hip_ocp_fp_cxx.hpp>
 
-#endif  // HIP_INCLUDE_HIP_HIP_BF16_H
+#endif  // HIP_INCLUDE_HIP_HIP_EXT_OCP_H

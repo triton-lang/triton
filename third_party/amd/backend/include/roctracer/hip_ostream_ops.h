@@ -96,34 +96,173 @@ namespace detail {
   }
 // End of basic ostream ops
 
-inline static std::ostream& operator<<(std::ostream& out, const __locale_struct& v)
+inline static std::ostream& operator<<(std::ostream& out, const div_t& v)
 {
   std::operator<<(out, '{');
   HIP_depth_max_cnt++;
   if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
-    if (std::string("__locale_struct::__names").find(HIP_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "__names=");
-      roctracer::hip_support::detail::operator<<(out, v.__names);
+    if (std::string("div_t::rem").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "rem=");
+      roctracer::hip_support::detail::operator<<(out, v.rem);
       std::operator<<(out, ", ");
     }
-    if (std::string("__locale_struct::__ctype_toupper").find(HIP_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "__ctype_toupper=");
-      roctracer::hip_support::detail::operator<<(out, v.__ctype_toupper);
+    if (std::string("div_t::quot").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "quot=");
+      roctracer::hip_support::detail::operator<<(out, v.quot);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const ldiv_t& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("ldiv_t::rem").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "rem=");
+      roctracer::hip_support::detail::operator<<(out, v.rem);
       std::operator<<(out, ", ");
     }
-    if (std::string("__locale_struct::__ctype_tolower").find(HIP_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "__ctype_tolower=");
-      roctracer::hip_support::detail::operator<<(out, v.__ctype_tolower);
+    if (std::string("ldiv_t::quot").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "quot=");
+      roctracer::hip_support::detail::operator<<(out, v.quot);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const lldiv_t& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("lldiv_t::rem").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "rem=");
+      roctracer::hip_support::detail::operator<<(out, v.rem);
       std::operator<<(out, ", ");
     }
-    if (std::string("__locale_struct::__ctype_b").find(HIP_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "__ctype_b=");
-      roctracer::hip_support::detail::operator<<(out, v.__ctype_b);
+    if (std::string("lldiv_t::quot").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "quot=");
+      roctracer::hip_support::detail::operator<<(out, v.quot);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const timeval& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("timeval::tv_usec").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "tv_usec=");
+      roctracer::hip_support::detail::operator<<(out, v.tv_usec);
       std::operator<<(out, ", ");
     }
-    if (std::string("__locale_struct::__locales").find(HIP_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "__locales=");
-      roctracer::hip_support::detail::operator<<(out, v.__locales);
+    if (std::string("timeval::tv_sec").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "tv_sec=");
+      roctracer::hip_support::detail::operator<<(out, v.tv_sec);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const timespec& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("timespec::tv_nsec").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "tv_nsec=");
+      roctracer::hip_support::detail::operator<<(out, v.tv_nsec);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("timespec::tv_sec").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "tv_sec=");
+      roctracer::hip_support::detail::operator<<(out, v.tv_sec);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const random_data& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("random_data::end_ptr").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "end_ptr=");
+      roctracer::hip_support::detail::operator<<(out, v.end_ptr);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("random_data::rand_sep").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "rand_sep=");
+      roctracer::hip_support::detail::operator<<(out, v.rand_sep);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("random_data::rand_deg").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "rand_deg=");
+      roctracer::hip_support::detail::operator<<(out, v.rand_deg);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("random_data::rand_type").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "rand_type=");
+      roctracer::hip_support::detail::operator<<(out, v.rand_type);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("random_data::state").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "state=");
+      roctracer::hip_support::detail::operator<<(out, v.state);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("random_data::rptr").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "rptr=");
+      roctracer::hip_support::detail::operator<<(out, v.rptr);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("random_data::fptr").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "fptr=");
+      roctracer::hip_support::detail::operator<<(out, v.fptr);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const drand48_data& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("drand48_data::__a").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "__a=");
+      roctracer::hip_support::detail::operator<<(out, v.__a);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("drand48_data::__init").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "__init=");
+      roctracer::hip_support::detail::operator<<(out, v.__init);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("drand48_data::__c").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "__c=");
+      roctracer::hip_support::detail::operator<<(out, v.__c);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("drand48_data::__old_x").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "__old_x=");
+      roctracer::hip_support::detail::operator<<(out, v.__old_x);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("drand48_data::__x").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "__x=");
+      roctracer::hip_support::detail::operator<<(out, v.__x);
     }
   };
   HIP_depth_max_cnt--;
@@ -1481,6 +1620,180 @@ inline static std::ostream& operator<<(std::ostream& out, const HIP_MEMCPY3D& v)
   std::operator<<(out, '}');
   return out;
 }
+inline static std::ostream& operator<<(std::ostream& out, const hipMemLocation& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipMemLocation::id").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "id=");
+      roctracer::hip_support::detail::operator<<(out, v.id);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemLocation::type").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "type=");
+      roctracer::hip_support::detail::operator<<(out, v.type);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hipMemcpyAttributes& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipMemcpyAttributes::flags").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "flags=");
+      roctracer::hip_support::detail::operator<<(out, v.flags);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemcpyAttributes::dstLocHint").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "dstLocHint=");
+      roctracer::hip_support::detail::operator<<(out, v.dstLocHint);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemcpyAttributes::srcLocHint").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "srcLocHint=");
+      roctracer::hip_support::detail::operator<<(out, v.srcLocHint);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemcpyAttributes::srcAccessOrder").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "srcAccessOrder=");
+      roctracer::hip_support::detail::operator<<(out, v.srcAccessOrder);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hipOffset3D& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipOffset3D::z").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "z=");
+      roctracer::hip_support::detail::operator<<(out, v.z);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipOffset3D::y").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "y=");
+      roctracer::hip_support::detail::operator<<(out, v.y);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipOffset3D::x").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "x=");
+      roctracer::hip_support::detail::operator<<(out, v.x);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hipMemcpy3DOperand& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipMemcpy3DOperand::type").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "type=");
+      roctracer::hip_support::detail::operator<<(out, v.type);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hipMemcpy3DBatchOp& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipMemcpy3DBatchOp::flags").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "flags=");
+      roctracer::hip_support::detail::operator<<(out, v.flags);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemcpy3DBatchOp::srcAccessOrder").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "srcAccessOrder=");
+      roctracer::hip_support::detail::operator<<(out, v.srcAccessOrder);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemcpy3DBatchOp::extent").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "extent=");
+      roctracer::hip_support::detail::operator<<(out, v.extent);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemcpy3DBatchOp::dst").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "dst=");
+      roctracer::hip_support::detail::operator<<(out, v.dst);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemcpy3DBatchOp::src").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "src=");
+      roctracer::hip_support::detail::operator<<(out, v.src);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hipMemcpy3DPeerParms& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipMemcpy3DPeerParms::extent").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "extent=");
+      roctracer::hip_support::detail::operator<<(out, v.extent);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemcpy3DPeerParms::dstDevice").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "dstDevice=");
+      roctracer::hip_support::detail::operator<<(out, v.dstDevice);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemcpy3DPeerParms::dstPtr").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "dstPtr=");
+      roctracer::hip_support::detail::operator<<(out, v.dstPtr);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemcpy3DPeerParms::dstPos").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "dstPos=");
+      roctracer::hip_support::detail::operator<<(out, v.dstPos);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemcpy3DPeerParms::dstArray").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "dstArray=");
+      roctracer::hip_support::detail::operator<<(out, v.dstArray);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemcpy3DPeerParms::srcDevice").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "srcDevice=");
+      roctracer::hip_support::detail::operator<<(out, v.srcDevice);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemcpy3DPeerParms::srcPtr").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "srcPtr=");
+      roctracer::hip_support::detail::operator<<(out, v.srcPtr);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemcpy3DPeerParms::srcPos").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "srcPos=");
+      roctracer::hip_support::detail::operator<<(out, v.srcPos);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipMemcpy3DPeerParms::srcArray").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "srcArray=");
+      roctracer::hip_support::detail::operator<<(out, v.srcArray);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
 inline static std::ostream& operator<<(std::ostream& out, const uchar1& v)
 {
   std::operator<<(out, '{');
@@ -2747,19 +3060,68 @@ inline static std::ostream& operator<<(std::ostream& out, const hipFuncAttribute
   std::operator<<(out, '}');
   return out;
 }
-inline static std::ostream& operator<<(std::ostream& out, const hipMemLocation& v)
+inline static std::ostream& operator<<(std::ostream& out, const hipStreamBatchMemOpParams& v)
 {
   std::operator<<(out, '{');
   HIP_depth_max_cnt++;
   if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
-    if (std::string("hipMemLocation::id").find(HIP_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "id=");
-      roctracer::hip_support::detail::operator<<(out, v.id);
+    if (std::string("hipStreamBatchMemOpParams::pad").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "pad=");
+      roctracer::hip_support::detail::operator<<(out, v.pad);
       std::operator<<(out, ", ");
     }
-    if (std::string("hipMemLocation::type").find(HIP_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "type=");
-      roctracer::hip_support::detail::operator<<(out, v.type);
+    if (std::string("hipStreamBatchMemOpParams::memoryBarrier").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "memoryBarrier=");
+      roctracer::hip_support::detail::operator<<(out, v.memoryBarrier);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipStreamBatchMemOpParams::flushRemoteWrites").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "flushRemoteWrites=");
+      roctracer::hip_support::detail::operator<<(out, v.flushRemoteWrites);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipStreamBatchMemOpParams::writeValue").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "writeValue=");
+      roctracer::hip_support::detail::operator<<(out, v.writeValue);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipStreamBatchMemOpParams::waitValue").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "waitValue=");
+      roctracer::hip_support::detail::operator<<(out, v.waitValue);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipStreamBatchMemOpParams::operation").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "operation=");
+      roctracer::hip_support::detail::operator<<(out, v.operation);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hipBatchMemOpNodeParams& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipBatchMemOpNodeParams::flags").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "flags=");
+      roctracer::hip_support::detail::operator<<(out, v.flags);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipBatchMemOpNodeParams::paramArray").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "paramArray=");
+      roctracer::hip_support::detail::operator<<(out, v.paramArray);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipBatchMemOpNodeParams::count").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "count=");
+      roctracer::hip_support::detail::operator<<(out, v.count);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipBatchMemOpNodeParams::ctx").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "ctx=");
+      roctracer::hip_support::detail::operator<<(out, v.ctx);
     }
   };
   HIP_depth_max_cnt--;
@@ -3234,11 +3596,45 @@ inline static std::ostream& operator<<(std::ostream& out, const hipAccessPolicyW
   std::operator<<(out, '}');
   return out;
 }
+inline static std::ostream& operator<<(std::ostream& out, const hipLaunchMemSyncDomainMap& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipLaunchMemSyncDomainMap::remote").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "remote=");
+      roctracer::hip_support::detail::operator<<(out, v.remote);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipLaunchMemSyncDomainMap::default_").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "default_=");
+      roctracer::hip_support::detail::operator<<(out, v.default_);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
 inline static std::ostream& operator<<(std::ostream& out, const hipLaunchAttributeValue& v)
 {
   std::operator<<(out, '{');
   HIP_depth_max_cnt++;
   if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipLaunchAttributeValue::memSyncDomain").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "memSyncDomain=");
+      roctracer::hip_support::detail::operator<<(out, v.memSyncDomain);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipLaunchAttributeValue::memSyncDomainMap").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "memSyncDomainMap=");
+      roctracer::hip_support::detail::operator<<(out, v.memSyncDomainMap);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipLaunchAttributeValue::syncPolicy").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "syncPolicy=");
+      roctracer::hip_support::detail::operator<<(out, v.syncPolicy);
+      std::operator<<(out, ", ");
+    }
     if (std::string("hipLaunchAttributeValue::priority").find(HIP_structs_regex) != std::string::npos)   {
       std::operator<<(out, "priority=");
       roctracer::hip_support::detail::operator<<(out, v.priority);
@@ -3252,45 +3648,11 @@ inline static std::ostream& operator<<(std::ostream& out, const hipLaunchAttribu
     if (std::string("hipLaunchAttributeValue::accessPolicyWindow").find(HIP_structs_regex) != std::string::npos)   {
       std::operator<<(out, "accessPolicyWindow=");
       roctracer::hip_support::detail::operator<<(out, v.accessPolicyWindow);
-    }
-  };
-  HIP_depth_max_cnt--;
-  std::operator<<(out, '}');
-  return out;
-}
-inline static std::ostream& operator<<(std::ostream& out, const HIP_MEMSET_NODE_PARAMS& v)
-{
-  std::operator<<(out, '{');
-  HIP_depth_max_cnt++;
-  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
-    if (std::string("HIP_MEMSET_NODE_PARAMS::height").find(HIP_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "height=");
-      roctracer::hip_support::detail::operator<<(out, v.height);
       std::operator<<(out, ", ");
     }
-    if (std::string("HIP_MEMSET_NODE_PARAMS::width").find(HIP_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "width=");
-      roctracer::hip_support::detail::operator<<(out, v.width);
-      std::operator<<(out, ", ");
-    }
-    if (std::string("HIP_MEMSET_NODE_PARAMS::elementSize").find(HIP_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "elementSize=");
-      roctracer::hip_support::detail::operator<<(out, v.elementSize);
-      std::operator<<(out, ", ");
-    }
-    if (std::string("HIP_MEMSET_NODE_PARAMS::value").find(HIP_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "value=");
-      roctracer::hip_support::detail::operator<<(out, v.value);
-      std::operator<<(out, ", ");
-    }
-    if (std::string("HIP_MEMSET_NODE_PARAMS::pitch").find(HIP_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "pitch=");
-      roctracer::hip_support::detail::operator<<(out, v.pitch);
-      std::operator<<(out, ", ");
-    }
-    if (std::string("HIP_MEMSET_NODE_PARAMS::dst").find(HIP_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "dst=");
-      roctracer::hip_support::detail::operator<<(out, v.dst);
+    if (std::string("hipLaunchAttributeValue::pad").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "pad=");
+      roctracer::hip_support::detail::operator<<(out, v.pad);
     }
   };
   HIP_depth_max_cnt--;
@@ -3334,11 +3696,6 @@ inline static std::ostream& operator<<(std::ostream& out, const hipMemAllocation
     if (std::string("hipMemAllocationProp::location").find(HIP_structs_regex) != std::string::npos)   {
       std::operator<<(out, "location=");
       roctracer::hip_support::detail::operator<<(out, v.location);
-      std::operator<<(out, ", ");
-    }
-    if (std::string("hipMemAllocationProp::requestedHandleType").find(HIP_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "requestedHandleType=");
-      roctracer::hip_support::detail::operator<<(out, v.requestedHandleType);
       std::operator<<(out, ", ");
     }
     if (std::string("hipMemAllocationProp::type").find(HIP_structs_regex) != std::string::npos)   {
@@ -3575,6 +3932,118 @@ inline static std::ostream& operator<<(std::ostream& out, const hipGraphEdgeData
     if (std::string("hipGraphEdgeData::from_port").find(HIP_structs_regex) != std::string::npos)   {
       std::operator<<(out, "from_port=");
       roctracer::hip_support::detail::operator<<(out, v.from_port);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hipLaunchAttribute& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipLaunchAttribute::id").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "id=");
+      roctracer::hip_support::detail::operator<<(out, v.id);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hipLaunchConfig_t& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipLaunchConfig_t::numAttrs").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "numAttrs=");
+      roctracer::hip_support::detail::operator<<(out, v.numAttrs);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipLaunchConfig_t::attrs").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "attrs=");
+      roctracer::hip_support::detail::operator<<(out, v.attrs);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipLaunchConfig_t::stream").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "stream=");
+      roctracer::hip_support::detail::operator<<(out, v.stream);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipLaunchConfig_t::dynamicSmemBytes").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "dynamicSmemBytes=");
+      roctracer::hip_support::detail::operator<<(out, v.dynamicSmemBytes);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipLaunchConfig_t::blockDim").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "blockDim=");
+      roctracer::hip_support::detail::operator<<(out, v.blockDim);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipLaunchConfig_t::gridDim").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "gridDim=");
+      roctracer::hip_support::detail::operator<<(out, v.gridDim);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const HIP_LAUNCH_CONFIG& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("HIP_LAUNCH_CONFIG::numAttrs").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "numAttrs=");
+      roctracer::hip_support::detail::operator<<(out, v.numAttrs);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("HIP_LAUNCH_CONFIG::attrs").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "attrs=");
+      roctracer::hip_support::detail::operator<<(out, v.attrs);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("HIP_LAUNCH_CONFIG::hStream").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "hStream=");
+      roctracer::hip_support::detail::operator<<(out, v.hStream);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("HIP_LAUNCH_CONFIG::sharedMemBytes").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "sharedMemBytes=");
+      roctracer::hip_support::detail::operator<<(out, v.sharedMemBytes);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("HIP_LAUNCH_CONFIG::blockDimZ").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "blockDimZ=");
+      roctracer::hip_support::detail::operator<<(out, v.blockDimZ);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("HIP_LAUNCH_CONFIG::blockDimY").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "blockDimY=");
+      roctracer::hip_support::detail::operator<<(out, v.blockDimY);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("HIP_LAUNCH_CONFIG::blockDimX").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "blockDimX=");
+      roctracer::hip_support::detail::operator<<(out, v.blockDimX);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("HIP_LAUNCH_CONFIG::gridDimZ").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "gridDimZ=");
+      roctracer::hip_support::detail::operator<<(out, v.gridDimZ);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("HIP_LAUNCH_CONFIG::gridDimY").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "gridDimY=");
+      roctracer::hip_support::detail::operator<<(out, v.gridDimY);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("HIP_LAUNCH_CONFIG::gridDimX").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "gridDimX=");
+      roctracer::hip_support::detail::operator<<(out, v.gridDimX);
     }
   };
   HIP_depth_max_cnt--;
@@ -3865,10 +4334,142 @@ inline static std::ostream& operator<<(std::ostream& out, const hipDeviceProp_tR
   std::operator<<(out, '}');
   return out;
 }
+inline static std::ostream& operator<<(std::ostream& out, const hipStreamBatchMemOpParams_union::hipStreamMemOpWaitValueParams_t& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipStreamBatchMemOpParams_union::hipStreamMemOpWaitValueParams_t::alias").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "alias=");
+      roctracer::hip_support::detail::operator<<(out, v.alias);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipStreamBatchMemOpParams_union::hipStreamMemOpWaitValueParams_t::flags").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "flags=");
+      roctracer::hip_support::detail::operator<<(out, v.flags);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipStreamBatchMemOpParams_union::hipStreamMemOpWaitValueParams_t::address").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "address=");
+      roctracer::hip_support::detail::operator<<(out, v.address);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipStreamBatchMemOpParams_union::hipStreamMemOpWaitValueParams_t::operation").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "operation=");
+      roctracer::hip_support::detail::operator<<(out, v.operation);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hipStreamBatchMemOpParams_union::hipStreamMemOpWriteValueParams_t& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipStreamBatchMemOpParams_union::hipStreamMemOpWriteValueParams_t::alias").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "alias=");
+      roctracer::hip_support::detail::operator<<(out, v.alias);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipStreamBatchMemOpParams_union::hipStreamMemOpWriteValueParams_t::flags").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "flags=");
+      roctracer::hip_support::detail::operator<<(out, v.flags);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipStreamBatchMemOpParams_union::hipStreamMemOpWriteValueParams_t::address").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "address=");
+      roctracer::hip_support::detail::operator<<(out, v.address);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipStreamBatchMemOpParams_union::hipStreamMemOpWriteValueParams_t::operation").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "operation=");
+      roctracer::hip_support::detail::operator<<(out, v.operation);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hipStreamBatchMemOpParams_union::hipStreamMemOpFlushRemoteWritesParams_t& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipStreamBatchMemOpParams_union::hipStreamMemOpFlushRemoteWritesParams_t::flags").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "flags=");
+      roctracer::hip_support::detail::operator<<(out, v.flags);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipStreamBatchMemOpParams_union::hipStreamMemOpFlushRemoteWritesParams_t::operation").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "operation=");
+      roctracer::hip_support::detail::operator<<(out, v.operation);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hipStreamBatchMemOpParams_union::hipStreamMemOpMemoryBarrierParams_t& v)
+{
+  std::operator<<(out, '{');
+  HIP_depth_max_cnt++;
+  if (HIP_depth_max == -1 || HIP_depth_max_cnt <= HIP_depth_max) {
+    if (std::string("hipStreamBatchMemOpParams_union::hipStreamMemOpMemoryBarrierParams_t::flags").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "flags=");
+      roctracer::hip_support::detail::operator<<(out, v.flags);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hipStreamBatchMemOpParams_union::hipStreamMemOpMemoryBarrierParams_t::operation").find(HIP_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "operation=");
+      roctracer::hip_support::detail::operator<<(out, v.operation);
+    }
+  };
+  HIP_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
 // end ostream ops for HIP 
 };};};
 
-inline static std::ostream& operator<<(std::ostream& out, const __locale_struct& v)
+inline static std::ostream& operator<<(std::ostream& out, const div_t& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const ldiv_t& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const lldiv_t& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const timeval& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const timespec& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const random_data& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const drand48_data& v)
 {
   roctracer::hip_support::detail::operator<<(out, v);
   return out;
@@ -3983,6 +4584,42 @@ inline static std::ostream& operator<<(std::ostream& out, const hipMemcpy3DParms
 }
 
 inline static std::ostream& operator<<(std::ostream& out, const HIP_MEMCPY3D& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hipMemLocation& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hipMemcpyAttributes& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hipOffset3D& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hipMemcpy3DOperand& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hipMemcpy3DBatchOp& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hipMemcpy3DPeerParms& v)
 {
   roctracer::hip_support::detail::operator<<(out, v);
   return out;
@@ -4312,7 +4949,13 @@ inline static std::ostream& operator<<(std::ostream& out, const hipFuncAttribute
   return out;
 }
 
-inline static std::ostream& operator<<(std::ostream& out, const hipMemLocation& v)
+inline static std::ostream& operator<<(std::ostream& out, const hipStreamBatchMemOpParams& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hipBatchMemOpNodeParams& v)
 {
   roctracer::hip_support::detail::operator<<(out, v);
   return out;
@@ -4420,13 +5063,13 @@ inline static std::ostream& operator<<(std::ostream& out, const hipAccessPolicyW
   return out;
 }
 
-inline static std::ostream& operator<<(std::ostream& out, const hipLaunchAttributeValue& v)
+inline static std::ostream& operator<<(std::ostream& out, const hipLaunchMemSyncDomainMap& v)
 {
   roctracer::hip_support::detail::operator<<(out, v);
   return out;
 }
 
-inline static std::ostream& operator<<(std::ostream& out, const HIP_MEMSET_NODE_PARAMS& v)
+inline static std::ostream& operator<<(std::ostream& out, const hipLaunchAttributeValue& v)
 {
   roctracer::hip_support::detail::operator<<(out, v);
   return out;
@@ -4504,7 +5147,49 @@ inline static std::ostream& operator<<(std::ostream& out, const hipGraphEdgeData
   return out;
 }
 
+inline static std::ostream& operator<<(std::ostream& out, const hipLaunchAttribute& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hipLaunchConfig_t& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const HIP_LAUNCH_CONFIG& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
 inline static std::ostream& operator<<(std::ostream& out, const hipDeviceProp_tR0000& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hipStreamBatchMemOpParams_union::hipStreamMemOpWaitValueParams_t& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hipStreamBatchMemOpParams_union::hipStreamMemOpWriteValueParams_t& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hipStreamBatchMemOpParams_union::hipStreamMemOpFlushRemoteWritesParams_t& v)
+{
+  roctracer::hip_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hipStreamBatchMemOpParams_union::hipStreamMemOpMemoryBarrierParams_t& v)
 {
   roctracer::hip_support::detail::operator<<(out, v);
   return out;

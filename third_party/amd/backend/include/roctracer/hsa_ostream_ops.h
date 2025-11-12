@@ -290,16 +290,6 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_kernel_dispa
     if (std::string("hsa_kernel_dispatch_packet_t::workgroup_size_x").find(HSA_structs_regex) != std::string::npos)   {
       std::operator<<(out, "workgroup_size_x=");
       roctracer::hsa_support::detail::operator<<(out, v.workgroup_size_x);
-      std::operator<<(out, ", ");
-    }
-    if (std::string("hsa_kernel_dispatch_packet_t::setup").find(HSA_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "setup=");
-      roctracer::hsa_support::detail::operator<<(out, v.setup);
-      std::operator<<(out, ", ");
-    }
-    if (std::string("hsa_kernel_dispatch_packet_t::header").find(HSA_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "header=");
-      roctracer::hsa_support::detail::operator<<(out, v.header);
     }
   };
   HSA_depth_max_cnt--;
@@ -697,6 +687,30 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_ext_sampler_
   std::operator<<(out, '}');
   return out;
 }
+inline static std::ostream& operator<<(std::ostream& out, const hsa_ext_sampler_descriptor_v2_t& v)
+{
+  std::operator<<(out, '{');
+  HSA_depth_max_cnt++;
+  if (HSA_depth_max == -1 || HSA_depth_max_cnt <= HSA_depth_max) {
+    if (std::string("hsa_ext_sampler_descriptor_v2_t::address_modes").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "address_modes=");
+      roctracer::hsa_support::detail::operator<<(out, v.address_modes);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_ext_sampler_descriptor_v2_t::filter_mode").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "filter_mode=");
+      roctracer::hsa_support::detail::operator<<(out, v.filter_mode);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_ext_sampler_descriptor_v2_t::coordinate_mode").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "coordinate_mode=");
+      roctracer::hsa_support::detail::operator<<(out, v.coordinate_mode);
+    }
+  };
+  HSA_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
 inline static std::ostream& operator<<(std::ostream& out, const hsa_ext_images_1_00_pfn_t& v)
 {
   std::operator<<(out, '{');
@@ -741,6 +755,11 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_ext_images_1
   std::operator<<(out, '{');
   HSA_depth_max_cnt++;
   if (HSA_depth_max == -1 || HSA_depth_max_cnt <= HSA_depth_max) {
+    if (std::string("hsa_ext_images_1_pfn_t::hsa_ext_sampler_create_v2").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "hsa_ext_sampler_create_v2=");
+      roctracer::hsa_support::detail::operator<<(out, v.hsa_ext_sampler_create_v2);
+      std::operator<<(out, ", ");
+    }
     if (std::string("hsa_ext_images_1_pfn_t::hsa_ext_image_data_get_info_with_layout").find(HSA_structs_regex) != std::string::npos)   {
       std::operator<<(out, "hsa_ext_image_data_get_info_with_layout=");
       roctracer::hsa_support::detail::operator<<(out, v.hsa_ext_image_data_get_info_with_layout);
@@ -1098,6 +1117,98 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_barrier_
   std::operator<<(out, '}');
   return out;
 }
+inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_aie_ert_start_kernel_data_t& v)
+{
+  std::operator<<(out, '{');
+  HSA_depth_max_cnt++;
+  if (HSA_depth_max == -1 || HSA_depth_max_cnt <= HSA_depth_max) {
+    if (std::string("hsa_amd_aie_ert_start_kernel_data_t::data").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "data=");
+      roctracer::hsa_support::detail::operator<<(out, v.data);
+    }
+  };
+  HSA_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_aie_ert_packet_t& v)
+{
+  std::operator<<(out, '{');
+  HSA_depth_max_cnt++;
+  if (HSA_depth_max == -1 || HSA_depth_max_cnt <= HSA_depth_max) {
+    if (std::string("hsa_amd_aie_ert_packet_t::payload_data").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "payload_data=");
+      roctracer::hsa_support::detail::operator<<(out, v.payload_data);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_amd_aie_ert_packet_t::reserved5").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "reserved5=");
+      roctracer::hsa_support::detail::operator<<(out, v.reserved5);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_amd_aie_ert_packet_t::reserved4").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "reserved4=");
+      roctracer::hsa_support::detail::operator<<(out, v.reserved4);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_amd_aie_ert_packet_t::reserved3").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "reserved3=");
+      roctracer::hsa_support::detail::operator<<(out, v.reserved3);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_amd_aie_ert_packet_t::reserved2").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "reserved2=");
+      roctracer::hsa_support::detail::operator<<(out, v.reserved2);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_amd_aie_ert_packet_t::reserved1").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "reserved1=");
+      roctracer::hsa_support::detail::operator<<(out, v.reserved1);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_amd_aie_ert_packet_t::reserved0").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "reserved0=");
+      roctracer::hsa_support::detail::operator<<(out, v.reserved0);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_amd_aie_ert_packet_t::header").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "header=");
+      roctracer::hsa_support::detail::operator<<(out, v.header);
+    }
+  };
+  HSA_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_clock_counters_t& v)
+{
+  std::operator<<(out, '{');
+  HSA_depth_max_cnt++;
+  if (HSA_depth_max == -1 || HSA_depth_max_cnt <= HSA_depth_max) {
+    if (std::string("hsa_amd_clock_counters_t::system_clock_frequency").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "system_clock_frequency=");
+      roctracer::hsa_support::detail::operator<<(out, v.system_clock_frequency);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_amd_clock_counters_t::system_clock_counter").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "system_clock_counter=");
+      roctracer::hsa_support::detail::operator<<(out, v.system_clock_counter);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_amd_clock_counters_t::cpu_clock_counter").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "cpu_clock_counter=");
+      roctracer::hsa_support::detail::operator<<(out, v.cpu_clock_counter);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_amd_clock_counters_t::gpu_clock_counter").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "gpu_clock_counter=");
+      roctracer::hsa_support::detail::operator<<(out, v.gpu_clock_counter);
+    }
+  };
+  HSA_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
 inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_hdp_flush_t& v)
 {
   std::operator<<(out, '{');
@@ -1149,6 +1260,30 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_profilin
     if (std::string("hsa_amd_profiling_async_copy_time_t::start").find(HSA_structs_regex) != std::string::npos)   {
       std::operator<<(out, "start=");
       roctracer::hsa_support::detail::operator<<(out, v.start);
+    }
+  };
+  HSA_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_image_descriptor_t& v)
+{
+  std::operator<<(out, '{');
+  HSA_depth_max_cnt++;
+  if (HSA_depth_max == -1 || HSA_depth_max_cnt <= HSA_depth_max) {
+    if (std::string("hsa_amd_image_descriptor_t::data").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "data=");
+      roctracer::hsa_support::detail::operator<<(out, v.data);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_amd_image_descriptor_t::deviceID").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "deviceID=");
+      roctracer::hsa_support::detail::operator<<(out, v.deviceID);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_amd_image_descriptor_t::version").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "version=");
+      roctracer::hsa_support::detail::operator<<(out, v.version);
     }
   };
   HSA_depth_max_cnt--;
@@ -1227,30 +1362,6 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_memory_p
   std::operator<<(out, '}');
   return out;
 }
-inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_image_descriptor_t& v)
-{
-  std::operator<<(out, '{');
-  HSA_depth_max_cnt++;
-  if (HSA_depth_max == -1 || HSA_depth_max_cnt <= HSA_depth_max) {
-    if (std::string("hsa_amd_image_descriptor_t::data").find(HSA_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "data=");
-      roctracer::hsa_support::detail::operator<<(out, v.data);
-      std::operator<<(out, ", ");
-    }
-    if (std::string("hsa_amd_image_descriptor_t::deviceID").find(HSA_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "deviceID=");
-      roctracer::hsa_support::detail::operator<<(out, v.deviceID);
-      std::operator<<(out, ", ");
-    }
-    if (std::string("hsa_amd_image_descriptor_t::version").find(HSA_structs_regex) != std::string::npos)   {
-      std::operator<<(out, "version=");
-      roctracer::hsa_support::detail::operator<<(out, v.version);
-    }
-  };
-  HSA_depth_max_cnt--;
-  std::operator<<(out, '}');
-  return out;
-}
 inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_pointer_info_t& v)
 {
   std::operator<<(out, '{');
@@ -1315,6 +1426,30 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_gpu_memo
       std::operator<<(out, ", ");
     }
     if (std::string("hsa_amd_gpu_memory_fault_info_t::agent").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "agent=");
+      roctracer::hsa_support::detail::operator<<(out, v.agent);
+    }
+  };
+  HSA_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_gpu_memory_error_info_t& v)
+{
+  std::operator<<(out, '{');
+  HSA_depth_max_cnt++;
+  if (HSA_depth_max == -1 || HSA_depth_max_cnt <= HSA_depth_max) {
+    if (std::string("hsa_amd_gpu_memory_error_info_t::error_reason_mask").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "error_reason_mask=");
+      roctracer::hsa_support::detail::operator<<(out, v.error_reason_mask);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_amd_gpu_memory_error_info_t::virtual_address").find(HSA_structs_regex) != std::string::npos)   {
+      std::operator<<(out, "virtual_address=");
+      roctracer::hsa_support::detail::operator<<(out, v.virtual_address);
+      std::operator<<(out, ", ");
+    }
+    if (std::string("hsa_amd_gpu_memory_error_info_t::agent").find(HSA_structs_regex) != std::string::npos)   {
       std::operator<<(out, "agent=");
       roctracer::hsa_support::detail::operator<<(out, v.agent);
     }
@@ -1408,6 +1543,16 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_memory_a
       std::operator<<(out, "permissions=");
       roctracer::hsa_support::detail::operator<<(out, v.permissions);
     }
+  };
+  HSA_depth_max_cnt--;
+  std::operator<<(out, '}');
+  return out;
+}
+inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_ais_file_handle_t& v)
+{
+  std::operator<<(out, '{');
+  HSA_depth_max_cnt++;
+  if (HSA_depth_max == -1 || HSA_depth_max_cnt <= HSA_depth_max) {
   };
   HSA_depth_max_cnt--;
   std::operator<<(out, '}');
@@ -1578,6 +1723,12 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_ext_sampler_
   return out;
 }
 
+inline static std::ostream& operator<<(std::ostream& out, const hsa_ext_sampler_descriptor_v2_t& v)
+{
+  roctracer::hsa_support::detail::operator<<(out, v);
+  return out;
+}
+
 inline static std::ostream& operator<<(std::ostream& out, const hsa_ext_images_1_00_pfn_t& v)
 {
   roctracer::hsa_support::detail::operator<<(out, v);
@@ -1632,6 +1783,24 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_barrier_
   return out;
 }
 
+inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_aie_ert_start_kernel_data_t& v)
+{
+  roctracer::hsa_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_aie_ert_packet_t& v)
+{
+  roctracer::hsa_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_clock_counters_t& v)
+{
+  roctracer::hsa_support::detail::operator<<(out, v);
+  return out;
+}
+
 inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_hdp_flush_t& v)
 {
   roctracer::hsa_support::detail::operator<<(out, v);
@@ -1645,6 +1814,12 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_profilin
 }
 
 inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_profiling_async_copy_time_t& v)
+{
+  roctracer::hsa_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_image_descriptor_t& v)
 {
   roctracer::hsa_support::detail::operator<<(out, v);
   return out;
@@ -1668,12 +1843,6 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_memory_p
   return out;
 }
 
-inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_image_descriptor_t& v)
-{
-  roctracer::hsa_support::detail::operator<<(out, v);
-  return out;
-}
-
 inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_pointer_info_t& v)
 {
   roctracer::hsa_support::detail::operator<<(out, v);
@@ -1687,6 +1856,12 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_ipc_memo
 }
 
 inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_gpu_memory_fault_info_t& v)
+{
+  roctracer::hsa_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_gpu_memory_error_info_t& v)
 {
   roctracer::hsa_support::detail::operator<<(out, v);
   return out;
@@ -1717,6 +1892,12 @@ inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_vmem_all
 }
 
 inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_memory_access_desc_t& v)
+{
+  roctracer::hsa_support::detail::operator<<(out, v);
+  return out;
+}
+
+inline static std::ostream& operator<<(std::ostream& out, const hsa_amd_ais_file_handle_t& v)
 {
   roctracer::hsa_support::detail::operator<<(out, v);
   return out;

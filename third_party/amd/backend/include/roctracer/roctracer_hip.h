@@ -25,6 +25,7 @@
 
 #include <hip/hip_runtime.h>
 #include <hip/hip_deprecated.h>
+#include "hip_ostream_ops.h"
 #include <hip/amd_detail/hip_prof_str.h>
 
 typedef enum {

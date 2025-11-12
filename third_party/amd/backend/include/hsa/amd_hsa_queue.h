@@ -64,15 +64,59 @@ enum amd_queue_properties_t {
 // AMD Queue Capabilities.
 typedef uint32_t amd_queue_capabilities32_t;
 enum amd_queue_capabilities_t {
-  /* Whether this CP queue supports dual-scratch and async-reclaim */
-  AMD_HSA_BITS_CREATE_ENUM_ENTRIES(AMD_QUEUE_CAPS_ASYNC_RECLAIM, 0, 1),
+  /* This version of CP FW supports dual-scratch and async-reclaim */
+  AMD_HSA_BITS_CREATE_ENUM_ENTRIES(AMD_QUEUE_CAPS_CP_ASYNC_RECLAIM, 0, 1),
+
+  /*
+   * This version of ROCr supports async-reclaim and CP FW may access the
+   * V2 fields.
+   */
+  AMD_HSA_BITS_CREATE_ENUM_ENTRIES(AMD_QUEUE_CAPS_SW_ASYNC_RECLAIM, 1, 1),
 };
 
-// Members tagged with "async-reclaim" are ignored by CP FW's that do not support
-// AMD_QUEUE_CAPS_ASYNC_RECLAIM. CP FW's that support async-reclaim also support
-// dual-scratch (alternate scratch).
-
+/* This is the original amd_queue_t structure. The definition is only kept
+ * for reference purposes. This structure should not be used. */
 typedef struct AMD_QUEUE_ALIGN amd_queue_s {
+  hsa_queue_t hsa_queue;
+  uint32_t caps;
+  uint32_t reserved1[3];
+  volatile uint64_t write_dispatch_id;
+  uint32_t group_segment_aperture_base_hi;
+  uint32_t private_segment_aperture_base_hi;
+  uint32_t max_cu_id;
+  uint32_t max_wave_id;
+  volatile uint64_t max_legacy_doorbell_dispatch_id_plus_1;
+  volatile uint32_t legacy_doorbell_lock;
+  uint32_t reserved2[9];
+  volatile uint64_t read_dispatch_id;
+  uint32_t read_dispatch_id_field_base_byte_offset;
+  uint32_t compute_tmpring_size;
+  uint32_t scratch_resource_descriptor[4];
+  uint64_t scratch_backing_memory_location;
+  uint32_t reserved3[2];
+  uint32_t scratch_wave64_lane_byte_size;
+  amd_queue_properties32_t queue_properties;
+  uint32_t reserved4[2];
+  hsa_signal_t queue_inactive_signal;
+  uint32_t reserved5[14];
+} amd_queue_t;
+
+/*
+ * AMD_QUEUE Version 2
+ * amd_queue_v2_t is backwards compatible with amd_queue_t structure and can
+ * be used with previous versions of CP FW. The added fields tagged as V2 are
+ * ignored when running previous versions of CP FW.
+ * CP FW will not try to access elements beyond the original 64-bytes
+ * (sizeof(amd_queue_t)) unless the AMD_QUEUE_CAPS_SW_ASYNC_RECLAIM bit is set.
+ */
+
+#define MAX_NUM_XCC 128
+typedef struct scratch_last_used_index_xcc_s {
+  volatile uint64_t main;
+  volatile uint64_t alt;
+} scratch_last_used_index_xcc_t;
+
+typedef struct AMD_QUEUE_ALIGN amd_queue_v2_s {
   hsa_queue_t hsa_queue;
   uint32_t caps;
   uint32_t reserved1[3];
@@ -92,18 +136,19 @@ typedef struct AMD_QUEUE_ALIGN amd_queue_s {
   uint64_t scratch_backing_memory_byte_size;
   uint32_t scratch_wave64_lane_byte_size;
   amd_queue_properties32_t queue_properties;
-  volatile uint64_t scratch_last_used_index;     /* async-reclaim */
+  volatile uint64_t scratch_max_use_index;       /* V2 */
   hsa_signal_t queue_inactive_signal;
-  uint32_t reserved4[2];
-  volatile uint64_t alt_scratch_last_used_index; /* async-reclaim */
-  uint64_t alt_scratch_backing_memory_location;  /* async-reclaim */
-  uint64_t alt_scratch_backing_memory_byte_size; /* async-reclaim */
-  uint32_t alt_scratch_dispatch_limit_x;         /* async-reclaim */
-  uint32_t alt_scratch_dispatch_limit_y;         /* async-reclaim */
-  uint32_t alt_scratch_dispatch_limit_z;         /* async-reclaim */
-  uint32_t alt_scratch_wave64_lane_byte_size;    /* async-reclaim */
-  uint32_t alt_compute_tmpring_size;             /* async-reclaim */
+  volatile uint64_t alt_scratch_max_use_index;  /* V2 */
+  uint32_t alt_scratch_resource_descriptor[4];   /* V2 */
+  uint64_t alt_scratch_backing_memory_location;  /* V2 */
+  uint32_t alt_scratch_dispatch_limit_x;         /* V2 */
+  uint32_t alt_scratch_dispatch_limit_y;         /* V2 */
+  uint32_t alt_scratch_dispatch_limit_z;         /* V2 */
+  uint32_t alt_scratch_wave64_lane_byte_size;    /* V2 */
+  uint32_t alt_compute_tmpring_size;             /* V2 */
   uint32_t reserved5;
-} amd_queue_t;
+
+  scratch_last_used_index_xcc_t scratch_last_used_index[MAX_NUM_XCC];
+} amd_queue_v2_t;
 
 #endif // AMD_HSA_QUEUE_H

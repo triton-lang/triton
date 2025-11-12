@@ -267,21 +267,21 @@ typedef struct {
 // Only 'pm4_command' fields of the packet are set and the application
 // is responsible to set Vendor Specific header type a completion signal
 hsa_status_t hsa_ven_amd_aqlprofile_start(
-    hsa_ven_amd_aqlprofile_profile_t* profile,        // [in/out] profile contex object
+    hsa_ven_amd_aqlprofile_profile_t* profile,        // [in,out] profile context object
     hsa_ext_amd_aql_pm4_packet_t* aql_start_packet);  // [out] profile start AQL packet
 
 // Method to populate the provided AQL packet with profiling stop commands
 // Only 'pm4_command' fields of the packet are set and the application
 // is responsible to set Vendor Specific header type and a completion signal
 hsa_status_t hsa_ven_amd_aqlprofile_stop(
-    const hsa_ven_amd_aqlprofile_profile_t* profile,  // [in] profile contex object
+    const hsa_ven_amd_aqlprofile_profile_t* profile,  // [in] profile context object
     hsa_ext_amd_aql_pm4_packet_t* aql_stop_packet);   // [out] profile stop AQL packet
 
 // Method to populate the provided AQL packet with profiling read commands
 // Only 'pm4_command' fields of the packet are set and the application
 // is responsible to set Vendor Specific header type and a completion signal
 hsa_status_t hsa_ven_amd_aqlprofile_read(
-    const hsa_ven_amd_aqlprofile_profile_t* profile,  // [in] profile contex object
+    const hsa_ven_amd_aqlprofile_profile_t* profile,  // [in] profile context object
     hsa_ext_amd_aql_pm4_packet_t* aql_read_packet);   // [out] profile stop AQL packet
 
 // Legacy devices, PM4 profiling packet size
@@ -293,7 +293,7 @@ hsa_status_t hsa_ven_amd_aqlprofile_legacy_get_pm4(
 
 // Method to add a marker (correlation ID) into the ATT buffer.
 hsa_status_t hsa_ven_amd_aqlprofile_att_marker(
-    hsa_ven_amd_aqlprofile_profile_t* profile,            // [in/out] profile contex object
+    hsa_ven_amd_aqlprofile_profile_t* profile,            // [in,out] profile context object
     hsa_ext_amd_aql_pm4_packet_t* aql_marker_packet,      // [out] profile marker AQL packet
     uint32_t data,                                        // [in] Data to be inserted
     hsa_ven_amd_aqlprofile_att_marker_channel_t channel); // [in] Comm channel
@@ -345,19 +345,19 @@ typedef enum {
 typedef hsa_status_t (*hsa_ven_amd_aqlprofile_data_callback_t)(
     hsa_ven_amd_aqlprofile_info_type_t info_type,   // [in] data type, PMC or trace data
     hsa_ven_amd_aqlprofile_info_data_t* info_data,  // [in] info_data object
-    void* callback_data);                           // [in/out] data passed to the callback
+    void* callback_data);                           // [in,out] data passed to the callback
 
 // Method for getting the profile info
 hsa_status_t hsa_ven_amd_aqlprofile_get_info(
     const hsa_ven_amd_aqlprofile_profile_t* profile,  // [in] profile context object
     hsa_ven_amd_aqlprofile_info_type_t attribute,     // [in] requested profile attribute
-    void* value);                                     // [in/out] returned value
+    void* value);                                     // [in,out] returned value
 
 // Method for iterating the events output data
 hsa_status_t hsa_ven_amd_aqlprofile_iterate_data(
     const hsa_ven_amd_aqlprofile_profile_t* profile,  // [in] profile context object
     hsa_ven_amd_aqlprofile_data_callback_t callback,  // [in] callback to iterate the output data
-    void* data);                                      // [in/out] data passed to the callback
+    void* data);                                      // [in,out] data passed to the callback
 
 // Return error string
 hsa_status_t hsa_ven_amd_aqlprofile_error_string(

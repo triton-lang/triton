@@ -62,7 +62,6 @@ typedef struct AMD_SIGNAL_ALIGN amd_signal_s {
   amd_signal_kind64_t kind;
   union {
     volatile int64_t value;
-    volatile uint32_t* legacy_hardware_doorbell_ptr;
     volatile uint64_t* hardware_doorbell_ptr;
   };
   uint64_t event_mailbox_ptr;
@@ -71,7 +70,7 @@ typedef struct AMD_SIGNAL_ALIGN amd_signal_s {
   uint64_t start_ts;
   uint64_t end_ts;
   union {
-    amd_queue_t* queue_ptr;
+    amd_queue_v2_t* queue_ptr;
     uint64_t reserved2;
   };
   uint32_t reserved3[2];

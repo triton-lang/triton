@@ -32,7 +32,7 @@ THE SOFTWARE.
 #elif !defined(__HIP_PLATFORM_AMD__) && defined(__HIP_PLATFORM_NVIDIA__)
 #include <hip/nvidia_detail/nvidia_hip_complex.h>
 #else
-#error("Must define exactly one of __HIP_PLATFORM_AMD__ or __HIP_PLATFORM_NVIDIA__");
+#error ("Must define exactly one of __HIP_PLATFORM_AMD__ or __HIP_PLATFORM_NVIDIA__");
 #endif
 
 #endif

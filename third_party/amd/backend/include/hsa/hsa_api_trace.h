@@ -3,7 +3,7 @@
 // The University of Illinois/NCSA
 // Open Source License (NCSA)
 //
-// Copyright (c) 2014-2020, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2014-2025, Advanced Micro Devices, Inc. All rights reserved.
 //
 // Developed by:
 //
@@ -176,6 +176,8 @@ struct ImageExtTable {
   decltype(hsa_ext_image_get_capability_with_layout)* hsa_ext_image_get_capability_with_layout_fn;
   decltype(hsa_ext_image_data_get_info_with_layout)* hsa_ext_image_data_get_info_with_layout_fn;
   decltype(hsa_ext_image_create_with_layout)* hsa_ext_image_create_with_layout_fn;
+  decltype(hsa_ext_sampler_create_v2)* hsa_ext_sampler_create_v2_fn;
+
 };
 
 // Table to export HSA PC Sampling Extension Apis
@@ -265,6 +267,12 @@ struct AmdExtTable {
   decltype(hsa_amd_agent_set_async_scratch_limit)* hsa_amd_agent_set_async_scratch_limit_fn;
   decltype(hsa_amd_queue_get_info)* hsa_amd_queue_get_info_fn;
   decltype(hsa_amd_vmem_address_reserve_align)* hsa_amd_vmem_address_reserve_align_fn;
+  decltype(hsa_amd_enable_logging)* hsa_amd_enable_logging_fn;
+  decltype(hsa_amd_signal_wait_all)* hsa_amd_signal_wait_all_fn;
+  decltype(hsa_amd_memory_get_preferred_copy_engine)* hsa_amd_memory_get_preferred_copy_engine_fn;
+  decltype(hsa_amd_portable_export_dmabuf_v2)* hsa_amd_portable_export_dmabuf_v2_fn;
+  decltype(hsa_amd_ais_file_write)* hsa_amd_ais_file_write_fn;
+  decltype(hsa_amd_ais_file_read)* hsa_amd_ais_file_read_fn;
 };
 
 // Table to export HSA Core Runtime Apis

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2019 - 2021 Advanced Micro Devices, Inc. All rights reserved.
+Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in
@@ -20,13 +20,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#ifndef HIP_INCLUDE_HIP_AMD_DETAIL_HIP_COMMON_H
-#define HIP_INCLUDE_HIP_AMD_DETAIL_HIP_COMMON_H
+#pragma once
 
-#if defined(__clang__) && defined(__HIP__)
-#define __HIP_CLANG_ONLY__ 1
-#else
-#define __HIP_CLANG_ONLY__ 0
-#endif
-
-#endif  // HIP_INCLUDE_HIP_AMD_DETAIL_HIP_COMMON_H
+enum hipRoundMode {
+  hipRoundNearest = 0,
+  hipRoundZero = 1,
+  hipRoundPosInf = 2,
+  hipRoundMinInf = 3,
+};

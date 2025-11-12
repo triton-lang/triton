@@ -22,9 +22,9 @@
 
 /* HSA API tracing primitives
  'CoreApi', header 'hsa.h', 125 funcs
- 'AmdExt', header 'hsa_ext_amd.h', 70 funcs
- 'ImageExt', header 'hsa_ext_image.h', 13 funcs
- 'AmdExt', header 'hsa_api_trace.h', 70 funcs
+ 'AmdExt', header 'hsa_ext_amd.h', 76 funcs
+ 'ImageExt', header 'hsa_ext_image.h', 14 funcs
+ 'AmdExt', header 'hsa_api_trace.h', 76 funcs
  */
 
 #ifndef HSA_PROF_STR_H_
@@ -231,24 +231,31 @@ enum hsa_api_id_t {
   HSA_API_ID_hsa_amd_agent_set_async_scratch_limit = 192,
   HSA_API_ID_hsa_amd_queue_get_info = 193,
   HSA_API_ID_hsa_amd_vmem_address_reserve_align = 194,
+  HSA_API_ID_hsa_amd_enable_logging = 195,
+  HSA_API_ID_hsa_amd_signal_wait_all = 196,
+  HSA_API_ID_hsa_amd_memory_get_preferred_copy_engine = 197,
+  HSA_API_ID_hsa_amd_portable_export_dmabuf_v2 = 198,
+  HSA_API_ID_hsa_amd_ais_file_write = 199,
+  HSA_API_ID_hsa_amd_ais_file_read = 200,
 
   /* block: ImageExt API */
-  HSA_API_ID_hsa_ext_image_get_capability = 195,
-  HSA_API_ID_hsa_ext_image_data_get_info = 196,
-  HSA_API_ID_hsa_ext_image_create = 197,
-  HSA_API_ID_hsa_ext_image_import = 198,
-  HSA_API_ID_hsa_ext_image_export = 199,
-  HSA_API_ID_hsa_ext_image_copy = 200,
-  HSA_API_ID_hsa_ext_image_clear = 201,
-  HSA_API_ID_hsa_ext_image_destroy = 202,
-  HSA_API_ID_hsa_ext_sampler_create = 203,
-  HSA_API_ID_hsa_ext_sampler_destroy = 204,
-  HSA_API_ID_hsa_ext_image_get_capability_with_layout = 205,
-  HSA_API_ID_hsa_ext_image_data_get_info_with_layout = 206,
-  HSA_API_ID_hsa_ext_image_create_with_layout = 207,
+  HSA_API_ID_hsa_ext_image_get_capability = 201,
+  HSA_API_ID_hsa_ext_image_data_get_info = 202,
+  HSA_API_ID_hsa_ext_image_create = 203,
+  HSA_API_ID_hsa_ext_image_import = 204,
+  HSA_API_ID_hsa_ext_image_export = 205,
+  HSA_API_ID_hsa_ext_image_copy = 206,
+  HSA_API_ID_hsa_ext_image_clear = 207,
+  HSA_API_ID_hsa_ext_image_destroy = 208,
+  HSA_API_ID_hsa_ext_sampler_create = 209,
+  HSA_API_ID_hsa_ext_sampler_destroy = 210,
+  HSA_API_ID_hsa_ext_image_get_capability_with_layout = 211,
+  HSA_API_ID_hsa_ext_image_data_get_info_with_layout = 212,
+  HSA_API_ID_hsa_ext_image_create_with_layout = 213,
+  HSA_API_ID_hsa_ext_sampler_create_v2 = 214,
 
-  HSA_API_ID_DISPATCH = 208,
-  HSA_API_ID_NUMBER = 209,
+  HSA_API_ID_DISPATCH = 215,
+  HSA_API_ID_NUMBER = 216,
 };
 /* Declarations of APIs intended for use only by tools. */
 typedef void (*hsa_amd_queue_intercept_packet_writer)(const void*, uint64_t);
@@ -262,10 +269,10 @@ struct hsa_api_data_t {
   uint64_t correlation_id;
   uint32_t phase;
   union {
-    uint64_t uint64_t_retval;
     hsa_status_t hsa_status_t_retval;
-    hsa_signal_value_t hsa_signal_value_t_retval;
     uint32_t uint32_t_retval;
+    hsa_signal_value_t hsa_signal_value_t_retval;
+    uint64_t uint64_t_retval;
   };
   union {
     /* block: CoreApi API */
@@ -1250,6 +1257,47 @@ struct hsa_api_data_t {
       uint64_t alignment;
       uint64_t flags;
     } hsa_amd_vmem_address_reserve_align;
+    struct {
+      uint8_t* flags;
+      void* file;
+    } hsa_amd_enable_logging;
+    struct {
+      uint32_t signal_count;
+      hsa_signal_t* signals;
+      hsa_signal_condition_t* conds;
+      hsa_signal_value_t* values;
+      uint64_t timeout_hint;
+      hsa_wait_state_t wait_hint;
+      hsa_signal_value_t* satisfying_values;
+    } hsa_amd_signal_wait_all;
+    struct {
+      hsa_agent_t dst_agent;
+      hsa_agent_t src_agent;
+      uint32_t* recommended_ids_mask;
+    } hsa_amd_memory_get_preferred_copy_engine;
+    struct {
+      const void* ptr;
+      size_t size;
+      int* dmabuf;
+      uint64_t* offset;
+      uint64_t flags;
+    } hsa_amd_portable_export_dmabuf_v2;
+    struct {
+      hsa_amd_ais_file_handle_t handle;
+      void* devicePtr;
+      uint64_t size;
+      int64_t file_offset;
+      uint64_t* size_copied;
+      int32_t* status;
+    } hsa_amd_ais_file_write;
+    struct {
+      hsa_amd_ais_file_handle_t handle;
+      void* devicePtr;
+      uint64_t size;
+      int64_t file_offset;
+      uint64_t* size_copied;
+      int32_t* status;
+    } hsa_amd_ais_file_read;
 
     /* block: ImageExt API */
     struct {
@@ -1340,6 +1388,11 @@ struct hsa_api_data_t {
       size_t image_data_slice_pitch;
       hsa_ext_image_t* image;
     } hsa_ext_image_create_with_layout;
+    struct {
+      hsa_agent_t agent;
+      const hsa_ext_sampler_descriptor_v2_t* sampler_descriptor;
+      hsa_ext_sampler_t* sampler;
+    } hsa_ext_sampler_create_v2;
   } args;
   uint64_t *phase_data;
 };
@@ -2920,6 +2973,65 @@ inline std::ostream& operator<< (std::ostream& out, const hsa_api_data_pair_t& d
       out << ") = " << api_data.hsa_status_t_retval;
       break;
     }
+    case HSA_API_ID_hsa_amd_enable_logging: {
+      out << "hsa_amd_enable_logging(";
+      out << api_data.args.hsa_amd_enable_logging.flags << ", ";
+      out << api_data.args.hsa_amd_enable_logging.file;
+      out << ") = " << api_data.hsa_status_t_retval;
+      break;
+    }
+    case HSA_API_ID_hsa_amd_signal_wait_all: {
+      out << "hsa_amd_signal_wait_all(";
+      out << api_data.args.hsa_amd_signal_wait_all.signal_count << ", ";
+      out << api_data.args.hsa_amd_signal_wait_all.signals << ", ";
+      out << api_data.args.hsa_amd_signal_wait_all.conds << ", ";
+      out << api_data.args.hsa_amd_signal_wait_all.values << ", ";
+      out << api_data.args.hsa_amd_signal_wait_all.timeout_hint << ", ";
+      out << api_data.args.hsa_amd_signal_wait_all.wait_hint << ", ";
+      out << api_data.args.hsa_amd_signal_wait_all.satisfying_values;
+      out << ") = " << api_data.uint32_t_retval;
+      break;
+    }
+    case HSA_API_ID_hsa_amd_memory_get_preferred_copy_engine: {
+      out << "hsa_amd_memory_get_preferred_copy_engine(";
+      out << api_data.args.hsa_amd_memory_get_preferred_copy_engine.dst_agent << ", ";
+      out << api_data.args.hsa_amd_memory_get_preferred_copy_engine.src_agent << ", ";
+      out << api_data.args.hsa_amd_memory_get_preferred_copy_engine.recommended_ids_mask;
+      out << ") = " << api_data.hsa_status_t_retval;
+      break;
+    }
+    case HSA_API_ID_hsa_amd_portable_export_dmabuf_v2: {
+      out << "hsa_amd_portable_export_dmabuf_v2(";
+      out << api_data.args.hsa_amd_portable_export_dmabuf_v2.ptr << ", ";
+      out << api_data.args.hsa_amd_portable_export_dmabuf_v2.size << ", ";
+      out << api_data.args.hsa_amd_portable_export_dmabuf_v2.dmabuf << ", ";
+      out << api_data.args.hsa_amd_portable_export_dmabuf_v2.offset << ", ";
+      out << api_data.args.hsa_amd_portable_export_dmabuf_v2.flags;
+      out << ") = " << api_data.hsa_status_t_retval;
+      break;
+    }
+    case HSA_API_ID_hsa_amd_ais_file_write: {
+      out << "hsa_amd_ais_file_write(";
+      out << api_data.args.hsa_amd_ais_file_write.handle << ", ";
+      out << api_data.args.hsa_amd_ais_file_write.devicePtr << ", ";
+      out << api_data.args.hsa_amd_ais_file_write.size << ", ";
+      out << api_data.args.hsa_amd_ais_file_write.file_offset << ", ";
+      out << api_data.args.hsa_amd_ais_file_write.size_copied << ", ";
+      out << api_data.args.hsa_amd_ais_file_write.status;
+      out << ") = " << api_data.hsa_status_t_retval;
+      break;
+    }
+    case HSA_API_ID_hsa_amd_ais_file_read: {
+      out << "hsa_amd_ais_file_read(";
+      out << api_data.args.hsa_amd_ais_file_read.handle << ", ";
+      out << api_data.args.hsa_amd_ais_file_read.devicePtr << ", ";
+      out << api_data.args.hsa_amd_ais_file_read.size << ", ";
+      out << api_data.args.hsa_amd_ais_file_read.file_offset << ", ";
+      out << api_data.args.hsa_amd_ais_file_read.size_copied << ", ";
+      out << api_data.args.hsa_amd_ais_file_read.status;
+      out << ") = " << api_data.hsa_status_t_retval;
+      break;
+    }
 
     /* block: ImageExt API */
     case HSA_API_ID_hsa_ext_image_get_capability: {
@@ -3046,6 +3158,14 @@ inline std::ostream& operator<< (std::ostream& out, const hsa_api_data_pair_t& d
       out << api_data.args.hsa_ext_image_create_with_layout.image_data_row_pitch << ", ";
       out << api_data.args.hsa_ext_image_create_with_layout.image_data_slice_pitch << ", ";
       out << api_data.args.hsa_ext_image_create_with_layout.image;
+      out << ") = " << api_data.hsa_status_t_retval;
+      break;
+    }
+    case HSA_API_ID_hsa_ext_sampler_create_v2: {
+      out << "hsa_ext_sampler_create_v2(";
+      out << api_data.args.hsa_ext_sampler_create_v2.agent << ", ";
+      out << api_data.args.hsa_ext_sampler_create_v2.sampler_descriptor << ", ";
+      out << api_data.args.hsa_ext_sampler_create_v2.sampler;
       out << ") = " << api_data.hsa_status_t_retval;
       break;
     }

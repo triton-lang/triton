@@ -3,7 +3,7 @@
 // The University of Illinois/NCSA
 // Open Source License (NCSA)
 //
-// Copyright (c) 2014-2024, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (c) 2014-2025, Advanced Micro Devices, Inc. All rights reserved.
 //
 // Developed by:
 //
@@ -58,9 +58,11 @@
 // Step Ids of the Api tables exported by Hsa Core Runtime
 #define HSA_API_TABLE_STEP_VERSION                  0x01
 #define HSA_CORE_API_TABLE_STEP_VERSION             0x00
-#define HSA_AMD_EXT_API_TABLE_STEP_VERSION          0x03
+#define HSA_AMD_EXT_API_TABLE_STEP_VERSION          0x08
 #define HSA_FINALIZER_API_TABLE_STEP_VERSION        0x00
-#define HSA_IMAGE_API_TABLE_STEP_VERSION            0x00
+#define HSA_IMAGE_API_TABLE_STEP_VERSION            0x01
+// Rocprofiler just checks HSA_MAGE_EXT_API_TABLE_STEP_VERSION
+#define HSA_IMAGE_EXT_API_TABLE_STEP_VERSION        HSA_IMAGE_API_TABLE_STEP_VERSION
 #define HSA_AQLPROFILE_API_TABLE_STEP_VERSION       0x00
 #define HSA_TOOLS_API_TABLE_STEP_VERSION            0x00
 #define HSA_PC_SAMPLING_API_TABLE_STEP_VERSION      0x00
