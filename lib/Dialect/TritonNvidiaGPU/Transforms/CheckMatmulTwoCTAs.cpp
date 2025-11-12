@@ -53,7 +53,30 @@ public:
       return;
     }
 
-    bool twoCTAValue = firstMatmul ? firstTwoCTA : false;
+    // Also check TMEMCopyOp for two_ctas setting
+    bool twoCTAFromCopy = false;
+    mod.walk([&](ttng::TMEMCopyOp op) {
+      auto dstTy = cast<mlir::triton::gpu::MemDescType>(op.getDst().getType());
+      if (auto tmemEnc = dyn_cast<ttng::TensorMemoryEncodingAttr>(dstTy.getEncoding())) {
+        if (tmemEnc.getTwoCTAs()) {
+          twoCTAFromCopy = true;
+          return WalkResult::interrupt();
+        }
+      }
+      return WalkResult::advance();
+    });
+
+    // Check if numCTAs==2 for any tmem copy ops (including TensorMemoryScalesLayout)
+    bool hasTMemCopyWith2CTAs = false;
+    unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+    if (numCTAs == 2) {
+      mod.walk([&](ttng::TMEMCopyOp op) {
+        hasTMemCopyWith2CTAs = true;
+        return WalkResult::interrupt();
+      });
+    }
+
+    bool twoCTAValue = (firstMatmul && firstTwoCTA) || twoCTAFromCopy || hasTMemCopyWith2CTAs;
     mod->setAttr(AttrTwoCTAsName, BoolAttr::get(mod.getContext(), twoCTAValue));
   }
 };

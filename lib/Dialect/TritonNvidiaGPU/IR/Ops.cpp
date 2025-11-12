@@ -751,8 +751,12 @@ LogicalResult TMEMCopyOp::verify() {
 
   auto mod = getOperation()->getParentOfType<ModuleOp>();
   unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
-  if (numCTAs != 1)
-    return emitOpError("NYI: Only one CTA is supported for now.");
+  
+  // For 2 CTA mode, verify module attribute is set (will be set by CheckMatmulTwoCTAs pass)
+  // Note: This verification happens during IR construction, before the pass runs,
+  // so we just check consistency with numCTAs for now
+  if (numCTAs != 1 && numCTAs != 2)
+    return emitOpError("NYI: Only 1 or 2 CTAs supported for tcgen05.cp.");
 
   // Fp4 we could lift if we needed
   auto nvmmaEnc =

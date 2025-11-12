@@ -932,6 +932,66 @@ def test_tmem_copy_2d():
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_tmem_copy_2d_2cta():
+    device = "cuda"
+
+    smem_h = 64
+    smem_w = 16
+    num_rows = 128
+    num_cols = smem_h * smem_w // 32
+
+    @gluon.jit
+    def kernel(in_ptr, out_ptr, smem_h: ttgl.constexpr, smem_w: ttgl.constexpr, num_rows: ttgl.constexpr,
+               num_cols: ttgl.constexpr):
+        in_ptrs = in_ptr + ttgl.arange(0, smem_h)[:, None] * smem_w + ttgl.arange(0, smem_w)[None, :]
+        out_ptrs = out_ptr + ttgl.arange(0, num_rows)[:, None] * num_cols + ttgl.arange(0, num_cols)[None, :]
+
+        # For 2 CTA mode: ctas_per_cga=[2,1] declares 2 CTA context, cta_split_num=[1,1] means replicate (don't split)
+        blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 4], [32, 1], [4, 1], [1, 0],
+                                                      ctas_per_cga=[2, 1], cta_split_num=[1, 1])
+        value = ttgl.load(ttgl.set_auto_layout(in_ptrs, blocked))
+
+        # For 2 CTA mode with replication (cta_split_num=[1,1]), block_bases=[[0, 0]] means no address splitting
+        smem_layout: ttgl.constexpr = ttgl.SharedLinearLayout(
+            offset_bases=[[0, 1], [0, 2], [32, 0], [0, 4], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]],
+            block_bases=[[0, 0]])
+        tmem_layout: ttgl.constexpr = TensorMemoryScalesLayout()
+        smem = ttgl.allocate_shared_memory(ttgl.int8, (smem_h, smem_w), layout=smem_layout)
+        tmem = allocate_tensor_memory(ttgl.int8, (smem_h, smem_w), layout=tmem_layout)
+
+        barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], ttgl.constexpr(mbarrier.MBarrierLayout()))
+        mbarrier.init(barrier, count=1)
+
+        smem.store(value)
+        fence_async_shared()
+        tcgen05_copy(smem, tmem)
+        tcgen05_commit(barrier)
+        mbarrier.wait(barrier, phase=0)
+        tmem_alias: ttgl.constexpr = TensorMemoryLayout((num_rows, num_cols), col_stride=1)
+        tmem = tmem._reinterpret(ttgl.int8, (num_rows, num_cols), tmem_alias)
+        value = tmem.load(blocked)
+        ttgl.store(ttgl.set_auto_layout(out_ptrs, blocked), value)
+
+    torch.manual_seed(0)
+    x = torch.randint(size=(smem_h, smem_w), low=-100, high=100, dtype=torch.int8).to(device)
+    #x = torch.arange(smem_h * smem_w, dtype=torch.int8, device=device).reshape(smem_h, smem_w)
+    z_tri = torch.zeros(size=(num_rows, num_cols), dtype=torch.int8).to(device)
+    kernel[(1, )](x, z_tri, smem_h, smem_w, num_rows, num_cols, num_ctas=2)
+
+    # offset_bases=[[0, 1], [0, 2], [32, 0], [0, 4], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 8]],
+    # Split into contiguous shmem chunks
+    x_res = x.reshape(2, 32, 2, 2, 4)
+    # Put tmem cols first then rows
+    x_res = x_res.permute(1, 2, 3, 0, 4)
+    # Reshape as 32xnum_cols
+    x_res = x_res.reshape(num_rows // 4, num_cols)
+
+    warps = torch.chunk(z_tri, chunks=4, dim=0)
+    for warp in warps:
+        torch.testing.assert_close(x_res, warp)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_tmem_subslice_block_m_64():
 
     @gluon.jit

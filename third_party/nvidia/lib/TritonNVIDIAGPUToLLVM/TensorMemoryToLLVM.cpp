@@ -622,10 +622,13 @@ struct TensorMemoryCopyOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMEMCopyOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    assert(lookupNumCTAs(rewriter) == 1 && "NYI");
+    // Allow 1 or 2 CTAs for tcgen05.cp
+    unsigned numCTAs = lookupNumCTAs(rewriter);
+    bool twoCTAs = getModuleTwoCTAs(op);
+    assert((numCTAs == 1 || (numCTAs == 2 && twoCTAs)) && 
+           "Only 1 CTA or 2 CTAs with two_ctas mode is supported");
     Location loc = op->getLoc();
     Value pred = LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter);
-    bool twoCTAs = getModuleTwoCTAs(op);
     copySharedToTmem(rewriter, loc, typeConverter, op, adaptor.getSrc(),
                      adaptor.getDst(), pred);
 
