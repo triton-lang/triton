@@ -55,8 +55,8 @@ def make_slice_sizes(n_slices, total_size, device="cuda"):
 def init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter, device="cuda"):
     n_rows = m * n_expts_act
     slice_sizes = make_slice_sizes(n_expts_tot, n_rows, device=device)
-    gather_indx = torch.div(torch.randperm(n_rows, device=device), n_expts_act, rounding_mode='trunc') if do_gather else None
-    scatter_indx = torch.randperm(n_rows, device=device) if do_scatter else None
+    gather_indx = torch.div(torch.randperm(n_rows, device=device), n_expts_act, rounding_mode='trunc').to(torch.int32) if do_gather else None
+    scatter_indx = torch.randperm(n_rows, device=device).to(torch.int32) if do_scatter else None
     ragged_batch_metadata = make_ragged_tensor_metadata(slice_sizes, n_rows)
     return m, ragged_batch_metadata, gather_indx, scatter_indx
 
@@ -181,27 +181,6 @@ def opt_flags_scope(request):
     yield
     opt_flags.reset_opt_flags_constraints()
 
-
-def aggregate_experts(y, scatter_indx, n_expts_act, epilogue, precision_config, y_in):
-    if scatter_indx is None or n_expts_act == 1:
-        return y
-    from triton_kernels.reduce import reduce, PostprocessFn
-    out_matmul = y
-    mask = (scatter_indx.src_indx != -1).view(out_matmul.shape[-2]//n_expts_act, n_expts_act, 1)
-    out_matmul = out_matmul.view(out_matmul.shape[-2]//n_expts_act, n_expts_act, -1)
-    mask = mask.expand_as(out_matmul)
-    # out_matmul_scale_shape = out_matmul.shape[:-1] + (triton.cdiv(out_matmul.shape[-1], 32),)
-    postprocess_fn = PostprocessFn() if epilogue is None else PostprocessFn(specs=epilogue.specs, fn_args=epilogue.fn_arg_values_finalize)
-    x_flex = InFlexData(dtype=precision_config.flex_ctx.out_data.dtype, scale=precision_config.flex_ctx.out_data.expected_scale)
-    out_final, out_final_mx_scale = reduce(out_matmul, dim=1, postprocess_fn2=postprocess_fn, x_flex=x_flex, #
-        mask=mask,
-        y_has_mx=precision_config.out_scale is not None,
-        y_flex=precision_config.flex_ctx.out_data,
-        y_flex_saturate_inf=precision_config.flexpoint_saturate_inf,
-        y=y_in,
-    )
-    precision_config.out_scale = out_final_mx_scale
-    return out_final
 
 # ---------------
 # unit tests
