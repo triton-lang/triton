@@ -9,6 +9,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONTOTRITONGPU
@@ -157,11 +158,12 @@ struct TritonExpandDimsPattern
     std::iota(retOrder.begin(), retOrder.end(), 0);
 
     auto argCTALayout = argEncoding.getCTALayout();
-    auto retCTAsPerCGA = insertOne(argCTALayout.getCTAsPerCGA(), op.getAxis());
+    auto retCTAsPerCGA =
+        insertOne(ArrayRef(argCTALayout.getCTAsPerCGA()), op.getAxis());
     auto retCTASplitNum =
-        insertOne(argCTALayout.getCTASplitNum(), op.getAxis());
+        insertOne(ArrayRef(argCTALayout.getCTASplitNum()), op.getAxis());
     auto retCTAOrder = insertOrder(argCTALayout.getCTAOrder(), op.getAxis());
-    auto retCTALayout = triton::gpu::CTALayoutAttr::get(
+    auto retCTALayout = triton::gpu::CTAEncodingAttr::fromSplitParams(
         getContext(), retCTAsPerCGA, retCTASplitNum, retCTAOrder);
 
     triton::gpu::BlockedEncodingAttr retEncoding =
@@ -329,15 +331,16 @@ struct TritonSplitOpPattern : public OpConversionPattern<triton::SplitOp> {
         return res;
       };
 
+      auto layout = defaultEnc.getCTALayout().getLinearLayout();
+      auto kBlock = StringAttr::get(getContext(), "block");
+      auto newDim = standardOutDimNames(getContext(), rank)[rank - 1];
+      layout *= LinearLayout::identity1D(1, kBlock, newDim);
       srcEnc = BlockedEncodingAttr::get(
           getContext(), append(defaultEnc.getSizePerThread(), 2),
           append(defaultEnc.getThreadsPerWarp(), 1),
           append(defaultEnc.getWarpsPerCTA(), 1),
           prepend(defaultEnc.getOrder(), rank - 1),
-          CTALayoutAttr::get(getContext(),
-                             append(defaultEnc.getCTAsPerCGA(), 1),
-                             append(defaultEnc.getCTASplitNum(), 1),
-                             prepend(defaultEnc.getCTAOrder(), rank - 1)));
+          CTAEncodingAttr::get(getContext(), layout));
       srcTy = srcTy.cloneWithEncoding(srcEnc);
       src = ConvertLayoutOp::create(rewriter, op.getLoc(), srcTy, src);
     }

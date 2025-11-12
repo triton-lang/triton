@@ -27,10 +27,10 @@ namespace {
 //    for register layouts, and input dims [offset] for shared layouts.
 //  - cgaLayout: Arrangement of multiple blocks, i.e. input dims [block].
 //
-// Note that this is inconsistent with the type name CTALayoutAttr.  That type
+// Note that this is inconsistent with the type name CTAEncodingAttr.  That type
 // is equivalent to our cgaLayout.
 //
-// IMO the name CTALayoutAttr is wrong.  If we tried to be consistent anyway,
+// IMO the name CTAEncodingAttr is wrong.  If we tried to be consistent anyway,
 // then we'd have to rename ctaLayout to "warpLayout".  I think that's more
 // confusing than being inconsistent about "cgaLayout", especially when we have
 // to consider the size of the warpLayout (surely that's not the "warpSize").
@@ -155,28 +155,6 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
 }
 
 } // namespace
-
-LinearLayout makeCgaLayout(CTALayoutAttr layout) {
-  MLIRContext *ctx = layout.getContext();
-  StringAttr kBlock = S("block");
-
-  int rank = layout.getCTAOrder().size();
-  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
-
-  LinearLayout ret = LinearLayout::empty();
-  for (int i = 0; i < rank; i++) {
-    // Start with the most minor dimension, which is order[0].
-    int dim = layout.getCTAOrder()[i];
-    int split = layout.getCTASplitNum()[dim];
-    int ctas = layout.getCTAsPerCGA()[dim];
-    assert(ctas % split == 0);
-    ret *= LinearLayout::identity1D(split, kBlock, outDimNames[dim]) *
-           LinearLayout::zeros1D(ctas / split, kBlock, outDimNames[dim]);
-  }
-
-  // Transpose to standard order (dim0, dim1, ...).
-  return ret.transposeOuts(outDimNames);
-}
 
 // Returns the layout of a single core matrix which tiles the nvmma layout
 LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
@@ -1041,28 +1019,7 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   parentShape.insert(parentShape.begin() + getDim(), 1);
   LinearLayout parentLL = triton::gpu::toLinearLayout(parentShape, getParent());
 
-  // Remove dimension getDim() from the parent layout.
-  //
-  //  1. Construct a layout `transform` from parent-out-dims to slice-out-dims
-  //     that removes the relevant out-dim.
-  //  2. Compute linearSlice = parent.compose(transform).  Now linearSlice maps
-  //     from parent in-dims to slice out-dims.
-  //  3. Fix up duplicate registers introduced by slicing.
-  auto outDimNames = standardOutDimNames(ctx, shape.size() + 1);
-  LinearLayout transform = LinearLayout::empty();
-  for (auto [idx, outDim] : llvm::enumerate(parentLL.getOutDimNames())) {
-    if (idx == getDim()) {
-      // Because we're multiplying by all zeros, we could replace outDimNames[0]
-      // with any other valid out-dim; the layout will be the same.
-      transform *= LinearLayout::zeros1D(parentLL.getOutDimSize(outDim), outDim,
-                                         outDimNames[0]);
-    } else {
-      transform *=
-          LinearLayout::identity1D(parentLL.getOutDimSize(outDim), outDim,
-                                   outDimNames[idx - (idx < getDim() ? 0 : 1)]);
-    }
-  }
-  LinearLayout sliceLL = parentLL.compose(transform);
+  auto sliceLL = removeStandardDim(parentLL, getDim());
 
   // Step 3: Along the "register" dim, remove any all-zero bases.
   auto bases = sliceLL.getBases();
@@ -1308,12 +1265,15 @@ LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
 }
 
 LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
-                                    CTALayoutAttr cgaLayoutAttr,
+                                    CTAEncodingAttr cgaLayoutAttr,
                                     ArrayRef<int64_t> shape) {
   int rank = shape.size();
   assert(ctaLayout.getNumOutDims() == rank);
-  assert(cgaLayoutAttr.getCTAOrder().size() == rank);
   MLIRContext *ctx = cgaLayoutAttr.getContext();
+  if (cgaLayoutAttr.getRank() == 0 ||
+      cgaLayoutAttr.getCTAOrder().size() != rank) {
+    cgaLayoutAttr = CTAEncodingAttr::getDefault(ctx, rank);
+  }
 
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 
@@ -1323,7 +1283,7 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   }
 
   LinearLayout cgaLayout =
-      ensureLayoutNotLargerThan(makeCgaLayout(cgaLayoutAttr), labeledShape)
+      ensureLayoutNotLargerThan(cgaLayoutAttr.getLinearLayout(), labeledShape)
           .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
   // Calculate the shape of the ctaLayout, which is `shape` divided by the
@@ -1456,7 +1416,7 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                            warpLayout.transposeOuts(outDimNames);
 
   return combineCtaCgaWithShape(
-      ctaLayout, CTALayoutAttr::getDefault(ctx, /*rank=*/2), dotOperandShape);
+      ctaLayout, CTAEncodingAttr::getDefault(ctx, /*rank=*/2), dotOperandShape);
 }
 
 // PTX ISA - Warp-level MMA Block Scaling
@@ -1472,7 +1432,7 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
 LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
                                           ArrayRef<int64_t> shape, int opIdx,
                                           ArrayRef<unsigned> warpsPerCTA,
-                                          CTALayoutAttr ctaLayout) {
+                                          CTAEncodingAttr ctaLayout) {
   unsigned rank = shape.size();
   auto outDims = standardOutDimNames(ctx, rank);
   StringAttr kRegister = StringAttr::get(ctx, "register");
@@ -1586,8 +1546,7 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
                            warpLayout.transposeOuts(outDimNames);
 
-  auto ctaLay = CTALayoutAttr::get(/*context=*/ctx, /*CTAsPerCGA=*/{1, 1},
-                                   /*CTASplitNum=*/{1, 1}, /*CTAOrder=*/{1, 0});
+  auto ctaLay = CTAEncodingAttr::getDefault(ctx, 2);
   auto finalLay = combineCtaCgaWithShape(ctaLayout, ctaLay, dotOperandShape);
   return finalLay;
 }

@@ -579,11 +579,7 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
       // preserved. Otherwise fall back to the generic shared-linear encoding
       // logic below.
       if (innerDimDst == innerDimSrc) {
-        auto CTALayout = CTALayoutAttr::get(
-            ctx,
-            /*CTAsPerCGA=*/SmallVector<unsigned>(dstShape.size(), 1),
-            /*CTASplitNum=*/SmallVector<unsigned>(dstShape.size(), 1),
-            /*CTAOrder=*/llvm::to_vector(llvm::seq<unsigned>(dstShape.size())));
+        auto CTALayout = CTAEncodingAttr::getDefault(ctx, dstShape.size());
         auto candidateEncoding = NVMMASharedEncodingAttr::get(
             ctx, mmaEncoding.getSwizzlingByteWidth(),
             mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
@@ -730,6 +726,8 @@ static LogicalResult verifySharedMemoryRank(Operation *op,
   auto enc = dyn_cast<LayoutEncodingTrait>(memdesc.getEncoding());
   if (!enc)
     return op->emitOpError("expected memdesc to have a shared memory encoding");
+  if (isa<NVMMASharedEncodingAttr>(enc))
+    return success();
   if (type.getRank() != enc.getRank()) {
     return op->emitOpError(regName)
            << " has rank " << type.getRank()

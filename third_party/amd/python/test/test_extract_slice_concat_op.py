@@ -30,17 +30,14 @@ class LinearLayout:
 
 class BlockedLayout:
 
-    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order, ctas_per_cga, cta_split_num, cta_order):
+    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order):
         self.sz_per_thread = size_per_thread
         self.threads_per_warp = threads_per_warp
         self.warps_per_cta = warps_per_cta
         self.order = order
-        self.ctas_per_cga = ctas_per_cga
-        self.cta_split_num = cta_split_num
-        self.cta_order = cta_order
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+        return f"#{GPU_DIALECT}.blocked<{{sizePerThread={self.sz_per_thread}, threadsPerWarp={self.threads_per_warp}, warpsPerCTA={self.warps_per_cta}, order={self.order}}}>"
 
 
 # -----------------------
@@ -50,26 +47,25 @@ class BlockedLayout:
 regs2x2 = [[1, 0], [0, 1]]
 lanes8x8 = [[2, 0], [4, 0], [8, 0], [0, 2], [0, 4], [0, 8]]
 warps2x2 = [[16, 0], [0, 16]]
-cta_layout = [[1, 1], [1, 1], [0, 1]]
 redundant_ll = LinearLayout([[0, 0]] + regs2x2, lanes8x8, warps2x2, block=[])
 non_redundant_ll = LinearLayout(regs2x2, lanes8x8, warps2x2, block=[])
 
 # list of pairs defining ExtractSliceOp input and output layouts
 extract_layout = [
-    (BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0], *cta_layout), ) * 2,
-    (BlockedLayout([2, 2], [64, 1], [2, 2], [1, 0], *cta_layout), ) * 2,
-    (BlockedLayout([2, 2], [16, 4], [4, 1], [0, 1], *cta_layout), ) * 2,
-    (BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0], *cta_layout), ) * 2,
-    (BlockedLayout([1, 8], [16, 4], [4, 1], [0, 1], *cta_layout), ) * 2,
+    (BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0]), ) * 2,
+    (BlockedLayout([2, 2], [64, 1], [2, 2], [1, 0]), ) * 2,
+    (BlockedLayout([2, 2], [16, 4], [4, 1], [0, 1]), ) * 2,
+    (BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0]), ) * 2,
+    (BlockedLayout([1, 8], [16, 4], [4, 1], [0, 1]), ) * 2,
     (redundant_ll, non_redundant_ll),
     (non_redundant_ll, redundant_ll),
 ]
 blocked_layout = [
-    BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0], *cta_layout),
-    BlockedLayout([2, 2], [16, 4], [2, 2], [1, 0], *cta_layout),
-    BlockedLayout([2, 2], [16, 4], [2, 2], [0, 1], *cta_layout),
-    BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0], *cta_layout),
-    BlockedLayout([1, 8], [16, 4], [4, 1], [0, 1], *cta_layout),
+    BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0]),
+    BlockedLayout([2, 2], [16, 4], [2, 2], [1, 0]),
+    BlockedLayout([2, 2], [16, 4], [2, 2], [0, 1]),
+    BlockedLayout([1, 8], [16, 4], [4, 1], [1, 0]),
+    BlockedLayout([1, 8], [16, 4], [4, 1], [0, 1]),
 ]
 
 

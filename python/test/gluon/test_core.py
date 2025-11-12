@@ -74,7 +74,7 @@ def test_copy_kernel(layout, XBLOCK):
 def test_copy_kernel_multi_cta():
     XBLOCK = 2048
     layout = ttgl.BlockedLayout(size_per_thread=[8], threads_per_warp=[THREADS_PER_WARP], warps_per_cta=[8], order=[0],
-                                ctas_per_cga=[2], cta_split_num=[2])
+                                cga_layout=ttgl.make_cga_layout([2], [2], [0]))
 
     inp = torch.randn(XBLOCK * 4 - 7, device="cuda")
     out = torch.empty_like(inp)
@@ -252,7 +252,7 @@ def is_two_ctas(layout_a: ttgl.constexpr, layout_b: ttgl.constexpr) -> ttgl.cons
 def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, block_layout_a: ttgl.constexpr,
                block_layout_b: ttgl.constexpr, block_layout_c: ttgl.constexpr, mma_layout: ttgl.constexpr,
                shared_layout_a: ttgl.constexpr, shared_layout_b: ttgl.constexpr, acc_dtype: ttgl.constexpr,
-               ASYNC: ttgl.constexpr, USE_TCGEN05: ttgl.constexpr):
+               ASYNC: ttgl.constexpr, USE_TCGEN05: ttgl.constexpr, mma_barrier_layout: ttgl.constexpr = None):
     a_offs_m = ttgl.arange(0, M)[:, None]
     a_offs_k = ttgl.arange(0, K)[None, :]
     b_offs_k = ttgl.arange(0, K)[:, None]
@@ -272,16 +272,12 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
     fence_async_shared(cluster=two_ctas)
 
     if USE_TCGEN05:
-        tmem_shape: ttgl.constexpr = (min(M // mma_layout.cta_split_num[0], 128), N // mma_layout.cta_split_num[1])
-        tmem_layout: ttgl.constexpr = TensorMemoryLayout(tmem_shape, col_stride=32 // acc_dtype.primitive_bitwidth,
-                                                         cta_split_num=mma_layout.cta_split_num, two_ctas=two_ctas)
-
-        # The layout of this mbarrier seems to be irrelevant. We might want to change the API to just acacept num_ctas
-        mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [1],
-                                                  mbarrier.MBarrierLayout(ctas_per_cga=(2 if two_ctas else 1)))
+        # The layout of this mbarrier seems to be irrelevant. We might want to change the API to just accept num_ctas
+        assert mma_barrier_layout is not None, "Expected an mbarrier layout for TCGen05 MMA execution"
+        mma_barrier = ttgl.allocate_shared_memory(ttgl.int64, [1], mma_barrier_layout)
         mbarrier.init(mma_barrier, count=1)
 
-        acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], tmem_layout)
+        acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], mma_layout)
 
         tcgen05_mma(smem_a, smem_b, acc_tmem, use_acc=False, mbarriers=[mma_barrier])
         mbarrier.wait(mma_barrier, phase=0)
@@ -290,11 +286,9 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
         tmem_reg_layout: ttgl.constexpr = get_tmem_reg_layout(
             acc_dtype,
             (M, N),
-            tmem_layout,
+            mma_layout,
             num_warps=ttgl.num_warps(),
-            ctas_per_cga=mma_layout.ctas_per_cga,
-            cta_split_num=mma_layout.cta_split_num,
-            cta_order=mma_layout.cta_order,
+            cga_layout=block_layout_c.cga_layout,
         )
         acc = acc_tmem.load(tmem_reg_layout)
     else:
@@ -468,27 +462,41 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
     gl_acc_dtype = acc_dtype_map[acc_dtype]
     out_dtype = torch.float32
     cta_order = [1, 0]
-    block_layout_a = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0],
-                                        ctas_per_cga=ctas_per_cga, cta_split_num=cta_split_a, cta_order=cta_order)
+    cga_layout_a = ttgl.make_cga_layout(ctas_per_cga, cta_split_a, cta_order)
+    cga_layout_b = ttgl.make_cga_layout(ctas_per_cga_b, cta_split_b, cta_order)
+    cga_layout_c = ttgl.make_cga_layout(ctas_per_cga, ctas_per_cga, cta_order)
+    block_layout_a = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[0, 1],
+                                        cga_layout=cga_layout_a)
     block_layout_b = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0],
-                                        ctas_per_cga=ctas_per_cga_b, cta_split_num=cta_split_b, cta_order=cta_order)
+                                        cga_layout=cga_layout_b)
     if swizzling_a == 0:
         shared_layout_a = get_shared_swizzling_zero(M, K, transpose_a, ctas_per_cga, cta_split_a, cta_order)
     else:
         shared_layout_a = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_a, element_bitwidth=bitwidth, rank=2,
-                                                 transposed=transpose_a, ctas_per_cga=ctas_per_cga,
-                                                 cta_split_num=cta_split_a, cta_order=cta_order)
+                                                 transposed=transpose_a, cga_layout=cga_layout_a)
     if swizzling_b == 0:
         shared_layout_b = get_shared_swizzling_zero(K, N, transpose_b, ctas_per_cga_b, cta_split_b, cta_order)
     else:
         shared_layout_b = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzling_b, element_bitwidth=bitwidth, rank=2,
-                                                 transposed=transpose_b, ctas_per_cga=ctas_per_cga_b,
-                                                 cta_split_num=cta_split_b, cta_order=cta_order)
-    mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=instr_shape,
-                                             ctas_per_cga=ctas_per_cga, cta_split_num=ctas_per_cga, cta_order=cta_order)
+                                                 transposed=transpose_b, cga_layout=cga_layout_b)
+    if use_tcgen05:
+        tmem_shape = (min(M // ctas_per_cga[0], 128), N // ctas_per_cga[1])
+        mma_layout = TensorMemoryLayout(tmem_shape, col_stride=32 // torch.finfo(acc_dtype).bits,
+                                        cta_split_num=tuple(ctas_per_cga), two_ctas=two_ctas)
+    else:
+        mma_layout = ttgl.NVMMADistributedLayout(version=[3, 0], warps_per_cta=warps, instr_shape=instr_shape,
+                                                 cga_layout=cga_layout_a)
 
     block_layout_c = ttgl.BlockedLayout([1, 8], [1, THREADS_PER_WARP], warps_per_cta=warps, order=[1, 0],
-                                        ctas_per_cga=ctas_per_cga, cta_split_num=ctas_per_cga, cta_order=cta_order)
+                                        cga_layout=cga_layout_c)
+    num_ctas = ctas_per_cga[0] * ctas_per_cga[1]
+    mma_barrier_layout = None
+    if use_tcgen05:
+        barrier_cga_layout = []
+        if two_ctas:
+            barrier_cga_layout.append([0])
+        barrier_cga_layout.extend([2**i] for i in range(num_ctas // (2 if two_ctas else 1)))
+        mma_barrier_layout = mbarrier.MBarrierLayout(cga_layout=barrier_cga_layout)
     torch.manual_seed(0)
 
     def cast(x, dtype):
@@ -522,8 +530,9 @@ def test_mma_shared_inputs(bitwidth, transpose_a, transpose_b, acc_dtype, warps,
             gl_acc_dtype,
             False,
             use_tcgen05,
+            mma_barrier_layout,
             num_warps=warps[0] * warps[1],
-            num_ctas=ctas_per_cga[0] * ctas_per_cga[1],
+            num_ctas=num_ctas,
         )
     except OutOfResources:
         # FIXME: Compute a priori
