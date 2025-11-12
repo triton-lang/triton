@@ -55,7 +55,7 @@ def make_slice_sizes(n_slices, total_size, device="cuda"):
 def init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter, device="cuda"):
     n_rows = m * n_expts_act
     slice_sizes = make_slice_sizes(n_expts_tot, n_rows, device=device)
-    gather_indx = torch.div(torch.randperm(n_rows, device=device), n_expts_act, rounding_mode='trunc').to(torch.int32) if do_gather else None
+    gather_indx = torch.randint(0, m, (n_rows, ), device=device).to(torch.int32) if do_gather and m > 0 else None
     scatter_indx = torch.randperm(n_rows, device=device).to(torch.int32) if do_scatter else None
     ragged_batch_metadata = make_ragged_tensor_metadata(slice_sizes, n_rows)
     return m, ragged_batch_metadata, gather_indx, scatter_indx
