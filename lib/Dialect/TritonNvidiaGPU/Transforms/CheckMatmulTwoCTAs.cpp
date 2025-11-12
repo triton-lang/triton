@@ -25,25 +25,39 @@ public:
 
   void runOnOperation() override {
     ModuleOp mod = getOperation();
-    Operation *firstMatmul = nullptr;
-    bool firstTwoCTA = false;
+    Operation *firstTcGenOp = nullptr;
+    bool twoCTA = false;
+    unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
 
-    // Step 1: Check all MMA ops have consistent two_ctas setting
-    WalkResult result = mod.walk([&](ttng::TCGen5MMAOp op) {
-      bool currentTwoCTA = op.getTwoCtas();
-      if (!firstMatmul) {
-        firstMatmul = op;
-        firstTwoCTA = currentTwoCTA;
+    // Walk all operations and check consistency across all tcgen05 ops
+    WalkResult result = mod.walk([&](Operation *op) {
+      std::optional<bool> currentTwoCTA;
+      
+      // Determine CTA mode for tcgen05 operations
+      if (auto mmaOp = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+        currentTwoCTA = mmaOp.getTwoCtas();
+      } else if (isa<ttng::TMEMCopyOp>(op)) {
+        // For TMEMCopyOp, CTA mode is always determined by kernel launch numCTAs
+        currentTwoCTA = (numCTAs == 2);
+      } else {
+        // Not a tcgen05 op, skip
         return WalkResult::advance();
       }
-      if (currentTwoCTA != firstTwoCTA) {
-        auto diag = op.emitError()
-                    << "inconsistent two_ctas setting across matmuls; "
-                       "expected all matmuls to "
-                    << (firstTwoCTA ? "enable" : "disable") << " two_ctas.";
-        diag.attachNote(firstMatmul->getLoc())
-            << "first matmul here has two_ctas="
-            << (firstTwoCTA ? "true" : "false") << ".";
+      
+      // Check consistency across all tcgen05 ops
+      if (!firstTcGenOp) {
+        firstTcGenOp = op;
+        twoCTA = *currentTwoCTA;
+        return WalkResult::advance();
+      }
+      if (*currentTwoCTA != twoCTA) {
+        auto diag = op->emitError()
+                    << "inconsistent two_ctas setting across tcgen05 operations; "
+                       "expected all tcgen05 ops to "
+                    << (twoCTA ? "enable" : "disable") << " two_ctas.";
+        diag.attachNote(firstTcGenOp->getLoc())
+            << "first tcgen05 op here has two_ctas="
+            << (twoCTA ? "true" : "false") << ".";
         return WalkResult::interrupt();
       }
       return WalkResult::advance();
@@ -54,42 +68,8 @@ public:
       return;
     }
 
-    // Step 2: Check if any TMEMCopyOp exists and verify consistency with MMA mode
-    unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
-    
-    WalkResult copyResult = mod.walk([&](ttng::TMEMCopyOp op) {
-      // For TMEMCopyOp, CTA mode is always determined by kernel launch numCTAs
-      bool copyTwoCTA = (numCTAs == 2);
-      
-      if (!firstMatmul) {
-        // No MMA found yet, so copy op sets the mode
-        firstMatmul = op;
-        firstTwoCTA = copyTwoCTA;
-        return WalkResult::advance();
-      }
-      if (firstTwoCTA != copyTwoCTA) {
-        // MMA exists with different mode - inconsistent!
-        auto diag = op.emitError()
-                    << "inconsistent CTA mode between tcgen05 operations; "
-                       "copy operations use "
-                    << (copyTwoCTA ? "2" : "1") << " CTA mode but "
-                       "matmul operations use "
-                    << (firstTwoCTA ? "2" : "1") << " CTA mode.";
-        diag.attachNote(firstMatmul->getLoc())
-            << "first matmul here has two_ctas="
-            << (firstTwoCTA ? "true" : "false");
-        return WalkResult::interrupt();
-      }
-      return WalkResult::advance();
-    });
-
-    if (copyResult.wasInterrupted()) {
-      signalPassFailure();
-      return;
-    }
-
-    // Step 3: Set module attribute
-    bool twoCTAValue = firstMatmul ? firstTwoCTA : false;
+    // Set module attribute
+    bool twoCTAValue = firstTcGenOp ? twoCTA : false;
     mod->setAttr(AttrTwoCTAsName, BoolAttr::get(mod.getContext(), twoCTAValue));
   }
 };
