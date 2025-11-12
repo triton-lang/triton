@@ -619,13 +619,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         assert tri_y.data_ptr() == y_tri_in.data_ptr()
         assert tri_y.shape == y_tri_in.shape
         assert tri_y.stride() == y_tri_in.stride()
-    # If split_k > 1, then the intermediate tensor is fp32.
-    sep_gather = mode == "ragged" and do_gather and n_expts_act > 1 and split_k == 1
-    # sep_scatter = mode == "ragged" and do_scatter and n_expts_act > 1 and split_k == 1
     y_scale = flex.out_data.expected_scale if act_is_float8 else 1
 
     def round_x(x, idx):
-        return x.to(act_dtype).to(torch.float32) if sep_gather else x
+        return x.to(act_dtype).to(torch.float32)
 
     ref_y = matmul_torch(x_ref, w_ref, bias_ref,  #
                              x_ragged_metadata=x_ragged_metadata,
