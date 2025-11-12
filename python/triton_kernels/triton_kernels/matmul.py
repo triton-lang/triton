@@ -1,6 +1,6 @@
 # isort: off
 # fmt: off
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import itertools
 import torch
 import triton
@@ -22,46 +22,6 @@ from .reduce import reduce
 from .reduce import PostprocessFn as ReducePostprocessFn
 from .tensor_details.ragged_tensor import ragged_metadata_fields
 
-
-@dataclass
-class GatherIndx:
-    """
-    Indices for an operation that performs:
-    Y = X[src_idx, :]
-    """
-    # array such that `dst_idx[src_idx] = arange(0, N)`
-    src_indx: torch.Tensor
-    dst_indx: torch.Tensor
-
-
-@dataclass
-class ScatterIndx:
-    """
-    Indices for an operation that performs:
-    Y[dst_idx, :] = X
-    """
-    # array such that `dst_idx[src_idx] = arange(0, N)`
-    src_indx: torch.Tensor
-    dst_indx: torch.Tensor
-
-@dataclass
-class RoutingData:
-    gate_scal: torch.Tensor = field()
-    expt_hist: torch.Tensor = field()
-    n_expts_tot: int = field()
-    n_expts_act: int = field()
-    expt_data: RaggedTensorMetadata = None
-
-    # Used to make perf annotation cleaner: when we use expert sharding, we can
-    # use this to tell the "expected" number of local tokens per expert, because
-    # the actual number can vary per each input.
-    expected_tokens_per_expt: int = field(default=None)
-
-    def n_blocks(self, n_rows, block_m):
-        if n_rows <= self.n_expts_tot:
-            return n_rows
-        else:
-            return triton.cdiv(max(n_rows - self.n_expts_tot + 1, 0), block_m) + self.n_expts_tot - 1
 
 @dataclass(frozen=True)
 class FusedActivation:
@@ -165,9 +125,9 @@ def init_allocation(x, w, precision_config, fused_activation,
     M = x.shape[-2]
     # if the activations are gathered, then M is number of gather indices
     if gather_indx is not None:
-        M = gather_indx.src_indx.shape[0]
+        M = gather_indx.shape[0]
     if scatter_indx is not None:
-        M = scatter_indx.src_indx.shape[0]
+        M = scatter_indx.shape[0]
     y_rows = M
     y_rows *= n_reduce_shards
     out_shape = (batch_dim, y_rows, N // fused_activation.specs.reduction_n)
@@ -236,8 +196,8 @@ def matmul_set_idle_sms(num_idle_sms):
 def matmul(x, w, bias,
     x_ragged_metadata: RaggedTensorMetadata | None = None,
     w_ragged_metadata: RaggedTensorMetadata | None = None,
-    gather_indx: GatherIndx | None = None,
-    scatter_indx: ScatterIndx | None = None,
+    gather_indx: torch.Tensor | None = None,
+    scatter_indx: torch.Tensor | None = None,
     precision_config: PrecisionConfig | None = None,
     betas: torch.Tensor | None = None,
     gammas: torch.Tensor | None = None,
@@ -309,7 +269,7 @@ def matmul(x, w, bias,
     is_w_ragged = w_ragged_metadata is not None
     is_y_ragged = is_x_ragged and w_ragged_metadata is None
     ragged_dimension = "K" if is_w_ragged else "M" if is_x_ragged else None
-    M = x.shape[-2] if gather_indx is None else gather_indx.src_indx.shape[0]
+    M = x.shape[-2] if gather_indx is None else gather_indx.shape[0]
     if ragged_dimension == "K":
         batch_size = w_ragged_metadata.n_slices
     elif ragged_dimension is None and w.ndim == 3:
@@ -406,7 +366,6 @@ def matmul(x, w, bias,
     # matrix multiplication
     flex = precision_config.flex_ctx
     bias_stride = None if bias is None else bias.stride(0)
-    num_indx = None if scatter_indx is None else scatter_indx.src_indx.shape[0]
     # moe metadata
     expt_data_w = tuple([None] * 6) if ragged_dimension != "K" else ragged_metadata_fields(w_ragged_metadata, opt_flags.block_k)
     expt_data_x = tuple([None] * 6) if ragged_dimension is None else ragged_metadata_fields(x_ragged_metadata, opt_flags.block_m if ragged_dimension == "M" else opt_flags.block_k)
@@ -497,12 +456,9 @@ def matmul(x, w, bias,
                    None if ragged_dimension == "M" else x.shape[-2],
                    N, K, K_W,
                    betas, gammas,
-                   None if gather_indx is None else gather_indx.src_indx,
-                   None if gather_indx is None else gather_indx.dst_indx,  # Only for launch_metadata
-                   None if scatter_indx is None else scatter_indx.src_indx,
-                   num_indx,
-                   None if scatter_indx is None else scatter_indx.dst_indx,
-                   None if scatter_indx is None else scatter_indx.dst_indx.shape[0],
+                   gather_indx,
+                   scatter_indx,
+                   None if scatter_indx is None else scatter_indx.shape[0],
                    ragged_dimension,
                    *expt_data_x,
                    *expt_data_w,
@@ -581,8 +537,8 @@ def matmul(x, w, bias,
 def matmul_torch(x, w, bias,
                  x_ragged_metadata: RaggedTensorMetadata | None = None,
                  w_ragged_metadata: RaggedTensorMetadata | None = None,
-                 gather_indx: GatherIndx = None,
-                 scatter_indx: ScatterIndx = None,
+                 gather_indx: torch.Tensor = None,
+                 scatter_indx: torch.Tensor = None,
                  precision_config: PrecisionConfig = None,
                  betas = None,
                  gammas = None,
@@ -637,13 +593,13 @@ def matmul_torch(x, w, bias,
     else:
         offs = [[0, x.shape[1]] for _ in range(w.shape[0])]
     # compute
-    n_rows = x.shape[1] if gather_indx is None else gather_indx.src_indx.shape[0]
+    n_rows = x.shape[1] if gather_indx is None else gather_indx.shape[0]
     y = torch.zeros((x.shape[0], n_rows, w.shape[-1]), device=x.device, dtype=x.dtype)
     for i, (lo, hi) in enumerate(offs):
         if gather_indx is None:
             idx = torch.arange(lo, hi, device=x.device)
         else:
-            idx = gather_indx.src_indx[lo:hi]
+            idx = gather_indx[lo:hi]
         batch = i if is_input_batched else 0
         out = torch.matmul(round_x(x[batch, idx, :], torch.arange(lo, hi, device="cuda")).float(),
                            w[i].float())
@@ -656,9 +612,9 @@ def matmul_torch(x, w, bias,
         y = y.view(y.shape[1], y.shape[2])
     if scatter_indx is None:
         return y
-    out = torch.zeros((scatter_indx.dst_indx.shape[0], y.shape[-1]), dtype=y.dtype, device=x.device)
-    msk = scatter_indx.dst_indx != -1
-    out[scatter_indx.dst_indx[msk], :] = y[msk, :]
+    out = torch.zeros((scatter_indx.shape[0], y.shape[-1]), dtype=y.dtype, device=x.device)
+    msk = scatter_indx != -1
+    out[scatter_indx[msk], :] = y[msk, :]
     return out
 
 

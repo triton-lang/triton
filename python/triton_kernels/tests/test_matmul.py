@@ -8,8 +8,7 @@ from typing import Union
 import triton
 # matmul utilities
 import triton_kernels.matmul_details.opt_flags as opt_flags
-from triton_kernels.matmul import FlexCtx, RoutingData, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
-from triton_kernels.matmul import GatherIndx, ScatterIndx
+from triton_kernels.matmul import FlexCtx, PrecisionConfig, FusedActivation, FnSpecs, FnName, Epilogue
 from triton_kernels.matmul import matmul_set_idle_sms, matmul, matmul_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
@@ -46,14 +45,11 @@ def init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter, device
     dispatch_indx = sparse_logits.mask_metadata.row_sorted_indx
     combine_indx = sparse_logits.mask_metadata.col_sorted_indx
     ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
-    routing_data = RoutingData(None, ragged_batch_metadata.slice_sizes, n_expts_tot, n_expts_act, ragged_batch_metadata)
     gather_src_indx = torch.div(combine_indx, n_expts_act, rounding_mode='trunc')
-    gather_idx = GatherIndx(gather_src_indx, dispatch_indx) if do_gather else None
-    scatter_idx =  ScatterIndx(dispatch_indx, combine_indx) if do_scatter else None
-    return m, routing_data, gather_idx, scatter_idx
+    return m, ragged_batch_metadata, gather_src_indx if do_gather else None, combine_indx if do_scatter else None
 
 
-def init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, mode, act_dtype, weight_dtype,
+def init_compute_data(m, n, k, ragged_metadata, gindx, sindx, n_expts_tot, n_expts_act, mode, act_dtype, weight_dtype,
                       has_y_gammas, requires_grad=True, device="cuda",
                       inner_expt_opt=None, padding_block_k=None):
     torch.manual_seed(0)
@@ -88,7 +84,7 @@ def init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, mo
 
         start = 0
         if is_padded:
-            for this_expt_nrows in rdata.expt_hist.tolist():
+            for this_expt_nrows in ragged_metadata.slice_sizes.tolist():
                 end = start + this_expt_nrows
                 padding_end = start + triton.cdiv(this_expt_nrows, padding_block_k) * padding_block_k
                 t[end:padding_end, :] = 0
@@ -96,7 +92,7 @@ def init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, mo
             assert start <= t.shape[0]
             t[start:, :] = nan_val
         else:
-            n_actual_rows = rdata.expt_hist.sum().item()
+            n_actual_rows = ragged_metadata.slice_sizes.sum().item()
             if n_actual_rows + padding_block_k < t.shape[0]:
                 t[n_actual_rows+padding_block_k:, :] = nan_val
 
@@ -465,11 +461,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
                                    mode, n_expts_tot, expt_is_inner, device=device)
     # precision_opt.x_pad_trans_requires_flexpoint = False
     if mode == "ragged":
-        m, rdata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter,
+        m, x_ragged_metadata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter,
                                                    device=device)
     else:
-        rdata = gindx = sindx = None
-    x_ragged_metadata = None if rdata is None else rdata.expt_data
+        x_ragged_metadata = gindx = sindx = None
 
 
     padding_block_k = 32
@@ -494,7 +489,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
             x_ragged_metadata2.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k
             x_ragged_metadata2.slice_sizes_divisibility = padding_block_k
 
-    x_tri, w_tri, bias_tri, gs0_tri, gs1_tri = init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act,
+    x_tri, w_tri, bias_tri, gs0_tri, gs1_tri = init_compute_data(m, n, k, x_ragged_metadata2, gindx, sindx, n_expts_tot, n_expts_act,
                                                                  mode, torch.bfloat16 if act_mxfp8 else act_dtype,  #
                                                                  torch.bfloat16 if weight_mxfp else weight_dtype,
                                                                  has_y_gammas, requires_grad=test_bwd, device=device,
@@ -509,11 +504,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         if mode == "batched":
             yT_shape = (n_expts_tot, n, x_tri.shape[-2])
         elif sindx is not None:
-            yT_shape = (n, sindx.src_indx.shape[0])
+            yT_shape = (n, sindx.shape[0])
         elif expt_is_inner:
             yT_shape = (n_expts_tot, n, k)
         else:
-            n_rows = x_tri.shape[-2] if gindx is None else gindx.dst_indx.shape[0]
+            n_rows = x_tri.shape[-2] if gindx is None else gindx.shape[0]
             yT_shape = (n, n_rows)
         y_tri_in = torch.empty(yT_shape, dtype=act_dtype, device=device).transpose(-1, -2)
     else:
@@ -607,7 +602,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         x_ref = upcast_from_mxfp(x_tri, x_mx_scales_tri, torch.bfloat16, axis=-1)
         is_input_batched = x_tri.ndim == 3
         y_shape = x_tri.shape if is_input_batched else (1,) + x_tri.shape
-        n_rows = y_shape[1] if gindx is None or mode == "batched" else gindx.dst_indx.shape[0]
+        n_rows = y_shape[1] if gindx is None or mode == "batched" else gindx.shape[0]
         y_shape = (y_shape[0], n_rows, w_tri_orig.shape[-1])
         if sindx is None or mode == "batched":
             if not is_input_batched:
@@ -622,7 +617,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         y_scale = None
 
     if mode == "batched":
-        rdata, gindx, sindx = None, None, None
+        x_ragged_metadata, gindx, sindx = None, None, None
     flex = precision_opt.flex_ctx
 
     # triton
@@ -648,7 +643,9 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     ref_y = matmul_torch(x_ref, w_ref, bias_ref,  #
                              x_ragged_metadata=x_ragged_metadata2,
                              w_ragged_metadata=w_ragged_metadata,
-                             gather_indx=gindx, scatter_indx=sindx, round_x=round_x, gammas=gs1_ref)
+                             gather_indx=gindx,
+                             scatter_indx=sindx,
+                             round_x=round_x, gammas=gs1_ref)
 
     def scale(val, scal):
         if scal is None:
@@ -780,19 +777,17 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, is_persistent,
 
     weight_dtype, act_dtype = torch.float16, torch.float16
     if mode == "ragged":
-        m, rdata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter,
+        m, x_ragged_metadata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter,
                                                    device=device)
-        x_ragged_metadata = rdata.expt_data
     else:
-        rdata = gindx = sindx = None
-        x_ragged_metadata = None
+        x_ragged_metadata = gindx = sindx = None
 
     precision_opt = init_precision(act_dtype, str(act_dtype).startswith("torch.float8"), weight_dtype, False, mode, n_expts_tot, device=device)
-    x, w, bias, _, _ = init_compute_data(m, n, k, rdata, gindx, sindx, n_expts_tot, n_expts_act, mode,
+    x, w, bias, _, _ = init_compute_data(m, n, k, x_ragged_metadata, gindx, sindx, n_expts_tot, n_expts_act, mode,
                                          act_dtype, weight_dtype, False, requires_grad=False, device=device)
 
     if mode == "batched":
-        rdata, gindx, sindx = None, None, None
+        x_ragged_metadata, gindx, sindx = None, None, None
 
     try:
         a = swiglu(matmul(x, w, bias, x_ragged_metadata, gindx, sindx, precision_opt), swiglu_alpha,

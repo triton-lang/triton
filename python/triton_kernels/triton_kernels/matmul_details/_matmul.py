@@ -37,8 +37,7 @@ def _matmul(
              M, N, K, K_W, # shapes
              # expt data
              Betas, Gammas,
-             GatherIndx, GatherDstIndx,  # GatherDstIndx is only used for launch metadata.
-             ScatterSrcIndx, num_idxs,
+             GatherIndx,
              WriteBackIndx, writeback_size,
              RAGGED_DIMENSION: tl.constexpr,
              XSliceSizes, XSliceOffs, XBlockOffs, XBlockSchedule, X_EXPECTED_SLICE_SIZE: tl.constexpr, X_SLICE_SIZES_DIVISIBILITY: tl.constexpr,
