@@ -300,7 +300,6 @@ def triton_key():
 
     # plugins
     if "TRITON_PASS_PLUGIN_PATH" in os.environ:
-        libplugin_hash = hashlib.sha256()
 
         def get_so_dependencies(lib_path):
             result = subprocess.run(['ldd', lib_path], capture_output=True, text=True)
