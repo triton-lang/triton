@@ -30,6 +30,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
+#include "llvm/TargetParser/Triple.h"
 #include <array>
 #include <optional>
 #include <pybind11/pybind11.h>
