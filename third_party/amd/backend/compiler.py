@@ -4,6 +4,7 @@ from triton import knobs
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
+import os
 import hashlib
 import tempfile
 import re
