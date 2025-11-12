@@ -478,18 +478,16 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
 
 
     w_ragged_metadata = None
-    x_ragged_metadata2 = x_ragged_metadata
     if expt_is_inner:
         w_ragged_metadata = replace(x_ragged_metadata)
         if "pad_w" in inner_expt_opt:
             w_ragged_metadata.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k
             w_ragged_metadata.slice_sizes_divisibility = padding_block_k
-        x_ragged_metadata2 = replace(x_ragged_metadata)
         if "pad_x" in inner_expt_opt:
-            x_ragged_metadata2.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k
-            x_ragged_metadata2.slice_sizes_divisibility = padding_block_k
+            x_ragged_metadata.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k
+            x_ragged_metadata.slice_sizes_divisibility = padding_block_k
 
-    x_tri, w_tri, bias_tri, gs0_tri, gs1_tri = init_compute_data(m, n, k, x_ragged_metadata2, gindx, sindx, n_expts_tot, n_expts_act,
+    x_tri, w_tri, bias_tri, gs0_tri, gs1_tri = init_compute_data(m, n, k, x_ragged_metadata, gindx, sindx, n_expts_tot, n_expts_act,
                                                                  mode, torch.bfloat16 if act_mxfp8 else act_dtype,  #
                                                                  torch.bfloat16 if weight_mxfp else weight_dtype,
                                                                  has_y_gammas, requires_grad=test_bwd, device=device,
@@ -623,7 +621,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     # triton
     try:
         tri_y = matmul(x_tri, w_tri, bias_tri,
-                           x_ragged_metadata2, w_ragged_metadata,
+                           x_ragged_metadata, w_ragged_metadata,
                            gindx, sindx, precision_opt,
                            gammas=gs1_ref, epilogue=epilogue, y=y_tri_in)
     except (opt_flags.InapplicableConstraint, NotImplementedError) as e:
@@ -641,7 +639,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         return x.to(act_dtype).to(torch.float32) if sep_gather else x
 
     ref_y = matmul_torch(x_ref, w_ref, bias_ref,  #
-                             x_ragged_metadata=x_ragged_metadata2,
+                             x_ragged_metadata=x_ragged_metadata,
                              w_ragged_metadata=w_ragged_metadata,
                              gather_indx=gindx,
                              scatter_indx=sindx,
