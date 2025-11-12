@@ -82,7 +82,7 @@ LogicalResult InferCoalescedLayout(ModuleOp &mod,
           mod.getContext(), axisInfoAnalysis, curr, numWarps, threadsPerWarp,
           ctaLayout, shapePerCTA);
       // set seed value
-      for (auto value : llvm::to_vector_of<Value>(curr->getOperands()))
+      for (auto value : curr->getOperands())
         seedEncodings.push_back({value, layout});
       return WalkResult::advance();
     });
@@ -114,9 +114,8 @@ class GluonInferCoalescedEncodingsPass
     if (failed(InferCoalescedLayout(moduleOp, isCoalescedEncodingTensorType)))
       return signalPassFailure();
 
-    // if (failed(doubleCheckEncodings(moduleOp,
-    // isCoalescedEncodingTensorType)))
-    //   return signalPassFailure();
+    if (failed(doubleCheckEncodings(moduleOp, isCoalescedEncodingTensorType)))
+      return signalPassFailure();
   }
 };
 } // namespace mlir::triton::gluon
