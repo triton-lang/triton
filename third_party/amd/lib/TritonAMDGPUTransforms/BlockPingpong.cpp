@@ -31,7 +31,7 @@ namespace {
 // by interleaving the execution of two warps on each SIMD. Especially it groups
 // instructions into Dot and Memory clusters so they can efficiently run in
 // parallel. Also this pass inserts `rocdl.s.setprio` operation and
-// `amdgpu.cond_barrier` to run two parallel warps in synchronization.
+// `amdg.cond_barrier` to run two parallel warps in synchronization.
 // This scheduling doesn't help improving the memory latency itself but it
 // relies on software-pipelining to hide the global latency. Likely to improve
 // the performance of compute-bound cases.
@@ -796,11 +796,14 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   // s_barrier
   //
   // Check note 2 and 3 for details.
-  constexpr int32_t ldsOnlyBits = ~(0x1f << 8);
   updateOpInsertion(dotOps[1]);
   prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
   prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
-  prependOp(ROCDL::SWaitcntOp::create(builder, loc, ldsOnlyBits), false);
+  auto dsAttr = builder.getI32IntegerAttr(0);
+  prependOp(tt::amdgpu::MemoryCounterWaitOp::create(
+                builder, loc, /* load= */ nullptr, /* store= */ nullptr,
+                /* ds= */ dsAttr),
+            false);
   prependOp(ROCDL::SBarrierOp::create(builder, loc), false);
   prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
 
@@ -831,7 +834,10 @@ LogicalResult Pingponger::transformChainedDotSchedule(OpBuilder &builder,
   updateOpInsertion(lastInsertedOp->getBlock()->getTerminator());
   prependOp(ROCDL::SchedBarrier::create(builder, loc, 0), false);
   prependOp(ROCDL::SetPrioOp::create(builder, loc, lowPriority), false);
-  prependOp(ROCDL::SWaitcntOp::create(builder, loc, ldsOnlyBits), false);
+  prependOp(tt::amdgpu::MemoryCounterWaitOp::create(
+                builder, loc, /* load= */ nullptr, /* store= */ nullptr,
+                /* ds= */ dsAttr),
+            false);
 
   return success();
 }

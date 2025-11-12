@@ -15,7 +15,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // GFX950: rocdl.cvt.scalef32.pk.bf16.fp4 %[[REG]][1], %[[SCALE]] : vector<2xbf16>
     // GFX950: rocdl.cvt.scalef32.pk.bf16.fp4 %[[REG]][2], %[[SCALE]] : vector<2xbf16>
     // GFX950: rocdl.cvt.scalef32.pk.bf16.fp4 %[[REG]][3], %[[SCALE]] : vector<2xbf16>
-    %1 = amdgpu.upcast_mxfp %arg0, %arg1 fp_type = e2m1 {fastMath = false} : tensor<32x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>, tensor<32x2xi8, #blocked> -> tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+    %1 = amdg.upcast_mxfp %arg0, %arg1 fp_type = e2m1 {fastMath = false} : tensor<32x32xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>, tensor<32x2xi8, #blocked> -> tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
     tt.return
   }
 }
@@ -34,7 +34,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // GFX950: %[[SCALE:.*]] = llvm.bitcast %[[INTS]] : i32 to f32
     // GFX950: rocdl.cvt.scalef32.pk.bf16.fp8 %[[REG:.*]][false], %[[SCALE]] : vector<2xbf16>
     // GFX950: rocdl.cvt.scalef32.pk.bf16.fp8 %[[REG]][true], %[[SCALE]] : vector<2xbf16>
-    %1 = amdgpu.upcast_mxfp %arg0, %arg1 fp_type = e4m3 {fastMath = false} : tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>, tensor<32x2xi8, #blocked> -> tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+    %1 = amdg.upcast_mxfp %arg0, %arg1 fp_type = e4m3 {fastMath = false} : tensor<64x32xf8E4M3FN, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>, tensor<32x2xi8, #blocked> -> tensor<64x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
     tt.return
   }
 }
@@ -52,7 +52,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // GFX950: %[[SCALE:.*]] = llvm.bitcast %[[INTS]] : i32 to f32
     // GFX950: rocdl.cvt.scalef32.pk.f16.bf8 %[[REG:.*]][false], %[[SCALE]] : vector<2xf16>
     // GFX950: rocdl.cvt.scalef32.pk.f16.bf8 %[[REG]][true], %[[SCALE]] : vector<2xf16>
-    %1 = amdgpu.upcast_mxfp %arg0, %arg1 fp_type = e5m2 {fastMath = false} : tensor<64x32xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>, tensor<32x2xi8, #blocked> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+    %1 = amdg.upcast_mxfp %arg0, %arg1 fp_type = e5m2 {fastMath = false} : tensor<64x32xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>, tensor<32x2xi8, #blocked> -> tensor<64x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
     tt.return
   }
 }

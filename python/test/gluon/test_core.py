@@ -588,7 +588,7 @@ def test_amd_direct_load_to_shared(use_buffer_load):
     pgm = kernel[(1, )](a, b, use_buffer_load)
 
     torch.testing.assert_close(a, b)
-    assert re.search(r'ttg\.local_load .* \{ttg\.amdgpu\.syncedViaAsyncWait = true\}', pgm.asm['ttgir'], re.MULTILINE)
+    assert re.search(r'ttg\.local_load .* \{ttg\.amdg\.syncedViaAsyncWait = true\}', pgm.asm['ttgir'], re.MULTILINE)
     if use_buffer_load:
         assert re.search(r"buffer_load.*lds$", pgm.asm['amdgcn'], re.MULTILINE)
     else:
@@ -1400,7 +1400,7 @@ def test_buffer_atomic_rmw_add_bf16():
     torch.testing.assert_close(a, torch_ref)
 
     ttgir = compiled.asm["ttgir"]
-    assert ttgir.count("amdgpu.buffer_atomic_rmw fadd, relaxed, cta") == 1
+    assert ttgir.count("amdg.buffer_atomic_rmw fadd, relaxed, cta") == 1
 
     llir = compiled.asm["llir"]
     assert llir.count("tail call <2 x bfloat> @llvm.amdgcn.raw.ptr.buffer.atomic.fadd.v2bf16") == SIZE_PER_THREAD // 2

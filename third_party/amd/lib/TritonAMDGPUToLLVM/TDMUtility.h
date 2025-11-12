@@ -27,7 +27,7 @@ void fillTDMDescriptor(RewriterBase &rewriter, Location loc,
                        unsigned padInterval, unsigned padAmount,
                        SmallVector<Value> &group0, SmallVector<Value> &group1,
                        SmallVector<Value> offset, Value dstPtr, Value pred,
-                       const TargetInfo &targetInfo);
+                       const TargetInfo &targetInfo, Value barrierPtr);
 
 } // namespace mlir::LLVM::AMD
 

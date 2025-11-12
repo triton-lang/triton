@@ -243,7 +243,7 @@ public:
       if (bufferSize > 0)
         allocBufferSize = bufferSize.getValue();
       else
-        allocBufferSize = 16384 * segmentNum;
+        allocBufferSize = 16384 * segmentNum; // 16KB per profiling unit
     } else {
       mlir::emitError(loc, "buffer-type not supported");
       return failure();

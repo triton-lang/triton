@@ -24,9 +24,21 @@ bool filterAsyncLocalLoadsDependencies(Operation *op1, Operation *op2) {
   return isLocalLoadWithAsyncWaitToken(op1) ||
          isLocalLoadWithAsyncWaitToken(op2);
 };
+
+bool filterLDSMemoryBarriersDependencies(Operation *op1, Operation *op2) {
+  auto isLDSMemoryBarrierOp = [](Operation *op) {
+    return llvm::isa<triton::amdgpu::InitBarrierOp,
+                     triton::amdgpu::ArriveBarrierOp,
+                     triton::amdgpu::AsyncCopyMbarrierArriveOp,
+                     triton::amdgpu::WaitBarrierOp>(op);
+  };
+
+  return (isLDSMemoryBarrierOp(op1) && isLDSMemoryBarrierOp(op2));
+}
 } // namespace
 
 bool membarFilter(Operation *op1, Operation *op2) {
-  return filterAsyncLocalLoadsDependencies(op1, op2);
+  return (filterAsyncLocalLoadsDependencies(op1, op2) ||
+          filterLDSMemoryBarriersDependencies(op1, op2));
 }
 } // namespace mlir::triton::AMD

@@ -15,6 +15,10 @@ constexpr int TC_THREAD_OFFSET = TMA_THREAD_OFFSET + NUM_THREADS;
 constexpr int TOTAL_NUM_THREADS = TC_THREAD_OFFSET + NUM_THREADS;
 constexpr int THREADS_BITMASK_SIZE = llvm::NextPowerOf2(TOTAL_NUM_THREADS);
 
+namespace CommitKind {
+enum Kind { None = -1, AsyncCp = 0, Wgmma, TmaStore, NumCommitKinds };
+}
+
 Operation *createStoreScratchMemory(OpBuilder &b, Location loc, Value alloc,
                                     Value tensor, RankedTensorType tensorType);
 Value createLoadScratchMemory(OpBuilder &b, Location loc, Value alloc,
@@ -63,8 +67,7 @@ struct AuxDataMap {
   RegionToValueMap writeTracking[numMemTypes];
   RegionToValueMap readVisibility[numMemTypes];
   RegionToValueMap readTracking[numMemTypes];
-  RegionToValueMap asyncCpCommits;
-  RegionToValueMap wgmmaCommits;
+  RegionToValueMap commits[CommitKind::NumCommitKinds];
   RegionToValueMap lock;
   RegionToValueMap waiting;
 

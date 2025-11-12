@@ -61,6 +61,10 @@ Value printfPromoteValue(RewriterBase &rewriter, Value value, bool isSigned) {
 }
 } // namespace
 
+llvm::AMDGPU::IsaVersion TargetInfo::getIsaVersion() const {
+  return llvm::AMDGPU::getIsaVersion(arch);
+}
+
 llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(arch);
 }

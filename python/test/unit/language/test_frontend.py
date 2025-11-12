@@ -588,3 +588,21 @@ def test_aggregate_constexpr_function():
 
     # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_16_
     anchor(agg.square_val())
+
+
+@tl.core.builtin
+def make_list(*args, _semantic=None):
+    return list(args)
+
+
+@triton.constexpr_function
+def function_taking_list(arg):
+    return arg[1]
+
+
+@filecheck_test
+@triton.jit
+def test_constexpr_function_taking_list():
+    a: tl.constexpr = function_taking_list(make_list(4, 8, 16))
+    # CHECK: call @{{.*}}anchor{{.*}}cconstexpr_8_
+    anchor(a)

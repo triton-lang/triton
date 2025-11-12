@@ -30,7 +30,7 @@ namespace {
 using triton::AMD::ISAFamily;
 
 constexpr char AttrDecomposedDotScaledSource[] =
-    "amdgpu.decomposed_dot_scaled_source";
+    "amdg.decomposed_dot_scaled_source";
 
 int getMfmaVersion(ISAFamily isaFamily) {
   switch (isaFamily) {

@@ -170,9 +170,8 @@ void ScopeIdAllocation::reachability() {
       virtualBlockList.emplace_back(block, Block::iterator());
   });
 
-  DenseSet<VirtualBlock> exitVirtualBlocks;
   while (!virtualBlockList.empty()) {
-    VirtualBlock &virtualBlock = virtualBlockList.front();
+    VirtualBlock virtualBlock = virtualBlockList.front();
     virtualBlockList.pop_front();
     // Evaluate the transfer function for this block starting from the cached
     // input state.
@@ -195,9 +194,6 @@ void ScopeIdAllocation::reachability() {
           inputBlockInfo.erase(scopeId);
         }
       }
-    }
-    if (successors.empty()) {
-      exitVirtualBlocks.insert(virtualBlock);
     }
     // Skip successor propagation if the output state is unchanged.
     if (outputBlockInfoMap.count(virtualBlock) &&

@@ -211,10 +211,10 @@ private:
 // according to the need.
 //
 // It matches
-// tt.load -> ... -> amdgpu.scaled_upcast_x
+// tt.load -> ... -> amdg.scaled_upcast_x
 //
 // And rewrites it to
-// tt.load -> ttg.local_alloc -> ttg.local_load -> ... -> amdgpu.scaled_upcast_x
+// tt.load -> ttg.local_alloc -> ttg.local_load -> ... -> amdg.scaled_upcast_x
 template <typename OpTy>
 class AllocSharedMemForUpcastedScales : public OpRewritePattern<OpTy> {
 public:

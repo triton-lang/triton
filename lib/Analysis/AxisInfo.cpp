@@ -29,10 +29,6 @@ template <typename... Args> int64_t gcd(int64_t a, int64_t b, Args... args) {
     return gcd(std::gcd(a, b), args...);
 }
 
-constexpr int log2Int(int64_t num) {
-  return (num > 1) ? 1 + log2Int(num / 2) : 0;
-}
-
 // If lhs * rhs overflows, return max value possible value for the type
 int64_t multiplyDivisor(int64_t lhs, int64_t rhs) {
   if (lhs > kMaxDivisor / rhs)
@@ -167,7 +163,6 @@ public:
                    axisinfo::CallbackType callback = nullptr);
   using dataflow::SparseForwardDataFlowAnalysis<
       dataflow::Lattice<AxisInfo>>::getLatticeElement;
-  using FuncAxisInfoMapT = DenseMap<FunctionOpInterface, AxisInfo>;
 
   LogicalResult
   visitOperation(Operation *op,
@@ -322,7 +317,6 @@ private:
       // with element locations:
       // [4, 5, 6, 7]
       // It is "strided contiguous" with a divisibility of 16 bytes
-      auto rank = lhs.getRank();
       auto elemSize = std::max<int64_t>(
           1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
       rhsDivisibility = multiplyDivisor(rhs.getDivisibility(dim), elemSize);
@@ -341,7 +335,6 @@ private:
         return {lhs.getConstantValue().value() -
                 rhs.getConstantValue().value()};
       } else if constexpr (std::is_same_v<OpTy, triton::AddPtrOp>) {
-        auto rank = lhs.getRank();
         auto elemSize = std::max<int64_t>(
             1, triton::getPointeeBitWidth(op.getPtr().getType()) / 8);
         auto rhsValue = rhs.getConstantValue().value() * elemSize;
@@ -375,14 +368,12 @@ private:
   int64_t getDivisibility(arith::MulIOp op, const AxisInfo &lhs,
                           const AxisInfo &rhs, int dim) override {
     auto lhsDivisibility = lhs.getDivisibility(dim);
-    if (lhs.getContiguity(dim) > 1 &&
-        !(rhs.getConstantValue().has_value() && rhs.getConstantValue() == 1)) {
+    if (lhs.getContiguity(dim) > 1 && rhs.getConstantValue() != 1) {
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
     auto rhsDivisibility = rhs.getDivisibility(dim);
-    if (rhs.getContiguity(dim) > 1 &&
-        !(lhs.getConstantValue().has_value() && lhs.getConstantValue() == 1)) {
+    if (rhs.getContiguity(dim) > 1 && lhs.getConstantValue() != 1) {
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       rhsDivisibility = 1;
     }
@@ -681,7 +672,7 @@ public:
     AxisInfo::DimVectorT contiguity, divisibility, constancy;
     std::optional<int64_t> constantValue;
     for (short d = 0; d < rank; ++d) {
-      int64_t constHint = 1;
+      int64_t constHint;
       if (lhsInfo.getConstantValue().has_value() &&
           rhsInfo.getConstantValue().has_value()) {
         constHint = shape[d];
@@ -903,7 +894,6 @@ private:
       // Treat [2^n,2^n+1,...]'s divisibility as 1 instead of 2^n
       lhsDivisibility = 1;
     }
-    auto numBits = log2Int(lhsDivisibility);
     return multiplyDivisor(lhsDivisibility, 1ll << shift);
   }
 

@@ -406,16 +406,6 @@ void init_gluon_ir(py::module &&m) {
                  ctx, version, warpsPerCta, instrShape, transposed, ctaLayout,
                  tilesPerWarp, elementBitWidth);
            })
-      .def("get_amd_mfma_scale_layout",
-           [](GluonOpBuilder &self, unsigned opIdx, std::vector<int64_t> &shape,
-              unsigned mfmaMDim, std::vector<unsigned> &tilesPerWarp,
-              std::vector<unsigned> &warpsPerCTA) -> py::object {
-             auto ctx = self.getContext();
-             auto ll = ttg::chooseScaledMfmaScaleLayout(
-                 ctx, opIdx, shape, mfmaMDim, tilesPerWarp, warpsPerCTA);
-             auto attr = ttg::LinearEncodingAttr::get(ctx, ll);
-             return layoutToGluon(attr);
-           })
       .def("get_amd_wmma_layout",
            [](GluonOpBuilder &self, unsigned version, bool transposed,
               std::vector<unsigned> &warpsPerCta,
@@ -430,16 +420,6 @@ void init_gluon_ir(py::module &&m) {
              return ttg::AMDWmmaEncodingAttr::get(ctx, version, transposed,
                                                   warpsPerCta, tilesPerWarp,
                                                   ctaLayout, instrShape);
-           })
-      .def("get_amd_wmma_scale_layout",
-           [](GluonOpBuilder &self, unsigned opIdx, std::vector<int64_t> &shape,
-              unsigned mfmaMDim, std::vector<unsigned> &tilesPerWarp,
-              std::vector<unsigned> &warpsPerCTA) -> py::object {
-             auto ctx = self.getContext();
-             auto ll = ttg::chooseScaledWmmaScaleLayout(
-                 ctx, opIdx, shape, mfmaMDim, tilesPerWarp, warpsPerCTA);
-             auto attr = ttg::LinearEncodingAttr::get(ctx, ll);
-             return layoutToGluon(attr);
            })
       .def("get_padded_shared_layout",
            [](GluonOpBuilder &self, std::vector<unsigned> &intervals,
@@ -839,10 +819,10 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_tdm_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
-              Value result) {
+              Value result, Value barrier) {
              Value pred = self.create<arith::ConstantIntOp>(1, 1);
-             self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(descPtr, indices,
-                                                            result, pred);
+             self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(
+                 descPtr, indices, result, pred, barrier);
            })
       .def("create_async_tdm_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
@@ -850,10 +830,27 @@ void init_gluon_ir(py::module &&m) {
              self.create<ttag::AsyncTDMCopyLocalToGlobalOp>(descPtr, indices,
                                                             src);
            })
-      .def("create_async_tdm_wait", [](GluonOpBuilder &self, int num) {
-        ValueRange tokens;
-        self.create<ttag::AsyncTDMWait>(tokens, num);
-      });
+      .def("create_async_tdm_wait",
+           [](GluonOpBuilder &self, int num) {
+             ValueRange tokens;
+             self.create<ttag::AsyncTDMWait>(tokens, num);
+           })
+      .def("create_async_copy_lds_barrier_arrive",
+           [](GluonOpBuilder &self, Value mbarrier) {
+             self.create<ttag::AsyncCopyMbarrierArriveOp>(mbarrier);
+           })
+      .def("create_lds_barrier_init",
+           [](GluonOpBuilder &self, Value memDesc, int count) {
+             self.create<ttag::InitBarrierOp>(memDesc, count);
+           })
+      .def("create_lds_barrier_wait",
+           [](GluonOpBuilder &self, Value memDesc, Value phase) {
+             self.create<ttag::WaitBarrierOp>(memDesc, phase);
+           })
+      .def("create_lds_barrier_arrive",
+           [](GluonOpBuilder &self, Value memDesc, int count) -> Value {
+             return self.create<ttag::ArriveBarrierOp>(memDesc, count);
+           });
 
   m.def(
       "compute_tmem_reg_layout",
@@ -912,6 +909,40 @@ void init_gluon_ir(py::module &&m) {
         auto attr = ttg::LinearEncodingAttr::get(ctx, *layout);
         return layoutToGluon(attr);
       });
+
+  m.def("get_amd_mfma_scale_layout",
+        [](unsigned opIdx, std::vector<int64_t> &shape, unsigned mfmaMDim,
+           std::vector<unsigned> &tilesPerWarp,
+           std::vector<unsigned> &warpsPerCTA) -> py::object {
+          DialectRegistry registry;
+          registry.insert<triton::TritonDialect, ttg::TritonGPUDialect,
+                          ttng::TritonNvidiaGPUDialect, gluon::GluonDialect>();
+          MLIRContext ctx(MLIRContext::Threading::DISABLED);
+          ctx.appendDialectRegistry(registry);
+          ctx.loadAllAvailableDialects();
+
+          auto ll = ttg::chooseScaledMfmaScaleLayout(
+              &ctx, opIdx, shape, mfmaMDim, tilesPerWarp, warpsPerCTA);
+          auto attr = ttg::LinearEncodingAttr::get(&ctx, ll);
+          return layoutToGluon(attr);
+        });
+
+  m.def("get_amd_wmma_scale_layout",
+        [](unsigned opIdx, std::vector<int64_t> &shape, unsigned wmmaMDim,
+           std::vector<unsigned> &tilesPerWarp,
+           std::vector<unsigned> &warpsPerCTA) -> py::object {
+          DialectRegistry registry;
+          registry.insert<triton::TritonDialect, ttg::TritonGPUDialect,
+                          ttng::TritonNvidiaGPUDialect, gluon::GluonDialect>();
+          MLIRContext ctx(MLIRContext::Threading::DISABLED);
+          ctx.appendDialectRegistry(registry);
+          ctx.loadAllAvailableDialects();
+
+          auto ll = ttg::chooseScaledWmmaScaleLayout(
+              &ctx, opIdx, shape, wmmaMDim, tilesPerWarp, warpsPerCTA);
+          auto attr = ttg::LinearEncodingAttr::get(&ctx, ll);
+          return layoutToGluon(attr);
+        });
 
   py::class_<ttg::WarpSpecializeOp, OpState>(m, "WarpSpecializeOp",
                                              py::module_local())

@@ -823,17 +823,30 @@ SetVector<int> assignIfOpPartitions(scf::IfOp ifOp) {
   for (int i = 0; i < thenYieldPartitions.size(); ++i) {
     auto &thenIds = thenYieldPartitions[i];
     auto &elseIds = elseYieldPartitions[i];
+    auto thenYieldOpnd = ifOp.thenYield()->getOperand(i);
+    auto elseYieldOpnd = ifOp.elseYield()->getOperand(i);
+    auto thenYieldOpndDefOp = thenYieldOpnd.getDefiningOp();
+    auto elseYieldOpndDefOp = elseYieldOpnd.getDefiningOp();
 
-    if (auto yieldOpnd = ifOp.thenYield()->getOperand(i);
-        isa<AsyncTokenType>(yieldOpnd.getType())) {
+    if (isa<AsyncTokenType>(thenYieldOpnd.getType())) {
       // Heuristic: when if-op yields an async-token, the output partition of
       //            the token is that of its producer
-      if (ifOp.thenBlock()->findAncestorOpInBlock(*yieldOpnd.getDefiningOp())) {
+      if (ifOp.thenBlock()->findAncestorOpInBlock(
+              *thenYieldOpnd.getDefiningOp())) {
         outputPartitions.push_back(elseIds);
       } else {
         outputPartitions.push_back(thenIds);
       }
+    } else if (thenYieldOpndDefOp &&
+               thenYieldOpndDefOp->getBlock() == ifOp.thenBlock()) {
+      // Heuristic: if yield operand is defined in then block, use its Ids
+      outputPartitions.push_back(thenIds);
+    } else if (elseYieldOpndDefOp &&
+               elseYieldOpndDefOp->getBlock() == ifOp.elseBlock()) {
+      // same for else block
+      outputPartitions.push_back(elseIds);
     } else {
+      // otherwise pick thenIds if avaialble, otherwise elseIds
       outputPartitions.push_back(!thenIds.empty() ? thenIds : elseIds);
     }
   }

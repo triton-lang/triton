@@ -6,7 +6,7 @@
 
 namespace mlir::triton::AMD {
 
-constexpr char AttrSharedMemPadded[] = "amdgpu.use_padded_scratch_shmem";
+constexpr char AttrSharedMemPadded[] = "amdg.use_padded_scratch_shmem";
 
 unsigned getConvertLayoutScratchInBytes(RankedTensorType srcTy,
                                         RankedTensorType dstTy,

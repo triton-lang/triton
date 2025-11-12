@@ -16,9 +16,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-COUNT-4: llvm.insertelement{{.*}} : vector<4xi32>
     // CHECK-COUNT-8: llvm.insertelement{{.*}} : vector<8xi32>
     // CHECK: llvm.amdgcn.tensor.load.to.lds.d2{{.*}} : (vector<4xi32>, vector<8xi32>, i32) -> ()
-    %2 = amdgpu.async_tdm_copy_global_to_local %0[%c_offset, %c_offset] into %1, %c_pred : !tt.tensordesc<tensor<64x64xf16, #shared>> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    %2 = amdg.async_tdm_copy_global_to_local %0[%c_offset, %c_offset] into %1, %c_pred : !tt.tensordesc<tensor<64x64xf16, #shared>> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     // CHECK: llvm.amdgcn.s.wait.tensorcnt{{.*}} : (i16) -> ()
-    %3 = amdgpu.async_tdm_wait  {num = 0 : i32}
+    %3 = amdg.async_tdm_wait  {num = 0 : i32}
     %4 = ttg.local_load %1 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> tensor<64x64xf16, #blocked>
     tt.return
   }
@@ -43,9 +43,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // CHECK-COUNT-4: llvm.insertelement{{.*}} : vector<4xi32>
     // CHECK-COUNT-8: llvm.insertelement{{.*}} : vector<8xi32>
     // CHECK: llvm.amdgcn.tensor.store.from.lds.d2{{.*}} : (vector<4xi32>, vector<8xi32>, i32) -> ()
-    amdgpu.async_tdm_copy_local_to_global %0[%c_offset, %c_offset] from %1: !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x64xf16, #shared>>
+    amdg.async_tdm_copy_local_to_global %0[%c_offset, %c_offset] from %1: !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> !tt.tensordesc<tensor<64x64xf16, #shared>>
     // CHECK: llvm.amdgcn.s.wait.tensorcnt{{.*}} : (i16) -> ()
-    %3 = amdgpu.async_tdm_wait  {num = 0 : i32}
+    %3 = amdg.async_tdm_wait  {num = 0 : i32}
     tt.return
   }
 }

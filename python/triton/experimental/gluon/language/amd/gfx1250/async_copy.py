@@ -3,11 +3,7 @@ from ..._semantic import _check
 from triton.experimental.gluon.language._layouts import DistributedLayout
 from ..cdna4.async_copy import commit_group, wait_group
 
-__all__ = [
-    "global_to_shared",
-    "commit_group",
-    "wait_group",
-]
+__all__ = ["global_to_shared", "commit_group", "wait_group", "mbarrier_arrive"]
 
 
 @builtin
@@ -43,3 +39,13 @@ def global_to_shared(smem, pointer, mask=None, other=None, cache_modifier="", _s
     other_handle = other.handle if other is not None else ir.value()
     _semantic.builder.create_async_copy_global_to_local(smem.handle, pointer.handle, mask_handle, other_handle,
                                                         cache_modifier, ir.EVICTION_POLICY.NORMAL, False)
+
+
+@builtin
+def mbarrier_arrive(mbarrier, _semantic=None):
+    """
+    Arrive on the mbarrier once all outstanding async copies are complete.
+    Args:
+        mbarrier (shared_memory_descriptor): Barrier object to arrive on.
+    """
+    _semantic.builder.create_async_copy_lds_barrier_arrive(mbarrier.handle)

@@ -274,6 +274,11 @@ def tl_full(shape, value, dtype=None):
     return ttgl.full(shape, value, dtype, layout=layout)
 
 
+@ttgl._core.builtin
+def tl_trans(value, *dims, _semantic=None):
+    return value.trans(*dims, _semantic=_semantic)
+
+
 @gluon.jit
 def reset_to_default_layout(value):
     ty: ttgl.constexpr = value.type

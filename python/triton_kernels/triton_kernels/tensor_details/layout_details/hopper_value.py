@@ -120,6 +120,14 @@ class HopperMXValueLayout(Layout):
         batch = data.ndim - 2
         assert batch >= 0
         assert self.mma_version in (2, 3)
+        # Pre-pad both matrix dims to multiples of 64
+        *_, M_in, K_in = data.shape
+        SWIZZLE_ALIGN_M = 64
+        SWIZZLE_ALIGN_K = 64
+        pad_m = (SWIZZLE_ALIGN_M - (M_in % SWIZZLE_ALIGN_M)) % SWIZZLE_ALIGN_M
+        pad_k = (SWIZZLE_ALIGN_K - (K_in % SWIZZLE_ALIGN_K)) % SWIZZLE_ALIGN_K
+        data = torch.nn.functional.pad(data, (0, pad_k, 0, pad_m))
+
         data = self._maybe_mT(data)
         init_shape = data.shape
 

@@ -9,7 +9,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         // CHECK: %[[offset:.*]] = llvm.select %[[c_mask]]
         // CHECK: %[[aux:.*]] = llvm.mlir.constant(3 : i32) : i32
         // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[offset]], {{.*}}, %[[aux]]
-        %ret = amdgpu.buffer_load %arg0[%offset] cacheModifier = cs : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset] cacheModifier = cs : tensor<128xf32, #blocked0>
         tt.return
   }
 }
@@ -31,7 +31,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         // CHECK: %[[mask:.*]] = llvm.extractvalue %{{.*}} : !llvm.struct<(i1, i1, i1, i1)>
         // CHECK: %[[offset:.*]] = llvm.select %[[mask]]
         // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[offset]]
-        %ret = amdgpu.buffer_load %arg0[%offset], %7 stride = %c256_i32 : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset], %7 stride = %c256_i32 : tensor<128xf32, #blocked0>
         tt.return
   }
 }
@@ -55,7 +55,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         // CHECK: %[[offset:.*]] = llvm.select %[[mask]]
         // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[offset]]
         // CHECK: llvm.select
-        %ret = amdgpu.buffer_load %arg0[%offset], %7, %other stride = %c256_i32: tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_load %arg0[%offset], %7, %other stride = %c256_i32: tensor<128xf32, #blocked0>
         tt.return
   }
 }
@@ -71,7 +71,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         // CHECK: %[[aux:.*]] = llvm.mlir.constant(3 : i32) : i32
         // CHECK: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, %[[offset]], {{.*}}, %[[aux]]
         %c256_i32 = arith.constant 256 : i32
-        amdgpu.buffer_store %value, %arg0[%offset] cacheModifier = cs stride = %c256_i32 : tensor<128xf32, #blocked0>
+        amdg.buffer_store %value, %arg0[%offset] cacheModifier = cs stride = %c256_i32 : tensor<128xf32, #blocked0>
         tt.return
   }
 }
@@ -95,7 +95,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         // CHECK: %[[mask2:.*]] = llvm.and %[[mask1]], %[[mask0]]
         // CHECK: %[[offset:.*]] = llvm.select %[[mask2]]
         // CHECK: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, %[[offset]]
-        amdgpu.buffer_store %value, %arg0[%offset], %7 stride = %N : tensor<128xf32, #blocked0>
+        amdg.buffer_store %value, %arg0[%offset], %7 stride = %N : tensor<128xf32, #blocked0>
         tt.return
   }
 }
@@ -114,14 +114,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %4 = arith.addi %3, %2 : tensor<256xi32, #blocked0>
         // Load 8 elements from A with two vectorized load instructions
         // CHECK-COUNT-2: rocdl.raw.ptr.buffer.load {{.*}} : vector<4xf32>
-        %9 = amdgpu.buffer_load %arg0[%4] stride = %arg3 : tensor<256xf32, #blocked0>
+        %9 = amdg.buffer_load %arg0[%4] stride = %arg3 : tensor<256xf32, #blocked0>
         // Load 8 elements from B with two vectorized load instructions
         // CHECK-COUNT-2: rocdl.raw.ptr.buffer.load {{.*}} : vector<4xf32>
-        %10 = amdgpu.buffer_load %arg1[%4] stride = %arg3 : tensor<256xf32, #blocked0>
+        %10 = amdg.buffer_load %arg1[%4] stride = %arg3 : tensor<256xf32, #blocked0>
         %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>
         // Store 8 elements into C with two vectorized store instructions
         // CHECK-COUNT-2: rocdl.raw.ptr.buffer.store {{.*}} : vector<4xf32>
-        amdgpu.buffer_store %11, %arg2[%4] stride = %arg3 : tensor<256xf32, #blocked0>
+        amdg.buffer_store %11, %arg2[%4] stride = %arg3 : tensor<256xf32, #blocked0>
         tt.return
   }
 }
@@ -139,9 +139,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
     %4 = arith.addi %3, %1 : tensor<256x64xi32, #blocked>
     // Load 16 f16 elements check for correct vector size of instruction (4xi32 = 8xf16)
     // CHECK-COUNT-4: rocdl.raw.ptr.buffer.load {{.*}} : vector<4xi32>
-    %5 = amdgpu.buffer_load %arg0[%4] : tensor<256x64xf16, #blocked>
+    %5 = amdg.buffer_load %arg0[%4] : tensor<256x64xf16, #blocked>
     // CHECK-COUNT-4: rocdl.raw.ptr.buffer.store {{.*}} : vector<4xi32>
-    amdgpu.buffer_store %5, %arg0[%4] : tensor<256x64xf16, #blocked>
+    amdg.buffer_store %5, %arg0[%4] : tensor<256x64xf16, #blocked>
     tt.return
   }
 }
@@ -162,14 +162,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %7 = arith.cmpi slt, %4, %5: tensor<256xi32, #blocked0>
         // Load 8 elements from A with eight scalar load instructions
         // CHECK-COUNT-8: rocdl.raw.ptr.buffer.load {{.*}} : f32
-        %9 = amdgpu.buffer_load %arg0[%4], %7 stride = %arg3 : tensor<256xf32, #blocked0>
+        %9 = amdg.buffer_load %arg0[%4], %7 stride = %arg3 : tensor<256xf32, #blocked0>
         // Load 8 elements from B with two scalar load instructions
         // CHECK-COUNT-8: rocdl.raw.ptr.buffer.load {{.*}} : f32
-        %10 = amdgpu.buffer_load %arg1[%4], %7 stride = %arg3 : tensor<256xf32, #blocked0>
+        %10 = amdg.buffer_load %arg1[%4], %7 stride = %arg3 : tensor<256xf32, #blocked0>
         %11 = arith.addf %9, %10 : tensor<256xf32, #blocked0>
         // Store 8 elements into C with two scalar store instructions
         // CHECK-COUNT-8: rocdl.raw.ptr.buffer.store {{.*}} : f32
-        amdgpu.buffer_store %11, %arg2[%4], %7 stride = %arg3 : tensor<256xf32, #blocked0>
+        amdg.buffer_store %11, %arg2[%4], %7 stride = %arg3 : tensor<256xf32, #blocked0>
         tt.return
   }
 }
@@ -190,14 +190,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %7 = arith.cmpi slt, %4, %5: tensor<256xi32, #blocked0>
         // Load 8 fp16 elements from A with four i32 scalar load instructions
         // CHECK-COUNT-4: rocdl.raw.ptr.buffer.load {{.*}} : i32
-        %9 = amdgpu.buffer_load %arg0[%4], %7 stride = %arg3 : tensor<256xf16, #blocked0>
+        %9 = amdg.buffer_load %arg0[%4], %7 stride = %arg3 : tensor<256xf16, #blocked0>
         // Load 8 fp16 elements from B with four i32 scalar load instructions
         // CHECK-COUNT-4: rocdl.raw.ptr.buffer.load {{.*}} : i32
-        %10 = amdgpu.buffer_load %arg1[%4], %7 stride = %arg3 : tensor<256xf16, #blocked0>
+        %10 = amdg.buffer_load %arg1[%4], %7 stride = %arg3 : tensor<256xf16, #blocked0>
         %11 = arith.addf %9, %10 : tensor<256xf16, #blocked0>
         // Store 8 fp16 elements into C with four i32 scalar store instructionss
         // CHECK-COUNT-4: rocdl.raw.ptr.buffer.store {{.*}} : i32
-        amdgpu.buffer_store %11, %arg2[%4], %7 stride = %arg3 : tensor<256xf16, #blocked0>
+        amdg.buffer_store %11, %arg2[%4], %7 stride = %arg3 : tensor<256xf16, #blocked0>
         tt.return
   }
 }
@@ -225,7 +225,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
         // We will have 4 calls to fadd, since the sizePerThread is 4. Scope/ordering instructions will be
         // generated by the lowering of llvm.fence
-        %ret = amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu, %values, %arg0[%offset], %mask stride = %stride : tensor<128xf32, #blocked0>
+        %ret = amdg.buffer_atomic_rmw fadd, acq_rel, gpu, %values, %arg0[%offset], %mask stride = %stride : tensor<128xf32, #blocked0>
 
         // CHECK: %[[result:.*]] = llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"({{.*}}, {{.*}}, %[[mask1:.*]], {{.*}}, {{.*}}) : (f32, !llvm.ptr<8>, i32, i32, i32) -> f32
         // CHECK: %[[result:.*]] = llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.fadd"({{.*}}, {{.*}}, %[[mask1:.*]], {{.*}}, {{.*}}) : (f32, !llvm.ptr<8>, i32, i32, i32) -> f32
@@ -252,7 +252,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
         // We expect vector size == 1 (i16) for the generated loads as sizePerThread = [1, 1]
         // CHECK-COUNT-8: rocdl.raw.ptr.buffer.load {{.*}}, {{.*}}, {{.*}}, {{.*}} : i16
         // CHECK-NOT: rocdl.raw.ptr.buffer.load
-        %24 = amdgpu.buffer_load %arg0[%23] : tensor<8x16xf16, #blocked>
+        %24 = amdg.buffer_load %arg0[%23] : tensor<8x16xf16, #blocked>
         tt.return
   }
 }
@@ -268,10 +268,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %1 = arith.muli %0, %cst : tensor<1024xi32, #blocked>
     // CHECK-COUNT-4: rocdl.raw.ptr.buffer.load {{.*}}, {{.*}}, {{.*}}, {{.*}} : f32
     // CHECK-NOT: rocdl.raw.ptr.buffer.load
-    %2 = amdgpu.buffer_load %arg0[%1] : tensor<1024xf32, #blocked>
+    %2 = amdg.buffer_load %arg0[%1] : tensor<1024xf32, #blocked>
     // CHECK-COUNT-4: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}} : f32
     // CHECK-NOT: rocdl.raw.ptr.buffer.store
-    amdgpu.buffer_store %2, %arg1[%1] : tensor<1024xf32, #blocked>
+    amdg.buffer_store %2, %arg1[%1] : tensor<1024xf32, #blocked>
     tt.return
   }
 }

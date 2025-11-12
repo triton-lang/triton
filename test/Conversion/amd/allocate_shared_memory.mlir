@@ -22,7 +22,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-LABEL: @convert_layout_padded
 tt.func @convert_layout_padded(%arg0: tensor<256x256xi32, #blocked1>) {
   // CHECK-NEXT: allocation.offset = 0 : i32
-  %0 = ttg.convert_layout %arg0 {amdgpu.use_padded_scratch_shmem} : tensor<256x256xi32, #blocked1> -> tensor<256x256xi32, #blocked2>
+  %0 = ttg.convert_layout %arg0 {amdg.use_padded_scratch_shmem} : tensor<256x256xi32, #blocked1> -> tensor<256x256xi32, #blocked2>
   tt.return
 }
 

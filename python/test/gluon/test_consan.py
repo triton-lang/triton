@@ -279,6 +279,50 @@ def test_async_copy(FAILURE, device, run_wrapper, monkeypatch):
     kernel[(1, )](input, FAILURE=FAILURE, num_warps=4)
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires ampere or newer")
+@pytest.mark.parametrize("FAILURE", [True, False])
+def test_tma_store(FAILURE, device, run_wrapper, monkeypatch):
+    if run_wrapper:
+        result = run_in_process(test_tma_store, (FAILURE, device, False, monkeypatch))
+        if FAILURE:
+            assert "device-side assert" in str(result.exc)
+            assert "Accessing buffer with pending access. Pending access type: async_copy_shared_to_global" in result.driver_stderr_output
+        else:
+            assert result.exc is None
+            assert result.driver_stderr_output == ""
+        return
+
+    monkeypatch.setenv("TRITON_INSTRUMENTATION_MODE", "consan")
+    monkeypatch.setenv("CUDA_LAUNCH_BLOCKING", "1")
+    knobs.refresh_knobs()
+
+    # ConSan requires a global memory allocation
+    def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+
+    @gluon.jit
+    def kernel(output_desc, FAILURE: ttgl.constexpr):
+        smem_layout: ttgl.constexpr = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [2, XBLOCK, XBLOCK], smem_layout)
+        blocked_layout: ttgl.constexpr = ttgl.BlockedLayout(size_per_thread=[1, XBLOCK], threads_per_warp=[32, 1],
+                                                            warps_per_cta=[4, 1], order=[0, 1])
+        val = ttgl.full([XBLOCK, XBLOCK], 42, ttgl.float16, blocked_layout)
+        tma.async_copy_shared_to_global(output_desc, [0, 0], smem.index(0))
+        tma.async_copy_shared_to_global(output_desc, [0, 0], smem.index(1))
+        tma.store_wait(pendings=1)
+        smem.index(0).store(val)
+        if not FAILURE:
+            tma.store_wait(pendings=0)
+        smem.index(1).store(val)
+
+    output = torch.empty((XBLOCK, XBLOCK), device=device, dtype=torch.float16)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=128, element_bitwidth=16, rank=2)
+    output_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(output, [XBLOCK.value, XBLOCK.value], shared_layout)
+    kernel[(1, )](output_desc, FAILURE=FAILURE, num_warps=4)
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 10, reason="Requires blackwell or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 @pytest.mark.parametrize("MEM_ACCESS_KIND", ["tma_cp", "local_store", "tmem_load", "tmem_store"])

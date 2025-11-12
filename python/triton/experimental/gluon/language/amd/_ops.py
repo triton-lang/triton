@@ -1,3 +1,5 @@
+import math
+
 from triton import knobs
 from triton.experimental.gluon.language import _core as ttgl
 from triton.experimental.gluon.language._semantic import _check
@@ -57,13 +59,13 @@ def _mma_scaled(a, a_scale, a_format, b, b_scale, b_format, acc, scale_fn, seman
         operand = a if op_idx == 0 else b
 
         scale_shape = _get_scale_shape(op_idx, operand, format)
-        scale_layout = scale_fn(operand.type.layout, scale_shape, semantic)
-
         if isinstance(scale, ttgl.tensor) and scale.numel.value != 1:
-            assert scale.type.shape == scale_shape, \
-                f"Expect scale tensor to have shape {scale_shape}, but got {scale.type.shape}"
+            # In the case of scale pre-shuffling, the input shape is different from the default shape. We only check
+            # the number of elements here.
+            assert math.prod(scale_shape) == scale.numel.value, "Incompatible scale shape"
             return scale
 
+        scale_layout = scale_fn(operand.type.layout, scale_shape)
         scale_value = _unwrap_if_constexpr(scale)
         scale_value = 0x7F if scale_value is None else scale_value
         return semantic.full(scale_shape, scale_value, ttgl.uint8, scale_layout)

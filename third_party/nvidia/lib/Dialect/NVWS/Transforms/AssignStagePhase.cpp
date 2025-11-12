@@ -263,11 +263,23 @@ template <class T> struct AssignStagePhase {
     auto ifOpOutputsIds = getPartitionOutputs(ifOp);
     ifOp.erase();
 
-    for (auto arg : {thenIndex.stage, thenIndex.phase}) {
-      auto argIds = getPartitionIds(arg.getDefiningOp());
-      ifOpIds.insert(argIds.begin(), argIds.end());
-      ifOpOutputsIds.push_back(argIds);
+    SetVector<int> stageIds;
+    // at least one of the then/else block must have producing op
+    for (auto arg : {thenIndex.stage, elseIndex.stage}) {
+      if (auto defOp = arg.getDefiningOp()) {
+        auto argIds = getPartitionIds(defOp);
+        stageIds.insert(argIds.begin(), argIds.end());
+      }
     }
+    SetVector<int> phaseIds;
+    for (auto arg : {thenIndex.phase, elseIndex.phase}) {
+      if (auto defOp = arg.getDefiningOp()) {
+        auto argIds = getPartitionIds(defOp);
+        phaseIds.insert(argIds.begin(), argIds.end());
+      }
+    }
+    ifOpOutputsIds.push_back(stageIds);
+    ifOpOutputsIds.push_back(phaseIds);
     setPartition(newIfOp, ifOpIds);
     setPartitionOutputs(newIfOp, ifOpOutputsIds);
 

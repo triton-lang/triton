@@ -34,7 +34,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_4:.*]] = arith.muli %[[VAL_3]], %[[VAL_2]] : i32
 // CHECK:           %[[VAL_5:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_6:.*]] = tt.addptr %[[VAL_0]], %[[VAL_4]] : !tt.ptr<f32>, i32
-// CHECK:           %[[VAL_7:.*]] = amdgpu.buffer_load %[[VAL_6]]{{\[}}%[[VAL_5]]] : tensor<1024xf32>
+// CHECK:           %[[VAL_7:.*]] = amdg.buffer_load %[[VAL_6]]{{\[}}%[[VAL_5]]] : tensor<1024xf32>
 // CHECK:           tt.return %[[VAL_7]] : tensor<1024xf32>
 // CHECK:         }
 
@@ -100,7 +100,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_6:.*]] = tt.addptr %[[VAL_0]], %[[VAL_4]] : !tt.ptr<f32>, i32
 // CHECK:           %[[VAL_7:.*]] = tt.addptr %[[VAL_6]], %[[VAL_4]] : !tt.ptr<f32>, i32
 // CHECK:           %[[VAL_8:.*]] = arith.addi %[[VAL_5]], %[[VAL_5]] : tensor<1024xi32>
-// CHECK:           %[[VAL_9:.*]] = amdgpu.buffer_load %[[VAL_7]]{{\[}}%[[VAL_8]]] : tensor<1024xf32>
+// CHECK:           %[[VAL_9:.*]] = amdg.buffer_load %[[VAL_7]]{{\[}}%[[VAL_8]]] : tensor<1024xf32>
 // CHECK:           tt.return %[[VAL_9]] : tensor<1024xf32>
 // CHECK:         }
 
@@ -396,7 +396,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:             scf.yield %[[VAL_12]], %[[VAL_4]] : !tt.ptr<f32>, tensor<1024xi64>
 // CHECK:           }
 // CHECK:           %[[VAL_13:.*]] = arith.trunci %[[VAL_14:.*]]#1 : tensor<1024xi64> to tensor<1024xi32>
-// CHECK:           %[[VAL_15:.*]] = amdgpu.buffer_load %[[VAL_14]]#0{{\[}}%[[VAL_13]]] : tensor<1024xf32>
+// CHECK:           %[[VAL_15:.*]] = amdg.buffer_load %[[VAL_14]]#0{{\[}}%[[VAL_13]]] : tensor<1024xf32>
 // CHECK:           tt.return %[[VAL_15]] : tensor<1024xf32>
 // CHECK:         }
 
@@ -437,7 +437,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           cf.cond_br %[[VAL_1]], ^bb1(%[[VAL_0]], %[[VAL_2]] : !tt.ptr<f32>, tensor<1024xi64>), ^bb1(%[[VAL_8]], %[[VAL_9]] : !tt.ptr<f32>, tensor<1024xi64>)
 // CHECK:         ^bb1(%[[VAL_9:.*]]: !tt.ptr<f32>, %[[VAL_11:.*]]: tensor<1024xi64>):
 // CHECK:           %[[VAL_12:.*]] = arith.trunci %[[VAL_11]] : tensor<1024xi64> to tensor<1024xi32>
-// CHECK:           %[[VAL_13:.*]] = amdgpu.buffer_load %[[VAL_9]]{{\[}}%[[VAL_12]]] : tensor<1024xf32>
+// CHECK:           %[[VAL_13:.*]] = amdg.buffer_load %[[VAL_9]]{{\[}}%[[VAL_12]]] : tensor<1024xf32>
 // CHECK:           tt.return %[[VAL_13]] : tensor<1024xf32>
 // CHECK:         }
 
@@ -475,7 +475,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_5:.*]] = arith.muli %[[VAL_4]], %[[VAL_3]] : i32
 // CHECK:           %[[VAL_6:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_7:.*]] = tt.addptr %[[VAL_0]], %[[VAL_5]] : !tt.ptr<f32>, i32
-// CHECK:           %[[VAL_8:.*]] = amdgpu.buffer_load %[[VAL_7]]{{\[}}%[[VAL_6]]] : tensor<1024xf32>
+// CHECK:           %[[VAL_8:.*]] = amdg.buffer_load %[[VAL_7]]{{\[}}%[[VAL_6]]] : tensor<1024xf32>
 // CHECK:           tt.return %[[VAL_8]] : tensor<1024xf32>
 // CHECK:         }
 
@@ -603,7 +603,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_10:.*]] = arith.select %[[VAL_1]], %[[VAL_0]], %[[VAL_8]] : !tt.ptr<f32>
 // CHECK:           %[[VAL_11:.*]] = arith.select %[[VAL_1]], %[[VAL_3]], %[[VAL_9]] : tensor<1024xi64>
 // CHECK:           %[[VAL_12:.*]] = arith.trunci %[[VAL_11]] : tensor<1024xi64> to tensor<1024xi32>
-// CHECK:           %[[VAL_13:.*]] = amdgpu.buffer_load %[[VAL_10]]{{\[}}%[[VAL_12]]] : tensor<1024xf32>
+// CHECK:           %[[VAL_13:.*]] = amdg.buffer_load %[[VAL_10]]{{\[}}%[[VAL_12]]] : tensor<1024xf32>
 // CHECK:           tt.return %[[VAL_13]] : tensor<1024xf32>
 // CHECK:         }
 
@@ -638,7 +638,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_9:.*]] = arith.cmpi ne, %[[VAL_2]], %[[VAL_4]] : i8
 // CHECK:           %[[VAL_10:.*]] = arith.select %[[VAL_9]], %[[VAL_0]], %[[VAL_1]] : !tt.ptr<i64>
 // CHECK:           %[[VAL_11:.*]] = tt.addptr %[[VAL_10]], %[[VAL_7]] : !tt.ptr<i64>, i32
-// CHECK:           %[[VAL_12:.*]] = amdgpu.buffer_load %[[VAL_11]]{{\[}}%[[VAL_8]]] : tensor<1024xi64>
+// CHECK:           %[[VAL_12:.*]] = amdg.buffer_load %[[VAL_11]]{{\[}}%[[VAL_8]]] : tensor<1024xi64>
 // CHECK:           tt.return %[[VAL_12]] : tensor<1024xi64>
 // CHECK:         }
 
@@ -672,7 +672,7 @@ module attributes {"ttg.num-ctas" = 1 : i32} {
 // CHECK:           %[[VAL_9:.*]] = arith.extsi %[[VAL_7]] : tensor<1024xi32> to tensor<1024xi64>
 // CHECK:           %[[VAL_10:.*]]:3 = scf.for %[[VAL_11:.*]] = %[[VAL_3]] to %[[VAL_5]] step %[[VAL_4]] iter_args(%[[VAL_12:.*]] = %[[VAL_8]], %[[VAL_13:.*]] = %[[VAL_9]], %[[VAL_14:.*]] = %[[VAL_1]]) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
 // CHECK:             %[[VAL_15:.*]] = arith.trunci %[[VAL_13]] : tensor<1024xi64> to tensor<1024xi32>
-// CHECK:             %[[VAL_16:.*]] = amdgpu.buffer_load %[[VAL_12]]{{\[}}%[[VAL_15]]] : tensor<1024xf32>
+// CHECK:             %[[VAL_16:.*]] = amdg.buffer_load %[[VAL_12]]{{\[}}%[[VAL_15]]] : tensor<1024xf32>
 // CHECK:             %[[VAL_17:.*]] = tt.addptr %[[VAL_12]], %[[VAL_6]] : !tt.ptr<f32>, i32
 // CHECK:             %[[VAL_18:.*]] = arith.extsi %[[VAL_7]] : tensor<1024xi32> to tensor<1024xi64>
 // CHECK:             %[[VAL_19:.*]] = arith.addi %[[VAL_18]], %[[VAL_13]] : tensor<1024xi64>

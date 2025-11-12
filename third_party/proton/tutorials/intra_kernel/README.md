@@ -63,16 +63,19 @@ python3 example_dsl.py --increase-accuracy
 ## Understanding Timeline Traces
 
 ### Time Representation
+
 - **Scope Duration**: Displayed in cycles for precise measurement
 - **Threadblock Start Times**: Measured in nanoseconds using global timing
 - **Chrome Trace Format**: Assumes 1GHz GPU frequency for consistent time units (ns)
 
 ### Circular Buffer System
+
 - **Backend Storage**: Uses circular buffer for runtime profiling on each CTA
 - **Buffer Overflow**: When full, earlier events are dropped with warnings in trace generation
 - **Event Window**: Displays sliding window (the latest window) of recorded events in timeline
 
 ### Finalize Time Measurement
+
 - **Definition**: Captures `Finalize Time` when kernel execution completes
 - **Meaning**: Shows overhead of dumping profiling data from buffer to global memory (appears as a field in Chrome trace viewer tab)
 
@@ -89,10 +92,10 @@ python3 example_dsl.py --increase-accuracy
 
 ### Buffer Configuration
 
-| Parameter | Options | Description |
-|-----------|---------|-------------|
-| `buffer_type` | `shared`, `global`| Storage location for profiling buffer |
-| `buffer_size` | `N` | Byte size of the profiling buffer (default: infer a small fraction of shared memory if `shared`. For `global`, 16384 bytes * num_sampled_warp) |
+| Buffer Type | Options | Default | Description |
+|-------------|---------|---------|-------------|
+| `buffer_type` | `shared`, `global` | `shared` | Determines whether profiling data is stored in shared or global memory |
+| `buffer_size` | Integer | `shared`: Maximum size without reducing occupancy; `global`: 16KB × number of profiled units (e.g., warp) | Controls per-block profiling buffer size in bytes |
 
 ### Sampling Configuration
 
@@ -106,11 +109,13 @@ python3 example_dsl.py --increase-accuracy
 ## Output Formats
 
 ### Timeline Traces
+
 - **Format**: Chrome trace format (`.chrome_trace` files)
 - **Viewer**: Chrome browser at `chrome://tracing` or [`Perfetto`](https://ui.perfetto.dev/)
 - **Content**: Detailed timeline with scope durations
 
 ### Operation Measurements
+
 - **Format**: Hatchet format (`.hatchet` files)
 - **Viewer**: `proton-viewer -m normalized_cycles <filename>.hatchet`
 (with `-m cycles` showing sum of all cycles across the GPU, `normalized_cycles` for per-warp averaged cycles)

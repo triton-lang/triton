@@ -136,6 +136,9 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
       nvws.aref.get.exit %aref0[%c0_i32], %2#2 [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 1>} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
       // CHECK: [[IDX1:%.*]]:4 = scf.if
       scf.if %cond {
+      // CHECK-NEXT: yield {ttg.partition = array<i32: 0, 1>} [[S2]], [[P2]], [[S3]], [[P3]]
+      // CHECK-NEXT: } else {
+      } else {
         // CHECK-NEXT: [[S2a:%.*]] = arith.addi [[S2]], [[C10]]
         // CHECK-NEXT: [[CMP:%.*]] = arith.cmpi eq, [[S2a]], [[C30]]
         // CHECK-NEXT: [[S2b:%.*]] = arith.select [[CMP]], [[C00]], [[S2a]]
@@ -160,8 +163,6 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
         nvws.aref.get.exit %aref1[%c0_i32], %5#2 [#nvws.async_op<tc5mma>] {ttg.partition = array<i32: 1>} : !nvws.aref<[!ttg.memdesc<3x64x16xf16, #shared0, #smem>, !ttg.memdesc<3x16x32xf16, #shared0, #smem>]>, !ttg.async.token
         // CHECK-NEXT: yield {ttg.partition = array<i32: 0, 1>} [[S2b]], [[P2b]], [[S3b]], [[P3b]]
       } {ttg.partition = array<i32: 0, 1>}
-      // CHECK-NEXT: } else {
-      // CHECK-NEXT: yield {ttg.partition = array<i32: 0, 1>} [[S2]], [[P2]], [[S3]], [[P3]]
       // CHECK-NEXT: } {ttg.partition = array<i32: 0, 1>, ttg.partition.outputs = [array<i32: 0>, array<i32: 0>, array<i32: 1>, array<i32: 1>]}
       // CHECK: scf.yield {ttg.partition = array<i32: 0, 1, 2>} [[S0b]], [[P0b]], [[S1b]], [[P1b]], [[IDX1]]#0, [[IDX1]]#1, [[IDX1]]#2, [[IDX1]]#3
 
