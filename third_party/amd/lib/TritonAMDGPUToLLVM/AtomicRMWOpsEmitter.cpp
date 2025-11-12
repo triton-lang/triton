@@ -1,4 +1,5 @@
 #include "Utility.h"
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -7,6 +8,9 @@
 
 #include <array>
 #include <cstdlib>
+
+#include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace triton::AMD;
 
@@ -114,13 +118,32 @@ Value genBPermute(RewriterBase &rewriter, Value v, Value dst) {
       ->getResult(0);
 }
 
+static unsigned getTypeBitWidth(Type ty) {
+  return TypeSwitch<Type, unsigned>(ty)
+      .Case<IntegerType>([](IntegerType intTy) { return intTy.getWidth(); })
+      .Case<FloatType>([](FloatType floatTy) { return floatTy.getWidth(); })
+      .Case<VectorType>([](VectorType vecTy) {
+        unsigned elemWidth = getTypeBitWidth(vecTy.getElementType());
+        return elemWidth * vecTy.getNumElements();
+      })
+      .Case<LLVM::LLVMArrayType>([](LLVM::LLVMArrayType arrayTy) {
+        unsigned elemWidth = getTypeBitWidth(arrayTy.getElementType());
+        return elemWidth * arrayTy.getNumElements();
+      })
+      .Default([](Type unsupportedTy) -> unsigned {
+        llvm::errs() << "Unsupported type in getTypeBitWidth: " << unsupportedTy
+                     << "\n";
+        llvm_unreachable("unsupported type for tiled I32 operation");
+      });
+}
+
 template <typename Generator, typename... Values>
 Value genI32TiledOp(RewriterBase &rewriter, Generator genCall, Value argToSplit,
                     Values... args) {
   auto loc = argToSplit.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type ty = argToSplit.getType();
-  size_t tySize = ty.getIntOrFloatBitWidth();
+  size_t tySize = getTypeBitWidth(ty);
   size_t i32Size = i32_ty.getIntOrFloatBitWidth();
   size_t count = tySize / i32Size;
   assert(tySize % i32Size == 0 && count > 0 &&
