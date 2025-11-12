@@ -28,6 +28,7 @@ public:
     Operation *firstMatmul = nullptr;
     bool firstTwoCTA = false;
 
+    // Step 1: Check all MMA ops have consistent two_ctas setting
     WalkResult result = mod.walk([&](ttng::TCGen5MMAOp op) {
       bool currentTwoCTA = op.getTwoCtas();
       if (!firstMatmul) {
@@ -53,30 +54,42 @@ public:
       return;
     }
 
-    // Also check TMEMCopyOp for two_ctas setting
-    bool twoCTAFromCopy = false;
-    mod.walk([&](ttng::TMEMCopyOp op) {
-      auto dstTy = cast<mlir::triton::gpu::MemDescType>(op.getDst().getType());
-      if (auto tmemEnc = dyn_cast<ttng::TensorMemoryEncodingAttr>(dstTy.getEncoding())) {
-        if (tmemEnc.getTwoCTAs()) {
-          twoCTAFromCopy = true;
-          return WalkResult::interrupt();
-        }
+    // Step 2: Check if any TMEMCopyOp exists and verify consistency with MMA mode
+    unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+    
+    WalkResult copyResult = mod.walk([&](ttng::TMEMCopyOp op) {
+      // For TMEMCopyOp, CTA mode is always determined by kernel launch numCTAs
+      bool copyTwoCTA = (numCTAs == 2);
+      
+      if (!firstMatmul) {
+        // No MMA found yet, so copy op sets the mode
+        firstMatmul = op;
+        firstTwoCTA = copyTwoCTA;
+        return WalkResult::advance();
+      }
+      if (firstTwoCTA != copyTwoCTA) {
+        // MMA exists with different mode - inconsistent!
+        auto diag = op.emitError()
+                    << "inconsistent CTA mode between tcgen05 operations; "
+                       "copy operations use "
+                    << (copyTwoCTA ? "2" : "1") << " CTA mode but "
+                       "matmul operations use "
+                    << (firstTwoCTA ? "2" : "1") << " CTA mode.";
+        diag.attachNote(firstMatmul->getLoc())
+            << "first matmul here has two_ctas="
+            << (firstTwoCTA ? "true" : "false");
+        return WalkResult::interrupt();
       }
       return WalkResult::advance();
     });
 
-    // Check if numCTAs==2 for any tmem copy ops (including TensorMemoryScalesLayout)
-    bool hasTMemCopyWith2CTAs = false;
-    unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
-    if (numCTAs == 2) {
-      mod.walk([&](ttng::TMEMCopyOp op) {
-        hasTMemCopyWith2CTAs = true;
-        return WalkResult::interrupt();
-      });
+    if (copyResult.wasInterrupted()) {
+      signalPassFailure();
+      return;
     }
 
-    bool twoCTAValue = (firstMatmul && firstTwoCTA) || twoCTAFromCopy || hasTMemCopyWith2CTAs;
+    // Step 3: Set module attribute
+    bool twoCTAValue = firstMatmul ? firstTwoCTA : false;
     mod->setAttr(AttrTwoCTAsName, BoolAttr::get(mod.getContext(), twoCTAValue));
   }
 };
