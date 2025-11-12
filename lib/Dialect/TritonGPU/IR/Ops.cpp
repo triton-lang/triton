@@ -578,35 +578,7 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
                                                    ArrayRef<int64_t> dstShape,
                                                    Attribute &dstEnc) {
   auto *ctx = srcEnc.getContext();
-  // TODO Delete this once SharedLinearEncodingAttr is more widely supported.
-  if (auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(srcEnc)) {
-    if (getNumCTAs(mmaEncoding) == 1) {
-      int innerDimDst =
-          mmaEncoding.getTransposed() ? dstShape.front() : dstShape.back();
-      int innerDimSrc =
-          mmaEncoding.getTransposed() ? srcShape.front() : srcShape.back();
-      // We can keep an NVMMAShared encoding only if the innermost dimension is
-      // preserved. Otherwise fall back to the generic shared-linear encoding
-      // logic below.
-      if (innerDimDst == innerDimSrc) {
-        auto CTALayout = CTALayoutAttr::get(
-            ctx,
-            /*CTAsPerCGA=*/SmallVector<unsigned>(dstShape.size(), 1),
-            /*CTASplitNum=*/SmallVector<unsigned>(dstShape.size(), 1),
-            /*CTAOrder=*/llvm::to_vector(llvm::seq<unsigned>(dstShape.size())));
-        auto candidateEncoding = NVMMASharedEncodingAttr::get(
-            ctx, mmaEncoding.getSwizzlingByteWidth(),
-            mmaEncoding.getTransposed(), mmaEncoding.getElementBitWidth(),
-            mmaEncoding.getFp4Padded(), CTALayout);
-        auto srcLL = toLinearLayout(srcShape, srcEnc);
-        auto dstLL = toLinearLayout(dstShape, candidateEncoding);
-        if (reshapeLayout(ctx, srcLL, dstShape) == dstLL) {
-          dstEnc = candidateEncoding;
-          return success();
-        }
-      }
-    }
-  } else if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
+  if (auto padded = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
     LinearLayout ll = padded.getLinearComponent();
     LinearLayout dst = reshapeLayout(ctx, ll, dstShape);
     SmallVector<std::pair<unsigned, unsigned>> intervalPads;

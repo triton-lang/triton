@@ -165,10 +165,11 @@ public:
             getContext(), allocOp.getLoc(), allocType, srcShape, innerTy)))
       return failure();
 
-    // For now don't apply the transformation if the new encoding is not an
-    // MMAv3/v5 encoding as it may not be compatible with the user.
-    // The heuristic can be refined once we have more flexible mma ops.
-    if (!isa<NVMMASharedEncodingAttr>(innerTy.getEncoding()))
+    // Just apply the transformation if the new encoding would be TMA-compatible
+    auto nvmma = dyn_cast<NVMMASharedEncodingAttr>(allocType.getEncoding());
+    if (!nvmma || nvmma.getTransposed())
+      return failure();
+    if (srcShape.back() != dstShape.back())
       return failure();
 
     auto newAlloc = LocalAllocOp::create(rewriter, allocOp.getLoc(), innerTy,

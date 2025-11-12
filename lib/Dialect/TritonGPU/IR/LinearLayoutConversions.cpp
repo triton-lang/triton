@@ -227,6 +227,7 @@ LinearLayout nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                                        bool disableSwizzle) {
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
+  assert(rank == 2);
   auto shapePerCTA = getShapePerCTA(shared, shape);
   auto kOffset = S("offset");
   auto tmaShape = triton::nvidia_gpu::getTMABlockShape(shared, shapePerCTA,

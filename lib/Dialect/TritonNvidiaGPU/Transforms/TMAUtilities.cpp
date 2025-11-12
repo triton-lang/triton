@@ -85,6 +85,9 @@ updateEncodingForShape(Operation *op, ttg::SharedEncodingTrait encoding,
         order, newCtaEnc);
   }
 
+  if (auto linearEnc = dyn_cast<ttg::SharedLinearEncodingAttr>(encoding))
+    return linearEnc;
+
   constexpr auto msg = "Internal Error: Unhandled tensor descriptor encoding";
   if (op)
     op->emitError() << msg;

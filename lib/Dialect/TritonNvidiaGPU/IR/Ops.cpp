@@ -209,8 +209,9 @@ LogicalResult AsyncTMACopyGlobalToLocalOp::verify() {
     return emitOpError("TMA copies must have between 1 and 5 coordinates");
   if (!getResult().getType().getMutableMemory())
     return emitOpError("Cannot store into immutable memory");
-  if (!isa<NVMMASharedEncodingAttr>(getResult().getType().getEncoding()))
-    return emitOpError("TMA result must have NVMMA shared layout");
+  if (!isa<NVMMASharedEncodingAttr, SharedLinearEncodingAttr>(
+          getResult().getType().getEncoding()))
+    return emitOpError("TMA result must have NVMMA or SharedLinear layout");
   return success();
 }
 
