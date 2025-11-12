@@ -2106,31 +2106,26 @@ def test_shared_scatter(N, M):
 
 
 @pytest.mark.parametrize("N,M,num_warps", [(64, 64, 2), (128, 128, 4)])
-def test_gather_multiwarp(N, M, num_warps):
-    """Test gather with multiple warps."""
+def test_scatter_gather_multiwarp(N, M, num_warps):
+    """Test scatter and gather with multiple warps."""
     device = torch.device("cuda")
 
-    # Create a test matrix [N, M]
-    matrix = torch.arange(N * M, dtype=torch.float32, device=device).reshape(N, M)
-
-    # Create gather indices for diagonal elements
-    indices = torch.arange(N, dtype=torch.int32, device=device) * (M + 1)
-
-    output = torch.zeros(N, dtype=torch.float32, device=device)
-
-    # Expected: diagonal elements
-    expected = matrix.flatten()[indices]
-
-    # Create layouts with multiple warps
+    # Create layouts with multiple warps (shared across both tests)
     layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[8, 4], warps_per_cta=[num_warps, 1],
                                    order=[1, 0])
     layout_1d = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[num_warps], order=[0])
     shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+
+    # Test gather
+    matrix = torch.arange(N * M, dtype=torch.float32, device=device).reshape(N, M)
+    gather_indices = torch.arange(N, dtype=torch.int32, device=device) * (M + 1)
+    gather_output = torch.zeros(N, dtype=torch.float32, device=device)
+    gather_expected = matrix.flatten()[gather_indices]
 
     shared_gather_kernel[(1, )](
         matrix,
-        indices,
-        output,
+        gather_indices,
+        gather_output,
         N=N,
         M=M,
         layout_2d=layout_2d,
@@ -2139,37 +2134,20 @@ def test_gather_multiwarp(N, M, num_warps):
         num_warps=num_warps,
     )
 
-    torch.testing.assert_close(output, expected)
+    torch.testing.assert_close(gather_output, gather_expected)
 
-
-@pytest.mark.parametrize("N,M,num_warps", [(64, 64, 2), (128, 128, 4)])
-def test_scatter_multiwarp(N, M, num_warps):
-    """Test scatter with multiple warps."""
-    device = torch.device("cuda")
-
-    # Create scatter indices for diagonal elements
-    indices = torch.arange(N, dtype=torch.int32, device=device) * (M + 1)
-
-    # Create values to scatter
-    values = torch.arange(N, dtype=torch.float32, device=device) + 100.0
-
-    output = torch.zeros((N, M), dtype=torch.float32, device=device)
-
-    # Expected: diagonal elements filled
-    expected = torch.zeros((N, M), dtype=torch.float32, device=device)
+    # Test scatter
+    scatter_indices = torch.arange(N, dtype=torch.int32, device=device) * (M + 1)
+    scatter_values = torch.arange(N, dtype=torch.float32, device=device) + 100.0
+    scatter_output = torch.zeros((N, M), dtype=torch.float32, device=device)
+    scatter_expected = torch.zeros((N, M), dtype=torch.float32, device=device)
     for i in range(N):
-        expected[i, i] = values[i]
-
-    # Create layouts with multiple warps
-    layout_2d = ttgl.BlockedLayout(size_per_thread=[1, 1], threads_per_warp=[8, 4], warps_per_cta=[num_warps, 1],
-                                   order=[1, 0])
-    layout_1d = ttgl.BlockedLayout(size_per_thread=[1], threads_per_warp=[32], warps_per_cta=[num_warps], order=[0])
-    shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+        scatter_expected[i, i] = scatter_values[i]
 
     shared_scatter_kernel[(1, )](
-        indices,
-        values,
-        output,
+        scatter_indices,
+        scatter_values,
+        scatter_output,
         N=N,
         M=M,
         layout_2d=layout_2d,
@@ -2178,7 +2156,7 @@ def test_scatter_multiwarp(N, M, num_warps):
         num_warps=num_warps,
     )
 
-    torch.testing.assert_close(output, expected)
+    torch.testing.assert_close(scatter_output, scatter_expected)
 
 
 # ============================================================================
