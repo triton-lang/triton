@@ -1060,6 +1060,11 @@ SmallVector<unsigned> LinearEncodingAttr::getRepOrder() const {
   return getOrder();
 }
 
+CTAEncodingAttr LinearEncodingAttr::getCTALayout() const {
+  return CTAEncodingAttr::fromSplitParams(getContext(), getCTAsPerCGA(),
+                                          getCTASplitNum(), getCTAOrder());
+}
+
 SmallVector<unsigned> LinearEncodingAttr::getCTAsPerCGA() const {
   // CTAs are split into an identity part (SplitNum) and a broadcast part
   return basesPerDim(StringAttr::get(getContext(), "block"),
@@ -1804,6 +1809,11 @@ SmallVector<unsigned> SharedLinearEncodingAttr::getOrder() const {
   SmallVector<unsigned> defaultOrder(rank);
   std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
   return orderPerDim(StringAttr::get(getContext(), "offset"), defaultOrder);
+}
+
+CTAEncodingAttr SharedLinearEncodingAttr::getCTALayout() const {
+  return CTAEncodingAttr::fromSplitParams(getContext(), getCTAsPerCGA(),
+                                          getCTASplitNum(), getCTAOrder());
 }
 
 SmallVector<unsigned> SharedLinearEncodingAttr::getCTAsPerCGA() const {
