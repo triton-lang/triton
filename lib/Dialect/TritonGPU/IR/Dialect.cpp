@@ -1536,39 +1536,28 @@ SmallVector<unsigned> SliceEncodingAttr::getRepOrder() const {
   return eraseOrder(parentRepOrder, getDim());
 }
 
+CTAEncodingAttr SliceEncodingAttr::getCTALayout() const {
+  auto layout = ::getCTALayout(getParent()).getLinearLayout();
+  auto bases = layout.getBases();
+  auto kBlock = StringAttr::get(getContext(), "block");
+  auto &blockBases = bases[kBlock];
+  for (auto &basis : blockBases) {
+    basis.erase(basis.begin() + getDim());
+  }
+  auto dims = layout.getOutDims();
+  return CTAEncodingAttr::get(getContext(), LinearLayout(bases, dims, true));
+}
+
 SmallVector<unsigned> SliceEncodingAttr::getCTASplitNum() const {
-  SmallVector<unsigned> res = ::getCTASplitNum(getParent());
-  res.erase(res.begin() + getDim());
-  return res;
+  return getCTALayout().getCTASplitNum();
 }
 
 SmallVector<unsigned> SliceEncodingAttr::getCTAOrder() const {
-  auto parentCTAOrder = ::getCTAOrder(getParent());
-  return eraseOrder(parentCTAOrder, getDim());
+  return getCTALayout().getCTAOrder();
 }
 
 SmallVector<unsigned> SliceEncodingAttr::getCTAsPerCGA() const {
-  auto parentCTAsPerCGA = ::getCTAsPerCGA(getParent());
-  if (parentCTAsPerCGA[getDim()] == 1) {
-    parentCTAsPerCGA.erase(parentCTAsPerCGA.begin() + getDim());
-    return parentCTAsPerCGA;
-  }
-  /* For getCTAsPerCGA of a slice layout, we have two choices:
-   * (1) Return CTAsPerCGA of its parent. This is not a perfect solution
-   * because the rank of the returned CTAsPerCGA does not match the rank of
-   * tensorShape.
-   * (2) Get CTAsPerCGA of its parent and erase the sliced dim. This is not a
-   * perfect solution because the product of the returned CTAsPerCGA might not
-   * match numCTAs.
-   * To avoid introducing inconsistencies to the shape and
-   * layout system, the usage of directly getting CTAsPerCGA of a slice layout
-   * in which the sliced dim is not 1 is banned. You should always consider
-   * slice layout as a special case and use getCTAsPerCGA(layout.getParent())
-   * in the branch where layout is an instance of SliceEncodingAttr. This is
-   * inconvenient but safe.
-   */
-  llvm::report_fatal_error(
-      "getCTAsPerCGA for SliceEncodingAttr is not well-defined");
+  return getCTALayout().getCTAsPerCGA();
 }
 
 template <class T>
@@ -2510,23 +2499,31 @@ SmallVector<unsigned> DotOperandEncodingAttr::getRepOrder() const {
   return {};
 }
 
+CTAEncodingAttr DotOperandEncodingAttr::getCTALayout() const {
+  auto layout = ::getCTALayout(getParent()).getLinearLayout();
+  auto bases = layout.getBases();
+  auto kBlock = StringAttr::get(getContext(), "block");
+  auto &blockBases = bases[kBlock];
+  auto rank = layout.getNumOutDims();
+  auto kDim = getOpIdx() == 0 ? rank - 1 : rank - 2;
+  for (auto &basis : blockBases) {
+    basis[kDim] = 0;
+  }
+  auto dims = layout.getOutDims();
+  dims[kDim].second = 1;
+  return CTAEncodingAttr::get(getContext(), LinearLayout(bases, dims, true));
+}
+
 SmallVector<unsigned> DotOperandEncodingAttr::getCTAsPerCGA() const {
-  return ::getCTAsPerCGA(getParent());
+  return getCTALayout().getCTAsPerCGA();
 }
 
 SmallVector<unsigned> DotOperandEncodingAttr::getCTAOrder() const {
-  return ::getCTAOrder(getParent());
+  return getCTALayout().getCTAOrder();
 }
 
 SmallVector<unsigned> DotOperandEncodingAttr::getCTASplitNum() const {
-  SmallVector<unsigned> res = ::getCTASplitNum(getParent());
-  auto rank = res.size();
-  assert(rank == 2 || rank == 3 && "Invalid dotLayout");
-
-  // Do not split CTA in K dimension
-  auto kDim = getOpIdx() == 0 ? rank - 1 : rank - 2;
-  res[kDim] = 1;
-  return res;
+  return getCTALayout().getCTASplitNum();
 }
 
 LogicalResult DotOperandEncodingAttr::verify(

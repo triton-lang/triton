@@ -1471,6 +1471,8 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding", [
   let extraClassDeclaration = extraDistributedDeclaration # [{
     template<class T>
     SmallVector<T> paddedShape(ArrayRef<T> shape) const;
+
+    CTAEncodingAttr getCTALayout() const;
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -1539,7 +1541,9 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
 
   let assemblyFormat = "`<` `{` struct(params) `}` `>`";
   let genVerifyDecl = 1;
-  let extraClassDeclaration = extraDistributedDeclaration;
+  let extraClassDeclaration = extraDistributedDeclaration # [{
+    CTAEncodingAttr getCTALayout() const;
+   }];
 }
 
 def TTG_SharedMemorySpace : AttrDef<TritonGPU_Dialect, "SharedMemorySpace"> {
