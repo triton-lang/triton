@@ -52,15 +52,15 @@ def make_slice_sizes(n_slices, total_size, device="cuda"):
     assert len(counts) == n_slices
     return counts
 
-def init_routing_data(m, n_expts_tot, do_gather, do_scatter, device="cuda"):
+def init_routing_data(m, n_slices, do_gather, do_scatter, device="cuda"):
     n_rows = m
-    slice_sizes = make_slice_sizes(n_expts_tot, n_rows, device=device)
+    slice_sizes = make_slice_sizes(n_slices, n_rows, device=device)
     gather_indx = torch.randint(0, m, (n_rows, ), device=device).to(torch.int32) if do_gather and m > 0 else None
     scatter_indx = torch.randperm(n_rows, device=device).to(torch.int32) if do_scatter else None
     ragged_batch_metadata = make_ragged_tensor_metadata(slice_sizes, n_rows)
     return m, ragged_batch_metadata, gather_indx, scatter_indx
 
-def init_compute_data(m, n, k, ragged_metadata, gindx, sindx, n_expts_tot, mode, act_dtype, weight_dtype,
+def init_compute_data(m, n, k, ragged_metadata, gindx, sindx, n_slices, mode, act_dtype, weight_dtype,
                       has_y_gammas, requires_grad=True, device="cuda",
                       inner_expt_opt=None, padding_block_k=None):
     torch.manual_seed(0)
@@ -68,12 +68,12 @@ def init_compute_data(m, n, k, ragged_metadata, gindx, sindx, n_expts_tot, mode,
     if inner_expt_opt is not None:
         assert gindx is None and sindx is None
         # Rotate tensor shapes (dw = x.T @ dy)
-        m, k = k, triton.cdiv(m + padding_block_k * n_expts_tot, padding_block_k) * padding_block_k
+        m, k = k, triton.cdiv(m + padding_block_k * n_slices, padding_block_k) * padding_block_k
         in_m = m
     else:
         in_m = m
-    shape_x = (n_expts_tot, in_m, k) if mode == 'batched' else (in_m, k)
-    shape_batch = tuple() if (mode == "plain" or inner_expt_opt is not None) else (n_expts_tot, )
+    shape_x = (n_slices, in_m, k) if mode == 'batched' else (in_m, k)
+    shape_batch = tuple() if (mode == "plain" or inner_expt_opt is not None) else (n_slices, )
     x = alloc_rand(shape_x, device=device, dtype=act_dtype, requires_grad=requires_grad)
     w = alloc_rand(shape_batch + (k, n), device=device, dtype=weight_dtype, requires_grad=requires_grad)
     bias = alloc_rand(shape_batch + (n, ), device=device, dtype=torch.float32, requires_grad=requires_grad)
@@ -120,12 +120,12 @@ def init_compute_data(m, n, k, ragged_metadata, gindx, sindx, n_expts_tot, mode,
 # ---------------
 
 
-def init_precision(out_dtype, act_use_flexpoint, weight_dtype, weight_mxfp, mode, n_expts_tot=1, expt_is_inner=False, device="cuda"):
+def init_precision(out_dtype, act_use_flexpoint, weight_dtype, weight_mxfp, mode, n_slices=1, expt_is_inner=False, device="cuda"):
     weight_use_flexpoint = weight_dtype.itemsize == 1 and not weight_mxfp
     # flexpoint
-    make_tensor = lambda val0, val1: torch.tensor([val0, val1] * (n_expts_tot // 2) +
+    make_tensor = lambda val0, val1: torch.tensor([val0, val1] * (n_slices // 2) +
                                                   ([val0]
-                                                   if n_expts_tot % 2 else []), dtype=torch.float32, device=device)
+                                                   if n_slices % 2 else []), dtype=torch.float32, device=device)
     make_scalar = lambda val: torch.tensor([val], dtype=torch.float32, device=device)
     make = lambda val0, val1, is_tensor: make_tensor(val0, val1) if is_tensor else make_scalar(val0)
 
@@ -195,7 +195,7 @@ class Case:
     mode: str
     act_dtype_str: str
     weight_dtype_str: str
-    n_expts_tot: int = 1
+    n_slices: int = 1
     split_k: int = 1
     hbm_swizzling: bool = False
     epilogue_subtile: Union[int, None] = None
@@ -219,7 +219,6 @@ class Case:
             # Non-mx types:
             Case(16, 256, 256, "ragged", "float16", "float16", 128),
             Case(16, 256, 256, "ragged", "float16", "float16", 128, split_k=3),
-            Case(16, 256, 256, "ragged", "float16", "float16", 128, split_k=3),
             Case(300, 400, 400, "batched", "float8_e5m2", "float8_e5m2", 5),
             Case(16, 256, 256, "batched", "float16", "float16", 5),
             Case(16, 256, 256, "ragged", "float16", "float16", 3),
@@ -236,8 +235,8 @@ class Case:
             Case(1000, 400, 400, "ragged", "float16", "float16", 3),
             Case(1000, 700, 700, "ragged", "float16", "float16", 8),
             Case(1000, 700, 700, "ragged", "float16", "float16", 8, split_k=9),
-            Case(16, 16, 1000, "batched", "float16", "float16", 5, split_k=None),
-            Case(16, 16, 1000, "batched", "float8_e5m2", "float8_e5m2", 5, split_k=None),
+            Case(16, 16, 1000, "batched", "float16", "float16", 5),
+            Case(16, 16, 1000, "batched", "float8_e5m2", "float8_e5m2", 5),
             Case(16, 16, 2048, "batched", "float8_e5m2", "float8_e5m2", 6, split_k=5),
             # mx types:
             Case(16, 256, 256, "plain", "bfloat16", "mxfloat4_e2m1", 1),
@@ -256,7 +255,6 @@ class Case:
             # Cover (N or K) % 128 == 64 (https://github.com/triton-lang/triton/pull/7203)
             Case(1, 1472, 1472, "ragged", "bfloat16", "mxfloat4_e2m1", 128),
             Case(16, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", 128, hbm_swizzling=True),
-            Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3, hbm_swizzling=True),
             Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3, hbm_swizzling=True),
             Case(1000, 704, 832, "batched", "float8_e5m2", "mxfloat4_e2m1", 3),
             Case(1000, 704, 800, "ragged", "float8_e5m2", "mxfloat4_e2m1", 8, split_k=9),
@@ -295,9 +293,9 @@ class Case:
             Case(1000, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 3),
             Case(600, 400, 400, "ragged", "float8_e4m3fn", "float8_e4m3fn", 4),
         ] + [
-            Case(320, 400, 400, mode, dtype, dtype, n_expts_tot,
+            Case(320, 400, 400, mode, dtype, dtype, n_slices,
                  x_transpose=x_transpose, w_transpose=w_transpose, y_transpose=y_transpose)
-            for (mode, n_expts_tot) in (
+            for (mode, n_slices) in (
                 ("batched", 1),
                 ("ragged", 8),
                 ("ragged", 32),
@@ -314,15 +312,13 @@ class Case:
     (False, False, None),
     (True, False, None),
     (False, True, None),
-    (False, True, None),
-    (True, True, None),
     (True, True, None),
     (False, False, "pad_w"),
     (False, False, "pad_x"),
 ])
 @pytest.mark.parametrize("has_y_gammas", [False, True])
 @pytest.mark.parametrize("is_persistent", [False, True])
-def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
+def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_slices,
             mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             x_transpose, w_transpose, y_transpose,
             device, opt_flags_scope):
@@ -330,7 +326,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamma
     # the frame that called pytest.skip, including all the tensors, leading to OOM.
     skip_message = None
     try:
-        _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
+        _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_slices,
                  mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
                  x_transpose, w_transpose, y_transpose,
                  device, opt_flags_scope)
@@ -340,7 +336,7 @@ def test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamma
     if skip_message is not None:
         pytest.skip(skip_message)
 
-def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_expts_tot,
+def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gammas, is_persistent, n_slices,
             mode, act_dtype_str, weight_dtype_str, block_m, hbm_swizzling, colmajor_mxfp_weight, epilogue_subtile,
             x_transpose, w_transpose, y_transpose,
             device, opt_flags_scope):
@@ -447,10 +443,10 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
     weight_dtype = dtype_str_to_torch(weight_dtype_str)
     act_dtype = dtype_str_to_torch(act_dtype_str)
     precision_opt = init_precision(act_dtype, act_is_float8, weight_dtype, weight_mxfp,
-                                   mode, n_expts_tot, expt_is_inner, device=device)
+                                   mode, n_slices, expt_is_inner, device=device)
     # precision_opt.x_pad_trans_requires_flexpoint = False
     if mode == "ragged":
-        m, x_ragged_metadata, gindx, sindx = init_routing_data(m, n_expts_tot, do_gather, do_scatter, device=device)
+        m, x_ragged_metadata, gindx, sindx = init_routing_data(m, n_slices, do_gather, do_scatter, device=device)
     else:
         x_ragged_metadata = gindx = sindx = None
 
@@ -475,7 +471,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
             x_ragged_metadata.slice_offs = x_ragged_metadata.block_offs(padding_block_k) * padding_block_k
             x_ragged_metadata.slice_sizes_divisibility = padding_block_k
 
-    x_tri, w_tri, bias_tri, gs0_tri, gs1_tri = init_compute_data(m, n, k, x_ragged_metadata, gindx, sindx, n_expts_tot,
+    x_tri, w_tri, bias_tri, gs0_tri, gs1_tri = init_compute_data(m, n, k, x_ragged_metadata, gindx, sindx, n_slices,
                                                                  mode, torch.bfloat16 if act_mxfp8 else act_dtype,  #
                                                                  torch.bfloat16 if weight_mxfp else weight_dtype,
                                                                  has_y_gammas, requires_grad=test_bwd, device=device,
@@ -488,11 +484,11 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
         w_tri = w_tri.detach().transpose(-1, -2).contiguous().transpose(-1, -2).requires_grad_(test_bwd)
     if y_transpose:
         if mode == "batched":
-            yT_shape = (n_expts_tot, n, x_tri.shape[-2])
+            yT_shape = (n_slices, n, x_tri.shape[-2])
         elif sindx is not None:
             yT_shape = (n, sindx.shape[0])
         elif expt_is_inner:
-            yT_shape = (n_expts_tot, n, k)
+            yT_shape = (n_slices, n, k)
         else:
             n_rows = x_tri.shape[-2] if gindx is None else gindx.shape[0]
             yT_shape = (n, n_rows)
@@ -755,18 +751,18 @@ def test_fused_act(m, n, k, mode, split_k, do_gather, do_scatter, is_persistent,
         "epilogue_subtile": epilogue_subtile,
         "split_k": split_k,
     }
-    n_expts_tot = 1
+    n_slices = 1
     opt_flags.update_opt_flags_constraints(constraints)
 
     weight_dtype, act_dtype = torch.float16, torch.float16
     if mode == "ragged":
-        m, x_ragged_metadata, gindx, sindx = init_routing_data(m, n_expts_tot, do_gather, do_scatter,
+        m, x_ragged_metadata, gindx, sindx = init_routing_data(m, n_slices, do_gather, do_scatter,
                                                    device=device)
     else:
         x_ragged_metadata = gindx = sindx = None
 
-    precision_opt = init_precision(act_dtype, str(act_dtype).startswith("torch.float8"), weight_dtype, False, mode, n_expts_tot, device=device)
-    x, w, bias, _, _ = init_compute_data(m, n, k, x_ragged_metadata, gindx, sindx, n_expts_tot, mode,
+    precision_opt = init_precision(act_dtype, str(act_dtype).startswith("torch.float8"), weight_dtype, False, mode, n_slices, device=device)
+    x, w, bias, _, _ = init_compute_data(m, n, k, x_ragged_metadata, gindx, sindx, n_slices, mode,
                                          act_dtype, weight_dtype, False, requires_grad=False, device=device)
 
     if mode == "batched":
