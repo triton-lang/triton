@@ -85,7 +85,7 @@ Running with same code but loading the plugin library also produces the same res
 pass manager is not inserted into the compiler pass pipeline:
 
 ``` bash
-TRITON_ALWAYS_COMPILE=1 TRITON_PASS_PLUGIN_PATH=/home/triton/python/triton/plugins/libTritonPluginsTestLib.so python test.python
+TRITON_PASS_PLUGIN_PATH=/home/triton/python/triton/plugins/libTritonPluginsTestLib.so python test.python
 ```
 
 ``` MLIR
@@ -112,7 +112,7 @@ from triton import knobs
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 @triton.jit
-def kernel1(BLOCK_SIZE: tl.constexpr):
+def kernel(BLOCK_SIZE: tl.constexpr):
     return
 
 def inspect_stages_hook(self, stages, options, language, capability):
@@ -134,19 +134,32 @@ if __name__ == '__main__':
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']), )
+
+    h = kernel[grid](BLOCK_SIZE=1024)
+    print(h.asm["ttgir"])
+
     if "TRITON_PASS_PLUGIN_PATH" in os.environ:
       knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
-    h = kernel1[grid](BLOCK_SIZE=1024)
+    h = kernel[grid](BLOCK_SIZE=1024)
     print(h.asm["ttgir"])
 ```
 
 ``` bash
-TRITON_ALWAYS_COMPILE=1 TRITON_PASS_PLUGIN_PATH=/home/triton/python/triton/plugins/libTritonPluginsTestLib.so python test.py
+TRITON_PASS_PLUGIN_PATH=/home/triton/python/triton/plugins/libTritonPluginsTestLib.so python test.py
 ```
 
-Shows the pass ran and modified the kernel name.
+Shows the pass ran and modified the kernel name but only after the hook is set. Any kernel
+before the hook are left unchanged.
 
 ``` MLIR
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
+    tt.return loc(#loc1)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc("/home/triton/test.py":13:0)
+#loc1 = loc("/home/triton/test.py":14:4)
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @foo() attributes {noinline = false} {
     tt.return loc(#loc1)
