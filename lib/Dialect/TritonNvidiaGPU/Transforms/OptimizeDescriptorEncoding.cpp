@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/PriorityWorklist.h"
 #include <algorithm>
 #include <unordered_set>
@@ -197,20 +198,35 @@ Attribute getFallbackSharedEncoding(RankedTensorType tensorType,
                                     ttg::CTALayoutAttr ctaLayout,
                                     ArrayRef<int64_t> usageShape) {
   auto ctx = tensorType.getContext();
-  SmallVector<unsigned> order;
-  for (int i = tensorType.getRank() - 1; i >= 0; --i)
-    order.push_back(i);
-
   ArrayRef<int64_t> shape =
       usageShape.empty() ? tensorType.getShape() : usageShape;
-  if (!ctaLayout)
-    ctaLayout = ttg::CTALayoutAttr::getDefault(ctx, tensorType.getRank());
-  else if (ctaLayout.getRank() != tensorType.getRank())
-    ctaLayout = updateCTALayoutForShape(ctaLayout, shape);
 
-  return ttg::NVMMASharedEncodingAttr::get(ctx, shape, order, ctaLayout,
-                                           tensorType.getElementType(),
-                                           /*fp4Padded*/ false);
+  SmallVector<int64_t> shape2d{1};
+  for (int i = 0; i < shape.size() - 1; ++i) {
+    shape2d[0] *= shape[i];
+  }
+  shape2d.push_back(shape.back());
+
+  // v hacky
+  if (!ctaLayout)
+    ctaLayout = ttg::CTALayoutAttr::getDefault(ctx, 2);
+  else if (ctaLayout.getRank() != 2)
+    ctaLayout = updateCTALayoutForShape(ctaLayout, shape2d);
+
+  auto nvmma = ttg::NVMMASharedEncodingAttr::get(
+      ctx, shape2d, {1, 0}, ctaLayout, tensorType.getElementType(),
+      /*fp4Padded*/ false);
+  if (shape.size() == shape2d.size())
+    return nvmma;
+
+  auto ll = toLinearLayout(shape2d, nvmma);
+  auto dims = standardOutDimNames(ctx, shape.size());
+  std::vector<std::pair<StringAttr, int32_t>> outDims;
+  for (int i = 0; i < shape.size(); ++i) {
+    outDims.push_back({dims[i], shape[i]});
+  }
+  ll = ll.reshapeOuts(outDims);
+  return ttg::SharedLinearEncodingAttr::get(ctx, ll, nvmma.getAlignment());
 }
 
 TensorDescType getTensorDescTypeWithEncoding(Operation *op,

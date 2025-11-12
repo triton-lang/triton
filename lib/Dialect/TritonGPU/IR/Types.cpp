@@ -157,6 +157,11 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
              << "memorySpace must be SharedMemorySpace for shared encoding. "
              << "Got " << memorySpace;
     }
+    if (isa<NVMMASharedEncodingAttr>(enc) &&
+        !(shape.size() == 2 || shape.size() == 3)) {
+      return emitError()
+             << "NVMMASharedEncodingAttr is only valid for 2D or 3D shapes";
+    }
   } else if (auto enc = dyn_cast<nvidia_gpu::TensorMemoryScalesEncodingAttr>(
                  encoding)) {
     if (memorySpace != nvidia_gpu::TensorMemorySpaceAttr::get(ctx)) {
