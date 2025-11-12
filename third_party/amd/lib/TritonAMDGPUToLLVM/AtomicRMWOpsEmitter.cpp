@@ -448,8 +448,7 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
       ROCDL::MbcntHiOp::create(rewriter, loc, i32_ty, maskHi, mbcntLoRes,
                                /*arg_attrs=*/{}, /*res_attrs=*/{});
   Value base = b.add(start, cnt);
-  Value updatedMax =
-      b.select(b.icmp_ugt(cnt, currentMax), cnt, currentMax);
+  Value updatedMax = b.select(b.icmp_ugt(cnt, currentMax), cnt, currentMax);
   Value leader = b.icmp_eq(idx, b.i32_val(0));
   cnt = b.sub(cnt, idx);
   idx = b.add(idx, start);
@@ -464,8 +463,7 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   Value leaderRes = afterLoopBlock->getArgument(2);
   Value maxCntRes = afterLoopBlock->getArgument(3);
 
-  Value leaderMask =
-      targetInfo.ballot(rewriter, loc, i64_ty, leaderRes);
+  Value leaderMask = targetInfo.ballot(rewriter, loc, i64_ty, leaderRes);
   Value uniqueAddrCount =
       b.trunc(i32_ty, generatePopcount64(rewriter, leaderMask));
 
@@ -476,9 +474,9 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   bool isScalarFloat = mlir::isa<FloatType>(scalarTy);
   bool isScalarInt =
       mlir::isa<IntegerType>(scalarTy) || mlir::isa<IndexType>(scalarTy);
-  bool isAddLike = opKind == LLVM::AtomicBinOp::fadd ||
-                   (opKind == LLVM::AtomicBinOp::add &&
-                    (isScalarFloat || isScalarInt));
+  bool isAddLike =
+      opKind == LLVM::AtomicBinOp::fadd ||
+      (opKind == LLVM::AtomicBinOp::add && (isScalarFloat || isScalarInt));
 
   int coopThresholdInt = waveSizeInt >> (isAddLike ? 1 : 2);
   coopThresholdInt = std::max(1, coopThresholdInt);
@@ -489,12 +487,10 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
       coopThresholdInt = static_cast<int>(parsed);
   }
 
-  Value enableCoop =
-      b.icmp_ult(uniqueAddrCount, b.i32_val(coopThresholdInt));
+  Value enableCoop = b.icmp_ult(uniqueAddrCount, b.i32_val(coopThresholdInt));
 
   auto *coopBlock = rewriter.createBlock(
-      afterLoopBlock->getParent(),
-      std::next(Region::iterator(afterLoopBlock)));
+      afterLoopBlock->getParent(), std::next(Region::iterator(afterLoopBlock)));
   coopBlock->addArgument(rmwPtr.getType(), loc);
   coopBlock->addArgument(operandElemType, loc);
   coopBlock->addArgument(i32_ty, loc);
@@ -558,15 +554,14 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   Value arrangedLeader = fullPermuteBlock->getArgument(4);
   Value arrangedMax = fullPermuteBlock->getArgument(5);
 
-  arrangedPtr =
-      genI32TiledOp(rewriter, genPermute, arrangedPtr, arrangedIdx);
+  arrangedPtr = genI32TiledOp(rewriter, genPermute, arrangedPtr, arrangedIdx);
   arrangedOperand =
       genI32TiledOp(rewriter, genPermute, arrangedOperand, arrangedIdx);
-  Value packedRoleInfo = genI32TiledOp(
-      rewriter, genPermute,
-      b.or_(b.zext(i32_ty, arrangedLeader),
-            b.or_(arrangedIdx, b.shl(arrangedCnt, b.i32_val(8)))),
-      arrangedIdx);
+  Value packedRoleInfo =
+      genI32TiledOp(rewriter, genPermute,
+                    b.or_(b.zext(i32_ty, arrangedLeader),
+                          b.or_(arrangedIdx, b.shl(arrangedCnt, b.i32_val(8)))),
+                    arrangedIdx);
   Value permutedCnt =
       b.and_(b.lshr(packedRoleInfo, b.i32_val(8)), b.i32_val(0xff));
   Value permutedLeader =
@@ -594,9 +589,9 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   auto *afterRedBlock =
       rewriter.splitBlock(afterArrangeBlock, afterArrangeBlock->begin());
   afterRedBlock->addArgument(operandElemType, loc);
-  auto *partialReductionBlock = rewriter.createBlock(
-      afterArrangeBlock->getParent(),
-      std::next(Region::iterator(afterArrangeBlock)));
+  auto *partialReductionBlock =
+      rewriter.createBlock(afterArrangeBlock->getParent(),
+                           std::next(Region::iterator(afterArrangeBlock)));
   rewriter.setInsertionPointToEnd(afterArrangeBlock);
   Value reductionCond = b.icmp_sgt(coopMaxCnt, b.i32_val(1));
   rewriter.create<LLVM::CondBrOp>(loc, reductionCond, partialReductionBlock,
@@ -679,9 +674,8 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   if (isScalarFloat && opKind == LLVM::AtomicBinOp::fadd) {
     for (int stride : reductionStrides) {
       Value strideVal = b.i32_val(stride);
-      Value reductionGuard = b.and_(
-          b.icmp_ugt(coopMaxCnt, strideVal),
-          b.icmp_ult(strideVal, coopCntRes));
+      Value reductionGuard = b.and_(b.icmp_ugt(coopMaxCnt, strideVal),
+                                    b.icmp_ult(strideVal, coopCntRes));
       Value tmp = computeTmp(acc, stride);
       Value combined = b.fadd(acc, tmp);
       acc = b.select(reductionGuard, combined, acc);
@@ -689,9 +683,8 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   } else if (isScalarInt && opKind == LLVM::AtomicBinOp::add) {
     for (int stride : reductionStrides) {
       Value strideVal = b.i32_val(stride);
-      Value reductionGuard = b.and_(
-          b.icmp_ugt(coopMaxCnt, strideVal),
-          b.icmp_ult(strideVal, coopCntRes));
+      Value reductionGuard = b.and_(b.icmp_ugt(coopMaxCnt, strideVal),
+                                    b.icmp_ult(strideVal, coopCntRes));
       Value tmp = computeTmp(acc, stride);
       Value combined = b.add(acc, tmp);
       acc = b.select(reductionGuard, combined, acc);
@@ -699,9 +692,8 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
   } else {
     for (int stride : reductionStrides) {
       Value strideVal = b.i32_val(stride);
-      Value reductionGuard = b.and_(
-          b.icmp_ugt(coopMaxCnt, strideVal),
-          b.icmp_ult(strideVal, coopCntRes));
+      Value reductionGuard = b.and_(b.icmp_ugt(coopMaxCnt, strideVal),
+                                    b.icmp_ult(strideVal, coopCntRes));
       Value tmp = computeTmp(acc, stride);
       Value combined = performOp(acc, tmp);
       acc = b.select(reductionGuard, combined, acc);

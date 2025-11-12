@@ -1,6 +1,5 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include <cstdlib>
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -20,6 +19,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include <cstdlib>
 
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-convert-buffer-ops"
@@ -623,9 +623,9 @@ struct TritonAMDGPUConvertToBufferOpsPass
     // lowering to LLVM
     triton::AMD::ISAFamily isaFamily =
         triton::AMD::deduceISAFamily(archGenerationName);
-    bool allowBufferAtomics = this->allowBufferAtomics &&
-                              (ISAFamily::CDNA3 == isaFamily ||
-                               ISAFamily::CDNA4 == isaFamily);
+    bool allowBufferAtomics =
+        this->allowBufferAtomics &&
+        (ISAFamily::CDNA3 == isaFamily || ISAFamily::CDNA4 == isaFamily);
     if (std::getenv("TRITON_DISABLE_BUFFER_ATOMICS"))
       allowBufferAtomics = false;
     if (allowBufferAtomics)
