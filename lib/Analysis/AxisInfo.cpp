@@ -9,8 +9,6 @@
 
 #include <numeric>
 
-#undef LDBG
-
 #define DEBUG_TYPE "axis-info"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
