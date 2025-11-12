@@ -1,5 +1,6 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include <cstdlib>
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -622,8 +623,12 @@ struct TritonAMDGPUConvertToBufferOpsPass
     // lowering to LLVM
     triton::AMD::ISAFamily isaFamily =
         triton::AMD::deduceISAFamily(archGenerationName);
-    if (this->allowBufferAtomics &&
-        (ISAFamily::CDNA3 == isaFamily || ISAFamily::CDNA4 == isaFamily))
+    bool allowBufferAtomics = this->allowBufferAtomics &&
+                              (ISAFamily::CDNA3 == isaFamily ||
+                               ISAFamily::CDNA4 == isaFamily);
+    if (std::getenv("TRITON_DISABLE_BUFFER_ATOMICS"))
+      allowBufferAtomics = false;
+    if (allowBufferAtomics)
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
           context, assumptions, axisInfoAnalysis, solver, isaFamily,
           this->analyzeSmallTensorOfst);
