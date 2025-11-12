@@ -327,7 +327,7 @@ std::string translateLLVMIRToASM(llvm::Module &module,
 
 
 // New function: Resume compilation from MIR
-std::string translateMIRToASM(const std::string &mirText,
+std::string translateMIRToASM(const std::string &mirPath,
                               const std::string &triple,
                               const std::string &proc,
                               const std::string &features,
@@ -336,37 +336,63 @@ std::string translateMIRToASM(const std::string &mirText,
                               bool isObject) {
   using namespace mlir;
 
-  std::string llcCmd = "/home/sontuavu/llvm-project/build/bin/llc";
-  llcCmd += " -mtriple=" + triple;
-  llcCmd += " -mcpu=" + proc;
-  if (!features.empty()) {
-    llcCmd += " -mattr=" + features;
-  }
-  llcCmd += " -start-before=machine-block-freq";
-  llcCmd += " vector_add_post_sched.mir";
-  llcCmd += " -o /dev/null";
-  llcCmd += " 2> tmp";
-  
-  int ret = system(llcCmd.c_str());
-  if (ret != 0) {
-    llvm::errs() << "Warning: llc command failed for DAG generation\n";
-  }
+//std::string llcCmd = "/home/sontuavu/llvm-project/build/bin/llc";
+//llcCmd += " -mtriple=" + triple;
+//llcCmd += " -mcpu=" + proc;
+//if (!features.empty()) {
+//  llcCmd += " -mattr=" + features;
+//}
+//llcCmd += " -start-before=machine-block-freq";
+//llcCmd += " vector_add_post_sched.mir";
+//llcCmd += " -o /dev/null";
+//llcCmd += " 2> tmp";
+//
+//int ret = system(llcCmd.c_str());
+//if (ret != 0) {
+//  llvm::errs() << "Warning: llc command failed for DAG generation\n";
+//}
 
-    auto options = llvm::cl::getRegisteredOptions();
+  auto options = llvm::cl::getRegisteredOptions();
 
-    auto startBeforeOpt = options.find("start-after");
-    if (startBeforeOpt != options.end()) {
-      startBeforeOpt->second->addOccurrence(1, "start-after", "machine-scheduler");
-      llvm::errs() << "start-before option set successfully\n";
-    } else {
-      llvm::errs() << "WARNING: start-before option not found!\n";
-    }
+  auto startAfterOpt = options.find("start-after");
+  std::string originalStartAfter;
+  if (startAfterOpt != options.end()) {
+//  startAfterOpt->second->addOccurrence(1, "start-after", "machine-scheduler");
+    auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(startAfterOpt->second);
+//  originalStartAfter = optPtr->getValue();
+    llvm::errs() << "start-after option set successfully\n";
+  } else {
+    llvm::errs() << "WARNING: start-after option not found!\n";
+  }
 
   // Enable pass debugging
-  auto debugPassOpt = options.find("debug-pass");
-  if (debugPassOpt != options.end()) {
-    debugPassOpt->second->addOccurrence(1, "debug-pass", "Structure");
+//auto debugPassOpt = options.find("debug-pass");
+//if (debugPassOpt != options.end()) {
+//  debugPassOpt->second->addOccurrence(1, "debug-pass", "Structure");
+//}
+
+  auto enableMISchedOpt = options.find("enable-misched");
+  bool originalEnableMisched;
+  if (enableMISchedOpt != options.end()) {
+    auto *optPtr = static_cast<llvm::cl::opt<bool> *>(enableMISchedOpt->second);
+    originalEnableMisched = optPtr->getValue();
+    enableMISchedOpt->second->addOccurrence(1, "enable-misched", "false");
   }
+
+  auto enablePostMISchedOpt = options.find("enable-post-misched");
+  bool originalEnablePostMisched;
+  if (enablePostMISchedOpt != options.end()) {
+    auto *optPtr = static_cast<llvm::cl::opt<bool> *>(enablePostMISchedOpt->second);
+    originalEnablePostMisched = optPtr->getValue();
+    enablePostMISchedOpt->second->addOccurrence(1, "enable-post-misched", "false");
+  }
+
+//  auto optIt = options.find("print-after-all");
+//  if (optIt != options.end()) {
+//    auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
+//    *optPtr = true;
+//    llvm::errs() << "print-after-all option set successfully\n";
+//  }
 
   // Apply other flags
   for (const std::string &flag : flags) {
@@ -381,12 +407,18 @@ std::string translateMIRToASM(const std::string &mirText,
   llvm::LLVMContext context;
   llvm::SMDiagnostic error;
 
-  // Create a MemoryBuffer from MIR text
-  std::unique_ptr<llvm::MemoryBuffer> buffer =
-      llvm::MemoryBuffer::getMemBuffer(mirText);
+  // Load MIR file into memory
+  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> buffer =
+      llvm::MemoryBuffer::getFile(mirPath);
+
+  if (!buffer) {
+    llvm::report_fatal_error(
+        llvm::Twine("failed to open MIR file: ") + mirPath + " " +
+        buffer.getError().message());
+  }
 
   std::unique_ptr<llvm::MIRParser> mirParser =
-      llvm::createMIRParser(std::move(buffer), context);
+      llvm::createMIRParser(std::move(buffer.get()), context);
 
   if (!mirParser) {
     llvm::report_fatal_error("failed to create MIR parser");
@@ -396,32 +428,6 @@ std::string translateMIRToASM(const std::string &mirText,
   if (!module) {
     llvm::report_fatal_error("failed to parse MIR IR module");
   }
-
-  // Apply flags
-//auto options = llvm::cl::getRegisteredOptions();
-//for (const std::string &flag : flags) {
-//  auto *shortPtr = static_cast<llvm::cl::opt<bool> *>(options[flag]);
-//  assert(shortPtr);
-//  shortPtr->setValue(true);
-//}
-
-//// Set start-after to resume after the point where we stopped
-//std::string originalStartAfter;
-//auto startAfterOpt = options.find("start-before");
-//if (startAfterOpt != options.end()) {
-//  auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(startAfterOpt->second);
-//  originalStartAfter = optPtr->getValue();
-//  // Start after the pass we stopped before (machine-scheduler)
-//  // Actually, when loading MIR, we want to run from the beginning of
-//  // the machine pass pipeline, so we might not need start-after
-//  optPtr->setValue("machine-scheduler");
-//}
-
-//auto enableMachineSchedOpt = options.find("enable-misched");
-//if (enableMachineSchedOpt != options.end()) {
-//  auto *optPtr = static_cast<llvm::cl::opt<bool> *>(enableMachineSchedOpt->second);
-//  optPtr->setValue(false);
-//}
 
   // Setup target machine
   module->setTargetTriple(Triple(triple));
@@ -443,30 +449,30 @@ std::string translateMIRToASM(const std::string &mirText,
   }
 
   // Verify machine functions
-  llvm::errs() << "Verifying machine functions...\n";
-  for (auto &F : *module) {
-    if (auto *MF = MMIWP->getMMI().getMachineFunction(F)) {
-        auto &MRI = MF->getRegInfo();
-        // Freeze reserved registers
-        if (!MRI.reservedRegsFrozen()) {
-          MRI.freezeReservedRegs();
-        }
-      llvm::errs() << "  Function: " << F.getName() << "\n";
-      llvm::errs() << "    Num basic blocks: " << MF->size() << "\n";
+//llvm::errs() << "Verifying machine functions...\n";
+//for (auto &F : *module) {
+//  if (auto *MF = MMIWP->getMMI().getMachineFunction(F)) {
+//      auto &MRI = MF->getRegInfo();
+//      // Freeze reserved registers
+//      if (!MRI.reservedRegsFrozen()) {
+//        MRI.freezeReservedRegs();
+//      }
+//    llvm::errs() << "  Function: " << F.getName() << "\n";
+//    llvm::errs() << "    Num basic blocks: " << MF->size() << "\n";
 
-      // Check if basic blocks are valid
-      for (auto &MBB : *MF) {
-        llvm::errs() << "    BB: " << MBB.getNumber() << " has " << MBB.size() << " instructions\n";
-      }
+//    // Check if basic blocks are valid
+//    for (auto &MBB : *MF) {
+//      llvm::errs() << "    BB: " << MBB.getNumber() << " has " << MBB.size() << " instructions\n";
+//    }
 
-      // Try to verify
-      if (!MF->verify(nullptr, nullptr, nullptr, /*AbortOnError=*/false)) {
-        llvm::errs() << "    WARNING: MachineFunction verification FAILED!\n";
-      } else {
-        llvm::errs() << "    MachineFunction verification passed\n";
-      }
-    }
-  }
+//    // Try to verify
+//    if (!MF->verify(nullptr, nullptr, nullptr, /*AbortOnError=*/false)) {
+//      llvm::errs() << "    WARNING: MachineFunction verification FAILED!\n";
+//    } else {
+//      llvm::errs() << "    MachineFunction verification passed\n";
+//    }
+//  }
+//}
 
   // Emit code from MIR
   std::string result;
@@ -482,11 +488,16 @@ std::string translateMIRToASM(const std::string &mirText,
     pass.run(*module);
   }
 
-  // Restore start-after
-//if (startAfterOpt != options.end()) {
-//  auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(startAfterOpt->second);
-//  optPtr->setValue(originalStartAfter);
-//}
+  // Restore options
+  if (startAfterOpt != options.end()) {
+    auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(startAfterOpt->second);
+    optPtr->setValue(originalStartAfter);
+  }
+
+  if (enableMISchedOpt != options.end()) {
+    auto *optPtr = static_cast<llvm::cl::opt<bool> *>(enableMISchedOpt->second);
+    optPtr->setValue(originalEnableMisched);
+  }
 
   return result;
 }
@@ -815,13 +826,13 @@ void init_triton_llvm(py::module &&m) {
 
   m.def(
     "translate_mir_to_asm",
-    [](std::string mirText, std::string triple, std::string proc,
+    [](std::string mirPath, std::string triple, std::string proc,
        std::string features, std::vector<std::string> flags,
        bool enable_fp_fusion, bool isObject) -> py::object {
       std::string result;
       {
         py::gil_scoped_release allow_threads;
-        result = translateMIRToASM(mirText, triple, proc, features, flags,
+        result = translateMIRToASM(mirPath, triple, proc, features, flags,
                                    enable_fp_fusion, isObject);
       }
       if (isObject)

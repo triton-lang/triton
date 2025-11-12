@@ -4,6 +4,7 @@ from triton import knobs
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
+import os
 import hashlib
 import tempfile
 import re
@@ -451,8 +452,13 @@ class HIPBackend(BaseBackend):
       # else:
       #     amdgcn = llvm.translate_mir_to_asm(mir, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
       #                                    False)
-        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
-                                       False, dump_file_id)
+        swap_mir_path = os.environ.get('TRITON_SWAP_MIR')
+        if swap_mir_path:
+            amdgcn = llvm.translate_mir_to_asm(swap_mir_path + '/' + dump_file_id + '.txt', amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
+                                           False)
+        else:
+            amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
+                                           False, dump_file_id)
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
