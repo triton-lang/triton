@@ -3,9 +3,6 @@
 
 namespace mlir::triton {
 
-// TODO: In AMDGPU, getWarpGroupStartThreadId and getThreadId are activately
-// used, so these NV specific AIPs are put inthe common base TargetInfoBase. It
-// will be refactored.
 std::optional<int>
 TargetInfoBase::getWarpGroupStartThreadId(Block *block) const {
   using namespace triton::gpu;
