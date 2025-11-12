@@ -342,6 +342,13 @@ static const char *hipLibSearchPaths[] = {{"{libhip_path}"}};
 #define HIP_SYMBOL_LIST(FOR_EACH_ERR_FN, FOR_EACH_STR_FN)                     \\
   FOR_EACH_STR_FN(hipGetLastError)                                            \\
   FOR_EACH_STR_FN(hipGetErrorString, hipError_t hipError)                     \\
+#if HIP_VERSION_MAJOR >= 7                                                    \\
+  FOR_EACH_ERR_FN(hipDrvLaunchKernelEx,                                       \\
+                  const HIP_LAUNCH_CONFIG *config,                            \\
+                  hipFunction_t f,                                            \\
+                  void **kernelParams,                                        \\
+                  void **extra)                                               \\
+#endif                                                                        \\
   FOR_EACH_ERR_FN(hipModuleLaunchKernel, hipFunction_t f,                     \\
                   unsigned int gridDimX, unsigned int gridDimY,               \\
                   unsigned int gridDimZ, unsigned int blockDimX,              \\
@@ -441,13 +448,37 @@ static inline void gpuAssert(hipError_t code, const char *file, int line)
 #define HIP_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int shared_memory, hipStream_t stream, hipFunction_t function, hipDeviceptr_t profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+  if (gridX * gridY * gridZ <= 0)
+    return;
   hipDeviceptr_t global_scratch = 0;
   void *params[] = {{ {', '.join(params)} }};
-  if (gridX*gridY*gridZ > 0 && launch_cooperative_grid) {{
+  if (launch_cooperative_grid) {{
     HIP_CHECK(hipSymbolTable.hipModuleLaunchCooperativeKernel(function, gridX, gridY, gridZ, {warp_size}*num_warps, 1, 1, shared_memory, stream, params, 0));
     return;
   }}
-  if (gridX*gridY*gridZ > 0) {{
+#if HIP_VERSION_MAJOR >= 7                                                    \\
+  else if (num_ctas > 1){{
+    HIP_LAUNCH_CONFIG config;
+    config.gridDimX = gridX * num_ctas;
+    config.gridDimY = gridY;
+    config.gridDimZ = gridZ;
+    config.blockDimX = {warp_size}*num_warps;
+    config.blockDimY = 1;
+    config.blockDimZ = 1;
+    hipLaunchAttribute attribute[1];
+    attribute[0].id = hipLaunchAttributeClusterDimension;
+    attribute[0].val.clusterDim.x = num_ctas;
+    attribute[0].val.clusterDim.y = 1;
+    attribute[0].val.clusterDim.z = 1;
+    config.attrs = attribute;
+    config.numAttrs = 1;
+    config.hStream = stream;
+    config.sharedMemBytes = shared_memory;
+    HIP_CHECK(hipSymbolTable.hipDrvLaunchKernelEx(&config, function, params, 0));
+    return;
+  }}
+#endif
+  else {{
     HIP_CHECK(hipSymbolTable.hipModuleLaunchKernel(function, gridX, gridY, gridZ, {warp_size}*num_warps, 1, 1, shared_memory, stream, params, 0));
   }}
 }}
