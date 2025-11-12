@@ -441,30 +441,6 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_amdgcn(src, metadata, options):
-
-        def _dump_mir_if_requested(kernel_name):
-            """
-            Dump MIR if `TRITON_DUMP_MIR` environment variable (which contains path to dump MIR file) is set.
-            """
-            import os
-            dump_mir_path = os.environ.get('TRITON_DUMP_MIR')
-
-            if not dump_mir_path:
-                return
-
-            dump_mir_path += '/' + kernel_name + '.txt'
-            # Generate MIR
-            mir = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion)
-
-            # Ensure directory exists
-            Path(dump_mir_path).parent.mkdir(parents=True, exist_ok=True)
-
-            # Write MIR to file
-            with open(dump_mir_path, 'w') as f:
-                f.write(mir)
-                f.write("---")
-                f.write("\n========== SCHEDULING DAG ==========\n")
-
         # Find kernel names (there should only be one)
         # We get the name at the last possible step to accommodate `triton.compile`
         # on user-provided LLVM
@@ -474,7 +450,9 @@ class HIPBackend(BaseBackend):
         # llvm -> hsaco
         flags = []
         features = '-real-true16' if 'gfx11' in options.arch else ''
-        mir = _dump_mir_if_requested(names[0])
+        ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
+        dump_file_id = names[0] + '_' + ir_hash
+        mir = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion, dump_file_id)
       # if not mir:
       #     amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
       #                                    False)
@@ -482,7 +460,7 @@ class HIPBackend(BaseBackend):
       #     amdgcn = llvm.translate_mir_to_asm(mir, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
       #                                    False)
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
-                                       False, names[0])
+                                       False, dump_file_id)
         if knobs.amd.dump_amdgcn:
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
