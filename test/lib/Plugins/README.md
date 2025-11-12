@@ -142,6 +142,13 @@ if __name__ == '__main__':
       knobs.runtime.add_stages_inspection_hook = inspect_stages_hook
     h = kernel[grid](BLOCK_SIZE=1024)
     print(h.asm["ttgir"])
+
+    # Unset the hook and clear the kernel cache to go back to the
+    # standard pipeline
+    kernel.device_caches.clear()
+    knobs.runtime.add_stages_inspection_hook = None
+    h = kernel2[grid](BLOCK_SIZE=1024)
+    print(h.asm["ttgir"])
 ```
 
 ``` bash
@@ -162,6 +169,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @foo() attributes {noinline = false} {
+    tt.return loc(#loc1)
+  } loc(#loc)
+} loc(#loc)
+#loc = loc("/home/triton/test.py":13:0)
+#loc1 = loc("/home/triton/test.py":14:4)
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @kernel() attributes {noinline = false} {
     tt.return loc(#loc1)
   } loc(#loc)
 } loc(#loc)
