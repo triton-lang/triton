@@ -36,7 +36,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
       sharedMemorySpace, /*mutableMemory=*/true);
   auto alloc =
       gpu::LocalAllocOp::create(rewriter, loc, memDescType).getResult();
-  auto barrierCTALayout = gpu::CTALayoutAttr::get(
+  auto barrierCTALayout = gpu::CTAEncodingAttr::fromSplitParams(
       /*context=*/tensorType.getContext(), /*CTAsPerCGA=*/{1},
       /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
   auto barrierEncoding = gpu::SwizzledSharedEncodingAttr::get(

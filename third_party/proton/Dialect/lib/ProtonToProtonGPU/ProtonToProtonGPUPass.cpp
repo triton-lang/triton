@@ -282,7 +282,7 @@ public:
     Value segment;
     Value buffer;
     if (bufferType == gpu::BufferType::SHARED) {
-      auto ctaLayout = triton::gpu::CTALayoutAttr::get(
+      auto ctaLayout = triton::gpu::CTAEncodingAttr::fromSplitParams(
           context, /*CTAsPerCGA=*/{1},
           /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
       auto encoding = triton::gpu::SwizzledSharedEncodingAttr::get(

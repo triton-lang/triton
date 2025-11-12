@@ -17,26 +17,22 @@ SmallVector<Value> translateTMAIndices(OpBuilder &builder, Location loc,
   return indices;
 }
 
-ttg::CTALayoutAttr updateCTALayoutForShape(ttg::CTALayoutAttr ctaLayout,
-                                           ArrayRef<int64_t> shape) {
+ttg::CTAEncodingAttr updateCTALayoutForShape(ttg::CTAEncodingAttr ctaLayout,
+                                             ArrayRef<int64_t> shape) {
   auto rank = shape.size();
   if (ctaLayout.getRank() == rank)
     return ctaLayout;
 
   auto ctx = ctaLayout.getContext();
-  std::optional<unsigned> twoCTADim = ctaLayout.getTwoCTADim();
   if (ctaLayout.getRank() > rank) {
     unsigned rankDiff = ctaLayout.getRank() - rank;
-    if (twoCTADim) {
-      if (*twoCTADim < rankDiff)
-        twoCTADim = std::nullopt;
-      else
-        twoCTADim = *twoCTADim - rankDiff;
-    }
-    return ttg::CTALayoutAttr::get(
-        ctx, ctaLayout.getCTAsPerCGA().drop_front(rankDiff),
-        ctaLayout.getCTASplitNum().drop_front(rankDiff),
-        ctaLayout.getCTAOrder().drop_front(rankDiff), twoCTADim);
+    auto CTAsPerCGA = ctaLayout.getCTAsPerCGA();
+    auto CTASplitNum = ctaLayout.getCTASplitNum();
+    auto CTAOrder = ctaLayout.getCTAOrder();
+    return ttg::CTAEncodingAttr::fromSplitParams(
+        ctx, ArrayRef(CTAsPerCGA).drop_front(rankDiff),
+        ArrayRef(CTASplitNum).drop_front(rankDiff),
+        ArrayRef(CTAOrder).drop_front(rankDiff));
   }
   // For rank-reducing loads, we need to rank-increase the CTA Layout
   auto rankDiff = rank - ctaLayout.getRank();
@@ -53,10 +49,8 @@ ttg::CTALayoutAttr updateCTALayoutForShape(ttg::CTALayoutAttr ctaLayout,
     CTAOrder[i] = rank - i;
   }
   llvm::copy(ctaLayout.getCTAOrder(), CTAOrder.begin() + rankDiff);
-  if (twoCTADim)
-    twoCTADim = *twoCTADim + rankDiff;
-  return ttg::CTALayoutAttr::get(ctx, CTAsPerCGA, CTASplitNum, CTAOrder,
-                                 twoCTADim);
+  return ttg::CTAEncodingAttr::fromSplitParams(ctx, CTAsPerCGA, CTASplitNum,
+                                               CTAOrder);
 }
 
 ttg::SharedEncodingTrait

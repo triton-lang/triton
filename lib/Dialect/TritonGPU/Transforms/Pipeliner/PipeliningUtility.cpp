@@ -442,9 +442,9 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
       rewriter.getBlock()->getParentOp()->getParentOfType<ModuleOp>());
   Attribute sharedMemorySpace =
       ttg::SharedMemorySpaceAttr::get(rewriter.getContext());
-  auto barrierCTALayout =
-      ttg::CTALayoutAttr::get(/*context=*/ctx, /*CTAsPerCGA=*/{numCTAs},
-                              /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
+  auto barrierCTALayout = ttg::CTAEncodingAttr::fromSplitParams(
+      /*context=*/ctx, /*CTAsPerCGA=*/{numCTAs},
+      /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
   auto barrierEncoding =
       ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
   ttg::MemDescType memDescType = ttg::MemDescType::get(

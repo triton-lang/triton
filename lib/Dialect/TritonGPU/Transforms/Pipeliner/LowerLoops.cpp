@@ -463,7 +463,8 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule,
         canUseAsyncCp = op.getResultTypes()[0].getIntOrFloatBitWidth() >= 32;
         sharedEncoding = ttg::SwizzledSharedEncodingAttr::get(
             forOp.getContext(), 1, 1, 1, {0},
-            ttg::CTALayoutAttr::get(forOp.getContext(), {1}, {1}, {0}));
+            ttg::CTAEncodingAttr::fromSplitParams(forOp.getContext(), {1}, {1},
+                                                  {0}));
         if (canUseAsyncCp) {
           scalarLoads.push_back(&op);
         }

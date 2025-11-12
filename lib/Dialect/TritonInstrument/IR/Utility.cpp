@@ -18,7 +18,7 @@ namespace {
 BlockedEncodingAttr getThreadLocalBlockedEncoding(MLIRContext *ctx,
                                                   unsigned int size,
                                                   unsigned int warps) {
-  auto ctaLayout = CTALayoutAttr::getDefault(ctx, /*rank=*/1);
+  auto ctaLayout = CTAEncodingAttr::getDefault(ctx, /*rank=*/1);
   return BlockedEncodingAttr::get(ctx,
                                   /*sizePerThread=*/{size},
                                   /*threadsPerWarp=*/{32},
@@ -30,7 +30,7 @@ BlockedEncodingAttr getThreadLocalBlockedEncoding(MLIRContext *ctx,
                                                   unsigned int buffers,
                                                   unsigned int barriers,
                                                   unsigned int warps) {
-  auto ctaLayout = CTALayoutAttr::getDefault(ctx, /*rank=*/2);
+  auto ctaLayout = CTAEncodingAttr::getDefault(ctx, /*rank=*/2);
   return BlockedEncodingAttr::get(ctx,
                                   /*sizePerThread=*/{buffers, barriers},
                                   /*threadsPerWarp=*/{1, 32},

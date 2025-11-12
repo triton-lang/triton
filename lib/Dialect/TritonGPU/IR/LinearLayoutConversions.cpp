@@ -27,10 +27,10 @@ namespace {
 //    for register layouts, and input dims [offset] for shared layouts.
 //  - cgaLayout: Arrangement of multiple blocks, i.e. input dims [block].
 //
-// Note that this is inconsistent with the type name CTALayoutAttr.  That type
+// Note that this is inconsistent with the type name CTAEncodingAttr.  That type
 // is equivalent to our cgaLayout.
 //
-// IMO the name CTALayoutAttr is wrong.  If we tried to be consistent anyway,
+// IMO the name CTAEncodingAttr is wrong.  If we tried to be consistent anyway,
 // then we'd have to rename ctaLayout to "warpLayout".  I think that's more
 // confusing than being inconsistent about "cgaLayout", especially when we have
 // to consider the size of the warpLayout (surely that's not the "warpSize").
@@ -156,34 +156,8 @@ sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
 
 } // namespace
 
-LinearLayout makeCgaLayout(CTALayoutAttr layout) {
-  MLIRContext *ctx = layout.getContext();
-  StringAttr kBlock = S("block");
-
-  int rank = layout.getCTAOrder().size();
-  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
-
-  LinearLayout ret = LinearLayout::empty();
-  auto ctaSplitNum = to_vector(layout.getCTASplitNum());
-  auto ctaPerCGA = to_vector(layout.getCTAsPerCGA());
-  if (layout.getTwoCTADim().has_value()) {
-    auto dim = layout.getTwoCTADim().value();
-    ret *= LinearLayout::identity1D(2, kBlock, outDimNames[dim]);
-    ctaSplitNum[dim] /= 2;
-    ctaPerCGA[dim] /= 2;
-  }
-  for (int i = 0; i < rank; i++) {
-    // Start with the most minor dimension, which is order[0].
-    int dim = layout.getCTAOrder()[i];
-    int split = ctaSplitNum[dim];
-    int ctas = ctaPerCGA[dim];
-    assert(ctas % split == 0);
-    ret *= LinearLayout::identity1D(split, kBlock, outDimNames[dim]) *
-           LinearLayout::zeros1D(ctas / split, kBlock, outDimNames[dim]);
-  }
-
-  // Transpose to standard order (dim0, dim1, ...).
-  return ret.transposeOuts(outDimNames);
+LinearLayout makeCgaLayout(CTAEncodingAttr layout) {
+  return layout.getLinearLayout();
 }
 
 // Returns the layout of a single core matrix which tiles the nvmma layout
@@ -1313,12 +1287,15 @@ LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
 }
 
 LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
-                                    CTALayoutAttr cgaLayoutAttr,
+                                    CTAEncodingAttr cgaLayoutAttr,
                                     ArrayRef<int64_t> shape) {
   int rank = shape.size();
   assert(ctaLayout.getNumOutDims() == rank);
-  assert(cgaLayoutAttr.getCTAOrder().size() == rank);
   MLIRContext *ctx = cgaLayoutAttr.getContext();
+  if (cgaLayoutAttr.getRank() == 0 ||
+      cgaLayoutAttr.getCTAOrder().size() != rank) {
+    cgaLayoutAttr = CTAEncodingAttr::getDefault(ctx, rank);
+  }
 
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 
@@ -1461,7 +1438,7 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
                            warpLayout.transposeOuts(outDimNames);
 
   return combineCtaCgaWithShape(
-      ctaLayout, CTALayoutAttr::getDefault(ctx, /*rank=*/2), dotOperandShape);
+      ctaLayout, CTAEncodingAttr::getDefault(ctx, /*rank=*/2), dotOperandShape);
 }
 
 // PTX ISA - Warp-level MMA Block Scaling
@@ -1477,7 +1454,7 @@ LinearLayout chooseScaledWmmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
 LinearLayout getSM120DotScaledScaleLayout(MLIRContext *ctx,
                                           ArrayRef<int64_t> shape, int opIdx,
                                           ArrayRef<unsigned> warpsPerCTA,
-                                          CTALayoutAttr ctaLayout) {
+                                          CTAEncodingAttr ctaLayout) {
   unsigned rank = shape.size();
   auto outDims = standardOutDimNames(ctx, rank);
   StringAttr kRegister = StringAttr::get(ctx, "register");
@@ -1591,8 +1568,9 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int dotOperandIdx,
   LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
                            warpLayout.transposeOuts(outDimNames);
 
-  auto ctaLay = CTALayoutAttr::get(/*context=*/ctx, /*CTAsPerCGA=*/{1, 1},
-                                   /*CTASplitNum=*/{1, 1}, /*CTAOrder=*/{1, 0});
+  auto ctaLay = CTAEncodingAttr::fromSplitParams(
+      /*context=*/ctx, /*CTAsPerCGA=*/{1, 1},
+      /*CTASplitNum=*/{1, 1}, /*CTAOrder=*/{1, 0});
   auto finalLay = combineCtaCgaWithShape(ctaLayout, ctaLay, dotOperandShape);
   return finalLay;
 }

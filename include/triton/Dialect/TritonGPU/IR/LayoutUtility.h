@@ -3,6 +3,6 @@
 
 namespace mlir::triton::gpu {
 
-CTALayoutAttr permuteCTALayout(MLIRContext *ctx, CTALayoutAttr layout,
-                               ArrayRef<int> order);
+CTAEncodingAttr permuteCTALayout(MLIRContext *ctx, CTAEncodingAttr layout,
+                                 ArrayRef<int> order);
 } // namespace mlir::triton::gpu

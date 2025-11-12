@@ -35,9 +35,10 @@ createDistributedEncodings(MLIRContext &ctx) {
   // Define a tensor shape
   auto rank = 2;
   SmallVector<SmallVector<unsigned>> orders = {{0, 1}, {1, 0}};
-  SmallVector<triton::gpu::CTALayoutAttr> ctaLayouts = {
-      triton::gpu::CTALayoutAttr::getDefault(&ctx, rank),
-      triton::gpu::CTALayoutAttr::get(&ctx, {4, 2}, {2, 2}, {1, 0}),
+  SmallVector<triton::gpu::CTAEncodingAttr> ctaLayouts = {
+      triton::gpu::CTAEncodingAttr::getDefault(&ctx, rank),
+      triton::gpu::CTAEncodingAttr::fromSplitParams(&ctx, {4, 2}, {2, 2},
+                                                    {1, 0}),
   };
   std::vector<DistributedEncodingTrait> distributedEncodings;
 
@@ -478,8 +479,8 @@ class AMDLayoutTest : public ::testing::Test {
 public:
   AMDLayoutTest() {
     ctx.getOrLoadDialect<TritonGPUDialect>();
-    ctaLayout =
-        triton::gpu::CTALayoutAttr::get(&ctx, ctaPerCGA, ctaSplit, ctaOrder);
+    ctaLayout = triton::gpu::CTAEncodingAttr::fromSplitParams(
+        &ctx, ctaPerCGA, ctaSplit, ctaOrder);
     f16Ty = Float16Type::get(&ctx);
   }
 
@@ -493,7 +494,7 @@ protected:
   const SmallVector<unsigned> ctaPerCGA{1, 1, 1};
   const SmallVector<unsigned> ctaSplit{1, 1, 1};
   const SmallVector<unsigned> ctaOrder{2, 1, 0};
-  triton::gpu::CTALayoutAttr ctaLayout;
+  triton::gpu::CTAEncodingAttr ctaLayout;
   Type f16Ty;
 };
 
