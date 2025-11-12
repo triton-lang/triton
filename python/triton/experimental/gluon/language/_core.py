@@ -1,6 +1,5 @@
 from __future__ import annotations
 import math
-import builtins
 from typing import TypeVar, List, TYPE_CHECKING, Tuple
 from functools import wraps
 import warnings
@@ -602,14 +601,5 @@ def dot_fma(a, b, acc, _semantic=None):
 
 
 @constexpr_function
-def print_layout(layout, shape):
-
-    def _unwrap(x):
-        if isinstance(x, constexpr):
-            return _unwrap(x.value)
-        if isinstance(x, (list, builtins.tuple, tuple)):
-            return [_unwrap(i) for i in list(x)]
-        return x
-
-    linear_layout = _materialize_linear_layout_builtin(_unwrap(layout), _unwrap(shape))
-    print(linear_layout)
+def static_print_layout(layout, shape):
+    print(_materialize_linear_layout_builtin(layout, shape))

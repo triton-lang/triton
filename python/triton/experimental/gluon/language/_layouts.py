@@ -691,10 +691,10 @@ def warps_per_cta(layout, shape):
 
 def _materialize_linear_layout_builtin(layout, shape):
     if isinstance(layout, AutoLayout):
-        raise ValueError("print_layout requires a resolved layout, got AutoLayout")
+        raise ValueError("static_print_layout requires a resolved layout, got AutoLayout")
 
     if not (isinstance(shape, list) and all(isinstance(dim, int) for dim in shape)):
-        raise TypeError(f"print_layout shape entries must be ints, got {shape}")
+        raise TypeError(f"static_print_layout shape entries must be ints, got {shape}")
 
     if isinstance(layout, SharedLinearLayout):
         if layout.shape != shape:
