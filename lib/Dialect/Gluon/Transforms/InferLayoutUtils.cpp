@@ -67,7 +67,6 @@ bool encodingsMayVary(Operation *op) {
   return isa<triton::JoinOp, triton::SplitOp, triton::ReshapeOp, triton::CatOp,
              triton::TransOp>(op);
 }
-} // namespace
 
 LogicalResult
 updateEncoding(ArrayRef<Value> values, LayoutInfo info, FuncOp *func,
@@ -94,9 +93,11 @@ updateEncoding(ArrayRef<Value> values, LayoutInfo info, FuncOp *func,
   }
   return success();
 }
+} // namespace
 
-LogicalResult inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck,
-                          const llvm::SmallVector<std::pair<Value, Attribute>> &seedEncodings) {
+LogicalResult inferLayout(
+    FuncOp func, llvm::function_ref<bool(Type)> typeCheck,
+    const llvm::SmallVector<std::pair<Value, Attribute>> &seedEncodings) {
   // Disallow auto encoding accross function call boundaries
   for (auto argTy : func.getArgumentTypes()) {
     if (typeCheck(argTy)) {

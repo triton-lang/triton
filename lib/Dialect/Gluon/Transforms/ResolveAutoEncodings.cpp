@@ -22,7 +22,8 @@ bool isAutoEncodingTensorType(Type ty) {
   auto tensorTy = dyn_cast<RankedTensorType>(ty);
   return tensorTy && isa<gluon::AutoEncodingAttr>(tensorTy.getEncoding());
 }
-LogicalResult inferAutoLayout(ModuleOp &mod, llvm::function_ref<bool(Type)> typeCheck) {
+LogicalResult inferAutoLayout(ModuleOp &mod,
+                              llvm::function_ref<bool(Type)> typeCheck) {
   for (auto &op : *mod.getBody()) {
     auto func = dyn_cast<FuncOp>(&op);
     if (!func)

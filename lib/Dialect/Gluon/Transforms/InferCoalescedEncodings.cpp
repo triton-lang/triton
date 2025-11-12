@@ -38,12 +38,13 @@ bool isCoalescedEncodingTensorType(Type ty) {
   return tensorTy && isa<gluon::CoalescedEncodingAttr>(tensorTy.getEncoding());
 }
 
-LogicalResult InferCoalescedLayout(ModuleOp &mod, llvm::function_ref<bool(Type)> typeCheck) {
+LogicalResult InferCoalescedLayout(ModuleOp &mod,
+                                   llvm::function_ref<bool(Type)> typeCheck) {
   // axis info analysis
   ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
 
-  // infer function-level coalesced layout 
+  // infer function-level coalesced layout
   for (auto &op : *mod.getBody()) {
     auto func = dyn_cast<FuncOp>(&op);
     if (!func)
@@ -77,9 +78,9 @@ LogicalResult InferCoalescedLayout(ModuleOp &mod, llvm::function_ref<bool(Type)>
       auto ctaLayout = getDefaultCTALayout(tensorType, numCTAs);
       auto shapePerCTA = ttg::getShapePerCTA(ctaLayout.getCTASplitNum(),
                                              tensorType.getShape());
-      auto layout = ttg::buildCoalescedEncoding(mod.getContext(), axisInfoAnalysis,
-                                                curr, numWarps, threadsPerWarp,
-                                                ctaLayout, shapePerCTA);
+      auto layout = ttg::buildCoalescedEncoding(
+          mod.getContext(), axisInfoAnalysis, curr, numWarps, threadsPerWarp,
+          ctaLayout, shapePerCTA);
       // set seed value
       for (auto value : llvm::to_vector_of<Value>(curr->getOperands()))
         seedEncodings.push_back({value, layout});
@@ -113,8 +114,9 @@ class GluonInferCoalescedEncodingsPass
     if (failed(InferCoalescedLayout(moduleOp, isCoalescedEncodingTensorType)))
       return signalPassFailure();
 
-    //if (failed(doubleCheckEncodings(moduleOp, isCoalescedEncodingTensorType)))
-    //  return signalPassFailure();
+    // if (failed(doubleCheckEncodings(moduleOp,
+    // isCoalescedEncodingTensorType)))
+    //   return signalPassFailure();
   }
 };
 } // namespace mlir::triton::gluon

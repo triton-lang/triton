@@ -19,14 +19,10 @@ struct LayoutInfo {
 
   operator bool() { return bool(encoding); }
 };
-LogicalResult
-updateEncoding(ArrayRef<Value> values, LayoutInfo info, FuncOp *func,
-               llvm::MapVector<Value, LayoutInfo> &valueToEncoding,
-               llvm::PriorityWorklist<Value> &worklist,
-               llvm::MapVector<Attribute, uint64_t> &hashMemo);
 
-LogicalResult inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck, 
-                          const SmallVector<std::pair<Value, Attribute>> &seedEncodings);
+LogicalResult
+inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck,
+            const SmallVector<std::pair<Value, Attribute>> &seedEncodings);
 
 LogicalResult doubleCheckEncodings(ModuleOp &mod,
                                    llvm::function_ref<bool(Type)> typeCheck);
