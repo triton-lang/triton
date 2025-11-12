@@ -13,7 +13,6 @@ from triton_kernels.matmul import matmul_set_idle_sms, matmul, matmul_torch
 from triton_kernels.swiglu import swiglu, swiglu_fn, PrecisionConfig as SwiGLUPrecisionConfig
 from triton_kernels.tensor import convert_layout, wrap_torch_tensor, FP4, make_ragged_tensor_metadata
 from triton_kernels.tensor_details import layout
-from triton_kernels.topk import topk
 # numerics utilities
 from triton_kernels.numerics import InFlexData, OutFlexData
 from triton_kernels.numerics_details.mxfp import downcast_to_mxfp, upcast_from_mxfp, quantize_mxfp8_fn, downcast_to_mxfp_torch, upcast_from_mxfp_torch, MXFP_BLOCK_SIZE
@@ -38,16 +37,28 @@ def alloc_rand(shape, device, dtype, requires_grad=True):
 def alloc_rand_like(x):
     return alloc_rand(x.shape, x.device, x.dtype, x.requires_grad)
 
+def make_slice_sizes(n_slices, total_size, device="cuda"):
+    dtype = torch.int32
+    if total_size < 0:
+        raise ValueError("total_size must be non-negative")
+    if n_slices <= 0:
+        return torch.zeros((0,), dtype=dtype, device=device)
+    if total_size == 0:
+        return torch.zeros((n_slices,), dtype=dtype, device=device)
+    probs = torch.ones(n_slices, device=device) / n_slices
+    assignments = torch.multinomial(probs, total_size, replacement=True)
+    counts = torch.bincount(assignments, minlength=n_slices).to(dtype)
+    assert counts.sum().item() == total_size
+    assert len(counts) == n_slices
+    return counts
 
 def init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter, device="cuda"):
-    logits = torch.randn((m, n_expts_tot), dtype=torch.float16, device=device, requires_grad=True)
-    sparse_logits = topk(logits, n_expts_act)
-    dispatch_indx = sparse_logits.mask_metadata.row_sorted_indx
-    combine_indx = sparse_logits.mask_metadata.col_sorted_indx
-    ragged_batch_metadata = make_ragged_tensor_metadata(sparse_logits.mask_metadata.col_sum, dispatch_indx.shape[0])
-    gather_src_indx = torch.div(combine_indx, n_expts_act, rounding_mode='trunc')
-    return m, ragged_batch_metadata, gather_src_indx if do_gather else None, combine_indx if do_scatter else None
-
+    n_rows = m * n_expts_act
+    slice_sizes = make_slice_sizes(n_expts_tot, n_rows, device=device)
+    gather_indx = torch.div(torch.randperm(n_rows, device=device), n_expts_act, rounding_mode='trunc') if do_gather else None
+    scatter_indx = torch.randperm(n_rows, device=device) if do_scatter else None
+    ragged_batch_metadata = make_ragged_tensor_metadata(slice_sizes, n_rows)
+    return m, ragged_batch_metadata, gather_indx, scatter_indx
 
 def init_compute_data(m, n, k, ragged_metadata, gindx, sindx, n_expts_tot, n_expts_act, mode, act_dtype, weight_dtype,
                       has_y_gammas, requires_grad=True, device="cuda",
@@ -461,8 +472,7 @@ def _test_op(m, n, k, split_k, do_gather, do_scatter, inner_expt_opt, has_y_gamm
                                    mode, n_expts_tot, expt_is_inner, device=device)
     # precision_opt.x_pad_trans_requires_flexpoint = False
     if mode == "ragged":
-        m, x_ragged_metadata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter,
-                                                   device=device)
+        m, x_ragged_metadata, gindx, sindx = init_routing_data(m, n_expts_tot, n_expts_act, do_gather, do_scatter, device=device)
     else:
         x_ragged_metadata = gindx = sindx = None
 
