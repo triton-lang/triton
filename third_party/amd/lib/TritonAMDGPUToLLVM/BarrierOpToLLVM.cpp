@@ -1,5 +1,6 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
+#include "amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -17,6 +18,10 @@ namespace {
 struct InitBarrierOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::InitBarrierOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  InitBarrierOpConversion(const LLVMTypeConverter &converter,
+                          const AMD::TargetInfo &targetInfo,
+                          PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::InitBarrierOp op, OpAdaptor adaptor,
@@ -33,7 +38,8 @@ struct InitBarrierOpConversion
     auto *ldsBarrierInitBlock = rewriter.createBlock(
         curBlock->getParent(), std::next(Region::iterator(curBlock)));
     rewriter.setInsertionPointToEnd(curBlock);
-    auto id = getThreadId(rewriter, loc);
+
+    auto id = targetInfo.getThreadId(rewriter, loc);
     auto pred = b.icmp_eq(id, b.i32_val(0));
     LLVM::CondBrOp::create(rewriter, loc, pred, ldsBarrierInitBlock, endBlock);
     rewriter.setInsertionPointToEnd(ldsBarrierInitBlock);
@@ -50,6 +56,8 @@ struct InitBarrierOpConversion
     rewriter.eraseOp(op);
     return success();
   }
+
+  const AMD::TargetInfo &targetInfo;
 };
 
 struct ArriveBarrierOpConversion
@@ -119,8 +127,8 @@ struct WaitBarrierOpConversion
 
 void mlir::triton::AMD::populateBarrierOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    PatternBenefit benefit) {
-  patterns.add<InitBarrierOpConversion>(typeConverter, benefit);
+    const AMD::TargetInfo &targetInfo, PatternBenefit benefit) {
+  patterns.add<InitBarrierOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit);
   patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
 }

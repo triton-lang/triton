@@ -63,6 +63,7 @@ void populateTensorPtrOpsToLLVMPatterns(LLVMTypeConverter &typeConverter,
 
 void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns,
+                                     const TargetInfo &targetInfo,
                                      PatternBenefit benefit);
 } // namespace mlir::triton::AMD
 

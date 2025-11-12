@@ -32,6 +32,8 @@ public:
   // End of Hardware Indices
   // -----------------------------------------------------------------------
 
+  virtual bool supportMaximumMinimum() const = 0;
+
   virtual Value ballot(RewriterBase &rewriter, Location loc, Type type,
                        Value cmp) const = 0;
 
