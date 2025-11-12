@@ -52,9 +52,7 @@ class AMDMFMALayout(DistributedLayout):
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
         super().__setattr__("element_bitwidth", _unwrap_if_constexpr(self.element_bitwidth))
         super().__setattr__("tiles_per_warp", _unwrap_if_constexpr(self.tiles_per_warp))
-        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
-        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
-        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+        _realize_cta_layout(self, len(self.warps_per_cta))
 
         if self.element_bitwidth is None:
             object.__setattr__(self, "element_bitwidth", 32)
@@ -86,9 +84,6 @@ class AMDMFMALayout(DistributedLayout):
 
         rank = len(self.warps_per_cta)
         _realize_cta_layout(self, rank)
-        assert len(self.ctas_per_cga) == rank
-        assert len(self.cta_split_num) == rank
-        assert len(self.cta_order) == rank
 
     def __hash__(self):
         return hash((
@@ -137,12 +132,11 @@ class AMDWMMALayout(DistributedLayout):
         super().__setattr__("version", _unwrap_if_constexpr(self.version))
         super().__setattr__("transposed", _unwrap_if_constexpr(self.transposed))
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
-        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
-        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
-        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
+        rank = len(self.warps_per_cta)
+        _realize_cta_layout(self, rank)
 
         if self.tiles_per_warp is None:
-            tiles_per_warp = [1] * len(self.warps_per_cta)
+            tiles_per_warp = [1] * rank
         else:
             tiles_per_warp = _unwrap_if_constexpr(self.tiles_per_warp)
 

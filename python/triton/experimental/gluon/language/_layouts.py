@@ -19,11 +19,12 @@ def _realize_cta_layout(layout, rank):
     object.__setattr__(layout, "cta_split_num", _unwrap_if_constexpr(cta_split_num))
     object.__setattr__(layout, "cta_order", _unwrap_if_constexpr(cta_order))
 
-    two_cta_dim = getattr(layout, "two_cta_dim", None)
-    two_cta_dim = _unwrap_if_constexpr(two_cta_dim)
-    assert two_cta_dim is None or (0 <= two_cta_dim <
-                                   rank), f"two_cta_dim must be between 0 and rank. Got {two_cta_dim} for rank {rank}"
-    object.__setattr__(layout, "two_cta_dim", two_cta_dim)
+    if hasattr(layout, "two_cta_dim"):
+        two_cta_dim = layout.two_cta_dim
+        two_cta_dim = _unwrap_if_constexpr(two_cta_dim)
+        assert two_cta_dim is None or (
+            0 <= two_cta_dim < rank), f"two_cta_dim must be between 0 and rank. Got {two_cta_dim} for rank {rank}"
+        object.__setattr__(layout, "two_cta_dim", two_cta_dim)
 
 
 class DistributedLayout:
