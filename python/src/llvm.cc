@@ -357,12 +357,9 @@ std::string translateMIRToASM(const std::string &mirPath,
   auto startAfterOpt = options.find("start-after");
   std::string originalStartAfter;
   if (startAfterOpt != options.end()) {
-//  startAfterOpt->second->addOccurrence(1, "start-after", "machine-scheduler");
     auto *optPtr = static_cast<llvm::cl::opt<std::string> *>(startAfterOpt->second);
-//  originalStartAfter = optPtr->getValue();
-    llvm::errs() << "start-after option set successfully\n";
-  } else {
-    llvm::errs() << "WARNING: start-after option not found!\n";
+    originalStartAfter = optPtr->getValue();
+    optPtr->setValue("machine-scheduler");
   }
 
   // Enable pass debugging
@@ -371,14 +368,6 @@ std::string translateMIRToASM(const std::string &mirPath,
 //  debugPassOpt->second->addOccurrence(1, "debug-pass", "Structure");
 //}
 
-  auto enableMISchedOpt = options.find("enable-misched");
-  bool originalEnableMisched;
-  if (enableMISchedOpt != options.end()) {
-    auto *optPtr = static_cast<llvm::cl::opt<bool> *>(enableMISchedOpt->second);
-    originalEnableMisched = optPtr->getValue();
-    enableMISchedOpt->second->addOccurrence(1, "enable-misched", "false");
-  }
-
   auto enablePostMISchedOpt = options.find("enable-post-misched");
   bool originalEnablePostMisched;
   if (enablePostMISchedOpt != options.end()) {
@@ -386,13 +375,6 @@ std::string translateMIRToASM(const std::string &mirPath,
     originalEnablePostMisched = optPtr->getValue();
     enablePostMISchedOpt->second->addOccurrence(1, "enable-post-misched", "false");
   }
-
-//  auto optIt = options.find("print-after-all");
-//  if (optIt != options.end()) {
-//    auto optPtr = static_cast<llvm::cl::opt<bool> *>(optIt->second);
-//    *optPtr = true;
-//    llvm::errs() << "print-after-all option set successfully\n";
-//  }
 
   // Apply other flags
   for (const std::string &flag : flags) {
@@ -434,45 +416,8 @@ std::string translateMIRToASM(const std::string &mirPath,
   auto machine = createTargetMachine(module.get(), proc, enable_fp_fusion, features);
   module->setDataLayout(machine->createDataLayout());
 
-  // Create MachineModuleInfoWrapperPass FIRST
-  llvm::MachineModuleInfoWrapperPass *MMIWP =
-      new llvm::MachineModuleInfoWrapperPass(machine.get());
-
-  // Create PassManager and add MMIWP
+  // Create PassManager
   llvm::legacy::PassManager pass;
-  pass.add(MMIWP);
-
-  // Now create MachineModuleInfo and parse machine functions
-  llvm::MachineModuleInfo MMI(machine.get());
-  if (mirParser->parseMachineFunctions(*module, MMI)) {
-    llvm::report_fatal_error("Failed to parse machine functions from MIR");
-  }
-
-  // Verify machine functions
-//llvm::errs() << "Verifying machine functions...\n";
-//for (auto &F : *module) {
-//  if (auto *MF = MMIWP->getMMI().getMachineFunction(F)) {
-//      auto &MRI = MF->getRegInfo();
-//      // Freeze reserved registers
-//      if (!MRI.reservedRegsFrozen()) {
-//        MRI.freezeReservedRegs();
-//      }
-//    llvm::errs() << "  Function: " << F.getName() << "\n";
-//    llvm::errs() << "    Num basic blocks: " << MF->size() << "\n";
-
-//    // Check if basic blocks are valid
-//    for (auto &MBB : *MF) {
-//      llvm::errs() << "    BB: " << MBB.getNumber() << " has " << MBB.size() << " instructions\n";
-//    }
-
-//    // Try to verify
-//    if (!MF->verify(nullptr, nullptr, nullptr, /*AbortOnError=*/false)) {
-//      llvm::errs() << "    WARNING: MachineFunction verification FAILED!\n";
-//    } else {
-//      llvm::errs() << "    MachineFunction verification passed\n";
-//    }
-//  }
-//}
 
   // Emit code from MIR
   std::string result;
@@ -483,8 +428,18 @@ std::string translateMIRToASM(const std::string &mirPath,
     auto fileType = isObject ? llvm::CodeGenFileType::ObjectFile
                              : llvm::CodeGenFileType::AssemblyFile;
 
+    // Create MachineModuleInfoWrapperPass FIRST
+    llvm::MachineModuleInfoWrapperPass *MMIWP =
+        new llvm::MachineModuleInfoWrapperPass(machine.get());
+
     // This will run the remaining machine passes and emit assembly/object
-    machine->addPassesToEmitFile(pass, pstream, nullptr, fileType);
+    machine->addPassesToEmitFile(pass, pstream, nullptr, fileType, /*NoVerify*/false, MMIWP);
+
+    // Now parse machine functions
+    if (mirParser->parseMachineFunctions(*module, MMIWP->getMMI())) {
+      llvm::report_fatal_error("Failed to parse machine functions from MIR");
+    }
+
     pass.run(*module);
   }
 
@@ -494,9 +449,9 @@ std::string translateMIRToASM(const std::string &mirPath,
     optPtr->setValue(originalStartAfter);
   }
 
-  if (enableMISchedOpt != options.end()) {
-    auto *optPtr = static_cast<llvm::cl::opt<bool> *>(enableMISchedOpt->second);
-    optPtr->setValue(originalEnableMisched);
+  if (enablePostMISchedOpt != options.end()) {
+    auto *optPtr = static_cast<llvm::cl::opt<bool> *>(enablePostMISchedOpt->second);
+    optPtr->setValue(originalEnablePostMisched);
   }
 
   return result;

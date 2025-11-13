@@ -446,12 +446,6 @@ class HIPBackend(BaseBackend):
         ir_hash = hashlib.sha256(src.encode("utf-8")).hexdigest()
         dump_file_id = names[0] + '_' + ir_hash
         mir = llvm.translate_to_mir(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion, dump_file_id)
-      # if not mir:
-      #     amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
-      #                                    False)
-      # else:
-      #     amdgcn = llvm.translate_mir_to_asm(mir, amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
-      #                                    False)
         swap_mir_path = os.environ.get('TRITON_SWAP_MIR')
         if swap_mir_path:
             amdgcn = llvm.translate_mir_to_asm(swap_mir_path + '/' + dump_file_id + '.txt', amd.TARGET_TRIPLE, options.arch, features, flags, options.enable_fp_fusion,
