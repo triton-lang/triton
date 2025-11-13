@@ -31,6 +31,7 @@ from ._core import (
     tuple_type,
     _unwrap_if_constexpr,
     # API Functions
+    add,
     allocate_shared_memory,
     arange,
     associative_scan,
@@ -62,6 +63,7 @@ from ._core import (
     max_contiguous,
     maximum,
     minimum,
+    mul,
     multiple_of,
     num_programs,
     permute,
@@ -76,6 +78,7 @@ from ._core import (
     static_print,
     static_range,
     store,
+    sub,
     thread_barrier,
     to_linear_layout,
     to_tensor,

@@ -84,7 +84,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 // CHECK: tt.load
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
@@ -127,7 +127,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: gpu.barrier
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -197,7 +197,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
@@ -226,7 +226,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: gpu.barrier
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -520,7 +520,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
@@ -549,7 +549,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: gpu.barrier
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -622,7 +622,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 // CHECK: tt.load
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
@@ -665,7 +665,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: gpu.barrier
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -998,7 +998,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
@@ -1028,7 +1028,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: gpu.barrier
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -1107,7 +1107,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 // CHECK: tt.load
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
@@ -1151,7 +1151,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: gpu.barrier
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -1404,7 +1404,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
@@ -1433,7 +1433,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: gpu.barrier
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -1526,7 +1526,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
 // CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
 // CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
+// CHECK: amdg.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 // CHECK: tt.load
 // CHECK: %[[SLICEA0:.+]] = ttg.local_load
@@ -1569,7 +1569,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: gpu.barrier
 // CHECK: rocdl.sched.barrier 0
 // CHECK: scf.yield
-// CHECK: amdgpu.cond_barrier %[[WARPLOW]]
+// CHECK: amdg.cond_barrier %[[WARPLOW]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
@@ -1841,12 +1841,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK-LABEL: async_ns3_gemm
 // CHECK-NOT: rocdl
 // CHECK-NS3-LABEL: async_ns3_gemm
-// CHECK-NS3: amdgpu.cond_barrier
+// CHECK-NS3: amdg.cond_barrier
 // CHECK-NS3: %[[LL0:.+]] = ttg.local_load
 // CHECK-NS3: %[[LL1:.+]] = ttg.local_load
 // CHECK-NS3: ttg.async_wait
 // CHECK-NS3: tt.dot %[[LL0]], %[[LL1]]
-// CHECK-NS3: amdgpu.cond_barrier
+// CHECK-NS3: amdg.cond_barrier
 
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [32, 2], warpsPerCTA = [1, 8], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
@@ -1892,7 +1892,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 // CHECK-LABEL: gemm_mxfp4
-// CHECK: amdgpu.cond_barrier
+// CHECK: amdg.cond_barrier
 // CHECK: %[[WAIT:.+]] = ttg.async_wait
 // CHECK: ttg.async_copy_global_to_local
 // CHECK: ttg.async_copy_global_to_local
@@ -1910,7 +1910,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK: %[[LL3:.+]] = ttg.local_load
 // CHECK-SAME: %[[WAIT]]
 // CHECK: tt.dot_scaled %[[LL2]] scale %[[LL0]], %[[LL3]] scale %[[LL1]]
-// CHECK: amdgpu.cond_barrier
+// CHECK: amdg.cond_barrier
 
 #blocked = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [64, 1], warpsPerCTA = [1, 8], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
