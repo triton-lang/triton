@@ -50,7 +50,7 @@ triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
 }
 
 triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
-  auto aTy = cast<triton::gpu::TensorOrMemDesc>(a.getType()).getElementType();
+  auto aTy = cast<triton::TensorOrMemDesc>(a.getType()).getElementType();
   if (aTy.isF16()) {
     return triton::nvgpu::WGMMAEltType::f16;
   } else if (aTy.isBF16()) {
@@ -190,7 +190,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          bool needsPartialAccumulator,
                          uint32_t maxNumImpreciseAcc, bool sync, Value thread) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
-  auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
+  auto aTensorTy = cast<triton::TensorOrMemDesc>(a.getType());
   auto bTensorTy = cast<triton::gpu::MemDescType>(b.getType());
   auto dTensorTy = cast<RankedTensorType>(d.getType());
   bool aInShared = isa<SharedEncodingTrait>(aTensorTy.getEncoding());
@@ -277,7 +277,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
           auto aDotOpEnc =
               cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
           assert(aDotOpEnc.getKWidth() ==
-                 32 / aTensorTy.getElementTypeBitWidth());
+                 32 / aTensorTy.getElementType().getIntOrFloatBitWidth());
 
           unsigned regASize = (instrMNK[0] * instrMNK[2]) / 32;
           llvm::SmallVector<Value> regA =

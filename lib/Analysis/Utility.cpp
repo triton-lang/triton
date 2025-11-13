@@ -933,8 +933,7 @@ bool supportMMA(Value value, int version) {
   // types of both the operands are identical here.
   assert((version == 1 || version == 2 || version == 3) &&
          "Unexpected MMA layout version found");
-  auto elemTy =
-      cast<triton::gpu::TensorOrMemDesc>(value.getType()).getElementType();
+  auto elemTy = cast<triton::TensorOrMemDesc>(value.getType()).getElementType();
   // FP8 is not natively supported on all mma versions but it can always be
   // promoted to fp16 therefore we can always support it.
   bool isFP8 = llvm::isa<Float8E5M2Type, Float8E4M3FNType, Float8E5M2FNUZType,
@@ -951,8 +950,8 @@ bool supportMMA(Value value, int version) {
 // transfer via warp-shuffles, and if it's the identity on kLane just have to
 // reorder the registers.
 LinearLayout minimalCvtLayout(Type srcTy_, Type dstTy_) {
-  auto srcTy = cast<triton::gpu::TensorOrMemDesc>(srcTy_);
-  auto dstTy = cast<triton::gpu::TensorOrMemDesc>(dstTy_);
+  auto srcTy = cast<triton::TensorOrMemDesc>(srcTy_);
+  auto dstTy = cast<triton::TensorOrMemDesc>(dstTy_);
   LinearLayout srcLayout = toLinearLayout(srcTy);
   LinearLayout dstLayout = toLinearLayout(dstTy);
   auto sDims = to_vector(srcLayout.getInDimNames());

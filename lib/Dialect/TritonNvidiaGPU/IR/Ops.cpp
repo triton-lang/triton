@@ -51,7 +51,8 @@ LogicalResult WarpGroupDotOp::inferReturnTypes(
   inferredReturnTypes.push_back(accTy);
 
   // verify encodings
-  auto aEnc = cast<TensorOrMemDesc>(operands[0].getType()).getEncoding();
+  auto aEnc =
+      cast<triton::TensorOrMemDesc>(operands[0].getType()).getEncoding();
   auto bEnc = cast<MemDescType>(operands[1].getType()).getEncoding();
   auto retEnc = accTy.getEncoding();
   if (aEnc) {
@@ -131,12 +132,12 @@ void WarpGroupDotOp::getEffects(
 bool WarpGroupDotOp::needsPartialAccumulator() {
   const auto &a = getA();
   const auto &d = getD();
-  auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
-  auto aElTy = cast<triton::gpu::TensorOrMemDesc>(a.getType()).getElementType();
+  auto aTensorTy = cast<triton::TensorOrMemDesc>(a.getType());
+  auto aElTy = cast<triton::TensorOrMemDesc>(a.getType()).getElementType();
   bool isFP8 = llvm::isa<Float8E5M2Type, Float8E4M3FNType, Float8E5M2FNUZType,
                          Float8E4M3FNUZType>(aElTy);
   bool accFP32 =
-      cast<triton::gpu::TensorOrMemDesc>(d.getType()).getElementType().isF32();
+      cast<triton::TensorOrMemDesc>(d.getType()).getElementType().isF32();
   uint32_t maxNumImpreciseAcc = getMaxNumImpreciseAcc();
   return isFP8 && accFP32 && maxNumImpreciseAcc <= aTensorTy.getShape()[1];
 }
