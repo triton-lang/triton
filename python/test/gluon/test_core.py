@@ -1696,7 +1696,6 @@ def shared_gather_kernel(
     # Allocate 2D shared memory and store the matrix
     smem_2d = ttgl.allocate_shared_memory(ttgl.float32, [N, M], layout=shared_layout)
     smem_2d.store(matrix_data)
-    ttgl.thread_barrier()
 
     # Reshape to 1D to test gather along axis 0
     smem_1d = smem_2d.reshape([N * M])
@@ -1772,7 +1771,6 @@ def shared_scatter_kernel(
     offsets_2d = indices_x[:, None] * M + indices_y[None, :]
     zeros = ttgl.zeros([N, M], ttgl.float32, layout=layout_2d)
     smem.store(zeros)
-    ttgl.thread_barrier()
 
     # Reshape to 1D to test scatter along axis 0
     smem_1d = smem.reshape([N * M])
@@ -1784,7 +1782,6 @@ def shared_scatter_kernel(
 
     # Scatter using axis-based API: smem_1d[indices[i]] = values[i]
     smem_1d.scatter(values, indices, axis=0)
-    ttgl.thread_barrier()
 
     # Read back the full matrix from shared memory
     matrix_data = smem.load(layout=layout_2d)
@@ -1920,7 +1917,6 @@ def gather_2d_kernel(
     # Store in shared memory
     smem = ttgl.allocate_shared_memory(ttgl.float32, [N, M], layout=shared_layout)
     smem.store(matrix_data)
-    ttgl.thread_barrier()
 
     # Load indices [N, M] - same rank as source
     indices = ttgl.load(indices_ptr + offsets_2d)
@@ -1996,7 +1992,6 @@ def scatter_2d_kernel(
     offsets_2d = indices_x[:, None] * M + indices_y[None, :]
     zeros = ttgl.zeros([N, M], ttgl.float32, layout=layout_2d)
     smem.store(zeros)
-    ttgl.thread_barrier()
 
     # Load indices [N, M] and values [N, M]
     indices = ttgl.load(indices_ptr + offsets_2d)
@@ -2004,7 +1999,6 @@ def scatter_2d_kernel(
 
     # Scatter along specified axis
     smem.scatter(values, indices, axis=axis)
-    ttgl.thread_barrier()
 
     # Read back the result
     result = smem.load(layout=layout_2d)
@@ -2084,7 +2078,6 @@ def gather_3d_kernel(
     # Store in shared memory
     smem = ttgl.allocate_shared_memory(ttgl.float32, [N, M, P], layout=shared_layout)
     smem.store(tensor_data)
-    ttgl.thread_barrier()
 
     # Load indices [N, M, P] - same rank as source
     indices_data = ttgl.load(indices_ptr + offsets_3d)
@@ -2173,7 +2166,6 @@ def scatter_3d_kernel(
     smem = ttgl.allocate_shared_memory(ttgl.float32, [N, M, P], layout=shared_layout)
     zeros = ttgl.full([N, M, P], 0.0, ttgl.float32, layout=layout_3d)
     smem.store(zeros)
-    ttgl.thread_barrier()
 
     # Load indices [N, M, P] and values [N, M, P]
     indices_data = ttgl.load(indices_ptr + offsets_3d)
@@ -2181,7 +2173,6 @@ def scatter_3d_kernel(
 
     # Scatter along specified axis
     smem.scatter(values_data, indices_data, axis=axis)
-    ttgl.thread_barrier()
 
     # Read back the result
     result = smem.load(layout=layout_3d)
