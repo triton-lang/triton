@@ -152,6 +152,24 @@ module {
 // -----
 
 module {
+  tt.func @scf_loop() {
+    %c0 = arith.constant 0 : index
+    // expected-remark @below {{scope id = 0}}
+    // expected-remark @below {{scope parent id = -1}}
+    proton.record start "loop"
+    scf.for %i = %c0 to %c0 step %c0 {
+      // expected-remark @below {{scope id = 1}}
+      // expected-remark @below {{scope parent id = 0}}
+      proton.record start "loop_body"
+    }
+    proton.record end "loop"
+    tt.return
+  }
+}
+
+// -----
+
+module {
   tt.func @scf_loop_if(%cond: i1) {
     %c0 = arith.constant 0 : index
     scf.for %i = %c0 to %c0 step %c0 {
