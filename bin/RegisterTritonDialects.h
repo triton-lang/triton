@@ -46,7 +46,6 @@
 #include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 
-#include "mlir/Tools/Plugins/PassPlugin.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir {
