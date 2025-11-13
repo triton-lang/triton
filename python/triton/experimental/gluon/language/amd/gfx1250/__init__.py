@@ -7,8 +7,11 @@ from .._layouts import AMDWMMALayout
 from ..cdna3 import buffer_load, buffer_store
 from . import tdm
 from . import async_copy
+from . import mbarrier
 
-__all__ = ["async_copy", "tdm", "wmma", "wmma_scaled", "buffer_load", "buffer_store", "get_wmma_scale_layout"]
+__all__ = [
+    "async_copy", "tdm", "mbarrier", "wmma", "wmma_scaled", "buffer_load", "buffer_store", "get_wmma_scale_layout"
+]
 
 
 @builtin

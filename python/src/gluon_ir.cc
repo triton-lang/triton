@@ -100,6 +100,7 @@ struct GluonOpBuilder : public TritonOpBuilder {
 
 struct GluonLayouts {
   py::handle AutoLayout;
+  py::handle CoalescedLayout;
   py::handle BlockedLayout;
   py::handle SliceLayout;
   py::handle DistributedLinearLayout;
@@ -122,6 +123,7 @@ struct GluonLayouts {
     auto blackwellLayouts = py::module::import(
         "triton.experimental.gluon.language.nvidia.blackwell");
     AutoLayout = py::object(layouts.attr("AutoLayout")).release();
+    CoalescedLayout = py::object(layouts.attr("CoalescedLayout")).release();
     BlockedLayout = py::object(layouts.attr("BlockedLayout")).release();
     SliceLayout = py::object(layouts.attr("SliceLayout")).release();
     DistributedLinearLayout =
@@ -231,6 +233,8 @@ py::object layoutToGluon(Attribute layout) {
         toStdVector(ll.getBases().lookup(kBlock)), sharedLl.getAlignment());
   } else if (auto autoEnc = dyn_cast<gluon::AutoEncodingAttr>(layout)) {
     return layouts.AutoLayout();
+  } else if (auto autoEnc = dyn_cast<gluon::CoalescedEncodingAttr>(layout)) {
+    return layouts.CoalescedLayout();
   } else if (auto amdMfma = dyn_cast<ttg::AMDMfmaEncodingAttr>(layout)) {
     auto ctaLayout = amdMfma.getCTALayout();
     return layouts.AMDMFMALayout(
@@ -467,6 +471,11 @@ void init_gluon_ir(py::module &&m) {
       .def("get_auto_layout",
            [](GluonOpBuilder &self) -> Attribute {
              return self.getChecked<gluon::AutoEncodingAttr>(self.getContext());
+           })
+      .def("get_coalesced_layout",
+           [](GluonOpBuilder &self) -> Attribute {
+             return self.getChecked<gluon::CoalescedEncodingAttr>(
+                 self.getContext());
            })
       .def("get_swizzled_shared_layout",
            [](GluonOpBuilder &self, int vec, int perPhase, int maxPhase,
@@ -820,10 +829,10 @@ void init_gluon_ir(py::module &&m) {
            })
       .def("create_async_tdm_copy_global_to_local",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
-              Value result) {
+              Value result, Value barrier) {
              Value pred = self.create<arith::ConstantIntOp>(1, 1);
-             self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(descPtr, indices,
-                                                            result, pred);
+             self.create<ttag::AsyncTDMCopyGlobalToLocalOp>(
+                 descPtr, indices, result, pred, barrier);
            })
       .def("create_async_tdm_copy_local_to_global",
            [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &indices,
@@ -836,6 +845,22 @@ void init_gluon_ir(py::module &&m) {
              ValueRange tokens;
              self.create<ttag::AsyncTDMWait>(tokens, num);
            })
+      .def("create_async_copy_lds_barrier_arrive",
+           [](GluonOpBuilder &self, Value mbarrier) {
+             self.create<ttag::AsyncCopyMbarrierArriveOp>(mbarrier);
+           })
+      .def("create_lds_barrier_init",
+           [](GluonOpBuilder &self, Value memDesc, int count) {
+             self.create<ttag::InitBarrierOp>(memDesc, count);
+           })
+      .def("create_lds_barrier_wait",
+           [](GluonOpBuilder &self, Value memDesc, Value phase) {
+             self.create<ttag::WaitBarrierOp>(memDesc, phase);
+           })
+      .def("create_lds_barrier_arrive",
+           [](GluonOpBuilder &self, Value memDesc, int count) -> Value {
+             return self.create<ttag::ArriveBarrierOp>(memDesc, count);
+           });
       .def("create_warp_pipeline_border", [](GluonOpBuilder &self) {
         auto border = self.create<ROCDL::SchedBarrier>(0);
         border->setAttr("triton.warp_pipeline.border",

@@ -390,30 +390,44 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-DAG: %[[TM_READ_TRACKING_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 8 : i32} : !tt.ptr<i64>
 
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[A:.*]], %true, %[[TC_BIT]], %[[SM_BUFS]], %[[SM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[A_I64]], %true, %[[TC_BIT]], %[[SM_BUFS]], %[[SM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 4294967296 : i64
-    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[A]], %true, %[[TC_MASK]], %[[SM_BUFS]], %[[SM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A]] :
+    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[A_I64]], %true, %[[TC_MASK]], %[[SM_BUFS]], %[[SM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[B:.*]], %true, %[[TC_BIT]], %[[SM_BUFS]], %[[SM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[B_I64:.*]] = tti.experimental_memdesc_to_i64 %[[B:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[B_I64]], %true, %[[TC_BIT]], %[[SM_BUFS]], %[[SM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 4294967296 : i64
-    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[B]], %true, %[[TC_MASK]], %[[SM_BUFS]], %[[SM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[B_I64:.*]] = tti.experimental_memdesc_to_i64 %[[B]] :
+    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[B_I64]], %true, %[[TC_MASK]], %[[SM_BUFS]], %[[SM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[ACC:.*]], %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[ACC_I64]], %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[ACC]], %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[ACC_I64]], %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 4294967296 : i64
-    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}%[[ACC]], %true, %[[TC_MASK]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
-    // CHECK: tt.call @__triton_consan_clear_write_tracking{{.*}}%[[ACC]], %true, %[[TM_BUFS]], %[[TM_WRITE_TRACKING_GLOB]]
-    // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}%[[ACC]], %true, %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
-    // CHECK: tt.call @__triton_consan_clear_read_tracking{{.*}}%[[ACC]], %true, %[[TM_BUFS]], %[[TM_READ_TRACKING_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}%[[ACC_I64]], %true, %[[TC_MASK]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_clear_write_tracking{{.*}}%[[ACC_I64]], %true, %[[TM_BUFS]], %[[TM_WRITE_TRACKING_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}%[[ACC_I64]], %true, %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_clear_read_tracking{{.*}}%[[ACC_I64]], %true, %[[TM_BUFS]], %[[TM_READ_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR:.*]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_WRITE_VISIBILITY_GLOB]], %[[SM_WRITE_TRACKING_GLOB]]
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR:.*]] :
+    // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_WRITE_VISIBILITY_GLOB]], %[[SM_WRITE_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_READ_VISIBILITY_GLOB]], %[[SM_READ_TRACKING_GLOB]]
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR]] :
+    // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_READ_VISIBILITY_GLOB]], %[[SM_READ_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_WRITE_VISIBILITY_GLOB]], %[[TM_WRITE_TRACKING_GLOB]]
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR]] :
+    // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_WRITE_VISIBILITY_GLOB]], %[[TM_WRITE_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_READ_VISIBILITY_GLOB]], %[[TM_READ_TRACKING_GLOB]]
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR]] :
+    // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_READ_VISIBILITY_GLOB]], %[[TM_READ_TRACKING_GLOB]]
     // CHECK: ttng.tc_gen5_mma %[[A]], %[[B]], %[[ACC]][], {{.*}}, {{.*}}, %[[BAR]]
     %c0_i32 = arith.constant 0 : i32
     %0 = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
@@ -451,30 +465,44 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK-DAG: %[[TM_READ_TRACKING_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 8 : i32, nbytes = 16 : i32} : !tt.ptr<i64>
 
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[A:.*]], %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[A_I64]], %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 4294967296 : i64
-    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[A]], %true, %[[TC_MASK]], %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A]] :
+    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[A_I64]], %true, %[[TC_MASK]], %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[B:.*]], %true, %[[TC_BIT]], %[[SM_BUFS]], %[[SM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[B_I64:.*]] = tti.experimental_memdesc_to_i64 %[[B:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[B_I64]], %true, %[[TC_BIT]], %[[SM_BUFS]], %[[SM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 4294967296 : i64
-    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[B]], %true, %[[TC_MASK]], %[[SM_BUFS]], %[[SM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[B_I64:.*]] = tti.experimental_memdesc_to_i64 %[[B]] :
+    // CHECK: tt.call @__triton_consan_set_read_visibility{{.*}}%[[B_I64]], %true, %[[TC_MASK]], %[[SM_BUFS]], %[[SM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[ACC:.*]], %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}%[[ACC_I64]], %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[ACC]], %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}%[[ACC_I64]], %true, %[[TC_BIT]], %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
     // CHECK: %[[TC_MASK:.*]] = arith.constant 4294967296 : i64
-    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}%[[ACC]], %true, %[[TC_MASK]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
-    // CHECK: tt.call @__triton_consan_clear_write_tracking{{.*}}%[[ACC]], %true, %[[TM_BUFS]], %[[TM_WRITE_TRACKING_GLOB]]
-    // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}%[[ACC]], %true, %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
-    // CHECK: tt.call @__triton_consan_clear_read_tracking{{.*}}%[[ACC]], %true, %[[TM_BUFS]], %[[TM_READ_TRACKING_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_set_write_visibility{{.*}}%[[ACC_I64]], %true, %[[TC_MASK]], %[[TM_BUFS]], %[[TM_WRITE_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_clear_write_tracking{{.*}}%[[ACC_I64]], %true, %[[TM_BUFS]], %[[TM_WRITE_TRACKING_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_clear_read_visibility{{.*}}%[[ACC_I64]], %true, %[[TM_BUFS]], %[[TM_READ_VISIBILITY_GLOB]]
+    // CHECK: %[[ACC_I64:.*]] = tti.experimental_memdesc_to_i64 %[[ACC]] :
+    // CHECK: tt.call @__triton_consan_clear_read_tracking{{.*}}%[[ACC_I64]], %true, %[[TM_BUFS]], %[[TM_READ_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR:.*]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_WRITE_VISIBILITY_GLOB]], %[[SM_WRITE_TRACKING_GLOB]]
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR:.*]] :
+    // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_WRITE_VISIBILITY_GLOB]], %[[SM_WRITE_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR:.*]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_READ_VISIBILITY_GLOB]], %[[SM_READ_TRACKING_GLOB]]
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR]] :
+    // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[SM_READ_VISIBILITY_GLOB]], %[[SM_READ_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR:.*]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_WRITE_VISIBILITY_GLOB]], %[[TM_WRITE_TRACKING_GLOB]]
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR]] :
+    // CHECK: tt.call @__triton_consan_track_visible_writes{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_WRITE_VISIBILITY_GLOB]], %[[TM_WRITE_TRACKING_GLOB]]
     // CHECK: %[[TC_BIT:.*]] = arith.constant 32 : i32
-    // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR:.*]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_READ_VISIBILITY_GLOB]], %[[TM_READ_TRACKING_GLOB]]
+    // CHECK: %[[BAR_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BAR]] :
+    // CHECK: tt.call @__triton_consan_track_visible_reads{{.*}}%[[BAR_I64]], {{.*}}, %[[TC_BIT]], %[[BARRIERS]], %[[TM_READ_VISIBILITY_GLOB]], %[[TM_READ_TRACKING_GLOB]]
     // CHECK: tt.call @__triton_consan_verify_barrier_arrive
     // CHECK: tt.call @__triton_consan_update_barrier_state
     // CHECK: tti.experimental_lock_release
@@ -531,12 +559,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
     // CHECK: %[[WRITE_COMMITS:.*]] = arith.constant dense<0> : tensor<1x16xi8
     // CHECK: %[[WRT_COMMITS_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 16 : i32} : !tt.ptr<i8>
 
-    // CHECK: tt.call @__triton_consan_verify_write_visibility_nw1
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility_nw1{{.*}}(%[[A_I64]]
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A]] :
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}(%[[A:.*]], {{.*}}, %[[THREAD_BIT]], %[[BUFFERS]], %[[WRT_COMMITS_GLOB]]
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}(%[[A_I64]], {{.*}}, %[[THREAD_BIT]], %[[BUFFERS]], %[[WRT_COMMITS_GLOB]]
     // CHECK: tt.call @__triton_consan_verify_read_visibility_nw1
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
-    // CHECK: tt.call @__triton_consan_stage_access_for_commit_nw1{{.*}}(%[[A]], {{.*}}, %[[THREAD_BIT]], %[[BUFFERS]], %[[WRT_COMMITS_GLOB]]
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A]] :
+    // CHECK: tt.call @__triton_consan_stage_access_for_commit_nw1{{.*}}(%[[A_I64]], {{.*}}, %[[THREAD_BIT]], %[[BUFFERS]], %[[WRT_COMMITS_GLOB]]
     // CHECK: ttg.async_copy_global_to_local %{{.*}}, %[[A]]
 
     %shmem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
@@ -563,12 +594,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
 
     // CHECK-DAG: %[[WRT_COMMITS_GLOB:.*]] = ttg.global_scratch_alloc {alignment = 1 : i32, nbytes = 16 : i32} : !tt.ptr<i8>
 
-    // CHECK: tt.call @__triton_consan_verify_write_visibility
+    // CHECK: tt.call @__triton_consan_init_barrier_state
+
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}(%[[A_I64]]
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A]] :
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
-    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}(%[[A:.*]], {{.*}}, %[[THREAD_BIT]], %[[BUFFERS]], %[[WRT_COMMITS_GLOB]]
-    // CHECK: tt.call @__triton_consan_verify_read_visibility
+    // CHECK: tt.call @__triton_consan_check_outstanding_commits{{.*}}(%[[A_I64]], {{.*}}, %[[THREAD_BIT]], %[[BUFFERS]], %[[WRT_COMMITS_GLOB]]
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A]] :
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}(%[[A_I64]]
     // CHECK: %[[THREAD_BIT:.*]] = arith.constant 0 : i32
-    // CHECK: tt.call @__triton_consan_stage_access_for_commit{{.*}}(%[[A]], {{.*}}, %[[THREAD_BIT]], %[[BUFFERS]], %[[WRT_COMMITS_GLOB]]
+    // CHECK: %[[A_I64:.*]] = tti.experimental_memdesc_to_i64 %[[A]] :
+    // CHECK: tt.call @__triton_consan_stage_access_for_commit{{.*}}(%[[A_I64]], {{.*}}, %[[THREAD_BIT]], %[[BUFFERS]], %[[WRT_COMMITS_GLOB]]
     // CHECK: ttg.async_copy_global_to_local %{{.*}}, %[[A]]
     %bar = ttg.local_alloc {allocation.offset = 65536 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -710,8 +747,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-LABEL: @local_alloc_with_src
   tt.func public @local_alloc_with_src(%acc: tensor<128x128xf16, #mma>) {
     // CHECK: %[[BUF:.*]] = ttg.local_alloc
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}(%[[BUF]]
-    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}(%[[BUF]]
+    // CHECK: %[[BUF_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BUF:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}(%[[BUF_I64]]
+    // CHECK: %[[BUF_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BUF:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}(%[[BUF_I64]]
     %buf = ttg.local_alloc %acc {allocation.offset = 0 : i32} : (tensor<128x128xf16, #mma>) -> !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
@@ -731,8 +770,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-LABEL: @tmem_alloc_with_src
   tt.func public @tmem_alloc_with_src(%acc: tensor<128x128xf16, #blocked>) {
     // CHECK: %[[BUF:.*]] = ttng.tmem_alloc
-    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}(%[[BUF]]
-    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}(%[[BUF]]
+    // CHECK: %[[BUF_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BUF:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}(%[[BUF_I64]]
+    // CHECK: %[[BUF_I64:.*]] = tti.experimental_memdesc_to_i64 %[[BUF:.*]] :
+    // CHECK: tt.call @__triton_consan_verify_read_visibility{{.*}}(%[[BUF_I64]]
     %buf = ttng.tmem_alloc %acc { tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32 } : (tensor<128x128xf16, #blocked>) -> !ttg.memdesc<128x128xf16, #tmem, #ttng.tensor_memory, mutable>
     %bar = ttg.local_alloc {allocation.offset = 4096 : i32} : () -> !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>

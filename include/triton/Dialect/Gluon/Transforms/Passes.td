@@ -8,7 +8,13 @@ def GluonResolveAutoEncodingsPass : Pass<"gluon-resolve-auto-encodings", "mlir::
   let dependentDialects = [
     "mlir::triton::gpu::TritonGPUDialect",
   ];
+}
 
+def GluonInferCoalescedEncodingsPass : Pass<"gluon-infer-coalesced-encodings", "mlir::ModuleOp"> {
+  let summary = "Infer coalesced encodings based on axis analysis";
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+  ];
 }
 
 def GluonCanonicalize: Pass<"gluon-canonicalize"> {

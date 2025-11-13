@@ -96,6 +96,7 @@ from ._layouts import (
     SwizzledSharedLayout,
     PaddedSharedLayout,
     SharedLinearLayout,
+    CoalescedLayout,
 )
 from ._math import (
     umulhi,
