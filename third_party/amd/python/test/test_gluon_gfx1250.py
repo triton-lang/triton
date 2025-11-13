@@ -1317,7 +1317,7 @@ def _test_runtime_async_copy_layouts(M, N, vec_size, shared_layout, dtype, use_m
 @ASYNC_COPY_TEST_PARAM_SHARED_LAYOUT
 @ASYNC_COPY_TEST_PARAM_DTYPE
 def test_runtime_async_copy(M, N, vec_size, shared_layout, dtype):
-    _test_runtime_async_copy_layouts(M, N, vec_size, shared_layout, dtype)
+    _test_runtime_async_copy_layouts(M, N, vec_size, shared_layout, dtype, False)
 
 
 @gluon.jit
