@@ -46,7 +46,6 @@ from ._core import (
     atomic_xchg,
     atomic_xor,
     bank_conflicts,
-    cat,
     convert_layout,
     device_assert,
     device_print,

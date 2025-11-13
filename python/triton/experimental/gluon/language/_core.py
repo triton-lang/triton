@@ -443,25 +443,6 @@ def histogram(input, num_bins, mask=None, layout=None, _semantic=None, _generato
 
 
 @builtin
-def cat(input, other, can_reorder=False, layout=None, _semantic=None):
-    """
-    Concatenate the two tensors.
-
-    Args:
-        input (tensor): The first input tensor.
-        other (tensor): The second input tensor.
-        can_reorder (bool): Compiler hint. If true, the compiler is allowed to reorder elements while concatenating inputs.  Only use if the order does not matter (e.g., result is only used in reduction ops).  Current implementation of `cat` supports only can_reorder=True.
-        layout (DistributedLayout): The destination layout of the output tensor.
-
-    Returns:
-        tensor: The concatenated tensor.
-    """
-    can_reorder = _unwrap_if_constexpr(can_reorder)
-    layout = _unwrap_if_constexpr(layout)
-    return _semantic.cat(input, other, can_reorder, layout)
-
-
-@builtin
 def allocate_shared_memory(element_ty, shape, layout, value=None, _semantic=None) -> shared_memory_descriptor:
     """
     Allocate shared memory for a tensor with the given element type, shape, and layout.
