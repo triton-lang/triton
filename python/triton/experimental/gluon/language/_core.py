@@ -269,6 +269,7 @@ class shared_memory_descriptor(base_value):
         layout = _unwrap_if_constexpr(layout)
         return _semantic.shared_load(self, layout)
 
+    @builtin
     def store(self, value, _semantic: GluonSemantic = None) -> None:
         """
         Store a tensor into shared memory.
