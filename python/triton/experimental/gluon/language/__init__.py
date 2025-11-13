@@ -3,6 +3,7 @@ from ._core import (
     base_type,
     block_type,
     broadcast,
+    cast,
     constexpr,
     dtype,
     void,
