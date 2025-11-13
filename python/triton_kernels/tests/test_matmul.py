@@ -240,13 +240,13 @@ def _build_test_op_cases():
     # bfloat16 x mx
     for shape in [odd_shape2, even_shape]:
         test_cases.extend([
-            # Case(*shape, "plain", "bfloat16", "mxfloat4_e2m1"),
+            Case(*shape, "plain", "bfloat16", "mxfloat4_e2m1"),
             Case(*shape, "plain", "bfloat16", "mxfloat4_e2m1", hbm_swizzling=True, epilogue_subtile=4),
-            # Case(*shape, "batched", "bfloat16", "mxfloat4_e2m1"),
+            Case(*shape, "batched", "bfloat16", "mxfloat4_e2m1"),
             Case(*shape, "batched", "bfloat16", "mxfloat4_e2m1", hbm_swizzling=True),
-            # Case(*shape, "ragged", "bfloat16", "mxfloat4_e2m1", split_k=9),
+            Case(*shape, "ragged", "bfloat16", "mxfloat4_e2m1", split_k=9),
             Case(*shape, "ragged", "bfloat16", "mxfloat4_e2m1", split_k=9, hbm_swizzling=True),
-            # Case(*shape, "ragged", "bfloat16", "mxfloat8_e4m3fn"),
+            Case(*shape, "ragged", "bfloat16", "mxfloat8_e4m3fn"),
             Case(*shape, "ragged", "bfloat16", "mxfloat8_e4m3fn", hbm_swizzling=True)
         ])
     # float8 x mxfloat
@@ -254,7 +254,7 @@ def _build_test_op_cases():
         Case(16, 256, 256, "ragged", "float8_e5m2", "mxfloat4_e2m1", hbm_swizzling=True),
         Case(1024, 1024, 1024, "batched", "float8_e5m2", "mxfloat4_e2m1", hbm_swizzling=True),
         # TODO: bug
-        # Case(1024, 1024, 1024, "batched", "float8_e5m2", "mxfloat4_e2m1"),
+        Case(1024, 1024, 1024, "batched", "float8_e5m2", "mxfloat4_e2m1"),
         Case(1024, 1024, 1024, "ragged", "float8_e5m2", "mxfloat4_e2m1", split_k=9),
         Case(1024, 1024, 1024, "ragged", "float8_e5m2", "mxfloat4_e2m1", split_k=9, hbm_swizzling=True),
         Case(300, 400, 400, "ragged", "float8_e5m2", "mxfloat8_e4m3fn"),

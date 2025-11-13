@@ -297,6 +297,12 @@ def matmul(a, b, bias,
         # if ragged dimension is K, w must be either padded or row major to ensure alignment
         (not is_b_ragged or b.stride(-1)==1 or b_ragged_metadata.slice_sizes_divisibility is not None)
     )
+    if b_scale is not None and isinstance(b_scale.storage.layout, StridedLayout) and b_scale.storage.data.stride()[-1] != 1:
+        # In this case, we need to transpose b_scale. Then the reduction dim
+        # becomes the last dim that will be divided by 32. This to be a multiple
+        # of 16 to be TMA-compliant requires block_k to be a multiple of 512,
+        # which is too big.
+        can_use_tma = False
     has_gather_tma = has_gather and target_info.has_tma_gather()
     # hopper w/ mxfp4 doesn't support TMA
     can_use_tma = can_use_tma and (torch.cuda.get_device_capability()[0] > 9 or bitwidth(b.dtype) != 4)
