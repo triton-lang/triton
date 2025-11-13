@@ -2,7 +2,6 @@
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Tools/Plugins/PassPlugin.h"
 #include "passes.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Membar.h"
@@ -18,7 +17,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <string>
-#include <unordered_map>
 
 namespace py = pybind11;
 
