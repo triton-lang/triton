@@ -31,6 +31,32 @@ struct AutomaticWarpSpecialization
 
   void runOnOperation() override;
 };
+
+void multiBufferTMADescriptors(ModuleOp mod, int numStages) {
+  SetVector<scf::ForOp> descUpdateLoops;
+  mod.walk([&](scf::ForOp loop) {
+    if (loop->hasAttr(kWarpSpecializeAttrName)) {
+      loop.walk([&](triton::MakeTensorDescOp op) {
+        if (auto forOp = op->getParentOfType<scf::ForOp>()) {
+          descUpdateLoops.insert(forOp);
+        }
+      });
+    }
+  });
+
+  // +1 to make sure that overlapping of the next desc update and the oldest
+  // inflight TMA load is safe
+  const int numDescs = numStages + 1;
+  // CoarseSchedule's notion of numStages is the maximuim loop-pipelining
+  // stage + 1, see CoarseSchedule::deSerialize(). So if we want n buffers,
+  // we need to pass n + 1 as numStages.
+  triton::CoarseSchedule schedule(numDescs + 1);
+
+  for (auto loop : descUpdateLoops) {
+    triton::lowerTMADescriptors(loop, schedule);
+  }
+}
+
 } // namespace
 
 void AutomaticWarpSpecialization::runOnOperation() {
@@ -50,30 +76,7 @@ void AutomaticWarpSpecialization::runOnOperation() {
   if (failed(runPipeline(pm, getOperation())))
     return signalPassFailure();
 
-  {
-    // Multi-buffer TMA descriptors. We cannot rely on SWP to do it, to support
-    // desc updates in nested loops.
-    SetVector<scf::ForOp> descUpdateLoops;
-    getOperation().walk([&](scf::ForOp loop) {
-      if (loop->hasAttr(kWarpSpecializeAttrName)) {
-        loop.walk([&](triton::MakeTensorDescOp op) {
-          if (auto forOp = op->getParentOfType<scf::ForOp>()) {
-            descUpdateLoops.insert(forOp);
-          }
-        });
-      }
-    });
-
-    // +1 to make sure that overlapping of the next desc update and the oldest
-    // inflight TMA load is safe
-    const int numDescs = numStages + 1;
-    // CoarseSchedule's notion of numStages is the maximuim loop-pipelining
-    // stage + 1, see CoarseSchedule::deSerialize(). So if we want n buffers,
-    // we need to pass n + 1 as numStages.
-    triton::CoarseSchedule schedule(numDescs + 1);
-
-    for (auto loop : descUpdateLoops) {
-      triton::lowerTMADescriptors(loop, schedule);
-    }
-  }
+  // Multi-buffer TMA descriptors. We cannot rely on SWP to do it, to support
+  // desc updates in nested loops.
+  multiBufferTMADescriptors(getOperation(), numStages);
 }
