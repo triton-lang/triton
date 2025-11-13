@@ -249,27 +249,28 @@ private:
         }
       }
       if (auto asyncCommitGroupOp = dyn_cast<ttg::AsyncCommitGroupOp>(op)) {
-        funcBuilder.createCommitAccessesCall(b, thread, nullptr,
-                                             auxData.asyncCpCommits[op], op);
+        funcBuilder.createCommitAccessesCall(
+            b, thread, nullptr, auxData.commits[CommitKind::AsyncCp][op], op);
       }
       if (auto asyncWaitOp = dyn_cast<ttg::AsyncWaitOp>(op)) {
         funcBuilder.createClearOutstandingCommitsTransferWritesCall(
-            b, thread, getThreadPeersMask(thread), asyncWaitOp.getNum(),
-            nullptr, auxData.asyncCpCommits[op],
+            b, baseThread, getThreadPeersMask(thread), asyncWaitOp.getNum(),
+            nullptr, auxData.commits[CommitKind::AsyncCp][op],
             auxData.writeVisibility[(int)MemType::SHARED_MEM][op], op);
       }
-      if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
-        if (wgmmaOp.getIsAsync() == true) {
-          // Add commit (implicit in ttgir) after staging wgmma's operand for
-          // read
-          funcBuilder.createCommitAccessesCall(b, thread, nullptr,
-                                               auxData.wgmmaCommits[op], op);
-        }
-      }
       if (auto wgmmaWaitOp = dyn_cast<ttng::WarpGroupDotWaitOp>(op)) {
+
         funcBuilder.createClearOutstandingCommitsTransferReadsCall(
-            b, thread, getThreadPeersMask(thread), wgmmaWaitOp.getPendings(),
-            nullptr, auxData.wgmmaCommits[op],
+            b, baseThread, getThreadPeersMask(thread),
+            wgmmaWaitOp.getPendings(), nullptr,
+            auxData.commits[CommitKind::Wgmma][op],
+            auxData.readVisibility[(int)MemType::SHARED_MEM][op], op);
+      }
+      if (auto tmaStoreWaitOp = dyn_cast<ttng::TMAStoreWaitOp>(op)) {
+        funcBuilder.createClearOutstandingCommitsTransferReadsCall(
+            b, baseThread, getThreadPeersMask(thread),
+            tmaStoreWaitOp.getPendings(), nullptr,
+            auxData.commits[CommitKind::TmaStore][op],
             auxData.readVisibility[(int)MemType::SHARED_MEM][op], op);
       }
       listener.maybeWrapWithCriticalSection(b, auxData, nullptr);
@@ -292,15 +293,20 @@ private:
       None,
       Barrier,
       wgmmaCommit,
-      asyncCpCommit
+      CommitCount
     } trackingKind = TrackingKind::None;
+
+    CommitKind::Kind commitKind = CommitKind::None;
+
     SmallVector<BarrierInfo> barriers;
     Value pred;
     SmallVector<Effects> operandEffects;
+    bool implicitCommit = false;
   };
 
   void instrumentMemEffects(ImplicitLocOpBuilder &b, Operation *op, int thread,
                             tti::FunctionBuilder &funcBuilder) {
+    int baseThread = getBaseThread(thread);
     std::optional<MemEffectsOpInfo> opInfo = getMemEffectsOpInfo(op);
     if (!opInfo) {
       return;
@@ -333,14 +339,12 @@ private:
               b, buf, getThreadPeersMask(thread), pred, memType, op);
         }
         if (opInfo->trackingKind ==
-            MemEffectsOpInfo::TrackingKind::wgmmaCommit) {
-          assert(isa<ttng::WarpGroupDotOp>(op));
+            MemEffectsOpInfo::TrackingKind::CommitCount) {
           assert(memType == MemType::SHARED_MEM);
           funcBuilder.createStageAccessForCommitCall(
-              b, buf, thread, pred, buffersVT, auxData.wgmmaCommits[op], op);
+              b, buf, baseThread, pred, buffersVT,
+              auxData.commits[opInfo->commitKind][op], op);
         }
-        assert(opInfo->trackingKind !=
-               MemEffectsOpInfo::TrackingKind::asyncCpCommit);
       }
       if (effect.rw == MemEffectsOpInfo::Effects::Write) {
         // Op is writing to the buffer, we need to check if anything else
@@ -358,13 +362,12 @@ private:
           funcBuilder.createClearReadTrackingCall(b, buf, pred, memType, op);
         }
         if (opInfo->trackingKind ==
-            MemEffectsOpInfo::TrackingKind::asyncCpCommit) {
+            MemEffectsOpInfo::TrackingKind::CommitCount) {
           assert(memType == MemType::SHARED_MEM);
           funcBuilder.createStageAccessForCommitCall(
-              b, buf, thread, pred, buffersVT, auxData.asyncCpCommits[op], op);
+              b, buf, baseThread, pred, buffersVT,
+              auxData.commits[opInfo->commitKind][op], op);
         }
-        assert(opInfo->trackingKind !=
-               MemEffectsOpInfo::TrackingKind::wgmmaCommit);
       }
     }
     for (const auto &barrierInfo : opInfo->barriers) {
@@ -389,6 +392,12 @@ private:
                                                  combinedPred, op);
       }
     }
+    if (opInfo->implicitCommit) {
+      assert(opInfo->trackingKind ==
+             MemEffectsOpInfo::TrackingKind::CommitCount);
+      funcBuilder.createCommitAccessesCall(
+          b, baseThread, pred, auxData.commits[opInfo->commitKind][op], op);
+    }
   }
 
   void addWriteChecks(ImplicitLocOpBuilder &b,
@@ -401,10 +410,11 @@ private:
                                                   pred, memType, op);
     }
     // commit-num-based synchronization is only supported for shared memory
-    if (memType == MemType::SHARED_MEM && auxData.asyncCpCommits[op].value) {
+    if (memType == MemType::SHARED_MEM &&
+        auxData.commits[CommitKind::AsyncCp][op].value) {
       funcBuilder.createCheckOutstandingCommitsCall(
-          b, buf, thread, "async_copy_global_to_shared", pred, buffersVT,
-          auxData.asyncCpCommits[op], op);
+          b, buf, getBaseThread(thread), "async_copy_global_to_shared", pred,
+          buffersVT, auxData.commits[CommitKind::AsyncCp][op], op);
     }
   }
 
@@ -417,10 +427,17 @@ private:
                                                  pred, memType, op);
     }
     // commit-num-based synchronization is only supported for shared memory
-    if (memType == MemType::SHARED_MEM && auxData.wgmmaCommits[op].value) {
+    if (memType == MemType::SHARED_MEM &&
+        auxData.commits[CommitKind::Wgmma][op].value) {
       funcBuilder.createCheckOutstandingCommitsCall(
-          b, buf, thread, "warpgroup_mma operand read", pred, buffersVT,
-          auxData.wgmmaCommits[op], op);
+          b, buf, getBaseThread(thread), "warpgroup_mma operand read", pred,
+          buffersVT, auxData.commits[CommitKind::Wgmma][op], op);
+    }
+    if (memType == MemType::SHARED_MEM &&
+        auxData.commits[CommitKind::TmaStore][op].value) {
+      funcBuilder.createCheckOutstandingCommitsCall(
+          b, buf, getBaseThread(thread), "async_copy_shared_to_global", pred,
+          buffersVT, auxData.commits[CommitKind::TmaStore][op], op);
     }
   }
 
@@ -436,7 +453,9 @@ private:
     }
     if (auto storeOp = dyn_cast<ttng::AsyncTMACopyLocalToGlobalOp>(op)) {
       info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::None;
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
+      info->commitKind = CommitKind::TmaStore;
+      info->implicitCommit = true;
       info->operandEffects.push_back({/*.rw =*/MemEffectsOpInfo::Effects::Read,
                                       /*.buf =*/storeOp.getSrc()});
     }
@@ -456,7 +475,8 @@ private:
     }
     if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
       info.emplace();
-      info->trackingKind = MemEffectsOpInfo::TrackingKind::asyncCpCommit;
+      info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
+      info->commitKind = CommitKind::AsyncCp;
       info->operandEffects.push_back({/*.rw =*/MemEffectsOpInfo::Effects::Write,
                                       /*.buf =*/copyOp.getResult()});
     }
@@ -536,7 +556,9 @@ private:
     if (auto wgmmaOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
       if (wgmmaOp.getIsAsync() == true) {
         info.emplace();
-        info->trackingKind = MemEffectsOpInfo::TrackingKind::wgmmaCommit;
+        info->trackingKind = MemEffectsOpInfo::TrackingKind::CommitCount;
+        info->commitKind = CommitKind::Wgmma;
+        info->implicitCommit = true;
         info->barriers = {};
         if (isa<ttg::SharedEncodingTrait>(
                 wgmmaOp.getA().getType().getEncoding())) {

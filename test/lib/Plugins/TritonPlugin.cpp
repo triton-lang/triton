@@ -63,7 +63,7 @@ tritonAddPluginPass(mlir::PassManager *pm, const char *passName) {
 TRITON_PLUGIN_API
 tritonRegisterPluginPass(const char *passName) {
   std::string passNameStr(passName);
-  if (passMap.find(passNameStr) == passMap.end())
+  if (registryMap.find(passNameStr) == registryMap.end())
     return TP_GENERIC_FAILURE;
   registryMap[passNameStr]();
   return TP_SUCCESS;
@@ -73,7 +73,10 @@ TRITON_PLUGIN_API
 tritonEnumeratePluginPasses(uint32_t *passCount, const char **passNames) {
   if (!passCount)
     return TP_GENERIC_FAILURE;
-  *passCount = passMap.size();
+  auto count = passMap.size();
+  assert(count == registryMap.size() &&
+         "Expected register and add passes map size to match");
+  *passCount = count;
   if (!passNames)
     return TP_SUCCESS;
   unsigned i = 0;
