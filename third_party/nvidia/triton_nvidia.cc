@@ -32,11 +32,6 @@ void init_triton_nvidia_passes_ttgpuir(py::module &&m) {
           pm.addPass(mlir::triton::createConvertTritonGPUToLLVMPass(
               capability, ptxVersion));
         });
-  m.def("add_nvgpu_to_llvm",
-        [](mlir::PassManager &pm, int32_t capability, int32_t ptxVersion) {
-          pm.addPass(mlir::triton::createConvertNVGPUToLLVMPass(capability,
-                                                                ptxVersion));
-        });
 }
 
 static std::unique_ptr<mlir::Pass>
