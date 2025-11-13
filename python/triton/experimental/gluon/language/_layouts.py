@@ -12,9 +12,19 @@ def _realize_cta_layout(layout, rank):
     # Canonicalize CTA order to [n,n-1,...,0] if CTAsPerCGA is [1...1]. This matches logic in C++.
     if all(num_cta == 1 for num_cta in ctas_per_cga):
         cta_order = list(range(rank - 1, -1, -1))
-    object.__setattr__(layout, "ctas_per_cga", ctas_per_cga)
-    object.__setattr__(layout, "cta_split_num", cta_split_num)
-    object.__setattr__(layout, "cta_order", cta_order)
+    assert len(ctas_per_cga) == rank
+    assert len(cta_split_num) == rank
+    assert len(cta_order) == rank
+    object.__setattr__(layout, "ctas_per_cga", _unwrap_if_constexpr(ctas_per_cga))
+    object.__setattr__(layout, "cta_split_num", _unwrap_if_constexpr(cta_split_num))
+    object.__setattr__(layout, "cta_order", _unwrap_if_constexpr(cta_order))
+
+    if hasattr(layout, "two_cta_dim"):
+        two_cta_dim = layout.two_cta_dim
+        two_cta_dim = _unwrap_if_constexpr(two_cta_dim)
+        assert two_cta_dim is None or (
+            0 <= two_cta_dim < rank), f"two_cta_dim must be between 0 and rank. Got {two_cta_dim} for rank {rank}"
+        object.__setattr__(layout, "two_cta_dim", two_cta_dim)
 
 
 class DistributedLayout:
@@ -66,24 +76,19 @@ class BlockedLayout(DistributedLayout):
     ctas_per_cga: Optional[List[int]] = None
     cta_split_num: Optional[List[int]] = None
     cta_order: Optional[List[int]] = None
+    two_cta_dim: Optional[int] = None
 
     def __post_init__(self):
         super().__setattr__("size_per_thread", _unwrap_if_constexpr(self.size_per_thread))
         super().__setattr__("threads_per_warp", _unwrap_if_constexpr(self.threads_per_warp))
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
         super().__setattr__("order", _unwrap_if_constexpr(self.order))
-        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
-        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
-        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
 
         rank = len(self.size_per_thread)
         _realize_cta_layout(self, rank)
         assert len(self.threads_per_warp) == rank
         assert len(self.warps_per_cta) == rank
         assert len(self.order) == rank
-        assert len(self.ctas_per_cga) == rank
-        assert len(self.cta_split_num) == rank
-        assert len(self.cta_order) == rank
 
     def _to_ir(self, builder):
         return builder.get_blocked_layout(
@@ -94,6 +99,7 @@ class BlockedLayout(DistributedLayout):
             self.ctas_per_cga,
             self.cta_split_num,
             self.cta_order,
+            self.two_cta_dim,
         )
 
     def mangle(self) -> str:
@@ -110,7 +116,8 @@ class BlockedLayout(DistributedLayout):
         ctas_per_cga = stringify(self.ctas_per_cga)
         cta_split_num = stringify(self.cta_split_num)
         cta_order = stringify(self.cta_order)
-        return f"B{size_per_thread}B{threads_per_warp}B{warps_per_cta}B{order}B{ctas_per_cga}B{cta_split_num}B{cta_order}B"
+        two_cta_dim = "" if self.two_cta_dim is None else str(self.two_cta_dim)
+        return f"B{size_per_thread}_{threads_per_warp}_{warps_per_cta}_{order}_{ctas_per_cga}_{cta_split_num}_{cta_order}_{two_cta_dim}B"
 
     def __hash__(self):
         return hash((
@@ -121,6 +128,7 @@ class BlockedLayout(DistributedLayout):
             tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
             tuple(self.cta_split_num) if self.cta_split_num else None,
             tuple(self.cta_order) if self.cta_order else None,
+            self.two_cta_dim,
         ))
 
 
@@ -267,33 +275,29 @@ class NVMMADistributedLayout(DistributedLayout):
     ctas_per_cga: Optional[List[int]] = None
     cta_split_num: Optional[List[int]] = None
     cta_order: Optional[List[int]] = None
+    two_cta_dim: Optional[int] = None
 
     def __post_init__(self):
         super().__setattr__("version", _unwrap_if_constexpr(self.version))
         super().__setattr__("warps_per_cta", _unwrap_if_constexpr(self.warps_per_cta))
         super().__setattr__("instr_shape", _unwrap_if_constexpr(self.instr_shape))
-        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
-        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
-        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
 
         rank = len(self.warps_per_cta)
         _realize_cta_layout(self, rank)
-        assert len(self.ctas_per_cga) == rank
-        assert len(self.cta_split_num) == rank
-        assert len(self.cta_order) == rank
 
     def _to_ir(self, builder):
         return builder.get_mma_layout(self.version, self.warps_per_cta, self.ctas_per_cga, self.cta_split_num,
-                                      self.cta_order, self.instr_shape)
+                                      self.cta_order, self.instr_shape, self.two_cta_dim)
 
     def mangle(self) -> str:
-        return f"MMA_{self.version}_{self.warps_per_cta}_{self.instr_shape}_{self.ctas_per_cga}_{self.cta_split_num}_{self.cta_order}_MMA"
+        two_cta_dim = "" if self.two_cta_dim is None else str(self.two_cta_dim)
+        return f"MMA_{self.version}_{self.warps_per_cta}_{self.instr_shape}_{self.ctas_per_cga}_{self.cta_split_num}_{self.cta_order}_{two_cta_dim}_MMA"
 
     def __hash__(self):
         return hash((tuple(self.version), tuple(self.warps_per_cta),
                      tuple(self.instr_shape), tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
                      tuple(self.cta_split_num) if self.cta_split_num else None,
-                     tuple(self.cta_order) if self.cta_order else None))
+                     tuple(self.cta_order) if self.cta_order else None, self.two_cta_dim))
 
 
 class SharedLayout:
@@ -338,6 +342,7 @@ class NVMMASharedLayout(SharedLayout):
     ctas_per_cga: Optional[List[int]] = None
     cta_split_num: Optional[List[int]] = None
     cta_order: Optional[List[int]] = None
+    two_cta_dim: Optional[int] = None
 
     def __post_init__(self):
         super().__setattr__("swizzle_byte_width", _unwrap_if_constexpr(self.swizzle_byte_width))
@@ -345,17 +350,11 @@ class NVMMASharedLayout(SharedLayout):
         super().__setattr__("rank", _unwrap_if_constexpr(self.rank))
         super().__setattr__("transposed", _unwrap_if_constexpr(self.transposed))
         super().__setattr__("fp4_padded", _unwrap_if_constexpr(self.fp4_padded))
-        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
-        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
-        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
 
         assert self.element_bitwidth in [8, 16, 32, 64]
         assert self.swizzle_byte_width in [0, 32, 64, 128]
         rank = self.rank
         _realize_cta_layout(self, rank)
-        assert len(self.ctas_per_cga) == rank
-        assert len(self.cta_split_num) == rank
-        assert len(self.cta_order) == rank
 
     def _to_ir(self, builder):
         return builder.get_nvmma_shared_layout(
@@ -366,12 +365,13 @@ class NVMMASharedLayout(SharedLayout):
             self.ctas_per_cga,
             self.cta_split_num,
             self.cta_order,
+            self.two_cta_dim,
         )
 
     @staticmethod
     @constexpr_function
     def get_default_for(block_shape, dtype, transposed=False, fp4_padded=False, ctas_per_cga=None, cta_split_num=None,
-                        cta_order=None):
+                        cta_order=None, two_cta_dim=None):
         """Returns an NVMMASharedLayout with default swizzling for a given shape.
 
         This picks the largest swizzle pattern compatible with the shape, which
@@ -408,16 +408,18 @@ class NVMMASharedLayout(SharedLayout):
             ctas_per_cga=ctas_per_cga,
             cta_split_num=cta_split_num,
             cta_order=cta_order,
+            two_cta_dim=two_cta_dim,
         )
 
     def mangle(self) -> str:
-        return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_NVMMA"
+        two_cta_dim = "" if self.two_cta_dim is None else str(self.two_cta_dim)
+        return f"NVMMA_{self.swizzle_byte_width}_{self.element_bitwidth}_{self.transposed}_{self.fp4_padded}_{two_cta_dim}_NVMMA"
 
     def __hash__(self):
         return hash((self.swizzle_byte_width, self.element_bitwidth, self.rank, self.transposed, self.fp4_padded,
                      tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
                      tuple(self.cta_split_num) if self.cta_split_num else None,
-                     tuple(self.cta_order) if self.cta_order else None))
+                     tuple(self.cta_order) if self.cta_order else None, self.two_cta_dim))
 
 
 @dataclass(frozen=True, eq=True)
@@ -441,21 +443,16 @@ class SwizzledSharedLayout(SharedLayout):
     ctas_per_cga: Optional[List[int]] = None
     cta_split_num: Optional[List[int]] = None
     cta_order: Optional[List[int]] = None
+    two_cta_dim: Optional[int] = None
 
     def __post_init__(self):
         super().__setattr__("vec", _unwrap_if_constexpr(self.vec))
         super().__setattr__("per_phase", _unwrap_if_constexpr(self.per_phase))
         super().__setattr__("max_phase", _unwrap_if_constexpr(self.max_phase))
         super().__setattr__("order", _unwrap_if_constexpr(self.order))
-        super().__setattr__("ctas_per_cga", _unwrap_if_constexpr(self.ctas_per_cga))
-        super().__setattr__("cta_split_num", _unwrap_if_constexpr(self.cta_split_num))
-        super().__setattr__("cta_order", _unwrap_if_constexpr(self.cta_order))
 
         rank = len(self.order)
         _realize_cta_layout(self, rank)
-        assert len(self.ctas_per_cga) == rank
-        assert len(self.cta_split_num) == rank
-        assert len(self.cta_order) == rank
 
     def _to_ir(self, builder):
         return builder.get_swizzled_shared_layout(
@@ -466,6 +463,7 @@ class SwizzledSharedLayout(SharedLayout):
             self.ctas_per_cga,
             self.cta_split_num,
             self.cta_order,
+            self.two_cta_dim,
         )
 
     def mangle(self) -> str:
@@ -475,13 +473,14 @@ class SwizzledSharedLayout(SharedLayout):
                 return ""
             return "_".join(map(str, x))
 
-        return f"SSS_{self.vec}_{self.per_phase}_{self.max_phase}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_SSS"
+        two_cta_dim = "" if self.two_cta_dim is None else str(self.two_cta_dim)
+        return f"SSS_{self.vec}_{self.per_phase}_{self.max_phase}_{stringify(self.order)}_{stringify(self.ctas_per_cga)}_{stringify(self.cta_split_num)}_{stringify(self.cta_order)}_{two_cta_dim}_SSS"
 
     def __hash__(self):
         return hash((self.vec, self.per_phase, self.max_phase,
                      tuple(self.order), tuple(self.ctas_per_cga) if self.ctas_per_cga else None,
                      tuple(self.cta_split_num) if self.cta_split_num else None,
-                     tuple(self.cta_order) if self.cta_order else None))
+                     tuple(self.cta_order) if self.cta_order else None, self.two_cta_dim))
 
 
 @dataclass(frozen=True, eq=True)

@@ -19,7 +19,7 @@ def _is_int_list(value):
 
 
 def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant, ctas_per_cga, cta_split_num,
-                             cta_order):
+                             cta_order, two_cta_dim=None):
     _check(isinstance(instr_variant, str), lambda: "instr_variant must be a string")
     _check(instr_variant in ("32x32b", "16x64b", "16x128b", "16x256b", "16x32bx2", "32x32b_splitn"),
            lambda: f"unknown instr_variant: {instr_variant}")
@@ -41,6 +41,14 @@ def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant
     _check(len(cta_split_num) == rank, lambda: "cta_split_num rank mismatch")
     _check(len(cta_order) == rank, lambda: "cta_order rank mismatch")
 
+    if two_cta_dim is not None:
+        _check(isinstance(two_cta_dim, int), lambda: f"two_cta_dim must be an int but got {type(two_cta_dim)!r}")
+        _check(0 <= two_cta_dim < rank, lambda: f"two_cta_dim must be within [0, {rank}) but got {two_cta_dim}")
+        _check(
+            cta_split_num[two_cta_dim] >= 2,
+            lambda: f"two_cta_dim={two_cta_dim} requires cta_split_num[{two_cta_dim}] >= 2, got "
+            f"{cta_split_num[two_cta_dim]}")
+
     layout_obj = compute_tmem_reg_layout(
         element_ty,
         shape,
@@ -50,6 +58,7 @@ def _compute_tmem_reg_layout(element_ty, shape, layout, num_warps, instr_variant
         ctas_per_cga,
         cta_split_num,
         cta_order,
+        two_cta_dim,
     )
     _check(layout_obj is not None,
            lambda: f"TMEM layout '{atom_variant}' unsupported for shape {shape} and num_warps {num_warps}")

@@ -191,9 +191,9 @@ static LogicalResult setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   // Construct the new layout.
   MLIRContext *ctx = srcType.getContext();
   auto baseLayout = cast<LayoutEncodingTrait>(srcType.getEncoding());
-  auto ctaLayout =
-      CTALayoutAttr::get(ctx, baseLayout.getCTAsPerCGA(),
-                         baseLayout.getCTASplitNum(), baseLayout.getCTAOrder());
+  auto ctaLayout = CTALayoutAttr::get(
+      ctx, baseLayout.getCTAsPerCGA(), baseLayout.getCTASplitNum(),
+      baseLayout.getCTAOrder(), baseLayout.getTwoCTADim());
   auto newLayout = BlockedEncodingAttr::get(ctx, sizePerThread, threadsPerWarp,
                                             warpsPerCTA, order, ctaLayout);
 
@@ -551,14 +551,13 @@ private:
     auto threadsPerWarp3d = insertValue(blocked.getThreadsPerWarp(), rank, 1);
     auto warsPerCTA3d = insertValue(blocked.getWarpsPerCTA(), rank, 1);
     auto order3d = insertValue(blocked.getOrder(), 0, rank);
-    auto ctasPerCGA3d =
-        insertValue(blocked.getCTALayout().getCTAsPerCGA(), rank, 1);
-    auto ctasSplitNum3d =
-        insertValue(blocked.getCTALayout().getCTASplitNum(), rank, 1);
-    auto ctaOrder3d =
-        insertValue(blocked.getCTALayout().getCTAOrder(), rank, rank);
+    auto baseCTALayout = blocked.getCTALayout();
+    auto ctasPerCGA3d = insertValue(baseCTALayout.getCTAsPerCGA(), rank, 1);
+    auto ctasSplitNum3d = insertValue(baseCTALayout.getCTASplitNum(), rank, 1);
+    auto ctaOrder3d = insertValue(baseCTALayout.getCTAOrder(), rank, rank);
     auto ctaLayout3d = triton::gpu::CTALayoutAttr::get(
-        reduce.getContext(), ctasPerCGA3d, ctasSplitNum3d, ctaOrder3d);
+        reduce.getContext(), ctasPerCGA3d, ctasSplitNum3d, ctaOrder3d,
+        baseCTALayout.getTwoCTADim());
     auto blocked3d = triton::gpu::BlockedEncodingAttr::get(
         reduce.getContext(), sizePerThread3d, threadsPerWarp3d, warsPerCTA3d,
         order3d, ctaLayout3d);

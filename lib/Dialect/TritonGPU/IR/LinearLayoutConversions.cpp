@@ -164,11 +164,19 @@ LinearLayout makeCgaLayout(CTALayoutAttr layout) {
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 
   LinearLayout ret = LinearLayout::empty();
+  auto ctaSplitNum = to_vector(layout.getCTASplitNum());
+  auto ctaPerCGA = to_vector(layout.getCTAsPerCGA());
+  if (layout.getTwoCTADim().has_value()) {
+    auto dim = layout.getTwoCTADim().value();
+    ret *= LinearLayout::identity1D(2, kBlock, outDimNames[dim]);
+    ctaSplitNum[dim] /= 2;
+    ctaPerCGA[dim] /= 2;
+  }
   for (int i = 0; i < rank; i++) {
     // Start with the most minor dimension, which is order[0].
     int dim = layout.getCTAOrder()[i];
-    int split = layout.getCTASplitNum()[dim];
-    int ctas = layout.getCTAsPerCGA()[dim];
+    int split = ctaSplitNum[dim];
+    int ctas = ctaPerCGA[dim];
     assert(ctas % split == 0);
     ret *= LinearLayout::identity1D(split, kBlock, outDimNames[dim]) *
            LinearLayout::zeros1D(ctas / split, kBlock, outDimNames[dim]);
@@ -1117,23 +1125,20 @@ LinearLayout tensorMemoryToLinearLayout(ArrayRef<int64_t> shape,
       blockM *= 2;
       splitM /= 2;
     }
-    auto split = LinearLayout::identity1D(splitM, kCol, dims[0]);
     auto newEncoding = TensorMemoryEncodingAttr::get(
         ctx, blockM, encoding.getBlockN(), encoding.getColStride(), 1,
         encoding.getCTASplitN(), encoding.getTwoCTAs());
     auto ret =
-        tensorMemoryToLinearLayout({shape[0] / splitM, shape[1]}, newEncoding) *
-        split;
-    // In this case, we swap the basis of the last row and last column as per
+        tensorMemoryToLinearLayout({shape[0] / splitM, shape[1]}, newEncoding);
+    // In this case, we swap the basis of the last row and last column
     // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-data-path-layout-bny
     if (isM64TwoCTA) {
       auto bases = ret.getBases();
-      auto &rowBases = bases[kRow];
-      auto &colBases = bases[kCol];
-      std::swap(rowBases[rowBases.size() - 1], colBases[colBases.size() - 1]);
+      std::swap(bases[kRow].back(), bases[kCol].back());
       ret = LinearLayout(bases, ret.getOutDims(), ret.isSurjective());
     }
-    return ret;
+    auto split = LinearLayout::identity1D(splitM, kCol, dims[0]);
+    return ret * split;
   }
   assert(encoding.getCTASplitM() == 1 && encoding.getCTASplitN() == 1);
 

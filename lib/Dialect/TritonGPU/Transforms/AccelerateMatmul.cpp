@@ -23,6 +23,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
+#include <optional>
 
 namespace mlir {
 namespace triton {
@@ -166,7 +167,8 @@ static Value
 getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
                           bool allowTranspose, bool isMMAv5Fp4Padded = false,
                           bool forceTranspose = false,
-                          Operation *op = nullptr /*only for diagnostic*/) {
+                          Operation *op = nullptr /*only for diagnostic*/,
+                          std::optional<unsigned> twoCTADim = std::nullopt) {
   OpBuilder::InsertionGuard g(rewriter);
   Value arg = v;
   while (auto cvtOp = arg.getDefiningOp<ConvertLayoutOp>())
@@ -202,6 +204,8 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
   Attribute SharedMemorySpace =
       SharedMemorySpaceAttr::get(argType.getContext());
   auto CTALayout = getCTALayout(argType.getEncoding());
+  if (twoCTADim)
+    CTALayout = CTALayout.withTwoCTADim(twoCTADim);
   auto newLayout = NVMMASharedEncodingAttr::get(
       argType.getContext(), argType.getShape(), newOrder, CTALayout,
       argType.getElementType(), isMMAv5Fp4Padded);
@@ -495,7 +499,8 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
   RankedTensorType bType = cast<RankedTensorType>(b.getType());
   auto currentLayout = cast<DistributedEncodingTrait>(bType.getEncoding());
   auto newCTALayout =
-      CTALayoutAttr::get(ctx, {1, 2}, {1, 2}, getCTAOrder(currentLayout));
+      CTALayoutAttr::get(ctx, {1, 2}, {1, 2}, getCTAOrder(currentLayout),
+                         /*twoCTADim=*/1);
   Attribute newLayout = replaceCTALayout(currentLayout, newCTALayout);
   rewriter.setInsertionPoint(loadOp);
   for (OpOperand &operand : loadOp->getOpOperands()) {
@@ -556,8 +561,14 @@ public:
     // atomicity. As we currently don't support this layout we disallow
     // transpose for TF32 inputs.
     bool allowTranspose = !dotOp.getA().getType().getElementType().isF32();
-    a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose);
-    b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose);
+    a = getSharedMemoryMMAOperand(
+        a, rewriter, 0, allowTranspose, /*isMMAv5Fp4Padded=*/false,
+        /*forceTranspose=*/false, /*op=*/nullptr,
+        useTwoCTAs ? std::optional<unsigned>(0) : std::nullopt);
+    b = getSharedMemoryMMAOperand(
+        b, rewriter, 1, allowTranspose, /*isMMAv5Fp4Padded=*/false,
+        /*forceTranspose=*/false, /*op=*/nullptr,
+        useTwoCTAs ? std::optional<unsigned>(1) : std::nullopt);
     MLIRContext *context = dotOp->getContext();
     auto instrShape = mmaVersionToInstrShape(
         versionMajor, retShapePerCTA, oldAType.getElementType(), numWarps);
