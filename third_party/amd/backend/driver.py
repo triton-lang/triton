@@ -325,6 +325,7 @@ def make_launcher(constants, signature, warp_size, tensordesc_meta):
         elif ty != "constexpr":
             internal_args_list.append(f"_arg{i}")
 
+    newline = '\n  '
     ptr_decls = [
         f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;"
         for i, ty in signature.items()
@@ -650,9 +651,9 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   }}
 
   // raise exception asap
-  {'\n  '.join(tensor_desc_decls)}
-  {'\n  '.join(ptr_decls)}
-  {'\n  '.join(float_storage_decls)}
+  {newline.join(tensor_desc_decls)}
+  {newline.join(ptr_decls)}
+  {newline.join(float_storage_decls)}
   _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function, (hipDeviceptr_t)profile_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
 
   if(launch_exit_hook != Py_None){{
