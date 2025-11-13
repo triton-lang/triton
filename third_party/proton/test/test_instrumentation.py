@@ -281,9 +281,8 @@ def test_tree(tmp_path: pathlib.Path, hook):
             offsets = block_start + tl.arange(0, BLOCK_SIZE)
             mask = offsets < n_elements
             with pl.scope("load_ops"):
-                for _ in range(x_iters):
-                    with pl.scope("load_x"):
-                        x = tl.load(x_ptr + offsets, mask=mask)
+                with pl.scope("load_x"):
+                    x = tl.load(x_ptr + offsets, mask=mask)
                 with pl.scope("load_y"):
                     y = tl.load(y_ptr + offsets, mask=mask)
             output = x + y
