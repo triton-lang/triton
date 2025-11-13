@@ -161,6 +161,7 @@ module {
       // expected-remark @below {{scope id = 1}}
       // expected-remark @below {{scope parent id = 0}}
       proton.record start "loop_body"
+      proton.record end "loop_body"
     }
     proton.record end "loop"
     tt.return
