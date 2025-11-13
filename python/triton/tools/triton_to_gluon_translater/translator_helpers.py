@@ -15,13 +15,18 @@ from triton.experimental.gluon.language.nvidia.hopper import tma, fence_async_sh
 from triton.experimental.gluon.language.nvidia.blackwell import tma as tma_blackwell
 
 
+@gluon.constexpr_function
+def tl_dot_mma_sync_layout(shape, num_warps):
+    rank = len(shape)
+    assert rank in [2, 3], "MMA sync only supports 2D shapes or 3D shapes with a batch outer dimension"
+    if rank == 2:
+        return ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[num_warps, 1], instr_shape=[16, 8])
+    return ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[num_warps, 1, 1], instr_shape=[1, 16, 8])
+
+
 @gluon.jit
 def tl_dot_mma_sync(a, b, acc_init=None, input_precision=None):
-    mma_layout: ttgl.constexpr = ttgl.NVMMADistributedLayout(
-        version=[2, 0],
-        warps_per_cta=[ttgl.num_warps(), 1],
-        instr_shape=[16, 8],
-    )
+    mma_layout: ttgl.constexpr = tl_dot_mma_sync_layout(a.type.shape, ttgl.num_warps())
     a_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=mma_layout, operand_index=0, k_width=2)
     b_layout: ttgl.constexpr = ttgl.DotOperandLayout(parent=mma_layout, operand_index=1, k_width=2)
     a = ttgl.convert_layout(a, a_layout)
@@ -31,7 +36,7 @@ def tl_dot_mma_sync(a, b, acc_init=None, input_precision=None):
     else:
         acc = ttgl.full([a.shape[0], a.shape[1], b.shape[2]], 0.0, ttgl.float32, layout=mma_layout)
     result = mma_v2(a, b, acc, input_precision)
-    if acc is not None:
+    if acc_init is not None:
         result = ttgl.convert_layout(result, acc_init.type.layout)
     return result
 
@@ -49,7 +54,7 @@ def tl_dot_blackwell(a, b, acc=None, input_precision=None, allow_tf32=None, max_
     M: ttgl.constexpr = a.type.shape[0]
     N: ttgl.constexpr = b.type.shape[1]
     K: ttgl.constexpr = a.type.shape[1]
-    ttgl.static_assert(M >= 64 and N >= 16 and K >= 16, "TODO: support smaller shapes using mmav2")
+    ttgl.static_assert(M >= 64 and N >= 16 and K >= 16, "shapes are too small for MMAv5")
     # Shared memory layouts for inputs (simple default)
     swizzle_byte_with_a: ttgl.constexpr = get_swizzle_byte_width(a.dtype.primitive_bitwidth * K)
     swizzle_byte_with_b: ttgl.constexpr = get_swizzle_byte_width(b.dtype.primitive_bitwidth * N)
@@ -83,7 +88,10 @@ def tl_dot_blackwell(a, b, acc=None, input_precision=None, allow_tf32=None, max_
 
 @gluon.jit
 def tl_dot(a, b, acc=None, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=ttgl.float32):
-    if ttgl.num_warps() < 4:
+    M: ttgl.constexpr = a.type.shape[0]
+    N: ttgl.constexpr = b.type.shape[1]
+    K: ttgl.constexpr = a.type.shape[1]
+    if ttgl.num_warps() < 4 or M < 64 or N < 16 or K < 16:
         return tl_dot_mma_sync(a, b, acc, input_precision)
     else:
         return tl_dot_blackwell(a, b, acc, input_precision, allow_tf32, max_num_imprecise_acc, out_dtype)
