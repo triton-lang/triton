@@ -272,7 +272,6 @@ def test_tree(tmp_path: pathlib.Path, hook):
         y_ptr,
         output_ptr,
         n_elements,
-        x_iters,
         BLOCK_SIZE: tl.constexpr,
     ):
         with pl.scope("kernel"):
@@ -296,7 +295,7 @@ def test_tree(tmp_path: pathlib.Path, hook):
     n_elements = output.numel()
     grid = (1, 1, 1)
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation", hook=hook)
-    add_kernel[grid](x, y, output, n_elements, x_iters=1, BLOCK_SIZE=1024, num_warps=1)
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
     proton.finalize()
 
     with open(temp_file, "rb") as f:
