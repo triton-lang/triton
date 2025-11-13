@@ -17,7 +17,7 @@ from types import ModuleType
 from .. import knobs
 from .driver import driver
 from . import _async_compile
-from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict
+from .._utils import find_paths_if, get_iterable_path, type_canonicalisation_dict, is_namedtuple
 from .cache import get_cache_key
 from triton._C.libtriton import get_cache_invalidating_env_vars, native_specialize_impl
 
@@ -564,9 +564,11 @@ def compute_cache_key(kernel_key_cache, specialization, options):
     def replace_callables(obj):
         if isinstance(obj, list):
             return [replace_callables(arg) for arg in obj]
+        elif is_namedtuple(obj):
+            results = [replace_callables(arg) for arg in obj]
+            return obj.__class__(*results)
         elif isinstance(obj, tuple):
-            results = tuple(replace_callables(arg) for arg in obj)
-            return obj.__class__(results)
+            return tuple(replace_callables(arg) for arg in obj)
         elif isinstance(obj, JITCallable):
             return obj.cache_key
         return obj
