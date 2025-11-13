@@ -110,8 +110,8 @@ class HIPBackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {'arch': knobs.runtime.override_arch or self.target.arch}
 
-        if opts.get("num_ctas", 1) > 1:
-            raise ValueError("num_ctas > 1 not supported for AMD GPUs")
+        if opts.get("num_ctas", 1) > 1 and not amd.supports_multi_cta_launch(self.target.arch):
+            raise ValueError(f"num_ctas > 1 not supported on {self.target.arch}")
 
         # Enable XF32 (TF32) for CDNA3 GPUs
         if self.target.arch == 'gfx942':

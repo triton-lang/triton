@@ -1317,7 +1317,42 @@ def _test_runtime_async_copy_layouts(M, N, vec_size, shared_layout, dtype, use_m
 @ASYNC_COPY_TEST_PARAM_SHARED_LAYOUT
 @ASYNC_COPY_TEST_PARAM_DTYPE
 def test_runtime_async_copy(M, N, vec_size, shared_layout, dtype):
-    _test_runtime_async_copy_layouts(M, N, vec_size, shared_layout, dtype)
+    _test_runtime_async_copy_layouts(M, N, vec_size, shared_layout, dtype, False)
+
+
+@pytest.mark.parametrize("blocked_layout", [
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       ctas_per_cga=[1, 1], cta_split_num=[1, 1]),
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       ctas_per_cga=[1, 2], cta_split_num=[1, 2]),
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       ctas_per_cga=[2, 1], cta_split_num=[2, 1]),
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       ctas_per_cga=[4, 4], cta_split_num=[1, 4]),
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       ctas_per_cga=[4, 4], cta_split_num=[2, 2]),
+    ttgl.BlockedLayout(size_per_thread=[1, 8], threads_per_warp=[4, 8], warps_per_cta=[1, 1], order=[1, 0],
+                       ctas_per_cga=[2, 8], cta_split_num=[1, 8]),
+])
+def test_runtime_async_copy_layouts_multi_cta(blocked_layout):
+    M = 1024
+    N = 1024
+    BLOCK_M = 128
+    BLOCK_N = 128
+    num_ctas = blocked_layout.ctas_per_cga[0] * blocked_layout.ctas_per_cga[1]
+
+    shared_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], blocked_layout.ctas_per_cga,
+                                              blocked_layout.cta_split_num)
+
+    a = torch.rand((M, N), dtype=torch.float32)
+    out = torch.empty_like(a)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    out_handle = out.cuda()
+    async_load_and_write_back_kernel[grid](a.cuda(), out_handle, M, N, BLOCK_M, BLOCK_N, blocked_layout, shared_layout,
+                                           num_warps=1, num_ctas=num_ctas)
+    out_tri = out_handle.cpu()
+    out_ref = a.cpu()
+    assert torch.equal(out_tri, out_ref)
 
 
 @gluon.jit
