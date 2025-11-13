@@ -412,12 +412,13 @@ def matmul(a, b, bias,
     b_scale_has_tma = opt_flags.is_persistent and b_scale is not None
     b_transpose = b_storage.data.stride()[-2] == 1
     if b_scale_has_tma:
+        scale_block_k = opt_flags.block_k // int(MXFP_BLOCK_SIZE)
         b_scale_storage = b_scale.storage
-        b_scale_tma_block_size = [opt_flags.block_n, opt_flags.block_k] if b_transpose else [opt_flags.block_k, opt_flags.block_n]
+        b_scale_tma_block_size = [opt_flags.block_n, scale_block_k] if b_transpose else [scale_block_k, opt_flags.block_n]
         if isinstance(b_scale.storage.layout, StridedLayout):
             b_scale_storage = _canonicalize_storage(b_scale.storage, 3, None)
             b_scale_tma_block_size = [1] + b_scale_tma_block_size
-        b_scale_tensor_or_tma = b_scale_storage.make_tma(b_scale_tma_block_size, "dense")
+        b_scale_tensor_or_tma = b_scale_storage.make_tma(b_scale_tma_block_size, "dense", is_scale=True)
     else:
         b_scale_tensor_or_tma = b_scale
     # canonicalize strides
