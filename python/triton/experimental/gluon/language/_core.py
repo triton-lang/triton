@@ -440,6 +440,7 @@ def histogram(input, num_bins, mask=None, layout=None, _semantic=None, _generato
         mask = _semantic.to_tensor(mask)
     return _semantic.histogram(input, num_bins, mask, layout)
 
+
 @builtin
 def cat(input, other, can_reorder=False, layout=None, _semantic=None):
     """
