@@ -486,7 +486,7 @@ class JITCallable:
         return self.__globals__ | inspect.getclosurevars(self.fn).nonlocals
 
     @property
-    def cache_key(self):
+    def cache_key(self) -> str:
         # TODO : hash should be attribute of `self`
         with self._hash_lock:
             if self.hash is not None:
@@ -507,6 +507,9 @@ class JITCallable:
                               if isinstance(val, constexpr)])
             self.hash = hashlib.sha256(self.hash.encode("utf-8")).hexdigest()
         return self.hash
+
+    def __hash__(self):
+        return hash(self.cache_key)
 
     # we do not parse `src` in the constructor because
     # the user might want to monkey-patch self.src dynamically.
@@ -557,7 +560,18 @@ def compute_cache_key(kernel_key_cache, specialization, options):
     if cache_key is not None:
         return cache_key
 
-    cache_key = str(specialization) + str(options)
+    # Replace JITCallable objects with their hash, so the cache key will change if the src is updated
+    def replace_callables(obj):
+        if isinstance(obj, list):
+            return [replace_callables(arg) for arg in obj]
+        elif isinstance(obj, tuple):
+            results = tuple(replace_callables(arg) for arg in obj)
+            return obj.__class__(results)
+        elif isinstance(obj, JITCallable):
+            return obj.cache_key
+        return obj
+
+    cache_key = str(replace_callables(specialization)) + str(options)
     kernel_key_cache[key] = cache_key
     return cache_key
 
