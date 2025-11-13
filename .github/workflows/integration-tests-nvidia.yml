@@ -87,6 +87,8 @@ jobs:
         run: ccache --print-stats
       - name: Run lit tests
         run: make test-lit
+      - name: Install pytest-sugar
+        run: python3 -m pip install pytest-sugar
       - name: Run python tests on CUDA
         run: make NUM_PROCS=24 test-unit
       - name: Run distributed tests
