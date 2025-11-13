@@ -8,18 +8,6 @@
 
 namespace mlir::triton::gluon {
 
-struct LayoutInfo {
-  Attribute encoding;
-  // Some operations can infer one of many encodings,
-  // we model this by setting the mayVary flag on encodings
-  // derived from these ops.
-  // If "may vary" is set then we allow conflicts, and when
-  // resolving conflicts we prefer encodings that are not allowed to vary.
-  bool mayVary = false;
-
-  operator bool() { return bool(encoding); }
-};
-
 LogicalResult
 inferLayout(FuncOp func, llvm::function_ref<bool(Type)> typeCheck,
             const SmallVector<std::pair<Value, Attribute>> &seedEncodings);

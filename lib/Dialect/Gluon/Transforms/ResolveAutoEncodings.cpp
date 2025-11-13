@@ -22,8 +22,7 @@ bool isAutoEncodingTensorType(Type ty) {
   auto tensorTy = dyn_cast<RankedTensorType>(ty);
   return tensorTy && isa<gluon::AutoEncodingAttr>(tensorTy.getEncoding());
 }
-LogicalResult inferAutoLayout(ModuleOp &mod,
-                              llvm::function_ref<bool(Type)> typeCheck) {
+LogicalResult inferAutoLayout(ModuleOp &mod) {
   for (auto &op : *mod.getBody()) {
     auto func = dyn_cast<FuncOp>(&op);
     if (!func)
@@ -31,14 +30,11 @@ LogicalResult inferAutoLayout(ModuleOp &mod,
 
     // Set seed values from set_auto_layout ops
     llvm::SmallVector<std::pair<Value, Attribute>> seedEncodings;
-    auto res = func.walk([&](gluon::SetAutoLayoutOp op) -> WalkResult {
+    func.walk([&](gluon::SetAutoLayoutOp op) {
       seedEncodings.push_back({op.getSrc(), op.getType().getEncoding()});
-      return WalkResult::advance();
     });
-    if (res.wasInterrupted())
-      return failure();
 
-    if (failed(inferLayout(func, typeCheck, seedEncodings)))
+    if (failed(inferLayout(func, isAutoEncodingTensorType, seedEncodings)))
       return failure();
   }
   return success();
@@ -58,7 +54,7 @@ public:
     ModuleOp m = getOperation();
 
     // Do layout inference
-    if (failed(inferAutoLayout(m, isAutoEncodingTensorType)))
+    if (failed(inferAutoLayout(m)))
       return signalPassFailure();
 
     // Cleanup set_auto_layout ops

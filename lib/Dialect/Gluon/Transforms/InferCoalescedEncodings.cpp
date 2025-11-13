@@ -38,9 +38,7 @@ bool isCoalescedEncodingTensorType(Type ty) {
   return tensorTy && isa<gluon::CoalescedEncodingAttr>(tensorTy.getEncoding());
 }
 
-LogicalResult InferCoalescedLayout(ModuleOp &mod,
-                                   llvm::function_ref<bool(Type)> typeCheck) {
-  // axis info analysis
+LogicalResult inferCoalescedLayout(ModuleOp &mod) {
   ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
 
@@ -54,7 +52,7 @@ LogicalResult InferCoalescedLayout(ModuleOp &mod,
     // infer coalesced encoding for ptrs
     //
     llvm::SmallVector<std::pair<Value, Attribute>> seedEncodings;
-    auto res = func.walk([&](Operation *curr) {
+    func.walk([&](Operation *curr) {
       Value ptr = getMemAccessPtr(curr);
       if (!ptr)
         return WalkResult::advance();
@@ -65,11 +63,8 @@ LogicalResult InferCoalescedLayout(ModuleOp &mod,
       if (!isPtrTensor)
         return WalkResult::advance();
       // we only consider those with coalesced encoding
-      if (auto tensorType = dyn_cast<RankedTensorType>(ptr.getType())) {
-        auto encoding = tensorType.getEncoding();
-        if (!encoding || !isa<gluon::CoalescedEncodingAttr>(encoding))
-          return WalkResult::advance();
-      }
+      if (!isCoalescedEncodingTensorType(ptr.getType()))
+        return WalkResult::advance();
 
       // build a coalesced encoding
       int numWarps = ttg::lookupNumWarps(curr);
@@ -87,9 +82,6 @@ LogicalResult InferCoalescedLayout(ModuleOp &mod,
       return WalkResult::advance();
     });
 
-    if (res.wasInterrupted())
-      return failure();
-
     // 2. propagate Coalesced Layout forward/backward
     //
     // for backward slice, it doesn't cross the set_auto_layout boundary
@@ -97,7 +89,7 @@ LogicalResult InferCoalescedLayout(ModuleOp &mod,
     // -> gl.set_auto_layout(val, a concrete coalesced layout)
     // then ResolveAutoLayoutPass will handle the rest
     //
-    if (failed(inferLayout(func, typeCheck, seedEncodings)))
+    if (failed(inferLayout(func, isCoalescedEncodingTensorType, seedEncodings)))
       return failure();
   }
   return success();
@@ -111,7 +103,7 @@ class GluonInferCoalescedEncodingsPass
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
 
-    if (failed(InferCoalescedLayout(moduleOp, isCoalescedEncodingTensorType)))
+    if (failed(inferCoalescedLayout(moduleOp)))
       return signalPassFailure();
 
     if (failed(doubleCheckEncodings(moduleOp, isCoalescedEncodingTensorType)))

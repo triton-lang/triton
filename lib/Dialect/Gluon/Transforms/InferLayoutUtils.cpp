@@ -21,6 +21,18 @@
 namespace mlir::triton::gluon {
 
 namespace {
+struct LayoutInfo {
+  Attribute encoding;
+  // Some operations can infer one of many encodings,
+  // we model this by setting the mayVary flag on encodings
+  // derived from these ops.
+  // If "may vary" is set then we allow conflicts, and when
+  // resolving conflicts we prefer encodings that are not allowed to vary.
+  bool mayVary = false;
+
+  operator bool() { return bool(encoding); }
+};
+
 uint64_t hashWithMemo(Attribute attr,
                       llvm::MapVector<Attribute, uint64_t> &hashMemo) {
   auto it = hashMemo.find(attr);
