@@ -453,7 +453,6 @@ static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas
   if(num_ctas > 1) {{
     hipLaunchAttribute attributes[2];
     // Attribute0: Cluster dimensions
-    // Workaround: Use magic numbers/untyped union members until cluster launch attribute is available
     attributes[0].id = 4;
     int *cluster_dims = (int*)attributes[0].val.pad;
     cluster_dims[0] = num_ctas;

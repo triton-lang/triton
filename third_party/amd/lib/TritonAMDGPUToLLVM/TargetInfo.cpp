@@ -658,12 +658,7 @@ bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
 }
 
 bool TargetInfo::supportsMultiCTALaunch() const {
-  switch (getISAFamily()) {
-  case ISAFamily::GFX1250:
-    return true;
-  default:
-    return false;
-  }
+  return getISAFamily() == ISAFamily::GFX1250;
 }
 
 void TargetInfo::localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
