@@ -822,6 +822,7 @@ Operation *getDominantConsumer(ArefGetEnterOp getEnterOp, Block &container,
 // This is an optimization to combine arefs for TMA load into one, so that
 // barrier arrive and wait are coalesced.
 void combineArefs(scf::ForOp loop) {
+  // We combine getEnterOps in the same loop body, not across a loop.
   auto getEnterOps = loop.getOps<ArefGetEnterOp>();
 
   // Arefs whose get-enter ops share the same dominant consumer can be combined
