@@ -811,6 +811,11 @@ LogicalResult LocalGatherOp::verify() {
     return emitError("result element type must match source element type");
   }
 
+  // Verify indices and result have the same layout
+  if (indicesTy.getEncoding() != dstTy.getEncoding()) {
+    return emitError("indices and result must have the same layout");
+  }
+
   return success();
 }
 
