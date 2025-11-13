@@ -504,20 +504,20 @@ struct DirectToLdsLoadConversionBase : public LoadStoreConversionBase {
       sharedLayout = triton::gpu::toLinearLayout(dstTy);
     }
     auto cvt = srcLayout.invertAndCompose(sharedLayout);
-
-    Value ctaMulticastMask;
-    if (isaFamily == ISAFamily::GFX1250) {
-      if (!cvt.isTrivialOver({str_attr("block")})) {
-        return emitError(loc, "async copy global to local does not support "
-                              "non-trivial block dimension");
-      }
-      ctaMulticastMask = LLVM::AMD::emitCtaMulticastMask(
-          rewriter, loc, targetInfo.getClusterCTAId(rewriter, loc), srcLayout);
+    if (!cvt.isTrivialOver({str_attr("block")})) {
+      return emitError(
+          loc,
+          "direct to lds loads do not support non-trivial block dimension");
     }
-
     cvt = cvt.sublayout(
         {str_attr("register"), str_attr("lane"), str_attr("warp")},
         {str_attr("offset")});
+
+    Value ctaMulticastMask;
+    if (isaFamily == ISAFamily::GFX1250) {
+      ctaMulticastMask = LLVM::AMD::emitCtaMulticastMask(
+          rewriter, loc, targetInfo.getClusterCTAId(rewriter, loc), srcLayout);
+    }
 
     auto smemObj =
         LLVM::getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
@@ -995,8 +995,8 @@ struct AsyncCopyGlobalToLocalOpConversion
       return failure();
     }
 
-    // For swizzled layouts we need to use the non swizzled layout to
-    // compute the LDS addresses since we gather into LDS
+    // For swizzled layouts we need to use the non swizzled layout to compute
+    // the LDS addresses since we gather into LDS
     auto flatDstTy = dstTy;
     SmallVector<Value> swizzledLaneOffsets;
     if (requiresSrcPtrSwizzling) {
