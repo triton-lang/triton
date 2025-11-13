@@ -261,6 +261,11 @@ def compile(src, target=None, options=None, _env_vars=None):
     metadata_filename = f"{file_name}.json"
     metadata_group = fn_cache_manager.get_group(metadata_filename) or {}
     metadata_path = metadata_group.get(metadata_filename)
+    # For now just always force a recompile when the compiler pipeline hook is set
+    # since we are dynamically altering the pipeline
+    # TODO(crobeck): find a cleaner way to do this
+    if knobs.runtime.add_stages_inspection_hook is not None:
+        knobs.compilation.always_compile = True
     always_compile = knobs.compilation.always_compile
     if not always_compile and metadata_path is not None:
         # cache hit!
