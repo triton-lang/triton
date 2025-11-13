@@ -499,6 +499,16 @@ def set_auto_layout(value, layout, _semantic=None):
 
 
 @builtin
+def fp4_to_fp(src, elem_type, axis, _semantic=None):
+    """
+    Upcast a tensor from fp4 (e2m1) to another floating point type.
+    """
+    axis = _unwrap_if_constexpr(axis)
+    elem_type = _unwrap_if_constexpr(elem_type)
+    return _semantic.fp4_to_fp(src, elem_type, axis)
+
+
+@builtin
 def warp_specialize(functions_and_args, worker_num_warps, worker_num_regs, _semantic=None, _generator=None):
     """
     Create a warp-specialized execution region, partitioning work across warps.

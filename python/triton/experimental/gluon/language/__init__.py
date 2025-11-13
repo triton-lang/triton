@@ -53,6 +53,7 @@ from ._core import (
     dot_fma,
     expand_dims,
     full,
+    fp4_to_fp,
     gather,
     num_warps,
     num_ctas,

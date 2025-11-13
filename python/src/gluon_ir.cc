@@ -546,6 +546,12 @@ void init_gluon_ir(py::module &&m) {
               Type retType) -> Value {
              return self.create<triton::CatOp>(retType, lhs, rhs);
            })
+      .def("create_fp4_to_fp",
+           [](GluonOpBuilder &self, Value src, Type elemType,
+              int axis) -> Value {
+             return self.create<ttg::Fp4ToFpOp>(
+                 cast<TypedValue<RankedTensorType>>(src), elemType, axis);
+           })
       .def("create_async_copy_global_to_local",
            [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
               Value other, tt::CacheModifier cacheModifier,
