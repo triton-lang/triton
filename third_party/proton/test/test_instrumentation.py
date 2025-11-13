@@ -417,6 +417,11 @@ def test_multi_session(tmp_path: pathlib.Path):
     add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
     proton.finalize()
 
+    temp_file_restart = tmp_path / "test_tree_restart.hatchet"
+    session_id0 = proton.start(str(temp_file_restart.with_suffix("")), backend="instrumentation")
+    add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024, num_warps=1)
+    proton.finalize()
+
     with open(temp_file_inst, "rb") as f:
         data = json.load(f)
         kernel_frame = data[0]["children"][0]
@@ -428,6 +433,12 @@ def test_multi_session(tmp_path: pathlib.Path):
         kernel_frame = data[0]["children"][0]
         assert "add_kernel" == kernel_frame["frame"]["name"]
         assert "time (ns)" in kernel_frame["metrics"]
+
+    with open(temp_file_restart, "rb") as f:
+        data = json.load(f)
+        kernel_frame = data[0]["children"][0]
+        assert "add_kernel" == kernel_frame["frame"]["name"]
+        assert "cycles" in kernel_frame["children"][0]["metrics"]
 
 
 def test_autotune(tmp_path: pathlib.Path):
