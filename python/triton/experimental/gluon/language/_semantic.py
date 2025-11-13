@@ -503,7 +503,9 @@ class GluonSemantic(TritonSemantic[TensorTy]):
 
     def fp4_to_fp(self, src: TensorTy, elem_type, axis) -> TensorTy:
         result = self.builder.create_fp4_to_fp(src.handle, elem_type.to_ir(self.builder), axis)
-        return self._wrap_tensor_infer_layout(result)
+        shape = list(src.type.shape)
+        shape[axis] *= 2
+        return self._wrap_handle_infer_layout(result, elem_type, shape)
 
     def warp_specialize(self, functions_and_args, worker_num_warps: Sequence[int], worker_num_regs: Sequence[int],
                         generator):

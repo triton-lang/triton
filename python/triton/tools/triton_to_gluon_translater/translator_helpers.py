@@ -196,7 +196,7 @@ def tl_dot_decomposed_scale_to_16(scale, compute_type):
     int_type: ttgl.constexpr = get_int_type(int_width)
 
     zexted = ttgl.cast(scale, int_type)
-    shift_value: ttgl.constexpr = large_fp_type.fp_mantissa_width - 1
+    shift_value: ttgl.constexpr = large_fp_type.fp_mantissa_width
     shl_res = zexted << shift_value
     scale_fp = ttgl.cast(shl_res, large_fp_type, bitcast=True)
     if large_fp_type != compute_type:
@@ -297,20 +297,33 @@ def tl_dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=No
         return tl_dot_scaled_blackwell(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, fast_math,
                                        lhs_k_pack, rhs_k_pack, out_dtype)
     else:
-        return tl_dot_scaled_mma_sync(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, fast_math,
-                                      lhs_k_pack, rhs_k_pack, out_dtype)
+        return tl_dot_decomposed_block_scales(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, fast_math,
+                                              lhs_k_pack, rhs_k_pack, out_dtype)
 
 
 @gluon.jit
-def tl_dot_scaled_mma_sync(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, fast_math=False,
-                           lhs_k_pack=True, rhs_k_pack=True, out_dtype=ttgl.float32):
-    ttgl.static_assert(not (not lhs_k_pack or not rhs_k_pack), "TODO: support m/n packed formats")
-    compute_type: ttgl.constexpr = ttgl.float16 if (lhs_format == "fp16" or rhs_format == "fp16") else ttgl.bfloat16
+def tl_dot_decomposed_block_scales(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, fast_math=False,
+                                   lhs_k_pack=True, rhs_k_pack=True, out_dtype=ttgl.float32):
+    if lhs_scale is None and rhs_scale is not None:
+        lhs_trans = tl_trans(lhs)
+        rhs_trans = tl_trans(rhs)
+        if acc is not None:
+            orig_layout: ttgl.constexpr = acc.type.layout
+            acc = tl_trans(acc)
+        result = tl_dot_scaled(rhs_trans, rhs_scale, rhs_format, lhs_trans, lhs_scale, lhs_format, acc, fast_math,
+                               lhs_k_pack, rhs_k_pack, out_dtype)
+        result = tl_trans(result)
+        if acc is not None:
+            result = ttgl.convert_layout(result, orig_layout)
+        return result
+    else:
+        ttgl.static_assert(not (not lhs_k_pack or not rhs_k_pack), "TODO: support m/n packed formats")
+        compute_type: ttgl.constexpr = ttgl.float16 if (lhs_format == "fp16" or rhs_format == "fp16") else ttgl.bfloat16
 
-    scale_a = tl_dot_decomposed_scale_arg(lhs, lhs_scale, lhs_format, 0, compute_type, fast_math)
-    scale_b = tl_dot_decomposed_scale_arg(rhs, rhs_scale, rhs_format, 1, compute_type, fast_math)
+        scale_a = tl_dot_decomposed_scale_arg(lhs, lhs_scale, lhs_format, 0, compute_type, fast_math)
+        scale_b = tl_dot_decomposed_scale_arg(rhs, rhs_scale, rhs_format, 1, compute_type, fast_math)
 
-    return tl_dot_mma_sync(scale_a, scale_b, acc, out_dtype=out_dtype)
+        return tl_dot(scale_a, scale_b, acc, out_dtype=out_dtype)
 
 
 @gluon.jit
