@@ -67,86 +67,14 @@ void mlir::triton::amdgpu::TritonAMDGPUDialect::initialize() {
 
 namespace mlir::triton::amdgpu {
 
-// Check that the source and destination tensor layouts match on a CTA tile.
-// This means that lane and warp bases of linear layout must match, and the
-// register basis must be the same up to a number of registers contained within
-// a CTA tile.
-bool hasMatchingCTATileLayoutForSliceConcat(
-    RankedTensorType srcTy, RankedTensorType dstTy,
-    std::function<void(const Twine &)> emitError) {
-  auto srcShape = srcTy.getShape();
-  auto dstShape = dstTy.getShape();
-  auto srcLL = triton::gpu::toLinearLayout(srcTy);
-  auto dstLL = triton::gpu::toLinearLayout(dstTy);
-
-  MLIRContext *ctx = srcTy.getContext();
-  auto kReg = StringAttr::get(ctx, "register");
-  srcLL = srcLL.removeZeroBasesAlongDim(kReg);
-  dstLL = dstLL.removeZeroBasesAlongDim(kReg);
-
-  auto getBases = [&](StringRef name) {
-    auto key = StringAttr::get(ctx, name);
-    return std::pair{srcLL.getBases().lookup(key),
-                     dstLL.getBases().lookup(key)};
-  };
-
-  auto [regSrc, regDst] = getBases("register");
-  auto [laneSrc, laneDst] = getBases("lane");
-  auto [warpSrc, warpDst] = getBases("warp");
-
-  auto shapeCTASrc = mlir::triton::AMD::getShapePerCTATile(srcTy);
-  auto shapeCTADst = mlir::triton::AMD::getShapePerCTATile(dstTy);
-  if (shapeCTASrc != shapeCTADst) {
-    emitError(
-        "CTA tile shapes must match between source and destination tensors.");
-    return false;
-  }
-
-  // Compute number of basis vectors that desribe registers from one CTA tile.
-  unsigned numCTAs = 1;
-  for (size_t d = 0, rank = srcShape.size(); d < rank; ++d) {
-    assert(srcShape[d] % shapeCTASrc[d] == 0 &&
-           "Source shape must be multiple of CTA tile shape");
-    numCTAs *= srcShape[d] / shapeCTASrc[d];
-  }
-
-  assert(llvm::isPowerOf2_32(numCTAs) &&
-         "expect number of CTAs to be power of 2");
-
-  unsigned totalElemsPerThreadNoBroadcastLog = regSrc.size();
-  unsigned elemsPerThreadPerCTALog =
-      totalElemsPerThreadNoBroadcastLog - llvm::Log2_32(numCTAs);
-  unsigned regCompareLen = elemsPerThreadPerCTALog;
-
-  auto compareBasis = [&](auto &srcBasis, auto &dstBasis, StringRef message,
-                          int limit = -1) {
-    int n = (limit < 0 ? srcBasis.size()
-                       : std::min<unsigned>(srcBasis.size(), limit));
-    if (dstBasis.size() < n) {
-      emitError(message);
-      return false;
-    }
-    for (size_t i = 0; i < n; ++i) {
-      if (srcBasis[i] != dstBasis[i]) {
-        emitError(message);
-        return false;
-      }
-    }
-    return true;
-  };
-
-  if (!compareBasis(regSrc, regDst,
-                    "Register basis must match on a CTA tile between source "
-                    "and destination.",
-                    regCompareLen))
-    return false;
-
-  if (laneSrc != laneDst || warpSrc != warpDst) {
-    emitError("Lane and warp dim basis must match between source and "
-              "destination layout.");
-    return false;
-  }
-  return true;
+std::string getStringFromCoords(mlir::triton::AMD::ElemLocationKey coords) {
+  std::string result;
+  llvm::raw_string_ostream os(result);
+  os << "[";
+  llvm::interleaveComma(coords, os,
+                        [&](const auto &coord) { os << coord.second; });
+  os << "]";
+  return os.str();
 }
 
 LogicalResult ExtractSliceOp::verify() {
@@ -167,7 +95,6 @@ LogicalResult ExtractSliceOp::verify() {
   auto srcShape = srcTy.getShape();
   auto dstShape = dstTy.getShape();
   auto offsets = getStaticOffsets();
-  auto shapePerCTATile = mlir::triton::AMD::getShapePerCTATile(srcTy);
   size_t rank = srcShape.size();
 
   auto failDim = [&](StringRef msg, int i) -> LogicalResult {
@@ -179,16 +106,59 @@ LogicalResult ExtractSliceOp::verify() {
       return failDim("result shape cannot exceed source shape", i);
     if (offsets[i] + dstShape[i] > srcShape[i])
       return failDim("invalid offset", i);
-    if (dstShape[i] % shapePerCTATile[i] != 0)
-      return emitError("result shape must be multiple of shapePerCTATile");
-    if (offsets[i] % shapePerCTATile[i] != 0)
-      return emitError("offset must be multiple of shapePerCTATile");
   }
 
-  // Verify that source and destination layout match on a CTA tile.
-  if (!hasMatchingCTATileLayoutForSliceConcat(
-          srcTy, dstTy, [&](const Twine &msg) { emitError() << msg; }))
-    return failure();
+  auto linearLayoutSrc = triton::gpu::toLinearLayout(srcTy);
+  auto linearLayoutDst = triton::gpu::toLinearLayout(dstTy);
+  auto ctx = srcTy.getContext();
+
+  auto getBases = [&](StringRef name) {
+    auto key = StringAttr::get(ctx, name);
+    return std::pair{linearLayoutSrc.getBases().lookup(key),
+                     linearLayoutDst.getBases().lookup(key)};
+  };
+
+  StringAttr kReg = StringAttr::get(ctx, "register");
+  auto dstRegBases = linearLayoutDst.getBases().lookup(kReg);
+
+  int dstRegCount = 1 << dstRegBases.size();
+  SmallVector<Value> resultVals;
+
+  // Algorithm:
+  // 1. for every dst register
+  // 2.   get dst element coordinates relative to tile start
+  // 3.   add coordinates of tile start relative to parent tensor
+  // 4.   check if exists source register which holds dst value
+
+  // 1. for every dst register
+  for (int regId = 0; regId < dstRegCount; ++regId) {
+    // 2.   get dst element coordinates relative to tile start
+    auto elemCoords = mlir::triton::AMD::getElemCoordinatesFromRegisters(
+        linearLayoutDst, regId, ctx);
+    // 3.   add coordinates of tile start relative to parent tensor
+
+    for (int i = 0; i < rank; ++i)
+      elemCoords[i].second += offsets[i];
+
+    // 4.   check if exists source register which holds dst value
+    std::optional<int> srcReg = mlir::triton::AMD::getRegFromCoordinates(
+        linearLayoutSrc, elemCoords, ctx);
+
+    if (!srcReg.has_value()) {
+      std::string msg;
+      llvm::raw_string_ostream os(msg);
+      os << "No source register holds the element for destination index "
+         << getStringFromCoords(elemCoords);
+      return emitError(os.str());
+    }
+  }
+
+  auto [laneSrc, laneDst] = getBases("lane");
+  auto [warpSrc, warpDst] = getBases("warp");
+  if (laneSrc != laneDst || warpSrc != warpDst) {
+    return emitError("Lane and warp dim basis must match between source and "
+                     "destination layout.");
+  }
 
   return success();
 }
@@ -553,10 +523,69 @@ LogicalResult ConcatOp::verify() {
     return emitError()
            << "Element types of sources and destination must match.";
 
-  // 3) Check that all source and destination layouts match on a CTA tile.
-  if (!hasMatchingCTATileLayoutForSliceConcat(
-          srcType, dstType, [&](const Twine &msg) { emitError() << msg; }))
-    return failure();
+  auto linearLayoutSrc = triton::gpu::toLinearLayout(srcType);
+  auto linearLayoutDst = triton::gpu::toLinearLayout(dstType);
+  auto ctx = srcType.getContext();
+
+  auto getBases = [&](StringRef name) {
+    auto key = StringAttr::get(ctx, name);
+    return std::pair{linearLayoutSrc.getBases().lookup(key),
+                     linearLayoutDst.getBases().lookup(key)};
+  };
+
+  auto srcToDstShape = LLVM::AMD::multiDimElementwise<int64_t, int64_t>(
+      dstShape, srcShape, std::divides<unsigned>());
+  std::vector<unsigned> defaultOrder(rank);
+  std::iota(defaultOrder.rbegin(), defaultOrder.rend(), 0);
+
+  StringAttr kReg = StringAttr::get(ctx, "register");
+  auto dstRegBases = linearLayoutDst.getBases().lookup(kReg);
+  int dstRegCount = 1 << dstRegBases.size();
+
+  // Algorithm:
+  // 1. for all elements in dst tensor
+  // 2.   get dst value location in tensor
+  // 3.   find, which input tile holds the dst value
+  // 4.   subtract dst coordinates and start coordinates of the tile
+  // 5.   check if exist source register which holds dst value
+
+  // 1. for all elements in dst tensor
+  for (int regId = 0; regId < dstRegCount; ++regId) {
+    // 2.   get dst value location in tensor
+    auto elemCoords = mlir::triton::AMD::getElemCoordinatesFromRegisters(
+        linearLayoutDst, regId, ctx);
+    auto elemCoordsArray = llvm::to_vector(llvm::make_second_range(elemCoords));
+
+    // 3.   find, which input tile holds the dst value
+    auto multiDimOperandIdx = LLVM::AMD::multiDimElementwise<int32_t, int64_t>(
+        elemCoordsArray, srcShape, std::divides<unsigned>());
+    auto linearOperandIdx =
+        mlir::LLVM::linearize(multiDimOperandIdx, srcToDstShape, defaultOrder);
+
+    // 4.   subtract dst coordinates and start coordinates of the tile
+
+    for (int dim = 0; dim < rank; ++dim)
+      elemCoords[dim].second -= multiDimOperandIdx[dim] * srcShape[dim];
+
+    std::optional<int> srcReg = mlir::triton::AMD::getRegFromCoordinates(
+        linearLayoutSrc, elemCoords, ctx);
+    // 5.   check if exist source register which holds dst value
+
+    if (!srcReg.has_value()) {
+      auto coordsStr = getStringFromCoords(elemCoords);
+      std::string msg =
+          "No source register holds the element for destination index " +
+          coordsStr;
+      return emitError(msg);
+    }
+  }
+
+  auto [laneSrc, laneDst] = getBases("lane");
+  auto [warpSrc, warpDst] = getBases("warp");
+  if (laneSrc != laneDst || warpSrc != warpDst) {
+    return emitError("Lane and warp dim basis must match between source and "
+                     "destination layout.");
+  }
 
   return success();
 }
