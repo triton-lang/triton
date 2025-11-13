@@ -2342,35 +2342,12 @@ def gather_3d_kernel(
 ):
     """Test 3D gather along specified axis."""
     # Load the tensor from global memory [N, M, P]
-    # Create nested slice layouts: 3D -> 2D -> 1D
-    # For idx_n: [N,M,P] -> [N,P] -> [N]
-    slice_n_2d: ttgl.constexpr = ttgl.SliceLayout(dim=1, parent=layout_3d)  # Squeeze M
-    slice_n_1d: ttgl.constexpr = ttgl.SliceLayout(dim=1, parent=slice_n_2d)  # Squeeze P
+    idx_n = ttgl.arange(0, N)[:, None, None]
+    idx_m = ttgl.arange(0, M)[None, :, None]
+    idx_p = ttgl.arange(0, P)[None, None, :]
 
-    # For idx_m: [N,M,P] -> [N,M] -> [M]
-    slice_m_2d: ttgl.constexpr = ttgl.SliceLayout(dim=2, parent=layout_3d)  # Squeeze P
-    slice_m_1d: ttgl.constexpr = ttgl.SliceLayout(dim=0, parent=slice_m_2d)  # Squeeze N
-
-    # For idx_p: [N,M,P] -> [N,P] -> [P]
-    slice_p_2d: ttgl.constexpr = ttgl.SliceLayout(dim=1, parent=layout_3d)  # Squeeze M
-    slice_p_1d: ttgl.constexpr = ttgl.SliceLayout(dim=0, parent=slice_p_2d)  # Squeeze N
-
-    idx_n = ttgl.arange(0, N, layout=slice_n_1d)
-    idx_n_2d_temp = ttgl.expand_dims(idx_n, 1)
-    idx_n_2d = ttgl.convert_layout(idx_n_2d_temp, slice_n_2d)
-    idx_n_3d = ttgl.expand_dims(idx_n_2d, 1)
-
-    idx_m = ttgl.arange(0, M, layout=slice_m_1d)
-    idx_m_2d_temp = ttgl.expand_dims(idx_m, 0)
-    idx_m_2d = ttgl.convert_layout(idx_m_2d_temp, slice_m_2d)
-    idx_m_3d = ttgl.expand_dims(idx_m_2d, 2)
-
-    idx_p = ttgl.arange(0, P, layout=slice_p_1d)
-    idx_p_2d_temp = ttgl.expand_dims(idx_p, 0)
-    idx_p_2d = ttgl.convert_layout(idx_p_2d_temp, slice_p_2d)
-    idx_p_3d = ttgl.expand_dims(idx_p_2d, 1)
-
-    offsets_3d = idx_n_3d * (M * P) + idx_m_3d * P + idx_p_3d
+    offsets_3d = idx_n * (M * P) + idx_m * P + idx_p
+    offsets_3d = ttgl.set_auto_layout(offsets_3d, layout_3d)
 
     tensor_data = ttgl.load(tensor_ptr + offsets_3d)
 
@@ -2455,35 +2432,12 @@ def scatter_3d_kernel(
     shared_layout: ttgl.constexpr,
 ):
     """Test 3D scatter along specified axis."""
-    # Create nested slice layouts: 3D -> 2D -> 1D
-    # For idx_n: [N,M,P] -> [N,P] -> [N]
-    slice_n_2d: ttgl.constexpr = ttgl.SliceLayout(dim=1, parent=layout_3d)  # Squeeze M
-    slice_n_1d: ttgl.constexpr = ttgl.SliceLayout(dim=1, parent=slice_n_2d)  # Squeeze P
+    idx_n = ttgl.arange(0, N)[:, None, None]
+    idx_m = ttgl.arange(0, M)[None, :, None]
+    idx_p = ttgl.arange(0, P)[None, None, :]
 
-    # For idx_m: [N,M,P] -> [N,M] -> [M]
-    slice_m_2d: ttgl.constexpr = ttgl.SliceLayout(dim=2, parent=layout_3d)  # Squeeze P
-    slice_m_1d: ttgl.constexpr = ttgl.SliceLayout(dim=0, parent=slice_m_2d)  # Squeeze N
-
-    # For idx_p: [N,M,P] -> [N,P] -> [P]
-    slice_p_2d: ttgl.constexpr = ttgl.SliceLayout(dim=1, parent=layout_3d)  # Squeeze M
-    slice_p_1d: ttgl.constexpr = ttgl.SliceLayout(dim=0, parent=slice_p_2d)  # Squeeze N
-
-    idx_n = ttgl.arange(0, N, layout=slice_n_1d)
-    idx_n_2d_temp = ttgl.expand_dims(idx_n, 1)
-    idx_n_2d = ttgl.convert_layout(idx_n_2d_temp, slice_n_2d)
-    idx_n_3d = ttgl.expand_dims(idx_n_2d, 1)
-
-    idx_m = ttgl.arange(0, M, layout=slice_m_1d)
-    idx_m_2d_temp = ttgl.expand_dims(idx_m, 0)
-    idx_m_2d = ttgl.convert_layout(idx_m_2d_temp, slice_m_2d)
-    idx_m_3d = ttgl.expand_dims(idx_m_2d, 2)
-
-    idx_p = ttgl.arange(0, P, layout=slice_p_1d)
-    idx_p_2d_temp = ttgl.expand_dims(idx_p, 0)
-    idx_p_2d = ttgl.convert_layout(idx_p_2d_temp, slice_p_2d)
-    idx_p_3d = ttgl.expand_dims(idx_p_2d, 1)
-
-    offsets_3d = idx_n_3d * (M * P) + idx_m_3d * P + idx_p_3d
+    offsets_3d = idx_n * (M * P) + idx_m * P + idx_p
+    offsets_3d = ttgl.set_auto_layout(offsets_3d, layout_3d)
 
     # Initialize shared memory to zero
     smem = ttgl.allocate_shared_memory(ttgl.float32, [N, M, P], layout=shared_layout)
