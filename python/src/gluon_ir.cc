@@ -860,13 +860,11 @@ void init_gluon_ir(py::module &&m) {
       .def("create_lds_barrier_arrive",
            [](GluonOpBuilder &self, Value memDesc, int count) -> Value {
              return self.create<ttag::ArriveBarrierOp>(memDesc, count);
+           })
+      .def("create_warp_pipeline_border", [](GluonOpBuilder &self) {
+           auto border = self.create<ROCDL::SchedBarrier>(0);
+           border->setAttr("triton.warp_pipeline.border", self.getBuilder().getUnitAttr());
            });
-  .def("create_warp_pipeline_border", [](GluonOpBuilder &self) {
-    auto border = self.create<ROCDL::SchedBarrier>(0);
-    border->setAttr("triton.warp_pipeline.border",
-                    self.getBuilder().getUnitAttr());
-  });
-  ;
 
   m.def(
       "compute_tmem_reg_layout",
