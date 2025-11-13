@@ -288,6 +288,12 @@ def tl_trans(value, *dims, _semantic=None):
 
 
 @gluon.jit
+def tl_cat(lhs, rhs, can_reorder=False):
+    return ttgl.cat(lhs, rhs, can_reorder, layout=default_blocked_layout([lhs.shape[0] + rhs.shape[0]],
+                                                                         ttgl.num_warps()))
+
+
+@gluon.jit
 def reset_to_default_layout(value):
     ty: ttgl.constexpr = value.type
     if isinstance(ty, ttgl.tuple_type):

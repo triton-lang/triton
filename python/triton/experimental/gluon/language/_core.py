@@ -112,10 +112,10 @@ atomic_or = builtin(tl_core.atomic_or)
 atomic_xchg = builtin(tl_core.atomic_xchg)
 atomic_xor = builtin(tl_core.atomic_xor)
 broadcast = builtin(tl_core.broadcast)
-cat = builtin(tl_core.cat)
 device_assert = builtin(tl_core.device_assert)
 device_print = builtin(tl_core.device_print)
 expand_dims = builtin(tl_core.expand_dims)
+gather = builtin(tl_core.gather)
 inline_asm_elementwise = builtin(tl_core.inline_asm_elementwise)
 join = builtin(tl_core.join)
 load = builtin(tl_core.load)
@@ -440,24 +440,23 @@ def histogram(input, num_bins, mask=None, layout=None, _semantic=None, _generato
         mask = _semantic.to_tensor(mask)
     return _semantic.histogram(input, num_bins, mask, layout)
 
-
 @builtin
-def gather(src, index, axis, _semantic=None):
+def cat(input, other, can_reorder=False, layout=None, _semantic=None):
     """
-    Gather values from a tensor along a specified axis using an index tensor.
+    Concatenate the two tensors.
 
     Args:
-        src (tensor): The source tensor to gather values from.
-        index (tensor): The index tensor specifying which values to gather.
-        axis (int): The axis along which to gather values.
+        input (tensor): The first input tensor.
+        other (tensor): The second input tensor.
+        can_reorder (bool): Compiler hint. If true, the compiler is allowed to reorder elements while concatenating inputs.  Only use if the order does not matter (e.g., result is only used in reduction ops).  Current implementation of `cat` supports only can_reorder=True.
+        layout (DistributedLayout): The destination layout of the output tensor.
 
     Returns:
-        tensor: The gathered tensor.
+        tensor: The concatenated tensor.
     """
-    src = _unwrap_if_constexpr(src)
-    index = _unwrap_if_constexpr(index)
-    axis = _unwrap_if_constexpr(axis)
-    return _semantic.gather(src, index, axis)
+    can_reorder = _unwrap_if_constexpr(can_reorder)
+    layout = _unwrap_if_constexpr(layout)
+    return _semantic.cat(input, other, can_reorder, layout)
 
 
 @builtin

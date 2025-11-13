@@ -278,8 +278,7 @@ py::object layoutToGluon(Attribute layout) {
   throw py::value_error("Unhandled encoding encountered");
 }
 
-template <typename CondT>
-static void check(CondT &&cond, const char *msg) {
+template <typename CondT> static void check(CondT &&cond, const char *msg) {
   if (!std::forward<CondT>(cond))
     throw py::value_error(msg);
 }
@@ -541,6 +540,11 @@ void init_gluon_ir(py::module &&m) {
                return self.create<triton::HistogramOp>(resultTy, operand,
                                                        *mask);
              }
+           })
+      .def("create_cat",
+           [](GluonOpBuilder &self, Value &lhs, Value &rhs,
+              Type retType) -> Value {
+             return self.create<triton::CatOp>(retType, lhs, rhs);
            })
       .def("create_async_copy_global_to_local",
            [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
