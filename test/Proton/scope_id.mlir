@@ -222,19 +222,19 @@ module {
     ttg.warp_specialize()
     default {
       // expected-remark @below {{scope id = 1}}
-      // expected-remark @below {{scope parent id = -1}}
+      // expected-remark @below {{scope parent id = 0}}
       proton.record start "default"
       // expected-remark @below {{scope id = 1}}
-      // expected-remark @below {{scope parent id = -1}}
+      // expected-remark @below {{scope parent id = 0}}
       proton.record end "default"
       ttg.warp_yield
     }
     partition0() num_warps(1) {
       // expected-remark @below {{scope id = 2}}
-      // expected-remark @below {{scope parent id = -1}}
+      // expected-remark @below {{scope parent id = 0}}
       proton.record start "partition"
       // expected-remark @below {{scope id = 2}}
-      // expected-remark @below {{scope parent id = -1}}
+      // expected-remark @below {{scope parent id = 0}}
       proton.record end "partition"
       ttg.warp_return
     } : () -> ()
